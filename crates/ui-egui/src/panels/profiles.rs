@@ -123,7 +123,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         {
             let s = with_profile_id(&d, &saved_profile_id);
             app.hover_preview = Some(HoverPreview {
-                label: crate::i18n::tr_format!("Profile: {}", crate::i18n::profile_label(&saved_profile_id, p_name)),
+                label: crate::i18n::tr_format!("Profile: {}", crate::i18n::profile_label_logical(&saved_profile_id, p_name)),
                 settings: s,
             });
         }
@@ -192,14 +192,14 @@ fn cell_ui(
     }
     if resp.hovered() && !applied && !over_star {
         app.hover_preview =
-            Some(HoverPreview { label: crate::i18n::tr_format!("Profile: {}", crate::i18n::profile_label(p_id, p_name)), settings: s.clone() });
+            Some(HoverPreview { label: crate::i18n::tr_format!("Profile: {}", crate::i18n::profile_label_logical(p_id, p_name)), settings: s.clone() });
         ui.data_mut(|m| m.insert_temp(egui::Id::new("last-profile-hover"), (id, p_id.to_string())));
     }
-    let resp = resp.on_hover_text(format!(
+    let resp = resp.on_hover_text(crate::i18n::display(format!(
         "{} ({})",
-        crate::i18n::profile_label(p_id, p_name),
-        crate::i18n::builtin_label(p_group, lightcraft_engine::presets::profile(p_id).is_some())
-    ));
+        crate::i18n::profile_label_logical(p_id, p_name),
+        crate::i18n::builtin_label_logical(p_group, lightcraft_engine::presets::profile(p_id).is_some())
+    )));
     if resp.clicked() {
         if resp.interact_pointer_pos().is_some_and(|q| star.contains(q)) {
             let _ = app.run("profile.favorite", json!({"id": p_id}));

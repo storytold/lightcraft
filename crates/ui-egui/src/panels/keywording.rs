@@ -78,7 +78,7 @@ fn chip(ui: &mut egui::Ui, path: &str, partial: bool, cross: bool) -> (egui::Res
     let x = cross.then(|| {
         let xr = Rect::from_center_size(pos2(rect.right() - 11.0, rect.center().y), vec2(14.0, 14.0));
         let xresp = ui.interact(xr, id.with("remove"), Sense::click());
-        let said = crate::i18n::tr_format!("Remove “{name}”", name = full);
+        let said = crate::i18n::tr_format_logical!("Remove “{name}”", name = full);
         xresp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &said));
         xresp
     });
@@ -86,7 +86,7 @@ fn chip(ui: &mut egui::Ui, path: &str, partial: bool, cross: bool) -> (egui::Res
     if resp.hovered() || x.as_ref().is_some_and(egui::Response::hovered) {
         ui.painter().rect_filled(rect.shrink(1.0), 10.0, t.hover.gamma_multiply(0.5));
     }
-    ui.painter().text(pos2(rect.left() + 8.0, rect.center().y), Align2::LEFT_CENTER, &shown, font.clone(), color);
+    ui.painter().text(pos2(rect.left() + 8.0, rect.center().y), Align2::LEFT_CENTER, crate::bidi::visual(&shown), font.clone(), color);
     if let Some(x) = &x {
         ui.painter().text(x.rect.center(), Align2::CENTER_CENTER, "×", t.font(13.0), if x.hovered() { t.text } else { t.text_dim });
     }

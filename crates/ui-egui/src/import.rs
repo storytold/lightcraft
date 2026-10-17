@@ -781,22 +781,22 @@ fn xmp_warning_text(warning: &ImportWarning) -> String {
             ImportUprightMode::Auto => crate::i18n::tr_format!(
                 "Lightroom geometry was not preserved for {path}; {mode} will be recalculated.",
                 path = path,
-                mode = crate::i18n::tr("Auto")
+                mode = crate::i18n::tr_logical("Auto")
             ),
             ImportUprightMode::Level => crate::i18n::tr_format!(
                 "Lightroom geometry was not preserved for {path}; {mode} will be recalculated.",
                 path = path,
-                mode = crate::i18n::tr("Level")
+                mode = crate::i18n::tr_logical("Level")
             ),
             ImportUprightMode::Vertical => crate::i18n::tr_format!(
                 "Lightroom geometry was not preserved for {path}; {mode} will be recalculated.",
                 path = path,
-                mode = crate::i18n::tr("Vertical")
+                mode = crate::i18n::tr_logical("Vertical")
             ),
             ImportUprightMode::Full => crate::i18n::tr_format!(
                 "Lightroom geometry was not preserved for {path}; {mode} will be recalculated.",
                 path = path,
-                mode = crate::i18n::tr("Full")
+                mode = crate::i18n::tr_logical("Full")
             ),
             ImportUprightMode::Unknown => {
                 crate::i18n::tr_format!("Lightroom geometry for {path} was not preserved; saved Upright transform is unsupported.", path = path,)

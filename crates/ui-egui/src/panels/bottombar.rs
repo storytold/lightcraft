@@ -197,7 +197,7 @@ fn right_side(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, compact_zo
             Zoom::Fill => "Fill".to_string(),
             Zoom::Percent(p) => format!("{p:.0}%"),
         };
-        let zr = crate::widgets::dropdown(&mut child, "zoom", crate::i18n::tr(&zoom_label), t.font(13.0), t.text_label);
+        let zr = crate::widgets::dropdown(&mut child, "zoom", crate::i18n::tr_logical(&zoom_label), t.font(13.0), t.text_label);
         egui::Popup::menu(&zr).show(|ui| {
             for (label, z) in [
                 ("Fit", Zoom::Fit),
@@ -218,7 +218,7 @@ fn right_side(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, compact_zo
             let cz = crate::widgets::dropdown(
                 &mut child,
                 "clickZoom",
-                &crate::i18n::tr_format!("Click {}:1", app.ui.click_zoom / 100),
+                &crate::i18n::tr_format_logical!("Click {}:1", app.ui.click_zoom / 100),
                 t.font(13.0),
                 t.text_label,
             );

@@ -740,8 +740,8 @@ fn theme_card<V: PartialEq + Copy>(
                                     true,
                                     format!(
                                         "{}: {}",
-                                        crate::i18n::tr(if favorite { "Remove from favorites" } else { "Add to favorites" }),
-                                        crate::i18n::tr(kind.label())
+                                        crate::i18n::tr_logical(if favorite { "Remove from favorites" } else { "Add to favorites" }),
+                                        crate::i18n::tr_logical(kind.label())
                                     ),
                                 )
                             });

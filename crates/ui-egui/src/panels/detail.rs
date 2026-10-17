@@ -1041,7 +1041,7 @@ fn filter_pill(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect) {
     let t = Tokens::get(ui.ctx());
     let p = ui.painter_at(canvas);
     let label =
-        chips.iter().map(|c| crate::panels::chips::display_label(c, &app.session.filter, &app.session.catalog)).collect::<Vec<_>>().join("  ·  ");
+        chips.iter().map(|c| crate::panels::chips::display_label_logical(c, &app.session.filter, &app.session.catalog)).collect::<Vec<_>>().join("  ·  ");
     let g = p.layout_no_wrap(crate::i18n::tr_format!("Filtered: {label}", label = label), t.font(12.0), Color32::from_gray(225));
     // the same inset from the left as from the top, so the pill sits in the corner (#1645)
     let inset = 3.0;
@@ -1191,10 +1191,12 @@ pub(crate) fn failed_pill(
     error: &str,
 ) {
     let offline = matches!(&photo.source, lightcraft_catalog::Source::File { path } if app.session.media.availability.is_offline(path));
-    let text = crate::i18n::tr(if offline { "Original offline · no smart preview" } else { "This photo can't be opened" });
+    let source = if offline { "Original offline · no smart preview" } else { "This photo can't be opened" };
+    let text = crate::i18n::tr(source);
     let r = loupe_pill(ui, canvas, over, navigator, id, text, true);
     let resp = ui.interact(r, egui::Id::new(("render-failed", id)), Sense::hover()).on_hover_text(error);
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, format!("{text}: {error}")));
+    let said = format!("{}: {error}", crate::i18n::tr_logical(source));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, said.clone()));
 }
 
 fn quick_name(q: lightcraft_engine::media::QuickSource) -> &'static str {

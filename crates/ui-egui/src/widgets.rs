@@ -45,13 +45,19 @@ pub fn preview_only_variant(reason: &str) -> &str {
 
 /// What a preview-only raw means for the user (see `Photo::preview_only`).
 pub fn preview_only_explanation(reason: &str) -> String {
+    crate::i18n::display(preview_only_explanation_logical(reason))
+}
+
+/// [`preview_only_explanation`] in logical order, for a `tr_format!` argument (see
+/// `i18n::tr_logical`).
+pub(crate) fn preview_only_explanation_logical(reason: &str) -> String {
     if reason.starts_with("Nikon High Efficiency NEF (") {
-        return crate::i18n::tr(
+        return crate::i18n::tr_logical(
             "Nikon High Efficiency NEF (HE / HE★) uses intoPIX TicoRAW compression. LightCraft does not currently have a license for this codec, so only the camera's embedded JPEG preview is available, not the raw sensor data. To edit raw data, shoot Lossless compressed NEF or convert existing HE files to DNG using a licensed converter.",
         )
         .to_string();
     }
-    crate::i18n::tr_format!(
+    crate::i18n::tr_format_logical!(
         "LightCraft can't decode this raw variant yet ({}). You're editing the camera's embedded JPEG preview, which already includes the camera's picture style (e.g. Monochrome) and white balance.",
         preview_only_variant(reason)
     )
@@ -78,7 +84,7 @@ pub fn preview_only_notice(ui: &mut Ui, key: &str, reason: &str) {
         })
         .response;
     let r = r.on_hover_text(crate::i18n::tr_format!("Decoder: {reason}", reason = reason));
-    r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, crate::i18n::tr("Preview only: editing the camera's embedded JPEG")));
+    r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, crate::i18n::tr_logical("Preview only: editing the camera's embedded JPEG")));
     register(ui.ctx(), format!("notice:previewOnly:{key}"), r.rect);
 }
 
@@ -200,7 +206,7 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
         ui.data_mut(|d| d.insert_temp(focused_slider_key(), id));
     }
     // screen readers: a slider named after its control, with its value
-    let label_text = crate::i18n::tr(label_override.unwrap_or(spec.label)).to_string();
+    let label_text = crate::i18n::tr_logical(label_override.unwrap_or(spec.label)).to_string();
     resp.widget_info(|| egui::WidgetInfo::slider(enabled, value, label_text.clone()));
     // and its range, step and the value as shown ("+0.50", "5600")
     let shown = shown_value(spec, value);
@@ -431,11 +437,12 @@ pub fn nudged(spec: &ControlSpec, value: f64, steps: f64) -> f64 {
 
 /// Collapsible section header ("› Light"). Returns the response (click toggles).
 pub fn section_header(ui: &mut Ui, id: &str, title: &str, open: bool, enabled: Option<bool>) -> (Response, Option<bool>) {
+    let said = crate::i18n::tr_logical(title);
     let title = crate::i18n::tr(title);
     let t = Tokens::get(ui.ctx());
     let w = ui.available_width();
     let (r, resp) = ui.allocate_exact_size(vec2(w, 52.0), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::CollapsingHeader, true, open, title));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::CollapsingHeader, true, open, said));
     register(ui.ctx(), format!("section:{id}"), r);
     let p = ui.painter();
     if ui.rect_contains_pointer(r) {
@@ -475,13 +482,14 @@ pub fn divider(ui: &mut Ui) {
 
 /// A flyout row inside a section (Curve, Color Mixer, Color Grading…): inset dark box with icon tile.
 pub fn flyout_row(ui: &mut Ui, id: &str, title: &str, icon: Icon, open: bool) -> Response {
+    let said = crate::i18n::tr_logical(title);
     let title = crate::i18n::tr(title);
     let t = Tokens::get(ui.ctx());
     let w = ui.available_width();
     let (outer, _) = ui.allocate_exact_size(vec2(w, 40.0), Sense::hover());
     let r = Rect::from_min_max(pos2(outer.left() + 16.0, outer.top() + 4.0), pos2(outer.right() - 16.0, outer.bottom() - 4.0));
     let resp = ui.interact(r, ui.id().with(("flyout", id)), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::CollapsingHeader, true, open, title));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::CollapsingHeader, true, open, said));
     register(ui.ctx(), format!("flyout:{id}"), r);
     let p = ui.painter();
     p.rect_filled(r, 4.0, if resp.hovered() { t.hover.gamma_multiply(0.8) } else { t.inset });
@@ -500,13 +508,15 @@ pub fn flyout_row(ui: &mut Ui, id: &str, title: &str, icon: Icon, open: bool) ->
 
 /// A small bordered text button (Auto, B&W, HDR…).
 pub fn text_button(ui: &mut Ui, id: &str, label: &str, active: bool) -> Response {
-    let label = if id.starts_with("labelSet-") { label } else { crate::i18n::tr(label) };
+    let user_named = id.starts_with("labelSet-");
+    let said = if user_named { label } else { crate::i18n::tr_logical(label) };
+    let label = if user_named { crate::bidi::visual(label) } else { std::borrow::Cow::Borrowed(crate::i18n::tr(label)) };
     let t = Tokens::get(ui.ctx());
     let font = t.semibold(11.5);
     let galley = ui.painter().layout_no_wrap(label.to_string(), font, t.text);
     let size = vec2((galley.size().x + 18.0).max(37.0), 24.0);
     let (r, resp) = ui.allocate_exact_size(size, Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, active, label));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, active, said));
     register(ui.ctx(), format!("button:{id}"), r);
     let fill = if active {
         t.pressed
@@ -559,10 +569,11 @@ pub fn segmented(ui: &mut Ui, id: &str, items: &[(&str, &str)], active: Option<u
 
 /// An icon-only button. `active` draws the selected background (tool strip).
 pub fn icon_button(ui: &mut Ui, id: &str, icon: Icon, size: egui::Vec2, active: bool, enabled: bool, tooltip: &str) -> Response {
+    let said = crate::i18n::tr_logical(tooltip);
     let tooltip = crate::i18n::tr(tooltip);
     let t = Tokens::get(ui.ctx());
     let (r, resp) = ui.allocate_exact_size(size, if enabled { Sense::click() } else { Sense::hover() });
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, active, tooltip));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, active, said));
     register(ui.ctx(), format!("icon:{id}"), r);
     let p = ui.painter();
     let sq = Rect::from_center_size(r.center(), vec2(32.0f32.min(size.x), 32.0f32.min(size.y)));
@@ -619,10 +630,14 @@ fn star_lit(i: u8, rating: u8, hover: Option<u8>) -> bool {
     i < hover.unwrap_or(rating)
 }
 
-/// A borderless dropdown button: `text` followed by a painted chevron (no font glyph needed).
+/// A borderless dropdown button: `text` — a message or user name in logical order — followed
+/// by a painted chevron (no font glyph needed). It is drawn in display order and announced
+/// logically.
 pub fn dropdown(ui: &mut Ui, id: &str, text: &str, font: egui::FontId, color: Color32) -> Response {
     let t = Tokens::get(ui.ctx());
-    let galley = ui.painter().layout_no_wrap(text.to_string(), font, color);
+    // A message reorders with the interface language's direction; a name with its own.
+    let shown = if crate::i18n::language().rtl() { crate::i18n::display(text.to_string()) } else { crate::bidi::visual(text).into_owned() };
+    let galley = ui.painter().layout_no_wrap(shown, font, color);
     let size = vec2(galley.size().x + 20.0, galley.size().y.max(20.0));
     let (r, resp) = ui.allocate_exact_size(size, Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, text));

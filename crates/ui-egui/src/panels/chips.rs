@@ -16,10 +16,12 @@ const GAP: f32 = 6.0;
 const TAIL: f32 = 170.0;
 
 /// "14 of 120 photos" when a filter narrows the source, else "14 photos".
+/// The photos count in logical order: painted sites wrap it in `i18n::display`, and it can be
+/// composed into a `tr_format!` argument directly (see `i18n::tr_logical`).
 pub fn count_text(matching: usize, total: Option<usize>, filtering: bool) -> String {
     match total {
-        Some(t) if filtering && t != matching => crate::i18n::tr_format!("{matching} of {t} photos", matching = matching, t = t),
-        _ => crate::i18n::tr_format!("{matching} photos", matching = matching),
+        Some(t) if filtering && t != matching => crate::i18n::tr_format_logical!("{matching} of {t} photos", matching = matching, t = t),
+        _ => crate::i18n::tr_format_logical!("{matching} photos", matching = matching),
     }
 }
 
@@ -30,48 +32,54 @@ fn chip_width(ui: &egui::Ui, label: &str, font: egui::FontId) -> f32 {
 
 /// Localise generated chip labels without rewriting search text or metadata values.
 pub(crate) fn display_label(chip: &FilterChip, filter: &lightcraft_catalog::Filter, catalog: &lightcraft_catalog::Catalog) -> String {
-    use crate::i18n::{date_group_label, rules_label, tr};
+    crate::i18n::display(display_label_logical(chip, filter, catalog))
+}
+
+/// [`display_label`] in logical order, for composing into a larger message (see
+/// `i18n::tr_logical`): the composed text is reordered once, at its end.
+pub(crate) fn display_label_logical(chip: &FilterChip, filter: &lightcraft_catalog::Filter, catalog: &lightcraft_catalog::Catalog) -> String {
+    use crate::i18n::{date_group_label_logical, rules_label_logical, tr_logical};
     if crate::i18n::language() == crate::i18n::Locale::En {
         return chip.label.clone();
     }
     if chip.clear.get("ruleSet").is_some()
         && let Some(rules) = &filter.rule_set
     {
-        return format!("{}: {}", tr("Rules"), rules_label(rules, catalog));
+        return format!("{}: {}", tr_logical("Rules"), rules_label_logical(rules, catalog));
     }
     if chip.clear.get("label").is_some() {
         let mut labels = filter.labels.clone();
         labels.extend(filter.label.filter(|label| !labels.contains(label)));
-        let names = labels.iter().map(|label| crate::i18n::color_label(catalog, *label)).collect::<Vec<_>>();
-        return format!("{}: {}", tr("Label"), names.join(&format!(" {} ", tr("or"))));
+        let names = labels.iter().map(|label| crate::i18n::color_label_logical(catalog, *label)).collect::<Vec<_>>();
+        return format!("{}: {}", tr_logical("Label"), names.join(&format!(" {} ", tr_logical("or"))));
     }
     if chip.clear.get("dateFrom").is_some() || chip.clear.get("dateTo").is_some() {
         return match (&filter.date_from, &filter.date_to) {
-            (Some(from), Some(to)) => format!("{} {} – {}", tr("Captured"), date_group_label(from, false), date_group_label(to, false)),
-            (Some(from), None) => format!("{} {}", tr("Captured from"), date_group_label(from, false)),
-            (None, Some(to)) => format!("{} {}", tr("Captured until"), date_group_label(to, false)),
+            (Some(from), Some(to)) => format!("{} {} – {}", tr_logical("Captured"), date_group_label_logical(from, false), date_group_label_logical(to, false)),
+            (Some(from), None) => format!("{} {}", tr_logical("Captured from"), date_group_label_logical(from, false)),
+            (None, Some(to)) => format!("{} {}", tr_logical("Captured until"), date_group_label_logical(to, false)),
             _ => chip.label.clone(),
         };
     }
     if chip.clear.get("only").is_some() {
-        return format!("{} {}", tr("Only"), crate::i18n::tr_format!("{n} photos", n = filter.only.len()));
+        return format!("{} {}", tr_logical("Only"), crate::i18n::tr_format_logical!("{n} photos", n = filter.only.len()));
     }
     if let Some((prefix, value)) = chip.label.split_once(": ") {
         let value = if matches!(prefix, "Flag" | "Type") {
-            tr(value).to_string()
+            tr_logical(value).to_string()
         } else if prefix == "Date" {
-            filter.date.as_ref().map_or_else(|| value.to_string(), |date| date_group_label(date, false))
+            filter.date.as_ref().map_or_else(|| value.to_string(), |date| date_group_label_logical(date, false))
         } else if prefix == "Imported" {
-            filter.imported.as_ref().map_or_else(|| value.to_string(), |date| date_group_label(date, false))
+            filter.imported.as_ref().map_or_else(|| value.to_string(), |date| date_group_label_logical(date, false))
         } else {
-            crate::bidi::visual(value).into_owned()
+            value.to_string()
         };
-        return format!("{}: {value}", tr(prefix));
+        return format!("{}: {value}", tr_logical(prefix));
     }
     if let Some(value) = chip.label.strip_prefix("Rating ") {
-        return format!("{} {value}", tr("Rating"));
+        return format!("{} {value}", tr_logical("Rating"));
     }
-    tr(&chip.label).to_string()
+    tr_logical(&chip.label).to_string()
 }
 
 /// Draws the strip; does nothing without chips.

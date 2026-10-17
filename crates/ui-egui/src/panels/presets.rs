@@ -191,7 +191,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     if resp.hovered()
                         && let Some(s) = look
                     {
-                        let label = crate::i18n::tr_format!("Preset: {name}", name = name);
+                        let label = crate::i18n::tr_format!("Preset: {name}", name = crate::i18n::builtin_label_logical(&pr.name, pr.builtin));
                         app.hover_preview = Some(HoverPreview { label: label.clone(), settings: s });
                         if let Some(id) = active {
                             ui.data_mut(|d| d.insert_temp(egui::Id::new("last-preset-hover"), (id, pr.clone(), label)));
@@ -200,7 +200,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     if resp.clicked() && app.run("preset.apply", json!({"id": pid, "amount": 100})).is_ok() {
                         ui.data_mut(|d| d.insert_temp(amt_id, AppliedPreset::new(&app.session, pid.clone(), 100.0)));
                         ui.data_mut(|d| d.remove::<(lightcraft_catalog::PhotoId, Preset, String)>(egui::Id::new("last-preset-hover")));
-                        app.toast(ui.ctx(), crate::i18n::tr_format!("Preset: {name}", name = name));
+                        app.toast(ui.ctx(), crate::i18n::tr_format!("Preset: {name}", name = crate::i18n::builtin_label_logical(&pr.name, pr.builtin)));
                     }
                     let (builtin, group) = (pr.builtin, pr.group.clone());
                     resp.context_menu(|ui| {
@@ -216,7 +216,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                             .clicked()
                         {
                             match app.run("preset.update", json!({"id": pid})) {
-                                Ok(_) => app.toast(ui.ctx(), crate::i18n::tr_format!("Updated “{name}”", name = name)),
+                                Ok(_) => app.toast(ui.ctx(), crate::i18n::tr_format!("Updated “{name}”", name = crate::i18n::builtin_label_logical(&pr.name, pr.builtin))),
                                 Err(e) => app.toast(ui.ctx(), e),
                             }
                         }

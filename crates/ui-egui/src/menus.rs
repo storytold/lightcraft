@@ -231,10 +231,10 @@ pub const UI_COMMANDS: &[UiCommand] = &[
 fn panel(app: &mut LightcraftApp, ctx: &egui::Context, p: RightPanel, name: &str) {
     if app.ui.right == p && crate::docking::exposed(app, crate::docking::Panel::Tools) {
         app.ui.right = RightPanel::None;
-        app.toast(ctx, crate::i18n::tr_format!("{name} Off", name = crate::i18n::tr(name)));
+        app.toast(ctx, crate::i18n::tr_format!("{name} Off", name = crate::i18n::tr_logical(name)));
     } else {
         app.ui.right = p;
-        app.toast(ctx, crate::i18n::tr_format!("{name} On", name = crate::i18n::tr(name)));
+        app.toast(ctx, crate::i18n::tr_format!("{name} On", name = crate::i18n::tr_logical(name)));
         if p.is_edit_tool() && !matches!(app.ui.view, ViewMode::Detail) {
             app.ui.view = ViewMode::Detail;
         }

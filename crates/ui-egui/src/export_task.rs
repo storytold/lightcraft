@@ -134,19 +134,25 @@ pub fn start_contact_sheet(app: &mut LightcraftApp, params: &Value) -> Result<Va
 
 /// The toast's account of [`AfterExport::run`]'s Apple Photos outcome.
 pub fn apple_photos_note(outcome: &Value) -> String {
+    crate::i18n::display(apple_photos_note_logical(outcome))
+}
+
+/// [`apple_photos_note`] in logical order, for composing into a longer toast (see
+/// `i18n::tr_logical`).
+fn apple_photos_note_logical(outcome: &Value) -> String {
     if let Some(e) = outcome.get("error").and_then(Value::as_str) {
-        return crate::i18n::tr_format!("not added to Apple Photos: {e}", e = e);
+        return crate::i18n::tr_format_logical!("not added to Apple Photos: {e}", e = e);
     }
     if let Some(why) = outcome.get("skipped").and_then(Value::as_str) {
         if outcome.get("cancelled").and_then(Value::as_bool) == Some(true) {
-            return crate::i18n::tr("not added to Apple Photos (cancelled)").to_string();
+            return crate::i18n::tr_logical("not added to Apple Photos (cancelled)").to_string();
         }
-        return crate::i18n::tr_format!("not added to Apple Photos: {e}", e = why);
+        return crate::i18n::tr_format_logical!("not added to Apple Photos: {e}", e = why);
     }
     let n = outcome.get("imported").and_then(Value::as_u64).unwrap_or(0);
     let mut m = match outcome.get("album").and_then(Value::as_str) {
-        Some(album) => crate::i18n::tr_format!("{n} added to Apple Photos album “{album}”", n = n, album = album),
-        None => crate::i18n::tr_format!("{n} added to Apple Photos", n = n),
+        Some(album) => crate::i18n::tr_format_logical!("{n} added to Apple Photos album “{album}”", n = n, album = album),
+        None => crate::i18n::tr_format_logical!("{n} added to Apple Photos", n = n),
     };
     if let Some(w) = outcome.get("warning").and_then(Value::as_str) {
         m += &format!(" ({w})");
@@ -196,22 +202,22 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
                     let failed: Vec<&Value> = files.iter().filter(|f| f.get("error").is_some()).collect();
                     let skipped = files.iter().filter(|f| f.get("skipped").is_some()).count();
                     let mut m =
-                        crate::i18n::tr_format!("Exported {ok} of {total} photo{}", if total == 1 { "" } else { "s" }, ok = ok, total = total);
+                        crate::i18n::tr_format_logical!("Exported {ok} of {total} photo{}", if total == 1 { "" } else { "s" }, ok = ok, total = total);
                     if let Some(sheet) = sheet {
                         m = format!("Exported contact sheet: {} photos, {} pages", sheet["photos"], sheet["pages"]);
                     }
                     if skipped > 0 {
-                        m += &crate::i18n::tr_format!(" · {skipped} skipped (file exists)", skipped = skipped);
+                        m += &crate::i18n::tr_format_logical!(" · {skipped} skipped (file exists)", skipped = skipped);
                     }
                     if let Some(first) = failed.first() {
-                        m += &crate::i18n::tr_format!(" · {} failed: {}", failed.len(), first["error"].as_str().unwrap_or("error"));
+                        m += &crate::i18n::tr_format_logical!(" · {} failed: {}", failed.len(), first["error"].as_str().unwrap_or("error"));
                     }
                     if cancelled {
                         m += " · cancelled";
                     }
                     if let Some(photos) = &photos {
                         m += " · ";
-                        m += &apple_photos_note(photos);
+                        m += &apple_photos_note_logical(photos);
                     }
                     app.last_export_result = Some(json!({"files": files, "cancelled": cancelled, "applePhotos": photos}));
                     m
@@ -219,9 +225,9 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
                 Err(e) => e,
             };
             if photos_failed {
-                app.toast_for(ctx, msg, 15.0);
+                app.toast_for(ctx, crate::i18n::display(msg), 15.0);
             } else {
-                app.toast(ctx, msg);
+                app.toast(ctx, crate::i18n::display(msg));
             }
         }
         Err(std::sync::mpsc::TryRecvError::Empty) => {

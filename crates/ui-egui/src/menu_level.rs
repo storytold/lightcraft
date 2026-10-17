@@ -119,7 +119,7 @@ pub fn level(ui: &mut Ui, depth: usize, bar_bottom: Option<f32>, rows: impl FnOn
         let id = key.with(dir < 0.0);
         let r = ui.interact(strip, id, Sense::hover());
         r.widget_info(|| {
-            egui::WidgetInfo::labeled(egui::WidgetType::Button, live, crate::i18n::tr(if dir < 0.0 { "Scroll menu up" } else { "Scroll menu down" }))
+            egui::WidgetInfo::labeled(egui::WidgetType::Button, live, crate::i18n::tr_logical(if dir < 0.0 { "Scroll menu up" } else { "Scroll menu down" }))
         });
         if live && pointer_on(ui, strip) {
             target = (offset + dir * SPEED * dt.max(1.0 / 120.0)).clamp(0.0, max);

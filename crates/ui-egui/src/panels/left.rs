@@ -80,7 +80,11 @@ fn row_sensed(
     sense: Sense,
     mark: Option<egui::Color32>,
 ) -> egui::Response {
-    let label = if matches!(id, "all" | "recentlyAdded" | "picks" | "missing" | "recentlyDeleted") { crate::i18n::tr(label) } else { label };
+    let builtin = matches!(id, "all" | "recentlyAdded" | "picks" | "missing" | "recentlyDeleted");
+    // the spoken name is logical text (the row's `spoken`, a source label's translation, or a
+    // caller's user-data name); `label` for painting is the display-order one
+    let said = spoken.unwrap_or_else(|| if builtin { crate::i18n::tr_logical(label) } else { label });
+    let label = if builtin { crate::i18n::tr(label) } else { label };
     let t = Tokens::get(ui.ctx());
     let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), sense);
     if scroll_asked(ui, id) {
@@ -88,9 +92,8 @@ fn row_sensed(
     }
     register(ui.ctx(), format!("source:{id}"), r);
     let mark_w = if mark.is_some() { MARK_W } else { 0.0 };
-    let said = spoken.unwrap_or(label);
     let name = match count {
-        Some(n) => crate::i18n::tr_format!("{label}, {n} photos", label = said, n = n),
+        Some(n) => crate::i18n::tr_format_logical!("{label}, {n} photos", label = said, n = n),
         None => said.to_string(),
     };
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, &name));
@@ -206,7 +209,7 @@ fn tree_toggle(ui: &mut egui::Ui, row: &egui::Response, indent: f32, key: egui::
         *open = !*open;
         set_tree_open(ui, key, *open);
     }
-    let label = if *open { crate::i18n::tr("Collapse") } else { crate::i18n::tr("Expand") };
+    let label = if *open { crate::i18n::tr_logical("Collapse") } else { crate::i18n::tr_logical("Expand") };
     tri.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
     tri
 }
@@ -424,7 +427,7 @@ fn section_header(app: &mut LightcraftApp, ui: &mut egui::Ui, section: SidebarSe
     }
     resp.context_menu(|ui| sections_menu(app, ui, Some(section)));
     let open = !app.ui.sidebar.is_collapsed(section);
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::CollapsingHeader, true, open, title));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::CollapsingHeader, true, open, crate::i18n::tr_logical(section.title())));
     // what is visible of the header: its bar and count end at the panel's edge, like a row's
     let edge = r.right().min(visible_right(ui));
     let hovered = resp.hovered() && app.ui.dragging_section.is_none();
@@ -840,7 +843,7 @@ fn local_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, now: &LocalNow) {
         let reveal = local.owner == Some(i);
         folder_tree(app, ui, path, name, path, 0.0, current, reveal, transient);
     }
-    if app.services.pick_folder.is_some() && row(app, ui, "local:browse", Icon::Plus, crate::i18n::tr("Browse Folder…"), None, false, 0.0).clicked()
+    if app.services.pick_folder.is_some() && row_named(app, ui, "local:browse", Icon::Plus, crate::i18n::tr("Browse Folder…"), Some(crate::i18n::tr_logical("Browse Folder…")), None, false, 0.0).clicked()
     {
         let picked = app.services.pick_folder.as_mut().and_then(|f| f());
         if let Some(path) = picked {
@@ -857,7 +860,8 @@ fn local_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, now: &LocalNow) {
     let hidden = app.ui.hidden_locations.len();
     if hidden > 0 {
         let label = crate::i18n::tr_format!("Show {hidden} hidden location{}", if hidden == 1 { "" } else { "s" }, hidden = hidden);
-        if row(app, ui, "local:restoreHidden", Icon::Folder, &label, None, false, 0.0)
+        let spoken = crate::i18n::tr_format_logical!("Show {hidden} hidden location{}", if hidden == 1 { "" } else { "s" }, hidden = hidden);
+        if row_named(app, ui, "local:restoreHidden", Icon::Folder, &label, Some(&spoken), None, false, 0.0)
             .on_hover_text(crate::i18n::tr("Put the locations you removed from Local back (no files change)"))
             .clicked()
         {
@@ -1059,7 +1063,7 @@ fn folder_tree(
             ui.data_mut(|d| d.insert_temp(revealed_id, target));
         }
     }
-    let resp = row(app, ui, &format!("local:{path}"), Icon::Folder, &crate::bidi::visual(name), None, sel, indent + 12.0).on_hover_text(path);
+    let resp = row_named(app, ui, &format!("local:{path}"), Icon::Folder, &crate::bidi::visual(name), Some(name), None, sel, indent + 12.0).on_hover_text(path);
     let tr = tree_toggle(ui, &resp, indent, open_id, &mut open, format!("folderToggle:{path}"));
     if !tr.clicked()
         && resp.clicked()
@@ -1130,7 +1134,7 @@ fn date_row(app: &mut LightcraftApp, ui: &mut egui::Ui, key: &str, label: &str, 
     let open_id = egui::Id::new(("date-open", key.to_string()));
     let mut open = tree_open(ui, open_id, false);
     let sel = app.session.filter.date.as_deref() == Some(key);
-    let resp = row(app, ui, &format!("date:{key}"), Icon::Clock, label, Some(count), sel, indent);
+    let resp = row_named(app, ui, &format!("date:{key}"), Icon::Clock, label, Some(&crate::i18n::date_group_label_logical(key, true)), Some(count), sel, indent);
     if key.len() < 10 {
         tree_toggle(ui, &resp, indent, open_id, &mut open, format!("dateToggle:{key}"));
     }
@@ -1175,7 +1179,7 @@ fn albums_tree(app: &mut LightcraftApp, ui: &mut egui::Ui, all: &AlbumKids, pare
                 &format!("folder:{}", a.id.0),
                 Icon::Folder,
                 &crate::bidi::visual(&a.name),
-                None,
+                Some(&a.name),
                 None,
                 false,
                 indent,
@@ -1226,7 +1230,7 @@ fn albums_tree(app: &mut LightcraftApp, ui: &mut egui::Ui, all: &AlbumKids, pare
                 &format!("album:{}", a.id.0),
                 icon,
                 &crate::bidi::visual(&label),
-                None,
+                Some(&a.name),
                 Some(n),
                 sel,
                 indent,
@@ -1245,7 +1249,7 @@ fn albums_tree(app: &mut LightcraftApp, ui: &mut egui::Ui, all: &AlbumKids, pare
             }
             if let Some(rules) = &a.smart {
                 // one tooltip: the rules, then what needs fixing in them
-                let mut tip = crate::i18n::tr_format!("Smart album: {}", crate::i18n::filter_label(rules, &app.session.catalog));
+                let mut tip = crate::i18n::tr_format!("Smart album: {}", crate::i18n::filter_label_logical(rules, &app.session.catalog));
                 if !problems.is_empty() {
                     tip.push_str("\n\n");
                     tip.push_str(crate::i18n::tr("Some rules need fixing (Edit Smart Album…):"));
@@ -1551,16 +1555,16 @@ fn drop_target(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response
             Ok(r) => {
                 let n = r.get("added").and_then(serde_json::Value::as_u64).unwrap_or(0);
                 let skipped = r.get("skipped").and_then(serde_json::Value::as_u64).unwrap_or(0);
-                let mut msg = crate::i18n::tr_format!("Added {n} photo{} to “{}”", if n == 1 { "" } else { "s" }, a.name, n = n);
+                let mut msg = crate::i18n::tr_format_logical!("Added {n} photo{} to “{}”", if n == 1 { "" } else { "s" }, a.name, n = n);
                 if skipped > 0 {
                     msg.push_str(" · ");
-                    msg.push_str(&crate::i18n::tr_format!(
+                    msg.push_str(&crate::i18n::tr_format_logical!(
                         "{n} Local photo{} skipped: albums hold library photos (Add to My Photos first)",
                         if skipped == 1 { "" } else { "s" },
                         n = skipped
                     ));
                 }
-                app.toast(ui.ctx(), msg);
+                app.toast(ui.ctx(), crate::i18n::display(msg));
             }
             Err(e) => app.toast(ui.ctx(), e),
         }
@@ -1789,7 +1793,7 @@ fn folder_row(app: &mut LightcraftApp, ui: &mut egui::Ui, n: &FolderNode, id: &s
         && app.session.library_folder.as_deref().is_some_and(|f| same_folder(f, &n.path));
     // the label is said with the name, as it is shown beside it
     let spoken = match n.label {
-        Some(l) => format!("{name}, {}", crate::i18n::color_label(&app.session.catalog, l)),
+        Some(l) => format!("{name}, {}", crate::i18n::color_label_logical(&app.session.catalog, l)),
         None => name.to_string(),
     };
     let mark = n.label.map(crate::theme::label_color);
@@ -2009,7 +2013,7 @@ fn keyword_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, nodes: &[KeywordNode
 /// One drawn row of [`keyword_rows`]; `open_id` and `open` are its triangle's when it has rows inside it.
 fn keyword_row(app: &mut LightcraftApp, ui: &mut egui::Ui, n: &KeywordNode, id: &str, indent: f32, open_id: Option<egui::Id>, open: &mut bool) {
     let sel = app.session.filter.keyword.as_deref().is_some_and(|k| k.eq_ignore_ascii_case(&n.path));
-    let resp = row(app, ui, id, Icon::Tag, &crate::bidi::visual(&n.name), Some(n.count), sel, indent);
+    let resp = row_named(app, ui, id, Icon::Tag, &crate::bidi::visual(&n.name), Some(&n.name), Some(n.count), sel, indent);
     if let Some(k) = open_id {
         tree_toggle(ui, &resp, indent, k, open, format!("keywordToggle:{}", n.path));
     }

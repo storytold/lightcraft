@@ -159,7 +159,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(crate::i18n::tr("Profile")).font(t.font(13.0)).color(t.text_dim));
             let name = app.session.profile_info(&d.profile.id).map(|(name, _)| name).unwrap_or("Color");
-            let r = crate::widgets::dropdown(ui, "profile", crate::i18n::profile_label(&d.profile.id, name), t.font(15.0), t.text_label);
+            let r = crate::widgets::dropdown(ui, "profile", crate::i18n::profile_label_logical(&d.profile.id, name), t.font(15.0), t.text_label);
             egui::Popup::menu(&r).show(|ui| profile_menu(app, ui, &d));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if crate::widgets::icon_button(
@@ -228,7 +228,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 2, bottom: 2 }).show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(crate::i18n::tr("White Balance")).font(t.font(13.0)).color(t.text_dim));
-                let r = crate::widgets::dropdown(ui, "wbMode", crate::i18n::tr(d.wb.mode.label()), t.font(14.0), t.text_label);
+                let r = crate::widgets::dropdown(ui, "wbMode", crate::i18n::tr_logical(d.wb.mode.label()), t.font(14.0), t.text_label);
                 egui::Popup::menu(&r).show(|ui| {
                     for m in WbMode::ALL {
                         if m == WbMode::Custom {
@@ -481,9 +481,9 @@ fn profile_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings)
     if let Some((name, _)) = app.session.profile_info(cur) {
         let fav = app.session.profile_favorites.iter().any(|f| f == cur);
         let label = if fav {
-            crate::i18n::tr_format!("Remove “{}” from Favorites", crate::i18n::profile_label(cur, name))
+            crate::i18n::tr_format!("Remove “{}” from Favorites", crate::i18n::profile_label_logical(cur, name))
         } else {
-            crate::i18n::tr_format!("Add “{}” to Favorites", crate::i18n::profile_label(cur, name))
+            crate::i18n::tr_format!("Add “{}” to Favorites", crate::i18n::profile_label_logical(cur, name))
         };
         let r = ui.button(label);
         register(ui.ctx(), "profileMenu:toggleFavorite", r.rect);
@@ -505,7 +505,7 @@ fn profile_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings)
         s.profile.id = hovered_id.clone();
         s.profile.amount = 100.0;
         app.hover_preview =
-            Some(crate::HoverPreview { label: crate::i18n::tr_format!("Profile: {}", crate::i18n::profile_label(hovered_id, name)), settings: s });
+            Some(crate::HoverPreview { label: crate::i18n::tr_format!("Profile: {}", crate::i18n::profile_label_logical(hovered_id, name)), settings: s });
     }
     if let Some(id) = pick.0 {
         let _ = app.run("develop.profile", json!({"id": id}));
@@ -1088,7 +1088,7 @@ fn curve_footer(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings)
             ui.label(RichText::new(crate::i18n::tr("Point Curve")).font(t.font(12.0)).color(t.text_label));
             let current = matching_preset(&app.session, &d.curve);
             let builtin = current.as_ref().is_none_or(|name| all_presets(&app.session).iter().any(|p| p.builtin && &p.name == name));
-            let label = crate::i18n::builtin_label(current.as_deref().unwrap_or("Custom"), builtin);
+            let label = crate::i18n::builtin_label_logical(current.as_deref().unwrap_or("Custom"), builtin);
             let r = crate::widgets::dropdown(ui, "curvePreset", label, t.font(12.0), t.text);
             egui::Popup::menu(&r).show(|ui| {
                 ui.set_min_width(180.0);
@@ -1152,7 +1152,7 @@ fn curve_reset_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, ch: &str) {
     let label = if ch == "parametric" {
         crate::i18n::tr("Reset Parametric Curve").to_string()
     } else {
-        crate::i18n::tr_format!("Reset {} Channel", crate::i18n::tr(channel_label(ch)))
+        crate::i18n::tr_format!("Reset {} Channel", crate::i18n::tr_logical(channel_label(ch)))
     };
     let r = ui.button(label);
     register(ui.ctx(), "curveMenu:resetChannel", r.rect);
@@ -1669,7 +1669,7 @@ fn quick_develop(app: &mut LightcraftApp, ui: &mut egui::Ui, n: usize) {
                 for (txt, d) in [("◀◀", -big), ("◀", -small), ("▶", small), ("▶▶", big)] {
                     let r = ui.add(egui::Button::new(egui::RichText::new(txt).size(10.0)).min_size(egui::vec2(28.0, 18.0)));
                     crate::widgets::register(ui.ctx(), format!("button:quick-{ctl}-{txt}"), r.rect);
-                    if r.on_hover_text(crate::i18n::tr_format!("{label} {d:+} on every selected photo", d = d, label = crate::i18n::tr(label)))
+                    if r.on_hover_text(crate::i18n::tr_format!("{label} {d:+} on every selected photo", d = d, label = crate::i18n::tr_logical(label)))
                         .clicked()
                     {
                         let _ = app.run("develop.quickAdjust", json!({"control": ctl, "delta": d}));

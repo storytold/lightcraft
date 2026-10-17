@@ -492,7 +492,7 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
             if f == "tool.brush" && matches!(app.ui.view, crate::state::ViewMode::PhotoGrid | crate::state::ViewMode::SquareGrid) {
                 if let Ok(r) = app.run("album.toggleTarget", json!({})) {
                     let n = app.session.targets(&json!({})).len();
-                    let what = crate::i18n::tr_format!("{n} photo{}", if n == 1 { "" } else { "s" }, n = n);
+                    let what = crate::i18n::tr_format_logical!("{n} photo{}", if n == 1 { "" } else { "s" }, n = n);
                     let name = r["name"].as_str().unwrap_or("Quick Collection").to_string();
                     app.toast(
                         ctx,

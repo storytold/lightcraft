@@ -50,7 +50,7 @@ pub fn may_close(app: &mut LightcraftApp) -> bool {
     // before the library is touched: a Cancel here keeps working with it
     let running = app.session.activity.running_cancellable();
     if !running.is_empty() {
-        let names = running.iter().map(|t| crate::i18n::tr(&t.label)).collect::<Vec<_>>().join(", ");
+        let names = running.iter().map(|t| crate::i18n::tr_logical(&t.label)).collect::<Vec<_>>().join(", ");
         app.quit_prompt = Some(QuitPrompt::Tasks(if running.len() == 1 {
             crate::i18n::tr_format!("1 task is still running: {names}. Quitting stops it.", names = names)
         } else {

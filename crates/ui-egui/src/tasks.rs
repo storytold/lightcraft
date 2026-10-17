@@ -83,7 +83,7 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
             Err(TryRecvError::Disconnected) => {
                 // the worker died (a panic, already logged)
                 let t = app.tasks.running.remove(i);
-                app.toast(ctx, crate::i18n::tr_format!("{} failed", t.label));
+                app.toast(ctx, crate::i18n::tr_format!("{} failed", crate::i18n::tr_logical(&t.label)));
             }
         }
     }

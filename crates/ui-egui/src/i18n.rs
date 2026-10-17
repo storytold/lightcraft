@@ -52,21 +52,12 @@ macro_rules! language_table {
                 static EMPTY: OnceLock<BTreeMap<String, String>> = OnceLock::new();
                 // A malformed catalog logs and comes back empty: a broken translation degrades to
                 // English text, it never takes the app down.
+                // Catalogs store logical order — the order text is written and read in. Display
+                // order for right-to-left languages is derived by `catalog_display`, so a catalog
+                // value can still be composed into a longer message without being reordered twice.
                 let parse = |language: Locale, catalog: Option<&'static str>| match catalog {
                     Some(json) => match serde_json::from_str::<BTreeMap<String, String>>(json) {
-                        Ok(mut messages) => {
-                            // A right-to-left catalog stores logical order; egui needs display
-                            // order, applied once at load (bidi::display_rtl). The key is the
-                            // catalog's own language: whichever caller fills `CATALOGS` first
-                            // parses every language, so `self` may be English while Arabic is
-                            // being parsed.
-                            if language.rtl() {
-                                for value in messages.values_mut() {
-                                    *value = crate::bidi::display_rtl(value);
-                                }
-                            }
-                            messages
-                        }
+                        Ok(messages) => messages,
                         Err(error) => {
                             log::error!("Invalid message catalog for {}: {error}", language.code());
                             BTreeMap::new()
@@ -142,18 +133,43 @@ language_table! {
 }
 
 impl Locale {
-    /// Whether the language's text runs right to left: its catalog is reordered for display at
-    /// load (the `parse` above), its `tr_format!` results through [`display`], and user text is
+    /// Whether the language's text runs right to left: its labels reach egui in display order
+    /// (`catalog_display` through `tr`, `display` on `tr_format!` results), and user text is
     /// drawn through `bidi::visual` at the paint sites.
     pub fn rtl(self) -> bool {
         matches!(self.script(), "Arab" | "Hebr")
     }
+
+    /// The catalog in display order: for a right-to-left language each value once through
+    /// `bidi::display_rtl`, for any other the catalog itself. `tr` and friends hand this out for
+    /// painting; composition (`tr_format!` arguments, spoken names) uses [`tr_logical`], the
+    /// catalog's stored order, so a translated piece is never reordered twice.
+    fn catalog_display(self) -> &'static BTreeMap<String, String> {
+        if !self.rtl() {
+            return self.catalog();
+        }
+        static DISPLAY: OnceLock<BTreeMap<Locale, BTreeMap<String, String>>> = OnceLock::new();
+        DISPLAY
+            .get_or_init(|| {
+                Locale::ALL
+                    .iter()
+                    .filter(|language| language.rtl())
+                    .map(|language| {
+                        (*language, language.catalog().iter().map(|(key, value)| (key.clone(), crate::bidi::display_rtl(value))).collect())
+                    })
+                    .collect()
+            })
+            .get(&self)
+            .unwrap_or_else(|| self.catalog())
+    }
 }
 
-/// The order a `tr_format!` result is drawn in: the active right-to-left language's result goes
-/// through `bidi::visual`, everything else is returned unchanged.
+/// The order a `tr_format!` result (or any message composed in logical order) is drawn in: the
+/// active right-to-left language's text goes once through `bidi::display_rtl`, the same reorder
+/// `catalog_display` applies to stored labels, so a composed message and a plain label land in
+/// the same order. Everything else is returned unchanged.
 pub fn display(text: String) -> String {
-    if language().rtl() { crate::bidi::visual(&text).into_owned() } else { text }
+    if language().rtl() { crate::bidi::display_rtl(&text) } else { text }
 }
 
 // The settings file stores the BCP-47 code (`"zh-hans"`), never the Rust variant name, so a
@@ -194,13 +210,36 @@ pub fn tr(source: &str) -> &str {
     tr_in(language(), source)
 }
 
+/// `tr` for composing: the catalog's logical (stored) order. `tr` and `tr_format!` already give
+/// display order for painting; feeding their results into another `tr_format!` argument or a
+/// spoken name would reorder the piece a second time. Compose with `tr_logical` and let the
+/// finished message go through `display` once.
+pub fn tr_logical(source: &str) -> &str {
+    tr_logical_in(language(), source)
+}
+
+fn tr_logical_in(language: Locale, source: &str) -> &str {
+    if language.catalog().is_empty() {
+        return source;
+    }
+    language.catalog().get(source).map(String::as_str).unwrap_or(source)
+}
+
 /// [`tr`] for a message whose translation depends on where it appears: a catalog entry keyed
 /// `"<context>|<source>"` wins, else the plain message. A language adds the contextual entry only
 /// where its shared translation reads wrongly there (Japanese はい / いいえ as a rule's value).
 fn tr_ctx_in<'a>(language: Locale, context: &str, source: &'a str) -> &'a str {
-    match language.catalog().get(&format!("{context}|{source}")) {
+    match language.catalog_display().get(&format!("{context}|{source}")) {
         Some(translation) => translation.as_str(),
         None => tr_in(language, source),
+    }
+}
+
+/// [`tr_ctx_in`] in the catalog's logical order, for composing (see [`tr_logical`]).
+fn tr_ctx_logical_in<'a>(language: Locale, context: &str, source: &'a str) -> &'a str {
+    match language.catalog().get(&format!("{context}|{source}")) {
+        Some(translation) => translation.as_str(),
+        None => tr_logical_in(language, source),
     }
 }
 
@@ -219,9 +258,10 @@ fn tr_in(language: Locale, source: &str) -> &str {
     })
 }
 
-/// One language's catalog keyed for lookup, with values that outlive the catalog's own borrow.
+/// One language's display-order catalog keyed for lookup, with values that outlive the
+/// catalog's own borrow.
 fn catalog_verbatim(language: Locale) -> BTreeMap<String, &'static str> {
-    language.catalog().iter().map(|(key, value)| (key.clone(), value.as_str())).collect()
+    language.catalog_display().iter().map(|(key, value)| (key.clone(), value.as_str())).collect()
 }
 
 // `tr_format!` (one arm per message, one `format!` per language) is generated by `build.rs` from
@@ -244,10 +284,21 @@ pub fn builtin_label(source: &str, builtin: bool) -> &str {
     if builtin { tr(source) } else { source }
 }
 
+/// [`builtin_label`] in the catalog's logical order, for a `tr_format!` argument (see
+/// [`tr_logical`]): the finished message reorders once at the end.
+pub fn builtin_label_logical(source: &str, builtin: bool) -> &str {
+    if builtin { tr_logical(source) } else { source }
+}
+
 /// A profile's name for display: a built-in profile's is translated, an imported LUT's is shown as
 /// its file named it (it may happen to match a message, like "Vivid").
 pub fn profile_label<'a>(id: &str, name: &'a str) -> &'a str {
     builtin_label(name, lightcraft_engine::presets::profile(id).is_some())
+}
+
+/// [`profile_label`] in logical order, for a `tr_format!` argument (see [`tr_logical`]).
+pub fn profile_label_logical<'a>(id: &str, name: &'a str) -> &'a str {
+    builtin_label_logical(name, lightcraft_engine::presets::profile(id).is_some())
 }
 
 /// An Activity (history) step for display. The step's stored label stays English; generated steps
@@ -257,13 +308,13 @@ pub fn history_label(source: &str, presets: &[lightcraft_develop::Preset]) -> St
         // A user preset may share a stock preset's name: then the step could be either, so it
         // keeps the name as written.
         let builtin = presets.iter().any(|p| p.builtin && p.name == name) && !presets.iter().any(|p| !p.builtin && p.name == name);
-        return tr_format!("Preset: {name}", name = builtin_label(name, builtin));
+        return tr_format!("Preset: {name}", name = builtin_label_logical(name, builtin));
     }
     if let Some(name) = source.strip_prefix("Reset ") {
-        return tr_format!("Reset {name}", name = tr(name));
+        return tr_format!("Reset {name}", name = tr_logical(name));
     }
     if let Some(name) = source.strip_prefix("Quick Develop: ") {
-        return tr_format!("Quick Develop: {name}", name = tr(name));
+        return tr_format!("Quick Develop: {name}", name = tr_logical(name));
     }
     tr(source).to_string()
 }
@@ -271,16 +322,27 @@ pub fn history_label(source: &str, presets: &[lightcraft_develop::Preset]) -> St
 /// A library source's heading (All Photos, Recently Deleted…) in the UI language; an album's
 /// name is the user's and stays verbatim.
 pub fn source_label(source: lightcraft_engine::LibrarySource, catalog: &lightcraft_catalog::Catalog) -> String {
+    display(source_label_logical(source, catalog))
+}
+
+/// [`source_label`] in logical order, for composing into a larger message (see [`tr_logical`]).
+/// An album's name is the user's and stays verbatim either way.
+pub fn source_label_logical(source: lightcraft_engine::LibrarySource, catalog: &lightcraft_catalog::Catalog) -> String {
     let label = source.label(catalog);
-    if matches!(source, lightcraft_engine::LibrarySource::Album(id) if catalog.album(id).is_some()) { label } else { tr(&label).to_string() }
+    if matches!(source, lightcraft_engine::LibrarySource::Album(id) if catalog.album(id).is_some()) { label } else { tr_logical(&label).to_string() }
 }
 
 /// What the grid is titled for the session's source: [`source_label`], or a library folder's last
 /// two names (`photos/travel`; the folder's name is the user's and stays verbatim).
 pub fn source_title(session: &lightcraft_engine::Session) -> String {
+    display(source_title_logical(session))
+}
+
+/// [`source_title`] in logical order, for a `tr_format!` argument (see [`tr_logical`]).
+pub fn source_title_logical(session: &lightcraft_engine::Session) -> String {
     match (session.source, session.library_folder.as_deref()) {
         (lightcraft_engine::LibrarySource::LibraryFolder, Some(path)) => lightcraft_catalog::folders::folder_label(path),
-        (source, _) => source_label(source, &session.catalog),
+        (source, _) => source_label_logical(source, &session.catalog),
     }
 }
 
@@ -289,6 +351,11 @@ pub fn source_title(session: &lightcraft_engine::Session) -> String {
 /// catalog's own wording; every other language formats it with its `*-formats.json` date
 /// patterns and weekday names. The grouping keys themselves never change.
 pub fn date_group_label(key: &str, short: bool) -> String {
+    display(date_group_label_logical(key, short))
+}
+
+/// [`date_group_label`] in logical order, for composing into a larger message (see [`tr_logical`]).
+pub fn date_group_label_logical(key: &str, short: bool) -> String {
     let label = lightcraft_catalog::dates::group_label(key);
     if language() == Locale::En {
         return if short {
@@ -303,28 +370,28 @@ pub fn date_group_label(key: &str, short: bool) -> String {
             label
         };
     }
-    let Some(year) = key.get(..4).and_then(|y| y.parse::<u32>().ok()) else { return tr(&label).to_string() };
+    let Some(year) = key.get(..4).and_then(|y| y.parse::<u32>().ok()) else { return tr_logical(&label).to_string() };
     if key.len() == 4 {
-        return tr_format!("{year}", year = year);
+        return tr_format_logical!("{year}", year = year);
     }
     let Some(month) = key.get(5..7).and_then(|m| m.parse::<u32>().ok()).filter(|m| (1..=12).contains(m)) else {
-        return tr(&label).to_string();
+        return tr_logical(&label).to_string();
     };
     if key.len() == 7 {
-        return if short { tr_format!("{month}", month = month) } else { tr_format!("{month} {year}", month = month, year = year) };
+        return if short { tr_format_logical!("{month}", month = month) } else { tr_format_logical!("{month} {year}", month = month, year = year) };
     }
     if key.len() == 10
         && let Some(weekday) = lightcraft_catalog::dates::weekday(key)
         && let Some(day) = key.get(8..10).and_then(|d| d.parse::<u32>().ok())
     {
-        let weekday = tr(weekday);
+        let weekday = tr_logical(weekday);
         return if short {
-            tr_format!("{weekday}, {day}", weekday = weekday, day = day)
+            tr_format_logical!("{weekday}, {day}", weekday = weekday, day = day)
         } else {
-            tr_format!("{weekday}, {day} {month} {year}", weekday = weekday, day = day, month = month, year = year)
+            tr_format_logical!("{weekday}, {day} {month} {year}", weekday = weekday, day = day, month = month, year = year)
         };
     }
-    tr(&label).to_string()
+    tr_logical(&label).to_string()
 }
 
 /// A capture time for display in the UI language (English: "March 30, 2022 at 10:11:11 PM");
@@ -333,26 +400,37 @@ pub fn display_time(iso: &str) -> String {
     if language() == Locale::En || lightcraft_catalog::dates::normalize_iso(iso).is_none() {
         return lightcraft_catalog::dates::display_time(iso);
     }
-    let date = date_group_label(iso.get(..10).unwrap_or(iso), false);
+    let date = date_group_label_logical(iso.get(..10).unwrap_or(iso), false);
     match iso.get(11..).filter(|time| !time.is_empty()) {
-        Some(time) => format!("{date} {time}"),
-        None => date,
+        Some(time) => display(format!("{date} {time}")),
+        None => display(date),
     }
 }
 
 /// Built-in colour names are translated; custom label names are user data.
 pub fn color_label(catalog: &lightcraft_catalog::Catalog, label: lightcraft_catalog::ColorLabel) -> String {
-    catalog.custom_label_name(label).map_or_else(|| tr(&catalog.label_name(label)).to_string(), str::to_string)
+    display(color_label_logical(catalog, label))
+}
+
+/// [`color_label`] in logical order, for a `tr_format!` argument or a spoken name (see
+/// [`tr_logical`]).
+pub fn color_label_logical(catalog: &lightcraft_catalog::Catalog, label: lightcraft_catalog::ColorLabel) -> String {
+    catalog.custom_label_name(label).map_or_else(|| tr_logical(&catalog.label_name(label)).to_string(), str::to_string)
 }
 
 /// A legacy smart-album filter summary, using the same display labels as filter chips.
 pub fn filter_label(filter: &lightcraft_catalog::Filter, catalog: &lightcraft_catalog::Catalog) -> String {
+    display(filter_label_logical(filter, catalog))
+}
+
+/// [`filter_label`] in logical order, for composing into a larger message (see [`tr_logical`]).
+pub fn filter_label_logical(filter: &lightcraft_catalog::Filter, catalog: &lightcraft_catalog::Catalog) -> String {
     if language() == Locale::En {
         filter.describe_with(catalog)
     } else {
         lightcraft_engine::filter_chips(filter, catalog)
             .iter()
-            .map(|chip| crate::panels::chips::display_label(chip, filter, catalog))
+            .map(|chip| crate::panels::chips::display_label_logical(chip, filter, catalog))
             .collect::<Vec<_>>()
             .join(" · ")
     }
@@ -361,21 +439,21 @@ pub fn filter_label(filter: &lightcraft_catalog::Filter, catalog: &lightcraft_ca
 /// What people read for a smart-album rule's problem, under its row: the field's name and the
 /// issue, in the current language ("Title: needs something to look for").
 pub fn problem_text(problem: &lightcraft_catalog::rules::Problem) -> String {
-    problem_text_in(language(), problem)
+    display(problem_text_in(language(), problem))
 }
 
 /// [`problem_text`] with the rule's position first ("#2.1 Rating: …"), for lists away from the
 /// editor (the sidebar's tooltip).
 pub fn problem_line(problem: &lightcraft_catalog::rules::Problem) -> String {
-    problem_line_in(language(), problem)
+    display(problem_line_in(language(), problem))
 }
 
 fn problem_text_in(language: Locale, problem: &lightcraft_catalog::rules::Problem) -> String {
-    let issue = tr_in(language, problem.issue.text());
+    let issue = tr_logical_in(language, problem.issue.text());
     // Japanese and Chinese catalogs join a label and its text with a full-width colon
     let colon = if matches!(language.script(), "Jpan" | "Hans" | "Hant") { "：" } else { ": " };
     match problem.field.as_deref() {
-        Some(field) => format!("{}{colon}{issue}", tr_in(language, lightcraft_catalog::rules::field_label(field).unwrap_or(field))),
+        Some(field) => format!("{}{colon}{issue}", tr_logical_in(language, lightcraft_catalog::rules::field_label(field).unwrap_or(field))),
         None => issue.to_string(),
     }
 }
@@ -399,6 +477,12 @@ fn choice_text_in<'a>(language: Locale, field: &str, id: &'a str) -> &'a str {
     lightcraft_catalog::rules::choice_label(field, id).map_or(id, |label| tr_in(language, label))
 }
 
+/// [`choice_text`] in the catalog's logical order, for composing a rules summary (see
+/// [`tr_logical`]).
+fn choice_text_logical<'a>(language: Locale, field: &str, id: &'a str) -> &'a str {
+    lightcraft_catalog::rules::choice_label(field, id).map_or(id, |label| tr_logical_in(language, label))
+}
+
 /// What people read for a smart-album yes/no value ("Ja" / "Nein" in German).
 pub fn bool_text(b: bool) -> &'static str {
     bool_text_in(language(), b)
@@ -411,15 +495,24 @@ fn bool_text_in(language: Locale, b: bool) -> &'static str {
     tr_ctx_in(language, BOOL_CONTEXT, lightcraft_catalog::rules::bool_label(b))
 }
 
+fn bool_text_logical(language: Locale, b: bool) -> &'static str {
+    tr_ctx_logical_in(language, BOOL_CONTEXT, lightcraft_catalog::rules::bool_label(b))
+}
+
 /// A rule summary for display, keeping free-text rule values verbatim.
 pub fn rules_label(rules: &lightcraft_catalog::RuleSet, catalog: &lightcraft_catalog::Catalog) -> String {
+    display(rules_label_logical(rules, catalog))
+}
+
+/// [`rules_label`] in logical order, for composing into a larger message (see [`tr_logical`]).
+pub fn rules_label_logical(rules: &lightcraft_catalog::RuleSet, catalog: &lightcraft_catalog::Catalog) -> String {
     fn describe(rules: &lightcraft_catalog::RuleSet, catalog: &lightcraft_catalog::Catalog, depth: usize) -> String {
         use lightcraft_catalog::{
             Match, Rule,
             rules::{FIELDS, Kind, ops_for},
         };
         if depth >= 16 {
-            return tr("Nested group").to_string();
+            return tr_logical("Nested group").to_string();
         }
         let parts: Vec<String> = rules
             .rules
@@ -432,25 +525,25 @@ pub fn rules_label(rules: &lightcraft_catalog::RuleSet, catalog: &lightcraft_cat
                     let text = match kind {
                         // the album's name, as people know it (a user's name is never translated)
                         Kind::Album => lightcraft_catalog::rules::album_name(value, Some(catalog)),
-                        Kind::Choice(_) => value.as_str().map_or_else(|| value.to_string(), |id| choice_text(field, id).to_string()),
-                        Kind::Bool => lightcraft_catalog::rules::bool_value(value).map_or_else(|| value.to_string(), |b| bool_text(b).to_string()),
+                        Kind::Choice(_) => value.as_str().map_or_else(|| value.to_string(), |id| choice_text_logical(language(), field, id).to_string()),
+                        Kind::Bool => lightcraft_catalog::rules::bool_value(value).map_or_else(|| value.to_string(), |b| bool_text_logical(language(), b).to_string()),
                         _ if matches!(op.as_str(), "inLast" | "notInLast") => format!(
                             "{} {}",
                             value.get("n").unwrap_or(&serde_json::Value::Null),
-                            tr(value.get("unit").and_then(serde_json::Value::as_str).unwrap_or("days"))
+                            tr_logical(value.get("unit").and_then(serde_json::Value::as_str).unwrap_or("days"))
                         ),
                         _ => value.as_str().map(str::to_string).unwrap_or_else(|| if value.is_null() { String::new() } else { value.to_string() }),
                     };
-                    format!("{} {} {text}", tr(label), tr(operator)).trim().to_string()
+                    format!("{} {} {text}", tr_logical(label), tr_logical(operator)).trim().to_string()
                 }
             })
             .collect();
         let join = match rules.mode {
-            Match::All => tr("and"),
-            Match::Any | Match::None => tr("or"),
+            Match::All => tr_logical("and"),
+            Match::Any | Match::None => tr_logical("or"),
         };
         let text = parts.join(&format!(" {join} "));
-        if rules.mode == Match::None { format!("{} ({text})", tr("none of")) } else { text }
+        if rules.mode == Match::None { format!("{} ({text})", tr_logical("none of")) } else { text }
     }
     // Preserve the established source-language summary.
     if language() == Locale::En { rules.describe_with(catalog) } else { describe(rules, catalog, 0) }
@@ -487,6 +580,29 @@ mod tests {
         let translation = Locale::Ar.tr("Photo Merge");
         assert_eq!(translation, "الصور دمج", "a two-word label reads right to left");
         assert_ne!(Locale::De.tr("File"), "File", "a left-to-right catalog is untouched");
+    }
+
+    /// The two orders are the contract: catalog values stay logical at rest, `tr`/`tr_format!`
+    /// hand out display order for painting, and `tr_logical`/`tr_format_logical!` return logical
+    /// text for composing — a format argument or a screen reader's name. A display-ordered piece
+    /// fed into another `tr_format!` would be reordered a second time and come out scrambled.
+    #[test]
+    fn arabic_composes_logically_and_displays_once() {
+        set_language(Locale::Ar);
+        assert_eq!(tr_logical("Photo Merge"), "دمج الصور", "the order the translator wrote");
+        assert_eq!(tr("Photo Merge"), "الصور دمج", "the order egui paints");
+
+        // Composing: a logical argument lands at its placeholder; tr_format! reorders once.
+        let logical = tr_format_logical!("{label}, {n} photos", label = tr_logical("All Photos"), n = 5);
+        assert_eq!(logical, "كل الصور، 5 صورة", "a screen reader announces logical order");
+        assert_eq!(tr_format!("Restore {}", tr_logical("Photo Merge")), "الصور دمج استعادة");
+        // The bug tr_logical prevents: a display-ordered `tr` result as an argument scrambles.
+        assert_eq!(tr_format!("Restore {}", tr("Photo Merge")), "دمج الصور استعادة");
+
+        // User text fills its placeholder in logical order and reorders with the message.
+        let album = "رحلة المدينة";
+        assert_eq!(tr_format_logical!("Added {n} photo{} to “{}”", "", album, n = 3), "أُضيفت 3 صورة إلى «رحلة المدينة»");
+        set_language(Locale::En);
     }
 
     /// Where two catalogs translate the same text they agree on its placeholders. Catalogs may cover
@@ -907,11 +1023,11 @@ mod tests {
         for n in [0, 1, 2, 5, 11, 21, 22, 25, 111] {
             assert_eq!(tr_format!("Imported {} photo{}", n, if n == 1 { "" } else { "s" }), format!("Імпортовано фото: {n}"));
             assert_eq!(tr_format!("{} files and {f} folder{}", n, "s", f = n), format!("Файлів: {n}, тек: {n}"));
-            let noun = tr(if n == 1 { "cached picture" } else { "cached pictures" });
+            let noun = tr_logical(if n == 1 { "cached picture" } else { "cached pictures" });
             assert_eq!(tr_format!("{n} {noun}", n = n, noun = noun), format!("Кешовані зображення: {n}"));
         }
         // This trailing argument is queue progress, not an English plural suffix.
-        let queued = tr_format!(" · {queued} waiting", queued = 5);
+        let queued = tr_format_logical!(" · {queued} waiting", queued = 5);
         assert_eq!(
             tr_format!("Denoising {name}: {done} of {total} tiles{}", queued, name = "IMG.CR3", done = 1, total = 4),
             "Усунення шуму IMG.CR3: ділянки — 1 із 4 · очікують: 5"

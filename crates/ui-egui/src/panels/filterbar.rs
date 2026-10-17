@@ -60,7 +60,7 @@ fn picker(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, current: &str, a
     let r = crate::widgets::dropdown(
         ui,
         &format!("filter-{id}"),
-        if active && matches!(id, "camera" | "lens" | "keyword") { current } else { crate::i18n::tr(current) },
+        if active && matches!(id, "camera" | "lens" | "keyword") { current } else { crate::i18n::tr_logical(current) },
         t.font(12.5),
         if active { t.text } else { t.text_label },
     );
@@ -179,7 +179,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     for l in ColorLabel::ALL {
         let on = chosen.contains(&l);
         let name = format!("{l:?}").to_lowercase();
-        let tip = crate::i18n::tr_format!("{} label (click more labels to show any of them)", crate::i18n::color_label(&app.session.catalog, l));
+        let tip = crate::i18n::tr_format!("{} label (click more labels to show any of them)", crate::i18n::color_label_logical(&app.session.catalog, l));
         let resp = toggle(ui, &format!("label-{name}"), on, &tip, |p, r, _| {
             p.circle_filled(r.center(), 5.5, label_color(l));
         });

@@ -82,15 +82,18 @@ fn generate() -> Result<String, Box<dyn std::error::Error>> {
     }
 
     let mut source = String::from(concat!(
-        "/// Translate a format string, checked by `format!` in every language.\n",
+        "/// Translate a format string, checked by `format!` in every language, in display order\n",
+        "/// (a right-to-left language's result once through `i18n::display`). Arguments are logical\n",
+        "/// text: pass `tr_logical`/`tr_format_logical!` results, not `tr`/`tr_format!` ones — the\n",
+        "/// whole message is reordered once, here.\n",
         "/// `build.rs` writes one arm per message from `locales/*-formats.json`.\n",
         "macro_rules! tr_format {\n",
     ));
-    for english in all {
+    for english in &all {
         let en = serde_json::to_string(english)?;
         source.push_str(&format!("    ({en} $(, $($args:tt)*)?) => {{\n        $crate::i18n::display(match $crate::i18n::language() {{\n"));
         for (_, variant, messages) in &catalogs {
-            if let Some(translated) = messages.get(english) {
+            if let Some(translated) = messages.get(english.as_str()) {
                 let translated = serde_json::to_string(translated)?;
                 source.push_str(&format!("            $crate::i18n::Locale::{variant} => format!({translated} $(, $($args)*)?),\n"));
             }
@@ -100,9 +103,28 @@ fn generate() -> Result<String, Box<dyn std::error::Error>> {
     source.push_str(concat!(
         "}\n",
         "\n",
+        "/// `tr_format!` in the catalog's logical order: a message composed inside another message\n",
+        "/// (a `tr_format!` argument) or a spoken name for accessibility, which is reordered by the\n",
+        "/// outer `tr_format!`/`display` or handled by the assistive technology itself.\n",
+        "macro_rules! tr_format_logical {\n",
+    ));
+    for english in all {
+        let en = serde_json::to_string(english)?;
+        source.push_str(&format!("    ({en} $(, $($args:tt)*)?) => {{\n        match $crate::i18n::language() {{\n"));
+        for (_, variant, messages) in &catalogs {
+            if let Some(translated) = messages.get(english.as_str()) {
+                let translated = serde_json::to_string(translated)?;
+                source.push_str(&format!("            $crate::i18n::Locale::{variant} => format!({translated} $(, $($args)*)?),\n"));
+            }
+        }
+        source.push_str(&format!("            _ => format!({en} $(, $($args)*)?),\n        }}\n    }};\n"));
+    }
+    source.push_str(concat!(
+        "}\n",
+        "\n",
         "// `macro_rules!` is textual: the module re-export is what lets call sites say\n",
         "// `crate::i18n::tr_format!`.\n",
-        "pub(crate) use tr_format;\n",
+        "pub(crate) use {tr_format, tr_format_logical};\n",
     ));
     Ok(source)
 }

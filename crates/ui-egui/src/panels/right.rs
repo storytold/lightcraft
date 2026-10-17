@@ -148,7 +148,7 @@ fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             ui.label(crate::i18n::tr("Aspect Ratio"));
             let cur = aspect_label(app.crop_tool_aspect(), original);
             let t = Tokens::get(ui.ctx());
-            let r = crate::widgets::dropdown(ui, "cropAspect", crate::i18n::tr(&cur), t.font(12.5), t.text);
+            let r = crate::widgets::dropdown(ui, "cropAspect", crate::i18n::tr_logical(&cur), t.font(12.5), t.text);
 
             egui::Popup::menu(&r).show(|ui| {
                 for (label, a) in ASPECT_PRESETS {
@@ -387,7 +387,7 @@ fn remove(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             lightcraft_develop::SpotMode::Remove => "Remove",
             lightcraft_develop::SpotMode::Fill => "Content-Aware",
         };
-        super::edit::sub_title(ui, &crate::i18n::tr_format!("{mode} spot {} of {}", i + 1, d.spots.len(), mode = crate::i18n::tr(mode)));
+        super::edit::sub_title(ui, &crate::i18n::tr_format!("{mode} spot {} of {}", i + 1, d.spots.len(), mode = crate::i18n::tr_logical(mode)));
     }
     let plain = |id: &'static str, label: &'static str, min: f64, max: f64, default: f64| lightcraft_develop::ControlSpec {
         id,
@@ -493,7 +493,7 @@ fn red_eye(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         ui,
         &crate::i18n::tr_format!(
             "{label} {index} of {n}",
-            label = crate::i18n::tr(if eye.pet { "Pet Eye" } else { "Red Eye" }),
+            label = crate::i18n::tr_logical(if eye.pet { "Pet Eye" } else { "Red Eye" }),
             index = i + 1,
             n = n
         ),
@@ -542,7 +542,7 @@ fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 .copy_of
                 .and_then(|m| app.session.catalog.photo(m))
                 .map(|m| m.file_name.clone())
-                .unwrap_or_else(|| crate::i18n::tr("a removed photo").into());
+                .unwrap_or_else(|| crate::i18n::tr_logical("a removed photo").into());
             ui.label(egui::RichText::new(crate::i18n::tr_format!("Virtual copy “{name}” of {of}", name = name, of = of)).color(t.text_label));
         }
         ui.add_space(8.0);
@@ -682,15 +682,15 @@ fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             }
         }
         if let Some(a) = p.analysis {
-            let mut line = crate::i18n::tr_format!("Focus {:.0}", a.sharpness);
+            let mut line = crate::i18n::tr_format_logical!("Focus {:.0}", a.sharpness);
             if a.clipped > 0.02 {
-                line.push_str(&crate::i18n::tr_format!(" · {:.0}% clipped", a.clipped * 100.0));
+                line.push_str(&crate::i18n::tr_format_logical!(" · {:.0}% clipped", a.clipped * 100.0));
             }
             if a.group.is_some() {
                 line.push_str(if a.best { " · best of its burst" } else { " · in a burst" });
             }
             ui.add_space(4.0);
-            ui.label(egui::RichText::new(line).color(t.text_dim));
+            ui.label(egui::RichText::new(crate::i18n::display(line)).color(t.text_dim));
         }
         // offline originals / smart previews
         // (cached answers, checked off the UI thread: unknown counts as online / no smart preview)

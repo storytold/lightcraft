@@ -309,12 +309,12 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     let preview = app.session.execute("stack.auto", &json!({"gap": *gap, "preview": true})).unwrap_or_default();
                     let scope = if app.session.selection.ids.len() > 1 { "the selected photos" } else { "the photos in view" };
                     ui.label(
-                        egui::RichText::new(crate::i18n::tr_format!("Creates {} stacks from {} of {scope}", preview["stacks"], preview["photos"], scope = crate::i18n::tr(scope))).color(t.text_dim),
+                        egui::RichText::new(crate::i18n::tr_format!("Creates {} stacks from {} of {scope}", preview["stacks"], preview["photos"], scope = crate::i18n::tr_logical(scope))).color(t.text_dim),
                     );
                 }
                 Dialog::Cull { reject_below, pick_best } => {
                     let n = app.session.selection.ids.len();
-                    let scope = if n > 1 { crate::i18n::tr_format!("the {n} selected photos", n = n) } else { crate::i18n::tr_format!("the {} photos in view", app.session.visible_cloned().len()) };
+                    let scope = if n > 1 { crate::i18n::tr_format_logical!("the {n} selected photos", n = n) } else { crate::i18n::tr_format_logical!("the {} photos in view", app.session.visible_cloned().len()) };
                     ui.label(egui::RichText::new(crate::i18n::tr_format!("Scores {scope} for focus and exposure and finds similar shots taken within seconds of each other (bursts).", scope = scope)).color(t.text_label));
                     ui.add_space(6.0);
                     let r = ui.add(egui::Slider::new(reject_below, 0.0..=80.0).text(crate::i18n::tr("Reject below focus")).step_by(1.0));
@@ -432,7 +432,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     }
                     let rules = app.session.view_rules();
                     let n = app.session.catalog.query(&rules, &Default::default()).len();
-                    ui.label(egui::RichText::new(crate::i18n::tr_format!("Matches: {}", crate::i18n::filter_label(&rules, &app.session.catalog))).color(t.text_label));
+                    ui.label(egui::RichText::new(crate::i18n::tr_format!("Matches: {}", crate::i18n::filter_label_logical(&rules, &app.session.catalog))).color(t.text_label));
                     ui.label(
                         egui::RichText::new(crate::i18n::tr_format!("{n} photo{} now · updates automatically as photos change", if n == 1 { "" } else { "s" }, n = n))
                             .color(t.text_dim),
@@ -1114,7 +1114,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     );
                 }
                 Dialog::ConfirmDelete { count } => {
-                    let what = if *count == 1 { crate::i18n::tr("this photo").to_string() } else { crate::i18n::tr_format!("these {count} photos", count = count) };
+                    let what = if *count == 1 { crate::i18n::tr_logical("this photo").to_string() } else { crate::i18n::tr_format_logical!("these {count} photos", count = count) };
                     ui.label(crate::i18n::tr_format!("Move {what} to Recently Deleted?", what = what));
                     ui.label(egui::RichText::new(crate::i18n::tr("They can be restored from Recently Deleted until it is emptied.")).color(t.text_dim));
                 }
@@ -1224,7 +1224,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     Dialog::Import { opts } => {
                         let n = opts.selected_paths().len();
                         let verb = if opts.copy && opts.move_files { "Move" } else { "Import" };
-                        add_label = crate::i18n::tr_format!("{verb} {n} Photo{}", if n == 1 { "" } else { "s" }, verb = crate::i18n::tr(verb), n = n);
+                        add_label = crate::i18n::tr_format!("{verb} {n} Photo{}", if n == 1 { "" } else { "s" }, verb = crate::i18n::tr_logical(verb), n = n);
                         add_label.as_str()
                     }
                     Dialog::ContactSheet { .. } => "Choose PDF…",

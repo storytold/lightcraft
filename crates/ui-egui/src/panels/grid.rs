@@ -145,7 +145,7 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let chips = lightcraft_engine::filter_chips(&app.session.filter, &app.session.catalog);
     let total = app.session.source_total();
     let counted = super::chips::count_text(ids.len(), total, !chips.is_empty());
-    let cnt = if sel_n > 1 { crate::i18n::tr_format!("{sel_n} selected · {counted}", counted = counted, sel_n = sel_n) } else { counted };
+    let cnt = if sel_n > 1 { crate::i18n::tr_format!("{sel_n} selected · {counted}", counted = counted, sel_n = sel_n) } else { crate::i18n::display(counted) };
     match app.session.browse.clone().filter(|_| app.session.source == lightcraft_engine::LibrarySource::Folder) {
         Some(b) => {
             let local = app.caches.grid.local(&app.session.catalog, &ids, generation);
@@ -178,7 +178,7 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         if !chips.is_empty() {
             let body = match total {
                 Some(n) if n > 0 => {
-                    crate::i18n::tr_format!("{n} photos in {} are hidden by the filters above", crate::i18n::source_title(&app.session), n = n)
+                    crate::i18n::tr_format!("{n} photos in {} are hidden by the filters above", crate::i18n::source_title_logical(&app.session), n = n)
                 }
                 _ => "Remove a filter above, or choose Clear all".to_string(),
             };
@@ -565,15 +565,15 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
     // screen readers: the file, then rating / flag / label
     let mut spoken = photo.file_name.clone();
     if photo.rating > 0 {
-        spoken.push_str(&crate::i18n::tr_format!(", {} star{}", photo.rating, if photo.rating == 1 { "" } else { "s" }));
+        spoken.push_str(&crate::i18n::tr_format_logical!(", {} star{}", photo.rating, if photo.rating == 1 { "" } else { "s" }));
     }
     match photo.flag {
-        lightcraft_catalog::Flag::Pick => spoken.push_str(crate::i18n::tr(", picked")),
-        lightcraft_catalog::Flag::Reject => spoken.push_str(crate::i18n::tr(", rejected")),
+        lightcraft_catalog::Flag::Pick => spoken.push_str(crate::i18n::tr_logical(", picked")),
+        lightcraft_catalog::Flag::Reject => spoken.push_str(crate::i18n::tr_logical(", rejected")),
         lightcraft_catalog::Flag::None => {}
     }
     if let Some(l) = photo.label {
-        spoken.push_str(&crate::i18n::tr_format!(", {} label", crate::i18n::color_label(&app.session.catalog, l)));
+        spoken.push_str(&crate::i18n::tr_format_logical!(", {} label", crate::i18n::color_label_logical(&app.session.catalog, l)));
     }
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, &spoken));
     let active = state == lightcraft_engine::SelectionState::Active;
@@ -628,12 +628,13 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
                 .into_iter()
                 .flatten()
                 .collect();
-                if parts.is_empty() { "—".to_string() } else { parts.join(" · ") }
+                if parts.is_empty() { "—".to_string() } else { crate::bidi::visual(&parts.join(" · ")).into_owned() }
             }
             "date" => photo.captured.as_deref().map(crate::i18n::display_time).unwrap_or_else(|| crate::i18n::tr("No date").into()),
-            _ => photo.file_name.rsplit_once('.').map(|(n, _)| n.to_string()).unwrap_or(photo.file_name.clone()),
+            // the file's name is user data in logical order: display order once, here
+            _ => crate::bidi::visual(photo.file_name.rsplit_once('.').map(|(n, _)| n).unwrap_or(&photo.file_name)).into_owned(),
         };
-        p.text(pos2(r.left() + 8.0, r.top() + 12.0), Align2::LEFT_CENTER, crate::bidi::visual(&name), t.font(10.5), t.text_dim);
+        p.text(pos2(r.left() + 8.0, r.top() + 12.0), Align2::LEFT_CENTER, name, t.font(10.5), t.text_dim);
         let fmt = photo.format.clone();
         let g = p.layout_no_wrap(fmt, t.semibold(9.0), t.text_label);
         let br = Rect::from_min_size(pos2(r.right() - g.size().x - 14.0, r.top() + 5.0), g.size() + vec2(8.0, 3.0));
@@ -703,7 +704,7 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
         p.galley(pos2(br.left() + 17.0, br.center().y - g.size().y / 2.0), g, Color32::WHITE);
         register(ui.ctx(), format!("badge:previewOnly:{}", id.0), br);
         ui.interact(br, egui::Id::new(("preview-only-badge", id.0)), Sense::hover())
-            .on_hover_text(crate::i18n::tr_format!("Preview only — {}", crate::widgets::preview_only_explanation(why)));
+            .on_hover_text(crate::i18n::tr_format!("Preview only — {}", crate::widgets::preview_only_explanation_logical(why)));
     }
     if photo.flag == Flag::Reject {
         p.rect_filled(img_rect, 0.0, Color32::from_black_alpha(110));

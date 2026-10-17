@@ -5,7 +5,7 @@
 //! slider mixes in. It is cached data made in the background for the photos being looked at, and never a file in the
 //! library. A model is fetched only when the user presses Download and accepts its terms.
 
-use crate::i18n::{tr, tr_format};
+use crate::i18n::{tr, tr_format, tr_format_logical, tr_logical};
 use egui::RichText;
 use lightcraft_catalog::PhotoId;
 use lightcraft_engine::denoise::PhotoState;
@@ -328,7 +328,7 @@ fn work_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, list: &V
                 .unwrap_or_default();
             let text = tr_format!(
                 "Denoising {name}: {done} of {total} tiles{}",
-                if queued > 0 { tr_format!(" · {queued} waiting", queued = queued) } else { String::new() },
+                if queued > 0 { tr_format_logical!(" · {queued} waiting", queued = queued) } else { String::new() },
                 name = name,
                 done = done,
                 total = total
@@ -393,9 +393,9 @@ fn work_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, list: &V
 fn device_line(d: &Value, run_on: &str) -> String {
     match d["kind"].as_str() {
         _ if run_on == "cpu" => tr("The processor does the work.").into(),
-        Some("gpu") => tr_format!("Running on {}.", d["adapter"].as_str().unwrap_or(tr("the graphics card"))),
+        Some("gpu") => tr_format!("Running on {}.", d["adapter"].as_str().unwrap_or(tr_logical("the graphics card"))),
         Some("cpu") => {
-            tr_format!("Running on the processor: {}.", tr(d["reason"].as_str().unwrap_or("the graphics card is not used")).trim_end_matches('.'))
+            tr_format!("Running on the processor: {}.", tr_logical(d["reason"].as_str().unwrap_or("the graphics card is not used")).trim_end_matches('.'))
         }
         _ => tr("The graphics card is set up when the next photo is made.").into(),
     }
@@ -570,7 +570,7 @@ fn plain(e: &lightcraft_engine::EngineError) -> String {
 
 /// "1 photo" / "3 photos": the count with the right noun.
 fn count(n: u64, one: &str, many: &str) -> String {
-    tr_format!("{n} {noun}", n = n, noun = tr(if n == 1 { one } else { many }))
+    tr_format!("{n} {noun}", n = n, noun = tr_logical(if n == 1 { one } else { many }))
 }
 
 pub(super) fn window_pace(app: &LightcraftApp, ctx: &egui::Context, now: f64, watching: bool) -> &'static str {
@@ -623,7 +623,7 @@ pub(super) fn licence_line(m: &Value) -> String {
         Some("no") => "non-commercial use only",
         _ => "terms unclear",
     };
-    tr_format!("{name} · {terms}", name = tr(name), terms = tr(terms))
+    tr_format!("{name} · {terms}", name = tr_logical(name), terms = tr_logical(terms))
 }
 
 pub(super) fn open_page(app: &mut LightcraftApp, url: &str) {
@@ -664,7 +664,7 @@ pub fn model_dialog(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, info
                 RichText::new(tr_format!(
                     "Downloads from {host}. Once it has arrived and checked out, LightCraft installs it, {after}.",
                     host = host,
-                    after = tr(after)
+                    after = tr_logical(after)
                 ))
                 .color(t.text_label),
             )
@@ -685,7 +685,7 @@ pub fn model_dialog(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, info
         ui.add_space(2.0);
         ui.label(RichText::new(tr("LightCraft does not know this model, so it assumed:")).color(t.text_label));
         for a in info["assumptions"].as_array().into_iter().flatten().filter_map(Value::as_str) {
-            ui.add(egui::Label::new(RichText::new(tr_format!("•  {assumption}", assumption = tr(a))).font(t.font(12.0)).color(t.text_dim)).wrap());
+            ui.add(egui::Label::new(RichText::new(tr_format!("•  {assumption}", assumption = tr_logical(a))).font(t.font(12.0)).color(t.text_dim)).wrap());
         }
     }
     if let Some(url) = m["source"].as_str().or(m["licence"]["url"].as_str()) {

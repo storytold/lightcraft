@@ -679,15 +679,15 @@ impl LightcraftApp {
                 let plural = if done == 1 { "" } else { "s" };
                 let mut msg = match (b.error(), b.what) {
                     (Some(e), what) => format!("{}: {e}", if what.is_empty() { "previews" } else { what }),
-                    (None, "") => crate::i18n::tr_format!("Previews ready for {done} photo{plural}", done = done, plural = plural),
+                    (None, "") => crate::i18n::tr_format_logical!("Previews ready for {done} photo{plural}", done = done, plural = plural),
                     (None, what) => {
-                        crate::i18n::tr_format!("Done ({what}): {done} photo{plural}", done = done, plural = plural, what = crate::i18n::tr(what))
+                        crate::i18n::tr_format_logical!("Done ({what}): {done} photo{plural}", done = done, plural = plural, what = crate::i18n::tr_logical(what))
                     }
                 };
                 if failed > 0 {
-                    msg.push_str(&crate::i18n::tr_format!(" · {failed} couldn't be rendered", failed = failed));
+                    msg.push_str(&crate::i18n::tr_format_logical!(" · {failed} couldn't be rendered", failed = failed));
                 }
-                self.toast(ctx, msg);
+                self.toast(ctx, crate::i18n::display(msg));
             }
         } else {
             // The activity stack shows the run while it works; poll for the end.
