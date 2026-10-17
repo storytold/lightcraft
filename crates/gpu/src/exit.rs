@@ -35,6 +35,12 @@ pub(crate) fn enter() -> Option<Work<'static>> {
     GATE.enter()
 }
 
+/// Keep tracking work that was already submitted before a caller timed out. Unlike `enter`,
+/// this continuation must survive a racing shutdown: it admits no new device work.
+pub(crate) fn submitted() -> Work<'static> {
+    GATE.submitted()
+}
+
 pub(crate) fn begin_shutdown() {
     GATE.close();
 }
@@ -63,6 +69,12 @@ impl Gate {
         }
         s.busy = s.busy.saturating_add(1);
         Some(Work(self))
+    }
+
+    fn submitted(&self) -> Work<'_> {
+        let mut s = self.lock();
+        s.busy = s.busy.saturating_add(1);
+        Work(self)
     }
 
     /// Nothing enters from now on.
@@ -96,6 +108,19 @@ impl Drop for Work<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_timed_out_submission_stays_in_flight_even_if_shutdown_races() {
+        let gate = Gate::new();
+        let render = gate.enter().unwrap();
+        gate.close();
+        let submitted = gate.submitted();
+        drop(render);
+        assert!(!gate.wait_idle(Duration::ZERO));
+        assert!(gate.enter().is_none());
+        drop(submitted);
+        assert!(gate.wait_idle(Duration::ZERO));
+    }
 
     #[test]
     fn closed_gate_lets_nothing_in_and_waits_for_what_is_inside() {

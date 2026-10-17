@@ -137,7 +137,8 @@ impl Fallback {
     }
 }
 
-/// A simulated GPU failure for the next [`render`] on this thread (tests of the CPU fallback).
+/// A fault for the next [`render`] on this thread (tests of the CPU fallback). All are simulated
+/// except [`Fault::DeviceLost`], which destroys the real device and requires an isolated process.
 #[doc(hidden)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Fault {
@@ -148,6 +149,11 @@ pub enum Fault {
     DropWork,
     /// A storage-buffer limit of this many bytes for this render.
     Limit(u64),
+    /// Time out the next readback after submitting real work and requesting its map.
+    ReadbackTimeout,
+    /// Destroy the real device. Only use in an isolated test process: this cannot be reset and
+    /// disables GPU rendering for every thread in that process.
+    DeviceLost,
 }
 
 thread_local! {
@@ -159,8 +165,8 @@ thread_local! {
     static BROKEN_HERE: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
 }
 
-/// Make the next [`render`] on this thread fail with `f` (tests). A fatal `f` then stops GPU use
-/// on this thread only, until [`reset_failures`].
+/// Make the next [`render`] on this thread fail with `f` (tests). A simulated fatal `f` stops GPU
+/// use on this thread only, until [`reset_failures`]. [`Fault::DeviceLost`] cannot be reset.
 #[doc(hidden)]
 pub fn inject_fault(f: Fault) {
     FAULT.with(|c| c.set(Some(f)));
@@ -232,7 +238,21 @@ pub fn shutting_down() -> bool {
 pub fn wait_idle(timeout: std::time::Duration) -> bool {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        exit::wait_idle(timeout)
+        let started = std::time::Instant::now();
+        loop {
+            // A timed-out render returned already, but its submission still holds an exit
+            // token. Drive bounded maintenance even if no later render will poll the device.
+            if let Some(g) = existing_device() {
+                g.readbacks_ready();
+            }
+            let left = timeout.saturating_sub(started.elapsed());
+            if exit::wait_idle(left.min(std::time::Duration::from_millis(10))) {
+                return true;
+            }
+            if started.elapsed() >= timeout {
+                return false;
+            }
+        }
     }
     #[cfg(target_arch = "wasm32")]
     {
@@ -470,8 +490,21 @@ pub fn try_render(
         // in flight until this returns; not tried once the process is ending (issue #620)
         let _work = exit::enter().ok_or(Fallback::NotTried)?;
         let gpu = device().ok_or(Fallback::NotTried)?;
-        let ext = stages.map(|c| c.extension::<GpuStages>());
         let fault = take_fault();
+        if fault == Some(Fault::DeviceLost) {
+            gpu.device.destroy();
+        }
+        let ready = gpu.readbacks_ready();
+        // Maintenance can deliver the device-lost callback. Never resume on that device.
+        if !enabled() {
+            return Err(Fallback::NotTried);
+        }
+        if !ready {
+            let reason = "GPU render: an earlier readback timed out; its submitted work is still pending".to_string();
+            record_fallback(reason.clone());
+            return Err(Fallback::Failed(reason));
+        }
+        let ext = stages.map(|c| c.extension::<GpuStages>());
         // A simulated failure stops GPU use on this thread only (see `BROKEN_HERE`).
         let stop = |reason: &str| if fault.is_some() { mark_broken_here(reason) } else { mark_broken(reason) };
         let _ = ctx::take_failure(); // nothing left over from an earlier render on this thread
@@ -487,6 +520,15 @@ pub fn try_render(
             (Some(f), _) if f.kind == ctx::FailKind::Limit => Some(f),
             (f, scoped) => scoped.or(f),
         };
+        let failure = failure.map(|f| {
+            // A timeout and an asynchronous device-loss notification can race. Recovery must
+            // never obscure the fatal reason or imply that this device will be reused.
+            if f.kind == ctx::FailKind::Timeout && BROKEN.load(Ordering::Relaxed) {
+                ctx::Failure { kind: ctx::FailKind::Fatal, reason: unavailable_reason().unwrap_or_else(|| "device failure".into()) }
+            } else {
+                f
+            }
+        });
         let reason = match (r, failure) {
             (Err(_), _) => {
                 log::error!("gpu: render failed; using the CPU pipeline from now on");
@@ -511,7 +553,7 @@ pub fn try_render(
                         gpu.trim(0);
                         format!("{what}: {}", f.reason)
                     }
-                    ctx::FailKind::Limit | ctx::FailKind::Blank => format!("{what}: {}", f.reason),
+                    ctx::FailKind::Limit | ctx::FailKind::Blank | ctx::FailKind::Timeout => format!("{what}: {}", f.reason),
                 };
                 log::warn!("gpu: rendering on the CPU instead: {reason}");
                 if render::profiling() {

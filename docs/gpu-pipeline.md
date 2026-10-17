@@ -183,8 +183,14 @@ cannot vouch for:
 - **Error scopes.** Each render runs inside out-of-memory, validation and internal error scopes
   (thread-local in wgpu): errors fail that render instead of disappearing into the uncaptured
   handler. The device-lost callback and the uncaptured handler (other threads) stop GPU use.
-- **Readback.** The wait has a timeout (60 s); a failed wait, map error or missing map callback
-  fails the render (before, a lost device left the readback waiting forever).
+- **Readback.** The wait targets the render's own submission and has a timeout (60 s), including
+  stage waits under `LIGHTCRAFT_PROFILE`. A timeout fails only that render (issue #1948): the
+  staging buffer is destroyed, cancelling its map, while wgpu keeps its submitted uses alive.
+  Later GPU renders fall back promptly until a nonblocking poll confirms that submission has
+  completed; then GPU rendering resumes automatically. Already-submitted storage buffers remain
+  safe to reuse in queue order, and the failed render's cached stages are cleared. Pending work
+  stays counted for shutdown, whose bounded wait also drives completion polling. No additional
+  stages are submitted after a failed readback. Map errors and missing callbacks remain fatal.
 - **Limits.** The device is created with the adapter's limits; every buffer is checked against
   `min(max_storage_buffer_binding_size, max_buffer_size)` when it is created. A render with a
   buffer over the limit (24 MP RGB f32 = 275 MiB; a 128 MiB WebGPU-default device; many masks)
@@ -204,7 +210,8 @@ cannot vouch for:
 | buffer over the device limit | CPU | GPU |
 | out of device memory | CPU (buffer pool emptied) | GPU |
 | entirely black result | CPU | GPU |
-| validation / internal error, device lost, readback failure or timeout, incomplete image, panic | CPU | CPU (whole process) |
+| readback / stage wait timeout | CPU | CPU while that submission is pending, then GPU |
+| validation / internal error, device lost, map failure / missing callback, incomplete image, panic | CPU | CPU (whole process) |
 
 **Diagnosing.** `ui.inspect` → `perf.gpu` (adapter in use), `perf.gpuReason` (why renders don't use
 the GPU, e.g. `"disabled by LIGHTCRAFT_GPU=0"`, `"software adapter (llvmpipe (LLVM 21.1.8, 256 bits))
@@ -226,6 +233,11 @@ consequences: a simulated fatal failure stops GPU use on the injecting thread on
 false, `unavailable_reason()` set there), until `reset_failures()`, which undoes nothing else — a
 real failure still stops the whole process. Such a test asserts on its own render's reason, not on
 `last_fallback()`, so it can run beside other tests rendering on the GPU (issue #675).
+`crates/gpu/tests/readback_timeout.rs` injects a timeout after real submission and map registration
+on 96 × 64 procedural images, including an early dehaze readback, then checks CPU-equivalent GPU
+renders without resetting failures. Its final negative control destroys the actual device and
+verifies that neither another thread nor `reset_failures` can revive it; this test therefore has
+its own executable. This does not reproduce a real 60 s stall or a large-image memory workload.
 
 ## Correctness: CPU oracle and equivalence tests
 `crates/gpu/tests/equivalence.rs` renders the same settings on both and compares 8-bit sRGB:

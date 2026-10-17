@@ -129,6 +129,8 @@ impl GpuStages {
 pub(crate) struct Cx<'a> {
     pub gpu: &'a Gpu,
     enc: Option<wgpu::CommandEncoder>,
+    /// Last stage submission not yet waited for (including an automatic flush).
+    last_submission: Option<wgpu::SubmissionIndex>,
     /// Kernel invocations recorded since the last submit.
     pending: u64,
 }
@@ -142,7 +144,7 @@ const BAND_PIXELS: usize = 4 << 20;
 
 impl<'a> Cx<'a> {
     pub fn new(gpu: &'a Gpu) -> Cx<'a> {
-        Cx { gpu, enc: Some(gpu.encoder()), pending: 0 }
+        Cx { gpu, enc: Some(gpu.encoder()), last_submission: None, pending: 0 }
     }
 
     /// Record kernel `name` (see [`Gpu::run`]).
@@ -159,6 +161,7 @@ impl<'a> Cx<'a> {
     /// Submit what is recorded and read back `len` values of `b`.
     pub fn read<T: bytemuck::Pod>(&mut self, b: &Buf, len: usize) -> Vec<T> {
         self.pending = 0;
+        self.last_submission = None; // the readback waits for this and all earlier work
         let enc = self.enc.take().unwrap_or_else(|| self.gpu.encoder());
         self.gpu.finish_and_read(enc, b, len)
     }
@@ -169,18 +172,22 @@ impl<'a> Cx<'a> {
     /// and buffers dropped by earlier work become reusable by later work (lower peak memory).
     pub fn flush(&mut self) {
         self.pending = 0;
-        if let Some(enc) = self.enc.take() {
-            self.gpu.submit([enc.finish()]);
+        if let Some(enc) = self.enc.take()
+            && !crate::ctx::failed()
+        {
+            self.last_submission = Some(self.gpu.submit([enc.finish()]));
         }
     }
 
     /// Submit what is recorded and wait for it (profiling only: stage timings).
     pub fn sync(&mut self) {
-        self.pending = 0;
-        if let Some(enc) = self.enc.take() {
-            self.gpu.submit([enc.finish()]);
+        self.flush();
+        if let Some(submission) = self.last_submission.take()
+            && !crate::ctx::failed()
+            && let Err(e) = self.gpu.wait(submission, false)
+        {
+            fail(e.kind, format!("stage wait failed: {}", e.reason));
         }
-        let _ = self.gpu.device.poll(wgpu::PollType::wait_indefinitely());
     }
 
     /// A zero-filled buffer (the clear is recorded).
@@ -604,6 +611,7 @@ pub fn render(
         Some(crate::Fault::Limit(bytes)) => Some(crate::ctx::LimitOverride::new(bytes)),
         _ => None,
     };
+    let _timeout = (fault == Some(crate::Fault::ReadbackTimeout)).then(crate::ctx::ReadbackTimeout::new);
     if !gpu.fits(n * 3) {
         fail(
             FailKind::Limit,
@@ -640,6 +648,9 @@ pub fn render(
         }
     };
     lap("sample", &mut t, &mut cx);
+    if crate::ctx::failed() {
+        return None;
+    }
 
     // 2. white balance, defringe, spots, noise reduction
     let lin = match cached.as_ref().and_then(|e| e.lin.clone()).filter(|(k, _)| *k == plan.lin_key) {
@@ -647,6 +658,9 @@ pub fn render(
         None => Arc::new(linear(&mut cx, &sampled, info, &plan, &mut host)),
     };
     lap("wb/nr", &mut t, &mut cx);
+    if crate::ctx::failed() {
+        return None;
+    }
 
     // 3. spatial planes
     let mut planes = match cached.map(|e| e.planes) {
@@ -659,6 +673,9 @@ pub fn render(
         prep.air = a;
     }
     lap("planes", &mut t, &mut cx);
+    if crate::ctx::failed() {
+        return None;
+    }
     if let Some(c) = stages {
         c.put(Entry { src: src.clone(), geo: plan.geo, sampled, lin: Some((plan.lin_key, lin.clone())), planes });
     }
@@ -666,6 +683,9 @@ pub fn render(
     // 4. masks
     let (masks, terms) = masks(&mut cx, &lin, &prep, &plan, &mut host);
     lap("masks", &mut t, &mut cx);
+    if crate::ctx::failed() {
+        return None;
+    }
 
     // 5. per-pixel stage
     let mut fp = FinishParams::new(s, &plan.frame, info, w, h, plan.px_per_long, prep.air, req.space);
@@ -1090,6 +1110,26 @@ fn masks(cx: &mut Cx<'_>, lin: &Buf, prep: &Prep, plan: &Plan<'_>, host: &mut Ho
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn profiling_sync_waits_for_an_already_flushed_submission() {
+        let Some(gpu) = crate::device() else {
+            lightcraft_testkit::skip!(Gpu, "no GPU adapter ({})", crate::unavailable_reason().unwrap_or_default());
+            return;
+        };
+        let _scope = crate::ctx::RenderScope::new(gpu);
+        let mut cx = Cx::new(gpu);
+        let _buffer = cx.zeroed(4);
+        // Automatic stage flushing leaves exactly this state, without needing a large render.
+        cx.flush();
+        assert!(cx.enc.is_none());
+        assert!(cx.last_submission.is_some());
+        let waits = crate::ctx::WAIT_CALLS.with(|n| n.get());
+        cx.sync();
+        assert_eq!(crate::ctx::WAIT_CALLS.with(|n| n.get()), waits + 1, "profiling must wait even when flush already consumed the encoder");
+        assert!(cx.last_submission.is_none());
+        assert!(!crate::ctx::failed());
+    }
 
     #[test]
     fn coverage_mask_matches_per_pixel_decision() {
