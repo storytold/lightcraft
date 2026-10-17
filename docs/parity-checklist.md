@@ -220,7 +220,7 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 | LR-EDIT-OPTICS-MANUAL | Manual distortion / vignetting | P1 | ✅ | `ctl:optics.distortion`, `ctl:optics.vignetting`, `ctl:optics.vignettingMidpoint` | |
 | LR-EDIT-GEOM-UPRIGHT | Upright | P1 | ✅ | `cmd:geometry.upright`, `cmd:geometry.guides` | |
 | LR-EDIT-GEOM-MANUAL | Manual transform | P1 | ✅ | `ctl:geometry.*` | |
-| LR-EDIT-GEOM-CONSTRAIN | Constrain crop | P1 | ✅ | `crates/ui-egui/src/panels/right.rs` (checkbox → `cmd:develop.merge`) | |
+| LR-EDIT-GEOM-CONSTRAIN | Constrain crop | P1 | ✅ | `crates/ui-egui/src/panels/right.rs` (checkbox → `cmd:develop.merge`), `crates/engine/src/lib.rs` (`fit_constrained_crop`) | Ticking it, or changing Geometry, Upright or lens corrections while it is ticked, shrinks the stored crop about its centre until no blank corner is left, so the Crop tool shows it (it used to apply at render time only, outside the Crop tool: issue #1927; tests in `crates/engine/src/tests_constrain_crop.rs`). A crop drawn by hand is kept as drawn; unticking keeps the tighter crop |
 | LR-EDIT-GEOM-GRID | Grid while transforming | P2 | ✅ | `crates/ui-egui/src/panels/detail.rs` | a fine grid over the photo while a geometry slider is dragged |
 | LR-EDIT-LENSBLUR | Lens blur | P2 | ⬜ | | settings field reserved, not rendered |
 | LR-EDIT-CALIB | Calibration [Classic] | P1 | ✅ | `ctl:calibration.*` | shadows tint, red/green/blue primary hue and saturation; read/written in XMP |

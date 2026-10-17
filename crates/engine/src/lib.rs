@@ -875,7 +875,7 @@ impl Session {
     /// undo step; otherwise it is committed with a history entry.
     pub fn set_develop(&mut self, id: PhotoId, settings: DevelopSettings, label: &str) -> Result<()> {
         let now = (self.clock)();
-        let settings = Arc::new(settings);
+        let settings = Arc::new(self.fit_constrained_crop(id, settings));
         if let Some(i) = &self.interaction
             && i.photo == id
         {
@@ -885,6 +885,37 @@ impl Session {
         ops.extend(self.auto_sync_ops(id, &settings, label));
         let op = if ops.len() == 1 { ops.remove(0) } else { Op::Batch { ops } };
         self.commit(label, op)
+    }
+
+    /// "Constrain Crop" keeps the stored crop inside the warped photo, as Lightroom does (issue
+    /// #1927): turning it on, or an edit that changes the warp (Geometry, Upright, lens corrections,
+    /// their sections' eyes) while it is on, shrinks the crop about its centre until no blank corner
+    /// is left, so the Crop tool shows what the render keeps. An edit of the crop itself is left as
+    /// drawn (the render still constrains it).
+    fn fit_constrained_crop(&self, id: PhotoId, mut d: DevelopSettings) -> DevelopSettings {
+        if !d.geometry.constrain_crop {
+            return d;
+        }
+        let Some(photo) = self.catalog.photo(id) else { return d };
+        let before = &photo.develop;
+        let turned_on = !before.geometry.constrain_crop;
+        let warp_changed = before.geometry != d.geometry
+            || before.optics != d.optics
+            || before.orientation != d.orientation
+            || before.disabled_sections != d.disabled_sections;
+        let crop_edited = before.crop.geometry != d.crop.geometry;
+        if !(turned_on || (warp_changed && !crop_edited)) {
+            return d;
+        }
+        let frame = lightcraft_pipeline::geometry::Frame::with_lens(
+            photo.width.max(1) as usize,
+            photo.height.max(1) as usize,
+            &d,
+            true,
+            photo.embedded_lens.as_ref(),
+        );
+        d.crop.geometry.rect = frame.crop.rect;
+        d
     }
 
     /// With Auto Sync on, the ops that carry an edit of the active photo `id` (to `new`) over to the
@@ -1242,6 +1273,8 @@ mod tests_album_remove;
 mod tests_albums_local;
 #[cfg(test)]
 mod tests_color;
+#[cfg(test)]
+mod tests_constrain_crop;
 #[cfg(test)]
 mod tests_crop_angle;
 #[cfg(test)]
