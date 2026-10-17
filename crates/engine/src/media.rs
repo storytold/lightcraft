@@ -960,10 +960,18 @@ impl RenderJob {
             Some(e) => Err(e),
             None => self.source.load_source().and_then(|s| closing().map_or(Ok(s), Err)),
         };
+        // Validate and load the correction before entering the pipeline; errors remain visible,
+        // including exports, instead of silently producing an uncorrected picture.
+        let source = source.and_then(|source| {
+            let plain = source.image_for(self.settings.denoise_amount());
+            let corrected =
+                crate::reflections::apply(&plain, &self.settings.reflection, self.source_key, source.info_or(self.info.clone()).mattes.as_deref())?;
+            Ok((source, corrected))
+        });
         match source {
-            Ok(source) => {
+            Ok((source, corrected)) => {
                 // the plain picture, or (Denoise amount above 0 and a denoised picture cached) the mix the amount asks for
-                let src = &source.image_for(self.settings.denoise_amount());
+                let src = &corrected;
                 let info = source.info_or(self.info);
                 // Thumbnails (many small jobs side by side) stay on the CPU; views and exports use
                 // the GPU when there is one.

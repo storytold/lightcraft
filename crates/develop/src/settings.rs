@@ -137,6 +137,9 @@ pub struct DevelopSettings {
     pub red_eye: Vec<RedEye>,
     pub lens_blur: LensBlur,
     pub enhance: Enhance,
+    /// Local per-photo reflection correction; absent in old catalogs.
+    #[serde(skip_serializing_if = "Reflection::is_default")]
+    pub reflection: Reflection,
     /// Camera calibration: shadows tint and primary hue/saturation (applied before tone mapping).
     pub calibration: Calibration,
     /// Section on/off toggles (the "eye" buttons on panel headers): section id → enabled.
@@ -172,6 +175,7 @@ impl Default for DevelopSettings {
             red_eye: Vec::new(),
             lens_blur: LensBlur::default(),
             enhance: Enhance::default(),
+            reflection: Reflection::default(),
             calibration: Calibration::default(),
             disabled_sections: Vec::new(),
         }
@@ -1189,5 +1193,50 @@ impl DevelopSettings {
         s.light.whites = add(s.light.whites, h.sdr_whites);
         s.effects.clarity = add(s.effects.clarity, h.sdr_clarity);
         std::borrow::Cow::Owned(s)
+    }
+}
+
+/// A cached, source-bound correction applied before ordinary develop edits.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Reflection {
+    /// Original-source coordinates (before user crop/rotation), expressed as percentages.
+    pub limit_region: bool,
+    pub left: f64,
+    pub top: f64,
+    pub right: f64,
+    pub bottom: f64,
+    pub protect_sky: bool,
+    pub detail_protection: f64,
+    pub model: String,
+    pub enabled: bool,
+    pub correction: String,
+    pub source_key: String,
+    pub amount: f64,
+    pub quality: u32,
+}
+impl Reflection {
+    pub fn is_default(&self) -> bool {
+        self.correction.is_empty() && self.amount == 0.0
+    }
+}
+
+impl Default for Reflection {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            correction: String::new(),
+            source_key: String::new(),
+            amount: 0.0,
+            quality: 0,
+            limit_region: false,
+            left: 0.0,
+            top: 0.0,
+            right: 100.0,
+            bottom: 100.0,
+            protect_sky: false,
+            detail_protection: 0.0,
+            model: String::new(),
+        }
     }
 }

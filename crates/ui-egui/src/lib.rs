@@ -32,6 +32,7 @@ pub mod panels;
 pub mod pick;
 pub mod print_view;
 pub mod recheck;
+pub mod reflections;
 pub mod region;
 pub mod render;
 pub mod shortcuts;
@@ -427,6 +428,10 @@ pub struct LightcraftApp {
     pub(crate) compare_hold_until: f64,
     /// Photo Merge dialog previews and background merges.
     pub merge: merge::MergeState,
+    pub reflection_quality: u32,
+    pub reflection_model: String,
+    pub reflection_open: bool,
+    pub reflection_photo: Option<lightcraft_catalog::PhotoId>,
     /// An import in progress (the import review dialog's batches).
     pub import: Option<import::ImportTask>,
     /// A folder scan in progress (feeds the import review).
@@ -532,6 +537,10 @@ impl LightcraftApp {
             compare_tiles: Default::default(),
             compare_hold_until: f64::NEG_INFINITY,
             merge: merge::MergeState::default(),
+            reflection_quality: 768,
+            reflection_model: "dsrnet-s".into(),
+            reflection_open: true,
+            reflection_photo: None,
             import: None,
             scan: None,
             sync: None,

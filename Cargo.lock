@@ -3245,6 +3245,7 @@ dependencies = [
  "lightcraft-preview",
  "lightcraft-raster",
  "lightcraft-raw",
+ "lightcraft-reflections",
  "lightcraft-scenes",
  "lightcraft-segment",
  "lightcraft-slideshow",
@@ -3449,6 +3450,17 @@ dependencies = [
  "zune-core",
  "zune-jpeg",
  "zune-jpegxl",
+]
+
+[[package]]
+name = "lightcraft-reflections"
+version = "0.8.0"
+dependencies = [
+ "candle-core",
+ "candle-nn",
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]

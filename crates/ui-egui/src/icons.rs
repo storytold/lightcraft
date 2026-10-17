@@ -14,6 +14,7 @@ pub enum Icon {
     Share,
     Help,
     Cloud,
+    Reflection,
     Sliders,
     Crop,
     Eraser,
@@ -311,6 +312,13 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, color: Color32, turn: Option<
                 let a = (i as f32 * 45.0).to_radians();
                 pen.line(&[(10.0 + 6.0 * a.cos(), 10.0 + 6.0 * a.sin()), (10.0 + 8.0 * a.cos(), 10.0 + 8.0 * a.sin())]);
             }
+        }
+        Reflection => {
+            pen.line(&[(9.0, 2.5), (9.0, 17.5)]);
+            pen.closed(&[(6.0, 5.0), (2.5, 14.5), (6.0, 14.5)]);
+            pen.closed(&[(12.0, 5.0), (15.5, 14.5), (12.0, 14.5)]);
+            pen.line(&[(16.0, 2.0), (16.0, 6.0)]);
+            pen.line(&[(14.0, 4.0), (18.0, 4.0)]);
         }
         EyeOff => {
             pen.arc(10.0, 16.0, 9.0, 212.0, 328.0);

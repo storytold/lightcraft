@@ -204,6 +204,15 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("app.contactSheet", "Export Contact Sheet PDF", None, ""),
     ("photo.editInPhotoCraft", "Edit in PhotoCraft", Some("Cmd+Shift+E"), "Photo>Edit In"),
     ("photo.editInExternal", "Edit in Other Editor", Some("Cmd+Alt+E"), "Photo>Edit In"),
+    ("photo.removeReflections", "Remove Reflections", None, "Photo"),
+    ("reflection.apply", "Apply Reflection Removal", None, ""),
+    ("reflection.reset", "Reset Reflection Removal", None, ""),
+    ("reflection.toggle", "Reflection Visibility", None, ""),
+    ("reflection.panel", "Reflections", None, ""),
+    ("reflection.install", "Install Reflection Model…", None, ""),
+    ("reflection.instructions", "Model download instructions", None, ""),
+    ("reflection.models", "Reflection Models", None, ""),
+    ("reflection.status", "Reflection Status", None, ""),
     // {ids?, app?}: the original files themselves (a raw stays a raw: no render, no copy), opened
     // in the other editor, e.g. a raw developer
     ("photo.openOriginalInExternal", "Open Original in Other Editor (RAW, no copy)", None, "Photo>Edit In"),
@@ -1441,6 +1450,18 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         }
         "photo.editInPhotoCraft" => edit_in(app, &ctx, p, true),
         "photo.editInExternal" => edit_in(app, &ctx, p, false),
+        "photo.removeReflections"
+        | "reflection.apply"
+        | "reflection.reset"
+        | "reflection.status"
+        | "reflection.toggle"
+        | "reflection.panel"
+        | "reflection.install"
+        | "reflection.models"
+        | "reflection.instructions" => {
+            app.ui.right = RightPanel::Remove;
+            crate::reflections::command(app, id, p)
+        }
         "photo.openOriginalInExternal" => open_original_in(app, &ctx, p),
         "dialog.cull" => {
             app.ui.dialog = Some(Dialog::Cull { reject_below: 0.0, pick_best: true });
@@ -2140,6 +2161,11 @@ pub fn ui_enabled(app: &LightcraftApp, id: &str) -> bool {
             app.session.active().is_some()
         }
         "photo.tagFromTracklog" => app.session.active().is_some() && app.services.pick_tracklog.is_some(),
+        "photo.removeReflections" | "reflection.apply" => {
+            app.session.active().is_some() && lightcraft_engine::reflections::available() && !app.tasks.is_running("Remove Reflections")
+        }
+        "reflection.install" | "reflection.models" | "reflection.instructions" => !cfg!(target_arch = "wasm32"),
+        "reflection.reset" | "reflection.status" | "reflection.toggle" | "reflection.panel" => app.session.active().is_some(),
         "photo.editInPhotoCraft" | "photo.editInExternal" => app.session.active().is_some() && app.services.open_with.is_some(),
         "app.exportPrevious" => app.session.active().is_some() && app.session.last_export.is_some(),
         "dialog.pasteSettings" => app.session.active().is_some() && app.session.clipboard.is_some(),
