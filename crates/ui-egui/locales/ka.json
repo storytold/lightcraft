@@ -2718,5 +2718,11 @@
   "≥  at least": "≥  არანაკლებ",
   "⌘-drag to straighten, ⇧G Guided Upright, a grid while transforming.": "⌘-გადათრევა გასასწორებლად, ⇧G მართვადი Upright, ბადე გარდაქმნისას.",
   "日本語": "日本語",
-  "繁體中文（台灣）": "繁體中文（台灣）"
+  "繁體中文（台灣）": "繁體中文（台灣）",
+  "Fit to Photos": "ფოტოებში ჩატევა",
+  "Map": "რუკა",
+  "Map tiles are off (Settings / map.tileSource)": "რუკის ფილები გამორთულია (პარამეტრები / map.tileSource)",
+  "No photos with a location": "მდებარეობიანი ფოტოები არ არის",
+  "photo without GPS": "ფოტო GPS-ის გარეშე",
+  "photos without GPS": "ფოტო GPS-ის გარეშე"
 }

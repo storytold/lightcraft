@@ -2157,5 +2157,11 @@
   "This is a Lightroom catalog, not a LightCraft library. Import it into a LightCraft library instead?": "To jest katalog Lightrooma, a nie biblioteka LightCraft. Zaimportować go zamiast tego do biblioteki LightCraft?",
   "Unnamed Faces": "Nienazwane twarze",
   "Vertical inset (% of short edge)": "Margines pionowy (% krótszego boku)",
-  "not added to Apple Photos (cancelled)": "nie dodano do aplikacji Zdjęcia (anulowano)"
+  "not added to Apple Photos (cancelled)": "nie dodano do aplikacji Zdjęcia (anulowano)",
+  "Fit to Photos": "Dopasuj do zdjęć",
+  "Map": "Mapa",
+  "Map tiles are off (Settings / map.tileSource)": "Kafelki mapy są wyłączone (Ustawienia / map.tileSource)",
+  "No photos with a location": "Brak zdjęć z lokalizacją",
+  "photo without GPS": "zdjęcie bez GPS",
+  "photos without GPS": "zdjęć bez GPS"
 }

@@ -12,6 +12,7 @@ workspace = true
 [dependencies]
 craft-ui = { workspace = true }
 lightcraft-geom = { workspace = true }
+lightcraft-map = { workspace = true }
 lightcraft-meta = { workspace = true }
 lightcraft-color = { workspace = true }
 lightcraft-raster = { workspace = true }
