@@ -1084,6 +1084,7 @@
   "Photos per bracket (0 = auto)": "Fotos por horquillado (0 = automático)",
   "Photos seen in Local but never added or changed leave the catalog when their folder hasn't been browsed for this long (checked when the library opens). Files stay on disk; browsing the folder shows them again.": "Las fotos vistas en Local, pero nunca añadidas ni modificadas, salen del catálogo cuando su carpeta no se ha explorado durante este tiempo (se comprueba al abrir la biblioteca). Los archivos permanecen en el disco; al explorar la carpeta vuelven a aparecer.",
   "Photos that arrive in this folder (tethering, a scanner, a sync app) are added as soon as they're complete.": "Las fotos que llegan a esta carpeta (captura conectada, un escáner, una aplicación de sincronización) se añaden en cuanto están completas.",
+  "Photos in folders inside the watched folder are added too (hidden folders and the library's own folder are skipped).": "También se añaden las fotos de las carpetas que hay dentro de la carpeta vigilada (se omiten las carpetas ocultas y la propia carpeta de la biblioteca).",
   "Pick": "Seleccionada",
   "Pick Flag": "Marca de seleccionada",
   "Pick a colour on the photo with the eyedropper.": "Elegir un color en la foto con el cuentagotas.",

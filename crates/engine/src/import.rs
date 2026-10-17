@@ -310,6 +310,8 @@ pub struct ImportDefaults {
     pub auto_folder: Option<String>,
     pub auto_copy: bool,
     pub auto_album: Option<String>,
+    /// Auto import also looks in the watched folder's subfolders (off: its top level only).
+    pub auto_subfolders: bool,
     /// Open the import review when a camera or memory card is connected.
     pub show_on_card: bool,
 }

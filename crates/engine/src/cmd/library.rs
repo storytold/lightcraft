@@ -24,15 +24,157 @@ fn select_after_deletion(s: &mut Session, before: &[PhotoId]) {
 /// The auto-import folder's visible files with their sizes (the file-system half of
 /// `library.autoImportScan`; the app lists on a worker thread and passes `listing`).
 pub fn list_auto_import_folder(folder: &str) -> std::result::Result<Vec<(String, u64)>, String> {
-    let rd = std::fs::read_dir(folder).map_err(|e| format!("{folder}: {e}"))?;
-    Ok(rd
-        .flatten()
-        .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
-        .filter_map(|e| {
-            let m = std::fs::metadata(e.path()).ok()?;
-            m.is_file().then(|| (e.path().to_string_lossy().to_string(), m.len()))
-        })
-        .collect())
+    AutoImportWalk::new(folder, false, Vec::new()).list().map(|l| l.files)
+}
+
+/// Folder levels an auto import with subfolders lists (the watched folder's own entries are
+/// level 1).
+pub const AUTO_IMPORT_MAX_DEPTH: usize = 16;
+/// Directory entries an auto import with subfolders looks at per scan, at most.
+pub const AUTO_IMPORT_MAX_ENTRIES: usize = 200_000;
+
+/// How the watched folder is listed (`library.autoImportScan`): built from the session on the UI
+/// thread ([`AutoImportWalk::of`]), listed on a worker thread ([`AutoImportWalk::list`]).
+#[derive(Clone, Debug)]
+pub struct AutoImportWalk {
+    pub folder: String,
+    /// Also list subfolders (photos only, by extension), up to [`AUTO_IMPORT_MAX_DEPTH`] levels and
+    /// [`AUTO_IMPORT_MAX_ENTRIES`] entries. Hidden folders and folder links are never entered.
+    pub subfolders: bool,
+    /// Folders never entered: the library's own (where auto import's copies go).
+    pub skip: Vec<std::path::PathBuf>,
+    /// Bounds of a listing with subfolders.
+    pub max_depth: usize,
+    pub max_entries: usize,
+}
+
+/// What [`AutoImportWalk::list`] found.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AutoImportListing {
+    /// (path, size) of each file.
+    pub files: Vec<(String, u64)>,
+    /// What was left out and why (an unreadable subfolder, a bound reached).
+    pub warnings: Vec<String>,
+}
+
+impl AutoImportWalk {
+    /// The session's auto-import listing, if a watched folder is set.
+    pub fn of(s: &Session) -> Option<Self> {
+        let d = &s.import_defaults;
+        let folder = d.auto_folder.clone()?;
+        // auto import copies into the library's Originals, so skipping the library also skips
+        // the destination when it sits inside the watched folder
+        let skip = s.library.as_ref().filter(|l| l.on_disk).map(|l| vec![l.dir.clone()]).unwrap_or_default();
+        Some(AutoImportWalk::new(&folder, d.auto_subfolders, skip))
+    }
+
+    /// A listing of `folder` with the default bounds.
+    pub fn new(folder: &str, subfolders: bool, skip: Vec<std::path::PathBuf>) -> Self {
+        AutoImportWalk { folder: folder.to_string(), subfolders, skip, max_depth: AUTO_IMPORT_MAX_DEPTH, max_entries: AUTO_IMPORT_MAX_ENTRIES }
+    }
+
+    /// List the watched folder (an error only when the folder itself can't be read).
+    pub fn list(&self) -> std::result::Result<AutoImportListing, String> {
+        use std::path::{Path, PathBuf};
+        let folder = &self.folder;
+        let rd = std::fs::read_dir(folder).map_err(|e| format!("{folder}: {e}"))?;
+        let mut out = AutoImportListing::default();
+        if !self.subfolders {
+            out.files = rd
+                .flatten()
+                .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
+                .filter_map(|e| {
+                    let m = std::fs::metadata(e.path()).ok()?;
+                    m.is_file().then(|| (e.path().to_string_lossy().to_string(), m.len()))
+                })
+                .collect();
+            return Ok(out);
+        }
+        // skipped folders compared by their canonical paths: a folder's canonical path is the
+        // canonical root joined with its path below the root (folder links aren't followed)
+        let canon = |p: &Path| std::fs::canonicalize(p).ok();
+        let skip: Vec<PathBuf> = self.skip.iter().filter_map(|p| canon(p)).collect();
+        let root = canon(Path::new(folder)).unwrap_or_else(|| PathBuf::from(folder));
+        if skip.contains(&root) {
+            return Ok(out);
+        }
+        let mut entries = 0usize;
+        // stopped at the entry bound / left folders below the depth bound unlisted
+        let (mut full, mut deep) = (false, false);
+        let mut bad_names = 0usize;
+        // (folder, its canonical path, its level: the watched folder's entries are level 1)
+        let mut stack: Vec<(PathBuf, PathBuf, usize, Option<std::fs::ReadDir>)> = vec![(PathBuf::from(folder), root, 1, Some(rd))];
+        while let Some((dir, canon_dir, level, rd)) = stack.pop() {
+            let rd = match rd {
+                Some(rd) => rd,
+                None => match std::fs::read_dir(&dir) {
+                    Ok(rd) => rd,
+                    // gone since it was listed (moved or deleted while scanning): nothing to say
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(e) => {
+                        out.warnings.push(format!("Auto Import skipped {}: {e}", dir.display()));
+                        continue;
+                    }
+                },
+            };
+            let mut below = Vec::new();
+            for e in rd.flatten() {
+                if entries >= self.max_entries {
+                    full = true;
+                    break;
+                }
+                entries = entries.saturating_add(1);
+                let name = e.file_name();
+                let Some(name) = name.to_str() else {
+                    bad_names = bad_names.saturating_add(1);
+                    continue;
+                };
+                if name.starts_with('.') {
+                    continue;
+                }
+                let Ok(ft) = e.file_type() else { continue };
+                let path = e.path();
+                if ft.is_dir() {
+                    let c = canon_dir.join(name);
+                    if skip.contains(&c) {
+                        continue;
+                    }
+                    if level >= self.max_depth {
+                        deep = true;
+                        continue;
+                    }
+                    below.push((path, c, level.saturating_add(1), None));
+                    continue;
+                }
+                // a link to a file is a file; a link to a folder isn't followed (no loops)
+                if level > 1 && !crate::import::is_supported(&path) {
+                    continue;
+                }
+                let Ok(m) = std::fs::metadata(&path) else { continue };
+                if m.is_file() {
+                    out.files.push((path.to_string_lossy().to_string(), m.len()));
+                }
+            }
+            if full {
+                break;
+            }
+            below.sort_by(|a, b| b.0.cmp(&a.0));
+            stack.extend(below);
+        }
+        if bad_names > 0 {
+            out.warnings.push(format!("Auto Import skipped {bad_names} file or folder names that aren't valid Unicode in {folder}"));
+        }
+        if full {
+            out.warnings.push(format!(
+                "Auto Import stopped looking in {folder} after {} files and folders: photos beyond them aren't imported",
+                self.max_entries
+            ));
+        }
+        if deep {
+            out.warnings.push(format!("Auto Import looks {} folder levels deep in {folder}: photos further down aren't imported", self.max_depth));
+        }
+        Ok(out)
+    }
 }
 
 /// `library.import`'s params, checked (no file-system calls).
@@ -1354,7 +1496,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Auto Import Settings",
             [],
             None,
-            "{folder?: path | null (off), copy?: bool (copy into the library's Originals, else add in place), album?: name | null} — a watched folder whose new photos are added as they arrive (library.autoImportScan; the app scans every few seconds) → the settings",
+            "{folder?: path | null (off), copy?: bool (copy into the library's Originals, else add in place), album?: name | null, subfolders?: bool (also its subfolders: photos only, hidden folders, folder links and the library's own folder skipped, 16 levels / 200,000 entries at most; default false)} — a watched folder whose new photos are added as they arrive (library.autoImportScan; the app scans every few seconds) → the settings",
             always,
             |s, p| {
                 if let Some(f) = p.get("folder") {
@@ -1367,12 +1509,15 @@ pub fn specs() -> Vec<CommandSpec> {
                 if let Some(c) = p.get("copy").and_then(Value::as_bool) {
                     s.import_defaults.auto_copy = c;
                 }
+                if let Some(b) = p.get("subfolders").and_then(Value::as_bool) {
+                    s.import_defaults.auto_subfolders = b;
+                }
                 if let Some(a) = p.get("album") {
                     s.import_defaults.auto_album = a.as_str().map(str::trim).filter(|a| !a.is_empty()).map(str::to_string);
                 }
                 s.save_prefs()?;
                 let d = &s.import_defaults;
-                Ok(json!({"folder": d.auto_folder, "copy": d.auto_copy, "album": d.auto_album}))
+                Ok(json!({"folder": d.auto_folder, "copy": d.auto_copy, "album": d.auto_album, "subfolders": d.auto_subfolders}))
             }
         ),
         cmd!(
@@ -1380,10 +1525,13 @@ pub fn specs() -> Vec<CommandSpec> {
             "Auto Import Now",
             [],
             None,
-            "{listing?: [[path, size]] (the folder as listed by the caller, e.g. on a worker thread), start?: bool (false: return the `library.import` params as `import` instead of importing)} — add the watched folder's new photos (files the library doesn't have yet; partial / still-copying files wait for the next scan) → {imported, folder, warnings?: [{path, code, profile?, mode?, fields?}], import?}",
+            "{listing?: [[path, size]] (the folder as listed by the caller, e.g. on a worker thread), listingWarnings?: [text] (what that listing left out), start?: bool (false: return the `library.import` params as `import` instead of importing)} — add the watched folder's new photos (files the library doesn't have yet; partial / still-copying files wait for the next scan; with subfolders on, its subfolders' photos too) → {imported, folder, subfolders, warnings?: [{path, code, profile?, mode?, fields?}], listingWarnings?: [text] (an unreadable subfolder, a listing bound reached), import?}",
             always,
             |s, p| {
-                let Some(folder) = s.import_defaults.auto_folder.clone() else { return Ok(json!({"imported": [], "folder": null})) };
+                let Some(walk) = AutoImportWalk::of(s) else {
+                    return Ok(json!({"imported": [], "folder": null, "subfolders": s.import_defaults.auto_subfolders}));
+                };
+                let (folder, subfolders) = (walk.folder.clone(), walk.subfolders);
                 // only files that stopped growing: a file still being written is left for later
                 let known: std::collections::HashSet<String> = s
                     .catalog
@@ -1394,9 +1542,21 @@ pub fn specs() -> Vec<CommandSpec> {
                     })
                     .collect();
                 // the folder's files and sizes: listed here, or already listed on a worker thread (the app)
-                let listing: Vec<(String, u64)> = match p.get("listing").and_then(Value::as_array) {
-                    Some(l) => l.iter().filter_map(|e| Some((e.get(0)?.as_str()?.to_string(), e.get(1)?.as_u64()?))).collect(),
-                    None => list_auto_import_folder(&folder).map_err(|e| bad("library.autoImportScan", e))?,
+                let (listing, list_warnings): (Vec<(String, u64)>, Vec<String>) = match p.get("listing").and_then(Value::as_array) {
+                    Some(l) => {
+                        (l.iter().filter_map(|e| Some((e.get(0)?.as_str()?.to_string(), e.get(1)?.as_u64()?))).collect(), strs(p, "listingWarnings"))
+                    }
+                    None => {
+                        let l = walk.list().map_err(|e| bad("library.autoImportScan", e))?;
+                        (l.files, l.warnings)
+                    }
+                };
+                let base = |imported: Value| {
+                    let mut r = json!({"imported": imported, "folder": folder, "subfolders": subfolders});
+                    if !list_warnings.is_empty() {
+                        r["listingWarnings"] = json!(list_warnings);
+                    }
+                    r
                 };
                 let mut fresh = Vec::new();
                 for (ps, size) in listing {
@@ -1413,7 +1573,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     }
                 }
                 if fresh.is_empty() {
-                    return Ok(json!({"imported": [], "folder": folder}));
+                    return Ok(base(json!([])));
                 }
                 let mode = if s.import_defaults.auto_copy { "copy" } else { "add" };
                 // a photo deleted from the library doesn't come back on its own because its file
@@ -1430,13 +1590,15 @@ pub fn specs() -> Vec<CommandSpec> {
                 }
                 if p.get("start").and_then(Value::as_bool) == Some(false) {
                     // the caller imports them (the app: on a worker thread)
-                    return Ok(json!({"imported": [], "folder": folder, "import": params}));
+                    let mut r = base(json!([]));
+                    r["import"] = params;
+                    return Ok(r);
                 }
                 let sel = s.selection.clone();
                 let r = s.execute("library.import", &params)?;
                 // arriving photos don't take over the selection
                 s.selection = sel;
-                let mut result = json!({"imported": r["imported"], "folder": folder});
+                let mut result = base(r["imported"].clone());
                 if let Some(warnings) = r.get("warnings") {
                     result["warnings"] = warnings.clone();
                 }

@@ -1050,6 +1050,7 @@
   "Photos": "写真",
   "Photos seen in Local but never added or changed leave the catalog when their folder hasn't been browsed for this long (checked when the library opens). Files stay on disk; browsing the folder shows them again.": "ローカルで参照しただけの写真は、この期間フォルダを開いていなければカタログから外します。ファイルはディスクに残り、再びフォルダを開くと表示されます",
   "Photos that arrive in this folder (tethering, a scanner, a sync app) are added as soon as they're complete.": "このフォルダに転送された写真は、転送が完了すると自動で追加されます",
+  "Photos in folders inside the watched folder are added too (hidden folders and the library's own folder are skipped).": "監視フォルダー内のフォルダーにある写真も追加されます（隠しフォルダーとライブラリ自体のフォルダーはスキップされます）。",
   "Pick": "採用",
   "Pick a colour on the photo with the eyedropper.": "スポイトで写真の色を選択してください",
   "Pick the sharpest photo of each burst": "連写ごとに最も鮮明な写真を採用",

@@ -390,6 +390,16 @@ fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         });
         if d.auto_folder.is_some() {
             row(ui, t, "", |ui| {
+                let mut sub = d.auto_subfolders;
+                let r = ui.checkbox(&mut sub, crate::i18n::tr("Include subfolders")).on_hover_text(crate::i18n::tr(
+                    "Photos in folders inside the watched folder are added too (hidden folders and the library's own folder are skipped).",
+                ));
+                register(ui.ctx(), "check:settings.autoImportSubfolders", r.rect);
+                if r.changed() {
+                    let _ = app.run("library.autoImport", json!({"subfolders": sub}));
+                }
+            });
+            row(ui, t, "", |ui| {
                 let mut copy = d.auto_copy;
                 if ui.checkbox(&mut copy, crate::i18n::tr("Copy into the library (else use the files where they are)")).changed() {
                     let _ = app.run("library.autoImport", json!({"copy": copy}));

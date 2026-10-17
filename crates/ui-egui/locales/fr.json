@@ -1028,6 +1028,7 @@
   "Photos per bracket (0 = auto)": "Photos par bracketing (0 = auto)",
   "Photos seen in Local but never added or changed leave the catalog when their folder hasn't been browsed for this long (checked when the library opens). Files stay on disk; browsing the folder shows them again.": "Les photos vues dans Local mais jamais ajoutées ni modifiées quittent le catalogue lorsque leur dossier n'a pas été parcouru depuis cette durée (vérifié à l'ouverture de la bibliothèque). Les fichiers restent sur le disque ; parcourir le dossier les fait réapparaître.",
   "Photos that arrive in this folder (tethering, a scanner, a sync app) are added as soon as they're complete.": "Les photos qui arrivent dans ce dossier (capture connectée, scanner, application de synchronisation) sont ajoutées dès qu'elles sont complètes.",
+  "Photos in folders inside the watched folder are added too (hidden folders and the library's own folder are skipped).": "Les photos des dossiers situés dans le dossier surveillé sont aussi ajoutées (les dossiers masqués et le dossier de la bibliothèque elle-même sont ignorés).",
   "Pick": "Sélectionnée",
   "Pick Flag": "Drapeau de sélection",
   "Pick a colour on the photo with the eyedropper.": "Choisissez une couleur sur la photo avec la pipette.",

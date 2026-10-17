@@ -437,6 +437,30 @@ fn auto_import_listing_has_no_row() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// Issue #1109: Settings ▸ Import ▸ Auto Import has an Include subfolders box under the watched
+/// folder, off by default, that switches `library.autoImport`'s `subfolders`.
+#[test]
+fn auto_import_include_subfolders_box() {
+    let mut h = demo();
+    let dir = std::env::temp_dir().join(format!("lc-activity-autoimport-sub-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    h.app.session.execute("library.autoImport", &json!({"folder": dir.to_string_lossy()})).unwrap();
+    let r = h.request("engine.execute", json!({"command": "app.settings", "params": {"tab": "import"}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.request("ui.widgets", json!({}), T);
+    for _ in 0..5 {
+        h.step();
+    }
+    assert!(has(&h, "check:settings.autoImportSubfolders"), "the box is shown");
+    assert!(!h.app.session.import_defaults.auto_subfolders, "off by default");
+    click(&mut h, "check:settings.autoImportSubfolders");
+    assert!(h.app.session.import_defaults.auto_subfolders);
+    click(&mut h, "check:settings.autoImportSubfolders");
+    assert!(!h.app.session.import_defaults.auto_subfolders);
+    h.app.session.import_defaults.auto_folder = None;
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 #[test]
 fn rows_added_later_grow_the_stack() {
     let mut h = demo();

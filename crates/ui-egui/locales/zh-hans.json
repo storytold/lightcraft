@@ -1085,6 +1085,7 @@
   "Photos": "照片",
   "Photos seen in Local but never added or changed leave the catalog when their folder hasn't been browsed for this long (checked when the library opens). Files stay on disk; browsing the folder shows them again.": "仅在“本地”中查看过、从未添加或更改的照片，若其文件夹在此时长内未被浏览，将移出目录（打开图库时检查）。文件保留在磁盘上；浏览该文件夹即可再次显示。",
   "Photos that arrive in this folder (tethering, a scanner, a sync app) are added as soon as they're complete.": "进入此文件夹的照片（联机拍摄、扫描仪、同步应用）在传输完成后即被添加。",
+  "Photos in folders inside the watched folder are added too (hidden folders and the library's own folder are skipped).": "监视文件夹内各文件夹中的照片也会添加（跳过隐藏文件夹和图库本身的文件夹）。",
   "Pick": "留用",
   "Pick a colour on the photo with the eyedropper.": "用吸管在照片上取色。",
   "Pick the sharpest photo of each burst": "为每组连拍选取最清晰的照片",
