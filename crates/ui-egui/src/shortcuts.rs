@@ -398,6 +398,8 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
             if let Some((m, k)) = parse(sc).filter(|_| !native(sc))
                 && !(k == Key::Escape && popup_open)
                 && !taken.contains(&(m, k))
+                // The magnifier uses held Space as a temporary pan override, not a zoom toggle.
+                && !(k == Key::Space && *id == "view.zoomToggle" && app.ui.tool == "zoom" && app.ui.slideshow.is_none())
                 && matches(i, m, k)
             {
                 aliased.push((id, serde_json::from_str(params).unwrap_or_default()));

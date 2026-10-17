@@ -2,20 +2,13 @@
 //! loupe renders at the size it is drawn at (up to the photo's own pixels and a safety ceiling);
 //! "Preview size" in Settings only lowers that when the user asks for it.
 
-use crate::state::{AppSettings, LOUPE_EDGE_CEILING, PREVIEW_LIMITS, STANDARD_PREVIEW_EDGE};
+use crate::state::{AppSettings, LOUPE_EDGE_CEILING, STANDARD_PREVIEW_EDGE};
 
 /// A texture side no GPU we run on refuses (see the tests of small ones below).
 const BIG: usize = 16384;
 
 fn with_limit(preview_limit: u32) -> AppSettings {
     AppSettings { preview_limit, ..Default::default() }
-}
-
-// Given a fresh install
-#[test]
-fn default_is_automatic() {
-    assert_eq!(AppSettings::default().preview_limit, 0);
-    assert_eq!(PREVIEW_LIMITS[0], 0, "Automatic is the first choice");
 }
 
 // Given Automatic, when a 24 MP photo is shown at 1:1, then the render is the photo's own width

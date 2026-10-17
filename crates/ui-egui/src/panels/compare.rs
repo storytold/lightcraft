@@ -220,6 +220,16 @@ fn photo_tile(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, slot: Slo
         } else if resp.dragged() {
             super::detail::pan_image(app, img_area, img, resp.drag_delta());
         }
+        if app.ui.tool == "zoom"
+            && resp.clicked()
+            && let Some(at) = resp.interact_pointer_pos().filter(|p| img_area.contains(*p))
+        {
+            app.ui.pan = (((at.x - img.left()) / img.width()).clamp(0.0, 1.0), ((at.y - img.top()) / img.height()).clamp(0.0, 1.0));
+            // A pointer click targets this pane's point; the keyboard toggle may target the active photo's AF point.
+            app.ui.zoom = if app.ui.zoom == Zoom::Fit { Zoom::Percent(app.ui.click_zoom as f32) } else { Zoom::Fit };
+            app.ui.zoom_anim = true;
+            img = super::detail::fit_rect(img_area, aspect, app.ui.zoom, native, ppp, app.ui.pan);
+        }
     }
     let texture_side = super::detail::texture_side(ui.ctx());
     let want =
@@ -491,7 +501,7 @@ pub fn show_compare(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         if resp.clicked() {
             select_pair(app, sel, cand, id);
         }
-        if resp.double_clicked() {
+        if resp.double_clicked() && app.ui.tool != "zoom" {
             app.ui.zoom = if app.ui.zoom == Zoom::Fit { Zoom::Percent(100.0) } else { Zoom::Fit };
         }
         resp.context_menu(|ui| {

@@ -159,6 +159,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("tool.linear", "Linear Gradient", Some("L"), "Window>Tools"),
     ("tool.radial", "Radial Gradient", Some("R"), "Window>Tools"),
     ("tool.wbPicker", "White Balance Selector", Some("W"), "Window>Tools"),
+    ("tool.zoom", "Zoom Tool", None, "Window>Tools"),
     ("tool.none", "No Tool", None, ""),
     // brush size / feather of the active brush (Masking brush, Remove tool and its selected spot)
     ("brush.smaller", "Decrease Brush Size", Some("["), "Window>Tools"),
@@ -1199,6 +1200,17 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             let tool = &s["tool.".len()..];
             match tool {
                 "none" => app.ui.tool.clear(),
+                "zoom" => {
+                    if matches!(app.ui.right, RightPanel::Crop | RightPanel::Masking | RightPanel::Remove | RightPanel::RedEye) {
+                        let _ = app.session.end_interaction();
+                        app.ui.right = RightPanel::Edit;
+                    }
+                    if !matches!(app.ui.view, ViewMode::Compare | ViewMode::Reference) {
+                        app.ui.view = ViewMode::Detail;
+                    }
+                    app.gesture = None;
+                    app.ui.tool = "zoom".into();
+                }
                 "guidedUpright" => {
                     // Crop & Geometry with Guided Upright on, ready to draw guides
                     app.ui.right = RightPanel::Crop;

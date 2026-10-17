@@ -1,6 +1,6 @@
 # Gaps: where LightCraft falls short of Lightroom
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-14 · **Change:** minor (gap 10: 515 of 1,446 models verified, ~84% of photographers on a verified body)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-15 · **Change:** minor (magnifier and anchored scrub navigation reconciled with upstream's closed original-pixel detail gap; upstream camera-coverage updates retained)
 
 Every known shortfall, one entry each, ranked by user impact (how many Lightroom users hit it, and
 how hard it blocks them), then by effort. **Agents pick work from the top** (the first entry nobody is
@@ -98,6 +98,7 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 | 2026-10-12 | minor | Gap 25: Render to DNG lands as an export format; lossy DNG and AVIF import remain |
 | 2026-10-12 | minor | Gap 10 shrinks: the Hasselblad Lunar (a Sony NEX-7 ARW under its own Make) decodes and is verified, 236 models (#1275) |
 | 2026-10-12 | minor | Gap 14: HLG AVIF export (`hdrTransfer`) and a tested SDR/HDR display decision |
+| 2026-10-11 | minor | Magnifier / Shift scrub and temporary Space pan added; gap 4's rendering work and headline percentages unchanged |
 | 2026-10-12 | minor | Gap 15: printer colour management lands (printer / paper ICC profiles or Managed by Printer, intent, black point compensation, print adjustment, print sharpening, 16-bit ICC-tagged PDF with an output intent); page overlays and direct printing remain |
 | 2026-10-12 | minor | Gap 15 shrinks: File → Print… is a Print dialog with the four layout styles, cell editing, image settings, guides, page setup and templates; printer colour management, page overlays and direct printing remain |
 | 2026-10-12 | minor | Gap 15: the Print module's layout styles, cells, image settings, templates and PDF are `print.*` commands (CLI, control, MCP); the Print view, printer colour management and page overlays remain |
