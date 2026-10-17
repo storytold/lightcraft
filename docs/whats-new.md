@@ -1,5 +1,12 @@
 # What's new in LightCraft
 
+## 2026-10-16
+
+### The photo grid keeps up with imports into a large library
+- While photos are imported into a large library, the grid takes in each batch as it arrives instead of reading
+  every photo of the view again: at about 180,000 photos a batch cost the window a tenth of a second, over and over
+  for as long as the import ran. Changing one photo's capture time or crop is quicker too.
+
 ## 2026-10-14
 
 ### Lightroom radial masks on the right side

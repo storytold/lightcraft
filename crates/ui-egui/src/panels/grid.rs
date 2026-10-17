@@ -42,6 +42,9 @@ pub struct GridStats {
     pub layout_builds: u64,
     /// Per-view data (date runs, row index) built.
     pub view_builds: u64,
+    /// Photos whose date and shape were read from the catalog (every photo of a list read whole;
+    /// only the photos an edit touched of one followed: [`GridCache`]).
+    pub photos_read: u64,
     /// Stack indexes built.
     pub stack_index_builds: u64,
     /// Wall-clock time of the last [`show`].
@@ -62,6 +65,10 @@ type StackIndex = HashMap<PhotoId, (StackId, usize)>;
 /// (`None`: no headers) and the grouping.
 type RunsKey = (u64, Option<SortKey>, GroupBy);
 
+/// The most photos an edit may touch for the grid to read only those again (each costs a lookup
+/// and a date parse; past this, reading the whole list is as quick).
+const MAX_FOLLOWED: usize = 4096;
+
 /// What the grid derives from the visible photos, kept across frames. Everything is keyed by the
 /// session's visible-list generation ([`lightcraft_engine::Session::visible_shared`]), which
 /// changes whenever the list is recomputed (any catalog change: crops, orientation, dates, stacks;
@@ -75,19 +82,159 @@ pub struct GridCache {
     stacks: Option<(u64, Arc<StackIndex>)>,
     /// How many of the photos are browsed (Local) ones, by generation.
     local: Option<(u64, usize)>,
+    /// What was read of each photo of the list last shown.
+    read: Option<ListRead>,
+}
+
+/// What the grid read of each photo of a list, position by position: its own date group (a
+/// stack's members take their first photo's when the runs are made) and its cell's shape. A new
+/// list that differs from this one by the photos an edit touched (an import's batch, a capture
+/// time, a crop) is read again only for those: at 180,000 photos, reading every photo again took
+/// most of a 100 ms frame for each batch an import added.
+struct ListRead {
+    ids: Arc<[PhotoId]>,
+    /// The catalog revision it was read at.
+    revision: u64,
+    /// The date and grouping of the groups (`None`: the list has no date runs, no group is read).
+    dates: Option<(SortKey, GroupBy)>,
+    /// Each photo's group, an index into `names`.
+    groups: Vec<u32>,
+    names: Vec<String>,
+    named: HashMap<String, u32>,
+    /// Each photo's shape; `None` for the square grid, whose cells are all alike.
+    shapes: Option<Vec<f32>>,
+}
+
+impl ListRead {
+    fn new(ids: Arc<[PhotoId]>, revision: u64, dates: Option<(SortKey, GroupBy)>, shaped: bool) -> ListRead {
+        let n = ids.len();
+        let groups = Vec::with_capacity(if dates.is_some() { n } else { 0 });
+        ListRead { ids, revision, dates, groups, names: Vec::new(), named: HashMap::new(), shapes: shaped.then(|| Vec::with_capacity(n)) }
+    }
+
+    /// Read photo `id` from the catalog and put it next.
+    fn read(&mut self, cat: &Catalog, id: PhotoId) {
+        if let Some((key, by)) = self.dates {
+            let name = cat.date_group(id, key, by);
+            let next = u32::try_from(self.names.len()).unwrap_or(u32::MAX);
+            let g = match self.named.get(&name) {
+                Some(g) => *g,
+                None => {
+                    self.named.insert(name.clone(), next);
+                    self.names.push(name);
+                    next
+                }
+            };
+            self.groups.push(g);
+        }
+        if let Some(shapes) = self.shapes.as_mut() {
+            shapes.push(shape_of(cat, id));
+        }
+    }
+
+    /// Read every photo of `ids`.
+    fn whole(stats: &mut GridStats, cat: &Catalog, ids: &Arc<[PhotoId]>, dates: Option<(SortKey, GroupBy)>, shaped: bool) -> ListRead {
+        let mut r = ListRead::new(ids.clone(), cat.revision, dates, shaped);
+        if r.dates.is_some() || shaped {
+            for id in ids.iter() {
+                r.read(cat, *id);
+            }
+            stats.photos_read += ids.len() as u64;
+        }
+        r
+    }
+
+    /// `ids` from what was read of the list before it: the photos the catalog says changed since
+    /// are read again, the others are taken over. `None` when the list is not this one with
+    /// those photos changed, added or removed (another view, order or grouping; an edit to more
+    /// than photos of its own, such as a stack): read it whole then.
+    fn follow(self, stats: &mut GridStats, cat: &Catalog, ids: &Arc<[PhotoId]>, dates: Option<(SortKey, GroupBy)>, shaped: bool) -> Option<ListRead> {
+        if self.dates != dates || self.shapes.is_some() != shaped {
+            return None;
+        }
+        let touched: HashSet<PhotoId> = cat.touched_since(self.revision)?.into_iter().collect();
+        if touched.len() > MAX_FOLLOWED {
+            return None;
+        }
+        let mut r = ListRead::new(ids.clone(), cat.revision, dates, shaped);
+        // (the groups' names go on: an import adds a day or two at most)
+        r.names = self.names;
+        r.named = self.named;
+        let mut was = 0;
+        let mut fresh = 0u64;
+        for id in ids.iter() {
+            if touched.contains(id) {
+                r.read(cat, *id);
+                fresh += 1;
+                continue;
+            }
+            // (the photos touched are read again wherever they are now)
+            while self.ids.get(was).is_some_and(|w| touched.contains(w)) {
+                was += 1;
+            }
+            // an untouched photo is where it was, among the others: else this is another list
+            if self.ids.get(was) != Some(id) {
+                return None;
+            }
+            if dates.is_some() {
+                r.groups.push(*self.groups.get(was)?);
+            }
+            if let (Some(to), Some(from)) = (r.shapes.as_mut(), self.shapes.as_ref()) {
+                to.push(*from.get(was)?);
+            }
+            was += 1;
+        }
+        // no untouched photo left the list
+        if self.ids.get(was..).is_some_and(|rest| rest.iter().any(|w| !touched.contains(w))) {
+            return None;
+        }
+        stats.photos_read += fresh;
+        Some(r)
+    }
 }
 
 impl GridCache {
-    fn runs(&mut self, stats: &mut GridStats, cat: &Catalog, ids: &[PhotoId], key: RunsKey) -> Arc<Vec<DateRun>> {
+    /// The date runs of `ids`, reading what has to be read of them (`square`: the cells' shapes
+    /// are not wanted).
+    fn runs(&mut self, stats: &mut GridStats, cat: &Catalog, ids: &Arc<[PhotoId]>, key: RunsKey, square: bool) -> Arc<Vec<DateRun>> {
+        let shaped = !square;
         match &self.runs {
-            Some((k, r)) if *k == key => r.clone(),
+            Some((k, r)) if *k == key && self.read.as_ref().is_some_and(|read| read.shapes.is_some() == shaped) => r.clone(),
             _ => {
                 stats.view_builds += 1;
-                let r = Arc::new(key.1.map(|sort| cat.date_runs(ids, sort, key.2)).unwrap_or_default());
+                let dates = key.1.map(|sort| (sort, key.2)).filter(|(sort, by)| lightcraft_catalog::dates::groups_by_date(*sort, *by));
+                let read = match self.read.take() {
+                    // (the same list, read at this revision)
+                    Some(r) if Arc::ptr_eq(&r.ids, ids) && r.revision == cat.revision && r.dates == dates && r.shapes.is_some() == shaped => r,
+                    Some(r) => r.follow(stats, cat, ids, dates, shaped).unwrap_or_else(|| ListRead::whole(stats, cat, ids, dates, shaped)),
+                    None => ListRead::whole(stats, cat, ids, dates, shaped),
+                };
+                let r = Arc::new(match dates {
+                    Some(_) if !ids.is_empty() => {
+                        let stacks = self.stacks(stats, cat, key.0);
+                        let group = |i: usize, _: PhotoId| read.groups.get(i).and_then(|g| read.names.get(*g as usize)).map_or("", String::as_str);
+                        lightcraft_catalog::dates::date_runs_of(ids, &stacks, group)
+                    }
+                    _ => Vec::new(),
+                });
+                self.read = Some(read);
                 self.runs = Some((key, r.clone()));
                 r
             }
         }
+    }
+
+    /// The shape of each cell of the list last shown (width / height), in list order; empty for
+    /// the square grid.
+    fn shapes(&self) -> &[f32] {
+        self.read.as_ref().and_then(|r| r.shapes.as_deref()).unwrap_or(&[])
+    }
+
+    /// The date runs and the cell shapes the grid shows now (tests compare them with a grid made
+    /// afresh).
+    #[cfg(test)]
+    pub(crate) fn runs_and_shapes(&self) -> Option<(Arc<Vec<DateRun>>, Vec<f32>)> {
+        Some((self.runs.as_ref()?.1.clone(), self.shapes().to_vec()))
     }
 
     fn stacks(&mut self, stats: &mut GridStats, cat: &Catalog, generation: u64) -> Arc<StackIndex> {
@@ -114,18 +261,14 @@ impl GridCache {
     }
 }
 
-/// Width / height of each photo's cell: its cropped, oriented shape.
-fn aspects(cat: &Catalog, ids: &[PhotoId]) -> Vec<f32> {
-    ids.iter()
-        .map(|id| {
-            let p = cat.photo(*id);
-            let (w, h) = p.map(|p| (p.width.max(1) as f32, p.height.max(1) as f32)).unwrap_or((3.0, 2.0));
-            let swap = p.is_some_and(|p| p.develop.orientation.swaps_axes());
-            let crop = p.map(|p| p.develop.crop.geometry.rect).unwrap_or(lightcraft_geom::Rect::UNIT);
-            let (w, h) = if swap { (h, w) } else { (w, h) };
-            (w * crop.width() as f32) / (h * crop.height() as f32).max(1e-3)
-        })
-        .collect()
+/// Width / height of a photo's cell: its cropped, oriented shape.
+pub(crate) fn shape_of(cat: &Catalog, id: PhotoId) -> f32 {
+    let p = cat.photo(id);
+    let (w, h) = p.map(|p| (p.width.max(1) as f32, p.height.max(1) as f32)).unwrap_or((3.0, 2.0));
+    let swap = p.is_some_and(|p| p.develop.orientation.swaps_axes());
+    let crop = p.map(|p| p.develop.crop.geometry.rect).unwrap_or(lightcraft_geom::Rect::UNIT);
+    let (w, h) = if swap { (h, w) } else { (w, h) };
+    (w * crop.width() as f32) / (h * crop.height() as f32).max(1e-3)
 }
 
 /// The rows (of a layout's `rows`, top to bottom) that meet the y range `top..=bottom`, found by
@@ -211,7 +354,7 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     };
     let runs_key = (generation, group_key, by);
     let stats = &mut app.caches.grid_stats;
-    let runs = app.caches.grid.runs(stats, &app.session.catalog, &ids, runs_key);
+    let runs = app.caches.grid.runs(stats, &app.session.catalog, &ids, runs_key, square);
     // the layout only changes with the photos (and their shapes), the grouping, the width and
     // the thumbnail size
     let lay_key = (runs_key, avail_w.to_bits(), target.to_bits(), square);
@@ -219,9 +362,15 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         Some((k, l)) if *k == lay_key => l.clone(),
         _ => {
             stats.layout_builds += 1;
-            let aspects = if square { vec![1.0; ids.len()] } else { aspects(&app.session.catalog, &ids) };
+            let ones;
+            let shapes = if square {
+                ones = vec![1.0; ids.len()];
+                &ones[..]
+            } else {
+                app.caches.grid.shapes()
+            };
             let spans: Vec<(usize, usize)> = runs.iter().map(|r| (r.start, r.count)).collect();
-            let l = Arc::new(layout(&aspects, &spans, avail_w, target, square));
+            let l = Arc::new(layout(shapes, &spans, avail_w, target, square));
             app.caches.grid.layout = Some((lay_key, l.clone()));
             l
         }

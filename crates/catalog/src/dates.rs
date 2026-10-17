@@ -154,38 +154,56 @@ impl Catalog {
     /// never split by a header. Empty for sort keys without a date and for [`GroupBy::None`]
     /// ([`GroupBy::Auto`] means days here).
     pub fn date_runs(&self, ids: &[PhotoId], key: SortKey, by: GroupBy) -> Vec<DateRun> {
-        if by == GroupBy::None || ids.is_empty() {
+        if !groups_by_date(key, by) || ids.is_empty() {
             return Vec::new();
         }
-        let n = by.prefix();
-        let date_of = |id: &PhotoId| -> String {
-            let Some(p) = self.photo(*id) else { return String::new() };
-            let d = match key {
-                SortKey::CaptureDate => p.captured.as_deref(),
-                SortKey::ImportDate => Some(p.imported.as_str()),
-                SortKey::EditDate => p.edited.as_deref(),
-                _ => None,
-            };
-            d.filter(|d| iso_seconds(d.get(..10).unwrap_or("")).is_some()).and_then(|d| d.get(..n)).unwrap_or("").to_string()
-        };
-        if !matches!(key, SortKey::CaptureDate | SortKey::ImportDate | SortKey::EditDate) {
-            return Vec::new();
-        }
-        let stacks = self.stack_index();
-        let mut runs: Vec<DateRun> = Vec::new();
-        let mut stack_key: std::collections::HashMap<crate::StackId, String> = Default::default();
-        for (i, id) in ids.iter().enumerate() {
-            let k = match stacks.get(id) {
-                Some((sid, _)) => stack_key.entry(*sid).or_insert_with(|| date_of(id)).clone(),
-                None => date_of(id),
-            };
-            match runs.last_mut() {
-                Some(r) if r.key == k => r.count += 1,
-                _ => runs.push(DateRun { label: group_label(&k), key: k, start: i, count: 1 }),
-            }
-        }
-        runs
+        date_runs_of(ids, &self.stack_index(), |_, id| self.date_group(id, key, by))
     }
+
+    /// The date group of photo `id` on its own for [`Catalog::date_runs`] (`2026-09-30` /
+    /// `2026-09` / `2026`; empty without a usable date): a stack's members take the group of its
+    /// first photo in the list there.
+    pub fn date_group(&self, id: PhotoId, key: SortKey, by: GroupBy) -> String {
+        let Some(p) = self.photo(id) else { return String::new() };
+        let d = match key {
+            SortKey::CaptureDate => p.captured.as_deref(),
+            SortKey::ImportDate => Some(p.imported.as_str()),
+            SortKey::EditDate => p.edited.as_deref(),
+            _ => None,
+        };
+        d.filter(|d| iso_seconds(d.get(..10).unwrap_or("")).is_some()).and_then(|d| d.get(..by.prefix())).unwrap_or("").to_string()
+    }
+}
+
+/// Whether [`Catalog::date_runs`] has runs for sort key `key` grouped `by`.
+pub fn groups_by_date(key: SortKey, by: GroupBy) -> bool {
+    by != GroupBy::None && matches!(key, SortKey::CaptureDate | SortKey::ImportDate | SortKey::EditDate)
+}
+
+/// [`Catalog::date_runs`] from each photo's own group (`group(position, id)`, see
+/// [`Catalog::date_group`]) and the stack index ([`Catalog::stack_index`]).
+pub fn date_runs_of<K: AsRef<str>>(
+    ids: &[PhotoId],
+    stacks: &std::collections::HashMap<PhotoId, (crate::StackId, usize)>,
+    mut group: impl FnMut(usize, PhotoId) -> K,
+) -> Vec<DateRun> {
+    let mut runs: Vec<DateRun> = Vec::new();
+    let mut stack_key: std::collections::HashMap<crate::StackId, String> = Default::default();
+    for (i, id) in ids.iter().enumerate() {
+        let own;
+        let k: &str = match stacks.get(id) {
+            Some((sid, _)) => stack_key.entry(*sid).or_insert_with(|| group(i, *id).as_ref().to_string()),
+            None => {
+                own = group(i, *id);
+                own.as_ref()
+            }
+        };
+        match runs.last_mut() {
+            Some(r) if r.key == k => r.count += 1,
+            _ => runs.push(DateRun { label: group_label(k), key: k.to_string(), start: i, count: 1 }),
+        }
+    }
+    runs
 }
 
 #[cfg(test)]
