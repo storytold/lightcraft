@@ -185,7 +185,6 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 ("help", Icon::Help, "Keyboard shortcuts", "app.shortcuts"),
                 ("share", Icon::Share, "Export", "dialog.export"),
                 ("import", Icon::Plus, import_tip.as_str(), "file.addPhotos"),
-                ("bell", Icon::Bell, "Activity", "panel.activity"),
             ] {
                 let r = Rect::from_center_size(pos2(x, full.center().y), vec2(28.0, 28.0));
                 let resp = ui.interact(r, egui::Id::new(("top", id)), Sense::click()).on_hover_text(crate::i18n::tr(tip));
@@ -250,6 +249,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     }
                 }
             });
+            // the bell, leftmost of the icons: what runs in the background, with the room up to the filter icon
+            // for naming it
+            x -= 40.0;
+            let bell = Rect::from_center_size(pos2(x, full.center().y), vec2(28.0, 28.0));
+            crate::panels::activity::bell(app, ui, &t, bell, fr.right() + 12.0);
             let _ = Align2::CENTER_CENTER;
         });
 }

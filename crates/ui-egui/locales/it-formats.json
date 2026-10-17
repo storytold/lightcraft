@@ -237,6 +237,7 @@
   "+{n} more": "+{n} altre",
   "1 task is still running: {names}. Quitting stops it.": "1 attività è ancora in corso: {names}. Uscendo si interrompe.",
   "{n} tasks are still running: {names}. Quitting stops them.": "{n} attività sono ancora in corso: {names}. Uscendo si interrompono.",
+  "{n} tasks": "{n} attività",
   "{what} merge cancelled": "Unione {what} annullata",
   "{n} Local photo{} skipped: albums hold library photos (Add to My Photos first)": "Foto locali saltate: {n}{0:.0}; gli album contengono foto della libreria (prima aggiungile a Le mie foto)",
   "New Folder in “{name}”": "Nuova cartella in “{name}”",

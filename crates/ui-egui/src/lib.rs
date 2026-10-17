@@ -476,8 +476,10 @@ pub struct LightcraftApp {
     /// The library failed to open at launch: the blocking window, then the temporary-session
     /// banner (issue #100). Cleared once a library opens.
     pub library_problem: Option<panels::library_problem::LibraryProblem>,
-    /// The activity stack shows every task, not just the first few ("+N more" was clicked).
-    pub activity_expanded: bool,
+    /// The list of running tasks under the top bar's bell is open (as of the last frame).
+    pub activity_open: bool,
+    /// `view.tasks` asked for the list to be opened or closed; the top bar does it on its next frame.
+    pub(crate) activity_set: Option<bool>,
 }
 
 impl LightcraftApp {
@@ -555,7 +557,8 @@ impl LightcraftApp {
             screen_profile: None,
             screen_profile_read: None,
             library_problem: None,
-            activity_expanded: false,
+            activity_open: false,
+            activity_set: None,
             model_setup: Default::default(),
         }
     }
@@ -1437,7 +1440,10 @@ impl LightcraftApp {
         self.ai_mask_detail(&ctx);
         self.place_names_outcome(&ctx);
         if self.ui.fullscreen {
-            // full-screen preview: the photo alone on black
+            // full-screen preview: the photo alone on black (no top bar: the list of tasks under its bell is closed,
+            // and a request to open it is not kept for later)
+            self.activity_open = false;
+            self.activity_set = None;
             egui::CentralPanel::default()
                 .frame(egui::Frame::NONE.fill(egui::Color32::BLACK))
                 .show(ui, |ui| if self.ui.slideshow.is_some() { panels::slideshow::show(self, ui) } else { panels::detail::show(self, ui) });
@@ -1465,7 +1471,6 @@ impl LightcraftApp {
         panels::library_problem::show(self, &ctx);
         export_task::poll(self, &ctx);
         slideshow_export::poll(self, &ctx);
-        panels::activity::show(self, &ctx);
         export_task::poll_photos(self, &ctx);
         pick::poll(self, &ctx);
         panels::grid::drag_feedback(self, &ctx);
