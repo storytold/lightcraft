@@ -326,11 +326,12 @@ fn keyboard_owned(app: &LightcraftApp, ctx: &egui::Context) -> bool {
             [Key::ArrowLeft, Key::ArrowRight, Key::ArrowUp, Key::ArrowDown, Key::Enter, Key::Space].iter().any(|key| input.key_pressed(*key))
         });
     }
-    let chrome = app
-        .ui
-        .docking
-        .as_ref()
-        .is_some_and(|workspace| craft_ui::docking::DockArea::new(egui::Id::new("lightcraft-docking")).chrome_has_focus(ctx, &workspace.layout));
+    // a plain button (the welcome's) keeps what works it; the rest are shortcuts, as on dock chrome
+    let chrome =
+        crate::widgets::plain_button_has_focus(ctx)
+            || app.ui.docking.as_ref().is_some_and(|workspace| {
+                craft_ui::docking::DockArea::new(egui::Id::new("lightcraft-docking")).chrome_has_focus(ctx, &workspace.layout)
+            });
     if !chrome {
         return true;
     }

@@ -1167,6 +1167,12 @@ impl Session {
         self.total.as_ref().map(|t| t.1)
     }
 
+    /// The library holds sample (demo) photos, Recently Deleted included. Asked each frame (the
+    /// samples banner, the Help menu): the catalog keeps the count, so it costs no scan.
+    pub fn has_samples(&self) -> bool {
+        self.catalog.sample_photos() > 0
+    }
+
     pub fn visible_cloned(&mut self) -> Vec<PhotoId> {
         self.visible().to_vec()
     }
@@ -1300,6 +1306,8 @@ mod tests_print;
 mod tests_process;
 #[cfg(test)]
 mod tests_recheck;
+#[cfg(test)]
+mod tests_samples;
 #[cfg(test)]
 mod tests_segment;
 #[cfg(test)]

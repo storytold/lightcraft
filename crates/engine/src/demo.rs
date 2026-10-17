@@ -2,12 +2,92 @@
 
 use std::sync::Arc;
 
-use lightcraft_catalog::{Album, Flag, Meta, Op, Photo, Source};
+use std::collections::HashSet;
+
+use lightcraft_catalog::{Album, AlbumId, Catalog, Flag, Meta, Op, Photo, PhotoId, Source};
 use lightcraft_develop::DevelopSettings;
 
 use crate::Session;
 
+/// Fill the session's catalog with the demo photos and albums directly (no undo step, no
+/// journal entry): a new in-memory session, or a new library that asked for them.
 pub fn load(s: &mut Session) {
+    for op in ops(s) {
+        let _ = s.catalog.apply(op);
+    }
+    select_first(s);
+}
+
+/// The sample scenes the empty library's welcome shows, as (scene id, title): five landscapes of
+/// different colours (a lake at dawn, dunes, an aurora, lavender, a beach). None of them comes
+/// edited ([`ops`] edits a few others): the one opened is as its thumbnail showed it, and the
+/// first slider dragged is the first change.
+pub fn welcome_scenes() -> Vec<(u32, String)> {
+    let scenes = lightcraft_scenes::demo_library();
+    [1u32, 2, 14, 6, 18].iter().filter_map(|id| scenes.iter().find(|s| s.id == *id).map(|s| (s.id, s.name.clone()))).collect()
+}
+
+/// How many sample photos [`ops`] adds.
+pub fn sample_count() -> usize {
+    lightcraft_scenes::demo_library().len()
+}
+
+/// A sample scene drawn small for the welcome (`max_edge` on its long side), as it looks before
+/// any edit. About 25 ms for one at 320 px on all cores: call it off the UI thread.
+pub fn scene_preview(scene: u32, max_edge: usize) -> Option<lightcraft_raster::Rgba8> {
+    let scenes = lightcraft_scenes::demo_library();
+    let s = scenes.iter().find(|s| s.id == scene)?;
+    Some(s.render_fit(max_edge.clamp(16, 1024)).to_srgb8())
+}
+
+/// Select the first photo shown, so there is one to look at.
+pub fn select_first(s: &mut Session) {
+    if let Some(first) = s.visible_cloned().first() {
+        s.selection = crate::Selection::single(*first);
+    }
+}
+
+/// What takes the sample photos out: every demo photo (wherever it is: albums, stacks), the
+/// albums they alone filled, and the folders that held only such albums. An album that also holds
+/// a photo of the person's own stays, with that photo (and a cover that was a sample becomes its
+/// first photo left). Returns the op, how many photos go, and the albums that go.
+pub fn remove_ops(c: &Catalog) -> (Op, usize, Vec<AlbumId>) {
+    let samples: Vec<PhotoId> = c.photos().filter(|p| matches!(p.source, Source::Demo { .. })).map(|p| p.id).collect();
+    let gone: HashSet<PhotoId> = samples.iter().copied().collect();
+    let filled_by_samples =
+        |a: &Album| !a.folder && a.smart.is_none() && !a.quick && !a.photos.is_empty() && a.photos.iter().all(|p| gone.contains(p));
+    let mut albums: Vec<AlbumId> = c.albums().filter(|a| filled_by_samples(a)).map(|a| a.id).collect();
+    // a folder goes when everything in it goes (bounded: a folder can't hold itself)
+    let mut changed = true;
+    let mut rounds = 0;
+    while changed && rounds < 64 {
+        rounds += 1;
+        let emptied: Vec<AlbumId> = c
+            .albums()
+            .filter(|f| f.folder && f.photos.is_empty() && !albums.contains(&f.id))
+            .filter(|f| {
+                let mut inside = c.albums().filter(|a| a.parent == Some(f.id)).peekable();
+                inside.peek().is_some() && inside.all(|a| albums.contains(&a.id))
+            })
+            .map(|f| f.id)
+            .collect();
+        changed = !emptied.is_empty();
+        albums.extend(emptied);
+    }
+    let Op::Batch { mut ops } = c.delete_photos_permanently_ops(&samples) else {
+        return (Op::Batch { ops: Vec::new() }, 0, Vec::new());
+    };
+    // an album that stays shows one of its own photos, not a removed sample
+    for a in c.albums().filter(|a| !albums.contains(&a.id) && a.cover.is_some_and(|p| gone.contains(&p))) {
+        ops.push(Op::SetAlbumCover { id: a.id, cover: a.photos.iter().copied().find(|p| !gone.contains(p)) });
+    }
+    // inner albums before the folders that hold them
+    ops.extend(albums.iter().map(|id| Op::RemoveAlbum { id: *id }));
+    (Op::Batch { ops }, samples.len(), albums)
+}
+
+/// The ops that add the demo photos and albums (ids are taken from the catalog).
+pub fn ops(s: &mut Session) -> Vec<Op> {
     let scenes = lightcraft_scenes::demo_library();
     let mut ids = Vec::new();
     let mut ops = Vec::new();
@@ -99,12 +179,29 @@ pub fn load(s: &mut Session) {
             album: Album { id, name: name.into(), parent, folder: false, photos, cover, smart: None, quick: false, order: None },
         });
     }
-    for op in ops {
-        let _ = s.catalog.apply(op);
+    ops
+}
+
+/// The name of the folder [`ops_in_folder`] puts the sample albums in, unless asked for another
+/// (the interface asks for it in its language).
+pub const SAMPLES_FOLDER: &str = "Sample Photos";
+
+/// [`ops`], with every album in one folder named `folder`, so the samples' albums stay together
+/// and apart from the ones the person makes.
+pub fn ops_in_folder(s: &mut Session, folder: &str) -> Vec<Op> {
+    let mut ops = ops(s);
+    let id = s.catalog.alloc_album_id();
+    for op in &mut ops {
+        if let Op::AddAlbum { album } = op
+            && album.parent.is_none()
+        {
+            album.parent = Some(id);
+        }
     }
-    if let Some(first) = s.visible_cloned().first() {
-        s.selection = crate::Selection::single(*first);
-    }
+    let at = ops.iter().position(|op| matches!(op, Op::AddAlbum { .. })).unwrap_or(ops.len());
+    let album = Album { id, name: folder.into(), parent: None, folder: true, photos: vec![], cover: None, smart: None, quick: false, order: None };
+    ops.insert(at, Op::AddAlbum { album });
+    ops
 }
 
 /// Procedural scenes are deterministic but costly to evaluate: every pixel runs the scene's noise
@@ -331,6 +428,27 @@ fn trim_scene_cache(c: &mut SceneCache, limit: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_welcome_samples_arrive_unedited() {
+        let mut s = Session::new();
+        let edited: Vec<u32> = ops(&mut s)
+            .iter()
+            .filter_map(|op| match op {
+                Op::AddPhoto { photo } => match photo.source {
+                    Source::Demo { scene } if *photo.develop != DevelopSettings::default() => Some(scene),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+        assert!(!edited.is_empty(), "a few samples come edited, for the grid's variety");
+        let welcome = welcome_scenes();
+        assert_eq!(welcome.len(), 5, "every scene the welcome shows exists");
+        for (scene, title) in welcome {
+            assert!(!edited.contains(&scene), "“{title}” comes edited: its thumbnail would show it otherwise");
+        }
+    }
 
     fn small_scene() -> lightcraft_scenes::Scene {
         lightcraft_scenes::demo_library().swap_remove(0)

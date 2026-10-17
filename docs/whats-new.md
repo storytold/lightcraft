@@ -137,7 +137,8 @@
 ### Reliability
 
 ### One kind of button
-- Dialogs' buttons and About's Discord link are drawn by one button component: primary (filled with the accent),
+- Dialogs' buttons, About's Discord link, the empty library's welcome and the samples banner are drawn by one button
+  component: primary (filled with the accent),
   secondary, danger (filled red) and ghost, in three sizes, with an icon or without, and an icon alone (named for
   screen readers). Each darkens a little when hovered and more when pressed, shows a ring where the keyboard is, and
   its text reads at 4.5:1 or more on its fill in every theme. Dialog buttons are 30 points tall, like the welcome's.
@@ -151,6 +152,41 @@
   further ⇧-clicks carry on from the last point, as in Lightroom. Change the brush size, feather or flow before the
   ⇧-click and the line tapers from the old values to the new ones. The whole line is one undo step.
   `mask.brushStroke {connect: true}` does the same for agents.
+### Every way to the samples leads to the editor
+- However the sample photos come into an empty library (a thumbnail, the welcome's Try Sample Photos button, Help ▸
+  Add Sample Photos, an agent), they open on a sample in Detail with the Edit panel, ready to edit; a thumbnail opens
+  the one clicked. A library that already has photos stays where it was.
+- There, until the first change, the banner invites one: "Drag any slider: the original never changes. Press Y to
+  compare before and after." (the key Compare Before and After is bound to).
+
+### The welcome reads for everyone
+- Screen readers now hear the empty library's welcome, not only its buttons: the title (as a heading), what it says,
+  the hint and the sample row's caption, and the right panel's note beside it.
+- A new library's welcome puts the keyboard on Import Photos…, so Enter or Space starts; the welcome's buttons show an
+  accent ring where the keyboard is.
+- Dimmed text (captions, hints, counts, the right panel's notes) is a shade stronger in every theme, most in the light
+  ones, so it reads at WCAG AA (4.5:1) on the panels, the canvas and the grid: Charcoal and Midnight #949494, Silver
+  #585858, Paper #6b6b6b.
+- The welcome also says that a folder can be looked through without importing it, under Local in the sidebar (the
+  desktop app).
+
+### The welcome has the window
+- While the library is empty, the welcome is the one thing asking for attention: the Tools panel steps aside (it comes
+  back as it was once photos arrive, an editing tool such as Crop as the Edit panel; opening it meanwhile keeps it
+  open), and the bottom bar's rating, flags and
+  Copy Edit Settings wait until there is a photo to use them on.
+- Under the welcome's buttons, a row of five sample photos: click one to add the samples and open it in Detail with the
+  Edit panel, ready to edit. Where the row doesn't fit, and in the web build, Try Sample Photos is a button as before.
+
+### A new library asks how to begin
+- A new library made by the desktop app now starts empty instead of quietly filling with the 24 procedural demo
+  photos. Its first screen, "Welcome to LightCraft", offers Import Photos…, Import Lightroom Catalog… and Try Sample
+  Photos. `--memory` still starts with the demo photos (`--no-demo` for none), as do `lightcraft-cli --demo` and the
+  web build.
+- While sample photos are in a library, a banner says so and offers Import Photos… and Remove Sample Photos; once
+  photos of your own are in, it offers Remove Sample Photos or Keep Them. Removing them takes the sample photos and
+  the albums only they filled (an album holding a photo of yours stays, with it), in one step Edit ▸ Undo reverses.
+  Help ▸ Add Sample Photos and Help ▸ Remove Sample Photos do the same at any time.
 
 ### Hard-edged Heal and Clone spots
 - A spot with Feather at 0 no longer draws black pixels exactly on its radius. This also fixes spots at 0% Opacity

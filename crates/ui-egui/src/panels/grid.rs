@@ -146,6 +146,8 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let total = app.session.source_total();
     let counted = super::chips::count_text(ids.len(), total, !chips.is_empty());
     let cnt = if sel_n > 1 { crate::i18n::tr_format!("{sel_n} selected · {counted}", counted = counted, sel_n = sel_n) } else { counted };
+    // "0 photos" says nothing the welcome below doesn't say better
+    let cnt = if super::empty_library::in_view(app) { String::new() } else { cnt };
     match app.session.browse.clone().filter(|_| app.session.source == lightcraft_engine::LibrarySource::Folder) {
         Some(b) => {
             let local = app.caches.grid.local(&app.session.catalog, &ids, generation);
@@ -161,9 +163,11 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             let font = t.semibold(17.0);
             let title = crate::widgets::elide_head(&full, room, |s| ui.painter().layout_no_wrap(s.to_string(), font.clone(), t.text).size().x);
             let title_rect = ui.painter().text(pos2(hr.left() + 20.0, hr.center().y), Align2::LEFT_CENTER, &title, font, t.text);
-            let count_rect = ui.painter().text(pos2(hr.right() - 20.0, hr.center().y), Align2::RIGHT_CENTER, cnt, t.font(12.5), t.text_dim);
             crate::widgets::register(ui.ctx(), "grid:title", title_rect);
-            crate::widgets::register(ui.ctx(), "grid:count", count_rect);
+            if !cnt.is_empty() {
+                let count_rect = ui.painter().text(pos2(hr.right() - 20.0, hr.center().y), Align2::RIGHT_CENTER, cnt, t.font(12.5), t.text_dim);
+                crate::widgets::register(ui.ctx(), "grid:count", count_rect);
+            }
             if title != full {
                 ui.interact(title_rect, ui.id().with("grid-title"), Sense::hover()).on_hover_text(full);
             }
@@ -193,7 +197,9 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         } else if app.session.source == lightcraft_engine::LibrarySource::Folder {
             super::empty_message(ui, ui.max_rect(), "No photos in this folder", "Turn on Include subfolders, or pick another folder under Local");
         } else if super::empty_library::shown(&app.session) {
-            super::empty_library::show(app, ui, ui.max_rect());
+            // below the header: centred in the space it has, and never over the title above it
+            let below = ui.available_rect_before_wrap();
+            super::empty_library::show(app, ui, below);
         } else {
             super::empty_message(ui, ui.max_rect(), "No photos", "Import photos with File → Import Photos… (Cmd+Shift+I), or drop them here");
         }

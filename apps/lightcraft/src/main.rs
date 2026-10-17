@@ -4,10 +4,11 @@
 //!
 //! The library (catalog, presets, thumbnail cache) lives in `--library DIR`, else
 //! `$LIGHTCRAFT_LIBRARY`, else the library last opened with Settings → Open Library…, else
-//! `~/Pictures/LightCraft Library`; a new library starts with the
-//! procedural demo photos unless `--no-demo` or files are given. Files and folders on the command
-//! line are imported (duplicates are skipped). `--memory` runs an in-memory session that writes
-//! nothing (demo photos unless files are given; used by the README showcase scripts). A library
+//! `~/Pictures/LightCraft Library`; a new library starts empty, and its first screen offers to
+//! import photos, a Lightroom catalog, or the procedural sample photos (`library.addSamples`).
+//! Files and folders on the command line are imported (duplicates are skipped). `--memory` runs an
+//! in-memory session that writes nothing (demo photos unless `--no-demo` or files are given; used
+//! by the README showcase scripts). A library
 //! that can't be opened is never replaced silently: the window says why and asks what to do
 //! (`lightcraft_ui_egui::panels::library_problem`).
 //!
@@ -61,7 +62,7 @@ impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         #[cfg(target_os = "macos")]
         if let Some(m) = self.2.as_mut()
-            && m.update(&mut self.0, ctx)
+            && m.update(&mut self.0)
             && lightcraft_ui_egui::panels::notices::may_close(&mut self.0)
         {
             // Quit from the menu bar: save exactly what closing the window saves (settings and
@@ -744,7 +745,8 @@ fn open_library_session(in_memory: bool, dir: Option<std::path::PathBuf>, seed_d
     };
     let t0 = std::time::Instant::now();
     let mut s = Session::new().with_fs().with_default_denoise_models().with_system_clock();
-    match s.open_library(&dir, seed_demo) {
+    // a new library starts empty: its first screen asks how to begin (sample photos are one way)
+    match s.open_library(&dir, false) {
         Ok(r) => {
             let (replayed, torn) = (r.replayed, r.torn_bytes);
             log::info!(
@@ -770,7 +772,7 @@ USAGE: lightcraft [OPTIONS] [FILES/FOLDERS…]   (files and folders are imported
 
 OPTIONS:
   --library DIR    open (or create) this library (default: ~/Pictures/LightCraft Library; env LIGHTCRAFT_LIBRARY)
-  --no-demo        don't seed a new library with the procedural demo photos
+  --no-demo        with --memory, start without the procedural demo photos
   --memory         throwaway in-memory session (alias --demo); nothing is saved
   --control PORT   serve the JSON-lines control channel on 127.0.0.1:PORT (env LIGHTCRAFT_CONTROL_PORT;
                    see docs/control-protocol.md)

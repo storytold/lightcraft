@@ -85,6 +85,10 @@ const PILL_W: f32 = 208.0;
 /// The rating/flag pill and copy/paste settings, between `from` and `to` (the side groups): the
 /// copy buttons go first when there is no room (they are in the Edit menu too), then the pill.
 fn centre(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, from: f32, to: f32) {
+    // nothing to rate, flag or copy settings from until the library has photos
+    if super::empty_library::shown(&app.session) {
+        return;
+    }
     let t = Tokens::get(ui.ctx());
     let has_clip = app.session.clipboard.is_some();
     let label = crate::i18n::tr(if has_clip { "Paste Edit Settings" } else { "Copy Edit Settings" });
@@ -483,7 +487,8 @@ mod tests {
     fn rating_and_flag_buttons_keep_padding_inside_the_pill() {
         for scale in [1.0, 2.0] {
             for room in [240.0, 500.0] {
-                let mut app = LightcraftApp::new(lightcraft_engine::Session::new(), Services::default());
+                // photos to rate: an empty library has no pill (the welcome has the window)
+                let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services::default());
                 let mut view = HeadlessView::new();
                 for frame in 0..3 {
                     let raw = HeadlessView::raw_input(vec2(700.0, 40.0), scale, frame as f64 / 60.0, vec![]);

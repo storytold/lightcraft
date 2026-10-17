@@ -302,6 +302,20 @@ fn empty_hint(ui: &mut egui::Ui, section: SidebarSection) {
     ui.painter().galley(pos2(r.left() + 42.0, r.center().y - galley.size().y / 2.0), galley, t.text_dim);
 }
 
+/// Under the welcome, in place of the empty sections that fill as photos arrive (widget
+/// `sidebarEmpty:welcome`): one quiet line saying they will.
+fn welcome_note(ui: &mut egui::Ui) {
+    let t = Tokens::get(ui.ctx());
+    ui.add_space(SECTION_GAP + 6.0);
+    let width = (ui.available_width().min(visible_right(ui) - ui.cursor().left()) - 36.0).max(80.0);
+    let text = crate::i18n::tr("Albums, dates, folders and keywords appear here as photos arrive");
+    let galley = ui.painter().layout(text.to_string(), t.font(12.5), t.text_dim, width);
+    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), galley.size().y), Sense::hover());
+    register(ui.ctx(), "sidebarEmpty:welcome", r);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, text));
+    ui.painter().galley(pos2(r.left() + 18.0, r.top()), galley, t.text_dim);
+}
+
 /// Where a section was laid out this frame (screen y): from its header's top to the end of its rows.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct PlacedSection {
@@ -674,10 +688,18 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             let local = local_now(app, ui);
             let shown: Vec<SidebarSection> = app.ui.sidebar.shown().collect();
             let mut placed: Vec<PlacedSection> = Vec::with_capacity(shown.len());
+            // under the welcome, the sections that fill as photos arrive say so in one line after
+            // the sections, not "No … yet" each (Local, with folders to look through, stays)
+            let welcome = super::empty_library::in_view(app);
+            let mut folded = false;
             for s in shown {
                 let at = match s {
                     SidebarSection::Albums => {
                         let rows = app.session.catalog.albums().filter(|a| a.parent.is_none()).count();
+                        if welcome && rows == 0 {
+                            folded = true;
+                            continue;
+                        }
                         section(app, ui, s, rows, |app, ui| albums_rows(app, ui, reveal))
                     }
                     SidebarSection::Local => {
@@ -686,10 +708,18 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     }
                     SidebarSection::ByDate => {
                         let rows = app.caches.date_groups(&app.session.catalog).len();
+                        if welcome && rows == 0 {
+                            folded = true;
+                            continue;
+                        }
                         section(app, ui, s, rows, date_rows)
                     }
                     SidebarSection::Folders => {
                         let tree = app.caches.folder_tree(&app.session.catalog);
+                        if welcome && tree.is_empty() {
+                            folded = true;
+                            continue;
+                        }
                         section(app, ui, s, tree.len(), |app, ui| {
                             reveal_chosen(app, ui, &tree);
                             folder_rows(app, ui, &tree, 0.0);
@@ -697,10 +727,17 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     }
                     SidebarSection::Keywords => {
                         let tree = app.caches.keyword_tree(&app.session.catalog);
+                        if welcome && tree.is_empty() {
+                            folded = true;
+                            continue;
+                        }
                         section(app, ui, s, tree.len(), |app, ui| keyword_rows(app, ui, &tree, 0.0))
                     }
                 };
                 placed.push(at);
+            }
+            if folded {
+                welcome_note(ui);
             }
             ui.data_mut(|d| d.remove::<String>(egui::Id::new(SCROLL_TO_ROW)));
             // room below the last section (a section dragged to the end is dropped here)

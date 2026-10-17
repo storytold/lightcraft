@@ -150,6 +150,12 @@ mod tests_rename_person;
 #[cfg(test)]
 mod tests_sam_setup;
 #[cfg(test)]
+mod tests_samples;
+#[cfg(test)]
+mod tests_samples_banner;
+#[cfg(test)]
+mod tests_samples_landing;
+#[cfg(test)]
 mod tests_scroll;
 #[cfg(test)]
 mod tests_slider_reset;
@@ -176,6 +182,10 @@ mod tests_view_cost;
 #[cfg(test)]
 mod tests_wb_selector;
 #[cfg(test)]
+mod tests_welcome;
+#[cfg(test)]
+mod tests_welcome_access;
+#[cfg(test)]
 mod tests_zoom;
 #[cfg(test)]
 mod tests_zoom_keys;
@@ -190,6 +200,8 @@ pub use control::{ControlRequest, ControlResponse};
 pub use state::UiState;
 
 const TOAST_SECONDS: f64 = 1.4;
+/// A toast with more to read (where something went).
+const TOAST_READ_SECONDS: f64 = 4.0;
 /// The `path` of a display profile read from the screen rather than chosen as a file.
 pub const SCREEN_PROFILE: &str = "screen";
 
@@ -476,6 +488,26 @@ pub struct LightcraftApp {
     /// The library failed to open at launch: the blocking window, then the temporary-session
     /// banner (issue #100). Cleared once a library opens.
     pub library_problem: Option<panels::library_problem::LibraryProblem>,
+    /// Whether the library held sample photos last frame (`None` before the first): samples that
+    /// newly appear, however they came (the welcome, Help ▸ Add Sample Photos, an agent), bring
+    /// back a samples banner closed over earlier ones.
+    pub samples_present: Option<bool>,
+    /// Whether the empty library's welcome had the window last frame (`None` before the first):
+    /// becoming empty puts the Tools panel aside ([`panels::empty_library::follow`]).
+    pub welcome_seen: Option<bool>,
+    /// The welcome's sample thumbnails while they are shown (drawn by a worker as it starts).
+    pub(crate) welcome_samples: Option<panels::empty_library::SampleStrip>,
+    /// The welcome was drawn this frame (its thumbnails go the frame after it isn't).
+    pub(crate) welcome_drawn: bool,
+    /// The new library's welcome has put the keyboard on Import Photos… (once per session).
+    pub(crate) welcome_focused: bool,
+    /// The session's commit count when samples came into an empty library and a sample was opened
+    /// ([`panels::empty_library::land_on_samples`]): until it moves on (a first change), the
+    /// samples banner invites one.
+    pub(crate) samples_landed: Option<u64>,
+    /// How far the person has come since then: edited, compared ([`panels::samples::Tour`]). The
+    /// count itself only says samples landed in this library.
+    pub(crate) samples_tour: panels::samples::Tour,
     /// The activity stack shows every task, not just the first few ("+N more" was clicked).
     pub activity_expanded: bool,
 }
@@ -555,6 +587,13 @@ impl LightcraftApp {
             screen_profile: None,
             screen_profile_read: None,
             library_problem: None,
+            samples_present: None,
+            welcome_seen: None,
+            welcome_samples: None,
+            welcome_drawn: false,
+            welcome_focused: false,
+            samples_landed: None,
+            samples_tour: Default::default(),
             activity_expanded: false,
             model_setup: Default::default(),
         }
@@ -617,7 +656,21 @@ impl LightcraftApp {
         } else {
             params
         };
+        // the samples' folder named in the interface's language, unless the caller names it
+        let params = if id == "library.addSamples" && params.get("folder").is_none_or(Value::is_null) {
+            let mut p = if params.is_object() { params } else { serde_json::json!({}) };
+            p["folder"] = serde_json::json!(i18n::tr(lightcraft_engine::demo::SAMPLES_FOLDER));
+            p
+        } else {
+            params
+        };
+        // samples coming into an empty library, however they are asked for, land on one in Detail
+        // (the welcome showing: not a Local folder or Recently Deleted of an otherwise empty library)
+        let landing = id == "library.addSamples" && panels::empty_library::shown(&self.session);
         let r = self.session.execute(id, &params).map_err(CommandError::from);
+        if r.is_ok() && landing {
+            panels::empty_library::land_on_samples(self);
+        }
         if r.is_ok() && matches!(id, "crop.aspect" | "crop.rotateAspect") {
             self.ui.crop_default_aspect = if id == "crop.aspect" && params.get("aspect").and_then(Value::as_str) == Some("original") {
                 Some(serde_json::json!("original"))
@@ -641,16 +694,24 @@ impl LightcraftApp {
         if r.is_ok() {
             // These commands finish synchronously, so their completion would otherwise
             // be invisible once the activity stack is gone. Never show success on error.
+            let added = r.as_ref().ok().filter(|_| id == "library.addSamples").map(|v| {
+                let n = v["added"].as_u64().unwrap_or(0);
+                let folder = v["folder"].as_str().unwrap_or_default();
+                i18n::tr_format!("Added {n} sample photos, with albums under “{folder}” and keywords to try", n = n, folder = folder)
+            });
             let completed = match id {
                 "library.compact" => Some(format!("✓ {}", i18n::tr("Optimize Library"))),
                 "library.clearPreviews" => Some(format!("✓ {}", i18n::tr("Clear Preview Cache"))),
                 "develop.autoSync" => Some(format!("{}: {}", i18n::tr("Auto Sync"), i18n::tr(if self.session.auto_sync { "On" } else { "Off" }))),
                 _ => None,
             };
-            if let Some(message) = completed {
+            // (where the samples' albums went is a message to read: it stays as long as one that
+            // says where to look)
+            let completed = completed.map(|m| (m, TOAST_SECONDS)).or(added.map(|m| (m, TOAST_READ_SECONDS)));
+            if let Some((message, secs)) = completed {
                 // Menu clicks can arrive before the next frame updates last_time.
                 let now = self.tasks.repaint.as_ref().map(|ctx| ctx.input(|i| i.time)).unwrap_or(self.last_time);
-                self.ui.toast = Some((message, now + TOAST_SECONDS, None));
+                self.ui.toast = Some((message, now + secs, None));
             }
         }
         if r.is_ok() && id == "photo.label" {
@@ -1403,6 +1464,8 @@ impl LightcraftApp {
             return;
         }
         self.shown_library = Some(generation);
+        // the invitation to edit a sample belongs to the library the samples landed in
+        self.samples_landed = None;
         if let Some(l) = self.session.library.as_ref().filter(|l| l.on_disk) {
             let path = l.dir.to_string_lossy().into_owned();
             panels::settings::remember_library(&mut self.ui.settings.recent_libraries, &path);
@@ -1432,6 +1495,7 @@ impl LightcraftApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
         self.library_changed(&ctx);
+        panels::empty_library::follow(self);
         // panels set it again this frame while the pointer rests on a preset or profile
         self.hover_preview = None;
         self.ai_mask_detail(&ctx);
@@ -1454,6 +1518,7 @@ impl LightcraftApp {
         // right panels and left panel run to the bottom; the bottom bar sits between them).
         panels::topbar::show(self, ui);
         panels::library_problem::banner(self, ui);
+        panels::samples::banner(self, ui);
         panels::strip::show(self, ui);
         // filled: the gaps the dock leaves between its panes show chrome, not the dark clear colour
         let chrome = theme::Tokens::get(&ctx).chrome;
@@ -1474,7 +1539,8 @@ impl LightcraftApp {
         panels::keyword_list::drag_feedback(self, &ctx);
         panels::toast(self, &ctx);
         self.widgets = widgets::take_registry(&ctx);
-        self.text_focus = ctx.egui_wants_keyboard_input();
+        // a focused plain button (the welcome's) isn't a text field the person is typing in
+        self.text_focus = ctx.egui_wants_keyboard_input() && !crate::widgets::plain_button_has_focus(&ctx);
         self.end_frame(&ctx, t0);
     }
 }
