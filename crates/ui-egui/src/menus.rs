@@ -72,6 +72,12 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.compare", "Compare", Some("Shift+C"), "View"),
     ("view.survey", "Survey", Some("N"), "View"),
     ("view.people", "People", None, "View"),
+    ("view.map", "Map", None, "View"),
+    ("map.fit", "Fit Map to Photos", None, ""),
+    ("map.setView", "Set Map View", None, ""),
+    ("map.zoomIn", "Zoom In on Map", None, ""),
+    ("map.zoomOut", "Zoom Out on Map", None, ""),
+    ("map.state", "Map State", None, ""),
     ("view.person", "Show Person", None, ""),
     ("view.faceBoxes", "Face Boxes", None, "View"),
     ("view.focusPoint", "Show Focus Point", Some("Alt+F"), "View"),
@@ -427,6 +433,9 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
     // the app's own context: a toast's time comes from its clock (a fresh context's clock is at 0,
     // and a toast set by it was long over by the app's clock: it never showed)
     let ctx = app.tasks.repaint.clone().unwrap_or_default();
+    if let Some(r) = crate::panels::map::command(app, id, p) {
+        return Some(r);
+    }
     let r: Result<Value, String> = match id {
         "view.photoGrid" => {
             app.ui.view = ViewMode::PhotoGrid;

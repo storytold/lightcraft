@@ -46,16 +46,16 @@ cited here still exists. Formerly docs/parity.md.
 | R. Video (VID) | 0 | 0 | 5 | 1 | — | 0/2 (0%) |
 | S. Export (EXP) | 15 | 4 | 0 | 0 | 7/7 (100%) | 7/7 (100%) |
 | T. Share (SHARE) | 0 | 0 | 0 | 4 | — | — |
-| U. Map & location (MAP) | 0 | 1 | 1 | 0 | — | 0/1 (0%) |
+| U. Map & location (MAP) | 1 | 1 | 0 | 0 | — | 1/1 (100%) |
 | V. Preferences (PREF) | 6 | 2 | 2 | 2 | 1/1 (100%) | 4/5 (80%) |
 | W. Cloud & AI infrastructure (CLOUD / AI) | 1 | 0 | 1 | 2 | — | — |
 | X. Cross-cutting behaviours (BEHAV) | 23 | 6 | 1 | 1 | 8/8 (100%) | 7/10 (70%) |
-| Y. Menus | 84 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
+| Y. Menus | 85 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 78 | 4 | 2 | 1 | 49/52 (94%) | 24/26 (92%) |
-| Lightroom Classic extras | 40 | 23 | 23 | 8 | — | 24/26 (92%) |
-| **Total** | 419 | 61 | 59 | 35 | 194/201 (97%) | 148/161 (92%) |
+| Lightroom Classic extras | 41 | 23 | 22 | 8 | — | 24/26 (92%) |
+| **Total** | 422 | 61 | 57 | 35 | 194/201 (97%) | 149/161 (93%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.4%** of 539 in-scope rows — P0 98.3% of 201 · P1 95.0% of 161 · P2 55.7% of 176.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.8%** of 540 in-scope rows — P0 98.3% of 201 · P1 95.3% of 161 · P2 56.8% of 177.
 <!-- /parity:summary -->
 
 ## Top gaps and shortcut notes
@@ -168,7 +168,7 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 |---|---|---|---|---|---|
 | LR-META-INFO | Info panel | P0 | ✅ | `cmd:panel.info`, `cmd:photo.setMeta`, `crates/ui-egui/src/panels/right.rs` (`info`, `camera_card`) | camera card (camera, lens, size, format, focal length / shutter / aperture / ISO); title, caption, alt text, extended description, copyright, copyright status, rights usage terms, copyright info URL, creator; file name (rename), file path (reveal), capture time (edit); location, city, state, country; GPS. No flash, map snippet or people; a raw with no lens name (Nikon DSLRs) shows its range from Exif LensSpecification or the Nikon maker note's Lens tag, written like Lightroom's `24.0-70.0 mm f/2.8` |
 | LR-META-COPYRIGHT-DEFAULT | Default copyright on import | P1 | ✅ | `cmd:library.preferences` (`import.copyright`, `import.creator`), `crates/ui-egui/src/panels/settings.rs` | Settings → Import → Metadata; fills only photos without their own |
-| LR-META-LOCATION | Location editing | P2 | 🟡 | `cmd:photo.setMeta` (`location`, `city`, `state`, `country`, `gps`), `cmd:metadata.reverseGeocode` | place fields and GPS (decimal or degrees / minutes / seconds) edited in Info, read/written as IPTC Core / Photoshop / EXIF XMP; Show on Map opens OpenStreetMap; Fill Location fills empty City / State / Country from GPS offline (GeoNames, downloaded on request: `cmd:metadata.downloadPlaceNames`); no embedded map |
+| LR-META-LOCATION | Location editing | P2 | 🟡 | `cmd:photo.setMeta` (`location`, `city`, `state`, `country`, `gps`), `cmd:metadata.reverseGeocode` | place fields and GPS (decimal or degrees / minutes / seconds) edited in Info, read/written as IPTC Core / Photoshop / EXIF XMP; a map of the place in Info (LR-MAP-INFO); Open in Browser opens OpenStreetMap; Fill Location fills empty City / State / Country from GPS offline (GeoNames, downloaded on request: `cmd:metadata.downloadPlaceNames`) |
 | LR-META-COPYPASTE | Copy / paste metadata | P2 | ✅ | `cmd:photo.copyMetadata`, `cmd:photo.pasteMetadata` | title, caption, alt text, extended description, copyright (notice, status, usage terms, info URL), creator, place fields, keywords; `fields` picks a subset |
 | LR-META-XMP | XMP read/write | P0 | ✅ | `cmd:photo.saveMetadataToFile`, `cmd:photo.readMetadataFromFile`, `cmd:library.xmpPreferences`, `crates/engine/src/sidecar.rs`, `docs/xmp-interop.md` | sidecar wins for metadata; a sidecar capture time (`exif:DateTimeOriginal` / `photoshop:DateCreated` / `xmp:CreateDate`) fills in only when the file has none; saving merges into an existing sidecar (`crates/meta/src/xmp_merge.rs`): another app's `crs:`, `xmpMM:History` and unknown namespaces are kept byte for byte, an unreadable sidecar is backed up first; with stem naming, files sharing a stem (raw + JPEG) get separate sidecars (`<file>.xmp` for all but the raw); a `crs:` custom white balance on a relative-WB raw is shifted from `crs:AsShotTemperature` rather than read as Kelvin, or kept As Shot and reported when the packet has no as-shot white (issue #510); heal and clone spots (`crs:RetouchAreas`, legacy `crs:RetouchInfo`) are read into our spots (`crates/engine/src/crs_masks.rs`, see `docs/xmp-interop.md` → Spot removal); radial masks (`Mask/CircularGradient`) keep Lightroom's inside / outside: `crs:Flipped="true"` is the effect-inside flag of current masks and of the legacy Radial Filter, `crs:MaskInverted` the inversion, checked against Lightroom Classic's renders (issue #1815); Read Metadata from File never writes the sidecar back, even with auto-write on, so another app's later `crs:` edits are still read (issue #934) |
 | LR-META-EXIF-FULL | Full EXIF/IPTC [Classic] | P1 | ✅ | `cmd:photo.allMetadata`, `cmd:dialog.allMetadata`, `crates/meta/src/tags.rs`, `crates/meta/src/exif.rs`, `crates/meta/src/iptc.rs` | read and written on export; Info ▸ All Metadata…: every TIFF / EXIF / GPS / interop tag (named, common values spelled out) and the XMP fields, searchable; metadata presets |
@@ -422,8 +422,8 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 
 | Id | Feature | Tier | Status | Evidence | Missing / notes |
 |---|---|---|---|---|---|
-| LR-MAP-INFO | Location in the info panel | P1 | 🟡 | `cmd:photo.setMeta` (`location`, `city`, `state`, `country`, `gps`), `crates/ui-egui/src/panels/right.rs` | location, city, state/province, country and GPS editable; Show on Map (OpenStreetMap in the browser); no map in the panel |
-| LR-MAP-MODULE | Map module [Classic] | P2 | ⬜ | | |
+| LR-MAP-INFO | Location in the info panel | P1 | ✅ | `cmd:photo.setMeta` (`location`, `city`, `state`, `country`, `gps`), `cmd:map.state`, `cmd:metadata.reverseGeocode`, `crates/ui-egui/src/panels/right.rs`, `crates/ui-egui/src/panels/map.rs` | location, city, state/province, country and GPS editable; under them a map of the active photo's place (zoom 14, its pin, the tile credit; shares the Map view's tiles; fetches only while on screen; grey with a note offline); clicking it opens the Map view centred there; Open in Browser shows the place on openstreetmap.org; Fill Location fills empty City / State / Country from GPS offline |
+| LR-MAP-MODULE | Map module [Classic] | P2 | 🟡 | `cmd:view.map`, `cmd:map.fit`, `cmd:map.setView`, `cmd:map.state`, `cmd:map.tileSource`, `cmd:map.cacheInfo`, `cmd:map.clearCache`, `crates/map`, `crates/ui-egui/src/panels/map.rs`, `docs/map.md` | a Map view (View ▸ Map, LRC-MAP-VIEW) over the core: Web Mercator tile maths, tile source (OpenStreetMap by default, custom or offline), on-disk tile cache and a viewport-only fetch queue. Not yet: geotagging by dragging photos onto the map (LRC-MAP-GEOTAG), the location filter bar (LRC-MAP-FILTER), saved locations (LRC-MAP-LOCATIONS), track logs drawn on the map, the map in the Info panel (LR-MAP-INFO), an offline basemap |
 
 ## V. Preferences (PREF)
 
@@ -552,6 +552,7 @@ visible menu bar yet: the menu model is only exposed through the control channel
 | MENU-VIEW-PHOTOCOUNT | Show photo counts | P2 | ✅ | `cmd:view.photoCounts` | View ▸ Show Photo Counts toggles the left panel's counts |
 | MENU-VIEW-SIDEBARSECTIONS | Sidebar sections | P2 | ✅ | `cmd:view.sidebarSection`, `cmd:view.sidebarReset` | View ▸ Sidebar Sections ▸ a checkable item per left-sidebar section, then Reset Sidebar Sections (see LR-BEHAV-SIDEBAR-HIDE) |
 | MENU-VIEW-HDR | HDR display options | P2 | ⬜ | | |
+| MENU-VIEW-MAP | Map | P2 | ✅ | `cmd:view.map` | View ▸ Map and the map pin in the bottom bar (LRC-MAP-VIEW) |
 | MENU-PHOTO-ADDTOALBUM | Add to album | P0 | ✅ | `cmd:album.addPhotos` | off for a Local-only selection, with an Add to My Photos First hint item (issue #684) |
 | MENU-PHOTO-REMOVEFROMALBUM | Remove from album | P0 | ✅ | `cmd:album.removePhotos` | Photo ▸ Remove from Album, shown in a normal album only, carries the ⌫ shortcut there (Delete Photo then has none) (issue #1805) |
 | MENU-PHOTO-RATE | Rate submenu | P0 | ✅ | `cmd:photo.rate` | |
@@ -732,7 +733,7 @@ From `08-lightroom-classic-extras.md` (Classic-only features) and part 2 of `06-
 | LRC-DEV-VIEWOPTIONS | Develop view options | P2 | ⬜ | | |
 | LRC-DEV-LOUPEOVERLAY | Loupe overlay: layout image | P2 | 🟡 | `cmd:view.chooseLayoutImage`, `cmd:view.layoutImage`, `cmd:view.layoutImageOpacity`, `cmd:view.layoutImageMatte`, `crates/ui-egui/src/panels/layout_overlay.rs` | View ▸ Loupe Overlay: a PNG with transparency (a cover layout, a banner's safe areas) fitted and centred over the loupe photo, following zoom and pan; opacity and matte (the photo darkened outside the graphic's box) in steps; ⌥⌘O shows / hides it; read off the UI thread; saved with the UI state. Not yet: the Grid and Guides overlays, moving and resizing the layout with ⌘ held, free opacity / matte sliders |
 | LRC-DEV-VIDEO | Video frame capture | P2 | ⬜ | | |
-| LRC-MAP-VIEW | Map view | P2 | ⬜ | | |
+| LRC-MAP-VIEW | Map view | P2 | ✅ | `cmd:view.map`, `cmd:map.fit`, `cmd:map.setView`, `cmd:map.zoomIn`, `cmd:map.zoomOut`, `cmd:map.state`, `crates/ui-egui/src/panels/map.rs`, `crates/map/src/cluster.rs` | View ▸ Map (or the pin in the bottom bar), with the filmstrip: the photos in view (source, filter and sort, as the grid) with a GPS position as pins on a slippy map; nearby pins merge into a counted cluster per zoom (60 px cells) and split as you zoom in; a click selects a pin's photos (⌘ / ⇧ adds), a double-click opens the first in Detail, hovering shows its thumbnail; selected photos' pins are blue. Drag to pan, mouse wheel / pinch / ⌘-scroll zoom around the pointer, two-finger scroll pans, double-click the map zooms in, + / − and Fit to Photos (⌘= / ⌘- / ⌘0 too); the first visit fits the photos, the view is kept for the session; "N photos without GPS" bottom left; the tile source's attribution always shown bottom right; offline, a grey map with a note. One map style (the tile source's; satellite / terrain imagery is out by licence), no location search (LRC-MAP-REVGEO), no H to hide pins (KEY-HIDEPINS) |
 | LRC-MAP-GEOTAG | Drag photos onto the map | P2 | ⬜ | | |
 | LRC-MAP-LOCATIONS | Saved locations | P2 | ⬜ | | |
 | LRC-MAP-TRACKLOG | GPS track logs | P2 | ✅ | `cmd:photo.autoTagTracklog`, `cmd:photo.tagFromTracklog`, `crates/meta/src/gpx.rs` | Photo ▸ Auto-Tag from Tracklog…: a GPX 1.0 / 1.1 track log sets the GPS of the selected photos by capture time — interpolated between the points of a track segment, else the nearest point within `maxGap` (10 min); never across segment breaks. The camera's time zone comes from the photo (Exif offset) or is asked for; photos that already have a location keep it unless `replace`; `dryRun` previews; one undo step. No track drawn on a map (no Map module) |

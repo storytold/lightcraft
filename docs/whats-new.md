@@ -2,6 +2,18 @@
 
 ## 2026-10-14
 
+### Map view
+- View ▸ Map (or the map pin in the bottom bar) shows the photos in view on a map, with the filmstrip below. Nearby
+  photos gather in a numbered cluster that splits as you zoom in; click a pin to select its photos, double-click to
+  open one, rest the pointer on it to see the photo.
+- Drag to pan; the mouse wheel or a pinch zooms where the pointer is; Fit to Photos frames every photo with a location.
+  The count of photos without GPS is shown bottom left.
+- The map uses OpenStreetMap's tiles (credited on the map) or a tile server you choose, only fetches what is on screen,
+  and can be switched off (`map.tileSource {offline: true}`); see [Map](map.md) for what is sent where.
+- The Info panel shows a small map of the photo's place under its location fields (the active photo's, with several
+  selected). Click it to open the Map view there; **Open in Browser** (formerly Show on Map) still opens
+  OpenStreetMap's site.
+
 ### Lightroom radial masks on the right side
 - Radial masks brought over from Lightroom Classic (catalog import, XMP sidecars, edits inside DNGs and presets) now
   apply their effect inside the circle, as Lightroom does, instead of outside it (issue #1815). A mask inverted in
