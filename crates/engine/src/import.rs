@@ -358,7 +358,8 @@ pub fn apply_import_defaults(s: &Session, p: &mut Photo) {
     let preset = s.import_defaults.preset_for(raw, &p.meta.camera).and_then(|id| s.presets.iter().find(|x| x.id == id));
     match preset {
         Some(pr) => {
-            let look = std::sync::Arc::new(pr.apply(&base, 1.0));
+            // a preset carries no Upright correction (an old one may still hold one: not this photo's)
+            let look = std::sync::Arc::new(crate::upright_transfer::apply_preset(p, &base, pr, 1.0));
             p.develop = look.clone();
             p.import_look = (*look != base).then_some(look);
         }
@@ -1068,7 +1069,11 @@ impl ImportJob {
                 .or_else(|| info.xmp.clone().filter(|_| raw));
             let target = crate::crs::Target::for_file(info.kind, &info.format, info.preview_only.is_some(), &info.meta.camera);
             let sidecar = packet.and_then(|x| match crate::sidecar::parse_sidecar(&x, target) {
-                Ok(sc) => Some(sc),
+                Ok(mut sc) => {
+                    // Lightroom's crop and saved Upright refer to the file's stored image
+                    sc.set_frame(info.stored_frame());
+                    Some(sc)
+                }
                 Err(e) => {
                     log::warn!("import {path}: XMP: {e}");
                     None
@@ -1438,7 +1443,8 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                     }
                 }
                 if let Some(preset) = &opts.preset {
-                    let d = std::sync::Arc::new(preset.apply(&p.develop, 1.0));
+                    // after the sidecar: the photo keeps the Upright correction it was given
+                    let d = std::sync::Arc::new(crate::upright_transfer::apply_preset(&p, &p.develop, preset, 1.0));
                     let label = format!("Preset: {}", preset.name);
                     p.develop = d.clone();
                     p.edited = Some(now.clone());

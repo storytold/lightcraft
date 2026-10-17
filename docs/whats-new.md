@@ -375,6 +375,33 @@
   JPEG get faster too.
 ## 2026-10-12
 
+### Lightroom Upright comes across
+- Photos edited in Lightroom with Upright Auto, Full, Level or Vertical now keep the correction Lightroom saved
+  with the edit instead of being analysed again (issue #205), so they open framed as they are in Lightroom. Upright
+  Auto matches Lightroom's exports to under a pixel; Full, Level and Vertical use the same saved correction but
+  haven't been compared with exports yet. Not covered yet: Transform sliders or a straightened crop on top of
+  Upright, and Lightroom's lens profile corrections (details in docs/xmp-interop.md, *Saved Upright geometry*).
+  This works for XMP sidecars and DNG files with the edit inside, on import, with Photo ▸ Read Metadata from File
+  and with Synchronize Folder. Lightroom Classic catalogs still have it worked out again for now, and the import
+  says so.
+- Rotate Left and Rotate Right turn an Upright correction with the photo. It used to stay as it was, so the photo
+  came out skewed after a turn. Settings JSON that changes the rotation (Apply Settings JSON, MCP `set_develop`, the
+  CLI) turns it the same way, also when the settings are sent back whole, again after each change or with their
+  numbers rounded.
+- An Upright correction stays with its photo: it is the analysis of that one image. Paste, Sync and Auto Sync give a
+  virtual copy the correction turned its way. Other photos get the rest of the Geometry settings (the Upright mode,
+  the Transform sliders, guides) and keep their own correction, or work out their own when the mode changes; Lightroom
+  community experts report that Lightroom's Sync with only Upright Mode checked works out each photo too. Presets keep
+  the mode, never a correction. LightCraft used to copy its own correction to other photos as it was, which applied
+  one scene's correction to another.
+- A crop read from an XMP sidecar now lands where Lightroom put it on photos shown on their side (portrait raws),
+  and straightened crops keep Lightroom's frame. A portrait crop used to cut the wrong side of the photo.
+  Synchronize Folder reads sidecars the same way, and its report lists what a sidecar couldn't carry over.
+- Lightroom's Upright values 2, 3 and 4 now read as Full, Level and Vertical. They used to come in as Level,
+  Vertical and Full.
+- Guided Upright doesn't come across yet (Lightroom's guides aren't read), and the import report says so. The
+  report no longer lists Lightroom's Upright analysis fields as adjustments that weren't imported.
+
 ### Canon CR2 highlights
 - Blown highlights in CR2 files from the Canon EOS 50D, 60D, 450D (Rebel XSi), 500D (Rebel T1i), 550D (Rebel T2i),
   1200D (Rebel T5) and 100D (Rebel SL1) now count as clipped (issue #1272). They used to stop at 81–98% of white, so

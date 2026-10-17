@@ -82,6 +82,8 @@ pub struct SyncInput {
     /// The library as it is now (the one the scan looks files up in): for those photos, their
     /// sidecars' names and the colour label names a sidecar may use.
     labels: Arc<Catalog>,
+    /// The session's file probe lets sidecars use the file's orientation for crops and saved Upright.
+    probe: Option<crate::media::FileProbe>,
 }
 
 /// What changed in a folder since it came into the library.
@@ -154,6 +156,8 @@ pub struct SyncReport {
     pub read: usize,
     /// (path or photo, why) for what couldn't be done.
     pub failed: Vec<(String, String)>,
+    /// What sidecars said that couldn't be carried over in full (as for import).
+    pub warnings: Vec<crate::import::ImportWarning>,
 }
 
 fn invalid(msg: impl Into<String>) -> EngineError {
@@ -182,7 +186,7 @@ impl SyncInput {
         }
         let (scan, _) = ScanInput::new(s, &[path.to_string()]);
         let labels = scan.library();
-        Ok(SyncInput { folder: path.to_string(), scan, ids, naming: s.xmp.naming, labels })
+        Ok(SyncInput { folder: path.to_string(), scan, ids, naming: s.xmp.naming, labels, probe: s.media.file_probe.clone() })
     }
 }
 
@@ -193,7 +197,7 @@ impl SyncInput {
 /// library's photos, which run on several threads too. Stops early when `progress.files.cancel`
 /// is set.
 pub fn scan_with(input: SyncInput, progress: &SyncProgress) -> FolderChanges {
-    let SyncInput { folder, scan, ids, naming, labels } = input;
+    let SyncInput { folder, scan, ids, naming, labels, probe } = input;
     let seen: Vec<Arc<Photo>> = ids.iter().filter_map(|id| labels.photo(*id)).map(Arc::clone).collect();
     if !cfg!(target_arch = "wasm32") && !Path::new(&folder).is_dir() {
         return FolderChanges { path: folder, seen, offline: true, ..Default::default() };
@@ -219,12 +223,13 @@ pub fn scan_with(input: SyncInput, progress: &SyncProgress) -> FolderChanges {
     let listing = &listing;
     // (no threads on the web: one after the other there)
     #[cfg(target_arch = "wasm32")]
-    let (out, checks) = (crate::import::scan_files(scan, files, &progress.files), check_photos(&photos, &labels, listing, progress));
+    let (out, checks) = (crate::import::scan_files(scan, files, &progress.files), check_photos(&photos, &labels, listing, probe.as_ref(), progress));
     #[cfg(not(target_arch = "wasm32"))]
     let (out, checks) = std::thread::scope(|sc| {
         let photos = &photos;
         let labels = &labels;
-        let checks = sc.spawn(move || check_photos(photos, labels, listing, progress));
+        let probe = probe.as_ref();
+        let checks = sc.spawn(move || check_photos(photos, labels, listing, probe, progress));
         let out = crate::import::scan_files(scan, files, &progress.files);
         // (a check that panicked counts as nothing found; the scan still reports the rest)
         (out, checks.join().unwrap_or_default())
@@ -478,12 +483,12 @@ impl Listing {
     }
 }
 
-fn check_photo(p: &Photo, naming: SidecarNaming, labels: &Catalog, listing: &Listing) -> Check {
+fn check_photo(p: &Photo, naming: SidecarNaming, labels: &Catalog, listing: &Listing, probe: Option<&crate::media::FileProbe>) -> Check {
     let Some(file) = crate::cmd::missing::checked_path(p) else { return Check::Nothing };
     let file = Path::new(file);
     if !listing.or_ask(listing.exists(file), || file.exists()) {
         Check::Missing
-    } else if p.copy_of.is_none() && sidecar_has_news(labels, p, naming, listing) {
+    } else if p.copy_of.is_none() && sidecar_has_news(labels, p, naming, listing, probe) {
         Check::News
     } else {
         Check::Nothing
@@ -492,12 +497,18 @@ fn check_photo(p: &Photo, naming: SidecarNaming, labels: &Catalog, listing: &Lis
 
 /// [`check_photo`] for each photo, in order, on several threads (each file is a wait on the
 /// disk, not work for the CPU). Photos not reached before a cancel count as nothing found.
-fn check_photos(photos: &[(Arc<Photo>, SidecarNaming)], labels: &Catalog, listing: &Listing, progress: &SyncProgress) -> Vec<Check> {
+fn check_photos(
+    photos: &[(Arc<Photo>, SidecarNaming)],
+    labels: &Catalog,
+    listing: &Listing,
+    probe: Option<&crate::media::FileProbe>,
+    progress: &SyncProgress,
+) -> Vec<Check> {
     use std::sync::atomic::Ordering::Relaxed;
     progress.to_check.store(photos.len(), Relaxed);
     let cancel = &progress.files.cancel;
     let check = |p: &Photo, naming: SidecarNaming| {
-        let c = check_photo(p, naming, labels, listing);
+        let c = check_photo(p, naming, labels, listing, probe);
         progress.checked.fetch_add(1, Relaxed);
         c
     };
@@ -565,7 +576,7 @@ impl Session {
 
 /// Whether `p`'s XMP sidecar file was saved after the library last had its say about the photo
 /// (imported, or edited here) and says something the library doesn't.
-fn sidecar_has_news(labels: &Catalog, p: &Photo, naming: SidecarNaming, listing: &Listing) -> bool {
+fn sidecar_has_news(labels: &Catalog, p: &Photo, naming: SidecarNaming, listing: &Listing, probe: Option<&crate::media::FileProbe>) -> bool {
     let Source::File { path } = &p.source else { return false };
     // ([`crate::sidecar::find_sidecar`], each name looked up in the listing before the disk)
     // (a name the listing holds is read for its date next, and one that can't be read is passed
@@ -586,7 +597,14 @@ fn sidecar_has_news(labels: &Catalog, p: &Photo, naming: SidecarNaming, listing:
         return false;
     }
     let Ok(text) = std::fs::read_to_string(&file) else { return false };
-    let Ok(sc) = crate::sidecar::parse_sidecar(&text, crate::crs::Target::for_photo(p)) else { return false };
+    let Ok(mut sc) = crate::sidecar::parse_sidecar(&text, crate::crs::Target::for_photo(p)) else { return false };
+    // compared in the photo's frame, as it would be read; a crop that can't be placed (no frame) and
+    // differs from the photo's is still news, so the synchronize that reads it says why it was left
+    if let Some(held) = framed(&mut sc, path, probe)
+        && lightcraft_develop::apply_partial(&p.develop, &serde_json::json!({"crop": held}), 1.0).crop != p.develop.crop
+    {
+        return true;
+    }
     let sc = sc.resolve_label(labels);
     let mut q = p.clone();
     crate::sidecar::merge_into(&mut q, &sc, "");
@@ -622,8 +640,10 @@ pub struct SyncWork {
     import: Option<(crate::import::ImportJob, Vec<String>)>,
     moved: Vec<FolderMoved>,
     missing: Vec<FolderPhoto>,
-    /// (photo, its file, how its sidecar is named)
+    /// (photo, its file, sidecar naming, white balance target)
     sidecars: Vec<(PhotoId, String, SidecarNaming, crate::crs::Target)>,
+    /// The session's file probe, for the files' orientations ([`SyncInput`]).
+    probe: Option<crate::media::FileProbe>,
 }
 
 /// The catalog half of a synchronize (see [`SyncJob`]).
@@ -688,6 +708,7 @@ impl SyncJob {
             moved: if choice.relink_moved { moved } else { Vec::new() },
             missing: if choice.remove_missing { missing } else { Vec::new() },
             sidecars,
+            probe: s.media.file_probe.clone(),
         };
         let commit = SyncCommit {
             opts,
@@ -709,7 +730,7 @@ impl SyncWork {
     pub fn run(self, progress: &SyncProgress, mut send: impl FnMut(SyncStep) -> bool) {
         use std::sync::atomic::Ordering::Relaxed;
         let cancel = &progress.files.cancel;
-        let SyncWork { import, moved, missing, sidecars } = self;
+        let SyncWork { import, moved, missing, sidecars, probe } = self;
         let pieces = import.as_ref().map_or(0, |(_, f)| f.len()) + moved.len() + missing.len() + sidecars.len();
         progress.to_check.store(pieces, Relaxed);
         progress.checked.store(0, Relaxed);
@@ -753,7 +774,7 @@ impl SyncWork {
             if cancel.load(Relaxed) {
                 break;
             }
-            read.push((id, path.clone(), read_sidecar(&path, naming, target)));
+            read.push((id, path.clone(), read_sidecar(&path, naming, target, probe.as_ref())));
             step(1);
         }
         if !read.is_empty() {
@@ -762,15 +783,34 @@ impl SyncWork {
     }
 }
 
-/// Read and parse photo file `path`'s XMP sidecar file.
-fn read_sidecar(path: &str, naming: SidecarNaming, target: crate::crs::Target) -> std::result::Result<crate::sidecar::SidecarData, String> {
+/// Read and parse photo file `path`'s XMP sidecar file, its crop and saved Upright in the frame the
+/// file has now, as import reads them.
+fn read_sidecar(
+    path: &str,
+    naming: SidecarNaming,
+    target: crate::crs::Target,
+    probe: Option<&crate::media::FileProbe>,
+) -> std::result::Result<crate::sidecar::SidecarData, String> {
     let file = crate::sidecar::find_sidecar(path, naming).ok_or_else(|| "no XMP sidecar".to_string())?;
     let len = std::fs::metadata(&file).map_err(|e| format!("{}: {e}", file.display()))?.len();
     if len > MAX_SIDECAR_BYTES {
         return Err(format!("{}: too large for an XMP sidecar", file.display()));
     }
     let text = std::fs::read_to_string(&file).map_err(|e| format!("{}: {e}", file.display()))?;
-    crate::sidecar::parse_sidecar(&text, target).map_err(|e| format!("{}: {e}", file.display()))
+    let mut sc = crate::sidecar::parse_sidecar(&text, target).map_err(|e| format!("{}: {e}", file.display()))?;
+    framed(&mut sc, path, probe);
+    Ok(sc)
+}
+
+/// Give a parsed sidecar of the photo whose file is `path` the frame the file has now, through the
+/// session's file probe (only when the packet's crop or saved Upright needs it). Without one, the
+/// photo's crop is left as it is and the report says so; returns the crop held that way.
+fn framed(sc: &mut crate::sidecar::SidecarData, path: &str, probe: Option<&crate::media::FileProbe>) -> Option<serde_json::Value> {
+    if !sc.needs_frame() {
+        return None;
+    }
+    sc.set_frame(crate::sidecar::probe_frame(probe, path));
+    sc.hold_unframed_crop()
 }
 
 impl SyncCommit {
@@ -830,6 +870,12 @@ impl SyncCommit {
             SyncStep::Sidecars(read) => {
                 let mut ops = Vec::new();
                 for (id, path, sc) in read {
+                    if let Ok(sc) = &sc {
+                        report.warnings.extend(sc.warnings.iter().cloned().map(|mut w| {
+                            w.path = path.clone();
+                            w
+                        }));
+                    }
                     match sc.map_err(EngineError::Other).and_then(|sc| s.sidecar_op(id, sc)) {
                         Ok(op) => ops.push(op),
                         Err(e) => report.failed.push((path, e.to_string())),

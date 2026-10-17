@@ -152,17 +152,17 @@ fn a_check_from_the_listing_is_the_check_from_the_disk() {
     let nothing = Listing::default();
     for naming in [SidecarNaming::Stem, SidecarNaming::Full] {
         for p in &photos {
-            let from_disk = check_photo(p, naming, &c, &nothing);
-            assert_eq!(check_photo(p, naming, &c, &l), from_disk, "{:?} {naming:?}", p.file_name);
+            let from_disk = check_photo(p, naming, &c, &nothing, None);
+            assert_eq!(check_photo(p, naming, &c, &l, None), from_disk, "{:?} {naming:?}", p.file_name);
         }
     }
     let expected = [Check::Nothing, Check::News, Check::News, Check::News, Check::News, Check::News, Check::Missing, Check::Missing, Check::Missing];
-    assert_eq!(photos.iter().map(|p| check_photo(p, SidecarNaming::Stem, &c, &l)).collect::<Vec<_>>(), expected);
+    assert_eq!(photos.iter().map(|p| check_photo(p, SidecarNaming::Stem, &c, &l, None)).collect::<Vec<_>>(), expected);
 
     // what the disk was asked about the same photos, with the listing and without: fewer questions with it
     let asked = |l: &Listing| {
         for p in &photos {
-            check_photo(p, SidecarNaming::Stem, &c, l);
+            check_photo(p, SidecarNaming::Stem, &c, l, None);
         }
         l.asked.load(std::sync::atomic::Ordering::Relaxed)
     };
@@ -185,7 +185,7 @@ fn a_check_from_the_listing_is_the_check_from_the_disk() {
     let mut c2 = Catalog::new();
     for (name, expected) in [("deep.jpg", Check::News), ("gone.jpg", Check::Missing), ("gone.jpg.xmp", Check::Missing)] {
         let p = photo(&mut c2, &sub.join(name));
-        assert_eq!(check_photo(&p, SidecarNaming::Stem, &c2, &only_plain), expected, "{name}");
+        assert_eq!(check_photo(&p, SidecarNaming::Stem, &c2, &only_plain, None), expected, "{name}");
     }
     assert_eq!(only_plain.asked.load(std::sync::atomic::Ordering::Relaxed), 0, "every answer came from the listing");
     let _ = std::fs::remove_dir_all(&dir);

@@ -1670,6 +1670,18 @@ pub struct ProbeInfo {
     /// A raw variant that can't be decoded yet: why. The file is described (and will be shown and
     /// edited) from its embedded preview; see [`lightcraft_catalog::Photo::preview_only`].
     pub preview_only: Option<String>,
+    /// How the stored image is turned into the oriented one `width × height` describes (the
+    /// file's EXIF orientation, as the decoder applies it); `None` when not known. Lightroom's
+    /// saved Upright matrices are in the stored frame ([`crate::crs::SavedUpright`]).
+    pub orientation: Option<lightcraft_geom::Orientation>,
+}
+
+impl ProbeInfo {
+    /// The stored image's frame: its orientation and its size before that orientation, when both
+    /// are known (see [`crate::sidecar::SidecarData::set_frame`]).
+    pub fn stored_frame(&self) -> Option<crate::sidecar::StoredFrame> {
+        crate::sidecar::StoredFrame::of_shown(self.orientation?, f64::from(self.width), f64::from(self.height))
+    }
 }
 
 pub type FileProbe = Arc<dyn Fn(&str) -> Result<ProbeInfo, String> + Send + Sync>;

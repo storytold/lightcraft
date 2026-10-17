@@ -19,7 +19,7 @@ use std::borrow::Cow;
 use std::sync::Mutex;
 
 use lightcraft_develop::{Crop, DevelopSettings, Geometry, Upright};
-use lightcraft_geom::{Homography, Point};
+use lightcraft_geom::{Homography, Orientation, Point};
 use lightcraft_raster::{Plane, Rgb32f};
 
 use crate::SourceInfo;
@@ -593,6 +593,21 @@ pub fn resolve<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings) -> C
     let mut e = s.clone();
     e.geometry.upright_transform = Some(auto_transform(src, info, s, g.upright));
     Cow::Owned(e)
+}
+
+/// A stored Upright correction (`Geometry::upright_transform`) for the photo turned a further
+/// `turn` (Rotate Left / Right): the same correction of the same scene, in the turned frame. In
+/// centred coordinates, which are isotropic and keep their scale (the long edge stays the long
+/// edge), a flip is x → −x and a clockwise quarter turn (x, y) → (−y, x).
+pub fn turned(h: &Homography, turn: Orientation) -> Homography {
+    let (flip, quarter_turns) = turn.to_parts();
+    let mut m = if flip { Homography([-1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]) } else { Homography::IDENTITY };
+    for _ in 0..quarter_turns {
+        m = Homography([0.0, -1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]).mul(&m);
+    }
+    // m is a signed permutation: its inverse is its transpose
+    let back = Homography([m.0[0], m.0[3], 0.0, m.0[1], m.0[4], 0.0, 0.0, 0.0, 1.0]);
+    m.mul(h).mul(&back)
 }
 
 /// The Upright homography in effect for settings (stored automatic transform, or solved from guides).
