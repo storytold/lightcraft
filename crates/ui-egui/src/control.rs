@@ -138,8 +138,12 @@ pub fn inspect(app: &LightcraftApp, ctx: &egui::Context) -> Value {
         "export": {"running": app.export.as_ref().map(crate::export_task::ExportTask::status), "last": app.last_export_result},
         "import": app.import.as_ref().map(crate::import::ImportTask::status),
         "tasks": app.tasks.labels(),
-        // every long-running task in flight, as the activity stack shows them (`activity.list`)
+        // every long-running task in flight, as the bell's popover shows them (`activity.list`)
         "activity": app.session.activity.list(),
+        // the bell's popover (running tasks and recent notifications) is open, and what the bell lists, newest first
+        "activityOpen": app.notifications.open,
+        "notifications": app.notifications.items.iter().map(|n| json!({"id": n.id, "text": n.text, "warning": n.warning, "details": n.report.is_some()})).collect::<Vec<_>>(),
+        "unread": app.notifications.unread,
         // commands waiting on a native file dialog shown off the UI thread (`pick`)
         "fileDialogs": app.pending_picks.iter().map(|p| p.command.clone()).collect::<Vec<_>>(),
         "memory": memory(app),

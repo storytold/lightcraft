@@ -20,7 +20,7 @@ Use **File** > **Import Photos…** to pick files, or **File** > **Import from F
 6. Optional: set **Album** to add the photos to an existing album or a new one, **Preset** to apply a preset to every photo, and **Keywords** (separated by commas).
 7. Click the button at the bottom. It shows the number of checked photos, for example **Import 24 Photos**. With **Move** it reads **Move 24 Photos**.
 
-The import runs in the background, with a progress row in the activity stack at the top left, and you can keep working while it does. The whole import is one undo step.
+The import runs in the background, and you can keep working while it does: a ring around the bell at the top left shows its progress, and clicking the bell shows the import's row. If some Lightroom settings in the photos' XMP files couldn't be applied, the message at the end says how many photos that concerns; **Show Details** lists them by setting. The whole import is one undo step.
 
 ## Good to know
 

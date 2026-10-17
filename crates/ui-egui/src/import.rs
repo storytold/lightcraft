@@ -796,59 +796,72 @@ fn commit_batch(app: &mut LightcraftApp, task: &mut ImportTask, prepared: lightc
     }
 }
 
-fn xmp_warning_text(warning: &ImportWarning) -> String {
-    let path = &warning.path;
+/// What a warning is about, without the photo: the heading of its group in the import report.
+fn warning_headings(warning: &ImportWarning) -> Vec<String> {
+    use crate::i18n::tr;
     match warning.code {
-        ImportWarningCode::CameraProfile => crate::i18n::tr_format!(
-            "XMP profile \"{profile}\" was not applied for {path}; colors may differ from Lightroom.",
-            profile = warning.profile.as_deref().unwrap_or_default(),
-            path = path,
-        ),
-        ImportWarningCode::UprightGeometry => match warning.mode.unwrap_or(ImportUprightMode::Unknown) {
-            ImportUprightMode::Off => crate::i18n::tr_format!(
-                "Lightroom geometry for {path} was not preserved; saved transform is ignored because Upright is Off.",
-                path = path,
-            ),
-            ImportUprightMode::Guided => crate::i18n::tr_format!(
-                "Lightroom geometry for {path} was not preserved; Guided Upright saved transform is unsupported.",
-                path = path,
-            ),
-            ImportUprightMode::Auto => crate::i18n::tr_format!(
-                "Lightroom geometry was not preserved for {path}; {mode} will be recalculated.",
-                path = path,
-                mode = crate::i18n::tr("Auto")
-            ),
-            ImportUprightMode::Level => crate::i18n::tr_format!(
-                "Lightroom geometry was not preserved for {path}; {mode} will be recalculated.",
-                path = path,
-                mode = crate::i18n::tr("Level")
-            ),
-            ImportUprightMode::Vertical => crate::i18n::tr_format!(
-                "Lightroom geometry was not preserved for {path}; {mode} will be recalculated.",
-                path = path,
-                mode = crate::i18n::tr("Vertical")
-            ),
-            ImportUprightMode::Full => crate::i18n::tr_format!(
-                "Lightroom geometry was not preserved for {path}; {mode} will be recalculated.",
-                path = path,
-                mode = crate::i18n::tr("Full")
-            ),
-            ImportUprightMode::Unknown => {
-                crate::i18n::tr_format!("Lightroom geometry for {path} was not preserved; saved Upright transform is unsupported.", path = path,)
-            }
-        },
-        ImportWarningCode::UnmappedXmp => {
-            crate::i18n::tr_format!("XMP adjustments were not imported for {path}: {fields}.", path = path, fields = warning.fields.join(", "),)
+        ImportWarningCode::CameraProfile => {
+            vec![format!("{}: {}", tr("Profile not applied, colors may differ from Lightroom"), warning.profile.as_deref().unwrap_or_default())]
         }
+        ImportWarningCode::UprightGeometry => vec![
+            tr(match warning.mode.unwrap_or(ImportUprightMode::Unknown) {
+                ImportUprightMode::Off => "Saved Lightroom geometry ignored: Upright is Off",
+                ImportUprightMode::Guided => "Guided Upright geometry is not supported",
+                ImportUprightMode::Auto => "Upright Auto will be recalculated",
+                ImportUprightMode::Level => "Upright Level will be recalculated",
+                ImportUprightMode::Vertical => "Upright Vertical will be recalculated",
+                ImportUprightMode::Full => "Upright Full will be recalculated",
+                ImportUprightMode::Unknown => "Saved Upright geometry is not supported",
+            })
+            .to_string(),
+        ],
+        ImportWarningCode::UnmappedXmp => warning.fields.iter().map(|field| format!("{}: {field}", tr("Not imported"))).collect(),
     }
 }
 
-fn xmp_warnings_text(warnings: &[ImportWarning]) -> String {
-    crate::i18n::tr_format!(
-        "Import warnings ({n}):\n{warnings}",
-        n = warnings.len(),
-        warnings = warnings.iter().map(xmp_warning_text).collect::<Vec<_>>().join("\n"),
-    )
+/// How many photos the warnings are about.
+fn warned_photos(warnings: &[ImportWarning]) -> usize {
+    let mut paths: Vec<&str> = warnings.iter().map(|w| w.path.as_str()).collect();
+    paths.sort_unstable();
+    paths.dedup();
+    paths.len()
+}
+
+/// The import's warnings as a report: one group per problem (a Lightroom setting not carried over, a profile not
+/// applied…) listing the photos it concerns, in the order the problems first came up.
+pub(crate) fn warnings_report(warnings: &[ImportWarning]) -> crate::notifications::Report {
+    let mut groups: Vec<crate::notifications::ReportGroup> = Vec::new();
+    for w in warnings {
+        for heading in warning_headings(w) {
+            let i = match groups.iter().position(|g| g.heading == heading) {
+                Some(i) => i,
+                None => {
+                    groups.push(crate::notifications::ReportGroup { heading, items: Vec::new() });
+                    groups.len() - 1
+                }
+            };
+            if let Some(g) = groups.get_mut(i)
+                && !g.items.contains(&w.path)
+            {
+                g.items.push(w.path.clone());
+            }
+        }
+    }
+    let n = warned_photos(warnings);
+    crate::notifications::Report {
+        title: crate::i18n::tr("Import Warnings").to_string(),
+        summary: format!(
+            "{}: {n}. {}",
+            crate::i18n::tr("Photos with Lightroom settings LightCraft didn't apply"),
+            crate::i18n::tr("Their other edits were imported.")
+        ),
+        groups,
+    }
+}
+
+/// The toast's line for the warnings (the report has the rest).
+fn warnings_line(warnings: &[ImportWarning]) -> String {
+    format!("{}: {}", crate::i18n::tr("Lightroom settings not applied"), warned_photos(warnings))
 }
 
 /// The import is done (or cancelled): one undo step, show and select the first photo (unless the
@@ -866,7 +879,9 @@ fn finish(app: &mut LightcraftApp, ctx: &egui::Context, task: ImportTask) {
     app.session.merge_undo(steps, &label);
     if task.auto {
         if !task.warnings.is_empty() {
-            app.toast_for(ctx, xmp_warnings_text(&task.warnings), 8.0);
+            let added = crate::i18n::tr_format!("Auto Import: added {} photo{}", task.imported, if task.imported == 1 { "" } else { "s" });
+            let msg = format!("{added} · {}", warnings_line(&task.warnings));
+            app.notify(ctx, msg, true, Some(warnings_report(&task.warnings)));
         } else if task.imported > 0 {
             app.toast(ctx, crate::i18n::tr_format!("Auto Import: added {} photo{}", task.imported, if task.imported == 1 { "" } else { "s" }));
         }
@@ -874,7 +889,8 @@ fn finish(app: &mut LightcraftApp, ctx: &egui::Context, task: ImportTask) {
     }
     if task.browse {
         if !task.warnings.is_empty() {
-            app.toast_for(ctx, xmp_warnings_text(&task.warnings), 8.0);
+            let msg = format!("{} · {}", crate::i18n::tr("Photos added"), warnings_line(&task.warnings));
+            app.notify(ctx, msg, true, Some(warnings_report(&task.warnings)));
         } else if task.failed > 0 {
             app.toast(ctx, crate::i18n::tr_format!("{} photo{} not readable", task.failed, if task.failed == 1 { "" } else { "s" }));
         }
@@ -927,11 +943,11 @@ fn finish(app: &mut LightcraftApp, ctx: &egui::Context, task: ImportTask) {
         msg.push_str(&crate::i18n::tr_format!(" · {} not readable", task.failed));
     }
     if task.warnings.is_empty() {
-        app.toast(ctx, msg);
+        app.notify(ctx, msg, task.failed > 0, None);
     } else {
-        msg.push_str("\n\n");
-        msg.push_str(&xmp_warnings_text(&task.warnings));
-        app.toast_for(ctx, msg, 8.0);
+        msg.push_str(" · ");
+        msg.push_str(&warnings_line(&task.warnings));
+        app.notify(ctx, msg, true, Some(warnings_report(&task.warnings)));
     }
 }
 

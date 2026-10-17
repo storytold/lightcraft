@@ -122,6 +122,8 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.back", "Back to Grid", Some("Escape"), ""),
     ("tool.done", "Done", Some("Enter"), ""),
     ("view.filterBar", "Filter Bar", Some("Shift+F"), "View"),
+    // {open?}: the top bar's bell popover (running tasks, recent notifications); no params toggles
+    ("view.activity", "Activity & Notifications", None, "Window"),
     ("local.addRoot", "Add Folder to Local", None, ""),
     ("local.hide", "Remove from Local", None, ""),
     ("local.restoreHidden", "Show Hidden Local Locations", None, ""),
@@ -1098,6 +1100,10 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         "view.soloSections" => bool_param(id, p, "on").map(|on| {
             app.ui.set_single_panel(on.unwrap_or(!app.ui.single_panel));
             json!({"soloSections": app.ui.single_panel})
+        }),
+        "view.activity" => bool_param(id, p, "open").map(|open| {
+            crate::panels::activity::set_open(app, open);
+            json!({"open": app.notifications.open})
         }),
         "view.filterBar" => {
             app.ui.filter_bar = !app.ui.filter_bar;

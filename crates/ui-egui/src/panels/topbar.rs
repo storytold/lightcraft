@@ -63,13 +63,21 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             // room for the filter icon and the seven icons on the right
             // (the field is centred, so each icon on the right takes its width from both sides)
             let mut sw = 640.0f32.min(full.width() - 620.0).max(190.0);
+            let mut cx = full.center().x;
             if !app.native_menu {
                 // leave room for the in-window menus left of the (centred) search field
-                let menus_right = full.left() + 140.0 + crate::menubar::bar_width(ui) + 24.0;
-                sw = sw.min(2.0 * (full.center().x - menus_right)).max(190.0);
+                // (140: the sidebar button and back / forward; 34: the bell)
+                let menus_right = full.left() + 174.0 + crate::menubar::bar_width(ui) + 24.0;
+                sw = sw.min(2.0 * (cx - menus_right)).max(190.0);
+                // still in their way at its narrowest: off centre, into the room the icons on the right leave
+                // (their leftmost edge, less the filter icon's 36 and a gap)
+                let icons_left = full.right() - 18.0 - 5.0 * 40.0 - 14.0;
+                if cx - sw / 2.0 < menus_right {
+                    cx = (menus_right + sw / 2.0).min(icons_left - 36.0 - 8.0 - sw / 2.0).max(cx);
+                }
             }
-            let search_left = full.center().x - sw / 2.0;
-            let sr = Rect::from_center_size(pos2(full.center().x, full.center().y), vec2(sw, 28.0));
+            let search_left = cx - sw / 2.0;
+            let sr = Rect::from_center_size(pos2(cx, full.center().y), vec2(sw, 28.0));
             if app.integrated_titlebar {
                 window_handle(app, ui, full, left as f32, 12.0, sr);
             }
@@ -85,6 +93,12 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     let _ = app.run("view.back", json!({}));
                 }
                 icon_button(ui, "forward", Icon::Forward, vec2(30.0, 30.0), false, false, crate::i18n::tr("Forward"));
+                // running tasks and notifications: the bell, and the running task's name grows from it into the
+                // bar's free space (what the in-window menus and the search field leave)
+                ui.add_space(6.0);
+                let menus = if app.native_menu { 0.0 } else { crate::menubar::bar_width(ui) + 10.0 };
+                let label_room = search_left - ui.cursor().left() - 28.0 - 4.0 - menus - 16.0;
+                crate::panels::activity::bell(app, ui, label_room);
                 if !app.native_menu {
                     // no native menu bar (web, Windows, Linux): menus in the top bar
                     ui.add_space(10.0);
@@ -185,7 +199,6 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 ("help", Icon::Help, "Keyboard shortcuts", "app.shortcuts"),
                 ("share", Icon::Share, "Export", "dialog.export"),
                 ("import", Icon::Plus, import_tip.as_str(), "file.addPhotos"),
-                ("bell", Icon::Bell, "Activity", "panel.activity"),
             ] {
                 let r = Rect::from_center_size(pos2(x, full.center().y), vec2(28.0, 28.0));
                 let resp = ui.interact(r, egui::Id::new(("top", id)), Sense::click()).on_hover_text(crate::i18n::tr(tip));

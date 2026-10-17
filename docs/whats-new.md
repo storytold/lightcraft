@@ -1,5 +1,17 @@
 # What's new in LightCraft
 
+## 2026-10-16
+
+### Running tasks and messages stay out of the way
+- Imports, exports and other background tasks no longer float over the folder list. A ring around the bell at the
+  top left, next to the back and forward arrows, shows their progress, with the task's name beside it when the window has room; click the bell for each
+  task's row and ✕. The bell also keeps the recent messages (a dot says new ones came), so a message that faded
+  can still be read.
+- An import whose Lightroom XMP settings couldn't all be applied says so in one line ("Lightroom settings not
+  applied: 48") instead of covering the photos with every file and setting. **Show Details** lists the photos by
+  setting, with Copy to Clipboard. Settings Lightroom writes only for itself (profile checksums, the lens profile's
+  name, `CompatibleVersion`…) are no longer reported at all. No message is taller than a few lines now.
+
 ## 2026-10-14
 
 ### Lightroom radial masks on the right side

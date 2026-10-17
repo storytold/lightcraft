@@ -949,6 +949,10 @@ pub struct NameEdit {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum Dialog {
+    /// A notification's report (its Details link): a summary and groups of items, with Copy to Clipboard.
+    Report {
+        report: crate::notifications::Report,
+    },
     /// A Lightroom import result stays readable after its activity row disappears.
     LightroomResult {
         summary: String,

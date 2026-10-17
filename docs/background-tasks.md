@@ -1,12 +1,23 @@
 # Long-running tasks and the activity stack
 
-Everything that takes a while runs off the UI thread and shows up in **one** place: the activity stack in the
-top-left corner under the top bar (issue #345). Each task has a row with its name, a progress bar (a sweep while
-the amount of work isn't known), the count and what it's working on, and ✕ if it can stop. Quitting asks first while
-a task that can stop is running. Agents see the same list through `activity.list` / `activity.cancel`, and
-`ui.inspect` reports it as `activity`.
+Everything that takes a while runs off the UI thread and shows up in **one** place: the bell at the left of the
+top bar, after back / forward (issue #345). Nothing floats over the photos or the sidebar while a task runs: a ring around the bell shows
+how far the tasks have got (a segment sweeps while the amount of work isn't known) and, where the bar has room, the
+task's name and count sit beside it. Clicking the bell (or `view.activity`) opens a popover with a row per task — its
+name, a progress bar, the count and what it's working on, and ✕ if it can stop — and the recent notifications below.
+Quitting asks first while a task that can stop is running. Agents see the same list through `activity.list` /
+`activity.cancel`, and `ui.inspect` reports it as `activity` (`activityOpen`: the popover is open).
 
-The registry is `lightcraft_engine::activity` (`crates/engine/src/activity.rs`, `Session::activity`). The stack is
+## Notifications
+
+How a job ended is a toast at the bottom of the canvas, a few lines at most. `LightcraftApp::notify` also keeps it in
+the bell's Recent list (`crate::notifications`; errors from `toast_error` go there too) and puts a dot on the bell
+until the popover is opened. A result too long for a toast (every photo an import warned about) goes in a `Report`:
+the toast and the list entry then have a **Show Details** link that opens it as a dialog (`Dialog::Report`, grouped,
+with Copy to Clipboard). Never put a list in the toast itself. `ui.inspect` → `notifications` lists them, newest
+first (`details`: has a report; ids `toast:details`, `notification:details:<id>`).
+
+The registry is `lightcraft_engine::activity` (`crates/engine/src/activity.rs`, `Session::activity`). The bell and its popover are
 `crates/ui-egui/src/panels/activity.rs`. Every job that can last more than a moment uses it; **don't add a progress
 window, panel or progress toast of your own**. A dialog may still show progress inline (the Synchronize Folder
 dialog counts files while it scans), and a toast at the end saying what happened is fine. A view saying its pixels
@@ -67,4 +78,5 @@ guard.detail(&file_name);
 Assert the row (`session.activity.list()`: kind, label, total, `cancellable`), that `activity.cancel(id)` stops the
 job, and that the row is gone once the job ends. `crates/ui-egui/src/tests_activity.rs` has the helpers, and the
 job-specific tests show the pattern (`tests_sync.rs`, `export_task.rs`, `tests_denoise.rs`…). A row only appears
-on screen once its task is 0.5 s old, so tests that click its ✕ wait for `activity:cancel:<id>` first.
+in the popover once its task is 0.5 s old and the popover is open (`view.activity {"open": true}` or
+`panels::activity::set_open`), so tests that click its ✕ open it and wait for `activity:cancel:<id>` first.

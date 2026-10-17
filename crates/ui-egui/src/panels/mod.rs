@@ -86,21 +86,63 @@ pub fn toast(app: &mut LightcraftApp, ctx: &egui::Context) {
     }
     let Some(canvas) = app.canvas_rect else { return };
     let t = Tokens::get(ctx);
+    // a Details link when the notification behind this toast has a report
+    let link = app.toast_link.as_ref().filter(|(linked, _)| *linked == text).map(|(_, id)| *id);
     let fade = ((until - now) / 0.25).clamp(0.0, 1.0) as f32;
     let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("toast")));
-    // long messages (a save warning, the web build's notices) wrap within the canvas
+    // long messages (a save warning, the web build's notices) wrap within the canvas, up to a few lines: a toast
+    // says what happened, it never covers the photos (a long list goes in a report, behind the Details link)
     let wrap = (canvas.width() - 80.0).clamp(200.0, 720.0);
     let (background, foreground) = label.map(crate::theme::label_toast_colors).unwrap_or((egui::Color32::from_black_alpha(200), t.text));
     let foreground = foreground.gamma_multiply(fade);
-    let galley = painter.layout(text, t.font(14.0), foreground, wrap);
-    let size = vec2(galley.size().x + 40.0, (galley.size().y + 22.0).max(40.0));
+    let mut job = egui::text::LayoutJob::simple(text, t.font(14.0), foreground, wrap);
+    job.wrap.max_rows = TOAST_MAX_ROWS;
+    let galley = painter.layout_job(job);
+    let link_text = crate::i18n::tr("Show Details");
+    let link_galley = link.map(|_| painter.layout_no_wrap(link_text.to_string(), t.semibold(13.0), t.accent.gamma_multiply(fade)));
+    let link_h = link_galley.as_ref().map_or(0.0, |g| g.size().y + 6.0);
+    let content_w = galley.size().x.max(link_galley.as_ref().map_or(0.0, |g| g.size().x));
+    let size = vec2(content_w + 40.0, (galley.size().y + link_h + 22.0).max(40.0));
     // a slideshow's playback controls sit at the bottom: the toast goes to the top there, clear of them
-    let y = if app.ui.slideshow.is_some() { canvas.top() + 60.0 } else { canvas.bottom() - 60.0 };
+    let y = if app.ui.slideshow.is_some() { canvas.top() + 60.0 } else { canvas.bottom() - 60.0 - link_h / 2.0 };
     let r = Rect::from_center_size(pos2(canvas.center().x, y), size);
+    crate::widgets::register(ctx, "toast", r);
     painter.rect_filled(r, 6.0, background.gamma_multiply(fade));
-    painter.galley(r.center() - galley.size() / 2.0, galley, foreground);
+    let text_top = r.center().y - (galley.size().y + link_h) / 2.0;
+    painter.galley(pos2(r.center().x - galley.size().x / 2.0, text_top), galley.clone(), foreground);
+    if let (Some(id), Some(g)) = (link, link_galley) {
+        // only the link takes clicks: the rest of the toast lets them through to the photos
+        let lr = Rect::from_min_size(pos2(r.center().x - g.size().x / 2.0, text_top + galley.size().y + 6.0), g.size());
+        let resp = egui::Area::new(egui::Id::new("toast-details"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(lr.min)
+            .show(ctx, |ui| ui.allocate_rect(lr, egui::Sense::click()))
+            .inner;
+        crate::widgets::announce(&resp, link_text);
+        crate::widgets::register(ctx, "toast:details", lr);
+        if resp.hovered() {
+            ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        painter.galley(lr.min, g, t.accent.gamma_multiply(fade));
+        if resp.hovered() {
+            painter.line_segment([lr.left_bottom(), lr.right_bottom()], egui::Stroke::new(1.0, t.accent.gamma_multiply(fade)));
+        }
+        if resp.clicked() && app.show_report(id) {
+            app.ui.toast = None;
+            return;
+        }
+    }
+    // the pointer resting on the toast keeps it (reading, or on the way to its link)
+    if ctx.pointer_hover_pos().is_some_and(|p| r.contains(p))
+        && let Some((_, until, _)) = app.ui.toast.as_mut()
+    {
+        *until = until.max(now + 1.0);
+    }
     ctx.request_repaint_after(std::time::Duration::from_millis(30));
 }
+
+/// A toast wraps to at most this many lines (the rest is cut with "…").
+pub const TOAST_MAX_ROWS: usize = 4;
 
 /// Paint a centred, dimmed message (empty states).
 pub fn empty_message(ui: &egui::Ui, rect: Rect, title: &str, body: &str) {

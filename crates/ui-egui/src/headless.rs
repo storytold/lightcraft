@@ -3318,8 +3318,9 @@ mod tests {
         assert!(!h.app.scan.as_ref().unwrap().copy, "the running scan keeps its options");
         let r = h.request("ui.inspect", json!({}), t);
         assert!(r["result"]["scan"].is_object(), "{r}");
-        // Cancel is the ✕ of the scan's row in the activity stack (shown once it is half a second old)
+        // Cancel is the ✕ of the scan's row in the bell's popover (shown once it is half a second old)
         let id = h.app.session.activity.list().first().map(|t| t.id).expect("a scan row");
+        crate::panels::activity::set_open(&mut h.app, Some(true));
         let cross = format!("activity:cancel:{id}");
         assert!(h.step_until(t, |h| h.app.widgets.iter().any(|(w, _)| *w == cross)), "the row shows");
         let r = h.request("ui.clickWidget", json!({"id": cross}), t);

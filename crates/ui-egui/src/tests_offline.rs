@@ -211,6 +211,7 @@ fn import_reads_files_off_the_ui_thread_and_can_be_cancelled() {
     frames_while_asleep(&mut h, &nas, 20, "import");
     assert!(h.app.import.is_some(), "importing");
     let id = h.app.session.activity.list().first().map(|t| t.id).expect("an import row");
+    crate::panels::activity::set_open(&mut h.app, Some(true));
     let cross = format!("activity:cancel:{id}");
     assert!(h.step_until(Duration::from_secs(60), |h| h.app.widgets.iter().any(|(w, _)| *w == cross)), "the row shows");
     assert!(!nas.forced(), "an import frame waited for the sleeping drive");

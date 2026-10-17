@@ -356,6 +356,11 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
     if keyboard_owned(app, ctx) || app.recording_shortcut.is_some() || app.ui.name_edit.is_some() {
         return;
     }
+    // the bell's popover closes on Esc, and that is all Esc does then
+    if app.notifications.open && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+        app.notifications.open = false;
+        return;
+    }
     let mut fire: Vec<String> = Vec::new();
     // shortcuts the native menu bar handles (it consumes those key presses itself)
     let native = |sc: &str| app.native_shortcuts.contains(sc);

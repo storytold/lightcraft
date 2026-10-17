@@ -1,4 +1,5 @@
-//! Issue #345: the activity stack — one place, top-left, for every long-running task, with ✕ to cancel.
+//! Issue #345: every long-running task in one place, the top bar's bell — a ring while something runs, a popover with a
+//! row per task and ✕ to cancel — and the notifications it keeps (an import's warnings behind a Details link).
 
 use std::time::Duration;
 
@@ -33,9 +34,15 @@ fn rect(h: &Headless, id: &str) -> egui::Rect {
     h.app.widgets.iter().find(|(w, _)| w == id).map(|(_, r)| *r).unwrap_or_else(|| panic!("no widget {id}"))
 }
 
-/// Rows show once their task is half a second old.
+/// Rows show once their task is half a second old; they are in the bell's popover, opened here.
 fn wait_visible(h: &mut Headless) {
     std::thread::sleep(Duration::from_millis(600));
+    open_popover(h);
+}
+
+fn open_popover(h: &mut Headless) {
+    let r = h.request("engine.execute", json!({"command": "view.activity", "params": {"open": true}}), T);
+    assert_eq!(r["ok"], true, "{r}");
     h.step();
     h.step();
 }
@@ -69,23 +76,144 @@ fn rows_appear_after_half_a_second_and_cancel_by_click() {
 }
 
 #[test]
-fn more_than_three_rows_overflow_and_expand() {
+fn every_task_has_a_row_in_the_popover() {
     let mut h = demo();
     let guards: Vec<_> = (0..5).map(|i| h.app.session.activity.start("export", &format!("Task {i}"), Cancel::Yes)).collect();
     wait_visible(&mut h);
-    assert_eq!(rows(&h), 3);
-    assert!(has(&h, "activity:more"));
-    click(&mut h, "activity:more");
     assert_eq!(rows(&h), 5);
-    // expanded, the stack grows to show them all
-    let stack = h.view.ctx.memory(|m| m.area_rect(egui::Id::new("activity-stack"))).expect("the stack is drawn");
+    let popover = rect(&h, "activity:popover");
     for g in &guards {
         let r = rect(&h, &format!("activity:row:{}", g.id()));
-        assert!(stack.contains_rect(r), "row {} at {r:?} is cut off by the stack at {stack:?}", g.id());
+        assert!(popover.contains_rect(r), "row {} at {r:?} is cut off by the popover at {popover:?}", g.id());
     }
     drop(guards);
     h.step();
     assert_eq!(rows(&h), 0);
+}
+
+/// While a task runs, nothing floats over the photos or the sidebar: the bell carries a ring (and the task's name
+/// where the bar has room); the rows wait in the popover until it is opened.
+#[test]
+fn a_running_task_shows_on_the_bell_not_over_the_library() {
+    let mut h = demo();
+    let g = h.app.session.activity.start("export", "Exporting", Cancel::Yes);
+    g.progress(2, 5);
+    std::thread::sleep(Duration::from_millis(600));
+    h.step();
+    h.step();
+    assert!(has(&h, "activity:ring"), "the bell shows the task");
+    assert_eq!(rows(&h), 0, "no rows until the popover opens");
+    assert!(!has(&h, "activity:popover"));
+    let bell = rect(&h, "icon:bell");
+    assert!(bell.bottom() <= crate::theme::Tokens::get(&h.view.ctx).top_bar_h + 1.0, "in the top bar: {bell:?}");
+    // at the left, where the activity stack used to be, and clear of the right-hand icons
+    assert!(bell.left() < rect(&h, "field:search").left(), "left of the search field: {bell:?}");
+    // a click on the bell opens the popover under it, from its left edge
+    click(&mut h, "icon:bell");
+    assert!(h.app.notifications.open);
+    let popover = rect(&h, "activity:popover");
+    assert!(popover.top() >= bell.bottom() && (popover.left() - bell.left()).abs() < 1.0, "{popover:?} under {bell:?}");
+    assert!(has(&h, &format!("activity:row:{}", g.id())));
+    drop(g);
+    h.step();
+    h.step();
+    assert!(!has(&h, "activity:ring"), "gone with the task");
+}
+
+#[test]
+fn the_popover_closes_on_escape_and_on_a_click_elsewhere() {
+    let mut h = demo();
+    open_popover(&mut h);
+    assert!(has(&h, "activity:popover"));
+    assert_eq!(h.request("ui.key", json!({"key": "Escape"}), T)["ok"], true);
+    for _ in 0..3 {
+        h.step();
+    }
+    assert!(!h.app.notifications.open, "Esc closes it");
+    open_popover(&mut h);
+    let canvas = h.app.canvas_rect.expect("a canvas");
+    let r = h.request("ui.click", json!({"x": canvas.left() + 20.0, "y": canvas.bottom() - 20.0}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    for _ in 0..3 {
+        h.step();
+    }
+    assert!(!h.app.notifications.open, "a click elsewhere closes it");
+}
+
+/// A toast with a report (an import's warnings) is one line and a Details link; the link opens the report, and the
+/// bell keeps the notification (a dot until the popover is opened).
+#[test]
+fn a_report_is_behind_the_toasts_details_link_and_in_the_bell() {
+    let mut h = demo();
+    let report = crate::notifications::Report {
+        title: "Import Warnings".into(),
+        summary: "Photos with Lightroom settings LightCraft didn't apply: 2".into(),
+        groups: vec![crate::notifications::ReportGroup { heading: "Not imported: Look".into(), items: vec!["/x/a.ARW".into(), "/x/b.ARW".into()] }],
+    };
+    let ctx = h.view.ctx.clone();
+    h.app.notify(&ctx, "Imported 2 photos · Lightroom settings not applied: 2", true, Some(report.clone()));
+    h.step();
+    h.step();
+    assert!(has(&h, "toast:details"));
+    assert!(has(&h, "indicator:unread"));
+    click(&mut h, "toast:details");
+    assert!(matches!(&h.app.ui.dialog, Some(crate::state::Dialog::Report { report: r }) if *r == report), "{:?}", h.app.ui.dialog);
+    assert!(h.app.ui.toast.is_none(), "the toast goes once its report is open");
+    h.app.ui.dialog = None;
+    // the bell keeps it, with the same link
+    open_popover(&mut h);
+    assert!(!has(&h, "indicator:unread"), "read once the popover is open");
+    let id = h.app.notifications.items[0].id;
+    click(&mut h, &format!("notification:details:{id}"));
+    assert!(matches!(&h.app.ui.dialog, Some(crate::state::Dialog::Report { .. })));
+    assert!(!h.app.notifications.open, "the popover makes way for the report");
+    let inspect = h.request("ui.inspect", json!({}), T);
+    assert_eq!(inspect["result"]["notifications"][0]["details"], true, "{}", inspect["result"]["notifications"]);
+}
+
+/// However long the message, a toast stays a few lines tall (it used to list every warned photo and cover the grid).
+#[test]
+fn a_long_toast_is_cut_to_a_few_lines() {
+    let mut h = demo();
+    let ctx = h.view.ctx.clone();
+    let long: String = (0..60).map(|i| format!("XMP adjustments were not imported for /Volumes/X/DSC{i:05}.ARW: Look.\n")).collect();
+    h.app.toast(&ctx, long);
+    h.step();
+    h.step();
+    let toast = rect(&h, "toast");
+    let canvas = h.app.canvas_rect.expect("a canvas");
+    assert!(toast.height() < 120.0, "{toast:?}");
+    assert!(toast.height() < canvas.height() / 4.0, "{toast:?} in {canvas:?}");
+}
+
+#[test]
+fn import_warnings_are_grouped_by_what_was_not_applied() {
+    use lightcraft_engine::import::{ImportUprightMode, ImportWarning, ImportWarningCode};
+    let w = |path: &str, code, fields: &[&str], mode| ImportWarning {
+        path: path.into(),
+        code,
+        profile: (code == ImportWarningCode::CameraProfile).then(|| "Camera Faithful".into()),
+        mode,
+        fields: fields.iter().map(|f| f.to_string()).collect(),
+    };
+    let warnings = [
+        w("/x/1.ARW", ImportWarningCode::UnmappedXmp, &["Look", "ColorVariance"], None),
+        w("/x/2.ARW", ImportWarningCode::UnmappedXmp, &["Look"], None),
+        w("/x/2.ARW", ImportWarningCode::CameraProfile, &[], None),
+        w("/x/3.ARW", ImportWarningCode::UprightGeometry, &[], Some(ImportUprightMode::Auto)),
+    ];
+    let r = crate::import::warnings_report(&warnings);
+    let groups: Vec<(&str, Vec<&str>)> = r.groups.iter().map(|g| (g.heading.as_str(), g.items.iter().map(String::as_str).collect())).collect();
+    assert_eq!(
+        groups,
+        [
+            ("Not imported: Look", vec!["/x/1.ARW", "/x/2.ARW"]),
+            ("Not imported: ColorVariance", vec!["/x/1.ARW"]),
+            ("Profile not applied, colors may differ from Lightroom: Camera Faithful", vec!["/x/2.ARW"]),
+            ("Upright Auto will be recalculated", vec!["/x/3.ARW"]),
+        ]
+    );
+    assert!(r.summary.contains(": 3."), "three photos: {}", r.summary);
 }
 
 #[test]
@@ -140,13 +268,14 @@ fn stale_cancel_is_harmless() {
 }
 
 #[test]
-fn long_detail_stays_inside_the_stack() {
+fn long_detail_stays_inside_the_popover() {
     let mut h = demo();
     let g = h.app.session.activity.start("export", "Exportieren", Cancel::Yes);
     g.detail(&"IMG_".repeat(75));
     wait_visible(&mut h);
     let row = rect(&h, &format!("activity:row:{}", g.id()));
     assert!(row.width() <= WIDTH + 1.0, "{row:?}");
+    assert!(rect(&h, "activity:popover").contains_rect(row), "{row:?}");
 }
 
 #[test]
@@ -438,23 +567,23 @@ fn auto_import_listing_has_no_row() {
 }
 
 #[test]
-fn rows_added_later_grow_the_stack() {
+fn rows_added_later_grow_the_popover() {
     let mut h = demo();
     let a = h.app.session.activity.start("export", "Exporting", Cancel::Yes);
     a.progress(1, 24);
     a.detail("LC01347.jpg");
     wait_visible(&mut h);
-    // two more tasks while the stack already shows one row: it grows to show them, nothing is cut off
+    // two more tasks while the popover already shows one row: it grows to show them, nothing is cut off
     let b = h.app.session.activity.start("previews", "Building previews", Cancel::Yes);
     let c = h.app.session.activity.start("lightroom", "Reading Lightroom catalog", Cancel::Yes);
     wait_visible(&mut h);
     for _ in 0..5 {
         h.step();
     }
-    let stack = h.view.ctx.memory(|m| m.area_rect(egui::Id::new("activity-stack"))).expect("the stack is drawn");
+    let popover = rect(&h, "activity:popover");
     for g in [&a, &b, &c] {
         let r = rect(&h, &format!("activity:row:{}", g.id()));
-        assert!(stack.contains_rect(r), "row {} at {r:?} is cut off by the stack at {stack:?}", g.id());
+        assert!(popover.contains_rect(r), "row {} at {r:?} is cut off by the popover at {popover:?}", g.id());
     }
 }
 
