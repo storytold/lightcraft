@@ -280,6 +280,9 @@ struct Boot {
     index: ThumbIndex,
     /// The library folder in storage (`library`, or a restored backup's).
     lib_dir: String,
+    /// Library files that exist but couldn't be read (#1507): the library isn't opened and
+    /// nothing is saved, so the stored copy stays as it was.
+    load_error: Option<String>,
 }
 
 async fn boot(opts: Options) -> Boot {
@@ -298,6 +301,7 @@ async fn boot(opts: Options) -> Boot {
     let files = Files::default();
     let mut index = ThumbIndex::default();
     let mut lib_dir = DEFAULT_LIBRARY_DIR.to_string();
+    let mut load_error = None;
     if let Some(b) = &backend {
         if opts.reset {
             // everything this site keeps in the browser, photos included: never without asking
@@ -315,21 +319,32 @@ async fn boot(opts: Options) -> Boot {
             }
         }
         // a restored backup lives in its own folder (see `backup`)
-        if let Ok(Some(d)) = b.read(ACTIVE_LIBRARY).await {
-            let d = String::from_utf8_lossy(&d).trim().to_string();
-            if valid_library_dir(&d) {
-                lib_dir = d;
+        match b.read(ACTIVE_LIBRARY).await {
+            Ok(Some(d)) => {
+                let d = String::from_utf8_lossy(&d).trim().to_string();
+                if valid_library_dir(&d) {
+                    lib_dir = d;
+                }
+            }
+            Ok(None) => {}
+            // not knowing which library is in use, any library opened could be the wrong one
+            Err(e) => load_error = Some(format!("couldn't read which library is in use from browser storage ({e})")),
+        }
+        if load_error.is_none() {
+            let mut reads = Vec::new();
+            for name in LIBRARY_FILES {
+                reads.push((name, b.read(&library_key(&lib_dir, name)).await));
+            }
+            if let Err(e) = crate::files::preload_library(&files, reads) {
+                log::error!("{e}");
+                load_error = Some(e);
             }
         }
-        for name in LIBRARY_FILES {
-            match b.read(&library_key(&lib_dir, name)).await {
-                Ok(Some(data)) => files.preload(name, data),
-                Ok(None) => {}
-                Err(e) => log::error!("reading {name}: {e}"),
-            }
-        }
-        if let Ok(Some(j)) = b.read(THUMB_INDEX).await {
-            index = ThumbIndex::from_json(&j);
+        let index_read = b.read(THUMB_INDEX).await;
+        match &index_read {
+            Ok(Some(j)) => index = ThumbIndex::from_json(j),
+            Ok(None) => {}
+            Err(e) => log::warn!("reading the thumbnail index: {e}"),
         }
         crate::backend::request_persistence(|granted| {
             if !granted {
@@ -339,7 +354,8 @@ async fn boot(opts: Options) -> Boot {
                 );
             }
         });
-        // thumbnails stored without an index entry (index saved late, or lost): delete them
+        // thumbnails stored without an index entry (index saved late, or lost): delete them; not
+        // when the index couldn't be read, which would make every thumbnail look unindexed
         let b2 = b.clone();
         let known: std::collections::HashSet<String> = b
             .list("thumbs")
@@ -349,7 +365,7 @@ async fn boot(opts: Options) -> Boot {
             .filter(|n| n.ends_with(".jpg"))
             .map(|n| n.trim_end_matches(".jpg").to_string())
             .collect();
-        let orphans: Vec<String> = known.into_iter().filter(|k| !index.contains(k)).collect();
+        let orphans: Vec<String> = if index_read.is_ok() { known.into_iter().filter(|k| !index.contains(k)).collect() } else { Vec::new() };
         if !orphans.is_empty() {
             wasm_bindgen_futures::spawn_local(async move {
                 for k in &orphans {
@@ -366,7 +382,7 @@ async fn boot(opts: Options) -> Boot {
         index.len(),
         index.total() as f64 / 1e6
     );
-    Boot { opts, backend, files, index, lib_dir }
+    Boot { opts, backend, files, index, lib_dir, load_error }
 }
 
 struct WebApp {
@@ -389,7 +405,7 @@ struct WebApp {
 
 impl WebApp {
     fn new(cc: &eframe::CreationContext<'_>, boot: Boot, chinese_font: Vec<u8>) -> Self {
-        let Boot { opts, backend, files, index, lib_dir } = boot;
+        let Boot { opts, backend, files, index, lib_dir, load_error } = boot;
         let originals = Originals::default();
         let t = perf_now();
         let mut session = Session::new();
@@ -401,7 +417,13 @@ impl WebApp {
             on_disk: false,
         };
         let mut problem = None;
-        match session.open_library_in(stores, true).cloned() {
+        // a library that couldn't be read is not opened: it would show incomplete, then save over the stored copy
+        let read_failed = load_error.is_some();
+        let opened = match load_error {
+            Some(e) => Err(format!("{e}. Nothing was changed in storage")),
+            None => session.open_library_in(stores, true).cloned().map_err(|e| e.to_string()),
+        };
+        match opened {
             Ok(r) => log::info!(
                 "lightcraft: library {} in {:.0} ms ({} photos; snapshot seq {}, {} ops replayed)",
                 if r.created { "created" } else { "loaded" },
@@ -432,7 +454,8 @@ impl WebApp {
         }
         // previews are large (≤ 2560 px, f32): keep few in a 32-bit address space
         session.media.preview_capacity = 3;
-        let frozen = Rc::new(Cell::new(false));
+        // nothing is saved while the stored library couldn't be read
+        let frozen = Rc::new(Cell::new(read_failed));
         let mut app = LightcraftApp::new(session, services(originals.clone(), backend.clone(), files.clone(), frozen.clone(), cc.egui_ctx.clone()))
             .with_chinese_font(chinese_font);
         let ui_written = files.get("ui.json").unwrap_or_default();

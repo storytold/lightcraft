@@ -1,5 +1,13 @@
 # What's new in LightCraft
 
+## 2026-10-15
+
+### Web: an unreadable library is not opened
+- In the browser version, a library file that exists but can't be read at start-up is no longer taken for a missing
+  one (issue #1507). LightCraft used to open the library without it, showing an incomplete catalog that the next save
+  would write over the stored copy. It now leaves the library unopened, saves nothing and says which file couldn't be
+  read; reload the page to try again.
+
 ## 2026-10-14
 
 ### Lightroom radial masks on the right side
