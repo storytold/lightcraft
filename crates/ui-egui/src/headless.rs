@@ -234,7 +234,7 @@ pub struct Headless {
     /// Logical size (points) and scale.
     pub size: egui::Vec2,
     pub pixels_per_point: f32,
-    time: f64,
+    pub(crate) time: f64,
     frames: u64,
     pub(crate) events: Vec<egui::Event>,
     control: Sender<ControlRequest>,

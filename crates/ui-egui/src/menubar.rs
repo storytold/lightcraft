@@ -338,6 +338,7 @@ pub fn checked(app: &LightcraftApp, id: &str) -> Option<bool> {
         "view.focusPoint" => Some(u.settings.focus_point),
         "view.zoomToFocus" => Some(u.settings.zoom_to_focus),
         "view.filmstrip" => Some(u.filmstrip),
+        "view.frameRate" => Some(u.frame_rate),
         "view.histogram" => Some(u.histogram),
         "view.clipping" => Some(u.show_clipping),
         "view.visualizeHdr" => Some(u.hdr_visualize),

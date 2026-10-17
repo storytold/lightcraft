@@ -209,6 +209,8 @@ pub struct Renderer {
     pub last_main_ms: f64,
     /// Jobs finished since start (for inspect/perf).
     pub completed: u64,
+    /// Finished jobs thrown away because a newer request for their slot had replaced them.
+    pub discarded: u64,
     /// Keep a CPU copy of every texture so the UI can be rasterized headlessly (set when the app
     /// is driven by the control channel).
     pub keep_pixels: bool,
@@ -287,6 +289,7 @@ impl Renderer {
             live_hdr_histogram: None,
             last_main_ms: 0.0,
             completed: 0,
+            discarded: 0,
             keep_pixels: false,
             stages: HashMap::new(),
             quick_tried: HashMap::new(),
@@ -794,6 +797,7 @@ impl Renderer {
                     && self.shown_ids.get(&slot).is_none_or(|shown| r.request_id > *shown)
                     && r.rendered.is_ok();
                 if !newer_draft {
+                    self.discarded += 1;
                     continue;
                 }
                 session.accept(&r);

@@ -17,6 +17,7 @@ pub mod date_picker;
 pub mod docking;
 pub mod export_task;
 mod focus_scan;
+mod frame_rate;
 pub mod headless;
 pub mod i18n;
 pub mod icons;
@@ -1383,6 +1384,11 @@ impl LightcraftApp {
 
     /// Frame timings once layout is done (`t0`: when layout started).
     fn end_frame(&mut self, ctx: &egui::Context, t0: f64) {
+        if self.ui.frame_rate {
+            frame_rate::show(ctx, self);
+        } else {
+            frame_rate::forget(ctx);
+        }
         ctx.output(|o| {
             for c in &o.commands {
                 if let egui::OutputCommand::CopyText(text) = c {

@@ -244,6 +244,8 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("app.about", "About LightCraft", None, "Help"),
     ("app.systemInfo", "System Info…", None, "Help"),
     ("app.openLogFolder", "Open Log Folder", None, "Help"),
+    // the frame-rate display (`frame_rate`): a debugging aid, never saved
+    ("view.frameRate", "Show Frame Rate", None, "Help>Debug"),
     ("app.whatsNew", "What's New", None, "Help"),
     ("dialog.cull", "Assisted Culling…", None, "Photo"),
     ("app.help", "LightCraft Help", Some("F1"), "Help"),
@@ -784,6 +786,11 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         "view.filmstrip" => {
             app.ui.filmstrip = !app.ui.filmstrip;
             Ok(Value::Null)
+        }
+        "view.frameRate" => {
+            // {show?: bool} (toggles when omitted)
+            app.ui.frame_rate = p.get("show").and_then(Value::as_bool).unwrap_or(!app.ui.frame_rate);
+            Ok(json!({"show": app.ui.frame_rate}))
         }
         "view.leftPanel" => {
             app.ui.left_panel = !app.ui.left_panel;
