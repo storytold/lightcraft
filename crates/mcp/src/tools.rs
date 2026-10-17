@@ -384,8 +384,7 @@ fn annotations(name: &str, title: &str) -> Value {
             | "ui_inspect"
             | "ui_screenshot"
     );
-    let files = matches!(name, "export" | "render_photo" | "screenshot");
-    json!({"title": title, "readOnlyHint": read_only, "destructiveHint": !read_only && !files,
+    json!({"title": title, "readOnlyHint": read_only, "destructiveHint": !read_only,
         "idempotentHint": read_only || matches!(name, "render_photo" | "screenshot"), "openWorldHint": false})
 }
 
