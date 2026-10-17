@@ -13,6 +13,12 @@
 //! * Synchronize hands the work to the background at once: the dialog closes, the app keeps
 //!   answering, and the photos arrive over the next frames under a row in the activity stack, as one undo
 //!   step.
+//! * A Synchronize Folder and an import never run at once: one asked for while the other runs waits in line behind it
+//!   and starts by itself, planning its work then (an import checks for duplicates against the library as it is
+//!   when it starts; a synchronize scans the folder again).
+//! * A synchronize that waited removes or relinks only the photos its dialog showed: a photo that went missing while
+//!   it waited stays, and the end says so.
+//! * The dialog's own scan doesn't hold up an import: it only reads.
 
 use std::time::Duration;
 
@@ -228,33 +234,127 @@ fn a_stopped_synchronize_says_it_was_stopped_and_stays_at_most_one_step() {
     assert!(h.app.session.undo.len() <= steps + 1, "what was done by then is at most one step");
 }
 
-#[test]
-fn a_synchronize_and_an_import_never_run_at_once() {
-    let dir = Scratch::new("exclusive");
-    let mut h = changed_folder(&dir);
-    open_and_scan(&mut h, &dir.path("trip"));
-    let dlg = h.app.ui.dialog.take().expect("the dialog is open");
-    assert!(crate::panels::dialogs::confirm_dialog(&mut h.app, &dlg).is_ok());
-    // dropping the same folder on the window while the run works would add its files twice
-    let r = crate::import::start_paths(&mut h.app, vec![dir.path("trip")]);
-    assert!(r.is_err(), "no import while synchronizing: {r:?}");
-    assert!(h.step_until(T, |h| h.app.sync_run.is_none()));
-    // and the other way round: an import is running (no frame has run since it started)
-    let r = crate::import::start_paths(&mut h.app, vec![dir.path("trip/a.png")]);
-    assert!(r.is_ok(), "{r:?}");
-    assert!(h.app.import.is_some());
-    let d = Dialog::SynchronizeFolder {
+fn sync_dialog(dir: &Scratch, remove_missing: bool) -> Dialog {
+    Dialog::SynchronizeFolder {
         path: dir.path("trip"),
         name: "trip".into(),
         disk: false,
         counts: Some(Default::default()),
         import_new: true,
         relink_moved: true,
-        remove_missing: false,
+        remove_missing,
         read_metadata: false,
-    };
-    let r = crate::panels::dialogs::confirm_dialog(&mut h.app, &d);
-    assert!(r.is_err() && h.app.sync_run.is_none(), "no synchronize while importing: {r:?}");
+    }
+}
+
+/// Every task done, nothing waiting.
+fn idle(h: &Headless) -> bool {
+    h.app.sync_run.is_none() && h.app.import.is_none() && h.app.session.activity.list().is_empty()
+}
+
+/// Given a synchronize running, when the same folder is dropped on the window, then the import waits in line behind
+/// it and starts by itself once it ends, adding nothing twice (it plans its work then). The other way round: a
+/// synchronize confirmed while an import runs waits for it, and then synchronizes.
+#[test]
+fn a_synchronize_and_an_import_wait_for_each_other() {
+    let dir = Scratch::new("exclusive");
+    let mut h = changed_folder(&dir);
+    open_and_scan(&mut h, &dir.path("trip"));
+    let dlg = h.app.ui.dialog.take().expect("the dialog is open");
+    assert!(crate::panels::dialogs::confirm_dialog(&mut h.app, &dlg).is_ok());
+    // dropping the same folder on the window while the run works would add its files twice
+    let r = crate::import::start_paths(&mut h.app, vec![dir.path("trip")]).expect("it waits instead of being refused");
+    let id = r["queued"].as_u64().unwrap_or_else(|| panic!("queued: {r}"));
+    let waiting = h.app.session.activity.waiting();
+    assert_eq!(waiting.iter().map(|t| (t.id, t.kind, t.label.as_str())).collect::<Vec<_>>(), vec![(id, "import", "Importing")]);
+    assert!(h.app.ui.toast.as_ref().is_some_and(|t| t.0.starts_with("Queued")), "{:?}", h.app.ui.toast);
+    assert!(h.step_until(SETTLE, idle), "both ran");
+    let c = h.app.session.catalog.photos().filter(|p| p.in_library() && p.file_name == "c.png").count();
+    assert_eq!(c, 1, "the import found c already in the library when its turn came");
+    // and the other way round: an import is running (no frame has run since it started)
+    write_png(&dir.path("trip/d.png"), 4);
+    let r = crate::import::start_paths(&mut h.app, vec![dir.path("trip/a.png")]);
+    assert!(r.as_ref().is_ok_and(|v| v.get("importing").is_some()), "{r:?}");
+    let r = crate::panels::dialogs::confirm_dialog(&mut h.app, &sync_dialog(&dir, false));
+    assert!(r.as_ref().is_ok_and(|v| v.get("queued").is_some()), "the synchronize waits: {r:?}");
+    assert!(h.app.sync_run.is_none());
+    assert!(h.step_until(SETTLE, idle), "both ran");
+    assert!(in_library(&h).contains(&"d.png".to_string()), "the synchronize scanned the folder at its turn: {:?}", in_library(&h));
+}
+
+/// Given a synchronize that will remove the one missing photo its dialog showed (b), waiting behind an import, when
+/// another photo of the folder (a) goes missing while it waits, then at its turn it removes b only: a stays, and the
+/// end says one more is missing and was left alone.
+#[test]
+fn a_waiting_synchronize_removes_only_the_missing_photos_its_dialog_showed() {
+    let dir = Scratch::new("reviewed");
+    let mut h = changed_folder(&dir);
+    open_and_scan(&mut h, &dir.path("trip"));
+    tick_remove_missing(&mut h);
+    let hold = h.app.session.activity.start("import", "Importing", lightcraft_engine::activity::Cancel::Yes);
+    let dlg = h.app.ui.dialog.take().expect("the dialog is open");
+    let r = crate::panels::dialogs::confirm_dialog(&mut h.app, &dlg);
+    assert!(r.as_ref().is_ok_and(|v| v.get("queued").is_some()), "it waits for the import: {r:?}");
+    std::fs::remove_file(dir.path("trip/a.png")).unwrap();
+    drop(hold);
+    assert!(h.step_until(SETTLE, idle), "it ran");
+    assert_eq!(in_library(&h), vec!["a.png", "c.png"], "b (shown) was removed, a (gone since) was not");
+    let said = h.app.session.activity.finished().into_iter().map(|f| format!("{} {}", f.summary, f.detail)).collect::<String>()
+        + &h.app.ui.toast.iter().map(|t| t.0.clone()).collect::<String>();
+    assert!(said.contains("1 more missing"), "{said}");
+}
+
+/// Given a waiting synchronize that has started scanning its folder again, when another library is opened before the
+/// scan is in, then it stops without touching the new library: its photo ids were the old library's.
+#[test]
+fn a_waiting_synchronize_never_acts_on_another_library() {
+    let dir = Scratch::new("switch");
+    let mut h = changed_folder(&dir);
+    open_and_scan(&mut h, &dir.path("trip"));
+    tick_remove_missing(&mut h);
+    let hold = h.app.session.activity.start("import", "Importing", lightcraft_engine::activity::Cancel::Yes);
+    let dlg = h.app.ui.dialog.take().expect("the dialog is open");
+    let id = crate::panels::dialogs::confirm_dialog(&mut h.app, &dlg).ok().and_then(|v| v["queued"].as_u64()).expect("it waits");
+    drop(hold);
+    // one frame: it starts scanning; the next library opens before the scan is looked at
+    assert!(h.step_until(T, |h| h.app.sync_queued.is_some()), "it started scanning again");
+    h.app.session.open_library(dir.path("other"), false).unwrap();
+    assert!(h.step_until(SETTLE, idle), "it ended");
+    assert_eq!(h.app.session.catalog.photos().count(), 0, "nothing came into the new library, nothing was removed");
+    let row = h.app.session.activity.finished().into_iter().find(|f| f.id == id).expect("its row");
+    assert_eq!((row.ending, row.retryable), (lightcraft_engine::activity::Ending::Stopped, false), "{row:?}");
+}
+
+/// Given a synchronize waiting in line, when its folder is gone by its turn, then it ends saying so, and can be
+/// retried once the folder is back.
+#[test]
+fn a_waiting_synchronize_whose_folder_went_away_can_be_retried() {
+    let dir = Scratch::new("gone");
+    let mut h = changed_folder(&dir);
+    let hold = h.app.session.activity.start("import", "Importing", lightcraft_engine::activity::Cancel::Yes);
+    let r = crate::panels::dialogs::confirm_dialog(&mut h.app, &sync_dialog(&dir, false));
+    let id = r.ok().and_then(|v| v["queued"].as_u64()).expect("it waits");
+    std::fs::rename(dir.path("trip"), dir.path("trip-away")).unwrap();
+    drop(hold);
+    assert!(h.step_until(SETTLE, idle), "it ended");
+    let row = h.app.session.activity.finished().into_iter().find(|f| f.id == id).expect("a row for it, under the id it waited with");
+    assert_eq!((row.ending, row.retryable), (lightcraft_engine::activity::Ending::Failed, true), "{row:?}");
+    std::fs::rename(dir.path("trip-away"), dir.path("trip")).unwrap();
+    let r = h.request("engine.execute", json!({"command": "activity.retry", "params": {"id": id}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(h.step_until(SETTLE, idle), "it ran again");
+    assert!(in_library(&h).contains(&"c.png".to_string()), "{:?}", in_library(&h));
+}
+
+/// The dialog's scan only reads: an import dropped on the window while it scans starts at once.
+#[test]
+fn the_dialogs_scan_doesnt_hold_up_an_import() {
+    let dir = Scratch::new("scan-free");
+    let mut h = changed_folder(&dir);
+    crate::sync::open(&mut h.app, &dir.path("trip"), "trip", false).unwrap();
+    let r = crate::import::start_paths(&mut h.app, vec![dir.path("trip/c.png")]);
+    assert!(r.as_ref().is_ok_and(|v| v.get("importing").is_some()), "{r:?}");
+    h.settle(SETTLE);
 }
 
 #[test]
@@ -275,6 +375,21 @@ fn a_synchronize_shows_a_row_and_its_cross_stops_it() {
     let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
     assert!(toast.contains("Stopped"), "{toast:?}");
     assert!(h.app.session.activity.list().is_empty(), "the row goes with the run");
+    let row = h.app.session.activity.last_finished().expect("a stopped run leaves a row");
+    assert_eq!((row.label.as_str(), row.ending), ("Synchronizing folder", lightcraft_engine::activity::Ending::Stopped));
+    assert!(row.summary.contains("trip: Stopped"), "it names the folder and says how it ended: {:?}", row.summary);
+}
+
+#[test]
+fn a_synchronize_that_ran_to_its_end_leaves_a_row_saying_what_it_did() {
+    let dir = Scratch::new("donerow");
+    let mut h = changed_folder(&dir);
+    h.app.session.activity.keep_after(0);
+    open_and_scan(&mut h, &dir.path("trip"));
+    synchronize(&mut h);
+    let row = h.app.session.activity.last_finished().expect("a row for the run");
+    assert_eq!((row.label.as_str(), row.ending), ("Synchronizing folder", lightcraft_engine::activity::Ending::Done));
+    assert!(row.summary.ends_with("trip: Imported 1"), "it names the folder and says what it did: {:?}", row.summary);
 }
 
 #[test]
@@ -293,12 +408,14 @@ fn the_folders_scan_shows_a_row_and_its_cross_closes_the_dialog() {
     crate::sync::open(&mut h.app, &dir.path("trip"), "trip", false).unwrap();
     let rows = h.app.session.activity.list();
     assert_eq!(rows.len(), 1, "{rows:?}");
-    assert_eq!((rows[0].kind, rows[0].label.as_str(), rows[0].detail.as_str()), ("sync", "Looking for changes", "trip"));
+    assert_eq!((rows[0].kind, rows[0].label.as_str(), rows[0].detail.as_str()), ("scan", "Looking for changes", "trip"));
     assert!(rows[0].cancellable);
     h.app.session.activity.cancel(rows[0].id).unwrap();
     h.step();
     assert!(h.app.sync.is_none(), "✕ stops the scan");
     assert!(h.app.ui.dialog.is_none(), "and closes its dialog: there is nothing to show");
+    let row = h.app.session.activity.last_finished().expect("a stopped scan leaves a row");
+    assert_eq!((row.label.as_str(), row.ending), ("Looking for changes", lightcraft_engine::activity::Ending::Stopped));
     gate.store(true, std::sync::atomic::Ordering::Relaxed);
     assert!(h.app.session.activity.list().is_empty());
     h.settle(SETTLE);

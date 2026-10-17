@@ -3,6 +3,7 @@
 //! `lightcraft_engine::cmd::recheck`). The probe runs on a worker thread, so opening never waits
 //! for it; the result is applied back here, unless another library was opened meanwhile.
 
+use lightcraft_engine::activity::{Ending, Outcome};
 use lightcraft_engine::cmd::recheck;
 
 use crate::LightcraftApp;
@@ -26,7 +27,7 @@ pub fn tick(app: &mut LightcraftApp) {
     let work = move || recheck::probe(&probe, stale);
     let done = move |app: &mut LightcraftApp, ctx: &egui::Context, results| {
         if app.session.library_generation() != library {
-            return;
+            return Outcome::ended(Ending::Stopped);
         }
         match recheck::apply(&mut app.session, results) {
             Ok(r) => {
@@ -36,8 +37,12 @@ pub fn tick(app: &mut LightcraftApp) {
                 } else if n > 1 {
                     app.toast(ctx, crate::i18n::tr_format!("{n} raws can now be developed from their raw data", n = n));
                 }
+                Outcome::ended(Ending::Done)
             }
-            Err(e) => log::warn!("recheck of preview-only raws: {e}"),
+            Err(e) => {
+                log::warn!("recheck of preview-only raws: {e}");
+                Outcome { ending: Ending::Failed, summary: e.to_string(), ..Default::default() }
+            }
         }
     };
     if let Err(e) = crate::tasks::spawn(app, LABEL, Some("recheck"), work, done) {

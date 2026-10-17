@@ -357,10 +357,12 @@ impl Headless {
             || self.app.scan.is_some()
             || self.app.sync.is_some()
             || self.app.sync_run.is_some()
+            || self.app.sync_queued.is_some()
             || self.app.import.is_some()
             || self.app.export.is_some()
             || self.app.session.denoise_busy()
             || !self.app.tasks.is_empty()
+            || !self.app.session.activity.waiting().is_empty()
             || !self.app.synthetic.is_empty()
             || !self.events.is_empty()
     }
@@ -3318,7 +3320,9 @@ mod tests {
         assert!(!h.app.scan.as_ref().unwrap().copy, "the running scan keeps its options");
         let r = h.request("ui.inspect", json!({}), t);
         assert!(r["result"]["scan"].is_object(), "{r}");
-        // Cancel is the ✕ of the scan's row in the activity stack (shown once it is half a second old)
+        // Cancel is the ✕ of the scan's row in the activity stack (the list under the bell; there once the scan is
+        // half a second old)
+        h.request("engine.execute", json!({"command": "view.tasks", "params": {"show": true}}), t);
         let id = h.app.session.activity.list().first().map(|t| t.id).expect("a scan row");
         let cross = format!("activity:cancel:{id}");
         assert!(h.step_until(t, |h| h.app.widgets.iter().any(|(w, _)| *w == cross)), "the row shows");

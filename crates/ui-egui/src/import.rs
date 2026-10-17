@@ -9,6 +9,7 @@
 //! one undo step.
 
 use egui::{Align2, Color32, Rect, Sense, Stroke, StrokeKind, Vec2, pos2, vec2};
+use lightcraft_engine::activity::{Lane, Request};
 use lightcraft_engine::import::{
     ImportCandidate, ImportUprightMode, ImportWarning, ImportWarningCode, ScanInput, ScanOutput, ScanProgress, scan_with,
 };
@@ -270,12 +271,21 @@ pub struct ImportTask {
     run: Option<ImportRun>,
     /// The import's row in the activity stack (its ✕ and `activity.cancel` set the run's cancel flag).
     guard: Option<lightcraft_engine::activity::TaskGuard>,
+    /// What it was asked, kept on its row so that one that did not go well can be asked for again (not for reading a
+    /// Local folder, nor for Auto Import, which come back by themselves).
+    request: Option<Request>,
 }
 
 impl ImportTask {
     /// An import of `paths` (files or folders) with `library.import` params (without `paths`).
     pub fn new(paths: Vec<String>, params: Value, undo0: usize, browse: bool) -> Self {
         ImportTask { total: paths.len(), queue: paths, params, undo0, browse, ..Default::default() }
+    }
+
+    /// An import of the person's choosing, which can be asked for again as it was ([`import_request`]).
+    fn asked(paths: Vec<String>, params: Value, undo0: usize) -> Self {
+        let request = import_request(&paths, &params);
+        ImportTask { request: Some(request), ..ImportTask::new(paths, params, undo0, false) }
     }
 
     /// An Auto Import (see [`ImportTask::auto`]).
@@ -425,7 +435,7 @@ pub struct ScanTask {
     /// Open the review with this album chosen (an album's context menu ▸ Import…).
     pub album: Option<u64>,
     /// Browsing a folder (Local): the photos are read in place instead of opening the review.
-    browse: bool,
+    pub(crate) browse: bool,
     /// What is being scanned (the review's source).
     sources: Vec<String>,
     /// The scan's row in the activity stack (its ✕ and `activity.cancel` set `progress.cancel`).
@@ -438,10 +448,30 @@ fn scan_guard(app: &LightcraftApp, progress: &ScanProgress, browse: bool) -> lig
     app.session.activity.start("scan", label, lightcraft_engine::activity::Cancel::Flag(progress.cancel.clone()))
 }
 
-/// An import and a Synchronize Folder never run at once: each readies its files against the
-/// library as it was when it started, so both could add the same file.
-pub(crate) fn busy_synchronizing(app: &LightcraftApp) -> Result<(), String> {
-    if app.sync_run.is_some() { Err(crate::i18n::tr("A folder is being synchronized").to_string()) } else { Ok(()) }
+/// The command of an import's request ([`Request`]): the app runs it ([`start_request`]), with its files and its
+/// `library.import` params.
+pub const IMPORT_REQUEST: &str = "app:import";
+
+fn import_request(paths: &[String], params: &Value) -> Request {
+    Request { command: IMPORT_REQUEST.into(), params: json!({"paths": paths, "params": params}) }
+}
+
+/// The library lane is taken: an import (or the reading of a Local folder) or a Synchronize Folder runs, or waits
+/// to. Each readies its files against the library as it is when it starts, so two side by side could add the same
+/// file: one asked for now waits in line ([`Lane::Library`]).
+pub(crate) fn library_busy(app: &LightcraftApp) -> bool {
+    app.import.is_some()
+        || app.sync_run.is_some()
+        || app.sync_queued.is_some()
+        || app.session.activity.lane_busy(Lane::Library)
+        || app.session.activity.lane_waiting(Lane::Library)
+}
+
+/// Put an import of `paths` with `params` in line behind what runs in the library lane, and say so.
+fn wait_in_line(app: &mut LightcraftApp, paths: &[String], params: &Value) -> Result<Value, String> {
+    let (id, place) = app.session.activity.enqueue("import", "Importing", import_request(paths, params))?;
+    app.queued_toast(place as u64);
+    Ok(json!({"queued": id, "place": place}))
 }
 
 /// Settings → Import → "Show the import review when a camera or card is connected", called with
@@ -556,6 +586,7 @@ pub fn browse(app: &mut LightcraftApp, path: &str, subfolders: Option<bool>) -> 
 
 /// Collect a finished scan and open the review (called every frame).
 pub fn poll_scan(app: &mut LightcraftApp, ctx: &egui::Context) {
+    use lightcraft_engine::activity::{Ending, Outcome};
     let Some(task) = app.scan.as_ref() else { return };
     ctx.request_repaint_after(std::time::Duration::from_millis(100));
     let out = match task.rx.try_recv() {
@@ -563,7 +594,9 @@ pub fn poll_scan(app: &mut LightcraftApp, ctx: &egui::Context) {
         Err(std::sync::mpsc::TryRecvError::Empty) => {
             if task.guard.is_cancelled() {
                 // ✕: the worker stops at its next file; don't wait for it (a NAS read can take a while)
-                app.scan = None;
+                if let Some(task) = app.scan.take() {
+                    task.guard.finish(Outcome::ended(Ending::Stopped));
+                }
                 return;
             }
             let (total, done) = (task.progress.total.load(Ordering::Relaxed), task.progress.done.load(Ordering::Relaxed));
@@ -573,15 +606,23 @@ pub fn poll_scan(app: &mut LightcraftApp, ctx: &egui::Context) {
             return;
         }
         Err(_) => {
-            app.scan = None;
+            // the worker died (a panic, logged)
+            if let Some(task) = app.scan.take() {
+                task.guard.finish(Outcome::ended(Ending::Died));
+            }
             app.toast(ctx, crate::i18n::tr("Scan failed"));
             return;
         }
     };
     let Some(task) = app.scan.take() else { return };
+    // (a scan another one replaced was let go without a word; one here that was cancelled was stopped by its ✕)
     if task.progress.cancel.load(Ordering::Relaxed) {
+        task.guard.finish(Outcome::ended(Ending::Stopped));
         return;
     }
+    let found_none = out.candidates.is_empty() && !task.browse;
+    task.guard
+        .finish(Outcome { detail: if found_none { crate::i18n::tr("No photos found").to_string() } else { String::new() }, ..Default::default() });
     app.session.import_probes = out.probes;
     if task.browse {
         // records of files gone from the folder (deleted or moved by another app) that nothing was changed on go,
@@ -630,17 +671,21 @@ impl ScanTask {
     }
 }
 
-/// Start importing the dialog's checked files (the dialog's OK / `ui.dialog.confirm`).
+/// Start importing the dialog's checked files (the dialog's OK / `ui.dialog.confirm`). While the library lane is
+/// taken (an import or a Synchronize Folder runs) it waits in line, and plans its work when its turn comes.
 pub fn start(app: &mut LightcraftApp, d: &ImportDialog) -> Result<Value, String> {
-    busy_synchronizing(app)?;
     let queue = d.selected_paths();
     if queue.is_empty() {
         return Err("no photos selected".into());
     }
     let undo0 = app.session.undo.len();
+    let waits = library_busy(app);
     let mut album = d.album;
-    if album.is_none() && !d.new_album.trim().is_empty() {
-        let r = app.session.execute("album.create", &json!({"name": d.new_album.trim()})).map_err(|e| e.to_string())?;
+    let new_album = d.new_album.trim();
+    // (one that waits names its new album instead: it is made once the import adds a photo, so a waiting import taken
+    // out of the line leaves no empty album behind)
+    if album.is_none() && !new_album.is_empty() && !waits {
+        let r = app.session.execute("album.create", &json!({"name": new_album})).map_err(|e| e.to_string())?;
         album = r["id"].as_u64();
     }
     let mode = match (d.copy, d.move_files) {
@@ -654,6 +699,8 @@ pub fn start(app: &mut LightcraftApp, d: &ImportDialog) -> Result<Value, String>
     }
     if let Some(a) = album {
         params["album"] = json!(a);
+    } else if waits && !new_album.is_empty() {
+        params["albumName"] = json!(new_album);
     }
     if !d.preset.is_empty() {
         params["preset"] = json!(d.preset);
@@ -676,50 +723,81 @@ pub fn start(app: &mut LightcraftApp, d: &ImportDialog) -> Result<Value, String>
             params["dng"] = json!(true);
         }
     }
-    let total = queue.len();
-    app.import = Some(ImportTask::new(queue, params, undo0, false));
+    // the review's thumbnails are done with, whether it runs now or later
     app.renderer.forget_imports();
+    if waits {
+        return wait_in_line(app, &queue, &params);
+    }
+    let total = queue.len();
+    app.import = Some(ImportTask::asked(queue, params, undo0));
     Ok(json!({"importing": total}))
 }
 
-/// Start importing `paths` (files or folders) in the background, e.g. dropped on the window.
+/// Start importing `paths` (files or folders) in the background, e.g. dropped on the window; in line, like
+/// [`start`], while the library lane is taken.
 pub fn start_paths(app: &mut LightcraftApp, paths: Vec<String>) -> Result<Value, String> {
-    busy_synchronizing(app)?;
-    if app.import.is_some() || app.scan.as_ref().is_some_and(|t| !t.browse) {
+    if app.scan.as_ref().is_some_and(|t| !t.browse) {
         return Err("an import is running".into());
+    }
+    let params = json!({"mode": "add"});
+    if library_busy(app) {
+        return wait_in_line(app, &paths, &params);
     }
     let undo0 = app.session.undo.len();
     let total = paths.len();
-    app.import = Some(ImportTask::new(paths, json!({"mode": "add"}), undo0, false));
+    app.import = Some(ImportTask::asked(paths, params, undo0));
     Ok(json!({"importing": total}))
+}
+
+/// Start an import that waited in line (`request`, made by [`import_request`]): it plans its work now, against the
+/// library as it is, under the row it had while it waited.
+pub fn start_request(app: &mut LightcraftApp, ctx: &egui::Context, request: &Request) -> Result<(), String> {
+    let paths: Vec<String> =
+        request.params["paths"].as_array().map(|a| a.iter().filter_map(|p| p.as_str().map(str::to_string)).collect()).unwrap_or_default();
+    if paths.is_empty() {
+        return Err("no files to import".into());
+    }
+    if app.import.is_some() {
+        return Err("an import is running".into());
+    }
+    let undo0 = app.session.undo.len();
+    let mut task = ImportTask::asked(paths, request.params["params"].clone(), undo0);
+    begin(app, ctx, &mut task)?;
+    app.import = Some(task);
+    Ok(())
+}
+
+/// Plan the import against the library as it is and start its worker, under a row in the activity stack.
+fn begin(app: &mut LightcraftApp, ctx: &egui::Context, task: &mut ImportTask) -> Result<(), String> {
+    let mut p = task.params.clone();
+    p["paths"] = json!(task.queue);
+    let (job, album, name) = lightcraft_engine::cmd::library::import_params(&app.session, &p)
+        .and_then(|req| Ok((lightcraft_engine::import::ImportJob::new(&mut app.session, req.opts)?, req.album, req.album_name)))
+        .map_err(|e| e.to_string())?;
+    let run = ImportRun::start(job, std::mem::take(&mut task.queue), album, name, ctx)?;
+    if task.auto {
+        task.keep_selection = Some(app.session.selection.clone());
+    }
+    let label = if task.browse { "Reading folder" } else { "Importing" };
+    let guard = app.session.activity.start("import", label, lightcraft_engine::activity::Cancel::Flag(run.cancel.clone()));
+    if let Some(request) = &task.request {
+        guard.set_request(request.clone());
+    }
+    task.guard = Some(guard);
+    task.run = Some(run);
+    Ok(())
 }
 
 /// Advance the import in progress (called every frame): start its worker, then add the batches it
 /// has readied to the catalog.
 pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
     let Some(mut task) = app.import.take() else { return };
-    if task.run.is_none() {
-        let mut p = task.params.clone();
-        p["paths"] = json!(task.queue);
-        let started = lightcraft_engine::cmd::library::import_params(&app.session, &p)
-            .and_then(|req| Ok((lightcraft_engine::import::ImportJob::new(&mut app.session, req.opts)?, req.album, req.album_name)))
-            .map_err(|e| e.to_string())
-            .and_then(|(job, album, name)| ImportRun::start(job, std::mem::take(&mut task.queue), album, name, ctx));
-        if task.auto {
-            task.keep_selection = Some(app.session.selection.clone());
-        }
-        match started {
-            Ok(run) => {
-                let label = if task.browse { "Reading folder" } else { "Importing" };
-                task.guard = Some(app.session.activity.start("import", label, lightcraft_engine::activity::Cancel::Flag(run.cancel.clone())));
-                task.run = Some(run);
-            }
-            Err(e) => {
-                log::warn!("import: {e}");
-                app.toast(ctx, crate::i18n::tr_format!("Import failed: {e}", e = e));
-                return;
-            }
-        }
+    if task.run.is_none()
+        && let Err(e) = begin(app, ctx, &mut task)
+    {
+        log::warn!("import: {e}");
+        app.toast(ctx, crate::i18n::tr_format!("Import failed: {e}", e = e));
+        return;
     }
     ctx.request_repaint_after(std::time::Duration::from_millis(100));
     let Some(run) = task.run.as_mut() else { return };
@@ -907,6 +985,8 @@ fn finish(app: &mut LightcraftApp, ctx: &egui::Context, task: ImportTask) {
     } else {
         crate::i18n::tr_format!("Imported {} photo{}", task.imported, plural(task.imported))
     };
+    // what was done is the first line of the row the import leaves; the rest is what needs reading under it
+    let summary = msg.clone();
     if task.restored > 0 && (task.imported > 0 || task.cancelled) {
         msg.push_str(&crate::i18n::tr_format!(" · {} restored from Recently Deleted", task.restored));
     }
@@ -925,6 +1005,23 @@ fn finish(app: &mut LightcraftApp, ctx: &egui::Context, task: ImportTask) {
     }
     if task.failed > 0 {
         msg.push_str(&crate::i18n::tr_format!(" · {} not readable", task.failed));
+    }
+    // The import says how it ended in a toast, as ever, and to the activity stack: one that ran long, was stopped
+    // or could not read every file stays in the list under the bell.
+    use lightcraft_engine::activity::{Ending, Outcome};
+    let ending = if task.cancelled {
+        Ending::Stopped
+    } else if task.failed > 0 && task.imported == 0 && task.restored == 0 {
+        Ending::Failed
+    } else if task.failed > 0 || !task.warnings.is_empty() {
+        Ending::Problems
+    } else {
+        Ending::Done
+    };
+    let detail = msg.get(summary.len()..).unwrap_or_default().trim_start_matches(" · ").to_string();
+    if let Some(guard) = task.guard {
+        // (which files could not be read is not kept: only how many)
+        guard.finish(Outcome { ending, summary, detail, failed: task.failed, ..Default::default() });
     }
     if task.warnings.is_empty() {
         app.toast(ctx, msg);
