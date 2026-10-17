@@ -40,6 +40,7 @@ const LABEL_W: f32 = 150.0;
 pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, tab: &mut String) {
     let t = Tokens::get(ui.ctx());
     ui.set_width((ui.ctx().content_rect().width() - 64.0).clamp(240.0, 560.0));
+    // the tabs wrap onto a second row on a phone instead of widening the dialog
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
         for (id, label) in TABS {
@@ -68,12 +69,19 @@ pub(super) fn heading(ui: &mut egui::Ui, t: &Tokens, text: &str) {
 }
 
 pub(super) fn row<R>(ui: &mut egui::Ui, t: &Tokens, label: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    let add = match super::compact::stacked_row(ui, RichText::new(crate::i18n::tr(label)).color(t.text_label), add) {
+        Ok(r) => return r,
+        Err(add) => add,
+    };
     ui.horizontal(|ui| {
         ui.allocate_ui_with_layout(egui::vec2(LABEL_W, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
             ui.set_min_width(LABEL_W);
             ui.label(RichText::new(crate::i18n::tr(label)).color(t.text_label));
         });
-        add(ui)
+        // controls wrap under their column rather than widening the dialog (it changed width
+        // between tabs, and the line under the tabs fell short)
+        ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), 24.0), egui::Layout::left_to_right(egui::Align::Center).with_main_wrap(true), add)
+            .inner
     })
     .inner
 }
@@ -119,7 +127,7 @@ fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         None => crate::i18n::tr("In memory — nothing is saved").to_string(),
     };
     row(ui, t, crate::i18n::tr("Location"), |ui| {
-        ui.label(RichText::new(location).color(t.text));
+        ui.add(egui::Label::new(RichText::new(&location).color(t.text)).truncate()).on_hover_text(&location);
     });
     row(ui, t, "", |ui| {
         let can = app.services.pick_folder.is_some();

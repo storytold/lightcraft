@@ -165,7 +165,7 @@ fn drop_keyword(app: &mut LightcraftApp, ctx: &egui::Context, keyword: &str, par
 /// `can_fold`: the triangle opens and closes the level (not while a filter opens it).
 fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId], ticks: &Ticks, can_fold: bool) {
     let t = Tokens::get(ui.ctx());
-    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::click_and_drag());
+    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), crate::widgets::list_item_sense(ui.ctx()));
     crate::widgets::announce(&resp, r.path.clone());
     register(ui.ctx(), format!("keywordRow:{}", r.path), rect);
     if resp.drag_started() {
@@ -205,7 +205,7 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId
     let boxr = Rect::from_center_size(pos2(x + 22.0, cy), vec2(13.0, 13.0));
     let on = !selection.is_empty();
     // (it senses drags too, so a press there that moves doesn't pick the keyword up)
-    let sense = if on { Sense::click_and_drag() } else { Sense::hover() };
+    let sense = if on { crate::widgets::list_item_sense(ui.ctx()) } else { Sense::hover() };
     let tb = ui.interact(boxr.expand(3.0), egui::Id::new(("keyword-list-tick", r.path.to_lowercase())), sense);
     crate::widgets::announce(&tb, format!("{} {}", crate::i18n::tr("Keyword"), r.path));
     register(ui.ctx(), format!("keywordCheck:{}", r.path), boxr);
@@ -237,7 +237,7 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId
         let key = if state == Tick::All { "removeKeywords" } else { "addKeywords" };
         let _ = app.run("photo.setMeta", json!({key: [r.path]}));
     }
-    // the count, then the arrow left of it (shown on hover)
+    // the count, then the arrow left of it (shown on hover, always on a touch screen)
     let count = ui.painter().layout_no_wrap(r.count.to_string(), t.font(12.0), t.text_dim);
     let count_rect = Rect::from_min_size(pos2(inner.right() - 6.0 - count.size().x, cy - count.size().y / 2.0), count.size());
     register(ui.ctx(), format!("keywordCount:{}", r.path), count_rect);
@@ -246,7 +246,7 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId
     let ar = ui.interact(arrow, egui::Id::new(("keyword-list-show", r.path.to_lowercase())), Sense::click());
     crate::widgets::announce(&ar, crate::i18n::tr("Show photos"));
     register(ui.ctx(), format!("keywordShow:{}", r.path), arrow);
-    if resp.hovered() || ar.hovered() {
+    if resp.hovered() || ar.hovered() || crate::widgets::touch_screen(ui.ctx()) {
         paint(ui.painter(), arrow, Icon::ChevronRight, if ar.hovered() { t.text } else { t.text_dim });
     }
     if ar.on_hover_text(crate::i18n::tr("Show Photos with Keyword")).clicked() {
@@ -269,7 +269,7 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId
     if resp.clicked() {
         app.ui.keyword_list_selected = Some(r.path.clone());
     }
-    if resp.double_clicked() {
+    if crate::widgets::double_clicked(ui, &resp) {
         app.ui.dialog = Some(edit_dialog(app, &r.path));
     }
     resp.context_menu(|ui| menu(app, ui, &r.path, selection));
@@ -340,6 +340,14 @@ fn menu(app: &mut LightcraftApp, ui: &mut egui::Ui, path: &str, selection: &[Pho
     if item(ui, "edit", crate::i18n::tr("Edit Keyword Tag…"), true) {
         app.ui.dialog = Some(edit_dialog(app, path));
     }
+    // inside another keyword or at the top level, without dragging (touch screens)
+    ui.menu_button(crate::i18n::tr("Move to"), |ui| {
+        if item(ui, "moveTop", crate::i18n::tr("Top Level"), path.contains('|')) {
+            drop_keyword(app, ui.ctx(), path, None);
+        }
+        let tree = app.session.catalog.keyword_tree();
+        move_targets(app, ui, &tree, path, 0);
+    });
     let is_default = app.session.catalog.default_keyword_parent().as_deref().is_some_and(|k| same(k, path));
     let label = format!("{}{}", if is_default { "✓ " } else { "" }, crate::i18n::tr("Put New Keywords Inside This Keyword"));
     if item(ui, "defaultParent", &label, true) {
@@ -365,6 +373,34 @@ fn menu(app: &mut LightcraftApp, ui: &mut egui::Ui, path: &str, selection: &[Pho
         app.ui.dialog = Some(delete_dialog(app, path));
     }
 }
+
+/// The keywords `moving` can go inside, as menus that follow the tree (not itself or one of its
+/// own; levels below [`MOVE_DEPTH`] are left out).
+fn move_targets(app: &mut LightcraftApp, ui: &mut egui::Ui, nodes: &[lightcraft_catalog::keywords::KeywordNode], moving: &str, depth: usize) {
+    let fits = |n: &lightcraft_catalog::keywords::KeywordNode| !same(&n.path, moving) && !lightcraft_catalog::keywords::is_under(&n.path, moving);
+    for n in nodes.iter().filter(|n| fits(n)) {
+        if depth + 1 < MOVE_DEPTH && n.children.iter().any(fits) {
+            ui.menu_button(&n.name, |ui| {
+                let r = ui.button(crate::i18n::tr("Inside This Keyword"));
+                register(ui.ctx(), format!("keywordMoveInto:{}", n.path), r.rect);
+                if r.clicked() {
+                    drop_keyword(app, ui.ctx(), moving, Some(&n.path));
+                }
+                ui.separator();
+                move_targets(app, ui, &n.children, moving, depth + 1);
+            });
+        } else {
+            let r = ui.button(&n.name);
+            register(ui.ctx(), format!("keywordMoveInto:{}", n.path), r.rect);
+            if r.clicked() {
+                drop_keyword(app, ui.ctx(), moving, Some(&n.path));
+            }
+        }
+    }
+}
+
+/// How deep the Move to menus go.
+const MOVE_DEPTH: usize = 8;
 
 /// Create Keyword Tag: inside the keyword picked in the list, else the default parent.
 pub(crate) fn create_dialog(app: &LightcraftApp) -> Dialog {

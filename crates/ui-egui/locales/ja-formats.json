@@ -1,5 +1,7 @@
 {
   " · {skipped} skipped (file exists)": "・{skipped}件は同名ファイルのためスキップ",
+  " · {reduced} made smaller to fit this device's memory": "・{reduced}件はこの端末のメモリに収まるよう縮小",
+  "Photos · {n}": "写真 · {n}",
   " · {} duplicate{} skipped": "・重複{}枚をスキップ{:.0}",
   " · {} failed: {}": "・{}件失敗：{}",
   " · {} moved": "・{}件移動",

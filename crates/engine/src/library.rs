@@ -23,7 +23,7 @@
 
 use std::path::{Path, PathBuf};
 
-use lightcraft_catalog::{FsStore, Journal, LibraryLock, LoadReport, Store};
+use lightcraft_catalog::{FsStore, Journal, LibraryLock, LoadReport, Op, Store};
 use lightcraft_develop::Preset;
 use serde::{Deserialize, Serialize};
 
@@ -583,6 +583,11 @@ impl Session {
             blocked: settings.blocked,
             lock: lock.take(),
         });
+        // photos kept in this library while it was elsewhere (moved folder; iOS reinstall): point
+        // them at it again. Journaled, not undoable: undoing it would only break them again
+        if on_disk {
+            self.relink_moved_library();
+        }
         // forget untouched Local records of folders not browsed for a while (journaled at once)
         if self.forget_local_days > 0 {
             let plan = self.forget_local(false, None);
@@ -602,6 +607,29 @@ impl Session {
         }
         self.library_identity = std::sync::Arc::new(());
         Ok(())
+    }
+
+    /// See [`crate::cmd::missing::plan_moved_library`].
+    fn relink_moved_library(&mut self) {
+        let Some(dir) = self.library.as_ref().map(|l| l.dir.clone()) else { return };
+        let moved = crate::cmd::missing::plan_moved_library(&self.catalog, &dir);
+        if moved.is_empty() {
+            return;
+        }
+        let op = Op::Batch { ops: moved.iter().map(|(id, path)| crate::cmd::missing::relink_op(*id, path)).collect() };
+        match self.catalog.apply(op.clone()) {
+            Ok(_) => {
+                self.pending_log.push(op);
+                for (id, _) in &moved {
+                    self.media.forget(*id);
+                }
+                log::info!("library: moved since last opened; {} photo(s) found in it again", moved.len());
+                if let Err(e) = self.persist() {
+                    log::error!("library: {e}");
+                }
+            }
+            Err(e) => log::error!("library: relinking photos of the moved library: {e}"),
+        }
     }
 
     /// Write pending ops to the log (fsynced), compact when due, and save changed presets.

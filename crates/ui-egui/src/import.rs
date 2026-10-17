@@ -26,30 +26,9 @@ use crate::widgets::register;
 #[cfg(target_arch = "wasm32")]
 const BATCH: usize = 8;
 
-/// The review dialog's first size (points). It can be resized; the photo grid takes the height.
-pub(crate) const DIALOG_SIZE: [f32; 2] = [960.0, 720.0];
-/// Memory keys: where the photo grid ended and where the dialog's content (its buttons) ended, last
-/// frame. Their difference is the room the grid leaves below it.
-const GRID_BOTTOM: &str = "import-grid-bottom";
-const CONTENT_BOTTOM: &str = "import-content-bottom";
-/// Room below the grid before it has been measured (more than the options and buttons take).
-const DEFAULT_BELOW_GRID: f32 = 360.0;
-
-/// Height of the photo grid: what is `available` once `below` (options and buttons) is left free,
-/// in whole points so the window never grows by a fraction each frame, and at least one `row`.
-pub(crate) fn grid_height(available: f32, below: f32, row: f32) -> f32 {
-    let h = (available - below.max(0.0)).floor();
-    if h.is_finite() { h.max(row) } else { (DIALOG_SIZE[1] - DEFAULT_BELOW_GRID).max(row) }
-}
-
-/// Remember where the review dialog's content ends this frame (after its buttons), for
-/// [`grid_height`] on the next.
-pub(crate) fn note_dialog_bottom(ui: &egui::Ui) {
-    if !ui.is_sizing_pass() {
-        let y = ui.min_rect().bottom();
-        ui.ctx().data_mut(|m| m.insert_temp(egui::Id::new(CONTENT_BOTTOM), y));
-    }
-}
+/// The review dialog's largest size (points): it takes as much of the screen as this, so the
+/// photos get the height. It can be resized on the desktop.
+pub(crate) const DIALOG_SIZE: [f32; 2] = [1100.0, 960.0];
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -983,7 +962,103 @@ fn dup_counts(d: &ImportDialog) -> (usize, usize, usize) {
 }
 
 /// The dialog body: options, then the candidate grid.
-pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
+/// What the review's own buttons asked for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Footer {
+    Cancel,
+    Import,
+}
+
+/// How the review lays out at a content width.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Layout {
+    /// The photos with the options in a column beside them.
+    Side,
+    /// A phone held upright: the photos and the options as two tabs.
+    Tabs,
+}
+
+/// Narrowest content that still takes the options column beside two columns of photos.
+const SIDE_MIN_WIDTH: f32 = 560.0;
+/// Thumbnail cell (and its file name below it).
+const CELL: f32 = 116.0;
+const CELL_GAP: f32 = 6.0;
+const NAME_H: f32 = 20.0;
+/// The buttons' row at the bottom of the options (or of both tabs).
+const FOOTER_H: f32 = 34.0;
+
+pub(crate) fn layout(width: f32) -> Layout {
+    if width >= SIDE_MIN_WIDTH { Layout::Side } else { Layout::Tabs }
+}
+
+/// The review's window size on a screen whose free area is `area`: as much of it as a review
+/// can use, so the photos get the height.
+pub(crate) fn window_size(area: egui::Vec2) -> egui::Vec2 {
+    vec2(area.x.min(DIALOG_SIZE[0]), area.y.min(DIALOG_SIZE[1]))
+}
+
+/// The review dialog's content: the photos, the options and its own Cancel / Import buttons,
+/// laid out for the room there is (see [`Layout`]). The caller acts on the button pressed.
+pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) -> Option<Footer> {
+    let full = ui.available_rect_before_wrap();
+    // (a window that is still sizing itself reports no height: one of the screen's)
+    let height = if full.height().is_finite() && full.height() > 1.0 { full.height() } else { window_size(ui.ctx().content_rect().size()).y - 80.0 };
+    let full = Rect::from_min_size(full.min, vec2(full.width(), height.max(CELL + NAME_H + FOOTER_H)));
+    ui.allocate_rect(full, Sense::hover());
+    let mut pressed = None;
+    let child = |ui: &mut egui::Ui, r: Rect, add: &mut dyn FnMut(&mut egui::Ui)| {
+        ui.scope_builder(egui::UiBuilder::new().max_rect(r).layout(egui::Layout::top_down(egui::Align::Min)), |ui| {
+            ui.spacing_mut().item_spacing.y = 8.0;
+            add(ui)
+        });
+    };
+    match layout(full.width()) {
+        Layout::Side => {
+            let side = (full.width() * 0.36).clamp(280.0, 380.0);
+            let gap = 16.0;
+            let left = Rect::from_min_max(full.min, pos2(full.right() - side - gap, full.bottom()));
+            let right = Rect::from_min_max(pos2(full.right() - side, full.top()), full.max);
+            child(ui, left, &mut |ui| {
+                header(ui, d);
+                grid(app, ui, d, 0.0);
+            });
+            ui.painter().vline(right.left() - gap / 2.0, full.y_range(), egui::Stroke::new(1.0, Tokens::get(ui.ctx()).divider));
+            child(ui, right, &mut |ui| {
+                options_column(app, ui, d, right);
+                pressed = footer(ui, d);
+            });
+        }
+        Layout::Tabs => {
+            let tab_id = egui::Id::new("import-tab");
+            let mut on_options = ui.ctx().data(|m| m.get_temp::<bool>(tab_id)).unwrap_or(false);
+            child(ui, full, &mut |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 4.0;
+                    let photos = crate::i18n::tr_format!("Photos · {n}", n = d.candidates.len());
+                    if crate::widgets::text_button(ui, "importTab-photos", &photos, !on_options).clicked() {
+                        on_options = false;
+                    }
+                    if crate::widgets::text_button(ui, "importTab-options", crate::i18n::tr("Options"), on_options).clicked() {
+                        on_options = true;
+                    }
+                });
+                if on_options {
+                    let r = Rect::from_min_max(pos2(full.left(), ui.cursor().top()), full.max);
+                    options_column(app, ui, d, r);
+                } else {
+                    header(ui, d);
+                    grid(app, ui, d, FOOTER_H + 8.0);
+                }
+                pressed = footer(ui, d);
+            });
+            ui.ctx().data_mut(|m| m.insert_temp(tab_id, on_options));
+        }
+    }
+    pressed
+}
+
+/// The counts, Check All / Uncheck All and the file-type toggles above the photos.
+fn header(ui: &mut egui::Ui, d: &mut ImportDialog) {
     let t = Tokens::get(ui.ctx());
     let n = d.candidates.len();
     let (dups, in_source, trashed) = dup_counts(d);
@@ -1026,36 +1101,72 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
             }
         });
     }
-    // candidate grid
-    let cell = 116.0;
+}
+
+/// The photos to check, as tall as the column leaves with `below` kept free (the buttons, in tabs).
+fn grid(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog, below: f32) {
+    let n = d.candidates.len();
     let avail = ui.available_width();
-    let cols = ((avail + 6.0) / (cell + 6.0)).floor().max(1.0) as usize;
+    // as many columns as fit at the smallest size, each widened to share the row's width
+    let cols = ((avail + CELL_GAP) / (CELL + CELL_GAP)).floor().max(1.0) as usize;
+    let cell = ((avail + CELL_GAP) / cols as f32 - CELL_GAP).clamp(CELL.min(avail), 1.6 * CELL).floor();
     let rows = n.div_ceil(cols);
-    // as tall as the window leaves after the options and buttons below it (measured last frame),
-    // so resizing the dialog resizes the grid
-    let below = ui.ctx().data(|m| {
-        let y = |key: &str| m.get_temp::<f32>(egui::Id::new(key));
-        y(CONTENT_BOTTOM).zip(y(GRID_BOTTOM)).map(|(content, grid)| content - grid)
-    });
-    let grid_h = grid_height(ui.available_height(), below.unwrap_or(DEFAULT_BELOW_GRID), cell + 26.0);
-    let grid =
-        egui::ScrollArea::vertical().id_salt("import-grid").max_height(grid_h).auto_shrink([false, false]).show_viewport(ui, |ui, viewport| {
-            let (area, _) = ui.allocate_exact_size(vec2(avail, rows as f32 * (cell + 26.0)), Sense::hover());
+    let h = (ui.available_height() - below).floor().max(CELL + NAME_H);
+    let r = egui::ScrollArea::vertical().id_salt("import-grid").max_height(h).min_scrolled_height(h).auto_shrink([false, false]).show_viewport(
+        ui,
+        |ui, viewport| {
+            let (area, _) = ui.allocate_exact_size(vec2(avail, (rows as f32 * (cell + NAME_H + CELL_GAP) - CELL_GAP).max(0.0)), Sense::hover());
             for i in 0..n {
                 let (c, r) = (i % cols, i / cols);
-                let local = Rect::from_min_size(pos2(c as f32 * (cell + 6.0), r as f32 * (cell + 26.0)), vec2(cell, cell + 20.0));
+                let local = Rect::from_min_size(pos2(c as f32 * (cell + CELL_GAP), r as f32 * (cell + NAME_H + CELL_GAP)), vec2(cell, cell + NAME_H));
                 if !local.intersects(viewport.expand(cell)) {
                     continue;
                 }
                 let rect = local.translate(area.min.to_vec2());
                 candidate_cell(app, ui, d, i, rect);
             }
-        });
-    if !ui.is_sizing_pass() {
-        ui.ctx().data_mut(|m| m.insert_temp(egui::Id::new(GRID_BOTTOM), grid.inner_rect.bottom()));
-    }
-    ui.add_space(4.0);
-    // options
+        },
+    );
+    register(ui.ctx(), "grid:importPhotos", r.inner_rect);
+}
+
+/// The options, scrolling within `column` above the buttons.
+fn options_column(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog, column: Rect) {
+    let h = (column.bottom() - ui.cursor().top() - FOOTER_H - 8.0).floor().max(40.0);
+    let r = egui::ScrollArea::vertical().id_salt("import-options").max_height(h).min_scrolled_height(h).auto_shrink([false, false]).show(ui, |ui| {
+        ui.spacing_mut().item_spacing.y = 8.0;
+        options(app, ui, d);
+    });
+    register(ui.ctx(), "panel:importOptions", r.inner_rect);
+}
+
+/// Cancel and Import (or Move) at the bottom right.
+fn footer(ui: &mut egui::Ui, d: &ImportDialog) -> Option<Footer> {
+    let mut pressed = None;
+    let top = (ui.max_rect().bottom() - FOOTER_H).max(ui.cursor().top());
+    let r = Rect::from_min_max(pos2(ui.max_rect().left(), top), ui.max_rect().max);
+    ui.scope_builder(egui::UiBuilder::new().max_rect(r).layout(egui::Layout::right_to_left(egui::Align::Center)), |ui| {
+        let n = d.selected_paths().len();
+        let verb = if d.copy && d.move_files { "Move" } else { "Import" };
+        let label = crate::i18n::tr_format!("{verb} {n} Photo{}", if n == 1 { "" } else { "s" }, verb = crate::i18n::tr(verb), n = n);
+        let t = Tokens::get(ui.ctx());
+        let ok = ui.add(egui::Button::new(egui::RichText::new(label).color(egui::Color32::WHITE)).fill(t.accent).min_size(vec2(0.0, 28.0)));
+        register(ui.ctx(), "button:dialogOk", ok.rect);
+        if ok.clicked() {
+            pressed = Some(Footer::Import);
+        }
+        let cancel = ui.add(egui::Button::new(crate::i18n::tr("Cancel")).min_size(vec2(0.0, 28.0)));
+        register(ui.ctx(), "button:dialogCancel", cancel.rect);
+        if cancel.clicked() {
+            pressed = Some(Footer::Cancel);
+        }
+    });
+    pressed
+}
+
+/// The review's options: source, transfer, destination, naming, album, preset, keywords.
+fn options(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
+    let t = Tokens::get(ui.ctx());
     if !d.sources.is_empty() {
         field(ui, "Source", |ui| {
             // (whether each source is a folder is checked off the UI thread, once)
@@ -1565,8 +1676,20 @@ fn inspect_sources(sources: &[String]) -> SourceSummary {
 }
 
 /// A labelled row (fixed label column).
+/// Narrower than this (the options column, a phone), a field's label sits above its controls.
+const STACK_BELOW: f32 = 480.0;
+
 fn field<R>(ui: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
     let t = Tokens::get(ui.ctx());
+    if crate::panels::compact::is_compact(ui.ctx()) || ui.available_width() < STACK_BELOW {
+        return ui
+            .vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 4.0;
+                ui.label(egui::RichText::new(crate::i18n::tr(label)).color(t.text_label));
+                ui.horizontal_wrapped(add).inner
+            })
+            .inner;
+    }
     ui.horizontal(|ui| {
         ui.allocate_ui_with_layout(vec2(78.0, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
             ui.set_min_width(78.0);
@@ -1580,19 +1703,6 @@ fn field<R>(ui: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egui::Ui) -> R
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn grid_height_follows_the_window() {
-        // the grid takes what the options and buttons leave, in whole points
-        assert_eq!(grid_height(700.0, 300.0, 142.0), 400.0);
-        assert_eq!(grid_height(1000.5, 300.0, 142.0), 700.0);
-        // never less than one row of thumbnails
-        assert_eq!(grid_height(200.0, 300.0, 142.0), 142.0);
-        // a bad measurement doesn't take the grid away or make it endless
-        assert_eq!(grid_height(700.0, -50.0, 142.0), 700.0);
-        assert_eq!(grid_height(700.0, f32::NAN, 142.0), 700.0);
-        assert_eq!(grid_height(f32::INFINITY, 300.0, 142.0), DIALOG_SIZE[1] - DEFAULT_BELOW_GRID);
-    }
 
     /// Six candidates, all checked; candidate 3 is a duplicate (unchecked, not importable).
     fn dialog() -> ImportDialog {

@@ -81,7 +81,11 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("compare.swap", "Swap Compare Photos", None, "View"),
     ("compare.set", "Show in Compare", None, ""),
     ("compare.makeSelect", "Make Candidate the Select", None, "View"),
+    // ← / → in Compare; menu items for touch screens, which have no arrow keys
+    ("compare.previous", "Previous Candidate", None, "View"),
+    ("compare.next", "Next Candidate", None, "View"),
     ("view.autoAdvance", "Auto Advance", None, "Photo"),
+    ("view.selectMode", "Select Several", None, "Edit"),
     ("view.filmstrip", "Filmstrip", Some("/"), "View"),
     ("view.leftPanel", "My Photos Panel", Some("Cmd+Shift+L"), "View"),
     ("view.beforeAfter", "Compare Before and After", Some("Y"), "View"),
@@ -610,6 +614,16 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             crate::panels::compare::set_photo(app, lightcraft_catalog::PhotoId(id), p.get("side").and_then(Value::as_str))
         }
         "compare.makeSelect" => crate::panels::compare::make_select(app),
+        "compare.previous" => crate::panels::compare::compare_step(app, -1),
+        "compare.next" => crate::panels::compare::compare_step(app, 1),
+        "view.selectMode" => {
+            // {on?: bool}: toggles without
+            app.ui.select_mode = p.get("on").and_then(Value::as_bool).unwrap_or(!app.ui.select_mode);
+            if app.ui.select_mode {
+                app.toast(&ctx, crate::i18n::tr("Tap photos to add them to the selection or take them out"));
+            }
+            Ok(json!({"selectMode": app.ui.select_mode}))
+        }
         "view.autoAdvance" => {
             app.ui.auto_advance = !app.ui.auto_advance;
             app.toast(&ctx, crate::i18n::tr(if app.ui.auto_advance { "Auto Advance On" } else { "Auto Advance Off" }));
@@ -651,7 +665,14 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             let now = ctx.input(|i| i.time);
             let r = crate::panels::slideshow::start(app, p, now);
             if r.is_ok() {
-                app.toast(&ctx, crate::i18n::tr("Slideshow · Space pauses · Esc ends"));
+                app.toast(
+                    &ctx,
+                    crate::i18n::tr(if crate::widgets::touch_screen(&ctx) {
+                        "Slideshow · Pause and Exit are at the top right"
+                    } else {
+                        "Slideshow · Space pauses · Esc ends"
+                    }),
+                );
             }
             r
         }
@@ -1236,7 +1257,11 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
                     app.ui.right = RightPanel::Masking;
                     app.ui.view = ViewMode::Detail;
                     app.ui.tool = tool.into();
-                    return Some(app.session.execute("mask.add", &json!({"kind": tool})).map_err(|e| e.to_string()));
+                    let r = app.session.execute("mask.add", &json!({"kind": tool})).map_err(|e| e.to_string());
+                    if r.is_ok() {
+                        app.ui.draw_mask = app.session.active_mask;
+                    }
+                    return Some(r);
                 }
                 "wbPicker" => {
                     app.ui.right = RightPanel::Edit;
@@ -1409,7 +1434,13 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         "dialog.export" => {
             let prev = app.session.last_export.clone().unwrap_or_default();
             let u = |k: &str, d: u64| prev.get(k).and_then(Value::as_u64).unwrap_or(d);
-            let dir = prev.get("dir").and_then(Value::as_str).map(str::to_string).unwrap_or_else(crate::control::default_export_dir);
+            // a host with its own export folder (mobile) always uses it: sandbox paths change between installs
+            let dir = prev
+                .get("dir")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .filter(|_| app.services.export_dir.is_none())
+                .unwrap_or_else(|| crate::control::default_export_dir(&app.services));
             let opts = lightcraft_engine::export::ExportOptions::from_json(&prev);
             // no previous export: 2048 px long edge; a previous full-size export: full size
             let full_size = opts.resize.is_none() && lightcraft_engine::export::ExportOptions::has_size_param(&prev);
@@ -1425,7 +1456,13 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         "dialog.faceModel" => {
             let path = match p.get("path").and_then(Value::as_str) {
                 Some(x) => Some(x.to_string()),
-                None => app.services.pick_model_file.as_mut().and_then(|f| f().into_iter().next()),
+                None => {
+                    let req = PickRequest::file(crate::i18n::tr("Add a Face Recognition Model"), crate::i18n::tr("Face models (ONNX)"), &["onnx"]);
+                    match crate::pick::ask(app, id, p, "path", req, |s| s.pick_model_file.as_mut().map(|f| f())) {
+                        Picked::Now(paths) => paths.into_iter().next(),
+                        Picked::Later | Picked::Unavailable => None,
+                    }
+                }
             };
             match path {
                 Some(path) => crate::panels::faces::open_dialog(app, &path),
@@ -1765,6 +1802,14 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             match path {
                 Some(path) => {
                     let r = crate::import::open(app, vec![path]);
+                    // mobile hosts: copy in (only the scan just started; an error means another
+                    // scan is running)
+                    if r.is_ok()
+                        && app.services.import_copies
+                        && let Some(t) = &mut app.scan
+                    {
+                        t.copy = true;
+                    }
                     import_into_album(app, p, r)
                 }
                 None => Ok(Value::Null),
@@ -2139,8 +2184,10 @@ pub fn ui_enabled(app: &LightcraftApp, id: &str) -> bool {
         "app.export" | "dialog.export" | "dialog.createPreset" | "dialog.rename" | "dialog.captureTime" | "dialog.copySettings" => {
             app.session.active().is_some()
         }
-        "photo.tagFromTracklog" => app.session.active().is_some() && app.services.pick_tracklog.is_some(),
-        "photo.editInPhotoCraft" | "photo.editInExternal" => app.session.active().is_some() && app.services.open_with.is_some(),
+        "photo.tagFromTracklog" => app.session.active().is_some() && (app.services.pick_tracklog.is_some() || app.services.picker.is_some()),
+        "photo.editInPhotoCraft" | "photo.editInExternal" => {
+            app.session.active().is_some() && (app.services.open_with.is_some() || (app.services.share.is_some() && id == "photo.editInExternal"))
+        }
         "app.exportPrevious" => app.session.active().is_some() && app.session.last_export.is_some(),
         "dialog.pasteSettings" => app.session.active().is_some() && app.session.clipboard.is_some(),
         "photo.openOriginalInExternal" => {
@@ -2167,12 +2214,13 @@ pub fn ui_enabled(app: &LightcraftApp, id: &str) -> bool {
         "view.compare" => app.session.catalog.len() > 1,
         "view.fullScreenPreview" | "view.infoOverlay" | "view.navigator" => app.session.active().is_some() || app.ui.fullscreen,
         "app.openLibrary" | "app.newLibrary" => app.services.pick_folder.is_some() && crate::panels::settings::can_switch_library(app).is_ok(),
-        "file.addFolder" => app.services.pick_folder.is_some() && !crate::lightroom_import::is_running(app),
+        // the mobile shells have only the background picker
+        "file.addFolder" => (app.services.pick_folder.is_some() || app.services.picker.is_some()) && !crate::lightroom_import::is_running(app),
         "file.backupLibrary" => app.services.backup_library.is_some(),
         "app.openLogFolder" => app.services.reveal.is_some() && app.services.log_file.is_some(),
         "file.restoreLibrary" => app.services.restore_library.is_some(),
         "app.clearRecentLibraries" => !app.ui.settings.recent_libraries.is_empty(),
-        "compare.swap" | "compare.makeSelect" | "compare.set" => app.ui.view == ViewMode::Compare,
+        "compare.swap" | "compare.makeSelect" | "compare.set" | "compare.previous" | "compare.next" => app.ui.view == ViewMode::Compare,
         "slideshow.togglePause" | "slideshow.next" | "slideshow.previous" | "slideshow.end" => app.ui.slideshow.is_some(),
         s if s.starts_with("dialog.merge") || (s.starts_with("merge.") && s.ends_with("Last")) => {
             app.session.selected().len() >= 2 && app.merge.final_task.is_none()
@@ -2327,6 +2375,13 @@ fn edit_in(app: &mut LightcraftApp, ctx: &egui::Context, p: &Value, photocraft: 
         if let Some(Err(e)) = app.services.open_with.as_mut().map(|f| f(path, &editor)) {
             failed = Some(e);
         }
+    }
+    // mobile: no editor to launch; the share sheet opens the copies in another app
+    if app.services.open_with.is_none()
+        && let Some(share) = app.services.share.as_mut()
+    {
+        let paths: Vec<String> = copies.iter().map(|(p, _)| p.clone()).collect();
+        share(&paths);
     }
     match (failed, copies.as_slice()) {
         (Some(e), _) => app.toast(ctx, crate::i18n::tr_format!("Couldn't open the editor: {e}", e = e)),

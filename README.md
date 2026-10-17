@@ -448,6 +448,11 @@ too, and still in `lightcraft-panics.log` in the temp folder. The logger is `app
 The web build needs the `wasm32-unknown-unknown` target and the matching `wasm-bindgen` CLI
 (`cargo xtask web` prints the exact install command); see [docs/web.md](docs/web.md).
 
+**iOS / iPadOS and Android** builds come from source, not from releases yet: `apps/lightcraft-mobile/scripts/ios-sim.sh`
+runs the app in a booted simulator and `apps/lightcraft-mobile/scripts/android-apk.sh --run` installs it with adb. The
+same UI and engine, with a phone layout, touch, Apple Pencil and the system photo picker; requirements and status are in
+[apps/lightcraft-mobile/README.md](apps/lightcraft-mobile/README.md).
+
 **Nix** builds the desktop app and `lightcraft-cli` (the Nix build always includes the craft-fonts input, so Japanese
 text has glyphs):
 

@@ -11,9 +11,13 @@ const T: Duration = Duration::from_secs(20);
 
 /// Detail view with the Edit panel's Curve flyout open on `channel`.
 fn curve_open(channel: &str) -> Headless {
+    curve_open_sized(channel, [1200.0, 1400.0])
+}
+
+fn curve_open_sized(channel: &str, size: [f32; 2]) -> Headless {
     let services = Services { png: None, ..Default::default() };
     let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
-    let mut h = Headless::new(app, [1200.0, 1400.0], 1.0);
+    let mut h = Headless::new(app, size, 1.0);
     let r = h.request("ui.set", json!({"view": "detail"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.app.ui.right = crate::state::RightPanel::Edit;
@@ -26,6 +30,17 @@ fn curve_open(channel: &str) -> Headless {
     h.app.ui.curve_channel = channel.into();
     h.step();
     h.step();
+    // a short window: scroll the Edit panel until the whole graph is on screen
+    for _ in 0..40 {
+        let r = curve_rect(&mut h);
+        if r.bottom() <= size[1] - 8.0 {
+            break;
+        }
+        h.input([egui::Event::PointerMoved(egui::pos2(r.center().x, size[1] / 2.0))]);
+        let s = h.request("ui.scroll", json!({"dx": 0.0, "dy": -60.0}), T);
+        assert_eq!(s["ok"], true, "{s}");
+        h.step();
+    }
     h
 }
 
@@ -168,6 +183,109 @@ fn dragging_a_point_past_its_neighbour_is_clamped() {
     assert_eq!(c.len(), 4, "{c:?}");
     assert!(c[1].0 < c[2].0 && c[1].0 > 0.55, "clamped just left of its neighbour: {c:?}");
     assert_eq!(c[2], (0.6, 0.6), "the neighbour stays: {c:?}");
+}
+
+/// One finger from `from` to `to` in `steps` moves, then lifted, as egui-winit reports a touch.
+fn touch_drag(h: &mut Headless, from: egui::Pos2, to: egui::Pos2, steps: usize) {
+    let touch = |phase, pos| egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(1), phase, pos, force: Some(0.5) };
+    let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+    h.input([touch(egui::TouchPhase::Start, from), egui::Event::PointerMoved(from), button(from, true)]);
+    h.step();
+    for i in 1..=steps {
+        let p = from + (to - from) * (i as f32 / steps as f32);
+        h.input([touch(egui::TouchPhase::Move, p), egui::Event::PointerMoved(p)]);
+        h.step();
+    }
+    h.input([touch(egui::TouchPhase::End, to), button(to, false), egui::Event::PointerGone]);
+    h.step();
+    h.step();
+}
+
+fn curve_rect(h: &mut Headless) -> egui::Rect {
+    let r = h.request("ui.widgets", json!({"filter": "curve"}), T);
+    let w = r["result"].as_array().unwrap().iter().find(|w| w["id"] == "curve").cloned().unwrap();
+    let v: Vec<f32> = (0..4).map(|i| w["rect"][i].as_f64().unwrap() as f32).collect();
+    egui::Rect::from_min_size(egui::pos2(v[0], v[1]), egui::vec2(v[2], v[3]))
+}
+
+#[test]
+fn touch_dragging_a_point_moves_it() {
+    let mut h = curve_open("master");
+    exec(&mut h, "develop.curve", json!({"channel": "master", "points": [[0.0, 0.0], [0.5, 0.5], [1.0, 1.0]]}));
+    h.step();
+    let r = curve_rect(&mut h);
+    let from = r.center();
+    let to = from + egui::vec2(-0.1 * r.width(), -0.2 * r.height());
+    touch_drag(&mut h, from, to, 12);
+    let c = pts(&develop(&h).curve.master);
+    assert_eq!(c.len(), 3, "{c:?}");
+    assert!((c[1].0 - 0.4).abs() < 0.03 && (c[1].1 - 0.7).abs() < 0.03, "the point follows the finger: {c:?}");
+}
+
+#[test]
+fn touch_dragging_a_point_moves_it_in_a_scrolling_panel() {
+    // iPad 11" landscape: the Edit panel is taller than the window, so it scrolls by touch
+    let mut h = curve_open_sized("master", [1194.0, 834.0]);
+    exec(&mut h, "develop.curve", json!({"channel": "master", "points": [[0.0, 0.0], [0.5, 0.5], [1.0, 1.0]]}));
+    h.step();
+    let r = curve_rect(&mut h);
+    let from = r.center();
+    let to = from + egui::vec2(-0.1 * r.width(), -0.2 * r.height());
+    touch_drag(&mut h, from, to, 12);
+    let c = pts(&develop(&h).curve.master);
+    assert_eq!(c.len(), 3, "{c:?}");
+    assert!((c[1].0 - 0.4).abs() < 0.03 && (c[1].1 - 0.7).abs() < 0.03, "the point follows the finger: {c:?}");
+}
+
+fn widget_rect(h: &mut Headless, id: &str) -> egui::Rect {
+    let r = h.request("ui.widgets", json!({"filter": id}), T);
+    let w = r["result"].as_array().unwrap().iter().find(|w| w["id"] == id).cloned().unwrap_or_else(|| panic!("{id} on screen: {r}"));
+    let v: Vec<f32> = (0..4).map(|i| w["rect"][i].as_f64().unwrap() as f32).collect();
+    egui::Rect::from_min_size(egui::pos2(v[0], v[1]), egui::vec2(v[2], v[3]))
+}
+
+/// A point at fractions (`fx` across, `fy` up from the bottom) of the curve graph.
+fn at(r: egui::Rect, fx: f32, fy: f32) -> egui::Pos2 {
+    egui::pos2(r.left() + fx * r.width(), r.bottom() - fy * r.height())
+}
+
+#[test]
+fn touch_dragging_the_parametric_graph_adjusts_the_region_under_the_finger() {
+    let mut h = curve_open_sized("parametric", [1194.0, 834.0]);
+    let r = curve_rect(&mut h);
+    let undo_before = h.app.session.undo.len();
+    // the right end (highlights) dragged up by a quarter of the graph: +50
+    touch_drag(&mut h, at(r, 0.9, 0.5), at(r, 0.9, 0.75), 10);
+    let c = develop(&h).curve;
+    assert!((c.highlights - 50.0).abs() <= 2.0, "highlights follow the drag: {c:?}");
+    assert_eq!((c.lights, c.darks, c.shadows), (0.0, 0.0, 0.0), "only that region: {c:?}");
+    assert_eq!(h.app.session.undo.len(), undo_before + 1, "one undo step per drag");
+    // the left end (shadows) dragged down, past the bottom: clamped at −100
+    touch_drag(&mut h, at(r, 0.1, 0.5), at(r, 0.1, -0.4), 10);
+    assert_eq!(develop(&h).curve.shadows, -100.0);
+    // darks (between the shadows and midtones splits) by mouse
+    let r2 = h.request("ui.dragWidget", json!({"id": "curve", "fx": 0.4, "fy": 0.5, "dx": 0.0, "dy": -0.1 * r.height(), "steps": 8}), T);
+    assert_eq!(r2["ok"], true, "{r2}");
+    h.step();
+    assert!((develop(&h).curve.darks - 20.0).abs() <= 2.0, "{:?}", develop(&h).curve);
+}
+
+#[test]
+fn dragging_a_split_handle_moves_the_split_between_its_neighbours() {
+    let mut h = curve_open("parametric");
+    let r = curve_rect(&mut h);
+    let mid = widget_rect(&mut h, "curveSplit:mid");
+    // midtones split 50 → 60
+    touch_drag(&mut h, mid.center(), mid.center() + egui::vec2(0.1 * r.width(), 0.0), 8);
+    assert!((develop(&h).curve.split_mid - 60.0).abs() <= 1.0, "{:?}", develop(&h).curve);
+    // the shadows split can't pass the midtones split
+    let sh = widget_rect(&mut h, "curveSplit:shadows");
+    touch_drag(&mut h, sh.center(), sh.center() + egui::vec2(0.6 * r.width(), 0.0), 8);
+    let c = develop(&h).curve;
+    assert!(c.split_shadows < c.split_mid, "{c:?}");
+    // double-tap resets
+    click_widget(&mut h, "curveSplit:mid", 2);
+    assert_eq!(develop(&h).curve.split_mid, 50.0);
 }
 
 /// A targeted-adjustment tool takes over clicks and drags on the photo, so turning it on says so

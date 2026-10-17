@@ -608,6 +608,9 @@ pub enum KeywordingView {
     WillExport,
 }
 
+/// The fewest and most thumbnails across the compact grid.
+pub const GRID_COLUMNS: (u8, u8) = (1, 8);
+
 /// How the Keywording box lays out the selection's keywords.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -662,6 +665,8 @@ pub struct UiState {
     pub zoom_anim: bool,
     pub before_after: BeforeAfter,
     pub thumb_size: f32,
+    /// Thumbnails across the compact (phone) grid, which has no size slider: a pinch changes it.
+    pub grid_columns: u8,
     /// Open Edit sections by id.
     pub open_sections: Vec<String>,
     /// Open flyouts (curve, mixer, grading…).
@@ -814,6 +819,9 @@ pub struct UiState {
     pub grading_hidden: Option<(lightcraft_catalog::PhotoId, [bool; 3])>,
     /// Active on-canvas tool: "", "brush", "linear", "radial", "wbPicker", "straighten", "remove".
     pub tool: String,
+    /// A linear / radial gradient mask just created from its tile (or Tools menu) with its default
+    /// shape: a drag on the photo draws it instead, until it has been drawn or edited.
+    pub draw_mask: Option<u32>,
     pub brush_size: f32,
     pub brush_feather: f32,
     pub brush_flow: f32,
@@ -849,6 +857,16 @@ pub struct UiState {
     pub local_browse_root: Option<String>,
     /// Culling: after a rating, flag or colour-label key, move to the next photo.
     pub auto_advance: bool,
+    /// Edit ▸ Select Several (for touch screens, which have no ⌘ or ⇧ to click with): a tap on a
+    /// photo adds it to the selection or takes it out, as ⌘-click does.
+    #[serde(skip)]
+    pub select_mode: bool,
+    /// Touch screens (no ⇧ or ⌥ to click with): a tap with the Color Range picker adds a sample,
+    /// as ⇧-click does; a tap with the Object tool leaves out what's under it, as ⌥-click does.
+    #[serde(skip)]
+    pub pick_adds: bool,
+    #[serde(skip)]
+    pub object_excludes: bool,
     /// Full-screen preview (F): the photo alone on black, no chrome.
     pub fullscreen: bool,
     /// Lights Out (Shift+L): not saved, every launch starts with the lights on.
@@ -1283,6 +1301,7 @@ impl Default for UiState {
             zoom_anim: false,
             before_after: BeforeAfter::Off,
             thumb_size: 220.0,
+            grid_columns: 3,
             open_sections: vec!["light".into()],
             open_flyouts: vec![],
             single_panel: false,
@@ -1344,6 +1363,7 @@ impl Default for UiState {
             grading_mode: "3way".into(),
             grading_hidden: None,
             tool: String::new(),
+            draw_mask: None,
             brush_size: 0.04,
             brush_feather: 50.0,
             brush_flow: 60.0,
@@ -1361,6 +1381,9 @@ impl Default for UiState {
             visualize_spots: false,
             spots_threshold: 50.0,
             auto_advance: false,
+            select_mode: false,
+            pick_adds: false,
+            object_excludes: false,
             fullscreen: false,
             lights_out: LightsOut::On,
             slideshow: None,
@@ -1467,6 +1490,7 @@ impl UiState {
     /// Clamp values restored from disk.
     pub fn sanitized(mut self) -> Self {
         self.thumb_size = self.thumb_size.clamp(THUMB_SIZE_MIN, THUMB_SIZE_MAX);
+        self.grid_columns = self.grid_columns.clamp(GRID_COLUMNS.0, GRID_COLUMNS.1);
         self.left_width = LEFT_WIDTH.clamp(self.left_width);
         self.right_width = RIGHT_WIDTH.clamp(self.right_width);
         self.brush_size = self.brush_size.clamp(0.002, 0.5);

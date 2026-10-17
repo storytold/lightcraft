@@ -1124,7 +1124,8 @@ fn date_row(app: &mut LightcraftApp, ui: &mut egui::Ui, key: &str, label: &str, 
     let open_id = egui::Id::new(("date-open", key.to_string()));
     let mut open = tree_open(ui, open_id, false);
     let sel = app.session.filter.date.as_deref() == Some(key);
-    let resp = row(app, ui, &format!("date:{key}"), Icon::Clock, label, Some(count), sel, indent);
+    // room for the disclosure triangle left of the icon, as in the Local folder tree
+    let resp = row(app, ui, &format!("date:{key}"), Icon::Clock, label, Some(count), sel, indent + 12.0);
     if key.len() < 10 {
         tree_toggle(ui, &resp, indent, open_id, &mut open, format!("dateToggle:{key}"));
     }
@@ -1163,8 +1164,19 @@ fn albums_tree(app: &mut LightcraftApp, ui: &mut egui::Ui, all: &AlbumKids, pare
                 open = true;
                 set_tree_open(ui, open_id, true);
             }
-            let resp =
-                row_sensed(app, ui, &format!("folder:{}", a.id.0), Icon::Folder, &a.name, None, None, false, indent, Sense::click_and_drag(), None);
+            let resp = row_sensed(
+                app,
+                ui,
+                &format!("folder:{}", a.id.0),
+                Icon::Folder,
+                &a.name,
+                None,
+                None,
+                false,
+                indent,
+                crate::widgets::list_item_sense(ui.ctx()),
+                None,
+            );
             // a folder is no source, so its row folds it too; the triangle is the same click, aimed
             let has_children = all.get(&Some(a.id)).is_some_and(|v| !v.is_empty());
             if resp.drag_started() {
@@ -1203,7 +1215,19 @@ fn albums_tree(app: &mut LightcraftApp, ui: &mut egui::Ui, all: &AlbumKids, pare
             // a smart album whose rules no longer check (an album they test was deleted) says so
             let problems = app.caches.smart_album_problems(&app.session.catalog).get(&a.id).cloned().unwrap_or_default();
             let label = if problems.is_empty() { label } else { format!("⚠ {label}") };
-            let mut resp = row_sensed(app, ui, &format!("album:{}", a.id.0), icon, &label, None, Some(n), sel, indent, Sense::click_and_drag(), None);
+            let mut resp = row_sensed(
+                app,
+                ui,
+                &format!("album:{}", a.id.0),
+                icon,
+                &label,
+                None,
+                Some(n),
+                sel,
+                indent,
+                crate::widgets::list_item_sense(ui.ctx()),
+                None,
+            );
             if !problems.is_empty() {
                 crate::widgets::register(ui.ctx(), format!("albumProblem:{}", a.id.0), resp.rect);
             }
@@ -1670,6 +1694,20 @@ fn folder_menu(app: &mut LightcraftApp, resp: &egui::Response, a: &Album) {
                 }
             }
         });
+        // by hand without dragging (touch screens): one place up or down among its own kind
+        let kind: Vec<AlbumId> = app.session.catalog.album_children(a.parent).iter().filter(|s| s.folder == a.folder).map(|s| s.id).collect();
+        if let Some(at) = kind.iter().position(|&s| s == a.id) {
+            let r = ui.add_enabled(at > 0, egui::Button::new(crate::i18n::tr("Move Up")));
+            register(ui.ctx(), format!("albumUp:{}", a.id.0), r.rect);
+            if r.clicked() {
+                place_album(app, ui, a.id, a.parent, at.checked_sub(1).and_then(|i| kind.get(i)).copied());
+            }
+            let r = ui.add_enabled(at + 1 < kind.len(), egui::Button::new(crate::i18n::tr("Move Down")));
+            register(ui.ctx(), format!("albumDown:{}", a.id.0), r.rect);
+            if r.clicked() {
+                place_album(app, ui, a.id, a.parent, kind.get(at + 2).copied());
+            }
+        }
         if ui.button(crate::i18n::tr("Rename…")).clicked() {
             app.ui.dialog = Some(crate::state::Dialog::RenameAlbum { id: a.id.0, name: a.name.clone() });
         }

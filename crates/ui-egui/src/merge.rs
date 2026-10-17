@@ -359,10 +359,13 @@ fn last_failed_matches(app: &LightcraftApp, opts: &MergeDialog) -> bool {
 /// The dialog body (options on the left, preview on the right).
 pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut MergeDialog) {
     let t = crate::theme::Tokens::get(ui.ctx());
-    ui.horizontal_top(|ui| {
+    // compact layout: the preview above the options, as wide as the screen allows
+    let compact = crate::panels::compact::is_compact(ui.ctx());
+    let layout = if compact { egui::Layout::top_down(egui::Align::Min) } else { egui::Layout::left_to_right(egui::Align::Min) };
+    ui.with_layout(layout, |ui| {
         // preview
         ui.vertical(|ui| {
-            let box_size = egui::vec2(520.0, 360.0);
+            let box_size = if compact { egui::vec2(ui.available_width(), ui.available_width() * 0.7) } else { egui::vec2(520.0, 360.0) };
             let (rect, _) = ui.allocate_exact_size(box_size, egui::Sense::hover());
             ui.painter().rect_filled(rect, 4.0, t.canvas);
             crate::widgets::register(ui.ctx(), "merge.preview", rect);
@@ -382,7 +385,9 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut MergeDialog) 
                 );
             }
             if let Some(e) = &app.merge.error {
-                ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, e, t.font(13.0), t.text);
+                // wrapped: a phone-width preview is narrower than most messages
+                let g = ui.painter().layout(e.clone(), t.font(13.0), t.text, rect.width() - 24.0);
+                ui.painter().galley(rect.center() - g.size() / 2.0, g, t.text);
             }
             let info = app.merge.preview.as_ref().map(|p| p.3.clone());
             if let Some(info) = info {
@@ -405,7 +410,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut MergeDialog) 
         ui.add_space(12.0);
         // options
         ui.vertical(|ui| {
-            ui.set_width(220.0);
+            ui.set_width(if compact { ui.available_width() } else { 220.0 });
             if opts.is_pano() {
                 ui.label(egui::RichText::new(crate::i18n::tr("Projection")).color(t.text_label));
                 for (v, l) in [("auto", "Auto Select"), ("spherical", "Spherical"), ("cylindrical", "Cylindrical"), ("perspective", "Perspective")] {

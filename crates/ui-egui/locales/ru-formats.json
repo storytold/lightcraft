@@ -4,6 +4,8 @@
   " · {:.0}% clipped": " · обрезано: {:.0}%",
   " · {failed} couldn't be rendered": " · не удалось отрисовать: {failed}",
   " · {skipped} skipped (file exists)": " · пропущено: {skipped} (файл существует)",
+  " · {reduced} made smaller to fit this device's memory": " · {reduced} уменьшено, чтобы поместиться в памяти этого устройства",
+  "Photos · {n}": "Фото · {n}",
   " · {} duplicate{} skipped": " · пропущено дубликатов: {}{:.0}",
   " · {} failed: {}": " · не удалось: {}; ошибка: {}",
   " · {} moved": " · перемещено: {}",

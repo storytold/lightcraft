@@ -18,6 +18,7 @@ pub mod docking;
 pub mod export_task;
 mod focus_scan;
 pub mod headless;
+pub mod hid;
 pub mod i18n;
 pub mod icons;
 pub mod import;
@@ -64,6 +65,8 @@ mod tests_button;
 #[cfg(test)]
 mod tests_canvas_keys;
 #[cfg(test)]
+mod tests_compact;
+#[cfg(test)]
 mod tests_compare;
 #[cfg(test)]
 mod tests_copy_paste_dialogs;
@@ -98,6 +101,8 @@ mod tests_grading;
 #[cfg(test)]
 mod tests_grid;
 #[cfg(test)]
+mod tests_import_layout;
+#[cfg(test)]
 mod tests_info_dialogs;
 #[cfg(test)]
 mod tests_keymap;
@@ -127,6 +132,8 @@ mod tests_masking;
 mod tests_masking_layout;
 #[cfg(test)]
 mod tests_menubar;
+#[cfg(test)]
+mod tests_mobile;
 #[cfg(test)]
 mod tests_offline;
 #[cfg(test)]
@@ -169,6 +176,8 @@ mod tests_temp_slider;
 mod tests_titlebar;
 #[cfg(test)]
 mod tests_tool_overlay;
+#[cfg(test)]
+mod tests_touch;
 #[cfg(test)]
 mod tests_unsaved;
 #[cfg(test)]
@@ -222,6 +231,8 @@ pub type CheckEditorFn = Box<dyn Fn(&str) -> Result<(), String>>;
 /// Something the host does with the session (web: back up or restore the library in browser
 /// storage); the work may finish asynchronously.
 pub type HostAction = Box<dyn FnMut(&mut Session) -> Result<Value, String>>;
+/// Hand finished files to the platform's share sheet (paths).
+pub type ShareFn = Box<dyn FnMut(&[String])>;
 
 /// The system's dark/light appearance where egui doesn't report one (Linux desktops whose
 /// windowing layer says nothing, e.g. many Wayland compositors). The host answers from what it
@@ -297,6 +308,16 @@ pub struct Services {
     pub backup_library: Option<HostAction>,
     /// File ▸ Restore Library from Backup… (web only; keeps the current library).
     pub restore_library: Option<HostAction>,
+    /// The default export folder (mobile: inside the app's sandbox); else
+    /// `~/Pictures/LightCraft Exports`.
+    pub export_dir: Option<String>,
+    /// Offer the files of a finished export from the Export dialog (or Export with Preset /
+    /// Previous) in the platform's share sheet (mobile hosts).
+    pub share: Option<ShareFn>,
+    /// Import from Folder… starts on Copy (mobile hosts: a folder picked outside the app's own
+    /// storage can be read only while the system allows, so files added in place would go
+    /// missing).
+    pub import_copies: bool,
     /// The system appearance for Appearance Mode ▸ Auto, ahead of egui's own report.
     pub system_theme: Option<SystemThemeFn>,
 }
@@ -378,10 +399,14 @@ pub struct LightcraftApp {
     pub copied: Option<String>,
     /// Native file dialogs up for commands (`pick`): each command runs again when its closes.
     pub(crate) pending_picks: Vec<pick::Pending>,
+    /// Native file dialogs up for buttons inside dialogs (`pick::ask_field`), by button.
+    pub(crate) field_picks: Vec<(String, Receiver<Vec<String>>)>,
     /// Modifiers announced for synthetic input (held from a button down to its release).
     synthetic_mods: egui::Modifiers,
     /// Clear `synthetic_mods` on the next frame.
     synthetic_mods_release: bool,
+    /// A lifted finger's `PointerGone`, held back to the next frame (see [`defer_touch_pointer_gone`]).
+    pointer_gone_deferred: bool,
     styled: bool,
     /// The language the installed fonts were built for: the CJK fallback order follows the UI
     /// language's script, so switching language reinstalls them.
@@ -507,8 +532,10 @@ impl LightcraftApp {
             synthetic: vec![],
             copied: None,
             pending_picks: vec![],
+            field_picks: vec![],
             synthetic_mods: egui::Modifiers::NONE,
             synthetic_mods_release: false,
+            pointer_gone_deferred: false,
             styled: false,
             font_language: i18n::Locale::En,
             chinese_font: None,
@@ -730,6 +757,25 @@ impl LightcraftApp {
     }
 
     /// Show a transient toast at the bottom of the canvas (like the reference app's HUD).
+    /// A finger has no Esc or F: on a touch screen, full screen shows Exit in the top-right corner of
+    /// the safe area. (A slideshow has its own controls, which a tap brings up.)
+    fn fullscreen_touch_controls(&mut self, ctx: &egui::Context) {
+        if !widgets::touch_screen(ctx) || self.ui.slideshow.is_some() {
+            return;
+        }
+        // (anchored within the content rect: inside the safe area)
+        egui::Area::new(egui::Id::new("fullscreen-touch")).anchor(egui::Align2::RIGHT_TOP, [-12.0, 12.0]).order(egui::Order::Foreground).show(
+            ctx,
+            |ui| {
+                egui::Frame::NONE.fill(egui::Color32::from_black_alpha(170)).corner_radius(6.0).inner_margin(6.0).show(ui, |ui| {
+                    if widgets::text_button(ui, "fullscreenExit", "Exit", false).clicked() {
+                        self.ui.fullscreen = false;
+                    }
+                });
+            },
+        );
+    }
+
     /// Advance a running slideshow.
     fn slideshow_tick(&mut self, ctx: &egui::Context) {
         panels::slideshow::tick(self, ctx);
@@ -789,6 +835,19 @@ impl LightcraftApp {
             (Some(_), true) => ctx.request_repaint_after(std::time::Duration::from_secs(2)), // retry
             (None, false) => {}
         }
+    }
+
+    /// A double tap on an Apple Pencil (the shells call this when the system's preferred action is
+    /// to switch to the eraser): while painting a mask, the brush switches between Add and Erase.
+    /// Returns whether it did anything.
+    pub fn pencil_tap(&mut self, ctx: &egui::Context) -> bool {
+        if self.ui.tool != "brush" {
+            return false;
+        }
+        self.ui.brush_erase = !self.ui.brush_erase;
+        let mode = if self.ui.brush_erase { "Brush: Erase" } else { "Brush: Add" };
+        self.toast(ctx, i18n::tr(mode));
+        true
     }
 
     pub fn toast(&mut self, ctx: &egui::Context, text: impl Into<String>) {
@@ -1056,6 +1115,10 @@ impl LightcraftApp {
 
     /// Per-frame logic before layout (control channel, renders, shortcuts, drops).
     pub fn logic(&mut self, ctx: &egui::Context) {
+        if self.pointer_gone_deferred {
+            // the next frame delivers the held-back `PointerGone`
+            ctx.request_repaint();
+        }
         i18n::set_language(self.ui.language);
         let t0 = now_ms();
         panels::library_problem::logic(self);
@@ -1324,6 +1387,7 @@ impl LightcraftApp {
 
     /// Inject synthetic events (pointer events one per frame; key sequences up to the release).
     pub fn raw_input_hook(&mut self, raw: &mut egui::RawInput) {
+        defer_touch_pointer_gone(&mut self.pointer_gone_deferred, raw);
         // the frame after a synthetic release / key: modifiers back up
         if std::mem::take(&mut self.synthetic_mods_release) && self.synthetic_mods != egui::Modifiers::NONE {
             self.synthetic_mods = egui::Modifiers::NONE;
@@ -1420,6 +1484,21 @@ impl LightcraftApp {
 
     /// Lay out the whole window.
     pub fn ui(&mut self, ui: &mut egui::Ui) {
+        // inside the safe area (iOS: clear of the status bar, Dynamic Island and home indicator;
+        // the insets are zero elsewhere), in the compact layout when that is narrow
+        let content = ui.ctx().content_rect();
+        widgets::note_pointer(ui.ctx());
+        panels::compact::update(self, &ui.ctx().clone(), content);
+        if content != ui.max_rect() {
+            ui.painter().rect_filled(ui.max_rect(), 0.0, theme::Tokens::get(ui.ctx()).chrome);
+        }
+        // always the same child, insets or not: widget ids (and with them text focus) stay put
+        // when the insets change, as when the soft keyboard comes up
+        let mut inner = ui.new_child(egui::UiBuilder::new().id_salt("safe-area").max_rect(content));
+        self.layout(&mut inner);
+    }
+
+    fn layout(&mut self, ui: &mut egui::Ui) {
         i18n::set_language(self.ui.language);
         let ctx = ui.ctx().clone();
         if !self.fonts_ready {
@@ -1441,6 +1520,7 @@ impl LightcraftApp {
             egui::CentralPanel::default()
                 .frame(egui::Frame::NONE.fill(egui::Color32::BLACK))
                 .show(ui, |ui| if self.ui.slideshow.is_some() { panels::slideshow::show(self, ui) } else { panels::detail::show(self, ui) });
+            self.fullscreen_touch_controls(&ctx);
             panels::second::show(self, &ctx);
             panels::notices::show(self, &ctx);
             panels::dialogs::show(self, &ctx);
@@ -1452,12 +1532,33 @@ impl LightcraftApp {
         }
         // Order matters: earlier panels take the full edge (top bar spans the window; the tool strip,
         // right panels and left panel run to the bottom; the bottom bar sits between them).
-        panels::topbar::show(self, ui);
-        panels::library_problem::banner(self, ui);
-        panels::strip::show(self, ui);
-        // filled: the gaps the dock leaves between its panes show chrome, not the dark clear colour
-        let chrome = theme::Tokens::get(&ctx).chrome;
-        egui::CentralPanel::default().frame(egui::Frame::NONE.fill(chrome)).show(ui, |ui| docking::show(self, ui));
+        if panels::compact::is_compact(&ctx) {
+            panels::compact::show(self, ui);
+            let t = theme::Tokens::get(&ctx);
+            let bg = if matches!(
+                self.ui.view,
+                state::ViewMode::Detail | state::ViewMode::Compare | state::ViewMode::Survey | state::ViewMode::Reference
+            ) {
+                t.canvas
+            } else {
+                t.grid_bg
+            };
+            egui::CentralPanel::default().frame(egui::Frame::NONE.fill(bg)).show(ui, |ui| match self.ui.view {
+                state::ViewMode::PhotoGrid | state::ViewMode::SquareGrid => panels::grid::show(self, ui),
+                state::ViewMode::Detail => panels::detail::show(self, ui),
+                state::ViewMode::Compare => panels::compare::show_compare(self, ui),
+                state::ViewMode::Survey => panels::compare::show_survey(self, ui),
+                state::ViewMode::Reference => panels::compare::show_reference(self, ui),
+                state::ViewMode::People => panels::people::show(self, ui),
+            });
+        } else {
+            panels::topbar::show(self, ui);
+            panels::library_problem::banner(self, ui);
+            panels::strip::show(self, ui);
+            // filled: the gaps the dock leaves between its panes show chrome, not the dark clear colour
+            let chrome = theme::Tokens::get(&ctx).chrome;
+            egui::CentralPanel::default().frame(egui::Frame::NONE.fill(chrome)).show(ui, |ui| docking::show(self, ui));
+        }
         self.lights_out(&ctx);
         panels::second::show(self, &ctx);
         panels::notices::show(self, &ctx);
@@ -2157,6 +2258,21 @@ mod cache_tests {
     }
 }
 
+/// egui-winit reports a lifted finger (or pencil) as a button release and a `PointerGone` in the
+/// same frame, so in the frame where the tap becomes a click the pointer has no position, and
+/// whatever checks where a click landed by hover misses taps: egui's menus close after a click on
+/// an item only when it's hovered, so a tapped submenu item left the menu open. Hold a
+/// `PointerGone` that follows a release back to the next frame (`deferred`); the caller repaints.
+pub(crate) fn defer_touch_pointer_gone(deferred: &mut bool, raw: &mut egui::RawInput) {
+    if std::mem::take(deferred) {
+        raw.events.insert(0, egui::Event::PointerGone);
+    }
+    let Some(release) = raw.events.iter().rposition(|e| matches!(e, egui::Event::PointerButton { pressed: false, .. })) else { return };
+    if let Some(gone) = raw.events.iter().rposition(|e| matches!(e, egui::Event::PointerGone)).filter(|g| *g > release) {
+        raw.events.remove(gone);
+        *deferred = true;
+    }
+}
 #[cfg(test)]
 mod tests_model_setup;
 

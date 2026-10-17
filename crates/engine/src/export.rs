@@ -1220,6 +1220,9 @@ impl ExportOptions {
 
 /// Unsharp mask on an 8-bit image (separable box-blur approximation of a small Gaussian).
 pub fn output_sharpen(img: &mut Rgba8, target: SharpenFor, amount: SharpenAmount) {
+    if target == SharpenFor::None {
+        return;
+    }
     let src: Vec<[f32; 3]> = img.data.iter().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect();
     if let Some(out) = unsharp(img.width, img.height, &src, target, amount) {
         for (p, v) in img.data.iter_mut().zip(out) {
@@ -1232,6 +1235,9 @@ pub fn output_sharpen(img: &mut Rgba8, target: SharpenFor, amount: SharpenAmount
 
 /// [`output_sharpen`] on a high-bit-depth image (float images are sharpened in linear light).
 pub fn output_sharpen_deep(img: &mut DeepImage, target: SharpenFor, amount: SharpenAmount) {
+    if target == SharpenFor::None {
+        return;
+    }
     let (w, h) = (img.width, img.height);
     match &mut img.samples {
         DeepSamples::U16(v) => {
@@ -1304,13 +1310,15 @@ pub fn encode_image(img: &Rgba8, o: &ExportOptions) -> Result<Vec<u8>, String> {
 
 /// Like [`encode_image`], embedding `meta` (already filtered by the policy) as EXIF + XMP.
 pub fn encode_with_metadata(img: &Rgba8, o: &ExportOptions, meta: Option<&Metadata>) -> Result<Vec<u8>, String> {
-    let img = finish_8bit(img, o);
     let space = o.effective_space();
+    // a copy only to sharpen or watermark (a full-size 8-bit image is 4 bytes a pixel)
+    let edited = (o.sharpen != SharpenFor::None || o.watermark.is_some()).then(|| finish_8bit(img, o));
+    let img = edited.as_ref().unwrap_or(img);
     let profile = icc::write_named(named_space(space));
     let exif = meta.map(lightcraft_meta::write_exif);
     let xmp = meta.map(|m| lightcraft_meta::write_xmp(m, None));
     let meta = EncodeMeta { icc: Some(&profile), exif: exif.as_deref(), xmp: xmp.as_deref(), ppi: Some(o.ppi) };
-    let e = EncodeImage::rgba8(&img);
+    let e = EncodeImage::rgba8(img);
     let r = match o.format {
         ExportFormat::Jpeg => {
             // 4:4:4 normally; 4:2:0 when targeting a file size (much smaller at equal visual quality).
@@ -1545,6 +1553,35 @@ pub struct Exported {
 }
 
 /// Output size of photo `p` under `o` (its cropped full size when `o.resize` is `None`).
+/// [`output_size`] scaled down, if need be, to at most `max_pixels` (0: no limit); the second
+/// value is the size it was reduced from.
+pub fn output_size_within(p: &lightcraft_catalog::Photo, o: &ExportOptions, max_pixels: usize) -> ((usize, usize), Option<(usize, usize)>) {
+    let (w, h) = output_size(p, o);
+    match crate::media::capped_size(w, h, max_pixels) {
+        Some(fit) => (fit, Some((w, h))),
+        None => ((w, h), None),
+    }
+}
+
+/// Whether photo `p` can be exported under `o` at its full output size by rendering it tile by
+/// tile ([`lightcraft_pipeline::tiled`]) within `max_pixels` (source and output).
+pub fn tiles_fit(p: &lightcraft_catalog::Photo, o: &ExportOptions, max_pixels: usize) -> bool {
+    let (w, h) = output_size(p, o);
+    let src = p.width as usize * p.height as usize;
+    let (nw, nh) = lightcraft_pipeline::native_output_size(p.width.max(1) as usize, p.height.max(1) as usize, &p.develop);
+    let req = lightcraft_pipeline::RenderRequest {
+        space: o.effective_space(),
+        depth: o.effective_depth(),
+        ..lightcraft_pipeline::RenderRequest::fit(w, h)
+    };
+    max_pixels > 0
+        && w * h <= max_pixels
+        && src <= max_pixels
+        // tiles don't downscale (a prefilter reads the whole image): near the source's own size
+        && nw.max(nh) <= 1.25 * w.max(h) as f64
+        && lightcraft_pipeline::tiled::supported(&p.develop, &req)
+}
+
 pub fn output_size(p: &lightcraft_catalog::Photo, o: &ExportOptions) -> (usize, usize) {
     let (w, h) = lightcraft_pipeline::native_output_size(p.width.max(1) as usize, p.height.max(1) as usize, &p.develop);
     // whole pixels first: a crop's float noise (5999.999… for 6000) must not decide a half-pixel tie
@@ -1567,6 +1604,9 @@ pub fn export_photo(session: &mut crate::Session, id: lightcraft_catalog::PhotoI
 pub struct PreparedExport {
     pub photo: lightcraft_catalog::PhotoId,
     pub file_name: String,
+    /// The size it would have had, when the host's working-resolution cap
+    /// ([`crate::media::MediaCache::max_working_pixels`]) made it smaller.
+    pub reduced_from: Option<(usize, usize)>,
     /// The folder of the photo's original on disk ([`DestinationMode::SameAsOriginal`]); `None`
     /// for a demo photo or one in the browser's storage.
     pub source_dir: Option<String>,
@@ -1642,19 +1682,30 @@ fn prepare_guarded(
         o
     };
     let (full_px, long) = ((p.width as usize).saturating_mul(p.height as usize), p.width.max(p.height) as usize);
+    let mut reduced_from = None;
     let (work, weight) = if o.format.is_rendered() {
-        let (w, h) = output_size(p, o);
+        let ((w, h), from) = output_size_within(p, o, session.media.max_working_pixels);
+        let tiled = from.filter(|_| tiles_fit(p, o, session.media.max_tiled_pixels));
+        reduced_from = from.filter(|_| tiled.is_none());
+        let (w, h) = tiled.unwrap_or((w, h));
         let (nw, nh) = lightcraft_pipeline::native_output_size(p.width.max(1) as usize, p.height.max(1) as usize, &p.develop);
         let native_px = (nw.round().max(1.0) * nh.round().max(1.0)) as usize;
         let label = p.file_name.clone();
         let meta = export_metadata(p, &session.catalog, o);
         let gain_map = o.hdr_output() && o.format == ExportFormat::Jpeg;
-        let job = session.export_job(id, w, h, o.effective_space(), o.effective_depth())?;
+        let tiled_photo = tiled.map(|_| p.clone());
+        let mut job = session.export_job(id, w, h, o.effective_space(), o.effective_depth())?;
+        let mut hdr_job = if gain_map { Some(session.export_job(id, w, h, o.effective_space(), OutputDepth::F32Hdr)?) } else { None };
+        if let Some(p) = &tiled_photo {
+            tile_job(&mut job, &mut session.media, p, o);
+            if let Some(j) = &mut hdr_job {
+                tile_job(j, &mut session.media, p, o);
+            }
+        }
         let weight = render_weight(full_px, long, job.level, w.saturating_mul(h));
         if let Some(why) = too_big_for_memory((w, h), native_px, weight, crate::memory::total_ram()) {
             return Err(format!("{label}: {why}"));
         }
-        let hdr_job = if gain_map { Some(session.export_job(id, w, h, o.effective_space(), OutputDepth::F32Hdr)?) } else { None };
         (Work::Render(Box::new(RenderWork { job, hdr_job, meta, opts: o.clone() })), weight)
     } else {
         let lightcraft_catalog::Source::File { path } = &p.source else {
@@ -1679,7 +1730,22 @@ fn prepare_guarded(
         };
         (work, weight)
     };
-    Ok(PreparedExport { photo: id, file_name, source_dir, work, guard, weight })
+    Ok(PreparedExport { photo: id, file_name, source_dir, reduced_from, work, guard, weight })
+}
+
+/// Make `job` render tile by tile from `p`'s original at full size: an export over the working
+/// cap (the cap is for whole renders), with the denoised picture the export asked for, if any.
+fn tile_job(job: &mut crate::media::RenderJob, media: &mut crate::media::MediaCache, p: &lightcraft_catalog::Photo, o: &ExportOptions) {
+    let denoise = match &job.source {
+        crate::media::SourceRef::File { denoise, .. } => denoise.clone(),
+        _ => None,
+    };
+    job.source = media.source_ref_within(p, crate::media::SourceLevel::Full, media.max_tiled_pixels);
+    if let (crate::media::SourceRef::File { denoise: d, .. }, Some(wanted)) = (&mut job.source, denoise) {
+        *d = Some(wanted);
+    }
+    job.tiled = true;
+    job.tiled_gpu = tiles_fit(p, o, media.max_gpu_tiled_pixels);
 }
 
 /// The folder a photo's original is in, for [`DestinationMode::SameAsOriginal`]. None for a demo
@@ -2001,12 +2067,13 @@ fn run_batch_with(
             if !progress(i, &item.file_name) {
                 break;
             }
-            let (photo, name, guard, source_dir) = (item.photo, item.file_name.clone(), item.guard.clone(), item.source_dir.clone());
-            placer.place(photo, name, source_dir.as_deref(), &guard, run_gated(item))?;
+            let (photo, name, guard, source_dir, reduced_from) =
+                (item.photo, item.file_name.clone(), item.guard.clone(), item.source_dir.clone(), item.reduced_from);
+            placer.place(photo, name, source_dir.as_deref(), &guard, reduced_from, run_gated(item))?;
         }
         return Ok(std::mem::take(&mut placer.out));
     }
-    let heads: Vec<_> = items.iter().map(|i| (i.photo, i.file_name.clone(), i.guard.clone(), i.source_dir.clone())).collect();
+    let heads: Vec<_> = items.iter().map(|i| (i.photo, i.file_name.clone(), i.guard.clone(), i.source_dir.clone(), i.reduced_from)).collect();
     let queue = Queue {
         lane: std::sync::Mutex::new(Lane { items: items.into_iter().map(Some).collect(), next: 0, placed: 0, stop: false, done: Default::default() }),
         cv: std::sync::Condvar::new(),
@@ -2021,12 +2088,12 @@ fn run_batch_with(
             }
         }
         let placed = || {
-            for (i, (photo, name, guard, source_dir)) in heads.into_iter().enumerate() {
+            for (i, (photo, name, guard, source_dir, reduced_from)) in heads.into_iter().enumerate() {
                 if !progress(i, &name) {
                     break;
                 }
                 let e = queue.result(i);
-                placer.place(photo, name, source_dir.as_deref(), &guard, e)?;
+                placer.place(photo, name, source_dir.as_deref(), &guard, reduced_from, e)?;
             }
             Ok::<_, String>(())
         };
@@ -2186,14 +2253,16 @@ impl<'a> Placer<'a> {
         Ok(if self.o.subfolder.is_empty() { base } else { join_path(&base, &self.o.subfolder) })
     }
 
-    /// Place photo `photo`'s export result (file `name`, its original in `source_dir`): write it
-    /// and record the outcome. `Err` only when it failed and `stop_on_error` is set.
+    /// Place photo `photo`'s export result (file `name`, its original in `source_dir`;
+    /// `reduced_from`: see [`PreparedExport::reduced_from`]): write it and record the outcome.
+    /// `Err` only when it failed and `stop_on_error` is set.
     fn place(
         &mut self,
         photo: lightcraft_catalog::PhotoId,
         name: String,
         source_dir: Option<&str>,
         guard: &crate::originals::OriginalGuard,
+        reduced_from: Option<(usize, usize)>,
         e: Result<Exported, String>,
     ) -> Result<(), String> {
         use serde_json::json;
@@ -2257,6 +2326,10 @@ impl<'a> Placer<'a> {
                 let mut entry = json!({"path": path, "width": e.width, "height": e.height, "bytes": e.bytes.len(), "sidecars": sidecars});
                 if let Some(why) = &e.gpu_fallback {
                     entry["gpuFallback"] = json!(why);
+                }
+                if let Some((w, h)) = reduced_from {
+                    // smaller than asked, to fit the host's working-resolution cap
+                    entry["reducedFrom"] = json!([w, h]);
                 }
                 self.out.push(entry);
             }

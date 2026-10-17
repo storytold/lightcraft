@@ -98,12 +98,13 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             continue;
         }
         let gap = 8.0;
-        let cw = ((ui.available_width() - 44.0 - gap * (COLUMNS as f32 - 1.0)) / COLUMNS as f32).max(40.0);
+        // within the panel's 24 / 22 pt margins
+        let cw = ((ui.available_width() - 24.0 - 22.0 - gap * (COLUMNS as f32 - 1.0)) / COLUMNS as f32).max(40.0);
         let th = (cw * 0.75).round();
         for row in list.chunks(COLUMNS) {
             let (rr, _) = ui.allocate_exact_size(vec2(ui.available_width(), th + 30.0), Sense::hover());
             for (i, p) in row.iter().enumerate() {
-                let cell = Rect::from_min_size(pos2(rr.left() + 22.0 + i as f32 * (cw + gap), rr.top()), vec2(cw, th + 24.0));
+                let cell = Rect::from_min_size(pos2(rr.left() + 24.0 + i as f32 * (cw + gap), rr.top()), vec2(cw, th + 24.0));
                 cell_ui(app, ui, &d, id, tag, p, cell, th);
             }
         }
@@ -175,12 +176,13 @@ fn cell_ui(
     // cut short (with …) to the cell, so it never runs into its neighbour; the full name on hover
     let g = one_line(painter, crate::i18n::profile_label(p_id, p_name), t.font(12.0), name_color, cell.width() - 2.0);
     painter.galley(pos2(cell.left() + 2.0, thumb.bottom() + 12.0 - g.size().y / 2.0), g, name_color);
-    // favourite star (always shown when set, on hover otherwise)
+    // favourite star (always shown when set or on a touch screen, where a tap there toggles it; on
+    // hover otherwise)
     let fav = app.session.profile_favorites.iter().any(|f| f == p_id);
     let star = Rect::from_center_size(pos2(thumb.right() - 13.0, thumb.top() + 13.0), vec2(20.0, 20.0));
     register(ui.ctx(), format!("profileStar:{}{}", if tag.is_empty() { "" } else { "fav:" }, p_id), star);
     let over_star = resp.hover_pos().is_some_and(|q| star.contains(q));
-    if fav || resp.hovered() {
+    if fav || resp.hovered() || crate::widgets::touch_screen(ui.ctx()) {
         painter.circle_filled(star.center(), 10.0, Color32::from_black_alpha(110));
         paint(painter, star.shrink(4.0), if fav { Icon::StarFilled } else { Icon::Star }, if fav || over_star { t.star } else { Color32::WHITE });
     }

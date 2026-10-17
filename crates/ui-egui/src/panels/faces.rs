@@ -286,7 +286,7 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     }
     ui.add_space(6.0);
     ui.horizontal(|ui| {
-        let can = app.services.pick_model_file.is_some();
+        let can = app.services.pick_model_file.is_some() || app.services.picker.is_some();
         let r = ui.add_enabled(can, egui::Button::new(crate::i18n::tr("Add a model file…")));
         register(ui.ctx(), "faces:addModel", r.rect);
         if r.clicked() {

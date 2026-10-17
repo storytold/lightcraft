@@ -1,10 +1,11 @@
 # Hardware parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (pen pressure for brush masks; monitor profile from colord on Linux); previously major (created from the code, gpu-pipeline.md and the parity checklist) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (iOS / Android shells: Apple Pencil, touch screens; earlier: pen pressure for brush masks; monitor profile from colord on Linux); previously major (created from the code, gpu-pipeline.md and the parity checklist) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 What Lightroom does with the machine's hardware, per platform, and what LightCraft does. Sources:
 [gpu-pipeline.md](gpu-pipeline.md), [display-profiles.md](display-profiles.md), [denoise.md](denoise.md),
-[ai-masks.md](ai-masks.md), `crates/gpu`, `crates/engine/src/devices.rs`, `crates/ui-egui/src/panels/second.rs`.
+[ai-masks.md](ai-masks.md), `crates/gpu`, `crates/engine/src/devices.rs`, `crates/ui-egui/src/panels/second.rs`,
+[`apps/lightcraft-mobile`](../apps/lightcraft-mobile/README.md) (iOS / iPadOS and Android shells, built from source).
 
 | Feature | Target | LightCraft: macOS | Windows | Linux / BSD | Web | Status |
 |---|---|---|---|---|---|---|
@@ -14,7 +15,8 @@ What Lightroom does with the machine's hardware, per platform, and what LightCra
 | HDR (EDR) display | ✅ (macOS EDR, Windows HDR) | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ (LR-VIEW-HDR-DISPLAY) |
 | Monitor profile | automatic per display, follows the window | ✅ the screen's profile, followed across screens | 🟡 picked by hand (WCS needs FFI) | 🟡 colord's profile (one display, or all sharing one); no follow across monitors | — | 🟡 Windows OS profile not read; Linux per-monitor follow missing |
 | Second window / second monitor | ✅ (Classic) | ✅ (⌘F11) | ✅ | ✅ | — | ✅ (Classic secondary-window keys missing) |
-| Pen pressure / tilt (brush masks) | ✅ pressure for size / flow | ⬜ winit reports no tablet pressure on macOS | 🟡 pen force from winit touch events (untested on a tablet) | ⬜ winit has no X11 / Wayland tablet input | 🟡 pointer-event force where winit passes it | 🟡 brush size and flow follow pen pressure wherever egui gets a touch force (Brush ▸ Pen Pressure); no tilt; macOS / Linux tablets wait on winit |
+| Pen pressure / tilt (brush masks) | ✅ pressure for size / flow | ⬜ winit reports no tablet pressure on macOS | 🟡 pen force from winit touch events (untested on a tablet) | ⬜ winit has no X11 / Wayland tablet input | 🟡 pointer-event force where winit passes it | 🟡 brush size and flow follow pen pressure wherever egui gets a touch force (Brush ▸ Pen Pressure); no tilt; macOS / Linux tablets wait on winit; on iPad (iOS shell) the Apple Pencil too, whose double tap swaps Add / Erase |
+| Touch screens (phones, tablets) | Lightroom mobile apps | — | — | — | — | 🟡 iOS / iPadOS and Android: compact phone layout, finger-sized controls, swipe, touch scrolling, soft keyboards, iPad keyboard and trackpad (`apps/lightcraft-mobile`); not packaged or released |
 | Trackpad gestures | pinch zoom, pan | ✅ pinch, two-finger pan | 🟡 (winit) | 🟡 | 🟡 | ✅ on macOS |
 | Card readers / cameras as import sources | ✅ (devices panel, eject after import) | ✅ mounted volumes with DCIM | ✅ | ✅ | — | 🟡 no eject-after-import check, no MTP / PTP phones |
 | Tethered capture | ✅ Classic (Canon, Nikon, Sony, Leica) | ⬜ | ⬜ | ⬜ | — | ⬜ |

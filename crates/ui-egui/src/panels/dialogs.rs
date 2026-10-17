@@ -276,9 +276,9 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
     }
     .to_string();
     let frame = egui::Frame::window(&ctx.global_style()).inner_margin(egui::Margin::symmetric(16, 12));
-    // The import review can be resized (its photo grid takes the room); it keeps a window id of its
-    // own so the size it is given doesn't carry over to the other dialogs. Its content scrolls
-    // rather than growing the window when the options below the grid get taller (e.g. Copy).
+    // The import review takes most of the screen (its photo grid and options column scroll on
+    // their own) and can be resized on the desktop; it keeps a window id of its own so the size
+    // it is given doesn't carry over to the other dialogs.
     let import = matches!(dlg, Dialog::Import { .. });
     // The Print dialog sizes itself to the window and scrolls its settings column on its own.
     let print = matches!(dlg, Dialog::Print);
@@ -299,16 +299,14 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
     let widest = if settings { ctx.data(|d| d.get_temp::<f32>(widest_id)).unwrap_or(0.0).min(screen.width() * 0.9) } else { 0.0 };
     let mut content_w = 0.0f32;
     let mut body_h = None;
-    let shown = egui::Window::new(crate::i18n::tr(&title)).id(window_id)
+    let window = egui::Window::new(crate::i18n::tr(&title))
+        .id(window_id)
         .collapsible(false)
-        .resizable(import)
-        .vscroll(import)
-        .resize(|r| if import { r.default_height(crate::import::DIALOG_SIZE[1]) } else { r })
+        .resizable(import && !crate::panels::compact::is_compact(ctx))
         .frame(frame)
         .anchor(if settings { egui::Align2::CENTER_TOP } else { egui::Align2::CENTER_CENTER }, [0.0, if settings { top } else { 0.0 }])
         .min_width(widest)
         .default_width(match dlg {
-            Dialog::Import { .. } => crate::import::DIALOG_SIZE[0],
             Dialog::SmartRules { .. } => 680.0,
             Dialog::AllMetadata { .. } => 620.0,
             Dialog::Print => 1100.0,
@@ -316,7 +314,18 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
             Dialog::LightroomCatalog { .. } => 440.0,
             Dialog::ManageEffects { .. } => 560.0,
             _ => 380.0,
-        })
+        });
+    let window = if import {
+        // inside the frame's margins and title bar
+        let area = ctx.content_rect().shrink(8.0);
+        let size = crate::import::window_size(area.size()) - egui::vec2(32.0, 64.0);
+        let window = window.vscroll(false).constrain_to(area).max_size(area.size() - egui::vec2(32.0, 64.0));
+        if crate::panels::compact::is_compact(ctx) { window.fixed_size(size) } else { window.default_size(size) }
+    } else {
+        crate::panels::compact::dialog(ctx, window)
+    };
+    let mut import_pressed = None;
+    let shown = window
         .show(ctx, |ui| {
             ui.spacing_mut().item_spacing.y = 8.0;
             body_h = dialog_body(ui, (!import && !print).then_some(title.as_str()), body_max, |ui| match &mut dlg {
@@ -599,7 +608,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     let (preview, total) = rename_preview(app, ui.ctx(), template, *start as usize);
                     match &preview {
                         Some(rows) => {
-                            egui::Grid::new("rename-preview").num_columns(3).spacing([8.0, 2.0]).show(ui, |ui| {
+                            egui::Grid::new("rename-preview").num_columns(3).spacing([8.0, 2.0]).min_col_width(0.0).show(ui, |ui| {
                                 for pl in rows {
                                     ui.label(egui::RichText::new(&pl.from).color(t.text_dim));
                                     let (arrow, _) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
@@ -924,10 +933,13 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                         if graphic {
                             field(ui, "Graphic", |ui| {
                                 trailing_button_row(ui, |ui| {
-                                    if app.services.pick_files.is_some()
+                                    if crate::pick::can_ask_field(app, app.services.pick_files.is_some())
                                         && crate::widgets::text_button(ui, "exportWmChoose", crate::i18n::tr("Choose…"), false).clicked()
-                                        && let Some(f) = app.services.pick_files.as_mut().and_then(|pick| pick().into_iter().next())
                                     {
+                                        let req = crate::pick::PickRequest::file(crate::i18n::tr("Graphic"), crate::i18n::tr("Photos"), WM_GRAPHICS);
+                                        crate::pick::ask_field(app, "exportWmChoose", req, |s| s.pick_files.as_mut().map(|pick| pick()));
+                                    }
+                                    if let Some(f) = crate::pick::field_answer(app, ui.ctx(), "exportWmChoose").and_then(|p| p.into_iter().next()) {
                                         wm.image = f;
                                     }
                                     crate::widgets::named(ui.add(egui::TextEdit::singleline(&mut wm.image).hint_text("logo.png").desired_width(ui.available_width())), crate::i18n::tr("Image"));
@@ -1082,7 +1094,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     });
                 }
                 Dialog::Merge { opts } => crate::merge::body(app, ui, opts),
-                Dialog::Import { opts } => crate::import::body(app, ui, opts),
+                Dialog::Import { opts } => import_pressed = crate::import::body(app, ui, opts),
                 Dialog::Settings { tab } => crate::panels::settings::body(app, ui, tab),
                 Dialog::SamModel { error, .. } => sam_model_body(app, ui, error.as_deref()),
                 Dialog::KeywordTag {
@@ -1266,7 +1278,8 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     );
                 }
                 Dialog::About => {
-                    ui.set_min_width(680.0);
+                    // (the phone's width on a phone, as Settings does)
+                    ui.set_min_width(crate::panels::compact::dialog_width(ui.ctx(), 680.0, 16.0));
                     let tab_id = egui::Id::new("about_tab");
                     let mut tab = ui.data_mut(|d| d.get_temp::<u8>(tab_id)).unwrap_or(0);
                     ui.horizontal(|ui| {
@@ -1317,6 +1330,10 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                 Dialog::Shortcuts => crate::panels::keymap::body(app, ui, &t),
                 Dialog::Print => crate::print_view::body(app, ui, &t),
             });
+            // (the import review draws its own buttons, beside or under its photos)
+            if import {
+                return;
+            }
             ui.add_space(4.0);
             // the confirm on the right with Cancel to its left (macOS and GNOME's order), filled with
             // the accent when it is the dialog's primary action. The row spans the width the window
@@ -1339,14 +1356,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     Dialog::LightroomResult { .. } => "Close",
                     _ => "Cancel",
                 };
-                let add_label;
                 let ok = match &dlg {
-                    Dialog::Import { opts } => {
-                        let n = opts.selected_paths().len();
-                        let verb = if opts.copy && opts.move_files { "Move" } else { "Import" };
-                        add_label = crate::i18n::tr_format!("{verb} {n} Photo{}", if n == 1 { "" } else { "s" }, verb = crate::i18n::tr(verb), n = n);
-                        add_label.as_str()
-                    }
                     Dialog::LightroomResult { first: Some(_), .. } => "Show in Library",
                     Dialog::ContactSheet { .. } => "Choose PDF…",
                     Dialog::SlideshowExport { .. } => "Export…",
@@ -1426,11 +1436,15 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     }
                 }
             });
-            if import {
-                crate::import::note_dialog_bottom(ui);
-            }
+            // compact layout: a text field the soft keyboard just covered scrolls back into view
+            crate::panels::compact::keep_focus_visible(ui);
             content_w = ui.min_rect().width();
         });
+    match import_pressed {
+        Some(crate::import::Footer::Cancel) => close = true,
+        Some(crate::import::Footer::Import) => confirm = true,
+        None => {}
+    }
     if settings && content_w > widest + 0.5 {
         ctx.data_mut(|d| d.insert_temp(widest_id, content_w));
     }
@@ -2071,6 +2085,9 @@ fn export_size(ui: &mut egui::Ui, full: &mut bool, r: &mut lightcraft_engine::ex
         *ppi = p as u16;
     }
 }
+/// What a graphic watermark can be (a logo; PNG keeps its transparency).
+const WM_GRAPHICS: &[&str] = &["png", "jpg", "jpeg", "webp", "tif", "tiff"];
+
 /// All nine positions supported by both the text and graphic watermark renderer.
 /// Keep them in grid order so bottom-centre and edge-centre anchors are available in Export.
 const WM_POSITIONS: [(lightcraft_engine::export::Anchor, &str); 9] = {
@@ -2088,7 +2105,8 @@ const WM_INSET_Y: ControlSpec =
 
 /// A themed slider row editing `v`; true when it changed.
 fn num(ui: &mut egui::Ui, spec: &ControlSpec, v: &mut f64) -> bool {
-    match crate::widgets::slider(ui, spec, *v, true, None).value {
+    // in line with the dialog's label column (the panels' 24 / 22 pt slider padding indented it)
+    match crate::widgets::slider_padded(ui, spec, *v, true, None, (0.0, 0.0)).value {
         Some(n) => {
             *v = n;
             true
@@ -2154,6 +2172,10 @@ fn slideshow_export_body(app: &mut LightcraftApp, ui: &mut egui::Ui, settings: &
 
 fn field<R>(ui: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
     let t = Tokens::get(ui.ctx());
+    let add = match crate::panels::compact::stacked_row(ui, egui::RichText::new(crate::i18n::tr(label)).color(t.text_label), add) {
+        Ok(r) => return r,
+        Err(add) => add,
+    };
     ui.horizontal(|ui| {
         ui.allocate_ui_with_layout(egui::vec2(LABEL_W, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
             ui.set_min_width(LABEL_W);

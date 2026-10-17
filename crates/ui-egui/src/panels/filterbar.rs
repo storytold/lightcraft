@@ -14,6 +14,10 @@ use crate::widgets::register;
 pub const HEIGHT: f32 = 40.0;
 /// Bar width (points) below which the controls take two rows.
 const WIDE: f32 = 1240.0;
+/// Bar width below which the controls wrap onto as many rows as they need.
+const NARROW: f32 = 760.0;
+/// The most height a wrapped bar takes.
+const WRAPPED_MAX_H: f32 = 400.0;
 
 /// Colour-label swatches (UI colours, our own choice).
 pub use crate::theme::label_color;
@@ -95,108 +99,133 @@ fn picker(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, current: &str, a
 
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
-    // one row when there is room, else the metadata pickers and actions go to a second row
+    // one row when there is room, else the metadata pickers and actions go to a second row; a
+    // narrower bar (a phone) wraps its groups onto as many rows as they need
     let two_rows = ui.available_width() < WIDE;
-    let (bar, _) = ui.allocate_exact_size(vec2(ui.available_width(), if two_rows { 2.0 * HEIGHT - 8.0 } else { HEIGHT }), Sense::hover());
+    let wraps = ui.available_width() < NARROW;
+    let wrapped_id = egui::Id::new("filterbar-wrapped-height");
+    let wrapped_h = ui.ctx().data(|d| d.get_temp::<f32>(wrapped_id)).unwrap_or(2.0 * HEIGHT - 8.0);
+    let height = if wraps {
+        wrapped_h
+    } else if two_rows {
+        2.0 * HEIGHT - 8.0
+    } else {
+        HEIGHT
+    };
+    let (bar, _) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
     ui.painter().rect_filled(bar, 0.0, t.chrome);
     ui.painter().line_segment([bar.left_bottom(), bar.right_bottom()], Stroke::new(1.0, t.divider));
     register(ui.ctx(), "filterbar", bar);
     let f = app.session.filter.clone();
     let row = |ui: &mut egui::Ui, i: f32| {
-        let r = Rect::from_min_size(bar.min + vec2(16.0, 4.0 + i * (HEIGHT - 8.0)), vec2(bar.width() - 32.0, HEIGHT - 8.0));
+        // 20 pt in, in line with the grid's title and the filter chips
+        let r = Rect::from_min_size(bar.min + vec2(20.0, 4.0 + i * (HEIGHT - 8.0)), vec2(bar.width() - 40.0, HEIGHT - 8.0));
         let mut c = ui.new_child(egui::UiBuilder::new().max_rect(r).layout(egui::Layout::left_to_right(egui::Align::Center)));
         c.spacing_mut().item_spacing.x = 4.0;
         c
     };
-    let mut row1 = row(ui, 0.0);
+    let mut row1 = if wraps {
+        let r = Rect::from_min_size(bar.min + vec2(20.0, 4.0), vec2(bar.width() - 40.0, WRAPPED_MAX_H));
+        let mut c = ui.new_child(egui::UiBuilder::new().max_rect(r).layout(egui::Layout::left_to_right(egui::Align::Min).with_main_wrap(true)));
+        c.spacing_mut().item_spacing = vec2(4.0, 2.0);
+        c
+    } else {
+        row(ui, 0.0)
+    };
     let mut row2 = row(ui, 1.0);
     let ui = &mut row1;
 
-    // rating: operator + stars
-    caption(ui, "Rating");
-    let op_label = match f.rating_op {
-        RatingOp::AtLeast => "≥",
-        RatingOp::Exactly => "=",
-        RatingOp::AtMost => "≤",
-    };
-    picker(
-        app,
-        ui,
-        "ratingOp",
-        op_label,
-        false,
-        [("≥  at least", "atLeast", RatingOp::AtLeast), ("=  exactly", "exactly", RatingOp::Exactly), ("≤  at most", "atMost", RatingOp::AtMost)]
-            .into_iter()
-            .map(|(l, k, op)| (l.to_string(), json!({"ratingOp": k}), f.rating_op == op))
-            .collect(),
-    );
-    for i in 1..=5u8 {
-        let (r, resp) = ui.allocate_exact_size(vec2(17.0, 26.0), Sense::click());
-        crate::widgets::announce(&resp, format!("{i} ★"));
-        register(ui.ctx(), format!("filter:star{i}"), r);
-        let filled = i <= f.rating;
-        let c = if filled {
-            t.star
-        } else if resp.hovered() {
-            t.text_label
-        } else {
-            t.icon
+    group(ui, "rating", |ui| {
+        // rating: operator + stars
+        caption(ui, "Rating");
+        let op_label = match f.rating_op {
+            RatingOp::AtLeast => "≥",
+            RatingOp::Exactly => "=",
+            RatingOp::AtMost => "≤",
         };
-        paint(ui.painter(), Rect::from_center_size(r.center(), vec2(14.0, 14.0)), if filled { Icon::StarFilled } else { Icon::Star }, c);
-        if resp.clicked() {
-            filter(app, json!({"rating": if f.rating == i { 0 } else { i }}));
-        }
-    }
-    ui.add_space(14.0);
-
-    // flags (one at a time; click again to clear)
-    caption(ui, "Flag");
-    for (id, icon, flag, tip) in [
-        ("pick", Icon::FlagPick, Flag::Pick, "Picked"),
-        ("reject", Icon::FlagReject, Flag::Reject, "Rejected"),
-        ("none", Icon::Circle, Flag::None, "Unflagged"),
-    ] {
-        let on = f.flag == Some(flag);
-        let color = match flag {
-            Flag::Pick if on => t.pick,
-            Flag::Reject if on => t.reject,
-            _ => Color32::TRANSPARENT,
-        };
-        let resp = toggle(ui, id, on, tip, |p, r, c| paint(p, r, icon, if color == Color32::TRANSPARENT { c } else { color }));
-        if resp.clicked() {
-            filter(app, json!({"flag": if on { Value::Null } else { json!(id) }}));
-        }
-    }
-    ui.add_space(14.0);
-
-    // colour labels
-    caption(ui, "Label");
-    // several labels can be on at once (any of them matches)
-    let mut chosen: Vec<ColorLabel> = f.labels.clone();
-    if let Some(l) = f.label
-        && !chosen.contains(&l)
-    {
-        chosen.push(l);
-    }
-    for l in ColorLabel::ALL {
-        let on = chosen.contains(&l);
-        let name = format!("{l:?}").to_lowercase();
-        let tip = crate::i18n::tr_format!("{} label (click more labels to show any of them)", crate::i18n::color_label(&app.session.catalog, l));
-        let resp = toggle(ui, &format!("label-{name}"), on, &tip, |p, r, _| {
-            p.circle_filled(r.center(), 5.5, label_color(l));
-        });
-        if resp.clicked() {
-            let mut next = chosen.clone();
-            if on {
-                next.retain(|x| *x != l);
+        picker(
+            app,
+            ui,
+            "ratingOp",
+            op_label,
+            false,
+            [("≥  at least", "atLeast", RatingOp::AtLeast), ("=  exactly", "exactly", RatingOp::Exactly), ("≤  at most", "atMost", RatingOp::AtMost)]
+                .into_iter()
+                .map(|(l, k, op)| (l.to_string(), json!({"ratingOp": k}), f.rating_op == op))
+                .collect(),
+        );
+        for i in 1..=5u8 {
+            let (r, resp) = ui.allocate_exact_size(vec2(17.0, 26.0), Sense::click());
+            crate::widgets::announce(&resp, format!("{i} ★"));
+            register(ui.ctx(), format!("filter:star{i}"), r);
+            let filled = i <= f.rating;
+            let c = if filled {
+                t.star
+            } else if resp.hovered() {
+                t.text_label
             } else {
-                next.push(l);
+                t.icon
+            };
+            paint(ui.painter(), Rect::from_center_size(r.center(), vec2(14.0, 14.0)), if filled { Icon::StarFilled } else { Icon::Star }, c);
+            if resp.clicked() {
+                filter(app, json!({"rating": if f.rating == i { 0 } else { i }}));
             }
-            next.sort();
-            let names: Vec<String> = next.iter().map(|x| format!("{x:?}").to_lowercase()).collect();
-            filter(app, json!({"label": Value::Null, "labels": names}));
         }
-    }
+    });
+    ui.add_space(14.0);
+
+    group(ui, "flag", |ui| {
+        // flags (one at a time; click again to clear)
+        caption(ui, "Flag");
+        for (id, icon, flag, tip) in [
+            ("pick", Icon::FlagPick, Flag::Pick, "Picked"),
+            ("reject", Icon::FlagReject, Flag::Reject, "Rejected"),
+            ("none", Icon::Circle, Flag::None, "Unflagged"),
+        ] {
+            let on = f.flag == Some(flag);
+            let color = match flag {
+                Flag::Pick if on => t.pick,
+                Flag::Reject if on => t.reject,
+                _ => Color32::TRANSPARENT,
+            };
+            let resp = toggle(ui, id, on, tip, |p, r, c| paint(p, r, icon, if color == Color32::TRANSPARENT { c } else { color }));
+            if resp.clicked() {
+                filter(app, json!({"flag": if on { Value::Null } else { json!(id) }}));
+            }
+        }
+    });
+    ui.add_space(14.0);
+
+    group(ui, "label", |ui| {
+        // colour labels
+        caption(ui, "Label");
+        // several labels can be on at once (any of them matches)
+        let mut chosen: Vec<ColorLabel> = f.labels.clone();
+        if let Some(l) = f.label
+            && !chosen.contains(&l)
+        {
+            chosen.push(l);
+        }
+        for l in ColorLabel::ALL {
+            let on = chosen.contains(&l);
+            let name = format!("{l:?}").to_lowercase();
+            let tip = crate::i18n::tr_format!("{} label (click more labels to show any of them)", crate::i18n::color_label(&app.session.catalog, l));
+            let resp = toggle(ui, &format!("label-{name}"), on, &tip, |p, r, _| {
+                p.circle_filled(r.center(), 5.5, label_color(l));
+            });
+            if resp.clicked() {
+                let mut next = chosen.clone();
+                if on {
+                    next.retain(|x| *x != l);
+                } else {
+                    next.push(l);
+                }
+                next.sort();
+                let names: Vec<String> = next.iter().map(|x| format!("{x:?}").to_lowercase()).collect();
+                filter(app, json!({"label": Value::Null, "labels": names}));
+            }
+        }
+    });
     ui.add_space(14.0);
 
     // kind + edited
@@ -252,7 +281,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     );
 
     // metadata pickers
-    let ui: &mut egui::Ui = if two_rows { &mut row2 } else { &mut row1 };
+    let ui: &mut egui::Ui = if two_rows && !wraps { &mut row2 } else { &mut row1 };
     let values = app.caches.filter_values(&app.session.catalog);
     let (cameras, lenses, keywords) = (values.cameras.clone(), values.lenses.clone(), values.keywords.clone());
     for (id, key, all_label, current, values) in [
@@ -305,4 +334,29 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             crate::panels::dialogs::prompt(app, "Save Filter Preset", "Preset name", "", "filter.savePreset", json!({}), "name");
         }
     });
+    if wraps {
+        // the rows the groups took, for next frame's bar (one frame late when that changes)
+        let h = (row1.min_rect().height() + 8.0).clamp(HEIGHT, WRAPPED_MAX_H);
+        if (h - wrapped_h).abs() > 0.5 {
+            row1.ctx().data_mut(|d| d.insert_temp(wrapped_id, h));
+            row1.ctx().request_repaint();
+        }
+    }
+}
+
+/// Controls that stay together on one row when a narrow bar wraps: the group asks for its width
+/// as last drawn, so a group that doesn't fit the rest of the row starts the next one.
+fn group(ui: &mut egui::Ui, key: &str, add: impl FnOnce(&mut egui::Ui)) {
+    let id = egui::Id::new(("filterbar-group", key));
+    let last = ui.ctx().data(|d| d.get_temp::<f32>(id));
+    let size = vec2(last.unwrap_or(0.0), ui.spacing().interact_size.y);
+    let r = ui.allocate_ui_with_layout(size, egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        add(ui);
+    });
+    let w = r.response.rect.width();
+    if last.is_none_or(|l| (l - w).abs() > 0.5) {
+        ui.ctx().data_mut(|d| d.insert_temp(id, w));
+        ui.ctx().request_repaint();
+    }
 }

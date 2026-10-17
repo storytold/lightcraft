@@ -613,7 +613,9 @@ fn histogram(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     // row under the plot
     let hdr = hist.as_ref().and_then(|h| h.hdr);
     let legend = if hdr.is_some() { 26.0 } else { 0.0 };
-    let (r, resp) = ui.allocate_exact_size(vec2(w, 118.0 + legend), Sense::click());
+    // lower in the compact layout's sheet, which has little height for the sliders
+    let h = if super::compact::is_compact(ui.ctx()) { 64.0 } else { 118.0 };
+    let (r, resp) = ui.allocate_exact_size(vec2(w, h + legend), Sense::click());
     crate::widgets::announce(&resp, crate::i18n::tr("Histogram"));
     register(ui.ctx(), "histogram", r);
     let p = ui.painter();
@@ -947,7 +949,7 @@ fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, d: &Dev
                     _ => "Blue channel",
                 };
                 let resp = resp.on_hover_text(crate::i18n::tr_format!("{name} — double-click to reset it", name = name));
-                if resp.double_clicked() {
+                if crate::widgets::double_clicked(ui, &resp) {
                     app.ui.curve_channel = ch.into();
                     let _ = app.run("curve.reset", json!({"channel": ch}));
                 } else if resp.clicked() {
@@ -961,8 +963,11 @@ fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, d: &Dev
     });
     let ch = app.ui.curve_channel.clone();
     let w = ui.available_width();
-    let side = (w - 48.0).max(80.0);
-    let (outer, _) = ui.allocate_exact_size(vec2(w, side + 12.0), Sense::hover());
+    // between the panel's 24 / 22 pt margins, like the sliders
+    let side = (w - 24.0 - 22.0).max(80.0);
+    // the parametric curve has its split handles under the graph
+    let handles_h = if ch == "parametric" { SPLIT_HANDLES_H } else { 0.0 };
+    let (outer, _) = ui.allocate_exact_size(vec2(w, side + 12.0 + handles_h), Sense::hover());
     let r = Rect::from_min_size(pos2(outer.left() + 24.0, outer.top() + 6.0), vec2(side, side));
     let resp = ui.interact(r, egui::Id::new(("curve", &ch)), Sense::click_and_drag());
     crate::widgets::announce(&resp, crate::i18n::tr("Tone Curve"));
@@ -988,7 +993,10 @@ fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, d: &Dev
     let to_screen = |x: f64, y: f64| pos2(r.left() + x as f32 * r.width(), r.bottom() - y as f32 * r.height());
     let from_screen = |q: Pos2| (((q.x - r.left()) / r.width()).clamp(0.0, 1.0) as f64, ((r.bottom() - q.y) / r.height()).clamp(0.0, 1.0) as f64);
     if ch == "parametric" {
+        parametric_graph_input(app, ui, &resp, r, d);
+        split_handles(app, ui, r, d);
         // draw the effective parametric curve by sampling the pipeline's region curve approximation
+        let p = ui.painter();
         let c = &d.curve;
         let regions = [
             (0.0, c.split_shadows / 100.0, c.shadows),
@@ -1045,15 +1053,18 @@ fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, d: &Dev
     // the point being dragged (stored as `Option<usize>` so a stale value can be cleared)
     let mut dragging: Option<usize> = ui.data(|dd| dd.get_temp::<Option<usize>>(drag_id)).flatten();
     let nearest = |q: Pos2| pts.iter().enumerate().map(|(i, p)| (i, to_screen(p.x, p.y).distance(q))).min_by(|a, b| a.1.total_cmp(&b.1));
-    let hovered = resp.hover_pos().and_then(nearest).filter(|(_, dist)| *dist < 10.0).map(|(i, _)| i);
-    if dragging.is_some() {
+    let reach = crate::widgets::grab_radius(ui.ctx(), 10.0);
+    let hovered = resp.hover_pos().and_then(nearest).filter(|(_, dist)| *dist < reach).map(|(i, _)| i);
+    // the point being dragged as drawn: none once the finger / button is up (no repaint follows)
+    let live = dragging.filter(|_| !resp.drag_stopped());
+    if live.is_some() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
     } else if hovered.is_some() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
     }
     for (i, q) in pts.iter().enumerate() {
         let c = to_screen(q.x, q.y);
-        if dragging == Some(i) || (dragging.is_none() && hovered == Some(i)) {
+        if live == Some(i) || (live.is_none() && hovered == Some(i)) {
             p.circle_filled(c, 5.5, color);
             p.circle_stroke(c, 5.5, Stroke::new(1.0, t.canvas));
         } else {
@@ -1061,7 +1072,7 @@ fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, d: &Dev
         }
     }
     // input / output readout of the point being dragged (0–255 like the histogram)
-    if let Some(q) = dragging.and_then(|i| pts.get(i)) {
+    if let Some(q) = live.and_then(|i| pts.get(i)) {
         p.text(
             r.left_top() + vec2(6.0, 4.0),
             egui::Align2::LEFT_TOP,
@@ -1071,10 +1082,10 @@ fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, d: &Dev
         );
     }
     let mut new_pts = None;
-    if resp.double_clicked()
+    if crate::widgets::double_clicked(ui, &resp)
         && let Some(q) = resp.interact_pointer_pos()
         && let Some((i, dist)) = nearest(q)
-        && dist < 10.0
+        && dist < reach
         && i != 0
         && i != pts.len() - 1
     {
@@ -1087,7 +1098,7 @@ fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, d: &Dev
         // pick the point under the press, not where the pointer is once the drag threshold passed
         let _ = app.run("develop.beginInteraction", json!({"label": "Tone Curve"}));
         match nearest(q) {
-            Some((i, dist)) if dist < 10.0 => dragging = Some(i),
+            Some((i, dist)) if dist < reach => dragging = Some(i),
             _ => {
                 let (x, y) = from_screen(q);
                 let mut v = pts.clone();
@@ -1130,7 +1141,7 @@ fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, d: &Dev
         }
     } else if resp.clicked()
         && let Some(q) = resp.interact_pointer_pos()
-        && nearest(q).is_none_or(|(_, dist)| dist >= 10.0)
+        && nearest(q).is_none_or(|(_, dist)| dist >= reach)
     {
         let (x, y) = from_screen(q);
         let mut v = pts.clone();
@@ -1150,6 +1161,129 @@ fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, d: &Dev
     curve_footer(app, ui, d);
     control(app, ui, d, "curve.refineSaturation", true);
     let _ = id;
+}
+
+/// Height of the strip under the parametric graph that holds the split handles (a finger's width).
+const SPLIT_HANDLES_H: f32 = 22.0;
+
+/// The parametric region control under graph position `x` (0–1), from the splits.
+fn parametric_region(c: &lightcraft_develop::ToneCurve, x: f64) -> (&'static str, f64, f64) {
+    let (s, m, h) = (c.split_shadows / 100.0, c.split_mid / 100.0, c.split_highlights / 100.0);
+    if x < s {
+        ("curve.shadows", 0.0, s)
+    } else if x < m {
+        ("curve.darks", s, m)
+    } else if x < h {
+        ("curve.lights", m, h)
+    } else {
+        ("curve.highlights", h, 1.0)
+    }
+}
+
+/// Parametric graph by mouse, touch or pencil: a drag up or down adjusts the region the press
+/// landed in (the whole height of the graph is the slider's full range), with one undo step per
+/// drag. The region under the pointer is shaded, and the value shows while dragging.
+fn parametric_graph_input(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, r: Rect, d: &DevelopSettings) {
+    let t = Tokens::get(ui.ctx());
+    let x_of = |q: Pos2| (((q.x - r.left()) / r.width()).clamp(0.0, 1.0)) as f64;
+    // (control, value at the press, y of the press) while a drag is in progress
+    let drag_id = egui::Id::new("curve-parametric-drag");
+    let mut drag: Option<(String, f64, f32)> = ui.data(|dd| dd.get_temp::<Option<(String, f64, f32)>>(drag_id)).flatten();
+    if resp.drag_started()
+        && let Some(q) = ui.input(|i| i.pointer.press_origin()).or(resp.interact_pointer_pos())
+    {
+        let (ctl, ..) = parametric_region(&d.curve, x_of(q));
+        let v = controls::get(d, ctl).unwrap_or(0.0);
+        let _ = app.run("develop.beginInteraction", json!({"label": "Tone Curve"}));
+        drag = Some((ctl.to_string(), v, q.y));
+    } else if resp.dragged()
+        && let (Some((ctl, v0, y0)), Some(q)) = (&drag, resp.interact_pointer_pos())
+        && let Some(spec) = controls::find(ctl)
+    {
+        let span = spec.max - spec.min;
+        let nv = (v0 + f64::from(y0 - q.y) / f64::from(r.height().max(1.0)) * span).round().clamp(spec.min, spec.max);
+        if (nv - controls::get(d, ctl).unwrap_or(0.0)).abs() > 1e-9 {
+            let _ = app.run("develop.set", json!({"control": ctl, "value": nv}));
+        }
+    }
+    // the finger / button is up: no more readout (no repaint follows the release)
+    let stopped = resp.drag_stopped() && drag.is_some();
+    if stopped {
+        drag = None;
+        let _ = app.run("develop.endInteraction", json!({}));
+    }
+    let shown = drag.as_ref().map(|(ctl, ..)| ctl.clone()).or_else(|| resp.hover_pos().map(|q| parametric_region(&d.curve, x_of(q)).0.to_string()));
+    if let Some(ctl) = shown {
+        // the band of that region (from the splits), shaded
+        let probe = match ctl.as_str() {
+            "curve.shadows" => 0.0,
+            "curve.darks" => d.curve.split_shadows / 100.0,
+            "curve.lights" => d.curve.split_mid / 100.0,
+            _ => 1.0,
+        };
+        let (_, lo, hi) = parametric_region(&d.curve, probe);
+        let band = Rect::from_x_y_ranges(r.left() + lo as f32 * r.width()..=r.left() + hi as f32 * r.width(), r.y_range());
+        ui.painter().rect_filled(band, 0.0, Color32::from_white_alpha(14));
+        if drag.is_some()
+            && let Some(spec) = controls::find(&ctl)
+        {
+            let v = controls::get(d, &ctl).unwrap_or(0.0);
+            let text = format!("{}  {}{v:.0}", crate::i18n::tr(spec.label), if v > 0.0 { "+" } else { "" });
+            ui.painter().text(r.left_top() + vec2(6.0, 4.0), egui::Align2::LEFT_TOP, text, t.font(11.0), t.text_dim);
+        }
+    }
+    ui.data_mut(|dd| dd.insert_temp(drag_id, drag));
+}
+
+/// The three split handles under the parametric graph (shadows / midtones / highlights): drag one
+/// sideways to move that split (it stays between its neighbours), double-click or double-tap to
+/// reset it.
+fn split_handles(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect, d: &DevelopSettings) {
+    let t = Tokens::get(ui.ctx());
+    const SPLITS: [(&str, &str); 3] = [("shadows", "curve.splitShadows"), ("mid", "curve.splitMid"), ("highlights", "curve.splitHighlights")];
+    let strip = Rect::from_min_size(pos2(r.left(), r.bottom() + 4.0), vec2(r.width(), SPLIT_HANDLES_H));
+    let values = [d.curve.split_shadows, d.curve.split_mid, d.curve.split_highlights];
+    let x_of = |v: f64| r.left() + (v / 100.0) as f32 * r.width();
+    let drag_id = egui::Id::new("curve-split-drag");
+    let mut dragging: Option<usize> = ui.data(|dd| dd.get_temp::<Option<usize>>(drag_id)).flatten();
+    for (i, (name, ctl)) in SPLITS.iter().enumerate() {
+        let x = x_of(values[i]);
+        let hit = Rect::from_center_size(pos2(x, strip.center().y), vec2(SPLIT_HANDLES_H, SPLIT_HANDLES_H));
+        let id = egui::Id::new(("curve-split", *name));
+        let resp = ui.interact(hit, id, Sense::click_and_drag());
+        register(ui.ctx(), format!("curveSplit:{name}"), hit);
+        let Some(spec) = controls::find(ctl) else { continue };
+        let resp = resp.on_hover_text(crate::i18n::tr_format!("{name} — double-click to reset it", name = crate::i18n::tr(spec.label)));
+        if crate::widgets::double_clicked(ui, &resp) {
+            let _ = app.run("develop.set", json!({"control": ctl, "value": spec.default}));
+        } else if resp.drag_started() {
+            let _ = app.run("develop.beginInteraction", json!({"label": spec.label}));
+            dragging = Some(i);
+        } else if resp.dragged()
+            && dragging == Some(i)
+            && let Some(q) = resp.interact_pointer_pos()
+        {
+            // between the neighbouring splits (5 apart) and within the control's range
+            let lo = if i == 0 { spec.min } else { (values[i - 1] + 5.0).max(spec.min) };
+            let hi = values.get(i + 1).map_or(spec.max, |n| (n - 5.0).min(spec.max));
+            let nv = (f64::from((q.x - r.left()) / r.width().max(1.0)) * 100.0).round().clamp(lo, hi.max(lo));
+            if (nv - values[i]).abs() > 1e-9 {
+                let _ = app.run("develop.set", json!({"control": ctl, "value": nv}));
+            }
+        }
+        if resp.drag_stopped() && dragging == Some(i) {
+            dragging = None;
+            let _ = app.run("develop.endInteraction", json!({}));
+        }
+        let active = dragging == Some(i) || resp.hovered();
+        let c = if active { t.text } else { t.icon };
+        let top = strip.top() + 4.0;
+        ui.painter().add(egui::Shape::convex_polygon(vec![pos2(x, top), pos2(x + 6.0, top + 10.0), pos2(x - 6.0, top + 10.0)], c, Stroke::NONE));
+        if dragging == Some(i) {
+            ui.painter().line_segment([pos2(x, r.top()), pos2(x, r.bottom())], Stroke::new(1.0, Color32::from_white_alpha(60)));
+        }
+    }
+    ui.data_mut(|dd| dd.insert_temp(drag_id, dragging));
 }
 
 /// The row under the curve graph: point-curve presets and reset every curve.
@@ -1195,11 +1329,18 @@ fn curve_footer(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings)
                     crate::panels::dialogs::prompt(app, "Save Point Curve Preset", "Preset name", "", "curve.savePreset", json!({}), "name");
                     ui.close();
                 }
-                if ui.add_enabled(app.services.pick_curve_preset_files.is_some(), egui::Button::new(crate::i18n::tr("Import Presets…"))).clicked() {
+                if ui
+                    .add_enabled(
+                        app.services.pick_curve_preset_files.is_some() || app.services.picker.is_some(),
+                        egui::Button::new(crate::i18n::tr("Import Presets…")),
+                    )
+                    .clicked()
+                {
                     let _ = app.run("file.importCurvePresets", json!({}));
                     ui.close();
                 }
-                let can_export = app.services.save_curve_preset_file.is_some() && !app.session.curve_presets.is_empty();
+                let can_export =
+                    (app.services.save_curve_preset_file.is_some() || app.services.picker.is_some()) && !app.session.curve_presets.is_empty();
                 if ui.add_enabled(can_export, egui::Button::new(crate::i18n::tr("Export Presets…"))).clicked() {
                     let _ = app.run("file.exportCurvePresets", json!({}));
                     ui.close();
@@ -1582,7 +1723,7 @@ fn grading_wheel(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings
     if resp.drag_stopped() || resp.clicked() {
         let _ = app.run("develop.endInteraction", json!({}));
     }
-    if resp.double_clicked() {
+    if crate::widgets::double_clicked(ui, &resp) {
         let _ = app.run("develop.set", json!({"values": {format!("grading.{key}.hue"): 0, format!("grading.{key}.sat"): 0}}));
     }
     // hue and saturation readout: centred above the wheel, shown like the eye (no fade)

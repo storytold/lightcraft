@@ -262,6 +262,10 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
                     if let Some(first) = failed.first() {
                         m += &crate::i18n::tr_format!(" · {} failed: {}", failed.len(), first["error"].as_str().unwrap_or("error"));
                     }
+                    let reduced = files.iter().filter(|f| f.get("reducedFrom").is_some()).count();
+                    if reduced > 0 {
+                        m += &crate::i18n::tr_format!(" · {reduced} made smaller to fit this device's memory", reduced = reduced);
+                    }
                     if cancelled {
                         m += " · cancelled";
                     }
@@ -269,11 +273,20 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
                         m += " · ";
                         m += &apple_photos_note(photos);
                     }
+                    // mobile: offer what was written in the share sheet
+                    let paths: Vec<String> = files.iter().filter_map(|f| f.get("path").and_then(Value::as_str)).map(str::to_string).collect();
+                    if !cancelled
+                        && !paths.is_empty()
+                        && let Some(share) = app.services.share.as_mut()
+                    {
+                        share(&paths);
+                    }
                     app.last_export_result = Some(json!({"files": files, "cancelled": cancelled, "applePhotos": photos}));
                     m
                 }
                 Err(e) => e,
             };
+            log::info!("export: {msg}");
             if photos_failed {
                 app.toast_for(ctx, msg, 15.0);
             } else {

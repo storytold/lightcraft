@@ -73,6 +73,12 @@ const FIELDS: &[(&str, usize)] = &[
     ("OUT_Y", 3),
     ("OUT_TRC", 1),
     ("OUT_GAMMA", 1),
+    // the whole output's size and this buffer's place in it (a tile; the vignette is placed in
+    // the whole output)
+    ("VIG_GW", 1),
+    ("VIG_GH", 1),
+    ("VIG_X0", 1),
+    ("VIG_Y0", 1),
     // first row of a band dispatch (the kernel runs over rows Y0.., see `render`)
     ("Y0", 1),
 ];
@@ -139,8 +145,9 @@ pub struct Present {
 }
 
 /// The `finish` kernel's parameter block and auxiliary table (tone LUT | chroma curve | sRGB LUT | curve LUTs |
-/// mask terms) for `fp` with `masks` (their local adjustments' terms).
-pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Present) -> (Vec<u32>, Vec<f32>) {
+/// mask terms) for `fp` with `masks` (their local adjustments' terms), over a `buf` (w, h) buffer:
+/// the whole output, or a tile of it at (`fp.x0`, `fp.y0`).
+pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Present, buf: (usize, usize)) -> (Vec<u32>, Vec<f32>) {
     let mut aux: Vec<f32> = fp.tone.lut().to_vec();
     aux.extend_from_slice(fp.tone.chroma_lut());
     let srgb_off = aux.len();
@@ -158,8 +165,12 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     }
 
     let mut p = Block::new();
-    p.u("W", fp.w as u32);
-    p.u("H", fp.h as u32);
+    p.u("W", buf.0 as u32);
+    p.u("H", buf.1 as u32);
+    p.u("VIG_GW", fp.w as u32);
+    p.u("VIG_GH", fp.h as u32);
+    p.u("VIG_X0", fp.x0 as u32);
+    p.u("VIG_Y0", fp.y0 as u32);
     p.u("NMASK", masks.len() as u32);
     p.u("MASK_OFF", mask_off as u32);
     p.u("SRGB_OFF", srgb_off as u32);

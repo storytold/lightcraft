@@ -4,6 +4,8 @@
   " · {:.0}% clipped": " · {:.0}% beschnitten",
   " · {failed} couldn't be rendered": " · nicht gerenderte Fotos: {failed}",
   " · {skipped} skipped (file exists)": " · {skipped} übersprungen (Datei vorhanden)",
+  " · {reduced} made smaller to fit this device's memory": " · {reduced} verkleinert, damit sie in den Speicher dieses Geräts passen",
+  "Photos · {n}": "Fotos · {n}",
   " · {} duplicate{} skipped": " · {} übersprungen (Duplikate){:.0}",
   " · {} failed: {}": " · {} fehlgeschlagen: {}",
   " · {} moved": " · {} verschoben",

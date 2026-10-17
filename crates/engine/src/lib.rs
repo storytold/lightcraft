@@ -1287,6 +1287,8 @@ mod tests_merge;
 #[cfg(test)]
 mod tests_move_to_share;
 #[cfg(test)]
+mod tests_moved_library;
+#[cfg(test)]
 mod tests_organize;
 #[cfg(test)]
 mod tests_persist;
@@ -1314,5 +1316,7 @@ mod tests_spots;
 mod tests_sync;
 #[cfg(test)]
 mod tests_view_follow;
+#[cfg(test)]
+mod tests_working_cap;
 #[cfg(test)]
 mod tests_xmp;

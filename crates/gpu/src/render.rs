@@ -265,11 +265,16 @@ pub(crate) fn gaussian(cx: &mut Cx<'_>, src: &Buf, w: usize, h: usize, nc: usize
 
 /// Resample taps of `lightcraft_raster::resample::resize`, packed for the `resize_*` kernels.
 fn taps(src: usize, dst: usize, filter: Filter) -> Vec<u32> {
-    let w = lightcraft_raster::resample::weights(src, dst, filter);
+    pack_taps(&lightcraft_raster::resample::weights(src, dst, filter))
+}
+
+/// Taps (first source index, weights) per output coordinate, packed for the `resize_*` kernels.
+pub(crate) fn pack_taps(w: &[(usize, Vec<f32>)]) -> Vec<u32> {
+    let dst = w.len();
     let mut t = Vec::with_capacity(dst * 3);
     let mut weights = Vec::new();
     let base = dst * 3;
-    for (lo, ws) in &w {
+    for (lo, ws) in w {
         t.extend_from_slice(&[*lo as u32, ws.len() as u32, (base + weights.len()) as u32]);
         weights.extend(ws.iter().map(|v| v.to_bits()));
     }
@@ -319,7 +324,7 @@ fn guided_coeffs(cx: &mut Cx<'_>, p: &Buf, w: usize, h: usize, sigma: f32, eps: 
 }
 
 /// Separable median of a plane (`local::median_hv`).
-fn median_hv(cx: &mut Cx<'_>, p: &Buf, w: usize, h: usize, r: usize) -> Buf {
+pub(crate) fn median_hv(cx: &mut Cx<'_>, p: &Buf, w: usize, h: usize, r: usize) -> Buf {
     if r == 0 || w * h == 0 {
         return cx.copy(p);
     }
@@ -332,7 +337,7 @@ fn median_hv(cx: &mut Cx<'_>, p: &Buf, w: usize, h: usize, r: usize) -> Buf {
 }
 
 /// The highlights/shadows base (`local::tone_base`; `detail` 0: V1, no median).
-fn tone_base(cx: &mut Cx<'_>, l: &Buf, w: usize, h: usize, sigma: f32, detail: usize) -> Buf {
+pub(crate) fn tone_base(cx: &mut Cx<'_>, l: &Buf, w: usize, h: usize, sigma: f32, detail: usize) -> Buf {
     if detail == 0 {
         return guided_fast(cx, l, w, h, sigma, local::BASE_EPS);
     }
@@ -341,7 +346,7 @@ fn tone_base(cx: &mut Cx<'_>, l: &Buf, w: usize, h: usize, sigma: f32, detail: u
 }
 
 /// Fast guided filter (`local::guided_fast`): coefficients on a subsampled grid.
-fn guided_fast(cx: &mut Cx<'_>, p: &Buf, w: usize, h: usize, sigma: f32, eps: f32) -> Buf {
+pub(crate) fn guided_fast(cx: &mut Cx<'_>, p: &Buf, w: usize, h: usize, sigma: f32, eps: f32) -> Buf {
     let s = local::guided_fast_step(sigma);
     if s <= 1 {
         return guided(cx, p, w, h, sigma, eps);
@@ -564,10 +569,10 @@ fn sample(cx: &mut Cx<'_>, src: &Arc<Rgb32f>, src_buf: Arc<Buf>, plan: &Plan<'_>
 
 /// CPU copies made along the way (for stages that still run on the CPU).
 #[derive(Default)]
-struct Host {
-    sampled: Option<Rgb32f>,
-    lin: Option<Arc<Rgb32f>>,
-    log_l: Option<Arc<Plane>>,
+pub(crate) struct Host {
+    pub sampled: Option<Rgb32f>,
+    pub lin: Option<Arc<Rgb32f>>,
+    pub log_l: Option<Arc<Plane>>,
 }
 
 pub(crate) fn profiling() -> bool {
@@ -604,10 +609,24 @@ pub fn render(
         Some(crate::Fault::Limit(bytes)) => Some(crate::ctx::LimitOverride::new(bytes)),
         _ => None,
     };
-    if !gpu.fits(n * 3) {
+    // the widest buffer: RGB, or the mask planes (followed by the blurred chromaticity)
+    let nmask = plan.settings.masks.iter().filter(|m| m.visible && !m.components.is_empty()).count();
+    let words = if nmask > 0 { nmask + 3 } else { 3 };
+    if !gpu.fits(n * words) {
+        // over the device's buffer limit: in tiles, when the render can be tiled
+        let opts = crate::tiled::options_for_limit(gpu, s);
+        let tiled =
+            lightcraft_pipeline::tiled::supported(&plan.settings, req) && plan.frame.sample_plan(src.width, src.height, w, h).prefilter.is_none();
+        if tiled {
+            return crate::tiled::render_tiled(gpu, src, info, s, req, &opts, fault);
+        }
         fail(
             FailKind::Limit,
-            format!("{w}×{h} needs {} MiB buffers, over the device's {} MiB storage-buffer limit", (n * 12).div_ceil(1 << 20), gpu.limit() >> 20),
+            format!(
+                "{w}×{h} needs {} MiB buffers, over the device's {} MiB storage-buffer limit",
+                (n * words * 4).div_ceil(1 << 20),
+                gpu.limit() >> 20
+            ),
         );
         return None;
     }
@@ -678,37 +697,7 @@ pub fn render(
         dark: prep.dark.is_some(),
         chroma: masks.is_some() && prep.chroma.is_some(),
     };
-    let (p, aux) = finish_block(&fp, &terms, &present);
-    let aux = gpu.upload(&aux);
-    // cleared, so that work which never ran cannot pass for an image (see the check below)
-    let out = cx.zeroed(n);
-    if fault == Some(crate::Fault::Validation) {
-        // a dispatch the device rejects (too many workgroups)
-        cx.run("box_h", &[0; 5], &[Some(&aux), Some(&out)], [gpu.device.limits().max_compute_workgroups_per_dimension + 1, 1, 1]);
-    }
-    // in bands of rows: each dispatch (and submission) stays short on a slow GPU
-    let rows = (BAND_PIXELS / w.max(1) / 16 * 16).max(16); // whole workgroups: bands never overlap
-    let y0_at = crate::params::index("Y0").unwrap_or(0);
-    let mut p = p;
-    for y0 in (0..h).step_by(rows).filter(|_| fault != Some(crate::Fault::DropWork)) {
-        p[y0_at] = y0 as u32;
-        cx.run(
-            "main",
-            &p,
-            &[
-                Some(&lin),
-                Some(&prep.log_l),
-                Some(&prep.base),
-                prep.clarity.as_deref(),
-                prep.texture.as_deref(),
-                prep.dark.as_deref(),
-                masks.as_ref(),
-                Some(&aux),
-                Some(&out),
-            ],
-            groups2(w, rows.min(h - y0), [16, 16]),
-        );
-    }
+    let out = finish_pass(&mut cx, &lin, &prep, masks.as_ref(), finish_block(&fp, &terms, &present, (w, h)), (w, h), fault);
     // the alpha a mask overlay shows: copied out before the readback below submits
     let overlay_mask = req.overlay.mask(s).map(|m| {
         let list = s.masks.iter().filter(|m| m.visible && !m.components.is_empty());
@@ -781,13 +770,58 @@ pub fn render(
     Some(Rendered { image, histogram, deep: None })
 }
 
+/// The per-pixel stage over a `w × h` buffer (`block`: [`finish_block`]'s parameters and
+/// table): the 8-bit result, one `u32` a pixel, in a buffer cleared first so that work which
+/// never ran cannot pass for an image (see [`unwritten`]).
+pub(crate) fn finish_pass(
+    cx: &mut Cx<'_>,
+    lin: &Buf,
+    prep: &Prep,
+    masks: Option<&Buf>,
+    block: (Vec<u32>, Vec<f32>),
+    (w, h): (usize, usize),
+    fault: Option<crate::Fault>,
+) -> Buf {
+    let (mut p, aux) = block;
+    let aux = cx.gpu.upload(&aux);
+    let out = cx.zeroed(w * h);
+    if fault == Some(crate::Fault::Validation) {
+        // a dispatch the device rejects (too many workgroups)
+        let too_many = cx.gpu.device.limits().max_compute_workgroups_per_dimension + 1;
+        cx.run("box_h", &[0; 5], &[Some(&aux), Some(&out)], [too_many, 1, 1]);
+    }
+    // in bands of rows: each dispatch (and submission) stays short on a slow GPU
+    let rows = (BAND_PIXELS / w.max(1) / 16 * 16).max(16); // whole workgroups: bands never overlap
+    let y0_at = crate::params::index("Y0").unwrap_or(0);
+    for y0 in (0..h).step_by(rows).filter(|_| fault != Some(crate::Fault::DropWork)) {
+        p[y0_at] = y0 as u32;
+        cx.run(
+            "main",
+            &p,
+            &[
+                Some(lin),
+                Some(&prep.log_l),
+                Some(&prep.base),
+                prep.clarity.as_deref(),
+                prep.texture.as_deref(),
+                prep.dark.as_deref(),
+                masks,
+                Some(&aux),
+                Some(&out),
+            ],
+            groups2(w, rows.min(h - y0), [16, 16]),
+        );
+    }
+    out
+}
+
 /// Pixels whose alpha is not 255 (cheap: no early exit, so it vectorizes).
-fn unwritten(data: &[[u8; 4]]) -> usize {
+pub(crate) fn unwritten(data: &[[u8; 4]]) -> usize {
     data.chunks(4096).filter(|c| c.iter().fold(255u8, |a, p| a & p[3]) != 255).map(|c| c.iter().filter(|p| p[3] != 255).count()).sum()
 }
 
 /// The white-balanced, retouched, denoised image.
-fn linear(cx: &mut Cx<'_>, sampled: &Buf, info: &SourceInfo, plan: &Plan<'_>, host: &mut Host) -> Buf {
+pub(crate) fn linear(cx: &mut Cx<'_>, sampled: &Buf, info: &SourceInfo, plan: &Plan<'_>, host: &mut Host) -> Buf {
     let (w, h) = (plan.w, plan.h);
     let n = w * h;
     let s = &*plan.settings;
@@ -844,15 +878,15 @@ fn denoise(cx: &mut Cx<'_>, img: Buf, plan: &Plan<'_>) -> Buf {
 }
 
 /// The planes the per-pixel stage reads.
-struct Prep {
-    log_l: Arc<Buf>,
-    base: Arc<Buf>,
-    clarity: Option<Arc<Buf>>,
-    texture: Option<Arc<Buf>>,
-    dark: Option<Arc<Buf>>,
+pub(crate) struct Prep {
+    pub log_l: Arc<Buf>,
+    pub base: Arc<Buf>,
+    pub clarity: Option<Arc<Buf>>,
+    pub texture: Option<Arc<Buf>>,
+    pub dark: Option<Arc<Buf>>,
     /// Blurred chromaticity (local Moiré / Noise).
-    chroma: Option<Arc<Buf>>,
-    air: f32,
+    pub chroma: Option<Arc<Buf>>,
+    pub air: f32,
 }
 
 /// The spatial planes (`local::prepare`), reusing those in `planes`.
@@ -951,7 +985,7 @@ fn guided_cross_max(cx: &mut Cx<'_>, guide: &Buf, p: &Buf, w: usize, h: usize, s
 /// Evaluate the masks (`lightcraft_pipeline::masks::evaluate`): their alpha planes (concatenated,
 /// followed by the blurred chromaticity when local Moiré / Noise need it) and their adjustment
 /// terms. Shapes without a kernel (Sky, Subject, …) run on the CPU.
-fn masks(cx: &mut Cx<'_>, lin: &Buf, prep: &Prep, plan: &Plan<'_>, host: &mut Host) -> (Option<Buf>, Vec<[f32; MASK_TERMS]>) {
+pub(crate) fn masks(cx: &mut Cx<'_>, lin: &Buf, prep: &Prep, plan: &Plan<'_>, host: &mut Host) -> (Option<Buf>, Vec<[f32; MASK_TERMS]>) {
     use lightcraft_develop::{MaskOp, MaskShape};
     let s = &*plan.settings;
     let list: Vec<_> = s.masks.iter().filter(|m| m.visible && !m.components.is_empty()).collect();

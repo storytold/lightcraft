@@ -277,6 +277,8 @@ pub fn contributors_ui(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             table(app, ui, &list, &mut v);
         } else {
             ui.horizontal_wrapped(|ui| {
+                // lines break between names, never inside one (uneven line spacing otherwise)
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
                 for (i, c) in list.iter().enumerate() {
                     if i > 0 {
                         ui.label(RichText::new("·").color(t.text_dim));

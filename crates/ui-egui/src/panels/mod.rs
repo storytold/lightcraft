@@ -3,6 +3,7 @@
 pub mod activity;
 pub mod bottombar;
 pub mod chips;
+pub mod compact;
 pub mod compare;
 pub mod crop_overlay;
 pub mod denoise;
@@ -62,6 +63,15 @@ pub fn resizable_side(
     let pid = egui::Id::new(id);
     ui.ctx().data_mut(|d| d.remove::<egui::containers::panel::PanelState>(pid));
     let avail = ui.available_rect_before_wrap();
+    if compact::is_compact(ui.ctx()) {
+        // the compact layout's sheet or drawer: the whole region (the drawer is a column beside
+        // the photos in a wide window), nothing to resize
+        let panel = if left { egui::Panel::left(pid) } else { egui::Panel::right(pid) };
+        let w = if left && compact::beside(ui.ctx()) { compact::side_width(avail.width()) } else { avail.width() };
+        let r = panel.frame(frame).resizable(false).exact_size(w).show(ui, add);
+        crate::widgets::register(ui.ctx(), format!("panel:{id}"), r.response.rect);
+        return None;
+    }
     let max = (avail.width() - reserve - crate::state::MIN_PHOTO_WIDTH).clamp(limits.min, limits.max);
     let panel = if left { egui::Panel::left(pid) } else { egui::Panel::right(pid) };
     let r = panel.frame(frame).resizable(true).size_range(limits.min..=max).default_size(limits.clamp(width).min(max)).show(ui, add);
@@ -107,7 +117,11 @@ pub fn empty_message(ui: &egui::Ui, rect: Rect, title: &str, body: &str) {
     let t = Tokens::get(ui.ctx());
     let p = ui.painter();
     p.text(rect.center() - vec2(0.0, 12.0), Align2::CENTER_CENTER, crate::i18n::tr(title), t.semibold(18.0), t.text_label);
-    p.text(rect.center() + vec2(0.0, 14.0), Align2::CENTER_CENTER, crate::i18n::tr(body), t.font(13.0), t.text_dim);
+    // the body wraps (centred) to the area: a phone is narrower than most of these sentences
+    let mut job = egui::text::LayoutJob::simple(crate::i18n::tr(body).to_string(), t.font(13.0), t.text_dim, (rect.width() - 40.0).max(120.0));
+    job.halign = egui::Align::Center;
+    let galley = p.layout_job(job);
+    p.galley(pos2(rect.center().x, rect.center().y + 4.0), galley, t.text_dim);
 }
 
 /// A button under an empty state's message: the command it runs, its label, and the id it is

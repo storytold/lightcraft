@@ -713,6 +713,10 @@ fn services(cc: &eframe::CreationContext<'_>, log_file: Option<&std::path::Path>
         // the library is a folder on disk: backed up with the user's other files
         backup_library: None,
         restore_library: None,
+        // exports go to ~/Pictures/LightCraft Exports; no share sheet on the desktop
+        export_dir: None,
+        share: None,
+        import_copies: false,
         system_theme: appearance::service(),
     }
 }

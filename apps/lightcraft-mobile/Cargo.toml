@@ -1,0 +1,60 @@
+[package]
+name = "lightcraft-mobile"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "LightCraft on iOS/iPadOS and Android: the egui UI in a thin native shell (spike; see README.md)"
+
+[lints]
+workspace = true
+
+# iOS: the `lightcraft-ios` binary, wrapped in an .app by scripts/ios-sim.sh.
+# Android: the cdylib, loaded by NativeActivity (android/AndroidManifest.xml, scripts/android-apk.sh).
+[lib]
+name = "lightcraft_mobile"
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "lightcraft-ios"
+path = "src/main.rs"
+
+[dependencies]
+lightcraft-engine = { workspace = true }
+lightcraft-pipeline = { workspace = true }
+lightcraft-ui-egui = { workspace = true }
+lightcraft-codecs = { workspace = true }
+lightcraft-raster = { workspace = true }
+lightcraft-gpu = { workspace = true }
+lightcraft-sysmem = { workspace = true }
+log = { workspace = true }
+serde_json = { workspace = true }
+
+# Desktop and wasm builds of the workspace compile this crate empty (winit needs x11/wayland
+# features there, which a mobile shell has no use for).
+[target.'cfg(any(target_os = "ios", target_os = "android"))'.dependencies]
+eframe = { workspace = true, features = ["default_fonts", "wgpu"] }
+egui = { workspace = true }
+
+# UIScene adoption and keyboard tracking (src/ios_scene.rs): the objc2 generation wgpu already uses, not winit 0.30's
+[target.'cfg(target_os = "ios")'.dependencies]
+objc2 = { version = "0.6", default-features = false, features = ["std"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "block2", "NSObject", "NSNotification", "NSValue", "NSDictionary", "NSString", "NSArray", "NSError", "NSItemProvider", "NSURL", "NSFileManager", "NSProgress", "NSProcessInfo", "NSSet", "NSEnumerator"] }
+objc2-ui-kit = { version = "0.3", default-features = false, features = ["std", "objc2-core-foundation", "UIGeometry", "UIResponder", "UIScene", "UISceneOptions", "UISceneSession", "UIView", "UIViewController", "UIWindow", "UIWindowScene", "UIActivity", "UIActivityViewController", "UIPopoverPresentationController", "UIPresentationController", "UIApplication", "UIEvent", "UIPress", "UIPressesEvent", "UIKey", "UICommand", "UIKeyConstants", "UITextInput", "UITextInputTraits", "UIPasteboard", "UIGestureRecognizer", "UIHoverGestureRecognizer", "UIPanGestureRecognizer", "UITapGestureRecognizer", "UIPinchGestureRecognizer", "UIPencilInteraction", "UIInteraction"] }
+raw-window-handle = "0.6"
+# the photo picker (src/ios_picker.rs)
+objc2-photos-ui = { version = "0.3", default-features = false, features = ["std", "PHPicker", "block2", "objc2-photos"] }
+block2 = "0.6"
+objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "CFCGTypes"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+eframe = { workspace = true, features = ["android-native-activity"] }
+winit = { version = "0.30", features = ["android-native-activity"] }
+# GL for the window: emulators and some devices fail to configure a Vulkan surface
+wgpu = { workspace = true, features = ["gles"] }
+# window insets and the photo picker over JNI (src/android_jni.rs): the version android-activity uses
+jni = "0.22"
+# logcat (src/android_jni.rs): the version android-activity uses
+ndk-sys = "0.6"
+# mapping the system CJK font (src/android_jni.rs)
+libc = "0.2"

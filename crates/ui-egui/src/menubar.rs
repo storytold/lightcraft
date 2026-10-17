@@ -110,6 +110,7 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "---",
             "library.selectAll",
             "library.selectNone",
+            "view.selectMode",
             "@Select by",
             "---",
             "view.focusSearch",
@@ -178,6 +179,8 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "---",
             "compare.swap",
             "compare.makeSelect",
+            "compare.previous",
+            "compare.next",
         ],
     ),
     (
@@ -349,6 +352,7 @@ pub fn checked(app: &LightcraftApp, id: &str) -> Option<bool> {
         "view.beforeAfter" => Some(u.before_after == crate::state::BeforeAfter::SideBySide),
         "view.beforeAfterSplit" => Some(u.before_after == crate::state::BeforeAfter::Split),
         "view.autoAdvance" => Some(u.auto_advance),
+        "view.selectMode" => Some(u.select_mode),
         "view.filterBar" => Some(u.filter_bar),
         "view.soloSections" => Some(u.single_panel),
         "view.navigator" => Some(u.navigator),
@@ -917,7 +921,8 @@ pub fn show_in_window(app: &mut LightcraftApp, ui: &mut egui::Ui, max_width: f32
     let total: f32 = widths.iter().sum();
     let mut clicked: Option<(String, Value)> = None;
     let start = ui.cursor().left();
-    let mac = ui.ctx().os() == egui::os::OperatingSystem::Mac;
+    // ⌘ on Apple keyboards: a Mac's and an iPad's (see `hid`)
+    let mac = matches!(ui.ctx().os(), egui::os::OperatingSystem::Mac | egui::os::OperatingSystem::IOS);
     // Menus hang below the whole top bar and never grow past the window (#189): a tall menu
     // scrolls instead of egui sliding it up over the titles.
     let bar_bottom = Some(ui.max_rect().bottom());
@@ -1044,6 +1049,7 @@ fn nodes_ui(ui: &mut egui::Ui, nodes: &[MenuNode], mac: bool, clicked: &mut Opti
                     b = b.shortcut_text(shortcut_text(sc, mac));
                 }
                 let r = ui.add_enabled(*enabled, b);
+                crate::widgets::register(ui.ctx(), format!("menuItem:{id}"), r.rect);
                 if *checked == Some(true) {
                     let t = crate::theme::Tokens::get(ui.ctx());
                     let c = egui::Rect::from_center_size(egui::pos2(r.rect.left() + 11.0, r.rect.center().y), egui::vec2(13.0, 13.0));

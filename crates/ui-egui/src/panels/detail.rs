@@ -1,7 +1,7 @@
 //! The Detail (loupe) view: the developed photo, before/after, zoom & pan, the filmstrip, and the
 //! on-canvas tools (crop, brush/gradient masks, remove spots, white-balance picker).
 
-use egui::{Align2, Color32, Pos2, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
+use egui::{Align2, Color32, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2, pos2, vec2};
 use lightcraft_catalog::PhotoId;
 use lightcraft_develop::{DevelopSettings, MaskShape};
 use lightcraft_geom::{Affine, Point};
@@ -54,6 +54,12 @@ pub enum Gesture {
         mask: u32,
         comp: usize,
         handle: u8,
+        original_shape: MaskShape,
+    },
+    /// Drawing a just-created linear / radial gradient (`mask`'s first component) from `a`.
+    DrawMask {
+        mask: u32,
+        a: Point,
         original_shape: MaskShape,
     },
     /// Guided Upright: a guide being drawn from `a` (normalized transformed coordinates).
@@ -228,6 +234,20 @@ pub(crate) fn navigate_gesture(app: &mut LightcraftApp, ui: &mut egui::Ui, resp:
     ui.input_mut(|i| i.smooth_scroll_delta = egui::Vec2::ZERO);
     ui.ctx().request_repaint();
     true
+}
+
+/// How far a touch swipe has dragged the photo sideways (0 when none is in progress).
+fn swipe_offset(ctx: &egui::Context) -> f32 {
+    ctx.data(|d| d.get_temp::<f32>(egui::Id::new("loupe-swipe"))).unwrap_or(0.0)
+}
+
+/// Drop a swipe in progress (a pinch or two-finger pan took over).
+fn cancel_swipe(ctx: &egui::Context) {
+    let id = egui::Id::new("loupe-swipe");
+    ctx.data_mut(|d| {
+        d.remove::<f32>(id);
+        d.remove::<Vec2>(id.with("moved"));
+    });
 }
 
 /// The largest texture the GPU behind `ctx` takes (egui reports it; 2048 until it does, the
@@ -437,8 +457,10 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let full = ui.max_rect();
     let fullscreen = app.ui.fullscreen;
-    let show_film = app.ui.filmstrip && !fullscreen;
-    let film_h = if show_film { t.film_h } else { 0.0 };
+    // compact layout: the edit sheet takes the filmstrip's place
+    let compact = super::compact::is_compact(ui.ctx());
+    let show_film = app.ui.filmstrip && !fullscreen && !(compact && super::compact::sheet_open(app));
+    let film_h = if show_film { film_height(ui.ctx(), full) } else { 0.0 };
     let canvas = Rect::from_min_max(full.min, pos2(full.right(), full.bottom() - film_h));
     app.canvas_rect = Some(canvas);
     if show_film {
@@ -472,7 +494,12 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     // two views (before, after): side by side or stacked
     let split = matches!(app.ui.before_after, BeforeAfter::SideBySide | BeforeAfter::TopBottom);
     let split_view = matches!(app.ui.before_after, BeforeAfter::Split | BeforeAfter::SplitTopBottom);
-    let areas: Vec<Rect> = match app.ui.before_after {
+    // a phone held upright: Left/Right stacks the two (side by side, each would be a sliver)
+    let before_after = match app.ui.before_after {
+        BeforeAfter::SideBySide if compact && area.height() > area.width() => BeforeAfter::TopBottom,
+        b => b,
+    };
+    let areas: Vec<Rect> = match before_after {
         BeforeAfter::SideBySide => {
             let half = area.width() / 2.0 - 6.0;
             vec![
@@ -504,7 +531,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let display_aspect = visible_texture_aspect.filter(|a| !crop_tool && (a / aspect - 1.0).abs() > 0.02).unwrap_or(aspect);
     let resp = ui.interact(canvas, egui::Id::new("loupe"), Sense::click_and_drag());
     crate::widgets::announce(&resp, crate::i18n::tr("Photo"));
-    let mut target_rect = fit_rect(main_area, display_aspect, app.ui.zoom, native, ppp, app.ui.pan);
+    // a touch swipe to the next / previous photo drags the photo along
+    let mut target_rect = fit_rect(main_area, display_aspect, app.ui.zoom, native, ppp, app.ui.pan).translate(vec2(swipe_offset(ui.ctx()), 0.0));
     let mut img_rect = animated_rect(ui.ctx(), &mut app.ui.zoom_anim, target_rect);
     let in_pane = |pane: Rect, image: Rect| image.translate(pane.center() - main_area.center());
     let mut navigating = false;
@@ -512,6 +540,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         let view_img = in_pane(view_area, img_rect);
         if navigate_gesture(app, ui, &resp, view_area, view_img, native) {
             navigating = true;
+            cancel_swipe(ui.ctx());
             target_rect = fit_rect(main_area, display_aspect, app.ui.zoom, native, ppp, app.ui.pan);
             img_rect = target_rect;
             break;
@@ -1003,6 +1032,10 @@ fn region_overlay(
     let t = Tokens::get(p.ctx());
     let clip = p.clip_rect();
     let pointer = ui.input(|i| i.pointer.hover_pos());
+    // a finger can't hover: every box shows its handles, its × and its "Add name" invitation, and
+    // the handles and × are bigger
+    let touch = crate::widgets::touch_screen(ui.ctx());
+    let (handle, x_size) = if touch { (28.0, 24.0) } else { (14.0, 16.0) };
     // the box being dragged: (region index, its box so far)
     let drag_key = egui::Id::new("region-drag");
     let live: Option<(usize, lightcraft_geom::Rect)> = ui.data(|d| d.get_temp(drag_key));
@@ -1014,10 +1047,10 @@ fn region_overlay(
         // white with a black keyline just outside it, so the box shows on any background
         p.rect_stroke(rect.expand(1.0), 0.0, Stroke::new(1.0, Color32::from_black_alpha(190)), StrokeKind::Outside);
         p.rect_stroke(rect, 0.0, Stroke::new(1.0, Color32::WHITE), StrokeKind::Outside);
-        if dragging.is_some() || (live.is_none() && pointer.is_some_and(|h| rect.expand(8.0).contains(h))) {
+        if dragging.is_some() || (live.is_none() && (touch || pointer.is_some_and(|h| rect.expand(8.0).contains(h)))) {
             for (h, (fx, fy, cursor)) in REGION_HANDLES.iter().enumerate() {
                 let c = pos2(rect.left() + fx * rect.width(), rect.top() + fy * rect.height());
-                let resp = ui.interact(Rect::from_center_size(c, vec2(14.0, 14.0)), egui::Id::new(("region-handle", index, h)), Sense::drag());
+                let resp = ui.interact(Rect::from_center_size(c, vec2(handle, handle)), egui::Id::new(("region-handle", index, h)), Sense::drag());
                 crate::widgets::announce(&resp, crate::i18n::tr("Resize region"));
                 if resp.hovered() || resp.dragged() {
                     ui.ctx().set_cursor_icon(*cursor);
@@ -1060,8 +1093,8 @@ fn region_overlay(
                 }
             }
         }
-        if dragging.is_none() && live.is_none() && pointer.is_some_and(|h| rect.expand(3.0).contains(h)) {
-            let xr = Rect::from_center_size(pos2(rect.right() - 13.0, rect.top() + 13.0), vec2(16.0, 16.0));
+        if dragging.is_none() && live.is_none() && (touch || pointer.is_some_and(|h| rect.expand(3.0).contains(h))) {
+            let xr = Rect::from_center_size(pos2(rect.right() - 5.0 - x_size / 2.0, rect.top() + 5.0 + x_size / 2.0), vec2(x_size, x_size));
             let resp = ui.interact(xr, egui::Id::new(("region-x", index)), Sense::click());
             crate::widgets::announce(&resp, crate::i18n::tr("Remove region"));
             register(ui.ctx(), format!("regionRemove:{index}"), xr);
@@ -1079,7 +1112,7 @@ fn region_overlay(
         // what the label says: the name, a guess to confirm ("Jane Doe?"), or on hover an invitation to name the face
         let is_face = r.kind == lightcraft_meta::RegionKind::Face;
         let hint = hints.and_then(|h| h.by_index.get(&index));
-        let hovered = pointer.is_some_and(|h| rect.expand(3.0).contains(h));
+        let hovered = touch || pointer.is_some_and(|h| rect.expand(3.0).contains(h));
         let editing_this = editing.as_ref().is_some_and(|e| e.photo == photo.id.0 && e.index == index);
         let (text, text_color, fill_alpha, invitation) = match (&r.name, hint.and_then(|h| h.suggestion.as_ref())) {
             (Some(n), _) => (n.clone(), Color32::from_gray(225), 235, false),
@@ -1314,9 +1347,9 @@ fn quick_name(q: lightcraft_engine::media::QuickSource) -> &'static str {
 /// Targeted adjustment tool: dragging up/down on the photo raises/lowers the tone-curve region or
 /// the colour-mixer bands under the press point (`develop.targeted`, one call per whole step, all
 /// in one interaction = one undo step).
-fn targeted_drag(app: &mut LightcraftApp, resp: &egui::Response, map: &CanvasMap, target: &str) {
+fn targeted_drag(app: &mut LightcraftApp, ui: &egui::Ui, resp: &egui::Response, map: &CanvasMap, target: &str) {
     if resp.drag_started()
-        && let Some(q) = resp.interact_pointer_pos()
+        && let Some(q) = crate::widgets::press_pos(ui, resp)
     {
         let _ = app.run("develop.beginInteraction", json!({"label": "Targeted Adjustment"}));
         app.gesture = Some(Gesture::Targeted { at: map.norm(q), acc: 0.0 });
@@ -1437,7 +1470,7 @@ fn general_interaction(
         return;
     }
     if let Some(target) = app.ui.tool.strip_prefix("tat:").map(str::to_string) {
-        targeted_drag(app, resp, map, &target);
+        targeted_drag(app, ui, resp, map, &target);
         return;
     }
     if app.ui.tool == "colorRange" {
@@ -1458,6 +1491,9 @@ fn general_interaction(
     }
     // click toggles Fit ↔ the chosen click-zoom ratio at the clicked point; drag pans when zoomed
     let zoomed = img.width() > canvas.width() + 1.0 || img.height() > canvas.height() + 1.0;
+    if !zoomed && swipe(app, ui, resp, canvas) {
+        return;
+    }
     if resp.double_clicked() || (resp.clicked() && !zoomed) {
         if let Some(q) = resp.interact_pointer_pos() {
             let u = ((q.x - img.left()) / img.width()).clamp(0.0, 1.0);
@@ -1474,6 +1510,33 @@ fn general_interaction(
         pan_image(app, canvas, img, resp.drag_delta());
     }
     let _ = (native, aspect);
+}
+
+/// One finger dragged sideways across the photo at Fit: the photo follows it, and letting go past
+/// a sixth of the canvas (at least 60 pt) shows the next or previous photo. Touch only (a mouse
+/// drag at Fit stays a no-op). True while a swipe is in progress.
+fn swipe(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, canvas: Rect) -> bool {
+    let id = egui::Id::new("loupe-swipe");
+    let moved_id = id.with("moved");
+    if resp.drag_stopped() {
+        // the pointer may be gone already: decide from the movement stored while dragging
+        let Some(moved) = ui.ctx().data_mut(|d| d.remove_temp::<Vec2>(moved_id)) else { return false };
+        ui.ctx().data_mut(|d| d.remove::<f32>(id));
+        if moved.x.abs() > (canvas.width() / 6.0).max(60.0) && moved.x.abs() > moved.y.abs() * 1.5 {
+            let _ = app.run(if moved.x < 0.0 { "library.next" } else { "library.previous" }, json!({}));
+        }
+        return true;
+    }
+    let swiping = ui.ctx().data(|d| d.get_temp::<Vec2>(moved_id)).is_some();
+    if !(resp.drag_started() && ui.input(|i| i.any_touches()) || resp.dragged() && swiping) {
+        return false;
+    }
+    let Some(moved) = ui.input(|i| i.pointer.interact_pos().zip(i.pointer.press_origin()).map(|(p, o)| p - o)) else { return swiping };
+    ui.ctx().data_mut(|d| {
+        d.insert_temp(moved_id, moved);
+        d.insert_temp(id, if moved.x.abs() > moved.y.abs() { moved.x } else { 0.0 });
+    });
+    true
 }
 
 // ------------------------------------------------------------------------ crop
@@ -1532,6 +1595,17 @@ fn crop_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
         let s = to_straight(n, d.crop.geometry.angle, frame);
         d.crop.geometry.rect.contains(Point::new(s.x.clamp(-1.0, 2.0), s.y))
     };
+    // the handle a press at `q` grabs: the nearest within reach (a finger's on a touch screen)
+    let reach = crate::widgets::grab_radius(ui.ctx(), 12.0);
+    let grab = |q: Pos2| {
+        handles
+            .iter()
+            .enumerate()
+            .map(|(i, h)| (i, h.distance(q)))
+            .filter(|(_, dist)| *dist < reach)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(i, _)| i)
+    };
     // a crop drag cut short (the tool closed before the release) leaves its gesture behind: with no
     // button held it is over
     if matches!(app.gesture, Some(Gesture::CropRotate { .. } | Gesture::CropHandle { .. }))
@@ -1551,7 +1625,7 @@ fn crop_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
             Some(Gesture::CropHandle { handle, .. }) => Some(usize::from(handle)),
             _ => None,
         };
-        let near = held.or_else(|| handles.iter().position(|h| h.distance(hq) < 12.0)).filter(|_| !rotating);
+        let near = held.or_else(|| grab(hq)).filter(|_| !rotating);
         let cursor = match near {
             Some(0 | 2) => egui::CursorIcon::ResizeNwSe,
             Some(1 | 3) => egui::CursorIcon::ResizeNeSw,
@@ -1572,16 +1646,16 @@ fn crop_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
     let readout_at = pointer.filter(|_| rotating);
     let mut shown_angle = d.crop.geometry.angle;
     // double-click inside the crop box applies the crop (same as Return / Done)
-    if resp.double_clicked()
+    if crate::widgets::double_clicked(ui, resp)
         && let Some(q) = resp.interact_pointer_pos()
         && inside(q)
-        && !handles.iter().any(|h| h.distance(q) < 12.0)
+        && grab(q).is_none()
     {
         let _ = app.run("tool.done", json!({}));
         return;
     }
     if resp.drag_started()
-        && let Some(q) = resp.interact_pointer_pos()
+        && let Some(q) = crate::widgets::press_pos(ui, resp)
     {
         if let Err(e) = app.run("develop.beginInteraction", json!({"label": "Crop"})).and_then(|_| app.begin_crop().map(|_| serde_json::Value::Null))
         {
@@ -1590,7 +1664,7 @@ fn crop_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
             return;
         }
         let d = app.session.develop_of(id).unwrap_or_default();
-        app.gesture = Some(match handles.iter().position(|h| h.distance(q) < 12.0) {
+        app.gesture = Some(match grab(q) {
             Some(h) => Gesture::CropHandle { handle: h as u8, start: d.crop.geometry.rect, angle: d.crop.geometry.angle },
             None if inside(q) => Gesture::CropHandle { handle: 8, start: d.crop.geometry.rect, angle: d.crop.geometry.angle },
             None => {
@@ -1790,7 +1864,7 @@ fn guided_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respo
     }
     ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
     if resp.drag_started()
-        && let Some(q) = resp.interact_pointer_pos()
+        && let Some(q) = crate::widgets::press_pos(ui, resp)
     {
         app.gesture = Some(Gesture::Guide { a: map.norm(q) });
     }
@@ -1806,6 +1880,15 @@ fn guided_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respo
             let (ca, cb) = (frame.transformed_to_corrected(a), frame.transformed_to_corrected(b));
             let _ = app.run("geometry.guides", json!({"guides": [[ca.x, ca.y, cb.x, cb.y]], "add": true}));
         }
+    }
+}
+
+/// The first points of a brush or spot stroke whose first position is `n`: the press point too
+/// when the stroke began as a drag (the pointer is past the drag threshold by then).
+fn stroke_start(ui: &egui::Ui, resp: &egui::Response, map: &CanvasMap, n: Point) -> Vec<Point> {
+    match ui.input(|i| i.pointer.press_origin()).filter(|_| resp.drag_started()).map(|q| map.norm(q)) {
+        Some(o) if o != n => vec![o, n],
+        _ => vec![n],
     }
 }
 
@@ -1904,6 +1987,21 @@ pub(crate) fn component_pin(shape: &MaskShape) -> Option<Point> {
 }
 
 /// `shape` moved by `dn` (normalized); `handle` 1/2 = a linear gradient's start/end set to `at`.
+/// `shape` (a linear or radial gradient) drawn by a drag from `a` to `b` (normalized): a linear
+/// gradient runs from `a` to `b`, a radial one is centred on `a` and reaches `b`.
+fn drawn_shape(shape: &MaskShape, a: Point, b: Point, map: &CanvasMap) -> MaskShape {
+    match shape.clone() {
+        MaskShape::Radial { feather, invert, .. } => {
+            let l = frame_long_norm(map);
+            let rx = ((b.x - a.x) / l.0).abs().max(0.01);
+            let ry = ((b.y - a.y) / l.1).abs().max(0.01);
+            MaskShape::Radial { center: a, rx, ry, angle: 0.0, feather, invert }
+        }
+        MaskShape::Linear { .. } if a.dist(b) > 1e-3 => MaskShape::Linear { start: a, end: b },
+        other => other,
+    }
+}
+
 fn moved_shape(shape: &MaskShape, handle: u8, dn: Point, at: Point, map: &CanvasMap, alt: bool) -> MaskShape {
     let mv = |p: Point| Point::new(p.x + dn.x, p.y + dn.y);
     match shape.clone() {
@@ -1986,7 +2084,8 @@ fn color_range_pick(app: &mut LightcraftApp, ui: &egui::Ui, resp: &egui::Respons
         && let Some(q) = resp.interact_pointer_pos()
     {
         let n = map.norm(q);
-        let add = ui.input(|i| i.modifiers.shift);
+        // ⇧-click adds; so does a tap after the panel's Add (touch screens have no ⇧)
+        let add = ui.input(|i| i.modifiers.shift) || app.ui.pick_adds;
         if let Err(e) = app.run("mask.sampleColor", json!({"x": n.x, "y": n.y, "add": add})) {
             app.toast(ui.ctx(), e);
         }
@@ -2110,7 +2209,7 @@ fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
             && let Some(q) = resp.interact_pointer_pos()
         {
             let n = map.norm(q);
-            let exclude = ui.input(|i| i.modifiers.alt);
+            let exclude = ui.input(|i| i.modifiers.alt) || app.ui.object_excludes;
             match app.run_typed("mask.objectPoint", json!({"x": n.x, "y": n.y, "exclude": exclude})) {
                 Ok(_) => {
                     if let Some(mid) = app.session.active_mask {
@@ -2142,10 +2241,12 @@ fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
                     record_pressure(pressure, points.len(), force);
                     points.push(n);
                 }
+                // from where it was pressed, not where the drag threshold was passed
                 _ => {
+                    let points = stroke_start(ui, resp, map, n);
                     let mut pressure = Vec::new();
-                    record_pressure(&mut pressure, 0, force);
-                    app.gesture = Some(Gesture::Brush { points: vec![n], pressure });
+                    record_pressure(&mut pressure, points.len().saturating_sub(1), force);
+                    app.gesture = Some(Gesture::Brush { points, pressure });
                 }
             }
         }
@@ -2187,10 +2288,11 @@ fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
         return;
     }
     // the grip under the pointer: the selected mask's first, then the nearest
+    let reach = crate::widgets::grab_radius(ui.ctx(), 10.0);
     let hit = |q: Pos2| {
         grips
             .iter()
-            .filter(|g| g.3.distance(q) < 10.0)
+            .filter(|g| g.3.distance(q) < reach)
             .min_by(|a, b| {
                 (Some(a.0) != active, a.3.distance(q)).partial_cmp(&(Some(b.0) != active, b.3.distance(q))).unwrap_or(std::cmp::Ordering::Equal)
             })
@@ -2203,7 +2305,20 @@ fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
     {
         let _ = app.run("mask.select", json!({"id": mid}));
     }
+    // a gradient just created from its tile: a drag away from the pins draws it
+    let drawing = app.ui.draw_mask.filter(|m| Some(*m) == active && matches!(app.ui.tool.as_str(), "linear" | "radial"));
+    if drawing.is_none() {
+        app.ui.draw_mask = None;
+    }
     if resp.drag_started()
+        && let Some(q) = crate::widgets::press_pos(ui, resp)
+        && hit(q).is_none()
+        && let Some(mask) = drawing
+        && let Some(original_shape) = d.masks.iter().find(|m| m.id == mask).and_then(|m| m.components.first()).map(|c| c.shape.clone())
+    {
+        let _ = app.run("develop.beginInteraction", json!({"label": "Draw Mask"}));
+        app.gesture = Some(Gesture::DrawMask { mask, a: map.norm(q), original_shape });
+    } else if resp.drag_started()
         && let Some(q) = ui.input(|i| i.pointer.press_origin()).or(resp.interact_pointer_pos())
     {
         let grip = hit(q).map(|(m, c, h, _)| (m, c, h)).or_else(|| {
@@ -2225,6 +2340,8 @@ fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
             }
             let _ = app.run("develop.beginInteraction", json!({"label": "Edit Mask"}));
             app.gesture = Some(Gesture::MaskHandle { mask, comp, handle, original_shape });
+            // edited by its pins: drags don't redraw it any more
+            app.ui.draw_mask = None;
         }
     }
     if resp.dragged()
@@ -2238,7 +2355,16 @@ fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
         let new_shape = moved_shape(&original_shape, handle, dn, n, map, alt);
         let _ = app.run("mask.update", json!({"id": mask, "component": comp, "shape": new_shape}));
     }
-    if resp.drag_stopped() && matches!(app.gesture, Some(Gesture::MaskHandle { .. })) {
+    if resp.dragged()
+        && let (Some(Gesture::DrawMask { mask, a, original_shape }), Some(q)) = (app.gesture.clone(), resp.interact_pointer_pos())
+    {
+        let shape = drawn_shape(&original_shape, a, map.norm(q), map);
+        let _ = app.run("mask.update", json!({"id": mask, "component": 0, "shape": shape}));
+    }
+    if resp.drag_stopped() && matches!(app.gesture, Some(Gesture::MaskHandle { .. } | Gesture::DrawMask { .. })) {
+        if matches!(app.gesture, Some(Gesture::DrawMask { .. })) {
+            app.ui.draw_mask = None;
+        }
         app.gesture = None;
         let _ = app.run("develop.endInteraction", json!({}));
     }
@@ -2418,7 +2544,7 @@ fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respo
         let n = map.norm(q);
         match &mut app.gesture {
             Some(Gesture::Spot { points }) => points.push(n),
-            _ => app.gesture = Some(Gesture::Spot { points: vec![n] }),
+            _ => app.gesture = Some(Gesture::Spot { points: stroke_start(ui, resp, map, n) }),
         }
     }
     if let Some(Gesture::Spot { points }) = &app.gesture {
@@ -2564,13 +2690,24 @@ fn film_label(name: &str) -> String {
     if name.chars().nth(14).is_some() { format!("{}…", name.chars().take(13).collect::<String>()) } else { name.to_string() }
 }
 
+/// The filmstrip's lowest height (the compact layout's, in a short window).
+const FILM_MIN_H: f32 = 84.0;
+
+/// The filmstrip's height under a view `full` tall: the compact layout's is lower in a short
+/// window (a phone in landscape), with smaller cells.
+pub(crate) fn film_height(ctx: &egui::Context, full: Rect) -> f32 {
+    let t = Tokens::get(ctx);
+    if super::compact::is_compact(ctx) { (full.height() * 0.24).clamp(FILM_MIN_H, t.film_h) } else { t.film_h }
+}
+
 pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
     let t = Tokens::get(ui.ctx());
     ui.painter().rect_filled(r, 0.0, t.canvas);
     ui.painter().rect_filled(Rect::from_min_size(r.min, vec2(r.width(), 4.0)), 0.0, Color32::from_gray(0x20));
     let ids = app.session.visible_cloned();
     let active = app.session.selection.active;
-    let cell_w = 120.0;
+    // 120 pt cells in the full-height strip, narrower in a lower one
+    let cell_w = (120.0 * r.height() / t.film_h).round().clamp(70.0, 120.0);
     let ppp = ui.ctx().pixels_per_point();
     if ids.is_empty() {
         let why = if app.session.filter != Default::default() { "No photos match the filters (View → Clear Filters)" } else { "No photos" };
@@ -2617,13 +2754,14 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
                 t.canvas
             };
             p.rect_filled(cr, 0.0, crate::theme::label_background(base, label, selected));
-            let names = app.ui.settings.film_names;
+            // (no room for the name and format over a narrow cell)
+            let names = app.ui.settings.film_names && cell_w >= 100.0;
             if let Some(ph) = app.session.catalog.photo(*id).filter(|_| names) {
                 let name = ph.file_name.rsplit_once('.').map(|(n, _)| n).unwrap_or(&ph.file_name);
                 p.text(pos2(cr.left() + 8.0, cr.top() + 10.0), Align2::LEFT_CENTER, film_label(name), t.font(10.0), t.text_dim);
                 p.text(pos2(cr.right() - 8.0, cr.top() + 10.0), Align2::RIGHT_CENTER, &ph.format, t.semibold(8.5), t.text_dim);
             }
-            let img_area = Rect::from_min_max(cr.min + vec2(10.0, 22.0), cr.max - vec2(10.0, 8.0));
+            let img_area = Rect::from_min_max(cr.min + vec2(10.0, if cell_w >= 100.0 { 22.0 } else { 8.0 }), cr.max - vec2(10.0, 8.0));
             super::grid::request_thumb(app, *id, (256.0 * ppp.min(2.0) / 2.0) as usize * 2, 8);
             if let Some(tex) = app.renderer.thumb(*id) {
                 let [tw, th] = tex.size;
@@ -2660,7 +2798,8 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
                     // ⌘/Ctrl- and Shift-clicks change the selection; the pair on screen stays (#187)
                     super::compare::select_with_modifier(app, *id, !m.command)
                 } else {
-                    let mode = if m.command {
+                    // (Select Several on a touch screen: taps add and remove photos, as ⌘-clicks do)
+                    let mode = if m.command || app.ui.select_mode {
                         "toggle"
                     } else if m.shift {
                         "range"
@@ -2753,7 +2892,7 @@ mod preview_geometry_tests {
 /// `held`: drawn with ⌘ held in the crop tool, which stays active afterwards.
 fn straighten_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, held: bool) {
     ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
-    if !held && resp.double_clicked() {
+    if !held && crate::widgets::double_clicked(ui, resp) {
         let _ = app.run("crop.autoStraighten", json!({}));
         app.ui.tool.clear();
         app.gesture = None;
@@ -2999,10 +3138,11 @@ mod wheel_zoom_tests {
 }
 
 /// The pen pressure (0..1) reported this frame: the force of the latest touch or pen event that carries one (winit
-/// reports a pen's pressure as a touch force, on the platforms that give it), `None` for a mouse.
+/// reports a pen's pressure as a touch force, on the platforms that give it), `None` for a mouse. A force of 0 is no
+/// reading yet (an Apple Pencil's first contact reports it before its first real pressure).
 pub(crate) fn pen_force(i: &egui::InputState) -> Option<f32> {
     i.events.iter().rev().find_map(|e| match e {
-        egui::Event::Touch { force: Some(f), .. } if f.is_finite() => Some(f.clamp(0.0, 1.0)),
+        egui::Event::Touch { force: Some(f), .. } if f.is_finite() && *f > 0.0 => Some(f.min(1.0)),
         _ => None,
     })
 }
@@ -3047,6 +3187,9 @@ mod pen_tests {
         assert_eq!(pen_force(&i), Some(0.3), "the latest usable force");
         i.events = vec![touch(Some(4.0))];
         assert_eq!(pen_force(&i), Some(1.0));
+        // an Apple Pencil's first contact reports 0 before its first real pressure
+        i.events = vec![touch(Some(0.0))];
+        assert_eq!(pen_force(&i), None);
     }
 }
 

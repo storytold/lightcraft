@@ -135,6 +135,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                             // an empty colour range; clicking the photo samples it
                             let _ = app.run("mask.add", json!({"kind": "colorRange"}));
                             app.ui.tool = "colorRange".into();
+                            app.ui.pick_adds = false;
                             app.toast(ui.ctx(), crate::i18n::tr("Click the photo to pick a colour · ⇧-click adds more"));
                         }
                         "object" => start_object(app, ui.ctx(), "new"),
@@ -144,7 +145,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                         }
                         "linear" | "radial" => {
                             app.ui.tool = kind.to_string();
-                            let _ = app.run("mask.add", json!({"kind": kind}));
+                            if app.run("mask.add", json!({"kind": kind})).is_ok() {
+                                // drag on the photo to draw it (it starts with a default shape)
+                                app.ui.draw_mask = app.session.active_mask;
+                                app.toast(ui.ctx(), crate::i18n::tr("Drag on the photo to draw the gradient"));
+                            }
                         }
                         k => {
                             let _ = app.run("mask.add", json!({"kind": k}));
@@ -190,6 +195,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     });
     divider(ui);
     // mask list
+    // (the mask rows run wider than the panel's 24 / 22 pt margins; the header keeps them)
     egui::Frame::NONE.inner_margin(egui::Margin { left: 16, right: 16, top: 8, bottom: 8 }).show(ui, |ui| {
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(crate::i18n::tr("Masks")).font(t.semibold(13.0)).color(t.text_label));
@@ -259,9 +265,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             register(ui.ctx(), format!("maskName:{}", m.id), Rect::from_min_size(at, g.size()));
             ui.painter().galley(at, g, color);
             let resp = if elided { resp.on_hover_text(&m.name) } else { resp };
-            // show / hide on hover (and always while hidden)
+            // show / hide on hover (and always while hidden, or on a touch screen)
             // (the pointer test, not `hovered`: over the eye, the row itself no longer counts as hovered)
-            if ui.rect_contains_pointer(r) || !m.visible {
+            if ui.rect_contains_pointer(r) || !m.visible || crate::widgets::touch_screen(ui.ctx()) {
                 let er = Rect::from_center_size(pos2(r.right() - 16.0, r.center().y), vec2(22.0, 22.0));
                 register(ui.ctx(), format!("maskVisible:{}", m.id), er);
                 let eye = ui.interact(er, egui::Id::new(("maskVisible", m.id)), Sense::click());
@@ -279,7 +285,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             if resp.clicked() {
                 let _ = app.run("mask.select", json!({"id": m.id}));
             }
-            if resp.double_clicked() {
+            if crate::widgets::double_clicked(ui, &resp) {
                 app.ui.renaming_mask = Some((m.id, m.name.clone()));
             }
             resp.context_menu(|ui| mask_menu(app, ui, m.id, &m.name, m.visible, index, count));
@@ -287,7 +293,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 // right under the selected mask: ＋ adds to it, − takes away from it (any mask
                 // type; Describe… opens its field here)
                 ui.horizontal(|ui| {
-                    ui.add_space(30.0);
+                    // under the mask's name
+                    ui.add_space(32.0);
                     let plus = text_button(ui, &format!("maskPlus:{}", m.id), "+", false).on_hover_text(crate::i18n::tr("Add to this mask"));
                     egui::Popup::menu(&plus).show(|ui| component_menu(app, ui, "add"));
                     let minus = text_button(ui, &format!("maskMinus:{}", m.id), "−", false).on_hover_text(crate::i18n::tr("Subtract from this mask"));
@@ -296,11 +303,10 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 describe_field(app, ui, false);
             }
         }
-        if !d.masks.is_empty() {
-            ui.add_space(6.0);
-            overlay_options(app, ui);
-        }
     });
+    if !d.masks.is_empty() {
+        overlay_options(app, ui);
+    }
     let Some(mid) = app.session.active_mask else { return };
     let Some(m) = d.masks.iter().find(|m| m.id == mid).cloned() else { return };
     divider(ui);
@@ -346,7 +352,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 });
                 let resp = resp.inner;
                 register(ui.ctx(), format!("component:{i}"), resp.rect);
-                if resp.double_clicked() {
+                if crate::widgets::double_clicked(ui, &resp) {
                     app.ui.renaming_component = Some((m.id, i, label.clone()));
                 }
                 resp.context_menu(|ui| component_row_menu(app, ui, m.id, i, &label, m.components.len()));
@@ -456,34 +462,38 @@ fn overlay_options(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     use lightcraft_pipeline::MaskView;
     let t = Tokens::get(ui.ctx());
     let view = MaskView::parse(&app.ui.mask_overlay_mode).unwrap_or_default();
-    ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(crate::i18n::tr("Overlay")).color(t.text_dim));
-        let r = crate::widgets::dropdown(ui, "maskOverlayMode", menu_label(view.label()), t.font(12.5), t.text_label);
-        egui::Popup::menu(&r).show(|ui| {
-            for v in MaskView::ALL {
-                if ui.selectable_label(v == view, menu_label(v.label())).clicked() {
-                    let _ = app.run("view.maskOverlayMode", json!({"mode": v.name()}));
-                }
-            }
-        });
-    });
     let colored = matches!(view, MaskView::Color | MaskView::ColorOnBw);
-    if colored {
+    // the panel's 24 / 22 pt margins (the slider has them built in)
+    let margins = egui::Margin { left: 24, right: 22, top: 0, bottom: 0 };
+    egui::Frame::NONE.inner_margin(margins).show(ui, |ui| {
         ui.horizontal(|ui| {
-            for c in OVERLAY_COLORS {
-                let (r, resp) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::click());
-                crate::widgets::announce(&resp, format!("{} #{:02x}{:02x}{:02x}", crate::i18n::tr("Overlay color"), c[0], c[1], c[2]));
-                register(ui.ctx(), format!("maskOverlayColor:{:02x}{:02x}{:02x}", c[0], c[1], c[2]), r);
-                ui.painter().rect_filled(r.shrink(2.0), 3.0, egui::Color32::from_rgb(c[0], c[1], c[2]));
-                if app.ui.mask_overlay_color == c {
-                    ui.painter().rect_stroke(r, 3.0, Stroke::new(1.5, t.text), egui::StrokeKind::Inside);
+            ui.label(egui::RichText::new(crate::i18n::tr("Overlay")).color(t.text_dim));
+            let r = crate::widgets::dropdown(ui, "maskOverlayMode", menu_label(view.label()), t.font(12.5), t.text_label);
+            egui::Popup::menu(&r).show(|ui| {
+                for v in MaskView::ALL {
+                    if ui.selectable_label(v == view, menu_label(v.label())).clicked() {
+                        let _ = app.run("view.maskOverlayMode", json!({"mode": v.name()}));
+                    }
                 }
-                if resp.clicked() {
-                    let _ = app.run("view.maskOverlayColor", json!({"color": c}));
-                }
-            }
+            });
         });
-    }
+        if colored {
+            ui.horizontal(|ui| {
+                for c in OVERLAY_COLORS {
+                    let (r, resp) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::click());
+                    crate::widgets::announce(&resp, format!("{} #{:02x}{:02x}{:02x}", crate::i18n::tr("Overlay color"), c[0], c[1], c[2]));
+                    register(ui.ctx(), format!("maskOverlayColor:{:02x}{:02x}{:02x}", c[0], c[1], c[2]), r);
+                    ui.painter().rect_filled(r.shrink(2.0), 3.0, egui::Color32::from_rgb(c[0], c[1], c[2]));
+                    if app.ui.mask_overlay_color == c {
+                        ui.painter().rect_stroke(r, 3.0, Stroke::new(1.5, t.text), egui::StrokeKind::Inside);
+                    }
+                    if resp.clicked() {
+                        let _ = app.run("view.maskOverlayColor", json!({"color": c}));
+                    }
+                }
+            });
+        }
+    });
     let spec = ControlSpec {
         id: "ui.maskOverlayOpacity",
         label: "Opacity",
@@ -499,10 +509,12 @@ fn overlay_options(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     if let Some(v) = out.value {
         app.ui.mask_overlay_opacity = v as f32;
     }
-    let mut pins = app.ui.mask_pins;
-    if ui.checkbox(&mut pins, crate::i18n::tr("Show Pins")).changed() {
-        let _ = app.run("view.maskPins", json!({"show": pins}));
-    }
+    egui::Frame::NONE.inner_margin(egui::Margin { bottom: 8, ..margins }).show(ui, |ui| {
+        let mut pins = app.ui.mask_pins;
+        if ui.checkbox(&mut pins, crate::i18n::tr("Show Pins")).changed() {
+            let _ = app.run("view.maskPins", json!({"show": pins}));
+        }
+    });
     if app.ui.mask_pins {
         super::right::tool_overlay_options(app, ui);
     }
@@ -604,6 +616,18 @@ fn range_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, comp: usize, shape
             }
         }
         MaskShape::Object { edge, .. } | MaskShape::Prompt { edge, .. } => {
+            // a finger has no ⌥: taps with the Object tool leave things out while this is on
+            if matches!(shape, MaskShape::Object { .. }) && crate::widgets::touch_screen(ui.ctx()) {
+                ui.horizontal(|ui| {
+                    for (exclude, label) in [(false, "Include"), (true, "Leave Out")] {
+                        let on = app.ui.tool == "object" && app.ui.object_excludes == exclude;
+                        if text_button(ui, &format!("objectTap{}{comp}", if exclude { "Out" } else { "In" }), label, on).clicked() {
+                            app.ui.tool = "object".into();
+                            app.ui.object_excludes = exclude;
+                        }
+                    }
+                });
+            }
             // Edge: how crisp the selection's border is (−100 hard … 0 as computed … 100 soft)
             let spec = ControlSpec {
                 id: "edge",
@@ -635,11 +659,21 @@ fn range_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, comp: usize, shape
                         .size(11.5),
                 );
                 let picking = app.ui.tool == "colorRange";
-                if text_button(ui, &format!("colorPick{comp}"), crate::i18n::tr("Pick"), picking)
+                if text_button(ui, &format!("colorPick{comp}"), crate::i18n::tr("Pick"), picking && !app.ui.pick_adds)
                     .on_hover_text(crate::i18n::tr("Click the photo to pick a colour; ⇧-click adds more (up to 5)"))
                     .clicked()
                 {
-                    app.ui.tool = if picking { String::new() } else { "colorRange".into() };
+                    app.ui.tool = if picking && !app.ui.pick_adds { String::new() } else { "colorRange".into() };
+                    app.ui.pick_adds = false;
+                }
+                // a finger has no ⇧: taps add samples while this is on
+                if crate::widgets::touch_screen(ui.ctx())
+                    && !samples.is_empty()
+                    && text_button(ui, &format!("colorAdd{comp}"), crate::i18n::tr("Add"), picking && app.ui.pick_adds).clicked()
+                {
+                    let adding = picking && app.ui.pick_adds;
+                    app.ui.tool = if adding { String::new() } else { "colorRange".into() };
+                    app.ui.pick_adds = !adding;
                 }
             });
             let spec = ControlSpec {
@@ -726,6 +760,7 @@ pub(crate) fn start_object(app: &mut LightcraftApp, ctx: &egui::Context, op: &st
     match r {
         Ok(_) => {
             app.ui.tool = "object".into();
+            app.ui.object_excludes = false;
             app.toast(ctx, crate::i18n::tr("Click the object to select it · ⌥-click leaves a part out"));
         }
         Err(e) => app.ai_error(ctx, e, Some(("object", op))),
@@ -743,6 +778,7 @@ pub(crate) fn begin_ai(app: &mut LightcraftApp, kind: &str, op: &str) -> Result<
                 app.run("mask.addComponent", json!({"op": op, "kind": "object"}))
             }?;
             app.ui.tool = "object".into();
+            app.ui.object_excludes = false;
             Ok(r)
         }
         _ => {

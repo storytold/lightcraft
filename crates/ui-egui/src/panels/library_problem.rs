@@ -107,7 +107,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
         .default_width(460.0)
         .show(ctx, |ui| {
             // a fixed width: a wrapped label in an auto-sized, centred window would move it every frame
-            ui.set_width(440.0);
+            ui.set_width(super::compact::dialog_width(ui.ctx(), 440.0, 18.0));
             ui.spacing_mut().item_spacing.y = 8.0;
             if problem.path.is_empty() {
                 ui.label(RichText::new(crate::i18n::tr("LightCraft couldn't find where to keep your library.")).color(t.text));

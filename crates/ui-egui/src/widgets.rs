@@ -67,6 +67,91 @@ pub fn escape_taken(ctx: &egui::Context) -> bool {
     ctx.data(|d| d.get_temp::<u64>(egui::Id::new("lc-escape-taken"))) == Some(ctx.cumulative_frame_nr())
 }
 
+/// How far from a handle (crop corner, curve point, mask pin …) a press still grabs it: `mouse`
+/// points with a mouse or trackpad, and at least 22 (a 44-point target, the iOS / Android minimum)
+/// once the screen has been touched, finger or pencil.
+pub fn grab_radius(ctx: &egui::Context, mouse: f32) -> f32 {
+    if ctx.input(|i| i.has_touch_screen()) { mouse.max(22.0) } else { mouse }
+}
+
+/// Whether the screen can be touched: controls a mouse reveals by hovering (a section's eye, a
+/// tile's remove button) are always there, since a finger can't hover. An iPad with a trackpad
+/// counts too.
+pub fn touch_screen(ctx: &egui::Context) -> bool {
+    ctx.input(|i| i.has_touch_screen())
+}
+
+const FINGER: &str = "lc-pointer-is-finger";
+
+/// Each frame, before the UI: whether the pointer is a finger (or pencil) or a mouse / trackpad,
+/// from this frame's events. A touch screen with a trackpad (an iPad with a Magic Keyboard)
+/// reports both: touches as `Touch` events (with the pointer events egui makes of them), the
+/// trackpad as pointer events alone.
+pub fn note_pointer(ctx: &egui::Context) {
+    let finger = ctx.input(|i| {
+        if i.events.iter().any(|e| matches!(e, egui::Event::Touch { .. })) {
+            Some(true)
+        } else if i.events.iter().any(|e| matches!(e, egui::Event::PointerMoved(_) | egui::Event::PointerButton { .. })) {
+            Some(false)
+        } else {
+            None
+        }
+    });
+    if let Some(f) = finger {
+        ctx.data_mut(|d| d.insert_temp(egui::Id::new(FINGER), f));
+    }
+}
+
+/// Whether the pointer is a finger (or pencil) now ([`note_pointer`]); before any input, whether
+/// the screen can be touched.
+pub fn finger(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<bool>(egui::Id::new(FINGER))).unwrap_or_else(|| touch_screen(ctx))
+}
+
+/// What a photo, album or keyword in a scrolling list senses: clicks and drags (drag and drop)
+/// with a mouse or trackpad, an iPad's included. With a finger clicks only: egui gives a drag to
+/// the widget under the finger, so a list item that took drags would never let a finger scroll its
+/// list. A long press opens the item's context menu there (egui counts it as a secondary click).
+pub fn list_item_sense(ctx: &egui::Context) -> egui::Sense {
+    if finger(ctx) { egui::Sense::click() } else { egui::Sense::click_and_drag() }
+}
+
+/// Longest time between the two taps of a double tap (release to release, s).
+const DOUBLE_TAP: f64 = 0.5;
+
+/// Whether `resp` was double-clicked, or on a touch screen double-tapped: egui's double click
+/// wants both clicks within 6 points and 0.3 s, which a mouse makes but fingers seldom do (they
+/// land a few points apart, and tap slower). Two taps on the same widget within [`DOUBLE_TAP`]
+/// count, wherever on it they land.
+pub fn double_clicked(ui: &egui::Ui, resp: &egui::Response) -> bool {
+    if !finger(ui.ctx()) {
+        return resp.double_clicked();
+    }
+    if !resp.clicked() {
+        return false;
+    }
+    let key = egui::Id::new("lc-last-tap");
+    let now = ui.input(|i| i.time);
+    let last = ui.ctx().data(|d| d.get_temp::<(egui::Id, f64)>(key));
+    let double = last.is_some_and(|(id, at)| id == resp.id && now - at <= DOUBLE_TAP);
+    // a double tap's second tap doesn't start the next one
+    ui.ctx().data_mut(|d| {
+        if double {
+            d.remove::<(egui::Id, f64)>(key);
+        } else {
+            d.insert_temp(key, (resp.id, now));
+        }
+    });
+    double
+}
+
+/// Where the drag that `resp` reports as started was pressed. By then the pointer has moved past
+/// the drag threshold (by touch often well past it, one event can be a long way), so hit tests
+/// and stroke starts use this, not the current position.
+pub fn press_pos(ui: &egui::Ui, resp: &egui::Response) -> Option<egui::Pos2> {
+    ui.input(|i| i.pointer.press_origin()).or(resp.interact_pointer_pos())
+}
+
 pub fn take_registry(ctx: &egui::Context) -> Vec<(String, Rect)> {
     ctx.data_mut(|d| std::mem::take(&mut d.get_temp_mut_or_default::<Registry>(egui::Id::new("lc-registry")).0))
 }
@@ -201,6 +286,16 @@ pub struct SliderOut {
     pub reset: bool,
 }
 
+/// How a touch drag that started on a slider's track is being used (decided by its first
+/// movement, kept until the finger lifts).
+#[derive(Clone, Copy, PartialEq)]
+enum TouchDrag {
+    /// Mostly sideways: adjusts the value, by the distance moved (no jump to the finger).
+    Adjust,
+    /// Mostly up or down: scrolls the panel the slider is in; the value is left alone.
+    Scroll,
+}
+
 /// What a value typed into a slider asks for (issue #322): a number such as `0.5`, `+12`, `-1,5`
 /// (comma or point) or `5600 K`, on the control's steps and clamped to its range. `None` when it
 /// isn't a finite number, so the slider keeps its value.
@@ -230,12 +325,21 @@ const THUMB_RING: f32 = 7.0;
 /// Scroll sideways over it to nudge it. Click the value to type one: Return or clicking away applies it,
 /// Esc keeps the old one. Drag the value sideways to scrub it, as if dragging the thumb (Shift: a tenth
 /// as far).
+///
+/// By touch, a drag that starts on the track adjusts the value only when it starts sideways; one
+/// that starts up or down scrolls the panel instead, and a tap doesn't move the value (on a phone
+/// the sliders fill the panel, so scrolling would otherwise keep changing them).
 pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_override: Option<&str>) -> SliderOut {
+    slider_padded(ui, spec, value, enabled, label_override, (24.0, 22.0))
+}
+
+/// [`slider`] with its own (left, right) padding: the panels' is 24 / 22 pt; a dialog's slider
+/// lines up with its label column instead.
+pub fn slider_padded(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_override: Option<&str>, pad: (f32, f32)) -> SliderOut {
     let t = Tokens::get(ui.ctx());
     let w = ui.available_width();
     let (row, _) = ui.allocate_exact_size(vec2(w, t.slider_row_h), Sense::hover());
-    let pad_l = 24.0;
-    let pad_r = 22.0;
+    let (pad_l, pad_r) = pad;
     let label_rect = Rect::from_min_size(pos2(row.left() + pad_l, row.top() + 4.0), vec2(w - pad_l - pad_r, 18.0));
     let track_rect = Rect::from_min_max(pos2(row.left() + pad_l, row.top() + 22.0), pos2(row.right() - pad_r, row.top() + 40.0));
     let id = ui.id().with(spec.id);
@@ -330,6 +434,16 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
         resp.clone().on_hover_text(reset_hint.as_str());
     }
     let mut v = value;
+    let touch_id = id.with("touch-drag");
+    if resp.drag_started() && ui.input(|i| i.any_touches()) {
+        let moved = ui.input(|i| i.pointer.interact_pos().zip(i.pointer.press_origin()).map(|(p, o)| p - o)).unwrap_or_default();
+        let kind = if moved.y.abs() > moved.x.abs() { TouchDrag::Scroll } else { TouchDrag::Adjust };
+        ui.ctx().data_mut(|d| d.insert_temp(touch_id, kind));
+    }
+    let touch_drag = ui.ctx().data(|d| d.get_temp::<TouchDrag>(touch_id));
+    if resp.drag_stopped() || !(resp.dragged() || resp.drag_started()) {
+        ui.ctx().data_mut(|d| d.remove::<TouchDrag>(touch_id));
+    }
     if let Some(mut pos) = scrub {
         // scrubbing the value moves it as dragging the thumb would: the pointer's sideways travel
         // over the track's width (a tenth with Shift), on the control's steps
@@ -390,7 +504,12 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
             typing = Some((text.clone(), frames, pressed));
             ui.data_mut(|m| m.insert_temp(typing_id, (text, frames, pressed)));
         }
-    } else if resp.double_clicked() || label_resp.double_clicked() {
+    } else if touch_drag == Some(TouchDrag::Scroll) {
+        if resp.dragged() || resp.drag_started() {
+            let delta = ui.input(|i| i.pointer.delta());
+            ui.scroll_with_delta_animation(vec2(0.0, delta.y), egui::style::ScrollAnimation::none());
+        }
+    } else if double_clicked(ui, &resp) | double_clicked(ui, &label_resp) {
         out.reset = true;
         out.value = Some(spec.default);
         v = spec.default;
@@ -403,13 +522,16 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
         {
             let fine = ui.input(|i| i.modifiers.shift);
             let step = spec.step.max(1e-9);
-            let nv = if fine {
-                // a tenth of the pointer's movement along the track; the unrounded position is kept, so a
-                // slow drag adds up instead of rounding back to the same step every frame
+            let nv = if fine || touch_drag == Some(TouchDrag::Adjust) {
+                // relative: the pointer's movement along the track (a tenth of it with ⇧; a finger
+                // moves the value by the distance moved, with no jump to where it touched). The
+                // unrounded position is kept, so a slow drag adds up instead of rounding back to the
+                // same step every frame
                 let fine_id = id.with("fine-pos");
                 let dx = ui.input(|i| i.pointer.delta().x);
+                let gain = if fine { 0.1 } else { 1.0 };
                 let kept = ui.data(|m| m.get_temp::<f64>(fine_id)).filter(|&p| ((spec.value_at(p) / step).round() * step - value).abs() < step / 2.0);
-                let pos = (kept.unwrap_or_else(|| spec.position(value)) + f64::from(dx / track_rect.width()) * 0.1).clamp(0.0, 1.0);
+                let pos = (kept.unwrap_or_else(|| spec.position(value)) + f64::from(dx / track_rect.width()) * gain).clamp(0.0, 1.0);
                 ui.data_mut(|m| m.insert_temp(fine_id, pos));
                 spec.value_at(pos)
             } else {
@@ -421,6 +543,7 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
                 v = nv;
             }
         } else if resp.clicked()
+            && !ui.input(|i| i.has_touch_screen())
             && let Some(p) = resp.interact_pointer_pos()
             // a click on the thumb leaves it there, so the first click of a double-click on it isn't a
             // history step of its own before the reset
@@ -584,7 +707,7 @@ pub fn section_header(ui: &mut Ui, id: &str, title: &str, open: bool, enabled: O
     // pointer is over the eye itself (the eye is on top), which hid the eye before it could be
     // clicked (issue #316)
     if let Some(on) = enabled
-        && (ui.rect_contains_pointer(r) || !on)
+        && (ui.rect_contains_pointer(r) || !on || touch_screen(ui.ctx()))
     {
         let eye = Rect::from_center_size(pos2(r.right() - 34.0, r.center().y), vec2(18.0, 18.0));
         let er = ui.interact(eye, ui.id().with(("eye", id)), Sense::click());
@@ -667,6 +790,10 @@ pub fn segmented(ui: &mut Ui, id: &str, items: &[(&str, &str)], active: Option<u
     let seg_w = ((w - gap * (per_row as f32 - 1.0)) / per_row as f32).max(24.0);
     let mut clicked = None;
     for (row_i, row) in items.chunks(per_row).enumerate() {
+        // rows as far apart as the segments (panels may set no vertical item spacing)
+        if row_i > 0 {
+            ui.add_space(gap);
+        }
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = gap;
             for (j, (label, key)) in row.iter().enumerate() {

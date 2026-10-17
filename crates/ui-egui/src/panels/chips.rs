@@ -26,7 +26,7 @@ pub fn count_text(matching: usize, total: Option<usize>, filtering: bool) -> Str
 
 /// Width of a chip with `label` (text + the × button).
 fn chip_width(ui: &egui::Ui, label: &str, font: egui::FontId) -> f32 {
-    ui.painter().layout_no_wrap(label.to_string(), font, egui::Color32::WHITE).size().x + 12.0 + 22.0
+    ui.painter().layout_no_wrap(label.to_string(), font, egui::Color32::WHITE).size().x + 12.0 + 24.0
 }
 
 /// Localise generated chip labels without rewriting search text or metadata values.
@@ -98,9 +98,10 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, chips: &[FilterChip]) {
         }
         let r = Rect::from_min_size(pos2(x, bar.center().y - 11.0), vec2(w.min(right - x), 22.0));
         ui.painter().rect(r, 11.0, t.field, Stroke::new(1.0, t.accent.gamma_multiply(0.6)), StrokeKind::Inside);
-        let text_r = Rect::from_min_max(r.min, pos2(r.right() - 22.0, r.max.y));
+        let text_r = Rect::from_min_max(r.min, pos2(r.right() - 24.0, r.max.y));
         ui.painter().with_clip_rect(text_r).text(pos2(r.left() + 10.0, r.center().y), egui::Align2::LEFT_CENTER, &label, font.clone(), t.text);
-        let xr = Rect::from_center_size(pos2(r.right() - 12.0, r.center().y), vec2(18.0, 18.0));
+        // the × as far from the right edge as the text is from the left
+        let xr = Rect::from_center_size(pos2(r.right() - 14.0, r.center().y), vec2(18.0, 18.0));
         let resp = ui.interact(xr, egui::Id::new(("filter-chip-x", i)), Sense::click()).on_hover_text(crate::i18n::tr("Remove this filter"));
         crate::widgets::announce(&resp, format!("{}: {label}", crate::i18n::tr("Remove this filter")));
         register(ui.ctx(), format!("chip:{i}"), xr);

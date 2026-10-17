@@ -26,7 +26,7 @@ use crate::{ControlRequest, LightcraftApp};
 /// Background behind the panels (eframe's default clear colour, made opaque).
 const CLEAR: Color32 = Color32::from_rgb(12, 12, 12);
 /// Simulated frame interval (deterministic animation time).
-const FRAME_DT: f64 = 1.0 / 60.0;
+pub(crate) const FRAME_DT: f64 = 1.0 / 60.0;
 
 /// Validate the scaled screenshot dimensions before layout or pixel allocation.
 pub fn viewport_pixels(size: [f32; 2], pixels_per_point: f32) -> Result<[usize; 2], String> {
@@ -221,6 +221,9 @@ impl HeadlessView {
     }
 }
 
+/// How long [`Headless::request`] waits for a widget it is asked to click, drag or hover.
+const WIDGET_WAIT: Duration = Duration::from_secs(5);
+
 /// A windowless app session: the app's `logic` + `ui` driven frame by frame into a
 /// [`HeadlessView`], with control-protocol requests answered by the shared handler.
 pub struct Headless {
@@ -237,6 +240,8 @@ pub struct Headless {
     time: f64,
     frames: u64,
     pub(crate) events: Vec<egui::Event>,
+    /// Safe-area insets to report on the next frame (a phone's notch, or its soft keyboard).
+    safe_area: Option<egui::SafeAreaInsets>,
     control: Sender<ControlRequest>,
     quit: bool,
     /// The simulated window is zoomed (`Maximized(true)` seen, reported back to the app like a real host).
@@ -245,6 +250,57 @@ pub struct Headless {
     pub window_commands: Vec<ViewportCommand>,
     /// The pointer cursor the last frame asked for (what a real host would show).
     pub last_cursor: egui::CursorIcon,
+    /// Tests: one headless app at a time per test process (see [`serial`]). Last, so it's
+    /// released after the app is gone.
+    #[cfg(test)]
+    _serial: serial::Guard,
+}
+
+/// The ui-egui tests drive whole apps, and parallel tests in one process share the engine's
+/// process-wide memory gate and the CPU with each other's render pools: background work (grid
+/// thumbnails) starved behind other tests' renders for minutes and `settle` timed out. One
+/// headless app at a time is deterministic, and faster too (the suite ran in 87 s serially
+/// against 117 s in parallel). Re-entrant: a test may hold two apps.
+#[cfg(test)]
+mod serial {
+    use std::sync::{Condvar, Mutex};
+    use std::thread::ThreadId;
+
+    static OWNER: Mutex<Option<(ThreadId, usize)>> = Mutex::new(None);
+    static FREED: Condvar = Condvar::new();
+
+    pub struct Guard;
+
+    pub fn lock() -> Guard {
+        let me = std::thread::current().id();
+        let mut owner = OWNER.lock().unwrap_or_else(|e| e.into_inner());
+        loop {
+            match owner.as_mut() {
+                None => {
+                    *owner = Some((me, 1));
+                    return Guard;
+                }
+                Some((t, n)) if *t == me => {
+                    *n += 1;
+                    return Guard;
+                }
+                Some(_) => owner = FREED.wait(owner).unwrap_or_else(|e| e.into_inner()),
+            }
+        }
+    }
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            let mut owner = OWNER.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some((_, n)) = owner.as_mut() {
+                *n -= 1;
+                if *n == 0 {
+                    *owner = None;
+                    FREED.notify_all();
+                }
+            }
+        }
+    }
 }
 
 /// A headless run (`lightcraft-cli snapshot`, tests) is a one-shot process: however it ends, it
@@ -262,6 +318,8 @@ impl Headless {
     /// Invalid dimensions fall back to 1600×1000 at scale 1; external callers can use
     /// [`viewport_pixels`] to reject them before constructing the session.
     pub fn new(app: LightcraftApp, size: [f32; 2], pixels_per_point: f32) -> Self {
+        #[cfg(test)]
+        let serial = serial::lock();
         let (size, pixels_per_point) = if viewport_pixels(size, pixels_per_point).is_ok() {
             (egui::Vec2::from(size), pixels_per_point)
         } else {
@@ -280,8 +338,11 @@ impl Headless {
             time: 0.0,
             frames: 0,
             events: vec![],
+            safe_area: None,
             control: tx,
             quit: false,
+            #[cfg(test)]
+            _serial: serial,
             window_maximized: false,
             window_commands: vec![],
             last_cursor: egui::CursorIcon::Default,
@@ -308,12 +369,24 @@ impl Headless {
     }
 
     /// Run one frame.
+    /// Queue raw input for the next [`Self::step`] (touch gestures, which the control protocol
+    /// has no requests for).
+    pub fn input(&mut self, events: impl IntoIterator<Item = egui::Event>) {
+        self.events.extend(events);
+    }
+
+    /// Report these safe-area insets from the next frame on (egui keeps them until changed).
+    pub fn set_safe_area(&mut self, insets: egui::SafeAreaInsets) {
+        self.safe_area = Some(insets);
+    }
+
     pub fn step(&mut self) {
         (self.size, self.pixels_per_point) = bounded_viewport(self.size, self.pixels_per_point);
         let mut raw = HeadlessView::raw_input(self.size, self.pixels_per_point, self.time, std::mem::take(&mut self.events));
         raw.viewports.entry(ViewportId::ROOT).or_default().maximized = Some(self.window_maximized);
         raw.max_texture_side = (self.reported_texture_side != Some(self.max_texture_side)).then_some(self.max_texture_side);
         self.reported_texture_side = Some(self.max_texture_side);
+        raw.safe_area_insets = self.safe_area.take();
         self.app.raw_input_hook(&mut raw);
         let app = &mut self.app;
         let mut cursor = egui::CursorIcon::Default;
@@ -345,6 +418,27 @@ impl Headless {
                 ViewportCommand::StartDrag => self.window_commands.push(c),
                 _ => {}
             }
+        }
+    }
+
+    /// Run frames until widget `id` is on screen and holds still (lists that fill in from the disk
+    /// or expand take a few frames, more on a loaded machine; rows above it can still arrive),
+    /// at most `timeout`. Returns whether it showed up.
+    pub fn wait_for_widget(&mut self, id: &str, timeout: Duration) -> bool {
+        let t0 = Instant::now();
+        let mut last = None;
+        loop {
+            let now = self.app.widgets.iter().find(|(w, _)| w == id).map(|(_, r)| *r);
+            // rows above it may still come in from the disk (the Local section's folders)
+            let listing = crate::panels::left::fs_cached_running(&self.view.ctx) > 0;
+            if now.is_some() && now == last && !listing {
+                return true;
+            }
+            if t0.elapsed() > timeout {
+                return now.is_some();
+            }
+            last = now;
+            self.step();
         }
     }
 
@@ -428,6 +522,13 @@ impl Headless {
     /// Send a control-protocol request (see [`crate::control`]) and run frames until it is
     /// answered, then until its input has been consumed. Returns `{"ok": …, "result"|"error": …}`.
     pub fn request(&mut self, method: &str, params: Value, timeout: Duration) -> Value {
+        // a widget to click, drag or hover may need a few more frames to show up (a list filled
+        // in from the disk, an expanding level): wait a little for it (absent ones stay errors)
+        if matches!(method, "ui.clickWidget" | "ui.dragWidget" | "ui.hoverWidget")
+            && let Some(id) = params.get("id").and_then(Value::as_str)
+        {
+            self.wait_for_widget(id, timeout.min(WIDGET_WAIT));
+        }
         let (req, rx) = ControlRequest::new(method, params);
         if self.control.send(req).is_err() {
             return json!({"ok": false, "error": "control channel closed"});
@@ -2486,6 +2587,36 @@ mod tests {
         let _ = std::fs::remove_dir_all(&out);
     }
 
+    /// A mobile host's share sheet gets the written files when a UI export finishes, and the
+    /// Export dialog starts in the host's export folder.
+    #[test]
+    fn finished_export_is_offered_to_the_share_sheet() {
+        let mut h = demo([1200.0, 900.0]);
+        let t = Duration::from_secs(10);
+        h.app.services.write_shared = Some(std::sync::Arc::new(|_: &str, _: &[u8]| Ok(())));
+        h.app.services.export_dir = Some("/sandbox/Exports".into());
+        let shared = std::rc::Rc::new(std::cell::RefCell::new(Vec::<Vec<String>>::new()));
+        let s = shared.clone();
+        h.app.services.share = Some(Box::new(move |paths: &[String]| s.borrow_mut().push(paths.to_vec())));
+        let ids: Vec<u64> = h.app.session.visible_cloned().iter().take(2).map(|p| p.0).collect();
+        h.request("engine.execute", json!({"command": "library.select", "params": {"ids": ids}}), t);
+        h.request("engine.execute", json!({"command": "dialog.export", "params": {}}), t);
+        h.settle(SETTLE);
+        let Some(crate::state::Dialog::Export { full_size, resize, dir, .. }) = &mut h.app.ui.dialog else { panic!("no export dialog") };
+        assert_eq!(dir, "/sandbox/Exports");
+        *full_size = false;
+        *resize = lightcraft_engine::export::Resize::long_edge(64);
+        assert_eq!(h.request("ui.dialog.confirm", json!({}), t)["ok"], true);
+        let t0 = Instant::now();
+        while h.app.export.is_some() && t0.elapsed() < Duration::from_secs(60) {
+            h.step();
+        }
+        let shared = shared.borrow();
+        assert_eq!(shared.len(), 1, "shared once: {shared:?}");
+        assert_eq!(shared[0].len(), 2);
+        assert!(shared[0].iter().all(|p| p.starts_with("/sandbox/Exports/")), "{shared:?}");
+    }
+
     /// Dragging grid photos onto an album row adds them to the album.
     #[test]
     fn drag_photos_onto_an_album() {
@@ -3642,7 +3773,7 @@ mod tests {
         }
         let r0 = rect(&mut h);
         assert!(r0[3] > 600.0, "{r0:?}");
-        // the Copy options add rows below the grid: the grid makes room, the window doesn't grow
+        // the Copy options add rows to the options column: it scrolls, the window doesn't grow
         for copy in [true, false] {
             if let Some(crate::state::Dialog::Import { opts }) = &mut h.app.ui.dialog {
                 opts.copy = copy;
@@ -3653,13 +3784,16 @@ mod tests {
             let r = rect(&mut h);
             assert!((r[3] - r0[3]).abs() < 0.5, "copy {copy}: {r0:?} → {r:?}");
         }
+        let grid = |h: &Headless| h.app.widgets.iter().rev().find(|(w, _)| w == "grid:importPhotos").map(|(_, r)| r.height()).unwrap();
+        let g0 = grid(&h);
         let (x, y) = (r0[0] + r0[2] - 3.0, r0[1] + r0[3] - 3.0);
-        h.request("ui.drag", json!({"x": x, "y": y, "toX": x + 160.0, "toY": y + 120.0, "steps": 12}), t);
+        h.request("ui.drag", json!({"x": x, "y": y, "toX": x - 160.0, "toY": y - 120.0, "steps": 12}), t);
         for _ in 0..10 {
             h.step();
         }
         let r1 = rect(&mut h);
-        assert!(r1[2] > r0[2] + 100.0 && r1[3] > r0[3] + 80.0, "dragging the corner resized it: {r0:?} → {r1:?}");
+        assert!(r1[2] < r0[2] - 100.0 && r1[3] < r0[3] - 80.0, "dragging the corner resized it: {r0:?} → {r1:?}");
+        assert!(grid(&h) < g0 - 80.0, "the photo grid took the new height: {g0} → {}", grid(&h));
         for _ in 0..60 {
             h.step();
         }
@@ -3814,7 +3948,8 @@ mod tests {
         let services = crate::Services { png: None, pick_folder: Some(Box::new(move || Some(dest_s.clone()))), ..Default::default() };
         let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo().with_fs(), services);
         app.ui.view = crate::state::ViewMode::PhotoGrid;
-        let mut h = Headless::new(app, [1300.0, 900.0], 1.0);
+        // tall enough for the whole Import dialog (a shorter window scrolls it)
+        let mut h = Headless::new(app, [1300.0, 1400.0], 1.0);
         let t = Duration::from_secs(10);
         let r = h.request("engine.execute", json!({"command": "file.addPhotos", "params": {"paths": [src.to_string_lossy()]}}), t);
         assert_eq!(r["result"]["scanning"], true, "{r}");
@@ -3976,7 +4111,8 @@ mod tests {
         session.open_library(&lib, false).unwrap();
         let mut app = LightcraftApp::new(session, crate::Services { png: None, ..Default::default() });
         app.ui.view = crate::state::ViewMode::PhotoGrid;
-        let mut h = Headless::new(app, [1300.0, 1000.0], 1.0);
+        // tall enough for the whole Import dialog (a shorter window scrolls it)
+        let mut h = Headless::new(app, [1300.0, 1400.0], 1.0);
         let t = Duration::from_secs(10);
         let r =
             h.request("engine.execute", json!({"command": "file.addPhotos", "params": {"paths": [dir.join("IMG_0007.png").to_string_lossy()]}}), t);

@@ -180,9 +180,8 @@ pub fn target_active(app: &LightcraftApp, params: &mut Value) {
 }
 
 fn area_and_filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui) -> Rect {
-    let t = Tokens::get(ui.ctx());
     let full = ui.max_rect();
-    let film_h = if app.ui.filmstrip { t.film_h } else { 0.0 };
+    let film_h = if app.ui.filmstrip { super::detail::film_height(ui.ctx(), full) } else { 0.0 };
     let canvas = Rect::from_min_max(full.min, pos2(full.right(), full.bottom() - film_h));
     app.canvas_rect = Some(canvas);
     if app.ui.filmstrip {
@@ -335,14 +334,35 @@ fn photo_tile(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, slot: Slo
         pt.galley(pos2(x, cap.center().y - g.size().y / 2.0), g, t.text_dim);
         x += name_w + 10.0;
     }
+    // the stars rate this photo (tap the current rating again to clear it); finger-sized apart
+    // on a touch screen
+    let (step, size) = if ui.input(|i| i.has_touch_screen()) { (24.0, 16.0) } else { (13.0, 12.0) };
+    let mut rate = None;
     for i in 0..5u8 {
         let filled = i < photo.rating;
-        let r = Rect::from_min_size(pos2(x + i as f32 * 13.0, cap.center().y - 6.0), vec2(12.0, 12.0));
+        let r = Rect::from_min_size(pos2(x + i as f32 * step, cap.center().y - size / 2.0), vec2(size, size));
         if r.right() < cap.right() {
-            paint(pt, r, if filled { Icon::StarFilled } else { Icon::Star }, if filled { t.star } else { t.icon.gamma_multiply(0.6) });
+            let hit = Rect::from_min_size(pos2(x + i as f32 * step - (step - size) / 2.0, cap.top()), vec2(step, caption_h));
+            let sresp = ui.interact(hit, egui::Id::new(("cull-star", id.0, i)), Sense::click());
+            crate::widgets::announce(&sresp, format!("{} ★", i + 1));
+            register(ui.ctx(), format!("cullStar:{}:{}", id.0, i + 1), hit);
+            let c = if filled {
+                t.star
+            } else if sresp.hovered() {
+                t.text
+            } else {
+                t.icon.gamma_multiply(0.6)
+            };
+            paint(pt, r, if filled { Icon::StarFilled } else { Icon::Star }, c);
+            if sresp.clicked() {
+                rate = Some(if photo.rating == i + 1 { 0 } else { i + 1 });
+            }
         }
     }
-    x += 5.0 * 13.0 + 4.0;
+    if let Some(r) = rate {
+        let _ = app.run("photo.rate", json!({"rating": r, "ids": [id.0]}));
+    }
+    x += 5.0 * step + 4.0;
     let fr = Rect::from_min_size(pos2(x, cap.center().y - 7.0), vec2(14.0, 14.0));
     match photo.flag {
         Flag::Pick if fr.right() < cap.right() => paint(pt, fr, Icon::FlagPick, t.pick),
@@ -491,7 +511,7 @@ pub fn show_compare(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         if resp.clicked() {
             select_pair(app, sel, cand, id);
         }
-        if resp.double_clicked() {
+        if crate::widgets::double_clicked(ui, &resp) {
             app.ui.zoom = if app.ui.zoom == Zoom::Fit { Zoom::Percent(100.0) } else { Zoom::Fit };
         }
         resp.context_menu(|ui| {
@@ -546,12 +566,12 @@ pub fn show_survey(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         if resp.clicked() {
             app.session.selection.active = Some(*id);
         }
-        if resp.double_clicked() {
+        if crate::widgets::double_clicked(ui, &resp) {
             let _ = app.run("library.select", json!({"ids": [id.0]}));
             app.ui.view = ViewMode::Detail;
         }
-        // remove from the survey (deselect) on hover
-        if resp.hovered() && photos.len() > 1 {
+        // remove from the survey (deselect) on hover; always there on a touch screen
+        if (resp.hovered() || crate::widgets::touch_screen(ui.ctx())) && photos.len() > 1 {
             let xr = Rect::from_min_size(pos2(img.right() - 26.0, img.top() + 6.0), vec2(20.0, 20.0));
             let xresp = ui.interact(xr, egui::Id::new(("survey-x", id.0)), Sense::click()).on_hover_text(crate::i18n::tr("Remove from survey"));
             crate::widgets::announce(&xresp, crate::i18n::tr("Remove from survey"));
