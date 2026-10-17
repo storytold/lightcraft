@@ -4,6 +4,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
+use lightcraft_engine::control_auth;
 use serde_json::{Value, json};
 
 /// Reply payloads include base64-encoded previews and screenshots, unlike the small requests.
@@ -30,19 +31,36 @@ pub struct Remote {
     addr: String,
     conn: Option<(BufReader<TcpStream>, TcpStream)>,
     next_id: u64,
+    /// Sent first on every connection ([`control_auth`]). `None`: look it up at each connection
+    /// ([`control_auth::client_token`]); `Some(None)`: send none.
+    token: Option<Option<String>>,
 }
 
+/// The id of the `auth` request that opens each connection (requests count from 1).
+const AUTH_ID: u64 = 0;
+
 impl Remote {
-    /// Connect to `addr` (e.g. `127.0.0.1:7980`), failing fast when nothing is listening.
+    /// Connect to `addr` (e.g. `127.0.0.1:7980`), failing fast when nothing is listening or the
+    /// app refuses the token. The token is `$LIGHTCRAFT_CONTROL_TOKEN`, else the one the app wrote
+    /// for that port ([`control_auth::client_token`]).
     pub fn connect(addr: &str) -> std::io::Result<Self> {
-        let mut r = Self { addr: addr.to_string(), conn: None, next_id: 1 };
+        let mut r = Self::lazy(addr);
         r.reconnect()?;
         Ok(r)
     }
 
-    /// A remote that connects on first use (the app may start after the MCP server).
+    /// A remote that connects on first use (the app may start after the MCP server). The token
+    /// is looked up again at each connection, so an app started later is found with its own.
     pub fn lazy(addr: &str) -> Self {
-        Self { addr: addr.to_string(), conn: None, next_id: 1 }
+        Self { addr: addr.to_string(), conn: None, next_id: 1, token: None }
+    }
+
+    /// Use this token instead of looking one up (`None`: send none).
+    pub fn with_token(mut self, token: Option<String>) -> Self {
+        self.token = Some(token);
+        self.conn = None;
+        self.next_id = 1;
+        self
     }
 
     pub fn addr(&self) -> &str {
@@ -59,13 +77,39 @@ impl Remote {
                     // The app answers within 60 s (its own timeout); leave headroom.
                     s.set_read_timeout(Some(Duration::from_secs(90))).ok();
                     let read = s.try_clone()?;
-                    self.conn = Some((BufReader::new(read), s));
+                    let mut conn = (BufReader::new(read), s);
+                    self.authenticate(&mut conn)?;
+                    self.conn = Some(conn);
                     return Ok(());
                 }
                 Err(e) => last = e,
             }
         }
         Err(last)
+    }
+
+    /// Open a fresh connection with the `auth` request. A refused token, or a token source that
+    /// can't be used (a malformed `LIGHTCRAFT_CONTROL_TOKEN` or token file), is a `PermissionDenied`
+    /// error carrying the reason; without a token nothing is sent (the first request then
+    /// gets the app's "authentication required" reply).
+    fn authenticate(&self, (reader, writer): &mut (BufReader<TcpStream>, TcpStream)) -> std::io::Result<()> {
+        let looked_up;
+        let token = match &self.token {
+            Some(fixed) => fixed,
+            None => {
+                looked_up = control_auth::client_token(&self.addr).map_err(|e| std::io::Error::new(std::io::ErrorKind::PermissionDenied, e))?;
+                &looked_up
+            }
+        };
+        let Some(token) = token else { return Ok(()) };
+        writeln!(writer, "{}", control_auth::auth_request(json!(AUTH_ID), token))?;
+        writer.flush()?;
+        let reply = parse_reply(&read_reply(reader, MAX_REPLY)?, AUTH_ID)?;
+        if reply.get("ok").and_then(Value::as_bool) == Some(true) {
+            return Ok(());
+        }
+        let why = reply.get("error").and_then(Value::as_str).unwrap_or("the app refused the control token");
+        Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, why.to_string()))
     }
 
     /// Send one request line and read the reply line. On failure the flag says whether the request
@@ -152,6 +196,8 @@ impl Backend for Remote {
                     self.conn = None;
                     if sent {
                         self.unknown_outcome(method, &e)
+                    } else if e.kind() == std::io::ErrorKind::PermissionDenied {
+                        format!("LightCraft app at {} refused the connection: {e}", self.addr)
                     } else {
                         format!("LightCraft app at {} is not reachable: {e} (start it with `lightcraft --control PORT`)", self.addr)
                     }
@@ -218,6 +264,71 @@ mod tests {
         let listener = worker.join().unwrap();
         listener.set_nonblocking(true).unwrap();
         assert_eq!(listener.accept().unwrap_err().kind(), std::io::ErrorKind::WouldBlock, "request was resent on a new connection");
+    }
+
+    /// A fake app that requires `token`: answers `auth`, then echoes each method it runs.
+    fn app_with_token(token: &'static str) -> (String, std::thread::JoinHandle<Vec<String>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let worker = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut writer = stream.try_clone().unwrap();
+            let mut ran = Vec::new();
+            let mut authenticated = false;
+            for line in BufReader::new(stream).lines() {
+                let Ok(line) = line else { break };
+                let req: Value = serde_json::from_str(&line).unwrap();
+                let method = req["method"].as_str().unwrap().to_string();
+                if !authenticated {
+                    let (mut reply, ok) = control_auth::check_auth_request(&method, &req["params"], token);
+                    reply["id"] = req["id"].clone();
+                    writeln!(writer, "{reply}").unwrap();
+                    if !ok {
+                        break;
+                    }
+                    authenticated = true;
+                    continue;
+                }
+                writeln!(writer, "{}", json!({"id": req["id"], "ok": true, "result": method})).unwrap();
+                ran.push(method);
+            }
+            ran
+        });
+        (addr, worker)
+    }
+
+    const TOKEN: &str = "abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd";
+
+    #[test]
+    fn the_token_is_sent_before_the_first_request() {
+        let (addr, app) = app_with_token(TOKEN);
+        let mut remote = Remote::lazy(&addr).with_token(Some(TOKEN.into()));
+        assert_eq!(remote.call("ui.inspect", json!({})), Ok(json!("ui.inspect")));
+        assert_eq!(remote.call("engine.commands", json!({})), Ok(json!("engine.commands")));
+        drop(remote);
+        assert_eq!(app.join().unwrap(), ["ui.inspect", "engine.commands"]);
+    }
+
+    #[test]
+    fn a_refused_token_is_reported_and_nothing_runs() {
+        let (addr, app) = app_with_token(TOKEN);
+        let err = match Remote::lazy(&addr).with_token(Some("0".repeat(64))).reconnect() {
+            Ok(()) => panic!("a wrong token must be refused"),
+            Err(e) => e,
+        };
+        assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(err.to_string().contains("wrong control token"), "{err}");
+        assert!(app.join().unwrap().is_empty());
+    }
+
+    #[test]
+    fn without_a_token_the_apps_refusal_is_the_error() {
+        let (addr, app) = app_with_token(TOKEN);
+        let mut remote = Remote::lazy(&addr).with_token(None);
+        let err = remote.call("app.quit", json!({})).unwrap_err();
+        assert!(err.contains("authentication required"), "{err}");
+        drop(remote);
+        assert!(app.join().unwrap().is_empty());
     }
 
     #[test]

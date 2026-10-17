@@ -5,7 +5,10 @@
 //! (an HTTP request line from a browser's cross-origin `fetch`, a stray `nc`, binary junk) gets
 //! one error reply and the connection is closed, so nothing after it is executed. Lines are
 //! bounded ([`MAX_LINE`]) and so is the number of open connections ([`MAX_CONNECTIONS`]); junk
-//! never reaches the UI thread. See `docs/control-protocol.md`.
+//! never reaches the UI thread. The first request on a connection must be `auth` with the run's
+//! token ([`lightcraft_engine::control_auth`]); anything else gets one error reply and the
+//! connection is closed, so a process or web page that only knows the port can't run commands.
+//! See `docs/control-protocol.md`.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -14,6 +17,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::Duration;
 
+use lightcraft_engine::control_auth;
 use lightcraft_ui_egui::ControlRequest;
 use serde_json::{Value, json};
 
@@ -23,7 +27,8 @@ pub const MAX_LINE: usize = 4 * 1024 * 1024;
 /// Connections served at once; further ones get an error line and are closed.
 pub const MAX_CONNECTIONS: usize = 16;
 
-pub fn start(port: u16, ctx: egui::Context) -> Receiver<ControlRequest> {
+/// Serve the control channel on `127.0.0.1:port`; every connection must authenticate with `token`.
+pub fn start(port: u16, token: String, ctx: egui::Context) -> Receiver<ControlRequest> {
     let (tx, rx) = channel::<ControlRequest>();
     let listener = match TcpListener::bind(("127.0.0.1", port)) {
         Ok(l) => l,
@@ -33,12 +38,13 @@ pub fn start(port: u16, ctx: egui::Context) -> Receiver<ControlRequest> {
         }
     };
     log::info!("control server listening on 127.0.0.1:{port}");
-    std::thread::spawn(move || accept_loop(listener, tx, ctx));
+    std::thread::spawn(move || accept_loop(listener, tx, ctx, token));
     rx
 }
 
-fn accept_loop(listener: TcpListener, tx: Sender<ControlRequest>, ctx: egui::Context) {
+fn accept_loop(listener: TcpListener, tx: Sender<ControlRequest>, ctx: egui::Context, token: String) {
     let open = Arc::new(AtomicUsize::new(0));
+    let token = Arc::new(token);
     for mut stream in listener.incoming().flatten() {
         if open.fetch_add(1, Ordering::SeqCst) >= MAX_CONNECTIONS {
             open.fetch_sub(1, Ordering::SeqCst);
@@ -48,8 +54,9 @@ fn accept_loop(listener: TcpListener, tx: Sender<ControlRequest>, ctx: egui::Con
         let tx = tx.clone();
         let ctx = ctx.clone();
         let open = Arc::clone(&open);
+        let token = Arc::clone(&token);
         std::thread::spawn(move || {
-            serve(stream, &tx, &ctx);
+            serve(stream, &tx, &ctx, &token);
             open.fetch_sub(1, Ordering::SeqCst);
         });
     }
@@ -66,9 +73,8 @@ const NO_FRAMES_AFTER: Duration = Duration::from_secs(5);
 pub const HIDDEN_WINDOW_ERROR: &str = "the app drew no frame for 5 s, so the request was not run: its window is probably not visible \
 (on Wayland a window on a hidden workspace or minimized is not redrawn, which pauses the app). Bring the window on screen and send it again";
 
-fn serve(stream: TcpStream, tx: &Sender<ControlRequest>, ctx: &egui::Context) {
-    let Ok(read) = stream.try_clone() else { return };
-    serve_lines(read, stream, |method, params| {
+fn serve(stream: TcpStream, tx: &Sender<ControlRequest>, ctx: &egui::Context, token: &str) {
+    serve_stream(stream, token, |method, params| {
         let (req, rrx) = ControlRequest::new(method, params);
         let state = Arc::clone(&req.state);
         tx.send(req).ok()?;
@@ -151,6 +157,32 @@ fn parse_line(bytes: &[u8]) -> Line {
     }
 }
 
+/// [`serve_lines`] on a socket, then close it so the peer reads every reply. Reads and writes go
+/// through the one stream, not a `try_clone`: on Windows a cloned socket handle is inheritable, and
+/// a program the app starts (browser, Explorer, an editor) would keep the connection open (#1991).
+fn serve_stream(stream: TcpStream, token: &str, handle: impl FnMut(String, Value) -> Option<Value>) {
+    serve_lines(&stream, &stream, token, handle);
+    close_gracefully(&stream);
+}
+
+/// Close a connection the server is done with without destroying its last reply. A socket closed
+/// while the peer's later lines sit unread is reset (on Windows at once), and a reset can discard
+/// the error reply the peer has not read yet, so the client sees "connection reset" instead of
+/// why. Send FIN, then read and drop what is left (bounded in bytes and time) before closing.
+fn close_gracefully(stream: &TcpStream) {
+    let _ = stream.shutdown(std::net::Shutdown::Write);
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
+    let mut sink = [0u8; 8192];
+    let mut left = MAX_LINE;
+    let mut reader = stream;
+    while left > 0 {
+        match reader.read(&mut sink) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => left = left.saturating_sub(n),
+        }
+    }
+}
+
 /// Read one `\n`-terminated line of at most `max` bytes into `buf` (newline stripped).
 /// `Ok(false)` at end of stream; `Err` when the line is too long or the read fails.
 fn read_bounded_line(reader: &mut impl BufRead, buf: &mut Vec<u8>, max: usize) -> Result<bool, String> {
@@ -176,11 +208,13 @@ fn read_bounded_line(reader: &mut impl BufRead, buf: &mut Vec<u8>, max: usize) -
 }
 
 /// Serve requests from `read`, answering on `out`, until the peer closes, sends something that is
-/// not a request, or `handle` returns `None` (app gone). `handle` gets `(method, params)` and
-/// returns the reply object (the request's `id` is added here).
-fn serve_lines<R: Read, W: Write>(read: R, mut out: W, mut handle: impl FnMut(String, Value) -> Option<Value>) {
+/// not a request, fails to authenticate, or `handle` returns `None` (app gone). The first request
+/// must be `auth` with `token` and is answered here; `handle` gets the later ones as
+/// `(method, params)` and returns the reply object (the request's `id` is added here).
+fn serve_lines<R: Read, W: Write>(read: R, mut out: W, token: &str, mut handle: impl FnMut(String, Value) -> Option<Value>) {
     let mut reader = BufReader::new(read);
     let mut buf = Vec::new();
+    let mut authenticated = false;
     loop {
         let reject = match read_bounded_line(&mut reader, &mut buf, MAX_LINE) {
             Ok(false) => return,
@@ -188,6 +222,17 @@ fn serve_lines<R: Read, W: Write>(read: R, mut out: W, mut handle: impl FnMut(St
             Ok(true) => match parse_line(&buf) {
                 Line::Blank => continue,
                 Line::Reject(e) => e,
+                Line::Request { id, method, params } if !authenticated => {
+                    let (mut r, ok) = control_auth::check_auth_request(&method, &params, token);
+                    if let Some(o) = r.as_object_mut() {
+                        o.insert("id".into(), id);
+                    }
+                    if writeln!(out, "{r}").and_then(|()| out.flush()).is_err() || !ok {
+                        return;
+                    }
+                    authenticated = true;
+                    continue;
+                }
                 Line::Request { id, method, params } => {
                     let Some(mut r) = handle(method, params) else { return };
                     if let Some(o) = r.as_object_mut() {
@@ -254,15 +299,53 @@ mod tests {
         worker.join().unwrap();
     }
 
-    fn run(input: &[u8]) -> (Vec<Value>, Vec<String>) {
+    const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    /// Serve `input` as it arrives, without authenticating first: replies and the methods run.
+    fn run_raw(input: &[u8]) -> (Vec<Value>, Vec<String>) {
         let mut out = Vec::new();
         let mut calls = Vec::new();
-        serve_lines(input, &mut out, |m, _p| {
+        serve_lines(input, &mut out, TOKEN, |m, _p| {
             calls.push(m);
             Some(json!({"ok": true, "result": null}))
         });
         let replies = String::from_utf8(out).unwrap().lines().map(|l| serde_json::from_str::<Value>(l).unwrap()).collect();
         (replies, calls)
+    }
+
+    /// Serve `input` after a successful `auth`; the `auth` reply is left out.
+    fn run(input: &[u8]) -> (Vec<Value>, Vec<String>) {
+        let mut all = format!("{}\n", control_auth::auth_request(json!(0), TOKEN)).into_bytes();
+        all.extend_from_slice(input);
+        let (mut replies, calls) = run_raw(&all);
+        assert_eq!(replies.remove(0)["ok"], true, "auth");
+        (replies, calls)
+    }
+
+    #[test]
+    fn nothing_runs_before_the_connection_authenticates() {
+        for first in [
+            r#"{"id":1,"method":"engine.execute","params":{"command":"folder.move"}}"#.to_string(),
+            r#"{"id":1,"method":"auth","params":{}}"#.to_string(),
+            control_auth::auth_request(json!(1), &"0".repeat(64)).to_string(),
+        ] {
+            let (r, calls) = run_raw(format!("{first}\n{{\"id\":2,\"method\":\"app.quit\"}}\n").as_bytes());
+            assert!(calls.is_empty(), "nothing may run: {calls:?}");
+            assert_eq!(r.len(), 1, "one refusal, then the connection is closed: {r:?}");
+            assert_eq!(r[0]["id"], 1);
+            assert_eq!(r[0]["ok"], false);
+            assert!(!r[0].to_string().contains(TOKEN));
+        }
+    }
+
+    #[test]
+    fn an_authenticated_connection_runs_requests() {
+        let input = format!("\n{}\n{{\"id\":2,\"method\":\"ui.inspect\"}}\n", control_auth::auth_request(json!(1), &TOKEN.to_uppercase()));
+        let (r, calls) = run_raw(input.as_bytes());
+        assert_eq!(calls, ["ui.inspect"]);
+        assert_eq!(r[0]["id"], 1);
+        assert_eq!(r[0]["result"]["authenticated"], true);
+        assert_eq!(r[1]["id"], 2);
     }
 
     #[test]
@@ -281,7 +364,20 @@ mod tests {
         // closed, so the JSON body is never executed.
         let http = b"POST / HTTP/1.1\r\nHost: 127.0.0.1:7980\r\nContent-Type: text/plain\r\n\r\n\
             {\"id\":1,\"method\":\"engine.execute\",\"params\":{\"command\":\"folder.move\"}}\n";
-        let (r, calls) = run(http);
+        for (r, calls) in [run(http), run_raw(http)] {
+            assert!(calls.is_empty(), "nothing may run: {calls:?}");
+            assert_eq!(r.len(), 1);
+            assert_eq!(r[0]["ok"], false);
+            assert!(r[0]["error"].as_str().unwrap().contains("closing the connection"));
+        }
+    }
+
+    #[test]
+    fn http_request_with_an_auth_line_in_the_body_is_still_refused() {
+        // Even a page that knew the token could only send it after the HTTP request line.
+        let http =
+            format!("POST / HTTP/1.1\r\nHost: 127.0.0.1:7980\r\n\r\n{}\n{{\"method\":\"app.quit\"}}\n", control_auth::auth_request(json!(1), TOKEN));
+        let (r, calls) = run_raw(http.as_bytes());
         assert!(calls.is_empty(), "nothing may run: {calls:?}");
         assert_eq!(r.len(), 1);
         assert_eq!(r[0]["ok"], false);
@@ -317,7 +413,7 @@ mod tests {
         let endless = std::io::repeat(b'x');
         let mut out = Vec::new();
         let mut ran = false;
-        serve_lines(endless, &mut out, |_, _| {
+        serve_lines(endless, &mut out, TOKEN, |_, _| {
             ran = true;
             None
         });
@@ -344,18 +440,21 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let server = std::thread::spawn(move || {
             let (s, _) = listener.accept().unwrap();
-            let read = s.try_clone().unwrap();
-            serve_lines(read, s, |_, _| Some(json!({"ok": true})));
+            serve_stream(s, TOKEN, |_, _| Some(json!({"ok": true})));
         });
         let mut c = TcpStream::connect(addr).unwrap();
         c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+        writeln!(c, "{}", control_auth::auth_request(json!(6), TOKEN)).unwrap();
         c.write_all(b"{\"id\":7,\"method\":\"x\"}\nhello\n{\"method\":\"y\"}\n").unwrap();
         let mut text = String::new();
-        c.read_to_string(&mut text).unwrap(); // returns at EOF: the server closed the connection
+        // Returns at EOF: the server closed the connection, gracefully, so every reply arrives even
+        // though `y` was never read (a plain close resets the connection on Windows).
+        c.read_to_string(&mut text).unwrap();
         server.join().unwrap();
         let lines: Vec<&str> = text.lines().collect();
-        assert_eq!(lines.len(), 2, "{text}");
-        assert!(lines[0].contains("\"id\":7"));
-        assert!(lines[1].contains("closing the connection"));
+        assert_eq!(lines.len(), 3, "{text}");
+        assert!(lines[0].contains("\"authenticated\":true"));
+        assert!(lines[1].contains("\"id\":7"));
+        assert!(lines[2].contains("closing the connection"));
     }
 }
