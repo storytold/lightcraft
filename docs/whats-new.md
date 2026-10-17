@@ -181,6 +181,12 @@
   merges used to open at about 7000 K / +115 where the photos show 4000–5300 K / +8. HDRs merged before this keep
   their old white balance; merge them again.
 
+### Find photos whose file is in the library twice
+- Smart albums and the library filter have a new rule, File ▸ Same Content as Another Photo. It finds the photos
+  whose file has the same content as another photo's, under another name or in another folder, such as a copy made
+  with Photo ▸ Duplicate. Virtual copies don't count, and neither do photos in Recently Deleted or only browsed in
+  Local. An album with the rule keeps its count up to date as copies are deleted, restored or removed.
+
 ## 2026-10-13
 
 ### Edits keep up in a large library
