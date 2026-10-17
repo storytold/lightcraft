@@ -1,6 +1,6 @@
 # RAW parity: cameras, formats, demosaic, colour and lens profiles
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (integration batch 36: 515 models verified after the CC0 per-model checks; Epson ERF and Mamiya MEF decode; measured Nikon image areas) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6 (Camera Raw 18.7)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (Hasselblad FFF colour matrix from the embedded 3FR header; 3FR / FFF RGB previews) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6 (Camera Raw 18.7)
 
 Raw processing is the deepest single dimension of Lightroom parity: a photographer whose camera
 does not decode, or decodes with the wrong colour, cannot switch. This document measures it model by
@@ -159,7 +159,7 @@ checked (the per-model CC0 sweeps of October 2026); compressed ORF (OM / Olympus
 | DNG | Apple ProRAW (incl. semantic mattes) | ✅ | iPhone 12 Pro corpus; ProfileGainTableMap read but off (ΔE00 19 against Lightroom with it on) |
 | DNG | phone DNGs (Pixel, Galaxy, Xiaomi…) | 🟡 | Pixel 2 XL corpus; 13 further Apple, Google and Samsung models in the pinned sweep; white-level pile-up fix #548 |
 | DNG | GoPro GPR (VC-5) | ⬜ | refused |
-| 3FR / FFF | DNG-like layouts | 🟡 | six Hasselblad models verified on nine files; FFF neutral-matrix colour remains unverified |
+| 3FR / FFF | DNG-like layouts | 🟡 | six Hasselblad models verified on nine files; read by `vendor::hasselblad`: an FFF has no colour matrix of its own and now takes the camera's from the original 3FR header it embeds in tag `0xC51B` (it used to develop with the neutral matrix); RGGB checked against the camera preview on the CC0 H4D-40 FFF and CFV 3FR; the embedded preview is the uncompressed 8-bit RGB image (no JPEG in these files), handed on as a baseline TIFF |
 | 3FR / FFF | Hasselblad compression | ⬜ | preview |
 | ERF | 12-bit in 16-byte blocks (R-D1, R-D1s, R-D1x) | ✅ | 3 CC0 corpus files; crop registered and WB measured against the embedded preview (no WB tag found); `vendor/erf.rs` |
 | IIQ, MOS, MRW, KDC, X3F | all | ⬜ | preview; an uncompressed MOS, whose IFD0 is the mosaic itself with no Make tag, is recognised by Leaf's data block `0x8606` (#1275) |
@@ -287,6 +287,8 @@ Beyond decoding:
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | minor | Hasselblad 3FR / FFF embedded previews: the uncompressed 8-bit RGB image, handed on as a baseline TIFF (checked on the CC0 H4D-40 FFF, 1217 × 913, and CFV 3FR, 218 × 218, upright through the file's orientation); counts unchanged |
+| 2026-10-15 | minor | Hasselblad 3FR / FFF get their own reader (`crates/raw/src/vendor/hasselblad.rs`): an FFF takes its colour matrix from the original 3FR header in tag `0xC51B` instead of developing with the neutral matrix; RGGB checked against the camera preview on the CC0 H4D-40 FFF and CFV 3FR; counts unchanged |
 | 2026-10-14 | minor | Camera-coverage sweep (#1327): 30 models verified on 40 CC0 files (`coverage_sweep_corpus.rs`, `coverage-sweep.tsv`; `docs/raw/coverage.py` 515 → 545 verified rows); the counts above are not re-measured here. Sensor verification does not establish colour parity (#1277) |
 | 2026-10-13 | minor | Bundled camera profiles 4 → 5 (ILCA-99M2) |
 | 2026-10-14 | minor | 21 Sony and Leica models verified (one CC0 raw.pixls.us file each, pinned; `sony_leica_corpus.rs`): 258 verified, 920 unverified; Leica on a verified body 21% → 72%, Sony 91% → 92%, use-weighted 85% and 43% |

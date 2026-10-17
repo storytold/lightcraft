@@ -148,8 +148,8 @@ fn candidates<'a>(data: &'a [u8], ifd: &Ifd, base: u64, out: &mut Vec<&'a [u8]>)
     }
 }
 
-/// The largest embedded preview, if any: a JPEG, or (DNG 1.7) a JPEG XL file — both decode with
-/// `lightcraft_codecs::decode`.
+/// The largest embedded preview, if any: a JPEG, or (DNG 1.7) a JPEG XL file, or for a Hasselblad 3FR / FFF, which
+/// has no JPEG, its uncompressed RGB preview wrapped as a baseline TIFF — all decode with `lightcraft_codecs::decode`.
 pub fn embedded_preview(bytes: &[u8]) -> Option<Vec<u8>> {
     preview_covering(bytes, None)
 }
@@ -220,6 +220,8 @@ fn preview_covering(bytes: &[u8], min_edge: Option<u32>) -> Option<Vec<u8>> {
         .map(|s| if is_jxl(s) { s.to_vec() } else { trim_eoi(s).to_vec() });
     // a TIFF raw whose preview no tag points to: one we can't decode (Leaf MOS), or Epson ERF (in its maker note)
     best.or_else(|| format.filter(|f| !f.is_supported() || *f == crate::RawFormat::Erf).and_then(|_| scan_for_jpeg(bytes)))
+        // Hasselblad 3FR / FFF carry no JPEG, only uncompressed RGB images: one wrapped as a baseline TIFF
+        .or_else(|| (format == Some(crate::RawFormat::CfaTiff)).then(|| crate::vendor::hasselblad::rgb_preview(&tiff, bytes)).flatten())
 }
 
 /// The end of the DCT JPEG whose SOI is at `soi` (exclusive index after its EOI) and its component count,
