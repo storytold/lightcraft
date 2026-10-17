@@ -536,6 +536,8 @@ pub fn parse_xmp(s: &str) -> Result<XmpData, XmpError> {
     }
     if let (Some(lat), Some(lon)) =
         (first("exif:GPSLatitude").and_then(|s| parse_gps_coord(&s)), first("exif:GPSLongitude").and_then(|s| parse_gps_coord(&s)))
+        && (-90.0..=90.0).contains(&lat)
+        && (-180.0..=180.0).contains(&lon)
     {
         let altitude = num("exif:GPSAltitude").map(|a| if first("exif:GPSAltitudeRef").as_deref() == Some("1") { -a } else { a });
         m.gps = Some(Gps { latitude: lat, longitude: lon, altitude });
@@ -838,6 +840,24 @@ mod tests {
         assert_eq!(parse_gps_coord(""), None);
         assert_eq!(parse_gps_coord("é"), None);
         assert_eq!(fmt_gps_coord(-45.51, 'N', 'S'), "45,30.600000S");
+    }
+
+    /// Like the EXIF and GPX readers, XMP drops a position outside latitude ±90° / longitude ±180°.
+    #[test]
+    fn xmp_gps_out_of_range_rejected() {
+        let gps = |lat: &str, lon: &str| {
+            let x = format!(
+                r#"<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+                xmlns:e="http://ns.adobe.com/exif/1.0/" e:GPSLatitude="{lat}" e:GPSLongitude="{lon}"/>"#
+            );
+            parse_xmp(&x).unwrap().metadata.gps
+        };
+        assert_eq!(gps("95,0N", "200,30E"), None);
+        assert_eq!(gps("95,0N", "10,0E"), None);
+        assert_eq!(gps("10,0S", "200,30W"), None);
+        assert_eq!(gps("90,0,1N", "0,0E"), None);
+        assert_eq!(gps("90,0N", "180,0E"), Some(Gps { latitude: 90.0, longitude: 180.0, altitude: None }));
+        assert_eq!(gps("90,0S", "180,0W"), Some(Gps { latitude: -90.0, longitude: -180.0, altitude: None }));
     }
 
     /// MWG Region Guidelines v2.0, element form (`rdf:parseType="Resource"`, self-closing `Area`) — how
