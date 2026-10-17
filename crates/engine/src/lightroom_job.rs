@@ -806,7 +806,7 @@ mod tests {
         let photos: Vec<_> = (1..=(BATCH + 2) as i64)
             .map(|i| {
                 let path = dir.join(format!("p{i}.jpg"));
-                std::fs::write(&path, b"jpeg").unwrap();
+                std::fs::write(&path, format!("jpeg {i}")).unwrap();
                 photo(i, &path.to_string_lossy(), &[])
             })
             .collect();

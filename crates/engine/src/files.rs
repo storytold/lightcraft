@@ -152,6 +152,7 @@ fn probe_bytes_with(name: &str, bytes: &[u8], hash: bool) -> Result<ProbeInfo, S
 /// [`probe_bytes_with`] given what the raw reader said about `bytes` ([`raw_probe`]).
 fn describe(name: &str, bytes: &[u8], raw: RawProbe, hash: bool) -> Result<ProbeInfo, String> {
     let content_hash = hash.then(|| lightcraft_preview::hash_bytes(bytes).to_string());
+    let head_hash = Some(head_hash(bytes));
     let m = lightcraft_meta::extract(bytes);
     let (meta, captured) = meta_of(&m);
     if let Some(raw) = raw {
@@ -172,6 +173,7 @@ fn describe(name: &str, bytes: &[u8], raw: RawProbe, hash: bool) -> Result<Probe
                     content_hash,
                     xmp: lightcraft_meta::embedded(bytes).xmp,
                     preview_only: Some(why),
+                    head_hash,
                     ..Default::default()
                 });
             }
@@ -199,6 +201,7 @@ fn describe(name: &str, bytes: &[u8], raw: RawProbe, hash: bool) -> Result<Probe
             content_hash,
             xmp: lightcraft_meta::embedded(bytes).xmp,
             preview_only: None,
+            head_hash,
         });
     }
     let fmt = lightcraft_codecs::sniff(bytes).ok_or("unrecognized file format")?;
@@ -232,7 +235,23 @@ fn describe(name: &str, bytes: &[u8], raw: RawProbe, hash: bool) -> Result<Probe
         embedded_lens: None,
         xmp: None,
         preview_only: None,
+        head_hash,
     })
+}
+
+pub(crate) const HEAD_BYTES: u64 = PARTIAL_PREFIX;
+
+pub(crate) fn head_hash(bytes: &[u8]) -> String {
+    let head = usize::try_from(HEAD_BYTES).ok().and_then(|n| bytes.get(..n)).unwrap_or(bytes);
+    lightcraft_preview::hash_bytes(head).to_string()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn file_head_hash(path: &str) -> std::io::Result<String> {
+    use std::io::Read;
+    let mut head = Vec::new();
+    std::fs::File::open(path)?.take(HEAD_BYTES).read_to_end(&mut head)?;
+    Ok(head_hash(&head))
 }
 
 /// Why a raw that failed to decode should show its embedded preview instead (`Ok`), or the error

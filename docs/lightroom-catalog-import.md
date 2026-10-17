@@ -101,8 +101,10 @@ with that preview: a few megabytes of its tens. NEF, ORF, PEF and ARW6 files (th
 files under 4 MiB are read whole, as a normal import reads them. On a 38,500-photo catalog with
 1.1 TB of originals on a USB SSD (mostly EOS R5 Mark II CR3s, plus DNG, ORF and JPEG files) the
 import took about 2 minutes instead of about half an hour. A raw described from its headers gets no content
-hash. A later import of a copy of it from elsewhere still finds it by hashing it then (when at most 16
-photos without a hash share the copy's size), and that hash is kept. Until a photo has a hash, Find
+hash. A later import of a copy of it from elsewhere still finds it: files of the same size and dimensions
+are compared by a hash of their first 512 KiB, and only when those match are both read whole and their full
+hashes compared (and the hash taken is kept). A copy is never called a duplicate without the full hash.
+Files that share size and dimensions with more than 256 photos are not compared. Until a photo has a hash, Find
 Missing Photos matches its file by name and size only, and Reload from Disk takes the same file as
 unchanged (its size, dimensions and preview state decide: no undo step, previews kept). A
 background pass filling in the missing hashes would lift both limits. Sidecars are looked for in a listing of each folder,

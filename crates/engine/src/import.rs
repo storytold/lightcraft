@@ -613,24 +613,6 @@ fn library_files(library: &lightcraft_catalog::Catalog, files: &[String]) -> Has
     by_path
 }
 
-/// Which photo of the library has each of the contents `hashes` (the later one where several
-/// have it). One pass over the library, and an entry only for a content that was asked about.
-fn library_hashes<'a>(library: &lightcraft_catalog::Catalog, hashes: impl Iterator<Item = &'a str>) -> HashMap<String, PhotoId> {
-    let wanted: std::collections::HashSet<&str> = hashes.collect();
-    let mut by_hash = HashMap::new();
-    if wanted.is_empty() {
-        return by_hash;
-    }
-    for p in library.photos() {
-        if let Some(h) = &p.content_hash
-            && wanted.contains(h.as_str())
-        {
-            by_hash.insert(h.clone(), p.id);
-        }
-    }
-    by_hash
-}
-
 /// Progress and cancellation of a running [`scan_with`].
 #[derive(Default)]
 pub struct ScanProgress {
@@ -707,10 +689,9 @@ pub(crate) fn scan_files(mut input: ScanInput, files: Vec<String>, progress: &Sc
         cached.into_iter().map(|c| c.map(Ok).unwrap_or_else(|| fresh.next().unwrap_or_else(|| Err("not probed".into())))).collect();
     crate::memory::release();
     let mut probes: HashMap<String, Result<ProbeInfo, String>> = todo.into_iter().zip(probed).collect();
-    // (who in the library has a content that was probed: asked once the probes are in)
-    let probed_hashes = probes.values().filter_map(|r| r.as_ref().ok()).filter_map(|info| info.content_hash.as_deref());
-    let mut seen_hash: HashMap<String, Option<u64>> =
-        library_hashes(&input.library, probed_hashes).into_iter().map(|(h, id)| (h, Some(id.0))).collect();
+    let mut dups = dupes::Duplicates::default();
+    let probed_infos: Vec<&ProbeInfo> = probes.values().filter_map(|r| r.as_ref().ok()).collect();
+    dups.add_library_matching(input.library.photos(), &probed_infos);
     let mut out = Vec::with_capacity(files.len());
     let mut kept = HashMap::new();
     for f in files {
@@ -723,22 +704,18 @@ pub(crate) fn scan_files(mut input: ScanInput, files: Vec<String>, progress: &Sc
         let name = Path::new(&f).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| f.clone());
         let mut c = ImportCandidate { path: f.clone(), name, ..Default::default() };
         match probes.remove(&f) {
-            Some(Ok(info)) => {
+            Some(Ok(mut info)) => {
                 (c.format, c.kind, c.width, c.height, c.file_size, c.captured) =
                     (info.format.clone(), info.kind, info.width, info.height, info.file_size, info.captured.clone());
                 // as the import will date it (a sidecar's date, when there is one, still wins there)
                 c.captured = c.captured.or_else(|| info.file_modified.clone());
                 c.preview_only = info.preview_only.clone();
-                if let Some(h) = &info.content_hash {
-                    match seen_hash.get(h) {
-                        Some(existing) => {
-                            c.duplicate = Some("content".into());
-                            c.existing = *existing;
-                        }
-                        None => {
-                            seen_hash.insert(h.clone(), None);
-                        }
+                match dups.find(&f, &mut info) {
+                    Some(existing) => {
+                        c.duplicate = Some("content".into());
+                        c.existing = existing.map(|id| id.0);
                     }
+                    None => dups.add_new(&f, &info),
                 }
                 kept.insert(f, info);
             }
@@ -786,8 +763,7 @@ pub struct ImportJob {
     library: Option<(lightcraft_catalog::Catalog, bool)>,
     /// path → (photo, a Local browse record?)
     by_path: HashMap<String, (PhotoId, bool)>,
-    /// content hash → the photo that has it (`None`: a file earlier in this import)
-    by_hash: HashMap<String, Option<PhotoId>>,
+    dups: dupes::Duplicates,
     probe: Option<crate::media::FileProbe>,
     file_bytes: Option<crate::merge::ByteReader>,
     /// Probes from a preceding scan (not read again).
@@ -802,17 +778,6 @@ pub struct ImportJob {
     /// ones read so far: the step before they are handled.
     pub read_total: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     pub read_done: std::sync::Arc<std::sync::atomic::AtomicUsize>,
-    /// Photos in the library without a content hash (added from their headers), by file size: a
-    /// new file of the same size is compared with them by hashing them on demand ([`ImportJob::unhashed_duplicate`]).
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
-    unhashed: HashMap<u64, Vec<(PhotoId, String)>>,
-    /// Whether a new file is compared with [`ImportJob::unhashed`] (not when the new files get no
-    /// hash themselves, nor for a browsed folder).
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
-    compare_unhashed: bool,
-    /// Hashes computed on demand this import (`None`: the file couldn't be read).
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
-    hashed: HashMap<PhotoId, Option<String>>,
     /// The names in each folder (lower case), listed once: most files have no sidecar, and asking
     /// a slow drive for a file that isn't there costs about as much as listing a folder.
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
@@ -954,7 +919,6 @@ impl ImportJob {
         // a raw described from its headers has no hash to compare (nor does a browsed file)
         let headers_only = opts.headers_only && mode == ImportMode::Add;
         let probe = if headers_only { s.media.header_probe.clone().or_else(|| s.media.file_probe.clone()) } else { s.media.file_probe.clone() };
-        let compare_unhashed = !(headers_only || opts.local);
         Ok(ImportJob {
             seq: opts.rename_start.max(1),
             opts,
@@ -963,7 +927,7 @@ impl ImportJob {
             copy_root,
             library: Some((s.catalog.clone(), fresh)),
             by_path: HashMap::new(),
-            by_hash: HashMap::new(),
+            dups: dupes::Duplicates::default(),
             probe,
             file_bytes: s.media.file_bytes.clone(),
             cache: std::mem::take(&mut s.import_probes),
@@ -973,9 +937,6 @@ impl ImportJob {
             done: Default::default(),
             read_total: Default::default(),
             read_done: Default::default(),
-            unhashed: HashMap::new(),
-            compare_unhashed,
-            hashed: HashMap::new(),
             listings: HashMap::new(),
         })
     }
@@ -1013,13 +974,8 @@ impl ImportJob {
             }
             if let Source::File { path } = &p.source {
                 self.by_path.insert(path.clone(), (p.id, p.local));
-                if self.compare_unhashed && p.content_hash.is_none() && p.file_size > 0 && p.copy_of.is_none() {
-                    self.unhashed.entry(p.file_size).or_default().push((p.id, path.clone()));
-                }
             }
-            if let Some(h) = &p.content_hash {
-                self.by_hash.insert(h.clone(), Some(p.id));
-            }
+            self.dups.add_library(p);
         }
     }
 
@@ -1084,21 +1040,18 @@ impl ImportJob {
                 }
             };
             // a copy of a file whose transfer is still pending: a duplicate only if that one succeeds
-            if !opts.local
-                && let Some(h) = &info.content_hash
-                && plan.transfers.iter().any(|t| t.info.content_hash.as_ref() == Some(h))
-            {
+            if !opts.local && plan.transfers.iter().any(|t| dupes::could_repeat(&t.info, &info)) {
                 self.run_plan(&mut plan, &mut out, cancel);
                 if cancel.load(Relaxed) {
                     break;
                 }
             }
-            if let Some(h) = &info.content_hash
-                && !opts.local
-                && let Some(existing) = self.by_hash.get(h).copied().or_else(|| self.unhashed_duplicate(h, info.file_size, &mut out.hashes).map(Some))
+            if !opts.local
+                && let Some(existing) = self.dups.find(&path, &mut info)
             {
                 self.done.fetch_add(1, Relaxed);
-                plan.slots.push(Slot::Item(PreparedItem::Duplicate { path, existing, reason: "content", hash: Some(h.clone()) }));
+                let hash = info.content_hash.clone();
+                plan.slots.push(Slot::Item(PreparedItem::Duplicate { path, existing, reason: "content", hash }));
                 continue;
             }
             // the XMP sidecar (or a raw's embedded XMP), read before copying: its capture time files
@@ -1169,13 +1122,20 @@ impl ImportJob {
                 }
                 _ => path.clone(),
             };
-            if let Some(h) = &info.content_hash {
-                self.by_hash.insert(h.clone(), None);
-            }
+            self.dups.add_new(&path, &info);
             self.done.fetch_add(1, Relaxed);
             plan.slots.push(Slot::Item(PreparedItem::Ready(Box::new(ReadyFile { path, stored, info, sidecar, placed: None }))));
         }
         self.run_plan(&mut plan, &mut out, cancel);
+        for item in &mut out.items {
+            if let PreparedItem::Ready(r) = item
+                && r.info.content_hash.is_none()
+                && let Some(h) = self.dups.learned(&r.path)
+            {
+                r.info.content_hash = Some(h.clone());
+            }
+        }
+        out.hashes.extend(self.dups.take_filled());
         out
     }
 
@@ -1191,10 +1151,8 @@ impl ImportJob {
                     None => continue,
                 },
             };
-            if let PreparedItem::Ready(r) = &item
-                && let Some(h) = &r.info.content_hash
-            {
-                self.by_hash.insert(h.clone(), None);
+            if let PreparedItem::Ready(r) = &item {
+                self.dups.add_new(&r.path, &r.info);
             }
             out.items.push(item);
         }
@@ -1223,45 +1181,7 @@ impl ImportJob {
         }
         crate::sidecar::find_sidecar(path, self.naming)
     }
-
-    /// The photo already in the library whose file has content `hash`, among those of the same
-    /// `size` that have no hash yet (each hashed now, once per import; new hashes go to `filled`).
-    /// Skipped when many share the size (uncompressed raws of one camera all do): that would read
-    /// each of them in full.
-    fn unhashed_duplicate(&mut self, hash: &str, size: u64, filled: &mut Vec<(PhotoId, String)>) -> Option<PhotoId> {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let candidates = self.unhashed.get(&size).filter(|c| c.len() <= MAX_UNHASHED_SAME_SIZE)?.clone();
-            for (id, path) in candidates {
-                let known = match self.hashed.get(&id) {
-                    Some(h) => h.clone(),
-                    None => {
-                        let h = hash_file(&path);
-                        self.hashed.insert(id, h.clone());
-                        if let Some(h) = &h {
-                            filled.push((id, h.clone()));
-                            self.by_hash.insert(h.clone(), Some(id));
-                        }
-                        h
-                    }
-                };
-                if known.as_deref() == Some(hash) {
-                    return Some(id);
-                }
-            }
-            None
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            let _ = (hash, size, filled);
-            None
-        }
-    }
 }
-
-/// Photos without a content hash that one new file of the same size is compared with at most.
-#[cfg(not(target_arch = "wasm32"))]
-const MAX_UNHASHED_SAME_SIZE: usize = 16;
 
 /// The names in `dir`, lower case; `None` when it can't be listed in full (or is huge).
 #[cfg(not(target_arch = "wasm32"))]
@@ -1279,9 +1199,26 @@ fn list_names(dir: &Path) -> Option<std::collections::HashSet<String>> {
 /// The content hash of the file at `path` (as a probe computes it), if it can be read.
 #[cfg(not(target_arch = "wasm32"))]
 fn hash_file(path: &str) -> Option<String> {
+    #[cfg(test)]
+    FULL_HASHES.with(|n| n.set(n.get() + 1));
     let len = std::fs::metadata(path).ok()?.len();
     let _permit = crate::memory::work_gate().acquire(usize::try_from(len).unwrap_or(usize::MAX));
     std::fs::read(path).ok().map(|b| lightcraft_preview::hash_bytes(&b).to_string())
+}
+
+#[cfg(test)]
+thread_local! {
+    static FULL_HASHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn full_hashes() -> usize {
+    FULL_HASHES.with(|n| n.get())
+}
+
+#[cfg(test)]
+fn reset_full_hashes() {
+    FULL_HASHES.with(|n| n.set(0));
 }
 
 /// A batch's items in file order while its transfers are pending ([`ImportJob::run_plan`]).
@@ -1717,9 +1654,16 @@ impl Session {
     }
 }
 
+#[path = "import/dupes.rs"]
+mod dupes;
+
 #[cfg(test)]
 #[path = "import/tests_known.rs"]
 mod tests_known;
+
+#[cfg(test)]
+#[path = "import/tests_dupes.rs"]
+mod tests_dupes;
 
 #[cfg(test)]
 mod prepared_tests {

@@ -284,7 +284,7 @@ fn same_for_sync(a: &Arc<Photo>, b: &Arc<Photo>) -> bool {
 }
 
 /// The content a hash stands for: a Duplicate's own hash is the original's plus `:dup<id>`.
-fn base_hash(h: &str) -> &str {
+pub(crate) fn base_hash(h: &str) -> &str {
     h.split(':').next().unwrap_or(h)
 }
 
