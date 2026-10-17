@@ -70,7 +70,7 @@ fn label_tints_grid_and_filmstrip_chrome_without_changing_photo_pixels() {
             h.step();
             let image = h.paint();
             let c = pixel(&image, sample);
-            assert_ne!(c, pixel(&neutral, sample), "{view:?} {label} must tint the thumbnail surround/footer");
+            assert_ne!(c, pixel(&neutral, sample), "{view:?} {label} must tint the thumbnail surround/label dot");
             assert!(!colours.contains(&c), "each label has a distinct tint: {view:?} {label}");
             colours.push(c);
             assert_eq!(pixel(&image, cell.center()), centre, "{view:?} {label} must not tint image pixels");

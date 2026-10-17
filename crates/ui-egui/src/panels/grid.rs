@@ -825,9 +825,10 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, view: 
         marks: show_badges,
         hot: resp.hovered() || selected,
         failure,
+        surround: square,
     };
-    crate::thumb::overlay(app, ui, &overlay);
-    cell_interaction(app, ui, &resp, id, &photo);
+    let badge = crate::thumb::overlay(app, ui, &overlay);
+    cell_interaction(app, ui, &resp, id, &photo, badge);
 }
 
 pub(crate) fn cell_description(app: &LightcraftApp, photo: &lightcraft_catalog::Photo) -> String {
@@ -904,7 +905,14 @@ fn paint_cell_caption(app: &LightcraftApp, p: &egui::Painter, t: &Tokens, photo:
     }
 }
 
-fn cell_interaction(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, id: PhotoId, photo: &lightcraft_catalog::Photo) {
+fn cell_interaction(
+    app: &mut LightcraftApp,
+    ui: &mut egui::Ui,
+    resp: &egui::Response,
+    id: PhotoId,
+    photo: &lightcraft_catalog::Photo,
+    badge: Option<egui::Response>,
+) {
     if let Some(k) = app.ui.keyword_painter.clone() {
         // painting: a click toggles the keyword on this photo
         if resp.hovered() {
@@ -937,6 +945,10 @@ fn cell_interaction(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Res
         begin_photo_drag(app, id);
     }
     crate::widgets::context_menu(resp, |ui| context_menu(app, ui, id));
+    // (the stack badge covers part of the cell: it opens the same menu)
+    if let Some(badge) = badge {
+        crate::widgets::context_menu(&badge, |ui| context_menu(app, ui, id));
+    }
 }
 
 struct ThumbFlags {

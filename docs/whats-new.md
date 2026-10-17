@@ -636,8 +636,12 @@
 - In the Photo Grid a colour label is no longer a tinted band over the bottom of the picture; it is the dot in the
   row of marks, as in the Square Grid and the filmstrip.
 - On a narrow thumbnail (a portrait photo at the smallest size) the marks no longer run over the photo's edge: the
-  copy tag drops its name, the edited mark goes, five stars become one star and the number, and what still doesn't fit is left out.
-  The Preview pill sits above the marks on the filmstrip too.
+  copy tag drops its name, the edited mark goes, five stars become one star and the number, and what still doesn't fit is left out;
+  the stack badge sheds its icon and then the "1/" of "1/12". Nothing is painted outside the photo. The Preview pill sits
+  above the marks on the filmstrip too, and steps aside for the stack badge. In the Photo Grid, which has no tinted
+  surround, the label dot is kept before the stars on a narrow photo and stays when ratings and flags are turned off.
+- The filmstrip now dims rejected photos as the grid does, and in the grid the dim sits under the marks, so the red
+  reject flag stays clear. Right-clicking the stack badge opens the photo's menu.
 - Screen readers say "rating 3 of 5" in every language, instead of building "stars" from an English plural.
 
 ### Sharper resampling in HDR and panorama merges

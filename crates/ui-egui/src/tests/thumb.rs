@@ -162,3 +162,29 @@ fn a_label_is_the_dot_in_the_marks_row_on_every_surface_and_no_footer_covers_the
         assert!(!footer_band_in(&h, r), "{view:?}: no tinted footer over the photo");
     }
 }
+
+#[test]
+fn with_ratings_and_flags_off_the_justified_grid_still_shows_the_label() {
+    let mut h = demo();
+    let ids = first_photos(&mut h, 2);
+    run(&mut h, "photo.label", json!({"ids": [ids[0].0], "label": "red"}));
+    run(&mut h, "library.select", json!({"ids": [ids[1].0]}));
+    h.app.ui.settings.grid_badges = crate::state::GridBadges::Never;
+    h.settle(SETTLE);
+    let cell = widget(&h, &format!("thumb:{}", ids[0].0)).expect("the photo's cell");
+    assert!(label_dot_in(&h, cell), "the label is not a rating or a flag: it stays, the grid has no surround to tint");
+}
+
+#[test]
+fn right_clicking_the_filmstrips_stack_badge_opens_the_photo_menu() {
+    let mut h = demo();
+    let ids = first_photos(&mut h, 2);
+    run(&mut h, "stack.group", json!({"ids": [ids[0].0, ids[1].0], "collapsed": false}));
+    h.request("ui.set", json!({"view": "detail"}), T);
+    h.settle(SETTLE);
+    assert!(!egui::Popup::is_any_open(&h.view.ctx));
+    let r = h.request("ui.clickWidget", json!({"id": format!("film:stack:{}", ids[0].0), "button": "right"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert!(egui::Popup::is_any_open(&h.view.ctx), "the photo's menu, as on the rest of the cell");
+}
