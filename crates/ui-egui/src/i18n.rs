@@ -164,6 +164,12 @@ pub fn language() -> Locale {
     LOCALE.with(std::cell::Cell::get)
 }
 
+/// Text written for Markdown (What's New) shown in the window: its menu paths use `▸`, which no UI
+/// font has (Inter, egui's faces), so they show `→` like the rest of the UI (issue #1950).
+pub fn paintable_menu_path(text: &str) -> String {
+    text.replace('\u{25B8}', "→")
+}
+
 /// Translate a built-in display label, preserving unknown labels verbatim.
 /// Never call this on editable user text, filenames or command identifiers.
 pub fn tr(source: &str) -> &str {
@@ -747,6 +753,54 @@ mod tests {
                 assert!(fonts.has_glyph(&font, symbol), "{symbol:?} has no glyph in any installed font");
             }
         });
+    }
+
+    /// No string the window shows uses `▸` or `▾` (issue #1950): neither Inter nor egui's faces have
+    /// them, so they paint as a box. Menu paths use `→`. Scans the non-test Rust sources of every
+    /// crate and app for the triangles on lines that aren't comments.
+    #[test]
+    fn ui_strings_do_not_use_missing_menu_triangles() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        // still in an open PR that changes it (#1287)
+        let pending = ["Photo ▸ Edit In ▸ Edit in PhotoCraft"];
+        let mut found = Vec::new();
+        let mut dirs = vec![root.join("crates"), root.join("apps")];
+        while let Some(dir) = dirs.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap() {
+                let path = entry.unwrap().path();
+                let name = path.file_name().unwrap().to_string_lossy().to_string();
+                if path.is_dir() {
+                    if name != "tests" && name != "target" {
+                        dirs.push(path);
+                    }
+                    continue;
+                }
+                if !name.ends_with(".rs") || name.starts_with("tests_") {
+                    continue;
+                }
+                let text = std::fs::read_to_string(&path).unwrap();
+                let lines: Vec<&str> = text.lines().collect();
+                // the test module, by convention at the end of the file
+                let end = (0..lines.len())
+                    .find(|&i| lines[i].trim() == "#[cfg(test)]" && lines.get(i + 1).is_some_and(|l| l.trim_start().starts_with("mod ")))
+                    .unwrap_or(lines.len());
+                for (i, line) in lines[..end].iter().enumerate() {
+                    let code = line.trim_start();
+                    if code.starts_with("//") || !line.contains(['▸', '▾']) || pending.iter().any(|p| line.contains(p)) {
+                        continue;
+                    }
+                    found.push(format!("{}:{}: {}", path.display(), i + 1, code));
+                }
+            }
+        }
+        assert!(found.is_empty(), "menu triangles that paint as a box (use →):\n{}", found.join("\n"));
+    }
+
+    #[test]
+    fn whats_new_shows_menu_paths_with_a_paintable_arrow() {
+        let shown = paintable_menu_path(crate::panels::dialogs::WHATS_NEW);
+        assert!(!shown.contains('▸'));
+        assert_eq!(paintable_menu_path("File ▸ Back Up Library…"), "File → Back Up Library…");
     }
 
     #[test]

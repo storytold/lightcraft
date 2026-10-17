@@ -1808,7 +1808,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
                         let profiles = v["imported"].as_array().map_or(0, Vec::len);
                         if profiles > 0 {
                             parts.push(crate::i18n::tr_format!(
-                                "Imported {profiles} profile{} (Profile browser ▸ their groups)",
+                                "Imported {profiles} profile{} (Profile browser → their groups)",
                                 if profiles == 1 { "" } else { "s" },
                                 profiles = profiles
                             ));
@@ -2224,7 +2224,7 @@ pub fn delete_in_album(app: &mut LightcraftApp, ctx: &egui::Context) -> bool {
     let lightcraft_engine::LibrarySource::Album(aid) = app.session.source else { return false };
     let Some(album) = app.session.catalog.album(aid) else { return false };
     if album.is_smart() {
-        app.toast(ctx, crate::i18n::tr("Smart albums update automatically: change their rules, or use Photo ▸ Delete Photo"));
+        app.toast(ctx, crate::i18n::tr("Smart albums update automatically: change their rules, or use Photo → Delete Photo"));
         return true;
     }
     if app.session.selected().is_empty() {

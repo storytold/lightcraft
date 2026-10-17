@@ -350,19 +350,21 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                 }
                 Dialog::WhatsNew => {
                     egui::ScrollArea::vertical().max_height(list_height(ui, 460.0)).auto_shrink([false, true]).show(ui, |ui| {
+                        // lines are translated as written (their catalog keys keep `▸`), then shown with `→`
+                        let shown = |source: &str| crate::i18n::paintable_menu_path(crate::i18n::tr(source));
                         for line in WHATS_NEW.lines() {
                             let l = line.trim_end();
                             if let Some(h) = l.strip_prefix("### ") {
                                 ui.add_space(6.0);
-                                ui.label(egui::RichText::new(crate::i18n::tr(h)).font(t.semibold(12.5)).color(t.text));
+                                ui.label(egui::RichText::new(shown(h)).font(t.semibold(12.5)).color(t.text));
                             } else if let Some(h) = l.strip_prefix("## ") {
                                 ui.add_space(8.0);
-                                ui.label(egui::RichText::new(crate::i18n::tr(h)).font(t.semibold(14.0)).color(t.text));
+                                ui.label(egui::RichText::new(shown(h)).font(t.semibold(14.0)).color(t.text));
                             } else if l.starts_with("# ") || l.is_empty() {
                             } else if let Some(b) = l.strip_prefix("- ") {
-                                ui.label(egui::RichText::new(format!("•  {}", crate::i18n::tr(b).replace('`', ""))).color(t.text_label));
+                                ui.label(egui::RichText::new(format!("•  {}", shown(b).replace('`', ""))).color(t.text_label));
                             } else {
-                                ui.label(egui::RichText::new(crate::i18n::tr(l.trim()).replace('`', "")).color(t.text_label));
+                                ui.label(egui::RichText::new(shown(l.trim()).replace('`', "")).color(t.text_label));
                             }
                         }
                     });

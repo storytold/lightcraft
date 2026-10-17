@@ -1,5 +1,12 @@
 # What's new in LightCraft
 
+## 2026-10-16
+
+### Menu paths no longer show a box
+- Messages and tooltips that name a menu path (Edit → Undo, Settings → AI Denoise, …) used a "▸" character that the
+  interface font doesn't have, so it showed as an empty box (issue #1950). They use "→" now, as the translations
+  already did, and so does this What's New window.
+
 ## 2026-10-14
 
 ### Lightroom radial masks on the right side
