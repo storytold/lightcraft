@@ -584,6 +584,12 @@ pub fn poll_scan(app: &mut LightcraftApp, ctx: &egui::Context) {
     }
     app.session.import_probes = out.probes;
     if task.browse {
+        // the folder and the ones its photos are in count as browsed now, as `library.browse` records them, so
+        // their untouched Local photos aren't forgotten while the folder is in use
+        if let Some(root) = app.session.browse.as_ref().map(|b| b.path.clone()) {
+            let shown: Vec<String> = out.candidates.iter().map(|c| c.path.clone()).collect();
+            app.session.note_browsed(&root, &shown);
+        }
         // records of files gone from the folder (deleted or moved by another app) that nothing was changed on go,
         // as `library.browse` forgets them (issue #1392)
         if let Some(b) = app.session.browse.clone() {
