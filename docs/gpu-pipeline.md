@@ -159,6 +159,14 @@ walks the drive.
 - Stage cache: `GpuStages` mirrors `StageCache` (same keys: source identity + `geo`, `lin_key`,
   per-plane radii) and lives in it as an extension, so the UI needs no change. The uploaded source is
   kept per view. A tone / colour / exposure drag re-runs one dispatch of `finish` plus the readback.
+  Mask alphas are cached too, on both sides (`masks::AlphaCache`, one plane per visible mask of the
+  last render), each keyed by `masks::alpha_key`: the mask's components, Refine Edges, Invert and
+  Amount, `geo`, plus `lin_key` when it reads the image (range masks, Sky / Subject / Background
+  heuristics, Auto Mask brushes, Refine Edges) and the exposure when it reads that (luminance and
+  colour range, Sky). An Exposure drag over gradient and brush masks, or a drag of a mask's own
+  sliders, evaluates no mask; a cached alpha is the buffer a fresh evaluation produced, so warm and
+  fresh renders stay bit-identical. Both caches' `bytes()` count the alphas and the blurred
+  chromaticity.
 - One command encoder per render; the only mid-render readback is the airlight samples (dehaze, when
   the dark channel is recomputed). Dropped buffers are recycled (exact size, ≤ 2 GB pool) once the
   thread that dropped them has submitted — allocating and zero-filling fresh 100–300 MB buffers
