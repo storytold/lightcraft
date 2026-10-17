@@ -545,6 +545,86 @@ fn rereading_a_sidecar_clears_regions_only_when_it_states_them() {
     let _ = std::fs::remove_dir_all(&src);
 }
 
+/// A sidecar as Lightroom Classic writes a hierarchical keyword: names flat in `dc:subject`, the
+/// path in `lr:hierarchicalSubject`.
+const LR_KEYWORDS: &str = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:dc="http://purl.org/dc/elements/1.1/"
+    xmlns:lr="http://ns.adobe.com/lightroom/1.0/">
+   <dc:subject><rdf:Bag><rdf:li>Heron</rdf:li><rdf:li>Birds</rdf:li><rdf:li>Animals</rdf:li><rdf:li>sunset</rdf:li></rdf:Bag></dc:subject>
+   <lr:hierarchicalSubject><rdf:Bag><rdf:li>Animals|Birds|Heron</rdf:li><rdf:li>sunset</rdf:li></rdf:Bag></lr:hierarchicalSubject>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>"#;
+
+/// Keywords are saved as Lightroom Classic writes them: names in `dc:subject` (never a `|`, which
+/// hangs Lightroom Classic's import), full paths in `lr:hierarchicalSubject`, merged with the paths
+/// the sidecar already lists so another app's survive; saving again changes nothing.
+#[test]
+fn hierarchical_keywords_are_saved_as_names_and_merged_paths() {
+    let src = temp_dir("hier-keywords");
+    write_png(&src.join("heron.png"), 5);
+    std::fs::write(src.join("heron.xmp"), LR_KEYWORDS).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    assert_eq!(s.catalog.photo(id).unwrap().meta.keywords, ["Animals|Birds|Heron", "sunset"]);
+    let side = || std::fs::read_to_string(src.join("heron.xmp")).unwrap();
+    let save = |s: &mut Session| {
+        s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    };
+    let fields = |x: &str| {
+        let m = lightcraft_meta::parse_xmp(x).unwrap().metadata;
+        assert!(m.keywords.iter().all(|k| !k.contains('|')), "a `|` in dc:subject: {:?}", m.keywords);
+        (m.keywords, m.hierarchical_keywords)
+    };
+    // a plain save: the paths read from the sidecar don't go into dc:subject
+    save(&mut s);
+    assert_eq!(fields(&side()), (strings(&["Heron", "Birds", "Animals", "sunset"]), strings(&["Animals|Birds|Heron", "sunset"])));
+    // keywords added here: each name once, whatever its case
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "addKeywords": ["Projects|2024|heron", "sidecar-test"]})).unwrap();
+    save(&mut s);
+    assert_eq!(
+        fields(&side()),
+        (
+            strings(&["Heron", "Birds", "Animals", "sunset", "2024", "Projects", "sidecar-test"]),
+            strings(&["Animals|Birds|Heron", "sunset", "Projects|2024|heron", "sidecar-test"])
+        )
+    );
+    // another app adds a path to the sidecar: a save keeps it, and keeps it out of dc:subject
+    let added = side().replacen(
+        "<rdf:li>sidecar-test</rdf:li>\n    </rdf:Bag>\n   </lr:hierarchicalSubject>",
+        "<rdf:li>sidecar-test</rdf:li>\n     <rdf:li>People|Sam</rdf:li>\n    </rdf:Bag>\n   </lr:hierarchicalSubject>",
+        1,
+    );
+    assert!(added.contains("People|Sam"));
+    std::fs::write(src.join("heron.xmp"), &added).unwrap();
+    save(&mut s);
+    let (flat, paths) = fields(&side());
+    assert!(!flat.iter().any(|k| k == "Sam" || k == "People"), "{flat:?}");
+    assert_eq!(paths, strings(&["Animals|Birds|Heron", "sunset", "Projects|2024|heron", "sidecar-test", "People|Sam"]));
+    // saving again is stable
+    let once = side();
+    save(&mut s);
+    assert_eq!(side(), once);
+    // read back, the other app's path is a keyword like the others; saving twice changes nothing
+    s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap().meta.keywords, ["Animals|Birds|Heron", "sunset", "Projects|2024|heron", "sidecar-test", "People|Sam"]);
+    save(&mut s);
+    let (flat, paths) = fields(&side());
+    assert_eq!(flat, strings(&["Heron", "Birds", "Animals", "sunset", "2024", "Projects", "sidecar-test", "Sam", "People"]));
+    assert_eq!(paths, strings(&["Animals|Birds|Heron", "sunset", "Projects|2024|heron", "sidecar-test", "People|Sam"]));
+    let once = side();
+    save(&mut s);
+    assert_eq!(side(), once);
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+fn strings(v: &[&str]) -> Vec<String> {
+    v.iter().map(|s| s.to_string()).collect()
+}
+
 fn synthetic_dng(xmp: &str) -> Vec<u8> {
     synthetic_dng_with(Some(xmp), lightcraft_meta::Metadata::default())
 }

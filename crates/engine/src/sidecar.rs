@@ -4,6 +4,9 @@
 //! change when [`XmpPrefs::auto_write`] is on): rating, colour label, title, caption, copyright,
 //! creator, keywords, capture time and GPS in the standard namespaces, plus our complete develop
 //! settings (`lc:settings`, JSON), the pick/reject flag (`lc:flag`) and location (`lc:location`).
+//! Keywords are written as Lightroom Classic writes them: names (each keyword's and its parents')
+//! in `dc:subject`, never a `|`; full paths in `lr:hierarchicalSubject`, together with the paths the
+//! sidecar already lists (another app's keywords survive a save).
 //!
 //! An existing sidecar is never replaced wholesale (issue #92): LightCraft's properties
 //! ([`OWNED`], [`OWNED_IF_STATED`]) are merged into it ([`lightcraft_meta::merge_xmp`]) and
@@ -329,7 +332,21 @@ pub fn sidecar_packet(p: &Photo, cat: &lightcraft_catalog::Catalog) -> String {
 /// [`sidecar_packet`], without any location (GPS, sublocation, city, state, country) when
 /// `remove_location` is set (an export with "Remove location info").
 pub fn sidecar_packet_with(p: &Photo, cat: &lightcraft_catalog::Catalog, remove_location: bool) -> String {
+    packet(p, cat, remove_location, &[])
+}
+
+/// [`sidecar_packet_with`]. Keywords go in as a sidecar carries them
+/// ([`lightcraft_catalog::keywords::sidecar_keywords`]: names in `dc:subject`, paths in
+/// `lr:hierarchicalSubject`), followed in `lr:hierarchicalSubject` by the paths of `kept_paths` the
+/// photo doesn't have (those the sidecar already lists, another app's included).
+fn packet(p: &Photo, cat: &lightcraft_catalog::Catalog, remove_location: bool, kept_paths: &[String]) -> String {
     let nz = |s: &str| (!s.trim().is_empty()).then(|| s.to_string());
+    let mut keywords = lightcraft_catalog::keywords::sidecar_keywords(&p.meta.keywords);
+    for k in kept_paths {
+        if !k.trim().is_empty() && !keywords.hierarchical.iter().any(|h| lightcraft_catalog::keywords::same(h, k)) {
+            keywords.hierarchical.push(k.clone());
+        }
+    }
     let meta = lightcraft_meta::Metadata {
         software: Some("LightCraft".into()),
         title: nz(&p.meta.title),
@@ -345,7 +362,8 @@ pub fn sidecar_packet_with(p: &Photo, cat: &lightcraft_catalog::Catalog, remove_
         usage_terms: nz(&p.meta.usage_terms),
         copyright_url: nz(&p.meta.copyright_url),
         artist: nz(&p.meta.creator),
-        keywords: p.meta.keywords.clone(),
+        keywords: keywords.flat,
+        hierarchical_keywords: keywords.hierarchical,
         rating: Some(p.rating.min(5) as i8),
         label: p.label.map(|l| cat.label_name(l)),
         capture_time: p.captured.as_deref().and_then(lightcraft_meta::DateTime::parse_iso),
@@ -380,6 +398,7 @@ pub const OWNED: &[&str] = &[
     "dc:rights",
     "dc:creator",
     "dc:subject",
+    "lr:hierarchicalSubject",
     "Iptc4xmpCore:Location",
     "Iptc4xmpCore:AltTextAccessibility",
     "Iptc4xmpCore:ExtDescrAccessibility",
@@ -433,30 +452,36 @@ pub struct SidecarSaved {
     pub backup: Option<PathBuf>,
 }
 
-/// The new contents for the sidecar at `path`: `fresh` merged into the existing file, if any.
-/// Returns (contents, merged, backup).
-fn sidecar_contents(path: &Path, fresh: String, stamp: &str) -> std::io::Result<(String, bool, Option<PathBuf>)> {
+/// The new contents for photo `p`'s sidecar at `path`: its packet merged into the existing file,
+/// if any. Returns (contents, merged, backup).
+fn sidecar_contents(path: &Path, p: &Photo, cat: &lightcraft_catalog::Catalog, stamp: &str) -> std::io::Result<(String, bool, Option<PathBuf>)> {
     let bytes = match std::fs::read(path) {
         Ok(b) => b,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((fresh, false, None)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((sidecar_packet(p, cat), false, None)),
         // can't see what is there: never overwrite it blindly
         Err(e) => return Err(e),
     };
     if bytes.iter().all(u8::is_ascii_whitespace) {
-        return Ok((fresh, false, None));
+        return Ok((sidecar_packet(p, cat), false, None));
     }
     let rules = lightcraft_meta::MergeRules { owned: OWNED, owned_if_present: OWNED_IF_STATED };
-    match std::str::from_utf8(&bytes)
-        .map_err(|e| e.to_string())
-        .and_then(|old| lightcraft_meta::merge_xmp(old, &fresh, rules).map_err(|e| e.to_string()))
-    {
+    match std::str::from_utf8(&bytes).map_err(|e| e.to_string()).and_then(|old| {
+        let fresh = packet(p, cat, false, &hierarchical_paths(old));
+        lightcraft_meta::merge_xmp(old, &fresh, rules).map_err(|e| e.to_string())
+    }) {
         Ok(merged) => Ok((merged, true, None)),
         Err(why) => {
             let b = backup(path, stamp)?;
             log::warn!("{}: not readable as XMP ({why}); kept a copy as {} before replacing it", path.display(), b.display());
-            Ok((fresh, false, Some(b)))
+            Ok((sidecar_packet(p, cat), false, Some(b)))
         }
     }
+}
+
+/// The paths packet `old` lists in `lr:hierarchicalSubject` (none when it can't be read): a save
+/// keeps them, so another app's keywords survive it.
+fn hierarchical_paths(old: &str) -> Vec<String> {
+    lightcraft_meta::parse_xmp(old).map(|d| d.metadata.hierarchical_keywords).unwrap_or_default()
 }
 
 /// Key of the stem sidecar a file maps to (case-insensitive).
@@ -658,7 +683,7 @@ impl Session {
         self.validate_sidecar_packets_for_paths(std::slice::from_ref(&path), &crate::rename::RealFs)?;
         let p = self.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?;
         let err = |e: std::io::Error| EngineError::Other(format!("{}: {e}", path.display()));
-        let (data, merged, backup) = sidecar_contents(&path, sidecar_packet(p, &self.catalog), &(self.clock)()).map_err(err)?;
+        let (data, merged, backup) = sidecar_contents(&path, p, &self.catalog, &(self.clock)()).map_err(err)?;
         write_atomic(&path, data.as_bytes()).map_err(err)?;
         self.note_sidecar_write(&path, data.as_bytes());
         Ok(SidecarSaved { path, merged, backup })
@@ -801,6 +826,20 @@ mod tests {
 
     use super::*;
     use lightcraft_catalog::Meta;
+
+    /// A photo's plain and hierarchical keywords are written as names (`dc:subject`, never a `|`)
+    /// and paths (`lr:hierarchicalSubject`), and read back as the same keywords.
+    #[test]
+    fn sidecar_keywords_roundtrip_as_names_and_paths() {
+        let mut p = photo();
+        p.meta.keywords = vec!["Animals|Birds|Heron".into(), "sunset".into(), "Animals|Birds|Owl".into()];
+        let x = sidecar_packet(&p, &lightcraft_catalog::Catalog::new());
+        let m = lightcraft_meta::parse_xmp(&x).unwrap().metadata;
+        assert_eq!(m.keywords, ["Heron", "Birds", "Animals", "sunset", "Owl"]);
+        assert_eq!(m.hierarchical_keywords, ["Animals|Birds|Heron", "sunset", "Animals|Birds|Owl"]);
+        let sc = parse_sidecar(&x, crate::crs::Target::Rendered).unwrap();
+        assert_eq!(sc.keywords.as_deref(), Some(p.meta.keywords.as_slice()));
+    }
 
     fn photo() -> Photo {
         let mut p = Photo::new(PhotoId(7), Source::File { path: "/x/IMG_1.jpg".into() }, "IMG_1.jpg", "JPEG", 40, 30, "2026-01-01T00:00:00");
