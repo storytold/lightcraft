@@ -158,3 +158,40 @@ fn gpu_status_never_moves_the_performance_controls() {
     let first = seen[0].1;
     assert!(seen.iter().all(|(_, r, _)| *r == first), "the memory buttons moved: {seen:?}");
 }
+
+/// Settings ▸ Performance says where AI masks run and how long the last photo took (issue #932): before the model
+/// loads, its two lines are there all the same, at the end of the tab, so nothing above them moves when it loads.
+#[test]
+fn performance_tab_shows_where_ai_masks_run() {
+    let mut h = demo([1300.0, 820.0]);
+    let r = h.request("ui.key", json!({"key": ",", "cmd": true}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    let r = h.request("ui.clickWidget", json!({"id": "button:settingsTab-performance"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    let has = |h: &Headless, id: &str| h.app.widgets.iter().any(|(w, _)| w == id);
+    if !lightcraft_engine::segment::Segmenter::AVAILABLE {
+        assert!(!has(&h, "settings:aiMasksDevice"), "a build without AI masks says nothing about them");
+        return;
+    }
+    let (device, time) = (rect(&h, "settings:aiMasksDevice"), rect(&h, "settings:aiMasksTime"));
+    assert!(device.bottom() <= time.top() + 1.0, "the device line comes first: {device:?} {time:?}");
+    let choice = rect(&h, "button:settingsAiMasksRunOn-1");
+    assert!(choice.bottom() <= device.top() + 1.0, "the choice of where they run comes first: {choice:?} {device:?}");
+    assert!(rect(&h, "button:settingsMemory-2").bottom() < choice.top(), "after the other performance settings");
+    let b = h.app.session.segmenter.backend();
+    assert!(b["device"].is_null() && b["encodeMs"].is_null(), "nothing loaded or timed yet: {b}");
+    // CPU, then Automatic again: the choice applies at once, and nothing moves
+    use lightcraft_engine::segment::{CPU_CHOSEN, RunOn};
+    for (button, want) in [("button:settingsAiMasksRunOn-1", RunOn::Cpu), ("button:settingsAiMasksRunOn-0", RunOn::Auto)] {
+        let r = h.request("ui.clickWidget", json!({"id": button}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.step();
+        h.step();
+        assert_eq!(h.app.session.segmenter.run_on(), want);
+        let fallback = h.app.session.segmenter.backend()["fallback"].clone();
+        assert_eq!(fallback == CPU_CHOSEN, want == RunOn::Cpu, "{fallback}");
+        // (its text says why it runs on the CPU now, so only its width changes)
+        assert_eq!(rect(&h, "settings:aiMasksDevice").min, device.min, "the device line stays put");
+    }
+}

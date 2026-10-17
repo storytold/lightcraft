@@ -2063,5 +2063,15 @@
   "Open Settings": "Otevřít nastavení",
   "Select none": "Zrušit celý výběr",
   "Select all": "Vybrat vše",
-  "Visualize HDR": "Zobrazit rozsah HDR"
+  "Visualize HDR": "Zobrazit rozsah HDR",
+  "AI masks": "AI masky",
+  "Runs on": "Běží na",
+  "Last photo": "Poslední fotka",
+  "Remote worker": "Vzdálený proces",
+  "Not loaded yet": "Zatím nenačteno",
+  "Run on": "Spouštět na",
+  "Automatic (GPU when available)": "Automaticky (GPU, je-li k dispozici)",
+  "CPU": "CPU",
+  "Object and Describe masks analyze each photo once, on the graphics card unless CPU is chosen or “Use the GPU for rendering” is off. On the processor that takes much longer.": "Masky Objekt a Popsat analyzují každou fotku jednou, na grafické kartě, pokud není zvoleno CPU nebo vypnuto „Použít GPU pro vykreslování“. Na procesoru to trvá mnohem déle.",
+  "Automatic runs the model on the Mac's graphics card. Choose CPU if AI masks fail there; on the processor they take much longer.": "Automaticky spouští model na grafické kartě Macu. Pokud tam AI masky selhávají, zvolte CPU; na procesoru trvají mnohem déle."
 }

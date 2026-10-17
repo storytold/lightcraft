@@ -2338,5 +2338,13 @@
   "Checking the GPU…": "Vérification du GPU…",
   "CPU": "Processeur",
   "A face model uses the GPU only when a check shows it gives the same results faster.": "Un modèle de visages n’utilise le GPU que si une vérification montre qu’il donne les mêmes résultats plus vite.",
-  "Checking the GPU for faces": "Vérification du GPU pour les visages"
+  "Checking the GPU for faces": "Vérification du GPU pour les visages",
+  "AI masks": "Masques IA",
+  "Runs on": "S’exécute sur",
+  "Last photo": "Dernière photo",
+  "Remote worker": "Processus distant",
+  "Run on": "Exécuter sur",
+  "Automatic (GPU when available)": "Automatique (GPU si disponible)",
+  "Object and Describe masks analyze each photo once, on the graphics card unless CPU is chosen or “Use the GPU for rendering” is off. On the processor that takes much longer.": "Les masques Objet et Décrire analysent chaque photo une fois, sur la carte graphique sauf si Processeur est choisi ou si « Utiliser le GPU pour le rendu » est désactivé. Sur le processeur, c’est beaucoup plus long.",
+  "Automatic runs the model on the Mac's graphics card. Choose CPU if AI masks fail there; on the processor they take much longer.": "Automatique exécute le modèle sur la carte graphique du Mac. Choisissez Processeur si les masques IA y échouent ; sur le processeur, ils sont beaucoup plus longs."
 }

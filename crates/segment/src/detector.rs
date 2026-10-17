@@ -6,13 +6,15 @@
 //! the Python/PyTorch SAM 3 code of Hugging Face Transformers (`models/sam3/modeling_sam3.py`), Copyright The HuggingFace
 //! Team and Meta Platforms, Inc.; translated to Rust on candle and restructured. See NOTICE.
 
+use std::sync::{Mutex, OnceLock, PoisonError};
+
 use candle_core::{D, Device, IndexOp, Module, Tensor};
 use candle_nn::{Conv2d, Conv2dConfig, GroupNorm, LayerNorm, Linear, VarBuilder};
 
 use crate::clip::TextEncoder;
 use crate::neck::{FPN, Neck};
 use crate::nn::{Attention, DecoderMlp, Mlp, TORCH_LN_EPS, cxcywh_to_xyxy, inverse_sigmoid, linear, ln, padding_bias, sine_grid, to_vec};
-use crate::{Error, Prediction, Result};
+use crate::{BackboneAccel, Error, Prediction, Result};
 
 const HIDDEN: usize = FPN;
 const HEADS: usize = 8;
@@ -41,6 +43,15 @@ pub struct Output {
     pub boxes: Vec<[f32; 4]>,
     /// The text features `[1, 32, 256]` (tests).
     pub text: Tensor,
+    /// The DETR encoder's memory `[1, 5184, 256]` (tests).
+    pub memory: Tensor,
+}
+
+/// Where the DETR encoder may run outside candle: the model's accelerator (if it still has one), and why the encoder
+/// stopped running there (set on its first failure; from then on candle runs it).
+pub struct EncoderAccel<'a> {
+    pub accel: &'a Mutex<Option<Box<dyn BackboneAccel>>>,
+    pub failed: &'a OnceLock<String>,
 }
 
 struct EncoderLayer {
@@ -159,9 +170,13 @@ impl Detector {
         })
     }
 
-    /// The detector's feature pyramid for the backbone output `[1, 1024, 72, 72]`.
-    pub fn features(&self, backbone: &Tensor) -> Result<Features> {
-        let levels = self.neck.forward(backbone, 3)?;
+    /// The detector's feature pyramid for the backbone output `[1, 1024, 72, 72]`, or from its neck's three
+    /// levels when they were computed elsewhere (an accelerator).
+    pub fn features(&self, backbone: &Tensor, levels: Option<Vec<Tensor>>) -> Result<Features> {
+        let levels = match levels {
+            Some(levels) => levels,
+            None => self.neck.forward(backbone, 3)?,
+        };
         let last = levels.last().ok_or_else(|| Error::Model("detector neck".into()))?;
         let (_, _, side, _) = last.dims4()?;
         let flat = last.flatten_from(2)?.transpose(1, 2)?.contiguous()?;
@@ -203,23 +218,60 @@ impl Detector {
         Ok(Tensor::cat(&[one(1)?, one(0)?, one(2)?, one(3)?], D::Minus1)?)
     }
 
-    /// Run the detector for one tokenized prompt.
-    pub fn predict(&self, f: &Features, ids: &[u32], valid: &[bool]) -> Result<Output> {
-        let text = self.text_proj.forward(&self.text.forward(ids, valid)?)?; // [1, 32, 256]
-        let text_bias = padding_bias(valid, &self.device)?;
-
-        // DETR encoder: image tokens attend to themselves and to the prompt
+    /// The DETR encoder: image tokens attend to themselves and to the prompt. Returns the memory `[1, 5184, 256]`.
+    fn encode(&self, f: &Features, text: &Tensor, text_bias: &Tensor) -> Result<Tensor> {
         let mut x = f.flat.clone();
         for l in &self.encoder {
             let h = l.ln1.forward(&x)?;
             let hp = (&h + &f.pos)?;
             x = (&x + l.self_attn.forward(&hp, &hp, &h, None)?)?;
             let h = l.ln2.forward(&x)?;
-            x = (&x + l.cross_attn.forward(&h, &text, &text, Some(&text_bias))?)?;
+            x = (&x + l.cross_attn.forward(&h, text, text, Some(text_bias))?)?;
             let h = l.ln3.forward(&x)?;
             x = (&x + l.mlp.forward(&h)?)?;
         }
-        let memory = x;
+        Ok(x)
+    }
+
+    /// [`Detector::encode`] on the accelerator; `None` when there is none, or it doesn't run the encoder or fails (the
+    /// first failure is logged and noted in `accel.failed`, and the accelerator isn't asked again).
+    fn encode_accelerated(&self, f: &Features, text: &Tensor, valid: &[bool], accel: &EncoderAccel) -> Result<Option<Tensor>> {
+        if accel.failed.get().is_some() {
+            return Ok(None);
+        }
+        let guard = accel.accel.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(a) = guard.as_ref() else { return Ok(None) };
+        let image = to_vec(&f.flat)?;
+        let want = image.len();
+        // what the decoder can't use is a failure too: a wrong size, or NaN / ∞ from a broken kernel
+        let checked = a.detr_encoder(&image, &to_vec(&f.pos)?, &to_vec(text)?, valid).and_then(|out| {
+            if out.len() != want {
+                Err(format!("it returned {} values instead of {want}", out.len()))
+            } else if out.iter().any(|v| !v.is_finite()) {
+                Err("it returned values that are not numbers".into())
+            } else {
+                Ok(out)
+            }
+        });
+        match checked {
+            Ok(out) => Ok(Some(Tensor::from_vec(out, f.flat.dims(), &self.device)?)),
+            Err(e) => {
+                log::warn!("SAM 3 DETR encoder not run on {} ({e}); using the {} for it from now on", a.device(), crate::device_name(&self.device));
+                let _ = accel.failed.set(format!("{}: {e}", a.device()));
+                Ok(None)
+            }
+        }
+    }
+
+    /// Run the detector for one tokenized prompt, the DETR encoder on `accel` when it runs it.
+    pub fn predict(&self, f: &Features, ids: &[u32], valid: &[bool], accel: &EncoderAccel) -> Result<Output> {
+        let text = self.text_proj.forward(&self.text.forward(ids, valid)?)?; // [1, 32, 256]
+        let text_bias = padding_bias(valid, &self.device)?;
+
+        let memory = match self.encode_accelerated(f, &text, valid, accel)? {
+            Some(memory) => memory,
+            None => self.encode(f, &text, &text_bias)?,
+        };
 
         // DETR decoder: presence token + 200 queries with iterative box refinement
         let mut boxes = candle_nn::ops::sigmoid(&self.reference_points)?;
@@ -285,6 +337,7 @@ impl Detector {
             presence: to_vec(&presence)?.first().copied().unwrap_or(-10.0),
             boxes: bv.as_chunks::<4>().0.to_vec(),
             text,
+            memory,
         })
     }
 }
