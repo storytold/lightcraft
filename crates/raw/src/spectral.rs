@@ -142,6 +142,7 @@ mod tests {
             ("Canon", "Canon EOS REBEL T3i", "EOS 600D"),
             ("Canon", "Canon EOS Kiss X5", "EOS 600D"),
             ("Canon", "Canon EOS R5 Mark II", "EOS R5m2"),
+            ("Canon", "Canon EOS R6 Mark II", "EOS R6m2"),
             ("NIKON CORPORATION", "NIKON D800", "D800E"),
             ("NIKON CORPORATION", "NIKON Z 6_2", "Z f"),
             ("SONY", "ILCE-7RM4A", "ILCE-7RM4"),
