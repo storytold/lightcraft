@@ -131,6 +131,15 @@ are the same in every version, so serve them with `Cache-Control: no-cache` (not
     is saved; the stored library is left as it was.
   - A panic (wasm is built with `panic = "abort"`) replaces the page with a message saying the
     stored library is kept and to reload, instead of a frozen canvas.
+  - A lost WebGL connection leaves the editing session open and shows a keyboard-accessible
+    recovery panel instead of a blank canvas. **Back up library** downloads the current catalog,
+    edits, and available originals; only then is **Reload after backup** enabled. Confirm that
+    the ZIP is saved before reloading. In `?store=memory`, reload discards the temporary session:
+    restore its backup in a browser-storage session and keep the source photos. There is no
+    automatic graphics restart or silent reload.
+    The recovery backup also works in memory mode; if a catalogued original cannot be read
+    (including one missing from browser storage's file list), it reports the error and keeps
+    reload disabled rather than making an incomplete backup.
 - **Importing photos with no filesystem.** *File ▸ Import Photos…* (<kbd>⌘⇧I</kbd>) opens the
   browser's file picker. You can also drop files anywhere on the page. The bytes are written to
   storage, then imported and decoded by the same engine code as the desktop app

@@ -38,6 +38,54 @@
       await init({ module_or_path: module });
       // automation: `await lightcraft.command("library.info", "{}")` → JSON text
       globalThis.lightcraft = { command };
+      const canvas = document.getElementById("lightcraft_canvas");
+      let recovery;
+      canvas.addEventListener("webglcontextlost", (event) => {
+        event.preventDefault(); // permit restoration, but stale GPU resources still require a restart
+        if (recovery) return;
+        recovery = document.createElement("section");
+        recovery.id = "lightcraft_graphics_recovery";
+        recovery.setAttribute("role", "alertdialog");
+        recovery.setAttribute("aria-labelledby", "lightcraft_graphics_title");
+        recovery.style.cssText = "position:fixed;inset:0;z-index:9;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:32px;background:#1c1c1c;color:#e0e0e0;font:15px/1.5 system-ui;text-align:center";
+        const title = document.createElement("h1");
+        title.id = "lightcraft_graphics_title";
+        title.textContent = "The browser's graphics connection was lost";
+        const explanation = document.createElement("p");
+        explanation.style.maxWidth = "600px";
+        explanation.textContent = "Your editing session is still open. Back up the library before reloading, especially in a temporary session (?store=memory). The backup includes edits and available originals. Keep your source photos too.";
+        const status = document.createElement("p");
+        status.setAttribute("aria-live", "polite");
+        const backup = document.createElement("button");
+        backup.textContent = "Back up library";
+        const reload = document.createElement("button");
+        reload.textContent = "Reload after backup";
+        reload.disabled = true;
+        for (const button of [backup, reload]) button.style.cssText = "font:inherit;padding:10px 18px;cursor:pointer";
+        backup.addEventListener("click", async () => {
+          backup.disabled = true;
+          reload.disabled = true;
+          status.textContent = "Preparing the backup. Keep this page open…";
+          try {
+            await command("web.recoveryBackup", "{}");
+            status.textContent = "Backup download started. Confirm the ZIP is saved before reloading. Temporary sessions can be restored from it in a browser-storage session.";
+            reload.disabled = false;
+          } catch (error) {
+            status.textContent = "Backup failed: " + error + ". Keep this page open; do not reload until your work is protected.";
+          } finally {
+            backup.disabled = false;
+          }
+        });
+        reload.addEventListener("click", () => {
+          if (window.confirm("Have you saved the backup ZIP? Reloading discards a temporary session and any unsaved changes. Restore the ZIP with File > Restore Library from Backup in a browser-storage session.")) location.reload();
+        });
+        recovery.append(title, explanation, backup, reload, status);
+        document.body.append(recovery);
+        backup.focus();
+      });
+      canvas.addEventListener("webglcontextrestored", () => {
+        if (recovery) recovery.querySelector("h1").textContent = "Graphics restored — restart after protecting your work";
+      });
       start(font);
     })().catch((e) => {
       console.error(e);

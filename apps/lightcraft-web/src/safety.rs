@@ -152,7 +152,12 @@ pub fn download_blob(name: &str, blob: &web_sys::Blob) -> Result<(), String> {
 /// File ▸ Back Up Library…: a zip of the library files (as the app has them, saved or not) and
 /// every original in storage, built entry by entry into the browser's memory (outside the wasm
 /// heap) and downloaded. `names`: content hash → the photo's file name.
-pub async fn backup(files: Files, backend: Backend, names: HashMap<String, String>) -> Result<(usize, f64), String> {
+pub async fn backup(
+    files: Files,
+    backend: Option<Backend>,
+    resident: HashMap<String, std::sync::Arc<[u8]>>,
+    names: HashMap<String, String>,
+) -> Result<(usize, f64), String> {
     let parts = js_sys::Array::new();
     let mut zip = ZipWriter::default();
     let mut bytes = 0f64;
@@ -170,18 +175,27 @@ pub async fn backup(files: Files, backend: Backend, names: HashMap<String, Strin
         }
     }
     let mut originals = 0;
-    for hash in backend.list("originals").await? {
-        if !valid_hash(&hash) {
+    // Storage enumeration alone omits a catalogued original whose key was lost or evicted.
+    let stored = match &backend {
+        Some(b) => b.list("originals").await?,
+        None => Vec::new(),
+    };
+    let mut hashes: Vec<&str> = names.keys().chain(stored.iter()).map(String::as_str).collect();
+    hashes.sort_unstable();
+    hashes.dedup();
+    for hash in hashes {
+        if !valid_hash(hash) {
             continue;
         }
-        match backend.read(&storage_key(&hash)).await {
-            Ok(Some(data)) => {
-                let name = names.get(&hash).map_or("original", String::as_str);
-                add(&mut zip, &original_entry(&hash, name), &data)?;
+        let data =
+            if let Some(b) = &backend { b.read(&storage_key(hash)).await?.map(std::sync::Arc::<[u8]>::from) } else { resident.get(hash).cloned() };
+        match data {
+            Some(data) => {
+                let name = names.get(hash).map_or("original", String::as_str);
+                add(&mut zip, &original_entry(hash, name), &data)?;
                 originals += 1;
             }
-            Ok(None) => {}
-            Err(e) => return Err(format!("reading an original from browser storage: {e}")),
+            None => return Err(format!("original {hash} is unavailable; keep this page open and preserve your source photos")),
         }
     }
     let tail = zip.finish()?;

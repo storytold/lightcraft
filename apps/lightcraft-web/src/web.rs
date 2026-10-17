@@ -167,12 +167,13 @@ fn download(path: &str, bytes: &[u8]) -> Result<(), String> {
 fn services(originals: Originals, backend: Option<Backend>, files: Files, frozen: Rc<Cell<bool>>, ctx: egui::Context) -> Services {
     let (backup_backend, backup_files) = (backend.clone(), files);
     let restore_backend = backend.clone();
+    let backup_originals = originals.clone();
     Services {
         picker: None,
         pick_display_profile: None,
         screen_profile: None,
         backup_library: Some(Box::new(move |session: &mut Session| {
-            let Some(b) = backup_backend.clone() else { return Err("nothing is stored in this browser session (?store=memory)".into()) };
+            let b = backup_backend.clone();
             // the photos' own names for the originals in the zip
             let names: std::collections::HashMap<String, String> = session
                 .catalog
@@ -183,9 +184,10 @@ fn services(originals: Originals, backend: Option<Backend>, files: Files, frozen
                 })
                 .collect();
             let files = backup_files.clone();
+            let resident = if b.is_none() { backup_originals.snapshot() } else { Default::default() };
             notice("Backing up the library… (the download starts when it's ready)");
             wasm_bindgen_futures::spawn_local(async move {
-                match safety::backup(files, b, names).await {
+                match safety::backup(files, b, resident, names).await {
                     Ok((n, bytes)) => notice(format!(
                         "Library backed up: {n} original{} ({:.1} MB). Keep the file somewhere safe.",
                         if n == 1 { "" } else { "s" },
@@ -614,6 +616,40 @@ impl WebApp {
         let inbox = INBOX.with(|q| std::mem::take(&mut *q.borrow_mut()));
         for (id, params, (resolve, reject)) in inbox {
             let params: serde_json::Value = serde_json::from_str(&params).unwrap_or(json!({}));
+            if id == "web.recoveryBackup" {
+                let ready = self.app.session.end_interaction().and_then(|_| self.app.session.persist());
+                if let Err(e) = ready {
+                    let _ = reject.call1(&JsValue::NULL, &e.to_string().into());
+                    continue;
+                }
+                self.app.session.save_view();
+                if let Ok(ui) = serde_json::to_vec_pretty(&self.app.ui) {
+                    self.files.write("ui.json", &ui);
+                }
+                let names = self
+                    .app
+                    .session
+                    .catalog
+                    .photos()
+                    .filter_map(|p| match &p.source {
+                        Source::File { path } => crate::store::hash_of_path(path).map(|h| (h.to_string(), p.file_name.clone())),
+                        _ => None,
+                    })
+                    .collect();
+                let resident = if self.backend.is_none() { self.originals.snapshot() } else { Default::default() };
+                let (files, backend) = (self.files.clone(), self.backend.clone());
+                wasm_bindgen_futures::spawn_local(async move {
+                    match safety::backup(files, backend, resident, names).await {
+                        Ok((n, bytes)) => {
+                            let _ = resolve.call1(&JsValue::NULL, &json!({"originals": n, "bytes": bytes}).to_string().into());
+                        }
+                        Err(e) => {
+                            let _ = reject.call1(&JsValue::NULL, &e.into());
+                        }
+                    }
+                });
+                continue;
+            }
             let r = if id == "web.stats" { Ok(self.web_stats()) } else { self.app.run(&id, params) };
             let _ = match r {
                 Ok(v) => resolve.call1(&JsValue::NULL, &v.to_string().into()),
