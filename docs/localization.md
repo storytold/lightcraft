@@ -34,6 +34,7 @@ are in [`localization-zh-hans.md`](localization-zh-hans.md), [`localization-zh-h
        Cs, "cs", "Čeština", "Latn", include_str!("../locales/cs.json");
        It, "it", "Italiano", "Latn", include_str!("../locales/it.json");
        Ka, "ka", "ქართული", "Geor", include_str!("../locales/ka.json");
+       Lao, "lo", "ພາສາລາວ", "Lao", include_str!("../locales/lo.json");
    }
    ```
 
