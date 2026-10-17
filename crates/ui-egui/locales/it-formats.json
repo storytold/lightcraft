@@ -295,5 +295,19 @@
   "Already in “{}”": "Already in “{}”",
   "Move {n} photo{} to “{}”": "Move {n} photo{} to “{}”",
   "Move {n} photo{} to “{}”?": "Move {n} photo{} to “{}”?",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Moved {n} photo{} to “{}”. Edit → Undo moves them back."
+  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Moved {n} photo{} to “{}”. Edit → Undo moves them back.",
+  "Delete the saved location “{name}”?": "Eliminare la posizione salvata “{name}”?",
+  "In the private location “{name}”: its map is hidden.": "Nella posizione privata “{name}”: la sua mappa è nascosta.",
+  "within {d} of {lat}, {lon}": "entro {d} da {lat}, {lon}",
+  "All Tracks ({n})": "Tutte le tracce ({n})",
+  "Track {n}": "Traccia {n}",
+  "camera time, UTC{o}": "ora della fotocamera, UTC{o}",
+  "Set Time Zone Offset… (UTC{o})": "Imposta differenza di fuso orario… (UTC{o})",
+  "Auto-Tag {n} Selected Photos": "Geolocalizza automaticamente {n} foto selezionate",
+  "{m} of them fall within the track's time range": "{m} rientrano nell'intervallo di tempo del tracciato",
+  "{n} more tracks": "Altre {n} tracce",
+  "Deleted {n} map tiles": "Eliminati {n} riquadri della mappa",
+  "{size} MB in {n} tiles (limit {cap} MB)": "{size} MB in {n} riquadri (limite {cap} MB)",
+  "Map tiles from {id}": "Riquadri della mappa da {id}",
+  "In use: {url} (up to zoom {zoom})": "In uso: {url} (fino allo zoom {zoom})"
 }

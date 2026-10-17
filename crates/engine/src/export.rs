@@ -1641,6 +1641,15 @@ fn prepare_guarded(
     } else {
         o
     };
+    // a photo inside a private saved location is exported without its location, as if "Remove
+    // location info" were on for it (LRC-MAP-LOCATIONS)
+    let private_opts;
+    let o = if !o.remove_location && session.map.locations.private_at(p.meta.gps).is_some() {
+        private_opts = ExportOptions { remove_location: true, ..o.clone() };
+        &private_opts
+    } else {
+        o
+    };
     let (full_px, long) = ((p.width as usize).saturating_mul(p.height as usize), p.width.max(p.height) as usize);
     let (work, weight) = if o.format.is_rendered() {
         let (w, h) = output_size(p, o);

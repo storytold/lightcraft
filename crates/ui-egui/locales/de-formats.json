@@ -295,5 +295,19 @@
   "Already in “{}”": "Bereits in „{}“",
   "Move {n} photo{} to “{}”": "{n} Foto{0} nach „{1}“ verschieben",
   "Move {n} photo{} to “{}”?": "{n} Foto{0} nach „{1}“ verschieben?",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "{n} Foto{0} nach „{1}“ verschoben. Bearbeiten → Rückgängig holt sie zurück."
+  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "{n} Foto{0} nach „{1}“ verschoben. Bearbeiten → Rückgängig holt sie zurück.",
+  "Delete the saved location “{name}”?": "Den gespeicherten Ort „{name}“ löschen?",
+  "In the private location “{name}”: its map is hidden.": "Im privaten Ort „{name}“: Die Karte ist ausgeblendet.",
+  "within {d} of {lat}, {lon}": "im Umkreis von {d} um {lat}, {lon}",
+  "All Tracks ({n})": "Alle Tracks ({n})",
+  "Track {n}": "Track {n}",
+  "camera time, UTC{o}": "Kamerazeit, UTC{o}",
+  "Set Time Zone Offset… (UTC{o})": "Zeitzonenversatz festlegen… (UTC{o})",
+  "Auto-Tag {n} Selected Photos": "{n} ausgewählte Fotos automatisch verorten",
+  "{m} of them fall within the track's time range": "{m} davon liegen im Zeitbereich des Tracks",
+  "{n} more tracks": "{n} weitere Tracks",
+  "Deleted {n} map tiles": "{n} Kartenkacheln gelöscht",
+  "{size} MB in {n} tiles (limit {cap} MB)": "{size} MB in {n} Kacheln (Grenze {cap} MB)",
+  "Map tiles from {id}": "Kartenkacheln von {id}",
+  "In use: {url} (up to zoom {zoom})": "In Verwendung: {url} (bis Zoomstufe {zoom})"
 }

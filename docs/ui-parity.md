@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (zoom row: soft proofing sharp at 1:1; canvas tools by keyboard; focus-order test; ~50 unnamed hand-drawn widgets named) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (zoom row: soft proofing sharp at 1:1; canvas tools by keyboard; focus-order test; ~50 unnamed hand-drawn widgets named; Map view keys) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 How LightCraft's interaction compares with Lightroom's: views, panels, tools and handles, modifier
 keys, shortcuts, zoom, context menus and feel. Rows for individual menu items and shortcuts live in
@@ -60,7 +60,7 @@ under the UI command that wraps it (a no-op error); the UI command now wins.
 | Expand/collapse edit sections | ⌘⌥1–5 | ⌘1–6 | ⌘0 = Zoom to Fit, ⌘1 = Zoom 100 %; Geometry lives in the Crop panel |
 | Histogram | ⌘⇧H | ⌘0 | ⌘0 = Zoom to Fit |
 | Square Grid | ⇧G | (none; ⇧G = Guided Upright) | Guided Upright is a button in the Crop panel |
-| Hide / show pins (Tool Overlay) | ⇧H (cycles Auto, Always, Selected, Never) | H (Classic) | H opens Remove; View ▸ Tool Overlay and the Remove / Masking panels pick a mode |
+| Hide / show pins (Tool Overlay) | ⇧H (cycles Auto, Always, Selected, Never) | H (Classic) | H opens Remove (in the Map view it hides the photo pins); View ▸ Tool Overlay and the Remove / Masking panels pick a mode |
 | Export dialog | ⌘⇧E (+ ⇧E) | ⇧E | ⌘⇧E is "Edit in Photoshop" there; no external-editor command yet |
 | Crop overlay cycle | ⇧O | O | O = mask overlay; ⇧O (mask colour / overlay orientation) unused otherwise |
 | Create Version | ⌘⇧S (+ ⇧M) | ⇧M (Windows: Ctrl+⇧S) | — |
@@ -71,6 +71,13 @@ under the UI command that wraps it (a no-op error); the UI command now wins.
 **Grid thumbnail size (KEYC-COMPARE):** Classic's `=` and `-` increase and decrease the Grid thumbnail size (same keys on macOS and Windows; `+` also works for the larger size here, as Shift+`=` or the keypad). They step the bottom-bar slider by 30 pt inside its 90–480 pt range, in Photo Grid, Square Grid and People only; Detail, Compare, Survey and Reference ignore them, and ⌘= / ⌘− stay Zoom In / Out. See [library shortcuts](library-shortcuts.md).
 
 **Library navigation keys (KEYC-COMPARE):** in Photo Grid and Square Grid, `Home` / `End` make the first / last photo of the view the active, selected one, and `Shift+Left` / `Shift+Right` add the previous / next photo of the view to the selection (the added photo becomes active; the keys never remove a photo from the selection, and do nothing at either end of the view). They wait in the other views, in the full-screen preview, while a text field or a dialog has the keyboard, and when you gave the key to a command; they are listed under Fixed keys in Help → Keyboard Shortcuts. `Cmd+O` (`Ctrl+O` on Windows and Linux) runs File → Open Library… ; View → Visualize HDR has no default key (`Shift+H` cycles the Tool Overlay, issue #224; `Cmd+Shift+H` stays the Histogram). Covered by `crates/ui-egui/src/tests_keymap.rs`; the macOS native menu path for `Cmd+O` is not exercised by the headless tests.
+
+**Map view (KEYC-MODULE-OUTPUT, KEY-HIDEPINS):** the Map module's keys work in the Map view only
+(`shortcuts::MAP_ONLY`): ⌘K Lock Markers, `\` location filter bar, O Saved Locations list, `=` / `−` zoom (⌘= / ⌘− /
+⌘0 too), H hide pins. H, `\` and O mean Remove, Show Original and the mask overlay elsewhere and keep that meaning
+there; in the Map view the map's command wins (the pairs are in `shortcuts::CONTEXTUAL`, so reassigning one doesn't
+take the key from the other). Not mapped: Classic's I (map info), ⌘F (map search), ⌘1–6 (map styles) and ⌫ (delete GPS;
+⌫ stays Delete photo, Remove GPS Coordinates is in the Photo menu). All are in View ▸ Map; see [Map](map.md#keys-and-menus).
 
 **Still missing / broken:**
 - No command yet: F1 help (verify the rest of the old list: full screen, settings, stacks,
@@ -139,4 +146,5 @@ a real screen reader on any platform yet.
 | 2026-10-14 | minor | Zoom row: soft proofing gets zoom windows; LR-VIEW-ZOOM gap closed |
 | 2026-10-12 | minor | Accessibility: an AccessKit tree audit test over every view, Develop tool and 13 dialogs; unnamed fields, slider ranges and the Auto Stack slider fixed; 30% → 55%; UI remaining 40–70 h → 34–58 h |
 | 2026-10-11 | minor | Zoom row: Compare and Reference get zoom windows; what remains of LR-VIEW-ZOOM is overlays and soft proofing |
+| 2026-10-11 | minor | Map view keys (⌘K, \\, O, = / −, H) scoped to the Map view |
 | 2026-10-10 | major | Created: measured command and shortcut counts, assessment by area, estimates; moved the shortcut conflicts section here from the checklist |

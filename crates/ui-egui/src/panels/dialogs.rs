@@ -235,6 +235,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
         Dialog::KeywordTag { editing: None, .. } => "Create Keyword Tag",
         Dialog::KeywordTag { .. } => "Edit Keyword Tag",
         Dialog::DeleteKeyword { .. } => "Delete Keyword",
+        Dialog::DeleteLocation { .. } => "Delete Saved Location",
         Dialog::MoveKeyword { .. } => "Merge Keywords",
         Dialog::KeywordSet { .. } => "Edit Keyword Set",
         Dialog::MergeKeywords { .. } => "Merge Keywords",
@@ -1193,6 +1194,12 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     };
                     ui.label(egui::RichText::new(crate::i18n::tr("Their photos and the keywords below them come together under one keyword.")).color(t.text_dim));
                 }
+                Dialog::DeleteLocation { name, .. } => {
+                    ui.label(crate::i18n::tr_format!("Delete the saved location “{name}”?", name = name));
+                    ui.label(
+                        egui::RichText::new(crate::i18n::tr("Its photos keep their GPS positions. This can't be undone.")).color(t.text_dim),
+                    );
+                }
                 Dialog::DeleteKeyword { keyword, count } => {
                     let name = keyword.replace('|', " › ");
                     ui.label(crate::i18n::tr_format!("Delete the keyword “{name}”?", name = name));
@@ -1356,7 +1363,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     Dialog::DenoiseModel { .. } => "Install",
                     Dialog::FaceModel { info, .. } if !informational && info["download"].is_string() => "Download",
                     Dialog::FaceModel { .. } if !informational => "Install",
-                    Dialog::ConfirmDelete { .. } | Dialog::DeleteKeyword { .. } | Dialog::DeleteEffects { .. } => "Delete",
+                    Dialog::ConfirmDelete { .. } | Dialog::DeleteKeyword { .. } | Dialog::DeleteEffects { .. } | Dialog::DeleteLocation { .. } => "Delete",
                     Dialog::SaveEffect { .. } => "Create",
                     Dialog::MovePhotos { .. } => "Move",
                     // (not "Merge": that is photo merging, HDR / panorama, in some languages)
@@ -1833,6 +1840,7 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
             }
         }
         Dialog::DeleteKeyword { keyword, .. } => app.run("keyword.delete", json!({"keyword": keyword})),
+        Dialog::DeleteLocation { id, .. } => app.run("map.location.remove", json!({"id": id})),
         Dialog::KeywordSet { replaces, name, slots, as_new } => {
             use lightcraft_catalog::keywords::same;
             let name = name.trim();
@@ -2296,9 +2304,11 @@ pub enum ConfirmStyle {
 
 pub fn confirm_style(dlg: &Dialog) -> ConfirmStyle {
     match dlg {
-        Dialog::ConfirmDelete { .. } | Dialog::DeleteKeyword { .. } | Dialog::DeleteEffects { .. } | Dialog::RemoveFolder { .. } => {
-            ConfirmStyle::Plain
-        }
+        Dialog::ConfirmDelete { .. }
+        | Dialog::DeleteKeyword { .. }
+        | Dialog::DeleteEffects { .. }
+        | Dialog::DeleteLocation { .. }
+        | Dialog::RemoveFolder { .. } => ConfirmStyle::Plain,
         _ if only_shows(dlg) => ConfirmStyle::Plain,
         _ => ConfirmStyle::Primary,
     }

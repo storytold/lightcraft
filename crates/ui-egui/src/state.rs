@@ -18,6 +18,8 @@ pub enum ViewMode {
     Reference,
     /// A card per person named on faces (close-up, name, photo count).
     People,
+    /// The photos in view as pins on a map (`panels/map.rs`).
+    Map,
 }
 
 /// The right-hand tool/panel shown next to the tool strip.
@@ -709,6 +711,13 @@ pub struct UiState {
     pub show_counts: bool,
     /// Face / pet boxes (read from XMP) over the photo in the loupe.
     pub face_boxes: bool,
+    /// Map view: Lock Markers (pins can't be dragged to move a photo's position; `map.lockMarkers`).
+    pub map_lock_markers: bool,
+    /// Map view: photo pins and clusters drawn (H, `map.showPins`; saved locations and track logs
+    /// stay).
+    pub map_show_pins: bool,
+    /// Map view: the location filter bar above the map (`\`, `map.filterBar`).
+    pub map_filter_bar: bool,
     /// The left sidebar's sections: their order, which are hidden and which are folded shut.
     pub sidebar: crate::sidebar::SidebarLayout,
     /// What settings files said before [`UiState::sidebar`]: the ids of the folded sections. Read
@@ -1071,6 +1080,11 @@ pub enum Dialog {
         /// Photos that have it (or one below it).
         count: usize,
     },
+    /// Delete a saved location (Map view), after asking: it isn't an undo step.
+    DeleteLocation {
+        id: u64,
+        name: String,
+    },
     /// Merge keywords into another one on every photo.
     MergeKeywords {
         from: Vec<String>,
@@ -1307,6 +1321,9 @@ impl Default for UiState {
             grid_info: "filename".into(),
             show_counts: true,
             face_boxes: true,
+            map_lock_markers: false,
+            map_show_pins: true,
+            map_filter_bar: true,
             sidebar: Default::default(),
             collapsed_sidebar: Vec::new(),
             name_edit: None,

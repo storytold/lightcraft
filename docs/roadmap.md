@@ -1,6 +1,6 @@
 # Roadmap: milestones, current focus and what's next
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** major (created; milestones moved here from ROADMAP.md, focus re-ranked after the 2026-10-10 re-measure) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** minor (M15: Map module keys, menus and settings) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 Forward-looking plan. The summary with the headline numbers is [ROADMAP.md](../ROADMAP.md); the
 ranked shortfalls are [gaps.md](gaps.md); the numbers come from [target-app-parity.md](target-app-parity.md).
@@ -76,7 +76,7 @@ calibration: M0–M13 took ≈ 25 active hours against an estimate of ≈ 110–
 | M12 | AI & smart features | subject/sky/background/people/object masks, semantic search, faces/People (permissively licensed models, pure-Rust inference) | 20–40 | 🚧 (faces: detection, recognition, People view ✅; Object / Describe masks via SAM 3 🟡; Subject / Sky / People masks, semantic search ⬜) |
 | M13 | Merge | HDR merge (deghost), panorama (projections, boundary warp, fill edges), HDR panorama | 10–15 | ✅ |
 | M14 | Video | import/playback/trim via FilmCraft crates, global edits + presets on video, video export | 6–10 | ⬜ |
-| M15 | Classic modules | Map, Book, Slideshow, Print, Web; smart collections, stacks, virtual copies, publish services, tethering | 25–40 | 🚧 (smart albums, stacks, virtual copies, compare/survey ✅; contact-sheet PDF 🟡; Map/Book/Slideshow/Print/Web ⬜) |
+| M15 | Classic modules | Map, Book, Slideshow, Print, Web; smart collections, stacks, virtual copies, publish services, tethering | 25–40 | 🚧 (smart albums, stacks, virtual copies, compare/survey ✅; contact-sheet PDF 🟡; Map 🟡: view, geotagging, location filter, saved locations, track logs, keys, menus and Settings ▸ Map done, location folders left; Book/Slideshow/Print/Web ⬜) |
 | M16 | 1.0 polish | preferences, shortcut editor, accessibility, localization, packaging (dmg/msi/AppImage/web), hardening | 10–20 | 🚧 (settings, keyboard shortcuts sheet, packaging basics ✅; English/Chinese (Simplified, Traditional)/Japanese/Brazilian Portuguese/Spanish/German/Russian/Ukrainian/Georgian localisation 🟡; accessibility and further locales ⬜) |
 
 ## Risks that coding hours alone don't retire
@@ -108,6 +108,7 @@ calibration: M0–M13 took ≈ 25 active hours against an estimate of ≈ 110–
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-11 | minor | M15: the Map module's keys, View ▸ Map menu and Settings ▸ Map landed; location folders left |
 | 2026-10-10 | minor | Beta hours 340–600; full ready ~59% in the gate note |
 | 2026-10-10 | minor | Added the Alpha gate table (core-workflow gate from the revised standard): passes, stays alpha |
 | 2026-10-10 | major | Created: milestones moved from ROADMAP.md (statuses refreshed: M3 ✅, M11 / M12 / M15 detail), current focus re-ranked toward beta, risks and design notes kept |
