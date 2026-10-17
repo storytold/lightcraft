@@ -152,6 +152,9 @@
   ⇧-click and the line tapers from the old values to the new ones. The whole line is one undo step.
   `mask.brushStroke {connect: true}` does the same for agents.
 
+- Import ▸ Move (and a move to another volume) now writes the new file's folder entry to disk before it removes the
+  original, and keeps the original when that fails (issue #1501). The copy's contents were already synced, but not
+  the name in its folder, so a crash right after the move could in principle keep the deletion and lose the copy.
 ### Hard-edged Heal and Clone spots
 - A spot with Feather at 0 no longer draws black pixels exactly on its radius. This also fixes spots at 0% Opacity
   changing pixels along their edge. The hard edge now leaves pixels on the radius unchanged.

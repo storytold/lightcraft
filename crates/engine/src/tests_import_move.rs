@@ -291,6 +291,31 @@ fn a_source_that_cannot_be_removed_is_kept_and_reported() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// The copy's folder is synced to disk before the original is removed; when that sync fails the original stays
+/// and is reported, and the photo is imported from its copy (issue #1501).
+#[test]
+fn the_original_stays_when_the_copys_folder_cannot_be_synced() {
+    let base = temp_dir("dirsync");
+    let (card, dest) = (base.join("card"), base.join("out"));
+    write_png(&card.join("a.png"), 1);
+    std::fs::create_dir_all(&dest).unwrap();
+    let mut s = session();
+    inject(Fault::FailDirSync);
+    let r = import_move(&mut s, &[&card], &dest, json!({"organize": "flat"}));
+    inject(Fault::None);
+    assert_eq!(len(&r, "imported"), 1, "{r}");
+    assert_eq!(len(&r, "moved"), 0, "{r}");
+    assert!(r["kept"][0]["reason"].as_str().unwrap().contains("durable"), "{r}");
+    assert!(card.join("a.png").is_file() && dest.join("a.png").is_file());
+    // and with the sync working, nested new folders are made and the original moves
+    write_png(&card.join("b.png"), 2);
+    let deep = base.join("out2");
+    let r = import_move(&mut s, &[&card.join("b.png")], &deep, json!({"organize": "day"}));
+    assert_eq!(len(&r, "moved"), 1, "{r}");
+    assert!(!card.join("b.png").exists());
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// Duplicates, unreadable files and files that fail (here: a different sidecar already at the
 /// destination) keep their sources; the rest of the batch still moves.
 #[test]

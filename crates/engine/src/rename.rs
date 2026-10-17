@@ -477,6 +477,13 @@ fn move_across_volumes(fs: &RealFs, a: &Path, b: &Path) -> std::io::Result<()> {
         let _ = std::fs::remove_file(b);
         return Err(std::io::Error::other(format!("the copy at {} did not match the original; the original was kept", b.display())));
     }
+    // the copy's name in its folder must be on disk before the original goes (issue #1501)
+    if let Some(dir) = b.parent()
+        && let Err(e) = crate::import_move::sync_dir(dir)
+    {
+        let _ = std::fs::remove_file(b);
+        return Err(std::io::Error::other(format!("could not make {} durable ({e}); the original was kept", b.display())));
+    }
     std::fs::remove_file(a).inspect_err(|_| {
         // the original stays: drop the copy so the file isn't in two places
         let _ = std::fs::remove_file(b);
