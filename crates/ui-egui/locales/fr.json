@@ -2338,5 +2338,11 @@
   "Checking the GPU…": "Vérification du GPU…",
   "CPU": "Processeur",
   "A face model uses the GPU only when a check shows it gives the same results faster.": "Un modèle de visages n’utilise le GPU que si une vérification montre qu’il donne les mêmes résultats plus vite.",
-  "Checking the GPU for faces": "Vérification du GPU pour les visages"
+  "Checking the GPU for faces": "Vérification du GPU pour les visages",
+  "Continue in Background": "Continuer en arrière-plan",
+  "Folder not found": "Dossier introuvable",
+  "Dismiss": "Ignorer",
+  "Review…": "Examiner…",
+  "Open Synchronize Folder with what the scan found": "Ouvrir Synchroniser le dossier avec ce que l'analyse a trouvé",
+  "You can go on working: a notice at the top left says when the scan is done.": "Vous pouvez continuer à travailler : un avis en haut à gauche signale la fin de l'analyse."
 }

@@ -295,5 +295,8 @@
   "Already in “{}”": "Уже в «{}»",
   "Move {n} photo{} to “{}”": "Переместить в «{1}» фото: {n}{0:.0}",
   "Move {n} photo{} to “{}”?": "Переместить в «{1}» фото: {n}{0:.0}?",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "В «{1}» перемещено фото: {n}{0:.0}. Правка → Отменить вернёт их."
+  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "В «{1}» перемещено фото: {n}{0:.0}. Правка → Отменить вернёт их.",
+  "Changes found: {n}": "Найдено изменений: {n}",
+  "“{name}” is still being scanned: wait for it, or stop it with ✕ on its row": "«{name}» ещё просматривается: дождитесь окончания или остановите поиск кнопкой ✕ в его строке",
+  "Look at the changes found in “{name}” first, or dismiss them": "Сначала просмотрите изменения, найденные в «{name}», или скройте их"
 }

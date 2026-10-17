@@ -295,5 +295,8 @@
   "Already in “{}”": "Już w „{}”",
   "Move {n} photo{} to “{}”": "Przenieś do „{1}” — zdjęcia: {n}{0:.0}",
   "Move {n} photo{} to “{}”?": "Przenieść do „{1}” — zdjęcia: {n}{0:.0}?",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Przeniesiono do „{1}” — zdjęcia: {n}{0:.0}. Edytuj → Cofnij przywróci je."
+  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Przeniesiono do „{1}” — zdjęcia: {n}{0:.0}. Edytuj → Cofnij przywróci je.",
+  "Changes found: {n}": "Znalezione zmiany: {n}",
+  "“{name}” is still being scanned: wait for it, or stop it with ✕ on its row": "„{name}” jest jeszcze przeszukiwany: poczekaj albo zatrzymaj to ✕ w jego wierszu",
+  "Look at the changes found in “{name}” first, or dismiss them": "Najpierw przejrzyj zmiany znalezione w „{name}” albo je odrzuć"
 }

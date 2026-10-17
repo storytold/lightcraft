@@ -295,5 +295,8 @@
   "Already in “{}”": "Already in “{}”",
   "Move {n} photo{} to “{}”": "Move {n} photo{} to “{}”",
   "Move {n} photo{} to “{}”?": "Move {n} photo{} to “{}”?",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Moved {n} photo{} to “{}”. Edit → Undo moves them back."
+  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Moved {n} photo{} to “{}”. Edit → Undo moves them back.",
+  "Changes found: {n}": "ნაპოვნი ცვლილებები: {n}",
+  "“{name}” is still being scanned: wait for it, or stop it with ✕ on its row": "„{name}“ ჯერ კიდევ მოწმდება: დაელოდეთ, ან შეაჩერეთ ✕-ით მის მწკრივზე",
+  "Look at the changes found in “{name}” first, or dismiss them": "ჯერ ნახეთ „{name}“-ში ნაპოვნი ცვლილებები, ან უარყავით ისინი"
 }

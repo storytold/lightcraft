@@ -2141,5 +2141,11 @@
   "Checking the GPU…": "正在檢查 GPU…",
   "CPU": "CPU",
   "A face model uses the GPU only when a check shows it gives the same results faster.": "只有在檢查顯示 GPU 能更快得出相同結果時，臉孔模型才會使用 GPU。",
-  "Checking the GPU for faces": "正在檢查用於臉孔的 GPU"
+  "Checking the GPU for faces": "正在檢查用於臉孔的 GPU",
+  "Continue in Background": "在背景繼續",
+  "Folder not found": "找不到資料夾",
+  "Dismiss": "忽略",
+  "Review…": "檢視…",
+  "Open Synchronize Folder with what the scan found": "以掃描結果開啟「同步資料夾」",
+  "You can go on working: a notice at the top left says when the scan is done.": "你可以繼續工作：掃描完成時左上角會出現通知。"
 }

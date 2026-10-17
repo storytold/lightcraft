@@ -2333,5 +2333,11 @@
   "Checking the GPU…": "Проверка ГП…",
   "CPU": "ЦП",
   "A face model uses the GPU only when a check shows it gives the same results faster.": "Модель лиц использует ГП, только если проверка показала, что он даёт те же результаты быстрее.",
-  "Checking the GPU for faces": "Проверка ГП для лиц"
+  "Checking the GPU for faces": "Проверка ГП для лиц",
+  "Continue in Background": "Продолжить в фоне",
+  "Folder not found": "Папка не найдена",
+  "Dismiss": "Скрыть",
+  "Review…": "Просмотреть…",
+  "Open Synchronize Folder with what the scan found": "Открыть «Синхронизировать папку» с результатами поиска",
+  "You can go on working: a notice at the top left says when the scan is done.": "Можно продолжать работу: уведомление слева вверху сообщит, когда поиск завершится."
 }

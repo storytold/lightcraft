@@ -2340,5 +2340,11 @@
   "Checking the GPU…": "GPU を確認中…",
   "CPU": "CPU",
   "A face model uses the GPU only when a check shows it gives the same results faster.": "顔モデルが GPU を使うのは、同じ結果をより速く出せると確認できた場合だけです。",
-  "Checking the GPU for faces": "顔用の GPU を確認中"
+  "Checking the GPU for faces": "顔用の GPU を確認中",
+  "Continue in Background": "バックグラウンドで続行",
+  "Folder not found": "フォルダが見つかりません",
+  "Dismiss": "閉じる",
+  "Review…": "確認…",
+  "Open Synchronize Folder with what the scan found": "スキャンの結果を「フォルダを同期」で開く",
+  "You can go on working: a notice at the top left says when the scan is done.": "作業を続けられます。スキャンが終わると左上に通知が表示されます。"
 }
