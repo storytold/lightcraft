@@ -130,6 +130,7 @@ language_table! {
     Cs, "cs", "Čeština", "Latn", include_str!("../locales/cs.json");
     It, "it", "Italiano", "Latn", include_str!("../locales/it.json");
     Ka, "ka", "ქართული", "Geor", include_str!("../locales/ka.json");
+    Fi, "fi", "Suomi", "Latn", include_str!("../locales/fi.json");
 }
 
 // The settings file stores the BCP-47 code (`"zh-hans"`), never the Rust variant name, so a
@@ -782,6 +783,7 @@ mod tests {
             ("app.language.czech", Locale::Cs),
             ("app.language.italian", Locale::It),
             ("app.language.georgian", Locale::Ka),
+            ("app.language.finnish", Locale::Fi),
         ];
         // One command per language, and every command reachable from the menu table.
         assert_eq!(commands.len(), Locale::ALL.len());
@@ -1164,6 +1166,110 @@ mod tests {
         set_language(Locale::En);
     }
 
+    /// Finnish's coverage of every catalog message and display label, reported like Italian's.
+    #[test]
+    fn finnish_coverage_of_catalogs_commands_controls_and_rules_is_reported() {
+        let catalog = Locale::Fi.catalog();
+        let keys: std::collections::BTreeSet<&String> = Locale::ALL.iter().flat_map(|language| language.catalog().keys()).collect();
+        let lacking: Vec<_> = keys.into_iter().filter(|key| !catalog.contains_key(key.as_str())).collect();
+        if !lacking.is_empty() {
+            eprintln!("fi lacks {} catalog message(s) (shown in English): {lacking:?}", lacking.len());
+        }
+        let mut labels: Vec<&str> = lightcraft_engine::command_specs().iter().map(|spec| spec.label).collect();
+        labels.extend(crate::menus::ui_commands().map(|command| command.1).filter(|label| !Locale::ALL.iter().any(|locale| locale.name() == *label)));
+        labels.extend(lightcraft_develop::CONTROLS.iter().map(|control| control.label));
+        labels.extend(crate::panels::settings::TABS.iter().map(|(_, label)| *label));
+        for (_, label, kind) in lightcraft_catalog::rules::FIELDS {
+            labels.push(label);
+            labels.extend(lightcraft_catalog::rules::ops_for(*kind).iter().map(|(_, label)| *label));
+        }
+        labels.extend(lightcraft_engine::rename::TOKENS.iter().map(|token| token.meaning));
+        labels.extend(lightcraft_engine::rename::TEMPLATE_NOTES);
+        let missing: Vec<_> = labels.into_iter().filter(|label| !catalog.contains_key(*label)).collect();
+        if !missing.is_empty() {
+            eprintln!("fi lacks {} display label(s) (shown in English): {missing:?}", missing.len());
+        }
+    }
+
+    #[test]
+    fn finnish_switches_persists_formats_dates_and_preserves_values() {
+        use crate::control::{ControlRequest, Outcome};
+        let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default());
+        app.run("app.language.finnish", serde_json::json!({})).unwrap();
+        assert_eq!(app.ui.language, Locale::Fi);
+        assert_eq!(crate::menubar::checked(&app, "app.language.finnish"), Some(true));
+        assert_eq!(tr("Light"), "Valo");
+        assert_eq!(tr("Landscape"), "Maisema");
+        assert_eq!(tr("Home"), "Kotikansio");
+        // Finnish dates have no leading zeros and a lower-case weekday; times are 24-hour with colons.
+        assert_eq!(date_group_label("2026-09-20", false), "sunnuntai 20.9.2026");
+        assert_eq!(date_group_label("2026-09-20", true), "sunnuntai 20.");
+        assert_eq!(date_group_label("2026-09", false), "9/2026");
+        assert_eq!(date_group_label("2026-09", true), "9");
+        assert_eq!(date_group_label("2026", false), "2026");
+        assert_eq!(display_time("2026-09-20T16:04:05"), "sunnuntai 20.9.2026 16:04:05");
+        // A noun after a numeral is in the partitive singular (1 kuva, 2 kuvaa), which the English
+        // plural suffix cannot choose, so counts follow a label; the suffix is consumed and never shows.
+        for n in [0, 1, 2, 5, 11, 21, 22, 25, 111] {
+            assert_eq!(tr_format!("Imported {} photo{}", n, if n == 1 { "" } else { "s" }), format!("Tuotuja kuvia: {n}"));
+            assert_eq!(tr_format!("{} files and {f} folder{}", n, "s", f = n), format!("Tiedostoja: {n}, kansioita: {n}"));
+            let noun = tr(if n == 1 { "cached picture" } else { "cached pictures" });
+            let expected = if n == 1 { "1 välimuistissa oleva kuva".to_string() } else { format!("{n} välimuistissa olevaa kuvaa") };
+            assert_eq!(tr_format!("{n} {noun}", n = n, noun = noun), expected);
+        }
+        // This trailing argument is queue progress, not an English plural suffix.
+        let queued = tr_format!(" · {queued} waiting", queued = 5);
+        assert_eq!(
+            tr_format!("Denoising {name}: {done} of {total} tiles{}", queued, name = "IMG.CR3", done = 1, total = 4),
+            "Kohinanpoisto IMG.CR3: 1 / 4 ruutua · odottaa: 5"
+        );
+        let name = "Color {title} 日本語";
+        assert_eq!(tr_format!("Added {n} photo{} to “{}”", "s", name, n = 22), format!("Lisättyjä kuvia kohteeseen ”{name}”: 22"));
+        assert_eq!(builtin_label("Warm Glow", false), "Warm Glow");
+        assert_eq!(builtin_label("Warm Glow", true), "Lämmin hehku");
+        assert_eq!(tr("photo-{title}.jpg"), "photo-{title}.jpg");
+        assert_eq!(tr("develop.set"), "develop.set");
+        let saved = serde_json::to_string(&app.ui).unwrap();
+        assert!(saved.contains(r#""language":"fi""#));
+        assert_eq!(serde_json::from_str::<crate::state::UiState>(&saved).unwrap().language, Locale::Fi);
+        let ctx = egui::Context::default();
+        for code in ["fi", "fi-FI", "fi_FI.UTF-8", "fi-Latn-FI"] {
+            assert_eq!(Locale::parse_tag(code), Some(Locale::Fi));
+            let (request, _) = ControlRequest::new("ui.set", serde_json::json!({"language": code}));
+            let Outcome::Done(reply) = crate::control::handle(&mut app, &ctx, &request) else { panic!("expected reply") };
+            assert_eq!(reply["ok"], true);
+            assert_eq!(language(), Locale::Fi);
+        }
+        set_language(Locale::En);
+    }
+
+    #[test]
+    fn finnish_panels_dialogs_and_letters_paint_with_bundled_fonts() {
+        let ctx = fonts_ctx(&[]);
+        let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default());
+        app.ui.left_panel = true;
+        let text = painted_text(&ctx, &mut app, Locale::Fi);
+        assert!(text.contains("Omat kuvat") && text.contains("Kaikki kuvat"), "{text}");
+        for (command, title) in [("app.about", "Tietoja LightCraftista"), ("app.shortcuts", "Pikanäppäimet"), ("app.settings", "Asetukset")] {
+            app.ui.dialog = None;
+            app.run(command, serde_json::json!({})).unwrap();
+            let text = painted_text(&ctx, &mut app, Locale::Fi);
+            assert!(text.contains(title), "{command}: {text}");
+        }
+        ctx.fonts_mut(|fonts| {
+            for family in [egui::FontFamily::Proportional, egui::FontFamily::Name(crate::theme::FONT_SEMIBOLD.into())] {
+                let font = egui::FontId::new(13.0, family);
+                for ch in "äöåÄÖÅ”–"
+                    .chars()
+                    .chain(Locale::Fi.catalog().values().flat_map(|text| text.chars()).filter(|ch| ('\u{00c0}'..='\u{017f}').contains(ch)))
+                {
+                    assert!(fonts.has_glyph(&font, ch), "missing Finnish glyph {ch}");
+                }
+            }
+        });
+        set_language(Locale::En);
+    }
+
     /// Every command, control, rule and rename label, and every line of What's New, is a message a
     /// catalog can translate. What a language lacks is reported, not failed (like
     /// `catalogs_agree_on_placeholders_and_report_gaps`): a feature PR doesn't have to ship every
@@ -1305,7 +1411,7 @@ mod tests {
     }
 
     #[test]
-    fn german_ukrainian_and_italian_buttons_fit_the_bottom_bar_and_export_dialog() {
+    fn german_ukrainian_italian_and_finnish_buttons_fit_the_bottom_bar_and_export_dialog() {
         fn collect(shape: &egui::epaint::Shape, bounds: &mut Vec<(String, egui::Rect)>) {
             match shape {
                 egui::epaint::Shape::Text(shape) => {
@@ -1315,7 +1421,7 @@ mod tests {
                 _ => {}
             }
         }
-        for language in [Locale::De, Locale::Uk, Locale::It] {
+        for language in [Locale::De, Locale::Uk, Locale::It, Locale::Fi] {
             let ctx = fonts_ctx(&[]);
             let services = crate::Services { pick_folder: Some(Box::new(|| None)), ..Default::default() };
             let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
