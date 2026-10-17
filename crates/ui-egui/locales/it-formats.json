@@ -295,5 +295,10 @@
   "Already in “{}”": "Already in “{}”",
   "Move {n} photo{} to “{}”": "Move {n} photo{} to “{}”",
   "Move {n} photo{} to “{}”?": "Move {n} photo{} to “{}”?",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Moved {n} photo{} to “{}”. Edit → Undo moves them back."
+  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Moved {n} photo{} to “{}”. Edit → Undo moves them back.",
+  " · {n} imported although another photo has the same content": " · importate {n} anche se un’altra foto ha lo stesso contenuto",
+  "Same content as {path} in the library": "Stesso contenuto di {path} nella libreria",
+  "Same file as {path} earlier in this import": "Stesso file di {path} già presente in questa importazione",
+  "· {n} copies of library photos": "· copie di foto nella libreria: {n}",
+  "· {n} repeated in this import": "· ripetizioni in questa importazione: {n}"
 }

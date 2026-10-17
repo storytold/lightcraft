@@ -295,5 +295,10 @@
   "Already in “{}”": "Již v „{}“",
   "Move {n} photo{} to “{}”": "Přesunout do „{1}“ fotografie: {n}{0:.0}",
   "Move {n} photo{} to “{}”?": "Přesunout do „{1}“ fotografie: {n}{0:.0}?",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Do „{1}“ přesunuto fotografií: {n}{0:.0}. Úpravy → Zpět je vrátí."
+  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Do „{1}“ přesunuto fotografií: {n}{0:.0}. Úpravy → Zpět je vrátí.",
+  " · {n} imported although another photo has the same content": " · importováno {n}, přestože jiná fotografie má stejný obsah",
+  "Same content as {path} in the library": "Stejný obsah jako {path} v knihovně",
+  "Same file as {path} earlier in this import": "Stejný soubor jako {path} dříve v tomto importu",
+  "· {n} copies of library photos": "· kopie fotografií z knihovny: {n}",
+  "· {n} repeated in this import": "· opakování v tomto importu: {n}"
 }

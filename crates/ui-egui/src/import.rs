@@ -129,15 +129,37 @@ impl ImportDialog {
             }
         }
     }
-    /// Candidate `i` can be checked: a readable file the library doesn't have, or one whose photo
-    /// is in Recently Deleted — even with "Leave them", a click picks it (issue #1285).
+    /// Candidate `i` can be checked: readable, and not a duplicate — except one by content (not of a
+    /// file in Recently Deleted), which can be ticked by hand to import it anyway, and one in
+    /// Recently Deleted (checked only by hand when "Leave them" is selected). A file already
+    /// in the library from the same path never can.
     pub fn importable(&self, i: usize) -> bool {
-        self.candidates.get(i).is_some_and(|c| c.error.is_none() && (c.duplicate.is_none() || self.is_trashed(i)))
+        self.candidates.get(i).is_some_and(|c| {
+            c.error.is_none()
+                && match c.duplicate.as_deref() {
+                    None => true,
+                    Some(_) if self.is_trashed(i) => true,
+                    Some(reason) => reason == "content",
+                }
+        })
     }
-    /// Candidate `i` is checked by Check All and the file type toggles: with "Leave them", a file in
-    /// Recently Deleted is only checked by hand.
+    /// Candidate `i` is checked by Check All and by file type: importable, and not a content
+    /// duplicate (those are only ever ticked by hand).
     pub fn checked_by_default(&self, i: usize) -> bool {
-        self.importable(i) && !(self.is_trashed(i) && self.on_deleted.is_empty())
+        self.importable(i)
+            && !(self.is_trashed(i) && self.on_deleted.is_empty())
+            && self.candidates.get(i).is_some_and(|c| c.duplicate.is_none() || self.is_trashed(i))
+    }
+    /// The checked files that import although another photo has their content (`importAnyway`).
+    pub fn import_anyway_paths(&self) -> Vec<String> {
+        let anyway = |i: usize, c: &ImportCandidate| c.duplicate.as_deref() == Some("content") && !self.is_trashed(i);
+        self.candidates
+            .iter()
+            .zip(&self.checked)
+            .enumerate()
+            .filter(|(i, (c, on))| **on && self.importable(*i) && anyway(*i, c))
+            .map(|(_, (c, _))| c.path.clone())
+            .collect()
     }
     /// The file types among the candidates (`ARW`, `JPG`…, upper case, sorted) and how many of each.
     pub fn file_types(&self) -> Vec<(String, usize)> {
@@ -190,7 +212,9 @@ impl ImportDialog {
         let Some(on) = self.checked.get(i).map(|c| !c) else { return };
         let from = if shift { self.last_clicked.filter(|a| *a < self.checked.len()).unwrap_or(i) } else { i };
         for k in from.min(i)..=from.max(i) {
+            // (a range doesn't sweep in the content duplicates it passes over)
             if self.importable(k)
+                && (k == i || !on || self.checked_by_default(k))
                 && let Some(c) = self.checked.get_mut(k)
             {
                 *c = on;
@@ -240,6 +264,8 @@ pub struct ImportTask {
     pub done: usize,
     params: Value,
     pub imported: usize,
+    /// Of `imported`, the files ticked by hand although another photo has their content.
+    pub imported_anyway: usize,
     /// Brought back from Recently Deleted (`onDeleted: restore`).
     pub restored: usize,
     pub duplicates: usize,
@@ -649,6 +675,10 @@ pub fn start(app: &mut LightcraftApp, d: &ImportDialog) -> Result<Value, String>
         (true, true) => "move",
     };
     let mut params = json!({"mode": mode, "keywords": d.keywords()});
+    let anyway = d.import_anyway_paths();
+    if !anyway.is_empty() {
+        params["importAnyway"] = json!(anyway);
+    }
     if !d.on_deleted.is_empty() {
         params["onDeleted"] = json!(d.on_deleted);
     }
@@ -776,6 +806,7 @@ fn commit_batch(app: &mut LightcraftApp, task: &mut ImportTask, prepared: lightc
             let len = |k: &str| v[k].as_array().map_or(0, Vec::len);
             task.imported += len("imported");
             task.restored += len("restored");
+            task.imported_anyway += v["importedAnyway"].as_u64().unwrap_or(0) as usize;
             task.duplicates += len("duplicates");
             task.existing.extend(v["duplicates"].as_array().into_iter().flatten().filter_map(|d| d["existing"].as_u64()));
             task.failed += len("failed");
@@ -910,6 +941,9 @@ fn finish(app: &mut LightcraftApp, ctx: &egui::Context, task: ImportTask) {
     if task.restored > 0 && (task.imported > 0 || task.cancelled) {
         msg.push_str(&crate::i18n::tr_format!(" · {} restored from Recently Deleted", task.restored));
     }
+    if task.imported_anyway > 0 {
+        msg.push_str(&crate::i18n::tr_format!(" · {n} imported although another photo has the same content", n = task.imported_anyway));
+    }
     if task.params["mode"] == "move" {
         msg.push_str(&crate::i18n::tr_format!(" · {} moved", task.moved));
         if task.kept > 0 {
@@ -986,16 +1020,20 @@ fn dup_counts(d: &ImportDialog) -> (usize, usize, usize) {
 pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
     let t = Tokens::get(ui.ctx());
     let n = d.candidates.len();
-    let (dups, in_source, trashed) = dup_counts(d);
+    let (_, _, trashed) = dup_counts(d);
+    // files of photos in Recently Deleted are not "already in the library": they are counted apart
+    let dups = lightcraft_engine::import::DuplicateCounts::of(d.candidates.iter().enumerate().filter(|(i, _)| !d.is_trashed(*i)).map(|(_, c)| c));
     let sel = d.selected_paths().len();
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(crate::i18n::tr_format!("{n} found · {sel} selected", n = n, sel = sel)).color(t.text));
-        if dups > 0 {
-            ui.label(egui::RichText::new(crate::i18n::tr_format!("· {dups} already in the library", dups = dups)).color(t.text_dim));
+        if dups.in_library > 0 {
+            ui.label(egui::RichText::new(crate::i18n::tr_format!("· {dups} already in the library", dups = dups.in_library)).color(t.text_dim));
         }
-        if in_source > 0 {
-            ui.label(egui::RichText::new(crate::i18n::tr_format!("· {in_source} identical copies", in_source = in_source)).color(t.text_dim))
-                .on_hover_text(crate::i18n::tr("Files with the same content as another file in this import: only the first is imported."));
+        if dups.copies > 0 {
+            ui.label(egui::RichText::new(crate::i18n::tr_format!("· {n} copies of library photos", n = dups.copies)).color(t.text_dim));
+        }
+        if dups.repeated > 0 {
+            ui.label(egui::RichText::new(crate::i18n::tr_format!("· {n} repeated in this import", n = dups.repeated)).color(t.text_dim));
         }
         if trashed > 0 {
             ui.label(egui::RichText::new(crate::i18n::tr_format!("· {trashed} in Recently Deleted", trashed = trashed)).color(t.text_dim));
@@ -1374,6 +1412,19 @@ fn candidate_cell(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDial
         c.file_size as f64 / 1e6,
         c.captured.as_deref().map(|d| format!("\n{}", d.replace('T', " "))).unwrap_or_default()
     );
+    // a duplicate by content says what it matches
+    let matches = match (c.duplicate.as_deref(), &c.earlier, c.existing) {
+        (Some("content"), Some(earlier), _) => Some(crate::i18n::tr_format!("Same file as {path} earlier in this import", path = earlier)),
+        (Some("content"), None, Some(id)) => match app.session.catalog.photo(lightcraft_catalog::PhotoId(id)).map(|p| &p.source) {
+            Some(lightcraft_catalog::Source::File { path }) => Some(crate::i18n::tr_format!("Same content as {path} in the library", path = path)),
+            _ => None,
+        },
+        _ => None,
+    };
+    let tip = match matches {
+        Some(m) => format!("{m}\n{tip}"),
+        None => tip,
+    };
     let resp = resp.on_hover_text(tip);
     if resp.clicked() && ok {
         let shift = ui.input(|input| input.modifiers.shift);
@@ -1594,7 +1645,7 @@ mod tests {
         assert_eq!(grid_height(f32::INFINITY, 300.0, 142.0), DIALOG_SIZE[1] - DEFAULT_BELOW_GRID);
     }
 
-    /// Six candidates, all checked; candidate 3 is a duplicate (unchecked, not importable).
+    /// Six candidates, all checked; candidate 3 is a duplicate by content (unchecked until ticked by hand).
     fn dialog() -> ImportDialog {
         let mut candidates: Vec<ImportCandidate> = (0..6).map(|i| ImportCandidate { path: format!("img{i}.jpg"), ..Default::default() }).collect();
         candidates[3].duplicate = Some("content".into());
@@ -1648,9 +1699,53 @@ mod tests {
         d.click(1, false);
         assert_eq!(d.checked, [true, true, true, false, true, true]);
         d.click(3, false);
-        assert_eq!(d.checked, [true, true, true, false, true, true], "a duplicate can't be checked");
+        assert_eq!(d.checked, [true, true, true, true, true, true], "a duplicate by content can be ticked by hand");
+        d.click(3, false);
+        assert_eq!(d.checked, [true, true, true, false, true, true]);
     }
 
+    /// Issue #1401: a duplicate by content is ticked by hand to import it anyway; one by path never is.
+    #[test]
+    fn a_content_duplicate_can_be_ticked_by_hand_but_a_path_duplicate_cannot() {
+        let mut d = dialog();
+        d.candidates[2].duplicate = Some("path".into());
+        d.checked[2] = false;
+        d.click(2, false);
+        assert!(!d.checked[2] && !d.importable(2), "same path: not importable");
+        assert!(d.importable(3) && !d.checked[3], "content duplicate: importable, unchecked by default");
+        assert!(d.import_anyway_paths().is_empty());
+        d.click(3, false);
+        assert!(d.checked[3]);
+        assert_eq!(d.import_anyway_paths(), ["img3.jpg"]);
+        assert!(d.selected_paths().contains(&"img3.jpg".to_string()));
+        // Check All and the file-type toggles leave it alone; only the hand ticks it
+        d.checked[3] = false;
+        for i in 0..d.candidates.len() {
+            d.checked[i] = d.checked_by_default(i);
+        }
+        assert_eq!(d.checked, [true, true, false, false, true, true]);
+        d.check_type("JPG", true);
+        assert!(!d.checked[3]);
+        // a click range passes over it
+        d.checked.iter_mut().for_each(|c| *c = false);
+        d.click(0, false);
+        d.click(5, true);
+        assert_eq!(d.checked, [true, true, false, false, true, true]);
+        // one in Recently Deleted follows the choice for those files instead
+        let mut d = dialog();
+        d.set_trashed(vec![false, false, false, true, false, false]);
+        assert!(d.checked[3] && d.import_anyway_paths().is_empty(), "restored, not imported anyway");
+    }
+
+    #[test]
+    fn the_summary_counts_the_three_kinds_apart() {
+        let mut d = dialog();
+        d.candidates[1].duplicate = Some("path".into());
+        d.candidates[4].duplicate = Some("content".into());
+        d.candidates[4].earlier = Some("img0.jpg".into());
+        let counts = lightcraft_engine::import::DuplicateCounts::of(&d.candidates);
+        assert_eq!((counts.in_library, counts.copies, counts.repeated), (1, 1, 1));
+    }
     #[test]
     fn shift_click_sets_the_range_to_the_clicked_state() {
         let mut d = dialog();
@@ -1686,8 +1781,9 @@ mod tests {
         assert!(d.selected_paths().contains(&"img3.jpg".to_string()));
         d.click(3, false);
         assert!(!d.checked[3]);
-        // a plain duplicate (not in Recently Deleted) still can't be checked
+        // a path duplicate (not in Recently Deleted) still can't be checked
         d.set_trashed(vec![false; 6]);
+        d.candidates[3].duplicate = Some("path".into());
         d.click(3, false);
         assert!(!d.checked[3]);
     }
