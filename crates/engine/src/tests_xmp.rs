@@ -560,7 +560,8 @@ const LR_KEYWORDS: &str = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/">
 
 /// Keywords are saved as Lightroom Classic writes them: names in `dc:subject` (never a `|`, which
 /// hangs Lightroom Classic's import), full paths in `lr:hierarchicalSubject`, merged with the paths
-/// the sidecar already lists so another app's survive; saving again changes nothing.
+/// the sidecar already lists so another app's survive, while a keyword removed here stays removed;
+/// saving again changes nothing.
 #[test]
 fn hierarchical_keywords_are_saved_as_names_and_merged_paths() {
     let src = temp_dir("hier-keywords");
@@ -615,6 +616,27 @@ fn hierarchical_keywords_are_saved_as_names_and_merged_paths() {
     let (flat, paths) = fields(&side());
     assert_eq!(flat, strings(&["Heron", "Birds", "Animals", "sunset", "2024", "Projects", "sidecar-test", "Sam", "People"]));
     assert_eq!(paths, strings(&["Animals|Birds|Heron", "sunset", "Projects|2024|heron", "sidecar-test", "People|Sam"]));
+    let once = side();
+    save(&mut s);
+    assert_eq!(side(), once);
+    // keywords removed here (one the photo came with, one added here, the other app's once read)
+    // stay removed: from both fields, after a save and a read
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "removeKeywords": ["sunset", "Projects|2024|heron", "People|Sam"]})).unwrap();
+    save(&mut s);
+    assert_eq!(fields(&side()), (strings(&["Heron", "Birds", "Animals", "sidecar-test"]), strings(&["Animals|Birds|Heron", "sidecar-test"])));
+    s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap().meta.keywords, ["Animals|Birds|Heron", "sidecar-test"]);
+    // another app's path added after that is still kept, and only it, save after save
+    let added = side().replacen(
+        "<rdf:li>sidecar-test</rdf:li>\n    </rdf:Bag>\n   </lr:hierarchicalSubject>",
+        "<rdf:li>sidecar-test</rdf:li>\n     <rdf:li>Events|Picnic</rdf:li>\n    </rdf:Bag>\n   </lr:hierarchicalSubject>",
+        1,
+    );
+    assert!(added.contains("Events|Picnic"));
+    std::fs::write(src.join("heron.xmp"), &added).unwrap();
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "removeKeywords": ["sidecar-test"]})).unwrap();
+    save(&mut s);
+    assert_eq!(fields(&side()), (strings(&["Heron", "Birds", "Animals"]), strings(&["Animals|Birds|Heron", "Events|Picnic"])));
     let once = side();
     save(&mut s);
     assert_eq!(side(), once);

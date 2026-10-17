@@ -58,7 +58,9 @@ the only copy of those edits outside that application's catalog. Saving never dr
   keywords containing it (each once, whatever its case), never a `|` — Lightroom Classic 15.3+ on macOS Tahoe hangs
   importing a sidecar with a `|` in `dc:subject`. `lr:hierarchicalSubject` gets every full path, followed by the paths
   the sidecar already lists that the photo doesn't have, so another application's paths survive a save; the merged
-  list replaces the old one, and saving again changes nothing.
+  list replaces the old one, and saving again changes nothing. A keyword removed in LightCraft stays removed: each save
+  records the paths it wrote as the photo's own in `lc:keywordPaths` (a JSON list), and the next save drops those of
+  them the photo no longer has. A path LightCraft never wrote is never removed.
 - **Everything else is kept byte for byte**: other namespaces (`crs:`, `xmpMM:`, unknown ones), `xmp:CreatorTool`, comments, the packet wrapper and padding. LightCraft's properties go into one
   `rdf:Description` of their own; owned properties written by another application (in attribute or element form) are
   removed from its description, which otherwise stays as it was.
@@ -66,8 +68,9 @@ the only copy of those edits outside that application's catalog. Saving never dr
   `<name>.xmp.bak-<date><time>` (`-1`, `-2`… if taken — a backup is never overwritten), then replaced. A sidecar that
   can't be read at all (permissions) is left alone and the save fails.
 
-Limits: the paths a sidecar already lists in `lr:hierarchicalSubject` are kept, so it may still list keywords removed
-in LightCraft. LightCraft doesn't write `crs:`: the other application's
+Limits: a sidecar without `lc:keywordPaths` (another application's, or one LightCraft saved before it was recorded)
+keeps every path it lists, so a keyword removed in LightCraft may come back from it once; if another application writes
+the same path LightCraft last wrote and the keyword is then removed in LightCraft, the path is removed. LightCraft doesn't write `crs:`: the other application's
 develop settings stay as that application left them, next to LightCraft's own (`lc:settings`, which LightCraft reads
 first).
 

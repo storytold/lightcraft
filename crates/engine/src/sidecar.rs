@@ -6,7 +6,8 @@
 //! settings (`lc:settings`, JSON), the pick/reject flag (`lc:flag`) and location (`lc:location`).
 //! Keywords are written as Lightroom Classic writes them: names (each keyword's and its parents')
 //! in `dc:subject`, never a `|`; full paths in `lr:hierarchicalSubject`, together with the paths the
-//! sidecar already lists (another app's keywords survive a save).
+//! sidecar already lists (another app's keywords survive a save) except those LightCraft wrote there
+//! itself and has since removed (its own paths are recorded in `lc:keywordPaths`).
 //!
 //! An existing sidecar is never replaced wholesale (issue #92): LightCraft's properties
 //! ([`OWNED`], [`OWNED_IF_STATED`]) are merged into it ([`lightcraft_meta::merge_xmp`]) and
@@ -332,18 +333,23 @@ pub fn sidecar_packet(p: &Photo, cat: &lightcraft_catalog::Catalog) -> String {
 /// [`sidecar_packet`], without any location (GPS, sublocation, city, state, country) when
 /// `remove_location` is set (an export with "Remove location info").
 pub fn sidecar_packet_with(p: &Photo, cat: &lightcraft_catalog::Catalog, remove_location: bool) -> String {
-    packet(p, cat, remove_location, &[])
+    packet(p, cat, remove_location, &OldPaths::default())
 }
 
 /// [`sidecar_packet_with`]. Keywords go in as a sidecar carries them
 /// ([`lightcraft_catalog::keywords::sidecar_keywords`]: names in `dc:subject`, paths in
-/// `lr:hierarchicalSubject`), followed in `lr:hierarchicalSubject` by the paths of `kept_paths` the
-/// photo doesn't have (those the sidecar already lists, another app's included).
-fn packet(p: &Photo, cat: &lightcraft_catalog::Catalog, remove_location: bool, kept_paths: &[String]) -> String {
+/// `lr:hierarchicalSubject`), followed in `lr:hierarchicalSubject` by the paths the sidecar already
+/// lists ([`OldPaths`]) that the photo doesn't have, except those LightCraft wrote itself last time:
+/// those are keywords removed here since. The photo's own paths are recorded in `lc:keywordPaths`
+/// (a JSON list) for the next save to tell them from another app's.
+fn packet(p: &Photo, cat: &lightcraft_catalog::Catalog, remove_location: bool, old: &OldPaths) -> String {
+    use lightcraft_catalog::keywords::same;
     let nz = |s: &str| (!s.trim().is_empty()).then(|| s.to_string());
     let mut keywords = lightcraft_catalog::keywords::sidecar_keywords(&p.meta.keywords);
-    for k in kept_paths {
-        if !k.trim().is_empty() && !keywords.hierarchical.iter().any(|h| lightcraft_catalog::keywords::same(h, k)) {
+    let own = (!keywords.hierarchical.is_empty()).then(|| serde_json::to_string(&keywords.hierarchical).unwrap_or_default());
+    for k in &old.listed {
+        let known = |v: &[String]| v.iter().any(|h| same(h, k));
+        if !k.trim().is_empty() && !known(&keywords.hierarchical) && !known(&old.written) {
             keywords.hierarchical.push(k.clone());
         }
     }
@@ -383,6 +389,9 @@ fn packet(p: &Photo, cat: &lightcraft_catalog::Catalog, remove_location: bool, k
     let mut lc = vec![("settings", settings.as_str()), ("flag", flag)];
     if !remove_location && !p.meta.location.trim().is_empty() {
         lc.push(("location", p.meta.location.as_str()));
+    }
+    if let Some(own) = &own {
+        lc.push(("keywordPaths", own.as_str()));
     }
     lightcraft_meta::write_xmp_lc(&meta, &lc)
 }
@@ -466,7 +475,7 @@ fn sidecar_contents(path: &Path, p: &Photo, cat: &lightcraft_catalog::Catalog, s
     }
     let rules = lightcraft_meta::MergeRules { owned: OWNED, owned_if_present: OWNED_IF_STATED };
     match std::str::from_utf8(&bytes).map_err(|e| e.to_string()).and_then(|old| {
-        let fresh = packet(p, cat, false, &hierarchical_paths(old));
+        let fresh = packet(p, cat, false, &OldPaths::of(old));
         lightcraft_meta::merge_xmp(old, &fresh, rules).map_err(|e| e.to_string())
     }) {
         Ok(merged) => Ok((merged, true, None)),
@@ -478,10 +487,22 @@ fn sidecar_contents(path: &Path, p: &Photo, cat: &lightcraft_catalog::Catalog, s
     }
 }
 
-/// The paths packet `old` lists in `lr:hierarchicalSubject` (none when it can't be read): a save
-/// keeps them, so another app's keywords survive it.
-fn hierarchical_paths(old: &str) -> Vec<String> {
-    lightcraft_meta::parse_xmp(old).map(|d| d.metadata.hierarchical_keywords).unwrap_or_default()
+/// The keyword paths of the sidecar a save merges into (none when it can't be read).
+#[derive(Default)]
+struct OldPaths {
+    /// Its `lr:hierarchicalSubject`: a save keeps them, so another app's keywords survive it…
+    listed: Vec<String>,
+    /// …except those LightCraft wrote as the photo's own last time (`lc:keywordPaths`) and the
+    /// photo no longer has: a keyword removed here stays removed.
+    written: Vec<String>,
+}
+
+impl OldPaths {
+    fn of(old: &str) -> OldPaths {
+        let Ok(d) = lightcraft_meta::parse_xmp(old) else { return OldPaths::default() };
+        let written = d.properties.get("lc:keywordPaths").and_then(|v| v.first()).and_then(|j| serde_json::from_str(j).ok()).unwrap_or_default();
+        OldPaths { listed: d.metadata.hierarchical_keywords, written }
+    }
 }
 
 /// Key of the stem sidecar a file maps to (case-insensitive).
