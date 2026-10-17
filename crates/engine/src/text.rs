@@ -1,11 +1,11 @@
 //! Text drawing in pure Rust, shared by the export watermark and the slideshow overlays: Inter
-//! SemiBold (bundled) first, then the craft-fonts CJK faces as fallbacks ([`faces`]); glyph outlines
+//! SemiBold (bundled) first, then the craft-fonts non-Latin faces as fallbacks ([`faces`]); glyph outlines
 //! from `ab_glyph`, vertical CJK cells shaped with `harfrust`. [`TextLayout`] lays a string out
 //! once (lines split at `\n`, kerning within a face) and reports its size, so callers can anchor
 //! it before drawing; drawing hands out per-pixel coverage, and the caller blends.
 //!
-//! RTL scripts are laid out in logical order without bidi reordering, and scripts no face covers
-//! draw as Inter's missing-glyph box: wrong-looking, never a crash.
+//! Horizontal text has no contextual shaping or bidi reordering. Arabic glyphs remain isolated
+//! and in logical order. Scripts no face covers draw as Inter's missing-glyph box.
 
 use ab_glyph::{Font, FontRef, Glyph, PxScale, ScaleFont, point};
 
@@ -16,13 +16,15 @@ pub static TEXT_FONT: &[u8] = include_bytes!("../../../assets/fonts/Inter-SemiBo
 pub const MAX_CHARS: usize = 4000;
 
 /// The text faces: Inter first, then the craft-fonts CJK faces (Mincho first, the watermark's
-/// serif look; then any other CJK face — drawn text has no UI language, so every CJK script is
-/// offered). Without craft-fonts that is Inter alone, and CJK characters draw as Inter's
-/// missing-glyph box.
+/// serif look; then any other CJK face), then the UI's other non-Latin fallback faces. Drawn text
+/// has no UI language, so every bundled script is offered. Without craft-fonts that is Inter
+/// alone, and unsupported characters draw as Inter's missing-glyph box.
 pub fn faces(craft: &'static [crate::fonts::CraftFont]) -> Vec<FontRef<'static>> {
     let mut cjk: Vec<_> = crate::fonts::cjk(craft).collect();
     cjk.sort_by_key(|f| !f.is_mincho());
-    std::iter::once(TEXT_FONT).chain(cjk.into_iter().map(|f| f.bytes)).filter_map(|bytes| FontRef::try_from_slice(bytes).ok()).collect()
+    let others =
+        crate::fonts::ui_fallback(craft, "Latn", "Regular").into_iter().filter(|f| !f.scripts.iter().any(|s| crate::fonts::is_cjk_script(s)));
+    std::iter::once(TEXT_FONT).chain(cjk.into_iter().chain(others).map(|f| f.bytes)).filter_map(|bytes| FontRef::try_from_slice(bytes).ok()).collect()
 }
 
 /// Shape a whole grapheme in one cell. CJK uses vertical origins and forms; Latin stays upright.
@@ -219,6 +221,85 @@ impl TextLayout {
                     };
                     f((ox + sx) as i32, (oy + sy) as i32, cov);
                 });
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fonts::{CRAFT_FONTS, CraftFont};
+
+    fn assert_script_glyphs(script: &str, text: &str) {
+        if !CRAFT_FONTS.iter().any(|font| font.covers(script)) {
+            lightcraft_testkit::skip!(Fonts, "built without the {script} face from craft-fonts");
+            return;
+        }
+        let layout = TextLayout::new(text, 40.0, false, CRAFT_FONTS).unwrap();
+        assert_eq!(layout.glyphs.len(), text.chars().count());
+        for (ch, (face, glyph, _)) in text.chars().zip(&layout.glyphs) {
+            assert_ne!(glyph.id.0, 0, "missing {script} glyph for {ch}");
+            let font = &layout.fonts[*face];
+            assert!(CRAFT_FONTS.iter().any(|entry| entry.covers(script) && entry.bytes == font.font_data()));
+        }
+        let mut covered = 0;
+        layout.draw(0.0, 0.0, |_, _, coverage| covered += usize::from(coverage > 0.0));
+        assert!(covered > 0, "{script} outlines are rasterized");
+    }
+
+    #[test]
+    fn bundled_arabic_uses_its_glyphs() {
+        assert_script_glyphs("Arab", "مرحبا");
+    }
+
+    #[test]
+    fn bundled_thai_uses_its_glyphs() {
+        assert_script_glyphs("Thai", "สวัสดีครับ");
+    }
+
+    #[test]
+    fn absent_fonts_keep_inter_and_missing_glyph_boxes() {
+        assert_eq!(faces(&[]).len(), 1);
+        let layout = TextLayout::new("Aกم", 40.0, false, &[]).unwrap();
+        assert_ne!(layout.glyphs[0].1.id.0, 0);
+        assert!(layout.glyphs[1..].iter().all(|(face, glyph, _)| *face == 0 && glyph.id.0 == 0));
+        let mut covered = 0;
+        layout.draw(0.0, 0.0, |_, _, coverage| covered += usize::from(coverage > 0.0));
+        assert!(covered > 0);
+    }
+
+    #[test]
+    fn latin_and_cjk_rendering_keeps_the_existing_preference() {
+        let mut cjk: Vec<_> = crate::fonts::cjk(CRAFT_FONTS).collect();
+        if cjk.is_empty() {
+            lightcraft_testkit::skip!(Fonts, "built without CJK faces from craft-fonts");
+            return;
+        }
+        cjk.sort_by_key(|font| !font.is_mincho());
+        let previous: &'static [CraftFont] = Box::leak(
+            cjk.into_iter()
+                .map(|font| CraftFont { family: font.family, style: font.style, scripts: font.scripts, bytes: font.bytes })
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        );
+        let actual = faces(CRAFT_FONTS);
+        assert!(actual.len() > previous.len());
+        assert!(actual[0].font_data() == TEXT_FONT, "Inter stays first");
+        for (font, expected) in actual.iter().skip(1).zip(previous) {
+            assert!(font.font_data() == expected.bytes, "existing CJK face order: {} {}", expected.family, expected.style);
+        }
+        for vertical in [false, true] {
+            for text in ["LightCraft AV 123", "日本語、。你好世界한국어"] {
+                let before = TextLayout::new(text, 40.0, vertical, previous).unwrap();
+                let after = TextLayout::new(text, 40.0, vertical, CRAFT_FONTS).unwrap();
+                assert_eq!((before.width, before.height), (after.width, after.height));
+                let pixels = |layout: &TextLayout| {
+                    let mut pixels = Vec::new();
+                    layout.draw(0.0, 0.0, |x, y, coverage| pixels.push((x, y, coverage)));
+                    pixels
+                };
+                assert!(pixels(&before) == pixels(&after), "{text}, vertical={vertical}");
             }
         }
     }

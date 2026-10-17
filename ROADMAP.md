@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~14 points and ~340–600 h away
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (RAW: 83% of Adobe's models decode, 38% verified after the camera-coverage sweep #1327) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-17 · **Change:** minor (watermark completeness reassessed after #2052; current checklist recount synchronized) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 One-page summary of how close LightCraft is to Adobe Lightroom. Agents: read this, then pick work
 from [docs/gaps.md](docs/gaps.md). The full assessment, method and evidence are in
@@ -12,7 +12,7 @@ from [docs/gaps.md](docs/gaps.md). The full assessment, method and evidence are 
 
 | | Value | Kind |
 |---|---:|---|
-| **Feature breadth** (checklist) | **81.6%** of 532 rows (P0 98.0%, P1 95.2%, P2 50.0%) | measured: [parity-checklist.md](docs/parity-checklist.md) recount |
+| **Feature breadth** (checklist) | **83.3%** of 539 rows (P0 98.3%, P1 94.7%, P2 55.7%) | measured: [parity-checklist.md](docs/parity-checklist.md) recount |
 | **Feature breadth** (weighted by use) | **~77%** | estimated |
 | **Ready for real work** (full target) | **~61%** (56–66%) | estimated: weighted sum over the dimensions |
 | **Mainstream practitioner** | **~51%** (46–56%) | estimated |
@@ -44,7 +44,7 @@ Hours are calibrated on this repo's PR history; see
 
 | Dimension | Ready | Breadth | Remaining | Doc |
 |---|---:|---:|---:|---|
-| Features | ~61% | ~77% (checklist 81.1%) | 600–1,100 h | [target-app-parity](docs/target-app-parity.md#features) |
+| Features | ~61% | ~77% (checklist 83.3%) | 600–1,100 h | [target-app-parity](docs/target-app-parity.md#features) |
 | ↳ RAW cameras, colour, lens profiles | ~60% | 83% of 1,446 Adobe models decode, 38% verified | 255–480 h | [raw-parity](docs/raw-parity.md) |
 | UI/UX fidelity | ~70% | ~85% | 32–54 h | [ui-parity](docs/ui-parity.md) |
 | File formats (non-raw) | ~70% | ~85% | 30–55 h | [file-format-parity](docs/file-format-parity.md) |
@@ -183,6 +183,7 @@ Ranked toward beta; detail in [docs/roadmap.md](docs/roadmap.md), gaps in [docs/
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-17 | minor | LR-EXP-WATERMARK reassessed as partial for existing shaping, bidi and font limits (#2052); current checklist recount 83.4% to 83.3% of 539 rows. Stale headline figures synchronized to that recount; readiness and effort estimates unchanged |
 | 2026-10-12 | minor | Italian interface (`it`, #1192): 2,201 of 2,398 messages, locale, menu command and tests; headline numbers unchanged |
 | 2026-10-13 | minor | Sony ILCA-99M2 camera colour profile in the log; numbers unchanged |
 | 2026-10-14 | minor | Localization ~52% → ~55% (mean of the 12 key languages): de, es, fr, ja and uk catalogs filled |
