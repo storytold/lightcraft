@@ -2338,5 +2338,19 @@
   "Checking the GPU…": "Перевірка ГП…",
   "CPU": "ЦП",
   "A face model uses the GPU only when a check shows it gives the same results faster.": "Модель облич використовує ГП, лише якщо перевірка показала, що він дає ті самі результати швидше.",
-  "Checking the GPU for faces": "Перевірка ГП для облич"
+  "Checking the GPU for faces": "Перевірка ГП для облич",
+  "Fit to Photos": "Показати всі фото",
+  "Lock Markers": "Закріпити маркери",
+  "Pins can't be dragged to move photos": "Маркери не можна перетягувати, щоб перемістити фото",
+  "Remove GPS Coordinates": "Видалити GPS-координати",
+  "Remove GPS Coordinates of These Photos": "Видалити GPS-координати цих фото",
+  "Set GPS Coordinates": "Задати GPS-координати",
+  "Map": "Мапа",
+  "Map tiles are off": "Плитки мапи вимкнено",
+  "Map tiles are off (Settings / map.tileSource)": "Плитки мапи вимкнено (Налаштування / map.tileSource)",
+  "No photos with a location": "Немає фото з місцезнаходженням",
+  "Open in Browser": "Відкрити в браузері",
+  "Show in the Map view": "Показати в режимі «Мапа»",
+  "photo without GPS": "фото без GPS",
+  "photos without GPS": "фото без GPS"
 }

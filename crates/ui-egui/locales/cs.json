@@ -1607,7 +1607,6 @@
   "Show in File Manager": "Zobrazit ve správci souborů",
   "Show in Finder": "Zobrazit ve Finderu",
   "Show less": "Zobrazit méně",
-  "Show on Map": "Zobrazit na mapě",
   "Show overlay (O)": "Zobrazit překrytí (O)",
   "Show ratings, flags and edit badges": "Zobrazit hodnocení, příznaky a odznaky úprav",
   "Show the Navigator while zoomed in": "Zobrazit navigátor při přiblížení",
@@ -2063,5 +2062,19 @@
   "Open Settings": "Otevřít nastavení",
   "Select none": "Zrušit celý výběr",
   "Select all": "Vybrat vše",
-  "Visualize HDR": "Zobrazit rozsah HDR"
+  "Visualize HDR": "Zobrazit rozsah HDR",
+  "Fit to Photos": "Přizpůsobit fotografiím",
+  "Map": "Mapa",
+  "Map tiles are off (Settings / map.tileSource)": "Dlaždice mapy jsou vypnuté (Nastavení / map.tileSource)",
+  "No photos with a location": "Žádné fotografie s místem",
+  "photo without GPS": "fotografie bez GPS",
+  "photos without GPS": "fotografií bez GPS",
+  "Map tiles are off": "Dlaždice mapy jsou vypnuté",
+  "Open in Browser": "Otevřít v prohlížeči",
+  "Show in the Map view": "Zobrazit v zobrazení Mapa",
+  "Lock Markers": "Zamknout značky",
+  "Pins can't be dragged to move photos": "Špendlíky nelze přetáhnout a přesunout tak fotografie",
+  "Remove GPS Coordinates": "Odebrat souřadnice GPS",
+  "Remove GPS Coordinates of These Photos": "Odebrat souřadnice GPS těchto fotografií",
+  "Set GPS Coordinates": "Nastavit souřadnice GPS"
 }

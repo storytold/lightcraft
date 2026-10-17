@@ -1341,7 +1341,6 @@
   "Show in Explorer": "Mostra in Esplora file",
   "Show in File Manager": "Mostra nel gestore file",
   "Show in Finder": "Mostra nel Finder",
-  "Show on Map": "Mostra sulla mappa",
   "Show overlay (O)": "Mostra sovrapposizione (O)",
   "Show ratings, flags and edit badges": "Mostra valutazioni, contrassegni e indicatori di modifica",
   "Show the Navigator while zoomed in": "Mostra il Navigatore quando lo zoom è attivo",
@@ -1990,5 +1989,19 @@
   "Test Face Model": "Testa il modello dei volti",
   "This build cannot run recognition models: they can be added and chosen, not used.": "Questa versione non può eseguire modelli di riconoscimento: si possono aggiungere e scegliere, non usare.",
   "This build has nowhere to keep face models, so the model list is not available. (The desktop app has.)": "Questa versione non ha dove tenere i modelli dei volti, quindi l'elenco dei modelli non è disponibile. (L'app desktop ce l'ha.)",
-  "Unnamed Faces": "Volti senza nome"
+  "Unnamed Faces": "Volti senza nome",
+  "Fit to Photos": "Adatta alle foto",
+  "Map": "Mappa",
+  "Map tiles are off (Settings / map.tileSource)": "I riquadri della mappa sono disattivati (Impostazioni / map.tileSource)",
+  "No photos with a location": "Nessuna foto con posizione",
+  "photo without GPS": "foto senza GPS",
+  "photos without GPS": "foto senza GPS",
+  "Map tiles are off": "I riquadri della mappa sono disattivati",
+  "Open in Browser": "Apri nel browser",
+  "Show in the Map view": "Mostra nella vista Mappa",
+  "Lock Markers": "Blocca indicatori",
+  "Pins can't be dragged to move photos": "Gli indicatori non si possono trascinare per spostare le foto",
+  "Remove GPS Coordinates": "Rimuovi coordinate GPS",
+  "Remove GPS Coordinates of These Photos": "Rimuovi coordinate GPS di queste foto",
+  "Set GPS Coordinates": "Imposta coordinate GPS"
 }
