@@ -1306,10 +1306,10 @@ Sony	A6400 (ILCE-6400)	ARW	2018	verified	issue #535: raw.pixls.us bulk check of 
 Sony	A6500 (ILCE-6500)	ARW	2015	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
 Sony	A6600 (ILCE-6600)	ARW	2019	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
 Sony	A6700 (ILCE-6700)	ARW	2022	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
-Sony	DSC-F828	SRF	2003	unsupported	issue #702 (SRF refused); SRF not in the import list
+Sony	DSC-F828	SRF	2003	preview	2026-10-12 release CLI: raw.pixls.us DSC06227.SRF imports as preview-only through recursive and direct import (docs/raw-parity.md)
 Sony	DSC-HX95	ARW	2018	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
 Sony	DSC-HX99	ARW	2018	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
-Sony	DSC-V3	SRF	2005	unsupported	SRF not in the import list
+Sony	DSC-V3	SRF	2005	unsupported	SRF is discovered; sensor decoding unsupported, usable preview not verified on a real file
 Sony	DSC-RX100M7A	ARW	2024	verified	corpus: crates/raw/tests/sony_leica_corpus.rs (pinned sensor hash, camera-JPEG check)
 Sony	FX3 (ILME-FX3)	ARW	2020	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
 Sony	FX30 (ILME-FX30)	ARW	2022	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)

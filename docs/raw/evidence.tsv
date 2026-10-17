@@ -465,10 +465,10 @@ Sony	A900 (DSLR-A900)	verified	issue #535: raw.pixls.us bulk check of all 100 So
 Sony	A99 (SLT-A99V)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies
 Sony	A99 II (ILCA-99M2)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
 Sony	Alpha 1 (ILCE-1)*	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
-Sony	DSC-F828	unsupported	SRF not in the import list (the probe accepts it again since #774, issue #702); raw not decoded
+Sony	DSC-F828	preview	2026-10-12 release CLI: raw.pixls.us DSC06227.SRF imports as preview-only through recursive and direct import (docs/raw-parity.md)
 Sony	DSC-HX95	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
 Sony	DSC-HX99	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
-Sony	DSC-V3	unsupported	SRF not in the import list
+Sony	DSC-V3	unsupported	SRF is discovered; sensor decoding unsupported, usable preview not verified on a real file
 Sony	FX3 (ILME-FX3)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
 Sony	FX30 (ILME-FX30)	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
 Sony	NEX-3	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
@@ -528,7 +528,7 @@ Samsung	TL350 (WB2000)	verified	corpus: crates/raw/tests/olympus_samsung_corpus.
 Samsung	NX1000	verified	corpus: crates/raw/tests/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
 Samsung	NX1100	verified	corpus: crates/raw/tests/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
 Sony	A100 (DSLR-A100)	unsupported	issue #702: regression, refused as not a readable photo
-Sony	DSC-F828	unsupported	issue #702 (SRF refused); SRF not in the import list
+Sony	DSC-F828	preview	2026-10-12 release CLI: raw.pixls.us DSC06227.SRF imports as preview-only through recursive and direct import (docs/raw-parity.md)
 Epson	R-D1	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES)
 Epson	R-D1s	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES)
 Epson	R-D1x	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES)

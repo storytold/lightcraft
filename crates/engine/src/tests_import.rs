@@ -31,6 +31,25 @@ fn ids(v: &Value, key: &str) -> usize {
 }
 
 #[test]
+fn recursive_discovery_includes_sony_sr2_and_srf_case_insensitively() {
+    let src = temp_dir("sony-discovery");
+    std::fs::create_dir_all(src.join("trip/day2")).unwrap();
+    let names = ["r1.SR2", "f828.srf", "trip/r1.sr2", "trip/f828.SRF", "trip/day2/r1.Sr2", "trip/day2/f828.SrF", "control.JPG"];
+    let mut expected: Vec<String> = names.iter().map(|name| src.join(name).to_string_lossy().into_owned()).collect();
+    for path in &expected {
+        std::fs::write(path, b"discovery only, not a decoded photo").unwrap();
+    }
+    std::fs::write(src.join("trip/notes.txt"), b"not a photo").unwrap();
+
+    let mut found = crate::import::expand(&[src.to_string_lossy().into_owned()], None);
+    found.sort();
+    expected.sort();
+    assert_eq!(found, expected);
+    assert_eq!(crate::import::expand(&expected, None), expected, "folder and direct discovery agree");
+    std::fs::remove_dir_all(src).unwrap();
+}
+
+#[test]
 fn recursive_import_with_duplicates() {
     let src = temp_dir("src");
     write_png(&src.join("a.png"), 1);
