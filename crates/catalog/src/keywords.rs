@@ -161,6 +161,57 @@ fn dedupe(v: &mut Vec<String>) {
     v.retain(|k| !k.is_empty() && seen.insert(k.to_lowercase()));
 }
 
+/// What a photo's XMP sidecar carries for these keywords: every keyword's name and the names of
+/// the keywords containing it, flat (`dc:subject`, so never a `|`), and its full path
+/// (`lr:hierarchicalSubject`). Unlike [`Catalog::export_keywords`] nothing is left out and no
+/// synonym is added: the sidecar is the photo's own metadata, and reads back as these keywords
+/// ([`from_file`]).
+pub fn sidecar_keywords(keywords: &[String]) -> ExportKeywords {
+    let all = KeywordInfo { export_synonyms: false, ..KeywordInfo::default() };
+    split_for_file(keywords, |_| &all)
+}
+
+/// Keywords split into names and paths as a file carries them, by each keyword's tag options
+/// (`info`, by path): see [`Catalog::export_keywords`].
+fn split_for_file<'a>(keywords: &[String], info: impl Fn(&str) -> &'a KeywordInfo) -> ExportKeywords {
+    let mut out = ExportKeywords::default();
+    let push = |v: &mut Vec<String>, s: &str| {
+        if !s.is_empty() && !v.iter().any(|x| same(x, s)) {
+            v.push(s.to_string());
+        }
+    };
+    for k in keywords {
+        let path = clean(k);
+        let me = info(&path);
+        if path.is_empty() || !me.include_on_export {
+            continue;
+        }
+        let levels: Vec<&str> = path.split(SEP).collect();
+        let mut names = |at: usize, i: &KeywordInfo| {
+            if let Some(name) = levels.get(at) {
+                push(&mut out.flat, name);
+            }
+            if i.export_synonyms {
+                for s in &i.synonyms {
+                    push(&mut out.flat, s.trim());
+                }
+            }
+        };
+        names(levels.len().saturating_sub(1), me);
+        if me.export_containing {
+            for at in (0..levels.len().saturating_sub(1)).rev() {
+                let parent = levels.get(..=at).map(|l| l.join("|")).unwrap_or_default();
+                let pi = info(&parent);
+                if pi.include_on_export {
+                    names(at, pi);
+                }
+            }
+        }
+        push(&mut out.hierarchical, &path);
+    }
+    out
+}
+
 /// What the keyword list knows about a keyword besides the photos that carry it: Lightroom
 /// Classic's keyword tag options. A keyword is listed when it was created on its own or given
 /// attributes; one that only photos carry has the defaults.
@@ -418,43 +469,7 @@ impl Catalog {
     /// whatever its case.
     pub fn export_keywords(&self, keywords: &[String]) -> ExportKeywords {
         let defaults = KeywordInfo::default();
-        let info = |path: &str| self.keyword_info(path).unwrap_or(&defaults);
-        let mut out = ExportKeywords::default();
-        let push = |v: &mut Vec<String>, s: &str| {
-            if !s.is_empty() && !v.iter().any(|x| same(x, s)) {
-                v.push(s.to_string());
-            }
-        };
-        for k in keywords {
-            let path = clean(k);
-            let me = info(&path);
-            if path.is_empty() || !me.include_on_export {
-                continue;
-            }
-            let levels: Vec<&str> = path.split(SEP).collect();
-            let mut names = |at: usize, i: &KeywordInfo| {
-                if let Some(name) = levels.get(at) {
-                    push(&mut out.flat, name);
-                }
-                if i.export_synonyms {
-                    for s in &i.synonyms {
-                        push(&mut out.flat, s.trim());
-                    }
-                }
-            };
-            names(levels.len().saturating_sub(1), me);
-            if me.export_containing {
-                for at in (0..levels.len().saturating_sub(1)).rev() {
-                    let parent = levels.get(..=at).map(|l| l.join("|")).unwrap_or_default();
-                    let pi = info(&parent);
-                    if pi.include_on_export {
-                        names(at, pi);
-                    }
-                }
-            }
-            push(&mut out.hierarchical, &path);
-        }
-        out
+        split_for_file(keywords, |path| self.keyword_info(path).unwrap_or(&defaults))
     }
 
     /// The keyword list as a file (Lightroom Classic's format, [`parse_keyword_list`]): every
@@ -1102,6 +1117,18 @@ mod tests {
         let (flat, paths) = exported(&c, &["travel|Italy|Rome", "Travel|Spain", "beach"]);
         assert_eq!(flat, ["Rome", "Italy", "travel", "Spain", "beach"]);
         assert_eq!(paths, ["travel|Italy|Rome", "Travel|Spain", "beach"]);
+    }
+
+    /// A sidecar carries every keyword (export options aside) as its name, its parents' names and its
+    /// path, and no synonyms: what it holds reads back as the same keywords.
+    #[test]
+    fn a_sidecar_carries_every_keyword_as_names_and_its_path() {
+        let keywords: Vec<String> = ["Animals|Birds|Heron", "animals|Birds|Owl", "sunset", "Birds"].iter().map(|k| k.to_string()).collect();
+        let s = sidecar_keywords(&keywords);
+        assert_eq!(s.flat, ["Heron", "Birds", "Animals", "Owl", "sunset"]);
+        assert_eq!(s.hierarchical, ["Animals|Birds|Heron", "animals|Birds|Owl", "sunset", "Birds"]);
+        assert!(s.flat.iter().all(|k| !k.contains(SEP)));
+        assert_eq!(from_file(&s.flat, &s.hierarchical), keywords);
     }
 
     /// A keyword not included on export is left out, path and all; a parent left out (a keyword that

@@ -545,6 +545,108 @@ fn rereading_a_sidecar_clears_regions_only_when_it_states_them() {
     let _ = std::fs::remove_dir_all(&src);
 }
 
+/// A sidecar as Lightroom Classic writes a hierarchical keyword: names flat in `dc:subject`, the
+/// path in `lr:hierarchicalSubject`.
+const LR_KEYWORDS: &str = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:dc="http://purl.org/dc/elements/1.1/"
+    xmlns:lr="http://ns.adobe.com/lightroom/1.0/">
+   <dc:subject><rdf:Bag><rdf:li>Heron</rdf:li><rdf:li>Birds</rdf:li><rdf:li>Animals</rdf:li><rdf:li>sunset</rdf:li></rdf:Bag></dc:subject>
+   <lr:hierarchicalSubject><rdf:Bag><rdf:li>Animals|Birds|Heron</rdf:li><rdf:li>sunset</rdf:li></rdf:Bag></lr:hierarchicalSubject>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>"#;
+
+/// Keywords are saved as Lightroom Classic writes them: names in `dc:subject` (never a `|`, which
+/// hangs Lightroom Classic's import), full paths in `lr:hierarchicalSubject`, merged with the paths
+/// the sidecar already lists so another app's survive, while a keyword removed here stays removed;
+/// saving again changes nothing.
+#[test]
+fn hierarchical_keywords_are_saved_as_names_and_merged_paths() {
+    let src = temp_dir("hier-keywords");
+    write_png(&src.join("heron.png"), 5);
+    std::fs::write(src.join("heron.xmp"), LR_KEYWORDS).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    assert_eq!(s.catalog.photo(id).unwrap().meta.keywords, ["Animals|Birds|Heron", "sunset"]);
+    let side = || std::fs::read_to_string(src.join("heron.xmp")).unwrap();
+    let save = |s: &mut Session| {
+        s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    };
+    let fields = |x: &str| {
+        let m = lightcraft_meta::parse_xmp(x).unwrap().metadata;
+        assert!(m.keywords.iter().all(|k| !k.contains('|')), "a `|` in dc:subject: {:?}", m.keywords);
+        (m.keywords, m.hierarchical_keywords)
+    };
+    // a plain save: the paths read from the sidecar don't go into dc:subject
+    save(&mut s);
+    assert_eq!(fields(&side()), (strings(&["Heron", "Birds", "Animals", "sunset"]), strings(&["Animals|Birds|Heron", "sunset"])));
+    // keywords added here: each name once, whatever its case
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "addKeywords": ["Projects|2024|heron", "sidecar-test"]})).unwrap();
+    save(&mut s);
+    assert_eq!(
+        fields(&side()),
+        (
+            strings(&["Heron", "Birds", "Animals", "sunset", "2024", "Projects", "sidecar-test"]),
+            strings(&["Animals|Birds|Heron", "sunset", "Projects|2024|heron", "sidecar-test"])
+        )
+    );
+    // another app adds a path to the sidecar: a save keeps it, and keeps it out of dc:subject
+    let added = side().replacen(
+        "<rdf:li>sidecar-test</rdf:li>\n    </rdf:Bag>\n   </lr:hierarchicalSubject>",
+        "<rdf:li>sidecar-test</rdf:li>\n     <rdf:li>People|Sam</rdf:li>\n    </rdf:Bag>\n   </lr:hierarchicalSubject>",
+        1,
+    );
+    assert!(added.contains("People|Sam"));
+    std::fs::write(src.join("heron.xmp"), &added).unwrap();
+    save(&mut s);
+    let (flat, paths) = fields(&side());
+    assert!(!flat.iter().any(|k| k == "Sam" || k == "People"), "{flat:?}");
+    assert_eq!(paths, strings(&["Animals|Birds|Heron", "sunset", "Projects|2024|heron", "sidecar-test", "People|Sam"]));
+    // saving again is stable
+    let once = side();
+    save(&mut s);
+    assert_eq!(side(), once);
+    // read back, the other app's path is a keyword like the others; saving twice changes nothing
+    s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap().meta.keywords, ["Animals|Birds|Heron", "sunset", "Projects|2024|heron", "sidecar-test", "People|Sam"]);
+    save(&mut s);
+    let (flat, paths) = fields(&side());
+    assert_eq!(flat, strings(&["Heron", "Birds", "Animals", "sunset", "2024", "Projects", "sidecar-test", "Sam", "People"]));
+    assert_eq!(paths, strings(&["Animals|Birds|Heron", "sunset", "Projects|2024|heron", "sidecar-test", "People|Sam"]));
+    let once = side();
+    save(&mut s);
+    assert_eq!(side(), once);
+    // keywords removed here (one the photo came with, one added here, the other app's once read)
+    // stay removed: from both fields, after a save and a read
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "removeKeywords": ["sunset", "Projects|2024|heron", "People|Sam"]})).unwrap();
+    save(&mut s);
+    assert_eq!(fields(&side()), (strings(&["Heron", "Birds", "Animals", "sidecar-test"]), strings(&["Animals|Birds|Heron", "sidecar-test"])));
+    s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap().meta.keywords, ["Animals|Birds|Heron", "sidecar-test"]);
+    // another app's path added after that is still kept, and only it, save after save
+    let added = side().replacen(
+        "<rdf:li>sidecar-test</rdf:li>\n    </rdf:Bag>\n   </lr:hierarchicalSubject>",
+        "<rdf:li>sidecar-test</rdf:li>\n     <rdf:li>Events|Picnic</rdf:li>\n    </rdf:Bag>\n   </lr:hierarchicalSubject>",
+        1,
+    );
+    assert!(added.contains("Events|Picnic"));
+    std::fs::write(src.join("heron.xmp"), &added).unwrap();
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "removeKeywords": ["sidecar-test"]})).unwrap();
+    save(&mut s);
+    assert_eq!(fields(&side()), (strings(&["Heron", "Birds", "Animals"]), strings(&["Animals|Birds|Heron", "Events|Picnic"])));
+    let once = side();
+    save(&mut s);
+    assert_eq!(side(), once);
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+fn strings(v: &[&str]) -> Vec<String> {
+    v.iter().map(|s| s.to_string()).collect()
+}
+
 fn synthetic_dng(xmp: &str) -> Vec<u8> {
     synthetic_dng_with(Some(xmp), lightcraft_meta::Metadata::default())
 }
@@ -1327,4 +1429,82 @@ fn a_failed_auto_write_waits_and_is_written_on_retry() {
     assert_eq!(s.unsaved_sidecars(), 0);
     std::fs::set_permissions(&src, std::fs::Permissions::from_mode(0o755)).unwrap();
     let _ = std::fs::remove_dir_all(&src);
+}
+
+const REVIEW_KEYWORDS: &str = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:lr="http://ns.adobe.com/lightroom/1.0/">
+   <dc:subject><rdf:Bag><rdf:li>Heron</rdf:li><rdf:li>Birds</rdf:li><rdf:li>Animals</rdf:li><rdf:li>sunset</rdf:li></rdf:Bag></dc:subject>
+   <lr:hierarchicalSubject><rdf:Bag><rdf:li>Animals|Birds|Heron</rdf:li><rdf:li>sunset</rdf:li></rdf:Bag></lr:hierarchicalSubject>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>"#;
+
+#[test]
+fn spaced_keyword_paths_stay_deleted() {
+    let src = temp_dir("review-spaced-owned");
+    write_png(&src.join("heron.png"), 5);
+    let initial = REVIEW_KEYWORDS.replace("Animals|Birds|Heron", "Animals | Birds | Heron");
+    std::fs::write(src.join("heron.xmp"), initial).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    assert_eq!(s.catalog.photo(id).unwrap().meta.keywords, ["Animals|Birds|Heron", "sunset"]);
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "removeKeywords": ["Animals|Birds|Heron"]})).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    let after = s.catalog.photo(id).unwrap().meta.keywords.clone();
+    let _ = std::fs::remove_dir_all(&src);
+    assert_eq!(after, ["sunset"], "an already-owned keyword must not return after deletion");
+}
+
+/// A save writes each path once, in its normalized form, and records the normalized path as the photo's own;
+/// the flat names are written once each.
+#[test]
+fn spaced_keyword_paths_are_written_once_normalized() {
+    let src = temp_dir("keyword-spaced-once");
+    write_png(&src.join("heron.png"), 7);
+    std::fs::write(src.join("heron.xmp"), REVIEW_KEYWORDS.replace("Animals|Birds|Heron", "Animals | Birds | Heron")).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    let saved = lightcraft_meta::parse_xmp(&std::fs::read_to_string(src.join("heron.xmp")).unwrap()).unwrap();
+    let _ = std::fs::remove_dir_all(&src);
+    assert_eq!(saved.metadata.hierarchical_keywords, ["Animals|Birds|Heron", "sunset"], "one normalized path each");
+    let mut flat = saved.metadata.keywords.clone();
+    flat.sort();
+    assert_eq!(flat, ["Animals", "Birds", "Heron", "sunset"], "each flat name once");
+    let record = saved.properties.get("lc:keywordPaths").and_then(|v| v.first()).expect("the record of the photo's own paths");
+    assert_eq!(record, r#"["Animals|Birds|Heron","sunset"]"#);
+}
+
+/// An `lc:keywordPaths` record an older build wrote with spaces still marks its path as the photo's own, so removing
+/// the keyword here keeps it out of the sidecar.
+#[test]
+fn spaced_keyword_record_still_marks_the_path_as_owned() {
+    let src = temp_dir("keyword-spaced-record");
+    write_png(&src.join("heron.png"), 8);
+    let old = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:lr="http://ns.adobe.com/lightroom/1.0/" xmlns:lc="http://ns.lightcraft.app/lc/1.0/">
+   <dc:subject><rdf:Bag><rdf:li>Heron</rdf:li><rdf:li>Birds</rdf:li><rdf:li>Animals</rdf:li><rdf:li>sunset</rdf:li></rdf:Bag></dc:subject>
+   <lr:hierarchicalSubject><rdf:Bag><rdf:li>Animals|Birds|Heron</rdf:li><rdf:li>sunset</rdf:li></rdf:Bag></lr:hierarchicalSubject>
+   <lc:keywordPaths>["Animals | Birds | Heron","sunset"]</lc:keywordPaths>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>"#;
+    std::fs::write(src.join("heron.xmp"), old).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "removeKeywords": ["Animals|Birds|Heron"]})).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    let saved = lightcraft_meta::parse_xmp(&std::fs::read_to_string(src.join("heron.xmp")).unwrap()).unwrap();
+    s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    let after = s.catalog.photo(id).unwrap().meta.keywords.clone();
+    let _ = std::fs::remove_dir_all(&src);
+    assert_eq!(saved.metadata.hierarchical_keywords, ["sunset"], "the owned path is removed from the sidecar");
+    assert_eq!(after, ["sunset"], "and does not return on read");
 }
