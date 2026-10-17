@@ -1,6 +1,6 @@
 # Lightroom parity checklist
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (integration batch 36: slideshow module, print-ready PDF fixes, local adjustment presets, Layout Image loupe overlay, Delete in an album removes from it, new languages Czech, Polish, Italian-ready catalogs; many rows' notes updated by their PRs) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (LR-EDIT-EFFECTS-GRAIN: film grain as clumps of irregular particles; upstream integration batch 36 merged in; catalog import: persistent result, offline Local promotion and library-switch dismissal; integration batch 35: KEYC-SELECTONLYACTIVE, Select Only Active Photo ⌘⇧D; LR-BEHAV-AUTOSAVE, damaged snapshots repaired on open; LR-EDIT-OPTICS-PROFILE, Nikon Z 6II / Z 8 / Z f in-file distortion; LRC-LIB-CATALOG-IMPORT, WAL-only catalogs open; LR-EXP-DIM, enlargements stop at 512 MP; LR-IMP-CAMERA-COVERAGE, Canon EOS RP CR3 verified; model folder retry) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 The measured, row-by-row checklist: one row per Lightroom feature, menu item and shortcut, what we
 have and what is missing. It answers *does the feature exist?* (feature breadth). Whether it is good
@@ -205,7 +205,7 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 | LR-EDIT-EFFECTS-CLARITY | Clarity | P0 | ✅ | `ctl:effects.clarity` | |
 | LR-EDIT-EFFECTS-DEHAZE | Dehaze | P0 | ✅ | `ctl:effects.dehaze` | |
 | LR-EDIT-EFFECTS-VIGNETTE | Post-crop vignette | P0 | ✅ | `ctl:vignette.*`, `crates/pipeline/src/finish.rs`, `crates/ui-egui/src/panels/edit.rs` | style picker (Highlight / Color / Paint) in the Effects section |
-| LR-EDIT-EFFECTS-GRAIN | Grain | P1 | ✅ | `ctl:grain.*` | |
+| LR-EDIT-EFFECTS-GRAIN | Grain | P1 | ✅ | `ctl:grain.*`, `crates/pipeline/src/grain.rs`, `docs/grain.md` | particles rendered per pixel (own implementation of the Boolean model of Newson et al. 2017, extended to clumps of irregular grains); resolution independent (a small render ≈ the export downscaled, tested). Beyond Lightroom: Size Variation, Shape (Roughness), Clumping, Color (dye layers), Response and Seed sliders. Look not yet compared with Lightroom renders; CPU export cost ≈ 0.9 s per 24 MP (GPU ≈ 0.1 s) |
 | LR-EDIT-DETAIL-SHARPEN | Sharpening | P0 | ✅ | `ctl:detail.sharpenAmount`, `ctl:detail.sharpenRadius`, `ctl:detail.sharpenDetail`, `ctl:detail.sharpenMasking` | no Alt-drag mask preview |
 | LR-EDIT-DETAIL-NR | Luminance noise reduction | P0 | ✅ | `ctl:detail.nrLuminance`, `ctl:detail.nrDetail`, `ctl:detail.nrContrast` | radii in the original's pixels, so grid, loupe and smaller exports look like the full-size render scaled down (`local::nr_params`, `Plan::detail_scale`, #960) |
 | LR-EDIT-DETAIL-CNR | Colour noise reduction | P0 | ✅ | `ctl:detail.nrColor`, `ctl:detail.nrColorDetail`, `ctl:detail.nrColorSmoothness` | preview-size independent like luminance NR (#960) |
@@ -797,6 +797,7 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-11 | minor | LR-EDIT-EFFECTS-GRAIN: grain redrawn as clumps of irregular particles with Size Variation, Shape, Clumping and Seed controls. Earlier: Size range narrowed (old 0–20), Roughness reshapes grains instead of reshuffling them. Earlier the same day: stays ✅ with a note: the value-noise grain was replaced by a Boolean-model film grain (resolution independent, Color and Response sliders), see `docs/grain.md` |
 | 2026-10-12 | minor | LR-EDIT-OPTICS-PROFILE: Sony ARW shading, CA and distortion tables decoded with settings and provenance (raw IFD, `SR2SubIFD` fallback); applied corrections unchanged (ILCE-7RM4A and ILCE-7RM6 distortion); status unchanged (🟡) |
 | 2026-10-14 | minor | LR-IMP-CAMERA-COVERAGE: Camera-coverage sweep (#1327): 30 models verified on 40 CC0 files (coverage.py 515 → 545 verified); sensor verification does not establish colour parity (#1277); status unchanged (🟡) |
 | 2026-10-13 | minor | LR-MERGE-PANO: a panorama's DNG takes its `AsShotNeutral` from the median of its frames' vendor white-balance multipliers (CR2, NEF, ARW…) instead of the first frame's tags, and frames now carry the multipliers (issue #1144); status unchanged (✅) |

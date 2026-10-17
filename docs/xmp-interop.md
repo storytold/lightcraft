@@ -134,7 +134,7 @@ application's renderer and is ignored: the photo keeps LightCraft's own process,
 | `ColorNoiseReduction`, `ColorNoiseReductionDetail`, `ColorNoiseReductionSmoothness` | `detail.nr_color/nr_color_detail/nr_color_smoothness` | |
 | `PostCropVignetteAmount/Midpoint/Roundness/Feather/HighlightContrast` | `vignette.amount/midpoint/roundness/feather/highlights` | |
 | `PostCropVignetteStyle` | `vignette.style` | 1 highlight priority, 2 colour priority, 3 paint overlay |
-| `GrainAmount`, `GrainSize`, `GrainFrequency` | `grain.amount`, `grain.size`, `grain.roughness` | |
+| `GrainAmount`, `GrainSize`, `GrainFrequency` | `grain.amount`, `grain.size`, `grain.roughness` | Roughness is LightCraft's grain Shape; `grain.color`, `grain.response`, `grain.sizeVariation`, `grain.clumping` and `grain.seed` have no Camera Raw equivalent (not written) |
 | `LensProfileEnable`, `AutoLateralCA` | `optics.lens_profile`, `optics.remove_ca` | lens profiles are the file's own (DNG-embedded) corrections, which Lightroom applies whatever its profile switch says (our inference): only `LensProfileEnable=1` carries over, `0` leaves the switch as it is |
 | `LensManualDistortionAmount`, `VignetteAmount`, `VignetteMidpoint` | `optics.distortion`, `optics.vignetting`, `optics.vignetting_midpoint` | |
 | `DefringePurple/GreenAmount/HueLo/HueHi` | `optics.defringe_*` | |

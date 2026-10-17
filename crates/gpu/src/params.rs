@@ -60,10 +60,26 @@ const FIELDS: &[(&str, usize)] = &[
     // the window's offset in the whole output and the whole output's size (pixels)
     ("VIG_VIEW", 4),
     ("GRAIN", 1),
-    ("GRAIN_AMT", 1),
-    ("GRAIN_SC", 1),
-    ("GRAIN_ROUGH", 1),
+    ("GRAIN_AMP", 1),
+    ("GRAIN_INV_R", 1),
+    ("GRAIN_S", 1),
+    ("GRAIN_INV_S", 1),
+    ("GRAIN_SPREAD", 1),
+    ("GRAIN_ASPECT", 1),
+    ("GRAIN_LUMP", 1),
+    ("GRAIN_CLUMP_E", 1),
+    ("GRAIN_CLUMP_D", 1),
+    ("GRAIN_AREA", 1),
+    ("GRAIN_SUPPORT", 1),
+    ("GRAIN_SUB_REACH", 1),
+    ("GRAIN_CELL", 1),
+    ("GRAIN_KAPPA", 1),
+    ("GRAIN_WF", 1),
+    ("GRAIN_WN", 1),
+    ("GRAIN_COLOR", 1),
+    ("GRAIN_GAMMA", 1),
     ("GRAIN_SEED", 1),
+    ("GRAIN_PPL", 1),
     ("GRAIN_AFF", 6),
     ("REFINE_SAT", 1),
     ("CALIB", 1),
@@ -233,12 +249,28 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     let (trc, gamma) = fp.out_trc.code();
     p.u("OUT_TRC", trc);
     p.f("OUT_GAMMA", gamma);
-    if let Some((amt, cell, rough, seed)) = fp.grain {
+    if let Some(g) = fp.grain {
         p.b("GRAIN", true);
-        p.f("GRAIN_AMT", amt);
-        p.f("GRAIN_SC", fp.px_per_long as f32 / cell);
-        p.f("GRAIN_ROUGH", rough);
-        p.u("GRAIN_SEED", seed);
+        p.f("GRAIN_AMP", g.amp);
+        p.f("GRAIN_INV_R", g.inv_r);
+        p.f("GRAIN_S", g.s);
+        p.f("GRAIN_INV_S", g.inv_s);
+        p.f("GRAIN_SPREAD", g.spread);
+        p.f("GRAIN_ASPECT", g.aspect);
+        p.f("GRAIN_LUMP", g.lump);
+        p.f("GRAIN_CLUMP_E", g.clump_extra);
+        p.f("GRAIN_CLUMP_D", g.clump_d);
+        p.f("GRAIN_AREA", g.area);
+        p.f("GRAIN_SUPPORT", g.support);
+        p.f("GRAIN_SUB_REACH", g.sub_reach);
+        p.f("GRAIN_CELL", g.cell);
+        p.f("GRAIN_KAPPA", g.kappa);
+        p.f("GRAIN_WF", g.w_field);
+        p.f("GRAIN_WN", g.w_noise);
+        p.f("GRAIN_COLOR", g.color);
+        p.f("GRAIN_GAMMA", g.gamma);
+        p.u("GRAIN_SEED", g.seed);
+        p.f("GRAIN_PPL", g.px_per_long);
         let long = fp.ow.max(fp.oh);
         let [a, b, c, d, e, f] = fp.out_to_norm.0;
         let (kx, ky) = (fp.ow / long, fp.oh / long);

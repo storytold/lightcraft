@@ -262,6 +262,18 @@ fn constants() -> String {
     for (i, h) in GRAIN_HASH.iter().enumerate() {
         s += &format!("const GRAIN_H{i}: u32 = {h}u;\n");
     }
+    {
+        use lightcraft_pipeline::grain::{CHANNEL_SALT, MAX_PER_CELL, MAX_REACH, MAX_SUB, P_MAX, P_MIN, TONE_FLOOR};
+        s += &format!(
+            "const GRAIN_P_MIN: f32 = {P_MIN:?};\nconst GRAIN_P_MAX: f32 = {P_MAX:?};\nconst GRAIN_MAX_PER_CELL: u32 = {MAX_PER_CELL}u;\nconst GRAIN_MAX_SUB: u32 = {MAX_SUB}u;\nconst GRAIN_TONE_FLOOR: f32 = {TONE_FLOOR:?};\nconst GRAIN_MAX_REACH: i32 = {MAX_REACH};\n"
+        );
+        let phases: Vec<String> = lightcraft_pipeline::grain::PHASES.iter().map(|p| format!("vec2<f32>({:?}, {:?})", p[0], p[1])).collect();
+        // a private array: indexed at run time (a const array may not be, on every backend)
+        s += &format!("var<private> GRAIN_PHASES: array<vec2<f32>, 16> = array<vec2<f32>, 16>({});\n", phases.join(", "));
+        for (name, salt) in ["R", "G", "B"].iter().zip(CHANNEL_SALT) {
+            s += &format!("const GRAIN_SALT_{name}: u32 = {salt}u;\n");
+        }
+    }
     for (name, idx) in crate::params::finish_fields() {
         s += &format!("const F_{name}: u32 = {idx}u;\n");
     }

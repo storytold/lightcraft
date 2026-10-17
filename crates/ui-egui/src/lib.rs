@@ -30,6 +30,7 @@ pub mod merge;
 mod model_setup;
 pub mod panels;
 pub mod pick;
+mod pointer_repair;
 pub mod print_view;
 pub mod recheck;
 pub mod region;
@@ -382,6 +383,8 @@ pub struct LightcraftApp {
     synthetic_mods: egui::Modifiers,
     /// Clear `synthetic_mods` on the next frame.
     synthetic_mods_release: bool,
+    /// Puts back mouse-button releases the window integration dropped (see `pointer_repair`).
+    pointer_repair: pointer_repair::PointerRepair,
     styled: bool,
     /// The language the installed fonts were built for: the CJK fallback order follows the UI
     /// language's script, so switching language reinstalls them.
@@ -509,6 +512,7 @@ impl LightcraftApp {
             pending_picks: vec![],
             synthetic_mods: egui::Modifiers::NONE,
             synthetic_mods_release: false,
+            pointer_repair: pointer_repair::PointerRepair::default(),
             styled: false,
             font_language: i18n::Locale::En,
             chinese_font: None,
@@ -1322,8 +1326,14 @@ impl LightcraftApp {
         self.screen_profile = icc;
     }
 
-    /// Inject synthetic events (pointer events one per frame; key sequences up to the release).
+    /// Inject synthetic events (pointer events one per frame; key sequences up to the release),
+    /// then put back button releases the window integration dropped.
     pub fn raw_input_hook(&mut self, raw: &mut egui::RawInput) {
+        self.inject_synthetic(raw);
+        self.pointer_repair.repair(raw);
+    }
+
+    fn inject_synthetic(&mut self, raw: &mut egui::RawInput) {
         // the frame after a synthetic release / key: modifiers back up
         if std::mem::take(&mut self.synthetic_mods_release) && self.synthetic_mods != egui::Modifiers::NONE {
             self.synthetic_mods = egui::Modifiers::NONE;
@@ -1333,7 +1343,7 @@ impl LightcraftApp {
             return;
         }
         let n = match self.synthetic[0] {
-            egui::Event::PointerMoved(_) | egui::Event::PointerButton { .. } | egui::Event::MouseWheel { .. } => 1,
+            egui::Event::PointerMoved(_) | egui::Event::PointerButton { .. } | egui::Event::MouseWheel { .. } | egui::Event::PointerGone => 1,
             _ => self.synthetic.iter().position(|e| matches!(e, egui::Event::Key { pressed: false, .. })).map_or(self.synthetic.len(), |i| i + 1),
         };
         if let Some(egui::Event::PointerMoved(p) | egui::Event::PointerButton { pos: p, .. }) = self.synthetic.first() {

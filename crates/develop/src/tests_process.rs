@@ -160,3 +160,11 @@ fn the_process_is_not_an_edit_nor_part_of_copied_settings() {
 
 /// A process other than the latest: a newer LightCraft's number (no older one than V1 exists).
 const LATEST_PLUS_ONE: u32 = ProcessVersion::LATEST.0 + 1;
+
+#[test]
+fn grain_saved_without_the_new_fields_loads_with_their_defaults() {
+    let s = DevelopSettings::from_json(&legacy()).unwrap();
+    let d = Grain::default();
+    assert_eq!((s.grain.amount, s.grain.size, s.grain.roughness, s.grain.seed), (20.0, 25.0, 50.0, 0));
+    assert_eq!((s.grain.color, s.grain.response, s.grain.size_variation, s.grain.clumping), (d.color, d.response, d.size_variation, d.clumping));
+}

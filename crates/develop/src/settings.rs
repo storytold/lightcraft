@@ -598,15 +598,25 @@ impl Default for Vignette {
 #[serde(default)]
 pub struct Grain {
     pub amount: f64,
+    /// Mean grain size, relative to the frame (0..100; ≈ 4–48 µm on a 35 mm frame).
     pub size: f64,
+    /// Grain shape (Camera Raw's Roughness): 0 = round grains; 100 = elongated, irregular ones.
     pub roughness: f64,
     /// Seed for the procedural grain (stable per photo).
     pub seed: u32,
+    /// Colour (chroma) grain, 0..100: independent dye-layer grain on top of the luminance grain.
+    pub color: f64,
+    /// Where grain is strongest: −100 shadows … 0 midtones … +100 highlights.
+    pub response: f64,
+    /// Spread of grain sizes, 0..100: 0 = all grains the mean size.
+    pub size_variation: f64,
+    /// Clumping, 0..100: 0 = single grains; 100 = clusters of several grains.
+    pub clumping: f64,
 }
 
 impl Default for Grain {
     fn default() -> Self {
-        Self { amount: 0.0, size: 25.0, roughness: 50.0, seed: 0 }
+        Self { amount: 0.0, size: 25.0, roughness: 50.0, seed: 0, color: 0.0, response: 0.0, size_variation: 40.0, clumping: 30.0 }
     }
 }
 

@@ -84,26 +84,7 @@ fn vignette(s: &DevelopSettings) -> Option<Vig> {
     })
 }
 
-/// Hash constants of [`grain_noise`] (shared with the GPU kernel).
-pub const GRAIN_HASH: [u32; 4] = [0x8da6_b343, 0xd816_3841, 0xcb1a_b31f, 0x5bd1_e995];
-
-#[inline]
-fn grain_noise(x: f32, y: f32, seed: u32) -> f32 {
-    let (x0, y0) = (x.floor(), y.floor());
-    let (fx, fy) = (x - x0, y - y0);
-    let h = |i: i32, j: i32| {
-        let mut v = (i as u32).wrapping_mul(GRAIN_HASH[0]) ^ (j as u32).wrapping_mul(GRAIN_HASH[1]) ^ seed.wrapping_mul(GRAIN_HASH[2]);
-        v ^= v >> 13;
-        v = v.wrapping_mul(GRAIN_HASH[3]);
-        v ^= v >> 15;
-        (v & 0xffff) as f32 / 32768.0 - 1.0
-    };
-    let (i, j) = (x0 as i32, y0 as i32);
-    let (u, v) = (fx * fx * (3.0 - 2.0 * fx), fy * fy * (3.0 - 2.0 * fy));
-    let a = h(i, j) + (h(i + 1, j) - h(i, j)) * u;
-    let b = h(i, j + 1) + (h(i + 1, j + 1) - h(i, j + 1)) * u;
-    a + (b - a) * v
-}
+pub use crate::grain::GRAIN_HASH;
 
 /// Number of per-mask terms in [`mask_terms`].
 pub const MASK_TERMS: usize = 21;
@@ -181,8 +162,8 @@ pub struct FinishParams {
     pub air_pre: f32,
     pub gain: f32,
     pub ev: f32,
-    /// Grain: amount, cell size (px), roughness, seed.
-    pub grain: Option<(f32, f32, f32, u32)>,
+    /// Film grain (see [`crate::grain`]).
+    pub grain: Option<crate::grain::GrainParams>,
     /// Output px → normalized oriented coordinates.
     pub out_to_norm: lightcraft_geom::Affine,
     pub ow: f64,
@@ -218,10 +199,7 @@ impl FinishParams {
         };
         let ev = s.light.exposure as f32;
         let gain = 2f32.powf(ev);
-        let grain = (s.grain.amount > 0.0 && effects).then(|| {
-            let cell = (0.0006 + (s.grain.size / 100.0) as f32 * 0.0024) * px_per_long as f32;
-            ((s.grain.amount / 100.0) as f32 * 0.13, cell.max(0.6), (s.grain.roughness / 100.0) as f32, s.grain.seed)
-        });
+        let grain = if effects { crate::grain::GrainParams::new(&s.grain, px_per_long) } else { None };
         let calibration = s.section_enabled("calibration");
         let peak = s.hdr.peak();
         FinishParams {
@@ -399,8 +377,13 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
     let peak = fp.peak;
     let hdr = peak > 1.0;
     let mut out = vec![T::default(); w * h];
-    for_rows(&mut out, w, |y, row| {
-        for (x, px) in row.iter_mut().enumerate() {
+    // bands of rows: grain splats each grain once per band (see `GrainParams::apply_band`)
+    const BAND: usize = 8;
+    for_rows(&mut out, w * BAND, |band, rows| {
+        // display-encoded colour and gamut-warning overlay per pixel, before grain and LUT
+        let mut enc: Vec<([f32; 3], Option<[f32; 3]>)> = Vec::with_capacity(rows.len());
+        for q in 0..rows.len() {
+            let (x, y) = (q % w, band * BAND + q / w);
             let i = y * w + x;
             let raw = p.img.data[i];
             let mut c = if gain == 1.0 { raw } else { raw.map(|v| v * gain) };
@@ -637,19 +620,23 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                     e = refine_saturation(e0, e, fp.refine_sat);
                 }
             }
-            if let Some((amt, cell, rough, seed)) = *grain {
+            enc.push((e, warn));
+        }
+        if let Some(gp) = grain {
+            let (mut gx, mut gy) = (Vec::with_capacity(enc.len()), Vec::with_capacity(enc.len()));
+            for q in 0..enc.len() {
+                let (x, y) = (q % w, band * BAND + q / w);
                 let n = out_to_norm.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
-                let (gx, gy) = ((n.x * fp.ow) as f32 / long as f32, (n.y * fp.oh) as f32 / long as f32);
-                let sc = fp.px_per_long as f32 / cell;
-                let mut g = grain_noise(gx * sc, gy * sc, seed);
-                g = g * (1.0 - rough * 0.5) + grain_noise(gx * sc * 2.3, gy * sc * 2.3, seed ^ 0x55) * rough * 0.7;
-                let mut lum = 0.2126 * e[0] + 0.7152 * e[1] + 0.0722 * e[2];
-                if hdr {
-                    lum = lum.clamp(0.0, 1.0);
-                }
-                let k = amt * g * (0.35 + 2.6 * lum * (1.0 - lum));
-                e = e.map(|v| v + k);
+                gx.push((n.x * fp.ow / long) as f32);
+                gy.push((n.y * fp.oh / long) as f32);
             }
+            let mut es: Vec<[f32; 3]> = enc.iter().map(|q| q.0).collect();
+            gp.apply_band(&gx, &gy, w, &mut es);
+            for (q, e) in enc.iter_mut().zip(es) {
+                q.0 = e;
+            }
+        }
+        for (px, (e, warn)) in rows.iter_mut().zip(enc) {
             let e = match &p_lut {
                 Some((l, k)) if hdr => {
                     // the LUT sees SDR values; the part above SDR white is carried over

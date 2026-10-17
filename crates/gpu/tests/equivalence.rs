@@ -216,6 +216,15 @@ fn cases() -> Vec<(&'static str, Edit)> {
             s.grain.size = 40.0;
             s.grain.roughness = 60.0;
         }),
+        // coarse grain: explicit Boolean-model grains even at this size, colour layers, response
+        ("grain (coarse, colour)", |s| {
+            s.grain.amount = 80.0;
+            s.grain.size = 90.0;
+            s.grain.roughness = 100.0;
+            s.grain.color = 60.0;
+            s.grain.response = -40.0;
+            s.grain.seed = 77;
+        }),
         ("dehaze -", |s| s.effects.dehaze = -50.0),
         ("dehaze +", |s| s.effects.dehaze = 60.0),
         ("clarity/texture -", |s| {
