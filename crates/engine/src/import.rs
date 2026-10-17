@@ -801,6 +801,7 @@ pub struct Prepared {
     items: Vec<PreparedItem>,
     /// Content hashes computed on demand for photos already in the library, saved with the batch.
     hashes: Vec<(PhotoId, String)>,
+    learned_paths: HashMap<String, String>,
 }
 
 #[derive(Debug)]
@@ -1145,6 +1146,7 @@ impl ImportJob {
             }
         }
         out.hashes.extend(self.dups.take_filled());
+        out.learned_paths = self.dups.take_learned();
         out
     }
 
@@ -1161,7 +1163,7 @@ impl ImportJob {
                 },
             };
             if let PreparedItem::Ready(r) = &item {
-                self.dups.add_new(&r.path, &r.info);
+                self.dups.add_new(&r.stored, &r.info);
             }
             out.items.push(item);
         }
@@ -1438,7 +1440,20 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
     let mut purge: Vec<PhotoId> = Vec::new();
     let mut purged: std::collections::HashSet<PhotoId> = Default::default();
     // hashes computed on demand (to compare a new file with photos added from their headers) are kept
-    for (id, hash) in &prepared.hashes {
+    let path_hashes: Vec<_> = s
+        .catalog
+        .photos()
+        .filter_map(|p| {
+            let Source::File { path } = &p.source else { return None };
+            let hash = prepared.learned_paths.get(path)?;
+            if p.content_hash.is_some() || p.copy_of.is_some() {
+                return None;
+            }
+            new_hash.insert(hash.clone(), p.id);
+            Some((p.id, hash.clone()))
+        })
+        .collect();
+    for (id, hash) in prepared.hashes.iter().chain(&path_hashes) {
         if let Some(p) = s.catalog.photo(*id).filter(|p| p.content_hash.is_none()) {
             ops.push(Op::SetContent {
                 id: *id,

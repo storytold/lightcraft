@@ -167,3 +167,71 @@ fn an_unreadable_candidate_is_not_a_duplicate_and_does_not_fail_the_import() {
     assert_eq!((r.imported.len(), r.duplicates.len(), r.failed.len()), (1, 0, 0), "{r:?}");
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn a_later_batch_learns_the_committed_photos_hash_and_existing_id() {
+    let dir = temp_dir("later-hash");
+    let data = bytes(9, BIG);
+    let first = write(&dir, "a.dng", &data);
+    let second = write(&dir, "b.dng", &data);
+    let mut s = header_session();
+    s.open_library(dir.join("library"), false).unwrap();
+    let opts = ImportOptions { mode: ImportMode::Add, ..Default::default() };
+    let mut job = ImportJob::new(&mut s, opts.clone()).unwrap();
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    let ready = job.prepare_files(vec![first], &cancel);
+    let a = commit_prepared(&mut s, &opts, &job.now, ready).unwrap();
+    let id = PhotoId(a.imported[0]);
+    assert!(s.catalog.photo(id).unwrap().content_hash.is_none());
+    let ready = job.prepare_files(vec![second], &cancel);
+    let b = commit_prepared(&mut s, &opts, &job.now, ready).unwrap();
+    assert!(b.imported.is_empty());
+    assert_eq!(b.duplicates[0].existing, Some(id.0));
+    let expected = lightcraft_preview::hash_bytes(&data).to_string();
+    assert_eq!(s.catalog.photo(id).unwrap().content_hash.as_ref(), Some(&expected));
+    s.close_library().unwrap();
+    s.open_library(dir.join("library"), false).unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap().content_hash.as_ref(), Some(&expected));
+    s.close_library().unwrap();
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_later_move_batch_compares_the_surviving_destination() {
+    let dir = temp_dir("later-move");
+    let data = bytes(10, BIG);
+    let first = write(&dir, "a.dng", &data);
+    let second = write(&dir, "b.dng", &data);
+    let mut s = header_session();
+    let opts = ImportOptions { mode: ImportMode::Move, destination: Some(dir.join("dest").to_string_lossy().into_owned()), ..Default::default() };
+    let mut job = ImportJob::new(&mut s, opts.clone()).unwrap();
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    let ready = job.prepare_files(vec![first.clone()], &cancel);
+    let a = commit_prepared(&mut s, &opts, &job.now, ready).unwrap();
+    assert!(!Path::new(&first).exists());
+    let ready = job.prepare_files(vec![second.clone()], &cancel);
+    let b = commit_prepared(&mut s, &opts, &job.now, ready).unwrap();
+    assert!(b.imported.is_empty(), "{b:?}");
+    assert_eq!(b.duplicates[0].existing, Some(a.imported[0]));
+    assert!(Path::new(&second).exists());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn add_registers_distinct_candidates_once_across_batches() {
+    let dir = temp_dir("distinct-cap");
+    let paths: Vec<_> = (0..129u8).map(|i| write(&dir, &format!("f{i}.dng"), &bytes(i, BIG))).collect();
+    let copy = write(&dir, "copy.dng", &bytes(0, BIG));
+    let mut s = header_session();
+    let opts = ImportOptions { mode: ImportMode::Add, ..Default::default() };
+    let mut job = ImportJob::new(&mut s, opts.clone()).unwrap();
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    let ready = job.prepare_files(paths, &cancel);
+    let a = commit_prepared(&mut s, &opts, &job.now, ready).unwrap();
+    assert_eq!(a.imported.len(), 129);
+    let ready = job.prepare_files(vec![copy], &cancel);
+    let b = commit_prepared(&mut s, &opts, &job.now, ready).unwrap();
+    assert!(b.imported.is_empty(), "{b:?}");
+    assert_eq!(b.duplicates[0].existing, Some(a.imported[0]));
+    let _ = std::fs::remove_dir_all(dir);
+}

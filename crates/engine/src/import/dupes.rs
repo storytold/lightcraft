@@ -64,12 +64,13 @@ impl Duplicates {
             self.by_hash.insert(base_hash(h).to_string(), None);
         }
         if let Some(k) = key(info.file_size, info.width, info.height) {
-            self.by_key.entry(k).or_default().push(Known {
-                existing: None,
-                path: path.to_string(),
-                hash: info.content_hash.clone(),
-                head: info.head_hash.clone(),
-            });
+            let entries = self.by_key.entry(k).or_default();
+            if let Some(known) = entries.iter_mut().find(|known| known.path == path) {
+                known.hash = info.content_hash.clone().or_else(|| known.hash.clone());
+                known.head = info.head_hash.clone().or_else(|| known.head.clone());
+            } else {
+                entries.push(Known { existing: None, path: path.to_string(), hash: info.content_hash.clone(), head: info.head_hash.clone() });
+            }
         }
     }
 
@@ -125,6 +126,10 @@ impl Duplicates {
 
     pub(crate) fn learned(&self, path: &str) -> Option<&String> {
         self.learned.get(path)
+    }
+
+    pub(crate) fn take_learned(&mut self) -> HashMap<String, String> {
+        std::mem::take(&mut self.learned)
     }
 
     fn learn(&mut self, twin: &Known, hash: &str) {

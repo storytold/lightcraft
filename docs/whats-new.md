@@ -12,6 +12,8 @@
 - Copies are still found without that hash: files of the same size and dimensions are compared by their first
   512 KB, and only then read whole. The 16-photo limit on that comparison is gone.
 
+- Import duplicate checks now keep working between batches after a Move, retain hashes learned for earlier batches, and count distinct files toward the comparison limit.
+
 ### Reliability
 - A damaged or crafted TIFF-based raw with a very large number of strips or tiles can no longer make an import hang
   while it reads the file's headers (issue #2128). Working out where each strip ends and which parts of the file to
