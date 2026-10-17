@@ -282,6 +282,32 @@ mod tests {
         assert_eq!(s2.catalog.photo(id).unwrap().rating, 5, "the rating survived");
     }
 
+    /// A backup copies the stored library files, so while a save is failing it would miss the
+    /// queued changes: it is refused with the reason until they are written (#1508).
+    #[test]
+    fn backup_is_refused_while_changes_are_unsaved() {
+        let files = Files::default();
+        let mut s = Session::new();
+        let stores = LibraryStores { dir: "browser".into(), catalog: Box::new(files.store()), files: Box::new(files.store()), on_disk: false };
+        s.open_library_in(stores, true).unwrap();
+        assert_eq!(crate::backup::unsaved_refusal(s.unsaved()), None, "everything saved: the backup may start");
+        files.set_error(Some("QuotaExceededError".into()));
+        let _ = s.execute("photo.rate", &json!({"rating": 5}));
+        let refusal = crate::backup::unsaved_refusal(s.unsaved()).expect("refused while the rating is unsaved");
+        assert!(refusal.contains("could not be saved") && refusal.contains("QuotaExceeded"), "{refusal}");
+        files.set_error(None);
+        s.persist_if_dirty();
+        s.persist().unwrap();
+        assert_eq!(crate::backup::unsaved_refusal(s.unsaved()), None, "allowed again once the change is written");
+    }
+
+    #[test]
+    fn unsaved_refusal_counts_changes() {
+        use crate::backup::unsaved_refusal;
+        assert!(unsaved_refusal(Some((1, "quota"))).unwrap().contains("1 change could not"));
+        assert!(unsaved_refusal(Some((3, "quota"))).unwrap().contains("3 changes could not"));
+    }
+
     #[test]
     fn library_survives_reload_through_flushes() {
         let mut disk = BTreeMap::new();

@@ -1,5 +1,13 @@
 # What's new in LightCraft
 
+## 2026-10-15
+
+### Web: no backup that misses unsaved changes
+- In the browser version, File ▸ Back Up Library… no longer reports success while a save is failing (storage full or
+  cleared): the backup copies the stored library, so it left out the changes that couldn't be saved (issue #1508). It
+  now refuses to start and says how many changes are unsaved and why. LightCraft retries the save with every change;
+  back up once nothing is left unsaved.
+
 ## 2026-10-14
 
 ### Lightroom radial masks on the right side

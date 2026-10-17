@@ -173,6 +173,9 @@ fn services(originals: Originals, backend: Option<Backend>, files: Files, frozen
         screen_profile: None,
         backup_library: Some(Box::new(move |session: &mut Session| {
             let Some(b) = backup_backend.clone() else { return Err("nothing is stored in this browser session (?store=memory)".into()) };
+            if let Some(why) = crate::backup::unsaved_refusal(session.unsaved()) {
+                return Err(why);
+            }
             // the photos' own names for the originals in the zip
             let names: std::collections::HashMap<String, String> = session
                 .catalog

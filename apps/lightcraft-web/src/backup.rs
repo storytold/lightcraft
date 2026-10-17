@@ -52,6 +52,18 @@ pub fn valid_hash(h: &str) -> bool {
     !h.is_empty() && h.len() <= 128 && h.chars().all(|c| c.is_ascii_alphanumeric())
 }
 
+/// Why a backup can't start yet, given [`lightcraft_engine::Session::unsaved`]: changes applied in
+/// the app but not yet written to browser storage (a save failed). The zip copies the stored
+/// library files, so it would report success while missing them; `None` when everything is saved.
+pub fn unsaved_refusal(unsaved: Option<(usize, &str)>) -> Option<String> {
+    let (ops, why) = unsaved?;
+    let changes = if ops == 1 { "1 change".to_string() } else { format!("{ops} changes") };
+    Some(format!(
+        "Backup not started: {changes} could not be saved to browser storage yet ({why}), so the backup would miss them. \
+         Free up storage space; LightCraft retries the save with every change. Back up once nothing is left unsaved."
+    ))
+}
+
 /// Zip entry name for an original.
 pub fn original_entry(hash: &str, file_name: &str) -> String {
     let name: String = file_name.chars().map(|c| if c == '/' || c == '\\' || c.is_control() { '_' } else { c }).collect();
