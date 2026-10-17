@@ -1772,6 +1772,23 @@ mod tests {
         h.settle(SETTLE);
     }
 
+    /// Hovering the applied profile shows the applied look (no preview), not the last other profile hovered.
+    #[test]
+    fn hovering_the_applied_profile_drops_the_last_hover() {
+        let mut h = demo([1400.0, 900.0]);
+        let t = Duration::from_secs(10);
+        h.request("ui.set", json!({"view": "detail"}), t);
+        h.request("engine.execute", json!({"command": "panel.profiles"}), t);
+        h.settle(SETTLE);
+        h.request("ui.clickWidget", json!({"id": "profileCell:lc.vivid"}), t);
+        h.request("ui.hoverWidget", json!({"id": "profileCell:lc.portrait"}), t);
+        h.step();
+        assert!(h.app.hover_preview.is_some(), "another profile previews");
+        h.request("ui.hoverWidget", json!({"id": "profileCell:lc.vivid"}), t);
+        h.step();
+        assert!(h.app.hover_preview.is_none(), "the applied profile is shown, not the last hovered one");
+    }
+
     /// Presets column: resting on a preset previews it in the loupe without a history entry;
     /// thumbnails are variant renders; Create Preset includes only the checked groups.
     #[test]
