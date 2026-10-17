@@ -3,7 +3,7 @@
 //! that can be cancelled. The tasks come from the engine's registry ([`lightcraft_engine::activity`]); ✕ runs
 //! `activity.cancel` like any other frontend would.
 
-use egui::{Align, Layout, Margin, Rect, RichText, Sense, Stroke, pos2, vec2};
+use egui::{Align, Layout, Margin, RichText, Sense, Stroke, pos2, vec2};
 use lightcraft_engine::activity::{TaskInfo, Unit};
 use serde_json::json;
 
@@ -136,7 +136,7 @@ fn row(ui: &mut egui::Ui, t: &Tokens, task: &TaskInfo, width: f32) -> bool {
                 clicked = resp.on_hover_text(tr("Cancel")).clicked();
             }
         });
-        bar(ui, t, task, width);
+        bar(ui, task, width);
         let line = detail_line(task);
         if !line.is_empty() {
             ui.add(egui::Label::new(RichText::new(line).font(t.font(11.0)).color(t.text_dim)).truncate());
@@ -147,20 +147,7 @@ fn row(ui: &mut egui::Ui, t: &Tokens, task: &TaskInfo, width: f32) -> bool {
 }
 
 /// The progress bar; while the amount of work isn't known, a segment sweeps across.
-fn bar(ui: &mut egui::Ui, t: &Tokens, task: &TaskInfo, width: f32) {
-    let (rect, _) = ui.allocate_exact_size(vec2(width, 5.0), Sense::hover());
-    let p = ui.painter();
-    p.rect_filled(rect, 2.5, t.field);
-    let fill = if task.total > 0 {
-        let frac = (task.done as f64 / task.total as f64).clamp(0.0, 1.0) as f32;
-        Rect::from_min_size(rect.min, vec2(rect.width() * frac, rect.height()))
-    } else {
-        let phase = (ui.input(|i| i.time) * 0.7).fract() as f32;
-        let w = rect.width() * 0.3;
-        let x = rect.left() + (rect.width() + w) * phase - w;
-        Rect::from_min_max(pos2(x.max(rect.left()), rect.top()), pos2((x + w).min(rect.right()), rect.bottom()))
-    };
-    if fill.width() > 0.0 {
-        p.rect_filled(fill, 2.5, if task.cancelling { t.text_dim } else { t.accent });
-    }
+fn bar(ui: &mut egui::Ui, task: &TaskInfo, width: f32) {
+    let fraction = (task.total > 0).then(|| (task.done as f64 / task.total as f64) as f32);
+    crate::progress::Progress::new(fraction).width(width).dimmed(task.cancelling).show(ui);
 }

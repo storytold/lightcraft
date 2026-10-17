@@ -1,5 +1,14 @@
 # What's new in LightCraft
 
+## 2026-10-16
+
+### Progress looks the same everywhere
+- Download, scan, denoise and activity progress now use one bar that fills the width it is given, with its text on
+  it, and a gentle sweep while the amount of work isn't known yet. Waits that only said "Selecting…", "Waiting to
+  start…" or "Installing…" now show a small turning arc beside the text, and a thumbnail still being made shows a
+  quiet placeholder that fits the theme in the grid, the filmstrip and Compare. Screen readers hear a progress
+  indicator with its percentage.
+
 ## 2026-10-14
 
 ### Lightroom radial masks on the right side

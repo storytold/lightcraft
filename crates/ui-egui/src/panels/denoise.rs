@@ -168,7 +168,12 @@ pub fn detail_status(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, am
                 let now = ui.ctx().input(|i| i.time);
                 app.caches.denoise.next_pump = app.caches.denoise.next_pump.min(now + 0.05);
                 ui.ctx().request_repaint_after(std::time::Duration::from_millis(60));
-                egui::Frame::NONE.inner_margin(pad).show(ui, |ui| note(ui, "Waiting to start…", t.text_dim));
+                egui::Frame::NONE.inner_margin(pad).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        crate::progress::spinner(ui, 12.0);
+                        note(ui, "Waiting to start…", t.text_dim);
+                    })
+                });
             } else if amount > 0.0 {
                 egui::Frame::NONE.inner_margin(pad).show(ui, |ui| {
                     note(ui, "Its denoised picture is not made yet, and pictures are not made on their own (Settings, AI Denoise).", t.text_dim);
@@ -199,8 +204,7 @@ pub fn detail_status(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, am
                 } else {
                     tr("Starting…").to_string()
                 };
-                let bar = ui.add(egui::ProgressBar::new(frac).desired_width(ui.available_width().min(240.0)).text(RichText::new(text).size(11.0)));
-                register(ui.ctx(), "denoise:progress", bar.rect);
+                crate::progress::Progress::new(if total > 0 { Some(frac) } else { None }).label(text).widget("denoise:progress").show(ui);
             });
         }
         PhotoState::Failed { why, unsupported } => {
@@ -245,8 +249,12 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         .map(|v| v["downloads"].as_array().cloned().unwrap_or_default())
         .unwrap_or_default();
     heading(ui, t, "Models");
-    let r = ui.add_enabled(runtime && app.services.pick_denoise_model.is_some(), egui::Button::new(tr("Install from file…")));
-    register(ui.ctx(), "denoise:installFile", r.rect);
+    let installing = downloads.iter().any(|d| d["id"] == "local-install" && d["state"].as_str() == Some("installing"));
+    let r = crate::button::Button::new("Install from file…")
+        .enabled(runtime && app.services.pick_denoise_model.is_some())
+        .busy(installing)
+        .widget("denoise:installFile")
+        .show(ui);
     if r.clicked()
         && let Some(path) = app.services.pick_denoise_model.as_mut().and_then(|f| f().into_iter().next())
     {
@@ -333,8 +341,7 @@ fn work_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, list: &V
                 done = done,
                 total = total
             );
-            let bar = ui.add(egui::ProgressBar::new(frac).desired_width(380.0).text(RichText::new(text).size(11.5)));
-            register(ui.ctx(), "denoise:settingsProgress", bar.rect);
+            crate::progress::Progress::new(Some(frac)).label(text).widget("denoise:settingsProgress").show(ui);
         }
         None if queued > 0 => hint(ui, t, &count(queued, "photo waiting", "photos waiting")),
         None => {
@@ -444,11 +451,17 @@ fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, 
                         } else {
                             tr_format!("{} of {} from {host}", mb(Some(got)), mb(Some(total)), host = host)
                         };
-                        let bar = ui.add(egui::ProgressBar::new(frac).desired_width(260.0).text(RichText::new(text).font(t.font(11.5))));
-                        register(ui.ctx(), format!("denoise:progress:{id}"), bar.rect);
+                        crate::progress::Progress::new(Some(frac))
+                            .label(text)
+                            .width(crate::progress::ROW_WIDTH.min(ui.available_width()))
+                            .widget(format!("denoise:progress:{id}"))
+                            .show(ui);
                     }
                     (Some("done" | "installing"), _) => {
-                        ui.label(RichText::new(tr("Downloaded and checked. Installing…")).font(t.font(11.5)).color(t.text_dim));
+                        ui.horizontal(|ui| {
+                            crate::progress::spinner(ui, 12.0);
+                            ui.label(RichText::new(tr("Downloaded and checked. Installing…")).font(t.font(11.5)).color(t.text_dim));
+                        });
                     }
                     (Some("failed"), Some(d)) => {
                         let why = sentence(d["error"].as_str().unwrap_or("The download failed"));

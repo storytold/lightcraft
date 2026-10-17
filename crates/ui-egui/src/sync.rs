@@ -136,7 +136,7 @@ pub fn body(app: &LightcraftApp, ui: &mut egui::Ui, dlg: &mut Dialog) {
     ui.add_space(6.0);
     let Some(c) = counts.as_ref() else {
         ui.horizontal(|ui| {
-            ui.spinner();
+            crate::progress::spinner(ui, 14.0);
             match progress(app) {
                 Some((done, total)) if total > 0 => ui.label(format!("{} {done} / {total}", crate::i18n::tr("Scanning…"))),
                 _ => ui.label(crate::i18n::tr("Scanning…")),

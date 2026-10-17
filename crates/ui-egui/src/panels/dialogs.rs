@@ -133,7 +133,14 @@ fn watermark_preview(
                 Ok(img) => img,
                 Err(e) => {
                     let note = if e.is_some() { "Preview unavailable" } else { "Loading preview…" };
-                    let r = ui.label(egui::RichText::new(crate::i18n::tr(note)).color(t.text_dim));
+                    let r = ui
+                        .horizontal(|ui| {
+                            if e.is_none() {
+                                crate::progress::spinner(ui, 12.0);
+                            }
+                            ui.label(egui::RichText::new(crate::i18n::tr(note)).color(t.text_dim))
+                        })
+                        .inner;
                     if let Some(e) = e {
                         r.on_hover_text(e);
                     }
@@ -610,7 +617,10 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                             });
                         }
                         None => {
-                            ui.label(egui::RichText::new(crate::i18n::tr("Checking names…")).color(t.text_dim));
+                            ui.horizontal(|ui| {
+                                crate::progress::spinner(ui, 12.0);
+                                ui.label(egui::RichText::new(crate::i18n::tr("Checking names…")).color(t.text_dim));
+                            });
                         }
                     }
                     let more = total.saturating_sub(RENAME_PREVIEW_ROWS);
@@ -1663,8 +1673,7 @@ fn sam_model_body(app: &mut LightcraftApp, ui: &mut egui::Ui, error: Option<&str
         ui.add_space(4.0);
         let frac = if d.total > 0 { d.done as f64 / d.total as f64 } else { 0.0 };
         let text = format!("{:.2} / {:.2} GB · {}", gb(d.done), gb(d.total), d.file);
-        let r = ui.add(egui::ProgressBar::new(frac as f32).text(text));
-        crate::widgets::register(ui.ctx(), "progress:samDownload", r.rect);
+        crate::progress::Progress::new(Some(frac as f32)).label(text).widget("progress:samDownload").show(ui);
         let r = ui.button(crate::i18n::tr("Cancel Download"));
         crate::widgets::register(ui.ctx(), "button:samCancel", r.rect);
         if r.clicked() {

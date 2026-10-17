@@ -841,7 +841,8 @@ fn paint_cell(
             clip.add(egui::Shape::mesh(mesh));
         }
         None => {
-            clip.rect_filled(shown, 0.0, if photo.is_some() { Color32::from_gray(52) } else { Color32::from_gray(200) });
+            let t = Tokens::get(painter.ctx());
+            clip.rect_filled(shown, 0.0, if photo.is_some() { t.skeleton } else { t.track });
         }
     }
     if im.stroke_enabled && im.stroke_width_pt > 0.0 {

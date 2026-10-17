@@ -169,7 +169,10 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         };
         if let Some(status) = status {
             ui.add_space(4.0);
-            ui.add(egui::Label::new(egui::RichText::new(crate::i18n::tr(status)).color(t.text_dim)).wrap());
+            ui.horizontal_top(|ui| {
+                crate::progress::spinner(ui, 14.0);
+                ui.add(egui::Label::new(egui::RichText::new(crate::i18n::tr(status)).color(t.text_dim)).wrap());
+            });
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
         }
         // the model download, while its dialog is closed
@@ -178,10 +181,13 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 let pct = if download.total > 0 { download.done as f64 / download.total as f64 } else { 0.0 };
-                let r = ui.add(
-                    egui::ProgressBar::new(pct as f32).desired_width(ui.available_width() - 70.0).text(format!("SAM 3: {} %", (pct * 100.0).floor())),
-                );
-                register(ui.ctx(), "maskSamProgress", r.rect);
+                // the bar takes what the Details button leaves
+                let details = ui.spacing().interact_size.x + 30.0;
+                crate::progress::Progress::new(Some(pct as f32))
+                    .label(format!("SAM 3: {} %", (pct * 100.0).floor()))
+                    .width((ui.available_width() - details).max(96.0))
+                    .widget("maskSamProgress")
+                    .show(ui);
                 if text_button(ui, "maskSamDetails", crate::i18n::tr("Details"), false).clicked() {
                     app.offer_sam_download(None);
                 }
@@ -777,7 +783,8 @@ fn describe_field(app: &mut LightcraftApp, ui: &mut egui::Ui, new_mask: bool) {
     let mut submit = false;
     // the (translated) Select button is placed first, at the right; the field takes what is left
     ui.allocate_ui_with_layout(vec2(ui.available_width(), 24.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        if text_button(ui, "maskDescribeGo", crate::i18n::tr("Select"), false).clicked() {
+        let working = app.session.segmenter.analyzing() || app.session.segmenter.busy();
+        if crate::button::Button::new("Select").small().busy(working).widget("button:maskDescribeGo").show(ui).clicked() {
             submit = true;
         }
         let r = ui.add(
