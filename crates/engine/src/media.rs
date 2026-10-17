@@ -1644,6 +1644,28 @@ impl crate::Session {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FileStamp {
+    size: u64,
+    modified: Option<std::time::SystemTime>,
+    #[cfg(target_os = "linux")]
+    identity: (u64, u64),
+}
+
+impl FileStamp {
+    pub(crate) fn from_metadata(metadata: &std::fs::Metadata) -> Self {
+        Self {
+            size: metadata.len(),
+            modified: metadata.modified().ok(),
+            #[cfg(target_os = "linux")]
+            identity: {
+                use std::os::unix::fs::MetadataExt;
+                (metadata.dev(), metadata.ino())
+            },
+        }
+    }
+}
+
 /// What an import learns from a file header (set by the app from `lightcraft-codecs`/`-raw`).
 #[derive(Clone, Debug, Default)]
 pub struct ProbeInfo {
@@ -1652,6 +1674,8 @@ pub struct ProbeInfo {
     pub format: String,
     pub kind: MediaKind,
     pub file_size: u64,
+    /// Native source facts checked on workers before reusing review probes.
+    pub file_stamp: Option<FileStamp>,
     pub captured: Option<String>,
     /// The file's modification time (ISO 8601, the clock of [`crate::import::system_clock`]): the
     /// capture date of a file whose metadata has none, as Lightroom does (exports saved without
@@ -1670,6 +1694,21 @@ pub struct ProbeInfo {
     /// A raw variant that can't be decoded yet: why. The file is described (and will be shown and
     /// edited) from its embedded preview; see [`lightcraft_catalog::Photo::preview_only`].
     pub preview_only: Option<String>,
+}
+
+impl ProbeInfo {
+    pub(crate) fn cache_is_current(&self, path: &str) -> bool {
+        // Web files are not std::fs files; retain the upstream virtual-file exception.
+        if cfg!(target_arch = "wasm32") {
+            return true;
+        }
+        let metadata = std::fs::metadata(path).ok();
+        match &self.file_stamp {
+            Some(stamp) => metadata.is_some_and(|m| m.is_file() && stamp.size == self.file_size && *stamp == FileStamp::from_metadata(&m)),
+            // Virtual sources have no filesystem metadata. Custom hooks retain the size check.
+            None => metadata.is_none_or(|m| m.is_file() && m.len() == self.file_size),
+        }
+    }
 }
 
 pub type FileProbe = Arc<dyn Fn(&str) -> Result<ProbeInfo, String> + Send + Sync>;

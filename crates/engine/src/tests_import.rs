@@ -1748,3 +1748,120 @@ fn presets_apply_the_imported_profile_they_name() {
     assert_eq!(apply(&mut s, "Portra Soft").profile.id, "lc.vivid");
     let _ = std::fs::remove_dir_all(&src);
 }
+
+#[test]
+fn import_scan_can_exclude_subfolders() {
+    use crate::import::{ScanInput, ScanProgress, expand, expand_with_subfolders, scan_with};
+    let src = std::env::temp_dir().join("lc-import-review-scan").join(format!("engine-subfolders-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&src);
+    write_png(&src.join("original.png"), 1);
+    write_png(&src.join("exported/companion.png"), 2);
+    write_png(&src.join(".hidden/hidden.png"), 3);
+    std::fs::write(src.join("notes.txt"), "not a photo").unwrap();
+    let root = src.to_string_lossy().to_string();
+    let original = src.join("original.png").to_string_lossy().to_string();
+    let companion = src.join("exported/companion.png").to_string_lossy().to_string();
+    let paths = vec![root.clone()];
+    assert_eq!(expand_with_subfolders(&paths, None, false), vec![original.clone()]);
+    assert_eq!(expand(&paths, None), vec![companion.clone(), original.clone()]);
+    assert_eq!(expand_with_subfolders(&paths, Some(&src.join("exported")), true), vec![original.clone()]);
+    assert_eq!(
+        expand_with_subfolders(&[root, src.join("exported").to_string_lossy().to_string(), original.clone()], None, false),
+        vec![original.clone(), companion.clone()],
+        "directly named sources are included and duplicate paths removed"
+    );
+    let mut s = Session::new().with_fs();
+    let (input, paths) = ScanInput::new(&mut s, &paths);
+    let out = scan_with(input.with_subfolders(false), &paths, &ScanProgress::default());
+    assert!(out.has_folders);
+    assert_eq!(out.candidates.iter().map(|c| c.path.clone()).collect::<Vec<_>>(), vec![original.clone()]);
+    assert!(out.candidates.iter().all(|c| c.error.is_none()));
+    assert_eq!(s.catalog.len(), 0, "review never imports");
+    s.import_probes = out.probes;
+    let r = s.execute("library.import", &json!({"paths": [original]})).unwrap();
+    assert_eq!(ids(&r, "imported"), 1);
+    assert_eq!(s.catalog.len(), 1);
+    assert!(s.catalog.photos().all(|p| !matches!(&p.source, lightcraft_catalog::Source::File { path } if path == &companion)));
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+#[test]
+fn pre_cancelled_import_scans_skip_traversal_and_probing() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut session = crate::Session::new();
+    session.media.file_probe = Some(Arc::new({
+        let calls = calls.clone();
+        move |_| {
+            calls.fetch_add(1, Ordering::Relaxed);
+            Ok(crate::media::ProbeInfo::default())
+        }
+    }));
+    let paths = vec!["never-read.png".to_string()];
+    let (input, paths) = crate::import::ScanInput::new(&mut session, &paths);
+    let progress = crate::import::ScanProgress::default();
+    progress.cancel.store(true, Ordering::Relaxed);
+    let out = crate::import::scan_with(input, &paths, &progress);
+    assert!(out.candidates.is_empty() && out.probes.is_empty());
+    assert_eq!(calls.load(Ordering::Relaxed), 0);
+    assert_eq!(progress.total.load(Ordering::Relaxed), 0);
+}
+
+#[test]
+fn importing_after_a_canceled_rescan_consumes_shared_probes() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let dir = std::env::temp_dir().join("lc-import-review-scan").join(format!("consumed-probes-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("photo.png");
+    let write_image = |width: usize| {
+        let image = lightcraft_raster::Rgba8 { width, height: 8, data: vec![[12, 34, 56, 255]; width * 8] };
+        let bytes = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&image), &Default::default()).unwrap();
+        std::fs::write(&file, bytes).unwrap();
+    };
+    write_image(12);
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut session = Session::new().with_fs();
+    let probe = session.media.file_probe.clone().unwrap();
+    session.media.file_probe = Some(Arc::new({
+        let calls = calls.clone();
+        move |path| {
+            calls.fetch_add(1, Ordering::Relaxed);
+            probe(path)
+        }
+    }));
+    let paths = vec![file.to_string_lossy().to_string()];
+    crate::import::scan(&mut session, &paths);
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+    // A canceled worker may retain its snapshot while another import completes.
+    let (pending_input, _) = crate::import::ScanInput::new(&mut session, &paths);
+    let imported = session.execute("library.import", &json!({"paths": paths})).unwrap();
+    let id = lightcraft_catalog::PhotoId(imported["imported"][0].as_u64().unwrap());
+    assert_eq!(session.catalog.photo(id).unwrap().width, 12);
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+    session.execute("edit.undo", &json!({})).unwrap();
+    write_image(20);
+    let imported = session.execute("library.import", &json!({"paths": paths})).unwrap();
+    let id = lightcraft_catalog::PhotoId(imported["imported"][0].as_u64().unwrap());
+    assert_eq!(session.catalog.photo(id).unwrap().width, 20, "a consumed probe must not describe replacement bytes");
+    assert_eq!(calls.load(Ordering::Relaxed), 2);
+    drop(pending_input);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn invalid_preview_scope_keeps_retained_probes_and_catalog() {
+    let mut s = Session::new();
+    s.import_probes.insert("retained.png".into(), Default::default());
+    for value in [json!(null), json!("false"), json!(1), json!([])] {
+        assert!(s.execute("library.importPreview", &json!({"paths":["retained.png"], "subfolders":value})).is_err());
+        assert!(s.import_probes.contains_key("retained.png"));
+        assert_eq!(s.catalog.len(), 0);
+        assert!(s.undo.is_empty());
+    }
+}

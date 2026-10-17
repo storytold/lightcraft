@@ -42,6 +42,35 @@ fn has_slide(h: &Headless, item: impl Into<Item>) -> bool {
     }
 }
 
+fn assert_slides_prepared(h: &mut Headless, current: PhotoId, ahead: &[Item], on_frame: impl Fn(&Headless)) {
+    let start = h.time();
+    let position = play(h).position();
+    let advanced = std::cell::Cell::new(false);
+    let first_due = std::cell::Cell::new(None);
+    let rendered = h.step_until(SETTLE, |h| {
+        on_frame(h);
+        let Some(run) = h.app.ui.slideshow.as_ref() else {
+            advanced.set(true);
+            return false;
+        };
+        let same = run.play.current() == Item::Photo(current) && run.play.position() == position;
+        if !same {
+            advanced.set(true);
+        }
+        if same && first_due.get().is_none() && has_slide(h, current) {
+            first_due.set(Some(run.play.due()));
+        }
+        has_slide(h, current) && ahead.iter().all(|item| has_slide(h, *item))
+    });
+    assert!(!advanced.get(), "playback advanced or ended while waiting for the original three slides");
+    assert!(rendered, "the slide up and the next two slides are rendered");
+    assert_eq!(photo_up(h), current, "still on the first slide");
+    let first_due = first_due.get().expect("the first slide's texture supplied its deadline");
+    let ready_at = h.time();
+    let elapsed = ready_at - start;
+    assert!(ready_at < first_due, "before the first is due: elapsed={elapsed}, ready_at={ready_at}, first_due={first_due}");
+}
+
 /// The photo up now (none while a title screen is).
 fn photo_up(h: &Headless) -> PhotoId {
     play(h).current_photo().expect("a photo is up")
@@ -84,15 +113,9 @@ fn next_slides_are_prepared_before_they_are_due() {
     run(&mut h, "view.slideshow", json!({"interval": 60, "fadeDuration": 1, "preparePreviews": true, "seed": 7}));
     let ahead = play(&h).upcoming(crate::panels::slideshow::AHEAD);
     assert_eq!(ahead.len(), 2);
-    let start = h.time();
     // the slide up and the next two; their renders can finish in any order
     let current = photo_up(&h);
-    assert!(
-        h.step_until(SETTLE, |h| has_slide(h, current) && ahead.iter().all(|id| has_slide(h, *id))),
-        "the slide up and the next two slides are rendered"
-    );
-    assert!(h.time() - start < 60.0, "before the first is due");
-    assert_eq!(photo_up(&h), current, "still on the first slide");
+    assert_slides_prepared(&mut h, current, &ahead, |_| {});
     h.settle(SETTLE);
 
     // off: only the slide up is rendered until the next one is due
@@ -722,4 +745,38 @@ fn template_browser_previews_on_hover_applies_and_manages_user_templates() {
     assert_eq!(SlideLook::of(&h.app.session).overlays, before.overlays);
     h.settle(SETTLE);
     let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn prepared_slides_use_the_first_readiness_deadline() {
+    use std::{cell::Cell, rc::Rc};
+
+    let services = Services { png: None, ..Default::default() };
+    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+    let mut h = Headless::new(app, [1000.0, 700.0], 1.0);
+    let open = Rc::new(Cell::new(false));
+    h.app.renderer.set_offload(Box::new(crate::headless::RenderGate::new(open.clone())));
+    h.step();
+    run(&mut h, "view.slideshow", json!({"interval": 60, "fadeDuration": 1, "preparePreviews": true, "seed": 7}));
+    let current = photo_up(&h);
+    let ahead = play(&h).upcoming(crate::panels::slideshow::AHEAD);
+    assert_eq!(ahead.len(), 2);
+    let start = h.time();
+    let frame = h.frames();
+    assert_slides_prepared(&mut h, current, &ahead, |h| {
+        // Hold initial readiness beyond the old virtual bound, inside the existing bounded wait.
+        if !open.get() && h.frames() - frame >= 3601 {
+            assert!(h.time() - start > 60.0);
+            assert_eq!(photo_up(h), current);
+            assert!(!has_slide(h, current));
+            assert!(h.app.renderer.is_pending(Slot::Slide(current.into())));
+            for &item in &ahead {
+                assert!(!has_slide(h, item));
+                assert!(h.app.renderer.is_pending(Slot::Slide(item)), "requested before its due time");
+            }
+            assert!(play(h).waiting_for().is_none());
+            assert!(play(h).due() > h.time(), "initial readiness still postpones the deadline");
+            open.set(true);
+        }
+    });
 }

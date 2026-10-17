@@ -1507,14 +1507,19 @@ pub fn specs() -> Vec<CommandSpec> {
             "Review Import",
             [],
             None,
-            "{paths: [file or folder (recursive)]} → {candidates: [{path, name, format, kind, width, height, fileSize, captured, duplicate?: path|content, existing?, error?, previewOnly?: why a raw can only be shown from its embedded preview}], duplicates, scanned} — nothing is added",
+            "{paths: [file or folder], subfolders?: bool (default true)} → {candidates: [{path, name, format, kind, width, height, fileSize, captured, duplicate?: path|content, existing?, error?, previewOnly?: why a raw can only be shown from its embedded preview}], duplicates, scanned} — nothing is added",
             always,
             |s, p| {
                 let paths = strs(p, "paths");
                 if paths.is_empty() {
                     return Err(bad("library.importPreview", "no paths"));
                 }
-                let c = crate::import::scan(s, &paths);
+                let subfolders = match p.get("subfolders") {
+                    None => true,
+                    Some(Value::Bool(value)) => *value,
+                    Some(_) => return Err(bad("library.importPreview", "subfolders must be a boolean")),
+                };
+                let c = crate::import::scan_with_subfolders(s, &paths, subfolders);
                 let dups = c.iter().filter(|c| c.duplicate.is_some()).count();
                 Ok(json!({"scanned": c.len(), "duplicates": dups, "candidates": c}))
             }

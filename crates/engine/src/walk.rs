@@ -47,6 +47,30 @@ fn hidden(p: &Path) -> bool {
     p.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.'))
 }
 
+/// Optional import scope and worker cancellation. Defaults preserve [`files_in`]'s behavior.
+pub struct Options<'a> {
+    /// Read nested folders too; false omits them without reporting truncation.
+    pub subfolders: bool,
+    pub cancel: Option<&'a std::sync::atomic::AtomicBool>,
+    /// A worker-resolved folder identity; its descendants and directory aliases are excluded.
+    pub canonical_skip: Option<&'a Path>,
+    /// Share across source roots to list each physical directory once. Ordinary child folder
+    /// identities come from their canonical parent and entry name, without another metadata read.
+    pub directories: Option<&'a mut HashSet<PathBuf>>,
+}
+
+impl Default for Options<'_> {
+    fn default() -> Self {
+        Self { subfolders: true, cancel: None, canonical_skip: None, directories: None }
+    }
+}
+
+impl Options<'_> {
+    fn cancelled(&self) -> bool {
+        self.cancel.is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
+    }
+}
+
 /// What a folder's listing says an entry is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EntryKind {
@@ -65,48 +89,102 @@ pub type NoteFolder<'a> = &'a mut dyn FnMut(&Path, Vec<(std::ffi::OsString, Entr
 /// are left out, the folder `skip` (e.g. the library's own) is never entered, and the walk stops
 /// at `limits` (see [`Walked::truncated`]). Unreadable folders are skipped.
 pub fn files_in(root: &Path, skip: Option<&Path>, limits: Limits, keep: impl FnMut(&Path) -> bool) -> Walked {
-    walk(root, skip, limits, keep, None)
+    files_in_with(root, skip, limits, Options::default(), keep)
 }
 
 /// [`files_in`], handing the listing of every folder it reads to `note`: who walks a folder to
 /// find its files has, with that, the answer to "is this name there" for everything in it, and
 /// need not ask the disk again (a round trip for each name on a network share).
 pub fn files_in_noting(root: &Path, skip: Option<&Path>, limits: Limits, keep: impl FnMut(&Path) -> bool, note: NoteFolder) -> Walked {
-    walk(root, skip, limits, keep, Some(note))
+    files_in_with_noting(root, skip, limits, Options::default(), keep, note)
 }
 
-fn walk(root: &Path, skip: Option<&Path>, limits: Limits, mut keep: impl FnMut(&Path) -> bool, mut note: Option<NoteFolder>) -> Walked {
+/// [`files_in`] with optional direct-folder scope, cancellation and shared directory identities.
+/// Cancellation is checked before filesystem work, during listing and between queued entries;
+/// it does not report a limit truncation. Call only on a filesystem worker.
+pub fn files_in_with(root: &Path, skip: Option<&Path>, limits: Limits, options: Options<'_>, keep: impl FnMut(&Path) -> bool) -> Walked {
+    walk(root, skip, limits, options, keep, None)
+}
+
+/// [`files_in_with`], also handing over each folder's listing without another walk.
+pub(crate) fn files_in_with_noting(
+    root: &Path,
+    skip: Option<&Path>,
+    limits: Limits,
+    options: Options<'_>,
+    keep: impl FnMut(&Path) -> bool,
+    note: NoteFolder,
+) -> Walked {
+    walk(root, skip, limits, options, keep, Some(note))
+}
+
+fn walk(
+    root: &Path,
+    skip: Option<&Path>,
+    limits: Limits,
+    mut options: Options<'_>,
+    mut keep: impl FnMut(&Path) -> bool,
+    mut note: Option<NoteFolder>,
+) -> Walked {
     let mut out = Walked::default();
-    // canonical folders reached through a link, so a link loop is walked at most once
+    if options.cancelled() {
+        return out;
+    }
+    let canonical = std::fs::canonicalize(root).ok();
+    let identities = options.directories.is_some() || options.canonical_skip.is_some();
+    // Default callers retain the existing link-only seen set. Import shares all directory
+    // identities and checks them when popped in path order, preserving the first source spelling.
     let mut linked: HashSet<PathBuf> = HashSet::new();
-    if let Ok(c) = std::fs::canonicalize(root) {
-        linked.insert(c);
+    if let Some(c) = &canonical {
+        linked.insert(c.clone());
     }
     // Include aliases to the library in the exclusion, not just its lexical path.
     let skip_canonical = skip.and_then(|p| std::fs::canonicalize(p).ok());
-    // (path, depth of the folder it is in, is a folder); popped in path order
-    let mut stack: Vec<(PathBuf, usize, bool)> = vec![(root.to_path_buf(), 0, true)];
-    while let Some((path, depth, is_dir)) = stack.pop() {
+    // (path, depth of the folder it is in, is a folder, canonical folder identity)
+    let mut stack = vec![(root.to_path_buf(), 0usize, true, canonical.filter(|_| identities))];
+    while let Some((path, depth, is_dir, canonical)) = stack.pop() {
+        if options.cancelled() {
+            break;
+        }
         if !is_dir {
             if keep(&path) {
                 out.files.push(path);
             }
             continue;
         }
-        if skip.is_some_and(|s| path == s) || skip_canonical.as_ref().is_some_and(|s| std::fs::canonicalize(&path).is_ok_and(|p| p.starts_with(s))) {
+        if (depth > 0 && !options.subfolders)
+            || skip.is_some_and(|s| path == s)
+            || skip_canonical.as_ref().is_some_and(|s| std::fs::canonicalize(&path).is_ok_and(|p| p.starts_with(s)))
+        {
             continue;
+        }
+        if identities {
+            let Some(c) = &canonical else { continue };
+            if options.canonical_skip.is_some_and(|s| c.starts_with(s)) || options.directories.as_ref().is_some_and(|seen| seen.contains(c)) {
+                continue;
+            }
         }
         if depth >= limits.max_depth {
             out.truncated = true;
             continue;
         }
+        if options.cancelled() {
+            break;
+        }
         let Ok(rd) = std::fs::read_dir(&path) else { continue };
-        let mut children: Vec<(PathBuf, bool)> = Vec::new();
-        // (the folder's listing, for who asked for it; all of it unless something below says otherwise)
+        if let (Some(seen), Some(c)) = (options.directories.as_mut(), &canonical) {
+            seen.insert(c.clone());
+        }
+        let mut children = Vec::new();
+        // A partial or cancelled listing must not answer that an unlisted file is missing.
         let mut listed = note.is_some().then(Vec::new);
         let mut complete = true;
-        for e in rd {
-            let Ok(e) = e else {
+        for entry in rd {
+            if options.cancelled() {
+                complete = false;
+                break;
+            }
+            let Ok(e) = entry else {
                 complete = false;
                 continue;
             };
@@ -137,29 +215,36 @@ fn walk(root: &Path, skip: Option<&Path>, limits: Limits, mut keep: impl FnMut(&
                 continue;
             }
             let Ok(ft) = ft else { continue };
-            let dir = if ft.is_symlink() {
-                // a link (or a Windows junction): a folder is entered once, a file is a file
+            let (dir, identity) = if ft.is_symlink() {
+                // A link to a folder needs its target identity; regular entries use file_type.
                 match std::fs::metadata(&p) {
                     Ok(m) if m.is_dir() => {
-                        let Ok(c) = std::fs::canonicalize(&p) else { continue };
-                        if !linked.insert(c) {
+                        if !options.subfolders {
                             continue;
                         }
-                        true
+                        let Ok(c) = std::fs::canonicalize(&p) else { continue };
+                        if options.directories.is_none() && !linked.insert(c.clone()) {
+                            continue;
+                        }
+                        (true, identities.then_some(c))
                     }
-                    _ => false,
+                    _ => (false, None),
                 }
             } else {
-                ft.is_dir()
+                let dir = ft.is_dir();
+                if dir && !options.subfolders {
+                    continue;
+                }
+                (dir, canonical.as_ref().filter(|_| dir).map(|c| c.join(e.file_name())))
             };
-            children.push((p, dir));
+            children.push((p, dir, identity));
         }
         if let (Some(note), Some(listed)) = (note.as_mut(), listed) {
-            note(&path, listed, complete);
+            note(&path, listed, complete && !options.cancelled());
         }
         children.sort();
         let below = depth.saturating_add(1);
-        stack.extend(children.into_iter().rev().map(|(p, d)| (p, below, d)));
+        stack.extend(children.into_iter().rev().map(|(p, d, c)| (p, below, d, c)));
     }
     out
 }
@@ -295,5 +380,131 @@ mod tests {
         assert!(w.files.len() <= 2, "{w:?}");
         assert!(w.files.iter().any(|p| p.ends_with("a/b/p.jpg")), "{w:?}");
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn direct_scope_omits_children_without_truncation_and_allows_named_children() {
+        let d = tmp("direct-scope");
+        std::fs::create_dir_all(d.join("child")).unwrap();
+        std::fs::write(d.join("a.jpg"), b"healthy").unwrap();
+        std::fs::write(d.join("child/b.jpg"), b"healthy").unwrap();
+        let mut seen = HashSet::new();
+        let limits = Limits { max_depth: 1, max_entries: 10 };
+        let options = Options { subfolders: false, directories: Some(&mut seen), ..Default::default() };
+        let direct = files_in_with(&d, None, limits, options, |_| true);
+        assert_eq!(direct.files, [d.join("a.jpg")]);
+        assert_eq!((direct.entries, direct.truncated), (2, false));
+        let options = Options { subfolders: false, directories: Some(&mut seen), ..Default::default() };
+        let child = files_in_with(&d.join("child"), None, limits, options, |_| true);
+        assert_eq!(child.files, [d.join("child/b.jpg")]);
+        assert!(!child.truncated);
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn pre_cancelled_walk_does_no_listing_or_filtering() {
+        use std::sync::atomic::AtomicBool;
+        let d = tmp("pre-cancel");
+        std::fs::write(d.join("a.jpg"), b"healthy").unwrap();
+        let cancel = AtomicBool::new(true);
+        let options = Options { cancel: Some(&cancel), ..Default::default() };
+        let w = files_in_with(&d, None, Limits::default(), options, |_| panic!("cancelled before filtering"));
+        assert_eq!(w, Walked::default());
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn cancelled_walk_stops_between_files_and_folders() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let d = tmp("during-cancel");
+        std::fs::create_dir_all(d.join("z-child")).unwrap();
+        for f in ["a.jpg", "b.jpg", "z-child/c.jpg"] {
+            std::fs::write(d.join(f), b"healthy").unwrap();
+        }
+        let cancel = AtomicBool::new(false);
+        let mut seen = HashSet::new();
+        let options = Options { cancel: Some(&cancel), directories: Some(&mut seen), ..Default::default() };
+        let w = files_in_with(&d, None, Limits::default(), options, |_| {
+            cancel.store(true, Ordering::Relaxed);
+            true
+        });
+        assert_eq!(w.files, [d.join("a.jpg")]);
+        assert_eq!((w.entries, w.truncated), (3, false));
+        assert!(!seen.contains(&d.join("z-child").canonicalize().unwrap()));
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn shared_sources_choose_first_directory_alias_and_preserve_distinct_files() {
+        let d = tmp("shared-sources");
+        let real = d.join("real");
+        std::fs::create_dir_all(&real).unwrap();
+        std::fs::write(real.join("a.jpg"), b"same healthy bytes").unwrap();
+        std::fs::copy(real.join("a.jpg"), real.join("copy.jpg")).unwrap();
+        std::os::unix::fs::symlink(real.join("a.jpg"), real.join("file-alias.jpg")).unwrap();
+        let alias = d.join("alias");
+        std::os::unix::fs::symlink(&real, &alias).unwrap();
+        let mut seen = HashSet::new();
+        let options = Options { directories: Some(&mut seen), ..Default::default() };
+        let first = files_in_with(&alias, None, Limits::default(), options, |_| true);
+        assert_eq!(first.files, [alias.join("a.jpg"), alias.join("copy.jpg"), alias.join("file-alias.jpg")]);
+        assert!(!first.truncated);
+        let options = Options { directories: Some(&mut seen), ..Default::default() };
+        assert_eq!(files_in_with(&real, None, Limits::default(), options, |_| true), Walked::default());
+        // Overlapping parents also omit already-listed directory identities, not file copies.
+        let options = Options { directories: Some(&mut seen), ..Default::default() };
+        let parent = files_in_with(&d, None, Limits::default(), options, |_| true);
+        assert!(parent.files.is_empty() && !parent.truncated);
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn canonical_skip_excludes_real_alias_and_nested_directory_sources() {
+        let d = tmp("canonical-skip");
+        let lib = d.join("library");
+        let outside = d.join("library-other");
+        for dir in [lib.join("originals"), outside.clone()] {
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("a.jpg"), b"healthy").unwrap();
+        }
+        std::os::unix::fs::symlink(&lib, d.join("alias")).unwrap();
+        std::os::unix::fs::symlink(lib.join("originals"), d.join("nested-alias")).unwrap();
+        let canonical_skip = lib.canonicalize().unwrap();
+        let mut seen = HashSet::new();
+        for root in [&lib, &lib.join("originals"), &d.join("alias"), &d.join("nested-alias")] {
+            let options = Options { canonical_skip: Some(&canonical_skip), directories: Some(&mut seen), ..Default::default() };
+            assert_eq!(files_in_with(root, Some(&lib), Limits::default(), options, |_| true), Walked::default());
+        }
+        let options = Options { canonical_skip: Some(&canonical_skip), directories: Some(&mut seen), ..Default::default() };
+        let w = files_in_with(&d, Some(&lib), Limits::default(), options, |_| true);
+        assert_eq!(w.files, [outside.join("a.jpg")]);
+        assert!(!w.truncated);
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn scoped_walks_still_report_entry_and_depth_bounds() {
+        let d = tmp("scoped-bounds");
+        std::fs::create_dir_all(d.join("a/b")).unwrap();
+        std::fs::write(d.join("a/b/deep.jpg"), b"healthy").unwrap();
+        for i in 0..6 {
+            std::fs::write(d.join(format!("{i}.jpg")), b"healthy").unwrap();
+        }
+        let mut seen = HashSet::new();
+        let options = Options { directories: Some(&mut seen), ..Default::default() };
+        let w = files_in_with(&d, None, Limits { max_depth: 1, max_entries: 20 }, options, |_| true);
+        assert_eq!(w.files.len(), 6);
+        assert!(w.truncated);
+        let options = Options { subfolders: false, ..Default::default() };
+        let w = files_in_with(&d, None, Limits { max_depth: 1, max_entries: 3 }, options, |_| true);
+        assert_eq!(w.entries, 3);
+        assert!(w.truncated);
+        let _ = std::fs::remove_dir_all(d);
     }
 }

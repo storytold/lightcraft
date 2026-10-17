@@ -159,6 +159,9 @@ impl Organize {
 #[serde(default, rename_all = "camelCase")]
 pub struct ImportCandidate {
     pub path: String,
+    /// Stable filesystem identity, computed on the scan worker for checkbox persistence.
+    #[serde(skip)]
+    pub selection_identity: String,
     pub name: String,
     pub format: String,
     pub kind: MediaKind,
@@ -374,8 +377,8 @@ pub fn is_supported(path: &Path) -> bool {
 }
 
 /// Expand files and folders (recursively) into supported files. `skip` (e.g. the library folder)
-/// is never descended into. Each folder's walk is bounded ([`crate::walk::Limits::default`]); a
-/// walk that stops at a bound is logged.
+/// is never descended into, including directory aliases. Each folder's walk is bounded
+/// ([`crate::walk::Limits::default`]); a walk that stops at a bound is logged.
 pub fn expand(paths: &[String], skip: Option<&Path>) -> Vec<String> {
     expand_within(paths, skip, crate::walk::Limits::default()).0
 }
@@ -391,19 +394,50 @@ pub(crate) fn expand_noting(
     paths: &[String],
     skip: Option<&Path>,
     limits: crate::walk::Limits,
+    note: Option<crate::walk::NoteFolder>,
+) -> (Vec<String>, bool) {
+    expand_scoped(paths, skip, limits, true, None, note)
+}
+
+/// As [`expand`], optionally reading only the directly named folders' files.
+pub fn expand_with_subfolders(paths: &[String], skip: Option<&Path>, subfolders: bool) -> Vec<String> {
+    expand_cancellable(paths, skip, subfolders, None)
+}
+
+fn expand_cancellable(paths: &[String], skip: Option<&Path>, subfolders: bool, cancel: Option<&std::sync::atomic::AtomicBool>) -> Vec<String> {
+    expand_scoped(paths, skip, crate::walk::Limits::default(), subfolders, cancel, None).0
+}
+
+fn expand_scoped(
+    paths: &[String],
+    skip: Option<&Path>,
+    limits: crate::walk::Limits,
+    subfolders: bool,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
     mut note: Option<crate::walk::NoteFolder>,
 ) -> (Vec<String>, bool) {
+    let cancelled = || cancel.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed));
+    if cancelled() {
+        return (Vec::new(), false);
+    }
+    // Identity resolution belongs to the filesystem half, never ScanInput/ImportJob snapshots.
+    let canonical_skip = skip.and_then(|p| p.canonicalize().ok());
+    let mut directories = std::collections::HashSet::new();
     let mut out = Vec::new();
     let mut truncated = false;
     for p in paths {
+        if cancelled() {
+            break;
+        }
         let p = Path::new(p);
         if skip.is_some_and(|s| p == s) {
             continue;
         }
         if p.is_dir() {
+            let options = crate::walk::Options { subfolders, cancel, canonical_skip: canonical_skip.as_deref(), directories: Some(&mut directories) };
             let w = match note.as_mut() {
-                Some(note) => crate::walk::files_in_noting(p, skip, limits, is_supported, &mut **note),
-                None => crate::walk::files_in(p, skip, limits, is_supported),
+                Some(note) => crate::walk::files_in_with_noting(p, skip, limits, options, is_supported, &mut **note),
+                None => crate::walk::files_in_with(p, skip, limits, options, is_supported),
             };
             if w.truncated {
                 log::warn!(
@@ -568,13 +602,14 @@ fn copy_into(dir: &Path, src: &str, name: Option<&str>, probe_hash: Option<&str>
 /// What a [`scan`] needs from the session, so it can run on another thread (a folder on a network
 /// share can take minutes to read).
 pub struct ScanInput {
+    subfolders: bool,
     probe: Option<crate::media::FileProbe>,
     skip: Option<PathBuf>,
     /// The library as it is now (photos are shared with the session, not copied): looked up for
     /// the files the scan finds ([`library_files`]) and the contents it probes
     /// ([`library_hashes`]), on the scan's thread.
     library: std::sync::Arc<lightcraft_catalog::Catalog>,
-    cache: HashMap<String, ProbeInfo>,
+    cache: std::sync::Arc<HashMap<String, ProbeInfo>>,
 }
 
 /// The library's photos of `files`: path → (photo, its summary as a candidate that is there
@@ -638,6 +673,8 @@ pub struct ScanProgress {
 
 /// The result of [`scan_with`]: the candidates, and the probes to keep for the import that follows.
 pub struct ScanOutput {
+    /// Whether a directly named source was a folder (checked on the scan worker).
+    pub has_folders: bool,
     pub candidates: Vec<ImportCandidate>,
     pub probes: HashMap<String, ProbeInfo>,
 }
@@ -648,7 +685,13 @@ impl ScanInput {
         // (no table of the library here: this is the session's thread, and the library may hold
         // millions of photos. The scan looks up what it finds)
         let library = std::sync::Arc::new(s.catalog.clone());
-        let input = ScanInput { probe: s.media.file_probe.clone(), skip, library, cache: std::mem::take(&mut s.import_probes) };
+        let cache = if s.import_probes.is_empty() {
+            s.import_probe_cache.clone().unwrap_or_default()
+        } else {
+            std::sync::Arc::new(std::mem::take(&mut s.import_probes))
+        };
+        s.import_probe_cache = Some(cache.clone());
+        let input = ScanInput { subfolders: true, probe: s.media.file_probe.clone(), skip, library, cache };
         (input, paths.to_vec())
     }
 
@@ -661,38 +704,61 @@ impl ScanInput {
     pub(crate) fn library(&self) -> std::sync::Arc<lightcraft_catalog::Catalog> {
         std::sync::Arc::clone(&self.library)
     }
+
+    /// Include nested folders (the default), or just the directly named folders' files.
+    pub fn with_subfolders(mut self, subfolders: bool) -> Self {
+        self.subfolders = subfolders;
+        self
+    }
 }
 
 /// Find and probe what importing `paths` would add, marking duplicates (by path, or by content
 /// against the library and earlier candidates). Nothing is added; the probes are kept for the
 /// import that follows.
 pub fn scan(s: &mut Session, paths: &[String]) -> Vec<ImportCandidate> {
+    scan_with_subfolders(s, paths, true)
+}
+
+/// Preview only the directly named folders when `subfolders` is false.
+pub fn scan_with_subfolders(s: &mut Session, paths: &[String], subfolders: bool) -> Vec<ImportCandidate> {
     let (input, paths) = ScanInput::new(s, paths);
+    let input = input.with_subfolders(subfolders);
     let out = scan_with(input, &paths, &ScanProgress::default());
-    s.import_probes = out.probes;
+    s.accept_import_scan(out.probes);
     out.candidates
 }
 
 /// [`scan`] without the session, so it can run on a worker thread. Stops early (returning what it
 /// has) when `progress.cancel` is set.
 pub fn scan_with(input: ScanInput, paths: &[String], progress: &ScanProgress) -> ScanOutput {
-    let files = expand(paths, input.skip.as_deref());
-    scan_files(input, files, progress)
+    use std::sync::atomic::Ordering::Relaxed;
+    if progress.cancel.load(Relaxed) {
+        return ScanOutput { has_folders: false, candidates: Vec::new(), probes: HashMap::new() };
+    }
+    let has_folders = paths.iter().take_while(|_| !progress.cancel.load(Relaxed)).any(|p| Path::new(p).is_dir());
+    let files = expand_cancellable(paths, input.skip.as_deref(), input.subfolders, Some(&progress.cancel));
+    let mut out = scan_files(input, files, progress);
+    out.has_folders = has_folders;
+    out
 }
 
 /// [`scan_with`] for files that were found already (`paths` expanded, [`expand`]).
-pub(crate) fn scan_files(mut input: ScanInput, files: Vec<String>, progress: &ScanProgress) -> ScanOutput {
+pub(crate) fn scan_files(input: ScanInput, files: Vec<String>, progress: &ScanProgress) -> ScanOutput {
     use std::sync::atomic::Ordering::Relaxed;
+    if progress.cancel.load(Relaxed) {
+        return ScanOutput { has_folders: false, candidates: Vec::new(), probes: HashMap::new() };
+    }
     let by_path = library_files(&input.library, &files);
     let todo: Vec<String> = files.iter().filter(|f| !by_path.contains_key(Path::new(f))).cloned().collect();
     progress.total.store(todo.len(), Relaxed);
-    // probes from a preceding `scan` are reused when the file is unchanged (same size)
+    // Recheck native source facts on this worker before reusing a preceding review.
     let cached: Vec<Option<ProbeInfo>> = todo
         .iter()
         .map(|f| {
-            let info = input.cache.remove(f)?;
-            let size = std::fs::metadata(f).map(|m| m.len()).ok();
-            (size.is_none() || size == Some(info.file_size)).then_some(info)
+            if progress.cancel.load(Relaxed) {
+                return None;
+            }
+            input.cache.get(f).filter(|info| info.cache_is_current(f)).cloned()
         })
         .collect();
     let missing: Vec<String> = todo.iter().zip(&cached).filter(|(_, c)| c.is_none()).map(|(f, _)| f.clone()).collect();
@@ -709,14 +775,19 @@ pub(crate) fn scan_files(mut input: ScanInput, files: Vec<String>, progress: &Sc
     let mut out = Vec::with_capacity(files.len());
     let mut kept = HashMap::new();
     for f in files {
+        if progress.cancel.load(Relaxed) {
+            break;
+        }
+        let selection_identity = Path::new(&f).canonicalize().ok().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
         if let Some((_, c)) = by_path.get(Path::new(&f)) {
             let mut c = c.clone();
+            c.selection_identity = selection_identity;
             c.name = Path::new(&f).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| f.clone());
             out.push(c);
             continue;
         }
         let name = Path::new(&f).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| f.clone());
-        let mut c = ImportCandidate { path: f.clone(), name, ..Default::default() };
+        let mut c = ImportCandidate { path: f.clone(), selection_identity, name, ..Default::default() };
         match probes.remove(&f) {
             Some(Ok(info)) => {
                 (c.format, c.kind, c.width, c.height, c.file_size, c.captured) =
@@ -742,7 +813,7 @@ pub(crate) fn scan_files(mut input: ScanInput, files: Vec<String>, progress: &Sc
         }
         out.push(c);
     }
-    ScanOutput { candidates: out, probes: kept }
+    ScanOutput { has_folders: false, candidates: out, probes: kept }
 }
 
 /// Import files/folders. See the module docs.
@@ -760,6 +831,7 @@ pub fn import_with(s: &mut Session, paths: &[String], opts: &ImportOptions) -> c
     let prepared = job.prepare(paths, &std::sync::atomic::AtomicBool::new(false));
     // probes a scan left for files not imported now stay for a later import
     s.import_probes.extend(std::mem::take(&mut job.cache));
+    s.import_probe_cache = job.shared_cache.take();
     commit_prepared(s, &job.opts, &job.now, prepared)
 }
 
@@ -787,6 +859,7 @@ pub struct ImportJob {
     file_bytes: Option<crate::merge::ByteReader>,
     /// Probes from a preceding scan (not read again).
     cache: HashMap<String, ProbeInfo>,
+    shared_cache: Option<std::sync::Arc<HashMap<String, ProbeInfo>>>,
     naming: crate::sidecar::SidecarNaming,
     now: String,
     seq: usize,
@@ -933,6 +1006,7 @@ impl ImportJob {
             probe: s.media.file_probe.clone(),
             file_bytes: s.media.file_bytes.clone(),
             cache: std::mem::take(&mut s.import_probes),
+            shared_cache: s.import_probe_cache.take(),
             naming: s.xmp.naming,
             now: (s.clock)(),
             total: Default::default(),
@@ -1006,15 +1080,28 @@ impl ImportJob {
             }
         }
 
-        // files a preceding scan already probed are not read again (a network share is slow to read),
-        // as long as they are still there, as they were: a file gone or changed since is probed again
-        let cached: Vec<Option<ProbeInfo>> = todo
+        // Reuse review probes only while native sources remain regular files with the same
+        // size and identity/time stamp. Freshness checks and shared-cache consumption
+        // happen on this worker, leaving an in-flight scan's snapshot intact.
+        let cached: Vec<Option<Result<ProbeInfo, String>>> = todo
             .iter()
             .map(|f| {
-                // (the web's files are not std::fs files: kept as probed)
-                self.cache
-                    .remove(f)
-                    .filter(|info| cfg!(target_arch = "wasm32") || std::fs::metadata(f).is_ok_and(|m| m.is_file() && m.len() == info.file_size))
+                if cancel.load(Relaxed) {
+                    return Some(Err("cancelled".into()));
+                }
+                let primary = self.cache.remove(f);
+                let retained =
+                    self.shared_cache.as_mut().and_then(|cache| if cache.contains_key(f) { std::sync::Arc::make_mut(cache).remove(f) } else { None });
+                let info = primary.or(retained)?;
+                if info.cache_is_current(f) {
+                    Some(Ok(info))
+                } else if mode == ImportMode::Copy {
+                    // Copy has always refused bytes changed since review, rather than copying
+                    // a different photo. The consumed probe lets a deliberate retry probe afresh.
+                    Some(Err("source changed meanwhile; review or retry the import".into()))
+                } else {
+                    None
+                }
             })
             .collect();
         let missing: Vec<String> = todo.iter().zip(&cached).filter(|(_, c)| c.is_none()).map(|(f, _)| f.clone()).collect();
@@ -1023,7 +1110,7 @@ impl ImportJob {
         self.read_total.fetch_add(missing.len(), Relaxed);
         let mut fresh = probe_all(self.probe.as_ref(), &missing, &self.read_done, cancel).into_iter();
         let probed: Vec<Result<ProbeInfo, String>> =
-            cached.into_iter().map(|c| c.map(Ok).unwrap_or_else(|| fresh.next().unwrap_or_else(|| Err("not probed".into())))).collect();
+            cached.into_iter().map(|c| c.unwrap_or_else(|| fresh.next().unwrap_or_else(|| Err("not probed".into())))).collect();
         crate::memory::release();
         // Files are planned one by one, in order (duplicates, sidecars, names, folders); their
         // copies or moves — the slow part, reading and writing every byte and verifying it — are
@@ -1538,7 +1625,7 @@ impl Session {
         let id = PhotoId(u64::MAX - slot);
         let mut p = Photo::new(id, Source::File { path: c.path.clone() }, &c.name, &c.format, c.width.max(1), c.height.max(1), "");
         p.kind = c.kind;
-        if let Some(info) = self.import_probes.get(&c.path) {
+        if let Some(info) = self.cached_import_probe(&c.path) {
             p.as_shot_wb = info.as_shot_wb;
             p.embedded_lens = info.embedded_lens;
             p.preview_only = info.preview_only.clone();
@@ -1659,3 +1746,7 @@ mod prepared_tests {
         assert!(prepared.items.is_empty());
     }
 }
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "import/tests_scan_review.rs"]
+mod scan_review_tests;
