@@ -14,7 +14,7 @@ use lightcraft_raster::resample::{Filter, fit};
 use crate::media::{DenoiseSpec, FileLoader, FileProbe, PairLoader, PreviewLoader, ProbeInfo};
 
 fn meta_of(m: &lightcraft_meta::Metadata) -> (Meta, Option<String>) {
-    let shutter = m.exposure_time.map(|t| if t >= 1.0 { format!("{t:.0}") } else { format!("1/{:.0}", 1.0 / t) }).unwrap_or_default();
+    let shutter = m.exposure_display().map(|s| s.trim_end_matches('″').to_string()).unwrap_or_default();
     let camera = [m.make.clone().unwrap_or_default(), m.model.clone().unwrap_or_default()].join(" ").trim().to_string();
     let meta = Meta {
         camera,
@@ -1108,6 +1108,27 @@ impl crate::Session {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    #[test]
+    fn imported_shutter_times_survive_catalog_and_export_metadata() {
+        use lightcraft_catalog::{Catalog, Photo, PhotoId};
+        for t in [0.3, 0.4, 0.6, 0.8, 1.3, 1.6, 2.5, 3.2, 0.625, 1.0 / 2.8, 0.003, 1.0 / 250.0] {
+            let original = lightcraft_meta::Metadata { exposure_time: Some(t), ..Default::default() };
+            let (meta, _) = meta_of(&original);
+            assert_eq!(lightcraft_catalog::parse_shutter_seconds(&meta.shutter), Some(t));
+            // Exercise the persisted string, not a value kept alongside it in memory.
+            let meta: Meta = serde_json::from_str(&serde_json::to_string(&meta).unwrap()).unwrap();
+            let mut photo = Photo::new(PhotoId(1), lightcraft_catalog::Source::Demo { scene: 0 }, "capture.jpg", "JPEG", 2, 2, "");
+            photo.meta = meta;
+            let exported = crate::export::export_metadata(&photo, &Catalog::new(), &crate::export::ExportOptions::default()).unwrap();
+            assert_eq!(exported.exposure_time, Some(t));
+            let bytes =
+                crate::export::encode_with_metadata(&lightcraft_raster::Rgba8::new(2, 2), &crate::export::ExportOptions::default(), Some(&exported))
+                    .unwrap();
+            let back = lightcraft_meta::extract(&bytes);
+            assert!((back.exposure_time.unwrap() - t).abs() < 0.000001, "{t}: {:?}", back.exposure_time);
+        }
+    }
+
     /// Keywords from a file keep their hierarchy: the paths of `lr:hierarchicalSubject`, not the
     /// flat names of `dc:subject` that LightCraft's exports (and Lightroom Classic) write besides
     /// them; an exported `travel|Italy|Rome` comes back as itself.

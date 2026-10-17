@@ -231,18 +231,21 @@ impl Metadata {
         }
     }
 
-    /// Exposure time formatted like cameras show it: `1/250`, `0.5`, `2″`.
+    /// Exposure time without rounding away capture metadata: `1/250`, `0.625`, `1.3″`.
     pub fn exposure_display(&self) -> Option<String> {
         let t = self.exposure_time?;
-        if t.is_nan() || t <= 0.0 {
+        if !t.is_finite() || t <= 0.0 {
             return None;
         }
-        Some(if t < 0.3 {
-            format!("1/{}", (1.0 / t).round())
+        let denominator = (1.0 / t).round();
+        // Only use a reciprocal when parsing it recovers the original duration.
+        // Decimal thirds of a stop and unusual camera rationals must not be quantized.
+        Some(if t < 0.3 && denominator.is_finite() && 1.0 / denominator == t {
+            format!("1/{denominator}")
         } else if t < 1.0 {
-            format!("{}", (t * 10.0).round() / 10.0)
+            t.to_string()
         } else {
-            format!("{}″", (t * 10.0).round() / 10.0)
+            format!("{t}″")
         })
     }
 
@@ -336,6 +339,22 @@ mod tests {
         assert_eq!(parse_number("1/0"), None);
         assert_eq!(parse_number("abc"), None);
         assert_eq!(parse_number("inf"), None);
+    }
+
+    #[test]
+    fn exposure_display_preserves_duration() {
+        for t in [0.3, 0.4, 0.6, 0.8, 1.3, 1.6, 2.5, 3.2, 0.625, 1.0 / 2.8, 0.003, 1.0 / 250.0] {
+            let text = Metadata { exposure_time: Some(t), ..Default::default() }.exposure_display().unwrap();
+            let number = text.trim_end_matches('″');
+            let actual = match number.split_once('/') {
+                Some((n, d)) => n.parse::<f64>().unwrap() / d.parse::<f64>().unwrap(),
+                None => number.parse::<f64>().unwrap(),
+            };
+            assert_eq!(actual, t, "{text}");
+        }
+        for t in [0.0, -1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(Metadata { exposure_time: Some(t), ..Default::default() }.exposure_display().is_none());
+        }
     }
 
     #[test]
