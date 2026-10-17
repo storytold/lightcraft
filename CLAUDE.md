@@ -92,7 +92,11 @@ of it. Full standard: `../craftrules/standards/never-crash.md`
   with it (`release.yml`, `CRAFT_FONTS_REQUIRED=1`) and ship the fonts' OFL licences. Tests that need these fonts skip
   without it; the FreeBSD CI job runs them with it. Rules: craftrules
   [`standards/fonts.md`](https://github.com/storytold/craftrules/blob/main/standards/fonts.md).
-- Icons drawn in code (e.g. `crates/ui-egui/src/icons.rs`) are original work and are recorded in `assets/ATTRIBUTION.md` as such; do not trace them from Adobe icons.
+- Icons drawn in code (`crates/ui-egui/src/icons.rs`) are our own work, or path data adapted from
+  [Lucide](https://lucide.dev) (ISC; the arms that call `lucide!`, each commented with its Lucide name). Both are
+  recorded in `assets/ATTRIBUTION.md`, and the Lucide notice is in `assets/licenses/ISC-Lucide.txt` and `NOTICE`.
+  Adapting a further Lucide icon means naming it in that attribution row. Never trace icons from Adobe products, and
+  never take icons from a GPL/LGPL set.
 - Demo/test images: generated procedurally by `lightcraft-scenes`, or CC0 downloads kept in the gitignored `corpus/` with their source recorded. Screenshots of Adobe apps live only in the gitignored `plan/` and are never committed or published.
 - **Enforced:** `cargo xtask assets` (in `ci`) fails when an image/icon/font/sound/video/raw/ICC/XMP file is not matched
   by a path pattern in the first column of `assets/ATTRIBUTION.md`, when a referenced licence file is missing, when a
