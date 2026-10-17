@@ -7,6 +7,9 @@
   while it reads the file's headers (issue #2128). Working out where each strip ends and which parts of the file to
   skip now takes time in proportion to the number of strips, and a file with more than about a million of them is
   read whole instead.
+- A damaged or crafted Epson ERF or Mamiya MEF whose raw image is far smaller than the size it declares is refused
+  before LightCraft sets aside memory for it (issue #2119). A few-kilobyte file used to make the import set aside
+  2 GB.
 
 ## 2026-10-14
 

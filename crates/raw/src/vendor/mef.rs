@@ -89,6 +89,9 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     // the white balance is measured from the samples, so the header probe reads them too
     let chunks = info.chunks(bytes.len() as u64);
     let src = chunks.first().and_then(|c| chunk_bytes(bytes, c)).ok_or_else(|| RawError::Corrupt("Mef strip outside file".into()))?;
+    if chunks.first().is_none_or(|c| src.len() as u64 != c.len) {
+        return Err(RawError::Corrupt("Mef strip shorter than its declared size".into()));
+    }
     let mut d = vec![0u16; n];
     crate::unpack::unpack_msb(src, 12, &mut d);
     let white = super::white_from_data(&d, 12);
@@ -183,5 +186,31 @@ mod tests {
                 let _ = crate::probe_info(&g);
             }
         }
+    }
+
+    #[test]
+    fn a_mef_declaring_more_samples_than_it_holds_is_refused_without_allocating() {
+        let (w, h) = (32768u32, 32768u32);
+        let mut raw = IfdBuilder::new();
+        raw.set(t::NEW_SUBFILE_TYPE, Value::Long(vec![0]));
+        raw.set(t::IMAGE_WIDTH, Value::Long(vec![w]));
+        raw.set(t::IMAGE_LENGTH, Value::Long(vec![h]));
+        raw.set(t::BITS_PER_SAMPLE, Value::Short(vec![12]));
+        raw.set(t::COMPRESSION, Value::Short(vec![1]));
+        raw.set(t::PHOTOMETRIC, Value::Short(vec![t::photometric::CFA]));
+        raw.set(t::CFA_REPEAT_PATTERN_DIM, Value::Short(vec![2, 2]));
+        raw.set(t::CFA_PATTERN_EP, Value::Byte(vec![0, 1, 1, 2]));
+        raw.set(t::ROWS_PER_STRIP, Value::Long(vec![h]));
+        raw.set(t::STRIP_OFFSETS, Value::Long(vec![8]));
+        raw.set(t::STRIP_BYTE_COUNTS, Value::Long(vec![w * 3 / 2 * h]));
+        let mut ifd0 = IfdBuilder::new();
+        ifd0.set(t::MAKE, Value::Ascii("Mamiya-OP Co.,Ltd.".into()));
+        ifd0.set(t::MODEL, Value::Ascii("MAMIYA ZD".into()));
+        ifd0.add_sub_ifd(raw);
+        let mut f = TiffWriter::new(ByteOrder::Big, false).write(&[ifd0]).unwrap();
+        f.resize(4096, 0);
+        assert_eq!(crate::probe(&f), Some(RawFormat::Mef));
+        assert!(matches!(crate::probe_info(&f), Err(RawError::Corrupt(_))), "{:?}", crate::probe_info(&f).map(|_| ()));
+        assert!(matches!(crate::decode(&f), Err(RawError::Corrupt(_))));
     }
 }
