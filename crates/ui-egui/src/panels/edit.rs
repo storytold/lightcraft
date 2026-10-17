@@ -1535,7 +1535,8 @@ fn grading_wheel(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings
     // puck as it is at that moment.
     let grab_id = egui::Id::new(("wheelGrab", key));
     let mods = ui.input(|i| WheelMods::from_modifiers(i.modifiers));
-    let grab = match resp.interact_pointer_pos() {
+    let pointer = wheel_pointer(ui, &resp);
+    let grab = match pointer {
         Some(q) if resp.dragged() || resp.clicked() => {
             let held = ui.data(|m| m.get_temp::<WheelGrab>(grab_id)).filter(|g| g.mods == mods && !resp.drag_started());
             Some(held.unwrap_or_else(|| {
@@ -1574,13 +1575,20 @@ fn grading_wheel(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings
         let _ = app.run("develop.beginInteraction", json!({"label": crate::i18n::tr_format!("{label} Grading", label = label)}));
     }
     if (resp.dragged() || resp.clicked())
-        && let Some(q) = resp.interact_pointer_pos()
+        && let Some(q) = pointer
     {
         let (hue, sat) = grab.map_or_else(|| wheel_pick(q - c, rad, None), |g| g.pick(q - c, rad));
         let _ = app.run("develop.set", json!({"values": {format!("grading.{key}.hue"): hue.round(), format!("grading.{key}.sat"): sat.round()}}));
     }
     if resp.drag_stopped() || resp.clicked() {
         let _ = app.run("develop.endInteraction", json!({}));
+    }
+    // released, or Esc (egui ends a drag on it)
+    if resp.drag_stopped()
+        && let Some(held) = ui.ctx().data_mut(|m| m.remove_temp::<WheelCapture>(egui::Id::new(WHEEL_CAPTURE)))
+        && !held.dropped
+    {
+        give_pointer_back(ui.ctx(), held.origin);
     }
     if resp.double_clicked() {
         let _ = app.run("develop.set", json!({"values": {format!("grading.{key}.hue"): 0, format!("grading.{key}.sat"): 0}}));
@@ -1682,6 +1690,99 @@ impl WheelGrab {
             v
         };
         wheel_pick(v, rad, self.lock())
+    }
+}
+
+/// A wheel drag holds the pointer, as in Lightroom (issue #1899): it is hidden for the drag, the
+/// puck follows the mouse's own travel, and on release the pointer is back where the button went
+/// down, so a long (Alt) drag doesn't leave it far from the wheels. On macOS the pointer is locked
+/// in place for the drag; elsewhere it moves unseen and is put back. The browser can't move it
+/// (eframe's web host ignores the command), so there it only shows again where the drag ended.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct WheelCapture {
+    /// Where the button went down: the pointer goes back there.
+    origin: Pos2,
+    /// Where the pointer would be had it been free: where the drag began plus the travel since.
+    pos: Pos2,
+    /// Let go early (the window lost focus): the rest of this drag leaves the wheel alone.
+    dropped: bool,
+    /// The pass that last drew the dragged wheel.
+    pass: u64,
+}
+
+/// One wheel is dragged at a time, so one capture for them all.
+const WHEEL_CAPTURE: &str = "wheelCapture";
+
+/// The mouse's travel this frame: the pointer's, or, while the pointer stands still (locked, or
+/// against a screen edge), the raw motion the host reports.
+fn wheel_travel(delta: egui::Vec2, motion: Option<egui::Vec2>) -> egui::Vec2 {
+    if delta != egui::Vec2::ZERO {
+        return delta;
+    }
+    motion.filter(|m| m.x.is_finite() && m.y.is_finite()).unwrap_or(egui::Vec2::ZERO)
+}
+
+/// Where the wheel `resp` reads the pointer this frame: where it clicked, or for a drag the held
+/// pointer ([`WheelCapture`]), `None` once a lost focus let go of it (Esc ends the drag itself:
+/// egui stops a drag on Esc).
+fn wheel_pointer(ui: &egui::Ui, resp: &egui::Response) -> Option<Pos2> {
+    let q = resp.interact_pointer_pos()?;
+    if !resp.dragged() {
+        return Some(q);
+    }
+    let ctx = ui.ctx();
+    let id = egui::Id::new(WHEEL_CAPTURE);
+    let held = ctx.data(|m| m.get_temp::<WheelCapture>(id)).filter(|_| !resp.drag_started());
+    let mut cap = held.unwrap_or_else(|| {
+        if cfg!(target_os = "macos") {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CursorGrab(egui::CursorGrab::Locked));
+        }
+        WheelCapture { origin: ui.input(|i| i.pointer.press_origin()).unwrap_or(q), pos: q, ..Default::default() }
+    });
+    cap.pass = ctx.cumulative_pass_nr();
+    if !cap.dropped {
+        let (travel, unfocused) = ui.input(|i| {
+            // the event, not `focused`: a click that activates the window may land before its focus
+            let unfocused = i.events.iter().any(|e| matches!(e, egui::Event::WindowFocused(false)));
+            (wheel_travel(i.pointer.delta(), i.pointer.motion()), unfocused)
+        });
+        if !resp.drag_started() {
+            cap.pos += travel;
+        }
+        if unfocused {
+            give_pointer_back(ctx, cap.origin);
+            cap.dropped = true;
+        } else {
+            ctx.set_cursor_icon(egui::CursorIcon::None);
+        }
+    }
+    ctx.data_mut(|m| m.insert_temp(id, cap));
+    (!cap.dropped).then_some(cap.pos)
+}
+
+/// Unlock and show the pointer a wheel drag held, back at `origin`.
+fn give_pointer_back(ctx: &egui::Context, origin: Pos2) {
+    if cfg!(target_os = "macos") {
+        ctx.send_viewport_cmd(egui::ViewportCommand::CursorGrab(egui::CursorGrab::None));
+    }
+    if cfg!(not(target_arch = "wasm32")) {
+        ctx.send_viewport_cmd(egui::ViewportCommand::CursorPosition(origin));
+    }
+}
+
+/// Once a frame, after the panels: a held pointer stays hidden over whatever set its own cursor,
+/// and is given back if no wheel drew this pass (the flyout closed or the view changed under the
+/// drag), so it is never left locked or hidden.
+pub(crate) fn wheel_pointer_frame_end(ctx: &egui::Context) {
+    let id = egui::Id::new(WHEEL_CAPTURE);
+    let Some(cap) = ctx.data(|m| m.get_temp::<WheelCapture>(id)) else { return };
+    if cap.pass != ctx.cumulative_pass_nr() {
+        ctx.data_mut(|m| m.remove::<WheelCapture>(id));
+        if !cap.dropped {
+            give_pointer_back(ctx, cap.origin);
+        }
+    } else if !cap.dropped {
+        ctx.set_cursor_icon(egui::CursorIcon::None);
     }
 }
 

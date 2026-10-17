@@ -375,3 +375,125 @@ fn wheel_rim_is_fully_saturated_and_the_centre_neutral() {
     let (hi, lo) = (p.r().max(p.g()).max(p.b()), p.r().min(p.g()).min(p.b()));
     assert!(hi - lo <= 40 && lo >= 100, "centre is not a neutral grey: {p:?}");
 }
+
+// ------------------------------------------------------------------ the held pointer (issue #1899)
+
+fn pointer_event(h: &mut Headless, e: egui::Event) {
+    h.events.push(e);
+    h.step();
+}
+
+fn button(h: &mut Headless, at: egui::Pos2, pressed: bool) {
+    let e = egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    pointer_event(h, e);
+}
+
+/// Press the midtones wheel at `at` and move the pointer 10 to the right, far enough to make it
+/// a drag; where the pointer is then.
+fn start_wheel_drag(h: &mut Headless, at: egui::Pos2) -> egui::Pos2 {
+    pointer_event(h, egui::Event::PointerMoved(at));
+    button(h, at, true);
+    let to = at + egui::vec2(10.0, 0.0);
+    pointer_event(h, egui::Event::PointerMoved(to));
+    h.step();
+    to
+}
+
+fn cursor_moves(h: &Headless) -> Vec<egui::Pos2> {
+    h.window_commands
+        .iter()
+        .filter_map(|c| match c {
+            egui::ViewportCommand::CursorPosition(p) => Some(*p),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_held_wheel_follows_the_mouses_motion_not_where_the_pointer_sits() {
+    use crate::panels::edit::wheel_pick;
+    let mut h = demo();
+    let rad = wheel_radius(&h, "midtones");
+    set_wheel(&mut h, "midtones", 0.0, 0.0);
+    let c = widget(&h, "wheel:midtones").unwrap().center();
+    let held = start_wheel_drag(&mut h, c + egui::vec2(rad * 0.4, 0.0));
+    // the pointer stays where it is (macOS locks it there) while the mouse goes on moving up
+    for _ in 0..5 {
+        pointer_event(&mut h, egui::Event::MouseMoved(egui::vec2(0.0, -rad * 0.1)));
+    }
+    let (hue, sat) = wheel_value(&h, "midtones");
+    let (want_hue, want_sat) = wheel_pick(held + egui::vec2(0.0, -rad * 0.5) - c, rad, None);
+    assert!((hue - want_hue.round() as f64).abs() <= 1.0 && (sat - want_sat.round() as f64).abs() <= 1.0, "{hue} {sat} vs {want_hue} {want_sat}");
+    assert!(hue > 30.0, "the puck went up with the mouse: {hue}");
+    button(&mut h, held, false);
+}
+
+#[test]
+fn a_wheel_drag_hides_the_pointer_and_releasing_puts_it_back_where_it_was_pressed() {
+    let mut h = demo();
+    let rad = wheel_radius(&h, "midtones");
+    set_wheel(&mut h, "midtones", 0.0, 0.0);
+    let press = widget(&h, "wheel:midtones").unwrap().center() + egui::vec2(rad * 0.3, rad * 0.2);
+    let at = start_wheel_drag(&mut h, press);
+    let far = at + egui::vec2(-rad * 0.6, -rad * 0.9);
+    pointer_event(&mut h, egui::Event::PointerMoved(far));
+    assert_eq!(h.last_cursor, egui::CursorIcon::None, "hidden while the wheel is dragged");
+    assert!(cursor_moves(&h).is_empty(), "nothing moves the pointer before the release");
+    button(&mut h, far, false);
+    h.step();
+    assert_eq!(cursor_moves(&h), [press], "back where the button went down");
+    assert_ne!(h.last_cursor, egui::CursorIcon::None, "shown again");
+    #[cfg(target_os = "macos")]
+    assert_eq!(
+        h.window_commands.iter().filter(|c| matches!(c, egui::ViewportCommand::CursorGrab(_))).collect::<Vec<_>>(),
+        [&egui::ViewportCommand::CursorGrab(egui::CursorGrab::Locked), &egui::ViewportCommand::CursorGrab(egui::CursorGrab::None)],
+        "locked for the drag, unlocked at the end"
+    );
+    // a click is not a drag: the pointer stays visible where it is
+    h.window_commands.clear();
+    let r = h.request("ui.clickWidget", json!({"id": "wheel:midtones"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    assert!(h.window_commands.is_empty(), "{:?}", h.window_commands);
+}
+
+#[test]
+fn escape_or_losing_focus_gives_the_pointer_back_mid_drag() {
+    let esc = egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
+    for let_go in [esc, egui::Event::WindowFocused(false)] {
+        let mut h = demo();
+        let rad = wheel_radius(&h, "midtones");
+        set_wheel(&mut h, "midtones", 0.0, 0.0);
+        let press = widget(&h, "wheel:midtones").unwrap().center() + egui::vec2(rad * 0.3, 0.0);
+        let at = start_wheel_drag(&mut h, press);
+        assert_eq!(h.last_cursor, egui::CursorIcon::None, "{let_go:?}: hidden while dragged");
+        pointer_event(&mut h, let_go.clone());
+        h.step();
+        assert_ne!(h.last_cursor, egui::CursorIcon::None, "{let_go:?}: shown again");
+        assert_eq!(cursor_moves(&h), [press], "{let_go:?}: back where it was pressed");
+        // the rest of the drag no longer moves the puck, and the pointer stays visible
+        let before = wheel_value(&h, "midtones");
+        pointer_event(&mut h, egui::Event::PointerMoved(at + egui::vec2(-rad * 0.5, -rad * 0.5)));
+        assert_eq!(wheel_value(&h, "midtones"), before, "{let_go:?}");
+        assert_ne!(h.last_cursor, egui::CursorIcon::None, "{let_go:?}");
+        button(&mut h, at, false);
+        h.step();
+        assert_eq!(cursor_moves(&h), [press], "{let_go:?}: given back once");
+    }
+}
+
+#[test]
+fn a_wheel_that_goes_away_mid_drag_gives_the_pointer_back() {
+    let mut h = demo();
+    let rad = wheel_radius(&h, "midtones");
+    let press = widget(&h, "wheel:midtones").unwrap().center() + egui::vec2(rad * 0.3, 0.0);
+    start_wheel_drag(&mut h, press);
+    assert_eq!(h.last_cursor, egui::CursorIcon::None);
+    // the flyout closes under the drag: no wheel is drawn to let go of the pointer itself
+    h.app.ui.toggle_flyout("grading");
+    h.step();
+    h.step();
+    assert!(widget(&h, "wheel:midtones").is_none());
+    assert_ne!(h.last_cursor, egui::CursorIcon::None);
+    assert_eq!(cursor_moves(&h), [press]);
+}
