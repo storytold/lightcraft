@@ -169,7 +169,6 @@
   "the {} photos in view": "ხედში არსებული ფოტოები ({})",
   "these {count} photos": "ეს ფოტოები ({count})",
   "{:.1} MB": "{:.1} MB",
-  "{count} smart preview{} · {:.1} MB": "ჭკვიანი წინასწარი ხედი: {count}{:.0} · {:.1} MB",
   "{done} of {total}": "{done} / {total}",
   "{done} of {total} MB": "{done} / {total} MB",
   "{file} · {size}": "{file} · {size}",
@@ -295,5 +294,35 @@
   "Already in “{}”": "Already in “{}”",
   "Move {n} photo{} to “{}”": "Move {n} photo{} to “{}”",
   "Move {n} photo{} to “{}”?": "Move {n} photo{} to “{}”?",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Moved {n} photo{} to “{}”. Edit → Undo moves them back."
+  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Moved {n} photo{} to “{}”. Edit → Undo moves them back.",
+  "Destination: {path}": "დანიშნულება: {path}",
+  "Estimated total size: {size}": "სავარაუდო საერთო ზომა: {size}",
+  "Free space: {size}": "თავისუფალი ადგილი: {size}",
+  "Smart preview folder change failed: {error}": "ჭკვიანი წინასწარი ხედების საქაღალდის შეცვლა ვერ მოხერხდა: {error}",
+  "could not check smart preview storage: {e}": "ჭკვიანი წინასწარი ხედების საცავი ვერ შემოწმდა: {e}",
+  "free space is unavailable for {path} on this platform": "ამ პლატფორმაზე {path}-ისთვის თავისუფალი ადგილი უცნობია",
+  "Photos: {count}": {
+    "one": "ფოტოები: {count}",
+    "few": "ფოტოები: {count}",
+    "many": "ფოტოები: {count}",
+    "other": "ფოტოები: {count}"
+  },
+  "{count} smart previews · {size:.1} MiB": {
+    "one": "ჭკვიანი წინასწარი ხედები: {count} · {size:.1} MiB",
+    "few": "ჭკვიანი წინასწარი ხედები: {count} · {size:.1} MiB",
+    "many": "ჭკვიანი წინასწარი ხედები: {count} · {size:.1} MiB",
+    "other": "ჭკვიანი წინასწარი ხედები: {count} · {size:.1} MiB"
+  },
+  ". {count} existing previews kept unchanged": {
+    "one": ". უცვლელად დატოვებული არსებული ხედები: {count}",
+    "few": ". უცვლელად დატოვებული არსებული ხედები: {count}",
+    "many": ". უცვლელად დატოვებული არსებული ხედები: {count}",
+    "other": ". უცვლელად დატოვებული არსებული ხედები: {count}"
+  },
+  "Smart preview folder changed. {count} source files could not be removed.": {
+    "one": "ჭკვიანი წინასწარი ხედების საქაღალდე შეიცვალა. წყაროს წაუშლელი ფაილები: {count}.",
+    "few": "ჭკვიანი წინასწარი ხედების საქაღალდე შეიცვალა. წყაროს წაუშლელი ფაილები: {count}.",
+    "many": "ჭკვიანი წინასწარი ხედების საქაღალდე შეიცვალა. წყაროს წაუშლელი ფაილები: {count}.",
+    "other": "ჭკვიანი წინასწარი ხედების საქაღალდე შეიცვალა. წყაროს წაუშლელი ფაილები: {count}."
+  }
 }

@@ -127,7 +127,6 @@
   "the {n} selected photos": "{n} zaznaczonych zdjęć",
   "the {} photos in view": "{} zdjęć w bieżącym widoku",
   "these {count} photos": "te {count} zdjęcia",
-  "{count} smart preview{} · {:.1} MB": "Inteligentne podglądy: {count}{:.0} · {:.1} MB",
   "{f} folders (and their subfolders)": "{f} folderów (wraz z podfolderami)",
   "{label} Grading": "Gradacja: {label}",
   "{label} {d:+} on every selected photo": "{label}: {d:+} na każdym zaznaczonym zdjęciu",
@@ -295,5 +294,35 @@
   "Already in “{}”": "Już w „{}”",
   "Move {n} photo{} to “{}”": "Przenieś do „{1}” — zdjęcia: {n}{0:.0}",
   "Move {n} photo{} to “{}”?": "Przenieść do „{1}” — zdjęcia: {n}{0:.0}?",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Przeniesiono do „{1}” — zdjęcia: {n}{0:.0}. Edytuj → Cofnij przywróci je."
+  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Przeniesiono do „{1}” — zdjęcia: {n}{0:.0}. Edytuj → Cofnij przywróci je.",
+  "Destination: {path}": "Miejsce docelowe: {path}",
+  "Estimated total size: {size}": "Szacowany łączny rozmiar: {size}",
+  "Free space: {size}": "Wolne miejsce: {size}",
+  "Smart preview folder change failed: {error}": "Nie udało się zmienić folderu podglądów inteligentnych: {error}",
+  "could not check smart preview storage: {e}": "nie można sprawdzić miejsca na podglądy inteligentne: {e}",
+  "free space is unavailable for {path} on this platform": "na tej platformie nie można sprawdzić wolnego miejsca dla {path}",
+  "Photos: {count}": {
+    "one": "Zdjęcia: {count}",
+    "few": "Zdjęcia: {count}",
+    "many": "Zdjęcia: {count}",
+    "other": "Zdjęcia: {count}"
+  },
+  "{count} smart previews · {size:.1} MiB": {
+    "one": "Podglądy inteligentne: {count} · {size:.1} MiB",
+    "few": "Podglądy inteligentne: {count} · {size:.1} MiB",
+    "many": "Podglądy inteligentne: {count} · {size:.1} MiB",
+    "other": "Podglądy inteligentne: {count} · {size:.1} MiB"
+  },
+  ". {count} existing previews kept unchanged": {
+    "one": ". Zachowane istniejące podglądy: {count}",
+    "few": ". Zachowane istniejące podglądy: {count}",
+    "many": ". Zachowane istniejące podglądy: {count}",
+    "other": ". Zachowane istniejące podglądy: {count}"
+  },
+  "Smart preview folder changed. {count} source files could not be removed.": {
+    "one": "Folder podglądów inteligentnych został zmieniony. Nieusunięte pliki źródłowe: {count}.",
+    "few": "Folder podglądów inteligentnych został zmieniony. Nieusunięte pliki źródłowe: {count}.",
+    "many": "Folder podglądów inteligentnych został zmieniony. Nieusunięte pliki źródłowe: {count}.",
+    "other": "Folder podglądów inteligentnych został zmieniony. Nieusunięte pliki źródłowe: {count}."
+  }
 }
