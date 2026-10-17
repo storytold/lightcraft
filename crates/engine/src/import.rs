@@ -562,12 +562,12 @@ fn probe_all(
 /// new path. The copy is verified ([`crate::import_move::copy_new`]: a new file, synced and
 /// checked against `probe_hash`, the content hash the probe computed — or compared byte for byte
 /// with the source when there is none); a bad one is removed and the photo reported as failed.
-fn copy_into(dir: &Path, src: &str, name: Option<&str>, probe_hash: Option<&str>) -> Result<String, String> {
+fn copy_into(dir: &Path, src: &str, name: Option<&str>, probe_hash: Option<&str>) -> Result<(String, String), String> {
     let name = name
         .map(str::to_string)
         .unwrap_or_else(|| Path::new(src).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "photo".into()));
     let expect = probe_hash.and_then(lightcraft_preview::Hash128::parse);
-    crate::import_move::copy_new(Path::new(src), dir, &name, expect).map(|p| p.to_string_lossy().to_string())
+    crate::import_move::copy_new(Path::new(src), dir, &name, expect).map(|(p, hash)| (p.to_string_lossy().to_string(), hash.to_string()))
 }
 
 /// What a [`scan`] needs from the session, so it can run on another thread (a folder on a network
@@ -1361,13 +1361,19 @@ fn run_transfer(t: Transfer, file_bytes: Option<&crate::merge::ByteReader>) -> P
         How::Place { name } => match crate::import_move::place(Path::new(&path), &dir, &name) {
             Ok(pl) => {
                 let dst = pl.dst.to_string_lossy().to_string();
+                if info.content_hash.is_none() {
+                    info.content_hash = pl.hash.map(|h| h.to_string());
+                }
                 placed = Some(pl);
                 dst
             }
             Err(e) => return PreparedItem::Failed(path, e),
         },
         How::Copy { name } => match copy_into(&dir, &path, name.as_deref(), info.content_hash.as_deref()) {
-            Ok(p) => p,
+            Ok((p, hash)) => {
+                info.content_hash.get_or_insert(hash);
+                p
+            }
             Err(e) => return PreparedItem::Failed(path, e),
         },
     };

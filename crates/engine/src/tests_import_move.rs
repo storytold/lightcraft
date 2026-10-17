@@ -530,3 +530,53 @@ fn finish_keeps_the_original_when_the_copy_changed_to_the_same_length() {
     inject(Fault::None);
     let _ = std::fs::remove_dir_all(&base);
 }
+
+fn without_probe_hashes(s: &mut Session) {
+    let probe = s.media.file_probe.clone().unwrap();
+    s.media.file_probe = Some(std::sync::Arc::new(move |path: &str| {
+        probe(path).map(|mut info| {
+            info.content_hash = None;
+            info
+        })
+    }));
+}
+
+fn import_copy(s: &mut Session, card: &Path, dest: &Path) -> Value {
+    s.execute(
+        "library.import",
+        &json!({"paths": [card.to_string_lossy()], "mode": "copy", "destination": dest.to_string_lossy(), "organize": "flat"}),
+    )
+    .unwrap()
+}
+
+#[test]
+fn a_copy_without_a_probe_hash_keeps_the_hash_it_copied() {
+    let base = temp_dir("copyhashless");
+    let (card, dest) = (base.join("card"), base.join("out"));
+    write_png(&card.join("a.png"), 4);
+    let source = std::fs::read(card.join("a.png")).unwrap();
+    let mut s = session();
+    without_probe_hashes(&mut s);
+    let r = import_copy(&mut s, &card, &dest);
+    assert_eq!(len(&r, "imported"), 1, "{r}");
+    let photo = s.catalog.photos().next().unwrap();
+    assert_eq!(photo.content_hash, Some(lightcraft_preview::hash_bytes(&source).to_string()));
+    assert_eq!(std::fs::read(dest.join("a.png")).unwrap(), source);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn a_source_changed_during_the_copy_is_refused() {
+    let base = temp_dir("copygrow");
+    let (card, dest) = (base.join("card"), base.join("out"));
+    write_png(&card.join("a.png"), 5);
+    let mut s = session();
+    without_probe_hashes(&mut s);
+    inject(Fault::Grow);
+    let r = import_copy(&mut s, &card, &dest);
+    inject(Fault::None);
+    assert_eq!((len(&r, "imported"), len(&r, "failed")), (0, 1), "{r}");
+    assert!(r.to_string().contains("changed while it was copied"), "{r}");
+    assert_eq!(files_under(&dest), Vec::<String>::new());
+    let _ = std::fs::remove_dir_all(&base);
+}
