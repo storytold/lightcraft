@@ -822,7 +822,7 @@ impl Renderer {
                 }
                 Err(e) => {
                     if !matches!(slot, Slot::Prefetch(_)) {
-                        log::warn!("render {slot:?}: {e}");
+                        log::warn!("{}", render_failure_message(slot, r.photo, session.catalog.photo(r.photo).map(|p| &p.source), &e));
                         self.failed.insert(slot, (r.key, e, self.catalog_rev, r.photo));
                     }
                     continue;
@@ -994,10 +994,42 @@ impl Renderer {
     }
 }
 
+/// Include the source identity in diagnostics for every catalog-backed render slot (#1890).
+/// Debug-format paths so whitespace/control characters cannot forge another log entry.
+fn render_failure_message(slot: Slot, photo: PhotoId, source: Option<&lightcraft_catalog::Source>, error: &str) -> String {
+    match source {
+        Some(lightcraft_catalog::Source::File { path }) => format!("render {slot:?}, {photo:?}, file {path:?}: {error}"),
+        Some(lightcraft_catalog::Source::Demo { scene }) => format!("render {slot:?}, {photo:?}, demo scene {scene}: {error}"),
+        None => format!("render {slot:?}, {photo:?}, source unavailable: {error}"),
+    }
+}
+
 #[cfg(test)]
 mod thumbnail_tests {
     use super::*;
     use lightcraft_catalog::{Catalog, Op, Photo, Source};
+
+    #[test]
+    fn render_failures_identify_the_file_for_thumbnail_and_view_slots() {
+        let source = Source::File { path: "/photos/trip/IMG_0042.nef".into() };
+        for slot in [Slot::Thumb(PhotoId(42)), Slot::Main, Slot::Before, Slot::Compare(1), Slot::Region] {
+            let message = render_failure_message(slot, PhotoId(42), Some(&source), "unsupported compression");
+            assert!(message.contains("/photos/trip/IMG_0042.nef"), "{message}");
+            assert!(message.contains("PhotoId(42)"), "{message}");
+            assert!(message.ends_with(": unsupported compression"), "{message}");
+        }
+    }
+
+    #[test]
+    fn render_failure_paths_are_escaped_and_missing_sources_still_identified() {
+        let source = Source::File { path: "line\nbreak.nef".into() };
+        let message = render_failure_message(Slot::Main, PhotoId(42), Some(&source), "decode failed");
+        assert!(!message.contains('\n'));
+        assert!(message.contains("line\\nbreak.nef"));
+        assert!(render_failure_message(Slot::Main, PhotoId(42), None, "decode failed").contains("PhotoId(42), source unavailable"));
+        let demo = Source::Demo { scene: 7 };
+        assert!(render_failure_message(Slot::Main, PhotoId(42), Some(&demo), "decode failed").contains("demo scene 7"));
+    }
 
     struct Blocked;
     impl RenderOffload for Blocked {
