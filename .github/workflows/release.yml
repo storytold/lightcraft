@@ -26,7 +26,7 @@ jobs:
     with:
       app-name: lightcraft
       app-title: LightCraft
-      craft-fonts-ref: 3d9ab3a132ed0eff457e424226a435a901da30d3
+      craft-fonts-ref: 1466a883ae5ac0a7d76cfe7f9d56fe0240acb255 # adds Noto Sans Hebrew (storytold/craft-fonts#12)
       version: ${{ inputs.version }}
     secrets:
       APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
