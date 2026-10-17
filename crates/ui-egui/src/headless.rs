@@ -4292,6 +4292,40 @@ mod tests {
         h.settle(SETTLE);
     }
 
+    /// #911 (toast labels only): cycling the overlay announces each mode in the UI language.
+    #[test]
+    fn info_overlay_toasts_are_painted_in_the_users_language() {
+        use crate::i18n::Locale;
+
+        struct RestoreLanguage(Locale);
+        impl Drop for RestoreLanguage {
+            fn drop(&mut self) {
+                crate::i18n::set_language(self.0);
+            }
+        }
+        let _restore = RestoreLanguage(crate::i18n::language());
+        let mut h = demo([1000.0, 700.0]);
+        let t = Duration::from_secs(10);
+        assert_eq!(h.request("ui.set", json!({"view": "detail", "infoOverlay": "off"}), t)["ok"], true);
+        for (command, locale) in [("app.language.german", Locale::De), ("app.language.french", Locale::Fr), ("app.language.english", Locale::En)] {
+            assert_eq!(h.request("engine.execute", json!({"command": command}), t)["ok"], true);
+            assert_eq!(h.app.ui.language, locale);
+            assert_eq!(crate::i18n::language(), locale);
+            for (mode, key) in [("basic", "Info Overlay: File"), ("exposure", "Info Overlay: Exposure"), ("off", "Info Overlay Off")] {
+                let expected = locale.tr(key);
+                if locale != Locale::En {
+                    assert_ne!(expected, key, "this locale must translate the tested message");
+                }
+                assert_eq!(h.request("ui.key", json!({"key": "i", "cmd": true}), t)["ok"], true);
+                assert_eq!(serde_json::to_value(h.app.ui.info_overlay).unwrap(), json!(mode));
+                assert_eq!(h.app.ui.toast.as_ref().expect("overlay toast").0, expected);
+                h.step();
+                let painted = h.painted_text();
+                assert!(painted.iter().any(|text| text == expected), "{painted:?}");
+            }
+        }
+    }
+
     /// A click on the image zooms to the chosen click-zoom ratio (1:1 by default), animating the
     /// loupe while rendering once at the final size; Z uses the same ratio; a second click returns to Fit.
     #[test]

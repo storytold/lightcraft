@@ -394,7 +394,7 @@ CRAFT_FONTS_DIR=../craft-fonts cargo run --release -p lightcraft
 本仓库；见 [craftrules `standards/fonts.md`](https://github.com/storytold/craftrules/blob/main/standards/fonts.md)。
 
 **界面语言：** **编辑 → 语言**（English、简体中文、繁體中文（台灣）、日本語、Português (Brasil)、Español、Deutsch、Русский、Français）或 **设置 → 一般 →
-语言**；选择立即生效并会保留。见 [docs/localization.md](docs/localization.md)。
+语言**；选择立即生效并会保留。信息叠加模式切换提示使用所选界面语言。见 [docs/localization.md](docs/localization.md)。
 
 **日志：** 桌面应用把日志写到标准错误，以及设置文件夹里的 `logs/lightcraft.log`
 （Linux `$XDG_CONFIG_HOME/lightcraft/logs/`，默认 `~/.config/lightcraft/logs/`；macOS
