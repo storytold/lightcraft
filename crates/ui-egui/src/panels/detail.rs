@@ -910,40 +910,19 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     });
 }
 
-/// The info overlay at the canvas' top left (`view.infoOverlay`): file name with the capture date
-/// and size, or with the camera and exposure.
+/// The info overlay at the canvas' top left (`view.infoOverlay`): the lines View Options chose for
+/// Info 1 or Info 2 (`view.viewOptions`).
 fn info_overlay(app: &LightcraftApp, p: &egui::Painter, canvas: Rect, photo: &lightcraft_catalog::Photo) {
     use crate::state::InfoOverlay;
-    let lines: Vec<String> = match app.ui.info_overlay {
+    let fields = match app.ui.info_overlay {
         InfoOverlay::Off => return,
-        InfoOverlay::Basic => {
-            let date = photo.captured.as_deref().unwrap_or(&photo.imported);
-            vec![photo.file_name.clone(), format!("{} · {} × {}", pretty_date(date), photo.width, photo.height)]
-        }
-        InfoOverlay::Exposure => {
-            let m = &photo.meta;
-            let mut exp = Vec::new();
-            if !m.shutter.is_empty() {
-                exp.push(format!("{} s", m.shutter));
-            }
-            if let Some(a) = m.aperture {
-                exp.push(format!("f/{a:.1}"));
-            }
-            if let Some(i) = m.iso {
-                exp.push(format!("ISO {i}"));
-            }
-            if let Some(f) = m.focal_mm {
-                exp.push(format!("{f:.0} mm"));
-            }
-            let camera = [m.camera.as_str(), m.lens.as_str()].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join(" · ");
-            let mut v = vec![photo.file_name.clone()];
-            v.push(if exp.is_empty() { "No exposure information".into() } else { exp.join("  ") });
-            if !camera.is_empty() {
-                v.push(camera);
-            }
-            v
-        }
+        InfoOverlay::Basic => &app.ui.settings.loupe_info.info1,
+        InfoOverlay::Exposure => &app.ui.settings.loupe_info.info2,
     };
+    let lines: Vec<String> = fields.iter().filter_map(|f| info_line(*f, photo)).collect();
+    if lines.is_empty() {
+        return;
+    }
     let t = Tokens::get(p.ctx());
     let mut y = canvas.top() + 12.0;
     for (i, l) in lines.iter().enumerate() {
@@ -1179,6 +1158,39 @@ fn preview_only_pill(ui: &mut egui::Ui, canvas: Rect, reason: &str) {
     p.galley(pos2(r.left() + 29.0, r.center().y - g.size().y / 2.0), g, Color32::WHITE);
     register(ui.ctx(), "notice:previewOnly:loupe", r);
     ui.interact(r, egui::Id::new("preview-only-pill"), Sense::hover()).on_hover_text(crate::widgets::preview_only_explanation(reason));
+}
+
+/// One line of the info overlay for `photo`; `None` when the field is None or the photo has
+/// nothing to show for it.
+fn info_line(field: crate::state::LoupeInfoField, photo: &lightcraft_catalog::Photo) -> Option<String> {
+    use crate::state::LoupeInfoField as F;
+    let m = &photo.meta;
+    let text = match field {
+        F::None => return None,
+        F::FileName => photo.file_name.clone(),
+        F::CaptureDate => pretty_date(photo.captured.as_deref().unwrap_or(&photo.imported)),
+        F::Dimensions => format!("{} × {}", photo.width, photo.height),
+        F::Exposure => {
+            let mut exp = Vec::new();
+            if !m.shutter.is_empty() {
+                exp.push(format!("{} s", m.shutter));
+            }
+            if let Some(a) = m.aperture {
+                exp.push(format!("f/{a:.1}"));
+            }
+            if let Some(i) = m.iso {
+                exp.push(format!("ISO {i}"));
+            }
+            if let Some(f) = m.focal_mm {
+                exp.push(format!("{f:.0} mm"));
+            }
+            if exp.is_empty() { "No exposure information".into() } else { exp.join("  ") }
+        }
+        F::Camera => m.camera.clone(),
+        F::Lens => m.lens.clone(),
+        F::CameraAndLens => [m.camera.as_str(), m.lens.as_str()].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join(" · "),
+    };
+    (!text.is_empty()).then_some(text)
 }
 
 /// `2026-09-30T12:00:00` → `2026-09-30 12:00`.
@@ -3108,5 +3120,44 @@ mod info_overlay_tests {
         assert_eq!(copies.len(), 2, "the file name and its shadow: {copies:?}");
         assert_eq!(copies[1], Color32::WHITE, "the text on top");
         assert!(copies[0].r() < 64 && copies[0].a() > 0, "the shadow under it is dark: {:?}", copies[0]);
+    }
+
+    /// The lines the overlay paints, top to bottom (each once: the shadow copies left out).
+    fn painted_lines(app: &LightcraftApp, photo: &lightcraft_catalog::Photo) -> Vec<String> {
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts(&ctx);
+        let canvas = Rect::from_min_size(pos2(52.0, 82.0), vec2(800.0, 500.0));
+        let raw = crate::headless::HeadlessView::raw_input(vec2(1000.0, 700.0), 1.0, 0.0, vec![]);
+        let mut out = ctx.run_ui(raw, |ui| info_overlay(app, ui.painter(), canvas, photo));
+        out.textures_delta.clear();
+        let mut lines = Vec::new();
+        for c in &out.shapes {
+            if let egui::epaint::Shape::Text(t) = &c.shape
+                && t.override_text_color.unwrap_or(t.fallback_color) == Color32::WHITE
+            {
+                lines.push(t.galley.job.text.clone());
+            }
+        }
+        lines
+    }
+
+    /// View ▸ View Options: Info 1 and Info 2 each show the three lines chosen for them, in that
+    /// order, without the lines set to None.
+    #[test]
+    fn the_info_overlay_shows_the_lines_chosen_in_view_options() {
+        use crate::state::{InfoOverlay, LoupeInfoField as F};
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), crate::Services { png: None, ..Default::default() });
+        let photo = app.session.catalog.photos().next().map(|p| (**p).clone()).expect("the demo catalog has photos");
+        let size = format!("{} × {}", photo.width, photo.height);
+        let date = pretty_date(photo.captured.as_deref().unwrap_or(&photo.imported));
+        app.ui.settings.loupe_info.info1 = [F::Dimensions, F::None, F::FileName];
+        app.ui.settings.loupe_info.info2 = [F::CaptureDate, F::FileName, F::None];
+        app.ui.info_overlay = InfoOverlay::Basic;
+        assert_eq!(painted_lines(&app, &photo), vec![size.clone(), photo.file_name.clone()], "Info 1");
+        app.ui.info_overlay = InfoOverlay::Exposure;
+        assert_eq!(painted_lines(&app, &photo), vec![date, photo.file_name.clone()], "Info 2");
+        app.ui.settings.loupe_info.info1 = [F::None; 3];
+        app.ui.info_overlay = InfoOverlay::Basic;
+        assert_eq!(painted_lines(&app, &photo), Vec::<String>::new(), "nothing chosen, nothing shown");
     }
 }

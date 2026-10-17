@@ -685,8 +685,49 @@ fn interface_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     check(ui, "settings.navigator", &mut app.ui.navigator, "Show the Navigator while zoomed in");
     row(ui, t, crate::i18n::tr("Info overlay"), |ui| {
         use crate::state::InfoOverlay as I;
-        choices(ui, "settingsInfo", &[(I::Off, "Off"), (I::Basic, "File & date"), (I::Exposure, "Exposure")], &mut app.ui.info_overlay);
+        choices(ui, "settingsInfo", &[(I::Off, "Off"), (I::Basic, "Info 1"), (I::Exposure, "Info 2")], &mut app.ui.info_overlay);
     });
+    hint(ui, t, crate::i18n::tr("View → View Options chooses the lines Info 1 and Info 2 show."));
+}
+
+/// View ▸ View Options (⌘J), Lightroom Classic's Loupe View tab: whether the info overlay shows and
+/// which, and the three lines each of Info 1 and Info 2 shows (`view.viewOptions`). Changes apply
+/// as they are made.
+pub(super) fn view_options(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+    use crate::state::{InfoOverlay as I, LoupeInfo, LoupeInfoField as F};
+    heading(ui, t, crate::i18n::tr("Loupe View"));
+    let mut show = app.ui.info_overlay != I::Off;
+    if check(ui, "viewOptions.showInfo", &mut show, "Show Info Overlay") {
+        app.ui.info_overlay = if show { I::Basic } else { I::Off };
+    }
+    ui.add_enabled_ui(show, |ui| {
+        ui.horizontal(|ui| {
+            choices(ui, "viewOptionsInfo", &[(I::Basic, "Info 1"), (I::Exposure, "Info 2")], &mut app.ui.info_overlay);
+        });
+    });
+    for (n, title, defaults) in [(1, "Loupe Info 1", LoupeInfo::INFO1), (2, "Loupe Info 2", LoupeInfo::INFO2)] {
+        heading(ui, t, crate::i18n::tr(title));
+        let lines = if n == 1 { &mut app.ui.settings.loupe_info.info1 } else { &mut app.ui.settings.loupe_info.info2 };
+        for (i, line) in lines.iter_mut().enumerate() {
+            let id = format!("viewOptionsInfo{n}Line{}", i + 1);
+            let r = crate::widgets::combo_box(&id).width(220.0).selected_text(crate::i18n::tr(line.label())).show_ui(ui, |ui| {
+                for f in F::ALL {
+                    let key = serde_json::to_value(f).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
+                    let r = ui.selectable_label(line == f, crate::i18n::tr(f.label()));
+                    register(ui.ctx(), format!("button:{id}-{key}"), r.rect);
+                    if r.clicked() {
+                        *line = *f;
+                    }
+                }
+            });
+            register(ui.ctx(), format!("combo:{id}"), r.response.rect);
+        }
+        let r = ui.add_enabled(*lines != defaults, egui::Button::new(crate::i18n::tr("Use Defaults")));
+        register(ui.ctx(), format!("button:viewOptionsDefaults{n}"), r.rect);
+        if r.clicked() {
+            *lines = defaults;
+        }
+    }
 }
 
 // ----------------------------------------------------------------------------------- Slideshow

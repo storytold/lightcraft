@@ -178,6 +178,8 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "---",
             "compare.swap",
             "compare.makeSelect",
+            "---",
+            "view.viewOptions",
         ],
     ),
     (

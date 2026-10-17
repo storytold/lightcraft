@@ -129,6 +129,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.lightsOut", "Lights Out", Some("Shift+L"), "View"),
     ("view.enterFullScreen", "Enter Full Screen", Some("Cmd+Shift+F"), "View"),
     ("view.infoOverlay", "Cycle Info Overlay", Some("Cmd+I"), "View"),
+    ("view.viewOptions", "View Options…", Some("Cmd+J"), "View"),
     ("view.chooseLayoutImage", "Choose Layout Image…", None, "View"),
     ("view.layoutImage", "Show Layout Image", Some("Cmd+Alt+O"), "View"),
     ("view.layoutImageOpacity", "Layout Image Opacity", None, ""),
@@ -707,6 +708,27 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             };
             app.toast(&ctx, label);
             Ok(json!({"infoOverlay": app.ui.info_overlay}))
+        }
+        "view.viewOptions" => {
+            // `info1` / `info2` set the lines for an agent; without them the window opens
+            let mut info = app.ui.settings.loupe_info;
+            let mut set = false;
+            for (key, lines) in [("info1", &mut info.info1), ("info2", &mut info.info2)] {
+                let Some(v) = p.get(key) else { continue };
+                match serde_json::from_value(v.clone()) {
+                    Ok(v) => *lines = v,
+                    Err(_) => {
+                        return Some(Err(format!("`{key}`: three of none|fileName|captureDate|dimensions|exposure|camera|lens|cameraAndLens")));
+                    }
+                }
+                set = true;
+            }
+            if set {
+                app.ui.settings.loupe_info = info;
+            } else {
+                app.ui.dialog = Some(Dialog::ViewOptions);
+            }
+            Ok(json!({"loupeInfo": app.ui.settings.loupe_info}))
         }
         "view.chooseLayoutImage" => {
             let path = match p.get("path").and_then(Value::as_str) {

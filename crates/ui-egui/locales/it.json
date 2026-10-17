@@ -1990,5 +1990,15 @@
   "Test Face Model": "Testa il modello dei volti",
   "This build cannot run recognition models: they can be added and chosen, not used.": "Questa versione non può eseguire modelli di riconoscimento: si possono aggiungere e scegliere, non usare.",
   "This build has nowhere to keep face models, so the model list is not available. (The desktop app has.)": "Questa versione non ha dove tenere i modelli dei volti, quindi l'elenco dei modelli non è disponibile. (L'app desktop ce l'ha.)",
-  "Unnamed Faces": "Volti senza nome"
+  "Unnamed Faces": "Volti senza nome",
+  "View Options…": "Opzioni di visualizzazione…",
+  "View Options": "Opzioni di visualizzazione",
+  "Loupe View": "Vista lente",
+  "Show Info Overlay": "Mostra sovrapposizione informazioni",
+  "Loupe Info 1": "Info lente 1",
+  "Loupe Info 2": "Info lente 2",
+  "Use Defaults": "Usa predefiniti",
+  "Dimensions": "Dimensioni",
+  "Camera & Lens": "Fotocamera e obiettivo",
+  "View → View Options chooses the lines Info 1 and Info 2 show.": "Visualizza → Opzioni di visualizzazione sceglie le righe di Info 1 e Info 2."
 }
