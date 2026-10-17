@@ -253,6 +253,7 @@ fn parse_tree(s: &str) -> Result<Node, XmpError> {
                 }
             }
             Event::End(_) if stack.len() > 1 => {
+                #[allow(clippy::expect_used)] // stack[0] is the permanent root, so len > 1 guarantees a real element on top
                 let n = stack.pop().expect("len > 1");
                 scopes.pop();
                 if let Some(parent) = stack.last_mut() {
@@ -288,9 +289,12 @@ fn parse_tree(s: &str) -> Result<Node, XmpError> {
     }
     // close unterminated elements leniently
     while stack.len() > 1 {
+        #[allow(clippy::expect_used)] // stack[0] is the permanent root, so len > 1 guarantees a real element on top
         let n = stack.pop().expect("len > 1");
+        #[allow(clippy::expect_used)] // len > 1 leaves the root below the popped element, so last_mut() is Some
         stack.last_mut().expect("root").children.push(n);
     }
+    #[allow(clippy::expect_used)] // the loop above leaves exactly the root on the stack
     Ok(stack.pop().expect("root"))
 }
 
