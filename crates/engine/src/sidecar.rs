@@ -325,12 +325,13 @@ impl SidecarData {
 /// The sidecar packet for a photo; the colour label is written by its name in `cat` (custom
 /// label names included, as other editors do).
 pub fn sidecar_packet(p: &Photo, cat: &lightcraft_catalog::Catalog) -> String {
-    sidecar_packet_with(p, cat, false)
+    sidecar_packet_with(p, cat, false, crate::export::MetadataPolicy::All)
 }
 
-/// [`sidecar_packet`], without any location (GPS, sublocation, city, state, country) when
-/// `remove_location` is set (an export with "Remove location info").
-pub fn sidecar_packet_with(p: &Photo, cat: &lightcraft_catalog::Catalog, remove_location: bool) -> String {
+/// [`sidecar_packet`] for an export: only the metadata `policy` includes, and without any location
+/// (GPS, sublocation, city, state, country) when `remove_location` is set ("Remove location info").
+/// The edits and the flag are always written: they are what the packet is for.
+pub fn sidecar_packet_with(p: &Photo, cat: &lightcraft_catalog::Catalog, remove_location: bool, policy: crate::export::MetadataPolicy) -> String {
     let nz = |s: &str| (!s.trim().is_empty()).then(|| s.to_string());
     let meta = lightcraft_meta::Metadata {
         software: Some("LightCraft".into()),
@@ -354,10 +355,11 @@ pub fn sidecar_packet_with(p: &Photo, cat: &lightcraft_catalog::Catalog, remove_
         gps: p.meta.gps.map(|(latitude, longitude)| lightcraft_meta::Gps { latitude, longitude, altitude: None }),
         ..Default::default()
     };
-    let mut meta = meta;
+    let mut meta = policy.restrict(&meta);
     if remove_location {
         (meta.sublocation, meta.city, meta.state, meta.country, meta.gps) = (None, None, None, None, None);
     }
+    let remove_location = remove_location || !policy.includes_location();
     let settings = serde_json::to_string(&*p.develop).unwrap_or_default();
     let flag = match p.flag {
         Flag::None => "none",

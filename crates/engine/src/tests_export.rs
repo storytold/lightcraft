@@ -579,6 +579,76 @@ fn remove_location_holds_for_original_and_dng_exports() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The metadata setting holds for the file-copying formats too (#1505): the original's sidecar
+/// and the DNG's packet carry only what it includes, and an original that embeds metadata it
+/// leaves out is refused rather than copied.
+#[test]
+fn metadata_policy_holds_for_original_and_dng_exports() {
+    let dir = temp_dir("export-policy");
+    let raw = dir.join("Raw.dng");
+    std::fs::write(&raw, synthetic_dng_with(None, Default::default())).unwrap();
+    // a scan without any metadata of its own, and a JPEG whose EXIF names the camera
+    let img = lightcraft_raster::Rgba8::from_fn(32, 24, |x, y| [(x * 8) as u8, (y * 10) as u8, 90, 255]);
+    let scan = dir.join("Scan.jpg");
+    std::fs::write(
+        &scan,
+        lightcraft_codecs::encode_jpeg(&lightcraft_codecs::EncodeImage::rgba8(&img), 90, Default::default(), &Default::default()).unwrap(),
+    )
+    .unwrap();
+    let jpg = dir.join("Cam.jpg");
+    let cam = lightcraft_meta::Metadata { make: Some("Maker".into()), model: Some("Body".into()), ..Default::default() };
+    let exif = lightcraft_meta::write_exif(&cam);
+    let meta = lightcraft_codecs::EncodeMeta { exif: Some(&exif), ..Default::default() };
+    std::fs::write(&jpg, lightcraft_codecs::encode_jpeg(&lightcraft_codecs::EncodeImage::rgba8(&img), 90, Default::default(), &meta).unwrap())
+        .unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [raw.to_string_lossy(), scan.to_string_lossy(), jpg.to_string_lossy()]})).unwrap();
+    let id = |s: &Session, n: &str| s.catalog.photos().find(|p| p.file_name == n).unwrap().id;
+    let (rid, sid, jid) = (id(&s, "Raw.dng"), id(&s, "Scan.jpg"), id(&s, "Cam.jpg"));
+    s.execute(
+        "photo.setMeta",
+        &json!({"ids": [rid.0, sid.0], "title": "Dune", "caption": "Evening", "creator": "Sam", "copyright": "© Sam", "keywords": ["sand"], "city": "Paris", "gps": [48.85, 2.35]}),
+    )
+    .unwrap();
+    let opts = |f: &str, policy: &str| ExportOptions::from_json(&json!({"format": f, "metadata": policy}));
+    let side = |e: &crate::export::Exported| lightcraft_meta::parse_xmp(std::str::from_utf8(&e.sidecars[0].1).unwrap()).unwrap().metadata;
+
+    // the scan's original with its sidecar, the raw as a DNG with the packet inside
+    for (format, pid) in [("original", sid), ("dng", rid)] {
+        let get = |s: &mut Session, policy: &str| {
+            let e = export_photo(s, pid, &opts(format, policy), 1).unwrap();
+            if format == "original" { side(&e) } else { lightcraft_meta::extract(&e.bytes) }
+        };
+        for policy in ["all", "allExceptCamera"] {
+            let m = get(&mut s, policy);
+            assert_eq!(m.title.as_deref(), Some("Dune"), "{format} {policy}");
+            assert!(m.city.is_some() && m.gps.is_some() && m.keywords == ["sand"], "{format} {policy}: {m:?}");
+            assert_eq!(m.copyright.as_deref(), Some("© Sam"));
+        }
+        let m = get(&mut s, "copyright");
+        assert_eq!((m.copyright.as_deref(), m.artist.as_deref()), (Some("© Sam"), Some("Sam")), "{format}");
+        assert!(m.title.is_none() && m.caption.is_none() && m.keywords.is_empty(), "{format}: {m:?}");
+        assert!(m.city.is_none() && m.gps.is_none() && m.rating.is_none(), "{format}: {m:?}");
+        let m = get(&mut s, "none");
+        assert!(m.copyright.is_none() && m.artist.is_none() && m.title.is_none() && m.gps.is_none(), "{format}: {m:?}");
+        assert!(m.keywords.is_empty() && m.city.is_none(), "{format}: {m:?}");
+    }
+    // the sidecar keeps the edits whatever the policy
+    let e = export_photo(&mut s, sid, &opts("original", "none"), 1).unwrap();
+    assert!(lightcraft_meta::parse_xmp(std::str::from_utf8(&e.sidecars[0].1).unwrap()).unwrap().lc_settings.is_some());
+
+    // an original naming its camera (a JPEG's EXIF, a raw's own tags): copied under "all",
+    // refused when the camera must go
+    for pid in [jid, rid] {
+        assert!(export_photo(&mut s, pid, &opts("original", "all"), 1).is_ok());
+        for policy in ["allExceptCamera", "copyright", "none"] {
+            let err = export_photo(&mut s, pid, &opts("original", policy), 1).err().unwrap();
+            assert!(err.contains("copied unchanged") && err.contains(policy) && err.contains("export as JPEG"), "{err}");
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// `metadata: "NONE"` as `app.export` sends it: the JPEG carries no location or camera data
 /// (it used to be read as `all` and carry both).
 #[test]

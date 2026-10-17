@@ -572,6 +572,47 @@ pub enum MetadataPolicy {
 }
 
 impl MetadataPolicy {
+    /// `m` with only what this policy embeds. Technical fields (dimensions, orientation, software)
+    /// are always kept: they describe the file, not the photo or the photographer.
+    pub fn restrict(self, m: &Metadata) -> Metadata {
+        let mut out = m.clone();
+        if self == Self::All {
+            return out;
+        }
+        // camera, lens and capture settings
+        (out.make, out.model, out.serial_number) = (None, None, None);
+        (out.lens_make, out.lens_model, out.lens_serial_number, out.lens_spec) = (None, None, None, None);
+        (out.exposure_time, out.f_number, out.iso, out.focal_length, out.focal_length_35mm) = (None, None, None, None, None);
+        (out.flash, out.exposure_bias, out.exposure_program, out.metering_mode, out.white_balance) = (None, None, None, None, None);
+        if self == Self::AllExceptCamera {
+            return out;
+        }
+        // everything but the copyright info
+        (out.capture_time, out.gps, out.title, out.caption, out.alt_text, out.extended_description) = (None, None, None, None, None, None);
+        (out.sublocation, out.city, out.state, out.country) = (None, None, None, None);
+        (out.keywords, out.hierarchical_keywords, out.regions) = (Vec::new(), Vec::new(), Vec::new());
+        (out.rating, out.label) = (None, None);
+        if self == Self::Copyright {
+            return out;
+        }
+        (out.artist, out.copyright, out.copyright_marked, out.usage_terms, out.copyright_url) = (None, None, None, None, None);
+        out
+    }
+
+    /// Whether this policy embeds where the photo was taken.
+    pub fn includes_location(self) -> bool {
+        matches!(self, Self::All | Self::AllExceptCamera)
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::AllExceptCamera => "allExceptCamera",
+            Self::Copyright => "copyright",
+            Self::None => "none",
+        }
+    }
+
     pub fn parse(s: &str) -> Option<Self> {
         match s.to_ascii_lowercase().as_str() {
             "all" => Some(Self::All),
@@ -1600,6 +1641,8 @@ enum Work {
         lossy_edge: Option<u32>,
         /// The original must not carry a location ([`removes_location`]).
         remove_location: bool,
+        /// The original must not carry metadata this policy leaves out.
+        policy: MetadataPolicy,
         label: String,
         size: (usize, usize),
     },
@@ -1666,7 +1709,7 @@ fn prepare_guarded(
         let work = Work::File {
             path: path.clone(),
             read: session.media.file_bytes.clone(),
-            packet: crate::sidecar::sidecar_packet_with(p, &session.catalog, removes_location(p, &session.catalog, o)),
+            packet: crate::sidecar::sidecar_packet_with(p, &session.catalog, removes_location(p, &session.catalog, o), o.metadata),
             dng,
             quality: o.quality,
             lossy_edge: o.resize.is_some().then(|| {
@@ -1674,6 +1717,7 @@ fn prepare_guarded(
                 u32::try_from(w.max(h)).unwrap_or(u32::MAX)
             }),
             remove_location: removes_location(p, &session.catalog, o),
+            policy: o.metadata,
             label: p.file_name.clone(),
             size: (p.width as usize, p.height as usize),
         };
@@ -1743,7 +1787,7 @@ impl PreparedExport {
                 };
                 Ok(Exported { file_name, bytes, width: r.image.width, height: r.image.height, sidecars: Vec::new(), gpu_fallback })
             }
-            Work::File { path, read, packet, dng, quality, lossy_edge, label, size, remove_location } => {
+            Work::File { path, read, packet, dng, quality, lossy_edge, label, size, remove_location, policy } => {
                 let bytes = match &read {
                     Some(r) => r(&path)?,
                     None => std::fs::read(&path).map_err(|e| format!("{path}: {e}"))?,
@@ -1754,6 +1798,15 @@ impl PreparedExport {
                         return Err(format!(
                             "{label}: can't remove the location from an original file that embeds GPS; export as JPEG, TIFF or DNG instead"
                         ));
+                    }
+                    if policy != MetadataPolicy::All {
+                        let embedded = lightcraft_meta::extract(&bytes);
+                        if policy.restrict(&embedded) != embedded {
+                            return Err(format!(
+                                "{label}: an original file is copied unchanged, and this one embeds metadata that the \"{}\" metadata setting leaves out; export as JPEG or TIFF instead",
+                                policy.name()
+                            ));
+                        }
                     }
                     return Ok(Exported {
                         file_name,
