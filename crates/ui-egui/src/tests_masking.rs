@@ -159,23 +159,23 @@ fn mask_adjustments_hide_overlay_without_disabling_the_mask() {
     let d = develop(&h);
     assert!(d.masks[0].adjust.exposure > 0.0);
     assert!(d.masks[0].visible, "hiding the overlay must not disable the mask");
-    assert_eq!(crate::panels::detail::view_overlay(&h.app, &d), Overlay::None);
+    assert_eq!(crate::panels::detail::view_overlay(&h.app, &d, false), Overlay::None);
     let mask = d.masks[0].clone();
 
     let r = h.request("ui.key", json!({"key": "o"}), T);
     assert_eq!(r["ok"], true, "{r}");
     assert!(h.app.ui.mask_overlay, "O can restore the overlay");
     assert_eq!(develop(&h).masks[0], mask, "toggling the overlay leaves the mask and its effect unchanged");
-    assert!(matches!(crate::panels::detail::view_overlay(&h.app, &develop(&h)), Overlay::Mask { .. }));
+    assert!(matches!(crate::panels::detail::view_overlay(&h.app, &develop(&h), false), Overlay::Mask { .. }));
 
     // Ctrl+Shift+O / Cmd+Shift+O shows every visible mask's region at once (the new command), ahead of the selected
     // mask overlay so it is not shadowed by the always-on single-mask overlay.
     exec(&mut h, "view.maskOverlayAll", json!({}));
     assert!(h.app.ui.mask_overlay_all, "the all-masks overlay command turns it on");
-    assert!(matches!(crate::panels::detail::view_overlay(&h.app, &develop(&h)), Overlay::AllMasks { .. }));
+    assert!(matches!(crate::panels::detail::view_overlay(&h.app, &develop(&h), false), Overlay::AllMasks { .. }));
     exec(&mut h, "view.maskOverlayAll", json!({}));
     assert!(!h.app.ui.mask_overlay_all, "the all-masks overlay command toggles it off");
-    assert!(!matches!(crate::panels::detail::view_overlay(&h.app, &develop(&h)), Overlay::AllMasks { .. }));
+    assert!(!matches!(crate::panels::detail::view_overlay(&h.app, &develop(&h), false), Overlay::AllMasks { .. }));
 
     // Failed edits and global adjustments must not hide the mask overlay.
     assert!(h.app.run("mask.adjust", json!({"id": 999, "values": {"exposure": 1.0}})).is_err());
@@ -274,12 +274,12 @@ fn mask_overlay_keys_and_pins() {
     assert_eq!(h.app.session.active_mask, Some(2));
     // the loupe asks the renderer for the selected mask's overlay
     let d = develop(&h);
-    let o = crate::panels::detail::view_overlay(&h.app, &d);
+    let o = crate::panels::detail::view_overlay(&h.app, &d, false);
     assert_eq!(o, Overlay::Mask { id: 2, view: MaskView::Color, color: [230, 30, 40], opacity: 50 });
     // O toggles it, Shift+O cycles the colour (and leaves the crop overlay alone)
     h.request("ui.key", json!({"key": "o"}), T);
     assert!(!h.app.ui.mask_overlay);
-    assert_eq!(crate::panels::detail::view_overlay(&h.app, &d), Overlay::None);
+    assert_eq!(crate::panels::detail::view_overlay(&h.app, &d, false), Overlay::None);
     h.request("ui.key", json!({"key": "o"}), T);
     let crop = h.app.ui.crop_overlay;
     let colour = h.app.ui.mask_overlay_color;

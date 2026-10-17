@@ -5,7 +5,7 @@ use lightcraft_color::spline::{Lut1, MonotoneCurve};
 use lightcraft_color::transfer::linear_to_srgb;
 use lightcraft_develop::{DevelopSettings, LocalAdjustments, Process, ToneCurve, VignetteStyle};
 use lightcraft_geom::Point;
-use lightcraft_raster::Rgba8;
+use lightcraft_raster::{Plane, Rgba8};
 
 use crate::colorops::ColorOps;
 use crate::geometry::Frame;
@@ -13,6 +13,36 @@ use crate::local::log_lum;
 use crate::output::{DeepImage, DeepSamples, OutputDepth, OutputSpace, OutputTrc};
 use crate::tone::ToneMap;
 use crate::{Prepared, SourceInfo, for_rows};
+
+/// Sharpening's Masking as 0..1.
+fn sharpen_masking(s: &DevelopSettings) -> f32 {
+    (s.detail.sharpen_masking / 100.0) as f32
+}
+
+/// How much sharpening applies at a pixel whose fine detail (log luminance minus its texture
+/// blur) is `det`, with Masking `masking` (0..1): everywhere at 0, only on stronger edges above.
+#[inline]
+fn sharpen_weight(masking: f32, det: f32) -> f32 {
+    if masking > 0.0 { smooth(masking * 0.25, masking * 0.25 + 0.15, det.abs()) } else { 1.0 }
+}
+
+/// [`sharpen_weight`] at every pixel of `p` (the view [`crate::Overlay::SharpenMask`] shows).
+pub(crate) fn sharpen_weight_plane(p: &Prepared, s: &DevelopSettings) -> Plane {
+    let masking = sharpen_masking(s);
+    if masking <= 0.0 {
+        return Plane::filled(p.log_l.width, p.log_l.height, 1.0);
+    }
+    // the detail band the render sharpens (made here when sharpening is off)
+    let fresh;
+    let blur = match &p.texture_blur {
+        Some(b) if (b.width, b.height) == (p.log_l.width, p.log_l.height) => &**b,
+        _ => {
+            fresh = lightcraft_raster::blur::gaussian(&p.log_l, crate::local::texture_sigma(p.px_per_long));
+            &fresh
+        }
+    };
+    p.log_l.zip_map(blur, |l, b| sharpen_weight(masking, l - b))
+}
 
 #[inline]
 fn smooth(e0: f32, e1: f32, x: f32) -> f32 {
@@ -244,7 +274,7 @@ impl FinishParams {
             tex,
             dehaze,
             sharpen: (s.detail.sharpen_amount / 150.0) as f32,
-            sharpen_mask: (s.detail.sharpen_masking / 100.0) as f32,
+            sharpen_mask: sharpen_masking(s),
             air: air_pre * gain,
             air_pre,
             gain,
@@ -509,8 +539,7 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                 let tame = 1.0 - 0.6 * smooth(0.4, 1.6, det.abs());
                 delta += tx * 1.1 * det.clamp(-1.0, 1.0) * tame;
                 if sp != 0.0 {
-                    let m = if sharpen_mask > 0.0 { smooth(sharpen_mask * 0.25, sharpen_mask * 0.25 + 0.15, det.abs()) } else { 1.0 };
-                    delta += sp * 1.3 * det.clamp(-0.8, 0.8) * m;
+                    delta += sp * 1.3 * det.clamp(-0.8, 0.8) * sharpen_weight(sharpen_mask, det);
                 }
             }
             // local Noise: smooth (or, negative, boost) small-amplitude detail, keep edges

@@ -320,11 +320,11 @@ fn animated_rect(ctx: &egui::Context, anim: &mut bool, target: Rect) -> Rect {
 
 /// Whether an overlay can be rendered on a region tile without changing what the tile means.
 /// Mask overlays (one mask, or every visible mask at once) are evaluated from the same mask
-/// alphas as the full render; the other diagnostic overlays either need whole-frame context or
-/// deliberately replace the loupe.
+/// alphas as the full render, and the clipping and grey views work per pixel of it; the other
+/// diagnostic overlays need whole-frame context or deliberately replace the loupe.
 pub(crate) fn overlay_supports_window(overlay: lightcraft_pipeline::Overlay) -> bool {
     use lightcraft_pipeline::Overlay;
-    matches!(overlay, Overlay::None | Overlay::Mask { .. } | Overlay::AllMasks { .. })
+    matches!(overlay, Overlay::None | Overlay::Mask { .. } | Overlay::AllMasks { .. } | Overlay::ShadowClip | Overlay::HighlightClip | Overlay::Grey)
 }
 
 /// What a window render of the loupe needs to know about the view it belongs to.
@@ -522,7 +522,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     app.image_rect = Some(img_rect);
     // request renders: the loupe at display resolution (drafts during drags)
     let interacting = app.session.interaction.is_some();
-    let overlay = view_overlay(app, &d);
+    let overlay = view_overlay(app, &d, ui.input(|i| i.modifiers.alt && i.pointer.primary_down()));
     // a drag drafts at full size where the GPU draws the view (by the GPU's own rule, `handles`;
     // `ready` first: `available` would wait for a device still being created)
     let gpu = interacting
@@ -1342,12 +1342,41 @@ fn targeted_drag(app: &mut LightcraftApp, resp: &egui::Response, map: &CanvasMap
     }
 }
 
-/// The diagnostic overlay the loupe shows (the selected mask, Point Color's visualized range,
+/// The view holding ⌥ (Option) while dragging slider `control` shows in the loupe, as in Lightroom
+/// (issue #937): clipping on Blacks (shadows) and Whites / Exposure (highlights), the sharpening
+/// mask on Masking, the image in grey on the other Sharpening and the luminance Noise Reduction
+/// sliders. Releasing ⌥ or the slider brings the photo back; nothing is saved.
+pub(crate) fn slider_preview(control: &str) -> Option<lightcraft_pipeline::Overlay> {
+    SLIDER_PREVIEWS.iter().find(|(id, _)| *id == control).map(|(_, o)| *o)
+}
+
+/// The controls with a [`slider_preview`], and the view each shows.
+pub(crate) const SLIDER_PREVIEWS: [(&str, lightcraft_pipeline::Overlay); 10] = {
+    use lightcraft_pipeline::Overlay::{Grey, HighlightClip, ShadowClip, SharpenMask};
+    [
+        ("light.blacks", ShadowClip),
+        ("light.whites", HighlightClip),
+        ("light.exposure", HighlightClip),
+        ("detail.sharpenMasking", SharpenMask),
+        ("detail.sharpenAmount", Grey),
+        ("detail.sharpenRadius", Grey),
+        ("detail.sharpenDetail", Grey),
+        ("detail.nrLuminance", Grey),
+        ("detail.nrDetail", Grey),
+        ("detail.nrContrast", Grey),
+    ]
+};
+
+/// The diagnostic overlay the loupe shows (the ⌥-drag preview of the slider being dragged while
+/// `alt`: ⌥ is held with the button down; the selected mask, Point Color's visualized range,
 /// Visualize Spots).
-pub(crate) fn view_overlay(app: &LightcraftApp, d: &DevelopSettings) -> lightcraft_pipeline::Overlay {
+pub(crate) fn view_overlay(app: &LightcraftApp, d: &DevelopSettings, alt: bool) -> lightcraft_pipeline::Overlay {
     use lightcraft_pipeline::{MaskView, Overlay};
     if app.ui.fullscreen {
         return Overlay::None;
+    }
+    if alt && let Some(o) = app.ui.dragging_control.as_deref().and_then(slider_preview) {
+        return o;
     }
     // Show every visible mask's region at once (Ctrl+Shift+O / Cmd+Shift+O), ahead of the selected-mask overlay
     // so the shortcut is not shadowed by the always-on single-mask overlay.

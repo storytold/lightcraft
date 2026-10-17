@@ -120,7 +120,8 @@ pub fn last_fallback() -> Option<String> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Fallback {
     /// The GPU was not tried: it is unavailable, disabled or closing ([`unavailable_reason`]), or
-    /// the request is one only the CPU renders (high bit depth, soft proof, HDR range overlay).
+    /// the request is one only the CPU renders (high bit depth, soft proof, HDR range or sharpening
+    /// mask overlay).
     NotTried,
     /// The render was tried on the GPU and failed, for this reason (the same text
     /// [`last_fallback`] reports). The CPU renders it instead.
@@ -441,10 +442,13 @@ pub fn render(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &R
 
 /// Whether the GPU renders requests of this kind at all (a given render can still fall back to
 /// the CPU): the kernel writes 8-bit output, so high-bit-depth exports and soft proofs render on
-/// the CPU, and so does Visualize HDR, which needs the float HDR render. [`try_render`] follows it,
+/// the CPU, and so does Visualize HDR, which needs the float HDR render, and the sharpening mask,
+/// which needs the detail planes. [`try_render`] follows it,
 /// and the loupe sizes its slider-drag drafts by it (issue #330), so the two can't drift apart.
 pub fn handles(depth: lightcraft_pipeline::OutputDepth, proofed: bool, overlay: lightcraft_pipeline::Overlay) -> bool {
-    depth == lightcraft_pipeline::OutputDepth::U8 && !proofed && overlay != lightcraft_pipeline::Overlay::HdrRange
+    depth == lightcraft_pipeline::OutputDepth::U8
+        && !proofed
+        && !matches!(overlay, lightcraft_pipeline::Overlay::HdrRange | lightcraft_pipeline::Overlay::SharpenMask)
 }
 
 /// [`render`], reporting why this render made no GPU image: [`Fallback::NotTried`] when the GPU

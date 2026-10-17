@@ -1,6 +1,6 @@
 # Lightroom parity checklist
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (integration batch 36: slideshow module, print-ready PDF fixes, local adjustment presets, Layout Image loupe overlay, Delete in an album removes from it, new languages Czech, Polish, Italian-ready catalogs; many rows' notes updated by their PRs) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-16 · **Change:** minor (⌥-drag previews on Blacks / Whites / Exposure / Sharpening / luminance NR, #937; LR-VIEW-CLIPPING and LR-EDIT-DETAIL-SHARPEN downgraded to 🟡: J doesn't paint clipped pixels, Radius / Detail unused) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 The measured, row-by-row checklist: one row per Lightroom feature, menu item and shortcut, what we
 have and what is missing. It answers *does the feature exist?* (feature breadth). Whether it is good
@@ -28,10 +28,10 @@ cited here still exists. Formerly docs/parity.md.
 |---|---:|---:|---:|---:|---:|---:|
 | A. Import (IMP) | 12 | 3 | 1 | 1 | 4/6 (67%) | 5/5 (100%) |
 | B. Library management (LIB) | 22 | 2 | 1 | 2 | 9/9 (100%) | 9/9 (100%) |
-| C. Views & navigation (VIEW) | 16 | 1 | 1 | 0 | 9/9 (100%) | 4/4 (100%) |
+| C. Views & navigation (VIEW) | 15 | 2 | 1 | 0 | 8/9 (89%) | 4/4 (100%) |
 | D. Search & filter (FILT) | 11 | 1 | 1 | 0 | 4/4 (100%) | 4/4 (100%) |
 | E. Metadata (META) | 5 | 1 | 0 | 0 | 2/2 (100%) | 2/2 (100%) |
-| F. Edit panel — global adjustments (EDIT) | 44 | 2 | 3 | 1 | 28/28 (100%) | 13/14 (93%) |
+| F. Edit panel — global adjustments (EDIT) | 43 | 3 | 3 | 1 | 27/28 (96%) | 13/14 (93%) |
 | G. Profiles (PROF) | 7 | 1 | 3 | 0 | 3/4 (75%) | 3/3 (100%) |
 | H. Crop & rotate (CROP) | 9 | 0 | 0 | 1 | 6/6 (100%) | 3/3 (100%) |
 | I. Remove / healing (REM) | 8 | 1 | 2 | 2 | 4/4 (100%) | 2/3 (67%) |
@@ -53,9 +53,9 @@ cited here still exists. Formerly docs/parity.md.
 | Y. Menus | 84 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 78 | 4 | 2 | 1 | 49/52 (94%) | 24/26 (92%) |
 | Lightroom Classic extras | 40 | 23 | 23 | 8 | — | 24/26 (92%) |
-| **Total** | 419 | 61 | 59 | 35 | 194/201 (97%) | 148/161 (92%) |
+| **Total** | 417 | 63 | 59 | 35 | 192/201 (96%) | 148/161 (92%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.4%** of 539 in-scope rows — P0 98.3% of 201 · P1 95.0% of 161 · P2 55.7% of 176.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.2%** of 539 in-scope rows — P0 97.8% of 201 · P1 95.0% of 161 · P2 55.7% of 176.
 <!-- /parity:summary -->
 
 ## Top gaps and shortcut notes
@@ -140,7 +140,7 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 | LR-VIEW-INFOOVERLAY | Info overlay on the photo | P1 | ✅ | `cmd:view.infoOverlay` | off / file + date + size / exposure + camera; ⌘I cycles (I in full screen; elsewhere I stays the Info panel) |
 | LR-VIEW-SLIDESHOW | Slideshow | P2 | ✅ | `cmd:view.slideshow` | View ▸ Slideshow (⌥⌘↩): the photos in view full screen from the selected one, played with the library's playback settings (see LRC-SS-PLAYBACK: fades, random order, repeat, previews prepared ahead; `interval` / any setting overrides one run); Space pauses, ←/→ step (a cut), Esc ends; playback controls on pointer movement |
 | LR-VIEW-SECONDWINDOW | Second display window [Classic] | P2 | ✅ | `cmd:view.secondWindow`, `crates/ui-egui/src/panels/second.rs` | Window ▸ Second Window (⌘F11): the active photo fitted in its own native window with its own render (a floating panel where there are no native windows); loupe view only (no grid / compare / survey there) |
-| LR-VIEW-CLIPPING | Clipping indicators | P0 | ✅ | `cmd:view.clipping` | |
+| LR-VIEW-CLIPPING | Clipping indicators | P0 | 🟡 | `cmd:view.clipping`, `crates/ui-egui/src/panels/detail.rs` (`clipping_overlay`, `slider_preview`) | J only frames the photo red (highlights) / blue (shadows) when any pixel clips; it doesn't paint the clipped pixels. ⌥-dragging Blacks / Whites / Exposure shows the clipped pixels and channels (`Overlay::ShadowClip` / `HighlightClip`, issue #937) |
 | LR-VIEW-HISTOGRAM | Histogram | P0 | ✅ | `cmd:view.histogram`, `crates/ui-egui/src/panels/edit.rs`, `crates/pipeline/src/lib.rs` (`hdr_histogram`) | HDR edits: SDR on the left half, the HDR range (0 to 5 stops above SDR white, a fixed scale) on the right with the headroom limit marked; colour bar (white, or Visualize HDR range's colours when that is on) and SDR / HDR labels; no drag-to-adjust on the histogram; it follows slider drags live (a small render beside the drafts, `Slot::HdrHistogram`) and never drops to the SDR layout mid-drag |
 | LR-VIEW-HDR-DISPLAY | HDR display output | P2 | ⬜ | |, `apps/lightcraft/src/hdr_display.rs` (`choose`, `preferred_hdr_format`) | SDR/HDR decision (platform, surface format, OS headroom, `LIGHTCRAFT_HDR_DISPLAY=0`) is unit-tested and logged at start; always SDR today because eframe configures an 8-bit surface; no OS headroom query yet;  |
 
@@ -180,12 +180,12 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 | LR-EDIT-AUTO | Auto settings | P0 | ✅ | `cmd:develop.auto`, `crates/pipeline/src/auto.rs` | a Lightroom-like recipe calibrated black-box on Lightroom's Auto results for 24 Sony raws: Exposure from the scene's scene-linear log-average luminance (Lightroom's observed slope, -0.41 EV per EV), Highlights -66 and Shadows +52 (Lightroom's average Auto values), Contrast +68 and Vibrance +30 fitted on our scales. Held out one photo at a time: on the 16 photos whose start Sony's DRO doesn't brighten, a median dE76 of 6.4 from Lightroom's Auto results against 8.3 unedited; on all 24, 7.7 against 7.9 (issues #318, #209). Calibrated on Sony files only; Whites and Blacks stay 0 |
 | LR-EDIT-BW | Black & white | P0 | ✅ | `cmd:develop.treatment` | |
 | LR-EDIT-HDR-MODE | HDR editing | P2 | ✅ | `cmd:develop.hdr`, `ctl:hdr.maxEv`, `crates/ui-egui/src/panels/edit.rs` (`hdr_row`) | HDR button next to B&W in the Edit panel header, as Lightroom (Visualize HDR and the headroom limit in the Light panel while it's on); see Q. HDR |
-| LR-EDIT-LIGHT-EXPOSURE | Exposure | P0 | ✅ | `ctl:light.exposure` | |
+| LR-EDIT-LIGHT-EXPOSURE | Exposure | P0 | ✅ | `ctl:light.exposure` | ⌥-drag: highlight clipping view (#937) |
 | LR-EDIT-LIGHT-CONTRAST | Contrast | P0 | ✅ | `ctl:light.contrast` | |
 | LR-EDIT-LIGHT-HIGHLIGHTS | Highlights | P0 | ✅ | `ctl:light.highlights`, `crates/raw/src/highlight.rs` | sensor-clipped highlights stay neutral when Highlights (or Exposure, Whites) darkens them: fully clipped content is rebuilt to the neutral of the colour model applied after it, partly clipped content takes its colour from reliable unclipped content nearby (not from dark objects, lens fringes or another surface beside it) and white where there is none, and pale partly clipped content (a white sky) turns white on its way to clipping (#523); binned previews and thumbnails decide clipping per sample before averaging (`develop_binned_masked`, `highlight::reconstruct_masked`), so a block with one clipped specular sample keeps its mean instead of jumping to the clip level, which reconstruction turned into green speckles at 500 px (#548) From process V2 the Highlights/Shadows base is the edge-aware filter of the 0.15 %-of-long-edge median of log luminance: twigs and fine texture take their surroundings' shift, so bright areas keep their local contrast as with Exposure (V1's base kept ~0.6 of it at −100, #632); region edges stay sharp |
 | LR-EDIT-LIGHT-SHADOWS | Shadows | P0 | ✅ | `ctl:light.shadows` | From process V2, the same base as Highlights: dark areas keep their local contrast when lifted (#632) |
-| LR-EDIT-LIGHT-WHITES | Whites | P0 | ✅ | `ctl:light.whites` | |
-| LR-EDIT-LIGHT-BLACKS | Blacks | P0 | ✅ | `ctl:light.blacks` | |
+| LR-EDIT-LIGHT-WHITES | Whites | P0 | ✅ | `ctl:light.whites` | ⌥-drag: highlight clipping view, black where nothing clips (#937) |
+| LR-EDIT-LIGHT-BLACKS | Blacks | P0 | ✅ | `ctl:light.blacks` | ⌥-drag: shadow clipping view, white where nothing clips (#937) |
 | LR-EDIT-LIGHT-CURVE-PARAM | Parametric curve | P0 | ✅ | `ctl:curve.highlights`, `ctl:curve.lights`, `ctl:curve.darks`, `ctl:curve.shadows`, `ctl:curve.split*` | |
 | LR-EDIT-LIGHT-CURVE-POINT | Point curve | P0 | ✅ | `cmd:develop.curve`, `cmd:curve.reset`, `cmd:curve.presets`, `cmd:curve.applyPreset`, `cmd:curve.savePreset`, `cmd:curve.deletePreset`, `cmd:curve.importPresets`, `cmd:curve.exportPresets`, `cmd:file.importCurvePresets`, `cmd:file.exportCurvePresets`, `crates/engine/src/cmd/curves.rs`, `crates/ui-egui/src/panels/edit.rs` | click to add a point; drag a point in both axes (between its neighbours, input / output readout, one undo step per drag; ⌥-drag moves it a tenth as far for fine adjustment, issue #1363); drag empty space to add and drag; double-click removes; reset: double-click a channel selector (that channel), the Reset button under the graph (every curve incl. parametric) or right-click the graph (channel / all); Point Curve preset dropdown: own Linear / Medium Contrast / Strong Contrast, user presets (save the current point curves, delete by right-click; saved with the library), import / export as `.lccurve` JSON |
 | LR-EDIT-LIGHT-CURVE-RGB | Per-channel curves | P0 | ✅ | `cmd:develop.curve` (`channel`) | |
@@ -206,8 +206,8 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 | LR-EDIT-EFFECTS-DEHAZE | Dehaze | P0 | ✅ | `ctl:effects.dehaze` | |
 | LR-EDIT-EFFECTS-VIGNETTE | Post-crop vignette | P0 | ✅ | `ctl:vignette.*`, `crates/pipeline/src/finish.rs`, `crates/ui-egui/src/panels/edit.rs` | style picker (Highlight / Color / Paint) in the Effects section |
 | LR-EDIT-EFFECTS-GRAIN | Grain | P1 | ✅ | `ctl:grain.*` | |
-| LR-EDIT-DETAIL-SHARPEN | Sharpening | P0 | ✅ | `ctl:detail.sharpenAmount`, `ctl:detail.sharpenRadius`, `ctl:detail.sharpenDetail`, `ctl:detail.sharpenMasking` | no Alt-drag mask preview |
-| LR-EDIT-DETAIL-NR | Luminance noise reduction | P0 | ✅ | `ctl:detail.nrLuminance`, `ctl:detail.nrDetail`, `ctl:detail.nrContrast` | radii in the original's pixels, so grid, loupe and smaller exports look like the full-size render scaled down (`local::nr_params`, `Plan::detail_scale`, #960) |
+| LR-EDIT-DETAIL-SHARPEN | Sharpening | P0 | 🟡 | `ctl:detail.sharpenAmount`, `ctl:detail.sharpenRadius`, `ctl:detail.sharpenDetail`, `ctl:detail.sharpenMasking` | ⌥-drag: Masking shows the sharpening mask white on black, the other sliders the image in grey (#937). Radius and Detail are saved but the render doesn't use them yet (fixed band at 0.18% of the long edge, `local::texture_sigma`) |
+| LR-EDIT-DETAIL-NR | Luminance noise reduction | P0 | ✅ | `ctl:detail.nrLuminance`, `ctl:detail.nrDetail`, `ctl:detail.nrContrast` | radii in the original's pixels, so grid, loupe and smaller exports look like the full-size render scaled down (`local::nr_params`, `Plan::detail_scale`, #960); ⌥-drag: the image in grey (#937) |
 | LR-EDIT-DETAIL-CNR | Colour noise reduction | P0 | ✅ | `ctl:detail.nrColor`, `ctl:detail.nrColorDetail`, `ctl:detail.nrColorSmoothness` | preview-size independent like luminance NR (#960) |
 | LR-EDIT-DETAIL-DENOISE | AI denoise | P2 | 🟡 | cmd:denoise.toggle, cmd:denoise.models.install, cmd:denoise.queue, ctl:enhance.denoise, `crates/denoise/`, `docs/denoise.md` | non-destructive Bayer RAW, opt-in weights, pure-Rust CPU/GPU; GPU convolution uses independently written shared scalars (Metal equivalence regression, issue #479); tiles can also run on another computer's graphics card (`lightcraft-cli denoise-serve`, `crates/denoise/src/remote.rs`); X-Trans/linear RGB, model policy and Lightroom fidelity remain; closing the model setup without installing turns the switch back off (#922) |
 | LR-EDIT-DETAIL-RAWDETAILS | Improved demosaic toggle | P2 | ⬜ | | |
@@ -872,6 +872,7 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 | 2026-10-13 | minor | LR-META-INFO: Nikon DSLR raws show their lens from the maker note; status unchanged (✅) |
 | 2026-10-13 | patch | LR-IMP-LOCAL: browsing a Local folder again forgets the untouched records of files deleted or moved by another app (issue #1392); status unchanged |
 | 2026-10-13 | minor | LR-MERGE-PANO: a panorama keeps its photos' resolution (up to 512 MP / 65,000 px) instead of a fixed 40 MP, held to what fits in memory (issue #1455); status unchanged |
+| 2026-10-11 | minor | ⌥-drag previews (issue #937) noted on LR-EDIT-LIGHT-EXPOSURE / WHITES / BLACKS and LR-EDIT-DETAIL-NR; LR-VIEW-CLIPPING ✅ → 🟡 (J frames the photo, doesn't paint clipped pixels), LR-EDIT-DETAIL-SHARPEN ✅ → 🟡 (Radius and Detail don't reach the render) |
 | 2026-10-11 | minor | KEY-SLIDER-TYPE: honor immediate Return/Escape and keep typed keys in the value editor; add regression references |
 | 2026-10-11 | minor | LR-PROF-CAMERACOLOR: raws with a black-and-white camera JPEG take its tone curve (issue #577) |
 | 2026-10-11 | minor | LR-VIEW-ZOOM and LR-VIEW-COMPARE: Compare and Reference are sharp at 1:1 (zoom windows per pane, two originals kept decoded while they are open); statuses unchanged |

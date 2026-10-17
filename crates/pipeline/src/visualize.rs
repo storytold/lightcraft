@@ -9,12 +9,20 @@
 //! - **Mask overlay** (Masking): the evaluated alpha of one mask, drawn as a colour tint, a colour
 //!   tint on a black-and-white image, the image on black / white, or the alpha as white on black
 //!   ([`MaskView`]). Both renderers hand the same alpha plane (the one the render used) to [`apply`].
+//! - **Clipping while ⌥-dragging** Blacks / Whites / Exposure ([`Overlay::ShadowClip`],
+//!   [`Overlay::HighlightClip`]): every output channel at 0 (or 255) shown, everything else blank,
+//!   so the clipped areas, and the channels that clip, are all that's left to see.
+//! - **Sharpening mask while ⌥-dragging Masking** ([`Overlay::SharpenMask`]): the weight the
+//!   render gives sharpening at each pixel, white on black (the CPU renderer draws it: it needs the
+//!   detail planes).
+//! - **Grey while ⌥-dragging** Sharpening or luminance Noise Reduction ([`Overlay::Grey`]): the
+//!   render in grey, so detail and noise are judged without colour.
 
 use std::borrow::Cow;
 
 use lightcraft_color::perceptual::{lab_to_lch, oklab_from_2020};
 use lightcraft_color::transfer::srgb_to_linear;
-use lightcraft_color::{REC2020, SRGB};
+use lightcraft_color::{LUMA_709, REC2020, SRGB};
 use lightcraft_develop::DevelopSettings;
 use lightcraft_raster::{Plane, Rgba8};
 
@@ -39,6 +47,17 @@ pub enum Overlay {
     /// Visualize HDR (photos edited in HDR): the SDR image dimmed to grey, with every pixel the HDR
     /// rendition puts above SDR white painted by how far above it is ([`HDR_BANDS`]).
     HdrRange,
+    /// Shadow clipping (⌥ on Blacks): white, black where every channel is 0, and where only some
+    /// are, the colour of the channels that aren't.
+    ShadowClip,
+    /// Highlight clipping (⌥ on Whites / Exposure): black, white where every channel is 255, and
+    /// where only some are, the colour of those channels.
+    HighlightClip,
+    /// Sharpening's weight after Masking (⌥ on Masking): white where it sharpens, black where
+    /// Masking holds it back.
+    SharpenMask,
+    /// The render in grey (⌥ on the Sharpening and luminance Noise Reduction sliders).
+    Grey,
 }
 
 /// [`Overlay::HdrRange`] colours (sRGB) for 0–1, 1–2, 2–3 and ≥ 3 stops above SDR white.
@@ -125,6 +144,10 @@ impl Overlay {
             Overlay::Mask { id, view, color, opacity } => (3, pack_mask(id, view, color, opacity) as f64),
             Overlay::AllMasks { view, color, opacity } => (5, pack_mask(0, view, color, opacity) as f64),
             Overlay::HdrRange => (4, 0.0),
+            Overlay::ShadowClip => (6, 0.0),
+            Overlay::HighlightClip => (7, 0.0),
+            Overlay::SharpenMask => (8, 0.0),
+            Overlay::Grey => (9, 0.0),
         }
     }
 
@@ -143,6 +166,10 @@ impl Overlay {
                     opacity: ((v as u64 >> 44) & 0x7f).min(100) as u8,
                 }
             }
+            6 => Overlay::ShadowClip,
+            7 => Overlay::HighlightClip,
+            8 => Overlay::SharpenMask,
+            9 => Overlay::Grey,
             _ => Overlay::None,
         }
     }
@@ -156,7 +183,17 @@ impl Overlay {
             Overlay::Mask { id, view, color, opacity } => 3 << 60 | pack_mask(id, view, color, opacity),
             Overlay::AllMasks { view, color, opacity } => 5 << 60 | pack_mask(0, view, color, opacity),
             Overlay::HdrRange => 0x4000,
+            Overlay::ShadowClip => 0x5000,
+            Overlay::HighlightClip => 0x6000,
+            Overlay::SharpenMask => 0x7000,
+            Overlay::Grey => 0x8000,
         }
+    }
+
+    /// The ⌥-drag clipping views, which test the sRGB values the histogram counts (a display
+    /// render draws them in sRGB, then converts).
+    pub fn is_clipping(self) -> bool {
+        matches!(self, Overlay::ShadowClip | Overlay::HighlightClip)
     }
 
     /// The mask an [`Overlay::Mask`] shows (if it exists in `s` and has components).
@@ -181,12 +218,21 @@ pub fn adjust_settings(o: Overlay, s: &mut Cow<'_, DevelopSettings>) {
 }
 
 /// Draw overlay `o` over `img` (rendered with `plan`). `mask` is the evaluated alpha of the mask
-/// an [`Overlay::Mask`] shows, at the image's size (see [`Overlay::mask`]); `masks` is the set of
-/// alphas an [`Overlay::AllMasks`] shows, one per visible mask with components.
+/// an [`Overlay::Mask`] shows, or the sharpening weight of an [`Overlay::SharpenMask`], at the
+/// image's size (see [`Overlay::mask`]); `masks` is the set of alphas an [`Overlay::AllMasks`]
+/// shows, one per visible mask with components.
 pub fn apply(img: &mut Rgba8, o: Overlay, plan: &Plan<'_>, mask: Option<&Plane>, masks: Option<&[Plane]>) {
     match o {
         // drawn by the renderer from the HDR rendition ([`hdr_range`])
         Overlay::None | Overlay::HdrRange => {}
+        Overlay::ShadowClip => clipping(img, false),
+        Overlay::HighlightClip => clipping(img, true),
+        Overlay::Grey => grey(img),
+        Overlay::SharpenMask => {
+            if let Some(a) = mask.filter(|a| (a.width, a.height) == (img.width, img.height)) {
+                mask_view(img, a, MaskView::WhiteOnBlack, [255; 3], 100);
+            }
+        }
         Overlay::PointColorRange(i) => {
             if let Some(p) = plan.settings.point_colors.get(i as usize) {
                 point_color_range(img, &PointK::new(p));
@@ -224,7 +270,7 @@ pub fn mask_view(img: &mut Rgba8, a: &Plane, view: MaskView, color: [u8; 3], opa
         for (x, px) in row.iter_mut().enumerate() {
             let a = a.data[y * w + x].clamp(0.0, 1.0);
             let p = [px[0] as f32, px[1] as f32, px[2] as f32];
-            let grey = 0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2];
+            let grey = luma8(*px);
             let out: [f32; 3] = match view {
                 MaskView::Color => std::array::from_fn(|c| p[c] + (col[c] - p[c]) * a * op),
                 MaskView::ColorOnBw => std::array::from_fn(|c| grey + (col[c] - grey) * a * op),
@@ -235,6 +281,25 @@ pub fn mask_view(img: &mut Rgba8, a: &Plane, view: MaskView, color: [u8; 3], opa
             let o = out.map(|v| v.round().clamp(0.0, 255.0) as u8);
             *px = [o[0], o[1], o[2], 255];
         }
+    });
+}
+
+/// Rec. 709 luma of an 8-bit pixel (0..255).
+fn luma8(p: [u8; 4]) -> f32 {
+    LUMA_709[0] * p[0] as f32 + LUMA_709[1] * p[1] as f32 + LUMA_709[2] * p[2] as f32
+}
+
+/// The clipping view: with `high`, each channel at 255 on, the rest off (black where nothing
+/// clips); otherwise each channel at 0 off, the rest on (white where nothing clips).
+fn clipping(img: &mut Rgba8, high: bool) {
+    let on = move |v: u8| if (high && v == 255) || (!high && v != 0) { 255 } else { 0 };
+    img.map_in_place(|p| [on(p[0]), on(p[1]), on(p[2]), 255]);
+}
+
+fn grey(img: &mut Rgba8) {
+    img.map_in_place(|p| {
+        let g = luma8(p).round().clamp(0.0, 255.0) as u8;
+        [g, g, g, 255]
     });
 }
 
@@ -255,7 +320,7 @@ fn spots(img: &mut Rgba8, t: u8, ppl: f64) {
     }
     let l = lightcraft_raster::Plane::from_fn(w, h, |x, y| {
         let p = img.data[y * w + x];
-        (0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32) / 255.0
+        luma8(p) / 255.0
     });
     let b = lightcraft_raster::blur::gaussian(&l, (SPOT_SIGMA * ppl).max(0.8) as f32);
     let thr = spot_threshold(t);
@@ -275,7 +340,7 @@ fn point_color_range(img: &mut Rgba8, k: &PointK) {
             let c = std::array::from_fn(|r| m[r][0] * lin[0] + m[r][1] * lin[1] + m[r][2] * lin[2]);
             let [l, ch, h] = lab_to_lch(oklab_from_2020(c));
             let a = k.weight(l, ch, h);
-            let grey = 0.2126 * px[0] as f32 + 0.7152 * px[1] as f32 + 0.0722 * px[2] as f32;
+            let grey = luma8(*px);
             for c in 0..3 {
                 px[c] = (grey + (px[c] as f32 - grey) * a).round().clamp(0.0, 255.0) as u8;
             }
@@ -296,7 +361,7 @@ pub fn hdr_range(img: &mut Rgba8, hdr: &crate::DeepImage, luma: [f32; 3]) {
             let i = (y * w + x) * 3;
             let Some(c) = v.get(i..i + 3) else { continue };
             let lum = luma[0] * c[0] + luma[1] * c[1] + luma[2] * c[2];
-            let grey = (0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32) * 0.55;
+            let grey = luma8(*p) * 0.55;
             if lum > 1.0 {
                 let stops = lum.log2();
                 let band = HDR_BANDS[(stops as usize).min(HDR_BANDS.len() - 1)];
@@ -341,6 +406,66 @@ mod tests {
         assert!(spot_threshold(0) > spot_threshold(50) && spot_threshold(50) > spot_threshold(100));
         let (k, v) = Overlay::Spots(37).to_parts();
         assert_eq!(Overlay::from_parts(k, v), Overlay::Spots(37));
+    }
+
+    #[test]
+    fn clipping_views_show_only_the_clipped_channels() {
+        // left to right: black, a red that clips only in red, mid grey, white
+        let src = Rgb32f::from_fn(40, 10, |x, _| match x / 10 {
+            0 => [0.0; 3],
+            1 => [0.9, 0.02, 0.02],
+            2 => [0.18; 3],
+            _ => [8.0; 3],
+        });
+        let (info, s) = (SourceInfo::default(), DevelopSettings::default());
+        let shot = |o: Overlay| render(&src, &info, &s, &RenderRequest { overlay: o, ..RenderRequest::fit(40, 10) });
+        let plain = shot(Overlay::None).image;
+        let at = |i: &Rgba8, x: usize| i.data[5 * 40 + x];
+        assert_eq!((at(&plain, 5), at(&plain, 35)), ([0, 0, 0, 255], [255; 4]), "the scene clips at both ends");
+        assert_eq!(at(&plain, 15)[0], 255, "the red clips in red");
+        let hi = shot(Overlay::HighlightClip);
+        assert_eq!([5, 15, 25, 35].map(|x| at(&hi.image, x)), [[0, 0, 0, 255], [255, 0, 0, 255], [0, 0, 0, 255], [255; 4]]);
+        let lo = shot(Overlay::ShadowClip);
+        assert_eq!(at(&lo.image, 5), [0, 0, 0, 255], "black where every channel clips");
+        assert_eq!([25, 35].map(|x| at(&lo.image, x)), [[255; 4]; 2], "white where none does");
+        // only the view changes: the histogram is the photo's
+        assert_eq!(hi.histogram.clipping(), shot(Overlay::None).histogram.clipping());
+        for o in [Overlay::ShadowClip, Overlay::HighlightClip, Overlay::SharpenMask, Overlay::Grey] {
+            let (k, v) = o.to_parts();
+            assert_eq!(Overlay::from_parts(k, v), o);
+            assert_ne!(o.key(), Overlay::None.key());
+        }
+    }
+
+    #[test]
+    fn sharpen_mask_view_follows_masking() {
+        // a hard vertical edge between two flat halves
+        let src = Rgb32f::from_fn(200, 100, |x, _| if x < 100 { [0.05; 3] } else { [0.4; 3] });
+        let info = SourceInfo::default();
+        let mut s = DevelopSettings::default();
+        s.detail.sharpen_amount = 60.0;
+        let shot =
+            |s: &DevelopSettings| render(&src, &info, s, &RenderRequest { overlay: Overlay::SharpenMask, ..RenderRequest::fit(200, 100) }).image;
+        let at = |i: &Rgba8, x: usize| i.data[50 * 200 + x][0];
+        // Masking 0: sharpening applies everywhere
+        let open = shot(&s);
+        assert!(open.data.iter().all(|p| *p == [255; 4]), "all white at Masking 0");
+        // Masking 100: only the edge is sharpened
+        s.detail.sharpen_masking = 100.0;
+        let edge = shot(&s);
+        assert_eq!((at(&edge, 20), at(&edge, 180)), (0, 0), "flat areas held back");
+        assert!(at(&edge, 100).max(at(&edge, 99)) > 200, "the edge sharpened: {}", at(&edge, 100));
+        // the mask shows with sharpening off too
+        s.detail.sharpen_amount = 0.0;
+        assert_eq!(shot(&s).data, edge.data);
+    }
+
+    #[test]
+    fn grey_view_drops_the_colour() {
+        let src = Rgb32f::from_fn(8, 8, |_, _| [0.4, 0.1, 0.05]);
+        let req = RenderRequest { overlay: Overlay::Grey, ..RenderRequest::fit(8, 8) };
+        let v = render(&src, &SourceInfo::default(), &DevelopSettings::default(), &req).image;
+        assert!(v.data.iter().all(|p| p[0] == p[1] && p[1] == p[2] && p[0] > 0));
     }
 
     #[test]

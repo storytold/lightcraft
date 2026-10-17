@@ -212,7 +212,10 @@ mod in_the_loupe {
         h.settle(SETTLE);
         let id = h.app.session.active().expect("a photo");
         let d = h.app.session.develop_of(id).expect("settings");
-        assert!(matches!(crate::panels::detail::view_overlay(&h.app, &d), lightcraft_pipeline::Overlay::Mask { .. }), "the mask overlay is shown");
+        assert!(
+            matches!(crate::panels::detail::view_overlay(&h.app, &d, false), lightcraft_pipeline::Overlay::Mask { .. }),
+            "the mask overlay is shown"
+        );
         assert_eq!((h.app.ui.zoom, h.app.ui.pan), (zoom, pan), "showing the overlay keeps zoom and pan");
         let main = rendered_long_edge(&h);
         assert!(main <= 2560 && main < native, "native {native}: the whole-frame render is {main}");
@@ -250,7 +253,7 @@ mod in_the_loupe {
         let id = h.app.session.active().expect("a photo");
         let d = h.app.session.develop_of(id).expect("settings");
         assert!(
-            matches!(crate::panels::detail::view_overlay(&h.app, &d), lightcraft_pipeline::Overlay::AllMasks { .. }),
+            matches!(crate::panels::detail::view_overlay(&h.app, &d, false), lightcraft_pipeline::Overlay::AllMasks { .. }),
             "the all-masks overlay is shown"
         );
         let main = rendered_long_edge(&h);
