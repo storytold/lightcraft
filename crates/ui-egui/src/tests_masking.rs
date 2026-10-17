@@ -1609,6 +1609,56 @@ fn a_fast_brush_stroke_shows_without_gaps_before_the_button_is_released() {
 }
 
 #[test]
+fn reflections_are_in_the_remove_panel_and_reset_is_undoable() {
+    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services::default());
+    let mut h = Headless::new(app, [1200.0, 1000.0], 1.0);
+    let id = h.app.session.active().unwrap();
+    let mut d = (*h.app.session.develop_of(id).unwrap()).clone();
+    d.reflection = lightcraft_develop::Reflection {
+        enabled: true,
+        correction: "test.lcr".into(),
+        source_key: "test".into(),
+        amount: 0.0,
+        quality: 384,
+        ..Default::default()
+    };
+    h.app.session.set_develop(id, d, "Test correction").unwrap();
+    h.app.ui.right = RightPanel::Remove;
+    h.settle(SETTLE);
+    assert!(h.app.widgets.iter().any(|(name, _)| name == "reflection:apply"));
+    assert!(h.app.widgets.iter().any(|(name, _)| name == "reflection:reset"));
+    // Toggling an existing correction with the same settings never starts inference.
+    for enabled in [false, true, false, true] {
+        let r = h.request("engine.execute", json!({"command":"reflection.toggle","params":{"enabled":enabled,"quality":384,"model":""}}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        assert_eq!(h.app.session.develop_of(id).unwrap().reflection.enabled, enabled);
+        assert!(!h.app.tasks.is_running("Reflection Removal"));
+        assert_eq!(h.app.session.develop_of(id).unwrap().reflection.correction, "test.lcr");
+    }
+    let r = h.request("engine.execute", json!({"command":"reflection.reset","params":{}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(h.app.session.develop_of(id).unwrap().reflection.correction.is_empty());
+    h.app.session.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(h.app.session.develop_of(id).unwrap().reflection.correction, "test.lcr");
+}
+
+#[test]
+fn reflection_instructions_use_the_native_browser_service() {
+    let opened = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let captured = opened.clone();
+    let services = Services {
+        open_url: Some(Box::new(move |url| {
+            *captured.lock().unwrap() = url.into();
+            Ok(())
+        })),
+        ..Default::default()
+    };
+    let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+    app.run("reflection.instructions", json!({})).unwrap();
+    assert_eq!(*opened.lock().unwrap(), "https://github.com/mingcv/DSRNet#trained-weights");
+}
+
+#[test]
 fn effect_dropdown_applies_saves_and_shows_the_matching_effect() {
     let mut h = detail("panel.masking");
     exec(&mut h, "mask.add", json!({"kind": "radial"}));

@@ -157,6 +157,13 @@ macro_rules! controls {
         pub fn set(s: &mut DevelopSettings, id: &str, v: f64) -> bool {
             let Some(spec) = find(id) else { return false };
             let v = spec.clamp(v);
+            let v = match id {
+                "reflection.left" => v.min((s.reflection.right-1.0).max(0.0)),
+                "reflection.right" => v.max((s.reflection.left+1.0).min(100.0)),
+                "reflection.top" => v.min((s.reflection.bottom-1.0).max(0.0)),
+                "reflection.bottom" => v.max((s.reflection.top+1.0).min(100.0)),
+                _ => v,
+            };
             match id {
                 $( $id => { s.$($field).+ = v as _; true } )*
                 _ => indexed_set(s, id, v),
@@ -251,6 +258,12 @@ controls! {
     "grain.amount" => grain.amount, "Grain", Grain, 0, 100, 0, 1, 0, Plain;
     "grain.size" => grain.size, "Size", Grain, 0, 100, 25, 1, 0, Plain;
     "grain.roughness" => grain.roughness, "Roughness", Grain, 0, 100, 50, 1, 0, Plain;
+    "reflection.detailProtection" => reflection.detail_protection, "Detail Protection", Detail, 0, 100, 0, 1, 0, Plain;
+    "reflection.left" => reflection.left, "Left", Detail, 0, 99, 0, 1, 0, Plain;
+    "reflection.top" => reflection.top, "Top", Detail, 0, 99, 0, 1, 0, Plain;
+    "reflection.right" => reflection.right, "Right", Detail, 1, 100, 100, 1, 0, Plain;
+    "reflection.bottom" => reflection.bottom, "Bottom", Detail, 1, 100, 100, 1, 0, Plain;
+    "reflection.amount" => reflection.amount, "Amount", Detail, 0, 100, 0, 1, 0, Plain;
     "enhance.denoise" => enhance.denoise, "Amount", Detail, 0, 100, 0, 1, 0, Plain;
     "detail.sharpenAmount" => detail.sharpen_amount, "Sharpening", Detail, 0, 150, 0, 1, 0, Plain;
     "detail.sharpenRadius" => detail.sharpen_radius, "Radius", Detail, 0.5, 3, 1, 0.1, 1, Plain;

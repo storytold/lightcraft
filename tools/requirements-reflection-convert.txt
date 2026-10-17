@@ -1,0 +1,6 @@
+# One-time conversion only. Native inference is pure Rust.
+torch>=2.0,<3
+safetensors>=0.4,<1
+
+# Only needed for the author-hosted Nature checkpoint download.
+gdown>=5,<6
