@@ -319,7 +319,7 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 
 | Id | Feature | Tier | Status | Evidence | Missing / notes |
 |---|---|---|---|---|---|
-| LR-PRE-PANEL | Presets panel | P0 | ✅ | `cmd:panel.presets`, `cmd:preset.apply`, `crates/ui-egui/src/panels/presets.rs` | grouped list with amount; resting on a preset previews it in the loupe (no history entry); optional live thumbnails (⋯ → Show Thumbnails) |
+| LR-PRE-PANEL | Presets panel | P0 | ✅ | `cmd:panel.presets`, `cmd:preset.apply`, `crates/ui-egui/src/panels/presets.rs` | grouped list with amount; starred presets also listed first in a Favorites group (in panel order; shown only when there are any); resting on a preset previews it in the loupe (no history entry); optional live thumbnails (⋯ → Show Thumbnails) |
 | LR-PRE-CREATE | Create preset | P0 | ✅ | `cmd:dialog.createPreset`, `cmd:preset.create` (`groups`) | name, group and a checklist of settings groups (crop, masks, remove, red eye off by default; All / None) |
 | LR-PRE-MANAGE | Manage presets | P1 | ✅ | `cmd:preset.delete`, `cmd:preset.favorite`, `cmd:preset.import`, `cmd:preset.export`, `cmd:preset.rename`, `cmd:preset.update`, `cmd:preset.move` | rename, update with current settings, move to a group (existing or new); no hiding of groups |
 | LR-PRE-AMOUNT | Preset amount | P1 | ✅ | `cmd:preset.apply` (`amount` 0–200) | |
@@ -586,7 +586,7 @@ visible menu bar yet: the menu model is only exposed through the control channel
 | MENU-CTX-DETAIL | Loupe context menu | P1 | ✅ | `crates/ui-egui/src/panels/detail.rs` | Zoom submenu (fit, 100%, in, out), then the photo menu |
 | MENU-CTX-ALBUM | Album / folder row menu | P0 | ✅ | `crates/ui-egui/src/panels/left.rs` (`folder_menu`), `cmd:album.move`, `cmd:dialog.export`, `cmd:file.addPhotos`, `cmd:file.addFolder`, `cmd:file.addFromDevice` | add selected, Import ▸ Import Photos… / Import from Folder… / Import from Device ▸ (one entry per camera or card, as in File ▸ Import from Device; the import review opens with that album chosen: `{album}` on those commands; `button:albumImport`), export album (dialog / preset), New ▸ Create Album / Smart Album / Smart Album from Filter / Folder (on a folder: made inside it), move to a folder or the top level, rename, delete; smart albums: update rules |
 | MENU-CTX-MASK | Mask / component menu | P0 | ✅ | `crates/ui-egui/src/panels/masking.rs` (`mask_menu`, `component_row_menu`), `cmd:mask.component` | mask rows: duplicate (and invert), invert, show/hide, move, rename, delete; component rows (right-click or "…"): invert, duplicate, mode (add / subtract / intersect), intersect with / subtract a new component, rename (also double-click), delete (the last one deletes the mask) |
-| MENU-CTX-PRESET | Preset menu | P1 | ✅ | `crates/ui-egui/src/panels/presets.rs` | favourite, update with current settings, rename, move to group, delete; group: export |
+| MENU-CTX-PRESET | Preset menu | P1 | ✅ | `crates/ui-egui/src/panels/presets.rs` | favourite (the preset joins the Favorites group at the top), update with current settings, rename, move to group, delete; group: export |
 | MENU-CTX-PROFILE | Profile favourites | P2 | ✅ | `cmd:profile.favorite`, `crates/ui-egui/src/panels/profiles.rs` | star in the profile browser; Favorites group first |
 | MENU-CTX-VERSION | Version menu | P1 | ✅ | `crates/ui-egui/src/panels/right.rs` (`versions`) | restore, update with current settings, rename, set as before, delete |
 | MENU-CTX-KEYWORD | Keyword chip menu | P1 | ✅ | `crates/ui-egui/src/panels/keywording.rs` (`menu`) | acts on the selected photos: add to all selected photos (a keyword only some have), remove from selected photos, show photos with keyword, Edit Keyword Tag…; deleting a keyword from the library is the Keyword List's |
@@ -797,6 +797,7 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-16 | patch | LR-PRE-PANEL, MENU-CTX-PRESET: starred presets are listed first in a Favorites group, as in the profile browser (#1999); status unchanged |
 | 2026-10-12 | minor | LR-EDIT-OPTICS-PROFILE: Sony ARW shading, CA and distortion tables decoded with settings and provenance (raw IFD, `SR2SubIFD` fallback); applied corrections unchanged (ILCE-7RM4A and ILCE-7RM6 distortion); status unchanged (🟡) |
 | 2026-10-14 | minor | LR-IMP-CAMERA-COVERAGE: Camera-coverage sweep (#1327): 30 models verified on 40 CC0 files (coverage.py 515 → 545 verified); sensor verification does not establish colour parity (#1277); status unchanged (🟡) |
 | 2026-10-13 | minor | LR-MERGE-PANO: a panorama's DNG takes its `AsShotNeutral` from the median of its frames' vendor white-balance multipliers (CR2, NEF, ARW…) instead of the first frame's tags, and frames now carry the multipliers (issue #1144); status unchanged (✅) |
