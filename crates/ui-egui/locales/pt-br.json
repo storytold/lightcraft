@@ -2180,5 +2180,11 @@
   "Checking the GPU…": "Verificando a GPU…",
   "CPU": "CPU",
   "A face model uses the GPU only when a check shows it gives the same results faster.": "Um modelo de rostos só usa a GPU quando uma verificação mostra que ela dá os mesmos resultados mais rápido.",
-  "Checking the GPU for faces": "Verificando a GPU para rostos"
+  "Checking the GPU for faces": "Verificando a GPU para rostos",
+  "Include selected photos": "Incluir fotos selecionadas",
+  "Color Overlay": "Sobreposição de cor",
+  "Color Overlay on B&W": "Sobreposição de cor em P&B",
+  "Image on Black": "Imagem sobre preto",
+  "Image on White": "Imagem sobre branco",
+  "White on Black": "Branco sobre preto"
 }
