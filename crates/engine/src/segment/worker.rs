@@ -104,7 +104,7 @@ pub struct Backend {
     /// What runs the backbone: "wgpu" (LightCraft's GPU kernels) or "candle".
     pub runtime: Option<String>,
     /// What runs the rest (the necks and the click and text heads): "CPU" or "Metal GPU", with the parts the GPU
-    /// accelerator runs ("CPU; the necks and the DETR encoder on the GPU").
+    /// accelerator runs ("CPU; the necks, the DETR encoder and the mask decoder on the GPU").
     pub heads: Option<String>,
     /// Why the backbone runs on the CPU where it could use the GPU: the GPU is switched off, there
     /// is no usable one, or it failed on a photo.

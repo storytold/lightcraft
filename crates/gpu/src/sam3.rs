@@ -17,8 +17,8 @@
 //! per layer and reads the result back once. No subgroups or shader-f16 needed. The two necks that follow the
 //! backbone run on the same device, built when first asked for (`sam3/neck.rs`).
 //!
-//! The same accelerator runs the text detector's DETR encoder (`sam3/detr.rs`; its weights load on the first text
-//! prompt).
+//! The same accelerator runs the text detector's DETR encoder (`sam3/detr.rs`) and its mask decoder (`sam3/pixel.rs`);
+//! their weights load on the first text prompt.
 //!
 //! The device is its own (like denoise's and faces'): it respects the same switches as GPU rendering
 //! (`LIGHTCRAFT_GPU`, `LIGHTCRAFT_GPU_BACKEND`, `LIGHTCRAFT_GPU_ADAPTER`, the GPU preference), the crash sentinel
@@ -35,6 +35,7 @@ use wgpu::util::DeviceExt;
 
 mod detr;
 mod neck;
+mod pixel;
 #[cfg(test)]
 mod tests;
 
@@ -947,6 +948,8 @@ pub struct Sam3Gpu {
     detr: detr::Encoder,
     /// The feature pyramids, built on first use.
     necks: neck::Necks,
+    /// The detector's mask decoder, loaded on the first text prompt.
+    masks: pixel::MaskDecoder,
 }
 
 /// The SAM 3 backbone on the GPU with the checkpoint's weights uploaded, or why it can't run there (GPU off, missing,
@@ -1042,7 +1045,18 @@ fn build_inner(dev: &'static Dev, weights: &WeightReader, precision: Precision) 
     let recorded = g.record();
     let detr = detr::Encoder::new(weights.clone());
     let necks = neck::Necks::new(weights.clone());
-    Ok(Sam3Gpu { dev, recorded, work: Mutex::new(Work { pixels, out: y, staging }), weight_bytes: ld.bytes, work_bytes, precision, detr, necks })
+    let masks = pixel::MaskDecoder::new(weights.clone());
+    Ok(Sam3Gpu {
+        dev,
+        recorded,
+        work: Mutex::new(Work { pixels, out: y, staging }),
+        weight_bytes: ld.bytes,
+        work_bytes,
+        precision,
+        detr,
+        necks,
+        masks,
+    })
 }
 
 /// Run `f`, turning a panic into a broken device.
@@ -1067,6 +1081,11 @@ impl Sam3Gpu {
     /// Bytes of device memory the DETR encoder's weights and work buffers take, once a text prompt loaded them.
     pub fn detr_bytes(&self) -> Option<(u64, u64)> {
         self.detr.bytes()
+    }
+
+    /// Bytes of device memory the mask decoder's weights and work buffers take, once a text prompt loaded them.
+    pub fn mask_decoder_bytes(&self) -> Option<(u64, u64)> {
+        self.masks.bytes()
     }
 
     fn run(&self, pixels: &[f32]) -> Result<Vec<f32>, String> {
@@ -1114,6 +1133,25 @@ impl BackboneAccel for Sam3Gpu {
         }
         let Some(_work) = crate::exit::enter() else { return Err("LightCraft is closing".into()) };
         guarded(|| self.detr.run(self.dev, image, pos, text, valid))
+    }
+
+    fn mask_decoder(
+        &self,
+        memory: &[f32],
+        text: &[f32],
+        valid: &[bool],
+        levels: [&[f32]; 2],
+        rows: &[f32],
+        bias: &[f32],
+    ) -> Result<Vec<f32>, String> {
+        if let Some(why) = broken_reason() {
+            return Err(format!("the GPU is not used any more: {why}"));
+        }
+        if let Some(why) = crate::switched_off() {
+            return Err(why);
+        }
+        let Some(_work) = crate::exit::enter() else { return Err("LightCraft is closing".into()) };
+        guarded(|| self.masks.run(self.dev, memory, text, valid, levels, rows, bias))
     }
 
     fn runs_heads(&self) -> bool {

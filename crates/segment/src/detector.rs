@@ -51,11 +51,13 @@ pub struct Output {
     pub memory: Tensor,
 }
 
-/// Where the DETR encoder may run outside candle: the model's accelerator (if it still has one), and why the encoder
-/// stopped running there (set on its first failure; from then on candle runs it).
+/// Where the DETR encoder and the mask decoder may run outside candle: the model's accelerator (if it still has one),
+/// and why the encoder (`failed`) or the mask decoder (`masks_failed`) stopped running there (set on its first failure;
+/// from then on candle runs it).
 pub struct EncoderAccel<'a> {
     pub accel: &'a Mutex<Option<Box<dyn BackboneAccel>>>,
     pub failed: &'a OnceLock<String>,
+    pub masks_failed: &'a OnceLock<String>,
 }
 
 struct EncoderLayer {
@@ -290,7 +292,73 @@ impl Detector {
         }
     }
 
-    /// Run the detector for one tokenized prompt, the DETR encoder on `accel` when it runs it.
+    /// The mask decoder in candle: the per-query mask logits `[200, 288, 288]` for the encoder memory and the mask
+    /// embeddings `e` `[1, 200, 256]`.
+    fn masks(&self, f: &Features, memory: &Tensor, text: &Tensor, text_bias: &Tensor, e: &Tensor) -> Result<Tensor> {
+        // the encoder memory attends to the prompt, then a pixel decoder up to 288²
+        let mem = (memory + self.prompt_attn.forward(&self.prompt_ln.forward(memory)?, text, text, Some(text_bias))?)?;
+        let [l0, l1, _] = &f.levels[..] else { return Err(Error::Model("detector levels".into())) };
+        let mut prev = mem.transpose(1, 2)?.reshape((1, HIDDEN, f.side, f.side))?;
+        for (i, skip) in [l1, l0].into_iter().enumerate() {
+            let (_, _, sh, sw) = skip.dims4()?;
+            prev = (prev.upsample_nearest2d(sh, sw)? + skip)?;
+            let (Some(conv), Some(norm)) = (self.pixel_convs.get(i), self.pixel_norms.get(i)) else {
+                return Err(Error::Model("pixel decoder".into()));
+            };
+            prev = norm.forward(&conv.forward(&prev)?)?.relu()?;
+        }
+        let inst = self.instance_proj.forward(&prev)?; // [1, 256, 288, 288]
+        let (_, c, mh, mw) = inst.dims4()?;
+        Ok(e.matmul(&inst.reshape((1, c, mh * mw))?)?.reshape((QUERIES, mh, mw))?)
+    }
+
+    /// [`Detector::masks`] on the accelerator; `None` when there is none, or it doesn't run the mask decoder or fails
+    /// (the first failure is logged and noted in `accel.masks_failed`, and the accelerator isn't asked again).
+    fn masks_accelerated(
+        &self,
+        f: &Features,
+        memory: &Tensor,
+        (text, valid): (&Tensor, &[bool]),
+        e: &Tensor,
+        accel: &EncoderAccel,
+    ) -> Result<Option<Tensor>> {
+        if accel.masks_failed.get().is_some() {
+            return Ok(None);
+        }
+        let guard = accel.accel.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(a) = guard.as_ref() else { return Ok(None) };
+        let [l0, l1, _] = &f.levels[..] else { return Err(Error::Model("detector levels".into())) };
+        let (_, _, mh, mw) = l0.dims4()?;
+        // the instance projection folded into the embeddings: e · (W x + b) = (e W) x + e b, one product per pixel
+        let e = e.squeeze(0)?; // [200, 256]
+        let rows = e.matmul(&self.instance_proj.weight().reshape((HIDDEN, HIDDEN))?)?;
+        let bias = match self.instance_proj.bias() {
+            Some(b) => to_vec(&e.matmul(&b.unsqueeze(1)?)?)?,
+            None => vec![0.0; QUERIES],
+        };
+        let want = QUERIES * mh * mw;
+        // what the masks can't use is a failure too: a wrong size, or NaN / ∞ from a broken kernel
+        let checked = a.mask_decoder(&to_vec(memory)?, &to_vec(text)?, valid, [&to_vec(l1)?, &to_vec(l0)?], &to_vec(&rows)?, &bias).and_then(|out| {
+            if out.len() != want {
+                Err(format!("it returned {} values instead of {want}", out.len()))
+            } else if !out.iter().fold(true, |ok, v| ok & v.is_finite()) {
+                // without short-cutting, so that it vectorizes (17 M values)
+                Err("it returned values that are not numbers".into())
+            } else {
+                Ok(out)
+            }
+        });
+        match checked {
+            Ok(out) => Ok(Some(Tensor::from_vec(out, (QUERIES, mh, mw), &self.device)?)),
+            Err(e) => {
+                log::warn!("SAM 3 mask decoder not run on {} ({e}); using the {} for it from now on", a.device(), crate::device_name(&self.device));
+                let _ = accel.masks_failed.set(format!("{}: {e}", a.device()));
+                Ok(None)
+            }
+        }
+    }
+
+    /// Run the detector for one tokenized prompt, the DETR encoder and the mask decoder on `accel` when it runs them.
     pub fn predict(&self, f: &Features, ids: &[u32], valid: &[bool], accel: &EncoderAccel) -> Result<Output> {
         let text = self.text_features(ids, valid)?;
         let text_bias = padding_bias(valid, &self.device)?;
@@ -334,20 +402,7 @@ impl Detector {
         let pq = self.score_query_proj.forward(&queries)?; // [1, 200, 256]
         let logits = (pq.matmul(&pt.unsqueeze(2)?)? / (HIDDEN as f64).sqrt())?.clamp(-12f32, 12f32)?;
 
-        // masks: the encoder memory attends to the prompt, then a pixel decoder up to 288²
-        let mem = (&memory + self.prompt_attn.forward(&self.prompt_ln.forward(&memory)?, &text, &text, Some(&text_bias))?)?;
-        let [l0, l1, _] = &f.levels[..] else { return Err(Error::Model("detector levels".into())) };
-        let mut prev = mem.transpose(1, 2)?.reshape((1, HIDDEN, f.side, f.side))?;
-        for (i, skip) in [l1, l0].into_iter().enumerate() {
-            let (_, _, sh, sw) = skip.dims4()?;
-            prev = (prev.upsample_nearest2d(sh, sw)? + skip)?;
-            let (Some(conv), Some(norm)) = (self.pixel_convs.get(i), self.pixel_norms.get(i)) else {
-                return Err(Error::Model("pixel decoder".into()));
-            };
-            prev = norm.forward(&conv.forward(&prev)?)?.relu()?;
-        }
-        let inst = self.instance_proj.forward(&prev)?; // [1, 256, 288, 288]
-        let (_, c, mh, mw) = inst.dims4()?;
+        // masks: each query's mask embedding against the mask decoder's per-pixel output
         let mut e = queries.clone();
         for (i, l) in self.mask_embedder.iter().enumerate() {
             e = l.forward(&e)?;
@@ -355,7 +410,10 @@ impl Detector {
                 e = e.relu()?;
             }
         }
-        let masks = e.matmul(&inst.reshape((1, c, mh * mw))?)?.reshape((QUERIES, mh, mw))?;
+        let masks = match self.masks_accelerated(f, &memory, (&text, valid), &e, accel)? {
+            Some(masks) => masks,
+            None => self.masks(f, &memory, &text, &text_bias, &e)?,
+        };
         let boxes = cxcywh_to_xyxy(&boxes)?;
         let bv = to_vec(&boxes)?;
         Ok(Output {

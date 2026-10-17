@@ -121,8 +121,8 @@ pub trait BackboneAccel: Send + Sync {
     /// What it runs on, for logs and Settings (e.g. "NVIDIA GeForce RTX 5070 (Vulkan)").
     fn device(&self) -> String;
 
-    /// Whether it also runs the necks and the DETR encoder ([`BackboneAccel::neck`],
-    /// [`BackboneAccel::detr_encoder`]), for the status.
+    /// Whether it also runs the necks, the DETR encoder and the mask decoder ([`BackboneAccel::neck`],
+    /// [`BackboneAccel::detr_encoder`], [`BackboneAccel::mask_decoder`]), for the status.
     fn runs_heads(&self) -> bool {
         false
     }
@@ -142,6 +142,25 @@ pub trait BackboneAccel: Send + Sync {
     fn detr_encoder(&self, image: &[f32], pos: &[f32], text: &[f32], valid: &[bool]) -> std::result::Result<Vec<f32>, String> {
         let _ = (image, pos, text, valid);
         Err("no DETR encoder on this accelerator".into())
+    }
+
+    /// The detector's mask decoder: the encoder memory `[5184, 256]` attends to the prompt `text` `[32, 256]` (`valid`
+    /// marks its real tokens) and is added to it, the pixel decoder brings that up to 288² with the detector neck's
+    /// `levels` `[256, 144, 144]` and `[256, 288, 288]` (CHW), and each of the `rows` `[r, 256]` (1 ≤ r ≤ 256, with
+    /// `bias` `[r]`) is a 1 × 1 projection of its output. Returns `[r, 288, 288]` (the detector passes its mask
+    /// embeddings with the instance projection folded in: the per-query mask logits). `Err` when this accelerator
+    /// doesn't run it (the candle decoder runs instead).
+    fn mask_decoder(
+        &self,
+        memory: &[f32],
+        text: &[f32],
+        valid: &[bool],
+        levels: [&[f32]; 2],
+        rows: &[f32],
+        bias: &[f32],
+    ) -> std::result::Result<Vec<f32>, String> {
+        let _ = (memory, text, valid, levels, rows, bias);
+        Err("no mask decoder on this accelerator".into())
     }
 }
 
@@ -197,6 +216,8 @@ pub struct Sam3 {
     fallback: Mutex<Option<String>>,
     /// Why the DETR encoder runs in candle although there is an accelerator (it failed there once).
     detr_fallback: OnceLock<String>,
+    /// The same for the text detector's mask decoder.
+    mask_fallback: OnceLock<String>,
     /// The necks the accelerator failed on: candle runs them from then on.
     necks_off: Mutex<Vec<NeckKind>>,
     /// The candle tracker neck: loaded on first use, unless the accelerator runs it.
@@ -273,6 +294,7 @@ impl Sam3 {
             accel: Mutex::new(accel),
             fallback: Mutex::new(None),
             detr_fallback: OnceLock::new(),
+            mask_fallback: OnceLock::new(),
             necks_off: Mutex::new(Vec::new()),
             tracker_neck: None,
             tracker: None,
@@ -315,8 +337,14 @@ impl Sam3 {
         self.detr_fallback.get().cloned()
     }
 
+    /// Why the text detector's mask decoder runs in candle although the backbone runs on an accelerator: the
+    /// accelerator doesn't run it or failed on it (then it isn't asked again). `None` when there is no such reason.
+    pub fn mask_fallback(&self) -> Option<String> {
+        self.mask_fallback.get().cloned()
+    }
+
     /// What runs everything after the backbone: the model's device, and which of those parts the accelerator runs
-    /// (e.g. "CPU; the necks and the DETR encoder on the GPU").
+    /// (e.g. "CPU; the necks, the DETR encoder and the mask decoder on the GPU").
     pub fn heads_device(&self) -> String {
         let base = device_name(&self.device);
         if !self.accel.lock().unwrap_or_else(PoisonError::into_inner).as_ref().is_some_and(|a| a.runs_heads()) {
@@ -335,7 +363,14 @@ impl Sam3 {
         if self.detr_fallback.get().is_none() {
             gpu.push("the DETR encoder");
         }
-        if gpu.is_empty() { base } else { format!("{base}; {} on the GPU", gpu.join(" and ")) }
+        if self.mask_fallback.get().is_none() {
+            gpu.push("the mask decoder");
+        }
+        match gpu.split_last() {
+            None => base,
+            Some((last, [])) => format!("{base}; {last} on the GPU"),
+            Some((last, rest)) => format!("{base}; {} and {last} on the GPU", rest.join(", ")),
+        }
     }
 
     fn vb<'a>(w: &Arc<weights::Weights>, device: &Device) -> VarBuilder<'a> {
@@ -503,7 +538,9 @@ impl Sam3 {
             self.tokenizer = Some(tokenizer::Tokenizer::load(&self.dir)?);
         }
         match (&self.detector, &self.tokenizer) {
-            (Some(d), Some(t)) => Ok((d, t, detector::EncoderAccel { accel: &self.accel, failed: &self.detr_fallback })),
+            (Some(d), Some(t)) => {
+                Ok((d, t, detector::EncoderAccel { accel: &self.accel, failed: &self.detr_fallback, masks_failed: &self.mask_fallback }))
+            }
             _ => Err(Error::Model("detector failed to load".into())),
         }
     }
@@ -676,7 +713,7 @@ mod tests {
             let fake = NeckFake { calls: calls.clone(), short };
             let m = Sam3::load_accelerated(&dir, Device::Cpu, move |_| Ok(Box::new(fake))).unwrap();
             let enc = m.encode(&[128; 4 * 3 * 3], 4, 3).unwrap();
-            assert_eq!(m.heads_device(), "CPU; the necks and the DETR encoder on the GPU");
+            assert_eq!(m.heads_device(), "CPU; the necks, the DETR encoder and the mask decoder on the GPU");
             let levels = m.accel_neck(NeckKind::Tracker, enc.backbone(), 3).unwrap();
             for (i, (l, side)) in levels.iter().zip([288, 144, 72]).enumerate() {
                 assert_eq!(l.dims(), [1, neck::FPN, side, side]);
@@ -686,7 +723,7 @@ mod tests {
             assert!(m.accel_neck(NeckKind::Detector, enc.backbone(), 3).is_none());
             assert!(m.accel_neck(NeckKind::Detector, enc.backbone(), 3).is_none());
             assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 2);
-            assert_eq!(m.heads_device(), "CPU; the click neck and the DETR encoder on the GPU");
+            assert_eq!(m.heads_device(), "CPU; the click neck, the DETR encoder and the mask decoder on the GPU");
             // the other neck and the backbone stay on the accelerator
             assert!(m.accel_neck(NeckKind::Tracker, enc.backbone(), 3).is_some());
             assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 3);

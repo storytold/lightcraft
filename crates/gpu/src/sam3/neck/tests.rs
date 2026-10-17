@@ -35,7 +35,7 @@ fn conv_transpose_ref(x: &[f64], side: usize, (cin, cout): (usize, usize), w: &[
 
 /// PyTorch's `Conv2d(cin, cout, k, padding k / 2)` on pixel rows `x` (`[side², cin]`), weight `[cout, cin, k, k]`:
 /// `[side², cout]`.
-fn conv_ref(x: &[f64], side: usize, (cin, cout, k): (usize, usize, usize), w: &[f32], b: &[f32]) -> Vec<f64> {
+pub(in crate::sam3) fn conv_ref(x: &[f64], side: usize, (cin, cout, k): (usize, usize, usize), w: &[f32], b: &[f32]) -> Vec<f64> {
     let pad = (k / 2) as isize;
     let mut y = vec![0f64; side * side * cout];
     for r in 0..side {
@@ -61,11 +61,11 @@ fn conv_ref(x: &[f64], side: usize, (cin, cout, k): (usize, usize, usize), w: &[
     y
 }
 
-fn f32s(v: &[f64]) -> Vec<f32> {
+pub(in crate::sam3) fn f32s(v: &[f64]) -> Vec<f32> {
     v.iter().map(|x| *x as f32).collect()
 }
 
-fn f64s(v: &[f32]) -> Vec<f64> {
+pub(in crate::sam3) fn f64s(v: &[f32]) -> Vec<f64> {
     v.iter().map(|x| *x as f64).collect()
 }
 

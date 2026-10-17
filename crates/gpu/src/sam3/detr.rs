@@ -37,15 +37,15 @@ const RELU: u32 = 2;
 /// No bias in the attention kernel.
 const NONE: u32 = u32::MAX;
 
-struct Kernels {
+pub(super) struct Kernels {
     attention: wgpu::ComputePipeline,
     add: wgpu::ComputePipeline,
 }
 
 static KERNELS: OnceLock<Result<Kernels, String>> = OnceLock::new();
 
-/// The encoder's kernels, compiled on first use.
-fn kernels(dev: &'static Dev) -> Result<&'static Kernels, String> {
+/// The encoder's kernels, compiled on first use (the mask decoder's prompt attention uses them too).
+pub(super) fn kernels(dev: &'static Dev) -> Result<&'static Kernels, String> {
     KERNELS
         .get_or_init(|| {
             let validation = dev.device.push_error_scope(wgpu::ErrorFilter::Validation);
@@ -95,15 +95,15 @@ fn attention_source(keys: u32) -> String {
 }
 
 /// Where an attention's q, k and v are: a buffer, its row stride and the column of head 0 (in floats).
-struct Operand<'a> {
-    buffer: &'a wgpu::Buffer,
-    stride: usize,
-    offset: usize,
+pub(super) struct Operand<'a> {
+    pub(super) buffer: &'a wgpu::Buffer,
+    pub(super) stride: usize,
+    pub(super) offset: usize,
 }
 
 impl Graph {
     /// Layer norm with PyTorch's eps (the backbone's is 1e-6).
-    fn layernorm_torch(&mut self, [x, gamma, beta, y]: [&wgpu::Buffer; 4], rows: usize, c: usize) -> Result<(), String> {
+    pub(super) fn layernorm_torch(&mut self, [x, gamma, beta, y]: [&wgpu::Buffer; 4], rows: usize, c: usize) -> Result<(), String> {
         let (g, row) = self.flat(rows)?;
         self.push(&self.dev.k.layernorm, [u32_of(rows)?, u32_of(c)?, 0, 0, EPS.to_bits(), 0, u32_of(rows)?, row], [x, gamma, beta, y], g);
         Ok(())
@@ -131,7 +131,7 @@ impl Graph {
     /// Attention of `queries` queries over `keys` keys, `heads` heads of 32, into `out` (`[queries, heads · 32]`);
     /// with `bias`, key j's scores get `k.buffer[bias + j]` added.
     #[allow(clippy::too_many_arguments)]
-    fn attention_detr(
+    pub(super) fn attention_detr(
         &mut self,
         kernels: &'static Kernels,
         [q, k, v]: [Operand; 3],

@@ -25,7 +25,7 @@ use lightcraft_segment::{NeckKind, WeightReader};
 use super::{Dev, GRID, Graph, HIDDEN, Matmul, Precision, Recorded, TILE, TIMEOUT, buffer, matmul_source_with, pipeline, u32_of, upload};
 
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;
 
 /// Channels of every level.
 const FPN: usize = 256;
@@ -62,7 +62,7 @@ fn prefix(which: NeckKind) -> &'static str {
 // ---------------------------------------------------------------------------------------------------------------------
 // kernels
 
-struct Kernels {
+pub(super) struct Kernels {
     /// The 3 × 3 convolution: the matrix product with the implicit-im2col A loader.
     conv: Matmul,
     to_rows: wgpu::ComputePipeline,
@@ -71,8 +71,9 @@ struct Kernels {
 
 static KERNELS: OnceLock<Result<Kernels, String>> = OnceLock::new();
 
-/// The neck's own kernels, compiled on first use (the backbone's are compiled with the device).
-fn kernels(dev: &'static Dev) -> Result<&'static Kernels, String> {
+/// The neck's own kernels, compiled on first use (the backbone's are compiled with the device; the mask decoder uses
+/// the 3 × 3 convolution too).
+pub(super) fn kernels(dev: &'static Dev) -> Result<&'static Kernels, String> {
     KERNELS
         .get_or_init(|| {
             let validation = dev.device.push_error_scope(wgpu::ErrorFilter::Validation);
@@ -96,7 +97,13 @@ fn kernels(dev: &'static Dev) -> Result<&'static Kernels, String> {
 impl Graph {
     /// The 3 × 3 convolution (padding 1) of the image `x` (`[side², cin]`, cin a multiple of 4) with `w`
     /// (`[cout, 3, 3, cin]`) and `bias` (`[cout]`) into `y` (`[side², cout]`).
-    fn conv3(&mut self, k: &'static Kernels, [x, w, bias, y]: [&wgpu::Buffer; 4], side: usize, (cin, cout): (usize, usize)) -> Result<(), String> {
+    pub(super) fn conv3(
+        &mut self,
+        k: &'static Kernels,
+        [x, w, bias, y]: [&wgpu::Buffer; 4],
+        side: usize,
+        (cin, cout): (usize, usize),
+    ) -> Result<(), String> {
         if side == 0 || !cin.is_multiple_of(4) || cin == 0 || cout == 0 {
             return Err(format!("a {side}² {cin} → {cout} convolution the SAM 3 kernel cannot do"));
         }
@@ -182,7 +189,7 @@ fn transposed_weights(dev: &Dev, label: &str, w: &[f32], b: &[f32], cin: usize, 
 }
 
 /// A `k × k` convolution's weight `[cout, cin, k, k]` and bias on the device: rows `[cout, k, k, cin]`.
-fn conv_weights(dev: &Dev, label: &str, w: &[f32], b: &[f32], (cin, cout, k): (usize, usize, usize)) -> [wgpu::Buffer; 2] {
+pub(super) fn conv_weights(dev: &Dev, label: &str, w: &[f32], b: &[f32], (cin, cout, k): (usize, usize, usize)) -> [wgpu::Buffer; 2] {
     [upload(dev, label, &conv_rows(w, cout, cin, k)), upload(dev, label, b)]
 }
 
@@ -336,7 +343,7 @@ fn build(dev: &'static Dev, k: &'static Kernels, weights: &WeightReader, which: 
 }
 
 /// Run `f` (buffer creation and uploads), turning the device's out-of-memory and validation errors into an `Err`.
-fn scoped<T>(dev: &Dev, f: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+pub(super) fn scoped<T>(dev: &Dev, f: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
     let oom = dev.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
     let validation = dev.device.push_error_scope(wgpu::ErrorFilter::Validation);
     let made = f();
