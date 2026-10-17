@@ -148,7 +148,11 @@ fn stamp_browsed(s: &mut Session, root: &str, files: &[String]) {
 /// referred to by an undo / redo step.
 fn in_use(s: &mut Session) -> std::collections::HashSet<PhotoId> {
     let mut keep = held(s);
-    keep.extend(s.visible().iter().copied());
+    // Missing Photos lists library photos only, never Local records, so it keeps nothing here; and
+    // working it out checks every original (minutes on a sleeping NAS when the library opens on it)
+    if s.source != crate::LibrarySource::Missing {
+        keep.extend(s.visible().iter().copied());
+    }
     keep
 }
 
