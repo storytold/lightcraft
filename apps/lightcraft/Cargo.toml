@@ -45,6 +45,10 @@ zbus = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 muda = { workspace = true }
+# Files opened from Finder / the Dock / `open -a` arrive as the open-documents Apple event, which
+# winit doesn't handle; this audited crate (also used by PhotoCraft and FilmCraft) registers the
+# handler behind a safe API, so no `unsafe` enters this workspace. See src/apple_events.rs.
+fmv-macos-events = "=0.1.0"
 objc2 = { workspace = true }
 objc2-app-kit = { workspace = true }
 objc2-foundation = { workspace = true }

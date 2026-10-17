@@ -44,6 +44,8 @@ of it. Full standard: `../craftrules/standards/never-crash.md`
   allocator pages to macOS after raw decodes). Every other production crate root has `#![forbid(unsafe_code)]`. A new
   unsafe need goes in an isolated, well-tested helper crate like it: `// SAFETY:` on every block, a safe API, a safe
   fallback where possible, and a line here naming it.
+  The desktop app's macOS open-documents handler comes from the audited external crate `fmv-macos-events`
+  (safe API over `NSAppleEventManager`; `apps/lightcraft/src/apple_events.rs`), as in PhotoCraft and FilmCraft.
 - **Input-derived numbers are hostile:** `get()` instead of `[i]`/`[a..b]` for offsets from files, users, agents or
   arithmetic on them; checked/saturating math for lengths, offsets and counts; no division by zero, NaN/inf or negative
   casts to `usize`; cap allocations sized by input; slice strings only at char boundaries.

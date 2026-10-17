@@ -132,6 +132,8 @@ mod tests_offline;
 #[cfg(test)]
 mod tests_open_lightroom;
 #[cfg(test)]
+mod tests_os_events;
+#[cfg(test)]
 mod tests_panels;
 #[cfg(test)]
 mod tests_preset_import;
@@ -228,6 +230,20 @@ pub type HostAction = Box<dyn FnMut(&mut Session) -> Result<Value, String>>;
 /// last heard and wakes the UI itself when that changes; it is never polled for changes.
 pub type SystemThemeFn = Box<dyn Fn(&egui::Context) -> Option<egui::Theme>>;
 
+/// A request from the operating system, delivered by the host through [`Services::os_events`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OsEvent {
+    /// Open these files (absolute paths): a Finder double-click, Open With, a drop on the Dock
+    /// icon. Handled like files dropped on the window: photos and folders import in the
+    /// background, presets as presets.
+    Open(Vec<String>),
+    /// Quit (the Dock menu's Quit, log out, AppleScript): the app's own quit path.
+    Quit,
+}
+
+/// Requests from the operating system since the last call (see [`OsEvent`]).
+pub type OsEventsFn = Box<dyn FnMut() -> Vec<OsEvent>>;
+
 /// Platform services injected by the host app (desktop or web).
 #[derive(Default)]
 pub struct Services {
@@ -299,6 +315,10 @@ pub struct Services {
     pub restore_library: Option<HostAction>,
     /// The system appearance for Appearance Mode ▸ Auto, ahead of egui's own report.
     pub system_theme: Option<SystemThemeFn>,
+    /// The files the operating system asks us to open and its quit requests (macOS Apple events,
+    /// see [`OsEvent`]), polled every frame. Without it a photo opened from Finder reaches only
+    /// AppKit, which answers that LightCraft cannot open files in that format.
+    pub os_events: Option<OsEventsFn>,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -1217,25 +1237,57 @@ impl LightcraftApp {
         {
             let dropped: Vec<String> =
                 ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_string_lossy().to_string()).filter(|p| !p.is_empty()).collect());
-            // preset files import as presets, everything else as photos
-            // a dropped face model opens its licence dialog; presets and photos as before
-            let (models, dropped): (Vec<String>, Vec<String>) = dropped.into_iter().partition(|p| is_model_file(p));
-            if let Some(model) = models.first()
-                && let Err(e) = panels::faces::open_dialog(self, model)
-            {
-                self.toast(ctx, e);
-            }
-            let (presets, photos) = split_presets(dropped);
-            if !presets.is_empty() {
-                let _ = self.run("file.importPresets", serde_json::json!({"paths": presets}));
-            }
-            // read and added on a worker thread (dropped folders can be large, or on a slow drive)
-            if !photos.is_empty() {
-                if self.lightroom.is_some() {
-                    self.toast(ctx, "Finish Lightroom catalog import before adding photos");
-                } else if let Err(e) = import::start_paths(self, photos) {
-                    self.toast(ctx, e);
+            self.open_paths_from_os(ctx, dropped);
+        }
+        self.drain_os_events(ctx);
+    }
+
+    /// Handle the requests the operating system queued since the last frame (see
+    /// [`Services::os_events`]).
+    pub(crate) fn drain_os_events(&mut self, ctx: &egui::Context) {
+        let events = self.services.os_events.as_mut().map(|f| f()).unwrap_or_default();
+        for e in events {
+            match e {
+                OsEvent::Open(paths) if paths.is_empty() => {}
+                OsEvent::Open(paths) => {
+                    self.open_paths_from_os(ctx, paths);
+                    // Another app (Finder, the Dock) asked us to open: bring the window forward.
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                    ctx.request_repaint();
                 }
+                OsEvent::Quit => self.ui.quit = true,
+            }
+        }
+    }
+
+    /// Files the OS hands us, dropped on the window or opened from Finder, the Dock or Open With
+    /// (macOS, see [`Services::os_events`]): a face model opens its licence dialog, preset files
+    /// import as presets, everything else as photos, read and added on a worker thread (a folder
+    /// can be large, or on a slow drive). While the library problem dialog is up they wait with
+    /// the launch files, imported once the user has chosen where (issue #374).
+    fn open_paths_from_os(&mut self, ctx: &egui::Context, paths: Vec<String>) {
+        if paths.is_empty() {
+            return;
+        }
+        if let Some(problem) = self.library_problem.as_mut().filter(|p| !p.dismissed) {
+            problem.pending_import.extend(paths);
+            return;
+        }
+        let (models, paths): (Vec<String>, Vec<String>) = paths.into_iter().partition(|p| is_model_file(p));
+        if let Some(model) = models.first()
+            && let Err(e) = panels::faces::open_dialog(self, model)
+        {
+            self.toast(ctx, e);
+        }
+        let (presets, photos) = split_presets(paths);
+        if !presets.is_empty() {
+            let _ = self.run("file.importPresets", serde_json::json!({"paths": presets}));
+        }
+        if !photos.is_empty() {
+            if self.lightroom.is_some() {
+                self.toast(ctx, "Finish Lightroom catalog import before adding photos");
+            } else if let Err(e) = import::start_paths(self, photos) {
+                self.toast(ctx, e);
             }
         }
     }
