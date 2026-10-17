@@ -32,6 +32,8 @@ use lightcraft_raster::Rgb32f;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod backend;
 #[cfg(not(target_arch = "wasm32"))]
+mod budget;
+#[cfg(not(target_arch = "wasm32"))]
 mod ctx;
 #[cfg(not(target_arch = "wasm32"))]
 mod exit;
@@ -148,6 +150,11 @@ pub enum Fault {
     DropWork,
     /// A storage-buffer limit of this many bytes for this render.
     Limit(u64),
+    /// Every buffer the render asks for finds the device out of memory, on the first attempt
+    /// only: the retry with the device to itself succeeds.
+    OutOfMemory,
+    /// Only upload staging runs out of memory, after destination creation; the retry succeeds.
+    UploadOutOfMemory,
 }
 
 thread_local! {
@@ -471,62 +478,83 @@ pub fn try_render(
         let _work = exit::enter().ok_or(Fallback::NotTried)?;
         let gpu = device().ok_or(Fallback::NotTried)?;
         let ext = stages.map(|c| c.extension::<GpuStages>());
-        let fault = take_fault();
+        let mut fault = take_fault();
         // A simulated failure stops GPU use on this thread only (see `BROKEN_HERE`).
-        let stop = |reason: &str| if fault.is_some() { mark_broken_here(reason) } else { mark_broken(reason) };
-        let _ = ctx::take_failure(); // nothing left over from an earlier render on this thread
-        let (r, scoped) = {
-            let _scope = ctx::RenderScope::new(gpu);
-            let errors = ctx::ErrorScopes::push(gpu);
-            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| render::render(gpu, src, info, s, req, ext.as_deref(), fault)));
-            (r, errors.pop())
-        };
-        // An error the device raised explains the readback failures that follow it; a buffer
-        // over the limit explains the errors its placeholder raises.
-        let failure = match (ctx::take_failure(), scoped) {
-            (Some(f), _) if f.kind == ctx::FailKind::Limit => Some(f),
-            (f, scoped) => scoped.or(f),
-        };
-        let reason = match (r, failure) {
-            (Err(_), _) => {
-                log::error!("gpu: render failed; using the CPU pipeline from now on");
-                stop("a GPU render panicked");
-                "a GPU render panicked; the GPU is not used again".to_string()
-            }
-            (Ok(r), Some(f)) => {
-                // the view's cached device stages may hold results of the failed passes
-                if let Some(e) = &ext {
-                    e.clear();
+        let simulated = fault.is_some();
+        let stop = |reason: &str| if simulated { mark_broken_here(reason) } else { mark_broken(reason) };
+        // Renders share the device's memory: wait for room instead of running out of it, and after
+        // running out anyway (the size is an estimate) try once more with the device to this
+        // render alone before the CPU takes over (upstream #1764).
+        static BUDGET: std::sync::OnceLock<budget::Budget> = std::sync::OnceLock::new();
+        let budget = BUDGET.get_or_init(|| budget::Budget::new(budget::initial(gpu.max_buffer)));
+        let need = budget::footprint(src.width, src.height);
+        let mut alone = false;
+        let reason = loop {
+            let _permit = budget.admit(need, alone, shutting_down).ok_or(Fallback::NotTried)?;
+            let _ = ctx::take_failure(); // nothing left over from an earlier render on this thread
+            let (r, scoped) = {
+                let _scope = ctx::RenderScope::new(gpu);
+                let errors = ctx::ErrorScopes::push(gpu);
+                let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| render::render(gpu, src, info, s, req, ext.as_deref(), fault)));
+                (r, errors.pop())
+            };
+            // An error the device raised explains the readback failures that follow it; a buffer
+            // over the limit or out of memory explains the errors its placeholder raises.
+            let failure = match (ctx::take_failure(), scoped) {
+                (Some(f), _) if matches!(f.kind, ctx::FailKind::Limit | ctx::FailKind::OutOfMemory) => Some(f),
+                (f, scoped) => scoped.or(f),
+            };
+            break match (r, failure) {
+                (Err(_), _) => {
+                    log::error!("gpu: render failed; using the CPU pipeline from now on");
+                    stop("a GPU render panicked");
+                    "a GPU render panicked; the GPU is not used again".to_string()
                 }
-                let what = match &r {
-                    Some(r) => format!("{}×{}", r.image.width, r.image.height),
-                    None => "GPU render".into(),
-                };
-                let reason = match f.kind {
-                    ctx::FailKind::Fatal => {
-                        stop(&f.reason);
-                        format!("{what}: {}; the GPU is not used again", f.reason)
+                (Ok(r), Some(f)) => {
+                    // the view's cached device stages may hold results of the failed passes
+                    if let Some(e) = &ext {
+                        e.clear();
                     }
-                    ctx::FailKind::OutOfMemory => {
-                        gpu.trim(0);
-                        format!("{what}: {}", f.reason)
+                    let what = match &r {
+                        Some(r) => format!("{}×{}", r.image.width, r.image.height),
+                        None => "GPU render".into(),
+                    };
+                    let reason = match f.kind {
+                        ctx::FailKind::Fatal => {
+                            stop(&f.reason);
+                            format!("{what}: {}; the GPU is not used again", f.reason)
+                        }
+                        ctx::FailKind::OutOfMemory => {
+                            gpu.trim(0);
+                            budget.out_of_memory();
+                            if !alone {
+                                fault = fault.filter(|f| !matches!(f, Fault::OutOfMemory | Fault::UploadOutOfMemory));
+                                log::info!("gpu: {what}: {}; retrying with the device to this render alone", f.reason);
+                                alone = true;
+                                continue;
+                            }
+                            format!("{what}: {}", f.reason)
+                        }
+                        ctx::FailKind::Limit | ctx::FailKind::Blank => format!("{what}: {}", f.reason),
+                    };
+                    log::warn!("gpu: rendering on the CPU instead: {reason}");
+                    if render::profiling() {
+                        eprintln!("  gpu fallback to the CPU: {reason}");
                     }
-                    ctx::FailKind::Limit | ctx::FailKind::Blank => format!("{what}: {}", f.reason),
-                };
-                log::warn!("gpu: rendering on the CPU instead: {reason}");
-                if render::profiling() {
-                    eprintln!("  gpu fallback to the CPU: {reason}");
+                    reason
                 }
-                reason
-            }
-            // a device error on another thread or a lost device during the render
-            (Ok(Some(_)), None) if BROKEN.load(Ordering::Relaxed) => {
-                format!("device failure during the render: {}", unavailable_reason().unwrap_or_default())
-            }
-            (Ok(Some(r)), None) => return Ok(r),
-            // every path of `render::render` that gives up records a failure first; should one
-            // not, the CPU renders it rather than nothing
-            (Ok(None), None) => "GPU render: no image came back".to_string(),
+                // a device error on another thread or a lost device during the render
+                (Ok(Some(_)), None) if BROKEN.load(Ordering::Relaxed) => {
+                    format!("device failure during the render: {}", unavailable_reason().unwrap_or_default())
+                }
+                (Ok(Some(r)), None) => {
+                    budget.succeeded();
+                    return Ok(r);
+                }
+                // every path of `render::render` that gives up records a failure first; should one
+                // not, the CPU renders it rather than nothing
+                (Ok(None), None) => "GPU render: no image came back".to_string(),
+            };
         };
         record_fallback(reason.clone());
         Err(Fallback::Failed(reason))
