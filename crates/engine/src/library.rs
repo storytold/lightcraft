@@ -4,6 +4,7 @@
 //! ```text
 //! LightCraft Library/
 //!   catalog.snap   catalog.log      (lightcraft-catalog journal)
+//!   segments/      (the snapshot's photos: JSON files that catalog.snap lists)
 //!   presets.json   view.json        (user presets + favourites; last source/sort/selection)
 //!   prefs.json     (library preferences: XMP sidecars, import defaults, cache size, last export)
 //!   thumbs/        (rendered thumbnail cache, safe to delete)
@@ -304,6 +305,20 @@ struct SettingsLoad {
     blocked: Vec<&'static str>,
 }
 
+/// What to tell the person when opening the library upgraded it: the files it was are kept
+/// beside it (as large as it was), and are theirs to delete.
+fn kept_note(report: &LoadReport) -> Option<String> {
+    if report.kept.is_empty() {
+        return None;
+    }
+    // (a library whose log was damaged: that log is the other half of what it was)
+    let kept: Vec<&str> = report.kept.iter().chain(&report.damaged).map(String::as_str).collect();
+    Some(format!(
+        "This library was upgraded for this version of LightCraft, and earlier versions can't open it now. The library as it was is kept beside it as {}: delete it once the earlier version is no longer wanted (docs/catalog-persistence.md, \"Going back to an older version\").",
+        kept.join(" and ")
+    ))
+}
+
 impl SettingsLoad {
     fn read<T: serde::de::DeserializeOwned>(&mut self, store: &mut dyn Store, name: &'static str) -> Option<T> {
         let bytes = match store.read(name) {
@@ -463,6 +478,10 @@ impl Session {
         #[cfg(not(target_arch = "wasm32"))]
         self.faces.library_changed();
         let (mut journal, mut catalog, report) = Journal::open(catalog)?;
+        if lock.is_some() {
+            // (only with the library's lock: see `Journal::remove_unlisted_segments`)
+            journal.remove_unlisted_segments();
+        }
         // A loaded catalog counts revisions from 0, like every other one. Caches (sidebar counts,
         // keyword tree, the grid's list…) are keyed on the revision, so give each library loaded
         // in this process its own range: otherwise an empty library opened after one that was
@@ -566,6 +585,7 @@ impl Session {
             self.tidy_thumbnail_cache();
         }
         let view_written = self.view_json();
+        let kept = kept_note(&report);
         self.library = Some(Library {
             dir,
             on_disk,
@@ -578,7 +598,7 @@ impl Session {
             forgot_local: None,
             presets_saved,
             view_written,
-            settings_warnings: unlocked_warning(lock.as_ref()).into_iter().chain(settings.warnings).collect(),
+            settings_warnings: unlocked_warning(lock.as_ref()).into_iter().chain(kept).chain(settings.warnings).collect(),
             warnings_reported: 0,
             blocked: settings.blocked,
             lock: lock.take(),
@@ -676,9 +696,11 @@ impl Session {
         lib.unsaved_error.as_deref().filter(|_| !self.pending_log.is_empty()).map(|e| (self.pending_log.len(), e))
     }
 
-    /// Flush everything and write a snapshot (on quit). Ends an open interaction first.
+    /// Flush everything and compact the log into a snapshot (on quit). Ends an open interaction
+    /// first. A large catalog with only a short log keeps the log instead (see
+    /// [`Journal::wants_snapshot_on_close`]): everything is saved, and the next open replays it.
     ///
-    /// The snapshot is written even when appending the queued ops fails: it is a fresh file
+    /// The snapshot is always written when appending the queued ops fails: it is a fresh file
     /// holding everything in memory, so it saves those ops too (the log handle may be the only
     /// thing that's broken). Fails only if nothing could be saved; the ops then stay queued.
     pub fn close_library(&mut self) -> Result<()> {
@@ -691,7 +713,20 @@ impl Session {
         let unlogged = if persisted.is_err() { self.pending_log.len() as u64 } else { 0 };
         let Some(lib) = self.library.as_mut() else { return Ok(()) };
         let before = lib.journal.seq();
-        let snapshot = lib.journal.snapshot_with_unlogged(&self.catalog, unlogged);
+        let saved = unlogged == 0 && persisted.is_ok();
+        if saved {
+            // a compaction that is under way (the save above may have started it) finishes first:
+            // it empties the log, and the catalog isn't written a second time below
+            if let Err(e) = lib.journal.wait() {
+                log::error!("library: compaction: {e}");
+            }
+        }
+        let snapshot = if !saved || lib.journal.wants_snapshot_on_close() {
+            lib.journal.snapshot_with_unlogged(&self.catalog, unlogged)
+        } else {
+            // everything is in the log, which is short: the next open replays it
+            Ok(())
+        };
         if unlogged > 0 && lib.journal.seq() == before + unlogged {
             // the snapshot holds the queued ops: they are saved, never append them again
             log::info!("library: {unlogged} queued change(s) saved in the closing snapshot");

@@ -483,6 +483,25 @@
   files, the same files as `library.import` (issue #1080). They used to be skipped without a word.
 - Compare and Reference View panes say "Rendering…" (or that the photo can't be opened) the same way, so a
   magnified preview isn't taken for the photo when checking focus at 1:1.
+### Large libraries
+- The catalog on disk is several times smaller: a photo's record states only what was set (no empty fields, no default
+  develop settings), about 0.4 to 0.6 kB for an unedited photo where it was 3.4 to 3.7 kB. Edits, history steps and
+  versions are stored as what differs from the defaults.
+- Saving follows what changed, not the size of the library: the catalog file is rewritten when the changes since the
+  last rewrite have grown to a quarter of its size, where it used to be rewritten every 2000 changes. Importing 100,000
+  photos rewrote it 50 times (9.4 GB written); it is now 15 times (0.25 GB). Quitting no longer rewrites a large
+  catalog for a handful of changes.
+- The catalog's photos are saved in segment files (JSON files in `segments/` beside `catalog.snap`), and saving rewrites only the
+  segments whose photos changed: after edits in one place, 4 MB where it was the whole catalog (75 ms where it was 2 s,
+  for 3.5 million photos). Opening reads the segments on several threads: 0.15 s where it was 0.5 s for 300,000 photos,
+  1.7 s where it was 6.1 s for 3.5 million. A damaged segment is named when the library is opened, and nothing is
+  modified.
+- Libraries are upgraded when first opened (catalog format 11) and can't be opened by earlier versions afterwards. The
+  photos are split into segments only once the segments written read back the same. Copy or back up the whole library
+  folder: `catalog.snap` alone no longer holds the photos.
+  The library as it was is kept beside it (`catalog.snap.v6-…`, `catalog.log.v6-…`): to go back, see
+  `docs/catalog-persistence.md`.
+  Numbers and the measurements behind them: `docs/catalog-persistence.md`.
 
 ### Lens corrections
 - Sony A7R VI (ILCE-7RM6) raws are corrected for lens distortion from the table the camera records in each file,
