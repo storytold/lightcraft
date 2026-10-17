@@ -35,6 +35,19 @@ pub trait Store: Send {
     /// Cut a file to `len` bytes (drop a torn tail before appending again). A missing file is
     /// left missing.
     fn truncate(&mut self, name: &str, len: u64) -> io::Result<()>;
+    /// Remove a file (a missing one is not an error). The default can't: such a store keeps what
+    /// it was asked to remove.
+    fn remove(&mut self, name: &str) -> io::Result<()> {
+        let _ = name;
+        Err(io::Error::new(io::ErrorKind::Unsupported, "this store can't remove files"))
+    }
+    /// Whether the files an upgrade to a newer catalog format replaces are kept beside the
+    /// library (see [`crate::journal`] → *Format versions*): the way back to the build that wrote
+    /// them. `false` where there is no such build to go back to (the browser always runs the
+    /// newest one) and room is short.
+    fn keeps_replaced_formats(&self) -> bool {
+        true
+    }
     /// Human-readable location (diagnostics).
     fn describe(&self) -> String;
     /// Another handle on the same files that a worker thread can write `catalog.snap` through
@@ -169,6 +182,17 @@ impl Store for FsStore {
         f.sync_all()
     }
 
+    fn remove(&mut self, name: &str) -> io::Result<()> {
+        if self.appender.as_ref().is_some_and(|(n, _)| n == name) {
+            self.appender = None;
+        }
+        match std::fs::remove_file(self.path(name)) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e),
+        }
+    }
+
     fn describe(&self) -> String {
         self.dir.display().to_string()
     }
@@ -232,6 +256,10 @@ impl Store for MemStore {
         if let Some(f) = self.files.lock().unwrap_or_else(|e| e.into_inner()).get_mut(name) {
             f.truncate(len as usize);
         }
+        Ok(())
+    }
+    fn remove(&mut self, name: &str) -> io::Result<()> {
+        self.files.lock().unwrap_or_else(|e| e.into_inner()).remove(name);
         Ok(())
     }
     fn describe(&self) -> String {
