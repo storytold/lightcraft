@@ -217,6 +217,8 @@ struct PrefsFile {
     filter_presets: Vec<crate::cmd::filters::FilterPreset>,
     /// Point-curve presets.
     curve_presets: Vec<crate::cmd::curves::CurvePreset>,
+    /// The crop tool's saved and hidden aspect ratios.
+    crop_aspects: crate::cmd::crop_aspects::CropAspects,
     /// Mask effect presets.
     mask_effects: Vec<crate::cmd::mask_effects::MaskEffect>,
     /// The effect new masks of each kind start with.
@@ -497,6 +499,7 @@ impl Session {
         self.metadata_presets = prefs.metadata_presets;
         self.filter_presets = prefs.filter_presets;
         self.curve_presets = prefs.curve_presets;
+        self.crop_aspects = prefs.crop_aspects.sanitized();
         self.mask_effects = prefs.mask_effects;
         self.mask_tool_effects = prefs.mask_tool_effects;
         self.label_sets = prefs.label_sets;
@@ -751,6 +754,7 @@ impl Session {
             metadata_presets: self.metadata_presets.clone(),
             filter_presets: self.filter_presets.clone(),
             curve_presets: self.curve_presets.clone(),
+            crop_aspects: self.crop_aspects.clone(),
             mask_effects: self.mask_effects.clone(),
             mask_tool_effects: self.mask_tool_effects.clone(),
             label_sets: self.label_sets.clone(),

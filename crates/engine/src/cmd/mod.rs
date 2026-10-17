@@ -9,6 +9,7 @@ mod before;
 pub(crate) mod browse;
 mod color;
 pub(crate) mod convert;
+pub mod crop_aspects;
 mod cull;
 pub mod curves;
 pub(crate) mod denoise;
@@ -145,6 +146,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(develop::specs());
         v.extend(color::specs());
         v.extend(curves::specs());
+        v.extend(crop_aspects::specs());
         v.extend(masks::specs());
         v.extend(organize::specs());
         v.extend(keywords::specs());
