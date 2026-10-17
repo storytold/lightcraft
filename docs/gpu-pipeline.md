@@ -458,8 +458,9 @@ candle runs the decoder for that model from then on.
   uploads and the read-back (by FLOP count about a third of it kernels, the 288² convolution ~8 ms at ~12 TFLOP/s;
   the rest transfers), first use 0.09–0.17 s. Per prompt in the app (`--app`, against `--cpu-masks`): a Describe on a
   photo already analyzed 1.9–2.2 s → 1.04–1.06 s, the first on a photo 2.0–2.1 s → 1.11–1.12 s (2.5 s → 1.65 s with
-  the first load); under load (~15, parallel builds) 1.9 s → 1.1–1.2 s. What remains is in candle on the CPU: the
-  CLIP text encoder and the DETR decoder.
+  the first load); under load (~15, parallel builds) 1.9 s → 1.1–1.2 s. With the CPU-side text cache and one-pass box
+  bias as well: a new prompt on an analyzed photo ~0.7 s, a prompt used before 0.45–0.46 s. What remains is in candle
+  on the CPU: the DETR decoder (~0.4 s) and, for a new prompt, the CLIP text encoder (~0.25 s).
 - Accuracy (`tests/sam3_mask_decoder.rs`; both models share one GPU accelerator, so only the mask decoder differs):
   against the decoder transcribed with candle's tensor ops in f64, the GPU's instance features are within max rel
   4.2e-6, mean abs 1.7e-7; candle's own f32 decoder is 1.1e-3–1.5e-3 / 2e-4 from it, all of that from its GroupNorm's
