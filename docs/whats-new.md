@@ -183,6 +183,23 @@
 
 ## 2026-10-13
 
+### What a finished export or import leaves behind
+- An export or import that ran for 10 seconds or more, was stopped, or did not go well for every file stays in the
+  list under the bell when it ends, until you dismiss it: what it did, how long it took, and for an export the files
+  that failed with the reason for each (Show failed, Copy all) and Show in Finder (Explorer, File Manager) for what
+  it made; an import says how many files it could not read. The message that passes still shows, as before; until
+  now it was the only record.
+- One that did not go well puts a mark on the bell until you dismiss it, and comes first in the list, under "Needs
+  attention". An export whose worker crashed says that it stopped unexpectedly.
+- With nothing else running, the top bar says for a few seconds how the task that just ended went.
+
+### Background tasks under the bell
+- Running tasks (imports, exports, preview builds…) no longer float over the top-left corner, where they covered the
+  top of the left panel for as long as a job ran. The bell in the top bar shows them: a ring for how far along they
+  are, and beside it, in a wide window, the task's name and percentage, or how many run (a narrower window keeps the
+  percentage or the count, and the bell's tooltip says the rest). Click the bell (or Window ▸ Tasks) for the list,
+  with ✕ to stop a task; it shows every task, the newest first, and scrolls. Esc or a click elsewhere closes it.
+- The bell used to open History. History is in the Window menu and on the tool strip, as before.
 ### Edits keep up in a large library
 - A small edit (a keyword, a rating, a flag, a slider) no longer has the grid's list worked out again from every
   photo: only the photos the edit touched are asked about again and put at their place in the order. In a library of

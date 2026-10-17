@@ -907,6 +907,8 @@ fn finish(app: &mut LightcraftApp, ctx: &egui::Context, task: ImportTask) {
     } else {
         crate::i18n::tr_format!("Imported {} photo{}", task.imported, plural(task.imported))
     };
+    // what was done is the first line of the row the import leaves; the rest is what needs reading under it
+    let summary = msg.clone();
     if task.restored > 0 && (task.imported > 0 || task.cancelled) {
         msg.push_str(&crate::i18n::tr_format!(" · {} restored from Recently Deleted", task.restored));
     }
@@ -925,6 +927,23 @@ fn finish(app: &mut LightcraftApp, ctx: &egui::Context, task: ImportTask) {
     }
     if task.failed > 0 {
         msg.push_str(&crate::i18n::tr_format!(" · {} not readable", task.failed));
+    }
+    // The import says how it ended in a toast, as ever, and to the activity stack: one that ran long, was stopped
+    // or could not read every file stays in the list under the bell.
+    use lightcraft_engine::activity::{Ending, Outcome};
+    let ending = if task.cancelled {
+        Ending::Stopped
+    } else if task.failed > 0 && task.imported == 0 && task.restored == 0 {
+        Ending::Failed
+    } else if task.failed > 0 || !task.warnings.is_empty() {
+        Ending::Problems
+    } else {
+        Ending::Done
+    };
+    let detail = msg.get(summary.len()..).unwrap_or_default().trim_start_matches(" · ").to_string();
+    if let Some(guard) = task.guard {
+        // (which files could not be read is not kept: only how many)
+        guard.finish(Outcome { ending, summary, detail, failed: task.failed, ..Default::default() });
     }
     if task.warnings.is_empty() {
         app.toast(ctx, msg);
