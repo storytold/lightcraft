@@ -178,6 +178,32 @@ mod tests {
     }
 
     #[test]
+    fn a_masks_local_curve_is_written_only_when_it_has_points() {
+        use lightcraft_geom::Point;
+        let mut s = DevelopSettings::default();
+        s.masks.push(Mask { id: 1, ..Default::default() });
+        // no curve: the mask's JSON (and so `hash64`) is what it was before masks had one
+        let plain = s.to_json();
+        assert!(plain["masks"][0].get("curve").is_none());
+        let old = json!({"masks": [{"id": 1, "name": "Mask 1", "visible": true, "invert": false, "components": [], "adjust": {}}]});
+        assert_eq!(DevelopSettings::from_json(&old).unwrap().masks[0].curve, PointCurves::default());
+        // a curve is kept channel by channel, and only the channels that have points are written
+        s.masks[0].curve.master = vec![Point::new(0.0, 0.0), Point::new(0.5, 0.65), Point::new(1.0, 1.0)];
+        s.masks[0].curve.blue = vec![Point::new(0.0, 0.1), Point::new(1.0, 1.0)];
+        let v = s.to_json();
+        assert_eq!(v["masks"][0]["curve"].as_object().map(|o| o.len()), Some(2));
+        let back = DevelopSettings::from_json(&v).unwrap();
+        assert_eq!(back, s);
+        assert_ne!(back.hash64(), DevelopSettings::from_json(&plain).unwrap().hash64());
+        // points on the diagonal are linear but still kept as the editor placed them
+        let mut diag = PointCurves { red: vec![Point::new(0.0, 0.0), Point::new(0.4, 0.4), Point::new(1.0, 1.0)], ..Default::default() };
+        assert!(diag.is_identity() && !diag.is_empty());
+        diag.channel_mut("rgb").unwrap().push(Point::new(0.2, 0.3));
+        assert!(!diag.is_identity());
+        assert!(diag.channel("alpha").is_none());
+    }
+
+    #[test]
     fn white_balance_scale_reads_absent_as_legacy_and_writes_only_kelvin() {
         // settings from before the scale existed: no field, `Legacy`, and written back without it
         let old = json!({"wb": {"mode": "custom", "temp": 5800.0, "tint": 3.0}});
