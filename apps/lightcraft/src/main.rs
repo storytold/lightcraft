@@ -74,6 +74,9 @@ impl eframe::App for App {
         self.1.tick(&mut self.0, ctx);
     }
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
+        // photos opened from Finder or another app while LightCraft runs (macOS, issue #506): handled
+        // like files dropped on the window
+        raw.dropped_files.extend(opened_as_dropped(lightcraft_opendocs::take()));
         self.0.raw_input_hook(raw);
     }
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
@@ -814,6 +817,24 @@ fn launch_imports_in(args: &[String], cwd: Option<&std::path::Path>, home: Optio
     (files, notices)
 }
 
+/// A file the system asked LightCraft to open (`lightcraft_opendocs`), handed to the UI as a file
+/// dropped on the window (as egui-winit hands over a real drop).
+#[derive(Debug)]
+struct OpenedFile(std::path::PathBuf);
+
+impl egui::DroppedFile for OpenedFile {
+    fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+    fn bytes(&self) -> Result<Vec<u8>, String> {
+        std::fs::read(&self.0).map_err(|e| e.to_string())
+    }
+}
+
+fn opened_as_dropped(paths: Vec<String>) -> impl Iterator<Item = egui::DroppedFileHandle> {
+    paths.into_iter().map(|p| std::sync::Arc::new(OpenedFile(p.into())) as egui::DroppedFileHandle)
+}
+
 /// Where the log files live: `logs` in the settings folder, next to `ui.json` (see `logging`).
 /// None with `LIGHTCRAFT_NO_PREFS` (tests, scripts), so those runs don't rotate away the user's logs.
 fn log_dir() -> Option<std::path::PathBuf> {
@@ -953,6 +974,9 @@ fn main() -> eframe::Result {
             b.with_x11();
         }));
     }
+    // macOS hands photos opened from Finder or another app to the running app, not as arguments
+    // (issue #506); before the event loop exists, so the ones it was launched with arrive too
+    lightcraft_opendocs::install();
     let started = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         eframe::run_native(
             "LightCraft",
@@ -961,6 +985,12 @@ fn main() -> eframe::Result {
                 // the window's renderer is up (eframe calls this after creating it)
                 win_files_app.started(window_renderer);
                 came_up_app.store(true, std::sync::atomic::Ordering::Relaxed);
+                // photos the app was opened with from Finder or another app (macOS) are here by now:
+                // imported like the ones named as arguments; any that come later, like dropped files
+                let (opened, opened_notices) = launch_imports(&lightcraft_opendocs::take());
+                let files = [files, opened].concat();
+                let ctx = cc.egui_ctx.clone();
+                lightcraft_opendocs::set_waker(move || ctx.request_repaint());
                 let (mut session, problem) = open_session(in_memory, library_dir, seed_demo && files.is_empty());
                 // AI masks: the SAM 3 checkpoint (facebook/sam3) in <config>/models/sam3, or LIGHTCRAFT_SAM3_DIR
                 // (never required: without it, AI masks offer to download it; see docs/ai-masks.md)
@@ -976,6 +1006,7 @@ fn main() -> eframe::Result {
                 app.integrated_titlebar = cfg!(target_os = "macos");
                 app.notices.extend(prefs_warning);
                 app.notices.extend(launch_notices);
+                app.notices.extend(opened_notices);
                 app.notices.extend(window_notice);
                 app.gpu_notice = true;
                 // an empty library opens where Import is offered (a grid, with the sidebar); before
@@ -1057,7 +1088,7 @@ fn main() -> eframe::Result {
     let started = started.unwrap_or_else(|_| Err(eframe::Error::AppCreation("the window's renderer panicked while starting".into())));
     if let Err(e) = &started {
         // the renderer never came up: start again, which tries the next one in the chain
-        if window_gpu::relaunch_after_failure(&win_files) {
+        if window_gpu::relaunch_after_failure(&win_files, lightcraft_opendocs::take()) {
             log::error!("LightCraft could not open its window with {}: {e}; trying the next renderer", window_renderer.name());
             return Ok(());
         }

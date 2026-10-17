@@ -20,6 +20,7 @@ heif = ["lightcraft-codecs/heif"]
 [dependencies]
 lightcraft-engine = { workspace = true, features = ["sam"] }
 lightcraft-sysmem = { workspace = true }
+lightcraft-opendocs = { workspace = true }
 lightcraft-ui-egui = { workspace = true }
 lightcraft-codecs = { workspace = true }
 lightcraft-raster = { workspace = true }

@@ -3084,6 +3084,7 @@ dependencies = [
  "egui",
  "lightcraft-codecs",
  "lightcraft-engine",
+ "lightcraft-opendocs",
  "lightcraft-raster",
  "lightcraft-sysmem",
  "lightcraft-testkit",
@@ -3383,6 +3384,17 @@ dependencies = [
  "quick-xml 0.38.4",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "lightcraft-opendocs"
+version = "0.8.0"
+dependencies = [
+ "block2 0.6.2",
+ "log",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
 ]
 
 [[package]]

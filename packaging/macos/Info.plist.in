@@ -49,6 +49,48 @@
   <key>NSHumanReadableCopyright</key>
   <string>Copyright © the LightCraft authors. MIT OR Apache-2.0.</string>
 
+  <!-- The photos LightCraft imports (EXTENSIONS in crates/engine/src/import.rs), so Finder's Open
+       With, a drop on the Dock icon and other apps (Photo Mechanic, Files) can hand them over
+       (issue #506); they arrive through crates/opendocs. Alternate: offered, never made the
+       default app for these types. public.camera-raw-image covers the raw formats macOS knows,
+       DNG included. -->
+  <key>CFBundleDocumentTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>Camera Raw Image</string>
+      <key>CFBundleTypeRole</key>
+      <string>Viewer</string>
+      <key>LSHandlerRank</key>
+      <string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array>
+        <string>public.camera-raw-image</string>
+      </array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>Image</string>
+      <key>CFBundleTypeRole</key>
+      <string>Viewer</string>
+      <key>LSHandlerRank</key>
+      <string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array>
+        <string>public.jpeg</string>
+        <string>public.heic</string>
+        <string>public.heif</string>
+        <string>public.tiff</string>
+        <string>public.png</string>
+        <string>org.webmproject.webp</string>
+        <string>public.jpeg-xl</string>
+        <string>com.adobe.photoshop-image</string>
+        <string>com.compuserve.gif</string>
+        <string>com.microsoft.bmp</string>
+      </array>
+    </dict>
+  </array>
+
   <!-- Lightcraft's own format. -->
   <key>UTExportedTypeDeclarations</key>
   <array>

@@ -216,8 +216,9 @@ pub fn check_pipeline(device: &wgpu::Device, build: impl FnOnce(&wgpu::Device)) 
 
 /// The start failed (error or panic) before the window's renderer came up: start the app again,
 /// which then tries the next renderer. `false`: not relaunched (it came up, nothing written to
-/// disk, or the retries are used up).
-pub fn relaunch_after_failure(files: &Files) -> bool {
+/// disk, or the retries are used up). `opened`: files the system handed this launch (macOS, opened
+/// from Finder or another app), passed on as arguments so the next launch imports them.
+pub fn relaunch_after_failure(files: &Files, opened: Vec<String>) -> bool {
     if !files.armed() {
         return false;
     }
@@ -229,6 +230,7 @@ pub fn relaunch_after_failure(files: &Files) -> bool {
     log::warn!("window: the renderer failed to start; starting again with the next one");
     std::process::Command::new(exe)
         .args(std::env::args_os().skip(1))
+        .args(opened)
         .env(RETRY_VAR, (tries + 1).to_string())
         .spawn()
         .map_err(|e| log::error!("window: could not start again: {e}"))
@@ -265,7 +267,7 @@ mod tests {
         // nothing written without a settings folder
         let none = Files::new(None);
         none.arm(dx);
-        assert!(!none.armed() && !relaunch_after_failure(&none));
+        assert!(!none.armed() && !relaunch_after_failure(&none, Vec::new()));
         let _ = std::fs::remove_dir_all(&d);
     }
 
