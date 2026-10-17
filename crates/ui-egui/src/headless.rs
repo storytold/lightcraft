@@ -2174,6 +2174,28 @@ mod tests {
         assert!(rect[2].as_f64().unwrap() > 50.0 && rect[3].as_f64().unwrap() > 50.0, "{rect}");
     }
 
+    /// Issue #1952: a previous export saved with a depth its format doesn't have (an API call made
+    /// before `app.export` refused it) opens at a depth the format offers, so the dialog's Export,
+    /// which has no depth to pick for JPEG, doesn't fail; a depth the format has is kept.
+    #[test]
+    fn export_dialog_drops_a_depth_the_format_lacks() {
+        let mut h = demo([1200.0, 900.0]);
+        let t = Duration::from_secs(10);
+        let opened = |h: &mut Headless, last: Value| {
+            h.app.ui.dialog = None;
+            h.app.session.last_export = Some(last);
+            h.request("engine.execute", json!({"command": "dialog.export", "params": {}}), t);
+            match &h.app.ui.dialog {
+                Some(crate::state::Dialog::Export { opts, .. }) => opts.clone(),
+                _ => panic!("the export dialog is open"),
+            }
+        };
+        let o = opened(&mut h, json!({"format": "jpeg", "bitDepth": 16}));
+        assert_eq!(o.bit_depth, None);
+        lightcraft_engine::export::ExportOptions::from_params(&o.to_json()).expect("the dialog's settings export");
+        assert_eq!(opened(&mut h, json!({"format": "tiff", "bitDepth": 32})).bit_depth, Some(32));
+    }
+
     #[test]
     fn export_dialog_runs_in_the_background() {
         let mut h = demo([1200.0, 900.0]);

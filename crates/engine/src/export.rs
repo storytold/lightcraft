@@ -816,11 +816,18 @@ impl ExportOptions {
     /// newer version may have written and this one doesn't know dropped, also inside `watermark`.
     /// [`ExportOptions::validate`] is strict about what a caller types; settings saved on disk are
     /// not the caller's typo, and refusing them would make a preset or Export with Previous fail
-    /// for good after an update.
+    /// for good after an update. A `bitDepth` the stored format doesn't have (written at the
+    /// format's own depth before issue #1952) is dropped too.
     pub fn known_keys_only(p: &serde_json::Value) -> serde_json::Value {
         let mut p = p.clone();
         if let Some(o) = p.as_object_mut() {
             o.retain(|k, _| OPTION_PARAMS.contains(&k.as_str()) || TARGET_PARAMS.contains(&k.as_str()));
+            let format = o.get("format").and_then(serde_json::Value::as_str).map_or(Some(ExportFormat::default()), ExportFormat::parse);
+            if let (Some(format), Some(depth)) = (format, o.get("bitDepth").and_then(whole))
+                && !Self::bit_depths(format).iter().any(|d| i64::from(d.0) == depth)
+            {
+                o.remove("bitDepth");
+            }
             if let Some(w) = o.get_mut("watermark").and_then(serde_json::Value::as_object_mut) {
                 w.retain(|k, _| WATERMARK_PARAMS.contains(&k.as_str()));
             }
@@ -947,6 +954,26 @@ impl ExportOptions {
                     }
                 }
                 _ => return Err(bad(unknown_key("parameter", k, &known))),
+            }
+        }
+        // issue #1952: a depth the format doesn't have would be written at the format's own depth;
+        // the format is the one exported: `format`, else the one `path` names, else the default
+        if let Some(depth) = obj.get("bitDepth").and_then(whole) {
+            let format = match (obj.get("format").and_then(Value::as_str), obj.get("path").and_then(Value::as_str)) {
+                (Some(f), _) => ExportFormat::parse(f),
+                (None, Some(path)) => std::path::Path::new(path).extension().and_then(|e| e.to_str()).and_then(ExportFormat::parse),
+                (None, None) => Some(ExportFormat::default()),
+            };
+            if let Some(format) = format {
+                let mut depths: Vec<u8> = Self::bit_depths(format).iter().map(|d| d.0).collect();
+                if !depths.iter().any(|d| i64::from(*d) == depth) {
+                    depths.sort_unstable();
+                    let mut list: Vec<String> = depths.iter().map(u8::to_string).collect();
+                    let last = list.pop().unwrap_or_default();
+                    let list = if list.is_empty() { last } else { format!("{} or {last}", list.join(", ")) };
+                    let name = serde_json::to_value(format).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
+                    return Err(bad(format!("`bitDepth` must be {list} for {name}")));
+                }
             }
         }
         Ok(())
@@ -3167,6 +3194,7 @@ mod tests {
             resize: Some(Resize::default()),
             limit_kb: Some(500),
             watermark: Some(Watermark { text: "©".into(), ..Default::default() }),
+            format: ExportFormat::Png,
             bit_depth: Some(16),
             ..Default::default()
         };
@@ -3201,6 +3229,42 @@ mod tests {
         assert_eq!(ExportOptions::from_params(&ExportOptions::default().to_json()).unwrap(), ExportOptions::default());
         // null is "not given", as a dropped key is
         ExportOptions::from_params(&json!({"quality": 92, "longEdge": null, "watermark": null})).unwrap();
+    }
+
+    /// Issue #1952: a `bitDepth` the format doesn't have is refused (the Export dialog never offers
+    /// it), not written at the format's own depth; the error names the depths the format takes.
+    #[test]
+    fn bit_depth_must_suit_the_format() {
+        use serde_json::json;
+        let err = |p: serde_json::Value| ExportOptions::from_params(&p).err().map(|e| e.to_string()).unwrap_or_default();
+        assert!(err(json!({"format": "jpeg", "bitDepth": 16})).contains("`bitDepth` must be 8 for jpeg"));
+        assert!(err(json!({"format": "png", "bitDepth": 10})).contains("`bitDepth` must be 8 or 16 for png"));
+        assert!(err(json!({"format": "tiff", "bitDepth": 10})).contains("`bitDepth` must be 8, 16 or 32 for tiff"));
+        // no `format`: the one `path` names, else the default (JPEG)
+        assert!(err(json!({"path": "/out/a.png", "bitDepth": 32})).contains("for png"));
+        assert!(err(json!({"bitDepth": 16})).contains("for jpeg"));
+        assert!(ExportOptions::from_params(&json!({"path": "/out/a.tif", "bitDepth": 32})).is_ok());
+        // stored settings (a preset, Export with Previous) lose such a depth instead of failing
+        let stored = ExportOptions::known_keys_only(&json!({"format": "jpeg", "bitDepth": 16}));
+        assert_eq!(stored.get("bitDepth"), None);
+        assert_eq!(ExportOptions::known_keys_only(&json!({"format": "tiff", "bitDepth": 32}))["bitDepth"], 32);
+        for f in [
+            ExportFormat::Jpeg,
+            ExportFormat::Png,
+            ExportFormat::Tiff,
+            ExportFormat::Psd,
+            ExportFormat::Webp,
+            ExportFormat::Avif,
+            ExportFormat::Jxl,
+            ExportFormat::Original,
+            ExportFormat::Dng,
+            ExportFormat::RenderedDng,
+        ] {
+            for &(b, _) in ExportOptions::bit_depths(f) {
+                let o = ExportOptions { format: f, bit_depth: Some(b), ..Default::default() };
+                assert_eq!(ExportOptions::from_params(&o.to_json()).ok(), Some(o), "{f:?} {b}");
+            }
+        }
     }
 
     /// Issue #956: `destinationMode` picks a specific folder (the default) or each photo's own
