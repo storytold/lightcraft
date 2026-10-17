@@ -133,27 +133,56 @@ fn grid_headers_selection_scrolling_stacks_and_shape_changes() {
 }
 
 /// Selected photos whose thumbnails have not loaded (or can't) are still marked selected in the
-/// justified grid (issue #298): the active one white, the others grey.
+/// justified grid (issue #298), in a light theme too (a white ring vanished on the light grid):
+/// the ring of the active photo is heavier than the others' and both are the theme's colours, not
+/// fixed white and grey.
 #[test]
 fn unloaded_thumbnails_show_their_selection() {
+    use egui::epaint::Shape;
     let mut h = grid(ViewMode::PhotoGrid);
+    h.app.ui.settings.appearance_mode = crate::state::AppearanceMode::Light;
+    h.step();
     h.request("engine.execute", json!({"command": "library.selectAll"}), T);
-    let img = h.snapshot(SETTLE);
-    assert_eq!(h.view.ctx.pixels_per_point(), 1.0);
+    h.settle(SETTLE);
+    let t = crate::theme::Tokens::get(&h.view.ctx);
+    assert!(crate::theme::current(&h.view.ctx).is_some_and(|k| !k.is_dark()), "light theme");
     let active = h.app.session.selection.active.expect("active");
     let canvas = h.app.canvas_rect.expect("grid drawn");
+    let shapes = h.view.painted_shapes();
+    // the strokes drawn around a photo's cell in paint order (the widest first): (width, colour)
+    let ring = |r: egui::Rect| -> Vec<(f32, egui::Color32)> {
+        shapes
+            .iter()
+            .filter_map(|s| match s {
+                Shape::Rect(rs)
+                    if rs.stroke.width > 0.0 && rs.stroke_kind == egui::StrokeKind::Outside && (rs.rect.center() - r.center()).length() < 0.5 =>
+                {
+                    Some((rs.stroke.width, rs.stroke.color))
+                }
+                _ => None,
+            })
+            .collect()
+    };
     let mut checked = 0;
+    let mut saw_active = false;
     for (w, r) in h.app.widgets.iter().filter(|(w, _)| w.starts_with("thumb:")) {
-        if !canvas.shrink(4.0).contains_rect(*r) || r.min.x < 6.0 {
+        if !canvas.shrink(4.0).contains_rect(*r) {
             continue;
         }
         let id = w.trim_start_matches("thumb:").parse::<u64>().unwrap();
-        let want = if id == active.0 { egui::Color32::WHITE } else { egui::Color32::from_gray(170) };
-        let px = img[((r.min.x - 1.0) as usize, r.center().y as usize)];
-        assert_eq!(px, want, "photo {id}");
+        let strokes = ring(*r);
+        if id == active.0 {
+            assert_ne!(t.ring_active, egui::Color32::WHITE, "the light theme's ring must not vanish on its grid");
+            assert_eq!(strokes, vec![(3.0, t.ring_active), (1.0, t.ring_inner)], "photo {id}: active ring");
+            saw_active = true;
+        } else {
+            assert_eq!(strokes.iter().map(|(w, _)| *w).sum::<f32>(), 1.5, "photo {id}: selected ring {strokes:?}");
+            assert_eq!(strokes.iter().map(|(_, c)| *c).collect::<Vec<_>>(), vec![t.ring_selected], "photo {id}");
+        }
         checked += 1;
     }
     assert!(checked >= 3, "checked {checked}");
+    assert!(saw_active, "the active photo (top left) was checked");
 }
 
 /// A folder of unedited raws on a slow share: the grid must not decode every raw to draw a 512 px

@@ -44,6 +44,17 @@ pub struct Tokens {
     pub grid_bg: Color32,
     pub cell: Color32,
     pub cell_selected: Color32,
+    /// The ring round the active photo (outer line, 2 pt): 3:1 or more against the grid and the
+    /// square grid's cells. The photo itself is parted from it by [`Tokens::ring_inner`].
+    pub ring_active: Color32,
+    /// The thin line (1 pt) between the active photo and its ring: the ring's opposite, so the ring
+    /// reads on a photo of any brightness.
+    pub ring_inner: Color32,
+    /// The ring round the other selected photos (1.5 pt, against the active one's 3 pt): 3:1 or
+    /// more against the grid.
+    pub ring_selected: Color32,
+    /// What stands where a photo is still being drawn.
+    pub placeholder: Color32,
     pub divider: Color32,
     pub inset: Color32,
     pub field: Color32,
@@ -125,6 +136,10 @@ impl Default for Tokens {
             grid_bg: Color32::from_rgb(0x0f, 0x0f, 0x0f),
             cell: Color32::from_rgb(0x1c, 0x1c, 0x1c),
             cell_selected: Color32::from_rgb(0x2d, 0x2d, 0x2d),
+            ring_active: Color32::from_rgb(0xff, 0xff, 0xff),
+            ring_inner: Color32::from_rgb(0x00, 0x00, 0x00),
+            ring_selected: Color32::from_rgb(0xc0, 0xc0, 0xc0),
+            placeholder: Color32::from_rgb(0x26, 0x26, 0x26),
             divider: Color32::from_rgb(0x1c, 0x1c, 0x1c),
             inset: Color32::from_rgb(0x23, 0x23, 0x23),
             field: Color32::from_rgb(0x22, 0x22, 0x22),
@@ -167,6 +182,7 @@ impl Tokens {
         match kind {
             ThemeKind::Charcoal => base,
             ThemeKind::Midnight => Tokens {
+                placeholder: rgb(0x1c1c1c),
                 chrome: rgb(0x1e1e1e),
                 canvas: rgb(0x121212),
                 grid_bg: rgb(0x080808),
@@ -184,6 +200,10 @@ impl Tokens {
                 ..base
             },
             ThemeKind::Silver => Tokens {
+                ring_active: rgb(0x141414),
+                ring_inner: rgb(0xffffff),
+                ring_selected: rgb(0x4a4a4a),
+                placeholder: rgb(0xc2c2c2),
                 chrome: rgb(0xe6e6e6),
                 canvas: rgb(0xcfcfcf),
                 grid_bg: rgb(0xd9d9d9),
@@ -214,6 +234,10 @@ impl Tokens {
                 ..base
             },
             ThemeKind::Paper => Tokens {
+                ring_active: rgb(0x141414),
+                ring_inner: rgb(0xffffff),
+                ring_selected: rgb(0x4a4a4a),
+                placeholder: rgb(0xdcdcdc),
                 chrome: rgb(0xfafafa),
                 canvas: rgb(0xececec),
                 grid_bg: rgb(0xf2f2f2),
@@ -451,7 +475,46 @@ pub fn apply_kind(ctx: &egui::Context, kind: ThemeKind) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::button::contrast;
     use crate::i18n::{Locale, set_language};
+
+    /// The selection ring is a mark on the grid: 3:1 or more against what it is drawn over, in
+    /// every theme. The active photo's ring reads on the grid and on a selected or unselected
+    /// square-grid cell; the other selected photos' ring on the grid.
+    #[test]
+    fn selection_rings_stand_out_from_the_grid_in_every_theme() {
+        for kind in ThemeKind::ALL {
+            let t = Tokens::for_kind(kind);
+            for (what, surface) in [("grid", t.grid_bg), ("cell", t.cell), ("selected cell", t.cell_selected)] {
+                assert!(contrast(t.ring_active, surface) >= 3.0, "{kind:?}: active ring on the {what}: {:.2}", contrast(t.ring_active, surface));
+            }
+            // the selected ring also sits on a selected cell (square grid, filmstrip), label-tinted or not
+            let mut selected_cells = vec![("grid", t.grid_bg), ("selected cell", t.cell_selected)];
+            for label in lightcraft_catalog::ColorLabel::ALL {
+                selected_cells.push(("labelled selected cell", label_background(t.cell_selected, Some(label), true)));
+            }
+            for (what, surface) in selected_cells {
+                assert!(
+                    contrast(t.ring_selected, surface) >= 3.0,
+                    "{kind:?}: selected ring on the {what}: {:.2}",
+                    contrast(t.ring_selected, surface)
+                );
+            }
+            // the thin inner line of the active ring is the ring's opposite: it parts the ring from the photo's edge
+            assert!(contrast(t.ring_inner, t.ring_active) >= 3.0, "{kind:?}: inner line against the active ring");
+        }
+    }
+
+    /// A photo still being drawn is a slab of its theme, not a dark one on a light grid.
+    #[test]
+    fn the_loading_placeholder_belongs_to_the_theme() {
+        for kind in ThemeKind::ALL {
+            let t = Tokens::for_kind(kind);
+            assert!(t.placeholder != t.grid_bg, "{kind:?}: the slab must show on the grid");
+            let dark_slab = contrast(t.placeholder, Color32::BLACK) < contrast(t.placeholder, Color32::WHITE);
+            assert_eq!(dark_slab, kind.is_dark(), "{kind:?}: a {} slab", if dark_slab { "dark" } else { "light" });
+        }
+    }
 
     /// Every theme scrolls 100 points a wheel notch, and a zoom notch stays egui's stock ~1.22x
     /// (`exp(40 / 200)`) instead of growing with the longer scroll.
