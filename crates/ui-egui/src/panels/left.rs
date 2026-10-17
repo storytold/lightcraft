@@ -111,11 +111,11 @@ fn row_sensed(
         icon,
         if selected { t.text } else { t.icon },
     );
-    let font = t.font(13.5);
+    let font = t.body();
     let color = if selected { t.text } else { t.text_label };
     // a count of nothing is there, but fainter: the rows that hold photos stand out
     let count_color = |n: usize| if n == 0 { t.text_dim.gamma_multiply(0.55) } else { t.text_dim };
-    let count_galley = count.filter(|_| app.ui.show_counts).map(|n| ui.painter().layout_no_wrap(n.to_string(), t.font(12.5), count_color(n)));
+    let count_galley = count.filter(|_| app.ui.show_counts).map(|n| crate::readout::figures(ui.painter(), &n.to_string(), t.label(), count_color(n)));
     let label_left = r.left() + 42.0 + indent;
     let count_left = count_galley.as_ref().map_or(edge - 18.0, |g| edge - 18.0 - g.size().x);
     // a label's dot sits just before the count
@@ -297,7 +297,7 @@ fn empty_hint(ui: &mut egui::Ui, section: SidebarSection) {
     let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::hover());
     register(ui.ctx(), format!("sidebarEmpty:{}", section.id()), r);
     let text = crate::i18n::tr(section.empty_hint());
-    let galley = ui.painter().layout_no_wrap(text.to_string(), t.font(12.5), t.text_dim);
+    let galley = ui.painter().layout_no_wrap(text.to_string(), t.label(), t.text_dim);
     note_width(ui, 42.0 + galley.size().x + 18.0);
     ui.painter().galley(pos2(r.left() + 42.0, r.center().y - galley.size().y / 2.0), galley, t.text_dim);
 }
@@ -427,14 +427,14 @@ fn section_header(app: &mut LightcraftApp, ui: &mut egui::Ui, section: SidebarSe
     register(ui.ctx(), format!("{widget}Chevron:{id}"), Rect::from_center_size(c, vec2(16.0, 16.0)));
     let col = if hovered { t.text } else { t.text_dim };
     paint(ui.painter(), Rect::from_center_size(c, vec2(16.0, 16.0)), if open { Icon::ChevronDown } else { Icon::ChevronRight }, col);
-    ui.painter().text(pos2(r.left() + 18.0, r.center().y), Align2::LEFT_CENTER, title, t.semibold(13.5), t.text_label);
+    ui.painter().text(pos2(r.left() + 18.0, r.center().y), Align2::LEFT_CENTER, title, t.title_strong(), t.text_label);
     let button = header_button(section);
     // (an album being dragged puts "Top Level" in the Albums header)
     let room = !(section == SidebarSection::Albums && app.ui.dragging_album.is_some());
     if !open && rows > 0 && app.ui.show_counts && room {
         // folded: how much is in there (left of the header's own button)
         let right = edge - 18.0 - if button.is_some() { HEADER_BUTTON + 4.0 } else { 0.0 };
-        let count = ui.painter().text(pos2(right, r.center().y), Align2::RIGHT_CENTER, rows.to_string(), t.font(12.5), t.text_dim);
+        let count = ui.painter().text(pos2(right, r.center().y), Align2::RIGHT_CENTER, rows.to_string(), t.label(), t.text_dim);
         register(ui.ctx(), format!("{widget}Count:{id}"), count);
     }
     if section == SidebarSection::Albums {
@@ -1467,7 +1467,7 @@ fn top_level_drop_target(app: &mut LightcraftApp, ui: &mut egui::Ui, header: Rec
     ui.painter().rect_stroke(header.shrink2(vec2(8.0, 3.0)), 4.0, stroke, egui::StrokeKind::Inside);
     // right-aligned, left of the + button
     let edge = header.right().min(ui.clip_rect().right());
-    ui.painter().text(pos2(edge - 56.0, header.center().y), Align2::RIGHT_CENTER, crate::i18n::tr("Top Level"), t.font(12.5), t.text_dim);
+    ui.painter().text(pos2(edge - 56.0, header.center().y), Align2::RIGHT_CENTER, crate::i18n::tr("Top Level"), t.label(), t.text_dim);
     if over && ui.input(|i| i.pointer.primary_released()) {
         drop_album(app, ui, dragged, None);
     }

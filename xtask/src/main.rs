@@ -10,6 +10,7 @@ mod ico;
 mod layers;
 mod parity;
 mod stats;
+mod typescale;
 mod version;
 mod web;
 
@@ -47,6 +48,8 @@ commands:
                   picture and what the decoder's crop keeps beyond the camera frame (any make with a full-size
                   embedded JPEG); print image-area entries for Nikon bodies that record no crop (MEASURED_BODIES in
                   crates/raw/src/vendor/nef.rs)
+  type [--list]   the interface gives no text a size past the scale of crates/ui-egui/src/theme.rs (TextSize);
+                  --list names the sizes asked by number that are drawn at the nearest one; part of ci
 ";
 
 fn main() -> ExitCode {
@@ -65,6 +68,7 @@ fn main() -> ExitCode {
         Some("corpus") => cmd_corpus(rest.contains(&"--download")),
         Some("stats") => stats::run(&root(), rest.contains(&"--exact")),
         Some("raw-frame") => cmd_raw_frame(&rest),
+        Some("type") => typescale::run(&root(), rest.contains(&"--list")),
         Some("-h" | "--help" | "help") | None => {
             print!("{USAGE}");
             Ok(())
@@ -297,6 +301,8 @@ fn cmd_ci(args: &[&str]) -> Result<(), String> {
 
     type Step<'a> = (&'static str, Box<dyn Fn() -> Result<(), String> + 'a>);
     let mut steps: Vec<Step> = vec![
+        // (first: it reads sources only, and says in a second what a build would take minutes to)
+        ("type", Box::new(|| typescale::run(&root, false))),
         (
             "fmt",
             Box::new(|| {

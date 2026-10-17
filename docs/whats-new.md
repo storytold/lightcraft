@@ -550,6 +550,160 @@
   scene) now develop from their sensor data with every editing tool, like the camera's other raws. Photos
   imported earlier switch over with Photo ▸ Reload from Disk.
 
+### Settings window
+- The tabs of Settings are grouped by what you come to do. **Library** is the library itself: where it is, opening
+  or making another, where its smart previews are kept and when photos only seen in Local leave the catalog (the
+  last two were under Performance). **Files** is what is written beside the photo files and what they are opened
+  in: XMP sidecars (which was under Import, though it governs every later edit) and External Editing (which was
+  under General). General keeps the language, startup and culling; Performance keeps rendering and the thumbnail
+  cache. Display is now **Monitor** and Interface is **Appearance**, so the monitor's colour profile and how
+  LightCraft looks are not mistaken for each other. Agents: `app.settings` takes `library` and `files` as tabs;
+  every tab id from before still opens its tab (`display` and `interface` are Monitor and Appearance).
+- Settings has a filter above its tabs. Type a word, or part of one, and the sections that have it are listed with
+  the tab each is on, whichever tab was open: the names of tabs and sections, labels, buttons and explanations
+  are all looked through, and every word typed has to be there. Click a section (or press Return for the first,
+  or ↓ to go down to them) and its tab opens at it. Esc empties the filter; a second Esc closes Settings. The
+  choices of a closed list and tooltips are not looked through. Scripts: `field:settingsFilter`, and
+  `settingsFound:<tab>:<section>` for each section found.
+- The filter of Settings finds more of what is typed and puts the best first. It is ready to type in when Settings
+  opens. Either spelling of a word finds the other (color, colour), also while it is being typed, and some words a
+  section does not say itself find it ("trash" for Culling, "scheme" for Appearance; in English). A section or tab
+  named for the word comes first, then one with it in a label, choice or button, then one that mentions it in an
+  explanation, so Return opens the best match and not the first tab that has the word. The line under a result
+  starts shortly before the word it was found by, which is drawn stronger. The folders shown in Settings (the
+  library's, a cache's) and its text boxes (what is typed into one, or what an empty one says) are no longer
+  looked through. The heading of the section opened is marked for a moment. Scripts: `settingsLanded:<section>`
+  while it is.
+- Settings by keyboard is a short way. Tab stops once at the tab bar (at the open tab) and once at each row of
+  choices (at the one that holds), and the arrow keys move inside: → ↓ to the next, ← ↑ to the one before, Home and
+  End to the ends, Space or Return to open or choose. General's first checkbox is four presses from the filter,
+  where it was some twenty. Whatever has the focus is ringed 2 pt in the text colour: tabs and choices as before,
+  and now checkboxes, buttons, closed lists, radio buttons, text boxes and the sections the filter finds. The star that
+  makes a theme a favourite is a Tab stop for every theme, not only for one that is a favourite already.
+- What Settings says can be read in every theme. Its explanations, the text a box shows while it is empty, "In Use"
+  on a theme's card and the lines that warn or refuse now stand at least 4.5:1 against what they are on (the
+  explanations were 4.2:1 in Charcoal and 4.3:1 in Silver, "In Use" 2.9:1 in Charcoal); the borders of text boxes,
+  checkboxes, radio buttons, buttons and each choice of a row, and the line under the tabs, stand 3:1, where they
+  were 1.2 to 1.7:1; so do the buttons of a question a button asks. The AI Denoise page's own lines are read the
+  same way. The colours of the rest of LightCraft are as they were.
+- The hint under External Editing drew two empty boxes where its menu path had arrows; it reads "Photo > Edit In >
+  Edit in PhotoCraft" now.
+- Photo ▸ Edit In, Edit in PhotoCraft and Edit in Other Editor have names in all nine languages, the ones the hint
+  under External Editing gives.
+- 27 sentences and names in Settings that no language had are in all nine: External Editing and its hints, the
+  Monitor tab, the questions asked before clearing the cache, removing a model and deleting smart previews, and
+  what automatic XMP writing does. "memory only", "(library default)" and "starting…" are translated too.
+- Each section of Settings can be found by scripts as `heading:<its English name>` in `ui.widgets`, whatever the
+  interface language.
+- Settings is one size on every tab and stays where it is as you go through them; before, each tab made its own
+  size and the tabs moved under the pointer. The tabs stay in place while a long page scrolls, a page that goes on
+  below shows a scroll handle without the pointer on it, and each page remembers where it was scrolled to.
+- Nothing in Settings runs off the side any more. A row with more choices than fit (the languages on General) wraps
+  onto further lines and a long label wraps in its column, where both used to widen the window: in a small
+  LightCraft window the labels and the Close button of General ended up off screen.
+- The tabs of Settings look like tabs: names on the window with a line under the open one, no longer the same
+  buttons as the choices under them (on General the languages read as a second row of tabs). In Settings a chosen
+  option is outlined as well as filled, so it stands out in every theme.
+- A tab or a choice reached with the keyboard shows a ring. Tab moves through them, ← and → along a row, and Space
+  or Return opens or chooses, as before: the focus was there all along but could not be seen. Text buttons
+  elsewhere in LightCraft show the same ring. Screen readers are told a choice in Settings is a radio button.
+- Settings asks before it does what is slow or impossible to take back. Clear Cache says that thumbnails and
+  previews are made again as you browse, and a model's Remove that its file is deleted, each with the action and
+  Keep under the button. Keep has the focus, so Return alone changes nothing; Esc or a click elsewhere answers no.
+- Changing the smart previews folder with "Delete them" chosen no longer deletes at the press of Choose Folder: with
+  the new folder chosen, it says how many smart previews would go and what they are for, and waits for Delete and
+  Change Folder or Cancel. The choice goes back to "Move them" afterwards, and neither it nor the question is
+  left standing when Settings is closed or another library is opened.
+- Esc in a text box of Settings (Copyright, Creator, the Auto Import album, the two External Editing boxes) gives
+  the text back and stays in Settings; in the first three it used to save what was typed, and in all of them it
+  closed the window. Those three now have the Cut / Copy / Paste menu too, and what is typed in Copyright or
+  Creator is saved when another tab is clicked, where it used to be dropped.
+- Automatically write changes into XMP sidecars says what is written where.
+- A long folder (General ▸ Library ▸ Location, the folder Auto Import watches, the smart previews folder, a monitor
+  profile's file) is shortened to its last folders ("…/Pictures/Library") on one line; rest the pointer on it for
+  the whole path.
+
+### Text sizes
+- Text is set in seven sizes, each with a job: 10 pt for a badge on a thumbnail, 11 for an explanation, the
+  caption over a field or a chip, 12 for a count or the title of a tab, 13 for controls, rows and values, 14 for the header of a section,
+  15 for the name of a panel or a window, 18 for the title over the photos. There were seventeen, from 8.5 to 20 pt
+  and often half a point apart: a slider's name was 12.5 pt beside a checkbox's 13, a caption 11 pt in Settings and
+  11.5 in Info.
+- A size between two went to the one its job has: a slider's name and value 12.5 to 13 pt, a count 12.5 to 12,
+  an explanation or the caption over a field 11.5 to 11, a row of the sidebar and the search box 13.5 to 13, a
+  window's title 16 to 15 (the size of a panel's name), the title over the photos 17 to 18.
+- The smallest text is 10 pt: the format on a filmstrip cell was 8.5, the count on the filter button 9.5.
+- For those who write code: name the size (`t.caption()`, `t.body_strong()`, … in `theme.rs`); a number asked of
+  the theme (`t.font(12.5)`) is drawn at the nearest size, and `cargo xtask type`, part of `ci`, refuses a number
+  written where a font is made past it (`.size(11.5)`).
+
+### Text that can be read
+- The dim text of captions, counts, file names and explanations stands 4.5:1 against every panel, the grid, a
+  cell, a text box and a button, in all four themes. It was 4.20:1 on a panel in Charcoal, 3.3 to 4.3:1 on the
+  surfaces of Silver and Paper; Settings had been put right by itself, and now the colour is right where it is
+  defined. It stays dimmer than a label.
+- So do a placeholder in a text box and anything else written faintly (they were the label colour at 60 %, under
+  4.1:1 everywhere), a link (the accent as text was 2.56:1 on a panel in Charcoal, and links in About a bright blue
+  at 2.4 to 2.8:1 in the light themes), and a caution or an error written as text (3.09:1 in Silver).
+- A chosen chip or selected text keeps its label 4.5:1 on the accent behind it; the count on the filter button and
+  the "!" on the notices button are in black or white, whichever stands out from the circle; the name on a
+  selected filmstrip cell or square grid cell, or one tinted by a colour label, is made readable on that cell, and the format over a square cell is
+  light on its dark chip in the light themes too; a hidden mask's name is dim, not the colour of what
+  cannot be used.
+- Left as it was: a count of nothing in the sidebar ("0") is fainter than the other counts on purpose.
+
+### Marks and words over a picture
+- What is written or marked over a photo is in one light ink on a dark shade of its own, the same in every theme: a
+  picture has no theme. In Silver and Paper the stars, the pick flag and the "edited" mark on a thumbnail or a
+  filmstrip cell were the theme's dark greys on a dark bar, and next to invisible; the toast wrote the theme's
+  near-black text on its black shade.
+- A rated, flagged or edited thumbnail or filmstrip cell has a small shade under its marks, only as wide as they
+  are, whether or not the pointer is on it (the marks lay on the bare photo and went out on a bright one). The band
+  along the lower edge of a photo under the pointer or a chosen one is as it was; the dark bar across a marked
+  filmstrip cell is gone, its marks being on their shades. In the photo grid, on a thumbnail narrower than its marks
+  they end where the photo ends.
+- The flag of a rejected photo is a lighter red over a picture, which stands out from its shade in every theme, and
+  a rejected thumbnail is dimmed under its marks, not over them.
+- "Before", over a photo shown as it was before its edits, is on a shade too.
+- Left as they were: the virtual-copy tag, "Preview" and a stack's count, which were white on dark pills of their
+  own already.
+
+### Numbers
+- What a photo was taken with reads the same wherever it is shown: "1/250 sec · f/2.8 · ISO 100 · 35 mm" under the
+  histogram, over a square cell of the grid and in the info overlay, and the same words on the rows of Info. One
+  photo used to read "f / 2.8", "f/2.8" and "f/2.8", "35 mm" and "35mm", "1/250 sec", "1/250 s" and "1/250", in
+  three different orders.
+- A negative value has a minus (−1.25), not a hyphen; either can be typed, and the field a value opens in
+  for typing has the hyphen, so that what is copied from it pastes anywhere.
+- A value can be typed in the digits an Arabic or Persian keyboard gives (١٫٥, ۲۰٪), with the Arabic decimal
+  sign, comma or percent sign; they used to be no number, and the slider kept its value.
+- A slider's value stands in a column of figures: it begins and ends where any other value of as many figures does,
+  and no longer shifts while it is dragged. The counts on the rows of the left sidebar's lists (My Photos, Albums,
+  Folders) are set in the same figures.
+- A long file name on the filmstrip or in the Import grid is shortened in the middle to the room it has, so the
+  number of the frame stays ("IMG_20…_153012" where it was "IMG_20240712_…").
+
+### Longer words keep to their place
+- Edit: Reset goes to a row of its own under Auto, B&W and HDR when it has no room beside them. In German
+  ("Zurücksetzen") it lay over HDR.
+- A row of choices (the crop overlays, Upright, the vignette styles, the two tabs of Versions) puts fewer to a row
+  when the longest name would not fit its share of the width: "Mit Hilfslinien" ran out of a third of the panel,
+  "Goldfarben" out of a quarter.
+- The filter bar puts on each row what fits there, by what its words measure: Type and Edited go down to the second
+  row, or to one of their own, where they ran off the edge of the grid ("Bearbeitet oder nicht" in German with both
+  side panels open), and the bar grows by a row. In English each row holds what it did down to a grid about
+  720 pt wide; narrower than that, Type and Edited go to the second row, and below about 680 pt to a row of their
+  own. A part that is wider than the whole bar still runs off it (German under about 645 pt).
+
+### Small things in how the interface writes
+- Text marked for emphasis is in the full text colour; it was the label colour, the same as the text around it.
+- Edit: the profile and the white balance are written at the size of any control's value (13 pt). They were 15
+  and 14 pt, larger than and as large as the 14 pt headers of the sections they stand in.
+- The format on the card of Info, in capitals, has a little room between its letters.
+- What an empty view says (no photo selected, nothing to compare, no reference photo) is wrapped inside the view
+  and centred; a long sentence ran out of a narrow one.
+- German: the day of a date has two figures as its month does ("Freitag, 04.09.2026", not "4.09.2026").
+
 ### Switching libraries
 - File ▸ New Library… asks for a name, then where to put it, and opens the new library (issue #902).
 - File ▸ Open Recent Library lists the last 8 libraries; ones that are gone (moved, drive disconnected) are greyed

@@ -109,7 +109,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 ui.new_child(egui::UiBuilder::new().max_rect(sr.shrink2(vec2(10.0, 4.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
             let empty = app.ui.search.is_empty();
             if empty && !focused {
-                let g = child.painter().layout_no_wrap(crate::i18n::tr("Search Photos").into(), t.font(13.5), t.text_dim);
+                let g = child.painter().layout_no_wrap(crate::i18n::tr("Search Photos").into(), t.body(), t.text_dim);
                 let w = g.size().x + 24.0;
                 let x0 = sr.center().x - w / 2.0;
                 paint(child.painter(), Rect::from_min_size(pos2(x0, sr.center().y - 8.0), vec2(16.0, 16.0)), Icon::Search, t.text_dim);
@@ -119,7 +119,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 .label(crate::i18n::tr("Search Photos"))
                 .frame(false)
                 .width(sr.width() - 20.0)
-                .font(t.font(13.5))
+                .font(t.body())
                 .text_color(t.text)
                 .show(&mut child)
                 .response;
@@ -150,7 +150,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             if active > 0 {
                 let c = fr.right_top() + vec2(-3.0, 8.0);
                 ui.painter().circle_filled(c, 7.0, t.accent);
-                ui.painter().text(c, Align2::CENTER_CENTER, active.to_string(), t.semibold(9.5), t.canvas);
+                ui.painter().text(c, Align2::CENTER_CENTER, active.to_string(), t.micro_strong(), t.ink_on(t.accent));
             }
             let fresp = fresp.on_hover_text(if active > 0 {
                 crate::i18n::tr_format!("Filter bar — {active} active filter{}", if active == 1 { "" } else { "s" }, active = active)
@@ -203,7 +203,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 if warn {
                     let c = r.right_top() + vec2(-5.0, 6.0);
                     ui.painter().circle_filled(c, 6.0, t.reject);
-                    ui.painter().text(c, Align2::CENTER_CENTER, "!", t.semibold(9.5), t.canvas);
+                    ui.painter().text(c, Align2::CENTER_CENTER, "!", t.micro_strong(), t.ink_on(t.reject));
                     register(ui.ctx(), "indicator:unsaved", r);
                 }
                 // a refusal says why (Import while a Lightroom catalog is coming in)

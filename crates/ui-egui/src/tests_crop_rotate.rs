@@ -108,7 +108,7 @@ fn the_angle_reads_like_the_straighten_value() {
     use crate::panels::detail::crop_angle_label;
     assert_eq!(crop_angle_label(0.0), "0.00°", "as the Angle field shows it at rest");
     assert_eq!(crop_angle_label(2.5), "+2.50°");
-    assert_eq!(crop_angle_label(-12.254), "-12.25°");
+    assert_eq!(crop_angle_label(-12.254), "−12.25°", "with a minus, as a slider's value has");
     assert_eq!(crop_angle_label(-0.001), "0.00°", "no minus zero, and every zero the same");
 }
 

@@ -354,7 +354,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                             let l = line.trim_end();
                             if let Some(h) = l.strip_prefix("### ") {
                                 ui.add_space(6.0);
-                                ui.label(egui::RichText::new(crate::i18n::tr(h)).font(t.semibold(12.5)).color(t.text));
+                                ui.label(egui::RichText::new(crate::i18n::tr(h)).font(t.body_strong()).color(t.text));
                             } else if let Some(h) = l.strip_prefix("## ") {
                                 ui.add_space(8.0);
                                 ui.label(egui::RichText::new(crate::i18n::tr(h)).font(t.semibold(14.0)).color(t.text));
@@ -429,7 +429,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                         }
                         for (g, list) in &groups {
                             ui.add_space(6.0);
-                            ui.label(egui::RichText::new(g).font(t.semibold(12.5)).color(t.text));
+                            ui.label(egui::RichText::new(g).font(t.body_strong()).color(t.text));
                             egui::Grid::new(format!("meta-{g}")).num_columns(2).spacing([16.0, 3.0]).striped(true).show(ui, |ui| {
                                 for (n, v) in list {
                                     ui.label(egui::RichText::new(n).color(t.text_dim));
@@ -461,7 +461,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                                 .color(t.text_dim),
                         );
                     } else {
-                        ui.label(egui::RichText::new(crate::i18n::tr("Fix the marked rules to save this album.")).color(t.caution));
+                        ui.label(egui::RichText::new(crate::i18n::tr("Fix the marked rules to save this album.")).color(t.text_caution()));
                     }
                 }
                 Dialog::NewSmartAlbum { name, .. } => {
@@ -1053,7 +1053,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                             });
                             ui.label(
                                 egui::RichText::new(crate::i18n::tr("The first time, macOS asks whether LightCraft may control Photos."))
-                                    .size(11.0)
+                                    .font(t.caption())
                                     .color(t.text_dim),
                             );
                         }
@@ -1083,7 +1083,9 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                 }
                 Dialog::Merge { opts } => crate::merge::body(app, ui, opts),
                 Dialog::Import { opts } => crate::import::body(app, ui, opts),
-                Dialog::Settings { tab } => crate::panels::settings::body(app, ui, tab),
+                // (Settings is never taller than `body_max`, so the scroll area round it never
+                // scrolls: its tab bar stays put and its pages scroll by themselves)
+                Dialog::Settings { tab } => crate::panels::settings::window(app, ui, tab, body_max),
                 Dialog::SamModel { error, .. } => sam_model_body(app, ui, error.as_deref()),
                 Dialog::KeywordTag {
                     editing,
@@ -1283,7 +1285,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                         1 => crate::credits::contributors_ui(app, ui),
                         2 => crate::credits::models_ui(ui),
                         _ => {
-                            ui.label(egui::RichText::new("LightCraft").font(t.semibold(20.0)).color(t.text));
+                            ui.label(egui::RichText::new("LightCraft").font(t.display_strong()).color(t.text));
                             ui.label(crate::i18n::tr_format!("Version {} — a clean-room, pure-Rust photo library and raw developer.", env!("CARGO_PKG_VERSION")));
                             ui.label(crate::i18n::tr_format!(
                                 "MIT OR Apache-2.0. Fonts: {} (OFL). Icons: original.",

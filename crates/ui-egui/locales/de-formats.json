@@ -169,7 +169,7 @@
   "{stage}… {:.0}%": "{stage}… {:.0}%",
   "{verb} {n} Photo{}": "{verb}: {n} Foto{}",
   "{weekday}, {day}": "{weekday}, {day}.",
-  "{weekday}, {day} {month} {year}": "{weekday}, {day}.{month:02}.{year}",
+  "{weekday}, {day} {month} {year}": "{weekday}, {day:02}.{month:02}.{year}",
   "{what} merge added": "{what}-Zusammenfügung hinzugefügt",
   "{what} merge failed: {e}": "{what}-Zusammenfügung fehlgeschlagen: {e}",
   "{year}": "{year}",

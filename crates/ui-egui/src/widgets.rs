@@ -110,10 +110,10 @@ pub fn preview_only_notice(ui: &mut Ui, key: &str, reason: &str) -> bool {
             ui.horizontal(|ui| {
                 let (ir, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
                 paint(ui.painter(), ir, Icon::Info, t.caution);
-                ui.label(egui::RichText::new(crate::i18n::tr("Preview only")).font(t.semibold(12.5)).color(t.text));
+                ui.label(egui::RichText::new(crate::i18n::tr("Preview only")).font(t.body_strong()).color(t.text));
             });
             ui.add_space(2.0);
-            ui.label(egui::RichText::new(preview_only_explanation(reason)).size(11.5).color(t.text_label));
+            ui.label(egui::RichText::new(preview_only_explanation(reason)).font(t.caption()).color(t.text_label));
             ui.add_space(6.0);
             reload = text_button(ui, &format!("reloadPreviewOnly:{key}"), "Reload from Disk", false).clicked();
         })
@@ -202,11 +202,29 @@ pub struct SliderOut {
 }
 
 /// What a value typed into a slider asks for (issue #322): a number such as `0.5`, `+12`, `-1,5`
-/// (comma or point) or `5600 K`, on the control's steps and clamped to its range. `None` when it
-/// isn't a finite number, so the slider keeps its value.
+/// (comma or point), `5600 K` or `5°`, on the control's steps and clamped to its range. The digits may
+/// be the Arabic-Indic or Persian ones (`١٫٥`, `۲۰٪`), as an Arabic or Persian keyboard gives
+/// them. `None` when it isn't a finite number, so the slider keeps its value.
 pub fn typed_value(spec: &ControlSpec, text: &str) -> Option<f64> {
-    let t = text.trim().replace(',', ".");
-    let t = t.trim_end_matches(|c: char| c == '%' || c == 'K' || c == 'k' || c.is_whitespace());
+    let t: String = text
+        .chars()
+        // (the marks a keyboard or a paste puts around a number to say which way it reads: the
+        // direction marks, and the embeddings and isolates an app wraps a number in)
+        .filter(|c| !matches!(c, '\u{200e}' | '\u{200f}' | '\u{61c}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'))
+        .map(|c| match c {
+            // (Arabic-Indic digits, and their Persian forms)
+            '\u{660}'..='\u{669}' => char::from_digit(c as u32 - 0x660, 10).unwrap_or(c),
+            '\u{6f0}'..='\u{6f9}' => char::from_digit(c as u32 - 0x6f0, 10).unwrap_or(c),
+            // (a decimal comma, the Arabic comma, or the Arabic decimal sign)
+            ',' | '\u{60c}' | '\u{66b}' => '.',
+            '\u{66a}' => '%',
+            // (a minus as the value is shown with, or the hyphen of a keyboard)
+            crate::readout::MINUS => '-',
+            c => c,
+        })
+        .collect();
+    let t = t.trim();
+    let t = t.trim_end_matches(|c: char| c == '%' || c == '°' || c == 'K' || c == 'k' || c.is_whitespace());
     let v: f64 = t.parse().ok().filter(|v: &f64| v.is_finite())?;
     let step = spec.step.max(1e-9);
     Some(((v / step).round() * step).clamp(spec.min, spec.max))
@@ -215,7 +233,7 @@ pub fn typed_value(spec: &ControlSpec, text: &str) -> Option<f64> {
 /// A slider's value as shown next to its label.
 pub(crate) fn shown_value(spec: &ControlSpec, v: f64) -> String {
     let shown = if spec.id == "wb.temp" { format!("{v:.0}") } else { spec.format(v).replace("+0.00", "0").replace("-0.00", "0") };
-    if shown == "+0" || shown == "-0" { "0".to_string() } else { shown }
+    if shown == "+0" || shown == "-0" { "0".to_string() } else { crate::readout::signed(&shown) }
 }
 
 /// Pointer travel (points, sideways from the press) that turns a press on a slider's value into a
@@ -224,6 +242,12 @@ const SCRUB_START: f32 = 3.0;
 
 /// The radius of a slider's hollow ring thumb.
 const THUMB_RING: f32 = 7.0;
+
+/// A slider's value as the text its field opens with: no plus, and the hyphen of a keyboard
+/// for the minus it is shown with, so that what is copied from the field pastes anywhere.
+pub(crate) fn draft_value(spec: &ControlSpec, v: f64) -> String {
+    shown_value(spec, v).trim_start_matches('+').replace(crate::readout::MINUS, "-")
+}
 
 /// A Lightroom slider row (label + value above a track with a hollow ring thumb).
 /// Double-click the label or thumb to reset (hovering either says so). Shift-drag = fine adjustment.
@@ -310,7 +334,7 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
     let value_pressed = value_resp.is_pointer_button_down_on() && ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary));
     // Focus on the owned primary press before fast typing; retain the readout's click activation.
     if enabled && typing.is_none() && (value_resp.clicked() || value_pressed) {
-        typing = Some((shown_value(spec, value).trim_start_matches('+').to_string(), 0, value_pressed));
+        typing = Some((draft_value(spec, value), 0, value_pressed));
     }
     let value_released = ui.input(|i| i.pointer.button_released(egui::PointerButton::Primary));
     // The opening press must complete the readout's original click before the edit continues.
@@ -364,7 +388,7 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(value_rect).layout(egui::Layout::right_to_left(egui::Align::Center)));
         // the old value is selected when the field takes the focus, so typing replaces it
         let field = crate::text_field::TextField::singleline(&format!("sliderField:{}", spec.id), &mut text)
-            .font(t.font(12.5))
+            .font(t.body())
             .horizontal_align(egui::Align::RIGHT)
             .width(value_rect.width())
             .margin(egui::Margin::ZERO)
@@ -518,10 +542,10 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
     let hovered = resp.hovered() || resp.dragged();
     let text_c = if enabled { t.text_label } else { t.text_disabled };
     let p = ui.painter();
-    p.text(label_rect.left_center(), Align2::LEFT_CENTER, crate::i18n::tr(label_override.unwrap_or(spec.label)), t.font(12.5), text_c);
+    p.text(label_rect.left_center(), Align2::LEFT_CENTER, crate::i18n::tr(label_override.unwrap_or(spec.label)), t.body(), text_c);
     if typing.is_none() {
-        p.text(label_rect.right_center(), Align2::RIGHT_CENTER, shown_value(spec, v), t.font(12.5), text_c);
-        // the scrub pointer, as over Lightroom's values: a drag here changes the value
+        // (in a column of figures: the value keeps its place while it changes)
+        crate::readout::value(p, label_rect.right_center(), &shown_value(spec, v), t.body(), text_c);
         if enabled && (value_resp.hovered() || scrub.is_some()) {
             ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
         }
@@ -635,14 +659,124 @@ pub fn flyout_row(ui: &mut Ui, id: &str, title: &str, icon: Icon, open: bool) ->
 }
 
 /// A small bordered text button (Auto, B&W, HDR…).
+/// How wide a [`text_button`] with this label is: for a row that has to know whether one fits.
+pub fn text_button_width(ui: &Ui, label: &str) -> f32 {
+    let t = Tokens::get(ui.ctx());
+    (ui.painter().layout_no_wrap(crate::i18n::tr(label).to_string(), t.caption_strong(), t.text).size().x + 18.0).max(37.0)
+}
+
 pub fn text_button(ui: &mut Ui, id: &str, label: &str, active: bool) -> Response {
+    chip(ui, id, label, active, false, None)
+}
+
+/// One of a row of choices of which exactly one holds (`button:{id}`), drawn as [`text_button`]
+/// is, except that the one chosen is also outlined in the label colour: its fill alone stands
+/// about 1.4:1 against the others, the outline 3:1 or more in every theme. A screen reader is
+/// told it is a radio button.
+pub fn choice_button(ui: &mut Ui, id: &str, label: &str, chosen: bool) -> Response {
+    chip(ui, id, label, chosen, true, None)
+}
+
+/// A [`choice_button`] of a row that is one Tab stop ([`Roving`]).
+pub fn choice_button_in(ui: &mut Ui, row: &mut Roving, id: &str, label: &str, chosen: bool) -> Response {
+    chip(ui, id, label, chosen, true, Some(row))
+}
+
+/// A row of buttons that is one stop for Tab, as a tab bar or a group of radio buttons is: Tab
+/// comes to the one that holds (`chosen`, or the first) and leaves the row from wherever in it
+/// the focus is, and the arrow keys move the focus inside it (→ ↓ to the next, ← ↑ to the one
+/// before, Home and End to the ends) without choosing anything: Space or Return does that. The
+/// buttons are told to it one by one as they are drawn ([`choice_button_in`], [`tab_button_in`]),
+/// and it is [`Roving::end`]ed after the last.
+pub struct Roving {
+    key: egui::Id,
+    /// The buttons of the row as they were drawn on the frame before, in order.
+    last: Vec<egui::Id>,
+    now: Vec<egui::Id>,
+    /// Which of them Tab stops at on this frame: the one with the focus, or the one that holds.
+    stop: usize,
+    /// The button an arrow key moved the focus to, given it when the row has been drawn.
+    to: Option<egui::Id>,
+}
+
+impl Roving {
+    /// The row named `name` (unique on screen), of which the button at `chosen` holds.
+    pub fn new(ui: &Ui, name: &str, chosen: Option<usize>) -> Self {
+        let key = egui::Id::new(("roving-row", name));
+        let last: Vec<egui::Id> = ui.data(|d| d.get_temp(key)).unwrap_or_default();
+        let focused = ui.memory(|m| m.focused());
+        let stop = focused.and_then(|focused| last.iter().position(|id| *id == focused)).or(chosen).unwrap_or(0);
+        // (a choice that is not among the buttons leaves the first as the stop)
+        let stop = if last.is_empty() || stop < last.len() { stop } else { 0 };
+        Self { key, last, now: Vec::new(), stop, to: None }
+    }
+
+    /// What the next button of the row senses: clicks, and the focus by Tab if it is the stop.
+    fn sense(&self) -> Sense {
+        if self.now.len() == self.stop { Sense::click() } else { Sense::CLICK }
+    }
+
+    /// The next button of the row, drawn: the arrow keys move from it while it has the focus.
+    fn drawn(&mut self, ui: &Ui, resp: &Response) {
+        let place = self.now.len();
+        self.now.push(resp.id);
+        if !resp.has_focus() {
+            return;
+        }
+        // (the arrow keys are this row's while the focus is in it: not egui's, which go to
+        // whatever is nearest in that direction)
+        let arrows = egui::EventFilter { horizontal_arrows: true, vertical_arrows: true, ..Default::default() };
+        // (and on the frame the focus came here, when egui takes no filter yet and would look for
+        // what is nearest in the arrow's direction, starting from the button the focus was just
+        // given to: that search is called off)
+        ui.memory_mut(|m| {
+            m.set_focus_lock_filter(resp.id, arrows);
+            m.move_focus(egui::FocusDirection::None);
+        });
+        let end = self.last.len().saturating_sub(1);
+        let to = ui.input(|i| {
+            // (an arrow held with a modifier is somebody else's)
+            if i.modifiers.any() {
+                None
+            } else if i.key_pressed(egui::Key::ArrowRight) || i.key_pressed(egui::Key::ArrowDown) {
+                Some(place.saturating_add(1).min(end))
+            } else if i.key_pressed(egui::Key::ArrowLeft) || i.key_pressed(egui::Key::ArrowUp) {
+                Some(place.saturating_sub(1))
+            } else if i.key_pressed(egui::Key::Home) {
+                Some(0)
+            } else if i.key_pressed(egui::Key::End) {
+                Some(end)
+            } else {
+                None
+            }
+        });
+        // (given in `end`: a button drawn after this one on this frame does not take the focus
+        // by Tab yet, and egui takes the focus from one that does not)
+        self.to = to.filter(|to| *to != place).and_then(|to| self.last.get(to)).copied();
+    }
+
+    /// After the row's last button: what was drawn is remembered for the next frame.
+    pub fn end(self, ui: &Ui) {
+        if let Some(to) = self.to {
+            ui.memory_mut(|m| m.request_focus(to));
+            ui.ctx().request_repaint();
+        }
+        ui.data_mut(|d| d.insert_temp(self.key, self.now));
+    }
+}
+
+fn chip(ui: &mut Ui, id: &str, label: &str, active: bool, choice: bool, row: Option<&mut Roving>) -> Response {
     let label = if id.starts_with("labelSet-") { label } else { crate::i18n::tr(label) };
     let t = Tokens::get(ui.ctx());
-    let font = t.semibold(11.5);
+    let font = t.caption_strong();
     let galley = ui.painter().layout_no_wrap(label.to_string(), font, t.text);
     let size = vec2((galley.size().x + 18.0).max(37.0), 24.0);
-    let (r, resp) = ui.allocate_exact_size(size, Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, active, label));
+    let (r, resp) = ui.allocate_exact_size(size, row.as_ref().map_or(Sense::click(), |row| row.sense()));
+    if let Some(row) = row {
+        row.drawn(ui, &resp);
+    }
+    let kind = if choice { egui::WidgetType::RadioButton } else { egui::WidgetType::Button };
+    resp.widget_info(|| egui::WidgetInfo::selected(kind, true, active, label));
     register(ui.ctx(), format!("button:{id}"), r);
     let fill = if active {
         t.pressed
@@ -651,20 +785,96 @@ pub fn text_button(ui: &mut Ui, id: &str, label: &str, active: bool) -> Response
     } else {
         t.button
     };
+    // (a choice's border says where it is, among its neighbours on the window: it stands 3:1
+    // there in every theme, where a button's own border is 1.6 to 1.7:1)
+    let border = match (choice, active) {
+        (true, true) => t.text_label,
+        (true, false) => t.legible(t.button_border, t.chrome, 3.0),
+        (false, _) => t.button_border,
+    };
     let p = ui.painter();
-    p.rect(r, CornerRadius::same(4), fill, Stroke::new(1.0, t.button_border), StrokeKind::Inside);
+    p.rect(r, CornerRadius::same(4), fill, Stroke::new(1.0, border), StrokeKind::Inside);
     p.galley(r.center() - galley.size() / 2.0, galley, t.text);
+    focus_ring(ui, &t, &resp, r);
     resp
 }
+
+/// The ring a button drawn here shows while it has the keyboard focus (Tab, the arrow keys): 2 pt
+/// in the text colour with a 1 pt line of the surface's colour inside it, both within its rect so
+/// that a neighbour or the edge of a scrolled list never cuts them. The inner line sets the ring
+/// off from the button's fill, and makes it a double line: a chosen [`choice_button`] has a
+/// single thin one, so "has the focus" and "is chosen" are told apart by shape, not thickness.
+pub(crate) fn focus_ring(ui: &Ui, t: &Tokens, resp: &Response, r: Rect) {
+    if resp.has_focus() {
+        let p = ui.painter();
+        p.rect_stroke(r, CornerRadius::same(4), Stroke::new(2.0, t.text), StrokeKind::Inside);
+        p.rect_stroke(r.shrink(2.0), CornerRadius::same(2), Stroke::new(1.0, t.chrome), StrokeKind::Inside);
+    }
+}
+
+/// How tall a [`tab_button`] is.
+const TAB_HEIGHT: f32 = 28.0;
+
+/// A tab of a tab bar (`button:{id}`): its name on the surface it is on, with no border and no
+/// fill, so that it does not read as one of the buttons a page holds. The open tab's name is in
+/// the text colour over a 2 pt line of that colour along its bottom edge (the bar's own line, when
+/// the caller draws one there); the others are in the label colour. The names are a size up from
+/// the headings inside a page, which are in the same face. To a screen reader a tab is a button
+/// that says whether it is the one chosen (egui has no tab role to give it).
+pub fn tab_button(ui: &mut Ui, id: &str, label: &str, open: bool) -> Response {
+    tab(ui, id, label, open, None)
+}
+
+/// A [`tab_button`] of a tab bar that is one Tab stop ([`Roving`]).
+pub fn tab_button_in(ui: &mut Ui, bar: &mut Roving, id: &str, label: &str, open: bool) -> Response {
+    tab(ui, id, label, open, Some(bar))
+}
+
+fn tab(ui: &mut Ui, id: &str, label: &str, open: bool, bar: Option<&mut Roving>) -> Response {
+    let label = crate::i18n::tr(label);
+    let t = Tokens::get(ui.ctx());
+    let color = if open { t.text } else { t.text_label };
+    let galley = ui.painter().layout_no_wrap(label.to_string(), t.body_strong(), color);
+    let size = vec2((galley.size().x + 20.0).max(37.0), TAB_HEIGHT);
+    let (r, resp) = ui.allocate_exact_size(size, bar.as_ref().map_or(Sense::click(), |bar| bar.sense()));
+    if let Some(bar) = bar {
+        bar.drawn(ui, &resp);
+    }
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, open, label));
+    register(ui.ctx(), format!("button:{id}"), r);
+    let p = ui.painter();
+    // (on whole pixels, so the line under the open tab is crisp at a whole-number scale)
+    let r = egui::emath::GuiRounding::round_to_pixels(r, p.pixels_per_point());
+    if resp.hovered() && !open {
+        p.rect_filled(r.shrink2(vec2(0.0, 3.0)), CornerRadius::same(4), t.hover);
+    }
+    let color = if resp.hovered() { t.text } else { color };
+    p.galley_with_override_text_color(r.center() - galley.size() / 2.0, galley, color);
+    if open {
+        p.rect_filled(Rect::from_min_max(pos2(r.left(), r.bottom() - 2.0), r.max), CornerRadius::ZERO, t.text);
+    }
+    focus_ring(ui, &t, &resp, r);
+    resp
+}
+
+/// Room left and right of a segment's name.
+const SEGMENT_PAD: f32 = 5.0;
 
 /// A segmented control: `labels` share the available width equally, `per_row` per row. Each segment is
 /// addressable as `button:{id}-{key}` (keys parallel to labels). Returns the clicked index.
 pub fn segmented(ui: &mut Ui, id: &str, items: &[(&str, &str)], active: Option<usize>, per_row: usize) -> Option<usize> {
     let t = Tokens::get(ui.ctx());
-    let per_row = per_row.max(1);
     let gap = 4.0;
     let w = ui.available_width();
-    let seg_w = ((w - gap * (per_row as f32 - 1.0)) / per_row as f32).max(24.0);
+    let width_of = |per_row: usize| ((w - gap * (per_row as f32 - 1.0)) / per_row as f32).max(24.0);
+    // `per_row` to a row, or fewer where the longest name (a translation) would not fit its
+    // share of the width: "Mit Hilfslinien" ran out of a third of the panel
+    let widest = items
+        .iter()
+        .map(|(label, _)| ui.painter().layout_no_wrap(crate::i18n::tr(label).to_string(), t.caption_strong(), t.text).size().x)
+        .fold(0.0, f32::max);
+    let per_row = (1..=per_row.max(1)).rev().find(|n| width_of(*n) >= widest + 2.0 * SEGMENT_PAD).unwrap_or(1);
+    let seg_w = width_of(per_row);
     let mut clicked = None;
     for (row_i, row) in items.chunks(per_row).enumerate() {
         ui.horizontal(|ui| {
@@ -684,7 +894,9 @@ pub fn segmented(ui: &mut Ui, id: &str, items: &[(&str, &str)], active: Option<u
                 };
                 let p = ui.painter();
                 p.rect(r, CornerRadius::same(4), fill, Stroke::new(1.0, t.button_border), StrokeKind::Inside);
-                p.text(r.center(), Align2::CENTER_CENTER, label, t.semibold(11.5), t.text);
+                // (cut short only where even a row to itself is too narrow for the name)
+                let name = one_line(p, label, t.caption_strong(), t.text, seg_w - 2.0 * SEGMENT_PAD);
+                p.galley(r.center() - name.size() / 2.0, name, t.text);
                 if resp.clicked() {
                     clicked = Some(i);
                 }
@@ -964,6 +1176,17 @@ pub(crate) fn announce_selected(resp: &egui::Response, name: impl Into<String>, 
 pub(crate) fn named(r: egui::Response, name: &str) -> egui::Response {
     screen_reader_name(&r.ctx, r.id, name);
     r
+}
+
+/// `text` written over a picture, its top left corner at `at`: in the ink for pictures on a
+/// shade of its own (`Tokens::on_photo`, `Tokens::photo_shade`), so that it reads on any photo
+/// in any theme. Returns the shade's rectangle.
+pub(crate) fn on_photo_label(painter: &egui::Painter, at: egui::Pos2, text: &str, font: egui::FontId) -> Rect {
+    let galley = painter.layout_no_wrap(text.to_string(), font, Tokens::on_photo());
+    let shade = Rect::from_min_size(at, galley.size() + vec2(16.0, 8.0));
+    painter.rect_filled(shade, 4.0, Tokens::photo_shade());
+    painter.galley(shade.min + vec2(8.0, 4.0), galley, Tokens::on_photo());
+    shade
 }
 
 /// `text` laid out on one line, cut short with … when it is wider than `max` (the galley's
