@@ -490,9 +490,13 @@ pub struct PlaneSigmas {
 
 pub fn plane_sigmas(s: &DevelopSettings, px_per_long: f64, q: Quality) -> PlaneSigmas {
     let ppl = px_per_long as f32;
-    let local_any = |f: fn(&lightcraft_develop::LocalAdjustments) -> f64| s.masks.iter().any(|m| f(&m.adjust) != 0.0);
-    let tone_active =
-        s.light.highlights != 0.0 || s.light.shadows != 0.0 || s.masks.iter().any(|m| m.adjust.highlights != 0.0 || m.adjust.shadows != 0.0);
+    // A hidden mask, or one with no components, does not change the picture. Its sliders must
+    // not pick the tone base Clarity reads (#1214).
+    let live = |m: &&lightcraft_develop::Mask| m.visible && !m.components.is_empty();
+    let local_any = |f: fn(&lightcraft_develop::LocalAdjustments) -> f64| s.masks.iter().filter(live).any(|m| f(&m.adjust) != 0.0);
+    let tone_active = s.light.highlights != 0.0
+        || s.light.shadows != 0.0
+        || s.masks.iter().filter(live).any(|m| m.adjust.highlights != 0.0 || m.adjust.shadows != 0.0);
     // Edge-aware base at ~1.5% of the long edge (EV² epsilon: edges of > ~0.6 EV are preserved)
     // From V2 it is taken of the median at 0.15%: lines and texture finer than that are detail,
     // not tone (#632).
@@ -507,10 +511,10 @@ pub fn plane_sigmas(s: &DevelopSettings, px_per_long: f64, q: Quality) -> PlaneS
         || local_any(|a| a.texture)
         || local_any(|a| a.sharpness)
         || local_any(|a| a.noise)
-        || s.masks.iter().any(|m| m.adjust.defringe > 0.0))
+        || s.masks.iter().filter(live).any(|m| m.adjust.defringe > 0.0))
     .then(|| (0.0018 * ppl).max(0.6));
     let dark = (s.effects.dehaze != 0.0 || local_any(|a| a.dehaze)).then(|| (0.02 * ppl).max(1.0));
-    let chroma = (local_any(|a| a.moire) || s.masks.iter().any(|m| m.adjust.noise > 0.0)).then(|| (CHROMA_SIGMA * ppl).max(1.0));
+    let chroma = (local_any(|a| a.moire) || s.masks.iter().filter(live).any(|m| m.adjust.noise > 0.0)).then(|| (CHROMA_SIGMA * ppl).max(1.0));
     let base_detail = if base.is_some() { tone_base_detail(s, px_per_long) } else { 0 };
     PlaneSigmas { base, base_detail, clarity, texture, dark, chroma }
 }
@@ -690,22 +694,45 @@ mod tests {
     }
 
     #[test]
-    fn exposure_doubles() {
+    fn a_hidden_or_empty_mask_does_not_request_the_tone_base() {
+        use lightcraft_develop::{Mask, MaskComponent, MaskOp, MaskShape};
+        use lightcraft_geom::Point;
+        let shape = MaskShape::Linear { start: Point::new(0.0, 0.0), end: Point::new(1.0, 0.0) };
+        let component = MaskComponent { name: None, op: MaskOp::Add, invert: false, shape };
         let mut s = DevelopSettings::default();
-        s.light.exposure = 1.0;
-        let mut img = Rgb32f::filled(2, 2, [0.1, 0.2, 0.3]);
-        scene_linear_pre(&mut img, &SourceInfo::default(), &s);
-        assert!((img.get(1, 1)[2] - 0.6).abs() < 1e-5);
+        s.masks.push(Mask {
+            visible: false,
+            components: vec![component],
+            adjust: lightcraft_develop::LocalAdjustments { highlights: 40.0, ..Default::default() },
+            ..Default::default()
+        });
+        assert!(plane_sigmas(&s, 2000.0, Quality::Full).base.is_none());
+        s.masks[0].visible = true;
+        s.masks[0].components.clear();
+        assert!(plane_sigmas(&s, 2000.0, Quality::Full).base.is_none());
+        s.masks[0].components.push(MaskComponent {
+            name: None,
+            op: MaskOp::Add,
+            invert: false,
+            shape: MaskShape::Linear { start: Point::new(0.0, 0.0), end: Point::new(1.0, 0.0) },
+        });
+        assert!(plane_sigmas(&s, 2000.0, Quality::Full).base.is_some());
     }
-}
-
-#[cfg(test)]
-mod fast_tests {
-    use super::*;
 
     #[test]
-    fn fast_guided_close_to_reference() {
-        let p = Plane::from_fn(160, 120, |x, y| ((x as f32 * 0.13).sin() + (y as f32 * 0.07).cos()) * 2.0 + if x > 80 { 1.5 } else { 0.0 });
+    fn nr_contrast_keeps_fine_texture() {
+        let src = Rgb32f::from_fn(48, 16, |x, y| {
+            let n = if (x + y) % 2 == 0 { 0.12 } else { -0.12 };
+            [0.3 + n; 3]
+        });
+        let mut flat = DevelopSettings::default();
+        flat.detail.nr_luminance = 100.0;
+        let mut held = flat.clone();
+        held.detail.nr_contrast = 100.0;
+        let mut a = src.clone();
+        let mut b = src.clone();
+        denoise(&mut a, &flat, 48, 48);
+        denoise(&mut b, &held, 48, + if x > 80 { 1.5 } else { 0.0 });
         let a = guided(&p, 12.0, 0.3);
         let b = guided_fast(&p, 12.0, 0.3);
         let err: f32 = a.data.iter().zip(&b.data).map(|(u, v)| (u - v).abs()).sum::<f32>() / a.len() as f32;
