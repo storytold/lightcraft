@@ -62,6 +62,8 @@ mod tests_browse_active;
 #[cfg(test)]
 mod tests_button;
 #[cfg(test)]
+mod tests_button_migration;
+#[cfg(test)]
 mod tests_canvas_keys;
 #[cfg(test)]
 mod tests_compare;

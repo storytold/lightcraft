@@ -2,10 +2,10 @@
 //! the library opened (and host warnings such as a damaged `ui.json`), and quitting while changes
 //! are only in memory or while tasks that would be cut short are running (issue #345).
 
-use egui::{Align2, RichText, vec2};
+use egui::{Align2, RichText};
 
+use crate::button::Button;
 use crate::theme::Tokens;
-use crate::widgets::register;
 use crate::{LightcraftApp, QuitPrompt};
 
 /// Collect the library's settings-file warnings (each is shown once), and the no-GPU notice once the GPU device has
@@ -114,8 +114,7 @@ fn window(ctx: &egui::Context, id: &str, title: &str, text: &str, buttons: &[(&s
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 for (i, (bid, label, _)) in buttons.iter().enumerate() {
-                    let r = ui.add(egui::Button::new(crate::i18n::tr(label)).min_size(vec2(0.0, 26.0)));
-                    register(ui.ctx(), format!("button:{bid}"), r.rect);
+                    let r = Button::new(label).widget(format!("button:{bid}")).show(ui);
                     if r.clicked() {
                         chosen = Some(i);
                     }

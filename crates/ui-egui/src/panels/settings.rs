@@ -15,6 +15,7 @@ use egui::RichText;
 use serde_json::{Value, json};
 
 use crate::LightcraftApp;
+use crate::button::Button;
 use crate::state::{GridBadges, PREVIEW_LIMITS, StartupView};
 use crate::theme::Tokens;
 use crate::widgets::register;
@@ -123,13 +124,11 @@ fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     });
     row(ui, t, "", |ui| {
         let can = app.services.pick_folder.is_some();
-        let r = ui.add_enabled(can, egui::Button::new(crate::i18n::tr("Open Library…")));
-        register(ui.ctx(), "button:settingsOpenLibrary", r.rect);
+        let r = Button::new("Open Library…").enabled(can).widget("button:settingsOpenLibrary").show(ui);
         if r.clicked() {
             let _ = app.run("app.openLibrary", json!({}));
         }
-        let r = ui.add_enabled(can, egui::Button::new(crate::i18n::tr("New Library…")));
-        register(ui.ctx(), "button:settingsNewLibrary", r.rect);
+        let r = Button::new("New Library…").enabled(can).widget("button:settingsNewLibrary").show(ui);
         if r.clicked() {
             let _ = app.run("app.newLibrary", json!({}));
         }
@@ -376,15 +375,14 @@ fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         row(ui, t, crate::i18n::tr("Watched folder"), |ui| {
             ui.label(RichText::new(d.auto_folder.clone().unwrap_or_else(|| crate::i18n::tr("Off").into())).color(t.text));
             let can = app.services.pick_folder.is_some();
-            let r = ui.add_enabled(can, egui::Button::new(crate::i18n::tr("Choose…")));
-            register(ui.ctx(), "button:settingsAutoFolder", r.rect);
+            let r = Button::new("Choose…").small().enabled(can).widget("button:settingsAutoFolder").show(ui);
             if r.clicked()
                 && let Some(f) = app.services.pick_folder.as_mut().and_then(|f| f())
                 && let Err(e) = app.run("library.autoImport", json!({"folder": f}))
             {
                 app.toast(ui.ctx(), e);
             }
-            if d.auto_folder.is_some() && ui.button(crate::i18n::tr("Turn Off")).clicked() {
+            if d.auto_folder.is_some() && Button::new("Turn Off").small().show(ui).clicked() {
                 let _ = app.run("library.autoImport", json!({"folder": null}));
             }
         });
@@ -462,8 +460,7 @@ fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             RichText::new(used.map(|b| format!("{:.1} MB", b as f64 / 1048576.0)).unwrap_or_else(|| crate::i18n::tr("memory only").to_string()))
                 .color(t.text),
         );
-        let r = ui.button(crate::i18n::tr("Clear Cache"));
-        register(ui.ctx(), "button:settingsClearCache", r.rect);
+        let r = Button::new("Clear Cache").small().widget("button:settingsClearCache").show(ui);
         if r.clicked() {
             let _ = app.run("library.clearPreviews", json!({}));
         }
@@ -549,16 +546,14 @@ fn smart_previews(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     ui.horizontal(|ui| {
         ui.add_space(LABEL_W);
         if app.services.pick_folder.is_some() {
-            let r = ui.button(crate::i18n::tr("Choose Folder…"));
-            register(ui.ctx(), "button:settingsSmartChoose", r.rect);
+            let r = Button::new("Choose Folder…").widget("button:settingsSmartChoose").show(ui);
             if r.clicked()
                 && let Some(dir) = app.services.pick_folder.as_mut().and_then(|f| f())
             {
                 result = Some(app.run("library.smartPreviewsLocation", json!({"path": dir, "existing": existing})));
             }
         }
-        let r = ui.add_enabled(custom, egui::Button::new(crate::i18n::tr("Use Library Folder")));
-        register(ui.ctx(), "button:settingsSmartReset", r.rect);
+        let r = Button::new("Use Library Folder").enabled(custom).widget("button:settingsSmartReset").show(ui);
         if r.clicked() {
             result = Some(app.run("library.smartPreviewsLocation", json!({"reset": true, "existing": existing})));
         }
@@ -602,17 +597,15 @@ fn display_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     });
     row(ui, t, "", |ui| {
         let can = app.services.pick_display_profile.is_some();
-        let r = ui.add_enabled(can, egui::Button::new(crate::i18n::tr("Choose Profile…")));
-        register(ui.ctx(), "button:settingsDisplayProfile", r.rect);
+        let r = Button::new("Choose Profile…").enabled(can).widget("button:settingsDisplayProfile").show(ui);
         if r.clicked()
             && let Some(path) = app.services.pick_display_profile.as_mut().and_then(|pick| pick().into_iter().next())
         {
             app.ui.settings.display_profile = path;
         }
         // with no profile chosen, previews follow the screen's own profile where the host knows it
-        let none = if app.services.screen_profile.is_some() { crate::i18n::tr("Use Screen Profile") } else { crate::i18n::tr("Use sRGB") };
-        let r = ui.add_enabled(!app.ui.settings.display_profile.is_empty(), egui::Button::new(none));
-        register(ui.ctx(), "button:settingsDisplayProfileNone", r.rect);
+        let none = if app.services.screen_profile.is_some() { "Use Screen Profile" } else { "Use sRGB" };
+        let r = Button::new(none).enabled(!app.ui.settings.display_profile.is_empty()).widget("button:settingsDisplayProfileNone").show(ui);
         if r.clicked() {
             app.ui.settings.display_profile.clear();
         }
@@ -750,8 +743,7 @@ fn export_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             ("slideshowExportJpeg", "Export JPEG…", "jpeg"),
             ("slideshowExportVideo", "Export Video…", "video"),
         ] {
-            let r = ui.add_enabled(!running, egui::Button::new(crate::i18n::tr(label)));
-            register(ui.ctx(), format!("button:{id}"), r.rect);
+            let r = Button::new(label).enabled(!running).widget(format!("button:{id}")).show(ui);
             if r.clicked() {
                 let _ = app.run("dialog.slideshowExport", json!({"format": format}));
             }

@@ -10,6 +10,7 @@ use lightcraft_engine::cmd::mask_effects::{self as fx, FIELDS, MaskEffect};
 use serde_json::{Value, json};
 
 use crate::LightcraftApp;
+use crate::icons::Icon;
 use crate::state::Dialog;
 use crate::theme::Tokens;
 use crate::widgets::register;
@@ -392,8 +393,7 @@ pub fn save_body(
             .hint(crate::i18n::tr("Group (optional)"))
             .width(ui.available_width() - 30.0)
             .show(ui);
-        let pick = ui.small_button("…").on_hover_text(crate::i18n::tr("Choose a group"));
-        register(ui.ctx(), "button:effectGroupPick", pick.rect);
+        let pick = crate::button::Button::icon_only(Icon::Dots, "Choose a group").ghost().small().widget("button:effectGroupPick").show(ui);
         egui::Popup::menu(&pick).show(|ui| {
             for (g, _) in fx::menu_order(&app.session.mask_effects) {
                 if ui.button(if g.is_empty() { crate::i18n::tr("None").to_string() } else { g.clone() }).clicked() {
@@ -428,8 +428,7 @@ pub fn save_body(
     });
     ui.horizontal(|ui| {
         for (id, text) in [("all", "All"), ("none", "None"), ("changed", "Changed Only")] {
-            let b = ui.small_button(crate::i18n::tr(text));
-            register(ui.ctx(), format!("effectInclude:{id}"), b.rect);
+            let b = crate::button::Button::new(text).small().widget(format!("effectInclude:{id}")).show(ui);
             if b.clicked() {
                 *fields = match id {
                     "all" => list.iter().map(|k| k.to_string()).collect(),
@@ -522,10 +521,14 @@ pub fn manage_body(
             for e in list {
                 let sel = selected.contains(&e.name);
                 ui.horizontal(|ui| {
-                    let star = ui.add(egui::Button::new(if e.favorite { "★" } else { "☆" }).frame(false)).on_hover_text(crate::i18n::tr("Favorite"));
-                    if ui.is_rect_visible(star.rect) {
-                        register(ui.ctx(), format!("effectStar:{}", e.name), star.rect);
-                    }
+                    let star = crate::button::Button::icon_only(if e.favorite { Icon::StarFilled } else { Icon::Star }, "Favorite").ghost().small();
+                    // registered only when on screen (a long list scrolls)
+                    let star = if ui.is_rect_visible(egui::Rect::from_min_size(ui.cursor().min, star.desired_size(ui))) {
+                        star.widget(format!("effectStar:{}", e.name))
+                    } else {
+                        star
+                    };
+                    let star = star.show(ui);
                     if star.clicked() {
                         toggle_star = Some((e.name.clone(), !e.favorite));
                     }
@@ -600,15 +603,13 @@ pub fn manage_body(
                 .color(t.text),
         );
         ui.horizontal(|ui| {
-            let d = ui.button(crate::i18n::tr("Delete"));
-            register(ui.ctx(), "button:effectDeleteConfirm", d.rect);
+            let d = crate::button::Button::new("Delete").widget("button:effectDeleteConfirm").show(ui);
             if d.clicked() {
                 let _ = app.run("mask.deleteEffect", json!({"names": selected.clone()}));
                 selected.clear();
                 *confirm_delete = false;
             }
-            let c = ui.button(crate::i18n::tr("Cancel"));
-            register(ui.ctx(), "button:effectDeleteCancel", c.rect);
+            let c = crate::button::Button::new("Cancel").widget("button:effectDeleteCancel").show(ui);
             if c.clicked() {
                 *confirm_delete = false;
             }
@@ -617,9 +618,7 @@ pub fn manage_body(
     }
     ui.horizontal_wrapped(|ui| {
         let button = |ui: &mut egui::Ui, id: &str, text: &str, enabled: bool| {
-            let r = ui.add_enabled(enabled, egui::Button::new(crate::i18n::tr(text)));
-            register(ui.ctx(), format!("button:effect{id}"), r.rect);
-            r.clicked()
+            crate::button::Button::new(text).enabled(enabled).widget(format!("button:effect{id}")).show(ui).clicked()
         };
         if button(ui, "Apply", "Apply", one.is_some() && mask.is_some())
             && let (Some(name), Some(mid)) = (&one, mask)
@@ -647,8 +646,7 @@ pub fn manage_body(
             let all_fav = selected.iter().all(|s| effects.iter().any(|e| &e.name == s && e.favorite));
             let _ = app.run("mask.favoriteEffect", json!({"names": selected.clone(), "favorite": !all_fav}));
         }
-        let g = ui.add_enabled(n > 0, egui::Button::new(crate::i18n::tr("Move to Group…")));
-        register(ui.ctx(), "button:effectGroup", g.rect);
+        let g = crate::button::Button::new("Move to Group…").enabled(n > 0).widget("button:effectGroup").show(ui);
         egui::Popup::menu(&g).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
             let names = selected.clone();
             for (grp, _) in fx::menu_order(&app.session.mask_effects) {

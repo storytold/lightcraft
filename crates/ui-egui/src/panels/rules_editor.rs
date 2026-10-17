@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 
 use crate::album_picker::{AlbumEntry, AlbumPicker};
 use crate::date_picker::{DatePicker, PickedDate};
+use crate::icons::Icon;
 use crate::theme::Tokens;
 use crate::widgets::register;
 
@@ -304,7 +305,7 @@ pub fn edit(ui: &mut egui::Ui, rs: &mut RuleSet, salt: &str, depth: usize, path:
             Rule::Group { group } => {
                 egui::Frame::group(ui.style()).show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        if ui.small_button("−").on_hover_text(crate::i18n::tr("Remove this group")).clicked() {
+                        if crate::button::Button::icon_only(Icon::Minus, "Remove this group").ghost().small().show(ui).clicked() {
                             remove = Some(i);
                         }
                         ui.vertical(|ui| edit(ui, group, &rsalt, depth + 1, &here, env));
@@ -330,8 +331,11 @@ pub fn edit(ui: &mut egui::Ui, rs: &mut RuleSet, salt: &str, depth: usize, path:
                     });
                     value_editor(ui, field, op, value, &rsalt, env);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let add = ui.small_button("+").on_hover_text(crate::i18n::tr("Add a rule (⌥-click: a group)"));
-                        register(ui.ctx(), format!("button:ruleAdd-{rsalt}"), add.rect);
+                        let add = crate::button::Button::icon_only(Icon::Plus, "Add a rule (⌥-click: a group)")
+                            .ghost()
+                            .small()
+                            .widget(format!("button:ruleAdd-{rsalt}"))
+                            .show(ui);
                         if add.clicked() {
                             let group = ui.input(|i| i.modifiers.alt) && depth < 3;
                             insert = Some((
@@ -339,8 +343,11 @@ pub fn edit(ui: &mut egui::Ui, rs: &mut RuleSet, salt: &str, depth: usize, path:
                                 if group { Rule::Group { group: RuleSet { mode: Match::Any, rules: vec![new_rule()] } } } else { new_rule() },
                             ));
                         }
-                        let del = ui.small_button("−").on_hover_text(crate::i18n::tr("Remove this rule"));
-                        register(ui.ctx(), format!("button:ruleRemove-{rsalt}"), del.rect);
+                        let del = crate::button::Button::icon_only(Icon::Minus, "Remove this rule")
+                            .ghost()
+                            .small()
+                            .widget(format!("button:ruleRemove-{rsalt}"))
+                            .show(ui);
                         if del.clicked() {
                             remove = Some(i);
                         }
@@ -358,12 +365,11 @@ pub fn edit(ui: &mut egui::Ui, rs: &mut RuleSet, salt: &str, depth: usize, path:
     }
     if rs.rules.is_empty() || depth == 0 {
         ui.horizontal(|ui| {
-            let add = ui.small_button(crate::i18n::tr("+ Rule"));
-            register(ui.ctx(), format!("button:ruleAddEnd-{salt}"), add.rect);
+            let add = crate::button::Button::new("+ Rule").small().widget(format!("button:ruleAddEnd-{salt}")).show(ui);
             if add.clicked() {
                 rs.rules.push(new_rule());
             }
-            if depth < 3 && ui.small_button(crate::i18n::tr("+ Group")).clicked() {
+            if depth < 3 && crate::button::Button::new("+ Group").small().show(ui).clicked() {
                 rs.rules.push(Rule::Group { group: RuleSet { mode: Match::Any, rules: vec![new_rule()] } });
             }
         });

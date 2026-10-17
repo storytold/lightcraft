@@ -1,5 +1,12 @@
 # What's new in LightCraft
 
+## 2026-10-16
+
+### One look for action buttons
+- Buttons in Settings, the dialogs, the panels, the denoise and face-model setup, the notices and the shortcut list now
+  share one look and three heights (24, 30 and 36 points), instead of whatever each panel used. The ×, ↺, − and +
+  buttons are drawn icons with a name for screen readers; their automation ids are unchanged.
+
 ## 2026-10-14
 
 ### Lightroom radial masks on the right side

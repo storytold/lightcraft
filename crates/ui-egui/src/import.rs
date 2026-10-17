@@ -1001,10 +1001,10 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
             ui.label(egui::RichText::new(crate::i18n::tr_format!("· {trashed} in Recently Deleted", trashed = trashed)).color(t.text_dim));
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if crate::widgets::text_button(ui, "importNone", crate::i18n::tr("Uncheck All"), false).clicked() {
+            if crate::button::Button::new("Uncheck All").small().widget("button:importNone").show(ui).clicked() {
                 d.checked.iter_mut().for_each(|c| *c = false);
             }
-            if crate::widgets::text_button(ui, "importAll", crate::i18n::tr("Check All"), false).clicked() {
+            if crate::button::Button::new("Check All").small().widget("button:importAll").show(ui).clicked() {
                 for i in 0..n {
                     d.checked[i] = d.checked_by_default(i);
                 }
@@ -1119,12 +1119,12 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
             let shown = if d.destination.trim().is_empty() { crate::i18n::tr("Library Originals").to_string() } else { d.destination.clone() };
             ui.label(egui::RichText::new(shown).color(Tokens::get(ui.ctx()).text_label));
             if app.services.pick_folder.is_some()
-                && crate::widgets::text_button(ui, "importDest", crate::i18n::tr("Choose…"), false).clicked()
+                && crate::button::Button::new("Choose…").small().widget("button:importDest").show(ui).clicked()
                 && let Some(f) = app.services.pick_folder.as_mut().and_then(|f| f())
             {
                 d.destination = f;
             }
-            if !d.destination.is_empty() && crate::widgets::text_button(ui, "importDestReset", crate::i18n::tr("Library"), false).clicked() {
+            if !d.destination.is_empty() && crate::button::Button::new("Library").small().widget("button:importDestReset").show(ui).clicked() {
                 d.destination.clear();
             }
         });
@@ -1459,14 +1459,12 @@ pub(crate) fn tag_help(ui: &mut egui::Ui, key: &str, text: &mut String, edit_id:
         egui::ScrollArea::vertical().id_salt((key, "tags")).max_height(170.0).show(ui, |ui| {
             egui::Grid::new((key, "tag-grid")).num_columns(3).spacing([10.0, 2.0]).show(ui, |ui| {
                 for (i, tok) in TOKENS.iter().enumerate() {
-                    let r = ui.add(egui::Button::new(egui::RichText::new(tok.tag).monospace().color(t.text)).small()).on_hover_text(
-                        if tok.aliases.is_empty() {
-                            crate::i18n::tr("Insert at the cursor").to_string()
-                        } else {
-                            crate::i18n::tr_format!("Insert at the cursor (also written {})", tok.aliases.join(", "))
-                        },
-                    );
-                    register(ui.ctx(), format!("button:{key}Tag-{i}"), r.rect);
+                    let tip = if tok.aliases.is_empty() {
+                        crate::i18n::tr("Insert at the cursor").to_string()
+                    } else {
+                        crate::i18n::tr_format!("Insert at the cursor (also written {})", tok.aliases.join(", "))
+                    };
+                    let r = crate::button::Button::new(tok.tag).small().monospace().tooltip(&tip).widget(format!("button:{key}Tag-{i}")).show(ui);
                     if r.clicked() {
                         insert_at_cursor(ui.ctx(), edit_id, text, tok.tag);
                     }

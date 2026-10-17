@@ -3,10 +3,11 @@
 //! Continue Without Saving and Quit. Continuing shows a banner under the top bar for as long as the
 //! session is temporary.
 
-use egui::{Align2, RichText, vec2};
+use egui::{Align2, RichText};
 use serde_json::json;
 
 use crate::LightcraftApp;
+use crate::button::Button;
 use crate::theme::Tokens;
 use crate::widgets::register;
 
@@ -127,8 +128,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 let mut button = |ui: &mut egui::Ui, id: &str, label: &str, enabled: bool, c: Choice| {
-                    let r = ui.add_enabled(enabled, egui::Button::new(crate::i18n::tr(label)).min_size(vec2(0.0, 26.0)));
-                    register(ui.ctx(), format!("button:{id}"), r.rect);
+                    let r = Button::new(label).enabled(enabled).widget(format!("button:{id}")).show(ui);
                     if r.clicked() {
                         choice = Some(c);
                     }
@@ -177,10 +177,8 @@ pub fn banner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                         .color(t.canvas),
                 );
                 register(ui.ctx(), "indicator:temporarySession", r.rect);
-                let b = ui.add(
-                    egui::Button::new(RichText::new(crate::i18n::tr("Open Library…")).color(t.canvas)).fill(egui::Color32::from_black_alpha(40)),
-                );
-                register(ui.ctx(), "button:libraryReopen", b.rect);
+                // Secondary keeps its own fill and border, so it reads on the amber banner
+                let b = Button::new("Open Library…").small().widget("button:libraryReopen").show(ui);
                 reopen = b.clicked();
             });
         });
