@@ -1,12 +1,12 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (de, es, fr, ja, uk catalogs filled; re-measured; Italian and Georgian interface catalogs added) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-17 · **Change:** minor (de, es, fr, ja, uk catalogs filled; re-measured; Italian, Georgian and Finnish interface catalogs added) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 How far each interface language is from `full`. How to add or maintain a language is in
 [localization.md](localization.md); per-language notes are in `localization-<code>.md`
 ([zh-hans](localization-zh-hans.md), [zh-hant](localization-zh-hant.md), [ja](localization-ja.md),
 [pt-br](localization-pt-br.md), [es](localization-es.md), [de](localization-de.md),
-[ru](localization-ru.md), [ka](localization-ka.md)).
+[ru](localization-ru.md), [fi](localization-fi.md), [ka](localization-ka.md)).
 
 ## The target
 
@@ -67,6 +67,7 @@ that is promising but is not recorded as review, so the column says `no (communi
 | Ukrainian | `uk` | 2,383 / 2,398 (99%; 2026-10-12) | Cyrillic (Inter) | no (community edits) | partial (lower-layer errors English) | 2–4 h |
 | Italian | `it` | 2,201 / 2,398 (92%, measured 2026-10-12; the rest is What's New) | Latin (Inter) | no (written with an agent; native-speaker pass pending) | partial (lower-layer errors English) | 3–5 h |
 | Georgian | `ka` | 2,398 / 2,398 (100%: every plain and formats message any catalog has on 2026-10-12, plus the 27 display labels and 397 What's New lines no other catalog translates) | Geor: no craft-fonts face yet (boxes until one is available) | yes (native speaker) | partial (lower-layer errors English) | 2–4 h (+ a Georgian face) |
+| Finnish | `fi` | 2,605 / 3,303 (79%, measured 2026-10-17: 2,308 plain + 297 formats; the rest is What's New) | Latin (Inter) | no (written with an agent; native-speaker review by the contributor pending) | partial (lower-layer errors English) | 3–5 h |
 
 Target languages LightCraft lacks: Korean, Dutch, Polish, Swedish, Norwegian Bokmål, Thai
 (Thai needs shaping and line breaking without spaces). Each Latin-script one is ~10–16 h; Thai
@@ -93,6 +94,7 @@ Target languages LightCraft lacks: Korean, Dutch, Polish, Swedish, Norwegian Bok
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-17 | minor | Finnish interface catalog (`fi`): 2,605 of 3,303 messages (2,308 plain + 297 formats), What's New left in English |
 | 2026-10-12 | minor | Italian interface catalog (`it`): 2,201 of 2,398 messages, What's New left in English |
 | 2026-10-11 | minor | Shared work: the interface decides on error kinds, not English error text (#1046) |
 | 2026-10-12 | minor | Georgian (`ka`) row: every catalog message |

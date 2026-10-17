@@ -96,7 +96,7 @@ while lower-layer errors stay English. Detail: [localization-parity.md](docs/loc
 | Korean | ko | 0% | none (no Hangul face) |
 | Vietnamese | vi | 0% | none |
 
-Also shipped: Traditional Chinese (87%), Russian (74%), Ukrainian (99%), Italian (92%), Georgian (100%).
+Also shipped: Traditional Chinese (87%), Russian (74%), Ukrainian (99%), Italian (92%), Georgian (100%), Finnish (79%).
 
 ## Upcoming
 
@@ -192,6 +192,7 @@ Ranked toward beta; detail in [docs/roadmap.md](docs/roadmap.md), gaps in [docs/
 | 2026-10-12 | minor | Mamiya MEF decoded and imported: ZD verified (241); headline numbers unchanged |
 | 2026-10-12 | minor | Epson ERF decoded: 3 more verified models (240); headline numbers unchanged |
 | 2026-10-12 | minor | Georgian (`ka`) interface language added (every catalog message) |
+| 2026-10-17 | minor | Finnish (`fi`) interface language added: 2,605 of 3,303 messages (79%), locale, menu command and tests; headline numbers unchanged |
 | 2026-10-14 | minor | Full-resolution zoom (gap 4) closed: soft proofing gets zoom windows; headline numbers unchanged |
 | 2026-10-12 | minor | UI/UX remaining 40–70 h → 34–58 h (accessibility audit landed); headline numbers unchanged |
 | 2026-10-14 | minor | Camera-coverage sweep (#1327): 30 models verified on 40 CC0 files (coverage.py 515 → 545 verified); sensor verification does not establish colour parity (#1277); headline numbers unchanged |
