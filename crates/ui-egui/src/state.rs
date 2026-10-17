@@ -590,6 +590,10 @@ impl PanelWidth {
     }
 }
 
+/// The most folders [`UiState::folder_parents`] keeps: far more than anyone asks for by hand, and
+/// a bound on what a settings file can make the sidebar look up for every row.
+pub const MAX_FOLDER_PARENTS: usize = 256;
+
 /// The left sidebar (sources, albums, folders).
 pub const LEFT_WIDTH: PanelWidth = PanelWidth { min: 200.0, default: 268.0, max: 480.0 };
 /// The right panel (Edit, Masking, Info, …).
@@ -711,6 +715,24 @@ pub struct UiState {
     pub face_boxes: bool,
     /// The left sidebar's sections: their order, which are hidden and which are folded shut.
     pub sidebar: crate::sidebar::SidebarLayout,
+    /// Folders (as [`lightcraft_catalog::query::folder_key`] spells them) that only lead from a
+    /// disk to the library's first folder and were asked for with Show Parent Folder: the
+    /// sidebar's Folders lists them, where it otherwise passes them over.
+    pub folder_parents: std::collections::BTreeSet<String>,
+    /// Keyboard in Sidebar (`view.sidebarKeys`): the arrow keys, Enter, typing and F2 are the left
+    /// sidebar's (see [`crate::panels::side_keys`]). A mode of the moment: never saved.
+    #[serde(skip)]
+    pub sidebar_keys: bool,
+    /// The row the sidebar's keys are on (its widget id without `source:`, or a header's id).
+    #[serde(skip)]
+    pub sidebar_cursor: Option<String>,
+    /// Frames the sidebar has left to appear in after the keys were asked into it while it was
+    /// hidden, before they are given back (see [`crate::panels::side_keys::owns_keys`]).
+    #[serde(skip)]
+    pub sidebar_keys_grace: u8,
+    /// The cursor moved by a key: its row scrolls into view when it is drawn next.
+    #[serde(skip)]
+    pub sidebar_cursor_moved: bool,
     /// What settings files said before [`UiState::sidebar`]: the ids of the folded sections. Read
     /// so they stay folded ([`UiState::sanitized`] moves them over), never written.
     #[serde(skip_serializing)]
@@ -871,12 +893,20 @@ pub struct UiState {
     pub folded_sections: Vec<String>,
     /// The Keyword List's open levels (lower-case paths).
     pub keyword_list_open: Vec<String>,
+    /// The rows of the left sidebar's trees (Albums' folders, Local, By Date, Folders, Keywords)
+    /// that were opened or folded: they open as they were left. Read leniently.
+    #[serde(skip_serializing_if = "crate::tree_state::TreeState::is_empty")]
+    pub sidebar_trees: crate::tree_state::TreeState,
     /// The keyword picked in the Keyword List (− deletes it, Edit edits it).
     #[serde(skip)]
     pub keyword_list_selected: Option<String>,
     /// A keyword being dragged in the Keyword List (onto another to nest it).
     #[serde(skip)]
     pub dragging_keyword: Option<String>,
+    /// Choosing several rows of a sidebar list: the rows drawn and the anchor of each list, and
+    /// the other keywords picked in the Keyword List.
+    #[serde(skip)]
+    pub side: crate::panels::side_select::SideState,
     /// A running slideshow (full screen; see [`crate::panels::slideshow`]).
     #[serde(skip)]
     pub slideshow: Option<Box<crate::panels::slideshow::Run>>,
@@ -1071,6 +1101,8 @@ pub enum Dialog {
         /// Photos that have it (or one below it).
         count: usize,
     },
+    /// Delete or remove several sidebar rows at once (albums, keywords, folders), after asking.
+    Several(crate::panels::side_select::Several),
     /// Merge keywords into another one on every photo.
     MergeKeywords {
         from: Vec<String>,
@@ -1308,6 +1340,11 @@ impl Default for UiState {
             show_counts: true,
             face_boxes: true,
             sidebar: Default::default(),
+            folder_parents: Default::default(),
+            sidebar_keys: false,
+            sidebar_cursor: None,
+            sidebar_keys_grace: 0,
+            sidebar_cursor_moved: false,
             collapsed_sidebar: Vec::new(),
             name_edit: None,
             person_page: None,
@@ -1370,8 +1407,10 @@ impl Default for UiState {
             keyword_chips_all: None,
             folded_sections: Vec::new(),
             keyword_list_open: Vec::new(),
+            sidebar_trees: Default::default(),
             keyword_list_selected: None,
             dragging_keyword: None,
+            side: Default::default(),
             info_overlay: InfoOverlay::Off,
             layout_image: LayoutImage::default(),
             navigator: true,
@@ -1471,6 +1510,9 @@ impl UiState {
         self.right_width = RIGHT_WIDTH.clamp(self.right_width);
         self.brush_size = self.brush_size.clamp(0.002, 0.5);
         self.sidebar.adopt_collapsed(&std::mem::take(&mut self.collapsed_sidebar));
+        while self.folder_parents.len() > MAX_FOLDER_PARENTS {
+            self.folder_parents.pop_last();
+        }
         self.dialog = None;
         self.fullscreen = false;
         if !crate::state::PREVIEW_LIMITS.contains(&self.settings.preview_limit) {

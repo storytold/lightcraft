@@ -141,7 +141,7 @@ pub fn take_step(app: &mut LightcraftApp, ctx: &egui::Context, step: Setup) {
             }
         }
         Setup::GetModel => {
-            let _ = app.run("app.settings", json!({"tab": "faces"}));
+            app.act("app.settings", json!({"tab": "faces"}));
         }
         Setup::Running | Setup::Unavailable => {}
     }
@@ -290,7 +290,7 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         let r = ui.add_enabled(can, egui::Button::new(crate::i18n::tr("Add a model file…")));
         register(ui.ctx(), "faces:addModel", r.rect);
         if r.clicked() {
-            let _ = app.run("dialog.faceModel", json!({}));
+            app.act("dialog.faceModel", json!({}));
         }
         ui.label(RichText::new(crate::i18n::tr("or drop a .onnx file on the window")).color(t.text_dim));
     });
@@ -385,14 +385,14 @@ fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, 
                     let r = ui.button(crate::i18n::tr("Remove"));
                     register(ui.ctx(), format!("faces:remove:{id}"), r.rect);
                     if r.clicked() {
-                        let _ = app.run("faces.models.remove", json!({"id": id}));
+                        app.act("faces.models.remove", json!({"id": id}));
                         app.caches.faces_epoch += 1;
                     }
                     if !selected && !detector {
                         let r = ui.button("Use");
                         register(ui.ctx(), format!("faces:use:{id}"), r.rect);
                         if r.clicked() {
-                            let _ = app.run("faces.models.select", json!({"id": id}));
+                            app.act("faces.models.select", json!({"id": id}));
                             app.caches.faces_epoch += 1;
                         }
                     }
@@ -402,7 +402,7 @@ fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, 
                             let r = ui.button(crate::i18n::tr("Cancel"));
                             register(ui.ctx(), format!("faces:cancelDownload:{id}"), r.rect);
                             if r.clicked() {
-                                let _ = app.run("faces.models.downloadCancel", json!({"id": id}));
+                                app.act("faces.models.downloadCancel", json!({"id": id}));
                                 app.caches.faces_dl_watch.retain(|w| w != &id);
                             }
                         }
@@ -785,6 +785,7 @@ fn watch_downloads(app: &mut LightcraftApp, ctx: &egui::Context) {
                 l["models"].as_array().and_then(|a| a.iter().find(|m| m["id"] == id.as_str()).and_then(|m| m["name"].as_str().map(str::to_string)))
             })
             .unwrap_or_else(|| id.clone());
+        // refusal expected: the watcher clearing a finished download's row, nobody's click; a row already gone is as good
         let _ = app.session.execute("faces.models.downloadCancel", &json!({"id": id}));
         app.caches.faces_epoch += 1;
         let detector = app
