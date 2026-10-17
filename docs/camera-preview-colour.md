@@ -35,7 +35,9 @@ The wider set needs at least 96 dark samples (JPEG luminance below 0.015), inclu
 
 If the original curve cannot be fitted, the wider curve can still be accepted after the sample-count and rank checks. In either case, the completed look must pass its existing held-out gates: a full look needs finite errors, linear-display squared error below 70% of the neutral fallback's and per-channel RMS no greater than 0.10. Partial and monochrome tone-only looks need luminance rank correlation of at least 0.5 and finite squared errors below 70% of the fallback's in both linear and gamma-encoded values. The monochrome comparison uses luminance; the full and partial comparisons use colour channels. Colour-pair selection, colour fitting and the original colour training split are unchanged.
 
-The extra dark knots move the straight-line extension down toward black without a new serialized curve format or a different CPU/GPU interpolation rule. `LOOK_VERSION` 5 refreshes older fitted smart previews when their originals are online; `RENDER_CACHE_VERSION` 62 redraws cached renders.
+A near-black frame can have fewer than 256 colour pairs, so none of those attempts reaches tone fitting (#1587). After all existing looks fail, a tone-only fallback uses the wider signal floors above. At least 90% of the JPEG proxy must be below luminance 0.015. It excludes clipped sensor pixels from training and refuses invalid samples and JPEG highlights at or above 0.85. Every clipped pixel must stay at least as close to its JPEG luminance as the default curve leaves it. At least 256 usable pairs must show luminance rank correlation of 0.5 or more. Two thirds train a quantile curve; the held-out third must reduce squared luminance error by 30% in both linear and gamma-encoded values. This fallback keeps the source's spectral or neutral colour and learns no matrix, hue/saturation table or chroma curve. Earlier accepted looks keep their result.
+
+The extra dark knots move the straight-line extension down toward black without a new serialized curve format or a different CPU/GPU interpolation rule. `LOOK_VERSION` 10 refreshes older fitted smart previews when their originals are online; `RENDER_CACHE_VERSION` 67 redraws cached renders.
 
 No process-version bump is needed under the [rule for changes to source data](process-versions.md#the-rule). The decoded source carries the fitted camera tone in `SourceInfo`; both V1 and V2 use it in `finish::base_tone`. Existing raws edited under V1 or V2 can therefore change when decoded again. Offline smart previews keep their stored pixels and tone until rebuilt from the original. The scan on library opening runs once per look version for each smart previews folder. If an original was offline at that scan, run Build Smart Previews after reconnecting it.
 
@@ -187,7 +189,7 @@ A raw starts from the first of these that is available (`camera_preview::startin
 4. the model's spectral matrices, with LightCraft's default tone curve and no JPEG fit;
 5. the neutral fallback.
 
-When the file's JPEG is black and white, step 2 fits the tone curve alone with the profile's colour; without a profile, or when that fit fails, 4 and 5 take the tone curve fitted to it (see the black-and-white JPEG paragraph above).
+When the file's JPEG is black and white, step 2 fits the tone curve alone with the profile's colour; without a profile, or when that fit fails, 4 and 5 take the tone curve fitted to it (see the black-and-white JPEG paragraph above). If every existing JPEG fit fails, a near-black frame may take the guarded tone-only fallback described above, after its spectral or neutral colour has been chosen.
 
 The spectral matrices only replace the neutral fallback: a photo whose JPEG fit is accepted (with or without a
 profile) renders exactly as before, and a covered model takes its spectral matrices only when that fit fails the

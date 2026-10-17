@@ -34,7 +34,8 @@ use lightcraft_raw::{
 /// 7: the sensor proxy follows the file's lens warp when the camera JPEG is lens-corrected.
 /// 8: the bundled NIKON Z 6_2 profile.
 /// 9: the bundled NIKON Z 8 and NIKON D5300 profiles.
-pub const LOOK_VERSION: u32 = 9;
+/// 10: tone-only fallback for near-black scenes with too few colour pairs (#1587).
+pub const LOOK_VERSION: u32 = 10;
 
 #[derive(Clone, Debug)]
 pub(crate) struct CameraLook {
@@ -88,7 +89,18 @@ pub(crate) fn starting_colour(
     lens: Option<&LensGeometry>,
     embedded: Option<&lightcraft_develop::EmbeddedLens>,
 ) -> (Xy, CameraTransform, Option<CameraLook>) {
-    let (xy, t, look) = starting_colour_with(raw, |raw, t| fit_preview(raw, bytes, t, lens), |raw, t| monochrome_look(raw, bytes, t, lens));
+    let (xy, t, look) = starting_colour_with(
+        raw,
+        |raw, t| fit_preview(raw, bytes, t, lens),
+        |raw, t| monochrome_look(raw, bytes, t, lens),
+        |raw, t| {
+            if !file_local_look(raw.format) {
+                return None;
+            }
+            let (sensor, reference, clipped) = proxies(raw, bytes, t, PROXY, 0.0, lens)?;
+            fit_dark_tone(&sensor, &reference, &clipped)
+        },
+    );
     if look.is_none() && dng_tone_eligible(raw, &t) {
         let look = fit_dng_tone(raw, bytes, &t, embedded);
         return (xy, t, look);
@@ -118,11 +130,12 @@ pub(crate) fn dng_tone_eligible(raw: &RawImage, t: &CameraTransform) -> bool {
 }
 
 /// [`starting_colour`] with the JPEG fit (the look, and whether the JPEG is black and white) and the black-and-white
-/// JPEG's tone fit passed in (tests pin the order with them).
+/// JPEG's tone fit and the near-black tone fallback passed in (tests pin the order with them).
 fn starting_colour_with(
     raw: &mut RawImage,
     fit: impl FnOnce(&RawImage, &CameraTransform) -> (Option<CameraLook>, bool),
     monochrome: impl FnOnce(&RawImage, &CameraTransform) -> Option<CameraLook>,
+    dark: impl FnOnce(&RawImage, &CameraTransform) -> Option<CameraLook>,
 ) -> (Xy, CameraTransform, Option<CameraLook>) {
     let start = |raw: &RawImage| {
         let xy = lightcraft_raw::color::as_shot_white_xy(raw);
@@ -146,9 +159,9 @@ fn starting_colour_with(
         }
         None => (xy, t),
     };
-    // only a black-and-white JPEG: a colour one that gave no look pays nothing more
+    // A black-and-white JPEG first tries its existing tone fit on the chosen colour.
     let look = if black_and_white { monochrome(raw, &t) } else { None };
-    (xy, t, look)
+    (xy, t, look.or_else(|| dark(raw, &t)))
 }
 
 /// The colour a raw starts from ([`starting_colour`]) as DNG colour tags, for a DNG of the raw's camera RGB (Photo
@@ -1457,10 +1470,74 @@ fn fit_tone_only(sensor: &Rgb32f, reference: &Rgb32f, colour: Option<(Mat3, Opti
 fn fit_tone_only_on(sensor: &Rgb32f, reference: &Rgb32f, colour: &Option<(Mat3, Option<HsvTable>)>, edge_limit: Option<f32>) -> Option<CameraLook> {
     // every pair counts: the JPEG has no colour to require
     let (pairs, _) = collect_pairs(sensor, reference, f32::NEG_INFINITY, edge_limit, false)?;
-    let related = rank_correlation_ties(&pairs);
+    fit_tone_only_pairs(sensor, reference, colour, edge_limit, &pairs, false)
+}
+
+/// A near-black frame may have enough luminance signal for tone but fewer than 256 colour pairs.
+/// Try only after every existing look fails. Keep the colour of the source transform,
+/// exclude clipped pixels from training, and keep their luminance at least as close to the JPEG
+/// as the default curve does. Bright JPEGs need the existing fits to constrain their highlights.
+fn fit_dark_tone(sensor: &Rgb32f, reference: &Rgb32f, clipped: &[bool]) -> Option<CameraLook> {
+    if (sensor.width, sensor.height) != (reference.width, reference.height)
+        || sensor.data.len() != reference.data.len()
+        || clipped.len() != sensor.data.len()
+        || sensor.data.is_empty()
+        || sensor.data.iter().any(|p| !p.iter().all(|v| v.is_finite()))
+        || reference.data.iter().any(|p| !p.iter().all(|v| v.is_finite() && *v >= 0.0) || luminance_2020(*p) >= 0.85)
+    {
+        return None;
+    }
+    let dark = reference.data.iter().filter(|p| luminance_2020(**p) < 0.015).count();
+    if (dark as f64) < reference.data.len() as f64 * 0.9 {
+        return None;
+    }
+    [None, Some(EDGE_CONTRAST)].into_iter().find_map(|edge_limit| {
+        let pairs: Pairs = sensor
+            .data
+            .iter()
+            .zip(&reference.data)
+            .enumerate()
+            .filter(|(i, (input, output))| {
+                // The same signal floors as the camera toe, without colour ratios or counts.
+                !clipped.get(*i).copied().unwrap_or(true)
+                    && input.iter().all(|v| *v > 0.0001 && *v < 1.5)
+                    && (0.0003..0.85).contains(&luminance_2020(**output))
+                    && edge_limit.is_none_or(|limit| local_contrast(sensor, *i) <= limit && local_contrast(reference, *i) <= limit)
+            })
+            .map(|(_, (input, output))| (input.map(f64::from), output.map(f64::from)))
+            .collect();
+        if pairs.len() < 256 {
+            return None;
+        }
+        let look = fit_tone_only_pairs(sensor, reference, &None, edge_limit, &pairs, true)?;
+        let (tone, neutral) = (ToneMap::camera(&look.tone, 0.0, 0.0, 0.0), ToneMap::new(0.0, 0.0, 0.0));
+        for ((input, target), clipped) in sensor.data.iter().zip(&reference.data).zip(clipped) {
+            if *clipped {
+                let target = luma(target.map(f64::from));
+                let before = luma(displayed(input.map(f64::from), &neutral));
+                let after = luma(displayed(input.map(f64::from), &tone));
+                if !after.is_finite() || (after - target).abs() > (before - target).abs() {
+                    return None;
+                }
+            }
+        }
+        Some(look)
+    })
+}
+
+fn fit_tone_only_pairs(
+    sensor: &Rgb32f,
+    reference: &Rgb32f,
+    colour: &Option<(Mat3, Option<HsvTable>)>,
+    edge_limit: Option<f32>,
+    pairs: &Pairs,
+    dark: bool,
+) -> Option<CameraLook> {
+    let kind = if dark { "near-black scene" } else { "black-and-white JPEG" };
+    let related = rank_correlation_ties(pairs);
     if related < PARTIAL_MIN_RANK_CORRELATION {
         if lightcraft_pipeline::profiling() {
-            eprintln!("[profile] camera look from a black-and-white JPEG: luminance rank correlation {related:.3}, not the same picture");
+            eprintln!("[profile] camera look from a {kind}: luminance rank correlation {related:.3}, not the same picture");
         }
         return None;
     }
@@ -1470,7 +1547,15 @@ fn fit_tone_only_on(sensor: &Rgb32f, reference: &Rgb32f, colour: &Option<(Mat3, 
         let p = matrix.apply(x);
         correction.as_ref().map_or(p, |c| c.apply(p.map(|v| v as f32)).map(f64::from))
     };
-    let tone = fit_tone_with_shadows(ToneFit::Quantile, &pairs, sensor, reference, edge_limit, coloured)?;
+    let tone = if dark {
+        // Split this wider set once. The camera toe's separate colour/extra split belongs to
+        // the original colour pairs and would put some of these held-out pixels into training.
+        fit_tone(
+            pairs.iter().enumerate().filter(|(i, _)| i % 3 != 0).map(|(_, (x, y))| (luma(coloured(*x).map(|v| v.max(0.0))), luma(*y))).collect(),
+        )?
+    } else {
+        fit_tone_with_shadows(ToneFit::Quantile, pairs, sensor, reference, edge_limit, coloured)?
+    };
     let look = CameraLook { matrix, tone, hue_sat: hue_sat.clone() };
     let (tone, neutral) = (ToneMap::camera(&look.tone, 0.0, 0.0, 0.0), ToneMap::new(0.0, 0.0, 0.0));
     let encoded = |v: f64| v.max(0.0).powf(1.0 / 2.2);
@@ -1485,7 +1570,7 @@ fn fit_tone_only_on(sensor: &Rgb32f, reference: &Rgb32f, colour: &Option<(Mat3, 
     }
     if lightcraft_pipeline::profiling() {
         eprintln!(
-            "[profile] camera look from a black-and-white JPEG: holdout luminance RMS {:.5} -> {:.5} ({samples} pixels{})",
+            "[profile] camera look from a {kind}: holdout luminance RMS {:.5} -> {:.5} ({samples} pixels{})",
             (before / samples.max(1) as f64).sqrt(),
             (after / samples.max(1) as f64).sqrt(),
             if edge_limit.is_some() { ", away from edges" } else { "" }
@@ -2557,6 +2642,7 @@ mod tests {
             &mut raw,
             |_, _| panic!("no JPEG fit for a raw with its own matrices"),
             |_, _| panic!("no black-and-white JPEG fit for a raw with its own matrices"),
+            |_, _| panic!("no dark tone fit for a raw with its own matrices"),
         );
         assert_eq!(raw.color, color);
         assert!(!t.matrix_is_fallback && look.is_none());
@@ -2578,6 +2664,7 @@ mod tests {
                     (Some(fitted.clone()), false)
                 },
                 |_, _| panic!("no black-and-white JPEG fit after an accepted fit"),
+                |_, _| panic!("no dark tone fit after an accepted fit"),
             );
             assert_eq!(look.map(|l| l.matrix), Some(fitted.matrix), "{model}");
             assert_eq!(raw.color, lightcraft_raw::ColorData::default(), "{model}: spectral matrices left out");
@@ -2600,7 +2687,8 @@ mod tests {
 
         let camera = lightcraft_raw::spectral::find(Some("Canon"), "Canon EOS 600D").unwrap();
         let mut raw = raw_of(RawFormat::Cr2, "Canon", "Canon EOS 600D", Default::default());
-        let (xy, t, look) = starting_colour_with(&mut raw, |_, _| (None, false), |_, _| panic!("a colour JPEG never takes the black-and-white step"));
+        let (xy, t, look) =
+            starting_colour_with(&mut raw, |_, _| (None, false), |_, _| panic!("a colour JPEG never takes the black-and-white step"), |_, _| None);
         assert!(look.is_none());
         assert_eq!(raw.color.illuminant, [17, 21]);
         assert_eq!(raw.color.forward_matrix, camera.forward_matrix.map(Some));
@@ -2630,6 +2718,7 @@ mod tests {
                 assert!(!t.matrix_is_fallback && raw.color.forward_matrix == camera.forward_matrix.map(Some), "the spectral matrices are in");
                 Some(toned.clone())
             },
+            |_, _| panic!("an accepted monochrome look keeps its tone"),
         );
         assert!(look.as_ref().is_some_and(|l| l.matrix == Mat3::IDENTITY && l.hue_sat.is_none()), "the tone curve on top");
         assert!(!t.matrix_is_fallback);
@@ -2643,6 +2732,7 @@ mod tests {
                 assert!(t.matrix_is_fallback, "outside the table: the neutral fallback's colour");
                 Some(toned.clone())
             },
+            |_, _| panic!("an accepted monochrome look keeps its tone"),
         );
         assert!(look.is_some() && t.matrix_is_fallback);
         assert_eq!(raw.color, lightcraft_raw::ColorData::default());
@@ -3593,6 +3683,110 @@ mod tests {
     /// An overcast, nearly colourless scene (under 5% of the pixels coloured, so no colour matrix is
     /// learnt and the full look is never tried) whose camera renders it two stops brighter than the
     /// neutral fallback: the partial look is the tone curve (and chroma curve) alone.
+    fn near_black_scene() -> (Rgb32f, Rgb32f) {
+        let mut sensor = Rgb32f::new(96, 64);
+        let mut reference = sensor.clone();
+        for (i, (input, output)) in sensor.data.iter_mut().zip(&mut reference.data).enumerate() {
+            let y = if i % 60 == 0 { 0.3 + (i % 7) as f32 * 0.01 } else { 0.006 + ((i * 7919) % 6144) as f32 / 6144.0 * 0.075 };
+            let rgb = [1.15, 1.0, 0.75];
+            *input = rgb.map(|v| v * y / luminance_2020(rgb));
+            *output = input.map(|v| v * 0.08);
+        }
+        (sensor, reference)
+    }
+
+    #[test]
+    fn a_near_black_scene_gets_tone_without_learning_colour() {
+        let (sensor, reference) = near_black_scene();
+        assert!(collect_pairs(&sensor, &reference, 0.005, None, false).is_none(), "too few midtones even for the partial look");
+        let mut raw = raw_of(RawFormat::Nef, "NIKON CORPORATION", "NIKON D610", Default::default());
+        let (_, _, look) = starting_colour_with(
+            &mut raw,
+            |_, _| (fit_look(&sensor, &reference, &vec![false; sensor.data.len()], None), false),
+            |_, _| None,
+            |_, _| fit_dark_tone(&sensor, &reference, &vec![false; sensor.data.len()]),
+        );
+        let look = look.expect("tone from the dark pixels");
+        assert_eq!(look.matrix, Mat3::IDENTITY);
+        assert!(look.hue_sat.is_none());
+        let tone = ToneMap::camera(&look.tone, 0.0, 0.0, 0.0);
+        let error = |tone: &ToneMap| {
+            sensor
+                .data
+                .iter()
+                .zip(&reference.data)
+                .map(|(x, y)| (luma(displayed(x.map(f64::from), tone)) - luma(y.map(f64::from))).powi(2))
+                .sum::<f64>()
+        };
+        assert!(error(&tone) < error(&ToneMap::new(0.0, 0.0, 0.0)) * 0.001);
+        assert_eq!(look.tone.apply(0.0), 0.0);
+        let mut previous = 0.0;
+        for i in 0..10_000 {
+            let y = look.tone.apply(i as f32 / 10_000.0);
+            assert!(y.is_finite() && y >= previous && y <= 1.0);
+            previous = y;
+        }
+        // Models with spectral matrices keep them before the dark tone is fitted.
+        let mut raw = raw_of(RawFormat::Cr2, "Canon", "Canon EOS 600D", Default::default());
+        let (_, t, look) = starting_colour_with(
+            &mut raw,
+            |_, _| (None, false),
+            |_, _| None,
+            |raw, t| {
+                assert!(!t.matrix_is_fallback && lightcraft_raw::color::has_matrix(&raw.color));
+                fit_dark_tone(&sensor, &reference, &vec![false; sensor.data.len()])
+            },
+        );
+        assert!(!t.matrix_is_fallback);
+        assert_eq!(look.expect("tone on top of spectral colour").matrix, Mat3::IDENTITY);
+    }
+
+    #[test]
+    fn dark_tone_holdout_never_enters_training() {
+        let (sensor, mut reference) = near_black_scene();
+        let none = vec![false; sensor.data.len()];
+        let original = fit_dark_tone(&sensor, &reference, &none).expect("dark tone");
+        // Every pixel clears the wider signal floors. Changing only its held-out third must
+        // change the measured error, but cannot change the fitted curve.
+        for p in reference.data.iter_mut().step_by(3) {
+            *p = p.map(|v| v * 1.03);
+        }
+        let changed = fit_dark_tone(&sensor, &reference, &none).expect("still clearly better than the fallback");
+        assert_eq!(changed.tone, original.tone);
+    }
+
+    #[test]
+    fn dark_tone_requires_signal_correlation_and_unclipped_highlights() {
+        let (sensor, reference) = near_black_scene();
+        let none = vec![false; sensor.data.len()];
+        let mut unrelated = reference.clone();
+        for (i, p) in unrelated.data.iter_mut().enumerate() {
+            *p = reference.data[(i * 3571) % reference.data.len()];
+        }
+        assert!(fit_dark_tone(&sensor, &unrelated, &none).is_none(), "unrelated dark JPEG");
+        let mut flat = reference.clone();
+        flat.data.fill([0.002; 3]);
+        assert!(fit_dark_tone(&sensor, &flat, &none).is_none(), "a quantized flat JPEG cannot teach tone");
+        let mut sparse = reference.clone();
+        sparse.data.iter_mut().skip(80).for_each(|p| *p = [0.0; 3]);
+        assert!(fit_dark_tone(&sensor, &sparse, &none).is_none(), "fewer than 256 usable pairs");
+        let mut bright = reference.clone();
+        bright.data[0] = [0.95; 3];
+        assert!(fit_dark_tone(&sensor, &bright, &none).is_none(), "dark pairs cannot constrain a bright highlight");
+        let mut clipped = none;
+        clipped[0] = true;
+        let original = fit_dark_tone(&sensor, &reference, &clipped).expect("tone without the clipped pixel");
+        let mut changed = sensor.clone();
+        changed.data[0] = [0.18; 3];
+        let look = fit_dark_tone(&changed, &reference, &clipped).expect("the clipped pixel is still closer to its JPEG");
+        assert_eq!(look.tone, original.tone, "clipped samples cannot change the fitted curve");
+        let mut highlight = reference.clone();
+        highlight.data[0] = [0.8; 3];
+        assert!(fit_dark_tone(&changed, &highlight, &clipped).is_none(), "the curve cannot darken a clipped highlight away from the JPEG");
+        assert!(fit_dark_tone(&sensor, &Rgb32f::new(64, 96), &clipped).is_none(), "mismatched dimensions");
+        assert!(fit_dark_tone(&sensor, &reference, &[]).is_none(), "mismatched clip mask");
+    }
+
     #[test]
     fn partial_look_brightens_a_dull_scene_without_learning_colour() {
         let (w, h) = (96usize, 64usize);
@@ -3739,6 +3933,7 @@ mod tests {
                 assert!(!t.matrix_is_fallback, "on the spectral matrices");
                 own.clone()
             },
+            |_, _| None,
         );
         assert!(look.is_some() && !t.matrix_is_fallback);
     }
