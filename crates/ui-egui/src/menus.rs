@@ -172,6 +172,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.sidebarSection", "Show Sidebar Section", None, ""),
     ("view.sidebarMoveSection", "Move Sidebar Section", None, ""),
     ("view.sidebarReset", "Reset Sidebar Sections", None, ""),
+    ("view.folderParent", "Show Parent Folder", None, ""),
     ("view.slideshow", "Slideshow", Some("Cmd+Alt+Enter"), "View"),
     ("view.slideshowOptions", "Slideshow Options…", None, "View"),
     ("dialog.slideshowExport", "Export Slideshow…", None, "View"),
@@ -296,7 +297,7 @@ fn adjust_brush(app: &mut LightcraftApp, k: f32, df: f32) -> Value {
             if df != 0.0 {
                 p["feather"] = json!(app.ui.remove_feather);
             }
-            let _ = app.run("spot.update", p);
+            app.act("spot.update", p);
         }
         json!({"size": app.ui.remove_size, "feather": app.ui.remove_feather})
     } else {
@@ -528,6 +529,58 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             app.ui.sidebar = Default::default();
             Ok(json!({"sidebar": app.ui.sidebar}))
         }
+        "view.folderParent" => {
+            // {path, show?}: list (or pass over again) a folder that only leads from its disk to
+            // the library's first folder there; with no `show`, the one or the other
+            let Some(path) = p.get("path").and_then(Value::as_str) else {
+                return Some(Err(format!("{id}: `path` is needed (a folder above the library's folders, see library.folders)")));
+            };
+            let show = match bool_param(id, p, "show") {
+                Ok(show) => show,
+                Err(e) => return Some(Err(e)),
+            };
+            let key = lightcraft_catalog::query::folder_key(path);
+            // a folder asked for earlier can always be taken off again, also once it no longer
+            // only leads on (photos or a second folder came into it, it was labelled or renamed)
+            if show != Some(true) && app.ui.folder_parents.remove(&key) {
+                return Some(Ok(json!({"path": key, "show": false})));
+            }
+            use crate::panels::left::{FolderPlace, folder_place};
+            let tree = app.caches.folder_tree(&app.session.catalog);
+            let node = match folder_place(app, &tree, &key) {
+                Some((node, FolderPlace::Leading)) => node.path.clone(),
+                Some((_, FolderPlace::Below(above))) => {
+                    return Some(Err(format!("{id}: `{path}` is listed because `{above}` above it is: show or hide that folder instead")));
+                }
+                Some((_, FolderPlace::Listed)) => {
+                    return Some(Err(format!(
+                        "{id}: `{path}` is always listed in Folders: only a folder that holds no photo itself and leads from its disk to one folder can be shown or hidden"
+                    )));
+                }
+                None => return Some(Err(format!("{id}: `{path}` holds no photo of the library, so Folders has no place for it"))),
+            };
+            let show = show.unwrap_or(true);
+            if show && !app.ui.folder_parents.contains(&key) {
+                if app.ui.folder_parents.len() >= crate::state::MAX_FOLDER_PARENTS {
+                    // folders that stopped leading on take no room from the ones that do
+                    let stale: Vec<String> = app
+                        .ui
+                        .folder_parents
+                        .iter()
+                        .filter(|k| !matches!(folder_place(app, &tree, k), Some((_, FolderPlace::Leading | FolderPlace::Below(_)))))
+                        .cloned()
+                        .collect();
+                    for k in stale {
+                        app.ui.folder_parents.remove(&k);
+                    }
+                }
+                if app.ui.folder_parents.len() >= crate::state::MAX_FOLDER_PARENTS {
+                    return Some(Err(format!("{id}: {} parent folders are shown already; hide one first", crate::state::MAX_FOLDER_PARENTS)));
+                }
+                app.ui.folder_parents.insert(key);
+            }
+            Ok(json!({"path": node, "show": show}))
+        }
         "view.appearance" => appearance_command(app, p),
         "view.theme" => theme_command(app, p),
         "library.selectOnlyActive" => {
@@ -594,6 +647,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
                 && let Some(i) = vis.iter().position(|x| x.0 == r)
                 && let Some(next) = vis.get(i + 1).or(i.checked_sub(1).and_then(|j| vis.get(j)))
             {
+                // refusal expected: a step of view.reference, already inside `run`, which answers for the whole command
                 let _ = app.session.execute("library.select", &json!({"ids": [next.0]}));
             }
             app.ui.view = ViewMode::Reference;
