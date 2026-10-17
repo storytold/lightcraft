@@ -39,21 +39,32 @@ pub fn start(port: u16, ctx: egui::Context) -> Receiver<ControlRequest> {
 
 fn accept_loop(listener: TcpListener, tx: Sender<ControlRequest>, ctx: egui::Context) {
     let open = Arc::new(AtomicUsize::new(0));
-    for mut stream in listener.incoming().flatten() {
-        if open.fetch_add(1, Ordering::SeqCst) >= MAX_CONNECTIONS {
-            open.fetch_sub(1, Ordering::SeqCst);
-            let _ = writeln!(stream, "{}", json!({"ok": false, "error": "too many control connections"}));
-            continue;
-        }
-        let tx = tx.clone();
-        let ctx = ctx.clone();
-        let open = Arc::clone(&open);
-        std::thread::spawn(move || {
-            serve(stream, &tx, &ctx);
-            open.fetch_sub(1, Ordering::SeqCst);
-        });
+    for stream in listener.incoming().flatten() {
+        let _ = spawn_connection(stream, tx.clone(), ctx.clone(), Arc::clone(&open), IDLE_TIMEOUT);
     }
 }
+
+/// Admit and serve one connection, releasing its slot when serving ends.
+fn spawn_connection(
+    mut stream: TcpStream,
+    tx: Sender<ControlRequest>,
+    ctx: egui::Context,
+    open: Arc<AtomicUsize>,
+    idle_timeout: Duration,
+) -> Option<std::thread::JoinHandle<()>> {
+    if open.fetch_add(1, Ordering::SeqCst) >= MAX_CONNECTIONS {
+        open.fetch_sub(1, Ordering::SeqCst);
+        let _ = writeln!(stream, "{}", json!({"ok": false, "error": "too many control connections"}));
+        return None;
+    }
+    Some(std::thread::spawn(move || {
+        serve(stream, &tx, &ctx, idle_timeout);
+        open.fetch_sub(1, Ordering::SeqCst);
+    }))
+}
+
+/// Five minutes allows pauses between automation commands without retaining abandoned slots forever.
+const IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
 /// How long a request waits for its reply.
 const REPLY_TIMEOUT: Duration = Duration::from_secs(60);
@@ -66,7 +77,11 @@ const NO_FRAMES_AFTER: Duration = Duration::from_secs(5);
 pub const HIDDEN_WINDOW_ERROR: &str = "the app drew no frame for 5 s, so the request was not run: its window is probably not visible \
 (on Wayland a window on a hidden workspace or minimized is not redrawn, which pauses the app). Bring the window on screen and send it again";
 
-fn serve(stream: TcpStream, tx: &Sender<ControlRequest>, ctx: &egui::Context) {
+fn serve(stream: TcpStream, tx: &Sender<ControlRequest>, ctx: &egui::Context, idle_timeout: Duration) {
+    if let Err(e) = stream.set_read_timeout(Some(idle_timeout)) {
+        log::warn!("control connection closed: could not set idle read timeout: {e}");
+        return;
+    }
     let Ok(read) = stream.try_clone() else { return };
     serve_lines(read, stream, |method, params| {
         let (req, rrx) = ControlRequest::new(method, params);
@@ -157,7 +172,10 @@ fn read_bounded_line(reader: &mut impl BufRead, buf: &mut Vec<u8>, max: usize) -
     buf.clear();
     // `take` bounds the bytes buffered for one line: a peer can't make us allocate more than `max`.
     let limit = u64::try_from(max).unwrap_or(u64::MAX).saturating_add(1);
-    let n = reader.take(limit).read_until(b'\n', buf).map_err(|e| e.to_string())?;
+    let n = reader.take(limit).read_until(b'\n', buf).map_err(|e| match e.kind() {
+        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut => "control connection idle read timed out; closing the connection".to_string(),
+        _ => e.to_string(),
+    })?;
     if n == 0 {
         return Ok(false);
     }
@@ -208,6 +226,95 @@ fn serve_lines<R: Read, W: Write>(read: R, mut out: W, mut handle: impl FnMut(St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Own the client and worker together: even a failing timeout assertion closes the socket
+    /// before joining, so the regression cannot leave a worker stuck in a read.
+    struct Connection {
+        client: BufReader<TcpStream>,
+        requests: Receiver<ControlRequest>,
+        worker: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl Connection {
+        fn new(open: &Arc<AtomicUsize>, idle: Duration) -> Self {
+            let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+            let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+            client.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+            let (stream, _) = listener.accept().unwrap();
+            let (tx, requests) = channel();
+            let worker = spawn_connection(stream, tx, egui::Context::default(), Arc::clone(open), idle).unwrap();
+            Self { client: BufReader::new(client), requests, worker: Some(worker) }
+        }
+
+        fn join(&mut self) {
+            if let Some(worker) = self.worker.take() {
+                worker.join().unwrap();
+            }
+        }
+    }
+
+    impl Drop for Connection {
+        fn drop(&mut self) {
+            let _ = self.client.get_ref().shutdown(std::net::Shutdown::Both);
+            while let Ok(req) = self.requests.try_recv() {
+                let _ = req.reply.send(json!({"ok": false, "error": "test closing"}));
+            }
+            self.join();
+        }
+    }
+
+    #[test]
+    fn idle_connections_release_their_slots_without_dispatching() {
+        for input in ["", "{\"method\":\"engine.execute\""] {
+            let open = Arc::new(AtomicUsize::new(0));
+            let mut connection = Connection::new(&open, Duration::from_millis(100));
+            assert_eq!(open.load(Ordering::SeqCst), 1);
+            connection.client.get_mut().write_all(input.as_bytes()).unwrap();
+            let mut reply = String::new();
+            let closed = connection.client.read_to_string(&mut reply);
+            assert!(closed.is_ok(), "idle connection stayed open: {closed:?}");
+            connection.join();
+            assert_eq!(open.load(Ordering::SeqCst), 0, "the production worker releases its slot");
+            assert!(connection.requests.try_recv().is_err(), "incomplete input never runs");
+            let reply: Value = serde_json::from_str(&reply).unwrap();
+            assert_eq!(reply["ok"], false);
+            assert!(reply["error"].as_str().unwrap().contains("idle read timed out"));
+
+            // A subsequent connection is admitted through the same accounting path.
+            let mut next = Connection::new(&open, Duration::from_secs(1));
+            next.client.get_mut().shutdown(std::net::Shutdown::Write).unwrap();
+            let mut eof = String::new();
+            next.client.read_to_string(&mut eof).unwrap();
+            next.join();
+            assert!(eof.is_empty());
+            assert_eq!(open.load(Ordering::SeqCst), 0);
+        }
+    }
+
+    #[test]
+    fn persistent_requests_and_slow_replies_outlive_the_idle_read_timeout() {
+        let open = Arc::new(AtomicUsize::new(0));
+        let mut connection = Connection::new(&open, Duration::from_millis(100));
+        for id in [1, 2] {
+            writeln!(connection.client.get_mut(), "{}", json!({"id": id, "method": "engine.commands"})).unwrap();
+            let req = connection.requests.recv_timeout(Duration::from_secs(3)).unwrap();
+            assert_eq!(req.method, "engine.commands");
+            assert!(req.take());
+            // A dispatched command waits for its reply, not for socket input.
+            std::thread::sleep(Duration::from_millis(250));
+            req.reply.send(json!({"ok": true, "result": id})).unwrap();
+            let mut reply = String::new();
+            connection.client.read_line(&mut reply).unwrap();
+            let reply: Value = serde_json::from_str(&reply).unwrap();
+            assert_eq!(reply, json!({"id": id, "ok": true, "result": id}));
+        }
+        connection.client.get_mut().shutdown(std::net::Shutdown::Write).unwrap();
+        let mut eof = String::new();
+        connection.client.read_to_string(&mut eof).unwrap();
+        connection.join();
+        assert!(eof.is_empty());
+        assert_eq!(open.load(Ordering::SeqCst), 0);
+    }
 
     /// Issue #718: an app that draws no frames (a hidden Wayland window) gets the request given
     /// up with a reason, quickly, and the app then skips it instead of running it late.

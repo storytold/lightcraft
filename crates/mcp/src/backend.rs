@@ -377,6 +377,53 @@ mod tests {
     }
 
     #[test]
+    fn idle_close_reconnects_without_replaying_a_command() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let (closed, expired) = std::sync::mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let mut ids = Vec::new();
+            for _ in 0..2 {
+                let deadline = std::time::Instant::now() + Duration::from_secs(5);
+                let stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock && std::time::Instant::now() < deadline => {
+                            std::thread::sleep(Duration::from_millis(5));
+                        }
+                        Err(e) => panic!("accept: {e}"),
+                    }
+                };
+                stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut writer = stream;
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                let request: Value = serde_json::from_str(&line).unwrap();
+                ids.push(request["id"].as_u64().unwrap());
+                writeln!(writer, "{}", json!({"id": request["id"], "ok": true, "result": ids.len()})).unwrap();
+                writer.set_read_timeout(Some(Duration::from_millis(50))).unwrap();
+                line.clear();
+                let error = reader.read_line(&mut line).unwrap_err();
+                assert!(matches!(error.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut));
+                assert!(line.is_empty(), "no command is resent while idle");
+                writeln!(writer, "{}", json!({"ok": false, "error": "control connection idle read timed out; closing the connection"})).unwrap();
+                drop(reader);
+                drop(writer);
+                closed.send(()).unwrap();
+            }
+            ids
+        });
+        let mut remote = Remote::lazy(&addr);
+        assert_eq!(remote.call("engine.execute", json!({"command": "edit.undo"})).unwrap(), json!(1));
+        expired.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(remote.call("engine.execute", json!({"command": "edit.undo"})).unwrap(), json!(2));
+        expired.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(server.join().unwrap(), [1, 2], "each command ran once on a separate connection");
+    }
+
+    #[test]
     fn unreachable_app_is_reported() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap().to_string();
