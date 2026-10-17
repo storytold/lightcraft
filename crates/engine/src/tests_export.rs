@@ -276,6 +276,30 @@ fn curve_preset_export_never_overwrites_originals_or_sidecars() {
     preset_export_preserves_originals("curve.exportPresets", json!({"names": ["Linear"]}), "curve-export-guard");
 }
 
+/// #1944: Export Keywords went straight to `std::fs::write`, replacing a library original.
+#[test]
+fn keyword_export_never_overwrites_originals_or_sidecars() {
+    preset_export_preserves_originals("keyword.export", json!({}), "keyword-export-guard");
+}
+
+#[test]
+fn keyword_export_preserves_the_previous_file_on_write_failure() {
+    let dir = temp_dir("keyword-export-failure");
+    let mut s = Session::with_demo();
+    let path = dir.join("keywords.txt");
+    let params = json!({"path": path.to_string_lossy()});
+    s.execute("keyword.export", &params).unwrap();
+    let previous = std::fs::read(&path).unwrap();
+    {
+        let _fault = lightcraft_catalog::safe_file::fail_writes_after(4);
+        assert!(s.execute("keyword.export", &params).is_err(), "keyword.export must report the failed write");
+    }
+    assert_eq!(std::fs::read(&path).unwrap(), previous, "the prior export is kept");
+    s.execute("keyword.export", &params).unwrap();
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "no temporary files remain");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 #[test]
 fn preset_exports_preserve_previous_files_on_write_failure() {
     let dir = temp_dir("preset-export-failure");
