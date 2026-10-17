@@ -15,6 +15,7 @@ use egui::RichText;
 use serde_json::{Value, json};
 
 use crate::LightcraftApp;
+use crate::menu_item::MenuItem;
 use crate::state::{GridBadges, PREVIEW_LIMITS, StartupView};
 use crate::theme::Tokens;
 use crate::widgets::register;
@@ -215,7 +216,7 @@ fn preset_combo(app: &LightcraftApp, ui: &mut egui::Ui, id: &str, current: Optio
     let text = current.map(name).unwrap_or_else(|| crate::i18n::tr(none_label).to_string());
     let mut out = None;
     let r = crate::widgets::combo_box(id).width(240.0).selected_text(text).show_ui(ui, |ui| {
-        if ui.selectable_label(current.is_none(), crate::i18n::tr(none_label)).clicked() {
+        if MenuItem::new(crate::i18n::tr(none_label)).selected(current.is_none()).show(ui).clicked() {
             out = Some(None);
         }
         if let Some(pid) = crate::panels::presets::picker_rows(ui, id, &app.session.presets, current) {
@@ -285,10 +286,10 @@ fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
                     };
                     let id = format!("settingsCamera-{i}");
                     let r = crate::widgets::combo_box(&id).width(240.0).selected_text(label).show_ui(ui, |ui| {
-                        if ui.selectable_label(current == Some(RAW_DEFAULT), crate::i18n::tr("Same as raw default")).clicked() {
+                        if MenuItem::new(crate::i18n::tr("Same as raw default")).selected(current == Some(RAW_DEFAULT)).show(ui).clicked() {
                             pick = Some(json!({"camera": cam, "remove": true}));
                         }
-                        if ui.selectable_label(current.is_none(), crate::i18n::tr("LightCraft Default")).clicked() {
+                        if MenuItem::new(crate::i18n::tr("LightCraft Default")).selected(current.is_none()).show(ui).clicked() {
                             pick = Some(json!({"camera": cam, "preset": null}));
                         }
                         if let Some(pid) = crate::panels::presets::picker_rows(ui, &id, &app.session.presets, current) {
@@ -337,11 +338,11 @@ fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
                 .width(240.0)
                 .selected_text(cur.clone().unwrap_or_else(|| crate::i18n::tr("None").into()))
                 .show_ui(ui, |ui| {
-                    if ui.selectable_label(cur.is_none(), crate::i18n::tr("None")).clicked() {
+                    if MenuItem::new(crate::i18n::tr("None")).selected(cur.is_none()).show(ui).clicked() {
                         pick = Some(String::new());
                     }
                     for m in &app.session.metadata_presets {
-                        if ui.selectable_label(cur.as_deref() == Some(m.name.as_str()), &m.name).clicked() {
+                        if MenuItem::new(&m.name).selected(cur.as_deref() == Some(m.name.as_str())).show(ui).clicked() {
                             pick = Some(m.name.clone());
                         }
                     }

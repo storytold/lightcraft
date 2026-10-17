@@ -32,18 +32,6 @@ pub fn arrow_button<'a>(ui: &mut Ui, text: impl egui::IntoAtoms<'a>, icon: Icon,
     r.response
 }
 
-/// Keep egui's submenu interaction and layout, using our vector chevron instead of a font glyph.
-pub fn menu_button<'a, R>(ui: &mut Ui, atoms: impl egui::IntoAtoms<'a>, contents: impl FnOnce(&mut Ui) -> R) -> egui::InnerResponse<Option<R>> {
-    if !egui::containers::menu::is_in_menu(ui) {
-        return ui.menu_button(atoms, contents);
-    }
-    let button = egui::Button::new(atoms.into_atoms()).right_text("    ");
-    let (response, inner) = egui::containers::menu::SubMenuButton::from_button(button).ui(ui, contents);
-    let center = pos2(response.rect.right() - ui.spacing().button_padding.x - 8.0, response.rect.center().y);
-    paint(ui.painter(), Rect::from_center_size(center, vec2(16.0, 16.0)), Icon::ChevronRight, ui.style().interact(&response).fg_stroke.color);
-    egui::InnerResponse::new(inner.map(|r| r.inner), response)
-}
-
 // ------------------------------------------------------------------ automation registry
 
 #[derive(Clone, Default)]

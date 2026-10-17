@@ -4,6 +4,7 @@ use lightcraft_develop::{ControlSpec, Section, SettingsGroup, Track};
 use serde_json::json;
 
 use crate::LightcraftApp;
+use crate::menu_item::MenuItem;
 use crate::state::Dialog;
 use crate::theme::Tokens;
 
@@ -725,8 +726,12 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     ui.label(crate::i18n::tr_format!("{n} selected photos · {pages} pages", n = n, pages = n.div_ceil(options.columns * options.rows)));
                     field(ui, "Paper", |ui| {
                         crate::widgets::combo_box("contactSheetPaper").selected_text(&options.paper).show_ui(ui, |ui| {
-                            ui.selectable_value(&mut options.paper, "a4".into(), "A4");
-                            ui.selectable_value(&mut options.paper, "letter".into(), crate::i18n::tr("Letter"));
+                            if MenuItem::new("A4").selected(options.paper == "a4").show(ui).clicked() {
+                                options.paper = "a4".into();
+                            }
+                            if MenuItem::new(crate::i18n::tr("Letter")).selected(options.paper == "letter").show(ui).clicked() {
+                                options.paper = "letter".into();
+                            }
                         });
                     });
                     ui.checkbox(&mut options.landscape, crate::i18n::tr("Landscape"));
@@ -750,7 +755,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                                     ui.separator();
                                 }
                                 builtin = b;
-                                if ui.selectable_label(false, crate::i18n::builtin_label(&p.name, b)).clicked() {
+                                if MenuItem::new(crate::i18n::builtin_label(&p.name, b)).show(ui).clicked() {
                                     chosen = Some(p.name);
                                 }
                             }
@@ -2030,7 +2035,9 @@ fn export_size(ui: &mut egui::Ui, full: &mut bool, r: &mut lightcraft_engine::ex
             let before = r.mode;
             let c = crate::widgets::combo_box("exportResizeMode").width(150.0).selected_text(crate::i18n::tr(cur)).show_ui(ui, |ui| {
                 for (m, l) in MODES {
-                    ui.selectable_value(&mut r.mode, m, crate::i18n::tr(l));
+                    if MenuItem::new(crate::i18n::tr(l)).selected(r.mode == m).show(ui).clicked() {
+                        r.mode = m;
+                    }
                 }
             });
             crate::widgets::register(ui.ctx(), "combo:exportResizeMode", c.response.rect);

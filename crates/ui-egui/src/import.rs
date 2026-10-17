@@ -17,6 +17,7 @@ use serde_json::{Value, json};
 use std::sync::atomic::Ordering;
 
 use crate::LightcraftApp;
+use crate::menu_item::MenuItem;
 use crate::render::Slot;
 use crate::theme::Tokens;
 use crate::widgets::register;
@@ -1139,8 +1140,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
             let cur = opts.iter().find(|o| o.0 == key).map_or(opts[0].1, |o| o.1);
             let combo = crate::widgets::combo_box("import-organize").selected_text(crate::i18n::tr(cur)).show_ui(ui, |ui| {
                 for (k, label) in opts {
-                    let r = ui.selectable_label(key == k, crate::i18n::tr(label));
-                    register(ui.ctx(), format!("button:importOrganize-{k}"), r.rect);
+                    let r = MenuItem::new(crate::i18n::tr(label)).selected(key == k).widget(format!("button:importOrganize-{k}")).show(ui);
                     if r.clicked() {
                         d.organize = k.to_string();
                         if k == "custom" && d.folder_template.trim().is_empty() {
@@ -1222,7 +1222,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
             let mut pick = None;
             crate::widgets::combo_box("import-on-deleted").selected_text(crate::i18n::tr(cur)).show_ui(ui, |ui| {
                 for (v, label) in [("restore", "Restore them"), ("fresh", "Import as new"), ("", "Leave them")] {
-                    if ui.selectable_label(d.on_deleted == v, crate::i18n::tr(label)).clicked() {
+                    if MenuItem::new(crate::i18n::tr(label)).selected(d.on_deleted == v).show(ui).clicked() {
                         pick = Some(v);
                     }
                 }
@@ -1251,18 +1251,18 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
             None => crate::i18n::tr("None").into(),
         };
         crate::widgets::combo_box("import-album").selected_text(cur).show_ui(ui, |ui| {
-            if ui.selectable_label(d.album.is_none() && d.new_album.is_empty(), crate::i18n::tr("None")).clicked() {
+            if MenuItem::new(crate::i18n::tr("None")).selected(d.album.is_none() && d.new_album.is_empty()).show(ui).clicked() {
                 d.album = None;
                 d.new_album.clear();
             }
-            if ui.selectable_label(d.album.is_none() && !d.new_album.is_empty(), crate::i18n::tr("New album…")).clicked() {
+            if MenuItem::new(crate::i18n::tr("New album…")).selected(d.album.is_none() && !d.new_album.is_empty()).show(ui).clicked() {
                 d.album = None;
                 if d.new_album.is_empty() {
                     d.new_album = crate::i18n::tr("Imported Photos").into();
                 }
             }
             for (id, name) in &albums {
-                if ui.selectable_label(d.album == Some(*id), name).clicked() {
+                if MenuItem::new(name).selected(d.album == Some(*id)).show(ui).clicked() {
                     d.album = Some(*id);
                     d.new_album.clear();
                 }
@@ -1282,7 +1282,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
             .map(|p| crate::i18n::builtin_label(&p.name, p.builtin).to_string())
             .unwrap_or_else(|| crate::i18n::tr("None").into());
         crate::widgets::combo_box("import-preset").selected_text(cur).height(300.0).show_ui(ui, |ui| {
-            if ui.selectable_label(d.preset.is_empty(), crate::i18n::tr("None")).clicked() {
+            if MenuItem::new(crate::i18n::tr("None")).selected(d.preset.is_empty()).show(ui).clicked() {
                 d.preset.clear();
             }
             let selected = (!d.preset.is_empty()).then_some(d.preset.as_str());
@@ -1295,11 +1295,11 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
         field(ui, "Metadata", |ui| {
             let cur = if d.metadata_preset.is_empty() { crate::i18n::tr("None").to_string() } else { d.metadata_preset.clone() };
             crate::widgets::combo_box("import-metadata").selected_text(cur).show_ui(ui, |ui| {
-                if ui.selectable_label(d.metadata_preset.is_empty(), crate::i18n::tr("None")).clicked() {
+                if MenuItem::new(crate::i18n::tr("None")).selected(d.metadata_preset.is_empty()).show(ui).clicked() {
                     d.metadata_preset.clear();
                 }
                 for m in &app.session.metadata_presets {
-                    if ui.selectable_label(d.metadata_preset == m.name, &m.name).clicked() {
+                    if MenuItem::new(&m.name).selected(d.metadata_preset == m.name).show(ui).clicked() {
                         d.metadata_preset = m.name.clone();
                     }
                 }
