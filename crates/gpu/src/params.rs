@@ -149,6 +149,9 @@ pub struct Present {
 
 /// The `finish` kernel's parameter block and auxiliary table (tone LUT | chroma curve | sRGB LUT | curve LUTs |
 /// mask terms) for `fp` with `masks` (their local adjustments' terms).
+///
+/// A curve whose length is not [`CURVE_N`] fails the render ([`FailKind::Fatal`]) and returns an
+/// empty parameter block with a truncated aux table, which the caller discards (CPU fallback).
 pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Present) -> (Vec<u32>, Vec<f32>) {
     let mut aux: Vec<f32> = fp.tone.lut().to_vec();
     aux.extend_from_slice(fp.tone.chroma_lut());
@@ -163,8 +166,9 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
                 // records the failure on this thread so the render falls back to the CPU; the
                 // partial `(p, aux)` returned here is never bound to a pipeline.
                 fail(FailKind::Fatal, format!("curve table has {} entries, expected {}", l.v.len(), CURVE_N));
-                // `p` is only assembled below the curve loop; the failed render's block is never
-                // consumed, so an empty one is as good as any
+                // `p` is only assembled below the curve loop, so an empty block is as good as any:
+                // the caller (render.rs) gates on `failed()` right after this returns and bails to
+                // the CPU fallback before indexing `p` or uploading `aux`.
                 return (Vec::new(), aux);
             }
             aux.extend_from_slice(&l.v);

@@ -42,6 +42,8 @@ commands:
   ico <out.ico> <in.png>...
                   pack square PNGs (<= 256 px) into a Windows .ico (see packaging/icons.sh)
   layers          enforce the crate dependency layering (plan/architecture.md §3)
+  roots           every production crate root carries #![forbid(unsafe_code)] and the six-lint
+                  deny list (AGENTS.md; crates/sysmem is exempt from the forbid only)
   parity [--write]
                   check docs/parity-checklist.md (every cmd:/ctl: id and path it cites exists) and print the
                   Lightroom parity summary; --write refreshes the summary table in the document
@@ -50,7 +52,7 @@ commands:
                   build the browser app (apps/lightcraft-web) into <target>/web-site/;
                   --serve serves it on http://127.0.0.1:<port> (default 8080)
   ci [--hardware] [--summary-md] [--quick [--base REF]]
-                  fmt --check, clippy -D warnings, heif, test, GPU probe, parity refs, layers, assets, wasm
+                  fmt --check, clippy -D warnings, heif, test, GPU probe, parity refs, layers, assets, roots, wasm
                   (stops at first failure). Tests run under cargo test (cargo nextest with
                   LIGHTCRAFT_NEXTEST=1), without examples, then doctests with cargo test --doc; after
                   them it prints the translation gaps report (never a failure). Writes
