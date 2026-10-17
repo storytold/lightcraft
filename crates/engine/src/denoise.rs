@@ -63,5 +63,8 @@ pub(crate) use settings::{Settings, forget_gpu_set_ups, installed_models, read_c
 pub(crate) use state::State;
 pub use state::{Pace, PhotoState};
 
-#[cfg(all(test, feature = "denoise"))]
+// Two stacked cfgs (not `all(test, feature = …)`): clippy only recognises a plain `cfg(test)`
+// module as test code, so the `allow-*-in-tests` settings in clippy.toml apply to its helpers.
+#[cfg(test)]
+#[cfg(feature = "denoise")]
 mod gpu_tests;

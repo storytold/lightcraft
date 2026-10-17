@@ -5,6 +5,8 @@ use lightcraft_develop::VignetteStyle;
 use lightcraft_pipeline::colorops::POINT_WORDS;
 use lightcraft_pipeline::finish::{FinishParams, MASK_TERMS, srgb_lut};
 
+use crate::ctx::{FailKind, fail};
+
 /// Entries per tone-curve table (`lightcraft_pipeline::finish` builds them at this size).
 pub const CURVE_N: u32 = 1024;
 
@@ -155,7 +157,16 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     let curve_off = aux.len();
     if let Some(c) = &fp.curves {
         for l in c {
-            assert_eq!(l.v.len(), CURVE_N as usize);
+            if l.v.len() != CURVE_N as usize {
+                // a wrong-length curve would shift every later aux offset (CURVE_OFF, MASK_OFF and
+                // the mask terms that follow) and make the kernel read the wrong data. `fail()`
+                // records the failure on this thread so the render falls back to the CPU; the
+                // partial `(p, aux)` returned here is never bound to a pipeline.
+                fail(FailKind::Fatal, format!("curve table has {} entries, expected {}", l.v.len(), CURVE_N));
+                // `p` is only assembled below the curve loop; the failed render's block is never
+                // consumed, so an empty one is as good as any
+                return (Vec::new(), aux);
+            }
             aux.extend_from_slice(&l.v);
         }
     }

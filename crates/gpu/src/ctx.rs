@@ -671,7 +671,12 @@ impl Gpu {
             fail(FailKind::Fatal, format!("unknown kernel {name}"));
             return;
         };
-        assert_eq!(bufs.len(), k.nbuf, "{name}: binding count");
+        if bufs.len() != k.nbuf {
+            // a caller/kernel mismatch would bind the wrong buffers: fail this render over to the
+            // CPU instead of crashing
+            fail(FailKind::Fatal, format!("{name}: binding count {} != {}", bufs.len(), k.nbuf));
+            return;
+        }
         let params = self.init_buffer(bytemuck::cast_slice(if p.is_empty() { &[0u32] } else { p }), wgpu::BufferUsages::STORAGE);
         let mut entries = vec![wgpu::BindGroupEntry { binding: 0, resource: params.as_entire_binding() }];
         for (i, b) in bufs.iter().enumerate() {
@@ -691,8 +696,17 @@ impl Gpu {
     /// and returns zeros, which the caller discards; after an earlier failure in the same render
     /// nothing more is submitted.
     pub fn finish_and_read<T: bytemuck::Pod>(&self, mut enc: wgpu::CommandEncoder, src: &Buf, len: usize) -> Vec<T> {
-        assert!(len <= src.len, "readback of {len} values from a buffer of {}", src.len);
         let zeros = || vec![<T as bytemuck::Zeroable>::zeroed(); len];
+        // a zero-length readback would issue a `copy_buffer_to_buffer` of size 0, which wgpu
+        // rejects as an invalid copy: early-return zeros instead
+        if len == 0 {
+            return zeros();
+        }
+        if len > src.len {
+            // a caller bug would read past the buffer: fail this render over to the CPU
+            fail(FailKind::Fatal, format!("readback of {len} values from a buffer of {}", src.len));
+            return zeros();
+        }
         if failed() {
             return zeros();
         }
