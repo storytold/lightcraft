@@ -1047,7 +1047,9 @@ impl Session {
                 && self.sort.key == lightcraft_catalog::SortKey::CaptureDate
                 && let LibrarySource::Album(a) = self.source
                 && let Some(al) = self.catalog.album(a)
+                // an album's own order; a smart album and a folder of albums have none
                 && !al.is_smart()
+                && !al.folder
                 && self.filter == Filter::default()
             {
                 // each photo's place looked up, not searched for (a big album sorted in O(n log n))
@@ -1234,6 +1236,8 @@ pub fn json_delta(old: &Value, new: &Value) -> Option<Value> {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_album_folder_source;
 #[cfg(test)]
 mod tests_album_order;
 #[cfg(test)]
