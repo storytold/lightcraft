@@ -104,6 +104,9 @@ pub struct MergeState {
     pub error: Option<String>,
     /// Options whose preview failed (not retried until they change).
     pub failed_options: Option<MergeDialog>,
+    /// The preview zoomed in by a click: the point of it (0..1 across and down) at the middle of
+    /// the box. `None` fits it in the box. Kept while the options change, to compare them there.
+    pub zoom: Option<(f32, f32)>,
     /// The last finished merge (`{id, path, …}`).
     pub last_result: Option<Value>,
     /// Photos the dialog merges (the selection when it opened).
@@ -158,6 +161,7 @@ pub fn open(app: &mut LightcraftApp, command: &str) -> Result<Value, String> {
     app.merge.error = None;
     app.merge.preview = None;
     app.merge.preview_pixels = None;
+    app.merge.zoom = None;
     if let Some(t) = app.merge.preview_task.take() {
         t.cancel.store(true, Ordering::Relaxed);
     }
@@ -356,6 +360,56 @@ fn last_failed_matches(app: &LightcraftApp, opts: &MergeDialog) -> bool {
     app.merge.failed_options.as_ref() == Some(opts)
 }
 
+/// Where a preview of `size` pixels is drawn in `area`: fitted, or zoomed in on the point `zoom`
+/// to one preview pixel per screen pixel (at least twice the fitted size), kept over the box
+/// where it covers it. Returns the rectangle and the point actually at the middle.
+fn preview_rect(area: egui::Rect, size: [usize; 2], ppp: f32, zoom: Option<(f32, f32)>) -> (egui::Rect, Option<(f32, f32)>) {
+    let (w, h) = (size[0].max(1) as f32, size[1].max(1) as f32);
+    let fit = (area.width() / w).min(area.height() / h);
+    let Some((u, v)) = zoom else {
+        return (egui::Rect::from_center_size(area.center(), egui::vec2(w * fit, h * fit)), None);
+    };
+    let s = (1.0 / ppp.max(0.1)).max(fit * 2.0);
+    let img = egui::vec2(w * s, h * s);
+    // the point clicked to the middle, but no gap at an edge where the image covers the box
+    let axis = |t: f32, len: f32, lo: f32, centre: f32, span: f32| -> (f32, f32) {
+        if len <= span {
+            return (centre - len / 2.0, 0.5);
+        }
+        let start = (centre - t.clamp(0.0, 1.0) * len).clamp(lo + span - len, lo);
+        (start, (centre - start) / len)
+    };
+    let (x, u) = axis(u, img.x, area.left(), area.center().x, area.width());
+    let (y, v) = axis(v, img.y, area.top(), area.center().y, area.height());
+    (egui::Rect::from_min_size(egui::pos2(x, y), img), Some((u, v)))
+}
+
+/// Click on the preview: zoom in on the point clicked, or back out; drag pans while zoomed in.
+fn preview_input(app: &mut LightcraftApp, ui: &egui::Ui, resp: &egui::Response, img: egui::Rect) {
+    let zoomed = app.merge.zoom.is_some();
+    if resp.hovered() {
+        let cursor = match (zoomed, resp.dragged()) {
+            (false, _) => egui::CursorIcon::ZoomIn,
+            (true, false) => egui::CursorIcon::Grab,
+            (true, true) => egui::CursorIcon::Grabbing,
+        };
+        ui.ctx().set_cursor_icon(cursor);
+    }
+    if resp.clicked() {
+        app.merge.zoom = if zoomed {
+            None
+        } else {
+            resp.interact_pointer_pos()
+                .map(|q| (((q.x - img.left()) / img.width()).clamp(0.0, 1.0), ((q.y - img.top()) / img.height()).clamp(0.0, 1.0)))
+        };
+    } else if resp.dragged()
+        && let Some((u, v)) = app.merge.zoom
+    {
+        let d = resp.drag_delta();
+        app.merge.zoom = Some((u - d.x / img.width(), v - d.y / img.height()));
+    }
+}
+
 /// The dialog body (options on the left, preview on the right).
 pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut MergeDialog) {
     let t = crate::theme::Tokens::get(ui.ctx());
@@ -363,13 +417,15 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut MergeDialog) 
         // preview
         ui.vertical(|ui| {
             let box_size = egui::vec2(520.0, 360.0);
-            let (rect, _) = ui.allocate_exact_size(box_size, egui::Sense::hover());
+            let (rect, resp) = ui.allocate_exact_size(box_size, egui::Sense::click_and_drag());
             ui.painter().rect_filled(rect, 4.0, t.canvas);
             crate::widgets::register(ui.ctx(), "merge.preview", rect);
             if let Some((tex, size, _, _)) = &app.merge.preview {
-                let s = (box_size.x / size[0] as f32).min(box_size.y / size[1] as f32);
-                let r = egui::Rect::from_center_size(rect.center(), egui::vec2(size[0] as f32 * s, size[1] as f32 * s));
-                ui.painter().image(tex.id(), r, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
+                let (tex, size) = (tex.id(), *size);
+                let (r, zoom) = preview_rect(rect, size, ui.ctx().pixels_per_point(), app.merge.zoom);
+                app.merge.zoom = zoom;
+                ui.painter_at(rect).image(tex, r, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
+                preview_input(app, ui, &resp, r);
             }
             if let Some(task) = &app.merge.preview_task {
                 let (f, stage) = task.progress.lock().map(|g| g.clone()).unwrap_or_default();
@@ -487,6 +543,46 @@ fn num(ui: &mut egui::Ui, spec: &lightcraft_develop::ControlSpec, v: &mut f64) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn area() -> egui::Rect {
+        egui::Rect::from_min_size(egui::pos2(100.0, 50.0), egui::vec2(520.0, 360.0))
+    }
+
+    #[test]
+    fn the_preview_fits_until_clicked() {
+        let (r, zoom) = preview_rect(area(), [1024, 683], 1.0, None);
+        assert_eq!(zoom, None);
+        assert!((r.width() - 520.0).abs() < 0.5 && r.height() < 360.0 && (r.center() - area().center()).length() < 0.5, "{r:?}");
+    }
+
+    /// Like Lightroom's: a click zooms in to one preview pixel per screen pixel on the point clicked.
+    #[test]
+    fn a_click_zooms_in_on_the_point_clicked() {
+        // a panorama preview, wide enough that one pixel per pixel is more than twice the fitted size
+        let (r, zoom) = preview_rect(area(), [1600, 1000], 1.0, Some((0.4, 0.55)));
+        assert_eq!(r.size(), egui::vec2(1600.0, 1000.0));
+        let (u, v) = zoom.unwrap();
+        assert!((u - 0.4).abs() < 1e-4 && (v - 0.55).abs() < 1e-4, "{u} {v}");
+        let at = r.min + egui::vec2(r.width() * 0.4, r.height() * 0.55);
+        assert!((at - area().center()).length() < 0.5, "the point clicked is in the middle: {at:?}");
+        // on a Retina screen, one preview pixel per physical pixel, but always at least twice the fitted size
+        let (r, _) = preview_rect(area(), [1024, 683], 2.0, Some((0.5, 0.5)));
+        assert!((r.width() - 1040.0).abs() < 0.5, "{r:?}");
+    }
+
+    /// Zoomed in near a corner (or panned past it), the image still covers the box.
+    #[test]
+    fn a_zoomed_preview_stays_over_the_box() {
+        for p in [(0.0, 0.0), (1.0, 1.0), (-3.0, 7.0)] {
+            let (r, zoom) = preview_rect(area(), [1024, 683], 1.0, Some(p));
+            assert!(r.contains_rect(area()), "{p:?}: {r:?}");
+            let (u, v) = zoom.unwrap();
+            assert!((0.0..=1.0).contains(&u) && (0.0..=1.0).contains(&v), "{p:?}: {u} {v}");
+        }
+        // a wide panorama is shorter than the box: centred up and down
+        let (r, _) = preview_rect(area(), [1024, 120], 1.0, Some((0.9, 0.0)));
+        assert!((r.center().y - area().center().y).abs() < 0.5 && r.left() < area().left() && r.right() >= area().right(), "{r:?}");
+    }
 
     /// Issue #1455: a panorama held to the computer's memory, or to the largest size, says so.
     #[test]

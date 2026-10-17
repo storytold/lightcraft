@@ -8,7 +8,8 @@ All algorithms are our own implementations from published papers (cited in the m
 
 - **App:** select the photos, then *Photo Merge ▸ HDR…* (`Ctrl+H`), *Panorama…* (`Ctrl+M`) or
   *HDR Panorama…* from the photo context menu (or the `dialog.merge*` commands). The dialog previews
-  the merge at ≤ 1024 px and re-runs the preview when an option changes; *Merge* runs the full merge
+  the merge at ≤ 1024 px and re-runs the preview when an option changes; as in Lightroom, a click on the preview
+  zooms in on that point (drag to pan, click again to fit), and it stays there while options change; *Merge* runs the full merge
   in the background (a row in the activity stack shows its progress, with ✕ to stop it). The result is written next to the first photo as
   `<name>-HDR.dng`, `-Pano.dng` or `-HDR-Pano.dng`, imported and selected. *Photo Merge ▸ HDR for Each Bracket Set*
   merges many brackets in one go with the last HDR options: one HDR per stack among the selected photos, then per
