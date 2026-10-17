@@ -234,6 +234,7 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "panel.presets",
             "panel.versions",
             "panel.activity",
+            "view.tasks",
             "panel.info",
             "panel.keywords",
             "---",
@@ -354,6 +355,7 @@ pub fn checked(app: &LightcraftApp, id: &str) -> Option<bool> {
         "view.navigator" => Some(u.navigator),
         "view.layoutImage" => Some(u.layout_image.show && !u.layout_image.path.trim().is_empty()),
         "library.holdView" => Some(app.session.hold_view),
+        "view.tasks" => Some(app.activity_open),
         "view.fullScreenPreview" => Some(u.fullscreen),
         "view.lightsOut" => Some(u.lights_out != crate::state::LightsOut::On),
         "view.enterFullScreen" => Some(app.window_is_fullscreen),
@@ -1529,7 +1531,7 @@ mod tests {
             move || {
                 let _ = rx_unblock.recv();
             },
-            |_app, _ctx, _| {},
+            |_app, _ctx, _| lightcraft_engine::activity::Outcome::default(),
         )
         .unwrap();
         assert!(app.tasks.is_running("Unrelated Long Background Task"));

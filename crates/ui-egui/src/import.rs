@@ -556,6 +556,7 @@ pub fn browse(app: &mut LightcraftApp, path: &str, subfolders: Option<bool>) -> 
 
 /// Collect a finished scan and open the review (called every frame).
 pub fn poll_scan(app: &mut LightcraftApp, ctx: &egui::Context) {
+    use lightcraft_engine::activity::{Ending, Outcome};
     let Some(task) = app.scan.as_ref() else { return };
     ctx.request_repaint_after(std::time::Duration::from_millis(100));
     let out = match task.rx.try_recv() {
@@ -563,7 +564,9 @@ pub fn poll_scan(app: &mut LightcraftApp, ctx: &egui::Context) {
         Err(std::sync::mpsc::TryRecvError::Empty) => {
             if task.guard.is_cancelled() {
                 // ✕: the worker stops at its next file; don't wait for it (a NAS read can take a while)
-                app.scan = None;
+                if let Some(task) = app.scan.take() {
+                    task.guard.finish(Outcome::ended(Ending::Stopped));
+                }
                 return;
             }
             let (total, done) = (task.progress.total.load(Ordering::Relaxed), task.progress.done.load(Ordering::Relaxed));
@@ -573,15 +576,23 @@ pub fn poll_scan(app: &mut LightcraftApp, ctx: &egui::Context) {
             return;
         }
         Err(_) => {
-            app.scan = None;
+            // the worker died (a panic, logged)
+            if let Some(task) = app.scan.take() {
+                task.guard.finish(Outcome::ended(Ending::Died));
+            }
             app.toast(ctx, crate::i18n::tr("Scan failed"));
             return;
         }
     };
     let Some(task) = app.scan.take() else { return };
+    // (a scan another one replaced was let go without a word; one here that was cancelled was stopped by its ✕)
     if task.progress.cancel.load(Ordering::Relaxed) {
+        task.guard.finish(Outcome::ended(Ending::Stopped));
         return;
     }
+    let found_none = out.candidates.is_empty() && !task.browse;
+    task.guard
+        .finish(Outcome { detail: if found_none { crate::i18n::tr("No photos found").to_string() } else { String::new() }, ..Default::default() });
     app.session.import_probes = out.probes;
     if task.browse {
         // records of files gone from the folder (deleted or moved by another app) that nothing was changed on go,
@@ -907,6 +918,8 @@ fn finish(app: &mut LightcraftApp, ctx: &egui::Context, task: ImportTask) {
     } else {
         crate::i18n::tr_format!("Imported {} photo{}", task.imported, plural(task.imported))
     };
+    // what was done is the first line of the row the import leaves; the rest is what needs reading under it
+    let summary = msg.clone();
     if task.restored > 0 && (task.imported > 0 || task.cancelled) {
         msg.push_str(&crate::i18n::tr_format!(" · {} restored from Recently Deleted", task.restored));
     }
@@ -925,6 +938,23 @@ fn finish(app: &mut LightcraftApp, ctx: &egui::Context, task: ImportTask) {
     }
     if task.failed > 0 {
         msg.push_str(&crate::i18n::tr_format!(" · {} not readable", task.failed));
+    }
+    // The import says how it ended in a toast, as ever, and to the activity stack: one that ran long, was stopped
+    // or could not read every file stays in the list under the bell.
+    use lightcraft_engine::activity::{Ending, Outcome};
+    let ending = if task.cancelled {
+        Ending::Stopped
+    } else if task.failed > 0 && task.imported == 0 && task.restored == 0 {
+        Ending::Failed
+    } else if task.failed > 0 || !task.warnings.is_empty() {
+        Ending::Problems
+    } else {
+        Ending::Done
+    };
+    let detail = msg.get(summary.len()..).unwrap_or_default().trim_start_matches(" · ").to_string();
+    if let Some(guard) = task.guard {
+        // (which files could not be read is not kept: only how many)
+        guard.finish(Outcome { ending, summary, detail, failed: task.failed, ..Default::default() });
     }
     if task.warnings.is_empty() {
         app.toast(ctx, msg);
