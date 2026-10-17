@@ -1,5 +1,16 @@
 # What's new in LightCraft
 
+## 2026-10-16
+
+### Importing into a large library keeps the window responsive
+- While an import or Synchronize Folder adds photos to a large library, the sidebar's counts (Folders, By Date,
+  Keywords, All Photos, Picks, Recently Deleted) take in each batch as it lands instead of counting every photo of
+  the library again, which made the window slow and at times unresponsive for as long as the import ran. A change
+  too large to follow, such as opening a library, is counted in the background while the sidebar keeps its counts.
+- The Missing Photos count no longer checks every file of the library after every change. Each file is checked once
+  when the library opens and every five minutes, one at a time, and new photos' files as they come in, so a
+  library on a network share isn't checked over and over.
+
 ## 2026-10-14
 
 ### Lightroom radial masks on the right side

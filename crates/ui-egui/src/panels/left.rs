@@ -613,7 +613,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 title.on_hover_text(l.dir.display().to_string());
             }
         }
-        let counts = app.caches.counts(&app.session.catalog);
+        let library = app.session.library_generation();
+        let counts = app.caches.counts(&app.session.catalog, library);
         let (total, picks, deleted) = (counts.total, counts.picks, counts.deleted);
         egui::ScrollArea::both().id_salt("left-scroll").auto_shrink([false, false]).show_viewport(ui, |ui, viewport| {
             drag_auto_scroll(app, ui);
@@ -639,7 +640,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     let _ = app.run("library.source", json!({"kind": id}));
                 }
             }
-            // photos whose files can't be found (checked every few seconds, not every frame)
+            // photos whose files can't be found (the background checks of each file)
             let missing = missing_count(app, ui);
             if (missing > 0 || src == LibrarySource::Missing)
                 && row(app, ui, "missing", Icon::Folder, "Missing Photos", Some(missing), src == LibrarySource::Missing, 0.0).clicked()
@@ -685,18 +686,18 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                         section(app, ui, s, local.places.places.len(), |app, ui| local_rows(app, ui, local))
                     }
                     SidebarSection::ByDate => {
-                        let rows = app.caches.date_groups(&app.session.catalog).len();
+                        let rows = app.caches.date_groups(&app.session.catalog, library).len();
                         section(app, ui, s, rows, date_rows)
                     }
                     SidebarSection::Folders => {
-                        let tree = app.caches.folder_tree(&app.session.catalog);
+                        let tree = app.caches.folder_tree(&app.session.catalog, library);
                         section(app, ui, s, tree.len(), |app, ui| {
                             reveal_chosen(app, ui, &tree);
                             folder_rows(app, ui, &tree, 0.0);
                         })
                     }
                     SidebarSection::Keywords => {
-                        let tree = app.caches.keyword_tree(&app.session.catalog);
+                        let tree = app.caches.keyword_tree(&app.session.catalog, library);
                         section(app, ui, s, tree.len(), |app, ui| keyword_rows(app, ui, &tree, 0.0))
                     }
                 };
@@ -733,7 +734,7 @@ fn albums_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, reveal: Option<u64>) 
 
 /// By Date: year → month → day; a click filters by that prefix, the triangle opens a level.
 fn date_rows(app: &mut LightcraftApp, ui: &mut egui::Ui) {
-    let groups = app.caches.date_groups(&app.session.catalog);
+    let groups = app.caches.date_groups(&app.session.catalog, app.session.library_generation());
     for g in groups.iter() {
         if date_row(app, ui, &g.year, &crate::i18n::date_group_label(&g.year, true), g.count, 0.0) {
             for (m, n) in &g.months {
@@ -750,43 +751,15 @@ fn date_rows(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 }
 
 /// How many library photos have no file (Local browse records are not checked; see
-/// `cmd::missing::checked_path`). Checking stats every file, which on a network share takes
-/// seconds, so it runs on a worker thread: the count shown is the last finished one, refreshed
-/// at most every 5 s, and at once (after the running check) when the catalog changed.
+/// `Photo::library_file`): what the background checks of the files found ([`crate::Caches::missing_count`]).
+/// Every file is checked when the library opens and every few minutes, one at a time on the
+/// availability worker; the files of photos that come in are checked as they do. On a network
+/// share that is one stream of checks, never a pass over the library per edit.
 fn missing_count(app: &mut LightcraftApp, ui: &mut egui::Ui) -> usize {
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
-    #[derive(Clone, Default)]
-    struct Job {
-        n: std::sync::Arc<AtomicUsize>,
-        running: std::sync::Arc<AtomicBool>,
-        at: f64,
-        rev: u64,
-    }
-    let id = egui::Id::new("missing-count");
-    let now = ui.input(|i| i.time);
-    let rev = app.session.catalog.revision;
-    let mut job: Job = ui.data(|d| d.get_temp(id)).unwrap_or(Job { rev: u64::MAX, at: f64::MIN, ..Default::default() });
-    let fresh = now - job.at < 5.0 && job.rev == rev;
-    if !fresh && !job.running.load(Relaxed) {
-        // the same scope as the Missing Photos view: library photos only, never Local browse records
-        let paths = lightcraft_engine::cmd::missing::candidates(&app.session.catalog);
-        job.running.store(true, Relaxed);
-        job.at = now;
-        job.rev = rev;
-        let (n, running, ctx) = (job.n.clone(), job.running.clone(), ui.ctx().clone());
-        let work = move || {
-            let missing = if cfg!(target_arch = "wasm32") { 0 } else { paths.iter().filter(|p| !std::path::Path::new(p).exists()).count() };
-            n.store(missing, Relaxed);
-            running.store(false, Relaxed);
-            ctx.request_repaint();
-        };
-        #[cfg(not(target_arch = "wasm32"))]
-        std::thread::spawn(work);
-        #[cfg(target_arch = "wasm32")]
-        work();
-        ui.data_mut(|d| d.insert_temp(id, job.clone()));
-    }
-    job.n.load(Relaxed)
+    let (library, now) = (app.session.library_generation(), ui.input(|i| i.time));
+    let s = &app.session;
+    app.caches.check_files(&s.catalog, library, &s.media.availability, now);
+    app.caches.missing_count(&s.catalog, library, &s.media.availability)
 }
 
 /// Local's folders as they stand this frame, and the folder being browsed among them.
@@ -1063,7 +1036,7 @@ fn folder_tree(
     }
     resp.context_menu(|ui| {
         // the library actions of the Folders tree, when this folder (or one inside it) holds library photos
-        let library = app.caches.folder_tree(&app.session.catalog);
+        let library = app.caches.folder_tree(&app.session.catalog, app.session.library_generation());
         let held = library_node_for(&library, path);
         if (transient || indent > 0.0)
             && ui

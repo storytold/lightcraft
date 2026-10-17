@@ -978,8 +978,9 @@ impl Session {
         };
         let view = format!("{}|{rules}", key.1);
         if self.source == LibrarySource::Missing && self.media.availability.is_background() {
-            // the view fills in as the background checks find files gone
-            key.1.push_str(&format!("|{}", self.media.availability.generation()));
+            // the view fills in as the background checks find files gone (a file found there at
+            // its first check changes nothing it shows)
+            key.1.push_str(&format!("|{}", self.media.availability.gone_generation()));
         }
         if self.visible_key.as_ref() != Some(&key) {
             // "in the last N days" rules count back from the session's clock
