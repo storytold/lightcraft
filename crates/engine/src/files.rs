@@ -135,7 +135,7 @@ fn ext_upper(name: &str) -> String {
 /// compressed data that is all there: such a file imports and shows as unreadable when rendered).
 pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
     let content_hash = Some(lightcraft_preview::hash_bytes(bytes).to_string());
-    let m = lightcraft_meta::extract(bytes);
+    let m = file_metadata(bytes);
     let (meta, captured) = meta_of(&m);
     if lightcraft_raw::probe(bytes).is_some() {
         let raw = match lightcraft_raw::probe_info(bytes).map_err(|e| preview_reason(bytes, e)) {
@@ -177,6 +177,7 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
             file_size: bytes.len() as u64,
             captured,
             file_modified: None,
+            captured_is_file_date: false,
             meta,
             as_shot_wb,
             content_hash,
@@ -209,6 +210,7 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
         file_size: bytes.len() as u64,
         captured,
         file_modified: None,
+        captured_is_file_date: false,
         meta,
         as_shot_wb: None,
         content_hash,
@@ -216,6 +218,18 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
         xmp: None,
         preview_only: None,
     })
+}
+
+/// The metadata a file carries ([`lightcraft_meta::extract`]). A HEIF / HEIC file keeps its EXIF and XMP in
+/// items of its container, which the HEIF reader finds (`lightcraft_codecs::heif_metadata`): without it an
+/// iPhone photo had no camera, and its capture time fell back to the file's date.
+fn file_metadata(bytes: &[u8]) -> lightcraft_meta::Metadata {
+    if lightcraft_codecs::sniff(bytes) != Some(lightcraft_codecs::Format::Heif) {
+        return lightcraft_meta::extract(bytes);
+    }
+    // (a file whose metadata can't be read still imports, described by its header)
+    let (exif, xmp) = lightcraft_codecs::heif_metadata(bytes).unwrap_or_default();
+    lightcraft_meta::from_embedded(&lightcraft_meta::Embedded { exif, xmp, ..Default::default() })
 }
 
 /// Why a raw that failed to decode should show its embedded preview instead (`Ok`), or the error

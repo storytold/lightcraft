@@ -922,6 +922,48 @@ fn gps_typed_in_is_saved_to_xmp() {
     assert!(s.catalog.photo(id).unwrap().meta.gps.is_none());
 }
 
+/// A photo with no capture time in the file or its sidecar is dated by the file's modification time, but
+/// that guess is never written to the sidecar as its capture time; a time read from the sidecar later, or
+/// set here, replaces it and is written.
+#[test]
+fn a_file_date_guess_is_never_saved_as_the_capture_time() {
+    let src = temp_dir("file-date");
+    write_png(&src.join("scan.png"), 3);
+    let rated = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="2"/>
+</rdf:RDF></x:xmpmeta>"#;
+    std::fs::write(src.join("scan.xmp"), rated).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    let p = s.catalog.photo(id).unwrap().clone();
+    assert!(p.captured.is_some(), "dated by the file, as Lightroom does");
+    assert_eq!(p.captured_fallback, p.captured);
+    let dates = |src: &Path| {
+        let d = lightcraft_meta::parse_xmp(&std::fs::read_to_string(src.join("scan.xmp")).unwrap()).unwrap();
+        ["exif:DateTimeOriginal", "photoshop:DateCreated"].map(|k| d.properties.get(k).and_then(|v| v.first()).cloned())
+    };
+    s.execute("photo.rate", &json!({"ids": [id.0], "rating": 3})).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    assert_eq!(dates(&src), [None, None], "no capture time is made up");
+    // the sidecar learns the real time elsewhere: reading it replaces the guess
+    std::fs::write(
+        src.join("scan.xmp"),
+        rated.replace(
+            "xmp:Rating=\"2\"",
+            "xmp:Rating=\"2\" xmlns:exif=\"http://ns.adobe.com/exif/1.0/\" exif:DateTimeOriginal=\"2019-07-01T10:20:30\"",
+        ),
+    )
+    .unwrap();
+    s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap().captured.as_deref(), Some("2019-07-01T10:20:30"));
+    // a time set here is the user's, and is written
+    s.execute("photo.setCaptureTime", &json!({"ids": [id.0], "time": "2020-01-02T03:04:05"})).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    assert_eq!(dates(&src), [Some("2020-01-02T03:04:05".to_string()), Some("2020-01-02T03:04:05".to_string())]);
+    let _ = std::fs::remove_dir_all(&src);
+}
+
 /// DNG export compression: lossless, zip and none all decode; none is the biggest.
 #[test]
 fn dng_export_compression_choices() {

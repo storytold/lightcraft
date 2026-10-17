@@ -7,7 +7,8 @@
 //! - [`parse_xmp`] / [`write_xmp`] — XMP packets (interchange fields + the opaque `lc:settings` JSON).
 //! - [`parse_iptc`] — IPTC-IIM record 2 datasets.
 //! - [`parse_gpx`] — GPS track logs (GPX) for geotagging by capture time.
-//! - [`extract`] — all of the above for a whole file (JPEG, PNG, WebP, TIFF/DNG/raw, Canon CR3).
+//! - [`extract`] — all of the above for a whole file (JPEG, PNG, WebP, TIFF/DNG/raw, Canon CR3);
+//!   [`from_embedded`] for blocks found by another container reader (HEIF).
 //! - [`cr3`] — the Canon CR3 container (metadata blocks, XMP, the JPEG and raw tracks).
 #![forbid(unsafe_code)]
 
@@ -280,7 +281,12 @@ impl Metadata {
 /// Read everything we understand from a whole file (JPEG, PNG, WebP, TIFF-based incl. DNG/raw).
 /// Precedence: EXIF, then IPTC fills gaps, then XMP overrides user fields and fills the rest.
 pub fn extract(bytes: &[u8]) -> Metadata {
-    let e = embedded(bytes);
+    from_embedded(&embedded(bytes))
+}
+
+/// [`extract`] for metadata blocks already located (e.g. in a container [`embedded`] doesn't walk,
+/// such as HEIF's items), with the same precedence.
+pub fn from_embedded(e: &Embedded) -> Metadata {
     let mut m = e.exif.as_deref().map(read_exif).unwrap_or_default();
     if let Some(i) = e.iptc.as_deref() {
         m.fill_missing(&parse_iptc(i));

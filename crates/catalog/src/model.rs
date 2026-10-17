@@ -236,6 +236,12 @@ pub struct Photo {
     /// ISO 8601 local capture time.
     #[serde(default)]
     pub captured: Option<String>,
+    /// The file's modification time, when import dated the photo by it because neither the file nor
+    /// its sidecar had a capture time (as Lightroom does). While [`Photo::captured`] is still this
+    /// guess, it is not a capture time anyone stated: it is never written to XMP, and a capture time
+    /// read from a sidecar later replaces it ([`Photo::captured_stated`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub captured_fallback: Option<String>,
     pub imported: String,
     #[serde(default)]
     pub meta: Meta,
@@ -371,6 +377,7 @@ impl Photo {
             height,
             file_size: 0,
             captured: None,
+            captured_fallback: None,
             imported: imported.to_string(),
             meta: Meta::default(),
             rating: 0,
@@ -395,6 +402,11 @@ impl Photo {
             preview_checked: String::new(),
             local_baseline: None,
         }
+    }
+    /// [`Photo::captured`], unless it is still the file-date guess import made
+    /// ([`Photo::captured_fallback`]): a capture time the file, a sidecar or the user stated.
+    pub fn captured_stated(&self) -> Option<&str> {
+        self.captured.as_deref().filter(|c| self.captured_fallback.as_deref() != Some(*c))
     }
     /// Sets [`Photo::preview_only`] as this build decided it, with its stamp.
     pub fn set_preview_only(&mut self, preview_only: Option<String>) {

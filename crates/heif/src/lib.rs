@@ -174,6 +174,19 @@ fn probe_unguarded(bytes: &[u8]) -> Result<Info, Error> {
     })
 }
 
+/// The primary image's EXIF (a TIFF structure, as in [`Decoded::exif`]) and XMP packet, read
+/// from the container alone: no picture is decoded, so cataloguing a photo costs about a
+/// [`probe`]. `(None, None)` for a file that carries neither.
+pub fn read_metadata(bytes: &[u8]) -> Result<(Option<Vec<u8>>, Option<String>), Error> {
+    guarded(|| {
+        let ctx = Context::open(bytes).map_err(|e| match e {
+            heic_rs::Error::MissingBox("meta") => Error::Unsupported(SEQUENCE),
+            e => err(e),
+        })?;
+        Ok(metadata(&ctx))
+    })
+}
+
 /// Decodes the primary image, with its metadata.
 pub fn decode(bytes: &[u8], options: &Options) -> Result<Decoded, Error> {
     guarded(|| decode_unguarded(bytes, options))
@@ -384,7 +397,7 @@ mod tests {
     fn image_sequence_is_unsupported_with_a_clear_message() {
         // An ftyp and nothing else: a HEIF image sequence would have a moov here instead of a meta.
         let bytes = b"\0\0\0\x18ftypmsf1\0\0\0\0msf1hevc";
-        for r in [probe(bytes).map(|_| ()), decode(bytes, &Options::default()).map(|_| ())] {
+        for r in [probe(bytes).map(|_| ()), decode(bytes, &Options::default()).map(|_| ()), read_metadata(bytes).map(|_| ())] {
             assert!(matches!(&r, Err(Error::Unsupported(m)) if m.contains("sequence")), "{r:?}");
         }
     }
@@ -395,6 +408,7 @@ mod tests {
             assert!(probe(bytes).is_err());
             assert!(decode(bytes, &Options::default()).is_err());
             assert!(decode_thumbnail(bytes, 1, &Options::default()).is_err());
+            assert!(read_metadata(bytes).is_err());
         }
     }
 
