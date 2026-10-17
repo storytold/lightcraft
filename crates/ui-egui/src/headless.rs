@@ -2629,12 +2629,14 @@ mod tests {
         h.request("ui.key", json!({"key": "O", "shift": true}), t);
         assert_eq!(h.app.ui.crop_overlay_orient, 1);
         assert_eq!(h.app.ui.mask_overlay, mask_overlay, "O doesn't toggle the mask overlay while cropping");
-        let locked = |h: &Headless| h.app.session.develop_of(h.app.session.active().unwrap()).unwrap().crop.aspect.is_some();
-        assert!(!locked(&h));
-        h.request("ui.key", json!({"key": "A"}), t);
+        // an untouched photo starts locked to its own shape (#991): A unlocks, A again locks
+        let locked = |h: &Headless| h.app.crop_tool_aspect().is_some();
         assert!(locked(&h));
         h.request("ui.key", json!({"key": "A"}), t);
         assert!(!locked(&h));
+        assert_eq!(h.app.ui.crop_default_aspect, Some(json!("free")));
+        h.request("ui.key", json!({"key": "A"}), t);
+        assert!(locked(&h));
         assert!(!h.app.ui.visualize_spots);
     }
 
