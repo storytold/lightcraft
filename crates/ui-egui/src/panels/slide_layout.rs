@@ -8,13 +8,14 @@
 //! by the same composer playback uses; it is requested once the layout has been still for
 //! [`DEBOUNCE`] seconds, so a drag doesn't queue a render per frame.
 
+use crate::check::{Check, check};
 use egui::{Align2, Color32, Rect, Sense, Stroke, pos2, vec2};
 use lightcraft_engine::slide::{Aspect, SlideSettings};
 use lightcraft_engine::slide_template::SlideLook;
 use lightcraft_slideshow::{MARGIN_MAX, SHADOW_OFFSET_MAX, SHADOW_RADIUS_MAX, STROKE_MAX};
 use serde_json::{Value, json};
 
-use super::settings::{check, choices, heading, hint, row};
+use super::settings::{choices, heading, hint, row};
 use crate::LightcraftApp;
 use crate::render::Slot;
 use crate::theme::Tokens;
@@ -71,7 +72,7 @@ fn colour(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, key: &str, value
 /// A checkbox (`check:settings.{id}`) for `key`; true when it is on.
 fn toggle(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, key: &str, value: bool, label: &str) -> bool {
     let mut v = value;
-    if check(ui, &format!("settings.{id}"), &mut v, label) {
+    if check(ui, &format!("settings.{id}"), &mut v, label).changed() {
         set(app, json!({ key: v }));
     }
     v
@@ -129,8 +130,8 @@ pub fn sections(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     }
     let active = app.session.active();
     let mut on = s.background_image.is_some();
-    let r = ui.add_enabled(on || active.is_some(), egui::Checkbox::new(&mut on, crate::i18n::tr("Background image")));
-    register(ui.ctx(), "check:settings.slideshowBackgroundImage", r.rect);
+    let can_toggle = on || active.is_some();
+    let r = Check::new("settings.slideshowBackgroundImage", &mut on, "Background image").enabled(can_toggle).show(ui);
     if r.changed() {
         set(app, json!({"backgroundImage": if on { active.map(|a| a.0) } else { None }}));
     }

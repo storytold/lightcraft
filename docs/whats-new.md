@@ -1,5 +1,16 @@
 # What's new in LightCraft
 
+## 2026-10-16
+
+### Tick boxes, radios and toggle buttons look and work the same everywhere
+- Every tick box and radio button in LightCraft is now drawn the same way in all four themes, with a clear outline
+  when empty, an accent fill and white tick when on, and an accent ring where the keyboard is. Space or Return toggles
+  the one with the keyboard, and screen readers hear each as a checkbox or radio button with its state. A tick box that
+  can't be used now fades and shows why when you hover it.
+- Choices shown as rows of buttons (the Keywording view, Soft Proofing intent, the date picker's precision, About ▸
+  Contributors, the shortcut and keyword set buttons) now use the same toggle button as the rest of the interface. The
+  two gamut warnings in Soft Proofing show a swatch of the colour they paint on the photo.
+
 ## 2026-10-14
 
 ### Lightroom radial masks on the right side

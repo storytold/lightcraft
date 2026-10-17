@@ -657,6 +657,51 @@ pub fn text_button(ui: &mut Ui, id: &str, label: &str, active: bool) -> Response
     resp
 }
 
+/// [`text_button`] in a box `width` wide, for a grid of them or a button of a fixed width: its text
+/// is cut short with … when it does not fit. `label` is drawn as given (the caller translates it;
+/// it may be a name the user chose). Addressable as `button:{id}`.
+pub fn text_button_sized(ui: &mut Ui, id: &str, label: &str, active: bool, width: f32, height: f32) -> Response {
+    let t = Tokens::get(ui.ctx());
+    let (r, resp) = ui.allocate_exact_size(vec2(width, height), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, active, label));
+    register(ui.ctx(), format!("button:{id}"), r);
+    let fill = if active {
+        t.pressed
+    } else if resp.hovered() {
+        t.hover
+    } else {
+        t.button
+    };
+    let p = ui.painter_at(r);
+    p.rect(r, CornerRadius::same(4), fill, Stroke::new(1.0, t.button_border), StrokeKind::Inside);
+    let galley = one_line(&p, label, t.semibold(11.5), t.text, r.width() - 12.0);
+    p.galley(r.center() - galley.size() / 2.0, galley, t.text);
+    resp
+}
+
+/// A square toggle showing a colour swatch (the gamut warnings: the colour the warning paints on
+/// the photo). `name` is the tooltip and what a screen reader says. Addressable as `button:{id}`.
+pub fn swatch_toggle(ui: &mut Ui, id: &str, swatch: Color32, active: bool, name: &str) -> Response {
+    let name = crate::i18n::tr(name);
+    let t = Tokens::get(ui.ctx());
+    let (r, resp) = ui.allocate_exact_size(vec2(24.0, 24.0), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, active, name));
+    register(ui.ctx(), format!("button:{id}"), r);
+    let fill = if active {
+        t.pressed
+    } else if resp.hovered() {
+        t.hover
+    } else {
+        t.button
+    };
+    let p = ui.painter();
+    p.rect(r, CornerRadius::same(4), fill, Stroke::new(1.0, t.button_border), StrokeKind::Inside);
+    let chip = Rect::from_center_size(r.center(), vec2(10.0, 10.0));
+    p.rect_filled(chip, 2.0, swatch);
+    p.rect_stroke(chip, 2.0, Stroke::new(1.0, t.text), StrokeKind::Outside);
+    resp.on_hover_text(name)
+}
+
 /// A segmented control: `labels` share the available width equally, `per_row` per row. Each segment is
 /// addressable as `button:{id}-{key}` (keys parallel to labels). Returns the clicked index.
 pub fn segmented(ui: &mut Ui, id: &str, items: &[(&str, &str)], active: Option<usize>, per_row: usize) -> Option<usize> {

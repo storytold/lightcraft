@@ -7,12 +7,13 @@
 //! preview ([`super::slide_layout::preview`]) to that screen; its Photo / Intro / Ending buttons
 //! pick what it shows ([`preview_shows`]).
 
+use crate::check::check;
 use lightcraft_engine::slide_overlay::{PLATE_SIZE_MAX, SIZE_MIN};
 use lightcraft_engine::slide_title::{TitleContent, TitleScreen};
 use lightcraft_engine::slideshow::{SLIDE_MAX, SLIDE_MIN, Title};
 use serde_json::{Value, json};
 
-use super::settings::{check, choices, heading, hint, row};
+use super::settings::{choices, heading, hint, row};
 use crate::LightcraftApp;
 use crate::text_field::TextField;
 use crate::theme::Tokens;
@@ -110,7 +111,7 @@ fn screen(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, title: Title, 
         Title::Ending => ("slideshowEnding", "settingsSlideshowEndingContent", "Ending screen"),
     };
     let mut on = s.enabled;
-    if check(ui, &format!("settings.{name}"), &mut on, label) {
+    if check(ui, &format!("settings.{name}"), &mut on, label).changed() {
         set(app, ui.ctx(), title, "enabled", json!(on));
     }
     if !on {
@@ -133,7 +134,7 @@ fn screen(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, title: Title, 
     row(ui, t, "Scale", |ui| slider(app, ui, &format!("{name}Scale"), title, "scale", s.scale, SIZE_MIN..=PLATE_SIZE_MAX, 100.0, " %"));
     ui.horizontal(|ui| {
         let mut over = s.override_color;
-        if check(ui, &format!("settings.{name}Override"), &mut over, "Override colour") {
+        if check(ui, &format!("settings.{name}Override"), &mut over, "Override colour").changed() {
             set(app, ui.ctx(), title, "overrideColor", json!(over));
         }
         if over {
@@ -141,7 +142,7 @@ fn screen(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, title: Title, 
         }
     });
     let mut own = s.duration.is_some();
-    if check(ui, &format!("settings.{name}OwnDuration"), &mut own, "Own duration (off: the slide duration)") {
+    if check(ui, &format!("settings.{name}OwnDuration"), &mut own, "Own duration (off: the slide duration)").changed() {
         let d = if own { json!(app.session.slideshow.slide_duration) } else { Value::Null };
         set(app, ui.ctx(), title, "duration", d);
     }

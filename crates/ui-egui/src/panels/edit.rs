@@ -1,6 +1,7 @@
 //! The Edit panel: histogram, Auto/B&W, profile, and the Light / Color / Effects / Detail / Optics
 //! sections, built from the engine's control specs.
 
+use crate::check::{Check, check};
 use egui::epaint::{Mesh, Vertex};
 use egui::{Align2, Color32, Pos2, Rect, RichText, Sense, Stroke, pos2, vec2};
 use lightcraft_catalog::PhotoId;
@@ -196,9 +197,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     if app.session.source_info(id).local_tone.is_some() {
         egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 0, bottom: 10 }).show(ui, |ui| {
             let mut on = d.profile.camera_local_tone;
-            let r = ui.checkbox(&mut on, crate::i18n::tr("Camera local tone mapping"));
-            crate::widgets::register(ui.ctx(), "check:profile.cameraLocalTone", r.rect);
-            if r.on_hover_text(crate::i18n::tr("Apply the local tone mapping stored in the raw (Apple ProRAW), as the camera renders it")).changed() {
+            let tip = "Apply the local tone mapping stored in the raw (Apple ProRAW), as the camera renders it";
+            if Check::new("profile.cameraLocalTone", &mut on, "Camera local tone mapping").tooltip(tip).show(ui).changed() {
                 let _ = app.run("develop.merge", json!({"settings": {"profile": {"camera_local_tone": on}}, "label": "Camera Local Tone Mapping"}));
             }
         });
@@ -367,11 +367,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         let has_lens = app.session.catalog.photo(id).is_some_and(|p| p.embedded_lens.is_some());
         egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 4, bottom: 4 }).show(ui, |ui| {
             let mut ca = d.optics.remove_ca;
-            if ui.checkbox(&mut ca, crate::i18n::tr("Remove Chromatic Aberration")).changed() {
+            if check(ui, "optics.removeCa", &mut ca, "Remove Chromatic Aberration").changed() {
                 let _ = app.run("develop.merge", json!({"settings": {"optics": {"remove_ca": ca}}, "label": "Remove CA"}));
             }
             let mut lp = d.optics.lens_profile;
-            if ui.checkbox(&mut lp, crate::i18n::tr("Enable Lens Corrections")).changed() {
+            if check(ui, "optics.lensProfile", &mut lp, "Enable Lens Corrections").changed() {
                 let _ = app.run("develop.merge", json!({"settings": {"optics": {"lens_profile": lp}}, "label": "Lens Corrections"}));
             }
             if lp && !has_lens {
@@ -783,6 +783,12 @@ fn histogram(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
 
 // ------------------------------------------------------------------------------ soft proofing
 
+/// A gamut warning's linear colour as the colour of its toggle's swatch.
+fn gamut_swatch(c: [f32; 3]) -> Color32 {
+    let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    Color32::from_rgb(q(c[0]), q(c[1]), q(c[2]))
+}
+
 /// The Soft Proofing strip under the histogram: proof profile, gamut warnings, Create Proof Copy.
 fn soft_proofing(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     use lightcraft_engine::pipeline::OutputSpace;
@@ -791,16 +797,17 @@ fn soft_proofing(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         ui.horizontal(|ui| {
             ui.label(RichText::new(crate::i18n::tr("Soft Proofing")).color(t.text).strong());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                // the swatches are the colours the warnings paint on the photo
                 let mut dest = app.ui.proof.dest_warning;
-                let r = ui
-                    .toggle_value(&mut dest, RichText::new("■").color(Color32::from_rgb(255, 40, 40)))
-                    .on_hover_text(crate::i18n::tr("Show destination gamut warning"));
-                register(ui.ctx(), "button:proofDestWarning", r.rect);
+                let swatch = gamut_swatch(lightcraft_pipeline::output::PROOF_DEST_WARNING);
+                if crate::widgets::swatch_toggle(ui, "proofDestWarning", swatch, dest, "Show destination gamut warning").clicked() {
+                    dest = !dest;
+                }
                 let mut disp = app.ui.proof.display_warning;
-                let r2 = ui
-                    .toggle_value(&mut disp, RichText::new("■").color(Color32::from_rgb(40, 90, 255)))
-                    .on_hover_text(crate::i18n::tr("Show display gamut warning"));
-                register(ui.ctx(), "button:proofDisplayWarning", r2.rect);
+                let swatch = gamut_swatch(lightcraft_pipeline::output::PROOF_DISPLAY_WARNING);
+                if crate::widgets::swatch_toggle(ui, "proofDisplayWarning", swatch, disp, "Show display gamut warning").clicked() {
+                    disp = !disp;
+                }
                 if dest != app.ui.proof.dest_warning || disp != app.ui.proof.display_warning {
                     let _ = app.run("view.softProof", json!({"destWarning": dest, "displayWarning": disp}));
                 }
@@ -837,15 +844,14 @@ fn soft_proofing(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 ui.label(RichText::new(crate::i18n::tr("Intent:")).color(t.text_label));
                 use lightcraft_engine::proof::ProofIntent;
                 for (i, label) in [(ProofIntent::Perceptual, "Perceptual"), (ProofIntent::Relative, "Relative")] {
-                    let r = ui.selectable_label(app.ui.proof_intent == i, crate::i18n::tr(label));
-                    register(ui.ctx(), format!("button:proofIntent-{}", i.name()), r.rect);
+                    let r = crate::widgets::text_button(ui, &format!("proofIntent-{}", i.name()), label, app.ui.proof_intent == i);
                     if r.clicked() && app.ui.proof_intent != i {
                         let _ = app.run("view.softProof", json!({"intent": i.name()}));
                     }
                 }
             });
             let mut paper = app.ui.proof_paper_ink;
-            let r = ui.checkbox(&mut paper, crate::i18n::tr("Simulate Paper & Ink"));
+            let r = check(ui, "proofPaperInk", &mut paper, "Simulate Paper & Ink");
             register(ui.ctx(), "button:proofPaperInk", r.rect);
             if r.changed() {
                 let _ = app.run("view.softProof", json!({"paperInk": paper}));
@@ -1402,7 +1408,7 @@ fn point_color(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings) 
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 4, bottom: 8 }).show(ui, |ui| {
         ui.horizontal(|ui| {
             let mut v = app.ui.point_color_visualize;
-            if ui.checkbox(&mut v, crate::i18n::tr("Visualize range")).changed() {
+            if check(ui, "pointColorVisualize", &mut v, "Visualize range").changed() {
                 app.ui.point_color_visualize = v;
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1425,9 +1431,8 @@ fn hdr_row(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings) {
     }
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 4, bottom: 4 }).show(ui, |ui| {
         let mut v = app.ui.hdr_visualize;
-        let r = ui.checkbox(&mut v, "Visualize HDR");
-        register(ui.ctx(), "check:hdrVisualize", r.rect);
-        if r.on_hover_text("Grey below SDR white; yellow, orange, red, magenta up to 1, 2, 3 and over 3 stops above it").changed() {
+        let tip = "Grey below SDR white; yellow, orange, red, magenta up to 1, 2, 3 and over 3 stops above it";
+        if Check::new("hdrVisualize", &mut v, "Visualize HDR").tooltip(tip).show(ui).changed() {
             app.ui.hdr_visualize = v;
         }
     });

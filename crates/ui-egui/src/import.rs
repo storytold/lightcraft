@@ -8,6 +8,7 @@
 //! catalog between frames, with a row and ✕ in the activity stack (issue #345); the whole import is
 //! one undo step.
 
+use crate::check::check;
 use egui::{Align2, Color32, Rect, Sense, Stroke, StrokeKind, Vec2, pos2, vec2};
 use lightcraft_engine::import::{
     ImportCandidate, ImportUprightMode, ImportWarning, ImportWarningCode, ScanInput, ScanOutput, ScanProgress, scan_with,
@@ -1180,8 +1181,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
         }
         if !d.move_files {
             field(ui, "Raw files", |ui| {
-                let r = ui.checkbox(&mut d.dng, crate::i18n::tr("Copy as DNG"));
-                register(ui.ctx(), "check:importDng", r.rect);
+                check(ui, "importDng", &mut d.dng, "Copy as DNG");
             });
         }
         let rename_id = egui::Id::new("import-rename");

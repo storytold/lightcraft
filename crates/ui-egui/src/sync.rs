@@ -4,6 +4,7 @@
 //! the scan the dialog showed (see `lightcraft_engine::sync`). Both the scan and the run show a row in the activity
 //! stack (issue #345); its ✕ stops them like the dialog's Cancel.
 
+use crate::check::Check;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
@@ -149,7 +150,7 @@ pub fn body(app: &LightcraftApp, ui: &mut egui::Ui, dlg: &mut Dialog) {
         return;
     }
     let choice = |ui: &mut egui::Ui, on: &mut bool, n: usize, text: String, widget: &str| {
-        let r = ui.add_enabled(n > 0, egui::Checkbox::new(on, text));
+        let r = Check::new(&format!("sync.{widget}"), on, &text).enabled(n > 0).show(ui);
         crate::widgets::register(ui.ctx(), widget, r.rect);
     };
     let count = |text: &str, n: usize| format!("{} ({n})", crate::i18n::tr(text));

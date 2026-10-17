@@ -1,6 +1,7 @@
 //! The right-hand panel next to the tool strip: Edit, Crop, Remove, Masking, Red Eye, Info,
 //! Keywords, Versions, Activity.
 
+use crate::check::check;
 use egui::{Align2, Rect, Sense, pos2, vec2};
 use lightcraft_catalog::PhotoId;
 use serde_json::json;
@@ -399,7 +400,7 @@ fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         }
         ui.add_space(4.0);
         let mut c = d.geometry.constrain_crop;
-        if ui.checkbox(&mut c, crate::i18n::tr("Constrain Crop")).changed() {
+        if check(ui, "constrainCrop", &mut c, "Constrain Crop").changed() {
             let _ = app.run("develop.merge", json!({"settings": {"geometry": {"constrain_crop": c}}, "label": "Constrain Crop"}));
         }
     });
@@ -504,7 +505,7 @@ fn remove(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     // Visualize Spots (A): a black/white high-pass view that makes dust and specks stand out
     padded(ui, |ui| {
         let mut v = app.ui.visualize_spots;
-        if ui.checkbox(&mut v, crate::i18n::tr("Visualize Spots (A)")).changed() {
+        if check(ui, "visualizeSpots", &mut v, "Visualize Spots (A)").changed() {
             app.ui.visualize_spots = v;
         }
     });
@@ -602,7 +603,7 @@ fn red_eye(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     padded(ui, |ui| {
         if eye.pet {
             let mut on = eye.catchlight.is_some();
-            if ui.checkbox(&mut on, crate::i18n::tr("Add Catchlight")).changed() {
+            if check(ui, "redeyeCatchlight", &mut on, "Add Catchlight").changed() {
                 let _ = app.run("redeye.catchlight", json!({"index": i, "on": on}));
             }
             ui.add_space(4.0);
@@ -1230,12 +1231,11 @@ fn keyword_set(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             let on = chip.is_some_and(|c| c.on_all());
             let some = chip.is_some() && !on;
             let short = format!("{}{}", k.rsplit('|').next().unwrap_or(k), if some { " *" } else { "" });
-            let r = ui
-                .add_sized(
-                    [bw, 22.0],
-                    egui::Button::new(egui::RichText::new(short).size(11.5).color(if on { t.text } else { t.text_label })).selected(on).truncate(),
-                )
-                .on_hover_text(format!("{} — ⌥{}", k.replace('|', " › "), i + 1));
+            let r = crate::widgets::text_button_sized(ui, &format!("kwSetButton-{}", i + 1), &short, on, bw, 22.0).on_hover_text(format!(
+                "{} — ⌥{}",
+                k.replace('|', " › "),
+                i + 1
+            ));
             register(ui.ctx(), format!("kwSet:{}", i + 1), r.rect);
             if on {
                 register(ui.ctx(), format!("kwSetOn:{}", i + 1), r.rect);
