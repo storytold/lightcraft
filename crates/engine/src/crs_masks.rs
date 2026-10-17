@@ -99,6 +99,21 @@ fn adjust(c: &XmpValue) -> Value {
     Value::Object(a)
 }
 
+/// The correction's local sliders we have no counterpart for (e.g. `LocalGrain`), when set:
+/// reported, never dropped silently.
+fn unmapped_local(c: &XmpValue) -> Vec<String> {
+    let XmpValue::Struct(m) = c else { return Vec::new() };
+    m.keys()
+        .filter_map(|k| {
+            let field = k.strip_prefix("crs:").filter(|f| f.starts_with("Local"))?;
+            // 100 = "curve saturation unchanged", written with every correction
+            let neutral = if field == "LocalCurveRefineSaturation" { 100.0 } else { 0.0 };
+            let set = num(c, k).is_some_and(|v| v != neutral);
+            (set && !LOCAL.iter().any(|(crs, ..)| *crs == field)).then(|| field.to_string())
+        })
+        .collect()
+}
+
 /// Perceptual lightness 0..1 (how range masks store luminance) → our range scale: log
 /// luminance on −8..+4 EV mapped to 0..1.
 fn lightness_to_range(l: f64) -> f64 {
@@ -214,8 +229,12 @@ fn component(m: &XmpValue, container: &str, aspect: f64) -> Result<Value, String
                 Some("2") => {
                     let q: Vec<f64> = text(r, "crs:LumRange").unwrap_or("0 0 1 1").split_whitespace().filter_map(|v| v.parse().ok()).collect();
                     let [a, b, c, d] = q[..] else { return Err("luminance range".into()) };
+                    // full strength at white (1, the top of their scale) takes in everything brighter: ours
+                    // goes on above scene white, so that end stays open instead of cutting off at 0 EV
+                    let open_top = c >= 1.0;
                     let (a, b, c, d) = (lightness_to_range(a), lightness_to_range(b), lightness_to_range(c), lightness_to_range(d));
-                    json!({"kind": "luminanceRange", "lo": b, "hi": c, "lo_feather": (b - a).max(0.0), "hi_feather": (d - c).max(0.0)})
+                    let (hi, hi_feather) = if open_top { (1.0, 0.0) } else { (c, (d - c).max(0.0)) };
+                    json!({"kind": "luminanceRange", "lo": b, "hi": hi, "lo_feather": (b - a).max(0.0), "hi_feather": hi_feather})
                 }
                 Some("3") => {
                     let q: Vec<f64> = text(r, "crs:DepthRange").unwrap_or("0 0 1 1").split_whitespace().filter_map(|v| v.parse().ok()).collect();
@@ -252,6 +271,7 @@ pub fn masks(values: &Values, aspect: f64) -> (Vec<Value>, Vec<String>) {
             if parts.is_empty() {
                 continue;
             }
+            skipped.extend(unmapped_local(c));
             // brush dabs of one correction are one brush component
             let mut merged: Vec<Value> = Vec::new();
             for p in parts {
@@ -504,6 +524,28 @@ mod tests {
             lightcraft_pipeline::render(&img, &Default::default(), d, &lightcraft_pipeline::RenderRequest::fit(96, 64)).image.data
         };
         assert_ne!(render(&DevelopSettings { light: s.light, ..Default::default() }), render(&s), "the masks change the picture");
+    }
+
+    #[test]
+    fn range_to_white_stays_open_and_unmapped_local_sliders_are_reported() {
+        // written for this test: a highlights range (full from 0.85 up to white) carrying a local slider we lack
+        let x = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
+ <crs:MaskGroupBasedCorrections><rdf:Seq>
+  <rdf:li><rdf:Description crs:What="Correction" crs:LocalClarity2012="-0.3" crs:LocalGrain="0.4" crs:LocalCurveRefineSaturation="100">
+   <crs:CorrectionMasks><rdf:Seq>
+    <rdf:li crs:What="Mask/RangeMask"><crs:CorrectionRangeMask crs:Type="2" crs:LumRange="0.6 0.85 1 1"/></rdf:li>
+   </rdf:Seq></crs:CorrectionMasks>
+  </rdf:Description></rdf:li>
+ </rdf:Seq></crs:MaskGroupBasedCorrections>
+</rdf:Description></rdf:RDF></x:xmpmeta>"#;
+        let d = lightcraft_meta::parse_xmp(x).unwrap();
+        let (partial, unmapped) = crate::crs::to_partial_report(&d.properties, Some(&d.values), crate::crs::Target::Any, 1.5);
+        let s = DevelopSettings::default().merged(&partial).expect("valid settings");
+        let MaskShape::LuminanceRange { hi, hi_feather, .. } = &s.masks[0].components[0].shape else { panic!() };
+        assert_eq!((*hi, *hi_feather), (1.0, 0.0), "brighter than scene white is still in the range");
+        assert_eq!(s.masks[0].adjust.clarity, -30.0);
+        assert_eq!(unmapped, ["Mask: LocalGrain"], "a refine saturation of 100 is neutral, not reported");
     }
 
     #[test]
