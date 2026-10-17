@@ -951,6 +951,28 @@ fn list_subfolders(path: &str) -> Vec<(String, String)> {
     v
 }
 
+/// Whether `path` is a folder, when the file system answers within a moment; `None` when it is slow
+/// to (a network share busy listing, a sleeping NAS): the caller goes on without blocking the window,
+/// and the work that reads the folder finds out. The look goes on in the background meanwhile.
+pub(crate) fn is_dir_quickly(path: &std::path::Path) -> Option<bool> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        Some(path.is_dir())
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let p = path.to_path_buf();
+        std::thread::Builder::new()
+            .name("lc-is-dir".into())
+            .spawn(move || {
+                let _ = tx.send(p.is_dir());
+            })
+            .ok()?;
+        rx.recv_timeout(std::time::Duration::from_millis(150)).ok()
+    }
+}
+
 /// How many [`fs_cached`] answers for `ctx` are being worked out right now. Rows appear (and
 /// the sidebar below them moves) when they land, so the headless driver counts them as pending
 /// work and waits for them before acting on widget positions.
@@ -2141,6 +2163,15 @@ fn keyword_row(app: &mut LightcraftApp, ui: &mut egui::Ui, n: &KeywordNode, id: 
 mod tests {
     use super::local_places;
     use crate::widgets::elide_head;
+
+    /// A file system that answers at once is asked as before: a folder is one, a file or a missing
+    /// path is not (a slow one gives `None`, and opening it goes on without blocking the window).
+    #[test]
+    fn is_dir_quickly_answers_for_a_local_disk() {
+        let dir = std::env::temp_dir();
+        assert_eq!(super::is_dir_quickly(&dir), Some(true));
+        assert_eq!(super::is_dir_quickly(&dir.join("lc-surely-not-here-1f3a")), Some(false));
+    }
 
     /// Width = characters, so a limit of 12 is "12 characters".
     fn fit(text: &str, max: usize) -> String {

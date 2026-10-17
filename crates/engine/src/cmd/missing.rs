@@ -90,10 +90,7 @@ fn stored_hash(p: &Photo) -> Option<&str> {
     p.content_hash.as_deref().map(|h| h.split(':').next().unwrap_or(h)).filter(|h| !h.is_empty())
 }
 
-/// The content hash of the file at `path` (as import computes it), if it can be read.
-fn file_hash(path: &str) -> Option<String> {
-    std::fs::read(path).ok().map(|b| lightcraft_preview::hash_bytes(&b).to_string())
-}
+use crate::hashing::file_hash;
 
 /// An in-scope photo ([`checked_path`]) as Find Missing Photos sees it: its file, the size and
 /// content hash the library knows (0 / `None` = unknown).

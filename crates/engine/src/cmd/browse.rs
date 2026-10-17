@@ -17,7 +17,7 @@ use lightcraft_catalog::{Op, PhotoId, Source};
 use serde_json::{Value, json};
 
 use super::{CommandSpec, always, bad, bool_or, cmd, str_param};
-use crate::import::{ImportMode, ImportOptions, import_with, is_supported};
+use crate::import::{ImportMode, ImportOptions, import_with};
 use crate::{Browse, LibrarySource, Result, Session};
 
 fn browse(s: &mut Session, p: &Value) -> Result<Value> {
@@ -32,20 +32,12 @@ fn browse(s: &mut Session, p: &Value) -> Result<Value> {
     let files: Vec<String> = if subfolders {
         crate::import::expand(std::slice::from_ref(&dir_s), None)
     } else {
-        let mut v: Vec<String> = std::fs::read_dir(&dir)
-            .map_err(|e| bad(C, format!("{path}: {e}")))?
-            .flatten()
-            .map(|e| e.path())
-            .filter(|f| f.is_file() && is_supported(f) && !f.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.')))
-            .map(|f| f.to_string_lossy().to_string())
-            .collect();
-        v.sort();
-        v
+        crate::import::list_folder(&dir).map_err(|e| bad(C, format!("{path}: {e}")))?
     };
     // looking at a folder never brings its deleted photos back (importing the files does)
     let opts = ImportOptions { mode: ImportMode::Add, local: true, on_deleted: crate::import::OnDeleted::Skip, ..Default::default() };
     let report = import_with(s, &files, &opts)?;
-    let forgotten = forget_gone(s, &dir_s, subfolders, &files);
+    let forgotten = s.forget_gone_from(&dir_s, subfolders, &files);
     stamp_browsed(s, &dir_s, &files);
     s.browse = Some(Browse { path: dir_s.clone(), subfolders });
     s.source = LibrarySource::Folder;
@@ -63,10 +55,59 @@ fn browse(s: &mut Session, p: &Value) -> Result<Value> {
 
 impl Session {
     /// Forget the untouched Local records of files gone from the folder `dir` (with its subfolders when
-    /// `subfolders`) that a browse just listed as `files`: what `library.browse` does after reading a folder, for a
-    /// UI that reads it on a worker thread instead. Returns how many went.
+    /// `subfolders`) that a browse just listed as `files`: what `library.browse` does after reading a folder.
+    /// Checks files on disk; a UI reading the folder on a worker thread uses [`Session::gone_check`] there and
+    /// [`Session::forget_gone`] here instead. Returns how many went.
     pub fn forget_gone_from(&mut self, dir: &str, subfolders: bool, files: &[String]) -> usize {
-        forget_gone(self, dir, subfolders, files)
+        let gone = self.gone_check(dir, subfolders).run(files);
+        self.forget_gone(dir, &gone)
+    }
+
+    /// What finding the gone files of the folder `dir` needs, detached from the session so it can run
+    /// on a worker thread: it looks at files on disk, and on a network share each look can take seconds.
+    pub fn gone_check(&self, dir: &str, subfolders: bool) -> GoneCheck {
+        GoneCheck { catalog: self.catalog.clone(), smart: self.media.smart_dir.clone(), dir: dir.to_string(), subfolders }
+    }
+
+    /// Forget `gone` ([`GoneCheck::run`]) but those nothing may forget: changed records and the ones the
+    /// session holds. No file-system access. Returns how many went.
+    pub fn forget_gone(&mut self, dir: &str, gone: &[PhotoId]) -> usize {
+        forget_gone(self, dir, gone)
+    }
+}
+
+/// See [`Session::gone_check`].
+pub struct GoneCheck {
+    catalog: lightcraft_catalog::Catalog,
+    smart: Option<std::path::PathBuf>,
+    dir: String,
+    subfolders: bool,
+}
+
+impl std::fmt::Debug for GoneCheck {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GoneCheck").field("dir", &self.dir).field("subfolders", &self.subfolders).finish()
+    }
+}
+
+impl GoneCheck {
+    /// The Local records in the folder that the listing `files` left out and whose files are no longer on
+    /// disk, with no smart preview left of them either.
+    pub fn run(&self, files: &[String]) -> Vec<PhotoId> {
+        let listed: std::collections::HashSet<&str> = files.iter().map(String::as_str).collect();
+        self.catalog
+            .photos()
+            .filter(|p| p.local && !p.deleted)
+            .filter(|p| match &p.source {
+                // a file left out of the listing is checked on disk: another spelling of its path, or
+                // a listing that missed it, keeps it
+                Source::File { path } => in_folder(path, &self.dir, self.subfolders) && !listed.contains(path.as_str()) && !Path::new(path).exists(),
+                Source::Demo { .. } => false,
+            })
+            // a smart preview may be all that is left of the picture
+            .filter(|p| !self.smart.as_ref().is_some_and(|d| crate::smart::file_path(d, p).exists()))
+            .map(|p| p.id)
+            .collect()
     }
 }
 
@@ -76,24 +117,10 @@ impl Session {
 /// every visit (issue #1392). Records the user changed stay, shown as missing, and so do those
 /// the session holds (selected, edited, in the undo history) or with a smart preview. Returns how
 /// many went.
-fn forget_gone(s: &mut Session, dir: &str, subfolders: bool, files: &[String]) -> usize {
-    let listed: std::collections::HashSet<&str> = files.iter().map(String::as_str).collect();
+fn forget_gone(s: &mut Session, dir: &str, gone: &[PhotoId]) -> usize {
     let held = held(s);
-    let smart = s.media.smart_dir.clone();
-    let gone: Vec<PhotoId> = s
-        .catalog
-        .photos()
-        .filter(|p| p.local && !p.deleted && !held.contains(&p.id))
-        // a smart preview may be all that is left of the picture
-        .filter(|p| !smart.as_ref().is_some_and(|d| crate::smart::file_path(d, p).exists()))
-        .filter(|p| match &p.source {
-            // a file left out of the listing is checked on disk: another spelling of its path, or
-            // a listing that missed it, keeps it
-            Source::File { path } => in_folder(path, dir, subfolders) && !listed.contains(path.as_str()) && !Path::new(path).exists(),
-            Source::Demo { .. } => false,
-        })
-        .map(|p| p.id)
-        .collect();
+    let gone: Vec<PhotoId> =
+        gone.iter().copied().filter(|id| !held.contains(id) && s.catalog.photo(*id).is_some_and(|p| p.local && !p.deleted)).collect();
     if gone.is_empty() {
         return 0;
     }
@@ -229,8 +256,13 @@ fn add_to_library(s: &mut Session, p: &Value) -> Result<Value> {
         return Ok(json!({"added": 0}));
     }
     let n = ids.len();
-    let ops = ids.into_iter().map(|id| Op::SetLocal { id, local: false }).collect();
+    let ops = ids.iter().map(|&id| Op::SetLocal { id, local: false }).collect();
     s.commit("Add to My Photos", Op::Batch { ops })?;
+    // browsing left their content hashes unset (see `crate::hashing`)
+    s.queue_hash(ids);
+    if !s.hash_in_background {
+        s.hash_queued_now();
+    }
     Ok(json!({"added": n}))
 }
 

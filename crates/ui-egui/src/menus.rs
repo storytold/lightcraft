@@ -1068,7 +1068,8 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             let Some(path) = p.get("path").and_then(Value::as_str) else { return Some(Err("local.addRoot needs a path".into())) };
             let abs = std::path::absolute(path).map(|a| a.to_string_lossy().trim_end_matches(['/', '\\']).to_string()).unwrap_or(path.into());
             let abs = if abs.is_empty() { path.to_string() } else { abs };
-            if !std::path::Path::new(&abs).is_dir() {
+            // (a folder on a network share can take seconds to answer: kept, and listed when it does)
+            if crate::panels::left::is_dir_quickly(std::path::Path::new(&abs)) == Some(false) {
                 return Some(Err(format!("{path}: not a folder")));
             }
             use crate::panels::left::same_folder;

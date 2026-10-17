@@ -164,9 +164,167 @@ fn walk(root: &Path, skip: Option<&Path>, limits: Limits, mut keep: impl FnMut(&
     out
 }
 
+/// Folders [`files_in_parallel`] lists at once by default: on a network share each listing is a
+/// round trip of a second or more (an rclone SFTP mount: 0.5–8 s, however few entries), which is
+/// waiting, not work.
+pub const PARALLEL_LISTINGS: usize = 8;
+
+/// The folders still to list (folder, depth) and how many are being listed, for [`files_in_parallel`].
+struct Queue {
+    todo: Vec<(PathBuf, usize)>,
+    busy: usize,
+}
+
+/// [`files_in`] for a folder that may be on a slow (network) share, as browsing it with its
+/// subfolders reads it: up to `threads` folders are listed at once, and each folder's files that
+/// `keep` accepts are handed to `found` (sorted) as soon as that folder has been listed — folders
+/// in the order their listings finish, not path order. The same limits, hidden entries and links as
+/// [`files_in`] (no folder is skipped). Stops before the next folder once `cancel` is set. Returns
+/// whether the walk stopped at a [`Limits`] bound.
+pub fn files_in_parallel(
+    root: &Path,
+    limits: Limits,
+    threads: usize,
+    keep: impl Fn(&Path) -> bool + Sync,
+    cancel: &std::sync::atomic::AtomicBool,
+    found: impl Fn(Vec<PathBuf>) + Sync,
+) -> bool {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
+    use std::sync::{Condvar, Mutex, PoisonError};
+    let queue = Mutex::new(Queue { todo: vec![(root.to_path_buf(), 0)], busy: 0 });
+    let changed = Condvar::new();
+    let linked: Mutex<HashSet<PathBuf>> = Mutex::new(std::fs::canonicalize(root).into_iter().collect());
+    let entries = AtomicUsize::new(0);
+    let truncated = AtomicBool::new(false);
+    // one folder's files (kept) and subfolders
+    let list = |dir: &Path| -> (Vec<PathBuf>, Vec<PathBuf>) {
+        let (mut files, mut subs) = (Vec::new(), Vec::new());
+        let Ok(rd) = std::fs::read_dir(dir) else { return (files, subs) };
+        for e in rd.flatten() {
+            if entries.fetch_add(1, Relaxed) >= limits.max_entries {
+                truncated.store(true, Relaxed);
+                break;
+            }
+            let p = e.path();
+            if hidden(&p) {
+                continue;
+            }
+            let Ok(ft) = e.file_type() else { continue };
+            let is_dir = if ft.is_symlink() {
+                // a link (or a Windows junction): a folder is entered once, a file is a file
+                match std::fs::metadata(&p) {
+                    Ok(m) if m.is_dir() => {
+                        let Ok(c) = std::fs::canonicalize(&p) else { continue };
+                        if !linked.lock().unwrap_or_else(PoisonError::into_inner).insert(c) {
+                            continue;
+                        }
+                        true
+                    }
+                    _ => false,
+                }
+            } else {
+                ft.is_dir()
+            };
+            if is_dir {
+                subs.push(p);
+            } else if keep(&p) {
+                files.push(p);
+            }
+        }
+        files.sort();
+        (files, subs)
+    };
+    let work = || {
+        loop {
+            // the next folder, or the end: nothing left and nobody listing (who could add more)
+            let (dir, depth) = {
+                let mut q = queue.lock().unwrap_or_else(PoisonError::into_inner);
+                loop {
+                    if cancel.load(Relaxed) {
+                        return;
+                    }
+                    if let Some(next) = q.todo.pop() {
+                        q.busy += 1;
+                        break next;
+                    }
+                    if q.busy == 0 {
+                        changed.notify_all();
+                        return;
+                    }
+                    // (woken when a listing ends; the timeout notices `cancel`)
+                    q = changed.wait_timeout(q, std::time::Duration::from_millis(100)).unwrap_or_else(PoisonError::into_inner).0;
+                }
+            };
+            let subs = if depth >= limits.max_depth {
+                truncated.store(true, Relaxed);
+                Vec::new()
+            } else {
+                let (files, subs) = list(&dir);
+                if !files.is_empty() {
+                    found(files);
+                }
+                subs
+            };
+            let mut q = queue.lock().unwrap_or_else(PoisonError::into_inner);
+            q.todo.extend(subs.into_iter().map(|s| (s, depth.saturating_add(1))));
+            q.busy = q.busy.saturating_sub(1);
+            changed.notify_all();
+        }
+    };
+    std::thread::scope(|s| {
+        for _ in 1..threads.max(1) {
+            s.spawn(work);
+        }
+        work();
+    });
+    truncated.load(Relaxed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A parallel walk finds what a walk finds (the same files; the same limit and link rules),
+    /// handing over each folder's files once, and stops when cancelled.
+    #[test]
+    fn a_parallel_walk_finds_what_a_walk_finds() {
+        let root = tmp("parallel");
+        for d in ["a/b/c", "d", "e/.hidden"] {
+            std::fs::create_dir_all(root.join(d)).unwrap();
+        }
+        for f in ["1.jpg", "a/2.jpg", "a/b/3.jpg", "a/b/c/4.jpg", "d/5.jpg", "e/.hidden/6.jpg", ".7.jpg", "a/8.txt"] {
+            std::fs::write(root.join(f), b"x").unwrap();
+        }
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(root.join("a"), root.join("d/link-to-a")).unwrap();
+        let keep = |p: &Path| p.extension().is_some_and(|e| e == "jpg");
+        let walk_all = |limits: Limits, threads: usize| {
+            let got = std::sync::Mutex::new(Vec::new());
+            let calls = std::sync::atomic::AtomicUsize::new(0);
+            let truncated = files_in_parallel(&root, limits, threads, keep, &std::sync::atomic::AtomicBool::new(false), |files| {
+                calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                got.lock().unwrap().extend(files);
+            });
+            let mut got = got.into_inner().unwrap();
+            got.sort();
+            (got, truncated, calls.into_inner())
+        };
+        for threads in [1, 4] {
+            let (got, truncated, calls) = walk_all(Limits::default(), threads);
+            assert_eq!(got, files_in(&root, None, Limits::default(), keep).files, "{threads} threads");
+            assert!(!truncated);
+            // once per folder with photos: root, a, a/b, a/b/c, d (and, through the link, a, a/b and a/b/c
+            // again, as `files_in` walks them)
+            assert_eq!(calls, if cfg!(unix) { 8 } else { 5 });
+        }
+        let shallow = Limits { max_depth: 2, ..Limits::default() };
+        let (got, truncated, _) = walk_all(shallow, 4);
+        assert_eq!(got, files_in(&root, None, shallow, keep).files);
+        assert!(truncated);
+        let cancelled = std::sync::atomic::AtomicBool::new(true);
+        assert!(!files_in_parallel(&root, Limits::default(), 4, keep, &cancelled, |_| panic!("nothing is listed once cancelled")));
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     fn tmp(tag: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("lc-walk-{tag}-{}", std::process::id()));

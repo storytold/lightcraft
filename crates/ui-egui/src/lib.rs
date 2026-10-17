@@ -17,6 +17,7 @@ pub mod date_picker;
 pub mod docking;
 pub mod export_task;
 mod focus_scan;
+pub mod hashing;
 pub mod headless;
 pub mod i18n;
 pub mod icons;
@@ -484,6 +485,7 @@ impl LightcraftApp {
     pub fn new(mut session: Session, services: Services) -> Self {
         // AI mask requests run on the model's worker; frames apply their results (never wait)
         session.segmenter.background = true;
+        session.hash_in_background = true;
         Self {
             session,
             ui: UiState::default(),
@@ -1113,6 +1115,7 @@ impl LightcraftApp {
         import::tick(self, ctx);
         lightroom_import::tick(self, ctx);
         recheck::tick(self);
+        hashing::tick(self);
         tasks::poll(self, ctx);
         self.preview_build_status(ctx);
         self.save_status(ctx);

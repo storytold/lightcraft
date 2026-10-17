@@ -373,6 +373,48 @@ pub fn is_supported(path: &Path) -> bool {
     path.extension().is_some_and(|e| EXTENSIONS.contains(&e.to_string_lossy().to_lowercase().as_str()))
 }
 
+/// The photos directly in `dir` (no subfolders, no hidden files) as browsing it lists them, sorted.
+/// What an entry is comes from the listing itself: asking the disk about each one is a round trip
+/// per file on a network share (seconds for a folder of a thousand raws); only a link is followed.
+pub fn list_folder(dir: &Path) -> std::io::Result<Vec<String>> {
+    let mut v: Vec<String> = std::fs::read_dir(dir)?
+        .flatten()
+        .filter_map(|e| {
+            let p = e.path();
+            if !is_supported(&p) || p.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.')) {
+                return None;
+            }
+            let file = match e.file_type() {
+                Ok(t) if !t.is_symlink() => t.is_file(),
+                _ => p.is_file(),
+            };
+            file.then(|| p.to_string_lossy().to_string())
+        })
+        .collect();
+    v.sort();
+    Ok(v)
+}
+
+/// List a browsed folder (Local) — its own photos, or with its subfolders — handing them to `found`
+/// as they are found: a folder's photos as soon as that folder is listed, several folders listed at
+/// once ([`crate::walk::files_in_parallel`]). On a network share each listing takes a second or more,
+/// so a tree of hundreds of folders takes minutes; what is found meanwhile can already be shown and
+/// read. Stops early once `cancel` is set.
+pub fn list_browsed(dir: &str, subfolders: bool, cancel: &std::sync::atomic::AtomicBool, found: impl Fn(Vec<String>) + Sync) {
+    if !subfolders {
+        found(list_folder(Path::new(dir)).unwrap_or_default());
+        return;
+    }
+    let limits = crate::walk::Limits::default();
+    let threads = crate::walk::PARALLEL_LISTINGS;
+    let truncated = crate::walk::files_in_parallel(Path::new(dir), limits, threads, is_supported, cancel, |files| {
+        found(files.into_iter().map(|f| f.to_string_lossy().to_string()).collect());
+    });
+    if truncated {
+        log::warn!("browse: stopped looking in {dir} (limits: {} entries, {} folder levels)", limits.max_entries, limits.max_depth);
+    }
+}
+
 /// Expand files and folders (recursively) into supported files. `skip` (e.g. the library folder)
 /// is never descended into. Each folder's walk is bounded ([`crate::walk::Limits::default`]); a
 /// walk that stops at a bound is logged.
@@ -760,7 +802,11 @@ pub fn import_with(s: &mut Session, paths: &[String], opts: &ImportOptions) -> c
     let prepared = job.prepare(paths, &std::sync::atomic::AtomicBool::new(false));
     // probes a scan left for files not imported now stay for a later import
     s.import_probes.extend(std::mem::take(&mut job.cache));
-    commit_prepared(s, &job.opts, &job.now, prepared)
+    let report = commit_prepared(s, &job.opts, &job.now, prepared)?;
+    if !s.hash_in_background {
+        s.hash_queued_now();
+    }
+    Ok(report)
 }
 
 /// Everything the file-system half of an import needs, detached from the session so it can run
@@ -921,6 +967,8 @@ impl ImportJob {
             return Err(crate::EngineError::Other("copying or moving needs a destination folder or an open library".into()));
         }
         let fresh = opts.on_deleted == OnDeleted::Fresh;
+        // browsing reads only what describes a file (a network share holds thousands of raws)
+        let probe = if opts.local { s.media.file_probe_light.clone().or_else(|| s.media.file_probe.clone()) } else { s.media.file_probe.clone() };
         Ok(ImportJob {
             seq: opts.rename_start.max(1),
             opts,
@@ -930,7 +978,7 @@ impl ImportJob {
             library: Some((s.catalog.clone(), fresh)),
             by_path: HashMap::new(),
             by_hash: HashMap::new(),
-            probe: s.media.file_probe.clone(),
+            probe,
             file_bytes: s.media.file_bytes.clone(),
             cache: std::mem::take(&mut s.import_probes),
             naming: s.xmp.naming,
@@ -957,6 +1005,13 @@ impl ImportJob {
         let files = expand(paths, self.lib_dir.as_deref());
         self.total.fetch_add(files.len(), std::sync::atomic::Ordering::Relaxed);
         files
+    }
+
+    /// `files` split into those the library already has (by path) and the rest, each in order: a
+    /// browse shows the first at once and reads the others.
+    pub fn split_known(&mut self, files: Vec<String>) -> (Vec<String>, Vec<String>) {
+        self.look_up_library();
+        files.into_iter().partition(|f| self.by_path.contains_key(f.as_str()))
     }
 
     /// When the import started ([`Session::clock`]), for [`commit_prepared`].
@@ -1345,6 +1400,8 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
     let now = now.to_string();
     let mut report = ImportReport { scanned: prepared.scanned, ..Default::default() };
     let mut ops = Vec::new();
+    // browsed (Local) photos imported for real: their content hashes are worked out afterwards
+    let mut promoted = Vec::new();
     // Move: placed at the destination, sources untouched until the records are committed
     let mut placed: Vec<crate::import_move::Placed> = Vec::new();
     // photos added by this batch, by content (a duplicate of a file earlier in the import names it)
@@ -1368,6 +1425,7 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
             PreparedItem::Promote(id) => {
                 if s.catalog.photo(id).is_some_and(|p| p.local) {
                     ops.push(Op::SetLocal { id, local: false });
+                    promoted.push(id);
                 }
                 report.imported.push(id.0);
             }
@@ -1474,6 +1532,7 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
     if !placed.is_empty() {
         finish_moves(s, placed, log0, &mut report);
     }
+    s.queue_hash(promoted);
     Ok(report)
 }
 

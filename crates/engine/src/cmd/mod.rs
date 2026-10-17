@@ -6,7 +6,7 @@
 
 mod activity;
 mod before;
-pub(crate) mod browse;
+pub mod browse;
 mod color;
 pub(crate) mod convert;
 mod cull;
