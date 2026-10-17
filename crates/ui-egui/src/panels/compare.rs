@@ -345,7 +345,7 @@ fn photo_tile(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, slot: Slo
     x += 5.0 * 13.0 + 4.0;
     let fr = Rect::from_min_size(pos2(x, cap.center().y - 7.0), vec2(14.0, 14.0));
     match photo.flag {
-        Flag::Pick if fr.right() < cap.right() => paint(pt, fr, Icon::FlagPick, t.pick),
+        Flag::Pick if fr.right() < cap.right() => paint(pt, fr, Icon::FlagPickFilled, t.pick),
         Flag::Reject if fr.right() < cap.right() => paint(pt, fr, Icon::FlagReject, t.reject),
         _ => {}
     }
