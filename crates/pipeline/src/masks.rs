@@ -25,6 +25,33 @@ pub enum MatteKind {
     Glasses,
 }
 
+impl MatteKind {
+    /// A stable code for serialization (e.g. a smart preview's stored mattes); never renumber.
+    pub fn code(self) -> u8 {
+        match self {
+            MatteKind::Sky => 0,
+            MatteKind::Person => 1,
+            MatteKind::Skin => 2,
+            MatteKind::Hair => 3,
+            MatteKind::Teeth => 4,
+            MatteKind::Glasses => 5,
+        }
+    }
+
+    /// [`MatteKind::code`]'s inverse (`None` for a code this build doesn't know).
+    pub fn from_code(code: u8) -> Option<Self> {
+        match code {
+            0 => Some(MatteKind::Sky),
+            1 => Some(MatteKind::Person),
+            2 => Some(MatteKind::Skin),
+            3 => Some(MatteKind::Hair),
+            4 => Some(MatteKind::Teeth),
+            5 => Some(MatteKind::Glasses),
+            _ => None,
+        }
+    }
+}
+
 /// Segmentation mattes that came with the source: 0..255 alpha planes, each covering the whole
 /// (EXIF-oriented) source image at its own resolution. Several mattes of one kind (e.g. one per
 /// person) are combined with max.
@@ -54,6 +81,12 @@ impl Mattes {
     /// Memory held (bytes).
     pub fn bytes(&self) -> usize {
         self.mattes.iter().map(|(_, m)| m.data.len()).sum()
+    }
+
+    /// The stored mattes, in insertion order (kind and plane), e.g. for storing them with a
+    /// photo's proxy source.
+    pub fn iter(&self) -> impl Iterator<Item = (MatteKind, &Image<u8>)> {
+        self.mattes.iter().map(|(k, m)| (*k, m))
     }
 
     fn of(&self, kinds: &[MatteKind]) -> Vec<&Image<u8>> {

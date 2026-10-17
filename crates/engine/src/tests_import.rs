@@ -479,6 +479,129 @@ fn smart_previews_stand_in_for_offline_originals() {
     let _ = std::fs::remove_dir_all(&lib);
 }
 
+/// Issue #1534: the decoder facts a render interprets its settings against (a camera colour model,
+/// the file's local tone map, its semantic mattes) must be stored with the smart preview, so an
+/// edit made while the original is offline renders the same picture as the online source instead
+/// of the header-facts fallback.
+#[test]
+fn smart_previews_keep_the_decoder_facts_offline_edits_need() {
+    use lightcraft_develop::{DevelopSettings, LocalAdjustments, Mask, MaskComponent, MaskOp, MaskShape, WbMode};
+    use lightcraft_pipeline::SourceInfo;
+    use lightcraft_pipeline::masks::{MatteKind, Mattes};
+    use lightcraft_raster::Rgb32f;
+
+    // A smooth scene: the proxy's 8-bit sRGB round trip stays within a code step, so a mismatch
+    // left between the offline and the online render is metadata the proxy failed to keep.
+    let pixels = Rgb32f::from_fn(96, 64, |x, y| {
+        let t = ((x * 7 + y * 3) % 96) as f32 / 96.0;
+        [0.02 + t * 1.2, 0.02 + t * 0.6, 0.02 + t * 0.25]
+    });
+    let camera_color = lightcraft_pipeline::CameraColor {
+        tags: lightcraft_raw::ColorData {
+            illuminant: [21, 17],
+            color_matrix: [Some(lightcraft_color::Mat3([[0.9, 0.2, -0.15], [-0.3, 1.25, 0.08], [0.02, -0.12, 0.85]])), None],
+            as_shot_neutral: Some([0.5, 1.0, 0.7]),
+            baseline_exposure: 0.3,
+            ..Default::default()
+        },
+        developed_for: lightcraft_color::Xy { x: 0.32, y: 0.35 },
+    };
+    let mut mattes = Mattes::default();
+    mattes.push(
+        MatteKind::Sky,
+        lightcraft_raster::Image { width: 96, height: 64, data: (0..96 * 64usize).map(|i| if (i % 96) / 24 == 1 { 255 } else { 0 }).collect() },
+    );
+    let local_tone = lightcraft_pipeline::local_tone::LocalTone {
+        map: lightcraft_raw::gaintable::GainTableMap {
+            points_v: 1,
+            points_h: 2,
+            points_n: 1,
+            spacing_v: 1.0,
+            spacing_h: 1.0,
+            origin_v: 0.0,
+            origin_h: 0.0,
+            weights: [1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0, 0.0, 0.0],
+            gamma: 1.0,
+            gains: vec![1.0, 4.0],
+        },
+        placement: lightcraft_raw::gaintable::SourcePlacement { rect: [0.0, 0.0, 1.0, 1.0], orientation: lightcraft_geom::Orientation::Normal },
+    };
+    // the facts differ per case; the rest is the raw source's usual shape
+    let info = |camera_color: Option<lightcraft_pipeline::CameraColor>,
+                local_tone: Option<lightcraft_pipeline::local_tone::LocalTone>,
+                mattes: Option<Mattes>| SourceInfo {
+        raw: true,
+        as_shot_temp: 5200.0,
+        as_shot_tint: 8.0,
+        camera_color: camera_color.map(std::sync::Arc::new),
+        local_tone: local_tone.map(std::sync::Arc::new),
+        mattes: mattes.map(std::sync::Arc::new),
+        ..Default::default()
+    };
+
+    /// Build the proxy of `pixels`+`info`, apply `edit`, then render the proxy's own pixels and
+    /// stored facts online, and the same proxy offline (the original renamed away): how many
+    /// pixels differ. Identical stored pixels and identical edits must render identically; what
+    /// the proxy failed to keep shows up as a difference.
+    fn offline_diff(tag: &str, pixels: &Rgb32f, info: &SourceInfo, edit: DevelopSettings) -> usize {
+        let src = temp_dir(&format!("smartmeta-src-{tag}"));
+        let lib = temp_dir(&format!("smartmeta-lib-{tag}"));
+        write_png(&src.join("a.png"), 3);
+        let mut s = Session::new().with_fs();
+        s.open_library(&lib, false).unwrap();
+        let (p, i) = (pixels.clone(), info.clone());
+        s.media.file_loader = Some(std::sync::Arc::new(move |_path, _max_edge| Ok((p.clone(), i.clone()))));
+        s.execute("library.import", &json!({"paths": [src.join("a.png").to_string_lossy()]})).unwrap();
+        let id = s.active().unwrap();
+        let r = s.execute("library.smartPreviews", &json!({})).unwrap();
+        assert_eq!(r["built"], 1, "{r}");
+        s.set_develop(id, edit, "reproduction").unwrap();
+        let dir = s.media.smart_dir.clone().unwrap();
+        let stored = crate::smart::load(&crate::smart::sharded_file_path(&dir, s.catalog.photo(id).unwrap())).unwrap();
+        let mut online = s.render_job(id, 96, 96, false, true).unwrap();
+        // the proxy's own (post-JPEG) pixels, with the facts the original source had: the offline
+        // render must reach the same picture through the facts the proxy stored
+        online.source = crate::media::SourceRef::Loaded(Box::new(crate::media::DecodedSource::new(stored.image, Some(info.clone()))));
+        let online = online.run().rendered.unwrap().image;
+        // the drive goes away
+        std::fs::rename(&src, src.with_extension("offline")).unwrap();
+        s.media.rendered.clear();
+        s.media.clear_sources();
+        s.media.forget(id);
+        let offline = s.render_now(id, 96, 96).expect("renders from the smart preview").image;
+        assert_eq!(online.data.len(), offline.data.len(), "{tag}: same grid");
+        let differing = online.data.iter().zip(&offline.data).filter(|(a, b)| a != b).count();
+        let _ = std::fs::remove_dir_all(src.with_extension("offline"));
+        let _ = std::fs::remove_dir_all(&lib);
+        differing
+    }
+
+    // a Kelvin white balance is evaluated through the camera's colour model
+    let mut wb = DevelopSettings::default();
+    wb.wb.mode = WbMode::Custom;
+    wb.wb.temp = 3000.0;
+    wb.wb.tint = 20.0;
+    let differing = offline_diff("wb", &pixels, &info(Some(camera_color), None, None), wb);
+    assert_eq!(differing, 0, "the camera colour model is kept offline");
+
+    // an AI mask uses the mattes that came with the file
+    let mut sky = DevelopSettings::default();
+    sky.masks.push(Mask {
+        components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape: MaskShape::Sky }],
+        adjust: LocalAdjustments { exposure: 2.0, ..Default::default() },
+        ..Default::default()
+    });
+    let differing = offline_diff("sky", &pixels, &info(None, None, Some(mattes)), sky);
+    assert_eq!(differing, 0, "the file's mattes are kept offline");
+
+    // Camera local tone mapping reads the file's gain table map
+    let mut tone = DevelopSettings::default();
+    tone.profile.camera_local_tone = true;
+    tone.light.exposure = -3.0;
+    let differing = offline_diff("tone", &pixels, &info(None, Some(local_tone), None), tone);
+    assert_eq!(differing, 0, "the local tone map is kept offline");
+}
+
 /// Issue #106: a smart preview cut short (crash, full drive) counted as built forever and failed
 /// exactly when the original went offline. Writes are atomic now, and a damaged proxy is not
 /// reported as present and is rebuilt.
