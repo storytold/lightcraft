@@ -224,13 +224,24 @@ fn the_preview_pill_keeps_its_word_on_a_short_photo_with_no_marks() {
         preview_checked: "0.5.0".into(),
     };
     h.app.session.catalog.apply(op).unwrap();
-    // no thumbnail yet: the photo is its placeholder, 16:9
+    // no thumbnail: the photo is its placeholder, 16:9. A thumbnail the demo already rendered
+    // would be drawn at the picture's own shape instead (a portrait one leaves the pill no room).
     h.app.renderer.set_offload(Box::new(RenderGate::new(Rc::new(Cell::new(false)))));
+    h.app.renderer.textures.remove(&Slot::Thumb(id));
+    h.app.renderer.textures.remove(&Slot::ThumbQuick(id));
     h.app.ui.view = ViewMode::SquareGrid;
     h.app.ui.thumb_size = 90.0;
-    for _ in 0..10 {
-        h.step();
+    for round in 0..2 {
+        for _ in 0..10 {
+            h.step();
+        }
+        // (a render already under way before the gate lands in the first round: drop it too)
+        if round == 0 {
+            h.app.renderer.textures.remove(&Slot::Thumb(id));
+            h.app.renderer.textures.remove(&Slot::ThumbQuick(id));
+        }
     }
+    assert!(h.app.renderer.thumb(id).is_none(), "the photo is still its placeholder");
     let pill = widget(&h, &format!("badge:previewOnly:{}", id.0)).expect("the pill is drawn");
     assert!(pill.width() > 30.0, "its word is there, not the icon alone: {pill:?}");
 }
