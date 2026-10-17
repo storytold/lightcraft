@@ -140,6 +140,8 @@ mod tests_preview_limit;
 #[cfg(test)]
 mod tests_print;
 #[cfg(test)]
+mod tests_profile_menu;
+#[cfg(test)]
 mod tests_profiles_layout;
 #[cfg(test)]
 mod tests_quit_unsaved;
