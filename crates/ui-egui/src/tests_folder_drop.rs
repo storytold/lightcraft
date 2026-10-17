@@ -50,8 +50,13 @@ fn widget(h: &Headless, id: &str) -> Option<Rect> {
     h.app.widgets.iter().find(|(w, _)| w == id).map(|(_, r)| *r)
 }
 
+/// A folder as the Folders tree names it: `/`-separated on every platform.
+fn tree_path(dir: &Path) -> String {
+    dir.to_string_lossy().replace('\\', "/")
+}
+
 fn folder_row(h: &Headless, dir: &Path) -> Option<Rect> {
-    widget(h, &format!("source:libfolder:{}", dir.to_string_lossy()))
+    widget(h, &format!("source:libfolder:{}", tree_path(dir)))
 }
 
 fn id_of(h: &Headless, file: &str) -> u64 {
@@ -180,7 +185,7 @@ fn photos_already_in_the_folder_stay_put() {
     let (root, trip, home) = folders("here");
     let mut h = app(&[(trip.join("beach.png"), false), (home.join("garden.png"), false)]);
     // open the folder holding both
-    let toggle = widget(&h, &format!("libraryFolderToggle:{}", root.to_string_lossy())).unwrap();
+    let toggle = widget(&h, &format!("libraryFolderToggle:{}", tree_path(&root))).unwrap();
     h.app.synthetic.push(egui::Event::PointerMoved(toggle.center()));
     h.app.synthetic.push(egui::Event::PointerButton {
         pos: toggle.center(),
@@ -284,7 +289,7 @@ fn cancelling_the_question_moves_nothing() {
     let target = if folder_row(&h, &home).is_some() {
         target
     } else {
-        click(&mut h, &format!("libraryFolderToggle:{}", root.to_string_lossy()));
+        click(&mut h, &format!("libraryFolderToggle:{}", tree_path(&root)));
         folder_row(&h, &home).unwrap()
     };
     let undo = h.app.session.undo.len();
@@ -302,7 +307,7 @@ fn dont_ask_again_moves_the_next_drop_at_once() {
     let (root, trip, home) = folders("dont-ask");
     std::fs::copy(trip.join("beach.png"), trip.join("dunes.png")).unwrap();
     let mut h = app(&[(trip.join("beach.png"), false), (trip.join("dunes.png"), false), (home.join("garden.png"), false)]);
-    click(&mut h, &format!("libraryFolderToggle:{}", root.to_string_lossy()));
+    click(&mut h, &format!("libraryFolderToggle:{}", tree_path(&root)));
     let target = folder_row(&h, &home).unwrap();
     let beach = id_of(&h, "beach.png");
     h.app.session.selection = lightcraft_engine::Selection::single(lightcraft_catalog::PhotoId(beach));
@@ -327,7 +332,7 @@ fn dont_ask_again_moves_the_next_drop_at_once() {
 fn a_question_left_open_while_another_library_opens_moves_nothing() {
     let (root, trip, home) = folders("other-library");
     let mut h = app(&[(trip.join("beach.png"), false), (home.join("garden.png"), false)]);
-    click(&mut h, &format!("libraryFolderToggle:{}", root.to_string_lossy()));
+    click(&mut h, &format!("libraryFolderToggle:{}", tree_path(&root)));
     let beach = id_of(&h, "beach.png");
     let target = folder_row(&h, &home).unwrap();
     drop_beach(&mut h, beach, target);
