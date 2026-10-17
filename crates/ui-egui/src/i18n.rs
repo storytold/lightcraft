@@ -437,6 +437,7 @@ pub fn rules_label(rules: &lightcraft_catalog::RuleSet, catalog: &lightcraft_cat
                         Kind::Album => lightcraft_catalog::rules::album_name(value, Some(catalog)),
                         Kind::Choice(_) => value.as_str().map_or_else(|| value.to_string(), |id| choice_text(field, id).to_string()),
                         Kind::Bool => lightcraft_catalog::rules::bool_value(value).map_or_else(|| value.to_string(), |b| bool_text(b).to_string()),
+                        Kind::Area => lightcraft_catalog::rules::GpsArea::parse(value).map_or_else(|_| value.to_string(), |a| a.describe()),
                         _ if matches!(op.as_str(), "inLast" | "notInLast") => format!(
                             "{} {}",
                             value.get("n").unwrap_or(&serde_json::Value::Null),
