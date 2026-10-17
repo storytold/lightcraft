@@ -227,6 +227,7 @@
   "Delete the keyword “{name}”?": "キーワード「{name}」を削除しますか？",
   "It is taken off {count} photo{}, with the keywords below it. Undo brings it back.": "写真{count}枚から下位のキーワードとともに削除されます。取り消すと元に戻ります。{:.0}",
   "Create Keyword Tag Inside “{name}”…": "「{name}」の中にキーワードタグを作成…",
+  "Inside: {names}": "この中: {names}",
   "“{parent}” has a “{name}” already. Merge the two?": "「{parent}」にはすでに「{name}」があります。統合しますか？",
   "There is a “{name}” at the top level already. Merge the two?": "最上位にはすでに「{name}」があります。統合しますか？",
   "Added “{keyword}” to {n} photo{}": "写真{n}枚に「{keyword}」を追加しました{:.0}",

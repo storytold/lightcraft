@@ -223,6 +223,14 @@
   on the top bar it comes back zoomed. The other way round, a window you drag out until it is as wide as the
   screen and nearly as tall counts as zoomed.
 - For scripts: a size set with `ui.resize` is remembered like any other, so a script that needs a size sets it.
+### Keyword List: a keyword shows that one inside it is applied
+- In the Keyword List (right panel ▸ Keywords), a keyword whose box is empty now carries a dot in it when the
+  selected photos have a keyword inside it, at any depth: with `Places › Italy › Rome` on a photo, `Places` and
+  `Italy` show the dot and `Rome` the tick. A folded keyword no longer hides that something in it is applied.
+  Resting on the box names what is inside.
+- The tick and the dash are as they were, and are about the keyword itself: all of the selected photos have it, or
+  some do. A keyword the photos have themselves shows that, not the dot. A click on the box still gives the
+  keyword itself to the selected photos.
 
 ### HDR merges keep the lens correction
 - An HDR made with Photo ▸ Photo Merge ▸ HDR now keeps the lens correction the photos carry (Sony's, Panasonic's

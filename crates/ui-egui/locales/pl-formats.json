@@ -284,6 +284,7 @@
   "new, inside {parent}": "new, inside {parent}",
   "Keywords of {n} selected photos": "Keywords of {n} selected photos",
   "Removed “{name}” from {n} photos. Edit ▸ Undo puts it back.": "Removed “{name}” from {n} photos. Edit → Undo puts it back.",
+  "Inside: {names}": "Wewnątrz: {names}",
   "LightCraft stopped unexpectedly: {e}\n\nThe log file has the details: {path}": "LightCraft stopped unexpectedly: {e}\n\nThe log file has the details: {path}",
   "LightCraft stopped unexpectedly: {e}": "LightCraft stopped unexpectedly: {e}",
   "Renames {n} face{} across the library. The files are not changed.": "Renames {n} face{} across the library. The files are not changed.",

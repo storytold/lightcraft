@@ -223,6 +223,7 @@
   "Delete the keyword “{name}”?": "Das Stichwort „{name}“ löschen?",
   "It is taken off {count} photo{}, with the keywords below it. Undo brings it back.": "Es wird von {count} Foto{} entfernt, mit den Stichwörtern darunter. Rückgängig stellt es wieder her.",
   "Create Keyword Tag Inside “{name}”…": "Stichwort in „{name}“ erstellen…",
+  "Inside: {names}": "Darin: {names}",
   "“{parent}” has a “{name}” already. Merge the two?": "„{parent}“ enthält bereits „{name}“. Beide zusammenführen?",
   "There is a “{name}” at the top level already. Merge the two?": "Auf der obersten Ebene gibt es bereits „{name}“. Beide zusammenführen?",
   "Added “{keyword}” to {n} photo{}": "„{keyword}“ zu {n} Foto{} hinzugefügt",

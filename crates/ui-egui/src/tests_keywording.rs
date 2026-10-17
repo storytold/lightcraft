@@ -196,6 +196,38 @@ fn the_active_photo_alone_is_the_selection() {
     assert!(has(&h, "keywordCheck:beach"));
 }
 
+/// Given a selection with a keyword that is inside others, when the Keyword List is shown, then
+/// every keyword above it carries a dot in its box (also folded, where the keyword itself is out
+/// of sight), and its own box is the one that is ticked. A keyword above it that the selection
+/// has itself shows its tick and no dot; a keyword with nothing applied inside shows neither.
+#[test]
+fn a_keyword_shows_that_one_inside_it_is_applied() {
+    let (mut h, ids) = two_selected();
+    ask(&mut h, "engine.execute", json!({"command": "photo.setMeta", "params": {"ids": ids, "addKeywords": ["travel|Italy|Rome"]}}));
+    h.settle(SETTLE);
+    // folded: `travel` is the only row of the three, and says there is something inside
+    assert!(has(&h, "keywordRow:travel") && !has(&h, "keywordRow:travel|Italy"), "folded");
+    assert!(has(&h, "keywordInside:travel"));
+    assert!(!has(&h, "keywordInside:beach") && !has(&h, "keywordInside:Weddings"), "nothing is inside these");
+    // the dot sits in the keyword's own box
+    let rect = |h: &Headless, id: &str| h.app.widgets.iter().find(|(w, _)| w == id).map(|(_, r)| *r).unwrap();
+    assert!(rect(&h, "keywordCheck:travel").contains_rect(rect(&h, "keywordInside:travel")));
+    // opened down to it: each level above has the dot, the keyword itself the tick
+    h.app.ui.keyword_list_open.extend(["travel".to_string(), "travel|italy".to_string()]);
+    h.settle(SETTLE);
+    assert!(has(&h, "keywordInside:travel") && has(&h, "keywordInside:travel|Italy"));
+    assert!(has(&h, "keywordRow:travel|Italy|Rome") && !has(&h, "keywordInside:travel|Italy|Rome"));
+    // a keyword the selection has itself shows its own state: the tick, or the dash when only some photos have it
+    ask(&mut h, "engine.execute", json!({"command": "photo.setMeta", "params": {"ids": ids, "addKeywords": ["travel"]}}));
+    ask(&mut h, "engine.execute", json!({"command": "photo.setMeta", "params": {"ids": [ids[0]], "addKeywords": ["travel|Italy"]}}));
+    h.settle(SETTLE);
+    assert!(!has(&h, "keywordInside:travel") && !has(&h, "keywordInside:travel|Italy"));
+    // with nothing selected nothing is applied, inside or not
+    ask(&mut h, "engine.execute", json!({"command": "library.select", "params": {"ids": []}}));
+    h.settle(SETTLE);
+    assert!(has(&h, "keywordRow:travel") && !h.app.widgets.iter().any(|(w, _)| w.starts_with("keywordInside:")));
+}
+
 /// Esc in the Add keyword box gives back what it held before this edit, as every text field does:
 /// text left there by an earlier edit stays.
 #[test]

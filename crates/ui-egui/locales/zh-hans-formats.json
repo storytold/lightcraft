@@ -227,6 +227,7 @@
   "Delete the keyword “{name}”?": "要删除关键字“{name}”吗？",
   "It is taken off {count} photo{}, with the keywords below it. Undo brings it back.": "将从 {count} 张照片中移除，其下的关键字也一并移除。撤销可恢复。{:.0}",
   "Create Keyword Tag Inside “{name}”…": "在“{name}”中创建关键字标记…",
+  "Inside: {names}": "其中：{names}",
   "“{parent}” has a “{name}” already. Merge the two?": "“{parent}”中已有“{name}”。要合并两者吗？",
   "There is a “{name}” at the top level already. Merge the two?": "顶层已有“{name}”。要合并两者吗？",
   "Added “{keyword}” to {n} photo{}": "已将“{keyword}”添加到 {n} 张照片{:.0}",

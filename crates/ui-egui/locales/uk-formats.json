@@ -223,6 +223,7 @@
   "Delete the keyword “{name}”?": "Видалити ключове слово «{name}»?",
   "It is taken off {count} photo{}, with the keywords below it. Undo brings it back.": "Його буде знято з фото (кількість: {count}{:.0}) разом із вкладеними ключовими словами. Скасування поверне його.",
   "Create Keyword Tag Inside “{name}”…": "Створити ключове слово в «{name}»…",
+  "Inside: {names}": "Усередині: {names}",
   "“{parent}” has a “{name}” already. Merge the two?": "«{parent}» уже містить «{name}». Об’єднати їх?",
   "There is a “{name}” at the top level already. Merge the two?": "На верхньому рівні вже є «{name}». Об’єднати їх?",
   "Added “{keyword}” to {n} photo{}": "«{keyword}» додано до фото: {n}{:.0}",
