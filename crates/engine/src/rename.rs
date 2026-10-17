@@ -916,7 +916,8 @@ fn plan_rename_core(
 ) -> Vec<RenamePlan> {
     let mut taken: HashSet<String> = HashSet::new(); // lower-case target paths/names claimed in this batch
     let mut out = Vec::new();
-    for (seq, p) in (start..).zip(photos) {
+    for (i, p) in photos.iter().enumerate() {
+        let seq = start.saturating_add(i);
         let want = expand(template, p, seq);
         let (stem, ext) = split_ext(&want);
         let (stem, ext) = (stem.to_string(), ext.to_string());
