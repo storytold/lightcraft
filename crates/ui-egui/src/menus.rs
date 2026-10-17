@@ -2293,6 +2293,11 @@ fn show_in_finder(app: &mut LightcraftApp) -> Result<Value, String> {
 /// file (`format`, `colorSpace`, `bitDepth`) and the editor (`app`). PhotoCraft is checked first,
 /// so a missing editor leaves no copy behind.
 fn edit_in(app: &mut LightcraftApp, ctx: &egui::Context, p: &Value, photocraft: bool) -> Result<Value, String> {
+    // every way in (menu, shortcut, context menu, the control channel) says why nothing opened
+    edit_in_inner(app, ctx, p, photocraft).inspect_err(|e| app.toast(ctx, crate::i18n::tr_format!("Couldn't open the editor: {e}", e = e)))
+}
+
+fn edit_in_inner(app: &mut LightcraftApp, ctx: &egui::Context, p: &Value, photocraft: bool) -> Result<Value, String> {
     let settings = &app.ui.settings;
     let (file, configured) = if photocraft {
         let path = settings.photocraft_path.trim();
@@ -2301,11 +2306,8 @@ fn edit_in(app: &mut LightcraftApp, ctx: &egui::Context, p: &Value, photocraft: 
         (settings.external_file, settings.external_editor.clone())
     };
     let editor = p.get("app").and_then(Value::as_str).map_or(configured, str::to_string);
-    if let Some(check) = app.services.check_editor.as_ref()
-        && let Err(e) = check(&editor)
-    {
-        app.toast(ctx, e.clone());
-        return Err(e);
+    if let Some(check) = app.services.check_editor.as_ref() {
+        check(&editor)?;
     }
     let mut params = file.params();
     if let (Some(o), Some(given)) = (params.as_object_mut(), p.as_object()) {
@@ -2328,9 +2330,11 @@ fn edit_in(app: &mut LightcraftApp, ctx: &egui::Context, p: &Value, photocraft: 
             failed = Some(e);
         }
     }
-    match (failed, copies.as_slice()) {
-        (Some(e), _) => app.toast(ctx, crate::i18n::tr_format!("Couldn't open the editor: {e}", e = e)),
-        (None, [(path, _)]) => {
+    if let Some(e) = failed {
+        return Err(e);
+    }
+    match copies.as_slice() {
+        [(path, _)] => {
             let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
             app.toast(ctx, crate::i18n::tr_format!("{name} opened for editing; it is stacked with the original", name = name));
         }
