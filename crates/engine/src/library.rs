@@ -4,6 +4,7 @@
 //! ```text
 //! LightCraft Library/
 //!   catalog.snap   catalog.log      (lightcraft-catalog journal)
+//!   segments/      (the snapshot's photos: JSON files that catalog.snap lists)
 //!   presets.json   view.json        (user presets + favourites; last source/sort/selection)
 //!   prefs.json     (library preferences: XMP sidecars, import defaults, cache size, last export)
 //!   thumbs/        (rendered thumbnail cache, safe to delete)
@@ -75,8 +76,8 @@ pub struct Library {
     /// cached in `thumbs/`.
     pub on_disk: bool,
     journal: Journal,
-    /// presets.json, view.json, prefs.json.
-    files: Box<dyn Store>,
+    /// The library's own files beside the catalog ([`SettingsFile`]).
+    pub(crate) files: Box<dyn Store>,
     /// What happened when the catalog was loaded.
     pub report: LoadReport,
     /// Last persistence error (shown by the UI; ops stay pending and are retried).
@@ -102,13 +103,88 @@ pub struct Library {
     lock: Option<LibraryLock>,
 }
 
+/// One of the library's own files beside the catalog: what it remembers that is not in the
+/// catalog. This is the one list of them. A file the library writes there is a file its backups
+/// take along (`cmd::backup`) and the browser build reads at start-up, so the library's file
+/// store writes no file that is not here ([`Listed`]): add a variant, and both follow.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SettingsFile {
+    /// User presets and favourites.
+    Presets,
+    /// What the library shows: source, sort, filter.
+    View,
+    /// Preferences that belong to the library.
+    Prefs,
+}
+
+impl SettingsFile {
+    pub const ALL: [SettingsFile; 3] = [SettingsFile::Presets, SettingsFile::View, SettingsFile::Prefs];
+
+    pub const fn name(self) -> &'static str {
+        match self {
+            SettingsFile::Presets => "presets.json",
+            SettingsFile::View => "view.json",
+            SettingsFile::Prefs => "prefs.json",
+        }
+    }
+}
+
+/// The names of [`SettingsFile::ALL`].
+pub const SETTINGS_FILES: [&str; 3] = [SettingsFile::Presets.name(), SettingsFile::View.name(), SettingsFile::Prefs.name()];
+
+const PRESETS: &str = SettingsFile::Presets.name();
+const VIEW: &str = SettingsFile::View.name();
+const PREFS: &str = SettingsFile::Prefs.name();
+
+/// The library's file store, writing only the files the library lists ([`SettingsFile`]), and
+/// one of those set aside under its own name (`prefs.json.corrupt-…`).
+struct Listed(Box<dyn Store>);
+
+impl Listed {
+    fn check(name: &str) -> std::io::Result<()> {
+        let listed = SETTINGS_FILES.iter().any(|file| name.strip_prefix(file).is_some_and(|rest| rest.is_empty() || rest.starts_with('.')));
+        if listed {
+            return Ok(());
+        }
+        Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{name} is not one of the library's files: list it in library::SettingsFile, so that backups take it along"),
+        ))
+    }
+}
+
+impl Store for Listed {
+    fn read(&mut self, name: &str) -> std::io::Result<Option<Vec<u8>>> {
+        self.0.read(name)
+    }
+    fn write_atomic(&mut self, name: &str, data: &[u8]) -> std::io::Result<()> {
+        Listed::check(name)?;
+        self.0.write_atomic(name, data)
+    }
+    fn append(&mut self, name: &str, data: &[u8]) -> std::io::Result<()> {
+        Listed::check(name)?;
+        self.0.append(name, data)
+    }
+    fn truncate(&mut self, name: &str, len: u64) -> std::io::Result<()> {
+        Listed::check(name)?;
+        self.0.truncate(name, len)
+    }
+    fn remove(&mut self, name: &str) -> std::io::Result<()> {
+        Listed::check(name)?;
+        self.0.remove(name)
+    }
+    fn describe(&self) -> String {
+        self.0.describe()
+    }
+}
+
 /// Where a library's files live (see [`Session::open_library_in`]).
 pub struct LibraryStores {
     /// Shown as the library's location (`library.info`).
     pub dir: PathBuf,
     /// The catalog journal (`catalog.snap`, `catalog.log`).
     pub catalog: Box<dyn Store>,
-    /// presets.json, view.json, prefs.json.
+    /// The library's own files beside the catalog ([`SettingsFile`]).
     pub files: Box<dyn Store>,
     /// `dir` is a real directory (enables `Originals/` copies and the `thumbs/` disk cache).
     pub on_disk: bool,
@@ -204,6 +280,9 @@ impl Library {
 #[serde(default, rename_all = "camelCase")]
 struct PrefsFile {
     xmp: crate::sidecar::XmpPrefs,
+    /// Where the library's backups go (`library.backupPreferences`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    backup_dir: Option<PathBuf>,
     /// Parameters of the last export (for Export with Previous).
     #[serde(alias = "last_export")]
     last_export: Option<serde_json::Value>,
@@ -302,6 +381,20 @@ struct SettingsLoad {
     warnings: Vec<String>,
     /// Files not to overwrite this session.
     blocked: Vec<&'static str>,
+}
+
+/// What to tell the person when opening the library upgraded it: the files it was are kept
+/// beside it (as large as it was), and are theirs to delete.
+fn kept_note(report: &LoadReport) -> Option<String> {
+    if report.kept.is_empty() {
+        return None;
+    }
+    // (a library whose log was damaged: that log is the other half of what it was)
+    let kept: Vec<&str> = report.kept.iter().chain(&report.damaged).map(String::as_str).collect();
+    Some(format!(
+        "This library was upgraded for this version of LightCraft, and earlier versions can't open it now. The library as it was is kept beside it as {}: delete it once the earlier version is no longer wanted (docs/catalog-persistence.md, \"Going back to an older version\").",
+        kept.join(" and ")
+    ))
 }
 
 impl SettingsLoad {
@@ -448,7 +541,8 @@ impl Session {
 
     /// Open `stores`; the new library takes `lock` once nothing can fail any more.
     fn open_stores(&mut self, stores: LibraryStores, seed_demo: bool, lock: &mut Option<LibraryLock>) -> Result<()> {
-        let LibraryStores { dir, catalog, mut files, on_disk } = stores;
+        let LibraryStores { dir, catalog, files, on_disk } = stores;
+        let mut files: Box<dyn Store> = Box::new(Listed(files));
         self.media.smart_dir = on_disk.then(|| crate::smart::dir(&dir));
         // the current library may be these same files: let its background snapshot land first
         if let Some(old) = self.library.as_mut()
@@ -463,6 +557,10 @@ impl Session {
         #[cfg(not(target_arch = "wasm32"))]
         self.faces.library_changed();
         let (mut journal, mut catalog, report) = Journal::open(catalog)?;
+        if lock.is_some() {
+            // (only with the library's lock: see `Journal::remove_unlisted_segments`)
+            journal.remove_unlisted_segments();
+        }
         // A loaded catalog counts revisions from 0, like every other one. Caches (sidebar counts,
         // keyword tree, the grid's list…) are keyed on the revision, so give each library loaded
         // in this process its own range: otherwise an empty library opened after one that was
@@ -489,8 +587,9 @@ impl Session {
         }
         let mut settings = SettingsLoad::default();
         // preferences
-        let prefs = settings.read::<PrefsFile>(files.as_mut(), "prefs.json").unwrap_or_default();
+        let prefs = settings.read::<PrefsFile>(files.as_mut(), PREFS).unwrap_or_default();
         self.xmp = prefs.xmp;
+        self.backup_dir = prefs.backup_dir;
         self.last_export = prefs.last_export;
         self.export_presets = prefs.export_presets;
         self.print_templates = prefs.print_templates;
@@ -519,7 +618,7 @@ impl Session {
             self.media.smart_dir = Some(d.clone());
         }
         // presets
-        if let Some(f) = settings.read::<PresetsFile>(files.as_mut(), "presets.json") {
+        if let Some(f) = settings.read::<PresetsFile>(files.as_mut(), PRESETS) {
             for p in &mut self.presets {
                 p.favorite = p.builtin && f.favorites.contains(&p.id) || (!p.builtin && p.favorite);
             }
@@ -534,7 +633,7 @@ impl Session {
             self.profile_recent = f.profile_recent.into_iter().filter(known).take(crate::presets::RECENT_PROFILES).collect();
         }
         // view state
-        if let Some(v) = settings.read::<ViewFile>(files.as_mut(), "view.json") {
+        if let Some(v) = settings.read::<ViewFile>(files.as_mut(), VIEW) {
             self.source = v.source;
             self.browse = v.browse;
             self.library_folder = v.library_folder.filter(|f| !f.trim().is_empty());
@@ -566,6 +665,7 @@ impl Session {
             self.tidy_thumbnail_cache();
         }
         let view_written = self.view_json();
+        let kept = kept_note(&report);
         self.library = Some(Library {
             dir,
             on_disk,
@@ -578,7 +678,7 @@ impl Session {
             forgot_local: None,
             presets_saved,
             view_written,
-            settings_warnings: unlocked_warning(lock.as_ref()).into_iter().chain(settings.warnings).collect(),
+            settings_warnings: unlocked_warning(lock.as_ref()).into_iter().chain(kept).chain(settings.warnings).collect(),
             warnings_reported: 0,
             blocked: settings.blocked,
             lock: lock.take(),
@@ -638,7 +738,7 @@ impl Session {
             log::error!("library: compaction: {e}");
             lib.last_error = Some(format!("compaction: {e}"));
         }
-        let due = self.library.as_ref().is_some_and(|l| l.presets_saved.differs(self) && !l.blocked.contains(&"presets.json"));
+        let due = self.library.as_ref().is_some_and(|l| l.presets_saved.differs(self) && !l.blocked.contains(&PRESETS));
         if !due {
             return Ok(());
         }
@@ -648,7 +748,7 @@ impl Session {
         let Some(lib) = self.library.as_mut() else { return Ok(()) };
         if state.hash == lib.presets_saved.hash {
             lib.presets_saved = state;
-        } else if let Err(e) = lib.files.write_atomic("presets.json", presets.as_bytes()) {
+        } else if let Err(e) = lib.files.write_atomic(PRESETS, presets.as_bytes()) {
             // the state stays stale: the next save tries again
             log::error!("library: presets: {e}");
         } else {
@@ -676,9 +776,11 @@ impl Session {
         lib.unsaved_error.as_deref().filter(|_| !self.pending_log.is_empty()).map(|e| (self.pending_log.len(), e))
     }
 
-    /// Flush everything and write a snapshot (on quit). Ends an open interaction first.
+    /// Flush everything and compact the log into a snapshot (on quit). Ends an open interaction
+    /// first. A large catalog with only a short log keeps the log instead (see
+    /// [`Journal::wants_snapshot_on_close`]): everything is saved, and the next open replays it.
     ///
-    /// The snapshot is written even when appending the queued ops fails: it is a fresh file
+    /// The snapshot is always written when appending the queued ops fails: it is a fresh file
     /// holding everything in memory, so it saves those ops too (the log handle may be the only
     /// thing that's broken). Fails only if nothing could be saved; the ops then stay queued.
     pub fn close_library(&mut self) -> Result<()> {
@@ -691,7 +793,20 @@ impl Session {
         let unlogged = if persisted.is_err() { self.pending_log.len() as u64 } else { 0 };
         let Some(lib) = self.library.as_mut() else { return Ok(()) };
         let before = lib.journal.seq();
-        let snapshot = lib.journal.snapshot_with_unlogged(&self.catalog, unlogged);
+        let saved = unlogged == 0 && persisted.is_ok();
+        if saved {
+            // a compaction that is under way (the save above may have started it) finishes first:
+            // it empties the log, and the catalog isn't written a second time below
+            if let Err(e) = lib.journal.wait() {
+                log::error!("library: compaction: {e}");
+            }
+        }
+        let snapshot = if !saved || lib.journal.wants_snapshot_on_close() {
+            lib.journal.snapshot_with_unlogged(&self.catalog, unlogged)
+        } else {
+            // everything is in the log, which is short: the next open replays it
+            Ok(())
+        };
         if unlogged > 0 && lib.journal.seq() == before + unlogged {
             // the snapshot holds the queued ops: they are saved, never append them again
             log::info!("library: {unlogged} queued change(s) saved in the closing snapshot");
@@ -733,8 +848,8 @@ impl Session {
         }
         let v = self.view_json();
         let Some(lib) = self.library.as_mut() else { return };
-        if v != lib.view_written && !lib.blocked.contains(&"view.json") {
-            match lib.files.write_atomic("view.json", &v) {
+        if v != lib.view_written && !lib.blocked.contains(&VIEW) {
+            match lib.files.write_atomic(VIEW, &v) {
                 Ok(()) => lib.view_written = v,
                 Err(e) => log::error!("library: view: {e}"),
             }
@@ -745,6 +860,7 @@ impl Session {
     pub fn save_prefs(&mut self) -> Result<()> {
         let v = serde_json::to_vec_pretty(&PrefsFile {
             xmp: self.xmp,
+            backup_dir: self.backup_dir.clone(),
             last_export: self.last_export.clone(),
             export_presets: self.export_presets.clone(),
             print_templates: self.print_templates.clone(),
@@ -770,12 +886,12 @@ impl Session {
         })
         .unwrap_or_default();
         let Some(lib) = self.library.as_mut() else { return Ok(()) };
-        if lib.blocked.contains(&"prefs.json") {
+        if lib.blocked.contains(&PREFS) {
             return Err(EngineError::Other(
                 "prefs: prefs.json couldn't be read when the library opened, so it isn't overwritten; reopen the library to save preferences".into(),
             ));
         }
-        lib.files.write_atomic("prefs.json", &v).map_err(|e| EngineError::Other(format!("prefs: {e}")))
+        lib.files.write_atomic(PREFS, &v).map_err(|e| EngineError::Other(format!("prefs: {e}")))
     }
 
     /// Warnings about the open library not handed out yet: its settings files, and a lock that

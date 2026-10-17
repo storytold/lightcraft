@@ -349,6 +349,12 @@ pub struct Session {
     pub slideshow_export: Option<std::sync::Arc<slideshow_export::ExportRun>>,
     /// The last (or running) Build Previews.
     pub preview_build: Option<std::sync::Arc<cmd::previews::PreviewBuild>>,
+    /// The library backup under way, or the last one made (`library.backup`).
+    pub backup: Option<std::sync::Arc<cmd::backup::BackupJob>>,
+    /// Where the library's backups go (a library preference; `None`: Backups in its folder).
+    pub backup_dir: Option<std::path::PathBuf>,
+    /// Holds a backup before it starts reading (tests look at its row meanwhile).
+    pub(crate) backup_hold: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Develop defaults applied on import (persisted in prefs.json).
     pub import_defaults: import::ImportDefaults,
     /// Disk budget of the library's thumbnail cache in MB (0 = default; persisted in prefs.json).
@@ -482,6 +488,9 @@ impl Session {
             activity: Default::default(),
             preview_build: None,
             slideshow_export: None,
+            backup: None,
+            backup_dir: None,
+            backup_hold: Default::default(),
             import_defaults: import::ImportDefaults::default(),
             cache_mb: 0,
             slideshow: slideshow::PlaybackSettings::default(),
@@ -1240,6 +1249,8 @@ mod tests_album_order;
 mod tests_album_remove;
 #[cfg(test)]
 mod tests_albums_local;
+#[cfg(test)]
+mod tests_backup;
 #[cfg(test)]
 mod tests_color;
 #[cfg(test)]

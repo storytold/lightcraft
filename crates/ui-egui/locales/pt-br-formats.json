@@ -271,6 +271,8 @@
   "{name} opened in the other editor": "{name} aberto no outro editor",
   "{n} originals opened in the other editor": "{n} originais abertos no outro editor",
   "· {in_source} identical copies": "· {in_source} cópias idênticas",
+  "Backed up the library to {}": "Backup da biblioteca salvo em {}",
+  "The library was not backed up: {}": "O backup da biblioteca não foi feito: {}",
   "{count} more warnings.": "Mais {count} avisos.",
   "{photos} catalog records processed; {collections} collections.": "{photos} registros do catálogo processados; {collections} coleções.",
   "{missing} originals are missing. Their catalog records are available; use Find Missing Photos to relink them.": "{missing} originais estão ausentes. Seus registros no catálogo estão disponíveis; use Encontrar fotos ausentes para vinculá-los novamente.",

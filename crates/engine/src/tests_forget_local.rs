@@ -198,13 +198,26 @@ fn upgraded_catalogs_forget_nothing_at_first() {
     look_elsewhere(&mut s);
     s.close_library().unwrap();
     drop(s);
-    // strip the times and baselines, as an older version would have written the snapshot
+    // the snapshot as an older version would have written it: one file holding the photos,
+    // without the times and baselines
     let snap = std::fs::read_to_string(lib.join("catalog.snap")).unwrap();
     let mut v: serde_json::Value = serde_json::from_str(&snap).unwrap();
+    let segments = v.as_object_mut().unwrap().remove("segments").unwrap();
+    v.as_object_mut().unwrap().remove("photos");
+    v["version"] = 1.into();
     v["catalog"].as_object_mut().unwrap().remove("browsed");
-    for p in v["catalog"]["photos"].as_object_mut().unwrap().values_mut() {
-        p.as_object_mut().unwrap().remove("local_baseline");
+    let mut photos = serde_json::Map::new();
+    for segment in segments.as_array().unwrap() {
+        let file = lib.join(segment["name"].as_str().unwrap());
+        let held: serde_json::Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+        photos.extend(held["photos"].as_object().unwrap().clone());
+        std::fs::remove_file(file).unwrap();
     }
+    assert_eq!(photos.len(), 1);
+    for p in photos.values_mut() {
+        assert!(p.as_object_mut().unwrap().remove("local_baseline").is_some());
+    }
+    v["catalog"]["photos"] = photos.into();
     std::fs::write(lib.join("catalog.snap"), serde_json::to_vec(&v).unwrap()).unwrap();
     set(&clock, "2027-01-01T10:00:00");
     let s = open(&lib, &clock);

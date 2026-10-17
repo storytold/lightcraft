@@ -243,6 +243,8 @@
   "{} — show their photos": "{} — მისი ფოტოების ჩვენება",
   "· {dups} already in the library": "· უკვე ბიბლიოთეკაშია: {dups}",
   "· {in_source} identical copies": "· იდენტური ასლები: {in_source}",
+  "Backed up the library to {}": "ბიბლიოთეკის სარეზერვო ასლი შეიქმნა: {}",
+  "The library was not backed up: {}": "ბიბლიოთეკის სარეზერვო ასლი ვერ შეიქმნა: {}",
   "· {n} photo{}": "· ფოტო: {n}{:.0}",
   "· {trashed} in Recently Deleted": "· ახლახან წაშლილებში: {trashed}",
   "“{parent}” has a “{name}” already. Merge the two?": "„{parent}“-ში „{name}“ უკვე არსებობს. გაერთიანდეს ორივე?",

@@ -74,6 +74,7 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "@Open Recent Library",
             "file.backupLibrary",
             "file.restoreLibrary",
+            "library.backup",
             "---",
             "dialog.newAlbum",
             "dialog.newFolder",
@@ -294,6 +295,8 @@ fn host_supports(app: &LightcraftApp, id: &str) -> bool {
     match id {
         "file.backupLibrary" => app.services.backup_library.is_some(),
         "file.restoreLibrary" => app.services.restore_library.is_some(),
+        // a library that is a folder on disk is backed up to a folder (the browser's has its own backup, above)
+        "library.backup" => app.session.library.as_ref().is_some_and(|l| l.on_disk),
         "photo.restore" | "photo.deletePermanently" => selection_deleted(app),
         "photo.delete" => !selection_deleted(app),
         // only in an album that holds its photos (not a smart one)
@@ -1141,6 +1144,24 @@ mod tests {
         let all: Vec<MenuNode> = bar.iter().flat_map(|(_, v)| v.clone()).collect();
         let text = serde_json::to_string(&all).unwrap();
         assert!(!text.contains("Add Folder") && !text.contains("\"Add Photos"), "no add-folder wording left in the menus");
+    }
+
+    /// File ▸ Back Up Library is for a library that is a folder on disk: in its menu and
+    /// backing it up; absent where the library has no folder (the browser's has its own backup).
+    #[test]
+    fn back_up_library_is_offered_for_a_library_on_disk() {
+        let all = |app: &LightcraftApp| -> Vec<MenuNode> { menu_bar(app).into_iter().flat_map(|(_, v)| v).collect() };
+        assert!(find(&all(&app()), "library.backup").is_none(), "the demo library has no folder");
+        let dir = std::env::temp_dir().join(format!("lc-menubar-backup-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut session = lightcraft_engine::Session::new();
+        session.open_library(&dir, true).unwrap();
+        let mut on_disk = LightcraftApp::new(session, crate::Services::default());
+        assert!(matches!(find(&all(&on_disk), "library.backup"), Some(MenuNode::Item { enabled: true, .. })));
+        let r = run_item(&mut on_disk, "library.backup", json!({"background": false})).unwrap();
+        assert!(r["error"].is_null() && std::path::Path::new(r["report"]["dir"].as_str().unwrap()).starts_with(dir.join("Backups")), "{r}");
+        drop(on_disk);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Back Up / Restore Library are the browser build's (its library lives in browser storage):
