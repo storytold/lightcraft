@@ -1,42 +1,197 @@
-//! Lens profile corrections from a lens database the user supplies ([`lightcraft_lensdb`]).
+//! Lens profile corrections from a lens database the user supplies ([`lightcraft_lensdb`])
+//! or bundled calibrated lens profiles (Canon EF/RF).
 //!
 //! When a raw carries no lens correction of its own (DNG opcodes, or a camera correction a raw reader converts,
-//! [`crate::files::embedded_lens`]), the lens named in its EXIF is looked up in a lensfun-format database: the
-//! directory in `LIGHTCRAFT_LENSFUN_DIR` (e.g. lensfun's `data/db`, CC-BY-SA, which is never bundled with the app).
+//! [`crate::files::embedded_lens`]), the lens named in its EXIF is looked up in the lens database.
 //! The profile is converted to the same [`lightcraft_develop::EmbeddedLens`] form, so "Enable Profile Corrections", its
-//! amount sliders, the GPU path and DNG export treat both alike. Without the variable nothing changes.
-use std::path::PathBuf;
+//! amount sliders, the GPU path and DNG export treat both alike.
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use lightcraft_develop::EmbeddedLens;
 use lightcraft_lensdb::{LensDb, Shot};
 
+static BUNDLED_CANON_RF: &str = include_str!("../../../assets/lens-profiles/canon-rf.json");
+static BUNDLED_CANON_EF: &str = include_str!("../../../assets/lens-profiles/canon-ef.json");
+
 /// The environment variable naming the lens database directory.
 pub const ENV: &str = "LIGHTCRAFT_LENSFUN_DIR";
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct JsonProfile {
+    maker: String,
+    model: String,
+    mount: Option<String>,
+    #[serde(default = "default_crop")]
+    crop_factor: f64,
+    #[serde(default)]
+    distortion: Vec<JsonDistortion>,
+    #[serde(default)]
+    tca: Vec<JsonTca>,
+}
+
+fn default_crop() -> f64 {
+    1.0
+}
+
+#[derive(serde::Deserialize)]
+struct JsonDistortion {
+    focal: f64,
+    a: f64,
+    b: f64,
+    c: f64,
+}
+
+#[derive(serde::Deserialize)]
+struct JsonTca {
+    focal: f64,
+    vr: f64,
+    vb: f64,
+}
+
+fn to_profile(jp: JsonProfile) -> lightcraft_lensdb::Profile {
+    use lightcraft_lensdb::{Distortion, Tca};
+    let mut distortion: Vec<(f64, Distortion)> = jp
+        .distortion
+        .into_iter()
+        .map(|d| (d.focal, Distortion::PtLens { a: d.a, b: d.b, c: d.c }))
+        .collect();
+    distortion.sort_by(|a, b| a.0.total_cmp(&b.0));
+
+    let mut tca: Vec<(f64, Tca)> = jp
+        .tca
+        .into_iter()
+        .map(|t| (t.focal, Tca::Linear { kr: t.vr, kb: t.vb }))
+        .collect();
+    tca.sort_by(|a, b| a.0.total_cmp(&b.0));
+
+    let mounts = jp.mount.into_iter().collect();
+    let crop_factor = if jp.crop_factor > 0.0 { jp.crop_factor } else { 1.0 };
+
+    lightcraft_lensdb::Profile {
+        maker: jp.maker,
+        models: vec![jp.model],
+        mounts,
+        crop_factor,
+        aspect_ratio: 1.5,
+        rectilinear: true,
+        distortion,
+        tca,
+        vignetting: Vec::new(),
+    }
+}
+
+fn load_bundled(db: &mut LensDb) {
+    if let Ok(rf) = serde_json::from_str::<Vec<JsonProfile>>(BUNDLED_CANON_RF) {
+        db.lenses.extend(rf.into_iter().map(to_profile));
+    }
+    if let Ok(ef) = serde_json::from_str::<Vec<JsonProfile>>(BUNDLED_CANON_EF) {
+        db.lenses.extend(ef.into_iter().map(to_profile));
+    }
+    if let Ok(dir) = std::env::var("LIGHTCRAFT_LENS_PROFILES") {
+        load_json_dir(Path::new(&dir), db);
+    }
+    if let Some(config_dir) = crate::config::config_dir() {
+        load_json_dir(&config_dir.join("lens-profiles"), db);
+    }
+}
+
+fn load_json_dir(dir: &Path, db: &mut LensDb) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().is_some_and(|ext| ext == "json") {
+            if let Ok(bytes) = std::fs::read(&path) {
+                if let Ok(profiles) = serde_json::from_slice::<Vec<JsonProfile>>(&bytes) {
+                    db.lenses.extend(profiles.into_iter().map(to_profile));
+                }
+            }
+        }
+    }
+}
 
 /// The configured database, read once per process; `None` when none is configured or it holds no lenses.
 pub fn database() -> Option<&'static LensDb> {
     static DB: OnceLock<Option<LensDb>> = OnceLock::new();
     DB.get_or_init(|| {
-        let dir = PathBuf::from(std::env::var_os(ENV)?);
-        match LensDb::load_dir(&dir) {
-            Ok((db, errors)) => {
-                for (file, e) in errors {
-                    log::warn!("lens database: skipped {file}: {e}");
+        let mut db = LensDb::default();
+        load_bundled(&mut db);
+        if let Some(dir) = std::env::var_os(ENV) {
+            match LensDb::load_dir(&PathBuf::from(dir)) {
+                Ok((loaded, errors)) => {
+                    for (file, e) in errors {
+                        log::warn!("lens database: skipped {file}: {e}");
+                    }
+                    db.extend(loaded);
                 }
-                (!db.lenses.is_empty()).then_some(db)
-            }
-            Err(e) => {
-                log::warn!("{e}");
-                None
+                Err(e) => {
+                    log::warn!("{e}");
+                }
             }
         }
+        (!db.lenses.is_empty()).then_some(db)
     })
     .as_ref()
 }
 
-/// The database profile for a photo with metadata `m`, for its `w × h` (unoriented, default-cropped) image,
-/// re-expressed after `orientation`. `None` without a database, lens name, focal length or matching profile.
+/// Whether any profile in the database matches `lens_model`.
+pub fn has_lens(lens_model: &str) -> bool {
+    let Some(db) = database() else { return false };
+    db.find_lens(None, lens_model, None).is_some()
+}
+
+/// The matched profile's canonical name if recognized.
+pub fn matched_name(lens_model: &str, camera: &str) -> Option<String> {
+    let db = database()?;
+    let cam = db.find_camera("", camera);
+    let profile = db.find_lens(None, lens_model, cam)?;
+    profile.models.first().cloned().or_else(|| Some(profile.maker.clone()))
+}
+
+/// Resolves an `EmbeddedLens` for a photo, filling in missing distortion or vignette profiles
+/// from the lens database if recognized.
+pub fn resolve_photo_lens(
+    embedded: Option<lightcraft_develop::EmbeddedLens>,
+    lens_name: &str,
+    camera: &str,
+    focal_mm: Option<f32>,
+    aperture: Option<f32>,
+) -> Option<lightcraft_develop::EmbeddedLens> {
+    if lens_name.trim().is_empty() {
+        return embedded;
+    }
+    let db = database();
+    let db_lens = db.and_then(|db| {
+        let cam = db.find_camera("", camera);
+        let profile = db.find_lens(None, lens_name, cam)?;
+        let focal = focal_mm.map(|f| f as f64).unwrap_or(50.0);
+        let shot = Shot {
+            focal,
+            aperture: aperture.map(|a| a as f64),
+            distance: None,
+            crop_factor: cam.map(|c| c.crop_factor),
+            width: 6000.0,
+            height: 4000.0,
+        };
+        profile.correction(&shot)
+    });
+    match (embedded, db_lens) {
+        (Some(mut l), Some(dl)) => {
+            if l.vignette.is_none() {
+                l.vignette = dl.vignette;
+            }
+            if l.warp.is_none() {
+                l.warp = dl.warp;
+            }
+            Some(l)
+        }
+        (Some(l), None) => Some(l),
+        (None, Some(dl)) => Some(dl),
+        (None, None) => None,
+    }
+}
+
 pub fn lookup(db: &LensDb, m: &lightcraft_meta::Metadata, w: f64, h: f64, orientation: lightcraft_geom::Orientation) -> Option<EmbeddedLens> {
     let focal = m.focal_length.filter(|f| f.is_finite() && *f > 0.0)?;
     let camera = db.find_camera(m.make.as_deref().unwrap_or_default(), m.model.as_deref().unwrap_or_default());
@@ -68,13 +223,32 @@ fn frame_crop_factor(camera: Option<f64>, focal: f64, focal_35mm: Option<f64>) -
     }
 }
 
-/// [`crate::files::embedded_lens`], else the database profile ([`lookup`]) for a raw with metadata `meta`.
+/// [`crate::files::embedded_lens`], augmented with the database profile ([`lookup`]) when the raw
+/// lacks distortion or vignette tables of its own (e.g. Canon CR3 files, which embed radial
+/// vignette opcodes but rely on calibrated lens profiles for rectilinear distortion).
 pub fn for_raw(raw: &lightcraft_raw::RawInfo, meta: impl FnOnce() -> lightcraft_meta::Metadata) -> Option<EmbeddedLens> {
-    crate::files::embedded_lens(raw).or_else(|| {
-        let db = database()?;
+    let embedded = crate::files::embedded_lens(raw);
+    if embedded.as_ref().is_some_and(|l| l.warp.is_some() && l.vignette.is_some()) {
+        return embedded;
+    }
+    let db_lens = database().and_then(|db| {
         let (w, h) = raw.developed_size();
         lookup(db, &meta(), w as f64, h as f64, raw.orientation)
-    })
+    });
+    match (embedded, db_lens) {
+        (Some(mut l), Some(dl)) => {
+            if l.warp.is_none() {
+                l.warp = dl.warp;
+            }
+            if l.vignette.is_none() {
+                l.vignette = dl.vignette;
+            }
+            Some(l)
+        }
+        (Some(l), None) => Some(l),
+        (None, Some(dl)) => Some(dl),
+        (None, None) => None,
+    }
 }
 
 #[cfg(test)]
@@ -100,6 +274,13 @@ mod tests {
             f_number: Some(3.5),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn bundled_canon_profiles_are_loaded_and_findable() {
+        assert!(has_lens("Canon RF 70-200mm F2.8L IS USM"));
+        let name = matched_name("RF 70-200mm F2.8L IS USM", "Canon EOS R5");
+        assert!(name.is_some(), "Canon RF 70-200mm profile must be matched: {name:?}");
     }
 
     #[test]

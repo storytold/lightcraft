@@ -1234,11 +1234,18 @@ fn header_info(p: &Photo) -> SourceInfo {
     if p.develops_raw() {
         let relative = p.relative_wb();
         let (temp, tint) = if relative { (6500.0, 0.0) } else { p.as_shot_wb.unwrap_or((5500.0, 0.0)) };
+        let lens = crate::lens_profiles::resolve_photo_lens(
+            p.embedded_lens,
+            &p.meta.lens,
+            &p.meta.camera,
+            p.meta.focal_mm,
+            p.meta.aperture,
+        );
         SourceInfo {
             raw: true,
             as_shot_temp: temp,
             as_shot_tint: tint,
-            lens: p.embedded_lens,
+            lens,
             relative_wb: relative,
             // (a fitted-look raw edited in Kelvin: its camera's matrices give the scale, see `files::WbScaleOf`)
             legacy_relative_wb: p.fitted_look() && !relative,
@@ -1520,12 +1527,19 @@ impl crate::Session {
         // what the window's spots and Auto Mask strokes read must fit in one render: else the
         // caller keeps the whole-frame render (a window alone would come out wrong)
         let p = self.catalog.photo(id)?;
+        let lens = crate::lens_profiles::resolve_photo_lens(
+            p.embedded_lens,
+            &p.meta.lens,
+            &p.meta.camera,
+            p.meta.focal_mm,
+            p.meta.aperture,
+        );
         let frame = lightcraft_pipeline::geometry::Frame::with_lens(
             p.width.max(1) as usize,
             p.height.max(1) as usize,
             &job.settings,
             apply_crop,
-            p.embedded_lens.as_ref(),
+            lens.as_ref(),
         );
         let ppl = frame.px_per_long(full_w);
         lightcraft_pipeline::spots::window_for_reads_checked(&job.settings, &frame, full_w, full_h, ppl, window.clamped(full_w, full_h))?;
@@ -1545,7 +1559,13 @@ impl crate::Session {
     /// The embedded preview of an unedited raw (path, loader), when the app installed a loader.
     fn embedded_of(&self, p: &Photo) -> Option<(String, PreviewLoader)> {
         match (&p.source, &self.media.preview_loader) {
-            (Source::File { path }, Some(l)) if p.kind == MediaKind::Raw && crate::import::has_import_look(p) => Some((path.clone(), l.clone())),
+            (Source::File { path }, Some(l))
+                if p.kind == MediaKind::Raw
+                    && crate::import::has_import_look(p)
+                    && !p.develop.optics.lens_profile =>
+            {
+                Some((path.clone(), l.clone()))
+            }
             _ => None,
         }
     }

@@ -365,7 +365,13 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         ui.add_space(8.0);
     });
     section(app, ui, &d, "optics", "Optics", |app, ui, d| {
-        let has_lens = app.session.catalog.photo(id).is_some_and(|p| p.embedded_lens.is_some());
+        let photo_opt = app.session.catalog.photo(id);
+        let has_lens = photo_opt.is_some_and(|p| {
+            p.embedded_lens.is_some() || lightcraft_engine::lens_profiles::has_lens(&p.meta.lens)
+        });
+        let matched_name = photo_opt.and_then(|p| {
+            lightcraft_engine::lens_profiles::matched_name(&p.meta.lens, &p.meta.camera)
+        });
         egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 4, bottom: 4 }).show(ui, |ui| {
             let mut ca = d.optics.remove_ca;
             if ui.checkbox(&mut ca, crate::i18n::tr("Remove Chromatic Aberration")).changed() {
@@ -375,7 +381,15 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             if ui.checkbox(&mut lp, crate::i18n::tr("Enable Lens Corrections")).changed() {
                 let _ = app.run("develop.merge", json!({"settings": {"optics": {"lens_profile": lp}}, "label": "Lens Corrections"}));
             }
-            if lp && !has_lens {
+            if lp && has_lens {
+                if let Some(name) = &matched_name {
+                    ui.label(
+                        egui::RichText::new(format!("Lens: {name}"))
+                            .size(11.0)
+                            .color(Tokens::get(ui.ctx()).text_dim),
+                    );
+                }
+            } else if lp && !has_lens {
                 ui.label(
                     egui::RichText::new(crate::i18n::tr("No lens data embedded in this file.")).size(11.0).color(Tokens::get(ui.ctx()).text_dim),
                 );
