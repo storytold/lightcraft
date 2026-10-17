@@ -141,7 +141,7 @@ fn white_balance_commands_write_kelvin_on_raws_whose_camera_has_matrices() {
         id
     };
     let kelvin = add(&mut s, "a.arw", "SONY ILCE-7M3", (4986.0, -2.0));
-    let relative = add(&mut s, "b.arw", "SONY ILCE-7M2", (6500.0, 0.0));
+    let relative = add(&mut s, "b.arw", "SONY DSLR-A100", (6500.0, 0.0));
     let dev = |s: &Session, id| (*s.develop_of(id).unwrap()).clone();
     assert_eq!((dev(&s, kelvin).wb.scale, dev(&s, relative).wb.scale), (WbScale::Kelvin, WbScale::Legacy));
 

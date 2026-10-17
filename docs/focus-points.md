@@ -33,7 +33,7 @@ from a supported body have no point and haven't been looked at, LightCraft reads
 (`photo.readFocusPoints`) starts the same job by hand. Photo ▸ Reload from Disk still fills a missing point too, but it
 re-reads and hashes whole files and runs while you wait, so it is for a few photos, not a library.
 
-- **What is opened**: only photos whose stored camera is a supported body (`SONY ILCE-1`, `SONY ILCE-7SM3`), whose
+- **What is opened**: only photos whose stored camera is a supported body (44 Sony bodies, `focus::SONY_MODELS`), whose
   file is an ARW or JPEG, that are in the library and have no point yet. Nothing else is opened.
 - **What is read**: the few kilobytes that hold the focus data, not the file
   (`lightcraft_meta::focus::read_header`). It walks the file's structure as the decoder does — the TIFF header and
@@ -63,8 +63,11 @@ re-reads and hashes whole files and runs while you wait, so it is for a few phot
 
 ## Cameras
 
-Sony first, on bodies whose files have been checked: **ILCE-1 (α1)** and **ILCE-7SM3 (A7S III)**
-(`lightcraft_meta::focus::SONY_MODELS`). Other Sony bodies store the same tags, but a body is added only after its
+Sony first, on the 44 bodies whose files have been checked (`lightcraft_meta::focus::SONY_MODELS`): the ILCE-1 (α1) and
+ILCE-7SM3 (A7S III) first, then every body of the public raw.pixls.us samples that records the focus location: the
+ILCE-1M2, 6100, 6300, 6400 and 6400A, 6500, 6600, 6700, 7C, 7CM2, 7CR, 7M3, 7M4, 7M5, 7RM2, 7RM3 and 7RM3A, 7RM4 and
+7RM4A, 7RM5, 7SM2, 9, 9M2 and 9M3, the ILCA-99M2, the ILME-FX2, FX3 and FX30, the ZV-1, ZV-1M2, ZV-E1, ZV-E10 and
+ZV-E10M2, and the DSC-HX95, HX99, RX0M2, RX100M5A, RX100M6, RX100M7, RX100M7A, RX10M4 and RX1RM3. Other Sony bodies store the same tags, but a body is added only after its
 files are checked, so an unchecked one shows nothing rather than a misleading box. Fujifilm, Canon, Nikon, OM System
 and Panasonic record similar data and are later steps.
 
@@ -90,6 +93,23 @@ stored as `p³ mod 249` (bytes 249–255 unchanged): ExifTool's decoded AFAreaMo
 
 On the α1 files the box sits on the subject: drawn on the embedded previews, it lands on the bird's eye in eye-AF
 shots and follows spot, zone, wide and tracking shots, in portrait and landscape.
+
+The other bodies were checked on the public raw.pixls.us samples (one to six ARWs each, 103 files), the same way:
+every one of the 77 points equals the box ExifTool's FocusLocation and FocusFrameSize give (one of them a portrait,
+EXIF 8; many without a frame, drawn at the default size), and every one of the 26 files without a point is a
+manual-focus shot or a Wide shot at the exact centre by ExifTool's focus modes too. Drawn on the camera JPEGs, one
+file per body, the boxes sit on what the camera focused on: a pigeon on a wall (FX30, Expanded Flexible Spot), a face
+(FX2, Human Eye Tracking), a leaf, a chart patch, a lantern (ZV-E10M2, Wide, off centre). Seven bodies (DSC-HX95,
+DSC-HX99, ILCE-6700, ILCE-7CR, ILCE-7RM2, ILCE-7SM2, ILCE-9M3) only have samples without a point; they read as
+ExifTool reads them and are listed with the others.
+
+Left out:
+
+- bodies that don't record `0x2027` (every NEX, SLT and DSLR-A; the ILCE-3000, 3500, 5000, 5100, 6000 and 6001, QX1,
+  7, 7R, 7S and 7M2; the ILCA-68 and 77M2; the RX100 to RX100 III, RX10, RX1 and RX1R; the UMC-R10C);
+- the DSC-RX0, RX100 IV, RX100 V, RX10 II, RX10 III and RX1R II: they record the location, but their `0x201b` reads 0
+  (Manual) on every sample while the enciphered block says AF-S, and ExifTool doesn't decode that tag for them, so a
+  manual-focus shot can't be told apart. They show no point.
 
 ### When there is no real point
 

@@ -651,6 +651,11 @@ pub struct ColorData {
     /// matrices a Kelvin scale ([`kelvin_presets`]). Not a DNG tag: nothing else reads it.
     #[serde(default)]
     pub kelvin_presets: Option<kelvin_presets::KelvinPresets>,
+    /// The camera's as-shot white-balance multipliers when the data come already balanced by them and
+    /// [`RawImage::wb_multipliers`] is unit (Sony's downsized lossless ARW, linear YCbCr): what a Kelvin scale reads
+    /// as As Shot. Not a DNG tag; the render never applies it.
+    #[serde(default)]
+    pub balanced_as_shot: Option<[f32; 3]>,
 }
 
 /// A decoded raw image.

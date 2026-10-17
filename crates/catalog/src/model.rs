@@ -646,10 +646,15 @@ mod edited_tests {
             ("Canon Canon EOS R7", "CR3", true),
             ("FUJIFILM X-T4", "RAF", false),
             ("ILCE-7M3", "ARW", false),
-            ("SONY ILCE-7M2", "ARW", true),
+            ("SONY ILCE-7M2", "ARW", false),
             ("SONY ILCA-99M2", "ARW", false),
             ("SONY SLT-A33", "ARW", false),
-            ("SONY ILCE-1", "ARW", true),
+            ("SONY ILCE-1", "ARW", false),
+            ("SONY ILCE-1M2", "ARW", false),
+            ("SONY ZV-E10M2", "ARW", false),
+            // the Sony bodies without presets, and a Sony sensor sold under another name
+            ("SONY DSLR-A100", "ARW", true),
+            ("HASSELBLAD Lunar", "ARW", true),
             ("", "ARW", true),
             ("SONY ILCE-7M3", "DNG", false),
         ] {

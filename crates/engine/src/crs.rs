@@ -750,7 +750,7 @@ mod tests {
         assert_eq!(Target::for_file(MediaKind::Raw, "ARW", false, ""), Target::RawRelative);
         assert_eq!(Target::for_file(MediaKind::Raw, "nef", false, "NIKON CORPORATION NIKON D7500"), Target::RawRelative);
         // Lightroom's `fileFormat` name for proprietary raws
-        assert_eq!(Target::for_file(MediaKind::Raw, "RAW", false, "SONY ILCE-7M2"), Target::RawRelative);
+        assert_eq!(Target::for_file(MediaKind::Raw, "RAW", false, "SONY DSLR-A100"), Target::RawRelative);
         assert_eq!(Target::for_file(MediaKind::Raw, "DNG", false, ""), Target::RawAbsolute);
         // a raw shown from its embedded preview develops like a rendered file
         assert_eq!(Target::for_file(MediaKind::Raw, "ARW", true, "SONY ILCE-7M3"), Target::Rendered);
@@ -779,15 +779,15 @@ mod tests {
         let p = props(x);
         let a7m3 = Target::for_file(MediaKind::Raw, "ARW", false, "SONY ILCE-7M3");
         assert_eq!(to_partial(&p, a7m3)["wb"], json!({"mode": "custom", "temp": 4650.0, "tint": 3.0, "scale": "kelvin"}));
-        let a7m2 = Target::for_file(MediaKind::Raw, "ARW", false, "SONY ILCE-7M2");
-        let shifted = to_partial(&p, a7m2);
+        let a100 = Target::for_file(MediaKind::Raw, "ARW", false, "SONY DSLR-A100");
+        let shifted = to_partial(&p, a100);
         assert!(shifted["wb"]["temp"].as_f64().is_some_and(|t| t > 5000.0 && t < 6500.0), "{shifted}");
         assert_eq!(shifted["wb"]["tint"], 4.0);
         assert!(shifted["wb"].get("scale").is_none());
         // without the reference the Kelvin camera still reads it, the other stays As Shot
         let bare = props(&x.replace(r#" crs:AsShotTemperature="5400" crs:AsShotTint="-1""#, ""));
         assert_eq!(to_partial(&bare, a7m3)["wb"]["temp"], 4650.0);
-        assert_eq!(to_partial(&bare, a7m2)["wb"], json!({"mode": "asShot"}));
+        assert_eq!(to_partial(&bare, a100)["wb"], json!({"mode": "asShot"}));
         // a named preset carries no numbers either way
         let daylight = props(&x.replace(r#"crs:WhiteBalance="Custom""#, r#"crs:WhiteBalance="Daylight""#));
         assert_eq!(to_partial(&daylight, a7m3)["wb"], json!({"mode": "daylight"}));

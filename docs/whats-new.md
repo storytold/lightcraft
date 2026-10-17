@@ -1,5 +1,31 @@
 # What's new in LightCraft
 
+## 2026-10-15
+
+### Right As Shot temperature for Sony M and S raws
+- Sony's smaller lossless raws (M and S sizes) showed a wrong As Shot temperature: an α7 IV M raw read 1691 K with a
+  strong tint. They now show the temperature the camera chose, as their full-size raws do. Their look is unchanged.
+
+### Colour for Sony raws whose camera colour can't be matched
+- A Sony raw whose colour can't be matched to its own camera JPEG (a night sky, where almost everything is too dark
+  to compare) no longer opens grey and washed out on cameras without colour data of their own in LightCraft, such as
+  the α1 and α1 II, α6700, the FX series and the older NEX, SLT and α DSLR bodies. Such a photo now starts from
+  another Sony sensor's measured colour: checked against the camera JPEGs of the public samples of 97 Sony models,
+  its colour is about half as far from the camera's. Photos whose colour could be matched look exactly as before.
+
+### Focus points for 44 Sony cameras
+- The focus point (View ▸ Show Focus Point, ⌥F; Toggle Zoom centres on it) now shows for 44 Sony cameras: the α6300
+  to α6700, the α7 III to α7 V, α7R II to α7R V, α7S II, α7C series, the α9 series, the α1 II, the α99 II, the FX2,
+  FX3 and FX30, the ZV series and recent RX compacts, besides the α1 and A7S III it showed for until now. Photos already in a library get their point in the
+  background the next time the library opens. Older bodies that don't record where they focused show none.
+
+### Kelvin white balance for almost every Sony camera
+- The Temperature slider of Sony raws is now in Kelvin, with As Shot at the temperature the camera chose, on every
+  Sony camera from the α DSLR-A200 on (the α1 and α1 II, α6700, α7 II, α7C R, FX3, the ZV and RX series…), as in
+  Lightroom. It used to be a relative scale around As Shot on most of them. The temperature is read from the
+  white-balance presets each raw stores. Edits made before keep their look, and Lightroom's Temperature values
+  carry over when you import a catalog or sidecar.
+
 ## 2026-10-14
 
 ### Lightroom radial masks on the right side

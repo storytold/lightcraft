@@ -804,8 +804,13 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         active_area: Rect::new(0, 0, w, h),
         crop,
         orientation: Orientation::from_exif(ifd0.u16(t::ORIENTATION).unwrap_or(1)),
-        // (linear YCbCr comes white-balanced: its unit multipliers have no place on the presets' curve)
-        color: ColorData { kelvin_presets: if linear_rgb { None } else { sr2().and_then(sr2_kelvin_presets) }, ..Default::default() },
+        // linear YCbCr comes white-balanced: its unit multipliers have no place on the presets' curve, the levels the
+        // camera balanced it with do (they read 1691 K / -190 through the ILCE-7M4's matrices as unit multipliers)
+        color: ColorData {
+            kelvin_presets: sr2().and_then(sr2_kelvin_presets),
+            balanced_as_shot: if linear_rgb { wb } else { None },
+            ..Default::default()
+        },
         // Sony's linear YCbCr already carries as-shot WB. Applying the CFA gains again
         // makes a neutral surface magenta. WB edits remain relative to this as-shot RGB.
         wb_multipliers: if linear_rgb { Some([1.0; 3]) } else { wb },
@@ -848,6 +853,9 @@ mod tests {
         assert!(full.cfa.is_none());
         assert_eq!(full.data.len(), 48);
         assert_eq!(full.wb_multipliers, Some([1.0; 3]));
+        // the levels it was balanced with stay readable for the Kelvin scale's As Shot, in the header too
+        assert_eq!(full.color.balanced_as_shot, Some([2.0, 1.0, 2.0]));
+        assert_eq!(header.color.balanced_as_shot, Some([2.0, 1.0, 2.0]));
         // the YCbCr data sit 512 above the recorded sensor black level; white moves with it
         assert_eq!((full.black.mean(), full.white_at(0)), (1024.0, 16895.0));
         assert_eq!((header.black.mean(), header.white_at(0)), (1024.0, 16895.0));

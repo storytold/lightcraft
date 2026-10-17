@@ -49,7 +49,7 @@ Vendor RGB WB multipliers alone do **not** identify an absolute illuminant witho
 
 **Kelvin through the camera's measured matrices (issue #730).** A raw of a camera in `lightcraft_raw::spectral` (52 bodies: ILCE-7M3, ILCE-7M4, ILCE-7RM3, D850, EOS 5D Mark III…) edits white balance in Kelvin like a DNG, whichever look it got: the matrices read its as-shot multipliers as a temperature and tint (`spectral::as_shot_white_through`, the DNG `AsShotNeutral` reading with the model's `ColorMatrix1/2`) and the Temp slider runs 2000–50000 K with As Shot at that reading. The matrices do nothing else: the colour look stays the file's JPEG fit (or the profile, or the spectral fallback), and the picture is adapted from the as-shot white to the chosen one with Bradford, as every fitted look is — not re-developed in camera space as a DNG is. That keeps one adaptation model per camera whether or not a photo's fit was accepted, and it is what makes the upgrade exact: white balance written on the relative scale before this (no `scale` in the settings' `wb`, `WbScale::Legacy`) renders as the composition of the two Bradford adaptations, which is again one Bradford adaptation (`lightcraft_pipeline::local::legacy_white`), so existing edits are pixel-identical; they are converted to Custom Kelvin values the first time they are edited (`normalize_wb`). The decision is one function on both sides — `lightcraft_catalog::relative_wb_camera(format, camera)` from the catalog's camera string and `files::WbScaleOf` from the file — and a test keeps them in step. A photo imported before this keeps the relative scale's 6500 / 0 as its recorded as-shot white until its file is next decoded for display or reloaded (`Op::SetAsShotWb`, bookkeeping); only the readout waits, not the look. Raws of cameras without measured matrices stay relative, unless their own white-balance presets give the scale (next).
 
-**Kelvin through the camera's white-balance presets.** Sony ARWs store, in the encrypted `SR2SubIFD`, the multipliers of every white-balance preset, five of them at a stated temperature (2500, 3200, 4500, 6000 and 8500 K). For a camera without measured matrices whose files carry them (`lightcraft_raw::kelvin_presets`: Sony ILCA-99M2, ILCA-77M2, SLT-A33, DSC-RX10, ILCE-3500, ILCE-7S) they take the matrices' place in everything above: the as-shot multipliers are placed on the curve through the five presets (mired linear along it, in log red/green and blue/green), an offset from the curve is the tint, and the decision, the Bradford adaptation, the pixel-identical upgrade and `Op::SetAsShotWb` are the same. The scale is Sony's own: files shot on the Kelvin setting read back what the dial said (ILCA-77M2 3400 K → 3396 K and 5200 K → 5193 K, SLT-A33 4700 K → 4708 K, the public ILCE-3500 sample's 5600 K → 5594 K; with the colour filter one step towards magenta, the SLT-A33's 3400 K reads 3473 K / +11), and the Shade preset reads 7493 K on the public ILCE-7S sample. Off the curve, two constants come from the 14 Sony bodies that have both measured matrices and presets: the tint is the offset scaled by the locus's own spacing (the matrices give 0.90–1.04 of it), and the isotherms lean against the curve's normal (`ISOTHERM_TILT` 0.74, measured 0.59–0.84). On 150 ILCE-7SM2 photos read both ways, the presets' temperature tracks the matrices' to ±4 mired around Sony's 8 % higher scale, and the tint to −9 ± 4. A listed camera whose file has no presets keeps the Kelvin scale with As Shot at D65, as a covered camera without multipliers does. Bodies with measured matrices keep reading through them.
+**Kelvin through the camera's white-balance presets.** Sony ARWs store, in the encrypted `SR2SubIFD`, the multipliers of every white-balance preset, five of them at a stated temperature (2500, 3200, 4500, 6000 and 8500 K). Every Sony body without measured matrices takes its scale from them (`lightcraft_raw::kelvin_presets`), except the three that predate them (DSC-F828, DSC-R1, DSLR-A100): on the public raw.pixls.us samples, all 167 raws of the 105 other bodies, from the 2008 DSLR-A200 to the ILCE-1M2, ILME-FX2 and ZV-E10M2, carry the five. They take the matrices' place in everything above: the as-shot multipliers are placed on the curve through the five presets (mired linear along it, in log red/green and blue/green), an offset from the curve is the tint, and the decision, the Bradford adaptation, the pixel-identical upgrade and `Op::SetAsShotWb` are the same. The scale is Sony's own: files shot on the Kelvin setting read back what the dial said (ILCA-77M2 3400 K → 3396 K and 5200 K → 5193 K, SLT-A33 4700 K → 4708 K, the public ILCE-3500 sample's 5600 K → 5594 K, the public ILCE-7CR samples' 5600 K → 5602 K, the public ILME-FX3 sample's 5500 K → 5530 K; with the colour filter one step towards magenta, the SLT-A33's 3400 K reads 3473 K / +11). It holds on every body: on the 159 public samples of the 97 bodies whose raws decode, Sony's other presets read through the five as Daylight 5200–5384 K, Cloudy 6010–6345 K, Shade 7336–8276 K and Tungsten 2713–3200 K, with tint within ±12. Off the curve, two constants come from the 14 Sony bodies that have both measured matrices and presets: the tint is the offset scaled by the locus's own spacing (the matrices give 0.90–1.04 of it), and the isotherms lean against the curve's normal (`ISOTHERM_TILT` 0.74, measured 0.59–0.84). On 150 ILCE-7SM2 photos read both ways, the presets' temperature tracks the matrices' to ±4 mired around Sony's 8 % higher scale, and the tint to −9 ± 4. Sony's downsized lossless ARWs (M and S, linear YCbCr) come balanced already, so they open with unit multipliers; their As Shot is read from the levels the camera balanced them with (`ColorData::balanced_as_shot`), through the presets or the measured matrices alike: a downsized lossless ILCE-7M4 sample used to read 1691 K / −190 through its matrices, and the public ILCE-7CR samples now read 5602 K at full size and downsized alike. A covered camera whose file has no presets keeps the Kelvin scale with As Shot at D65, as a covered camera without multipliers does. Bodies with measured matrices keep reading through them.
 
 What the matrices say is not verified against Lightroom's Kelvin. On the ILCE-7M3 a Color Temp. series reads 7–10 % below Sony's dial through them, smoothly and monotonically, with tint near the locus (issue #730); whether the matrices or the dial are off is open (a grey card under an incandescent bulb would tell, since the Illuminant A matrix is exact there by construction). Public samples: ILCE-7M3 AWB 4268 K / +7, ILCE-7M4 AWB 4344 K / +26, GFX100S on its Daylight preset 4659 K / +9 (Fujifilm's nominal daylight is about 5300 K: the same direction and size of gap).
 
@@ -185,9 +185,10 @@ A raw starts from the first of these that is available (`camera_preview::startin
 2. a camera profile for its model (bundled or local), with tone and chroma fitted to the file's JPEG;
 3. the file-local fit to its own JPEG described above;
 4. the model's spectral matrices, with LightCraft's default tone curve and no JPEG fit;
-5. the neutral fallback.
+5. for an ARW whose body has no spectral matrices, the ILCE-7M3's as a stand-in (below), likewise;
+6. the neutral fallback.
 
-When the file's JPEG is black and white, step 2 fits the tone curve alone with the profile's colour; without a profile, or when that fit fails, 4 and 5 take the tone curve fitted to it (see the black-and-white JPEG paragraph above).
+When the file's JPEG is black and white, step 2 fits the tone curve alone with the profile's colour; without a profile, or when that fit fails, 4, 5 and 6 take the tone curve fitted to it (see the black-and-white JPEG paragraph above).
 
 The spectral matrices only replace the neutral fallback: a photo whose JPEG fit is accepted (with or without a
 profile) renders exactly as before, and a covered model takes its spectral matrices only when that fit fails the
@@ -198,6 +199,35 @@ still pools the uncorrected camera colour of covered models, so a profile can be
 
 No colour-difference measurement of the spectral matrices against the camera JPEG, or against the file-local fit,
 is recorded here yet. Whether they should come before the file-local fit for these models is open until one is.
+
+**A stand-in for Sony bodies outside the table** (`spectral::stand_in`). Most Sony bodies (the ILCE-1 and ILCE-1M2,
+ILCE-9M2 and ILCE-9M3, ILCE-6700, the FX series, every SLT, NEX and DSLR-A) have no spectral row, so a photo whose
+fit fails (a night sky with too few pixels above the fit's floors, for one) used to open in the neutral fallback,
+whose "camera RGB ≈ linear sRGB" keeps about a third of the colour. Such an ARW now takes the ILCE-7M3's spectral
+matrices instead, with the default tone curve, exactly as a covered model's failed fit does. Two measurements:
+
+- On the table's own rows (each row's white-balanced camera RGB of 146 sRGB-gamut test colours of moderate chroma,
+  rendered through another row's forward matrix or through the neutral model; mean CIE76 against the row's own
+  rendering, under D65 and Illuminant A): the neutral model is 14.0–16.0 off on all 11 Sony rows, one modern Sony
+  full-frame row rendering another 0.2–2.0 (the ILCE-7SM2 is the outlier, 2.8–5.7), and the ILCE-7M3 row has the
+  lowest worst case on the other ten (mean 1.2, worst 3.4). It also beats the neutral model on every one of the
+  table's 51 other cameras, every make back to the 2004 Nikon D70 (mean 2.8–2.9, worst 7.5, against 11.7–17.2), so it
+  is used for every ARW, old bodies included. A test pins these figures.
+- Against the camera JPEGs of the public raw.pixls.us samples (158 decodable ARWs of 97 bodies, the 2007 DSLR-A700
+  to the ILCE-1M2): every file's sensor proxy through
+  each candidate with the default tone curve, compared on its mid-tone pixels in CIE 1976 u′v′ (colour alone, as the
+  default tone curve differs from the camera's). Median distance ×1000: neutral 19.1, stand-in 10.2, the other Sony
+  rows 9.6–10.3; on the 40 files of bodies with their own row, 12.3 for it and 11.8 for the stand-in. The stand-in is
+  closer than the neutral model on 145 of the 158: on 122 of the 125 shot in the Standard creative style (20.8 →
+  10.2; the three others are ILCE-7RM4 files whose own row does no better) and on all 10 Vivid ones, but on only 9 of
+  the 17 Neutral ones, a style that mutes colour as the neutral model does. In CIE76 the median goes 17.7 → 16.1, the
+  tone curve's difference dominating.
+
+It only replaces the neutral fallback: photos whose fit is accepted, and every other format, render as before (on the
+public samples the fit or the partial look takes 156 of the 158; the stand-in reaches a DSC-RX10 shot and a NEX-3
+shot whose JPEG is black and white, which then takes its tone curve on top). It doesn't decide the white-balance scale
+either: the presets or the measured matrices do, read before it is applied (`WbScaleOf`). Look version 10 and render
+cache version 65.
 
 ## Smart previews and the look version
 

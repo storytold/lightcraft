@@ -34,7 +34,9 @@ use lightcraft_raw::{
 /// 7: the sensor proxy follows the file's lens warp when the camera JPEG is lens-corrected.
 /// 8: the bundled NIKON Z 6_2 profile.
 /// 9: the bundled NIKON Z 8 and NIKON D5300 profiles.
-pub const LOOK_VERSION: u32 = 9;
+/// 10: a failed fit of an ARW whose body has no spectral matrices takes the ILCE-7M3's (`spectral::stand_in`), not the
+/// neutral fallback's colour.
+pub const LOOK_VERSION: u32 = 10;
 
 #[derive(Clone, Debug)]
 pub(crate) struct CameraLook {
@@ -74,7 +76,9 @@ pub(crate) fn file_local_look(format: RawFormat) -> bool {
 /// The colour a raw starts from, first available first: the file's own colour matrices (DNG); a look fitted to the
 /// file's JPEG ([`fit_preview`]: with the camera profile for its model when there is one, else with colour fitted to
 /// this photo alone); the model's colour matrices from measured spectral sensitivities (`lightcraft_raw::spectral`);
-/// the neutral fallback. The spectral matrices only stand in for the neutral fallback, so a photo whose JPEG fit is
+/// for an ARW of a Sony body without them, another Sony sensor's (`spectral::stand_in`, the ILCE-7M3's: about
+/// 1 CIE76 from the measured Sony bodies' own colour where the neutral fallback is about 15 off); the neutral fallback.
+/// The spectral matrices only stand in for the neutral fallback, so a photo whose JPEG fit is
 /// accepted renders as without them; when used they are written into `raw.color`. A photo whose JPEG is black and
 /// white (a monochrome picture style) has no colour to fit, but still gives its tone curve: with the camera profile's
 /// colour in [`fit_preview`], else on top of the spectral matrices or the fallback ([`monochrome_look`]). Returns the
@@ -136,11 +140,18 @@ fn starting_colour_with(
     if let Some(look) = look {
         return (xy, t, Some(look));
     }
-    let (xy, t) = match raw.metadata.model.as_deref().and_then(|model| lightcraft_raw::spectral::find(raw.metadata.make.as_deref(), model)) {
+    let measured = raw.metadata.model.as_deref().and_then(|model| lightcraft_raw::spectral::find(raw.metadata.make.as_deref(), model));
+    // a Sony body outside the table: another Sony sensor's matrices are far closer than the neutral fallback's
+    let (camera, stand_in) = match measured {
+        Some(camera) => (Some(camera), false),
+        None => (lightcraft_raw::spectral::stand_in(raw.format), true),
+    };
+    let (xy, t) = match camera {
         Some(camera) => {
             camera.fill(&mut raw.color);
             if lightcraft_pipeline::profiling() {
-                eprintln!("[profile] {:?} camera colour from spectral sensitivities: {} {}", raw.format, camera.make, camera.model);
+                let role = if stand_in { ", standing in for this body" } else { "" };
+                eprintln!("[profile] {:?} camera colour from spectral sensitivities: {} {}{role}", raw.format, camera.make, camera.model);
             }
             start(raw)
         }
@@ -228,6 +239,7 @@ pub(crate) fn dng_colour(tags: &ColorData, declared: &crate::files::DngWhite, t:
         baseline_exposure: t.baseline_exposure + k.log2(),
         baseline_sharpness: tags.baseline_sharpness,
         kelvin_presets: None,
+        balanced_as_shot: None,
         profile: ProfileLook {
             hue_sat_map: [look.and_then(|l| l.hue_sat.clone()), None],
             tone_curve: look.and_then(|l| dng_tone_curve(&l.tone)),
@@ -2659,6 +2671,42 @@ mod tests {
         let mut raw = raw_of(RawFormat::Cr2, "Canon", "", Default::default());
         raw.metadata.model = None;
         assert!(starting_colour(&mut raw, &[], None, None).1.matrix_is_fallback);
+    }
+
+    /// Step 5 for an ARW: a Sony body outside the table whose fit fails (here: no camera JPEG; on a night sky, too few
+    /// pixels above the fit's floors) takes the stand-in's matrices instead of the neutral fallback's colour, also
+    /// without a model and under another make (every ARW is a Sony sensor). The Kelvin scale is not its doing: the
+    /// body still has no measured matrices for the catalog and the white-balance scale.
+    #[test]
+    fn a_sony_body_outside_the_table_takes_the_stand_in() {
+        let stand_in = lightcraft_raw::spectral::stand_in(RawFormat::Arw).unwrap();
+        for (make, model) in [("SONY", "ILCE-1M2"), ("SONY", ""), ("HASSELBLAD", "Lunar")] {
+            let mut raw = raw_of(RawFormat::Arw, make, model, Default::default());
+            if model.is_empty() {
+                raw.metadata.model = None;
+            }
+            let (xy, t, look) = starting_colour_with(
+                &mut raw,
+                |_, t| {
+                    assert!(t.matrix_is_fallback, "the fit sees the raw without the stand-in");
+                    (None, false)
+                },
+                |_, _| panic!("a colour JPEG never takes the black-and-white step"),
+            );
+            assert!(look.is_none() && !t.matrix_is_fallback, "{model}");
+            assert_eq!(raw.color.forward_matrix, stand_in.forward_matrix.map(Some), "{model}");
+            assert_eq!(xy, lightcraft_raw::color::as_shot_white_xy(&raw));
+            // white-balanced white stays white
+            let w = t.matrix.apply([1.0; 3]);
+            assert!(w.iter().all(|v| (v - 1.0).abs() < 1e-4), "{w:?}");
+        }
+        assert_eq!(lightcraft_raw::spectral::find(Some("SONY"), "ILCE-1M2"), None);
+        assert_eq!(lightcraft_catalog::relative_wb_camera("ARW", "SONY ILCE-1M2"), !lightcraft_raw::kelvin_presets::covers(Some("SONY"), "ILCE-1M2"));
+        // the same failure outside ARW keeps the neutral fallback
+        let mut raw = raw_of(RawFormat::Nef, "NIKON CORPORATION", "NIKON D3", Default::default());
+        let (_, t, _) = starting_colour_with(&mut raw, |_, _| (None, false), |_, _| None);
+        assert!(t.matrix_is_fallback);
+        assert_eq!(raw.color, lightcraft_raw::ColorData::default());
     }
 
     /// The colour precedence on public raws (each skipped without its corpus file): a photo whose JPEG fit is
