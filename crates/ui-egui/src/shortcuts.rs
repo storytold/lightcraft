@@ -541,8 +541,8 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
                 let _ = app.run("view.infoOverlay", json!({}));
                 continue;
             }
-            // Delete acts on what's being edited: the active mask in the Masking panel; never the
-            // photo while retouching (spots are removed from their own panel).
+            // Delete acts on what's being edited: the active mask in the Masking panel, the selected
+            // spot or red-eye correction; never the photo while retouching.
             if f == "photo.delete" {
                 use crate::state::RightPanel as R;
                 match app.ui.right {
@@ -558,7 +558,13 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
                         }
                         continue;
                     }
-                    R::RedEye => continue,
+                    R::RedEye => {
+                        let eyes = app.session.active().and_then(|id| app.session.develop_of(id)).map(|d| d.red_eye.len()).unwrap_or(0);
+                        if app.ui.eye < eyes {
+                            let _ = app.run("redeye.delete", json!({"index": app.ui.eye}));
+                        }
+                        continue;
+                    }
                     _ => {}
                 }
                 // in an album, Delete takes the photos out of the album only, as in Lightroom: they

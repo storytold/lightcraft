@@ -46,7 +46,7 @@ Hours are calibrated on this repo's PR history; see
 |---|---:|---:|---:|---|
 | Features | ~61% | ~77% (checklist 81.1%) | 600–1,100 h | [target-app-parity](docs/target-app-parity.md#features) |
 | ↳ RAW cameras, colour, lens profiles | ~60% | 83% of 1,446 Adobe models decode, 38% verified | 255–480 h | [raw-parity](docs/raw-parity.md) |
-| UI/UX fidelity | ~70% | ~85% | 32–54 h | [ui-parity](docs/ui-parity.md) |
+| UI/UX fidelity | ~70% | ~85% | 31–53 h | [ui-parity](docs/ui-parity.md) |
 | File formats (non-raw) | ~70% | ~85% | 30–55 h | [file-format-parity](docs/file-format-parity.md) |
 | Hardware | ~40% | ~50% | 40–80 h | [hardware-parity](docs/hardware-parity.md) |
 | Localization | ~55% of the 12 key languages | 7 of 12 present | 130–210 h (+145–255 h new scripts) | [localization-parity](docs/localization-parity.md) |
@@ -183,6 +183,7 @@ Ranked toward beta; detail in [docs/roadmap.md](docs/roadmap.md), gaps in [docs/
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | minor | UI/UX remaining 32–54 h → 31–53 h (red-eye corrections by keyboard); headline numbers unchanged |
 | 2026-10-12 | minor | Italian interface (`it`, #1192): 2,201 of 2,398 messages, locale, menu command and tests; headline numbers unchanged |
 | 2026-10-13 | minor | Sony ILCA-99M2 camera colour profile in the log; numbers unchanged |
 | 2026-10-14 | minor | Localization ~52% → ~55% (mean of the 12 key languages): de, es, fr, ja and uk catalogs filled |

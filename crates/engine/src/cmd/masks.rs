@@ -995,6 +995,29 @@ pub fn specs() -> Vec<CommandSpec> {
             }
         ),
         cmd!(
+            "redeye.update",
+            "Edit Red Eye Correction",
+            [],
+            None,
+            "{index, move?: [dx,dy] normalized (the centre stays on the photo), rx?, ry?: radii as fractions of the long edge}",
+            has_active,
+            |s, p| {
+                let c = "redeye.update";
+                let i = super::index_req(p, "index", c)?;
+                let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
+                let mut dd = (*s.develop_of(id).unwrap_or_default()).clone();
+                let eye = dd.red_eye.get_mut(i).ok_or_else(|| bad(c, "no such eye"))?;
+                if let Some(d) = point(p, "move") {
+                    eye.center = Point::new((eye.center.x + d.x).clamp(0.0, 1.0), (eye.center.y + d.y).clamp(0.0, 1.0));
+                }
+                eye.rx = f64_or(p, "rx", eye.rx).clamp(1e-4, 0.5);
+                eye.ry = f64_or(p, "ry", eye.ry).clamp(1e-4, 0.5);
+                let label = if eye.pet { "Pet Eye" } else { "Red Eye" };
+                s.set_develop(id, dd, label)?;
+                Ok(json!({"index": i}))
+            }
+        ),
+        cmd!(
             "redeye.catchlight",
             "Pet Eye Catchlight",
             [],
