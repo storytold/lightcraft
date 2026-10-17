@@ -228,6 +228,71 @@ fn grain_noise(x: f32, y: f32, seed: u32) -> f32 {
     return a + (b - a) * v;
 }
 
+// The 3×3 matrix at parameter `o` (row-major).
+fn mat_at(o: u32) -> array<vec3<f32>, 3> {
+    return array<vec3<f32>, 3>(
+        vec3<f32>(pf(o), pf(o + 1u), pf(o + 2u)),
+        vec3<f32>(pf(o + 3u), pf(o + 4u), pf(o + 5u)),
+        vec3<f32>(pf(o + 6u), pf(o + 7u), pf(o + 8u)),
+    );
+}
+
+// `finish::gamut_map_to` (SDR peak 1) with the luminance weights at parameter `yo`: the mapped
+// colour and the scale t it needed.
+fn gamut_map(r: vec3<f32>, yo: u32) -> vec4<f32> {
+    let yy = clamp(pf(yo) * r.x + pf(yo + 1u) * r.y + pf(yo + 2u) * r.z, 0.0, 1.0);
+    var t = 1.0;
+    for (var k = 0u; k < 3u; k++) {
+        let c = r[k];
+        if (c < 0.0) {
+            t = min(t, yy / max(yy - c, 1e-9));
+        } else if (c > 1.0) {
+            t = min(t, (1.0 - yy) / max(c - yy, 1e-9));
+        }
+    }
+    if (t < 1.0) {
+        return vec4<f32>(yy + (r - yy) * t, t);
+    }
+    return vec4<f32>(r, 1.0);
+}
+
+// `finish::out_of_gamut`: needed real desaturation, and isn't a neutral clipping at white/black.
+fn out_of_gamut(r: vec3<f32>, t: f32) -> bool {
+    let lo = min(r.x, min(r.y, r.z));
+    let hi = max(r.x, max(r.y, r.z));
+    return t < GAMUT_WARN && (hi - lo) > 0.02 * max(abs(hi), 1e-3) && hi - lo > 1e-3 && (lo < -1e-3 || (hi > 1.0 && lo < 1.0));
+}
+
+// `Lut3d::apply` (trilinear) on the LUT profile's table in `aux` (red fastest).
+fn lut_at(r: u32, g: u32, b: u32) -> vec3<f32> {
+    let n = pu(F_LUT_N);
+    let o = pu(F_LUT_OFF) + 3u * (r + n * (g + n * b));
+    return vec3<f32>(aux[o], aux[o + 1u], aux[o + 2u]);
+}
+
+fn lut_apply(c: vec3<f32>) -> vec3<f32> {
+    let n = pu(F_LUT_N);
+    let s = f32(n - 1u);
+    var idx = vec3<u32>(0u);
+    var fr = vec3<f32>(0.0);
+    for (var k = 0u; k < 3u; k++) {
+        let lo = pf(F_LUT_MIN + k);
+        let span = max(pf(F_LUT_MAX + k) - lo, 1e-6);
+        let x = clamp((c[k] - lo) / span, 0.0, 1.0) * s;
+        let i = min(u32(floor(x)), n - 2u);
+        idx[k] = i;
+        fr[k] = x - f32(i);
+    }
+    let r = idx.x;
+    let g = idx.y;
+    let b = idx.z;
+    let c00 = mix(lut_at(r, g, b), lut_at(r + 1u, g, b), fr.x);
+    let c10 = mix(lut_at(r, g + 1u, b), lut_at(r + 1u, g + 1u, b), fr.x);
+    let c01 = mix(lut_at(r, g, b + 1u), lut_at(r + 1u, g, b + 1u), fr.x);
+    let c11 = mix(lut_at(r, g + 1u, b + 1u), lut_at(r + 1u, g + 1u, b + 1u), fr.x);
+    return mix(mix(c00, c10, fr.y), mix(c01, c11, fr.y), fr.z);
+}
+
 fn enc8(v: f32) -> u32 {
     return u32(clamp(v, 0.0, 1.0) * 255.0 + 0.5);
 }
@@ -467,26 +532,25 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 
-    // --- gamut map to the output space (desaturate towards luminance until in range)
-    let om = array<vec3<f32>, 3>(
-        vec3<f32>(pf(F_OUT_M), pf(F_OUT_M + 1u), pf(F_OUT_M + 2u)),
-        vec3<f32>(pf(F_OUT_M + 3u), pf(F_OUT_M + 4u), pf(F_OUT_M + 5u)),
-        vec3<f32>(pf(F_OUT_M + 6u), pf(F_OUT_M + 7u), pf(F_OUT_M + 8u)),
-    );
-    var r = mul3(om, d);
-    let yy = clamp(pf(F_OUT_Y) * r.x + pf(F_OUT_Y + 1u) * r.y + pf(F_OUT_Y + 2u) * r.z, 0.0, 1.0);
-    var tg = 1.0;
-    for (var k = 0u; k < 3u; k++) {
-        let cc = r[k];
-        if (cc < 0.0) {
-            tg = min(tg, yy / max(yy - cc, 1e-9));
-        } else if (cc > 1.0) {
-            tg = min(tg, (1.0 - yy) / max(cc - yy, 1e-9));
+    // --- gamut map to the output space (desaturate towards luminance until in range);
+    // soft proofing maps into the proof space first and shows that in the output space
+    var warn = 0u;
+    var r: vec3<f32>;
+    if (pu(F_PROOF) != 0u) {
+        let q0 = mul3(mat_at(F_PROOF_M), d);
+        let gq = gamut_map(q0, F_PROOF_Y);
+        if (pu(F_PROOF_DEST_WARN) != 0u && out_of_gamut(q0, gq.w)) {
+            warn = 1u;
         }
+        r = mul3(mat_at(F_PROOF_OUT_M), gq.xyz);
+    } else {
+        r = mul3(mat_at(F_OUT_M), d);
     }
-    if (tg < 1.0) {
-        r = yy + (r - yy) * tg;
+    let go = gamut_map(r, F_OUT_Y);
+    if (pu(F_PROOF) != 0u && pu(F_PROOF_DISP_WARN) != 0u && warn == 0u && out_of_gamut(r, go.w)) {
+        warn = 2u;
     }
+    r = go.xyz;
 
     // --- encode, curves, grain
     var e = vec3<f32>(encode_srgb(r.x), encode_srgb(r.y), encode_srgb(r.z));
@@ -511,6 +575,15 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let lum = 0.2126 * e.x + 0.7152 * e.y + 0.0722 * e.z;
         let k = pf(F_GRAIN_AMT) * g * (0.35 + 2.6 * lum * (1.0 - lum));
         e = e + k;
+    }
+    if (pu(F_LUT) != 0u) {
+        let m = lut_apply(clamp(e, vec3<f32>(0.0), vec3<f32>(1.0)));
+        e = e + (m - e) * pf(F_LUT_AMT);
+    }
+    if (warn == 1u) {
+        e = vec3<f32>(PROOF_DEST_R, PROOF_DEST_G, PROOF_DEST_B);
+    } else if (warn == 2u) {
+        e = vec3<f32>(PROOF_DISP_R, PROOF_DISP_G, PROOF_DISP_B);
     }
     e = vec3<f32>(out_encode(e.x), out_encode(e.y), out_encode(e.z));
     out[i] = enc8(e.x) | (enc8(e.y) << 8u) | (enc8(e.z) << 16u) | (255u << 24u);

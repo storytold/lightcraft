@@ -51,6 +51,6 @@ fn body(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         let [tw, th] = t.tex.size();
         let s = (area.width() / tw as f32).min(area.height() / th as f32);
         let r = Rect::from_center_size(area.center(), vec2(tw as f32 * s, th as f32 * s));
-        ui.painter().image(t.tex.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+        ui.painter().image(t.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
     }
 }

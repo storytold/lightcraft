@@ -181,7 +181,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                         if let Some(job) = app.session.variant_job(id, s, THUMB_EDGE)
                             && let Some(tex) = app.renderer.variant(job)
                         {
-                            ui.painter().image(tex.tex.id(), tr, cover_uv(tr, tex.size), Color32::WHITE);
+                            ui.painter().image(tex.id(), tr, cover_uv(tr, tex.size), Color32::WHITE);
                         }
                         text_x = tr.right() + 10.0;
                     }

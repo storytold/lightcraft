@@ -761,7 +761,7 @@ mod in_the_loupe {
             .iter()
             .enumerate()
             .filter_map(|(i, c)| match &c.shape {
-                egui::epaint::Shape::Mesh(m) if m.texture_id == tex.tex.id() => Some((i, c.clip_rect, m.calc_bounds())),
+                egui::epaint::Shape::Mesh(m) if m.texture_id == tex.id() => Some((i, c.clip_rect, m.calc_bounds())),
                 _ => None,
             })
             .collect()

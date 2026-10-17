@@ -55,12 +55,58 @@ fn app_icon() -> egui::IconData {
     eframe::icon_data::from_png_bytes(png).unwrap_or_default()
 }
 
-struct App(LightcraftApp, PrefsWriter, #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>);
+struct App(LightcraftApp, PrefsWriter, Option<WindowTextures>, #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>);
+
+/// Draws renders that stayed on the GPU: registers their textures with the window's egui-wgpu
+/// renderer (the GPU renderer runs on the window's device, see [`adopt_window_device`]).
+struct WindowTextures {
+    device: eframe::wgpu::Device,
+    renderer: std::sync::Arc<egui::mutex::RwLock<eframe::egui_wgpu::Renderer>>,
+}
+
+impl lightcraft_ui_egui::render::ScreenTextures for WindowTextures {
+    fn show(&mut self, frame: &lightcraft_engine::media::ScreenFrame, id: Option<egui::TextureId>) -> Option<egui::TextureId> {
+        let view = frame.texture.create_view(&Default::default());
+        let mut r = self.renderer.write();
+        let filter = eframe::wgpu::FilterMode::Linear;
+        Some(match id {
+            Some(id) => {
+                r.update_egui_texture_from_wgpu_texture(&self.device, &view, filter, id);
+                id
+            }
+            None => r.register_native_texture(&self.device, &view, filter),
+        })
+    }
+
+    fn free(&mut self, id: egui::TextureId) {
+        self.renderer.write().free_texture(&id);
+    }
+}
+
+/// Render on the window's device (off the UI thread: building the kernels takes a moment), so the
+/// loupe's drafts are drawn straight from the GPU; the textures they leave are shown through
+/// [`WindowTextures`] once that worked. Otherwise the GPU renderer makes a device of its own, as
+/// before, and every render comes back as pixels.
+fn adopt_window_device(rs: &eframe::egui_wgpu::RenderState, ctx: &egui::Context) -> WindowTextures {
+    let (device, queue, info) = (rs.device.clone(), rs.queue.clone(), rs.adapter.get_info());
+    let ctx = ctx.clone();
+    let spawned = std::thread::Builder::new().name("lc-gpu-window".into()).spawn(move || {
+        match lightcraft_engine::gpu::adopt_window_device(device, queue, info) {
+            Ok(()) => log::info!("gpu: rendering on the window's device"),
+            Err(e) => log::info!("gpu: renders come back as pixels: {e}"),
+        }
+        ctx.request_repaint();
+    });
+    if let Err(e) = spawned {
+        log::warn!("gpu: {e}");
+    }
+    WindowTextures { device: rs.device.clone(), renderer: rs.renderer.clone() }
+}
 
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         #[cfg(target_os = "macos")]
-        if let Some(m) = self.2.as_mut()
+        if let Some(m) = self.3.as_mut()
             && m.update(&mut self.0, ctx)
             && lightcraft_ui_egui::panels::notices::may_close(&mut self.0)
         {
@@ -78,6 +124,13 @@ impl eframe::App for App {
     }
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         self.0.perf.host_frame_ms = frame.info().cpu_usage.map(|s| f64::from(s) * 1000.0);
+        // the GPU renderer adopted the window's device: its renders can be drawn as they are
+        if self.2.is_some()
+            && lightcraft_engine::gpu::on_window_device()
+            && let Some(t) = self.2.take()
+        {
+            self.0.renderer.set_screen_textures(Box::new(t));
+        }
         self.0.ui(ui);
     }
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
@@ -1018,9 +1071,16 @@ fn main() -> eframe::Result {
                 #[cfg(target_os = "macos")]
                 let menu =
                     (std::env::var_os("LIGHTCRAFT_NO_NATIVE_MENU").is_none()).then(|| native_menu::NativeMenu::install(&mut app, &cc.egui_ctx));
+                // the GPU renderer on the window's device, when GPU rendering is on
+                // (LIGHTCRAFT_GPU_WINDOW=0: a device of its own, renders read back - for comparison or a driver
+                // that misbehaves with compute and drawing on one device)
+                let window_device = std::env::var_os("LIGHTCRAFT_GPU_WINDOW").is_none_or(|v| v != "0");
+                let window_textures =
+                    cc.wgpu_render_state.as_ref().filter(|_| gpu_on && window_device).map(|rs| adopt_window_device(rs, &cc.egui_ctx));
                 Ok(Box::new(App(
                     app,
                     writer,
+                    window_textures,
                     #[cfg(target_os = "macos")]
                     menu,
                 )))
@@ -1532,6 +1592,7 @@ mod tests {
             let mut app = App(
                 app,
                 PrefsWriter::default(),
+                None,
                 #[cfg(target_os = "macos")]
                 None,
             );

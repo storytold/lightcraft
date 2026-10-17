@@ -756,11 +756,25 @@ pub struct RenderJob {
     pub view_cache: Option<(Arc<PreviewCache>, Hash128)>,
     /// Render for this monitor profile ([`Self::with_display`]).
     pub display: Option<Arc<crate::display::Display>>,
+    /// Shown on screen at once and not kept: the result may stay on the GPU as a texture
+    /// ([`Self::on_screen`]).
+    pub on_screen: bool,
     /// Compose the render into a slideshow slide ([`Self::with_slide`]).
     pub slide: Option<Arc<crate::slide::SlideCompose>>,
     /// A face tile that can be cut from the raw's embedded preview, tried before `source`
     /// ([`crate::Session::face_job`]; `None` for every other job).
     pub preview_cut: Option<crate::face_tiles::PreviewCut>,
+}
+
+/// A render left on the GPU for the window to draw ([`RenderResult::frame`]).
+#[cfg(not(target_arch = "wasm32"))]
+pub type ScreenFrame = lightcraft_gpu::DisplayFrame;
+/// A render left on the GPU for the window to draw (never, in the browser build).
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone, Debug)]
+pub struct ScreenFrame {
+    pub width: usize,
+    pub height: usize,
 }
 
 pub struct RenderResult {
@@ -780,6 +794,9 @@ pub struct RenderResult {
     /// The display profile (id) the image is encoded for; `None`: sRGB (see
     /// [`crate::display::present`]).
     pub display: Option<u64>,
+    /// The result as a texture on the window's GPU device ([`RenderJob::on_screen`]); `rendered`
+    /// then holds its histogram and an empty image.
+    pub frame: Option<ScreenFrame>,
 }
 
 impl RenderJob {
@@ -818,6 +835,15 @@ impl RenderJob {
         if proof.is_some() {
             self.view_cache = None;
         }
+        self
+    }
+
+    /// The result is only drawn (an interactive draft of a view): when the GPU renderer runs on the
+    /// window's device it may hand back a texture ([`RenderResult::frame`]) instead of reading the
+    /// pixels back. Ignored where pixels are needed: thumbnails (cached), a full-quality render
+    /// kept as the view preview, and a monitor profile (corrected on the CPU).
+    pub fn on_screen(mut self) -> Self {
+        self.on_screen = true;
         self
     }
 
@@ -887,6 +913,7 @@ impl RenderJob {
             loaded: None,
             quick: None,
             display: None,
+            frame: None,
         }
     }
 
@@ -930,6 +957,7 @@ impl RenderJob {
                 loaded: None,
                 quick: None,
                 display: None,
+                frame: None,
             };
         }
         // a face tile of an unedited raw: cut from the camera's embedded preview when it is big enough
@@ -950,6 +978,7 @@ impl RenderJob {
                 loaded: None,
                 quick: None,
                 display: None,
+                frame: None,
             };
         }
         let was_loaded = matches!(self.source, SourceRef::Loaded(_));
@@ -965,10 +994,39 @@ impl RenderJob {
                 // the plain picture, or (Denoise amount above 0 and a denoised picture cached) the mix the amount asks for
                 let src = &source.image_for(self.settings.denoise_amount());
                 let info = source.info_or(self.info);
-                // Thumbnails (many small jobs side by side) stay on the CPU; views and exports use
-                // the GPU when there is one.
-                let gpu = self.cache.is_none();
-                let (mut rendered, gpu_fallback) = develop_reporting(src, &info, &self.settings, &self.request, self.stages.as_deref(), gpu);
+                // Views and exports use the GPU when there is one (waiting for the device if it is
+                // still being created). Thumbnails (grid, filmstrip, preset and profile previews)
+                // use it once it is ready - ~20-30 % faster than the CPU at 256 px with six jobs
+                // side by side (`crates/gpu/tests/thumbs_bench.rs`), and the cores stay free for
+                // decoding - but never wait for it: at startup they render on the CPU.
+                let gpu = self.cache.is_none() || lightcraft_gpu::ready();
+                let pixels_needed =
+                    self.cache.is_some() || self.display.is_some() || (self.view_cache.is_some() && self.request.quality == Quality::Full);
+                let frame = (self.on_screen && !pixels_needed && gpu)
+                    .then(|| develop_on_screen(src, &info, &self.settings, &self.request, self.stages.as_deref()));
+                let (mut rendered, gpu_fallback) = match frame {
+                    Some(OnScreen::Frame(frame, histogram)) => {
+                        return RenderResult {
+                            request_id: self.request_id,
+                            source_key: self.source_key,
+                            photo: self.photo,
+                            level: self.level,
+                            key: self.key,
+                            rendered: Ok(Rendered {
+                                image: lightcraft_raster::Rgba8 { width: 0, height: 0, data: Vec::new() },
+                                histogram,
+                                deep: None,
+                            }),
+                            gpu_fallback: None,
+                            loaded: (!was_loaded).then_some(source),
+                            quick: None,
+                            display: None,
+                            frame: Some(frame),
+                        };
+                    }
+                    Some(OnScreen::Pixels(r)) => (r, None),
+                    None => develop_reporting(src, &info, &self.settings, &self.request, self.stages.as_deref(), gpu),
+                };
                 // for a display profile: the image goes to the display's values, the histogram
                 // and the cached view preview stay sRGB
                 let mut srgb = None;
@@ -1005,6 +1063,7 @@ impl RenderJob {
                     loaded: (!was_loaded).then_some(source),
                     quick: None,
                     display,
+                    frame: None,
                 }
             }
             Err(e) => self.failed(e),
@@ -1046,12 +1105,8 @@ fn develop_image(
     stages: Option<&StageCache>,
     gpu: bool,
 ) -> (Rendered, Option<String>) {
-    // LUT profiles have no GPU stage: they render on the CPU
-    let fallback = if gpu
-        && !lightcraft_pipeline::lut::is_lut_profile(&s.profile.id)
-        && !s.masks.iter().any(|m| m.visible && m.refine > 0.0)
-        && req.proof.is_none()
-    {
+    // (LUT profiles, Refine Edges and soft proofs render on the GPU too)
+    let fallback = if gpu {
         match lightcraft_gpu::try_render(src, info, s, req, stages) {
             Ok(r) => return (r, None),
             Err(lightcraft_gpu::Fallback::Failed(why)) => Some(why),
@@ -1065,6 +1120,27 @@ fn develop_image(
         None => lightcraft_pipeline::render(src, info, s, req),
     };
     (rendered, fallback)
+}
+
+/// What [`develop_on_screen`] made.
+enum OnScreen {
+    /// A texture on the window's device, and the histogram.
+    Frame(ScreenFrame, Histogram),
+    /// Pixels (GPU or CPU).
+    Pixels(Rendered),
+}
+
+/// [`develop`] for a render that is only drawn: a texture on the window's device when the GPU
+/// renderer can hand one over, else the pixels.
+fn develop_on_screen(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, stages: Option<&StageCache>) -> OnScreen {
+    #[cfg(not(target_arch = "wasm32"))]
+    match lightcraft_gpu::render_display(src, info, s, req, stages) {
+        Some(lightcraft_gpu::Output::Display { frame, histogram }) => OnScreen::Frame(frame, histogram),
+        Some(lightcraft_gpu::Output::Image(r)) => OnScreen::Pixels(r),
+        None => OnScreen::Pixels(develop(src, info, s, req, stages, false)),
+    }
+    #[cfg(target_arch = "wasm32")]
+    OnScreen::Pixels(develop(src, info, s, req, stages, false))
 }
 
 /// Where a [`QuickJob`]'s stand-in image came from.
@@ -1110,6 +1186,7 @@ impl QuickJob {
             loaded: None,
             quick: None,
             display: None,
+            frame: None,
         })
     }
 
@@ -1127,6 +1204,7 @@ impl QuickJob {
             loaded: None,
             quick,
             display: None,
+            frame: None,
         };
         let rendered = |image: Rgba8| {
             let histogram = Histogram::of_srgb8(&image);
@@ -1264,6 +1342,7 @@ impl crate::Session {
             stages: None,
             view_cache: None,
             display: None,
+            on_screen: false,
             slide: None,
             preview_cut: None,
         })
@@ -1317,6 +1396,7 @@ impl crate::Session {
             stages: None,
             view_cache: None,
             display: None,
+            on_screen: false,
             slide: None,
             preview_cut: None,
         })
@@ -1371,6 +1451,7 @@ impl crate::Session {
             stages: None,
             view_cache: None,
             display: None,
+            on_screen: false,
             slide: None,
             preview_cut,
         })
