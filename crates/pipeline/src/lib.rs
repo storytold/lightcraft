@@ -34,6 +34,9 @@ pub mod local;
 pub mod local_tone;
 pub mod lut;
 pub mod masks;
+pub mod nrc_joint;
+#[cfg(test)]
+mod nrc_joint_reference;
 pub mod optics;
 pub mod output;
 pub mod profiles;
@@ -412,6 +415,10 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
     let (full_w, full_h) = frame.fit(req.max_w, req.max_h);
     // sizes and scale are those of the whole output; a window only narrows what is drawn
     let px_per_long = frame.px_per_long(full_w);
+    let src_long = src.width.max(src.height);
+    // (an original reported smaller than the source is the source)
+    let native_long = info.native_long.unwrap_or(0).max(src_long).max(1);
+    let detail_scale = local::detail_scale(px_per_long, native_long);
     let mut fixed_air = None;
     let mut keep = None;
     let (frame, w, h) = match req.window {
@@ -423,7 +430,20 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
                 fixed_air = Some(local::frame_airlight(src, info, s, &frame, pw, ph));
             }
             // (spots grow the rendered window; only 8-bit renders are cut back to the request)
-            let work = if req.depth == OutputDepth::U8 { spots::window_for_reads(s, &frame, full_w, full_h, px_per_long, win) } else { win };
+            let mut work = if req.depth == OutputDepth::U8 { spots::window_for_reads(s, &frame, full_w, full_h, px_per_long, win) } else { win };
+            if req.depth == OutputDepth::U8
+                && local::joint_colour_nr(s)
+                && let Some(params) = local::nrc_params(s, detail_scale)
+            {
+                // The joint diffusion reads a chain of neighbours across its scales. Keep
+                // those reads outside the requested zoom window, just as spot reads are.
+                let halo = params.passes.last().map_or(0, |p| (6.0 * p.sigma).ceil() as usize).saturating_add(4);
+                let x = work.x.saturating_sub(halo);
+                let y = work.y.saturating_sub(halo);
+                let right = work.x.saturating_add(work.w).saturating_add(halo).min(full_w);
+                let bottom = work.y.saturating_add(work.h).saturating_add(halo).min(full_h);
+                work = PixelWindow { x, y, w: right.saturating_sub(x), h: bottom.saturating_sub(y) }.clamped(full_w, full_h);
+            }
             if work != win {
                 keep = Some(PixelWindow { x: win.x - work.x, y: win.y - work.y, ..win });
             }
@@ -431,10 +451,6 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         }
         None => (frame, full_w, full_h),
     };
-    let src_long = src.width.max(src.height);
-    // (an original reported smaller than the source is the source)
-    let native_long = info.native_long.unwrap_or(0).max(src_long).max(1);
-    let detail_scale = local::detail_scale(px_per_long, native_long);
     let geo = hash_of((format!("{frame:?}"), w, h));
     let (wb_t, wb_tint) = local::effective_wb(info, s);
     let eyes = redeye::resolve(src, &s.red_eye, s.orientation, &frame, w, h, px_per_long);
