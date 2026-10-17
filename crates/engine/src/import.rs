@@ -1091,6 +1091,12 @@ impl ImportJob {
                     let mut q = Photo::new(PhotoId(0), Source::File { path: path.clone() }, &own, &info.format, 0, 0, &self.now);
                     q.captured = info.captured.clone();
                     q.meta = info.meta.clone();
+                    q.rating = info.rating;
+                    q.flag = info.flag;
+                    q.label = info.label;
+                    if let Some(sc) = &sidecar {
+                        crate::sidecar::merge_into(&mut q, sc, &self.now);
+                    }
                     let name = opts.rename.as_deref().filter(|t| !t.trim().is_empty()).map(|t| {
                         let n = crate::rename::expand(t, &q, self.seq);
                         self.seq += 1;
@@ -1415,6 +1421,9 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                 p.file_size = info.file_size;
                 p.captured = info.captured;
                 p.meta = info.meta;
+                p.rating = info.rating;
+                p.flag = info.flag;
+                p.label = info.label_text.as_deref().and_then(|t| s.catalog.label_from_name(t)).or(info.label);
                 p.as_shot_wb = info.as_shot_wb;
                 p.content_hash = info.content_hash;
                 p.embedded_lens = info.embedded_lens;

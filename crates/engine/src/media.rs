@@ -1658,6 +1658,10 @@ pub struct ProbeInfo {
     /// metadata would otherwise all land under "Unknown Date").
     pub file_modified: Option<String>,
     pub meta: lightcraft_catalog::Meta,
+    pub rating: u8,
+    pub flag: lightcraft_catalog::Flag,
+    pub label: Option<lightcraft_catalog::ColorLabel>,
+    pub label_text: Option<String>,
     pub as_shot_wb: Option<(f64, f64)>,
     /// Hash of the file's bytes (hex), for duplicate detection. When it is a 32-digit
     /// [`lightcraft_preview::hash_bytes`] of the whole file (as the native probe computes it),

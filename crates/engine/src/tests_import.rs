@@ -1748,3 +1748,23 @@ fn presets_apply_the_imported_profile_they_name() {
     assert_eq!(apply(&mut s, "Portra Soft").profile.id, "lc.vivid");
     let _ = std::fs::remove_dir_all(&src);
 }
+
+#[test]
+fn import_preserves_embedded_rating_and_label() {
+    use lightcraft_codecs::{ChromaSubsampling, EncodeImage, EncodeMeta, Samples, encode_jpeg};
+    let src = temp_dir("embedded-rating-test");
+    let px = [128u8; 40 * 30 * 3];
+    let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="5" xmp:Label="Blue"/></rdf:RDF></x:xmpmeta>"#;
+    let meta = EncodeMeta { xmp: Some(xmp), ..Default::default() };
+    let bytes = encode_jpeg(&EncodeImage::new(40, 30, 3, Samples::U8(&px)), 90, ChromaSubsampling::S444, &meta).unwrap();
+    std::fs::write(src.join("photo.jpg"), &bytes).unwrap();
+
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [src.join("photo.jpg").to_string_lossy()]})).unwrap();
+    assert_eq!(ids(&r, "imported"), 1);
+    let p = s.catalog.photos().next().unwrap();
+    assert_eq!(p.rating, 5);
+    assert_eq!(p.label, Some(lightcraft_catalog::ColorLabel::Blue));
+
+    let _ = std::fs::remove_dir_all(&src);
+}
