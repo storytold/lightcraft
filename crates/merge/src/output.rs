@@ -73,6 +73,22 @@ pub fn write_linear_dng(
     samples: DngSamples,
     lens: &[Opcode],
 ) -> Result<Vec<u8>> {
+    write_linear_dng_cropped(img, color, orientation, metadata, baseline_exposure, samples, lens, None)
+}
+
+/// [`write_linear_dng`] with a default crop (`x, y, w, h` normalised to the image): the part a reader shows
+/// (`DefaultCropOrigin` / `DefaultCropSize`), the rest kept in the file, as a camera's raw keeps its margins.
+#[allow(clippy::too_many_arguments)]
+pub fn write_linear_dng_cropped(
+    img: &Rgb32f,
+    color: &FrameColor,
+    orientation: Orientation,
+    metadata: &Metadata,
+    baseline_exposure: f64,
+    samples: DngSamples,
+    lens: &[Opcode],
+    crop: Option<[f64; 4]>,
+) -> Result<Vec<u8>> {
     let (w, h) = (img.width, img.height);
     if w == 0 || h == 0 {
         return Err(MergeError::Output("empty image".into()));
@@ -107,7 +123,7 @@ pub fn write_linear_dng(
         black: BlackLevel::uniform(0.0),
         white: vec![white],
         active_area: Rect::new(0, 0, w, h),
-        crop: Rect::new(0, 0, w, h),
+        crop: crop.and_then(|c| crop_rect(c, w, h)).unwrap_or(Rect::new(0, 0, w, h)),
         orientation,
         color: cd,
         wb_multipliers: None,
@@ -121,9 +137,39 @@ pub fn write_linear_dng(
     lightcraft_raw::write_dng(&raw, &DngWriteOptions { compression, ..Default::default() }).map_err(|e| MergeError::Output(e.to_string()))
 }
 
+/// A normalised crop (`x, y, w, h`) in pixels of a `w × h` image, at least 2 × 2 and inside it; `None` when it
+/// isn't finite or covers nothing.
+fn crop_rect(c: [f64; 4], w: usize, h: usize) -> Option<Rect> {
+    if !c.iter().all(|v| v.is_finite()) {
+        return None;
+    }
+    let x0 = (c[0].clamp(0.0, 1.0) * w as f64).round() as usize;
+    let y0 = (c[1].clamp(0.0, 1.0) * h as f64).round() as usize;
+    let x1 = ((c[0] + c[2]).clamp(0.0, 1.0) * w as f64).round() as usize;
+    let y1 = ((c[1] + c[3]).clamp(0.0, 1.0) * h as f64).round() as usize;
+    (x1 >= x0 + 2 && y1 >= y0 + 2).then(|| Rect::new(x0, y0, x1 - x0, y1 - y0))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A merge's crop goes into the DNG as its default crop: a reader shows that part, the rest stays in the file.
+    #[test]
+    fn the_crop_is_the_dngs_default_crop() {
+        let img = Rgb32f::from_fn(100, 50, |x, _| [x as f32 / 100.0, 0.2, 0.3]);
+        let color = FrameColor::Linear { to_xyz_d50: bradford(D65, D50).mul(&lightcraft_color::SRGB.to_xyz()) };
+        let bytes =
+            write_linear_dng_cropped(&img, &color, Orientation::Normal, &Metadata::default(), 0.0, DngSamples::Half, &[], Some([0.1, 0.2, 0.5, 0.6]))
+                .unwrap();
+        let raw = lightcraft_raw::decode(&bytes).unwrap();
+        assert_eq!((raw.active_area.width, raw.active_area.height), (100, 50));
+        assert_eq!((raw.crop.x, raw.crop.y, raw.crop.width, raw.crop.height), (10, 10, 50, 30));
+        assert_eq!(raw.develop(lightcraft_raw::Method::Bilinear).unwrap().width, 50);
+        // nonsense crops are left out
+        assert!(crop_rect([f64::NAN, 0.0, 1.0, 1.0], 10, 10).is_none());
+        assert!(crop_rect([0.5, 0.5, 0.0, 0.0], 10, 10).is_none());
+    }
 
     #[test]
     fn linear_dng_round_trips_through_the_raw_decoder() {

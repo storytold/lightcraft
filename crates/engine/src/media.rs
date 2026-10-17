@@ -333,6 +333,9 @@ impl SourceRef {
 }
 
 pub struct MediaCache {
+    /// Decodes a raw's whole picture, ignoring its default crop (photos with "Show Full Image" on); `None` where the
+    /// host has none (they then show the default crop).
+    pub full_frame_loader: Option<FileLoader>,
     settings_hashes: SettingsHashes,
     /// Decoded thumbnail-level sources (LRU by bytes).
     thumbs: Lru<PhotoId, DecodedSource>,
@@ -417,6 +420,7 @@ impl Default for MediaCache {
     fn default() -> Self {
         let budget = crate::memory::cache_share(crate::memory::budget());
         MediaCache {
+            full_frame_loader: None,
             settings_hashes: SettingsHashes::default(),
             thumbs: Lru::new(THUMB_SOURCE_BYTES.min(budget)),
             previews: Vec::new(),
@@ -662,6 +666,13 @@ impl MediaCache {
 
     fn source_ref_with(&mut self, p: &Photo, level: SourceLevel, cached: bool) -> SourceRef {
         let mut r = self.source_ref_plain(p, level, cached);
+        if p.develop.crop.full_frame
+            && let (SourceRef::File { loader, .. }, Some(full)) = (&mut r, &self.full_frame_loader)
+        {
+            // the whole picture, past the default crop (no denoised twin: that is made for the default crop)
+            *loader = Some(full.clone());
+            return r;
+        }
         if let (SourceRef::File { denoise, .. }, Some((spec, loader))) = (&mut r, self.denoise.get(p.id)) {
             *denoise = Some((spec.clone(), loader.clone()));
         }

@@ -45,8 +45,11 @@ fn hdr_merge_command_creates_and_imports_a_dng() {
     assert_eq!((p.width, p.height), (480, 320));
     assert_eq!(p.kind, lightcraft_catalog::MediaKind::Raw);
     assert_eq!(s.selection.active, Some(id));
+    // Auto Settings: the brightness is in the DNG (BaselineExposure), every slider at 0 with its whole range free
     let d = s.develop_of(id).unwrap();
-    assert!(d.light.exposure != 0.0 || d.light.highlights != 0.0, "auto settings applied");
+    assert_eq!((d.light.exposure, d.light.contrast, d.light.highlights, d.light.shadows), (0.0, 0.0, 0.0, 0.0), "sliders untouched");
+    let baseline = |path: &str| lightcraft_raw::decode(&std::fs::read(path).unwrap()).unwrap().color.baseline_exposure;
+    let auto_baseline = baseline(path);
     let img = s.render_now(id, 256, 256).unwrap();
     assert_eq!(img.image.width, 256);
     // Create Stack: the result tops a collapsed stack of its sources, so the grid shows the result
@@ -58,6 +61,8 @@ fn hdr_merge_command_creates_and_imports_a_dng() {
     // the second merge doesn't overwrite the first
     let r2 = s.execute("merge.hdr", &json!({"ids": ids, "autoSettings": false})).unwrap();
     assert!(r2["path"].as_str().unwrap().ends_with("IMG_0-HDR-2.dng"));
+    // without Auto Settings the DNG keeps the merge's own brightness
+    assert!((auto_baseline - baseline(r2["path"].as_str().unwrap())).abs() > 0.05, "auto exposure baked in");
     let id2 = lightcraft_catalog::PhotoId(r2["id"].as_u64().unwrap());
     assert!(s.catalog.stack_of(id2).is_none(), "no stack without the option");
     // the type filter finds merge results (and only them)
@@ -160,10 +165,26 @@ fn panorama_command_with_auto_crop() {
     assert_eq!(r["projection"], "cylindrical");
     assert_eq!(r["used"].as_array().unwrap().len(), 3);
     let id = lightcraft_catalog::PhotoId(r["id"].as_u64().unwrap());
+    // the auto crop is the DNG's default crop: the photo is that part, and no crop edit
     let p = s.catalog.photo(id).unwrap().clone();
-    assert!(p.width > 800 && p.height > 300, "{}×{}", p.width, p.height);
-    let crop = s.develop_of(id).unwrap().crop.geometry.rect;
-    assert!(crop.width() < 1.0 && crop.width() * crop.height() > 0.5, "{crop:?}");
+    let (full_w, full_h) = (r["width"].as_u64().unwrap() as f64, r["height"].as_u64().unwrap() as f64);
+    assert!(full_w > 800.0 && full_h > 300.0, "{full_w}×{full_h}");
+    assert!((p.width as f64) < full_w && (p.width * p.height) as f64 > 0.5 * full_w * full_h, "{}×{} of {full_w}×{full_h}", p.width, p.height);
+    let d = s.develop_of(id).unwrap();
+    assert!(d.crop.geometry.is_identity() && !d.crop.full_frame, "{:?}", d.crop);
+    let aspect = |s: &mut Session| {
+        let img = s.render_now(id, 1200, 1200).unwrap().image;
+        img.width as f64 / img.height as f64
+    };
+    let cropped = aspect(&mut s);
+    assert!((cropped - p.width as f64 / p.height as f64).abs() < 0.02, "{cropped}");
+    // Show Full Image: the whole merged canvas, past the default crop; and back
+    s.execute("crop.fullFrame", &json!({"on": true})).unwrap();
+    assert!(s.develop_of(id).unwrap().crop.full_frame);
+    let full = aspect(&mut s);
+    assert!((full - full_w / full_h).abs() < 0.02, "{full} vs {}", full_w / full_h);
+    s.execute("crop.fullFrame", &json!({})).unwrap();
+    assert!((aspect(&mut s) - cropped).abs() < 1e-6);
     // the photos' own resolution, so nothing held it back (issue #1455)
     let (mp, native) = (r["megapixels"].as_f64().unwrap(), r["nativeMegapixels"].as_f64().unwrap());
     assert!((mp / native - 1.0).abs() < 0.02 && r["limit"].is_null(), "{r}");

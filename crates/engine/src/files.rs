@@ -404,14 +404,34 @@ fn denoised_camera_rgb(raw: &lightcraft_raw::RawImage, spec: &DenoiseSpec, facto
     }
 }
 
+/// [`load_vec`] of a raw's whole picture, past its default crop ("Show Full Image").
+pub fn load_vec_full(bytes: Vec<u8>, max_edge: usize) -> Result<(Rgb32f, SourceInfo), String> {
+    rayon::scope(move |_| load_bytes_with(std::borrow::Cow::Owned(bytes), max_edge, None, true).map(|(img, _, info)| (img, info)))
+}
+
 fn load_bytes_now(
     bytes: std::borrow::Cow<'_, [u8]>,
     max_edge: usize,
     denoise: Option<&DenoiseSpec>,
 ) -> Result<(Rgb32f, Option<Rgb32f>, SourceInfo), String> {
+    load_bytes_with(bytes, max_edge, denoise, false)
+}
+
+/// [`load_bytes_now`]; `full_frame`: a raw's whole active area instead of its default crop.
+fn load_bytes_with(
+    bytes: std::borrow::Cow<'_, [u8]>,
+    max_edge: usize,
+    denoise: Option<&DenoiseSpec>,
+    full_frame: bool,
+) -> Result<(Rgb32f, Option<Rgb32f>, SourceInfo), String> {
     if lightcraft_raw::probe(&bytes).is_some() {
         let mut raw = match lightcraft_raw::decode(&bytes).map_err(|e| preview_reason(&bytes, e)) {
-            Ok(r) => r,
+            Ok(mut r) => {
+                if full_frame {
+                    r.crop = lightcraft_raw::Rect::new(0, 0, r.active_area.width, r.active_area.height);
+                }
+                r
+            }
             Err(Ok(why)) => {
                 // show the camera's embedded JPEG (rendered, not raw) until the variant is supported
                 return load_embedded_preview(&bytes, max_edge)
@@ -1051,6 +1071,21 @@ pub fn fs_pair_loader() -> PairLoader {
     })
 }
 
+/// The filesystem decoder of a raw's whole picture ("Show Full Image"), counted at the memory gate as
+/// [`fs_hooks`]' loader is.
+pub fn fs_full_frame_loader() -> FileLoader {
+    Arc::new(|path: &str, max_edge: usize| {
+        let len = std::fs::metadata(path).map(|m| usize::try_from(m.len()).unwrap_or(usize::MAX)).unwrap_or(0);
+        let weight = len * if max_edge <= crate::media::SourceLevel::Thumb.max_edge() { 3 } else { 6 };
+        let gate = crate::memory::work_gate();
+        let _permit = if crate::memory::is_background() { gate.acquire(weight) } else { gate.acquire_urgent(weight) };
+        let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+        let r = load_vec_full(bytes, max_edge);
+        crate::memory::release();
+        r
+    })
+}
+
 /// Filesystem-backed hooks (native). On the web the host installs bytes-based hooks instead.
 ///
 /// Their working memory is bounded by [`crate::memory::work_gate`]: background loads (grid
@@ -1095,6 +1130,7 @@ impl crate::Session {
     pub fn with_fs(mut self) -> Self {
         let (l, p) = fs_hooks();
         self.media.file_loader = Some(l);
+        self.media.full_frame_loader = Some(fs_full_frame_loader());
         self.media.file_probe = Some(p);
         self.media.preview_loader = Some(fs_preview_loader());
         self.media.denoise.loader = Some(fs_pair_loader());

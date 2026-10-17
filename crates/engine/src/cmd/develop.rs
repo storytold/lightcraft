@@ -686,6 +686,27 @@ pub fn specs() -> Vec<CommandSpec> {
                 Ok(())
             })
         }),
+        cmd!(
+            "crop.fullFrame",
+            "Show Full Image",
+            [],
+            None,
+            "{on?: bool (default: toggle)}: a raw with a default crop (a merged panorama's crop, a camera's in-camera aspect ratio) shows the whole picture its file holds; the crop rectangle starts over",
+            has_active,
+            |s, p| {
+                let id = active(s, "crop.fullFrame")?;
+                let now = s.develop_of(id).is_some_and(|d| d.crop.full_frame);
+                let on = p.get("on").and_then(Value::as_bool).unwrap_or(!now);
+                edit(s, "crop.fullFrame", if on { "Show Full Image" } else { "Show Default Crop" }, |d| {
+                    // the rectangle was relative to the other picture
+                    if d.crop.full_frame != on {
+                        d.crop.geometry = CropGeometry::default();
+                    }
+                    d.crop.full_frame = on;
+                    Ok(())
+                })
+            }
+        ),
         cmd!("crop.reset", "Reset Crop", [], Some("Cmd+Alt+R"), "{}", has_active, |s, _| {
             edit(s, "crop.reset", "Reset Crop", |d| {
                 d.crop = Default::default();

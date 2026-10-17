@@ -607,9 +607,18 @@ impl Session {
         let mut invalidated = Vec::new();
         // photos whose file was replaced: the faces made from the old pixels go too (issue #1524)
         let mut replaced = Vec::new();
+        // photos whose develop settings change: "Show Full Image" decodes another picture
+        let mut develop: Vec<(PhotoId, bool)> = Vec::new();
         let mut pending = vec![&op];
         while let Some(op) = pending.pop() {
             match op {
+                Op::SetDevelop { id, .. }
+                | Op::SetVersions { id, .. }
+                | Op::SetHistory { id, .. }
+                | Op::PushHistory { id, .. }
+                | Op::SetHistoryCursor { id, .. } => {
+                    develop.push((*id, self.catalog.photo(*id).is_some_and(|p| p.develop.crop.full_frame)));
+                }
                 Op::SetContent { id, .. } => {
                     invalidated.push(*id);
                     replaced.push(*id);
@@ -621,6 +630,11 @@ impl Session {
             }
         }
         let inv = self.catalog.apply(op)?;
+        for (id, was) in develop {
+            if self.catalog.photo(id).is_some_and(|p| p.develop.crop.full_frame != was) {
+                invalidated.push(id);
+            }
+        }
         for id in invalidated {
             self.media.forget(id);
         }
