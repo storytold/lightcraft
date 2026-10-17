@@ -1,5 +1,12 @@
 # What's new in LightCraft
 
+## 2026-10-15
+
+### Export Keywords leaves your originals alone
+- File ▸ Export Keywords… (`keyword.export`) now refuses a path that is a photo's original or its XMP sidecar, as
+  the other exports do, and writes the list atomically (issue #1944). Over the control channel, MCP or the CLI it
+  used to write the keyword list over whatever file it was given.
+
 ## 2026-10-14
 
 ### Lightroom radial masks on the right side

@@ -276,6 +276,13 @@ fn curve_preset_export_never_overwrites_originals_or_sidecars() {
     preset_export_preserves_originals("curve.exportPresets", json!({"names": ["Linear"]}), "curve-export-guard");
 }
 
+/// Issue #1944: Export Keywords wrote its list over whatever path it was given, a library
+/// original included.
+#[test]
+fn keyword_export_never_overwrites_originals_or_sidecars() {
+    preset_export_preserves_originals("keyword.export", json!({}), "keyword-export-guard");
+}
+
 #[test]
 fn preset_exports_preserve_previous_files_on_write_failure() {
     let dir = temp_dir("preset-export-failure");
