@@ -84,17 +84,22 @@ pub enum Process {
     /// Highlights and Shadows keep the local contrast of the tones they move: their edge-aware base
     /// is taken of a fine median of log luminance (issue #632).
     V2,
+    /// Colours brighter than the output can show keep their hue and saturation: the brightest channel is
+    /// limited to white and the others keep their places between it and the darkest, instead of the colour
+    /// being moved toward its luminance (which turned bright saturated reds pink).
+    V3,
 }
 
 impl Process {
     /// Every process, oldest first.
-    pub const ALL: [Process; 2] = [Process::V1, Process::V2];
-    pub const LATEST: Process = Process::V2;
+    pub const ALL: [Process; 3] = [Process::V1, Process::V2, Process::V3];
+    pub const LATEST: Process = Process::V3;
 
     pub const fn version(self) -> ProcessVersion {
         match self {
             Process::V1 => ProcessVersion(1),
             Process::V2 => ProcessVersion(2),
+            Process::V3 => ProcessVersion(3),
         }
     }
 }

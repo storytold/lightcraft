@@ -73,6 +73,8 @@ const FIELDS: &[(&str, usize)] = &[
     ("OUT_Y", 3),
     ("OUT_TRC", 1),
     ("OUT_GAMMA", 1),
+    // process V3: over-range colours keep hue and saturation (`lightcraft_pipeline::finish::hue_clip`)
+    ("HUE_CLIP", 1),
     // first row of a band dispatch (the kernel runs over rows Y0.., see `render`)
     ("Y0", 1),
 ];
@@ -166,6 +168,7 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     p.u("CURVE_OFF", curve_off as u32);
     p.b("CURVES", fp.curves.is_some());
     p.f("REFINE_SAT", fp.refine_sat);
+    p.b("HUE_CLIP", fp.hue_clip);
     p.f("GAIN", fp.gain);
     p.f("EV", fp.ev);
     p.f("AIR", fp.air);

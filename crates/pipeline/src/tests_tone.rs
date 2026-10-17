@@ -243,3 +243,26 @@ fn the_base_plane_is_cached_per_process() {
     assert_ne!(local::base_key(&s1, sg, 0), local::base_key(&s2, sg, 0), "the process is part of the key");
     assert_ne!(local::base_key(&s2, sg, 0), local::base_key(&s2, sg, sig.base_detail));
 }
+
+/// Process V3: a bright saturated red pushed past white keeps its hue and most of its saturation; V2 moves it toward
+/// its luminance, which lifts green and blue and turns it pink.
+#[test]
+fn v3_keeps_bright_saturated_colours_out_of_pink() {
+    // sRGB (0.5, 0.025, 0.025) in linear Rec.2020: a red inside the output's gamut, as a red flower's
+    let mut src = Rgb32f::new(64, 64);
+    for p in src.data.iter_mut() {
+        *p = [0.323, 0.058, 0.033];
+    }
+    let raw = SourceInfo { raw: true, ..Default::default() };
+    let shot_on = |process: Process| {
+        let mut s = on(process);
+        s.light.exposure = 2.0;
+        let out = render(&src, &raw, &s, &RenderRequest::fit(64, 64)).image;
+        out.data[32 * 64 + 32]
+    };
+    let (v2, v3) = (shot_on(Process::V2), shot_on(Process::V3));
+    // measured: V2 (255, 157, 157), V3 (255, 106, 106): the red channel is limited to white and green and blue rise
+    // only part of the way toward the colour's luminance (the fades of `finish::hue_fade`)
+    assert!(v2[0] >= 250 && v2[1] > 140, "V2 turns pink: {v2:?}");
+    assert!(v3[0] >= 250 && v3[1] < 120 && v3[1].abs_diff(v3[2]) <= 1, "V3 keeps the red: {v3:?}");
+}

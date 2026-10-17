@@ -34,7 +34,10 @@ use lightcraft_raw::{
 /// 7: the sensor proxy follows the file's lens warp when the camera JPEG is lens-corrected.
 /// 8: the bundled NIKON Z 6_2 profile.
 /// 9: the bundled NIKON Z 8 and NIKON D5300 profiles.
-pub const LOOK_VERSION: u32 = 9;
+/// 10: a photo no look fits keeps its camera profile's colour instead of the neutral fallback.
+/// 11: a camera profile's pooled tone curve continues a photo's own past what its JPEG showed.
+/// 12: the bundled NIKON D780, D750 and D90 profiles.
+pub const LOOK_VERSION: u32 = 12;
 
 #[derive(Clone, Debug)]
 pub(crate) struct CameraLook {
@@ -270,16 +273,17 @@ pub(crate) fn fit_preview(raw: &RawImage, bytes: &[u8], transform: &CameraTransf
     // try its colour first and fit tone/chroma per photo (picture styles vary).
     let profile = raw.metadata.model.as_deref().and_then(crate::camera_profiles::get);
     let colour = profile.as_ref().and_then(|p| Some((p.matrix().mul(&transform.matrix.inverse()?), p.hue_sat.clone())));
-    let look = match fit_look(&sensor, &reference, &clipped, colour.clone()) {
-        Some(look) => look,
-        // A black-and-white JPEG has no colour to fit: the profile's colour and the JPEG's tone curve
-        // (`monochrome_look` does it without a profile).
-        None if colour.is_some() && black_and_white => {
-            let unclipped = without_clipped(&sensor, &clipped);
-            let Some(look) = fit_tone_only(unclipped.as_ref().unwrap_or(&sensor), &reference, colour) else { return (None, true) };
-            look
-        }
-        None => return (None, black_and_white),
+    let pooled = profile.as_ref().and_then(|p| p.tone);
+    let fitted = fit_look(&sensor, &reference, &clipped, colour.clone());
+    let tone_only = |colour| {
+        let unclipped = without_clipped(&sensor, &clipped);
+        fit_tone_only(unclipped.as_ref().unwrap_or(&sensor), &reference, Some(colour))
+    };
+    let Some(look) = with_profile_colour(fitted, colour, pooled, tone_only) else { return (None, black_and_white) };
+    // the camera's own curve past what this photo's JPEG showed
+    let look = match pooled {
+        Some(pooled) => CameraLook { tone: extend_tone(&look.tone, &pooled), ..look },
+        None => look,
     };
     // Sony's Dynamic Range Optimizer (on by default) brightens the camera JPEG's darker regions,
     // not the raw: keep the colour fitted to the JPEG, take the tone curve without DRO.
@@ -296,6 +300,24 @@ pub(crate) fn fit_preview(raw: &RawImage, bytes: &[u8], transform: &CameraTransf
         );
     }
     (Some(look), black_and_white)
+}
+
+/// `fitted`, the photo's own look, or when no look fits it (a black-and-white JPEG has no colour; a dark one too few
+/// colour pairs) its camera profile's `colour`: with the JPEG's tone curve when [`fit_tone_only`] finds one
+/// (`monochrome_look` does it without a profile), else the profile's pooled tone curve, else the default raw one. Dropping the profile there for the
+/// neutral fallback left a NIKON D780 frame 3.7 EV under, pushed back up, at 37% of its properly exposed twin's chroma
+/// (88-99% with the profile's colour).
+fn with_profile_colour(
+    fitted: Option<CameraLook>,
+    colour: Option<(Mat3, Option<HsvTable>)>,
+    pooled: Option<CameraTone>,
+    tone_only: impl FnOnce((Mat3, Option<HsvTable>)) -> Option<CameraLook>,
+) -> Option<CameraLook> {
+    if fitted.is_some() {
+        return fitted;
+    }
+    let colour = colour?;
+    tone_only(colour.clone()).or_else(|| Some(CameraLook { matrix: colour.0, tone: pooled.or_else(CameraTone::default_raw)?, hue_sat: colour.1 }))
 }
 
 /// Sensor level (normalised, white = 1) at or above which a raw channel counts as clipped, as in
@@ -808,7 +830,17 @@ fn align_cr3_framing(sensor: Rgb32f, clipped: Rgb32f, reference: &Rgb32f) -> (Rg
 /// Colour training pairs of one raw for a camera profile: white-balanced camera RGB (with the
 /// baseline exposure) → its camera JPEG (linear Rec.2020). `None` for formats with their own
 /// colour matrices, other files or unusable previews.
-pub(crate) fn profile_pairs(raw: &RawImage, bytes: &[u8], lens: Option<&LensGeometry>) -> Option<Vec<([f64; 3], [f64; 3])>> {
+/// What one photo contributes to a camera profile ([`profile_samples`]), in white-balanced camera RGB.
+pub(crate) struct ProfileSamples {
+    /// Colour pairs: camera RGB → the camera JPEG's linear Rec.2020.
+    pub colour: Vec<([f64; 3], [f64; 3])>,
+    /// Tone samples: camera RGB → the camera JPEG's luminance, dark pixels included (as the photo's own toe fit takes
+    /// them, [`fit_tone_with_shadows`]).
+    pub tone: Vec<([f64; 3], f64)>,
+}
+
+/// A raw's colour and tone samples for a pooled camera profile (`lightcraft-cli calibrate`).
+pub(crate) fn profile_samples(raw: &RawImage, bytes: &[u8], lens: Option<&LensGeometry>) -> Option<ProfileSamples> {
     if !file_local_look(raw.format) || lightcraft_raw::color::has_matrix(&raw.color) {
         return None;
     }
@@ -818,7 +850,72 @@ pub(crate) fn profile_pairs(raw: &RawImage, bytes: &[u8], lens: Option<&LensGeom
     // clipped sensor pixels don't record the scene's colour (see `fit_look`)
     let sensor = without_clipped(&sensor, &clipped).unwrap_or(sensor);
     let (pairs, _) = collect_pairs(&sensor, &reference, 0.05, None, false)?;
-    Some(pairs.into_iter().map(|(x, y)| (to_camera.apply(x), y)).collect())
+    let tone = sensor
+        .data
+        .iter()
+        .zip(&reference.data)
+        .filter(|(input, output)| tone_sample(**input, **output))
+        .map(|(input, output)| (to_camera.apply(input.map(f64::from)), f64::from(luminance_2020(*output))))
+        .collect();
+    Some(ProfileSamples { colour: pairs.into_iter().map(|(x, y)| (to_camera.apply(x), y)).collect(), tone })
+}
+
+/// Whether a sensor/JPEG proxy pixel pair can teach the tone curve: every channel above the sensor floor, the JPEG
+/// pixel about one 8-bit sRGB code above black (no flat black segment learnt from JPEG compression) and below the
+/// highlights (clipped or rolled off).
+fn tone_sample(input: [f32; 3], output: [f32; 3]) -> bool {
+    input.iter().all(|v| v.is_finite() && *v > 0.0001 && *v < 1.5)
+        && output.iter().all(|v| v.is_finite() && *v >= 0.0)
+        && (0.0003..0.85).contains(&luminance_2020(output))
+}
+
+/// A camera profile's tone curve from the tone samples pooled over its photos, through the profile's `matrix`: one
+/// curve for the camera, from shadows that only dark photos show to highlights that only bright ones show. Quantile
+/// matching ([`fit_tone`]) pools correctly because every photo went through the same camera curve (picture styles and
+/// Active D-Lighting aside, which it averages).
+pub(crate) fn fit_profile_tone(samples: &[([f64; 3], f64)], matrix: &Mat3) -> Option<CameraTone> {
+    fit_tone(samples.iter().map(|(x, y)| (luma(matrix.apply(*x).map(|v| v.max(0.0))), *y)).filter(|(x, _)| *x > 0.0).collect())
+}
+
+/// `photo`'s tone curve where its JPEG taught it, `pooled`'s past that: from the photo's last knot it fades over
+/// [`EXTEND_FADE_EV`] from its own level onto the camera's pooled curve, instead of the bounded shoulder
+/// ([`CameraTone::apply`]) whose rate comes from the photo's last two knots. A dark photo's curve ends in the shadows,
+/// and that shoulder rendered it, pushed back up, 4-7 L* darker than a properly exposed photo of the same scene.
+/// `photo` unchanged when the pooled curve doesn't reach on past it.
+fn extend_tone(photo: &CameraTone, pooled: &CameraTone) -> CameraTone {
+    /// EV over which the extension moves from the photo's level onto the pooled curve.
+    const EXTEND_FADE_EV: f32 = 1.0;
+    /// Knots per EV of the extension.
+    const EXTEND_KNOTS_PER_EV: f32 = 3.0;
+    let (own, camera) = (photo.knots(), pooled.knots());
+    let (end, last) = (own[31], camera[31][0]);
+    let span = (last / end[0]).log2();
+    if !(span.is_finite() && span > 0.2) {
+        return *photo;
+    }
+    let extra = ((span * EXTEND_KNOTS_PER_EV).round() as usize).clamp(2, 16);
+    let at_end = pooled.apply(end[0]);
+    let ratio = if at_end > 0.0 && end[1] > 0.0 { end[1] / at_end } else { 1.0 };
+    let mut knots = [[0.0f32; 2]; 32];
+    // the photo's own knots, evenly thinned to make room, always keeping its first and last
+    let kept = 32 - extra;
+    for (i, knot) in knots.iter_mut().take(kept).enumerate() {
+        *knot = own[i * 31 / (kept - 1)];
+    }
+    for k in 1..=extra {
+        let ev = span * k as f32 / extra as f32;
+        let x = end[0] * ev.exp2();
+        let t = (ev / EXTEND_FADE_EV).clamp(0.0, 1.0);
+        let w = t * t * (3.0 - 2.0 * t);
+        knots[kept + k - 1] = [x, pooled.apply(x) * ratio.powf(1.0 - w)];
+    }
+    // monotone and below white whatever the two curves do
+    let mut floor = 0.0f32;
+    for knot in &mut knots {
+        knot[1] = knot[1].max(floor).min(0.999);
+        floor = knot[1];
+    }
+    CameraTone::new(knots).and_then(|tone| tone.with_chroma(*photo.chroma())).unwrap_or(*photo)
 }
 
 /// A camera profile's colour model (matrix from white-balanced camera RGB, hue/saturation table)
@@ -2857,6 +2954,21 @@ mod tests {
         corpus_uses_the_bundled_profile("nef-nikon-z8-lossless.nef", "NIKON Z 8");
     }
 
+    #[test]
+    fn corpus_d780_uses_the_bundled_profile() {
+        corpus_uses_the_bundled_profile("nef-nikon-d780.nef", "NIKON D780");
+    }
+
+    #[test]
+    fn corpus_d750_uses_the_bundled_profile() {
+        corpus_uses_the_bundled_profile("nef-nikon-d750.nef", "NIKON D750");
+    }
+
+    #[test]
+    fn corpus_d90_uses_the_bundled_profile() {
+        corpus_uses_the_bundled_profile("nef-nikon-d90.nef", "NIKON D90");
+    }
+
     /// A public D7500 NEF (skipped without the corpus): its look is fitted to its own JPEG and white
     /// balance is relative to the as-shot look.
     #[test]
@@ -3982,5 +4094,83 @@ mod tests {
         let mut looked = color;
         looked.profile.look_table = HsvTable::from_tags(&[1, 2, 1], &[0.0, 1.0, 1.0, 0.0, 1.0, 1.0], 0);
         assert!(looked.profile.look_table.is_some() && !eligible(RawFormat::Dng, looked), "a look table is the file's own rendering");
+    }
+
+    #[test]
+    fn a_photo_no_look_fits_keeps_its_camera_profiles_colour() {
+        let colour = (
+            Mat3([[1.8, -0.6, -0.2], [-0.3, 1.5, -0.2], [0.0, -0.4, 1.4]]),
+            dro_test_look(&std::array::from_fn(|i| 0.01 + i as f32 * 0.01), &|x| x).hue_sat,
+        );
+        // too dark for any look, no tone either: the profile's colour, the default raw tone curve
+        let look = with_profile_colour(None, Some(colour.clone()), None, |_| None).expect("the profile's colour");
+        assert_eq!((look.matrix, look.hue_sat.is_some()), (colour.0, true));
+        assert_eq!(look.tone, CameraTone::default_raw().unwrap());
+        // the JPEG's tone curve when it has one
+        let toned = dro_test_look(&std::array::from_fn(|i| 0.01 + i as f32 * 0.01), &|x| 0.9 * x);
+        let look = with_profile_colour(None, Some(colour.clone()), None, |c| Some(CameraLook { matrix: c.0, ..toned.clone() })).unwrap();
+        assert_eq!((look.matrix, look.tone), (colour.0, toned.tone));
+        // a photo's own look wins; without a profile there is nothing to keep (the neutral fallback follows)
+        let own = with_profile_colour(Some(toned.clone()), Some(colour), None, |_| unreachable!()).unwrap();
+        assert_eq!(own.matrix, toned.matrix);
+        assert!(with_profile_colour(None, None, None, |_| unreachable!()).is_none());
+    }
+
+    /// A camera curve: a toe, then a shoulder toward 0.95, the shape camera JPEG curves have.
+    fn camera_curve(x: f32) -> f32 {
+        0.95 * (x / (x + 0.12)).powf(1.3) * 1.1
+    }
+
+    fn sampled(curve: impl Fn(f32) -> f32, from: f32, to: f32) -> CameraTone {
+        CameraTone::new(std::array::from_fn(|i| {
+            let x = from * (to / from).powf(i as f32 / 31.0);
+            [x, curve(x)]
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_dark_photos_curve_goes_on_along_the_cameras_pooled_one() {
+        let pooled = sampled(camera_curve, 0.0005, 0.9);
+        // a dark photo's JPEG showed the curve up to 0.02, 10% darker than the camera's (a picture style)
+        let photo = sampled(|x| 0.9 * camera_curve(x), 0.0005, 0.02).with_chroma([1.4, 1.2, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]).unwrap();
+        let tone = extend_tone(&photo, &pooled);
+        assert_eq!(tone.chroma(), photo.chroma());
+        // its own curve where its JPEG taught it, the pooled one from 1 EV past that, a monotone fade in between
+        for x in [0.001f32, 0.005, 0.01, 0.019] {
+            assert!((tone.apply(x) - photo.apply(x)).abs() < 0.02 * photo.apply(x), "{x}: {} vs {}", tone.apply(x), photo.apply(x));
+        }
+        for x in [0.05f32, 0.1, 0.3, 0.8] {
+            assert!((tone.apply(x) - pooled.apply(x)).abs() < 0.01, "{x}: {} vs {}", tone.apply(x), pooled.apply(x));
+        }
+        assert!(tone.knots().windows(2).all(|k| k[1][0] > k[0][0] && k[1][1] >= k[0][1]));
+        // a photo that already reaches as far keeps its curve
+        let bright = sampled(|x| 0.9 * camera_curve(x), 0.0005, 0.85);
+        assert_eq!(extend_tone(&bright, &pooled), bright);
+    }
+
+    #[test]
+    fn a_pooled_tone_curve_spans_dark_and_bright_photos() {
+        // camera RGB grey (white balanced): a dark photo's pixels and a bright one's, through one camera curve
+        let matrix = Mat3::IDENTITY;
+        let samples: Vec<([f64; 3], f64)> = (0..4000)
+            .map(|i| {
+                let x = if i % 2 == 0 { 0.0005 * 40f64.powf((i / 2) as f64 / 2000.0) } else { 0.02 * 40f64.powf((i / 2) as f64 / 2000.0) };
+                ([x; 3], f64::from(camera_curve(x as f32)))
+            })
+            .collect();
+        let tone = fit_profile_tone(&samples, &matrix).unwrap();
+        for x in [0.001f32, 0.01, 0.05, 0.2, 0.6] {
+            assert!((tone.apply(x) - camera_curve(x)).abs() < 0.01 + 0.03 * camera_curve(x), "{x}: {} vs {}", tone.apply(x), camera_curve(x));
+        }
+        assert!(fit_profile_tone(&samples[..64], &matrix).is_none(), "too few samples");
+    }
+
+    #[test]
+    fn a_photo_no_look_fits_takes_the_profiles_pooled_tone_curve() {
+        let colour = (Mat3::IDENTITY, None);
+        let pooled = sampled(camera_curve, 0.0005, 0.9);
+        let look = with_profile_colour(None, Some(colour), Some(pooled), |_| None).unwrap();
+        assert_eq!(look.tone, pooled);
     }
 }

@@ -195,6 +195,9 @@ pub struct FinishParams {
     /// Peak linear output relative to SDR white: 1 for SDR renders; `2^max_ev` for an HDR render
     /// ([`OutputDepth::F32Hdr`] with HDR on), which keeps values above 1 instead of clipping them.
     pub peak: f32,
+    /// Colours above `peak` keep their hue and saturation ([`hue_clip`], process V3) instead of moving toward their
+    /// luminance.
+    pub hue_clip: bool,
 }
 
 impl FinishParams {
@@ -226,6 +229,7 @@ impl FinishParams {
         let peak = s.hdr.peak();
         FinishParams {
             peak,
+            hue_clip: s.process.process() >= Process::V3,
             calib: if calibration { crate::colorops::calibration_matrix(&s.calibration) } else { None },
             shadow_tint: if calibration { (s.calibration.shadows_tint / 100.0) as f32 } else { 0.0 },
             tone: base_tone(s, info, peak),
@@ -280,8 +284,9 @@ impl FinishParams {
 pub fn base_tone(s: &DevelopSettings, info: &SourceInfo, peak: f32) -> ToneMap {
     let l = &s.light;
     match s.process.process() {
-        // V2 changes the Highlights/Shadows base (`local::tone_base`), not the tone map
-        Process::V1 | Process::V2 => match info.camera_tone.as_ref().filter(|_| info.raw) {
+        // V2 changes the Highlights/Shadows base (`local::tone_base`), V3 the over-range colours ([`hue_clip`]), not the
+        // tone map
+        Process::V1 | Process::V2 | Process::V3 => match info.camera_tone.as_ref().filter(|_| info.raw) {
             Some(curve) => ToneMap::camera_hdr(curve, l.contrast, l.whites, l.blacks, peak),
             None if info.raw => ToneMap::hdr(l.contrast, l.whites, l.blacks, peak),
             None => ToneMap::display_hdr(l.contrast, l.whites, l.blacks, peak),
@@ -541,7 +546,8 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
             let mx = d[0].max(d[1]).max(d[2]);
             if mx > peak {
                 let t = ((mx - peak) / (mx - o).max(1e-6)).clamp(0.0, 1.0);
-                d = d.map(|v| v + (o - v) * t);
+                let grey = d.map(|v| v + (o - v) * t);
+                d = if fp.hue_clip { keep_hue(d, grey, o, peak) } else { grey };
             }
 
             // --- colour
@@ -598,6 +604,7 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                     if pp.dest_warning && out_of_gamut(q0, t) {
                         warn = Some(crate::output::PROOF_DEST_WARNING);
                     }
+                    let q = if fp.hue_clip { keep_hue_in_gamut(q0, q, pp.luma, peak) } else { q };
                     mul3(&pp.proof_to_out, q)
                 }
                 None => mul3(to_out, d),
@@ -606,7 +613,7 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
             if fp.proof.as_ref().is_some_and(|pp| pp.display_warning) && warn.is_none() && out_of_gamut(r, t) {
                 warn = Some(crate::output::PROOF_DISPLAY_WARNING);
             }
-            r = mapped;
+            r = if fp.hue_clip { keep_hue_in_gamut(r, mapped, *out_luma, peak) } else { mapped };
 
             // --- encode, curves, grain
             let mut e = if hdr {
@@ -688,6 +695,75 @@ fn mul3(m: &[[f32; 3]; 3], d: [f32; 3]) -> [f32; 3] {
         m[1][0] * d[0] + m[1][1] * d[1] + m[1][2] * d[2],
         m[2][0] * d[0] + m[2][1] * d[1] + m[2][2] * d[2],
     ]
+}
+
+/// Luminance (relative to the peak) from which an over-range colour fades from keeping its hue ([`hue_clip`]) to
+/// moving toward its luminance as before V3, reached at the peak: a colour that is nearly white overall (a blown sky,
+/// sunlit pale leaves) still goes white, as a camera's per-channel curve takes it. Keeping the hue all the way rendered
+/// a blown sky light blue where the camera JPEG and V2 show it white.
+pub const HUE_FADE_FROM: f32 = 0.35;
+/// Stops by which the brightest channel exceeds the peak over which an over-range colour also fades toward its
+/// luminance: a colour just over white keeps its hue, one far over goes to white gradually. With the luminance fade
+/// alone (from 0.6) saturated colours kept their hue right up to white and then switched at a hard edge (an exposure
+/// ramp of a saturated blue or red went from full colour to white within a few per cent of its length), and a sunlit
+/// red lost its light and shade.
+pub const HUE_FADE_EV: f32 = 2.0;
+
+/// How far an over-range colour of luminance `y` whose brightest channel is `hi` has faded from [`hue_clip`] to the
+/// pre-V3 mapping (0 = hue kept, 1 = moved toward its luminance): the larger of the two fades.
+#[inline]
+fn hue_fade(y: f32, hi: f32, peak: f32) -> f32 {
+    let over = if hi > peak && peak > 0.0 { (hi / peak).log2() } else { 0.0 };
+    smooth(HUE_FADE_FROM * peak, peak, y).max(smooth(0.0, HUE_FADE_EV, over))
+}
+
+/// Process V3's over-range colour after the tone map: `hue_clip(d)` for a colour well below white in luminance `o` and
+/// just over white, fading to `grey` (the colour moved toward its luminance, V1 and V2) as [`hue_fade`] says.
+#[inline]
+fn keep_hue(d: [f32; 3], grey: [f32; 3], o: f32, peak: f32) -> [f32; 3] {
+    let kept = hue_clip(d, peak);
+    let w = hue_fade(o, d[0].max(d[1]).max(d[2]), peak);
+    std::array::from_fn(|i| kept[i] + (grey[i] - kept[i]) * w)
+}
+
+/// [`keep_hue`] for the output's gamut mapping: `r` limited to `peak` with its hue and negative channels moved toward
+/// its luminance, fading to `mapped` ([`gamut_map_to`]'s result) as [`hue_fade`] says (luminance with weights `luma`).
+#[inline]
+fn keep_hue_in_gamut(r: [f32; 3], mapped: [f32; 3], luma: [f32; 3], peak: f32) -> [f32; 3] {
+    let kept = lift_negatives(hue_clip(r, peak), luma, peak);
+    let y = luma[0] * r[0] + luma[1] * r[1] + luma[2] * r[2];
+    let w = hue_fade(y, r[0].max(r[1]).max(r[2]), peak);
+    std::array::from_fn(|i| kept[i] + (mapped[i] - kept[i]) * w)
+}
+
+/// `c` with no channel above `peak`, hue and saturation kept (process V3): when the brightest channel is above
+/// `peak` it becomes `peak`, the darkest stays (unless it is above `peak` too: then the colour is white) and the
+/// middle one keeps its place between them. A colour already in range is unchanged. Moving such a colour toward its
+/// luminance instead (V1, V2) keeps its brightness and gives up its colour: a sunlit red flower pushed 2.5 EV came
+/// out pink (CIE hue 25°, C* 48 against the camera JPEG's 33°, 83); with this it is 34°, 93.
+#[inline]
+pub fn hue_clip(c: [f32; 3], peak: f32) -> [f32; 3] {
+    let hi = c[0].max(c[1]).max(c[2]);
+    if hi.is_nan() || hi <= peak || !peak.is_finite() {
+        return c;
+    }
+    let lo = c[0].min(c[1]).min(c[2]);
+    if lo >= peak || !lo.is_finite() {
+        return [peak; 3];
+    }
+    let k = (peak - lo) / (hi - lo);
+    c.map(|v| lo + (v - lo) * k)
+}
+
+/// [`gamut_map_to`] for negative channels only (process V3, after [`hue_clip`] took the ones above `peak`, so the
+/// luminance is the limited colour's): `r` desaturated towards its luminance (weights `luma`, clamped to `0..peak`)
+/// until no channel is below 0. Lifting first, by the luminance of a red far above white, pulled its blue up to a
+/// magenta red.
+#[inline]
+fn lift_negatives(r: [f32; 3], luma: [f32; 3], peak: f32) -> [f32; 3] {
+    let yy = (luma[0] * r[0] + luma[1] * r[1] + luma[2] * r[2]).clamp(0.0, peak);
+    let t = r.iter().filter(|c| **c < 0.0).fold(1.0f32, |t, c| t.min(yy / (yy - c).max(1e-9)));
+    if t < 1.0 { r.map(|c| yy + (c - yy) * t) } else { r }
 }
 
 /// Desaturate linear `r` towards its luminance (weights `luma`) until every channel is in 0..1;
@@ -800,5 +876,71 @@ mod tests {
         assert!(worst < 2e-5, "{worst}");
         assert_eq!(encode_srgb(lut, -1.0), 0.0);
         assert!((encode_srgb(lut, 2.0) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn hue_clip_limits_the_brightest_channel_and_keeps_hue() {
+        assert_eq!(hue_clip([0.9, 0.5, 0.1], 1.0), [0.9, 0.5, 0.1], "in range: unchanged");
+        let c = hue_clip([1.8, 0.6, 0.0], 1.0);
+        assert_eq!(c[0], 1.0);
+        assert!(c[2] == 0.0 && (c[1] - 1.0 / 3.0).abs() < 1e-6, "middle keeps its place: {c:?}");
+        assert_eq!(hue_clip([1.5, 1.2, 1.1], 1.0), [1.0; 3], "every channel over: white");
+        assert_eq!(hue_clip([3.0, 0.5, 0.25], 2.0)[0], 2.0, "an HDR peak");
+        let n = hue_clip([f32::NAN, 0.2, 0.1], 1.0);
+        assert!(n[1] == 0.2 && n[2] == 0.1, "non-finite input left to the encoder: {n:?}");
+    }
+
+    #[test]
+    fn keep_hue_holds_saturated_colours_and_lets_near_white_ones_go_white() {
+        let grey_of = |d: [f32; 3], o: f32| {
+            let mx = d[0].max(d[1]).max(d[2]);
+            let t = ((mx - 1.0) / (mx - o)).clamp(0.0, 1.0);
+            d.map(|v| v + (o - v) * t)
+        };
+        // a saturated red just over white: the hue-preserving limit, all but unchanged by the fade
+        let (red, o) = ([1.05, 0.05, 0.05], 0.3);
+        let (got, kept) = (keep_hue(red, grey_of(red, o), o, 1.0), hue_clip(red, 1.0));
+        assert!((0..3).all(|c| (got[c] - kept[c]).abs() < 1e-3), "{got:?} vs {kept:?}");
+        // further over, part of the way toward its luminance: lighter than the limit, still clearly red
+        let (red, o) = ([1.7, 0.05, 0.05], 0.48);
+        let (kept, grey, got) = (hue_clip(red, 1.0), grey_of(red, o), keep_hue(red, grey_of(red, o), o, 1.0));
+        assert!(got[1] > kept[1] && got[1] < grey[1] && got[0] - got[1] > 0.4, "{got:?} between {kept:?} and {grey:?}");
+        // a blown sky (luminance at white): as before V3, toward its luminance, not a light blue
+        let (sky, o) = ([0.85, 1.0, 1.4], 1.0);
+        assert_eq!(keep_hue(sky, grey_of(sky, o), o, 1.0), grey_of(sky, o));
+    }
+
+    /// An exposure ramp of a saturated colour has no step on its way to white: neighbouring samples (1/50 EV apart)
+    /// stay close in every channel. With the luminance fade alone the ramp switched from full colour to white abruptly.
+    #[test]
+    fn saturated_ramps_reach_white_without_a_step() {
+        for colour in [[0.9, 0.05, 0.05], [0.05, 0.1, 0.9], [0.8, 0.0, 0.8], [0.05, 0.8, 0.1]] {
+            let y = luminance_2020(colour);
+            let (mut previous, mut worst) = (None::<[f32; 3]>, 0.0f32);
+            for i in 0..=400 {
+                let d = colour.map(|v| v * 2f32.powf(-1.0 + i as f32 / 50.0));
+                let o = (y * 2f32.powf(-1.0 + i as f32 / 50.0)).min(1.0);
+                let mx = d[0].max(d[1]).max(d[2]);
+                let out = if mx > 1.0 {
+                    let t = ((mx - 1.0) / (mx - o).max(1e-6)).clamp(0.0, 1.0);
+                    keep_hue(d, d.map(|v| v + (o - v) * t), o, 1.0)
+                } else {
+                    d
+                };
+                if let Some(p) = previous {
+                    worst = worst.max((0..3).map(|c| (out[c].min(1.0) - p[c].min(1.0)).abs()).fold(0.0, f32::max));
+                }
+                previous = Some(out);
+            }
+            assert!(worst < 0.06, "{colour:?}: a step of {worst}");
+        }
+    }
+
+    #[test]
+    fn negatives_are_lifted_toward_luminance_and_over_range_left_alone() {
+        let luma = [0.2627, 0.678, 0.0593];
+        let r = lift_negatives([0.6, 0.2, -0.05], luma, 1.0);
+        assert!(r[2].abs() < 1e-6 && r[0] < 0.6 && r[0] > r[1]);
+        assert_eq!(lift_negatives([1.6, 0.2, 0.05], luma, 1.0), [1.6, 0.2, 0.05]);
     }
 }

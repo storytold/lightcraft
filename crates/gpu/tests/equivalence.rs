@@ -605,7 +605,7 @@ fn highlights_shadows_base_matches_on_every_process() {
             }];
             check(&format!("{p:?} local highlights {w}"), &src, &raw, &s, &req);
         }
-        for p in [Process::V1, Process::V2, Process::V1, Process::V2] {
+        for p in [Process::V1, Process::V2, Process::V3, Process::V1, Process::V2, Process::V3] {
             let mut s = DevelopSettings { process: p.version(), ..DevelopSettings::default() };
             s.light.highlights = -100.0;
             let warm = lightcraft_gpu::render(&src, &raw, &s, &req, Some(&cache)).expect("gpu");
@@ -876,4 +876,21 @@ fn windows_of_a_big_photo_share_one_uploaded_source() {
     assert_eq!(lightcraft_gpu::shared_source_bytes(), 0, "an idle app gives it back");
     lightcraft_gpu::render(&src, &info, &s, &at(1000), Some(&after)).expect("gpu render");
     assert_eq!(lightcraft_gpu::source_uploads() - start, 2);
+}
+
+/// Colours pushed past white (process V3 keeps their hue, V1 and V2 move them toward their luminance) match the CPU's.
+#[test]
+fn overrange_colours_match_on_every_process() {
+    if !gpu() {
+        return;
+    }
+    let raw = SourceInfo { raw: true, ..Default::default() };
+    let src = scene(0, 900, 600);
+    let req = RenderRequest::fit(640, 640);
+    for p in Process::ALL {
+        let mut s = DevelopSettings { process: p.version(), ..DevelopSettings::default() };
+        s.light.exposure = 2.5;
+        s.color.saturation = 40.0;
+        check(&format!("{p:?} pushed past white"), &src, &raw, &s, &req);
+    }
 }

@@ -280,7 +280,7 @@ impl CameraColourModel<'_> {
                     }
                     let out = hue_sat.apply_lanes(rgb);
                     for (l, p) in chunk.iter_mut().enumerate() {
-                        *p = [out[0][l], out[1][l], out[2][l]].map(|v| v.max(0.0));
+                        *p = finite([out[0][l], out[1][l], out[2][l]]);
                     }
                 }
             });
@@ -302,8 +302,20 @@ impl CameraColourModel<'_> {
             Some(tables) => tables.apply(rgb, gain),
             None => rgb.map(|v| v * gain),
         };
-        self.hue_sat.map_or(rgb, |h| h.apply(rgb)).map(|v| v.max(0.0))
+        finite(self.hue_sat.map_or(rgb, |h| h.apply(rgb)))
     }
+}
+
+/// `rgb` (linear Rec.2020) as decoding leaves it for the stages after: negative channels kept, non-finite ones zero.
+/// Near black, negative channels are sensor noise through the colour matrix, and keeping them keeps the noise zero-mean
+/// until noise reduction and the output's gamut mapping (which moves a colour toward its luminance until it is in
+/// range) deal with it. Clamping each channel at zero here kept only the positive half of every channel's noise:
+/// through a saturating camera matrix (red row 3.5, −2.4, −0.1 on a NIKON D780 profile) red and blue have the widest
+/// noise, so pushed shadows and dark frames came out magenta (a black frame pushed 4 EV rendered at sRGB (64, 28, 65)
+/// in its darkest 40%, (2, 4, 4) without the clamp). Moving each such colour toward its luminance instead still left
+/// it pink, at (34, 14, 22): any per-pixel rule that treats pixels by the sign of their noise biases the mean.
+fn finite(rgb: [f32; 3]) -> [f32; 3] {
+    rgb.map(|v| if v.is_finite() { v } else { 0.0 })
 }
 
 /// The white-balanced camera RGB that `model` (white-balanced camera RGB → linear Rec.2020) renders
@@ -1838,6 +1850,39 @@ pub(crate) mod tests {
 
     /// A fitted camera look applied in lanes, on rows that aren't a whole number of them, gives the bits of the
     /// pixel-by-pixel path, awkward pixels (black, negative, huge, NaN, infinite) included.
+    #[test]
+    fn decoding_keeps_negative_channels_and_zeroes_non_finite_ones() {
+        assert_eq!(finite([0.6, 0.05, -0.04]), [0.6, 0.05, -0.04]);
+        assert_eq!(finite([f32::NAN, -0.1, f32::INFINITY]), [0.0, -0.1, 0.0]);
+    }
+
+    /// Dark sensor noise through a saturating camera matrix (a NIKON D780 profile's) averages to a neutral colour: the
+    /// per-channel clamp at zero decoding had kept red's and blue's wider positive halves and turned it magenta.
+    #[test]
+    fn dark_noise_through_a_saturating_matrix_stays_neutral() {
+        let matrix = lightcraft_color::Mat3([[3.48, -2.41, -0.06], [-0.41, 1.57, -0.16], [0.32, -1.86, 2.58]]);
+        let colour = CameraColourModel { wb: [1.0; 3], matrix, gain: 1.0, tables: None, hue_sat: None };
+        // a grey 0.002 above black with ±0.004 of noise per channel (a deterministic sequence)
+        let mut state = 12345u32;
+        let mut noise = || {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (state >> 8) as f32 / (1u32 << 24) as f32 * 0.008 - 0.004
+        };
+        let mut img = Rgb32f::new(200, 200);
+        for p in img.data.iter_mut() {
+            *p = [0.002 + noise(), 0.002 + noise(), 0.002 + noise()];
+        }
+        colour.apply(&mut img);
+        let mut mean = [0.0f64; 3];
+        for p in &img.data {
+            for (m, v) in mean.iter_mut().zip(p) {
+                *m += f64::from(*v);
+            }
+        }
+        let (hi, lo) = (mean[0].max(mean[1]).max(mean[2]), mean[0].min(mean[1]).min(mean[2]));
+        assert!(lo > 0.0 && hi / lo < 1.2, "mean {mean:?} is tinted");
+    }
+
     #[test]
     fn camera_look_in_lanes_matches_pixel_by_pixel() {
         let data = (0..72 * 5 * 5).map(|i| [((i * 37) % 61) as f32 - 30.0, 0.6 + ((i * 11) % 13) as f32 / 13.0, 1.0]).collect();

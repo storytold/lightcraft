@@ -420,7 +420,13 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let mx = max(d.x, max(d.y, d.z));
     if (mx > 1.0) {
         let t = clamp((mx - 1.0) / max(mx - o, 1e-6), 0.0, 1.0);
-        d = d + (o - d) * t;
+        let grey = d + (o - d) * t;
+        if (pu(F_HUE_CLIP) != 0u) {
+            let kept = hue_clip(d);
+            d = kept + (grey - kept) * hue_fade(o, mx);
+        } else {
+            d = grey;
+        }
     }
 
     // --- colour
@@ -474,18 +480,13 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         vec3<f32>(pf(F_OUT_M + 6u), pf(F_OUT_M + 7u), pf(F_OUT_M + 8u)),
     );
     var r = mul3(om, d);
-    let yy = clamp(pf(F_OUT_Y) * r.x + pf(F_OUT_Y + 1u) * r.y + pf(F_OUT_Y + 2u) * r.z, 0.0, 1.0);
-    var tg = 1.0;
-    for (var k = 0u; k < 3u; k++) {
-        let cc = r[k];
-        if (cc < 0.0) {
-            tg = min(tg, yy / max(yy - cc, 1e-9));
-        } else if (cc > 1.0) {
-            tg = min(tg, (1.0 - yy) / max(cc - yy, 1e-9));
-        }
-    }
-    if (tg < 1.0) {
-        r = yy + (r - yy) * tg;
+    let luma = vec3<f32>(pf(F_OUT_Y), pf(F_OUT_Y + 1u), pf(F_OUT_Y + 2u));
+    let mapped = to_gamut(r, luma, false);
+    if (pu(F_HUE_CLIP) != 0u) {
+        let kept = to_gamut(hue_clip(r), luma, true);
+        r = kept + (mapped - kept) * hue_fade(dot(luma, r), max(r.x, max(r.y, r.z)));
+    } else {
+        r = mapped;
     }
 
     // --- encode, curves, grain
@@ -514,4 +515,47 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     e = vec3<f32>(out_encode(e.x), out_encode(e.y), out_encode(e.z));
     out[i] = enc8(e.x) | (enc8(e.y) << 8u) | (enc8(e.z) << 16u) | (255u << 24u);
+}
+
+// `lightcraft_pipeline::finish::hue_clip` with peak 1 (process V3): the brightest channel limited to 1, the darkest
+// kept (all three 1 when it is above 1 too), the middle one in its place between them
+fn hue_clip(c: vec3<f32>) -> vec3<f32> {
+    let hi = max(c.x, max(c.y, c.z));
+    if (!(hi > 1.0)) {
+        return c;
+    }
+    let lo = min(c.x, min(c.y, c.z));
+    if (lo >= 1.0) {
+        return vec3<f32>(1.0);
+    }
+    return vec3<f32>(lo) + (c - vec3<f32>(lo)) * ((1.0 - lo) / (hi - lo));
+}
+
+// `lightcraft_pipeline::finish::HUE_FADE_FROM` and `HUE_FADE_EV` (keep in step)
+const HUE_FADE_FROM: f32 = 0.35;
+const HUE_FADE_EV: f32 = 2.0;
+
+// `lightcraft_pipeline::finish::hue_fade` with peak 1
+fn hue_fade(y: f32, hi: f32) -> f32 {
+    let over = select(0.0, log2(hi), hi > 1.0);
+    return max(sstep(HUE_FADE_FROM, 1.0, y), sstep(0.0, HUE_FADE_EV, over));
+}
+
+// `r` desaturated towards its luminance (weights `luma`, clamped to 0..1) until every channel is in range
+// (`finish::gamut_map`), or, with `negatives_only`, until none is below 0 (`finish::lift_negatives`)
+fn to_gamut(r: vec3<f32>, luma: vec3<f32>, negatives_only: bool) -> vec3<f32> {
+    let yy = clamp(dot(luma, r), 0.0, 1.0);
+    var tg = 1.0;
+    for (var k = 0u; k < 3u; k++) {
+        let cc = r[k];
+        if (cc < 0.0) {
+            tg = min(tg, yy / max(yy - cc, 1e-9));
+        } else if (cc > 1.0 && !negatives_only) {
+            tg = min(tg, (1.0 - yy) / max(cc - yy, 1e-9));
+        }
+    }
+    if (tg < 1.0) {
+        return yy + (r - yy) * tg;
+    }
+    return r;
 }
