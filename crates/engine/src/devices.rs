@@ -1,6 +1,8 @@
 //! Cameras and memory cards: mounted volumes with a `DCIM` folder (the DCF layout every camera
-//! writes). Listed by `library.devices`; the app offers them under File → Import from Device, and
-//! the import review copies from them into the library.
+//! writes), and cameras and phones that don't mount as a disk (PTP/MTP, through the system's own
+//! driver: `lightcraft-cameras`; Windows so far). Listed by `library.devices`; the app offers them
+//! under File → Import from Device, and the import review copies from them into the library (a
+//! camera's photos are fetched into a staging folder first: `camera_import`).
 //!
 //! Menus are rebuilt every frame (even with their popups closed), so [`devices`] never touches the
 //! disk: it serves the last scan and, when that is older than [`MAX_AGE`], starts one background
@@ -21,6 +23,9 @@ pub struct Device {
     pub path: String,
     /// The volume's mount point.
     pub root: String,
+    /// A camera that doesn't mount as a disk: its id for `lightcraft-cameras` (`path` and `root`
+    /// are then empty, and `name` is the camera's).
+    pub camera: Option<String>,
 }
 
 /// How long a scan is served before [`devices`] starts another one.
@@ -178,10 +183,21 @@ pub fn on_change(f: impl Fn() + Send + Sync + 'static) {
 
 fn scan() -> Vec<Device> {
     let mut extra = Vec::new();
-    if cfg!(windows) && std::env::var_os("LIGHTCRAFT_DEVICE_ROOTS").is_none() {
+    let fixed = std::env::var_os("LIGHTCRAFT_DEVICE_ROOTS").is_some();
+    if cfg!(windows) && !fixed {
         extra.extend((b'D'..=b'Z').map(|c| std::path::PathBuf::from(format!("{}:\\", c as char))));
     }
-    devices_in(&mount_parents(), extra)
+    let mut out = devices_in(&mount_parents(), extra);
+    // tests that fix the roots see only those; a camera the system can't read is simply not listed
+    if !fixed {
+        out.extend(cameras(lightcraft_cameras::cameras().unwrap_or_default()));
+    }
+    out
+}
+
+/// Cameras that don't mount as a disk, as devices.
+pub fn cameras(list: Vec<lightcraft_cameras::Camera>) -> Vec<Device> {
+    list.into_iter().map(|c| Device { name: c.name, path: String::new(), root: String::new(), camera: Some(c.id) }).collect()
 }
 
 /// Devices among the children of `parents`, plus the volume roots `extra`.
@@ -201,7 +217,7 @@ pub fn devices_in(parents: &[std::path::PathBuf], extra: Vec<std::path::PathBuf>
         let Some(dcim) = dcim_in(&root) else { continue };
         let name = root.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| root.to_string_lossy().to_string());
         if !out.iter().any(|d| d.root == root.to_string_lossy()) {
-            out.push(Device { name, path: dcim.to_string_lossy().to_string(), root: root.to_string_lossy().to_string() });
+            out.push(Device { name, path: dcim.to_string_lossy().to_string(), root: root.to_string_lossy().to_string(), camera: None });
         }
     }
     out
@@ -244,7 +260,7 @@ mod tests {
     }
 
     fn card(name: &str) -> Device {
-        Device { name: name.into(), path: format!("/v/{name}/DCIM"), root: format!("/v/{name}") }
+        Device { name: name.into(), path: format!("/v/{name}/DCIM"), root: format!("/v/{name}"), camera: None }
     }
 
     /// Wait (bounded) for `f`.
@@ -257,6 +273,16 @@ mod tests {
             std::thread::sleep(Duration::from_millis(5));
         }
         false
+    }
+
+    #[test]
+    fn cameras_are_devices_without_a_path() {
+        let c = lightcraft_cameras::Camera { id: "\\\\?\\usb#vid_04cb".into(), name: "X100T".into(), manufacturer: "FUJIFILM".into() };
+        let d = cameras(vec![c]);
+        assert_eq!(d, [Device { name: "X100T".into(), path: String::new(), root: String::new(), camera: Some("\\\\?\\usb#vid_04cb".into()) }]);
+        let v = serde_json::to_value(&d[0]).unwrap();
+        assert_eq!(v["camera"], "\\\\?\\usb#vid_04cb");
+        assert_eq!(v["path"], "");
     }
 
     #[test]

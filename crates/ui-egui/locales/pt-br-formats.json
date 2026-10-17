@@ -295,5 +295,9 @@
   "Renames {n} face{} across the library. The files are not changed.": "Renomeia {n} rosto{} na biblioteca. Os arquivos não são alterados.",
   "“{to}” is already a person. Combining them makes one person; Undo separates them again.": "“{to}” já é uma pessoa. Combiná-las deixa uma só; Desfazer as separa de novo.",
   "{what} merge added at {mp}: its full size, {full}, needs more memory than this computer has": "{what} mesclagem adicionada em {mp}: o tamanho completo, {full}, precisa de mais memória do que este computador tem",
-  "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "{what} mesclagem adicionada em {mp}, o maior tamanho possível para um panorama (tamanho completo: {full})"
+  "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "{what} mesclagem adicionada em {mp}, o maior tamanho possível para um panorama (tamanho completo: {full})",
+  "Couldn't read {name}: {error}": "Não foi possível ler {name}: {error}",
+  "Couldn't read {n} photo{s} from {name}": "{name}: não foi possível ler {n} foto{s}",
+  "No new photos on {name} ({n} already in the library)": "Nenhuma foto nova em {name} ({n} já na biblioteca)",
+  "No photos found on {name}": "Nenhuma foto encontrada em {name}"
 }

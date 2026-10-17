@@ -757,7 +757,7 @@ pub struct UiState {
     pub sidecar_retry_at: f64,
     #[serde(skip)]
     pub sidecars_waiting: usize,
-    /// The cards and cameras already seen (volume roots) while Settings → Import → "Show the
+    /// The cards and cameras already seen (volume roots, camera ids) while Settings → Import → "Show the
     /// import review when a camera or card is connected" is on; `None` = not looked yet.
     #[serde(skip)]
     pub known_cards: Option<Vec<String>>,

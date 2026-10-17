@@ -1,0 +1,27 @@
+[package]
+name = "lightcraft-cameras"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "LightCraft cameras (L0): cameras and phones that don't mount as a disk (PTP/MTP), read through the operating system's own driver (Windows Portable Devices). The workspace's second crate allowed `unsafe` (COM calls, isolated in `wpd`)."
+
+# Opts out of the workspace lints only to keep `unsafe_code = "deny"` overridable for the single COM
+# module below, exactly like `crates/sysmem`; every other crate root has `#![forbid(unsafe_code)]`.
+# See AGENTS.md ("`unsafe` lives only in …").
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+
+[dependencies]
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", default-features = false, features = [
+    "Win32_Devices_PortableDevices",
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Variant",
+] }

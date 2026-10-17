@@ -295,5 +295,9 @@
   "Already in “{}”": "Уже в «{}»",
   "Move {n} photo{} to “{}”": "Перемістити до «{1}» фото: {n}{0:.0}",
   "Move {n} photo{} to “{}”?": "Перемістити до «{1}» фото: {n}{0:.0}?",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "До «{1}» переміщено фото: {n}{0:.0}. Редагування → Скасувати поверне їх."
+  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "До «{1}» переміщено фото: {n}{0:.0}. Редагування → Скасувати поверне їх.",
+  "Couldn't read {name}: {error}": "Не вдалося прочитати {name}: {error}",
+  "Couldn't read {n} photo{s} from {name}": "{name}: не вдалося прочитати фото ({n}){s:.0}",
+  "No new photos on {name} ({n} already in the library)": "На {name} немає нових фото ({n} вже в бібліотеці)",
+  "No photos found on {name}": "На {name} не знайдено фото"
 }

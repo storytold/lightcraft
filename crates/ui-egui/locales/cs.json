@@ -2063,5 +2063,7 @@
   "Open Settings": "Otevřít nastavení",
   "Select none": "Zrušit celý výběr",
   "Select all": "Vybrat vše",
-  "Visualize HDR": "Zobrazit rozsah HDR"
+  "Visualize HDR": "Zobrazit rozsah HDR",
+  "Reading camera": "Načítání fotoaparátu",
+  "the camera stopped answering": "fotoaparát přestal odpovídat"
 }

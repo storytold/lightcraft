@@ -295,5 +295,9 @@
   "Renames {n} face{} across the library. The files are not changed.": "ライブラリ全体で{n}件の顔の名前を変更します。ファイルは変更されません。{:.0}",
   "“{to}” is already a person. Combining them makes one person; Undo separates them again.": "「{to}」はすでに別の人物です。まとめると1人になり、元に戻すと再び分かれます。",
   "{what} merge added at {mp}: its full size, {full}, needs more memory than this computer has": "{what}合成を{mp}で追加しました：フルサイズ（{full}）にはこのコンピューターのメモリが足りません",
-  "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "{what}合成を{mp}で追加しました。パノラマの最大サイズです（フルサイズ：{full}）"
+  "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "{what}合成を{mp}で追加しました。パノラマの最大サイズです（フルサイズ：{full}）",
+  "Couldn't read {name}: {error}": "{name} を読み取れませんでした: {error}",
+  "Couldn't read {n} photo{s} from {name}": "{name}: {n} 枚の写真を読み取れませんでした{s:.0}",
+  "No new photos on {name} ({n} already in the library)": "{name} に新しい写真はありません（{n} 枚はライブラリにあります）",
+  "No photos found on {name}": "{name} に写真が見つかりません"
 }

@@ -1734,10 +1734,19 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             }
         }
         "file.addFromDevice" => {
+            // a camera that doesn't mount as a disk: fetch its new photos, then review them
+            let album = p.get("album").and_then(Value::as_u64);
+            if let Some(camera) = p.get("camera").and_then(Value::as_str) {
+                let name = p.get("name").and_then(Value::as_str).unwrap_or_default();
+                return Some(crate::camera_import::start(app, camera, name, album));
+            }
             // a camera / card: review its DCIM folder, copying into the library by default
             let path = match p.get("path").and_then(Value::as_str) {
                 Some(x) => x.to_string(),
                 None => match lightcraft_engine::devices::devices_now().into_iter().next() {
+                    Some(lightcraft_engine::devices::Device { camera: Some(id), name, .. }) => {
+                        return Some(crate::camera_import::start(app, &id, &name, album));
+                    }
                     Some(d) => d.path,
                     None => return Some(Err("no camera or memory card found".into())),
                 },

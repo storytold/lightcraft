@@ -295,5 +295,9 @@
   "Already in “{}”": "Już w „{}”",
   "Move {n} photo{} to “{}”": "Przenieś do „{1}” — zdjęcia: {n}{0:.0}",
   "Move {n} photo{} to “{}”?": "Przenieść do „{1}” — zdjęcia: {n}{0:.0}?",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Przeniesiono do „{1}” — zdjęcia: {n}{0:.0}. Edytuj → Cofnij przywróci je."
+  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Przeniesiono do „{1}” — zdjęcia: {n}{0:.0}. Edytuj → Cofnij przywróci je.",
+  "Couldn't read {name}: {error}": "Nie można odczytać {name}: {error}",
+  "Couldn't read {n} photo{s} from {name}": "{name}: nie można odczytać zdjęć ({n}){s:.0}",
+  "No new photos on {name} ({n} already in the library)": "Brak nowych zdjęć na {name} ({n} już w bibliotece)",
+  "No photos found on {name}": "Nie znaleziono zdjęć na {name}"
 }

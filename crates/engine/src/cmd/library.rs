@@ -664,8 +664,17 @@ pub fn specs() -> Vec<CommandSpec> {
             s.selection = Selection { active: s.selection.active.filter(|a| vis.contains(a)).or(vis.first().copied()), ids: vis };
             Ok(json!({"selected": s.selection.ids.len()}))
         }),
-        cmd!(query "library.devices", "Cameras and Cards", [], None, "{} → [{name, path (its DCIM folder), root}] — mounted volumes with a DCIM folder", always, |_, _| {
+        cmd!(query "library.devices", "Cameras and Cards", [], None, "{} → [{name, path (its DCIM folder), root, camera}] — mounted volumes with a DCIM folder, and cameras/phones that don't mount as a disk (`camera`: their id, `path` empty; Windows)", always, |_, _| {
             Ok(serde_json::to_value(crate::devices::devices_now()).unwrap_or_default())
+        }),
+        cmd!(query "library.fetchCamera", "Fetch from Camera", [], None, "{camera: id from library.devices, name?: for the staging folder} — copy the camera's photos the library doesn't have yet into a staging folder outside the library (blocking, for headless use: in the desktop app `file.addFromDevice {camera}` does this in the background and opens the review; read-only on the camera; a file with the same name, size and a capture time within 2 min of the camera's date is skipped unread, a cancelled or repeated fetch reuses what is already staged) → {staged: [paths], fetched, reused, known, unsupported, failed: [{name, error}], bytes, folder}. Then import them: `library.import {paths: staged, mode: \"move\"}`", always, |s, p| {
+            let id = p.get("camera").and_then(Value::as_str).filter(|x| !x.is_empty()).ok_or_else(|| bad("library.fetchCamera", "`camera` (an id from library.devices) is required"))?;
+            let name = p.get("name").and_then(Value::as_str).filter(|x| !x.trim().is_empty()).unwrap_or("Camera");
+            let known = crate::camera_import::Known::of(&s.catalog);
+            let dir = crate::camera_import::staging_dir(name);
+            let progress = crate::camera_import::Progress::default();
+            let r = crate::camera_import::fetch_camera(id, &known, &dir, &progress).map_err(|e| bad("library.fetchCamera", e.to_string()))?;
+            Ok(serde_json::to_value(r).unwrap_or_default())
         }),
         cmd!(query "photo.copyMetadata", "Copy Metadata", ["Photo"], None, "{} — title, caption, copyright (notice, status, usage terms, info URL), creator, location and keywords of the active photo", has_active, |s, _| {
             let id = s.active().ok_or_else(|| bad("photo.copyMetadata", "no active photo"))?;

@@ -295,5 +295,9 @@
   "Renames {n} face{} across the library. The files are not changed.": "在整个图库中重命名 {n} 张面孔。不会改动文件。{:.0}",
   "“{to}” is already a person. Combining them makes one person; Undo separates them again.": "“{to}”已经是另一个人。合并后成为一个人；撤销会再把他们分开。",
   "{what} merge added at {mp}: its full size, {full}, needs more memory than this computer has": "已添加 {what} 合并（{mp}）：完整尺寸（{full}）所需的内存超出了这台电脑的内存",
-  "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "已添加 {what} 合并（{mp}），这是全景图的最大尺寸（完整尺寸：{full}）"
+  "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "已添加 {what} 合并（{mp}），这是全景图的最大尺寸（完整尺寸：{full}）",
+  "Couldn't read {name}: {error}": "无法读取 {name}：{error}",
+  "Couldn't read {n} photo{s} from {name}": "{name}：有 {n} 张照片无法读取{s:.0}",
+  "No new photos on {name} ({n} already in the library)": "{name} 上没有新照片（{n} 张已在图库中）",
+  "No photos found on {name}": "在 {name} 上未找到照片"
 }

@@ -654,7 +654,10 @@ pub(crate) fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>>
             if devices.is_empty() {
                 vec![item("file.addFromDevice", Value::Null, "No Camera or Card Found", None, false, None)]
             } else {
-                devices.into_iter().map(|d| item("file.addFromDevice", json!({"path": d.path}), format!("{}…", d.name), None, true, None)).collect()
+                devices
+                    .into_iter()
+                    .map(|d| item("file.addFromDevice", crate::camera_import::device_params(&d), format!("{}…", d.name), None, true, None))
+                    .collect()
             }
         }
         "Metadata Preset" => {

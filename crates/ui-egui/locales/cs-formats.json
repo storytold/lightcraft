@@ -295,5 +295,9 @@
   "Already in “{}”": "Již v „{}“",
   "Move {n} photo{} to “{}”": "Přesunout do „{1}“ fotografie: {n}{0:.0}",
   "Move {n} photo{} to “{}”?": "Přesunout do „{1}“ fotografie: {n}{0:.0}?",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Do „{1}“ přesunuto fotografií: {n}{0:.0}. Úpravy → Zpět je vrátí."
+  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Do „{1}“ přesunuto fotografií: {n}{0:.0}. Úpravy → Zpět je vrátí.",
+  "Couldn't read {name}: {error}": "{name} se nepodařilo přečíst: {error}",
+  "Couldn't read {n} photo{s} from {name}": "{name}: nepodařilo se přečíst fotografie ({n}){s:.0}",
+  "No new photos on {name} ({n} already in the library)": "Na {name} nejsou žádné nové fotografie ({n} již v knihovně)",
+  "No photos found on {name}": "Na {name} nebyly nalezeny fotografie"
 }
