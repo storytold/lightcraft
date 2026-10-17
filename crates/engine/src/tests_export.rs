@@ -991,7 +991,8 @@ fn same_folder_as_original_exports_next_to_each_photo() {
     let exists = |p: &str| std::path::Path::new(p).exists();
     let files = crate::export::export_batch(&mut s, &ids, &o, &to, &mut crate::export::write_file, &exists).unwrap();
     let written: Vec<&str> = files.iter().map(|f| f["path"].as_str().unwrap()).collect();
-    let mut want = vec![a.join("Exports/IMG_1.jpg").to_string_lossy().to_string(), b.join("Exports/IMG_1.jpg").to_string_lossy().to_string()];
+    // `export` joins the subfolder and name with `/` (`join_path`), on Windows too.
+    let mut want = vec![format!("{}/Exports/IMG_1.jpg", a.to_string_lossy()), format!("{}/Exports/IMG_1.jpg", b.to_string_lossy())];
     let mut got: Vec<String> = written.iter().map(|p| p.to_string()).collect();
     want.sort();
     got.sort();

@@ -225,6 +225,7 @@ fn a_one_shot_process_never_ends_during_a_photos_import() {
         drop(h); // what lightcraft-cli does before it exits
         return;
     }
+    let _serial = crate::serial_sockets_and_children();
     for mode in ["default", "nowait"] {
         let dir = std::env::temp_dir().join(format!("lc-mcp-photos-child-{mode}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);

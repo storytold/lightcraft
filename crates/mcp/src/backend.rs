@@ -193,6 +193,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn with_reply(reply: &[u8], check: impl FnOnce(&mut Remote, Result<Value, String>)) {
+        let _serial = crate::serial_sockets_and_children();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap().to_string();
         let reply = reply.to_vec();
@@ -307,6 +308,7 @@ mod tests {
 
     #[test]
     fn consecutive_replies_match_their_requests_on_one_connection() {
+        let _serial = crate::serial_sockets_and_children();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap().to_string();
         let worker = std::thread::spawn(move || {
@@ -331,6 +333,7 @@ mod tests {
 
     #[test]
     fn lost_reply_is_not_resent() {
+        let _serial = crate::serial_sockets_and_children();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap().to_string();
         let seen = Arc::new(AtomicUsize::new(0));
@@ -353,6 +356,7 @@ mod tests {
 
     #[test]
     fn connection_closed_by_app_reconnects_before_sending() {
+        let _serial = crate::serial_sockets_and_children();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap().to_string();
         let seen = Arc::new(AtomicUsize::new(0));
