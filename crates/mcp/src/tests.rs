@@ -391,6 +391,32 @@ fn core_tools_have_hints_and_reject_unknown_keys() {
         for key in lightcraft_engine::export::OPTION_PARAMS.iter().chain(lightcraft_engine::export::TARGET_PARAMS) {
             assert!(export["inputSchema"]["properties"].get(*key).is_some(), "missing export argument {key}");
         }
+        // every helper's exact annotation quadruple (overwriting an agent-supplied path is destructive)
+        let hints: &[(&str, bool, bool, bool)] = &[
+            ("command_list", true, false, true),
+            ("command_run", false, true, false),
+            ("command_batch", false, true, false),
+            ("list_commands", true, false, true),
+            ("run_command", false, true, false),
+            ("doc_inspect", true, false, true),
+            ("render_preview", true, false, true),
+            ("query_photos", true, false, true),
+            ("import", false, true, false),
+            ("select_photos", false, true, false),
+            ("list_controls", true, false, true),
+            ("get_develop", true, false, true),
+            ("set_develop", false, true, false),
+            ("apply_preset", false, true, false),
+            ("crop", false, true, false),
+            ("render_photo", false, true, true),
+            ("export", false, true, false),
+        ];
+        for &(name, ro, destructive, idem) in hints {
+            let t = tools.iter().find(|t| t["name"] == name).unwrap_or_else(|| panic!("missing helper tool {name}"));
+            assert_eq!(t["annotations"]["readOnlyHint"], ro, "{name} readOnlyHint");
+            assert_eq!(t["annotations"]["destructiveHint"], destructive, "{name} destructiveHint");
+            assert_eq!(t["annotations"]["idempotentHint"], idem, "{name} idempotentHint");
+        }
         let before = rpc(&mut s, 2, "resources/read", json!({"uri":"lightcraft://library"}));
         let image = rpc(&mut s, 2, "tools/call", json!({"name":"render_preview","arguments":{"max_side":64}}));
         assert_eq!(image["result"]["isError"], false, "{image}");
@@ -404,6 +430,23 @@ fn core_tools_have_hints_and_reject_unknown_keys() {
         let r = rpc(&mut s, 4, "tools/call", json!({"name":"command_batch","arguments":{"steps":[{"id":"no.such"},{"id":"catalog.stats"}]}}));
         assert_eq!(r["result"]["structuredContent"]["completed"], 0);
         assert_eq!(r["result"]["structuredContent"]["results"].as_array().unwrap().len(), 1);
+    }
+    // with a desktop app attached, the UI helpers appear; `screenshot` writes a file at an
+    // agent-supplied path, the rest are read-only
+    let mut ui = Server::new(Box::new(Recorder(vec![])));
+    let list = rpc(&mut ui, 10, "tools/list", json!({}));
+    let ui_tools = list["result"]["tools"].as_array().unwrap();
+    for (name, ro, dest, idem) in [
+        ("screenshot", false, true, true),
+        ("ui_screenshot", true, false, true),
+        ("ui_inspect", true, false, true),
+        ("inspect_ui", true, false, true),
+        ("list_widgets", true, false, true),
+    ] {
+        let t = ui_tools.iter().find(|t| t["name"] == name).unwrap_or_else(|| panic!("missing ui tool {name}"));
+        assert_eq!(t["annotations"]["readOnlyHint"], ro, "{name} readOnlyHint");
+        assert_eq!(t["annotations"]["destructiveHint"], dest, "{name} destructiveHint");
+        assert_eq!(t["annotations"]["idempotentHint"], idem, "{name} idempotentHint");
     }
 }
 
