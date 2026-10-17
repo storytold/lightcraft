@@ -378,10 +378,10 @@ impl Session {
     /// The key and settings of photo `id` as the model sees it: its look without masks, uncropped.
     #[cfg_attr(not(feature = "sam"), allow(dead_code))]
     fn segment_key(&self, id: PhotoId) -> Option<(u64, lightcraft_develop::DevelopSettings)> {
-        let p = self.catalog.photo(id)?;
+        let p = self.cache_photo(id)?;
         let mut d = (*p.develop).clone();
         d.masks.clear();
-        let content = crate::media::content_key(p);
+        let content = self.media.identities.tag(&p, &crate::media::content_key(&p));
         let mut h = mix(0xcbf2_9ce4_8422_2325, d.hash64());
         h = mix(h, id.0);
         for b in content.bytes() {
@@ -410,7 +410,7 @@ impl Session {
     ) -> Result<worker::Job, String> {
         let dir = self.segmenter.model_dir()?;
         let (key, mut d) = self.segment_key(id).ok_or("no such photo")?;
-        let p = self.catalog.photo(id).ok_or("no such photo")?.clone();
+        let p = self.cache_photo(id).ok_or("no such photo")?;
         let missing = match &p.source {
             lightcraft_catalog::Source::File { path } if !std::path::Path::new(path).exists() => Some(path.clone()),
             _ => None,
@@ -430,7 +430,16 @@ impl Session {
                 job
             }
         };
-        Ok(worker::Job { dir, key: if region.is_some() { 0 } else { key }, render: Some(render), missing, kind, tag, reply })
+        Ok(worker::Job {
+            source_ticket: Some(self.media.identities.ticket(&p)),
+            dir,
+            key: if region.is_some() { 0 } else { key },
+            render: Some(render),
+            missing,
+            kind,
+            tag,
+            reply,
+        })
     }
 
     /// Send a request and wait for its result (CLI, MCP, tests; or when not in background mode).
@@ -440,6 +449,9 @@ impl Session {
         let job = self.segment_job(id, kind, Tag::Wait, tx, region)?;
         self.segmenter.worker.submit(job)?;
         match rx.recv_timeout(WAIT) {
+            Ok(o) if o.source_ticket.as_ref().is_some_and(|ticket| !ticket.current()) => {
+                Err("the original changed before the AI selection finished; try again".into())
+            }
             Ok(o) => o.result,
             Err(_) => Err("the AI model took too long; try again".into()),
         }
@@ -578,8 +590,9 @@ impl Session {
                 }
                 self.segment_queue(id, kind, tag, Some(region))?;
             } else {
+                let source_ticket = self.cache_photo(id).map(|p| self.media.identities.ticket(&p));
                 let patch = self.segment_wait(id, kind, Some(region))?;
-                let outcome = worker::Outcome { tag, result: Ok(patch), superseded: false };
+                let outcome = worker::Outcome { source_ticket, tag, result: Ok(patch), superseded: false };
                 let mut polled = Polled::default();
                 self.apply_outcome(outcome, &mut polled);
             }
@@ -615,7 +628,7 @@ impl Session {
 
     #[cfg(feature = "sam")]
     fn apply_outcome(&mut self, o: worker::Outcome, polled: &mut Polled) {
-        if o.superseded {
+        if o.superseded || o.source_ticket.as_ref().is_some_and(|ticket| !ticket.current()) {
             return;
         }
         match o.tag {
@@ -710,6 +723,182 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn f_inventory_source_epoch_changes_segmentation_identity() {
+        let mut s = Session::with_demo();
+        let p = s.catalog.photos().next().unwrap().clone();
+        let before = s.segment_key(p.id).unwrap().0;
+        let mut file = (*p).clone();
+        file.source = lightcraft_catalog::Source::File { path: "epoch-test.raw".into() };
+        s.catalog.apply(lightcraft_catalog::Op::RemovePhoto { id: p.id }).unwrap();
+        s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(file.clone()) }).unwrap();
+        let before_file = s.segment_key(p.id).unwrap().0;
+        assert_ne!(before, before_file);
+        s.media.identities.invalidate(&file, None, || ()).unwrap();
+        assert_ne!(before_file, s.segment_key(p.id).unwrap().0);
+    }
+
+    #[cfg(feature = "sam")]
+    fn paused_sam_completion(transition: &str) {
+        use lightcraft_catalog::Op;
+        use serde_json::json;
+        let dir = crate::tests_xmp::temp_dir(&format!("sam-source-{transition}"));
+        let original = dir.join("a.png");
+        let other = dir.join("b.png");
+        let write = |path: &std::path::Path, seed: u8| {
+            let image = lightcraft_raster::Rgba8::from_fn(16, 12, |x, y| [(x * 9) as u8, (y * 11) as u8, seed, 255]);
+            let bytes =
+                crate::export::encode_image(&image, &crate::export::ExportOptions { format: crate::export::ExportFormat::Png, ..Default::default() })
+                    .unwrap();
+            let mut bytes = bytes;
+            bytes.resize(bytes.len().max(1024), 0);
+            std::fs::write(path, bytes).unwrap();
+        };
+        write(&original, 1);
+        write(&other, 200);
+        let mut s = Session::new().with_fs();
+        s.open_library(dir.join("lib"), false).unwrap();
+        let imported = s.execute("library.import", &json!({"paths":[original]})).unwrap();
+        let id = PhotoId(imported["imported"][0].as_u64().unwrap());
+        let photo = s.catalog.photo(id).unwrap().clone();
+        if transition == "recheck" {
+            s.catalog
+                .apply(Op::SetContent {
+                    id,
+                    width: photo.width,
+                    height: photo.height,
+                    file_size: photo.file_size,
+                    content_hash: photo.content_hash.clone(),
+                    preview_only: Some("synthetic decoder limitation".into()),
+                    preview_checked: String::new(),
+                })
+                .unwrap();
+        }
+        if transition == "learn" {
+            s.catalog
+                .apply(Op::SetContent {
+                    id,
+                    width: photo.width,
+                    height: photo.height,
+                    file_size: photo.file_size,
+                    content_hash: None,
+                    preview_only: None,
+                    preview_checked: String::new(),
+                })
+                .unwrap();
+        }
+        if transition == "recheck" {
+            let alias = crate::cache_identity::path_key(&photo).unwrap();
+            let proxy = crate::smart::paths_for_keys(s.media.smart_dir.as_ref().unwrap(), &[alias])[0].clone();
+            std::fs::create_dir_all(proxy.parent().unwrap()).unwrap();
+            std::fs::write(proxy, crate::smart::encode(&lightcraft_raster::Rgb32f::new(16, 12), None).unwrap()).unwrap();
+        }
+        let ticket = s.media.identities.ticket(&photo);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (started, release) = (std::sync::Arc::new(std::sync::Barrier::new(2)), std::sync::Arc::new(std::sync::Barrier::new(2)));
+        std::thread::scope(|scope| {
+            let (a, b) = (started.clone(), release.clone());
+            let worker = scope.spawn(move || {
+                a.wait();
+                b.wait();
+                tx.send(worker::Outcome {
+                    source_ticket: Some(ticket),
+                    tag: Tag::NewPrompt { photo: id, mask: None, op: "add".into(), name: None, text: "synthetic".into() },
+                    result: Ok(Some(seg_box(8, 2, 2, 6, 6))),
+                    superseded: false,
+                })
+                .unwrap();
+            });
+            started.wait();
+            match transition {
+                "reload" => {
+                    write(&original, 200);
+                    s.execute("photo.reload", &json!({"ids":[id.0]})).unwrap();
+                }
+                "recheck" => {
+                    write(&original, 200);
+                    let stacks = (s.undo.len(), s.redo.len());
+                    s.faces.scanned.insert(id.0);
+                    let result = s.execute("library.recheckPreviewOnly", &json!({"all":true})).unwrap();
+                    assert_eq!(result["updated"], json!([id.0]));
+                    assert_eq!((s.undo.len(), s.redo.len()), stacks);
+                }
+                "relink" => {
+                    s.execute("photo.relink", &json!({"id":id.0,"path":other})).unwrap();
+                }
+                "switch" => {
+                    s.open_library(dir.join("next-lib"), false).unwrap();
+                    s.execute("library.import", &json!({"paths":[other]})).unwrap();
+                }
+                "learn" => {
+                    s.apply_system(Op::SetContent {
+                        id,
+                        width: photo.width,
+                        height: photo.height,
+                        file_size: photo.file_size,
+                        content_hash: photo.content_hash.clone(),
+                        preview_only: None,
+                        preview_checked: String::new(),
+                    })
+                    .unwrap();
+                }
+                _ => panic!("unknown transition"),
+            }
+            s.execute("library.select", &json!({"ids":[id.0]})).unwrap();
+            s.execute("develop.set", &json!({"control":"light.exposure","value":1.25})).unwrap();
+            let before = s.develop_of(id).unwrap().hash64();
+            release.wait();
+            let outcome = rx.recv().unwrap();
+            let mut polled = Polled::default();
+            s.apply_outcome(outcome, &mut polled);
+            worker.join().unwrap();
+            if transition == "recheck" {
+                assert_eq!(s.catalog.photo(id).unwrap().file_size, photo.file_size, "same-size replacement fixture");
+                assert!(!s.faces.scanned.contains(id.0));
+                assert!(!s.media.content_keys(s.catalog.photo(id).unwrap()).contains(&crate::cache_identity::path_key(&photo).unwrap()));
+                let reopened = crate::cache_identity::CacheIdentity::open(&dir.join("lib/source-invalidations"));
+                assert!(!reopened.keys(&photo).contains(&crate::cache_identity::path_key(&photo).unwrap()));
+            }
+            assert_eq!(polled.changed, transition == "learn", "{transition}: {:?}", polled.messages);
+            let develop = s.develop_of(id).unwrap();
+            assert_eq!(develop.light.exposure, 1.25);
+            if transition == "learn" {
+                assert_eq!(develop.masks.len(), 1);
+            } else {
+                assert_eq!(develop.hash64(), before, "{transition}: current edits must stay unchanged");
+            }
+        });
+        drop(s);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(feature = "sam")]
+    #[test]
+    fn f_inventory_sam_rejects_a_completion_paused_across_reload() {
+        paused_sam_completion("reload");
+    }
+    #[cfg(feature = "sam")]
+    #[test]
+    fn f_inventory_sam_rejects_a_completion_paused_across_relink() {
+        paused_sam_completion("relink");
+    }
+    #[cfg(feature = "sam")]
+    #[test]
+    fn f_inventory_sam_rejects_a_completion_paused_across_library_switch() {
+        paused_sam_completion("switch");
+    }
+    #[cfg(feature = "sam")]
+    #[test]
+    fn f_inventory_sam_accepts_a_completion_paused_across_hash_learning() {
+        paused_sam_completion("learn");
+    }
+
+    #[cfg(feature = "sam")]
+    #[test]
+    fn f_repair_sam_rejects_a_completion_paused_across_recheck() {
+        paused_sam_completion("recheck");
+    }
 
     fn seg_box(side: usize, x0: usize, y0: usize, x1: usize, y1: usize) -> SegMask {
         let l: Vec<f32> =

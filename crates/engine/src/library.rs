@@ -561,9 +561,13 @@ impl Session {
         let presets_saved = PresetsSaved::state_of(self);
         // photo ids are per library: drop decoded sources of the previous one
         self.media.clear_sources();
+        self.media.identities.retire();
+        self.media.identities = Default::default();
         if on_disk {
             self.media.attach_disk_cache(&dir.join("thumbs"), self.cache_bytes());
             self.tidy_thumbnail_cache();
+        } else {
+            self.media.detach_disk_cache();
         }
         let view_written = self.view_json();
         self.library = Some(Library {

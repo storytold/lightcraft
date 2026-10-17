@@ -235,3 +235,41 @@ fn add_registers_distinct_candidates_once_across_batches() {
     assert_eq!(b.duplicates[0].existing, Some(a.imported[0]));
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn f_repair_undo_import_learning_preserves_existing_photo_sources_and_faces() {
+    use crate::media::SourceLevel;
+    use std::sync::Arc;
+    let dir = temp_dir("undo-learning");
+    let data = bytes(7, BIG);
+    let original = write(&dir, "original.dng", &data);
+    let duplicate = write(&dir, "duplicate.dng", &data);
+    let mut s = header_session();
+    let id = PhotoId(add(&mut s, &[original]).imported[0]);
+    let decoded = Arc::new(lightcraft_raster::Rgb32f::new(6, 4));
+    s.media.insert(id, SourceLevel::Preview, decoded.clone());
+    s.media.smart_dir = Some(dir.join("smart"));
+    let proxy = s.smart_preview_paths(s.catalog.photo(id).unwrap())[0].clone();
+    std::fs::create_dir_all(proxy.parent().unwrap()).unwrap();
+    std::fs::write(&proxy, crate::smart::encode(&decoded, None).unwrap()).unwrap();
+    s.media.file_loader = Some(Arc::new(|_, _| Err("must retain decoded original".into())));
+    s.faces.scanned.insert(id.0);
+    let ticket = s.media.identities.ticket(s.catalog.photo(id).unwrap());
+    add(&mut s, &[duplicate]);
+    assert!(s.catalog.photo(id).unwrap().content_hash.is_some());
+    s.undo_step().unwrap();
+    assert!(s.media.has_source(id, SourceLevel::Preview));
+    assert!(s.faces.scanned.contains(id.0));
+    assert!(ticket.current());
+    assert!(Arc::ptr_eq(&s.source_now(id, SourceLevel::Preview).unwrap(), &decoded));
+    assert!(s.smart_preview_paths(s.catalog.photo(id).unwrap()).contains(&proxy));
+    assert!(crate::smart::load(&proxy).is_ok());
+    s.redo_step().unwrap();
+    assert!(s.media.has_source(id, SourceLevel::Preview));
+    assert!(s.faces.scanned.contains(id.0));
+    assert!(ticket.current());
+    assert!(Arc::ptr_eq(&s.source_now(id, SourceLevel::Preview).unwrap(), &decoded));
+    assert!(s.smart_preview_paths(s.catalog.photo(id).unwrap()).contains(&proxy));
+    assert!(crate::smart::load(&proxy).is_ok());
+    std::fs::remove_dir_all(dir).unwrap();
+}

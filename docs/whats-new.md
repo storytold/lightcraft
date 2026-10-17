@@ -14,6 +14,12 @@
 
 - Import duplicate checks now keep working between batches after a Move, retain hashes learned for earlier batches, and count distinct files toward the comparison limit.
 
+### Content identity keeps cached work
+- Duplicate comparisons that learn a photo's hash keep decoded sources, thumbnails and face results.
+- Reloading changed content disables its path-based cache aliases across library reopen. Earlier render, face
+  and SAM results are rejected; smart-preview and denoise jobs cannot publish old pixels as the replacement.
+- Smart-preview status, offline rendering and Local retention use the same guarded cache identities, including virtual copies.
+
 ### Reliability
 - A damaged or crafted TIFF-based raw with a very large number of strips or tiles can no longer make an import hang
   while it reads the file's headers (issue #2128). Working out where each strip ends and which parts of the file to

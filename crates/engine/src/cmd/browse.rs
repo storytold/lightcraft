@@ -79,13 +79,12 @@ impl Session {
 fn forget_gone(s: &mut Session, dir: &str, subfolders: bool, files: &[String]) -> usize {
     let listed: std::collections::HashSet<&str> = files.iter().map(String::as_str).collect();
     let held = held(s);
-    let smart = s.media.smart_dir.clone();
     let gone: Vec<PhotoId> = s
         .catalog
         .photos()
         .filter(|p| p.local && !p.deleted && !held.contains(&p.id))
         // a smart preview may be all that is left of the picture
-        .filter(|p| !smart.as_ref().is_some_and(|d| crate::smart::file_path(d, p).exists()))
+        .filter(|p| !s.smart_preview_paths(p).iter().any(|path| path.exists()))
         .filter(|p| match &p.source {
             // a file left out of the listing is checked on disk: another spelling of its path, or
             // a listing that missed it, keeps it
@@ -177,10 +176,8 @@ impl Session {
         let days = days.unwrap_or(self.forget_local_days);
         let now = (self.clock)();
         let keep = in_use(self);
-        let smart = self.media.smart_dir.clone();
-        let plan = self
-            .catalog
-            .forget_local_plan(&now, days, &|p| keep.contains(&p.id) || smart.as_ref().is_some_and(|d| crate::smart::file_path(d, p).exists()));
+        let plan =
+            self.catalog.forget_local_plan(&now, days, &|p| keep.contains(&p.id) || self.smart_preview_paths(p).iter().any(|path| path.exists()));
         if dry_run {
             return plan;
         }

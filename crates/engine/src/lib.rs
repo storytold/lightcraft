@@ -18,6 +18,7 @@ pub mod activity;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod apple_photos;
 pub mod availability;
+pub mod cache_identity;
 pub(crate) mod camera_preview;
 pub mod camera_profiles;
 pub mod cmd;
@@ -600,31 +601,170 @@ impl Session {
         Ok(())
     }
 
+    fn invalidate_cache_source(
+        &mut self,
+        old: &lightcraft_catalog::Photo,
+        expected: Option<crate::cache_identity::PhysicalIdentity>,
+        replace_faces: bool,
+    ) -> Result<()> {
+        let identities = self.media.identities.clone();
+        let ids: Vec<_> = self.catalog.photos().filter(|p| p.source == old.source || p.id == old.id).map(|p| p.id).collect();
+        let invalidation = identities.invalidate(old, expected, || {
+            self.media.rendered.clear();
+            for id in ids {
+                self.media.forget(id);
+                self.media.denoise.remove(id);
+                #[cfg(not(target_arch = "wasm32"))]
+                if replace_faces {
+                    self.faces.content_replaced(id);
+                }
+                #[cfg(target_arch = "wasm32")]
+                let _ = replace_faces;
+            }
+        });
+        if let Some(alias) = crate::cache_identity::path_key(old) {
+            if let Some(dir) = &self.media.smart_dir {
+                for path in crate::smart::paths_for_keys(dir, std::slice::from_ref(&alias)) {
+                    let _ = std::fs::remove_file(path);
+                }
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            if let (Some(dir), Some(active)) = (self.denoise_products_dir(), self.denoise.active.as_ref()) {
+                let key = crate::denoise::product_key_for(&active.fingerprint, &alias);
+                let _ = std::fs::remove_file(crate::denoise::product_path(&dir, &key));
+            }
+        }
+        invalidation.map_err(|e| EngineError::Other(format!("cannot invalidate replaced photo caches: {e}; replacement was not applied")))
+    }
+
     fn apply_catalog(&mut self, op: Op) -> Result<Op> {
         // Retain only cache IDs while the catalog consumes the operation. Cloning an import
         // batch here also cloned every photo, although commit already keeps the journal copy.
         let mut invalidated = Vec::new();
-        // photos whose file was replaced: the faces made from the old pixels go too (issue #1524)
         let mut replaced = Vec::new();
+        let mut states = std::collections::HashMap::new();
+        let mut retirements: Vec<(lightcraft_catalog::Photo, Option<crate::cache_identity::PhysicalIdentity>, bool)> = Vec::new();
+        let mut retired = std::collections::HashMap::new();
+        let mut retire = |photo: &lightcraft_catalog::Photo, expected: Option<crate::cache_identity::PhysicalIdentity>, faces: bool| {
+            let Some(key) = crate::cache_identity::path_key(photo) else { return };
+            if let Some(index) = retired.get(&key).copied() {
+                if let Some((_, previous, replace_faces)) = retirements.get_mut(index) {
+                    *previous = expected;
+                    *replace_faces |= faces;
+                }
+            } else {
+                retired.insert(key, retirements.len());
+                retirements.push((photo.clone(), expected, faces));
+            }
+        };
+        let mut retired_sources = Vec::new();
         let mut pending = vec![&op];
         while let Some(op) = pending.pop() {
             match op {
-                Op::SetContent { id, .. } => {
-                    invalidated.push(*id);
-                    replaced.push(*id);
+                Op::SetContent { id, width, height, file_size, content_hash, preview_only, .. } => {
+                    let state = states.entry(*id).or_insert_with(|| {
+                        self.catalog
+                            .photo(*id)
+                            .map(|p| (p.width, p.height, p.file_size, p.content_hash.clone(), p.preview_only.clone(), p.source.clone()))
+                    });
+                    if let Some((w, h, size, hash, preview, source)) = state {
+                        let changed = (*w, *h, *size) != (*width, *height, *file_size)
+                            || hash.as_deref().is_some_and(|old| {
+                                content_hash.as_deref().is_some_and(|new| crate::sync::base_hash(old) != crate::sync::base_hash(new))
+                            })
+                            || preview != preview_only;
+                        if changed {
+                            let mut old = lightcraft_catalog::Photo::new(*id, source.clone(), "", "", *w, *h, "");
+                            old.file_size = *size;
+                            old.content_hash = hash.clone();
+                            old.preview_only = preview.clone();
+                            let mut destination = old.clone();
+                            destination.width = *width;
+                            destination.height = *height;
+                            destination.file_size = *file_size;
+                            destination.content_hash = content_hash.clone();
+                            destination.preview_only = preview_only.clone();
+                            let expected = crate::cache_identity::PhysicalIdentity::of(&destination);
+                            for photo in [&old, &destination] {
+                                retire(photo, expected.clone(), true);
+                            }
+                            for photo in self.catalog.photos().filter(|p| p.source == *source) {
+                                invalidated.push(photo.id);
+                                replaced.push(photo.id);
+                            }
+                            invalidated.push(*id);
+                            replaced.push(*id);
+                        }
+                        *w = *width;
+                        *h = *height;
+                        *size = *file_size;
+                        *hash = content_hash.clone();
+                        *preview = preview_only.clone();
+                    }
                 }
-                Op::SetFile { id, .. } | Op::Relink { id, .. } | Op::RemovePhoto { id } => invalidated.push(*id),
-                Op::AddPhoto { photo } => invalidated.push(photo.id),
-                Op::Batch { ops } => pending.extend(ops),
+                Op::SetFile { id, source, .. } | Op::Relink { id, source, .. } => {
+                    invalidated.push(*id);
+                    let state = states.entry(*id).or_insert_with(|| {
+                        self.catalog
+                            .photo(*id)
+                            .map(|p| (p.width, p.height, p.file_size, p.content_hash.clone(), p.preview_only.clone(), p.source.clone()))
+                    });
+                    if let Some(state) = state {
+                        if state.5 != *source {
+                            let mut old = lightcraft_catalog::Photo::new(*id, state.5.clone(), "", "", state.0, state.1, "");
+                            old.file_size = state.2;
+                            old.content_hash = state.3.clone();
+                            old.preview_only = state.4.clone();
+                            let mut destination = old.clone();
+                            destination.source = source.clone();
+                            let relink = matches!(op, Op::Relink { .. });
+                            let expected = (!relink).then(|| crate::cache_identity::PhysicalIdentity::of(&destination)).flatten();
+                            for photo in [&old, &destination] {
+                                retire(photo, expected.clone(), relink);
+                            }
+                            if matches!(op, Op::Relink { .. }) {
+                                replaced.push(*id);
+                            }
+                        }
+                        state.5 = source.clone();
+                    }
+                }
+                Op::RemovePhoto { id } => {
+                    invalidated.push(*id);
+                    states.insert(*id, None);
+                }
+                Op::AddPhoto { photo } => {
+                    invalidated.push(photo.id);
+                    states.insert(
+                        photo.id,
+                        Some((
+                            photo.width,
+                            photo.height,
+                            photo.file_size,
+                            photo.content_hash.clone(),
+                            photo.preview_only.clone(),
+                            photo.source.clone(),
+                        )),
+                    );
+                }
+                Op::Batch { ops } => pending.extend(ops.iter().rev()),
                 _ => {}
             }
         }
+        for (photo, expected, faces) in retirements {
+            if let lightcraft_catalog::Source::File { path } = &photo.source {
+                retired_sources.push(path.clone());
+            }
+            self.invalidate_cache_source(&photo, expected, faces)?;
+        }
         let inv = self.catalog.apply(op)?;
+        self.media.identities.confirm(&retired_sources);
         for id in invalidated {
             self.media.forget(id);
         }
         #[cfg(not(target_arch = "wasm32"))]
         for id in replaced {
+            self.media.denoise.remove(id);
             self.faces.content_replaced(id);
         }
         #[cfg(target_arch = "wasm32")]
@@ -658,7 +798,7 @@ impl Session {
     /// an undo step, and it leaves the redo stack alone.
     pub(crate) fn apply_system(&mut self, op: Op) -> Result<()> {
         let fwd = op.clone();
-        self.catalog.apply(op)?;
+        self.apply_catalog(op)?;
         self.pending_log.push(fwd);
         Ok(())
     }

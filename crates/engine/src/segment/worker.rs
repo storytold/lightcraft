@@ -46,6 +46,7 @@ pub enum Kind {
 
 /// One request.
 pub struct Job {
+    pub source_ticket: Option<crate::cache_identity::SourceTicket>,
     /// The model folder.
     pub dir: PathBuf,
     /// Which photo and look the request is about (the encode cache's key).
@@ -61,6 +62,7 @@ pub struct Job {
 
 /// A finished request: the segmentation (`None`: nothing selected / nothing to report).
 pub struct Outcome {
+    pub source_ticket: Option<crate::cache_identity::SourceTicket>,
     pub tag: Tag,
     pub result: Result<Option<SegMask>, String>,
     /// A newer request for the same selection came in; this one was skipped.
@@ -217,9 +219,9 @@ fn run(rx: &mpsc::Receiver<Job>, shared: &Shared, idle: Duration) {
         // counts the job as pending until just before its reply goes out: a caller woken by the
         // reply must not still see the worker busy with it
         let done = Done(if is_detail { &shared.detail } else { &shared.pending });
-        if queue.iter().any(|later| supersedes(later, &job)) {
+        if job.source_ticket.as_ref().is_some_and(|ticket| !ticket.current()) || queue.iter().any(|later| supersedes(later, &job)) {
             drop(done);
-            let _ = job.reply.send(Outcome { tag: job.tag, result: Ok(None), superseded: true });
+            let _ = job.reply.send(Outcome { source_ticket: job.source_ticket, tag: job.tag, result: Ok(None), superseded: true });
             continue;
         }
         let result = match std::panic::catch_unwind(AssertUnwindSafe(|| run_job(&mut state, shared, &mut job))) {
@@ -237,7 +239,7 @@ fn run(rx: &mpsc::Receiver<Job>, shared: &Shared, idle: Duration) {
         }
         shared.loaded.store(state.model.is_some() || state.remote.is_some(), Ordering::SeqCst);
         drop(done);
-        let _ = job.reply.send(Outcome { tag: job.tag, result, superseded: false });
+        let _ = job.reply.send(Outcome { source_ticket: job.source_ticket, tag: job.tag, result, superseded: false });
     }
 }
 
@@ -405,7 +407,35 @@ mod tests {
     fn job(tag: Tag, reply: &mpsc::Sender<Outcome>) -> Job {
         // an empty folder: loading fails with an error (no model files)
         let dir = std::env::temp_dir().join(format!("lc-sam3-worker-none-{}", std::process::id()));
-        Job { dir, key: 1, render: None, missing: None, kind: Kind::Prepare, tag, reply: reply.clone() }
+        Job { source_ticket: None, dir, key: 1, render: None, missing: None, kind: Kind::Prepare, tag, reply: reply.clone() }
+    }
+
+    #[test]
+    fn f_inventory_sam_skips_a_job_with_a_retired_source_before_model_work() {
+        let shared = Shared::default();
+        let (tx, rx) = mpsc::channel();
+        let (jtx, jrx) = mpsc::channel();
+        let identities = crate::cache_identity::CacheIdentity::default();
+        let photo = lightcraft_catalog::Photo::new(
+            lightcraft_catalog::PhotoId(1),
+            lightcraft_catalog::Source::File { path: "retired.raw".into() },
+            "retired.raw",
+            "RAW",
+            8,
+            8,
+            "",
+        );
+        let mut j = job(Tag::Wait, &tx);
+        j.source_ticket = Some(identities.ticket(&photo));
+        j.kind = Kind::Panic;
+        identities.invalidate(&photo, None, || ()).unwrap();
+        jtx.send(j).unwrap();
+        drop(jtx);
+        shared.pending.store(1, Ordering::SeqCst);
+        run(&jrx, &shared, Duration::from_secs(60));
+        let outcome = rx.recv().unwrap();
+        assert!(outcome.superseded);
+        assert!(matches!(outcome.result, Ok(None)));
     }
 
     #[test]

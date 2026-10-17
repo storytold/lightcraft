@@ -210,7 +210,8 @@ fn edit_copy(s: &mut Session, p: &Value, id: lightcraft_catalog::PhotoId, opts: 
 /// undo step and keeps its previews (their key is the path and size while there is no hash).
 pub(crate) fn content_op(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::Photo, info: crate::media::ProbeInfo) -> Option<Op> {
     let preview_checked = lightcraft_catalog::preview_stamp(&info.preview_only);
-    let same = (ph.content_hash.is_none() || info.content_hash == ph.content_hash)
+    let same = (ph.content_hash.is_none()
+        || info.content_hash.as_deref().map(crate::sync::base_hash) == ph.content_hash.as_deref().map(crate::sync::base_hash))
         && info.file_size == ph.file_size
         && (info.width, info.height) == (ph.width, ph.height)
         && info.preview_only == ph.preview_only
@@ -304,8 +305,8 @@ pub(crate) fn reload_ops(
         ops.append(&mut mine);
         changed.push(id);
     }
-    // virtual copies share the file
-    for c in cat.photos().filter(|c| c.copy_of == Some(id)) {
+    // All records of this physical file share its refreshed content facts.
+    for c in cat.photos().filter(|c| c.id != id && c.source == ph.source) {
         let theirs: Vec<Op> =
             content_op(c.id, c, info.clone()).into_iter().chain(lens_ops(c.id, c, info)).chain(as_shot_wb_op(c.id, c, info)).collect();
         if !theirs.is_empty() {

@@ -21,6 +21,18 @@ pub fn file_name(p: &Photo) -> String {
     format!("{:032x}.lcsp", h.0)
 }
 
+pub fn paths_for_keys(dir: &Path, keys: &[String]) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    for key in keys {
+        let name = format!("{}.lcsp", lightcraft_preview::Hasher128::new().str(key).finish());
+        if let Some(shard) = name.get(..2) {
+            paths.push(dir.join(shard).join(&name));
+        }
+        paths.push(dir.join(&name));
+    }
+    paths
+}
+
 /// The default sharded location of a proxy. A two-character hex prefix bounds each
 /// folder to about 1/256 of the library's smart previews.
 pub fn sharded_file_path(dir: &Path, p: &Photo) -> PathBuf {
