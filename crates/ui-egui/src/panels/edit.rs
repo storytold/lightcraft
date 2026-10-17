@@ -613,12 +613,19 @@ fn histogram(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     // row under the plot
     let hdr = hist.as_ref().and_then(|h| h.hdr);
     let legend = if hdr.is_some() { 26.0 } else { 0.0 };
-    let (r, resp) = ui.allocate_exact_size(vec2(w, 118.0 + legend), Sense::click());
+    let (r, resp) = ui.allocate_exact_size(vec2(w, 118.0 + legend), Sense::click_and_drag());
     crate::widgets::announce(&resp, crate::i18n::tr("Histogram"));
     register(ui.ctx(), "histogram", r);
     let p = ui.painter();
     p.rect_filled(r, 0.0, t.button);
     let plot = Rect::from_min_max(r.min + vec2(0.0, 6.0), pos2(r.right(), r.bottom() - 26.0 - legend));
+    // Lightroom Classic's tonal zones (Blacks / Shadows / Exposure / Highlights / Whites across the
+    // plot): a drag over one moves its control (the band and the readout show which and how far), a
+    // double-click puts it back to its default, and Shift drags a tenth as far
+    let zone = super::histogram::interact(app, ui, &resp, plot, id);
+    if let Some(a) = &zone {
+        super::histogram::paint_zone(p, plot, a, &t);
+    }
     if let Some(b) = hdr {
         // white for SDR, then one band per stop above SDR white: white too, or (Visualize HDR
         // range on) in its colours
@@ -759,8 +766,11 @@ fn histogram(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     if clicked {
         let _ = app.run("view.clipping", json!({}));
     }
-    // EXIF strip
-    if let Some(ph) = app.session.catalog.photo(id) {
+    // the tonal zone the pointer is on replaces the EXIF strip while it is there
+    if let Some(text) = zone.as_ref().and_then(|a| a.readout()) {
+        register(ui.ctx(), "histogramReadout", r);
+        p.text(pos2(r.left() + r.width() / 2.0, r.bottom() - 13.0), Align2::CENTER_CENTER, text, t.font(12.5), t.text_label);
+    } else if let Some(ph) = app.session.catalog.photo(id) {
         let m = &ph.meta;
         let parts: Vec<String> = [
             m.iso.map(|i| format!("ISO {i}")),

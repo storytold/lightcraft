@@ -69,6 +69,13 @@ pub enum Gesture {
         at: Point,
         acc: f32,
     },
+    /// A drag of one of the histogram's tonal zones (see [`super::histogram`]): the control the
+    /// press locked and the unrounded value its sideways travel has reached. It holds no canvas
+    /// geometry: the zone stays locked wherever the pointer goes.
+    HistogramDrag {
+        control: &'static str,
+        value: f64,
+    },
 }
 
 /// Screen ↔ normalized-image mapping for the displayed frame.

@@ -1,6 +1,6 @@
 # Lightroom parity checklist
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (integration batch 36: slideshow module, print-ready PDF fixes, local adjustment presets, Layout Image loupe overlay, Delete in an album removes from it, new languages Czech, Polish, Italian-ready catalogs; many rows' notes updated by their PRs) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-16 · **Change:** minor (LRC-DEV-HISTOGRAM-DRAG: the histogram's five tonal zones — hover for the value, drag to adjust the Basic control the press locked, double-click to reset; LR-VIEW-HISTOGRAM note updated; integration batch 36: slideshow module, print-ready PDF fixes, local adjustment presets, Layout Image loupe overlay, Delete in an album removes from it, new languages Czech, Polish, Italian-ready catalogs; many rows' notes updated by their PRs) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 The measured, row-by-row checklist: one row per Lightroom feature, menu item and shortcut, what we
 have and what is missing. It answers *does the feature exist?* (feature breadth). Whether it is good
@@ -52,10 +52,10 @@ cited here still exists. Formerly docs/parity.md.
 | X. Cross-cutting behaviours (BEHAV) | 23 | 6 | 1 | 1 | 8/8 (100%) | 7/10 (70%) |
 | Y. Menus | 84 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 78 | 4 | 2 | 1 | 49/52 (94%) | 24/26 (92%) |
-| Lightroom Classic extras | 40 | 23 | 23 | 8 | — | 24/26 (92%) |
-| **Total** | 419 | 61 | 59 | 35 | 194/201 (97%) | 148/161 (92%) |
+| Lightroom Classic extras | 41 | 23 | 23 | 8 | — | 24/26 (92%) |
+| **Total** | 420 | 61 | 59 | 35 | 194/201 (97%) | 148/161 (92%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.4%** of 539 in-scope rows — P0 98.3% of 201 · P1 95.0% of 161 · P2 55.7% of 176.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.4%** of 540 in-scope rows — P0 98.3% of 201 · P1 95.0% of 161 · P2 55.9% of 177.
 <!-- /parity:summary -->
 
 ## Top gaps and shortcut notes
@@ -141,7 +141,7 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 | LR-VIEW-SLIDESHOW | Slideshow | P2 | ✅ | `cmd:view.slideshow` | View ▸ Slideshow (⌥⌘↩): the photos in view full screen from the selected one, played with the library's playback settings (see LRC-SS-PLAYBACK: fades, random order, repeat, previews prepared ahead; `interval` / any setting overrides one run); Space pauses, ←/→ step (a cut), Esc ends; playback controls on pointer movement |
 | LR-VIEW-SECONDWINDOW | Second display window [Classic] | P2 | ✅ | `cmd:view.secondWindow`, `crates/ui-egui/src/panels/second.rs` | Window ▸ Second Window (⌘F11): the active photo fitted in its own native window with its own render (a floating panel where there are no native windows); loupe view only (no grid / compare / survey there) |
 | LR-VIEW-CLIPPING | Clipping indicators | P0 | ✅ | `cmd:view.clipping` | |
-| LR-VIEW-HISTOGRAM | Histogram | P0 | ✅ | `cmd:view.histogram`, `crates/ui-egui/src/panels/edit.rs`, `crates/pipeline/src/lib.rs` (`hdr_histogram`) | HDR edits: SDR on the left half, the HDR range (0 to 5 stops above SDR white, a fixed scale) on the right with the headroom limit marked; colour bar (white, or Visualize HDR range's colours when that is on) and SDR / HDR labels; no drag-to-adjust on the histogram; it follows slider drags live (a small render beside the drafts, `Slot::HdrHistogram`) and never drops to the SDR layout mid-drag |
+| LR-VIEW-HISTOGRAM | Histogram | P0 | ✅ | `cmd:view.histogram`, `crates/ui-egui/src/panels/edit.rs`, `crates/pipeline/src/lib.rs` (`hdr_histogram`) | HDR edits: SDR on the left half, the HDR range (0 to 5 stops above SDR white, a fixed scale) on the right with the headroom limit marked; colour bar (white, or Visualize HDR range's colours when that is on) and SDR / HDR labels; the plot's five tonal zones also drag to adjust their Basic control (LRC-DEV-HISTOGRAM-DRAG); it follows slider drags live (a small render beside the drafts, `Slot::HdrHistogram`) and never drops to the SDR layout mid-drag |
 | LR-VIEW-HDR-DISPLAY | HDR display output | P2 | ⬜ | |, `apps/lightcraft/src/hdr_display.rs` (`choose`, `preferred_hdr_format`) | SDR/HDR decision (platform, surface format, OS headroom, `LIGHTCRAFT_HDR_DISPLAY=0`) is unit-tested and logged at start; always SDR today because eframe configures an 8-bit surface; no OS headroom query yet;  |
 
 ## D. Search & filter (FILT)
@@ -732,6 +732,7 @@ From `08-lightroom-classic-extras.md` (Classic-only features) and part 2 of `06-
 | LRC-DEV-VIEWOPTIONS | Develop view options | P2 | ⬜ | | |
 | LRC-DEV-LOUPEOVERLAY | Loupe overlay: layout image | P2 | 🟡 | `cmd:view.chooseLayoutImage`, `cmd:view.layoutImage`, `cmd:view.layoutImageOpacity`, `cmd:view.layoutImageMatte`, `crates/ui-egui/src/panels/layout_overlay.rs` | View ▸ Loupe Overlay: a PNG with transparency (a cover layout, a banner's safe areas) fitted and centred over the loupe photo, following zoom and pan; opacity and matte (the photo darkened outside the graphic's box) in steps; ⌥⌘O shows / hides it; read off the UI thread; saved with the UI state. Not yet: the Grid and Guides overlays, moving and resizing the layout with ⌘ held, free opacity / matte sliders |
 | LRC-DEV-VIDEO | Video frame capture | P2 | ⬜ | | |
+| LRC-DEV-HISTOGRAM-DRAG | Drag on the histogram to adjust tone regions | P2 | ✅ | `crates/ui-egui/src/panels/histogram.rs`, `crates/ui-egui/src/panels/edit.rs`, `crates/develop/src/controls.rs`, `crates/ui-egui/src/tests_histogram_drag.rs`, `cmd:develop.set`, `cmd:develop.beginInteraction`, `cmd:develop.endInteraction`, `ctl:light.blacks`, `ctl:light.shadows`, `ctl:light.exposure`, `ctl:light.highlights`, `ctl:light.whites` | five zones across the plot's width, each moving the Basic control it names: Blacks 0.00–0.15, Shadows 0.15–0.35, Exposure 0.35–0.65, Highlights 0.65–0.85, Whites 0.85–1.00; every step is a `develop.set` between `develop.beginInteraction` and `develop.endInteraction` (the sliders' own path), so the draft render follows the drag live and the whole drag lands as one undo step; the zone the press landed in stays locked for the drag, so dragging across the others changes nothing; sideways travel of the plot's width sweeps that control's whole range (Shift a tenth, as on the sliders), clamped to its spec; hovering a zone tints it and shows its value in the strip under the plot ("Exposure: +0.45 EV"), with the sideways-resize cursor; a double-click resets that zone's control to its default in one undo step; the strip under the plot (readout / EXIF) and the clipping buttons in the plot's top corners are not zones |
 | LRC-MAP-VIEW | Map view | P2 | ⬜ | | |
 | LRC-MAP-GEOTAG | Drag photos onto the map | P2 | ⬜ | | |
 | LRC-MAP-LOCATIONS | Saved locations | P2 | ⬜ | | |

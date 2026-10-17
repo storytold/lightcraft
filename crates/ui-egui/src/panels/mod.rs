@@ -13,6 +13,7 @@ pub mod empty_library;
 pub mod faces;
 pub mod filterbar;
 pub mod grid;
+pub mod histogram;
 pub mod keymap;
 pub mod keyword_list;
 pub mod keywording;
