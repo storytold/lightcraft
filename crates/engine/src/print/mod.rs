@@ -40,11 +40,34 @@ pub struct PrintJob {
     pub ppi: f32,
     /// Profile, rendering intent, black point compensation, print adjustment, print sharpening.
     pub color: crate::print_color::PrintColorSettings,
+    /// Print in grayscale: the composed pages are turned gray (Rec. 709 weights, [`gray_u8`]) so the
+    /// PDF, the raster sent to a printer and the dialog's preview agree, whatever the driver does with
+    /// its own monochrome hint.
+    pub grayscale: bool,
 }
 
 impl Default for PrintJob {
     fn default() -> Self {
-        Self { ppi: 240.0, color: crate::print_color::PrintColorSettings::default() }
+        Self { ppi: 240.0, color: crate::print_color::PrintColorSettings::default(), grayscale: false }
+    }
+}
+
+/// Gray of an 8-bit colour with Rec. 709 weights, as integers that sum to 256 (white stays 255, black 0).
+/// The one conversion behind the Print dialog's preview and, through [`gray_u16`], the printed pages.
+pub fn gray_u8(r: u8, g: u8, b: u8) -> u8 {
+    ((u32::from(r) * 54 + u32::from(g) * 183 + u32::from(b) * 19) >> 8) as u8
+}
+
+/// [`gray_u8`] for 16-bit samples.
+pub fn gray_u16(r: u16, g: u16, b: u16) -> u16 {
+    ((u32::from(r) * 54 + u32::from(g) * 183 + u32::from(b) * 19) >> 8) as u16
+}
+
+/// Turn interleaved 16-bit RGB samples gray in place.
+pub fn gray_rgb16_in_place(rgb: &mut [u16]) {
+    for px in rgb.as_chunks_mut::<3>().0 {
+        let y = gray_u16(px[0], px[1], px[2]);
+        *px = [y, y, y];
     }
 }
 
@@ -87,5 +110,27 @@ mod tests {
         assert!(j.color.black_point_compensation && j.validate().is_ok());
         let j: PrintJob = serde_json::from_str(r#"{"color": {"contrast": 500}}"#).unwrap();
         assert!(j.validate().is_err());
+    }
+
+    #[test]
+    fn gray_is_rec709_and_keeps_the_extremes() {
+        assert_eq!((gray_u8(255, 0, 0), gray_u8(0, 255, 0), gray_u8(0, 0, 255)), (53, 182, 18));
+        assert_eq!((gray_u8(255, 255, 255), gray_u8(0, 0, 0), gray_u8(90, 90, 90)), (255, 0, 90));
+        let mut px = [65535u16, 0, 0, 65535, 65535, 65535, 0, 0, 0];
+        gray_rgb16_in_place(&mut px);
+        assert_eq!(px, [13_823, 13_823, 13_823, 65535, 65535, 65535, 0, 0, 0]);
+        assert_eq!(gray_u16(30_000, 30_000, 30_000), 30_000, "gray stays gray");
+        // the 16-bit and 8-bit conversions agree on 8-bit values widened by 257
+        for c in [[220u8, 30, 40], [0, 200, 0], [10, 20, 250]] {
+            let wide = gray_u16(u16::from(c[0]) * 257, u16::from(c[1]) * 257, u16::from(c[2]) * 257);
+            assert!((i32::from(wide / 257) - i32::from(gray_u8(c[0], c[1], c[2]))).abs() <= 1);
+        }
+    }
+
+    #[test]
+    fn the_grayscale_flag_is_a_job_setting_off_by_default() {
+        assert!(!PrintJob::default().grayscale);
+        let j: PrintJob = serde_json::from_str(r#"{"grayscale": true}"#).unwrap();
+        assert!(j.grayscale);
     }
 }
