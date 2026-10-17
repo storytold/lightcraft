@@ -169,6 +169,16 @@ impl DisplayProfile {
         !matches!(self.correction, Correction::None)
     }
 
+    /// What [`correct`](Self::correct) does when it is per-channel tables (a matrix/TRC profile
+    /// whose curves aren't sRGB's): output = `t[channel][input]`. `None` when it does nothing or
+    /// a full CMS transform. Lets a GPU render apply the correction itself (issue #1228).
+    pub fn correction_curves(&self) -> Option<&[[u8; 256]; 3]> {
+        match &self.correction {
+            Correction::Curves(t) => Some(t),
+            _ => None,
+        }
+    }
+
     /// A render in the display's primaries with the sRGB curve (the pipeline's display target) →
     /// the display's device values, in place.
     pub fn correct(&self, img: &mut Rgba8) -> Result<(), String> {

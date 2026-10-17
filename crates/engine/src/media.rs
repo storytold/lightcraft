@@ -761,6 +761,9 @@ pub struct RenderJob {
     /// A face tile that can be cut from the raw's embedded preview, tried before `source`
     /// ([`crate::Session::face_job`]; `None` for every other job).
     pub preview_cut: Option<crate::face_tiles::PreviewCut>,
+    /// Hand the result over as a texture on the window's device when the GPU can
+    /// ([`Self::to_texture`]).
+    pub texture: bool,
 }
 
 pub struct RenderResult {
@@ -780,6 +783,9 @@ pub struct RenderResult {
     /// The display profile (id) the image is encoded for; `None`: sRGB (see
     /// [`crate::display::present`]).
     pub display: Option<u64>,
+    /// The result as a texture on the window's device ([`RenderJob::to_texture`]); `rendered` is
+    /// then an empty image with an empty histogram.
+    pub texture: Option<lightcraft_gpu::GpuTexture>,
 }
 
 impl RenderJob {
@@ -844,6 +850,27 @@ impl RenderJob {
         self
     }
 
+    /// Hand the result over as a texture on the window's device, with no copy of its pixels back
+    /// to the CPU (issue #1228), when the GPU renders it and nothing needs the pixels: a view
+    /// that only draws them (the loupe's zoom window), with no overlay, nothing cached and no
+    /// display correction left to apply on the CPU. Otherwise the job renders as before. The
+    /// result is the same image, so the key stays.
+    pub fn to_texture(mut self, on: bool) -> Self {
+        self.texture = on;
+        self
+    }
+
+    /// Whether this job can render into a texture ([`Self::to_texture`]) at all.
+    fn texture_wanted(&self) -> bool {
+        self.texture
+            && self.cache.is_none()
+            && self.slide.is_none()
+            && self.view_cache.is_none()
+            && self.display.as_ref().is_none_or(|d| !d.profile.needs_correction() || d.profile.correction_curves().is_some())
+            && gpu_takes(&self.settings, &self.request)
+            && lightcraft_gpu::texture_handles(&self.request)
+    }
+
     /// Reuse `stages` across this view's renders.
     pub fn with_stages(mut self, stages: Arc<StageCache>) -> Self {
         self.stages = Some(stages);
@@ -887,6 +914,7 @@ impl RenderJob {
             loaded: None,
             quick: None,
             display: None,
+            texture: None,
         }
     }
 
@@ -930,6 +958,7 @@ impl RenderJob {
                 loaded: None,
                 quick: None,
                 display: None,
+                texture: None,
             };
         }
         // a face tile of an unedited raw: cut from the camera's embedded preview when it is big enough
@@ -950,9 +979,11 @@ impl RenderJob {
                 loaded: None,
                 quick: None,
                 display: None,
+                texture: None,
             };
         }
         let was_loaded = matches!(self.source, SourceRef::Loaded(_));
+        let want_texture = self.texture_wanted();
         // The app is closing (issue #620): nobody is left to show this, and quitting waits for the
         // jobs that are running. Without this, one that lost the GPU mid-way would render on the CPU.
         let closing = || lightcraft_gpu::shutting_down().then(|| "LightCraft is closing".to_string());
@@ -968,7 +999,36 @@ impl RenderJob {
                 // Thumbnails (many small jobs side by side) stay on the CPU; views and exports use
                 // the GPU when there is one.
                 let gpu = self.cache.is_none();
+                // a view that only draws the result: a texture on the window's device, no readback
+                let mut texture_fallback = None;
+                if want_texture {
+                    // the display's curves, when they aren't sRGB's: applied on the GPU too
+                    let curves = self.display.as_ref().and_then(|d| d.profile.correction_curves());
+                    match lightcraft_gpu::try_render_texture(src, &info, &self.settings, &self.request, self.stages.as_deref(), curves) {
+                        Ok(t) => {
+                            let empty = Rgba8 { width: 0, height: 0, data: Vec::new() };
+                            let histogram = Histogram::of_srgb8(&empty);
+                            return RenderResult {
+                                request_id: self.request_id,
+                                source_key: self.source_key,
+                                photo: self.photo,
+                                level: self.level,
+                                key: self.key,
+                                rendered: Ok(Rendered { image: empty, histogram, deep: None }),
+                                gpu_fallback: None,
+                                loaded: (!was_loaded).then_some(source),
+                                quick: None,
+                                // rendered into the display's primaries, and its curve is sRGB's
+                                display: self.display.as_ref().filter(|_| self.request.display.is_some()).map(|d| d.id()),
+                                texture: Some(t),
+                            };
+                        }
+                        Err(lightcraft_gpu::Fallback::Failed(why)) => texture_fallback = Some(why),
+                        Err(lightcraft_gpu::Fallback::NotTried) => {}
+                    }
+                }
                 let (mut rendered, gpu_fallback) = develop_reporting(src, &info, &self.settings, &self.request, self.stages.as_deref(), gpu);
+                let gpu_fallback = texture_fallback.or(gpu_fallback);
                 // for a display profile: the image goes to the display's values, the histogram
                 // and the cached view preview stay sRGB
                 let mut srgb = None;
@@ -1005,6 +1065,7 @@ impl RenderJob {
                     loaded: (!was_loaded).then_some(source),
                     quick: None,
                     display,
+                    texture: None,
                 }
             }
             Err(e) => self.failed(e),
@@ -1038,6 +1099,12 @@ pub fn develop_reporting(
     (rendered, fallback)
 }
 
+/// Whether a view's render is tried on the GPU at all: LUT profiles and refined masks have no GPU
+/// stage, and soft proofs render on the CPU.
+fn gpu_takes(s: &DevelopSettings, req: &RenderRequest) -> bool {
+    !lightcraft_pipeline::lut::is_lut_profile(&s.profile.id) && !s.masks.iter().any(|m| m.visible && m.refine > 0.0) && req.proof.is_none()
+}
+
 fn develop_image(
     src: &Arc<Rgb32f>,
     info: &SourceInfo,
@@ -1046,12 +1113,7 @@ fn develop_image(
     stages: Option<&StageCache>,
     gpu: bool,
 ) -> (Rendered, Option<String>) {
-    // LUT profiles have no GPU stage: they render on the CPU
-    let fallback = if gpu
-        && !lightcraft_pipeline::lut::is_lut_profile(&s.profile.id)
-        && !s.masks.iter().any(|m| m.visible && m.refine > 0.0)
-        && req.proof.is_none()
-    {
+    let fallback = if gpu && gpu_takes(s, req) {
         match lightcraft_gpu::try_render(src, info, s, req, stages) {
             Ok(r) => return (r, None),
             Err(lightcraft_gpu::Fallback::Failed(why)) => Some(why),
@@ -1110,6 +1172,7 @@ impl QuickJob {
             loaded: None,
             quick: None,
             display: None,
+            texture: None,
         })
     }
 
@@ -1127,6 +1190,7 @@ impl QuickJob {
             loaded: None,
             quick,
             display: None,
+            texture: None,
         };
         let rendered = |image: Rgba8| {
             let histogram = Histogram::of_srgb8(&image);
@@ -1266,6 +1330,7 @@ impl crate::Session {
             display: None,
             slide: None,
             preview_cut: None,
+            texture: false,
         })
     }
 
@@ -1319,6 +1384,7 @@ impl crate::Session {
             display: None,
             slide: None,
             preview_cut: None,
+            texture: false,
         })
     }
 
@@ -1373,6 +1439,7 @@ impl crate::Session {
             display: None,
             slide: None,
             preview_cut,
+            texture: false,
         })
     }
 

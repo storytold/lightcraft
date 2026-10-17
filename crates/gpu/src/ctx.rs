@@ -69,6 +69,11 @@ const MODULES: &[Module] = &[
         bindings: &[("src", false, "f32"), ("dst", true, "f32"), ("coverage", false, "u32")],
         entries: &["orient", "sample_affine", "sample_warp"],
     },
+    Module {
+        src: include_str!("wgsl/present.wgsl"),
+        bindings: &[("src", false, "u32"), ("dst", true, "u32"), ("stats", true, "atomic<u32>"), ("curves", false, "u32")],
+        entries: &["pad_rows"],
+    },
 ];
 
 struct Kernel {
@@ -232,6 +237,10 @@ pub struct Gpu {
     free: std::sync::Mutex<Vec<Tracked>>,
     /// Largest storage buffer the device accepts (bytes).
     pub max_buffer: u64,
+    /// Largest texture side the device accepts.
+    pub max_texture: u32,
+    /// The window's device ([`Gpu::shared`]): renders can be handed to the window as textures.
+    pub shared: bool,
 }
 
 /// WGSL constants shared by every module (generated from the CPU pipeline's values).
@@ -316,16 +325,43 @@ impl Gpu {
             ..Default::default()
         }))
         .map_err(|e| format!("{}: device creation failed ({e})", info.name))?;
+        Gpu::build(device, queue, info, false)
+    }
+
+    /// Render on the device the window created (issue #1228): renders then reach the screen as
+    /// textures on that device, with no copy back to the CPU. Refused as [`Gpu::new`] refuses an
+    /// adapter: a software one, or one with too few storage buffers for the kernels.
+    pub fn shared(device: wgpu::Device, queue: wgpu::Queue, info: wgpu::AdapterInfo) -> Result<Gpu, String> {
+        if info.device_type == wgpu::DeviceType::Cpu {
+            return Err(format!("software adapter ({}) skipped: the CPU pipeline is faster", info.name));
+        }
+        let n = device.limits().max_storage_buffers_per_shader_stage;
+        if n < 10 {
+            return Err(format!("{} has too few storage buffers per shader stage ({n} < 10)", info.name));
+        }
+        Gpu::build(device, queue, info, true)
+    }
+
+    /// Install the error handlers and compile the kernels on `device`.
+    fn build(device: wgpu::Device, queue: wgpu::Queue, info: wgpu::AdapterInfo, shared: bool) -> Result<Gpu, String> {
         // Errors outside a render's error scopes (see `ErrorScopes`): log, and stop using the GPU.
-        device.on_uncaptured_error(std::sync::Arc::new(|e| {
-            log::error!("gpu: {e}");
+        // On the window's device this covers the window's own errors too (its handler only
+        // logged): renders then go back to the CPU, and to textures egui uploads itself.
+        let what = if shared { "gpu (window device)" } else { "gpu" };
+        device.on_uncaptured_error(std::sync::Arc::new(move |e| {
+            log::error!("{what}: {e}");
             crate::mark_broken(&format!("device error: {e}"));
         }));
         // wgpu reports a lost device (driver reset, GPU hang, watchdog) only here — never as an
         // error — so without this callback a lost device went unnoticed.
-        device.set_device_lost_callback(|reason, msg| {
-            log::error!("gpu: device lost ({reason:?}): {msg}");
+        // On the window's device the window loses it too (it can't draw again until restarted):
+        // `window_device_lost` tells the app.
+        device.set_device_lost_callback(move |reason, msg| {
+            log::error!("{what}: device lost ({reason:?}): {msg}");
             crate::mark_broken(&format!("device lost ({reason:?}): {msg}"));
+            if shared {
+                crate::WINDOW_LOST.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
         });
         // a kernel the driver's compiler refuses is a validation or an internal error: no GPU, not a half-built one
         let scopes = [device.push_error_scope(wgpu::ErrorFilter::Validation), device.push_error_scope(wgpu::ErrorFilter::Internal)];
@@ -366,9 +402,16 @@ impl Gpu {
             usage: wgpu::BufferUsages::STORAGE,
             mapped_at_creation: false,
         });
-        let max_buffer = limits.max_storage_buffer_binding_size.min(limits.max_buffer_size);
-        log::info!("gpu: {} ({:?}), buffers ≤ {} MiB", info.name, info.backend, max_buffer >> 20);
-        Ok(Gpu { device, queue, info, kernels, dummy, free: Default::default(), max_buffer })
+        let limits = device.limits();
+        let mut max_buffer = limits.max_storage_buffer_binding_size.min(limits.max_buffer_size);
+        // (a device of our own was requested with these limits already; the window's was not)
+        if let Some((binding, buffer)) = limits_override() {
+            max_buffer = max_buffer.min(binding).min(buffer);
+        }
+        let max_texture = limits.max_texture_dimension_2d;
+        let with = if shared { ", shared with the window" } else { "" };
+        log::info!("gpu: {} ({:?}){with}, buffers ≤ {} MiB", info.name, info.backend, max_buffer >> 20);
+        Ok(Gpu { device, queue, info, kernels, dummy, free: Default::default(), max_buffer, max_texture, shared })
     }
 
     /// A buffer of `len` 32-bit values with undefined contents (a recycled one when possible).
@@ -577,6 +620,60 @@ impl Gpu {
         drop(data);
         staging.unmap();
         out
+    }
+}
+
+impl Gpu {
+    /// The pixels of an `Rgba8Unorm` texture on this device (a render handed to the window, read
+    /// back for a screenshot), or why not.
+    pub fn read_texture(&self, texture: &wgpu::Texture) -> Result<lightcraft_raster::Rgba8, String> {
+        let (w, h) = (texture.width() as usize, texture.height() as usize);
+        if texture.format() != wgpu::TextureFormat::Rgba8Unorm || !texture.usage().contains(wgpu::TextureUsages::COPY_SRC) {
+            return Err("not a render texture".into());
+        }
+        let stride = (w * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as usize) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as usize;
+        let size = (stride * h) as u64;
+        if size == 0 || size > self.device.limits().max_buffer_size {
+            return Err(format!("a {w}×{h} texture can't be read back"));
+        }
+        let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("texture readback"),
+            size,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut enc = self.encoder();
+        enc.copy_texture_to_buffer(
+            texture.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &staging,
+                layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(stride as u32), rows_per_image: Some(h as u32) },
+            },
+            wgpu::Extent3d { width: w as u32, height: h as u32, depth_or_array_layers: 1 },
+        );
+        self.queue.submit([enc.finish()]);
+        let slice = staging.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        self.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: Some(READBACK_TIMEOUT) }).map_err(|e| e.to_string())?;
+        match rx.recv_timeout(std::time::Duration::from_secs(10)) {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => return Err(e.to_string()),
+            Err(e) => return Err(format!("map callback: {e}")),
+        }
+        let data = slice.get_mapped_range().map_err(|e| format!("{e:?}"))?;
+        let mut out = Vec::with_capacity(w * h);
+        for row in data.chunks(stride) {
+            out.extend_from_slice(row.get(..w * 4).unwrap_or_default().as_chunks::<4>().0);
+        }
+        drop(data);
+        staging.unmap();
+        if out.len() != w * h {
+            return Err("the texture came back incomplete".into());
+        }
+        Ok(lightcraft_raster::Rgba8 { width: w, height: h, data: out })
     }
 }
 

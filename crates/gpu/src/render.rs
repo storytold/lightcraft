@@ -586,6 +586,49 @@ pub fn render(
     stages: Option<&GpuStages>,
     fault: Option<crate::Fault>,
 ) -> Option<Rendered> {
+    match render_as(gpu, src, info, s, req, stages, fault, None)? {
+        Made::Pixels(r) => Some(r),
+        Made::Texture(_) => None,
+    }
+}
+
+/// [`render`] into a texture on the window's device (issue #1228): no copy back to the CPU, no
+/// histogram and no overlay (the caller asks [`crate::texture_handles`] first). `curves`: a
+/// display profile's per-channel correction, applied on the way into the texture.
+#[allow(clippy::too_many_arguments)]
+pub fn render_texture(
+    gpu: &Gpu,
+    src: &Arc<Rgb32f>,
+    info: &SourceInfo,
+    s: &DevelopSettings,
+    req: &RenderRequest,
+    stages: Option<&GpuStages>,
+    fault: Option<crate::Fault>,
+    curves: Option<&[[u8; 256]; 3]>,
+) -> Option<crate::GpuTexture> {
+    match render_as(gpu, src, info, s, req, stages, fault, Some(curves))? {
+        Made::Texture(t) => Some(t),
+        Made::Pixels(_) => None,
+    }
+}
+
+/// What a render made: pixels on the CPU, or a texture on the window's device.
+enum Made {
+    Pixels(Rendered),
+    Texture(crate::GpuTexture),
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_as(
+    gpu: &Gpu,
+    src: &Arc<Rgb32f>,
+    info: &SourceInfo,
+    s: &DevelopSettings,
+    req: &RenderRequest,
+    stages: Option<&GpuStages>,
+    fault: Option<crate::Fault>,
+    texture: Option<Option<&[[u8; 256]; 3]>>,
+) -> Option<Made> {
     let mut t = profiling().then(std::time::Instant::now);
     // Each stage is submitted on its own; under `LIGHTCRAFT_PROFILE` also waited for, so the
     // timings are real.
@@ -709,6 +752,11 @@ pub fn render(
             groups2(w, rows.min(h - y0), [16, 16]),
         );
     }
+    if let Some(curves) = texture {
+        let made = to_texture(&mut cx, &out, w, h, plan.keep.map(|k| (k.x, k.y, k.w, k.h)), curves);
+        lap("finish + present", &mut t, &mut cx);
+        return made.map(Made::Texture);
+    }
     // the alpha a mask overlay shows: copied out before the readback below submits
     let overlay_mask = req.overlay.mask(s).map(|m| {
         let list = s.masks.iter().filter(|m| m.visible && !m.components.is_empty());
@@ -778,7 +826,82 @@ pub fn render(
     if let Some(k) = plan.keep {
         image = image.crop(k.x, k.y, k.w, k.h);
     }
-    Some(Rendered { image, histogram, deep: None })
+    Some(Made::Pixels(Rendered { image, histogram, deep: None }))
+}
+
+/// Copy the kept part (`keep`: x, y, w, h; all of the `w × h` output when `None`) of the packed
+/// RGBA8 output `out` into a new texture, with the checks the read-back path runs on the CPU: a
+/// pixel the per-pixel kernel never wrote fails the render, an entirely black one is redone on the
+/// CPU. Only two counters come back from the device.
+fn to_texture(
+    cx: &mut Cx<'_>,
+    out: &Buf,
+    w: usize,
+    h: usize,
+    keep: Option<(usize, usize, usize, usize)>,
+    curves: Option<&[[u8; 256]; 3]>,
+) -> Option<crate::GpuTexture> {
+    let gpu = cx.gpu;
+    let (x0, y0, kw, kh) = keep.unwrap_or((0, 0, w, h));
+    // a crop past the output would read past `out`: never expected, but not a reason to crash
+    if kw == 0 || kh == 0 || x0.saturating_add(kw) > w || y0.saturating_add(kh) > h {
+        fail(FailKind::Fatal, format!("a {kw}×{kh} window at {x0},{y0} is outside the {w}×{h} render"));
+        return None;
+    }
+    if kw > gpu.max_texture as usize || kh > gpu.max_texture as usize {
+        fail(FailKind::Limit, format!("{kw}×{kh} is over the device's {} px texture side", gpu.max_texture));
+        return None;
+    }
+    // rows padded to the copy alignment (256 bytes = 64 pixels)
+    let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as usize / 4;
+    let stride = kw.div_ceil(align) * align;
+    let padded = cx.gpu.buffer(stride * kh);
+    let stats = cx.zeroed(2);
+    // the display's per-channel tables, one word per entry
+    let tables = curves.map(|c| gpu.upload(&c.iter().flatten().map(|v| *v as u32).collect::<Vec<u32>>()));
+    let p = [w as u32, x0 as u32, y0 as u32, kw as u32, kh as u32, stride as u32, curves.is_some() as u32];
+    cx.run("pad_rows", &p, &[Some(out), Some(&padded), Some(&stats), tables.as_ref()], groups2(kw, kh, [16, 16]));
+    if crate::ctx::failed() {
+        return None;
+    }
+    let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("lightcraft render"),
+        size: wgpu::Extent3d { width: kw as u32, height: kh as u32, depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        // what egui samples its own textures as: sRGB-encoded bytes, blended in gamma space
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        // (COPY_SRC: a screenshot or a test can still read it back)
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    {
+        let enc = cx.enc.get_or_insert_with(|| gpu.encoder());
+        enc.copy_buffer_to_texture(
+            wgpu::TexelCopyBufferInfo {
+                buffer: padded.raw(),
+                layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(stride as u32 * 4), rows_per_image: Some(kh as u32) },
+            },
+            texture.as_image_copy(),
+            wgpu::Extent3d { width: kw as u32, height: kh as u32, depth_or_array_layers: 1 },
+        );
+    }
+    // submits everything recorded, the copy included, and waits for it
+    let counts: Vec<u32> = cx.read(&stats, 2);
+    if crate::ctx::failed() {
+        return None;
+    }
+    let (unwritten, lit) = (counts.first().copied().unwrap_or(0), counts.get(1).copied().unwrap_or(0));
+    if unwritten > 0 {
+        fail(FailKind::Fatal, format!("the GPU returned an incomplete image ({unwritten} of {} pixels unwritten)", kw * kh));
+        return None;
+    }
+    if kw * kh >= 4096 && lit == 0 {
+        fail(FailKind::Blank, "the GPU result is entirely black; rendering it on the CPU to be sure".into());
+        return None;
+    }
+    Some(crate::GpuTexture { texture, width: kw, height: kh })
 }
 
 /// Pixels whose alpha is not 255 (cheap: no early exit, so it vectorizes).

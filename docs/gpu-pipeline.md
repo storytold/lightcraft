@@ -43,6 +43,9 @@ Overrides (read once at launch):
 - else `WGPU_BACKEND` (wgpu's own variable, same names) — before #136 only the window honoured it,
   the compute device always used Vulkan + DX12 (+ Metal).
 - `LIGHTCRAFT_GPU=0`: GPU rendering off for the process (the window is unaffected).
+- `LIGHTCRAFT_GPU_TEXTURES=1` (opt-in): renders share the window's device and zoom windows come
+  back as textures ([Renders as window textures](#renders-as-window-textures-issue-1228)); a
+  restart after a lost device clears it.
 
 **DX12 shader compiler (issue #471).** Every instance (window and compute) compiles DX12 shaders with
 FXC (`d3dcompiler_47.dll`, part of Windows; `lightcraft_gpu::backend::backend_options`). wgpu's
@@ -220,12 +223,55 @@ passes on as `RenderResult::gpu_fallback`; an export carries it as `Exported::gp
 each file of an `app.export` batch result has `gpuFallback` when its render fell back (issue #675).
 **Reproducing a smaller GPU:** `LIGHTCRAFT_GPU_LIMITS=webgpu` (or `downlevel`) creates the device
 with 128 MiB storage bindings / 256 MiB buffers, `LIGHTCRAFT_GPU_LIMITS=<n>` with n MiB / 2n MiB.
+**Reproducing a driver reset:** `LIGHTCRAFT_GPU_LOSE_AFTER=<n>` destroys the device after n GPU
+renders ([Renders as window textures](#renders-as-window-textures-issue-1228)).
 Tests inject failures with `lightcraft_gpu::inject_fault` (`crates/gpu/tests/fallback.rs`,
 `export_falls_back_to_the_cpu_when_gpu_work_is_lost`). The fault is thread-local, and so are its
 consequences: a simulated fatal failure stops GPU use on the injecting thread only (`available()`
 false, `unavailable_reason()` set there), until `reset_failures()`, which undoes nothing else — a
 real failure still stops the whole process. Such a test asserts on its own render's reason, not on
 `last_fallback()`, so it can run beside other tests rendering on the GPU (issue #675).
+
+## Renders as window textures (issue #1228)
+**Opt-in: `LIGHTCRAFT_GPU_TEXTURES=1`.** A device has one queue, and the window's frames wait
+behind the renders on it. In 8 s 1:1 Exposure drags on a 61 MP raw (M4 Max, 4 alternating runs,
+both with one render per view slot) the shared device dropped 0–4 % of frames (p95 12–23 ms,
+worst 33–131 ms) where renders on a device of their own dropped none (p95 8–13 ms, worst
+18–36 ms), against window renders of 4–15 ms instead of 24–50 ms. Pacing the renders'
+submissions (waiting for each piece before queueing the next) made it worse. Until the window's
+frames can go first, renders keep their own device by default.
+
+With it, the desktop app lends the window's wgpu device to the renderer (`window_gpu::lend_device` →
+`lightcraft_gpu::share_window_device`, before anything renders): the kernels compile on it, and the
+window's device is requested with the adapter's limits (`window_device_limits`) so they fit. A
+render that is only drawn — the zoom windows of Detail, Before/After, Compare and Reference
+(`RenderJob::to_texture`) — then comes back as a texture on that device
+(`lightcraft_gpu::try_render_texture`) instead of pixels: the `pad_rows` kernel copies the kept
+part of the output into rows aligned for a buffer-to-texture copy, applies a display profile's
+per-channel curves on the way (`DisplayProfile::correction_curves`), and counts unwritten and lit
+pixels, so the incomplete-image and all-black checks still run on two words read back. The UI
+registers the texture with egui-wgpu (`render::NativeTextures`, `TexImage::Native`) and frees it
+when it is replaced. A 24 MP raw at 1:1 on an M4 Max: 30 ms per Exposure step instead of 41 ms
+(p50 round trip, 22–44 ms instead of 36–71 ms), and the window's 44 MB CPU copy is gone.
+
+Read-back pixels stay for everything else, and are the fallback: the whole frame (its histogram is
+shown), overlays (drawn on the CPU), soft proofs and deep renders, LUT-based display profiles (a
+CMS transform), thumbnails and exports; the glow renderer or a software window adapter (no device
+to share); without `LIGHTCRAFT_GPU_TEXTURES=1` (renders keep a device of their own); and any
+render that falls back to the CPU. A headless screenshot reads a texture back when it is taken
+(`lightcraft_gpu::read_texture`).
+
+**A lost device.** Render errors stay in their render's error scopes (thread-local) and never reach
+the window. A *lost* device (driver reset, GPU hang) is lost to the window too — as it was before
+sharing, when a reset took every device on the GPU. Renders go back to the CPU, and
+`lightcraft_gpu::window_device_lost()` is set: egui-wgpu panics drawing anything on a lost device,
+so the app draws empty frames and asks in a native dialog to restart or quit; after saving, a
+restart starts LightCraft again without `LIGHTCRAFT_GPU_TEXTURES`. A loss in the middle of a frame
+(the panic happens before the app can stop drawing) ends `run_native` with an error, and the app
+starts again the same way; the library has written every command to its journal, so only a
+slider drag in progress is lost. Tested by `crates/gpu/tests/texture_lost.rs` and
+`window_gpu::tests::a_lost_window_device_draws_empty_frames_without_a_panic`; seen end to end with
+`LIGHTCRAFT_GPU_LOSE_AFTER=<n>`, which destroys the device after n GPU renders.
 
 ## Correctness: CPU oracle and equivalence tests
 `crates/gpu/tests/equivalence.rs` renders the same settings on both and compares 8-bit sRGB:
@@ -320,8 +366,8 @@ A view's stages keep an uploaded source only up to 96 MB (a Preview-level source
   2.5–2.6 GB → 0.91–0.96 GB, heap peak 930 → ~600 MB; stepping median ~13 ms (unchanged).
 
 ## Open items
-- Keep the loupe texture on the GPU (render into an `egui-wgpu` texture on eframe's device instead of
-  reading back); share the device with eframe.
+- The whole-frame loupe render still reads back (its histogram is shown): a GPU histogram (below)
+  would let it stay on the GPU too; overlays drawn by a kernel would let their windows stay.
 - WebGPU in the browser build (async init, single device per canvas).
 - Defringe and spot removal kernels; Sky/Subject heuristics (replaced by the segmenter in M12).
 - Tiling for sources / outputs beyond the buffer limit (24 MP+ on WebGPU-default limits, 60 MP+

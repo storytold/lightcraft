@@ -67,8 +67,20 @@ impl eframe::App for App {
             // Quit from the menu bar: save exactly what closing the window saves (settings and
             // library, after the unsaved-changes check; otherwise its prompt shows), then end the
             // process instead of closing the viewport while AppKit is terminating (PR #444).
-            eframe::App::on_exit(self, None);
+            self.save_and_shut_down();
             std::process::exit(0);
+        }
+        // The window's device was lost (issue #1228: renders share it): nothing can be drawn on it
+        // again. Save, then restart or quit as the user answers (nothing else runs meanwhile).
+        if lightcraft_engine::gpu::window_device_lost() {
+            if let Some(restart) = window_gpu::device_lost_answer(ctx) {
+                self.save_and_shut_down();
+                if restart {
+                    window_gpu::relaunch_with_own_render_device();
+                }
+                std::process::exit(0);
+            }
+            return;
         }
         self.0.logic(ctx);
         self.1.tick(&mut self.0, ctx);
@@ -78,9 +90,33 @@ impl eframe::App for App {
     }
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         self.0.perf.host_frame_ms = frame.info().cpu_usage.map(|s| f64::from(s) * 1000.0);
+        // on a lost device, a frame with anything in it panics in egui-wgpu (its staging buffers
+        // can't be made): draw nothing until the restart (see `logic`)
+        if lightcraft_engine::gpu::window_device_lost() {
+            return;
+        }
         self.0.ui(ui);
     }
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.save_and_shut_down();
+        // macOS (#1331): end the process here, before eframe tears the window down, as Quit from
+        // the menu bar already does (PR #444). AccessKit's macOS adapter subclasses the window's
+        // content view and restores its class on teardown; AppKit's Touch Bar support observes
+        // that view (KVO), so in the next display cycle `-[_NSTouchBarFinderObservation
+        // invalidate]` throws "not registered" and closing the window ends in a crash report.
+        // Nothing after this is needed: settings and library are saved, background work has
+        // stopped and the log file is unbuffered. `on_exit` only runs once the app exists, so a
+        // renderer that fails to start still relaunches on the next one (`window_gpu`).
+        #[cfg(target_os = "macos")]
+        std::process::exit(0);
+    }
+}
+
+impl App {
+    /// Save settings and the library, then wait for background work: closing the window, Quit
+    /// from the macOS menu bar, or starting again after a lost graphics device (which must not
+    /// end the process here, so the macOS exit stays in `on_exit`).
+    fn save_and_shut_down(&mut self) {
         // (a size the window was just given is remembered too)
         self.0.ui.window = self.1.window_at_exit(self.0.ui.window);
         if let Err(e) = self.1.save(&self.0) {
@@ -93,16 +129,6 @@ impl eframe::App for App {
         if !self.0.shutdown(EXIT_WAIT) {
             log::warn!("quit: background work was still running after {EXIT_WAIT:?}");
         }
-        // macOS (#1331): end the process here, before eframe tears the window down, as Quit from
-        // the menu bar already does (PR #444). AccessKit's macOS adapter subclasses the window's
-        // content view and restores its class on teardown; AppKit's Touch Bar support observes
-        // that view (KVO), so in the next display cycle `-[_NSTouchBarFinderObservation
-        // invalidate]` throws "not registered" and closing the window ends in a crash report.
-        // Nothing after this is needed: settings and library are saved, background work has
-        // stopped and the log file is unbuffered. `on_exit` only runs once the app exists, so a
-        // renderer that fails to start still relaunches on the next one (`window_gpu`).
-        #[cfg(target_os = "macos")]
-        std::process::exit(0);
     }
 }
 
@@ -961,6 +987,9 @@ fn main() -> eframe::Result {
                 // the window's renderer is up (eframe calls this after creating it)
                 win_files_app.started(window_renderer);
                 came_up_app.store(true, std::sync::atomic::Ordering::Relaxed);
+                // renders run on the window's device and reach it as textures (issue #1228): lent
+                // before anything can create a render device of its own
+                let window_textures = window_gpu::lend_device(cc.wgpu_render_state.as_ref());
                 let (mut session, problem) = open_session(in_memory, library_dir, seed_demo && files.is_empty());
                 // AI masks: the SAM 3 checkpoint (facebook/sam3) in <config>/models/sam3, or LIGHTCRAFT_SAM3_DIR
                 // (never required: without it, AI masks offer to download it; see docs/ai-masks.md)
@@ -969,6 +998,9 @@ fn main() -> eframe::Result {
                 // HDR display: SDR unless the surface, platform and display all allow HDR
                 hdr_display::report(cc.wgpu_render_state.as_ref().map(|r| r.target_format));
                 let mut app = LightcraftApp::new(session, services(cc, app_log_file.as_deref()));
+                if let Some(t) = window_textures {
+                    app.renderer.set_native_textures(std::sync::Arc::new(t));
+                }
                 if let Some(ui) = prefs {
                     app.ui = ui;
                 }
@@ -1055,6 +1087,12 @@ fn main() -> eframe::Result {
     // a panic that still escaped the renderer's start (the probe and error handler should
     // prevent it): an error like any other failed start
     let started = started.unwrap_or_else(|_| Err(eframe::Error::AppCreation("the window's renderer panicked while starting".into())));
+    // the device renders share with the window was lost while a frame was being drawn (egui-wgpu
+    // panics there): not a failed start — start again, with renders on a device of their own
+    if started.is_err() && lightcraft_engine::gpu::window_device_lost() && window_gpu::relaunch_with_own_render_device() {
+        log::error!("LightCraft lost its graphics device while drawing; starting again");
+        return Ok(());
+    }
     if let Err(e) = &started {
         // the renderer never came up: start again, which tries the next one in the chain
         if window_gpu::relaunch_after_failure(&win_files) {

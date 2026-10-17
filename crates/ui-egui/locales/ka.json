@@ -2718,5 +2718,8 @@
   "≥  at least": "≥  არანაკლებ",
   "⌘-drag to straighten, ⇧G Guided Upright, a grid while transforming.": "⌘-გადათრევა გასასწორებლად, ⇧G მართვადი Upright, ბადე გარდაქმნისას.",
   "日本語": "日本語",
-  "繁體中文（台灣）": "繁體中文（台灣）"
+  "繁體中文（台灣）": "繁體中文（台灣）",
+  "LightCraft lost its graphics device": "LightCraft-მა დაკარგა გრაფიკული მოწყობილობა",
+  "The graphics driver stopped responding, so LightCraft can't draw its window any more. Your library and edits are saved.\n\nRestart LightCraft to continue.": "გრაფიკულმა დრაივერმა შეწყვიტა პასუხი, ამიტომ LightCraft-ს აღარ შეუძლია თავისი ფანჯრის დახატვა. თქვენი ბიბლიოთეკა და რედაქტირებები შენახულია.\n\nგასაგრძელებლად გადატვირთეთ LightCraft.",
+  "Restart": "გადატვირთვა"
 }

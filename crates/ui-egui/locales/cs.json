@@ -2063,5 +2063,8 @@
   "Open Settings": "Otevřít nastavení",
   "Select none": "Zrušit celý výběr",
   "Select all": "Vybrat vše",
-  "Visualize HDR": "Zobrazit rozsah HDR"
+  "Visualize HDR": "Zobrazit rozsah HDR",
+  "LightCraft lost its graphics device": "LightCraft ztratil grafické zařízení",
+  "The graphics driver stopped responding, so LightCraft can't draw its window any more. Your library and edits are saved.\n\nRestart LightCraft to continue.": "Grafický ovladač přestal odpovídat, takže LightCraft už nemůže vykreslovat své okno. Vaše knihovna a úpravy jsou uloženy.\n\nPro pokračování LightCraft restartujte.",
+  "Restart": "Restartovat"
 }

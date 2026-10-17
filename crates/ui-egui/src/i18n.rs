@@ -243,6 +243,17 @@ pub fn upper_first(text: &str) -> String {
     }
 }
 
+/// The native dialog shown when the window's graphics device was lost mid-session (issue #1228):
+/// title, text, and the two buttons (restart, quit).
+pub fn device_lost_message() -> (String, String, String, String) {
+    (
+        tr("LightCraft lost its graphics device").to_string(),
+        tr("The graphics driver stopped responding, so LightCraft can't draw its window any more. Your library and edits are saved.\n\nRestart LightCraft to continue.").to_string(),
+        tr("Restart").to_string(),
+        tr("Quit").to_string(),
+    )
+}
+
 pub fn builtin_label(source: &str, builtin: bool) -> &str {
     if builtin { tr(source) } else { source }
 }
@@ -812,6 +823,19 @@ mod tests {
             for key in ["Import Photos…", "Export…", "Exposure", "White Balance", "Settings", "Language"] {
                 let value = language.tr(key);
                 assert!(!value.is_empty() && value != key, "{language:?}: {key}");
+            }
+        }
+    }
+
+    /// The lost-device dialog (issue #1228) is a native dialog shown when nothing else can be
+    /// drawn: every language has its title, text and buttons.
+    #[test]
+    fn device_lost_dialog_is_translated_in_every_language() {
+        let english = device_lost_message();
+        for language in Locale::ALL.iter().filter(|language| **language != Locale::En) {
+            for key in [&english.0, &english.1, &english.2, &english.3] {
+                let value = language.tr(key);
+                assert!(!value.is_empty() && value != key.as_str(), "{language:?}: {key}");
             }
         }
     }

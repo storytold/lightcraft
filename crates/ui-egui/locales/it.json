@@ -1990,5 +1990,8 @@
   "Test Face Model": "Testa il modello dei volti",
   "This build cannot run recognition models: they can be added and chosen, not used.": "Questa versione non può eseguire modelli di riconoscimento: si possono aggiungere e scegliere, non usare.",
   "This build has nowhere to keep face models, so the model list is not available. (The desktop app has.)": "Questa versione non ha dove tenere i modelli dei volti, quindi l'elenco dei modelli non è disponibile. (L'app desktop ce l'ha.)",
-  "Unnamed Faces": "Volti senza nome"
+  "Unnamed Faces": "Volti senza nome",
+  "LightCraft lost its graphics device": "LightCraft ha perso il dispositivo grafico",
+  "The graphics driver stopped responding, so LightCraft can't draw its window any more. Your library and edits are saved.\n\nRestart LightCraft to continue.": "Il driver grafico ha smesso di rispondere, quindi LightCraft non può più disegnare la sua finestra. La tua libreria e le modifiche sono salvate.\n\nRiavvia LightCraft per continuare.",
+  "Restart": "Riavvia"
 }

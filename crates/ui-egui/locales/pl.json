@@ -2157,5 +2157,8 @@
   "This is a Lightroom catalog, not a LightCraft library. Import it into a LightCraft library instead?": "To jest katalog Lightrooma, a nie biblioteka LightCraft. Zaimportować go zamiast tego do biblioteki LightCraft?",
   "Unnamed Faces": "Nienazwane twarze",
   "Vertical inset (% of short edge)": "Margines pionowy (% krótszego boku)",
-  "not added to Apple Photos (cancelled)": "nie dodano do aplikacji Zdjęcia (anulowano)"
+  "not added to Apple Photos (cancelled)": "nie dodano do aplikacji Zdjęcia (anulowano)",
+  "LightCraft lost its graphics device": "LightCraft utracił urządzenie graficzne",
+  "The graphics driver stopped responding, so LightCraft can't draw its window any more. Your library and edits are saved.\n\nRestart LightCraft to continue.": "Sterownik grafiki przestał odpowiadać, więc LightCraft nie może już rysować swojego okna. Twoja biblioteka i zmiany są zapisane.\n\nUruchom ponownie LightCraft, aby kontynuować.",
+  "Restart": "Uruchom ponownie"
 }
