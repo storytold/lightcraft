@@ -297,12 +297,15 @@ fn matches(i: &egui::InputState, m: Modifiers, k: Key) -> bool {
     })
 }
 
-/// Default brackets rate in grids. Remapped brush keys retain their brush action, and a
-/// saved assignment of either bracket to another command takes precedence over this default.
-fn grid_bracket_command(keymap: &Keymap, grid: bool, id: &'static str, shortcut: (Modifiers, Key)) -> Option<&'static str> {
+/// Default brackets rate in grids, and the default backslash shows / hides the Filter Bar there
+/// (Lightroom Classic's Library keys; Detail keeps brush size and Show Original). Remapped brush and
+/// Show Original keys retain their action, and a saved assignment of the key to another command
+/// takes precedence over this default.
+fn grid_key_command(keymap: &Keymap, grid: bool, id: &'static str, shortcut: (Modifiers, Key)) -> Option<&'static str> {
     let command = match (grid, id, shortcut) {
         (true, "brush.smaller", (m, Key::OpenBracket)) if m == Modifiers::NONE => "photo.decreaseRating",
         (true, "brush.larger", (m, Key::CloseBracket)) if m == Modifiers::NONE => "photo.increaseRating",
+        (true, "view.showOriginal", (m, Key::Backslash)) if m == Modifiers::NONE => "view.filterBar",
         _ => return Some(id),
     };
     if keymap.iter().any(|(other, sc)| other != id && find_bindable(other).is_some() && parse(sc) == Some(shortcut)) { None } else { Some(command) }
@@ -389,7 +392,7 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
                 && !native(sc)
                 && !(k == Key::Escape && popup_open)
                 && matches(i, m, k)
-                && let Some(id) = grid_bracket_command(keymap, grid, b.id, (m, k))
+                && let Some(id) = grid_key_command(keymap, grid, b.id, (m, k))
             {
                 fire.push(id.to_string());
             }
@@ -1269,3 +1272,7 @@ mod relative_rating_tests;
 #[cfg(test)]
 #[path = "shortcuts/tests_flag_cycle.rs"]
 mod flag_cycle_tests;
+
+#[cfg(test)]
+#[path = "shortcuts/tests_filter_bar_key.rs"]
+mod filter_bar_key_tests;
