@@ -408,3 +408,36 @@ fn hostile_file_specs_are_rejected_before_touching_disk() {
         assert!(!dir.exists());
     }
 }
+
+/// A caller's `User-Agent` replaces the default one instead of adding a second header.
+#[test]
+fn a_callers_user_agent_replaces_the_default() {
+    fn user_agents(headers: &[(&str, String)]) -> Vec<String> {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = crate::http::Url::parse(&format!("http://{}/t", listener.local_addr().unwrap())).unwrap();
+        let worker = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(socket.try_clone().unwrap());
+            let mut agents = Vec::new();
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap() == 0 || line.trim().is_empty() {
+                    break;
+                }
+                if let Some((k, v)) = line.split_once(':')
+                    && k.eq_ignore_ascii_case("user-agent")
+                {
+                    agents.push(v.trim().to_string());
+                }
+            }
+            socket.write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n").unwrap();
+            agents
+        });
+        let cancel = AtomicBool::new(false);
+        let limits = crate::http::Limits { connect: Duration::from_secs(5), stall: Duration::from_secs(5), cancel: &cancel };
+        assert_eq!(crate::http::get(&url, headers, &limits).unwrap().status, 204);
+        worker.join().unwrap()
+    }
+    assert_eq!(user_agents(&[]), vec![format!("LightCraft/{}", env!("CARGO_PKG_VERSION"))]);
+    assert_eq!(user_agents(&[("User-Agent", "LightCraft/1 (+https://example.org)".into())]), vec!["LightCraft/1 (+https://example.org)"]);
+}

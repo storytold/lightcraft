@@ -3239,6 +3239,7 @@ dependencies = [
  "lightcraft-gpu",
  "lightcraft-heif",
  "lightcraft-lensdb",
+ "lightcraft-map",
  "lightcraft-merge",
  "lightcraft-meta",
  "lightcraft-pipeline",
@@ -3344,6 +3345,21 @@ dependencies = [
  "lightcraft-develop",
  "lightcraft-geom",
  "quick-xml 0.38.4",
+]
+
+[[package]]
+name = "lightcraft-map"
+version = "0.8.0"
+dependencies = [
+ "lightcraft-codecs",
+ "lightcraft-fetch",
+ "lightcraft-geom",
+ "log",
+ "png",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "web-time",
 ]
 
 [[package]]
@@ -3517,6 +3533,7 @@ dependencies = [
  "lightcraft-engine",
  "lightcraft-faces",
  "lightcraft-geom",
+ "lightcraft-map",
  "lightcraft-merge",
  "lightcraft-meta",
  "lightcraft-pipeline",

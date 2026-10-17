@@ -65,30 +65,22 @@ fn set_names_ops(s: &crate::Session, names: &[String; 5]) -> Vec<Op> {
 fn auto_tag_tracklog(s: &mut crate::Session, p: &Value) -> Result<Value> {
     use lightcraft_meta::{DateTime, Match, parse_gpx};
     const C: &str = "photo.autoTagTracklog";
-    let text = match (str_param(p, "gpx"), str_param(p, "path")) {
-        (Some(t), _) => t.to_string(),
-        (None, Some(path)) => std::fs::read_to_string(path).map_err(|e| bad(C, format!("can't read {path}: {e}")))?,
-        (None, None) => return Err(bad(C, "missing `path` (a .gpx file) or `gpx` (its text)")),
+    let from_map = bool_or(p, "loaded", false);
+    // the Map view's track log (its active track and offset), or a file / text given here
+    let (log, map_offset) = if from_map {
+        let t = s.map.track.as_ref().ok_or_else(|| bad(C, "no track log is loaded in the Map view (map.trackLog {path})"))?;
+        (t.active_log.clone(), t.offset_minutes)
+    } else {
+        let (text, _) = crate::tracklog::read_gpx(C, p)?.ok_or_else(|| bad(C, "missing `path` (a .gpx file) or `gpx` (its text)"))?;
+        (std::sync::Arc::new(parse_gpx(&text).map_err(|e| bad(C, e.to_string()))?), None)
     };
-    let log = parse_gpx(&text).map_err(|e| bad(C, e.to_string()))?;
     let (start, end) = log.span().ok_or_else(|| bad(C, "the track log has no timed track points"))?;
     // minutes east of UTC; `None` = not given (zone-less capture times are then read as UTC)
     let offset: Option<i64> = match p.get("offset") {
-        None | Some(Value::Null) => None,
-        Some(Value::String(o)) if o.trim().is_empty() => None,
-        Some(Value::Number(h)) => {
-            let h = h.as_f64().unwrap_or(0.0);
-            if h.abs() > 18.0 {
-                return Err(bad(C, "offset is at most ±18 hours"));
-            }
-            Some((h * 60.0).round() as i64)
-        }
-        Some(Value::String(o)) => {
-            Some(DateTime::parse_offset(o).ok_or_else(|| bad(C, format!("can't read offset `{o}` (e.g. +02:00 or -5)")))? as i64)
-        }
-        Some(_) => return Err(bad(C, "offset is `+HH:MM` or a number of hours")),
+        None => map_offset,
+        Some(v) => crate::tracklog::parse_offset(C, v)?,
     };
-    let max_gap = f64_or(p, "maxGap", 600.0);
+    let max_gap = f64_or(p, "maxGap", crate::tracklog::DEFAULT_MAX_GAP);
     if max_gap.is_nan() || max_gap < 0.0 {
         return Err(bad(C, "maxGap must be ≥ 0 seconds"));
     }
@@ -106,25 +98,17 @@ fn auto_tag_tracklog(s: &mut crate::Session, p: &Value) -> Result<Value> {
             no_time += 1;
             continue;
         };
-        // UTC seconds: the recorded zone wins, else the caller's offset
-        let utc = match dt.offset_minutes {
-            Some(_) => dt.unix_seconds(),
-            None => {
-                if offset.is_none() {
-                    assumed_utc += 1;
-                }
-                dt.unix_seconds() - offset.unwrap_or(0) * 60
-            }
-        } as f64
-            + dt.millis as f64 / 1000.0;
-        let Some((g, m)) = log.locate(utc, max_gap) else {
+        if dt.offset_minutes.is_none() && offset.is_none() {
+            assumed_utc += 1;
+        }
+        let Some((g, m)) = log.locate(crate::tracklog::capture_utc(&dt, offset), max_gap) else {
             outside += 1;
             continue;
         };
         if m == Match::Interpolated {
             interpolated += 1;
         }
-        let pos = ((g.latitude * 1e7).round() / 1e7, (g.longitude * 1e7).round() / 1e7);
+        let pos = crate::tracklog::rounded(&g);
         photos.push(json!({"id": id.0, "gps": [pos.0, pos.1], "match": if m == Match::Interpolated { "interpolated" } else { "nearest" }}));
         if ph.meta.gps != Some(pos) {
             let mut meta = ph.meta.clone();
@@ -247,7 +231,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Auto-Tag Photos from Tracklog",
             [],
             None,
-            "{path?: GPX file | gpx?: GPX text, ids?, offset?: camera clock's UTC offset for photos whose capture time has no zone (`+02:00`, or hours; default UTC), maxGap?: seconds (600), replace?: bool (also photos that already have GPS), dryRun?: bool} → {tagged, interpolated, nearest, skipped: {noTime, outside, hasGps}, assumedUtc, points, start, end, photos: [{id, gps, match}]} — positions from the track log by capture time; one undo step",
+            "{path?: GPX file (at most 50 MB) | gpx?: GPX text | loaded?: true (the Map view's track log: its active track, and its offset unless `offset` is given; map.trackLog), ids?, offset?: camera clock's UTC offset for photos whose capture time has no zone (`+02:00`, or hours; default UTC), maxGap?: seconds (600), replace?: bool (also photos that already have GPS), dryRun?: bool} → {tagged, interpolated, nearest, skipped: {noTime, outside, hasGps}, assumedUtc, points, start, end, photos: [{id, gps, match}]} — positions from the track log by capture time; one undo step",
             has_selection,
             auto_tag_tracklog
         ),

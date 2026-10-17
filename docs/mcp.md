@@ -206,7 +206,9 @@ connected): the id with `.` replaced by `_` and a `cmd_` prefix — `photo.rate`
 `develop.set` → `cmd_develop_set`, `edit.undo` → `cmd_edit_undo`. Arguments are the command's
 JSON params (documented in each tool's description and by `list_commands`). Pass `--compact` to
 leave these per-command tools out when a client struggles with a large tool list; `run_command`
-still reaches every command.
+still reaches every command. Library commands work headless too, e.g. the map's saved locations
+(`cmd_map_locations`, `cmd_map_location_add`, `…_update`, `…_remove`, `…_photos`; see `docs/map.md`), and its track
+log (`cmd_map_trackLog {path}` loads a GPX file, then `cmd_photo_autoTagTracklog {loaded: true}` tags from it).
 
 Slideshow slides, for example: `cmd_slideshow_layout` reads or changes the slide layout (margins,
 zoom to fill, stroke border, cast shadow, backdrop colour, colour wash, background image; saved with
