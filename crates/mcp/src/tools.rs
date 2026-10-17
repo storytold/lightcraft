@@ -237,7 +237,7 @@ pub fn helper_tools(has_ui: bool) -> Vec<Value> {
                 "resize": {"type": "object", "description": "Full Resize options; alternatively use the size helpers below"},
                 "destinationMode": {"type": "string", "enum": ["specificFolder", "sameAsOriginal"], "description": "specificFolder (default) = everything into `dir`; sameAsOriginal = each photo into the folder of its original (+ `subfolder`); a photo with no folder on disk (demo, browser) or whose folder is gone gets an error"},
                 "subfolder": {"type": "string", "description": "Created inside the destination folder"},
-                "conflict": {"type": "string", "enum": ["unique", "overwrite", "skip"]},
+                "conflict": {"type": "string", "enum": ["unique", "overwrite", "skip"], "description": "Applies to path and dir, including sidecars: unique (default) picks a free basename; skip leaves existing files untouched; overwrite replaces non-original files explicitly."},
                 "tiffCompression": {"type": "string", "enum": ["none", "lzw", "zip"]},
                 "dngCompression": {"type": "string", "enum": ["lossless", "deflate", "uncompressed", "lossy"]},
                 "format": {"type": "string", "enum": ["jpeg", "png", "tiff", "psd", "webp", "avif", "jxl", "original", "dng", "rendereddng"], "description": "psd = a flat PSD (no layers); rendereddng = Render to DNG, a linear 16-bit float DNG of the rendered photo with the edit baked in; original = the file as is + an XMP sidecar with the edits; dng = raw photos as DNG with the edits embedded"},

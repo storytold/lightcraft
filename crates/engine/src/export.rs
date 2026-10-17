@@ -1801,11 +1801,11 @@ pub enum DngCompression {
     Lossy,
 }
 
-/// The destination of a batch: a folder (with `ExportOptions::subfolder` and the conflict policy
-/// applied to each file together with its sidecars; with [`DestinationMode::SameAsOriginal`] each
-/// photo's own folder instead of `dir`), or one exact file path (single photo; an ordinary file
-/// already there is replaced). Either way a catalogued original (or its sidecar)
-/// is never written over: see [`crate::originals`].
+/// The destination of a batch: a folder (with `ExportOptions::subfolder`; with
+/// [`DestinationMode::SameAsOriginal`] each photo's own folder instead of `dir`), or one explicit
+/// file path (single photo). Both apply the conflict policy to the file and its sidecars;
+/// Unique may change the requested basename. A catalogued original or its sidecar is never
+/// written over: see [`crate::originals`].
 #[derive(Clone, Debug, Default)]
 pub struct Destination {
     pub dir: String,
@@ -2211,27 +2211,38 @@ impl<'a> Placer<'a> {
         let dir = dir.as_str();
         // the exported file and its sidecars
         let group = |main: &str| std::iter::once(main.to_string()).chain(e.sidecars.iter().map(|(x, _)| sidecar_path(main, x))).collect::<Vec<_>>();
-        let path = match self.to.exact.as_deref().filter(|_| self.single) {
-            Some(p) => Ok(p.to_string()),
-            None => {
-                let path = join_path(dir, &e.file_name);
-                let taken = &self.taken;
-                let busy = |main: &str| group(main).iter().any(|p| taken.contains(p) || exists(p));
-                if !busy(&path) {
-                    Ok(path)
-                } else {
-                    match o.conflict {
-                        Conflict::Overwrite => Ok(path),
-                        Conflict::Skip => {
-                            self.out.push(json!({"skipped": path}));
-                            return Ok(());
-                        }
-                        Conflict::Unique => {
-                            let (stem, ext) = e.file_name.rsplit_once('.').map_or((e.file_name.as_str(), None), |(a, b)| (a, Some(b)));
-                            let name = |n: usize| join_path(dir, &ext.map_or(format!("{stem}-{n}"), |x| format!("{stem}-{n}.{x}")));
-                            (2..1_000_000).map(name).find(|p| !busy(p)).ok_or_else(|| format!("{path}: no free file name"))
-                        }
-                    }
+        let requested = self.to.exact.as_deref().filter(|_| self.single).map_or_else(|| join_path(dir, &e.file_name), str::to_string);
+        if self.to.exact.is_some() && self.single {
+            // An explicitly requested original is an error, not a candidate for renaming or skipping.
+            let protected = guard.check(std::path::Path::new(&requested)).and_then(|()| {
+                e.sidecars.iter().try_for_each(|(extension, _)| guard.check(std::path::Path::new(&sidecar_path(&requested, extension))))
+            });
+            if let Err(err) = protected {
+                if self.stop_on_error {
+                    return Err(err);
+                }
+                self.out.push(json!({"photo": photo.0, "file": requested, "error": err}));
+                return Ok(());
+            }
+        }
+        let taken = &self.taken;
+        let busy = |main: &str| group(main).iter().any(|p| taken.contains(p) || exists(p));
+        let path = if !busy(&requested) {
+            Ok(requested)
+        } else {
+            match o.conflict {
+                Conflict::Overwrite => Ok(requested),
+                Conflict::Skip => {
+                    self.out.push(json!({"skipped": requested}));
+                    return Ok(());
+                }
+                Conflict::Unique => {
+                    // Keep the explicitly requested folder and basename, including Windows separators.
+                    let start = requested.rfind(['/', '\\']).map_or(0, |i| i + 1);
+                    let (folder, name) = requested.split_at(start);
+                    let (stem, ext) = name.rsplit_once('.').map_or((name, None), |(a, b)| (a, Some(b)));
+                    let name = |n: usize| ext.map_or_else(|| format!("{folder}{stem}-{n}"), |x| format!("{folder}{stem}-{n}.{x}"));
+                    (2..1_000_000).map(name).find(|p| !busy(p)).ok_or_else(|| format!("{requested}: no free file name"))
                 }
             }
         };

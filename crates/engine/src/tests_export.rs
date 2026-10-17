@@ -324,7 +324,9 @@ fn export_never_overwrites_an_original() {
     std::fs::create_dir_all(dir.join("sub")).unwrap();
     for exact in [src.to_string_lossy().to_string(), dir.join("sub/../IMG_1.jpg").to_string_lossy().to_string()] {
         let to = Destination { dir: String::new(), exact: Some(exact) };
-        assert!(disk_batch(&mut s, id, &o, &to).unwrap_err().contains("never writes over an original"));
+        for conflict in [Conflict::Unique, Conflict::Skip, Conflict::Overwrite] {
+            assert!(disk_batch(&mut s, id, &ExportOptions { conflict, ..o.clone() }, &to).unwrap_err().contains("never writes over an original"));
+        }
     }
     // the "Original" format re-writing the file onto itself (and its sidecar)
     let orig = ExportOptions { format: ExportFormat::Original, ..o.clone() };
@@ -344,6 +346,101 @@ fn export_never_overwrites_an_original() {
     assert_ne!(std::fs::read(&earlier).unwrap(), b"an earlier export", "an ordinary file is overwritten");
     assert_eq!(std::fs::read(&src).unwrap(), original);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Issue #1405: explicit paths must honor the same conflict policy as folder exports.
+#[test]
+fn explicit_export_paths_preserve_existing_files_and_rename_or_skip() {
+    use crate::export::{Conflict, Destination};
+    let (mut s, id, dir, src, original) = library_with_jpeg("export-exact-conflict");
+    let target = dir.join("chosen.name.jpg");
+    let next = dir.join("chosen.name-2.jpg");
+    std::fs::write(&target, b"precious existing file").unwrap();
+    std::fs::write(&next, b"previous numbered export").unwrap();
+    let to = Destination { dir: dir.join("unused").to_string_lossy().into(), exact: Some(target.to_string_lossy().into()) };
+    let opts = ExportOptions::default();
+    let skipped = disk_batch(&mut s, id, &ExportOptions { conflict: Conflict::Skip, ..opts.clone() }, &to).unwrap();
+    assert_eq!(skipped[0]["skipped"], target.to_string_lossy().as_ref());
+    assert_eq!(std::fs::read(&target).unwrap(), b"precious existing file");
+    let unique = disk_batch(&mut s, id, &opts, &to).unwrap();
+    assert_eq!(std::path::Path::new(unique[0]["path"].as_str().unwrap()), dir.join("chosen.name-3.jpg"));
+    assert!(lightcraft_codecs::decode(&std::fs::read(dir.join("chosen.name-3.jpg")).unwrap(), Default::default()).is_ok());
+    assert_eq!(std::fs::read(&target).unwrap(), b"precious existing file");
+    assert_eq!(std::fs::read(&next).unwrap(), b"previous numbered export");
+    disk_batch(&mut s, id, &ExportOptions { conflict: Conflict::Overwrite, ..opts }, &to).unwrap();
+    assert!(lightcraft_codecs::decode(&std::fs::read(&target).unwrap(), Default::default()).is_ok());
+    assert_eq!(std::fs::read(&src).unwrap(), original);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn explicit_export_paths_keep_sidecars_with_the_selected_basename() {
+    use crate::export::{Conflict, Destination};
+    let (mut s, id, dir, _, original) = library_with_jpeg("export-exact-sidecar");
+    let target = dir.join("chosen.jpg");
+    let sidecar = dir.join("chosen.xmp");
+    std::fs::write(&sidecar, b"precious sidecar").unwrap();
+    let to = Destination { dir: String::new(), exact: Some(target.to_string_lossy().into()) };
+    let opts = ExportOptions { format: ExportFormat::Original, ..Default::default() };
+    let skipped = disk_batch(&mut s, id, &ExportOptions { conflict: Conflict::Skip, ..opts.clone() }, &to).unwrap();
+    assert_eq!(skipped[0]["skipped"], target.to_string_lossy().as_ref());
+    assert!(!target.exists());
+    let unique = disk_batch(&mut s, id, &opts, &to).unwrap();
+    assert_eq!(std::path::Path::new(unique[0]["path"].as_str().unwrap()), dir.join("chosen-2.jpg"));
+    assert_eq!(std::path::Path::new(unique[0]["sidecars"][0].as_str().unwrap()), dir.join("chosen-2.xmp"));
+    assert_eq!(std::fs::read(dir.join("chosen-2.jpg")).unwrap(), original);
+    assert!(std::fs::read_to_string(dir.join("chosen-2.xmp")).unwrap().contains("xmpmeta"));
+    assert_eq!(std::fs::read(&sidecar).unwrap(), b"precious sidecar");
+    disk_batch(&mut s, id, &ExportOptions { conflict: Conflict::Overwrite, ..opts }, &to).unwrap();
+    assert_eq!(std::fs::read(&target).unwrap(), original);
+    assert!(std::fs::read_to_string(&sidecar).unwrap().contains("xmpmeta"));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn explicit_export_paths_preserve_windows_and_relative_basename_groups() {
+    use crate::export::{Conflict, Destination, DestinationMode, export_batch};
+    let (mut s, id, dir, _, _) = library_with_jpeg("export-exact-paths");
+    for (target, next, expected) in [
+        (r"C:\album.v1\chosen.name.jpg", r"C:\album.v1\chosen.name-2.jpg", r"C:\album.v1\chosen.name-3.jpg"),
+        ("album.v1/chosen.name.jpg", "album.v1/chosen.name-2.jpg", "album.v1/chosen.name-3.jpg"),
+        ("chosen.name.jpg", "chosen.name-2.jpg", "chosen.name-3.jpg"),
+    ] {
+        let sidecar = std::path::Path::new(target).with_extension("xmp").to_string_lossy().into_owned();
+        let expected_sidecar = std::path::Path::new(expected).with_extension("xmp").to_string_lossy().into_owned();
+        // An explicit path takes precedence over both destinationMode and subfolder.
+        let to = Destination { dir: "unused".into(), exact: Some(target.into()) };
+        let opts = ExportOptions {
+            format: ExportFormat::Original,
+            destination_mode: DestinationMode::SameAsOriginal,
+            subfolder: "ignored".into(),
+            ..Default::default()
+        };
+        for conflict in [Conflict::Skip, Conflict::Unique, Conflict::Overwrite] {
+            let mut written = Vec::new();
+            let mut write = |p: &str, _: &[u8]| {
+                written.push(p.to_string());
+                Ok(())
+            };
+            let files =
+                export_batch(&mut s, &[id], &ExportOptions { conflict, ..opts.clone() }, &to, &mut write, &|p| p == sidecar || p == next).unwrap();
+            match conflict {
+                Conflict::Skip => {
+                    assert_eq!(files[0]["skipped"], target);
+                    assert!(written.is_empty());
+                }
+                Conflict::Unique => {
+                    assert_eq!(files[0]["path"], expected);
+                    assert_eq!(written, [expected.to_string(), expected_sidecar.clone()]);
+                }
+                Conflict::Overwrite => {
+                    assert_eq!(files[0]["path"], target);
+                    assert_eq!(written, [target.to_string(), sidecar.clone()]);
+                }
+            }
+        }
+    }
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 /// Issue #93: the XMP sidecar of an "Original" export ignored the conflict policy.
