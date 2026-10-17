@@ -487,6 +487,9 @@ egui 前端是一个可替换的 crate；它下面没有任何东西知道 UI �
 `C:\Program Files\LightCraft`；升级会留在你选择的文件夹），结束时有一页确认 LightCraft 已安装，
 并可选择启动它。无人值守安装：`msiexec /i lightcraft-<ver>-windows-x64.msi /qn INSTALLFOLDER="D:\Apps\LightCraft\"`。
 
+**WinGet：** `winget install ArtCraft.LightCraft` 可安装并更新应用；清单会根据每个已发布的版本自动生成，
+并提交到 WinGet 社区存储库（工作原理见 [docs/releasing.md](docs/releasing.md)）。
+
 ### macOS
 
 | 构建 | 文件 | 说明 |

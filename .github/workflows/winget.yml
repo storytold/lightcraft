@@ -1,0 +1,45 @@
+# WinGet publishing: on every published (non-prerelease) GitHub Release, generate the winget
+# manifests from the release's installer assets and open a PR against microsoft/winget-pkgs
+# (package id `ArtCraft.LightCraft`) via vedantmgoyal9/winget-releaser. The manifests never live
+# in this repo and there is nothing to fill in per release; see docs/releasing.md. Needs the
+# `WINGET_TOKEN` repository secret: a GitHub PAT (public_repo scope) whose account signed the
+# Microsoft Pre-Release Software License for winget-pkgs and is an approved submitter; without it
+# the job fails with a clear error and the release itself is unaffected (winget lags that release).
+name: Winget release
+
+on:
+  release:
+    types: [released] # not prereleased: prereleases don't publish to winget; drafts never fire this
+  workflow_dispatch:
+    inputs:
+      release-tag:
+        description: "Release tag to publish, e.g. v1.2.0 (empty: the latest release)"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: winget-${{ github.ref }}
+  cancel-in-progress: false # a winget PR per release is worth waiting for
+
+jobs:
+  winget:
+    name: winget-pkgs PR for ${{ github.event.release.tag_name || inputs.release-tag }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Publish manifests to microsoft/winget-pkgs
+        # vedantmgoyal9/winget-releaser v2 (Komac). It reads the release assets, picks the Windows
+        # MSI installers, writes the yaml manifests (installer + version + locale) and submits them
+        # as a PR to microsoft/winget-pkgs with the token below.
+        uses: vedantmgoyal9/winget-releaser@b7370d4d152efdce803a26cc6ca9eee58cb2ad54 # v2
+        with:
+          identifier: ArtCraft.LightCraft
+          token: ${{ secrets.WINGET_TOKEN }}
+          # The manifest version comes from the release tag minus its `v` prefix (v1.2.0 → 1.2.0).
+          # The release also ships portable zips, DMGs, AppImages, debs, rpms and tarballs; only
+          # the Windows MSI installers (x86/x64/arm64) are winget installers.
+          installers-regex: '\.msi$'
+          release-tag: ${{ inputs.release-tag }}

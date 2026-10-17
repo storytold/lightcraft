@@ -525,6 +525,10 @@ Installers and executables are code-signed. The installer asks where to install 
 default; upgrades stay in the folder you chose) and ends on a page confirming LightCraft was installed, with an
 option to start it. For unattended installs: `msiexec /i lightcraft-<ver>-windows-x64.msi /qn INSTALLFOLDER="D:\Apps\LightCraft\"`.
 
+**WinGet:** `winget install ArtCraft.LightCraft` installs and updates the app; the manifests are generated
+from each published release and submitted to the WinGet community repository automatically (how it works:
+[docs/releasing.md](docs/releasing.md)).
+
 ### macOS
 
 | Build | File | Notes |
