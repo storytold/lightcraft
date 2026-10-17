@@ -88,6 +88,9 @@ impl Url {
             let end = v6.find(']').ok_or_else(|| bad("unterminated IPv6 address"))?;
             let host = v6.get(..end).unwrap_or_default();
             let after = v6.get(end + 1..).unwrap_or_default();
+            if !after.is_empty() && !after.starts_with(':') {
+                return Err(bad("unexpected text after IPv6 address"));
+            }
             (host.to_string(), after.strip_prefix(':'))
         } else {
             match authority.rsplit_once(':') {
@@ -535,6 +538,17 @@ mod tests {
         {
             assert!(Url::parse(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn rejects_text_after_a_bracketed_ipv6_host() {
+        for bad in ["http://[::1]junk/x", "https://[::1]junk/x", "http://[::1]8080/x", "http://[::1]8080"] {
+            assert!(matches!(Url::parse(bad), Err(HttpError::BadUrl(_))), "{bad}");
+        }
+        let u = Url::parse("http://[::1]:8080/x").unwrap();
+        assert_eq!((u.host.as_str(), u.port), ("::1", 8080));
+        let u = Url::parse("http://[::1]/x").unwrap();
+        assert_eq!((u.host.as_str(), u.port), ("::1", 80));
     }
 
     #[test]
