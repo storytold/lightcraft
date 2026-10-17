@@ -179,11 +179,94 @@ fn key_from(name: &str) -> Option<egui::Key> {
     })
 }
 
-fn push_drag(app: &mut LightcraftApp, a: egui::Pos2, b: egui::Pos2, steps: u64, m: egui::Modifiers) {
+/// Maximum click count allowed in a single `ui.click` or `ui.clickWidget` request.
+/// Legitimate UI automation uses 1 (single), 2 (double), or 3 (triple). 10 allows
+/// burst testing while keeping pointer event draining strictly under 0.35 s at 60 FPS.
+pub const MAX_CLICK_COUNT: u32 = 10;
+
+/// Maximum intermediate steps allowed for a synthetic drag gesture in `ui.drag` or `ui.dragWidget`.
+/// Default is 10; 50 provides smooth interpolation while keeping draining time sub-second (~0.88 s at 60 FPS).
+pub const MAX_DRAG_STEPS: u32 = 50;
+
+/// Aggregate pending synthetic event budget in `app.synthetic`.
+/// Pointer events drain 1 per frame; capping the queue at 128 bounds worst-case draining latency
+/// to ~2.1 s at 60 FPS while easily accommodating consecutive drags or multi-point gestures.
+pub const MAX_PENDING_EVENTS: usize = 128;
+
+fn parse_bounded_u32(p: &Value, key: &str, default: u32, min: u32, max: u32, method: &str) -> Result<u32, String> {
+    match p.get(key) {
+        None | Some(Value::Null) => Ok(default),
+        Some(Value::Number(n)) => {
+            if let Some(val) = n.as_u64() {
+                if val < min as u64 {
+                    Err(format!("{method}: `{key}` must be at least {min}"))
+                } else if val > max as u64 {
+                    Err(format!("{method}: `{key}` must be at most {max} (got {val})"))
+                } else {
+                    Ok(val as u32)
+                }
+            } else if let Some(i) = n.as_i64() {
+                if i < min as i64 {
+                    Err(format!("{method}: `{key}` must be at least {min} (got {i})"))
+                } else {
+                    Err(format!("{method}: `{key}` must be an integer between {min} and {max}"))
+                }
+            } else {
+                Err(format!("{method}: `{key}` must be an integer between {min} and {max}"))
+            }
+        }
+        Some(val) => Err(format!("{method}: `{key}` must be an integer, not {val}")),
+    }
+}
+
+fn parse_click_count(p: &Value, method: &str) -> Result<u32, String> {
+    parse_bounded_u32(p, "count", 1, 1, MAX_CLICK_COUNT, method)
+}
+
+fn parse_drag_steps(p: &Value, method: &str) -> Result<u32, String> {
+    parse_bounded_u32(p, "steps", 10, 1, MAX_DRAG_STEPS, method)
+}
+
+fn ensure_event_budget(app: &LightcraftApp, additional: usize, method: &str) -> Result<(), String> {
+    let pending = app.synthetic.len();
+    if pending.saturating_add(additional) > MAX_PENDING_EVENTS {
+        Err(format!(
+            "{method}: synthetic event budget exceeded: {pending} pending events, cannot enqueue {additional} more (maximum is {MAX_PENDING_EVENTS})"
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn push_event(app: &mut LightcraftApp, event: egui::Event, method: &str) -> Result<(), String> {
+    ensure_event_budget(app, 1, method)?;
+    app.synthetic.push(event);
+    Ok(())
+}
+
+/// Returns true if a pointer button is currently held down in egui or scheduled to remain held down in `app.synthetic`.
+fn pointer_is_down(app: &LightcraftApp, ctx: &egui::Context) -> bool {
+    let mut net_synthetic_down = 0i32;
+    for ev in &app.synthetic {
+        if let egui::Event::PointerButton { pressed, .. } = ev {
+            if *pressed {
+                net_synthetic_down += 1;
+            } else {
+                net_synthetic_down -= 1;
+            }
+        }
+    }
+    let egui_down = if ctx.input(|i| i.pointer.any_down()) { 1 } else { 0 };
+    (egui_down + net_synthetic_down) > 0
+}
+
+fn push_drag(app: &mut LightcraftApp, a: egui::Pos2, b: egui::Pos2, steps: u32, m: egui::Modifiers) {
+    let count = (steps as usize).saturating_add(3);
+    app.synthetic.reserve(count);
     app.synthetic.push(egui::Event::PointerMoved(a));
     app.synthetic.push(egui::Event::PointerButton { pos: a, button: egui::PointerButton::Primary, pressed: true, modifiers: m });
-    for i in 1..=steps.max(1) {
-        let t = i as f32 / steps.max(1) as f32;
+    for i in 1..=steps {
+        let t = i as f32 / steps as f32;
         app.synthetic.push(egui::Event::PointerMoved(a + (b - a) * t));
     }
     app.synthetic.push(egui::Event::PointerButton { pos: b, button: egui::PointerButton::Primary, pressed: false, modifiers: m });
@@ -219,49 +302,124 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
         }
         "ui.clickWidget" | "ui.dragWidget" | "ui.hoverWidget" => {
             let Some(id) = s("id") else { return err("missing `id`") };
-            let Some(r) = widget_rect(app, id) else { return err(format!("no widget `{id}` on screen (see ui.widgets)")) };
-            let m = modifiers(p);
-            // optional relative position inside the widget (0..1)
-            let at = egui::pos2(r.left() + r.width() * f("fx").unwrap_or(0.5) as f32, r.top() + r.height() * f("fy").unwrap_or(0.5) as f32);
-            if req.method == "ui.hoverWidget" {
-                app.synthetic.push(egui::Event::PointerMoved(at));
-            } else if req.method == "ui.clickWidget" {
-                let n = p.get("count").and_then(Value::as_u64).unwrap_or(1);
+            if req.method == "ui.clickWidget" {
+                let n = match parse_click_count(p, "ui.clickWidget") {
+                    Ok(n) => n,
+                    Err(e) => return err(e),
+                };
+                let Some(r) = widget_rect(app, id) else { return err(format!("no widget `{id}` on screen (see ui.widgets)")) };
+                let release_needed = pointer_is_down(app, ctx);
+                let additional = (if release_needed { 1 } else { 0 }) + 1 + 2 * (n as usize);
+                if let Err(e) = ensure_event_budget(app, additional, "ui.clickWidget") {
+                    return err(e);
+                }
+                let m = modifiers(p);
+                let at = egui::pos2(r.left() + r.width() * f("fx").unwrap_or(0.5) as f32, r.top() + r.height() * f("fy").unwrap_or(0.5) as f32);
                 let button = if s("button") == Some("right") { egui::PointerButton::Secondary } else { egui::PointerButton::Primary };
+                app.synthetic.reserve(additional);
+                if release_needed {
+                    app.synthetic.push(egui::Event::PointerButton { pos: at, button, pressed: false, modifiers: egui::Modifiers::NONE });
+                }
                 app.synthetic.push(egui::Event::PointerMoved(at));
                 for _ in 0..n {
                     app.synthetic.push(egui::Event::PointerButton { pos: at, button, pressed: true, modifiers: m });
                     app.synthetic.push(egui::Event::PointerButton { pos: at, button, pressed: false, modifiers: m });
                 }
-            } else {
+                ctx.request_repaint();
+                ok(json!({"rect": rect_json(r)}))
+            } else if req.method == "ui.dragWidget" {
+                let steps = match parse_drag_steps(p, "ui.dragWidget") {
+                    Ok(s) => s,
+                    Err(e) => return err(e),
+                };
+                let Some(r) = widget_rect(app, id) else { return err(format!("no widget `{id}` on screen (see ui.widgets)")) };
+                let release_needed = pointer_is_down(app, ctx);
+                let additional = (if release_needed { 1 } else { 0 }) + (steps as usize) + 3;
+                if let Err(e) = ensure_event_budget(app, additional, "ui.dragWidget") {
+                    return err(e);
+                }
+                let m = modifiers(p);
+                let at = egui::pos2(r.left() + r.width() * f("fx").unwrap_or(0.5) as f32, r.top() + r.height() * f("fy").unwrap_or(0.5) as f32);
                 let to = egui::pos2(
                     f("toX").map(|v| v as f32).unwrap_or(at.x + f("dx").unwrap_or(0.0) as f32),
                     f("toY").map(|v| v as f32).unwrap_or(at.y + f("dy").unwrap_or(0.0) as f32),
                 );
-                push_drag(app, at, to, p.get("steps").and_then(Value::as_u64).unwrap_or(10), m);
+                if release_needed {
+                    app.synthetic.push(egui::Event::PointerButton {
+                        pos: at,
+                        button: egui::PointerButton::Primary,
+                        pressed: false,
+                        modifiers: egui::Modifiers::NONE,
+                    });
+                }
+                push_drag(app, at, to, steps, m);
+                ctx.request_repaint();
+                ok(json!({"rect": rect_json(r)}))
+            } else {
+                let Some(r) = widget_rect(app, id) else { return err(format!("no widget `{id}` on screen (see ui.widgets)")) };
+                let at = egui::pos2(r.left() + r.width() * f("fx").unwrap_or(0.5) as f32, r.top() + r.height() * f("fy").unwrap_or(0.5) as f32);
+                if let Err(e) = push_event(app, egui::Event::PointerMoved(at), "ui.hoverWidget") {
+                    return err(e);
+                }
+                ctx.request_repaint();
+                ok(json!({"rect": rect_json(r)}))
             }
-            ctx.request_repaint();
-            ok(json!({"rect": rect_json(r)}))
         }
         "ui.move" => {
-            app.synthetic.push(egui::Event::PointerMoved(egui::pos2(f("x").unwrap_or(0.0) as f32, f("y").unwrap_or(0.0) as f32)));
+            let pos = egui::pos2(f("x").unwrap_or(0.0) as f32, f("y").unwrap_or(0.0) as f32);
+            if let Err(e) = push_event(app, egui::Event::PointerMoved(pos), "ui.move") {
+                return err(e);
+            }
             ctx.request_repaint();
             ok(Value::Null)
         }
-        "ui.click" | "ui.drag" => {
+        "ui.click" => {
+            let n = match parse_click_count(p, "ui.click") {
+                Ok(n) => n,
+                Err(e) => return err(e),
+            };
             let a = egui::pos2(f("x").unwrap_or(0.0) as f32, f("y").unwrap_or(0.0) as f32);
+            let release_needed = pointer_is_down(app, ctx);
+            let additional = (if release_needed { 1 } else { 0 }) + 1 + 2 * (n as usize);
+            if let Err(e) = ensure_event_budget(app, additional, "ui.click") {
+                return err(e);
+            }
             let m = modifiers(p);
             let button = if s("button") == Some("right") { egui::PointerButton::Secondary } else { egui::PointerButton::Primary };
-            if req.method == "ui.drag" {
-                let b = egui::pos2(f("toX").unwrap_or(0.0) as f32, f("toY").unwrap_or(0.0) as f32);
-                push_drag(app, a, b, p.get("steps").and_then(Value::as_u64).unwrap_or(10), m);
-            } else {
-                app.synthetic.push(egui::Event::PointerMoved(a));
-                for _ in 0..p.get("count").and_then(Value::as_u64).unwrap_or(1) {
-                    app.synthetic.push(egui::Event::PointerButton { pos: a, button, pressed: true, modifiers: m });
-                    app.synthetic.push(egui::Event::PointerButton { pos: a, button, pressed: false, modifiers: m });
-                }
+            app.synthetic.reserve(additional);
+            if release_needed {
+                app.synthetic.push(egui::Event::PointerButton { pos: a, button, pressed: false, modifiers: egui::Modifiers::NONE });
             }
+            app.synthetic.push(egui::Event::PointerMoved(a));
+            for _ in 0..n {
+                app.synthetic.push(egui::Event::PointerButton { pos: a, button, pressed: true, modifiers: m });
+                app.synthetic.push(egui::Event::PointerButton { pos: a, button, pressed: false, modifiers: m });
+            }
+            ctx.request_repaint();
+            ok(Value::Null)
+        }
+        "ui.drag" => {
+            let steps = match parse_drag_steps(p, "ui.drag") {
+                Ok(s) => s,
+                Err(e) => return err(e),
+            };
+            let release_needed = pointer_is_down(app, ctx);
+            let additional = (if release_needed { 1 } else { 0 }) + (steps as usize) + 3;
+            if let Err(e) = ensure_event_budget(app, additional, "ui.drag") {
+                return err(e);
+            }
+            let a = egui::pos2(f("x").unwrap_or(0.0) as f32, f("y").unwrap_or(0.0) as f32);
+            let b = egui::pos2(f("toX").unwrap_or(0.0) as f32, f("toY").unwrap_or(0.0) as f32);
+            let m = modifiers(p);
+            if release_needed {
+                app.synthetic.push(egui::Event::PointerButton {
+                    pos: a,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                });
+            }
+            push_drag(app, a, b, steps, m);
             ctx.request_repaint();
             ok(Value::Null)
         }
@@ -269,7 +427,40 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
             // events in normalized image coordinates of the displayed photo frame
             let Some(img) = app.image_rect else { return err("no image on screen (switch to Detail view)") };
             let Some(events) = p.get("events").and_then(Value::as_array) else { return err("missing `events`") };
+            let mut event_count: usize = 0;
+            let mut is_pure_release = !events.is_empty();
+            for e in events {
+                match e.get("kind").and_then(Value::as_str).unwrap_or("move") {
+                    "down" => {
+                        event_count = event_count.saturating_add(2);
+                        is_pure_release = false;
+                    }
+                    "up" => {
+                        event_count = event_count.saturating_add(1);
+                    }
+                    _ => {
+                        event_count = event_count.saturating_add(1);
+                        is_pure_release = false;
+                    }
+                }
+            }
+            if event_count > (MAX_DRAG_STEPS as usize).saturating_mul(2) {
+                return err(format!("ui.pointer: too many events in gesture (got {}, maximum is {})", events.len(), MAX_DRAG_STEPS * 2));
+            }
+            // A single pure release event ("up") relieving an in-flight held pointer is permitted through even if the queue
+            // is at the budget limit (up to MAX_PENDING_EVENTS + 1), ensuring that a gesture release cannot be dropped and
+            // leave the pointer stuck down, while strictly preventing repeated release requests or multi-event batches from
+            // growing the queue without bound.
+            let is_emergency_release = is_pure_release && pointer_is_down(app, ctx) && event_count == 1 && app.synthetic.len() <= MAX_PENDING_EVENTS;
+
+            if !is_emergency_release {
+                match ensure_event_budget(app, event_count, "ui.pointer") {
+                    Ok(()) => {}
+                    Err(e) => return err(e),
+                }
+            }
             let m = modifiers(p);
+            app.synthetic.reserve(event_count);
             for e in events {
                 let x = e.get("x").and_then(Value::as_f64).unwrap_or(0.5) as f32;
                 let y = e.get("y").and_then(Value::as_f64).unwrap_or(0.5) as f32;
@@ -290,6 +481,9 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
         }
         "ui.key" => {
             let Some(k) = s("key").and_then(key_from) else { return err("unknown or missing `key`") };
+            if let Err(e) = ensure_event_budget(app, 2, "ui.key") {
+                return err(e);
+            }
             let m = modifiers(p);
             app.synthetic.push(egui::Event::Key { key: k, physical_key: None, pressed: true, repeat: false, modifiers: m });
             app.synthetic.push(egui::Event::Key { key: k, physical_key: None, pressed: false, repeat: false, modifiers: m });
@@ -297,7 +491,10 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
             ok(Value::Null)
         }
         "ui.text" => {
-            app.synthetic.push(egui::Event::Text(s("text").unwrap_or("").to_string()));
+            let t = s("text").unwrap_or("").to_string();
+            if let Err(e) = push_event(app, egui::Event::Text(t), "ui.text") {
+                return err(e);
+            }
             ctx.request_repaint();
             ok(Value::Null)
         }
@@ -310,10 +507,22 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
                 return err("ui.clipboard: no text field has the focus (click one first)");
             }
             match s("action") {
-                Some("cut") => app.synthetic.push(egui::Event::Cut),
-                Some("copy") => app.synthetic.push(egui::Event::Copy),
+                Some("cut") => {
+                    if let Err(e) = push_event(app, egui::Event::Cut, "ui.clipboard") {
+                        return err(e);
+                    }
+                }
+                Some("copy") => {
+                    if let Err(e) = push_event(app, egui::Event::Copy, "ui.clipboard") {
+                        return err(e);
+                    }
+                }
                 Some("paste") => match s("text") {
-                    Some(text) => app.synthetic.push(egui::Event::Paste(text.to_string())),
+                    Some(text) => {
+                        if let Err(e) = push_event(app, egui::Event::Paste(text.to_string()), "ui.clipboard") {
+                            return err(e);
+                        }
+                    }
                     None => ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste),
                 },
                 _ => return err("ui.clipboard: `action` is cut, copy or paste"),
@@ -322,12 +531,15 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
             ok(Value::Null)
         }
         "ui.scroll" => {
-            app.synthetic.push(egui::Event::MouseWheel {
+            let ev = egui::Event::MouseWheel {
                 unit: egui::MouseWheelUnit::Point,
                 delta: egui::vec2(f("dx").unwrap_or(0.0) as f32, f("dy").unwrap_or(0.0) as f32),
                 phase: egui::TouchPhase::Move,
                 modifiers: modifiers(p),
-            });
+            };
+            if let Err(e) = push_event(app, ev, "ui.scroll") {
+                return err(e);
+            }
             ctx.request_repaint();
             ok(Value::Null)
         }
@@ -335,7 +547,9 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
             let Some(factor) = f("factor").map(|v| v as f32).filter(|v| v.is_finite() && *v > 0.0) else {
                 return err("ui.zoom: factor must be a finite positive number (1 = unchanged)");
             };
-            app.synthetic.push(egui::Event::Zoom(factor));
+            if let Err(e) = push_event(app, egui::Event::Zoom(factor), "ui.zoom") {
+                return err(e);
+            }
             ctx.request_repaint();
             ok(Value::Null)
         }
@@ -570,5 +784,376 @@ pub fn save_screenshot(app: &mut LightcraftApp, image: &egui::ColorImage, path: 
             Err(e) => json!({"ok": false, "error": e}),
         },
         None => json!({"ok": false, "error": "no writer configured"}),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_app() -> LightcraftApp {
+        LightcraftApp::new(lightcraft_engine::Session::new(), Default::default())
+    }
+
+    fn run_control(app: &mut LightcraftApp, method: &str, params: Value) -> Value {
+        let ctx = egui::Context::default();
+        let (req, _rx) = ControlRequest::new(method, params);
+        match handle(app, &ctx, &req) {
+            Outcome::Done(v) => v,
+            Outcome::Screenshot { .. } => json!({"screenshot": true}),
+        }
+    }
+
+    #[test]
+    fn parse_click_count_validation() {
+        assert_eq!(parse_click_count(&json!({}), "ui.click").unwrap(), 1);
+        assert_eq!(parse_click_count(&json!({"count": null}), "ui.click").unwrap(), 1);
+        assert_eq!(parse_click_count(&json!({"count": 1}), "ui.click").unwrap(), 1);
+        assert_eq!(parse_click_count(&json!({"count": 2}), "ui.click").unwrap(), 2);
+        assert_eq!(parse_click_count(&json!({"count": MAX_CLICK_COUNT}), "ui.click").unwrap(), MAX_CLICK_COUNT);
+
+        // Above limit
+        let err = parse_click_count(&json!({"count": MAX_CLICK_COUNT + 1}), "ui.click").unwrap_err();
+        assert!(err.contains("at most 10"), "{err}");
+        let err = parse_click_count(&json!({"count": 1_000_000_000u64}), "ui.click").unwrap_err();
+        assert!(err.contains("at most 10"), "{err}");
+        let err = parse_click_count(&json!({"count": u64::MAX}), "ui.click").unwrap_err();
+        assert!(err.contains("at most 10"), "{err}");
+
+        // Zero, negative, invalid types
+        assert!(parse_click_count(&json!({"count": 0}), "ui.click").unwrap_err().contains("at least 1"));
+        assert!(parse_click_count(&json!({"count": -1}), "ui.click").unwrap_err().contains("at least 1"));
+        assert!(parse_click_count(&json!({"count": "three"}), "ui.click").unwrap_err().contains("must be an integer"));
+        assert!(parse_click_count(&json!({"count": true}), "ui.click").unwrap_err().contains("must be an integer"));
+        assert!(parse_click_count(&json!({"count": 1.5}), "ui.click").unwrap_err().contains("must be an integer"));
+    }
+
+    #[test]
+    fn parse_drag_steps_validation() {
+        assert_eq!(parse_drag_steps(&json!({}), "ui.drag").unwrap(), 10);
+        assert_eq!(parse_drag_steps(&json!({"steps": null}), "ui.drag").unwrap(), 10);
+        assert_eq!(parse_drag_steps(&json!({"steps": 1}), "ui.drag").unwrap(), 1);
+        assert_eq!(parse_drag_steps(&json!({"steps": 10}), "ui.drag").unwrap(), 10);
+        assert_eq!(parse_drag_steps(&json!({"steps": MAX_DRAG_STEPS}), "ui.drag").unwrap(), MAX_DRAG_STEPS);
+
+        // Above limit
+        let err = parse_drag_steps(&json!({"steps": MAX_DRAG_STEPS + 1}), "ui.drag").unwrap_err();
+        assert!(err.contains("at most 50"), "{err}");
+        let err = parse_drag_steps(&json!({"steps": 1_000_000_000u64}), "ui.drag").unwrap_err();
+        assert!(err.contains("at most 50"), "{err}");
+        let err = parse_drag_steps(&json!({"steps": u64::MAX}), "ui.drag").unwrap_err();
+        assert!(err.contains("at most 50"), "{err}");
+
+        // Zero, negative, invalid types
+        assert!(parse_drag_steps(&json!({"steps": 0}), "ui.drag").unwrap_err().contains("at least 1"));
+        assert!(parse_drag_steps(&json!({"steps": -5}), "ui.drag").unwrap_err().contains("at least 1"));
+        assert!(parse_drag_steps(&json!({"steps": "many"}), "ui.drag").unwrap_err().contains("must be an integer"));
+        assert!(parse_drag_steps(&json!({"steps": false}), "ui.drag").unwrap_err().contains("must be an integer"));
+        assert!(parse_drag_steps(&json!({"steps": 2.5}), "ui.drag").unwrap_err().contains("must be an integer"));
+    }
+
+    #[test]
+    fn ui_click_bounds_and_queue_preservation() {
+        let mut app = test_app();
+
+        // 1. Normal click (default count = 1) -> 3 events
+        let res = run_control(&mut app, "ui.click", json!({"x": 100.0, "y": 200.0}));
+        assert_eq!(res["ok"], true);
+        assert_eq!(app.synthetic.len(), 3);
+        app.synthetic.clear();
+
+        // 2. Double click -> 5 events
+        let res = run_control(&mut app, "ui.click", json!({"x": 100.0, "y": 200.0, "count": 2}));
+        assert_eq!(res["ok"], true);
+        assert_eq!(app.synthetic.len(), 5);
+        app.synthetic.clear();
+
+        // 3. Accepted maximum limit (count = 10) -> 21 events
+        let res = run_control(&mut app, "ui.click", json!({"x": 100.0, "y": 200.0, "count": MAX_CLICK_COUNT}));
+        assert_eq!(res["ok"], true);
+        assert_eq!(app.synthetic.len(), 21);
+
+        // 4. Over limit (count = 11): rejected, queue length unchanged
+        let len_before = app.synthetic.len();
+        let res = run_control(&mut app, "ui.click", json!({"x": 100.0, "y": 200.0, "count": MAX_CLICK_COUNT + 1}));
+        assert_eq!(res["ok"], false);
+        assert!(res["error"].as_str().unwrap().contains("at most 10"));
+        assert_eq!(app.synthetic.len(), len_before, "queue must not be partially mutated");
+
+        // 5. Huge integer: rejected before event generation, queue unchanged
+        let res = run_control(&mut app, "ui.click", json!({"x": 100.0, "y": 200.0, "count": 1_000_000_000}));
+        assert_eq!(res["ok"], false);
+        assert_eq!(app.synthetic.len(), len_before);
+
+        // 6. Invalid type: rejected, queue unchanged
+        let res = run_control(&mut app, "ui.click", json!({"x": 100.0, "y": 200.0, "count": "bad"}));
+        assert_eq!(res["ok"], false);
+        assert_eq!(app.synthetic.len(), len_before);
+    }
+
+    #[test]
+    fn ui_drag_bounds_and_queue_preservation() {
+        let mut app = test_app();
+
+        // 1. Normal drag (default steps = 10) -> 13 events
+        let res = run_control(&mut app, "ui.drag", json!({"x": 10.0, "y": 10.0, "toX": 50.0, "toY": 50.0}));
+        assert_eq!(res["ok"], true);
+        assert_eq!(app.synthetic.len(), 13);
+        app.synthetic.clear();
+
+        // 2. Custom steps (steps = 4) -> 7 events
+        let res = run_control(&mut app, "ui.drag", json!({"x": 10.0, "y": 10.0, "toX": 50.0, "toY": 50.0, "steps": 4}));
+        assert_eq!(res["ok"], true);
+        assert_eq!(app.synthetic.len(), 7);
+        app.synthetic.clear();
+
+        // 3. Accepted maximum limit (steps = 50) -> 53 events
+        let res = run_control(&mut app, "ui.drag", json!({"x": 10.0, "y": 10.0, "toX": 50.0, "toY": 50.0, "steps": MAX_DRAG_STEPS}));
+        assert_eq!(res["ok"], true);
+        assert_eq!(app.synthetic.len(), 53);
+
+        // 4. Over limit (steps = 51): rejected, queue length unchanged
+        let len_before = app.synthetic.len();
+        let res = run_control(&mut app, "ui.drag", json!({"x": 10.0, "y": 10.0, "toX": 50.0, "toY": 50.0, "steps": MAX_DRAG_STEPS + 1}));
+        assert_eq!(res["ok"], false);
+        assert!(res["error"].as_str().unwrap().contains("at most 50"));
+        assert_eq!(app.synthetic.len(), len_before, "queue must not be partially mutated");
+
+        // 5. Huge integer: rejected, queue unchanged
+        let res = run_control(&mut app, "ui.drag", json!({"x": 10.0, "y": 10.0, "toX": 50.0, "toY": 50.0, "steps": 1_000_000_000}));
+        assert_eq!(res["ok"], false);
+        assert_eq!(app.synthetic.len(), len_before);
+
+        // 6. Invalid type: rejected, queue unchanged
+        let res = run_control(&mut app, "ui.drag", json!({"x": 10.0, "y": 10.0, "toX": 50.0, "toY": 50.0, "steps": "many"}));
+        assert_eq!(res["ok"], false);
+        assert_eq!(app.synthetic.len(), len_before);
+    }
+
+    #[test]
+    fn ui_widget_control_bounds_and_rejection() {
+        let mut app = test_app();
+        app.widgets.push(("testButton".to_string(), egui::Rect::from_min_size(egui::pos2(10.0, 10.0), egui::vec2(100.0, 30.0))));
+
+        // 1. Normal clickWidget (count = 1) -> 3 events
+        let res = run_control(&mut app, "ui.clickWidget", json!({"id": "testButton"}));
+        assert_eq!(res["ok"], true);
+        assert_eq!(app.synthetic.len(), 3);
+        app.synthetic.clear();
+
+        // 2. clickWidget with count = 2 -> 5 events
+        let res = run_control(&mut app, "ui.clickWidget", json!({"id": "testButton", "count": 2}));
+        assert_eq!(res["ok"], true);
+        assert_eq!(app.synthetic.len(), 5);
+        app.synthetic.clear();
+
+        // 3. clickWidget at limit (count = 10) -> 21 events
+        let res = run_control(&mut app, "ui.clickWidget", json!({"id": "testButton", "count": MAX_CLICK_COUNT}));
+        assert_eq!(res["ok"], true);
+        assert_eq!(app.synthetic.len(), 21);
+
+        // 4. clickWidget over limit (count = 11) -> rejected, queue unchanged
+        let len_before = app.synthetic.len();
+        let res = run_control(&mut app, "ui.clickWidget", json!({"id": "testButton", "count": MAX_CLICK_COUNT + 1}));
+        assert_eq!(res["ok"], false);
+        assert_eq!(app.synthetic.len(), len_before);
+
+        // 5. clickWidget invalid type -> rejected, queue unchanged
+        let res = run_control(&mut app, "ui.clickWidget", json!({"id": "testButton", "count": "bad"}));
+        assert_eq!(res["ok"], false);
+        assert_eq!(app.synthetic.len(), len_before);
+
+        // 6. Normal dragWidget (default steps = 10) -> 13 events
+        app.synthetic.clear();
+        let res = run_control(&mut app, "ui.dragWidget", json!({"id": "testButton", "dx": 20.0, "dy": 0.0}));
+        assert_eq!(res["ok"], true);
+        assert_eq!(app.synthetic.len(), 13);
+        app.synthetic.clear();
+
+        // 7. dragWidget at limit (steps = 50) -> 53 events
+        let res = run_control(&mut app, "ui.dragWidget", json!({"id": "testButton", "dx": 20.0, "dy": 0.0, "steps": MAX_DRAG_STEPS}));
+        assert_eq!(res["ok"], true);
+        assert_eq!(app.synthetic.len(), 53);
+
+        // 8. dragWidget over limit (steps = 51) -> rejected, queue unchanged
+        let len_before = app.synthetic.len();
+        let res = run_control(&mut app, "ui.dragWidget", json!({"id": "testButton", "dx": 20.0, "dy": 0.0, "steps": MAX_DRAG_STEPS + 1}));
+        assert_eq!(res["ok"], false);
+        assert_eq!(app.synthetic.len(), len_before);
+    }
+
+    #[test]
+    fn event_budget_prevents_unbounded_queue_growth() {
+        let mut app = test_app();
+
+        // Enqueue two maximum drags: 53 + 53 = 106 events (budget is 128)
+        let res1 = run_control(&mut app, "ui.drag", json!({"x": 0.0, "y": 0.0, "toX": 10.0, "toY": 10.0, "steps": 50}));
+        assert_eq!(res1["ok"], true);
+        assert_eq!(app.synthetic.len(), 53);
+
+        let res2 = run_control(&mut app, "ui.drag", json!({"x": 0.0, "y": 0.0, "toX": 10.0, "toY": 10.0, "steps": 50}));
+        assert_eq!(res2["ok"], true);
+        assert_eq!(app.synthetic.len(), 106);
+
+        // A third drag of 50 steps requires 53 more events (106 + 53 = 159 > 128): rejected!
+        let res3 = run_control(&mut app, "ui.drag", json!({"x": 0.0, "y": 0.0, "toX": 10.0, "toY": 10.0, "steps": 50}));
+        assert_eq!(res3["ok"], false);
+        assert!(res3["error"].as_str().unwrap().contains("budget exceeded"));
+        assert_eq!(app.synthetic.len(), 106, "queue must not grow beyond budget or partially mutate");
+
+        // A smaller drag that fits (e.g. 10 steps = 13 events -> 106 + 13 = 119 <= 128) succeeds
+        let res4 = run_control(&mut app, "ui.drag", json!({"x": 0.0, "y": 0.0, "toX": 10.0, "toY": 10.0, "steps": 10}));
+        assert_eq!(res4["ok"], true);
+        assert_eq!(app.synthetic.len(), 119);
+
+        // A single click requires 3 events (119 + 3 = 122 <= 128) succeeds
+        let res5 = run_control(&mut app, "ui.click", json!({"x": 5.0, "y": 5.0}));
+        assert_eq!(res5["ok"], true);
+        assert_eq!(app.synthetic.len(), 122);
+
+        // When queue is near limit, an excessive click (e.g. count = 4 -> 9 events, 122 + 9 = 131 > 128) is rejected
+        let res6 = run_control(&mut app, "ui.click", json!({"x": 5.0, "y": 5.0, "count": 4}));
+        assert_eq!(res6["ok"], false);
+        assert!(res6["error"].as_str().unwrap().contains("budget exceeded"));
+        assert_eq!(app.synthetic.len(), 122);
+    }
+
+    #[test]
+    fn ui_pointer_bounds_and_budget() {
+        let mut app = test_app();
+        app.image_rect = Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1000.0, 800.0)));
+
+        // Normal gesture (3 points: down, drag, up) -> 4 events (down pushes 2)
+        let res = run_control(
+            &mut app,
+            "ui.pointer",
+            json!({"events": [{"kind": "down", "x": 0.2, "y": 0.2}, {"kind": "drag", "x": 0.3, "y": 0.3}, {"kind": "up", "x": 0.3, "y": 0.3}]}),
+        );
+        assert_eq!(res["ok"], true);
+        assert_eq!(app.synthetic.len(), 4);
+        app.synthetic.clear();
+
+        // Excessive gesture (> MAX_DRAG_STEPS * 2 events = 100 events): rejected
+        let mut huge_events = Vec::new();
+        for _ in 0..101 {
+            huge_events.push(json!({"kind": "move", "x": 0.5, "y": 0.5}));
+        }
+        let res = run_control(&mut app, "ui.pointer", json!({"events": huge_events}));
+        assert_eq!(res["ok"], false);
+        assert!(res["error"].as_str().unwrap().contains("too many events"));
+        assert_eq!(app.synthetic.len(), 0);
+    }
+
+    #[test]
+    fn gesture_integrity_and_release_preservation() {
+        let mut app = test_app();
+        let ctx = egui::Context::default();
+        app.image_rect = Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1000.0, 800.0)));
+
+        // --- Scenario 1: A pending down event in app.synthetic that has not yet reached egui ---
+        app.synthetic.push(egui::Event::PointerButton {
+            pos: egui::pos2(10.0, 10.0),
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        });
+        assert!(pointer_is_down(&app, &ctx), "pending down in queue must be recognized as held pointer");
+        let res = run_control(&mut app, "ui.pointer", json!({"events": [{"kind": "up", "x": 0.5, "y": 0.5}]}));
+        assert_eq!(res["ok"], true);
+        assert!(!pointer_is_down(&app, &ctx), "pending down followed by pending up must be recognized as balanced");
+        app.synthetic.clear();
+
+        // --- Scenario 2: A release request when the queue is at capacity ---
+        for _ in 0..MAX_PENDING_EVENTS - 1 {
+            app.synthetic.push(egui::Event::PointerMoved(egui::pos2(10.0, 10.0)));
+        }
+        // Button down at the exact budget limit (128 events)
+        app.synthetic.push(egui::Event::PointerButton {
+            pos: egui::pos2(10.0, 10.0),
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        });
+        assert_eq!(app.synthetic.len(), MAX_PENDING_EVENTS);
+        assert!(pointer_is_down(&app, &ctx));
+
+        // Exactly one release request succeeds at capacity, bringing queue to MAX_PENDING_EVENTS + 1
+        let res = run_control(&mut app, "ui.pointer", json!({"events": [{"kind": "up", "x": 0.5, "y": 0.5}]}));
+        assert_eq!(res["ok"], true);
+        assert_eq!(app.synthetic.len(), MAX_PENDING_EVENTS + 1);
+        assert!(matches!(app.synthetic.last().unwrap(), egui::Event::PointerButton { pressed: false, .. }));
+        assert!(!pointer_is_down(&app, &ctx), "release is now queued");
+
+        // --- Scenario 3: Repeated release requests before the first release is processed ---
+        // A second release request while queue is at MAX_PENDING_EVENTS + 1 is REJECTED
+        let res2 = run_control(&mut app, "ui.pointer", json!({"events": [{"kind": "up", "x": 0.5, "y": 0.5}]}));
+        assert_eq!(res2["ok"], false);
+        assert!(res2["error"].as_str().unwrap().contains("budget exceeded"));
+        assert_eq!(app.synthetic.len(), MAX_PENDING_EVENTS + 1, "queue must not grow beyond MAX_PENDING_EVENTS + 1");
+
+        // A batch with multiple release events (e.g. 5 'up's) is also rejected, not exempted
+        let res3 =
+            run_control(&mut app, "ui.pointer", json!({"events": [{"kind": "up"}, {"kind": "up"}, {"kind": "up"}, {"kind": "up"}, {"kind": "up"}]}));
+        assert_eq!(res3["ok"], false);
+        assert!(res3["error"].as_str().unwrap().contains("budget exceeded"));
+        assert_eq!(app.synthetic.len(), MAX_PENDING_EVENTS + 1);
+
+        // --- Scenario 4: An unrelated pointer gesture already queued ---
+        app.synthetic.clear();
+        // A fully self-contained drag: move, down, move, up
+        app.synthetic.push(egui::Event::PointerMoved(egui::pos2(0.0, 0.0)));
+        app.synthetic.push(egui::Event::PointerButton {
+            pos: egui::pos2(0.0, 0.0),
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        });
+        app.synthetic.push(egui::Event::PointerMoved(egui::pos2(10.0, 10.0)));
+        app.synthetic.push(egui::Event::PointerButton {
+            pos: egui::pos2(10.0, 10.0),
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        assert!(!pointer_is_down(&app, &ctx), "balanced gesture is not down");
+        // Pad queue to capacity
+        while app.synthetic.len() < MAX_PENDING_EVENTS {
+            app.synthetic.push(egui::Event::PointerMoved(egui::pos2(5.0, 5.0)));
+        }
+        // An 'up' request without an unreleased down must NOT be exempted from budget
+        let res = run_control(&mut app, "ui.pointer", json!({"events": [{"kind": "up", "x": 0.5, "y": 0.5}]}));
+        assert_eq!(res["ok"], false);
+        assert!(res["error"].as_str().unwrap().contains("budget exceeded"));
+        assert_eq!(app.synthetic.len(), MAX_PENDING_EVENTS);
+
+        // --- Scenario 5: Recovery from an interrupted gesture ---
+        app.synthetic.clear();
+        // Gesture interrupted with down
+        app.synthetic.push(egui::Event::PointerButton {
+            pos: egui::pos2(10.0, 10.0),
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        });
+        assert!(pointer_is_down(&app, &ctx));
+
+        // A subsequent ui.click auto-emits a release first before clicking
+        let res = run_control(&mut app, "ui.click", json!({"x": 50.0, "y": 50.0}));
+        assert_eq!(res["ok"], true);
+        assert_eq!(app.synthetic.len(), 5); // 1 initial + 1 auto-release + 1 move + 2 click = 5
+        assert!(matches!(app.synthetic[1], egui::Event::PointerButton { pressed: false, .. }), "dangling down must be cleanly released");
+        assert!(!pointer_is_down(&app, &ctx));
+
+        // A subsequent ui.drag also auto-emits a release if interrupted
+        app.synthetic.clear();
+        app.synthetic.push(egui::Event::PointerButton {
+            pos: egui::pos2(10.0, 10.0),
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        });
+        let res = run_control(&mut app, "ui.drag", json!({"x": 10.0, "y": 10.0, "toX": 20.0, "toY": 20.0, "steps": 4}));
+        assert_eq!(res["ok"], true);
+        assert!(matches!(app.synthetic[1], egui::Event::PointerButton { pressed: false, .. }), "dangling down released before drag begins");
     }
 }
