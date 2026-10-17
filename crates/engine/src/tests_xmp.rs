@@ -922,6 +922,58 @@ fn gps_typed_in_is_saved_to_xmp() {
     assert!(s.catalog.photo(id).unwrap().meta.gps.is_none());
 }
 
+/// A PNG whose EXIF places it at (`lat`, `lon`), as a camera's GPS does.
+fn write_png_at(path: &Path, lat: f64, lon: f64) {
+    let img = lightcraft_raster::Rgba8 { width: 8, height: 8, data: vec![[90, 120, 150, 255]; 64] };
+    let gps = lightcraft_meta::Metadata { gps: Some(lightcraft_meta::Gps { latitude: lat, longitude: lon, altitude: None }), ..Default::default() };
+    let exif = lightcraft_meta::write_exif(&gps);
+    let meta = lightcraft_codecs::EncodeMeta { exif: Some(&exif), ..Default::default() };
+    std::fs::write(path, lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &meta).unwrap()).unwrap();
+}
+
+/// A sidecar's GPS wins over the camera's (MWG: XMP over Exif), on import and on Read Metadata from
+/// File; saving leaves the sidecar's position as it was written, and writes it only when it was
+/// changed here.
+#[test]
+fn sidecar_gps_wins_over_the_cameras_and_survives_a_save() {
+    let src = temp_dir("sidecar-gps");
+    write_png_at(&src.join("walk.png"), 10.5, 20.25);
+    let sidecar = |lat: &str, lon: &str| {
+        format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about="" xmlns:exif="http://ns.adobe.com/exif/1.0/" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="2">
+   <exif:GPSLatitude>{lat}</exif:GPSLatitude>
+   <exif:GPSLongitude>{lon}</exif:GPSLongitude>
+  </rdf:Description>
+</rdf:RDF></x:xmpmeta>"#
+        )
+    };
+    std::fs::write(src.join("walk.xmp"), sidecar("12,30.12345N", "45,15.54321W")).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    let near = |(a, b): (f64, f64), (c, d): (f64, f64)| (a - c).abs() < 1e-6 && (b - d).abs() < 1e-6;
+    let gps = |s: &Session| s.catalog.photo(id).unwrap().meta.gps.unwrap();
+    assert!(near(gps(&s), (12.5020575, -45.2590535)), "the sidecar's position, not the camera's: {:?}", gps(&s));
+    // a save that didn't change the position leaves it in the file exactly as written
+    s.execute("photo.rate", &json!({"ids": [id.0], "rating": 4})).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    let saved = std::fs::read_to_string(src.join("walk.xmp")).unwrap();
+    assert!(saved.contains("<exif:GPSLatitude>12,30.12345N</exif:GPSLatitude>"), "{saved}");
+    assert!(saved.contains("<exif:GPSLongitude>45,15.54321W</exif:GPSLongitude>"), "{saved}");
+    assert_eq!(lightcraft_meta::parse_xmp(&saved).unwrap().metadata.rating, Some(4), "the save happened");
+    // another app moved the photo: reading the sidecar again takes its position
+    std::fs::write(src.join("walk.xmp"), sidecar("5,6.60000S", "100,30.30000E")).unwrap();
+    s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    assert!(near(gps(&s), (-5.11, 100.505)), "{:?}", gps(&s));
+    // a position typed in here is written
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "gps": "1.2345, 6.789"})).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    let g = lightcraft_meta::parse_xmp(&std::fs::read_to_string(src.join("walk.xmp")).unwrap()).unwrap().metadata.gps.unwrap();
+    assert!(near((g.latitude, g.longitude), (1.2345, 6.789)), "{g:?}");
+    let _ = std::fs::remove_dir_all(&src);
+}
+
 /// DNG export compression: lossless, zip and none all decode; none is the biggest.
 #[test]
 fn dng_export_compression_choices() {
