@@ -530,4 +530,20 @@ mod tests {
         assert!(!m.exists(), "the process survived, so nothing is left to report");
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn a_panicking_scope_keeps_other_active_work_marked() {
+        let dir = std::env::temp_dir().join(format!("lc-gpu-overlap-panic-{}", std::process::id()));
+        let m = dir.join("gpu-init.marker");
+        let active = Mutex::new(0);
+        with_marker_on(Some(m.clone()), &active, "device creation", || {
+            let r = std::panic::catch_unwind(|| with_marker_on(Some(m.clone()), &active, "kernel compilation", || panic!("compile")));
+            assert!(r.is_err());
+            assert!(m.exists(), "other driver work is still active after the inner panic");
+            assert_eq!(*active.lock().unwrap(), 1);
+        });
+        assert!(!m.exists(), "the last surviving scope removes the marker");
+        assert_eq!(*active.lock().unwrap(), 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

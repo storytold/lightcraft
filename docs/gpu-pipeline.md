@@ -43,6 +43,9 @@ Overrides (read once at launch):
 - else `WGPU_BACKEND` (wgpu's own variable, same names) — before #136 only the window honoured it,
   the compute device always used Vulkan + DX12 (+ Metal).
 - `LIGHTCRAFT_GPU=0`: GPU rendering off for the process (the window is unaffected).
+- `LIGHTCRAFT_GPU_ALLOW_SOFTWARE=1`: accept a software adapter (llvmpipe / lavapipe, WARP), which is
+  otherwise refused because the CPU pipeline is faster. For tests on machines without a GPU (CI);
+  the app never sets it.
 
 **DX12 shader compiler (issue #471).** Every instance (window and compute) compiles DX12 shaders with
 FXC (`d3dcompiler_47.dll`, part of Windows; `lightcraft_gpu::backend::backend_options`). wgpu's
@@ -240,6 +243,16 @@ fresh ones. `windows_match` runs the settings cases again as a window of a 3000 
 from outside the window: the vignette geometry arrives as the `VIG_VIEW` parameter, the airlight and
 noise-reduction size come from the whole frame, and a window that spots or Auto Mask strokes grew is
 cut back after the readback. The tests skip (pass with a note) when no adapter exists.
+
+**Hosted CI in #1159** (`.github/workflows/ci.yml`, incorporating #1148) runs them on every platform: on Metal on the macOS
+runners, and on software adapters on Linux (Mesa lavapipe) and Windows (WARP, DX12 with FXC), which
+`LIGHTCRAFT_GPU_ALLOW_SOFTWARE=1` admits (tests only: the app never sets it). The step fails if they
+skip. Measured on lavapipe (CI and locally) and WARP: all 134 compared renders within **max 1 LSB,
+mean ≤ 0.0003 LSB**, as on the M4 Pro; on the macOS runner's (paravirtual) Metal device one case reaches
+2 LSB (point colour range overlay, 0.0002% of pixels over 1), the rest max 1. The suite takes about
+50 s on lavapipe, 30 s on the macOS runner and 2–7.5 min on WARP. These are results from the earlier contributor head; the refreshed main integration still needs hosted validation. lavapipe's
+storage bindings stop at 128 MiB (the WebGPU default), so the two big-source tests use a 117 MiB
+source: above what a view keeps with its stages (96 MiB) and small enough to be uploaded there.
 
 **AMD Radeon 8060S (RADV STRIX_HALO, Vulkan 1.4, Mesa 26.2.4, Linux 7.2), 2026-10-12**, the first
 non-Apple GPU verified: all 16 tests pass, 135 compared cases. 124 differ by max 1 LSB, 10 are

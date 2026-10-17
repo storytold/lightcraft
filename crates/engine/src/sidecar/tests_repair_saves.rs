@@ -152,7 +152,7 @@ fn autowrite_repairs_partial_rename_before_merging_foreign_xmp_across_library_sw
                     assert_eq!(parsed.title.as_deref(), Some("Final title"));
                     assert!(parsed.keywords.as_ref().unwrap().contains(&"café".to_string()));
                     if upper {
-                        // by listing: on a case-insensitive volume `preferred` answers for the upper-case packet
+                        // Exact directory entries distinguish a stored name from a case-insensitive alias.
                         let listed = std::fs::read_dir(&root).unwrap().any(|e| Some(e.unwrap().file_name().as_os_str()) == preferred.file_name());
                         assert!(!listed, "merge uses the repaired uppercase packet");
                     }

@@ -1,0 +1,141 @@
+# Tests on the three desktop platforms, on every pull request and every push to main (gap 9).
+#
+# - Linux runs `cargo xtask ci`, the same gate contributors run before a commit (fmt, clippy,
+#   heif, tests, parity, layers, assets, wasm), so whatever is added to it is checked here too.
+# - macOS and Windows run what differs per platform: clippy and the workspace tests (code behind
+#   `cfg(target_os)` only compiles there; issue #989). fmt, parity, layers, assets and wasm give
+#   the same answer everywhere, so they run once, on Linux.
+# - The GPU tests (CPU <-> GPU equivalence, fallback, memory, shutdown) skip when there is no GPU
+#   adapter. Linux and Windows runners have no GPU: `LIGHTCRAFT_GPU_ALLOW_SOFTWARE=1` (tests only;
+#   the app refuses software adapters) lets them use Mesa's lavapipe on Linux and WARP (DX12) on
+#   Windows. macOS runners expose a Metal device. The GPU step fails if the tests skip anyway
+#   (`skipped: no GPU adapter`, or `skipped (gpu): ...` from lightcraft-testkit's `skip!`, #1037).
+#   On macOS and Windows it names the test targets with `--workspace`, which reuses the build of
+#   the test step (under a minute of building). On Linux, after `cargo xtask ci`, the same command
+#   rebuilt about 190 crates (7 min), so it runs `lightcraft-gpu`'s tests only (about 2 min).
+#
+# Standard GitHub-hosted runners only: free for public repositories. Never a larger runner here
+# (release.yml's macos-15-xlarge is budget-capped).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  # what `cargo xtask ci` uses: backtraces with line numbers, a fraction of full debuginfo's RAM and cache
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  RUST_BACKTRACE: 1
+
+jobs:
+  linux:
+    name: Linux x86_64 (xtask ci, GPU tests on lavapipe)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+      CRAFT_FONTS_REQUIRED: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Optional font build input, so the Japanese and Chinese font tests run (they skip without it).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: storytold/craft-fonts
+          ref: 3d9ab3a132ed0eff457e424226a435a901da30d3 # bump deliberately
+          path: craft-fonts
+          persist-credentials: false
+      - name: Install system libraries and Mesa's Vulkan drivers (lavapipe)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev \
+            mesa-vulkan-drivers libvulkan1
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      # Dependencies only (rust-cache drops the workspace's own artifacts), saved from main and
+      # restored by pull requests, so the 10 GB cache holds one entry per job.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: ci
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: cargo xtask ci
+        run: cargo xtask ci
+      - name: GPU tests on a software adapter
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          LIGHTCRAFT_GPU_ALLOW_SOFTWARE: "1"
+        run: |
+          cargo test -p lightcraft-gpu --locked --tests -- --nocapture 2>&1 | tee "$RUNNER_TEMP/gpu-tests.log"
+          if grep -qE "skipped( \(gpu\))?: no GPU adapter" "$RUNNER_TEMP/gpu-tests.log"; then
+            echo "::error::the GPU tests skipped: the runner offered no GPU adapter"
+            exit 1
+          fi
+
+  desktop:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: "macOS arm64 (clippy, test, GPU tests on Metal)", runner: macos-latest }
+          - { name: "Windows x86_64 (clippy, test, GPU tests on WARP)", runner: windows-latest }
+    env:
+      CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+      CRAFT_FONTS_REQUIRED: "1"
+    steps:
+      # Check files out as committed: tests compare bytes of fixtures and docs.
+      - name: Keep line endings
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: storytold/craft-fonts
+          ref: 3d9ab3a132ed0eff457e424226a435a901da30d3 # bump deliberately
+          path: craft-fonts
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: ci
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      # every failing test binary, not only the first: platform failures tend to come in groups
+      - name: cargo test
+        if: ${{ !cancelled() }}
+        run: cargo test --workspace --locked --no-fail-fast
+      - name: GPU tests on a software adapter
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          LIGHTCRAFT_GPU_ALLOW_SOFTWARE: "1"
+        run: |
+          cargo test --workspace --locked --test equivalence --test fallback --test memory \
+            --test shutdown --test shutdown_first -- --nocapture 2>&1 | tee "$RUNNER_TEMP/gpu-tests.log"
+          if grep -qE "skipped( \(gpu\))?: no GPU adapter" "$RUNNER_TEMP/gpu-tests.log"; then
+            echo "::error::the GPU tests skipped: the runner offered no GPU adapter"
+            exit 1
+          fi
