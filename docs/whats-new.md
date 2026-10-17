@@ -1,5 +1,12 @@
 # What's new in LightCraft
 
+## 2026-10-17
+
+### Short Epson and Mamiya raws are refused
+- An Epson ERF or Mamiya MEF whose raw strip runs past the end of the file is now an error on import (issue #2119).
+  Before, the header probe trusted the declared strip length and sized its sample buffer from it, so a few KB of file
+  could make it allocate gigabytes.
+
 ## 2026-10-14
 
 ### Lightroom radial masks on the right side
