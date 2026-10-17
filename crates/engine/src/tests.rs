@@ -1103,6 +1103,16 @@ fn find_similar_filters_to_look_alikes() {
 }
 
 #[test]
+fn find_similar_with_no_hits_shows_no_photos() {
+    let mut s = demo();
+    let r = s.execute("library.findSimilar", &json!({"similarity": 1.5})).unwrap();
+    assert_eq!(r["photos"].as_array().map(Vec::len), Some(0));
+    assert_eq!(s.visible_cloned().len(), 0, "an empty Find Similar result must show no photos, not the whole library");
+    s.execute("library.clearFilter", &json!({})).unwrap();
+    assert_eq!(s.visible_cloned().len(), s.catalog.len(), "Clear Filters brings everything back");
+}
+
+#[test]
 fn quick_develop_adds_to_each_photo() {
     use lightcraft_catalog::PhotoId;
     let mut s = demo();
