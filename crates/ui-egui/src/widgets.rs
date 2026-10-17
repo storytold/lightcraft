@@ -722,41 +722,6 @@ pub fn icon_button(ui: &mut Ui, id: &str, icon: Icon, size: egui::Vec2, active: 
     if !tooltip.is_empty() { resp.on_hover_text(tooltip) } else { resp }
 }
 
-/// Star rating row (5 stars); returns a new rating when clicked (clicking the current rating clears).
-pub fn stars(ui: &mut Ui, id: &str, rating: u8, size: f32) -> Option<u8> {
-    let t = Tokens::get(ui.ctx());
-    let mut out = None;
-    let mut hover_n = None;
-    let mut rects = [Rect::NOTHING; 5];
-    for (i, slot) in (0..5u8).zip(rects.iter_mut()) {
-        let (r, resp) = ui.allocate_exact_size(vec2(size, size), Sense::click());
-        crate::widgets::announce_selected(&resp, format!("{} ★", i + 1), i < rating);
-        register(ui.ctx(), format!("star:{id}:{}", i + 1), r);
-        if resp.hovered() {
-            hover_n = Some(i + 1);
-        }
-        if resp.clicked() {
-            out = Some(if rating == i + 1 { 0 } else { i + 1 });
-        }
-        *slot = r;
-    }
-    // Hover previews the rating a click would set: stars 1..=hovered light up. The hovered star also gets the
-    // icon_button hover square, so hovering the current rating (where the preview looks the same) still shows feedback.
-    for (i, r) in (0..5u8).zip(rects) {
-        if hover_n == Some(i + 1) {
-            ui.painter().rect_filled(r, 4.0, t.hover.gamma_multiply(0.7));
-        }
-        let filled = star_lit(i, rating, hover_n);
-        paint(ui.painter(), r.shrink(size * 0.12), if filled { Icon::StarFilled } else { Icon::Star }, if filled { t.star } else { t.icon });
-    }
-    out
-}
-
-/// Whether the star at zero-based index `i` is drawn filled: the hovered star's rating previews over the current one.
-fn star_lit(i: u8, rating: u8, hover: Option<u8>) -> bool {
-    i < hover.unwrap_or(rating)
-}
-
 /// A borderless dropdown button: `text` followed by a painted chevron (no font glyph needed).
 pub fn dropdown(ui: &mut Ui, id: &str, text: &str, font: egui::FontId, color: Color32) -> Response {
     dropdown_within(ui, id, text, font, color, f32::INFINITY)
@@ -793,16 +758,6 @@ mod tests {
         assert!(explanation.contains("DNG"), "{explanation}");
         assert!(!explanation.contains("yet"), "{explanation}");
         assert!(preview_only_explanation("unsupported CR3").contains("unsupported CR3"));
-    }
-
-    /// Issue #647: hovering a star previews the rating a click would set.
-    #[test]
-    fn hovered_star_previews_its_rating() {
-        let lit = |rating, hover| (0..5u8).filter(|&i| star_lit(i, rating, hover)).count();
-        assert_eq!(lit(2, None), 2, "no hover shows the rating");
-        assert_eq!(lit(2, Some(4)), 4);
-        assert_eq!(lit(5, Some(1)), 1);
-        assert_eq!(lit(0, Some(3)), 3);
     }
 
     #[test]

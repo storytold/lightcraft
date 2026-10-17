@@ -1,5 +1,12 @@
 # What's new in LightCraft
 
+## 2026-10-16
+
+### One star rating everywhere
+- The stars in the bottom bar, the Info panel and the filter bar are now one shared control, and the badges on grid
+  cells, filmstrip thumbnails and the Compare caption use the same drawing. Hovering a star in the filter bar now
+  previews the rating like the others do, and with a star focused (Tab), ← and → lower and raise the rating.
+
 ## 2026-10-14
 
 ### Lightroom radial masks on the right side

@@ -912,12 +912,7 @@ fn theme_card<V: PartialEq + Copy>(
                             });
                             register(ui.ctx(), format!("button:themeFavorite-{}", kind.id()), r.rect);
                             if favorite || hovered {
-                                crate::icons::paint(
-                                    ui.painter(),
-                                    r.rect.shrink(4.0),
-                                    if favorite { crate::icons::Icon::StarFilled } else { crate::icons::Icon::Star },
-                                    if favorite { t.accent } else { t.text_dim },
-                                );
+                                crate::rating::paint_star(ui.painter(), r.rect.shrink(4.0), favorite, if favorite { t.accent } else { t.text_dim });
                             }
                             if r.clicked() {
                                 if favorite {

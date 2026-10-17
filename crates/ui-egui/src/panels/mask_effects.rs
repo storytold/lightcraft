@@ -237,7 +237,12 @@ fn menu(app: &mut LightcraftApp, ui: &mut egui::Ui, mask: &Mask, current: Option
             let elided = g.elided;
             ui.painter().galley(rect.left_center() + vec2(18.0, -g.size().y / 2.0), g, t.text);
             if fav {
-                ui.painter().text(rect.right_center() - vec2(4.0, 0.0), egui::Align2::RIGHT_CENTER, "★", t.font(11.0), t.text_dim);
+                crate::rating::paint_star(
+                    ui.painter(),
+                    egui::Rect::from_center_size(rect.right_center() - vec2(10.0, 0.0), vec2(11.0, 11.0)),
+                    true,
+                    t.text_dim,
+                );
             }
             if moved && st.highlight == Some(i) {
                 resp.scroll_to_me(None);
@@ -522,10 +527,7 @@ pub fn manage_body(
             for e in list {
                 let sel = selected.contains(&e.name);
                 ui.horizontal(|ui| {
-                    let star = ui.add(egui::Button::new(if e.favorite { "★" } else { "☆" }).frame(false)).on_hover_text(crate::i18n::tr("Favorite"));
-                    if ui.is_rect_visible(star.rect) {
-                        register(ui.ctx(), format!("effectStar:{}", e.name), star.rect);
-                    }
+                    let star = crate::rating::favorite_button(ui, format!("effectStar:{}", e.name), e.favorite, crate::i18n::tr("Favorite"));
                     if star.clicked() {
                         toggle_star = Some((e.name.clone(), !e.favorite));
                     }

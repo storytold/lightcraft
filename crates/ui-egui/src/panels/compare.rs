@@ -339,7 +339,7 @@ fn photo_tile(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, slot: Slo
         let filled = i < photo.rating;
         let r = Rect::from_min_size(pos2(x + i as f32 * 13.0, cap.center().y - 6.0), vec2(12.0, 12.0));
         if r.right() < cap.right() {
-            paint(pt, r, if filled { Icon::StarFilled } else { Icon::Star }, if filled { t.star } else { t.icon.gamma_multiply(0.6) });
+            crate::rating::paint_star(pt, r, filled, if filled { t.star } else { t.icon.gamma_multiply(0.6) });
         }
     }
     x += 5.0 * 13.0 + 4.0;

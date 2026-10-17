@@ -187,7 +187,12 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     }
                     ui.painter().text(pos2(text_x, r.center().y), Align2::LEFT_CENTER, &name, t.font(13.0), t.text_label);
                     if fav {
-                        paint(ui.painter(), Rect::from_center_size(pos2(r.right() - 20.0, r.center().y), vec2(16.0, 16.0)), Icon::StarFilled, t.star);
+                        crate::rating::paint_star(
+                            ui.painter(),
+                            Rect::from_center_size(pos2(r.right() - 20.0, r.center().y), vec2(16.0, 16.0)),
+                            true,
+                            t.star,
+                        );
                     }
                     // resting on a preset previews it in the loupe (no history entry)
                     if resp.hovered()

@@ -182,7 +182,7 @@ fn cell_ui(
     let over_star = resp.hover_pos().is_some_and(|q| star.contains(q));
     if fav || resp.hovered() {
         painter.circle_filled(star.center(), 10.0, Color32::from_black_alpha(110));
-        paint(painter, star.shrink(4.0), if fav { Icon::StarFilled } else { Icon::Star }, if fav || over_star { t.star } else { Color32::WHITE });
+        crate::rating::paint_star(painter, star.shrink(4.0), fav, if fav || over_star { t.star } else { Color32::WHITE });
     }
     if resp.hovered() && !applied && !over_star {
         app.hover_preview =

@@ -130,22 +130,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             .map(|(l, k, op)| (l.to_string(), json!({"ratingOp": k}), f.rating_op == op))
             .collect(),
     );
-    for i in 1..=5u8 {
-        let (r, resp) = ui.allocate_exact_size(vec2(17.0, 26.0), Sense::click());
-        crate::widgets::announce(&resp, format!("{i} ★"));
-        register(ui.ctx(), format!("filter:star{i}"), r);
-        let filled = i <= f.rating;
-        let c = if filled {
-            t.star
-        } else if resp.hovered() {
-            t.text_label
-        } else {
-            t.icon
-        };
-        paint(ui.painter(), Rect::from_center_size(r.center(), vec2(14.0, 14.0)), if filled { Icon::StarFilled } else { Icon::Star }, c);
-        if resp.clicked() {
-            filter(app, json!({"rating": if f.rating == i { 0 } else { i }}));
-        }
+    if let Some(r) = crate::rating::Rating::new("filter", f.rating).automation_ids("filter:star").show(ui) {
+        filter(app, json!({"rating": r}));
     }
     ui.add_space(14.0);
 
