@@ -349,7 +349,7 @@ fn packet(p: &Photo, cat: &lightcraft_catalog::Catalog, remove_location: bool, o
     let own = (!keywords.hierarchical.is_empty()).then(|| serde_json::to_string(&keywords.hierarchical).unwrap_or_default());
     for k in &old.listed {
         let known = |v: &[String]| v.iter().any(|h| same(h, k));
-        if !k.trim().is_empty() && !known(&keywords.hierarchical) && !known(&old.written) {
+        if !known(&keywords.hierarchical) && !known(&old.written) {
             keywords.hierarchical.push(k.clone());
         }
     }
@@ -499,9 +499,13 @@ struct OldPaths {
 
 impl OldPaths {
     fn of(old: &str) -> OldPaths {
+        use lightcraft_catalog::keywords::clean;
         let Ok(d) = lightcraft_meta::parse_xmp(old) else { return OldPaths::default() };
-        let written = d.properties.get("lc:keywordPaths").and_then(|v| v.first()).and_then(|j| serde_json::from_str(j).ok()).unwrap_or_default();
-        OldPaths { listed: d.metadata.hierarchical_keywords, written }
+        // normalized like every keyword read from a file, so `A | B` and `A|B` are one path
+        let normal = |v: Vec<String>| v.iter().map(|k| clean(k)).filter(|k| !k.is_empty()).collect::<Vec<String>>();
+        let written: Vec<String> =
+            d.properties.get("lc:keywordPaths").and_then(|v| v.first()).and_then(|j| serde_json::from_str(j).ok()).unwrap_or_default();
+        OldPaths { listed: normal(d.metadata.hierarchical_keywords), written: normal(written) }
     }
 }
 

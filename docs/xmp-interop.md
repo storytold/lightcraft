@@ -61,6 +61,8 @@ the only copy of those edits outside that application's catalog. Saving never dr
   list replaces the old one, and saving again changes nothing. A keyword removed in LightCraft stays removed: each save
   records the paths it wrote as the photo's own in `lc:keywordPaths` (a JSON list), and the next save drops those of
   them the photo no longer has. A path LightCraft never wrote is never removed.
+  Paths are compared normalized, as keywords are read from a file (spaces around each `|` level ignored, case ignored), so
+  `Animals | Birds | Heron` and `Animals|Birds|Heron` are one keyword: a save writes it once, and its record matches it.
 - **Everything else is kept byte for byte**: other namespaces (`crs:`, `xmpMM:`, unknown ones), `xmp:CreatorTool`, comments, the packet wrapper and padding. LightCraft's properties go into one
   `rdf:Description` of their own; owned properties written by another application (in attribute or element form) are
   removed from its description, which otherwise stays as it was.

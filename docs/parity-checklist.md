@@ -797,6 +797,7 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-17 | patch | LR-META-XMP: hierarchical keyword paths are normalized before the merge and the ownership check (a spaced path in the sidecar or in `lc:keywordPaths` is the same keyword), so a removed keyword cannot return through its spaced duplicate; status unchanged |
 | 2026-10-16 | patch | LR-META-XMP: a keyword removed in LightCraft stays out of the sidecar's `lr:hierarchicalSubject` (its own paths are recorded in `lc:keywordPaths`); another app's paths are still kept; status unchanged |
 | 2026-10-16 | patch | LR-META-XMP: a sidecar save writes hierarchical keywords as names in `dc:subject` (never a `\|`, which hangs Lightroom Classic 15.3+ on macOS Tahoe) and full paths in `lr:hierarchicalSubject`, merged with the paths the sidecar lists; status unchanged |
 | 2026-10-12 | minor | LR-EDIT-OPTICS-PROFILE: Sony ARW shading, CA and distortion tables decoded with settings and provenance (raw IFD, `SR2SubIFD` fallback); applied corrections unchanged (ILCE-7RM4A and ILCE-7RM6 distortion); status unchanged (🟡) |
