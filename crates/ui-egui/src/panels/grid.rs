@@ -64,13 +64,18 @@ type RunsKey = (u64, Option<SortKey>, GroupBy);
 
 /// What the grid derives from the visible photos, kept across frames. Everything is keyed by the
 /// session's visible-list generation ([`lightcraft_engine::Session::visible_shared`]), which
-/// changes whenever the list is recomputed (any catalog change: crops, orientation, dates, stacks;
+/// changes whenever the list is recomputed (a change to what the view reads: dates, stacks, photos;
 /// or another source, filter or sort) — so an unchanged frame neither copies nor hashes the ids.
+/// A develop edit keeps the list of a view that reads no develop state, but photo shapes (crop,
+/// orientation) are develop state: the justified layout follows those edits too (`shapes`).
 #[derive(Default)]
 pub struct GridCache {
     runs: Option<(RunsKey, Arc<Vec<DateRun>>)>,
-    /// Layout by (runs key, width, thumbnail size, square).
-    layout: Option<((RunsKey, u32, u32, bool), Arc<GridLayout>)>,
+    /// Layout by (runs key, width, thumbnail size, square, `shapes`).
+    layout: Option<((RunsKey, u32, u32, bool, u64), Arc<GridLayout>)>,
+    /// The catalog revision of the latest develop edit seen (or of any change not known photo by photo): what
+    /// the justified layout's cell shapes were read at.
+    shapes: u64,
     /// Stack index by generation.
     stacks: Option<(u64, Arc<StackIndex>)>,
     /// How many of the photos are browsed (Local) ones, by generation.
@@ -100,6 +105,14 @@ impl GridCache {
                 s
             }
         }
+    }
+
+    /// [`GridCache::shapes`], moved on to the catalog's revision when a photo's develop state may have changed.
+    fn shapes(&mut self, cat: &Catalog) -> u64 {
+        if !crate::still_right(cat, self.shapes, lightcraft_catalog::Aspects::DEVELOP) {
+            self.shapes = cat.revision;
+        }
+        self.shapes
     }
 
     fn local(&mut self, cat: &Catalog, ids: &[PhotoId], generation: u64) -> usize {
@@ -213,8 +226,9 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let stats = &mut app.caches.grid_stats;
     let runs = app.caches.grid.runs(stats, &app.session.catalog, &ids, runs_key);
     // the layout only changes with the photos (and their shapes), the grouping, the width and
-    // the thumbnail size
-    let lay_key = (runs_key, avail_w.to_bits(), target.to_bits(), square);
+    // the thumbnail size; a develop edit (crop, rotation) can change a shape and leave the list
+    let shapes = if square { 0 } else { app.caches.grid.shapes(&app.session.catalog) };
+    let lay_key = (runs_key, avail_w.to_bits(), target.to_bits(), square, shapes);
     let lay = match &app.caches.grid.layout {
         Some((k, l)) if *k == lay_key => l.clone(),
         _ => {
