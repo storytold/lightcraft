@@ -531,7 +531,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         && lightcraft_engine::gpu::available();
     let shown = app.renderer.textures.get(&Slot::Main).filter(|t| t.photo == id && t.quick.is_none()).map(|t| (t.key, t.ms));
     let drag = app.session.interaction.as_ref().map(|i| (i.photo, i.label.as_str()));
-    let draft = app.drag_scale.scale(drag, gpu, shown.map(|(key, _)| key));
+    let now = ui.input(|i| i.time);
+    let draft = app.drag_scale.scale(drag, gpu, shown.map(|(key, _)| key), now);
     // render at the final size: a click-zoom animation only changes how the result is drawn
     let native_long = native[0].max(native[1]);
     let drawn_long = target_rect.width().max(target_rect.height()) * ppp;
@@ -558,7 +559,6 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         app.drag_scale.observe(key, ms, app.perf.host_frame_ms);
     }
     // a pinch changes the zoom every frame: keep the sizes of before it until it is quiet
-    let now = ui.input(|i| i.time);
     let plan = app.size_hold.apply(id, now, navigating, plan);
     if app.size_hold.holding(now) {
         ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(crate::region::HOLD_SECS));
