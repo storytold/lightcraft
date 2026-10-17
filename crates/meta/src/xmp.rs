@@ -506,10 +506,7 @@ pub fn parse_xmp(s: &str) -> Result<XmpData, XmpError> {
         label: first("xmp:Label"),
         ..Default::default()
     };
-    m.iso = num("exif:ISOSpeedRatings").or_else(|| num("exifEX:PhotographicSensitivity")).filter(|v| *v > 0.0).map(|v| v as u32);
-    if let Some(v) = props.get("exif:ISOSpeedRatings").and_then(|v| v.first()).and_then(|s| parse_number(s)) {
-        m.iso = Some(v as u32);
-    }
+    m.iso = [num("exif:ISOSpeedRatings"), num("exifEX:PhotographicSensitivity")].into_iter().flatten().find(|v| *v > 0.0).map(|v| v as u32);
     if let Some(spec) = props.get("exifEX:LensSpecification").filter(|v| v.len() == 4) {
         let v: Vec<f64> = spec.iter().filter_map(|s| parse_number(s)).collect();
         if v.len() == 4 {
@@ -800,6 +797,24 @@ mod tests {
         assert_eq!(read("").copyright_marked, None);
         assert_eq!(read("maybe").copyright_marked, None);
         assert_eq!(read("True").copyright_url.as_deref(), Some("https://example.org/c"));
+    }
+
+    /// A zero or negative `exif:ISOSpeedRatings` is "no ISO" (as in the EXIF reader), not `Some(0)`, and
+    /// must not hide a valid `exifEX:PhotographicSensitivity`.
+    #[test]
+    fn non_positive_iso_is_ignored() {
+        let read = |attrs: &str| {
+            let x = format!(
+                r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+                <rdf:Description rdf:about="" xmlns:exif="http://ns.adobe.com/exif/1.0/" xmlns:exifEX="http://cipa.jp/exif/1.0/" {attrs}/>
+                </rdf:RDF></x:xmpmeta>"#
+            );
+            parse_xmp(&x).unwrap().metadata.iso
+        };
+        assert_eq!(read(r#"exif:ISOSpeedRatings="0" exifEX:PhotographicSensitivity="400""#), Some(400));
+        assert_eq!(read(r#"exif:ISOSpeedRatings="-100""#), None);
+        assert_eq!(read(r#"exif:ISOSpeedRatings="0""#), None);
+        assert_eq!(read(r#"exif:ISOSpeedRatings="200""#), Some(200));
     }
 
     #[test]
