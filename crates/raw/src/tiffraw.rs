@@ -226,12 +226,25 @@ fn jxl_chunk_check(src: &[u8], cw: usize, ch: usize, vw: usize, vh: usize, cpp: 
 
 /// Decode one baseline JPEG chunk to 8-bit samples: (samples, width, height, channels).
 pub(crate) fn lossy_jpeg(src: &[u8], cpp: usize) -> Result<(Vec<u8>, usize, usize, usize)> {
+    lossy_jpeg_limited(src, cpp, 1 << 16, None)
+}
+
+/// The same JPEG decoder with a header preflight before allocating output for a small preview.
+pub(crate) fn lossy_jpeg_limited(src: &[u8], cpp: usize, max_edge: usize, max_samples: Option<usize>) -> Result<(Vec<u8>, usize, usize, usize)> {
     use zune_core::bytestream::ZCursor;
     use zune_core::colorspace::ColorSpace;
     use zune_core::options::DecoderOptions;
     let cs = if cpp == 1 { ColorSpace::Luma } else { ColorSpace::RGB };
-    let opts = DecoderOptions::default().set_max_width(1 << 16).set_max_height(1 << 16).set_strict_mode(false).jpeg_set_out_colorspace(cs);
+    let opts = DecoderOptions::default().set_max_width(max_edge).set_max_height(max_edge).set_strict_mode(false).jpeg_set_out_colorspace(cs);
     let mut d = zune_jpeg::JpegDecoder::new_with_options(ZCursor::new(src), opts);
+    if let Some(limit) = max_samples {
+        d.decode_headers().map_err(|e| RawError::Corrupt(format!("lossy JPEG header: {e}")))?;
+        let header = d.info().ok_or_else(|| RawError::Corrupt("lossy JPEG without a header".into()))?;
+        let count = usize::from(header.width).checked_mul(usize::from(header.height)).and_then(|n| n.checked_mul(cpp));
+        if count.is_none_or(|n| n == 0 || n > limit) {
+            return Err(RawError::Limit("JPEG preview too large"));
+        }
+    }
     let px = d.decode().map_err(|e| RawError::Corrupt(format!("lossy JPEG tile: {e}")))?;
     let info = d.info().ok_or_else(|| RawError::Corrupt("lossy JPEG tile without a header".into()))?;
     let (w, h) = (info.width as usize, info.height as usize);
@@ -340,6 +353,15 @@ mod lossy_tests {
 
     /// A lossy-DNG-style image: two 16×8 tiles, each a baseline JPEG, the right one cut short
     /// by the image edge.
+    #[test]
+    fn preview_jpeg_dimensions_are_checked_before_pixel_decode() {
+        let mut jpeg = Vec::new();
+        jpeg_encoder::Encoder::new(&mut jpeg, 100).encode(&[128; 8 * 8 * 3], 8, 8, jpeg_encoder::ColorType::Rgb).unwrap();
+        let sof = jpeg.windows(2).position(|b| b == [0xff, 0xc0]).unwrap();
+        jpeg[sof + 5..sof + 9].copy_from_slice(&[0xea, 0x60, 0xea, 0x60]);
+        assert!(lossy_jpeg_limited(&jpeg, 3, 2048, Some(4 * 1024 * 1024 * 3)).is_err());
+    }
+
     #[test]
     fn lossy_jpeg_tiles_decode() {
         let (tw, th) = (16usize, 8usize);

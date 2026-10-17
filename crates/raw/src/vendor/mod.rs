@@ -7,6 +7,7 @@ mod arw6_curve;
 pub(crate) mod arw6_testenc;
 mod arw_lens;
 pub(crate) mod arw_lens_rm6;
+pub(crate) mod coolpix;
 pub mod cr2;
 pub mod cr3;
 pub mod crx;

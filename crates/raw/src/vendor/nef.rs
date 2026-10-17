@@ -8,7 +8,7 @@
 //! (HE / HE★, Z 8, Z 9, Z 6III, Z f): they keep compression 34713 but carry a wavelet codestream that starts with
 //! the JPEG XS markers SOC + CAP (ISO/IEC 21122-1, `FF10 FF50`) and have no `0x0096` table (issue #193).
 
-use super::{nefc, white_from_data};
+use super::{coolpix, nefc, white_from_data};
 use crate::tiffraw::{Packing, check_image, read_image};
 use crate::{BlackLevel, Cfa, ColorData, Mode, OpcodeLists, RawData, RawError, RawFormat, RawImage, Rect, Result};
 use lightcraft_geom::Orientation;
@@ -220,6 +220,20 @@ pub(crate) fn trailing_masked_columns(d: &[u16], w: usize, bits: u32) -> usize {
     aw & !1
 }
 
+/// The three measured field-stored originals use the binary maker-note version 0.2.0.0,
+/// compression 1 and a single tight 12-bit strip. Restrict the scene heuristic to this
+/// legacy dialect: brightness transitions in unrelated ordinary rasters can pass it.
+/// This is a measured scope discriminator, not a TIFF declaration of field storage.
+fn legacy_field_layout(info: &ImageInfo, mn: Option<&makernote::MakerNote>, file_len: usize) -> bool {
+    let legacy = mn.and_then(|m| m.ifd.bytes(0x0001)) == Some(&[0, 2, 0, 0]);
+    let expected = (info.width as u64).checked_mul(info.height as u64).and_then(|n| n.checked_mul(3)).map(|n| n / 2);
+    legacy
+        && info.compression == 1
+        && info.samples_per_pixel == 1
+        && info.bits() == 12
+        && matches!(info.chunks(file_len as u64).as_slice(), [c] if Some(c.len) == expected)
+}
+
 pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     let tiff = Tiff::parse(bytes)?;
     let ifd0 = &tiff.ifds[0];
@@ -235,11 +249,44 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         Mode::Full => h,
         Mode::Header => h.min(MASK_ROWS),
     };
-    let data = if info.compression == t::compression::NIKON {
+    let mut data = if info.compression == t::compression::NIKON {
         compressed(bytes, &info, mn.as_ref(), rows)?
     } else {
         uncompressed(bytes, &info, tiff.order, mn.as_ref(), rows)?
     };
+    // Header probes inspect stored rows. Judge masked columns before rearranging the full
+    // image too, so the probe and full decoder use exactly the same prefix.
+    let stored_active_w = match &data {
+        RawData::U16(samples) => trailing_masked_columns(samples, w, bits),
+        _ => w,
+    };
+    let model = ifd0.string(t::MODEL).unwrap_or_default();
+    // Some CCD Coolpix bodies write two interlaced fields one after the other.
+    // Only the measured legacy maker-note dialect and tightly packed layout enter the scene test.
+    // The field order comes from the model (see `coolpix`).
+    if let (Mode::Full, RawData::U16(d)) = (mode, &mut data)
+        && raw.u16(t::ORIENTATION).unwrap_or(1) == 1
+        && ifd0.u16(t::ORIENTATION).unwrap_or(1) == 1
+        && legacy_field_layout(&info, mn.as_ref(), bytes.len())
+        && coolpix::fields_stacked(d, w, h, raw.bytes(t::CFA_PATTERN_EP).unwrap_or(&[0, 1, 1, 2]), coolpix::first_field_even(&model))
+        && coolpix::preview_confirms_fields(bytes, d, w, h, coolpix::first_field_even(&model))
+        && let Some(img) = coolpix::deinterlace(d, w, h, coolpix::first_field_even(&model))
+    {
+        *d = img;
+    }
+    // the E5700's four-colour (CYGM) filter becomes linear RGB (gray-world balance, approximate colour)
+    let cygm = matches!(
+        (raw.u64s(t::CFA_REPEAT_PATTERN_DIM).as_deref(), raw.bytes(t::CFA_PATTERN_EP)),
+        (Some([2, 2]), Some(p)) if p == coolpix::CYGM_PATTERN
+    ) && info.compression != t::compression::NIKON
+        && info.samples_per_pixel == 1;
+    let mut cygm_white = None;
+    if cygm && let (Mode::Full, RawData::U16(d)) = (mode, &data) {
+        let (rgb, white) =
+            coolpix::cygm_to_rgb(d, w, h, coolpix::CYGM_PATTERN).ok_or_else(|| RawError::Corrupt("Coolpix: bad CYGM mosaic".into()))?;
+        cygm_white = Some(white);
+        data = RawData::U16(rgb);
+    }
     let RawData::U16(ref samples) = data else { return Err(RawError::Unsupported("float NEF".into())) };
 
     // Maker note 0x003d is in 14-bit units whatever the sample depth: 12-bit files from the D750, D780, D850,
@@ -260,16 +307,18 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         .and_then(|m| m.ifd.f64s(WB_RB_LEVELS))
         .filter(|v| v.len() >= 2 && v[0] > 0.1 && v[1] > 0.1 && v[0] < 10.0 && v[1] < 10.0)
         .map(|v| [v[0] as f32, 1.0, v[1] as f32]);
+    // the converted CYGM data is already balanced
+    let wb = if cygm { Some([1.0; 3]) } else { wb };
     let cfa = match (raw.u64s(t::CFA_REPEAT_PATTERN_DIM).as_deref(), raw.bytes(t::CFA_PATTERN_EP)) {
         (Some([2, 2]), Some(p)) if p.len() == 4 && p.iter().all(|&c| c <= 2) => Cfa { width: 2, height: 2, pattern: p.to_vec() },
         _ => Cfa::bayer_static("RGGB"),
     };
-    let model = ifd0.string(t::MODEL).unwrap_or_default();
     let body = measured_body(&model, w, h, bits);
-    let active_w = trailing_masked_columns(samples, w, bits);
+    let active_w = if cygm { w } else { stored_active_w };
     // the white level is measured from the whole image (or known for a measured body); the probe (no samples in its
     // result) takes the nominal one
     let white = match (body.and_then(|b| b.white), mode) {
+        _ if cygm_white.is_some() => cygm_white.unwrap_or_default(),
         (Some(white), _) => white,
         (None, Mode::Full) => white_from_data(samples, bits),
         (None, Mode::Header) => ((1u32 << bits.clamp(1, 16)) - 1) as f32,
@@ -286,12 +335,12 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         format: RawFormat::Nef,
         width: w,
         height: h,
-        cpp: 1,
+        cpp: if cygm { 3 } else { 1 },
         data: match mode {
             Mode::Full => data,
             Mode::Header => RawData::U16(Vec::new()),
         },
-        cfa: Some(cfa),
+        cfa: if cygm { None } else { Some(cfa) },
         bits,
         black,
         white: vec![white],
@@ -796,6 +845,178 @@ mod tests {
         assert_eq!(decode(Some(both)).black.values, vec![100.0, 101.0, 102.0, 103.0]);
     }
 
+    /// A Coolpix-style file: model `model`, `pattern` as the colour-filter tag, one strip of 12-bit MSB-first samples.
+    fn coolpix_file(model: &str, pattern: [u8; 4], w: usize, h: usize, strip_px: &[u16]) -> Vec<u8> {
+        coolpix_file_version(model, pattern, w, h, strip_px, &[0, 2, 0, 0])
+    }
+
+    fn coolpix_file_with_preview(model: &str, pattern: [u8; 4], w: usize, h: usize, strip_px: &[u16], preview_px: &[u16]) -> Vec<u8> {
+        let mut bytes = coolpix_file(model, pattern, w, h, strip_px);
+        let mut rgb = Vec::new();
+        for y in 0..h {
+            for x in 0..w {
+                let (xx, yy) = (x & !1, y & !1);
+                let light = (u32::from(preview_px[yy * w + xx])
+                    + u32::from(preview_px[yy * w + xx + 1])
+                    + u32::from(preview_px[(yy + 1) * w + xx])
+                    + u32::from(preview_px[(yy + 1) * w + xx + 1])) as f32
+                    / 4.0;
+                let q = (light / 4095.0).sqrt().clamp(0.0, 1.0) * 255.0;
+                rgb.extend([q as u8; 3]);
+            }
+        }
+        let mut jpeg = Vec::new();
+        jpeg_encoder::Encoder::new(&mut jpeg, 100).encode(&rgb, w as u16, h as u16, jpeg_encoder::ColorType::Rgb).unwrap();
+        // A documented TIFF JPEG pointer is enough; append an extra IFD in the existing chain.
+        let tiff = Tiff::parse(&bytes).unwrap();
+        let ifd0 = &tiff.ifds[0];
+        let next_pointer = ifd0.offset as usize + 2 + ifd0.entries.len() * 12;
+        let preview_offset = bytes.len() as u32;
+        // Little-endian IFD with two inline LONG entries and no next IFD.
+        bytes.extend(2u16.to_le_bytes());
+        for (tag, value) in [(t::JPEG_INTERCHANGE_FORMAT, preview_offset + 30), (t::JPEG_INTERCHANGE_FORMAT_LENGTH, jpeg.len() as u32)] {
+            bytes.extend(tag.to_le_bytes());
+            bytes.extend(4u16.to_le_bytes());
+            bytes.extend(1u32.to_le_bytes());
+            bytes.extend(value.to_le_bytes());
+        }
+        bytes.extend(0u32.to_le_bytes());
+        bytes[next_pointer..next_pointer + 4].copy_from_slice(&preview_offset.to_le_bytes());
+        bytes.extend(jpeg);
+        bytes
+    }
+
+    fn coolpix_file_version(model: &str, pattern: [u8; 4], w: usize, h: usize, strip_px: &[u16], version: &[u8]) -> Vec<u8> {
+        let mut packed = Vec::new();
+        for pair in strip_px.chunks(2) {
+            let v = (pair[0] as u32) << 12 | pair.get(1).copied().unwrap_or(0) as u32;
+            packed.extend_from_slice(&[(v >> 16) as u8, (v >> 8) as u8, v as u8]);
+        }
+        let mut raw = IfdBuilder::new();
+        raw.set(t::NEW_SUBFILE_TYPE, Value::Long(vec![0]));
+        raw.set(t::IMAGE_WIDTH, Value::Long(vec![w as u32]));
+        raw.set(t::IMAGE_LENGTH, Value::Long(vec![h as u32]));
+        raw.set(t::BITS_PER_SAMPLE, Value::Short(vec![12]));
+        raw.set(t::COMPRESSION, Value::Short(vec![1]));
+        raw.set(t::PHOTOMETRIC, Value::Short(vec![photometric::CFA]));
+        raw.set(t::CFA_REPEAT_PATTERN_DIM, Value::Short(vec![2, 2]));
+        raw.set(t::CFA_PATTERN_EP, Value::Byte(pattern.to_vec()));
+        raw.set(t::ORIENTATION, Value::Short(vec![1]));
+        raw.set_image(ImageData::Strips { rows_per_strip: h as u32, strips: vec![packed] });
+        let mut ifd0 = IfdBuilder::new();
+        ifd0.set(t::MAKE, Value::Ascii("NIKON".into()));
+        ifd0.set(t::MODEL, Value::Ascii(model.into()));
+        let mut note = IfdBuilder::new();
+        note.set(0x0001, Value::Undefined(version.to_vec()));
+        let mut maker = b"Nikon\0\x02\0\0\0".to_vec();
+        maker.extend(TiffWriter::new(ByteOrder::Little, false).write(&[note]).unwrap());
+        let mut exif = IfdBuilder::new();
+        exif.set(t::MAKER_NOTE, Value::Undefined(maker));
+        ifd0.set_child(t::EXIF_IFD, exif);
+        ifd0.add_sub_ifd(raw);
+        TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap()
+    }
+
+    /// The strip of a sensor image `img` with its even lines in the first (`first_even`) or the second field.
+    fn two_fields(img: &[u16], w: usize, h: usize, first_even: bool) -> Vec<u16> {
+        let lines = |start: usize| (start..h).step_by(2).flat_map(|y| img[y * w..(y + 1) * w].to_vec()).collect::<Vec<u16>>();
+        let (even, odd) = (lines(0), lines(1));
+        if first_even { [even, odd].concat() } else { [odd, even].concat() }
+    }
+
+    /// A smooth scene with a little per-colour texture, sized like nothing in particular.
+    fn smooth_scene(w: usize, h: usize) -> Vec<u16> {
+        (0..w * h)
+            .map(|i| {
+                let (x, y) = ((i % w) as f64 / w as f64, (i / w) as f64 / h as f64);
+                (1800.0
+                    + 600.0 * (y * 6.0 * std::f64::consts::PI).sin()
+                    + 300.0 * (x * 4.0 * std::f64::consts::PI).cos() * (y * 4.0 * std::f64::consts::PI).sin()
+                    + 1800.0 * y
+                    + (i % 2) as f64 * 40.0) as u16
+            })
+            .collect()
+    }
+
+    #[test]
+    fn stacked_fields_are_interleaved_for_every_body_that_writes_them() {
+        let (w, h) = (96usize, 80usize);
+        let img = smooth_scene(w, h);
+        // E8400, E8800 and E5400 store the even lines first (and so does any model the table does not know)
+        for model in ["E8400", "E8800", "E5400", "E99999"] {
+            let stored = two_fields(&img, w, h, true);
+            assert!(coolpix::fields_stacked(&stored, w, h, &[2, 1, 1, 0], true), "scene detector");
+            let bytes = coolpix_file_with_preview(model, [2, 1, 1, 0], w, h, &stored, &img);
+            assert!(coolpix::preview_confirms_fields(&bytes, &stored, w, h, true), "preview evidence");
+            let r = crate::decode(&bytes).unwrap();
+            assert_eq!((r.width, r.height, r.cpp), (w, h, 1), "{model}");
+            assert_eq!(r.data, RawData::U16(img.clone()), "{model}");
+            assert_eq!(r.cfa.as_ref().unwrap().name(), "BGGR", "{model}");
+        }
+    }
+
+    #[test]
+    fn a_normal_frame_is_left_alone() {
+        let (w, h) = (96usize, 80usize);
+        let img = smooth_scene(w, h);
+        let r = crate::decode(&coolpix_file("E8800", [2, 1, 1, 0], w, h, &img)).unwrap();
+        assert_eq!(r.data, RawData::U16(img));
+        // tiny frames are never stacked
+        let (w, h) = (16usize, 8usize);
+        let px: Vec<u16> = (0..w * h).map(|i| (i * 131 % 4096) as u16).collect();
+        let r = crate::decode(&coolpix_file("E8400", [2, 1, 1, 0], w, h, &px)).unwrap();
+        assert_eq!(r.data, RawData::U16(px));
+    }
+
+    #[test]
+    fn stacked_field_header_and_full_decode_have_the_same_geometry() {
+        let (w, h) = (160usize, 256usize);
+        let mut img = smooth_scene(w, h);
+        for row in img.chunks_mut(w) {
+            row[w - 8..].fill(0);
+        }
+        for (model, pattern, first_even) in [("E8400", [2, 1, 1, 0], true), ("E5700", coolpix::CYGM_PATTERN, false)] {
+            let bytes = coolpix_file_with_preview(model, pattern, w, h, &two_fields(&img, w, h, first_even), &img);
+            let header = decode(&bytes, Mode::Header).unwrap();
+            let full = decode(&bytes, Mode::Full).unwrap();
+            assert_eq!(header.info(), full.info(), "{model}");
+            assert!(matches!(header.data, RawData::U16(ref d) if d.is_empty()));
+        }
+    }
+
+    #[test]
+    fn a_neutral_horizon_in_a_normal_frame_is_not_interleaved() {
+        let (w, h) = (160usize, 256usize);
+        let image: Vec<u16> = (0..w * h).map(|i| (1000 + 2 * (i % w) + 2 * (i / w) + if i / w >= h / 2 { 2000 } else { 0 }) as u16).collect();
+        let bytes = coolpix_file("E8800", [2, 1, 1, 0], w, h, &image);
+        assert_eq!(crate::decode(&bytes).unwrap().data, RawData::U16(image));
+    }
+
+    #[test]
+    fn coolpix_e5700_keeps_geometry_during_cygm_conversion() {
+        let (w, h) = (128usize, 96usize);
+        // ideal complementary filters over a neutral grey ramp: Y = C = M = 2 g, G = g in a cell Y C / G M
+        let scene = smooth_scene(w, h);
+        let img: Vec<u16> =
+            (0..w * h).map(|i| scene[((i / w) & !1) * w + ((i % w) & !1)] / 2 * if (i / w) % 2 == 1 && i % 2 == 0 { 1 } else { 2 }).collect();
+        // the E5700 stores the odd lines first
+        let r = crate::decode(&coolpix_file_with_preview("E5700", [5, 3, 1, 4], w, h, &two_fields(&img, w, h, false), &img)).unwrap();
+        assert_eq!((r.width, r.height, r.cpp), (w, h, 3));
+        assert!(r.cfa.is_none());
+        let (expected, _) = coolpix::cygm_to_rgb(&img, w, h, coolpix::CYGM_PATTERN).unwrap();
+        assert!(r.data == RawData::U16(expected), "full decode retains the intended sensor geometry");
+    }
+
+    #[test]
+    fn coolpix_short_input_is_an_error_not_a_panic() {
+        let (w, h) = (128usize, 96usize);
+        let mut file = coolpix_file("E5700", [5, 3, 1, 4], w, h, &vec![100u16; w * h]);
+        file.truncate(file.len() / 2);
+        let _ = crate::decode(&file);
+        file.truncate(200);
+        assert!(crate::decode(&file).is_err());
+    }
+
     #[test]
     fn compressed_without_table_is_unsupported() {
         let bytes = nef(34713, 14, vec![vec![0; 64]], 8, 8, 8);
@@ -818,5 +1039,59 @@ mod tests {
         // a strip too short to hold the markers is still the missing-table case, not a panic
         let short = nef(34713, 14, vec![vec![0xff, 0x10]], 1, 1, 1);
         assert!(matches!(crate::decode(&short), Err(RawError::Unsupported(w)) if w.contains("linearization table")));
+    }
+    #[test]
+    fn mild_neutral_horizon_outside_legacy_dialect_is_not_interleaved() {
+        let (w, h) = (160usize, 256usize);
+        let image: Vec<u16> = (0..w * h).map(|i| (1000 + 2 * (i % w) + i / w + if i / w >= h / 2 { 100 } else { 0 }) as u16).collect();
+        // The scene heuristic alone cannot distinguish this ordinary raster from stacked fields.
+        assert!(coolpix::fields_stacked(&image, w, h, &[2, 1, 1, 0], true));
+        for version in [b"0211".as_slice(), b"unknown".as_slice()] {
+            let bytes = coolpix_file_version("E8800", [2, 1, 1, 0], w, h, &image, version);
+            assert_eq!(crate::decode(&bytes).unwrap().data, RawData::U16(image.clone()));
+        }
+    }
+    #[test]
+    fn same_legacy_dialect_horizons_need_independent_geometry_evidence() {
+        let (w, h) = (160usize, 256usize);
+        for jump in [100, 2000] {
+            let image: Vec<u16> = (0..w * h).map(|i| (1000 + 2 * (i % w) + i / w + if i / w >= h / 2 { jump } else { 0 }) as u16).collect();
+            for bytes in [coolpix_file("E8800", [2, 1, 1, 0], w, h, &image), coolpix_file_with_preview("E8800", [2, 1, 1, 0], w, h, &image, &image)] {
+                assert_eq!(crate::decode(&bytes).unwrap().data, RawData::U16(image.clone()));
+            }
+        }
+    }
+
+    #[test]
+    fn stacked_rows_without_a_preview_remain_untouched() {
+        let (w, h) = (160usize, 256usize);
+        let stored = two_fields(&smooth_scene(w, h), w, h, true);
+        let bytes = coolpix_file("E8400", [2, 1, 1, 0], w, h, &stored);
+        assert_eq!(crate::decode(&bytes).unwrap().data, RawData::U16(stored));
+    }
+    #[test]
+    fn uncertain_preview_or_orientation_leaves_stored_rows_intact() {
+        let (w, h) = (160usize, 256usize);
+        let image = smooth_scene(w, h);
+        let stored = two_fields(&image, w, h, true);
+        let bytes = coolpix_file_with_preview("E8400", [2, 1, 1, 0], w, h, &stored, &image);
+        let tiff = Tiff::parse(&bytes).unwrap();
+        let orientation = raw_ifd(&tiff).unwrap().get(t::ORIENTATION).unwrap().offset as usize;
+        for code in [2u16, 3, 6, 8] {
+            let mut rotated = bytes.clone();
+            rotated[orientation..orientation + 2].copy_from_slice(&code.to_le_bytes());
+            assert!(crate::decode(&rotated).unwrap().data == RawData::U16(stored.clone()));
+        }
+        let jpeg = tiff.all_ifds().iter().find_map(|i| i.u64(t::JPEG_INTERCHANGE_FORMAT)).unwrap() as usize;
+        let mut invalid = bytes.clone();
+        invalid[jpeg] = 0;
+        assert!(crate::decode(&invalid).unwrap().data == RawData::U16(stored.clone()));
+        let mut huge = bytes;
+        let sof = huge[jpeg..].windows(2).position(|b| b == [0xff, 0xc0]).unwrap() + jpeg;
+        huge[sof + 5..sof + 9].copy_from_slice(&[0xea, 0x60, 0xea, 0x60]);
+        assert!(crate::decode(&huge).unwrap().data == RawData::U16(stored.clone()));
+        let shifted: Vec<u16> = (0..w * h).map(|i| image[((i / w + h / 4) % h) * w + (i % w + w / 4) % w]).collect();
+        let mismatch = coolpix_file_with_preview("E8400", [2, 1, 1, 0], w, h, &stored, &shifted);
+        assert!(crate::decode(&mismatch).unwrap().data == RawData::U16(stored));
     }
 }
