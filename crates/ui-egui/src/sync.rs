@@ -18,10 +18,30 @@ use crate::theme::Tokens;
 /// A running scan of the dialog's folder.
 pub struct SyncTask {
     path: String,
+    /// What the dialog calls the folder (its row's detail).
+    name: String,
     progress: Arc<SyncProgress>,
     rx: std::sync::mpsc::Receiver<FolderChanges>,
     /// Its row in the activity stack; ✕ cancels the scan and closes the dialog.
     guard: TaskGuard,
+}
+
+/// What a scan's row shows: (done, of how many, detail). While the folder is listed, which comes
+/// first and on a network share can take minutes, a bar that moves on its own and how many
+/// folders and files were listed (a count stuck at "0 of 64085" looks like a scan that stopped);
+/// then the files and photos checked.
+pub(crate) fn scan_row(progress: &SyncProgress, name: &str) -> (u64, u64, String) {
+    match progress.listing() {
+        Some((folders, files)) => (0, 0, format!("{} · {name}", listing_text(folders, files))),
+        None => {
+            let (done, total) = progress.counts();
+            (done as u64, total as u64, name.to_string())
+        }
+    }
+}
+
+fn listing_text(folders: usize, files: usize) -> String {
+    crate::i18n::tr_format!("Listing folders: {folders} folders, {files} files", folders = folders, files = files)
 }
 
 /// Open the dialog for folder `path` (called `name` in it) and start scanning.
@@ -40,7 +60,7 @@ pub fn open(app: &mut LightcraftApp, path: &str, name: &str, disk: bool) -> Resu
     job();
     let guard = app.session.activity.start("sync", "Looking for changes", Cancel::Flag(progress.files.cancel.clone()));
     guard.detail(name);
-    app.sync = Some(SyncTask { path: path.to_string(), progress, rx, guard });
+    app.sync = Some(SyncTask { path: path.to_string(), name: name.to_string(), progress, rx, guard });
     let d = SyncChoice::default();
     app.ui.dialog = Some(Dialog::SynchronizeFolder {
         path: path.to_string(),
@@ -90,8 +110,9 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
         app.ui.dialog = None;
         return;
     }
-    let (done, total) = task.progress.counts();
-    task.guard.progress(done as u64, total as u64);
+    let (done, total, detail) = scan_row(&task.progress, &task.name);
+    task.guard.progress(done, total);
+    task.guard.detail(&detail);
     ctx.request_repaint_after(std::time::Duration::from_millis(100));
     let changes = match task.rx.try_recv() {
         Ok(c) => c,
@@ -120,9 +141,21 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
     }
 }
 
-/// How far the scan is (files probed, of how many).
-fn progress(app: &LightcraftApp) -> Option<(usize, usize)> {
-    app.sync.as_ref().map(|t| t.progress.counts())
+/// How far the scan is: the folders and files listed while it lists the folder, else the files
+/// and photos checked (done, of how many).
+enum ScanStage {
+    Listing(usize, usize),
+    Checking(usize, usize),
+}
+
+fn progress(app: &LightcraftApp) -> Option<ScanStage> {
+    app.sync.as_ref().map(|t| match t.progress.listing() {
+        Some((folders, files)) => ScanStage::Listing(folders, files),
+        None => {
+            let (done, total) = t.progress.counts();
+            ScanStage::Checking(done, total)
+        }
+    })
 }
 
 /// The dialog's body.
@@ -138,7 +171,8 @@ pub fn body(app: &LightcraftApp, ui: &mut egui::Ui, dlg: &mut Dialog) {
         ui.horizontal(|ui| {
             ui.spinner();
             match progress(app) {
-                Some((done, total)) if total > 0 => ui.label(format!("{} {done} / {total}", crate::i18n::tr("Scanning…"))),
+                Some(ScanStage::Listing(folders, files)) => ui.label(listing_text(folders, files)),
+                Some(ScanStage::Checking(done, total)) if total > 0 => ui.label(format!("{} {done} / {total}", crate::i18n::tr("Scanning…"))),
                 _ => ui.label(crate::i18n::tr("Scanning…")),
             }
         });

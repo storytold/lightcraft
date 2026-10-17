@@ -13,6 +13,9 @@
 //! * Synchronize hands the work to the background at once: the dialog closes, the app keeps
 //!   answering, and the photos arrive over the next frames under a row in the activity stack, as one undo
 //!   step.
+//! * While the folder is listed (minutes, on a network share), the scan's row says how many
+//!   folders and files it has listed, with a bar that moves on its own, not "0 of 64085"; then it
+//!   counts the files and photos checked.
 
 use std::time::Duration;
 
@@ -342,4 +345,20 @@ fn a_local_folder_with_library_photos_offers_synchronize() {
     h.step();
     assert!(matches!(h.app.ui.dialog, Some(Dialog::SynchronizeFolder { .. })), "the dialog opens at once");
     assert!(h.step_until(T, |h| matches!(&h.app.ui.dialog, Some(Dialog::SynchronizeFolder { counts: Some(_), .. }))));
+}
+
+#[test]
+fn while_the_folder_is_listed_its_row_says_what_was_listed_and_its_bar_moves_on_its_own() {
+    use std::sync::atomic::Ordering::Relaxed;
+    let p = lightcraft_engine::sync::SyncProgress::default();
+    p.to_check.store(64085, Relaxed);
+    p.folders_listed.store(312, Relaxed);
+    p.files_listed.store(18402, Relaxed);
+    let (done, total, detail) = crate::sync::scan_row(&p, "photos/Various");
+    assert_eq!((done, total), (0, 0), "a bar that moves on its own, not 0 of 64085");
+    assert_eq!(detail, "Listing folders: 312 folders, 18402 files · photos/Various");
+    // the listing is over: the files and photos checked, of how many
+    p.listed.store(true, Relaxed);
+    p.checked.store(10, Relaxed);
+    assert_eq!(crate::sync::scan_row(&p, "photos/Various"), (10, 64085, "photos/Various".to_string()));
 }
