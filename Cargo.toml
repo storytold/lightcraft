@@ -102,6 +102,8 @@ objc2-foundation = { version = "0.3", default-features = false, features = ["std
 # Appearance Mode ▸ Auto). Pure Rust; the version accesskit already brings in, pinned to it.
 zbus = "=5.19.0"
 web-time = "1"
+# MIDI controller input (Windows: WinMM, macOS: CoreMIDI; no C code compiled). Not built on Linux: its ALSA backend is C.
+midir = "0.10"
 
 # web (apps/lightcraft-web)
 wasm-bindgen = "0.2.129"

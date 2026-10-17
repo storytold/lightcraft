@@ -61,6 +61,8 @@ pub fn language_from_command(id: &str) -> Option<crate::i18n::Locale> {
 pub const UI_COMMANDS: &[UiCommand] = &[
     ("ui.dock", "Arrange Panel", None, ""),
     ("ui.dock.reset", "Reset Panel Layout", None, "Window"),
+    // re-reads midi.toml, so a controller map can be edited without restarting
+    ("midi.reload", "Reload MIDI Map", None, ""),
     ("modelSetup.cancel", "Cancel Pending Photo Action", None, ""),
     ("view.photoGrid", "Photo Grid", None, "View"),
     ("view.squareGrid", "Square Grid", None, "View"),
@@ -416,6 +418,23 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         // the app's own context: a fresh one's repaints reach no window and its clock starts at zero
         let ctx = app.tasks.repaint.clone().unwrap_or_default();
         return Some(crate::lightroom_import::command(app, id, p, &ctx));
+    }
+    if id == "midi.reload" {
+        let ctx = app.tasks.repaint.clone().unwrap_or_default();
+        let result = match app.midi_reload.as_mut() {
+            Some(reload) => reload(),
+            None => Err("MIDI input is not available in this build".to_string()),
+        };
+        return Some(match result {
+            Ok(said) => {
+                app.toast(&ctx, said.clone());
+                Ok(json!(said))
+            }
+            Err(e) => {
+                app.toast_error(&ctx, e.clone());
+                Err(e)
+            }
+        });
     }
     if let Some(language) = language_from_command(id) {
         app.ui.language = language;

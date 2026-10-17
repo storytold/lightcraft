@@ -1,0 +1,51 @@
+# MIDI map for the M-VAVE SMC-Mixer in DAW mode (hold SHIFT and press « on the device).
+#
+# To use it, copy this file to `midi.toml` in LightCraft's config folder (or point LIGHTCRAFT_MIDI_MAP
+# at it) and restart LightCraft, or run the `midi.reload` command. The format is explained in
+# docs/midi.md; in short, each binding has a source (`on`, `channel`, `number`) and one target:
+#   set:   put a develop control at the controller's position (absolute faders and knobs)
+#   nudge: move a develop control by `step` per tick (relative knobs; `encoding` says how the
+#          knob writes direction: "sign_magnitude" (default), "twos_complement" or "offset")
+#   run:   run a command when a button is pressed
+# The first binding that matches a message wins.
+
+# The mixer shows up as two input ports. Everything arrives on the first, and listening to both
+# can run a command twice. Leave `inputs` out to listen to every port.
+inputs = ["SMC-Mixer"]
+
+bindings = [
+  # Faders 1-8: pitch bend on channel 1-8
+  { on = "pitch_bend", channel = 1, set = "light.exposure" },
+  { on = "pitch_bend", channel = 2, set = "light.contrast" },
+  { on = "pitch_bend", channel = 3, set = "light.highlights" },
+  { on = "pitch_bend", channel = 4, set = "light.shadows" },
+  { on = "pitch_bend", channel = 5, set = "light.whites" },
+  { on = "pitch_bend", channel = 6, set = "light.blacks" },
+  { on = "pitch_bend", channel = 7, set = "effects.texture" },
+  { on = "pitch_bend", channel = 8, set = "effects.clarity" },
+
+  # Knobs 1-8: relative CC 16-23
+  { on = "control_change", number = 16, nudge = "wb.temp", step = 50 },
+  { on = "control_change", number = 17, nudge = "wb.tint" },
+  { on = "control_change", number = 18, nudge = "color.vibrance" },
+  { on = "control_change", number = 19, nudge = "color.saturation" },
+  { on = "control_change", number = 20, nudge = "effects.dehaze" },
+  { on = "control_change", number = 21, nudge = "detail.sharpenAmount" },
+  { on = "control_change", number = 22, nudge = "detail.nrLuminance" },
+  { on = "control_change", number = 23, nudge = "detail.nrColor" },
+
+  # « and » rotate the photo; the arrow buttons step through the photos
+  { on = "note", number = 46, run = "photo.rotateLeft" },
+  { on = "note", number = 47, run = "photo.rotateRight" },
+  { on = "note", number = 96, run = "library.previous" },  # Up
+  { on = "note", number = 97, run = "library.next" },      # Down
+  { on = "note", number = 98, run = "library.previous" },  # Left
+  { on = "note", number = 99, run = "library.next" },      # Right
+
+  # Play applies Auto Settings, Pause toggles Black & White
+  { on = "note", number = 94, run = "develop.auto" },
+  { on = "note", number = 93, run = "develop.treatment" },
+
+  # Record deletes the photo: it moves to Recently Deleted, so Undo and Restore bring it back
+  { on = "note", number = 95, run = "photo.delete" },
+]

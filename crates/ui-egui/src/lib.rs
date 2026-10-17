@@ -128,6 +128,8 @@ mod tests_masking_layout;
 #[cfg(test)]
 mod tests_menubar;
 #[cfg(test)]
+mod tests_midi;
+#[cfg(test)]
 mod tests_offline;
 #[cfg(test)]
 mod tests_open_lightroom;
@@ -182,6 +184,9 @@ mod tests_zoom_keys;
 
 use std::sync::mpsc::{Receiver, Sender};
 
+/// Seconds without a MIDI event after which a knob turn ends (and becomes one undo step).
+const MIDI_IDLE: f64 = 0.4;
+
 use lightcraft_engine::{AiModel, ErrorKind, Session};
 use serde_json::Value;
 
@@ -216,6 +221,8 @@ pub type OpenModelFolderFn = std::sync::Arc<dyn Fn(&str) -> Result<(), String> +
 /// The ICC profile of the screen showing the window, as the system colour-manages it (`None`:
 /// not known).
 pub type ScreenProfileFn = Box<dyn FnMut() -> Option<Vec<u8>>>;
+/// Re-reads the MIDI map and says what happened (`midi.reload`; see `docs/midi.md`).
+pub type MidiReload = Box<dyn FnMut() -> Result<String, String>>;
 /// Whether an external editor can be started (its name as in [`Services::open_with`]); the
 /// error says why not and what to do (e.g. PhotoCraft isn't installed).
 pub type CheckEditorFn = Box<dyn Fn(&str) -> Result<(), String>>;
@@ -368,6 +375,11 @@ pub struct LightcraftApp {
     /// Quit Anyway was chosen: the window may close with unsaved changes.
     pub quit_confirmed: bool,
     control_rx: Option<Receiver<ControlRequest>>,
+    midi_rx: Option<Receiver<lightcraft_engine::midi::Action>>,
+    /// Re-reads the MIDI map file (`midi.reload`); the host app provides it with the MIDI input.
+    pub(crate) midi_reload: Option<MidiReload>,
+    /// The control a MIDI knob is turning (one undo step) and the UI time of its last event.
+    midi_active: Option<(String, f64)>,
     pending_screenshots: Vec<PendingShot>,
     screenshot_token: u64,
     /// Offscreen context for headless screenshots of the windowed app.
@@ -501,6 +513,9 @@ impl LightcraftApp {
             quit_prompt: None,
             quit_confirmed: false,
             control_rx: None,
+            midi_rx: None,
+            midi_reload: None,
+            midi_active: None,
             pending_screenshots: vec![],
             screenshot_token: 0,
             shadow: None,
@@ -565,6 +580,13 @@ impl LightcraftApp {
         if !bytes.is_empty() {
             self.chinese_font = Some(std::sync::Arc::new(egui::FontData::from_owned(bytes)));
         }
+        self
+    }
+
+    /// Drive develop controls from a MIDI controller; see `docs/midi.md`.
+    pub fn with_midi(mut self, rx: Receiver<lightcraft_engine::midi::Action>, reload: MidiReload) -> Self {
+        self.midi_rx = Some(rx);
+        self.midi_reload = Some(reload);
         self
     }
 
@@ -887,6 +909,77 @@ impl LightcraftApp {
         self.ui.toast = Some((text.into(), t + 6.0, None));
     }
 
+    /// Apply queued MIDI actions. A turn of one knob or fader is one undo step: the interaction opens
+    /// on its first event and closes after [`MIDI_IDLE`] seconds without one (they have no release).
+    fn drain_midi(&mut self, ctx: &egui::Context) {
+        use lightcraft_engine::midi::Action;
+
+        let now = ctx.input(|i| i.time);
+        if let Some(rx) = self.midi_rx.take() {
+            // within a frame only the latest fader position and the sum of the knob ticks matter
+            let mut actions: Vec<Action> = vec![];
+            while let Ok(action) = rx.try_recv() {
+                match (action, actions.last_mut()) {
+                    (Action::Set { control, value }, Some(Action::Set { control: c, value: v })) if *c == control => *v = value,
+                    (Action::Nudge { control, delta }, Some(Action::Nudge { control: c, delta: d })) if *c == control => *d += delta,
+                    (action, _) => actions.push(action),
+                }
+            }
+            self.midi_rx = Some(rx);
+            for action in actions {
+                match action {
+                    Action::Command(id) => {
+                        self.end_midi_interaction();
+                        let _ = self.run(&id, serde_json::json!({}));
+                    }
+                    Action::Set { control, value } => {
+                        let params = serde_json::json!({ "control": control, "value": value });
+                        self.midi_edit(now, control, "develop.set", params);
+                    }
+                    Action::Nudge { control, delta } => {
+                        let params = serde_json::json!({ "control": control, "delta": delta });
+                        self.midi_edit(now, control, "develop.adjust", params);
+                    }
+                }
+            }
+        }
+        if let Some((_, last)) = self.midi_active {
+            if now - last >= MIDI_IDLE {
+                self.end_midi_interaction();
+            } else {
+                ctx.request_repaint_after(std::time::Duration::from_secs_f64(MIDI_IDLE - (now - last)));
+            }
+        }
+    }
+
+    /// Close the open MIDI interaction, if any.
+    fn end_midi_interaction(&mut self) {
+        if self.midi_active.take().is_some() {
+            let _ = self.run("develop.endInteraction", serde_json::json!({}));
+        }
+    }
+
+    /// One edit of `control` from a MIDI controller, inside that control's interaction (one undo step).
+    /// Nothing happens without an active photo.
+    fn midi_edit(&mut self, now: f64, control: String, command: &str, params: Value) {
+        if self.session.active().is_none() {
+            return;
+        }
+        if self.midi_active.as_ref().is_some_and(|(c, _)| *c != control) {
+            self.end_midi_interaction();
+        }
+        if self.midi_active.is_none() {
+            let label = lightcraft_develop::controls::find(&control).map_or("Edit", |c| c.label);
+            if self.run("develop.beginInteraction", serde_json::json!({ "label": label })).is_err() {
+                return;
+            }
+            self.midi_active = Some((control.clone(), now));
+        }
+        if self.run(command, params).is_ok() {
+            self.midi_active = Some((control, now));
+        }
+    }
+
     fn drain_control(&mut self, ctx: &egui::Context) {
         let Some(rx) = self.control_rx.take() else { return };
         while let Ok(req) = rx.try_recv() {
@@ -1100,6 +1193,7 @@ impl LightcraftApp {
             }
             self.last_time = now;
             self.drain_control(ctx);
+            self.drain_midi(ctx);
         }
         self.apply_settings(ctx);
         if !self.synthetic.is_empty() {

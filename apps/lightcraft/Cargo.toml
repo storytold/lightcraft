@@ -40,6 +40,9 @@ winit = { version = "0.30", default-features = false, features = ["x11"] }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rfd = { workspace = true }
 
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+midir = { workspace = true }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = { workspace = true }
 
