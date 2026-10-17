@@ -1182,6 +1182,21 @@ pub(crate) mod tests {
         let (t, tint) = a99m2.as_shot(d65);
         assert!((5000.0..6000.0).contains(&t) && tint.abs() < 10.0 && t.fract() == 0.0, "{t} {tint}");
         assert!(!lightcraft_catalog::relative_wb_camera("ARW", "SONY ILCA-99M2"));
+        // a Canon body without matrices, through the presets its ColorData lists (PowerShot G1 X Mark III, a
+        // Daylight shot with the camera's white balance shifted towards blue: below Daylight's 5651 K)
+        let canon = lightcraft_raw::kelvin_presets::KelvinPresets::from_unordered([
+            (5651.0, g(1418.0, 1357.0)),
+            (7505.0, g(1653.0, 1171.0)),
+            (6594.0, g(1533.0, 1259.0)),
+            (3174.0, g(963.0, 2016.0)),
+            (8529.0, g(1807.0, 1080.0)),
+        ]);
+        let with_canon = ColorData { kelvin_presets: canon, ..Default::default() };
+        let g1x3 = WbScaleOf::new(RawFormat::Cr2, &with_canon, Some(g(1264.0, 1537.0)), &meta("Canon", "Canon PowerShot G1 X Mark III"));
+        assert!(!g1x3.relative && g1x3.scale_white.is_some());
+        let (t, tint) = g1x3.as_shot(d65);
+        assert!((4300.0..5200.0).contains(&t) && tint.abs() < 10.0, "{t} {tint}");
+        assert!(!lightcraft_catalog::relative_wb_camera("CR2", "Canon Canon PowerShot G1 X Mark III"));
         let bare = WbScaleOf::new(RawFormat::Arw, &ColorData::default(), mul, &meta("SONY", "ILCA-99M2"));
         assert!(bare.legacy_relative && bare.scale_white.is_none());
         // presets in a file of a camera not listed: relative, as the catalog decides from the camera alone
