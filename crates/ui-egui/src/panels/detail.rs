@@ -1580,8 +1580,10 @@ fn crop_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
         let _ = app.run("tool.done", json!({}));
         return;
     }
+    // egui reports a drag only once the pointer has moved a few px: the zone is where the button
+    // went down, where the cursor showed it, not where the pointer is by then
     if resp.drag_started()
-        && let Some(q) = resp.interact_pointer_pos()
+        && let Some(q) = ui.input(|i| i.pointer.press_origin()).or_else(|| resp.interact_pointer_pos())
     {
         if let Err(e) = app.run("develop.beginInteraction", json!({"label": "Crop"})).and_then(|_| app.begin_crop().map(|_| serde_json::Value::Null))
         {
