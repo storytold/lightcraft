@@ -99,6 +99,11 @@ pub fn import_params(s: &Session, p: &Value) -> Result<ImportRequest> {
         convert_dng: bool_or(p, "dng", false),
         local: bool_or(p, "local", false),
     };
+    if matches!(mode, crate::import::ImportMode::Copy | crate::import::ImportMode::Move) {
+        if let Some(dest) = str_param(p, "destination").filter(|d| !d.trim().is_empty()) {
+            crate::file_access::check_write(dest).map_err(crate::EngineError::Other)?;
+        }
+    }
     let album_name = str_param(p, "albumName").map(str::trim).filter(|n| !n.is_empty()).map(str::to_string);
     Ok(ImportRequest { paths, opts, album, album_name })
 }

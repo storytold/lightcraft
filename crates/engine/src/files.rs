@@ -777,6 +777,9 @@ fn fit_box(max_edge: usize) -> lightcraft_codecs::DecodeOptions {
 /// the whole file, which is what the decode of one can hold.
 pub fn fs_preview_loader() -> PreviewLoader {
     Arc::new(|path: &str, max_edge: usize| {
+        if crate::file_access::check_read(path).is_err() {
+            return None;
+        }
         let len = std::fs::metadata(path).map(|m| usize::try_from(m.len()).unwrap_or(usize::MAX)).unwrap_or(0);
         let gate = crate::memory::work_gate();
         let _permit = if crate::memory::is_background() { gate.acquire(len.saturating_mul(2)) } else { gate.acquire_urgent(len.saturating_mul(2)) };
@@ -1040,6 +1043,7 @@ fn quick_image_srgb(header: &[u8], window: &[u8], adobe_rgb: bool, max_edge: usi
 /// denoised picture. It holds two pictures at once, so it counts for more at the memory gate than a plain load.
 pub fn fs_pair_loader() -> PairLoader {
     Arc::new(|path: &str, max_edge: usize, spec: &DenoiseSpec| {
+        crate::file_access::check_read(path).map_err(|e| format!("{path}: {e}"))?;
         let len = std::fs::metadata(path).map(|m| m.len() as usize).unwrap_or(0);
         let weight = len * if max_edge <= crate::media::SourceLevel::Thumb.max_edge() { 4 } else { 10 };
         let gate = crate::memory::work_gate();
@@ -1060,6 +1064,7 @@ pub fn fs_pair_loader() -> PairLoader {
 /// yields to them.
 pub fn fs_hooks() -> (FileLoader, FileProbe) {
     let loader: FileLoader = Arc::new(|path: &str, max_edge: usize| {
+        crate::file_access::check_read(path).map_err(|e| format!("{path}: {e}"))?;
         let len = std::fs::metadata(path).map(|m| usize::try_from(m.len()).unwrap_or(usize::MAX)).unwrap_or(0);
         let weight = len * if max_edge <= crate::media::SourceLevel::Thumb.max_edge() { 3 } else { 6 };
         let gate = crate::memory::work_gate();
@@ -1071,6 +1076,7 @@ pub fn fs_hooks() -> (FileLoader, FileProbe) {
         r
     });
     let probe: FileProbe = Arc::new(|path: &str| {
+        crate::file_access::check_read(path).map_err(|e| format!("{path}: {e}"))?;
         let len = std::fs::metadata(path).map(|m| usize::try_from(m.len()).unwrap_or(usize::MAX)).unwrap_or(0);
         let _permit = crate::memory::work_gate().acquire(len);
         let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;

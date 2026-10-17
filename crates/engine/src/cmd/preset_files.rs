@@ -31,7 +31,7 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
             let base = std::path::Path::new(top).parent().unwrap_or(std::path::Path::new(""));
             let rel = std::path::Path::new(&f).parent().and_then(|d| d.strip_prefix(base).ok()).map(|d| d.to_string_lossy().to_string());
             let rel = rel.filter(|_| from_dir);
-            let bytes = match mef::read_capped(&f) {
+            let bytes = match crate::file_access::check_read(&f).map_err(|e| e.to_string()).and_then(|_| mef::read_capped(&f)) {
                 Ok(b) => b,
                 Err(e) => {
                     failed.push(json!([f, e]));

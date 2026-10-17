@@ -88,6 +88,7 @@ impl crate::Session {
     /// path (the usual case) is answered without building the guard over the whole library.
     pub fn check_write_target(&self, path: &str) -> Result<(), String> {
         let path = Path::new(path);
+        crate::file_access::check_write(path)?;
         if std::fs::symlink_metadata(path).is_err() {
             return Ok(()); // nothing there to replace
         }

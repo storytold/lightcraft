@@ -436,6 +436,7 @@ fn effect_files(paths: &[String]) -> Vec<(String, Option<String>, bool)> {
 
 /// Read a file of at most [`MAX_FILE`] bytes.
 pub fn read_capped(path: &str) -> std::result::Result<Vec<u8>, String> {
+    crate::file_access::check_read(path)?;
     let len = std::fs::metadata(path).map_err(|e| e.to_string())?.len();
     if len > MAX_FILE {
         return Err(format!("too large for a preset file ({} MB)", len >> 20));
@@ -489,6 +490,7 @@ pub fn export_effects(s: &mut Session, p: &Value) -> Result<Value> {
     if chosen.is_empty() {
         return Err(bad(C, "no effect presets to export"));
     }
+    crate::file_access::check_write(&path).map_err(crate::EngineError::Other)?;
     if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
         std::fs::create_dir_all(dir).map_err(|e| crate::EngineError::Other(format!("{}: {e}", dir.display())))?;
     }

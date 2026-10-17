@@ -1941,6 +1941,7 @@ pub fn write_file_durable(path: &str, bytes: &[u8]) -> Result<(), String> {
 fn write_with(path: &str, bytes: &[u8], durable: bool) -> Result<(), String> {
     use lightcraft_catalog::safe_file::{write_atomic, write_atomic_nosync};
     let p = std::path::Path::new(path);
+    crate::file_access::check_write(p)?;
     if let Some(dir) = p.parent().filter(|d| !d.as_os_str().is_empty()) {
         std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     }

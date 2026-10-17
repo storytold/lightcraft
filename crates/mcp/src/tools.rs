@@ -634,9 +634,19 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> ToolResult {
                 Some(Value::String(p)) => vec![p.clone()],
                 _ => return ToolResult::error("missing `paths`"),
             };
+            for p in &paths {
+                if let Err(e) = lightcraft_engine::file_access::check_read(p) {
+                    return ToolResult::error(e);
+                }
+            }
             let files = expand_paths(&paths);
             if files.is_empty() {
                 return ToolResult::error(format!("no photos found in {paths:?}"));
+            }
+            for f in &files {
+                if let Err(e) = lightcraft_engine::file_access::check_read(f) {
+                    return ToolResult::error(e);
+                }
             }
             let mut p = json!({"paths": files});
             for k in ["album", "mode", "destination", "organize", "rename", "onDeleted"] {
