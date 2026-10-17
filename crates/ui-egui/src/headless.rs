@@ -1831,6 +1831,44 @@ mod tests {
         h.settle(SETTLE);
     }
 
+    /// Presets column: the star on a row toggles the favourite without applying the preset, and
+    /// favourites are listed first in a Favorites group (#1999), as in the profile browser.
+    #[test]
+    fn preset_star_lists_favourites_first() {
+        let mut h = demo([1400.0, 900.0]);
+        let t = Duration::from_secs(10);
+        h.request("ui.set", json!({"view": "detail"}), t);
+        h.request("engine.execute", json!({"command": "panel.presets"}), t);
+        h.settle(SETTLE);
+        let id = h.app.session.active().unwrap();
+        let history = |h: &Headless| h.app.session.catalog.photo(id).unwrap().history.len();
+        let before = history(&h);
+        let has = |h: &Headless, w: &str| h.app.widgets.iter().any(|(k, _)| k == w);
+        assert!(!has(&h, "presetGroup:fav"), "no Favorites group without a favourite");
+        let r = h.request("ui.clickWidget", json!({"id": "presetStar:lc.warm-glow"}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        let fav = |h: &Headless| h.app.session.presets.iter().find(|p| p.id == "lc.warm-glow").map(|p| p.favorite);
+        assert_eq!(fav(&h), Some(true));
+        assert_eq!(history(&h), before, "the star doesn't apply the preset");
+        h.step();
+        h.step();
+        assert!(has(&h, "presetGroup:fav") && has(&h, "preset:fav:lc.warm-glow") && has(&h, "preset:lc.warm-glow"), "listed first and in its group");
+        let y = |h: &Headless, w: &str| h.app.widgets.iter().find(|(k, _)| k == w).map(|(_, r)| r.top());
+        assert!(y(&h, "presetGroup:fav") < y(&h, "presetGroup:Color"), "Favorites first");
+        // a click on the favourite applies it
+        let r = h.request("ui.clickWidget", json!({"id": "preset:fav:lc.warm-glow"}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        assert_eq!(history(&h), before + 1);
+        // its star there takes it out of the group, and the empty group goes
+        let r = h.request("ui.clickWidget", json!({"id": "presetStar:fav:lc.warm-glow"}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        assert_eq!(fav(&h), Some(false));
+        h.step();
+        h.step();
+        assert!(!has(&h, "presetGroup:fav") && !has(&h, "preset:fav:lc.warm-glow"));
+        h.settle(SETTLE);
+    }
+
     /// A collection of thousands of presets (a Lightroom library imported whole) lists only the
     /// rows in view: a few dozen widgets and thumbnails a frame, not one per preset (every frame
     /// built all of them and froze the app for seconds); scrolling brings later rows in.

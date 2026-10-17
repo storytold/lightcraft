@@ -1,7 +1,7 @@
-//! The Presets column (opens to the left of the Edit panel): grouped presets with hover preview
-//! (the loupe shows the photo with the preset while the pointer rests on it; nothing is
-//! committed), optional live thumbnails, amount slider, create/favourite, import/export of preset
-//! files.
+//! The Presets column (opens to the left of the Edit panel): grouped presets (Favorites first,
+//! as in the profile browser) with hover preview (the loupe shows the photo with the preset while
+//! the pointer rests on it; nothing is committed), optional live thumbnails, amount slider,
+//! create/favourite (the star on a row, or its menu), import/export of preset files.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -127,12 +127,14 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             // imported whole is 10 000+ presets, and building every row each frame took seconds.
             let visible = ui.clip_rect().expand(row_h);
             for grp in groups.iter() {
-                let (g, builtin) = (grp.name.clone(), grp.builtin);
-                let open_id = egui::Id::new(("preset-group", &g));
+                let (g, builtin, favorites) = (grp.name.clone(), grp.builtin, grp.favorites);
+                // a user group may be named "Favorites" too: the favourites group has ids of its own
+                let tag = if favorites { "fav:" } else { "" };
+                let open_id = egui::Id::new(("preset-group", favorites, &g));
                 let open: bool = ui.data(|d| d.get_temp(open_id)).unwrap_or(true);
                 let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::click());
                 crate::widgets::announce(&resp, g.to_string());
-                register(ui.ctx(), format!("presetGroup:{g}"), r);
+                register(ui.ctx(), if favorites { "presetGroup:fav".to_string() } else { format!("presetGroup:{g}") }, r);
                 paint(
                     ui.painter(),
                     Rect::from_center_size(pos2(r.left() + 22.0, r.center().y), vec2(16.0, 16.0)),
@@ -149,11 +151,14 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 if resp.clicked() {
                     ui.data_mut(|d| d.insert_temp(open_id, !open));
                 }
-                resp.context_menu(|ui| {
-                    if ui.button(crate::i18n::tr("Export Group…")).clicked() {
-                        let _ = app.run("file.exportPresets", json!({"group": g}));
-                    }
-                });
+                // the favourites are no group of their own to export
+                if !favorites {
+                    resp.context_menu(|ui| {
+                        if ui.button(crate::i18n::tr("Export Group…")).clicked() {
+                            let _ = app.run("file.exportPresets", json!({"group": g}));
+                        }
+                    });
+                }
                 if !open {
                     continue;
                 }
@@ -166,7 +171,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     let (pid, name, fav) = (pr.id.clone(), crate::i18n::builtin_label(&pr.name, pr.builtin).to_string(), pr.favorite);
                     let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), row_h), Sense::click());
                     crate::widgets::announce(&resp, name.clone());
-                    register(ui.ctx(), format!("preset:{pid}"), r);
+                    register(ui.ctx(), format!("preset:{tag}{pid}"), r);
                     let is_last = last.as_ref().is_some_and(|l| l.id == pid);
                     if is_last {
                         ui.painter().rect_filled(r, 0.0, t.tool_active);
@@ -186,8 +191,13 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                         text_x = tr.right() + 10.0;
                     }
                     ui.painter().text(pos2(text_x, r.center().y), Align2::LEFT_CENTER, &name, t.font(13.0), t.text_label);
-                    if fav {
-                        paint(ui.painter(), Rect::from_center_size(pos2(r.right() - 20.0, r.center().y), vec2(16.0, 16.0)), Icon::StarFilled, t.star);
+                    // favourite star (always shown when set, on hover otherwise); a click on it toggles
+                    let star = Rect::from_center_size(pos2(r.right() - 20.0, r.center().y), vec2(16.0, 16.0));
+                    register(ui.ctx(), format!("presetStar:{tag}{pid}"), star);
+                    let over_star = resp.hover_pos().is_some_and(|q| star.expand(3.0).contains(q));
+                    if fav || resp.hovered() {
+                        let color = if fav || over_star { t.star } else { t.text_dim };
+                        paint(ui.painter(), star, if fav { Icon::StarFilled } else { Icon::Star }, color);
                     }
                     // resting on a preset previews it in the loupe (no history entry)
                     if resp.hovered()
@@ -199,7 +209,10 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                             ui.data_mut(|d| d.insert_temp(egui::Id::new("last-preset-hover"), (id, pr.clone(), label)));
                         }
                     }
-                    if resp.clicked() && app.run("preset.apply", json!({"id": pid, "amount": 100})).is_ok() {
+                    let on_star = resp.clicked() && resp.interact_pointer_pos().is_some_and(|q| star.expand(3.0).contains(q));
+                    if on_star {
+                        let _ = app.run("preset.favorite", json!({"id": pid}));
+                    } else if resp.clicked() && app.run("preset.apply", json!({"id": pid, "amount": 100})).is_ok() {
                         ui.data_mut(|d| d.insert_temp(amt_id, AppliedPreset::new(&app.session, pid.clone(), 100.0)));
                         ui.data_mut(|d| d.remove::<(lightcraft_catalog::PhotoId, Preset, String)>(egui::Id::new("last-preset-hover")));
                         app.toast(ui.ctx(), crate::i18n::tr_format!("Preset: {name}", name = name));
@@ -274,17 +287,21 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 
 /// A preset group as the panel lists it: indices into the session's presets.
 struct Group {
+    /// Its name ("Favorites" for the favourites group).
     name: String,
     /// Holds a stock preset: a stock group (shown in the UI language), even when user presets
     /// share its name; a group of user presets keeps its name.
     builtin: bool,
     /// Holds a user preset (a Move to Group target).
     user: bool,
+    /// The favourite presets of every group, listed first; shown only while there is one.
+    favorites: bool,
     items: Vec<usize>,
 }
 
-/// The presets by group (groups sorted by name, presets in list order), rebuilt only when the
-/// list changed (its generation).
+/// The presets by group (groups sorted by name, presets in list order) after a Favorites group of
+/// the favourite presets (in that same order), rebuilt only when the list changed (its generation;
+/// starring a preset changes it too).
 fn grouped(ctx: &egui::Context, presets: &PresetList) -> Arc<Vec<Group>> {
     let id = egui::Id::new("presets-grouped");
     if let Some((generation, groups)) = ctx.data(|d| d.get_temp::<(u64, Arc<Vec<Group>>)>(id))
@@ -294,12 +311,24 @@ fn grouped(ctx: &egui::Context, presets: &PresetList) -> Arc<Vec<Group>> {
     }
     let mut by_name: BTreeMap<&str, Group> = BTreeMap::new();
     for (i, p) in presets.iter().enumerate() {
-        let g = by_name.entry(&p.group).or_insert_with(|| Group { name: p.group.clone(), builtin: false, user: false, items: Vec::new() });
+        let g = by_name.entry(&p.group).or_insert_with(|| Group {
+            name: p.group.clone(),
+            builtin: false,
+            user: false,
+            favorites: false,
+            items: Vec::new(),
+        });
         g.builtin |= p.builtin;
         g.user |= !p.builtin;
         g.items.push(i);
     }
-    let groups = Arc::new(by_name.into_values().collect::<Vec<_>>());
+    let mut groups = by_name.into_values().collect::<Vec<_>>();
+    let favorites: Vec<usize> = groups.iter().flat_map(|g| g.items.iter().copied()).filter(|&i| presets.get(i).is_some_and(|p| p.favorite)).collect();
+    if !favorites.is_empty() {
+        // "Favorites" is a message: shown in the UI language, like a stock group's name
+        groups.insert(0, Group { name: "Favorites".to_string(), builtin: true, user: false, favorites: true, items: favorites });
+    }
+    let groups = Arc::new(groups);
     ctx.data_mut(|d| d.insert_temp(id, (presets.generation(), groups.clone())));
     groups
 }
@@ -412,5 +441,44 @@ mod tests {
         let other = session.visible().iter().copied().find(|id| Some(*id) != active).unwrap();
         session.execute("library.select", &json!({"ids": [other.0]})).unwrap();
         assert!(!state.is_current(&session), "the preset belongs to the earlier selection");
+    }
+
+    /// The groups' (name, favourites group?, preset ids), as the panel lists them.
+    fn listed(ctx: &egui::Context, session: &lightcraft_engine::Session) -> Vec<(String, bool, Vec<String>)> {
+        let ids = |g: &Group| g.items.iter().map(|&i| session.presets[i].id.clone()).collect();
+        grouped(ctx, &session.presets).iter().map(|g| (g.name.clone(), g.favorites, ids(g))).collect()
+    }
+
+    /// Starred presets are listed first in a Favorites group (#1999), like favourite profiles:
+    /// in the order of the groups below, gone again when unstarred or deleted, and a user group
+    /// named "Favorites" stays a group of its own.
+    #[test]
+    fn favourite_presets_are_listed_first_in_their_own_group() {
+        let ctx = egui::Context::default();
+        let mut session = lightcraft_engine::Session::with_demo();
+        assert!(listed(&ctx, &session).iter().all(|(_, fav, _)| !fav), "no Favorites group without a favourite");
+
+        session.execute("preset.create", &json!({"name": "Mine", "group": "Favorites"})).unwrap();
+        let mine = session.presets.iter().find(|p| !p.builtin).unwrap().id.clone();
+        for id in ["lc.warm-glow", "lc.bw-soft", mine.as_str()] {
+            session.execute("preset.favorite", &json!({"id": id})).unwrap();
+        }
+        let groups = listed(&ctx, &session);
+        let (name, fav, ids) = &groups[0];
+        assert_eq!((name.as_str(), *fav), ("Favorites", true));
+        // B&W before Color before the user's group, as listed below
+        assert_eq!(ids, &["lc.bw-soft".to_string(), "lc.warm-glow".to_string(), mine.clone()]);
+        assert_eq!(groups.iter().filter(|(_, fav, _)| *fav).count(), 1);
+        // every preset is still in its own group as well
+        assert!(groups.iter().any(|(n, fav, ids)| n == "Color" && !fav && ids.contains(&"lc.warm-glow".to_string())));
+        assert!(groups.iter().any(|(n, fav, ids)| n == "Favorites" && !fav && ids == std::slice::from_ref(&mine)), "the user's own group");
+
+        // unstarred: out of the group; deleted: gone; no favourite left: no group
+        session.execute("preset.favorite", &json!({"id": "lc.warm-glow"})).unwrap();
+        assert_eq!(listed(&ctx, &session)[0].2, ["lc.bw-soft".to_string(), mine.clone()]);
+        session.execute("preset.delete", &json!({"id": mine})).unwrap();
+        assert_eq!(listed(&ctx, &session)[0].2, ["lc.bw-soft".to_string()]);
+        session.execute("preset.favorite", &json!({"id": "lc.bw-soft", "favorite": false})).unwrap();
+        assert!(listed(&ctx, &session).iter().all(|(_, fav, _)| !fav));
     }
 }
