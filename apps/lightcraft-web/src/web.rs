@@ -625,9 +625,10 @@ impl WebApp {
 
 impl eframe::App for WebApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // (several notices at once each get their toast: they no longer replace one another)
         for text in safety::take_notices() {
             let now = ctx.input(|i| i.time);
-            self.app.ui.toast = Some((text, now + NOTICE_SECS, None));
+            self.app.ui.push_toast(text, now + NOTICE_SECS, None);
         }
         self.run_inbox();
         self.import_dropped(ctx);

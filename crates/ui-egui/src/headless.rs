@@ -2264,7 +2264,7 @@ mod tests {
         let args = calls.lock().unwrap().clone();
         assert_eq!(args.len(), 1);
         assert_eq!(args[0][args[0].len() - 2..], written[..], "the files written go to Photos");
-        let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+        let toast = h.app.ui.toast().map(|t| t.0.clone()).unwrap_or_default();
         assert!(toast.contains("2 added to Apple Photos album “Trip “2026””"), "{toast}");
         // Export with Previous repeats it
         assert_eq!(h.app.session.last_export.as_ref().unwrap()["addToPhotos"], true);
@@ -2349,11 +2349,11 @@ mod tests {
         assert!(t0.elapsed() < Duration::from_secs(5), "answered at once: {r}");
         assert_eq!(r["result"]["running"], true, "{r}");
         go.send(()).unwrap();
-        while !h.app.ui.toast.as_ref().is_some_and(|t| t.0.contains("Apple Photos")) {
+        while !h.app.ui.toast().is_some_and(|t| t.0.contains("Apple Photos")) {
             assert!(t0.elapsed() < Duration::from_secs(20), "the outcome is announced");
             h.step();
         }
-        assert_eq!(h.app.ui.toast.as_ref().unwrap().0, "1 added to Apple Photos album “Slow”");
+        assert_eq!(h.app.ui.toast().unwrap().0, "1 added to Apple Photos album “Slow”");
         if cfg!(target_os = "macos") {
             let t1 = Instant::now();
             let p = json!({"dir": out.to_string_lossy(), "longEdge": 32, "addToPhotos": true});
@@ -2362,7 +2362,7 @@ mod tests {
             assert_eq!(r["result"]["applePhotos"]["running"], true, "{r}");
             assert_eq!(r["result"]["applePhotos"]["job"], 2, "{r}");
             go.send(()).unwrap();
-            while !h.app.ui.toast.as_ref().is_some_and(|t| t.0.starts_with("1 added to Apple Photos") && !t.0.contains("Slow")) {
+            while !h.app.ui.toast().is_some_and(|t| t.0.starts_with("1 added to Apple Photos") && !t.0.contains("Slow")) {
                 assert!(t1.elapsed() < Duration::from_secs(20), "the outcome is announced");
                 h.step();
             }
@@ -2564,7 +2564,7 @@ mod tests {
         let r = h.request("ui.clickWidget", json!({"id": "button:reloadPreviewOnly:info"}), t);
         assert_eq!(r["ok"], true, "{r}");
         h.settle(SETTLE);
-        assert_eq!(h.app.ui.toast.clone().map(|x| x.0).as_deref(), Some("This raw variant still can't be decoded"));
+        assert_eq!(h.app.ui.toast().cloned().map(|x| x.0).as_deref(), Some("This raw variant still can't be decoded"));
         // a regular photo: no notice
         h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [other.0]}}), t);
         h.app.ui.right = crate::state::RightPanel::Edit;
@@ -3537,7 +3537,7 @@ mod tests {
                 h.step();
             }
             assert!(h.app.import.is_none(), "finished");
-            let toast = h.app.ui.toast.clone().map(|t| t.0).unwrap_or_default();
+            let toast = h.app.ui.toast().cloned().map(|t| t.0).unwrap_or_default();
             let photos = &h.app.session.catalog;
             assert_eq!(photos.photos().filter(|p| !p.deleted).count(), 2, "{choice}");
             let old = photos.photo(lightcraft_catalog::PhotoId(id));
@@ -3714,7 +3714,7 @@ mod tests {
         assert_eq!(h.app.session.catalog.len(), n0, "no second record");
         assert_eq!(h.app.session.source, lightcraft_engine::LibrarySource::All);
         assert_eq!(h.app.session.selection.ids, vec![id], "the restored photo is selected");
-        let toast = h.app.ui.toast.clone().expect("toast").0;
+        let toast = h.app.ui.toast().cloned().expect("toast").0;
         assert!(toast.contains("Restored 1 photo from Recently Deleted"), "{toast}");
         assert!(!photo_items(&h.app).contains(&"photo.restore".to_string()));
         // undo of the re-add puts it back in Recently Deleted; the trash view's menus offer Restore
@@ -3746,7 +3746,7 @@ mod tests {
         finish_import(&mut h);
         assert_eq!(h.app.session.source, lightcraft_engine::LibrarySource::All);
         assert_eq!(h.app.session.selection.ids, vec![id]);
-        let toast = h.app.ui.toast.clone().expect("toast").0;
+        let toast = h.app.ui.toast().cloned().expect("toast").0;
         assert!(toast.contains("All Photos"), "{toast}");
         assert!(!photo_items(&h.app).contains(&"library.emptyRecentlyDeleted".to_string()), "Empty is for the trash view only");
 

@@ -168,6 +168,8 @@ mod tests_temp_slider;
 #[cfg(test)]
 mod tests_titlebar;
 #[cfg(test)]
+mod tests_toasts;
+#[cfg(test)]
 mod tests_tool_overlay;
 #[cfg(test)]
 mod tests_unsaved;
@@ -650,7 +652,11 @@ impl LightcraftApp {
             if let Some(message) = completed {
                 // Menu clicks can arrive before the next frame updates last_time.
                 let now = self.tasks.repaint.as_ref().map(|ctx| ctx.input(|i| i.time)).unwrap_or(self.last_time);
-                self.ui.toast = Some((message, now + TOAST_SECONDS, None));
+                // (Auto Sync On / Off says a state: the new one takes the old one's place)
+                match id {
+                    "develop.autoSync" => self.ui.push_toast_on("autoSync", message, now + TOAST_SECONDS, None),
+                    _ => self.ui.push_toast(message, now + TOAST_SECONDS, None),
+                }
             }
         }
         if r.is_ok() && id == "photo.label" {
@@ -665,7 +671,7 @@ impl LightcraftApp {
             };
             // Native menu clicks can arrive before logic() updates last_time after an idle gap.
             let now = self.tasks.repaint.as_ref().map(|ctx| ctx.input(|i| i.time)).unwrap_or(self.last_time);
-            self.ui.toast = Some((text, now + TOAST_SECONDS, label));
+            self.ui.push_toast_on("label", text, now + TOAST_SECONDS, label);
         }
         match &r {
             Err(e) => {
@@ -771,7 +777,8 @@ impl LightcraftApp {
             (Some((n, e)), false) => {
                 self.ui.unsaved_seen = true;
                 let t = ctx.input(|i| i.time);
-                self.ui.toast = Some((
+                self.ui.push_toast_on(
+                    "save",
                     crate::i18n::tr_format!(
                         "{n} change{} saved in memory but not written to disk: {e} — LightCraft will retry",
                         if n == 1 { "" } else { "s" },
@@ -780,11 +787,12 @@ impl LightcraftApp {
                     ),
                     t + 6.0,
                     None,
-                ));
+                );
             }
             (None, true) => {
                 self.ui.unsaved_seen = false;
-                self.toast(ctx, crate::i18n::tr("Library saved"));
+                // (it takes the place of the warning that it couldn't be saved, if that still shows)
+                self.toast_on(ctx, "save", crate::i18n::tr("Library saved"));
             }
             (Some(_), true) => ctx.request_repaint_after(std::time::Duration::from_secs(2)), // retry
             (None, false) => {}
@@ -795,10 +803,17 @@ impl LightcraftApp {
         self.toast_for(ctx, text, TOAST_SECONDS);
     }
 
+    /// A toast that says the state of `topic` ("flag", "panel", "slideshow"…): it replaces the ones still showing
+    /// about that topic ([`state::UiState::push_toast_on`]).
+    pub fn toast_on(&mut self, ctx: &egui::Context, topic: &'static str, text: impl Into<String>) {
+        let t = ctx.input(|i| i.time);
+        self.ui.push_toast_on(topic, text, t + TOAST_SECONDS, None);
+    }
+
     /// A toast that stays `secs` seconds (messages that say where to look or what to do next).
     pub fn toast_for(&mut self, ctx: &egui::Context, text: impl Into<String>, secs: f64) {
         let t = ctx.input(|i| i.time);
-        self.ui.toast = Some((text.into(), t + secs, None));
+        self.ui.push_toast(text, t + secs, None);
     }
 
     /// Reverse geocoding: say how a place-names download ended (a failure stays readable, with what to do).
@@ -884,7 +899,7 @@ impl LightcraftApp {
     /// A toast for an error the user has to read and act on (stays 6 s).
     pub fn toast_error(&mut self, ctx: &egui::Context, text: impl Into<String>) {
         let t = ctx.input(|i| i.time);
-        self.ui.toast = Some((text.into(), t + 6.0, None));
+        self.ui.push_toast(text, t + 6.0, None);
     }
 
     fn drain_control(&mut self, ctx: &egui::Context) {

@@ -1417,7 +1417,7 @@ mod tests {
         let bad_dir = dir.join("nonexistent_subdir");
         let err = run_item(&mut app, "file.findMissing", json!({"folder": bad_dir.to_string_lossy(), "wait": true})).unwrap_err();
         assert!(err.contains("not a folder"), "expected 'not a folder' error, got: {err}");
-        assert!(app.ui.toast.as_ref().map(|t| t.0.contains("not a folder")).unwrap_or(false), "toast should reflect failure");
+        assert!(app.ui.toast().map(|t| t.0.contains("not a folder")).unwrap_or(false), "toast should reflect failure");
         assert!(app.ui.last_find_missing.is_none(), "last_find_missing must remain None on failure");
 
         // 2. Invalid timeout parameters are rejected cleanly

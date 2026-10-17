@@ -58,9 +58,9 @@ fn opening_a_library_rechecks_stale_preview_only_raws_in_the_background() {
     assert!(app.session.activity.list().iter().all(|r| r.kind != "recheck"), "the row goes with the task");
     let p = app.session.catalog.photo(id).unwrap();
     assert_eq!(p.preview_only, None);
-    assert!(app.ui.toast.as_ref().is_some_and(|(t, _, _)| t == "1 raw can now be developed from its raw data"), "{:?}", app.ui.toast);
+    assert!(app.ui.toast().is_some_and(|(t, ..)| t == "1 raw can now be developed from its raw data"), "{:?}", app.ui.toasts);
     // once per opened library
-    app.ui.toast = None;
+    app.ui.toasts.clear();
     crate::recheck::tick(&mut app);
     assert!(app.tasks.is_empty());
 }
@@ -74,7 +74,7 @@ fn recheck_result_is_dropped_after_switching_libraries() {
     crate::recheck::tick(&mut app);
     app.run("app.openLibrary", json!({"path": dir.0.join("other").to_string_lossy()})).unwrap();
     assert!(crate::tasks::wait(&mut app, &ctx, Duration::from_secs(10)));
-    assert!(app.ui.toast.is_none(), "{:?}", app.ui.toast);
+    assert!(app.ui.toast().is_none(), "{:?}", app.ui.toasts);
     assert!(app.session.catalog.photo(id).is_none(), "the other library is untouched");
 }
 
@@ -86,5 +86,5 @@ fn notice_reload_button_rereads_the_file() {
     let ctx = egui::Context::default();
     crate::panels::edit::reload_preview_only(&mut app, &ctx, id);
     assert_eq!(app.session.catalog.photo(id).unwrap().preview_only, None);
-    assert!(app.ui.toast.as_ref().is_some_and(|(t, _, _)| t == "This raw is now developed from its raw data"), "{:?}", app.ui.toast);
+    assert!(app.ui.toast().is_some_and(|(t, ..)| t == "This raw is now developed from its raw data"), "{:?}", app.ui.toasts);
 }

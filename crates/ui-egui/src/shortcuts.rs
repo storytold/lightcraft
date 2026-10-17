@@ -446,7 +446,7 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
         // a slideshow: Space pauses / resumes
         if id == "view.zoomToggle" && app.ui.slideshow.is_some() {
             if let Ok(v) = app.run("slideshow.togglePause", json!({})) {
-                app.toast(ctx, crate::i18n::tr(if v["paused"] == true { "Slideshow paused" } else { "Slideshow resumed" }));
+                app.toast_on(ctx, "slideshow", crate::i18n::tr(if v["paused"] == true { "Slideshow paused" } else { "Slideshow resumed" }));
             }
             continue;
         }
@@ -480,7 +480,7 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
             } else {
                 crate::i18n::tr_format!("Rated {}", "★".repeat(n.parse().unwrap_or(0)))
             };
-            app.toast(ctx, label);
+            app.toast_on(ctx, "rating", label);
         } else if matches!(f.as_str(), "photo.decreaseRating" | "photo.increaseRating") {
             cull(app, &f, json!({}), false);
         } else if let Some(l) = f.strip_prefix("label:") {
@@ -523,17 +523,17 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
             cull(app, &f, json!({}), false);
             let flag = active.and_then(|id| app.session.catalog.photo(id)).map(|p| p.flag);
             match flag {
-                Some(lightcraft_catalog::Flag::Pick) => app.toast(ctx, crate::i18n::tr("Flagged as Pick")),
-                Some(lightcraft_catalog::Flag::Reject) => app.toast(ctx, crate::i18n::tr("Flagged as Reject")),
-                Some(lightcraft_catalog::Flag::None) => app.toast(ctx, crate::i18n::tr("Unflagged")),
+                Some(lightcraft_catalog::Flag::Pick) => app.toast_on(ctx, "flag", crate::i18n::tr("Flagged as Pick")),
+                Some(lightcraft_catalog::Flag::Reject) => app.toast_on(ctx, "flag", crate::i18n::tr("Flagged as Reject")),
+                Some(lightcraft_catalog::Flag::None) => app.toast_on(ctx, "flag", crate::i18n::tr("Unflagged")),
                 None => {}
             }
         } else if matches!(f.as_str(), "photo.pick" | "photo.reject" | "photo.unflag") && app.ui.right != crate::state::RightPanel::Crop {
             cull(app, &f, json!({}), false);
             match f.as_str() {
-                "photo.pick" => app.toast(ctx, crate::i18n::tr("Flagged as Pick")),
-                "photo.reject" => app.toast(ctx, crate::i18n::tr("Flagged as Reject")),
-                _ => app.toast(ctx, crate::i18n::tr("Unflagged")),
+                "photo.pick" => app.toast_on(ctx, "flag", crate::i18n::tr("Flagged as Pick")),
+                "photo.reject" => app.toast_on(ctx, "flag", crate::i18n::tr("Flagged as Reject")),
+                _ => app.toast_on(ctx, "flag", crate::i18n::tr("Unflagged")),
             }
         } else {
             // in the full-screen preview (no panels) I cycles the info overlay instead
@@ -644,11 +644,11 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
                 app.toast(ctx, e);
             }
             match f.as_str() {
-                "photo.pick" => app.toast(ctx, crate::i18n::tr("Flagged as Pick")),
-                "photo.reject" => app.toast(ctx, crate::i18n::tr("Flagged as Reject")),
-                "photo.unflag" => app.toast(ctx, crate::i18n::tr("Unflagged")),
-                "edit.undo" => app.toast(ctx, crate::i18n::tr("Undo")),
-                "edit.redo" => app.toast(ctx, crate::i18n::tr("Redo")),
+                "photo.pick" => app.toast_on(ctx, "flag", crate::i18n::tr("Flagged as Pick")),
+                "photo.reject" => app.toast_on(ctx, "flag", crate::i18n::tr("Flagged as Reject")),
+                "photo.unflag" => app.toast_on(ctx, "flag", crate::i18n::tr("Unflagged")),
+                "edit.undo" => app.toast_on(ctx, "history", crate::i18n::tr("Undo")),
+                "edit.redo" => app.toast_on(ctx, "history", crate::i18n::tr("Redo")),
                 _ => {}
             }
         }
@@ -884,30 +884,30 @@ mod tests {
         for shift in [false, true] {
             for (k, name) in [("6", "Red"), ("7", "Yellow"), ("8", "Green"), ("9", "Blue")] {
                 h.app.session.execute("library.select", &json!({"ids": [1]})).unwrap();
-                h.app.ui.toast = None;
+                h.app.ui.toasts.clear();
                 key(&mut h, k, shift);
-                assert_eq!(h.app.ui.toast.as_ref().map(|t| t.0.as_str()), Some(format!("{name} Label").as_str()));
-                assert_eq!(h.app.ui.toast.as_ref().and_then(|t| t.2), h.app.session.catalog.photo(PhotoId(1)).unwrap().label);
+                assert_eq!(h.app.ui.toast().map(|t| t.0.as_str()), Some(format!("{name} Label").as_str()));
+                assert_eq!(h.app.ui.toast().and_then(|t| t.2), h.app.session.catalog.photo(PhotoId(1)).unwrap().label);
                 assert_eq!(h.app.session.active(), Some(PhotoId(if shift { 2 } else { 1 })));
             }
         }
         // Menus and the Info-panel swatches dispatch the same command, including purple/clear.
         h.app.run("photo.label", json!({"label": "purple"})).unwrap();
-        assert_eq!(h.app.ui.toast.as_ref().map(|t| t.0.as_str()), Some("Purple Label"));
+        assert_eq!(h.app.ui.toast().map(|t| t.0.as_str()), Some("Purple Label"));
         h.app.run("photo.label", json!({"label": "none"})).unwrap();
-        assert_eq!(h.app.ui.toast.as_ref().map(|t| t.0.as_str()), Some("Color label cleared"));
-        assert!(h.app.ui.toast.as_ref().is_some_and(|t| t.2.is_none()), "clear uses neutral feedback");
+        assert_eq!(h.app.ui.toast().map(|t| t.0.as_str()), Some("Color label cleared"));
+        assert!(h.app.ui.toast().is_some_and(|t| t.2.is_none()), "clear uses neutral feedback");
         h.app.session.execute("label.setNames", &json!({"names": {"red": "Needs review"}})).unwrap();
         key(&mut h, "6", false);
-        assert_eq!(h.app.ui.toast.as_ref().map(|t| t.0.as_str()), Some("Needs review Label"));
+        assert_eq!(h.app.ui.toast().map(|t| t.0.as_str()), Some("Needs review Label"));
         // Native menu callbacks run before logic() catches up to the current frame's clock.
         let now = h.view.ctx.input(|i| i.time);
         h.app.last_time = now - 10.0;
         h.app.run("photo.label", json!({"label": "blue"})).unwrap();
-        assert!(h.app.ui.toast.as_ref().is_some_and(|t| t.1 > now), "menu feedback must survive an idle gap");
-        h.app.ui.toast = None;
+        assert!(h.app.ui.toast().is_some_and(|t| t.1 > now), "menu feedback must survive an idle gap");
+        h.app.ui.toasts.clear();
         assert!(h.app.run("photo.label", json!({"label": "invalid"})).is_err());
-        assert!(h.app.ui.toast.is_none(), "failed actions must not announce success");
+        assert!(h.app.ui.toast().is_none(), "failed actions must not announce success");
     }
 
     #[test]

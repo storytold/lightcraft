@@ -507,7 +507,7 @@ fn the_highlight_stays_on_the_list() {
 }
 
 fn toast(h: &Headless) -> String {
-    h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default()
+    h.app.ui.toast().map(|t| t.0.clone()).unwrap_or_default()
 }
 
 // Given several photos selected, the box says how many its keywords are of; with one photo there
@@ -548,7 +548,7 @@ fn taking_a_keyword_off_several_photos_says_so_and_undo_puts_it_back() {
     assert!(all_have(&h, &ids, "beach"), "one undo step puts it back on both");
 
     // the menu's Remove from Selected Photos says the same
-    h.app.ui.toast = None;
+    h.app.ui.toasts.clear();
     ask(&mut h, "ui.clickWidget", json!({"id": "keywordChip:beach", "button": "right"}));
     ask(&mut h, "ui.clickWidget", json!({"id": "keywordChipMenu:remove"}));
     assert!(none_has(&h, &ids, "beach") && toast(&h).contains("beach"), "{}", toast(&h));

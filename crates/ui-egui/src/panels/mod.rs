@@ -76,29 +76,50 @@ pub fn resizable_side(
     Some(w.round().clamp(limits.min, max))
 }
 
-/// The HUD toast at the bottom centre of the canvas.
+/// The space between two toasts on screen.
+const TOAST_GAP: f32 = 8.0;
+
+/// The HUD toasts at the bottom centre of the canvas: the newest where a toast always was, the older ones above it,
+/// each fading out at its own time (widgets `toast:0` for the newest, `toast:1` above it…).
 pub fn toast(app: &mut LightcraftApp, ctx: &egui::Context) {
     let now = ctx.input(|i| i.time);
-    let Some((text, until, label)) = app.ui.toast.clone() else { return };
-    if now > until {
-        app.ui.toast = None;
+    app.ui.expire_toasts(now);
+    if app.ui.toasts.is_empty() {
         return;
     }
     let Some(canvas) = app.canvas_rect else { return };
     let t = Tokens::get(ctx);
-    let fade = ((until - now) / 0.25).clamp(0.0, 1.0) as f32;
     let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("toast")));
     // long messages (a save warning, the web build's notices) wrap within the canvas
     let wrap = (canvas.width() - 80.0).clamp(200.0, 720.0);
-    let (background, foreground) = label.map(crate::theme::label_toast_colors).unwrap_or((egui::Color32::from_black_alpha(200), t.text));
-    let foreground = foreground.gamma_multiply(fade);
-    let galley = painter.layout(text, t.font(14.0), foreground, wrap);
-    let size = vec2(galley.size().x + 40.0, (galley.size().y + 22.0).max(40.0));
-    // a slideshow's playback controls sit at the bottom: the toast goes to the top there, clear of them
-    let y = if app.ui.slideshow.is_some() { canvas.top() + 60.0 } else { canvas.bottom() - 60.0 };
-    let r = Rect::from_center_size(pos2(canvas.center().x, y), size);
-    painter.rect_filled(r, 6.0, background.gamma_multiply(fade));
-    painter.galley(r.center() - galley.size() / 2.0, galley, foreground);
+    // a slideshow's playback controls sit at the bottom: the toasts go to the top there, clear of them, the newest
+    // on top; elsewhere the newest is at the bottom and the older ones stack above it
+    let top = app.ui.slideshow.is_some();
+    // the edge the next one goes against; the newest has none: it is centred where the single toast always was
+    let mut edge: Option<f32> = None;
+    let x = canvas.center().x;
+    for (i, (text, until, label, _)) in app.ui.toasts.iter().rev().enumerate() {
+        let fade = ((until - now) / 0.25).clamp(0.0, 1.0) as f32;
+        let (background, foreground) = label.map(crate::theme::label_toast_colors).unwrap_or((egui::Color32::from_black_alpha(200), t.text));
+        let foreground = foreground.gamma_multiply(fade);
+        let galley = painter.layout(text.clone(), t.font(14.0), foreground, wrap);
+        let size = vec2(galley.size().x + 40.0, (galley.size().y + 22.0).max(40.0));
+        let r = match (edge, top) {
+            (None, true) => Rect::from_center_size(pos2(x, canvas.top() + 60.0), size),
+            (None, false) => Rect::from_center_size(pos2(x, canvas.bottom() - 60.0), size),
+            (Some(y), true) => Rect::from_min_size(pos2(x - size.x / 2.0, y), size),
+            (Some(y), false) => Rect::from_min_size(pos2(x - size.x / 2.0, y - size.y), size),
+        };
+        // the older ones never go past the canvas: a burst of long messages keeps those that fit (the newest is drawn
+        // as the single toast always was, whatever room there is)
+        if i > 0 && !canvas.contains_rect(r) {
+            break;
+        }
+        edge = Some(if top { r.bottom() + TOAST_GAP } else { r.top() - TOAST_GAP });
+        painter.rect_filled(r, 6.0, background.gamma_multiply(fade));
+        painter.galley(r.center() - galley.size() / 2.0, galley, foreground);
+        crate::widgets::register(ctx, format!("toast:{i}"), r);
+    }
     ctx.request_repaint_after(std::time::Duration::from_millis(30));
 }
 

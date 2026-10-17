@@ -32,7 +32,7 @@ fn run(h: &mut Headless, command: &str, params: serde_json::Value) -> serde_json
 }
 
 fn toast(h: &Headless) -> String {
-    h.app.ui.toast.clone().map(|t| t.0).unwrap_or_default()
+    h.app.ui.toast().cloned().map(|t| t.0).unwrap_or_default()
 }
 
 /// The File menu offers Import Keywords… and Export Keywords….

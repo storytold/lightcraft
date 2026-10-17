@@ -369,7 +369,7 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
                         }
                     }
                     u.collapsed_sidebar.clear();
-                    u.toast = app.ui.toast.clone();
+                    u.toasts = app.ui.toasts.clone();
                     u.dialog = app.ui.dialog.clone();
                     u.status = app.ui.status.clone();
                     crate::docking::cancel_replaced_gesture(app, u.docking.as_ref());

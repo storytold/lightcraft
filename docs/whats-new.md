@@ -1,5 +1,12 @@
 # What's new in LightCraft
 
+## 2026-10-15
+
+### Messages no longer hide each other
+- The short messages at the bottom of the photo view used to replace one another: a label set right after an export
+  ended hid the export's message. Now a new message appears where they always did and the ones still showing move up
+  above it, up to three, each going at its own time (at the top during a slideshow, the newest on top).
+
 ## 2026-10-14
 
 ### Lightroom radial masks on the right side

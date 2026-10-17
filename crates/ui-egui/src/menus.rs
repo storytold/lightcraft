@@ -268,10 +268,10 @@ pub const UI_COMMANDS: &[UiCommand] = &[
 fn panel(app: &mut LightcraftApp, ctx: &egui::Context, p: RightPanel, name: &str) {
     if app.ui.right == p && crate::docking::exposed(app, crate::docking::Panel::Tools) {
         app.ui.right = RightPanel::None;
-        app.toast(ctx, crate::i18n::tr_format!("{name} Off", name = crate::i18n::tr(name)));
+        app.toast_on(ctx, "panel", crate::i18n::tr_format!("{name} Off", name = crate::i18n::tr(name)));
     } else {
         app.ui.right = p;
-        app.toast(ctx, crate::i18n::tr_format!("{name} On", name = crate::i18n::tr(name)));
+        app.toast_on(ctx, "panel", crate::i18n::tr_format!("{name} On", name = crate::i18n::tr(name)));
         if p.is_edit_tool() && !matches!(app.ui.view, ViewMode::Detail) {
             app.ui.view = ViewMode::Detail;
         }
@@ -612,7 +612,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         "compare.makeSelect" => crate::panels::compare::make_select(app),
         "view.autoAdvance" => {
             app.ui.auto_advance = !app.ui.auto_advance;
-            app.toast(&ctx, crate::i18n::tr(if app.ui.auto_advance { "Auto Advance On" } else { "Auto Advance Off" }));
+            app.toast_on(&ctx, "autoAdvance", crate::i18n::tr(if app.ui.auto_advance { "Auto Advance On" } else { "Auto Advance Off" }));
             Ok(json!({"autoAdvance": app.ui.auto_advance}))
         }
         "view.back" => {
@@ -1033,7 +1033,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
                 },
             };
             app.ui.tool_overlay = mode;
-            app.toast(&ctx, tool_overlay_toast(mode));
+            app.toast_on(&ctx, "toolOverlay", tool_overlay_toast(mode));
             Ok(json!({"mode": mode.name()}))
         }
         "view.visualizeSpots" => {
@@ -1797,7 +1797,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
                     l.ends_with(".cube") || l.ends_with(".zip") || std::path::Path::new(p.as_str()).is_dir()
                 })
                 .collect();
-            // one toast for both halves (a second toast would replace the first)
+            // one toast for both halves: they are one import
             let mut parts: Vec<String> = Vec::new();
             // `name: reason` for each file that couldn't be imported
             let mut problems: Vec<String> = Vec::new();

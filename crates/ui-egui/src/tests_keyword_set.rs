@@ -86,7 +86,7 @@ fn a_set_needs_a_name() {
     open_editor(&mut h);
     ask(&mut h, "ui.clickWidget", json!({"id": "button:dialogOk"}));
     assert!(matches!(h.app.ui.dialog, Some(crate::state::Dialog::KeywordSet { .. })), "still open");
-    assert!(h.app.ui.toast.is_some(), "and says why");
+    assert!(h.app.ui.toast().is_some(), "and says why");
 }
 
 /// An empty slot is an empty button that does nothing.
@@ -124,7 +124,7 @@ fn a_taken_name_says_so() {
     ask(&mut h, "ui.text", json!({"text": "travel"}));
     ask(&mut h, "ui.clickWidget", json!({"id": "button:dialogOk"}));
     assert!(matches!(h.app.ui.dialog, Some(crate::state::Dialog::KeywordSet { .. })), "still open");
-    let toast = h.app.ui.toast.clone().map(|t| t.0).unwrap_or_default();
+    let toast = h.app.ui.toast().cloned().map(|t| t.0).unwrap_or_default();
     assert!(toast.starts_with("There is a keyword set"), "{toast}");
     let s = sets(&mut h);
     let travel = s["sets"].as_array().unwrap().iter().find(|x| x["name"] == "Travel").cloned().unwrap();
