@@ -531,6 +531,11 @@ pub fn dab_spacing(r: f64) -> f64 {
     (r / 4.0).max(0.5)
 }
 
+/// Most dabs one stroke is densified into (#1520): 16 MB of points, far more than any stroke painted on
+/// screen needs (fifty passes across a 10 000 px photo with the smallest brush), so only a hostile or
+/// corrupt stroke ever reaches it.
+pub const MAX_STROKE_DABS: usize = 1_000_000;
+
 /// Append the dabs of one path segment, from the previous sample `prev` (already stamped) to `q`,
 /// for a brush of radius `r`: evenly spaced at most [`dab_spacing`] apart, ending on `q`. The
 /// committed stroke ([`brush_dabs`]) and the live one the UI draws while the button is held place
@@ -549,8 +554,10 @@ pub fn push_dabs(dabs: &mut Vec<Point>, prev: Option<Point>, q: Point, r: f64) -
         }
         let n = (dist / dab_spacing(r)).ceil();
         // a hostile or degenerate segment (huge) gets no in-between dabs rather than a huge
-        // allocation: 1 M dabs is far more than any on-screen stroke needs
-        let n = if n.is_finite() { n.clamp(0.0, 1_000_000.0) as usize } else { 0 };
+        // allocation, and the stroke as a whole stops interpolating once `dabs` holds its budget:
+        // a per-segment cap alone multiplies across a long point list (#1520)
+        let budget = MAX_STROKE_DABS.saturating_sub(dabs.len()) as f64;
+        let n = if n.is_finite() { n.clamp(0.0, budget) as usize } else { 0 };
         for k in 1..n {
             dabs.push(prev.lerp(q, k as f64 / n as f64));
         }
@@ -844,6 +851,21 @@ mod tests {
         assert!(!push_dabs(&mut v, None, Point::new(f64::INFINITY, 1.0), r));
         push_dabs(&mut v, Some(Point::new(0.0, 0.0)), Point::new(1e300, 1.0), 0.0);
         assert!(v.len() <= 1_000_002, "{}", v.len());
+    }
+
+    /// Issue #1520: the per-segment cap does not bound a whole stroke. A short list of points whose
+    /// segments each run far outside the photo would densify into a dab vector of many gigabytes
+    /// (64 points: 2 GB at export). The stroke stops interpolating once it holds its budget.
+    #[test]
+    fn a_stroke_of_many_huge_segments_stays_within_its_dab_budget() {
+        let (w, h) = (480, 320);
+        let f = frame(w, h);
+        let points = (0..64).map(|i| Point::new(if i % 2 == 0 { -1000.0 } else { 1000.0 }, 0.5)).collect();
+        let s = BrushStroke { points, size: 0.0001, ..Default::default() };
+        let bd = brush_dabs(&s, &f, w, h);
+        assert!(bd.dabs.len() <= MAX_STROKE_DABS + s.points.len(), "{} dabs", bd.dabs.len());
+        // every sample is still stamped: the stroke ends where it was drawn
+        assert_eq!(bd.dabs.last(), Some(&f.norm_to_out(w, h).apply(Point::new(1000.0, 0.5))));
     }
 
     /// Pen pressure scales each dab's radius and flow; a stroke without pressure data paints as before, and hostile
