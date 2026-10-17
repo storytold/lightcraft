@@ -346,6 +346,9 @@ pub struct AppSettings {
     /// Ask before photos dropped on a Folders row move there on disk (the dialog's "Don't ask
     /// again" turns it off).
     pub ask_before_move: bool,
+    /// A click on the dimmed backdrop around a dialog closes it, like Esc (off: a stray click
+    /// never throws away a dialog's choices).
+    pub close_dialogs_outside: bool,
     /// GPU rendering allowed (`app.gpu`).
     pub gpu: bool,
     /// Largest long edge (pixels) the user lets the loupe render at; 0 = Automatic (the size it is
@@ -401,6 +404,7 @@ impl Default for AppSettings {
             startup_view: StartupView::Last,
             confirm_delete: true,
             ask_before_move: true,
+            close_dialogs_outside: false,
             gpu: true,
             preview_limit: 0,
             external_editor: String::new(),

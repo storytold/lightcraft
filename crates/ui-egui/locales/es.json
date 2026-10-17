@@ -292,6 +292,8 @@
   "Another library was opened since the photos were dropped: nothing was moved": "Se abrió otra biblioteca después de soltar las fotos: no se movió nada",
   "Settings → Confirm before moving photos to another folder on disk turns it back on": "Ajustes → Confirmar antes de mover fotos a otra carpeta del disco lo vuelve a activar",
   "Confirm before moving photos to another folder on disk": "Confirmar antes de mover fotos a otra carpeta del disco",
+  "Dialogs": "Diálogos",
+  "Close a dialog by clicking outside it": "Cerrar un diálogo al hacer clic fuera de él",
   "Constrain Crop": "Restringir recorte",
   "Contact Sheet PDF": "PDF de hoja de contactos",
   "Continue": "Continuar",

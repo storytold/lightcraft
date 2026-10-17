@@ -85,6 +85,37 @@ fn modal_dialogs_block_background_shortcuts_and_keep_escape() {
     assert_eq!(h.app.session.catalog.photo(active).unwrap().rating, 5, "closing restores shortcuts");
 }
 
+/// Settings → Close a dialog by clicking outside it: a click on the backdrop closes the dialog
+/// like Esc, without reaching the panels below; a click inside it, or a drag that ends outside, keeps it.
+#[test]
+fn a_click_outside_closes_the_dialog_when_settings_allow_it() {
+    let mut h = demo([1400.0, 1000.0], json!({"view": "detail", "right": "edit"}));
+    let active = h.app.session.active().unwrap();
+    let rating = h.app.session.catalog.photo(active).unwrap().rating;
+    h.app.run("dialog.copySettings", json!({})).unwrap();
+    h.step();
+    // off by default: the background click is blocked and the dialog stays
+    let r = h.request("ui.clickWidget", json!({"id": "star:bottom:5"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    assert!(h.app.ui.dialog.is_some(), "a stray click keeps the dialog unless Settings say otherwise");
+    h.app.ui.settings.close_dialogs_outside = true;
+    let r = h.request("ui.clickWidget", json!({"id": "copyGroup:none"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    assert!(h.app.ui.dialog.is_some(), "a click inside the dialog keeps it");
+    let window = h.app.widgets.iter().find(|(id, _)| id == "dialog:window").map(|(_, r)| *r).unwrap();
+    let r = h.request("ui.drag", json!({"x": window.center().x, "y": window.center().y, "toX": 10.0, "toY": 10.0}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    assert!(h.app.ui.dialog.is_some(), "a drag that ends outside the dialog keeps it");
+    let r = h.request("ui.clickWidget", json!({"id": "star:bottom:5"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    assert!(h.app.ui.dialog.is_none(), "a click on the backdrop closes the dialog");
+    assert_eq!(h.app.session.catalog.photo(active).unwrap().rating, rating, "the click doesn't reach the panel below");
+}
+
 #[test]
 fn modal_dialogs_close_background_menus() {
     let mut h = demo([1400.0, 1000.0], json!({"view": "detail", "right": "edit"}));
