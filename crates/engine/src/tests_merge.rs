@@ -226,3 +226,35 @@ fn panorama_size_is_held_to_memory() {
     assert_eq!(mp(fit_in_memory(&asked, photos, gb(16))), 20.0, "a size asked for is kept when it fits");
     assert_eq!(fit_in_memory(&full, 1e6, None), fit_in_memory(&full, 1e6, gb(8)), "memory unknown: taken as 8 GB");
 }
+
+/// A preview whose options change reads and decodes its photos once: the second (another deghost amount) takes
+/// them from the session's frame cache.
+#[test]
+fn a_changed_preview_reuses_its_decoded_photos() {
+    let dir = temp_dir("preview-cache");
+    let mut paths = Vec::new();
+    for (i, b) in lightcraft_merge::synth::bracket_dngs(320, 240, &[-2.0, 0.0, 2.0]).unwrap().into_iter().enumerate() {
+        let p = dir.join(format!("IMG_{i}.dng"));
+        std::fs::write(&p, b).unwrap();
+        paths.push(p.to_string_lossy().to_string());
+    }
+    let mut s = Session::new().with_fs();
+    let ids = import(&mut s, paths);
+    let reads = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let r = reads.clone();
+    s.media.file_bytes = Some(std::sync::Arc::new(move |path: &str| {
+        r.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        std::fs::read(path).map_err(|e| e.to_string())
+    }));
+    let count = || reads.load(std::sync::atomic::Ordering::Relaxed);
+    s.execute("merge.hdr", &json!({"ids": ids, "preview": true})).unwrap();
+    assert_eq!(count(), 3);
+    assert_eq!(s.media.merge_frames.len(), 3);
+    s.execute("merge.hdr", &json!({"ids": ids, "preview": true, "deghost": "high"})).unwrap();
+    assert_eq!(count(), 3, "the second preview read its photos again");
+    // the full-size merge doesn't use (or fill) the preview cache
+    s.execute("merge.hdr", &json!({"ids": ids, "autoSettings": false})).unwrap();
+    assert_eq!(count(), 6);
+    assert_eq!(s.media.merge_frames.len(), 3);
+    let _ = std::fs::remove_dir_all(&dir);
+}

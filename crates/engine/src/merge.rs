@@ -27,6 +27,8 @@ pub const NO_BRACKET_SETS: &str =
 
 /// Long edge of the frames of a preview merge.
 pub const PREVIEW_EDGE: usize = 1024;
+/// Photos a preview decodes at once.
+const PREVIEW_LOADS: usize = 4;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
@@ -73,6 +75,60 @@ pub struct MergeFinish {
     pub show_overlay: bool,
 }
 
+/// The decoded photos of recent merge previews, so a preview whose options change (another projection, a deghost
+/// amount) reads and decodes nothing again. Keyed by file (path, size, modification time), preview size and
+/// orientation; at most [`FRAME_CACHE_BYTES`], the least recently used out first. Full-size merges don't use it.
+#[derive(Clone, Default)]
+pub struct FrameCache(Arc<std::sync::Mutex<Vec<(FrameKey, Frame)>>>);
+
+#[derive(Clone, Debug, PartialEq)]
+struct FrameKey {
+    path: String,
+    len: u64,
+    modified: Option<std::time::SystemTime>,
+    edge: usize,
+    orient: bool,
+}
+
+/// Memory the decoded preview photos may take (a 1024 px frame is about 9 MB).
+const FRAME_CACHE_BYTES: usize = 512 << 20;
+
+impl FrameCache {
+    /// The key of `path` as it is on disk now; `None` when the file can't be looked at (no caching then).
+    fn key(path: &str, edge: usize, orient: bool) -> Option<FrameKey> {
+        let m = std::fs::metadata(path).ok()?;
+        Some(FrameKey { path: path.to_string(), len: m.len(), modified: m.modified().ok(), edge, orient })
+    }
+
+    fn get(&self, key: &FrameKey) -> Option<Frame> {
+        let mut v = self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let i = v.iter().position(|(k, _)| k == key)?;
+        let e = v.remove(i);
+        let f = e.1.clone();
+        v.push(e);
+        Some(f)
+    }
+
+    fn put(&self, key: FrameKey, frame: &Frame) {
+        let bytes = |f: &Frame| f.image.data.len() * std::mem::size_of::<[f32; 3]>();
+        let mut v = self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        v.retain(|(k, _)| *k != key);
+        v.push((key, frame.clone()));
+        while v.len() > 1 && v.iter().map(|(_, f)| bytes(f)).sum::<usize>() > FRAME_CACHE_BYTES {
+            v.remove(0);
+        }
+    }
+
+    /// Photos held.
+    pub fn len(&self) -> usize {
+        self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner).len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
 /// Reads a source photo's bytes (by catalog path).
 pub type ByteReader = Arc<dyn Fn(&str) -> std::result::Result<Vec<u8>, String> + Send + Sync>;
 
@@ -85,6 +141,8 @@ pub struct MergeJob {
     /// `Some(edge)`: preview at that frame size; `None`: the full-resolution merge.
     pub preview: Option<usize>,
     pub read: ByteReader,
+    /// Previews: the session's decoded photos ([`FrameCache`]).
+    pub frames: Option<FrameCache>,
 }
 
 /// What a merge produced.
@@ -107,21 +165,55 @@ fn err(e: impl std::fmt::Display) -> String {
 
 impl MergeJob {
     fn load(&self, orient: bool, progress: &ProgressFn, span: (f32, f32)) -> std::result::Result<Vec<Frame>, String> {
+        self.load_sources(&self.sources, orient, progress, span)
+    }
+
+    /// One photo as a merge frame, from the preview cache when it holds it.
+    fn load_one(&self, path: &str, orient: bool) -> std::result::Result<Frame, String> {
+        let key = self.frames.as_ref().and(self.preview).and_then(|edge| FrameCache::key(path, edge, orient));
+        if let (Some(cache), Some(k)) = (&self.frames, &key)
+            && let Some(f) = cache.get(k)
+        {
+            return Ok(f);
+        }
+        let bytes = (self.read)(path)?;
+        // a raw without colour matrices of its own starts from the colour it has when opened alone (#965)
+        let f = lightcraft_merge::load_frame_with(&bytes, self.preview, orient, &crate::camera_preview::starting_colour_tags)
+            .map_err(|e| format!("{path}: {e}"))?;
+        if let (Some(cache), Some(k)) = (&self.frames, key) {
+            cache.put(k, &f);
+        }
+        Ok(f)
+    }
+
+    fn load_sources(
+        &self,
+        sources: &[(PhotoId, String)],
+        orient: bool,
+        progress: &ProgressFn,
+        span: (f32, f32),
+    ) -> std::result::Result<Vec<Frame>, String> {
         use rayon::prelude::*;
         let done = std::sync::atomic::AtomicUsize::new(0);
-        let n = self.sources.len();
+        let n = sources.len();
         let one = |(_, path): &(PhotoId, String)| {
-            let bytes = (self.read)(path)?;
-            // a raw without colour matrices of its own starts from the colour it has when opened alone (#965)
-            let f = lightcraft_merge::load_frame_with(&bytes, self.preview, orient, &crate::camera_preview::starting_colour_tags)
-                .map_err(|e| format!("{path}: {e}"));
+            let f = self.load_one(path, orient);
             let k = done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-            progress(span.0 + (span.1 - span.0) * k as f32 / n as f32, "Reading photos");
+            progress(span.0 + (span.1 - span.0) * k as f32 / n.max(1) as f32, "Reading photos");
             f
         };
         // Full-size photos are decoded one at a time (the demosaic is parallel inside): decoding several 60 MP raws at
-        // once multiplied the decoders' scratch memory, and a 7-frame bracket ran out of memory.
-        if self.preview.is_some() { self.sources.par_iter().map(one).collect() } else { self.sources.iter().map(one).collect() }
+        // once multiplied the decoders' scratch memory, and a 7-frame bracket ran out of memory. Previews a few at a
+        // time: a raw that can't be binned (JPEG XL, linear DNG) still decodes at full size, and a panorama preview of
+        // a dozen 48 MP photos all at once reached 40 GB.
+        if self.preview.is_none() {
+            return sources.iter().map(one).collect();
+        }
+        let mut frames = Vec::with_capacity(n);
+        for chunk in sources.chunks(PREVIEW_LOADS) {
+            frames.extend(chunk.par_iter().map(one).collect::<std::result::Result<Vec<_>, _>>()?);
+        }
+        Ok(frames)
     }
 
     /// Run the merge. `progress(fraction, stage)` returns false to cancel.
@@ -168,18 +260,30 @@ impl MergeJob {
                 )
             }
             MergeKind::HdrPanorama { hdr, pano, bracket } => {
-                let frames = self.load(false, progress, (0.0, 0.2))?;
-                let b =
-                    if *bracket >= 2 { *bracket } else { detect_bracket(&frames).ok_or("could not detect the bracket size from EXIF; set it")? };
-                if !frames.len().is_multiple_of(b) || frames.len() / b < 2 {
-                    return Err(format!("{} photos don't form brackets of {b} for at least two positions", frames.len()));
+                let n = self.sources.len();
+                let b = if *bracket >= 2 {
+                    *bracket
+                } else {
+                    // the bracket size from the photos' EXIF exposures (read without decoding them)
+                    let ev: Option<Vec<f64>> = self
+                        .sources
+                        .iter()
+                        .map(|(_, path)| {
+                            (self.read)(path).ok().and_then(|bytes| lightcraft_merge::frame::exif_exposure(&lightcraft_meta::extract(&bytes)))
+                        })
+                        .collect();
+                    ev.as_deref().and_then(detect_bracket).ok_or("could not detect the bracket size from EXIF; set it")?
+                };
+                if !n.is_multiple_of(b) || n / b < 2 {
+                    return Err(format!("{n} photos don't form brackets of {b} for at least two positions"));
                 }
-                let groups = frames.len() / b;
+                let groups = n / b;
                 let mut merged = Vec::new();
-                let mut it = frames.into_iter();
-                for g in 0..groups {
-                    let set: Vec<Frame> = it.by_ref().take(b).collect();
-                    let p = sub(0.2 + 0.4 * g as f32 / groups as f32, 0.2 + 0.4 * (g + 1) as f32 / groups as f32);
+                // one bracket at a time: only its photos are held at full size, never all of them
+                for (g, set) in self.sources.chunks(b).enumerate() {
+                    let at = |t: f32| 0.6 * (g as f32 + t) / groups as f32;
+                    let set = self.load_sources(set, false, progress, (at(0.0), at(0.5)))?;
+                    let p = sub(at(0.5), at(1.0));
                     let r = lightcraft_merge::merge_hdr(set, hdr, &p).map_err(err)?;
                     let mut f = Frame {
                         image: r.radiance,
@@ -298,8 +402,7 @@ fn pixels(frames: &[Frame]) -> f64 {
 pub(crate) const MIN_FITTED_MEGAPIXELS: f64 = 40.0;
 
 /// Bracket size from EXIF: the smallest period of the exposure sequence (≥ 2).
-pub fn detect_bracket(frames: &[Frame]) -> Option<usize> {
-    let ev: Vec<f64> = frames.iter().map(|f| f.exposure).collect::<Option<_>>()?;
+pub fn detect_bracket(ev: &[f64]) -> Option<usize> {
     let n = ev.len();
     (2..=n / 2).find(|&b| n.is_multiple_of(b) && (0..n).all(|k| (ev[k] - ev[k % b]).abs() < 0.2) && (1..b).any(|k| (ev[k] - ev[0]).abs() > 0.5))
 }
@@ -421,7 +524,8 @@ impl Session {
             Some(r) => r.clone(),
             None => Arc::new(|path: &str| std::fs::read(path).map_err(|e| format!("{path}: {e}"))),
         };
-        Ok(MergeJob { kind, finish, sources, preview: preview.then_some(PREVIEW_EDGE), read })
+        let frames = preview.then(|| self.media.merge_frames.clone());
+        Ok(MergeJob { kind, finish, sources, preview: preview.then_some(PREVIEW_EDGE), read, frames })
     }
 
     /// Write a finished (non-preview) merge next to its first source, import it, select it and
