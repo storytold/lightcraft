@@ -957,6 +957,8 @@ pub fn specs() -> Vec<CommandSpec> {
                     let mut m = ph.meta.clone();
                     if let Some(g) = gps {
                         m.gps = g;
+                        // an explicit clear is remembered, so a save removes the sidecar's position; setting one undoes it
+                        m.gps_removed = g.is_none();
                     }
                     if let Some(st) = status {
                         m.copyright_status = st;

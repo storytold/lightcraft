@@ -31,7 +31,9 @@ What we write (standard namespaces, so other tools can read the metadata):
 `lc:` is `http://ns.lightcraft.app/lc/1.0/`.
 
 Reading merges into the catalog with the **sidecar winning** for every field it states; fields it doesn't state are
-kept. The one exception is the **capture time**: a time embedded in the file (EXIF/IPTC) always wins; when the file
+kept. That includes **GPS**: a sidecar's `exif:GPSLatitude`/`GPSLongitude` replaces the position the camera embedded in
+the file (the Metadata Working Group's rule: XMP over Exif), so a photo geotagged in another app keeps that place. The
+one exception is the **capture time**: a time embedded in the file (EXIF/IPTC) always wins; when the file
 has none, the sidecar's `exif:DateTimeOriginal`, else `photoshop:DateCreated`, else `xmp:CreateDate` (ISO 8601) is
 used — on import (it then also files a copied photo in its date folder) and by `photo.readMetadataFromFile` (undoable).
 `xmp:Rating="-1"` (the XMP convention for rejected) sets the reject flag. Develop settings come from
@@ -53,7 +55,12 @@ the only copy of those edits outside that application's catalog. Saving never dr
   (clearing a title in LightCraft clears it in the file). All of them are read back on import, so the library starts
   from what the sidecar said.
 - The **capture time** (`exif:DateTimeOriginal`, `photoshop:DateCreated`) and **GPS** (`exif:GPSLatitude`,
-  `exif:GPSLongitude`) are replaced only when LightCraft has a value; otherwise the file's stay.
+  `exif:GPSLongitude`) are replaced only when LightCraft has a value; otherwise the file's stay (GPS: see the removal rule below). A position the
+  sidecar already states (to within about a centimetre) is kept as written there, in its own precision: GPS is
+  rewritten only when it was changed in LightCraft.
+  A position removed in LightCraft (`photo.setMeta` with `gps: null`) is removed from the sidecar by the next save,
+  and that save clears the removal; a failed save keeps it. A photo whose position LightCraft never set keeps the one
+  its sidecar states. Read Metadata from File takes the sidecar's position whenever the sidecar states one.
 - **Everything else is kept byte for byte**: other namespaces (`crs:`, `xmpMM:`, `lr:hierarchicalSubject`, unknown
   ones), `xmp:CreatorTool`, comments, the packet wrapper and padding. LightCraft's properties go into one
   `rdf:Description` of their own; owned properties written by another application (in attribute or element form) are
