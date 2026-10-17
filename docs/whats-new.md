@@ -183,6 +183,12 @@
 
 ## 2026-10-13
 
+### Scrolling past editing sliders
+- Leaving a selected slider disarms its vertical mouse-wheel adjustment (issue #1355). Scrolling back over it now
+  scrolls the panel instead of unexpectedly changing the photo. Click or drag the slider again to adjust it
+  with the vertical wheel; keyboard arrow adjustments and an ongoing drag still work. Sideways scrolling
+  still adjusts the slider under the pointer without selecting it first.
+
 ### Edits keep up in a large library
 - A small edit (a keyword, a rating, a flag, a slider) no longer has the grid's list worked out again from every
   photo: only the photos the edit touched are asked about again and put at their place in the order. In a library of

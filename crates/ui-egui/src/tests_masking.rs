@@ -1518,6 +1518,36 @@ fn a_selected_develop_slider_accepts_wheel_nudges() {
     }
     let after = lightcraft_develop::controls::get(&develop(&h), "light.exposure").expect("exposure");
     assert!(after > before, "selected exposure did not increase: {before} -> {after}");
+    for _ in 0..40 {
+        h.step();
+    }
+    let before_leaving = develop(&h).light.exposure;
+    // Leaving the row disarms wheel edits, but must not take keyboard arrows away.
+    h.request("ui.move", json!({"x": panel.left() - 10.0, "y": track.center().y}), T);
+    h.request("ui.hoverWidget", json!({"id": name}), T);
+    // Exceed a full notch after cancelling the previous positive fractional remainder.
+    h.request("ui.scroll", json!({"dy": -240.0}), T);
+    for _ in 0..40 {
+        h.step();
+    }
+    assert_eq!(develop(&h).light.exposure, before_leaving, "returning to a slider while scrolling must not edit it (issue #1355)");
+    h.request("ui.move", json!({"x": panel.left() - 10.0, "y": track.center().y}), T);
+    h.request("ui.key", json!({"key": "ArrowUp"}), T);
+    assert!(develop(&h).light.exposure > before_leaving, "keyboard adjustment survives leaving the slider");
+
+    // Scroll back to the top, then explicitly select it again to re-enable wheel nudges.
+    h.request("ui.move", json!({"x": panel.right() - 8.0, "y": panel.center().y}), T);
+    h.request("ui.scroll", json!({"dy": 600.0}), T);
+    for _ in 0..40 {
+        h.step();
+    }
+    click(&mut h, name);
+    let before_reselecting = develop(&h).light.exposure;
+    h.request("ui.scroll", json!({"dy": 120.0}), T);
+    for _ in 0..40 {
+        h.step();
+    }
+    assert!(develop(&h).light.exposure > before_reselecting, "a new click re-enables wheel adjustment");
 }
 
 /// Scrolling sideways over a slider adjusts it without selecting it first: a trackpad swipe

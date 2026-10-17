@@ -176,3 +176,85 @@ fn a_disabled_value_does_not_scrub() {
     assert!(h.scrub(width / 5.0, 10, false).iter().all(|o| o.value.is_none() && !o.drag_started));
     assert_eq!(h.value, 0.71);
 }
+
+#[test]
+fn leaving_a_slider_disarms_wheel_edits_until_it_is_selected_again() {
+    let mut h = Harness::new();
+    let inside = h.track.center();
+    let outside = egui::pos2(5.0, 80.0);
+    let button = |pressed| Event::PointerButton { pos: inside, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    let wheel = || Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: vec2(0.0, 120.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: Modifiers::NONE,
+    };
+    h.frame(vec![Event::PointerMoved(inside)]);
+    h.frame(vec![button(true)]);
+    h.frame(vec![button(false)]);
+    let selected = h.value;
+    h.frame(vec![wheel()]);
+    for _ in 0..40 {
+        h.frame(vec![]);
+    }
+    assert!(h.value > selected, "selecting a slider enables wheel nudges");
+    h.frame(vec![Event::PointerMoved(outside)]);
+    let before_return = h.value;
+    h.frame(vec![Event::PointerMoved(inside), wheel()]);
+    for _ in 0..40 {
+        h.frame(vec![]);
+    }
+    assert_eq!(h.value, before_return, "scrolling back over a previously selected slider must not edit it");
+    h.frame(vec![Event::PointerMoved(outside)]);
+    let before_arrow = h.value;
+    h.key(Key::ArrowUp);
+    assert!(h.value > before_arrow, "leaving must preserve keyboard arrows");
+    // Sideways scrolling remains independent of vertical wheel selection (#1465).
+    let before_sideways = h.value;
+    h.frame(vec![
+        Event::PointerMoved(inside),
+        Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: vec2(120.0, 0.0), phase: egui::TouchPhase::Move, modifiers: Modifiers::NONE },
+    ]);
+    for _ in 0..40 {
+        h.frame(vec![]);
+    }
+    let after_sideways = h.value;
+    assert!(after_sideways > before_sideways, "a disarmed slider still accepts sideways nudges");
+    h.frame(vec![wheel()]);
+    for _ in 0..40 {
+        h.frame(vec![]);
+    }
+    assert_eq!(h.value, after_sideways, "sideways nudges do not re-arm vertical wheel edits");
+    h.frame(vec![Event::PointerMoved(inside)]);
+    h.frame(vec![button(true)]);
+    h.frame(vec![button(false)]);
+    let selected_again = h.value;
+    h.frame(vec![wheel()]);
+    for _ in 0..40 {
+        h.frame(vec![]);
+    }
+    assert!(h.value > selected_again, "selecting it again restores wheel nudges");
+}
+
+#[test]
+fn leaving_the_row_during_a_drag_keeps_dragging_but_release_disarms_the_wheel() {
+    let mut h = Harness::new();
+    let inside = h.track.center();
+    let outside = egui::pos2(h.track.right() - 20.0, 80.0);
+    let button = |pos, pressed| Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    h.frame(vec![Event::PointerMoved(inside)]);
+    h.frame(vec![button(inside, true)]);
+    let initial = h.value;
+    h.frame(vec![Event::PointerMoved(outside)]);
+    assert!(h.value > initial, "an owned drag keeps editing outside the row");
+    h.frame(vec![button(outside, false)]);
+    let released = h.value;
+    h.frame(vec![
+        Event::PointerMoved(inside),
+        Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: vec2(0.0, -120.0), phase: egui::TouchPhase::Move, modifiers: Modifiers::NONE },
+    ]);
+    for _ in 0..40 {
+        h.frame(vec![]);
+    }
+    assert_eq!(h.value, released, "releasing outside disarms subsequent wheel edits");
+}

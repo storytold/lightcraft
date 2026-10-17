@@ -240,15 +240,21 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
     let track_rect = Rect::from_min_max(pos2(row.left() + pad_l, row.top() + 22.0), pos2(row.right() - pad_r, row.top() + 40.0));
     let id = ui.id().with(spec.id);
     let resp = ui.interact(track_rect.expand2(vec2(8.0, 2.0)), id, if enabled { Sense::click_and_drag() } else { Sense::hover() });
-    // A click selects the slider for arrow/wheel adjustments. Keep scroll-to-adjust
-    // opt-in so hovering an unfocused slider still scrolls the containing panel.
-    // Tab reaching the slider selects it as a click does: the arrow keys then adjust it
+    // Keyboard focus survives leaving the row; wheel edits require a fresh click or drag.
+    let wheel_selected_id = id.with("wheel-selected");
+    let pointer_in_row = ui.rect_contains_pointer(row);
+    // Tab reaching the slider selects it for arrow keys, not vertical wheel edits.
     if enabled && resp.gained_focus() {
         ui.data_mut(|d| d.insert_temp(focused_slider_key(), id));
     }
     if enabled && (resp.clicked() || resp.drag_started()) {
         resp.request_focus();
-        ui.data_mut(|d| d.insert_temp(focused_slider_key(), id));
+        ui.data_mut(|d| {
+            d.insert_temp(focused_slider_key(), id);
+            d.insert_temp(wheel_selected_id, true);
+        });
+    } else if !enabled || !resp.has_focus() || (!pointer_in_row && !resp.is_pointer_button_down_on()) {
+        ui.data_mut(|d| d.remove::<bool>(wheel_selected_id));
     }
     // screen readers: a slider named after its control, with its value
     let label_text = crate::i18n::tr(label_override.unwrap_or(spec.label)).to_string();
@@ -446,7 +452,7 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
             })
         });
         // Arrow keys work with either a hovered or a focused slider.
-        if enabled && out.value.is_none() && typing.is_none() && (ui.rect_contains_pointer(row) || resp.has_focus() || inc || dec) {
+        if enabled && out.value.is_none() && typing.is_none() && (pointer_in_row || resp.has_focus() || inc || dec) {
             let (up, down, shift) = ui.input_mut(|i| {
                 let shift = i.modifiers.shift;
                 let m = if shift { egui::Modifiers::SHIFT } else { egui::Modifiers::NONE };
@@ -488,9 +494,9 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
         // Wheel nudges require an explicitly selected slider, unlike regular panel scrolling.
         // Consume only the vertical component so a trackpad's horizontal scroll still works.
         let wheel_id = id.with("wheel-rem");
-        if !resp.has_focus() {
+        if !resp.has_focus() || !ui.data(|m| m.get_temp::<bool>(wheel_selected_id)).unwrap_or(false) {
             ui.data_mut(|m| m.remove::<f32>(wheel_id));
-        } else if enabled && typing.is_none() && out.value.is_none() && ui.rect_contains_pointer(row) {
+        } else if enabled && typing.is_none() && out.value.is_none() && pointer_in_row {
             let delta = ui.input_mut(|i| {
                 let dy = i.smooth_scroll_delta.y;
                 if dy != 0.0 {
@@ -1013,8 +1019,8 @@ fn focused_slider_key() -> egui::Id {
     egui::Id::new("lightcraft-focused-slider")
 }
 
-/// Whether the widget with keyboard focus is a develop slider a click selected. It owns only the
-/// arrow keys (and the wheel): every other shortcut still works, as in Lightroom after a drag.
+/// Whether the widget with keyboard focus is a develop slider selected by a click, drag or Tab.
+/// It owns only the arrow keys: every other shortcut still works. Wheel selection is separate.
 pub fn slider_has_focus(ctx: &egui::Context) -> bool {
     let focused = ctx.memory(|m| m.focused());
     focused.is_some() && focused == ctx.data(|d| d.get_temp::<egui::Id>(focused_slider_key()))
