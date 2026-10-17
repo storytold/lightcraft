@@ -242,13 +242,12 @@ impl Store for MemStore {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests_staging {
     use super::*;
 
     /// A link planted at a staging name (`<name>.tmp`) is removed, never followed: the file it points to keeps its
     /// bytes and the save still lands (issue #1502).
-    #[cfg(unix)]
     #[test]
     fn a_link_at_the_staging_name_is_never_written_through() {
         let dir = std::env::temp_dir().join(format!("lc-staging-link-{}", std::process::id()));
