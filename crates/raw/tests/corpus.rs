@@ -1253,7 +1253,7 @@ fn sony_lens_records_of_the_public_samples() {
             "arw-sony-a7cr-compressed.arw",
             [272, 1, 0],
             (a7cr_shading, a7cr_ca, a7cr_distortion),
-            SonyLensStatus::NotValidatedModel,
+            SonyLensStatus::CameraCorrectionDisabled,
             (9600, 6376),
             32767,
             false,
@@ -1264,7 +1264,7 @@ fn sony_lens_records_of_the_public_samples() {
             "arw-sony-a7cr-lossless-l.arw",
             [272, 1, 0],
             (a7cr_shading, a7cr_ca, a7cr_distortion),
-            SonyLensStatus::NotValidatedModel,
+            SonyLensStatus::CameraCorrectionDisabled,
             (9728, 6656),
             7,
             false,
@@ -1275,7 +1275,7 @@ fn sony_lens_records_of_the_public_samples() {
             "arw-sony-a7cr-lossless-m.arw",
             [272, 1, 0],
             (a7cr_shading, a7cr_ca, a7cr_distortion),
-            SonyLensStatus::NotValidatedModel,
+            SonyLensStatus::NotValidatedMode,
             (6656, 4608),
             7,
             true,
@@ -1360,6 +1360,38 @@ fn sony_lens_records_of_the_public_samples() {
         checked += 1;
     }
     eprintln!("Sony lens records: {checked} checks on corpus files");
+}
+
+/// These pinned JPEGs have correction Off. Changing only the raw-IFD setting tests decoder wiring,
+/// not agreement with those JPEGs. The empirical corrected references are documented separately.
+#[test]
+fn a7cr_enabled_distortion_agrees_in_header_full_and_dng() {
+    use lightcraft_raw::lens_metadata::SonyLensStatus;
+    let root = corpus_root().join("raw");
+    let mut checked = 0;
+    for name in ["arw-sony-a7cr-compressed.arw", "arw-sony-a7cr-lossless-l.arw", "arw-sony-a7cr-lossless-m.arw"] {
+        let Some(mut bytes) = pinned_sony(&root, name) else { continue };
+        let original = probe_info(&bytes).unwrap();
+        assert!(original.opcodes.list3.is_empty(), "Off files must remain uncorrected");
+        let tiff = lightcraft_tiff::Tiff::parse(&bytes).unwrap();
+        let at = tiff.find(0x7036).unwrap().offset as usize;
+        let mut enabled = Vec::new();
+        tiff.order.put_u16(&mut enabled, 17);
+        bytes[at..at + 2].copy_from_slice(&enabled);
+        let header = probe_info(&bytes).unwrap();
+        let full = decode(&bytes).unwrap();
+        assert_eq!(header, full.info(), "{name}");
+        let s = full.lens_metadata.sony.as_ref().unwrap();
+        let linear = s.geometry.linear_ycbcr;
+        assert_eq!(s.distortion.status, if linear { SonyLensStatus::NotValidatedMode } else { SonyLensStatus::Applied });
+        assert_eq!(full.opcodes.list3.len(), usize::from(!linear));
+        // DNG export keeps the normalized map, including the different lossless storage padding.
+        let dng = lightcraft_raw::write_dng(&full, &Default::default()).unwrap();
+        let back = probe_info(&dng).unwrap();
+        assert_eq!(back.opcodes.list3, full.opcodes.list3, "{name}");
+        checked += 1;
+    }
+    assert!(checked == 0 || checked == 3, "run with all three pinned A7CR codings");
 }
 
 /// Kodak DCS520C (`crates/raw/src/vendor/kodak.rs`): the two-component lossless JPEG strip decodes through the

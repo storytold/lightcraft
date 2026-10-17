@@ -1658,6 +1658,49 @@ pub(crate) mod tests {
         Some((best.1, best.0))
     }
 
+    #[test]
+    fn corpus_a7cr_warp_keeps_coordinates_after_orientation_and_resizing() {
+        use lightcraft_geom::{Orientation, Point};
+        use lightcraft_pipeline::optics::Warp;
+        let root = std::env::var_os("LIGHTCRAFT_CORPUS")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus"));
+        for name in ["arw-sony-a7cr-compressed.arw", "arw-sony-a7cr-lossless-l.arw"] {
+            let Ok(mut bytes) = std::fs::read(root.join("raw").join(name)) else { continue };
+            let off = lightcraft_raw::probe_info(&bytes).unwrap();
+            assert!(embedded_lens(&off).is_none());
+            let tiff = lightcraft_tiff::Tiff::parse(&bytes).unwrap();
+            let at = tiff.find(0x7036).unwrap().offset as usize;
+            let mut enabled = Vec::new();
+            tiff.order.put_u16(&mut enabled, 17);
+            bytes[at..at + 2].copy_from_slice(&enabled);
+            let mut raw = lightcraft_raw::probe_info(&bytes).unwrap();
+            raw.orientation = Orientation::Normal;
+            let mut settings = lightcraft_develop::DevelopSettings::default();
+            settings.optics.lens_profile = true;
+            let base_lens = embedded_lens(&raw).unwrap();
+            let base = Warp::from_settings(9504.0, 6336.0, &settings, Some(&base_lens));
+            for orientation in 1..=8 {
+                let o = Orientation::from_exif(orientation);
+                raw.orientation = o;
+                let lens = embedded_lens(&raw).unwrap();
+                for edge in [1200.0, 2560.0, 9504.0] {
+                    let scale = edge / 9504.0;
+                    let (w, h) = if o.swaps_axes() { (6336.0 * scale, edge) } else { (edge, 6336.0 * scale) };
+                    let oriented = Warp::from_settings(w, h, &settings, Some(&lens));
+                    for (x, y) in [(0.05, 0.1), (0.5, 0.5), (0.9, 0.8)] {
+                        let point = Point::new(x * 9504.0, y * 6336.0);
+                        let source = base.corrected_to_source(point, 1);
+                        let (px, py) = o.map(point.x, point.y, 9504.0, 6336.0);
+                        let (sx, sy) = o.map(source.x, source.y, 9504.0, 6336.0);
+                        let got = oriented.corrected_to_source(Point::new(px * scale, py * scale), 1);
+                        assert!((got.x - sx * scale).hypot(got.y - sy * scale) < 1e-8, "{name} orientation {orientation} edge {edge}");
+                    }
+                }
+            }
+        }
+    }
+
     /// Issue #256: public Panasonic / Leica raws (skipped without the corpus) are corrected for distortion the way the
     /// camera corrected its own JPEG (tag 0x0119): at the corners of the frame, the render with "Enable Profile
     /// Corrections" lines up with the embedded JPEG within 2 px at 640 px, while the uncorrected render of the wide

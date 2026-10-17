@@ -34,7 +34,8 @@ use lightcraft_raw::{
 /// 7: the sensor proxy follows the file's lens warp when the camera JPEG is lens-corrected.
 /// 8: the bundled NIKON Z 6_2 profile.
 /// 9: the bundled NIKON Z 8 and NIKON D5300 profiles.
-pub const LOOK_VERSION: u32 = 9;
+/// 11: validated A7CR distortion, including the lens data stored with each smart preview.
+pub const LOOK_VERSION: u32 = 11;
 
 #[derive(Clone, Debug)]
 pub(crate) struct CameraLook {
