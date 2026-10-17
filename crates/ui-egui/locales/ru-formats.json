@@ -326,5 +326,8 @@
   "{name} is installed and in use: face recognition is on": "Модель {name} установлена и используется: распознавание лиц включено",
   "Bring photos in with File › Import Photos… ({keys}).": "Фотографии добавляются через Файл › Импорт фото… ({keys}).",
   "View › Detail View ({keys}).": "Вид › Режим детализации ({keys}).",
-  "File › Export… · File › Print… ({keys}).": "Файл › Экспорт… · Файл › Печать… ({keys})."
+  "File › Export… · File › Print… ({keys}).": "Файл › Экспорт… · Файл › Печать… ({keys}).",
+  "Add {n} photo{} to “{}”": "Добавить в «{1}» фото: {n}{0:.0}",
+  "{n} already there": "{n} уже там",
+  "Add “{keyword}” to {n} photo{}": "Добавить «{keyword}» к фото: {n}{:.0}"
 }

@@ -328,5 +328,8 @@
   "View › Detail View ({keys}).": "ხედი › დეტალური ხედი ({keys}).",
   "File › Export… · File › Print… ({keys}).": "ფაილი › ექსპორტი… · ფაილი › დაბეჭდვა… ({keys}).",
   "{n} folder{} could not be read": "საქაღალდეები, რომლებიც ვერ წაიკითხა: {n}{:.0}",
-  "{n} file{} skipped (not a supported photo type)": "გამოტოვებული ფაილები (მხარდაუჭერელი ფოტოს ტიპია): {n}{:.0}"
+  "{n} file{} skipped (not a supported photo type)": "გამოტოვებული ფაილები (მხარდაუჭერელი ფოტოს ტიპია): {n}{:.0}",
+  "Add {n} photo{} to “{}”": "დაამატეთ ფოტო „{1}“-ში: {n}{0:.0}",
+  "{n} already there": "{n} უკვე არის",
+  "Add “{keyword}” to {n} photo{}": "დაამატეთ „{keyword}“ ფოტოებს: {n}{:.0}"
 }

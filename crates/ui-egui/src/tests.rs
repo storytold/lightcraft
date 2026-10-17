@@ -26,6 +26,7 @@ mod dialog_tab;
 mod dialogs;
 mod disk_space;
 mod docking_acceptance;
+mod drag_contract;
 mod drop_import;
 mod edit_layout;
 mod empty_library;

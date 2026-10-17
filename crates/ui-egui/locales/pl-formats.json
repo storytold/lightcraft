@@ -325,5 +325,8 @@
   "View › Detail View ({keys}).": "Widok › Widok szczegółów ({keys}).",
   "File › Export… · File › Print… ({keys}).": "Plik › Eksportuj… · Plik › Drukuj… ({keys}).",
   "{n} folder{} could not be read": "Nie udało się odczytać folderów: {n}{:.0}",
-  "{n} file{} skipped (not a supported photo type)": "Pominięte pliki (nieobsługiwany typ zdjęcia): {n}{:.0}"
+  "{n} file{} skipped (not a supported photo type)": "Pominięte pliki (nieobsługiwany typ zdjęcia): {n}{:.0}",
+  "Add {n} photo{} to “{}”": "Dodaj do „{1}” — zdjęcia: {n}{0:.0}",
+  "{n} already there": "{n} już tam jest",
+  "Add “{keyword}” to {n} photo{}": "Dodaj „{keyword}” do zdjęć: {n}{:.0}"
 }
