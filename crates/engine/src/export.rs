@@ -1310,7 +1310,15 @@ pub fn encode_with_metadata(img: &Rgba8, o: &ExportOptions, meta: Option<&Metada
     let exif = meta.map(lightcraft_meta::write_exif);
     let xmp = meta.map(|m| lightcraft_meta::write_xmp(m, None));
     let meta = EncodeMeta { icc: Some(&profile), exif: exif.as_deref(), xmp: xmp.as_deref(), ppi: Some(o.ppi) };
-    let e = EncodeImage::rgba8(&img);
+    // Opaque photo exports need no alpha channel (#1670). Keep real transparency for
+    // callers of this encoder, and leave unrelated formats on their existing path.
+    let rgb: Option<Vec<u8>> = (matches!(o.format, ExportFormat::Png | ExportFormat::Tiff | ExportFormat::Webp)
+        && img.data.iter().all(|p| p.last() == Some(&255)))
+    .then(|| img.data.iter().flat_map(|p| p.iter().take(3).copied()).collect());
+    let e = match &rgb {
+        Some(data) => EncodeImage::new(img.width as u32, img.height as u32, 3, Samples::U8(data)),
+        None => EncodeImage::rgba8(&img),
+    };
     let r = match o.format {
         ExportFormat::Jpeg => {
             // 4:4:4 normally; 4:2:0 when targeting a file size (much smaller at equal visual quality).
@@ -2279,6 +2287,43 @@ mod tests {
             *p = [(x * 2) as u8, (y * 3) as u8, ((x * y) % 255) as u8, 255];
         }
         img
+    }
+
+    /// Issue #1670: removing a redundant alpha channel preserves samples and metadata.
+    #[test]
+    fn opaque_eight_bit_exports_are_rgb() {
+        let img = test_image();
+        let metadata = Metadata { copyright: Some("Synthetic export test".into()), ..Default::default() };
+        for format in [ExportFormat::Png, ExportFormat::Tiff, ExportFormat::Webp] {
+            for compression in [TiffCompression::None, TiffCompression::Lzw, TiffCompression::Deflate, TiffCompression::PackBits] {
+                let options = ExportOptions { format, tiff_compression: compression, ..Default::default() };
+                let bytes = encode_with_metadata(&img, &options, Some(&metadata)).unwrap();
+                let decoded = lightcraft_codecs::decode(&bytes, Default::default()).unwrap();
+                assert!(!decoded.has_alpha, "{format:?}/{compression:?} must be RGB");
+                assert_eq!((decoded.width, decoded.height, decoded.bit_depth), (96, 64, 8));
+                assert_eq!(decoded.to_srgb8().data, img.data, "{format:?}/{compression:?} pixels");
+                assert_eq!(decoded.icc.as_deref(), Some(icc::write_named(NamedSpace::Srgb).as_slice()));
+                assert!(decoded.xmp.as_deref().unwrap_or_default().contains("Synthetic export test"));
+                if format == ExportFormat::Png {
+                    assert_eq!(bytes[25], 2, "PNG IHDR declares RGB");
+                }
+                if format != ExportFormat::Tiff {
+                    break;
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn eight_bit_exports_preserve_real_alpha() {
+        let mut img = test_image();
+        img.data[0][3] = 128;
+        for format in [ExportFormat::Png, ExportFormat::Tiff, ExportFormat::Webp] {
+            let bytes = encode_image(&img, &ExportOptions { format, ..Default::default() }).unwrap();
+            let decoded = lightcraft_codecs::decode(&bytes, Default::default()).unwrap();
+            assert!(decoded.has_alpha, "{format:?} must retain real alpha");
+            assert_eq!(decoded.to_srgb8().data, img.data, "{format:?} samples");
+        }
     }
 
     #[test]
