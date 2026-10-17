@@ -257,8 +257,9 @@ impl CameraColourModel<'_> {
         lightcraft_raw::highlight::reconstruct_with(img, self.wb, HIGHLIGHT_CLIP, clipped_white(&self.matrix));
     }
 
-    /// [`Self::rebuild_highlights`] for a binned image whose clipped channels `mask` tells
-    /// ([`lightcraft_raw::RawImage::develop_binned_masked`]).
+    /// [`Self::rebuild_highlights`] for an image whose clipped channels `mask` tells: binned
+    /// ([`lightcraft_raw::RawImage::develop_binned_masked`]) or demosaiced at full size
+    /// ([`lightcraft_raw::RawImage::develop_balanced_masked`]).
     pub fn rebuild_highlights_masked(&self, img: &mut Rgb32f, mask: &[u8]) {
         lightcraft_raw::highlight::reconstruct_masked(img, self.wb, HIGHLIGHT_CLIP, clipped_white(&self.matrix), mask);
     }
@@ -450,7 +451,10 @@ fn load_bytes_now(
             Some((img, mask)) => (img, Some(mask)),
             None => {
                 let method = if max_edge <= 600 { lightcraft_raw::Method::Bilinear } else { lightcraft_raw::Method::Ahd };
-                (raw.develop(method).map_err(|e| e.to_string())?, None)
+                // demosaiced white balanced (the as-shot white the colour model below applies), camera RGB after it
+                // (demosaiced on the sensor's own scale, neutral edges get coloured outlines), and which channels
+                // were interpolated from clipped samples (issue #1328)
+                raw.develop_balanced_masked(method, t.wb, HIGHLIGHT_CLIP).map_err(|e| e.to_string())?
             }
         };
         // the same development from the denoised mosaic, when the photo has been denoised
@@ -1583,6 +1587,211 @@ pub(crate) mod tests {
         assert!(worst < 1.12, "green speckles: green {worst:.2}× the other channels");
     }
 
+    /// A neutral scene (`level` white balanced, at sub-pixel positions) as `tests_xmp::synthetic_dng_of`'s RGGB DNG
+    /// (as-shot neutral 0.5 : 1 : 0.7) records it: through a lens (each pixel the mean of its area, then a binomial
+    /// blur of about a pixel), divided by the white balance, clipped at the white level.
+    fn photographed_dng(w: usize, h: usize, level: impl Fn(f32, f32) -> f32) -> Vec<u8> {
+        let wb = [2.0, 1.0, 1.0 / 0.7];
+        let cfa = lightcraft_raw::Cfa::bayer("RGGB").unwrap();
+        let area: Vec<f32> = (0..w * h)
+            .map(|i| {
+                let (x, y) = ((i % w) as f32, (i / w) as f32);
+                (0..16).map(|k| level(x + ((k % 4) as f32 + 0.5) / 4.0, y + ((k / 4) as f32 + 0.5) / 4.0)).sum::<f32>() / 16.0
+            })
+            .collect();
+        let blur = |v: &[f32], dx: isize, dy: isize| -> Vec<f32> {
+            (0..w * h)
+                .map(|i| {
+                    let (x, y) = ((i % w) as isize, (i / w) as isize);
+                    let at = |k: isize| v[(y + k * dy).clamp(0, h as isize - 1) as usize * w + (x + k * dx).clamp(0, w as isize - 1) as usize];
+                    (at(-2) + 4.0 * at(-1) + 6.0 * at(0) + 4.0 * at(1) + at(2)) / 16.0
+                })
+                .collect()
+        };
+        let light = blur(&blur(&area, 1, 0), 0, 1);
+        let data = (0..w * h)
+            .map(|i| {
+                let v = (light[i] / wb[cfa.color_at(i % w, i / w) as usize]).min(1.0);
+                (256.0 + v * (16000.0 - 256.0)).round() as u16
+            })
+            .collect();
+        crate::tests_xmp::synthetic_dng_of(w, h, "RGGB", data, None, Default::default())
+    }
+
+    /// Issue #1328: full-size decodes (exports, 1:1) of neutral specular points of 1 to 3 px on a dark neutral
+    /// surface, bright enough to clip green (the brightest every channel). The pixels around them must come out
+    /// nearly neutral: no channel below 0.4 of the pixel's mean. Demosaiced before white balance, red beside a point
+    /// fell to zero (green and cyan rims: 153 of these 549 pixels had a channel below half the mean, most at zero).
+    /// Now the lowest is one channel at 0.498, a pixel the clip mask has rebuilt beside a 3 px point.
+    #[test]
+    fn full_size_specular_points_have_no_coloured_rims() {
+        let (w, h) = (96usize, 72usize);
+        let mut points = Vec::new();
+        for (i, level) in [2.0f32, 4.0, 8.0].into_iter().enumerate() {
+            for (j, size) in [1.0f32, 2.0, 3.0].into_iter().enumerate() {
+                for k in 0..2 {
+                    points.push((8.0 + j as f32 * 30.0 + k as f32 * 12.6, 9.0 + i as f32 * 22.0 + k as f32 * 7.3, size, level));
+                }
+            }
+        }
+        let lit = |x: f32, y: f32| points.iter().find(|&&(px, py, s, _)| (px..px + s).contains(&x) && (py..py + s).contains(&y)).map(|p| p.3);
+        let bytes = photographed_dng(w, h, |x, y| lit(x, y).unwrap_or(0.04));
+        let (img, _) = load_bytes(&bytes, 4096).unwrap();
+        assert_eq!((img.width, img.height), (w, h), "a full-size decode");
+        // within 2 px of a point, and not on it
+        let rim = |x: usize, y: usize| {
+            let (fx, fy) = (x as f32, y as f32);
+            let near = points.iter().any(|&(px, py, s, _)| fx + 3.0 > px && fx < px + s + 2.0 && fy + 3.0 > py && fy < py + s + 2.0);
+            near && (-1..=1).all(|d| lit(fx + 0.5 + d as f32, fy + 0.5).is_none() && lit(fx + 0.5, fy + 0.5 + d as f32).is_none())
+        };
+        let (mut n, mut bad) = (0, Vec::new());
+        for y in 0..h {
+            for x in 0..w {
+                if !rim(x, y) {
+                    continue;
+                }
+                n += 1;
+                let p = img.get(x, y);
+                let mean = (p[0] + p[1] + p[2]) / 3.0;
+                if p.iter().any(|&v| v < 0.4 * mean) {
+                    bad.push((x, y, p));
+                }
+            }
+        }
+        assert!(n > 300, "{n} rim pixels");
+        assert!(bad.is_empty(), "{} of {n} rim pixels coloured, e.g. {:?}", bad.len(), &bad[..bad.len().min(4)]);
+    }
+
+    /// Issue #1328: full-size decodes of sharp neutral white-on-dark edges (straight, diagonal, round, a 1 px line),
+    /// nothing clipped, stay nearly neutral along the edges. Demosaiced before white balance they had yellow,
+    /// green, cyan and magenta outlines.
+    #[test]
+    fn full_size_sharp_neutral_edges_stay_neutral() {
+        let (w, h) = (96usize, 80usize);
+        let (dark, bright) = (0.03f32, 0.85f32);
+        let shape = |x: f32, y: f32| {
+            let disc = (x - 70.0).powi(2) + (y - 24.0).powi(2) < 13.5f32.powi(2);
+            let bar = (10.0..30.0).contains(&x) && (8.0..40.0).contains(&y);
+            let slant = y > 46.0 && x * 0.6 + y > 70.0 && x < 60.0;
+            disc || bar || slant || ((80.0..81.0).contains(&x) && y > 46.0)
+        };
+        let bytes = photographed_dng(w, h, |x, y| if shape(x, y) { bright } else { dark });
+        let (img, _) = load_bytes(&bytes, 4096).unwrap();
+        assert_eq!((img.width, img.height), (w, h), "a full-size decode");
+        let inside = |x: usize, y: usize| shape(x as f32 + 0.5, y as f32 + 0.5);
+        let (mut n, mut worst, mut sum) = (0, 0f32, 0f32);
+        for y in 2..h - 2 {
+            for x in 2..w - 2 {
+                if !(x - 1..=x + 1).any(|xx| (y - 1..=y + 1).any(|yy| inside(xx, yy) != inside(x, y))) {
+                    continue;
+                }
+                let p = img.get(x, y);
+                // the colour model renders the white-balanced neutral [1, 1, 1] at about 1
+                let spread = (p[0].max(p[1]).max(p[2]) - p[0].min(p[1]).min(p[2])) / (bright - dark);
+                worst = worst.max(spread);
+                sum += spread;
+                n += 1;
+            }
+        }
+        let mean = sum / n as f32;
+        assert!(n > 600, "{n} edge pixels");
+        assert!(mean < 0.03 && worst < 0.2, "edge colour spread mean {mean:.3}, worst {worst:.3} of the edge's contrast");
+    }
+
+    /// Review of #1328: full-size decodes of dark twigs and wires against a clipped sky keep the level their own
+    /// samples measured. With every colour within 2 px of a clipped sample taken as clipped, the pixel's own measured
+    /// channel included, the lines' pixels were rebuilt as the brightest neutral (a 0.1 green became 1.77, rendered
+    /// white).
+    #[test]
+    fn full_size_dark_lines_against_a_clipped_sky_keep_their_level() {
+        let (w, h) = (96usize, 72usize);
+        let dark = |x: f32, y: f32| {
+            (20.0..23.0).contains(&x)
+                || (30.0..34.0).contains(&y)
+                || ((x - y * 0.5 - 50.0).abs() < 3.0 && y < 60.0)
+                || (x - 78.0).powi(2) + (y - 56.0).powi(2) < 25.0
+        };
+        let level = |x: f32, y: f32| if dark(x, y) { 0.05 } else { 3.0 };
+        let bytes = photographed_dng(w, h, level);
+        let (img, _) = load_bytes(&bytes, 4096).unwrap();
+        assert_eq!((img.width, img.height), (w, h), "a full-size decode");
+        // the level the lens let through, from the scene itself (as `photographed_dng` blurs it)
+        let lit = |x: usize, y: usize| {
+            let k = [1.0f32, 4.0, 6.0, 4.0, 1.0];
+            let mut s = 0.0;
+            for (j, ky) in k.iter().enumerate() {
+                for (i, kx) in k.iter().enumerate() {
+                    let (sx, sy) = ((x + i).saturating_sub(2).min(w - 1), (y + j).saturating_sub(2).min(h - 1));
+                    s += kx
+                        * ky
+                        * (0..16).map(|q| level(sx as f32 + ((q % 4) as f32 + 0.5) / 4.0, sy as f32 + ((q / 4) as f32 + 0.5) / 4.0)).sum::<f32>()
+                        / 16.0;
+                }
+            }
+            s / 256.0
+        };
+        let (mut n, mut lifted) = (0, Vec::new());
+        for y in 3..h - 3 {
+            for x in 3..w - 3 {
+                let l = lit(x, y);
+                if l > 0.5 {
+                    continue;
+                }
+                n += 1;
+                let p = img.get(x, y);
+                let mean = (p[0] + p[1] + p[2]) / 3.0;
+                if mean > 2.0 * l + 0.05 {
+                    lifted.push((x, y, l, p));
+                }
+            }
+        }
+        assert!(n > 400, "{n} line pixels");
+        assert!(lifted.is_empty(), "{} of {n} dark pixels lifted, e.g. {:?}", lifted.len(), &lifted[..lifted.len().min(3)]);
+    }
+
+    /// Issue #1328: full-size decodes of large clipped areas (a lamp, a patch of sky: every channel clipped) on bright
+    /// and on dark neutral surfaces. The pixels around them must stay neutral. The channels interpolated from clipped
+    /// samples are only lower bounds; told as clipped by value alone, they kept the clipped samples' colour
+    /// difference (magenta rims), and demosaiced before white balance they fell below zero.
+    #[test]
+    fn full_size_clipped_areas_have_no_coloured_rims() {
+        let (w, h) = (96usize, 72usize);
+        let lamp =
+            |x: f32, y: f32| (x - 30.0).powi(2) + (y - 36.0).powi(2) < 14.0f32.powi(2) || ((62.0..80.0).contains(&x) && (20.0..52.0).contains(&y));
+        let bytes = photographed_dng(w, h, |x, y| {
+            if lamp(x, y) {
+                6.0
+            } else if x < 48.0 {
+                0.7
+            } else {
+                0.05
+            }
+        });
+        let (img, _) = load_bytes(&bytes, 4096).unwrap();
+        assert_eq!((img.width, img.height), (w, h), "a full-size decode");
+        let inside = |x: usize, y: usize| lamp(x as f32 + 0.5, y as f32 + 0.5);
+        let (mut n, mut worst, mut sum) = (0, 0f32, 0f32);
+        for y in 2..h - 2 {
+            for x in 2..w - 2 {
+                if inside(x, y)
+                    || !(x.saturating_sub(3)..=(x + 3).min(w - 1)).any(|xx| (y.saturating_sub(3)..=(y + 3).min(h - 1)).any(|yy| inside(xx, yy)))
+                {
+                    continue;
+                }
+                let p = img.get(x, y);
+                let mean = (p[0] + p[1] + p[2]) / 3.0;
+                let spread = (p[0].max(p[1]).max(p[2]) - p[0].min(p[1]).min(p[2])) / mean.max(1e-3);
+                worst = worst.max(spread);
+                sum += spread;
+                n += 1;
+            }
+        }
+        let mean = sum / n as f32;
+        assert!(n > 600, "{n} rim pixels");
+        // (main: mean 0.45, worst 1.8; the white-balanced demosaic without the clip mask: mean 0.22, worst 1.3)
+        assert!(mean < 0.05 && worst < 0.8, "colour spread around the clipped area mean {mean:.3}, worst {worst:.3} of the pixel's mean");
+    }
+
     #[test]
     fn cached_denoise_uses_the_same_white_balance_profile_and_orientation_as_plain_raw() {
         use lightcraft_denoise::product;
@@ -1597,8 +1806,10 @@ pub(crate) mod tests {
         let bytes = write_dng(&raw, &DngWriteOptions::default()).unwrap();
         let decoded = lightcraft_raw::decode(&bytes).unwrap();
         assert!(decoded.color.profile.look_table.is_some());
-        // A cache containing the ordinary demosaic must undergo the identical downstream finish.
-        let camera_rgb = decoded.develop(Method::Ahd).unwrap();
+        // A cache containing the ordinary demosaic (of the mosaic white balanced as shot) must undergo the identical
+        // downstream finish.
+        let wb = lightcraft_raw::color::camera_transform(&decoded, lightcraft_raw::color::as_shot_white_xy(&decoded)).wb;
+        let camera_rgb = decoded.develop_balanced(Method::Ahd, wb).unwrap();
         let key = "synthetic-color-finish";
         let path = dir.join("same.lcdn");
         product::write(&path, &camera_rgb, key).unwrap();

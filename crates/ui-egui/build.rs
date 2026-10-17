@@ -53,7 +53,7 @@ fn capitalize(part: &str) -> String {
 }
 
 fn generate() -> Result<String, Box<dyn std::error::Error>> {
-    let mut catalogs: Vec<(String, String, BTreeMap<String, String>)> = Vec::new();
+    let mut catalogs: Vec<(String, String, BTreeMap<String, serde_json::Value>)> = Vec::new();
     for entry in fs::read_dir("locales")? {
         let path = entry?.path();
         let name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default().to_string();
@@ -61,11 +61,14 @@ fn generate() -> Result<String, Box<dyn std::error::Error>> {
         let Some(code) = name.strip_suffix("-formats.json").filter(|code| *code != "en") else { continue };
         println!("cargo:rerun-if-changed=locales/{name}");
         let variant = variant_for(code)?;
-        let messages: BTreeMap<String, String> =
+        let messages: BTreeMap<String, serde_json::Value> =
             serde_json::from_str(&fs::read_to_string(&path)?).map_err(|error| format!("locales/{name}: {error}"))?;
         catalogs.push((code.to_string(), variant, messages));
     }
     catalogs.sort_by(|a, b| a.0.cmp(&b.0));
+    // English only needs a catalog for messages with explicit plural forms.
+    println!("cargo:rerun-if-changed=locales/en-formats.json");
+    let english_plurals: BTreeMap<String, BTreeMap<String, String>> = serde_json::from_str(&fs::read_to_string("locales/en-formats.json")?)?;
 
     // Every catalog translates the same messages.
     let all: BTreeSet<&String> = catalogs.iter().flat_map(|(_, _, messages)| messages.keys()).collect();
@@ -88,14 +91,29 @@ fn generate() -> Result<String, Box<dyn std::error::Error>> {
     ));
     for english in all {
         let en = serde_json::to_string(english)?;
-        source.push_str(&format!("    ({en} $(, $($args:tt)*)?) => {{\n        match $crate::i18n::language() {{\n"));
-        for (_, variant, messages) in &catalogs {
-            if let Some(translated) = messages.get(english) {
+        if let Some(forms) = english_plurals.get(english) {
+            source.push_str(&format!(
+                "    ({en}, count = $count:expr $(, $($args:tt)*)?) => {{{{\n        let count = $count;\n        match $crate::i18n::language() {{\n"
+            ));
+            for (code, variant, messages) in &catalogs {
+                let forms: BTreeMap<String, String> =
+                    serde_json::from_value(messages[english].clone()).map_err(|e| format!("{code}: {english:?} needs plural forms: {e}"))?;
+                source.push_str(&format!("            $crate::i18n::Locale::{variant} => {{\n"));
+                plural_arms(&mut source, &forms, english)?;
+                source.push_str("            },\n");
+            }
+            source.push_str("            _ => {\n");
+            plural_arms(&mut source, forms, english)?;
+            source.push_str("            },\n        }\n    }};\n");
+        } else {
+            source.push_str(&format!("    ({en} $(, $($args:tt)*)?) => {{\n        match $crate::i18n::language() {{\n"));
+            for (_, variant, messages) in &catalogs {
+                let translated = messages[english].as_str().ok_or_else(|| format!("{english:?}: plural source missing from en-formats.json"))?;
                 let translated = serde_json::to_string(translated)?;
                 source.push_str(&format!("            $crate::i18n::Locale::{variant} => format!({translated} $(, $($args)*)?),\n"));
             }
+            source.push_str(&format!("            _ => format!({en} $(, $($args)*)?),\n        }}\n    }};\n"));
         }
-        source.push_str(&format!("            _ => format!({en} $(, $($args)*)?),\n        }}\n    }};\n"));
     }
     source.push_str(concat!(
         "}\n",
@@ -105,6 +123,19 @@ fn generate() -> Result<String, Box<dyn std::error::Error>> {
         "pub(crate) use tr_format;\n",
     ));
     Ok(source)
+}
+
+/// Every form uses the same named count and arguments, checked by Rust's formatter.
+fn plural_arms(source: &mut String, forms: &BTreeMap<String, String>, english: &str) -> Result<(), String> {
+    source.push_str("                match $crate::i18n::integer_plural_form($crate::i18n::language(), count as u64) {\n");
+    for form in ["one", "few", "many", "other"] {
+        let translated = forms.get(form).ok_or_else(|| format!("{english:?}: missing {form} plural form"))?;
+        let translated = serde_json::to_string(translated).map_err(|e| e.to_string())?;
+        let pattern = if form == "other" { "_".to_string() } else { format!("{form:?}") };
+        source.push_str(&format!("                    {pattern} => format!({translated}, count = count $(, $($args)*)?),\n"));
+    }
+    source.push_str("                }\n");
+    Ok(())
 }
 
 /// The About window's credits tables.

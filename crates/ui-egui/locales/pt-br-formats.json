@@ -1,4 +1,13 @@
 {
+  "Photos: {count}": {
+    "one": "Foto: {count}",
+    "few": "Fotos: {count}",
+    "many": "Fotos: {count}",
+    "other": "Fotos: {count}"
+  },
+  "Estimated total size: {size}": "Tamanho total estimado: {size}",
+  "Destination: {path}": "Destino: {path}",
+  "Free space: {size}": "Espaço livre: {size}",
   " ({} in Recently Deleted)": " ({} em Excluídos recentemente)",
   " · {skipped} skipped (file exists)": " · {skipped} ignorada(s) (arquivo existente)",
   " · {} duplicate{} skipped": " · {} duplicada(s) ignorada(s){:.0}",
@@ -101,7 +110,6 @@
   "the {n} selected photos": "as {n} fotos selecionadas",
   "the {} photos in view": "as {} fotos em exibição",
   "these {count} photos": "estas {count} fotos",
-  "{count} smart preview{} · {:.1} MB": "{count} pré-visualização(ões) inteligente(s){:.0} · {:.1} MB",
   "{f} folders (and their subfolders)": "{f} pastas (e suas subpastas)",
   "{label} Grading": "Graduação de {label}",
   "{label} {d:+} on every selected photo": "{label} {d:+} em cada foto selecionada",
@@ -295,5 +303,26 @@
   "Renames {n} face{} across the library. The files are not changed.": "Renomeia {n} rosto{} na biblioteca. Os arquivos não são alterados.",
   "“{to}” is already a person. Combining them makes one person; Undo separates them again.": "“{to}” já é uma pessoa. Combiná-las deixa uma só; Desfazer as separa de novo.",
   "{what} merge added at {mp}: its full size, {full}, needs more memory than this computer has": "{what} mesclagem adicionada em {mp}: o tamanho completo, {full}, precisa de mais memória do que este computador tem",
-  "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "{what} mesclagem adicionada em {mp}, o maior tamanho possível para um panorama (tamanho completo: {full})"
+  "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "{what} mesclagem adicionada em {mp}, o maior tamanho possível para um panorama (tamanho completo: {full})",
+  "Smart preview folder changed. {count} source files could not be removed.": {
+    "one": "Pasta de pré-visualizações inteligentes alterada. Não foi possível remover {count} arquivo de origem.",
+    "few": "Pasta de pré-visualizações inteligentes alterada. Não foi possível remover {count} arquivos de origem.",
+    "many": "Pasta de pré-visualizações inteligentes alterada. Não foi possível remover {count} arquivos de origem.",
+    "other": "Pasta de pré-visualizações inteligentes alterada. Não foi possível remover {count} arquivos de origem."
+  },
+  "Smart preview folder change failed: {error}": "Falha ao alterar a pasta de pré-visualizações inteligentes: {error}",
+  ". {count} existing previews kept unchanged": {
+    "one": ". {count} pré-visualização existente mantida sem alterações",
+    "few": ". {count} pré-visualizações existentes mantidas sem alterações",
+    "many": ". {count} pré-visualizações existentes mantidas sem alterações",
+    "other": ". {count} pré-visualizações existentes mantidas sem alterações"
+  },
+  "{count} smart previews · {size:.1} MiB": {
+    "one": "{count} pré-visualização inteligente · {size:.1} MiB",
+    "few": "{count} pré-visualizações inteligentes · {size:.1} MiB",
+    "many": "{count} pré-visualizações inteligentes · {size:.1} MiB",
+    "other": "{count} pré-visualizações inteligentes · {size:.1} MiB"
+  },
+  "could not check smart preview storage: {e}": "Não foi possível verificar o armazenamento das pré-visualizações inteligentes: {e}",
+  "free space is unavailable for {path} on this platform": "O espaço livre de {path} não está disponível nesta plataforma."
 }

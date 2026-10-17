@@ -284,7 +284,10 @@ the device on their first GPU render. `lightcraft_gpu::ready()` asks without blo
   current settings, else (raws with their import look) the embedded camera JPEG, else a
   thumbnail-level render; the full render replaces it in place.
 - Raw sources for previews (2560 px) and thumbnails are binned straight from the mosaic
-  (`RawImage::develop_binned`, 2× for a 24 MP preview); only exports / 1:1 demosaic at full size.
+  (`RawImage::develop_binned`, 2× for a 24 MP preview); exports / 1:1, and previews `files::bin_factor` can't bin
+  (Bayer sensors under about 4600 px on the long side, X-Trans under about 5760 px, such as 16 MP X-Trans), demosaic
+  at full size, on the CPU, with the mosaic white balanced as shot (`RawImage::develop_balanced_masked`, issue #1328).
+  The GPU starts from the decoded source either way.
 - The next and previous photos in filmstrip order are prepared in the background once the current
   one is rendered (decoded source kept, view render cached): stepping through photos shows the
   developed image in ~50 ms.

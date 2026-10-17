@@ -9,6 +9,10 @@
 //!   interpolation.
 //!
 //! Every method reproduces a constant-colour mosaic exactly.
+//!
+//! PPG, AHD and the X-Trans method interpolate colour differences (C − G), which a neutral surface keeps at zero
+//! only once it is white balanced: a mosaic that will be white balanced is demosaiced with its white balance applied
+//! and divided back out after ([`crate::RawImage::develop_balanced`], issue #1328).
 
 mod ahd;
 mod bilinear;

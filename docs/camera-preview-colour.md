@@ -201,6 +201,8 @@ is recorded here yet. Whether they should come before the file-local fit for the
 
 ## Smart previews and the look version
 
+See [Smart previews](smart-previews.md) for the optional lossless format, migration, storage limits, and header compatibility.
+
 A smart preview keeps the result of the fit twice: the colour matrix is baked into its pixels and the tone and chroma curves are stored in its header. When the fit changes, a preview built earlier keeps the old look until it is rebuilt, and the render cache version does not reach it (renders are keyed on the library's files, proxies are files of their own).
 
 The fit therefore has a version, `LOOK_VERSION` in `crates/engine/src/camera_preview.rs`, and every smart preview records the version that wrote it in its header line (`look_version`). **Bump the constant in any change that makes the fit give a different result for the same file**: the matrix, hue/saturation, tone or chroma fit, their gates and fallbacks, or how a camera profile feeds them. Changes that leave the fitted look alone don't need it. A header without the field (everything built before it existed) counts as version 0, and so does a value that is not a non-negative integer; a value from a newer build is left alone.
@@ -212,6 +214,15 @@ A proxy older than the constant is brought up to date by the existing Build Smar
 - Build Smart Previews does the same for the photos it is run on (`refreshed` in its result), whatever the marker says;
 - when the original can't be read (offline drive), the proxy and its curve are kept exactly as they are (`staleKept`). The old version in its header is the mark: the next Build Smart Previews with the original online rebuilds it. A rebuilt proxy carries the current version, so nothing is rebuilt twice. A proxy is only ever rebuilt from the original, never from another proxy;
 - the two never write the same proxy at once: each proxy is checked and written under one lock.
+
+A raw's proxy also holds the source its decode made, which the fit does not decide: previews of sensors too small to
+bin at preview size are demosaiced like full-size developments. `SOURCE_VERSION` in `crates/engine/src/smart.rs` is
+that decode's version, recorded as `source_version` (missing or malformed: 0). **Bump it in any change that makes a
+raw's decode give different pixels at preview size** (the demosaic, highlight reconstruction, the colour model); the
+render cache version covers renders and in-memory sources, not proxies. Every raw developed from its sensor data goes
+stale for it, with or without the per-file look (DNG proxies too); the opening scan and Build Smart Previews treat it
+as they treat the look version, with a `source-version` marker of its own. Version 1 is #1328's white-balanced
+demosaic. When both versions change in one release the scan runs once, and a rebuilt proxy carries both.
 
 ## Photo Merge
 
