@@ -445,6 +445,9 @@ pub fn apply_kind(ctx: &egui::Context, kind: ThemeKind) {
         s.text_styles.insert(egui::TextStyle::Small, FontId::proportional(11.0));
         s.text_styles.insert(egui::TextStyle::Heading, FontId::new(16.0, FontFamily::Name(FONT_SEMIBOLD.into())));
         s.animation_time = 0.08;
+        // Captions and headings are not text to select (#1885); text meant for copying opts in
+        // with `Label::selectable(true)`.
+        s.interaction.selectable_labels = false;
     });
 }
 
@@ -464,6 +467,46 @@ mod tests {
             assert_eq!(line, WHEEL_LINE_POINTS, "{kind:?}");
             assert!(((zoom * line).exp() - (40.0_f32 / 200.0).exp()).abs() < 1e-4, "{kind:?}: a notch zooms {}", (zoom * line).exp());
         }
+    }
+
+    /// Drag the pointer across `label` from end to end, press Copy, and return what egui copied.
+    fn drag_and_copy(label: impl Fn() -> egui::Label) -> Option<String> {
+        let ctx = egui::Context::default();
+        apply_kind(&ctx, ThemeKind::default());
+        let frame = |events: Vec<egui::Event>| {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 200.0))),
+                events,
+                ..Default::default()
+            };
+            let mut rect = egui::Rect::NOTHING;
+            let mut out = ctx.run_ui(input, |ui| rect = ui.add(label()).rect);
+            out.textures_delta.clear();
+            (out.platform_output.commands, rect)
+        };
+        let (_, rect) = frame(vec![]);
+        let (from, to) = (rect.left_center() + egui::vec2(1.0, 0.0), rect.right_center() - egui::vec2(1.0, 0.0));
+        let button =
+            |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        let mut commands = Vec::new();
+        for events in [
+            vec![egui::Event::PointerMoved(from)],
+            vec![button(from, true)],
+            vec![egui::Event::PointerMoved(to)],
+            vec![button(to, false)],
+            vec![egui::Event::Copy],
+        ] {
+            commands.extend(frame(events).0);
+        }
+        commands.into_iter().find_map(|c| if let egui::OutputCommand::CopyText(text) = c { Some(text) } else { None })
+    }
+
+    /// #1885: a panel caption is not text to select, as in Lightroom; text a dialog offers for
+    /// copying (a path) opts in and still copies.
+    #[test]
+    fn static_labels_cannot_be_drag_selected_but_opted_in_text_can() {
+        assert_eq!(drag_and_copy(|| egui::Label::new("Exposure")), None, "a plain label was selected and copied");
+        assert_eq!(drag_and_copy(|| egui::Label::new("/Users/me/Pictures").selectable(true)).as_deref(), Some("/Users/me/Pictures"));
     }
 
     /// #736: the release input must carry Thai, not silently skip the check with an older pin.
