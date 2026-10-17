@@ -611,6 +611,34 @@ fn cube_luts_become_profiles() {
 
 /// Folder rename / move on disk: files and sidecars go along, the photos are relinked and
 /// still render; clashes and moving into itself are refused.
+/// Without a library on disk an imported LUT lives only in this session: no copy of it is
+/// left in the temp folder (#1952).
+#[test]
+fn cube_import_without_a_library_leaves_no_temp_copy() {
+    let src = temp_dir("cubemem");
+    let mut cube = String::from("TITLE \"Temp Copy Check\"\nLUT_3D_SIZE 2\n");
+    for b in 0..2 {
+        for g in 0..2 {
+            for r in 0..2 {
+                cube.push_str(&format!("{r} {g} {b}\n"));
+            }
+        }
+    }
+    std::fs::write(src.join("mem.cube"), &cube).unwrap();
+    let leak = std::env::temp_dir().join("lightcraft-imported-temp-copy-check.cube");
+    let _ = std::fs::remove_file(&leak);
+    let mut s = Session::new().with_fs();
+    let r = s.execute("profile.import", &json!({"paths": [src.join("mem.cube").to_string_lossy()]})).unwrap();
+    let id = r["imported"][0]["id"].as_str().unwrap().to_string();
+    assert!(lightcraft_pipeline::lut::get(&id).is_some(), "usable in this session");
+    let file = s.lut_profiles.iter().find(|p| p.id == id).unwrap().file.clone();
+    assert!(file.is_empty() || Path::new(&file).starts_with(&src), "no copy written: {file}");
+    drop(s);
+    assert!(!leak.exists(), "{} left behind", leak.display());
+    lightcraft_pipeline::lut::unregister(&id);
+    let _ = std::fs::remove_dir_all(&src);
+}
+
 #[test]
 fn folders_rename_and_move_with_their_photos() {
     let root = temp_dir("folders");
