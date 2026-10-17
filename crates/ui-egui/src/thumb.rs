@@ -261,11 +261,14 @@ pub(crate) enum CopyTag {
     Hidden,
 }
 
+/// The least clear space between the stack badge and the copy tag.
+const COPY_GAP: f32 = 4.0;
+
 /// The copy tag for a photo `width` wide whose name is `name_w` wide, next to a stack badge
 /// `stack_w` wide (if it has one): the tag gives up its name before it would run into the badge
 /// or over the photo's edge, and then gives up its icon.
 pub(crate) fn copy_tag_layout(width: f32, stack_w: Option<f32>, name_w: f32, m: &Metrics) -> CopyTag {
-    let room = width - 2.0 * m.inset - stack_w.map_or(0.0, |w| w + m.gap);
+    let room = width - 2.0 * m.inset - stack_w.map_or(0.0, |w| w + COPY_GAP);
     if name_w + m.copy_extra <= room {
         CopyTag::Full
     } else if m.copy_icon <= room {
@@ -713,6 +716,19 @@ mod tests {
             }
             assert_eq!(seen, [CopyTag::Hidden, CopyTag::IconOnly, CopyTag::Full], "{surface:?}: as the tile widens");
         }
+    }
+
+    /// The real case: "Copy 1" (34 pt of text) beside a "2/2" badge (18 pt of text) on a 124 pt
+    /// justified tile fitted with 2 pt to spare on main. The tag keeps its name while it clears the
+    /// badge by 4 pt, and is the icon alone just below that.
+    #[test]
+    fn the_copy_tag_keeps_its_name_when_it_clears_the_badge_by_four_points() {
+        let m = Surface::Grid.metrics();
+        let (name_w, stack_w) = (34.0, 18.0 + m.stack_extra);
+        let edge = 2.0 * m.inset + stack_w + 4.0 + name_w + m.copy_extra;
+        assert_eq!(copy_tag_layout(124.0, Some(stack_w), name_w, &m), CopyTag::Full);
+        assert_eq!(copy_tag_layout(edge, Some(stack_w), name_w, &m), CopyTag::Full);
+        assert_eq!(copy_tag_layout(edge - 0.5, Some(stack_w), name_w, &m), CopyTag::IconOnly);
     }
 
     #[test]
