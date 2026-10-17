@@ -276,25 +276,24 @@ const RESYNC_BUDGET_BYTES: usize = 64 << 20; // 64 MiB
 /// The record's CRC must match, so damage is never mistaken for it.
 fn resync(line: &[u8], last: u64) -> Option<(usize, (u64, Op))> {
     const START: &[u8] = b"{\"seq\":";
-    // One record per line, so a line of valid UTF-8 holds a valid suffix at every record start and
-    // one validation covers every candidate; only a line that is not wholly valid re-checks, and
-    // then up to the budget rather than the suffix length times the candidate count.
+    // Only the retry record can follow a torn fragment, so only the LAST occurrence of the start
+    // marker can match; searching every occurrence made a hostile line quadratic in its length.
+    // Requiring i > 0 keeps the invariant that a fragment precedes the record.
     let whole = std::str::from_utf8(line).ok();
     let mut spent = 0usize;
-    (1..line.len().saturating_sub(START.len() - 1)).filter(|&i| line[i..].starts_with(START)).find_map(|i| {
-        let text = match &whole {
-            Some(t) => &t[i..],
-            None => {
-                if spent >= RESYNC_BUDGET_BYTES {
-                    return None;
-                }
-                spent = spent.saturating_add(line.len() - i);
-                std::str::from_utf8(&line[i..]).ok()?
+    let i = line.windows(START.len()).rposition(|w| w == START).filter(|&i| i > 0)?;
+    let text = match &whole {
+        Some(t) => &t[i..],
+        None => {
+            if spent >= RESYNC_BUDGET_BYTES {
+                return None;
             }
-        };
-        let rec = decode_record(text.trim_end_matches('\r'))?;
-        (rec.0 <= last.saturating_add(1)).then_some((i, rec))
-    })
+            spent = spent.saturating_add(line.len() - i);
+            std::str::from_utf8(&line[i..]).ok()?
+        }
+    };
+    let rec = decode_record(text.trim_end_matches('\u{0D}'))?;
+    (rec.0 <= last.saturating_add(1)).then_some((i, rec))
 }
 
 /// Write `catalog.snap` for the state after op `seq`, streaming the JSON into the store (no

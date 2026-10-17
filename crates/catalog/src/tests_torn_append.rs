@@ -221,3 +221,50 @@ fn fs_store_truncates_a_missing_file_quietly() {
     assert_eq!(std::fs::read(dir.join(LOG)).unwrap(), b"");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Issue #2124: `resync` must be linear in the line length, not quadratic. A line that is nothing
+/// but the start marker repeated 300k times must open fast, and a valid retry record placed after
+/// it must still be recovered.
+#[test]
+fn resync_is_not_quadratic_in_line_length() {
+    use std::time::Instant;
+
+    let probe = MemStore::new();
+
+    // Build a valid snapshot + an initial record so `j.seq()` is non-zero and the `seq <= last + 1`
+    // gate in resync can be exercised.
+    let (mut j, mut c, _) = Journal::open(Box::new(probe.clone())).unwrap();
+    let add = add_photo(&mut c);
+    let first = apply(&mut c, vec![add]);
+    j.append(&first).unwrap();
+
+    let log = probe.get(LOG).unwrap();
+    let base_len = log.len();
+
+    // A hostile 300k-repetition marker line (about 2.3 MB), then one valid retried record that
+    // continues the log (seq == j.seq() + 1, so resync's gate accepts it).
+    let marker = b"{\"seq\":";
+    let mut hostile = Vec::with_capacity(marker.len() * 300_000 + log.len() + 256);
+    hostile.extend_from_slice(&log[..base_len]);
+    for _ in 0..300_000 {
+        hostile.extend_from_slice(marker);
+    }
+
+    // Encode the retry record the same way the journal writes records, so decode_record accepts it.
+    let next_seq = j.seq() + 1;
+    let retry_op = Op::SetRating { id: c.photos().next().unwrap().id, rating: 5 };
+    let body = serde_json::to_string(&retry_op).unwrap();
+    let crc = crc32fast::hash(body.as_bytes());
+    let retry = format!("{{\"seq\":{next_seq},\"crc\":{crc},\"op\":{body}}}\n");
+    hostile.extend_from_slice(retry.as_bytes());
+
+    probe.set(LOG, hostile);
+
+    let t0 = Instant::now();
+    let (mut j2, mut _c2, report) = Journal::open(Box::new(probe.clone())).unwrap();
+    let elapsed = t0.elapsed();
+
+    assert!(elapsed.as_secs_f64() < 1.0, "Journal::open took {elapsed:?} on a hostile 2 MB line");
+    assert_eq!(j2.seq(), next_seq, "resync should have recovered the retried record after the fragment");
+    assert_eq!(report.torn_fragments, 1, "resync should report exactly one torn fragment");
+}
