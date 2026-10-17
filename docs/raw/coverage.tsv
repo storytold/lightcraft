@@ -128,14 +128,14 @@ Canon	EOS-1D X Mark III	CR3	2019	verified	corpus: crates/raw/tests/cr3_corpus.rs
 Canon	EOS 5D	CR2	2005	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Canon	EOS 5D Mark II	CR2	2008	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES)
 Canon	EOS-5D Mark III	CR2	2012	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES)
-Canon	EOS-5D Mark IV (** see note)	CR2	2015	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	EOS-5D Mark IV (** see note)	CR2	2015	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES); corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Canon	EOS 5DS	CR2	2015	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Canon	EOS 5DS R	CR2	2015	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES)
 Canon	EOS 6D	CR2	2012	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES)
-Canon	EOS 6D Mark II	CR2	2015	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	EOS 6D Mark II	CR2	2015	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES); corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Canon	EOS 7D	CR2	2008	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES)
 Canon	EOS 7D Mark II	CR2	2013	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
-Canon	EOS 10D	CRW	2003	preview	CRW is opened from its embedded JPEG only
+Canon	EOS 10D	CRW	2003	verified	corpus: crates/raw/tests/corpus.rs corpus_canon_crw (xtask RAW_SAMPLES)
 Canon	EOS 20D	CR2	2003	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Canon	EOS 20Da	CR2	2005	unverified	CR2 lossless JPEG decoder
 Canon	EOS 30D	CR2	2005	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
@@ -149,9 +149,9 @@ Canon	EOS 80D	CR2	2015	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SA
 Canon	EOS 90D	CR3	2018	verified	corpus: crates/raw/tests/cr3_corpus.rs (pinned sensor hash, camera-JPEG check, docs/cr3.md)
 Canon	EOS 200D (EOS Kiss X9, EOS Rebel SL2)	CR2	2015	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Canon	EOS 250D (EOS Rebel SL3, EOS 200D II, EOS Kiss X10)	CR3	2018	verified	corpus: crates/raw/tests/cr3_corpus.rs (pinned sensor hash, camera-JPEG check, docs/cr3.md)
-Canon	EOS D30	CRW	2003	preview	CRW is opened from its embedded JPEG only
-Canon	EOS D60	CRW	2003	preview	CRW is opened from its embedded JPEG only
-Canon	EOS 300D (EOS Digital Rebel, EOS Kiss Digital)	CRW	2003	preview	CRW is opened from its embedded JPEG only
+Canon	EOS D30	CRW	2003	verified	corpus: crates/raw/tests/corpus.rs corpus_canon_crw (xtask RAW_SAMPLES)
+Canon	EOS D60	CRW	2003	verified	corpus: crates/raw/tests/corpus.rs corpus_canon_crw (xtask RAW_SAMPLES)
+Canon	EOS 300D (EOS Digital Rebel, EOS Kiss Digital)	CRW	2003	verified	corpus: crates/raw/tests/corpus.rs corpus_canon_crw (xtask RAW_SAMPLES)
 Canon	EOS 100D (EOS Digital Rebel SL1, EOS Kiss X7)	CR2	2012	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Canon	EOS 500D (EOS Digital Rebel T1i, EOS Kiss X3 Digital)	CR2	2008	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Canon	EOS 550D (EOS Digital Rebel T2i, EOS Kiss X4 Digital)	CR2	2010	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES)
@@ -161,7 +161,7 @@ Canon	EOS 650D (EOS Digital Rebel T4i, EOS Kiss X4i)	CR2	2012	verified	corpus: c
 Canon	EOS 700D (EOS Digital Rebel T5i, EOS Kiss X7i)	CR2	2012	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Canon	EOS 1200D (EOS Digital Rebel T5, EOS Kiss X70)	CR2	2013	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Canon	EOS 1300D (EOS Digital Rebel T6, EOS Kiss X80)	CR2	2015	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
-Canon	EOS 1500D (EOS Rebel T7, EOS Kiss X90, EOS 2000D)	CR2	2017	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Canon	EOS 1500D (EOS Rebel T7, EOS Kiss X90, EOS 2000D)	CR2	2017	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES); corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Canon	EOS 3000D (EOS Rebel T100, EOS 4000D)	CR2	2017	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Canon	EOS 750D (EOS Digital Rebel T6i, EOS Kiss X8i)	CR2	2015	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Canon	EOS 760D (EOS Digital Rebel T6s, EOS Kiss 8000D)	CR2	2015	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
@@ -189,7 +189,7 @@ Canon	EOS R3	CR3	2021	verified	corpus: crates/raw/tests/cr3_corpus.rs (pinned se
 Canon	EOS R5	CR3	2019	verified	corpus: crates/raw/tests/cr3_corpus.rs (pinned sensor hash, camera-JPEG check, docs/cr3.md)
 Canon	EOS R5 C	CR3	2021	unverified	CRX decoder: lossless and C-RAW 0x100 / 0x200 single-tile; other variants fall back to the preview
 Canon	EOS R5 Mark II	CR3	2023	verified	corpus: crates/raw/tests/cr3_corpus.rs (pinned sensor hashes, docs/cr3.md); bulk: QP maps of 33,665 C-RAW files
-Canon	EOS R6	CR3	2019	verified	corpus: crates/raw/tests/cr3_corpus.rs (pinned sensor hash, camera-JPEG check, docs/cr3.md)
+Canon	EOS R6	CR3	2019	verified	corpus: crates/raw/tests/cr3_corpus.rs (exact sensor hashes, docs/cr3.md); corpus: crates/raw/tests/cr3_corpus.rs (pinned sensor hash, camera-JPEG check, docs/cr3.md)
 Canon	EOS R6 V	CR3	2025	unverified	CRX decoder: lossless and C-RAW 0x100 / 0x200 single-tile; other variants fall back to the preview
 Canon	EOS R6 Mark II	CR3	2022	verified	corpus: crates/raw/tests/cr3_corpus.rs (pinned sensor hash, camera-JPEG check, docs/cr3.md; C-RAW with adaptive QP above 168 still opens as the preview)
 Canon	EOS R6 Mark III	CR3	2025	verified	corpus: crates/raw/tests/cr3_corpus.rs (pinned sensor hash, camera-JPEG check, docs/cr3.md)
@@ -202,20 +202,20 @@ Canon	EOS R8	CR3	2022	verified	corpus: crates/raw/tests/cr3_corpus.rs (exact sen
 Canon	EOS R50	CR3	2022	verified	corpus: crates/raw/tests/cr3_corpus.rs (pinned sensor hash, camera-JPEG check, docs/cr3.md)
 Canon	EOS R50 V	CR3	2024	verified	corpus: crates/raw/tests/cr3_corpus.rs (pinned sensor hash, camera-JPEG check, docs/cr3.md)
 Canon	EOS R100	CR3	2022	verified	corpus: crates/raw/tests/cr3_corpus.rs (exact sensor hashes, docs/cr3.md)
-Canon	PowerShot 600	CRW	2003	preview	CRW is opened from its embedded JPEG only
-Canon	PowerShot A5	CRW	2003	preview	CRW is opened from its embedded JPEG only
-Canon	PowerShot A50	CRW	2003	preview	CRW is opened from its embedded JPEG only
-Canon	PowerShot G1	CRW	2003	preview	CRW is opened from its embedded JPEG only
+Canon	PowerShot 600	CRW	2003	preview	CMYG CRW is opened from its embedded JPEG only
+Canon	PowerShot A5	CRW	2003	preview	CMYG CRW is opened from its embedded JPEG only
+Canon	PowerShot A50	CRW	2003	preview	CMYG CRW is opened from its embedded JPEG only
+Canon	PowerShot G1	CRW	2003	preview	CMYG CRW is opened from its embedded JPEG only
 Canon	PowerShot G1 X	CR2	2012	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Canon	PowerShot G1 X Mark II	CR2	2013	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Canon	PowerShot G1 X Mark III	CR2	2017	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
-Canon	PowerShot G2	CRW	2003	preview	CRW is opened from its embedded JPEG only
-Canon	PowerShot G3	CRW	2003	preview	CRW is opened from its embedded JPEG only
+Canon	PowerShot G2	CRW	2003	verified	corpus: crates/raw/tests/corpus.rs corpus_canon_crw (xtask RAW_SAMPLES)
+Canon	PowerShot G3	CRW	2003	verified	corpus: crates/raw/tests/corpus.rs corpus_canon_crw (xtask RAW_SAMPLES)
 Canon	PowerShot G3 X	CR2	2015	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
-Canon	PowerShot G5	CRW	2003	preview	CRW is opened from its embedded JPEG only
+Canon	PowerShot G5	CRW	2003	verified	corpus: crates/raw/tests/corpus.rs corpus_canon_crw (xtask RAW_SAMPLES)
 Canon	PowerShot G5 X	CR2	2015	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Canon	PowerShot G5 X Mark II	CR3	2018	verified	corpus: crates/raw/tests/cr3_corpus.rs (pinned sensor hash, camera-JPEG check, docs/cr3.md)
-Canon	PowerShot G6	CRW	2003	preview	CRW is opened from its embedded JPEG only
+Canon	PowerShot G6	CRW	2003	verified	corpus: crates/raw/tests/corpus.rs corpus_canon_crw (xtask RAW_SAMPLES)
 Canon	PowerShot G7 X	CR2	2013	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Canon	PowerShot G7 X Mark II	CR2	2015	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Canon	PowerShot G7 X Mark III	CR3	2018	verified	corpus: crates/raw/tests/cr3_corpus.rs (pinned sensor hash, camera-JPEG check, docs/cr3.md)
@@ -227,17 +227,17 @@ Canon	PowerShot G11	CR2	2008	verified	corpus: crates/raw/tests/body_corpus.rs (p
 Canon	PowerShot G12	CR2	2010	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Canon	PowerShot G15	CR2	2012	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Canon	PowerShot G16	CR2	2013	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
-Canon	PowerShot Pro 1	CRW	2003	preview	CRW is opened from its embedded JPEG only
-Canon	PowerShot Pro70	CRW	2003	preview	CRW is opened from its embedded JPEG only
-Canon	PowerShot Pro90 IS	CRW	2003	preview	CRW is opened from its embedded JPEG only
-Canon	PowerShot S30	CRW	2003	preview	CRW is opened from its embedded JPEG only
-Canon	PowerShot S40	CRW	2003	preview	CRW is opened from its embedded JPEG only
-Canon	PowerShot S45	CRW	2003	preview	CRW is opened from its embedded JPEG only
-Canon	PowerShot S50	CRW	2003	preview	CRW is opened from its embedded JPEG only
-Canon	PowerShot S60	CRW	2003	preview	CRW is opened from its embedded JPEG only
+Canon	PowerShot Pro 1	CRW	2003	verified	corpus: crates/raw/tests/corpus.rs corpus_canon_crw (xtask RAW_SAMPLES)
+Canon	PowerShot Pro70	CRW	2003	preview	CMYG CRW is opened from its embedded JPEG only
+Canon	PowerShot Pro90 IS	CRW	2003	preview	CMYG CRW is opened from its embedded JPEG only
+Canon	PowerShot S30	CRW	2003	verified	corpus: crates/raw/tests/corpus.rs corpus_canon_crw (xtask RAW_SAMPLES)
+Canon	PowerShot S40	CRW	2003	verified	corpus: crates/raw/tests/corpus.rs corpus_canon_crw (xtask RAW_SAMPLES)
+Canon	PowerShot S45	CRW	2003	verified	corpus: crates/raw/tests/corpus.rs corpus_canon_crw (xtask RAW_SAMPLES)
+Canon	PowerShot S50	CRW	2003	verified	corpus: crates/raw/tests/corpus.rs corpus_canon_crw (xtask RAW_SAMPLES)
+Canon	PowerShot S60	CRW	2003	verified	corpus: crates/raw/tests/corpus.rs corpus_canon_crw (xtask RAW_SAMPLES)
 Canon	PowerShot S90	CR2	2008	unverified	CR2 lossless JPEG decoder
 Canon	PowerShot S95	CR2	2010	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
-Canon	PowerShot S70	CRW	2003	preview	CRW is opened from its embedded JPEG only
+Canon	PowerShot S70	CRW	2003	verified	corpus: crates/raw/tests/corpus.rs corpus_canon_crw (xtask RAW_SAMPLES)
 Canon	PowerShot S100	CR2	2010	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Canon	PowerShot S100V	CR2	2010	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Canon	PowerShot S110	CR2	2012	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
@@ -296,9 +296,9 @@ DJI	DJI Mavic 4 Pro (DJI FC9284)	DNG	2025	unverified	DNG decoder (uncompressed, 
 DJI	DJI Mavic 4 Pro (DJI FC9287)	DNG	2025	verified	corpus: crates/raw/tests/coverage_sweep_corpus.rs (pinned sensor hashes); bulk: docs/raw/coverage-sweep.tsv (CC0, SHA-256, camera-image check)
 DJI	DJI Mavic 4 Pro (Hasselblad L3D-100c)	DNG	2025	unverified	DNG decoder (uncompressed, LJ92, lossy, Deflate, JPEG XL, LinearRaw)
 DxO	DxO ONE	DNG	2015	unverified	DNG decoder (uncompressed, LJ92, lossy, Deflate, JPEG XL, LinearRaw)
-Epson	R-D1	ERF	2003	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES)
-Epson	R-D1s	ERF	2005	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES)
-Epson	R-D1x	ERF	2008	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES)
+Epson	R-D1	ERF	2003	verified	corpus: crates/raw/tests/corpus.rs corpus_epson_erf (xtask RAW_SAMPLES)
+Epson	R-D1s	ERF	2005	verified	corpus: crates/raw/tests/corpus.rs corpus_epson_erf (xtask RAW_SAMPLES)
+Epson	R-D1x	ERF	2008	verified	corpus: crates/raw/tests/corpus.rs corpus_epson_erf (xtask RAW_SAMPLES)
 Fujifilm	GFX 50R	RAF	2017	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Fujifilm	GFX 50S	RAF	2015	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES)
 Fujifilm	GFX 50S II	RAF	2020	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
@@ -309,16 +309,16 @@ Fujifilm	GFX 100 IR	RAF	2020	unverified	RAF decoder (uncompressed, lossless / lo
 Fujifilm	GFX 100S	RAF	2020	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES)
 Fujifilm	GFX 100S II	RAF	2023	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Fujifilm	GFX 100RF (Final Support)	RAF	2024	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES)
-Fujifilm	FinePix E900	RAF	2005	preview	pre-X FinePix RAF without a raw IFD
-Fujifilm	FinePix F505 EXR	RAF	2012	preview	pre-X FinePix RAF without a raw IFD
-Fujifilm	FinePix F550 EXR	RAF	2010	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
-Fujifilm	FinePix F600 EXR	RAF	2010	preview	pre-X FinePix RAF without a raw IFD
-Fujifilm	FinePix F605 EXR	RAF	2012	preview	pre-X FinePix RAF without a raw IFD
-Fujifilm	FinePix F700	RAF	2003	preview	pre-X FinePix RAF without a raw IFD
+Fujifilm	FinePix E900	RAF	2005	verified	corpus: crates/raw/tests/corpus.rs corpus_fujifilm_superccd (SuperCCD lattice, layout 1)
+Fujifilm	FinePix F505 EXR	RAF	2012	unverified	RAF decoder (uncompressed, lossless / lossy compressed, Bayer and X-Trans)
+Fujifilm	FinePix F550 EXR	RAF	2010	verified	corpus: crates/raw/tests/corpus.rs corpus_raw_decodes (raw IFD; render checked by eye); corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Fujifilm	FinePix F600 EXR	RAF	2010	verified	corpus: crates/raw/tests/corpus.rs corpus_raw_decodes (raw IFD; render checked by eye)
+Fujifilm	FinePix F605 EXR	RAF	2012	unverified	RAF decoder (uncompressed, lossless / lossy compressed, Bayer and X-Trans)
+Fujifilm	FinePix F700	RAF	2003	verified	corpus: crates/raw/tests/corpus.rs corpus_fujifilm_superccd (SuperCCD SR: S photosites, upright)
 Fujifilm	FinePix F770 EXR	RAF	2012	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
-Fujifilm	FinePix F775 EXR	RAF	2012	preview	pre-X FinePix RAF without a raw IFD
-Fujifilm	FinePix F800 EXR	RAF	2012	preview	pre-X FinePix RAF without a raw IFD
-Fujifilm	FinePix F900 EXR	RAF	2012	preview	pre-X FinePix RAF without a raw IFD
+Fujifilm	FinePix F775 EXR	RAF	2012	unverified	RAF decoder (uncompressed, lossless / lossy compressed, Bayer and X-Trans)
+Fujifilm	FinePix F800 EXR	RAF	2012	unverified	RAF decoder (uncompressed, lossless / lossy compressed, Bayer and X-Trans)
+Fujifilm	FinePix F900 EXR	RAF	2012	unverified	RAF decoder (uncompressed, lossless / lossy compressed, Bayer and X-Trans)
 Fujifilm	FinePix HS10	RAF	2010	unverified	RAF decoder (uncompressed, lossless / lossy compressed, Bayer and X-Trans)
 Fujifilm	FinePix HS20 EXR	RAF	2010	unverified	RAF decoder (uncompressed, lossless / lossy compressed, Bayer and X-Trans)
 Fujifilm	FinePix HS22 EXR	RAF	2013	unverified	RAF decoder (uncompressed, lossless / lossy compressed, Bayer and X-Trans)
@@ -326,22 +326,22 @@ Fujifilm	FinePix HS30 EXR	RAF	2012	verified	corpus: crates/raw/tests/body_corpus
 Fujifilm	FinePix HS33 EXR	RAF	2012	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Fujifilm	FinePix HS35 EXR	RAF	2013	unverified	RAF decoder (uncompressed, lossless / lossy compressed, Bayer and X-Trans)
 Fujifilm	FinePix HS50 EXR	RAF	2012	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
-Fujifilm	FinePix IS-1	RAF	2007	preview	pre-X FinePix RAF without a raw IFD
-Fujifilm	FinePix IS Pro	RAF	2008	preview	pre-X FinePix RAF without a raw IFD
-Fujifilm	FinePix S1	RAF	2013	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
-Fujifilm	FinePix S100fs	RAF	2007	preview	pre-X FinePix RAF without a raw IFD
-Fujifilm	FinePix S2 Pro	RAF	2003	preview	pre-X FinePix RAF without a raw IFD
-Fujifilm	FinePix S20 Pro	RAF	2003	preview	pre-X FinePix RAF without a raw IFD
-Fujifilm	FinePix S200 EXR	RAF	2010	preview	pre-X FinePix RAF without a raw IFD
-Fujifilm	FinePix S205 EXR	RAF	2013	preview	pre-X FinePix RAF without a raw IFD
-Fujifilm	FinePix S3 Pro	RAF	2005	preview	pre-X FinePix RAF without a raw IFD
-Fujifilm	FinePix S5 Pro	RAF	2007	preview	pre-X FinePix RAF without a raw IFD
-Fujifilm	FinePix S5000 Z	RAF	2003	preview	pre-X FinePix RAF without a raw IFD
-Fujifilm	FinePix S5200 (FinePix S5600)	RAF	2005	preview	pre-X FinePix RAF without a raw IFD
-Fujifilm	FinePix S6000fd (FinePix S6500fd)	RAF	2005	preview	pre-X FinePix RAF without a raw IFD
-Fujifilm	FinePix S7000 Z	RAF	2003	preview	pre-X FinePix RAF without a raw IFD
-Fujifilm	FinePix S9000 (FinePix S9500)	RAF	2005	preview	pre-X FinePix RAF without a raw IFD
-Fujifilm	FinePix S9100 (FinePix S9600)	RAF	2005	preview	pre-X FinePix RAF without a raw IFD
+Fujifilm	FinePix IS-1	RAF	2007	unverified	RAF decoder (uncompressed, lossless / lossy compressed, Bayer and X-Trans)
+Fujifilm	FinePix IS Pro	RAF	2008	unverified	RAF decoder (uncompressed, lossless / lossy compressed, Bayer and X-Trans)
+Fujifilm	FinePix S1	RAF	2013	verified	corpus: crates/raw/tests/corpus.rs corpus_raw_decodes (raw IFD; render checked by eye); corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Fujifilm	FinePix S100fs	RAF	2007	verified	corpus: crates/raw/tests/corpus.rs corpus_fujifilm_superccd (SuperCCD lattice, layout 0)
+Fujifilm	FinePix S2 Pro	RAF	2003	verified	corpus: crates/raw/tests/corpus.rs corpus_fujifilm_superccd (SuperCCD lattice, big-endian 12-bit, turned)
+Fujifilm	FinePix S20 Pro	RAF	2003	unverified	RAF decoder (uncompressed, lossless / lossy compressed, Bayer and X-Trans)
+Fujifilm	FinePix S200 EXR	RAF	2010	preview	SuperCCD EXR RAF stored upright without a raw IFD
+Fujifilm	FinePix S205 EXR	RAF	2013	preview	SuperCCD EXR RAF stored upright without a raw IFD
+Fujifilm	FinePix S3 Pro	RAF	2005	verified	corpus: crates/raw/tests/corpus.rs corpus_fujifilm_superccd (SuperCCD SR Pro, S frame)
+Fujifilm	FinePix S5 Pro	RAF	2007	verified	corpus: crates/raw/tests/corpus.rs corpus_fujifilm_superccd (SuperCCD SR Pro, S frame)
+Fujifilm	FinePix S5000 Z	RAF	2003	verified	corpus: crates/raw/tests/corpus.rs corpus_fujifilm_superccd (SuperCCD lattice, layout 1)
+Fujifilm	FinePix S5200 (FinePix S5600)	RAF	2005	verified	corpus: crates/raw/tests/corpus.rs corpus_fujifilm_superccd (S5200 and S5600 files)
+Fujifilm	FinePix S6000fd (FinePix S6500fd)	RAF	2005	verified	corpus: crates/raw/tests/corpus.rs corpus_fujifilm_superccd (S6000fd and S6500fd files)
+Fujifilm	FinePix S7000 Z	RAF	2003	verified	corpus: crates/raw/tests/corpus.rs corpus_fujifilm_superccd (SuperCCD lattice, layout 1)
+Fujifilm	FinePix S9000 (FinePix S9500)	RAF	2005	verified	corpus: crates/raw/tests/corpus.rs corpus_fujifilm_superccd (S9500 file)
+Fujifilm	FinePix S9100 (FinePix S9600)	RAF	2005	verified	corpus: crates/raw/tests/corpus.rs corpus_fujifilm_superccd (S9600 file)
 Fujifilm	FinePix SL1000	RAF	2012	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Fujifilm	FinePix X10	RAF	2010	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Fujifilm	FinePix X100	RAF	2010	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
@@ -350,8 +350,8 @@ Fujifilm	FinePix X-S1	RAF	2012	verified	corpus: crates/raw/tests/body_corpus.rs 
 Fujifilm	X100F	RAF	2015	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Fujifilm	X100S	RAF	2012	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Fujifilm	X100T	RAF	2013	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
-Fujifilm	X100V**	RAF	2019	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
-Fujifilm	X100VI	RAF	2023	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Fujifilm	X100V**	RAF	2019	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES); corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Fujifilm	X100VI	RAF	2023	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES); corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Fujifilm	X20	RAF	2012	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Fujifilm	X30	RAF	2013	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Fujifilm	X70	RAF	2015	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
@@ -366,7 +366,7 @@ Fujifilm	X-E1	RAF	2012	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SA
 Fujifilm	X-E2	RAF	2013	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Fujifilm	X-E2S	RAF	2015	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Fujifilm	X-E3	RAF	2017	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
-Fujifilm	X-E4	RAF	2020	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Fujifilm	X-E4	RAF	2020	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES); corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Fujifilm	X-E5	RAF	2024	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES)
 Fujifilm	X-H1	RAF	2017	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Fujifilm	X-H2 IR	RAF	2024	unverified	RAF decoder (uncompressed, lossless / lossy compressed, Bayer and X-Trans)
@@ -375,8 +375,8 @@ Fujifilm	X-M5	RAF	2024	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SA
 Fujifilm	X-Pro1	RAF	2012	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Fujifilm	X-Pro2	RAF	2015	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Fujifilm	X-Pro3**	RAF	2019	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
-Fujifilm	X-S10	RAF	2020	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
-Fujifilm	X-S20	RAF	2022	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Fujifilm	X-S10	RAF	2020	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES); corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Fujifilm	X-S20	RAF	2022	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES); corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Fujifilm	X-T1	RAF	2013	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Fujifilm	X-T1 IR	RAF	2015	unverified	RAF decoder (uncompressed, lossless / lossy compressed, Bayer and X-Trans)
 Fujifilm	X-T2	RAF	2015	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES)
@@ -386,7 +386,7 @@ Fujifilm	X-T5	RAF	2022	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SA
 Fujifilm	X-T10	RAF	2015	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Fujifilm	X-T20	RAF	2015	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES)
 Fujifilm	X-T30	RAF	2018	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
-Fujifilm	X-T30 II	RAF	2021	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Fujifilm	X-T30 II	RAF	2021	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES); corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Fujifilm	X-T30 III	RAF	2022	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Fujifilm	X-T50	RAF	2023	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES)
 Fujifilm	X-T100	RAF	2017	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
@@ -520,7 +520,7 @@ Hasselblad	H5D-50	3FR	2012	preview	3FR is opened from its embedded JPEG only
 Hasselblad	H5D-50c	3FR	2013	verified	corpus: crates/raw/tests/coverage_sweep_corpus.rs (pinned sensor hashes); bulk: docs/raw/coverage-sweep.tsv (CC0, SHA-256, camera-image check); decode verified, not colour calibration
 Hasselblad	H5D-60	3FR	2013	preview	3FR is opened from its embedded JPEG only
 Hasselblad	H6D-100c	3FR	2015	preview	3FR is opened from its embedded JPEG only
-Hasselblad	HV	ARW	2013	unverified	ARW decoder (uncompressed, cRAW, packed 12-bit, lossless, downsized YCbCr)
+Hasselblad	HV	ARW	2013	unverified	ARW decoder (ARW version 1, uncompressed, cRAW, packed 12-bit, lossless, downsized YCbCr)
 Hasselblad	Lunar	3FR	2012	verified	issue #1275: raw.pixls.us 4051 (a Sony NEX-7 ARW under Make HASSELBLAD) decodes from sensor data; black 512 and SR2SubIFD WB as on a NEX-7
 Hasselblad	Stellar II	3FR	2015	preview	3FR is opened from its embedded JPEG only
 Hasselblad	X1D	3FR	2015	verified	corpus: crates/raw/tests/coverage_sweep_corpus.rs (pinned sensor hashes); bulk: docs/raw/coverage-sweep.tsv (CC0, SHA-256, camera-image check); decode verified, not colour calibration
@@ -552,17 +552,17 @@ Kodak	EasyShare Z1015 IS	KDC	2008	preview	KDC is opened from its embedded JPEG o
 Kodak	EasyShare Z980	KDC	2008	preview	KDC is opened from its embedded JPEG only
 Kodak	EasyShare Z981	RAW	2010	preview	RAW is opened from its embedded JPEG only
 Kodak	EasyShare Z990	RAW	2010	preview	RAW is opened from its embedded JPEG only
-Konica Minolta	Alpha-5 Digital (China)	MRW	2005	preview	MRW is opened from its embedded JPEG only
-Konica Minolta	Alpha Sweet Digital (Japan)	MRW	2005	preview	MRW is opened from its embedded JPEG only
-Konica Minolta	DiMAGE 5	MRW	2003	preview	MRW is opened from its embedded JPEG only
-Konica Minolta	DiMAGE 7	MRW	2003	preview	MRW is opened from its embedded JPEG only
-Konica Minolta	DiMAGE 7i	MRW	2003	preview	MRW is opened from its embedded JPEG only
-Konica Minolta	DiMAGE 7Hi	MRW	2003	preview	MRW is opened from its embedded JPEG only
-Konica Minolta	DiMAGE A1	MRW	2003	preview	MRW is opened from its embedded JPEG only
-Konica Minolta	DiMAGE A2	MRW	2003	preview	MRW is opened from its embedded JPEG only
-Konica Minolta	DiMAGE A200	MRW	2003	preview	MRW is opened from its embedded JPEG only
-Konica Minolta	Maxxum 5D Dynax 5D	MRW	2005	preview	MRW is opened from its embedded JPEG only
-Konica Minolta	Maxxum 7D Dynax 7D	MRW	2003	preview	MRW is opened from its embedded JPEG only
+Konica Minolta	Alpha-5 Digital (China)	MRW	2005	unverified	MRW decoder (16-bit words, 12-bit packing; vendor/mrw.rs)
+Konica Minolta	Alpha Sweet Digital (Japan)	MRW	2005	unverified	MRW decoder (16-bit words, 12-bit packing; vendor/mrw.rs)
+Konica Minolta	DiMAGE 5	MRW	2003	unverified	MRW decoder (16-bit words, 12-bit packing; vendor/mrw.rs)
+Konica Minolta	DiMAGE 7	MRW	2003	verified	corpus: crates/raw/tests/corpus.rs corpus_minolta_mrw (xtask RAW_SAMPLES)
+Konica Minolta	DiMAGE 7i	MRW	2003	unverified	MRW decoder (16-bit words, 12-bit packing; vendor/mrw.rs)
+Konica Minolta	DiMAGE 7Hi	MRW	2003	verified	corpus: crates/raw/tests/corpus.rs corpus_minolta_mrw (xtask RAW_SAMPLES)
+Konica Minolta	DiMAGE A1	MRW	2003	verified	corpus: crates/raw/tests/corpus.rs corpus_minolta_mrw (xtask RAW_SAMPLES)
+Konica Minolta	DiMAGE A2	MRW	2003	verified	corpus: crates/raw/tests/corpus.rs corpus_minolta_mrw (xtask RAW_SAMPLES)
+Konica Minolta	DiMAGE A200	MRW	2003	verified	corpus: crates/raw/tests/corpus.rs corpus_minolta_mrw (xtask RAW_SAMPLES)
+Konica Minolta	Maxxum 5D Dynax 5D	MRW	2005	unverified	MRW decoder (16-bit words, 12-bit packing; vendor/mrw.rs)
+Konica Minolta	Maxxum 7D Dynax 7D	MRW	2003	verified	corpus: crates/raw/tests/corpus.rs corpus_minolta_mrw (xtask RAW_SAMPLES)
 Leaf	AFi II 6	MOS	2008	preview	MOS is opened from its embedded JPEG only
 Leaf	AFi II 7	MOS	2008	preview	MOS is opened from its embedded JPEG only
 Leaf	Aptus 17	MOS	2007	preview	MOS is opened from its embedded JPEG only
@@ -673,7 +673,7 @@ Mamiya	Mamiya M18	TIF	2008	unsupported	TIF is not imported
 Mamiya	Mamiya M22	TIF	2008	unsupported	TIF is not imported
 Mamiya	Mamiya M31	TIF	2008	unsupported	TIF is not imported
 Mamiya	Mamiya DM40	MOS	2010	preview	MOS is opened from its embedded JPEG only
-Mamiya	ZD	MEF	2005	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES)
+Mamiya	ZD	MEF	2005	verified	corpus: crates/raw/tests/corpus.rs corpus_mamiya_mef (xtask RAW_SAMPLES)
 Motorola	Moto G Power (2021) Front Camera	DNG	2021	unverified	DNG decoder (uncompressed, LJ92, lossy, Deflate, JPEG XL, LinearRaw)
 Motorola	Moto G Power (2021) Rear Macro Camera	DNG	2021	unverified	DNG decoder (uncompressed, LJ92, lossy, Deflate, JPEG XL, LinearRaw)
 Motorola	Moto G Power (2021) Rear Wide Camera	DNG	2021	unverified	DNG decoder (uncompressed, LJ92, lossy, Deflate, JPEG XL, LinearRaw)
@@ -683,32 +683,32 @@ Nikon	1 J3	NEF	2012	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sen
 Nikon	1 J4	NEF	2013	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Nikon	1 J5	NEF	2015	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Nikon	1 S1	NEF	2012	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
-Nikon	1 S2	NEF	2013	unverified	NEF decoder (uncompressed, lossless, lossy, lossy after split); HE / HE* setting preview-only
+Nikon	1 S2	NEF	2013	unverified	NEF decoder (uncompressed, lossless, lossy, lossy after split, table-less packed 12 / 14-bit); HE / HE* setting preview-only
 Nikon	1 V1	NEF	2010	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Nikon	1 V2	NEF	2012	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Nikon	1 V3	NEF	2013	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
-Nikon	COOLPIX 5000	NEF	2003	unverified	NEF decoder (uncompressed, lossless, lossy, lossy after split); HE / HE* setting preview-only
-Nikon	COOLPIX 5400	NEF	2003	unverified	NEF decoder (uncompressed, lossless, lossy, lossy after split); HE / HE* setting preview-only
+Nikon	COOLPIX 5000	NEF	2003	unverified	NEF decoder (uncompressed, lossless, lossy, lossy after split, table-less packed 12 / 14-bit); HE / HE* setting preview-only
+Nikon	COOLPIX 5400	NEF	2003	unverified	NEF decoder (uncompressed, lossless, lossy, lossy after split, table-less packed 12 / 14-bit); HE / HE* setting preview-only
 Nikon	COOLPIX 5700	NEF	2003	unsupported	bulk: raw.pixls.us CC0 file decodes wrongly (two stacked half-height fields, CMYG mosaic read as RGB; green vs camera JPEG r 0.12-0.36)
 Nikon	COOLPIX 8400	NEF	2005	unsupported	bulk: raw.pixls.us CC0 file decodes wrongly (two stacked half-height fields, CMYG mosaic read as RGB; green vs camera JPEG r 0.12-0.36)
-Nikon	COOLPIX 8700	NEF	2003	unverified	NEF decoder (uncompressed, lossless, lossy, lossy after split); HE / HE* setting preview-only
+Nikon	COOLPIX 8700	NEF	2003	unverified	NEF decoder (uncompressed, lossless, lossy, lossy after split, table-less packed 12 / 14-bit); HE / HE* setting preview-only
 Nikon	COOLPIX 8800	NEF	2005	unsupported	bulk: raw.pixls.us CC0 file decodes wrongly (two stacked half-height fields, CMYG mosaic read as RGB; green vs camera JPEG r 0.12-0.36)
 Nikon	COOLPIX A	NEF	2012	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Nikon	COOLPIX A1000	NRW	2018	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Nikon	COOLPIX B700	NRW	2015	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES)
-Nikon	COOLPIX P330	NRW	2012	unverified	NEF decoder (uncompressed, lossless, lossy, lossy after split); HE / HE* setting preview-only
-Nikon	COOLPIX P340	NRW	2013	unverified	NEF decoder (uncompressed, lossless, lossy, lossy after split); HE / HE* setting preview-only
+Nikon	COOLPIX P330	NRW	2012	unverified	NEF decoder (uncompressed, lossless, lossy, lossy after split, table-less packed 12 / 14-bit); HE / HE* setting preview-only
+Nikon	COOLPIX P340	NRW	2013	unverified	NEF decoder (uncompressed, lossless, lossy, lossy after split, table-less packed 12 / 14-bit); HE / HE* setting preview-only
 Nikon	COOLPIX P1000	NRW	2018	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Nikon	COOLPIX P1100	NRW	2024	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
-Nikon	COOLPIX P6000	NRW	2008	unverified	NEF decoder (uncompressed, lossless, lossy, lossy after split); HE / HE* setting preview-only
-Nikon	COOLPIX P7000	NRW	2010	unverified	NEF decoder (uncompressed, lossless, lossy, lossy after split); HE / HE* setting preview-only
-Nikon	COOLPIX P7100	NRW	2010	unverified	NEF decoder (uncompressed, lossless, lossy, lossy after split); HE / HE* setting preview-only
-Nikon	COOLPIX P7700	NRW	2012	unverified	NEF decoder (uncompressed, lossless, lossy, lossy after split); HE / HE* setting preview-only
-Nikon	COOLPIX P7800	NRW	2013	unverified	NEF decoder (uncompressed, lossless, lossy, lossy after split); HE / HE* setting preview-only
+Nikon	COOLPIX P6000	NRW	2008	unverified	NEF decoder (uncompressed, lossless, lossy, lossy after split, table-less packed 12 / 14-bit); HE / HE* setting preview-only
+Nikon	COOLPIX P7000	NRW	2010	unverified	NEF decoder (uncompressed, lossless, lossy, lossy after split, table-less packed 12 / 14-bit); HE / HE* setting preview-only
+Nikon	COOLPIX P7100	NRW	2010	unverified	NEF decoder (uncompressed, lossless, lossy, lossy after split, table-less packed 12 / 14-bit); HE / HE* setting preview-only
+Nikon	COOLPIX P7700	NRW	2012	unverified	NEF decoder (uncompressed, lossless, lossy, lossy after split, table-less packed 12 / 14-bit); HE / HE* setting preview-only
+Nikon	COOLPIX P7800	NRW	2013	unverified	NEF decoder (uncompressed, lossless, lossy, lossy after split, table-less packed 12 / 14-bit); HE / HE* setting preview-only
 Nikon	COOLPIX P950	NEF	2019	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
-Nikon	D1	NEF	2003	unverified	NEF decoder (uncompressed, lossless, lossy, lossy after split); HE / HE* setting preview-only
+Nikon	D1	NEF	2003	unverified	NEF decoder (uncompressed, lossless, lossy, lossy after split, table-less packed 12 / 14-bit); HE / HE* setting preview-only
 Nikon	D1H	NEF	2003	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
-Nikon	D1X	NEF	2003	unverified	NEF decoder (uncompressed, lossless, lossy, lossy after split); HE / HE* setting preview-only
+Nikon	D1X	NEF	2003	unverified	NEF decoder (uncompressed, lossless, lossy, lossy after split, table-less packed 12 / 14-bit); HE / HE* setting preview-only
 Nikon	D2H	NEF	2003	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Nikon	D2Hs	NEF	2005	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Nikon	D2X	NEF	2005	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
@@ -728,7 +728,7 @@ Nikon	D70	NEF	2005	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sens
 Nikon	D70S	NEF	2005	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Nikon	D80	NEF	2005	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Nikon	D90	NEF	2008	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
-Nikon	D100	NEF	2003	unverified	NEF decoder (uncompressed, lossless, lossy, lossy after split); HE / HE* setting preview-only
+Nikon	D100	NEF	2003	unverified	NEF decoder (uncompressed, lossless, lossy, lossy after split, table-less packed 12 / 14-bit); HE / HE* setting preview-only
 Nikon	D200	NEF	2005	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Nikon	D300	NEF	2007	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Nikon	D300s	NEF	2008	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
@@ -736,13 +736,13 @@ Nikon	D500	NEF	2015	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sen
 Nikon	D600	NEF	2012	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Nikon	D610	NEF	2013	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Nikon	D700	NEF	2008	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
-Nikon	D750	NEF	2013	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
-Nikon	D780	NEF	2019	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	D750	NEF	2013	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES); corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	D780	NEF	2019	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES); corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Nikon	D800	NEF	2012	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Nikon	D800E	NEF	2012	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Nikon	D810	NEF	2013	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
-Nikon	D810A	NEF	2015	unverified	NEF decoder (uncompressed, lossless, lossy, lossy after split); HE / HE* setting preview-only
-Nikon	D850	NEF	2015	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	D810A	NEF	2015	unverified	NEF decoder (uncompressed, lossless, lossy, lossy after split, table-less packed 12 / 14-bit); HE / HE* setting preview-only
+Nikon	D850	NEF	2015	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES); corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Nikon	D3000	NEF	2008	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Nikon	D3100	NEF	2010	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Nikon	D3200	NEF	2012	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
@@ -761,102 +761,102 @@ Nikon	D7200	NEF	2015	verified	corpus: crates/raw/tests/body_corpus.rs (pinned se
 Nikon	D7500	NEF	2015	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES)
 Nikon	Df	NEF	2013	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Nikon	Z 30	NEF	2021	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
-Nikon	Z 50	NEF	2019	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	Z 50	NEF	2019	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES); corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Nikon	Z 50 II	NEF	2024	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
-Nikon	Z 5	NEF	2019	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
-Nikon	Z 5 2	NEF	2024	unverified	NEF decoder (uncompressed, lossless, lossy, lossy after split); HE / HE* setting preview-only
-Nikon	Z 5 2C	NEF	2025	unverified	NEF decoder (uncompressed, lossless, lossy, lossy after split); HE / HE* setting preview-only
+Nikon	Z 5	NEF	2019	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES); corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	Z 5 2	NEF	2024	unverified	NEF decoder (uncompressed, lossless, lossy, lossy after split, table-less packed 12 / 14-bit); HE / HE* setting preview-only
+Nikon	Z 5 2C	NEF	2025	unverified	NEF decoder (uncompressed, lossless, lossy, lossy after split, table-less packed 12 / 14-bit); HE / HE* setting preview-only
 Nikon	Z 6	NEF	2018	verified	corpus: crates/raw/tests/coverage_sweep_corpus.rs (pinned sensor hashes); bulk: docs/raw/coverage-sweep.tsv (CC0, SHA-256, camera-image check); checked compressed NEF only; uncompressed remains preview-only (#671)
-Nikon	Z 6 II	NEF	2020	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
-Nikon	Z 6 III	NEF	2023	unverified	NEF decoder (uncompressed, lossless, lossy, lossy after split); HE / HE* setting preview-only
+Nikon	Z 6 II	NEF	2020	verified	corpus: crates/raw/tests/corpus.rs corpus_arw1_and_packed_nef (table-less "Packed 14 bits", #769); corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	Z 6 III	NEF	2023	unverified	NEF decoder (uncompressed, lossless, lossy, lossy after split, table-less packed 12 / 14-bit); HE / HE* setting preview-only
 Nikon	Z 7	NEF	2018	verified	corpus: crates/raw/tests/coverage_sweep_corpus.rs (pinned sensor hashes); bulk: docs/raw/coverage-sweep.tsv (CC0, SHA-256, camera-image check); checked compressed NEF only; uncompressed remains preview-only (#671)
-Nikon	Z 7 II	NEF	2020	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
-Nikon	Z 8	NEF	2022	verified	corpus: crates/raw/tests/coverage_sweep_corpus.rs (pinned sensor hashes); bulk: docs/raw/coverage-sweep.tsv (CC0, SHA-256, camera-image check); HE / HE* remain preview-only
-Nikon	Z 9 (*See note)	NEF	2021	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
-Nikon	Z fc	NEF	2020	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	Z 7 II	NEF	2020	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES); corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	Z 8	NEF	2022	verified	corpus: crates/raw/tests/corpus.rs corpus_nikon_z8_z9_lossless (14-bit lossless); corpus: crates/raw/tests/coverage_sweep_corpus.rs (pinned sensor hashes); bulk: docs/raw/coverage-sweep.tsv (CC0, SHA-256, camera-image check); HE / HE* remain preview-only
+Nikon	Z 9 (*See note)	NEF	2021	verified	corpus: crates/raw/tests/corpus.rs corpus_nikon_z8_z9_lossless (14-bit lossless); corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Nikon	Z fc	NEF	2020	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES); corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Nikon	Z f	NEF	2022	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES)
-Nikon	ZR	NEF	2024	unverified	NEF decoder (uncompressed, lossless, lossy, lossy after split); HE / HE* setting preview-only
+Nikon	ZR	NEF	2024	unverified	NEF decoder (uncompressed, lossless, lossy, lossy after split, table-less packed 12 / 14-bit); HE / HE* setting preview-only
 Nokia	Lumia 1020	DNG	2013	unverified	DNG decoder (uncompressed, LJ92, lossy, Deflate, JPEG XL, LinearRaw)
 Nokia	HMD Global Nokia 9 PureView Front Camera	DNG	2018	unverified	DNG decoder (uncompressed, LJ92, lossy, Deflate, JPEG XL, LinearRaw)
 Nokia	HMD Global Nokia 9 PureView Rear Camera	DNG	2018	unverified	DNG decoder (uncompressed, LJ92, lossy, Deflate, JPEG XL, LinearRaw)
-OM Digital Solutions	OM System OM-1	ORF	2021	preview	compressed ORF is not decoded
-OM Digital Solutions	OM System OM-5	ORF	2022	preview	compressed ORF is not decoded
-OM Digital Solutions	OM System TG - 7	ORF	2023	preview	compressed ORF is not decoded
-OM Digital Solutions	OM System OM-1 MARK II	ORF	2023	preview	compressed ORF is not decoded
-OM Digital Solutions	OM System OM-3	ORF	2024	preview	compressed ORF is not decoded
-OM Digital Solutions	OM-5 Mark II	ORF	2024	preview	compressed ORF is not decoded
-OM Digital Solutions	OM-3 Astro	ORF	2025	preview	compressed ORF is not decoded
-Olympus	AIR A01	ORF	2015	preview	compressed ORF is not decoded
+OM Digital Solutions	OM System OM-1	ORF	2021	unverified	compressed ORF decoder
+OM Digital Solutions	OM System OM-5	ORF	2022	unverified	compressed ORF decoder
+OM Digital Solutions	OM System TG - 7	ORF	2023	unverified	compressed ORF decoder
+OM Digital Solutions	OM System OM-1 MARK II	ORF	2023	unverified	compressed ORF decoder
+OM Digital Solutions	OM System OM-3	ORF	2024	unverified	compressed ORF decoder
+OM Digital Solutions	OM-5 Mark II	ORF	2024	unverified	compressed ORF decoder
+OM Digital Solutions	OM-3 Astro	ORF	2025	unverified	compressed ORF decoder
+Olympus	AIR A01	ORF	2015	unverified	compressed ORF decoder
 Olympus	Camedia C-5050 Zoom	ORF	2003	unverified	uncompressed / packed ORF
 Olympus	Camedia C-5060 Zoom	ORF	2003	verified	corpus: crates/raw/tests/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
 Olympus	Camedia C-7070 Wide Zoom	ORF	2005	verified	corpus: crates/raw/tests/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
 Olympus	Camedia C-8080 Wide Zoom	ORF	2003	unverified	uncompressed / packed ORF
 Olympus	E-1	ORF	2003	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES)
-Olympus	E-3	ORF	2007	preview	compressed ORF is not decoded
-Olympus	E-5	ORF	2010	preview	compressed ORF is not decoded
+Olympus	E-3	ORF	2007	unverified	compressed ORF decoder
+Olympus	E-5	ORF	2010	unverified	compressed ORF decoder
 Olympus	E-10	ORF	2003	verified	corpus: crates/raw/tests/olympus_samsung_corpus.rs (pinned sensor hash)
 Olympus	E-20	ORF	2003	unverified	uncompressed / packed ORF
-Olympus	E-30	ORF	2008	preview	compressed ORF is not decoded
-Olympus	E-420	ORF	2008	preview	compressed ORF is not decoded
-Olympus	E-450	ORF	2008	preview	compressed ORF is not decoded
-Olympus	E-520	ORF	2008	preview	compressed ORF is not decoded
-Olympus	E-600	ORF	2010	preview	compressed ORF is not decoded
-Olympus	E-620	ORF	2008	preview	compressed ORF is not decoded
+Olympus	E-30	ORF	2008	unverified	compressed ORF decoder
+Olympus	E-420	ORF	2008	unverified	compressed ORF decoder
+Olympus	E-450	ORF	2008	unverified	compressed ORF decoder
+Olympus	E-520	ORF	2008	unverified	compressed ORF decoder
+Olympus	E-600	ORF	2010	unverified	compressed ORF decoder
+Olympus	E-620	ORF	2008	unverified	compressed ORF decoder
 Olympus	EVOLT E-300	ORF	2005	verified	corpus: crates/raw/tests/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
 Olympus	EVOLT E-330	ORF	2005	verified	corpus: crates/raw/tests/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
 Olympus	EVOLT E-400	ORF	2005	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES)
-Olympus	EVOLT E-410	ORF	2007	preview	compressed ORF is not decoded
+Olympus	EVOLT E-410	ORF	2007	unverified	compressed ORF decoder
 Olympus	EVOLT E-500	ORF	2005	verified	corpus: crates/raw/tests/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
-Olympus	EVOLT E-510	ORF	2007	preview	compressed ORF is not decoded
-Olympus	OM-D E-M1	ORF	2013	preview	compressed ORF is not decoded
-Olympus	OM-D E-M1X	ORF	2018	preview	compressed ORF is not decoded
-Olympus	OM-D E-M1 Mark II	ORF	2015	preview	compressed ORF is not decoded
-Olympus	OM-D E-M1 Mark III	ORF	2019	preview	compressed ORF is not decoded
-Olympus	OM-D E-M5	ORF	2012	preview	compressed ORF is not decoded
+Olympus	EVOLT E-510	ORF	2007	unverified	compressed ORF decoder
+Olympus	OM-D E-M1	ORF	2013	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES), compressed ORF
+Olympus	OM-D E-M1X	ORF	2018	unverified	compressed ORF decoder
+Olympus	OM-D E-M1 Mark II	ORF	2015	unverified	compressed ORF decoder
+Olympus	OM-D E-M1 Mark III	ORF	2019	unverified	compressed ORF decoder
+Olympus	OM-D E-M5	ORF	2012	unverified	compressed ORF decoder
 Olympus	OM-D E-M5 Mark II	ORF	2015	verified	corpus: crates/raw/tests/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
-Olympus	OM-D E-M5 Mark III	ORF	2019	preview	compressed ORF is not decoded
-Olympus	OM-D E-M10	ORF	2013	preview	compressed ORF is not decoded
-Olympus	OM-D E-M10 Mark II	ORF	2015	preview	compressed ORF is not decoded
-Olympus	OM-D E-M10 Mark III	ORF	2017	preview	compressed ORF is not decoded
-Olympus	OM-D E-M10 Mark III S	ORF	2019	preview	compressed ORF is not decoded
-Olympus	OM-D E-M10 Mark IV	ORF	2019	preview	compressed ORF is not decoded
-Olympus	PEN E-P1	ORF	2008	preview	compressed ORF is not decoded
-Olympus	PEN E-P2	ORF	2008	preview	compressed ORF is not decoded
-Olympus	PEN E-P3	ORF	2010	preview	compressed ORF is not decoded
-Olympus	PEN E-P5	ORF	2013	preview	compressed ORF is not decoded
-Olympus	PEN E-P7	ORF	2020	preview	compressed ORF is not decoded
-Olympus	PEN E-PL1	ORF	2010	preview	compressed ORF is not decoded
-Olympus	PEN E-PL1s	ORF	2010	preview	compressed ORF is not decoded
-Olympus	PEN E-PL10	ORF	2019	preview	compressed ORF is not decoded
-Olympus	PEN E-PL2	ORF	2010	preview	compressed ORF is not decoded
-Olympus	PEN E-PL3	ORF	2010	preview	compressed ORF is not decoded
-Olympus	PEN E-PL6	ORF	2013	preview	compressed ORF is not decoded
-Olympus	PEN E-PL5	ORF	2012	preview	compressed ORF is not decoded
-Olympus	PEN E-PL7	ORF	2013	preview	compressed ORF is not decoded
-Olympus	PEN E-PL8	ORF	2015	preview	compressed ORF is not decoded
-Olympus	PEN E-PL9	ORF	2017	preview	compressed ORF is not decoded
-Olympus	PEN E-PM1	ORF	2010	preview	compressed ORF is not decoded
-Olympus	PEN E-PM2	ORF	2012	preview	compressed ORF is not decoded
+Olympus	OM-D E-M5 Mark III	ORF	2019	unverified	compressed ORF decoder
+Olympus	OM-D E-M10	ORF	2013	unverified	compressed ORF decoder
+Olympus	OM-D E-M10 Mark II	ORF	2015	unverified	compressed ORF decoder
+Olympus	OM-D E-M10 Mark III	ORF	2017	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES), compressed ORF
+Olympus	OM-D E-M10 Mark III S	ORF	2019	unverified	compressed ORF decoder
+Olympus	OM-D E-M10 Mark IV	ORF	2019	unverified	compressed ORF decoder
+Olympus	PEN E-P1	ORF	2008	unverified	compressed ORF decoder
+Olympus	PEN E-P2	ORF	2008	unverified	compressed ORF decoder
+Olympus	PEN E-P3	ORF	2010	unverified	compressed ORF decoder
+Olympus	PEN E-P5	ORF	2013	unverified	compressed ORF decoder
+Olympus	PEN E-P7	ORF	2020	unverified	compressed ORF decoder
+Olympus	PEN E-PL1	ORF	2010	unverified	compressed ORF decoder
+Olympus	PEN E-PL1s	ORF	2010	unverified	compressed ORF decoder
+Olympus	PEN E-PL10	ORF	2019	unverified	compressed ORF decoder
+Olympus	PEN E-PL2	ORF	2010	unverified	compressed ORF decoder
+Olympus	PEN E-PL3	ORF	2010	unverified	compressed ORF decoder
+Olympus	PEN E-PL6	ORF	2013	unverified	compressed ORF decoder
+Olympus	PEN E-PL5	ORF	2012	unverified	compressed ORF decoder
+Olympus	PEN E-PL7	ORF	2013	unverified	compressed ORF decoder
+Olympus	PEN E-PL8	ORF	2015	unverified	compressed ORF decoder
+Olympus	PEN E-PL9	ORF	2017	unverified	compressed ORF decoder
+Olympus	PEN E-PM1	ORF	2010	unverified	compressed ORF decoder
+Olympus	PEN E-PM2	ORF	2012	unverified	compressed ORF decoder
 Olympus	PEN-F	ORF	2015	verified	corpus: crates/raw/tests/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
-Olympus	SP-310	ORF	2005	preview	compressed ORF is not decoded
-Olympus	SP-320	ORF	2005	preview	compressed ORF is not decoded
-Olympus	SP-350	ORF	2005	preview	compressed ORF is not decoded
-Olympus	SP-500 UZ	ORF	2005	preview	compressed ORF is not decoded
+Olympus	SP-310	ORF	2005	unverified	compressed ORF decoder
+Olympus	SP-320	ORF	2005	unverified	compressed ORF decoder
+Olympus	SP-350	ORF	2005	unverified	compressed ORF decoder
+Olympus	SP-500 UZ	ORF	2005	unverified	compressed ORF decoder
 Olympus	SP-510 UZ	ORF	2005	verified	corpus: crates/raw/tests/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
 Olympus	SP-550 UZ	ORF	2007	verified	corpus: crates/raw/tests/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
-Olympus	SP-560 UZ	ORF	2007	preview	compressed ORF is not decoded
+Olympus	SP-560 UZ	ORF	2007	unverified	compressed ORF decoder
 Olympus	SP-565 UZ	ORF	2008	verified	corpus: crates/raw/tests/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
 Olympus	SP-570 UZ	ORF	2007	verified	corpus: crates/raw/tests/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
-Olympus	Stylus 1	ORF	2013	preview	compressed ORF is not decoded
-Olympus	Stylus 1s	ORF	2013	preview	compressed ORF is not decoded
+Olympus	Stylus 1	ORF	2013	unverified	compressed ORF decoder
+Olympus	Stylus 1s	ORF	2013	unverified	compressed ORF decoder
 Olympus	Stylus SH-2	ORF	2015	verified	corpus: crates/raw/tests/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
-Olympus	Stylus SH-3	ORF	2015	preview	compressed ORF is not decoded
-Olympus	Stylus Tough TG-4	ORF	2015	preview	compressed ORF is not decoded
-Olympus	Stylus Tough TG-5	ORF	2015	preview	compressed ORF is not decoded
-Olympus	Stylus Tough TG-6	ORF	2018	preview	compressed ORF is not decoded
+Olympus	Stylus SH-3	ORF	2015	unverified	compressed ORF decoder
+Olympus	Stylus Tough TG-4	ORF	2015	unverified	compressed ORF decoder
+Olympus	Stylus Tough TG-5	ORF	2015	unverified	compressed ORF decoder
+Olympus	Stylus Tough TG-6	ORF	2018	unverified	compressed ORF decoder
 Olympus	Stylus XZ-2 iHS	ORF	2012	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES)
 Olympus	Stylus XZ-10	ORF	2012	verified	corpus: crates/raw/tests/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
-Olympus	XZ-1	ORF	2010	preview	compressed ORF is not decoded
+Olympus	XZ-1	ORF	2010	unverified	compressed ORF decoder
 OnePlus	7T Front Camera	DNG	2019	unverified	DNG decoder (uncompressed, LJ92, lossy, Deflate, JPEG XL, LinearRaw)
 OnePlus	7T Rear Main Camera	DNG	2019	unverified	DNG decoder (uncompressed, LJ92, lossy, Deflate, JPEG XL, LinearRaw)
 OnePlus	8 Front Camera	DNG	2020	unverified	DNG decoder (uncompressed, LJ92, lossy, Deflate, JPEG XL, LinearRaw)
@@ -1018,18 +1018,18 @@ Pentax	*ist DS	PEF	2005	verified	corpus: crates/raw/tests/body_corpus.rs (pinned
 Pentax	*ist DS2	PEF	2005	unverified	PEF decoder (uncompressed, Huffman, packed 12-bit)
 Pentax	K-01	DNG	2012	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Pentax	K-1	DNG	2015	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
-Pentax	K-1 II (* see note)	DNG	2017	unverified	DNG decoder (uncompressed, LJ92, lossy, Deflate, JPEG XL, LinearRaw)
+Pentax	K-1 II (* see note)	DNG	2017	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES)
 Pentax	K-3	DNG	2013	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES)
 Pentax	K-3 II († see note)	DNG	2015	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Pentax	K-5	DNG	2010	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Pentax	K-5 II	DNG	2012	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Pentax	K-5 IIs	DNG	2012	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES)
 Pentax	K-7	PEF	2008	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
-Pentax	K-3 Mark III	DNG	2020	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Pentax	K-3 Mark III	DNG	2020	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES); corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Pentax	K-3 Mark III Monochrome	DNG	2022	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash)
 Pentax	K-30	DNG	2012	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Pentax	K-50	DNG	2013	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
-Pentax	K-70	PEF	2015	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Pentax	K-70	PEF	2015	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES); corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Pentax	K-500	DNG	2013	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Pentax	KP	DNG	2015	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Pentax	K-r	PEF	2010	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
@@ -1043,7 +1043,7 @@ Pentax	K100D Super	PEF	2007	verified	corpus: crates/raw/tests/body_corpus.rs (pi
 Pentax	K110D	PEF	2005	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Pentax	K200D	DNG	2007	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Pentax	K2000 K-m	PEF	2008	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
-Pentax	KF	PEF	2022	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
+Pentax	KF	PEF	2022	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES); corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Pentax	MX-1	DNG	2012	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Pentax	Q	DNG	2010	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
 Pentax	Q7	DNG	2013	verified	corpus: crates/raw/tests/body_corpus.rs (pinned sensor hash, camera-JPEG check)
@@ -1098,18 +1098,18 @@ Ricoh	GXR with GR LENS A16 24-85 F3.5-5.5	DNG	2010	unverified	DNG decoder (uncom
 Ricoh	GXR with GR LENS S10 24-72mm F2.5-4.4 VC	DNG	2008	unverified	DNG decoder (uncompressed, LJ92, lossy, Deflate, JPEG XL, LinearRaw)
 Ricoh	GXR with GR LENS Mount A12	DNG	2010	unverified	DNG decoder (uncompressed, LJ92, lossy, Deflate, JPEG XL, LinearRaw)
 Ricoh	THETA Z1	DNG	2018	unverified	DNG decoder (uncompressed, LJ92, lossy, Deflate, JPEG XL, LinearRaw)
-Samsung	EK-GN100	SRW	2012	preview	compressed SRW is not decoded
-Samsung	EK-GN110	SRW	2012	preview	compressed SRW is not decoded
-Samsung	EK-GN120	SRW	2012	preview	compressed SRW is not decoded
-Samsung	EK-KN120	SRW	2012	preview	compressed SRW is not decoded
+Samsung	EK-GN100	SRW	2012	unverified	compressed SRW (srwc.rs)
+Samsung	EK-GN110	SRW	2012	unverified	compressed SRW (srwc.rs)
+Samsung	EK-GN120	SRW	2012	unverified	compressed SRW (srwc.rs)
+Samsung	EK-KN120	SRW	2012	unverified	compressed SRW (srwc.rs)
 Samsung	EX2F	SRW	2012	unverified	uncompressed / packed SRW
-Samsung	NX300	SRW	2012	preview	compressed SRW is not decoded
-Samsung	NX500	SRW	2015	preview	compressed SRW is not decoded
+Samsung	NX300	SRW	2012	verified	corpus: crates/raw/tests/corpus.rs corpus_samsung_srw (xtask RAW_SAMPLES)
+Samsung	NX500	SRW	2015	verified	corpus: crates/raw/tests/corpus.rs corpus_samsung_srw (xtask RAW_SAMPLES)
 Samsung	NX1000	SRW	2012	verified	corpus: crates/raw/tests/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
 Samsung	NX1100	SRW	2012	verified	corpus: crates/raw/tests/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
-Samsung	NX2000	SRW	2012	preview	compressed SRW is not decoded
-Samsung	NX3000	SRW	2013	preview	compressed SRW is not decoded
-Samsung	NX3300	SRW	2015	preview	compressed SRW is not decoded
+Samsung	NX2000	SRW	2012	verified	corpus: crates/raw/tests/corpus.rs corpus_samsung_srw (xtask RAW_SAMPLES)
+Samsung	NX3000	SRW	2013	verified	corpus: crates/raw/tests/corpus.rs corpus_samsung_srw (xtask RAW_SAMPLES)
+Samsung	NX3300	SRW	2015	unverified	compressed SRW (srwc.rs)
 Samsung	NX U	SRW	2012	unverified	uncompressed / packed SRW
 Samsung	Pro 815	DNG	2003	unverified	DNG decoder (uncompressed, LJ92, lossy, Deflate, JPEG XL, LinearRaw)
 Samsung	TL350 (WB2000)	SRW	2010	verified	corpus: crates/raw/tests/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
@@ -1275,25 +1275,25 @@ Sony	A77 II (ILCA-77M2)	ARW	2013	verified	issue #535: raw.pixls.us bulk check of
 Sony	A7R IIIA (ILCE-7RM3A)	ARW	2020	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
 Sony	A7R IVA (ILCE-7RM4A)	ARW	2020	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
 Sony	A7R V (ILCE-7RM5)	ARW	2022	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
-Sony	A7R VI (ILCE-7RM6) (** see note)	ARW	2025	unverified	ARW decoder (uncompressed, cRAW, packed 12-bit, lossless, downsized YCbCr)
+Sony	A7R VI (ILCE-7RM6) (** see note)	ARW	2025	unverified	ARW decoder (ARW version 1, uncompressed, cRAW, packed 12-bit, lossless, downsized YCbCr)
 Sony	A99 (SLT-A99V)	ARW	2012	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies
 Sony	A99 II (ILCA-99M2)	ARW	2015	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
-Sony	A100 (DSLR-A100)	ARW	2005	unsupported	issue #702: regression, refused as not a readable photo
-Sony	A200 (DSLR-A200)	ARW	2007	preview	issue #535: preview-only on the raw.pixls.us sample
-Sony	A230 (DSLR-A230)	ARW	2008	preview	issue #535: preview-only on the raw.pixls.us sample
-Sony	A290 (DSLR-A290)	ARW	2010	preview	issue #535: preview-only on the raw.pixls.us sample
-Sony	A300 (DSLR-A300)	ARW	2007	preview	issue #535: preview-only on the raw.pixls.us sample
-Sony	A330 (DSLR A330)	ARW	2008	preview	issue #535: preview-only on the raw.pixls.us sample
-Sony	A350 (DSLR-A350)	ARW	2007	preview	issue #535: preview-only on the raw.pixls.us sample
-Sony	A380 (DSLR-A380)	ARW	2008	preview	issue #535: preview-only on the raw.pixls.us sample
-Sony	A390 (DSLR-A390)	ARW	2010	preview	issue #535: preview-only on the raw.pixls.us sample
+Sony	A100 (DSLR-A100)	ARW	2005	verified	corpus: crates/raw/tests/corpus.rs corpus_arw1_and_packed_nef (ARW version 1, xtask RAW_SAMPLES)
+Sony	A200 (DSLR-A200)	ARW	2007	verified	corpus: crates/raw/tests/corpus.rs corpus_arw1_and_packed_nef (ARW version 1, xtask RAW_SAMPLES)
+Sony	A230 (DSLR-A230)	ARW	2008	verified	corpus: crates/raw/tests/corpus.rs corpus_arw1_and_packed_nef (ARW version 1, xtask RAW_SAMPLES)
+Sony	A290 (DSLR-A290)	ARW	2010	verified	corpus: crates/raw/tests/corpus.rs corpus_arw1_and_packed_nef (ARW version 1, xtask RAW_SAMPLES)
+Sony	A300 (DSLR-A300)	ARW	2007	verified	corpus: crates/raw/tests/corpus.rs corpus_arw1_and_packed_nef (ARW version 1, xtask RAW_SAMPLES)
+Sony	A330 (DSLR A330)	ARW	2008	verified	corpus: crates/raw/tests/corpus.rs corpus_arw1_and_packed_nef (ARW version 1, xtask RAW_SAMPLES)
+Sony	A350 (DSLR-A350)	ARW	2007	verified	corpus: crates/raw/tests/corpus.rs corpus_arw1_and_packed_nef (ARW version 1, xtask RAW_SAMPLES)
+Sony	A380 (DSLR-A380)	ARW	2008	verified	corpus: crates/raw/tests/corpus.rs corpus_arw1_and_packed_nef (ARW version 1, xtask RAW_SAMPLES)
+Sony	A390 (DSLR-A390)	ARW	2010	verified	corpus: crates/raw/tests/corpus.rs corpus_arw1_and_packed_nef (ARW version 1, xtask RAW_SAMPLES)
 Sony	A450 (DSLR-A450)	ARW	2010	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
 Sony	A500 (DSLR-A500)	ARW	2008	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
 Sony	A550 (DSLR-A550)	ARW	2008	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
 Sony	A560 (DSLR-A560)	ARW	2010	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
 Sony	A580 (DSLR-A580)	ARW	2010	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
 Sony	A700 (DSLR-A700)	ARW	2007	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
-Sony	A850 (DSLR-A850)	ARW	2008	preview	issue #535: preview-only on the raw.pixls.us sample
+Sony	A850 (DSLR-A850)	ARW	2008	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES); packed 12-bit like the A900
 Sony	A900 (DSLR-A900)	ARW	2008	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
 Sony	A3000 (ILCE-3000)	ARW	2013	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
 Sony	A3500 (ILCE-3500)	ARW	2013	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
@@ -1306,10 +1306,10 @@ Sony	A6400 (ILCE-6400)	ARW	2018	verified	issue #535: raw.pixls.us bulk check of 
 Sony	A6500 (ILCE-6500)	ARW	2015	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
 Sony	A6600 (ILCE-6600)	ARW	2019	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
 Sony	A6700 (ILCE-6700)	ARW	2022	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
-Sony	DSC-F828	SRF	2003	unsupported	issue #702 (SRF refused); SRF not in the import list
+Sony	DSC-F828	SRF	2003	preview	2026-10-12 release CLI: raw.pixls.us DSC06227.SRF imports as preview-only through recursive and direct import (docs/raw-parity.md)
 Sony	DSC-HX95	ARW	2018	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
 Sony	DSC-HX99	ARW	2018	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
-Sony	DSC-V3	SRF	2005	unsupported	SRF not in the import list
+Sony	DSC-V3	SRF	2005	unsupported	SRF is discovered; sensor decoding unsupported, usable preview not verified on a real file
 Sony	DSC-RX100M7A	ARW	2024	verified	corpus: crates/raw/tests/sony_leica_corpus.rs (pinned sensor hash, camera-JPEG check)
 Sony	FX3 (ILME-FX3)	ARW	2020	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
 Sony	FX30 (ILME-FX30)	ARW	2022	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
@@ -1323,9 +1323,9 @@ Sony	NEX-6	ARW	2012	verified	issue #535: raw.pixls.us bulk check of all 100 Sony
 Sony	NEX-7	ARW	2010	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
 Sony	NEX-C3	ARW	2010	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
 Sony	NEX-F3	ARW	2012	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
-Sony	NEX-VG20	ARW	2012	unverified	ARW decoder (uncompressed, cRAW, packed 12-bit, lossless, downsized YCbCr)
-Sony	NEX-VG30	ARW	2012	unverified	ARW decoder (uncompressed, cRAW, packed 12-bit, lossless, downsized YCbCr)
-Sony	NEX-VG900	ARW	2012	unverified	ARW decoder (uncompressed, cRAW, packed 12-bit, lossless, downsized YCbCr)
+Sony	NEX-VG20	ARW	2012	unverified	ARW decoder (ARW version 1, uncompressed, cRAW, packed 12-bit, lossless, downsized YCbCr)
+Sony	NEX-VG30	ARW	2012	unverified	ARW decoder (ARW version 1, uncompressed, cRAW, packed 12-bit, lossless, downsized YCbCr)
+Sony	NEX-VG900	ARW	2012	unverified	ARW decoder (ARW version 1, uncompressed, cRAW, packed 12-bit, lossless, downsized YCbCr)
 Sony	RX0 (DSC-RX0)	ARW	2017	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
 Sony	RX0 II (DSC-RX0M2)	ARW	2018	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
 Sony	RX1 (DSC-RX1)	ARW	2012	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
@@ -1335,7 +1335,7 @@ Sony	RX10 (DSC-RX10)	ARW	2013	verified	issue #535: raw.pixls.us bulk check of al
 Sony	RX10 II (DSC-RX10M2)	ARW	2015	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
 Sony	RX10 III (DSC-RX10M3)	ARW	2015	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
 Sony	RX10 IV (DSC-RX10M4)	ARW	2017	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
-Sony	RX10 V (DSC-RX10M5) (** see note)	ARW	2025	unverified	ARW decoder (uncompressed, cRAW, packed 12-bit, lossless, downsized YCbCr)
+Sony	RX10 V (DSC-RX10M5) (** see note)	ARW	2025	unverified	ARW decoder (ARW version 1, uncompressed, cRAW, packed 12-bit, lossless, downsized YCbCr)
 Sony	RX100 (DSC-RX100)	ARW	2012	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
 Sony	RX100 II (DSC-RX100M2)	ARW	2013	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
 Sony	RX100 III (DSC-RX100M3)	ARW	2013	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
@@ -1377,13 +1377,13 @@ Sony	ZV-E10	ARW	2021	verified	issue #535: raw.pixls.us bulk check of all 100 Son
 Sony	ZV-E1	ARW	2022	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
 Sony	ZV-E10M2	ARW		verified	corpus: crates/raw/tests/sony_leica_corpus.rs (pinned sensor hash, camera-JPEG check)
 Sony	ZV-1M2	ARW	2022	verified	corpus: crates/raw/tests/sony_leica_corpus.rs (pinned sensor hash, camera-JPEG check)
-Sony	ZV-1A	ARW	2024	unverified	ARW decoder (uncompressed, cRAW, packed 12-bit, lossless, downsized YCbCr)
-Sony	ILX-LR1	ARW	2023	unverified	ARW decoder (uncompressed, cRAW, packed 12-bit, lossless, downsized YCbCr)
-Sony	ILCE - 1M2 (Final Support)	ARW	2024	unverified	ARW decoder (uncompressed, cRAW, packed 12-bit, lossless, downsized YCbCr)
-Sony	ILCE - 6100A	ARW	2024	unverified	ARW decoder (uncompressed, cRAW, packed 12-bit, lossless, downsized YCbCr)
+Sony	ZV-1A	ARW	2024	unverified	ARW decoder (ARW version 1, uncompressed, cRAW, packed 12-bit, lossless, downsized YCbCr)
+Sony	ILX-LR1	ARW	2023	unverified	ARW decoder (ARW version 1, uncompressed, cRAW, packed 12-bit, lossless, downsized YCbCr)
+Sony	ILCE - 1M2 (Final Support)	ARW	2024	unverified	ARW decoder (ARW version 1, uncompressed, cRAW, packed 12-bit, lossless, downsized YCbCr)
+Sony	ILCE - 6100A	ARW	2024	unverified	ARW decoder (ARW version 1, uncompressed, cRAW, packed 12-bit, lossless, downsized YCbCr)
 Sony	ILCE - 6400A	ARW	2024	verified	corpus: crates/raw/tests/sony_leica_corpus.rs (pinned sensor hash, camera-JPEG check)
 Sony	FX2 (ILMEFX2) (** see note)	ARW	2024	verified	corpus: crates/raw/tests/sony_leica_corpus.rs (pinned sensor hash, camera-JPEG check)
-Sony	FX3A (ILMEFX3A)	ARW	2024	unverified	ARW decoder (uncompressed, cRAW, packed 12-bit, lossless, downsized YCbCr)
+Sony	FX3A (ILMEFX3A)	ARW	2024	unverified	ARW decoder (ARW version 1, uncompressed, cRAW, packed 12-bit, lossless, downsized YCbCr)
 Sony	RX1R III (DSC-RX1RM3)	ARW	2024	verified	corpus: crates/raw/tests/sony_leica_corpus.rs (pinned sensor hash, camera-JPEG check)
 Xiaomi	Mi 11 Lite Front Camera	DNG	2021	unverified	DNG decoder (uncompressed, LJ92, lossy, Deflate, JPEG XL, LinearRaw)
 Xiaomi	Mi 11 Lite Rear Ultrawide Camera	DNG	2021	unverified	DNG decoder (uncompressed, LJ92, lossy, Deflate, JPEG XL, LinearRaw)

@@ -7,10 +7,10 @@ use std::sync::{Arc, Mutex};
 use serde_json::json;
 
 use crate::state::Dialog;
-use crate::{LightcraftApp, Services};
+use crate::{LccApp, Services};
 
 struct Fixture {
-    app: LightcraftApp,
+    app: LccApp,
     root: PathBuf,
 }
 
@@ -18,7 +18,7 @@ impl Fixture {
     fn new(name: &str) -> Self {
         let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
         let root = std::env::temp_dir().join(format!("lc-sam-folder-{name}-{}-{stamp}", std::process::id()));
-        let mut app = LightcraftApp::new(lightcraft_engine::Session::new(), Services::default());
+        let mut app = LccApp::new(lcc_engine::Session::new(), Services::default());
         app.session.segmenter.dir = Some(root.join("custom/models/sam3"));
         Self { app, root }
     }
@@ -119,7 +119,7 @@ fn folder_worker_keeps_frames_running_and_delivers_failure_before_retry() {
         started.send(path.to_string()).map_err(|e| e.to_string())?;
         held.lock().unwrap().recv_timeout(T).map_err(|e| e.to_string())?
     }));
-    let app = std::mem::replace(&mut f.app, LightcraftApp::new(lightcraft_engine::Session::new(), Services::default()));
+    let app = std::mem::replace(&mut f.app, LccApp::new(lcc_engine::Session::new(), Services::default()));
     let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
     h.step();
     let reply = h.app.run("app.openSamModelFolder", json!({})).unwrap();

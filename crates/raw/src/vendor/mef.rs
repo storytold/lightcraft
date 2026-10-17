@@ -16,9 +16,9 @@
 //! - No white-balance tag was found (the maker note holds an ICC-like profile), so the as-shot gains are measured
 //!   from that preview's neutral pixels ([`crate::wb_estimate`]).
 use crate::{BlackLevel, Cfa, ColorData, Mode, OpcodeLists, RawData, RawError, RawFormat, RawImage, Rect, Result};
-use lightcraft_geom::Orientation;
-use lightcraft_tiff::image::chunk_bytes;
-use lightcraft_tiff::{Ifd, Tiff, tags as t};
+use lcc_geom::Orientation;
+use lcc_tiff::image::chunk_bytes;
+use lcc_tiff::{Ifd, Tiff, tags as t};
 
 /// Where the preview's window starts in the sensor frame, and how many sensor pixels one preview pixel covers.
 const CROP_ORIGIN: (usize, usize) = (24, 12);
@@ -99,7 +99,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         None => crate::wb_estimate::as_shot(bytes, &frame),
     };
     let data = if mode == Mode::Full { RawData::U16(d) } else { RawData::U16(Vec::new()) };
-    let mut metadata = lightcraft_meta::from_tiff(&tiff);
+    let mut metadata = lcc_meta::from_tiff(&tiff);
     metadata.width = Some(crop.width as u32);
     metadata.height = Some(crop.height as u32);
     let orientation = raw.u16(t::ORIENTATION).or_else(|| tiff.ifds.first().and_then(|i| i.u16(t::ORIENTATION))).unwrap_or(1);
@@ -131,7 +131,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lightcraft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value};
+    use lcc_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value};
 
     fn pack(px: &[u16]) -> Vec<u8> {
         px.chunks(2).flat_map(|p| [(p[0] >> 4) as u8, ((p[0] & 15) << 4) as u8 | (p[1] >> 8) as u8, p[1] as u8]).collect()

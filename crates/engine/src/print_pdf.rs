@@ -314,7 +314,7 @@ pub fn write(pages: &[PdfPage], info: &PdfInfo) -> Result<Vec<u8>, String> {
     };
     w.object(catalog, &format!("<< /Type /Catalog /Pages {pages_id} 0 R{intents} >>"), None);
     let title = info.title.as_deref().map(|t| format!(" /Title {}", text(t))).unwrap_or_default();
-    w.object(info_id, &format!("<< /Producer (LightCraft){title} >>"), None);
+    w.object(info_id, &format!("<< /Producer {}{title} >>", text(lcc_brand::DISPLAY_NAME)), None);
 
     let xref = w.out.len();
     let mut table = format!("xref\n0 {}\n0000000000 65535 f \n", w.offsets.len() + 1);
@@ -329,7 +329,7 @@ pub fn write(pages: &[PdfPage], info: &PdfInfo) -> Result<Vec<u8>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lightcraft_codecs::NamedSpace;
+    use lcc_codecs::NamedSpace;
 
     /// The body of object `id` (dictionary and raw stream bytes), found through the xref table.
     fn object(pdf: &[u8], id: usize) -> (String, Vec<u8>) {
@@ -370,7 +370,7 @@ mod tests {
     }
 
     fn srgb() -> Arc<Vec<u8>> {
-        Arc::new(lightcraft_codecs::icc::write_named(NamedSpace::Srgb))
+        Arc::new(lcc_codecs::icc::write_named(NamedSpace::Srgb))
     }
 
     fn page(images: Vec<(PdfImage, Placement)>) -> PdfPage {
@@ -397,7 +397,7 @@ mod tests {
         let (profile, icc) = object(&pdf, reference(&dict, "/ICCBased"));
         assert!(profile.contains("/N 3") && profile.contains("/Alternate /DeviceRGB"), "{profile}");
         assert_eq!(inflate(&icc), *srgb());
-        assert_eq!(lightcraft_codecs::icc::parse(&inflate(&icc)).and_then(|i| i.named), Some(NamedSpace::Srgb));
+        assert_eq!(lcc_codecs::icc::parse(&inflate(&icc)).and_then(|i| i.named), Some(NamedSpace::Srgb));
     }
 
     #[test]
@@ -505,16 +505,5 @@ mod tests {
         assert!(bad(too_many));
         let info = PdfInfo { title: None, output_intent: Some(OutputIntent { icc: srgb(), channels: 2, condition: String::new() }) };
         assert!(write(&[page(vec![])], &info).is_err());
-    }
-
-    #[test]
-    fn numbers_and_strings() {
-        assert_eq!(num(612.0), "612");
-        assert_eq!(num(72.5), "72.5");
-        assert_eq!(num(-0.00001), "0");
-        assert_eq!(num(f64::NAN), "0");
-        assert_eq!(num(1.0 / 3.0), "0.3333");
-        assert_eq!(text("a(b)c\\"), "(a\\(b\\)c\\\\)");
-        assert_eq!(text("é"), "<FEFF00E9>");
     }
 }

@@ -1,0 +1,26 @@
+[package]
+name = "lcc-filters"
+description = "Sandboxed WebAssembly pixel filters: a resource-limited wasmi host for PhotoCraft ABI v1 filter plug-ins"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+sha2 = { workspace = true }
+# Pure-Rust WebAssembly interpreter (MIT OR Apache-2.0). `validate` keeps full module validation on.
+wasmi = { version = "2.0.0", default-features = false, features = ["std", "validate", "stable", "portable-dispatch"] }
+
+# Bands run in parallel on native; wasm builds stay single-threaded.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rayon = { workspace = true }
+
+[dev-dependencies]
+# WebAssembly text -> binary for the hostile-module fixtures (Apache-2.0 WITH LLVM-exception).
+wat = "1.228"
+
+[lints]
+workspace = true

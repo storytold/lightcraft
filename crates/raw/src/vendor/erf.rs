@@ -20,9 +20,9 @@
 //! - The preview is the maker note's tag `0x0280`, a JPEG whose first byte is stored as `ee` (found by the
 //!   structural scan in `preview::scan_for_jpeg`).
 use crate::{BlackLevel, Cfa, ColorData, Mode, OpcodeLists, RawData, RawError, RawFormat, RawImage, Rect, Result};
-use lightcraft_geom::Orientation;
-use lightcraft_tiff::image::chunk_bytes;
-use lightcraft_tiff::{Ifd, Tiff, tags as t};
+use lcc_geom::Orientation;
+use lcc_tiff::image::chunk_bytes;
+use lcc_tiff::{Ifd, Tiff, tags as t};
 
 /// Epson's private compression code for the 16-byte block layout.
 const BLOCKS16: u16 = 32769;
@@ -58,8 +58,8 @@ fn maker_note(bytes: &[u8], tiff: &Tiff) -> Option<Ifd> {
     if !bytes.get(start..)?.starts_with(b"EPSON\0") {
         return None;
     }
-    let opts = lightcraft_tiff::ParseOptions { max_ifds: 1, max_depth: 0, follow_children: false, ..Default::default() };
-    lightcraft_tiff::parse_ifd_at(bytes, e.offset.checked_add(8)?, tiff.order, 0, false, &opts).ok().map(|(i, _)| i)
+    let opts = lcc_tiff::ParseOptions { max_ifds: 1, max_depth: 0, follow_children: false, ..Default::default() };
+    lcc_tiff::parse_ifd_at(bytes, e.offset.checked_add(8)?, tiff.order, 0, false, &opts).ok().map(|(i, _)| i)
 }
 
 /// Unpack a strip of 16-byte blocks (15 bytes of ten MSB-first 12-bit samples, one pad byte).
@@ -102,7 +102,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     let white = super::white_from_data(&d, 12);
     let wb = crate::wb_estimate::as_shot(bytes, &crate::wb_estimate::Frame { data: &d, width: w, crop, cfa: &cfa, black: &black, white });
     let data = if mode == Mode::Full { RawData::U16(d) } else { RawData::U16(Vec::new()) };
-    let mut metadata = lightcraft_meta::from_tiff(&tiff);
+    let mut metadata = lcc_meta::from_tiff(&tiff);
     metadata.width = Some(crop.width as u32);
     metadata.height = Some(crop.height as u32);
     let img = RawImage {
@@ -133,7 +133,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lightcraft_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
+    use lcc_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
 
     /// Pack ten-sample groups into 16-byte blocks, MSB first, zero pad.
     fn pack(px: &[u16]) -> Vec<u8> {
@@ -164,7 +164,7 @@ mod tests {
         ifd0.set(t::MODEL, Value::Ascii("R-D1".into()));
         ifd0.set(t::ORIENTATION, Value::Short(vec![1]));
         ifd0.add_sub_ifd(raw);
-        TiffWriter::new(lightcraft_tiff::ByteOrder::Big, false).write(&[ifd0]).unwrap()
+        TiffWriter::new(lcc_tiff::ByteOrder::Big, false).write(&[ifd0]).unwrap()
     }
 
     #[test]

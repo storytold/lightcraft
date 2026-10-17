@@ -2,10 +2,10 @@
 
 use std::time::Duration;
 
-use lightcraft_catalog::PhotoId;
+use lcc_catalog::PhotoId;
 use serde_json::{Value, json};
 
-use crate::LightcraftApp;
+use crate::LccApp;
 use crate::headless::Headless;
 use crate::state::Dialog;
 
@@ -15,7 +15,7 @@ const T: Duration = Duration::from_secs(10);
 /// The demo library with an edited first photo selected; returns the first two photos' ids.
 fn edited() -> (Headless, [u64; 2]) {
     let services = crate::Services { png: None, ..Default::default() };
-    let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+    let mut app = LccApp::new(lcc_engine::Session::with_demo(), services);
     app.ui.view = crate::state::ViewMode::PhotoGrid;
     let mut h = Headless::new(app, [1200.0, 900.0], 1.0);
     let ids: Vec<u64> = h.app.session.visible_cloned().iter().take(2).map(|p| p.0).collect();
@@ -88,4 +88,37 @@ fn escape_closes_paste_settings_without_pasting() {
     key(&mut h, json!({"key": "Escape"}));
     assert!(h.app.ui.dialog.is_none(), "Esc closes the dialog");
     assert_eq!(exposure(&h, ids[1]), 0.0, "Esc pastes nothing");
+}
+
+fn click(h: &mut Headless, id: &str) {
+    h.settle(SETTLE);
+    let r = h.request("ui.clickWidget", json!({"id": id}), T);
+    assert_eq!(r["ok"], true, "{id}: {r}");
+    h.settle(SETTLE);
+}
+
+/// Develop's Copy… / Paste buttons under the left column (issue #118) copy through the Copy
+/// Settings dialog and paste into the selected photo.
+#[test]
+fn develop_left_bar_copies_and_pastes() {
+    let (mut h, ids) = edited();
+    h.app.run("module.develop", json!({})).unwrap();
+    h.app.run("panel.left", json!({"show": true})).unwrap();
+    click(&mut h, "button:leftBar-copy");
+    assert!(matches!(h.app.ui.dialog, Some(Dialog::CopySettings { .. })), "Copy… opens Copy Settings: {:?}", h.app.ui.dialog);
+    key(&mut h, json!({"key": "Enter"}));
+    assert!(h.app.session.clipboard.is_some(), "the dialog copies");
+    exec(&mut h, "library.select", json!({"ids": [ids[1]]}));
+    click(&mut h, "button:leftBar-paste");
+    assert_eq!(exposure(&h, ids[1]), 1.0, "Paste pastes the copied settings");
+}
+
+/// Library's Import… / Export… buttons under the left column (issue #118).
+#[test]
+fn library_left_bar_opens_export() {
+    let (mut h, _) = edited();
+    h.app.run("module.library", json!({})).unwrap();
+    h.app.run("panel.left", json!({"show": true})).unwrap();
+    click(&mut h, "button:leftBar-export");
+    assert!(matches!(h.app.ui.dialog, Some(Dialog::Export { .. })), "Export… opens Export: {:?}", h.app.ui.dialog);
 }

@@ -14,10 +14,13 @@
 use egui::RichText;
 use serde_json::{Value, json};
 
-use crate::LightcraftApp;
+use crate::LccApp;
 use crate::state::{GridBadges, PREVIEW_LIMITS, StartupView};
 use crate::theme::Tokens;
 use crate::widgets::register;
+
+/// Sections `app.settings {section}` can open, with their tab.
+pub const SECTIONS: &[(&str, &str)] = &[("lensProfiles", "import")];
 
 /// (id, label) of the tabs, in order.
 pub const TABS: &[(&str, &str)] = &[
@@ -29,6 +32,8 @@ pub const TABS: &[(&str, &str)] = &[
     ("slideshow", "Slideshow"),
     ("faces", "Faces"),
     ("denoise", "AI Denoise"),
+    ("connections", "Connections"),
+    ("shortcuts", "Shortcuts"),
 ];
 
 /// Thumbnail cache sizes offered (MB).
@@ -36,9 +41,8 @@ const CACHE_SIZES: [u32; 5] = [512, 1024, 2048, 4096, 8192];
 
 const LABEL_W: f32 = 150.0;
 
-/// The dialog body for `tab` (the tab bar switches `tab`).
-pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, tab: &mut String) {
-    let t = Tokens::get(ui.ctx());
+/// The tab row: the dialog's fixed header, above the scrolling [`body`].
+pub fn tabs(ui: &mut egui::Ui, tab: &mut String) {
     ui.set_width((ui.ctx().content_rect().width() - 64.0).clamp(240.0, 560.0));
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
@@ -49,8 +53,15 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, tab: &mut String) {
         }
     });
     ui.separator();
+}
+
+/// The selected tab's settings (the tabs themselves are [`tabs`]).
+pub fn body(app: &mut LccApp, ui: &mut egui::Ui, tab: &str) {
+    let t = Tokens::get(ui.ctx());
+    ui.set_width((ui.ctx().content_rect().width() - 64.0).clamp(240.0, 560.0));
+    ui.set_min_height(330.0);
     ui.add_space(2.0);
-    match tab.as_str() {
+    match tab {
         "import" => import_tab(app, ui, &t),
         "performance" => performance_tab(app, ui, &t),
         "display" => display_tab(app, ui, &t),
@@ -58,6 +69,9 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, tab: &mut String) {
         "slideshow" => slideshow_tab(app, ui, &t),
         "faces" => super::faces::settings_tab(app, ui, &t),
         "denoise" => super::denoise::settings_tab(app, ui, &t),
+        "shortcuts" => shortcuts_tab(app, ui, &t),
+        #[cfg(not(target_arch = "wasm32"))]
+        "connections" => super::connections::settings_tab(app, ui, &t),
         _ => general_tab(app, ui, &t),
     }
 }
@@ -102,9 +116,33 @@ pub(super) fn choices<V: PartialEq + Copy>(ui: &mut egui::Ui, id: &str, options:
     changed
 }
 
+// ----------------------------------------------------------------------------------- Shortcuts
+
+/// The shortcut editor (the command registry, with conflict handling), the keymap set and
+/// keymap file import/export.
+fn shortcuts_tab(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
+    use crate::shortcuts::KeymapSet;
+    let mut set = app.ui.settings.keymap_set;
+    row(ui, t, "Keymap", |ui| {
+        if choices(ui, "keymapSet", &[(KeymapSet::Classic, "Classic"), (KeymapSet::Alternative, "Alternative")], &mut set) {
+            let key = if set == KeymapSet::Classic { "classic" } else { "alternative" };
+            let _ = app.run("app.keymapSet", serde_json::json!({"set": key}));
+        }
+    });
+    row(ui, t, "Keymap file", |ui| {
+        if crate::widgets::text_button(ui, "keymapImport", "Import…", false).clicked() {
+            let _ = app.run("app.keymapImport", serde_json::json!({}));
+        }
+        if crate::widgets::text_button(ui, "keymapExport", "Export…", false).clicked() {
+            let _ = app.run("app.keymapExport", serde_json::json!({}));
+        }
+    });
+    super::keymap::body(app, ui, t);
+}
+
 // ------------------------------------------------------------------------------------- General
 
-fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+fn general_tab(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
     row(ui, t, crate::i18n::tr("Language"), |ui| {
         let languages: Vec<_> = crate::i18n::Locale::ALL.iter().map(|language| (*language, language.name())).collect();
         // Thirteen language names do not fit one line in a narrow window: wrap them.
@@ -146,6 +184,18 @@ fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             &mut app.ui.settings.startup_view,
         );
     });
+    // the updater is native only (the web build updates by reloading the page); saved through
+    // `update.prefs`, like the update dialog's own checkbox
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let mut check_at_startup = app.session.updater.prefs().check_at_startup;
+        if check(ui, "settings.updateAtStartup", &mut check_at_startup, "Check for updates when the app starts")
+            && let Err(e) = app.session.execute("update.prefs", &json!({"checkAtStartup": check_at_startup}))
+        {
+            // not saved: the box shows the stored value again next frame
+            app.toast_error(ui.ctx(), format!("{}: {e}", crate::i18n::tr("Update settings not saved")));
+        }
+    }
     heading(ui, t, crate::i18n::tr("Culling"));
     check(ui, "settings.autoAdvance", &mut app.ui.auto_advance, "Auto Advance: move to the next photo after rating or flagging");
     check(ui, "settings.confirmDelete", &mut app.ui.settings.confirm_delete, "Confirm before moving photos to Recently Deleted");
@@ -203,7 +253,7 @@ fn edit_file_rows(ui: &mut egui::Ui, t: &Tokens, id: &str, file: &mut crate::sta
 // -------------------------------------------------------------------------------------- Import
 
 /// A preset picker: `None` = `none_label`. Returns the new choice when it changed.
-fn preset_combo(app: &LightcraftApp, ui: &mut egui::Ui, id: &str, current: Option<&str>, none_label: &str) -> Option<Option<String>> {
+fn preset_combo(app: &LccApp, ui: &mut egui::Ui, id: &str, current: Option<&str>, none_label: &str) -> Option<Option<String>> {
     let name = |pid: &str| {
         app.session
             .presets
@@ -227,12 +277,12 @@ fn preset_combo(app: &LightcraftApp, ui: &mut egui::Ui, id: &str, current: Optio
 }
 
 /// Cameras of the raws in the library plus those with a stored default, sorted.
-fn cameras(app: &LightcraftApp) -> Vec<String> {
+fn cameras(app: &LccApp) -> Vec<String> {
     let mut v: Vec<String> = app
         .session
         .catalog
         .photos()
-        .filter(|p| p.kind == lightcraft_catalog::MediaKind::Raw && !p.meta.camera.is_empty())
+        .filter(|p| p.kind == lcc_catalog::MediaKind::Raw && !p.meta.camera.is_empty())
         .map(|p| p.meta.camera.clone())
         .chain(app.session.import_defaults.cameras.iter().map(|c| c.camera.clone()))
         .collect();
@@ -241,12 +291,12 @@ fn cameras(app: &LightcraftApp) -> Vec<String> {
     v
 }
 
-fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+fn import_tab(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
     let d = app.session.import_defaults.clone();
     heading(ui, t, crate::i18n::tr("Raw defaults"));
     hint(ui, t, crate::i18n::tr("Settings new raw photos start from. Changing them doesn't touch photos already in the library."));
     row(ui, t, crate::i18n::tr("Raw photos"), |ui| {
-        if let Some(v) = preset_combo(app, ui, "settingsRawPreset", d.raw_preset.as_deref(), "LightCraft Default") {
+        if let Some(v) = preset_combo(app, ui, "settingsRawPreset", d.raw_preset.as_deref(), "{app} Default") {
             let _ = app.run("library.preferences", json!({"import": {"rawPreset": v}}));
         }
     });
@@ -265,7 +315,7 @@ fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             for (i, cam) in cams.iter().enumerate() {
                 let entry = d.cameras.iter().find(|c| c.camera.eq_ignore_ascii_case(cam));
                 row(ui, t, cam, |ui| {
-                    // "Raw default" = no entry; otherwise the entry's preset (None = LightCraft Default)
+                    // "Raw default" = no entry; otherwise the entry's preset (None = the app default)
                     const RAW_DEFAULT: &str = "\u{1}raw";
                     let current = match entry {
                         None => Some(RAW_DEFAULT),
@@ -274,7 +324,7 @@ fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
                     let mut pick = None;
                     let label = match current {
                         Some(RAW_DEFAULT) => crate::i18n::tr("Same as raw default").to_string(),
-                        None => crate::i18n::tr("LightCraft Default").to_string(),
+                        None => crate::i18n::tr("{app} Default").to_string(),
                         Some(pid) => app
                             .session
                             .presets
@@ -288,7 +338,7 @@ fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
                         if ui.selectable_label(current == Some(RAW_DEFAULT), crate::i18n::tr("Same as raw default")).clicked() {
                             pick = Some(json!({"camera": cam, "remove": true}));
                         }
-                        if ui.selectable_label(current.is_none(), crate::i18n::tr("LightCraft Default")).clicked() {
+                        if ui.selectable_label(current.is_none(), crate::i18n::tr("{app} Default")).clicked() {
                             pick = Some(json!({"camera": cam, "preset": null}));
                         }
                         if let Some(pid) = crate::panels::presets::picker_rows(ui, &id, &app.session.presets, current) {
@@ -358,7 +408,7 @@ fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         let _ = app.run("library.xmpPreferences", json!({"autoWrite": xmp.auto_write}));
     }
     row(ui, t, crate::i18n::tr("Sidecar names"), |ui| {
-        use lightcraft_engine::sidecar::SidecarNaming as N;
+        use lcc_engine::sidecar::SidecarNaming as N;
         let mut n = xmp.naming;
         if choices(ui, "settingsXmpNaming", &[(N::Stem, "IMG_1.xmp"), (N::Full, "IMG_1.CR3.xmp")], &mut n) {
             let naming = if n == N::Full { "full" } else { "stem" };
@@ -407,14 +457,125 @@ fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         }
     }
     if app.session.library.is_none() {
-        hint(ui, t, crate::i18n::tr("In-memory session: these settings last until LightCraft quits."));
+        hint(ui, t, crate::i18n::tr("In-memory session: these settings last until {app} quits."));
     }
+    lens_profiles(app, ui, t);
+}
+
+// ------------------------------------------------------------------------------ Lens profiles
+
+/// Settings ▸ Import ▸ Lens profiles: the lens database lens corrections fall back to (an app setting, not a
+/// library one), a folder chooser, and downloading lensfun's database on request (`lens.db.*`).
+fn lens_profiles(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
+    use crate::i18n::tr;
+    let r = ui.scope(|ui| heading(ui, t, tr("Lens profiles"))).response;
+    register(ui.ctx(), "section:lensProfiles", r.rect);
+    if app.ui.settings_section.as_deref() == Some("lensProfiles") {
+        r.scroll_to_me(Some(egui::Align::TOP));
+        app.ui.settings_section = None;
+    }
+    hint(ui, t, tr("Lens corrections use these profiles for raw photos whose files carry no correction of their own."));
+    let st = app.session.lens_db.status();
+    let lenses = st["lenses"].as_u64().unwrap_or(0);
+    let dir = st["dir"].as_str().map(str::to_string);
+    row(ui, t, tr("Database"), |ui| {
+        let text = match &dir {
+            Some(d) if lenses > 0 => d.clone(),
+            Some(d) => format!("{d} ({})", tr("no lens profiles found")),
+            None => tr("None").to_string(),
+        };
+        // a long path is shortened (in full on hover), so it never widens the dialog
+        let label = egui::Label::new(RichText::new(&text).color(if lenses > 0 { t.text } else { t.text_dim })).truncate();
+        let l = ui.allocate_ui(egui::vec2(380.0, 20.0), |ui| ui.add(label)).inner.on_hover_text(&text);
+        register(ui.ctx(), "label:lensDbStatus", l.rect);
+    });
+    if lenses > 0 {
+        let summary = tr("{lenses} lenses, {cameras} cameras")
+            .replace("{lenses}", &lenses.to_string())
+            .replace("{cameras}", &st["cameras"].as_u64().unwrap_or(0).to_string());
+        let updated = st["updated"].as_str().map(|d| tr("updated {date}").replace("{date}", d));
+        row(ui, t, "", |ui| ui.label(RichText::new(updated.map_or(summary.clone(), |u| format!("{summary} · {u}"))).color(t.text_label)));
+    }
+    if st["origin"] == "env" {
+        hint(ui, t, &tr("Set by {var}, which overrides the folder chosen here.").replace("{var}", st["env"].as_str().unwrap_or_default()));
+    }
+    let running = st["download"]["state"] == "running";
+    let configured = st["configured"].is_string();
+    row(ui, t, "", |ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        if crate::widgets::text_button(ui, "lensDbFolder", "Choose Folder…", false).clicked()
+            && let Err(e) = app.run("app.lensDbFolder", json!({}))
+        {
+            app.toast(ui.ctx(), e);
+        }
+        if st["canDownload"] == true {
+            let label = if st["downloaded"] == true { "Update" } else { "Download" };
+            let b = ui.add_enabled_ui(!running, |ui| crate::widgets::text_button(ui, "lensDbDownload", label, false)).inner;
+            if b.clicked()
+                && let Err(e) = app.run("lens.db.download", json!({}))
+            {
+                app.toast(ui.ctx(), e);
+            }
+        }
+        if running && crate::widgets::text_button(ui, "lensDbCancel", "Cancel", false).clicked() {
+            let _ = app.run("lens.db.downloadCancel", json!({}));
+        }
+        if configured
+            && !running
+            && crate::widgets::text_button(ui, "lensDbRemove", "Remove", false).clicked()
+            && let Err(e) = app.run("lens.db.remove", json!({}))
+        {
+            app.toast(ui.ctx(), e);
+        }
+    });
+    match st["download"]["state"].as_str() {
+        Some("running") => {
+            let (done, total) = (st["download"]["bytes"].as_u64().unwrap_or(0), st["download"]["total"].as_u64().unwrap_or(0));
+            let mb = |b: u64| format!("{:.1}", b as f64 / 1_048_576.0);
+            let text = if total > 0 {
+                tr("Downloading the lens database… {done} of {total} MB").replace("{done}", &mb(done)).replace("{total}", &mb(total))
+            } else {
+                tr("Downloading the lens database… {done} MB").replace("{done}", &mb(done))
+            };
+            row(ui, t, "", |ui| ui.label(RichText::new(text).color(t.text_label)));
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+        }
+        Some("failed") => {
+            let e = st["download"]["error"].as_str().unwrap_or_default().to_string();
+            row(ui, t, "", |ui| ui.label(RichText::new(e).color(t.caution)));
+        }
+        _ => {}
+    }
+    hint(
+        ui,
+        t,
+        tr("Download fetches the lensfun project's database (lensfun.github.io, CC-BY-SA 3.0) into the settings folder. It is not part of {app}."),
+    );
+}
+
+/// Choose the lens database folder (`{dir}`, else a folder dialog), then use it (`lens.db.setDir`).
+pub fn lens_db_folder(app: &mut LccApp, p: &Value) -> Result<Value, String> {
+    let dir = match p.get("dir").and_then(Value::as_str).map(str::trim).filter(|d| !d.is_empty()) {
+        Some(d) => d.to_string(),
+        None => {
+            let req = crate::pick::PickRequest::folder(crate::i18n::tr("Choose Lens Database Folder"));
+            match crate::pick::ask(app, "app.lensDbFolder", p, "dir", req, |s| s.pick_folder.as_mut().and_then(|f| f()).map(|x| vec![x])) {
+                crate::pick::Picked::Now(v) => match v.into_iter().next() {
+                    Some(d) => d,
+                    None => return Ok(Value::Null),
+                },
+                crate::pick::Picked::Later => return Ok(Value::Null),
+                crate::pick::Picked::Unavailable => return Err("no folder dialog here: pass {dir}".into()),
+            }
+        }
+    };
+    app.run("lens.db.setDir", json!({"dir": dir}))
 }
 
 // --------------------------------------------------------------------------------- Performance
 
-fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
-    use lightcraft_engine::gpu;
+fn performance_tab(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
+    use lcc_engine::gpu;
     heading(ui, t, crate::i18n::tr("Rendering"));
     check(ui, "settings.gpu", &mut app.ui.settings.gpu, "Use the GPU for rendering");
     let status = if !gpu::available() {
@@ -443,7 +604,7 @@ fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         ),
     );
     row(ui, t, crate::i18n::tr("Memory for caches"), |ui| {
-        let auto = crate::i18n::tr_format!("Automatic ({} MB)", lightcraft_engine::memory::default_budget() >> 20);
+        let auto = crate::i18n::tr_format!("Automatic ({} MB)", lcc_engine::memory::default_budget() >> 20);
         let opts = [(0u32, auto.as_str()), (512, "512 MB"), (1024, "1 GB"), (2048, "2 GB"), (4096, "4 GB")];
         choices(ui, "settingsMemory", &opts, &mut app.ui.settings.memory_mb);
     });
@@ -490,7 +651,7 @@ fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
 /// Where this library keeps its smart previews (the offline-editing proxies, which can be large):
 /// the effective folder, what is in it, and choosing another one.
 #[cfg(not(target_arch = "wasm32"))]
-fn smart_previews(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+fn smart_previews(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
     // listing a big folder every frame would be slow: refresh every 2 s and after a change
     let cache = egui::Id::new("smart-location");
     let now = ui.input(|i| i.time);
@@ -586,7 +747,7 @@ fn smart_previews(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
 
 /// The monitor profile (`app.displayProfile`): previews are shown through the display's ICC
 /// profile, so wide-gamut and calibrated displays show colours as they are.
-fn display_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+fn display_tab(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
     heading(ui, t, crate::i18n::tr("Monitor profile"));
     let current = app.renderer.display().cloned();
     let screen = current.as_ref().is_some_and(|d| d.path == crate::SCREEN_PROFILE);
@@ -632,8 +793,8 @@ fn display_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         }
         row(ui, t, crate::i18n::tr("Type"), |ui| {
             let kind = match d.profile.kind {
-                lightcraft_engine::display::DisplayKind::MatrixTrc => crate::i18n::tr("Matrix/TRC"),
-                lightcraft_engine::display::DisplayKind::Lut => crate::i18n::tr("LUT-based"),
+                lcc_engine::display::DisplayKind::MatrixTrc => crate::i18n::tr("Matrix/TRC"),
+                lcc_engine::display::DisplayKind::Lut => crate::i18n::tr("LUT-based"),
             };
             ui.label(RichText::new(kind).color(t.text));
         });
@@ -653,9 +814,21 @@ fn display_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     );
     #[cfg(target_os = "linux")]
     hint(ui, t, crate::i18n::tr("Profiles assigned in your desktop's colour settings are usually in ~/.local/share/icc."));
+    #[cfg(target_os = "windows")]
+    {
+        heading(ui, t, crate::i18n::tr("Refresh rate"));
+        check(ui, "settings.vrrFlickerWorkaround", &mut app.ui.settings.vrr_flicker_workaround, "Prevent VRR flicker on OLED and VA monitors");
+        hint(
+            ui,
+            t,
+            crate::i18n::tr(
+                "Renders continuously at the monitor's refresh rate to avoid brightness and gamma shifts caused by G-SYNC / FreeSync variable refresh rate changes. Increases GPU and battery usage.",
+            ),
+        );
+    }
 }
 
-fn interface_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+fn interface_tab(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
     let system = app.system_theme(ui.ctx());
     appearance(ui, t, &mut app.ui.settings, system);
     heading(ui, t, crate::i18n::tr("Filmstrip"));
@@ -670,7 +843,12 @@ fn interface_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             &mut app.ui.settings.grid_badges,
         );
     });
+    check(ui, "settings.doubleClickDevelop", &mut app.ui.settings.double_click_develop, "Double-click opens the photo in Develop");
     check(ui, "settings.showFilenames", &mut app.ui.show_filenames, "Square Grid: show file names and formats");
+    row(ui, t, crate::i18n::tr("Wheel scroll speed"), |ui| {
+        choices(ui, "settingsWheelSpeed", &[(1.0, "Normal"), (2.0, "Fast"), (3.0, "Fastest")], &mut app.ui.settings.wheel_scroll_speed);
+    });
+    check(ui, "settings.wheelResizesBrush", &mut app.ui.settings.wheel_resizes_brush, "Wheel resizes brush instead of zooming");
     heading(ui, t, crate::i18n::tr("Keywords"));
     row(ui, t, crate::i18n::tr("Keywords of the selection"), |ui| {
         use crate::state::KeywordChips as K;
@@ -693,7 +871,7 @@ fn interface_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
 
 /// A playback duration slider (`slider:{id}`). While it is dragged the value changes in memory
 /// (the slideshow reads it); letting go saves it through `slideshow.playback`.
-fn duration_slider(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, key: &str, value: f64, range: std::ops::RangeInclusive<f64>) {
+fn duration_slider(app: &mut LccApp, ui: &mut egui::Ui, id: &str, key: &str, value: f64, range: std::ops::RangeInclusive<f64>) {
     let mut v = value;
     let r = ui.add(egui::Slider::new(&mut v, range).logarithmic(key == "slideDuration").suffix(" s").max_decimals(1));
     register(ui.ctx(), format!("slider:{id}"), r.rect);
@@ -710,7 +888,7 @@ fn duration_slider(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, key: &s
 /// Width of the Slideshow tab's settings column (the slide preview is beside it).
 const SLIDESHOW_COLUMN_W: f32 = 480.0;
 
-fn slideshow_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+fn slideshow_tab(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
     // the settings scroll on the left, the composed slide stays in view on the right
     let top_down = egui::Layout::top_down(egui::Align::Min);
     // as tall as the window allows (the dialog's title, tabs and Close button take ~260 pt)
@@ -741,7 +919,7 @@ fn slideshow_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
 }
 
 /// Export: PDF, JPEG sequence or video of the slideshow (View ▸ Export Slideshow…).
-fn export_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+fn export_section(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
     heading(ui, t, crate::i18n::tr("Export"));
     let running = app.session.slideshow_export.as_ref().is_some_and(|r| r.running());
     ui.horizontal(|ui| {
@@ -760,8 +938,8 @@ fn export_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     hint(ui, t, crate::i18n::tr("The photos in view as slides, with the settings above. Progress shows in the activity stack."));
 }
 
-fn playback_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
-    use lightcraft_engine::slideshow::{FADE_MAX, SLIDE_MAX, SLIDE_MIN};
+fn playback_section(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
+    use lcc_engine::slideshow::{FADE_MAX, SLIDE_MAX, SLIDE_MIN};
     heading(ui, t, crate::i18n::tr("Playback"));
     let s = app.session.slideshow.clone();
     row(ui, t, crate::i18n::tr("Slide duration"), |ui| {
@@ -833,7 +1011,7 @@ fn playback_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
 
 /// Appearance Mode (`button:settingsAppearance-{0,1,2}`: Auto, Dark, Light) above the light and
 /// dark theme cards (`radio:theme-{id}`), each with a preview of the chosen theme. The card in
-/// use is outlined. Applied on the next frame ([`LightcraftApp::sync_theme`]).
+/// use is outlined. Applied on the next frame ([`LccApp::sync_theme`]).
 fn appearance(ui: &mut egui::Ui, t: &Tokens, s: &mut crate::state::AppSettings, system: Option<egui::Theme>) {
     use crate::state::{AppearanceMode as M, DarkTheme, LightTheme};
     heading(ui, t, crate::i18n::tr("Appearance"));
@@ -933,7 +1111,7 @@ fn theme_card<V: PartialEq + Copy>(
         });
 }
 
-/// A small LightCraft window painted with `kind`'s tokens: the top bar with its search field, the
+/// A small app window painted with `kind`'s tokens: the top bar with its search field, the
 /// photo with the filmstrip under it, the Edit panel (histogram and sliders), the tool strip and
 /// the bottom bar.
 fn theme_preview(ui: &mut egui::Ui, kind: crate::theme::ThemeKind, width: f32) {
@@ -1058,7 +1236,7 @@ fn theme_preview(ui: &mut egui::Ui, kind: crate::theme::ThemeKind, width: f32) {
 
 /// Switching libraries is refused while an import (or the folder scan before one) is running: its
 /// remaining batches would be committed into the new library (issue #1509).
-pub(crate) fn can_switch_library(app: &LightcraftApp) -> Result<(), String> {
+pub(crate) fn can_switch_library(app: &LccApp) -> Result<(), String> {
     if crate::lightroom_import::is_running(app) {
         return Err("wait for Lightroom catalog import to finish before switching libraries".into());
     }
@@ -1072,10 +1250,10 @@ pub(crate) fn can_switch_library(app: &LightcraftApp) -> Result<(), String> {
 /// or a folder chosen in a dialog. Remembered as the library to open at launch.
 ///
 /// A Lightroom Classic catalog (its folder, an `.lrdata` / `.lrcat-data` folder or the `.lrcat`
-/// itself, see [`lightcraft_engine::lightroom_folder`]) is not opened: the current library stays
+/// itself, see [`lcc_engine::lightroom_folder`]) is not opened: the current library stays
 /// and a dialog offers Import Lightroom Catalog… instead; returns `{opened: false,
 /// lightroomCatalog: <.lrcat path or null>, path}`.
-pub fn open_library(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
+pub fn open_library(app: &mut LccApp, p: &Value) -> Result<Value, String> {
     can_switch_library(app)?;
     let path = match p.get("path").and_then(Value::as_str) {
         Some(x) => x.to_string(),
@@ -1093,9 +1271,9 @@ pub fn open_library(app: &mut LightcraftApp, p: &Value) -> Result<Value, String>
     };
     // A Lightroom catalog folder (or part of one) is not a library: before closing the library
     // open now, offer to import it instead (issue #891). The engine refuses it too.
-    if let Some(place) = lightcraft_engine::lightroom_folder::lightroom_catalog_at(std::path::Path::new(&path)) {
+    if let Some(place) = lcc_engine::lightroom_folder::lightroom_catalog_at(std::path::Path::new(&path)) {
         let catalog = place.catalog.map(|c| c.to_string_lossy().into_owned());
-        let err = lightcraft_engine::EngineError::LightroomCatalog { path: path.clone().into(), catalog: catalog.clone().map(Into::into) };
+        let err = lcc_engine::EngineError::LightroomCatalog { path: path.clone().into(), catalog: catalog.clone().map(Into::into) };
         // the library problem window (no library could be opened) shows the error instead
         if app.library_problem.is_some() {
             return Err(err.to_string());
@@ -1108,21 +1286,24 @@ pub fn open_library(app: &mut LightcraftApp, p: &Value) -> Result<Value, String>
         app.ui.settings.recent_libraries.retain(|r| r != &path);
         return Err(format!("{path}: the library is no longer there (moved, renamed or on a disconnected drive); removed from Open Recent Library"));
     }
-    switch_library(app, &path)
+    // `demo`: a newly created library starts with the procedural demo photos (the welcome dialog's choice)
+    let demo = p.get("demo").and_then(Value::as_bool).unwrap_or(false);
+    switch_library(app, &path, demo)
 }
 
 /// Close the current library and open the one at `path`. If it can't be opened (locked by
 /// another program, unreadable, a file), the error is returned and the current library stays open:
 /// the target is checked before anything is closed, and if opening it still fails the previous
-/// library is opened again (both errors are reported if that fails too).
-fn switch_library(app: &mut LightcraftApp, path: &str) -> Result<Value, String> {
+/// library is opened again (both errors are reported if that fails too). `demo`: a new library
+/// starts with the procedural demo photos.
+fn switch_library(app: &mut LccApp, path: &str, demo: bool) -> Result<Value, String> {
     let dir = app.session.check_library(std::path::Path::new(path)).map_err(|e| format!("{path}: {e}"))?;
     let path = dir.to_string_lossy().into_owned();
     // the library being left goes in the list too (also when it was opened at launch)
     let previous_dir = app.session.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.clone());
     let previous = previous_dir.as_ref().map(|d| d.to_string_lossy().into_owned());
     app.session.close_library().map_err(|e| e.to_string())?;
-    let opened = app.session.open_library(&dir, false).map(|_| ()).map_err(|e| format!("{path}: {e}"));
+    let opened = app.session.open_library(&dir, demo).map(|_| ()).map_err(|e| format!("{path}: {e}"));
     app.lightroom_last = None;
     app.lightroom_result = None;
     if matches!(app.ui.dialog.as_ref(), Some(crate::state::Dialog::LightroomResult { .. })) {
@@ -1158,7 +1339,7 @@ pub fn library_name(dir: &std::path::Path) -> String {
 }
 
 /// The open library's name (`None`: in memory, nothing is saved).
-pub fn open_library_name(app: &LightcraftApp) -> Option<String> {
+pub fn open_library_name(app: &LccApp) -> Option<String> {
     app.session.library.as_ref().filter(|l| l.on_disk).map(|l| library_name(&l.dir))
 }
 
@@ -1166,7 +1347,7 @@ pub fn open_library_name(app: &LightcraftApp) -> Option<String> {
 /// is the folder `name` inside `path` (or inside a location chosen in a dialog); without it,
 /// `path` itself, or a new folder named after the default library. The folder must not hold a
 /// library already, nor anything else.
-pub fn new_library(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
+pub fn new_library(app: &mut LccApp, p: &Value) -> Result<Value, String> {
     can_switch_library(app)?;
     let name = match p.get("name") {
         None | Some(Value::Null) => None,
@@ -1175,15 +1356,7 @@ pub fn new_library(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> 
     };
     // from the menu: ask for the name first (default prefilled), then for the location
     if name.is_none() && p.get("path").is_none() && app.services.pick_folder.is_some() {
-        crate::panels::dialogs::prompt(
-            app,
-            "New Library",
-            "Library name",
-            lightcraft_engine::library::DEFAULT_NAME,
-            "app.newLibrary",
-            json!({}),
-            "name",
-        );
+        crate::panels::dialogs::prompt(app, "New Library", "Library name", lcc_engine::library::DEFAULT_NAME, "app.newLibrary", json!({}), "name");
         return Ok(Value::Null);
     }
     let (location, picked) = match p.get("path").and_then(Value::as_str) {
@@ -1203,10 +1376,10 @@ pub fn new_library(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> 
     let dir = match name {
         Some(n) => location.join(n),
         // a chosen location gets a new folder in it, named after the default library
-        None if picked => free_name(&location, lightcraft_engine::library::DEFAULT_NAME),
+        None if picked => free_name(&location, lcc_engine::library::DEFAULT_NAME),
         None => location,
     };
-    if lightcraft_engine::library::is_library(&dir) {
+    if lcc_engine::library::is_library(&dir) {
         return Err(format!("{}: there is a library here already; open it with File ▸ Open Library…", dir.display()));
     }
     if dir.is_file() {
@@ -1216,7 +1389,7 @@ pub fn new_library(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> 
         return Err(format!("{}: the folder isn't empty; choose an empty folder or a new name", dir.display()));
     }
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: can't create the library folder: {e}", dir.display()))?;
-    switch_library(app, &dir.to_string_lossy())
+    switch_library(app, &dir.to_string_lossy(), false)
 }
 
 /// Characters a folder name can't hold on Windows (and `/`, which no system allows).
@@ -1248,7 +1421,7 @@ fn free_name(location: &std::path::Path, base: &str) -> std::path::PathBuf {
 /// `app.recentLibraries {clear?: bool}`: the recently opened libraries, newest first, as
 /// `[{path, name, exists, open}]` (`exists: false`: moved or on a disconnected drive). `clear`
 /// forgets them all.
-pub fn recent_libraries(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
+pub fn recent_libraries(app: &mut LccApp, p: &Value) -> Result<Value, String> {
     if p.get("clear").and_then(Value::as_bool) == Some(true) {
         app.ui.settings.recent_libraries.clear();
     }
@@ -1274,7 +1447,7 @@ pub fn recent_libraries(app: &mut LightcraftApp, p: &Value) -> Result<Value, Str
 /// only. A file that can't be used is an error and changes nothing. Returns the profile in use:
 /// `{path, description, kind (matrix|lut), primaries {red, green, blue: [x, y]}}`, with
 /// `path: null, screen: true` for the screen's profile.
-pub fn display_profile(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
+pub fn display_profile(app: &mut LccApp, p: &Value) -> Result<Value, String> {
     let path = match p.get("path") {
         None => None,
         Some(Value::Null) => Some(String::new()),
@@ -1282,7 +1455,7 @@ pub fn display_profile(app: &mut LightcraftApp, p: &Value) -> Result<Value, Stri
         Some(_) => return Err("app.displayProfile: path must be a string or null".into()),
     };
     if let Some(path) = path {
-        let d = lightcraft_engine::display::Display::load_opt(&path).map_err(|e| format!("app.displayProfile: {e}"))?;
+        let d = lcc_engine::display::Display::load_opt(&path).map_err(|e| format!("app.displayProfile: {e}"))?;
         app.renderer.set_display(d);
         app.ui.settings.display_profile = path.clone();
         app.display_applied = Some(path);
@@ -1310,8 +1483,8 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn app_with_import() -> LightcraftApp {
-        let mut app = LightcraftApp::new(lightcraft_engine::Session::new(), crate::Services::default());
+    fn app_with_import() -> LccApp {
+        let mut app = LccApp::new(lcc_engine::Session::new(), crate::Services::default());
         app.import = Some(crate::import::ImportTask::new(vec!["a.jpg".into()], json!({"mode": "add"}), 0, false));
         app
     }
@@ -1335,7 +1508,7 @@ mod tests {
     /// The menu items that switch libraries are greyed out meanwhile, like during a Lightroom import.
     #[test]
     fn library_switching_menu_items_are_disabled_while_an_import_runs() {
-        let mut app = LightcraftApp::new(lightcraft_engine::Session::new(), crate::Services::default());
+        let mut app = LccApp::new(lcc_engine::Session::new(), crate::Services::default());
         app.services.pick_folder = Some(Box::new(|| None));
         assert!(crate::menus::ui_enabled(&app, "app.openLibrary"));
         assert!(crate::menus::ui_enabled(&app, "app.newLibrary"));
@@ -1349,7 +1522,7 @@ mod tests {
     fn open_library_is_refused_while_an_import_scan_runs() {
         let dir = std::env::temp_dir().join(format!("lc-ui-switchscan-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
-        let mut app = LightcraftApp::new(lightcraft_engine::Session::new(), crate::Services::default());
+        let mut app = LccApp::new(lcc_engine::Session::new(), crate::Services::default());
         crate::import::open(&mut app, vec![dir.to_string_lossy().into_owned()]).unwrap();
         assert!(app.scan.is_some());
         let err = open_library(&mut app, &json!({"path": "other"})).unwrap_err();

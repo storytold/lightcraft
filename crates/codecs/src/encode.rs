@@ -3,7 +3,7 @@
 //! Metadata (ICC/EXIF/XMP) is embedded where the format allows.
 
 use crate::{Error, Result};
-use lightcraft_raster::Rgba8;
+use lcc_raster::Rgba8;
 use serde::{Deserialize, Serialize};
 
 /// Interleaved sample data. Integer samples are display-encoded (0..=MAX); float samples are
@@ -225,7 +225,7 @@ pub enum TiffCompression {
 }
 
 /// Encode TIFF: 8/16-bit integer or 32-bit float, gray/RGB with optional (unassociated) alpha.
-/// ICC and XMP are embedded; EXIF is not (write it through the TIFF writer in `lightcraft-tiff`).
+/// ICC and XMP are embedded; EXIF is not (write it through the TIFF writer in `lcc-tiff`).
 pub fn encode_tiff(img: &EncodeImage, compression: TiffCompression, meta: &EncodeMeta) -> Result<Vec<u8>> {
     use tiff::encoder::{Compression, DeflateLevel, TiffEncoder, colortype};
     use tiff::tags::Predictor;
@@ -415,7 +415,7 @@ pub fn hlg_signal(rgb: [f32; 3]) -> [f32; 3] {
     let fd = rgb.map(|v| (if v.is_finite() { v.max(0.0) } else { 0.0 }) * (HDR_REFERENCE_WHITE_NITS / HLG_REFERENCE_PEAK_NITS));
     let yd = (K[0] * fd[0] + K[1] * fd[1] + K[2] * fd[2]).min(1.0);
     let scale = if yd > 0.0 { yd.powf((1.0 - GAMMA) / GAMMA) } else { 0.0 };
-    fd.map(|v| lightcraft_color::transfer::hlg_encode(f64::from((v * scale).clamp(0.0, 1.0))).clamp(0.0, 1.0) as f32)
+    fd.map(|v| lcc_color::transfer::hlg_encode(f64::from((v * scale).clamp(0.0, 1.0))).clamp(0.0, 1.0) as f32)
 }
 
 /// Encode an HDR AVIF with the PQ curve (see [`encode_avif_hdr`]).

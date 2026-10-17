@@ -35,7 +35,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use lightcraft_raster::Rgba8;
+use lcc_raster::Rgba8;
 
 use crate::Hash128;
 
@@ -54,7 +54,7 @@ pub const STALE: std::time::Duration = std::time::Duration::from_secs(7 * 24 * 3
 /// The file that says the cache has looked through its folder for thumbnails under the name
 /// of before and taken them over ([`DiskCache::take_over_old`]): written after a whole pass,
 /// whatever else the folder holds, so that it is done once.
-const TIDIED: &str = ".lightcraft-thumbs";
+const TIDIED: &str = crate::legacy::TIDIED;
 
 /// Files an operating system leaves in a folder that was looked at: nobody's, and no reason
 /// to take a folder for more than a cache.
@@ -63,9 +63,15 @@ const DROPPINGS: [&str; 3] = [".DS_Store", "desktop.ini", "Thumbs.db"];
 /// The file that says a folder is a cache, for backup programs and the like (the Cache
 /// Directory Tagging Specification: the first line is the signature).
 pub const TAG: &str = "CACHEDIR.TAG";
-const TAG_TEXT: &str = "Signature: 8a477f597d28d172789f06886806bc55\n\
-# This folder holds LightCraft's thumbnail cache. It is safe to delete: LightCraft renders what it needs again.\n\
-# See https://bford.info/cachedir/\n";
+/// The text of the [`TAG`] file.
+fn tag_text() -> String {
+    let app = lcc_brand::DISPLAY_NAME;
+    format!(
+        "Signature: 8a477f597d28d172789f06886806bc55\n\
+# This folder holds {app}'s thumbnail cache. It is safe to delete: {app} renders what it needs again.\n\
+# See https://bford.info/cachedir/\n"
+    )
+}
 
 pub struct DiskCache {
     dir: PathBuf,
@@ -183,7 +189,7 @@ impl DiskCache {
             return;
         }
         if made {
-            let _ = std::fs::write(self.dir.join(TAG), TAG_TEXT);
+            let _ = std::fs::write(self.dir.join(TAG), tag_text());
         }
         // Serialize the file replacement and its size accounting. A repeated render of
         // the same key replaces its JPEG; it must not count as another cache entry.
@@ -296,7 +302,7 @@ impl DiskCache {
         if !blocked {
             let _ = std::fs::write(self.dir.join(TIDIED), b"");
             if self.holds_only_the_cache() {
-                let _ = std::fs::write(self.dir.join(TAG), TAG_TEXT);
+                let _ = std::fs::write(self.dir.join(TAG), tag_text());
             }
         }
         taken
@@ -368,6 +374,25 @@ impl DiskCache {
     pub fn size(&self) -> u64 {
         let mut t = self.total.lock().unwrap_or_else(|e| e.into_inner());
         *t.get_or_insert_with(|| self.scan().iter().map(|f| f.1).sum())
+    }
+
+    /// When the file of `key` was last written or read (`None`: not on disk).
+    pub fn modified(&self, key: Hash128) -> Option<std::time::SystemTime> {
+        std::fs::metadata(self.path(key)).ok().filter(|m| m.is_file()).and_then(|m| m.modified().ok())
+    }
+
+    /// Delete the file of `key`; returns the bytes freed (0: it was not there).
+    pub fn remove(&self, key: Hash128) -> u64 {
+        let p = self.path(key);
+        let Ok(m) = std::fs::symlink_metadata(&p) else { return 0 };
+        if !m.is_file() || std::fs::remove_file(&p).is_err() {
+            return 0;
+        }
+        let mut t = self.total.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(total) = t.as_mut() {
+            *total = total.saturating_sub(m.len());
+        }
+        m.len()
     }
 
     pub fn clear(&self) {

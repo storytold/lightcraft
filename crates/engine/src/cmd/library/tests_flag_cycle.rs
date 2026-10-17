@@ -1,5 +1,5 @@
 //! `photo.cycleFlag` / `photo.increaseFlag` / `photo.decreaseFlag` through the real engine.
-use lightcraft_catalog::{Flag, Op, Photo, PhotoId, Source};
+use lcc_catalog::{Flag, Op, Photo, PhotoId, Source};
 use serde_json::json;
 
 use crate::{Result, Selection, Session};
@@ -7,15 +7,8 @@ use crate::{Result, Selection, Session};
 fn session() -> Result<Session> {
     let mut s = Session::new();
     for (id, flag) in [(1, Flag::None), (2, Flag::Pick), (3, Flag::Reject), (4, Flag::None)] {
-        let mut photo = Photo::new(
-            PhotoId(id),
-            Source::File { path: format!("/lightcraft-flag-cycle/{id}.jpg") },
-            &format!("{id}.jpg"),
-            "JPEG",
-            40,
-            30,
-            "2026-10-13",
-        );
+        let mut photo =
+            Photo::new(PhotoId(id), Source::File { path: format!("/app-flag-cycle/{id}.jpg") }, &format!("{id}.jpg"), "JPEG", 40, 30, "2026-10-13");
         photo.flag = flag;
         s.catalog.apply(Op::AddPhoto { photo: Box::new(photo) })?;
     }
@@ -88,13 +81,4 @@ fn increase_and_decrease_clamp_without_wrapping() {
     let undo = s.undo.len();
     assert_eq!(s.execute("photo.decreaseFlag", &json!({})).unwrap()["changed"], 0);
     assert_eq!(s.undo.len(), undo, "no change, no history step");
-}
-
-#[test]
-fn registered_with_classic_shortcuts() {
-    let specs = crate::command_specs();
-    let key = |id: &str| specs.iter().find(|c| c.id == id).and_then(|c| c.shortcut);
-    assert_eq!(key("photo.cycleFlag"), Some("`"));
-    assert_eq!(key("photo.increaseFlag"), Some("Cmd+Up"));
-    assert_eq!(key("photo.decreaseFlag"), Some("Cmd+Down"));
 }

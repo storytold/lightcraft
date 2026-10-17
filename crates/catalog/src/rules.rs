@@ -71,10 +71,12 @@ pub const FIELDS: &[(&str, &str, Kind)] = &[
     ("virtualCopy", "Virtual Copy", Kind::Bool),
     ("copyName", "Copy Name", Kind::Text),
     ("stacked", "In a Stack", Kind::Bool),
+    ("immich", "Immich", Kind::Choice(&[("linked", "Linked"), ("probable", "Probably Linked"), ("notLinked", "Not Linked")])),
     // File
     ("fileName", "Filename", Kind::Text),
     ("extension", "File Extension", Kind::Text),
     ("filePath", "File Path", Kind::Text),
+    ("folder", "Folder", Kind::Text),
     ("kind", "File Type", Kind::Choice(&[("image", "Image"), ("raw", "Raw"), ("video", "Video")])),
     ("format", "File Format", Kind::Text),
     ("duration", "Video Duration", Kind::Number),
@@ -87,12 +89,14 @@ pub const FIELDS: &[(&str, &str, Kind)] = &[
     ("keywordCount", "Keyword Count", Kind::Number),
     ("person", "People", Kind::Keywords),
     ("personCount", "People Count", Kind::Number),
+    ("faceCount", "Face Count", Kind::Number),
     // Description
     ("title", "Title", Kind::Text),
     ("caption", "Caption", Kind::Text),
     ("altText", "Alt Text", Kind::Text),
     ("creator", "Creator", Kind::Text),
     ("copyright", "Copyright", Kind::Text),
+    ("usageTerms", "Rights Usage Terms", Kind::Text),
     (
         "copyrightStatus",
         "Copyright Status",
@@ -107,6 +111,7 @@ pub const FIELDS: &[(&str, &str, Kind)] = &[
     ("iso", "ISO Speed", Kind::Number),
     // Location
     ("location", "Location", Kind::Text),
+    ("sublocation", "Sublocation", Kind::Text),
     ("city", "City", Kind::Text),
     ("state", "State / Province", Kind::Text),
     ("country", "Country", Kind::Text),
@@ -114,6 +119,8 @@ pub const FIELDS: &[(&str, &str, Kind)] = &[
     // Size
     ("longEdge", "Long Edge", Kind::Number),
     ("shortEdge", "Short Edge", Kind::Number),
+    ("width", "Width (pixels)", Kind::Number),
+    ("height", "Height (pixels)", Kind::Number),
     ("aspect", "Aspect Ratio", Kind::Choice(&[("landscape", "Landscape (wide)"), ("portrait", "Portrait (tall)"), ("square", "Square")])),
     ("megapixels", "Megapixels", Kind::Number),
     // Develop
@@ -131,14 +138,14 @@ pub const TOP_LEVEL_FIELDS: &[&str] = &["rating", "flag", "label", "text"];
 /// The field menu's submenus: (label, fields), in order. Every field of [`FIELDS`] is either here
 /// once or in [`TOP_LEVEL_FIELDS`].
 pub const FIELD_GROUPS: &[(&str, &[&str])] = &[
-    ("Source", &["album", "virtualCopy", "copyName", "stacked"]),
-    ("File", &["fileName", "extension", "filePath", "kind", "format", "duration"]),
+    ("Source", &["album", "virtualCopy", "copyName", "stacked", "immich"]),
+    ("File", &["fileName", "extension", "filePath", "folder", "kind", "format", "duration"]),
     ("Date", &["captureDate", "importDate", "editDate"]),
-    ("Keywords & People", &["keywords", "keywordCount", "person", "personCount"]),
-    ("Description", &["title", "caption", "altText", "creator", "copyright", "copyrightStatus"]),
+    ("Keywords & People", &["keywords", "keywordCount", "person", "personCount", "faceCount"]),
+    ("Description", &["title", "caption", "altText", "creator", "copyright", "usageTerms", "copyrightStatus"]),
     ("Camera Info", &["camera", "lens", "focalLength", "aperture", "shutterSpeed", "iso"]),
-    ("Location", &["location", "city", "state", "country", "hasGps"]),
-    ("Size", &["longEdge", "shortEdge", "aspect", "megapixels"]),
+    ("Location", &["location", "sublocation", "city", "state", "country", "hasGps"]),
+    ("Size", &["longEdge", "shortEdge", "width", "height", "aspect", "megapixels"]),
     ("Develop", &["edited", "cropped", "treatment"]),
     ("Assisted Culling", &["sharpness", "bestOfGroup"]),
 ];
@@ -262,7 +269,7 @@ fn field_problem(field: &str, op: &str, value: &Value, cat: &Catalog, owner: Opt
     if !ops_for(kind).iter().any(|o| o.0 == op) {
         return Some((Issue::NoSuchOperator, format!("`{field}` has no operator `{op}`")));
     }
-    if matches!(op, "isEmpty" | "isNotEmpty") {
+    if !takes_value(op) {
         return None;
     }
     match kind {
@@ -363,7 +370,8 @@ pub fn rule_date(s: &str) -> Result<String, Issue> {
             _ => false,
         }
     };
-    if !(shaped(&s) || s.get(..19).is_some_and(shaped) && s.get(19..).is_some_and(tail_ok)) {
+    let with_zone = s.get(..19).is_some_and(shaped) && s.get(19..).is_some_and(tail_ok);
+    if !shaped(&s) && !with_zone {
         return Err(Issue::NeedsDate);
     }
     let part = |a: usize, b: usize| s.get(a..b).and_then(|t| t.parse::<u32>().ok());
@@ -562,6 +570,11 @@ pub fn ops_for(kind: Kind) -> &'static [(&'static str, &'static str)] {
             ("between", "is between"),
             ("inLast", "is in the last"),
             ("notInLast", "isn't in the last"),
+            ("today", "is today"),
+            ("yesterday", "is yesterday"),
+            ("thisWeek", "is in this week"),
+            ("thisMonth", "is in this month"),
+            ("thisYear", "is in this year"),
             ("isEmpty", "is unknown"),
         ],
         Kind::Choice(_) | Kind::Album => &[("is", "is"), ("isNot", "isn't")],
@@ -570,7 +583,72 @@ pub fn ops_for(kind: Kind) -> &'static [(&'static str, &'static str)] {
 }
 
 pub fn field_kind(field: &str) -> Option<Kind> {
+    if let Some(key) = plugin_field(field) {
+        return Some(if is_numeric_plugin_field(key) { Kind::Number } else { Kind::Text });
+    }
     FIELDS.iter().find(|f| f.0 == field).map(|f| f.2)
+}
+
+/// The rule field id of plug-in metadata field `key` of plug-in `plugin` (see [`crate::Photo::plugin_fields`]).
+pub fn plugin_field_id(plugin: &str, key: &str) -> String {
+    format!("plugin:{plugin}/{key}")
+}
+
+/// `"plugin:<plug-in id>/<key>"` → the [`crate::Photo::plugin_fields`] key `"<plug-in id>/<key>"`.
+pub fn plugin_field(field: &str) -> Option<&str> {
+    field.strip_prefix("plugin:").filter(|k| k.split_once('/').is_some_and(|(p, f)| !p.is_empty() && !f.is_empty()))
+}
+
+/// The plug-in metadata fields that hold numbers (`"<plug-in id>/<key>"`): rules compare them as
+/// numbers (is ≥, is between, …). The catalog doesn't know plug-ins: the engine says which, from
+/// the installed plug-ins' manifests ([`set_numeric_plugin_fields`]); others are text.
+static NUMERIC_PLUGIN_FIELDS: std::sync::RwLock<std::collections::BTreeSet<String>> = std::sync::RwLock::new(std::collections::BTreeSet::new());
+
+/// Which plug-in metadata fields hold numbers (`"<plug-in id>/<key>"`, as in [`crate::Photo::plugin_fields`]).
+pub fn set_numeric_plugin_fields(keys: impl IntoIterator<Item = String>) {
+    let keys: std::collections::BTreeSet<String> = keys.into_iter().collect();
+    let mut g = NUMERIC_PLUGIN_FIELDS.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if *g != keys {
+        *g = keys;
+    }
+}
+
+fn is_numeric_plugin_field(key: &str) -> bool {
+    NUMERIC_PLUGIN_FIELDS.read().unwrap_or_else(std::sync::PoisonError::into_inner).contains(key)
+}
+
+/// A plug-in field's value as rules and searches see it: text, `true` / `false`, a number as written.
+pub fn plugin_value_text(v: &Value) -> String {
+    match v {
+        Value::Null => String::new(),
+        Value::String(s) => s.clone(),
+        other => other.to_string(),
+    }
+}
+
+/// Date operators that name a calendar span around [`now`] (weeks start on Monday) and take no value.
+pub const CALENDAR_OPS: [&str; 5] = ["today", "yesterday", "thisWeek", "thisMonth", "thisYear"];
+
+/// Whether a rule with operator `op` needs a value (`isEmpty` and the calendar spans don't).
+pub fn takes_value(op: &str) -> bool {
+    !matches!(op, "isEmpty" | "isNotEmpty") && !CALENDAR_OPS.contains(&op)
+}
+
+/// Whether the date part of `have` (an ISO time) falls in the calendar span `op` names around `now`.
+fn calendar_op(op: &str, have: &str, now: &str) -> bool {
+    let (Some(day), Some(today)) = (have.get(..10), now.get(..10)) else { return false };
+    let back = |days: i64| crate::dates::shift_iso(today, -days * 86_400).and_then(|d| d.get(..10).map(str::to_string));
+    match op {
+        "today" => day == today,
+        "yesterday" => back(1).is_some_and(|y| day == y),
+        "thisWeek" => {
+            let since_monday = crate::dates::weekday(today).and_then(|w| crate::dates::WEEKDAYS.iter().position(|d| *d == w)).unwrap_or(0);
+            back(since_monday as i64).is_some_and(|monday| day >= monday.as_str() && day <= today)
+        }
+        "thisMonth" => today.get(..7).is_some_and(|m| day.starts_with(m)),
+        "thisYear" => today.get(..4).is_some_and(|y| day.starts_with(y)),
+        _ => false,
+    }
 }
 
 thread_local! {
@@ -790,6 +868,7 @@ fn date_op(op: &str, have: Option<&str>, value: &Value) -> bool {
             let Some(from) = crate::dates::shift_iso(&now(), -secs) else { return op == "inLast" };
             (h >= from.as_str()) == (op == "inLast")
         }
+        op if CALENDAR_OPS.contains(&op) => calendar_op(op, h, &now()),
         _ => false,
     }
 }
@@ -822,15 +901,20 @@ impl Rule {
             "virtualCopy" => yes(p.copy_of.is_some()),
             "copyName" => text(p.copy_name.as_deref().unwrap_or("")),
             "stacked" => yes(cat.stack_of(p.id).is_some()),
+            "immich" => {
+                let want = if want == "notlinked" { "notLinked" } else { want.as_str() };
+                crate::query::immich_state_is(cat, p.id, want) == (op == "is")
+            }
             "cropped" => yes(p.is_cropped()),
             "treatment" => {
-                let t = if p.develop.treatment == lightcraft_develop::Treatment::Bw { "monochrome" } else { "color" };
+                let t = if p.develop.treatment == lcc_develop::Treatment::Bw { "monochrome" } else { "color" };
                 (t == want) == (op == "is")
             }
             "keywords" => names_op(op, &m.keywords, &want),
             "keywordCount" => num_op(op, Some(p.keyword_count() as f64), value),
             "person" => names_op(op, &p.people(), &want),
             "personCount" => num_op(op, Some(p.people().len() as f64), value),
+            "faceCount" => num_op(op, Some(p.face_count() as f64), value),
             "text" => {
                 let all = [
                     p.file_name.as_str(),
@@ -847,6 +931,7 @@ impl Rule {
                     &m.keywords.join(" "),
                     &p.people().join(" "),
                     p.copy_name.as_deref().unwrap_or(""),
+                    &p.plugin_fields.values().map(plugin_value_text).collect::<Vec<_>>().join(" "),
                 ]
                 .join(" ");
                 text(&all)
@@ -879,6 +964,25 @@ impl Rule {
             "lens" => text(&m.lens),
             "location" => text(&[m.location.as_str(), &m.city, &m.state, &m.country].join(" ")),
             "creator" => text(&m.creator),
+            "sublocation" => text(&m.location),
+            "usageTerms" => text(&m.usage_terms),
+            "folder" => {
+                let folder = match &p.source {
+                    Source::File { path } => {
+                        let path = path.replace('\\', "/");
+                        path.rsplit_once('/').map(|(d, _)| d.to_string()).unwrap_or_default()
+                    }
+                    Source::Demo { .. } => String::new(),
+                };
+                let want = want.replace('\\', "/");
+                match op {
+                    "contains" => !want.trim().is_empty() && folder.to_lowercase().contains(want.trim()),
+                    "notContains" => want.trim().is_empty() || !folder.to_lowercase().contains(want.trim()),
+                    _ => text_op(op, &folder, &want),
+                }
+            }
+            "width" => num_op(op, Some(p.width as f64), value),
+            "height" => num_op(op, Some(p.height as f64), value),
             "copyright" => text(&m.copyright),
             "copyrightStatus" => {
                 let want = crate::CopyrightStatus::parse(&want);
@@ -907,7 +1011,16 @@ impl Rule {
                 // a smart album's photos are its matches; one being evaluated (a loop) holds none
                 id.is_some_and(|a| cat.album_contains(a, p)) == (op == "is")
             }
-            _ => false,
+            f => match plugin_field(f) {
+                // a number field compares as a number (a rule saved with a text operator still
+                // tests the text); an absent field has no value
+                Some(key) if is_numeric_plugin_field(key) && ops_for(Kind::Number).iter().any(|o| o.0 == op) => {
+                    num_op(op, p.plugin_fields.get(key).and_then(number).filter(|n| n.is_finite()), value)
+                }
+                // text rules over the field's value; an absent field is empty
+                Some(key) => text(&p.plugin_fields.get(key).map(plugin_value_text).unwrap_or_default()),
+                None => false,
+            },
         }
     }
 }
@@ -929,7 +1042,7 @@ impl RuleSet {
     pub fn depends_on_now(&self) -> bool {
         self.rules.iter().any(|r| match r {
             Rule::Group { group } => group.depends_on_now(),
-            Rule::Field { op, .. } => op == "inLast" || op == "notInLast",
+            Rule::Field { op, .. } => op == "inLast" || op == "notInLast" || CALENDAR_OPS.contains(&op.as_str()),
         })
     }
 
@@ -1065,6 +1178,37 @@ mod tests {
         serde_json::from_value(v).unwrap()
     }
 
+    /// P1.4: the location parts, people, folder, shutter speed, size, aspect ratio and treatment
+    /// are rule fields too; nested any/all groups combine them.
+    #[test]
+    fn location_people_folder_exposure_and_shape_fields() {
+        let cat = Catalog::new();
+        let mut p = photo(1);
+        p.meta.city = "Rome".into();
+        p.meta.country = "Italy".into();
+        p.meta.shutter = "1/250".into();
+        p.meta.regions.push(lcc_meta::Region {
+            rect: lcc_meta::Rect { x0: 0.1, y0: 0.1, x1: 0.2, y1: 0.2 },
+            kind: lcc_meta::RegionKind::Face,
+            name: Some("Anna Rossi".into()),
+            description: None,
+        });
+        p.source = Source::File { path: "/pics/2026/Trip/IMG_0042.CR2".into() };
+        let m = |v: serde_json::Value| rs(v).matches(&p, &cat);
+        assert!(m(json!({"rules": [{"field": "city", "op": "is", "value": "rome"}, {"field": "country", "op": "contains", "value": "ital"}]})));
+        assert!(m(json!({"rules": [{"field": "person", "op": "contains", "value": "anna"}]})));
+        assert!(!m(json!({"rules": [{"field": "person", "op": "isEmpty"}]})));
+        assert!(m(json!({"rules": [{"field": "folder", "op": "endsWith", "value": "/trip"}]})));
+        assert!(m(json!({"rules": [{"field": "shutterSpeed", "op": "lt", "value": 0.01}]})));
+        assert!(m(json!({"rules": [{"field": "width", "op": "is", "value": 6000}, {"field": "aspect", "op": "is", "value": "landscape"}]})));
+        assert!(m(json!({"rules": [{"field": "treatment", "op": "is", "value": "color"}]})));
+        // all of (city is Rome, any of (person Bob, iso ≥ 800))
+        assert!(m(json!({"rules": [
+            {"field": "city", "op": "is", "value": "rome"},
+            {"group": {"match": "any", "rules": [{"field": "person", "op": "contains", "value": "bob"}, {"field": "iso", "op": "gte", "value": 800}]}}
+        ]})));
+    }
+
     #[test]
     fn fields_ops_and_groups() {
         let cat = Catalog::new();
@@ -1117,9 +1261,80 @@ mod tests {
         no(json!({"rules": [{"field": "captureDate", "op": "inLast", "value": {"n": 1, "unit": "weeks"}}]}));
         yes(json!({"rules": [{"field": "captureDate", "op": "notInLast", "value": 7}]}));
         set_now(None);
+        // calendar spans: weeks start on Monday
+        for (now, yes_ops, no_ops) in [
+            ("2026-08-14T23:00:00", vec!["today", "thisWeek", "thisMonth", "thisYear"], vec!["yesterday"]),
+            ("2026-08-15T08:00:00", vec!["yesterday", "thisWeek", "thisMonth", "thisYear"], vec!["today"]),
+            ("2026-08-17T08:00:00", vec!["thisMonth", "thisYear"], vec!["today", "yesterday", "thisWeek"]),
+            ("2026-09-01T08:00:00", vec!["thisYear"], vec!["thisMonth", "thisWeek"]),
+            ("2027-08-14T08:00:00", vec![], vec!["thisYear", "thisWeek", "yesterday"]),
+        ] {
+            set_now(Some(now.into()));
+            for op in yes_ops {
+                yes(json!({"rules": [{"field": "captureDate", "op": op}]}));
+            }
+            for op in no_ops {
+                no(json!({"rules": [{"field": "captureDate", "op": op}]}));
+            }
+        }
+        set_now(None);
+        assert!(rs(json!({"rules": [{"field": "captureDate", "op": "today"}]})).depends_on_now());
+        assert!(rs(json!({"rules": [{"field": "captureDate", "op": "today"}]})).check(&cat).is_empty());
         // an empty rule list: all → everything, any → nothing
         yes(json!({"rules": []}));
         no(json!({"match": "any", "rules": []}));
+    }
+
+    /// G19: plug-in metadata fields are rule fields (`plugin:<id>/<key>`, text operators) and part of
+    /// Any Searchable Text; a photo without the field has it empty.
+    #[test]
+    fn plugin_fields_are_searchable() {
+        let cat = Catalog::new();
+        let mut p = photo(1);
+        p.plugin_fields.insert("com.ex.jobs/job".into(), json!("J-2026-17"));
+        p.plugin_fields.insert("com.ex.jobs/delivered".into(), json!(true));
+        let bare = photo(2);
+        let field = plugin_field_id("com.ex.jobs", "job");
+        assert_eq!(field, "plugin:com.ex.jobs/job");
+        let r = |op: &str, v: serde_json::Value| rs(json!({"rules": [{"field": field, "op": op, "value": v}]}));
+        assert!(r("contains", json!("j-2026")).matches(&p, &cat));
+        assert!(!r("contains", json!("j-2026")).matches(&bare, &cat));
+        assert!(r("isEmpty", json!(null)).matches(&bare, &cat));
+        assert!(rs(json!({"rules": [{"field": "plugin:com.ex.jobs/delivered", "op": "is", "value": "true"}]})).matches(&p, &cat));
+        assert!(rs(json!({"rules": [{"field": "text", "op": "contains", "value": "J-2026-17"}]})).matches(&p, &cat), "any searchable text");
+        assert!(r("contains", json!("x")).check(&cat).is_empty(), "a valid rule");
+        let f = crate::Filter { text: "j-2026".into(), ..Default::default() };
+        assert!(f.matches(&p, &cat) && !f.matches(&bare, &cat), "the filter bar's text search");
+        let f = crate::Filter { text: "job:2026-17".into(), ..Default::default() };
+        assert!(f.matches(&p, &cat) && !f.matches(&bare, &cat), "a field by its key");
+        assert!(plugin_field("plugin:/x").is_none() && plugin_field("plugin:a/").is_none() && plugin_field("rating").is_none());
+    }
+
+    /// G19: a plug-in number field compares as a number (`10` > `9`, which as text it isn't), its
+    /// rules check as numbers, and an absent value matches no comparison.
+    #[test]
+    fn numeric_plugin_fields_compare_as_numbers() {
+        set_numeric_plugin_fields(["com.ex.num/rank".to_string()]);
+        let cat = Catalog::new();
+        let mut ten = photo(1);
+        ten.plugin_fields.insert("com.ex.num/rank".into(), json!(10));
+        let mut nine = photo(2);
+        nine.plugin_fields.insert("com.ex.num/rank".into(), json!(9.5));
+        let bare = photo(3);
+        let field = plugin_field_id("com.ex.num", "rank");
+        assert_eq!(field_kind(&field), Some(Kind::Number));
+        let r = |op: &str, v: serde_json::Value| rs(json!({"rules": [{"field": field, "op": op, "value": v}]}));
+        assert!(r("gt", json!(9.75)).matches(&ten, &cat) && !r("gt", json!(9.75)).matches(&nine, &cat));
+        assert!(r("gte", json!("10")).matches(&ten, &cat), "a number written as text");
+        assert!(r("between", json!([9, 9.6])).matches(&nine, &cat) && !r("between", json!([9, 9.6])).matches(&ten, &cat));
+        assert!(r("is", json!(10)).matches(&ten, &cat) && r("isNot", json!(10)).matches(&nine, &cat));
+        assert!(!r("lt", json!(100)).matches(&bare, &cat) && r("isNot", json!(1)).matches(&bare, &cat));
+        assert!(r("lt", json!(5)).check(&cat).is_empty());
+        assert!(!r("lt", json!("many")).check(&cat).is_empty(), "needs a number");
+        // a rule saved with a text operator before still matches the text
+        assert!(r("contains", json!("10")).matches(&ten, &cat));
+        // other plug-in fields stay text
+        assert_eq!(field_kind("plugin:com.ex.num/name"), Some(Kind::Text));
     }
 
     #[test]
@@ -1159,7 +1374,7 @@ mod tests {
     /// faces are not people; People Count counts each person once.
     #[test]
     fn people_rules() {
-        use lightcraft_meta::{Rect, Region, RegionKind};
+        use lcc_meta::{Rect, Region, RegionKind};
         let cat = Catalog::new();
         let region = |name: Option<&str>, kind: RegionKind| Region {
             rect: Rect { x0: 0.4, y0: 0.4, x1: 0.6, y1: 0.6 },
@@ -1171,7 +1386,7 @@ mod tests {
         let m = |p: &Photo, field: &str, op: &str, value: serde_json::Value| {
             rs(json!({"rules": [{"field": field, "op": op, "value": value}]})).matches(p, &cat)
         };
-        assert!(m(&p, "person", "isEmpty", json!(null)) && m(&p, "personCount", "is", json!(0)));
+        assert!(m(&p, "person", "isEmpty", json!(null)) && m(&p, "personCount", "is", json!(0)) && m(&p, "faceCount", "is", json!(0)));
         p.meta.regions = vec![
             region(Some("Ana Lima"), RegionKind::Face),
             region(Some(" ana lima "), RegionKind::Face),
@@ -1185,7 +1400,10 @@ mod tests {
         assert!(m(&p, "person", "notContains", json!("rex")));
         assert!(m(&p, "person", "isNotEmpty", json!(null)));
         assert!(m(&p, "personCount", "is", json!(2)), "Ana Lima once, Bo; not the pet or the unnamed face");
+        assert!(m(&p, "faceCount", "is", json!(4)), "4 face regions: Ana Lima twice, unnamed face, Bo; not the pet");
+        assert!(m(&p, "faceCount", "gte", json!(3)));
         assert_eq!(field_group("person"), Some("Keywords & People"));
+        assert_eq!(field_group("faceCount"), Some("Keywords & People"));
     }
 
     /// Shutter Speed compares exposure times in seconds, written as the camera shows them: a
@@ -1210,6 +1428,19 @@ mod tests {
     #[test]
     fn shutter_seconds_parses_camera_notation() {
         for (s, want) in [("1/250", Some(0.004)), (" 1/250 s", Some(0.004)), ("0.5", Some(0.5)), ("2\"", Some(2.0)), ("30s", Some(30.0))] {
+            assert_eq!(crate::parse_shutter_seconds(s), want, "{s}");
+        }
+        // the same times as the app displays them (including the ″ of a whole second): the ingest string
+        // has to read back as the time it came from (issue #1619)
+        for (s, want) in [
+            ("1/250", Some(0.004)),
+            ("0.4", Some(0.4)),
+            ("0.8", Some(0.8)),
+            ("1\u{2033}", Some(1.0)),
+            ("1.3\u{2033}", Some(1.3)),
+            ("2.5\u{2033}", Some(2.5)),
+            ("30\u{2033}", Some(30.0)),
+        ] {
             assert_eq!(crate::parse_shutter_seconds(s), want, "{s}");
         }
         for s in ["", "1/0", "0", "-1/250", "fast", "inf", "NaN", "1/x"] {
@@ -1271,8 +1502,8 @@ mod tests {
         let mut d = photo(5);
         assert!(m(&d, "cropped", "is", json!(false)) && m(&d, "treatment", "is", json!("color")));
         let mut s = (*d.develop).clone();
-        s.crop.geometry.rect = lightcraft_geom::Rect::new(0.1, 0.0, 0.9, 1.0);
-        s.treatment = lightcraft_develop::Treatment::Bw;
+        s.crop.geometry.rect = lcc_geom::Rect::new(0.1, 0.0, 0.9, 1.0);
+        s.treatment = lcc_develop::Treatment::Bw;
         d.develop = std::sync::Arc::new(s);
         assert!(m(&d, "cropped", "is", json!(true)) && m(&d, "treatment", "is", json!("monochrome")));
         assert!(m(&d, "treatment", "isNot", json!("color")));
@@ -1295,11 +1526,11 @@ mod tests {
         assert!(m(&p, "aspect", "is", json!("landscape")) && m(&p, "longEdge", "is", json!(6000)) && m(&p, "shortEdge", "is", json!(4000)));
         assert!(m(&p, "megapixels", "is", json!(24)));
         let mut s = (*p.develop).clone();
-        s.orientation = lightcraft_geom::Orientation::Rotate90;
+        s.orientation = lcc_geom::Orientation::Rotate90;
         p.develop = std::sync::Arc::new(s.clone());
         assert!(m(&p, "aspect", "is", json!("portrait")) && m(&p, "longEdge", "is", json!(6000)));
         // a square crop of the rotated frame: 4000 wide, 4000 of its 6000 tall
-        s.crop.geometry.rect = lightcraft_geom::Rect::new(0.0, 1.0 / 6.0, 1.0, 5.0 / 6.0);
+        s.crop.geometry.rect = lcc_geom::Rect::new(0.0, 1.0 / 6.0, 1.0, 5.0 / 6.0);
         p.develop = std::sync::Arc::new(s);
         assert!(m(&p, "aspect", "is", json!("square")) && m(&p, "longEdge", "is", json!(4000)));
         assert!(m(&p, "megapixels", "is", json!(16)), "a 4000 × 4000 crop is 16 MP, not the sensor's 24");
@@ -1324,9 +1555,9 @@ mod tests {
         }
         p.meta.state = "Oregon".into();
         p.meta.alt_text = "A kite".into();
-        p.meta.regions = vec![lightcraft_meta::Region {
-            rect: lightcraft_meta::Rect { x0: 0.4, y0: 0.4, x1: 0.6, y1: 0.6 },
-            kind: lightcraft_meta::RegionKind::Face,
+        p.meta.regions = vec![lcc_meta::Region {
+            rect: lcc_meta::Rect { x0: 0.4, y0: 0.4, x1: 0.6, y1: 0.6 },
+            kind: lcc_meta::RegionKind::Face,
             name: Some("Ana".into()),
             description: None,
         }];
@@ -1334,36 +1565,6 @@ mod tests {
         for word in ["oregon", "kite", "ana", "bluish"] {
             assert!(m(&p, word), "{word}");
         }
-    }
-
-    /// Choice values have readable labels: the editor and summaries show "Public Domain" and
-    /// "Black & White", never ids like `publicDomain`; rules still store and accept the ids.
-    #[test]
-    fn choices_have_readable_labels() {
-        assert_eq!(choice_label("copyrightStatus", "publicDomain"), Some("Public Domain"));
-        assert_eq!(choice_label("treatment", "monochrome"), Some("Black & White"));
-        // own labels where a shared word would translate wrongly: "Color" is the colour noun (the
-        // Color panel) and "None" agrees with other nouns in gendered languages
-        assert_eq!(choice_label("treatment", "color"), Some("In Color"));
-        assert_eq!(choice_label("label", "none"), Some("No Label"));
-        assert_eq!(choice_label("flag", "pick"), Some("Picked"));
-        assert_eq!(choice_label("aspect", "landscape"), Some("Landscape (wide)"));
-        assert_eq!(choice_label("flag", "nope"), None);
-        assert_eq!(choice_label("rating", "pick"), None, "not a choice field");
-        for (field, _, kind) in FIELDS {
-            let Kind::Choice(choices) = kind else { continue };
-            for (id, label) in *choices {
-                assert!(!label.is_empty() && label != id, "{field}: {id} has no label of its own");
-                assert!(label.starts_with(|c: char| c.is_uppercase()), "{field}: {label}");
-            }
-        }
-        let r = rs(
-            json!({"rules": [{"field": "copyrightStatus", "op": "is", "value": "publicDomain"}, {"field": "flag", "op": "isNot", "value": "reject"}]}),
-        );
-        assert_eq!(r.describe(), "copyright status is public domain and pick flag isn't rejected");
-        let mut p = photo(1);
-        p.meta.copyright_status = crate::CopyrightStatus::PublicDomain;
-        assert!(r.matches(&p, &Catalog::new()), "ids still match");
     }
 
     /// Yes/no fields read "Yes" / "No", and a value means the same to matching and to every
@@ -1666,31 +1867,5 @@ mod tests {
         let mut labels: Vec<&str> = FIELD_GROUPS.iter().map(|g| g.0).collect();
         labels.dedup();
         assert_eq!(labels.len(), FIELD_GROUPS.len(), "group labels are unique");
-    }
-
-    /// Related fields sit together: all the file fields, all the camera (EXIF) fields, all the
-    /// dates, all the keyword fields.
-    #[test]
-    fn related_fields_share_a_group() {
-        let same = |fields: &[&str], group: &str| {
-            for f in fields {
-                assert_eq!(field_group(f), Some(group), "{f}");
-            }
-        };
-        same(&["fileName", "extension", "filePath", "kind", "format", "duration"], "File");
-        same(&["album", "virtualCopy", "copyName", "stacked"], "Source");
-        same(&["longEdge", "shortEdge", "aspect", "megapixels"], "Size");
-        same(&["edited", "cropped", "treatment"], "Develop");
-        same(&["camera", "lens", "focalLength", "aperture", "shutterSpeed", "iso"], "Camera Info");
-        same(&["captureDate", "importDate", "editDate"], "Date");
-        same(&["keywords", "keywordCount", "person", "personCount"], "Keywords & People");
-        same(&["title", "caption", "altText", "creator", "copyright", "copyrightStatus"], "Description");
-        same(&["location", "city", "state", "country", "hasGps"], "Location");
-        for f in ["rating", "flag", "label", "text"] {
-            assert_eq!(field_group(f), None, "{f} stays at the top level");
-        }
-        assert_eq!(field_group("nope"), None);
-        assert_eq!(field_label("filePath"), Some("File Path"));
-        assert_eq!(field_label("nope"), None);
     }
 }

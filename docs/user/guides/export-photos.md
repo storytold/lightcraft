@@ -19,7 +19,7 @@ Select the photos, then choose **File** > **Export…**. Pick a format, a size a
 8. Next to **Folder**, click **Choose…** and pick where the files go. **Subfolder** adds a folder inside it.
 9. Set **File name** to a template such as `{name}-{seq}`. Click **Tags** to see the tags you can insert.
 10. Set **If file exists** to **Add number**, **Overwrite** or **Skip**.
-11. On macOS, tick **Add to Apple Photos** to add the exported files to Photos as well. Type an **Album** name to put them in that album. The first time, macOS asks whether LightCraft may control Photos.
+11. On macOS, tick **Add to Apple Photos** to add the exported files to Photos as well. Type an **Album** name to put them in that album. The first time, macOS asks whether LightCraft Classic may control Photos.
 12. Click **OK**. The export shows its progress in the activity stack at the top left.
 
 If you did not choose a folder, the window stays open and shows an error, so your choices are not lost.

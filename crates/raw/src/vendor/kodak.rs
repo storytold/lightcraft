@@ -1,7 +1,7 @@
 //! Kodak DCS520C raw TIFF: the CFA sub-IFD holds one lossless JPEG (SOF3) stream of two components.
 //!
 //! Sources: TIFF 6.0 (container; `GrayResponseCurve` `0x123`; the CFA tags `CFARepeatPatternDim` and `CFAPattern`),
-//! ITU T.81 (lossless JPEG, process SOF3), LightCraft's own decoder in [`crate::ljpeg`], the file's `KodakIFD`
+//! ITU T.81 (lossless JPEG, process SOF3), the crate's own decoder in [`crate::ljpeg`], the file's `KodakIFD`
 //! (`0x8290`, a plain IFD with absolute offsets) and our own black-box analysis of the one CC0 sample from
 //! raw.pixls.us (2573, DCS520C; every number below was measured on it):
 //!
@@ -24,9 +24,9 @@
 //!   each other) the raw G/R is 0.94 and G/B 1.96; `0x848` (1913, 1834, 921) gives 0.96 and 1.99, the others
 //!   0.77..1.25 and 2.08..2.96, so its green over red and over blue are the gains.
 use crate::{BlackLevel, Cfa, ColorData, Mode, OpcodeLists, RawData, RawError, RawFormat, RawImage, Rect, Result, ljpeg};
-use lightcraft_geom::Orientation;
-use lightcraft_tiff::image::chunk_bytes;
-use lightcraft_tiff::{Ifd, Tiff, tags as t};
+use lcc_geom::Orientation;
+use lcc_tiff::image::chunk_bytes;
+use lcc_tiff::{Ifd, Tiff, tags as t};
 
 /// The vendor IFD pointer (`KodakIFD`).
 const KODAK_IFD: u16 = 0x8290;
@@ -96,7 +96,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         .and_then(|k| k.f64s(NEUTRAL))
         .filter(|v| v.len() == 3 && v.iter().all(|&x| x > 0.0))
         .map(|v| [(v[1] / v[0]) as f32, 1.0, (v[1] / v[2]) as f32]);
-    let mut metadata = lightcraft_meta::from_tiff(&tiff);
+    let mut metadata = lcc_meta::from_tiff(&tiff);
     metadata.width = Some(w as u32);
     metadata.height = Some(h as u32);
     let img = RawImage {
@@ -127,8 +127,8 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
 /// The vendor IFD (`KodakIFD`): a plain IFD with absolute value offsets.
 fn kodak_ifd(bytes: &[u8], tiff: &Tiff, ifd0: &Ifd) -> Option<Ifd> {
     let off = u64::from(ifd0.u32(KODAK_IFD)?);
-    let opts = lightcraft_tiff::ParseOptions { max_ifds: 4, max_depth: 1, follow_children: false, ..Default::default() };
-    lightcraft_tiff::parse_ifd_at(bytes, off, tiff.order, 0, false, &opts).ok().map(|(i, _)| i)
+    let opts = lcc_tiff::ParseOptions { max_ifds: 4, max_depth: 1, follow_children: false, ..Default::default() };
+    lcc_tiff::parse_ifd_at(bytes, off, tiff.order, 0, false, &opts).ok().map(|(i, _)| i)
 }
 
 /// Black level per CFA position (the mosaic's first sample is position 0): the value below which only 0.01% of that
@@ -167,7 +167,7 @@ fn measured_black(d: &[u16], w: usize) -> BlackLevel {
 mod tests {
     use super::*;
     use crate::{decode, probe, probe_info};
-    use lightcraft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value};
+    use lcc_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value};
 
     const W: usize = 16;
     const H: usize = 8;

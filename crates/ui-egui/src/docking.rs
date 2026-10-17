@@ -283,7 +283,7 @@ impl Workspace {
     }
 }
 
-fn from_ui(app: &crate::LightcraftApp) -> Workspace {
+fn from_ui(app: &crate::LccApp) -> Workspace {
     let mut workspace = Workspace::default();
     if let Some(Node::Split { size, second, .. }) = workspace.layout.root.as_mut() {
         *size = SplitSize::FixedFirst(crate::state::LEFT_WIDTH.clamp(app.ui.left_width));
@@ -294,13 +294,13 @@ fn from_ui(app: &crate::LightcraftApp) -> Workspace {
     workspace
 }
 
-fn sync(workspace: &mut Workspace, app: &crate::LightcraftApp) -> Result<(), String> {
+fn sync(workspace: &mut Workspace, app: &crate::LccApp) -> Result<(), String> {
     workspace.set_visible(Panel::Library, app.ui.left_panel)?;
     workspace.set_visible(Panel::Tools, app.ui.right != crate::state::RightPanel::None)?;
     workspace.set_visible(Panel::Presets, app.ui.presets)
 }
 
-fn publish_visibility(app: &mut crate::LightcraftApp, workspace: &Workspace) {
+fn publish_visibility(app: &mut crate::LccApp, workspace: &Workspace) {
     app.ui.left_panel = workspace.layout.contains(&Panel::Library);
     app.ui.presets = workspace.layout.contains(&Panel::Presets);
     if !workspace.layout.contains(&Panel::Tools) {
@@ -327,11 +327,11 @@ fn publish_visibility(app: &mut crate::LightcraftApp, workspace: &Workspace) {
     }
 }
 
-pub(crate) fn exposed(app: &crate::LightcraftApp, panel: Panel) -> bool {
+pub(crate) fn exposed(app: &crate::LccApp, panel: Panel) -> bool {
     app.ui.docking.as_ref().is_none_or(|workspace| workspace.exposed(panel))
 }
 
-pub(crate) fn reveal_command(app: &mut crate::LightcraftApp, id: &str) -> Result<(), String> {
+pub(crate) fn reveal_command(app: &mut crate::LccApp, id: &str) -> Result<(), String> {
     let panel = if id == "panel.presets" && app.ui.presets {
         Some(Panel::Presets)
     } else if (id.starts_with("panel.") && id != "panel.close" && id != "panel.presets"
@@ -360,26 +360,26 @@ pub(crate) fn drop_target(ui: &egui::Ui, rect: egui::Rect, pointer: Option<egui:
 
 /// Explicit host commands replace the snapshot before rendering. Cancel only their old
 /// gestures; actions returned by the renderer must keep continuous resizing alive.
-pub(crate) fn cancel_replaced_gesture(app: &crate::LightcraftApp, workspace: Option<&Workspace>) {
+pub(crate) fn cancel_replaced_gesture(app: &crate::LccApp, workspace: Option<&Workspace>) {
     let replaced = match (app.ui.docking.as_ref(), workspace) {
         (Some(old), Some(next)) => old.layout != next.layout || old.hidden != next.hidden,
         (None, None) => false,
         _ => true,
     };
     if replaced && let Some(ctx) = &app.tasks.repaint {
-        craft_ui::docking::cancel_drag::<Panel>(ctx, egui::Id::new("lightcraft-docking"));
+        craft_ui::docking::cancel_drag::<Panel>(ctx, egui::Id::new("app-docking"));
     }
 }
 
-pub fn command(app: &mut crate::LightcraftApp, reset: bool, params: &Value) -> Result<Value, String> {
+pub fn command(app: &mut crate::LccApp, reset: bool, params: &Value) -> Result<Value, String> {
     command_impl(app, reset, params, false)
 }
 
-fn command_impl(app: &mut crate::LightcraftApp, reset: bool, params: &Value, renderer_action: bool) -> Result<Value, String> {
+fn command_impl(app: &mut crate::LccApp, reset: bool, params: &Value, renderer_action: bool) -> Result<Value, String> {
     let mut workspace = app.ui.docking.clone().unwrap_or_else(|| from_ui(app));
     if reset {
         workspace = Workspace::default();
-        // The usual LightCraft starting workspace shows its current tool beside the photo.
+        // The usual starting workspace shows its current tool beside the photo.
         workspace.set_visible(Panel::Library, false)?;
         workspace.set_visible(Panel::Presets, false)?;
     } else {
@@ -394,7 +394,7 @@ fn command_impl(app: &mut crate::LightcraftApp, reset: bool, params: &Value, ren
     Ok(json!({"docking": app.ui.docking}))
 }
 
-pub fn show(app: &mut crate::LightcraftApp, ui: &mut egui::Ui) {
+pub fn show(app: &mut crate::LccApp, ui: &mut egui::Ui) {
     let t = crate::theme::Tokens::get(ui.ctx());
     let mut workspace = app.ui.docking.clone().unwrap_or_else(|| from_ui(app));
     if let Err(error) = workspace.validate().and_then(|()| sync(&mut workspace, app)) {
@@ -424,7 +424,7 @@ pub fn show(app: &mut crate::LightcraftApp, ui: &mut egui::Ui) {
     style.font = t.font(12.0);
     // Tool and preset panels publish hover previews before the photo consumes them.
     let mut canvas = None;
-    let output = DockArea::new(egui::Id::new("lightcraft-docking")).show_with_limits(
+    let output = DockArea::new(egui::Id::new("app-docking")).show_with_limits(
         ui,
         &workspace.layout,
         &style,
@@ -443,7 +443,7 @@ pub fn show(app: &mut crate::LightcraftApp, ui: &mut egui::Ui) {
                 crate::widgets::register(ui.ctx(), "panel:right_panel", ui.max_rect());
                 crate::panels::right::show(app, ui);
             }
-            Panel::Presets => crate::panels::presets::show(app, ui),
+            Panel::Presets => crate::panels::presets::show(app, ui, crate::module::DEVELOP_LEFT, false),
         },
     );
     if let Some(mut canvas) = canvas {
@@ -473,7 +473,7 @@ pub fn show(app: &mut crate::LightcraftApp, ui: &mut egui::Ui) {
     let _ = sync(&mut workspace, app);
     let stale = workspace.layout != rendered.layout || workspace.hidden != rendered.hidden;
     if stale {
-        craft_ui::docking::cancel_drag::<Panel>(ui.ctx(), egui::Id::new("lightcraft-docking"));
+        craft_ui::docking::cancel_drag::<Panel>(ui.ctx(), egui::Id::new("app-docking"));
     }
     publish_visibility(app, &workspace);
     app.ui.docking = Some(workspace);
@@ -565,8 +565,8 @@ fn panel_limits(panel: &Panel) -> PanelLimits {
 mod tests {
     use super::*;
 
-    fn app_with_widths() -> crate::LightcraftApp {
-        let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::new(), crate::Services::default());
+    fn app_with_widths() -> crate::LccApp {
+        let mut app = crate::LccApp::new(lcc_engine::Session::new(), crate::Services::default());
         app.ui.left_width = 333.0;
         app.ui.right_width = 410.0;
         app

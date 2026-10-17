@@ -1,6 +1,6 @@
 //! Lossy DNG (compression 34892) round trip: write, decode, develop, compare with the source.
 
-use lightcraft_raw::{
+use lcc_raw::{
     BlackLevel, Cfa, ColorData, DngCompression, DngWriteOptions, Mat3, Method, OpcodeLists, Orientation, RawData, RawFormat, RawImage, Rect,
 };
 
@@ -44,14 +44,14 @@ fn mosaic(w: usize, h: usize) -> RawImage {
 
 fn lossy(raw: &RawImage, long_edge: Option<u32>) -> Vec<u8> {
     let opts = DngWriteOptions { compression: DngCompression::LossyJpeg { tile: 32, quality: 95, long_edge }, ..Default::default() };
-    lightcraft_raw::write_dng(raw, &opts).unwrap()
+    lcc_raw::write_dng(raw, &opts).unwrap()
 }
 
 #[test]
 fn lossy_dng_round_trips_close_to_the_source() {
     let raw = mosaic(80, 56);
     let bytes = lossy(&raw, None);
-    let back = lightcraft_raw::decode(&bytes).unwrap();
+    let back = lcc_raw::decode(&bytes).unwrap();
     assert_eq!((back.width, back.height, back.cpp, back.cfa.is_none()), (76, 52, 3, true), "demosaiced, default crop applied");
     assert!(back.linearized);
     assert_eq!(back.orientation, raw.orientation);
@@ -76,11 +76,11 @@ fn lossy_dng_round_trips_close_to_the_source() {
 fn lossy_dng_scales_to_the_long_edge_and_is_smaller() {
     let raw = mosaic(160, 96);
     let small = lossy(&raw, Some(78));
-    let back = lightcraft_raw::decode(&small).unwrap();
+    let back = lcc_raw::decode(&small).unwrap();
     assert_eq!(back.width.max(back.height), 78);
     assert_eq!(back.width, 78);
     assert!(back.height == 46 || back.height == 47, "{}", back.height);
-    let full = lightcraft_raw::write_dng(&raw, &DngWriteOptions { compression: DngCompression::Uncompressed, ..Default::default() }).unwrap();
+    let full = lcc_raw::write_dng(&raw, &DngWriteOptions { compression: DngCompression::Uncompressed, ..Default::default() }).unwrap();
     assert!(small.len() < full.len() / 2, "{} vs {}", small.len(), full.len());
 }
 
@@ -90,7 +90,7 @@ fn lossy_dng_of_linear_data_and_extreme_values() {
     let (w, h) = (20usize, 12usize);
     let data: Vec<f32> = (0..w * h * 3).map(|i| [2.0, -1.0, f32::NAN, 0.5, f32::INFINITY][i % 5]).collect();
     let raw = RawImage { cpp: 3, cfa: None, data: RawData::F32(data), white: vec![1.0], black: BlackLevel::uniform(0.0), ..mosaic(w, h) };
-    let back = lightcraft_raw::decode(&lossy(&raw, Some(4))).unwrap();
+    let back = lcc_raw::decode(&lossy(&raw, Some(4))).unwrap();
     assert_eq!(back.width.max(back.height), 4);
     let rgb = back.develop(Method::Bilinear).unwrap();
     assert!(rgb.data.iter().flatten().all(|v| v.is_finite() && (0.0..=1.0).contains(v)));

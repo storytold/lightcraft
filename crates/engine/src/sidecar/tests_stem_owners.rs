@@ -3,7 +3,7 @@
 //! A library can hold millions of photos; a sidecar that is written for one of them, or a folder
 //! that is synchronized, must not cost a table of them all.
 use super::*;
-use lightcraft_catalog::{Catalog, Op, Photo, Source};
+use lcc_catalog::{Catalog, Op, Photo, Source};
 
 /// Paths that try the key: case in folders, names and endings, no ending, a dot file, endings
 /// inside folder names, non-ASCII letters (one that lower-cases to ASCII: the Kelvin sign).

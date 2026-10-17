@@ -4,7 +4,7 @@
 
 use serde_json::json;
 
-use crate::{LightcraftApp, Services};
+use crate::{LccApp, Services};
 
 #[test]
 fn opening_another_library_drops_the_old_librarys_cached_panels() {
@@ -15,13 +15,13 @@ fn opening_another_library_drops_the_old_librarys_cached_panels() {
     std::fs::create_dir_all(&b).unwrap();
 
     // library A with photos, reopened from disk (as at launch)
-    let mut session = lightcraft_engine::Session::new().with_fs();
+    let mut session = lcc_engine::Session::new().with_fs();
     session.open_library(&a, true).unwrap();
     session.close_library().unwrap();
     session.open_library(&a, false).unwrap();
     assert!(!session.catalog.is_empty());
 
-    let mut app = LightcraftApp::new(session, Services::default());
+    let mut app = LccApp::new(session, Services::default());
     let (cat, caches) = (&app.session.catalog, &mut app.caches);
     assert!(caches.counts(cat).total > 0);
     assert!(!caches.keyword_tree(cat).is_empty());
@@ -49,10 +49,10 @@ fn temp(tag: &str) -> std::path::PathBuf {
     dir
 }
 
-fn app_in(dir: &std::path::Path) -> LightcraftApp {
-    let mut session = lightcraft_engine::Session::new().with_fs();
+fn app_in(dir: &std::path::Path) -> LccApp {
+    let mut session = lcc_engine::Session::new().with_fs();
     session.open_library(dir.join("first"), false).unwrap();
-    LightcraftApp::new(session, Services::default())
+    LccApp::new(session, Services::default())
 }
 
 #[test]
@@ -75,7 +75,7 @@ fn switching_libraries_dismisses_the_previous_lightroom_result() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
-fn recent_submenu(app: &LightcraftApp) -> Vec<crate::menubar::MenuNode> {
+fn recent_submenu(app: &LccApp) -> Vec<crate::menubar::MenuNode> {
     use crate::menubar::MenuNode;
     let bar = crate::menubar::menu_bar(app);
     let file = &bar.iter().find(|(t, _)| t == "File").unwrap().1;
@@ -92,14 +92,14 @@ fn new_library_creates_opens_and_is_remembered_and_named() {
     let dir = temp("newlib");
     let mut app = app_in(&dir);
     app.library_changed(&egui::Context::default());
-    assert_eq!(app.window_title(), "LightCraft — first");
+    assert_eq!(app.window_title(), format!("{} — first", lcc_brand::DISPLAY_NAME));
 
     let r = app.run("app.newLibrary", json!({"path": dir.to_string_lossy(), "name": "Client A"})).unwrap();
     assert_eq!(r["name"], "Client A");
     let a = dir.join("Client A");
     assert_eq!(app.session.library.as_ref().unwrap().dir, a);
-    assert!(lightcraft_engine::library::is_library(&a), "the catalog is written");
-    assert_eq!(app.window_title(), "LightCraft — Client A");
+    assert!(lcc_engine::library::is_library(&a), "the catalog is written");
+    assert_eq!(app.window_title(), format!("{} — Client A", lcc_brand::DISPLAY_NAME));
     assert_eq!(app.ui.settings.library_path, a.to_string_lossy());
 
     // a second New Library at the same place is refused and the current one stays open
@@ -130,7 +130,7 @@ fn new_library_creates_opens_and_is_remembered_and_named() {
         })
         .expect("first in Open Recent Library");
     app.run("app.openLibrary", first).unwrap();
-    assert_eq!(app.window_title(), "LightCraft — first");
+    assert_eq!(app.window_title(), format!("{} — first", lcc_brand::DISPLAY_NAME));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -145,7 +145,7 @@ fn new_library_from_the_menu_asks_for_a_name_then_a_location() {
     let Some(crate::state::Dialog::TextPrompt { value, command, key, .. }) = app.ui.dialog.as_mut() else {
         panic!("no name prompt: {:?}", app.ui.dialog)
     };
-    assert_eq!(value, lightcraft_engine::library::DEFAULT_NAME);
+    assert_eq!(value, lcc_engine::library::DEFAULT_NAME);
     assert_eq!((command.as_str(), key.as_str()), ("app.newLibrary", "name"));
     *value = "Wedding".into();
     // what the dialog's OK runs
@@ -193,7 +193,7 @@ fn switching_to_a_locked_library_keeps_the_current_one_open() {
     app.run("app.openLibrary", json!({"path": dir.join("first").to_string_lossy()})).unwrap();
     // "another program" holds Other's lock
     let other = dir.join("Other");
-    let held = lightcraft_catalog::LibraryLock::acquire(&other, "someone else").unwrap();
+    let held = lcc_catalog::LibraryLock::acquire(&other, "someone else").unwrap();
     let e = app.run("app.openLibrary", json!({"path": other.to_string_lossy()})).unwrap_err();
     assert!(e.contains("already open"), "{e}");
     assert!(app.session.library.as_ref().unwrap().dir.ends_with("first"), "the current library stays");

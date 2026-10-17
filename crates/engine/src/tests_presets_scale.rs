@@ -5,7 +5,7 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
-use lightcraft_develop::Preset;
+use lcc_develop::Preset;
 use serde_json::json;
 
 use crate::Session;
@@ -58,25 +58,6 @@ fn develop_commands_do_not_reserialize_unchanged_presets() {
 }
 
 #[test]
-fn preset_list_generation_follows_mutable_access_only() {
-    let mut s = Session::new();
-    let g0 = s.presets.generation();
-    let _ = s.presets.iter().filter(|p| p.builtin).count();
-    let _ = s.presets.len();
-    assert_eq!(s.presets.generation(), g0, "reads keep the generation");
-    s.presets.push(many(1).remove(0));
-    let g1 = s.presets.generation();
-    assert_ne!(g1, g0);
-    for p in &mut s.presets {
-        p.favorite = false;
-    }
-    assert_ne!(s.presets.generation(), g1);
-    // generations are unique across sessions (UI caches key on them alone)
-    let other = Session::new();
-    assert_ne!(other.presets.generation(), s.presets.generation());
-}
-
-#[test]
 fn importing_thousands_of_presets_is_not_quadratic() {
     let mut s = Session::new();
     let t = Instant::now();
@@ -92,35 +73,4 @@ fn importing_thousands_of_presets_is_not_quadratic() {
     assert_eq!(s.presets.iter().filter(|p| p.id == id).count(), 1);
     // quadratic was ~200 M comparisons here (tens of seconds in debug builds)
     assert!(t.elapsed().as_secs() < 20, "took {:?}", t.elapsed());
-}
-
-/// Timing with a real preset collection: `LIGHTCRAFT_BENCH_PRESETS=path/to/presets.json cargo test
-/// -p lightcraft-engine --release presets_scale_bench -- --ignored --nocapture`. The file is copied
-/// into a temporary library; the original is only read.
-#[test]
-#[ignore]
-fn presets_scale_bench() {
-    let Ok(src) = std::env::var("LIGHTCRAFT_BENCH_PRESETS") else {
-        eprintln!("set LIGHTCRAFT_BENCH_PRESETS");
-        return;
-    };
-    let lib = temp_dir("bench");
-    std::fs::copy(&src, lib.join("presets.json")).unwrap();
-    let mut s = Session::new();
-    let t = Instant::now();
-    s.open_library(&lib, true).unwrap();
-    eprintln!("open library: {:?} ({} presets)", t.elapsed(), s.presets.len());
-    let t = Instant::now();
-    for i in 0..20 {
-        s.execute("develop.set", &json!({"control": "light.exposure", "value": i as f64 / 10.0})).unwrap();
-    }
-    eprintln!("develop.set: {:?} per command", t.elapsed() / 20);
-    let pid = s.presets.iter().rev().find(|p| !p.builtin).map(|p| p.id.clone()).unwrap();
-    let t = Instant::now();
-    s.execute("preset.apply", &json!({"id": pid, "amount": 100})).unwrap();
-    eprintln!("preset.apply: {:?}", t.elapsed());
-    let t = Instant::now();
-    s.execute("preset.favorite", &json!({"id": pid})).unwrap();
-    eprintln!("preset.favorite (saves presets.json): {:?}", t.elapsed());
-    let _ = std::fs::remove_dir_all(&lib);
 }

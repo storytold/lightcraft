@@ -28,8 +28,10 @@
 //!   (last), the bit order and the pixel order were fixed by measurement on the CC0 files 2878 (E-300), 3540 (E-500)
 //!   and 3624 (E-330), as was the sensor-origin RGGB anchoring (the maker-note crop offsets are odd). The E-M5 Mark II
 //!   and PEN-F files were only checked for smoothness, not for CFA anchoring or black level.
-//! - Olympus's compressed ORF (most interchangeable-lens bodies since ~2008) is not decoded: no permissively
-//!   licensed description exists. It reports [`RawError::Unsupported`]; the embedded preview still works.
+//! - Olympus's compressed ORF (most bodies since ~2008): IFD0 says uncompressed, 12 bits, one strip, but the strip
+//!   holds fewer than 12 bits per sample. See [`decode_compressed`]: a per-sample adaptive Golomb-style code with a
+//!   median-edge predictor over same-colour neighbours (the method of Olympus patents US7333035B2 / US7715639B2;
+//!   constants and bit layout established with existing open decoders read as a reference, no code copied).
 //! - The colour-filter layout is the file's Exif `CFAPattern`: GRBG on the E-1 and E-400, RGGB on the XZ-2, where
 //!   the colours of the decoded mosaic follow the embedded JPEG best with exactly that layout
 //!   (`corpus_orf_cfa_patterns`). The samples' active areas start at even offsets, so they can't tell whether the
@@ -40,10 +42,10 @@ use super::{cfa_from_exif, white_from_data};
 use crate::tiffraw::{Packing, read_image};
 use crate::unpack::unpack_msb;
 use crate::{BlackLevel, Cfa, ColorData, Mode, OpcodeLists, RawData, RawError, RawFormat, RawImage, Rect, Result};
-use lightcraft_geom::Orientation;
-use lightcraft_tiff::image::chunk_bytes;
-use lightcraft_tiff::makernote::MakerNote;
-use lightcraft_tiff::{Ifd, Tiff, Value, makernote, tags as t};
+use lcc_geom::Orientation;
+use lcc_tiff::image::chunk_bytes;
+use lcc_tiff::makernote::MakerNote;
+use lcc_tiff::{Ifd, Tiff, Value, makernote, tags as t};
 use rayon::prelude::*;
 
 pub(crate) const CAMERA_SETTINGS: u16 = 0x2020;
@@ -73,8 +75,8 @@ pub(crate) fn sub_ifd(bytes: &[u8], mn: &MakerNote, tag: u16) -> Option<Ifd> {
         Value::Undefined(_) | Value::Byte(_) => e.offset,
         _ => mn.base.checked_add(mn.ifd.u64(tag)?)?,
     };
-    let opts = lightcraft_tiff::ParseOptions { max_ifds: 4, max_depth: 1, follow_children: false, ..Default::default() };
-    lightcraft_tiff::parse_ifd_at(bytes, at, mn.order, mn.base, false, &opts).ok().map(|(i, _)| i)
+    let opts = lcc_tiff::ParseOptions { max_ifds: 4, max_depth: 1, follow_children: false, ..Default::default() };
+    lcc_tiff::parse_ifd_at(bytes, at, mn.order, mn.base, false, &opts).ok().map(|(i, _)| i)
 }
 
 /// Black level of a body without ImageProcessing: the main note's `0x1012` BlackLevel (the mean of its four values)
@@ -261,8 +263,12 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
             Vec::new()
         };
         (RawData::U16(d), 12)
+    } else if matches!(info.bits(), 12 | 16) && chunks.len() == 1 && info.samples_per_pixel == 1 && total * 8 < (n as u64) * 12 {
+        let src = chunk_bytes(bytes, &chunks[0]).ok_or_else(|| RawError::Corrupt("ORF strip outside file".into()))?;
+        let d = if mode == Mode::Full || stated.is_none() { decode_compressed(src, w, h)? } else { Vec::new() };
+        (RawData::U16(d), 12)
     } else {
-        return Err(RawError::Unsupported("Olympus compressed ORF".into()));
+        return Err(RawError::Unsupported("Olympus ORF layout".into()));
     };
     let RawData::U16(ref mut samples) = data else { return Err(RawError::Unsupported("float ORF".into())) };
     let bits = if bits == 16 && samples.iter().step_by(7).filter(|v| *v & 15 != 0).count() * 700 <= n {
@@ -315,7 +321,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
             Some([(g(MN_WB_RED)? / 256.0) as f32, 1.0, (g(MN_WB_BLUE)? / 256.0) as f32])
         });
     let white = white_from_data(samples, bits);
-    let mut metadata = lightcraft_meta::from_tiff(&tiff);
+    let mut metadata = lcc_meta::from_tiff(&tiff);
     metadata.width = Some(active.width as u32);
     metadata.height = Some(active.height as u32);
     let img = RawImage {
@@ -343,6 +349,140 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     Ok(img)
 }
 
+/// MSB-first bit reader over a byte slice; reading past the end yields zero bits (callers bound their loops by the
+/// image size, so a truncated stream decodes to a flat tail instead of failing mid-way).
+struct Bits<'a> {
+    src: &'a [u8],
+    pos: usize,
+    buf: u64,
+    have: u32,
+}
+
+impl<'a> Bits<'a> {
+    fn new(src: &'a [u8]) -> Self {
+        Self { src, pos: 0, buf: 0, have: 0 }
+    }
+    fn fill(&mut self) {
+        if self.have > 32 {
+            return;
+        }
+        if let Some(w) = self.src.get(self.pos..self.pos.saturating_add(4)).and_then(|s| <[u8; 4]>::try_from(s).ok()) {
+            self.buf |= u64::from(u32::from_be_bytes(w)) << (32 - self.have);
+            self.have += 32;
+            self.pos += 4;
+            return;
+        }
+        while self.have <= 56 {
+            let b = self.src.get(self.pos).copied().unwrap_or(0);
+            self.pos = self.pos.saturating_add(1);
+            self.buf |= u64::from(b) << (56 - self.have);
+            self.have += 8;
+        }
+    }
+    /// Reads `n` (≤ 32) bits.
+    fn get(&mut self, n: u32) -> u32 {
+        if n == 0 {
+            return 0;
+        }
+        self.fill();
+        let v = (self.buf >> (64 - n)) as u32;
+        self.buf <<= n;
+        self.have -= n;
+        v
+    }
+    /// Counts zero bits before the next one bit, at most `max` (the terminating one is consumed).
+    fn zeros(&mut self, max: u32) -> u32 {
+        self.fill();
+        let lz = self.buf.leading_zeros().min(max);
+        if lz < max {
+            self.buf <<= lz + 1;
+            self.have -= lz + 1;
+        } else {
+            self.buf <<= max;
+            self.have -= max;
+        }
+        lz
+    }
+    /// Past the end of the data by more than the reader's look-ahead.
+    fn overrun(&self) -> bool {
+        self.pos > self.src.len().saturating_add(8)
+    }
+}
+
+/// Low-order magnitude bits for the next sample of a colour column: more after a large magnitude, two extra while
+/// fewer than three small values have been seen in a row.
+fn magnitude_bits(st: &[i32; 3]) -> u32 {
+    let wide = if st[2] < 3 { 2 } else { 0 };
+    let mut nbits = 2 + wide;
+    while nbits < 16 && ((st[0] & 0xffff) >> (nbits + wide)) != 0 {
+        nbits += 1;
+    }
+    nbits
+}
+
+/// The prediction for sample (x, y) from already decoded same-colour neighbours.
+fn predict(out: &[u16], w: usize, x: usize, y: usize) -> i32 {
+    let at = |xx: usize, yy: usize| i32::from(out.get(yy * w + xx).copied().unwrap_or(0));
+    match (y >= 2, x >= 2) {
+        (false, false) => 0,
+        (false, true) => at(x - 2, y),
+        (true, false) => at(x, y - 2),
+        (true, true) => {
+            let (l, u, ul) = (at(x - 2, y), at(x, y - 2), at(x - 2, y - 2));
+            if (l < ul && ul < u) || (u < ul && ul < l) {
+                // a smooth ramp: the plane through the three, or their mean where it is nearly flat
+                if (l - ul).abs() > 32 || (u - ul).abs() > 32 { l + u - ul } else { (l + u) >> 1 }
+            } else if (l - ul).abs() > (u - ul).abs() {
+                l
+            } else {
+                u
+            }
+        }
+    }
+}
+
+/// Decodes the Olympus compressed 12-bit stream: a 7-byte header, then one MSB-first bit stream for the whole
+/// image. Each sample codes a residual against a prediction from the same-colour neighbours two columns left, two
+/// rows up and diagonally (median-edge detector, with a mean in flat areas). The residual is `sign`, two raw low
+/// bits, and a magnitude whose bit count adapts per colour column (even/odd) from the previous magnitude, a running
+/// average and a counter of small values; all three reset at each row.
+pub(crate) fn decode_compressed(src: &[u8], w: usize, h: usize) -> Result<Vec<u16>> {
+    let n = w.checked_mul(h).ok_or(RawError::Limit("image too large"))?;
+    let stream = src.get(7..).ok_or_else(|| RawError::Corrupt("ORF compressed strip too short".into()))?;
+    let mut out = vec![0u16; n];
+    let mut bits = Bits::new(stream);
+    for y in 0..h {
+        // [last magnitude, running average, small-value counter] for even and odd columns
+        let mut state = [[0i32; 3]; 2];
+        for x in 0..w {
+            let st = &mut state[x & 1];
+            let nbits = magnitude_bits(st);
+            let head = bits.get(3);
+            let low = (head & 3) as i32;
+            let negative = head & 4 != 0;
+            let mut high = bits.zeros(12);
+            if high == 12 {
+                high = bits.get(16 - nbits) >> 1;
+            }
+            let mag = ((high << nbits) | bits.get(nbits)) as i32;
+            st[0] = mag;
+            let diff = if negative { !mag } else { mag }.wrapping_add(st[1]);
+            st[1] = (diff.wrapping_mul(3).wrapping_add(st[1])) >> 5;
+            st[2] = if mag > 16 { 0 } else { st[2].saturating_add(1) };
+
+            let pred = predict(&out, w, x, y);
+            let v = pred.wrapping_add(diff.wrapping_mul(4) | low);
+            if let Some(o) = out.get_mut(y * w + x) {
+                *o = v.clamp(0, 4095) as u16;
+            }
+        }
+        if bits.overrun() {
+            return Err(RawError::Corrupt("ORF compressed data ends early".into()));
+        }
+    }
+    Ok(out)
+}
+
 /// The large preview JPEG referenced by CameraSettings `PreviewImageStart/Length` (relative to the note base).
 pub(crate) fn preview(bytes: &[u8]) -> Option<&[u8]> {
     let tiff = Tiff::parse(bytes).ok()?;
@@ -357,7 +497,7 @@ pub(crate) fn preview(bytes: &[u8]) -> Option<&[u8]> {
 mod tests {
     use super::*;
     use crate::vendor::EXIF_CFA_PATTERN;
-    use lightcraft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter};
+    use lcc_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter};
 
     fn orf(w: u32, h: u32, bits: u16, strip: Vec<u8>) -> Vec<u8> {
         orf_with(w, h, bits, strip, None)
@@ -711,7 +851,8 @@ mod tests {
         let le: Vec<u8> = be.chunks(4).flat_map(|c| [c[3], c[2], c[1], c[0]]).collect();
         let bytes = orf(w as u32, h as u32, 12, le);
         assert_eq!(crate::decode(&bytes).unwrap().data, RawData::U16(px));
-        let bytes = orf(w as u32, h as u32, 16, vec![0; 40]);
+        // between 12 and 16 bits per sample: no known layout
+        let bytes = orf(w as u32, h as u32, 16, vec![0; 112]);
         assert!(matches!(crate::decode(&bytes), Err(RawError::Unsupported(_))));
     }
 
@@ -779,6 +920,113 @@ mod tests {
         let bytes = orf_with(20, 4, 16, pack_blocks(&[5u16; 80]), Some(RGGB));
         for cut in [bytes.len() - 1, bytes.len() - 40, bytes.len() / 2, 100] {
             let _ = crate::decode(&bytes[..cut]);
+        }
+    }
+
+    /// Test encoder for the compressed stream: the inverse of `decode_compressed` (7 header bytes, then the bits).
+    fn encode_compressed(px: &[u16], w: usize, h: usize) -> Vec<u8> {
+        let mut bits: Vec<bool> = Vec::new();
+        let put = |v: u32, n: u32, bits: &mut Vec<bool>| (0..n).rev().for_each(|i| bits.push(v >> i & 1 != 0));
+        let mut out = vec![0u16; w * h];
+        for y in 0..h {
+            let mut state = [[0i32; 3]; 2];
+            for x in 0..w {
+                let st = &mut state[x & 1];
+                let nbits = magnitude_bits(st);
+                let r = i32::from(px[y * w + x]) - predict(&out, w, x, y);
+                let (low, diff) = (r & 3, r >> 2);
+                let d = diff - st[1];
+                let (negative, mag) = if d < 0 { (true, !d) } else { (false, d) };
+                put(u32::from(negative) << 2 | low as u32, 3, &mut bits);
+                let high = (mag as u32) >> nbits;
+                if high < 12 {
+                    put(1, high + 1, &mut bits);
+                } else {
+                    put(0, 12, &mut bits);
+                    put(high << 1, 16 - nbits, &mut bits);
+                }
+                put(mag as u32 & ((1 << nbits) - 1), nbits, &mut bits);
+                st[0] = mag;
+                st[1] = (diff * 3 + st[1]) >> 5;
+                st[2] = if mag > 16 { 0 } else { st[2] + 1 };
+                out[y * w + x] = px[y * w + x];
+            }
+        }
+        let mut bytes = vec![0u8; 7];
+        bytes.extend(bits.chunks(8).map(|c| c.iter().enumerate().fold(0u8, |b, (i, &v)| b | (u8::from(v) << (7 - i)))));
+        bytes
+    }
+
+    fn compressed_scene(w: usize, h: usize) -> Vec<u16> {
+        let mut seed = 0x2545_f491_u32;
+        (0..w * h)
+            .map(|i| {
+                seed ^= seed << 13;
+                seed ^= seed >> 17;
+                seed ^= seed << 5;
+                let (x, y) = (i % w, i / w);
+                // ramps, a hard edge, noise and a few clipped and black samples
+                let base = (x * 3000 / w + y * 900 / h) as u32 + if x > w / 2 { 400 } else { 0 };
+                let v = base + seed % 64;
+                if i % 97 == 0 {
+                    4095
+                } else if i % 89 == 0 {
+                    0
+                } else {
+                    v.min(4095) as u16
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn compressed_round_trip() {
+        for (w, h) in [(2, 1), (3, 3), (64, 40), (130, 17)] {
+            let px = compressed_scene(w, h);
+            let enc = encode_compressed(&px, w, h);
+            assert_eq!(decode_compressed(&enc, w, h).unwrap(), px, "{w}x{h}");
+        }
+    }
+
+    #[test]
+    fn compressed_orf_decodes_through_the_file() {
+        let (w, h) = (64, 40);
+        let px = compressed_scene(w, h);
+        let bytes = orf_with(w as u32, h as u32, 12, encode_compressed(&px, w, h), Some(RGGB));
+        let img = crate::decode(&bytes).unwrap();
+        let RawData::U16(d) = img.data else { panic!("not u16") };
+        assert_eq!(d, px);
+        assert_eq!(img.bits, 12);
+    }
+
+    #[test]
+    fn compressed_malformed_input_never_panics() {
+        let (w, h) = (64, 40);
+        let enc = encode_compressed(&compressed_scene(w, h), w, h);
+        // truncated streams: an error once well short, never a panic
+        assert!(decode_compressed(&enc[..enc.len() / 2], w, h).is_err());
+        for cut in [0, 3, 7, 8, enc.len() - 1] {
+            let _ = decode_compressed(&enc[..cut], w, h);
+        }
+        // random bytes and all-zero / all-one streams (long escape codes)
+        let mut seed = 7u32;
+        for len in [0usize, 9, 100, 4000, 20000] {
+            let junk: Vec<u8> = (0..len)
+                .map(|_| {
+                    seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12345);
+                    (seed >> 16) as u8
+                })
+                .collect();
+            let _ = decode_compressed(&junk, w, h);
+        }
+        let _ = decode_compressed(&vec![0u8; 50_000], w, h);
+        let _ = decode_compressed(&vec![0xffu8; 50_000], w, h);
+        // a whole file with a corrupt or truncated strip
+        let bytes = orf_with(w as u32, h as u32, 12, enc.iter().map(|b| b ^ 0x5a).collect(), Some(RGGB));
+        let _ = crate::decode(&bytes);
+        let good = orf_with(w as u32, h as u32, 12, enc, Some(RGGB));
+        for cut in [good.len() - 1, good.len() / 2, 50] {
+            let _ = crate::decode(&good[..cut]);
         }
     }
 }

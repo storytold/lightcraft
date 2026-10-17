@@ -5,8 +5,8 @@
 
 use std::cmp::Ordering;
 
-use lightcraft_catalog::PhotoId;
-use lightcraft_develop::{DevelopSettings, LocalAdjustments, Mask};
+use lcc_catalog::PhotoId;
+use lcc_develop::{DevelopSettings, LocalAdjustments, Mask};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
@@ -384,7 +384,7 @@ fn apply_effect(s: &mut Session, p: &Value) -> Result<Value> {
         // one undo step for every photo
         let mut ops: Vec<_> = s.develop_op(id, mine, &label).into_iter().collect();
         ops.extend(others.into_iter().filter_map(|(x, o)| s.develop_op(x, o, &label)));
-        s.commit(&label, lightcraft_catalog::Op::Batch { ops })?;
+        s.commit(&label, lcc_catalog::Op::Batch { ops })?;
     }
     // the next mask made with this tool starts with the effect
     if p.get("remember").and_then(Value::as_bool).unwrap_or(true) {

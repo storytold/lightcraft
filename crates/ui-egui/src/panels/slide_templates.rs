@@ -10,11 +10,11 @@
 //! Every action goes through a `slideshow.templates.*` command.
 
 use egui::{RichText, Sense, Stroke, vec2};
-use lightcraft_engine::slide_template::{PREVIOUS, SlideLook, Template};
+use lcc_engine::slide_template::{PREVIOUS, SlideLook, Template};
 use serde_json::json;
 
 use super::settings::{heading, hint};
-use crate::LightcraftApp;
+use crate::LccApp;
 use crate::text_field::TextField;
 use crate::theme::Tokens;
 use crate::widgets::register;
@@ -69,7 +69,7 @@ fn is_current(look: &SlideLook, now: &SlideLook) -> bool {
 }
 
 /// Run a template command; tell the user how it went.
-fn act(app: &mut LightcraftApp, ctx: &egui::Context, cmd: &str, p: serde_json::Value, done: impl FnOnce(&serde_json::Value) -> String) {
+fn act(app: &mut LccApp, ctx: &egui::Context, cmd: &str, p: serde_json::Value, done: impl FnOnce(&serde_json::Value) -> String) {
     match app.run(cmd, p) {
         Ok(r) => {
             let mut msg = done(&r);
@@ -85,13 +85,13 @@ fn act(app: &mut LightcraftApp, ctx: &egui::Context, cmd: &str, p: serde_json::V
     }
 }
 
-fn apply(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, name: &str) {
+fn apply(app: &mut LccApp, ctx: &egui::Context, id: &str, name: &str) {
     let name = name.to_string();
     act(app, ctx, "slideshow.templates.apply", json!({"id": id}), |_| crate::i18n::tr_format!("Applied {name}", name = name));
 }
 
 /// One template row (`template:{id}`): click applies, hover previews, right-click for its menu.
-fn template_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, tpl: &Template, current: bool, hovered: &mut Option<String>) {
+fn template_row(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, tpl: &Template, current: bool, hovered: &mut Option<String>) {
     let ctx = ui.ctx().clone();
     let name = shown_name(tpl);
     if let Some(Pending::Rename(id, mut text)) = pending(&ctx).filter(|p| matches!(p, Pending::Rename(id, _) if *id == tpl.id)) {
@@ -155,7 +155,7 @@ fn item(ui: &mut egui::Ui, id: &str, label: &str, enabled: bool) -> bool {
     r.clicked()
 }
 
-fn menu(app: &mut LightcraftApp, ui: &mut egui::Ui, tpl: &Template, name: &str) {
+fn menu(app: &mut LccApp, ui: &mut egui::Ui, tpl: &Template, name: &str) {
     let ctx = ui.ctx().clone();
     if item(ui, "slideshowTemplateApply", "Apply", true) {
         apply(app, &ctx, &tpl.id, name);
@@ -174,7 +174,7 @@ fn menu(app: &mut LightcraftApp, ui: &mut egui::Ui, tpl: &Template, name: &str) 
         }
     }
     if tpl.id != PREVIOUS && item(ui, "slideshowTemplateExport", "Export…", app.services.save_slideshow_template.is_some()) {
-        let file = format!("{}.json", lightcraft_engine::slide_template::file_stem(&tpl.name).unwrap_or_else(|| "Slideshow Template".into()));
+        let file = format!("{}.json", lcc_engine::slide_template::file_stem(&tpl.name).unwrap_or_else(|| "Slideshow Template".into()));
         if let Some(path) = app.services.save_slideshow_template.as_mut().and_then(|save| save(&file)) {
             act(app, &ctx, "slideshow.templates.export", json!({"id": tpl.id, "path": path}), |r| {
                 crate::i18n::tr_format!("Exported to {path}", path = r["path"].as_str().unwrap_or_default())
@@ -198,7 +198,7 @@ fn group(ui: &mut egui::Ui, t: &Tokens, text: &str) {
 }
 
 /// The Templates section.
-pub fn section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+pub fn section(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
     let ctx = ui.ctx().clone();
     heading(ui, t, "Templates");
     let listing = app.session.slide_templates();

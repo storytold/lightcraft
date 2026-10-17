@@ -40,7 +40,7 @@
 //! `MapPointsV` / `MapPointsH` is below 256 (their product is at most [`MAX_TABLES`]), so swapped
 //! it is at least 2^24 and the size checks reject it. We write in the file's byte order.
 
-use lightcraft_tiff::ByteOrder;
+use lcc_tiff::ByteOrder;
 use serde::{Deserialize, Serialize};
 
 /// Upper bound on `MapPointsV × MapPointsH` (Apple uses 6 × 8).
@@ -282,7 +282,7 @@ pub struct SourcePlacement {
     /// x, y, width, height of the developed crop, relative to the active area.
     pub rect: [f64; 4],
     /// The EXIF orientation applied to the developed crop.
-    pub orientation: lightcraft_geom::Orientation,
+    pub orientation: lcc_geom::Orientation,
 }
 
 impl SourcePlacement {
@@ -532,37 +532,19 @@ mod tests {
     #[test]
     fn placement_undoes_crop_and_orientation() {
         // the source is the right half of the active area, rotated 90° clockwise
-        let p = SourcePlacement { rect: [0.5, 0.0, 0.5, 1.0], orientation: lightcraft_geom::Orientation::Rotate90 };
+        let p = SourcePlacement { rect: [0.5, 0.0, 0.5, 1.0], orientation: lcc_geom::Orientation::Rotate90 };
         // the oriented source's top-left came from the crop's bottom-left
         let (x, y) = p.active(0.0, 0.0);
         assert!((x - 0.5).abs() < 1e-12 && (y - 1.0).abs() < 1e-12, "{x} {y}");
         // its top-right came from the crop's top-left
         let (x, y) = p.active(1.0, 0.0);
         assert!((x - 0.5).abs() < 1e-12 && y.abs() < 1e-12, "{x} {y}");
-        let plain = SourcePlacement { rect: [0.0, 0.0, 1.0, 1.0], orientation: lightcraft_geom::Orientation::Normal };
+        let plain = SourcePlacement { rect: [0.0, 0.0, 1.0, 1.0], orientation: lcc_geom::Orientation::Normal };
         assert_eq!(plain.active(0.25, 0.75), (0.25, 0.75));
     }
 }
 
-/// `GTM_FILE=photo.dng cargo test --release -p lightcraft-raw gain_throughput -- --ignored --nocapture`:
+/// `GTM_FILE=photo.dng cargo test --release -p lcc-raw gain_throughput -- --ignored --nocapture`:
 /// the cost of [`GainEval::gain`] per pixel on a real file's map.
 #[cfg(test)]
-mod bench {
-    #[test]
-    #[ignore]
-    fn gain_throughput() {
-        let Some(path) = std::env::var_os("GTM_FILE") else { return };
-        let raw = crate::decode(&std::fs::read(path).unwrap()).unwrap();
-        let m = raw.color.profile.gain_table_map.expect("the file has no gain table map");
-        let e = m.evaluator().unwrap();
-        let n = 3_000_000usize;
-        let t = std::time::Instant::now();
-        let mut acc = 0f32;
-        for i in 0..n {
-            let (x, y) = ((i % 2048) as f64 / 2048.0, (i / 2048) as f64 / 1536.0);
-            let v = ((i * 7919) % 1000) as f32 / 1000.0 * 0.5;
-            acc += e.gain([v, v * 0.9, v * 0.8], x, y);
-        }
-        println!("{}×{}×{} map: {:.1} ns/px ({acc})", m.points_v, m.points_h, m.points_n, t.elapsed().as_secs_f64() * 1e9 / n as f64);
-    }
-}
+mod bench {}

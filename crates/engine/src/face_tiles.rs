@@ -13,9 +13,9 @@
 //! needs its edits rendered, which the camera's display-referred JPEG can't take the way the raw
 //! does, so it keeps the full develop render.
 
-use lightcraft_geom::Rect;
-use lightcraft_raster::Rgba8;
-use lightcraft_raster::resample::{Filter, resize};
+use lcc_geom::Rect;
+use lcc_raster::Rgba8;
+use lcc_raster::resample::{Filter, resize};
 
 use crate::media::PreviewLoader;
 

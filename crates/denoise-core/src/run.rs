@@ -6,7 +6,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use lightcraft_raster::Rgb32f;
+use lcc_raster::Rgb32f;
 use rayon::prelude::*;
 
 use crate::bayer::{Layout, pack_tile};
@@ -126,7 +126,7 @@ pub fn denoise_bayer(
     let mut wsum = allocate(nx * ny, 0f32)?;
     let group = p.parallel.clamp(1, 4);
     let mut done = 0;
-    // where the time goes, printed under `LIGHTCRAFT_PROFILE`
+    // where the time goes, printed under `{ENV_PREFIX}_PROFILE`
     let (mut t_wait, mut t_total) = (std::time::Duration::ZERO, std::time::Duration::ZERO);
     let began = web_time::Instant::now();
 
@@ -210,7 +210,7 @@ pub fn denoise_bayer(
     if acc.iter().flatten().any(|v| !v.is_finite()) {
         return Err(Error::Model("numbers that are not finite after tile blending".into()));
     }
-    if std::env::var_os("LIGHTCRAFT_PROFILE").is_some() {
+    if lcc_brand::env_is_set("PROFILE") {
         eprintln!(
             "[denoise] {total} tiles, {} at once: tiles {:.0} ms (blending, {:.0} ms of it, overlaps the model), normalise {:.0} ms",
             group,

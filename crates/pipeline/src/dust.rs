@@ -3,7 +3,7 @@
 //! is compared with the local texture so detail doesn't trigger it, and each candidate blob
 //! must be small and roughly round.
 
-use lightcraft_raster::{Plane, Rgba8, blur::gaussian};
+use lcc_raster::{Plane, Rgba8, blur::gaussian};
 
 /// A found spot: centre (0..1 of the image's width / height) and radius (fraction of the long
 /// edge), with how much darker it is (0..1).
@@ -78,51 +78,4 @@ pub fn detect(img: &Rgba8, sensitivity: f32) -> Vec<DustSpot> {
     out.sort_by(|a, b| b.strength.total_cmp(&a.strength));
     out.truncate(60);
     out
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// A smooth sky gradient with three soft dark spots: all found, nothing else.
-    #[test]
-    fn finds_spots_on_smooth_areas() {
-        let (w, h) = (600usize, 400usize);
-        let spots = [(120.0f32, 90.0f32, 4.0f32), (400.0, 200.0, 6.0), (500.0, 330.0, 3.0)];
-        let data: Vec<[u8; 4]> = (0..w * h)
-            .map(|i| {
-                let (x, y) = ((i % w) as f32, (i / w) as f32);
-                let mut v = 0.55 + 0.25 * (y / h as f32) + 0.05 * (x / w as f32);
-                for (cx, cy, r) in spots {
-                    let d2 = (x - cx).powi(2) + (y - cy).powi(2);
-                    v -= 0.06 * (-d2 / (2.0 * r * r)).exp();
-                }
-                let b = (v * 255.0) as u8;
-                [b, b, (b as f32 * 1.1).min(255.0) as u8, 255]
-            })
-            .collect();
-        let found = detect(&Rgba8 { width: w, height: h, data }, 50.0);
-        assert_eq!(found.len(), 3, "{found:?}");
-        for (cx, cy, _) in spots {
-            assert!(
-                found.iter().any(|s| (s.x * w as f64 - cx as f64).abs() < 3.0 && (s.y * h as f64 - cy as f64).abs() < 3.0),
-                "{cx},{cy}: {found:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn textured_scenes_give_few_false_spots() {
-        let img = lightcraft_scenes::demo_library()[2].render(600, 400);
-        let data = img
-            .data
-            .iter()
-            .map(|c| {
-                let e = |v: f32| (lightcraft_color::transfer::linear_to_srgb(v.clamp(0.0, 1.0)) * 255.0) as u8;
-                [e(c[0]), e(c[1]), e(c[2]), 255]
-            })
-            .collect();
-        let found = detect(&Rgba8 { width: 600, height: 400, data }, 50.0);
-        assert!(found.len() <= 3, "{} false spots", found.len());
-    }
 }

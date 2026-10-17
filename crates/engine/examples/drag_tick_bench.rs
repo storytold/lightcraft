@@ -1,11 +1,11 @@
 //! UI-thread work one slider-drag tick costs outside the render: `develop.set` inside an
 //! interaction, the filmstrip's `visible()` after the catalog revision moved, and the settings
-//! hash the loupe takes every frame. `cargo run --release -p lightcraft-engine --example
+//! hash the loupe takes every frame. `cargo run --release -p lcc-engine --example
 //! drag_tick_bench -- [photos]` (default 20000).
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use lightcraft_catalog::{Op, Photo, PhotoId, Source};
-use lightcraft_engine::Session;
+use lcc_catalog::{Op, Photo, PhotoId, Source};
+use lcc_engine::Session;
 use serde_json::json;
 use std::time::Instant;
 

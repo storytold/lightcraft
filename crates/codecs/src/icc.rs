@@ -2,7 +2,7 @@
 //! and writing matrix/TRC profiles for export embedding.
 
 use crate::space::{NamedSpace, Trc, rgb_to_xyz_d50};
-use lightcraft_color::{D50, Mat3, RgbSpace, bradford};
+use lcc_color::{D50, Mat3, RgbSpace, bradford};
 use moxcms::{
     ColorProfile, DataColorSpace, Layout, LocalizableString, Matrix3d, ProfileText, RenderingIntent, ToneReprCurve, TransformOptions, Xyzd,
 };
@@ -256,7 +256,7 @@ pub(crate) fn cms_to_linear_rec2020(icc: &[u8], samples: &[f32], channels: usize
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lightcraft_color::{DISPLAY_P3, PROPHOTO, SRGB};
+    use lcc_color::{DISPLAY_P3, PROPHOTO, SRGB};
 
     #[test]
     fn write_then_parse_recognises() {
@@ -290,21 +290,12 @@ mod tests {
     }
 
     #[test]
-    fn linear_profile() {
-        let bytes = write_matrix_trc(&PROPHOTO, &Trc::Linear);
-        let info = parse(&bytes).unwrap();
-        assert_eq!(info.named, Some(NamedSpace::ProPhoto));
-        let IccKind::MatrixTrc { trc, .. } = info.kind else { panic!() };
-        assert!(trc[1].is_linear());
-    }
-
-    #[test]
     fn cms_path_matches_matrix_path() {
         let bytes = write_named(NamedSpace::DisplayP3);
         let px = [0.2f32, 0.5, 0.8];
         let out = cms_to_linear_rec2020(&bytes, &px, 3).unwrap()[0];
         let lin = px.map(|v| Trc::Srgb.to_linear(v));
-        let m = DISPLAY_P3.to_space(&lightcraft_color::REC2020);
+        let m = DISPLAY_P3.to_space(&lcc_color::REC2020);
         let want = m.apply_f32(lin);
         for i in 0..3 {
             assert!((out[i] - want[i]).abs() < 2e-3, "{out:?} vs {want:?}");

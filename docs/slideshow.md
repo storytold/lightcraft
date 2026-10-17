@@ -1,6 +1,6 @@
 # Slideshow
 
-LightCraft's slideshow follows Lightroom Classic's Slideshow module (no Adobe assets, templates or designs): the photos
+The app's slideshow follows Lightroom Classic's Slideshow module (no Adobe assets, templates or designs): the photos
 in view played full screen with a layout, overlays, intro and ending screens and fades, and exported as PDF, JPEG or
 video. There is no Slideshow module view yet: the settings live in Settings ▸ Slideshow (View ▸ Slideshow Options…)
 next to a live preview of the selected photo's slide, and View ▸ Slideshow (⌥⌘↩) plays.

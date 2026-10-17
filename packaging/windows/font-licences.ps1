@@ -2,7 +2,7 @@
 function Write-FontLicences([string] $Destination, [string] $InterLicence, [string] $CraftFontsDir) {
   if ($env:CRAFT_FONTS_REQUIRED -and -not $CraftFontsDir) { throw 'CRAFT_FONTS_REQUIRED is set but CRAFT_FONTS_DIR is missing' }
   $parts = [Collections.Generic.List[string]]::new()
-  $parts.Add("LightCraft font licences`n")
+  $parts.Add("$($Brand.display_name) font licences`n")
   $parts.Add([IO.File]::ReadAllText($InterLicence))
   if ($CraftFontsDir) {
     $manifest = Join-Path $CraftFontsDir 'fonts\manifest.txt'

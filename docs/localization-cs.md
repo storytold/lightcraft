@@ -3,7 +3,7 @@
 Češtinu (`cs`, English name **Czech**, native name **Čeština**) zapnete přes **Úpravy → Jazyk →
 Čeština** nebo **Nastavení → Obecné → Jazyk**. Změna platí ihned a ukládá se pro další spuštění.
 Příkaz je `app.language.czech`; řídicí kanál přijímá `ui.set {"language":"cs"}` i značky
-`cs-CZ` a `cs_CZ.UTF-8`. Pro běh bez okna lze nastavit `LIGHTCRAFT_LANGUAGE=cs`.
+`cs-CZ` a `cs_CZ.UTF-8`. Pro běh bez okna lze nastavit `<PREFIX>_LANGUAGE=cs`.
 
 Katalogy `crates/ui-egui/locales/cs.json` a `cs-formats.json` vznikly s pomocí AI pro @Losminek,
 po celých frázích podle významu anglických zdrojových řetězců. Výchozí seznam klíčů vycházel

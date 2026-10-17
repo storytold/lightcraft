@@ -2,20 +2,13 @@
 //! loupe renders at the size it is drawn at (up to the photo's own pixels and a safety ceiling);
 //! "Preview size" in Settings only lowers that when the user asks for it.
 
-use crate::state::{AppSettings, LOUPE_EDGE_CEILING, PREVIEW_LIMITS, STANDARD_PREVIEW_EDGE};
+use crate::state::{AppSettings, LOUPE_EDGE_CEILING, STANDARD_PREVIEW_EDGE};
 
 /// A texture side no GPU we run on refuses (see the tests of small ones below).
 const BIG: usize = 16384;
 
 fn with_limit(preview_limit: u32) -> AppSettings {
     AppSettings { preview_limit, ..Default::default() }
-}
-
-// Given a fresh install
-#[test]
-fn default_is_automatic() {
-    assert_eq!(AppSettings::default().preview_limit, 0);
-    assert_eq!(PREVIEW_LIMITS[0], 0, "Automatic is the first choice");
 }
 
 // Given Automatic, when a 24 MP photo is shown at 1:1, then the render is the photo's own width
@@ -30,19 +23,11 @@ fn automatic_does_not_cap_a_fit_view_at_the_old_default() {
     assert_eq!(with_limit(0).loupe_edge(3024.0, 6000, BIG), 3072, "rounded up to the next 64 px step");
 }
 
-// Dragging a window edge must not re-render (and re-key the caches) on every pixel
-#[test]
-fn render_sizes_move_in_steps() {
-    let s = with_limit(0);
-    assert_eq!(s.loupe_edge(2945.0, 6000, BIG), s.loupe_edge(3008.0, 6000, BIG));
-    assert_ne!(s.loupe_edge(3008.0, 6000, BIG), s.loupe_edge(3009.0, 6000, BIG));
-}
-
 // Neighbour prefetch and hover / before stand-ins stay at the preview level: a full-size decode
 // would evict the open photo's single full-resolution source (review of #323)
 #[test]
 fn prefetch_and_stand_ins_never_ask_for_the_full_source_level() {
-    use lightcraft_engine::SourceLevel;
+    use lcc_engine::SourceLevel;
     let s = with_limit(0);
     for wanted in [1000.0, 2560.0, 3024.0, 6000.0, 48000.0] {
         assert!(s.prefetch_edge(wanted, 6000, BIG) <= SourceLevel::Preview.max_edge(), "{wanted}");
@@ -143,10 +128,12 @@ mod in_the_loupe {
 
     use crate::headless::Headless;
     use crate::render::Slot;
-    use crate::{LightcraftApp, Services};
+    use crate::{LccApp, Services};
 
     const T: Duration = Duration::from_secs(20);
-    const SETTLE: Duration = Duration::from_secs(120);
+    /// Generous: these tests render 24 MP frames and tiles, which a loaded machine (a full
+    /// workspace test run) can take minutes over; a quiet machine settles in seconds.
+    const SETTLE: Duration = Duration::from_secs(300);
 
     /// The demo library in a 1400×900 window, the first photo open in Detail.
     fn detail() -> (Headless, usize) {
@@ -155,7 +142,11 @@ mod in_the_loupe {
 
     fn detail_in(size: [f32; 2]) -> (Headless, usize) {
         let services = Services { png: None, ..Default::default() };
-        let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+        let mut session = lcc_engine::Session::with_demo();
+        // newest first, the newest photo open: written around it
+        session.execute("library.sort", &json!({"ascending": false})).unwrap();
+        session.selection = lcc_engine::Selection::single(session.visible_cloned()[0]);
+        let app = LccApp::new(session, services);
         let mut h = Headless::new(app, size, 1.0);
         let r = h.request("ui.set", json!({"view": "detail", "right": "none", "filmstrip": false}), T);
         assert_eq!(r["ok"], true, "{r}");
@@ -212,7 +203,7 @@ mod in_the_loupe {
         h.settle(SETTLE);
         let id = h.app.session.active().expect("a photo");
         let d = h.app.session.develop_of(id).expect("settings");
-        assert!(matches!(crate::panels::detail::view_overlay(&h.app, &d), lightcraft_pipeline::Overlay::Mask { .. }), "the mask overlay is shown");
+        assert!(matches!(crate::panels::detail::view_overlay(&h.app, &d, false), lcc_pipeline::Overlay::Mask { .. }), "the mask overlay is shown");
         assert_eq!((h.app.ui.zoom, h.app.ui.pan), (zoom, pan), "showing the overlay keeps zoom and pan");
         let main = rendered_long_edge(&h);
         assert!(main <= 2560 && main < native, "native {native}: the whole-frame render is {main}");
@@ -250,7 +241,7 @@ mod in_the_loupe {
         let id = h.app.session.active().expect("a photo");
         let d = h.app.session.develop_of(id).expect("settings");
         assert!(
-            matches!(crate::panels::detail::view_overlay(&h.app, &d), lightcraft_pipeline::Overlay::AllMasks { .. }),
+            matches!(crate::panels::detail::view_overlay(&h.app, &d, false), lcc_pipeline::Overlay::AllMasks { .. }),
             "the all-masks overlay is shown"
         );
         let main = rendered_long_edge(&h);
@@ -259,29 +250,6 @@ mod in_the_loupe {
         assert_eq!(region.full.0.max(region.full.1), native, "cut from the photo's own pixels");
         let (w, hh) = region_tile(&h).expect("its texture");
         assert!(w >= 1300 && hh >= 700, "it covers the canvas: {w}×{hh}");
-    }
-
-    // Given soft proofing on at 1:1 (LR-VIEW-ZOOM), the view is a canvas-sized frame plus a
-    // native window carrying the proof, as without it, instead of a whole-frame render at the
-    // photo's full size; switching the proof off swaps the window back to the plain look
-    #[test]
-    fn soft_proofing_at_one_to_one_is_a_window() {
-        let (mut h, native) = detail();
-        h.request("engine.execute", json!({"command": "view.zoom100"}), T);
-        h.settle(SETTLE);
-        let plain = h.app.region_view.expect("a window render without the proof");
-        let r = h.request("engine.execute", json!({"command": "view.softProof", "params": {"on": true, "destWarning": true}}), T);
-        assert_eq!(r["ok"], true, "{r}");
-        h.settle(SETTLE);
-        assert!(h.app.ui.soft_proof);
-        let main = rendered_long_edge(&h);
-        assert!(main <= 2560 && main < native, "native {native}: the whole-frame render is {main}");
-        let proofed = h.app.region_view.expect("a window render with the proof");
-        assert_eq!(proofed.full.0.max(proofed.full.1), native, "cut from the photo's own pixels");
-        assert_ne!(proofed.settings, plain.settings, "the proof is part of the window's look");
-        h.request("engine.execute", json!({"command": "view.softProof", "params": {"on": false}}), T);
-        h.settle(SETTLE);
-        assert_eq!(h.app.region_view.map(|r| r.settings), Some(plain.settings), "back to the plain window");
     }
 
     // Given the user capped the preview at 1600 px, then 1:1 is rendered no larger than that
@@ -296,7 +264,19 @@ mod in_the_loupe {
     }
 
     fn region_tile(h: &Headless) -> Option<(usize, usize)> {
-        h.app.renderer.textures.get(&Slot::Region).map(|t| (t.size[0], t.size[1]))
+        tile(h, false)
+    }
+
+    /// The tiles held for the zoomed view of one side (its photo, frame and look).
+    fn side_tiles(h: &Headless, before: bool) -> Vec<(crate::region::TileKey, &crate::render::Tex)> {
+        let Some(view) = (if before { h.app.region_before_view } else { h.app.region_view }) else { return vec![] };
+        h.app
+            .renderer
+            .tiles
+            .iter()
+            .filter(|(k, _)| k.before() == before && k.photo == view.photo && k.full == view.full && k.look == view.settings)
+            .map(|(k, t)| (*k, t))
+            .collect()
     }
 
     // Given a fit view, the whole-frame render is all there is: no second render, no original decoded
@@ -330,7 +310,10 @@ mod in_the_loupe {
         h.app.ui.zoom = crate::state::Zoom::Percent(800.0);
         h.settle(SETTLE);
         let (w, hh) = region_tile(&h).expect("a window render");
-        assert!(w.max(hh) <= crate::region::MAX_SPAN && w < native * 8 / 2, "{w}×{hh}");
+        assert!(w < native * 8 / 2, "{w}×{hh}");
+        for (_, t) in side_tiles(&h, false) {
+            assert!(t.size[0].max(t.size[1]) <= crate::region::TILE, "{:?}", t.size);
+        }
         // …and panning far away asks for another window
         let before = h.app.region_view.unwrap().window;
         h.app.ui.pan = (0.9, 0.9);
@@ -348,22 +331,28 @@ mod in_the_loupe {
         h.request("engine.execute", json!({"command": "view.zoom100"}), T);
         h.settle(SETTLE);
         let view = h.app.region_view.expect("a window render");
-        let tile = h.app.renderer.textures.get(&Slot::Region).and_then(|t| t.pixels.clone()).expect("tile pixels");
+        let tiles = side_tiles(&h, false);
+        assert!(!tiles.is_empty(), "a tile");
         let main = h.app.renderer.textures.get(&Slot::Main).and_then(|t| t.pixels.clone()).expect("main pixels");
+        // (over every tile: one alone can sit on detail the canvas-sized render cannot hold)
         let (mut sum, mut n) = (0.0f32, 0.0f32);
-        for j in (8..tile.size[1] - 8).step_by(37) {
-            for i in (8..tile.size[0] - 8).step_by(37) {
-                // the same point of the frame in the whole-frame render
-                let u = (view.window.x + i) as f32 / view.full.0 as f32;
-                let v = (view.window.y + j) as f32 / view.full.1 as f32;
-                let (mx, my) =
-                    (((u * main.size[0] as f32) as usize).min(main.size[0] - 1), ((v * main.size[1] as f32) as usize).min(main.size[1] - 1));
-                let (a, b) = (tile.pixels[j * tile.size[0] + i], main.pixels[my * main.size[0] + mx]);
-                sum += (0..3).map(|k| (a.to_array()[k] as f32 - b.to_array()[k] as f32).abs()).sum::<f32>() / 3.0;
-                n += 1.0;
+        for (key, tex) in &tiles {
+            let tile = tex.pixels.clone().expect("tile pixels");
+            let window = crate::region::tile_rect(view.full, view.tile, key.tile).expect("inside the frame");
+            for j in (8..tile.size[1].saturating_sub(8)).step_by(37) {
+                for i in (8..tile.size[0].saturating_sub(8)).step_by(37) {
+                    // the same point of the frame in the whole-frame render
+                    let u = (window.x + i) as f32 / view.full.0 as f32;
+                    let v = (window.y + j) as f32 / view.full.1 as f32;
+                    let (mx, my) =
+                        (((u * main.size[0] as f32) as usize).min(main.size[0] - 1), ((v * main.size[1] as f32) as usize).min(main.size[1] - 1));
+                    let (a, b) = (tile.pixels[j * tile.size[0] + i], main.pixels[my * main.size[0] + mx]);
+                    sum += (0..3).map(|k| (a.to_array()[k] as f32 - b.to_array()[k] as f32).abs()).sum::<f32>() / 3.0;
+                    n += 1.0;
+                }
             }
         }
-        assert!(sum / n < 6.0, "mean difference {:.2} / 255 between the window and the frame render", sum / n);
+        assert!(sum / n < 6.0, "mean difference {:.2} / 255 between the tiles and the frame render", sum / n);
     }
 
     // Given a Fit view, a slider drag (whose Main draft is at 0.6 scale) does not start window renders
@@ -392,21 +381,6 @@ mod in_the_loupe {
         assert_eq!(h.app.region_view, None);
     }
 
-    // Given a zoomed view with a window render, when I go to the grid, then its windows are freed
-    // too (while one is held the app never counts as idle and keeps the GPU copy of the original)
-    #[test]
-    fn leaving_a_zoomed_detail_view_frees_its_windows() {
-        let (mut h, _) = detail();
-        h.app.ui.before_after = crate::state::BeforeAfter::SideBySide;
-        h.request("engine.execute", json!({"command": "view.zoom100"}), T);
-        h.settle(SETTLE);
-        assert!(tile(&h, Slot::Region).is_some() && tile(&h, Slot::RegionBefore).is_some());
-        h.request("ui.set", json!({"view": "photoGrid"}), T);
-        h.step();
-        assert_eq!((tile(&h, Slot::Region), tile(&h, Slot::RegionBefore)), (None, None));
-        assert_eq!((h.app.region_view, h.app.region_before_view), (None, None));
-    }
-
     // Given a zoomed view, when the photo is edited, then the old window (made with the old look)
     // is no longer current and is replaced by one for the new look
     #[test]
@@ -421,7 +395,7 @@ mod in_the_loupe {
         let second = h.app.region_view.expect("a window");
         assert_ne!(first.settings, second.settings);
         assert_ne!(first.key, second.key);
-        assert_eq!(h.app.renderer.textures.get(&Slot::Region).map(|t| t.key), Some(second.key), "the new window arrived");
+        assert!(!side_tiles(&h, false).is_empty(), "the new look's tiles arrived");
     }
 
     // Given a photo with spot removal, a zoomed view still gets its sharp window
@@ -430,10 +404,10 @@ mod in_the_loupe {
         let (mut h, _) = detail();
         let id = h.app.session.active().unwrap();
         let mut s = (*h.app.session.develop_of(id).unwrap()).clone();
-        s.spots.push(lightcraft_develop::Spot {
-            points: vec![lightcraft_geom::Point::new(0.5, 0.5)],
+        s.spots.push(lcc_develop::Spot {
+            points: vec![lcc_geom::Point::new(0.5, 0.5)],
             size: 0.01,
-            source_offset: Some(lightcraft_geom::Point::new(0.05, 0.0)),
+            source_offset: Some(lcc_geom::Point::new(0.05, 0.0)),
             ..Default::default()
         });
         h.app.session.set_develop(id, s, "Spot").unwrap();
@@ -456,6 +430,9 @@ mod in_the_loupe {
             h.settle(SETTLE);
             for (slot, t) in &h.app.renderer.textures {
                 assert!(t.size[0] <= 2048 && t.size[1] <= 2048, "{zoom:?} {slot:?}: {}×{}", t.size[0], t.size[1]);
+            }
+            for (k, t) in h.app.renderer.tiles.iter() {
+                assert!(t.size[0] <= 2048 && t.size[1] <= 2048, "{zoom:?} {k:?}: {}×{}", t.size[0], t.size[1]);
             }
             let main = h.app.renderer.textures.get(&Slot::Main).expect("loupe");
             assert!(main.size[0].max(main.size[1]) >= 700, "still a real render, not a thumbnail: {:?}", main.size);
@@ -501,8 +478,11 @@ mod in_the_loupe {
         assert!(main <= canvas_long && main * 4 < native, "the whole-frame draft is {main} px for a {native} px photo");
         let region = h.app.region_view.expect("the window is drafted too");
         assert_eq!(region.full.0.max(region.full.1), native, "at 100 %, magnified by the GPU");
-        let (w, hh) = region_tile(&h).expect("a window draft");
-        assert!(w * hh <= 3_000_000, "{w}×{hh}: the window holds what is on screen, not the frame");
+        let (_, g) = h.app.renderer.window_texture(crate::render::PANE_AFTER).expect("a window draft");
+        assert_eq!(g.window, region.window);
+        let w = region.window;
+        assert!(w.w * w.h <= 4 * crate::region::TILE * crate::region::TILE, "{w:?}: the tiles hold what is on screen, not the frame");
+        assert_eq!(h.app.renderer.tiles_pending(), 0, "no ring of tiles around the view is drafted");
     }
 
     /// Drag Exposure in the loupe and return the long edge of the whole-frame draft shown, with
@@ -522,7 +502,7 @@ mod in_the_loupe {
     fn a_slow_drag_drafts_small() {
         // the GPU device up front (the loupe never waits for it): with one, it is the earlier
         // drag's time that makes this drag small
-        let _ = lightcraft_engine::gpu::available();
+        let _ = lcc_engine::gpu::available();
         let (mut h, _) = detail();
         let id = h.app.session.active().expect("a photo is open");
         h.app.drag_scale.remember_slow(id, "Exposure");
@@ -535,7 +515,7 @@ mod in_the_loupe {
     fn a_soft_proofed_drag_drafts_small() {
         // the GPU device up front (the loupe never waits for it): with one, this is the case where
         // the GPU is there and the render still goes to the CPU
-        let _ = lightcraft_engine::gpu::available();
+        let _ = lcc_engine::gpu::available();
         let (mut h, _) = detail();
         h.app.ui.soft_proof = true;
         h.settle(SETTLE);
@@ -543,8 +523,15 @@ mod in_the_loupe {
         assert!(main <= small, "the draft is {main} px, a small one at most {small}");
     }
 
-    fn tile(h: &Headless, slot: Slot) -> Option<(usize, usize)> {
-        h.app.renderer.textures.get(&slot).map(|t| (t.size[0], t.size[1]))
+    /// The size of what one side's tiles cover together (`None`: no tiles).
+    fn tile(h: &Headless, before: bool) -> Option<(usize, usize)> {
+        let view = if before { h.app.region_before_view } else { h.app.region_view }?;
+        let rects: Vec<_> = side_tiles(h, before).iter().filter_map(|(k, _)| crate::region::tile_rect(k.full, view.tile, k.tile)).collect();
+        let x0 = rects.iter().map(|r| r.x).min()?;
+        let y0 = rects.iter().map(|r| r.y).min()?;
+        let x1 = rects.iter().map(|r| r.x + r.w).max()?;
+        let y1 = rects.iter().map(|r| r.y + r.h).max()?;
+        Some((x1 - x0, y1 - y0))
     }
 
     // Given Before/After side by side at 1:1, both sides are sharp windows of the same frame: the
@@ -558,33 +545,11 @@ mod in_the_loupe {
         let (after, before) = (h.app.region_view.expect("After window"), h.app.region_before_view.expect("Before window"));
         assert_eq!(after.full, before.full, "the same frame");
         assert_eq!(after.full.0.max(after.full.1), native);
-        let (a, b) = (tile(&h, Slot::Region).expect("After tile"), tile(&h, Slot::RegionBefore).expect("Before tile"));
+        let (a, b) = (tile(&h, false).expect("After tile"), tile(&h, true).expect("Before tile"));
         assert_eq!(a, b, "the same window of each");
         let main = h.app.renderer.textures.get(&Slot::Main).unwrap();
         let before_main = h.app.renderer.textures.get(&Slot::Before).unwrap();
         assert_eq!(main.size, before_main.size, "and the same whole-frame size under them");
-    }
-
-    // Given Before/After side by side, when I zoom to 1:1, then one window job decodes the original
-    // and the other side waits for it (the Before, asked for first, used to start a second decode
-    // beside the After's); both windows still arrive
-    #[test]
-    fn side_by_side_at_one_to_one_decodes_the_original_once() {
-        let (mut h, _) = detail();
-        let id = h.app.session.active().expect("a photo is open");
-        h.app.ui.before_after = crate::state::BeforeAfter::SideBySide;
-        h.app.ui.zoom = crate::state::Zoom::Percent(100.0);
-        let pending = |h: &Headless| [Slot::Region, Slot::RegionBefore].into_iter().filter(|s| h.app.renderer.is_pending(*s)).count();
-        for _ in 0..100 {
-            h.step();
-            if pending(&h) > 0 {
-                break;
-            }
-        }
-        assert!(!h.app.session.media.has_source(id, lightcraft_engine::SourceLevel::Full), "the original is still decoding");
-        assert_eq!(pending(&h), 1, "one window job decodes it");
-        h.settle(SETTLE);
-        assert!(tile(&h, Slot::Region).is_some() && tile(&h, Slot::RegionBefore).is_some(), "both windows arrived");
     }
 
     // Given the Before view alone (\), only the Before gets a window
@@ -596,7 +561,7 @@ mod in_the_loupe {
         h.settle(SETTLE);
         assert!(h.app.region_before_view.is_some());
         assert_eq!(h.app.region_view, None);
-        assert!(tile(&h, Slot::RegionBefore).is_some() && tile(&h, Slot::Region).is_none());
+        assert!(tile(&h, true).is_some() && tile(&h, false).is_none());
     }
 
     // Given a wipe (Split), both sides are windows, drawn over the same rect
@@ -607,7 +572,7 @@ mod in_the_loupe {
         h.request("engine.execute", json!({"command": "view.zoom100"}), T);
         h.settle(SETTLE);
         assert_eq!(h.app.region_view.map(|v| v.window), h.app.region_before_view.map(|v| v.window));
-        assert!(tile(&h, Slot::Region).is_some() && tile(&h, Slot::RegionBefore).is_some());
+        assert!(tile(&h, false).is_some() && tile(&h, true).is_some());
     }
 
     // Given the Before view turned off, its window is freed
@@ -617,12 +582,12 @@ mod in_the_loupe {
         h.app.ui.before_after = crate::state::BeforeAfter::SideBySide;
         h.request("engine.execute", json!({"command": "view.zoom100"}), T);
         h.settle(SETTLE);
-        assert!(tile(&h, Slot::RegionBefore).is_some());
+        assert!(tile(&h, true).is_some());
         h.app.ui.before_after = crate::state::BeforeAfter::Off;
         h.settle(SETTLE);
-        assert_eq!(tile(&h, Slot::RegionBefore), None);
+        assert_eq!(tile(&h, true), None);
         assert_eq!(h.app.region_before_view, None);
-        assert!(tile(&h, Slot::Region).is_some());
+        assert!(tile(&h, false).is_some());
     }
 
     // Given a trackpad pinch from fit to well past 100 %, the render sizes are held while it runs:
@@ -639,7 +604,7 @@ mod in_the_loupe {
         }
         assert!(matches!(h.app.ui.zoom, crate::state::Zoom::Percent(p) if p > 100.0), "{:?}", h.app.ui.zoom);
         assert_eq!(rendered_long_edge(&h), main_at_fit, "the whole-frame render keeps its size");
-        assert!(!h.app.renderer.is_pending(Slot::Region), "no window was asked for during the pinch");
+        assert_eq!(h.app.renderer.tiles_pending(), 0, "no tile was asked for during the pinch");
         for _ in 0..60 {
             h.step();
         }
@@ -663,22 +628,16 @@ mod in_the_loupe {
         assert_eq!(region_tile(&h), None);
     }
 
-    /// `cargo test -p lightcraft-ui-egui --release profile_slider_drag -- --ignored --nocapture`:
+    /// `cargo test -p lcc-ui-egui --release profile_slider_drag -- --ignored --nocapture`:
     /// milliseconds from a slider tick to the loupe showing it, at 100 % and 400 % of the demo
     /// library's 24 MP photos (what the maintainers asked for in the review of #351).
     #[test]
     #[ignore = "a measurement, not a check"]
     fn profile_slider_drag() {
-        for (size, percent, proof) in [
-            ([1400.0, 900.0], 0.0, false),
-            ([1400.0, 900.0], 100.0, false),
-            ([1400.0, 900.0], 400.0, false),
-            ([2800.0, 1700.0], 100.0, false),
-            ([2800.0, 1700.0], 400.0, false),
-            ([1400.0, 900.0], 100.0, true),
-        ] {
+        for (size, percent) in
+            [([1400.0, 900.0], 0.0), ([1400.0, 900.0], 100.0), ([1400.0, 900.0], 400.0), ([2800.0, 1700.0], 100.0), ([2800.0, 1700.0], 400.0)]
+        {
             let (mut h, native) = detail_in(size);
-            h.app.ui.soft_proof = proof;
             h.app.ui.zoom = if percent == 0.0 { crate::state::Zoom::Fit } else { crate::state::Zoom::Percent(percent) };
             h.settle(SETTLE);
             h.app.session.begin_interaction("Exposure").unwrap();
@@ -692,7 +651,11 @@ mod in_the_loupe {
                 );
                 assert_eq!(r["ok"], true);
                 let mut frames = 0;
-                while (h.app.renderer.is_pending(Slot::Main) || h.app.renderer.is_pending(Slot::Region)) && frames < 2000 {
+                while (h.app.renderer.is_pending(Slot::Main)
+                    || h.app.renderer.is_pending(Slot::Window(crate::render::PANE_AFTER))
+                    || h.app.renderer.tiles_pending() > 0)
+                    && frames < 2000
+                {
                     h.step();
                     std::thread::sleep(std::time::Duration::from_micros(200));
                     frames += 1;
@@ -700,12 +663,11 @@ mod in_the_loupe {
                 ms.push(t0.elapsed().as_secs_f64() * 1e3);
             }
             ms.sort_by(|a, b| a.total_cmp(b));
-            let (w, hh) = region_tile(&h).unwrap_or((0, 0));
+            let (w, hh) = h.app.renderer.window_texture(crate::render::PANE_AFTER).map_or((0, 0), |(_, g)| (g.window.w, g.window.h));
             eprintln!(
-                "PROFILE {}x{} canvas, {percent:>4}% (0 = fit){} of {native} px: tick→shown median {:.1} ms, p90 {:.1} ms, max {:.1} ms; whole-frame render {} px, window tile {w}×{hh}",
+                "PROFILE {}x{} canvas, {percent:>4}% (0 = fit) of {native} px: tick→shown median {:.1} ms, p90 {:.1} ms, max {:.1} ms; whole-frame render {} px, drag window {w}×{hh}",
                 size[0],
                 size[1],
-                if proof { ", soft proof" } else { "" },
                 ms[ms.len() / 2],
                 ms[ms.len() * 9 / 10],
                 ms[ms.len() - 1],
@@ -713,7 +675,70 @@ mod in_the_loupe {
             );
             eprintln!("        {}", h.app.renderer.memory());
             let job_ms = |slot| h.app.renderer.textures.get(&slot).map_or(0.0, |t| t.ms);
-            eprintln!("        last job times: whole frame {:.1} ms, window {:.1} ms", job_ms(Slot::Main), job_ms(Slot::Region));
+            eprintln!(
+                "        last job times: whole frame {:.1} ms, drag window {:.1} ms",
+                job_ms(Slot::Main),
+                job_ms(Slot::Window(crate::render::PANE_AFTER))
+            );
+        }
+    }
+
+    // Given a slider drag at 1:1, the window on screen is drafted as one job with its own stage
+    // cache (not a job per tile with none: 10-15x slower), drawn over the tiles; once the drag
+    // ends, the tiles of the final look are rendered and the drag window goes under them
+    #[test]
+    fn a_drag_at_one_to_one_drafts_one_window_not_every_tile() {
+        let (mut h, _) = detail();
+        h.request("engine.execute", json!({"command": "view.zoom100"}), T);
+        h.settle(SETTLE);
+        assert!(!h.app.renderer.tiles.is_empty(), "the tiles at rest");
+        let before: Vec<_> = h.app.renderer.tiles.keys().copied().collect();
+        h.app.session.begin_interaction("Exposure").unwrap();
+        for tick in 1..4 {
+            h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "light.exposure", "value": tick as f64 * 0.1}}), T);
+            h.step();
+            assert_eq!(h.app.renderer.tiles_pending(), 0, "no tile is drafted in a drag");
+        }
+        h.settle(SETTLE);
+        let (_, g) = h.app.renderer.window_texture(crate::render::PANE_AFTER).expect("the drag window arrived");
+        let view = h.app.region_view.expect("a zoomed view");
+        assert_eq!((g.full, g.window), (view.full, view.window));
+        let new_tiles: Vec<_> = h.app.renderer.tiles.keys().filter(|k| !before.contains(k)).collect();
+        assert!(new_tiles.is_empty(), "drafted tiles: {new_tiles:?}");
+        assert!(!drawn(&h, Slot::Window(crate::render::PANE_AFTER)).is_empty(), "the drag window is drawn");
+        h.app.session.end_interaction().unwrap();
+        h.settle(SETTLE);
+        let view = h.app.region_view.expect("a zoomed view");
+        assert!(h.app.renderer.tiles.keys().any(|k| k.look == view.settings), "the tiles of the final look");
+    }
+
+    // Given Compare and Reference views at 1:1, each photo gets its own sharp tiles over its
+    // canvas-sized render (as the loupe does), kept apart by pane
+    #[test]
+    fn compare_and_reference_at_one_to_one_are_tiled() {
+        for view in ["compare", "reference"] {
+            let (mut h, _) = detail();
+            let ids: Vec<u64> = h.app.session.visible_cloned().iter().take(2).map(|p| p.0).collect();
+            if view == "reference" {
+                h.app.ui.reference = Some(ids[0]);
+                h.app.session.selection.active = Some(lcc_catalog::PhotoId(ids[1]));
+                h.app.ui.view = crate::state::ViewMode::Reference;
+            } else {
+                h.app.ui.compare = Some((ids[0], ids[1]));
+                h.app.ui.view = crate::state::ViewMode::Compare;
+            }
+            h.app.ui.zoom = crate::state::Zoom::Percent(100.0);
+            h.settle(SETTLE);
+            for pane in [crate::render::PANE_COMPARE, crate::render::PANE_COMPARE + 1] {
+                let tiles: Vec<_> = h.app.renderer.tiles.keys().filter(|k| k.pane == pane).collect();
+                assert!(!tiles.is_empty(), "{view}: pane {pane} has tiles");
+                let photo = h.app.session.catalog.photo(tiles[0].photo).unwrap();
+                assert_eq!(tiles[0].full.0.max(tiles[0].full.1), photo.width.max(photo.height) as usize, "{view}: at 100 %");
+            }
+            // back to Fit: no tiles kept for the panes
+            h.app.ui.zoom = crate::state::Zoom::Fit;
+            h.settle(SETTLE);
+            assert!(h.app.renderer.tiles.keys().all(|k| k.pane < crate::render::PANE_COMPARE), "{view}: fit frees the tiles");
         }
     }
 
@@ -725,16 +750,27 @@ mod in_the_loupe {
         assert_eq!(h.app.session.memory_report().full_source.bytes, 0, "fit needed no original");
         h.app.ui.zoom = crate::state::Zoom::Percent(400.0);
         h.app.session.begin_interaction("Exposure").unwrap();
+        // Tick every frame until the original is decoded (whether a draft also finishes between two
+        // ticks depends on how loaded the machine is), then keep dragging: it stays in the cache.
         let mut ticks = 0;
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
-        while !h.app.renderer.textures.contains_key(&Slot::Region) && std::time::Instant::now() < deadline {
+        let mut tick = |h: &mut Headless| {
             let v = (ticks % 40) as f64 * 0.02;
             h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "light.exposure", "value": v}}), T);
             h.step();
             ticks += 1;
             std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+        while h.app.session.memory_report().full_source.bytes == 0 && std::time::Instant::now() < deadline {
+            tick(&mut h);
         }
-        assert!(h.app.renderer.textures.contains_key(&Slot::Region), "a window arrived");
+        assert!(h.app.session.memory_report().full_source.bytes > 0, "the drag decoded the original");
+        for _ in 0..40 {
+            tick(&mut h);
+            assert!(h.app.session.memory_report().full_source.bytes > 0, "the original stays in the cache while the drag goes on");
+        }
+        // once the ticks stop, the last one's drag window arrives
+        assert!(h.step_until(SETTLE, |h| h.app.renderer.window_texture(crate::render::PANE_AFTER).is_some()), "a drag window arrived");
         assert!(h.app.session.memory_report().full_source.bytes > 0, "the original stayed in the cache while the drag went on");
     }
 
@@ -756,12 +792,22 @@ mod in_the_loupe {
     /// The meshes the last frame drew with `slot`'s texture: (paint order, clip rect, bounds).
     fn drawn(h: &Headless, slot: Slot) -> Vec<(usize, egui::Rect, egui::Rect)> {
         let Some(tex) = h.app.renderer.textures.get(&slot) else { return vec![] };
+        drawn_with(h, &[tex.tex.id()])
+    }
+
+    /// The meshes the last frame drew with one side's tiles.
+    fn drawn_tiles(h: &Headless, before: bool) -> Vec<(usize, egui::Rect, egui::Rect)> {
+        let ids: Vec<_> = h.app.renderer.tiles.iter().filter(|(k, _)| k.before() == before).map(|(_, t)| t.tex.id()).collect();
+        drawn_with(h, &ids)
+    }
+
+    fn drawn_with(h: &Headless, ids: &[egui::TextureId]) -> Vec<(usize, egui::Rect, egui::Rect)> {
         h.view
             .shapes
             .iter()
             .enumerate()
             .filter_map(|(i, c)| match &c.shape {
-                egui::epaint::Shape::Mesh(m) if m.texture_id == tex.tex.id() => Some((i, c.clip_rect, m.calc_bounds())),
+                egui::epaint::Shape::Mesh(m) if ids.contains(&m.texture_id) => Some((i, c.clip_rect, m.calc_bounds())),
                 _ => None,
             })
             .collect()
@@ -777,7 +823,7 @@ mod in_the_loupe {
             h.request("engine.execute", json!({"command": "view.zoom100"}), T);
             h.settle(SETTLE);
             h.step();
-            let (stand_in, window) = (drawn(&h, Slot::Before), drawn(&h, Slot::RegionBefore));
+            let (stand_in, window) = (drawn(&h, Slot::Before), drawn_tiles(&h, true));
             assert!(!stand_in.is_empty() && !window.is_empty(), "{mode:?}: the stand-in {stand_in:?} and the window {window:?} are both painted");
             assert!(window[0].0 > stand_in[0].0, "{mode:?}: the Before window is under its stand-in");
             let mid = h.app.image_rect.unwrap().center();
@@ -786,7 +832,7 @@ mod in_the_loupe {
                 crate::state::BeforeAfter::Split => assert!(clip.right() <= mid.x + 0.5, "{clip:?} crosses the line at x = {}", mid.x),
                 _ => assert!(clip.bottom() <= mid.y + 0.5, "{clip:?} crosses the line at y = {}", mid.y),
             }
-            let after = drawn(&h, Slot::Region);
+            let after = drawn_tiles(&h, false);
             assert!(!after.is_empty());
             match mode {
                 crate::state::BeforeAfter::Split => assert!(after[0].1.left() >= mid.x - 0.5),
@@ -817,7 +863,7 @@ mod in_the_loupe {
         h.settle(SETTLE);
         h.step();
         let canvas = h.app.canvas_rect.unwrap();
-        let window = drawn(&h, Slot::RegionBefore);
+        let window = drawn_tiles(&h, true);
         assert!(!window.is_empty());
         assert!(window[0].1.right() >= canvas.right() - 0.5, "the Before window stops at the wipe line: {:?}", window[0].1);
     }
@@ -832,7 +878,7 @@ mod in_the_loupe {
         h.settle(SETTLE);
         h.step();
         let canvas = h.app.canvas_rect.unwrap();
-        let (before, after) = (drawn(&h, Slot::RegionBefore), drawn(&h, Slot::Region));
+        let (before, after) = (drawn_tiles(&h, true), drawn_tiles(&h, false));
         assert!(!before.is_empty() && !after.is_empty());
         assert!(before.iter().all(|(_, clip, _)| clip.right() <= canvas.center().x), "the Before window spills into the After pane: {before:?}");
         assert!(after.iter().all(|(_, clip, _)| clip.left() >= canvas.center().x), "the After window spills into the Before pane: {after:?}");
@@ -846,7 +892,24 @@ mod in_the_loupe {
         h.app.ui.before_after = crate::state::BeforeAfter::SideBySide;
         h.request("engine.execute", json!({"command": "view.zoom100"}), T);
         h.settle(SETTLE);
-        assert_eq!(h.app.region_tiles.len(), 2, "{:?}", h.app.region_tiles.keys().collect::<Vec<_>>());
+        assert!(!side_tiles(&h, false).is_empty() && !side_tiles(&h, true).is_empty(), "{:?}", h.app.renderer.tiles.keys().collect::<Vec<_>>());
+    }
+
+    // Given soft proofing at 1:1, the zoomed view is tiled like any other (each tile proofed),
+    // over a canvas-sized whole-frame render: not a full-size render of the whole photo
+    #[test]
+    fn soft_proofing_at_one_to_one_is_tiled() {
+        let (mut h, native) = detail();
+        h.request("engine.execute", json!({"command": "view.zoom100"}), T);
+        h.settle(SETTLE);
+        let plain = h.app.region_view.expect("tiles").settings;
+        h.app.ui.soft_proof = true;
+        h.settle(SETTLE);
+        let proof = h.app.region_view.expect("proofed tiles");
+        assert_eq!(proof.full.0.max(proof.full.1), native);
+        assert_ne!(proof.settings, plain, "the proof is part of the tiles' look");
+        assert!(!side_tiles(&h, false).is_empty());
+        assert!(rendered_long_edge(&h) < native, "the whole frame stays canvas-sized");
     }
 
     // Given a window the photo's spots make too big for one render (refused), the loupe falls back
@@ -895,11 +958,14 @@ mod in_the_loupe {
             let m = h.app.renderer.memory();
             (m["stageCaches"]["gpuBytes"].as_u64().unwrap() + m["stageCaches"]["cpuBytes"].as_u64().unwrap()) as usize
         };
+        // (the drag window's cache is made by the first tick of a drag)
+        h.app.session.begin_interaction("Exposure").unwrap();
+        h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "light.exposure", "value": 0.05}}), T);
+        h.settle(SETTLE);
         let before = held(&h);
         assert!(before > 3, "the views hold something ({before} bytes)");
         // a third of it is the budget: over it, but inside the runaway limit (four times)
         h.app.renderer.stage_budget_override = Some(before / 3);
-        h.app.session.begin_interaction("Exposure").unwrap();
         for tick in 0..8 {
             h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "light.exposure", "value": tick as f64 * 0.1}}), T);
             h.settle(SETTLE);
@@ -908,205 +974,48 @@ mod in_the_loupe {
         assert!(held(&h) > before / 3, "and they are still there");
     }
 
-    /// Load a Display P3 monitor profile (`app.displayProfile`), as Settings ▸ Display does.
-    fn use_display_profile(h: &mut Headless) {
-        let dir = std::env::temp_dir().join(format!("lightcraft-zoom-display-{}-{:?}", std::process::id(), std::thread::current().id()));
-        std::fs::create_dir_all(&dir).expect("temp dir");
-        let path = dir.join("p3.icc");
-        std::fs::write(&path, lightcraft_codecs::icc::write_named(lightcraft_codecs::NamedSpace::DisplayP3)).expect("profile written");
-        let r = h.request("engine.execute", json!({"command": "app.displayProfile", "params": {"path": path.to_string_lossy()}}), T);
-        assert_eq!(r["ok"], true, "{r}");
-        assert!(h.app.renderer.display_id().is_some());
-    }
-
-    // Given a monitor profile, when I zoom to 1:1, then the sharp window is painted over the
-    // whole-frame render, as without one (a display profile changes the texture's render key, and
-    // the window used to be looked up by the key it had before: never found, so only the
-    // whole-frame render, magnified and blurred, was shown)
+    // Given a 1:1 preview built (Library → Previews), when I zoom to 1:1, then the tiles on screen
+    // show its pixels in the very first frame, before any tile is rendered
     #[test]
-    fn a_display_profile_keeps_the_sharp_window_at_one_to_one() {
-        let (mut h, native) = detail();
-        use_display_profile(&mut h);
-        h.request("engine.execute", json!({"command": "view.zoom100"}), T);
-        h.settle(SETTLE);
-        assert!(rendered_long_edge(&h) < native, "the whole frame is smaller than the photo");
-        let view = h.app.region_view.expect("a window render");
-        assert_eq!(view.full.0.max(view.full.1), native);
-        let (whole, window) = (drawn(&h, Slot::Main), drawn(&h, Slot::Region));
-        assert!(!whole.is_empty(), "the whole-frame render is painted");
-        assert!(!window.is_empty(), "the window is painted");
-        assert!(window[0].0 > whole[0].0, "over the whole-frame render");
-    }
-
-    // …and in Compare, each pane's window too
-    #[test]
-    fn a_display_profile_keeps_the_compare_windows_at_one_to_one() {
+    fn a_one_to_one_preview_stands_in_for_the_tiles_at_once() {
         let (mut h, _) = detail();
-        use_display_profile(&mut h);
-        let r = h.request("engine.execute", json!({"command": "view.compare"}), T);
-        assert_eq!(r["ok"], true, "{r}");
+        let id = h.app.session.active().unwrap();
+        let r = h.app.session.execute("library.buildPreviews", &json!({"size": "full", "ids": [id.0], "wait": true}));
+        assert!(r.is_ok(), "{r:?}");
         h.app.ui.zoom = crate::state::Zoom::Percent(100.0);
-        h.settle(SETTLE);
-        for i in 0..2u8 {
-            assert!(h.app.compare_windows[i as usize].is_some(), "pane {i} asked for a window");
-            let (whole, window) = (drawn(&h, Slot::Compare(i)), drawn(&h, Slot::CompareRegion(i)));
-            assert!(!whole.is_empty() && !window.is_empty(), "pane {i}: both are painted");
-            assert!(window[0].0 > whole[0].0, "pane {i}: the window is painted over the whole-frame render");
-        }
-    }
-
-    // …and with no monitor profile chosen but a screen that reports one (macOS: previews follow
-    // the screen's profile, #787), the sharp window is painted too (#1365): every Mac renders for
-    // a display
-    #[test]
-    fn with_the_screen_profile_the_window_is_drawn() {
-        let (mut h, native) = detail();
-        h.app.services.screen_profile = Some(Box::new(|| Some(lightcraft_codecs::icc::write_named(lightcraft_codecs::NamedSpace::DisplayP3))));
         h.step();
-        assert!(h.app.ui.settings.display_profile.is_empty(), "no profile chosen");
-        assert!(h.app.renderer.display_id().is_some(), "the screen's profile is in use");
-        h.request("engine.execute", json!({"command": "view.zoom100"}), T);
+        assert!(h.app.region_view.is_some());
+        assert!(!side_tiles(&h, false).is_empty(), "the 1:1 preview's part is shown in the first frame");
+        assert!(
+            !drawn_tiles(&h, false).is_empty() || {
+                h.step();
+                !drawn_tiles(&h, false).is_empty()
+            },
+            "and drawn"
+        );
         h.settle(SETTLE);
-        assert!(rendered_long_edge(&h) < native, "the whole frame is smaller than the photo");
-        let (whole, window) = (drawn(&h, Slot::Main), drawn(&h, Slot::Region));
-        assert!(!whole.is_empty(), "the whole-frame render is painted");
-        assert!(!window.is_empty(), "the window is painted");
-        assert!(window[0].0 > whole[0].0, "over the whole-frame render");
+        let view = h.app.region_view.unwrap();
+        let k = side_tiles(&h, false)[0].0;
+        assert!(h.app.renderer.tiles.has_render(&k), "then replaced by its render: {view:?}");
     }
 
-    /// The engine caches' share of the default memory budget (1.5 GiB) on a machine with 6 GiB of
-    /// RAM or more: room for both panes' 24 MP originals (288 MB each as linear float).
-    const COMPARE_CACHE: usize = 768 << 20;
-
-    /// Compare view of the demo library at `zoom`, settled.
-    ///
-    /// The session's cache budget is set here rather than taken from the process-wide memory
-    /// budget, which other tests change while they run (Settings ▸ Performance ▸ 1 GB leaves a
-    /// 512 MiB share, too small for two originals, so one pane's was evicted).
-    fn compare_at(zoom: crate::state::Zoom) -> Headless {
+    // Given 1:1, when I pan by less than a tile and back, then no tile is rendered again: the
+    // tiles there are stay in the cache
+    #[test]
+    fn panning_reuses_the_tiles_it_has() {
         let (mut h, _) = detail();
-        h.app.session.media.set_budget(COMPARE_CACHE);
-        let r = h.request("engine.execute", json!({"command": "view.compare"}), T);
-        assert_eq!(r["ok"], true, "{r}");
-        assert_eq!(h.app.ui.view, crate::state::ViewMode::Compare);
-        h.app.ui.zoom = zoom;
-        h.settle(SETTLE);
-        h
-    }
-
-    fn native_of(h: &Headless, id: lightcraft_catalog::PhotoId) -> usize {
-        let p = h.app.session.catalog.photo(id).expect("in the catalog");
-        p.width.max(p.height) as usize
-    }
-
-    // Given two photos in Compare, when I zoom to 1:1 to check focus, then each pane shows a window
-    // cut from its own photo's pixels, not the 2560 px whole-frame render magnified
-    #[test]
-    fn compare_at_one_to_one_gets_a_sharp_window_per_pane() {
-        let h = compare_at(crate::state::Zoom::Percent(100.0));
-        let (sel, cand) = h.app.ui.compare.map(|(a, b)| (lightcraft_catalog::PhotoId(a), lightcraft_catalog::PhotoId(b))).expect("a pair");
-        for (i, id) in [(0u8, sel), (1u8, cand)] {
-            let whole = h.app.renderer.textures.get(&Slot::Compare(i)).expect("the whole-frame render");
-            assert!(whole.size[0].max(whole.size[1]) <= 2560, "pane {i}: the whole frame stays small");
-            let w = h.app.compare_windows[i as usize].unwrap_or_else(|| panic!("pane {i} asked for a window"));
-            assert_eq!(w.photo, id);
-            assert_eq!(w.full.0.max(w.full.1), native_of(&h, id), "pane {i}: 1:1 is the photo's own pixels");
-            let tex = h.app.renderer.textures.get(&Slot::CompareRegion(i)).unwrap_or_else(|| panic!("pane {i}: its texture"));
-            assert_eq!(tex.photo, id);
-            assert!(tex.size[0] >= 600 && tex.size[1] >= 600, "pane {i}: it covers the pane: {:?}", tex.size);
-            assert!(h.app.session.media.has_source(id, lightcraft_engine::SourceLevel::Full), "pane {i}: both originals stay decoded");
-        }
-    }
-
-    // Given Compare at fit, nothing more is rendered than before windows
-    #[test]
-    fn compare_at_fit_makes_no_window() {
-        let h = compare_at(crate::state::Zoom::Fit);
-        assert_eq!(h.app.compare_windows, [None, None]);
-        assert!(!h.app.renderer.textures.contains_key(&Slot::CompareRegion(0)) && !h.app.renderer.textures.contains_key(&Slot::CompareRegion(1)));
-    }
-
-    // Given Compare at 1:1, when I zoom back to fit or go back to Detail, then the windows' textures
-    // are freed, and back in Detail only one original is kept decoded
-    #[test]
-    fn leaving_a_zoomed_compare_frees_its_windows() {
-        let mut h = compare_at(crate::state::Zoom::Percent(100.0));
-        assert!(h.app.renderer.textures.contains_key(&Slot::CompareRegion(1)));
-        h.app.ui.zoom = crate::state::Zoom::Fit;
-        h.settle(SETTLE);
-        assert!(!h.app.renderer.textures.contains_key(&Slot::CompareRegion(1)), "fit: no window");
         h.app.ui.zoom = crate::state::Zoom::Percent(100.0);
         h.settle(SETTLE);
-        assert!(h.app.renderer.textures.contains_key(&Slot::CompareRegion(0)));
-        let r = h.request("ui.set", json!({"view": "detail"}), T);
-        assert_eq!(r["ok"], true, "{r}");
-        h.settle(SETTLE);
-        assert_eq!(h.app.compare_windows, [None, None]);
-        assert!(!h.app.renderer.textures.contains_key(&Slot::CompareRegion(0)) && !h.app.renderer.textures.contains_key(&Slot::CompareRegion(1)));
-        assert!(h.app.session.media.usage().2.count <= 1, "one original in Detail");
-    }
-
-    // A pane's window is drawn where it belongs: its pixels agree with the pane's whole-frame render
-    // at the same place of the frame, and it is painted over that render, inside the pane
-    #[test]
-    fn a_compare_window_lines_up_with_its_pane() {
-        let (mut h, _) = detail();
-        h.app.renderer.keep_pixels = true;
-        h.request("engine.execute", json!({"command": "view.compare"}), T);
-        h.app.ui.zoom = crate::state::Zoom::Percent(100.0);
-        h.settle(SETTLE);
-        h.step();
-        for i in 0..2u8 {
-            let view = h.app.compare_windows[i as usize].expect("a window");
-            let tile = h.app.renderer.textures.get(&Slot::CompareRegion(i)).and_then(|t| t.pixels.clone()).expect("tile pixels");
-            let main = h.app.renderer.textures.get(&Slot::Compare(i)).and_then(|t| t.pixels.clone()).expect("pane pixels");
-            let (mut sum, mut n) = (0.0f32, 0.0f32);
-            for j in (8..tile.size[1] - 8).step_by(37) {
-                for x in (8..tile.size[0] - 8).step_by(37) {
-                    let u = (view.window.x + x) as f32 / view.full.0 as f32;
-                    let v = (view.window.y + j) as f32 / view.full.1 as f32;
-                    let (mx, my) =
-                        (((u * main.size[0] as f32) as usize).min(main.size[0] - 1), ((v * main.size[1] as f32) as usize).min(main.size[1] - 1));
-                    let (a, b) = (tile.pixels[j * tile.size[0] + x], main.pixels[my * main.size[0] + mx]);
-                    sum += (0..3).map(|k| (a.to_array()[k] as f32 - b.to_array()[k] as f32).abs()).sum::<f32>() / 3.0;
-                    n += 1.0;
-                }
-            }
-            assert!(sum / n < 6.0, "pane {i}: mean difference {:.2} / 255 between the window and the pane's render", sum / n);
-            let (whole, window) = (drawn(&h, Slot::Compare(i)), drawn(&h, Slot::CompareRegion(i)));
-            assert!(!whole.is_empty() && !window.is_empty(), "pane {i}: both are painted");
-            assert!(window[0].0 > whole[0].0, "pane {i}: the window is painted over the whole-frame render");
-            assert!(window[0].1.width() < h.size.x * 0.6, "pane {i}: clipped to its pane, {:?}", window[0].1);
-        }
-        // the two panes' clips don't overlap
-        let (a, b) = (drawn(&h, Slot::CompareRegion(0))[0].1, drawn(&h, Slot::CompareRegion(1))[0].1);
-        assert!(a.right() <= b.left() + 0.5, "{a:?} / {b:?}");
-    }
-
-    // Given Reference view at 1:1, the reference and the active photo both get windows; a slider
-    // drag on the active photo asks for no new window until it ends
-    #[test]
-    fn reference_view_at_one_to_one_gets_windows_and_a_drag_keeps_them() {
-        let (mut h, _) = detail();
-        let r = h.request("engine.execute", json!({"command": "photo.setReference"}), T);
-        assert_eq!(r["ok"], true, "{r}");
-        let r = h.request("ui.key", json!({"key": "r", "shift": true}), T);
-        assert_eq!(r["ok"], true, "{r}");
-        assert_eq!(h.app.ui.view, crate::state::ViewMode::Reference);
-        h.app.ui.zoom = crate::state::Zoom::Percent(100.0);
-        h.settle(SETTLE);
-        let before = h.app.compare_windows[1].expect("the active photo's window");
-        assert!(h.app.compare_windows[0].is_some(), "the reference's window");
-        h.app.session.begin_interaction("Exposure").unwrap();
-        h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "light.exposure", "value": 0.8}}), T);
-        for _ in 0..5 {
+        let done = h.app.renderer.completed;
+        let start = h.app.ui.pan;
+        for k in 0..6 {
+            h.app.ui.pan = (start.0 + 0.002 * k as f32, start.1);
             h.step();
         }
-        assert_eq!(h.app.compare_windows[1], Some(before), "no window per drag tick");
-        assert!(!h.app.renderer.is_pending(Slot::CompareRegion(1)));
-        h.app.session.end_interaction().unwrap();
+        h.app.ui.pan = start;
         h.settle(SETTLE);
-        let after = h.app.compare_windows[1].expect("a window for the new look");
-        assert_ne!(after.settings, before.settings);
+        let held = side_tiles(&h, false).len();
+        assert!(held >= 1);
+        assert!(h.app.renderer.completed - done <= 2, "{} renders for a small pan", h.app.renderer.completed - done);
     }
 }

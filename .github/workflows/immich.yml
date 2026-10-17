@@ -1,0 +1,57 @@
+# Immich version matrix (IMM-*): the ignored live tests of `lcc-immich` against a throw-away Immich server in docker,
+# once with the oldest supported release (v3.0.0, `MIN_VERSION`) and once with Immich's moving `release` tag.
+# Needs no secrets: `cargo xtask immich seed` creates the admin user and API key on the fresh server.
+name: Immich
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'crates/immich/**'
+      - 'xtask/immich/**'
+      - 'xtask/src/immich.rs'
+      - '.github/workflows/immich.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: immich-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  live:
+    # Self-hosted gpu0 (docs/ci.md): cargo on the host (the runner's own CARGO_TARGET_DIR), the Immich
+    # server in the host's Docker (the runner user is in the docker group). One version at a time:
+    # both use the same compose project and ports.
+    runs-on: [self-hosted, Linux, X64, lcc]
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: nice -n 19 bash -e {0}
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        version: [min, latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+      - name: start Immich (${{ matrix.version }})
+        run: cargo xtask immich up --version ${{ matrix.version }}
+      - name: seed
+        run: cargo xtask immich seed
+      - name: live tests
+        run: cargo test -p lcc-immich --test live -- --ignored --test-threads=1
+      - name: server logs
+        if: failure()
+        run: docker compose -p xtask-immich -f xtask/immich/compose.yml logs --tail 200 immich-server
+      - name: stop
+        if: always()
+        run: cargo xtask immich down --volumes

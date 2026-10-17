@@ -8,11 +8,11 @@
 //! macOS oracle archive SHA256:
 //! ee70805cb60f18d5ed62548c4e595f6cee0a33407e15358eb1766a46afc1c16e.
 
-use lightcraft_raw::{RawData, RawFormat, decode, probe_info};
+use lcc_raw::{RawData, RawFormat, decode, probe_info};
 use std::path::{Path, PathBuf};
 
 fn corpus() -> PathBuf {
-    std::env::var_os("LIGHTCRAFT_CORPUS").map(PathBuf::from).unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus"))
+    lcc_brand::env_os("CORPUS").map(PathBuf::from).unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus"))
 }
 
 fn check(name: &str, hash: u64, sensor: (usize, usize), developed: (usize, usize)) {
@@ -22,7 +22,7 @@ fn check(name: &str, hash: u64, sensor: (usize, usize), developed: (usize, usize
 fn check_against(name: &str, hash: u64, sensor: (usize, usize), developed: Option<(usize, usize)>, reference: &str) {
     let path = corpus().join("raw").join(name);
     let Ok(bytes) = std::fs::read(&path) else {
-        lightcraft_testkit::skip!(Corpus, "{} absent", path.display());
+        lcc_testkit::skip!(Corpus, "{} absent", path.display());
         return;
     };
     let raw = decode(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
@@ -85,40 +85,13 @@ fn canon_r8_craw_sensor_is_exact() {
     check("cr3-canon-r8-craw.cr3", 0xf836_a663_a795_a375, (6188, 4120), (6000, 4000));
 }
 
-/// EOS R5 Mark II (raw.pixls.us 7881–7884, CC0). No external decoder was run on these: the hashes pin
-/// LightCraft's own decode. Lossless RAW is CRX 0x100, as in the oracle-checked fixtures above, with
-/// odd-height (2825- and 1787-row) Bayer planes; every entropy stream decodes to its exact end. These
-/// low-ISO C-RAW files need no QP-map escape (most of the camera's files do; that is covered by the unit
-/// tests in `crx.rs`, see docs/cr3.md). The developed images match the camera's own previews.
-fn check_r5m2(name: &str, hash: u64, sensor: (usize, usize), developed: Option<(usize, usize)>) {
-    check_against(name, hash, sensor, developed, "the pinned LightCraft decode");
-}
-
-#[test]
-fn canon_r5m2_sensor_is_pinned() {
-    // raw.pixls.us/getfile.php/7881; SHA256 d6e6aa3b493ea8936dff0efb0cc17c87471437e7317bce37c8c82ba08b9cab7b
-    check_r5m2("cr3-canon-r5m2-raw.cr3", 0xff71_6fb3_0248_496f, (8480, 5650), Some((8192, 5464)));
-    // raw.pixls.us/getfile.php/7882; SHA256 b3c08a5c7a97299dfd58896a12b939e7b43ec78682761812524825e6e5d087be
-    check_r5m2("cr3-canon-r5m2-craw.cr3", 0xaf32_b453_57b5_34e5, (8480, 5650), Some((8192, 5464)));
-}
-
-/// Crop mode (1.6×): the sensor samples only. Its developed framing depends on how the file's misplaced valid
-/// area is read, which is not part of the CRX decode.
-#[test]
-fn canon_r5m2_crop_mode_sensor_is_pinned() {
-    // raw.pixls.us/getfile.php/7883; SHA256 9f88c0ff012924193b7f4497559d133dfe626766d600b5d67689156721739ead
-    check_r5m2("cr3-canon-r5m2-apsc-raw.cr3", 0x31cf_630a_fe86_8958, (5376, 3574), None);
-    // raw.pixls.us/getfile.php/7884; SHA256 6a597497776a6abbfab8fcf12d0086ac7a3f8afea2879d61accf6bbf48d357d7
-    check_r5m2("cr3-canon-r5m2-apsc-craw.cr3", 0x4721_605b_2033_9332, (5376, 3574), None);
-}
-
 #[test]
 fn canon_m50_craw_crop_is_the_shot_aspect() {
     // raw.pixls.us/getfile.php/2663: the 1:1 square starts 1000 px right of the recommended crop's origin,
     // which is (12, 12) inside the valid sensor area.
     let path = corpus().join("raw").join("cr3-canon-m50-craw.cr3");
     let Ok(bytes) = std::fs::read(&path) else {
-        lightcraft_testkit::skip!(Corpus, "{} absent", path.display());
+        lcc_testkit::skip!(Corpus, "{} absent", path.display());
         return;
     };
     let raw = decode(&bytes).unwrap();
@@ -128,7 +101,7 @@ fn canon_m50_craw_crop_is_the_shot_aspect() {
 /// Green of the decoded mosaic against the camera's embedded JPEG, on a `gw × gh` grid of the active area
 /// (gamma-encoded, Pearson). A misread CRX stream (wrong tile, plane, band or quantiser) leaves a picture that
 /// no longer follows the camera's own rendering; lens-corrected compact JPEGs keep it well above 0.6.
-fn green_vs_camera_jpeg(raw: &lightcraft_raw::RawImage, jpeg: &[u8], gw: usize, gh: usize) -> f64 {
+fn green_vs_camera_jpeg(raw: &lcc_raw::RawImage, jpeg: &[u8], gw: usize, gh: usize) -> f64 {
     use zune_core::{bytestream::ZCursor, colorspace::ColorSpace, options::DecoderOptions};
     let opts = DecoderOptions::default().jpeg_set_out_colorspace(ColorSpace::RGB);
     let mut d = zune_jpeg::JpegDecoder::new_with_options(ZCursor::new(jpeg), opts);
@@ -167,7 +140,7 @@ fn green_vs_camera_jpeg(raw: &lightcraft_raw::RawImage, jpeg: &[u8], gw: usize, 
 }
 
 /// One CC0 file per further CR3 body (raw.pixls.us; URLs and SHA-256 in `RAW_SAMPLES`, xtask/src/main.rs).
-/// No external decoder was run on these: the sensor hashes pin LightCraft's own decode, every CRX stream
+/// No external decoder was run on these: the sensor hashes pin the app's own decode, every CRX stream
 /// decodes, and the mosaic follows the camera's own embedded JPEG (`green_vs_camera_jpeg` on 24 × 16 cells).
 /// The renders were also inspected at 100 % for tile, band and quantiser artefacts (none). See docs/cr3.md.
 #[test]
@@ -204,9 +177,9 @@ fn canon_cr3_bodies_decode_like_the_camera_jpeg() {
             eprintln!("skip: {} absent", path.display());
             continue;
         };
-        check_against(name, hash, sensor, None, "the pinned LightCraft decode");
+        check_against(name, hash, sensor, None, "the pinned decode of the app");
         let raw = decode(&bytes).unwrap();
-        let jpeg = lightcraft_raw::embedded_preview(&bytes).unwrap_or_else(|| panic!("{name}: no camera JPEG"));
+        let jpeg = lcc_raw::embedded_preview(&bytes).unwrap_or_else(|| panic!("{name}: no camera JPEG"));
         let r = green_vs_camera_jpeg(&raw, &jpeg, 24, 16);
         eprintln!("{name:34} {}x{}: green follows the camera JPEG, r = {r:.3}", raw.width, raw.height);
         assert!(r > 0.6, "{name}: decoded mosaic does not follow the camera JPEG (r = {r:.3})");
@@ -241,4 +214,25 @@ fn canon_rp_crop_mode_craw_sensor_is_exact() {
     // raw.pixls.us/getfile.php/4671; SHA256
     // 4a859ab137f792aedaf3416b0aad1497ebaab02052a49453902e226699154aa7
     check("cr3-canon-rp-craw-crop.cr3", 0x39a6_0c4e_fed4_e1f4, (4032, 2656), (3888, 2592));
+}
+
+// Canon EOS R6 lossless RAW: five private files supplied by the maintainer (not redistributable, so
+// absent for everyone else and skipped), checked against the same DNGLab 0.8.0 release (Linux x64
+// binary, which first reproduced the M50 RAW hash above). Sensor 5568x3708, developed 5472x3648.
+#[test]
+fn canon_r6_lossless_sensor_is_exact() {
+    for (name, hash) in [
+        // SHA256 7a8967ff68a21e076a3bd658fbdd2089c8b8285de0396da70feb5eb3ce8bfadf
+        ("cr3-canon-r6-1.cr3", 0x00b0_1d2b_9179_a8cb),
+        // SHA256 b8c26ebc480985f0bc7bf7c2cba33976e57e5bd4de148e171d49707fb613572e
+        ("cr3-canon-r6-2.cr3", 0xf663_6c02_e711_6eac),
+        // SHA256 56a7b5e5131522e716c2d82ac38a4a2e132270c8508d6ff250ac702f4aa471af
+        ("cr3-canon-r6-3.cr3", 0xd006_2a8b_5d5c_5d35),
+        // SHA256 bb9c4ab3da862029ef807ebc8e64ed77c08087586b3127dd58cf49c16a1e8af3
+        ("cr3-canon-r6-4.cr3", 0x0a4c_3b71_b3a6_efa4),
+        // SHA256 0fe2f4c3a5695516056a295c87a35696939bae6f09b9d21137b93a601f41f8b1
+        ("cr3-canon-r6-5.cr3", 0xe945_0c76_3748_7a3c),
+    ] {
+        check(name, hash, (5568, 3708), (5472, 3648));
+    }
 }

@@ -1,52 +1,81 @@
-//! LightCraft's egui frontend: a Lightroom-style UI over `lightcraft-engine`.
+//! The app's egui frontend: a Lightroom-style UI over `lcc-engine`.
 //!
-//! The UI is thin: every action goes through [`LightcraftApp::run`], which handles UI commands
+//! The UI is thin: every action goes through [`LccApp::run`], which handles UI commands
 //! (views, panels, zoom — see [`menus::ui_commands`]) and forwards everything else to the engine.
 //! The same entry point serves menus, shortcuts, buttons and the control channel ([`control`]).
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod access;
 pub mod album_picker;
+pub mod book;
 pub mod brush_live;
 pub mod button;
 pub mod canvas_keys;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod catalog_ui;
+#[cfg(target_arch = "wasm32")]
+#[path = "catalog_ui_web.rs"]
+pub mod catalog_ui;
+pub mod color_readout;
 mod command_error;
 pub mod control;
+pub mod creations_ui;
 pub mod credits;
 pub mod date_picker;
+pub mod dialog_frame;
 pub mod docking;
+mod edit_in;
 pub mod export_task;
 mod focus_scan;
 pub mod headless;
+pub mod help_overlay;
 pub mod i18n;
+mod i18n_fork;
 pub mod icons;
 pub mod import;
+pub mod libtools;
 pub mod lightroom_import;
 pub mod links;
+pub mod map;
 pub mod menu_level;
 pub mod menubar;
 pub mod menus;
 pub mod merge;
 mod model_setup;
+pub mod module;
 pub mod panels;
 pub mod pick;
+pub mod plate;
+pub mod print_ui;
 pub mod print_view;
 pub mod recheck;
 pub mod region;
 pub mod render;
+pub mod render_dng_task;
+/// The module shell's frame steps (fork-owned).
+mod shell;
 pub mod shortcuts;
 pub mod sidebar;
 pub mod slideshow_export;
+pub mod slideshow_ui;
 pub mod softpaint;
+pub mod space_hand;
 pub mod state;
 pub mod sync;
 pub mod tasks;
 pub mod text_field;
 pub mod theme;
+pub mod timelapse_ui;
 pub mod titlebar;
+pub mod video_ui;
+pub mod video_view;
+pub mod web_module;
 pub mod widgets;
 pub mod window_place;
 
+#[cfg(test)]
+mod tests_access;
 #[cfg(test)]
 mod tests_activity;
 #[cfg(test)]
@@ -64,9 +93,21 @@ mod tests_button;
 #[cfg(test)]
 mod tests_canvas_keys;
 #[cfg(test)]
+mod tests_catalog_ui;
+#[cfg(test)]
+mod tests_classic;
+#[cfg(test)]
+mod tests_clipping;
+#[cfg(test)]
+mod tests_color_readout;
+#[cfg(test)]
 mod tests_compare;
 #[cfg(test)]
 mod tests_copy_paste_dialogs;
+#[cfg(test)]
+mod tests_crop_aspects;
+#[cfg(test)]
+mod tests_crop_frame;
 #[cfg(test)]
 mod tests_crop_rotate;
 #[cfg(test)]
@@ -78,7 +119,7 @@ mod tests_date_picker;
 #[cfg(test)]
 mod tests_dialog_fit;
 #[cfg(test)]
-mod tests_dialog_primary;
+mod tests_dialog_frame;
 #[cfg(test)]
 mod tests_dialogs;
 #[cfg(test)]
@@ -90,6 +131,8 @@ mod tests_error_kinds;
 #[cfg(test)]
 mod tests_filmstrip;
 #[cfg(test)]
+mod tests_filter_search;
+#[cfg(test)]
 mod tests_focus_point;
 #[cfg(test)]
 mod tests_folder_drop;
@@ -97,6 +140,14 @@ mod tests_folder_drop;
 mod tests_grading;
 #[cfg(test)]
 mod tests_grid;
+#[cfg(test)]
+mod tests_histogram_drag;
+#[cfg(test)]
+mod tests_histogram_modes;
+#[cfg(test)]
+mod tests_i18n_coverage;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests_immich_ui;
 #[cfg(test)]
 mod tests_info_dialogs;
 #[cfg(test)]
@@ -116,9 +167,11 @@ mod tests_labels;
 #[cfg(test)]
 mod tests_layout_image;
 #[cfg(test)]
+mod tests_lens_db;
+#[cfg(test)]
 mod tests_library_problem;
 #[cfg(test)]
-mod tests_lights_out;
+mod tests_libtools;
 #[cfg(test)]
 mod tests_mask_effects;
 #[cfg(test)]
@@ -128,11 +181,19 @@ mod tests_masking_layout;
 #[cfg(test)]
 mod tests_menubar;
 #[cfg(test)]
+mod tests_merge_preview;
+#[cfg(test)]
+mod tests_module_help;
+#[cfg(test)]
+mod tests_modules;
+#[cfg(test)]
 mod tests_offline;
 #[cfg(test)]
 mod tests_open_lightroom;
 #[cfg(test)]
 mod tests_panels;
+#[cfg(test)]
+mod tests_preset_favorites;
 #[cfg(test)]
 mod tests_preset_import;
 #[cfg(test)]
@@ -158,6 +219,8 @@ mod tests_slideshow;
 #[cfg(test)]
 mod tests_solo_sections;
 #[cfg(test)]
+mod tests_space_hand;
+#[cfg(test)]
 mod tests_switch_library;
 #[cfg(test)]
 mod tests_sync;
@@ -171,8 +234,8 @@ mod tests_titlebar;
 mod tests_tool_overlay;
 #[cfg(test)]
 mod tests_unsaved;
-#[cfg(test)]
-mod tests_view_cost;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests_update;
 #[cfg(test)]
 mod tests_wb_selector;
 #[cfg(test)]
@@ -182,7 +245,7 @@ mod tests_zoom_keys;
 
 use std::sync::mpsc::{Receiver, Sender};
 
-use lightcraft_engine::{AiModel, ErrorKind, Session};
+use lcc_engine::{AiModel, ErrorKind, Session};
 use serde_json::Value;
 
 pub use command_error::CommandError;
@@ -199,7 +262,7 @@ pub type SaveFile = Box<dyn FnMut(&str) -> Option<String>>;
 pub type WriteFn = Box<dyn FnMut(&str, &[u8]) -> Result<(), String>>;
 /// A writer other threads can use (background export).
 pub type SharedWrite = std::sync::Arc<dyn Fn(&str, &[u8]) -> Result<(), String> + Send + Sync>;
-pub type PngEncode = Box<dyn Fn(&lightcraft_raster::Rgba8) -> Vec<u8>>;
+pub type PngEncode = Box<dyn Fn(&lcc_raster::Rgba8) -> Vec<u8>>;
 /// A folder chooser (`None` = cancelled).
 pub type PickFolder = Box<dyn FnMut() -> Option<String>>;
 /// Reveal a file in the system file manager (Finder / Explorer / the folder on Linux).
@@ -227,6 +290,25 @@ pub type HostAction = Box<dyn FnMut(&mut Session) -> Result<Value, String>>;
 /// windowing layer says nothing, e.g. many Wayland compositors). The host answers from what it
 /// last heard and wakes the UI itself when that changes; it is never polled for changes.
 pub type SystemThemeFn = Box<dyn Fn(&egui::Context) -> Option<egui::Theme>>;
+
+/// HDR display output (desktop: an extended-range float window surface; LR-VIEW-HDR-DISPLAY).
+/// With it, the loupe shows an HDR edit above SDR white, up to the display's headroom.
+pub trait HdrOutput {
+    /// The display's peak over SDR white right now when the window shows HDR (`> 1`), else
+    /// `None` (an SDR display, HDR switched off in the OS, or unknown). Asked every frame.
+    fn headroom(&mut self) -> Option<f32>;
+    /// Upload a linear-light render (3 floats per pixel, row-major, SDR white = 1, sRGB
+    /// primaries) as the loupe's HDR texture, replacing the previous one.
+    fn upload(&mut self, width: usize, height: usize, rgb: &[f32]) -> Result<egui::TextureId, String>;
+}
+
+/// Grades a playing clip's frames on the window's GPU (desktop: the egui-wgpu device, through
+/// `lcc_gpu::video_lut`), producing the texture to draw without a CPU grade or upload.
+pub trait VideoGpu {
+    /// Grade linear frame `img` with `lut` (identified by `key`) into a texture to draw (valid
+    /// until the next call). An error makes the loupe fall back to the CPU LUT.
+    fn grade(&mut self, img: &lcc_raster::Rgb32f, key: u64, lut: &lcc_pipeline::grade::GradeLut) -> Result<(egui::TextureId, [usize; 2]), String>;
+}
 
 /// Platform services injected by the host app (desktop or web).
 #[derive(Default)]
@@ -260,6 +342,10 @@ pub struct Services {
     pub pick_curve_preset_files: Option<PickFiles>,
     /// Save dialog for an exported `.lccurve` file.
     pub save_curve_preset_file: Option<SaveFile>,
+    /// Open dialog for a list file: a collection definition (`.json`) or a keyword list (`.txt`).
+    pub pick_list_file: Option<PickFiles>,
+    /// Save dialog for a list file (the suggested name carries the extension).
+    pub save_list_file: Option<SaveFile>,
     /// Open dialog for slideshow template files (`.json`; Settings ▸ Slideshow ▸ Templates ▸ Import…).
     pub pick_slideshow_templates: Option<PickFiles>,
     /// Save dialog for an exported slideshow template (`.json`).
@@ -271,8 +357,8 @@ pub struct Services {
     pub png: Option<PngEncode>,
     /// Show a file in the system file manager (desktop only).
     pub reveal: Option<RevealFn>,
-    /// The host's current log file (`<settings>/logs/lightcraft.log`), which Help ▸ Open Log
-    /// Folder reveals (#260). None where no log is kept: the web, `--memory`, `LIGHTCRAFT_NO_PREFS`.
+    /// The host's current log file (`<settings>/logs/<binary>.log`), which Help ▸ Open Log
+    /// Folder reveals (#260). None where no log is kept: the web, `--memory`, `<ENV_PREFIX>_NO_PREFS`.
     pub log_file: Option<String>,
     /// Choose a folder (Settings → General → Open Library…; desktop only).
     pub pick_folder: Option<PickFolder>,
@@ -299,13 +385,17 @@ pub struct Services {
     pub restore_library: Option<HostAction>,
     /// The system appearance for Appearance Mode ▸ Auto, ahead of egui's own report.
     pub system_theme: Option<SystemThemeFn>,
+    /// The GPU grade of playing video frames (none: graded on the CPU).
+    pub video_gpu: Option<Box<dyn VideoGpu>>,
+    /// HDR display output (none: the window is SDR).
+    pub hdr_output: Option<Box<dyn HdrOutput>>,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Perf {
-    /// Layout of the last frame ([`LightcraftApp::ui`], including commands run from widgets).
+    /// Layout of the last frame ([`LccApp::ui`], including commands run from widgets).
     pub frame_ms: f64,
-    /// Per-frame logic before layout ([`LightcraftApp::logic`]: control channel, shortcuts,
+    /// Per-frame logic before layout ([`LccApp::logic`]: control channel, shortcuts,
     /// render polling, pending catalog persistence).
     pub logic_ms: f64,
     /// The whole update of the last frame: logic + layout.
@@ -336,7 +426,7 @@ impl QuitPrompt {
     }
 }
 
-pub struct LightcraftApp {
+pub struct LccApp {
     pub(crate) model_setup: model_setup::Pending,
     /// Per-catalog-revision caches of library-wide results the panels show every frame
     /// (expensive on big libraries).
@@ -356,9 +446,10 @@ pub struct LightcraftApp {
     /// The keyboard shortcuts editor is waiting for a key press for this command: no shortcut
     /// fires (the native menu bar drops its accelerators too) until it gets one or is cancelled.
     pub recording_shortcut: Option<String>,
-    /// A text field had the keyboard at the end of the last frame. egui drops the focus as Esc
-    /// arrives, before the shortcuts are read, so this is how Esc there stays the field's own.
+    /// A text field had the keyboard last frame (Tab then moves focus as usual).
     pub text_focus: bool,
+    /// Tab presses held back from egui's focus navigation (their shift state): they toggle panels.
+    pub deferred_tabs: Vec<egui::Modifiers>,
     /// The host is [`headless::Headless`] (it answers viewport screenshot commands itself).
     pub headless_host: bool,
     /// Warnings to show one at a time (damaged settings files…, issue #103).
@@ -399,15 +490,24 @@ pub struct LightcraftApp {
     pub film_scroll: Option<f32>,
     /// Widget registry from the last frame (automation ids → rects).
     pub widgets: Vec<(String, egui::Rect)>,
+    /// A histogram clipping indicator is hovered this frame: the clipping overlay is previewed on
+    /// the photo without turning the persistent one on ([`Self::hover_preview`]'s pattern).
+    pub clipping_preview: bool,
     /// In-progress on-canvas gesture (brush stroke points, gradient drag…).
     pub gesture: Option<panels::detail::Gesture>,
+    /// The crop tool's view held still while the crop is dragged, rotated or straightened (issue #60).
+    pub crop_layout: Option<panels::detail::CropLayout>,
+    /// Space is held over a tool on the photo: the view's hand has the pointer ([`space_hand`]).
+    pub space_hand: Option<space_hand::SpaceHand>,
     /// The brush stroke being painted, as drawn on the photo until it's committed (issue #517).
     pub brush_live: Option<brush_live::LiveStroke>,
     /// What the loupe drew last frame: photo and source ("render", "cached", "embedded", "small",
     /// "thumb", "none").
-    pub loupe_shown: Option<(lightcraft_catalog::PhotoId, &'static str)>,
-    /// The window render the loupe asked for last, by job key (see [`region`]); kept for the few
-    /// windows whose textures can be on screen, and for the inspector.
+    pub loupe_shown: Option<(lcc_catalog::PhotoId, &'static str)>,
+    /// The loupe's video frames (playback worker, paused still).
+    pub video_view: video_view::VideoView,
+    /// The zoomed view the loupe asked tiles for last (see [`region`]): the frame, the part its
+    /// on-screen tiles cover and their look; for drawing while a pinch runs, and the inspector.
     pub region_view: Option<region::RegionView>,
     /// The same for the Before side of a Before/After view.
     pub region_before_view: Option<region::RegionView>,
@@ -416,15 +516,9 @@ pub struct LightcraftApp {
     /// The size of a slider drag's whole-frame drafts (full size where they keep up, issue #330).
     pub(crate) drag_scale: region::DragScale,
     /// (photo, look, window frame size) a window was refused for: it reads more than one render holds.
-    pub(crate) window_refused: Option<(lightcraft_catalog::PhotoId, u64, usize)>,
-    pub(crate) region_tiles: std::collections::HashMap<(bool, u64), region::RegionView>,
-    /// The window render each pane of Compare / Reference asked for last (left, right), as
-    /// [`Self::region_view`] is for the loupe.
-    pub compare_windows: [Option<region::RegionView>; 2],
-    /// Compare / Reference window renders by (pane, job key): which texture shows what.
-    pub(crate) compare_tiles: std::collections::HashMap<(u8, u64), region::RegionView>,
-    /// Until when (s) a pinch or scroll in Compare / Reference holds the windows there are.
-    pub(crate) compare_hold_until: f64,
+    pub(crate) window_refused: Option<(lcc_catalog::PhotoId, u64, usize)>,
+    /// (photo, look) whose 1:1 preview was last asked to be read from disk (see `detail`).
+    pub(crate) full_preview_loaded: Option<(lcc_catalog::PhotoId, u64)>,
     /// Photo Merge dialog previews and background merges.
     pub merge: merge::MergeState,
     /// An import in progress (the import review dialog's batches).
@@ -441,12 +535,17 @@ pub struct LightcraftApp {
     pub lightroom: Option<lightroom_import::LightroomTask>,
     /// Last terminal Lightroom result, exposed by the command's status/wait response.
     pub lightroom_last: Option<Value>,
+    /// Catalog dialogs and the Open Recent list (`catalog_ui`).
+    pub catalog_ui: catalog_ui::CatalogUi,
     /// A completed import result waiting for another modal dialog to close.
     pub(crate) lightroom_result: Option<state::Dialog>,
     /// The library generation the window title and the recent list were last updated for.
     pub shown_library: Option<u64>,
     /// A background export in progress.
     pub export: Option<export_task::ExportTask>,
+    /// A background Photo ▸ Render to DNG in progress, and the last one's result.
+    pub render_dng: Option<render_dng_task::RenderDngTask>,
+    pub last_render_dng: Option<serde_json::Value>,
     /// Background file-system work of other commands (Find Missing Photos, auto import…).
     pub tasks: tasks::Tasks,
     /// The files of the last finished background export (`ui.inspect` → `export.last`).
@@ -458,11 +557,24 @@ pub struct LightcraftApp {
     pub hover_preview: Option<HoverPreview>,
     /// The window is in full screen (as last reported by the host, or as last requested).
     pub window_is_fullscreen: bool,
+    /// Full Screen Preview (F) put the window into full screen itself: leaving the preview takes
+    /// the window back out (issue #2: the preview must cover the taskbar). `None` = no preview.
+    preview_window: Option<bool>,
     /// The GPU preference last applied (`app.gpu`), to apply Settings changes once.
     gpu_applied: Option<bool>,
     /// Say once, when the GPU device has been tried, that no graphics processor was found
     /// ([`panels::notices::gpu_notice`]). The desktop app sets it; headless sessions and tests don't.
     pub gpu_notice: bool,
+    /// This host may run the start-up update check (when the user turned it on): the desktop app
+    /// with a settings folder of its own sets it. Headless sessions (the test harness, `snapshot`,
+    /// MCP), `--memory` and `<PREFIX>_NO_PREFS` runs don't, so they never check at start.
+    pub startup_update_check: bool,
+    /// The window shows SDR only (desktop: eframe's surface is 8-bit, `hdr_display::report`), so
+    /// the HDR button says HDR edits are seen through the SDR rendition. Headless/tests: false.
+    pub hdr_display_sdr: bool,
+    /// The display's headroom when the window shows HDR now ([`HdrOutput::headroom`]): the loupe
+    /// then draws HDR edits from their HDR render ([`render::Slot::HdrView`]).
+    pub hdr_headroom: Option<f32>,
     /// The memory budget setting last applied (MB, 0 = automatic).
     memory_applied: Option<u32>,
     /// The display profile setting last applied (`app.displayProfile`).
@@ -476,16 +588,38 @@ pub struct LightcraftApp {
     /// The library failed to open at launch: the blocking window, then the temporary-session
     /// banner (issue #100). Cleared once a library opens.
     pub library_problem: Option<panels::library_problem::LibraryProblem>,
+    /// Immich: Connections settings, the Import dialog's Immich source, background pump state.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub immich: panels::connections::ImmichUi,
+    /// The Print module's settings and job state.
+    pub print: print_ui::PrintUi,
     /// The activity stack shows every task, not just the first few ("+N more" was clicked).
     pub activity_expanded: bool,
+    /// The Map module's view state (P3.3).
+    pub map: map::MapUi,
+    /// The Classic module help sheet (⌘/, P6.3).
+    pub help: help_overlay::HelpOverlay,
+    /// A dialog panel asked to be closed (it cannot do it itself: the dialog frame writes the state
+    /// back after the body has drawn). Taken by the dialog frame each frame.
+    pub close_dialog: bool,
 }
 
-impl LightcraftApp {
+impl LccApp {
     pub fn new(mut session: Session, services: Services) -> Self {
+        if cfg!(test) {
+            // unit tests never open the file manager or start other programs
+            session.desktop = std::sync::Arc::new(lcc_engine::desktop::Recorder::default());
+        }
         // AI mask requests run on the model's worker; frames apply their results (never wait)
         session.segmenter.background = true;
         Self {
             session,
+            #[cfg(not(target_arch = "wasm32"))]
+            immich: Default::default(),
+            print: Default::default(),
+            map: Default::default(),
+            help: Default::default(),
+            close_dialog: false,
             ui: UiState::default(),
             services,
             renderer: render::Renderer::default(),
@@ -496,6 +630,7 @@ impl LightcraftApp {
             native_shortcuts: Default::default(),
             recording_shortcut: None,
             text_focus: false,
+            deferred_tabs: Vec::new(),
             headless_host: false,
             notices: vec![],
             quit_prompt: None,
@@ -520,17 +655,17 @@ impl LightcraftApp {
             film_scroll: None,
             widgets: vec![],
             gesture: None,
+            crop_layout: None,
+            space_hand: None,
             brush_live: None,
             loupe_shown: None,
+            video_view: Default::default(),
             region_view: None,
             region_before_view: None,
             size_hold: Default::default(),
             drag_scale: Default::default(),
             window_refused: None,
-            region_tiles: Default::default(),
-            compare_windows: [None; 2],
-            compare_tiles: Default::default(),
-            compare_hold_until: f64::NEG_INFINITY,
+            full_preview_loaded: None,
             merge: merge::MergeState::default(),
             import: None,
             scan: None,
@@ -539,16 +674,24 @@ impl LightcraftApp {
             sync_run: None,
             lightroom: None,
             lightroom_last: None,
+            catalog_ui: Default::default(),
             lightroom_result: None,
             shown_library: None,
             export: None,
+            render_dng: None,
+            last_render_dng: None,
             tasks: Default::default(),
             last_export_result: None,
             slideshow_export_reported: true,
             hover_preview: None,
+            clipping_preview: false,
             window_is_fullscreen: false,
+            preview_window: None,
             gpu_applied: None,
             gpu_notice: false,
+            startup_update_check: false,
+            hdr_display_sdr: false,
+            hdr_headroom: None,
             memory_applied: None,
             display_applied: None,
             display_error: None,
@@ -596,11 +739,18 @@ impl LightcraftApp {
         self.run_typed(id, params).map_err(|e| e.message)
     }
 
-    /// [`LightcraftApp::run`], keeping what kind of error a refusal is: for code that decides on it
+    /// [`LccApp::run`], keeping what kind of error a refusal is: for code that decides on it
     /// (offer a model's download, treat a cancel as one) instead of reading the message.
     pub fn run_typed(&mut self, id: &str, params: Value) -> Result<Value, CommandError> {
+        shortcuts::set_active(self.ui.settings.keymap_set);
         if let Some(result) = model_setup::intercept(self, id, &params) {
             return result.map_err(CommandError::from);
+        }
+        if let Some(r) = edit_in::intercept(self, id, &params) {
+            return r.map_err(CommandError::from);
+        }
+        if video_ui::blocked(self, id) {
+            return Err(CommandError::from(i18n::tr(video_ui::NOT_FOR_VIDEO).to_string()));
         }
         if let Some(r) = menus::run_ui_command(self, id, &params) {
             if r.is_ok() {
@@ -611,13 +761,16 @@ impl LightcraftApp {
         let params = if id == "crop.aspect"
             && params.get("aspect").and_then(Value::as_str) == Some("toggle")
             && self.crop_tool_aspect().is_some()
-            && self.session.active().and_then(|id| self.session.develop_of(id)).is_some_and(|d| d.crop == lightcraft_develop::Crop::default())
+            && self.session.active().and_then(|id| self.session.develop_of(id)).is_some_and(|d| d.crop == lcc_develop::Crop::default())
         {
             serde_json::json!({"aspect": "free"})
         } else {
             params
         };
         let r = self.session.execute(id, &params).map_err(CommandError::from);
+        if let Ok(v) = &r {
+            edit_in::after_command(self, id, v);
+        }
         if r.is_ok() && matches!(id, "crop.aspect" | "crop.rotateAspect") {
             self.ui.crop_default_aspect = if id == "crop.aspect" && params.get("aspect").and_then(Value::as_str) == Some("original") {
                 Some(serde_json::json!("original"))
@@ -654,7 +807,7 @@ impl LightcraftApp {
             }
         }
         if r.is_ok() && id == "photo.label" {
-            let label = params.get("label").and_then(Value::as_str).and_then(lightcraft_catalog::ColorLabel::parse);
+            let label = params.get("label").and_then(Value::as_str).and_then(lcc_catalog::ColorLabel::parse);
             let text = match label {
                 Some(label) => {
                     let name =
@@ -693,7 +846,7 @@ impl LightcraftApp {
     pub(crate) fn crop_tool_aspect(&self) -> Option<(u32, u32)> {
         let photo = self.session.active()?;
         let d = self.session.develop_of(photo)?;
-        if d.crop != lightcraft_develop::Crop::default() {
+        if d.crop != lcc_develop::Crop::default() {
             return d.crop.aspect;
         }
         match self.ui.crop_default_aspect.as_ref()? {
@@ -716,7 +869,7 @@ impl LightcraftApp {
     /// Called only after a crop gesture begins, inside its undo transaction.
     pub(crate) fn begin_crop(&mut self) -> Result<(), String> {
         if self.session.interaction.is_some()
-            && self.session.active().and_then(|id| self.session.develop_of(id)).is_some_and(|d| d.crop == lightcraft_develop::Crop::default())
+            && self.session.active().and_then(|id| self.session.develop_of(id)).is_some_and(|d| d.crop == lcc_develop::Crop::default())
             && let Some(aspect) = self.ui.crop_default_aspect.clone()
             && aspect != serde_json::json!("free")
             && let Err(e) = self.session.execute("crop.aspect", &serde_json::json!({"aspect": aspect}))
@@ -773,7 +926,7 @@ impl LightcraftApp {
                 let t = ctx.input(|i| i.time);
                 self.ui.toast = Some((
                     crate::i18n::tr_format!(
-                        "{n} change{} saved in memory but not written to disk: {e} — LightCraft will retry",
+                        "{n} change{} saved in memory but not written to disk: {e} — {app} will retry",
                         if n == 1 { "" } else { "s" },
                         n = n,
                         e = e
@@ -803,7 +956,7 @@ impl LightcraftApp {
 
     /// Reverse geocoding: say how a place-names download ended (a failure stays readable, with what to do).
     fn place_names_outcome(&mut self, ctx: &egui::Context) {
-        use lightcraft_engine::cmd::geocode::DownloadOutcome;
+        use lcc_engine::cmd::geocode::DownloadOutcome;
         match self.session.place_names.take_outcome() {
             Some(DownloadOutcome::Done(_)) => self.toast(ctx, crate::i18n::tr("Place names downloaded")),
             Some(DownloadOutcome::Cancelled) => self.toast(ctx, crate::i18n::tr("Place names download cancelled")),
@@ -867,7 +1020,7 @@ impl LightcraftApp {
     /// ([`ErrorKind::ModelMissing`]), not its words.
     pub fn ai_error(&mut self, ctx: &egui::Context, e: impl Into<CommandError>, then: Option<(&str, &str)>) {
         let e = e.into();
-        if lightcraft_engine::segment::Segmenter::AVAILABLE && e.kind == ErrorKind::ModelMissing(AiModel::Sam3) {
+        if lcc_engine::segment::Segmenter::AVAILABLE && e.kind == ErrorKind::ModelMissing(AiModel::Sam3) {
             self.offer_sam_download(then);
         } else {
             self.toast_error(ctx, e.message);
@@ -1044,21 +1197,27 @@ impl LightcraftApp {
     /// on other threads (export, denoise, the device warm-up). `false`: the deadline passed first
     /// (the host exits anyway). The app renders nothing afterwards.
     pub fn shutdown(&mut self, timeout: std::time::Duration) -> bool {
-        lightcraft_engine::gpu::begin_shutdown();
+        lcc_engine::gpu::begin_shutdown();
         #[cfg(not(target_arch = "wasm32"))]
         let t0 = std::time::Instant::now();
         let stopped = self.renderer.shutdown(timeout);
         #[cfg(not(target_arch = "wasm32"))]
         let timeout = timeout.saturating_sub(t0.elapsed());
-        let idle = lightcraft_engine::gpu::wait_idle(timeout);
+        let idle = lcc_engine::gpu::wait_idle(timeout);
         stopped && idle
     }
 
     /// Per-frame logic before layout (control channel, renders, shortcuts, drops).
     pub fn logic(&mut self, ctx: &egui::Context) {
         i18n::set_language(self.ui.language);
+        widgets::sync_section_folds(ctx, &mut self.ui.section_open);
         let t0 = now_ms();
         panels::library_problem::logic(self);
+        // the display can switch between SDR and HDR (OS setting, another monitor) at any time
+        if let Some(h) = self.services.hdr_output.as_mut() {
+            self.hdr_headroom = h.headroom();
+            self.hdr_display_sdr = self.hdr_headroom.is_none();
+        }
         self.logic_inner(ctx);
         self.perf.logic_ms = now_ms() - t0;
     }
@@ -1069,7 +1228,7 @@ impl LightcraftApp {
             theme::apply(ctx);
             // File → Add from Device lists cards scanned in the background: show hot-plugs
             let repaint = ctx.clone();
-            lightcraft_engine::devices::on_change(move || repaint.request_repaint());
+            lcc_engine::devices::on_change(move || repaint.request_repaint());
             // "is the original there?" (grid, Info panel, Missing Photos) answers from a cache a
             // worker fills: a sleeping NAS or a dropped share never stalls a frame
             let repaint = ctx.clone();
@@ -1114,10 +1273,14 @@ impl LightcraftApp {
         lightroom_import::tick(self, ctx);
         recheck::tick(self);
         tasks::poll(self, ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        panels::update::poll(self, ctx);
         self.preview_build_status(ctx);
         self.save_status(ctx);
         self.slideshow_tick(ctx);
         panels::faces::pump(self, ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        panels::connections::pump(self, ctx);
         // back from an external editor: pick up the files it saved
         let focused = ctx.input(|i| i.focused);
         if focused && !self.ui.was_focused && !self.ui.external_edits.is_empty() {
@@ -1142,8 +1305,8 @@ impl LightcraftApp {
                 && !self.tasks.is_running(LABEL)
             {
                 self.ui.auto_import_at = now;
-                let work = move || lightcraft_engine::cmd::library::list_auto_import_folder(&folder);
-                let done = |app: &mut LightcraftApp, _ctx: &egui::Context, listing: Result<Vec<(String, u64)>, String>| {
+                let work = move || lcc_engine::cmd::library::list_auto_import_folder(&folder);
+                let done = |app: &mut LccApp, _ctx: &egui::Context, listing: Result<Vec<(String, u64)>, String>| {
                     let listing = match listing {
                         Ok(l) => l,
                         Err(e) => return log::debug!("auto import: {e}"),
@@ -1166,6 +1329,8 @@ impl LightcraftApp {
             }
             ctx.request_repaint_after(std::time::Duration::from_secs(3));
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        panels::tether_bar::show(self, ctx);
         // automatic XMP writes that failed (a network share offline): tried again every few seconds once their files
         // are reachable, and said once when they start waiting and once when they're written
         #[cfg(not(target_arch = "wasm32"))]
@@ -1183,7 +1348,7 @@ impl LightcraftApp {
                 self.toast_for(
                     ctx,
                     crate::i18n::tr_format!(
-                        "The XMP sidecars of {n} photos couldn't be written (is their folder offline?). LightCraft keeps trying.",
+                        "The XMP sidecars of {n} photos couldn't be written (is their folder offline?). {app} keeps trying.",
                         n = waiting
                     ),
                     8.0,
@@ -1196,20 +1361,22 @@ impl LightcraftApp {
         // Settings → Import: open the import review when a camera or card is connected
         #[cfg(not(target_arch = "wasm32"))]
         if self.session.import_defaults.show_on_card {
-            if let Some(now) = lightcraft_engine::devices::devices_scanned() {
+            if let Some(now) = lcc_engine::devices::devices_scanned() {
                 import::cards_seen(self, now);
             }
-            ctx.request_repaint_after(lightcraft_engine::devices::MAX_AGE);
+            ctx.request_repaint_after(lcc_engine::devices::MAX_AGE);
         } else {
             self.ui.known_cards = None;
         }
         self.session.persist_if_dirty();
         panels::denoise::pump(self, ctx);
+        panels::plugin_filters::pump(self, ctx);
         model_setup::pump(self, ctx);
         panels::faces::pump(self, ctx);
         focus_scan::pump(self, ctx);
         self.collect_screenshots(ctx);
         self.issue_screenshots(ctx);
+        edit_in::show(self, ctx);
         if self.fonts_ready {
             shortcuts::handle(self, ctx);
         }
@@ -1248,20 +1415,20 @@ impl LightcraftApp {
             // GPU device + kernels off the UI thread, once the window is up and only when GPU
             // rendering is on: a broken driver must not keep the window from appearing (issue #136)
             if self.ui.settings.gpu {
-                lightcraft_engine::gpu::warm_up();
+                lcc_engine::gpu::warm_up();
             }
         }
         let mb = self.ui.settings.memory_mb;
         // automatic at startup: leave the engine's default alone
         if self.memory_applied != Some(mb) && (mb > 0 || self.memory_applied.is_some()) {
-            let mb = if mb == 0 { (lightcraft_engine::memory::default_budget() >> 20) as u32 } else { mb };
+            let mb = if mb == 0 { (lcc_engine::memory::default_budget() >> 20) as u32 } else { mb };
             let _ = self.session.execute("app.memoryBudget", &serde_json::json!({"mb": mb}));
         }
         self.memory_applied = Some(mb);
         // the monitor profile (Settings ▸ Display): previews follow it from the next frame
         if self.display_applied.as_ref() != Some(&self.ui.settings.display_profile) {
             let path = self.ui.settings.display_profile.clone();
-            match lightcraft_engine::display::Display::load_opt(&path) {
+            match lcc_engine::display::Display::load_opt(&path) {
                 Ok(d) => {
                     self.renderer.set_display(d);
                     self.display_error = None;
@@ -1284,6 +1451,24 @@ impl LightcraftApp {
         }
         if let Some(fs) = ctx.input(|i| i.viewport().fullscreen) {
             self.window_is_fullscreen = fs;
+        }
+        // Full Screen Preview covers the whole screen: the window goes full screen with it and
+        // comes back when it ends, unless it was already full screen (then it stays)
+        match (self.ui.fullscreen, self.preview_window) {
+            (true, None) => {
+                let took = !self.window_is_fullscreen;
+                self.preview_window = Some(took);
+                if took && self.ui.window_fullscreen.is_none() {
+                    self.ui.window_fullscreen = Some(true);
+                }
+            }
+            (false, Some(took)) => {
+                self.preview_window = None;
+                if took && self.ui.window_fullscreen.is_none() {
+                    self.ui.window_fullscreen = Some(false);
+                }
+            }
+            _ => {}
         }
         if let Some(on) = self.ui.window_fullscreen.take() {
             ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(on));
@@ -1310,7 +1495,7 @@ impl LightcraftApp {
         if icc == self.screen_profile {
             return;
         }
-        let display = icc.as_deref().and_then(|bytes| match lightcraft_engine::display::Display::from_bytes(SCREEN_PROFILE, bytes) {
+        let display = icc.as_deref().and_then(|bytes| match lcc_engine::display::Display::from_bytes(SCREEN_PROFILE, bytes) {
             Ok(d) => Some(std::sync::Arc::new(d)),
             Err(msg) => {
                 // a profile we can't use: previews stay sRGB, as before #787
@@ -1330,11 +1515,22 @@ impl LightcraftApp {
             raw.events.push(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
         }
         if self.synthetic.is_empty() {
+            shell::defer_tabs(self, raw);
             return;
         }
-        let n = match self.synthetic[0] {
-            egui::Event::PointerMoved(_) | egui::Event::PointerButton { .. } | egui::Event::MouseWheel { .. } => 1,
-            _ => self.synthetic.iter().position(|e| matches!(e, egui::Event::Key { pressed: false, .. })).map_or(self.synthetic.len(), |i| i + 1),
+        let pointer =
+            |e: &egui::Event| matches!(e, egui::Event::PointerMoved(_) | egui::Event::PointerButton { .. } | egui::Event::MouseWheel { .. });
+        let n = if pointer(&self.synthetic[0]) {
+            1
+        } else {
+            // a key sequence up to its release; a key held down (no release yet) stops before the
+            // pointer events that follow, which then still come one per frame
+            let release = self.synthetic.iter().position(|e| matches!(e, egui::Event::Key { pressed: false, .. })).map(|i| i + 1);
+            let next_pointer = self.synthetic.iter().position(pointer);
+            match (release, next_pointer) {
+                (Some(r), Some(q)) => r.min(q),
+                (r, q) => r.or(q).unwrap_or(self.synthetic.len()),
+            }
         };
         if let Some(egui::Event::PointerMoved(p) | egui::Event::PointerButton { pos: p, .. }) = self.synthetic.first() {
             raw.events.push(egui::Event::PointerMoved(*p));
@@ -1355,34 +1551,12 @@ impl LightcraftApp {
             self.synthetic_mods_release = ends;
         }
         raw.events.extend(self.synthetic.drain(..n));
-    }
-
-    /// Lights Out: veil everything but the photo (the loupe's image, or the grid / Compare /
-    /// Survey area) in black. Painted above the panels, below dialogs and notices.
-    fn lights_out(&self, ctx: &egui::Context) {
-        let a = self.ui.lights_out.veil();
-        if a <= 0.0 {
-            return;
-        }
-        let screen = ctx.content_rect();
-        let keep = if self.ui.view == state::ViewMode::Detail { self.image_rect.or(self.canvas_rect) } else { self.canvas_rect };
-        let veil = egui::Color32::from_black_alpha((a.clamp(0.0, 1.0) * 255.0).round() as u8);
-        let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Middle, egui::Id::new("lights-out")));
-        let k = keep.unwrap_or(egui::Rect::NOTHING).intersect(screen);
-        if !k.is_positive() {
-            p.rect_filled(screen, 0.0, veil);
-            return;
-        }
-        // four bands around the photo
-        use egui::{Rect, pos2};
-        p.rect_filled(Rect::from_min_max(screen.min, pos2(screen.right(), k.top())), 0.0, veil);
-        p.rect_filled(Rect::from_min_max(pos2(screen.left(), k.bottom()), screen.max), 0.0, veil);
-        p.rect_filled(Rect::from_min_max(pos2(screen.left(), k.top()), pos2(k.left(), k.bottom())), 0.0, veil);
-        p.rect_filled(Rect::from_min_max(pos2(k.right(), k.top()), pos2(screen.right(), k.bottom())), 0.0, veil);
+        shell::defer_tabs(self, raw);
     }
 
     /// Frame timings once layout is done (`t0`: when layout started).
     fn end_frame(&mut self, ctx: &egui::Context, t0: f64) {
+        self.text_focus = self.tasks.repaint.as_ref().is_some_and(|c| c.egui_wants_keyboard_input());
         ctx.output(|o| {
             for c in &o.commands {
                 if let egui::OutputCommand::CopyText(text) = c {
@@ -1393,6 +1567,19 @@ impl LightcraftApp {
         self.perf.frame_ms = now_ms() - t0;
         self.perf.update_ms = self.perf.logic_ms + self.perf.frame_ms;
         self.perf.max_update_ms = self.perf.max_update_ms.max(self.perf.update_ms);
+        // Windows only: G-SYNC / FreeSync brightness flicker workaround.
+        #[cfg(target_os = "windows")]
+        if self.ui.settings.vrr_flicker_workaround && !self.headless_host {
+            let active = ctx.input(|i| {
+                let focused = i.focused;
+                let minimized =
+                    i.viewport().minimized.unwrap_or(false) || i.raw.viewports.get(&i.raw.viewport_id).and_then(|v| v.minimized).unwrap_or(false);
+                focused && !minimized
+            });
+            if active {
+                ctx.request_repaint();
+            }
+        }
     }
 
     /// Once per library opened (at launch too): name it in the window title, so nobody edits in
@@ -1410,11 +1597,11 @@ impl LightcraftApp {
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(self.window_title()));
     }
 
-    /// "LightCraft — <library name>" (just "LightCraft" for a library that isn't saved).
+    /// "<app> — <library name>" (just "<app>" for a library that isn't saved).
     pub fn window_title(&self) -> String {
         match panels::settings::open_library_name(self) {
-            Some(name) => format!("LightCraft — {name}"),
-            None => "LightCraft".to_string(),
+            Some(name) => format!("{} — {name}", lcc_brand::DISPLAY_NAME),
+            None => lcc_brand::DISPLAY_NAME.to_string(),
         }
     }
 
@@ -1422,6 +1609,8 @@ impl LightcraftApp {
     pub fn ui(&mut self, ui: &mut egui::Ui) {
         i18n::set_language(self.ui.language);
         let ctx = ui.ctx().clone();
+        widgets::sync_section_folds(&ctx, &mut self.ui.section_open);
+        shortcuts::set_active(self.ui.settings.keymap_set);
         if !self.fonts_ready {
             ctx.request_repaint();
             return;
@@ -1434,6 +1623,8 @@ impl LightcraftApp {
         self.library_changed(&ctx);
         // panels set it again this frame while the pointer rests on a preset or profile
         self.hover_preview = None;
+        // …and the histogram sets this while the pointer rests on a clipping indicator
+        self.clipping_preview = false;
         self.ai_mask_detail(&ctx);
         self.place_names_outcome(&ctx);
         if self.ui.fullscreen {
@@ -1444,6 +1635,7 @@ impl LightcraftApp {
             panels::second::show(self, &ctx);
             panels::notices::show(self, &ctx);
             panels::dialogs::show(self, &ctx);
+            catalog_ui::show(self, &ctx);
             panels::library_problem::show(self, &ctx);
             panels::toast(self, &ctx);
             self.widgets = widgets::take_registry(&ctx);
@@ -1452,18 +1644,29 @@ impl LightcraftApp {
         }
         // Order matters: earlier panels take the full edge (top bar spans the window; the tool strip,
         // right panels and left panel run to the bottom; the bottom bar sits between them).
-        panels::topbar::show(self, ui);
-        panels::library_problem::banner(self, ui);
-        panels::strip::show(self, ui);
-        // filled: the gaps the dock leaves between its panes show chrome, not the dark clear colour
-        let chrome = theme::Tokens::get(&ctx).chrome;
-        egui::CentralPanel::default().frame(egui::Frame::NONE.fill(chrome)).show(ui, |ui| docking::show(self, ui));
-        self.lights_out(&ctx);
+        let m = shell::edges(self, ui, &ctx);
+        let t = theme::Tokens::get(&ctx);
+        let bg = if matches!(self.ui.view, state::ViewMode::Detail | state::ViewMode::Compare | state::ViewMode::Survey | state::ViewMode::Reference)
+        {
+            t.canvas
+        } else {
+            t.grid_bg
+        };
+        egui::CentralPanel::default().frame(egui::Frame::NONE.fill(bg)).show(ui, |ui| m.center(ui, self));
+        module::lights_out(self, &ctx);
+        help_overlay::show(self, &ctx);
         panels::second::show(self, &ctx);
         panels::notices::show(self, &ctx);
         panels::dialogs::show(self, &ctx);
+        catalog_ui::show(self, &ctx);
+        plate::show_setup(self, &ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        panels::plugins::show(self, &ctx);
         panels::library_problem::show(self, &ctx);
         export_task::poll(self, &ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        panels::plugins::poll(self, &ctx);
+        render_dng_task::poll(self, &ctx);
         slideshow_export::poll(self, &ctx);
         panels::activity::show(self, &ctx);
         export_task::poll_photos(self, &ctx);
@@ -1510,11 +1713,11 @@ pub struct HoverPreview {
     /// What is previewed (e.g. "Preset: Warm Glow").
     pub label: String,
     /// The photo's settings with the look applied.
-    pub settings: lightcraft_develop::DevelopSettings,
+    pub settings: lcc_develop::DevelopSettings,
 }
 
-pub fn is_bw(d: &lightcraft_develop::DevelopSettings) -> bool {
-    d.treatment == lightcraft_develop::Treatment::Bw || d.profile.id == "lc.mono" || d.profile.id.starts_with("lc.bw.")
+pub fn is_bw(d: &lcc_develop::DevelopSettings) -> bool {
+    d.treatment == lcc_develop::Treatment::Bw || d.profile.id == "lc.mono" || d.profile.id.starts_with("lc.bw.")
 }
 
 /// "Found 3 faces in 2 photos" for a `faces.detect` result.
@@ -1533,7 +1736,7 @@ fn detect_summary(v: &Value) -> String {
 
 /// What to say when a SAM 3 download ended while its dialog was closed: the text, and whether it is
 /// shown as an error toast. A cancel is told by `cancelled`, not by the error's words.
-fn sam_download_ended(download: &lightcraft_engine::segment::DownloadStatus) -> Option<(String, bool)> {
+fn sam_download_ended(download: &lcc_engine::segment::DownloadStatus) -> Option<(String, bool)> {
     match &download.error {
         Some(_) if download.cancelled => {
             Some((crate::i18n::tr("SAM 3 download stopped: it resumes where it left off next time.").to_string(), false))
@@ -1624,7 +1827,7 @@ mod drop_tests {
 /// Results recomputed only when the catalog (or their inputs) change.
 #[derive(Default)]
 pub struct Caches {
-    keyword_tree: Option<(u64, std::sync::Arc<Vec<lightcraft_catalog::KeywordNode>>)>,
+    keyword_tree: Option<(u64, std::sync::Arc<Vec<lcc_catalog::KeywordNode>>)>,
     /// The Keywording box's read-only names (with containing keywords, or Will Export), by library
     /// revision, selection and view.
     keyword_names: Option<(u64, u64, std::sync::Arc<Vec<panels::keywording::Chip>>)>,
@@ -1637,19 +1840,21 @@ pub struct Caches {
     keyword_groups: Option<(u64, u64, std::sync::Arc<Vec<panels::keywording::Group>>)>,
     /// The Keyword List's tick boxes, by library revision and selection.
     keyword_ticks: Option<(u64, u64, std::sync::Arc<panels::keyword_list::Ticks>)>,
-    folder_tree: Option<(u64, std::sync::Arc<Vec<lightcraft_catalog::FolderNode>>)>,
-    people: Option<(u64, lightcraft_catalog::Filter, std::sync::Arc<Vec<lightcraft_catalog::Person>>)>,
+    /// The folder tree, made at a catalog revision and a disk folder listing generation.
+    folder_tree: Option<((u64, u64), std::sync::Arc<Vec<lcc_catalog::FolderNode>>)>,
+    /// The catalog's part of the folder tree (before the disk folders are added), by catalog revision.
+    folder_base: Option<(u64, std::sync::Arc<Vec<lcc_catalog::FolderNode>>)>,
+    people: Option<(u64, lcc_catalog::Filter, std::sync::Arc<Vec<lcc_catalog::Person>>)>,
     suggestions: Option<(u64, std::sync::Arc<Vec<String>>)>,
     /// What the Add keyword box offers for the text typed in it, by library revision, the
     /// selection's keywords and that text.
     completions: Option<(u64, std::sync::Arc<panels::keywording::Offers>)>,
     counts: Option<(u64, LibraryCounts)>,
-    date_groups: Option<(u64, std::sync::Arc<Vec<lightcraft_catalog::DateGroup>>)>,
+    date_groups: Option<(u64, std::sync::Arc<Vec<lcc_catalog::DateGroup>>)>,
     filter_values: Option<(u64, std::sync::Arc<FilterValues>)>,
     /// The albums' counts: the minute they are of (while a smart album asks about "the last N days"), the tally
     /// that follows edits, and the counts as the panels take them.
-    album_counts:
-        Option<(String, lightcraft_catalog::tally::AlbumTally, std::sync::Arc<std::collections::HashMap<lightcraft_catalog::AlbumId, usize>>)>,
+    album_counts: Option<(String, lcc_catalog::tally::AlbumTally, std::sync::Arc<std::collections::HashMap<lcc_catalog::AlbumId, usize>>)>,
     /// How often the album counts were made from every photo (tests check that unchanged frames, and edits to a
     /// photo or a few, don't).
     pub album_count_scans: usize,
@@ -1660,7 +1865,7 @@ pub struct Caches {
     dialog_count: Option<(u64, usize)>,
     pub dialog_count_scans: usize,
     /// The problems of every saved smart album that has some ([`Caches::smart_album_problems`]).
-    smart_problems: Option<(u64, std::sync::Arc<std::collections::HashMap<lightcraft_catalog::AlbumId, Vec<lightcraft_catalog::rules::Problem>>>)>,
+    smart_problems: Option<(u64, std::sync::Arc<std::collections::HashMap<lcc_catalog::AlbumId, Vec<lcc_catalog::rules::Problem>>>)>,
     pub smart_problem_scans: usize,
     /// AI denoise: what the pump last saw, the model list and the downloads being watched.
     pub denoise: panels::denoise::Ui,
@@ -1716,7 +1921,7 @@ pub struct FilterValues {
 /// What the smart-album rule dialog shows besides the rules themselves: their problems (each row
 /// marks its own), how many photos they match and the albums an Album rule picks from.
 pub struct RulesView {
-    pub problems: Vec<lightcraft_catalog::rules::Problem>,
+    pub problems: Vec<lcc_catalog::rules::Problem>,
     pub count: usize,
     pub albums: Vec<album_picker::AlbumEntry>,
 }
@@ -1730,27 +1935,41 @@ pub(crate) fn key_of(parts: impl std::hash::Hash) -> u64 {
 /// `reads` of a photo: nothing changed since, or only other things of some photos did (a rating changes no folder's
 /// count, a slider changes none at all). Each of these tallies asks every photo, so one kept is a pass over the
 /// library saved on every edit.
-fn still_right(cat: &lightcraft_catalog::Catalog, revision: u64, reads: lightcraft_catalog::Aspects) -> bool {
+fn still_right(cat: &lcc_catalog::Catalog, revision: u64, reads: lcc_catalog::Aspects) -> bool {
     revision == cat.revision || cat.aspects_since(revision).is_some_and(|changed| !changed.any_of(reads))
 }
 
 /// What the tallies below read of a photo, besides whether it is in the library.
-const READS_FILE: lightcraft_catalog::Aspects = lightcraft_catalog::Aspects::PRESENCE.with(lightcraft_catalog::Aspects::FILE);
-const READS_META: lightcraft_catalog::Aspects = lightcraft_catalog::Aspects::PRESENCE.with(lightcraft_catalog::Aspects::META);
-const READS_PEOPLE: lightcraft_catalog::Aspects = READS_META.with(lightcraft_catalog::Aspects::ANALYSIS);
-const READS_CAPTURED: lightcraft_catalog::Aspects = lightcraft_catalog::Aspects::PRESENCE.with(lightcraft_catalog::Aspects::CAPTURED);
-const READS_FLAG: lightcraft_catalog::Aspects = lightcraft_catalog::Aspects::PRESENCE.with(lightcraft_catalog::Aspects::FLAG);
+const READS_FILE: lcc_catalog::Aspects = lcc_catalog::Aspects::PRESENCE.with(lcc_catalog::Aspects::FILE);
+const READS_META: lcc_catalog::Aspects = lcc_catalog::Aspects::PRESENCE.with(lcc_catalog::Aspects::META);
+const READS_PEOPLE: lcc_catalog::Aspects = READS_META.with(lcc_catalog::Aspects::ANALYSIS);
+const READS_CAPTURED: lcc_catalog::Aspects = lcc_catalog::Aspects::PRESENCE.with(lcc_catalog::Aspects::CAPTURED);
+const READS_FLAG: lcc_catalog::Aspects = lcc_catalog::Aspects::PRESENCE.with(lcc_catalog::Aspects::FLAG);
 
 impl Caches {
     /// The folders the library's photos were imported from.
-    pub fn folder_tree(&mut self, cat: &lightcraft_catalog::Catalog) -> std::sync::Arc<Vec<lightcraft_catalog::FolderNode>> {
-        let kept = self.folder_tree.take().filter(|(r, _)| still_right(cat, *r, READS_FILE)).map(|(_, t)| t);
-        let t = kept.unwrap_or_else(|| std::sync::Arc::new(cat.folder_tree()));
-        self.folder_tree = Some((cat.revision, t.clone()));
+    pub fn folder_tree(&mut self, cat: &lcc_catalog::Catalog) -> std::sync::Arc<Vec<lcc_catalog::FolderNode>> {
+        let key = (cat.revision, crate::panels::left::classic::disk_generation());
+        if let Some((k, t)) = &self.folder_tree
+            && *k == key
+        {
+            return t.clone();
+        }
+        // a catalog change lists the disk folders again: a folder created, moved or removed changes no
+        // photo, so the catalog's own record of what changed can't tell
+        if self.folder_tree.as_ref().is_none_or(|((r, _), _)| *r != cat.revision) {
+            crate::panels::left::classic::invalidate_disk_folders();
+        }
+        // the catalog's part is made again only when a photo's file or presence changed
+        let base = self.folder_base.take().filter(|(r, _)| still_right(cat, *r, READS_FILE)).map(|(_, b)| b);
+        let base = base.unwrap_or_else(|| std::sync::Arc::new(cat.folder_tree()));
+        self.folder_base = Some((cat.revision, base.clone()));
+        let t = std::sync::Arc::new(crate::panels::left::classic::with_disk_folders(base.as_ref().clone()));
+        self.folder_tree = Some((key, t.clone()));
         t
     }
     /// The library's keyword tree.
-    pub fn keyword_tree(&mut self, cat: &lightcraft_catalog::Catalog) -> std::sync::Arc<Vec<lightcraft_catalog::KeywordNode>> {
+    pub fn keyword_tree(&mut self, cat: &lcc_catalog::Catalog) -> std::sync::Arc<Vec<lcc_catalog::KeywordNode>> {
         let kept = self.keyword_tree.take().filter(|(r, _)| still_right(cat, *r, READS_META)).map(|(_, t)| t);
         let t = kept.unwrap_or_else(|| std::sync::Arc::new(cat.keyword_tree()));
         self.keyword_tree = Some((cat.revision, t.clone()));
@@ -1760,8 +1979,8 @@ impl Caches {
     /// (`export`), or the keywords with those containing them.
     pub(crate) fn keyword_names(
         &mut self,
-        cat: &lightcraft_catalog::Catalog,
-        selection: &[lightcraft_catalog::PhotoId],
+        cat: &lcc_catalog::Catalog,
+        selection: &[lcc_catalog::PhotoId],
         export: bool,
     ) -> std::sync::Arc<Vec<panels::keywording::Chip>> {
         let key = key_of((selection, export));
@@ -1781,8 +2000,8 @@ impl Caches {
     /// The selection's keywords (the Keywording box's chips).
     pub(crate) fn keyword_chips(
         &mut self,
-        cat: &lightcraft_catalog::Catalog,
-        selection: &[lightcraft_catalog::PhotoId],
+        cat: &lcc_catalog::Catalog,
+        selection: &[lcc_catalog::PhotoId],
     ) -> std::sync::Arc<Vec<panels::keywording::Chip>> {
         let key = key_of(selection);
         match &self.keyword_chips {
@@ -1796,7 +2015,7 @@ impl Caches {
     }
     /// How many photos the selection is: each once, those the library has (what the Keywording
     /// box's "N of M" counts).
-    pub(crate) fn selected_photos(&mut self, cat: &lightcraft_catalog::Catalog, selection: &[lightcraft_catalog::PhotoId]) -> usize {
+    pub(crate) fn selected_photos(&mut self, cat: &lcc_catalog::Catalog, selection: &[lcc_catalog::PhotoId]) -> usize {
         let key = key_of(selection);
         match self.selected_photos {
             Some((r, k, n)) if r == cat.revision && k == key => n,
@@ -1810,8 +2029,8 @@ impl Caches {
     /// The selection's keywords grouped by the keyword they are inside (the grouped Keywording box).
     pub(crate) fn keyword_groups(
         &mut self,
-        cat: &lightcraft_catalog::Catalog,
-        selection: &[lightcraft_catalog::PhotoId],
+        cat: &lcc_catalog::Catalog,
+        selection: &[lcc_catalog::PhotoId],
     ) -> std::sync::Arc<Vec<panels::keywording::Group>> {
         let key = key_of(selection);
         match &self.keyword_groups {
@@ -1827,8 +2046,8 @@ impl Caches {
     /// How many selected photos have each keyword (the Keyword List's tick boxes).
     pub(crate) fn keyword_ticks(
         &mut self,
-        cat: &lightcraft_catalog::Catalog,
-        selection: &[lightcraft_catalog::PhotoId],
+        cat: &lcc_catalog::Catalog,
+        selection: &[lcc_catalog::PhotoId],
     ) -> std::sync::Arc<panels::keyword_list::Ticks> {
         let key = key_of(selection);
         match &self.keyword_ticks {
@@ -1842,12 +2061,8 @@ impl Caches {
     }
     /// The people named on faces among the photos the filter lets through (its own `person` aside),
     /// with photo counts.
-    pub fn people(
-        &mut self,
-        cat: &lightcraft_catalog::Catalog,
-        filter: &lightcraft_catalog::Filter,
-    ) -> std::sync::Arc<Vec<lightcraft_catalog::Person>> {
-        let key = lightcraft_catalog::Filter { person: None, ..filter.clone() };
+    pub fn people(&mut self, cat: &lcc_catalog::Catalog, filter: &lcc_catalog::Filter) -> std::sync::Arc<Vec<lcc_catalog::Person>> {
+        let key = lcc_catalog::Filter { person: None, ..filter.clone() };
         match &self.people {
             Some((r, f, t)) if *r == cat.revision && *f == key => t.clone(),
             _ => {
@@ -1858,7 +2073,7 @@ impl Caches {
         }
     }
     /// All Photos / Picks / Recently Deleted counts.
-    pub fn counts(&mut self, cat: &lightcraft_catalog::Catalog) -> LibraryCounts {
+    pub fn counts(&mut self, cat: &lcc_catalog::Catalog) -> LibraryCounts {
         if let Some((r, c)) = self.counts
             && still_right(cat, r, READS_FLAG)
         {
@@ -1869,7 +2084,7 @@ impl Caches {
         for p in cat.photos() {
             if p.in_library() {
                 c.total += 1;
-                if p.flag == lightcraft_catalog::Flag::Pick {
+                if p.flag == lcc_catalog::Flag::Pick {
                     c.picks += 1;
                 }
             } else if p.deleted && !p.local {
@@ -1880,21 +2095,21 @@ impl Caches {
         c
     }
     /// Everyone named on a face in the library (for completing a name as it is typed).
-    pub fn person_names(&mut self, cat: &lightcraft_catalog::Catalog) -> std::sync::Arc<Vec<String>> {
+    pub fn person_names(&mut self, cat: &lcc_catalog::Catalog) -> std::sync::Arc<Vec<String>> {
         let kept = self.person_names.take().filter(|(r, _)| still_right(cat, *r, READS_PEOPLE)).map(|(_, v)| v);
         let v = kept.unwrap_or_else(|| std::sync::Arc::new(cat.people().into_iter().map(|p| p.name).collect::<Vec<_>>()));
         self.person_names = Some((cat.revision, v.clone()));
         v
     }
     /// The By Date tree.
-    pub fn date_groups(&mut self, cat: &lightcraft_catalog::Catalog) -> std::sync::Arc<Vec<lightcraft_catalog::DateGroup>> {
+    pub fn date_groups(&mut self, cat: &lcc_catalog::Catalog) -> std::sync::Arc<Vec<lcc_catalog::DateGroup>> {
         let kept = self.date_groups.take().filter(|(r, _)| still_right(cat, *r, READS_CAPTURED)).map(|(_, g)| g);
         let g = kept.unwrap_or_else(|| std::sync::Arc::new(cat.date_groups()));
         self.date_groups = Some((cat.revision, g.clone()));
         g
     }
     /// Cameras, lenses and keywords in the library (filter bar pickers).
-    pub fn filter_values(&mut self, cat: &lightcraft_catalog::Catalog) -> std::sync::Arc<FilterValues> {
+    pub fn filter_values(&mut self, cat: &lcc_catalog::Catalog) -> std::sync::Arc<FilterValues> {
         match &self.filter_values {
             Some((r, v)) if *r == cat.revision => v.clone(),
             _ => {
@@ -1918,12 +2133,7 @@ impl Caches {
     /// What the Add keyword box offers for `typed` (see [`panels::keywording::offers`]). Kept apart
     /// from [`Self::suggestions`]: both are asked for on every frame of typing, and each looks
     /// through the library's keywords.
-    pub(crate) fn completions(
-        &mut self,
-        cat: &lightcraft_catalog::Catalog,
-        current: &[String],
-        typed: &str,
-    ) -> std::sync::Arc<panels::keywording::Offers> {
+    pub(crate) fn completions(&mut self, cat: &lcc_catalog::Catalog, current: &[String], typed: &str) -> std::sync::Arc<panels::keywording::Offers> {
         let k = key_of((cat.revision, current, typed));
         match &self.completions {
             Some((h, v)) if *h == k => v.clone(),
@@ -1935,7 +2145,7 @@ impl Caches {
         }
     }
     /// Keyword suggestions for a photo with `current` keywords and the typed `prefix`.
-    pub fn suggestions(&mut self, cat: &lightcraft_catalog::Catalog, current: &[String], prefix: &str, n: usize) -> std::sync::Arc<Vec<String>> {
+    pub fn suggestions(&mut self, cat: &lcc_catalog::Catalog, current: &[String], prefix: &str, n: usize) -> std::sync::Arc<Vec<String>> {
         let k = key_of((cat.revision, current, prefix, n));
         match &self.suggestions {
             Some((h, v)) if *h == k => v.clone(),
@@ -1956,8 +2166,8 @@ impl Caches {
     /// rules, the language or (for "in the last…" rules) the minute changes, not every frame.
     pub fn rules_view(
         &mut self,
-        cat: &lightcraft_catalog::Catalog,
-        rules: &lightcraft_catalog::RuleSet,
+        cat: &lcc_catalog::Catalog,
+        rules: &lcc_catalog::RuleSet,
         editing: Option<u64>,
         folder: Option<String>,
         now: &str,
@@ -1971,10 +2181,10 @@ impl Caches {
             return v.clone();
         }
         if relative {
-            lightcraft_catalog::rules::set_now(Some(now.to_string()));
+            lcc_catalog::rules::set_now(Some(now.to_string()));
         }
-        let problems = rules.check_for(cat, editing.map(lightcraft_catalog::AlbumId));
-        let filter = lightcraft_catalog::Filter { rule_set: Some(rules.clone()), library_folder: folder, ..Default::default() };
+        let problems = rules.check_for(cat, editing.map(lcc_catalog::AlbumId));
+        let filter = lcc_catalog::Filter { rule_set: Some(rules.clone()), library_folder: folder, ..Default::default() };
         let count = if problems.is_empty() { cat.query(&filter, &Default::default()).len() } else { 0 };
         let v = std::sync::Arc::new(RulesView { problems, count, albums: panels::dialogs::album_entries(cat, editing) });
         self.rules_view_scans += 1;
@@ -1984,7 +2194,7 @@ impl Caches {
 
     /// A count an open dialog shows (photos a filter matches, photos with a keyword…): `count` runs
     /// again only when the catalog or `what` (what is counted) changes, not every frame.
-    pub(crate) fn dialog_count(&mut self, cat: &lightcraft_catalog::Catalog, what: impl std::hash::Hash, count: impl FnOnce() -> usize) -> usize {
+    pub(crate) fn dialog_count(&mut self, cat: &lcc_catalog::Catalog, what: impl std::hash::Hash, count: impl FnOnce() -> usize) -> usize {
         let k = key_of((cat.revision, what));
         if let Some((key, n)) = self.dialog_count
             && key == k
@@ -2001,8 +2211,8 @@ impl Caches {
     /// for the sidebar's ⚠ marks: worked out again only when the catalog changes.
     pub fn smart_album_problems(
         &mut self,
-        cat: &lightcraft_catalog::Catalog,
-    ) -> std::sync::Arc<std::collections::HashMap<lightcraft_catalog::AlbumId, Vec<lightcraft_catalog::rules::Problem>>> {
+        cat: &lcc_catalog::Catalog,
+    ) -> std::sync::Arc<std::collections::HashMap<lcc_catalog::AlbumId, Vec<lcc_catalog::rules::Problem>>> {
         if let Some((rev, v)) = &self.smart_problems
             && *rev == cat.revision
         {
@@ -2016,11 +2226,7 @@ impl Caches {
         v
     }
 
-    pub fn album_counts(
-        &mut self,
-        cat: &lightcraft_catalog::Catalog,
-        now: &str,
-    ) -> std::sync::Arc<std::collections::HashMap<lightcraft_catalog::AlbumId, usize>> {
+    pub fn album_counts(&mut self, cat: &lcc_catalog::Catalog, now: &str) -> std::sync::Arc<std::collections::HashMap<lcc_catalog::AlbumId, usize>> {
         let relative = cat.albums().any(|a| a.smart.as_ref().is_some_and(|f| f.depends_on_now()));
         let minute = if relative { now.get(..16).unwrap_or(now) } else { "" };
         // the counts of this minute, if there are any: an edit to a photo or a few is followed from them, a smart
@@ -2037,7 +2243,7 @@ impl Caches {
             // "in the last N days" counts back from the session clock, as in the grid. (Within a minute an edit asks
             // only the photos it touched, at this second; the others were asked earlier in the minute. That is as
             // far out as the counts already were between edits, and the next minute counts them all again.)
-            lightcraft_catalog::rules::set_now(Some(now.to_string()));
+            lcc_catalog::rules::set_now(Some(now.to_string()));
         }
         let tally = match kept {
             Some((_, mut tally, _)) => {
@@ -2048,7 +2254,7 @@ impl Caches {
             }
             None => {
                 self.album_count_scans += 1;
-                lightcraft_catalog::tally::AlbumTally::of(cat)
+                lcc_catalog::tally::AlbumTally::of(cat)
             }
         };
         let shown = std::sync::Arc::new(tally.counts().clone());
@@ -2059,7 +2265,7 @@ impl Caches {
 
 #[cfg(test)]
 mod cache_tests {
-    use lightcraft_catalog::{Album, AlbumId, Catalog, Filter, Op, Photo, PhotoId, RuleSet, Source};
+    use lcc_catalog::{Album, AlbumId, Catalog, Filter, Op, Photo, PhotoId, RuleSet, Source};
 
     fn photo(id: u64, captured: &str, rating: u8) -> Op {
         let mut p = Photo::new(PhotoId(id), Source::Demo { scene: 0 }, &format!("p{id}.jpg"), "JPEG", 60, 40, "2026-01-01T00:00:00");
@@ -2105,7 +2311,7 @@ mod cache_tests {
         // an hour later the 11:59:30 photo has left "in the last hour", with no catalog change
         assert_eq!(c.album_counts(&cat, "2026-09-30T13:00:10")[&AlbumId(11)], 0);
         assert_eq!(c.album_count_scans, 3, "new rules and a new minute are counted from every photo; the rating was not");
-        lightcraft_catalog::rules::set_now(None);
+        lcc_catalog::rules::set_now(None);
     }
 
     /// The rule dialog's problems, live count and album list are worked out once per change to the
@@ -2132,7 +2338,7 @@ mod cache_tests {
         assert_eq!(c.rules_view(&cat, &rules(3), None, None, now).count, 2, "a catalog change");
         assert_eq!(c.rules_view_scans, 4);
         // the sidebar's problems
-        cat.apply(Op::AddAlbum { album: lightcraft_catalog::Album::new(AlbumId(20), "Trip") }).unwrap();
+        cat.apply(Op::AddAlbum { album: lcc_catalog::Album::new(AlbumId(20), "Trip") }).unwrap();
         cat.apply(smart(21, serde_json::json!({"rules": [{"field": "album", "op": "is", "value": 20}]}))).unwrap();
         assert!(c.smart_album_problems(&cat).get(&AlbumId(21)).is_none_or(Vec::is_empty));
         for _ in 0..10 {

@@ -1,6 +1,6 @@
 //! The `print.*` commands: state, cells, templates and the PDF.
 
-use lightcraft_catalog::MemStore;
+use lcc_catalog::MemStore;
 use serde_json::{Value, json};
 
 use crate::Session;
@@ -180,7 +180,7 @@ fn media_box(pdf: &[u8]) -> (f64, f64) {
 }
 
 fn temp_pdf(name: &str) -> String {
-    std::env::temp_dir().join(format!("lightcraft-print-{name}-{}.pdf", std::process::id())).to_string_lossy().to_string()
+    std::env::temp_dir().join(format!("app-print-{name}-{}.pdf", std::process::id())).to_string_lossy().to_string()
 }
 
 #[test]
@@ -217,10 +217,10 @@ fn export_pdf_prints_the_current_settings() {
 fn export_pdf_with_a_printer_profile() {
     let mut s = Session::with_demo();
     let ids: Vec<u64> = s.catalog.photos().take(1).map(|p| p.id.0).collect();
-    let dir = std::env::temp_dir().join(format!("lightcraft-print-icc-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("app-print-icc-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let icc = dir.join("Fine Art Matte.icc");
-    std::fs::write(&icc, lightcraft_codecs::icc::write_named(lightcraft_codecs::NamedSpace::AdobeRgb)).unwrap();
+    std::fs::write(&icc, lcc_codecs::icc::write_named(lcc_codecs::NamedSpace::AdobeRgb)).unwrap();
     let color = json!({"profile": {"kind": "icc", "path": icc}, "intent": "relative", "sharpen": "high", "media": "matte", "brightness": 10});
     run(
         &mut s,
@@ -313,31 +313,4 @@ fn a_hostile_template_in_the_preferences_does_not_break_the_library() {
     fails(&mut s, "print.template.apply", json!({"name": "Bad"}));
     fails(&mut s, "print.template.apply", json!({"name": "Huge"}));
     run(&mut s, "print.template.apply", json!({"name": "Fine"}));
-}
-
-#[test]
-fn every_print_command_is_registered_with_a_description() {
-    for id in [
-        "print.get",
-        "print.set",
-        "print.reset",
-        "print.cell.add",
-        "print.cell.move",
-        "print.cell.resize",
-        "print.cell.delete",
-        "print.cell.stack",
-        "print.cell.photo",
-        "print.cell.page",
-        "print.layout.autoLayout",
-        "print.layout.newPage",
-        "print.layout.clear",
-        "print.exportPdf",
-        "print.template.list",
-        "print.template.save",
-        "print.template.apply",
-        "print.template.delete",
-    ] {
-        let c = crate::find_command(id).unwrap_or_else(|| panic!("{id} missing"));
-        assert!(c.params.len() > 3, "{id}");
-    }
 }

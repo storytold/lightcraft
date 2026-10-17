@@ -10,8 +10,12 @@ workspace = true
 
 [dependencies]
 serde_json = { workspace = true }
+# release notes: `cargo xtask notes`
+lcc-notes = { workspace = true }
 # corpus download checksums
 sha2 = { workspace = true }
 # precompressed web bundle (`cargo xtask web`); pure Rust
 flate2 = "1"
 brotli = { version = "8", default-features = false, features = ["std"] }
+# ci/quarantine.toml
+toml = "1"

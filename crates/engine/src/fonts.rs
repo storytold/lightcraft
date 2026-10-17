@@ -2,7 +2,7 @@
 //!
 //! Built with `CRAFT_FONTS_DIR=<craft-fonts checkout>`, [`CRAFT_FONTS`] holds every font in its
 //! manifest (today: the Japanese and Simplified-Chinese UI and document fonts); otherwise it is
-//! empty and LightCraft uses only its own bundled fonts (Inter). Both the egui UI and the export
+//! empty and the app uses only its own bundled fonts (Inter). Both the egui UI and the export
 //! watermark renderer read it from here. See craftrules `standards/fonts.md`.
 
 /// A font from the optional craft-fonts build input (empty unless built with `CRAFT_FONTS_DIR`).

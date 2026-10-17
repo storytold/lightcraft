@@ -1,13 +1,15 @@
-# Quick static checks for the release pipeline (seconds, no Rust build): workflow syntax,
-# packaging shell/PowerShell scripts, and the Linux desktop/AppStream/Flatpak metadata.
+# Quick checks for the release pipeline (no Rust build): workflow syntax, packaging
+# shell/PowerShell scripts, and the Linux desktop/AppStream/Flatpak metadata (seconds), plus a
+# Windows job that builds and installs throwaway per-user MSI probes for the install-folder
+# searches (a few minutes).
 name: Packaging lint
 
 on:
   push:
     branches: [main, release]
-    paths: [".github/workflows/**", "packaging/**", "assets/app-icon/**"]
+    paths: [".github/workflows/**", "packaging/**", "assets/app-icon/**", "brand.toml"]
   pull_request:
-    paths: [".github/workflows/**", "packaging/**", "assets/app-icon/**"]
+    paths: [".github/workflows/**", "packaging/**", "assets/app-icon/**", "brand.toml"]
   workflow_dispatch:
 
 permissions:
@@ -19,19 +21,107 @@ concurrency:
 
 jobs:
   lint:
-    # Intentionally tracked at @main (not SHA-pinned) so org-wide CI improvements, security fixes, and build optimizations propagate without PR churn across all craftapp repos.
-    uses: storytold/craft-common-actions/.github/workflows/packaging-lint.yml@main
-    with:
-      extra-checks-script: packaging/check-app-specific.sh
+    timeout-minutes: 15
+    # Self-hosted gpu0 (docs/ci.md), in an Ubuntu container for the apt-packaged linters (needs Docker
+    # on the runner).
+    runs-on: [self-hosted, Linux, X64, lcc]
+    container: ubuntu:24.04
+    defaults:
+      run:
+        shell: bash -e {0}
+    env:
+      ACTIONLINT_VERSION: 1.7.12
+    steps:
+      - name: Install tools
+        # git first, so the checkout is a real repository (actionlint looks for .git)
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl git shellcheck desktop-file-utils appstream libxml2-utils python3-yaml
+          curl -fsSL "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" \
+            | tar -xz -C "$RUNNER_TEMP" actionlint
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: actionlint
+        run: |
+          "$RUNNER_TEMP/actionlint" -color
+      - name: shellcheck
+        run: shellcheck packaging/*.sh packaging/*/*.sh
+      - name: Render the packaging templates (brand.toml)
+        run: |
+          . packaging/env.sh
+          OUT="$RUNNER_TEMP/pkg"
+          for t in packaging/linux/*.in packaging/linux/flatpak/*.in packaging/macos/*.in packaging/windows/*.in; do
+            rel="${t#packaging/}"; rel="${rel%.in}"; rel="${rel//\{app_id\}/$BRAND_APP_ID}"
+            brand_render "$t" "$OUT/$rel"
+          done
+          {
+            echo "OUT=$OUT"
+            echo "APP_ID=$BRAND_APP_ID"
+            echo "APP_BINARY=$BRAND_BINARY"
+          } >>"$GITHUB_ENV"
+      - name: XML, desktop entry, AppStream, Flatpak manifest
+        run: |
+          xmllint --noout "$OUT"/windows/app.wxs "$OUT"/macos/*.plist "$OUT"/linux/*.xml packaging/macos/entitlements.plist
+          # Windows Installer needs Icon ids ending in .ico or .exe, or shortcuts show a blank icon.
+          if grep -oE '<Icon Id="[^"]*"' "$OUT/windows/app.wxs" | grep -vE '\.(ico|exe)"$'; then
+            echo "::error::Icon Id must end in .ico or .exe"; exit 1
+          fi
+          # The interactive installer asks where to install and ends on a completion page.
+          for want in '<UIRef Id="AppUI" />' 'Value="InstallDirDlg"' '<Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />' \
+              'Name="InstallFolder"' 'Value="LaunchApp"'; do
+            grep -qF "$want" "$OUT/windows/app.wxs" || { echo "::error::app.wxs lost: $want"; exit 1; }
+          done
+          # The completion page the Publish events point at must actually exist: a Publish alone
+          # does not pull the dialog fragment into the MSI, and without the DialogRef the
+          # installer finishes silently.
+          grep -qF '<DialogRef Id="ExitDialog" />' "$OUT/windows/app.wxs" \
+            || { echo "::error::ExitDialog is not referenced; installs and removes end without a completion dialog"; exit 1; }
+          desktop-file-validate "$OUT/linux/$APP_ID.desktop"
+          appstreamcli validate --no-net --explain "$OUT/linux/$APP_ID.metainfo.xml"
+          python3 - <<'EOF'
+          import os, yaml
+          out, app_id, binary = os.environ["OUT"], os.environ["APP_ID"], os.environ["APP_BINARY"]
+          src = yaml.safe_load(open(f"{out}/linux/flatpak/{app_id}.yml"))
+          bundle = yaml.safe_load(open(f"{out}/linux/flatpak/{app_id}.bundle.yml"))
+          for m in (src, bundle):
+              assert m["id"] == app_id and m["command"] == binary, m["id"]
+          for key in ("runtime", "runtime-version", "sdk", "finish-args"):
+              assert src[key] == bundle[key], f"Flatpak manifests disagree on {key}: {src[key]} vs {bundle[key]}"
+          print("Flatpak manifests ok")
+          EOF
+      - name: FreeBSD tarball layout (stub binaries)
+        run: bash packaging/freebsd/package.sh --dry-run
+      - name: hand the workspace back to the runner user
+        if: always()
+        # the container runs as root; root-owned files would break the next checkout on the host
+        run: chown -R "$(stat -c %u:%g "$GITHUB_WORKSPACE/..")" "$GITHUB_WORKSPACE"
 
   windows-install-folder:
-    runs-on: windows-latest
-    timeout-minutes: 10
+    # Self-hosted win0 (docs/ci.md). Its runner account can't write to Program Files: WiX goes into the
+    # runner's tool cache.
+    runs-on: [self-hosted, Windows, X64, lcc]
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: PowerShell scripts parse
+        shell: pwsh
+        run: |
+          foreach ($f in Get-ChildItem packaging/windows/*.ps1) {
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$null, [ref]$errors) | Out-Null
+            if ($errors) { $errors | ForEach-Object { Write-Output "::error file=$($f.Name)::$_" }; exit 1 }
+            Write-Output "ok $($f.Name)"
+          }
+      - uses: actions/setup-dotnet@v4
+        env:
+          DOTNET_INSTALL_DIR: ${{ runner.tool_cache }}\dotnet
+        with:
+          dotnet-version: 8.0.x
       - name: Install WiX
         shell: pwsh
-        run: dotnet tool install --global wix --version 5.0.2
+        run: |
+          $tools = Join-Path $env:RUNNER_TOOL_CACHE 'wix-5.0.2'
+          if (-not (Test-Path (Join-Path $tools 'wix.exe'))) { dotnet tool install --tool-path $tools wix --version 5.0.2 }
+          Add-Content -Path $env:GITHUB_PATH -Value $tools
       - name: Install-folder fallback and precedence (real MSI AppSearch)
         shell: pwsh
         run: |

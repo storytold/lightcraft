@@ -2,7 +2,7 @@
 // Derived from the camera spectral sensitivities of rawtoaces-data (Academy Software Foundation), licensed under
 // the Apache License 2.0 (LICENSE-APACHE); see NOTICE and assets/ATTRIBUTION.md. Do not edit by hand.
 use super::Camera;
-use lightcraft_color::Mat3;
+use lcc_color::Mat3;
 
 #[rustfmt::skip]
 pub(super) const CAMERAS: &[Camera] = &[
@@ -335,6 +335,7 @@ pub(super) const ALIASES: &[(&str, &str, &str)] = &[
     ("Canon", "EOS Rebel T3i", "EOS 600D"), // same model, alternative name
     ("Canon", "Kiss X5", "EOS 600D"), // same model, alternative name
     ("Canon", "EOS R5 Mark II", "EOS R5m2"), // same model, alternative name
+    ("Canon", "EOS R6 Mark II", "EOS R6m2"), // same model, alternative name
     ("Canon", "EOS 5DS R", "EOS 5DS"), // different model, same sensor
     ("Canon", "EOS 6D Mark II", "EOS RP"), // different model, same sensor
     ("Canon", "EOS R5 C", "EOS R5"), // different model, same sensor

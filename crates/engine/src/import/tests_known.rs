@@ -2,7 +2,7 @@
 //! the session's thread. A library can hold millions of photos; looking at one folder must not
 //! cost a table of them all before the first file is read.
 use super::*;
-use lightcraft_catalog::{Catalog, Op};
+use lcc_catalog::{Catalog, Op};
 
 /// A library of `folders` folders of three photos each, the third a copy (by content) of a
 /// photo in the folder before.

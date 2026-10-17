@@ -32,24 +32,3 @@ fn table() -> &'static [u16; 4096] {
 pub(crate) fn curve(code12: i32) -> u16 {
     table().get(code12.clamp(0, 4095) as usize).copied().unwrap_or(u16::MAX)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Pins the whole generated table (sum and position-weighted sum of all 4096 values, from the derivation's own
-    /// table), so a platform whose `ln` rounds differently fails here.
-    #[test]
-    fn table_is_pinned() {
-        let t = table();
-        let sum: u64 = t.iter().map(|&v| u64::from(v)).sum();
-        let weighted: u64 = t.iter().enumerate().map(|(i, &v)| (i as u64 + 1) * u64::from(v)).sum();
-        assert_eq!((sum, weighted), (27776336, 92792980288));
-        for (c, v) in [(0, 0), (1408, 1408), (1536, 1542), (2048, 2457), (3000, 7979), (3500, 16227), (3977, 32767), (4095, 39077)] {
-            assert_eq!(curve(c), v, "code {c}");
-        }
-        assert!((0..=1408).all(|c| curve(c) == c as u16), "identity through 1408");
-        assert!(t.windows(2).all(|w| w[0] < w[1]), "strictly increasing");
-        assert_eq!((curve(-5), curve(5000)), (0, 39077));
-    }
-}

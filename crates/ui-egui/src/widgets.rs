@@ -3,7 +3,7 @@
 //! ([`register`]) so the control channel can find and click it by name.
 
 use egui::{Align2, Color32, CornerRadius, Rect, Response, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
-use lightcraft_develop::{ControlSpec, Track};
+use lcc_develop::{ControlSpec, Track};
 
 use crate::icons::{Icon, paint};
 use crate::theme::Tokens;
@@ -55,6 +55,26 @@ pub fn register(ctx: &egui::Context, id: impl Into<String>, rect: Rect) {
     ctx.data_mut(|d| d.get_temp_mut_or_default::<Registry>(egui::Id::new("lc-registry")).0.push((id, rect)));
 }
 
+/// Called at the end of a scroll area's contents: when the keyboard focus (Tab) has just moved onto
+/// one of its widgets that lies scrolled out of view, scroll it in, so the focused control is never
+/// hidden (egui leaves that to each widget). A pass with a pointer press or release is left alone:
+/// the pointer's widget is already in view, a drag must not scroll under it, and egui's response
+/// lookup would hand the focus back on a click elsewhere.
+pub fn follow_focus(ui: &Ui) {
+    if ui.input(|i| i.pointer.any_down() || i.pointer.any_pressed() || i.pointer.any_released()) {
+        return;
+    }
+    let Some(r) = ui.memory(|m| m.focused()).and_then(|id| ui.ctx().read_response(id)) else {
+        return;
+    };
+    if !r.gained_focus() {
+        return;
+    }
+    if r.layer_id == ui.layer_id() && ui.min_rect().contains_rect(r.rect) && !ui.clip_rect().contains_rect(r.rect) {
+        r.scroll_to_me_animation(None, egui::style::ScrollAnimation::none());
+    }
+}
+
 /// Esc was handled this frame by something nested (an open popup closed on it): containers such
 /// as dialogs shouldn't close too. Keyed to the frame, so it lapses by itself on the next one.
 pub fn take_escape(ctx: &egui::Context) {
@@ -81,14 +101,20 @@ pub fn preview_only_variant(reason: &str) -> &str {
 
 /// What a preview-only raw means for the user (see `Photo::preview_only`).
 pub fn preview_only_explanation(reason: &str) -> String {
+    if reason.starts_with("Immich link only") {
+        return crate::i18n::tr(
+            "Linked from Immich: you see the server's preview until the original is downloaded (it is when the photo is opened in Develop).",
+        )
+        .to_string();
+    }
     if reason.starts_with("Nikon High Efficiency NEF (") {
         return crate::i18n::tr(
-            "Nikon High Efficiency NEF (HE / HE★) uses intoPIX TicoRAW compression. LightCraft does not currently have a license for this codec, so only the camera's embedded JPEG preview is available, not the raw sensor data. To edit raw data, shoot Lossless compressed NEF or convert existing HE files to DNG using a licensed converter.",
+            "Nikon High Efficiency NEF (HE / HE★) uses intoPIX TicoRAW compression. {app} does not currently have a license for this codec, so only the camera's embedded JPEG preview is available, not the raw sensor data. To edit raw data, shoot Lossless compressed NEF or convert existing HE files to DNG using a licensed converter.",
         )
         .to_string();
     }
     crate::i18n::tr_format!(
-        "LightCraft can't decode this raw variant yet ({}). You're editing the camera's embedded JPEG preview, which already includes the camera's picture style (e.g. Monochrome) and white balance.",
+        "{app} can't decode this raw variant yet ({}). You're editing the camera's embedded JPEG preview, which already includes the camera's picture style (e.g. Monochrome) and white balance.",
         preview_only_variant(reason)
     )
 }
@@ -313,8 +339,11 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
         typing = Some((shown_value(spec, value).trim_start_matches('+').to_string(), 0, value_pressed));
     }
     let value_released = ui.input(|i| i.pointer.button_released(egui::PointerButton::Primary));
-    // The opening press must complete the readout's original click before the edit continues.
-    if value_released && typing.as_ref().is_some_and(|(_, _, pressed)| *pressed) && !value_resp.clicked() {
+    // A press that leaves the readout before its release is a cancelled gesture: the field it
+    // opened closes. A release on the readout keeps it open, however long the button was held
+    // (fork #59: a long press is past egui's click time, so it isn't a click).
+    let released_away = value_released && ui.input(|i| i.pointer.interact_pos()).is_some_and(|p| !value_rect.contains(p));
+    if released_away && typing.as_ref().is_some_and(|(_, _, pressed)| *pressed) && !value_resp.clicked() {
         typing = None;
         ui.data_mut(|m| m.remove::<(String, u8, bool)>(typing_id));
         ui.memory_mut(|m| m.surrender_focus(crate::text_field::id(&format!("sliderField:{}", spec.id))));
@@ -601,6 +630,46 @@ pub fn section_header(ui: &mut Ui, id: &str, title: &str, open: bool, enabled: O
     (resp, toggled)
 }
 
+fn section_folds_id() -> egui::Id {
+    egui::Id::new("persisted-section-folds")
+}
+
+/// Carry the side-panel folds between the UI state (saved in `ui.json`) and the frame: changes
+/// made by [`folding_section`] last frame go to `saved`, then `saved` is what this frame draws.
+pub fn sync_section_folds(ctx: &egui::Context, saved: &mut std::collections::BTreeMap<String, bool>) {
+    let changed: Option<(bool, std::collections::BTreeMap<String, bool>)> = ctx.data(|d| d.get_temp(section_folds_id()));
+    if let Some((true, folds)) = changed {
+        *saved = folds;
+    }
+    ctx.data_mut(|d| d.insert_temp(section_folds_id(), (false, saved.clone())));
+}
+
+/// A collapsible side-panel section whose open state is remembered across launches under `key`
+/// (see [`sync_section_folds`]); `default_open` until the user folds or unfolds it.
+pub fn folding_section<R>(
+    ui: &mut Ui,
+    key: &str,
+    title: impl Into<egui::WidgetText>,
+    default_open: bool,
+    body: impl FnOnce(&mut Ui) -> R,
+) -> egui::CollapsingResponse<R> {
+    let id = section_folds_id();
+    let open = ui
+        .ctx()
+        .data(|d| d.get_temp::<(bool, std::collections::BTreeMap<String, bool>)>(id))
+        .and_then(|(_, m)| m.get(key).copied())
+        .unwrap_or(default_open);
+    let r = egui::CollapsingHeader::new(title).id_salt(("folding-section", key)).open(Some(open)).show(ui, body);
+    if r.header_response.clicked() {
+        ui.ctx().data_mut(|d| {
+            let (dirty, folds) = d.get_temp_mut_or_default::<(bool, std::collections::BTreeMap<String, bool>)>(id);
+            *dirty = true;
+            folds.insert(key.to_string(), !open);
+        });
+    }
+    r
+}
+
 /// Thin divider between groups.
 pub fn divider(ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
@@ -652,7 +721,9 @@ pub fn text_button(ui: &mut Ui, id: &str, label: &str, active: bool) -> Response
         t.button
     };
     let p = ui.painter();
-    p.rect(r, CornerRadius::same(4), fill, Stroke::new(1.0, t.button_border), StrokeKind::Inside);
+    // #122: an "on" choice gets a brighter edge as well as a brighter fill, so it reads as selected.
+    let edge = if active { t.text_dim } else { t.button_border };
+    p.rect(r, CornerRadius::same(4), fill, Stroke::new(1.0, edge), StrokeKind::Inside);
     p.galley(r.center() - galley.size() / 2.0, galley, t.text);
     resp
 }
@@ -694,12 +765,70 @@ pub fn segmented(ui: &mut Ui, id: &str, items: &[(&str, &str)], active: Option<u
     clicked
 }
 
+/// [`segmented`] with icons: one row of equal icon segments, each with its label as hover text and
+/// accessible name, addressable as `button:{id}-{key}`. Returns the clicked index.
+pub fn icon_segmented(ui: &mut Ui, id: &str, items: &[(Icon, &str, &str)], active: Option<usize>) -> Option<usize> {
+    let t = Tokens::get(ui.ctx());
+    let gap = 4.0;
+    let n = items.len().max(1) as f32;
+    let seg_w = ((ui.available_width() - gap * (n - 1.0)) / n).clamp(24.0, 40.0);
+    let mut clicked = None;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = gap;
+        for (i, (icon, label, key)) in items.iter().enumerate() {
+            let label = crate::i18n::tr(label);
+            let on = active == Some(i);
+            let (r, resp) = ui.allocate_exact_size(vec2(seg_w, 24.0), Sense::click());
+            resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, on, label));
+            register(ui.ctx(), format!("button:{id}-{key}"), r);
+            let fill = if on {
+                t.pressed
+            } else if resp.hovered() {
+                t.hover
+            } else {
+                t.button
+            };
+            let p = ui.painter();
+            p.rect(r, CornerRadius::same(4), fill, Stroke::new(1.0, t.button_border), StrokeKind::Inside);
+            let c = if on {
+                t.pick
+            } else if resp.hovered() {
+                t.text
+            } else {
+                t.icon
+            };
+            paint(p, Rect::from_center_size(r.center(), vec2(18.0, 18.0)), *icon, c);
+            if resp.on_hover_text(label).clicked() {
+                clicked = Some(i);
+            }
+        }
+    });
+    clicked
+}
+
 /// An icon-only button. `active` draws the selected background (tool strip).
 pub fn icon_button(ui: &mut Ui, id: &str, icon: Icon, size: egui::Vec2, active: bool, enabled: bool, tooltip: &str) -> Response {
     let tooltip = crate::i18n::tr(tooltip);
+    icon_button_named(ui, id, icon, size, active, enabled, tooltip, tooltip)
+}
+
+/// The tooltip a panel's icon button shows: its (translated) label, then the shortcut of
+/// `command` as menus write it (`Rotate Left (⌘[)`), when it has one.
+pub fn command_tooltip(ui: &Ui, label: &str, shortcut: Option<&str>) -> String {
+    let label = crate::i18n::tr(label);
+    match shortcut {
+        Some(sc) => format!("{label} ({})", crate::menubar::shortcut_text(sc, ui.ctx().os() == egui::os::OperatingSystem::Mac)),
+        None => label.to_string(),
+    }
+}
+
+/// [`icon_button`] with its accessible `name` (already translated) apart from its hover text
+/// (`tooltip`, e.g. the name plus a shortcut).
+#[allow(clippy::too_many_arguments)]
+pub fn icon_button_named(ui: &mut Ui, id: &str, icon: Icon, size: egui::Vec2, active: bool, enabled: bool, name: &str, tooltip: &str) -> Response {
     let t = Tokens::get(ui.ctx());
     let (r, resp) = ui.allocate_exact_size(size, if enabled { Sense::click() } else { Sense::hover() });
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, active, tooltip));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, active, name));
     register(ui.ctx(), format!("icon:{id}"), r);
     let p = ui.painter();
     let sq = Rect::from_center_size(r.center(), vec2(32.0f32.min(size.x), 32.0f32.min(size.y)));
@@ -732,6 +861,7 @@ pub fn stars(ui: &mut Ui, id: &str, rating: u8, size: f32) -> Option<u8> {
         let (r, resp) = ui.allocate_exact_size(vec2(size, size), Sense::click());
         crate::widgets::announce_selected(&resp, format!("{} ★", i + 1), i < rating);
         register(ui.ctx(), format!("star:{id}:{}", i + 1), r);
+        crate::access::named(&resp, egui::WidgetType::RadioButton, &format!("{} {}", crate::i18n::tr("Rating"), i + 1));
         if resp.hovered() {
             hover_n = Some(i + 1);
         }
@@ -782,19 +912,6 @@ pub fn dropdown_within(ui: &mut Ui, id: &str, text: &str, font: egui::FontId, co
 mod tests {
     use super::*;
 
-    #[test]
-    fn high_efficiency_nef_explains_the_codec_limit_and_workarounds() {
-        let reason = "Nikon High Efficiency NEF (HE / HE★, a JPEG XS-based codec with no public specification; shoot RAW Lossless compressed to edit the raw data)";
-        let explanation = preview_only_explanation(reason);
-        assert!(explanation.contains("TicoRAW"), "{explanation}");
-        assert!(explanation.contains("does not currently have a license"), "{explanation}");
-        assert!(!explanation.contains("cannot decode"), "{explanation}");
-        assert!(explanation.contains("Lossless compressed NEF"), "{explanation}");
-        assert!(explanation.contains("DNG"), "{explanation}");
-        assert!(!explanation.contains("yet"), "{explanation}");
-        assert!(preview_only_explanation("unsupported CR3").contains("unsupported CR3"));
-    }
-
     /// Issue #647: hovering a star previews the rating a click would set.
     #[test]
     fn hovered_star_previews_its_rating() {
@@ -810,7 +927,7 @@ mod tests {
         let spec = |id, min, max, step| ControlSpec {
             id,
             label: "",
-            section: lightcraft_develop::controls::Section::Light,
+            section: lcc_develop::controls::Section::Light,
             min,
             max,
             default: 0.0,
@@ -845,7 +962,7 @@ mod tests {
     #[test]
     fn a_slow_shift_drag_adds_up() {
         let ctx = egui::Context::default();
-        let temp = lightcraft_develop::controls::find("wb.temp").unwrap();
+        let temp = lcc_develop::controls::find("wb.temp").unwrap();
         let mut value = 7000.0;
         let frame = |time: f64, events: Vec<egui::Event>, value: f64| {
             let input = egui::RawInput {
@@ -881,9 +998,9 @@ mod tests {
     /// Typed values (issue #322): signs, a decimal comma, units; on the control's steps, in range.
     #[test]
     fn typed_values_are_stepped_and_clamped() {
-        let exposure = lightcraft_develop::controls::find("light.exposure").unwrap();
-        let contrast = lightcraft_develop::controls::find("light.contrast").unwrap();
-        let temp = lightcraft_develop::controls::find("wb.temp").unwrap();
+        let exposure = lcc_develop::controls::find("light.exposure").unwrap();
+        let contrast = lcc_develop::controls::find("light.contrast").unwrap();
+        let temp = lcc_develop::controls::find("wb.temp").unwrap();
         assert_eq!(typed_value(exposure, "1.5"), Some(1.5));
         assert_eq!(typed_value(exposure, " +0,25 "), Some(0.25));
         assert_eq!(typed_value(exposure, "-12"), Some(exposure.min), "clamped");
@@ -907,7 +1024,7 @@ mod access_tests {
         let ctx = egui::Context::default();
         crate::theme::install_fonts(&ctx);
         ctx.enable_accesskit();
-        let spec = lightcraft_develop::controls::find("light.exposure").unwrap();
+        let spec = lcc_develop::controls::find("light.exposure").unwrap();
         let mut found = Vec::new();
         let mut ranges = Vec::new();
         for _ in 0..3 {
@@ -915,6 +1032,8 @@ mod access_tests {
                 let _ = slider(ui, spec, 0.5, true, None);
                 let _ = text_button(ui, "auto", "Auto", false);
                 let _ = icon_button(ui, "trash", Icon::Trash, vec2(24.0, 24.0), false, true, "Delete mask");
+                let _ = icon_button_named(ui, "rotl", Icon::RotateLeft, vec2(28.0, 24.0), false, true, "Rotate Left", "Rotate Left (Ctrl+[)");
+                let _ = icon_segmented(ui, "ov", &[(Icon::OverlayThirds, "Thirds", "thirds"), (Icon::OverlayNone, "None", "none")], Some(0));
             });
             let mut out = out;
             out.textures_delta.clear();
@@ -938,6 +1057,8 @@ mod access_tests {
         assert!(ranges.contains(&(Some(spec.min), Some(spec.max))), "the slider's range: {ranges:?}");
         assert!(has("Button", "Auto"), "{found:?}");
         assert!(has("Button", "Delete mask"), "{found:?}");
+        assert!(has("Button", "Rotate Left"), "an icon button is named by its label, not its hover text: {found:?}");
+        assert!(has("Button", "Thirds") && has("Button", "None"), "icon segments are named: {found:?}");
     }
 }
 
@@ -1005,12 +1126,25 @@ pub(crate) fn elide_head(text: &str, max: f32, width: impl Fn(&str) -> f32) -> S
 #[path = "widgets/tests_numeric_entry.rs"]
 mod numeric_entry_tests;
 
+/// Whether Up / Down go to a slider this frame (the pointer over a slider's row, or a slider holding
+/// the keyboard focus), as [`slider`] reads them: the photo-stepping shortcuts then leave them alone.
+pub fn arrows_go_to_a_slider(ctx: &egui::Context, widgets: &[(String, egui::Rect)]) -> bool {
+    let pointer = ctx.input(|i| i.pointer.hover_pos());
+    // the registered rect is the track; its row reaches up over the label and out to the paddings
+    let over = pointer.is_some_and(|p| {
+        widgets.iter().any(|(id, r)| {
+            id.starts_with("slider:") && Rect::from_min_max(pos2(r.left() - 24.0, r.top() - 22.0), pos2(r.right() + 22.0, r.bottom())).contains(p)
+        })
+    });
+    let focused = ctx.data(|d| d.get_temp::<egui::Id>(focused_slider_key())).is_some_and(|id| ctx.memory(|m| m.has_focus(id)));
+    over || focused
+}
 #[cfg(test)]
 #[path = "widgets/tests_slider_reset.rs"]
 mod slider_reset_tests;
 
 fn focused_slider_key() -> egui::Id {
-    egui::Id::new("lightcraft-focused-slider")
+    egui::Id::new("app-focused-slider")
 }
 
 /// Whether the widget with keyboard focus is a develop slider a click selected. It owns only the

@@ -43,6 +43,11 @@ pub trait Store: Send {
     fn background_writer(&self) -> Option<Box<dyn Store>> {
         None
     }
+    /// The directory the files are in, when they are plain files there: such a library uses the
+    /// v4 store ([`crate::db`]) beside its log. `None` (the default): JSON snapshots.
+    fn dir(&self) -> Option<&Path> {
+        None
+    }
 }
 
 /// Files in a directory.
@@ -50,13 +55,20 @@ pub struct FsStore {
     dir: PathBuf,
     /// Open append handle (kept between appends; dropped on rewrite/truncate).
     appender: Option<(String, std::fs::File)>,
+    /// Keep the JSON snapshot (format 3 storage) instead of the v4 store.
+    json_only: bool,
 }
 
 impl FsStore {
     /// Use `dir` (created if missing).
     pub fn open(dir: impl AsRef<Path>) -> io::Result<FsStore> {
         std::fs::create_dir_all(dir.as_ref())?;
-        Ok(FsStore { dir: dir.as_ref().to_path_buf(), appender: None })
+        Ok(FsStore { dir: dir.as_ref().to_path_buf(), appender: None, json_only: false })
+    }
+    /// [`FsStore::open`], keeping the JSON snapshot storage ([`Store::dir`] says `None`): for
+    /// tools and tests of that format, and the benchmark's baseline.
+    pub fn open_json(dir: impl AsRef<Path>) -> io::Result<FsStore> {
+        Ok(FsStore { json_only: true, ..FsStore::open(dir)? })
     }
     pub fn dir(&self) -> &Path {
         &self.dir
@@ -75,7 +87,7 @@ impl FsStore {
 
 /// A new staging file at `tmp`: whatever is already there (a leftover from a crashed save, or a link) is removed first
 /// (a link itself, never what it points to), then the file is created exclusively, so a write never follows a link
-/// planted at that name into another file (issue #1502).
+/// planted at that name into another file.
 fn create_staging(tmp: &std::path::Path) -> io::Result<std::fs::File> {
     if std::fs::symlink_metadata(tmp).is_ok() {
         std::fs::remove_file(tmp)?;
@@ -175,7 +187,11 @@ impl Store for FsStore {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn background_writer(&self) -> Option<Box<dyn Store>> {
-        Some(Box::new(FsStore { dir: self.dir.clone(), appender: None }))
+        Some(Box::new(FsStore { dir: self.dir.clone(), appender: None, json_only: self.json_only }))
+    }
+
+    fn dir(&self) -> Option<&Path> {
+        (!self.json_only).then_some(self.dir.as_path())
     }
 }
 
@@ -242,16 +258,15 @@ impl Store for MemStore {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests_staging {
     use super::*;
 
     /// A link planted at a staging name (`<name>.tmp`) is removed, never followed: the file it points to keeps its
-    /// bytes and the save still lands (issue #1502).
-    #[cfg(unix)]
+    /// bytes and the save still lands.
     #[test]
     fn a_link_at_the_staging_name_is_never_written_through() {
-        let dir = std::env::temp_dir().join(format!("lc-staging-link-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("lcc-staging-link-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let mut store = FsStore::open(&dir).unwrap();
         let victim = dir.join("victim.txt");

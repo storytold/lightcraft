@@ -14,6 +14,7 @@
 
 pub mod disk;
 pub mod hash;
+mod legacy;
 pub mod lru;
 pub mod pool;
 
@@ -23,7 +24,7 @@ use std::sync::{Arc, Mutex, RwLock};
 
 pub use disk::{DiskCache, decode_jpeg, encode_jpeg};
 pub use hash::{Hash128, Hasher128, hash_bytes};
-use lightcraft_raster::Rgba8;
+use lcc_raster::Rgba8;
 pub use lru::{Lru, next_tick};
 pub use pool::JobPool;
 
@@ -87,6 +88,14 @@ impl PreviewCache {
 
     pub fn get(&self, key: Hash128) -> Option<Arc<Rgba8>> {
         self.get_at(self.generation(), key)
+    }
+
+    /// `key` if it is held in memory (never reads the disk).
+    pub fn get_in_memory(&self, key: Hash128) -> Option<Arc<Rgba8>> {
+        if self.generation.read().unwrap_or_else(std::sync::PoisonError::into_inner).is_none() {
+            return None;
+        }
+        self.mem.lock().unwrap_or_else(|e| e.into_inner()).get(&key).cloned()
     }
 
     /// Changes when explicitly cleared; jobs captured before that clear cannot repopulate it.
@@ -201,6 +210,18 @@ impl PreviewCache {
         if let Some(d) = &self.disk {
             d.clear();
         }
+    }
+
+    /// Drop one image (memory and disk); whether there was one.
+    pub fn remove(&self, key: Hash128) -> bool {
+        let in_mem = self.mem.lock().unwrap_or_else(|e| e.into_inner()).remove(&key).is_some();
+        let on_disk = self.disk.as_ref().is_some_and(|d| d.remove(key) > 0);
+        in_mem || on_disk
+    }
+
+    /// Whether `key` is held in memory or on disk (without reading it).
+    pub fn contains(&self, key: Hash128) -> bool {
+        self.mem.lock().unwrap_or_else(|e| e.into_inner()).contains(&key) || self.disk.as_ref().is_some_and(|d| d.modified(key).is_some())
     }
 
     /// Stop this cache object for good, leaving its disk files alone: called when another cache

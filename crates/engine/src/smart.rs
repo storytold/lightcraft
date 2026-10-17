@@ -8,16 +8,16 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use lightcraft_catalog::Photo;
-use lightcraft_color::transfer::linear_to_srgb;
-use lightcraft_pipeline::tone::CameraTone;
-use lightcraft_raster::{Rgb32f, Rgba8};
+use lcc_catalog::Photo;
+use lcc_color::transfer::linear_to_srgb;
+use lcc_pipeline::tone::CameraTone;
+use lcc_raster::{Rgb32f, Rgba8};
 
 const MAGIC: &[u8] = b"LCSP1\n";
 
 /// The proxy's file name for a photo (by its content, so copies share one).
 pub fn file_name(p: &Photo) -> String {
-    let h = lightcraft_preview::Hasher128::new().str(&crate::media::content_key(p)).finish();
+    let h = lcc_preview::Hasher128::new().str(&crate::media::content_key(p)).finish();
     format!("{:032x}.lcsp", h.0)
 }
 
@@ -98,13 +98,8 @@ pub fn encode(img: &Rgb32f, tone: Option<&CameraTone>) -> Result<Vec<u8>, String
         })
         .collect();
     let rgba = Rgba8 { width: img.width, height: img.height, data };
-    let jpg = lightcraft_codecs::encode_jpeg(
-        &lightcraft_codecs::EncodeImage::rgba8(&rgba),
-        JPEG_QUALITY,
-        lightcraft_codecs::ChromaSubsampling::S444,
-        &Default::default(),
-    )
-    .map_err(|e| e.to_string())?;
+    let jpg = lcc_codecs::encode_jpeg(&lcc_codecs::EncodeImage::rgba8(&rgba), JPEG_QUALITY, lcc_codecs::ChromaSubsampling::S444, &Default::default())
+        .map_err(|e| e.to_string())?;
     let mut out = MAGIC.to_vec();
     let mut head = serde_json::json!({
         "w": img.width,
@@ -130,7 +125,7 @@ pub fn decode(bytes: &[u8]) -> Result<(Rgb32f, Option<CameraTone>), String> {
     let head: serde_json::Value = serde_json::from_slice(&rest[..nl]).map_err(|e| e.to_string())?;
     let scale = head["scale"].as_f64().unwrap_or(1.0) as f32;
     let tone = head.get("tone").and_then(|t| serde_json::from_value::<CameraTone>(t.clone()).ok());
-    let d = lightcraft_codecs::decode(&rest[nl + 1..], Default::default()).map_err(|e| e.to_string())?;
+    let d = lcc_codecs::decode(&rest[nl + 1..], Default::default()).map_err(|e| e.to_string())?;
     // the decoder undoes the sRGB encoding; the values are the source's own primaries
     let mut img = d.image;
     img.data.iter_mut().for_each(|c| *c = c.map(|v| v * scale));
@@ -153,7 +148,7 @@ pub fn check_writable(dir: &Path) -> Result<(), String> {
         }
         std::fs::create_dir(dir).map_err(|e| format!("can't create {}: {e}", dir.display()))?;
     }
-    let probe = dir.join(format!(".lightcraft-write-test-{}", std::process::id()));
+    let probe = dir.join(format!(".app-write-test-{}", std::process::id()));
     std::fs::write(&probe, b"x").map_err(|e| format!("{} is not writable (is the drive full or read-only?): {e}", dir.display()))?;
     let _ = std::fs::remove_file(&probe);
     Ok(())
@@ -248,9 +243,7 @@ pub fn migrate(from: &Path, to: &Path, what: Existing) -> (usize, Vec<String>) {
                     } else {
                         // across drives: copied atomically (never a partial proxy at the new place)
                         std::fs::rename(&src, &dst).or_else(|_| {
-                            std::fs::read(&src)
-                                .and_then(|b| lightcraft_catalog::safe_file::write_atomic(&dst, &b))
-                                .and_then(|()| std::fs::remove_file(&src))
+                            std::fs::read(&src).and_then(|b| lcc_catalog::safe_file::write_atomic(&dst, &b)).and_then(|()| std::fs::remove_file(&src))
                         })
                     }
                 })
@@ -350,13 +343,19 @@ pub fn look_checked(dir: &Path) -> bool {
 pub fn mark_look_checked(dir: &Path) -> Result<(), String> {
     let path = dir.join(LOOK_MARKER);
     let text = format!("{} {}\n", crate::camera_preview::LOOK_VERSION, ENCODE_VERSION);
-    lightcraft_catalog::safe_file::write_atomic(&path, text.as_bytes()).map_err(|e| format!("{}: {e}", path.display()))
+    lcc_catalog::safe_file::write_atomic(&path, text.as_bytes()).map_err(|e| format!("{}: {e}", path.display()))
 }
 
 /// Load the proxy at `path`.
 pub fn load(path: &Path) -> Result<crate::media::DecodedSource, String> {
     let b = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    decode(&b).map(|(image, camera_tone)| crate::media::DecodedSource { image: Arc::new(image), info: None, camera_tone, denoised: None })
+    decode(&b).map(|(image, camera_tone)| crate::media::DecodedSource {
+        image: Arc::new(image),
+        info: None,
+        camera_tone,
+        denoised: None,
+        outliers: false,
+    })
 }
 
 #[cfg(test)]
@@ -430,7 +429,7 @@ mod tests {
         let (a, b) = (base.join("a"), base.join("b"));
         std::fs::create_dir_all(&a).unwrap();
         std::fs::create_dir_all(&b).unwrap();
-        let img = lightcraft_scenes::demo_library()[0].render(64, 40);
+        let img = lcc_scenes::demo_library()[0].render(64, 40);
         let good = encode(&img, None).unwrap();
         std::fs::write(a.join("1.lcsp"), &good).unwrap();
         assert!(is_valid(&a.join("1.lcsp")));
@@ -452,7 +451,7 @@ mod tests {
             [x, 0.95 * (1.0 - (-2.7 * x).exp())]
         }))
         .unwrap();
-        let img = lightcraft_scenes::demo_library()[0].render(64, 40);
+        let img = lcc_scenes::demo_library()[0].render(64, 40);
         let bytes = encode(&img, Some(&tone)).unwrap();
         assert_eq!(decode(&bytes).unwrap().1, Some(tone));
         let dir = temp("tone");
@@ -462,7 +461,7 @@ mod tests {
         assert!(is_valid(&path));
         let loaded = load(&path).unwrap();
         assert_eq!(loaded.camera_tone, Some(tone));
-        let header = lightcraft_pipeline::SourceInfo { raw: true, ..Default::default() };
+        let header = lcc_pipeline::SourceInfo { raw: true, ..Default::default() };
         assert_eq!(loaded.info_or(header).camera_tone, Some(tone));
         // a hostile curve (reversing knots) is ignored, not trusted
         let nl = MAGIC.len() + bytes[MAGIC.len()..].iter().position(|b| *b == b'\n').unwrap();
@@ -480,7 +479,7 @@ mod tests {
 
     #[test]
     fn roundtrip_keeps_the_picture() {
-        let img = lightcraft_scenes::demo_library()[0].render(160, 100);
+        let img = lcc_scenes::demo_library()[0].render(160, 100);
         let (back, tone) = decode(&encode(&img, None).unwrap()).unwrap();
         assert_eq!((back.width, back.height), (img.width, img.height));
         assert!(tone.is_none());
@@ -501,7 +500,7 @@ mod tests {
     /// enters what is measured. Built from a rendered demo scene so the dimensions and the flat
     /// row-major layout are the real ones.
     fn smooth_scene(w: usize, h: usize) -> Rgb32f {
-        let mut img = lightcraft_scenes::demo_library()[0].render(w, h);
+        let mut img = lcc_scenes::demo_library()[0].render(w, h);
         let (w, h) = (img.width.max(1), img.height.max(1));
         for (i, px) in img.data.iter_mut().enumerate() {
             let u = (i % w) as f32 / (w - 1).max(1) as f32;
@@ -568,13 +567,8 @@ mod tests {
             })
             .collect();
         let rgba = Rgba8 { width: img.width, height: img.height, data };
-        let jpg = lightcraft_codecs::encode_jpeg(
-            &lightcraft_codecs::EncodeImage::rgba8(&rgba),
-            92,
-            lightcraft_codecs::ChromaSubsampling::S444,
-            &Default::default(),
-        )
-        .unwrap();
+        let jpg =
+            lcc_codecs::encode_jpeg(&lcc_codecs::EncodeImage::rgba8(&rgba), 92, lcc_codecs::ChromaSubsampling::S444, &Default::default()).unwrap();
         // the version-1 container the decoder needs: magic, header, JPEG — and no `enc` field
         let mut out = MAGIC.to_vec();
         let head = serde_json::json!({"w": img.width, "h": img.height, "scale": scale, LOOK_FIELD: crate::camera_preview::LOOK_VERSION});
@@ -652,7 +646,7 @@ mod tests {
     #[test]
     fn a_proxy_from_an_older_encode_is_stale() {
         let dir = temp("encode-version");
-        let img = lightcraft_scenes::demo_library()[0].render(64, 40);
+        let img = lcc_scenes::demo_library()[0].render(64, 40);
         let bytes = encode(&img, None).unwrap();
         let path = dir.join("p.lcsp");
         std::fs::write(&path, &bytes).unwrap();

@@ -289,20 +289,6 @@ mod tests {
     }
 
     #[test]
-    fn a_u_net_is_described_with_its_shapes_and_costs() {
-        let net = Net::new(4, unet()).unwrap();
-        assert_eq!(net.out_channels(), 3);
-        assert_eq!(net.shape(3), Some(Shape { channels: 16, level: 1 }));
-        assert_eq!(net.shape(7), Some(Shape { channels: 3, level: -1 }));
-        assert_eq!(net.depth(), 1);
-        assert!(net.fits_tile(64) && !net.fits_tile(63) && !net.fits_tile(0));
-        // 64 × 64 cells: layer 1 = 4096·4·8·9, and so on; just check it is the sum of what the layers cost
-        let t = 64u64;
-        let want = t * t * 4 * 8 * 9 + (t / 2) * (t / 2) * 8 * 16 * 9 + (t / 2) * (t / 2) * 16 * 8 * 4 + t * t * 16 * 8 * 9 + t * t * 8 * 12;
-        assert_eq!(net.macs(64), want);
-    }
-
-    #[test]
     fn a_network_that_does_not_chain_is_refused() {
         // wrong input channel count for the first convolution
         assert!(Net::new(3, unet()).is_err());

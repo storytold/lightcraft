@@ -1,7 +1,7 @@
 //! Filter presets: the filter bar's settings saved under a name ("Five stars", "Unedited raws")
 //! and applied in one step. Saved with the library.
 
-use lightcraft_catalog::Filter;
+use lcc_catalog::Filter;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -53,6 +53,16 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(list(s))
 }
 
+/// Library ▸ Enable Filters (Classic ⌘L): switches the filter off, keeping its settings, and back on.
+fn toggle_enabled(s: &mut Session) -> Value {
+    match s.filter_suspended.take() {
+        Some(f) if s.filter == Filter::default() => s.filter = f,
+        _ if s.filter != Filter::default() => s.filter_suspended = Some(std::mem::take(&mut s.filter)),
+        _ => {}
+    }
+    json!({"enabled": s.filter_suspended.is_none(), "photos": s.visible().len()})
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(query "filter.presets", "Filter Presets", [], None, "{} → [{name, filter}]", always, |s, _| Ok(list(s))),
@@ -66,6 +76,15 @@ pub fn specs() -> Vec<CommandSpec> {
             save
         ),
         cmd!("filter.applyPreset", "Apply Filter Preset", [], None, "{name} — replaces the current filter → {photos}", always, apply),
+        cmd!(
+            "filter.toggleEnabled",
+            "Enable Filters",
+            ["Library"],
+            Some("Cmd+L"),
+            "{} — switches the current filter off (kept) or back on → {enabled, photos}",
+            always,
+            |s, _| Ok(toggle_enabled(s))
+        ),
         cmd!("filter.deletePreset", "Delete Filter Preset", [], None, "{name}", always, delete),
     ]
 }

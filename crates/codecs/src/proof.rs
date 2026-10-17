@@ -14,7 +14,7 @@
 //! Sources: ICC.1:2022 (rendering intents, media white point, absolute colorimetric scaling);
 //! the transforms are moxcms's. Own design otherwise.
 
-use lightcraft_color::{D50, D65, REC2020, bradford};
+use lcc_color::{D50, D65, REC2020, bradford};
 use moxcms::{ColorProfile, DataColorSpace, Layout, RenderingIntent, TransformOptions};
 
 use crate::display::MAX_PROFILE_BYTES;
@@ -87,7 +87,7 @@ pub fn proof_table(bytes: &[u8], intent: ProofIntent, paper_ink: bool) -> Result
 
     let n = PROOF_GRID;
     let grid: Vec<f32> = (0..n * n * n)
-        .flat_map(|i| [i / (n * n), (i / n) % n, i % n].map(|k| lightcraft_color::transfer::srgb_to_linear(k as f32 / (n - 1) as f32)))
+        .flat_map(|i| [i / (n * n), (i / n) % n, i % n].map(|k| lcc_color::transfer::srgb_to_linear(k as f32 / (n - 1) as f32)))
         .collect();
     let round_trip = |there: &dyn moxcms::TransformExecutor<f32>| -> Option<Vec<f32>> {
         let mut device = vec![0f32; n * n * n * ch];
@@ -99,7 +99,7 @@ pub fn proof_table(bytes: &[u8], intent: ProofIntent, paper_ink: bool) -> Result
     let sim = guarded(|| round_trip(fwd.as_ref())).ok_or("the profile's tables can't be applied")?;
     let colorimetric = guarded(|| round_trip(fwd_rel.as_ref())).ok_or("the profile's tables can't be applied")?;
     let paper = if paper_ink { paper_white(&dev) } else { [1.0; 3] };
-    let enc = |v: f32| lightcraft_color::transfer::linear_to_srgb(v.clamp(0.0, 1.0));
+    let enc = |v: f32| lcc_color::transfer::linear_to_srgb(v.clamp(0.0, 1.0));
     let data = (0..n * n * n)
         .map(|i| {
             let c = |v: &[f32], k: usize| v.get(i * 3 + k).copied().filter(|x| x.is_finite()).unwrap_or(0.0);
@@ -140,7 +140,7 @@ mod tests {
         assert!(at(&t, [0, top, 0])[3] > 0.05, "{:?}", at(&t, [0, top, 0]));
         let g = at(&t, [16, 16, 16]);
         assert!(g[3] < 0.01, "{g:?}");
-        let lin = lightcraft_color::transfer::srgb_to_linear(16.0 / 32.0);
+        let lin = lcc_color::transfer::srgb_to_linear(16.0 / 32.0);
         assert!((0..3).all(|k| (g[k] - lin).abs() < 0.01), "{g:?} vs {lin}");
         let w = at(&t, [top; 3]);
         assert!((0..3).all(|k| (w[k] - 1.0).abs() < 0.01), "{w:?}");

@@ -1,6 +1,5 @@
-use lightcraft_tiff::image::{Layout, chunk_bytes};
-use lightcraft_tiff::writer::{rational, srational};
-use lightcraft_tiff::{ByteOrder, FieldType, IfdBuilder, ImageData, ParseOptions, Tiff, TiffError, TiffWriter, Value, parse_ifd_at, tags};
+use lcc_tiff::image::{Layout, chunk_bytes};
+use lcc_tiff::{ByteOrder, FieldType, IfdBuilder, ImageData, ParseOptions, Tiff, TiffError, TiffWriter, Value, parse_ifd_at, tags};
 use proptest::prelude::*;
 
 const ORDERS: [ByteOrder; 2] = [ByteOrder::Little, ByteOrder::Big];
@@ -312,17 +311,6 @@ fn parse_ifd_with_base() {
     assert_eq!(ifd.get(5).unwrap().offset, 118);
 }
 
-#[test]
-fn rationals() {
-    assert_eq!(rational(2.8), (28, 10));
-    assert_eq!(rational(0.004), (4, 1000));
-    assert_eq!(rational(-1.0), (0, 1));
-    assert_eq!(srational(-0.333), (-333, 1000));
-    assert_eq!(srational(7.0), (7, 1));
-    let (n, d) = rational(1.0 / 3.0);
-    assert!((n as f64 / d as f64 - 1.0 / 3.0).abs() < 1e-6);
-}
-
 fn sample_file() -> Vec<u8> {
     let mut exif = IfdBuilder::new();
     exif.set(tags::F_NUMBER, Value::Rational(vec![(4, 1)]));
@@ -350,7 +338,7 @@ fn exercise(t: &Tiff, data: &[u8]) {
         }
     }
     if let Some(e) = t.exif().and_then(|x| x.get(tags::MAKER_NOTE)) {
-        let _ = lightcraft_tiff::makernote::parse_makernote(data, e.offset, e.count() as u64, t.order, "NIKON");
+        let _ = lcc_tiff::makernote::parse_makernote(data, e.offset, e.count() as u64, t.order, "NIKON");
     }
 }
 

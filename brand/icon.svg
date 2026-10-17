@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- Placeholder mark: six-blade lens aperture. Original work, MIT licence (see assets/ATTRIBUTION.md). -->
+  <rect width="256" height="256" rx="56" fill="#0d1b24"/>
+  <circle cx="128.0" cy="128.0" r="102.40" fill="#123447"/>
+  <path d="M128.00 89.60L228.50 147.62A102.40 102.40 0 0 0 128.00 25.60Z" fill="#2b6f8f"/><path d="M161.26 108.80L161.26 224.85A102.40 102.40 0 0 0 216.68 76.80Z" fill="#348aa8"/><path d="M161.26 147.20L60.75 205.22A102.40 102.40 0 0 0 216.68 179.20Z" fill="#3fa3bf"/><path d="M128.00 166.40L27.50 108.38A102.40 102.40 0 0 0 128.00 230.40Z" fill="#2b6f8f"/><path d="M94.74 147.20L94.74 31.15A102.40 102.40 0 0 0 39.32 179.20Z" fill="#348aa8"/><path d="M94.74 108.80L195.25 50.78A102.40 102.40 0 0 0 39.32 76.80Z" fill="#3fa3bf"/>
+  <circle cx="128.0" cy="128.0" r="102.40" fill="none" stroke="#e8eef2" stroke-width="7.68"/>
+</svg>

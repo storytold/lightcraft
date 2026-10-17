@@ -23,7 +23,7 @@ Click **B&W** at the top of the **Edit** panel to turn the photo monochrome. Cli
 
 ## HDR
 
-Click **HDR**, next to **B&W**, to edit the photo in HDR, with highlights brighter than SDR white for HDR exports. LightCraft cannot show HDR on an HDR screen yet, so you edit without seeing the extra brightness.
+Click **HDR**, next to **B&W**, to edit the photo in HDR, with highlights brighter than SDR white for HDR exports. LightCraft Classic cannot show HDR on an HDR screen yet, so you edit without seeing the extra brightness.
 
 ## Other edit tools
 
@@ -38,6 +38,6 @@ Open them from the **Window** menu, or press the key shown next to each one:
 
 ## Good to know
 
-- A raw photo that LightCraft cannot decode yet is edited from the camera's embedded JPEG. The **Edit** panel then shows **Preview only**. See [A raw photo opens as "Preview only"](../troubleshooting/preview-only-raw.md).
-- When you zoom in on a large raw, the view can look soft for a few seconds while LightCraft renders the full-resolution pixels.
+- A raw photo that LightCraft Classic cannot decode yet is edited from the camera's embedded JPEG. The **Edit** panel then shows **Preview only**. See [A raw photo opens as "Preview only"](../troubleshooting/preview-only-raw.md).
+- When you zoom in on a large raw, the view can look soft for a few seconds while LightCraft Classic renders the full-resolution pixels.
 - To save the result as a file, see [Export photos](export-photos.md).

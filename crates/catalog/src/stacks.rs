@@ -94,6 +94,38 @@ impl Catalog {
         self.group_ops(result, sources, true)
     }
 
+    /// Put `new` into `anchor`'s stack directly above it (Lightroom's Edit In: the edited version
+    /// sits on the photo it was made from, inside the stack that photo already belongs to), or
+    /// stack `[new, anchor]` when `anchor` isn't stacked. `new` leaves any stack it was in first.
+    /// `collapsed` sets the stack's state. `None` when either photo is missing or they're the same.
+    pub fn insert_above_ops(&mut self, new: PhotoId, anchor: PhotoId, collapsed: bool) -> Option<Op> {
+        if new == anchor || !self.photos.contains_key(&new) || !self.photos.contains_key(&anchor) {
+            return None;
+        }
+        let mut ops: Vec<Op> = Vec::new();
+        if let Some(old) = self.stack_of(new).filter(|s| !s.photos.contains(&anchor)).cloned() {
+            let rest: Vec<PhotoId> = old.photos.iter().copied().filter(|p| *p != new).collect();
+            ops.push(if rest.len() < 2 {
+                Op::RemoveStack { id: old.id }
+            } else {
+                Op::SetStack { id: old.id, photos: rest, collapsed: old.collapsed }
+            });
+        }
+        match self.stack_of(anchor).cloned() {
+            Some(st) => {
+                let mut photos: Vec<PhotoId> = st.photos.iter().copied().filter(|p| *p != new).collect();
+                let at = photos.iter().position(|p| *p == anchor)?;
+                photos.insert(at, new);
+                ops.push(Op::SetStack { id: st.id, photos, collapsed });
+            }
+            None => {
+                let id = self.alloc_stack_id();
+                ops.push(Op::AddStack { stack: Stack { id, photos: vec![new, anchor], collapsed } });
+            }
+        }
+        Some(Op::Batch { ops })
+    }
+
     /// Move `photo` `delta` places within its stack (towards the top for negative; index 0 is the
     /// top). `None` when it isn't stacked or can't move.
     pub fn move_in_stack_ops(&self, photo: PhotoId, delta: isize) -> Option<Op> {
@@ -132,14 +164,17 @@ impl Catalog {
 
     /// Ops that dissolve every stack containing one of `photos`.
     pub fn ungroup_ops(&self, photos: &[PhotoId]) -> Vec<Op> {
-        self.stacks.values().filter(|s| s.photos.iter().any(|p| photos.contains(p))).map(|s| Op::RemoveStack { id: s.id }).collect()
+        let ids: HashSet<StackId> = photos.iter().filter_map(|p| self.stack_id_of(*p)).collect();
+        self.stacks.values().filter(|s| ids.contains(&s.id)).map(|s| Op::RemoveStack { id: s.id }).collect()
     }
 
     /// Ops that take `photos` out of their stacks (a stack left with one photo is dissolved).
     pub fn remove_from_stacks_ops(&self, photos: &[PhotoId]) -> Vec<Op> {
+        let ids: HashSet<StackId> = photos.iter().filter_map(|p| self.stack_id_of(*p)).collect();
+        let photos: HashSet<PhotoId> = photos.iter().copied().collect();
         self.stacks
             .values()
-            .filter(|s| s.photos.iter().any(|p| photos.contains(p)))
+            .filter(|s| ids.contains(&s.id))
             .map(|s| {
                 let rest: Vec<PhotoId> = s.photos.iter().copied().filter(|p| !photos.contains(p)).collect();
                 if rest.len() < 2 { Op::RemoveStack { id: s.id } } else { Op::SetStack { id: s.id, photos: rest, collapsed: s.collapsed } }
@@ -207,19 +242,17 @@ impl Catalog {
     /// Only runs of two or more are returned.
     pub fn auto_stack_groups(&self, ids: &[PhotoId], gap_secs: f64) -> Vec<Vec<PhotoId>> {
         let index = self.stack_index();
-        let mut timed: Vec<(i64, &str, PhotoId)> = ids
+        let mut timed: Vec<(i64, PhotoId)> = ids
             .iter()
             .filter_map(|id| self.photos.get(id))
             .filter(|p| !p.deleted && !index.contains_key(&p.id))
-            .filter_map(|p| Some((iso_seconds(p.captured.as_deref()?)?, p.file_name.as_str(), p.id)))
+            .filter_map(|p| Some((iso_seconds(p.captured.as_deref()?)?, p.id)))
             .collect();
-        // a burst within one second stays in file name order (the first file is the stack's cover)
-        timed.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| cmp_name(a.1, b.1)).then(a.2.cmp(&b.2)));
-        // equal ids are the same photo, so same time and name: adjacent after the sort
-        timed.dedup_by_key(|(_, _, id)| *id);
+        timed.sort();
+        timed.dedup_by_key(|(_, id)| *id);
         let mut groups: Vec<Vec<PhotoId>> = Vec::new();
         let mut last: Option<i64> = None;
-        for (t, _, id) in timed {
+        for (t, id) in timed {
             match (last, groups.last_mut()) {
                 (Some(l), Some(g)) if (t - l) as f64 <= gap_secs => g.push(id),
                 _ => groups.push(vec![id]),
@@ -271,7 +304,7 @@ impl Catalog {
         let mut runs: Vec<Vec<(i64, &str, PhotoId, f64, f64)>> = Vec::new();
         for x in timed {
             match runs.last_mut() {
-                Some(r) if r.last().is_some_and(|l| (x.0 - l.0) as f64 <= l.3.ceil() + 1.0) => r.push(x),
+                Some(r) if r.last().is_some_and(|l| x.0.saturating_sub(l.0) as f64 <= l.3.ceil() + 1.0) => r.push(x),
                 _ => runs.push(vec![x]),
             }
         }
@@ -325,22 +358,6 @@ mod tests {
     }
 
     #[test]
-    fn auto_stack_keeps_a_burst_in_file_order() {
-        let mut c = Catalog::new();
-        let mut by_name = Vec::new();
-        for (n, name) in ["DSC_0001.ARW", "dsc_0002.ARW", "DSC_0003.ARW"].iter().enumerate() {
-            let id = PhotoId(1000 - n as u64);
-            let mut p = Photo::new(id, Source::Demo { scene: 1 }, name, "ARW", 60, 40, "2026-01-01T00:00:00");
-            p.captured = Some("2026-04-01T10:00:00".into());
-            c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
-            by_name.push(id);
-        }
-        let groups = c.auto_stack_groups(&[by_name[2], by_name[0], by_name[1]], 1.0);
-        assert_eq!(groups, vec![by_name.clone()]);
-        assert_eq!(groups[0][0], by_name[0], "the first file is the stack's cover");
-    }
-
-    #[test]
     fn iso_seconds_parses() {
         assert_eq!(iso_seconds("1970-01-01T00:00:00"), Some(0));
         assert_eq!(iso_seconds("1970-01-02"), Some(86_400));
@@ -388,6 +405,32 @@ mod tests {
         c2.apply(Op::Batch { ops: c2.ungroup_ops(&[b]) }).unwrap();
         assert_eq!(c2.stacks().count(), 0);
         let _ = inv;
+    }
+
+    #[test]
+    fn insert_above_joins_the_anchor_stack() {
+        let (mut c, ids) = cat(5, &[]);
+        let [a, b, x, n1, n2] = ids[..] else { panic!("five ids") };
+        // unstacked anchor: a new two-photo stack, the new version on top
+        let op = c.insert_above_ops(n1, b, false).unwrap();
+        c.apply(op).unwrap();
+        assert_eq!(c.stack_of(b).unwrap().photos, vec![n1, b]);
+        // anchor inside a stack: directly above it, the rest keep their order
+        let op = c.group_ops(a, &[a, n1, b, x], true).unwrap();
+        c.apply(op).unwrap();
+        assert_eq!(c.stack_of(a).unwrap().photos, vec![a, n1, b, x]);
+        let op = c.insert_above_ops(n2, x, false).unwrap();
+        c.apply(op).unwrap();
+        let st = c.stack_of(a).unwrap();
+        assert_eq!(st.photos, vec![a, n1, b, n2, x]);
+        assert!(!st.collapsed);
+        // moving within the same stack
+        let op = c.insert_above_ops(n2, a, false).unwrap();
+        c.apply(op).unwrap();
+        assert_eq!(c.stack_of(a).unwrap().photos, vec![n2, a, n1, b, x]);
+        assert_eq!(c.stacks().count(), 1);
+        assert!(c.insert_above_ops(a, a, false).is_none());
+        assert!(c.insert_above_ops(PhotoId(999), a, false).is_none());
     }
 
     #[test]

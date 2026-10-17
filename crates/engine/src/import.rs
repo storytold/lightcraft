@@ -26,21 +26,31 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use lightcraft_catalog::{MediaKind, Op, Photo, PhotoId, Source};
+use lcc_catalog::{MediaKind, Op, Photo, PhotoId, Source};
 use serde::{Deserialize, Serialize};
 
 use crate::Session;
 use crate::media::ProbeInfo;
 
-/// File extensions LightCraft imports (lower case).
+/// File extensions offered by import discovery and file pickers (lower case).
+/// This includes preview-only raws; the file probe decides whether sensor decoding is available.
 pub const EXTENSIONS: &[&str] = &[
-    "jpg", "jpeg", "png", "tif", "tiff", "webp", "dng", "cr2", "cr3", "nef", "nrw", "arw", "raf", "orf", "rw2", "rwl", "raw", "pef", "srw", "psd",
-    "jxl", "gif", "bmp",
+    "jpg", "jpeg", "png", "tif", "tiff", "webp", "dng", "cr2", "cr3", "nef", "nrw", "arw", "sr2", "srf", "raf", "orf", "rw2", "rwl", "raw", "pef",
+    "srw", "psd", "jxl", "gif", "bmp",
     // Decoded when built with the codecs' `heif` feature; otherwise the import reports them as
     // failed with the reason ("HEIC/HEIF support isn't included in this build").
-    "heic", "heif", "avif", // no AV1 decoder yet: reported as failed, like a HEIC without the feature
-    "iiq", "crw", "mrw", "x3f", "kdc", "mos", "erf", "3fr", "fff", "mef",
+    "heic", "heif", "avif", // a HEIC without the `heif` feature is reported as failed
+    "iiq", "crw", "mrw", "x3f", "kdc", "mos", "erf", "3fr", "fff", "mef", // video clips (MediaKind::Video; see VIDEO_EXTENSIONS)
+    "mp4", "m4v", "mov", "mkv", "webm", "mts", "m2ts", "3gp", "mxf",
 ];
+
+/// Video clip extensions (lower case): imported as [`MediaKind::Video`].
+pub const VIDEO_EXTENSIONS: &[&str] = &["mp4", "m4v", "mov", "mkv", "webm", "mts", "m2ts", "3gp", "mxf"];
+
+/// Whether a file name's extension is a video clip's.
+pub fn is_video_name(name: &str) -> bool {
+    Path::new(name).extension().is_some_and(|e| VIDEO_EXTENSIONS.contains(&e.to_string_lossy().to_lowercase().as_str()))
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ImportMode {
@@ -91,7 +101,7 @@ pub struct ImportOptions {
     pub on_deleted: OnDeleted,
     pub mode: ImportMode,
     /// Applied to every imported photo (one History entry).
-    pub preset: Option<lightcraft_develop::Preset>,
+    pub preset: Option<lcc_develop::Preset>,
     /// Added to every imported photo.
     pub keywords: Vec<String>,
     /// Browsing a folder: photos come in as `local` (not in the library), and a file with the
@@ -109,6 +119,10 @@ pub struct ImportOptions {
     pub metadata_preset: Option<String>,
     /// Copy: raws are copied as DNG (Copy as DNG).
     pub convert_dng: bool,
+    /// Import files whose content the library already has as new photos (Lightroom's "Don't
+    /// Import Suspected Duplicates" unchecked). A file at a path the library already lists, or one
+    /// in Recently Deleted, is still handled as a duplicate.
+    pub import_duplicates: bool,
 }
 
 /// How copies are filed in the destination. The date is the capture time, else the time of the
@@ -223,7 +237,7 @@ pub enum ImportWarningCode {
     CameraProfile,
     /// Lightroom geometry data was found but its saved transform is not retained.
     UprightGeometry,
-    /// One or more other XMP develop fields have no LightCraft mapping.
+    /// One or more other XMP develop fields have no mapping in the app.
     UnmappedXmp,
 }
 
@@ -274,7 +288,7 @@ pub struct Kept {
 /// The develop settings a photo gets on import: raws start from their as-shot white balance with
 /// default sharpening / colour noise reduction, and file-embedded lens corrections on (as the
 /// camera intended); a user default preset ([`ImportDefaults`]) goes on top.
-pub fn import_defaults(p: &Photo) -> lightcraft_develop::DevelopSettings {
+pub fn import_defaults(p: &Photo) -> lcc_develop::DevelopSettings {
     p.import_defaults()
 }
 
@@ -284,12 +298,16 @@ pub fn has_import_look(p: &Photo) -> bool {
     *p.develop == p.camera_defaults()
 }
 
+/// The name `library.setImportDefault` saves its preset under when the caller doesn't name one
+/// (Develop ▸ Optics ▸ Save as… pre-fills it).
+pub const NEW_PHOTO_DEFAULT: &str = "Optics for new photos";
+
 /// User defaults applied on import (Settings → Import; saved in the library's `prefs.json`).
 /// Presets are referenced by id; a preset that no longer exists is ignored.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ImportDefaults {
-    /// Preset applied to raw files (`None` = the LightCraft default).
+    /// Preset applied to raw files (`None` = the the app default).
     pub raw_preset: Option<String>,
     /// Use a camera's own default (below) when the photo's camera has one.
     pub per_camera: bool,
@@ -319,7 +337,7 @@ pub struct ImportDefaults {
 pub struct CameraDefault {
     /// Make + model (`Meta::camera`).
     pub camera: String,
-    /// Preset id; `None` = the LightCraft default for this camera.
+    /// Preset id; `None` = the the app default for this camera.
     pub preset: Option<String>,
 }
 
@@ -473,7 +491,7 @@ pub fn launch_path(arg: &str, cwd: Option<&Path>, home: Option<&Path>, dcim: imp
             None => LaunchPath::Refused { path: shown, why: "a whole drive".into() },
         });
     }
-    let key = lightcraft_catalog::query::folder_key;
+    let key = lcc_catalog::query::folder_key;
     if home.is_some_and(|h| key(&h.to_string_lossy()) == key(&shown)) {
         return Some(LaunchPath::Refused { path: shown, why: "the whole home folder".into() });
     }
@@ -561,7 +579,7 @@ fn copy_into(dir: &Path, src: &str, name: Option<&str>, probe_hash: Option<&str>
     let name = name
         .map(str::to_string)
         .unwrap_or_else(|| Path::new(src).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "photo".into()));
-    let expect = probe_hash.and_then(lightcraft_preview::Hash128::parse);
+    let expect = probe_hash.and_then(lcc_preview::Hash128::parse);
     crate::import_move::copy_new(Path::new(src), dir, &name, expect).map(|p| p.to_string_lossy().to_string())
 }
 
@@ -573,14 +591,14 @@ pub struct ScanInput {
     /// The library as it is now (photos are shared with the session, not copied): looked up for
     /// the files the scan finds ([`library_files`]) and the contents it probes
     /// ([`library_hashes`]), on the scan's thread.
-    library: std::sync::Arc<lightcraft_catalog::Catalog>,
+    library: std::sync::Arc<lcc_catalog::Catalog>,
     cache: HashMap<String, ProbeInfo>,
 }
 
 /// The library's photos of `files`: path → (photo, its summary as a candidate that is there
 /// already). One pass over the library, and a record only for a file that was found: a folder of
 /// a hundred files in a library of millions costs a hundred records.
-fn library_files(library: &lightcraft_catalog::Catalog, files: &[String]) -> HashMap<PathBuf, (PhotoId, ImportCandidate)> {
+fn library_files(library: &lcc_catalog::Catalog, files: &[String]) -> HashMap<PathBuf, (PhotoId, ImportCandidate)> {
     let found: std::collections::HashSet<&Path> = files.iter().map(Path::new).collect();
     let mut by_path = HashMap::new();
     if found.is_empty() {
@@ -610,7 +628,7 @@ fn library_files(library: &lightcraft_catalog::Catalog, files: &[String]) -> Has
 
 /// Which photo of the library has each of the contents `hashes` (the later one where several
 /// have it). One pass over the library, and an entry only for a content that was asked about.
-fn library_hashes<'a>(library: &lightcraft_catalog::Catalog, hashes: impl Iterator<Item = &'a str>) -> HashMap<String, PhotoId> {
+fn library_hashes<'a>(library: &lcc_catalog::Catalog, hashes: impl Iterator<Item = &'a str>) -> HashMap<String, PhotoId> {
     let wanted: std::collections::HashSet<&str> = hashes.collect();
     let mut by_hash = HashMap::new();
     if wanted.is_empty() {
@@ -658,7 +676,7 @@ impl ScanInput {
     }
 
     /// The library as the scan sees it (shared, for [`crate::sync`], which looks at the same one).
-    pub(crate) fn library(&self) -> std::sync::Arc<lightcraft_catalog::Catalog> {
+    pub(crate) fn library(&self) -> std::sync::Arc<lcc_catalog::Catalog> {
         std::sync::Arc::clone(&self.library)
     }
 }
@@ -778,7 +796,7 @@ pub struct ImportJob {
     /// session's thread, and a table of a library of millions of photos takes seconds. With it,
     /// whether a photo in Recently Deleted is passed over (an import that replaces such photos,
     /// as the options said when the import was set up).
-    library: Option<(lightcraft_catalog::Catalog, bool)>,
+    library: Option<(lcc_catalog::Catalog, bool)>,
     /// path → (photo, a Local browse record?)
     by_path: HashMap<String, (PhotoId, bool)>,
     /// content hash → the photo that has it (`None`: a file earlier in this import)
@@ -976,7 +994,10 @@ impl ImportJob {
             if let Source::File { path } = &p.source {
                 self.by_path.insert(path.clone(), (p.id, p.local));
             }
-            if let Some(h) = &p.content_hash {
+            // importing suspected duplicates: only a trashed photo's content still matches
+            if let Some(h) = &p.content_hash
+                && (p.deleted || !self.opts.import_duplicates)
+            {
                 self.by_hash.insert(h.clone(), Some(p.id));
             }
         }
@@ -1077,9 +1098,11 @@ impl ImportJob {
             if info.captured.is_none() {
                 info.captured = sidecar.as_ref().and_then(|sc| sc.captured.clone());
             }
-            // no date in the file or its sidecar: the file's own date, as Lightroom does
+            // no date in the file or its sidecar: the file's own date, as Lightroom does (a guess:
+            // never written to a sidecar as the capture time)
             if info.captured.is_none() {
                 info.captured = info.file_modified.clone();
+                info.captured_is_file_date = info.captured.is_some();
             }
             let stored = match (mode, &self.copy_root) {
                 (ImportMode::Copy | ImportMode::Move, Some(root))
@@ -1091,6 +1114,12 @@ impl ImportJob {
                     let mut q = Photo::new(PhotoId(0), Source::File { path: path.clone() }, &own, &info.format, 0, 0, &self.now);
                     q.captured = info.captured.clone();
                     q.meta = info.meta.clone();
+                    q.rating = info.rating;
+                    q.flag = info.flag;
+                    q.label = info.label;
+                    if let Some(sc) = &sidecar {
+                        crate::sidecar::merge_into(&mut q, sc, &self.now);
+                    }
                     let name = opts.rename.as_deref().filter(|t| !t.trim().is_empty()).map(|t| {
                         let n = crate::rename::expand(t, &q, self.seq);
                         self.seq += 1;
@@ -1130,7 +1159,9 @@ impl ImportJob {
                 }
                 _ => path.clone(),
             };
-            if let Some(h) = &info.content_hash {
+            if let Some(h) = &info.content_hash
+                && !self.opts.import_duplicates
+            {
                 self.by_hash.insert(h.clone(), None);
             }
             self.done.fetch_add(1, Relaxed);
@@ -1154,6 +1185,7 @@ impl ImportJob {
             };
             if let PreparedItem::Ready(r) = &item
                 && let Some(h) = &r.info.content_hash
+                && !self.opts.import_duplicates
             {
                 self.by_hash.insert(h.clone(), None);
             }
@@ -1330,7 +1362,7 @@ fn run_transfer(t: Transfer, file_bytes: Option<&crate::merge::ByteReader>) -> P
 
 /// A trashed photo's file is not where the library had it (never on the web, where paths are
 /// storage keys, not files).
-fn trashed_file_is_gone(cat: &lightcraft_catalog::Catalog, id: PhotoId) -> bool {
+fn trashed_file_is_gone(cat: &lcc_catalog::Catalog, id: PhotoId) -> bool {
     !cfg!(target_arch = "wasm32")
         && match cat.photo(id).map(|p| &p.source) {
             Some(Source::File { path }) => !Path::new(path).exists(),
@@ -1347,6 +1379,8 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
     let mut ops = Vec::new();
     // Move: placed at the destination, sources untouched until the records are committed
     let mut placed: Vec<crate::import_move::Placed> = Vec::new();
+    // plug-in fields from sidecars: into the plug-ins' data once the photos are catalogued
+    let mut plugin_fields: Vec<(PhotoId, Vec<(String, String, String)>)> = Vec::new();
     // photos added by this batch, by content (a duplicate of a file earlier in the import names it)
     let mut new_hash: HashMap<String, PhotoId> = HashMap::new();
     // Fresh: trashed photos a new import replaces (by content or by file), each removed once
@@ -1413,14 +1447,25 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                 let mut p = Photo::new(id, Source::File { path: stored }, &name, &info.format, info.width, info.height, &now);
                 p.kind = info.kind;
                 p.file_size = info.file_size;
+                p.captured_fallback = info.captured.clone().filter(|_| info.captured_is_file_date);
                 p.captured = info.captured;
                 p.meta = info.meta;
+                p.rating = info.rating;
+                p.flag = info.flag;
+                p.label = info.label_text.as_deref().and_then(|t| s.catalog.label_from_name(t)).or(info.label);
                 p.as_shot_wb = info.as_shot_wb;
                 p.content_hash = info.content_hash;
-                p.embedded_lens = info.embedded_lens;
+                p.sha1 = info.sha1.filter(|h| h.len() == 40 && h.bytes().all(|b| b.is_ascii_hexdigit()));
+                p.embedded_lens = info.embedded_lens.map(Box::new);
                 p.set_preview_only(info.preview_only.clone());
+                // a clip's stream facts land with the photo record: one undo step with the import
+                p.video = info.video;
+                p.duration = info.duration;
                 apply_import_defaults(s, &mut p);
                 if let Some(sc) = &sidecar {
+                    if !sc.plugin_fields.is_empty() {
+                        plugin_fields.push((id, sc.plugin_fields.clone()));
+                    }
                     crate::sidecar::merge_into(&mut p, sc, &now);
                     report.sidecars += 1;
                     report.warnings.extend(sc.warnings.iter().cloned().map(|mut warning| {
@@ -1432,7 +1477,7 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                     crate::cmd::metadata::apply_to(&mut p.meta, &mp.fields);
                 }
                 for k in &opts.keywords {
-                    let k = lightcraft_catalog::keywords::clean(k);
+                    let k = lcc_catalog::keywords::clean(k);
                     if !k.is_empty() && !p.meta.keywords.iter().any(|x| x.eq_ignore_ascii_case(&k)) {
                         p.meta.keywords.push(k);
                     }
@@ -1442,7 +1487,7 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                     let label = format!("Preset: {}", preset.name);
                     p.develop = d.clone();
                     p.edited = Some(now.clone());
-                    p.history.push(lightcraft_catalog::HistoryStep { label, settings: d });
+                    p.history.push(lcc_catalog::HistoryStep { label, settings: d });
                 }
                 report.imported.push(id.0);
                 p.local = opts.local;
@@ -1474,6 +1519,13 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
     if !placed.is_empty() {
         finish_moves(s, placed, log0, &mut report);
     }
+    crate::cmd::plugins::restore_fields(s, &plugin_fields);
+    // photos that came with an XMP sidecar start in step with it (the metadata-vs-file badge)
+    // (not browsed Local records: a stamp would count as a change the user made and keep them)
+    let with_xmp: Vec<PhotoId> = report.imported.iter().map(|i| PhotoId(*i)).filter(|id| s.catalog.photo(*id).is_some_and(|p| !p.local)).collect();
+    s.record_xmp_stamps(&with_xmp, true);
+    // Edit In versions (TIFF/PSD with an xmpMM:DerivedFrom link) stack on their source again
+    crate::cmd::edit_in::stack_derived(s, &with_xmp);
     Ok(report)
 }
 
@@ -1525,7 +1577,7 @@ pub fn system_clock() -> String {
 
 /// Unix seconds → `YYYY-MM-DDTHH:MM:SS` (UTC), proleptic Gregorian.
 pub fn civil(secs: i64) -> String {
-    lightcraft_catalog::dates::civil(secs)
+    lcc_catalog::dates::civil(secs)
 }
 
 impl Session {
@@ -1540,14 +1592,14 @@ impl Session {
         p.kind = c.kind;
         if let Some(info) = self.import_probes.get(&c.path) {
             p.as_shot_wb = info.as_shot_wb;
-            p.embedded_lens = info.embedded_lens;
+            p.embedded_lens = info.embedded_lens.map(Box::new);
             p.preview_only = info.preview_only.clone();
         }
         p.develop = std::sync::Arc::new(p.import_defaults());
         let edge = edge.clamp(64, crate::media::SourceLevel::Thumb.max_edge());
         let level = crate::media::SourceLevel::Thumb;
         let source = self.media.origin_ref(&p.source, level.max_edge());
-        let key = lightcraft_preview::Hasher128::new().str(&c.path).u64(c.file_size).u64(edge as u64).finish().0 as u64;
+        let key = lcc_preview::Hasher128::new().str(&c.path).u64(c.file_size).u64(edge as u64).finish().0 as u64;
         let small = crate::media::RenderJob {
             request_id: 0,
             cache_generation: self.media.rendered.generation(),
@@ -1558,7 +1610,7 @@ impl Session {
             origin: p.source.clone(),
             info: crate::media::source_info(&p),
             settings: p.develop.clone(),
-            request: lightcraft_pipeline::RenderRequest::fit(edge, edge),
+            request: lcc_pipeline::RenderRequest::fit(edge, edge),
             key,
             cache: None,
             stages: None,
@@ -1592,8 +1644,8 @@ mod prepared_tests {
     #[test]
     fn revalidate_add_only_converts_matching_ready_item() {
         let mut s = Session::new();
-        let existing_path = std::env::temp_dir().join("lightcraft-revalidate-existing.jpg");
-        let other_path = std::env::temp_dir().join("lightcraft-revalidate-other.jpg");
+        let existing_path = std::env::temp_dir().join("app-revalidate-existing.jpg");
+        let other_path = std::env::temp_dir().join("app-revalidate-other.jpg");
         let existing = Photo::new(PhotoId(1), Source::File { path: existing_path.to_string_lossy().into() }, "existing.jpg", "JPG", 1, 1, "now");
         s.commit("existing", Op::AddPhoto { photo: Box::new(existing) }).unwrap();
         let ready = |path: &Path| ReadyFile {
@@ -1613,7 +1665,7 @@ mod prepared_tests {
     }
 
     fn unread_paths(n: usize) -> Vec<String> {
-        (0..n).map(|i| std::env::temp_dir().join(format!("lightcraft-probe-progress-{i}.jpg")).to_string_lossy().into()).collect()
+        (0..n).map(|i| std::env::temp_dir().join(format!("lcc-probe-progress-{i}.jpg")).to_string_lossy().into()).collect()
     }
 
     /// Reading the files of a large import (a Lightroom catalog's originals) reported nothing:

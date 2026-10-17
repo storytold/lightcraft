@@ -1,0 +1,27 @@
+[package]
+name = "lcc-immich"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Immich client (L3): typed API calls written from the public API docs, asset matching, metadata and path mapping"
+
+[dependencies]
+lcc-catalog = { workspace = true }
+lcc-hash = { workspace = true }
+lcc-geom = { workspace = true }
+lcc-meta = { workspace = true }
+lcc-publish = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true
+
+# Native only: on wasm32 the client is empty (the web build talks to no servers).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+lcc-net = { workspace = true }
+lcc-credentials = { workspace = true }
+log = { workspace = true }
+
+[dev-dependencies]
+lcc-fuzzkit = { workspace = true }

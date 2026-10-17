@@ -2,7 +2,7 @@
 use super::{SliderOut, slider, take_registry};
 use crate::headless::HeadlessView;
 use egui::{Event, Key, Modifiers, PointerButton, Rect, vec2};
-use lightcraft_develop::{ControlSpec, controls};
+use lcc_develop::{ControlSpec, controls};
 
 struct Harness {
     view: HeadlessView,
@@ -97,6 +97,25 @@ fn typing_after_a_released_click_still_edits() {
     assert_eq!(h.frame(vec![button(false)]).value, None);
     h.frame(vec![]);
     assert!(h.view.ctx.egui_wants_keyboard_input(), "the field keeps the keyboard after the click");
+    h.frame(vec![Event::Text("2".into())]);
+    assert_eq!(h.key(Key::Enter).value, Some(2.0));
+}
+
+#[test]
+fn a_long_click_keeps_the_field_open() {
+    // Issue #59: a press held past egui's click time (here a second and a half) used to close
+    // the field on release; it stays open for typing.
+    let mut h = Harness::new();
+    let pos = h.rect.center();
+    let button = |pressed| Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    h.frame(vec![Event::PointerMoved(pos)]);
+    h.frame(vec![button(true)]);
+    for _ in 0..75 {
+        h.frame(vec![]);
+    }
+    assert_eq!(h.frame(vec![button(false)]).value, None);
+    h.frame(vec![]);
+    assert!(h.view.ctx.egui_wants_keyboard_input(), "the field keeps the keyboard after a long click");
     h.frame(vec![Event::Text("2".into())]);
     assert_eq!(h.key(Key::Enter).value, Some(2.0));
 }

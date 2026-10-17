@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use lightcraft_catalog::{ColorLabel, Flag, PhotoId};
+use lcc_catalog::{ColorLabel, Flag, PhotoId};
 use serde_json::json;
 
 use crate::Session;
@@ -35,11 +35,37 @@ pub(crate) fn temp_dir(tag: &str) -> PathBuf {
     d
 }
 
-fn write_png(path: &Path, seed: u8) {
+/// The temp volume ignores letter case (Windows, default macOS): `a.xmp` and `a.XMP` are one file
+/// there. Fixtures that need both spellings as separate files skip; `rename::tests::FakeFs` models
+/// such volumes instead.
+pub(crate) fn case_insensitive_volume() -> bool {
+    // probed once: parallel tests must not share (and delete) one probe folder
+    static PROBE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *PROBE.get_or_init(|| {
+        let d = temp_dir("case-probe");
+        std::fs::write(d.join("Probe.xmp"), b"").unwrap();
+        let insensitive = d.join("probe.XMP").exists();
+        let _ = std::fs::remove_dir_all(&d);
+        insensitive
+    })
+}
+
+/// Skip a real-disk fixture that writes case-variant sidecars as distinct files.
+macro_rules! skip_on_case_insensitive_volume {
+    () => {
+        if crate::tests_xmp::case_insensitive_volume() {
+            eprintln!("skipped: the temp volume ignores letter case (FakeFs models it)");
+            return;
+        }
+    };
+}
+pub(crate) use skip_on_case_insensitive_volume;
+
+pub(crate) fn write_png(path: &Path, seed: u8) {
     let (w, h) = (40usize, 24usize);
     let data: Vec<[u8; 4]> = (0..w * h).map(|i| [(i % w * 6) as u8, (i / w * 9) as u8, seed, 255]).collect();
-    let img = lightcraft_raster::Rgba8 { width: w, height: h, data };
-    let bytes = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+    let img = lcc_raster::Rgba8 { width: w, height: h, data };
+    let bytes = lcc_codecs::encode_png(&lcc_codecs::EncodeImage::rgba8(&img), &lcc_codecs::EncodeMeta::default()).unwrap();
     std::fs::write(path, bytes).unwrap();
 }
 
@@ -65,6 +91,8 @@ fn save_delete_library_reimport_restores_edits() {
     s.execute("develop.set", &json!({"control": "light.exposure", "value": 0.8})).unwrap();
     s.execute("develop.set", &json!({"control": "effects.clarity", "value": 25})).unwrap();
     s.execute("mask.add", &json!({"kind": "radial"})).unwrap();
+    let mask = s.develop_of(id).unwrap().masks[0].id;
+    s.execute("develop.curve", &json!({"channel": "blue", "points": [[0.0, 0.1], [0.5, 0.6], [1.0, 1.0]], "mask": mask})).unwrap();
     let edited = s.catalog.photo(id).unwrap().clone();
     let r = s.execute("photo.saveMetadataToFile", &json!({})).unwrap();
     assert_eq!(r["written"][0], src.join("dune.xmp").to_string_lossy().as_ref(), "{r}");
@@ -82,6 +110,7 @@ fn save_delete_library_reimport_restores_edits() {
     let p = s.catalog.photos().find(|p| p.file_name == "dune.png").unwrap().clone();
     assert_eq!(p.develop, edited.develop, "develop settings restored exactly");
     assert_eq!(p.develop.masks.len(), 1);
+    assert_eq!(p.develop.masks[0].curve.blue.len(), 3, "the mask's local Curve");
     assert_eq!((p.rating, p.flag, p.label), (4, Flag::Pick, Some(ColorLabel::Blue)));
     assert_eq!(p.meta.title, "Dune");
     assert_eq!(p.meta.caption, "Evening light");
@@ -429,7 +458,7 @@ fn regions_from_sidecar_are_read_on_import() {
     assert_eq!(p.meta.regions.len(), 1);
     let region = &p.meta.regions[0];
     assert_eq!(region.name.as_deref(), Some("Jane Doe"));
-    assert_eq!(region.kind, lightcraft_meta::RegionKind::Face);
+    assert_eq!(region.kind, lcc_meta::RegionKind::Face);
     assert!((region.rect.width() - 0.3).abs() < 1e-9, "{:?}", region.rect);
     let _ = std::fs::remove_dir_all(&src);
 }
@@ -546,19 +575,19 @@ fn rereading_a_sidecar_clears_regions_only_when_it_states_them() {
 }
 
 fn synthetic_dng(xmp: &str) -> Vec<u8> {
-    synthetic_dng_with(Some(xmp), lightcraft_meta::Metadata::default())
+    synthetic_dng_with(Some(xmp), lcc_meta::Metadata::default())
 }
 
 /// A tiny Bayer DNG written by our own DNG writer (optional embedded XMP, camera metadata).
-pub(crate) fn synthetic_dng_with(xmp: Option<&str>, metadata: lightcraft_meta::Metadata) -> Vec<u8> {
+pub(crate) fn synthetic_dng_with(xmp: Option<&str>, metadata: lcc_meta::Metadata) -> Vec<u8> {
     let (w, h) = (32usize, 24usize);
     let data: Vec<u16> = (0..w * h).map(|i| 256 + ((i % w) * 300 + (i / w) * 200) as u16).collect();
     synthetic_dng_of(w, h, "RGGB", data, xmp, metadata)
 }
 
 /// A synthetic Bayer DNG for denoise and cache tests.
-pub(crate) fn synthetic_dng_of(w: usize, h: usize, cfa: &str, data: Vec<u16>, xmp: Option<&str>, metadata: lightcraft_meta::Metadata) -> Vec<u8> {
-    use lightcraft_raw::*;
+pub(crate) fn synthetic_dng_of(w: usize, h: usize, cfa: &str, data: Vec<u16>, xmp: Option<&str>, metadata: lcc_meta::Metadata) -> Vec<u8> {
+    use lcc_raw::*;
     let cfa = Cfa::bayer(cfa).unwrap();
     let raw = RawImage {
         format: RawFormat::Dng,
@@ -576,8 +605,8 @@ pub(crate) fn synthetic_dng_of(w: usize, h: usize, cfa: &str, data: Vec<u16>, xm
         color: ColorData {
             illuminant: [17, 21],
             color_matrix: [
-                Some(lightcraft_color::Mat3([[0.9, 0.2, -0.15], [-0.3, 1.25, 0.08], [0.02, -0.12, 0.85]])),
-                Some(lightcraft_color::Mat3([[0.7, 0.3, -0.1], [-0.35, 1.3, 0.1], [0.05, -0.2, 1.0]])),
+                Some(lcc_color::Mat3([[0.9, 0.2, -0.15], [-0.3, 1.25, 0.08], [0.02, -0.12, 0.85]])),
+                Some(lcc_color::Mat3([[0.7, 0.3, -0.1], [-0.35, 1.3, 0.1], [0.05, -0.2, 1.0]])),
             ],
             as_shot_neutral: Some([0.5, 1.0, 0.7]),
             ..Default::default()
@@ -604,7 +633,7 @@ fn dng_embedded_crs_settings_are_read_on_import() {
     let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
     assert_eq!((r["imported"].as_array().unwrap().len(), r["sidecars"].as_u64()), (1, Some(1)), "{r}");
     let p = s.catalog.photos().next().unwrap();
-    assert_eq!(p.kind, lightcraft_catalog::MediaKind::Raw);
+    assert_eq!(p.kind, lcc_catalog::MediaKind::Raw);
     assert_eq!((p.develop.wb.temp, p.develop.wb.tint), (4300.0, 7.0));
     assert_eq!((p.develop.light.contrast, p.develop.effects.dehaze), (30.0, 12.0));
     assert_eq!(p.develop.detail.sharpen_amount, 40.0, "raw defaults kept for fields the XMP doesn't set");
@@ -621,6 +650,214 @@ fn dng_embedded_crs_settings_are_read_on_import() {
     let _ = std::fs::remove_dir_all(&src);
 }
 
+fn jpeg_xmp_packet(rating: i8, title: &str) -> String {
+    lcc_meta::write_xmp(&lcc_meta::Metadata { rating: Some(rating), title: Some(title.into()), ..Default::default() }, None)
+}
+
+fn write_jpeg_xmp(path: &Path, packet: &str) -> Vec<u8> {
+    let img = lcc_raster::Rgba8::from_fn(32, 24, |x, y| [(x * 7) as u8, (y * 9) as u8, 90, 255]);
+    let meta = lcc_codecs::EncodeMeta { xmp: Some(packet), ..Default::default() };
+    let bytes = lcc_codecs::encode_jpeg(&lcc_codecs::EncodeImage::rgba8(&img), 90, Default::default(), &meta).unwrap();
+    assert_eq!(lcc_meta::embedded(&bytes).xmp.as_deref(), Some(packet), "the procedural JPEG carries the requested packet");
+    std::fs::write(path, &bytes).unwrap();
+    bytes
+}
+
+#[test]
+fn embedded_jpeg_xmp_reread_refreshes_metadata_and_undoes_once() {
+    let src = temp_dir("jpeg-xmp-refresh");
+    let file = src.join("photo.jpg");
+    let initial = write_jpeg_xmp(&file, &jpeg_xmp_packet(1, "Initial embedded title"));
+    let mut s = Session::new().with_fs();
+    let imported = s.execute("library.import", &json!({"paths": [file.to_string_lossy()]})).unwrap();
+    assert_eq!(imported["imported"].as_array().unwrap().len(), 1, "{imported}");
+    let id = only(&s);
+    assert_eq!(s.catalog.photo(id).unwrap().kind, lcc_catalog::MediaKind::Image);
+    s.execute("library.select", &json!({"ids": [id.0]})).unwrap();
+    s.execute("photo.rate", &json!({"rating": 2})).unwrap();
+    s.execute("photo.setMeta", &json!({"title": "Catalog title"})).unwrap();
+    let before = s.catalog.photo(id).unwrap().clone();
+    assert!(!s.xmp.auto_write);
+
+    // Change the packet after import: rereading must use the file, not the imported metadata.
+    let changed = write_jpeg_xmp(&file, &jpeg_xmp_packet(4, "Changed embedded title"));
+    assert_ne!(initial, changed);
+    assert!(!src.join("photo.xmp").exists() && !src.join("photo.jpg.xmp").exists());
+    let read = s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    assert_eq!(read["read"], json!([{"id": id.0, "from": file.to_string_lossy()}]), "embedded JPEG XMP must be reread: {read}");
+    assert_eq!(read["failed"], json!([]), "{read}");
+    let photo = s.catalog.photo(id).unwrap();
+    assert_eq!((photo.rating, photo.meta.title.as_str()), (4, "Changed embedded title"));
+    assert_eq!(photo.develop, before.develop);
+
+    s.execute("edit.undo", &json!({})).unwrap();
+    let photo = s.catalog.photo(id).unwrap();
+    assert_eq!((photo.rating, &photo.meta.title), (before.rating, &before.meta.title), "one undo restores both fields");
+    assert_eq!(std::fs::read(&file).unwrap(), changed, "reading and undo never rewrite the original");
+    assert!(!src.join("photo.xmp").exists() && !src.join("photo.jpg.xmp").exists());
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+#[test]
+fn embedded_jpeg_xmp_reread_keeps_sidecar_precedence() {
+    let src = temp_dir("jpeg-xmp-sidecar");
+    let file = src.join("photo.jpg");
+    let original = write_jpeg_xmp(&file, &jpeg_xmp_packet(4, "Embedded title"));
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [file.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    let sidecar = src.join("photo.xmp");
+    let packet = jpeg_xmp_packet(5, "Sidecar title");
+    std::fs::write(&sidecar, &packet).unwrap();
+    let read = s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    assert_eq!(read["read"], json!([{"id": id.0, "from": sidecar.to_string_lossy()}]), "{read}");
+    assert_eq!(read["failed"], json!([]), "{read}");
+    let photo = s.catalog.photo(id).unwrap();
+    assert_eq!((photo.rating, photo.meta.title.as_str()), (5, "Sidecar title"));
+    assert_eq!(std::fs::read_to_string(&sidecar).unwrap(), packet);
+
+    // A malformed sidecar must report its failure, not fall back to the valid embedded packet.
+    let malformed = "<a>".repeat(1000);
+    assert!(lcc_meta::parse_xmp(&malformed).is_err());
+    std::fs::write(&sidecar, &malformed).unwrap();
+    let read = s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    assert_eq!(read["read"], json!([]), "{read}");
+    assert_eq!(read["failed"].as_array().unwrap().len(), 1, "{read}");
+    assert_eq!(read["failed"][0]["id"], id.0);
+    assert!(!read["failed"][0]["error"].as_str().unwrap().is_empty());
+    let photo = s.catalog.photo(id).unwrap();
+    assert_eq!((photo.rating, photo.meta.title.as_str()), (5, "Sidecar title"));
+    assert_eq!(std::fs::read_to_string(&sidecar).unwrap(), malformed);
+    assert_eq!(std::fs::read(&file).unwrap(), original);
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+#[test]
+fn embedded_jpeg_xmp_reread_malformed_input_preserves_state_and_undo() {
+    let src = temp_dir("jpeg-xmp-malformed");
+    let file = src.join("photo.jpg");
+    write_jpeg_xmp(&file, &jpeg_xmp_packet(1, "Original title"));
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [file.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    s.execute("library.select", &json!({"ids": [id.0]})).unwrap();
+    s.execute("photo.rate", &json!({"rating": 2})).unwrap();
+    let previous_title = s.catalog.photo(id).unwrap().meta.title.clone();
+    s.execute("photo.setMeta", &json!({"title": "Catalog title"})).unwrap();
+    let before = s.catalog.photo(id).unwrap().clone();
+    let malformed = "<a>".repeat(1000);
+    assert!(lcc_meta::parse_xmp(&malformed).is_err());
+    let broken_packet = write_jpeg_xmp(&file, &malformed);
+    let truncated_container = vec![0xff, 0xd8, 0xff, 0xe1, 0, 40, b'x'];
+    for bytes in [broken_packet, truncated_container] {
+        std::fs::write(&file, &bytes).unwrap();
+        let read = s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+        assert_eq!(read["read"], json!([]), "{read}");
+        assert_eq!(read["failed"].as_array().unwrap().len(), 1, "{read}");
+        assert_eq!(read["failed"][0]["id"], id.0);
+        assert!(!read["failed"][0]["error"].as_str().unwrap().is_empty());
+        let photo = s.catalog.photo(id).unwrap();
+        assert_eq!((photo.rating, &photo.meta.title), (before.rating, &before.meta.title));
+        assert_eq!(photo.develop, before.develop);
+        assert_eq!(std::fs::read(&file).unwrap(), bytes);
+        assert!(!src.join("photo.xmp").exists() && !src.join("photo.jpg.xmp").exists());
+    }
+    // Failed reads do not add an undo entry: the last successful title edit is still next.
+    s.execute("edit.undo", &json!({})).unwrap();
+    let photo = s.catalog.photo(id).unwrap();
+    assert_eq!((photo.rating, &photo.meta.title), (2, &previous_title));
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+#[test]
+fn embedded_jpeg_xmp_reread_non_utf8_sidecar_preserves_state_and_undo() {
+    let src = temp_dir("jpeg-xmp-non-utf8-sidecar");
+    let file = src.join("photo.jpg");
+    let original = write_jpeg_xmp(&file, &jpeg_xmp_packet(4, "Embedded title"));
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [file.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    assert!(!s.xmp.auto_write);
+    s.execute("library.select", &json!({"ids": [id.0]})).unwrap();
+    s.execute("photo.rate", &json!({"rating": 2})).unwrap();
+    let previous_title = s.catalog.photo(id).unwrap().meta.title.clone();
+    s.execute("photo.setMeta", &json!({"title": "Catalog title"})).unwrap();
+    let before = s.catalog.photo(id).unwrap().clone();
+    let sidecar = src.join("photo.xmp");
+    let invalid = [0xff, 0xfe, 0x80];
+    std::fs::write(&sidecar, invalid).unwrap();
+    assert_eq!(std::fs::read_to_string(&sidecar).unwrap_err().kind(), std::io::ErrorKind::InvalidData);
+    assert_eq!(crate::sidecar::find_sidecar(file.to_str().unwrap(), s.sidecar_naming(id)), Some(sidecar.clone()));
+
+    let read = s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    assert_eq!(read["read"], json!([]), "an existing non-UTF-8 sidecar must not fall back to embedded JPEG XMP: {read}");
+    assert_eq!(read["failed"].as_array().unwrap().len(), 1, "{read}");
+    assert_eq!(read["failed"][0]["id"], id.0);
+    assert!(!read["failed"][0]["error"].as_str().unwrap().is_empty());
+    let photo = s.catalog.photo(id).unwrap();
+    assert_eq!((photo.rating, &photo.meta.title), (before.rating, &before.meta.title));
+    assert_eq!(photo.develop, before.develop);
+
+    s.execute("edit.undo", &json!({})).unwrap();
+    let photo = s.catalog.photo(id).unwrap();
+    assert_eq!((photo.rating, &photo.meta.title), (2, &previous_title), "failed reads must not add an undo entry");
+    assert_eq!(photo.develop, before.develop);
+    assert_eq!(std::fs::read(&file).unwrap(), original);
+    assert_eq!(std::fs::read(&sidecar).unwrap(), invalid);
+    assert!(!src.join("photo.jpg.xmp").exists());
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+#[test]
+fn embedded_jpeg_xmp_reread_all_metadata_uses_supplied_bytes() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let src = temp_dir("jpeg-xmp-all-metadata");
+    let file = src.join("photo.jpg");
+    let original = write_jpeg_xmp(&file, &jpeg_xmp_packet(1, "On-disk title"));
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [file.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    assert!(!s.xmp.auto_write);
+    let before = s.catalog.photo(id).unwrap().clone();
+    let supplied = write_jpeg_xmp(&src.join("supplied.jpg"), &jpeg_xmp_packet(4, "Supplied title"));
+    let reads = Arc::new(AtomicUsize::new(0));
+    let counted = reads.clone();
+    let expected_path = file.to_string_lossy().into_owned();
+    s.media.file_bytes = Some(Arc::new(move |path| {
+        assert_eq!(path, expected_path);
+        counted.fetch_add(1, Ordering::SeqCst);
+        Ok(supplied.clone())
+    }));
+
+    let query = s.execute("photo.allMetadata", &json!({"id": id.0})).unwrap();
+    assert_eq!(reads.load(Ordering::SeqCst), 1);
+    let xmp = query["xmp"].as_array().unwrap();
+    assert!(
+        xmp.iter().any(|x| x["name"] == "dc:title" && x["value"] == "Supplied title"),
+        "All Metadata must use the bytes already supplied: {query}"
+    );
+    assert!(xmp.iter().any(|x| x["name"] == "xmp:Rating" && x["value"] == "4"), "{query}");
+    assert!(!xmp.iter().any(|x| x["value"] == "On-disk title"), "{query}");
+
+    let sidecar = src.join("photo.xmp");
+    let packet = jpeg_xmp_packet(5, "Sidecar title");
+    std::fs::write(&sidecar, &packet).unwrap();
+    let query = s.execute("photo.allMetadata", &json!({"id": id.0})).unwrap();
+    assert_eq!(reads.load(Ordering::SeqCst), 2);
+    let xmp = query["xmp"].as_array().unwrap();
+    assert!(xmp.iter().any(|x| x["name"] == "dc:title" && x["value"] == "Sidecar title"), "{query}");
+    assert!(xmp.iter().any(|x| x["name"] == "xmp:Rating" && x["value"] == "5"), "{query}");
+    assert!(!xmp.iter().any(|x| x["value"] == "Supplied title"), "{query}");
+    let photo = s.catalog.photo(id).unwrap();
+    assert_eq!((photo.rating, &photo.meta.title), (before.rating, &before.meta.title));
+    assert_eq!(photo.develop, before.develop);
+    assert_eq!(std::fs::read(&file).unwrap(), original);
+    assert_eq!(std::fs::read_to_string(&sidecar).unwrap(), packet);
+    let _ = std::fs::remove_dir_all(&src);
+}
+
 #[test]
 fn demo_photos_have_no_sidecar() {
     let mut s = Session::with_demo();
@@ -634,10 +871,10 @@ fn demo_photos_have_no_sidecar() {
 fn all_metadata_lists_exif_and_xmp() {
     let dir = temp_dir("allmeta");
     let path = dir.join("tagged.jpg");
-    let img = lightcraft_raster::Rgba8 { width: 16, height: 8, data: vec![[90, 120, 200, 255]; 128] };
-    let exif = lightcraft_meta::write_exif(&lightcraft_meta::Metadata { make: Some("Maker".into()), iso: Some(800), ..Default::default() });
-    let meta = lightcraft_codecs::EncodeMeta { exif: Some(&exif), ..Default::default() };
-    let jpg = lightcraft_codecs::encode_jpeg(&lightcraft_codecs::EncodeImage::rgba8(&img), 90, Default::default(), &meta).unwrap();
+    let img = lcc_raster::Rgba8 { width: 16, height: 8, data: vec![[90, 120, 200, 255]; 128] };
+    let exif = lcc_meta::write_exif(&lcc_meta::Metadata { make: Some("Maker".into()), iso: Some(800), ..Default::default() });
+    let meta = lcc_codecs::EncodeMeta { exif: Some(&exif), ..Default::default() };
+    let jpg = lcc_codecs::encode_jpeg(&lcc_codecs::EncodeImage::rgba8(&img), 90, Default::default(), &meta).unwrap();
     std::fs::write(&path, jpg).unwrap();
     let mut s = Session::new().with_fs();
     s.execute("library.import", &json!({"paths": [path.to_string_lossy()]})).unwrap();
@@ -655,7 +892,7 @@ fn all_metadata_lists_exif_and_xmp() {
 /// photo relinked and its edits kept; undo goes back to the original; non-raws are skipped.
 #[test]
 fn convert_raw_to_dng() {
-    let corpus = std::env::var_os("LIGHTCRAFT_CORPUS")
+    let corpus = lcc_brand::env_os("CORPUS")
         .map(PathBuf::from)
         .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus"))
         .join("raw/nef-nikon-d5100-uncompressed.nef");
@@ -668,7 +905,7 @@ fn convert_raw_to_dng() {
     let r = s.execute("photo.convertToDng", &json!({})).unwrap();
     assert_eq!((r["converted"].as_array().unwrap().len(), r["skipped"].as_array().unwrap().len()), (0, 1));
     if !corpus.exists() {
-        lightcraft_testkit::skip!(Corpus, "{} absent", corpus.display());
+        lcc_testkit::skip!(Corpus, "{} absent", corpus.display());
         return;
     }
     let nef = dir.join("shot.nef");
@@ -683,7 +920,7 @@ fn convert_raw_to_dng() {
     assert!(dir.join("shot.dng").exists() && nef.exists(), "the original is kept");
     assert_eq!(p.develop.light.exposure, 0.6, "edits kept");
     let bytes = std::fs::read(dir.join("shot.dng")).unwrap();
-    assert_eq!(lightcraft_raw::probe(&bytes), Some(lightcraft_raw::RawFormat::Dng));
+    assert_eq!(lcc_raw::probe(&bytes), Some(lcc_raw::RawFormat::Dng));
     assert!(s.render_now(id, 64, 64).is_ok(), "the DNG renders");
     s.execute("edit.undo", &json!({})).unwrap();
     assert_eq!(s.catalog.photo(id).unwrap().file_name, "shot.nef");
@@ -703,7 +940,7 @@ fn convert_raw_to_dng() {
     let names: Vec<String> = std::fs::read_dir(&dest).unwrap().flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect();
     assert_eq!(names, ["DSC_1.dng"]);
     assert!(card.join("DSC_1.NEF").exists(), "the card is untouched");
-    let id2 = lightcraft_catalog::PhotoId(r["imported"][0].as_u64().unwrap());
+    let id2 = lcc_catalog::PhotoId(r["imported"][0].as_u64().unwrap());
     assert_eq!(s.catalog.photo(id2).unwrap().format, "DNG");
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -723,10 +960,10 @@ fn convert_to_dng_is_verified_and_atomic() {
     let id = s.catalog.photos().next().unwrap().id;
     let path = raw.to_string_lossy().to_string();
     s.catalog
-        .apply(lightcraft_catalog::Op::Relink {
+        .apply(lcc_catalog::Op::Relink {
             id,
             file_name: "shot.dng".into(),
-            source: lightcraft_catalog::Source::File { path: path.clone() },
+            source: lcc_catalog::Source::File { path: path.clone() },
             format: Some("NEF".into()),
         })
         .unwrap();
@@ -738,21 +975,21 @@ fn convert_to_dng_is_verified_and_atomic() {
     };
     {
         // the drive fills up part-way
-        let _fault = lightcraft_catalog::safe_file::fail_writes_after(200);
+        let _fault = lcc_catalog::safe_file::fail_writes_after(200);
         let r = s.execute("photo.convertToDng", &json!({})).unwrap();
         assert_eq!(r["converted"].as_array().unwrap().len(), 0, "{r}");
         assert!(r["skipped"][0][1].as_str().unwrap().contains("the raw is kept"), "{r}");
     }
     assert_eq!(names(), ["shot.dng"], "no partial DNG");
-    assert_eq!(s.catalog.photo(id).unwrap().source, lightcraft_catalog::Source::File { path: path.clone() }, "not relinked");
+    assert_eq!(s.catalog.photo(id).unwrap().source, lcc_catalog::Source::File { path: path.clone() }, "not relinked");
     // a good conversion: a new name (the existing file is not replaced), decodable, relinked
     let r = s.execute("photo.convertToDng", &json!({})).unwrap();
     let out = r["converted"][0]["path"].as_str().unwrap().to_string();
     assert!(out.ends_with("shot-2.dng"), "{r}");
     assert_eq!(std::fs::read(&raw).unwrap(), bytes, "the raw is untouched");
-    let back = lightcraft_raw::decode(&std::fs::read(&out).unwrap()).unwrap();
-    assert_eq!(back.data, lightcraft_raw::decode(&bytes).unwrap().data);
-    assert_eq!(s.catalog.photo(id).unwrap().source, lightcraft_catalog::Source::File { path: out });
+    let back = lcc_raw::decode(&std::fs::read(&out).unwrap()).unwrap();
+    assert_eq!(back.data, lcc_raw::decode(&bytes).unwrap().data);
+    assert_eq!(s.catalog.photo(id).unwrap().source, lcc_catalog::Source::File { path: out });
     assert_eq!(names(), ["shot-2.dng", "shot.dng"], "no temp file left");
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -772,9 +1009,9 @@ fn external_edit_copy_is_stacked() {
     let path = r["path"].as_str().unwrap().to_string();
     assert!(path.ends_with("beach-Edit.tif"), "{path}");
     let bytes = std::fs::read(&path).unwrap();
-    let d = lightcraft_codecs::decode(&bytes, Default::default()).unwrap();
+    let d = lcc_codecs::decode(&bytes, Default::default()).unwrap();
     assert_eq!(d.bit_depth, 16);
-    let new = lightcraft_catalog::PhotoId(r["id"].as_u64().unwrap());
+    let new = lcc_catalog::PhotoId(r["id"].as_u64().unwrap());
     assert_eq!(s.active(), Some(new));
     let st = s.catalog.stack_of(new).expect("stacked");
     assert_eq!((st.top(), st.photos.contains(&orig)), (new, true));
@@ -809,9 +1046,9 @@ fn external_edit_copies_every_selected_photo() {
     for (copy, orig) in copies.iter().zip(&originals) {
         assert_eq!(copy["original"].as_u64(), Some(*orig));
         assert!(copy["path"].as_str().unwrap().ends_with("-Edit.tif"), "{copy}");
-        let new = lightcraft_catalog::PhotoId(copy["id"].as_u64().unwrap());
+        let new = lcc_catalog::PhotoId(copy["id"].as_u64().unwrap());
         let st = s.catalog.stack_of(new).expect("stacked");
-        assert_eq!((st.top(), st.photos.contains(&lightcraft_catalog::PhotoId(*orig))), (new, true));
+        assert_eq!((st.top(), st.photos.contains(&lcc_catalog::PhotoId(*orig))), (new, true));
         assert!(s.selection.contains(new), "the copies are selected");
     }
     assert_eq!(r["path"], copies[0]["path"], "the single-copy fields name the first copy");
@@ -836,25 +1073,23 @@ fn external_edit_copy_as_psd_round_trips() {
     let r = s.execute("photo.editExternal", &json!({"format": "psd", "bitDepth": 16})).unwrap();
     let path = r["path"].as_str().unwrap().to_string();
     assert!(path.ends_with("pier-Edit.psd"), "{path}");
-    let d = lightcraft_codecs::decode(&std::fs::read(&path).unwrap(), Default::default()).unwrap();
+    let d = lcc_codecs::decode(&std::fs::read(&path).unwrap(), Default::default()).unwrap();
     assert_eq!(d.bit_depth, 16);
     assert!(d.icc.is_some(), "the colour space travels with the file");
-    let new = lightcraft_catalog::PhotoId(r["id"].as_u64().unwrap());
+    let new = lcc_catalog::PhotoId(r["id"].as_u64().unwrap());
     assert_eq!(s.catalog.stack_of(new).map(|st| (st.top(), st.photos.contains(&orig))), Some((new, true)));
     // the editor saves the document back over the same file: Reload shows its pixels
     let before = s.render_now(new, 16, 16).unwrap().image.data;
     let (w, h) = (d.width as u32, d.height as u32);
     let px = vec![1000u16; (w * h * 3) as usize];
-    let saved =
-        lightcraft_codecs::encode_psd(&lightcraft_codecs::EncodeImage::new(w, h, 3, lightcraft_codecs::Samples::U16(&px)), &Default::default())
-            .unwrap();
+    let saved = lcc_codecs::encode_psd(&lcc_codecs::EncodeImage::new(w, h, 3, lcc_codecs::Samples::U16(&px)), &Default::default()).unwrap();
     std::fs::write(&path, saved).unwrap();
     assert_eq!(s.execute("photo.reload", &json!({"ids": [new.0]})).unwrap()["reloaded"], json!([new.0]));
     assert_ne!(s.render_now(new, 16, 16).unwrap().image.data, before);
     // 8-bit, and what it can't do
     s.execute("library.select", &json!({"ids": [orig.0]})).unwrap();
     let r8 = s.execute("photo.editExternal", &json!({"format": "psd", "bitDepth": 8})).unwrap();
-    let d8 = lightcraft_codecs::decode(&std::fs::read(r8["path"].as_str().unwrap()).unwrap(), Default::default()).unwrap();
+    let d8 = lcc_codecs::decode(&std::fs::read(r8["path"].as_str().unwrap()).unwrap(), Default::default()).unwrap();
     assert_eq!(d8.bit_depth, 8);
     assert!(s.execute("photo.editExternal", &json!({"format": "jpeg"})).is_err());
     assert!(s.execute("photo.editExternal", &json!({"bitDepth": 32})).is_err());
@@ -894,12 +1129,12 @@ fn duplicate_copies_the_file_and_the_edits() {
     s.execute("photo.rate", &json!({"rating": 4})).unwrap();
     let alb = s.execute("album.create", &json!({"name": "Keep", "addSelected": true})).unwrap()["id"].as_u64().unwrap();
     let r = s.execute("photo.duplicate", &json!({})).unwrap();
-    let dup = lightcraft_catalog::PhotoId(r["ids"][0].as_u64().unwrap());
+    let dup = lcc_catalog::PhotoId(r["ids"][0].as_u64().unwrap());
     let d = s.catalog.photo(dup).unwrap().clone();
     assert_eq!(d.file_name, "pic-copy.png");
     assert!(dir.join("pic-copy.png").exists());
     assert_eq!((d.develop.light.exposure, d.rating), (0.8, 4));
-    assert_eq!(s.catalog.album_count(lightcraft_catalog::AlbumId(alb)), 2);
+    assert_eq!(s.catalog.album_count(lcc_catalog::AlbumId(alb)), 2);
     assert_ne!(dup, orig);
     s.execute("edit.undo", &json!({})).unwrap();
     assert!(s.catalog.photo(dup).is_none(), "one undo step");
@@ -915,22 +1150,141 @@ fn gps_typed_in_is_saved_to_xmp() {
     let (la, lo) = s.catalog.photo(id).unwrap().meta.gps.unwrap();
     assert!((la - 48.8583).abs() < 1e-3 && (lo - 2.2944).abs() < 1e-3, "{la} {lo}");
     let x = crate::sidecar::sidecar_packet(s.catalog.photo(id).unwrap(), &s.catalog);
-    let back = lightcraft_meta::parse_xmp(&x).unwrap().metadata.gps.unwrap();
+    let back = lcc_meta::parse_xmp(&x).unwrap().metadata.gps.unwrap();
     assert!((back.latitude - la).abs() < 1e-5 && (back.longitude - lo).abs() < 1e-5);
     assert!(s.execute("photo.setMeta", &json!({"gps": "north pole-ish"})).is_err());
     s.execute("photo.setMeta", &json!({"gps": null})).unwrap();
     assert!(s.catalog.photo(id).unwrap().meta.gps.is_none());
 }
 
+/// A PNG whose EXIF places it at (`lat`, `lon`), as a camera's GPS does.
+fn write_png_at(path: &Path, lat: f64, lon: f64) {
+    let img = lcc_raster::Rgba8 { width: 8, height: 8, data: vec![[90, 120, 150, 255]; 64] };
+    let gps = lcc_meta::Metadata { gps: Some(lcc_meta::Gps { latitude: lat, longitude: lon, altitude: None }), ..Default::default() };
+    let exif = lcc_meta::write_exif(&gps);
+    let meta = lcc_codecs::EncodeMeta { exif: Some(&exif), ..Default::default() };
+    std::fs::write(path, lcc_codecs::encode_png(&lcc_codecs::EncodeImage::rgba8(&img), &meta).unwrap()).unwrap();
+}
+
+/// A sidecar's GPS wins over the camera's (MWG: XMP over Exif), on import and on Read Metadata from
+/// File; saving leaves the sidecar's position as it was written, and writes it only when it was
+/// changed here.
+#[test]
+fn sidecar_gps_wins_over_the_cameras_and_survives_a_save() {
+    let src = temp_dir("sidecar-gps");
+    write_png_at(&src.join("walk.png"), 10.5, 20.25);
+    let sidecar = |lat: &str, lon: &str| {
+        format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about="" xmlns:exif="http://ns.adobe.com/exif/1.0/" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="2">
+   <exif:GPSLatitude>{lat}</exif:GPSLatitude>
+   <exif:GPSLongitude>{lon}</exif:GPSLongitude>
+  </rdf:Description>
+</rdf:RDF></x:xmpmeta>"#
+        )
+    };
+    std::fs::write(src.join("walk.xmp"), sidecar("12,30.12345N", "45,15.54321W")).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    let near = |(a, b): (f64, f64), (c, d): (f64, f64)| (a - c).abs() < 1e-6 && (b - d).abs() < 1e-6;
+    let gps = |s: &Session| s.catalog.photo(id).unwrap().meta.gps.unwrap();
+    assert!(near(gps(&s), (12.5020575, -45.2590535)), "the sidecar's position, not the camera's: {:?}", gps(&s));
+    // a save that didn't change the position leaves it in the file exactly as written
+    s.execute("photo.rate", &json!({"ids": [id.0], "rating": 4})).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    let saved = std::fs::read_to_string(src.join("walk.xmp")).unwrap();
+    assert!(saved.contains("<exif:GPSLatitude>12,30.12345N</exif:GPSLatitude>"), "{saved}");
+    assert!(saved.contains("<exif:GPSLongitude>45,15.54321W</exif:GPSLongitude>"), "{saved}");
+    assert_eq!(lcc_meta::parse_xmp(&saved).unwrap().metadata.rating, Some(4), "the save happened");
+    // another app moved the photo: reading the sidecar again takes its position
+    std::fs::write(src.join("walk.xmp"), sidecar("5,6.60000S", "100,30.30000E")).unwrap();
+    s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    assert!(near(gps(&s), (-5.11, 100.505)), "{:?}", gps(&s));
+    // a position typed in here is written
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "gps": "1.2345, 6.789"})).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    let g = lcc_meta::parse_xmp(&std::fs::read_to_string(src.join("walk.xmp")).unwrap()).unwrap().metadata.gps.unwrap();
+    assert!(near((g.latitude, g.longitude), (1.2345, 6.789)), "{g:?}");
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// Lightroom Classic writes a sidecar's GPS as attributes on `rdf:Description`, with GPSVersionID and
+/// GPSAltitude beside it; a file with no position of its own (a raw without GPS) takes it (fork issue #247).
+#[test]
+fn lightroom_attribute_gps_in_a_sidecar_is_read() {
+    let src = temp_dir("sidecar-gps-lr");
+    let img = lcc_raster::Rgba8 { width: 8, height: 8, data: vec![[90, 120, 150, 255]; 64] };
+    std::fs::write(src.join("nef.png"), lcc_codecs::encode_png(&lcc_codecs::EncodeImage::rgba8(&img), &Default::default()).unwrap()).unwrap();
+    std::fs::write(
+        src.join("nef.xmp"),
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about="" xmlns:exif="http://ns.adobe.com/exif/1.0/"
+   exif:GPSLatitude="41,53.6349N"
+   exif:GPSLongitude="12,29.60904E"
+   exif:GPSVersionID="2.2.0.0"
+   exif:GPSAltitude="441000/10000"/>
+</rdf:RDF></x:xmpmeta>"#,
+    )
+    .unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let (lat, lon) = s.catalog.photo(only(&s)).unwrap().meta.gps.expect("the sidecar's position");
+    assert!((lat - (41.0 + 53.6349 / 60.0)).abs() < 1e-6 && (lon - (12.0 + 29.60904 / 60.0)).abs() < 1e-6, "{lat} {lon}");
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// A photo with no capture time in the file or its sidecar is dated by the file's modification time, but
+/// that guess is never written to the sidecar as its capture time; a time read from the sidecar later, or
+/// set here, replaces it and is written.
+#[test]
+fn a_file_date_guess_is_never_saved_as_the_capture_time() {
+    let src = temp_dir("file-date");
+    write_png(&src.join("scan.png"), 3);
+    let rated = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="2"/>
+</rdf:RDF></x:xmpmeta>"#;
+    std::fs::write(src.join("scan.xmp"), rated).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    let p = s.catalog.photo(id).unwrap().clone();
+    assert!(p.captured.is_some(), "dated by the file, as Lightroom does");
+    assert_eq!(p.captured_fallback, p.captured);
+    let dates = |src: &Path| {
+        let d = lcc_meta::parse_xmp(&std::fs::read_to_string(src.join("scan.xmp")).unwrap()).unwrap();
+        ["exif:DateTimeOriginal", "photoshop:DateCreated"].map(|k| d.properties.get(k).and_then(|v| v.first()).cloned())
+    };
+    s.execute("photo.rate", &json!({"ids": [id.0], "rating": 3})).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    assert_eq!(dates(&src), [None, None], "no capture time is made up");
+    // the sidecar learns the real time elsewhere: reading it replaces the guess
+    std::fs::write(
+        src.join("scan.xmp"),
+        rated.replace(
+            "xmp:Rating=\"2\"",
+            "xmp:Rating=\"2\" xmlns:exif=\"http://ns.adobe.com/exif/1.0/\" exif:DateTimeOriginal=\"2019-07-01T10:20:30\"",
+        ),
+    )
+    .unwrap();
+    s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap().captured.as_deref(), Some("2019-07-01T10:20:30"));
+    // a time set here is the user's, and is written
+    s.execute("photo.setCaptureTime", &json!({"ids": [id.0], "time": "2020-01-02T03:04:05"})).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    assert_eq!(dates(&src), [Some("2020-01-02T03:04:05".to_string()), Some("2020-01-02T03:04:05".to_string())]);
+    let _ = std::fs::remove_dir_all(&src);
+}
+
 /// DNG export compression: lossless, zip and none all decode; none is the biggest.
 #[test]
 fn dng_export_compression_choices() {
-    let corpus = std::env::var_os("LIGHTCRAFT_CORPUS")
+    let corpus = lcc_brand::env_os("CORPUS")
         .map(PathBuf::from)
         .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus"))
         .join("raw/nef-nikon-d5100-uncompressed.nef");
     if !corpus.exists() {
-        lightcraft_testkit::skip!(Corpus, "{} absent", corpus.display());
+        lcc_testkit::skip!(Corpus, "{} absent", corpus.display());
         return;
     }
     let mut s = Session::new().with_fs();
@@ -945,7 +1299,7 @@ fn dng_export_compression_choices() {
             Ok(())
         };
         crate::export::export_batch(&mut s, &[id], &o, &crate::export::Destination { dir: "x".into(), exact: None }, &mut write, &|_| false).unwrap();
-        let raw = lightcraft_raw::decode(&out).unwrap_or_else(|e| panic!("{c}: {e}"));
+        let raw = lcc_raw::decode(&out).unwrap_or_else(|e| panic!("{c}: {e}"));
         assert!(raw.width > 1000, "{c}");
         sizes.push((c, out.len()));
     }
@@ -959,21 +1313,21 @@ fn dng_export_compression_choices() {
 /// look is fitted to its JPEG when there is one).
 #[test]
 fn dngs_of_raws_without_colour_matrices_carry_the_colour_they_open_with() {
-    use lightcraft_raw::color::{as_shot_white_xy, camera_transform, has_matrix};
+    use lcc_raw::color::{as_shot_white_xy, camera_transform, has_matrix};
     let dir = temp_dir("dng-colour");
     let samples = [[0.2, 0.3, 0.1], [0.05, 0.02, 0.4], [0.6, 0.6, 0.6], [0.01, 0.5, 0.03]];
-    let render = |t: &lightcraft_raw::color::CameraTransform, c: [f64; 3]| {
+    let render = |t: &lcc_raw::color::CameraTransform, c: [f64; 3]| {
         t.matrix.apply(std::array::from_fn(|i| c[i] * t.wb[i] as f64)).map(|v| v * t.baseline_exposure.exp2())
     };
     for (model, measured) in [("NIKON Z f", true), ("NIKON Z 9", false)] {
-        let metadata = lightcraft_meta::Metadata { make: Some("NIKON CORPORATION".into()), model: Some(model.into()), ..Default::default() };
-        let mut raw = lightcraft_raw::decode(&synthetic_dng_with(None, metadata)).unwrap();
+        let metadata = lcc_meta::Metadata { make: Some("NIKON CORPORATION".into()), model: Some(model.into()), ..Default::default() };
+        let mut raw = lcc_raw::decode(&synthetic_dng_with(None, metadata)).unwrap();
         // a vendor raw's colour: a white balance, no matrices
-        raw.color = lightcraft_raw::ColorData { as_shot_neutral: Some([0.5, 1.0, 0.7]), ..Default::default() };
-        let bytes = lightcraft_raw::write_dng(&raw, &Default::default()).unwrap();
+        raw.color = lcc_raw::ColorData { as_shot_neutral: Some([0.5, 1.0, 0.7]), ..Default::default() };
+        let bytes = lcc_raw::write_dng(&raw, &Default::default()).unwrap();
         let path = dir.join(format!("{model}.dng"));
         std::fs::write(&path, &bytes).unwrap();
-        let mut opened = lightcraft_raw::decode(&bytes).unwrap();
+        let mut opened = lcc_raw::decode(&bytes).unwrap();
         assert!(!has_matrix(&opened.color));
         let (_, want, look) = crate::camera_preview::starting_colour(&mut opened, &bytes, None, None);
         assert_eq!((want.matrix_is_fallback, look.is_none()), (!measured, true), "{model}");
@@ -990,7 +1344,7 @@ fn dngs_of_raws_without_colour_matrices_carry_the_colour_they_open_with() {
         crate::export::export_batch(&mut s, &[id], &o, &crate::export::Destination { dir: "x".into(), exact: None }, &mut write, &|_| false).unwrap();
         let converted = crate::cmd::convert::write_dng_with(None, &path.to_string_lossy(), String::new()).unwrap();
         for (how, dng) in [("export", exported), ("convert", std::fs::read(&converted).unwrap())] {
-            let back = lightcraft_raw::decode(&dng).unwrap();
+            let back = lcc_raw::decode(&dng).unwrap();
             assert!(back.color.color_matrix[0].is_some() && back.color.illuminant[0] != 0, "{model} {how}: {:?}", back.color);
             let got = camera_transform(&back, as_shot_white_xy(&back));
             for c in samples {
@@ -1006,12 +1360,10 @@ fn dngs_of_raws_without_colour_matrices_carry_the_colour_they_open_with() {
 fn write_jpeg(path: &Path, capture: Option<&str>) {
     let (w, h) = (32usize, 24usize);
     let data: Vec<[u8; 4]> = (0..w * h).map(|i| [(i % w * 7) as u8, (i / w * 9) as u8, 90, 255]).collect();
-    let img = lightcraft_raster::Rgba8 { width: w, height: h, data };
-    let exif = capture.map(|c| {
-        lightcraft_meta::write_exif(&lightcraft_meta::Metadata { capture_time: lightcraft_meta::DateTime::parse_iso(c), ..Default::default() })
-    });
-    let meta = lightcraft_codecs::EncodeMeta { exif: exif.as_deref(), ..Default::default() };
-    let bytes = lightcraft_codecs::encode_jpeg(&lightcraft_codecs::EncodeImage::rgba8(&img), 90, Default::default(), &meta).unwrap();
+    let img = lcc_raster::Rgba8 { width: w, height: h, data };
+    let exif = capture.map(|c| lcc_meta::write_exif(&lcc_meta::Metadata { capture_time: lcc_meta::DateTime::parse_iso(c), ..Default::default() }));
+    let meta = lcc_codecs::EncodeMeta { exif: exif.as_deref(), ..Default::default() };
+    let bytes = lcc_codecs::encode_jpeg(&lcc_codecs::EncodeImage::rgba8(&img), 90, Default::default(), &meta).unwrap();
     std::fs::write(path, bytes).unwrap();
 }
 
@@ -1040,13 +1392,13 @@ fn sidecar_capture_time_fills_in_when_the_file_has_none() {
     let by_name = |s: &Session, n: &str| s.catalog.photos().find(|p| p.file_name == n).unwrap().clone();
     let sample = by_name(&s, "sample.jpg");
     assert_eq!(sample.captured.as_deref(), Some("2026-01-14T05:58:48"));
-    let lightcraft_catalog::Source::File { path } = &sample.source else { panic!("not a file") };
+    let lcc_catalog::Source::File { path } = &sample.source else { panic!("not a file") };
     assert!(Path::new(path).starts_with(lib.join("Originals").join("2026").join("2026-01-14")), "{path}");
     assert_eq!(by_name(&s, "dated.jpg").captured.as_deref(), Some("2020-05-06T07:08:09"));
 
     // Read Metadata from File fills in a missing capture time too
     let id = sample.id;
-    s.catalog.apply(lightcraft_catalog::Op::SetCaptured { id, captured: None }).unwrap();
+    s.catalog.apply(lcc_catalog::Op::SetCaptured { id, captured: None }).unwrap();
     std::fs::copy(src.join("sample.jpg.xmp"), format!("{path}.xmp")).unwrap();
     s.execute("library.select", &json!({"ids": [id.0]})).unwrap();
     s.execute("photo.readMetadataFromFile", &json!({})).unwrap();
@@ -1060,7 +1412,7 @@ fn sidecar_capture_time_fills_in_when_the_file_has_none() {
 /// Management fields and read back on a fresh import.
 #[test]
 fn copyright_status_usage_terms_and_url_round_trip() {
-    use lightcraft_catalog::CopyrightStatus;
+    use lcc_catalog::CopyrightStatus;
     let src = temp_dir("rights-src");
     let lib = temp_dir("rights-lib");
     write_png(&src.join("a.png"), 1);
@@ -1194,7 +1546,7 @@ fn saving_merges_into_another_apps_sidecar() {
     ] {
         assert!(out.contains(part), "lost {part:?}:\n{out}");
     }
-    let d = lightcraft_meta::parse_xmp(&out).unwrap();
+    let d = lcc_meta::parse_xmp(&out).unwrap();
     assert_eq!(d.metadata.rating, Some(5), "ours replaces theirs");
     assert_eq!(d.metadata.title.as_deref(), Some("Harbour"));
     assert_eq!(d.properties.get("crs:Version"), Some(&vec!["99.0".to_string()]));
@@ -1203,13 +1555,13 @@ fn saving_merges_into_another_apps_sidecar() {
     s.execute("develop.set", &json!({"control": "effects.clarity", "value": 0})).unwrap();
     s.execute("photo.readMetadataFromFile", &json!({})).unwrap();
     assert_eq!(s.catalog.photo(id).unwrap().develop, saved);
-    // saving again keeps one LightCraft description and the other app's data
+    // saving again keeps one the app description and the other app's data
     s.execute("photo.rate", &json!({"rating": 3})).unwrap();
     s.execute("photo.saveMetadataToFile", &json!({})).unwrap();
     let again = std::fs::read_to_string(src.join("shot.xmp")).unwrap();
     assert_eq!(again.matches("<rdf:Description").count(), 2, "{again}");
     assert!(again.contains("other:Secret=\"keep me\"") && again.contains("crs:Exposure2012=\"+0.65\""));
-    assert_eq!(lightcraft_meta::parse_xmp(&again).unwrap().metadata.rating, Some(3));
+    assert_eq!(lcc_meta::parse_xmp(&again).unwrap().metadata.rating, Some(3));
 
     // a sidecar that isn't XMP is kept as a backup before it is replaced
     std::fs::write(src.join("shot.xmp"), b"<not xmp").unwrap();
@@ -1217,7 +1569,7 @@ fn saving_merges_into_another_apps_sidecar() {
     let backup = r["backups"][0]["backup"].as_str().unwrap().to_string();
     assert!(backup.contains("shot.xmp.bak-"), "{r}");
     assert_eq!(std::fs::read(&backup).unwrap(), b"<not xmp");
-    assert_eq!(lightcraft_meta::parse_xmp(&std::fs::read_to_string(src.join("shot.xmp")).unwrap()).unwrap().metadata.rating, Some(3));
+    assert_eq!(lcc_meta::parse_xmp(&std::fs::read_to_string(src.join("shot.xmp")).unwrap()).unwrap().metadata.rating, Some(3));
     // … and another one never overwrites the first backup
     std::fs::write(src.join("shot.xmp"), b"<still not xmp").unwrap();
     let r = s.execute("photo.saveMetadataToFile", &json!({})).unwrap();
@@ -1237,7 +1589,7 @@ fn files_sharing_a_stem_get_their_own_sidecars() {
     let src = temp_dir("stem");
     let lib = temp_dir("stem-lib");
     write_png(&src.join("IMG_1.png"), 1);
-    let img = lightcraft_raster::Rgba8::from_fn(40, 24, |x, y| [(x * 6) as u8, (y * 9) as u8, 7, 255]);
+    let img = lcc_raster::Rgba8::from_fn(40, 24, |x, y| [(x * 6) as u8, (y * 9) as u8, 7, 255]);
     let jpg =
         crate::export::encode_image(&img, &crate::export::ExportOptions { format: crate::export::ExportFormat::Jpeg, ..Default::default() }).unwrap();
     std::fs::write(src.join("IMG_1.jpg"), jpg).unwrap();
@@ -1252,7 +1604,7 @@ fn files_sharing_a_stem_get_their_own_sidecars() {
     s.execute("photo.rate", &json!({"ids": [p.0], "rating": 5})).unwrap();
     let r = s.execute("photo.saveMetadataToFile", &json!({"ids": [j.0, p.0]})).unwrap();
     assert_eq!(r["written"].as_array().unwrap().len(), 2, "{r}");
-    let rating = |f: &str| lightcraft_meta::parse_xmp(&std::fs::read_to_string(src.join(f)).unwrap()).unwrap().metadata.rating;
+    let rating = |f: &str| lcc_meta::parse_xmp(&std::fs::read_to_string(src.join(f)).unwrap()).unwrap().metadata.rating;
     assert_eq!(rating("IMG_1.xmp"), Some(2));
     assert_eq!(rating("IMG_1.png.xmp"), Some(5));
     // each reads its own back
@@ -1283,7 +1635,7 @@ fn lossy_dng_export_scales_and_shrinks() {
     };
     let lossless = export(json!({"format": "dng"}));
     let lossy = export(json!({"format": "dng", "dngCompression": "lossy", "quality": 80, "longEdge": 32}));
-    let raw = lightcraft_raw::decode(&lossy).unwrap();
+    let raw = lcc_raw::decode(&lossy).unwrap();
     assert_eq!((raw.cpp, raw.cfa.is_none(), raw.width.max(raw.height)), (3, true, 32));
     assert_eq!(raw.color.as_shot_neutral, Some([0.5, 1.0, 0.7]));
     assert!(lossy.len() < lossless.len(), "{} vs {}", lossy.len(), lossless.len());

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use lightcraft_raster::Rgba8;
+use lcc_raster::Rgba8;
 
 use super::*;
 
@@ -426,6 +426,23 @@ fn nothing_the_cache_writes_is_named_as_a_picture() {
     assert!(pictures.is_empty(), "named as pictures: {pictures:?}");
     // and they are found again under those names
     assert!((0..12u8).all(|i| d.get(hash_bytes(&[i, 9])).is_some()));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// Given one image discarded, only it leaves memory and disk; a missing key is a no-op
+#[test]
+fn remove_drops_one_image_from_memory_and_disk() {
+    let dir = temp_dir("remove");
+    let cache = PreviewCache::with_disk(1 << 20, &dir, 1 << 20);
+    let (a, b) = (hash_bytes(b"a"), hash_bytes(b"b"));
+    cache.put(a, Arc::new(gradient(8, 8, 0)));
+    cache.put(b, Arc::new(gradient(8, 8, 9)));
+    assert!(cache.contains(a) && cache.disk().unwrap().modified(a).is_some());
+    assert!(cache.remove(a));
+    assert!(!cache.contains(a) && cache.get(a).is_none());
+    assert!(cache.contains(b));
+    assert!(!cache.remove(a), "already gone");
+    cache.clear();
     let _ = std::fs::remove_dir_all(&dir);
 }
 

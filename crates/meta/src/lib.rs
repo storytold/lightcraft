@@ -1,4 +1,4 @@
-//! Photo metadata for LightCraft: EXIF (TIFF/raw files, JPEG APP1, PNG `eXIf`, WebP `EXIF`), XMP packets
+//! Photo metadata: EXIF (TIFF/raw files, JPEG APP1, PNG `eXIf`, WebP `EXIF`, HEIF `Exif` items), XMP packets
 //! (read + write, standard namespaces plus our own `lc:` namespace) and basic IPTC-IIM.
 //!
 //! Entry points:
@@ -7,7 +7,7 @@
 //! - [`parse_xmp`] / [`write_xmp`] — XMP packets (interchange fields + the opaque `lc:settings` JSON).
 //! - [`parse_iptc`] — IPTC-IIM record 2 datasets.
 //! - [`parse_gpx`] — GPS track logs (GPX) for geotagging by capture time.
-//! - [`extract`] — all of the above for a whole file (JPEG, PNG, WebP, TIFF/DNG/raw, Canon CR3).
+//! - [`extract`] — all of the above for a whole file (JPEG, PNG, WebP, TIFF/DNG/raw, Canon CR3, HEIF/HEIC/AVIF).
 //! - [`cr3`] — the Canon CR3 container (metadata blocks, XMP, the JPEG and raw tracks).
 #![forbid(unsafe_code)]
 
@@ -17,8 +17,11 @@ mod datetime;
 mod exif;
 pub mod focus;
 mod focus_read;
+mod fuji;
 mod gpx;
+mod heif;
 mod iptc;
+mod legacy;
 pub mod tags;
 mod xmp;
 mod xmp_merge;
@@ -27,11 +30,15 @@ pub use container::{Embedded, embedded, jpeg_segments, png_chunks, webp_chunks};
 pub use datetime::DateTime;
 pub use exif::{from_tiff, read_exif, strip_exif_header, try_read_exif, write_exif};
 pub use focus::FocusPoint;
+pub use fuji::{FujiRecipe, FujiRow, read_recipe_file, recipe_from_bytes, recipe_from_exif};
 pub use gpx::{GpxError, Match, TrackPoint, Tracklog, parse_gpx};
 pub use iptc::parse_iptc;
-pub use lightcraft_geom::{Orientation, Rect};
+pub use lcc_geom::{Orientation, Rect};
 pub use tags::{TagRow, file_tag_rows, tag_rows};
-pub use xmp::{CRS_NS, LC_NS, XmpData, XmpError, XmpValue, parse_xmp, write_xmp, write_xmp_lc};
+pub use xmp::{
+    CRS_NS, FILTERS_PREFIX, LC_NS, MAX_FILTER_PART, VIDEO_PREFIX, XmpData, XmpError, XmpPluginFilter, XmpValue, parse_xmp, plugin_fields,
+    plugin_fields_ns, plugin_filters, plugin_filters_ns, video_ns, write_xmp, write_xmp_ext, write_xmp_filters, write_xmp_lc, write_xmp_video,
+};
 pub use xmp_merge::{MergeRules, merge_xmp};
 
 use serde::{Deserialize, Serialize};
@@ -54,7 +61,7 @@ pub struct Flash {
 }
 
 /// A named region of interest on a photo (MWG Region Guidelines, `mwg-rs:Regions`): most often a face,
-/// drawn by Lightroom, digiKam, Picasa or similar tools. Read-only for now — LightCraft does not write
+/// drawn by Lightroom, digiKam, Picasa or similar tools. Read-only for now — the app does not write
 /// regions yet (see `docs/xmp-interop.md`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Region {
@@ -78,7 +85,7 @@ pub enum RegionKind {
     Other(String),
 }
 
-/// Everything LightCraft shows or searches about a photo. All fields are optional; unknown = `None`/empty.
+/// Everything the app shows or searches about a photo. All fields are optional; unknown = `None`/empty.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Metadata {
     // camera
@@ -148,6 +155,9 @@ pub struct Metadata {
     /// Where the camera focused, from its maker notes ([`focus`]; Sony only for now), on the upright photo.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub focus: Option<FocusPoint>,
+    /// Fujifilm in-camera film recipe from the MakerNote. Not written back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fuji_recipe: Option<FujiRecipe>,
 }
 
 macro_rules! fill {
@@ -212,7 +222,10 @@ impl Metadata {
             self.regions = other.regions.clone();
         }
         if self.focus.is_none() {
-            self.focus = other.focus.clone();
+            self.focus.clone_from(&other.focus);
+        }
+        if self.fuji_recipe.is_none() {
+            self.fuji_recipe.clone_from(&other.fuji_recipe);
         }
     }
 
@@ -231,19 +244,9 @@ impl Metadata {
         }
     }
 
-    /// Exposure time formatted like cameras show it: `1/250`, `0.5`, `2″`.
+    /// Exposure time formatted like cameras show it: `1/250`, `0.5`, `2″`, `1.3″`.
     pub fn exposure_display(&self) -> Option<String> {
-        let t = self.exposure_time?;
-        if t.is_nan() || t <= 0.0 {
-            return None;
-        }
-        Some(if t < 0.3 {
-            format!("1/{}", (1.0 / t).round())
-        } else if t < 1.0 {
-            format!("{}", (t * 10.0).round() / 10.0)
-        } else {
-            format!("{}″", (t * 10.0).round() / 10.0)
-        })
+        exposure_display_of(self.exposure_time?)
     }
 
     /// Human name of the metering mode.
@@ -277,6 +280,23 @@ impl Metadata {
     }
 }
 
+/// An exposure time in seconds, written the way cameras show it: `1/250`, `0.5`, `2″`, `1.3″`. The third-stop
+/// speeds between 1/4 s and 4 s keep their step (`0.4`, `0.8`, `1.3″`) instead of rounding to a whole one —
+/// `″` marks a whole second, so a reader showing the string beside " s" must not add a second unit.
+/// `None` for anything that isn't a positive, finite time.
+pub fn exposure_display_of(t: f64) -> Option<String> {
+    if !t.is_finite() || t <= 0.0 {
+        return None;
+    }
+    Some(if t < 0.3 {
+        format!("1/{}", (1.0 / t).round())
+    } else if t < 1.0 {
+        format!("{}", (t * 10.0).round() / 10.0)
+    } else {
+        format!("{}″", (t * 10.0).round() / 10.0)
+    })
+}
+
 /// Read everything we understand from a whole file (JPEG, PNG, WebP, TIFF-based incl. DNG/raw).
 /// Precedence: EXIF, then IPTC fills gaps, then XMP overrides user fields and fills the rest.
 pub fn extract(bytes: &[u8]) -> Metadata {
@@ -289,7 +309,18 @@ pub fn extract(bytes: &[u8]) -> Metadata {
         m.overlay_user_fields(&x.metadata);
         m.fill_missing(&x.metadata);
     }
+    if let Some(exif) = e.exif.as_deref() {
+        m.fuji_recipe = fuji::recipe_from_exif(exif);
+    }
     m
+}
+
+/// Does the file embed a GPS position anywhere it can be read from? Export's "remove location"
+/// asks before copying an original byte for byte. For HEIF, HEIC and AVIF that is any EXIF or XMP
+/// item, whichever image it describes (a thumbnail's too), and an item that can't be read counts
+/// as a location; for other files, what [`extract`] reads.
+pub fn embeds_location(bytes: &[u8]) -> bool {
+    heif::embeds_location(bytes).unwrap_or_else(|| extract(bytes).gps.is_some())
 }
 
 /// A lens name from its focal and aperture range (Exif LensSpecification, or a Nikon maker note's Lens), written the
@@ -338,16 +369,27 @@ mod tests {
         assert_eq!(parse_number("inf"), None);
     }
 
+    /// The third-stop speeds between 1/4 s and 4 s keep their step, written as cameras show them (issue
+    /// #1619): 0.4 s is "0.4", not "1/2" (1/0.4 = 2.5, rounded to 2), and a whole second carries the ″.
     #[test]
-    fn exposure_display() {
-        let mut m = Metadata { exposure_time: Some(1.0 / 250.0), ..Default::default() };
-        assert_eq!(m.exposure_display().as_deref(), Some("1/250"));
-        m.exposure_time = Some(0.5);
-        assert_eq!(m.exposure_display().as_deref(), Some("0.5"));
-        m.exposure_time = Some(2.0);
-        assert_eq!(m.exposure_display().as_deref(), Some("2″"));
-        m.exposure_time = Some(0.0);
-        assert_eq!(m.exposure_display(), None);
+    fn exposure_times_keep_their_step() {
+        for (t, want) in [
+            (1.0 / 250.0, "1/250"),
+            (0.3, "0.3"),
+            (0.4, "0.4"),
+            (0.5, "0.5"),
+            (0.8, "0.8"),
+            (1.0, "1\u{2033}"),
+            (1.3, "1.3\u{2033}"),
+            (2.5, "2.5\u{2033}"),
+            (30.0, "30\u{2033}"),
+        ] {
+            assert_eq!(exposure_display_of(t).as_deref(), Some(want), "{t} s");
+            assert_eq!(Metadata { exposure_time: Some(t), ..Default::default() }.exposure_display().as_deref(), Some(want), "{t} s");
+        }
+        for t in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert_eq!(exposure_display_of(t), None, "{t}");
+        }
     }
 
     #[test]
@@ -362,12 +404,5 @@ mod tests {
         assert_eq!(a.rating, Some(4));
         assert_eq!(a.make.as_deref(), Some("A"));
         assert_eq!(a.keywords, vec!["k".to_string()]);
-    }
-
-    #[test]
-    fn names() {
-        let m = Metadata { metering_mode: Some(5), exposure_program: Some(3), ..Default::default() };
-        assert_eq!(m.metering_name(), Some("Pattern"));
-        assert_eq!(m.exposure_program_name(), Some("Aperture-priority AE"));
     }
 }

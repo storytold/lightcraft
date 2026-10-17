@@ -1,10 +1,10 @@
 //! Every way of setting the crop angle keeps the crop inside the photo (issue #742): the generic
-//! control path (`develop.set` on `crop.angle`, as MCP, the control channel and `lightcraft-cli
+//! control path (`develop.set` on `crop.angle`, as MCP, the control channel and `lcc-cli
 //! render --set` use it, plus `develop.adjust`, `develop.quickAdjust`, `develop.resetControl`) gives
 //! the same crop as `crop.straighten` (the rotate handle, the Straighten slider, the Angle field)
 //! and `crop.set {angle}`.
 
-use lightcraft_geom::{CropGeometry, Rect};
+use lcc_geom::{CropGeometry, Rect};
 use serde_json::{Value, json};
 
 use crate::Session;
@@ -143,7 +143,7 @@ fn a_crop_shrunk_by_straightening_grows_back_towards_0() {
     for angle in [5.0, 12.0, 20.0, 8.0, -20.0, -3.0, 0.0] {
         s.execute("crop.straighten", &json!({"angle": angle})).unwrap();
         let g = geometry(&s);
-        assert!(close(g, lightcraft_geom::crop_fit_angle(w, h, angle, None)), "the largest crop at {angle}°, got {g:?}");
+        assert!(close(g, lcc_geom::crop_fit_angle(w, h, angle, None)), "the largest crop at {angle}°, got {g:?}");
     }
     s.execute("develop.endInteraction", &json!({})).unwrap();
     s.execute("crop.straighten", &json!({"angle": 20.0})).unwrap();

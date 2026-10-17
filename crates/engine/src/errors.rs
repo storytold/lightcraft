@@ -6,7 +6,7 @@
 
 use crate::EngineError;
 
-/// A model a feature needs and LightCraft downloads only when the person agrees.
+/// A model a feature needs and the app downloads only when the person agrees.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum AiModel {
     /// YuNet, which finds faces (`faces.detect`; installed in Settings ▸ Faces).

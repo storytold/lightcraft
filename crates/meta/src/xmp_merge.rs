@@ -340,7 +340,7 @@ mod tests {
 
     fn fresh(rating: i8, keywords: &[&str]) -> String {
         let m = crate::Metadata {
-            software: Some("LightCraft".into()),
+            software: Some(lcc_brand::DISPLAY_NAME.into()),
             rating: Some(rating),
             keywords: keywords.iter().map(|k| k.to_string()).collect(),
             ..Default::default()

@@ -20,7 +20,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use lightcraft_geom::Rect;
+use lcc_geom::Rect;
 
 const MAGIC: &[u8; 4] = b"LCFE";
 const VERSION: u8 = 2;
@@ -236,7 +236,7 @@ pub(crate) const SCAN_TAG: &str = "yunet-2023mar";
 /// Largest record file we read.
 const SCAN_MAX_FILE: u64 = 64 << 20;
 
-/// The photos the detector has already searched for faces, so each is searched once, however many times LightCraft
+/// The photos the detector has already searched for faces, so each is searched once, however many times the app
 /// starts. Kept beside the library (`face-scanned.bin`: a header naming the detector, then photo ids, appended to).
 /// The focus-point backfill keeps its own record the same way ([`Scanned::new`] with its magic and decoder tag).
 pub(crate) struct Scanned {
@@ -493,7 +493,7 @@ mod tests {
 #[derive(Default)]
 pub(crate) struct FacesState {
     /// `<model id>@<sha256>` and the loaded model.
-    pub embedder: Option<(String, Arc<lightcraft_faces::runtime::Embedder>)>,
+    pub embedder: Option<(String, Arc<lcc_faces::runtime::Embedder>)>,
     pub index: Index,
     /// When the models folder was last looked at (the per-frame pump trusts a look for a second).
     pub checked: Option<std::time::Instant>,
@@ -503,9 +503,9 @@ pub(crate) struct FacesState {
     /// After a failure to load the chosen model, the background pump leaves it alone until then.
     pub retry_at: Option<std::time::Instant>,
     /// Photos the worker is busy with.
-    pub in_flight: std::collections::HashSet<lightcraft_catalog::PhotoId>,
+    pub in_flight: std::collections::HashSet<lcc_catalog::PhotoId>,
     /// Photos still to hand to the worker, and the catalog revision this list was made at.
-    pub queue: Vec<lightcraft_catalog::PhotoId>,
+    pub queue: Vec<lcc_catalog::PhotoId>,
     pub queue_stamp: Option<u64>,
     /// When the index was last written to its cache file by the background pump.
     pub saved_at: Option<std::time::Instant>,
@@ -540,7 +540,7 @@ impl FacesState {
 
     /// Photo `id`'s file was replaced by other content: the faces made from the old pixels are dropped and the photo is
     /// searched again (issue #1524). What a worker is still making from the old file is dropped when it comes back.
-    pub fn content_replaced(&mut self, id: lightcraft_catalog::PhotoId) {
+    pub fn content_replaced(&mut self, id: lcc_catalog::PhotoId) {
         self.index.forget_photo(id.0);
         self.scanned.remove(id.0);
         self.scan_failed.remove(&id.0);

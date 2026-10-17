@@ -1,27 +1,22 @@
-# Windows ARM64 build and smoke test.
-#
-# Release packages on arm64-windows are produced on x64 runners via cross-compilation
-# (target: aarch64-pc-windows-msvc) using MSVC's ARM64 cross tools, then installed and run
-# on GitHub Actions' native windows-11-arm runner.
+# Windows on ARM: package the ARM64 release the way release.yml does (built natively on the
+# self-hosted Windows on ARM runner, unsigned here), then install that MSI on a Windows 11 ARM64 runner, check the installed
+# binaries are ARM64, run the CLI natively, and uninstall. (A native ARM64 `cargo test` job is left
+# out for now: PdfCraft saw an intermittent access violation in egui UI tests there.)
 name: Windows ARM64
 
 on:
   push:
     branches: [main]
-    paths:
-      - ".github/workflows/windows-arm64.yml"
-      - "packaging/windows/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "crates/**"
   pull_request:
-    branches: [main]
     paths:
-      - ".github/workflows/windows-arm64.yml"
-      - "packaging/windows/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "crates/**"
+      - Cargo.toml
+      - Cargo.lock
+      - "**/Cargo.toml"
+      - "**/build.rs"
+      - .github/workflows/windows-arm64.yml
+      - packaging/windows/**
+  schedule:
+    - cron: "41 4 * * 1" # weekly, so drift in the runner images shows up
   workflow_dispatch:
 
 concurrency:
@@ -31,10 +26,131 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
 jobs:
-  windows-arm64:
-    # Intentionally tracked at @main (not SHA-pinned) so org-wide CI improvements, security fixes, and build optimizations propagate without PR churn across all craftapp repos.
-    uses: storytold/craft-common-actions/.github/workflows/windows-arm64.yml@main
-    with:
-      app-name: lightcraft
-      app-dir: LightCraft
+  package:
+    name: package (native ARM64)
+    # Self-hosted Windows on ARM runner (SNAPDRAGON): Visual Studio Build Tools with the ARM64 MSVC tools
+    # and Windows SDK, so it builds natively. win0 (x64) has no ARM64 MSVC tools. See docs/ci.md.
+    runs-on: [self-hosted, Windows, ARM64, lcc]
+    timeout-minutes: 120
+    env:
+      # SNAPDRAGON has 12 cores; the runner's own settings held cargo to 4. Two stay free for the desktop.
+      CARGO_BUILD_JOBS: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Low priority, persistent build cache
+        shell: pwsh
+        run: |
+          # `bash` steps need Git Bash, not the WSL launcher in System32 (SNAPDRAGON's PATH finds that first)
+          $gitBash = 'C:\Program Files\Git\bin'
+          if (Test-Path "$gitBash\bash.exe") { Add-Content -Path $env:GITHUB_PATH -Value $gitBash }
+          Get-Process -Name Runner.Worker -ErrorAction SilentlyContinue | ForEach-Object { $_.PriorityClass = 'BelowNormal' }
+          # a short path: rc.exe fails on long ones (under LocalSystem, LOCALAPPDATA is deep in System32)
+          if (-not $env:CARGO_TARGET_DIR) {
+            $dir = "C:\lcc-ci\target-$env:RUNNER_NAME"
+            New-Item -ItemType Directory -Force $dir | Out-Null
+            Add-Content -Path $env:GITHUB_ENV -Value "CARGO_TARGET_DIR=$dir"
+          }
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          targets: aarch64-pc-windows-msvc
+      # The runner account can't write to Program Files: the .NET SDK and WiX go into the runner's own
+      # tool cache.
+      - uses: actions/setup-dotnet@v4
+        env:
+          DOTNET_INSTALL_DIR: ${{ runner.tool_cache }}\dotnet
+        with:
+          dotnet-version: 8.0.x
+      - name: Install WiX
+        shell: pwsh
+        run: |
+          $tools = Join-Path $env:RUNNER_TOOL_CACHE 'wix-5.0.2'
+          if (-not (Test-Path (Join-Path $tools 'wix.exe'))) { dotnet tool install --tool-path $tools wix --version 5.0.2 }
+          Add-Content -Path $env:GITHUB_PATH -Value $tools
+      - name: Clang for ring (ARM64 only; kept in the runner tool cache)
+        if: runner.arch == 'ARM64'
+        # ring's aarch64-pc-windows-msvc build needs clang, which Visual Studio's ARM64 tools lack. LLVM's
+        # portable build is unpacked into the tool cache once (nothing installed or registered).
+        shell: pwsh
+        env:
+          LLVM_VERSION: 23.1.3
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path $env:RUNNER_TOOL_CACHE "llvm-$env:LLVM_VERSION-arm64-portable"
+          $clang = Get-ChildItem $root -Recurse -Filter clang.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $clang) {
+            # the portable tarball: msiexec is off limits to the runner account (error 1601)
+            $name = "clang+llvm-$env:LLVM_VERSION-aarch64-pc-windows-msvc"
+            New-Item -ItemType Directory -Force $root | Out-Null
+            $ok = $false
+            foreach ($ext in 'tar.zst', 'tar.xz') {
+              $tarball = Join-Path $env:RUNNER_TEMP "llvm.$ext"
+              Invoke-WebRequest -UseBasicParsing -OutFile $tarball "https://github.com/llvm/llvm-project/releases/download/llvmorg-$env:LLVM_VERSION/$name.$ext"
+              tar -xf $tarball -C $root
+              $code = $LASTEXITCODE
+              Remove-Item $tarball -Force
+              if ($code -eq 0) { $ok = $true; break }
+              Write-Output "tar could not unpack .$ext (exit $code)"
+            }
+            if (-not $ok) { throw "could not unpack LLVM" }
+            $clang = Get-ChildItem $root -Recurse -Filter clang.exe | Select-Object -First 1
+          }
+          Write-Output "clang: $($clang.FullName)"
+          Add-Content -Path $env:GITHUB_PATH -Value $clang.DirectoryName
+      - name: Build and package (unsigned)
+        shell: pwsh
+        env:
+          DIST: ${{ github.workspace }}\dist\arm64
+        run: ./packaging/windows/package.ps1 -Arch arm64
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: app-windows-arm64
+          path: dist/arm64/*
+          if-no-files-found: error
+          retention-days: 7
+
+  install:
+    name: install and run on ARM64
+    needs: package
+    # Self-hosted Windows on ARM runner (SNAPDRAGON).
+    runs-on: [self-hosted, Windows, ARM64, lcc]
+    timeout-minutes: 30
+    steps:
+      # for brand.toml and packaging/windows/brand.ps1 (the product name lives only there)
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: app-windows-arm64
+          path: dist
+      - name: Install the MSI, check it, run it, uninstall it
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          . ./packaging/windows/brand.ps1
+          $appExe = "$($Brand.binary).exe"
+          $cliExe = "$($Brand.cli_binary).exe"
+          $msi = (Get-ChildItem dist/*.msi | Select-Object -First 1).FullName
+          $p = Start-Process msiexec.exe -ArgumentList '/i', "`"$msi`"", '/qn', '/l*v', 'install.log' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Get-Content install.log -Tail 60; throw "msiexec /i exited $($p.ExitCode)" }
+          $dir = Join-Path $env:ProgramFiles $Brand.display_name
+          foreach ($exe in $appExe, $cliExe) {
+            $path = Join-Path $dir $exe
+            if (-not (Test-Path $path)) { throw "$exe not installed in $dir" }
+            $bytes = [System.IO.File]::ReadAllBytes($path)
+            $machine = [BitConverter]::ToUInt16($bytes, [BitConverter]::ToInt32($bytes, 0x3C) + 4)
+            if ($machine -ne 0xAA64) { throw "$exe is for machine 0x$('{0:X}' -f $machine), not ARM64" }
+            Write-Output "ok $path (ARM64)"
+          }
+          # The installed CLI runs natively on ARM64.
+          $cli = Join-Path $dir $cliExe
+          $out = & $cli --version 2>&1 | Out-String
+          if ($LASTEXITCODE -ne 0) { Write-Output $out; throw "$cliExe --version exited $LASTEXITCODE" }
+          Write-Output "ok $cliExe --version: $($out.Trim())"
+          $p = Start-Process msiexec.exe -ArgumentList '/x', "`"$msi`"", '/qn' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "msiexec /x exited $($p.ExitCode)" }
+          if (Test-Path (Join-Path $dir $appExe)) { throw "uninstall left $appExe behind" }
+          Write-Output 'ok uninstalled'

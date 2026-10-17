@@ -1,0 +1,108 @@
+# Lets a few trusted users triage issues and PRs by comment, without repository
+# access: /label, /unlabel, /assign, /unassign, /close, /reopen.
+#
+# Labels and assignees are separated by commas (`/label bug, good first issue`)
+# or, when there is no comma, by spaces (`/assign @a @b`). Only the first line
+# of the comment is read. /label never creates labels; unknown ones are reported.
+#
+# Runs on a GitHub-hosted runner: it reads untrusted comment text, so it stays
+# off the self-hosted machines. The comment reaches the script only through env
+# vars and is never interpolated into the shell.
+name: triage-bot
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions: {}
+
+jobs:
+  triage:
+    if: >-
+      startsWith(github.event.comment.body, '/') &&
+      contains(fromJSON('["clydecbrown","deunderscorepaul","endthestart"]'), github.event.comment.user.login)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Run command
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.issue.number }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+          BODY: ${{ github.event.comment.body }}
+        run: |
+          set -uo pipefail
+          errors=()
+          line=$(printf '%s\n' "$BODY" | head -n1 | tr -d '\r')
+          cmd=${line%%[[:space:]]*}
+          rest=${line#"$cmd"}
+          args=()
+          if [[ $rest == *,* ]]; then
+            IFS=',' read -ra raw <<< "$rest"
+          else
+            read -ra raw <<< "$rest"
+          fi
+          for a in "${raw[@]}"; do
+            a=$(printf '%s' "$a" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+            [[ -n $a ]] && args+=("$a")
+          done
+          enc() { jq -rn --arg x "$1" '$x|@uri'; }
+          user_ok() { [[ $1 =~ ^[A-Za-z0-9](-?[A-Za-z0-9])*$ ]]; }
+
+          case $cmd in
+            /label|/unlabel|/assign|/unassign)
+              [[ ${#args[@]} -eq 0 ]] && errors+=("\`$cmd\` needs at least one name.") ;;
+          esac
+
+          case $cmd in
+            /label)
+              for l in "${args[@]}"; do
+                if ! gh api "repos/$REPO/labels/$(enc "$l")" --silent 2>/dev/null; then
+                  errors+=("Label \`$l\` does not exist.")
+                elif ! gh api -X POST "repos/$REPO/issues/$NUMBER/labels" -f "labels[]=$l" --silent; then
+                  errors+=("Could not add label \`$l\`.")
+                fi
+              done ;;
+            /unlabel)
+              for l in "${args[@]}"; do
+                gh api -X DELETE "repos/$REPO/issues/$NUMBER/labels/$(enc "$l")" --silent 2>/dev/null \
+                  || errors+=("Label \`$l\` is not on this issue.")
+              done ;;
+            /assign|/unassign)
+              method=POST; [[ $cmd == /unassign ]] && method=DELETE
+              for u in "${args[@]}"; do
+                u=${u#@}
+                if ! user_ok "$u"; then
+                  errors+=("\`$u\` is not a valid user name.")
+                elif ! gh api -X "$method" "repos/$REPO/issues/$NUMBER/assignees" -f "assignees[]=$u" --silent; then
+                  errors+=("Could not ${cmd#/} \`$u\`.")
+                fi
+              done
+              if [[ $cmd == /assign ]]; then
+                now=$(gh api "repos/$REPO/issues/$NUMBER" --jq '[.assignees[].login] | join(" ")')
+                for u in "${args[@]}"; do
+                  u=${u#@}
+                  user_ok "$u" && [[ " $now " != *" $u "* ]] \
+                    && errors+=("\`$u\` can't be assigned (only people with access to the repo can be).")
+                done
+              fi ;;
+            /close)
+              gh api -X PATCH "repos/$REPO/issues/$NUMBER" -f state=closed --silent || errors+=("Could not close.") ;;
+            /reopen)
+              gh api -X PATCH "repos/$REPO/issues/$NUMBER" -f state=open --silent || errors+=("Could not reopen.") ;;
+            *)
+              exit 0 ;;  # not a triage command (e.g. another bot's); stay quiet
+          esac
+
+          if [[ ${#errors[@]} -eq 0 ]]; then
+            gh api -X POST "repos/$REPO/issues/comments/$COMMENT_ID/reactions" -f content=+1 --silent
+          else
+            gh api -X POST "repos/$REPO/issues/comments/$COMMENT_ID/reactions" -f content=confused --silent
+            msg=$(printf -- '- %s\n' "${errors[@]}")
+            gh api -X POST "repos/$REPO/issues/$NUMBER/comments" -f body="$msg" --silent
+            exit 1
+          fi

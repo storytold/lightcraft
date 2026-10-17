@@ -4,7 +4,7 @@
 //! binary blobs are summarised by size; of a maker note only the lens name is listed (the
 //! Panasonic one, as Panasonic writes no Exif LensModel).
 
-use lightcraft_tiff::{Ifd, Tiff, Value};
+use lcc_tiff::{Ifd, Tiff, Value};
 
 /// One metadata row.
 #[derive(Clone, Debug, PartialEq)]
@@ -306,7 +306,7 @@ fn nikon_nef_compression(tiff: &Tiff, bytes: &[u8]) -> Option<&'static str> {
         return None;
     }
     let e = ifd0.exif.as_ref()?.get(0x927c)?;
-    let mn = lightcraft_tiff::makernote::parse_makernote(bytes, e.offset, e.count() as u64, tiff.order, &make)?;
+    let mn = lcc_tiff::makernote::parse_makernote(bytes, e.offset, e.count() as u64, tiff.order, &make)?;
     nef_compression(mn.ifd.u32(0x0093)?)
 }
 
@@ -346,7 +346,7 @@ pub fn tag_rows(tiff: &Tiff) -> Vec<TagRow> {
 /// [`tag_rows`] of a file's bytes: a TIFF-based file directly, else its embedded EXIF block
 /// (JPEG, PNG, WebP, HEIF…). Empty when there is none.
 pub fn file_tag_rows(bytes: &[u8]) -> Vec<TagRow> {
-    if Tiff::sniff(bytes).is_some()
+    let mut rows = if Tiff::sniff(bytes).is_some()
         && let Ok(t) = Tiff::parse(bytes)
     {
         let mut rows = tag_rows(&t);
@@ -356,13 +356,20 @@ pub fn file_tag_rows(bytes: &[u8]) -> Vec<TagRow> {
             row.value = words.to_string();
         }
         panasonic_lens_row(bytes, &t, &mut rows);
-        return rows;
+        rows
+    } else {
+        let Some(exif) = crate::embedded(bytes).exif else { return Vec::new() };
+        let data = crate::strip_exif_header(&exif);
+        let Ok(t) = Tiff::parse(data) else { return Vec::new() };
+        let mut rows = tag_rows(&t);
+        panasonic_lens_row(data, &t, &mut rows);
+        rows
+    };
+    if let Some(recipe) = crate::fuji::recipe_from_bytes(bytes) {
+        for row in recipe.rows {
+            rows.push(TagRow { group: "Fujifilm", tag: row.tag, name: row.label, value: row.value });
+        }
     }
-    let Some(exif) = crate::embedded(bytes).exif else { return Vec::new() };
-    let data = crate::strip_exif_header(&exif);
-    let Ok(t) = Tiff::parse(data) else { return Vec::new() };
-    let mut rows = tag_rows(&t);
-    panasonic_lens_row(data, &t, &mut rows);
     rows
 }
 
@@ -482,7 +489,7 @@ mod tests {
         let rw2 = crate::exif::tests::panasonic_rw2("LUMIX S 85/F1.8");
         assert_eq!(lens(&file_tag_rows(&rw2)), ["LUMIX S 85/F1.8"]);
         // a JPEG: the note is in its own Exif
-        let exif = crate::exif::tests::panasonic_exif(lightcraft_tiff::ByteOrder::Big, Some("LUMIX G 25/F1.7"), None);
+        let exif = crate::exif::tests::panasonic_exif(lcc_tiff::ByteOrder::Big, Some("LUMIX G 25/F1.7"), None);
         let mut jpg = vec![0xff, 0xd8, 0xff, 0xe1];
         jpg.extend_from_slice(&((exif.len() + 8) as u16).to_be_bytes());
         jpg.extend(b"Exif\0\0");

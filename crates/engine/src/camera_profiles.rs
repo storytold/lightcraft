@@ -2,16 +2,17 @@
 //!
 //! A raw file without colour matrices (Sony ARW, Nikon NEF, Fujifilm RAF) gets its look fitted to its own embedded camera
 //! JPEG (`camera_preview`), but one photo shows too little of some colours: a lime shirt covering a
-//! few dozen proxy pixels next to a hillside of foliage at the same hue. `lightcraft-cli calibrate`
+//! few dozen proxy pixels next to a hillside of foliage at the same hue. the CLI's `calibrate`
 //! pools the colour pairs of many photos per model and fits one matrix and hue/saturation/value
 //! table; photos of that model then only fit their tone and chroma curves.
 //!
-//! Profiles are JSON files (`<model>.json`) in [`dir`]: `LIGHTCRAFT_CAMERA_PROFILES`, else
+//! Profiles are JSON files (`<model>.json`) in [`dir`]: `{ENV_PREFIX}_CAMERA_PROFILES`, else
 //! `<config>/camera-profiles`; a local profile replaces the one built in ([`BUNDLED`], from
 //! `assets/camera-profiles/`). They are read once per process; a damaged or hostile file is
 //! ignored with a warning. They hold aggregate colour statistics only, never image content.
-use lightcraft_color::Mat3;
-use lightcraft_raw::profile::HsvTable;
+use lcc_color::Mat3;
+use lcc_pipeline::tone::CameraTone;
+use lcc_raw::profile::HsvTable;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -22,13 +23,16 @@ const VERSION: u32 = 1;
 /// Largest profile file read (a 5 × 72 × 5 table is ~60 KB of JSON).
 const MAX_FILE: u64 = 4 << 20;
 
-/// Profiles built into LightCraft (`assets/camera-profiles/`, see `assets/ATTRIBUTION.md`):
+/// Profiles built into the app (`assets/camera-profiles/`, see `assets/ATTRIBUTION.md`):
 /// `(model, JSON)`.
 pub const BUNDLED: &[(&str, &str)] = &[
     ("ILCA-99M2", include_str!("../../../assets/camera-profiles/ILCA-99M2.json")),
     ("ILCE-7CR", include_str!("../../../assets/camera-profiles/ILCE-7CR.json")),
     ("ILCE-7M4", include_str!("../../../assets/camera-profiles/ILCE-7M4.json")),
     ("NIKON D5300", include_str!("../../../assets/camera-profiles/NIKON_D5300.json")),
+    ("NIKON D750", include_str!("../../../assets/camera-profiles/NIKON_D750.json")),
+    ("NIKON D780", include_str!("../../../assets/camera-profiles/NIKON_D780.json")),
+    ("NIKON D90", include_str!("../../../assets/camera-profiles/NIKON_D90.json")),
     ("NIKON Z 6_2", include_str!("../../../assets/camera-profiles/NIKON_Z_6_2.json")),
     ("NIKON Z 8", include_str!("../../../assets/camera-profiles/NIKON_Z_8.json")),
     ("X-H2S", include_str!("../../../assets/camera-profiles/X-H2S.json")),
@@ -47,11 +51,21 @@ pub struct CameraProfile {
     matrix: [[f64; 3]; 3],
     /// Hue/saturation/value correction after `matrix` (linear ProPhoto RGB).
     pub hue_sat: Option<HsvTable>,
+    /// The camera's tone curve pooled over the photos (scene luminance after `matrix` → the camera JPEG's): a photo
+    /// follows it past what its own JPEG shows, and takes it whole when its JPEG teaches no curve. Absent in profiles
+    /// fitted before it existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tone: Option<CameraTone>,
 }
 
 impl CameraProfile {
     pub fn new(model: &str, files: usize, samples: usize, matrix: Mat3, hue_sat: Option<HsvTable>) -> CameraProfile {
-        CameraProfile { version: VERSION, model: model.to_owned(), files, samples, matrix: matrix.0, hue_sat }
+        CameraProfile { version: VERSION, model: model.to_owned(), files, samples, matrix: matrix.0, hue_sat, tone: None }
+    }
+
+    /// The profile with its pooled tone curve.
+    pub fn with_tone(self, tone: Option<CameraTone>) -> CameraProfile {
+        CameraProfile { tone, ..self }
     }
 
     pub fn matrix(&self) -> Mat3 {
@@ -70,12 +84,12 @@ impl CameraProfile {
     }
 }
 
-/// LightCraft's configuration folder (settings, GPU marker, camera profiles); one helper for the app.
+/// The app's configuration folder (settings, GPU marker, camera profiles); one helper for the app.
 pub use crate::config::config_dir;
 
 /// Where camera profiles are read from and written to.
 pub fn dir() -> Option<PathBuf> {
-    std::env::var_os("LIGHTCRAFT_CAMERA_PROFILES").map(PathBuf::from).or_else(|| config_dir().map(|d| d.join("camera-profiles")))
+    lcc_brand::env_os("CAMERA_PROFILES").map(PathBuf::from).or_else(|| config_dir().map(|d| d.join("camera-profiles")))
 }
 
 /// File name of `model`'s profile: letters, digits, `-` and `_` kept, anything else `_`.
@@ -106,7 +120,7 @@ fn parse(json: &[u8], origin: &str) -> Result<CameraProfile, String> {
 /// The built-in profile for `model`, if any.
 fn bundled(model: &str) -> Option<CameraProfile> {
     let (_, json) = BUNDLED.iter().find(|(m, _)| *m == model)?;
-    parse(json.as_bytes(), &format!("built-in profile {model}")).inspect_err(|e| eprintln!("lightcraft: ignoring camera profile {e}")).ok()
+    parse(json.as_bytes(), &format!("built-in profile {model}")).inspect_err(|e| eprintln!("{}: ignoring camera profile {e}", lcc_brand::BINARY)).ok()
 }
 
 /// Write `profile` to `dir` (created if needed) as `<model>.json`; returns the path.
@@ -140,11 +154,11 @@ pub fn get(model: &str) -> Option<Arc<CameraProfile>> {
         Some(path) if path.is_file() => match load(&path) {
             Ok(p) if p.model.trim() == model => Some(Arc::new(p)),
             Ok(p) => {
-                eprintln!("lightcraft: ignoring camera profile {}: it is for {:?}, not {model:?}", path.display(), p.model);
+                eprintln!("{}: ignoring camera profile {}: it is for {:?}, not {model:?}", lcc_brand::BINARY, path.display(), p.model);
                 None
             }
             Err(e) => {
-                eprintln!("lightcraft: ignoring camera profile {e}");
+                eprintln!("{}: ignoring camera profile {e}", lcc_brand::BINARY);
                 None
             }
         },
@@ -173,7 +187,7 @@ pub fn cache_key() -> u64 {
             })
             .collect();
         files.sort();
-        let mut h = lightcraft_preview::Hasher128::new();
+        let mut h = lcc_preview::Hasher128::new();
         for (name, len, modified) in &files {
             h.str(name).u64(*len).u64(*modified);
         }
@@ -184,30 +198,43 @@ pub fn cache_key() -> u64 {
     })
 }
 
-/// Per camera model: the photos read and their pooled colour pairs.
+/// Per camera model: the photos read and their pooled colour pairs and tone samples.
 #[derive(Default)]
 pub struct Pool {
-    models: HashMap<String, (usize, Vec<([f64; 3], [f64; 3])>)>,
+    models: HashMap<String, Model>,
 }
 
-/// Most colour pairs kept per photo, so a few busy photos can't dominate a profile.
+#[derive(Default)]
+struct Model {
+    files: usize,
+    pairs: Vec<([f64; 3], [f64; 3])>,
+    tone: Vec<([f64; 3], f64)>,
+}
+
+/// Most colour pairs (and, separately, tone samples) kept per photo, so a few busy photos can't dominate a profile.
 const PAIRS_PER_FILE: usize = 4000;
+
+/// Every `n`-th item, `n` chosen to keep at most [`PAIRS_PER_FILE`].
+fn thinned<T>(items: Vec<T>) -> impl Iterator<Item = T> {
+    let step = items.len().div_ceil(PAIRS_PER_FILE).max(1);
+    items.into_iter().step_by(step)
+}
 
 impl Pool {
     /// Add one raw file's colour pairs. `Ok(None)` when the file can't contribute (not an ARW,
     /// NEF or RAF without colour matrices, no usable camera JPEG, too little colour).
     pub fn add(&mut self, bytes: &[u8]) -> Result<Option<String>, String> {
-        let mut raw = lightcraft_raw::decode(bytes).map_err(|e| e.to_string())?;
+        let mut raw = lcc_raw::decode(bytes).map_err(|e| e.to_string())?;
         // colour only: geometric lens corrections would stop the sensor proxy from binning (the pairs still follow
         // the warp the camera applied to its JPEG)
         let lens = crate::camera_preview::lens_geometry(&raw.opcodes.list3);
         raw.opcodes.list3.retain(|op| !op.is_lens_correction());
         let Some(model) = raw.metadata.model.as_deref().map(str::trim).filter(|m| !m.is_empty()) else { return Ok(None) };
-        let Some(pairs) = crate::camera_preview::profile_pairs(&raw, bytes, lens.as_ref()) else { return Ok(None) };
-        let step = pairs.len().div_ceil(PAIRS_PER_FILE).max(1);
+        let Some(samples) = crate::camera_preview::profile_samples(&raw, bytes, lens.as_ref()) else { return Ok(None) };
         let entry = self.models.entry(model.to_owned()).or_default();
-        entry.0 += 1;
-        entry.1.extend(pairs.into_iter().step_by(step));
+        entry.files += 1;
+        entry.pairs.extend(thinned(samples.colour));
+        entry.tone.extend(thinned(samples.tone));
         Ok(Some(model.to_owned()))
     }
 
@@ -217,26 +244,28 @@ impl Pool {
         models.sort_by(|a, b| a.0.cmp(b.0));
         models
             .into_iter()
-            .filter(|(_, (files, _))| *files >= min_files)
-            .map(|(model, (files, pairs))| {
-                let (matrix, hue_sat) = crate::camera_preview::fit_profile(pairs).ok_or_else(|| format!("{model}: no usable colour fit"))?;
-                Ok(CameraProfile::new(model, *files, pairs.len(), matrix, hue_sat))
+            .filter(|(_, m)| m.files >= min_files)
+            .map(|(model, m)| {
+                let (matrix, hue_sat) = crate::camera_preview::fit_profile(&m.pairs).ok_or_else(|| format!("{model}: no usable colour fit"))?;
+                let tone = crate::camera_preview::fit_profile_tone(&m.tone, &matrix);
+                Ok(CameraProfile::new(model, m.files, m.pairs.len(), matrix, hue_sat).with_tone(tone))
             })
             .collect()
     }
 
     /// Add another pool's photos and pairs (pools filled on separate threads).
     pub fn merge(&mut self, other: Pool) {
-        for (model, (files, pairs)) in other.models {
+        for (model, m) in other.models {
             let entry = self.models.entry(model).or_default();
-            entry.0 += files;
-            entry.1.extend(pairs);
+            entry.files += m.files;
+            entry.pairs.extend(m.pairs);
+            entry.tone.extend(m.tone);
         }
     }
 
     /// Photos read per model.
     pub fn files(&self) -> Vec<(String, usize)> {
-        let mut v: Vec<_> = self.models.iter().map(|(m, (n, _))| (m.clone(), *n)).collect();
+        let mut v: Vec<_> = self.models.iter().map(|(name, m)| (name.clone(), m.files)).collect();
         v.sort();
         v
     }
@@ -276,6 +305,14 @@ mod tests {
         let mut p = profile();
         p.version = 99;
         assert!(bad(p), "unknown version");
+        // a pooled tone curve round-trips; a broken one (knots going backwards) is a damaged file
+        let toned = profile().with_tone(CameraTone::default_raw());
+        let path = save(&toned, &dir).unwrap();
+        assert_eq!(load(&path).unwrap(), toned);
+        let mut json: serde_json::Value = serde_json::to_value(&toned).unwrap();
+        json["tone"]["knots"][3][0] = serde_json::json!(5.0);
+        std::fs::write(dir.join("bad.json"), serde_json::to_vec(&json).unwrap()).unwrap();
+        assert!(load(&dir.join("bad.json")).is_err(), "invalid tone curve");
         std::fs::write(dir.join("junk.json"), b"{not json").unwrap();
         assert!(load(&dir.join("junk.json")).is_err());
         assert!(load(&dir.join("missing.json")).is_err());

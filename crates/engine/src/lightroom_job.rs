@@ -117,7 +117,7 @@ impl LightroomArchiveFinalization {
         if bytes.len() > MAX_INDEX_BYTES {
             return Err(error("Lightroom import index exceeds 16 MiB"));
         }
-        lightcraft_catalog::safe_file::write_atomic(&path, &bytes).map_err(|e| error(e.to_string()))
+        lcc_catalog::safe_file::write_atomic(&path, &bytes).map_err(|e| error(e.to_string()))
     }
 
     pub fn path(&self) -> Option<&Path> {
@@ -354,6 +354,7 @@ mod tests {
             collections: Vec::new(),
             members: Vec::new(),
             collection_content: Vec::new(),
+            stacks: Vec::new(),
             warnings: Vec::new(),
         }
     }
@@ -397,6 +398,7 @@ mod tests {
                 collections: Vec::new(),
                 members: Vec::new(),
                 collection_content: Vec::new(),
+                stacks: Vec::new(),
                 warnings: Vec::new(),
             },
             normal: Prepared::default(),
@@ -494,8 +496,8 @@ mod tests {
         let first = commit_prepared(&mut session, prepared).unwrap();
         assert_eq!(first.report["mapping"]["1"].as_u64(), Some(1));
         assert_eq!(session.undo.len(), 1);
-        let id = lightcraft_catalog::PhotoId(1);
-        let mut personal = lightcraft_develop::DevelopSettings::default();
+        let id = lcc_catalog::PhotoId(1);
+        let mut personal = lcc_develop::DevelopSettings::default();
         personal.light.exposure = 1.5;
         session.set_develop(id, personal, "Personal").unwrap();
         let before = session.catalog.photo(id).map(|photo| photo.develop.clone());
@@ -508,7 +510,7 @@ mod tests {
 
     #[test]
     fn oversized_history_archive_keeps_prepared_import_successful_with_warning() {
-        let archive_dir = std::env::temp_dir().join(format!("lightcraft-lr-prepared-scale-{}", std::process::id()));
+        let archive_dir = std::env::temp_dir().join(format!("app-lr-prepared-scale-{}", std::process::id()));
         let mut data = empty_data();
         data.photos = (0..5_000)
             .map(|source_id| {
@@ -560,9 +562,63 @@ mod tests {
         std::fs::remove_dir_all(archive_dir).unwrap();
     }
 
+    /// A 7,984-photo Lightroom catalog sat for minutes after its tables were read: each photo's
+    /// XMP stamp worked out the whole catalog's sidecar owners again (quadratic). A large import
+    /// stamps its photos in time proportional to its size.
+    #[test]
+    fn a_large_import_stamps_its_photos_in_linear_time() {
+        let mut data = empty_data();
+        data.photos = (0..20_000)
+            .map(|source_id| lightroom_catalog::CatalogPhoto {
+                source_id,
+                uuid: format!("large-{source_id}"),
+                path: format!("/missing/large/IMG_{source_id:06}.jpg"),
+                image: std::collections::BTreeMap::from([
+                    ("id_local".into(), serde_json::json!(source_id)),
+                    ("fileFormat".into(), serde_json::json!("JPG")),
+                    ("fileWidth".into(), serde_json::json!(1)),
+                    ("fileHeight".into(), serde_json::json!(1)),
+                ]),
+                settings: String::new(),
+                xmp: String::new(),
+                keywords: Vec::new(),
+                history: Vec::new(),
+                snapshots: Vec::new(),
+            })
+            .collect();
+        let mut session = crate::Session::new();
+        let token = LightroomLibraryToken::capture(&session);
+        let prepared = PreparedLightroom {
+            data,
+            normal: Prepared::default(),
+            index: ImportIndex::default(),
+            archive_path: None,
+            token,
+            missing_sources: HashSet::new(),
+            update_existing: false,
+            now: "2026-01-01T00:00:00".into(),
+            cancelled: false,
+        };
+        let completion = commit_prepared(&mut session, prepared).unwrap();
+        assert_eq!(completion.report["photos"], 20_000);
+        // the photos' originals found at import start in step with their sidecars
+        let ids: Vec<_> = session.catalog.photos().map(|p| p.id).collect();
+        let started = std::time::Instant::now();
+        session.record_xmp_stamps(&ids, true);
+        // quadratic took minutes here even in release; linear is well under a second
+        assert!(started.elapsed() < std::time::Duration::from_secs(90), "{:?}", started.elapsed());
+        // Read Metadata from File over all of them works the sidecar owners out once too
+        session.selection.ids = ids.to_vec();
+        let started = std::time::Instant::now();
+        let read =
+            session.execute("photo.readMetadataFromFile", &serde_json::json!({ "ids": ids.iter().map(|id| id.0).collect::<Vec<_>>() })).unwrap();
+        assert_eq!(read["failed"].as_array().map(Vec::len), Some(20_000), "no file has a sidecar here");
+        assert!(started.elapsed() < std::time::Duration::from_secs(90), "{:?}", started.elapsed());
+    }
+
     #[test]
     fn execute_fn_import_does_not_rewrite_source_sidecar() {
-        let dir = std::env::temp_dir().join(format!("lightcraft-lr-job-sidecar-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("app-lr-job-sidecar-{}", std::process::id()));
         let path = dir.join("source.jpg");
         let sidecar = dir.join("source.xmp");
         std::fs::create_dir_all(&dir).unwrap();

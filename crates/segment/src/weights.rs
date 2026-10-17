@@ -1,7 +1,7 @@
 //! Safetensors weights read on demand.
 //!
 //! Tensors are read from the file when a module asks for them (positional reads, no memory
-//! map: `unsafe` stays in `lightcraft-sysmem`), so building only the point-prompt model never
+//! map: `unsafe` stays in `lcc-sysmem`), so building only the point-prompt model never
 //! touches the text encoder's bytes.
 
 use std::collections::HashMap;
@@ -49,7 +49,10 @@ impl Weights {
             }
             let dtype = match v.get("dtype").and_then(|d| d.as_str()) {
                 Some("F32") => DType::F32,
-                other => return Err(Error::Model(format!("{name}: unsupported dtype {other:?} (the SAM 3 checkpoint is F32)"))),
+                // integer buffers (BiRefNet's relative position indices and batch-norm counters)
+                // are recomputed or unused: skipped, never read
+                Some("I64") => continue,
+                other => return Err(Error::Model(format!("{name}: unsupported dtype {other:?} (the checkpoints are F32)"))),
             };
             let shape: Vec<usize> = v
                 .get("shape")
@@ -72,13 +75,13 @@ impl Weights {
         Ok(Arc::new(Self { file: Mutex::new(file), entries, data_start: 8 + n }))
     }
 
-    pub fn contains(&self, name: &str) -> bool {
-        self.entries.contains_key(name)
-    }
-
-    /// The shape stored in the header for `name`, without reading its data.
+    /// The shape of tensor `name`, if the file has it.
     pub fn shape(&self, name: &str) -> Option<&[usize]> {
         self.entries.get(name).map(|e| e.shape.as_slice())
+    }
+
+    pub fn contains(&self, name: &str) -> bool {
+        self.entries.contains_key(name)
     }
 
     /// Tensor `name` as stored, on the CPU.

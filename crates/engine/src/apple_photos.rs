@@ -7,7 +7,7 @@
 //! so no name or path can change what the script does and nothing needs escaping.
 //!
 //! This sends Apple Events to Photos' import command; it does not synthesize keystrokes or clicks.
-//! The first time, macOS asks the user whether LightCraft may control Photos (System Settings ›
+//! The first time, macOS asks the user whether the app may control Photos (System Settings ›
 //! Privacy & Security › Automation). A packaged app needs the `com.apple.security.automation.
 //! apple-events` entitlement and an `NSAppleEventsUsageDescription` for that (packaging/macos).
 //!
@@ -38,7 +38,7 @@ use crate::activity::{Activity, Cancel, TaskGuard};
 /// folders are never used. None there: a new top-level album is made. More than one: nothing is
 /// imported (error [`AMBIGUOUS_ALBUM`]).
 pub const SCRIPT: &str = r#"on run argv
-	if (count of argv) < 3 then error "LightCraft: no files to import" number -50
+	if (count of argv) < 3 then error "Photos import: no files to import" number -50
 	set albumName to item 2 of argv
 	set mediaFiles to {}
 	repeat with i from 3 to (count of argv)
@@ -63,7 +63,7 @@ pub const SCRIPT: &str = r#"on run argv
 					end considering
 					if sameName and candidateParent is missing value then set end of topLevel to contents of candidate
 				end repeat
-				if (count of topLevel) > 1 then error "LightCraft: several top-level albums have this name" number 23601
+				if (count of topLevel) > 1 then error "Photos import: several top-level albums have this name" number 23601
 				if (count of topLevel) is 1 then
 					set targetAlbum to item 1 of topLevel
 				else
@@ -101,7 +101,7 @@ end run"#;
 
 /// The first script argument, always the same: osascript's option parsing stops at the first
 /// argument that isn't an option, so an album name or path starting with `-` is never read as one.
-pub const MARKER: &str = "lightcraft-photos-import";
+pub const MARKER: &str = "photos-import";
 
 /// The error number [`SCRIPT`] raises when more than one top-level album has the name asked for.
 pub const AMBIGUOUS_ALBUM: i64 = 23601;
@@ -115,7 +115,7 @@ pub const KEPT_JOBS: usize = 32;
 /// Why there is no Photos runner in this session.
 pub fn unavailable() -> &'static str {
     if cfg!(target_os = "macos") {
-        "Apple Photos isn't connected in this session (it is in the desktop app and lightcraft-cli)"
+        "Apple Photos isn't connected in this session (it is in the desktop app and lcc-cli)"
     } else {
         "Apple Photos is only available on macOS"
     }
@@ -173,9 +173,12 @@ fn error_number(stderr: &str) -> Option<i64> {
 /// What to tell the user when osascript failed importing into `album`.
 pub fn explain(out: &Output, album: &str) -> String {
     match error_number(&out.stderr) {
-        Some(-1743 | -1744) => "LightCraft isn't allowed to control Photos. Allow it in System Settings › Privacy & Security › Automation \
-             (turn on Photos under LightCraft, or under your terminal app for lightcraft-cli), then try again."
-            .into(),
+        Some(-1743 | -1744) => format!(
+            "{app} isn't allowed to control Photos. Allow it in System Settings › Privacy & Security › Automation \
+             (turn on Photos under {app}, or under your terminal app for {cli}), then try again.",
+            app = lcc_brand::DISPLAY_NAME,
+            cli = lcc_brand::CLI_BINARY
+        ),
         Some(-600 | -10810 | -10814) => "Apple Photos couldn't be found or opened on this Mac.".into(),
         Some(-128) => "The import was cancelled in Photos.".into(),
         Some(-1712) => "Photos didn't answer in time; it may still be importing. Check Photos before trying again.".into(),
@@ -485,7 +488,7 @@ impl Imports {
         self.wait_idle_within(WaitLimits::default())
     }
 
-    /// Wait until no import is reserved or running: a process about to end (lightcraft-cli, an
+    /// Wait until no import is reserved or running: a process about to end (lcc-cli, an
     /// MCP server at EOF, a snapshot script) calls this so it never abandons osascript or an
     /// import's result. The deadline follows the job as it goes: while an export still writes
     /// the files it reserved the import for, `limits.writing` from the start of the wait; once
@@ -526,7 +529,7 @@ pub struct WaitLimits {
 }
 
 impl Default for WaitLimits {
-    /// An hour of writing (what `lightcraft-cli snapshot` gives a background export), then the
+    /// An hour of writing (what `lcc-cli snapshot` gives a background export), then the
     /// import's osascript limit ([`timeout_for`], at most two hours) and half a minute; three hours
     /// and a minute in all.
     fn default() -> Self {
@@ -535,7 +538,7 @@ impl Default for WaitLimits {
 }
 
 impl crate::Session {
-    /// Before a front end without a window ends (lightcraft-cli, the MCP server, a headless
+    /// Before a front end without a window ends (lcc-cli, the MCP server, a headless
     /// snapshot), on every exit path: wait for an Apple Photos import still reserved or running
     /// (`export.addToPhotos {wait: false}`, a background export still writing), bounded
     /// ([`Imports::wait_idle`], [`WaitLimits::default`]), so the process never abandons osascript
@@ -851,9 +854,9 @@ mod tests {
         assert!(filter.contains("parent of candidate") && filter.contains("candidateParent is missing value"), "{filter}");
         assert!(filter.contains("considering case"), "exact names: {filter}");
         assert!(filter.contains(&format!(
-            "if (count of topLevel) > 1 then error \"LightCraft: several top-level albums have this name\" number {AMBIGUOUS_ALBUM}"
+            "if (count of topLevel) > 1 then error \"Photos import: several top-level albums have this name\" number {AMBIGUOUS_ALBUM}"
         )));
-        let m = explain(&failed(&format!("execution error: LightCraft: several top-level albums have this name ({AMBIGUOUS_ALBUM})")), "Trip");
+        let m = explain(&failed(&format!("execution error: Photos import: several top-level albums have this name ({AMBIGUOUS_ALBUM})")), "Trip");
         assert!(m.contains("More than one album at the top level of Photos is named “Trip”") && m.contains("nothing was added"), "{m}");
     }
 

@@ -28,9 +28,9 @@
 
 use super::{COLOR_BALANCE, CR2_SLICE, SENSOR_INFO, words};
 use crate::{BlackLevel, ColorData, Mode, OpcodeLists, RawData, RawError, RawFormat, RawImage, Rect, Result, ljpeg};
-use lightcraft_geom::Orientation;
-use lightcraft_tiff::image::{Chunk, chunk_bytes};
-use lightcraft_tiff::{ByteOrder, Ifd, Tiff, makernote, tags as t};
+use lcc_geom::Orientation;
+use lcc_tiff::image::{Chunk, chunk_bytes};
+use lcc_tiff::{ByteOrder, Ifd, Tiff, makernote, tags as t};
 use rayon::prelude::*;
 
 /// Chroma samples are centred on this value.
@@ -335,7 +335,7 @@ fn colour_data_black(words: &[u64]) -> Option<f32> {
 /// Decode a Canon sRAW / mRAW CR2 into linear white-balanced camera RGB (`cpp` 3).
 pub(super) fn decode(bytes: &[u8], tiff: &Tiff, raw: &Ifd, mode: Mode) -> Result<RawImage> {
     let ifd0 = &tiff.ifds[0];
-    let off = raw.u64(t::STRIP_OFFSETS).ok_or(RawError::Tiff(lightcraft_tiff::TiffError::MissingTag(t::STRIP_OFFSETS)))?;
+    let off = raw.u64(t::STRIP_OFFSETS).ok_or(RawError::Tiff(lcc_tiff::TiffError::MissingTag(t::STRIP_OFFSETS)))?;
     let len = raw.u64(t::STRIP_BYTE_COUNTS).unwrap_or(bytes.len() as u64 - off.min(bytes.len() as u64));
     let chunk = Chunk { index: 0, x: 0, y: 0, width: 0, height: 0, plane: 0, offset: off, len };
     let src = chunk_bytes(bytes, &chunk).ok_or_else(|| RawError::Corrupt("raw strip outside file".into()))?;
@@ -371,7 +371,7 @@ pub(super) fn decode(bytes: &[u8], tiff: &Tiff, raw: &Ifd, mode: Mode) -> Result
         }
     };
 
-    let mut metadata = lightcraft_meta::from_tiff(tiff);
+    let mut metadata = lcc_meta::from_tiff(tiff);
     metadata.width = Some(active.width as u32);
     metadata.height = Some(active.height as u32);
     let img = RawImage {
@@ -403,7 +403,7 @@ pub(super) fn decode(bytes: &[u8], tiff: &Tiff, raw: &Ifd, mode: Mode) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lightcraft_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
+    use lcc_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
 
     const SRAW_TYPE_TAG: u16 = 0xc6c5;
 

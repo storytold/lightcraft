@@ -2,7 +2,7 @@
 use super::*;
 use crate::rename::{MoveFs, RealFs};
 use crate::tests_xmp::same_path_or_file;
-use lightcraft_catalog::{Op, Photo, Source};
+use lcc_catalog::{Op, Photo, Source};
 use serde_json::json;
 
 struct Faults(Vec<PathBuf>);
@@ -12,6 +12,9 @@ impl MoveFs for Faults {
     }
     fn is_file(&self, p: &Path) -> bool {
         RealFs.is_file(p)
+    }
+    fn listed(&self, p: &Path) -> bool {
+        RealFs.listed(p)
     }
     fn same_file(&self, a: &Path, b: &Path) -> bool {
         RealFs.same_file(a, b)
@@ -35,7 +38,7 @@ impl MoveFs for Faults {
 }
 fn packet(marker: &str) -> String {
     format!(
-        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:fixture="urn:lightcraft:provenance-test" xmp:Rating="5" fixture:Marker="{marker}"/></rdf:RDF></x:xmpmeta>"#
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:fixture="urn:example:provenance-test" xmp:Rating="5" fixture:Marker="{marker}"/></rdf:RDF></x:xmpmeta>"#
     )
 }
 fn path(photo: &Path, style: SidecarNaming, upper: bool) -> PathBuf {
@@ -120,6 +123,7 @@ fn replace(p: &Path, held: &Path, in_place: bool) -> (Vec<u8>, Vec<u8>) {
 
 #[test]
 fn replaced_and_in_place_companions_block_save_autowrite_retry_and_file_history() {
+    crate::tests_xmp::skip_on_case_insensitive_volume!();
     for style in [SidecarNaming::Stem, SidecarNaming::Full] {
         for upper_stem in [false, true] {
             for upper_full in [false, true] {
@@ -166,6 +170,7 @@ fn replaced_and_in_place_companions_block_save_autowrite_retry_and_file_history(
 
 #[test]
 fn failed_redo_and_discarded_or_pruned_history_keep_companion_provenance() {
+    crate::tests_xmp::skip_on_case_insensitive_volume!();
     for owner in ["redo", "discarded", "pruned"] {
         let mut f = partial(SidecarNaming::Stem, false, false, false);
         if owner == "pruned" {
@@ -224,6 +229,7 @@ fn two_repairs() -> Option<Partial> {
 
 #[test]
 fn absent_peer_destinations_are_not_owned_and_retirement_records_only_completed_packets() {
+    crate::tests_xmp::skip_on_case_insensitive_volume!();
     let Some(mut f) = two_repairs() else { return };
     let future = path(&f.b, SidecarNaming::Full, false);
     let upper = path(&f.b, SidecarNaming::Full, true);
@@ -258,6 +264,7 @@ fn absent_peer_destinations_are_not_owned_and_retirement_records_only_completed_
 
 #[test]
 fn own_atomic_shared_packet_writes_advance_retained_versions_and_failures_do_not() {
+    crate::tests_xmp::skip_on_case_insensitive_volume!();
     let mut f = partial(SidecarNaming::Stem, false, false, true);
     let shared = path(&f.a, SidecarNaming::Stem, false);
     let shared_before = std::fs::read(&shared).unwrap();
@@ -272,7 +279,7 @@ fn own_atomic_shared_packet_writes_advance_retained_versions_and_failures_do_not
     std::fs::rename(&f.source, &held).unwrap();
     let before = queued(&f.s);
     {
-        let _fault = lightcraft_catalog::safe_file::fail_writes_after(0);
+        let _fault = lcc_catalog::safe_file::fail_writes_after(0);
         assert!(f.s.save_sidecar(PhotoId(2)).is_err());
     }
     assert_eq!(queued(&f.s), before, "failed atomic writes must not advance provenance");
@@ -298,6 +305,7 @@ fn own_atomic_shared_packet_writes_advance_retained_versions_and_failures_do_not
 
 #[test]
 fn replaced_copy_keeps_its_shared_original_and_repair_source_byte_identical() {
+    crate::tests_xmp::skip_on_case_insensitive_volume!();
     let mut f = partial(SidecarNaming::Stem, true, true, true);
     let shared = path(&f.a, SidecarNaming::Stem, true);
     let shared_before = std::fs::read(&shared).unwrap();
@@ -323,6 +331,7 @@ fn replaced_copy_keeps_its_shared_original_and_repair_source_byte_identical() {
 
 #[test]
 fn changed_separated_sources_are_not_moved_or_retired() {
+    crate::tests_xmp::skip_on_case_insensitive_volume!();
     for style in [SidecarNaming::Stem, SidecarNaming::Full] {
         let mut f = partial(style, false, true, false);
         let held = f.dir.join("source-original-held.xmp");
@@ -358,8 +367,8 @@ fn detached_history_entry_is_checked_before_unrelated_global_retirement() {
         target: PathBuf,
     }
     let root = crate::tests_xmp::temp_dir("detached-history-preflight-contract");
-    let image = lightcraft_raster::Rgba8::from_fn(4, 3, |_, _| [40, 80, 120, 255]);
-    let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&image), &Default::default()).unwrap();
+    let image = lcc_raster::Rgba8::from_fn(4, 3, |_, _| [40, 80, 120, 255]);
+    let png = lcc_codecs::encode_png(&lcc_codecs::EncodeImage::rgba8(&image), &Default::default()).unwrap();
     let mut s = Session::new();
     s.xmp.naming = SidecarNaming::Stem;
     let mut native = Vec::new();
@@ -394,7 +403,7 @@ fn detached_history_entry_is_checked_before_unrelated_global_retirement() {
         assert_eq!(s.undo.len(), i + 1);
         assert_eq!(queued(&s).len(), i + 1);
         assert_eq!(s.catalog.photo(id).unwrap().source, Source::File { path: moved.to_string_lossy().into_owned() });
-        let decoded = lightcraft_codecs::decode(&std::fs::read(&moved).unwrap(), Default::default()).unwrap();
+        let decoded = lcc_codecs::decode(&std::fs::read(&moved).unwrap(), Default::default()).unwrap();
         assert_eq!((decoded.width, decoded.height), (4, 3));
         native.push(NativePartial {
             id,

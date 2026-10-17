@@ -1,21 +1,15 @@
 //! One process per library: an exclusive OS lock on `<library>/catalog.lock`, held for as long as
 //! the library is open (issue #99).
 //!
-//! Two processes on the same library (the app and `lightcraft-cli --library`, two app instances,
+//! Two processes on the same library (the app and the CLI with `--library`, two app instances,
 //! two computers on a shared folder) would each keep their own catalog and `seq` counter, and
 //! whichever wrote the last snapshot would silently drop the other's edits. So opening a library
 //! takes the lock first, and a second opener gets [`LockError::InUse`] instead.
 //!
 //! - The lock is the OS's (`flock` on Unix, `LockFileEx` on Windows, via [`std::fs::File::try_lock`]):
-//!   it is released explicitly when the [`LibraryLock`] is dropped and, after a crash or a kill, by
-//!   the OS when the process ends. A `catalog.lock` file left behind is therefore never "stale":
-//!   only a lock that's actually held refuses the open.
-//! - Dropping the lock calls [`std::fs::File::unlock`] rather than relying on the handle closing.
-//!   On Unix an `flock` lock belongs to the open file description and lasts while *any* descriptor
-//!   on it is open; a process that another thread is spawning holds a copy of every descriptor
-//!   (`O_CLOEXEC` only closes them at `execve`), so closing ours would leave the library "already
-//!   open" for a moment and a re-open would be refused (issue #680). `LOCK_UN` through our
-//!   descriptor frees the lock whatever copies a child still holds.
+//!   it is released when the [`LibraryLock`] is dropped and, after a crash or a kill, by the OS when
+//!   the process ends. A `catalog.lock` file left behind is therefore never "stale": only a lock
+//!   that's actually held refuses the open.
 //! - Who holds it (process id, computer, program, version) is written to `catalog.lock.owner`, for
 //!   the error message. It's a separate file because a Windows lock also blocks reading the
 //!   locked file. It's only a hint: it may be missing or left over from a crash.
@@ -40,7 +34,7 @@ pub struct LockOwner {
     pub pid: u32,
     /// Computer name, if known.
     pub host: String,
-    /// The program (`LightCraft`, `lightcraft-cli`…) and its version.
+    /// The program (the display name or the CLI binary name) and its version.
     pub program: String,
     pub version: String,
     /// When it opened the library (seconds since 1970).
@@ -59,9 +53,9 @@ impl LockOwner {
         }
     }
 
-    /// "LightCraft 0.3.0 (process 123 on studio-mac)".
+    /// "<app> 0.3.0 (process 123 on studio-mac)".
     pub fn describe(&self) -> String {
-        let program = if self.program.is_empty() { "another LightCraft" } else { self.program.as_str() };
+        let program = if self.program.is_empty() { "another program" } else { self.program.as_str() };
         let version = if self.version.is_empty() { String::new() } else { format!(" {}", self.version) };
         let host = if self.host.is_empty() {
             String::new()
@@ -83,7 +77,7 @@ fn host_name() -> String {
 #[derive(Debug, thiserror::Error)]
 pub enum LockError {
     /// Another process has the library open.
-    #[error("This library is already open in {}. Close it there first.", .0.as_ref().map(LockOwner::describe).unwrap_or_else(|| "another LightCraft program".into()))]
+    #[error("This library is already open in {}. Close it there first.", .0.as_ref().map(LockOwner::describe).unwrap_or_else(|| "another program".into()))]
     InUse(Option<LockOwner>),
 }
 
@@ -93,7 +87,7 @@ pub enum LockError {
 pub struct LibraryLock {
     dir: PathBuf,
     /// `None` when the file system can't lock (the library is open unlocked).
-    file: Option<File>,
+    _file: Option<File>,
     held: bool,
 }
 
@@ -102,7 +96,7 @@ impl LibraryLock {
     pub fn acquire(dir: &Path, program: &str) -> Result<LibraryLock, LockError> {
         let unlocked = |why: io::Error| {
             log::warn!("library {}: can't lock {LOCK} ({why}); opening it without protection against a second program", dir.display());
-            LibraryLock { dir: dir.to_path_buf(), file: None, held: false }
+            LibraryLock { dir: dir.to_path_buf(), _file: None, held: false }
         };
         let file = match OpenOptions::new().read(true).write(true).create(true).truncate(false).open(dir.join(LOCK)) {
             Ok(f) => f,
@@ -122,7 +116,7 @@ impl LibraryLock {
         {
             log::warn!("library {}: can't write {OWNER}: {e}", dir.display());
         }
-        Ok(LibraryLock { dir: dir.to_path_buf(), file: Some(file), held: true })
+        Ok(LibraryLock { dir: dir.to_path_buf(), _file: Some(file), held: true })
     }
 
     /// The OS lock is held (`false`: the file system can't lock; opened unprotected).
@@ -133,30 +127,14 @@ impl LibraryLock {
     pub fn dir(&self) -> &Path {
         &self.dir
     }
-
-    /// Another descriptor on the locked file: what a process spawned by another thread holds
-    /// between fork and exec (a `dup` refers to the same open file description). Tests only (the
-    /// test that uses it is Unix-only: `flock` semantics).
-    #[cfg(all(test, unix))]
-    pub(crate) fn descriptor_copy(&self) -> Option<File> {
-        self.file.as_ref().and_then(|f| f.try_clone().ok())
-    }
 }
 
 impl Drop for LibraryLock {
     /// Remove the owner note while still holding the lock (so it can't delete the next holder's),
-    /// then release the lock explicitly. Closing the handle isn't enough on Unix: `flock` lasts
-    /// while any copy of the descriptor is open, and a process another thread is spawning holds a
-    /// copy of every descriptor until it execs (issue #680). If the unlock fails the handle still
-    /// closes right after, which releases the lock once every copy is gone, as before.
+    /// then the file handle closes and the OS releases the lock.
     fn drop(&mut self) {
         if self.held {
             let _ = std::fs::remove_file(self.dir.join(OWNER));
-            if let Some(f) = &self.file
-                && let Err(e) = f.unlock()
-            {
-                log::warn!("library {}: can't release {LOCK}: {e}", self.dir.display());
-            }
         }
     }
 }

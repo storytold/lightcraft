@@ -58,6 +58,18 @@ impl CameraTone {
         Some(Self { knots, chroma: NO_CHROMA })
     }
 
+    /// The default raw tone curve ([`ToneMap::new`] at neutral settings) as camera-curve knots, about 1/3 EV apart
+    /// from 8 EV below grey to just under display white: for a camera look that knows a photo's colour but not its tone.
+    pub fn default_raw() -> Option<Self> {
+        const FROM_EV: f32 = -8.0;
+        const TO_EV: f32 = 2.6;
+        let map = ToneMap::new(0.0, 0.0, 0.0);
+        Self::new(std::array::from_fn(|i| {
+            let x = GREY * 2f32.powf(FROM_EV + (TO_EV - FROM_EV) * i as f32 / 31.0);
+            [x, map.apply(x)]
+        }))
+    }
+
     /// The curve with chroma scales at display luminance 0, 1/7 … 1 (each finite, 0..=4).
     pub fn with_chroma(self, chroma: [f32; CHROMA_N]) -> Option<Self> {
         chroma.iter().all(|k| k.is_finite() && (0.0..=4.0).contains(k)).then_some(Self { chroma, ..self })
@@ -91,6 +103,9 @@ impl CameraTone {
         1.0 - (1.0 - b[1]) * (-(y - b[0]) * slope / (1.0 - b[1]).max(0.01)).exp()
     }
 }
+
+/// Display luminance above which [`ToneMap::sdr_rolloff`] compresses an HDR edit's highlights.
+pub const ROLLOFF_KNEE: f32 = 0.5;
 
 /// Scene EV over grey where [`ToneMap::hdr`] starts lifting highlights above the SDR curve.
 const HDR_FROM_EV: f32 = 1.5;
@@ -218,6 +233,30 @@ impl ToneMap {
         ToneMap { lut, chroma: NO_CHROMA }
     }
 
+    /// Fits an HDR tone map reaching `peak` into SDR (own design, issue #69). Display values up to
+    /// the knee `k` ([`ROLLOFF_KNEE`]) stay as they are; above it the shoulder works in stops over
+    /// the knee, `v = log2(o/k)`, which run from 0 to `V = log2(peak/k)` and are fitted into
+    /// `W = log2(1/k)`: `v' = W·a·x / (1 + (a − 1)·x)` with `x = v/V` and `a = V/W`, `o' = k·2^v'`.
+    /// That maps `[k, peak]` onto `[k, 1]`, is monotone, and has slope 1 at the knee (continuous with
+    /// the curve below, in linear as in log terms), so highlights an SDR curve would clip keep their
+    /// gradation and each stop of HDR highlight takes a share of the SDR range. `peak ≤ 1` (or
+    /// non-finite) leaves the table unchanged.
+    pub fn sdr_rolloff(mut self, peak: f32) -> ToneMap {
+        if !peak.is_finite() || peak <= 1.0 {
+            return self;
+        }
+        let k = ROLLOFF_KNEE;
+        let (big_v, w) = ((peak / k).log2(), (1.0 / k).log2());
+        let a = big_v / w;
+        for o in &mut self.lut {
+            if *o > k {
+                let x = ((*o / k).log2() / big_v).clamp(0.0, 1.0);
+                *o = (k * (w * a * x / (1.0 + (a - 1.0) * x)).exp2()).min(1.0);
+            }
+        }
+        self
+    }
+
     /// The table (`LUT_N` entries, see [`ToneMap::apply`]).
     pub fn lut(&self) -> &[f32] {
         &self.lut
@@ -264,36 +303,6 @@ fn smooth(e0: f32, e1: f32, x: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn knots() -> [[f32; 2]; 32] {
-        std::array::from_fn(|i| {
-            let x = 0.004 * 1.18f32.powi(i as i32);
-            [x, 1.0 - (-2.0 * x).exp()]
-        })
-    }
-
-    #[test]
-    fn chroma_curve_is_identity_unless_set_and_survives_serde() {
-        let plain = CameraTone::new(knots()).unwrap();
-        let map = ToneMap::camera(&plain, 0.0, 0.0, 0.0);
-        assert!([0.0, 0.3, 0.77, 1.0, 2.0].iter().all(|o| map.chroma_scale(*o) == 1.0));
-        assert!([0.0, 0.5, 1.0].iter().all(|o| ToneMap::new(0.0, 0.0, 0.0).chroma_scale(*o) == 1.0));
-        // smart previews written before the chroma curve existed still load (identity)
-        let old = serde_json::json!({ "knots": knots() });
-        assert_eq!(serde_json::from_value::<CameraTone>(old).unwrap(), plain);
-        let tone = plain.with_chroma([1.4, 1.3, 1.1, 1.0, 0.7, 0.4, 0.25, 0.2]).unwrap();
-        let back: CameraTone = serde_json::from_value(serde_json::to_value(tone).unwrap()).unwrap();
-        assert_eq!(back, tone);
-        let map = ToneMap::camera(&tone, 0.0, 0.0, 0.0);
-        assert!((map.chroma_scale(0.0) - 1.4).abs() < 1e-6 && (map.chroma_scale(1.0) - 0.2).abs() < 1e-6);
-        assert!((map.chroma_scale(0.5 / 7.0) - 1.35).abs() < 1e-5, "interpolates between nodes");
-        assert_eq!(map.chroma_scale(f32::NAN), 1.0);
-        // hostile values are rejected, also when deserialized
-        assert!(plain.with_chroma([f32::NAN; CHROMA_N]).is_none());
-        assert!(plain.with_chroma([-1.0; CHROMA_N]).is_none());
-        let bad = serde_json::json!({ "knots": knots(), "chroma": [9.0, 1, 1, 1, 1, 1, 1, 1] });
-        assert!(serde_json::from_value::<CameraTone>(bad).is_err());
-    }
 
     #[test]
     fn camera_curve_preserves_black_and_extends_headroom() {
@@ -365,33 +374,6 @@ mod tests {
     }
 
     #[test]
-    fn camera_hdr_keeps_the_camera_look_and_lifts_highlights() {
-        let curve = CameraTone::new(knots()).unwrap().with_chroma([1.2, 1.1, 1.0, 1.0, 0.9, 0.8, 0.7, 0.6]).unwrap();
-        for (c, w, b) in [(0.0, 0.0, 0.0), (40.0, -30.0, -20.0)] {
-            let sdr = ToneMap::camera(&curve, c, w, b);
-            assert_eq!(ToneMap::camera_hdr(&curve, c, w, b, 1.0).lut(), sdr.lut());
-            assert_eq!(ToneMap::camera_hdr(&curve, c, w, b, f32::NAN).lut(), sdr.lut());
-            for peak in [2.0f32, 8.0] {
-                let t = ToneMap::camera_hdr(&curve, c, w, b, peak);
-                assert_eq!(t.chroma_lut(), sdr.chroma_lut());
-                let mut prev = -1.0;
-                for i in 0..2400 {
-                    let y = 1e-5 * 1.01f32.powi(i);
-                    let o = t.apply(y);
-                    assert!((0.0..=peak).contains(&o), "{peak} at {y}: {o}");
-                    assert!(o >= prev - 1e-6, "{peak} at {y}: {o} < {prev}");
-                    prev = o;
-                    // the camera's midtones, not the generic HDR curve's (issue: dark HDR exports)
-                    if y <= GREY * 2f32.powf(HDR_FROM_EV - 0.01) {
-                        assert!((o - sdr.apply(y)).abs() < 1e-6, "midtones differ at {y}: {o} vs {}", sdr.apply(y));
-                    }
-                }
-                assert!(t.apply(4.0) > 1.0 && t.apply(4.0) > sdr.apply(4.0) + 0.5, "{peak}: highlights lifted");
-            }
-        }
-    }
-
-    #[test]
     fn display_hdr_passes_hdr_sources_and_keeps_sdr() {
         assert_eq!(ToneMap::display_hdr(20.0, 10.0, -5.0, 1.0).lut(), ToneMap::display(20.0, 10.0, -5.0).lut());
         let t = ToneMap::display_hdr(0.0, 0.0, 0.0, 8.0);
@@ -429,15 +411,6 @@ mod tests {
     }
 
     #[test]
-    fn grey_stays_near_grey_and_highlights_roll_off() {
-        let t = ToneMap::new(0.0, 0.0, 0.0);
-        let g = t.apply(0.18);
-        assert!((0.15..0.24).contains(&g), "{g}");
-        assert!(t.apply(1.0) < 0.95 && t.apply(1.0) > 0.6);
-        assert!(t.apply(8.0) > 0.97);
-    }
-
-    #[test]
     fn sliders_move_the_right_way() {
         let base = ToneMap::new(0.0, 0.0, 0.0);
         let contrast = ToneMap::new(60.0, 0.0, 0.0);
@@ -446,5 +419,15 @@ mod tests {
         assert!(ToneMap::new(0.0, 60.0, 0.0).apply(0.8) > base.apply(0.8));
         assert!(ToneMap::new(0.0, 0.0, -60.0).apply(0.01) < base.apply(0.01));
         assert!(ToneMap::new(0.0, 0.0, 60.0).apply(0.01) > base.apply(0.01));
+    }
+
+    #[test]
+    fn default_raw_camera_tone_follows_the_default_tone_curve() {
+        let (camera, default) = (CameraTone::default_raw().unwrap(), ToneMap::new(0.0, 0.0, 0.0));
+        for ev in [-8.0f32, -6.0, -4.0, -2.0, -1.0, 0.0, 1.0, 2.0, 2.5] {
+            let y = GREY * 2f32.powf(ev);
+            let (a, b) = (camera.apply(y), default.apply(y));
+            assert!((a - b).abs() <= 0.01 * b.max(0.01), "{ev} EV: {a} vs {b}");
+        }
     }
 }

@@ -19,8 +19,8 @@ libraries. Measured on one real file (`DSCF9492.RAF`, 56.5 MB) over a GVFS/SMB s
 1. `read_prefix` reads the first `PREVIEW_PREFIX` (4 KiB); every format whose preview is locatable
    from the header keeps its pointer well inside that.
 2. For Fuji RAF the header's two big-endian `u32`s at **84** (offset) and **88** (length) are the
-   same fields `lightcraft_raw`'s RAF reader uses. When they declare more than the prefix holds, the
-   prefix is re-read once at exactly that extent: `lightcraft_raw::bounded_preview` reports the range
+   same fields `lcc_raw`'s RAF reader uses. When they declare more than the prefix holds, the
+   prefix is re-read once at exactly that extent: `lcc_raw::bounded_preview` reports the range
    its buffer covers (`slice` clamps to `b.len()`), so a short prefix yields a *plausible but
    truncated* range — a real 4 KiB prefix reports 3 948 bytes where the file holds 5.6 MB.
 3. `embedded_preview_from_range` checks the window really starts with a JPEG SOI and trims it at the
@@ -35,7 +35,7 @@ planner cannot describe keeps the whole-file path, so nothing regresses: `previe
 not fit or a file that changes underneath us ends in the same fallback — the user's preview is never
 lost to a damaged header.
 
-`LIGHTCRAFT_PROFILE=1` prints what each preview cost:
+`<PREFIX>_PROFILE=1` prints what each preview cost:
 
 ```
 [profile] preview …/DSCF9492.RAF: read 5857257 of 59277632 bytes (header 5857257, window 5857109)
@@ -45,14 +45,14 @@ lost to a damaged header.
 
 A Canon CR3 keeps its preview in a JPEG track, and a TIFF raw (CR2, ARW, DNG, RW2, 3FR …) can keep
 its preview tag in an IFD the header route's prefix cuts short. Neither has a field step 2 above can
-read, so `preview_window` asks `lightcraft_raw::sparse::preview_plan` — the module the
+read, so `preview_window` asks `lcc_raw::sparse::preview_plan` — the module the
 Lightroom-catalog import probes with — which ranges `embedded_preview` reads, and reads exactly
 those:
 
 - the buffer is the file's length with only the planned ranges filled in; every other byte stays zero
   and its pages are never written. Its cost is the bytes read — on macOS a freed buffer of that size
   may stay in the allocator's cache instead of going back to the OS (measured on a 38k-photo import,
-  [#832](https://github.com/storytold/lightcraft/issues/832)) — and the loader's memory gate counts
+  upstream #832) — and the loader's memory gate counts
   the whole file either way;
 - the module's own guarantee is what this path needs, and its corpus test asserts it: with the
   skipped bytes `0` and again `0xFF`, what a partly loaded buffer yields is what the whole file
@@ -79,8 +79,8 @@ route**, reading a median **7.8 %** of their bytes (0.9 %–27.7 %) — by forma
 does not describe them (the first four say so; an SRW plans to the whole file, and the 60 % budget
 then keeps the whole-file read), and the ARWs, CR2s, CR3s and DNGs that declared Adobe RGB (these take
 the plan route since #1440; the counts here are from before) or whose plan wants more than that budget. Across the whole corpus the plan handed on **the same preview as
-the whole file, every time** — and wrote it down: `cargo test -p lightcraft-raw --release --test
-sparse_corpus -- --nocapture` prints these numbers. `LIGHTCRAFT_PROFILE=1` says which route answered:
+the whole file, every time** — and wrote it down: `cargo test -p lcc-raw --release --test
+sparse_corpus -- --nocapture` prints these numbers. `<PREFIX>_PROFILE=1` says which route answered:
 
 ```
 [profile] preview …/arw-sony-a7rm4a-compressed.arw: read 688128 of 61832192 bytes (plan, window 483441)
@@ -118,7 +118,7 @@ render queue stayed empty.
 Many TIFF-based raws keep more than one embedded JPEG. A Sony A7R VI ARW holds a 1616 × 1080 one
 (0.3 MB) beside the 9984 × 6656 one (5.6 MB), and Nikon NEF and Panasonic RW2 files have mid-sized
 copies too. The loupe stand-in and the grid thumbnail (`embedded_preview_srgb`) decode the smallest
-JPEG whose long edge is at least the size asked for (`lightcraft_raw::embedded_preview_covering`).
+JPEG whose long edge is at least the size asked for (`lcc_raw::embedded_preview_covering`).
 They take the largest one when no other JPEG is big enough. The plan route picks the same way
 (`preview_window` takes the size asked for), so a raw read through the plan gets the JPEG the whole
 file would give. A smaller JPEG only counts as a copy of the picture when its aspect ratio is within
@@ -152,7 +152,7 @@ use the largest JPEG, so their geometry and colour do not depend on the size lev
 
   ```sh
   LC_PREVIEW_RAW="/mnt/nas/…/DSCF0001.RAF" \
-    cargo test --release -p lightcraft-engine --test preview_read -- --ignored --nocapture
+    cargo test --release -p lcc-engine --test preview_read -- --ignored --nocapture
   ```
 
   No raw fixture is committed (media never is, see `AGENTS.md`).

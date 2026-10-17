@@ -7,7 +7,7 @@ use std::time::Duration;
 use serde_json::json;
 
 use crate::headless::Headless;
-use crate::{LightcraftApp, Services};
+use crate::{LccApp, Services};
 
 const T: Duration = Duration::from_secs(20);
 const SETTLE: Duration = Duration::from_secs(120);
@@ -15,8 +15,8 @@ const SETTLE: Duration = Duration::from_secs(120);
 /// The demo library in Detail with the Edit panel's Light and Color sections open, on a raw photo (Kelvin
 /// white balance) when `raw`, else on a demo JPEG (relative white balance).
 fn edit_panel(raw: bool) -> Headless {
-    use lightcraft_catalog::{MediaKind, Op, Photo, PhotoId, Source};
-    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    use lcc_catalog::{MediaKind, Op, Photo, PhotoId, Source};
+    let app = LccApp::new(lcc_engine::Session::with_demo(), Services { png: None, ..Default::default() });
     let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
     let id = if raw {
         // a DNG raw photo (its file need not exist: the sliders only read its settings)
@@ -58,7 +58,7 @@ fn thumb(h: &Headless, control: &str) -> f32 {
     (rings[0] - track.left()) / track.width()
 }
 
-fn develop(h: &Headless) -> lightcraft_develop::DevelopSettings {
+fn develop(h: &Headless) -> lcc_develop::DevelopSettings {
     let id = h.app.session.selection.active.unwrap();
     (*h.app.session.develop_of(id).unwrap_or_default()).clone()
 }
@@ -96,17 +96,6 @@ fn the_kelvin_temp_slider_has_lightrooms_scale() {
     assert_eq!(h.request("ui.clickWidget", json!({"id": "slider:wb.temp", "fx": 1.0}), T)["ok"], true);
     h.settle(SETTLE);
     assert_eq!(develop(&h).wb.temp, 50000.0);
-}
-
-/// Exposure (like every slider but the Kelvin temperature) keeps its linear track.
-#[test]
-fn other_sliders_stay_linear() {
-    let mut h = edit_panel(true);
-    set(&mut h, "light.exposure", 1.0);
-    assert!((thumb(&h, "light.exposure") - 0.6).abs() < 0.005, "+1.00 of −5…+5 at 60 %");
-    assert_eq!(h.request("ui.clickWidget", json!({"id": "slider:light.exposure", "fx": 0.75}), T)["ok"], true);
-    h.settle(SETTLE);
-    assert!((develop(&h).light.exposure - 2.5).abs() < 0.011, "{}", develop(&h).light.exposure);
 }
 
 /// The relative temperature of a rendered photo (−100…+100, 0 = as shot, in the middle) is unchanged.

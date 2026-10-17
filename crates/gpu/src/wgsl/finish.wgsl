@@ -1,4 +1,4 @@
-// The per-pixel stage: a straight port of `lightcraft_pipeline::finish` (keep in step with it).
+// The per-pixel stage: a straight port of `lcc_pipeline::finish` (keep in step with it).
 // Bindings: img (rgb, pre-exposure), log_l, base, clar, tex, dark, masks (NMASK planes, then the
 // blurred chromaticity when HAS_CHROMA), aux
 // (tone LUT | chroma curve | sRGB LUT | curve LUTs | mask terms), out (packed RGBA8).
@@ -39,12 +39,16 @@ fn encode_srgb(v: f32) -> f32 {
     return aux[o + i] + (aux[o + i + 1u] - aux[o + i]) * t;
 }
 
-fn curve(ch: u32, x: f32) -> f32 {
-    let o = pu(F_CURVE_OFF) + ch * CURVE_N;
+// The curve table at `o` in `aux` (`Lut1::eval`).
+fn lut_at(o: u32, x: f32) -> f32 {
     let f = clamp(x, 0.0, 1.0) * f32(CURVE_N - 1u);
     let i = min(u32(f), CURVE_N - 2u);
     let t = f - f32(i);
     return aux[o + i] + (aux[o + i + 1u] - aux[o + i]) * t;
+}
+
+fn curve(ch: u32, x: f32) -> f32 {
+    return lut_at(pu(F_CURVE_OFF) + ch * CURVE_N, x);
 }
 
 fn band_weights(h: f32) -> array<f32, 8> {
@@ -326,7 +330,14 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (dz != 0.0 && pu(F_HAS_DARK) != 0u) {
         let d = clamp(dark[i] / pf(F_AIR_PRE), 0.0, 1.0);
         let air = pf(F_AIR);
-        if (dz > 0.0) {
+        if (dz > 0.0 && pu(F_DEHAZE_V3) != 0u) {
+            // process V3 (`finish::dehaze_v3_pixel`)
+            let k0 = clamp(dz, 0.0, 1.0);
+            let k = k0 * (0.4 + 0.6 * k0);
+            let t = max(1.0 - 0.95 * k * d, 0.15);
+            let veil = min(air * (1.0 - t), 0.9 * max(min(c.x, min(c.y, c.z)), 0.0));
+            c = max((c - veil) / t, vec3<f32>(0.0));
+        } else if (dz > 0.0) {
             let t = max(1.0 - 0.95 * min(dz, 1.0) * d, 0.12);
             c = max((c - air * (1.0 - t)) / t, vec3<f32>(0.0));
         } else {
@@ -378,19 +389,38 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         delta += cl * 0.85 * det * (0.35 + 0.65 * mid);
     }
     let tx = pf(F_TEX) + lt[8];
-    let sp = lt[13] * 0.6 + pf(F_SHARPEN);
-    if ((tx != 0.0 || sp != 0.0) && pu(F_HAS_TEX) != 0u) {
+    let v4 = pu(F_SHARPEN_V4) != 0u;
+    // V1-V3 sharpen by boosting the texture band; V4 has its own pixel-scale band
+    var sp_old = 0.0;
+    if (!v4) {
+        sp_old = lt[13] * 0.6 + pf(F_SHARPEN);
+    }
+    if ((tx != 0.0 || sp_old != 0.0) && pu(F_HAS_TEX) != 0u) {
         let det = l_pre - tex[i];
         let tame = 1.0 - 0.6 * sstep(0.4, 1.6, abs(det));
         delta += tx * 1.1 * clamp(det, -1.0, 1.0) * tame;
-        if (sp != 0.0) {
+        if (sp_old != 0.0) {
             let sm = pf(F_SHARPEN_MASK);
             var mk = 1.0;
             if (sm > 0.0) {
                 mk = sstep(sm * 0.25, sm * 0.25 + 0.15, abs(det));
             }
-            delta += sp * 1.3 * clamp(det, -0.8, 0.8) * mk;
+            delta += sp_old * 1.3 * clamp(det, -0.8, 0.8) * mk;
         }
+    }
+    // V4 sharpening: unsharp mask on the pixel-scale band (`sharpen_term` on the CPU)
+    var sp = 0.0;
+    if (v4) {
+        sp = (lt[13] * 0.6 + pf(F_SHARPEN)) * pf(F_SHARPEN_FADE);
+    }
+    if (sp != 0.0 && pu(F_HAS_SHP) != 0u) {
+        let det = l_pre - tex[pu(F_SHP_OFF) + i];
+        let sm = pf(F_SHARPEN_MASK);
+        var mk = 1.0;
+        if (sm > 0.0) {
+            mk = sstep(sm * 0.1, sm * 0.1 + 0.06, abs(det));
+        }
+        delta += sp * 7.0 * mk * det / (1.0 + abs(det) / pf(F_SHARPEN_LIMIT));
     }
     // local Noise: smooth (or, negative, boost) small-amplitude detail, keep edges
     if (l_noise != 0.0 && pu(F_HAS_TEX) != 0u) {
@@ -496,6 +526,20 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let rs = pf(F_REFINE_SAT);
         if (rs < 1.0) {
             e = refine_saturation(e0, e, rs);
+        }
+    }
+    // --- the masks' local Curves, in mask order, each weighted by its mask (`finish::local_curve_luts`)
+    if (pu(F_LCURVES) != 0u) {
+        let so = pu(F_LCURVE_OFF);
+        for (var m = 0u; m < nm; m++) {
+            let slot = aux[so + m];
+            let a = masks[m * n + i];
+            if (slot < 0.0 || a <= 0.0) {
+                continue;
+            }
+            let o = so + nm + u32(slot) * 3u * CURVE_N;
+            let c = vec3<f32>(lut_at(o, e.x), lut_at(o + CURVE_N, e.y), lut_at(o + 2u * CURVE_N, e.z));
+            e = e + (c - e) * a;
         }
     }
     if (pu(F_GRAIN) != 0u) {

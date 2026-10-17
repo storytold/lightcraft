@@ -1,9 +1,9 @@
 {
-  description = "LightCraft — photo library and non-destructive raw developer, in pure Rust";
+  description = "Photo library and non-destructive raw developer, in pure Rust";
 
   inputs = {
-    # LightCraft needs edition 2024 and rustc ≥ 1.90, so the flake tracks unstable. Consumers on a
-    # release channel can retarget it: `inputs.lightcraft.inputs.nixpkgs.follows = "nixpkgs";`
+    # The app needs edition 2024 and rustc ≥ 1.90, so the flake tracks unstable. Consumers on a
+    # release channel can retarget it: `inputs.<this-flake>.inputs.nixpkgs.follows = "nixpkgs";`
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
     # Optional build input of the repository: the CJK fonts (BIZ UDPGothic, BIZ UDMincho, Noto Sans CJK SC,
@@ -56,29 +56,29 @@
       packages = forAllSystems (
         pkgs: _:
         let
-          lightcraft = pkgs.callPackage ./nix/package.nix packageArgs;
+          app = pkgs.callPackage ./nix/package.nix packageArgs;
         in
         {
-          inherit lightcraft;
-          default = lightcraft;
+          inherit app;
+          default = app;
         }
       );
 
-      # `nixpkgs.overlays = [ inputs.lightcraft.overlays.default ]` → `pkgs.lightcraft` everywhere.
+      # `nixpkgs.overlays = [ inputs.<this-flake>.overlays.default ]` → `pkgs.app` everywhere.
       overlays.default = final: _prev: {
-        lightcraft = final.callPackage ./nix/package.nix packageArgs;
+        app = final.callPackage ./nix/package.nix packageArgs;
       };
 
       devShells = forAllSystems (
         pkgs: system:
         let
-          lightcraft = self.packages.${system}.lightcraft;
+          app = self.packages.${system}.app;
         in
         {
           default = pkgs.mkShell (
             {
               # The package's own native inputs, so `cargo build` in the shell needs no extra setup.
-              inputsFrom = [ lightcraft ];
+              inputsFrom = [ app ];
               packages = with pkgs; [
                 cargo
                 rustc
@@ -87,7 +87,7 @@
                 rust-analyzer
               ];
               # `cargo run` dlopens the Vulkan loader and libxkbcommon like the packaged binary.
-              LD_LIBRARY_PATH = lib.makeLibraryPath lightcraft.passthru.runtimeLibs;
+              LD_LIBRARY_PATH = lib.makeLibraryPath app.passthru.runtimeLibs;
               RUST_BACKTRACE = "1";
             }
             // lib.optionalAttrs (craft-fonts != null) {
@@ -100,10 +100,10 @@
 
       checks = forAllSystems (
         pkgs: system: {
-          lightcraft = self.packages.${system}.lightcraft;
+          app = self.packages.${system}.app;
 
           # `nix fmt` formats the flake; this keeps it formatted.
-          formatting = pkgs.runCommand "lightcraft-nix-formatting" { nativeBuildInputs = [ pkgs.nixfmt ]; } ''
+          formatting = pkgs.runCommand "app-nix-formatting" { nativeBuildInputs = [ pkgs.nixfmt ]; } ''
             nixfmt --check ${./flake.nix} ${./nix}
             touch $out
           '';

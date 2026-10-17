@@ -12,7 +12,7 @@
 //! AV1 video, in the background ([`crate::slideshow_export`]); `slideshow.exportStatus` reads how
 //! it is going.
 
-use lightcraft_catalog::PhotoId;
+use lcc_catalog::PhotoId;
 use serde_json::{Value, json};
 
 use super::{CommandSpec, always, bad, cmd, str_param};
@@ -76,7 +76,7 @@ fn titles(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// A slide size from the request: both sides given, one (the other from the aspect preview), or
 /// neither (1280 wide). Each side 16–[`PREVIEW_MAX`].
-fn preview_size(layout: &lightcraft_slideshow::SlideSettings, p: &Value) -> Result<(usize, usize)> {
+fn preview_size(layout: &lcc_slide::SlideSettings, p: &Value) -> Result<(usize, usize)> {
     const C: &str = "slideshow.preview";
     let side = |k: &str| -> Result<Option<usize>> {
         match p.get(k) {
@@ -109,8 +109,8 @@ fn deliver(png: &[u8], path: Option<&str>, out: &mut Value) -> Result<()> {
     Ok(())
 }
 
-fn encode_png(img: &lightcraft_raster::Rgba8) -> Result<Vec<u8>> {
-    lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(img), &lightcraft_codecs::EncodeMeta::default())
+fn encode_png(img: &lcc_raster::Rgba8) -> Result<Vec<u8>> {
+    lcc_codecs::encode_png(&lcc_codecs::EncodeImage::rgba8(img), &lcc_codecs::EncodeMeta::default())
         .map_err(|e| crate::EngineError::Other(format!("PNG: {e}")))
 }
 
@@ -132,7 +132,7 @@ fn preview_title(s: &mut Session, p: &Value, title: &Value, look: &SlideLook) ->
     let c = crate::slide_title::TitleCompose::new(&look.titles, &look.overlays, t, w, h);
     let img = c.compose();
     let png = encode_png(&img)?;
-    let rect = |r: lightcraft_slideshow::Rect| json!([r.x0, r.y0, r.x1, r.y1]);
+    let rect = |r: lcc_slide::Rect| json!([r.x0, r.y0, r.x1, r.y1]);
     let mut out = json!({
         "title": t.id(),
         "enabled": look.titles.screen(t).enabled,
@@ -176,8 +176,8 @@ fn preview(s: &mut Session, p: &Value) -> Result<Value> {
     let img = s.slide_now_look(&settings, &look.overlays, id, w, h).map_err(crate::EngineError::Other)?;
     let png = encode_png(&img)?;
     let aspect = s.slide_photo_aspect(id).unwrap_or(1.5);
-    let l = lightcraft_slideshow::layout(&settings, aspect, img.width, img.height);
-    let rect = |r: lightcraft_slideshow::Rect| json!([r.x0, r.y0, r.x1, r.y1]);
+    let l = lcc_slide::layout(&settings, aspect, img.width, img.height);
+    let rect = |r: lcc_slide::Rect| json!([r.x0, r.y0, r.x1, r.y1]);
     let mut out = json!({
         "id": id.0,
         "width": img.width,
@@ -313,7 +313,7 @@ fn tpl_export(s: &mut Session, p: &Value) -> Result<Value> {
 fn export(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "slideshow.export";
     if cfg!(target_arch = "wasm32") {
-        return Err(bad(C, "slideshow export needs the desktop app or lightcraft-cli"));
+        return Err(bad(C, "slideshow export needs the desktop app or lcc-cli"));
     }
     if s.slideshow_export.as_ref().is_some_and(|r| r.running()) {
         return Err(bad(C, "a slideshow export is already running (activity.cancel stops it)"));

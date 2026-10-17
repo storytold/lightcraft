@@ -154,8 +154,8 @@ impl PrintTransform {
             .iter()
             .map(|&lin| {
                 let lin = if adjust {
-                    let e = lightcraft_color::transfer::linear_to_srgb(lin.clamp(0.0, 1.0));
-                    lightcraft_color::transfer::srgb_to_linear(print_adjust(e, b, c))
+                    let e = lcc_color::transfer::linear_to_srgb(lin.clamp(0.0, 1.0));
+                    lcc_color::transfer::srgb_to_linear(print_adjust(e, b, c))
                 } else {
                     lin.clamp(0.0, 1.0)
                 };
@@ -276,7 +276,7 @@ mod tests {
         assert_eq!(t.channels(), 3);
         assert_eq!(crate::icc::parse(t.icc()).and_then(|i| i.named), Some(NamedSpace::Srgb));
         let out = t.apply(&greys(&[0.0, 0.18, 1.0])).unwrap();
-        let mid = (lightcraft_color::transfer::linear_to_srgb(0.18) * 65535.0) as i32;
+        let mid = (lcc_color::transfer::linear_to_srgb(0.18) * 65535.0) as i32;
         assert!(out[..3].iter().all(|&v| v < 64), "{out:?}");
         assert!(out[3..6].iter().all(|&v| (i32::from(v) - mid).abs() < 300), "{out:?} vs {mid}");
         assert!(out[6..].iter().all(|&v| v > 65400), "{out:?}");

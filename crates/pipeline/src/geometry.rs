@@ -5,10 +5,10 @@
 //! Normalized coordinates (masks, spots, crop) refer to the *transformed* image: the oriented source after
 //! lens correction and perspective, at the source's size. Everything is sampled in one resample.
 
-use lightcraft_develop::{DevelopSettings, EmbeddedLens};
-use lightcraft_geom::{Affine, CropGeometry, Homography, Orientation, Point, Rect};
-use lightcraft_raster::resample::{Filter, resize};
-use lightcraft_raster::{Rgb32f, par_rows};
+use lcc_develop::{DevelopSettings, EmbeddedLens};
+use lcc_geom::{Affine, CropGeometry, Homography, Orientation, Point, Rect};
+use lcc_raster::resample::{Filter, resize};
+use lcc_raster::{Rgb32f, par_rows};
 
 use crate::optics::{Warp, reorient_lens};
 

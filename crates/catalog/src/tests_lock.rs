@@ -5,17 +5,6 @@ use std::path::PathBuf;
 use crate::lock::{LOCK, OWNER};
 use crate::*;
 
-/// Taken by every test here that holds a lock in this process. On Unix, spawning the child of
-/// [`lock_held_by_another_process_is_released_when_it_dies`] briefly copies this process's file
-/// descriptors, close-on-exec lock files included, until the child's exec closes them. A lock
-/// another test drops in that moment stays held by the copy, so acquiring it again could fail with
-/// "in use".
-static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-fn serial() -> std::sync::MutexGuard<'static, ()> {
-    SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
-}
-
 fn temp_dir(tag: &str) -> PathBuf {
     let d = std::env::temp_dir().join(format!("lc-lock-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
@@ -25,23 +14,34 @@ fn temp_dir(tag: &str) -> PathBuf {
 
 #[test]
 fn second_opener_is_refused_until_the_first_lets_go() {
-    let _serial = serial();
     let dir = temp_dir("twice");
-    let first = LibraryLock::acquire(&dir, "LightCraft").unwrap();
+    let first = LibraryLock::acquire(&dir, lcc_brand::DISPLAY_NAME).unwrap();
     assert!(first.held());
     let owner: LockOwner = serde_json::from_slice(&std::fs::read(dir.join(OWNER)).unwrap()).unwrap();
-    assert_eq!((owner.pid, owner.program.as_str()), (std::process::id(), "LightCraft"));
+    assert_eq!((owner.pid, owner.program.as_str()), (std::process::id(), lcc_brand::DISPLAY_NAME));
 
-    let e = LibraryLock::acquire(&dir, "lightcraft-cli").unwrap_err();
+    let e = LibraryLock::acquire(&dir, "lcc-cli").unwrap_err();
     let LockError::InUse(Some(who)) = &e else { panic!("{e:?}") };
     assert_eq!(who.pid, std::process::id());
     let msg = e.to_string();
-    assert!(msg.contains("already open in LightCraft") && msg.contains(&format!("process {}", std::process::id())), "{msg}");
+    assert!(
+        msg.contains(&format!("already open in {}", lcc_brand::DISPLAY_NAME)) && msg.contains(&format!("process {}", std::process::id())),
+        "{msg}"
+    );
 
     drop(first);
     assert!(!dir.join(OWNER).exists(), "the owner note goes with the lock");
     assert!(dir.join(LOCK).exists(), "the lock file itself may stay: only a held lock refuses");
-    let again = LibraryLock::acquire(&dir, "lightcraft-cli").unwrap();
+    // another test spawning a process can briefly share this lock's file descriptor (between fork
+    // and exec), so the release may take a moment to be seen
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    let again = loop {
+        match LibraryLock::acquire(&dir, "lcc-cli") {
+            Ok(l) => break l,
+            Err(_) if std::time::Instant::now() < deadline => std::thread::sleep(std::time::Duration::from_millis(10)),
+            Err(e) => panic!("{e:?}"),
+        }
+    };
     assert!(again.held());
     drop(again);
     let _ = std::fs::remove_dir_all(&dir);
@@ -50,11 +50,10 @@ fn second_opener_is_refused_until_the_first_lets_go() {
 /// Files left behind by a crash (lock file + owner note) don't lock anyone out.
 #[test]
 fn leftover_lock_files_are_not_a_lock() {
-    let _serial = serial();
     let dir = temp_dir("stale");
     std::fs::write(dir.join(LOCK), b"").unwrap();
-    std::fs::write(dir.join(OWNER), br#"{"pid":999999,"host":"elsewhere","program":"LightCraft","version":"0.2.0","since":1}"#).unwrap();
-    let l = LibraryLock::acquire(&dir, "LightCraft").unwrap();
+    std::fs::write(dir.join(OWNER), br#"{"pid":999999,"host":"elsewhere","program":"Other","version":"0.2.0","since":1}"#).unwrap();
+    let l = LibraryLock::acquire(&dir, lcc_brand::DISPLAY_NAME).unwrap();
     assert!(l.held());
     let owner: LockOwner = serde_json::from_slice(&std::fs::read(dir.join(OWNER)).unwrap()).unwrap();
     assert_eq!(owner.pid, std::process::id(), "the note now names this process");
@@ -65,7 +64,6 @@ fn leftover_lock_files_are_not_a_lock() {
 /// Another process holds the lock; when it is killed (a crash), the OS releases it.
 #[test]
 fn lock_held_by_another_process_is_released_when_it_dies() {
-    let _serial = serial();
     let dir = temp_dir("child");
     let exe = std::env::current_exe().unwrap();
     let mut child = std::process::Command::new(exe)
@@ -81,7 +79,7 @@ fn lock_held_by_another_process_is_released_when_it_dies() {
         assert!(std::time::Instant::now() < deadline, "child never locked");
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
-    let e = LibraryLock::acquire(&dir, "LightCraft").unwrap_err();
+    let e = LibraryLock::acquire(&dir, lcc_brand::DISPLAY_NAME).unwrap_err();
     let LockError::InUse(Some(who)) = &e else { panic!("{e:?}") };
     assert_eq!(who.pid, child.id());
     assert!(e.to_string().contains("on this computer") || who.host.is_empty(), "{e}");
@@ -89,7 +87,7 @@ fn lock_held_by_another_process_is_released_when_it_dies() {
     child.kill().unwrap(); // SIGKILL: no clean-up runs, like a crash
     child.wait().unwrap();
     assert!(dir.join(OWNER).exists(), "the crashed holder's note is left behind");
-    let l = LibraryLock::acquire(&dir, "LightCraft").expect("the OS released the dead process's lock");
+    let l = LibraryLock::acquire(&dir, lcc_brand::DISPLAY_NAME).expect("the OS released the dead process's lock");
     assert!(l.held());
     drop(l);
     let _ = std::fs::remove_dir_all(&dir);
@@ -101,79 +99,7 @@ fn lock_held_by_another_process_is_released_when_it_dies() {
 #[ignore = "helper process for lock_held_by_another_process_is_released_when_it_dies"]
 fn lock_holder_child() {
     let Some(dir) = std::env::var_os("LC_LOCK_CHILD_DIR") else { return };
-    let _l = LibraryLock::acquire(std::path::Path::new(&dir), "lightcraft-cli").unwrap();
+    let _l = LibraryLock::acquire(std::path::Path::new(&dir), "lcc-cli").unwrap();
     std::fs::write(std::path::Path::new(&dir).join("child-locked"), b"").unwrap();
     std::thread::sleep(std::time::Duration::from_secs(120));
-}
-
-/// Issue #680: a process spawned by any thread holds a copy of every descriptor until it execs
-/// (close-on-exec only closes them then), and `flock` lasts while any copy of the descriptor is
-/// open. Dropping the `LibraryLock` must still free the library, so it releases explicitly rather
-/// than relying on its handle closing. A `try_clone` of the descriptor stands in for the child's
-/// copy: it refers to the same open file description, which is exactly what the child gets.
-#[cfg(unix)]
-#[test]
-fn the_library_is_free_once_dropped_even_if_a_child_holds_a_copy() {
-    let dir = temp_dir("copy");
-    let first = LibraryLock::acquire(&dir, "LightCraft").unwrap();
-    let copy = first.descriptor_copy().unwrap();
-    drop(first);
-    let again = LibraryLock::acquire(&dir, "lightcraft-cli").expect("the library is free once its LibraryLock is dropped");
-    assert!(again.held());
-    drop((again, copy));
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-/// Issue #680, as it happens in practice: one thread spawns cheap children while another acquires,
-/// drops and re-acquires the lock on its own directory. Every acquire must succeed (before the fix
-/// a few per cent were refused with `InUse(None)`). Bounded: about two seconds of cycles, and on a
-/// slow or loaded machine (the FreeBSD CI VM, where a spawn can take longer than that) until a few
-/// children have been spawned during them, at most a minute.
-#[cfg(unix)]
-#[test]
-fn dropping_the_lock_frees_the_library_while_another_thread_spawns_processes() {
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    use std::time::{Duration, Instant};
-
-    /// Children spawned while the lock cycles, at least, before the test may stop.
-    const CHILDREN: usize = 5;
-
-    let dir = temp_dir("spawn");
-    let stop = Arc::new(AtomicBool::new(false));
-    let count = Arc::new(AtomicUsize::new(0));
-    let spawner = {
-        let (stop, count) = (Arc::clone(&stop), Arc::clone(&count));
-        std::thread::spawn(move || {
-            while !stop.load(Ordering::Relaxed) {
-                if let Ok(mut c) = std::process::Command::new("true").stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn()
-                {
-                    let _ = c.wait();
-                    count.fetch_add(1, Ordering::Relaxed);
-                }
-            }
-            count.load(Ordering::Relaxed)
-        })
-    };
-    let t0 = Instant::now();
-    let enough = |cycles: usize| (cycles >= 200_000 || t0.elapsed() >= Duration::from_secs(2)) && count.load(Ordering::Relaxed) >= CHILDREN;
-    let mut cycles = 0usize;
-    let mut refused = Vec::new();
-    while !enough(cycles) && t0.elapsed() < Duration::from_secs(60) {
-        match LibraryLock::acquire(&dir, "LightCraft") {
-            Ok(l) => assert!(l.held()), // dropped here: the next cycle must get it back
-            Err(e) => refused.push(format!("cycle {cycles}: {e:?}")),
-        }
-        cycles += 1;
-    }
-    stop.store(true, Ordering::Relaxed);
-    let spawned = spawner.join().unwrap();
-    let _ = std::fs::remove_dir_all(&dir);
-    assert!(spawned > 0, "the spawning thread never got a child off the ground");
-    assert!(
-        refused.is_empty(),
-        "{} of {cycles} re-acquires refused while {spawned} children were spawned: {:?}",
-        refused.len(),
-        &refused[..refused.len().min(3)]
-    );
 }

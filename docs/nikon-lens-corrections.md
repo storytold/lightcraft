@@ -1,7 +1,7 @@
 # Nikon embedded distortion corrections
 
 Nikon writes its own distortion correction into NEFs from its mirrorless bodies, in the raw SubIFD tag `0xc7d5`
-(NikonNEFInfo). LightCraft reads it for the NIKON Z 6_2 (Z 6II), the NIKON Z 8 and the NIKON Z f and turns it into an
+(NikonNEFInfo). The app reads it for the NIKON Z 6_2 (Z 6II), the NIKON Z 8 and the NIKON Z f and turns it into an
 `OpcodeList3` `WarpRectilinear`, so it goes through the same profile correction control, optics path, orientation
 handling and DNG export as the other embedded corrections. Other bodies are left alone for now even if they have the
 same tag, because I've only checked files from these three.
@@ -14,7 +14,7 @@ Corrections.
 
 The [ExifTool Nikon tag names](https://exiftool.org/TagNames/Nikon.html) give the names of NikonNEFInfo and its
 DistortionInfo entry (`0x0005`): DistortionCorrection and RadialDistortionCoefficient1 to 3. Nothing else was taken
-from other software. The rest was worked out by comparing LightCraft's uncorrected render of each NEF with the
+from other software. The rest was worked out by comparing the app's uncorrected render of each NEF with the
 full-size JPEG the camera embeds in it. That JPEG is always distortion-corrected with Z lenses ("On (Required)"), and
 with other lenses when Auto distortion control is on. The comparison matched textured patches between the two images
 (normalised cross-correlation on the green channel at quarter size).
@@ -71,7 +71,7 @@ at 70, 135 and 200 mm. The NIKKOR Z 24-120mm f/4 S is within 0.6 to 1.0 px media
 to 28 mm, with the same kind of error toward the edges at the wide end as the Z lenses on the Z 6II. A few 14-24mm
 f/2.8G frames had Auto distortion control off, so their JPEGs aren't corrected and match about the same either way.
 
-I also rendered a few with `lightcraft-cli render` at default settings and measured those against the camera JPEG.
+I also rendered a few with `lcc-cli render` at default settings and measured those against the camera JPEG.
 The median error was 0.10 px for the 70-200 at 200 mm and 0.12 px for the Z f sample. The 24-70 was 0.32 px at 70 mm,
 on a frame with a 92 px sensor shift, and 8.4 px at 24 mm. The 20 mm came out at 1.3 px. On the Z 8 it was 0.14 px for the 70-200 at 200 mm, 0.45 and 0.68 px for the 24-120
 at 68 and 120 mm, 1.8 px for the Z 20 mm and 3.7 px for the 24-120 at 24 mm. That checks the

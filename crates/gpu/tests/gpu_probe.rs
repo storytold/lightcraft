@@ -3,24 +3,24 @@
 //! xtask runs it after the workspace tests, so it costs no extra build:
 //! `cargo test --workspace --test gpu_probe -- --ignored --nocapture`.
 //!
-//! - `LIGHTCRAFT_GPU_PROBE` unset: the compute device the pipeline picks (`available()`,
+//! - `<PREFIX>_GPU_PROBE` unset: the compute device the pipeline picks (`available()`,
 //!   `adapter_name()`, `unavailable_reason()`), the backends it may use and the backends this build
 //!   contains.
-//! - `LIGHTCRAFT_GPU_PROBE=<backend>` (`vulkan`, `metal`, `dx12`, `gl`): every adapter that
+//! - `<PREFIX>_GPU_PROBE=<backend>` (`vulkan`, `metal`, `dx12`, `gl`): every adapter that
 //!   backend lists, software ones (lavapipe, llvmpipe, WARP) included. One backend per process, so
 //!   a driver that crashes while it is enumerated (issue #136) costs only its own line.
 //!
 //! Only reports: which adapters the pipeline accepts is `ctx.rs`'s policy.
 #![cfg(not(target_arch = "wasm32"))]
 
-use lightcraft_gpu::backend::{self, Backends};
+use lcc_gpu::backend::{self, Backends};
 
 const NAMES: [(&str, Backends); 4] = [("vulkan", Backends::VULKAN), ("metal", Backends::METAL), ("dx12", Backends::DX12), ("gl", Backends::GL)];
 
 #[test]
 #[ignore = "the capability probe of `cargo xtask ci`"]
 fn gpu_probe() {
-    let line = match std::env::var("LIGHTCRAFT_GPU_PROBE").ok().filter(|b| !b.is_empty()) {
+    let line = match lcc_brand::env("GPU_PROBE").filter(|b| !b.is_empty()) {
         None => pipeline(),
         Some(name) => adapters(&name),
     };
@@ -34,13 +34,13 @@ fn names(set: Backends) -> String {
 }
 
 fn pipeline() -> String {
-    let available = lightcraft_gpu::available();
+    let available = lcc_gpu::available();
     let opt = |s: Option<String>| s.map_or_else(|| "null".to_owned(), |s| json_str(&s));
     let compiled = wgpu::Instance::enabled_backend_features();
     format!(
         "{{\"pipeline\":{{\"available\":{available},\"adapter\":{},\"reason\":{},\"backends\":{},\"compiled\":{}}}}}",
-        opt(lightcraft_gpu::adapter_name()),
-        opt(lightcraft_gpu::unavailable_reason()),
+        opt(lcc_gpu::adapter_name()),
+        opt(lcc_gpu::unavailable_reason()),
         names(backend::compute_backends().unwrap_or(Backends::empty()) & compiled),
         names(compiled),
     )

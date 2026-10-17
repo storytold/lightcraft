@@ -1,4 +1,4 @@
-//! A small CPU interpreter for the convolutional networks LightCraft bundles (the YuNet face detector).
+//! A small CPU interpreter for the convolutional networks the app bundles (the YuNet face detector).
 //!
 //! It runs checked convolution, affine/activation, broadcast, pooling, matrix and shape operators on
 //! float32 tensors. Unsupported semantics fail at load time. Dense convolutions use bounded im2col and
@@ -103,7 +103,7 @@ impl ConvJob<'_> {
     }
 }
 
-/// Something that can run a network's convolutions faster than the CPU kernels (the GPU, in `lightcraft-gpu`).
+/// Something that can run a network's convolutions faster than the CPU kernels (the GPU, in `lcc-gpu`).
 ///
 /// The CPU interpreter stays the reference: a net only uses an accelerator that agreed with it on a test input
 /// ([`Net::attach_checked`]), and the first error makes the net drop it and run on the CPU again.
@@ -271,7 +271,7 @@ impl Net {
                     .collect()
             })
             .flatten();
-        if std::env::var_os("LIGHTCRAFT_PROFILE").is_some() {
+        if lcc_brand::env_is_set("PROFILE") {
             eprintln!("[faces-gpu] {} steps x {}: {:.3} ms", program.steps.len(), inputs.len(), started.elapsed().as_secs_f64() * 1000.0);
         }
         if gathered.is_none() {
@@ -284,7 +284,7 @@ impl Net {
     fn run_one(&self, input: Tensor) -> Result<Vec<(String, Tensor)>> {
         self.validate_input(&input.shape)?;
         let mut scratch = kernels::Scratch::default();
-        let profile = std::env::var_os("LIGHTCRAFT_PROFILE").is_some();
+        let profile = lcc_brand::env_is_set("PROFILE");
         let g = &self.graph;
         let Some((input_name, _)) = g.inputs.first() else { return shape_err("the model has no input") };
         // when each value is last read, so big intermediates are dropped as soon as nothing needs them

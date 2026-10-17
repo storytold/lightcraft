@@ -1,9 +1,9 @@
 //! Your own list of models to download: `catalog.json` in the models folder.
 //!
-//! LightCraft's built-in list only holds models whose terms let the project point at them. Anything else (a stronger
+//! The app's built-in list only holds models whose terms let the project point at them. Anything else (a stronger
 //! recogniser whose weights are for research use, a model you trained, a mirror you trust) can be added by you: each entry
 //! is a model manifest (the same fields as a `face-model.json`) plus the address to fetch it from, and it then gets the same
-//! Download button as a built-in one, with its licence notice shown before anything is fetched. LightCraft ships and links to
+//! Download button as a built-in one, with its licence notice shown before anything is fetched. The app ships and links to
 //! none of them; what the file says, and whether you may use the weights, is yours to check.
 //!
 //! ```json
@@ -92,10 +92,10 @@ fn entry(v: &Value) -> Result<Entry, String> {
         return Err("`url` must be an https:// address of at most 500 characters, without spaces".into());
     }
     if known::all().iter().any(|k| k.id == m.id) {
-        return Err("that id belongs to a model LightCraft already knows".into());
+        return Err("that id belongs to a model the app already knows".into());
     }
     if m.sha256.as_deref().is_some_and(|h| known::lookup(h).is_some()) {
-        return Err("LightCraft already knows a model with that file".into());
+        return Err("The app already knows a model with that file".into());
     }
     Ok(Entry { file_name: file_name_of(&raw.url), url: raw.url, manifest: raw.manifest })
 }

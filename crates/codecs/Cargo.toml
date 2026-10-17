@@ -1,18 +1,20 @@
 [package]
-name = "lightcraft-codecs"
+name = "lcc-codecs"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "LightCraft standard image codecs: sniffing, decode to linear light, ICC, encoders (L1)"
+description = "Standard image codecs: sniffing, decode to linear light, ICC, encoders (L1)"
 
 [lints]
 workspace = true
 
 [dependencies]
-lightcraft-geom = { workspace = true }
-lightcraft-color = { workspace = true }
-lightcraft-raster = { workspace = true }
-lightcraft-heif = { workspace = true, optional = true }
+lcc-brand = { workspace = true }
+lcc-geom = { workspace = true }
+lcc-color = { workspace = true }
+lcc-raster = { workspace = true }
+lcc-meta = { workspace = true }
+lcc-heif = { workspace = true, optional = true }
 serde = { workspace = true }
 bytemuck = { workspace = true }
 thiserror = { workspace = true }
@@ -29,6 +31,10 @@ moxcms = { workspace = true }
 jxl-oxide = { workspace = true, optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# AVIF decode: clean-room pure-Rust AV1 decoder (no unsafe), the same pin as lcc-video. Native
+# only: it indexes its buffers directly, and on wasm32 (panic = abort) a malformed file could
+# take the page down instead of becoming an error, so the web build refuses AVIF.
+filmcraft-av1 = { git = "https://github.com/storytold/filmcraft", rev = "8309f21a6c3f34ddf190af7fd9bfd913053a1fd5" }
 ravif = { workspace = true, optional = true }
 rav1e = { workspace = true, optional = true }
 avif-serialize = { workspace = true, optional = true }
@@ -37,21 +43,21 @@ jixel = { workspace = true, optional = true }
 
 [features]
 default = ["parallel", "jxl", "avif"]
-parallel = ["dep:rayon", "lightcraft-raster/parallel", "jpeg-decoder/rayon"]
+parallel = ["dep:rayon", "lcc-raster/parallel", "jpeg-decoder/rayon"]
 ## JPEG XL decode (jxl-oxide) and, on native targets, encode (jixel); both pure Rust.
 jxl = ["dep:jxl-oxide", "dep:jixel"]
-# HEIC/HEIF decode via the optional lightcraft-heif crate (heic-rs, pure Rust). Off by default so
+# HEIC/HEIF decode via the optional lcc-heif crate (heic-rs, pure Rust). Off by default so
 # distributors choose it at build time (HEVC patents are a distributor's call, same policy as
 # PhotoCraft); `cargo xtask ci` clippies and tests it (`--features heif`), releases don't ship it yet.
-heif = ["dep:lightcraft-heif"]
+heif = ["dep:lcc-heif"]
 ## AVIF encoding via ravif/rav1e (pure Rust, BSD). Native targets only; a no-op on wasm32.
 avif = ["dep:ravif", "dep:rav1e", "dep:avif-serialize"]
 
 [dev-dependencies]
 # tests record why they skip (`cargo xtask ci` lists the skips)
-lightcraft-testkit = { workspace = true }
+lcc-testkit = { workspace = true }
 # JPEG XL tests read encoded samples without our colour conversion
 jxl-oxide = { workspace = true }
 proptest = { workspace = true }
 # Lossless synthetic HEIC files for the `heif` feature's tests.
-lightcraft-heif = { workspace = true, features = ["testdata"] }
+lcc-heif = { workspace = true, features = ["testdata"] }

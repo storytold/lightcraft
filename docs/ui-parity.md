@@ -1,8 +1,8 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (zoom row: soft proofing sharp at 1:1; canvas tools by keyboard; focus-order test; ~50 unnamed hand-drawn widgets named) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (upstream: diagnostic overlays noted as the zoom row's remainder; brush A / B presets; zoom row: overlays and soft proofing sharp at 1:1; gap closed; canvas tools by keyboard; focus-order test; ~50 unnamed hand-drawn widgets named) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
-How LightCraft's interaction compares with Lightroom's: views, panels, tools and handles, modifier
+How the app's interaction compares with Lightroom's: views, panels, tools and handles, modifier
 keys, shortcuts, zoom, context menus and feel. Rows for individual menu items and shortcuts live in
 [parity-checklist.md](parity-checklist.md) (sections Y and Z, Classic keys); this page is the
 assessment and the notes that don't fit a row. Visual reference for agents: `plan/lightroom/`
@@ -20,14 +20,14 @@ assessment and the notes that don't fit a row. Visual reference for agents: `pla
 
 ## Assessment by area
 
-| Area | Target | LightCraft | Ready | Main gaps |
+| Area | Target | The app | Ready | Main gaps |
 |---|---|---|---:|---|
 | Layout and views | Lightroom: grid / detail / edit; Classic: Library, Develop, Map, Book, Slideshow, Print, Web modules, filmstrip, panels | Lightroom-style single window: Photo Grid, Square Grid, Detail, Compare, Survey (≤ 48), Before / After, People, quick slideshow, second window, filmstrip | 75% | no Classic module switcher (by design) or output modules; dark theme only |
 | Develop panels and sliders | Light, Color, Effects, Detail, Optics, Geometry, Lens Blur, Calibration | every global slider; scrub, double-click reset, Alt-drag previews where implemented | 80% | Lens Blur, Calibration panel depth; slider feel (acceleration, fine Shift-drag) unmeasured |
 | Crop, Upright, transform handles | handles, aspect lock, angle, overlays (O / ⇧O), guided Upright | ✅ all of them; overlay cycle on ⇧O | 85% | crop opacity of cut-out area (15.5) |
-| Masking tools | brush (A / B, flow, density, auto mask, pressure), linear / radial, range masks, AI masks, pins | brush, linear, radial, colour / luminance range, add / subtract / intersect / invert, masks panel, pins | 60% | brush live preview (#517 / #518), no pen pressure, no depth range, AI masks, Feather / Edge controls (15.5) |
+| Masking tools | brush (A / B, flow, density, auto mask, pressure), linear / radial, range masks, AI masks, pins | brush, linear, radial, colour / luminance range, add / subtract / intersect / invert, masks panel, pins | 65% | no pen pressure, no depth range, AI masks |
 | Remove / heal | content-aware remove, heal, clone, visualize spots | heal, clone, auto source, visualize spots, red / pet eye | 65% | content-aware (patch synthesis) remove, generative remove, detect distractions |
-| Zoom and navigation | Fit / Fill / 1:1 / 2:1 … 11:1, Navigator, spacebar pan | Fit to 800%, pinch zoom, pan, Navigator-like | 60% | diagnostic overlays (Visualize Spots, Point Color range, HDR range) render the whole frame instead of a zoom window; everything else, mask overlays and soft proofing included, is sharp at 1:1–8:1 |
+| Zoom and navigation | Fit / Fill / 1:1 / 2:1 … 11:1, Navigator, spacebar pan | Fit to 800%, pinch zoom, pan, Navigator-like, Space-held hand over tools | 90% | original-pixel detail at 1:1–8:1 everywhere: loupe, Before/After, mask overlays, soft proofing, Compare and Reference are tiled zoom windows (LR-VIEW-ZOOM); left: diagnostic overlays (Visualize Spots, Point Color range, HDR range) render the whole frame instead of a zoom window |
 | Library culling and metadata | ratings, flags, labels with keys, painter, keywording, metadata panel, filter bar | ratings / flags / labels and advance, keyword list and sets, keywording box, metadata fields, smart albums, filter bar | 85% | painter tool, quick collection, some Classic keys |
 | Shortcuts | Lightroom desktop and Classic keymaps | Lightroom-desktop keymap with Classic additions, editable | 85% | deliberate differences below; no Classic keymap layer |
 | Context menus | everywhere | 26 sites (grid, filmstrip, albums, folders, keywords, masks, presets…) | 70% | unaudited against Lightroom's menus item by item |
@@ -36,7 +36,7 @@ assessment and the notes that don't fit a row. Visual reference for agents: `pla
 | Feel and responsiveness | GPU-interactive sliders (15.3) | ≤ 16 ms slider budget on GPU; background renders | 75% | colour NR at half resolution, 100k-photo grid test |
 | **UI/UX overall** | | | **~70%** | estimated, weighted by use (develop and library 60%, tools 25%, rest 15%) |
 
-Remaining: **32–54 h** (zoom detail 8–15 h, brush and masking feel 8–12 h, accessibility 2–4
+Remaining: **40–70 h** (zoom detail 8–15 h, brush pen pressure 3–6 h, accessibility audit 10–20
 h, Classic keymap layer 4–8 h, context-menu audit 4–8 h, text-field and IME polish 4–8 h). Output
 modules and AI tools are counted with their features in [target-app-parity.md](target-app-parity.md).
 
@@ -50,6 +50,11 @@ Compared `plan/lightroom/06-shortcuts.md` (desktop part) with our bindings: comm
 Export dialog, Space Toggle zoom, ⇧M Create Version, ⇧X Reject + advance, ⇧U Unflag + advance. `⇧Y` fired both
 Before/After Split and the History panel; History lost the binding. `W` and `⇧⌘I` also fired the engine command
 under the UI command that wraps it (a no-op error); the UI command now wins.
+
+**Fixed (#1895):** Space held over a tool on the photo (Crop, Masking, Remove, Red Eye, a picker) is the view's hand
+until the key is up, as Lightroom's temporary Hand / Zoom: a click zooms at the point clicked (or back to Fit), a drag
+pans, the tool gets neither; a tap still toggles the zoom (on its release). A held Space toggles once; its
+auto-repeat used to flip the zoom back and forth (`crates/ui-egui/src/space_hand.rs`).
 
 **Deliberate differences (our key → Lightroom desktop key)** — each is a conflict with another binding we have:
 
@@ -66,7 +71,7 @@ under the UI command that wraps it (a no-op error); the UI command now wins.
 | Create Version | ⌘⇧S (+ ⇧M) | ⇧M (Windows: Ctrl+⇧S) | — |
 | Select None | ⌘⇧A (+ ⌘D) | ⌘D | — |
 
-**Library culling (KEYC-RATING):** `0–5`, `6–9` and `P/X/U` reach egui on macOS even when displayed in the native menu (adapted from PR #261; issue #283). `Shift+0–9` applies and advances once; `Shift+P` picks and advances in Photo Grid / Square Grid and retains Presets elsewhere. See [library shortcuts](library-shortcuts.md) for the verified Classic mapping and regression coverage. `` ` `` cycles the flag (unflagged → pick → reject → unflagged) and ⌘↑ / ⌘↓ raise / lower it; the native menu leaves ⌘↑ / ⌘↓ to egui so Compare/Survey act on the active photo. Remaining Classic gaps: filter-bar keys.
+**Library culling (KEYC-RATING):** `0–5`, `6–9` and `P/X/U` reach egui on macOS even when displayed in the native menu (adapted from PR #261; issue #283). `Shift+0–9` and `Shift+P/X/U` apply and advance once in every photo view (issue #1707); Presets has no default key. See [library shortcuts](library-shortcuts.md) for the verified Classic mapping and regression coverage. Rating `[` / `]` (grids), \` flag toggle (in the Classic keymap; `photo.cycleFlag` cycles unflagged → pick → reject → unflagged), ⌘↑ / ⌘↓ raising / lowering the flag (the native menu leaves ⌘↑ / ⌘↓ to egui so Compare/Survey act on the active photo), `\` filter bar and ⌘L Library ▸ Enable Filters (`filter.toggleEnabled`, keeps the filter while off) are bound too (G28).
 
 **Grid thumbnail size (KEYC-COMPARE):** Classic's `=` and `-` increase and decrease the Grid thumbnail size (same keys on macOS and Windows; `+` also works for the larger size here, as Shift+`=` or the keypad). They step the bottom-bar slider by 30 pt inside its 90–480 pt range, in Photo Grid, Square Grid and People only; Detail, Compare, Survey and Reference ignore them, and ⌘= / ⌘− stay Zoom In / Out. See [library shortcuts](library-shortcuts.md).
 
@@ -130,6 +135,7 @@ a real screen reader on any platform yet.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-16 | minor | Shortcuts: Space held over a tool on the photo pans and click-zooms (Lightroom's temporary hand), a tap still toggles, auto-repeat no longer toggles (issue #1895) |
 | 2026-10-14 | patch | Shortcuts: Visualize HDR loses its default ⇧H, which cycles the Tool Overlay (issue #224); both PRs had claimed it |
 | 2026-10-12 | minor | Accessibility: crop handles, spots, gradient handles and mask pins operable by keyboard with AccessKit names and values; Tab order test for the right panels; hand-drawn icons and rows named; 55% → 75%; UI remaining 34–58 h → 32–54 h |
 | 2026-10-13 | minor | Shortcuts: Tool Overlay modes for spot and mask pins on ⇧H (H stays Remove; issue #224), listed with the deliberate differences; dropped from the missing list |
@@ -138,5 +144,7 @@ a real screen reader on any platform yet.
 | 2026-10-13 | minor | Shortcuts: Home / End and Shift+Left / Right in the two library grids, Cmd+O (Open Library…) and Shift+H (Visualize HDR) get bindings and keyboard tests; percentages and the dated counts above are unchanged |
 | 2026-10-14 | minor | Zoom row: soft proofing gets zoom windows; LR-VIEW-ZOOM gap closed |
 | 2026-10-12 | minor | Accessibility: an AccessKit tree audit test over every view, Develop tool and 13 dialogs; unnamed fields, slider ranges and the Auto Stack slider fixed; 30% → 55%; UI remaining 40–70 h → 34–58 h |
+| 2026-10-13 | minor | Masking tools: brush A / B presets and Density landed; pen pressure remains |
+| 2026-10-13 | minor | Zoom row: overlays and soft proofing are zoom windows too (already tiled since P1.6); LR-VIEW-ZOOM gap closed |
 | 2026-10-11 | minor | Zoom row: Compare and Reference get zoom windows; what remains of LR-VIEW-ZOOM is overlays and soft proofing |
 | 2026-10-10 | major | Created: measured command and shortcut counts, assessment by area, estimates; moved the shortcut conflicts section here from the checklist |

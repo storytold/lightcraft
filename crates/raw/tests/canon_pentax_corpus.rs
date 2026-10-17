@@ -2,22 +2,22 @@
 //! xtask/src/main.rs; downloaded into the gitignored corpus/raw by `cargo xtask corpus --download`).
 //!
 //! No external decoder was run on these: the FNV-1a hashes over the decoded u16 samples (row-major,
-//! little-endian, masked borders included) pin LightCraft's own decode, and the check against the camera is
+//! little-endian, masked borders included) pin the app's own decode, and the check against the camera is
 //! black-box: the green sites of the active area, on a 24 × 16 grid, must follow the camera's own embedded
 //! JPEG (gamma-encoded Pearson r; 0.69–1.00 on these files, a misread layout or stream gives r near 0). Four files are
 //! pinned only: two have no embedded JPEG (GX200, and the PowerShot S2 IS, a DNG written by CHDK), one is monochrome (K-3 Mark III
 //! Monochrome), and the GXR's preview is not oriented like its sensor; their renders were inspected by eye.
 //! Missing files are reported as skipped.
 
-use lightcraft_raw::{RawData, decode, embedded_preview, probe_info};
+use lcc_raw::{RawData, decode, embedded_preview, probe_info};
 use std::path::{Path, PathBuf};
 
 fn corpus() -> PathBuf {
-    std::env::var_os("LIGHTCRAFT_CORPUS").map(PathBuf::from).unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus"))
+    lcc_brand::env_os("CORPUS").map(PathBuf::from).unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus"))
 }
 
 /// Green of the decoded mosaic against the camera's embedded JPEG on a `gw × gh` grid of the active area.
-fn green_vs_camera_jpeg(raw: &lightcraft_raw::RawImage, jpeg: &[u8], gw: usize, gh: usize) -> f64 {
+fn green_vs_camera_jpeg(raw: &lcc_raw::RawImage, jpeg: &[u8], gw: usize, gh: usize) -> f64 {
     use zune_core::{bytestream::ZCursor, colorspace::ColorSpace, options::DecoderOptions};
     let opts = DecoderOptions::default().jpeg_set_out_colorspace(ColorSpace::RGB);
     let mut d = zune_jpeg::JpegDecoder::new_with_options(ZCursor::new(jpeg), opts);

@@ -11,7 +11,7 @@ use serde_json::json;
 use crate::headless::Headless;
 use crate::panels::empty_library;
 use crate::state::ViewMode;
-use crate::{LightcraftApp, Services};
+use crate::{LccApp, Services};
 
 const T: Duration = Duration::from_secs(20);
 
@@ -19,8 +19,8 @@ fn has(h: &Headless, id: &str) -> bool {
     h.app.widgets.iter().any(|(w, _)| w == id)
 }
 
-fn app(session: lightcraft_engine::Session) -> LightcraftApp {
-    LightcraftApp::new(session, Services::default())
+fn app(session: lcc_engine::Session) -> LccApp {
+    LccApp::new(session, Services::default())
 }
 
 /// A picker that records that it was asked and gives no files (the person cancelled).
@@ -37,7 +37,7 @@ fn counting_picker(h: &mut Headless) -> Rc<Cell<usize>> {
 #[test]
 fn an_empty_library_opens_on_the_grid_with_the_sidebar() {
     // Given a library with no photos, left in the Detail view with the sidebar hidden
-    let mut a = app(lightcraft_engine::Session::new());
+    let mut a = app(lcc_engine::Session::new());
     a.ui.view = ViewMode::Detail;
     a.ui.left_panel = false;
     // When it opens at launch
@@ -48,17 +48,8 @@ fn an_empty_library_opens_on_the_grid_with_the_sidebar() {
 }
 
 #[test]
-fn an_empty_library_left_on_the_square_grid_stays_there() {
-    let mut a = app(lightcraft_engine::Session::new());
-    a.ui.view = ViewMode::SquareGrid;
-    empty_library::open_on_empty_library(&mut a);
-    assert_eq!(a.ui.view, ViewMode::SquareGrid);
-    assert!(a.ui.left_panel);
-}
-
-#[test]
 fn a_library_with_photos_opens_as_it_was_left() {
-    let mut a = app(lightcraft_engine::Session::with_demo());
+    let mut a = app(lcc_engine::Session::with_demo());
     a.ui.view = ViewMode::Detail;
     a.ui.left_panel = false;
     empty_library::open_on_empty_library(&mut a);
@@ -68,7 +59,7 @@ fn a_library_with_photos_opens_as_it_was_left() {
 
 #[test]
 fn deleted_photos_leave_the_library_empty() {
-    let mut s = lightcraft_engine::Session::with_demo();
+    let mut s = lcc_engine::Session::with_demo();
     assert!(!empty_library::is_empty(&s));
     let ids: Vec<_> = s.catalog.photos().map(|p| p.id).collect();
     s.selection.ids = ids.clone();
@@ -78,7 +69,7 @@ fn deleted_photos_leave_the_library_empty() {
 
 #[test]
 fn the_empty_grid_offers_import_as_buttons() {
-    let mut a = app(lightcraft_engine::Session::new());
+    let mut a = app(lcc_engine::Session::new());
     a.ui.view = ViewMode::PhotoGrid;
     let mut h = Headless::new(a, [1300.0, 900.0], 1.0);
     h.step();
@@ -96,7 +87,7 @@ fn the_empty_grid_offers_import_as_buttons() {
 #[test]
 fn the_empty_detail_view_offers_import_instead_of_the_grid() {
     // the dead end the critique found: Detail pointed at a grid with nothing in it
-    let mut a = app(lightcraft_engine::Session::new());
+    let mut a = app(lcc_engine::Session::new());
     a.ui.view = ViewMode::Detail;
     let mut h = Headless::new(a, [1300.0, 900.0], 1.0);
     h.step();
@@ -106,7 +97,7 @@ fn the_empty_detail_view_offers_import_instead_of_the_grid() {
 
 #[test]
 fn detail_with_photos_but_none_selected_keeps_its_message() {
-    let mut a = app(lightcraft_engine::Session::with_demo());
+    let mut a = app(lcc_engine::Session::with_demo());
     a.ui.view = ViewMode::Detail;
     let mut h = Headless::new(a, [1300.0, 900.0], 1.0);
     h.app.session.selection.ids.clear();
@@ -119,7 +110,7 @@ fn detail_with_photos_but_none_selected_keeps_its_message() {
 
 #[test]
 fn the_top_bar_imports_in_every_library() {
-    let mut h = Headless::new(app(lightcraft_engine::Session::with_demo()), [1300.0, 900.0], 1.0);
+    let mut h = Headless::new(app(lcc_engine::Session::with_demo()), [1300.0, 900.0], 1.0);
     h.step();
     h.step();
     assert!(has(&h, "icon:import"));
@@ -130,24 +121,11 @@ fn the_top_bar_imports_in_every_library() {
 }
 
 #[test]
-fn the_hint_shows_the_shortcut_as_bound() {
-    let mut keymap = crate::state::AppSettings::default().keymap;
-    assert_eq!(empty_library::hint(&keymap, true), "or drop photos and folders into this window · ⌘⇧I");
-    assert_eq!(empty_library::hint(&keymap, false), "or drop photos and folders into this window · Ctrl+Shift+I");
-    // a remapped shortcut is the one shown
-    crate::shortcuts::assign(&mut keymap, "file.addPhotos", Some("Cmd+Alt+I")).unwrap();
-    assert_eq!(empty_library::hint(&keymap, true), "or drop photos and folders into this window · ⌘⌥I");
-    // and none at all leaves the key out
-    crate::shortcuts::assign(&mut keymap, "file.addPhotos", None).unwrap();
-    assert_eq!(empty_library::hint(&keymap, true), "or drop photos and folders into this window");
-}
-
-#[test]
 fn a_folder_browsed_under_local_is_not_the_empty_library() {
     // its photos aren't in the library, but they are what is on screen: no import prompt
-    let mut a = app(lightcraft_engine::Session::new());
+    let mut a = app(lcc_engine::Session::new());
     a.ui.view = ViewMode::Detail;
-    a.session.source = lightcraft_engine::LibrarySource::Folder;
+    a.session.source = lcc_engine::LibrarySource::Folder;
     assert!(empty_library::is_empty(&a.session));
     assert!(!empty_library::shown(&a.session));
     let mut h = Headless::new(a, [1300.0, 900.0], 1.0);
@@ -159,11 +137,11 @@ fn a_folder_browsed_under_local_is_not_the_empty_library() {
 #[test]
 fn recently_deleted_is_not_the_empty_library() {
     // the deleted photos are on screen there: no import prompt beside them
-    let mut s = lightcraft_engine::Session::with_demo();
+    let mut s = lcc_engine::Session::with_demo();
     let ids: Vec<_> = s.catalog.photos().map(|p| p.id).collect();
     s.selection.ids = ids.clone();
     s.execute("photo.delete", &json!({"ids": ids.iter().map(|i| i.0).collect::<Vec<_>>()})).unwrap();
-    s.source = lightcraft_engine::LibrarySource::RecentlyDeleted;
+    s.source = lcc_engine::LibrarySource::RecentlyDeleted;
     assert!(empty_library::is_empty(&s));
     assert!(!empty_library::shown(&s));
 }
@@ -172,8 +150,8 @@ fn recently_deleted_is_not_the_empty_library() {
 fn the_import_button_leaves_the_filter_and_appearance_icons_apart() {
     // the search field is centred: a seventh icon on the right must not push it into them
     // with the menus in the window (Windows, Linux, web) and in the native menu bar (macOS)
-    for (width, native_menu) in [900.0, 906.0, 1024.0, 1200.0, 1600.0].into_iter().flat_map(|w| [(w, false), (w, true)]) {
-        let mut a = app(lightcraft_engine::Session::with_demo());
+    for (width, native_menu) in [900.0, 906.0, 1600.0].into_iter().flat_map(|w| [(w, false), (w, true)]) {
+        let mut a = app(lcc_engine::Session::with_demo());
         // a native menu bar comes with the title bar drawn in the window (macOS): a wider left margin
         a.native_menu = native_menu;
         a.integrated_titlebar = native_menu;

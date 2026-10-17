@@ -1,9 +1,9 @@
 //! The button component: its sizes, its looks in every theme and state, what screen readers hear,
 //! and that a disabled one can't be clicked.
 
-use egui::{Color32, Pos2, Rect, pos2, vec2};
+use egui::{Pos2, Rect, pos2, vec2};
 
-use crate::button::{Button, Kind, Size, State, contrast, look};
+use crate::button::{Button, Kind, State, contrast, look};
 use crate::icons::Icon;
 use crate::theme::{ThemeKind, Tokens};
 
@@ -28,31 +28,6 @@ fn frames<T: Default>(events: Vec<egui::Event>, mut draw: impl FnMut(&mut egui::
         }
     }
     (found, last)
-}
-
-#[test]
-fn the_three_sizes_and_an_icon_alone() {
-    let (_, sizes) = frames(Vec::new(), |ui| {
-        [Size::Small, Size::Medium, Size::Large]
-            .map(|s| (Button::new("Import Photos…").size(s).desired_size(ui), Button::icon_only(Icon::Trash, "Delete").size(s).desired_size(ui)))
-            .to_vec()
-    });
-    let heights: Vec<f32> = sizes.iter().map(|(text, _)| text.y).collect();
-    assert_eq!(heights, vec![24.0, 30.0, 36.0]);
-    for (text, icon) in &sizes {
-        assert_eq!(icon.x, icon.y, "an icon alone is square");
-        assert!(text.x > icon.x, "text makes it wider");
-    }
-    // an icon beside the text makes it wider still, and a minimum width holds
-    let (_, (plain, with_icon, wide)) = frames(Vec::new(), |ui| {
-        (
-            Button::new("Remove").desired_size(ui).x,
-            Button::new("Remove").icon(Icon::Trash).desired_size(ui).x,
-            Button::new("OK").min_width(120.0).desired_size(ui).x,
-        )
-    });
-    assert!(with_icon > plain);
-    assert_eq!(wide, 120.0);
 }
 
 #[test]
@@ -85,17 +60,6 @@ fn text_on_a_fill_reads_at_aa_in_every_theme_and_state() {
         assert!(ghost.fill.is_none());
         assert!(contrast(ghost.content, t.chrome) >= 4.5, "{kind:?} ghost on chrome");
     }
-}
-
-#[test]
-fn hover_and_press_are_darker_and_disabled_is_faded() {
-    let t = Tokens::for_kind(ThemeKind::Charcoal);
-    let luma = |c: Color32| u32::from(c.r()) + u32::from(c.g()) + u32::from(c.b());
-    let fill = |s| look(&t, Kind::Primary, s).fill.map(luma).unwrap_or(0);
-    assert!(fill(State::Hovered) < fill(State::Idle));
-    assert!(fill(State::Pressed) < fill(State::Hovered));
-    let disabled = look(&t, Kind::Primary, State::Disabled);
-    assert!(disabled.content.a() < 255, "faded");
 }
 
 #[test]

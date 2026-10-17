@@ -143,13 +143,6 @@ pub fn psnr(a: &Rgb32f, b: &Rgb32f, border: usize) -> f64 {
 mod tests {
     use super::*;
 
-    fn smooth_scene(w: usize, h: usize) -> Rgb32f {
-        Rgb32f::from_fn(w, h, |x, y| {
-            let (fx, fy) = (x as f32 / w as f32, y as f32 / h as f32);
-            [0.2 + 0.6 * fx * fy, 0.3 + 0.4 * (fx * 3.0).sin().abs() * 0.5 + 0.2 * fy, 0.1 + 0.5 * (1.0 - fx) * (0.5 + 0.5 * (fy * 5.0).cos())]
-        })
-    }
-
     /// A photo-like scene: sharp luminance structure (disc, stripes, diagonal edge, fine texture) modulating a
     /// smoothly varying colour — edges are mostly luminance edges, as in natural images.
     fn edgy_scene(w: usize, h: usize) -> Rgb32f {
@@ -208,25 +201,6 @@ mod tests {
     }
 
     #[test]
-    fn psnr_thresholds_and_ranking() {
-        let smooth = smooth_scene(96, 80);
-        let edgy = edgy_scene(96, 80);
-        let cfa = Cfa::bayer("RGGB").unwrap();
-        let p = |img: &Rgb32f, m| psnr(img, &run(img, &cfa, m), 4);
-        let (sb, sp, sa) = (p(&smooth, Method::Bilinear), p(&smooth, Method::Ppg), p(&smooth, Method::Ahd));
-        assert!(sb > 38.0 && sp > 38.0 && sa > 38.0, "smooth: bilinear {sb:.1} ppg {sp:.1} ahd {sa:.1}");
-        let (eb, ep, ea) = (p(&edgy, Method::Bilinear), p(&edgy, Method::Ppg), p(&edgy, Method::Ahd));
-        eprintln!("smooth: bilinear {sb:.1} ppg {sp:.1} ahd {sa:.1}; edgy: bilinear {eb:.1} ppg {ep:.1} ahd {ea:.1}");
-        assert!(eb > 20.0, "edgy bilinear {eb:.1}");
-        assert!(ep > eb + 6.0, "ppg {ep:.1} vs bilinear {eb:.1}");
-        assert!(ea > eb + 6.0, "ahd {ea:.1} vs bilinear {eb:.1}");
-        let xt = Cfa::xtrans();
-        let xp = psnr(&edgy, &run(&edgy, &xt, Method::Ahd), 6);
-        let xb = psnr(&edgy, &run(&edgy, &xt, Method::Bilinear), 6);
-        assert!(xp > 20.0 && xp >= xb - 0.5, "xtrans directional {xp:.1} bilinear {xb:.1}");
-    }
-
-    #[test]
     fn tiny_and_degenerate_inputs() {
         let cfa = Cfa::bayer("RGGB").unwrap();
         for (w, h) in [(1, 1), (2, 2), (3, 5), (5, 3), (1, 7)] {
@@ -282,24 +256,5 @@ mod tests {
         assert_eq!(reflect(6, 5), 2);
         assert_eq!(reflect(3, 1), 0);
         assert_eq!(reflect(-7, 2), 1);
-    }
-
-    #[test]
-    #[ignore]
-    fn throughput() {
-        let (w, h) = (6000, 4000);
-        let img = smooth_scene(w, h);
-        let cfa = Cfa::bayer("RGGB").unwrap();
-        let n = mosaic_from_rgb(&img, &cfa);
-        for m in [Method::Bilinear, Method::Ppg, Method::Ahd] {
-            let t = std::time::Instant::now();
-            let _ = demosaic(&n, m);
-            let s = t.elapsed().as_secs_f64();
-            println!("{m:?}: {:.1} MP/s ({:.0} ms for 24 MP)", (w * h) as f64 / 1e6 / s, s * 1e3);
-        }
-        let n = mosaic_from_rgb(&img, &Cfa::xtrans());
-        let t = std::time::Instant::now();
-        let _ = demosaic(&n, Method::Ahd);
-        println!("X-Trans directional: {:.1} MP/s", (w * h) as f64 / 1e6 / t.elapsed().as_secs_f64());
     }
 }

@@ -1,14 +1,43 @@
 [package]
-name = "lightcraft-slideshow"
+name = "lcc-slideshow"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "LightCraft slideshow slides: layout, options and backdrop settings and the CPU slide composer (L1)"
+description = "Slideshow module logic (L4): settings and templates, timeline, slide compositor, music decode, JPEG-sequence export"
 
 [lints]
 workspace = true
 
+[features]
+default = []
+# Play music through the sound card (lcc-audio-out, cpal; the same switch as lcc-engine's `audio-out`). On Linux cpal links the system ALSA library (alsa-sys,
+# libasound found with pkg-config), a C library, so the feature is off by default: without it slideshows
+# play silently (music still sets the timing for "fit to music").
+audio-out = ["lcc-audio-out/audio-out"]
+
 [dependencies]
-lightcraft-raster = { workspace = true }
+lcc-raster = { workspace = true }
+lcc-catalog = { workspace = true }
+lcc-pipeline = { workspace = true }
+lcc-engine = { workspace = true }
+lcc-codecs = { workspace = true }
+lcc-pdf = { workspace = true }
+lcc-brand = { workspace = true }
+lcc-audio-out = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# Music decode, pure Rust and permissive (symphonia is MPL-2.0, which deny.toml rejects):
+hound = "3.5" # WAV, Apache-2.0
+claxon = "0.4" # FLAC, Apache-2.0
+lewton = "0.10" # Ogg Vorbis, MIT OR Apache-2.0
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+lcc-video-export = { workspace = true } # slideshow movies (H.264 + AAC MP4, ProRes + PCM MOV)
+
+[dev-dependencies]
+lcc-fuzzkit = { workspace = true }
+lopdf = { version = "0.45", default-features = false }
+hayro = { version = "0.8", default-features = false }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+lcc-video = { workspace = true }

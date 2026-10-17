@@ -5,12 +5,12 @@
 
 use serde_json::{Value, json};
 
-use crate::LightcraftApp;
+use crate::LccApp;
 use crate::pick::{PickKind, PickRequest, Picked};
 
 /// `app.slideshowExport {format, size?, quality?, fps?, container?, fullScreen?, speed?, path?}`:
 /// without a path, a save dialog asks for one first.
-pub fn start(app: &mut LightcraftApp, id: &str, p: &Value) -> Result<Value, String> {
+pub fn start(app: &mut LccApp, id: &str, p: &Value) -> Result<Value, String> {
     if app.session.slideshow_export.as_ref().is_some_and(|r| r.running()) {
         return Err("a slideshow export is already running".into());
     }
@@ -43,7 +43,7 @@ pub fn start(app: &mut LightcraftApp, id: &str, p: &Value) -> Result<Value, Stri
 }
 
 /// Each frame: when the export has ended, say how (once).
-pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
+pub fn poll(app: &mut LccApp, ctx: &egui::Context) {
     if app.slideshow_export_reported {
         return;
     }
@@ -79,7 +79,7 @@ mod tests {
     use std::time::{Duration, Instant};
 
     /// The app with a picker that answers `answer` and remembers what it was asked.
-    fn app_answering(answer: String) -> (LightcraftApp, Arc<Mutex<Vec<PickRequest>>>) {
+    fn app_answering(answer: String) -> (LccApp, Arc<Mutex<Vec<PickRequest>>>) {
         let asked = Arc::new(Mutex::new(Vec::<PickRequest>::new()));
         let requests = asked.clone();
         let services = crate::Services {
@@ -91,9 +91,9 @@ mod tests {
             })),
             ..Default::default()
         };
-        let mut s = lightcraft_engine::Session::with_demo();
+        let mut s = lcc_engine::Session::with_demo();
         s.execute("slideshow.playback", &json!({"slideDuration": 1, "fadeDuration": 0.5})).unwrap();
-        (LightcraftApp::new(s, services), asked)
+        (LccApp::new(s, services), asked)
     }
 
     fn run_dialog(h: &mut crate::headless::Headless) -> Value {

@@ -1,541 +1,474 @@
-//! The slide composer: [`layout`] (where the image cell, the photo, its frame and shadow go) and
-//! [`compose`] (the slide's pixels, on the CPU).
+//! Draw a slide: backdrop (colour, wash, image), the photo in its cell (fit or fill, pan and zoom),
+//! its drop shadow and stroke, the overlays (identity plate, rating stars, watermark, token text),
+//! and the intro / ending screens; plus the cross-fade and colour-fade between two frames.
 //!
-//! Drawing order: backdrop colour → background image (at its opacity, filling the slide) → colour
-//! wash → cast shadow → stroke border → photo. The stroke is drawn around the outside of the
-//! photo (the photo keeps its size); the shadow falls from the photo with its stroke.
+//! Sources: own design (straight alpha blending of 8-bit sRGB values, bilinear sampling, a soft
+//! shadow from the distance to a rectangle).
 
-use lightcraft_raster::blur::gaussian;
-use lightcraft_raster::resample::{Filter, resize};
-use lightcraft_raster::{Image, Plane, Rgba8, par_rows};
+use lcc_engine::export::{Anchor, Watermark, draw_watermark};
+use lcc_raster::Rgba8;
 
-use crate::settings::{MAX_SIDE, SlideSettings};
+use crate::settings::{Settings, TitleScreen};
+use crate::tokens::{SlideInfo, expand};
 
-/// A rectangle in slide pixels (`x0 ≤ x1`, `y0 ≤ y1`).
+/// Largest frame edge the compositor draws (an export or a 8K screen).
+pub const MAX_EDGE: usize = 8192;
+
+/// A rectangle in pixels (floating point).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Rect {
-    pub x0: f64,
-    pub y0: f64,
-    pub x1: f64,
-    pub y1: f64,
+    pub x0: f32,
+    pub y0: f32,
+    pub x1: f32,
+    pub y1: f32,
 }
 
 impl Rect {
-    pub fn width(&self) -> f64 {
-        self.x1 - self.x0
+    pub fn w(&self) -> f32 {
+        (self.x1 - self.x0).max(0.0)
     }
-    pub fn height(&self) -> f64 {
-        self.y1 - self.y0
+    pub fn h(&self) -> f32 {
+        (self.y1 - self.y0).max(0.0)
     }
-    fn intersect(&self, o: &Rect) -> Rect {
-        let (x0, y0) = (self.x0.max(o.x0), self.y0.max(o.y0));
-        Rect { x0, y0, x1: self.x1.min(o.x1).max(x0), y1: self.y1.min(o.y1).max(y0) }
-    }
-    fn expand(&self, d: f64) -> Rect {
-        Rect { x0: self.x0 - d, y0: self.y0 - d, x1: self.x1 + d, y1: self.y1 + d }
-    }
-    fn shift(&self, dx: f64, dy: f64) -> Rect {
-        Rect { x0: self.x0 + dx, y0: self.y0 + dy, x1: self.x1 + dx, y1: self.y1 + dy }
-    }
-    /// Whole pixel bounds clipped to `w × h`: (x0, y0, x1, y1).
-    fn pixels(&self, w: usize, h: usize) -> (usize, usize, usize, usize) {
-        let c = |v: f64, max: usize| if v.is_finite() { v.round().clamp(0.0, max as f64) as usize } else { 0 };
-        let (x0, y0) = (c(self.x0, w), c(self.y0, h));
-        (x0, y0, c(self.x1, w).max(x0), c(self.y1, h).max(y0))
+    fn shrink(&self, d: f32) -> Rect {
+        Rect { x0: self.x0 + d, y0: self.y0 + d, x1: self.x1 - d, y1: self.y1 - d }
     }
 }
 
-/// Where a slide's parts go, in slide pixels.
+/// The geometry of a slide in a `w × h` frame.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Layout {
-    /// The slide.
+pub struct Geometry {
+    /// The slide (the frame, or the aspect rectangle inside it).
     pub slide: Rect,
-    /// The image cell: the slide inside its margins.
+    /// The photo cell (slide minus margins).
     pub cell: Rect,
-    /// The whole photo, scaled (with zoom to fill it extends past the cell).
+    /// Where the photo is drawn (inside the cell when fitted; may exceed it when filling, clipped).
     pub photo: Rect,
-    /// The part of the photo that shows (the photo inside the cell).
-    pub visible: Rect,
-    /// The visible photo with its stroke border (the visible photo when there is none).
-    pub frame: Rect,
-    /// The rectangle that casts the shadow (the frame, offset), and the blur's sigma in pixels.
-    pub shadow: Option<(Rect, f64)>,
 }
 
-/// A usable aspect: a non-finite, zero or absurd one takes `fallback`.
-fn sane_aspect(a: f64, fallback: f64) -> f64 {
-    if a.is_finite() && a > 1e-3 && a < 1e3 { a } else { fallback }
-}
-
-/// The slide size `out_w × out_h` limited to [`MAX_SIDE`] (proportionally) and at least 1 × 1.
-fn slide_size(out_w: usize, out_h: usize) -> (usize, usize) {
-    let (w, h) = (out_w.max(1), out_h.max(1));
-    let long = w.max(h);
-    if long <= MAX_SIDE {
-        return (w, h);
-    }
-    let k = MAX_SIDE as f64 / long as f64;
-    (((w as f64 * k).round() as usize).clamp(1, MAX_SIDE), ((h as f64 * k).round() as usize).clamp(1, MAX_SIDE))
-}
-
-/// The layout of a `out_w × out_h` slide showing a photo of aspect `photo_aspect` (width /
-/// height; a bad one fills the cell).
-pub fn layout(s: &SlideSettings, photo_aspect: f64, out_w: usize, out_h: usize) -> Layout {
-    let s = s.clone().sanitized();
-    let (w, h) = slide_size(out_w, out_h);
-    let (wf, hf) = (w as f64, h as f64);
-    let short = wf.min(hf);
-    // margins in pixels; when they leave no room (a tiny slide), they shrink to leave one pixel
-    let fit = |a: f64, b: f64, room: f64| {
-        let (a, b) = ((a * short).round(), (b * short).round());
-        if a + b <= room - 1.0 {
-            (a, b)
-        } else {
-            let k = ((room - 1.0).max(0.0)) / (a + b).max(1e-9);
-            ((a * k).floor(), (b * k).floor())
+/// Lay out a photo of `pw × ph` in a `w × h` frame.
+pub fn geometry(w: usize, h: usize, pw: usize, ph: usize, s: &Settings) -> Geometry {
+    let (fw, fh) = (w as f32, h as f32);
+    let slide = match s.layout.aspect.ratio() {
+        Some(r) if fw / fh.max(1.0) > r => {
+            let sw = fh * r;
+            Rect { x0: (fw - sw) / 2.0, y0: 0.0, x1: (fw + sw) / 2.0, y1: fh }
         }
-    };
-    let (ml, mr) = fit(s.margin_left, s.margin_right, wf);
-    let (mt, mb) = fit(s.margin_top, s.margin_bottom, hf);
-    let slide = Rect { x0: 0.0, y0: 0.0, x1: wf, y1: hf };
-    let cell = Rect { x0: ml, y0: mt, x1: wf - mr, y1: hf - mb };
-    let (cw, ch) = (cell.width().max(1.0), cell.height().max(1.0));
-    let a = sane_aspect(photo_aspect, cw / ch);
-    let wider = a > cw / ch;
-    // fit: the photo's longer side (relative to the cell) meets the cell; fill: the shorter
-    let (dw, dh) = if wider != s.zoom_to_fill { (cw, cw / a) } else { (ch * a, ch) };
-    let (dw, dh) = (dw.round().max(1.0), dh.round().max(1.0));
-    let x0 = (cell.x0 + (cw - dw) / 2.0).round();
-    let y0 = (cell.y0 + (ch - dh) / 2.0).round();
-    let photo = Rect { x0, y0, x1: x0 + dw, y1: y0 + dh };
-    let visible = photo.intersect(&cell);
-    let stroke = if s.stroke_border && s.stroke_width > 0.0 { (s.stroke_width * short).round().max(1.0) } else { 0.0 };
-    let frame = visible.expand(stroke).intersect(&slide);
-    let shadow = (s.cast_shadow && s.shadow_opacity > 0.0).then(|| {
-        let (d, t) = (s.shadow_offset * short, s.shadow_angle.to_radians());
-        // counter-clockwise from the right, y down on screen
-        (frame.shift(d * t.cos(), -d * t.sin()), s.shadow_radius * short / 2.0)
-    });
-    Layout { slide, cell, photo, visible, frame, shadow }
-}
-
-/// The size to render a photo of aspect `photo_aspect` at for a `out_w × out_h` slide: the
-/// photo's whole size in the slide (with zoom to fill, larger than its cell), at most 4× the
-/// slide's long side.
-pub fn photo_size(s: &SlideSettings, photo_aspect: f64, out_w: usize, out_h: usize) -> (usize, usize) {
-    let l = layout(s, photo_aspect, out_w, out_h);
-    let (w, h) = (l.photo.width().max(1.0), l.photo.height().max(1.0));
-    let cap = 4.0 * l.slide.width().max(l.slide.height());
-    let k = (cap / w.max(h)).min(1.0);
-    (((w * k).round() as usize).max(1), ((h * k).round() as usize).max(1))
-}
-
-fn mix(a: u8, b: u8, t: f32) -> u8 {
-    (a as f32 + (b as f32 - a as f32) * t).round().clamp(0.0, 255.0) as u8
-}
-
-fn mix_px(dst: &mut [u8; 4], src: [u8; 3], t: f32) {
-    for (d, s) in dst.iter_mut().zip(src) {
-        *d = mix(*d, s, t);
-    }
-    dst[3] = 255;
-}
-
-/// Draw `src` scaled to `dest` (slide pixels), only where it meets `clip`, at `opacity`.
-/// Only the part of `src` that shows is resampled (a zoomed-to-fill panorama stays cheap).
-fn draw_image(out: &mut Rgba8, src: &Rgba8, dest: &Rect, clip: &Rect, opacity: f32) {
-    if src.width == 0 || src.height == 0 || src.data.len() != src.width * src.height || opacity <= 0.0 {
-        return;
-    }
-    let (w, h) = (out.width, out.height);
-    let (vx0, vy0, vx1, vy1) = dest.intersect(clip).pixels(w, h);
-    let (vw, vh) = (vx1 - vx0, vy1 - vy0);
-    if vw == 0 || vh == 0 || dest.width() <= 0.0 || dest.height() <= 0.0 {
-        return;
-    }
-    // the source pixels behind the visible part
-    let (sx, sy) = (src.width as f64 / dest.width(), src.height as f64 / dest.height());
-    let to_src = |v: f64, origin: f64, k: f64, max: usize| ((v - origin) * k).clamp(0.0, max as f64);
-    let (s0x, s1x) = (to_src(vx0 as f64, dest.x0, sx, src.width).floor(), to_src(vx1 as f64, dest.x0, sx, src.width).ceil());
-    let (s0y, s1y) = (to_src(vy0 as f64, dest.y0, sy, src.height).floor(), to_src(vy1 as f64, dest.y0, sy, src.height).ceil());
-    let (cx, cy) = (s0x as usize, s0y as usize);
-    let (cw, ch) = (((s1x - s0x) as usize).max(1), ((s1y - s0y) as usize).max(1));
-    let part = if (cx, cy, cw, ch) == (0, 0, src.width, src.height) { None } else { Some(src.crop(cx, cy, cw, ch)) };
-    let part = part.as_ref().unwrap_or(src);
-    let scaled: Rgba8 = if (part.width, part.height) == (vw, vh) {
-        part.clone()
-    } else {
-        let f = part.map(|p| [p[0] as f32, p[1] as f32, p[2] as f32, p[3] as f32]);
-        let filter = if vw < part.width { Filter::Lanczos3 } else { Filter::Mitchell };
-        resize(&f, vw, vh, filter).map(|p| [0, 1, 2, 3].map(|i| p[i].round().clamp(0.0, 255.0) as u8))
-    };
-    for (row, y) in (vy0..vy1).enumerate() {
-        let (Some(dst), Some(s)) = (out.data.get_mut(y * w + vx0..y * w + vx1), scaled.data.get(row * vw..(row + 1) * vw)) else {
-            continue;
-        };
-        for (d, p) in dst.iter_mut().zip(s) {
-            let a = opacity * p[3] as f32 / 255.0;
-            mix_px(d, [p[0], p[1], p[2]], a);
+        Some(r) => {
+            let sh = fw / r;
+            Rect { x0: 0.0, y0: (fh - sh) / 2.0, x1: fw, y1: (fh + sh) / 2.0 }
         }
+        None => Rect { x0: 0.0, y0: 0.0, x1: fw, y1: fh },
+    };
+    let [l, t, r, b] = s.layout.margins;
+    let cell = Rect { x0: slide.x0 + l * slide.w(), y0: slide.y0 + t * slide.h(), x1: slide.x1 - r * slide.w(), y1: slide.y1 - b * slide.h() };
+    let (pw, ph) = (pw.max(1) as f32, ph.max(1) as f32);
+    let (sx, sy) = (cell.w() / pw, cell.h() / ph);
+    let k = if s.options.zoom_to_fill { sx.max(sy) } else { sx.min(sy) };
+    let (dw, dh) = (pw * k, ph * k);
+    let (cx, cy) = ((cell.x0 + cell.x1) / 2.0, (cell.y0 + cell.y1) / 2.0);
+    let photo = Rect { x0: cx - dw / 2.0, y0: cy - dh / 2.0, x1: cx + dw / 2.0, y1: cy + dh / 2.0 };
+    Geometry { slide, cell, photo }
+}
+
+fn checked_frame(w: usize, h: usize, fill: [u8; 3]) -> Result<Rgba8, String> {
+    if w == 0 || h == 0 || w > MAX_EDGE || h > MAX_EDGE {
+        return Err(format!("slide size {w}×{h} is outside 1…{MAX_EDGE}"));
+    }
+    Ok(Rgba8::filled(w, h, [fill[0], fill[1], fill[2], 255]))
+}
+
+fn blend_px(p: &mut [u8; 4], c: [u8; 3], k: f32) {
+    let k = k.clamp(0.0, 1.0);
+    for i in 0..3 {
+        p[i] = (f32::from(p[i]) + (f32::from(c[i]) - f32::from(p[i])) * k).round() as u8;
     }
 }
 
-/// Fill `r` with `c`.
-fn fill(out: &mut Rgba8, r: &Rect, c: [u8; 3]) {
-    let w = out.width;
-    let (x0, y0, x1, y1) = r.pixels(out.width, out.height);
+/// Bilinear sample of `img` at pixel coordinates (centres at +0.5).
+fn sample(img: &Rgba8, x: f32, y: f32) -> [f32; 4] {
+    let (w, h) = (img.width, img.height);
+    if w == 0 || h == 0 {
+        return [0.0; 4];
+    }
+    let fx = (x - 0.5).clamp(0.0, (w - 1) as f32);
+    let fy = (y - 0.5).clamp(0.0, (h - 1) as f32);
+    let (x0, y0) = (fx.floor() as usize, fy.floor() as usize);
+    let (x1, y1) = ((x0 + 1).min(w - 1), (y0 + 1).min(h - 1));
+    let (tx, ty) = (fx - x0 as f32, fy - y0 as f32);
+    let px = |x: usize, y: usize| img.data.get(y * w + x).copied().unwrap_or([0; 4]);
+    let (a, b, c, d) = (px(x0, y0), px(x1, y0), px(x0, y1), px(x1, y1));
+    let mut out = [0.0; 4];
+    for i in 0..4 {
+        let top = f32::from(a[i]) + (f32::from(b[i]) - f32::from(a[i])) * tx;
+        let bottom = f32::from(c[i]) + (f32::from(d[i]) - f32::from(c[i])) * tx;
+        out[i] = top + (bottom - top) * ty;
+    }
+    out
+}
+
+/// Pixel bounds of `r` clipped to the image.
+fn bounds(img: &Rgba8, r: Rect) -> (usize, usize, usize, usize) {
+    let cl = |v: f32, max: usize| if v.is_finite() { v.clamp(0.0, max as f32) as usize } else { 0 };
+    (cl(r.x0.floor(), img.width), cl(r.y0.floor(), img.height), cl(r.x1.ceil(), img.width), cl(r.y1.ceil(), img.height))
+}
+
+fn backdrop(img: &mut Rgba8, s: &Settings, slide: Rect, background: Option<&Rgba8>) {
+    let b = &s.backdrop;
+    let (x0, y0, x1, y1) = bounds(img, slide);
+    let w = img.width;
     for y in y0..y1 {
-        if let Some(row) = out.data.get_mut(y * w + x0..y * w + x1) {
-            row.fill([c[0], c[1], c[2], 255]);
+        for x in x0..x1 {
+            let Some(p) = img.data.get_mut(y * w + x) else { continue };
+            *p = [b.color[0], b.color[1], b.color[2], 255];
         }
     }
-}
-
-/// A 1-D blurred step: 1 inside `[a, b)`, blurred with `sigma` (pixels), over `0..n`.
-fn blurred_step(n: usize, a: f64, b: f64, sigma: f64) -> Vec<f32> {
-    let inside = Plane::from_fn(n, 1, |x, _| {
-        let c = x as f64 + 0.5;
-        if c >= a && c < b { 1.0 } else { 0.0 }
-    });
-    gaussian(&inside, sigma as f32).data
-}
-
-/// The slide: `photo` (the developed photo, any size: it is scaled into its cell) and the
-/// backdrop image (any size; it fills the slide) composed with `s` at `out_w × out_h` pixels
-/// (limited to [`MAX_SIDE`] a side, at least 1 × 1). An empty `photo` draws the backdrop alone.
-pub fn compose(photo: &Rgba8, backdrop_image: Option<&Rgba8>, s: &SlideSettings, out_w: usize, out_h: usize) -> Rgba8 {
-    compose_with(photo, backdrop_image, s, out_w, out_h, &mut |_, _| {}).0
-}
-
-/// [`compose`], calling `behind(slide, layout)` once the backdrop is drawn and before the shadow,
-/// the stroke and the photo (so it draws behind the photo: a slideshow identity plate with
-/// "render behind image"), and returning the layout it drew with (for overlays drawn on top).
-pub fn compose_with(
-    photo: &Rgba8,
-    backdrop_image: Option<&Rgba8>,
-    s: &SlideSettings,
-    out_w: usize,
-    out_h: usize,
-    behind: &mut dyn FnMut(&mut Rgba8, &Layout),
-) -> (Rgba8, Layout) {
-    let s = s.clone().sanitized();
-    let (w, h) = slide_size(out_w, out_h);
-    let has_photo = photo.width > 0 && photo.height > 0 && photo.data.len() == photo.width * photo.height;
-    let aspect = if has_photo { photo.width as f64 / photo.height as f64 } else { f64::NAN };
-    let l = layout(&s, aspect, w, h);
-    let c = s.backdrop_color;
-    let mut out = Image::filled(w, h, [c[0], c[1], c[2], 255]);
-    // background image: the photo filling the slide, at its opacity
-    if let Some(bg) = backdrop_image.filter(|_| s.background_image.is_some() && s.background_opacity > 0.0)
-        && bg.width > 0
-        && bg.height > 0
-    {
-        let a = bg.width as f64 / bg.height as f64;
-        let fill_all = SlideSettings { zoom_to_fill: true, margin_left: 0.0, margin_right: 0.0, margin_top: 0.0, margin_bottom: 0.0, ..s.clone() };
-        let bl = layout(&fill_all, a, w, h);
-        draw_image(&mut out, bg, &bl.photo, &bl.slide, s.background_opacity as f32);
-    }
-    // colour wash: full wash colour at the side the angle points to, none at the opposite side
-    if s.color_wash && s.wash_opacity > 0.0 {
-        let t = s.wash_angle.to_radians();
-        let (dx, dy) = (t.cos(), -t.sin());
-        let (cx, cy) = (w as f64 / 2.0, h as f64 / 2.0);
-        let extent = (cx * dx.abs() + cy * dy.abs()).max(1e-9);
-        let (wc, op) = (s.wash_color, s.wash_opacity);
-        par_rows(&mut out.data, w, |y, row| {
-            let py = y as f64 + 0.5 - cy;
-            for (x, p) in row.iter_mut().enumerate() {
-                let proj = (x as f64 + 0.5 - cx) * dx + py * dy;
-                let k = ((proj / extent + 1.0) / 2.0).clamp(0.0, 1.0);
-                mix_px(p, wc, (k * op) as f32);
-            }
-        });
-    }
-    behind(&mut out, &l);
-    // cast shadow: a blurred rectangle (separable: the product of two blurred steps)
-    if let Some((r, sigma)) = l.shadow {
-        let op = s.shadow_opacity as f32;
-        let fx = blurred_step(w, r.x0, r.x1, sigma);
-        let fy = blurred_step(h, r.y0, r.y1, sigma);
-        par_rows(&mut out.data, w, |y, row| {
-            let ky = fy.get(y).copied().unwrap_or(0.0);
-            if ky <= 1e-4 {
-                return;
-            }
-            for (p, kx) in row.iter_mut().zip(&fx) {
-                let a = op * ky * kx;
-                if a > 1e-4 {
-                    mix_px(p, [0, 0, 0], a);
+    if let Some(bg) = background.filter(|_| b.image_opacity > 0.0) {
+        // cover the slide with the image
+        let k = (slide.w() / bg.width.max(1) as f32).max(slide.h() / bg.height.max(1) as f32).max(1e-6);
+        let (ox, oy) = ((slide.w() - bg.width as f32 * k) / 2.0, (slide.h() - bg.height as f32 * k) / 2.0);
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let sx = (x as f32 + 0.5 - slide.x0 - ox) / k;
+                let sy = (y as f32 + 0.5 - slide.y0 - oy) / k;
+                let c = sample(bg, sx, sy);
+                if let Some(p) = img.data.get_mut(y * w + x) {
+                    blend_px(p, [c[0] as u8, c[1] as u8, c[2] as u8], b.image_opacity * c[3] / 255.0);
                 }
             }
-        });
+        }
     }
-    if l.frame != l.visible {
-        fill(&mut out, &l.frame, s.stroke_color);
+    if b.wash && b.wash_opacity > 0.0 {
+        let a = b.wash_angle.to_radians();
+        let (dx, dy) = (a.cos(), -a.sin());
+        let (cx, cy) = ((slide.x0 + slide.x1) / 2.0, (slide.y0 + slide.y1) / 2.0);
+        let half = ((slide.w() * dx).abs() + (slide.h() * dy).abs()).max(1.0) / 2.0;
+        for y in y0..y1 {
+            for x in x0..x1 {
+                // 1 at the wash's side, 0 at the opposite one
+                let t = ((x as f32 + 0.5 - cx) * dx + (y as f32 + 0.5 - cy) * dy) / half;
+                let k = ((t + 1.0) / 2.0).clamp(0.0, 1.0) * b.wash_opacity;
+                if let Some(p) = img.data.get_mut(y * w + x) {
+                    blend_px(p, b.wash_color, k);
+                }
+            }
+        }
     }
-    if has_photo {
-        draw_image(&mut out, photo, &l.photo, &l.cell, 1.0);
+}
+
+fn shadow(img: &mut Rgba8, r: Rect, s: &Settings, short: f32) {
+    let o = &s.options;
+    let a = o.shadow_angle.to_radians();
+    let off = o.shadow_offset * short;
+    let rad = (o.shadow_radius * short).max(0.5);
+    let sr = Rect { x0: r.x0 + a.cos() * off, y0: r.y0 - a.sin() * off, x1: r.x1 + a.cos() * off, y1: r.y1 - a.sin() * off };
+    let (x0, y0, x1, y1) = bounds(img, Rect { x0: sr.x0 - rad, y0: sr.y0 - rad, x1: sr.x1 + rad, y1: sr.y1 + rad });
+    let w = img.width;
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+            let dx = (sr.x0 - px).max(px - sr.x1).max(0.0);
+            let dy = (sr.y0 - py).max(py - sr.y1).max(0.0);
+            let d = (dx * dx + dy * dy).sqrt() / rad;
+            let k = (1.0 - d).clamp(0.0, 1.0);
+            let k = k * k * (3.0 - 2.0 * k) * o.shadow_opacity;
+            if let Some(p) = img.data.get_mut(y * w + x) {
+                blend_px(p, [0, 0, 0], k);
+            }
+        }
     }
-    (out, l)
+}
+
+fn fill_rect(img: &mut Rgba8, r: Rect, c: [u8; 3], k: f32) {
+    let (x0, y0, x1, y1) = bounds(img, r);
+    let w = img.width;
+    for y in y0..y1 {
+        for x in x0..x1 {
+            if let Some(p) = img.data.get_mut(y * w + x) {
+                blend_px(p, c, k);
+            }
+        }
+    }
+}
+
+/// Draw the photo into `dest` clipped to `clip`, showing the window `(zoom, cx, cy)` of it.
+fn draw_photo(img: &mut Rgba8, photo: &Rgba8, dest: Rect, clip: Rect, view: (f32, f32, f32)) {
+    let (zoom, cx, cy) = view;
+    let zoom = if zoom.is_finite() { zoom.max(1.0) } else { 1.0 };
+    let r = Rect { x0: dest.x0.max(clip.x0), y0: dest.y0.max(clip.y0), x1: dest.x1.min(clip.x1), y1: dest.y1.min(clip.y1) };
+    let (x0, y0, x1, y1) = bounds(img, r);
+    let (dw, dh) = (dest.w().max(1e-3), dest.h().max(1e-3));
+    let (pw, ph) = (photo.width as f32, photo.height as f32);
+    let w = img.width;
+    for y in y0..y1 {
+        let v = (y as f32 + 0.5 - dest.y0) / dh;
+        let sy = (cy + (v - 0.5) / zoom) * ph;
+        for x in x0..x1 {
+            let u = (x as f32 + 0.5 - dest.x0) / dw;
+            let sx = (cx + (u - 0.5) / zoom) * pw;
+            let c = sample(photo, sx, sy);
+            if let Some(p) = img.data.get_mut(y * w + x) {
+                blend_px(p, [c[0].round() as u8, c[1].round() as u8, c[2].round() as u8], c[3] / 255.0);
+            }
+        }
+    }
+}
+
+/// Draw `text` inside `area` of `img` at `anchor`; `size` is a fraction of `short`.
+pub fn text_in(img: &mut Rgba8, area: Rect, text: &str, anchor: Anchor, size: f32, short: f32, color: [u8; 3], opacity: f32, shadow: bool) {
+    if text.trim().is_empty() || opacity <= 0.0 {
+        return;
+    }
+    let (x0, y0, x1, y1) = bounds(img, area);
+    if x1 <= x0 + 2 || y1 <= y0 + 2 {
+        return;
+    }
+    let (w, h) = (x1 - x0, y1 - y0);
+    let mut sub = img.crop(x0, y0, w, h);
+    let sub_short = w.min(h) as f32;
+    let inset = (0.02 * short / sub_short).clamp(0.0, 0.5);
+    let wm = Watermark {
+        text: text.to_string(),
+        size: (size * short / sub_short).clamp(0.001, 1.0),
+        opacity: opacity.clamp(0.0, 1.0),
+        anchor,
+        inset_x: inset,
+        inset_y: inset,
+        color,
+        shadow,
+        ..Default::default()
+    };
+    draw_watermark(&mut sub, &wm);
+    let iw = img.width;
+    for row in 0..h {
+        let (Some(dst), Some(src)) = (img.data.get_mut((y0 + row) * iw + x0..(y0 + row) * iw + x0 + w), sub.data.get(row * w..(row + 1) * w)) else {
+            continue;
+        };
+        dst.copy_from_slice(src);
+    }
+}
+
+/// A five-pointed star polygon centred at (cx, cy) with outer radius r.
+fn star(cx: f32, cy: f32, r: f32) -> [(f32, f32); 10] {
+    let mut pts = [(0.0, 0.0); 10];
+    for (i, p) in pts.iter_mut().enumerate() {
+        let a = -std::f32::consts::FRAC_PI_2 + i as f32 * std::f32::consts::PI / 5.0;
+        let rr = if i % 2 == 0 { r } else { r * 0.42 };
+        *p = (cx + rr * a.cos(), cy + rr * a.sin());
+    }
+    pts
+}
+
+fn inside(poly: &[(f32, f32)], x: f32, y: f32) -> bool {
+    let mut c = false;
+    let n = poly.len();
+    for i in 0..n {
+        let (xi, yi) = poly[i];
+        let (xj, yj) = poly[(i + n - 1) % n];
+        if (yi > y) != (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi {
+            c = !c;
+        }
+    }
+    c
+}
+
+/// Rating stars at the photo's bottom-right corner, inside it.
+fn stars(img: &mut Rgba8, photo: Rect, rating: u8, s: &Settings, short: f32) {
+    let n = rating.min(5);
+    if n == 0 {
+        return;
+    }
+    let o = &s.overlays;
+    let r = o.rating_size * short / 2.0;
+    let gap = r * 2.2;
+    let pad = 0.015 * short + r;
+    let w = img.width;
+    for i in 0..n {
+        let cx = photo.x1 - pad - (n - 1 - i) as f32 * gap;
+        let cy = photo.y1 - pad;
+        let poly = star(cx, cy, r);
+        let (x0, y0, x1, y1) = bounds(img, Rect { x0: cx - r, y0: cy - r, x1: cx + r, y1: cy + r });
+        for y in y0..y1 {
+            for x in x0..x1 {
+                // 2×2 supersampling for smooth edges
+                let mut cov = 0.0;
+                for (dx, dy) in [(0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)] {
+                    if inside(&poly, x as f32 + dx, y as f32 + dy) {
+                        cov += 0.25;
+                    }
+                }
+                if cov > 0.0
+                    && let Some(p) = img.data.get_mut(y * w + x)
+                {
+                    blend_px(p, o.rating_color, cov * o.rating_opacity);
+                }
+            }
+        }
+    }
+}
+
+/// Compose one slide at `w × h`. `photo`: the rendered photo (`None` draws the empty cell, as a
+/// layout preview); `view`: pan and zoom (`(1, 0.5, 0.5)` = still); `background`: the decoded
+/// backdrop image, if any; `plate`: the identity plate text when the settings leave theirs empty.
+pub fn compose_slide(
+    w: usize,
+    h: usize,
+    photo: Option<&Rgba8>,
+    info: &SlideInfo,
+    s: &Settings,
+    view: (f32, f32, f32),
+    background: Option<&Rgba8>,
+    plate: &str,
+) -> Result<Rgba8, String> {
+    let mut img = checked_frame(w, h, [0, 0, 0])?;
+    let (pw, ph) = photo.map_or((3, 2), |p| (p.width, p.height));
+    let g = geometry(w, h, pw, ph, s);
+    let short = g.slide.w().min(g.slide.h()).max(1.0);
+    backdrop(&mut img, s, g.slide, background);
+    let visible = Rect { x0: g.photo.x0.max(g.cell.x0), y0: g.photo.y0.max(g.cell.y0), x1: g.photo.x1.min(g.cell.x1), y1: g.photo.y1.min(g.cell.y1) };
+    if s.options.shadow && s.options.shadow_opacity > 0.0 {
+        shadow(&mut img, visible, s, short);
+    }
+    if s.options.stroke && s.options.stroke_width > 0.0 {
+        let sw = (s.options.stroke_width * short).max(1.0);
+        fill_rect(&mut img, visible.shrink(-sw), s.options.stroke_color, 1.0);
+    }
+    match photo {
+        Some(p) if p.width > 0 && p.height > 0 => draw_photo(&mut img, p, g.photo, g.cell, view),
+        _ => fill_rect(&mut img, visible, [90, 90, 90], 1.0),
+    }
+    let o = &s.overlays;
+    if o.identity_plate {
+        let text = if o.plate_text.trim().is_empty() { plate } else { o.plate_text.as_str() };
+        text_in(&mut img, g.slide, text, o.plate_anchor, o.plate_size, short, [235, 235, 235], o.plate_opacity, false);
+    }
+    if o.rating {
+        stars(&mut img, visible, info.rating, s, short);
+    }
+    if !o.watermark.trim().is_empty() {
+        text_in(&mut img, visible, &expand(&o.watermark, info), Anchor::BottomRight, 0.025, short, [255, 255, 255], 0.6, true);
+    }
+    for t in &o.texts {
+        let area = if t.on_photo { visible } else { g.slide };
+        text_in(&mut img, area, &expand(&t.text, info), t.anchor, t.size, short, t.color, t.opacity, t.shadow);
+    }
+    Ok(img)
+}
+
+/// The intro or ending screen.
+pub fn compose_title(w: usize, h: usize, t: &TitleScreen, plate: &str) -> Result<Rgba8, String> {
+    let mut img = checked_frame(w, h, t.color)?;
+    let short = w.min(h) as f32;
+    let full = Rect { x0: 0.0, y0: 0.0, x1: w as f32, y1: h as f32 };
+    let text = if !t.text.trim().is_empty() {
+        t.text.as_str()
+    } else if t.plate {
+        plate
+    } else {
+        ""
+    };
+    text_in(&mut img, full, text, Anchor::Center, t.size, short, t.text_color, 1.0, false);
+    Ok(img)
+}
+
+/// `a` → `b` by `k` (0..1); frames of different sizes give `a`.
+pub fn crossfade(a: &Rgba8, b: &Rgba8, k: f32) -> Rgba8 {
+    let mut out = a.clone();
+    if a.width != b.width || a.height != b.height {
+        return out;
+    }
+    for (p, q) in out.data.iter_mut().zip(&b.data) {
+        blend_px(p, [q[0], q[1], q[2]], k);
+    }
+    out
+}
+
+/// Fade `a` towards `color` by `k` (0..1).
+pub fn fade_to(a: &Rgba8, color: [u8; 3], k: f32) -> Rgba8 {
+    let mut out = a.clone();
+    for p in &mut out.data {
+        blend_px(p, color, k);
+    }
+    out
+}
+
+/// The transition between `a` and `b` at `k`: a cross-fade, or through `color` (first half out,
+/// second half in) when the playback fades through a colour.
+pub fn transition(a: &Rgba8, b: &Rgba8, k: f32, s: &Settings) -> Rgba8 {
+    if s.playback.color_fade {
+        if k < 0.5 { fade_to(a, s.playback.fade_color, k * 2.0) } else { fade_to(b, s.playback.fade_color, (1.0 - k) * 2.0) }
+    } else {
+        crossfade(a, b, k)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::settings::{MARGIN_MAX, SHADOW_OFFSET_MAX, SHADOW_RADIUS_MAX, STROKE_MAX};
-    use serde_json::json;
 
-    fn solid(w: usize, h: usize, c: [u8; 3]) -> Rgba8 {
-        Image::filled(w, h, [c[0], c[1], c[2], 255])
-    }
-
-    fn with(p: serde_json::Value) -> SlideSettings {
-        SlideSettings::default().merged(&p).unwrap()
-    }
-
-    fn px(img: &Rgba8, x: usize, y: usize) -> [u8; 3] {
-        let p = img.get(x, y);
-        [p[0], p[1], p[2]]
-    }
-
-    const RED: [u8; 3] = [255, 0, 0];
-    const GREEN: [u8; 3] = [0, 200, 0];
-
-    #[test]
-    fn margins_make_the_cell_and_the_photo_fits_inside_it() {
-        // 1000 × 500 slide, 10 % margins (of the 500 px short side = 50 px)
-        let s = with(json!({"margins": 0.1}));
-        let l = layout(&s, 1.0, 1000, 500);
-        assert_eq!(l.cell, Rect { x0: 50.0, y0: 50.0, x1: 950.0, y1: 450.0 });
-        // a square photo fits the 900 × 400 cell's height, centred
-        assert_eq!(l.photo, Rect { x0: 300.0, y0: 50.0, x1: 700.0, y1: 450.0 });
-        assert_eq!(l.visible, l.photo);
-        // independent margins
-        let s = with(json!({"linkMargins": false, "marginLeft": 0.2, "marginTop": 0.0, "marginRight": 0.0, "marginBottom": 0.4}));
-        let l = layout(&s, 3.0, 1000, 500);
-        assert_eq!(l.cell, Rect { x0: 100.0, y0: 0.0, x1: 1000.0, y1: 300.0 });
-        assert_eq!((l.photo.width(), l.photo.height()), (900.0, 300.0), "3:1 fits 900 × 300 exactly");
-
-        let img = compose(&solid(64, 64, GREEN), None, &with(json!({"margins": 0.1, "backdropColor": "#ff0000"})), 1000, 500);
-        assert_eq!((img.width, img.height), (1000, 500));
-        assert_eq!(px(&img, 10, 10), RED, "margin: backdrop");
-        assert_eq!(px(&img, 500, 250), GREEN, "cell centre: photo");
-        assert_eq!(px(&img, 290, 250), RED, "beside a fitted square photo: backdrop");
-        assert_eq!(px(&img, 310, 60), GREEN);
+    fn photo() -> Rgba8 {
+        Rgba8::filled(300, 200, [200, 30, 30, 255])
     }
 
     #[test]
-    fn zoom_to_fill_covers_the_cell_and_crops() {
-        let s = with(json!({"margins": 0.1, "zoomToFill": true}));
-        let l = layout(&s, 1.0, 1000, 500);
-        assert_eq!((l.photo.width(), l.photo.height()), (900.0, 900.0), "the square photo covers the 900 × 400 cell");
-        assert_eq!(l.visible, l.cell, "and shows only inside it");
-        assert_eq!(photo_size(&s, 1.0, 1000, 500), (900, 900), "rendered whole at the covering size");
-        // a gradient photo: zoomed to fill, its middle rows show, its top and bottom are cut
-        let photo = Rgba8::from_fn(100, 100, |_, y| [(y * 2) as u8, 0, 0, 255]);
-        let img = compose(&photo, None, &s, 1000, 500);
-        assert_eq!(px(&img, 500, 10), [0, 0, 0], "margin stays the backdrop");
-        assert_eq!(px(&img, 60, 250), px(&img, 940, 250), "covers the cell edge to edge");
-        let top = img.get(500, 51)[0];
-        assert!(top > 40, "the photo's top rows are cropped away ({top})");
-        // fit draws the whole photo (its first rows near black)
-        let img = compose(&photo, None, &with(json!({"margins": 0.1})), 1000, 500);
-        assert!(img.get(500, 51)[0] < 6);
+    fn fit_keeps_the_photo_inside_the_cell() {
+        let s = Settings::default();
+        let g = geometry(1000, 500, 300, 200, &s);
+        assert!(g.photo.x0 >= g.cell.x0 - 0.01 && g.photo.x1 <= g.cell.x1 + 0.01);
+        assert!((g.photo.h() - g.cell.h()).abs() < 0.01);
+        let mut f = s.clone();
+        f.options.zoom_to_fill = true;
+        let g = geometry(1000, 500, 300, 200, &f);
+        assert!((g.photo.w() - g.cell.w()).abs() < 0.01 && g.photo.h() > g.cell.h());
     }
 
     #[test]
-    fn aspect_preview_ratios() {
-        use crate::settings::Aspect;
-        let s = with(json!({"aspect": "4:3"}));
-        let r = s.aspect.ratio(2.0);
-        assert!((r - 4.0 / 3.0).abs() < 1e-12);
-        assert_eq!(with(json!({"aspect": "screen"})).aspect.ratio(2.0), 2.0);
-        assert_eq!(Aspect::parse("16:9"), Some(Aspect::Wide));
-        // a 4:3 slide of a 3:2 photo letterboxes top and bottom
-        let l = layout(&s, 1.5, 800, 600);
-        assert_eq!((l.photo.width(), l.photo.height(), l.photo.y0), (800.0, 533.0, 34.0));
+    fn aspect_letterboxes_the_slide() {
+        let mut s = Settings::default();
+        s.layout.aspect = crate::settings::Aspect::Classic4x3;
+        let g = geometry(1600, 900, 300, 200, &s);
+        assert!((g.slide.w() - 1200.0).abs() < 0.01);
     }
 
     #[test]
-    fn stroke_surrounds_the_photo_and_shadow_falls_at_its_angle() {
-        let s = with(json!({"margins": 0.2, "strokeBorder": true, "strokeWidth": 0.02, "strokeColor": "#ffffff"}));
-        let l = layout(&s, 1.0, 1000, 1000);
-        assert_eq!(l.visible, Rect { x0: 200.0, y0: 200.0, x1: 800.0, y1: 800.0 });
-        assert_eq!(l.frame, Rect { x0: 180.0, y0: 180.0, x1: 820.0, y1: 820.0 }, "20 px outside the photo");
-        let img = compose(&solid(10, 10, GREEN), None, &s, 1000, 1000);
-        assert_eq!(px(&img, 190, 500), [255, 255, 255], "stroke left");
-        assert_eq!(px(&img, 810, 810), [255, 255, 255], "stroke corner");
-        assert_eq!(px(&img, 175, 500), [0, 0, 0], "outside the stroke");
-        assert_eq!(px(&img, 205, 500), GREEN, "the photo keeps its size");
-
-        // shadow at −45° (down-right) by 5 %, hard edged (radius 0), opaque
-        let s = with(
-            json!({"margins": 0.2, "castShadow": true, "shadowOffset": 0.05, "shadowAngle": -45, "shadowRadius": 0, "shadowOpacity": 1, "backdropColor": "#ffffff"}),
-        );
-        let l = layout(&s, 1.0, 1000, 1000);
-        let (r, _) = l.shadow.unwrap();
-        let d = 50.0 / 2f64.sqrt();
-        assert!((r.x0 - (200.0 + d)).abs() < 1e-9 && (r.y0 - (200.0 + d)).abs() < 1e-9, "{r:?}");
-        let img = compose(&solid(10, 10, GREEN), None, &s, 1000, 1000);
-        assert_eq!(px(&img, 820, 820), [0, 0, 0], "shadow below right");
-        assert_eq!(px(&img, 180, 180), [255, 255, 255], "no shadow above left");
-        assert_eq!(px(&img, 850, 500), [255, 255, 255], "shadow ends at its offset");
-        // at 90° the shadow goes straight up; a soft radius spreads it but fades out
-        let s = with(
-            json!({"margins": 0.2, "castShadow": true, "shadowOffset": 0.05, "shadowAngle": 90, "shadowRadius": 0.04, "shadowOpacity": 0.8, "backdropColor": "#ffffff"}),
-        );
-        let img = compose(&solid(10, 10, GREEN), None, &s, 1000, 1000);
-        assert!(img.get(500, 170)[0] < 200, "above: in shadow");
-        assert_eq!(px(&img, 500, 950), [255, 255, 255], "below: none");
-        assert_eq!(px(&img, 500, 50), [255, 255, 255], "beyond the blur: none");
-        let mid = img.get(500, 151)[0];
-        assert!(mid > 60 && mid < 250, "a soft edge ({mid})");
+    fn slide_has_photo_in_the_middle_and_backdrop_at_the_edge() {
+        let mut s = Settings::default();
+        s.backdrop.color = [10, 20, 30];
+        s.overlays.rating = true;
+        s.overlays.texts.push(Default::default());
+        let info = SlideInfo { filename: "x.jpg".into(), rating: 3, ..Default::default() };
+        let img = compose_slide(400, 300, Some(&photo()), &info, &s, (1.0, 0.5, 0.5), None, "Plate").unwrap();
+        assert_eq!(img.get(200, 150), [200, 30, 30, 255]);
+        assert_eq!(img.get(1, 1), [10, 20, 30, 255]);
     }
 
     #[test]
-    fn colour_wash_follows_its_angle() {
-        let wash = |angle: f64| {
-            compose(
-                &Rgba8::new(0, 0),
-                None,
-                &with(json!({"colorWash": true, "washColor": "#ffffff", "washOpacity": 1, "washAngle": angle})),
-                200,
-                100,
-            )
-        };
-        // 0°: white at the right, black at the left
-        let img = wash(0.0);
-        assert!(img.get(199, 50)[0] > 250 && img.get(0, 50)[0] < 5);
-        assert!((img.get(100, 50)[0] as i32 - 128).abs() < 3, "half way in the middle");
-        assert_eq!(img.get(150, 0), img.get(150, 99), "constant along the other axis");
-        // 90°: white at the top
-        let img = wash(90.0);
-        assert!(img.get(100, 0)[0] > 245 && img.get(100, 99)[0] < 10);
-        // 180°: white at the left
-        assert!(wash(180.0).get(0, 50)[0] > 250);
-        // −45°: bottom-right is the brightest corner
-        let img = wash(-45.0);
-        assert!(img.get(199, 99)[0] > 250 && img.get(0, 0)[0] < 5);
-        // opacity scales it
-        let img =
-            compose(&Rgba8::new(0, 0), None, &with(json!({"colorWash": true, "washColor": "#ffffff", "washOpacity": 0.5, "washAngle": 0})), 200, 100);
-        assert!((img.get(199, 50)[0] as i32 - 127).abs() < 3);
+    fn hostile_sizes_are_errors_not_panics() {
+        let s = Settings::default();
+        assert!(compose_slide(0, 10, None, &SlideInfo::default(), &s, (1.0, 0.5, 0.5), None, "").is_err());
+        assert!(compose_slide(100_000, 10, None, &SlideInfo::default(), &s, (1.0, 0.5, 0.5), None, "").is_err());
+        let empty = Rgba8::new(0, 0);
+        assert!(compose_slide(64, 48, Some(&empty), &SlideInfo::default(), &s, (f32::NAN, f32::NAN, 0.5), None, "").is_ok());
+        let tiny = Rgba8::filled(1, 1, [9; 4]);
+        let mut all = s.clone();
+        all.options.stroke = true;
+        all.overlays.identity_plate = true;
+        all.overlays.rating = true;
+        all.overlays.watermark = "{Filename}".into();
+        all.backdrop.wash = true;
+        all.layout.margins = [0.45; 4];
+        assert!(compose_slide(3, 3, Some(&tiny), &SlideInfo { rating: 9, ..Default::default() }, &all, (1.3, 2.0, -1.0), Some(&tiny), "P").is_ok());
     }
 
     #[test]
-    fn background_image_fills_the_slide_at_its_opacity() {
-        let bg = solid(30, 10, [200, 100, 0]);
-        let s = with(json!({"backgroundImage": 5, "backgroundOpacity": 0.5, "backdropColor": "#000000", "margins": 0.25}));
-        let img = compose(&solid(4, 4, GREEN), Some(&bg), &s, 400, 200);
-        assert_eq!(px(&img, 2, 2), [100, 50, 0], "half the image over black");
-        assert_eq!(px(&img, 398, 198), [100, 50, 0], "fills the whole slide");
-        assert_eq!(px(&img, 200, 100), GREEN, "the photo on top");
-        // off, or no image given: the backdrop colour
-        let off = SlideSettings { background_image: None, ..s.clone() };
-        assert_eq!(px(&compose(&solid(4, 4, GREEN), Some(&bg), &off, 400, 200), 2, 2), [0, 0, 0]);
-        assert_eq!(px(&compose(&solid(4, 4, GREEN), None, &s, 400, 200), 2, 2), [0, 0, 0]);
-    }
-
-    #[test]
-    fn layouts_are_resolution_independent() {
-        let s = with(
-            json!({"linkMargins": false, "marginLeft": 0.1, "marginTop": 0.05, "marginRight": 0.2, "marginBottom": 0.08, "strokeBorder": true, "strokeWidth": 0.01, "castShadow": true, "shadowOffset": 0.02}),
-        );
-        let a = layout(&s, 1.5, 800, 450);
-        let b = layout(&s, 1.5, 1600, 900);
-        for (ra, rb) in [(a.cell, b.cell), (a.photo, b.photo), (a.frame, b.frame), (a.shadow.unwrap().0, b.shadow.unwrap().0)] {
-            for (va, vb) in [(ra.x0, rb.x0), (ra.y0, rb.y0), (ra.x1, rb.x1), (ra.y1, rb.y1)] {
-                assert!((va * 2.0 - vb).abs() <= 2.0, "{ra:?} vs {rb:?}");
-            }
-        }
-        assert!((a.shadow.unwrap().1 * 2.0 - b.shadow.unwrap().1).abs() < 1e-9);
-        // and the pixels agree: the big slide, halved, is the small one (away from edges)
-        let photo = Rgba8::from_fn(60, 40, |x, y| [(x * 4) as u8, (y * 6) as u8, 90, 255]);
-        let small = compose(&photo, None, &s, 800, 450);
-        let big = compose(&photo, None, &s, 1600, 900);
-        for (x, y) in [(10, 10), (400, 225), (300, 100), (700, 400)] {
-            let (p, q) = (small.get(x, y), big.get(x * 2, y * 2));
-            assert!((0..3).all(|i| (p[i] as i32 - q[i] as i32).abs() < 24), "({x}, {y}): {p:?} vs {q:?}");
-        }
-    }
-
-    #[test]
-    fn the_default_slide_is_the_photo_fitted_on_black() {
-        let photo = Rgba8::from_fn(300, 200, |x, y| [x as u8, y as u8, 7, 255]);
-        let s = SlideSettings::default();
-        assert!(s.is_plain());
-        // a 3:2 photo on a 16:10 screen: the photo at its own pixels, black bars beside it
-        assert_eq!(photo_size(&s, 1.5, 320, 200), (300, 200));
-        let img = compose(&photo, None, &s, 320, 200);
-        assert_eq!(px(&img, 5, 100), [0, 0, 0]);
-        assert_eq!(px(&img, 314, 100), [0, 0, 0]);
-        for (x, y) in [(0, 0), (150, 100), (299, 199)] {
-            assert_eq!(img.get(x + 10, y), photo.get(x, y), "unchanged pixels at ({x}, {y})");
-        }
-    }
-
-    #[test]
-    fn behind_draws_under_the_photo_and_the_layout_comes_back() {
-        let s = with(json!({"margins": 0.2}));
-        let mut seen = None;
-        let (img, l) = compose_with(&solid(10, 10, GREEN), None, &s, 200, 100, &mut |out, l| {
-            seen = Some(*l);
-            out.data.fill([255, 0, 0, 255]);
-        });
-        assert_eq!(seen, Some(l), "the hook gets the layout the slide is drawn with");
-        assert_eq!(px(&img, 2, 2), RED, "the hook's paint stays on the backdrop");
-        assert_eq!(px(&img, 100, 50), GREEN, "and the photo covers it");
-    }
-
-    #[test]
-    fn hostile_input_never_panics() {
-        let wild = SlideSettings {
-            margin_left: f64::NAN,
-            margin_right: 1e300,
-            margin_top: -5.0,
-            margin_bottom: f64::INFINITY,
-            stroke_border: true,
-            stroke_width: 1e9,
-            cast_shadow: true,
-            shadow_opacity: f64::NAN,
-            shadow_offset: -1.0,
-            shadow_radius: f64::INFINITY,
-            shadow_angle: f64::NAN,
-            color_wash: true,
-            wash_opacity: 9.0,
-            wash_angle: f64::INFINITY,
-            background_image: Some(u64::MAX),
-            background_opacity: f64::NEG_INFINITY,
-            zoom_to_fill: true,
-            ..SlideSettings::default()
-        };
-        let photos = [Rgba8::new(0, 0), Rgba8::new(1, 1), Rgba8::new(5000, 1), Rgba8::new(1, 3000), Rgba8 { width: 4, height: 4, data: vec![] }];
-        for photo in &photos {
-            for (w, h) in [(0, 0), (1, 1), (3, 2), (1, 400), (100_000, 2), (64, 48)] {
-                let img = compose(photo, Some(&Rgba8::new(0, 5)), &wild, w, h);
-                assert!(img.width >= 1 && img.height >= 1 && img.width <= MAX_SIDE && img.height <= MAX_SIDE);
-                assert_eq!(img.data.len(), img.width * img.height);
-                let (pw, ph) = photo_size(&wild, photo.width as f64 / photo.height.max(1) as f64, w, h);
-                assert!(pw >= 1 && ph >= 1 && pw <= 4 * MAX_SIDE && ph <= 4 * MAX_SIDE);
-            }
-        }
-        for a in [f64::NAN, 0.0, -1.0, f64::INFINITY, 1e-300, 1e300] {
-            let l = layout(&wild, a, 640, 480);
-            assert!(l.photo.width() >= 1.0 && l.photo.width().is_finite());
-        }
-        // the clamps: biggest margins still leave a cell, biggest stroke and shadow stay bounded
-        let s = SlideSettings {
-            margin_left: MARGIN_MAX,
-            margin_right: MARGIN_MAX,
-            stroke_border: true,
-            stroke_width: STROKE_MAX,
-            cast_shadow: true,
-            shadow_offset: SHADOW_OFFSET_MAX,
-            shadow_radius: SHADOW_RADIUS_MAX,
-            ..SlideSettings::default()
-        };
-        let l = layout(&s, 1.0, 100, 100);
-        assert!(l.cell.width() >= 1.0, "{l:?}");
-        assert!(l.frame.x0 >= 0.0 && l.frame.x1 <= 100.0, "the stroke stays on the slide");
+    fn transitions_blend() {
+        let a = Rgba8::filled(4, 4, [0, 0, 0, 255]);
+        let b = Rgba8::filled(4, 4, [200, 200, 200, 255]);
+        assert_eq!(crossfade(&a, &b, 0.5).get(0, 0), [100, 100, 100, 255]);
+        let mut s = Settings::default();
+        s.playback.color_fade = true;
+        s.playback.fade_color = [255, 255, 255];
+        assert_eq!(transition(&a, &b, 0.5, &s).get(0, 0), [255, 255, 255, 255]);
+        assert_eq!(crossfade(&a, &Rgba8::new(2, 2), 0.5).get(0, 0), [0, 0, 0, 255]);
     }
 }

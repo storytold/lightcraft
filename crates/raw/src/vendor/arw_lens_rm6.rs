@@ -12,7 +12,7 @@
 //! count: 16 / 16 / 32 in full-frame files of the ILCE-7RM6, 11 / 11 / 22 in its APS-C crop mode, the rest padding;
 //! the CA table holds red's knots, then blue's.
 //!
-//! Their meaning was measured by registering blocks of the camera JPEG in each file on LightCraft's uncorrected render
+//! Their meaning was measured by registering blocks of the camera JPEG in each file on the app's uncorrected render
 //! (and raw data, for CA) over 54 ILCE-7RM6 photos with four lenses, 41 of them shot with in-camera distortion
 //! correction on; nothing else (clean room). The conventions, with their worst residuals at a 1440 px long edge:
 //! - knot `i` sits at sensor radius `i · s` from the default-crop centre, `s` = the body's full-frame default-crop
@@ -45,7 +45,7 @@
 use super::fit_radial_warp;
 use crate::opcodes::max_radius;
 use crate::{Opcode, Rect};
-use lightcraft_tiff::Ifd;
+use lcc_tiff::Ifd;
 use std::ops::RangeInclusive;
 
 pub(crate) const DISTORTION_PARAMS: u16 = 0x7037;
@@ -211,7 +211,7 @@ pub(crate) fn lens_opcodes(raw: &Ifd, model: &str, active: Rect, crop: Rect) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lightcraft_tiff::{Entry, Value};
+    use lcc_tiff::{Entry, Value};
 
     /// The FF 16–35 mm example (corpus `arw-sony-ilce7rm6-ff-land-lossless.arw`, docs/sony-ilce7rm6-lens-corrections.md).
     const FF_DISTORTION: [i16; 17] = [16, 0, 2, 7, 16, 28, 43, 61, 83, 109, 139, 175, 217, 267, 325, 395, 479];

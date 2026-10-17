@@ -1,0 +1,21 @@
+[package]
+name = "custom-fields"
+description = "Example plug-in: custom metadata fields (client, job, usage) shown in the Metadata panel"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+lcc-plugin-sdk = { path = "../../plugin" }
+
+[profile.release]
+opt-level = "s"
+panic = "abort"
+lto = true
+strip = true

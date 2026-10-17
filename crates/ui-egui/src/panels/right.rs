@@ -2,16 +2,18 @@
 //! Keywords, Versions, Activity.
 
 use egui::{Align2, Rect, Sense, pos2, vec2};
-use lightcraft_catalog::PhotoId;
+use lcc_catalog::PhotoId;
 use serde_json::json;
 
-use crate::LightcraftApp;
+use crate::LccApp;
 use crate::icons::{Icon, paint};
 use crate::state::RightPanel;
+use crate::text_field::{Ending, TextField};
 use crate::theme::Tokens;
 use crate::widgets::{divider, register, slider, text_button};
+use lcc_engine::cmd::crop_aspects::{BUILTIN_ASPECTS, CustomAspect};
 
-pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+pub fn show(app: &mut LccApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let frame = egui::Frame::NONE.fill(t.chrome).stroke(egui::Stroke::new(1.0, t.divider));
     frame.show(ui, |ui| {
@@ -28,6 +30,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                         });
                     }
                     super::keyword_list::show(app, ui);
+                    crate::widgets::follow_focus(ui);
                 });
                 return;
             }
@@ -40,37 +43,111 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             }
             return;
         };
-        let mut area = egui::ScrollArea::vertical().id_salt("right-scroll").auto_shrink([false, false]);
-        if let Some(offset) = held {
-            area = area.vertical_scroll_offset(offset);
+        // Edit: Lightroom Classic's Previous / Sync… bar under the panels, outside the scrolling
+        let full = ui.available_rect_before_wrap();
+        let footer = (app.ui.right == RightPanel::Edit).then(|| Rect::from_min_max(pos2(full.left(), full.bottom() - SYNC_BAR_H), full.max));
+        let body = footer.map_or(full, |f| Rect::from_min_max(full.min, pos2(full.right(), f.top())));
+        ui.scope_builder(egui::UiBuilder::new().max_rect(body), |ui| {
+            let mut area = egui::ScrollArea::vertical().id_salt("right-scroll").auto_shrink([false, false]);
+            if let Some(offset) = held {
+                area = area.vertical_scroll_offset(offset);
+            }
+            // (where the pass starts: by its end egui may have pulled a shrunken panel's offset back)
+            let area_id = ui.data(|d| d.get_temp::<egui::Id>(egui::Id::new(AREA)));
+            let start = held.or_else(|| area_id.and_then(|a| egui::scroll_area::State::load(ui.ctx(), a)).map(|s| s.offset.y));
+            ui.data_mut(|d| match start {
+                Some(o) => {
+                    d.insert_temp(egui::Id::new(OFFSET), o);
+                }
+                None => d.remove::<f32>(egui::Id::new(OFFSET)),
+            });
+            let scrolled = area.show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                match app.ui.right {
+                    RightPanel::Edit => super::edit::show(app, ui, id),
+                    RightPanel::Profiles => super::profiles::show(app, ui, id),
+                    RightPanel::Crop => crop(app, ui, id),
+                    RightPanel::Remove => remove(app, ui, id),
+                    RightPanel::Masking => super::masking::show(app, ui, id),
+                    RightPanel::RedEye => red_eye(app, ui, id),
+                    RightPanel::Info => super::metadata::show(app, ui, id),
+                    RightPanel::Keywords => keywords(app, ui, id),
+                    RightPanel::Versions => versions(app, ui, id),
+                    RightPanel::Activity => activity(app, ui, id),
+                    RightPanel::None => {}
+                }
+                crate::widgets::follow_focus(ui);
+            });
+            ui.data_mut(|d| d.insert_temp(egui::Id::new(AREA), scrolled.id));
+        });
+        // drawn after the panels: a pending numeric edit commits on blur before Reset takes precedence
+        if let Some(f) = footer {
+            ui.scope_builder(egui::UiBuilder::new().max_rect(f), |ui| sync_bar(app, ui, f));
         }
-        // (where the pass starts: by its end egui may have pulled a shrunken panel's offset back)
-        let area_id = ui.data(|d| d.get_temp::<egui::Id>(egui::Id::new(AREA)));
-        let start = held.or_else(|| area_id.and_then(|a| egui::scroll_area::State::load(ui.ctx(), a)).map(|s| s.offset.y));
-        ui.data_mut(|d| match start {
-            Some(o) => {
-                d.insert_temp(egui::Id::new(OFFSET), o);
-            }
-            None => d.remove::<f32>(egui::Id::new(OFFSET)),
-        });
-        let scrolled = area.show(ui, |ui| {
-            ui.spacing_mut().item_spacing.y = 0.0;
-            match app.ui.right {
-                RightPanel::Edit => super::edit::show(app, ui, id),
-                RightPanel::Profiles => super::profiles::show(app, ui, id),
-                RightPanel::Crop => crop(app, ui, id),
-                RightPanel::Remove => remove(app, ui, id),
-                RightPanel::Masking => super::masking::show(app, ui, id),
-                RightPanel::RedEye => red_eye(app, ui, id),
-                RightPanel::Info => info(app, ui, id),
-                RightPanel::Keywords => keywords(app, ui, id),
-                RightPanel::Versions => versions(app, ui, id),
-                RightPanel::Activity => activity(app, ui, id),
-                RightPanel::None => {}
-            }
-        });
-        ui.data_mut(|d| d.insert_temp(egui::Id::new(AREA), scrolled.id));
     });
+}
+
+/// Height of the Previous / Sync… bar under the Edit panel.
+const SYNC_BAR_H: f32 = 44.0;
+
+/// Lightroom Classic's bar under the Develop panels: the Auto Sync switch, then Previous (one photo:
+/// paste the previous photo's settings), Sync… (several: Synchronize Settings) or Auto Sync (while
+/// it is on: edits already go to every selected photo; a click turns it off).
+fn sync_bar(app: &mut LccApp, ui: &mut egui::Ui, r: Rect) {
+    let t = Tokens::get(ui.ctx());
+    ui.painter().rect_filled(r, 0.0, t.chrome);
+    ui.painter().hline(r.x_range(), r.top() + 0.5, egui::Stroke::new(1.0, t.divider));
+    let auto = app.session.auto_sync;
+    let several = app.session.selection.ids.len() > 1;
+    ui.add_space(10.0);
+    ui.horizontal(|ui| {
+        ui.add_space(16.0);
+        ui.spacing_mut().item_spacing.x = 8.0;
+        // the switch
+        let (sr, resp) = ui.allocate_exact_size(vec2(30.0, 16.0), Sense::click());
+        register(ui.ctx(), "button:autoSyncSwitch", sr);
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, auto, crate::i18n::tr("Auto Sync")));
+        let p = ui.painter();
+        p.rect_filled(sr, 8.0, if auto { t.accent } else { t.divider });
+        let knob = if auto { sr.right() - 8.0 } else { sr.left() + 8.0 };
+        p.circle_filled(pos2(knob, sr.center().y), 6.0, t.text);
+        let tip = crate::i18n::tr(if auto { "Auto Sync is on: edits apply to every selected photo" } else { "Turn on Auto Sync" });
+        if resp.on_hover_text(tip).clicked() {
+            let _ = app.run("develop.autoSync", json!({"on": !auto}));
+        }
+        let (id, label) = match (auto, several) {
+            (true, _) => ("syncBar", "Auto Sync"),
+            (false, true) => ("syncBar", "Sync…"),
+            (false, false) => ("previousBar", "Previous"),
+        };
+        if text_button(ui, id, crate::i18n::tr(label), auto).clicked() {
+            let _ = match (auto, several) {
+                (true, _) => app.run("develop.autoSync", json!({"on": false})),
+                (false, true) => app.run("dialog.syncSettings", json!({})),
+                (false, false) => app.run("develop.pastePrevious", json!({})),
+            };
+        }
+        // Lightroom Classic: Reset at the right end of the bar
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.add_space(8.0);
+            if text_button(ui, "reset", crate::i18n::tr("Reset"), false)
+                .on_hover_text(super::edit::reset_tip(&app.ui.settings.keymap, ui.ctx().os() == egui::os::OperatingSystem::Mac))
+                .clicked()
+            {
+                let _ = app.run("develop.reset", json!({}));
+            }
+        });
+    });
+}
+
+/// The Classic Metadata panel (Library's right column).
+pub fn metadata_panel(app: &mut LccApp, ui: &mut egui::Ui) {
+    match app.session.active() {
+        Some(id) => super::metadata::show(app, ui, id),
+        None => {
+            ui.label(crate::i18n::tr("No photo selected"));
+        }
+    }
 }
 
 /// The panel's scroll area, its offset as the last pass started, and how far
@@ -99,14 +176,14 @@ pub fn header(ui: &mut egui::Ui, title: &str) {
 
 /// A panel title that folds its section shut and open again (`section:{id}`; kept in
 /// [`crate::state::UiState::folded_sections`]). Says whether the section is open.
-pub fn fold_header(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, title: &str) -> bool {
+pub fn fold_header(app: &mut LccApp, ui: &mut egui::Ui, id: &str, title: &str) -> bool {
     let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::click());
     let title = crate::i18n::tr(title);
     fold_title(app, ui, id, r, &resp, title)
 }
 
 /// [`fold_header`] for a title whose room is already taken (`r`, answering as `resp`).
-pub fn fold_title(app: &mut LightcraftApp, ui: &egui::Ui, id: &str, r: Rect, resp: &egui::Response, title: &str) -> bool {
+pub fn fold_title(app: &mut LccApp, ui: &egui::Ui, id: &str, r: Rect, resp: &egui::Response, title: &str) -> bool {
     let t = Tokens::get(ui.ctx());
     let open = !app.ui.section_folded(id);
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::CollapsingHeader, true, open, title));
@@ -138,24 +215,11 @@ fn padded(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 6, bottom: 6 }).show(ui, add);
 }
 
-/// The aspect presets of the Crop panel: (menu label, `crop.aspect` value).
-const ASPECT_PRESETS: [(&str, &str); 10] = [
-    ("Free", "free"),
-    ("Original", "original"),
-    ("1 × 1", "1x1"),
-    ("4 × 5 / 8 × 10", "4x5"),
-    ("8.5 × 11", "8.5x11"),
-    ("5 × 7", "5x7"),
-    ("2 × 3 / 4 × 6", "2x3"),
-    ("4 × 3", "4x3"),
-    ("16 × 9", "16x9"),
-    ("16 × 10", "16x10"),
-];
-
 /// What the aspect button says for the stored lock (`aspect` = width × 100, height × 100):
-/// a preset's name when the ratio matches one in either orientation, "Original" for the photo's own
-/// shape, otherwise the ratio as `1.37 : 1`.
-fn aspect_label(aspect: Option<(u32, u32)>, original: Option<f64>) -> String {
+/// "Original" for the photo's own shape, else the name of a ratio the user saved, else a built-in
+/// ratio's name, when the ratio matches one in either orientation; otherwise the ratio as
+/// `1.37 : 1`.
+pub(crate) fn aspect_label(aspect: Option<(u32, u32)>, original: Option<f64>, custom: &[CustomAspect]) -> String {
     let Some((w, h)) = aspect else { return "Free".into() };
     if w == 0 || h == 0 {
         return "Free".into();
@@ -165,7 +229,10 @@ fn aspect_label(aspect: Option<(u32, u32)>, original: Option<f64>) -> String {
     if original.is_some_and(is) {
         return "Original".into();
     }
-    for (label, key) in ASPECT_PRESETS {
+    if let Some(a) = custom.iter().find(|a| is(a.aspect[0] / a.aspect[1])) {
+        return a.name.clone();
+    }
+    for (label, key) in BUILTIN_ASPECTS {
         if let Some((x, y)) = key.split_once('x')
             && let (Ok(x), Ok(y)) = (x.parse::<f64>(), y.parse::<f64>())
             && is(x / y)
@@ -176,37 +243,124 @@ fn aspect_label(aspect: Option<(u32, u32)>, original: Option<f64>) -> String {
     format!("{:.2} : 1", r.max(1.0 / r))
 }
 
-/// "Custom" row of the aspect menu: two number fields and an Apply button (`crop.aspect` `[w, h]`).
-fn custom_aspect(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+/// "Custom" rows of the aspect menu: width × height with Apply (`crop.aspect` `[w, h]`), and a
+/// name with Save, which keeps the ratio in the menu (`crop.saveAspect`) and applies it.
+fn custom_aspect(app: &mut LccApp, ui: &mut egui::Ui) {
     let key = egui::Id::new("crop-custom-aspect");
-    let (mut w, mut h): (String, String) = ui.data_mut(|d| d.get_temp(key)).unwrap_or_else(|| ("3".into(), "2".into()));
-    let mut apply = false;
+    let (mut w, mut h, mut name): (String, String, String) =
+        ui.data_mut(|d| d.get_temp(key)).unwrap_or_else(|| ("3".into(), "2".into(), String::new()));
+    let (mut apply, mut save) = (false, false);
     ui.horizontal(|ui| {
         ui.label(crate::i18n::tr("Custom"));
-        let a = ui.add(egui::TextEdit::singleline(&mut w).desired_width(34.0));
-        crate::widgets::screen_reader_name(ui.ctx(), a.id, crate::i18n::tr("Width"));
-        register(ui.ctx(), "field:cropCustomW", a.rect);
+        let a = TextField::singleline("field:cropCustomW", &mut w).label(crate::i18n::tr("Width")).width(34.0).select_on_focus(true).show(ui);
         ui.label("×");
-        let b = ui.add(egui::TextEdit::singleline(&mut h).desired_width(34.0));
-        crate::widgets::screen_reader_name(ui.ctx(), b.id, crate::i18n::tr("Height"));
-        register(ui.ctx(), "field:cropCustomH", b.rect);
+        let b = TextField::singleline("field:cropCustomH", &mut h).label(crate::i18n::tr("Height")).width(34.0).select_on_focus(true).show(ui);
         let go = text_button(ui, "cropCustomApply", "Apply", false);
-        apply = go.clicked() || ((a.lost_focus() || b.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Enter)));
+        apply = go.clicked() || a.ending == Some(Ending::Return) || b.ending == Some(Ending::Return);
     });
-    if apply {
-        // Accept `3`, `2.5` and `3,5`; anything else (zero, negative, text, huge) is ignored.
-        let num = |t: &str| t.trim().replace(',', ".").parse::<f64>().ok().filter(|v| v.is_finite() && *v > 0.0 && *v <= 1000.0);
-        if let (Some(x), Some(y)) = (num(&w), num(&h))
-            && (1.0 / lightcraft_geom::MAX_RATIO..=lightcraft_geom::MAX_RATIO).contains(&(x / y))
-        {
+    ui.horizontal(|ui| {
+        let n = TextField::singleline("field:cropCustomName", &mut name).hint(crate::i18n::tr("Name")).width(118.0).show(ui);
+        let go = text_button(ui, "cropCustomSave", "Save", false);
+        save = go.clicked() || n.ending == Some(Ending::Return);
+    });
+    // Accept `3`, `2.5` and `3,5`; anything else (zero, negative, text, too wide) is ignored.
+    let num = |t: &str| t.trim().replace(',', ".").parse::<f64>().ok();
+    let ratio = match (num(&w), num(&h)) {
+        (Some(x), Some(y)) if lcc_engine::cmd::crop_aspects::valid_ratio(x, y) => Some((x, y)),
+        _ => None,
+    };
+    if let Some((x, y)) = ratio {
+        if save && !name.trim().is_empty() {
+            if app.run("crop.saveAspect", json!({"name": name.trim(), "aspect": [x, y]})).is_ok() {
+                let _ = app.run("crop.aspect", json!({"aspect": [x, y]}));
+                name.clear();
+                ui.close();
+            }
+        } else if apply {
             let _ = app.run("crop.aspect", json!({"aspect": [x, y]}));
             ui.close();
         }
     }
-    ui.data_mut(|d| d.insert_temp(key, (w, h)));
+    ui.data_mut(|d| d.insert_temp(key, (w, h, name)));
 }
 
-fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
+/// The aspect menu is in its Edit List mode (egui temp data, a `bool`).
+const ASPECT_EDITING: &str = "crop-aspect-edit";
+
+/// The aspect menu: the built-in ratios the user didn't hide, the saved ones, the Custom rows,
+/// and Edit List, which turns the list into one to reorder, delete and hide in (the menu stays
+/// open for it).
+fn aspect_menu(app: &mut LccApp, ui: &mut egui::Ui) {
+    let editing_id = egui::Id::new(ASPECT_EDITING);
+    let editing = ui.data(|d| d.get_temp::<bool>(editing_id)).unwrap_or(false);
+    if editing {
+        // room for a name beside its ↑ ↓ Delete buttons
+        ui.set_min_width(260.0);
+    }
+    for (label, key) in BUILTIN_ASPECTS {
+        let hidden = app.session.crop_aspects.is_hidden(key);
+        if editing {
+            if matches!(key, "free" | "original") {
+                // always in the menu: shown ticked, and not to be unticked
+                ui.add_enabled(false, egui::Checkbox::new(&mut true, crate::i18n::tr(label)));
+                continue;
+            }
+            let mut shown = !hidden;
+            let r = ui.checkbox(&mut shown, crate::i18n::tr(label));
+            register(ui.ctx(), format!("check:cropAspectShow:{key}"), r.rect);
+            if r.changed() {
+                let _ = app.run("crop.hideAspect", json!({"aspect": key, "hidden": !shown}));
+            }
+        } else if !hidden {
+            let r = ui.button(crate::i18n::tr(label));
+            register(ui.ctx(), format!("cropAspectPreset:{key}"), r.rect);
+            if r.clicked() {
+                let _ = app.run("crop.aspect", json!({"aspect": key}));
+                ui.close();
+            }
+        }
+    }
+    let custom = app.session.crop_aspects.custom.clone();
+    if !custom.is_empty() {
+        ui.separator();
+    }
+    let last = custom.len().saturating_sub(1);
+    for (i, a) in custom.iter().enumerate() {
+        if editing {
+            ui.horizontal(|ui| {
+                ui.label(&a.name);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if text_button(ui, &format!("cropAspectDelete-{i}"), "Delete", false).clicked() {
+                        let _ = app.run("crop.deleteAspect", json!({"name": a.name}));
+                    }
+                    if i < last && text_button(ui, &format!("cropAspectDown-{i}"), "↓", false).clicked() {
+                        let _ = app.run("crop.moveAspect", json!({"name": a.name, "to": i + 1}));
+                    }
+                    if i > 0 && text_button(ui, &format!("cropAspectUp-{i}"), "↑", false).clicked() {
+                        let _ = app.run("crop.moveAspect", json!({"name": a.name, "to": i - 1}));
+                    }
+                });
+            });
+        } else {
+            let r = ui.button(&a.name);
+            register(ui.ctx(), format!("cropAspectSaved:{i}"), r.rect);
+            if r.clicked() {
+                let _ = app.run("crop.aspect", json!({"aspect": a.aspect}));
+                ui.close();
+            }
+        }
+    }
+    ui.separator();
+    if !editing {
+        custom_aspect(app, ui);
+        ui.separator();
+    }
+    if text_button(ui, "cropAspectEdit", if editing { "Done" } else { "Edit List" }, editing).clicked() {
+        ui.data_mut(|d| d.insert_temp(editing_id, !editing));
+    }
+}
+
+fn crop(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
     let d = app.session.develop_of(id).unwrap_or_default();
     header(ui, "Crop");
     padded(ui, |ui| {
@@ -216,50 +370,46 @@ fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         });
         ui.horizontal(|ui| {
             ui.label(crate::i18n::tr("Aspect Ratio"));
-            let cur = aspect_label(app.crop_tool_aspect(), original);
+            let cur = aspect_label(app.crop_tool_aspect(), original, &app.session.crop_aspects.custom);
             let t = Tokens::get(ui.ctx());
-            let r = crate::widgets::dropdown(ui, "cropAspect", crate::i18n::tr(&cur), t.font(12.5), t.text);
+            // a saved ratio's name is the user's own words: not looked up for a translation
+            let saved = app.session.crop_aspects.custom.iter().any(|a| a.name == cur);
+            let text = if saved { cur.as_str() } else { crate::i18n::tr(&cur) };
+            let r = crate::widgets::dropdown(ui, "cropAspect", text, t.font(12.5), t.text);
 
-            egui::Popup::menu(&r).show(|ui| {
-                for (label, a) in ASPECT_PRESETS {
-                    if ui.button(crate::i18n::tr(label)).clicked() {
-                        let _ = app.run("crop.aspect", json!({"aspect": a}));
-                    }
-                }
-                ui.separator();
-                custom_aspect(app, ui);
-            });
+            if r.clicked() {
+                // the menu opens as a list to pick from, not in the middle of an edit
+                ui.data_mut(|d| d.insert_temp(egui::Id::new(ASPECT_EDITING), false));
+            }
+            // picking a ratio closes it; editing the list or typing in its fields does not
+            egui::Popup::menu(&r).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| aspect_menu(app, ui));
             let locked = app.crop_tool_aspect().is_some();
-            if text_button(ui, "cropLock", if locked { "Locked" } else { "Lock" }, locked).clicked() {
+            let (icon, label) = if locked { (Icon::Link, "Aspect Locked") } else { (Icon::Unlink, "Lock Aspect") };
+            if cmd_icon(app, ui, "cropLock", icon, label, None, locked).clicked() {
                 let _ = app.run("crop.aspect", json!({"aspect": "toggle"}));
             }
         });
         ui.add_space(6.0);
-        ui.horizontal_wrapped(|ui| {
-            if text_button(ui, "cropRotateLeft", crate::i18n::tr("Rotate Left"), false).clicked() {
-                let _ = app.run("photo.rotateLeft", json!({}));
-            }
-            if text_button(ui, "cropRotateRight", crate::i18n::tr("Rotate Right"), false).clicked() {
-                let _ = app.run("photo.rotateRight", json!({}));
-            }
-        });
-        ui.add_space(6.0);
-        ui.horizontal_wrapped(|ui| {
-            if text_button(ui, "cropFlipH", crate::i18n::tr("Flip H"), d.crop.flip_h).clicked() {
-                let _ = app.run("photo.flipHorizontal", json!({}));
-            }
-            if text_button(ui, "cropFlipV", crate::i18n::tr("Flip V"), d.crop.flip_v).clicked() {
-                let _ = app.run("photo.flipVertical", json!({}));
-            }
-            if text_button(ui, "cropSwapAspect", crate::i18n::tr("Swap Aspect (X)"), false).clicked() {
-                let _ = app.run("crop.rotateAspect", json!({}));
-            }
-            if text_button(ui, "cropReset", crate::i18n::tr("Reset"), false).clicked() {
-                let _ = app.run("crop.reset", json!({}));
+        // one row of icon buttons, as in the suite's transform panels (issue #972); each command's
+        // name and shortcut show on hover
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            let row = [
+                ("cropRotateLeft", Icon::RotateLeft, "Rotate Left", "photo.rotateLeft", false),
+                ("cropRotateRight", Icon::RotateRight, "Rotate Right", "photo.rotateRight", false),
+                ("cropFlipH", Icon::FlipH, "Flip Horizontal", "photo.flipHorizontal", d.crop.flip_h),
+                ("cropFlipV", Icon::FlipV, "Flip Vertical", "photo.flipVertical", d.crop.flip_v),
+                ("cropSwapAspect", Icon::SwapAspect, "Rotate Crop Aspect", "crop.rotateAspect", false),
+                ("cropReset", Icon::Reset, "Reset Crop", "crop.reset", false),
+            ];
+            for (id, icon, label, command, on) in row {
+                if cmd_icon(app, ui, id, icon, label, Some(command), on).clicked() {
+                    let _ = app.run(command, json!({}));
+                }
             }
         });
     });
-    let ang = lightcraft_develop::controls::find("crop.angle").copied();
+    let ang = lcc_develop::controls::find("crop.angle").copied();
     if let Some(spec) = ang {
         let out = slider(ui, &spec, d.crop.geometry.angle, true, Some("Straighten"));
         super::edit::apply_slider_out(app, &spec, out, |app, v| app.run("crop.straighten", json!({"angle": v})));
@@ -310,13 +460,13 @@ fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     padded(ui, |ui| {
         ui.horizontal(|ui| {
             let on = app.ui.tool == "straighten";
-            if text_button(ui, "straightenTool", crate::i18n::tr("Straighten Tool"), on)
+            if cmd_icon(app, ui, "straightenTool", Icon::Straighten, "Straighten Tool", None, on)
                 .on_hover_text(crate::i18n::tr("Drag along the horizon; double-click for Auto"))
                 .clicked()
             {
                 app.ui.tool = if on { String::new() } else { "straighten".into() };
             }
-            if text_button(ui, "straightenAuto", crate::i18n::tr("Auto"), false).clicked() {
+            if cmd_icon(app, ui, "straightenAuto", Icon::Auto, "Auto Straighten", Some("crop.autoStraighten"), false).clicked() {
                 let _ = app.run("crop.autoStraighten", json!({}));
             }
         });
@@ -326,21 +476,23 @@ fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         {
             use crate::state::CropOverlay as O;
             let opts = [
-                (O::Thirds, "Thirds", "thirds"),
-                (O::Grid, "Grid", "grid"),
-                (O::Golden, "Golden", "golden"),
-                (O::Diagonal, "Diagonal", "diagonal"),
-                (O::Triangle, "Triangle", "triangle"),
-                (O::Spiral, "Spiral", "spiral"),
-                (O::None, "None", "none"),
+                (O::Thirds, Icon::OverlayThirds, "Thirds", "thirds"),
+                (O::Grid, Icon::OverlayGrid, "Grid", "grid"),
+                (O::Golden, Icon::OverlayGolden, "Golden", "golden"),
+                (O::Diagonal, Icon::OverlayDiagonal, "Diagonal", "diagonal"),
+                (O::Triangle, Icon::OverlayTriangle, "Triangle", "triangle"),
+                (O::Spiral, Icon::OverlaySpiral, "Spiral", "spiral"),
+                (O::None, Icon::OverlayNone, "None", "none"),
             ];
-            let items: Vec<(&str, &str)> = opts.iter().map(|(_, l, k)| (*l, *k)).collect();
-            let active = opts.iter().position(|(o, _, _)| *o == app.ui.crop_overlay);
-            if let Some(i) = crate::widgets::segmented(ui, "cropOverlay", &items, active, 4) {
-                app.ui.crop_overlay = opts[i].0;
+            let items: Vec<(Icon, &str, &str)> = opts.iter().map(|(_, i, l, k)| (*i, *l, *k)).collect();
+            let active = opts.iter().position(|(o, ..)| *o == app.ui.crop_overlay);
+            if let Some(i) = crate::widgets::icon_segmented(ui, "cropOverlay", &items, active)
+                && let Some(o) = opts.get(i)
+            {
+                app.ui.crop_overlay = o.0;
             }
             if matches!(app.ui.crop_overlay, O::Triangle | O::Spiral)
-                && text_button(ui, "cropOverlayOrient", crate::i18n::tr("Flip Overlay (⇧O)"), false).clicked()
+                && cmd_icon(app, ui, "cropOverlayOrient", Icon::FlipH, "Flip Overlay (⇧O)", None, false).clicked()
             {
                 let _ = app.run("view.cropOverlayOrientation", json!({}));
             }
@@ -348,69 +500,73 @@ fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     });
     divider(ui);
     header(ui, "Geometry");
-    padded(ui, |ui| {
-        ui.label(crate::i18n::tr("Upright"));
-        {
-            use lightcraft_develop::Upright;
-            let modes = [
-                ("Off", Upright::Off, "off"),
-                ("Auto", Upright::Auto, "auto"),
-                ("Guided", Upright::Guided, "guided"),
-                ("Level", Upright::Level, "level"),
-                ("Vertical", Upright::Vertical, "vertical"),
-                ("Full", Upright::Full, "full"),
-            ];
-            let items: Vec<(&str, &str)> = modes.iter().map(|(l, _, k)| (*l, *k)).collect();
-            let active = modes.iter().position(|(_, m, _)| *m == d.geometry.upright);
-            if let Some(i) = crate::widgets::segmented(ui, "upright", &items, active, 3) {
-                let (_, mode, key) = modes[i];
-                let _ = app.run("geometry.upright", json!({"mode": key}));
-                app.ui.tool = if mode == Upright::Guided { "guidedUpright".into() } else { String::new() };
-            }
-        }
-        let guided = d.geometry.upright == lightcraft_develop::Upright::Guided;
-        ui.horizontal_wrapped(|ui| {
-            if !guided
-                && d.geometry.upright != lightcraft_develop::Upright::Off
-                && text_button(ui, "uprightUpdate", crate::i18n::tr("Update"), false).clicked()
+    // a clip takes the crop, straighten and flips only: Upright and the transform sliders are photo-only
+    let video = crate::video_ui::photo_is_video(app, id);
+    crate::video_ui::video_gate(ui, video, |ui| {
+        padded(ui, |ui| {
+            ui.label(crate::i18n::tr("Upright"));
             {
-                let mode = serde_json::to_value(d.geometry.upright).unwrap_or_default();
-                let _ = app.run("geometry.upright", json!({"mode": mode}));
+                use lcc_develop::Upright;
+                let modes = [
+                    ("Off", Upright::Off, "off"),
+                    ("Auto", Upright::Auto, "auto"),
+                    ("Guided", Upright::Guided, "guided"),
+                    ("Level", Upright::Level, "level"),
+                    ("Vertical", Upright::Vertical, "vertical"),
+                    ("Full", Upright::Full, "full"),
+                ];
+                let items: Vec<(&str, &str)> = modes.iter().map(|(l, _, k)| (*l, *k)).collect();
+                let active = modes.iter().position(|(_, m, _)| *m == d.geometry.upright);
+                if let Some(i) = crate::widgets::segmented(ui, "upright", &items, active, 3) {
+                    let (_, mode, key) = modes[i];
+                    let _ = app.run("geometry.upright", json!({"mode": key}));
+                    app.ui.tool = if mode == Upright::Guided { "guidedUpright".into() } else { String::new() };
+                }
             }
+            let guided = d.geometry.upright == lcc_develop::Upright::Guided;
+            ui.horizontal_wrapped(|ui| {
+                if !guided
+                    && d.geometry.upright != lcc_develop::Upright::Off
+                    && text_button(ui, "uprightUpdate", crate::i18n::tr("Update"), false).clicked()
+                {
+                    let mode = serde_json::to_value(d.geometry.upright).unwrap_or_default();
+                    let _ = app.run("geometry.upright", json!({"mode": mode}));
+                }
+                if guided {
+                    let drawing = app.ui.tool == "guidedUpright";
+                    if text_button(ui, "uprightDraw", crate::i18n::tr("Draw Guides"), drawing).clicked() {
+                        app.ui.tool = if drawing { String::new() } else { "guidedUpright".into() };
+                    }
+                    if !d.geometry.guides.is_empty() && text_button(ui, "uprightClear", crate::i18n::tr("Clear Guides"), false).clicked() {
+                        let _ = app.run("geometry.guides", json!({"guides": []}));
+                    }
+                }
+            });
             if guided {
-                let drawing = app.ui.tool == "guidedUpright";
-                if text_button(ui, "uprightDraw", crate::i18n::tr("Draw Guides"), drawing).clicked() {
-                    app.ui.tool = if drawing { String::new() } else { "guidedUpright".into() };
-                }
-                if !d.geometry.guides.is_empty() && text_button(ui, "uprightClear", crate::i18n::tr("Clear Guides"), false).clicked() {
-                    let _ = app.run("geometry.guides", json!({"guides": []}));
-                }
+                ui.label(
+                    egui::RichText::new(crate::i18n::tr_format!(
+                        "{} of 4 guides — drag along lines that should be vertical or horizontal.",
+                        d.geometry.guides.len()
+                    ))
+                    .size(11.0)
+                    .color(Tokens::get(ui.ctx()).text_dim),
+                );
+            }
+            ui.add_space(4.0);
+            let mut c = d.geometry.constrain_crop;
+            if ui.checkbox(&mut c, crate::i18n::tr("Constrain Crop")).changed() {
+                let _ = app.run("develop.merge", json!({"settings": {"geometry": {"constrain_crop": c}}, "label": "Constrain Crop"}));
             }
         });
-        if guided {
-            ui.label(
-                egui::RichText::new(crate::i18n::tr_format!(
-                    "{} of 4 guides — drag along lines that should be vertical or horizontal.",
-                    d.geometry.guides.len()
-                ))
-                .size(11.0)
-                .color(Tokens::get(ui.ctx()).text_dim),
-            );
-        }
-        ui.add_space(4.0);
-        let mut c = d.geometry.constrain_crop;
-        if ui.checkbox(&mut c, crate::i18n::tr("Constrain Crop")).changed() {
-            let _ = app.run("develop.merge", json!({"settings": {"geometry": {"constrain_crop": c}}, "label": "Constrain Crop"}));
+        for spec in lcc_develop::controls::in_section(lcc_develop::Section::Geometry).filter(|c| c.id != "crop.angle") {
+            let v = lcc_develop::controls::get(&d, spec.id).unwrap_or(spec.default);
+            let out = slider(ui, spec, v, true, None);
+            super::edit::apply_slider_out(app, spec, out, |app, v| app.run("develop.set", json!({"control": spec.id, "value": v})));
         }
     });
-    for spec in lightcraft_develop::controls::in_section(lightcraft_develop::Section::Geometry).filter(|c| c.id != "crop.angle") {
-        let v = lightcraft_develop::controls::get(&d, spec.id).unwrap_or(spec.default);
-        let out = slider(ui, spec, v, true, None);
-        super::edit::apply_slider_out(app, spec, out, |app, v| app.run("develop.set", json!({"control": spec.id, "value": v})));
-    }
 }
 
-fn remove(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
+fn remove(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
     let d = app.session.develop_of(id).unwrap_or_default();
     header(ui, "Remove");
     padded(ui, |ui| {
@@ -452,23 +608,23 @@ fn remove(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         (app.ui.remove_size, app.ui.remove_feather, app.ui.remove_opacity) = (sp.size as f32, sp.feather as f32, sp.opacity as f32);
         divider(ui);
         let mode = match sp.mode {
-            lightcraft_develop::SpotMode::Heal => "Heal",
-            lightcraft_develop::SpotMode::Clone => "Clone",
-            lightcraft_develop::SpotMode::Remove => "Remove",
-            lightcraft_develop::SpotMode::Fill => "Content-Aware",
+            lcc_develop::SpotMode::Heal => "Heal",
+            lcc_develop::SpotMode::Clone => "Clone",
+            lcc_develop::SpotMode::Remove => "Remove",
+            lcc_develop::SpotMode::Fill => "Content-Aware",
         };
         super::edit::sub_title(ui, &crate::i18n::tr_format!("{mode} spot {} of {}", i + 1, d.spots.len(), mode = crate::i18n::tr(mode)));
     }
-    let plain = |id: &'static str, label: &'static str, min: f64, max: f64, default: f64| lightcraft_develop::ControlSpec {
+    let plain = |id: &'static str, label: &'static str, min: f64, max: f64, default: f64| lcc_develop::ControlSpec {
         id,
         label,
-        section: lightcraft_develop::Section::Detail,
+        section: lcc_develop::Section::Detail,
         min,
         max,
         default,
         step: 1.0,
         decimals: 0,
-        track: lightcraft_develop::Track::Plain,
+        track: lcc_develop::Track::Plain,
     };
     let sliders = [
         (plain("ui.removeSize", "Size", 1.0, 250.0, 20.0), "size", (app.ui.remove_size * 1000.0) as f64),
@@ -508,16 +664,16 @@ fn remove(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             app.ui.visualize_spots = v;
         }
     });
-    let spec = lightcraft_develop::ControlSpec {
+    let spec = lcc_develop::ControlSpec {
         id: "ui.spotsThreshold",
         label: "Threshold",
-        section: lightcraft_develop::Section::Detail,
+        section: lcc_develop::Section::Detail,
         min: 0.0,
         max: 100.0,
         default: 50.0,
         step: 1.0,
         decimals: 0,
-        track: lightcraft_develop::Track::Plain,
+        track: lcc_develop::Track::Plain,
     };
     let out = slider(ui, &spec, app.ui.spots_threshold as f64, app.ui.visualize_spots, None);
     if let Some(v) = out.value {
@@ -536,7 +692,7 @@ fn remove(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
 
 /// Tool Overlay: when the spot and mask pins show on the photo (Auto / Always / Selected / Never;
 /// Shift+H steps through them). Remove and Masking panels.
-pub(crate) fn tool_overlay_options(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+pub(crate) fn tool_overlay_options(app: &mut LccApp, ui: &mut egui::Ui) {
     use crate::state::ToolOverlay;
     let t = Tokens::get(ui.ctx());
     ui.horizontal(|ui| {
@@ -556,7 +712,7 @@ pub(crate) fn tool_overlay_options(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     });
 }
 
-fn red_eye(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
+fn red_eye(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
     let d = app.session.develop_of(id).unwrap_or_default();
     header(ui, "Red Eye");
     padded(ui, |ui| {
@@ -594,8 +750,8 @@ fn red_eye(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     );
     for k in ["pupilSize", "darken"] {
         let cid = format!("redEye.{i}.{k}");
-        let Some(spec) = lightcraft_develop::controls::find(&cid) else { continue };
-        let v = lightcraft_develop::controls::get(&d, &cid).unwrap_or(spec.default);
+        let Some(spec) = lcc_develop::controls::find(&cid) else { continue };
+        let v = lcc_develop::controls::get(&d, &cid).unwrap_or(spec.default);
         let out = slider(ui, spec, v, true, None);
         super::edit::apply_slider_out(app, spec, out, |app, v| app.run("develop.set", json!({"control": cid, "value": v})));
     }
@@ -620,316 +776,7 @@ fn red_eye(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     });
 }
 
-fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
-    let Some(p) = app.session.catalog.photo(id).cloned() else { return };
-    header(ui, "Info");
-    let t = Tokens::get(ui.ctx());
-    padded(ui, |ui| {
-        camera_card(ui, &p);
-        ui.add_space(6.0);
-        if let Some(why) = &p.preview_only {
-            if crate::widgets::preview_only_notice(ui, "info", why) {
-                crate::panels::edit::reload_preview_only(app, ui.ctx(), id);
-            }
-            ui.add_space(6.0);
-        }
-        if let Some(name) = &p.copy_name {
-            let of = p
-                .copy_of
-                .and_then(|m| app.session.catalog.photo(m))
-                .map(|m| m.file_name.clone())
-                .unwrap_or_else(|| crate::i18n::tr("a removed photo").into());
-            ui.label(egui::RichText::new(crate::i18n::tr_format!("Virtual copy “{name}” of {of}", name = name, of = of)).color(t.text_label));
-        }
-        ui.add_space(8.0);
-        if let Some(r) = ui.horizontal(|ui| crate::widgets::stars(ui, "info", p.rating, 20.0)).inner {
-            let _ = app.run("photo.rate", json!({"rating": r}));
-        }
-        ui.add_space(6.0);
-        // colour label: one swatch per label (hover shows its name); clicking the current one clears it
-        ui.horizontal(|ui| {
-            for l in lightcraft_catalog::ColorLabel::ALL {
-                let (r, resp) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
-                crate::widgets::announce(&resp, crate::i18n::tr(&format!("{l:?}")));
-                let key = format!("{l:?}").to_lowercase();
-                register(ui.ctx(), format!("label:{key}"), r);
-                let on = p.label == Some(l);
-                ui.painter().circle_filled(r.center(), if on || resp.hovered() { 8.0 } else { 6.5 }, crate::panels::grid::label_color(l));
-                if on {
-                    ui.painter().circle_stroke(r.center(), 10.0, egui::Stroke::new(1.5, t.text));
-                }
-                let resp = resp.on_hover_text(crate::i18n::color_label(&app.session.catalog, l));
-                if resp.clicked() {
-                    let _ = app.run("photo.label", json!({"label": if on { "none".to_string() } else { key }}));
-                }
-            }
-            if let Some(l) = p.label {
-                ui.label(egui::RichText::new(app.session.catalog.label_name(l)).color(t.text_label));
-            }
-        });
-    });
-    divider(ui);
-    let m = p.meta.clone();
-    padded(ui, |ui| {
-        for (label, key, value, lines) in [
-            ("Title", "title", &m.title, 1),
-            ("Caption", "caption", &m.caption, 2),
-            ("Alt Text", "altText", &m.alt_text, 2),
-            ("Extended Description", "extendedDescription", &m.extended_description, 3),
-            ("Copyright", "copyright", &m.copyright, 1),
-        ] {
-            meta_field(app, ui, label, key, value, lines);
-        }
-        copyright_status(app, ui, m.copyright_status);
-        for (label, key, value, lines) in [
-            ("Rights Usage Terms", "usageTerms", &m.usage_terms, 2),
-            ("Copyright Info URL", "copyrightUrl", &m.copyright_url, 1),
-            ("Creator", "creator", &m.creator, 1),
-        ] {
-            meta_field(app, ui, label, key, value, lines);
-        }
-        // file: name (rename), path (reveal), capture time (edit)
-        let small = |ui: &mut egui::Ui, text: &str| ui.label(egui::RichText::new(crate::i18n::tr(text)).size(11.5).color(t.text_dim));
-        small(ui, "File Name");
-        ui.allocate_ui_with_layout(vec2(ui.available_width(), 22.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if crate::widgets::icon_button(ui, "infoRename", Icon::Pencil, vec2(20.0, 20.0), false, true, "Rename…").clicked() {
-                let _ = app.run("dialog.rename", json!({}));
-            }
-            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                ui.add(egui::Label::new(egui::RichText::new(&p.file_name).color(t.text)).truncate());
-            });
-        });
-        ui.add_space(4.0);
-        small(ui, "File Path");
-        ui.horizontal(|ui| {
-            let path = match &p.source {
-                lightcraft_catalog::Source::File { path } => path.clone(),
-                lightcraft_catalog::Source::Demo { .. } => crate::i18n::tr("Generated demo photo").into(),
-            };
-            ui.add(egui::Label::new(egui::RichText::new(path).size(12.0).color(t.text_label)).truncate());
-            if crate::menus::ui_enabled(app, "app.showInFinder") {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if crate::widgets::icon_button(ui, "infoReveal", Icon::Folder, vec2(20.0, 20.0), false, true, crate::menus::reveal_label())
-                        .clicked()
-                    {
-                        let _ = app.run("app.showInFinder", json!({}));
-                    }
-                });
-            }
-        });
-        ui.add_space(4.0);
-        small(ui, "Captured");
-        ui.allocate_ui_with_layout(vec2(ui.available_width(), 22.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if crate::widgets::icon_button(ui, "editCaptureTime", Icon::Pencil, vec2(20.0, 20.0), false, true, "Edit Capture Time…").clicked() {
-                let _ = app.run("dialog.captureTime", json!({}));
-            }
-            let cap = p.captured.as_deref().map(crate::i18n::display_time).unwrap_or_else(|| "—".into());
-            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                ui.add(egui::Label::new(egui::RichText::new(cap).size(12.5).color(t.text)).truncate());
-            });
-        });
-        ui.add_space(6.0);
-        for (label, key, value) in [
-            ("Location", "location", &m.location),
-            ("City", "city", &m.city),
-            ("State / Province", "state", &m.state),
-            ("Country", "country", &m.country),
-        ] {
-            meta_field(app, ui, label, key, value, 1);
-        }
-        // GPS: typed as "lat, lon" (or degrees / minutes / seconds); empty clears it
-        let gps = m.gps.map(|(la, lo)| format!("{la:.6}, {lo:.6}")).unwrap_or_default();
-        let gid = egui::Id::new("info-gps");
-        ui.label(egui::RichText::new("GPS").size(11.5).color(t.text_dim));
-        let mut text: String = ui.data(|d| d.get_temp(gid)).unwrap_or_else(|| gps.clone());
-        let r = ui.add(egui::TextEdit::singleline(&mut text).hint_text(crate::i18n::tr("latitude, longitude")).desired_width(f32::INFINITY));
-        crate::widgets::screen_reader_name(ui.ctx(), r.id, "GPS");
-        register(ui.ctx(), "field:gps", r.rect);
-        if r.has_focus() {
-            ui.data_mut(|d| d.insert_temp(gid, text.clone()));
-        } else {
-            ui.data_mut(|d| d.remove::<String>(gid));
-        }
-        if r.lost_focus()
-            && text.trim() != gps
-            && let Err(e) = app.run("photo.setMeta", json!({"gps": text.trim()}))
-        {
-            app.toast(ui.ctx(), e);
-        }
-        if let Some((la, lo)) = m.gps {
-            let pretty = format!("{:.5}° {}, {:.5}° {}", la.abs(), if la >= 0.0 { "N" } else { "S" }, lo.abs(), if lo >= 0.0 { "E" } else { "W" });
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(pretty).size(11.0).color(t.text_dim));
-                if text_button(ui, "showOnMap", crate::i18n::tr("Show on Map"), false)
-                    .on_hover_text(crate::i18n::tr("Open the place in OpenStreetMap"))
-                    .clicked()
-                {
-                    let url = format!("https://www.openstreetmap.org/?mlat={la:.6}&mlon={lo:.6}#map=15/{la:.6}/{lo:.6}");
-                    if let Err(e) = crate::links::open(app, &url) {
-                        app.toast(ui.ctx(), e);
-                    }
-                }
-            });
-            if text_button(ui, "fillLocation", crate::i18n::tr("Fill Location"), false)
-                .on_hover_text(crate::i18n::tr("Fill empty City, State and Country from GPS (offline GeoNames place names)"))
-                .clicked()
-                && let Err(e) = app.run("metadata.reverseGeocode", json!({}))
-            {
-                app.toast_error(ui.ctx(), e);
-            }
-        }
-        if let Some(a) = p.analysis {
-            let mut line = crate::i18n::tr_format!("Focus {:.0}", a.sharpness);
-            if a.clipped > 0.02 {
-                line.push_str(&crate::i18n::tr_format!(" · {:.0}% clipped", a.clipped * 100.0));
-            }
-            if a.group.is_some() {
-                line.push_str(if a.best { " · best of its burst" } else { " · in a burst" });
-            }
-            ui.add_space(4.0);
-            ui.label(egui::RichText::new(line).color(t.text_dim));
-        }
-        // offline originals / smart previews
-        // (cached answers, checked off the UI thread: unknown counts as online / no smart preview)
-        if let lightcraft_catalog::Source::File { path } = &p.source {
-            let avail = &app.session.media.availability;
-            let online = !avail.is_offline(path);
-            let smart = app.session.media.smart_dir.as_ref().is_some_and(|d| {
-                let shard = lightcraft_engine::smart::sharded_file_path(d, &p);
-                let legacy = d.join(lightcraft_engine::smart::file_name(&p));
-                avail.exists(&shard.to_string_lossy()) == Some(true) || avail.exists(&legacy.to_string_lossy()) == Some(true)
-            });
-            if !online || smart {
-                let text = match (online, smart) {
-                    (false, true) => "Original offline · editing the smart preview",
-                    (false, false) => "Original offline · no smart preview",
-                    _ => "Smart preview available",
-                };
-                ui.add_space(6.0);
-                ui.label(egui::RichText::new(crate::i18n::tr(text)).color(if online { t.text_dim } else { t.accent }));
-            }
-        }
-        ui.add_space(10.0);
-        if text_button(ui, "allMetadata", crate::i18n::tr("All Metadata…"), false)
-            .on_hover_text(crate::i18n::tr("Every EXIF, GPS and XMP field in the file"))
-            .clicked()
-        {
-            let _ = app.run("dialog.allMetadata", json!({}));
-        }
-    });
-}
-
-/// The camera card at the top of Info: camera, lens, size · file size and format, then the
-/// capture settings.
-fn camera_card(ui: &mut egui::Ui, p: &lightcraft_catalog::Photo) {
-    let t = Tokens::get(ui.ctx());
-    let m = &p.meta;
-    egui::Frame::NONE.fill(t.canvas).corner_radius(6.0).inner_margin(egui::Margin::symmetric(12, 10)).show(ui, |ui| {
-        ui.set_width(ui.available_width());
-        let dim = |s: &str| egui::RichText::new(s.to_string()).size(12.0).color(t.text_label);
-        if !m.camera.is_empty() {
-            ui.label(dim(&m.camera));
-        }
-        if !m.lens.is_empty() {
-            ui.add(egui::Label::new(dim(&m.lens)).truncate());
-        }
-        ui.horizontal(|ui| {
-            ui.label(dim(&format!("{} × {}  ·  {}", p.width, p.height, human_size(p.file_size))));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                egui::Frame::NONE.fill(t.chrome).corner_radius(3.0).inner_margin(egui::Margin::symmetric(5, 1)).show(ui, |ui| {
-                    ui.label(egui::RichText::new(p.format.to_uppercase()).size(10.5).color(t.text_label));
-                });
-            });
-        });
-        let rows = [
-            ("Focal length", m.focal_mm.map(|f| format!("{f:.1} mm").replace(".0 mm", " mm"))),
-            ("Shutter speed", (!m.shutter.is_empty()).then(|| crate::i18n::tr_format!("{} sec", m.shutter))),
-            ("Aperture", m.aperture.map(|f| format!("f / {f:.1}").replace(".0", ""))),
-            ("ISO", m.iso.map(|i| i.to_string())),
-        ];
-        if rows.iter().any(|r| r.1.is_some()) {
-            ui.add_space(6.0);
-            egui::Grid::new("info-capture").num_columns(2).spacing([24.0, 3.0]).show(ui, |ui| {
-                for (k, v) in rows {
-                    ui.label(dim(crate::i18n::tr(k)));
-                    ui.label(dim(&v.unwrap_or_else(|| "—".into())));
-                    ui.end_row();
-                }
-            });
-        }
-        // where the camera focused, and how (View ▸ Show Focus Point draws it): only when known; the
-        // whole card's width, so "AF-C · Expanded Flexible Spot · Face tracking" fits
-        if let Some(text) = focus_text(m.focus.as_ref()) {
-            ui.add_space(3.0);
-            let r = ui.horizontal_wrapped(|ui| {
-                ui.label(dim(crate::i18n::tr("Focus")));
-                ui.add_space(12.0);
-                ui.label(egui::RichText::new(text).size(12.0).color(t.text));
-            });
-            register(ui.ctx(), "info:focus", r.response.rect);
-        }
-    });
-}
-
-/// The camera's focus mode, AF area and tracking in the interface language ("AF-C · Wide · Animal Eye
-/// Tracking"), or `None` when the photo has no focus point.
-pub(crate) fn focus_text(f: Option<&lightcraft_meta::FocusPoint>) -> Option<String> {
-    let f = f?;
-    let words: Vec<&str> = f.words().into_iter().map(crate::i18n::tr).collect();
-    Some(if words.is_empty() { crate::i18n::tr("Focus point").to_string() } else { words.join(" · ") })
-}
-
-fn human_size(bytes: u64) -> String {
-    match bytes {
-        b if b >= 1 << 20 => format!("{:.1} MB", b as f64 / (1u64 << 20) as f64),
-        b if b >= 1 << 10 => format!("{} KB", b >> 10),
-        b => format!("{b} B"),
-    }
-}
-
-/// A labelled metadata text field: the typed text lives in egui memory while focused and is
-/// saved (photo.setMeta `key`) when the field loses focus.
-/// Copyright Status: Unknown / Copyrighted / Public Domain (`xmpRights:Marked`).
-fn copyright_status(app: &mut LightcraftApp, ui: &mut egui::Ui, current: lightcraft_catalog::CopyrightStatus) {
-    let t = Tokens::get(ui.ctx());
-    ui.label(egui::RichText::new(crate::i18n::tr("Copyright Status")).size(11.5).color(t.text_dim));
-    let r = crate::widgets::combo_box("info-copyright-status").selected_text(crate::i18n::tr(current.label())).show_ui(ui, |ui| {
-        for st in lightcraft_catalog::CopyrightStatus::ALL {
-            if ui.selectable_label(st == current, crate::i18n::tr(st.label())).clicked() && st != current {
-                let _ = app.run("photo.setMeta", json!({"copyrightStatus": st.id()}));
-            }
-        }
-    });
-    register(ui.ctx(), "field:copyrightStatus", r.response.rect);
-    ui.add_space(6.0);
-}
-
-fn meta_field(app: &mut LightcraftApp, ui: &mut egui::Ui, label: &str, key: &str, value: &str, lines: usize) {
-    let t = Tokens::get(ui.ctx());
-    ui.label(egui::RichText::new(crate::i18n::tr(label)).size(11.5).color(t.text_dim));
-    let id = egui::Id::new(("info-field", key));
-    let mut text: String = ui.data(|d| d.get_temp(id)).unwrap_or_else(|| value.to_string());
-    let widget = format!("field:{key}");
-    let field = if lines > 1 {
-        crate::text_field::TextField::multiline(&widget, &mut text).rows(lines)
-    } else {
-        crate::text_field::TextField::singleline(&widget, &mut text)
-    };
-    let r = field.label(crate::i18n::tr(label)).width(f32::INFINITY).show(ui);
-    // the typed text outlives frames while it is edited (the photo's value is drawn otherwise)
-    if r.editing {
-        ui.data_mut(|d| d.insert_temp(id, text.clone()));
-    } else {
-        ui.data_mut(|d| d.remove::<String>(id));
-    }
-    // Return (one line) or leaving saves; Esc gives the edit up
-    if r.committed() && text != value {
-        let _ = app.run("photo.setMeta", json!({key: text}));
-    }
-    ui.add_space(6.0);
-}
-
-fn keywords(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
+fn keywords(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
     // (the box is the selection's: the active photo only says that there is one)
     if app.session.catalog.photo(id).is_none() {
         return;
@@ -942,9 +789,9 @@ fn keywords(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     super::keyword_list::show(app, ui);
 }
 
-/// The Keywording box: the field that adds keywords, the selection's keywords, the keyword set,
-/// the painter and the suggestions.
-fn keywording(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+/// The keyword entry, chips, keyword set, painter and suggestions for the selected photos (the
+/// Classic shell's Keywording panel; the Keywords panel adds the Keyword List below them).
+pub(crate) fn keywording(app: &mut LccApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     padded(ui, |ui| {
         let kid = egui::Id::new("kw-input");
@@ -1030,7 +877,7 @@ fn keywording(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         // this edit (the shared field does)
         let returned = r.ending == Some(crate::text_field::Ending::Return) && !text.trim().is_empty();
         // a new name goes inside the default parent (Put New Keywords Inside This Keyword)
-        let as_typed = |app: &LightcraftApp, text: &str| -> Vec<String> {
+        let as_typed = |app: &LccApp, text: &str| -> Vec<String> {
             text.split(',').map(|s| app.session.catalog.typed_keyword(s)).filter(|s| !s.is_empty()).collect()
         };
         let adding: Option<Vec<String>> = match picked {
@@ -1073,7 +920,7 @@ fn keywording(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         // the painter: click photos in the grid to give them (or take away) a keyword
         ui.horizontal(|ui| {
             let pid = egui::Id::new("kw-painter");
-            let painting = app.ui.keyword_painter.clone();
+            let painting = app.ui.lib.painter.as_ref().filter(|p| p.kind == crate::libtools::PaintKind::Keywords).map(|p| p.value.clone());
             let mut k: String = ui.data(|d| d.get_temp(pid)).unwrap_or_else(|| painting.clone().unwrap_or_default());
             // (fixed while painting: Stop first)
             let field = ui
@@ -1154,24 +1001,21 @@ fn hold_list_in_place(ui: &mut egui::Ui, top: f32) {
 
 /// The keyword set: pick a set, then nine buttons (⌥1–⌥9) that toggle its keywords on the
 /// selected photos; "Save as Set…" keeps the current nine under a name.
-fn keyword_set(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+fn keyword_set(app: &mut LccApp, ui: &mut egui::Ui) {
     // on: every selected photo has it (⌥1–⌥9 then take it off them); partly on: only some do
     let selection = app.session.selected();
     let chips = app.caches.keyword_chips(&app.session.catalog, &selection);
     let t = Tokens::get(ui.ctx());
-    let sets = lightcraft_engine::cmd::keywords::keyword_sets_json(&app.session);
+    let sets = lcc_engine::cmd::keywords::keyword_sets_json(&app.session);
     let current = sets["current"].as_str().unwrap_or_default().to_string();
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(crate::i18n::tr("Keyword Set")).color(t.text_dim));
         let combo = crate::widgets::combo_box("kw-set")
-            .selected_text(crate::i18n::builtin_label(&current, current == lightcraft_engine::cmd::keywords::RECENT))
+            .selected_text(crate::i18n::builtin_label(&current, current == lcc_engine::cmd::keywords::RECENT))
             .show_ui(ui, |ui| {
                 for set in sets["sets"].as_array().into_iter().flatten() {
                     let name = set["name"].as_str().unwrap_or_default();
-                    if ui
-                        .selectable_label(name == current, crate::i18n::builtin_label(name, name == lightcraft_engine::cmd::keywords::RECENT))
-                        .clicked()
-                    {
+                    if ui.selectable_label(name == current, crate::i18n::builtin_label(name, name == lcc_engine::cmd::keywords::RECENT)).clicked() {
                         let _ = app.run("keyword.useSet", json!({"name": name}));
                     }
                 }
@@ -1183,7 +1027,7 @@ fn keyword_set(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     let mut slots: Vec<String> =
                         sets["keywords"].as_array().into_iter().flatten().filter_map(|k| k.as_str().map(str::to_string)).collect();
                     slots.resize(9, String::new());
-                    let named = current != lightcraft_engine::cmd::keywords::RECENT;
+                    let named = current != lcc_engine::cmd::keywords::RECENT;
                     app.ui.dialog = Some(crate::state::Dialog::KeywordSet {
                         replaces: named.then(|| current.clone()),
                         name: if named { current.clone() } else { String::new() },
@@ -1201,7 +1045,7 @@ fn keyword_set(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                         key: "name".into(),
                     });
                 }
-                if current != lightcraft_engine::cmd::keywords::RECENT
+                if current != lcc_engine::cmd::keywords::RECENT
                     && ui.button(crate::i18n::tr_format!("Delete “{current}”", current = current)).clicked()
                 {
                     let _ = app.run("keyword.deleteSet", json!({"name": current}));
@@ -1226,7 +1070,7 @@ fn keyword_set(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 }
                 continue;
             }
-            let chip = chips.iter().find(|c| lightcraft_catalog::keywords::same(&c.path, &lightcraft_catalog::keywords::clean(k)));
+            let chip = chips.iter().find(|c| lcc_catalog::keywords::same(&c.path, &lcc_catalog::keywords::clean(k)));
             let on = chip.is_some_and(|c| c.on_all());
             let some = chip.is_some() && !on;
             let short = format!("{}{}", k.rsplit('|').next().unwrap_or(k), if some { " *" } else { "" });
@@ -1252,16 +1096,22 @@ fn keyword_set(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     });
 }
 
-fn versions(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
-    let Some(p) = app.session.catalog.photo(id).cloned() else { return };
+fn versions(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
     header(ui, "Versions");
+    versions_body(app, ui, id);
+}
+
+/// The Versions rows without the right column's own header: the fork's Develop column draws them
+/// under its Classic "Versions" header (see `panels::classic_left`).
+pub(crate) fn versions_body(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
+    let Some(p) = app.session.catalog.photo(id).cloned() else { return };
     let t = Tokens::get(ui.ctx());
     padded(ui, |ui| {
         if text_button(ui, "versionCreate", crate::i18n::tr("Create Version"), false).clicked() {
             let _ = app.run("version.create", json!({}));
         }
         ui.add_space(8.0);
-        // Named (made by you) and Auto (made by LightCraft) versions
+        // Named (made by you) and Auto (made by the app) versions
         let tab_id = egui::Id::new("versions-tab");
         let mut auto: bool = ui.data(|d| d.get_temp(tab_id)).unwrap_or(false);
         let named_n = p.versions.iter().filter(|v| !v.auto).count();
@@ -1274,7 +1124,7 @@ fn versions(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             ui.data_mut(|d| d.insert_temp(tab_id, auto));
         }
         ui.add_space(6.0);
-        let shown: Vec<(usize, &lightcraft_catalog::Version)> = p.versions.iter().enumerate().filter(|(_, v)| v.auto == auto).collect();
+        let shown: Vec<(usize, &lcc_catalog::Version)> = p.versions.iter().enumerate().filter(|(_, v)| v.auto == auto).collect();
         if shown.is_empty() {
             let msg = if auto { "No automatic versions." } else { "No versions yet. Create one to keep this look." };
             ui.label(egui::RichText::new(crate::i18n::tr(msg)).color(t.text_dim));
@@ -1348,7 +1198,7 @@ fn short_time(iso: &str) -> String {
     if crate::i18n::language() != crate::i18n::Locale::En {
         return crate::i18n::display_time(iso);
     }
-    let long = lightcraft_catalog::dates::display_time(iso);
+    let long = lcc_catalog::dates::display_time(iso);
     // "September 30, 2026 at 12:00:00 PM" → month abbreviated, seconds dropped
     let (date, time) = long.split_once(" at ").map_or((long.as_str(), None), |(d, t)| (d, Some(t)));
     let date = match date.split_once(' ') {
@@ -1378,52 +1228,144 @@ fn history_row(i: usize, cursor: Option<usize>) -> HistoryRow {
     }
 }
 
-fn activity(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
-    let Some(p) = app.session.catalog.photo(id).cloned() else { return };
+fn activity(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
     header(ui, "History");
+    history_body(app, ui, id);
+}
+
+/// The heading of a History group: its Develop section, or for a step that spans several sections
+/// (a preset, paste, sync…) the step itself.
+fn group_title(section: Option<&str>, step_label: &str, presets: &[lcc_develop::Preset]) -> String {
+    let name = match section {
+        Some("basic") => "Basic",
+        Some("curve") => "Tone Curve",
+        Some("color") => "Color",
+        Some("grading") => "Color Grading",
+        Some("detail") => "Detail",
+        Some("effects") => "Effects",
+        Some("lens") => "Lens Corrections",
+        Some("geometry") => "Geometry",
+        Some("crop") => "Crop",
+        Some("masking") => "Masking",
+        Some("healing") => "Remove",
+        Some("lensBlur") => "Lens Blur",
+        Some("enhance") => "Enhance",
+        Some("calibration") => "Calibration",
+        Some("pluginFilters") => "Plug-in Filters",
+        Some(other) => other,
+        None => return crate::i18n::history_label(step_label, presets),
+    };
+    crate::i18n::tr(name).to_string()
+}
+
+/// The History rows without the right column's own header: the fork's Develop column draws them
+/// under its Classic "History" header (see `panels::classic_left`). Two levels, newest first:
+/// groups of consecutive steps on one section, each expanding (its chevron) to its steps. Going
+/// back to a step and editing there keeps the later groups and replays them on top.
+pub(crate) fn history_body(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
+    let Some(p) = app.session.catalog.photo(id).cloned() else { return };
     let t = Tokens::get(ui.ctx());
     padded(ui, |ui| {
         if p.history.is_empty() {
             ui.label(egui::RichText::new(crate::i18n::tr("No edits yet.")).color(t.text_dim));
         }
         let cursor = p.history_index();
-        for (i, h) in p.history.iter().enumerate().rev() {
-            let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::click());
-            crate::widgets::announce(&resp, crate::i18n::tr(&h.label));
-            register(ui.ctx(), format!("history:{i}"), r);
-            let row = history_row(i, cursor);
-            if row == HistoryRow::Current {
-                ui.painter().rect_filled(r, 3.0, t.pressed);
-            } else if resp.hovered() {
-                ui.painter().rect_filled(r, 3.0, t.hover);
+        if p.history_cursor.is_some_and(|c| c.saturating_add(1) < p.history.len())
+            && text_button(ui, "historyLatest", "Return to Latest", false).clicked()
+        {
+            let _ = app.run("history.latest", json!({}));
+        }
+        for g in lcc_engine::history_groups::groups(&p.history).into_iter().rev() {
+            let several = g.end > g.start;
+            let open_id = egui::Id::new(("historyGroupOpen", id.0, g.start));
+            let open = several && ui.ctx().data(|d| d.get_temp::<bool>(open_id)).unwrap_or(false);
+            let Some(newest) = p.history.get(g.end) else { continue };
+            let first = p.history.get(g.start).map_or("", |h| h.label.as_str());
+            let title = group_title(g.section.as_deref(), first, &app.session.presets);
+            let title = if several { format!("{title} ({})", g.end - g.start + 1) } else { title };
+            let holds_cursor = cursor.is_some_and(|c| (g.start..=g.end).contains(&c));
+            // a closed group reads as its newest step: current when the cursor is inside it
+            let row = if holds_cursor && !open { HistoryRow::Current } else { history_row(g.end, cursor) };
+            let lead = if !several {
+                Icon::Clock
+            } else if open {
+                Icon::ChevronDown
+            } else {
+                Icon::ChevronRight
+            };
+            let (r, resp) = history_row_ui(ui, &t, &title, lead, row, 0.0, true);
+            register(ui.ctx(), format!("historyGroup:{}", g.start), r);
+            if !several {
+                register(ui.ctx(), format!("history:{}", g.end), r);
             }
-            let (icon, text) = if row == HistoryRow::Undone { (t.text_disabled, t.text_disabled) } else { (t.icon, t.text_label) };
-            paint(ui.painter(), Rect::from_min_size(r.min + vec2(0.0, 4.0), vec2(16.0, 16.0)), Icon::Clock, icon);
-            ui.painter().text(
-                pos2(r.left() + 24.0, r.center().y),
-                Align2::LEFT_CENTER,
-                crate::i18n::history_label(&h.label, &app.session.presets),
-                t.font(12.5),
-                text,
-            );
             if resp.clicked() {
-                let _ = app.run("history.restore", json!({"index": i}));
+                // the chevron expands; the rest of the row goes to the group's newest step
+                if several && resp.interact_pointer_pos().is_some_and(|pos| pos.x < r.left() + 20.0) {
+                    ui.ctx().data_mut(|d| d.insert_temp(open_id, !open));
+                } else {
+                    let _ = app.run("history.restore", json!({"index": g.end}));
+                }
             }
-            resp.context_menu(|ui| {
-                if ui.button(crate::i18n::tr("Copy History Step Settings to Before")).clicked() {
-                    let _ = app.run("beforeAfter.setBefore", json!({"source": "history", "index": i}));
-                }
-                if ui.button(crate::i18n::tr("Create Version from Step")).clicked() {
+            step_menu(app, &resp, &newest.label, g.end);
+            if !open {
+                continue;
+            }
+            for i in (g.start..=g.end).rev() {
+                let Some(h) = p.history.get(i) else { continue };
+                let label = crate::i18n::history_label(&h.label, &app.session.presets);
+                let (r, resp) = history_row_ui(ui, &t, &label, Icon::Clock, history_row(i, cursor), 20.0, false);
+                register(ui.ctx(), format!("history:{i}"), r);
+                if resp.clicked() {
                     let _ = app.run("history.restore", json!({"index": i}));
-                    let _ = app.run("version.create", json!({"name": h.label}));
                 }
-                ui.separator();
-                if ui.button(crate::i18n::tr("Clear History")).clicked() {
-                    let _ = app.run("history.clear", json!({}));
-                }
-            });
+                step_menu(app, &resp, &h.label, i);
+            }
         }
     });
+}
+
+/// One History row (a group heading in semibold, or an indented step), drawn by its `row` state.
+fn history_row_ui(ui: &mut egui::Ui, t: &Tokens, text: &str, icon: Icon, row: HistoryRow, indent: f32, heading: bool) -> (Rect, egui::Response) {
+    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::click());
+    crate::widgets::announce(&resp, text);
+    if row == HistoryRow::Current {
+        ui.painter().rect_filled(r, 3.0, t.pressed);
+    } else if resp.hovered() {
+        ui.painter().rect_filled(r, 3.0, t.hover);
+    }
+    let (ic, tc) = if row == HistoryRow::Undone { (t.text_disabled, t.text_disabled) } else { (t.icon, t.text_label) };
+    paint(ui.painter(), Rect::from_min_size(r.min + vec2(indent, 4.0), vec2(16.0, 16.0)), icon, ic);
+    let font = if heading { t.semibold(12.5) } else { t.font(12.5) };
+    ui.painter().text(pos2(r.left() + indent + 24.0, r.center().y), Align2::LEFT_CENTER, text, font, tc);
+    (r, resp)
+}
+
+/// The context menu of History step `i` (labelled `label`).
+fn step_menu(app: &mut LccApp, resp: &egui::Response, label: &str, i: usize) {
+    resp.context_menu(|ui| {
+        if ui.button(crate::i18n::tr("Copy History Step Settings to Before")).clicked() {
+            let _ = app.run("beforeAfter.setBefore", json!({"source": "history", "index": i}));
+        }
+        if ui.button(crate::i18n::tr("Create Version from Step")).clicked() {
+            let _ = app.run("history.restore", json!({"index": i}));
+            let _ = app.run("version.create", json!({"name": label}));
+        }
+        ui.separator();
+        if ui.button(crate::i18n::tr("Clear History")).clicked() {
+            let _ = app.run("history.clear", json!({}));
+        }
+    });
+}
+
+/// A panel icon button for `label` (translated: the accessible name), its hover text the label plus
+/// `command`'s current shortcut. Addressable as `button:{id}` (as the text button it replaced was)
+/// and `icon:{id}`.
+fn cmd_icon(app: &LccApp, ui: &mut egui::Ui, id: &str, icon: Icon, label: &str, command: Option<&str>, active: bool) -> egui::Response {
+    let sc = command.and_then(|c| crate::shortcuts::shortcut_of(&app.ui.settings.keymap, c));
+    let tip = crate::widgets::command_tooltip(ui, label, sc);
+    let r = crate::widgets::icon_button_named(ui, id, icon, vec2(28.0, 24.0), active, true, crate::i18n::tr(label), &tip);
+    register(ui.ctx(), format!("button:{id}"), r.rect);
+    r
 }
 
 #[cfg(test)]
@@ -1441,18 +1383,18 @@ mod tests {
     // Feature: the aspect button tells what is locked
     #[test]
     fn aspect_label_names_presets_in_either_orientation() {
-        assert_eq!(super::aspect_label(None, Some(1.5)), "Free");
-        assert_eq!(super::aspect_label(Some((1600, 900)), None), "16 × 9");
-        assert_eq!(super::aspect_label(Some((900, 1600)), None), "16 × 9", "portrait 16:9");
-        assert_eq!(super::aspect_label(Some((400, 500)), None), "4 × 5 / 8 × 10");
+        assert_eq!(super::aspect_label(None, Some(1.5), &[]), "Free");
+        assert_eq!(super::aspect_label(Some((1600, 900)), None, &[]), "16 × 9");
+        assert_eq!(super::aspect_label(Some((900, 1600)), None, &[]), "16 × 9", "portrait 16:9");
+        assert_eq!(super::aspect_label(Some((400, 500)), None, &[]), "4 × 5 / 8 × 10");
     }
 
     #[test]
     fn aspect_label_prefers_original_over_a_coinciding_preset_and_never_shows_pixel_sizes() {
-        assert_eq!(super::aspect_label(Some((300, 200)), Some(1.5)), "Original");
-        assert_eq!(super::aspect_label(Some((600_000, 400_000)), Some(1.5)), "Original");
-        assert_eq!(super::aspect_label(Some((137, 100)), Some(1.5)), "1.37 : 1");
-        assert_eq!(super::aspect_label(Some((0, 5)), None), "Free");
+        assert_eq!(super::aspect_label(Some((300, 200)), Some(1.5), &[]), "Original");
+        assert_eq!(super::aspect_label(Some((600_000, 400_000)), Some(1.5), &[]), "Original");
+        assert_eq!(super::aspect_label(Some((137, 100)), Some(1.5), &[]), "1.37 : 1");
+        assert_eq!(super::aspect_label(Some((0, 5)), None, &[]), "Free");
     }
 
     #[test]

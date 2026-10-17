@@ -1,0 +1,24 @@
+[package]
+name = "lcc-hdrmeta"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "HDR metadata (L0): declares the window's HDR brightness range to the compositor through Vulkan VK_EXT_hdr_metadata. One of the two crates allowed `unsafe` (wgpu-hal calls)."
+
+# Opts out of the workspace lints only to keep `unsafe_code = "deny"` overridable for the single
+# `vulkan` module below; every other crate root has `#![forbid(unsafe_code)]`. See CLAUDE.md.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+
+[dependencies]
+wgpu = { workspace = true }
+
+# The metadata matters only where a Vulkan swapchain reaches a compositor that reads it
+# (Wayland: Mesa turns it into wp_color_management_v1 mastering luminance / max-CLL).
+[target.'cfg(all(unix, not(target_vendor = "apple"), not(target_arch = "wasm32")))'.dependencies]
+wgpu-hal = { version = "30", default-features = false, features = ["vulkan"] }
+ash = { version = "0.38", default-features = false }

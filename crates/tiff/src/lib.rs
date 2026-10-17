@@ -1,4 +1,4 @@
-//! TIFF / IFD reading and writing for LightCraft.
+//! TIFF / IFD reading and writing.
 //!
 //! - [`Tiff::parse`] reads classic TIFF and BigTIFF in both byte orders, following the IFD chain,
 //!   `SubIFDs`, and the Exif / GPS / Interoperability IFD pointers. All field types of TIFF 6.0,

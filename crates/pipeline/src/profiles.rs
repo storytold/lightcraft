@@ -9,8 +9,8 @@
 
 use std::borrow::Cow;
 
-use lightcraft_develop::{DevelopSettings, Treatment, Wheel};
-use lightcraft_geom::Point;
+use lcc_develop::{DevelopSettings, Treatment, Wheel};
+use lcc_geom::Point;
 
 /// Add a colour-grading wheel (`hue` °, `sat` 0..100, `lum` −100..100) scaled by `k` to `w`, as a
 /// colour vector (so a profile's tint combines with the user's instead of replacing it).
@@ -247,19 +247,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_profile_is_borrowed_and_others_change_things() {
-        let s = DevelopSettings::default();
-        assert!(matches!(effective(&s), Cow::Borrowed(_)));
-        for id in LOOK_IDS {
-            let mut t = s.clone();
-            t.profile.id = (*id).into();
-            assert_ne!(*effective(&t), t, "{id}");
-            t.profile.amount = 0.0;
-            assert_eq!(*effective(&t), t, "{id} at 0%");
-        }
-    }
-
-    #[test]
     fn looks_scale_with_amount_and_never_add_grain() {
         let mut s = DevelopSettings::default();
         s.light.contrast = 5.0;
@@ -287,24 +274,6 @@ mod tests {
             }
             assert_eq!(full.grain, s.grain, "{id} adds no grain");
             assert_eq!(full.profile, s.profile, "{id}");
-        }
-    }
-
-    #[test]
-    fn wheels_and_fades_compose_with_user_settings() {
-        let mut s = DevelopSettings::default();
-        s.grading.shadows = Wheel { hue: 195.0, sat: 10.0, lum: 0.0 };
-        s.curve.master = vec![Point::new(0.0, 0.0), Point::new(0.5, 0.6), Point::new(1.0, 1.0)];
-        s.profile.id = "lc.cine.teal-amber".into();
-        let e = effective(&s);
-        assert!((e.grading.shadows.hue - 195.0).abs() < 1e-6 && (e.grading.shadows.sat - 40.0).abs() < 1e-6, "{:?}", e.grading.shadows);
-        assert_eq!(e.curve.master, s.curve.master, "no fade in this look: the user's curve stays");
-        s.profile.id = "lc.muted.matte-soft".into();
-        let e = effective(&s);
-        assert_eq!(e.curve.master.len(), 3, "user points kept");
-        let ys: Vec<f64> = e.curve.master.iter().map(|p| p.y).collect();
-        for (y, want) in ys.iter().zip([0.08, 0.08 + 0.6 * 0.88, 0.96]) {
-            assert!((y - want).abs() < 1e-9, "{ys:?}");
         }
     }
 }

@@ -9,10 +9,10 @@ fn demo() -> Session {
 #[test]
 fn nested_catalog_operations_invalidate_sources_after_success_and_on_undo_redo() {
     use crate::media::SourceLevel;
-    use lightcraft_catalog::{Op, PhotoId};
+    use lcc_catalog::{Op, PhotoId};
     let mut s = demo();
     let id = s.active().unwrap();
-    let image = std::sync::Arc::new(lightcraft_raster::Rgb32f::new(1, 1));
+    let image = std::sync::Arc::new(lcc_raster::Rgb32f::new(1, 1));
     let cache = |s: &mut Session| {
         for level in [SourceLevel::Thumb, SourceLevel::Preview, SourceLevel::Full] {
             s.media.insert(id, level, image.clone());
@@ -39,14 +39,14 @@ fn nested_catalog_operations_invalidate_sources_after_success_and_on_undo_redo()
     assert!(!s.media.has_source(id, SourceLevel::Full));
 }
 
-fn active_dev(s: &Session) -> lightcraft_develop::DevelopSettings {
+fn active_dev(s: &Session) -> lcc_develop::DevelopSettings {
     (*s.develop_of(s.active().unwrap()).unwrap()).clone()
 }
 
 #[test]
 fn changing_one_wb_control_resolves_as_shot_without_stale_tint() {
-    use lightcraft_catalog::{Photo, PhotoId, Source};
-    use lightcraft_develop::{DevelopSettings, WbMode};
+    use lcc_catalog::{Photo, PhotoId, Source};
+    use lcc_develop::{DevelopSettings, WbMode};
     for format in ["ARW", "NEF", "NRW", "RAF", "CR2", "PEF", "ORF"] {
         let mut s = demo();
         let id = PhotoId(100);
@@ -55,7 +55,7 @@ fn changing_one_wb_control_resolves_as_shot_without_stale_tint() {
         // A catalog made by the old generic-matrix Kelvin inference.
         p.as_shot_wb = Some((6829.0, -127.0));
         p.develop = std::sync::Arc::new(DevelopSettings::for_raw(6829.0, -127.0));
-        s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        s.catalog.apply(lcc_catalog::Op::AddPhoto { photo: Box::new(p) }).unwrap();
         s.execute("library.select", &json!({"ids": [100], "active": 100})).unwrap();
         s.execute("develop.set", &json!({"control": "wb.temp", "value": 8000})).unwrap();
         let d = active_dev(&s);
@@ -75,8 +75,8 @@ fn changing_one_wb_control_resolves_as_shot_without_stale_tint() {
 /// keeps none.
 #[test]
 fn reset_edits_restores_a_raws_import_defaults() {
-    use lightcraft_catalog::{Photo, PhotoId, Source};
-    use lightcraft_develop::DevelopSettings;
+    use lcc_catalog::{Photo, PhotoId, Source};
+    use lcc_develop::DevelopSettings;
     let mut s = demo();
     for (id, format, raw) in [(200u64, "NEF", true), (201, "JPG", false)] {
         let name = format!("p{id}.{format}");
@@ -85,7 +85,7 @@ fn reset_edits_restores_a_raws_import_defaults() {
             p.as_shot_wb = Some((5200.0, 4.0));
             p.develop = std::sync::Arc::new(DevelopSettings::for_raw(5200.0, 4.0));
         }
-        s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        s.catalog.apply(lcc_catalog::Op::AddPhoto { photo: Box::new(p) }).unwrap();
     }
     for (id, want) in [(200, (40.0, 25.0)), (201, (0.0, 0.0))] {
         s.execute("library.select", &json!({"ids": [id], "active": id})).unwrap();
@@ -116,9 +116,9 @@ fn rating_flag_undo_redo() {
     s.execute("photo.flag", &json!({"flag": "reject"})).unwrap();
     assert_eq!(s.catalog.photo(id).unwrap().rating, 5);
     s.execute("edit.undo", &json!({})).unwrap();
-    assert_ne!(s.catalog.photo(id).unwrap().flag, lightcraft_catalog::Flag::Reject);
+    assert_ne!(s.catalog.photo(id).unwrap().flag, lcc_catalog::Flag::Reject);
     s.execute("edit.redo", &json!({})).unwrap();
-    assert_eq!(s.catalog.photo(id).unwrap().flag, lightcraft_catalog::Flag::Reject);
+    assert_eq!(s.catalog.photo(id).unwrap().flag, lcc_catalog::Flag::Reject);
     assert!(s.execute("photo.rate", &json!({"rating": 7})).is_err());
 }
 
@@ -155,7 +155,7 @@ fn copy_paste_sync_presets() {
     s.execute("develop.paste", &json!({})).unwrap();
     assert_eq!(s.develop_of(vis[2]).unwrap().effects.clarity, 30.0);
     s.execute("preset.apply", &json!({"id": "lc.bw-high-contrast", "amount": 100})).unwrap();
-    assert_eq!(s.develop_of(vis[1]).unwrap().treatment, lightcraft_develop::Treatment::Bw);
+    assert_eq!(s.develop_of(vis[1]).unwrap().treatment, lcc_develop::Treatment::Bw);
     let r = s.execute("preset.create", &json!({"name": "Mine", "groups": ["light", "effects"]})).unwrap();
     assert!(r["id"].as_str().unwrap().starts_with("user."));
     assert!(s.execute("preset.delete", &json!({"id": "lc.moody"})).is_err());
@@ -172,10 +172,10 @@ fn albums_crud() {
     s.execute("library.source", &json!({"kind": "all"})).unwrap();
     s.execute("library.selectAll", &json!({})).unwrap();
     s.execute("album.addPhotos", &json!({"id": a})).unwrap();
-    assert_eq!(s.catalog.album(lightcraft_catalog::AlbumId(a)).unwrap().photos.len(), 24);
+    assert_eq!(s.catalog.album(lcc_catalog::AlbumId(a)).unwrap().photos.len(), 24);
     s.execute("album.delete", &json!({"id": f})).unwrap();
-    assert!(s.catalog.album(lightcraft_catalog::AlbumId(a)).is_none());
-    assert!(s.catalog.album(lightcraft_catalog::AlbumId(f)).is_none());
+    assert!(s.catalog.album(lcc_catalog::AlbumId(a)).is_none());
+    assert!(s.catalog.album(lcc_catalog::AlbumId(f)).is_none());
     assert_eq!(s.catalog.photos().count(), 24, "album deletion keeps the photos");
 }
 
@@ -199,7 +199,7 @@ fn albums_and_smart_albums_are_created_only_inside_folders() {
     let sub = s.execute("album.create", &json!({"name": "Sub", "folder": true, "parent": folder})).unwrap()["id"].as_u64().unwrap();
     let smart = s.execute("album.createSmart", &json!({"name": "Rated", "parent": sub})).unwrap()["id"].as_u64().unwrap();
     assert_eq!(s.catalog.albums().count(), n + 2);
-    assert_eq!(s.catalog.album(lightcraft_catalog::AlbumId(smart)).unwrap().parent, Some(lightcraft_catalog::AlbumId(sub)));
+    assert_eq!(s.catalog.album(lcc_catalog::AlbumId(smart)).unwrap().parent, Some(lcc_catalog::AlbumId(sub)));
 }
 
 #[test]
@@ -318,8 +318,8 @@ fn permanently_deleting_explicit_targets_keeps_the_surviving_selection() {
 /// values when it changed, and a plain dab when there is nothing to connect to.
 #[test]
 fn connected_brush_strokes_start_where_the_last_one_ended() {
-    use lightcraft_develop::MaskShape;
-    use lightcraft_geom::Point;
+    use lcc_develop::MaskShape;
+    use lcc_geom::Point;
     let mut s = demo();
     let id = s.active().unwrap();
     let r = s.execute("mask.brushStroke", &json!({"points": [[0.2, 0.5]], "size": 0.02, "connect": true})).unwrap();
@@ -356,13 +356,13 @@ fn brush_strokes_keep_pen_pressure_and_refuse_bad_lists() {
     let mut s = demo();
     s.execute("mask.add", &json!({"kind": "brush"})).unwrap();
     s.execute("mask.brushStroke", &json!({"points": [[0.2, 0.2], [0.3, 0.3]], "pressure": [0.25, 7.0]})).unwrap();
-    let lightcraft_develop::MaskShape::Brush { strokes } = &active_dev(&s).masks[0].components[0].shape else { panic!("a brush") };
+    let lcc_develop::MaskShape::Brush { strokes } = &active_dev(&s).masks[0].components[0].shape else { panic!("a brush") };
     assert_eq!(strokes[0].pressure, vec![0.25, 1.0], "kept, clamped to 0..1");
     for bad in [json!([0.5, 0.5, 0.5]), json!("hard"), json!([0.5, "x"])] {
         assert!(s.execute("mask.brushStroke", &json!({"points": [[0.2, 0.2], [0.3, 0.3]], "pressure": bad})).is_err(), "{bad}");
     }
     s.execute("mask.brushStroke", &json!({"points": [[0.4, 0.4]]})).unwrap();
-    let lightcraft_develop::MaskShape::Brush { strokes } = &active_dev(&s).masks[0].components[0].shape else { panic!("a brush") };
+    let lcc_develop::MaskShape::Brush { strokes } = &active_dev(&s).masks[0].components[0].shape else { panic!("a brush") };
     assert!(strokes[1].pressure.is_empty(), "a mouse stroke has no pressure data");
     let json = serde_json::to_string(&strokes[1]).unwrap();
     assert!(!json.contains("pressure"), "and stores none: {json}");
@@ -372,7 +372,7 @@ fn brush_strokes_keep_pen_pressure_and_refuse_bad_lists() {
 /// tapered line; with no pressure on either side there is none.
 #[test]
 fn connected_brush_strokes_carry_pen_pressure() {
-    use lightcraft_develop::MaskShape;
+    use lcc_develop::MaskShape;
     let mut s = demo();
     let id = s.active().unwrap();
     let strokes = |s: &Session| {
@@ -417,6 +417,24 @@ fn masks_crop_and_render() {
 }
 
 #[test]
+fn auto_stays_applied_until_a_tone_slider_changes() {
+    let mut s = demo();
+    let id = s.active().unwrap();
+    assert!(!s.auto_is_current(id));
+    let r = s.execute("develop.auto", &json!({})).unwrap();
+    assert_eq!(r["current"], true, "{r}");
+    assert!(s.auto_is_current(id));
+    // a change elsewhere keeps it; a tone slider change ends it
+    s.execute("develop.set", &json!({"control": "effects.clarity", "value": 10})).unwrap();
+    assert!(s.auto_is_current(id));
+    s.execute("develop.set", &json!({"control": "light.contrast", "value": 3})).unwrap();
+    assert!(!s.auto_is_current(id));
+    // undoing that change brings the Auto values (and the state) back
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(s.auto_is_current(id));
+}
+
+#[test]
 fn versions_history_and_reset() {
     let mut s = demo();
     s.execute("develop.set", &json!({"control": "light.exposure", "value": 1.0})).unwrap();
@@ -438,8 +456,8 @@ fn op_log_replay_reproduces_catalog() {
     s.execute("develop.set", &json!({"control": "effects.dehaze", "value": 40})).unwrap();
     s.execute("album.create", &json!({"name": "X"})).unwrap();
     s.execute("edit.undo", &json!({})).unwrap();
-    let log: String = s.drain_log().iter().map(lightcraft_catalog::Catalog::op_to_log_line).collect();
-    let mut c = lightcraft_catalog::Catalog::from_snapshot(&snap).unwrap();
+    let log: String = s.drain_log().iter().map(lcc_catalog::Catalog::op_to_log_line).collect();
+    let mut c = lcc_catalog::Catalog::from_snapshot(&snap).unwrap();
     c.replay(&log).unwrap();
     assert_eq!(c.to_snapshot(), s.catalog.to_snapshot());
 }
@@ -463,7 +481,7 @@ fn upright_and_guides_commands() {
     let r = s.execute("geometry.upright", &json!({"mode": "level"})).unwrap();
     assert_eq!(r["mode"], "level");
     let d = active_dev(&s);
-    assert_eq!(d.geometry.upright, lightcraft_develop::Upright::Level);
+    assert_eq!(d.geometry.upright, lcc_develop::Upright::Level);
     assert!(d.geometry.upright_transform.is_some(), "analysis result is stored");
     s.execute("geometry.upright", &json!({"mode": "off"})).unwrap();
     assert!(active_dev(&s).geometry.upright_transform.is_none());
@@ -472,7 +490,7 @@ fn upright_and_guides_commands() {
         s.execute("geometry.guides", &json!({"guides": [[x, 0.2, x + 0.02, 0.8]], "add": true})).unwrap();
     }
     let d = active_dev(&s);
-    assert_eq!(d.geometry.upright, lightcraft_develop::Upright::Guided);
+    assert_eq!(d.geometry.upright, lcc_develop::Upright::Guided);
     assert_eq!(d.geometry.guides.len(), 4, "at most four guides");
     assert!((d.geometry.guides[0].0.x - 0.25).abs() < 1e-9, "oldest dropped");
     let id = s.active().unwrap();
@@ -510,7 +528,7 @@ fn paste_selected_settings_pastes_only_chosen_copied_groups() {
     // `detail` was not copied: asking for it pastes nothing for it
     s.execute("develop.paste", &json!({"ids": [ids[1].0], "groups": ["light", "detail"]})).unwrap();
     let d = s.develop_of(ids[1]).unwrap();
-    let base = lightcraft_develop::DevelopSettings::default();
+    let base = lcc_develop::DevelopSettings::default();
     assert_eq!(d.light.exposure, 1.0);
     assert_eq!(d.color.vibrance, base.color.vibrance);
     assert_ne!(d.detail.sharpen_amount, 90.0);
@@ -617,6 +635,19 @@ fn masks_reorder_and_duplicate_and_invert() {
 }
 
 #[test]
+fn mask_feather_is_set_clamped_and_undoable() {
+    let mut s = demo();
+    s.execute("mask.add", &json!({"kind": "radial"})).unwrap();
+    s.execute("mask.feather", &json!({"value": 40.0})).unwrap();
+    assert_eq!(active_dev(&s).masks[0].feather, 40.0);
+    s.execute("mask.feather", &json!({"value": 250.0})).unwrap();
+    assert_eq!(active_dev(&s).masks[0].feather, 100.0);
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(active_dev(&s).masks[0].feather, 40.0);
+    assert!(s.execute("mask.feather", &json!({"id": 9999, "value": 10.0})).is_err());
+}
+
+#[test]
 fn before_is_the_import_state_and_can_be_set_copied_and_swapped() {
     let mut s = demo();
     let id = s.active().unwrap();
@@ -686,7 +717,7 @@ fn presets_versions_history_and_select_by() {
     assert!(s.catalog.photo(s.active().unwrap()).unwrap().history.len() > 1, "undoable");
     // select by: the demo has rated and picked photos
     let vis = s.visible_cloned();
-    let picks = vis.iter().filter(|id| s.catalog.photo(**id).unwrap().flag == lightcraft_catalog::Flag::Pick).count();
+    let picks = vis.iter().filter(|id| s.catalog.photo(**id).unwrap().flag == lcc_catalog::Flag::Pick).count();
     let r = s.execute("library.selectBy", &json!({"flag": "pick"})).unwrap();
     assert_eq!(r["selected"].as_u64(), Some(picks as u64));
     assert!(picks > 0);
@@ -826,6 +857,28 @@ fn paste_from_previous_and_copy_paste_metadata() {
 }
 
 #[test]
+fn sync_metadata_copies_the_active_photo_to_the_selection() {
+    let mut s = demo();
+    let ids: Vec<_> = s.visible().iter().copied().take(3).collect();
+    s.execute("library.select", &json!({"ids": [ids[0].0]})).unwrap();
+    s.execute("photo.setMeta", &json!({"title": "Dawn", "keywords": ["sky"], "creator": "Me"})).unwrap();
+    // alone it has nothing to sync to
+    assert!(s.execute("photo.syncMetadata", &json!({})).is_err());
+    s.execute("library.select", &json!({"ids": ids.iter().map(|i| i.0).collect::<Vec<_>>(), "active": ids[0].0})).unwrap();
+    s.execute("photo.syncMetadata", &json!({"fields": ["title", "keywords"]})).unwrap();
+    for id in &ids[1..] {
+        let m = &s.catalog.photo(*id).unwrap().meta;
+        assert_eq!((m.title.as_str(), m.keywords.clone()), ("Dawn", vec!["sky".to_string()]));
+        assert_ne!(m.creator, "Me", "only the chosen fields");
+    }
+    s.execute("photo.syncMetadata", &json!({})).unwrap();
+    assert_eq!(s.catalog.photo(ids[2]).unwrap().meta.creator, "Me");
+    // one undo step takes the whole sync back
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_ne!(s.catalog.photo(ids[2]).unwrap().meta.creator, "Me");
+}
+
+#[test]
 fn stacks_move_and_split() {
     let mut s = demo();
     let ids: Vec<_> = s.visible().iter().copied().take(5).collect();
@@ -866,21 +919,36 @@ fn filter_presets_save_and_apply() {
 }
 
 #[test]
+fn enable_filters_toggles_and_keeps_the_filter() {
+    let mut s = demo();
+    let all = s.visible_cloned().len();
+    s.execute("filter.toggleEnabled", &json!({})).unwrap();
+    assert_eq!(s.visible_cloned().len(), all, "no filter: nothing to switch");
+    s.execute("library.filter", &json!({"rating": 4})).unwrap();
+    let four = s.visible_cloned().len();
+    assert!(four < all);
+    let r = s.execute("filter.toggleEnabled", &json!({})).unwrap();
+    assert_eq!((r["enabled"].as_bool(), r["photos"].as_u64()), (Some(false), Some(all as u64)));
+    let r = s.execute("filter.toggleEnabled", &json!({})).unwrap();
+    assert_eq!((r["enabled"].as_bool(), r["photos"].as_u64()), (Some(true), Some(four as u64)));
+}
+
+#[test]
 fn auto_bw_mix_separates_colours() {
     let mut s = demo();
     s.execute("develop.autoBwMix", &json!({})).unwrap();
     let d = active_dev(&s);
-    assert_eq!(d.treatment, lightcraft_develop::Treatment::Bw);
+    assert_eq!(d.treatment, lcc_develop::Treatment::Bw);
     let m = d.bw_mix.bands();
     assert!(m.iter().any(|v| *v != 0.0), "some band moved: {m:?}");
     assert!(m.iter().all(|v| v.abs() <= 60.0));
     s.execute("edit.undo", &json!({})).unwrap();
-    assert_ne!(active_dev(&s).treatment, lightcraft_develop::Treatment::Bw, "one undo step");
+    assert_ne!(active_dev(&s).treatment, lcc_develop::Treatment::Bw, "one undo step");
 }
 
 #[test]
 fn auto_sync_carries_only_the_changed_settings() {
-    use lightcraft_catalog::PhotoId;
+    use lcc_catalog::PhotoId;
     let mut s = demo();
     let ids: Vec<u64> = s.catalog.photos().take(3).map(|p| p.id.0).collect();
     // the second photo has its own contrast, which must survive
@@ -908,7 +976,7 @@ fn auto_sync_carries_only_the_changed_settings() {
     assert_eq!(ids.iter().map(|id| s.develop_of(PhotoId(*id)).unwrap().light.shadows).collect::<Vec<_>>(), shadows);
     // spot removal belongs to one photo
     let mut d = (*s.develop_of(PhotoId(ids[0])).unwrap()).clone();
-    d.spots.push(lightcraft_develop::Spot::default());
+    d.spots.push(lcc_develop::Spot::default());
     s.set_develop(PhotoId(ids[0]), d, "Remove").unwrap();
     assert!(s.develop_of(PhotoId(ids[1])).unwrap().spots.is_empty());
     // off: only the active photo
@@ -927,7 +995,7 @@ fn json_delta_keeps_only_changes() {
 
 #[test]
 fn build_previews_fills_the_cache() {
-    use lightcraft_catalog::PhotoId;
+    use lcc_catalog::PhotoId;
     let mut s = demo();
     let ids: Vec<u64> = s.catalog.photos().take(3).map(|p| p.id.0).collect();
     let cached = |s: &mut Session, id: u64| {
@@ -1003,7 +1071,7 @@ fn activity_cancel_stops_a_preview_build() {
 /// in the mask view) and not a different one; ⇧ adds samples, up to five.
 #[test]
 fn color_range_sampling_selects_the_clicked_colour() {
-    use lightcraft_pipeline::{MaskView, Overlay};
+    use lcc_pipeline::{MaskView, Overlay};
     let mut s = demo();
     // a flower: magenta petals at the centre, green around them
     let id = s.catalog.photos().find(|p| p.meta.keywords.iter().any(|k| k == "flower")).unwrap().id;
@@ -1019,8 +1087,7 @@ fn color_range_sampling_selects_the_clicked_colour() {
         });
         job.run().rendered.unwrap().image
     };
-    let at =
-        |img: &lightcraft_raster::Rgba8, x: f64, y: f64| img.data[(y * img.height as f64) as usize * img.width + (x * img.width as f64) as usize][0];
+    let at = |img: &lcc_raster::Rgba8, x: f64, y: f64| img.data[(y * img.height as f64) as usize * img.width + (x * img.width as f64) as usize][0];
     let r = s.execute("mask.sampleColor", &json!({"x": 0.5, "y": 0.5})).unwrap();
     assert_eq!(r["samples"].as_array().unwrap().len(), 1);
     let img = mask(&mut s);
@@ -1040,7 +1107,7 @@ fn color_range_sampling_selects_the_clicked_colour() {
 
 #[test]
 fn leaving_an_edited_photo_keeps_an_auto_version() {
-    use lightcraft_catalog::PhotoId;
+    use lcc_catalog::PhotoId;
     let mut s = demo();
     let ids: Vec<u64> = s.catalog.photos().take(2).map(|p| p.id.0).collect();
     s.execute("library.select", &json!({"ids": [ids[0]]})).unwrap();
@@ -1068,7 +1135,7 @@ fn leaving_an_edited_photo_keeps_an_auto_version() {
 
 #[test]
 fn match_total_exposures() {
-    use lightcraft_catalog::PhotoId;
+    use lcc_catalog::PhotoId;
     let mut s = demo();
     let ids: Vec<u64> = s.catalog.photos().take(3).map(|p| p.id.0).collect();
     // reference 1/100 f/4 ISO 100, slider +0.5; other 1/50 f/4 ISO 100 (one stop more light)
@@ -1077,7 +1144,7 @@ fn match_total_exposures() {
         m.shutter = sh.to_string();
         m.aperture = Some(*ap);
         m.iso = Some(*iso);
-        s.commit("t", lightcraft_catalog::Op::SetMeta { id: PhotoId(ids[i]), meta: Box::new(m) }).unwrap();
+        s.commit("t", lcc_catalog::Op::SetMeta { id: PhotoId(ids[i]), meta: Box::new(m) }).unwrap();
     }
     s.execute("library.select", &json!({"ids": ids})).unwrap();
     s.selection.active = Some(PhotoId(ids[0]));
@@ -1086,6 +1153,15 @@ fn match_total_exposures() {
     assert_eq!((r["changed"].as_u64(), r["skipped"].clone()), (Some(1), json!([ids[2]])));
     let e = s.develop_of(PhotoId(ids[1])).unwrap().light.exposure;
     assert!((e - (-0.5)).abs() < 1e-9, "one stop more light → one stop less exposure: {e}");
+    // the same holds for a catalog string in the camera notation of a whole second (issue #1619): the
+    // reference is now 1.3 s, 130× the light of the target 1/100 s, so the slider tops out at +5 EV
+    let mut m = s.catalog.photo(PhotoId(ids[0])).unwrap().meta.clone();
+    m.shutter = "1.3\u{2033}".into();
+    s.commit("t", lcc_catalog::Op::SetMeta { id: PhotoId(ids[0]), meta: Box::new(m) }).unwrap();
+    let r = s.execute("develop.matchExposure", &json!({})).unwrap();
+    assert_eq!(r["changed"].as_u64(), Some(1), "{r}");
+    let e = s.develop_of(PhotoId(ids[1])).unwrap().light.exposure;
+    assert_eq!(e, 5.0, "1.3 s against 1/100 s is 7.0 stops, clamped: {e}");
 }
 
 #[test]
@@ -1104,7 +1180,7 @@ fn find_similar_filters_to_look_alikes() {
 
 #[test]
 fn quick_develop_adds_to_each_photo() {
-    use lightcraft_catalog::PhotoId;
+    use lcc_catalog::PhotoId;
     let mut s = demo();
     let ids: Vec<u64> = s.catalog.photos().take(2).map(|p| p.id.0).collect();
     s.execute("develop.set", &json!({"control": "light.exposure", "value": 0.5, "ids": [ids[0]]})).unwrap();
@@ -1121,7 +1197,7 @@ fn quick_develop_adds_to_each_photo() {
 
 #[test]
 fn mask_components_invert_duplicate_rename_change_mode_and_delete() {
-    use lightcraft_develop::MaskOp;
+    use lcc_develop::MaskOp;
     let mut s = demo();
     s.execute("mask.add", &json!({"kind": "radial"})).unwrap();
     s.execute("mask.addComponent", &json!({"op": "subtract", "kind": "linear"})).unwrap();
@@ -1179,8 +1255,51 @@ fn curve_reset_by_channel_and_whole() {
     assert_eq!(active_dev(&s).curve.master.len(), 4);
     // everything (the default)
     s.execute("curve.reset", &json!({})).unwrap();
-    assert_eq!(active_dev(&s).curve, lightcraft_develop::ToneCurve::default());
+    assert_eq!(active_dev(&s).curve, lcc_develop::ToneCurve::default());
     assert!(s.execute("curve.reset", &json!({"channel": "alpha"})).is_err());
+}
+
+#[test]
+fn a_masks_local_curve_through_the_curve_commands() {
+    let mut s = demo();
+    let s_curve = json!([[0.0, 0.0], [0.25, 0.15], [0.75, 0.85], [1.0, 1.0]]);
+    s.execute("mask.add", &json!({"kind": "radial"})).unwrap();
+    s.execute("mask.add", &json!({"kind": "linear"})).unwrap();
+    let ids: Vec<u32> = active_dev(&s).masks.iter().map(|m| m.id).collect();
+    let curve_of = |s: &crate::Session, k: usize| active_dev(s).masks[k].curve.clone();
+    // a channel of one mask's curve: the other mask and the photo's Tone Curve stay linear
+    s.execute("develop.curve", &json!({"channel": "red", "points": s_curve, "mask": ids[0]})).unwrap();
+    s.execute("develop.curve", &json!({"channel": "master", "points": [[0.0, 0.1], [1.0, 1.0]], "mask": ids[0]})).unwrap();
+    assert_eq!(curve_of(&s, 0).red.len(), 4);
+    assert_eq!(curve_of(&s, 0).master.len(), 2);
+    assert!(curve_of(&s, 1).is_empty());
+    assert_eq!(active_dev(&s).curve, lcc_develop::ToneCurve::default());
+    // one undo step per change
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(curve_of(&s, 0).master.is_empty() && curve_of(&s, 0).red.len() == 4);
+    // what isn't a mask's curve is refused, nothing changed
+    let before = active_dev(&s);
+    assert!(s.execute("develop.curve", &json!({"channel": "red", "points": s_curve, "mask": 99})).is_err());
+    assert!(s.execute("develop.curve", &json!({"channel": "parametric", "points": s_curve, "mask": ids[0]})).is_err());
+    assert!(s.execute("develop.curve", &json!({"channel": "red", "points": s_curve, "mask": "first"})).is_err());
+    assert!(s.execute("curve.reset", &json!({"channel": "parametric", "mask": ids[0]})).is_err());
+    assert_eq!(active_dev(&s), before);
+    // presets: applied to, matched on and saved from a mask's curve
+    s.execute("curve.applyPreset", &json!({"name": "Strong Contrast", "mask": ids[1]})).unwrap();
+    assert_eq!(s.execute("curve.presets", &json!({"mask": ids[1]})).unwrap()["current"], "Strong Contrast");
+    assert_eq!(s.execute("curve.presets", &json!({})).unwrap()["current"], "Linear", "the photo's curve is untouched");
+    assert!(active_dev(&s).curve.master.is_empty());
+    s.execute("curve.savePreset", &json!({"name": "Red Lift", "mask": ids[0]})).unwrap();
+    let saved = s.curve_presets.iter().find(|p| p.name == "Red Lift").unwrap().clone();
+    assert_eq!((saved.red.len(), saved.master.len()), (4, 0));
+    s.execute("curve.applyPreset", &json!({"name": "Red Lift"})).unwrap();
+    assert_eq!(active_dev(&s).curve.red.len(), 4, "a mask's curve as a preset for the Tone Curve");
+    // reset: one channel, then all of it
+    s.execute("curve.reset", &json!({"channel": "red", "mask": ids[0]})).unwrap();
+    assert!(curve_of(&s, 0).is_empty());
+    s.execute("curve.reset", &json!({"mask": ids[1]})).unwrap();
+    assert!(curve_of(&s, 1).is_empty());
+    assert_eq!(active_dev(&s).curve.red.len(), 4, "the Tone Curve stays");
 }
 
 #[test]
@@ -1193,11 +1312,11 @@ fn ai_masks_without_the_model_explain_themselves() {
     assert!(!e.contains("invalid parameters"), "shown as is: {e}");
     assert!(s.develop_of(id).unwrap().masks.is_empty());
     // an empty Object component (as an older document may hold) still takes clicks
-    let shape = lightcraft_develop::MaskShape::Object { hint: vec![], exclude: vec![], seg: None, detail: vec![], edge: 0.0 };
+    let shape = lcc_develop::MaskShape::Object { hint: vec![], exclude: vec![], seg: None, detail: vec![], edge: 0.0 };
     let mut d = (*s.develop_of(id).unwrap()).clone();
-    d.masks.push(lightcraft_develop::Mask {
+    d.masks.push(lcc_develop::Mask {
         id: 1,
-        components: vec![lightcraft_develop::MaskComponent { name: None, op: lightcraft_develop::MaskOp::Add, invert: false, shape }],
+        components: vec![lcc_develop::MaskComponent { name: None, op: lcc_develop::MaskOp::Add, invert: false, shape }],
         ..Default::default()
     });
     s.set_develop(id, d, "test").unwrap();
@@ -1221,7 +1340,7 @@ fn ai_masks_without_the_model_explain_themselves() {
 /// face rectangle says: corners, oversized and degenerate rectangles never leave the frame or panic.
 #[test]
 fn face_job_crops_a_square_inside_the_photo() {
-    use lightcraft_geom::Rect;
+    use lcc_geom::Rect;
     let mut s = demo();
     let id = s.active().unwrap();
     let (w, h) = {
@@ -1248,14 +1367,14 @@ fn face_job_crops_a_square_inside_the_photo() {
     // a face around (0.45, 0.375) is centred in its crop (room to spare on every side)
     let r = s.face_job(id, faces[0], 256).unwrap().settings.crop.geometry.rect;
     assert!((((r.x0 + r.x1) / 2.0) - 0.45).abs() < 1e-9 && (((r.y0 + r.y1) / 2.0) - 0.375).abs() < 1e-9, "{r:?}");
-    assert!(s.face_job(lightcraft_catalog::PhotoId(u64::MAX), faces[0], 256).is_none());
+    assert!(s.face_job(lcc_catalog::PhotoId(u64::MAX), faces[0], 256).is_none());
 }
 
 /// Regions are on the upright photo; after Rotate Right the close-up still frames the face: the box
 /// is carried into the rotated frame the crop lives in, and the crop stays square in rotated pixels.
 #[test]
 fn face_job_follows_rotate_right() {
-    use lightcraft_geom::Rect;
+    use lcc_geom::Rect;
     let mut s = demo();
     let id = s.active().unwrap();
     let (w, h) = {
@@ -1349,6 +1468,18 @@ fn undo_and_redo_show_the_photo_they_change() {
     assert_eq!(s.selection, before, "a step over several photos keeps the selection");
 }
 
+/// Undoing a step that created photos (here a virtual copy) never leaves them in the selection.
+#[test]
+fn undo_never_leaves_vanished_photos_selected() {
+    let mut s = demo();
+    let r = s.execute("photo.virtualCopy", &json!({})).unwrap();
+    let copy = r["ids"][0].as_u64().unwrap();
+    s.execute("library.select", &json!({"ids": [copy]})).unwrap();
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(s.selection.ids.iter().all(|&id| s.catalog.photo(id).is_some()), "{:?}", s.selection);
+    assert!(s.selection.active.is_none_or(|a| s.selection.ids.contains(&a)));
+}
+
 #[test]
 fn hdr_edits_render_with_their_hdr_histogram() {
     let mut s = demo();
@@ -1359,7 +1490,7 @@ fn hdr_edits_render_with_their_hdr_histogram() {
     s.execute("develop.set", &json!({"control": "light.exposure", "value": 1.0})).unwrap();
     let r = s.loupe_job(id, 200, 200, true).unwrap().run().rendered.unwrap();
     let bins = r.histogram.hdr.expect("an HDR edit's histogram");
-    assert_eq!(bins.stops, lightcraft_develop::Hdr::MAX_EV_LIMIT as f32, "a fixed scale");
+    assert_eq!(bins.stops, lcc_develop::Hdr::MAX_EV_LIMIT as f32, "a fixed scale");
     assert!(r.histogram.above_sdr() > 0.0);
     assert!(r.deep.is_none(), "the preview itself stays the 8-bit SDR rendition");
 }
@@ -1614,13 +1745,13 @@ fn presets_validate_groups_on_create_and_update() {
 /// radii and the bilinear sampler (issue #1519). Such spots render, quickly, as a spot over the whole frame.
 #[test]
 fn oversized_spots_render() {
-    use lightcraft_develop::{Spot, SpotMode};
+    use lcc_develop::{Spot, SpotMode};
     for size in [10.0, 1e30, f64::MAX, f64::INFINITY, f64::NAN] {
         for mode in [SpotMode::Heal, SpotMode::Remove, SpotMode::Clone] {
             let mut s = demo();
             let id = s.active().unwrap();
             let mut dd = (*s.develop_of(id).unwrap_or_default()).clone();
-            dd.spots.push(Spot { mode, points: vec![lightcraft_geom::Point::new(0.5, 0.5)], size, ..Default::default() });
+            dd.spots.push(Spot { mode, points: vec![lcc_geom::Point::new(0.5, 0.5)], size, ..Default::default() });
             s.set_develop(id, dd, "Remove").unwrap();
             let t = std::time::Instant::now();
             let r = s.render_now(id, 300, 200).unwrap();
@@ -1633,7 +1764,7 @@ fn oversized_spots_render() {
 /// Rotate turns the crop with the image: a crop of the left half becomes the top half, and turning back restores it.
 #[test]
 fn rotate_carries_the_crop_with_the_image() {
-    use lightcraft_geom::Rect;
+    use lcc_geom::Rect;
     let mut s = demo();
     let id = s.active().unwrap();
     let mut d = active_dev(&s);
@@ -1656,7 +1787,7 @@ fn rotate_carries_the_crop_with_the_image() {
 /// out still means the selection.
 #[test]
 fn malformed_photo_targets_are_refused_not_widened() {
-    use lightcraft_catalog::PhotoId;
+    use lcc_catalog::PhotoId;
     let mut s = Session::with_demo();
     let ids: Vec<u64> = s.catalog.photos().take(3).map(|p| p.id.0).collect();
     s.execute("library.select", &json!({"ids": [ids[0], ids[1]]})).unwrap();
@@ -1681,4 +1812,67 @@ fn malformed_photo_targets_are_refused_not_widened() {
     // a preset's id is not a photo target
     let preset = s.presets.first().unwrap().id.clone();
     s.execute("preset.apply", &json!({"id": preset})).unwrap();
+}
+
+/// Issue #160: the stack commands are on exactly when a selected photo is stacked, however many
+/// unstacked photos are selected with it.
+#[test]
+fn stack_commands_need_a_stacked_photo_in_the_selection() {
+    let mut s = demo();
+    let on = |s: &Session, id: &str| s.commands().into_iter().find(|c| c.id == id).map(|c| (c.enabled, c.disabled_reason.clone()));
+    let ids: Vec<_> = s.visible().to_vec();
+    assert!(ids.len() >= 4);
+    let select = |s: &mut Session, sel: &[lcc_catalog::PhotoId]| {
+        s.execute("library.select", &json!({"ids": sel.iter().map(|i| i.0).collect::<Vec<_>>(), "active": sel[0].0})).unwrap();
+    };
+    select(&mut s, &ids[..2]);
+    s.execute("stack.group", &json!({"collapsed": false})).unwrap();
+    for id in ["stack.ungroup", "stack.remove", "stack.setTop", "stack.moveUp", "stack.moveDown", "stack.split", "stack.toggle"] {
+        select(&mut s, &ids[2..]);
+        let (enabled, why) = on(&s, id).unwrap();
+        assert!(!enabled && why.as_deref() == Some("no stacked photo selected"), "{id}: {why:?}");
+        // one stacked photo among many unstacked ones turns it on
+        let mut sel = ids[2..].to_vec();
+        sel.push(ids[1]);
+        select(&mut s, &sel);
+        assert!(on(&s, id).unwrap().0, "{id}");
+    }
+}
+
+/// Issue #175 (AC-2 of #160): evaluating the stack commands' `enabled` does work proportional to
+/// the selected and stacked photos, not their product. Counts the photos and stacks the checks
+/// look at (not time): a library four times larger costs less than eight times the work.
+#[test]
+fn stack_command_enabled_work_grows_linearly_with_the_library() {
+    use crate::cmd::STACK_WORK;
+    use lcc_catalog::{Op, Photo, PhotoId, Source};
+    const STACK_CMDS: [&str; 7] = ["stack.ungroup", "stack.remove", "stack.setTop", "stack.moveUp", "stack.moveDown", "stack.split", "stack.toggle"];
+    // `n` photos in stacks of two, all selected; `last_only` stacks just the last pair instead.
+    let work_for = |n: u64, last_only: bool| -> u64 {
+        let mut s = demo();
+        let mut ids = Vec::new();
+        for i in 0..n {
+            let id = s.catalog.alloc_photo_id();
+            let p = Photo::new(id, Source::Demo { scene: 1 }, &format!("s{i}.jpg"), "JPEG", 6, 4, "2026-01-01T00:00:00");
+            s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+            ids.push(id);
+        }
+        let pairs: Vec<&[PhotoId]> = if last_only { vec![&ids[ids.len() - 2..]] } else { ids.chunks(2).collect() };
+        for pair in pairs {
+            let op = s.catalog.group_ops(pair[0], &pair[1..], false).unwrap();
+            s.catalog.apply(op).unwrap();
+        }
+        s.selection = Selection { ids: ids.clone(), active: ids.first().copied() };
+        STACK_WORK.with(|w| w.set(0));
+        let specs = command_specs();
+        for id in STACK_CMDS {
+            let spec = specs.iter().find(|c| c.id == id).unwrap();
+            assert!((spec.enabled)(&s).is_ok(), "{id} is on with stacked photos selected");
+        }
+        STACK_WORK.with(std::cell::Cell::get)
+    };
+    for last_only in [false, true] {
+        let (small, large) = (work_for(1000, last_only), work_for(4000, last_only));
+        assert!(large < small.max(1) * 8, "last_only={last_only}: work {small} -> {large} for 4x the photos");
+    }
 }

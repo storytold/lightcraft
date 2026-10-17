@@ -6,10 +6,10 @@
 use super::{MAX_JOB_PAGES, PageRaster, PrintJob};
 use crate::print_color::PrintColorJob;
 use crate::print_pdf::ImageData;
-use lightcraft_color::transfer::encode_srgb8;
-use lightcraft_color::{REC2020, SRGB};
-use lightcraft_pipeline::OutputSpace;
-use lightcraft_raster::Rgba8;
+use lcc_color::transfer::encode_srgb8;
+use lcc_color::{REC2020, SRGB};
+use lcc_pipeline::OutputSpace;
+use lcc_raster::Rgba8;
 
 /// Largest PDF produced, bytes.
 const MAX_PDF_BYTES: usize = 256 * 1024 * 1024;
@@ -116,7 +116,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("lc-print-output-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let icc = dir.join("Lustre Paper.icc");
-        std::fs::write(&icc, lightcraft_codecs::icc::write_named(lightcraft_codecs::NamedSpace::AdobeRgb)).unwrap();
+        std::fs::write(&icc, lcc_codecs::icc::write_named(lcc_codecs::NamedSpace::AdobeRgb)).unwrap();
         let color =
             PrintColorSettings { profile: PrintProfile::Icc { path: icc }, intent: PrintIntent::Relative, sixteen_bit: false, ..Default::default() };
         let job = PrintJob { color, ..Default::default() };

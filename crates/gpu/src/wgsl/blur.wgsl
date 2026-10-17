@@ -1,5 +1,5 @@
 // Box passes (clamped edges) over an image of NC interleaved channels; three of each approximate a
-// Gaussian (`lightcraft_raster::blur::gaussian`).
+// Gaussian (`lcc_raster::blur::gaussian`).
 // P: w, h, nc, r, ch (box_v only). Bindings: src, dst.
 
 // Pixel `i` (all nc ≤ 3 channels at once: one contiguous read per pixel).
@@ -75,7 +75,7 @@ fn box_v(@builtin(global_invocation_id) g: vec3<u32>) {
     }
 }
 
-// Separable median of a single-channel plane (`lightcraft_pipeline::local::median_hv`): 2r+1
+// Separable median of a single-channel plane (`lcc_pipeline::local::median_hv`): 2r+1
 // taps (r ≤ 24, clamped edges) along a row (median_h) or a column (median_v), one thread per
 // pixel. The median is a selection, so the result matches the CPU's bit for bit.
 // P: w, h, nc (unused), r.
@@ -128,4 +128,41 @@ fn median_v(@builtin(global_invocation_id) g: vec3<u32>) {
         v[k] = src[u32(y) * w + g.x];
     }
     dst[g.y * w + g.x] = median_of(n, r, &v);
+}
+
+// Separable minimum of a single-channel plane (`lcc_pipeline::local::min_hv`): 2r+1 taps
+// (clamped to the image) along a row (min_h) or a column (min_v). P: w, h, nc (unused), r.
+@compute @workgroup_size(16, 16)
+fn min_h(@builtin(global_invocation_id) g: vec3<u32>) {
+    let w = pu(0u);
+    let h = pu(1u);
+    let r = pu(3u);
+    if (g.x >= w || g.y >= h) {
+        return;
+    }
+    let row = g.y * w;
+    let a = select(0u, g.x - r, g.x >= r);
+    let b = min(g.x + r, w - 1u);
+    var m = src[row + a];
+    for (var x = a + 1u; x <= b; x++) {
+        m = min(m, src[row + x]);
+    }
+    dst[row + g.x] = m;
+}
+
+@compute @workgroup_size(16, 16)
+fn min_v(@builtin(global_invocation_id) g: vec3<u32>) {
+    let w = pu(0u);
+    let h = pu(1u);
+    let r = pu(3u);
+    if (g.x >= w || g.y >= h) {
+        return;
+    }
+    let a = select(0u, g.y - r, g.y >= r);
+    let b = min(g.y + r, h - 1u);
+    var m = src[a * w + g.x];
+    for (var y = a + 1u; y <= b; y++) {
+        m = min(m, src[y * w + g.x]);
+    }
+    dst[g.y * w + g.x] = m;
 }

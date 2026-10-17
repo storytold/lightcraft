@@ -1,0 +1,48 @@
+# Classic screenshots for the README, from the procedural demo library. Run from the repository root:
+#   cargo run --release -p lcc-cli -- snapshot --demo --script docs/showcase/classic.jsonl --size 1600x1000
+# then convert the PNGs in docs/images/classic/ to JPEG (see docs/showcase/README.md).
+{"method":"engine.execute","params":{"command":"module.library"}}
+{"method":"engine.execute","params":{"command":"view.squareGrid"}}
+{"method":"engine.execute","params":{"command":"library.sort","params":{"group":"none"}}}
+{"method":"ui.set","params":{"leftPanel":true,"thumbSize":150}}
+{"method":"ui.settle","params":{"timeoutMs":30000}}
+{"method":"ui.screenshot","params":{"path":"docs/images/classic/library.png"}}
+{"method":"engine.execute","params":{"command":"library.select","params":{"ids":[1]}}}
+{"method":"engine.execute","params":{"command":"module.develop"}}
+{"method":"engine.execute","params":{"command":"develop.set","params":{"values":{"light.highlights":-55,"light.shadows":35,"color.vibrance":25,"effects.clarity":15}}}}
+{"method":"ui.settle","params":{"timeoutMs":30000}}
+{"method":"ui.screenshot","params":{"path":"docs/images/classic/develop.png"}}
+{"method":"engine.execute","params":{"command":"panel.masking"}}
+{"method":"engine.execute","params":{"command":"mask.add","params":{"kind":"linear","start":[0.5,0.0],"end":[0.5,0.45],"name":"Sky"}}}
+{"method":"engine.execute","params":{"command":"mask.adjust","params":{"values":{"exposure":-0.6,"temp":25,"saturation":20,"dehaze":20}}}}
+{"method":"engine.execute","params":{"command":"mask.add","params":{"kind":"radial","center":[0.62,0.4],"rx":0.2,"ry":0.14,"feather":70,"name":"Sun glow"}}}
+{"method":"engine.execute","params":{"command":"mask.adjust","params":{"values":{"exposure":0.5,"temp":40,"saturation":15}}}}
+{"method":"ui.settle","params":{"timeoutMs":30000}}
+{"method":"ui.screenshot","params":{"path":"docs/images/classic/masking.png"}}
+{"method":"engine.execute","params":{"command":"panel.edit"}}
+{"method":"engine.execute","params":{"command":"module.library"}}
+{"method":"engine.execute","params":{"command":"library.select","params":{"ids":[2,3,4,5]}}}
+{"method":"engine.execute","params":{"command":"view.survey"}}
+{"method":"ui.settle","params":{"timeoutMs":30000}}
+{"method":"ui.screenshot","params":{"path":"docs/images/classic/survey.png"}}
+{"method":"engine.execute","params":{"command":"library.select","params":{"ids":[2,3]}}}
+{"method":"engine.execute","params":{"command":"view.compare"}}
+{"method":"ui.settle","params":{"timeoutMs":30000}}
+{"method":"ui.screenshot","params":{"path":"docs/images/classic/compare.png"}}
+{"method":"engine.execute","params":{"command":"library.selectAll"}}
+{"method":"engine.execute","params":{"command":"module.map"}}
+{"method":"ui.settle","params":{"timeoutMs":30000}}
+{"method":"ui.screenshot","params":{"path":"docs/images/classic/map.png"}}
+{"method":"engine.execute","params":{"command":"module.book"}}
+{"method":"engine.execute","params":{"command":"book.autoLayout"}}
+{"method":"ui.settle","params":{"timeoutMs":30000}}
+{"method":"ui.screenshot","params":{"path":"docs/images/classic/book.png"}}
+{"method":"engine.execute","params":{"command":"module.slideshow"}}
+{"method":"ui.settle","params":{"timeoutMs":30000}}
+{"method":"ui.screenshot","params":{"path":"docs/images/classic/slideshow.png"}}
+{"method":"engine.execute","params":{"command":"module.print"}}
+{"method":"ui.settle","params":{"timeoutMs":30000}}
+{"method":"ui.screenshot","params":{"path":"docs/images/classic/print.png"}}
+{"method":"engine.execute","params":{"command":"module.web"}}
+{"method":"ui.settle","params":{"timeoutMs":30000}}
+{"method":"ui.screenshot","params":{"path":"docs/images/classic/web.png"}}

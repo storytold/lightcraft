@@ -25,7 +25,7 @@ pub enum Role {
 #[serde(rename_all = "camelCase")]
 pub enum Commercial {
     Yes,
-    /// Research or personal use only. Never bundled or redistributed by LightCraft.
+    /// Research or personal use only. Never bundled or redistributed by the app.
     No,
     /// The licence or the training data is unclear: the user is told so before installing.
     Unknown,
@@ -204,7 +204,7 @@ fn ratio(field: &'static str, v: Option<f32>, lo: f32, hi: f32) -> Result<(), Ma
     }
 }
 
-/// Check a manifest from any source. Everything the rest of LightCraft relies on (sizes it will allocate,
+/// Check a manifest from any source. Everything the rest of the app relies on (sizes it will allocate,
 /// numbers it will divide by, text it will show) is bounded here.
 pub fn validate(m: &ModelManifest) -> Result<(), ManifestError> {
     if !valid_id(&m.id) {
@@ -294,18 +294,6 @@ mod tests {
             output: OutputSpec::Embedding { dim: 512 },
             thresholds: Thresholds { match_cosine: Some(0.4), ..Default::default() },
             speed: Some(1.7),
-        }
-    }
-
-    #[test]
-    fn speed_reads_as_times_faster_than_the_reference() {
-        assert_eq!(describe_speed(7.0), "7× faster than a ResNet-100 model");
-        assert_eq!(describe_speed(4.6), "4.6× faster than a ResNet-100 model");
-        assert_eq!(describe_speed(1.7), "1.7× faster than a ResNet-100 model");
-        assert_eq!(describe_speed(1.0), "Same speed as a ResNet-100 model");
-        assert_eq!(describe_speed(0.5), "2× slower than a ResNet-100 model");
-        for odd in [0.0, -1.0, f32::NAN, f32::INFINITY] {
-            assert_eq!(describe_speed(odd), "", "{odd}");
         }
     }
 

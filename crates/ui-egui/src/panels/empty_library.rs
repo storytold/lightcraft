@@ -5,19 +5,19 @@ use egui::Rect;
 use serde_json::json;
 
 use super::EmptyAction;
-use crate::LightcraftApp;
+use crate::LccApp;
 use crate::shortcuts::Keymap;
 use crate::state::ViewMode;
 
 /// The library holds no photos: none, or only ones in Recently Deleted or browsed under Local.
-pub fn is_empty(session: &lightcraft_engine::Session) -> bool {
+pub fn is_empty(session: &lcc_engine::Session) -> bool {
     !session.catalog.photos().any(|p| p.in_library())
 }
 
 /// What is shown is the empty library: not a folder browsed under Local nor Recently Deleted,
 /// whose photos aren't in the library but are on screen.
-pub fn shown(session: &lightcraft_engine::Session) -> bool {
-    use lightcraft_engine::LibrarySource;
+pub fn shown(session: &lcc_engine::Session) -> bool {
+    use lcc_engine::LibrarySource;
     !matches!(session.source, LibrarySource::Folder | LibrarySource::RecentlyDeleted) && is_empty(session)
 }
 
@@ -25,7 +25,7 @@ pub fn shown(session: &lightcraft_engine::Session) -> bool {
 /// only "Choose a photo in the grid" to say). Square Grid stays as it is; a library with photos
 /// opens as left. The desktop host calls this before it notes what its settings file holds, so
 /// the switch isn't saved for its own sake.
-pub fn open_on_empty_library(app: &mut LightcraftApp) {
+pub fn open_on_empty_library(app: &mut LccApp) {
     if is_empty(&app.session) {
         if app.ui.view != ViewMode::SquareGrid {
             app.ui.view = ViewMode::PhotoGrid;
@@ -55,7 +55,7 @@ const IMPORT_LIGHTROOM: EmptyAction =
 
 /// The empty library's message and buttons, centred in `rect`. A click runs the command as its
 /// menu item does; a refusal shows as a toast.
-pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, rect: Rect) {
+pub fn show(app: &mut LccApp, ui: &mut egui::Ui, rect: Rect) {
     // the browser build can't read a Lightroom catalog from disk: only offer what works there
     let actions: &[EmptyAction] = if cfg!(target_arch = "wasm32") { &[IMPORT_PHOTOS] } else { &[IMPORT_PHOTOS, IMPORT_LIGHTROOM] };
     let mac = ui.ctx().os() == egui::os::OperatingSystem::Mac;

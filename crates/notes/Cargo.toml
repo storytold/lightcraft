@@ -1,0 +1,11 @@
+[package]
+name = "lcc-notes"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Release notes (standalone): What's New and changelog entries, one file per change, joined at build and release time. No dependencies."
+
+[dependencies]
+
+[lints]
+workspace = true

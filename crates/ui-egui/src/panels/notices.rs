@@ -6,14 +6,14 @@ use egui::{Align2, RichText, vec2};
 
 use crate::theme::Tokens;
 use crate::widgets::register;
-use crate::{LightcraftApp, QuitPrompt};
+use crate::{LccApp, QuitPrompt};
 
 /// Collect the library's settings-file warnings (each is shown once), and the no-GPU notice once the GPU device has
 /// been tried.
-pub fn logic(app: &mut LightcraftApp) {
+pub fn logic(app: &mut LccApp) {
     let new = app.session.take_library_warnings();
     app.notices.extend(new);
-    use lightcraft_engine::gpu;
+    use lcc_engine::gpu;
     if app.gpu_notice && app.gpu_applied == Some(true) && gpu::ready() {
         app.gpu_notice = false;
         if !gpu::available() {
@@ -24,15 +24,14 @@ pub fn logic(app: &mut LightcraftApp) {
 
 /// What to tell the user when GPU rendering is on (`enabled`) but the GPU could not be used for `reason`: only when no
 /// graphics adapter was found at all ("no GPU adapter among …", e.g. no Vulkan loader on Linux), which makes every
-/// render much slower without saying so. Nothing when it was turned off (preference, `LIGHTCRAFT_GPU`), a software
+/// render much slower without saying so. Nothing when it was turned off (preference, `<PREFIX>_GPU`), a software
 /// adapter was skipped, or it failed later; Settings ▸ Performance and Help ▸ System Info show those.
 pub fn gpu_notice(reason: Option<&str>, enabled: bool) -> Option<String> {
     if !enabled || !reason?.starts_with("no GPU adapter") {
         return None;
     }
     let mut text =
-        crate::i18n::tr("No graphics processor found: LightCraft renders on the CPU, which is much slower. Details in Help → System Info.")
-            .to_string();
+        crate::i18n::tr("No graphics processor found: {app} renders on the CPU, which is much slower. Details in Help → System Info.").to_string();
     if cfg!(target_os = "linux") {
         text.push(' ');
         text.push_str(crate::i18n::tr("On NixOS, start it from `nix develop`."));
@@ -43,7 +42,7 @@ pub fn gpu_notice(reason: Option<&str>, enabled: bool) -> Option<String> {
 /// The window may close now (`true`), or the quit prompt is shown (`false`). Running tasks that
 /// can be cancelled (an import, an export…) are asked about first; then changes that couldn't be
 /// written are retried — the log, then a snapshot of everything in memory.
-pub fn may_close(app: &mut LightcraftApp) -> bool {
+pub fn may_close(app: &mut LccApp) -> bool {
     if app.quit_confirmed {
         return true;
     }
@@ -98,8 +97,9 @@ fn window(ctx: &egui::Context, id: &str, title: &str, text: &str, buttons: &[(&s
     });
     let mut chosen = None;
     let frame = egui::Frame::window(&ctx.global_style()).inner_margin(egui::Margin::symmetric(18, 14));
-    egui::Window::new(crate::i18n::tr(title))
-        .id(egui::Id::new(id))
+    let window_id = egui::Id::new(id);
+    let shown = egui::Window::new(crate::i18n::tr(title))
+        .id(window_id)
         .order(egui::Order::Foreground)
         .collapsible(false)
         .resizable(false)
@@ -110,22 +110,26 @@ fn window(ctx: &egui::Context, id: &str, title: &str, text: &str, buttons: &[(&s
             // a fixed width: a wrapped label in an auto-sized, centred window would move it every frame
             ui.set_width(420.0);
             ui.spacing_mut().item_spacing.y = 8.0;
-            ui.add(egui::Label::new(RichText::new(text).color(t.text_label)).wrap());
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                for (i, (bid, label, _)) in buttons.iter().enumerate() {
-                    let r = ui.add(egui::Button::new(crate::i18n::tr(label)).min_size(vec2(0.0, 26.0)));
-                    register(ui.ctx(), format!("button:{bid}"), r.rect);
-                    if r.clicked() {
-                        chosen = Some(i);
+            let mut layout = crate::dialog_frame::ModalLayout::begin(ui, window_id);
+            layout.body(ui, |ui| ui.add(egui::Label::new(RichText::new(text).color(t.text_label)).wrap()));
+            layout.footer(ui, |ui| {
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    for (i, (bid, label, _)) in buttons.iter().enumerate() {
+                        let r = ui.add(egui::Button::new(crate::i18n::tr(label)).min_size(vec2(0.0, 26.0)));
+                        register(ui.ctx(), format!("button:{bid}"), r.rect);
+                        if r.clicked() {
+                            chosen = Some(i);
+                        }
                     }
-                }
+                });
             });
         });
+    crate::dialog_frame::ModalLayout::finish(ctx, window_id, shown.as_ref().map(|w| w.response.rect));
     chosen
 }
 
-pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
+pub fn show(app: &mut LccApp, ctx: &egui::Context) {
     if let Some(QuitPrompt::Tasks(text)) = app.quit_prompt.clone() {
         let buttons = [("quitAnyway", "Quit Anyway", Choice::QuitAnyway), ("quitCancel", "Cancel", Choice::Cancel)];
         let Some(i) = window(ctx, "quit-tasks", "Quit while tasks are running?", &text, &buttons) else { return };
@@ -182,13 +186,13 @@ mod tests {
         assert_eq!(text.contains("nix develop"), cfg!(target_os = "linux"), "{text}");
         assert_eq!(gpu_notice(Some(none), false), None, "the preference is off");
         for reason in [
-            "disabled by LIGHTCRAFT_GPU=0",
-            "disabled by LIGHTCRAFT_GPU_BACKEND=off",
-            "disabled by the GPU rendering preference (app.gpu)",
-            "software adapter (llvmpipe (LLVM 19.1.7, 256 bits)) skipped: the CPU pipeline is faster",
-            "stopped after a GPU failure: device lost",
+            format!("disabled by {}=0", lcc_brand::env_var("GPU")),
+            format!("disabled by {}=off", lcc_brand::env_var("GPU_BACKEND")),
+            "disabled by the GPU rendering preference (app.gpu)".to_string(),
+            "software adapter (llvmpipe (LLVM 19.1.7, 256 bits)) skipped: the CPU pipeline is faster".to_string(),
+            "stopped after a GPU failure: device lost".to_string(),
         ] {
-            assert_eq!(gpu_notice(Some(reason), true), None, "{reason}");
+            assert_eq!(gpu_notice(Some(&reason), true), None, "{reason}");
         }
         assert_eq!(gpu_notice(None, true), None, "the GPU is in use");
     }

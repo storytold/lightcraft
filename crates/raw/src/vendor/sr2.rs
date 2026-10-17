@@ -45,7 +45,7 @@
 //! of an accident 2⁻⁴⁰⁶⁴). For the DSC-R1's key `63 be 01 3e` the 11932-byte block becomes a well-formed 101-entry
 //! directory (black `0x7300`, white balance `0x7303`, crop `0x74c3`).
 
-use lightcraft_tiff::{ByteOrder, EntrySpan, Ifd, ParseOptions, decode_value, directory_entries, entry_span, tags as t};
+use lcc_tiff::{ByteOrder, EntrySpan, Ifd, ParseOptions, decode_value, directory_entries, entry_span, tags as t};
 
 /// `SR2Private` tags.
 const SUBIFD_OFFSET: u16 = 0x7200;
@@ -260,7 +260,7 @@ pub(crate) mod tests {
     const LONG: u16 = 4;
     const UNDEFINED: u16 = 7;
     const IFD: u16 = 13;
-    use lightcraft_tiff::ByteOrder::{Big, Little};
+    use lcc_tiff::ByteOrder::{Big, Little};
 
     /// An `SR2SubIFD` block for file offset `start`, encrypted: SHORT/SSHORT entries `(tag, type, values)`, values
     /// of more than two shorts stored after the table at file offsets, as Sony does.
@@ -429,8 +429,8 @@ pub(crate) mod tests {
     /// What `SubIfd::read` on main selects: the TIFF reader's parse of the directory with main's options, then the
     /// directory's `u64` and `bytes` lookups.
     fn reader_selects(bytes: &[u8], at: usize, order: ByteOrder) -> Selected {
-        let opts = lightcraft_tiff::ParseOptions { max_ifds: 1, max_depth: 0, follow_children: false, ..Default::default() };
-        let Ok((private, _)) = lightcraft_tiff::parse_ifd_at(bytes, at as u64, order, 0, false, &opts) else { return (None, None, None) };
+        let opts = lcc_tiff::ParseOptions { max_ifds: 1, max_depth: 0, follow_children: false, ..Default::default() };
+        let Ok((private, _)) = lcc_tiff::parse_ifd_at(bytes, at as u64, order, 0, false, &opts) else { return (None, None, None) };
         let n = |tag: u16| private.u64(tag).and_then(|v| usize::try_from(v).ok());
         (n(SUBIFD_OFFSET), n(SUBIFD_LENGTH), private.bytes(SUBIFD_KEY).and_then(|b| <[u8; 4]>::try_from(b).ok()))
     }
@@ -594,7 +594,7 @@ pub(crate) mod tests {
                 let mut pointer = Vec::new();
                 order.put_u32(&mut pointer, 0);
                 let ifd0 = Ifd {
-                    entries: vec![lightcraft_tiff::Entry { tag: t::DNG_PRIVATE_DATA, value: lightcraft_tiff::Value::Byte(pointer), offset: 0 }],
+                    entries: vec![lcc_tiff::Entry { tag: t::DNG_PRIVATE_DATA, value: lcc_tiff::Value::Byte(pointer), offset: 0 }],
                     ..Default::default()
                 };
                 let black = SubIfd::read(&file, &ifd0, order).and_then(|s| s.shorts(0x7310));

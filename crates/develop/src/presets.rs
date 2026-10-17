@@ -38,10 +38,11 @@ pub enum SettingsGroup {
     RedEye,
     LensBlur,
     Calibration,
+    PluginFilters,
 }
 
 impl SettingsGroup {
-    pub const ALL: [SettingsGroup; 20] = [
+    pub const ALL: [SettingsGroup; 21] = [
         SettingsGroup::Profile,
         SettingsGroup::Treatment,
         SettingsGroup::WhiteBalance,
@@ -62,6 +63,7 @@ impl SettingsGroup {
         SettingsGroup::RedEye,
         SettingsGroup::LensBlur,
         SettingsGroup::Calibration,
+        SettingsGroup::PluginFilters,
     ];
 
     /// Groups included by default when copying (Lightroom excludes crop, masks and spots by default).
@@ -94,6 +96,7 @@ impl SettingsGroup {
             SettingsGroup::RedEye => "Red Eye",
             SettingsGroup::LensBlur => "Lens Blur",
             SettingsGroup::Calibration => "Calibration",
+            SettingsGroup::PluginFilters => "Plug-in Filters",
         }
     }
 
@@ -120,6 +123,7 @@ impl SettingsGroup {
             SettingsGroup::RedEye => &["red_eye"],
             SettingsGroup::LensBlur => &["lens_blur"],
             SettingsGroup::Calibration => &["calibration"],
+            SettingsGroup::PluginFilters => &["plugin_filters"],
         }
     }
 }
@@ -132,6 +136,9 @@ pub fn extract_groups(s: &DevelopSettings, groups: &[SettingsGroup]) -> Value {
         for k in g.keys() {
             if let Some(v) = full.get(*k) {
                 out.insert((*k).to_string(), v.clone());
+            } else if *k == "plugin_filters" {
+                // Not written while empty: an empty stack still replaces the target's on paste.
+                out.insert((*k).to_string(), Value::Array(Vec::new()));
             }
         }
     }
@@ -155,9 +162,14 @@ pub fn deep_merge(base: &mut Value, patch: &Value) {
     }
 }
 
-/// Interpolate numbers in `patch` towards/away from `base` by `t` (1 = patch as-is); non-numeric
-/// values are taken from the patch when `t >= 0.5`.
+/// Interpolate numbers in `patch` towards/away from `base` by `t` (1 = patch as-is, 0 = base as-is).
+/// Point curves blend point by point. Discrete values (profile id, treatment, switches, seeds) take
+/// the preset's at any amount above 0, so the look fades in from nothing instead of jumping when
+/// they flip half-way (#37).
 fn scale_patch(base: &Value, patch: &Value, t: f64) -> Value {
+    if t <= 0.0 {
+        return if base.is_null() { patch.clone() } else { base.clone() };
+    }
     match (base, patch) {
         (Value::Object(b), Value::Object(p)) => {
             let mut out = Map::new();
@@ -173,14 +185,80 @@ fn scale_patch(base: &Value, patch: &Value, t: f64) -> Value {
             let (b, p) = (b.as_f64().unwrap_or(0.0), p.as_f64().unwrap_or(0.0));
             serde_json::Number::from_f64(b + (p - b) * t).map(Value::Number).unwrap_or(Value::Null)
         }
-        (b, p) => {
-            if t >= 0.5 {
-                p.clone()
-            } else {
-                b.clone()
-            }
+        (b, Value::Array(p)) => match (curve_points(b), curve_points(&Value::Array(p.clone()))) {
+            (Some(bc), Some(pc)) => blend_curves(&bc, &pc, t),
+            _ => match b {
+                Value::Array(ba) if ba.len() == p.len() => Value::Array(ba.iter().zip(p).map(|(b, p)| scale_patch(b, p, t)).collect()),
+                _ => Value::Array(p.clone()),
+            },
+        },
+        (_, p) => p.clone(),
+    }
+}
+
+/// Most points a blended curve keeps (input-derived lengths are capped).
+const MAX_CURVE_POINTS: usize = 256;
+
+/// A point curve (`[{x, y}, …]`, empty = identity) as sorted points, or `None` when `v` is not one.
+fn curve_points(v: &Value) -> Option<Vec<(f64, f64)>> {
+    let a = v.as_array()?;
+    let mut pts = Vec::with_capacity(a.len().min(MAX_CURVE_POINTS));
+    for p in a.iter().take(MAX_CURVE_POINTS) {
+        let o = p.as_object()?;
+        if o.len() != 2 {
+            return None;
+        }
+        let (x, y) = (o.get("x")?.as_f64()?, o.get("y")?.as_f64()?);
+        if !x.is_finite() || !y.is_finite() {
+            return None;
+        }
+        pts.push((x, y));
+    }
+    pts.sort_by(|a, b| a.0.total_cmp(&b.0));
+    Some(pts)
+}
+
+/// Piecewise-linear value of a curve at `x` (empty = identity).
+fn curve_at(c: &[(f64, f64)], x: f64) -> f64 {
+    let (Some(first), Some(last)) = (c.first(), c.last()) else { return x };
+    if x <= first.0 {
+        return first.1;
+    }
+    if x >= last.0 {
+        return last.1;
+    }
+    for w in c.windows(2) {
+        if let [(x0, y0), (x1, y1)] = *w
+            && x <= x1
+        {
+            let d = x1 - x0;
+            return if d > 1e-12 { y0 + (y1 - y0) * (x - x0) / d } else { y1 };
         }
     }
+    last.1
+}
+
+/// Blend two point curves: the union of their x positions, each y moved from the base curve's
+/// value towards the preset's by `t`.
+fn blend_curves(b: &[(f64, f64)], p: &[(f64, f64)], t: f64) -> Value {
+    if p.is_empty() && b.is_empty() {
+        return Value::Array(Vec::new());
+    }
+    let mut xs: Vec<f64> = b.iter().chain(p).map(|q| q.0).collect();
+    if b.is_empty() || p.is_empty() {
+        xs.extend([0.0, 1.0]);
+    }
+    xs.sort_by(f64::total_cmp);
+    xs.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
+    xs.truncate(MAX_CURVE_POINTS);
+    let pts = xs
+        .into_iter()
+        .map(|x| {
+            let (yb, yp) = (curve_at(b, x), curve_at(p, x));
+            serde_json::json!({"x": x, "y": (yb + (yp - yb) * t).clamp(0.0, 1.0)})
+        })
+        .collect();
+    Value::Array(pts)
 }
 
 /// Apply a partial settings object with an amount (1.0 = 100 %). Out-of-range values are clamped
@@ -285,12 +363,41 @@ mod tests {
         let p = Preset::from_settings("p", "P", "User", &a, &SettingsGroup::default_copy());
         assert!(p.settings.pointer("/grain/seed").is_some_and(Value::is_u64), "the default copy groups include the grain seed");
         let base = DevelopSettings::default();
-        for (amount, seed) in [(0.3, 0), (0.5, 12345), (1.5, 12345), (2.0, 12345)] {
+        for (amount, seed) in [(0.3, 12345), (0.5, 12345), (1.5, 12345), (2.0, 12345)] {
             let out = p.apply(&base, amount);
             assert!((out.light.exposure - amount.min(5.0)).abs() < 1e-9, "{amount}: exposure {}", out.light.exposure);
             assert!((out.grain.amount - (40.0 * amount).min(100.0)).abs() < 1e-9, "{amount}: grain {}", out.grain.amount);
             assert_eq!(out.grain.seed, seed, "{amount}: seed");
         }
+    }
+
+    /// #37: lowering the amount faded the preset until about 50 %, then jumped to the unedited
+    /// image because the curve, profile and switches flipped back to the photo's own there.
+    #[test]
+    fn amount_fades_gradually_to_nothing() {
+        let mut a = DevelopSettings::default();
+        a.profile.id = "lc.vivid".into();
+        a.light.contrast = 40.0;
+        a.curve.master = vec![lcc_geom::Point { x: 0.0, y: 0.1 }, lcc_geom::Point { x: 0.5, y: 0.6 }, lcc_geom::Point { x: 1.0, y: 1.0 }];
+        let p = Preset::from_settings("p", "P", "User", &a, &SettingsGroup::default_copy());
+        let base = DevelopSettings::default();
+        assert_eq!(p.apply(&base, 0.0), apply_partial(&base, &json!({}), 1.0), "0 % is the photo as it was");
+        let mid = |s: &DevelopSettings| lcc_develop_curve_mid(&s.curve.master);
+        let mut last = (0.0, 0.5);
+        for step in 1..=20 {
+            let t = f64::from(step) / 10.0;
+            let out = p.apply(&base, t);
+            assert_eq!(out.profile.id, "lc.vivid", "{t}: profile switches as soon as the preset is there");
+            let now = (out.light.contrast, mid(&out));
+            assert!(now.0 > last.0 && now.0 - last.0 < 4.0 + 1e-9, "{t}: contrast {now:?} after {last:?}");
+            assert!(now.1 >= last.1 - 1e-9 && now.1 - last.1 < 0.011, "{t}: curve mid {now:?} after {last:?}");
+            last = now;
+        }
+    }
+
+    fn lcc_develop_curve_mid(c: &[lcc_geom::Point]) -> f64 {
+        let pts: Vec<(f64, f64)> = c.iter().map(|p| (p.x, p.y)).collect();
+        curve_at(&pts, 0.5)
     }
 
     #[test]

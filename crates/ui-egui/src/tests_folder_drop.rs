@@ -9,7 +9,7 @@ use egui::{Pos2, Rect};
 use serde_json::json;
 
 use crate::headless::Headless;
-use crate::{LightcraftApp, Services};
+use crate::{LccApp, Services};
 
 /// Folders `trip` and `home` in a fresh temporary folder, with a photo file in each.
 fn folders(tag: &str) -> (PathBuf, PathBuf, PathBuf) {
@@ -18,8 +18,8 @@ fn folders(tag: &str) -> (PathBuf, PathBuf, PathBuf) {
     let (trip, home) = (root.join("trip"), root.join("home"));
     for (dir, file) in [(&trip, "beach.png"), (&home, "garden.png")] {
         std::fs::create_dir_all(dir).unwrap();
-        let img = lightcraft_raster::Rgba8 { width: 8, height: 8, data: vec![[90, 120, 160, 255]; 64] };
-        let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+        let img = lcc_raster::Rgba8 { width: 8, height: 8, data: vec![[90, 120, 160, 255]; 64] };
+        let png = lcc_codecs::encode_png(&lcc_codecs::EncodeImage::rgba8(&img), &lcc_codecs::EncodeMeta::default()).unwrap();
         std::fs::write(dir.join(file), png).unwrap();
     }
     (root, trip, home)
@@ -28,8 +28,8 @@ fn folders(tag: &str) -> (PathBuf, PathBuf, PathBuf) {
 /// The photos at `paths` in the catalog (`local`: browsed, not in the library), in the grid with
 /// the sidebar out, tall enough for the Folders section.
 fn app(paths: &[(PathBuf, bool)]) -> Headless {
-    use lightcraft_catalog::{Op, Photo, Source};
-    let mut session = lightcraft_engine::Session::new().with_fs();
+    use lcc_catalog::{Op, Photo, Source};
+    let mut session = lcc_engine::Session::new().with_fs();
     for (path, local) in paths {
         let id = session.catalog.alloc_photo_id();
         let name = path.file_name().unwrap().to_string_lossy().to_string();
@@ -37,7 +37,7 @@ fn app(paths: &[(PathBuf, bool)]) -> Headless {
         p.local = *local;
         session.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
     }
-    let mut h = Headless::new(LightcraftApp::new(session, Services { png: None, ..Default::default() }), [1300.0, 1600.0], 1.0);
+    let mut h = Headless::new(LccApp::new(session, Services { png: None, ..Default::default() }), [1300.0, 1600.0], 1.0);
     let r = h.request("ui.set", json!({"view": "photoGrid", "leftPanel": true, "sidebar": ["folders"]}), std::time::Duration::from_secs(10));
     assert_eq!(r["ok"], true, "{r}");
     for _ in 0..6 {
@@ -50,8 +50,24 @@ fn widget(h: &Headless, id: &str) -> Option<Rect> {
     h.app.widgets.iter().find(|(w, _)| w == id).map(|(_, r)| *r)
 }
 
+/// Fold the sidebar's Local section. On Windows the temp folder lies under the home folder, so
+/// browsing it opens Local at every folder on the way (all of `AppData\Local`'s), which pushes
+/// the Folders rows below the window and a drag never reaches them.
+fn fold_local(h: &mut Headless) {
+    if !h.app.ui.sidebar_section_collapsed("local") {
+        h.app.ui.toggle_sidebar_section("local");
+    }
+    h.step();
+    h.step();
+}
+
+/// `dir` as the folder tree spells it: the catalog's folder paths use `/` (`C:/Users/…` on Windows).
+fn tree_path(dir: &Path) -> String {
+    dir.to_string_lossy().replace('\\', "/")
+}
+
 fn folder_row(h: &Headless, dir: &Path) -> Option<Rect> {
-    widget(h, &format!("source:libfolder:{}", dir.to_string_lossy()))
+    widget(h, &format!("source:libfolder:{}", tree_path(dir)))
 }
 
 fn id_of(h: &Headless, file: &str) -> u64 {
@@ -135,8 +151,8 @@ fn photos_dropped_on_a_folder_move_there_on_disk() {
     click(&mut h, "button:dialogOk");
     // Then the file moved, the photo follows it, and the toast says Undo moves it back
     assert!(home.join("beach.png").is_file() && !trip.join("beach.png").exists(), "moved on disk");
-    let photo = h.app.session.catalog.photo(lightcraft_catalog::PhotoId(beach)).unwrap();
-    assert!(matches!(&photo.source, lightcraft_catalog::Source::File { path } if Path::new(path) == home.join("beach.png")));
+    let photo = h.app.session.catalog.photo(lcc_catalog::PhotoId(beach)).unwrap();
+    assert!(matches!(&photo.source, lcc_catalog::Source::File { path } if Path::new(path) == home.join("beach.png")));
     assert!(toast(&h).starts_with("Moved 1 photo to “home”. Edit → Undo moves them back."), "{}", toast(&h));
     assert!(h.app.ui.dragging_photos.is_none(), "the drag ended");
     // and one Undo moves it back
@@ -162,7 +178,8 @@ fn local_photos_are_refused_with_the_reason() {
     };
     h.step_until(std::time::Duration::from_secs(20), |h| shown(h));
     let beach = id_of(&h, "beach.png");
-    assert!(h.app.session.catalog.photo(lightcraft_catalog::PhotoId(beach)).unwrap().local);
+    assert!(h.app.session.catalog.photo(lcc_catalog::PhotoId(beach)).unwrap().local);
+    fold_local(&mut h);
     let target = folder_row(&h, &home).expect("the imported folder");
     let from = widget(&h, &format!("thumb:{beach}")).unwrap().center();
     press(&mut h, from);
@@ -180,7 +197,7 @@ fn photos_already_in_the_folder_stay_put() {
     let (root, trip, home) = folders("here");
     let mut h = app(&[(trip.join("beach.png"), false), (home.join("garden.png"), false)]);
     // open the folder holding both
-    let toggle = widget(&h, &format!("libraryFolderToggle:{}", root.to_string_lossy())).unwrap();
+    let toggle = widget(&h, &format!("libraryFolderToggle:{}", tree_path(&root))).unwrap();
     h.app.synthetic.push(egui::Event::PointerMoved(toggle.center()));
     h.app.synthetic.push(egui::Event::PointerButton {
         pos: toggle.center(),
@@ -222,8 +239,7 @@ fn photos_that_leave_the_view_leave_the_selection() {
     );
     assert_eq!(r["ok"], true, "{r}");
     let (beach, dunes) = (id_of(&h, "beach.png"), id_of(&h, "dunes.png"));
-    h.app.session.selection =
-        lightcraft_engine::Selection { ids: vec![lightcraft_catalog::PhotoId(beach)], active: Some(lightcraft_catalog::PhotoId(beach)) };
+    h.app.session.selection = lcc_engine::Selection { ids: vec![lcc_catalog::PhotoId(beach)], active: Some(lcc_catalog::PhotoId(beach)) };
     for _ in 0..4 {
         h.step();
     }
@@ -236,8 +252,8 @@ fn photos_that_leave_the_view_leave_the_selection() {
     click(&mut h, "button:dialogOk");
     assert!(home.join("beach.png").is_file(), "moved");
     // it left trip's view, and the selection with it: a Delete next can't reach it unseen
-    assert!(!h.app.session.selection.contains(lightcraft_catalog::PhotoId(beach)), "{:?}", h.app.session.selection);
-    assert!(h.app.session.visible_cloned().contains(&lightcraft_catalog::PhotoId(dunes)));
+    assert!(!h.app.session.selection.contains(lcc_catalog::PhotoId(beach)), "{:?}", h.app.session.selection);
+    assert!(h.app.session.visible_cloned().contains(&lcc_catalog::PhotoId(dunes)));
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -284,7 +300,7 @@ fn cancelling_the_question_moves_nothing() {
     let target = if folder_row(&h, &home).is_some() {
         target
     } else {
-        click(&mut h, &format!("libraryFolderToggle:{}", root.to_string_lossy()));
+        click(&mut h, &format!("libraryFolderToggle:{}", tree_path(&root)));
         folder_row(&h, &home).unwrap()
     };
     let undo = h.app.session.undo.len();
@@ -302,10 +318,10 @@ fn dont_ask_again_moves_the_next_drop_at_once() {
     let (root, trip, home) = folders("dont-ask");
     std::fs::copy(trip.join("beach.png"), trip.join("dunes.png")).unwrap();
     let mut h = app(&[(trip.join("beach.png"), false), (trip.join("dunes.png"), false), (home.join("garden.png"), false)]);
-    click(&mut h, &format!("libraryFolderToggle:{}", root.to_string_lossy()));
+    click(&mut h, &format!("libraryFolderToggle:{}", tree_path(&root)));
     let target = folder_row(&h, &home).unwrap();
     let beach = id_of(&h, "beach.png");
-    h.app.session.selection = lightcraft_engine::Selection::single(lightcraft_catalog::PhotoId(beach));
+    h.app.session.selection = lcc_engine::Selection::single(lcc_catalog::PhotoId(beach));
     drop_beach(&mut h, beach, target);
     // the question, with Don't ask again ticked
     click(&mut h, "check:moveDontAsk");
@@ -314,7 +330,7 @@ fn dont_ask_again_moves_the_next_drop_at_once() {
     assert!(!h.app.ui.settings.ask_before_move, "kept in Settings");
     // the next drop goes at once
     let dunes = id_of(&h, "dunes.png");
-    h.app.session.selection = lightcraft_engine::Selection::single(lightcraft_catalog::PhotoId(dunes));
+    h.app.session.selection = lcc_engine::Selection::single(lcc_catalog::PhotoId(dunes));
     h.step();
     let target = folder_row(&h, &home).unwrap();
     drop_beach(&mut h, dunes, target);
@@ -327,7 +343,7 @@ fn dont_ask_again_moves_the_next_drop_at_once() {
 fn a_question_left_open_while_another_library_opens_moves_nothing() {
     let (root, trip, home) = folders("other-library");
     let mut h = app(&[(trip.join("beach.png"), false), (home.join("garden.png"), false)]);
-    click(&mut h, &format!("libraryFolderToggle:{}", root.to_string_lossy()));
+    click(&mut h, &format!("libraryFolderToggle:{}", tree_path(&root)));
     let beach = id_of(&h, "beach.png");
     let target = folder_row(&h, &home).unwrap();
     drop_beach(&mut h, beach, target);

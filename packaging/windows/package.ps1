@@ -1,11 +1,11 @@
 <#
 .SYNOPSIS
-  Build, sign and package LightCraft for Windows.
+  Build, sign and package the app for Windows (names from brand.toml).
 
 .DESCRIPTION
   Produces, in $env:DIST (default: dist/release):
-    lightcraft-<version>-windows-<arch>.msi            per-machine installer (WiX v5)
-    lightcraft-<version>-windows-<arch>-portable.zip   lightcraft.exe + lightcraft-cli.exe
+    <binary>-<version>-windows-<arch>.msi            per-machine installer (WiX v5)
+    <binary>-<version>-windows-<arch>-portable.zip   <binary>.exe + <cli_binary>.exe
 
   The binaries link the C runtime statically (+crt-static), so neither the MSI nor the portable
   zip needs the Visual C++ redistributable. Signing is delegated to sign.ps1 (skipped with a
@@ -15,7 +15,7 @@
 
   Needs: Rust (MSVC toolchain + the target), the Windows SDK (rc.exe, signtool.exe),
   and WiX v5: dotnet tool install --global wix --version 5.0.2
-  The WiX UI and Util extensions (installer dialogs, "Launch LightCraft" on Finish) are added to
+  The WiX UI and Util extensions (installer dialogs, "Launch" on Finish) are added to
   the global WiX extension cache by this script (wix extension add -g ..., needs network once).
 
 .EXAMPLE
@@ -29,6 +29,9 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $Root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+. (Join-Path $PSScriptRoot 'brand.ps1')
+$AppExe = "$($Brand.binary).exe"
+$CliExe = "$($Brand.cli_binary).exe"
 
 function Invoke-Native([string] $What, [scriptblock] $Block) {
   Write-Output "==> $What"
@@ -60,7 +63,7 @@ function New-PanelBitmap([string] $Path, [int] $Width, [int] $Height, [int] $Spl
 }
 
 # The version lives in one place: [workspace.package] version in the root Cargo.toml.
-$Version = $env:LIGHTCRAFT_VERSION
+$Version = $env:PACKAGE_VERSION
 if (-not $Version) {
   $inPkg = $false
   foreach ($line in Get-Content (Join-Path $Root 'Cargo.toml')) {
@@ -77,10 +80,10 @@ $Dist = if ($env:DIST) { $env:DIST } else { Join-Path $Root 'dist\release' }
 $TargetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $Root 'target' }
 New-Item -ItemType Directory -Force -Path $Dist | Out-Null
 
-if (-not $env:LIGHTCRAFT_BUILD_SHA) { $env:LIGHTCRAFT_BUILD_SHA = (git -C $Root rev-parse HEAD 2>$null) }
-if (-not $env:LIGHTCRAFT_BUILD_DATE) { $env:LIGHTCRAFT_BUILD_DATE = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd') }
+if (-not $env:BUILD_SHA) { $env:BUILD_SHA = (git -C $Root rev-parse HEAD 2>$null) }
+if (-not $env:BUILD_DATE) { $env:BUILD_DATE = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd') }
 
-Write-Output "LightCraft $Version for Windows $Arch ($Target)"
+Write-Output "$($Brand.display_name) $Version for Windows $Arch ($Target)"
 
 if (-not $SkipBuild) {
   . (Join-Path $PSScriptRoot 'fonts.ps1')
@@ -90,8 +93,8 @@ if (-not $SkipBuild) {
   $flagVar = 'CARGO_TARGET_' + ($Target.ToUpper() -replace '-', '_') + '_RUSTFLAGS'
   [Environment]::SetEnvironmentVariable($flagVar, '-C target-feature=+crt-static')
   # Fail the build (rather than warn) if the icon/VERSIONINFO can't be embedded.
-  $env:LIGHTCRAFT_REQUIRE_WINRES = '1'
-  Invoke-Native "cargo build ($Target)" { cargo build --release --locked -p lightcraft -p lightcraft-cli --features lightcraft/heif,lightcraft-cli/heif --target $Target }
+  [Environment]::SetEnvironmentVariable("$($Brand.env_prefix)_REQUIRE_WINRES", '1')
+  Invoke-Native "cargo build ($Target)" { cargo build --release --locked -p lcc-app -p lcc-cli --features lcc-app/heif,lcc-cli/heif --target $Target }
 }
 
 $Bin = Join-Path $TargetDir "$Target\release"
@@ -106,7 +109,7 @@ function Get-PeHeader([string] $Path) {
   return @{ Machine = [BitConverter]::ToUInt16($bytes, $pe + 4); Subsystem = [BitConverter]::ToUInt16($bytes, $pe + 0x5C) }
 }
 $Machine = switch ($Arch) { 'x64' { 0x8664 } 'x86' { 0x14C } 'arm64' { 0xAA64 } }
-foreach ($check in @(@('lightcraft.exe', 2), @('lightcraft-cli.exe', 3))) {
+foreach ($check in @(@('app.exe', 2), @('app-cli.exe', 3))) {
   $h = Get-PeHeader (Join-Path $Bin $check[0])
   if ($h.Machine -ne $Machine) { throw "$($check[0]) is for machine 0x$('{0:X}' -f $h.Machine), expected 0x$('{0:X}' -f $Machine) ($Arch)" }
   if ($h.Subsystem -ne $check[1]) { throw "$($check[0]) has PE subsystem $($h.Subsystem), expected $($check[1])" }
@@ -115,12 +118,14 @@ foreach ($check in @(@('lightcraft.exe', 2), @('lightcraft-cli.exe', 3))) {
 $Stage = Join-Path $TargetDir "windows-package\$Arch"
 Remove-Item -Recurse -Force $Stage -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $Stage | Out-Null
-Copy-Item (Join-Path $Bin 'lightcraft.exe'), (Join-Path $Bin 'lightcraft-cli.exe') $Stage
+# The cargo binaries have neutral names (app, app-cli); the package carries the brand's.
+Copy-Item (Join-Path $Bin 'app.exe') (Join-Path $Stage $AppExe)
+Copy-Item (Join-Path $Bin 'app-cli.exe') (Join-Path $Stage $CliExe)
 # Include the embedded fonts' unmodified OFL texts in both installer and portable releases.
 . (Join-Path $PSScriptRoot 'font-licences.ps1')
 Write-FontLicences (Join-Path $Stage 'FONT-LICENCES.txt') (Join-Path $Root 'assets\fonts\OFL-Inter.txt') $env:CRAFT_FONTS_DIR
 
-& (Join-Path $PSScriptRoot 'sign.ps1') (Join-Path $Stage 'lightcraft.exe') (Join-Path $Stage 'lightcraft-cli.exe')
+& (Join-Path $PSScriptRoot 'sign.ps1') (Join-Path $Stage $AppExe) (Join-Path $Stage $CliExe)
 
 # ---- MSI ---------------------------------------------------------------------------------------
 # Extensions must match the WiX tool version (5.0.2, see release.yml). Re-adding is harmless.
@@ -138,10 +143,12 @@ $UiBannerBmp = Join-Path $Stage 'ui-banner.bmp'
 New-PanelBitmap $UiDialogBmp 493 312 164 ([byte[]](0x4E, 0x7B, 0xFB)) ([byte[]](0xFF, 0xFF, 0xFF))
 New-PanelBitmap $UiBannerBmp 493 58 0 ([byte[]](0xFF, 0xFF, 0xFF)) ([byte[]](0xFF, 0xFF, 0xFF))
 
-$Msi = Join-Path $Dist "lightcraft-$Version-windows-$Arch.msi"
+$Msi = Join-Path $Dist "$($Brand.binary)-$Version-windows-$Arch.msi"
+$Wxs = Join-Path $TargetDir "windows-package\app-$Arch.wxs"
+Expand-BrandTemplate (Join-Path $PSScriptRoot 'app.wxs.in') $Wxs
 Invoke-Native 'wix build' {
-  wix build (Join-Path $PSScriptRoot 'lightcraft.wxs') -arch $Arch -culture en-us @ExtArgs `
-    -d "Version=$MsiVersion" -d "BinDir=$Stage" -d "IconPath=$(Join-Path $Root 'assets\app-icon\lightcraft.ico')" `
+  wix build $Wxs -arch $Arch -culture en-us @ExtArgs `
+    -d "Version=$MsiVersion" -d "BinDir=$Stage" -d "IconPath=$(Join-Path $Root 'assets\app-icon\app.ico')" `
     -d "UiDialogBmp=$UiDialogBmp" -d "UiBannerBmp=$UiBannerBmp" `
     -o $Msi
 }
@@ -150,12 +157,12 @@ Remove-Item -Force -ErrorAction SilentlyContinue ([IO.Path]::ChangeExtension($Ms
 & (Join-Path $PSScriptRoot 'sign.ps1') $Msi
 
 # ---- portable zip ------------------------------------------------------------------------------
-$Portable = Join-Path $TargetDir "windows-package\lightcraft-$Version-windows-$Arch-portable"
+$Portable = Join-Path $TargetDir "windows-package\$($Brand.binary)-$Version-windows-$Arch-portable"
 Remove-Item -Recurse -Force $Portable -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $Portable | Out-Null
 Copy-Item (Join-Path $Stage '*.exe') $Portable
 Copy-Item (Join-Path $Stage 'FONT-LICENCES.txt') $Portable
-foreach ($f in 'README.md', 'LICENSE', 'LICENSE-MIT', 'LICENSE-APACHE', 'NOTICE') {
+foreach ($f in 'README.md', 'LICENSE', 'NOTICE') {
   $p = Join-Path $Root $f
   if (Test-Path $p) { Copy-Item $p $Portable }
 }
@@ -165,7 +172,7 @@ if ($env:CRAFT_FONTS_DIR) {
     Copy-Item $_.FullName (Join-Path $Portable "OFL-$($_.Directory.Name).txt")
   }
 }
-$Zip = Join-Path $Dist "lightcraft-$Version-windows-$Arch-portable.zip"
+$Zip = Join-Path $Dist "$($Brand.binary)-$Version-windows-$Arch-portable.zip"
 Remove-Item -Force $Zip -ErrorAction SilentlyContinue
 Compress-Archive -Path $Portable -DestinationPath $Zip
 
@@ -181,8 +188,8 @@ $HostArch = switch ($nativeArchitecture) {
   default { 'unknown' }
 }
 if ($Arch -ne 'arm64' -or $HostArch -eq 'arm64') {
-  Invoke-Native 'lightcraft-cli --version' { & (Join-Path $Stage 'lightcraft-cli.exe') --version }
+  Invoke-Native "$($Brand.cli_binary) --version" { & (Join-Path $Stage $CliExe) --version }
 } else {
-  Write-Output "skipping lightcraft-cli --version: an $Arch build doesn't run on this $HostArch machine"
+  Write-Output "skipping $($Brand.cli_binary) --version: an $Arch build doesn't run on this $HostArch machine"
 }
 Get-Item $Msi, $Zip | Format-Table Name, Length

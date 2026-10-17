@@ -6,7 +6,7 @@
 </filter></defs>
 
 <rect width="660" height="400" fill="#efe9dc"/><rect width="660" height="400" filter="url(#grain)"/>
-<g clip-path="url(#panel)"><rect width="232" height="400" fill="#f2a516"/><g transform="translate(-134.0,-40.0) scale(1.0)"><image href="../../../assets/app-icon/lightcraft.svg" width="512" height="512"/></g></g>
+<g clip-path="url(#panel)"><rect width="232" height="400" fill="#f2a516"/><g transform="translate(-134.0,-40.0) scale(1.0)"><image href="../../../brand/icon.svg" width="512" height="512"/></g></g>
 <line x1="232.5" y1="0" x2="232.5" y2="400" stroke="#0b0b0c" stroke-width="1.2"/>
 <line x1="236.5" y1="0" x2="236.5" y2="400" stroke="#0b0b0c" stroke-width="0.5"/>
 

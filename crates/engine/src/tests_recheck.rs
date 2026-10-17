@@ -2,14 +2,14 @@
 
 use std::path::PathBuf;
 
-use lightcraft_catalog::{APP_VERSION, Op, PhotoId};
+use lcc_catalog::{APP_VERSION, Op, PhotoId};
 use serde_json::json;
 
 use crate::Session;
 use crate::cmd::recheck;
 use crate::files::tests::cr3_with_preview;
 
-/// A version other than this build's: the flag was set by an older (or newer) LightCraft.
+/// A version other than this build's: the flag was set by an older (or newer) version of the app.
 const OTHER: &str = "0.5.0";
 
 struct Lib {
@@ -56,7 +56,7 @@ fn library(name: &str) -> Lib {
 }
 
 fn decodable_now(x: &Lib) {
-    std::fs::write(&x.file, crate::tests_xmp::synthetic_dng_with(None, lightcraft_meta::Metadata::default())).unwrap();
+    std::fs::write(&x.file, crate::tests_xmp::synthetic_dng_with(None, lcc_meta::Metadata::default())).unwrap();
 }
 
 /// The acceptance test: a stale flag on a file that decodes now is cleared without a manual

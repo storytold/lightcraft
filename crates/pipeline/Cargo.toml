@@ -1,25 +1,29 @@
 [package]
-name = "lightcraft-pipeline"
+name = "lcc-pipeline"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "LightCraft develop pipeline: scene-referred, float, resolution independent (CPU reference) (L2)"
+description = "Develop pipeline: scene-referred, float, resolution independent (CPU reference) (L2)"
 
 [lints]
 workspace = true
 
 [dependencies]
-lightcraft-geom = { workspace = true }
-lightcraft-color = { workspace = true }
-lightcraft-raster = { workspace = true }
-lightcraft-develop = { workspace = true }
-lightcraft-raw = { workspace = true }
-lightcraft-inpaint = { workspace = true }
+lcc-brand = { workspace = true }
+lcc-geom = { workspace = true }
+lcc-color = { workspace = true }
+lcc-raster = { workspace = true }
+lcc-develop = { workspace = true }
+lcc-raw = { workspace = true }
+lcc-inpaint = { workspace = true }
+lcc-filters = { workspace = true }
+serde_json = { workspace = true }
 rayon = { workspace = true }
 serde = { workspace = true }
 
 [dev-dependencies]
-lightcraft-scenes = { workspace = true }
+wat = "1.228"
+lcc-scenes = { workspace = true }
 proptest = { workspace = true }
 image = { workspace = true }
 serde_json = { workspace = true }

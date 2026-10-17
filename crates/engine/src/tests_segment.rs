@@ -68,7 +68,7 @@ fn status_and_model_commands_without_the_model() {
     s.segmenter.mirrors_file = Some(dir.join("none.txt"));
     if s.segmenter.mirrors().is_empty() {
         let e = s.execute("segment.model.download", &json!({"acknowledged": true})).unwrap_err().to_string();
-        assert!(e.contains("LIGHTCRAFT_SAM3_MIRRORS"), "{e}");
+        assert!(e.contains(&lcc_brand::env_var("SAM3_MIRRORS")), "{e}");
     }
     assert!(!s.segmenter.download_status().running);
 }
@@ -172,7 +172,7 @@ fn background_requests_never_wait_and_failures_come_back_as_messages() {
     // the Object mask is there, without a selection; no Describe mask was made from nothing
     let d = s.develop_of(id).unwrap();
     assert_eq!(d.masks.len(), 1);
-    assert!(matches!(&d.masks[0].components[0].shape, lightcraft_develop::MaskShape::Object { seg: None, .. }));
+    assert!(matches!(&d.masks[0].components[0].shape, lcc_develop::MaskShape::Object { seg: None, .. }));
     assert!(!s.segmenter.busy() && !s.segmenter.loaded());
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -194,7 +194,7 @@ fn waiting_requests_with_a_damaged_model_are_errors() {
     assert!(s.develop_of(id).unwrap().masks.is_empty());
     assert!(!s.segmenter.busy());
     // a stored segmentation needs no model at all (replayed or pasted masks)
-    let seg = serde_json::to_value(lightcraft_develop::SegMask::from_logits(4, &[5.0; 16])).unwrap();
+    let seg = serde_json::to_value(lcc_develop::SegMask::from_logits(4, &[5.0; 16])).unwrap();
     s.segmenter.dir = None;
     s.execute("mask.add", &json!({"kind": "prompt", "text": "sky", "seg": seg})).unwrap();
     assert_eq!(s.develop_of(id).unwrap().masks.len(), 1);
@@ -213,14 +213,14 @@ fn object_clicks_are_capped() {
     s.segmenter.dir = Some(dir.clone());
     let id = s.active().unwrap();
     let mut d = (*s.develop_of(id).unwrap()).clone();
-    let many = vec![lightcraft_geom::Point::new(0.5, 0.5); crate::segment::MAX_CLICKS];
-    d.masks.push(lightcraft_develop::Mask {
+    let many = vec![lcc_geom::Point::new(0.5, 0.5); crate::segment::MAX_CLICKS];
+    d.masks.push(lcc_develop::Mask {
         id: 1,
-        components: vec![lightcraft_develop::MaskComponent {
+        components: vec![lcc_develop::MaskComponent {
             name: None,
-            op: lightcraft_develop::MaskOp::Add,
+            op: lcc_develop::MaskOp::Add,
             invert: false,
-            shape: lightcraft_develop::MaskShape::Object { hint: many, exclude: vec![], seg: None, detail: vec![], edge: 0.0 },
+            shape: lcc_develop::MaskShape::Object { hint: many, exclude: vec![], seg: None, detail: vec![], edge: 0.0 },
         }],
         ..Default::default()
     });
@@ -280,6 +280,56 @@ fn a_running_model_download_shows_in_activity_and_cancels() {
     assert!(!s.segmenter.installed());
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_file(&mirrors);
+}
+
+/// The Subject model is optional: without it the status says so and the download needs consent;
+/// with (tiny, synthetic) weights in its folder it becomes the pipeline's subject model, whose
+/// runs show in the activity stack, and Subject masks take its selection.
+#[test]
+fn subject_model_is_optional_and_used_once_installed() {
+    let mut s = Session::with_demo();
+    let st = s.execute("segment.subject.status", &json!({})).unwrap();
+    assert_eq!((st["installed"].as_bool(), st["active"].as_bool()), (Some(false), Some(false)));
+    assert!(s.execute("segment.subject.download", &json!({})).is_err());
+    if !Segmenter::AVAILABLE {
+        return;
+    }
+    // no folder set: an error, no download
+    assert!(s.execute("segment.subject.download", &json!({"acknowledged": true})).is_err());
+    #[cfg(feature = "sam")]
+    {
+        use lcc_develop::{DevelopSettings, Mask, MaskComponent, MaskShape};
+        let dir = tmp("subject");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        lcc_segment::birefnet::write_tiny_checkpoint(&dir.join(lcc_segment::birefnet::WEIGHTS_FILE), 8).unwrap();
+        s.segmenter.subject.dir = Some(dir.clone());
+        let st = s.execute("segment.subject.status", &json!({})).unwrap();
+        assert_eq!((st["installed"].as_bool(), st["active"].as_bool()), (Some(true), Some(true)));
+        // a Subject mask on a demo photo runs the model (with a row in the activity stack)
+        let scene = &lcc_scenes::demo_library()[0];
+        let src = scene.render_fit(200);
+        let mut set = DevelopSettings::default();
+        set.masks.push(Mask {
+            components: vec![MaskComponent { name: None, op: Default::default(), invert: false, shape: MaskShape::Subject }],
+            ..Default::default()
+        });
+        let info = lcc_pipeline::SourceInfo::default();
+        let job = std::thread::spawn(move || lcc_pipeline::auto_mask::for_source(&src, &info, &set));
+        let mut seen = false;
+        while !job.is_finished() {
+            seen |= s.activity.list().iter().any(|t| t.kind == "segment");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let auto = job.join().unwrap();
+        assert!(seen, "no activity row while the model ran");
+        assert_eq!((auto.subject.width, auto.subject.height), (1024, 1024), "the model's grid");
+        assert!(s.activity.list().iter().all(|t| t.kind != "segment"), "the row goes when the run ends");
+        // removing the weights removes the model
+        std::fs::remove_dir_all(&dir).unwrap();
+        s.execute("segment.subject.status", &json!({})).unwrap();
+        assert!(!lcc_pipeline::auto_mask::has_subject_model());
+    }
 }
 
 /// Frontends decide on the error's kind, not its words (#1046): a missing model is

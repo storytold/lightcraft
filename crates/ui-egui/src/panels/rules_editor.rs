@@ -1,9 +1,9 @@
 //! The smart-album rule editor: match all / any / none of a list of rules (field, operator,
-//! value), with nested groups. Field and operator lists come from `lightcraft_catalog::rules`.
+//! value), with nested groups. Field and operator lists come from `lcc_catalog::rules`.
 
 use egui::RichText;
-use lightcraft_catalog::rules::{FIELD_GROUPS, Kind, Problem, TOP_LEVEL_FIELDS, bool_value, field_kind, field_label, ops_for};
-use lightcraft_catalog::{Match, Rule, RuleSet};
+use lcc_catalog::rules::{FIELD_GROUPS, Kind, Problem, TOP_LEVEL_FIELDS, bool_value, field_kind, field_label, ops_for, takes_value};
+use lcc_catalog::{Match, Rule, RuleSet};
 use serde_json::{Value, json};
 
 use crate::album_picker::{AlbumEntry, AlbumPicker};
@@ -14,7 +14,7 @@ use crate::widgets::register;
 /// A sensible starting value for `field` / `op`.
 pub fn default_value(field: &str, op: &str) -> Value {
     match (field_kind(field), op) {
-        (_, "isEmpty" | "isNotEmpty") => Value::Null,
+        (_, op) if !takes_value(op) => Value::Null,
         (Some(Kind::Date), "inLast" | "notInLast") => json!({"n": 30, "unit": "days"}),
         // this year (the catalog's clock): a date that means something, not an empty one that
         // matches nothing ("is") or every date ("between")
@@ -37,7 +37,7 @@ pub fn default_value(field: &str, op: &str) -> Value {
 
 /// The current year, `2026`.
 fn this_year() -> String {
-    lightcraft_catalog::rules::now().get(..4).unwrap_or("2026").to_string()
+    lcc_catalog::rules::now().get(..4).unwrap_or("2026").to_string()
 }
 
 /// A new rule (Rating ≥ 3).
@@ -120,7 +120,7 @@ pub struct Env {
 /// An Album rule's value: an album or a smart album, picked from the tree or by typing
 /// ([`AlbumPicker`]). The id is read as the catalog reads it (`3`, `"3"`) and written as a number.
 fn album_value(ui: &mut egui::Ui, v: &mut Value, salt: &str, env: &Env) {
-    let mut chosen = lightcraft_catalog::rules::album_rule_id(v).map(|a| a.0);
+    let mut chosen = lcc_catalog::rules::album_rule_id(v).map(|a| a.0);
     if AlbumPicker::new(salt, &mut chosen, &env.albums).width(200.0).show(ui).changed()
         && let Some(id) = chosen
     {
@@ -131,7 +131,7 @@ fn album_value(ui: &mut egui::Ui, v: &mut Value, salt: &str, env: &Env) {
 /// The value editor for one rule.
 fn value_editor(ui: &mut egui::Ui, field: &str, op: &str, v: &mut Value, salt: &str, env: &Env) {
     match (field_kind(field), op) {
-        (_, "isEmpty" | "isNotEmpty") => {}
+        (_, op) if !takes_value(op) => {}
         (Some(Kind::Album), _) => album_value(ui, v, salt, env),
         (Some(Kind::Date), "inLast" | "notInLast") => {
             // shown as stored ({n, unit}, or a plain number of days) and only written when changed:
@@ -230,8 +230,17 @@ fn value_editor(ui: &mut egui::Ui, field: &str, op: &str, v: &mut Value, salt: &
 /// The field menu of one rule: the top-level fields, then one submenu per field group. Picking a
 /// field keeps the operator when the new field has it, else takes the field's first operator.
 fn field_menu(ui: &mut egui::Ui, salt: &str, field: &mut String, op: &mut String, value: &mut Value) {
-    let label = field_label(field).unwrap_or(field.as_str()).to_string();
+    // G19: plug-in metadata fields (`plugin:<id>/<key>`), by their plug-in's and field's names
+    #[cfg(not(target_arch = "wasm32"))]
+    let plugin_fields = lcc_engine::cmd::plugins::rule_fields();
+    #[cfg(target_arch = "wasm32")]
+    let plugin_fields: Vec<(String, String)> = Vec::new();
+    let label = match plugin_fields.iter().find(|(id, _)| id == field) {
+        Some((_, name)) => name.clone(),
+        None => field_label(field).unwrap_or(field.as_str()).to_string(),
+    };
     let current = field.clone();
+    let mut plugin_pick: Option<String> = None;
     let r = crate::widgets::combo_box(format!("{salt}-field")).width(150.0).height(400.0).selected_text(crate::i18n::tr(&label)).show_ui(ui, |ui| {
         let mut pick = None;
         let mut item = |ui: &mut egui::Ui, id: &'static str| {
@@ -261,9 +270,35 @@ fn field_menu(ui: &mut egui::Ui, salt: &str, field: &mut String, op: &mut String
             });
             register(ui.ctx(), format!("ruleFieldGroup:{group}:{salt}"), r.response.rect);
         }
+        if !plugin_fields.is_empty() {
+            let text = RichText::new(crate::i18n::tr("Plug-in Fields"));
+            let text = if lcc_catalog::rules::plugin_field(&current).is_some() { text.strong() } else { text };
+            let r = crate::widgets::menu_button(ui, text, |ui| {
+                for (id, name) in &plugin_fields {
+                    let r = ui.selectable_label(current == *id, name);
+                    register(ui.ctx(), format!("ruleFieldItem:{id}:{salt}"), r.rect);
+                    if r.clicked() {
+                        plugin_pick = Some(id.clone());
+                        ui.close();
+                    }
+                }
+            });
+            register(ui.ctx(), format!("ruleFieldGroup:Plug-in Fields:{salt}"), r.response.rect);
+        }
         pick
     });
     register(ui.ctx(), format!("ruleField:{salt}"), r.response.rect);
+    if let Some(id) = plugin_pick {
+        if *field != id {
+            *field = id;
+            let ops = ops_for(Kind::Text);
+            if !ops.iter().any(|o| o.0 == op.as_str()) {
+                *op = ops.first().map_or("is", |o| o.0).to_string();
+            }
+            *value = default_value(field, op);
+        }
+        return;
+    }
     let Some(Some(id)) = r.inner else { return };
     if field == id {
         return;
@@ -320,9 +355,9 @@ pub fn edit(ui: &mut egui::Ui, rs: &mut RuleSet, salt: &str, depth: usize, path:
                     crate::widgets::combo_box(format!("{rsalt}-op")).width(110.0).selected_text(crate::i18n::tr(&op_label)).show_ui(ui, |ui| {
                         for (id, l) in ops_for(kind) {
                             if ui.selectable_label(op == id, crate::i18n::tr(l)).clicked() && op != id {
-                                let was_special = matches!(op.as_str(), "between" | "inLast" | "notInLast" | "isEmpty" | "isNotEmpty");
+                                let was_special = matches!(op.as_str(), "between" | "inLast" | "notInLast") || !takes_value(op);
                                 *op = id.to_string();
-                                if was_special || matches!(*id, "between" | "inLast" | "notInLast" | "isEmpty" | "isNotEmpty") {
+                                if was_special || matches!(*id, "between" | "inLast" | "notInLast") || !takes_value(id) {
                                     *value = default_value(field, op);
                                 }
                             }
@@ -373,8 +408,8 @@ pub fn edit(ui: &mut egui::Ui, rs: &mut RuleSet, salt: &str, depth: usize, path:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lightcraft_catalog::rules::FIELDS;
-    use lightcraft_catalog::{Catalog, Photo, PhotoId, Source};
+    use lcc_catalog::rules::FIELDS;
+    use lcc_catalog::{Catalog, Photo, PhotoId, Source};
 
     /// Every field × operator starts with a known operator and a value of the right shape: none for
     /// the empty tests, a pair for "between", one of the choices, a number for number fields (a
@@ -393,19 +428,19 @@ mod tests {
                 // input; every other default is a rule that means something
                 let problems = rs.check(&cat);
                 let waits = matches!(kind, Kind::Text | Kind::Keywords) || *field == "album";
-                assert!(problems.is_empty() || waits && !matches!(*op, "isEmpty" | "isNotEmpty"), "{field} {op}: {problems:?}");
+                assert!(problems.is_empty() || waits && takes_value(op), "{field} {op}: {problems:?}");
                 let _ = rs.matches(&p, &cat);
                 let v = default_value(field, op);
                 let one = |v: &Value| match kind {
                     Kind::Choice(c) => v.as_str().is_some_and(|s| c.iter().any(|c| c.0 == s)),
-                    Kind::Number if *field == "shutterSpeed" => v.as_str().and_then(lightcraft_catalog::parse_shutter_seconds).is_some(),
+                    Kind::Number if *field == "shutterSpeed" => v.as_str().and_then(lcc_catalog::parse_shutter_seconds).is_some(),
                     Kind::Number => v.is_number(),
                     Kind::Bool => v.is_boolean(),
                     Kind::Album => v.is_null(),
                     Kind::Text | Kind::Keywords | Kind::Date => v.is_string(),
                 };
                 match *op {
-                    "isEmpty" | "isNotEmpty" => assert!(v.is_null(), "{field} {op}: {v}"),
+                    op if !takes_value(op) => assert!(v.is_null(), "{field} {op}: {v}"),
                     "between" => assert!(v.as_array().is_some_and(|a| a.len() == 2 && a.iter().all(one)), "{field} {op}: {v}"),
                     "inLast" | "notInLast" => assert!(v["n"].is_number(), "{field} {op}: {v}"),
                     _ => assert!(one(&v), "{field} {op}: {v}"),
@@ -413,10 +448,10 @@ mod tests {
             }
         }
         // a new date rule starts at this year, not at "" (and a between doesn't match every date)
-        lightcraft_catalog::rules::set_now(Some("2026-10-09T12:00:00".into()));
+        lcc_catalog::rules::set_now(Some("2026-10-09T12:00:00".into()));
         assert_eq!(default_value("captureDate", "is"), json!("2026"));
         assert_eq!(default_value("captureDate", "between"), json!(["2026-01", "2026-12"]));
-        lightcraft_catalog::rules::set_now(None);
+        lcc_catalog::rules::set_now(None);
         assert_eq!(default_value("shutterSpeed", "gte"), json!("1/250"));
         assert_eq!(default_value("shutterSpeed", "between"), json!(["1/1000", "1/125"]));
     }

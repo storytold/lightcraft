@@ -4,19 +4,19 @@
 
 use std::time::Duration;
 
-use lightcraft_catalog::PhotoId;
+use lcc_catalog::PhotoId;
 use serde_json::json;
 
 use crate::headless::Headless;
 use crate::menubar::MenuNode;
-use crate::{LightcraftApp, Services};
+use crate::{LccApp, Services};
 
 const T: Duration = Duration::from_secs(20);
 const SETTLE: Duration = Duration::from_secs(120);
 
 fn demo() -> Headless {
     let services = Services { png: None, ..Default::default() };
-    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+    let app = LccApp::new(lcc_engine::Session::with_demo(), services);
     let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
     let r = h.request("ui.set", json!({"view": "photoGrid"}), T);
     assert_eq!(r["ok"], true, "{r}");
@@ -50,7 +50,7 @@ fn garden(h: &Headless) -> u64 {
 }
 
 fn in_album(h: &Headless, album: u64, photo: PhotoId) -> bool {
-    h.app.session.catalog.album(lightcraft_catalog::AlbumId(album)).is_some_and(|a| a.photos.contains(&photo))
+    h.app.session.catalog.album(lcc_catalog::AlbumId(album)).is_some_and(|a| a.photos.contains(&photo))
 }
 
 /// Given an album, when a photo is selected in it and Delete is pressed, then the photo leaves the
@@ -107,7 +107,7 @@ fn the_photo_menu_in_an_album_has_remove_from_album_on_the_delete_key() {
     let other = h.app.session.visible_cloned()[0];
     exec(&mut h, "library.select", json!({"ids": [other.0]}));
     crate::menubar::run_item(&mut h.app, "photo.delete", json!({})).unwrap();
-    assert_eq!(h.app.ui.dialog, Some(crate::state::Dialog::ConfirmDelete { count: 1 }));
+    assert!(matches!(h.app.ui.dialog, Some(crate::state::Dialog::ConfirmDelete { count: 1, .. })), "{:?}", h.app.ui.dialog);
     let r = h.request("ui.dialog.confirm", json!({}), T);
     assert_eq!(r["ok"], true, "{r}");
     assert!(h.app.session.catalog.photo(other).unwrap().deleted, "Delete Photo removes it from the library");

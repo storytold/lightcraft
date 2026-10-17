@@ -1,0 +1,82 @@
+[package]
+name = "lcc-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+default-run = "app"
+
+[[bin]]
+name = "app"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[features]
+default = ["denoise"]
+denoise = ["lcc-engine/denoise"]
+rawnind-model = ["denoise", "lcc-engine/rawnind-model"]
+# Open HEIC/HEIF photos (the optional lcc-heif crate). Not default so distributors choose
+# it (HEVC patents); build with `--features heif` to include it.
+heif = ["lcc-codecs/heif"]
+# Sound for video playback and slideshow music (cpal; links libasound on Linux). See docs/video.md.
+audio-out = ["lcc-engine/audio-out"]
+
+[dependencies]
+lcc-brand = { workspace = true }
+lcc-engine = { workspace = true, features = ["sam"] }
+lcc-sysmem = { workspace = true }
+lcc-ui-egui = { workspace = true }
+lcc-codecs = { workspace = true }
+lcc-raster = { workspace = true }
+# M14.4: the playing video frame graded on the window GPU (video_gpu)
+lcc-gpu = { workspace = true }
+lcc-pipeline = { workspace = true }
+eframe = { workspace = true, features = ["default_fonts", "wgpu", "glow", "accesskit", "wayland", "x11"] }
+# probing the window's renderer before it opens (`window_gpu`)
+pollster = { workspace = true }
+egui = { workspace = true }
+serde_json = { workspace = true }
+# the control port token
+getrandom = { workspace = true }
+log = { workspace = true }
+# the loupe's HDR texture (`hdr_display`): f32 → f16 texels, uploaded as bytes
+half = { workspace = true }
+# HDR metadata on the window's swapchain (Vulkan; no-op elsewhere)
+lcc-hdrmeta = { workspace = true }
+bytemuck = { workspace = true }
+
+[build-dependencies]
+# Icon + VERSIONINFO for the desktop executable; build.rs only uses it when targeting Windows.
+lcc-brand = { workspace = true }
+winresource = "0.1"
+
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+# HDR display output: the outputs' headroom from the Wayland colour-management protocol
+# (`wayland_hdr`)
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
+winit = { version = "0.30", default-features = false, features = ["x11"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rfd = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = { workspace = true }
+# the screen's ICC profile (_ICC_PROFILE root properties, RandR monitors): screen_profile_linux
+x11rb = { version = "0.13", default-features = false, features = ["randr"] }
+
+[target.'cfg(windows)'.dependencies]
+# the display's WCS profile association (registry, safe API): screen_profile_windows
+winreg = "0.55"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+muda = { workspace = true }
+objc2 = { workspace = true }
+objc2-app-kit = { workspace = true }
+objc2-foundation = { workspace = true }
+
+[dev-dependencies]
+# tests record why they skip (`cargo xtask ci` lists the skips)
+lcc-testkit = { workspace = true }

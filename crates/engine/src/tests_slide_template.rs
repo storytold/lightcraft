@@ -203,7 +203,7 @@ fn file_names_are_sanitised_and_ids_never_leave_the_folder() {
     for name in ["", "   ", "...", "/", "a\nb", &"y".repeat(81)] {
         err(&mut s, "slideshow.templates.save", json!({"name": name}));
     }
-    // an id can't point outside the folder (or at a file LightCraft wouldn't name)
+    // an id can't point outside the folder (or at a file the app wouldn't name)
     std::fs::write(dir.join("victim.json"), b"{}").unwrap();
     for id in ["user:../victim", "user:..", "user:/etc/passwd", "user:a/b", "user:", "user:x.json"] {
         let e = err(&mut s, "slideshow.templates.delete", json!({"id": id}));
@@ -226,13 +226,15 @@ fn bad_files_are_reported_and_skipped() {
         }
         serde_json::to_vec(&d).unwrap()
     };
+    let preset = crate::legacy::PRESET_FORMAT;
+    let preset_msg = format!("format `{preset}`");
     let files: Vec<(&str, Vec<u8>, &str)> = vec![
-        ("truncated.json", br#"{"format": "lightcraft.slideshowTemplate", "vers"#.to_vec(), "not a slideshow template"),
+        ("truncated.json", format!(r#"{{"format": "{FORMAT}", "vers"#).into_bytes(), "not a slideshow template"),
         ("binary.json", vec![0xff, 0xfe, 0x00, 0x01], "not UTF-8"),
         ("array.json", b"[1, 2]".to_vec(), "not a JSON object"),
-        ("preset.json", br#"{"format": "lightcraft.preset", "version": 1}"#.to_vec(), "format `lightcraft.preset`"),
-        ("newer.json", doc(json!({"version": 2})), "newer LightCraft"),
-        ("noversion.json", br#"{"format": "lightcraft.slideshowTemplate"}"#.to_vec(), "no `version`"),
+        ("preset.json", format!(r#"{{"format": "{preset}", "version": 1}}"#).into_bytes(), &preset_msg),
+        ("newer.json", doc(json!({"version": 2})), "made by a newer"),
+        ("noversion.json", format!(r#"{{"format": "{FORMAT}"}}"#).into_bytes(), "no `version`"),
         ("badversion.json", doc(json!({"version": -1})), "`version`"),
         ("unknown.json", doc(json!({"music": {}})), "unknown key `music`"),
         ("nan.json", doc(json!({"layout": {"margins": "wide"}})), "layout"),
@@ -265,11 +267,11 @@ fn bad_files_are_reported_and_skipped() {
     // out-of-range numbers in a hand-edited file are clamped, never applied as they are
     std::fs::write(folder.join("wild.json"), doc(json!({"layout": {"margins": 9, "shadowAngle": 1e300}, "playback": {"slideDuration": 1e9}})))
         .unwrap();
-    // written by hand, not through LightCraft: the folder's time may not have moved since the
+    // written by hand, not through the app: the folder's time may not have moved since the
     // listing above (same clock tick), so the cached listing is dropped as a write would drop it
     s.slide_templates_cache = None;
     let t = s.slide_template("user:wild").unwrap();
-    assert_eq!(t.look.layout.margin_left, lightcraft_slideshow::MARGIN_MAX);
+    assert_eq!(t.look.layout.margin_left, lcc_slide::MARGIN_MAX);
     assert_eq!(t.look.playback.slide_duration, crate::slideshow::SLIDE_MAX);
     let _ = std::fs::remove_dir_all(dir);
 }
@@ -357,7 +359,7 @@ fn a_saved_template_reads_back_through_its_section_validation() {
     assert_eq!(PlaybackSettings { prepare_previews: look.playback.prepare_previews, ..parsed.look.playback }, look.playback);
     // a BOM and a missing name are fine
     let mut bytes = "\u{feff}".as_bytes().to_vec();
-    bytes.extend(br#"{"format": "lightcraft.slideshowTemplate", "version": 1}"#);
+    bytes.extend(format!(r#"{{"format": "{FORMAT}", "version": 1}}"#).into_bytes());
     assert_eq!(parse(&bytes).unwrap().name, None);
     let _ = std::fs::remove_dir_all(dir);
 }

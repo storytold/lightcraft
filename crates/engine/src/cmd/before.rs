@@ -5,8 +5,8 @@
 
 use std::sync::Arc;
 
-use lightcraft_catalog::Photo;
-use lightcraft_develop::DevelopSettings;
+use lcc_catalog::Photo;
+use lcc_develop::DevelopSettings;
 use serde_json::{Value, json};
 
 use super::{CommandSpec, bad, cmd, has_active};
@@ -20,7 +20,7 @@ impl Session {
     }
 }
 
-fn active(s: &Session, c: &str) -> Result<lightcraft_catalog::PhotoId> {
+fn active(s: &Session, c: &str) -> Result<lcc_catalog::PhotoId> {
     s.active().ok_or_else(|| bad(c, "no active photo"))
 }
 

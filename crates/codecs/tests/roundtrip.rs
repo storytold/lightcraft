@@ -1,10 +1,10 @@
 //! Encode → decode round trips on generated fixtures.
 
-use lightcraft_codecs::exif::minimal_exif;
-use lightcraft_codecs::icc::{self, write_named};
-use lightcraft_codecs::*;
-use lightcraft_color::{DISPLAY_P3, REC2020, transfer::srgb_to_linear};
-use lightcraft_raster::Rgba8;
+use lcc_codecs::exif::minimal_exif;
+use lcc_codecs::icc::{self, write_named};
+use lcc_codecs::*;
+use lcc_color::{DISPLAY_P3, REC2020, transfer::srgb_to_linear};
+use lcc_raster::Rgba8;
 
 fn gradient(w: usize, h: usize) -> Rgba8 {
     Rgba8::from_fn(w, h, |x, y| [(x * 255 / w.max(2).saturating_sub(1).max(1)) as u8, (y * 255 / h.max(2)) as u8, ((x + y) % 256) as u8, 255])
@@ -183,12 +183,12 @@ fn p3_icc_to_working() {
 #[test]
 fn custom_matrix_icc_is_exact() {
     // A non-standard space: goes through the generic matrix/TRC path, not the named one.
-    let space = lightcraft_color::RgbSpace {
+    let space = lcc_color::RgbSpace {
         name: "Custom",
-        r: lightcraft_color::Xy::new(0.66, 0.32),
-        g: lightcraft_color::Xy::new(0.25, 0.65),
-        b: lightcraft_color::Xy::new(0.14, 0.07),
-        white: lightcraft_color::D65,
+        r: lcc_color::Xy::new(0.66, 0.32),
+        g: lcc_color::Xy::new(0.25, 0.65),
+        b: lcc_color::Xy::new(0.14, 0.07),
+        white: lcc_color::D65,
     };
     let icc = icc::write_matrix_trc(&space, &Trc::Gamma(2.0));
     let data = [255u8, 0, 0];
@@ -261,6 +261,28 @@ fn tiff_cmyk_and_orientation() {
     let red = d.image.get(1, 0);
     assert!(white.iter().all(|&v| (v - 1.0).abs() < 1e-5), "{white:?}");
     assert!(red[0] > 0.99 && red[1] < 0.01 && red[2] < 0.01, "{red:?}");
+}
+
+/// An uncompressed 16-bit RGB export in a single strip, the shape of the file in #1983 (3923 × 5877,
+/// 138 MB). Its one strip is larger than the `tiff` crate's default 128 MiB intermediate buffer, so
+/// the thumbnail (and the full decode) failed with "decoder limits exceeded".
+#[test]
+fn tiff_single_strip_larger_than_128_mib() {
+    use tiff::encoder::{TiffEncoder, colortype};
+    let (w, h) = (3923u32, 5877u32);
+    let mut cur = std::io::Cursor::new(Vec::new());
+    {
+        let mut enc = TiffEncoder::new(&mut cur).unwrap();
+        let mut im = enc.new_image::<colortype::RGB16>(w, h).unwrap();
+        im.rows_per_strip(h).unwrap();
+        im.write_data(&vec![0x8000u16; (w * h * 3) as usize]).unwrap();
+    }
+    let bytes = cur.into_inner();
+    assert!(bytes.len() > 128 << 20);
+    let t = decode_thumbnail(&bytes, 256).unwrap();
+    assert_eq!((t.source_width, t.source_height), (w, h));
+    let px = t.image.get(10, 10);
+    assert!(px[0].abs_diff(128) <= 2 && px[0] == px[1] && px[1] == px[2], "{px:?}");
 }
 
 /// A one-strip, uncompressed, single-sample TIFF (little-endian) whose samples are `bits` wide and
@@ -525,7 +547,8 @@ fn avif_encode_native() {
     if cfg!(feature = "avif") {
         let b = r.unwrap();
         assert_eq!(sniff(&b), Some(Format::Avif));
-        assert!(matches!(decode(&b, DecodeOptions::default()), Err(Error::Unsupported(Format::Avif, _))));
+        let d = decode(&b, DecodeOptions::default()).unwrap();
+        assert_eq!((d.format, d.width, d.height), (Format::Avif, 64, 48));
     } else {
         assert!(r.is_err());
     }
@@ -701,7 +724,7 @@ fn pq_png_rejects_short_buffers_and_survives_hostile_samples() {
 }
 
 /// Largest per-channel difference between two linear images.
-fn max_diff(a: &lightcraft_raster::Rgb32f, b: &lightcraft_raster::Rgb32f) -> f32 {
+fn max_diff(a: &lcc_raster::Rgb32f, b: &lcc_raster::Rgb32f) -> f32 {
     a.data.iter().zip(&b.data).flat_map(|(p, q)| (0..3).map(move |c| (p[c] - q[c]).abs())).fold(0.0, f32::max)
 }
 
@@ -732,6 +755,22 @@ fn jxl_lossless_exact_with_metadata() {
     let png = encode_png(&EncodeImage::new(40, 30, 3, Samples::U16(&px)), &meta).unwrap();
     let want = decode(&png, DecodeOptions::default()).unwrap();
     assert!(max_diff(&d.image, &want.image) < 1e-5, "16-bit lossless differs by {}", max_diff(&d.image, &want.image));
+}
+
+/// #1517: the size limit is checked from the header, before any frame is read, and a
+/// file cut anywhere is an error, never a panic.
+#[test]
+#[cfg(feature = "jxl")]
+fn jxl_size_limit_and_truncation() {
+    let b = encode_jxl(&EncodeImage::rgba8(&gradient(97, 61)), &JxlOptions { lossless: true, ..Default::default() }, &EncodeMeta::default()).unwrap();
+    let r = decode(&b, DecodeOptions { max_pixels: 97 * 61 - 1, ..Default::default() });
+    assert!(matches!(r, Err(Error::TooLarge(97, 61))), "{r:?}");
+    let d = decode(&b, DecodeOptions { max_pixels: 97 * 61, ..Default::default() }).unwrap();
+    assert_eq!((d.width, d.height), (97, 61));
+    for cut in [0, 1, 2, 5, 12, 40, b.len() / 2, b.len() - 1] {
+        let _ = decode(&b[..cut], DecodeOptions::default());
+    }
+    assert!(decode(&b[..12.min(b.len())], DecodeOptions::default()).is_err());
 }
 
 #[test]
@@ -812,7 +851,7 @@ fn jxl_hdr_pq() {
         let fb = r.image_all_channels();
         let at = |x: usize| fb.buf()[((h / 2) * w + x) * fb.channels() + 1];
         for (x, nits) in [(w / 4, HDR_REFERENCE_WHITE_NITS), (w * 3 / 4, 4.0 * HDR_REFERENCE_WHITE_NITS)] {
-            let (got, want) = (at(x), lightcraft_codecs::encode::pq_encode(nits));
+            let (got, want) = (at(x), lcc_codecs::encode::pq_encode(nits));
             assert!((got - want).abs() < 0.005, "lossless={lossless}: {nits} cd/m² written as {got}, want {want}");
         }
     }

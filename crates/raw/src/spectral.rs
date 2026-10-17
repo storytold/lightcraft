@@ -6,9 +6,10 @@
 //! sensitivities. [`Camera::fill`] writes them into a file's [`ColorData`], and [`crate::color`]'s DNG model does the
 //! rest. Other names of a covered camera (Rebel T3i for EOS 600D) come from rawtoaces-data's alias list. No number
 //! comes from Adobe or from a GPL raw decoder. Which colour a raw starts from is the engine's choice
-//! (`docs/camera-preview-colour.md`).
-use crate::ColorData;
-use lightcraft_color::{Mat3, Xy};
+//! (`docs/camera-preview-colour.md`). [`stand_in`] names the row whose colour an ARW of a body outside the table
+//! takes when its JPEG fit fails; it never gives a Kelvin scale, which only [`find`]'s rows do.
+use crate::{ColorData, RawFormat};
+use lcc_color::{Mat3, Xy};
 
 #[path = "spectral_table.rs"]
 mod table;
@@ -109,6 +110,31 @@ pub fn cameras() -> &'static [Camera] {
     table::CAMERAS
 }
 
+/// The Sony row whose matrices stand in for those of a Sony body outside the table.
+///
+/// Measured on the table itself: a row's white-balanced camera RGB of 146 sRGB-gamut test colours of moderate chroma
+/// (through its own forward matrix), rendered through another row's forward matrix or the neutral fallback's "camera
+/// RGB ≈ linear sRGB", mean CIE76 against its own rendering, under D65 and Illuminant A. The neutral fallback is
+/// 14.0–16.0 off on the 11 Sony rows; one of the eight modern Sony full-frame rows rendering another is 0.2–2.0 off
+/// (the ILCE-7SM2 is the outlier: 2.8–5.7). The ILCE-7M3 row has the lowest worst case on the other Sony rows (mean
+/// 1.2, worst 3.4: the ILCE-7SM2), and it is closer than the neutral fallback on every one of the table's 51 other
+/// cameras, of every make and back to the 2004 Nikon D70 (mean 2.8–2.9, worst 7.5, against 11.7–17.2). A test pins
+/// this (`tests::the_sony_stand_in_is_closer_than_the_neutral_fallback`). Against the camera JPEGs of 158 public Sony
+/// samples (97 bodies), the stand-in's colour is half as far as the neutral fallback's and as close as the bodies' own
+/// rows (`docs/camera-preview-colour.md`).
+const SONY_STAND_IN: &str = "ILCE-7M3";
+
+/// The row whose matrices stand in for the neutral fallback's colour of a raw of `format` whose body is outside the
+/// table ([`find`] gives nothing): the [`SONY_STAND_IN`] row for an ARW (every ARW, also one sold under another make
+/// such as the Hasselblad Lunar, comes from a Sony body), nothing for other formats. Only for the colour of a photo
+/// whose JPEG fit failed: the Kelvin scale and the catalog's view of which cameras have matrices stay [`find`]'s.
+pub fn stand_in(format: RawFormat) -> Option<&'static Camera> {
+    if format != RawFormat::Arw {
+        return None;
+    }
+    table::CAMERAS.iter().find(|c| c.make == "Sony" && c.model == SONY_STAND_IN)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -142,6 +168,7 @@ mod tests {
             ("Canon", "Canon EOS REBEL T3i", "EOS 600D"),
             ("Canon", "Canon EOS Kiss X5", "EOS 600D"),
             ("Canon", "Canon EOS R5 Mark II", "EOS R5m2"),
+            ("Canon", "Canon EOS R6 Mark II", "EOS R6m2"),
             ("NIKON CORPORATION", "NIKON D800", "D800E"),
             ("NIKON CORPORATION", "NIKON Z 6_2", "Z f"),
             ("SONY", "ILCE-7RM4A", "ILCE-7RM4"),
@@ -204,7 +231,7 @@ mod tests {
         let color = ColorData::default();
         // daylight-ish Sony multipliers: a white near the locus around 5000 K, not the generic model's wild tint
         let xy = as_shot_white_through(c, &color, Some([2.2, 1.0, 1.6])).unwrap();
-        let (t, tint) = lightcraft_color::cct::xy_to_temp_tint(xy);
+        let (t, tint) = lcc_color::cct::xy_to_temp_tint(xy);
         assert!((3500.0..7000.0).contains(&t) && tint.abs() < 30.0, "{t} {tint}");
         // the file's own tags are left alone
         assert_eq!(color, ColorData::default());
@@ -229,9 +256,82 @@ mod tests {
             // a forward matrix maps white-balanced white to D50 (DNG spec, chapter 6)
             for fm in &c.forward_matrix {
                 let w = fm.apply([1.0; 3]);
-                let d50 = lightcraft_color::D50.to_xyz();
+                let d50 = lcc_color::D50.to_xyz();
                 assert!((0..3).all(|i| (w[i] - d50[i]).abs() < 1e-4), "{} {w:?}", c.model);
             }
+        }
+    }
+
+    /// Mean CIE76 difference, over sRGB-gamut test colours of moderate chroma (24 hues × saturation 0.25, 0.5, 0.75 ×
+    /// value 0.25, 0.5, and two greys), between `camera`'s rendering of its own white-balanced camera RGB through its
+    /// forward matrix (index `ill`: 0 Illuminant A, 1 D65) and the rendering through `forward`.
+    fn mean_de76(camera: &Camera, ill: usize, forward: Mat3) -> f64 {
+        use lcc_color::D50;
+        let white = D50.to_xyz();
+        let lab = |xyz: [f64; 3]| {
+            let f = |t: f64| if t > (6.0f64 / 29.0).powi(3) { t.cbrt() } else { t / (3.0 * (6.0f64 / 29.0).powi(2)) + 4.0 / 29.0 };
+            let [x, y, z] = std::array::from_fn(|i| f(xyz[i] / white[i]));
+            [116.0 * y - 16.0, 500.0 * (x - y), 200.0 * (y - z)]
+        };
+        let hsv = |h: f64, s: f64, v: f64| {
+            let (i, f) = ((h * 6.0).floor(), h * 6.0 - (h * 6.0).floor());
+            let (p, q, t) = (v * (1.0 - s), v * (1.0 - s * f), v * (1.0 - s * (1.0 - f)));
+            match i as i32 % 6 {
+                0 => [v, t, p],
+                1 => [q, v, p],
+                2 => [p, v, t],
+                3 => [p, q, v],
+                4 => [t, p, v],
+                _ => [v, p, q],
+            }
+        };
+        let mut colours: Vec<[f64; 3]> = vec![[0.18; 3], [0.5; 3]];
+        for h in 0..24 {
+            for s in [0.25, 0.5, 0.75] {
+                for v in [0.25, 0.5] {
+                    colours.push(hsv(h as f64 / 24.0, s, v).map(|c| c.powf(2.2)));
+                }
+            }
+        }
+        let srgb_d50 = lcc_color::bradford(lcc_color::D65, D50).mul(&lcc_color::SRGB.to_xyz());
+        let own = camera.forward_matrix[ill];
+        let to_camera = own.inverse().unwrap();
+        let total: f64 = colours
+            .iter()
+            .map(|rgb| {
+                let xyz = srgb_d50.apply(*rgb);
+                let (a, b) = (lab(xyz), lab(forward.apply(to_camera.apply(xyz))));
+                (0..3).map(|i| (a[i] - b[i]).powi(2)).sum::<f64>().sqrt()
+            })
+            .sum();
+        total / colours.len() as f64
+    }
+
+    /// The figures in [`SONY_STAND_IN`]'s notes: the stand-in renders every other Sony row within a few CIE76 where the
+    /// neutral fallback is far off, and beats the neutral fallback on every row of the table.
+    #[test]
+    fn the_sony_stand_in_is_closer_than_the_neutral_fallback() {
+        let stand_in = stand_in(RawFormat::Arw).unwrap();
+        assert_eq!((stand_in.make, stand_in.model), ("Sony", "ILCE-7M3"));
+        let neutral = lcc_color::bradford(lcc_color::D65, lcc_color::D50).mul(&lcc_color::SRGB.to_xyz());
+        for c in cameras().iter().filter(|c| *c != stand_in) {
+            for ill in 0..2 {
+                let (with_stand_in, with_neutral) = (mean_de76(c, ill, stand_in.forward_matrix[ill]), mean_de76(c, ill, neutral));
+                assert!(
+                    with_stand_in < with_neutral && with_stand_in < 8.0 && with_neutral > 11.0,
+                    "{} {ill}: {with_stand_in} {with_neutral}",
+                    c.model
+                );
+                if c.make == "Sony" {
+                    assert!(with_stand_in < 3.5 && with_neutral > 13.5, "{} {ill}: {with_stand_in} {with_neutral}", c.model);
+                }
+            }
+        }
+        // its own row renders itself exactly
+        assert!(mean_de76(stand_in, 1, stand_in.forward_matrix[1]) < 1e-9);
+        // only ARW has a stand-in
+        for format in [RawFormat::Nef, RawFormat::Cr2, RawFormat::Raf, RawFormat::Dng, RawFormat::Rw2] {
+            assert_eq!(super::stand_in(format), None, "{format:?}");
         }
     }
 

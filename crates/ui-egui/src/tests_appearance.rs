@@ -7,16 +7,16 @@ use serde_json::json;
 use crate::headless::Headless;
 use crate::state::{AppSettings, AppearanceMode, DarkTheme, LightTheme, UiState};
 use crate::theme::ThemeKind;
-use crate::{LightcraftApp, Services};
+use crate::{LccApp, Services};
 
 const T: Duration = Duration::from_secs(20);
 
-fn app() -> LightcraftApp {
-    LightcraftApp::new(lightcraft_engine::Session::new(), Services { png: None, ..Default::default() })
+fn app() -> LccApp {
+    LccApp::new(lcc_engine::Session::new(), Services { png: None, ..Default::default() })
 }
 
 /// One frame of logic on `ctx`: where the theme is applied.
-fn frame(app: &mut LightcraftApp, ctx: &egui::Context) {
+fn frame(app: &mut LccApp, ctx: &egui::Context) {
     let mut output = ctx.run_ui(egui::RawInput::default(), |ui| app.logic(ui.ctx()));
     output.textures_delta.clear();
 }
@@ -32,7 +32,7 @@ fn new_users_keep_the_dark_look_and_old_settings_load_unchanged() {
     assert_eq!(old.settings.dark_theme, DarkTheme::Charcoal);
     assert_eq!(old.settings.light_theme, LightTheme::Silver);
     assert_eq!(old.settings.startup_view, crate::state::StartupView::Detail);
-    // and the Charcoal tokens are the ones LightCraft always had
+    // and the Charcoal tokens are the ones the app always had
     assert_eq!(crate::theme::Tokens::for_kind(ThemeKind::Charcoal).chrome, crate::theme::Tokens::default().chrome);
 }
 
@@ -53,7 +53,7 @@ fn delete_asks_first_by_default_also_for_settings_saved_by_earlier_versions() {
 fn choices_validate_and_survive_a_restart() {
     let mut a = app();
     let ctx = egui::Context::default();
-    let set = |a: &mut LightcraftApp, p: serde_json::Value| {
+    let set = |a: &mut LccApp, p: serde_json::Value| {
         let (req, _) = crate::control::ControlRequest::new("ui.set", p);
         match crate::control::handle(a, &ctx, &req) {
             crate::control::Outcome::Done(reply) => reply,
@@ -230,11 +230,10 @@ fn favorites_validate_roundtrip_and_stars_toggle_without_selecting() {
             h.step();
         }
         let pixels = h.paint();
-        let image =
-            lightcraft_raster::Rgba8 { width: pixels.size[0], height: pixels.size[1], data: pixels.pixels.iter().map(|c| c.to_array()).collect() };
-        let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&image), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+        let image = lcc_raster::Rgba8 { width: pixels.size[0], height: pixels.size[1], data: pixels.pixels.iter().map(|c| c.to_array()).collect() };
+        let png = lcc_codecs::encode_png(&lcc_codecs::EncodeImage::rgba8(&image), &lcc_codecs::EncodeMeta::default()).unwrap();
         std::fs::create_dir_all(&path).unwrap();
-        std::fs::write(std::path::Path::new(&path).join("lightcraft-favorites.png"), png).unwrap();
+        std::fs::write(std::path::Path::new(&path).join("app-favorites.png"), png).unwrap();
     }
     assert_eq!(h.app.ui.settings.light_theme, LightTheme::Silver, "starring does not select");
     let saved = serde_json::to_value(&h.app.ui.settings).unwrap();

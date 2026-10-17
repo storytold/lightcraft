@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 /// Encoder effort: time spent searching for a smaller file at the same quality. jixel's slowest
 /// search (about 20 % smaller again, five times slower) is not offered: its files are valid, but
-/// jxl-oxide, our decoder, renders blocks of them wrongly, so LightCraft could not read back its own
+/// jxl-oxide, our decoder, renders blocks of them wrongly, so the app could not read back its own
 /// exports.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

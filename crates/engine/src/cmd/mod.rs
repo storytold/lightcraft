@@ -4,27 +4,40 @@
 //! delete), `album.*`, `develop.*` (settings), `crop.*`, `mask.*`, `preset.*`, `version.*`,
 //! `edit.*` (undo/redo), and queries (`catalog.query`, `photo.inspect`, `develop.get`…).
 
+pub mod actions;
 mod activity;
 mod before;
 pub(crate) mod browse;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod catalog;
+mod collections;
 mod color;
 pub(crate) mod convert;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod credentials;
+pub mod crop_aspects;
 mod cull;
 pub mod curves;
 pub(crate) mod denoise;
 mod develop;
 mod edit;
+pub mod edit_in;
 mod export;
 pub(crate) mod face_detect;
 mod face_models;
 mod face_recognize;
 pub mod filters;
 mod focus;
+pub mod folders;
 pub mod geocode;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod immich;
 pub mod keywords;
+mod lens_db;
 pub mod library;
 pub mod lut_profiles;
 pub mod manage;
+pub mod map;
 pub mod mask_effect_files;
 pub mod mask_effects;
 mod masks;
@@ -32,14 +45,40 @@ mod merge;
 pub mod metadata;
 pub mod missing;
 mod organize;
+#[cfg(test)]
+pub(crate) use organize::STACK_WORK;
+pub(crate) mod plugin_filters;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod plugins;
+/// The web build has no plug-ins: plug-in fields read from XMP have nowhere to go.
+#[cfg(target_arch = "wasm32")]
+pub mod plugins {
+    /// No plug-ins folder on the web.
+    pub fn plugins_dir() -> Option<std::path::PathBuf> {
+        None
+    }
+    pub fn restore_fields(_s: &mut crate::Session, _items: &[(lcc_catalog::PhotoId, Vec<(String, String, String)>)]) -> usize {
+        0
+    }
+}
 mod prefs;
 mod preset_files;
 pub mod previews;
 mod print;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod publish;
 mod query;
+mod quick;
 pub mod recheck;
 mod slideshow;
 mod sync;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod tether;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod update;
+pub mod video;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod web;
 mod xmp;
 
 use serde::Serialize;
@@ -83,7 +122,7 @@ pub struct CommandInfo {
 
 impl CommandSpec {
     pub fn info(&self, s: &Session) -> CommandInfo {
-        let e = (self.enabled)(s);
+        let e = video_gate(s, self.id).and_then(|()| (self.enabled)(s));
         CommandInfo {
             id: self.id,
             label: self.label,
@@ -97,6 +136,34 @@ impl CommandSpec {
 }
 
 // ---------- enablement predicates
+
+/// Why a photo-only tool is disabled while a video clip is the active photo.
+pub const NOT_FOR_VIDEO: &str = "Not available for video";
+
+/// Commands that edit what a video can't take (plan §7: global grading only): crop and
+/// geometry, masks, Remove / Heal spots, Red Eye and AI Denoise.
+pub fn photo_only(id: &str) -> bool {
+    ["mask.", "spot.", "redeye."].iter().any(|p| id.starts_with(p)) || matches!(id, "denoise.queue" | "denoise.toggle")
+}
+
+/// [`NOT_FOR_VIDEO`] for a [`photo_only`] command while the active photo is a video clip.
+pub fn video_gate(s: &Session, id: &str) -> std::result::Result<(), String> {
+    if photo_only(id) && s.active().is_some_and(|a| crate::video::adapter::is_video(s, a)) { Err(NOT_FOR_VIDEO.into()) } else { Ok(()) }
+}
+
+/// [`video_gate`] for one call: a [`photo_only`] command that names photos through `ids` is also
+/// refused when any of them is a video clip, whatever the active photo is.
+pub fn video_gate_call(s: &Session, id: &str, params: &serde_json::Value) -> std::result::Result<(), String> {
+    video_gate(s, id)?;
+    if !photo_only(id) {
+        return Ok(());
+    }
+    let ids = params.get("ids").and_then(serde_json::Value::as_array).into_iter().flatten().filter_map(serde_json::Value::as_u64);
+    match ids.map(crate::catalog::PhotoId).find(|p| crate::video::adapter::is_video(s, *p)) {
+        Some(p) => Err(format!("{NOT_FOR_VIDEO} (photo {} is a video clip)", p.0)),
+        None => Ok(()),
+    }
+}
 
 pub fn always(_: &Session) -> std::result::Result<(), String> {
     Ok(())
@@ -142,29 +209,39 @@ pub fn command_specs() -> &'static [CommandSpec] {
         let mut v = Vec::new();
         v.extend(edit::specs());
         v.extend(library::specs());
+        v.extend(collections::specs());
         v.extend(develop::specs());
         v.extend(color::specs());
+        v.extend(plugin_filters::specs());
         v.extend(curves::specs());
+        v.extend(crop_aspects::specs());
         v.extend(masks::specs());
         v.extend(organize::specs());
         v.extend(keywords::specs());
         v.extend(manage::specs());
+        v.extend(map::specs());
         v.extend(previews::specs());
         v.extend(lut_profiles::specs());
+        v.extend(lens_db::specs());
         v.extend(mask_effects::specs());
         v.extend(cull::specs());
         v.extend(convert::specs());
         v.extend(convert::edit_specs());
         v.extend(merge::specs());
         v.extend(query::specs());
+        v.extend(quick::specs());
         v.extend(xmp::specs());
+        #[cfg(not(target_arch = "wasm32"))]
+        v.extend(catalog::specs());
         v.extend(preset_files::specs());
         v.extend(prefs::specs());
         v.extend(slideshow::specs());
         v.extend(export::specs());
+        v.extend(crate::creations::specs());
         v.extend(print::specs());
         v.extend(before::specs());
         v.extend(browse::specs());
+        v.extend(folders::specs());
         v.extend(missing::specs());
         v.extend(recheck::specs());
         v.extend(sync::specs());
@@ -175,8 +252,25 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(face_models::specs());
         v.extend(face_detect::specs());
         v.extend(face_recognize::specs());
+        #[cfg(not(target_arch = "wasm32"))]
+        v.extend(immich::specs());
+        #[cfg(not(target_arch = "wasm32"))]
+        v.extend(publish::specs());
+        #[cfg(not(target_arch = "wasm32"))]
+        v.extend(tether::specs());
+        #[cfg(not(target_arch = "wasm32"))]
+        v.extend(web::specs());
+        #[cfg(not(target_arch = "wasm32"))]
+        v.extend(credentials::specs());
+        v.extend(actions::specs());
+        v.extend(edit_in::specs());
+        #[cfg(not(target_arch = "wasm32"))]
+        v.extend(plugins::specs());
+        #[cfg(not(target_arch = "wasm32"))]
+        v.extend(update::specs());
         v.extend(focus::specs());
         v.extend(activity::specs());
+        v.extend(video::specs());
         v
     })
 }
@@ -219,7 +313,7 @@ pub(crate) fn bool_or(p: &Value, key: &str, d: bool) -> bool {
 pub(crate) fn ok() -> Result<Value> {
     Ok(Value::Null)
 }
-pub(crate) fn point(p: &Value, key: &str) -> Option<lightcraft_geom::Point> {
+pub(crate) fn point(p: &Value, key: &str) -> Option<lcc_geom::Point> {
     let a = p.get(key)?.as_array()?;
-    Some(lightcraft_geom::Point::new(a.first()?.as_f64()?, a.get(1)?.as_f64()?))
+    Some(lcc_geom::Point::new(a.first()?.as_f64()?, a.get(1)?.as_f64()?))
 }

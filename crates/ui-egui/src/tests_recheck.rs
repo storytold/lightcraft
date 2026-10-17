@@ -3,10 +3,10 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use lightcraft_catalog::{Op, PhotoId};
+use lcc_catalog::{Op, PhotoId};
 use serde_json::json;
 
-use crate::LightcraftApp;
+use crate::LccApp;
 
 struct Dir(PathBuf);
 
@@ -18,14 +18,14 @@ impl Drop for Dir {
 
 /// An app on a library at `dir/lib` with one photo whose preview-only flag an older version set.
 /// Its file (a PNG) reads fine, as a raw a newer decoder handles would.
-fn app_with_stale_photo(dir: &Path) -> (LightcraftApp, PhotoId) {
+fn app_with_stale_photo(dir: &Path) -> (LccApp, PhotoId) {
     let _ = std::fs::remove_dir_all(dir);
     std::fs::create_dir_all(dir.join("files")).unwrap();
-    let img = lightcraft_raster::Rgba8::from_fn(16, 12, |x, y| [(x * 9) as u8, (y * 11) as u8, 50, 255]);
-    let o = lightcraft_engine::export::ExportOptions { format: lightcraft_engine::export::ExportFormat::Png, ..Default::default() };
+    let img = lcc_raster::Rgba8::from_fn(16, 12, |x, y| [(x * 9) as u8, (y * 11) as u8, 50, 255]);
+    let o = lcc_engine::export::ExportOptions { format: lcc_engine::export::ExportFormat::Png, ..Default::default() };
     let file = dir.join("files/one.png");
-    std::fs::write(&file, lightcraft_engine::export::encode_image(&img, &o).unwrap()).unwrap();
-    let mut session = lightcraft_engine::Session::new().with_fs();
+    std::fs::write(&file, lcc_engine::export::encode_image(&img, &o).unwrap()).unwrap();
+    let mut session = lcc_engine::Session::new().with_fs();
     session.open_library(dir.join("lib"), false).unwrap();
     let r = session.execute("library.import", &json!({"paths": [file.to_string_lossy()]})).unwrap();
     let id = PhotoId(r["imported"][0].as_u64().unwrap());
@@ -42,7 +42,7 @@ fn app_with_stale_photo(dir: &Path) -> (LightcraftApp, PhotoId) {
             preview_checked: "0.5.0".into(),
         })
         .unwrap();
-    (LightcraftApp::new(session, Default::default()), id)
+    (LccApp::new(session, Default::default()), id)
 }
 
 #[test]

@@ -1,28 +1,52 @@
 //! Organizing commands: stacks (group, ungroup, set top, expand/collapse, auto-stack by capture
 //! time) and virtual copies.
 
-use lightcraft_catalog::{HistoryStep, Op, PhotoId, Stack, StackId};
+use lcc_catalog::{HistoryStep, Op, PhotoId, Stack, StackId};
 use serde_json::{Value, json};
 
 use super::{CommandSpec, always, bad, bool_or, cmd, f64_or, has_selection, str_param};
 use crate::{Result, Selection, Session};
 
-/// Stacks containing any of `targets`, in first-seen order.
-fn stacks_of(s: &Session, targets: &[PhotoId]) -> Vec<StackId> {
-    let mut v = Vec::new();
-    for t in targets {
-        if let Some(st) = s.catalog.stack_of(*t)
-            && !v.contains(&st.id)
-        {
-            v.push(st.id);
-        }
-    }
-    v
+#[cfg(test)]
+thread_local! {
+    /// Photos and stacks the stack checks have looked at, so a test can count their work (#175).
+    pub(crate) static STACK_WORK: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
+/// Counts `n` units of stack-check work in tests; nothing outside them.
+#[inline]
+fn work(n: usize) {
+    #[cfg(test)]
+    STACK_WORK.with(|w| w.set(w.get().saturating_add(n as u64)));
+    let _ = n;
+}
+
+/// Stacks containing any of `targets`, in first-seen order.
+fn stacks_of(s: &Session, targets: &[PhotoId]) -> Vec<StackId> {
+    let mut seen = std::collections::HashSet::new();
+    targets
+        .iter()
+        .filter_map(|t| {
+            work(1);
+            s.catalog.stack_of(*t)
+        })
+        .map(|st| st.id)
+        .filter(|id| seen.insert(*id))
+        .collect()
+}
+
+/// Enabled when any selected photo is stacked. Runs every frame for the menus, so it stops at the
+/// first stacked photo (each lookup is an index hit, issue #160).
 fn in_stack(s: &Session) -> std::result::Result<(), String> {
     has_selection(s)?;
-    if stacks_of(s, &s.selected()).is_empty() { Err("no stacked photo selected".into()) } else { Ok(()) }
+    if s.selected().iter().any(|p| {
+        work(1);
+        s.catalog.stack_of(*p).is_some()
+    }) {
+        Ok(())
+    } else {
+        Err("no stacked photo selected".into())
+    }
 }
 
 fn has_stacks(s: &Session) -> std::result::Result<(), String> {

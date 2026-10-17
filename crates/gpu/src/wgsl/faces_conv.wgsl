@@ -1,4 +1,4 @@
-// Convolution for the face networks (lightcraft-faces), planar (NCHW) float32, batch 1, any stride, padding and grouping.
+// Convolution for the face networks (lcc-faces), planar (NCHW) float32, batch 1, any stride, padding and grouping.
 //
 // `tiled` is an implicit matrix product per group: rows are the group's output channels (M), columns its output
 // pixels (N), and K runs over input channel x kernel tap. The input is gathered (im2col) straight into workgroup

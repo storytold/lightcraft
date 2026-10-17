@@ -7,13 +7,13 @@ use serde_json::json;
 
 use crate::headless::Headless;
 use crate::state::Dialog;
-use crate::{LightcraftApp, Services};
+use crate::{LccApp, Services};
 
 const T: Duration = Duration::from_secs(20);
 
 fn detail() -> Headless {
     let services = Services { png: None, ..Default::default() };
-    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+    let app = LccApp::new(lcc_engine::Session::with_demo(), services);
     let mut h = Headless::new(app, [1200.0, 900.0], 1.0);
     let r = h.request("ui.set", json!({"view": "detail"}), T);
     assert_eq!(r["ok"], true, "{r}");
@@ -36,7 +36,7 @@ fn click(h: &mut Headless, id: &str) {
     req(h, "ui.clickWidget", json!({"id": id}));
 }
 
-fn mask(h: &Headless) -> lightcraft_develop::Mask {
+fn mask(h: &Headless) -> lcc_develop::Mask {
     let id = h.app.session.active().expect("active photo");
     let d = h.app.session.develop_of(id).unwrap_or_default();
     d.masks.iter().find(|m| Some(m.id) == h.app.session.active_mask).cloned().expect("a selected mask")
@@ -54,7 +54,7 @@ fn setup() -> Headless {
         exec(&mut h, "mask.adjust", json!({"values": values}));
         exec(&mut h, "mask.saveEffect", json!({"name": name, "group": group}));
         let zero: serde_json::Map<String, serde_json::Value> =
-            lightcraft_engine::cmd::mask_effects::FIELDS.iter().map(|k| (k.to_string(), json!(0))).collect();
+            lcc_engine::cmd::mask_effects::FIELDS.iter().map(|k| (k.to_string(), json!(0))).collect();
         exec(&mut h, "mask.adjust", json!({"values": zero}));
     }
     exec(&mut h, "mask.favoriteEffect", json!({"name": "21 Skin"}));

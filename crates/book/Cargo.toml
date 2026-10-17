@@ -1,0 +1,24 @@
+[package]
+name = "lcc-book"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Photo books (L3): book settings, page templates, auto layout, cells, photo and page text with type controls, backgrounds, page numbers, and export to PDF or one JPEG per page"
+
+[lints]
+workspace = true
+
+[dependencies]
+lcc-layout = { workspace = true }
+lcc-raster = { workspace = true }
+lcc-text = { workspace = true }
+lcc-pdf = { workspace = true }
+lcc-codecs = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+lcc-fuzzkit = { workspace = true }
+lopdf = { version = "0.45", default-features = false }
+hayro = { version = "0.8", default-features = false }

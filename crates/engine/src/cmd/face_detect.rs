@@ -10,11 +10,11 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Instant;
 
-use lightcraft_catalog::Op;
-use lightcraft_develop::DevelopSettings;
-use lightcraft_faces::known::YUNET_ID;
-use lightcraft_faces::yunet::{Detector, Face, Options};
-use lightcraft_meta::{Region, RegionKind};
+use lcc_catalog::Op;
+use lcc_develop::DevelopSettings;
+use lcc_faces::known::YUNET_ID;
+use lcc_faces::yunet::{Detector, Face, Options};
+use lcc_meta::{Region, RegionKind};
 use serde_json::{Value, json};
 
 use super::{CommandSpec, always, bad, cmd, has_selection};
@@ -132,7 +132,7 @@ pub(crate) fn cpu_only(s: &Session) -> bool {
 pub(crate) fn offer_gpu(
     s: &Session,
     what: &'static str,
-    attach: impl FnOnce(Arc<dyn lightcraft_faces::net::Accelerator>) -> std::result::Result<(), String> + Send + 'static,
+    attach: impl FnOnce(Arc<dyn lcc_faces::net::Accelerator>) -> std::result::Result<(), String> + Send + 'static,
 ) {
     if cpu_only(s) {
         set_gpu_state(what, GpuState { why: Some("the CPU is chosen in Settings".into()), ..GpuState::default() });
@@ -143,14 +143,14 @@ pub(crate) fn offer_gpu(
     set_gpu_state(what, GpuState { checking: true, ..GpuState::default() });
     let spawned = std::thread::Builder::new().name(format!("faces-gpu-{what}")).spawn(move || {
         let _task = task;
-        let gpu = match lightcraft_gpu::faces::accelerator() {
+        let gpu = match lcc_gpu::faces::accelerator() {
             Ok(gpu) => gpu,
             Err(why) => {
                 log::info!("faces: {what} runs on the CPU ({why})");
                 return set_gpu_state(what, GpuState { why: Some(why), ..GpuState::default() });
             }
         };
-        let device = lightcraft_faces::net::Accelerator::device(&*gpu);
+        let device = lcc_faces::net::Accelerator::device(&*gpu);
         match attach(gpu) {
             Ok(()) => {
                 log::info!("faces: {what} runs on {device}");
@@ -179,7 +179,7 @@ fn gpu(s: &mut Session, p: &Value) -> Result<Value> {
         #[cfg(not(target_arch = "wasm32"))]
         let embedder = s.faces.embedder.as_ref().map(|(_, e)| e.clone());
         #[cfg(target_arch = "wasm32")]
-        let embedder: Option<Arc<lightcraft_faces::runtime::Embedder>> = None;
+        let embedder: Option<Arc<lcc_faces::runtime::Embedder>> = None;
         if cpu {
             for (what, net) in [("detection", detector.as_ref().map(|d| d.net())), ("recognition", embedder.as_ref().map(|e| e.net()))] {
                 if let Some(net) = net {
@@ -238,7 +238,7 @@ pub(crate) fn is_detected(r: &Region) -> bool {
 
 /// The photo as the faces see it: upright, uncropped, default settings, as 8-bit RGB with its size, its long edge at
 /// most `edge`.
-pub(crate) fn render_rgb(s: &mut Session, id: lightcraft_catalog::PhotoId, edge: usize) -> std::result::Result<(Vec<u8>, usize, usize), String> {
+pub(crate) fn render_rgb(s: &mut Session, id: lcc_catalog::PhotoId, edge: usize) -> std::result::Result<(Vec<u8>, usize, usize), String> {
     let settings = DevelopSettings::default();
     let job = s.preview_job(id, edge, edge, false, &settings).ok_or("no such photo")?;
     let image = job.run().rendered?.image;
@@ -278,7 +278,7 @@ fn detect(s: &mut Session, p: &Value) -> Result<Value> {
             let fresh: Vec<&Face> = faces.iter().filter(|f| !overlaps_existing(f, &meta.regions)).collect();
             for f in fresh {
                 meta.regions.push(Region {
-                    rect: lightcraft_geom::Rect { x0: f64::from(f.x0), y0: f64::from(f.y0), x1: f64::from(f.x1), y1: f64::from(f.y1) },
+                    rect: lcc_geom::Rect { x0: f64::from(f.x0), y0: f64::from(f.y0), x1: f64::from(f.x1), y1: f64::from(f.y1) },
                     kind: RegionKind::Face,
                     name: None,
                     description: Some(format!("{MARK}{LABEL}")),
@@ -328,7 +328,7 @@ mod tests {
         Face { x0, y0, x1, y1, score: 0.9, landmarks: [(0.0, 0.0); 5] }
     }
     fn region(x0: f64, y0: f64, x1: f64, y1: f64) -> Region {
-        Region { rect: lightcraft_geom::Rect { x0, y0, x1, y1 }, kind: RegionKind::Face, name: Some("Ann".into()), description: None }
+        Region { rect: lcc_geom::Rect { x0, y0, x1, y1 }, kind: RegionKind::Face, name: Some("Ann".into()), description: None }
     }
 
     #[test]

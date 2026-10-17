@@ -1,6 +1,6 @@
 //! Describing a raw file without reading its pixel data.
 //!
-//! [`probe_info`](crate::probe_info) and `lightcraft_meta::extract` read only a raw file's
+//! [`probe_info`](crate::probe_info) and `lcc_meta::extract` read only a raw file's
 //! headers, but those are a few hundred kilobytes of a file of tens of megabytes: an import from a
 //! slow drive spends nearly all its time reading samples nothing looks at. [`header_plan`] says
 //! which byte ranges of a file those readers need. It is asked about a buffer of the file's full
@@ -19,8 +19,8 @@
 
 use std::collections::HashSet;
 
-use lightcraft_meta::cr3::{Cr3TrackKind, XMP_UUID, is_cr3, parse_cr3};
-use lightcraft_tiff::{ByteOrder, FieldType, Tiff, tags as t};
+use lcc_meta::cr3::{Cr3TrackKind, XMP_UUID, is_cr3, parse_cr3};
+use lcc_tiff::{ByteOrder, FieldType, Tiff, tags as t};
 
 use crate::RawFormat;
 
@@ -29,7 +29,7 @@ use crate::RawFormat;
 const HEAD: u64 = 64 * 1024;
 /// An image whose chunks hold fewer bytes than this is read (thumbnails, small previews).
 const BULK: u64 = 256 * 1024;
-/// The same bounds as `lightcraft_tiff`'s reader.
+/// The same bounds as `lcc_tiff`'s reader.
 const MAX_IFDS: usize = 1024;
 const MAX_ENTRIES: u64 = 8192;
 const MAX_BOXES: usize = 4096;
@@ -270,7 +270,7 @@ fn tiff_plan(bytes: &[u8], loaded: &Ranges, preview: bool) -> HeaderPlan {
     })
 }
 
-/// Walk the IFDs of the TIFF in `data` (which starts at `origin` in the file) as `lightcraft_tiff`'s
+/// Walk the IFDs of the TIFF in `data` (which starts at `origin` in the file) as `lcc_tiff`'s
 /// reader does — the chain, `SubIFDs`, Exif, GPS and Interop, plus the `extra` pointer tags —
 /// asking for every IFD table and for the values that locate IFDs and image chunks. Returns the IFD
 /// tables and out-of-line values found (absolute ranges); incomplete while `w` needs more.
@@ -374,7 +374,7 @@ fn be64(bytes: &[u8], at: u64) -> Option<u64> {
     bytes.get(at..at.checked_add(8)?).map(|s| u64::from_be_bytes([s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7]]))
 }
 
-/// A CR3 is read where `lightcraft_meta::cr3::parse_cr3` and the CR3 decoder look: the file type,
+/// A CR3 is read where `lcc_meta::cr3::parse_cr3` and the CR3 decoder look: the file type,
 /// `moov` and the XMP `uuid` box, the first sample of each timed-metadata (`CTMD`) track, and the
 /// main raw track's coding headers and quantization maps. Previews and image tracks are skipped,
 /// unless `preview`: then every top-level box but `mdat` and the JPEG tracks are read too.

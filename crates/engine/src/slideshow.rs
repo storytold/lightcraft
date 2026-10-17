@@ -12,7 +12,7 @@
 //! The settings are a library preference (`prefs.json`, see [`crate::library`]), read and changed
 //! with the `slideshow.playback` command.
 
-use lightcraft_catalog::PhotoId;
+use lcc_catalog::PhotoId;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 

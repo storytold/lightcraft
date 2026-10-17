@@ -1,4 +1,4 @@
-//! Lens-correction data a raw file records, kept with where it came from and separately from what LightCraft
+//! Lens-correction data a raw file records, kept with where it came from and separately from what the app
 //! applies.
 //!
 //! A readable table is not a correction. Each component carries a [`SonyLensStatus`]: only
@@ -42,7 +42,7 @@ pub struct SonyLensCorrections {
     pub geometry: SonyLensGeometry,
 }
 
-/// One correction component: the camera's setting, its table, and whether LightCraft applies it.
+/// One correction component: the camera's setting, its table, and whether the app applies it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SonyComponent<T> {
     pub setting: SonyField<SonySetting>,
@@ -137,7 +137,7 @@ pub enum SonySettingMeaning {
 /// Whether a component is applied, and if not, why.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SonyLensStatus {
-    /// Converted into the image's `OpcodeList3` (today: ILCE-7RM4A and ILCE-7RM6 Bayer distortion in native 3:2 framing).
+    /// Converted into the image's `OpcodeList3` (ILCE-7RM4A, ILCE-7RM6 or eligible full-frame ILCE-7CR Bayer distortion).
     Applied,
     /// No usable table.
     NoTable,
@@ -149,6 +149,8 @@ pub enum SonyLensStatus {
     /// Decoded only: the model is validated, but not this coding or framing (linear YCbCr, a non-3:2 crop) or a
     /// table found only in the `SR2SubIFD`.
     NotValidatedMode,
+    /// A7CR distortion is Off, unavailable, missing or unknown. Its uncorrected JPEG and render keep the same geometry.
+    CameraCorrectionDisabled,
     /// Validated scope, but the table is all zeros: a valid no-op, nothing to apply.
     Neutral,
     /// Validated scope, but the conversion refused this table (values outside the validated range, a degenerate

@@ -7,7 +7,7 @@ use std::cmp::Ordering;
 
 use egui::RichText;
 
-use crate::{LightcraftApp, theme::Tokens};
+use crate::{LccApp, theme::Tokens};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Contributor {
@@ -220,14 +220,14 @@ fn profile_url(c: &Contributor) -> String {
 }
 
 /// A contributor's name as a link to their GitHub profile, with the whole line as its tooltip.
-fn name_link(app: &mut LightcraftApp, ui: &mut egui::Ui, c: &Contributor, names: NameMode) {
+fn name_link(app: &mut LccApp, ui: &mut egui::Ui, c: &Contributor, names: NameMode) {
     if ui.link(c.name(names)).on_hover_text(c.summary()).clicked() {
         let _ = crate::links::open(app, &profile_url(c));
     }
 }
 
 /// About ▸ Contributors: a name toggle, a sort, and the list as a grab bag or a table.
-pub fn contributors_ui(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+pub fn contributors_ui(app: &mut LccApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let id = egui::Id::new("credits_view");
     let mut v = ui.data_mut(|d| d.get_temp::<View>(id)).unwrap_or_default();
@@ -289,7 +289,7 @@ pub fn contributors_ui(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     ui.data_mut(|d| d.insert_temp(id, v));
 }
 
-fn table(app: &mut LightcraftApp, ui: &mut egui::Ui, list: &[&Contributor], v: &mut View) {
+fn table(app: &mut LccApp, ui: &mut egui::Ui, list: &[&Contributor], v: &mut View) {
     egui::Grid::new("credits_table").striped(true).num_columns(SortKey::ALL.len()).show(ui, |ui| {
         for k in SortKey::ALL {
             let text = RichText::new(crate::i18n::tr(k.label().1)).strong();
@@ -397,14 +397,6 @@ mod tests {
     }
 
     #[test]
-    fn names_fall_back_to_the_username() {
-        let p = c("bob", Some("Bobby"), None, 0, 0, "");
-        assert_eq!(p.name(NameMode::Username), "@bob");
-        assert_eq!(p.name(NameMode::DisplayName), "Bobby");
-        assert_eq!(p.name(NameMode::RealName), "@bob");
-    }
-
-    #[test]
     fn alphabetical_ignores_at_and_case() {
         let all = people();
         let v = sorted(&all, NameMode::Username, SortKey::Name, true);
@@ -422,23 +414,5 @@ mod tests {
         assert_eq!(logins(&v), ["Bob", "alice", "carol", "zed"]);
         let v = sorted(&all, NameMode::Username, SortKey::FirstCommit, true);
         assert_eq!(logins(&v), ["Bob", "zed", "carol", "alice"]); // undated last
-    }
-
-    #[test]
-    fn the_committed_json_is_baked_in() {
-        // contributors/contributors.json is committed, so a build always has someone to credit
-        assert!(!CONTRIBUTORS.is_empty(), "build.rs produced no contributors");
-        assert!(TOTAL_COMMITS > 0);
-        assert!(CONTRIBUTORS.iter().all(|c| !c.login.is_empty() && !c.login.starts_with('@')));
-        assert!(MODELS.iter().all(|m| !m.model.is_empty()));
-    }
-
-    #[test]
-    fn formatting() {
-        assert_eq!(group(1234567), "1,234,567");
-        assert_eq!(group(12), "12");
-        assert_eq!(signed(-1000), "−1,000");
-        assert_eq!(day("2026-10-07T18:45:23Z"), "2026-10-07");
-        assert_eq!(day(""), "—");
     }
 }

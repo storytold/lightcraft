@@ -1,35 +1,45 @@
 [package]
-name = "lightcraft-engine"
+name = "lcc-engine"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "LightCraft engine: session, command registry, history, render jobs, view-models (L4)"
+description = "Engine: session, command registry, history, render jobs, view-models (L4)"
 
 [lints]
 workspace = true
 
 [dependencies]
-lightcraft-geom = { workspace = true }
-lightcraft-color = { workspace = true }
-lightcraft-raster = { workspace = true }
-lightcraft-develop = { workspace = true }
-lightcraft-scenes = { workspace = true }
-lightcraft-pipeline = { workspace = true }
-lightcraft-gpu = { workspace = true }
-lightcraft-catalog = { workspace = true }
+lcc-filters = { workspace = true }
+lcc-brand = { workspace = true }
+lcc-geom = { workspace = true }
+lcc-color = { workspace = true }
+lcc-raster = { workspace = true }
+lcc-develop = { workspace = true }
+lcc-scenes = { workspace = true }
+lcc-pipeline = { workspace = true }
+lcc-gpu = { workspace = true }
+lcc-catalog = { workspace = true }
+lcc-geo = { workspace = true }
+lcc-hash = { workspace = true }
+lcc-layout = { workspace = true }
+lcc-print = { workspace = true }
 web-time = { workspace = true }
-lightcraft-preview = { workspace = true }
-lightcraft-codecs = { workspace = true }
-lightcraft-raw = { workspace = true }
-lightcraft-denoise-core = { workspace = true }
-lightcraft-denoise = { workspace = true, optional = true }
-lightcraft-meta = { workspace = true }
-lightcraft-lensdb = { workspace = true }
-lightcraft-faces = { workspace = true }
+lcc-preview = { workspace = true }
+lcc-codecs = { workspace = true }
+lcc-raw = { workspace = true }
+lcc-camdb = { workspace = true }
+lcc-denoise-core = { workspace = true }
+lcc-denoise = { workspace = true, optional = true }
+lcc-meta = { workspace = true }
+lcc-lensdb = { workspace = true }
+lcc-faces = { workspace = true }
 miniz_oxide = { workspace = true }
-lightcraft-merge = { workspace = true }
-lightcraft-geocode = { workspace = true }
-lightcraft-slideshow = { workspace = true }
+lcc-merge = { workspace = true }
+lcc-geocode = { workspace = true }
+lcc-psd = { workspace = true }
+lcc-actions = { workspace = true }
+lcc-slide = { workspace = true }
+tiff = { workspace = true }
 rayon = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -39,24 +49,62 @@ ab_glyph = { workspace = true }
 # Apply the font’s vertical substitutions and origins to Japanese watermarks.
 harfrust = { version = "0.12", default-features = false, features = ["std"] }
 unicode-segmentation = "1.13"
-lightcraft-segment = { workspace = true, optional = true }
+lcc-segment = { workspace = true, optional = true }
+# video clips: probe and poster frames (every call is `Unsupported` on wasm32)
+lcc-video = { workspace = true }
+lcc-audio-out = { workspace = true }
 
 # model downloads run natively only (the web build fetches no models)
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-lightcraft-fetch = { workspace = true }
+lcc-fetch = { workspace = true }
+# auto updates: the release feed, the download, and starting the install
+lcc-updater = { workspace = true }
+lcc-immich = { workspace = true }
+lcc-publish = { workspace = true }
+lcc-tether = { workspace = true }
+lcc-credentials = { workspace = true }
+lcc-webgallery = { workspace = true, features = ["sftp"] }
+lcc-plugins = { workspace = true }
+# M14.8: video clips in an export batch
+lcc-video-export = { workspace = true }
+# Delete from Disk (`photo.deleteFromDisk`): the system trash; the web build has none (`Session::trash` stays None)
+trash = { workspace = true }
+
+# free disk space of a volume (Folders panel)
+[target.'cfg(all(unix, not(target_arch = "wasm32")))'.dependencies]
+rustix = { workspace = true }
 
 [features]
+# Clip sound and slideshow music through the sound card (lcc-audio-out with cpal, which links the C
+# library libasound on Linux: off by default, see docs/video.md). Without it playback is muted.
+audio-out = ["lcc-audio-out/audio-out"]
 # AI masks with SAM 3 (Object / Describe). Off for the web and CLI builds.
-sam = ["dep:lightcraft-segment"]
-denoise = ["dep:lightcraft-denoise", "lightcraft-denoise/runtime", "lightcraft-gpu/denoise"]
-rawnind-model = ["denoise", "lightcraft-denoise/rawnind-model", "lightcraft-denoise-core/rawnind-model"]
+sam = ["dep:lcc-segment"]
+denoise = ["dep:lcc-denoise", "lcc-denoise/runtime", "lcc-gpu/denoise"]
+rawnind-model = ["denoise", "lcc-denoise/rawnind-model", "lcc-denoise-core/rawnind-model"]
 
 [dev-dependencies]
 # tests record why they skip (`cargo xtask ci` lists the skips)
-lightcraft-testkit = { workspace = true }
+lcc-testkit = { workspace = true }
 # HDR JPEG XL tests read the file's colour encoding
 jxl-oxide = { workspace = true }
+# the updater's end-to-end test builds a release with a real checksum
+sha2 = { workspace = true }
 # Lossless synthetic HEIC files (the import test; decoded when the codecs' `heif` feature is on).
-lightcraft-heif = { workspace = true, features = ["testdata"] }
+lcc-heif = { workspace = true, features = ["testdata"] }
 libc = { workspace = true }
-lightcraft-tiff = { workspace = true }
+lcc-tiff = { workspace = true }
+wat = "1.228" # P4.3: plug-in test modules
+
+# M14.2/M14.3/M14.8: synthetic clips generated in-test (no media committed) and re-decoded
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+lcc-video = { workspace = true, features = ["test-util"] }
+# M14.4: the GPU playback LUT benchmark (bench_playback)
+wgpu = { workspace = true }
+pollster = { workspace = true }
+filmcraft-h264enc = { git = "https://github.com/storytold/filmcraft", rev = "8309f21a6c3f34ddf190af7fd9bfd913053a1fd5" }
+filmcraft-isobmff = { git = "https://github.com/storytold/filmcraft", rev = "8309f21a6c3f34ddf190af7fd9bfd913053a1fd5" }
+
+[target.'cfg(windows)'.dependencies]
+# free space on Windows (the Folders panel); its own unsafe FFI stays inside the crate
+fs4 = { version = "1", default-features = false, features = ["sync"] }

@@ -1,4 +1,4 @@
-# Demo-library showcase: run LightCraft with `--memory --control 7980` (no files → procedural demo library)
+# Demo-library showcase: run the app with `--memory --control 7980` (no files → procedural demo library)
 {"method":"ui.resize","params":{"width":1600,"height":1000}}
 {"method":"engine.execute","params":{"command":"view.photoGrid"}}
 {"method":"ui.set","params":{"leftPanel":true,"right":"edit","thumbSize":230,"openSections":["light","color"],"presets":false}}

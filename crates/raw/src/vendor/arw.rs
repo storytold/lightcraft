@@ -48,10 +48,10 @@ use super::arw6;
 use crate::lens_metadata::SonyLensGeometry;
 use crate::tiffraw::{Packing, check_image, read_image_in};
 use crate::{BlackLevel, Cfa, ColorData, LensMetadata, Mode, OpcodeLists, RawData, RawError, RawFormat, RawImage, Rect, Result, ljpeg};
-use lightcraft_geom::Orientation;
-use lightcraft_tiff::image::{Chunk, ImageInfo, Layout, chunk_bytes};
-use lightcraft_tiff::tags::{self as t, photometric};
-use lightcraft_tiff::{Ifd, Tiff, makernote};
+use lcc_geom::Orientation;
+use lcc_tiff::image::{Chunk, ImageInfo, Layout, chunk_bytes};
+use lcc_tiff::tags::{self as t, photometric};
+use lcc_tiff::{Ifd, Tiff, makernote};
 use rayon::prelude::*;
 
 const TONE_CURVE: u16 = 0x7010;
@@ -226,7 +226,7 @@ fn sony_body<'a>(make: &str, model: &'a str, mn: Option<&makernote::MakerNote>) 
 /// White balance from the maker note's enciphered `Tag2010` block, the fallback described at [`TAG2010_WB`].
 /// `model` is the Sony body ([`sony_body`]); Sony appends a regional "V" to some names (SLT-A77V), which the
 /// documented lists omit.
-fn tag2010_wb(model: &str, block: &[u8], order: lightcraft_tiff::ByteOrder) -> Option<[f32; 3]> {
+fn tag2010_wb(model: &str, block: &[u8], order: lcc_tiff::ByteOrder) -> Option<[f32; 3]> {
     let model = model.trim();
     let &(_, offset) = TAG2010_WB.iter().find(|(models, _)| models.iter().any(|m| model == *m || model.strip_suffix('V') == Some(*m)))?;
     let bytes: Vec<u8> = block.get(offset..offset + 6)?.iter().map(|&b| DECIPHER[b as usize]).collect();
@@ -519,7 +519,7 @@ fn sr2_old_crop(sr2: &super::sr2::SubIfd, w: usize, h: usize) -> Option<Rect> {
 }
 
 /// One black level from the four deciphered per-channel levels (their mean), when they are near-equal and plausible.
-fn sr2_black_levels(plain: &[u8], order: lightcraft_tiff::ByteOrder) -> Option<f32> {
+fn sr2_black_levels(plain: &[u8], order: lcc_tiff::ByteOrder) -> Option<f32> {
     let levels: Vec<u16> = (0..4).filter_map(|i| order.read_u16(plain, 2 * i)).collect();
     let (&lo, &hi) = (levels.iter().min()?, levels.iter().max()?);
     (levels.len() == 4 && (64..=4096).contains(&lo) && hi - lo <= 64).then(|| levels.iter().map(|&v| f32::from(v)).sum::<f32>() / 4.0)
@@ -528,8 +528,8 @@ fn sr2_black_levels(plain: &[u8], order: lightcraft_tiff::ByteOrder) -> Option<f
 /// Byte order of 16-bit-word samples: the file's own order unless the words only fit the sample width in the other
 /// (see the DSC-R1 note at the top). Sampled across the strip; the order is swapped only when the file order leaves
 /// more than 1 % of the sampled words at or above `1 << max(bits, 14)` while the other order leaves none.
-fn word16_order(strip: &[u8], bits: u32, file: lightcraft_tiff::ByteOrder) -> lightcraft_tiff::ByteOrder {
-    use lightcraft_tiff::ByteOrder::{Big, Little};
+fn word16_order(strip: &[u8], bits: u32, file: lcc_tiff::ByteOrder) -> lcc_tiff::ByteOrder {
+    use lcc_tiff::ByteOrder::{Big, Little};
     let other = if file == Little { Big } else { Little };
     let limit = 1u32 << bits.clamp(14, 16);
     let (mut n, mut over_file, mut over_other) = (0usize, 0usize, 0usize);
@@ -608,6 +608,89 @@ fn recorded_size_crop(full: (u64, u64), exif: Option<(u64, u64)>, w: usize, h: u
     (height * 2 >= h).then(|| Rect::new(x, ((h - height) / 2) & !1, fw, height))
 }
 
+/// The DSLR-A100 (2006) keeps its raw data outside any image IFD: IFD0 tag 330 (`SubIFDs`, ExifTool's
+/// `A100DataOffset`) is a plain offset to an ARW1 stream (see `arw1.rs`) that runs to the end of the file, and
+/// `DNGPrivateData` points to a Minolta-style `\0MRI` block whose `\0PRD` record gives the coded frame (2608 × 3880,
+/// little-endian `u16`s at 8 and 10: the image is the frame less the 8 extra coded rows) and the recorded image size
+/// (2592 × 3872 at 12 and 14), and whose `\0WBG` record holds the as-shot levels (four little-endian `u16`s after four
+/// scale bytes, R, G, G, B). Measured on the CC0 raw.pixls.us `_DSC0258.ARW`: the stream decodes to exactly that
+/// frame, its darkest samples are 15–25 (black 0, like the A200's ARW1), and the RGGB phase follows from the WB
+/// levels (the brighter non-green phase is the one with the smaller gain).
+fn decode_a100(bytes: &[u8], tiff: &Tiff, mode: Mode) -> Result<RawImage> {
+    let ifd0 = &tiff.ifds[0];
+    let start =
+        ifd0.u64(t::SUB_IFDS).and_then(|o| usize::try_from(o).ok()).ok_or_else(|| RawError::Corrupt("A100 ARW without a data offset".into()))?;
+    let src = bytes.get(start..).filter(|s| !s.is_empty()).ok_or_else(|| RawError::Corrupt("A100 ARW: data offset outside the file".into()))?;
+    // DNGPrivateData holds the block's offset as four bytes in the file's byte order
+    let mri = ifd0
+        .bytes(t::DNG_PRIVATE_DATA)
+        .and_then(|b| tiff.order.read_u32(b, 0))
+        .and_then(|o| usize::try_from(o).ok())
+        .and_then(|o| bytes.get(o..))
+        .unwrap_or_default();
+    let record = |name: &[u8; 4]| -> Option<&[u8]> {
+        // `\0MRI` + length, then records of `\0XYZ` + little-endian u32 length + data
+        let body = mri.strip_prefix(b"\0MRI")?;
+        let len = u32::from_le_bytes(body.get(..4)?.try_into().ok()?) as usize;
+        let mut rest = body.get(4..4 + len.min(4096))?;
+        while rest.len() >= 8 {
+            let n = u32::from_le_bytes(rest.get(4..8)?.try_into().ok()?) as usize;
+            let data = rest.get(8..8usize.checked_add(n)?)?;
+            if rest.get(..4) == Some(name) {
+                return Some(data);
+            }
+            rest = rest.get(8 + n..)?;
+        }
+        None
+    };
+    let u16_at = |d: &[u8], i: usize| d.get(i..i + 2).map(|b| u16::from_le_bytes([b[0], b[1]]) as usize);
+    let prd = record(b"\0PRD");
+    let (frame_h, w) = prd.and_then(|p| Some((u16_at(p, 8)?, u16_at(p, 10)?))).unwrap_or((2608, 3880));
+    let (img_h, img_w) = prd.and_then(|p| Some((u16_at(p, 12)?, u16_at(p, 14)?))).unwrap_or((2592, 3872));
+    let h = frame_h.checked_sub(8).filter(|h| *h > 0 && w > 0).ok_or_else(|| RawError::Corrupt("A100 ARW: bad frame size".into()))?;
+    let data = match mode {
+        Mode::Header => Vec::new(),
+        Mode::Full => super::arw1::decode(src, w, h)?,
+    };
+    let wb = record(b"\0WBG").and_then(|g| {
+        let l = |i: usize| u16_at(g, 4 + 2 * i).map(|v| v as f32);
+        let (r, g1, b) = (l(0)?, l(1)?, l(3)?);
+        let (r, b) = (r / g1.max(1.0), b / g1.max(1.0));
+        ((0.2..=8.0).contains(&r) && (0.2..=8.0).contains(&b)).then_some([r, 1.0, b])
+    });
+    let crop = if img_w <= w && img_h <= h { Rect::new(((w - img_w) / 2) & !1, ((h - img_h) / 2) & !1, img_w, img_h) } else { Rect::new(0, 0, w, h) };
+    let mut metadata = lcc_meta::from_tiff(tiff);
+    metadata.width = Some(crop.width as u32);
+    metadata.height = Some(crop.height as u32);
+    let white = match mode {
+        Mode::Full => super::white_from_data(&data, 12),
+        Mode::Header => 4095.0,
+    };
+    let img = RawImage {
+        format: RawFormat::Arw,
+        width: w,
+        height: h,
+        cpp: 1,
+        data: RawData::U16(data),
+        cfa: Some(Cfa::bayer_static("RGGB")),
+        bits: 12,
+        black: BlackLevel::uniform(0.0),
+        white: vec![white],
+        active_area: Rect::new(0, 0, w, h),
+        crop,
+        orientation: Orientation::from_exif(ifd0.u16(t::ORIENTATION).unwrap_or(1)),
+        color: ColorData::default(),
+        wb_multipliers: wb,
+        linearized: false,
+        opcodes: OpcodeLists::default(),
+        metadata,
+        lens_metadata: Default::default(),
+        pixel_aspect: 1.0,
+    };
+    img.validate_for(mode)?;
+    Ok(img)
+}
+
 fn raw_ifd(tiff: &Tiff) -> Option<&Ifd> {
     tiff.all_ifds()
         .into_iter()
@@ -618,7 +701,12 @@ fn raw_ifd(tiff: &Tiff) -> Option<&Ifd> {
 pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     let tiff = Tiff::parse(bytes)?;
     let ifd0 = &tiff.ifds[0];
-    let raw = raw_ifd(&tiff).ok_or_else(|| RawError::Unsupported("ARW without a CFA image IFD (old ARW or SR2)".into()))?;
+    let Some(raw) = raw_ifd(&tiff) else {
+        if ifd0.string(t::MODEL).as_deref().map(str::trim) == Some("DSLR-A100") {
+            return decode_a100(bytes, &tiff, mode);
+        }
+        return Err(RawError::Unsupported("ARW without a CFA image IFD (old ARW or SR2)".into()));
+    };
     let info = raw.image()?;
     let (w, h) = (info.width as usize, info.height as usize);
     if w * h > crate::MAX_SAMPLES {
@@ -667,6 +755,14 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
             });
             (RawData::U16(data), 12)
         }
+        // ARW version 1 (DSLR-A200…A390): a Huffman-coded 12-bit strip, see `arw1.rs`
+        32767 if bits == 12 && chunks.len() == 1 => {
+            let src = chunk_bytes(bytes, &chunks[0]).ok_or_else(|| RawError::Corrupt("raw strip outside file".into()))?;
+            match mode {
+                Mode::Header => (RawData::U16(Vec::new()), 12),
+                Mode::Full => (RawData::U16(super::arw1::decode(src, w, h)?), 12),
+            }
+        }
         32767 => return Err(RawError::Unsupported("Sony ARW version 1 / packed compressed variant (raw strip is not one byte per pixel)".into())),
         7 if is_quad_tiled(bytes, &info) => match mode {
             Mode::Full => (RawData::U16(read_quad_tiles(bytes, &info)?), bits),
@@ -708,7 +804,16 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         (Some([2, 2]), Some(p)) if p.len() == 4 && p.iter().all(|&c| c <= 2) => Cfa { width: 2, height: 2, pattern: p.to_vec() },
         _ => Cfa::bayer_static("RGGB"),
     };
-    let default_black = if scale_bits >= 14 { 512.0 } else { 128.0 };
+    // ARW1 strips have the black level subtracted in camera: the darkest samples of the A200 sample are 0 in every
+    // CFA channel (1st percentile 0-4)
+    let arw1 = info.compression == 32767 && bits == 12 && !one_byte_per_sample && !packed12;
+    let default_black = if arw1 {
+        0.0
+    } else if scale_bits >= 14 {
+        512.0
+    } else {
+        128.0
+    };
     // the decrypted SR2SubIFD, read once and only when a plain black level or white balance is missing
     let sr2_cell = std::cell::OnceCell::new();
     let sr2 = || sr2_cell.get_or_init(|| super::sr2::SubIfd::read(bytes, ifd0, tiff.order)).as_ref();
@@ -755,7 +860,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
             if crop == Rect::new(0, 0, w, h) { sr2().and_then(|s| sr2_old_crop(s, w, h)).unwrap_or(crop) } else { crop }
         }
     };
-    let mut metadata = lightcraft_meta::from_tiff(&tiff);
+    let mut metadata = lcc_meta::from_tiff(&tiff);
     metadata.width = Some(crop.width as u32);
     metadata.height = Some(crop.height as u32);
     // The lens-correction record. The distortion table is centred on the DNG-style default crop when the file has
@@ -804,8 +909,13 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         active_area: Rect::new(0, 0, w, h),
         crop,
         orientation: Orientation::from_exif(ifd0.u16(t::ORIENTATION).unwrap_or(1)),
-        // (linear YCbCr comes white-balanced: its unit multipliers have no place on the presets' curve)
-        color: ColorData { kelvin_presets: if linear_rgb { None } else { sr2().and_then(sr2_kelvin_presets) }, ..Default::default() },
+        // linear YCbCr comes white-balanced: its unit multipliers have no place on the presets' curve, the levels the
+        // camera balanced it with do (they read 1691 K / -190 through the ILCE-7M4's matrices as unit multipliers)
+        color: ColorData {
+            kelvin_presets: sr2().and_then(sr2_kelvin_presets),
+            balanced_as_shot: if linear_rgb { wb } else { None },
+            ..Default::default()
+        },
         // Sony's linear YCbCr already carries as-shot WB. Applying the CFA gains again
         // makes a neutral surface magenta. WB edits remain relative to this as-shot RGB.
         wb_multipliers: if linear_rgb { Some([1.0; 3]) } else { wb },
@@ -826,7 +936,7 @@ mod tests {
 
     #[test]
     fn downsized_lossless_is_linear_rgb_not_cfa() {
-        use lightcraft_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
+        use lcc_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
         let mut raw = IfdBuilder::new();
         raw.set(t::MAKE, Value::Ascii("SONY".into()));
         raw.set(t::MODEL, Value::Ascii("ILCE-7M4".into()));
@@ -848,6 +958,9 @@ mod tests {
         assert!(full.cfa.is_none());
         assert_eq!(full.data.len(), 48);
         assert_eq!(full.wb_multipliers, Some([1.0; 3]));
+        // the levels it was balanced with stay readable for the Kelvin scale's As Shot, in the header too
+        assert_eq!(full.color.balanced_as_shot, Some([2.0, 1.0, 2.0]));
+        assert_eq!(header.color.balanced_as_shot, Some([2.0, 1.0, 2.0]));
         // the YCbCr data sit 512 above the recorded sensor black level; white moves with it
         assert_eq!((full.black.mean(), full.white_at(0)), (1024.0, 16895.0));
         assert_eq!((header.black.mean(), header.white_at(0)), (1024.0, 16895.0));
@@ -884,7 +997,7 @@ mod tests {
 
     /// A 32767-compressed ARW whose single strip is `strip` bytes for a 32 x 4 image.
     fn arw_with_strip(strip: usize) -> Vec<u8> {
-        use lightcraft_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
+        use lcc_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
         let mut raw = IfdBuilder::new();
         raw.set(t::MAKE, Value::Ascii("SONY".into()));
         raw.set(t::MODEL, Value::Ascii("DSLR-A200".into()));
@@ -904,7 +1017,7 @@ mod tests {
     /// [`super::super::arw_lens_rm6`]).
     #[test]
     fn lens_tables_reach_opcode_list3() {
-        use lightcraft_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
+        use lcc_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
         let file = |model: &str, ca: bool| {
             let mut raw = IfdBuilder::new();
             raw.set(t::MAKE, Value::Ascii("SONY".into()));
@@ -941,11 +1054,11 @@ mod tests {
 
     #[test]
     fn strip_larger_or_smaller_than_one_byte_per_pixel_is_the_packed_variant() {
+        // read as ARW1 (a zero-filled strip is not a valid ARW1 stream)
         for strip in [32 * 4 + 8, 32 * 4 * 5 / 4 - 1, 32 * 4 - 1] {
-            for mode in [Mode::Header, Mode::Full] {
-                let err = decode(&arw_with_strip(strip), mode).unwrap_err();
-                assert!(matches!(err, RawError::Unsupported(ref m) if m.contains("packed compressed variant")), "{strip} {mode:?}: {err:?}");
-            }
+            assert!(decode(&arw_with_strip(strip), Mode::Header).is_ok(), "{strip}");
+            let err = decode(&arw_with_strip(strip), Mode::Full).unwrap_err();
+            assert!(matches!(err, RawError::Corrupt(ref m) if m.contains("ARW1")), "{strip}: {err:?}");
         }
         for mode in [Mode::Header, Mode::Full] {
             let r = decode(&arw_with_strip(32 * 4), mode);
@@ -955,7 +1068,7 @@ mod tests {
 
     /// A 32767-compressed, 12-bit ARW of `w` x `h` whose single strip is `strip`.
     fn packed_arw(w: u32, h: u32, strip: Vec<u8>) -> Vec<u8> {
-        use lightcraft_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
+        use lcc_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
         let mut raw = IfdBuilder::new();
         raw.set(t::MAKE, Value::Ascii("SONY".into()));
         raw.set(t::MODEL, Value::Ascii("DSLR-A900".into()));
@@ -1001,14 +1114,13 @@ mod tests {
         let (w, h) = (8usize, 4usize);
         let exact = w * h * 3 / 2;
         for strip in [exact - 1, exact + 1, exact + 3 * h] {
-            for mode in [Mode::Header, Mode::Full] {
-                let err = decode(&packed_arw(w as u32, h as u32, vec![0u8; strip]), mode).unwrap_err();
-                assert!(matches!(err, RawError::Unsupported(ref m) if m.contains("packed compressed variant")), "{strip} {mode:?}: {err:?}");
-            }
+            // not packed: read as ARW1, which a zero-filled strip is not
+            let err = decode(&packed_arw(w as u32, h as u32, vec![0u8; strip]), Mode::Full).unwrap_err();
+            assert!(matches!(err, RawError::Corrupt(ref m) if m.contains("ARW1")), "{strip}: {err:?}");
         }
         // an odd width cannot be packed in pairs
         let err = decode(&packed_arw(7, 4, vec![0u8; 7 * 4 * 3 / 2]), Mode::Full).unwrap_err();
-        assert!(matches!(err, RawError::Unsupported(_)), "{err:?}");
+        assert!(matches!(err, RawError::Corrupt(ref m) if m.contains("ARW1")), "{err:?}");
     }
 
     /// Encode one 16-value set as an ARW2 block (the paper's scheme, used here to test the decoder).
@@ -1092,7 +1204,7 @@ mod tests {
 
     #[test]
     fn tag2010_white_balance_by_model() {
-        use lightcraft_tiff::ByteOrder::Little;
+        use lcc_tiff::ByteOrder::Little;
         let mut plain = vec![0u8; 700];
         for (i, v) in [669u16, 256, 441].iter().enumerate() {
             plain[612 + 2 * i..614 + 2 * i].copy_from_slice(&v.to_le_bytes());
@@ -1115,8 +1227,8 @@ mod tests {
 
     /// A Sony-style file: IFD0 (`make`) → Exif → maker note `SONY DSC \0\0\0` + an IFD of `entries` (tag, type,
     /// count, inline value bytes), the layout of the camera's own notes; `count` overrides the entry count.
-    fn sony_file(order: lightcraft_tiff::ByteOrder, make: &str, entries: &[(u16, u16, u32, [u8; 4])], count: Option<u16>) -> Vec<u8> {
-        use lightcraft_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value};
+    fn sony_file(order: lcc_tiff::ByteOrder, make: &str, entries: &[(u16, u16, u32, [u8; 4])], count: Option<u16>) -> Vec<u8> {
+        use lcc_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value};
         let (u16b, u32b) = match order {
             ByteOrder::Little => (u16::to_le_bytes as fn(u16) -> [u8; 2], u32::to_le_bytes as fn(u32) -> [u8; 4]),
             ByteOrder::Big => (u16::to_be_bytes as fn(u16) -> [u8; 2], u32::to_be_bytes as fn(u32) -> [u8; 4]),
@@ -1141,7 +1253,7 @@ mod tests {
 
     #[test]
     fn dynamic_range_optimizer_is_read_from_the_sony_note() {
-        use lightcraft_tiff::ByteOrder::{Big, Little};
+        use lcc_tiff::ByteOrder::{Big, Little};
         let long = |order, v: u32| match order {
             Little => v.to_le_bytes(),
             Big => v.to_be_bytes(),
@@ -1176,7 +1288,7 @@ mod tests {
 
     #[test]
     fn hostile_sony_notes_are_read_safely() {
-        use lightcraft_tiff::ByteOrder::Little;
+        use lcc_tiff::ByteOrder::Little;
         let entry = [(MN_DYNAMIC_RANGE_OPTIMIZER, 4, 1, 3u32.to_le_bytes())];
         let good = sony_file(Little, "SONY", &entry, None);
         assert_eq!(crate::embedded_preview_dynamic_range_optimized(&good), Some(true));
@@ -1192,9 +1304,9 @@ mod tests {
         assert_eq!(crate::embedded_preview_dynamic_range_optimized(b"not a TIFF"), None);
         assert_eq!(crate::embedded_preview_dynamic_range_optimized(&[]), None);
         // a Sony file without a maker note
-        let mut ifd0 = lightcraft_tiff::IfdBuilder::new();
-        ifd0.set(t::MAKE, lightcraft_tiff::Value::Ascii("SONY".into()));
-        assert_eq!(crate::embedded_preview_dynamic_range_optimized(&lightcraft_tiff::TiffWriter::new(Little, false).write(&[ifd0]).unwrap()), None);
+        let mut ifd0 = lcc_tiff::IfdBuilder::new();
+        ifd0.set(t::MAKE, lcc_tiff::Value::Ascii("SONY".into()));
+        assert_eq!(crate::embedded_preview_dynamic_range_optimized(&lcc_tiff::TiffWriter::new(Little, false).write(&[ifd0]).unwrap()), None);
     }
 
     #[test]
@@ -1219,7 +1331,7 @@ mod tests {
     /// (reached through `DNGPrivateData` and the `SR2Private` IFD, as Sony stores it, with `key`; black level 800)
     /// and a maker note whose `Tag2010` block (RX100 III layout) holds `WB_RGBLevels`.
     fn arw_with_wb(plain: Option<[u16; 4]>, sr2: Option<[u16; 4]>, tag2010: Option<[u16; 3]>, key: [u8; 4]) -> Vec<u8> {
-        use lightcraft_tiff::{ByteOrder::Little, IfdBuilder, ImageData, TiffWriter, Value};
+        use lcc_tiff::{ByteOrder::Little, IfdBuilder, ImageData, TiffWriter, Value};
         let mut tag2010_block = vec![0u8; 700];
         for (i, v) in tag2010.unwrap_or([0; 3]).iter().enumerate() {
             tag2010_block[612 + 2 * i..614 + 2 * i].copy_from_slice(&v.to_le_bytes());
@@ -1288,7 +1400,7 @@ mod tests {
     /// balance; without the ID, or with one that isn't listed, there is no layout to read.
     #[test]
     fn rebadged_body_takes_its_tag2010_layout_from_the_sony_model_id() {
-        use lightcraft_tiff::{ByteOrder::Little, IfdBuilder, ImageData, TiffWriter, Value};
+        use lcc_tiff::{ByteOrder::Little, IfdBuilder, ImageData, TiffWriter, Value};
         let file = |make: &str, model: &str, id: Option<u16>| {
             let mut block = vec![0u8; 4600];
             for (i, v) in [639u16, 256, 368].iter().enumerate() {
@@ -1352,7 +1464,7 @@ mod tests {
 
     #[test]
     fn dsc_r1_sr2_subifd_gives_black_wb_and_crop() {
-        use lightcraft_tiff::ByteOrder::Little;
+        use lcc_tiff::ByteOrder::Little;
         let key = [0x63, 0xbe, 0x01, 0x3e];
         let enc = |crop: [u16; 4], wb: [u16; 4]| {
             let b = super::super::sr2::tests::block_keyed(
@@ -1434,7 +1546,7 @@ mod tests {
 
     #[test]
     fn sr2_black_level_decodes_and_rejects_garbage() {
-        use lightcraft_tiff::ByteOrder::Little;
+        use lcc_tiff::ByteOrder::Little;
         let plain = |levels: [u16; 4]| -> Vec<u8> { levels.iter().flat_map(|v| v.to_le_bytes()).collect() };
         assert_eq!(sr2_black_levels(&plain([800; 4]), Little), Some(800.0));
         assert_eq!(sr2_black_levels(&plain([512, 512, 514, 512]), Little), Some(512.5));
@@ -1467,13 +1579,13 @@ mod tests {
     }
 
     /// [`sr2_black`] on the encrypted `SR2SubIFD` bytes `block`, which start at file offset `start`.
-    fn sr2_black_in(block: &[u8], start: usize, order: lightcraft_tiff::ByteOrder) -> Option<f32> {
+    fn sr2_black_in(block: &[u8], start: usize, order: lcc_tiff::ByteOrder) -> Option<f32> {
         sr2_black(&super::super::sr2::SubIfd::decrypt(block, start, order))
     }
 
     #[test]
     fn sr2_black_level_follows_the_first_entry_to_its_layout() {
-        use lightcraft_tiff::ByteOrder::Little;
+        use lcc_tiff::ByteOrder::Little;
         let start = 37584;
         // the value position of every layout seen, e.g. the DSLR-A700's (62112 bytes, value at 1638) and the
         // DSLR-A450/A500/A550's (27152 bytes, value at 2166); the first four are those of bodies without a plain 0x7310
@@ -1502,7 +1614,7 @@ mod tests {
 
     #[test]
     fn word16_byte_order_follows_the_sample_range() {
-        use lightcraft_tiff::ByteOrder::{Big, Little};
+        use lcc_tiff::ByteOrder::{Big, Little};
         let be: Vec<u8> = (0..4096u16).flat_map(|i| (512 + i * 3).to_be_bytes()).collect(); // 512..12800 big-endian words
         assert_eq!(word16_order(&be, 14, Little), Big);
         let le: Vec<u8> = (0..4096u16).flat_map(|i| (512 + i * 3).to_le_bytes()).collect();

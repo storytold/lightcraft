@@ -1,6 +1,6 @@
-# lightcraft-tiff (L0)
+# lcc-tiff (L0)
 
-TIFF / IFD reader and writer. Used by `lightcraft-raw` (DNG, CR2, NEF, ARW…), `lightcraft-meta` (Exif) and
+TIFF / IFD reader and writer. Used by `lcc-raw` (DNG, CR2, NEF, ARW…), `lcc-meta` (Exif) and
 later the TIFF/DNG exporters.
 
 ## Features
@@ -20,7 +20,7 @@ later the TIFF/DNG exporters.
   inferred.
 - `directory_entries`, `entry_span`, `ParseOptions::budget_for` and `decode_value` are the reader's own rules
   (directory layout and entry limit, which entries it reads, its value budget, value decoding), for callers that
-  must select entries exactly as `parse_ifd_at` would without decoding the whole directory (`lightcraft-raw`'s
+  must select entries exactly as `parse_ifd_at` would without decoding the whole directory (`lcc-raw`'s
   Sony `SR2Private` lookup).
 - `TiffWriter` writes IFD chains with strips or tiles, `SubIFDs` and pointer IFDs, in either byte order,
   classic or BigTIFF; `writer::rational` / `srational` approximate floats as rationals.

@@ -1,0 +1,51 @@
+[package]
+name = "lcc-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Command-line tool: headless render, command listing and the MCP server"
+
+[[bin]]
+name = "app-cli"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+lcc-brand = { workspace = true }
+lcc-engine = { workspace = true }
+lcc-denoise = { workspace = true }
+lcc-camdb = { workspace = true }
+lcc-sysmem = { workspace = true }
+lcc-mcp = { workspace = true }
+log = { workspace = true }
+lcc-ui-egui = { workspace = true }
+lcc-codecs = { workspace = true }
+lcc-raster = { workspace = true }
+lcc-merge = { workspace = true }
+serde_json = { workspace = true }
+dhat = { workspace = true, optional = true }
+
+[features]
+default = ["denoise"]
+denoise = ["lcc-engine/denoise"]
+rawnind-model = ["denoise", "lcc-engine/rawnind-model"]
+# Heap profiling: `cargo run --release -p lcc-cli --features dhat-heap -- snapshot …` counts
+# every allocation (live/peak bytes in `library.memory` / `ui.inspect`) and writes dhat-heap.json
+# (open it in DHAT's viewer: allocation sites by bytes at the peak). Slows allocation-heavy work.
+dhat-heap = ["dep:dhat"]
+
+# Open HEIC/HEIF photos (the optional lcc-heif crate). Not default so distributors choose
+# it (HEVC patents); build with `--features heif` to include it.
+heif = ["lcc-codecs/heif"]
+
+[dev-dependencies]
+# the SIL harness (tests/sil.rs) generates its test photos
+lcc-scenes = { workspace = true }
+
+# M14: end-to-end video tests encode a synthetic clip in-test and re-decode the export
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies.lcc-video]
+workspace = true
+features = ["test-util"]

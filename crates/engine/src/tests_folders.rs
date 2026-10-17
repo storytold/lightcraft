@@ -1,5 +1,5 @@
 //! Exploring the library by folder: `library.folders` lists where the imported photos live and
-//! `library.filter {libraryFolder}` shows one folder's photos (see `lightcraft_catalog::folders`);
+//! `library.filter {libraryFolder}` shows one folder's photos (see `lcc_catalog::folders`);
 //! `library.removeFolder` takes a folder's photos out of the library.
 //!
 //! * Given photos imported from two folders, an agent can list them with counts, then choose one
@@ -14,7 +14,7 @@
 //! * A labelled folder keeps its label when it is renamed or moved on disk, and so do the folders
 //!   inside it; undo puts the labels back where they were.
 
-use lightcraft_catalog::{Op, Photo, Source};
+use lcc_catalog::{Op, Photo, Source};
 use serde_json::json;
 
 use crate::{LibrarySource, Session, filter_chips};
@@ -212,7 +212,7 @@ fn the_folder_filter_takes_only_a_text_path() {
 
 /// Folders are compared by identity: a path read back may be spelled with the platform's separator.
 fn same_folder(actual: Option<&str>, expected: &str, why: &str) {
-    let key = lightcraft_catalog::query::folder_key;
+    let key = lcc_catalog::query::folder_key;
     assert_eq!(actual.map(key), Some(key(expected)), "{why}: {actual:?} vs {expected}");
 }
 
@@ -482,22 +482,18 @@ fn the_state_names_a_folder_only_while_it_is_shown() {
 fn a_blank_folder_filter_is_no_filter() {
     let mut s = session();
     s.execute("library.filter", &json!({"libraryFolder": "  "})).unwrap();
-    assert_eq!(s.filter, lightcraft_catalog::Filter::default(), "no hidden 'filters active' state");
+    assert_eq!(s.filter, lcc_catalog::Filter::default(), "no hidden 'filters active' state");
 }
 
 /// The label `library.folders` reports for the row at `path`.
 fn listed_label(s: &mut Session, path: &str) -> Option<String> {
     fn find(rows: &serde_json::Value, key: &str) -> Option<serde_json::Value> {
         rows.as_array()?.iter().find_map(|r| {
-            if r["path"].as_str().map(lightcraft_catalog::query::folder_key).as_deref() == Some(key) {
-                Some(r.clone())
-            } else {
-                find(&r["children"], key)
-            }
+            if r["path"].as_str().map(lcc_catalog::query::folder_key).as_deref() == Some(key) { Some(r.clone()) } else { find(&r["children"], key) }
         })
     }
     let rows = s.execute("library.folders", &json!({})).unwrap();
-    let row = find(&rows, &lightcraft_catalog::query::folder_key(path)).unwrap_or_else(|| panic!("no row for {path}: {rows}"));
+    let row = find(&rows, &lcc_catalog::query::folder_key(path)).unwrap_or_else(|| panic!("no row for {path}: {rows}"));
     row["label"].as_str().map(str::to_string)
 }
 
@@ -584,7 +580,7 @@ fn a_label_comes_off_a_folder_whose_photos_are_gone() {
 // ---- folder.create and photo.moveToFolder (issue #765)
 
 /// A library photo of the real file `path` (written with `body`); returns its id.
-fn add_file(s: &mut Session, path: &str, body: &str) -> lightcraft_catalog::PhotoId {
+fn add_file(s: &mut Session, path: &str, body: &str) -> lcc_catalog::PhotoId {
     std::fs::write(path, body).unwrap();
     let id = s.catalog.alloc_photo_id();
     let name = std::path::Path::new(path).file_name().unwrap().to_string_lossy().to_string();
@@ -593,7 +589,7 @@ fn add_file(s: &mut Session, path: &str, body: &str) -> lightcraft_catalog::Phot
     id
 }
 
-fn file_of(s: &Session, id: lightcraft_catalog::PhotoId) -> String {
+fn file_of(s: &Session, id: lcc_catalog::PhotoId) -> String {
     match &s.catalog.photo(id).unwrap().source {
         Source::File { path } => path.clone(),
         _ => panic!("not a file"),

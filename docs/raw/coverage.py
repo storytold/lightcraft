@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Measure LightCraft's raw camera coverage against Adobe's supported-camera list.
+"""Measure the app's raw camera coverage against Adobe's supported-camera list.
 
     python3 docs/raw/coverage.py            # print the summary, rewrite docs/raw/coverage.tsv
     python3 docs/raw/coverage.py --check    # exit 1 if coverage.tsv is stale
@@ -28,16 +28,22 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 # Olympus ORF bodies that write uncompressed / packed data (crates/raw/src/vendor/orf.rs). Everything else
-# writes compressed ORF, which is preview-only (the E-M5 II / PEN-F high-res mode alone is decoded).
+# writes compressed ORF, decoded by `decode_compressed` in the same file.
 ORF_DECODED = re.compile(r"^(E-1|E-10|E-20|EVOLT E-300|EVOLT E-330|EVOLT E-400|EVOLT E-500|E-300|E-330|E-500|Camedia C-\S+.*|Stylus XZ-2 iHS)$")
-# Samsung SRW bodies with compressed raw data (crates/raw/src/vendor/srw.rs refuses 32770 / 32772 / 32773).
+# Samsung SRW bodies with compressed raw data (32770 / 32772 / 32773, decoded by crates/raw/src/vendor/srwc.rs).
 SRW_COMPRESSED = re.compile(r"(^|\W)(NX1|NX30|NX300|NX300M|NX500|NX2000|NX3000|NX3300|NX mini|EK-GN\d+|EK-KN\d+)(\W|$)")
-# Fujifilm bodies before the X series whose RAF has no raw IFD (crates/raw/src/vendor/raf.rs).
-RAF_OLD = re.compile(r"^(FinePix (E|F|S\d|S\d{3,4}|IS)|IS Pro|S5Pro|S3Pro|S2Pro)", re.I)
+# Fujifilm SuperCCD EXR bodies whose RAF stores an upright EXR array without a raw IFD (refused by
+# crates/raw/src/vendor/raf_superccd.rs). The other pre-X bodies decode: SuperCCD lattices in raf_superccd.rs,
+# the rest through the raw IFD in raf.rs.
+RAF_OLD = re.compile(r"^FinePix S20[05] EXR", re.I)
+
+# Canon CRW bodies with a CMYG colour filter (crates/raw/src/vendor/crw.rs refuses them).
+CRW_CMYG = {"PowerShot 600", "PowerShot A5", "PowerShot A50", "PowerShot G1", "PowerShot Pro70", "PowerShot Pro90 IS"}
 
 # Probability that an unverified body of a format decodes correctly, used for the use-weighted share only.
 CONFIDENCE = {"DNG": 0.95, "CR2": 0.95, "CR3": 0.6, "NEF": 0.9, "NRW": 0.9, "ARW": 0.9, "SR2": 0.8, "RAF": 0.95,
-              "RW2": 0.95, "RWL": 0.95, "RAW": 0.95, "PEF": 0.9, "ORF": 0.8, "SRW": 0.8}
+              "RW2": 0.95, "RWL": 0.95, "RAW": 0.95, "PEF": 0.9, "ORF": 0.8, "SRW": 0.8,
+              "MRW": 0.9, "ERF": 0.9, "MEF": 0.9, "CRW": 0.9}
 
 
 def read_tsv(name):
@@ -61,14 +67,16 @@ def classify(maker, camera, ext_field):
         if e == "CR3":
             return "unverified", "CR3", "CRX decoder: lossless and C-RAW 0x100 / 0x200 single-tile; other variants fall back to the preview"
         if e in ("NEF", "NRW"):
-            return "unverified", e, "NEF decoder (uncompressed, lossless, lossy, lossy after split); HE / HE* setting preview-only"
+            return "unverified", e, "NEF decoder (uncompressed, lossless, lossy, lossy after split, table-less packed 12 / 14-bit); HE / HE* setting preview-only"
         if e == "ARW":
-            return "unverified", "ARW", "ARW decoder (uncompressed, cRAW, packed 12-bit, lossless, downsized YCbCr)"
+            return "unverified", "ARW", "ARW decoder (ARW version 1, uncompressed, cRAW, packed 12-bit, lossless, downsized YCbCr)"
         if e == "SR2":
             return "unverified", "SR2", "SR2 decoder"
+        if e == "SRF":
+            return "unsupported", "SRF", "SRF is discovered; sensor decoding unsupported, usable preview not verified on a real file"
         if e == "RAF":
             if RAF_OLD.search(camera):
-                return "preview", "RAF", "pre-X FinePix RAF without a raw IFD"
+                return "preview", "RAF", "SuperCCD EXR RAF stored upright without a raw IFD"
             return "unverified", "RAF", "RAF decoder (uncompressed, lossless / lossy compressed, Bayer and X-Trans)"
         if e in ("RW2", "RWL") or (e == "RAW" and maker in ("Panasonic", "Leica")):
             return "unverified", e, "Panasonic decoder, every raw format"
@@ -77,17 +85,23 @@ def classify(maker, camera, ext_field):
         if e == "ORF":
             if ORF_DECODED.match(camera):
                 return "unverified", "ORF", "uncompressed / packed ORF"
-            return "preview", "ORF", "compressed ORF is not decoded"
+            return "unverified", "ORF", "compressed ORF decoder"
         if e == "SRW":
             if SRW_COMPRESSED.search(camera):
-                return "preview", "SRW", "compressed SRW is not decoded"
+                return "unverified", "SRW", "compressed SRW (srwc.rs)"
             return "unverified", "SRW", "uncompressed / packed SRW"
+        if e == "MRW":
+            return "unverified", "MRW", "MRW decoder (16-bit words, 12-bit packing; vendor/mrw.rs)"
+        if e == "CRW":
+            if camera in CRW_CMYG:
+                return "preview", "CRW", "CMYG CRW is opened from its embedded JPEG only"
+            return "unverified", "CRW", "CRW decoder (CIFF, Huffman blocks, low bits; vendor/crw.rs)"
+        if e == "MEF":
+            return "unverified", "MEF", "MEF decoder (uncompressed 12-bit; vendor/mef.rs)"
+        if e == "ERF":
+            return "unverified", "ERF", "ERF decoder (12-bit 16-byte blocks; vendor/erf.rs)"
     e = es[0] if es else ""
-    if e == "MEF":
-        return "unverified", "MEF", "MEF decoder (uncompressed 12-bit)"
-    if e == "ERF":
-        return "unverified", "ERF", "ERF decoder (12-bit 16-byte blocks)"
-    if e in ("CRW", "3FR", "FFF", "IIQ", "MOS", "KDC", "MRW", "X3F", "RAW", "ORI"):
+    if e in ("3FR", "FFF", "IIQ", "MOS", "KDC", "X3F", "RAW", "ORI"):
         return "preview", e, f"{e} is opened from its embedded JPEG only"
     return "unsupported", e, f"{e or 'unknown'} is not imported"
 

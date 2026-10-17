@@ -1,0 +1,119 @@
+# Quality gates (docs/ci.md).
+# PRs and pushes to main run the FAST gate: Linux `cargo xtask ci --fast` (fmt, brand, docs, clippy, heif
+# clippy, parity, layers, assets, deny, wasm; no unit-test run) plus the SIL suite when it exists; macOS
+# and Windows build + clippy only.
+# Pushes to `release` and manual dispatch run the FULL gate: `cargo xtask ci` with every test on Linux,
+# and the workspace tests on macOS and Windows. FreeBSD has its own workflow (freebsd.yml).
+name: CI
+
+on:
+  push:
+    branches: [main, release]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  # A manual (full) run has its own group: GitHub keeps one waiting run per group, so a push to the same
+  # ref would otherwise replace a dispatched pre-release run that is still waiting for a runner.
+  group: ci-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && 'full' || 'push' }}
+  # On main every push keeps its run (a newer push waits behind it), so a run of merges still gets
+  # a result; on other refs a newer push replaces the older run.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  CARGO_PROFILE_DEV_DEBUG: 0
+  RUST_BACKTRACE: 1
+  # Fonts (optional build input): the CJK font tests run instead of skipping.
+  CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+  CRAFT_FONTS_REQUIRED: "1"
+  # full test runs only before a release (push to `release`) or on manual dispatch
+  FULL_CI: ${{ (github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/release') && '1' || '' }}
+
+jobs:
+  linux:
+    name: Linux (cargo xtask ci)
+    # Every job runs on the maintainer's self-hosted runners (docs/ci.md). Runs for outside
+    # contributors' PRs wait for approval, given after the maintainer has read the PR's code.
+    runs-on: [self-hosted, Linux, X64, lcc]
+    defaults:
+      run:
+        # low priority: the runner machines are also used interactively
+        shell: nice -n 19 bash -e {0}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: storytold/craft-fonts
+          ref: 3d9ab3a132ed0eff457e424226a435a901da30d3 # same pin as release.yml / freebsd.yml
+          path: craft-fonts
+      - name: Keep the build cache between runs
+        # One cache per runner instance (several can share a machine and run at once); a runner's
+        # .env may set CARGO_TARGET_DIR itself.
+        run: echo "CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-$HOME/.cache/lcc-ci-target-$RUNNER_NAME}" >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: rustfmt, clippy
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny,cargo-nextest
+      # full run (CI=true): the test stage runs cargo-nextest with retries and ci/quarantine.toml (docs/ci.md)
+      - name: cargo xtask ci (--fast unless a release / manual run)
+        shell: bash
+        run: |
+          if [ -n "$FULL_CI" ]; then cargo xtask ci; else cargo xtask ci --fast; fi
+      # Software-in-the-loop suite (docs/testing-sil.md); skipped until `cargo xtask sil` exists.
+      - name: SIL suite
+        shell: bash
+        run: |
+          if grep -q 'Some("sil")' xtask/src/main.rs; then cargo xtask sil; else echo "SIL suite not present yet; skipped"; fi
+
+  test:
+    name: ${{ matrix.name }} (clippy + build; tests before a release)
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # the maintainer's self-hosted runners (docs/ci.md)
+          - name: macOS
+            runner: '["self-hosted", "macOS", "ARM64", "lcc"]'
+          - name: Windows
+            runner: '["self-hosted", "Windows", "X64", "lcc"]'
+    runs-on: ${{ fromJSON(matrix.runner) }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: storytold/craft-fonts
+          ref: 3d9ab3a132ed0eff457e424226a435a901da30d3 # same pin as release.yml / freebsd.yml
+          path: craft-fonts
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          components: clippy
+      - name: Low priority
+        shell: bash
+        run: |
+          case "$RUNNER_OS" in
+            Windows) powershell -NoProfile -Command "Get-Process -Name Runner.Worker | ForEach-Object { \$_.PriorityClass = 'BelowNormal' }" || true ;;
+            macOS) renice -n 19 -p $PPID >/dev/null ;;  # nice only: taskpolicy -b confines work to the efficiency cores
+          esac
+      - uses: taiki-e/install-action@v2
+        if: env.FULL_CI == '1'
+        with:
+          tool: cargo-nextest
+      - name: build
+        run: cargo build --workspace --locked
+      - name: clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      # nextest with retries; quarantined tests (ci/quarantine.toml) run apart and only warn (docs/ci.md)
+      - name: test
+        if: env.FULL_CI == '1'
+        run: cargo xtask quarantine test

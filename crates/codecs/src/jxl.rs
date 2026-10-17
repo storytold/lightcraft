@@ -8,7 +8,7 @@ use crate::convert::{Buf, Meta, Model, Raw, check_size, finish};
 use crate::space::{NamedSpace, SourceSpace, SpaceOrigin, Trc};
 use crate::{DecodeOptions, Decoded, Error, Format, Result};
 use jxl_oxide::color::{ColourSpace, EnumColourEncoding, Primaries, RenderingIntent, TransferFunction, WhitePoint};
-use jxl_oxide::{AuxBoxData, JxlImage};
+use jxl_oxide::{AllocTracker, AuxBoxData, InitializeResult, JxlImage};
 
 const F: Format = Format::Jxl;
 
@@ -16,10 +16,59 @@ fn err(e: impl std::fmt::Display) -> Error {
     Error::Malformed(F, e.to_string())
 }
 
+/// Bytes the decoder may hold per allowed pixel: four f32 channels, eight times over for frames,
+/// extra channels and working buffers. The budget follows `max_pixels`, so oversized frames, extra
+/// channels or modular trees inside an image of allowed size still fail (#1517).
+const TRACKED_BYTES_PER_PIXEL: u64 = 4 * 4 * 8;
+
+/// The allocation budget never drops below this, so small images keep the decoder's fixed
+/// overhead (group buffers, entropy tables) whatever `max_pixels` is.
+const MIN_TRACKED_BYTES: u64 = 64 << 20;
+
+/// Bytes handed to the header stage at a time (the size `JxlImageBuilder::read` reads in).
+const HEADER_CHUNK: usize = 4096;
+
+/// Parses the header, checks the image size against `opts`, and only then reads the frames, with
+/// an allocation budget, so a huge image is refused before any of its pixels are decoded
+/// (`JxlImageBuilder::read` loads everything first).
+fn open(bytes: &[u8], opts: &DecodeOptions) -> Result<JxlImage> {
+    let budget = opts.max_pixels.saturating_mul(TRACKED_BYTES_PER_PIXEL).max(MIN_TRACKED_BYTES);
+    let tracker = AllocTracker::with_limit(usize::try_from(budget).unwrap_or(usize::MAX));
+    let mut uninit = JxlImage::builder().alloc_tracker(tracker).build_uninit();
+    // Small slices, as `read` does: whatever the header stage has buffered when it initializes is
+    // parsed as frame data right away, so feeding the whole file here would skip the size check.
+    let mut rest = bytes;
+    let mut window = HEADER_CHUNK;
+    let mut img = loop {
+        let consumed = uninit.feed_bytes(rest.get(..window).unwrap_or(rest)).map_err(err)?;
+        rest = rest.get(consumed..).unwrap_or_default();
+        match uninit.try_init().map_err(err)? {
+            InitializeResult::Initialized(img) => break img,
+            InitializeResult::NeedMoreData(more) => uninit = more,
+        }
+        if consumed == 0 {
+            // the parser wants more than the window holds at once
+            if window >= rest.len() {
+                return Err(err("truncated JPEG XL header"));
+            }
+            window = window.saturating_mul(2);
+        }
+    };
+    check_size(F, img.width() as u64, img.height() as u64, opts)?;
+    while !rest.is_empty() {
+        let consumed = img.feed_bytes(rest).map_err(err)?;
+        if consumed == 0 {
+            break;
+        }
+        rest = rest.get(consumed..).unwrap_or_default();
+    }
+    img.finalize().map_err(err)?;
+    Ok(img)
+}
+
 pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Decoded> {
-    let mut img = JxlImage::builder().read(std::io::Cursor::new(bytes)).map_err(err)?;
+    let mut img = open(bytes, opts)?;
     let (w, h) = (img.width(), img.height());
-    check_size(F, w as u64, h as u64, opts)?;
     let header = img.image_header();
     let bits = header.metadata.bit_depth.bits_per_sample() as u8;
     let float = matches!(header.metadata.bit_depth, jxl_oxide::image::BitDepth::FloatSample { .. });
@@ -59,7 +108,7 @@ pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Decoded> {
     let keep = n_color + has_alpha as usize;
     let src = fb.buf();
     let mut v = Vec::with_capacity(fw * fh * keep);
-    let to_2020 = lightcraft_color::SRGB.to_space(&lightcraft_color::REC2020).to_f32();
+    let to_2020 = lcc_color::SRGB.to_space(&lcc_color::REC2020).to_f32();
     for px in src.chunks_exact(ch) {
         let start = v.len();
         v.extend_from_slice(&px[..keep.min(ch)]);

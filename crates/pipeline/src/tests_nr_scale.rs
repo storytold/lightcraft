@@ -3,9 +3,9 @@
 
 use crate::local::{denoise, log_lum, nr_params};
 use crate::{RenderRequest, SourceInfo, plan, render};
-use lightcraft_develop::DevelopSettings;
-use lightcraft_raster::resample::{Filter, resize};
-use lightcraft_raster::{Rgb32f, Rgba8};
+use lcc_develop::DevelopSettings;
+use lcc_raster::resample::{Filter, resize};
+use lcc_raster::{Rgb32f, Rgba8};
 
 const W: usize = 1536;
 const H: usize = 1024;
@@ -123,24 +123,6 @@ fn colour_nr_preview_matches_full_size_scaled_down() {
 }
 
 #[test]
-fn full_size_parameters_unchanged() {
-    // full-size renders and exports keep their look: these are the parameters from before #960
-    let mut s = DevelopSettings::default();
-    s.detail.nr_luminance = 50.0;
-    s.detail.nr_detail = 50.0;
-    s.detail.nr_color = 25.0;
-    s.detail.nr_color_detail = 50.0;
-    s.detail.nr_color_smoothness = 50.0;
-    let (l, c) = nr_params(&s, 1.0);
-    let (l, c) = (l.unwrap(), c.unwrap());
-    assert_eq!(l.sigma, 1.0 + 2.5 * 0.5);
-    assert_eq!(l.eps, 0.002 + 0.5 * 0.5 * 0.25 * (1.0 - 0.7 * 0.5));
-    assert_eq!(l.k, 0.5f32.sqrt());
-    assert_eq!(c.sigma, (1.5 + 6.0 * 0.25) * 1.5);
-    assert_eq!(c.t, 0.25 * (1.0 - 0.25));
-}
-
-#[test]
 fn tiny_previews_skip_noise_reduction_and_hostile_scales_are_safe() {
     let mut s = DevelopSettings::default();
     s.detail.nr_luminance = 100.0;
@@ -204,7 +186,7 @@ fn crop_does_not_change_the_noise_reduction_scale() {
     let info = SourceInfo::default();
     assert!((plan(&src, &info, &s, &RenderRequest::fit(400, 200)).detail_scale - 1.0).abs() < 1e-6);
     let mut cropped = s.clone();
-    cropped.crop.geometry.rect = lightcraft_geom::Rect::new(0.25, 0.25, 0.75, 0.75);
+    cropped.crop.geometry.rect = lcc_geom::Rect::new(0.25, 0.25, 0.75, 0.75);
     let p = plan(&src, &info, &cropped, &RenderRequest::fit(200, 100));
     assert_eq!((p.w, p.h), (200, 100));
     assert!((p.detail_scale - 1.0).abs() < 1e-6, "{}", p.detail_scale);

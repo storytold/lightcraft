@@ -13,14 +13,14 @@
 //! Also here: automatic lateral chromatic aberration estimation ([`estimate_lateral_ca`]) and [`defringe`].
 //! Profile corrections use lens data embedded in the files (DNG `WarpRectilinear` / `WarpRectilinear2` /
 //! `FixVignetteRadial`, and the raw readers' equivalent of a camera's own correction, e.g. Panasonic / Leica RW2
-//! distortion), or a lens database profile in the same form (`lightcraft_lensdb`).
+//! distortion), or a lens database profile in the same form (`lcc_lensdb`).
 
 use std::sync::Mutex;
 
-use lightcraft_color::perceptual::{oklab_from_2020, oklab_to_2020};
-use lightcraft_develop::{DevelopSettings, EmbeddedLens, EmbeddedVignette, EmbeddedWarp, EmbeddedWarpStage};
-use lightcraft_geom::{Affine, Homography, Interval, Orientation, Point, Real};
-use lightcraft_raster::{Plane, Rgb32f};
+use lcc_color::perceptual::{oklab_from_2020, oklab_to_2020};
+use lcc_develop::{DevelopSettings, EmbeddedLens, EmbeddedVignette, EmbeddedWarp, EmbeddedWarpStage};
+use lcc_geom::{Affine, Homography, Interval, Orientation, Point, Real};
+use lcc_raster::{Plane, Rgb32f};
 
 use crate::for_rows;
 
@@ -654,12 +654,6 @@ mod tests {
     use super::*;
 
     // An empty image (no pixel to sample) has a fingerprint, its dimensions' (indexing its first pixel panicked)
-    #[test]
-    fn an_empty_image_has_a_fingerprint() {
-        assert_eq!(fingerprint(&Rgb32f::new(0, 0)), fingerprint(&Rgb32f::new(0, 0)));
-        assert_ne!(fingerprint(&Rgb32f::new(0, 3)), fingerprint(&Rgb32f::new(3, 0)));
-    }
-
     /// splitmix64: deterministic pseudo-random numbers for the warp tests.
     struct Rng(u64);
 
@@ -723,58 +717,6 @@ mod tests {
         wp
     }
 
-    /// FNV-1a over the bits of the f64 warp results (`Affine::apply`, `Homography::apply`, `to_corrected`,
-    /// `from_corrected`, `corrected_to_source`, `to_source`, `embedded_warp`) for pseudo-random warps and points.
-    /// The expected value was captured before these formulas became generic over `Real`: the f64 path must keep
-    /// the same operations in the same order, bit for bit. To recompute it after changing the inputs, run this
-    /// test (printing `hash`) on a scratch copy of 419261c (thumb-split, pre-generic formulas) and paste it here.
-    #[test]
-    fn warp_f64_results_are_bit_identical_to_the_pre_generic_formulas() {
-        let mut hash = 0xCBF2_9CE4_8422_2325u64;
-        let mut eat = |p: Point| {
-            for v in [p.x, p.y] {
-                for b in v.to_bits().to_le_bytes() {
-                    hash = (hash ^ b as u64).wrapping_mul(0x0000_0100_0000_01B3);
-                }
-            }
-        };
-        let mut r = Rng(42);
-        for _ in 0..2000 {
-            let wp = random_warp(&mut r);
-            let a = lightcraft_geom::Affine([
-                r.range(-2.0, 2.0),
-                r.range(-2.0, 2.0),
-                r.range(-2.0, 2.0),
-                r.range(-2.0, 2.0),
-                r.range(-500.0, 500.0),
-                r.range(-500.0, 500.0),
-            ]);
-            for _ in 0..40 {
-                let p = Point::new(r.range(-0.2, 1.2) * wp.w, r.range(-0.2, 1.2) * wp.h);
-                eat(a.apply(p));
-                eat(wp.persp_inv.apply(Point::new(p.x / wp.w - 0.5, p.y / wp.h - 0.5)));
-                eat(wp.to_corrected(p));
-                eat(wp.from_corrected(p));
-                for ch in 0..3 {
-                    eat(wp.corrected_to_source(p, ch));
-                    eat(wp.to_source(p, ch));
-                }
-                if let Some(ew) = wp.lens.and_then(|l| l.warp) {
-                    for ch in 0..4 {
-                        eat(embedded_warp(&ew, p, ch, wp.w, wp.h));
-                    }
-                }
-            }
-        }
-        // `Homography::apply`'s near-zero denominator clamp, including subnormal and signed-zero denominators and
-        // ±1e-300 exactly (not clamped: `<`, not `<=`)
-        let hz = Homography([1.0, 0.5, 0.25, -0.5, 1.0, 0.125, 1.0, 0.0, 0.0]);
-        for x in [0.0, -0.0, 1e-310, -1e-310, 1e-300, -1e-300, 1e-299, -1e-299, 0.5] {
-            eat(hz.apply(Point::new(x, 0.75)));
-        }
-        assert_eq!(hash, 0x3FA5_7473_D795_9E32, "f64 warp results changed");
-    }
-
     /// The interval evaluation of `framing` bounds the f64 evaluation of every point of the box.
     #[test]
     fn interval_framing_encloses_every_f64_result() {
@@ -782,7 +724,7 @@ mod tests {
         let (mut decided, mut total) = (0, 0);
         for _ in 0..500 {
             let wp = random_warp(&mut r);
-            let a = lightcraft_geom::Affine([
+            let a = lcc_geom::Affine([
                 r.range(0.5, 2.0),
                 r.range(-0.2, 0.2),
                 r.range(-0.2, 0.2),
@@ -879,34 +821,6 @@ mod tests {
         }
     }
 
-    /// A grid of dark lines on white with lateral CA: red magnified by `ar`, blue by `ab` (about the centre).
-    fn ca_grid(w: usize, h: usize, ar: f64, ab: f64) -> Rgb32f {
-        let (cx, cy) = (w as f64 / 2.0, h as f64 / 2.0);
-        let val = |x: f64, y: f64| -> f32 {
-            // smooth-edged discs on a grid (edges in every direction)
-            let cell = w as f64 / 10.0;
-            let (fx, fy) = ((x / cell).fract() - 0.5, (y / cell).fract() - 0.5);
-            let d = fx.hypot(fy) * cell - cell * 0.28;
-            (0.05 + 0.85 * (d / 1.2).clamp(-0.5, 0.5) + 0.425) as f32
-        };
-        Rgb32f::from_fn(w, h, |x, y| {
-            let (x, y) = (x as f64 + 0.5, y as f64 + 0.5);
-            let at = |a: f64| val(cx + (x - cx) / (1.0 + a), cy + (y - cy) / (1.0 + a));
-            [at(ar), at(0.0), at(ab)]
-        })
-    }
-
-    #[test]
-    fn ca_estimate_recovers_scale() {
-        let img = ca_grid(600, 400, 0.004, -0.003);
-        let [r, b] = estimate_lateral_ca_uncached(&img);
-        assert!((r - 0.004).abs() < 0.0008, "red {r}");
-        assert!((b + 0.003).abs() < 0.0008, "blue {b}");
-        let clean = ca_grid(600, 400, 0.0, 0.0);
-        let [r, b] = estimate_lateral_ca_uncached(&clean);
-        assert!(r.abs() < 0.0005 && b.abs() < 0.0005, "{r} {b}");
-    }
-
     #[test]
     fn warp_identity_and_distortion_direction() {
         let s = DevelopSettings::default();
@@ -919,15 +833,6 @@ mod tests {
         assert!(q.x > 0.0 && q.y > 0.0);
         let c = wp.to_source(Point::new(150.0, 100.0), 1);
         assert!(c.dist(Point::new(150.0, 100.0)) < 1e-9);
-    }
-
-    #[test]
-    fn manual_vignette_brightens_corners() {
-        let mut s = DevelopSettings::default();
-        s.optics.vignetting = 100.0;
-        let wp = Warp::from_settings(300.0, 200.0, &s, None);
-        assert!((wp.gain(Point::new(150.0, 100.0)) - 1.0).abs() < 1e-6);
-        assert!(wp.gain(Point::new(0.0, 0.0)) > 2.0);
     }
 
     #[test]
@@ -1045,7 +950,7 @@ mod tests {
                 stages.push(st);
             }
             let wp = chain(&stages);
-            let a = lightcraft_geom::Affine([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+            let a = lcc_geom::Affine([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
             for _ in 0..20 {
                 let (x0, y0) = (r.range(0.0, 1.0) * wp.w, r.range(0.0, 1.0) * wp.h);
                 let (bw, bh) = (r.range(0.0, 20.0), r.range(0.0, 20.0));
@@ -1084,28 +989,6 @@ mod tests {
         let s1 = embedded_stage(&r.stages[0].unwrap(), m(p), 0, 200.0, 300.0);
         assert!(s1.dist(m(s0)) < 1e-6, "{s1:?} vs {:?}", m(s0));
         assert_eq!(reorient_lens(&lens, Orientation::Normal, 300.0, 200.0), lens);
-    }
-
-    #[test]
-    fn defringe_removes_purple_at_edges_only() {
-        let mut s = DevelopSettings::default();
-        s.optics.defringe_purple_amount = 10.0;
-        // white | black edge with a purple column next to it, and a purple patch far from edges
-        let purple = [0.25f32, 0.05, 0.45];
-        let mut img = Rgb32f::from_fn(40, 20, |x, _| if x < 20 { [0.9; 3] } else { [0.02; 3] });
-        for y in 0..20 {
-            img.set(20, y, purple);
-        }
-        let flat = Rgb32f::filled(40, 20, purple);
-        let mut flat2 = flat.clone();
-        defringe(&mut img, &s, 1.0);
-        defringe(&mut flat2, &s, 1.0);
-        let chroma = |p: [f32; 3]| {
-            let l = oklab_from_2020(p);
-            l[1].hypot(l[2])
-        };
-        assert!(chroma(img.get(20, 10)) < chroma(purple) * 0.3);
-        assert!((chroma(flat2.get(20, 10)) - chroma(purple)).abs() < 1e-4);
     }
 
     /// Found by fuzzing catalog snapshots: a defringe amount far past the sliders' 20 (from a

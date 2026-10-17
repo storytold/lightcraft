@@ -5,10 +5,10 @@
 
 use std::time::Duration;
 
-use lightcraft_catalog::PhotoId;
+use lcc_catalog::PhotoId;
 use serde_json::{Value, json};
 
-use crate::LightcraftApp;
+use crate::LccApp;
 use crate::headless::Headless;
 use crate::state::ViewMode;
 
@@ -17,7 +17,7 @@ const SETTLE: Duration = Duration::from_secs(120);
 
 fn demo() -> Headless {
     let services = crate::Services { png: None, ..Default::default() };
-    let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+    let mut app = LccApp::new(lcc_engine::Session::with_demo(), services);
     app.ui.view = ViewMode::PhotoGrid;
     Headless::new(app, [1300.0, 900.0], 1.0)
 }
@@ -34,10 +34,10 @@ fn folder(name: &str, n: u8) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("lc-ui-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let o = lightcraft_engine::export::ExportOptions { format: lightcraft_engine::export::ExportFormat::Png, ..Default::default() };
+    let o = lcc_engine::export::ExportOptions { format: lcc_engine::export::ExportFormat::Png, ..Default::default() };
     for i in 0..n {
-        let img = lightcraft_raster::Rgba8::from_fn(24, 16, |x, y| [(x * 9) as u8, (y * 12) as u8, 40 * i, 255]);
-        std::fs::write(dir.join(format!("p{i}.png")), lightcraft_engine::export::encode_image(&img, &o).unwrap()).unwrap();
+        let img = lcc_raster::Rgba8::from_fn(24, 16, |x, y| [(x * 9) as u8, (y * 12) as u8, 40 * i, 255]);
+        std::fs::write(dir.join(format!("p{i}.png")), lcc_engine::export::encode_image(&img, &o).unwrap()).unwrap();
     }
     dir
 }

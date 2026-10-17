@@ -6,7 +6,7 @@
 //! everything ever decoded. `malloc_zone_pressure_relief` (libSystem) returns those pages now.
 //! Elsewhere (glibc, Windows) blocks this large are unmapped when freed: nothing to do.
 //!
-//! This is LightCraft's only crate allowed `unsafe` (one FFI call, in `macos`). Its API is safe,
+//! This is the workspace's only crate allowed `unsafe` (one FFI call, in `macos`). Its API is safe,
 //! and on failure or on other platforms it simply releases nothing.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 

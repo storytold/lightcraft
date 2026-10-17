@@ -1,20 +1,20 @@
-//! [`lightcraft_raw::sparse::header_plan`] over `corpus/raw/**` (git-ignored CC0 samples from
-//! raw.pixls.us, fetched with `cargo xtask corpus --download`; `LIGHTCRAFT_CORPUS` overrides the
+//! [`lcc_raw::sparse::header_plan`] over `corpus/raw/**` (git-ignored CC0 samples from
+//! raw.pixls.us, fetched with `cargo xtask corpus --download`; `<PREFIX>_CORPUS` overrides the
 //! corpus root). Skips cleanly when absent.
 //!
 //! For every file the plan reaches `Ready` on, probing the partly loaded buffer must give exactly
 //! what probing the whole file gives — with the skipped bytes zero and again with them 0xFF, so a
 //! reader that looked at skipped data would be caught. CR3 and DNG files must be described from a
-//! small part of the file (`cargo test -p lightcraft-raw --release --test sparse_corpus -- --nocapture`
+//! small part of the file (`cargo test -p lcc-raw --release --test sparse_corpus -- --nocapture`
 //! prints what each format reads).
 
-use lightcraft_raw::sparse::{HeaderPlan, Ranges, header_plan, preview_plan};
-use lightcraft_raw::{embedded_preview, probe, probe_info};
+use lcc_raw::sparse::{HeaderPlan, Ranges, header_plan, preview_plan};
+use lcc_raw::{embedded_preview, probe, probe_info};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 fn corpus_root() -> PathBuf {
-    std::env::var_os("LIGHTCRAFT_CORPUS").map(PathBuf::from).unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus"))
+    lcc_brand::env_os("CORPUS").map(PathBuf::from).unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus"))
 }
 
 /// Run the plan (with the embedded preview when `preview`), loading from `file` what it asks for
@@ -42,8 +42,8 @@ fn run(file: &[u8], fill: u8, preview: bool) -> (HeaderPlan, Vec<u8>, Ranges) {
 
 /// What an import learns from a file: the raw description and the metadata.
 fn describe(bytes: &[u8]) -> String {
-    let e = lightcraft_meta::embedded(bytes);
-    format!("{:?}\n{:?}\n{:?}", probe_info(bytes), lightcraft_meta::extract(bytes), e.xmp)
+    let e = lcc_meta::embedded(bytes);
+    format!("{:?}\n{:?}\n{:?}", probe_info(bytes), lcc_meta::extract(bytes), e.xmp)
 }
 
 #[test]
@@ -58,7 +58,7 @@ fn partial_reads_describe_raws_as_whole_files_do() {
         .filter(|p| p.is_file() && !p.extension().is_some_and(|e| e == "part" || e == "txt" || e == "md"))
         .collect();
     if paths.is_empty() {
-        lightcraft_testkit::skip!(Corpus, "{} absent", dir.display());
+        lcc_testkit::skip!(Corpus, "{} absent", dir.display());
         return;
     }
     paths.sort();

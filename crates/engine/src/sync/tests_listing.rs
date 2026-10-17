@@ -105,7 +105,7 @@ fn the_listing_answers_only_what_it_is_sure_of() {
 fn photo(c: &mut Catalog, path: &Path) -> Arc<Photo> {
     let id = c.alloc_photo_id();
     let name = path.file_name().unwrap().to_string_lossy().to_string();
-    c.apply(lightcraft_catalog::Op::AddPhoto {
+    c.apply(lcc_catalog::Op::AddPhoto {
         photo: Box::new(Photo::new(id, Source::File { path: path.to_string_lossy().to_string() }, &name, "JPEG", 6, 4, "2020-01-01T00:00:00")),
     })
     .unwrap();

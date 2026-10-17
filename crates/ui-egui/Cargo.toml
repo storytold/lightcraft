@@ -1,41 +1,69 @@
 [package]
-name = "lightcraft-ui-egui"
+name = "lcc-ui-egui"
 version.workspace = true
 edition.workspace = true
 rust-version = "1.95"
 license.workspace = true
-description = "LightCraft egui frontend (Lightroom-style UI); swappable — nothing below depends on it (L5)"
+description = "Egui frontend (Lightroom-style UI); swappable — nothing below depends on it (L5)"
 
 [lints]
 workspace = true
 
 [dependencies]
 craft-ui = { workspace = true }
-lightcraft-geom = { workspace = true }
-lightcraft-meta = { workspace = true }
-lightcraft-color = { workspace = true }
-lightcraft-raster = { workspace = true }
-lightcraft-develop = { workspace = true }
-lightcraft-pipeline = { workspace = true }
-lightcraft-catalog = { workspace = true }
+lcc-brand = { workspace = true }
+lcc-geom = { workspace = true }
+lcc-meta = { workspace = true }
+lcc-color = { workspace = true }
+lcc-raster = { workspace = true }
+lcc-develop = { workspace = true }
+lcc-pipeline = { workspace = true }
+lcc-catalog = { workspace = true }
+lcc-geo = { workspace = true }
 web-time = { workspace = true }
-lightcraft-engine = { workspace = true }
-lightcraft-slideshow = { workspace = true }
-lightcraft-preview = { workspace = true }
+lcc-engine = { workspace = true }
+lcc-layout = { workspace = true }
+lcc-pdf = { workspace = true }
+lcc-print = { workspace = true }
+lcc-preview = { workspace = true }
+lcc-slide = { workspace = true }
+lcc-slideshow = { workspace = true }
+# the Book module (owned, Phase 3)
+lcc-book = { workspace = true }
+lcc-text = { workspace = true }
+lcc-webgallery = { workspace = true }
 egui = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+lcc-immich = { workspace = true }
+lcc-publish = { workspace = true }
+lcc-codecs = { workspace = true }
+# identity plate graphic from an SVG (MIT/Apache-2.0, pure Rust); no text or system fonts
+resvg = { version = "0.45", default-features = false }
+
 [dev-dependencies]
+image = { workspace = true }
 # tests record why they skip (`cargo xtask ci` lists the skips)
-lightcraft-testkit = { workspace = true }
+lcc-testkit = { workspace = true }
 egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }
-lightcraft-denoise = { workspace = true, features = ["runtime"] }
-lightcraft-codecs = { workspace = true }
-lightcraft-faces = { workspace = true }
-lightcraft-merge = { workspace = true }
+lcc-denoise = { workspace = true, features = ["runtime"] }
+# the model-setup tests run denoise models; only the app/CLI enable this in builds
+lcc-engine = { workspace = true, features = ["denoise"] }
+lcc-codecs = { workspace = true }
+lcc-faces = { workspace = true }
+lcc-merge = { workspace = true }
+# the update tests offer a release the way a check would (native only, like the updater itself)
+lcc-updater = { workspace = true }
+filmcraft-h264enc = { git = "https://github.com/storytold/filmcraft", rev = "8309f21a6c3f34ddf190af7fd9bfd913053a1fd5" }
+filmcraft-isobmff = { git = "https://github.com/storytold/filmcraft", rev = "8309f21a6c3f34ddf190af7fd9bfd913053a1fd5" }
+wat = "1.228" # G19: a slow export-hook plug-in for the worker test
 
 [build-dependencies]
+lcc-brand = { workspace = true }
+# What's New: joins docs/whats-new/ and docs/whats-new.md into $OUT_DIR/whats-new.md
+lcc-notes = { workspace = true }
 serde_json = { workspace = true }
 toml = "1"

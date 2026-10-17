@@ -22,72 +22,104 @@ impl Buf {
     pub fn new(w: usize, h: usize, c: usize) -> Buf {
         Buf { w, h, c, data: vec![0.0; w * h * c] }
     }
-    #[inline]
-    fn at(&self, x: isize, y: isize, ch: usize) -> f32 {
-        let x = x.clamp(0, self.w as isize - 1) as usize;
-        let y = y.clamp(0, self.h as isize - 1) as usize;
-        self.data[(y * self.w + x) * self.c + ch]
-    }
 }
 
 const K: [f32; 5] = [1.0 / 16.0, 4.0 / 16.0, 6.0 / 16.0, 4.0 / 16.0, 1.0 / 16.0];
 
 /// Binomial 5-tap blur then decimate by 2 (output `⌈w/2⌉ × ⌈h/2⌉`).
 pub fn down(b: &Buf) -> Buf {
-    let (w2, h2) = (b.w.div_ceil(2), b.h.div_ceil(2));
-    // horizontal pass at decimated x
-    let mut tmp = Buf::new(w2, b.h, b.c);
-    tmp.data.par_chunks_mut(w2 * b.c).enumerate().for_each(|(y, row)| {
-        for x in 0..w2 {
-            for ch in 0..b.c {
-                let mut s = 0.0;
-                for (k, wk) in K.iter().enumerate() {
-                    s += wk * b.at(2 * x as isize + k as isize - 2, y as isize, ch);
-                }
-                row[x * b.c + ch] = s;
-            }
-        }
-    });
-    let mut out = Buf::new(w2, h2, b.c);
-    out.data.par_chunks_mut(w2 * b.c).enumerate().for_each(|(y, row)| {
-        for x in 0..w2 {
-            for ch in 0..b.c {
-                let mut s = 0.0;
-                for (k, wk) in K.iter().enumerate() {
-                    s += wk * tmp.at(x as isize, 2 * y as isize + k as isize - 2, ch);
-                }
-                row[x * b.c + ch] = s;
-            }
-        }
-    });
+    let mut out = Buf::new(0, 0, b.c);
+    down_into(b, &mut out);
     out
+}
+
+/// [`down`] into `out`, reusing its allocation.
+pub fn down_into(b: &Buf, out: &mut Buf) {
+    let (w2, h2, c) = (b.w.div_ceil(2), b.h.div_ceil(2), b.c);
+    out.w = w2;
+    out.h = h2;
+    out.c = c;
+    out.data.resize(w2 * h2 * c, 0.0);
+    if b.w == 0 || b.h == 0 || c == 0 {
+        return;
+    }
+    // the five (edge-clamped) source columns of each decimated column, then rows
+    let taps = |n: usize, i: usize| std::array::from_fn::<usize, 5, _>(|k| (2 * i + k).saturating_sub(2).min(n - 1));
+    let xs: Vec<[usize; 5]> = (0..w2).map(|x| taps(b.w, x)).collect();
+    // horizontal pass at decimated x
+    let mut tmp = vec![0.0f32; w2 * b.h * c];
+    tmp.par_chunks_mut(w2 * c).zip(b.data.par_chunks(b.w * c)).for_each(|(row, src)| {
+        for (x, t) in xs.iter().enumerate() {
+            for ch in 0..c {
+                let mut s = 0.0;
+                for (k, wk) in K.iter().enumerate() {
+                    s += wk * src[t[k] * c + ch];
+                }
+                row[x * c + ch] = s;
+            }
+        }
+    });
+    let row_len = w2 * c;
+    out.data.par_chunks_mut(row_len).enumerate().for_each(|(y, row)| {
+        let rows = taps(b.h, y).map(|r| &tmp[r * row_len..(r + 1) * row_len]);
+        for (i, o) in row.iter_mut().enumerate() {
+            let mut s = 0.0;
+            for (k, wk) in K.iter().enumerate() {
+                s += wk * rows[k][i];
+            }
+            *o = s;
+        }
+    });
+}
+
+/// Per output coordinate of [`up`]: the two (edge-clamped) source coordinates and the weight of the second.
+fn up_taps(n_src: usize, n: usize) -> Vec<(usize, usize, f32)> {
+    (0..n)
+        .map(|x| {
+            let f = (x as f32 + 0.5) / 2.0 - 0.5;
+            let x0 = f.floor();
+            let i = x0 as isize;
+            let clamp = |i: isize| i.clamp(0, n_src as isize - 1) as usize;
+            (clamp(i), clamp(i + 1), f - x0)
+        })
+        .collect()
 }
 
 /// Expand to `w × h` (bilinear, pixel-centre aligned with [`down`]'s grid).
 pub fn up(b: &Buf, w: usize, h: usize) -> Buf {
     let mut out = Buf::new(w, h, b.c);
-    out.data.par_chunks_mut(w * b.c).enumerate().for_each(|(y, row)| {
-        let fy = (y as f32 + 0.5) / 2.0 - 0.5;
-        let y0 = fy.floor();
-        let ty = fy - y0;
-        let y0 = y0 as isize;
-        for x in 0..w {
-            let fx = (x as f32 + 0.5) / 2.0 - 0.5;
-            let x0 = fx.floor();
-            let tx = fx - x0;
-            let x0 = x0 as isize;
-            for ch in 0..b.c {
-                let a = b.at(x0, y0, ch);
-                let bb = b.at(x0 + 1, y0, ch);
-                let c = b.at(x0, y0 + 1, ch);
-                let d = b.at(x0 + 1, y0 + 1, ch);
+    up_apply(b, &mut out, |o, v| *o = v);
+    out
+}
+
+/// `g −= up(coarse, g.w, g.h)`: the band of a Laplacian pyramid, without the expanded level.
+pub fn sub_up(g: &mut Buf, coarse: &Buf) {
+    up_apply(coarse, g, |o, v| *o -= v);
+}
+
+/// [`up`]'s value at every pixel of `out` (`out.w × out.h`), handed to `f` with the pixel's channel.
+fn up_apply(b: &Buf, out: &mut Buf, f: impl Fn(&mut f32, f32) + Sync) {
+    let c = b.c;
+    if b.w == 0 || b.h == 0 || c == 0 || out.c != c {
+        return;
+    }
+    let xs = up_taps(b.w, out.w);
+    let ys = up_taps(b.h, out.h);
+    let src_len = b.w * c;
+    out.data.par_chunks_mut(out.w * c).zip(&ys).for_each(|(row, &(y0, y1, ty))| {
+        let (r0, r1) = (&b.data[y0 * src_len..(y0 + 1) * src_len], &b.data[y1 * src_len..(y1 + 1) * src_len]);
+        for (x, &(x0, x1, tx)) in xs.iter().enumerate() {
+            for ch in 0..c {
+                let a = r0[x0 * c + ch];
+                let bb = r0[x1 * c + ch];
+                let cc = r1[x0 * c + ch];
+                let d = r1[x1 * c + ch];
                 let top = a + (bb - a) * tx;
-                let bot = c + (d - c) * tx;
-                row[x * b.c + ch] = top + (bot - top) * ty;
+                let bot = cc + (d - cc) * tx;
+                f(&mut row[x * c + ch], top + (bot - top) * ty);
             }
         }
     });
-    out
 }
 
 /// Fill pixels with weight 0 from their neighbourhood (push–pull: weighted pyramid down, fill
@@ -242,6 +274,61 @@ impl Blender {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The edge-clamped formulas `down` and `up` implement, one tap at a time.
+    fn at(b: &Buf, x: isize, y: isize, ch: usize) -> f32 {
+        let x = x.clamp(0, b.w as isize - 1) as usize;
+        let y = y.clamp(0, b.h as isize - 1) as usize;
+        b.data[(y * b.w + x) * b.c + ch]
+    }
+
+    #[test]
+    fn down_and_up_match_their_definitions_exactly() {
+        for (w, h, c) in [(37, 23, 3), (8, 5, 1), (1, 1, 4), (2, 9, 2), (64, 48, 3)] {
+            let mut b = Buf::new(w, h, c);
+            for (i, x) in b.data.iter_mut().enumerate() {
+                *x = ((i * 7919) % 1013) as f32 / 1013.0 - 0.3;
+            }
+            let d = down(&b);
+            let (w2, h2) = (w.div_ceil(2), h.div_ceil(2));
+            assert_eq!((d.w, d.h, d.c), (w2, h2, c));
+            for y in 0..h2 {
+                for x in 0..w2 {
+                    for ch in 0..c {
+                        let mut s = 0.0;
+                        for (k, wk) in K.iter().enumerate() {
+                            let mut t = 0.0;
+                            for (j, wj) in K.iter().enumerate() {
+                                t += wj * at(&b, 2 * x as isize + j as isize - 2, (2 * y as isize + k as isize - 2).clamp(0, h as isize - 1), ch);
+                            }
+                            s += wk * t;
+                        }
+                        assert_eq!(d.data[(y * w2 + x) * c + ch].to_bits(), f32::to_bits(s), "down {w}×{h}×{c} at {x},{y}");
+                    }
+                }
+            }
+            let u = up(&d, w, h);
+            let mut g = b.clone();
+            sub_up(&mut g, &d);
+            for y in 0..h {
+                let fy = (y as f32 + 0.5) / 2.0 - 0.5;
+                let (y0, ty) = (fy.floor(), fy - fy.floor());
+                for x in 0..w {
+                    let fx = (x as f32 + 0.5) / 2.0 - 0.5;
+                    let (x0, tx) = (fx.floor(), fx - fx.floor());
+                    let (x0, y0) = (x0 as isize, y0 as isize);
+                    for ch in 0..c {
+                        let top = at(&d, x0, y0, ch) + (at(&d, x0 + 1, y0, ch) - at(&d, x0, y0, ch)) * tx;
+                        let bot = at(&d, x0, y0 + 1, ch) + (at(&d, x0 + 1, y0 + 1, ch) - at(&d, x0, y0 + 1, ch)) * tx;
+                        let v = top + (bot - top) * ty;
+                        let i = (y * w + x) * c + ch;
+                        assert_eq!(u.data[i].to_bits(), v.to_bits(), "up {w}×{h}×{c} at {x},{y}");
+                        assert_eq!(g.data[i].to_bits(), (b.data[i] - v).to_bits(), "sub_up {w}×{h}×{c} at {x},{y}");
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn single_tile_reconstructs_exactly() {

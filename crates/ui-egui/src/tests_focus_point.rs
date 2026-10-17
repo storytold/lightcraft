@@ -5,20 +5,20 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use lightcraft_catalog::{Op, Photo, PhotoId, Source};
-use lightcraft_meta::FocusPoint;
+use lcc_catalog::{Op, Photo, PhotoId, Source};
+use lcc_meta::FocusPoint;
 use serde_json::json;
 
 use crate::headless::Headless;
 use crate::state::Zoom;
-use crate::{LightcraftApp, Services};
+use crate::{LccApp, Services};
 
 const T: Duration = Duration::from_secs(20);
 const SETTLE: Duration = Duration::from_secs(120);
 
 fn focus(x0: f64, y0: f64, x1: f64, y1: f64) -> FocusPoint {
     FocusPoint {
-        rect: lightcraft_geom::Rect { x0, y0, x1, y1 },
+        rect: lcc_geom::Rect { x0, y0, x1, y1 },
         mode: Some("AF-C".into()),
         area: Some("Wide".into()),
         tracking: Some("Animal Eye Tracking".into()),
@@ -27,7 +27,7 @@ fn focus(x0: f64, y0: f64, x1: f64, y1: f64) -> FocusPoint {
 
 /// The demo library in Detail with the Info panel, its first photo active and given `f` as its focus point.
 fn detail_with_focus(f: Option<FocusPoint>) -> (Headless, PhotoId) {
-    let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let mut app = LccApp::new(lcc_engine::Session::with_demo(), Services { png: None, ..Default::default() });
     app.ui.settings.gpu = false;
     let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
     let id = *h.app.session.visible_cloned().first().expect("a demo photo");
@@ -128,12 +128,12 @@ fn focus_box_follows_the_crop_and_drops_a_point_cropped_away() {
     assert!((b.x0 - 0.70).abs() < 1e-9 && (b.y1 - 0.55).abs() < 1e-9, "{b:?}");
     // keep the right half: x 0.5..1 becomes 0..1
     let mut d = (*p.develop).clone();
-    d.crop.geometry.rect = lightcraft_geom::Rect { x0: 0.5, y0: 0.0, x1: 1.0, y1: 1.0 };
+    d.crop.geometry.rect = lcc_geom::Rect { x0: 0.5, y0: 0.0, x1: 1.0, y1: 1.0 };
     p.develop = Arc::new(d.clone());
     let b = crate::panels::detail::focus_box(&p).expect("box");
     assert!((b.x0 - 0.40).abs() < 1e-6 && (b.x1 - 0.60).abs() < 1e-6, "{b:?}");
     // keep the left half: the point is gone
-    d.crop.geometry.rect = lightcraft_geom::Rect { x0: 0.0, y0: 0.0, x1: 0.5, y1: 1.0 };
+    d.crop.geometry.rect = lcc_geom::Rect { x0: 0.0, y0: 0.0, x1: 0.5, y1: 1.0 };
     p.develop = Arc::new(d);
     assert!(crate::panels::detail::focus_box(&p).is_none());
     // a zero-size photo or a garbage box never panics
@@ -164,14 +164,14 @@ fn the_frame_loop_reads_focus_points_for_photos_imported_earlier() {
     let dir = std::env::temp_dir().join(format!("lc-ui-focus-scan-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("temp dir");
-    let add = |app: &mut LightcraftApp, id: u64, name: &str| {
+    let add = |app: &mut LccApp, id: u64, name: &str| {
         let path = dir.join(name);
-        std::fs::write(&path, lightcraft_meta::focus::synthetic_arw(3, 200_000)).expect("write");
+        std::fs::write(&path, lcc_meta::focus::synthetic_arw(3, 200_000)).expect("write");
         let mut p = Photo::new(PhotoId(id), Source::File { path: path.to_string_lossy().into() }, name, "ARW", 8640, 5760, "2026-10-13T00:00:00");
         p.meta.camera = "SONY ILCE-1".into();
         app.session.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).expect("add");
     };
-    let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let mut app = LccApp::new(lcc_engine::Session::with_demo(), Services { png: None, ..Default::default() });
     app.ui.settings.gpu = false;
     add(&mut app, 9001, "old.ARW");
     let mut h = Headless::new(app, [1200.0, 800.0], 1.0);

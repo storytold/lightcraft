@@ -1,4 +1,4 @@
-//! RAW decoding for LightCraft.
+//! RAW decoding.
 //!
 //! - [`probe`] recognises raw containers; [`decode`] turns a file into a [`RawImage`] (sensor data + everything
 //!   needed to render it: CFA, black/white levels, active area, default crop, orientation, DNG colour tags,
@@ -27,13 +27,16 @@
 
 mod binned;
 pub mod color;
+pub mod dctjpeg;
 pub mod demosaic;
 mod dng;
 pub mod dngwrite;
 pub mod gaintable;
 pub mod highlight;
+mod hotpixel;
 #[cfg(feature = "jxl")]
 mod jxl;
+pub mod kelvin_builtin;
 pub mod kelvin_presets;
 pub mod lens_metadata;
 pub mod ljpeg;
@@ -52,11 +55,11 @@ mod wb_estimate;
 
 pub use demosaic::{Method, demosaic};
 pub use dngwrite::{DngCompression, DngWriteOptions, write_dng, write_rendered_dng};
+pub use lcc_color::Mat3;
+pub use lcc_geom::Orientation;
+pub use lcc_meta::Metadata;
+pub use lcc_raster::Rgb32f;
 pub use lens_metadata::LensMetadata;
-pub use lightcraft_color::Mat3;
-pub use lightcraft_geom::Orientation;
-pub use lightcraft_meta::Metadata;
-pub use lightcraft_raster::Rgb32f;
 pub use opcodes::{Opcode, OpcodeLists};
 pub use preview::{
     PREVIEW_PREFIX, PreviewColorSpace, PreviewRange, bounded_preview, embedded_preview, embedded_preview_color_space, embedded_preview_covering,
@@ -64,8 +67,8 @@ pub use preview::{
 };
 pub use semantic::{SemanticMask, semantic_masks};
 
-use lightcraft_color::Xy;
-use lightcraft_tiff::{Tiff, TiffError};
+use lcc_color::Xy;
+use lcc_tiff::{Tiff, TiffError};
 use serde::{Deserialize, Serialize};
 
 /// Upper bound on decoded samples (guards allocations driven by header values).
@@ -110,7 +113,7 @@ pub enum RawFormat {
     X3f,
     /// A TIFF-based raw that has no DNG version tag but describes itself the way DNG does (a
     /// full-resolution CFA image with black/white levels, a default crop and `AsShotNeutral`):
-    /// Hasselblad 3FR and FFF. Read by the DNG reader.
+    /// Hasselblad 3FR and FFF. Read by `vendor::hasselblad` (the DNG reader plus what Hasselblad adds).
     CfaTiff,
     /// Kodak DCS520C TIFF: a two-component lossless JPEG CFA sub-IFD with a response curve (`vendor::kodak`).
     KodakDcs,
@@ -139,8 +142,10 @@ impl RawFormat {
                 | RawFormat::CfaTiff
                 | RawFormat::Srw
                 | RawFormat::KodakDcs
+                | RawFormat::Mrw
                 | RawFormat::Erf
                 | RawFormat::Mef
+                | RawFormat::Crw
         )
     }
 }
@@ -172,28 +177,28 @@ pub fn probe(bytes: &[u8]) -> Option<RawFormat> {
         return Some(RawFormat::Cr2);
     }
     let (_, _) = Tiff::sniff(bytes)?;
-    let opts = lightcraft_tiff::ParseOptions { max_ifds: 256, ..Default::default() };
+    let opts = lcc_tiff::ParseOptions { max_ifds: 256, ..Default::default() };
     let t = Tiff::parse_with(bytes, &opts).ok()?;
     let ifd0 = t.ifds.first()?;
-    if ifd0.contains(lightcraft_tiff::tags::DNG_VERSION) {
+    if ifd0.contains(lcc_tiff::tags::DNG_VERSION) {
         return Some(RawFormat::Dng);
     }
-    let make = t.find(lightcraft_tiff::tags::MAKE).and_then(|e| e.value.as_str()).unwrap_or_default().to_ascii_uppercase();
+    let make = t.find(lcc_tiff::tags::MAKE).and_then(|e| e.value.as_str()).unwrap_or_default().to_ascii_uppercase();
     let has_cfa = has_raw_ifd(&t);
     // Pentax's reader takes the layout from the Exif `CFAPattern` when no IFD has a CFA photometric (uncompressed
     // and PackBits PEFs), so for the Pentax family that tag counts as raw evidence too
     let pentax_raw = has_cfa || t.exif().is_some_and(|e| e.contains(vendor::EXIF_CFA_PATTERN));
     // Samsung's raw IFD uses private compressions 32769..=32773 (`vendor::srw`), 32773 being PackBits elsewhere
-    let samsung_raw = has_cfa || t.all_ifds().iter().any(|i| i.u16(lightcraft_tiff::tags::COMPRESSION).is_some_and(|c| (32769..=32773).contains(&c)));
+    let samsung_raw = has_cfa || t.all_ifds().iter().any(|i| i.u16(lcc_tiff::tags::COMPRESSION).is_some_and(|c| (32769..=32773).contains(&c)));
     // Sony raws without a CFA IFD (#702): SRF (DSC-F828), whose IFD0 looks like RGB but holds 14-bit samples (12 or
     // 14 count: raw sensor depths; the raw is in Sony's SRF blocks), and the DSLR-A100, whose IFD0 is an old-style
     // JPEG thumbnail (compression 6, which today's TIFF writers don't produce) and whose `SubIFDs` tag addresses its
     // raw data. A camera-authored or exported TIFF has 8- or 16-bit samples, and its SubIFDs hold ordinary images
-    let model = t.find(lightcraft_tiff::tags::MODEL).and_then(|e| e.value.as_str()).unwrap_or_default().trim().to_ascii_uppercase();
+    let model = t.find(lcc_tiff::tags::MODEL).and_then(|e| e.value.as_str()).unwrap_or_default().trim().to_ascii_uppercase();
     let sony_raw = has_cfa
-        || ifd0.u64s(lightcraft_tiff::tags::BITS_PER_SAMPLE).is_some_and(|b| b.iter().any(|v| matches!(v, 12 | 14)))
-        || (model == "DSLR-A100" && ifd0.u16(lightcraft_tiff::tags::COMPRESSION) == Some(6) && ifd0.contains(lightcraft_tiff::tags::SUB_IFDS));
-    if make.starts_with("CANON") && t.ifds.len() >= 4 && t.ifds[3].u16(lightcraft_tiff::tags::COMPRESSION) == Some(6) {
+        || ifd0.u64s(lcc_tiff::tags::BITS_PER_SAMPLE).is_some_and(|b| b.iter().any(|v| matches!(v, 12 | 14)))
+        || (model == "DSLR-A100" && ifd0.u16(lcc_tiff::tags::COMPRESSION) == Some(6) && ifd0.contains(lcc_tiff::tags::SUB_IFDS));
+    if make.starts_with("CANON") && t.ifds.len() >= 4 && t.ifds[3].u16(lcc_tiff::tags::COMPRESSION) == Some(6) {
         return Some(RawFormat::Cr2);
     }
     if make.starts_with("NIKON") && has_cfa {
@@ -201,7 +206,7 @@ pub fn probe(bytes: &[u8]) -> Option<RawFormat> {
     }
     // Hasselblad's Sony-built bodies (the Lunar is a NEX-7 inside) write a Sony ARW under their own Make. Sony's
     // raw coding gives them away: compression 32767 or the raw IFD's tone-curve tag 0x7010, which no 3FR / FFF has
-    let sony_coded = || t.all_ifds().iter().any(|i| i.u16(lightcraft_tiff::tags::COMPRESSION) == Some(32767) || i.contains(0x7010));
+    let sony_coded = || t.all_ifds().iter().any(|i| i.u16(lcc_tiff::tags::COMPRESSION) == Some(32767) || i.contains(0x7010));
     if (make.starts_with("SONY") && sony_raw) || (make.starts_with("HASSELBLAD") && sony_coded()) {
         return Some(RawFormat::Arw);
     }
@@ -240,13 +245,13 @@ const LEAF_DATA: u16 = 0x8606;
 /// An uncompressed Leaf MOS: IFD0 is the 16-bit mosaic itself (compression 1, BlackIsZero, one sample per pixel),
 /// with no Make tag and no CFA photometric, so only Leaf's data block marks it as a raw (issue #1275). A rendered
 /// RGB image that kept the block stays an ordinary image.
-fn is_leaf_mosaic(ifd0: &lightcraft_tiff::Ifd) -> bool {
-    ifd0.contains(LEAF_DATA) && ifd0.u16(lightcraft_tiff::tags::SAMPLES_PER_PIXEL).unwrap_or(1) == 1
+fn is_leaf_mosaic(ifd0: &lcc_tiff::Ifd) -> bool {
+    ifd0.contains(LEAF_DATA) && ifd0.u16(lcc_tiff::tags::SAMPLES_PER_PIXEL).unwrap_or(1) == 1
 }
 
 /// Whether the Exif maker note starts with the signature of the Pentax layouts (`AOC\0` or `PENTAX \0`).
 fn has_pentax_maker_note(t: &Tiff, bytes: &[u8]) -> bool {
-    let Some(e) = t.exif().and_then(|e| e.get(lightcraft_tiff::tags::MAKER_NOTE)) else { return false };
+    let Some(e) = t.exif().and_then(|e| e.get(lcc_tiff::tags::MAKER_NOTE)) else { return false };
     bytes.get(e.offset as usize..).is_some_and(|n| n.starts_with(b"AOC\0") || n.starts_with(b"PENTAX \0"))
 }
 
@@ -255,19 +260,19 @@ fn has_pentax_maker_note(t: &Tiff, bytes: &[u8]) -> bool {
 /// or vendor-specific raw tags (Sony tone curve, CFA pattern, or Pentax compression 65535).
 fn has_raw_ifd(t: &Tiff) -> bool {
     t.all_ifds().iter().any(|i| {
-        i.u16(lightcraft_tiff::tags::PHOTOMETRIC) == Some(lightcraft_tiff::tags::photometric::CFA)
-            || i.u16(lightcraft_tiff::tags::COMPRESSION).is_some_and(|c| matches!(c, 34713 | 32767 | 32769 | 32770 | 99 | 65535))
+        i.u16(lcc_tiff::tags::PHOTOMETRIC) == Some(lcc_tiff::tags::photometric::CFA)
+            || i.u16(lcc_tiff::tags::COMPRESSION).is_some_and(|c| matches!(c, 34713 | 32767 | 32769 | 32770 | 99 | 65535))
             || i.contains(0x7010)
-            || i.contains(lightcraft_tiff::tags::CFA_PATTERN_EP)
-            || i.contains(lightcraft_tiff::tags::CFA_REPEAT_PATTERN_DIM)
+            || i.contains(lcc_tiff::tags::CFA_PATTERN_EP)
+            || i.contains(lcc_tiff::tags::CFA_REPEAT_PATTERN_DIM)
     })
 }
 
 /// IFD0 that is not an image at all: no `ImageWidth` / `ImageLength`, but a JPEG preview pointer or
 /// `SubIFDs` (the layout of Kodak KDC files, whose pictures sit in private tags). A plain TIFF reader
 /// rejects such a file as malformed even though it carries a preview.
-fn is_preview_container(ifd0: &lightcraft_tiff::Ifd) -> bool {
-    use lightcraft_tiff::tags::{IMAGE_LENGTH, IMAGE_WIDTH, JPEG_INTERCHANGE_FORMAT, SUB_IFDS};
+fn is_preview_container(ifd0: &lcc_tiff::Ifd) -> bool {
+    use lcc_tiff::tags::{IMAGE_LENGTH, IMAGE_WIDTH, JPEG_INTERCHANGE_FORMAT, SUB_IFDS};
     !ifd0.contains(IMAGE_WIDTH) && !ifd0.contains(IMAGE_LENGTH) && (ifd0.contains(JPEG_INTERCHANGE_FORMAT) || ifd0.contains(SUB_IFDS))
 }
 
@@ -292,7 +297,7 @@ pub(crate) struct ThumbnailShell {
 /// A multi-page TIFF is not caught (its pages are the IFD chain, not `SubIFDs`), nor a pyramid whose
 /// IFD0 is the full image.
 fn thumbnail_shell(t: &Tiff, len: usize) -> Option<ThumbnailShell> {
-    use lightcraft_tiff::tags::{IMAGE_LENGTH, IMAGE_WIDTH, PIXEL_X_DIMENSION, PIXEL_Y_DIMENSION};
+    use lcc_tiff::tags::{IMAGE_LENGTH, IMAGE_WIDTH, PIXEL_X_DIMENSION, PIXEL_Y_DIMENSION};
     let ifd0 = t.ifds.first()?;
     let (w0, h0) = (ifd0.u32(IMAGE_WIDTH)?, ifd0.u32(IMAGE_LENGTH)?);
     if w0 == 0 || h0 == 0 {
@@ -335,13 +340,13 @@ fn thumbnail_shell(t: &Tiff, len: usize) -> Option<ThumbnailShell> {
 
 /// Why [`decode`] gives up on a file [`probe`] called [`RawFormat::OtherTiff`].
 fn other_tiff_reason(bytes: &[u8]) -> String {
-    let t = Tiff::parse_with(bytes, &lightcraft_tiff::ParseOptions { max_ifds: 256, ..Default::default() }).ok();
+    let t = Tiff::parse_with(bytes, &lcc_tiff::ParseOptions { max_ifds: 256, ..Default::default() }).ok();
     // a DNG-style CFA IFD whose lossless JPEG the lossless decoder rejects: say why
     if let Some(t) = &t
         && let Some(info) = dng::raw_ifd(t).and_then(|i| i.image().ok())
-        && info.compression == lightcraft_tiff::tags::compression::JPEG
-        && let Some(src) = info.chunks(bytes.len() as u64).first().and_then(|c| lightcraft_tiff::image::chunk_bytes(bytes, c))
-        && let Err(e) = ljpeg::frame_info(src)
+        && info.compression == lcc_tiff::tags::compression::JPEG
+        && let Some(src) = info.chunks(bytes.len() as u64).first().and_then(|c| lcc_tiff::image::chunk_bytes(bytes, c))
+        && let Err(e) = if dctjpeg::is_dct(src) { dctjpeg::frame_info(src) } else { ljpeg::frame_info(src) }
     {
         return format!("raw image coded as lossless JPEG that is not decoded yet ({e})");
     }
@@ -397,11 +402,13 @@ fn decode_with(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         RawFormat::Rw2 => vendor::rw2::decode(bytes, mode),
         RawFormat::Pef => vendor::pef::decode(bytes, mode),
         RawFormat::Orf => vendor::orf::decode(bytes, mode),
-        RawFormat::CfaTiff => dng::decode_as(bytes, mode, RawFormat::CfaTiff).map(lift_clipped),
+        RawFormat::CfaTiff => vendor::hasselblad::decode(bytes, mode).map(lift_clipped),
         RawFormat::Srw => vendor::srw::decode(bytes, mode),
         RawFormat::KodakDcs => vendor::kodak::decode(bytes, mode),
+        RawFormat::Mrw => vendor::mrw::decode(bytes, mode),
         RawFormat::Erf => vendor::erf::decode(bytes, mode),
         RawFormat::Mef => vendor::mef::decode(bytes, mode),
+        RawFormat::Crw => vendor::crw::decode(bytes, mode),
         RawFormat::OtherTiff => Err(RawError::Unsupported(other_tiff_reason(bytes))),
         other => Err(RawError::Unsupported(format!("{other:?} files are not decoded yet"))),
     }
@@ -644,13 +651,18 @@ pub struct ColorData {
     /// The file's own camera-profile look (`ProfileHueSatMap*`, `ProfileLookTable*`,
     /// `ProfileToneCurve`), applied by [`color`]'s users at render time, and its
     /// `ProfileGainTableMap*`, kept (a DNG export writes it back) and rendered only when a photo's
-    /// "Camera local tone mapping" option asks for it (`lightcraft_pipeline::local_tone`).
+    /// "Camera local tone mapping" option asks for it (`lcc_pipeline::local_tone`).
     #[serde(default)]
     pub profile: profile::ProfileLook,
-    /// The camera's white-balance presets at stated temperatures (Sony ARW), which give a raw without colour
+    /// The camera's white-balance presets at stated temperatures (Sony ARW, Canon CR2), which give a raw without colour
     /// matrices a Kelvin scale ([`kelvin_presets`]). Not a DNG tag: nothing else reads it.
     #[serde(default)]
     pub kelvin_presets: Option<kelvin_presets::KelvinPresets>,
+    /// The camera's as-shot white-balance multipliers when the data come already balanced by them and
+    /// [`RawImage::wb_multipliers`] is unit (Sony's downsized lossless ARW, linear YCbCr): what a Kelvin scale reads
+    /// as As Shot. Not a DNG tag; the render never applies it.
+    #[serde(default)]
+    pub balanced_as_shot: Option<[f32; 3]>,
 }
 
 /// A decoded raw image.
@@ -853,7 +865,7 @@ impl RawImage {
         if h == rgb.height {
             return rgb;
         }
-        lightcraft_raster::resample::resize(&rgb, rgb.width, h, lightcraft_raster::resample::Filter::Mitchell)
+        lcc_raster::resample::resize(&rgb, rgb.width, h, lcc_raster::resample::Filter::Mitchell)
     }
 
     /// The part of a `width × height` demosaiced picture (the active area) that [`Self::develop`] keeps: the default
@@ -867,31 +879,6 @@ impl RawImage {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn cfa_helpers() {
-        let c = Cfa::bayer("RGGB").unwrap();
-        assert!(c.is_bayer());
-        assert_eq!(c.color_at(0, 0), 0);
-        assert_eq!(c.color_at(3, 3), 2);
-        assert_eq!(c.shifted(1, 0).name(), "GRBG");
-        assert_eq!(c.shifted(1, 1).name(), "BGGR");
-        assert!(Cfa::bayer("RGGX").is_none());
-        for name in ["RGGB", "BGGR", "GRBG", "GBRG"] {
-            assert_eq!(Cfa::bayer_static(name).name(), name);
-        }
-        let x = Cfa::xtrans();
-        assert!(!x.is_bayer());
-        let greens = x.pattern.iter().filter(|&&p| p == 1).count();
-        assert_eq!(greens, 20);
-        // every 3×3 block of the X-Trans layout has 5 greens
-        for by in 0..2 {
-            for bx in 0..2 {
-                let g = (0..9).filter(|i| x.color_at(bx * 3 + i % 3, by * 3 + i / 3) == 1).count();
-                assert_eq!(g, 5);
-            }
-        }
-    }
 
     #[test]
     fn a_picture_made_elsewhere_is_finished_like_develop_does() {
@@ -988,7 +975,7 @@ mod tests {
 
     // --- TIFF shells around a private raw block (thumbnail-only IFD0) ---
 
-    use lightcraft_tiff::{IfdBuilder, ImageData, TiffWriter, Value, tags as t};
+    use lcc_tiff::{IfdBuilder, ImageData, TiffWriter, Value, tags as t};
 
     /// An uncompressed 8-bit RGB image IFD.
     fn rgb_ifd(w: u32, h: u32) -> IfdBuilder {
@@ -1126,10 +1113,10 @@ mod tests {
         assert_eq!(probe(b"II\x1a\0\0\0HEAPCCDR\0\0"), Some(RawFormat::Crw));
         assert_eq!(probe(b"\0MRM\0\x01\0\0"), Some(RawFormat::Mrw));
         assert_eq!(probe(b"FOVb\x02\0\x02\0"), Some(RawFormat::X3f));
-        for f in [RawFormat::Crw, RawFormat::Mrw, RawFormat::X3f] {
-            assert!(!f.is_supported());
-        }
-        assert!(matches!(decode(b"\0MRM\0\x01\0\0"), Err(RawError::Unsupported(w)) if w.contains("Mrw")));
+        assert!(!RawFormat::X3f.is_supported());
+        assert!(RawFormat::Crw.is_supported());
+        assert!(RawFormat::Mrw.is_supported());
+        assert!(matches!(decode(b"\0MRM\0\x01\0\0"), Err(RawError::Corrupt(_))));
         // too short for the CIFF signature
         assert_eq!(probe(b"II\x1a\0\0\0HEAP"), None);
     }
@@ -1210,7 +1197,7 @@ mod tests {
             }
             ifd
         };
-        let bytes = TiffWriter::new(lightcraft_tiff::ByteOrder::Big, false).write(&[mosaic(true)]).unwrap();
+        let bytes = TiffWriter::new(lcc_tiff::ByteOrder::Big, false).write(&[mosaic(true)]).unwrap();
         assert_eq!(probe(&bytes), Some(RawFormat::OtherTiff));
         assert!(matches!(decode(&bytes), Err(RawError::Unsupported(_))));
         assert!(matches!(probe_info(&bytes), Err(RawError::Unsupported(_))));

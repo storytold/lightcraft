@@ -3,16 +3,20 @@
 
 use std::time::Duration;
 
-use lightcraft_develop::MaskShape;
+use lcc_develop::MaskShape;
 use serde_json::json;
 
 use crate::headless::Headless;
-use crate::{LightcraftApp, Services, canvas_keys};
+use crate::{LccApp, Services, canvas_keys};
 
 const T: Duration = Duration::from_secs(20);
 
 fn detail(panel: &str) -> Headless {
-    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let mut session = lcc_engine::Session::with_demo();
+    // newest first, the newest photo open: written around it
+    session.execute("library.sort", &json!({"ascending": false})).unwrap();
+    session.selection = lcc_engine::Selection::single(session.visible_cloned()[0]);
+    let app = LccApp::new(session, Services { png: None, ..Default::default() });
     let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
     // pins on whatever the pointer does: these tests move handles with the keyboard, and a headless
     // pointer is never over the photo, where the Tool Overlay's default Auto shows them
@@ -32,7 +36,7 @@ fn exec(h: &mut Headless, command: &str, params: serde_json::Value) -> serde_jso
     r["result"].clone()
 }
 
-fn develop(h: &Headless) -> lightcraft_develop::DevelopSettings {
+fn develop(h: &Headless) -> lcc_develop::DevelopSettings {
     let id = h.app.session.active().expect("active photo");
     (*h.app.session.develop_of(id).unwrap_or_default()).clone()
 }
@@ -76,9 +80,12 @@ fn crop_corner_moves_with_the_arrows_and_shift_moves_further() {
     assert!((after.x1 - after.x0 - (before.x1 - before.x0)).abs() < 1e-6, "{before:?} -> {after:?}");
 }
 
+/// Tab walks the focus to the crop handles where no command has Tab: the Alternative set (the
+/// Classic set's Tab hides the side panels, as in Lightroom Classic; see `shell::tests`).
 #[test]
 fn tab_reaches_the_crop_handles() {
     let mut h = detail("panel.crop");
+    h.app.ui.settings.keymap_set = crate::shortcuts::KeymapSet::Alternative;
     let handles: Vec<egui::Id> = (0..9).map(|i| canvas_keys::id(&format!("crop:{i}"))).collect();
     let mut reached = false;
     for _ in 0..200 {

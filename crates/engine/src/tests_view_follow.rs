@@ -1,7 +1,7 @@
 //! The view follows a small edit from the list it had ([`Session::visible`]): whatever the edit, the result has to
 //! be the list worked out from every photo.
 
-use lightcraft_catalog::{Op, Photo, PhotoId, Source};
+use lcc_catalog::{Op, Photo, PhotoId, Source};
 use serde_json::{Value, json};
 
 use crate::Session;
@@ -11,7 +11,7 @@ struct Dice(u64);
 
 impl Dice {
     fn roll(&mut self, sides: usize) -> usize {
-        self.0 = lightcraft_catalog::mix64(self.0);
+        self.0 = lcc_catalog::mix64(self.0);
         (self.0 % sides.max(1) as u64) as usize
     }
 }
@@ -222,7 +222,7 @@ fn an_edit_to_many_photos_or_to_more_than_photos_is_worked_out_whole() {
 
 #[test]
 fn the_albums_counts_followed_through_edits_are_the_counts_made_from_every_photo() {
-    use lightcraft_catalog::tally::AlbumTally;
+    use lcc_catalog::tally::AlbumTally;
     let (mut s, mut ids, album, smart) = library(240);
     // more smart albums: picks, well rated or keyworded ones, one that looks into an album of chosen photos
     for rules in [
@@ -238,7 +238,7 @@ fn the_albums_counts_followed_through_edits_are_the_counts_made_from_every_photo
         let made = s.execute("album.createSmart", &json!({"name": "More", "rules": rules}));
         assert!(made.is_ok(), "{rules}: {made:?}");
     }
-    assert!(s.catalog.album(lightcraft_catalog::AlbumId(smart)).is_some_and(|a| a.is_smart()));
+    assert!(s.catalog.album(lcc_catalog::AlbumId(smart)).is_some_and(|a| a.is_smart()));
     let fresh = |s: &Session| -> Vec<(u64, usize)> {
         let mut v: Vec<(u64, usize)> = s.catalog.albums().map(|a| (a.id.0, s.catalog.album_count(a.id))).collect();
         v.sort_unstable();
@@ -272,14 +272,14 @@ fn the_albums_counts_followed_through_edits_are_the_counts_made_from_every_photo
     // a photo deleted: the album of chosen photos it is in counts one less, without every photo being asked
     let in_album = s
         .catalog
-        .album(lightcraft_catalog::AlbumId(album))
+        .album(lcc_catalog::AlbumId(album))
         .and_then(|a| a.photos.iter().copied().find(|id| s.catalog.photo(*id).is_some_and(|p| !p.deleted)));
     if let Some(id) = in_album {
-        let before = tally.counts()[&lightcraft_catalog::AlbumId(album)];
+        let before = tally.counts()[&lcc_catalog::AlbumId(album)];
         s.execute("library.select", &json!({"ids": [id.0]})).unwrap();
         s.execute("photo.delete", &json!({})).unwrap();
         assert!(tally.update(&s.catalog), "followed");
-        assert_eq!(tally.counts()[&lightcraft_catalog::AlbumId(album)], before - 1);
+        assert_eq!(tally.counts()[&lcc_catalog::AlbumId(album)], before - 1);
     }
     // three hundred photos rated at once: counted from every photo, and right
     let many: Vec<u64> = s.visible_cloned().iter().take(300).map(|id| id.0).collect();

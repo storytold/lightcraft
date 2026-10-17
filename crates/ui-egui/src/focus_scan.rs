@@ -4,13 +4,13 @@
 
 use serde_json::json;
 
-use crate::LightcraftApp;
+use crate::LccApp;
 
 /// How often a running reader is asked for what it has read (its batches commit from here).
 const BUSY_SECS: f64 = 0.25;
 
 /// Called every frame. Idle, it costs a comparison and wakes nothing; reading, it asks again every [`BUSY_SECS`].
-pub fn pump(app: &mut LightcraftApp, ctx: &egui::Context) {
+pub fn pump(app: &mut LccApp, ctx: &egui::Context) {
     let now = ctx.input(|i| i.time);
     if now < app.caches.focus_next_pump {
         return;

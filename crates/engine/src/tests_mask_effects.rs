@@ -28,7 +28,7 @@ fn names(v: &Value) -> Vec<String> {
     v["effects"].as_array().unwrap().iter().map(|e| e["name"].as_str().unwrap().to_string()).collect()
 }
 
-fn mask_adjust(s: &Session, id: u32) -> lightcraft_develop::LocalAdjustments {
+fn mask_adjust(s: &Session, id: u32) -> lcc_develop::LocalAdjustments {
     s.develop_of(s.active().unwrap()).unwrap().masks.iter().find(|m| m.id == id).unwrap().adjust
 }
 
@@ -143,10 +143,10 @@ fn applying_to_several_masks_and_photos_is_one_undo_step() {
     with_effect(&mut s, "Warm", json!({"temp": 20}));
     let r = s.execute("mask.applyEffect", &json!({"name": "Warm", "id": face, "photos": "selected", "remember": false})).unwrap();
     assert_eq!(r["photos"], 2);
-    let other = s.develop_of(lightcraft_catalog::PhotoId(ids[1])).unwrap();
+    let other = s.develop_of(lcc_catalog::PhotoId(ids[1])).unwrap();
     assert_eq!(other.masks.iter().map(|m| m.adjust.temp).collect::<Vec<_>>(), [20.0, 0.0]);
     s.execute("edit.undo", &json!({})).unwrap();
-    let other = s.develop_of(lightcraft_catalog::PhotoId(ids[1])).unwrap();
+    let other = s.develop_of(lcc_catalog::PhotoId(ids[1])).unwrap();
     assert_eq!(other.masks[0].adjust.temp, 0.0, "undone on every photo");
     assert_eq!(mask_adjust(&s, face).temp, 0.0);
 }

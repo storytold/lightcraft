@@ -21,7 +21,7 @@
 //! pale partly clipped sky, the colour of another reliable surface (bright foliage) and the sky's own faint
 //! colour, which darkening and a camera profile turned teal.
 
-use lightcraft_raster::Rgb32f;
+use lcc_raster::Rgb32f;
 use rayon::prelude::*;
 
 /// Clip every channel of `wb ⊙ img` at `min_c(wb_c) · clip` — i.e. at the lowest channel's clip level after WB —
@@ -832,25 +832,6 @@ mod tests {
         assert_eq!(reconstruct(&mut img, [2.0, 1.0, 1.5], 0.99), 0);
         let mut empty = Rgb32f::new(0, 0);
         assert_eq!(reconstruct(&mut empty, [1.0; 3], 0.99), 0);
-    }
-
-    /// `cargo test --release -p lightcraft-raw --lib -- --ignored bench_reconstruct --nocapture`
-    #[test]
-    #[ignore]
-    fn bench_reconstruct() {
-        let img = Rgb32f::from_fn(6000, 4000, |x, y| {
-            let v = 0.4 + 0.8 * ((x as f32 * 0.003).sin() * (y as f32 * 0.002).cos()).abs();
-            [v.min(1.0), (v * 0.7).min(1.0), (v * 0.5).min(1.0)]
-        });
-        let ms = (0..3)
-            .map(|_| {
-                let mut i = img.clone();
-                let t = std::time::Instant::now();
-                reconstruct(&mut i, [2.0, 1.0, 1.5], 0.99);
-                t.elapsed().as_secs_f64() * 1e3
-            })
-            .fold(f64::MAX, f64::min);
-        eprintln!("reconstruct 24 MP: {ms:.0} ms");
     }
 
     /// A mask decides which channels are clipped (their values are lower bounds), whatever their values; the

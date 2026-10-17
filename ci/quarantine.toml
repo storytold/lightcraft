@@ -1,0 +1,10 @@
+# Quarantined tests: known-flaky tests CI still runs but does not gate on (docs/ci.md → Quarantine).
+# Every entry needs a tracking issue (`#N` here, or a URL) and an expiry (`until`, inclusive);
+# after it the test gates again.
+# Fix the test's robustness first; quarantine is the last resort. Validated by `cargo xtask quarantine check`.
+#
+# name      = "<package>::<test path>"  (unit tests of the library)
+# binary    = "<tests/ file stem>"       (integration tests only)
+# platforms = any of "linux", "macos", "windows"
+
+# (no entries: #13 and #14 are fixed)

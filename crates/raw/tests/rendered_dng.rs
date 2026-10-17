@@ -1,7 +1,7 @@
 //! Render to DNG: a linear DNG of a rendered image reads back as the same pixels and colours.
 
-use lightcraft_color::{Mat3, PROPHOTO, REC2020, SRGB};
-use lightcraft_raw::{Method, color, write_rendered_dng};
+use lcc_color::{Mat3, PROPHOTO, REC2020, SRGB};
+use lcc_raw::{Method, color, write_rendered_dng};
 
 fn image(w: usize, h: usize) -> Vec<f32> {
     (0..w * h).flat_map(|i| [(i % w) as f32 / w as f32, (i / w) as f32 / h as f32, 0.25 + (i % 7) as f32 * 0.25]).collect()
@@ -16,9 +16,9 @@ fn rendered_dng_round_trips_pixels_and_colour() {
     let (w, h) = (300usize, 70usize);
     let rgb = image(w, h);
     for space in [SRGB, PROPHOTO] {
-        let meta = lightcraft_meta::Metadata { make: Some("Maker".into()), model: Some("Model".into()), ..Default::default() };
+        let meta = lcc_meta::Metadata { make: Some("Maker".into()), model: Some("Model".into()), ..Default::default() };
         let bytes = write_rendered_dng(w, h, &rgb, &space, &meta, None).unwrap();
-        let raw = lightcraft_raw::decode(&bytes).unwrap();
+        let raw = lcc_raw::decode(&bytes).unwrap();
         assert_eq!((raw.width, raw.height, raw.cpp, raw.cfa.is_none()), (w, h, 3, true));
         assert_eq!(raw.metadata.model.as_deref(), Some("Model"));
         let dev = raw.develop(Method::Ahd).unwrap();
@@ -39,12 +39,12 @@ fn rendered_dng_round_trips_pixels_and_colour() {
 
 #[test]
 fn rendered_dng_rejects_bad_input_without_panicking() {
-    let m = lightcraft_meta::Metadata::default();
+    let m = lcc_meta::Metadata::default();
     assert!(write_rendered_dng(0, 4, &[], &SRGB, &m, None).is_err());
     assert!(write_rendered_dng(4, 4, &[0.5; 10], &SRGB, &m, None).is_err());
     assert!(write_rendered_dng(usize::MAX, 3, &[0.5; 10], &SRGB, &m, None).is_err());
     let odd = [f32::NAN, f32::INFINITY, -2.0, 70000.0, 0.5, 1.0];
-    let raw = lightcraft_raw::decode(&write_rendered_dng(2, 1, &odd, &SRGB, &m, None).unwrap()).unwrap();
+    let raw = lcc_raw::decode(&write_rendered_dng(2, 1, &odd, &SRGB, &m, None).unwrap()).unwrap();
     let dev = raw.develop(Method::Bilinear).unwrap();
     assert!(dev.data.iter().flatten().all(|v| v.is_finite() && *v >= 0.0));
 }

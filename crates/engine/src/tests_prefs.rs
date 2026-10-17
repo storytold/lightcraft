@@ -4,8 +4,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use lightcraft_catalog::MediaKind;
-use lightcraft_develop::Preset;
+use lcc_catalog::MediaKind;
+use lcc_develop::Preset;
 use serde_json::json;
 
 use crate::Session;
@@ -28,19 +28,19 @@ fn with_presets(s: &mut Session) {
 }
 
 fn dng(dir: &Path, name: &str, make: &str, model: &str) {
-    let meta = lightcraft_meta::Metadata { make: Some(make.into()), model: Some(model.into()), ..Default::default() };
+    let meta = lcc_meta::Metadata { make: Some(make.into()), model: Some(model.into()), ..Default::default() };
     std::fs::write(dir.join(name), crate::tests_xmp::synthetic_dng_with(None, meta)).unwrap();
 }
 
 fn png(path: &Path) {
     let (w, h) = (24usize, 16usize);
     let data: Vec<[u8; 4]> = (0..w * h).map(|i| [(i * 7) as u8, (i * 3) as u8, 90, 255]).collect();
-    let img = lightcraft_raster::Rgba8 { width: w, height: h, data };
-    let bytes = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+    let img = lcc_raster::Rgba8 { width: w, height: h, data };
+    let bytes = lcc_codecs::encode_png(&lcc_codecs::EncodeImage::rgba8(&img), &lcc_codecs::EncodeMeta::default()).unwrap();
     std::fs::write(path, bytes).unwrap();
 }
 
-fn photo_named<'a>(s: &'a Session, name: &str) -> &'a lightcraft_catalog::Photo {
+fn photo_named<'a>(s: &'a Session, name: &str) -> &'a lcc_catalog::Photo {
     s.catalog.photos().find(|p| p.file_name == name).unwrap_or_else(|| panic!("{name} not imported"))
 }
 
@@ -143,12 +143,31 @@ fn preferences_persist_with_the_library() {
 }
 
 #[test]
+fn last_merge_settings_persist_with_the_library() {
+    let lib = temp_dir("merge");
+    let opts = json!({"align": false, "deghost": "high"});
+    {
+        let mut s = Session::new().with_fs();
+        s.open_library(&lib, false).unwrap();
+        s.last_merge.insert("merge.hdr".into(), opts.clone());
+        s.save_prefs().unwrap();
+        s.close_library().unwrap();
+    }
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    assert_eq!(s.last_merge.get("merge.hdr"), Some(&opts));
+    assert!(!s.last_merge.contains_key("merge.panorama"));
+    drop(s);
+    let _ = std::fs::remove_dir_all(&lib);
+}
+
+#[test]
 fn default_copyright_and_creator_fill_gaps_on_import() {
     let dir = temp_dir("copyright");
     let lib = dir.join("lib");
     png(&dir.join("plain.png"));
     // a DNG that names its own artist keeps it
-    let meta = lightcraft_meta::Metadata { artist: Some("Someone Else".into()), ..Default::default() };
+    let meta = lcc_meta::Metadata { artist: Some("Someone Else".into()), ..Default::default() };
     std::fs::write(dir.join("own.dng"), crate::tests_xmp::synthetic_dng_with(None, meta)).unwrap();
     let mut s = Session::new().with_fs();
     s.open_library(&lib, false).unwrap();
@@ -326,8 +345,8 @@ fn resizing_the_disk_cache_keeps_the_cache_and_its_thumbnails() {
     let mut s = Session::new().with_fs();
     s.open_library(&lib, false).unwrap();
     let cache = s.media.rendered.clone();
-    let key = lightcraft_preview::hash_bytes(b"thumbnail");
-    let img = lightcraft_raster::Rgba8 { width: 4, height: 4, data: vec![[10, 20, 30, 255]; 16] };
+    let key = lcc_preview::hash_bytes(b"thumbnail");
+    let img = lcc_raster::Rgba8 { width: 4, height: 4, data: vec![[10, 20, 30, 255]; 16] };
     cache.put(key, Arc::new(img));
     let generation = cache.generation();
     s.execute("library.preferences", &json!({"cacheMb": 300})).unwrap();
@@ -354,8 +373,8 @@ fn reopening_a_library_retires_the_old_cache_so_its_jobs_cannot_write_after_a_cl
     let job = s.thumb_job(id, 128).unwrap();
     let (old, key) = job.cache.clone().unwrap();
     // a thumbnail written before the reopen is still valid afterwards
-    let kept = lightcraft_preview::hash_bytes(b"kept thumbnail");
-    let img = lightcraft_raster::Rgba8 { width: 4, height: 4, data: vec![[10, 20, 30, 255]; 16] };
+    let kept = lcc_preview::hash_bytes(b"kept thumbnail");
+    let img = lcc_raster::Rgba8 { width: 4, height: 4, data: vec![[10, 20, 30, 255]; 16] };
     old.put(kept, Arc::new(img.clone()));
     s.open_library(&lib, false).unwrap();
     assert!(!Arc::ptr_eq(&old, &s.media.rendered));
@@ -365,7 +384,7 @@ fn reopening_a_library_retires_the_old_cache_so_its_jobs_cannot_write_after_a_cl
     let r = job.run();
     assert!(r.rendered.is_ok());
     old.put(kept, Arc::new(img));
-    let fresh = lightcraft_preview::PreviewCache::with_disk(1 << 20, &lib.join("thumbs"), 1 << 30);
+    let fresh = lcc_preview::PreviewCache::with_disk(1 << 20, &lib.join("thumbs"), 1 << 30);
     assert!(fresh.get(key).is_none(), "stale thumbnail written through the replaced cache");
     assert!(fresh.get(kept).is_none(), "stale put through the replaced cache");
     assert!(s.media.rendered.get(key).is_none());
@@ -411,4 +430,61 @@ fn slideshow_playback_settings_persist_with_the_library() {
     assert_eq!((s.slideshow.slide_duration, s.slideshow.fade_duration), (120.0, 0.0));
     drop(s);
     let _ = std::fs::remove_dir_all(&lib);
+}
+
+#[test]
+fn a_photo_makes_its_optics_the_default_for_new_photos() {
+    let before = temp_dir("newdefault-before");
+    let after = temp_dir("newdefault-after");
+    let lib = temp_dir("newdefault-lib").join("lib");
+    dng(&before, "one.dng", "Nikon", "Z 9");
+    dng(&after, "two.dng", "Nikon", "Z 9 II");
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    s.execute("library.import", &json!({"paths": [before.to_string_lossy()]})).unwrap();
+    let id = photo_named(&s, "one.dng").id;
+    // the two Optics checkboxes a person turns on for a batch (issue #148)
+    s.execute("library.select", &json!({"ids": [id.0]})).unwrap();
+    s.execute("develop.merge", &json!({"settings": {"optics": {"lens_profile": true, "remove_ca": true}}, "label": "Optics"})).unwrap();
+    let r = s.execute("library.setImportDefault", &json!({})).unwrap();
+    let pid = r["id"].as_str().unwrap_or_default().to_string();
+    assert_eq!(r["scope"], "raw", "{r}");
+    assert_eq!(s.import_defaults.raw_preset.as_deref(), Some(pid.as_str()));
+    let saved = s.presets.iter().find(|p| p.id == pid).cloned().unwrap_or_else(|| panic!("the preset was saved: {pid}"));
+    assert_eq!(saved.name, "Optics for new photos");
+    assert_eq!((saved.settings["optics"]["lens_profile"].clone(), saved.settings["optics"]["remove_ca"].clone()), (json!(true), json!(true)));
+    assert!(saved.settings.get("light").is_none(), "a partial: only the group asked for, never the whole edit");
+
+    // a photo imported from now on starts with them, and counts as unedited
+    let r = s.execute("library.import", &json!({"paths": [after.to_string_lossy()]})).unwrap();
+    assert_eq!(r["imported"].as_array().map(Vec::len), Some(1), "{r}");
+    let fresh = photo_named(&s, "two.dng");
+    assert!(fresh.develop.optics.lens_profile && fresh.develop.optics.remove_ca, "the default applied on import");
+    assert!(!fresh.is_edited(), "a default is not an edit");
+
+    // pressing again updates that one preset instead of piling presets up
+    let count = s.presets.len();
+    let again = s.execute("library.setImportDefault", &json!({})).unwrap();
+    assert_eq!(again["id"], pid, "{again}");
+    assert_eq!(s.presets.len(), count, "one preset, not one per press");
+
+    // per-camera defaults on: the photo's own camera gets the entry (the import made the new photo
+    // active, so select the first one again — the panel acts on what is on screen)
+    s.execute("library.preferences", &json!({"import": {"perCamera": true}})).unwrap();
+    s.execute("library.select", &json!({"ids": [id.0]})).unwrap();
+    let r = s.execute("library.setImportDefault", &json!({})).unwrap();
+    assert_eq!((r["scope"].clone(), r["camera"].clone()), (json!("camera"), json!("Nikon Z 9")), "{r}");
+    assert_eq!(s.import_defaults.preset_for(true, "Nikon Z 9"), Some(pid.as_str()));
+    // and what it will not take
+    assert!(s.execute("library.setImportDefault", &json!({"scope": "sideways"})).is_err(), "an unknown scope is refused");
+    assert!(s.execute("library.setImportDefault", &json!({"groups": ["nope"]})).is_err(), "an unknown group is refused");
+
+    // a name of the user's own (Develop ▸ Optics ▸ Save as…): a second preset, and it takes over
+    let named = s.execute("library.setImportDefault", &json!({"name": "Birding optics", "scope": "raw"})).unwrap();
+    assert_eq!(named["name"], "Birding optics", "{named}");
+    assert_eq!(s.import_defaults.raw_preset.as_deref(), named["id"].as_str(), "{named}");
+    assert!(s.presets.iter().any(|p| p.id == pid), "the first one is still there: named defaults live side by side");
+    assert_eq!(s.presets.iter().filter(|p| p.name == "Birding optics").count(), 1, "and saving that name again reuses it");
+    let _ = std::fs::remove_dir_all(&before);
+    let _ = std::fs::remove_dir_all(&after);
 }

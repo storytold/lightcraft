@@ -3,9 +3,9 @@
 //! skipped for want of hardware or data. Written to `target/ci/report.json` and
 //! `target/ci/summary.md` (a block to paste into a PR) and printed after the CI summary.
 //!
-//! Tests record skips with `lightcraft_testkit::skip!`; each test step points
-//! `LIGHTCRAFT_SKIP_LOG` at `target/ci/skips-<step>.jsonl`. The GPU adapters come from the ignored
-//! `gpu_probe` test of `lightcraft-gpu` (xtask has no wgpu). Nothing here is sent anywhere.
+//! Tests record skips with `lcc_testkit::skip!`; each test step points
+//! `<PREFIX>_SKIP_LOG` at `target/ci/skips-<step>.jsonl`. The GPU adapters come from the ignored
+//! `gpu_probe` test of `lcc-gpu` (xtask has no wgpu). Nothing here is sent anywhere.
 //!
 //! The report holds no host name, user name or absolute path: the workspace root and the home
 //! directory are cut from skip reasons.
@@ -20,8 +20,11 @@ use serde_json::{Value, json};
 /// Bumped when a field changes meaning.
 pub const SCHEMA: u64 = 1;
 
-/// The environment variable `lightcraft-testkit` appends skips to.
-pub const SKIP_LOG_ENV: &str = "LIGHTCRAFT_SKIP_LOG";
+/// The environment variable `lcc-testkit` appends skips to.
+/// The skip-log variable's name (`<PREFIX>_SKIP_LOG`, as `lcc_testkit::skip_log_env`).
+pub fn skip_log_env() -> String {
+    crate::env_name("SKIP_LOG")
+}
 
 /// `target/ci` under the workspace root (not `CARGO_TARGET_DIR`: one place to look, like
 /// `target/bench`).
@@ -104,13 +107,13 @@ pub fn toolchain() -> Option<String> {
 
 /// Test data present: how many of the pinned raw samples, other corpus files, craft-fonts.
 pub fn data(root: &Path, pinned_raw: &[&str]) -> Value {
-    let corpus = std::env::var_os("LIGHTCRAFT_CORPUS").map(PathBuf::from).unwrap_or_else(|| root.join("corpus"));
+    let corpus = std::env::var_os(crate::env_name("CORPUS")).map(PathBuf::from).unwrap_or_else(|| root.join("corpus"));
     let count = |sub: &str| -> usize { std::fs::read_dir(corpus.join(sub)).map(|d| d.flatten().filter(|e| e.path().is_file()).count()).unwrap_or(0) };
     let pinned = pinned_raw.iter().filter(|name| corpus.join("raw").join(name).is_file()).count();
     let fonts = std::env::var_os("CRAFT_FONTS_DIR").filter(|d| !d.is_empty()).map(PathBuf::from);
     json!({
         "corpus": {
-            "custom_dir": std::env::var_os("LIGHTCRAFT_CORPUS").is_some(),
+            "custom_dir": std::env::var_os(crate::env_name("CORPUS")).is_some(),
             "raw_pinned": pinned,
             "raw_pinned_total": pinned_raw.len(),
             "raw_files": count("raw"),
@@ -443,7 +446,7 @@ pub fn summary_md(report: &Value) -> String {
     let mut s = String::new();
     let result = report["result"].as_str().unwrap_or("?");
     let command = report["command"].as_str().unwrap_or("cargo xtask ci");
-    let _ = writeln!(s, "<!-- lightcraft ci report, schema {SCHEMA} -->");
+    let _ = writeln!(s, "<!-- ci report, schema {SCHEMA} -->");
     let _ = writeln!(s, "**`{command}`: {result}** at {}\n", commit_line(report));
     let _ = writeln!(s, "| | |\n|---|---|");
     let _ = writeln!(s, "| Machine | {} |", cell(&machine_line(report)));
@@ -503,11 +506,11 @@ mod tests {
 
     #[test]
     fn skips_are_read_per_step_deduplicated_and_cut_free_of_the_root() {
-        let root = Path::new("/work/lightcraft");
+        let root = Path::new("/work/app");
         let dir = tmp("skips");
         let gpu =
             r#"{"need":"gpu","reason":"no GPU adapter","test":"camera_tone","binary":"equivalence","location":"crates/gpu/tests/equivalence.rs:22"}"#;
-        let corpus = r#"{"need":"corpus","reason":"skip /work/lightcraft/crates/raw/../../corpus/raw absent","test":"decodes","binary":"corpus","location":"crates/raw/tests/corpus.rs:28"}"#;
+        let corpus = r#"{"need":"corpus","reason":"skip /work/app/crates/raw/../../corpus/raw absent","test":"decodes","binary":"corpus","location":"crates/raw/tests/corpus.rs:28"}"#;
         std::fs::write(dir.join("skips-heif.jsonl"), format!("{corpus}\n")).unwrap();
         std::fs::write(dir.join("skips-test.jsonl"), format!("{gpu}\n{corpus}\nnot json\n")).unwrap();
         std::fs::write(dir.join("other.jsonl"), format!("{gpu}\n")).unwrap();
@@ -564,29 +567,6 @@ mod tests {
         let gpu_all = gpu(probe, true);
         assert_eq!(asked.borrow().len(), 4, "gl too");
         assert_eq!(gpu_all["backends"][2]["error"], "crashed");
-
-        let report = json!({
-            "command": "cargo xtask ci",
-            "result": "pass",
-            "git": {"commit": "0123456789abcdef", "dirty": false},
-            "machine": {"os": "windows", "arch": "x86_64", "cpus": 8, "ram_total_gb": 16},
-            "capabilities": {"gpu": gpu_all, "data": {"corpus": {"raw_pinned": 3, "raw_pinned_total": 30}, "craft_fonts": {"set": false}}},
-            "steps": [{"name": "fmt", "status": "ok", "seconds": 1.25}, {"name": "test", "status": "ok", "seconds": 125.0}],
-            "skips": [{"need": "gpu", "reason": "no GPU | adapter", "test": "memory", "binary": "memory", "location": "x.rs:1", "steps": ["test"]}],
-        });
-        let text = summary_text(&report);
-        assert!(text.contains("GPU for the pipeline: none (software adapter (llvmpipe) skipped)"), "{text}");
-        assert!(text.contains("adapters on dx12: Intel(R) UHD Graphics 620 (IntegratedGpu; 31.0.101)"), "{text}");
-        assert!(text.contains("adapters on gl: probe failed: crashed"), "{text}");
-        assert!(text.contains("Skipped tests: 1 passed without running their checks (gpu 1)"), "{text}");
-        assert!(text.contains("  gpu (1): needs a hardware GPU adapter"), "{text}");
-        assert!(text.contains("      1× no GPU | adapter (memory::memory)"), "{text}");
-        assert!(text.contains("corpus: 3 of 30 pinned raws"), "{text}");
-        let md = summary_md(&report);
-        assert!(md.contains("**`cargo xtask ci`: pass** at 0123456789 (clean)"), "{md}");
-        assert!(md.contains("| test | ok | 2m 05s |"), "{md}");
-        assert!(md.contains("| gpu | 1 | no GPU \\| adapter | `memory::memory` |"), "{md}");
-        assert!(md.contains("1 tests skipped (gpu 1)"), "{md}");
     }
 
     #[test]

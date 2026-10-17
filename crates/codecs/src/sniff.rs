@@ -3,7 +3,7 @@
 use crate::exif::Tiff;
 use serde::{Deserialize, Serialize};
 
-/// Image container formats LightCraft recognises.
+/// Image container formats the app recognises.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Format {
     Jpeg,
@@ -21,9 +21,9 @@ pub enum Format {
     /// Photoshop PSD / PSB (merged composite).
     Psd,
     /// TIFF-structured camera raw (DNG, CR2, NEF, ARW, PEF, ORF, RW2, SRW, 3FR, IIQ, ERF, …):
-    /// route to `lightcraft-raw`.
+    /// route to `lcc-raw`.
     RawTiffLike,
-    /// Non-TIFF camera raw containers (CR3, RAF, CRW, MRW, X3F): route to `lightcraft-raw`.
+    /// Non-TIFF camera raw containers (CR3, RAF, CRW, MRW, X3F): route to `lcc-raw`.
     RawOther,
 }
 
@@ -75,13 +75,14 @@ impl Format {
             Format::Jxl => Some("built without the `jxl` feature"),
             #[cfg(not(feature = "heif"))]
             Format::Heif => Some(crate::heif::NOT_IN_BUILD),
-            Format::Avif => Some("no pure-Rust, permissively licensed AV1 decoder yet"),
-            Format::RawTiffLike | Format::RawOther => Some("camera raw: decode with lightcraft-raw"),
+            #[cfg(target_arch = "wasm32")]
+            Format::Avif => Some("AVIF isn't decoded in the web build"),
+            Format::RawTiffLike | Format::RawOther => Some("camera raw: decode with lcc-raw"),
             _ => None,
         }
     }
 
-    /// Camera raw formats (decode with `lightcraft-raw`).
+    /// Camera raw formats (decode with `lcc-raw`).
     pub fn is_raw(self) -> bool {
         matches!(self, Format::RawTiffLike | Format::RawOther)
     }
@@ -176,6 +177,17 @@ fn tiff_is_raw(b: &[u8]) -> bool {
     let sony = t.ifd(ifd0).is_some_and(|(entries, _)| {
         entries.iter().any(|e| e.tag == 0x010f && t.bytes(e).and_then(|v| v.get(..4)).is_some_and(|v| v.eq_ignore_ascii_case(b"SONY")))
     });
+    // The DSLR-A100 ARW: an old-style-JPEG IFD0 whose SubIFDs pointer addresses the raw data (same rule as lcc-raw).
+    let a100 = sony
+        && t.ifd(ifd0).is_some_and(|(entries, _)| {
+            let model = entries.iter().find(|e| e.tag == 0x0110).and_then(|e| t.bytes(e));
+            let model_is = model.is_some_and(|v| v.split(|&c| c == 0).next() == Some(&b"DSLR-A100"[..]));
+            let old_jpeg = entries.iter().find(|e| e.tag == 0x0103).and_then(|e| t.uint(e)) == Some(6);
+            model_is && old_jpeg && entries.iter().any(|e| e.tag == 0x014A)
+        });
+    if a100 {
+        return true;
+    }
     let mut stack = vec![ifd0];
     let mut seen = 0;
     while let Some(pos) = stack.pop() {

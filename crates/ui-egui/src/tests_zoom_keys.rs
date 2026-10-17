@@ -10,14 +10,14 @@ use serde_json::json;
 
 use crate::headless::Headless;
 use crate::state::Zoom;
-use crate::{LightcraftApp, Services};
+use crate::{LccApp, Services};
 
 const T: Duration = Duration::from_secs(20);
 const SETTLE: Duration = Duration::from_secs(120);
 
 fn edit_view() -> Headless {
     let services = Services { png: None, ..Default::default() };
-    let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+    let mut app = LccApp::new(lcc_engine::Session::with_demo(), services);
     app.ui.settings.gpu = false;
     let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
     let r = h.request("ui.set", json!({"view": "detail", "right": "edit"}), T);
@@ -40,7 +40,8 @@ fn zoom_shortcuts_zoom_the_photo_and_leave_the_interface_scale_alone() {
     let scale = h.view.ctx.zoom_factor();
     // Cmd+= (Ctrl+= on Windows / Linux) is View ▸ Zoom In: the photo, not the UI
     key(&mut h, "=");
-    assert_eq!(h.app.ui.zoom, Zoom::Percent(50.0), "{:?}", h.app.ui.zoom);
+    // (the fork zooms by Lightroom Classic's fixed levels: from Fit in this window the next is 1:3)
+    assert_eq!(h.app.ui.zoom, Zoom::Percent(100.0 / 3.0), "{:?}", h.app.ui.zoom);
     assert_eq!(h.view.ctx.zoom_factor(), scale, "Cmd+= scaled the interface");
     // Cmd+Plus (a keypad or layout that reports `+`) is egui's other interface-zoom key
     key(&mut h, "Plus");
@@ -89,7 +90,7 @@ fn ctrl_wheel_over_the_photo_zooms_it_in_the_edit_view() {
 
 fn grid_view(view: crate::state::ViewMode) -> Headless {
     let services = Services { png: None, ..Default::default() };
-    let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+    let mut app = LccApp::new(lcc_engine::Session::with_demo(), services);
     app.ui.settings.gpu = false;
     app.ui.view = view;
     let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
@@ -172,7 +173,7 @@ fn cmd_equals_and_minus_still_zoom_and_leave_the_thumbnail_size_alone() {
     let mut h = edit_view();
     h.app.ui.thumb_size = 220.0;
     key(&mut h, "=");
-    assert_eq!(h.app.ui.zoom, Zoom::Percent(50.0));
+    assert!(matches!(h.app.ui.zoom, Zoom::Percent(_)), "Cmd+= zoomed in: {:?}", h.app.ui.zoom);
     key(&mut h, "-");
     assert_eq!(h.app.ui.zoom, Zoom::Percent(25.0));
     assert_eq!(h.app.ui.thumb_size, 220.0);

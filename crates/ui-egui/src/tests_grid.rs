@@ -5,13 +5,13 @@
 
 use std::time::Duration;
 
-use lightcraft_catalog::{Op, Photo, PhotoId, Source, Stack, StackId};
-use lightcraft_engine::Session;
+use lcc_catalog::{Op, Photo, PhotoId, Source, Stack, StackId};
+use lcc_engine::Session;
 use serde_json::json;
 
 use crate::headless::Headless;
 use crate::state::ViewMode;
-use crate::{LightcraftApp, Services};
+use crate::{LccApp, Services};
 
 const T: Duration = Duration::from_secs(30);
 const SETTLE: Duration = Duration::from_secs(120);
@@ -20,16 +20,23 @@ const N: u64 = 3000;
 /// `N` photos (missing files: thumbnails fail fast), 40 per capture day, landscape except every
 /// fifth; a three-photo stack every 100 photos.
 fn library() -> Session {
+    library_of(N)
+}
+
+fn library_of(n: u64) -> Session {
     let mut s = Session::new();
-    for i in 0..N {
+    // newest first: the tests here were written around the newest day heading the grid
+    s.sort.ascending = false;
+    for i in 0..n {
         let (w, h) = if i % 5 == 4 { (4000, 6000) } else { (6000, 4000) };
-        let path = format!("/lightcraft-grid-test/IMG_{i:05}.jpg");
+        let path = format!("/app-grid-test/IMG_{i:05}.jpg");
         let mut p = Photo::new(PhotoId(i + 1), Source::File { path }, &format!("IMG_{i:05}.jpg"), "JPEG", w, h, "2026-01-01T00:00:00");
         let day = i / 40;
         p.captured = Some(format!("2026-{:02}-{:02}T{:02}:00:00", 12 - day / 28, 28 - day % 28, 8 + i % 40 / 4));
+        p.rating = (i % 6) as u8;
         s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
     }
-    for k in 0..N / 100 {
+    for k in 0..n / 100 {
         let b = k * 100 + 1;
         let stack = Stack { id: StackId(k + 1), photos: vec![PhotoId(b), PhotoId(b + 1), PhotoId(b + 2)], collapsed: false };
         s.catalog.apply(Op::AddStack { stack }).unwrap();
@@ -38,7 +45,7 @@ fn library() -> Session {
 }
 
 fn grid(view: ViewMode) -> Headless {
-    let app = LightcraftApp::new(library(), Services { png: None, ..Default::default() });
+    let app = LccApp::new(library(), Services { png: None, ..Default::default() });
     let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
     h.app.ui.view = view;
     h.app.ui.thumb_size = 160.0;
@@ -171,4 +178,101 @@ fn an_unedited_raws_thumbnail_skips_the_sensor_decode() {
     // edited photo, or a raw with no embedded JPEG: render it
     assert!(!skips_the_real_render(false, true));
     assert!(!skips_the_real_render(false, false));
+}
+
+/// Performance at scale (gap 26; ignored, run with
+/// `cargo test --release -p lcc-ui-egui scale_100k_grid -- --ignored --nocapture`): the grid on a
+/// 100k-photo library. Times the first frame, unchanged frames, wheel scrolling, a far jump, a
+/// filter change and a sort change, and checks the per-frame work stays bounded. Ceilings are
+/// loose (shared, loaded machines): compare numbers from the same run.
+#[test]
+#[ignore]
+fn scale_100k_grid_frames() {
+    use std::time::Instant;
+    let ms = |t: Instant| t.elapsed().as_secs_f64() * 1e3;
+    let t = Instant::now();
+    let session = library_of(100_000);
+    eprintln!("grid 100k | build catalog: {:.0} ms", ms(t));
+    let app = LccApp::new(session, Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1600.0, 1000.0], 1.0);
+    h.app.ui.view = ViewMode::PhotoGrid;
+    h.app.ui.thumb_size = 160.0;
+    let t = Instant::now();
+    h.step();
+    let mut rows: Vec<(&str, f64)> = vec![("first frame", ms(t))];
+    h.settle(SETTLE);
+    let frames = |h: &mut Headless, what: &'static str, k: usize, rows: &mut Vec<(&str, f64)>| {
+        let t = Instant::now();
+        for _ in 0..k {
+            h.step();
+        }
+        rows.push((what, ms(t) / k as f64));
+    };
+    frames(&mut h, "unchanged frame", 20, &mut rows);
+    let canvas = h.app.canvas_rect.expect("grid drawn");
+    h.request("ui.move", json!({"x": canvas.center().x, "y": canvas.center().y}), T);
+    let before = h.app.caches.grid_stats.clone();
+    let t = Instant::now();
+    for _ in 0..30 {
+        h.request("ui.scroll", json!({"dy": -400.0}), T);
+        h.step();
+    }
+    rows.push(("wheel-scroll frame", ms(t) / 30.0));
+    let s = &h.app.caches.grid_stats;
+    let per = (s.cells_visited - before.cells_visited) / (s.frames - before.frames).max(1);
+    assert!(per < 400, "scrolling visited {per} cells per frame");
+    assert_eq!(s.layout_builds, before.layout_builds, "scrolling rebuilt the layout");
+    // let the wheel glide finish first: egui drops a scroll-to that starts while it still runs
+    h.settle(SETTLE);
+    let far = h.app.session.visible()[90_000];
+    let t = Instant::now();
+    select(&mut h, far);
+    rows.push(("jump to photo 90k (select + settle)", ms(t)));
+    assert!(on_screen(&h, far), "scroll {:?} canvas {:?} cell {:?}", h.app.grid_scroll, h.app.canvas_rect, widget(&h, &format!("thumb:{}", far.0)));
+    let change = |h: &mut Headless, what: &'static str, cmd: &str, params: serde_json::Value, rows: &mut Vec<(&str, f64)>| {
+        let t = Instant::now();
+        let r = h.request("engine.execute", json!({"command": cmd, "params": params}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.step();
+        rows.push((what, ms(t)));
+        h.settle(SETTLE);
+    };
+    change(&mut h, "filter rating >= 4 (command + next frame)", "library.filter", json!({"rating": 4}), &mut rows);
+    change(&mut h, "clear filter (command + next frame)", "library.filter", json!({"rating": 0}), &mut rows);
+    change(&mut h, "sort file name desc (command + next frame)", "library.sort", json!({"key": "fileName", "ascending": false}), &mut rows);
+    change(&mut h, "sort capture date (command + next frame)", "library.sort", json!({"key": "captureDate", "ascending": true}), &mut rows);
+    frames(&mut h, "unchanged frame after sorts", 20, &mut rows);
+    for (what, v) in &rows {
+        eprintln!("grid 100k | {what}: {v:.1} ms");
+    }
+    // ceilings an order of magnitude over the budgets, so only a real regression fails
+    for (what, v) in &rows {
+        let budget = if what.ends_with("frame") && !what.starts_with("first") || what.contains("frame after") { 250.0 } else { 5000.0 };
+        assert!(*v < budget, "{what}: {v:.0} ms over {budget} ms");
+    }
+}
+
+/// Issue #144: a double-click opens the loupe in Library by default (as in Lightroom Classic) and
+/// Develop when the preference is on; the setting survives a save/load of the settings.
+#[test]
+fn double_click_opens_the_loupe_or_develop_per_preference() {
+    use crate::module::ModuleId;
+    let mut app = LccApp::new(library_of(5), Services { png: None, ..Default::default() });
+    app.ui.view = ViewMode::PhotoGrid;
+    crate::panels::grid::open_photo(&mut app, PhotoId(3));
+    assert_eq!(app.session.selection.active, Some(PhotoId(3)));
+    assert_eq!(app.ui.view, ViewMode::Detail);
+    assert_eq!(app.ui.module, ModuleId::Library);
+
+    let _ = app.run("module.library", json!({}));
+    app.ui.view = ViewMode::PhotoGrid;
+    app.ui.settings.double_click_develop = true;
+    crate::panels::grid::open_photo(&mut app, PhotoId(4));
+    assert_eq!(app.session.selection.active, Some(PhotoId(4)));
+    assert_eq!(app.ui.module, ModuleId::Develop);
+
+    let s: crate::state::AppSettings = serde_json::from_value(serde_json::to_value(&app.ui.settings).unwrap()).unwrap();
+    assert!(s.double_click_develop);
+    let old: crate::state::AppSettings = serde_json::from_value(json!({})).unwrap();
+    assert!(!old.double_click_develop);
 }

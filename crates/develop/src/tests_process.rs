@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 
 use crate::*;
 
-/// Complete settings as LightCraft wrote them before process versions existed (main at 8f924a9:
+/// Complete settings as the app wrote them before process versions existed (main at 8f924a9:
 /// `serde_json::to_string` of a raw photo with tone, colour, curve, grading, effects and a radial
 /// mask), one top-level key per line. There is no `process` field.
 const LEGACY: &str = r#"
@@ -88,7 +88,7 @@ fn v1_is_left_out_when_saving_and_other_processes_are_kept() {
 
 #[test]
 fn unknown_process_numbers_load_and_render_with_the_newest_known() {
-    // written by a newer LightCraft: kept as it is, rendered with the latest process this build has
+    // written by a newer version of the app: kept as it is, rendered with the latest process this build has
     let s = DevelopSettings::from_json(&json!({"process": 7, "light": {"exposure": 0.5}})).unwrap();
     assert_eq!(s.process, ProcessVersion(7));
     assert_eq!(s.process.process(), Process::LATEST);
@@ -96,7 +96,7 @@ fn unknown_process_numbers_load_and_render_with_the_newest_known() {
     assert!(!s.process.is_outdated(), "never downgraded by Update to Current Process");
     assert_eq!(s.to_json()["process"], json!(7));
     assert_eq!(s.merged(&json!({"light": {"exposure": 1.0}})).unwrap().process, ProcessVersion(7));
-    // below V1 (no LightCraft writes it): rendered as V1, and updatable
+    // below V1 (no version of the app writes it): rendered as V1, and updatable
     let zero = DevelopSettings::from_json(&json!({"process": 0})).unwrap().process;
     assert_eq!((zero.process(), zero.is_known(), zero.is_outdated()), (Process::V1, false, true));
     let max = DevelopSettings::from_json(&json!({"process": u32::MAX})).unwrap().process;
@@ -158,5 +158,29 @@ fn the_process_is_not_an_edit_nor_part_of_copied_settings() {
     assert_eq!(target.merged(&json!({"process": LATEST_PLUS_ONE})).unwrap().process, ProcessVersion(LATEST_PLUS_ONE));
 }
 
-/// A process other than the latest: a newer LightCraft's number (no older one than V1 exists).
+/// A process other than the latest: a newer version of the app's number (no older one than V1 exists).
 const LATEST_PLUS_ONE: u32 = ProcessVersion::LATEST.0 + 1;
+
+#[test]
+fn plugin_filters_absent_from_old_json_and_not_written_when_empty() {
+    let old = DevelopSettings::default();
+    let mut v = old.to_json();
+    assert!(v.get("plugin_filters").is_none(), "an empty stack is not written");
+    v.as_object_mut().unwrap().remove("plugin_filters");
+    let back = DevelopSettings::from_json(&v).unwrap();
+    assert!(back.plugin_filters.is_empty());
+    assert_eq!(back.hash64(), old.hash64());
+
+    let mut s = DevelopSettings::default();
+    s.plugin_filters.push(PluginFilter { uid: 1, plugin: "x.neg".into(), name: "Negative".into(), stage: FilterStage::Source, ..Default::default() });
+    let rt = DevelopSettings::from_json(&s.to_json()).unwrap();
+    assert_eq!(rt, s);
+    assert_ne!(s.hash64(), old.hash64());
+    assert_eq!(s.active_plugin_filters(FilterStage::Source).count(), 1);
+    s.set_section_enabled(PLUGIN_FILTERS_SECTION, false);
+    assert_eq!(s.active_plugin_filters(FilterStage::Source).count(), 0);
+    assert!(s.effective().plugin_filters.is_empty());
+    // Copying the group carries an empty stack too, so a paste clears the target's.
+    let empty = extract_groups(&DevelopSettings::default(), &[SettingsGroup::PluginFilters]);
+    assert_eq!(s.merged(&empty).unwrap().plugin_filters.len(), 0);
+}

@@ -7,7 +7,7 @@
 //! Everything here is a suggestion for the user to confirm; nothing is ever named automatically. All of it is
 //! catalog-only (no sidecar is written) and naming is undoable.
 
-use lightcraft_catalog::Op;
+use lcc_catalog::Op;
 use serde_json::{Value, json};
 
 use super::{CommandSpec, bad, cmd};
@@ -28,7 +28,7 @@ fn name_param(p: &Value, c: &str) -> Result<Option<String>> {
 }
 
 /// Give a face region its name. Naming makes the face yours: a later "Detect Faces" run no longer replaces it.
-fn apply_name(region: &mut lightcraft_meta::Region, name: &Option<String>) {
+fn apply_name(region: &mut lcc_meta::Region, name: &Option<String>) {
     region.name = name.clone();
     if name.is_some() && region.description.as_deref().is_some_and(|d| d.starts_with(super::face_detect::MARK)) {
         region.description = None;
@@ -55,12 +55,12 @@ fn name_faces(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let (mut ops, mut named) = (Vec::new(), 0usize);
     for (photo, indexes) in by_photo {
-        let id = lightcraft_catalog::PhotoId(photo);
+        let id = lcc_catalog::PhotoId(photo);
         let Some(photo) = s.catalog.photo(id) else { continue };
         let mut meta = photo.meta.clone();
         let before = named;
         for i in indexes {
-            if let Some(region) = meta.regions.get_mut(i).filter(|r| r.kind == lightcraft_meta::RegionKind::Face) {
+            if let Some(region) = meta.regions.get_mut(i).filter(|r| r.kind == lcc_meta::RegionKind::Face) {
                 apply_name(region, &name);
                 named += 1;
             }
@@ -82,7 +82,7 @@ fn name_faces(s: &mut Session, p: &Value) -> Result<Value> {
 /// makes the face yours: a later "Detect Faces" run no longer replaces it.
 fn set_name(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "faces.setName";
-    let id = p.get("id").and_then(Value::as_u64).map(lightcraft_catalog::PhotoId).or_else(|| s.active()).ok_or_else(|| bad(C, "no photo"))?;
+    let id = p.get("id").and_then(Value::as_u64).map(lcc_catalog::PhotoId).or_else(|| s.active()).ok_or_else(|| bad(C, "no photo"))?;
     let index = p.get("index").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok()).ok_or_else(|| bad(C, "missing or invalid `index`"))?;
     let name = name_param(p, C)?;
     let mut meta = s.catalog.photo(id).ok_or_else(|| bad(C, "no such photo"))?.meta.clone();
@@ -135,7 +135,7 @@ fn rename_person(s: &mut Session, p: &Value) -> Result<Value> {
         let Some(ph) = s.catalog.photo(id) else { continue };
         let mut indexes = Vec::new();
         for (i, r) in ph.meta.regions.iter().enumerate() {
-            if r.kind != lightcraft_meta::RegionKind::Face {
+            if r.kind != lcc_meta::RegionKind::Face {
                 continue;
             }
             let Some(n) = r.name.as_deref().map(str::trim).filter(|n| !n.is_empty()) else { continue };
@@ -196,10 +196,10 @@ struct Arranged {
 /// faces that look alike are next to each other, and a face the named faces recognise carries the name they suggest.
 fn unnamed(s: &mut Session, p: &Value) -> Result<Value> {
     let limit = p.get("limit").and_then(Value::as_u64).map_or(600, |n| usize::try_from(n).unwrap_or(600)).clamp(1, MAX_UNNAMED);
-    let mut all: Vec<(u64, usize, lightcraft_geom::Rect)> = Vec::new();
+    let mut all: Vec<(u64, usize, lcc_geom::Rect)> = Vec::new();
     for ph in s.catalog.photos().filter(|ph| ph.in_library()) {
         for (index, r) in ph.meta.regions.iter().enumerate() {
-            if r.kind == lightcraft_meta::RegionKind::Face && r.name.is_none() {
+            if r.kind == lcc_meta::RegionKind::Face && r.name.is_none() {
                 all.push((ph.id.0, index, r.rect));
             }
         }
@@ -211,7 +211,7 @@ fn unnamed(s: &mut Session, p: &Value) -> Result<Value> {
     let faces: Vec<Value> = all
         .iter()
         .map(|(photo, index, rect)| {
-            let view = s.face_view(lightcraft_catalog::PhotoId(*photo), *rect);
+            let view = s.face_view(lcc_catalog::PhotoId(*photo), *rect);
             let suggestion = arranged.suggestions.get(&(*photo, *index)).map(|(name, score)| json!({"name": name, "score": score}));
             json!({"photo": photo, "index": index, "rect": rect_json(rect), "view": rect_json(&view), "suggestion": suggestion})
         })
@@ -229,7 +229,7 @@ struct Similar {
     pending: usize,
 }
 
-fn rect_json(r: &lightcraft_geom::Rect) -> Value {
+fn rect_json(r: &lcc_geom::Rect) -> Value {
     json!({"x0": r.x0, "y0": r.y0, "x1": r.x1, "y1": r.y1})
 }
 
@@ -246,7 +246,7 @@ fn person(s: &mut Session, p: &Value) -> Result<Value> {
     let (mut shown, mut total, mut confirmed) = (name.to_string(), 0usize, Vec::new());
     for ph in s.catalog.photos().filter(|ph| ph.in_library()) {
         for (index, r) in ph.meta.regions.iter().enumerate() {
-            let Some(n) = r.name.as_deref().filter(|n| r.kind == lightcraft_meta::RegionKind::Face && n.trim().to_lowercase() == key) else {
+            let Some(n) = r.name.as_deref().filter(|n| r.kind == lcc_meta::RegionKind::Face && n.trim().to_lowercase() == key) else {
                 continue;
             };
             if total == 0 {
@@ -269,12 +269,12 @@ mod imp {
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
-    use lightcraft_catalog::{Op, Photo, PhotoId};
-    use lightcraft_develop::DevelopSettings;
-    use lightcraft_faces::matching;
-    use lightcraft_faces::runtime::Embedder;
-    use lightcraft_geom::Rect;
-    use lightcraft_meta::{Region, RegionKind};
+    use lcc_catalog::{Op, Photo, PhotoId};
+    use lcc_develop::DevelopSettings;
+    use lcc_faces::matching;
+    use lcc_faces::runtime::Embedder;
+    use lcc_geom::Rect;
+    use lcc_meta::{Region, RegionKind};
     use serde_json::{Value, json};
 
     use super::super::bad;
@@ -324,7 +324,7 @@ mod imp {
         let net = embedder.clone();
         super::super::face_detect::offer_gpu(s, "recognition", move |gpu| net.accelerate(gpu, true).map_err(|e| e.to_string()));
         let dim = match installed.manifest.output {
-            lightcraft_faces::OutputSpec::Embedding { dim } => dim as usize,
+            lcc_faces::OutputSpec::Embedding { dim } => dim as usize,
             _ => return Err(bad(cmd, "the chosen model is not a recognition model")),
         };
         let cache = s.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.join(format!("face-embeddings-{id}.bin")));
@@ -676,7 +676,7 @@ mod imp {
         }
         // the GPU is held back the same way: a light pace leaves it mostly free for the window's own renders
         let (runs, share) = crate::faces_worker::gpu_pace(pace);
-        lightcraft_gpu::faces::set_pace(runs, share);
+        lcc_gpu::faces::set_pace(runs, share);
         while target > 0 && s.faces.in_flight.len() < target + PREFETCH {
             let Some(id) = s.faces.queue.pop() else { break };
             let Some(job) = prepare(s, id, true) else { continue };
@@ -1100,7 +1100,7 @@ mod imp {
         super::Similar { items: Vec::new(), ready: false, pending: 0 }
     }
 
-    pub fn arrange_unnamed(_: &mut Session, _: &mut Vec<(u64, usize, lightcraft_geom::Rect)>, _: usize) -> super::Arranged {
+    pub fn arrange_unnamed(_: &mut Session, _: &mut Vec<(u64, usize, lcc_geom::Rect)>, _: usize) -> super::Arranged {
         super::Arranged { ordered: false, ready: false, suggestions: Default::default() }
     }
 }

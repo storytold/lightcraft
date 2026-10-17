@@ -1,0 +1,11 @@
+# cargo-nextest profiles. CI runs `--profile ci` (via `cargo xtask ci` / `cargo xtask quarantine test`);
+# see docs/ci.md for retries, flaky reports and the quarantine (ci/quarantine.toml).
+
+[profile.ci]
+# a test that fails and then passes is reported as FLAKY (it passes the run, but shows in the log)
+retries = 2
+fail-fast = false
+# report a slow test after 2 minutes and kill it after 5 periods (10 minutes), so a hang fails fast
+slow-timeout = { period = "120s", terminate-after = 5 }
+failure-output = "immediate-final"
+final-status-level = "flaky"

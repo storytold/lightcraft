@@ -1,0 +1,72 @@
+# .deb and .rpm packages (nfpm: https://nfpm.goreleaser.com). A template: package.sh fills the {{…}}
+# placeholders from brand.toml, stages the file tree, substitutes its path for ${STAGE} (nfpm
+# doesn't expand env vars in `src`) and exports VERSION, NFPM_ARCH and PACKAGE_MAINTAINER.
+name: {{binary}}
+arch: ${NFPM_ARCH}
+platform: linux
+version: ${VERSION}
+# semver: 0.2.0-rc.1 becomes 0.2.0~rc.1 in deb/rpm, so pre-releases sort before the release.
+version_schema: semver
+release: 1
+section: graphics
+priority: optional
+maintainer: ${PACKAGE_MAINTAINER}
+vendor: {{vendor}}
+homepage: {{homepage}}
+license: MIT AND Apache-2.0
+description: |-
+  Open-source, native photo library and raw developer that works the way
+  Lightroom users expect. Import, rate, keyword and organise photos; develop
+  raw files non-destructively with exposure, tone, color grading, masks and
+  presets; GPU processing (wgpu). Includes {{cli_binary}}, a headless renderer
+  and command runner.
+
+# The binaries link only glibc and libgcc_s directly. Windowing (X11/Wayland, xkbcommon) and the
+# GPU (Vulkan, EGL/GL) are loaded at runtime, so they are dependencies/recommendations here
+# rather than ELF NEEDED entries.
+overrides:
+  deb:
+    depends:
+      - libc6 (>= 2.35)
+      - libgcc-s1
+      - libxkbcommon0
+      - libvulkan1 | libegl1
+    recommends:
+      - libwayland-client0
+      - libx11-6
+      - libx11-xcb1
+      - libxcursor1
+      - libxi6
+      - libxrandr2
+      - mesa-vulkan-drivers
+      - xdg-desktop-portal
+  rpm:
+    depends:
+      - libxkbcommon
+      - (vulkan-loader or libglvnd-egl)
+    recommends:
+      - libwayland-client
+      - libX11
+      - libXcursor
+      - libXi
+      - libXrandr
+      - mesa-vulkan-drivers
+      - xdg-desktop-portal
+
+contents:
+  - src: ${STAGE}/usr/bin/{{binary}}
+    dst: /usr/bin/{{binary}}
+    file_info: { mode: 0755 }
+  - src: ${STAGE}/usr/bin/{{cli_binary}}
+    dst: /usr/bin/{{cli_binary}}
+    file_info: { mode: 0755 }
+  - src: ${STAGE}/usr/share/
+    dst: /usr/share/
+    type: tree
+  - src: ${STAGE}/usr/lib/udev/rules.d/
+    dst: /usr/lib/udev/rules.d/
+    type: tree
+
+scripts:
+  postinstall: packaging/linux/postinst.sh
+  postremove: packaging/linux/postinst.sh

@@ -8,12 +8,12 @@ use serde_json::{Value, json};
 
 use crate::headless::Headless;
 use crate::state::Dialog;
-use crate::{LightcraftApp, Services};
+use crate::{LccApp, Services};
 
 const T: Duration = Duration::from_secs(30);
 
 fn demo(services: Services) -> Headless {
-    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+    let app = LccApp::new(lcc_engine::Session::with_demo(), services);
     let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
     h.settle(T);
     h
@@ -65,7 +65,7 @@ fn scale(h: &Headless) -> f32 {
     rect(h, "print:page").width() / h.app.session.print.layout.page_size().unwrap().0 as f32
 }
 
-fn cell_rect(h: &Headless, id: u32) -> lightcraft_engine::print::layout::Rect {
+fn cell_rect(h: &Headless, id: u32) -> lcc_engine::print::layout::Rect {
     h.app.session.print.layout.cell(id).unwrap().rect
 }
 
@@ -84,17 +84,17 @@ fn style_buttons_and_checkboxes_run_print_set() {
     let mut h = demo(Services::default());
     open_print(&mut h);
     click(&mut h, "button:printStyle-1");
-    assert_eq!(h.app.session.print.layout.style, lightcraft_engine::print::layout::Style::ContactSheet);
+    assert_eq!(h.app.session.print.layout.style, lcc_engine::print::layout::Style::ContactSheet);
     assert!(has(&h, "drag:printColumns") && has(&h, "print:gridcell:0"));
     click(&mut h, "check:printZoomFill");
     click(&mut h, "check:printStroke");
     assert!(h.app.session.print.image.zoom_to_fill && h.app.session.print.image.stroke_enabled);
     click(&mut h, "button:printOrientation-1");
-    assert_eq!(h.app.session.print.layout.page.orientation, lightcraft_engine::print::layout::Orientation::Landscape);
+    assert_eq!(h.app.session.print.layout.page.orientation, lcc_engine::print::layout::Orientation::Landscape);
     let p = rect(&h, "print:page");
     assert!(p.width() > p.height(), "the page is drawn landscape");
     click(&mut h, "button:printUnits-2");
-    assert_eq!(h.app.session.print.guides.units, lightcraft_engine::print::layout::Unit::Millimeters);
+    assert_eq!(h.app.session.print.guides.units, lcc_engine::print::layout::Unit::Millimeters);
     click(&mut h, "check:printShowGrid");
     assert!(h.app.session.print.guides.show_page_grid);
 }
@@ -150,7 +150,7 @@ fn dragging_a_cell_snaps_to_its_neighbour_when_snap_is_on() {
     click(&mut h, "button:printAddCell-0");
     click(&mut h, "button:printAddCell-0");
     let ids: Vec<u32> = h.app.session.print.layout.cells.iter().map(|c| c.id).collect();
-    assert_eq!(h.app.session.print.guides.snap, lightcraft_engine::print::layout::Snap::Cells);
+    assert_eq!(h.app.session.print.guides.snap, lcc_engine::print::layout::Snap::Cells);
     let a = cell_rect(&h, ids[0]);
     // park the second cell away from the first, then drag it back to 0.06 in from the first's right edge
     cmd(&mut h, "print.cell.move", json!({"id": ids[1], "x": a.right() + 0.8, "y": a.y}));
@@ -251,8 +251,8 @@ fn print_to_pdf_picks_a_file_and_runs_in_the_background() {
 
 #[test]
 fn printing_shows_a_row_in_the_activity_stack_and_stops() {
-    let mut app = LightcraftApp::new(
-        lightcraft_engine::Session::with_demo(),
+    let mut app = LccApp::new(
+        lcc_engine::Session::with_demo(),
         Services { write_shared: Some(Arc::new(|_, _| panic!("a stopped print wrote a file"))), ..Default::default() },
     );
     app.session.execute("print.set", &json!({"layout": {"style": "contactSheet"}, "job": {"ppi": 300.0}})).unwrap();
@@ -271,9 +271,9 @@ fn printing_shows_a_row_in_the_activity_stack_and_stops() {
 
 #[test]
 fn the_print_menu_item_needs_a_photo_and_is_listed() {
-    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services::default());
+    let app = LccApp::new(lcc_engine::Session::with_demo(), Services::default());
     assert!(crate::menus::ui_enabled(&app, "dialog.print"));
-    let empty = LightcraftApp::new(lightcraft_engine::Session::new(), Services::default());
+    let empty = LccApp::new(lcc_engine::Session::new(), Services::default());
     assert!(!crate::menus::ui_enabled(&empty, "dialog.print"));
 }
 
@@ -281,7 +281,7 @@ fn the_print_menu_item_needs_a_photo_and_is_listed() {
 fn the_print_dialog_fits_the_window_with_its_buttons_on_screen() {
     for size in [[1400.0, 900.0], [1100.0, 760.0]] {
         for style in ["singleImage", "customPackage"] {
-            let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services::default());
+            let app = LccApp::new(lcc_engine::Session::with_demo(), Services::default());
             let mut h = Headless::new(app, size, 1.0);
             h.settle(T);
             cmd(&mut h, "print.set", json!({"layout": {"style": style}}));
@@ -301,11 +301,11 @@ fn the_print_dialog_fits_the_window_with_its_buttons_on_screen() {
 
 #[test]
 fn print_job_colour_controls_reach_the_job_and_the_pdf() {
-    use lightcraft_engine::print_color::{PrintIntent, PrintMedia, PrintProfile, PrintSharpen};
-    let dir = std::env::temp_dir().join(format!("lightcraft-print-ui-{}", std::process::id()));
+    use lcc_engine::print_color::{PrintIntent, PrintMedia, PrintProfile, PrintSharpen};
+    let dir = std::env::temp_dir().join(format!("app-print-ui-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let icc = dir.join("Baryta Paper.icc");
-    std::fs::write(&icc, lightcraft_codecs::icc::write_named(lightcraft_codecs::NamedSpace::AdobeRgb)).unwrap();
+    std::fs::write(&icc, lcc_codecs::icc::write_named(lcc_codecs::NamedSpace::AdobeRgb)).unwrap();
     let picked = icc.to_string_lossy().into_owned();
     let services = Services { png: None, pick_display_profile: Some(Box::new(move || vec![picked.clone()])), ..Default::default() };
     let mut h = demo(services);
@@ -353,7 +353,7 @@ fn print_job_colour_controls_reach_the_job_and_the_pdf() {
     // back to Managed by Printer
     click(&mut h, "combo:printProfile");
     click(&mut h, "item:printProfile-adobeRgb");
-    assert_eq!(job(&h).profile, PrintProfile::Managed { space: lightcraft_engine::print_color::ManagedSpace::AdobeRgb });
+    assert_eq!(job(&h).profile, PrintProfile::Managed { space: lcc_engine::print_color::ManagedSpace::AdobeRgb });
 }
 
 #[test]

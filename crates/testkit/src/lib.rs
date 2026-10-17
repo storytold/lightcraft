@@ -9,12 +9,12 @@
 //! ```no_run
 //! # let gpu_available = false;
 //! if !gpu_available {
-//!     lightcraft_testkit::skip!(Gpu, "no GPU adapter");
+//!     lcc_testkit::skip!(Gpu, "no GPU adapter");
 //!     return;
 //! }
 //! ```
 //!
-//! It prints the note to stderr as before and, when the [`SKIP_LOG_ENV`] variable names a file
+//! It prints the note to stderr as before and, when the [`skip_log_env`] variable names a file
 //! (`cargo xtask ci` sets it), appends one JSON line there:
 //! `{"need":"gpu","reason":"no GPU adapter","test":"camera_tone","binary":"equivalence","location":"crates/gpu/tests/equivalence.rs:22"}`.
 //! `cargo xtask ci` lists the skips by need and reason in its summary and in
@@ -28,12 +28,15 @@ use std::io::Write as _;
 use std::path::Path;
 
 /// The environment variable naming the file skips are appended to (JSON lines).
-pub const SKIP_LOG_ENV: &str = "LIGHTCRAFT_SKIP_LOG";
+/// The skip-log variable's name: `<PREFIX>_SKIP_LOG` (`env_prefix` in `brand.toml`).
+pub fn skip_log_env() -> String {
+    lcc_brand::env_var("SKIP_LOG")
+}
 
 /// What a skipped test needed and didn't find.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Need {
-    /// A usable GPU adapter (`lightcraft_gpu::available()`).
+    /// A usable GPU adapter (`lcc_gpu::available()`).
     Gpu,
     /// A file from the gitignored `corpus/` (`cargo xtask corpus --download`) or a private corpus.
     Corpus,
@@ -79,7 +82,7 @@ macro_rules! skip {
 /// the test: a log that can't be written loses the entry, not the run.
 pub fn record(need: Need, reason: &str, file: &str, line: u32) {
     eprintln!("skipped ({}): {reason}", need.as_str());
-    let log = std::env::var_os(SKIP_LOG_ENV).filter(|p| !p.is_empty());
+    let log = std::env::var_os(skip_log_env()).filter(|p| !p.is_empty());
     if let Some(log) = log {
         let thread = std::thread::current();
         let binary = std::env::current_exe().ok().and_then(|p| p.file_stem().map(|s| binary_name(&s.to_string_lossy()).to_owned()));
@@ -92,7 +95,7 @@ pub fn record(need: Need, reason: &str, file: &str, line: u32) {
 fn append(path: &Path, line: &str) {
     let file = std::fs::OpenOptions::new().create(true).append(true).open(path);
     if let Err(e) = file.and_then(|mut f| f.write_all(line.as_bytes())) {
-        eprintln!("{SKIP_LOG_ENV}: can't append to {}: {e}", path.display());
+        eprintln!("{}: can't append to {}: {e}", skip_log_env(), path.display());
     }
 }
 
@@ -155,7 +158,7 @@ mod tests {
     #[test]
     fn binary_names_lose_cargos_hash_only() {
         assert_eq!(binary_name("equivalence-0f3a9c2b1d4e5f60"), "equivalence");
-        assert_eq!(binary_name("lightcraft_engine-0f3a9c2b1d4e5f60"), "lightcraft_engine");
+        assert_eq!(binary_name("lcc_engine-0f3a9c2b1d4e5f60"), "lcc_engine");
         assert_eq!(binary_name("sparse_corpus"), "sparse_corpus");
         assert_eq!(binary_name("cr3-corpus"), "cr3-corpus");
         assert_eq!(binary_name("-0f3a9c2b1d4e5f60"), "-0f3a9c2b1d4e5f60");
@@ -164,7 +167,7 @@ mod tests {
 
     #[test]
     fn appended_lines_accumulate() {
-        let dir = std::env::temp_dir().join(format!("lightcraft-testkit-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("lcc-testkit-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let log = dir.join("skips.jsonl");
         let _ = std::fs::remove_file(&log);
@@ -185,6 +188,6 @@ mod tests {
 
     #[test]
     fn a_missing_log_directory_does_not_fail_the_test() {
-        append(Path::new("/nonexistent-lightcraft-dir/skips.jsonl"), "{}\n");
+        append(Path::new("/nonexistent-app-dir/skips.jsonl"), "{}\n");
     }
 }

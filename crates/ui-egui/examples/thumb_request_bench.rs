@@ -1,9 +1,9 @@
-use lightcraft_catalog::{Op, Photo, PhotoId, Source};
-use lightcraft_develop::{BrushStroke, DevelopSettings, Mask, MaskComponent, MaskShape};
-use lightcraft_engine::Session;
-use lightcraft_engine::media::{RenderJob, RenderResult};
-use lightcraft_ui_egui::{
-    LightcraftApp, Services,
+use lcc_catalog::{Op, Photo, PhotoId, Source};
+use lcc_develop::{BrushStroke, DevelopSettings, Mask, MaskComponent, MaskShape};
+use lcc_engine::Session;
+use lcc_engine::media::{RenderJob, RenderResult};
+use lcc_ui_egui::{
+    LccApp, Services,
     headless::Headless,
     panels::grid::request_thumb,
     render::{RenderOffload, Slot, Tex},
@@ -74,7 +74,7 @@ fn settings(points: usize) -> DevelopSettings {
     let mut s = DevelopSettings::default();
     if points > 0 {
         let stroke = BrushStroke {
-            points: (0..points).map(|i| lightcraft_geom::Point::new((i % 100) as f64 / 100.0, (i / 100) as f64 / 100.0)).collect(),
+            points: (0..points).map(|i| lcc_geom::Point::new((i % 100) as f64 / 100.0, (i / 100) as f64 / 100.0)).collect(),
             ..Default::default()
         };
         s.masks.push(Mask {
@@ -103,7 +103,7 @@ fn micro(points: usize, pending: bool) {
         p.content_hash = Some(format!("{i:032x}"));
         session.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
     }
-    let mut app = LightcraftApp::new(session, Services::default());
+    let mut app = LccApp::new(session, Services::default());
     app.renderer.set_offload(Box::new(Blocked));
     let ctx = egui::Context::default();
     let texture = ctx.load_texture("audit", egui::ColorImage::new([1, 1], vec![egui::Color32::GRAY]), Default::default());
@@ -113,7 +113,7 @@ fn micro(points: usize, pending: bool) {
             let key = app.session.thumb_job(id, 384).unwrap().key;
             app.renderer.textures.insert(
                 Slot::Thumb(id),
-                Tex { key, photo: id, tex: texture.clone(), size: [1, 1], histogram: None, ms: 0.0, quick: None, pixels: None },
+                Tex { key, photo: id, tex: texture.clone(), size: [1, 1], histogram: None, ms: 0.0, quick: None, pixels: None, warnings: Vec::new() },
             );
         }
         request_thumb(&mut app, id, 384, 10);
@@ -157,15 +157,15 @@ fn verify_texture(h: &Headless, id: PhotoId) {
     let edge = tex.size[0].max(tex.size[1]);
     assert!([128, 256, 384, 512].contains(&edge), "thumbnail must use a supported size bucket");
     let Source::File { path } = &p.source else { unreachable!() };
-    let (source, info) = h.app.session.media.file_loader.as_ref().unwrap()(path, 512).unwrap();
+    let (source, info) = h.app.session.media.file_loader.as_ref().unwrap()(path, 512, p.develop.detail.nr_outliers).unwrap();
     println!("decode,path={path},raw={},preview_only={:?}", info.raw, p.preview_only);
     if std::env::var_os("REQUIRE_RAW").is_some() {
         assert!(p.preview_only.is_none(), "embedded-preview fallback does not validate RAW decoding");
         assert!(info.raw, "fresh loader must return decoded RAW data");
     }
-    let req = lightcraft_engine::pipeline::RenderRequest { apply_crop: true, ..lightcraft_engine::pipeline::RenderRequest::fit(edge, edge) };
+    let req = lcc_engine::pipeline::RenderRequest { apply_crop: true, ..lcc_engine::pipeline::RenderRequest::fit(edge, edge) };
     // Fresh direct CPU render: no candidate job/hash/source/preview cache helpers.
-    let expected = lightcraft_engine::pipeline::render(&source, &info, &p.develop, &req).image;
+    let expected = lcc_engine::pipeline::render(&source, &info, &p.develop, &req).image;
     assert_eq!(tex.size, [expected.width, expected.height]);
     assert_eq!(tex.pixels.as_ref().unwrap().pixels.iter().flat_map(|c| c.to_array()).collect::<Vec<_>>(), expected.as_bytes());
 }
@@ -195,16 +195,16 @@ fn real() {
         p.kind = probe.kind;
         p.meta = probe.meta;
         p.as_shot_wb = probe.as_shot_wb;
-        p.embedded_lens = probe.embedded_lens;
+        p.embedded_lens = probe.embedded_lens.map(Box::new);
         p.content_hash = probe.content_hash;
         p.preview_only = probe.preview_only;
-        lightcraft_engine::import::apply_import_defaults(&session, &mut p);
+        lcc_engine::import::apply_import_defaults(&session, &mut p);
         session.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
     }
-    let mut h = Headless::new(LightcraftApp::new(session, Services { png: None, ..Default::default() }), [1400.0, 900.0], 1.0);
-    h.app.renderer = lightcraft_ui_egui::render::Renderer::with_worker_threads(1);
+    let mut h = Headless::new(LccApp::new(session, Services { png: None, ..Default::default() }), [1400.0, 900.0], 1.0);
+    h.app.renderer = lcc_ui_egui::render::Renderer::with_worker_threads(1);
     h.app.renderer.keep_pixels = true;
-    h.app.ui.view = lightcraft_ui_egui::state::ViewMode::PhotoGrid;
+    h.app.ui.view = lcc_ui_egui::state::ViewMode::PhotoGrid;
     h.app.ui.thumb_size = if ext == "rw2" { 160.0 } else { 100.0 };
     let mut loading_frame = vec![];
     let mut loading_grid = vec![];

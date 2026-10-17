@@ -199,7 +199,7 @@ fn cell_photo(s: &mut Session, p: &Value) -> Result<Value> {
         None | Some(Value::Null) => None,
         Some(v) => {
             let n = v.as_u64().ok_or_else(|| bad(ID, "`photo` must be a photo id or null"))?;
-            if s.catalog.photo(lightcraft_catalog::PhotoId(n)).is_none() {
+            if s.catalog.photo(lcc_catalog::PhotoId(n)).is_none() {
                 return Err(bad(ID, format!("no photo {n}")));
             }
             Some(n)

@@ -7,12 +7,55 @@ stays a separate download. Adobe LCP profiles are never used.
 
 ## Setup
 
-1. Get the lensfun database (the `data/db/*.xml` files of <https://github.com/lensfun/lensfun>, or the copy a Linux
-   distribution installs under `/usr/share/lensfun/version_1/`).
-2. Point `LIGHTCRAFT_LENSFUN_DIR` at that directory and start the app (or the CLI).
+**Settings ▸ Import ▸ Lens profiles** shows the database in use (its folder, how many lenses and cameras, when its
+files were last updated) and offers:
 
-Files are read once per process. Invalid files are skipped with a warning in the log. Without the variable nothing
-changes.
+- **Choose Folder…**: a folder of lensfun-format `*.xml` files, e.g. the `data/db` folder of
+  <https://github.com/lensfun/lensfun> or the copy a Linux distribution installs under `/usr/share/lensfun/version_1/`.
+- **Download** (**Update** once downloaded): fetches lensfun's database, only when you ask, from the project's source
+  archive (`https://github.com/lensfun/lensfun/archive/master.tar.gz`, about 3 MB). Only its `data/db/*.xml` files are
+  kept, in `lensfun/db` in the settings folder; the archive is size-capped, file names are checked so nothing is written
+  outside that folder, and the old database stays until the new one has been read and holds lenses. The download
+  shows in the activity stack and can be cancelled there; a failure (no network, a 404, a damaged archive) is shown
+  in the section. The section names lensfun and its licence (CC-BY-SA 3.0).
+- **Remove**: stop using the database (a downloaded one is deleted).
+
+The folder is an app setting (`lens-profiles.json` in the settings folder), shared by every library, the CLI and the
+MCP server. A change takes effect at once, without a restart: the database is reloaded and the photo open in Develop
+is looked up again (other photos when they are next opened in Develop, or with `lens.db.refresh`).
+`<PREFIX>_LENSFUN_DIR` still works and overrides the folder chosen in Settings (the section says so).
+
+Develop ▸ Optics says why **Enable Lens Corrections** has nothing to apply to a raw without its own correction: no
+lens database (a link to the Settings section), no lens named in the photo's metadata, or no profile for its lens.
+
+Commands: `lens.db.status`, `lens.db.setDir {dir}`, `lens.db.download {wait?}`, `lens.db.downloadCancel`,
+`lens.db.remove`, `lens.db.refresh {ids}`, `lens.db.photo {id, lens?}`, `lens.db.list {mount?, crop?, query?, limit?,
+offset?}`; `app.settings {section: "lensProfiles"}` opens the section. Invalid files are skipped with a warning in the
+log.
+
+## Which correction applies
+
+In this order, the first that applies wins:
+
+1. the file's own correction (DNG opcodes, a camera correction a raw reader converts);
+2. a lens given by the caller (a lens picker's choice: maker, model, and the focal length and aperture such files
+   often lack, else the file's), found in the database by one of its names;
+3. the automatic match by the lens name in the photo's metadata;
+4. none.
+
+A given lens the database lacks gives no correction; it does not fall back to the name match. `lens.db.photo`
+reports which one applies: `embedded`, `chosen` (when called with `lens: {maker?, model, focal?, aperture?}`, or
+just the model name), `found`, or why there is none (`noDatabase`, `notRaw`, `noLensName`, `notFound`). In code the
+order is `lens_profiles::resolve_raw(raw, meta, given)` (`lookup_with` for the database part,
+`Session::lens_match_with` for the status). Nothing stores a choice on the photo yet: the given lens is a parameter.
+
+`lens.db.list` lists the database's lenses for a picker, sorted by maker and name: `mount` keeps lenses for that
+camera mount (and those naming none), `crop` (the camera's crop factor) keeps lenses calibrated on that frame or a
+larger one, and `query` keeps lenses whose maker or names contain every word. It returns at most `limit` lenses
+(100 by default, never more than 500) from `offset`, with the `total` that match and whether there are `more`;
+each lens has `maker`, `model` (the name to pass back as `lens.model`), `models`, `mounts`, `cropFactor`, the
+calibrated `focal` range and which corrections it has (`distortion`, `vignetting`, `tca`). Malformed parameters
+(non-numbers, negative or non-finite values, names over 256 characters) are errors, never a crash.
 
 ## What is applied
 

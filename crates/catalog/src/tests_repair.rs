@@ -15,6 +15,8 @@ fn album(id: u64, parent: Option<u64>, folder: bool, photos: Vec<PhotoId>) -> Al
         smart: None,
         quick: false,
         order: None,
+        creation: None,
+        photo_order: Vec::new(),
     }
 }
 
@@ -123,8 +125,8 @@ fn id_counters_are_moved_past_the_ids_in_use() {
     let (mut c, _) = load_edited(&c, |v| v["next_photo"] = u64::MAX.into());
     assert_eq!((c.alloc_photo_id().0, c.alloc_photo_id().0), (u64::MAX, u64::MAX), "saturates");
     let p = Photo::new(PhotoId(u64::MAX), Source::Demo { scene: 1 }, "a", "JPEG", 1, 1, "t");
-    c.apply(Op::AddPhoto { photo: Box::new(p.clone()) }).unwrap();
-    assert!(c.apply(Op::AddPhoto { photo: Box::new(p) }).is_err(), "the id is taken: refused, not overwritten");
+    // (this catalog refuses the largest id outright: it would leave no next one)
+    assert!(c.apply(Op::AddPhoto { photo: Box::new(p) }).is_err(), "refused, not overflowed");
 }
 
 /// A sound catalog loads unchanged.

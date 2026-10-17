@@ -7,19 +7,43 @@ use serde_json::json;
 
 use crate::headless::Headless;
 use crate::state::{LEFT_WIDTH, MIN_PHOTO_WIDTH, RIGHT_WIDTH};
-use crate::{LightcraftApp, Services};
+use crate::{LccApp, Services};
 
 const T: Duration = Duration::from_secs(20);
 const SETTLE: Duration = Duration::from_secs(120);
 
 fn demo(size: [f32; 2], ui: serde_json::Value) -> Headless {
     let services = Services { png: None, ..Default::default() };
-    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+    let app = LccApp::new(lcc_engine::Session::with_demo(), services);
     let mut h = Headless::new(app, size, 1.0);
+    // these tests measure the sources list: the Navigator above it is folded
+    h.app.ui.toggle_sidebar_section("panel:navigator");
     let r = h.request("ui.set", ui, T);
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
     h
+}
+
+/// The fork's Library draws its Classic panels on the left (Navigator, Catalog, Folders,
+/// Collections); Develop draws its own Classic stack (Navigator, Presets, Versions, History,
+/// Collections) and keeps upstream's reorderable sections (Albums, Local, By Date, Folders,
+/// Keywords under My Photos) as one more panel of that column, hidden until it is asked for. These
+/// tests are about those sections, so they ask for that panel and leave the rest of the column
+/// out: the loupe with the edit panel, whatever view `ui` asks for.
+fn sections_demo(size: [f32; 2], mut ui: serde_json::Value) -> Headless {
+    ui["view"] = json!("detail");
+    ui["right"] = json!("edit");
+    let mut h = demo(size, ui);
+    assert_eq!(h.app.ui.module, crate::module::ModuleId::Develop);
+    my_photos_only(&mut h);
+    h
+}
+
+/// Leave only Develop's "My Photos" panel (upstream's sidebar) in the left column.
+pub(crate) fn my_photos_only(h: &mut Headless) {
+    use crate::module::PanelId;
+    h.app.ui.hidden_panels = vec![PanelId::Navigator, PanelId::Presets, PanelId::Versions, PanelId::History, PanelId::Collections];
+    h.settle(SETTLE);
 }
 
 fn widget(h: &Headless, id: &str) -> egui::Rect {
@@ -173,7 +197,11 @@ fn a_narrow_window_shrinks_the_panels_without_forgetting_their_width() {
 /// is part of the saved UI state.
 #[test]
 fn sidebar_sections_collapse_and_remember_it() {
-    let mut h = demo([1400.0, 900.0], json!({"view": "photoGrid", "leftPanel": true}));
+    let mut h = demo([1400.0, 900.0], json!({"view": "photoGrid", "leftPanel": true, "right": "none"}));
+    // the Keyword List alone in Library's right column, at its top
+    h.app.ui.hidden_panels = vec![crate::module::PanelId::QuickDevelop, crate::module::PanelId::Keywording];
+    h.step();
+    h.step();
     let has = |h: &Headless, id: &str| h.app.widgets.iter().any(|(w, _)| w == id);
     let click = |h: &mut Headless, id: &str| {
         let r = h.request("ui.clickWidget", json!({"id": id}), T);
@@ -187,7 +215,7 @@ fn sidebar_sections_collapse_and_remember_it() {
     assert!(year_rows(&h) > 0, "the demo library has dated photos");
     click(&mut h, "sidebarSection:byDate");
     assert_eq!(year_rows(&h), 0, "folded");
-    assert!(h.app.ui.sidebar_section_collapsed("byDate") && !h.app.ui.sidebar_section_collapsed("albums"));
+    assert!(h.app.ui.sidebar_section_collapsed("byDate") && !h.app.ui.sidebar_section_collapsed("panel:collections"));
     assert!(has(&h, "sidebarSection:byDate"), "the header stays so it can be reopened");
     // the choice survives a save/load of the UI state
     let saved = serde_json::to_value(&h.app.ui).unwrap();
@@ -196,18 +224,18 @@ fn sidebar_sections_collapse_and_remember_it() {
     click(&mut h, "sidebarSection:byDate");
     assert!(year_rows(&h) > 0, "unfolded again");
     // Albums folds too, and the plus button inside its header still works on its own
-    click(&mut h, "sidebarSection:albums");
-    assert!(h.app.ui.sidebar_section_collapsed("albums"));
+    click(&mut h, "classicPanel:collections");
+    assert!(h.app.ui.sidebar_section_collapsed("panel:collections"));
     assert!(has(&h, "icon:albumNew"), "the Create Album button stays in the header");
-    click(&mut h, "sidebarSection:albums");
-    assert!(!h.app.ui.sidebar_section_collapsed("albums"));
+    click(&mut h, "classicPanel:collections");
+    assert!(!h.app.ui.sidebar_section_collapsed("panel:collections"));
     // Keywords and Local fold their rows too
     let rows = |h: &Headless, prefix: &str| h.app.widgets.iter().filter(|(w, _)| w.starts_with(prefix)).count();
-    assert!(rows(&h, "source:keyword:") > 0, "the demo library has keywords");
-    click(&mut h, "sidebarSection:keywords");
-    assert_eq!(rows(&h, "source:keyword:"), 0, "keywords folded");
-    click(&mut h, "sidebarSection:keywords");
-    assert!(rows(&h, "source:keyword:") > 0);
+    assert!(rows(&h, "keywordList:") > 0, "the demo library has keywords");
+    click(&mut h, "classicPanel:keywordList");
+    assert_eq!(rows(&h, "keywordList:"), 0, "keywords folded");
+    click(&mut h, "classicPanel:keywordList");
+    assert!(rows(&h, "keywordList:") > 0);
     if has(&h, "sidebarSection:local") {
         click(&mut h, "sidebarSection:local");
         assert_eq!(rows(&h, "source:local:"), 0, "local folded");
@@ -217,7 +245,7 @@ fn sidebar_sections_collapse_and_remember_it() {
     }
     // a click on the plus is the button's, not the header's
     click(&mut h, "icon:albumNew");
-    assert!(!h.app.ui.sidebar_section_collapsed("albums"), "the plus does not fold Albums");
+    assert!(!h.app.ui.sidebar_section_collapsed("panel:collections"), "the plus does not fold Collections");
 }
 
 /// Given a settings file from before sections could be arranged (it lists the folded ones as
@@ -258,7 +286,7 @@ fn sections_drawn(h: &Headless) -> Vec<String> {
 /// distance below what is above it.
 #[test]
 fn the_sidebar_draws_its_sections_as_arranged() {
-    let mut h = demo([1400.0, 1400.0], json!({"view": "photoGrid", "leftPanel": true}));
+    let mut h = sections_demo([1400.0, 1400.0], json!({"view": "photoGrid", "leftPanel": true}));
     // (Local is not on every platform)
     let listed = |drawn: &[String]| drawn.iter().filter(|s| s.as_str() != "local").cloned().collect::<Vec<_>>();
     let usual = sections_drawn(&h);
@@ -317,7 +345,7 @@ fn sidebar_menu_items(h: &Headless) -> Vec<(String, Option<bool>)> {
 /// as it was. The choice is part of the saved UI state.
 #[test]
 fn a_section_is_hidden_and_shown_from_the_view_menu() {
-    let mut h = demo([1400.0, 1400.0], json!({"view": "photoGrid", "leftPanel": true}));
+    let mut h = sections_demo([1400.0, 1400.0], json!({"view": "photoGrid", "leftPanel": true}));
     let checked = |h: &Headless, id: &str| sidebar_menu_items(h).into_iter().find(|(s, _)| s == id).unwrap_or_else(|| panic!("no {id} item")).1;
     assert_eq!(checked(&h, "byDate"), Some(true));
     assert!(has(&h, "sidebarSection:byDate"));
@@ -344,7 +372,7 @@ fn a_section_is_hidden_and_shown_from_the_view_menu() {
 /// is shown and open again; the item is only offered when there is something to reset.
 #[test]
 fn resetting_the_sidebar_brings_every_section_back() {
-    let mut h = demo([1400.0, 1400.0], json!({"view": "photoGrid", "leftPanel": true}));
+    let mut h = sections_demo([1400.0, 1400.0], json!({"view": "photoGrid", "leftPanel": true}));
     let reset_enabled = |h: &Headless| {
         let bar = crate::menubar::menu_bar(&h.app);
         let json = serde_json::to_string(&bar).unwrap();
@@ -366,7 +394,7 @@ fn resetting_the_sidebar_brings_every_section_back() {
 /// section is hidden; and the menu of the My Photos title, which is always there, shows it again.
 #[test]
 fn a_section_is_hidden_from_its_header_and_brought_back_from_the_title() {
-    let mut h = demo([1400.0, 1400.0], json!({"view": "photoGrid", "leftPanel": true}));
+    let mut h = sections_demo([1400.0, 1400.0], json!({"view": "photoGrid", "leftPanel": true}));
     right_click(&mut h, "sidebarSection:keywords");
     assert!(popup_open(&h), "the header has a menu");
     click(&mut h, "sidebarMenu:hide");
@@ -387,7 +415,7 @@ fn a_section_is_hidden_from_its_header_and_brought_back_from_the_title() {
 /// Given an album is being shown, when Albums is hidden, then the grid goes on showing the album.
 #[test]
 fn hiding_the_section_of_what_is_shown_keeps_showing_it() {
-    let mut h = demo([1400.0, 1400.0], json!({"view": "photoGrid", "leftPanel": true}));
+    let mut h = sections_demo([1400.0, 1400.0], json!({"view": "photoGrid", "leftPanel": true}));
     let album = h.app.session.execute("album.create", &json!({"name": "Kept"})).unwrap()["id"].as_u64().unwrap();
     exec(&mut h, "library.source", json!({"kind": "album", "id": album}));
     let shown = h.app.session.source;
@@ -400,7 +428,7 @@ fn hiding_the_section_of_what_is_shown_keeps_showing_it() {
 /// and open, so the new album can be seen.
 #[test]
 fn a_new_album_brings_a_hidden_albums_section_back() {
-    let mut h = demo([1400.0, 1400.0], json!({"view": "photoGrid", "leftPanel": true}));
+    let mut h = sections_demo([1400.0, 1400.0], json!({"view": "photoGrid", "leftPanel": true}));
     exec(&mut h, "view.sidebarSection", json!({"section": "albums", "show": false, "collapsed": true}));
     exec(&mut h, "dialog.newAlbum", json!({"name": "Fresh"}));
     let r = h.request("ui.dialog.confirm", json!({}), T);
@@ -461,7 +489,7 @@ fn header(h: &Headless, id: &str) -> egui::Rect {
 #[test]
 fn dragging_a_header_moves_its_section() {
     // folders too: photos imported from a folder
-    let mut h = folders_app_sized(&["/pics/trip/a.jpg"], [1400.0, 1400.0]);
+    let mut h = folders_sections_app(&["/pics/trip/a.jpg"], [1400.0, 1400.0]);
     let usual = sections_drawn(&h);
     let with_local = usual.contains(&"local".to_string());
     let listed = |ids: &[&str]| ids.iter().filter(|s| with_local || **s != "local").map(|s| s.to_string()).collect::<Vec<_>>();
@@ -501,7 +529,10 @@ fn dragging_a_header_moves_its_section() {
     assert!(!has(&h, "sidebarSectionDrop"));
     assert_eq!(sections_drawn(&h), listed(&["folders", "albums", "local", "byDate", "keywords"]));
     // dragged below everything: last
-    let end = egui::pos2(header(&h, "keywords").center().x, widget(&h, "panel:left_panel").bottom() - 20.0);
+    // (above the column's Import / Export bar when it has one, #118: the bar is not part of the list)
+    let foot =
+        h.app.widgets.iter().find(|(w, _)| w.starts_with("button:leftBar-")).map_or(widget(&h, "panel:left_panel").bottom(), |(_, r)| r.top() - 11.0);
+    let end = egui::pos2(header(&h, "keywords").center().x, foot - 20.0);
     let from = header(&h, "albums").center();
     drag_between(&mut h, from, end, Vec::new());
     assert_eq!(sections_drawn(&h), listed(&["folders", "local", "byDate", "keywords", "albums"]));
@@ -516,7 +547,7 @@ fn dragging_a_header_moves_its_section() {
 /// A drag that ends with Esc, or is released away from the sidebar, moves nothing.
 #[test]
 fn a_section_drag_that_is_given_up_moves_nothing() {
-    let mut h = demo([1400.0, 1400.0], json!({"view": "photoGrid", "leftPanel": true}));
+    let mut h = sections_demo([1400.0, 1400.0], json!({"view": "photoGrid", "leftPanel": true}));
     let usual = sections_drawn(&h);
     let (from, to) = (header(&h, "keywords").center(), header(&h, "albums").center() - egui::vec2(0.0, 12.0));
     let esc = egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
@@ -531,7 +562,7 @@ fn a_section_drag_that_is_given_up_moves_nothing() {
 /// An album dragged to the Albums header is not a section drag, and the other way round.
 #[test]
 fn dragging_a_section_is_not_dragging_an_album() {
-    let mut h = demo([1400.0, 1400.0], json!({"view": "photoGrid", "leftPanel": true}));
+    let mut h = sections_demo([1400.0, 1400.0], json!({"view": "photoGrid", "leftPanel": true}));
     let (from, to) = (header(&h, "albums").center(), header(&h, "keywords").center() + egui::vec2(0.0, 4.0));
     let before = h.app.session.catalog.revision;
     h.app.synthetic.push(egui::Event::PointerMoved(from));
@@ -568,7 +599,7 @@ fn dragging_a_section_is_not_dragging_an_album() {
 /// (stepping over hidden ones), and the command says when there is nowhere to go.
 #[test]
 fn a_section_moves_up_and_down_from_its_menu() {
-    let mut h = demo([1400.0, 1400.0], json!({"view": "photoGrid", "leftPanel": true}));
+    let mut h = sections_demo([1400.0, 1400.0], json!({"view": "photoGrid", "leftPanel": true}));
     // (Local is not on every platform: taken out, so the same sections are there everywhere)
     exec(&mut h, "view.sidebarSection", json!({"section": "local", "show": false}));
     exec(&mut h, "view.sidebarSection", json!({"section": "folders", "show": false}));
@@ -607,7 +638,7 @@ fn a_section_moves_up_and_down_from_its_menu() {
 /// Recently Deleted is one of My Photos' rows: right below the others, above every section.
 #[test]
 fn recently_deleted_is_listed_with_my_photos() {
-    let h = demo([1400.0, 1400.0], json!({"view": "photoGrid", "leftPanel": true}));
+    let h = sections_demo([1400.0, 1400.0], json!({"view": "photoGrid", "leftPanel": true}));
     let (picks, deleted) = (widget(&h, "source:picks"), widget(&h, "source:recentlyDeleted"));
     assert_eq!(deleted.top(), picks.bottom(), "no gap: the same group");
     let first = sections_drawn(&h).remove(0);
@@ -686,7 +717,7 @@ fn a_year_opens_into_its_months() {
 /// click on it folds the section and brings the section's own header into view.
 #[test]
 fn the_header_of_a_long_section_stays_in_sight() {
-    let mut h = demo([1400.0, 700.0], json!({"view": "photoGrid", "leftPanel": true}));
+    let mut h = sections_demo([1400.0, 700.0], json!({"view": "photoGrid", "leftPanel": true}));
     for i in 0..40 {
         h.app.session.execute("album.create", &json!({"name": format!("Album {i:02}")})).unwrap();
     }
@@ -743,7 +774,7 @@ pub(crate) fn scroll_sidebar(h: &mut Headless, dy: f32) {
 /// and not into the folder hidden under the header.
 #[test]
 fn a_drop_on_the_pinned_header_is_not_a_drop_on_the_row_beneath_it() {
-    let mut h = demo([1400.0, 700.0], json!({"view": "photoGrid", "leftPanel": true}));
+    let mut h = sections_demo([1400.0, 700.0], json!({"view": "photoGrid", "leftPanel": true}));
     let make = |h: &mut Headless, params: serde_json::Value| h.app.session.execute("album.create", &params).unwrap()["id"].as_u64().unwrap();
     for i in 0..30 {
         make(&mut h, json!({"name": format!("Folder {i:02}"), "folder": true}));
@@ -752,7 +783,7 @@ fn a_drop_on_the_pinned_header_is_not_a_drop_on_the_row_beneath_it() {
     let best = make(&mut h, json!({"name": "Best", "parent": last}));
     h.step();
     h.step();
-    let parent = |h: &Headless| h.app.session.catalog.album(lightcraft_catalog::AlbumId(best)).unwrap().parent.map(|p| p.0);
+    let parent = |h: &Headless| h.app.session.catalog.album(lcc_catalog::AlbumId(best)).unwrap().parent.map(|p| p.0);
     let row = |h: &Headless| widget(h, &format!("source:album:{best}"));
     // far enough that Best is in view and Albums' own header is not
     for _ in 0..8 {
@@ -776,7 +807,7 @@ fn a_drop_on_the_pinned_header_is_not_a_drop_on_the_row_beneath_it() {
 /// start scrolling until the pointer has left it.
 #[test]
 fn a_section_dragged_to_the_top_edge_scrolls_past_the_pinned_header() {
-    let mut h = demo([1400.0, 700.0], json!({"view": "photoGrid", "leftPanel": true}));
+    let mut h = sections_demo([1400.0, 700.0], json!({"view": "photoGrid", "leftPanel": true}));
     for i in 0..40 {
         h.app.session.execute("album.create", &json!({"name": format!("Album {i:02}")})).unwrap();
     }
@@ -846,7 +877,7 @@ fn a_section_dragged_to_the_top_edge_scrolls_past_the_pinned_header() {
 /// into the next section pushes it out and pins that section's header instead.
 #[test]
 fn the_next_section_takes_over_the_pinned_header() {
-    let mut h = demo([1400.0, 500.0], json!({"view": "photoGrid", "leftPanel": true, "sidebar": ["albums", "keywords"]}));
+    let mut h = sections_demo([1400.0, 500.0], json!({"view": "photoGrid", "leftPanel": true, "sidebar": ["albums", "keywords"]}));
     exec(&mut h, "view.sidebarSection", json!({"section": "local", "show": false}));
     exec(&mut h, "view.sidebarSection", json!({"section": "byDate", "show": false}));
     exec(&mut h, "view.sidebarSection", json!({"section": "folders", "show": false}));
@@ -874,7 +905,7 @@ fn the_next_section_takes_over_the_pinned_header() {
 /// and the keyword made there is listed in the section.
 #[test]
 fn the_keywords_header_creates_a_keyword() {
-    let mut h = demo([1400.0, 1400.0], json!({"view": "photoGrid", "leftPanel": true}));
+    let mut h = sections_demo([1400.0, 1400.0], json!({"view": "photoGrid", "leftPanel": true}));
     // something picked in the Keyword List: not where a keyword made from the sidebar goes
     h.app.ui.keyword_list_selected = Some("aurora".into());
     let (button, head) = (widget(&h, "icon:keywordNew"), header(&h, "keywords"));
@@ -899,7 +930,7 @@ fn the_keywords_header_creates_a_keyword() {
 /// has its count at the edge.
 #[test]
 fn a_header_button_stays_with_a_folded_header() {
-    let mut h = demo([1400.0, 1400.0], json!({"view": "photoGrid", "leftPanel": true}));
+    let mut h = sections_demo([1400.0, 1400.0], json!({"view": "photoGrid", "leftPanel": true}));
     for (section, button) in [("keywords", "icon:keywordNew"), ("albums", "icon:albumNew")] {
         click(&mut h, &format!("sidebarSection:{section}"));
         assert!(h.app.ui.sidebar_section_collapsed(section));
@@ -917,7 +948,7 @@ fn a_header_button_stays_with_a_folded_header() {
 /// A keyword made elsewhere (the Keyword List) leaves the sidebar as it is.
 #[test]
 fn a_keyword_made_from_the_header_is_shown() {
-    let mut h = demo([1400.0, 1400.0], json!({"view": "photoGrid", "leftPanel": true}));
+    let mut h = sections_demo([1400.0, 1400.0], json!({"view": "photoGrid", "leftPanel": true}));
     exec(&mut h, "keyword.create", json!({"name": "places", "parent": null}));
     exec(&mut h, "keyword.setDefaultParent", json!({"keyword": "places"}));
     click(&mut h, "sidebarSection:keywords");
@@ -944,7 +975,7 @@ fn a_keyword_made_from_the_header_is_shown() {
 /// A press on a header's button that turns into a drag is not a drag of the section.
 #[test]
 fn dragging_from_a_header_button_does_not_drag_the_section() {
-    let mut h = demo([1400.0, 1400.0], json!({"view": "photoGrid", "leftPanel": true}));
+    let mut h = sections_demo([1400.0, 1400.0], json!({"view": "photoGrid", "leftPanel": true}));
     for button in ["icon:keywordNew", "icon:albumNew"] {
         let from = widget(&h, button).center();
         h.app.synthetic.push(egui::Event::PointerMoved(from));
@@ -977,7 +1008,7 @@ fn dragging_from_a_header_button_does_not_drag_the_section() {
 /// doesn't need to.
 #[test]
 fn a_folded_section_says_how_much_it_holds() {
-    let mut h = demo([1400.0, 1400.0], json!({"view": "photoGrid", "leftPanel": true}));
+    let mut h = sections_demo([1400.0, 1400.0], json!({"view": "photoGrid", "leftPanel": true}));
     assert!(!has(&h, "sidebarSectionCount:byDate"));
     click(&mut h, "sidebarSection:byDate");
     assert!(has(&h, "sidebarSectionCount:byDate"));
@@ -992,7 +1023,7 @@ fn a_folded_section_says_how_much_it_holds() {
 /// A section's chevron is in the same column as the triangles of the rows below it.
 #[test]
 fn section_chevrons_line_up_with_row_triangles() {
-    let h = demo([1400.0, 1400.0], json!({"view": "photoGrid", "leftPanel": true}));
+    let h = sections_demo([1400.0, 1400.0], json!({"view": "photoGrid", "leftPanel": true}));
     let triangle = h.app.widgets.iter().find(|(w, _)| w.starts_with("dateToggle:")).map(|(_, r)| *r).expect("a year has a triangle");
     for id in sections_drawn(&h) {
         assert_eq!(widget(&h, &format!("sidebarSectionChevron:{id}")).center().x, triangle.center().x, "{id}");
@@ -1093,7 +1124,7 @@ fn albums_are_created_inside_the_chosen_folder() {
         assert_eq!(new.len(), 1, "{command} made exactly one album: {new:?}");
         new[0]
     };
-    let parent_of = |h: &Headless, id: u64| h.app.session.catalog.album(lightcraft_catalog::AlbumId(id)).unwrap().parent.map(|p| p.0);
+    let parent_of = |h: &Headless, id: u64| h.app.session.catalog.album(lcc_catalog::AlbumId(id)).unwrap().parent.map(|p| p.0);
     // fold both folders: the new rows must still be visible afterwards
     for f in [europe, trips] {
         let r = h.request("ui.clickWidget", json!({"id": format!("albumToggle:{f}")}), T);
@@ -1107,10 +1138,10 @@ fn albums_are_created_inside_the_chosen_folder() {
     assert!(has(&h, &format!("source:album:{album}")), "the new album is shown, its folders opened to it");
     let folder = create(&mut h, "dialog.newFolder", "Italy", Some(europe));
     assert_eq!(parent_of(&h, folder), Some(europe));
-    assert!(h.app.session.catalog.album(lightcraft_catalog::AlbumId(folder)).unwrap().folder);
+    assert!(h.app.session.catalog.album(lcc_catalog::AlbumId(folder)).unwrap().folder);
     let smart = create(&mut h, "dialog.smartAlbum", "Rated", Some(folder));
     assert_eq!(parent_of(&h, smart), Some(folder));
-    assert!(h.app.session.catalog.album(lightcraft_catalog::AlbumId(smart)).unwrap().is_smart());
+    assert!(h.app.session.catalog.album(lcc_catalog::AlbumId(smart)).unwrap().is_smart());
     let from_view = create(&mut h, "dialog.newSmartAlbum", "From view", Some(trips));
     assert_eq!(parent_of(&h, from_view), Some(trips));
     // without a folder they are still made at the top level
@@ -1145,6 +1176,9 @@ struct AlbumTree {
 
 fn album_tree() -> AlbumTree {
     let mut h = demo([1400.0, 900.0], json!({"view": "photoGrid", "leftPanel": true}));
+    // the Collections panel's tree is what these tests drag in: the panels above it are folded
+    h.app.ui.toggle_sidebar_section("panel:catalog");
+    h.app.ui.toggle_sidebar_section("panel:folders");
     let make = |h: &mut Headless, params: serde_json::Value| h.app.session.execute("album.create", &params).unwrap()["id"].as_u64().unwrap();
     let archive = make(&mut h, json!({"name": "Archive", "folder": true}));
     let trips = make(&mut h, json!({"name": "Trips", "folder": true}));
@@ -1164,10 +1198,10 @@ impl AlbumTree {
     }
     /// The middle of the "Albums" header, where an album is dropped to take it to the top level.
     fn albums_header(&self) -> egui::Pos2 {
-        widget(&self.h, "sidebarSection:albums").center()
+        widget(&self.h, "classicPanel:collections").center()
     }
     fn parent(&self, id: u64) -> Option<u64> {
-        self.h.app.session.catalog.album(lightcraft_catalog::AlbumId(id)).unwrap().parent.map(|p| p.0)
+        self.h.app.session.catalog.album(lcc_catalog::AlbumId(id)).unwrap().parent.map(|p| p.0)
     }
     /// Press at `from`, move through each `(point, frames held there)`, release at the last one.
     fn drag(&mut self, from: egui::Pos2, path: &[(egui::Pos2, usize)]) {
@@ -1213,7 +1247,7 @@ impl AlbumTree {
     /// The names inside `parent`, folders or albums only.
     fn kids(&self, parent: Option<u64>, folders: bool) -> Vec<String> {
         let cat = &self.h.app.session.catalog;
-        cat.album_children(parent.map(lightcraft_catalog::AlbumId)).iter().filter(|a| a.folder == folders).map(|a| a.name.clone()).collect()
+        cat.album_children(parent.map(lcc_catalog::AlbumId)).iter().filter(|a| a.folder == folders).map(|a| a.name.clone()).collect()
     }
     fn drag_row(&mut self, id: u64, onto: u64) {
         let (from, to) = (self.row(id).center(), self.row(onto).center());
@@ -1247,7 +1281,7 @@ fn dragging_an_album_onto_a_folder_moves_it() {
     // a plain click still only opens the album
     let c = t.row(t.best).center();
     t.drag(c, &[(c, 0)]);
-    assert_eq!(t.h.app.session.source, lightcraft_engine::LibrarySource::Album(lightcraft_catalog::AlbumId(t.best)));
+    assert_eq!(t.h.app.session.source, lcc_engine::LibrarySource::Album(lcc_catalog::AlbumId(t.best)));
 }
 
 /// A drag ends only with the main button, and Esc abandons it: a release of another button over a
@@ -1407,7 +1441,7 @@ fn a_dragged_album_scrolls_the_sidebar_at_its_edges() {
     hold(&mut t, egui::pos2(cx, bottom - 6.0));
     let scrolled = t.row(last).top();
     assert!(scrolled < start - 100.0, "the bottom edge scrolls down: {start} -> {scrolled}");
-    hold(&mut t, egui::pos2(cx, top + 70.0));
+    hold(&mut t, egui::pos2(cx, top + 26.0));
     let back = t.row(last).top();
     assert!(back > scrolled + 100.0, "the top edge scrolls back up: {scrolled} -> {back}");
     assert!(t.h.app.ui.dragging_album.is_none());
@@ -1487,24 +1521,44 @@ fn a_dragged_album_opens_the_folder_it_hovers_over() {
 
 /// A headless app over a library of file-backed photos that exist only in the catalog.
 fn folders_app(paths: &[&str]) -> Headless {
-    folders_app_sized(paths, [1400.0, 900.0])
+    // (tall enough for the Catalog rows above the folders)
+    folders_app_sized(paths, [1400.0, 980.0])
 }
 
 fn folders_app_sized(paths: &[&str], size: [f32; 2]) -> Headless {
-    folders_app_with_services(paths, size, Services { png: None, ..Default::default() })
+    folders_app_with(paths, size, json!({"view": "photoGrid", "leftPanel": true, "moduleBar": false}))
+}
+
+/// [`folders_app_sized`] in Develop, whose left column draws upstream's sections as its
+/// "My Photos" panel (see [`sections_demo`]).
+fn folders_sections_app(paths: &[&str], size: [f32; 2]) -> Headless {
+    let mut h = folders_app_with(paths, size, json!({"view": "detail", "right": "edit", "leftPanel": true, "moduleBar": false}));
+    assert_eq!(h.app.ui.module, crate::module::ModuleId::Develop);
+    my_photos_only(&mut h);
+    h
+}
+
+fn folders_app_with(paths: &[&str], size: [f32; 2], ui: serde_json::Value) -> Headless {
+    folders_app_full(paths, size, ui, Services { png: None, ..Default::default() })
 }
 
 fn folders_app_with_services(paths: &[&str], size: [f32; 2], services: Services) -> Headless {
-    use lightcraft_catalog::{Op, Photo, Source};
-    let mut session = lightcraft_engine::Session::new();
+    folders_app_full(paths, size, json!({"view": "photoGrid", "leftPanel": true, "moduleBar": false}), services)
+}
+
+fn folders_app_full(paths: &[&str], size: [f32; 2], ui: serde_json::Value, services: Services) -> Headless {
+    use lcc_catalog::{Op, Photo, Source};
+    let mut session = lcc_engine::Session::new();
     for path in paths {
         let id = session.catalog.alloc_photo_id();
         let p = Photo::new(id, Source::File { path: (*path).into() }, "x.jpg", "JPEG", 60, 40, "2026-01-01T10:00:00");
         session.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
     }
-    let app = LightcraftApp::new(session, services);
+    let app = LccApp::new(session, services);
     let mut h = Headless::new(app, size, 1.0);
-    let r = h.request("ui.set", json!({"view": "photoGrid", "leftPanel": true}), T);
+    h.app.ui.toggle_sidebar_section("panel:navigator");
+    // (the module bar off: these layouts were sized before it existed)
+    let r = h.request("ui.set", ui, T);
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
     h
@@ -1534,15 +1588,15 @@ fn folders_section_lists_where_photos_were_imported_from_and_fills_the_grid() {
     assert_eq!(h.app.session.visible().len(), 3);
     click(&mut h, "source:libfolder:/pics/trip");
     assert_eq!(h.app.session.visible().len(), 2, "only the photos imported from that folder");
-    assert_eq!(h.app.session.source, lightcraft_engine::LibrarySource::LibraryFolder);
+    assert_eq!(h.app.session.source, lcc_engine::LibrarySource::LibraryFolder);
     assert_eq!(h.app.session.library_folder.as_deref(), Some("/pics/trip"));
-    assert_eq!(h.app.session.filter, lightcraft_catalog::Filter::default(), "a source, not a filter");
+    assert_eq!(h.app.session.filter, lcc_catalog::Filter::default(), "a source, not a filter");
     click(&mut h, "source:all");
     assert_eq!(h.app.session.visible().len(), 3, "All Photos shows everything again");
     // the section folds like the others
-    click(&mut h, "sidebarSection:folders");
+    click(&mut h, "classicPanel:folders");
     assert!(!has(&h, "source:libfolder:/pics"), "folded");
-    click(&mut h, "sidebarSection:folders");
+    click(&mut h, "classicPanel:folders");
     assert!(has(&h, "source:libfolder:/pics"));
 }
 
@@ -1566,7 +1620,7 @@ fn disks_are_rows_of_their_own() {
 /// shown before is replaced, and the folder's own row is highlighted.
 #[test]
 fn choosing_a_library_folder_replaces_whatever_was_shown() {
-    use lightcraft_engine::LibrarySource;
+    use lcc_engine::LibrarySource;
     let mut h = folders_app(&["/pics/trip/a.jpg", "/pics/home/b.jpg"]);
     click(&mut h, "libraryFolderToggle:/pics");
     for before in [LibrarySource::Picks, LibrarySource::Folder, LibrarySource::RecentlyDeleted, LibrarySource::Missing] {
@@ -1584,10 +1638,10 @@ fn choosing_a_library_folder_replaces_whatever_was_shown() {
 #[test]
 fn the_grid_is_titled_after_the_folder() {
     let mut h = folders_app(&["/Volumes/tokyo/photos/travel/a.jpg"]);
-    h.app.session.source = lightcraft_engine::LibrarySource::LibraryFolder;
+    h.app.session.source = lcc_engine::LibrarySource::LibraryFolder;
     h.app.session.library_folder = Some("/Volumes/tokyo/photos/travel".into());
     assert_eq!(crate::i18n::source_title(&h.app.session), "photos/travel");
-    h.app.session.source = lightcraft_engine::LibrarySource::All;
+    h.app.session.source = lcc_engine::LibrarySource::All;
     assert_eq!(crate::i18n::source_title(&h.app.session), "All Photos");
 }
 
@@ -1642,7 +1696,7 @@ fn a_folder_that_holds_other_disks_only_opens() {
 fn the_chosen_folder_is_always_in_view() {
     let mut h = folders_app(&["/pics/trip/day1/a.jpg", "/pics/trip/b.jpg", "/pics/home/c.jpg"]);
     assert!(!has(&h, "source:libfolder:/pics/trip/day1"), "folded to begin with");
-    h.app.session.source = lightcraft_engine::LibrarySource::LibraryFolder;
+    h.app.session.source = lcc_engine::LibrarySource::LibraryFolder;
     h.app.session.library_folder = Some("/pics/trip/day1".into());
     h.step();
     h.step();
@@ -1669,7 +1723,7 @@ fn a_renamed_folder_keeps_its_place_in_the_tree() {
     // the folder tree writes paths with forward slashes, and its widget ids carry them
     let b = base.to_string_lossy().replace('\\', "/");
     let mut h = folders_app(&[&format!("{b}/pics/trip/a.jpg"), &format!("{b}/pics/home/b.jpg")]);
-    h.app.session.source = lightcraft_engine::LibrarySource::LibraryFolder;
+    h.app.session.source = lcc_engine::LibrarySource::LibraryFolder;
     h.app.session.library_folder = Some(format!("{b}/pics/trip"));
     h.step();
     h.step();
@@ -1751,7 +1805,7 @@ fn a_folder_menu_locates_its_missing_tree_only() {
         .catalog
         .photos()
         .filter_map(|photo| match &photo.source {
-            lightcraft_catalog::Source::File { path } => Some(path.clone()),
+            lcc_catalog::Source::File { path } => Some(path.clone()),
             _ => None,
         })
         .collect();
@@ -1770,7 +1824,7 @@ fn a_folder_takes_a_colour_label_from_its_menu() {
     right_click(&mut h, "source:libfolder:/pics/trip");
     click(&mut h, "folderLabelMenu");
     click(&mut h, "folderLabel:red");
-    assert_eq!(h.app.session.catalog.folder_color_label("/pics/trip"), Some(lightcraft_catalog::ColorLabel::Red));
+    assert_eq!(h.app.session.catalog.folder_color_label("/pics/trip"), Some(lcc_catalog::ColorLabel::Red));
     assert!(!popup_open(&h), "choosing closes the menu");
     h.step();
     assert!(has(&h, "labelMark:libfolder:/pics/trip"), "the row shows its label");
@@ -1839,7 +1893,7 @@ fn a_sidebar_that_fits_does_not_scroll_sideways() {
 fn a_long_folder_name_never_runs_under_the_photo_count() {
     let long = "/very/long/2024-06-12 Tripping Through The Extremely Long Named Mountains Of Somewhere";
     let mut h = folders_app_sized(&[&format!("{long}/a.jpg")], [900.0, 700.0]);
-    h.app.session.source = lightcraft_engine::LibrarySource::LibraryFolder;
+    h.app.session.source = lcc_engine::LibrarySource::LibraryFolder;
     h.app.session.library_folder = Some(long.into());
     h.step();
     h.step();
@@ -1949,13 +2003,44 @@ fn date_and_keyword_rows_show_their_photos_from_any_source() {
     let r = h.request("ui.clickWidget", json!({"id": row}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
-    assert_eq!(h.app.session.source, lightcraft_engine::LibrarySource::All, "{key}");
+    assert_eq!(h.app.session.source, lcc_engine::LibrarySource::All, "{key}");
     assert!(!h.app.session.visible().is_empty(), "{key}: its photos are shown");
     // choosing the row again clears it, and stays in All Photos
     let r = h.request("ui.clickWidget", json!({"id": row}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
-    assert_eq!(h.app.session.filter, lightcraft_catalog::Filter::default(), "{key}");
+    assert_eq!(h.app.session.filter, lcc_catalog::Filter::default(), "{key}");
+}
+
+/// Library's Navigator panel: its 1:1 preset opens the loupe at 1:1, a click on its picture pans
+/// there, Fit goes back; folding it hides the picture.
+#[test]
+fn navigator_panel_presets_and_click_to_pan() {
+    let mut h = demo([1400.0, 900.0], json!({"view": "photoGrid", "leftPanel": true}));
+    h.app.ui.toggle_sidebar_section("panel:navigator");
+    h.step();
+    h.step();
+    let r = h.request("ui.clickWidget", json!({"id": "navigator:1:1"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    assert_eq!(h.app.ui.view, crate::state::ViewMode::Detail);
+    assert_eq!(h.app.ui.zoom, crate::state::Zoom::Percent(100.0));
+    h.step();
+    h.app.ui.pan = (0.1, 0.9);
+    let r = h.request("ui.clickWidget", json!({"id": "navigator:image"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    let (u, v) = h.app.ui.pan;
+    assert!((u - 0.5).abs() < 0.05 && (v - 0.5).abs() < 0.05, "a click in the middle centres the loupe: {u},{v}");
+    let r = h.request("ui.clickWidget", json!({"id": "navigator:fit"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    assert_eq!(h.app.ui.zoom, crate::state::Zoom::Fit);
+    let r = h.request("ui.clickWidget", json!({"id": "sidebarSection:navigator"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+    assert!(!h.app.widgets.iter().any(|(w, _)| w == "navigator:image"));
 }
 
 /// Issue #501: use the actual context-menu button on the populated demo folder.
@@ -1983,7 +2068,7 @@ fn deleting_a_populated_album_folder_from_its_menu_is_undoable() {
 /// (Auto Advance On, Imported presets, …).
 #[test]
 fn a_menu_commands_toast_shows_after_a_while() {
-    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let app = LccApp::new(lcc_engine::Session::with_demo(), Services { png: None, ..Default::default() });
     let mut h = crate::headless::Headless::new(app, [1000.0, 700.0], 1.0);
     for _ in 0..600 {
         h.step();
@@ -2007,7 +2092,7 @@ fn the_tracklog_toast_shows_after_a_while() {
         r#"<?xml version="1.0"?><gpx version="1.1" creator="test" xmlns="http://www.topografix.com/GPX/1/1"><trk><trkseg><trkpt lat="46.0" lon="7.0"><time>2026-05-01T10:00:00Z</time></trkpt></trkseg></trk></gpx>"#,
     )
     .unwrap();
-    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let app = LccApp::new(lcc_engine::Session::with_demo(), Services { png: None, ..Default::default() });
     let mut h = crate::headless::Headless::new(app, [1000.0, 700.0], 1.0);
     for _ in 0..600 {
         h.step();
@@ -2055,7 +2140,7 @@ fn recognise_faces_stays_off_until_a_model_is_chosen() {
     }
     // a model: installing it chooses it and switches recognition on; the box then works both ways
     let f = dir.join("m.onnx");
-    std::fs::write(&f, lightcraft_faces::synthetic::tiny_embedder_model(64)).unwrap();
+    std::fs::write(&f, lcc_faces::synthetic::tiny_embedder_model(64)).unwrap();
     h.app.session.execute("faces.models.install", &json!({"path": f.to_string_lossy(), "acknowledged": true})).unwrap();
     h.app.caches.faces_epoch += 1;
     h.step();
@@ -2075,13 +2160,13 @@ fn recognise_faces_stays_off_until_a_model_is_chosen() {
 fn local_photos_cannot_be_added_to_albums_until_they_join_my_photos() {
     let mut h = demo([1400.0, 900.0], json!({"view": "photoGrid", "leftPanel": true}));
     let album = h.app.session.execute("album.create", &json!({"name": "Trip", "addSelected": false})).unwrap()["id"].as_u64().unwrap();
-    let album_id = lightcraft_catalog::AlbumId(album);
+    let album_id = lcc_catalog::AlbumId(album);
     let dir = std::env::temp_dir().join(format!("lc-ui-albums-local-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let img = lightcraft_raster::Rgba8::from_fn(24, 16, |x, y| [(x * 9) as u8, (y * 12) as u8, 80, 255]);
-    let o = lightcraft_engine::export::ExportOptions { format: lightcraft_engine::export::ExportFormat::Png, ..Default::default() };
-    std::fs::write(dir.join("a.png"), lightcraft_engine::export::encode_image(&img, &o).unwrap()).unwrap();
+    let img = lcc_raster::Rgba8::from_fn(24, 16, |x, y| [(x * 9) as u8, (y * 12) as u8, 80, 255]);
+    let o = lcc_engine::export::ExportOptions { format: lcc_engine::export::ExportFormat::Png, ..Default::default() };
+    std::fs::write(dir.join("a.png"), lcc_engine::export::encode_image(&img, &o).unwrap()).unwrap();
     let r = h.request("engine.execute", json!({"command": "library.browse", "params": {"path": dir.to_string_lossy()}}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
@@ -2089,6 +2174,12 @@ fn local_photos_cannot_be_added_to_albums_until_they_join_my_photos() {
     assert_eq!(vis.len(), 1, "{vis:?}");
     let local = vis[0];
     assert!(h.app.session.catalog.photo(local).unwrap().local);
+    // Local folded: on Windows the temp folder lies under the home folder, so browsing it opens Local
+    // at every folder on the way, which pushes the album row below the window
+    if !h.app.ui.sidebar_section_collapsed("local") {
+        h.app.ui.toggle_sidebar_section("local");
+    }
+    h.settle(SETTLE);
     let thumb = widget(&h, &format!("thumb:{}", local.0));
 
     // right-click: Add to Album is there but off, so hovering opens no album entries
@@ -2107,16 +2198,16 @@ fn local_photos_cannot_be_added_to_albums_until_they_join_my_photos() {
     h.step();
 
     // Photo ▸ Add to Album: the hint item first (off), the album and New Album… off
-    let add_to_album = |app: &LightcraftApp| -> Vec<crate::menubar::MenuNode> {
+    let add_to_album = |app: &LccApp| -> Vec<crate::menubar::MenuNode> {
         let bar = crate::menubar::menu_bar(app);
         let photo = &bar.iter().find(|(t, _)| t == "Photo").expect("Photo menu").1;
         photo
             .iter()
             .find_map(|n| match n {
-                crate::menubar::MenuNode::Submenu { label, children } if label == "Add to Album" => Some(children.clone()),
+                crate::menubar::MenuNode::Submenu { label, children } if label == "Add to Collection" => Some(children.clone()),
                 _ => None,
             })
-            .expect("Add to Album submenu")
+            .expect("Add to Collection submenu")
     };
     let enabled_of = |nodes: &[crate::menubar::MenuNode], id: &str| -> Option<bool> {
         nodes.iter().find_map(|n| match n {
@@ -2173,7 +2264,7 @@ fn right_click_add_to_album_offers_a_new_album_when_there_is_none() {
         h.app.session.execute("album.delete", &json!({"id": id})).unwrap();
     }
     assert!(h.app.session.catalog.albums().all(|a| a.folder || a.is_smart()), "no plain album is left");
-    let photo = lightcraft_catalog::PhotoId(h.app.session.visible_cloned()[1].0);
+    let photo = lcc_catalog::PhotoId(h.app.session.visible_cloned()[1].0);
     h.step();
     let thumb = widget(&h, &format!("thumb:{}", photo.0));
     let r = h.request("ui.click", json!({"x": thumb.center().x, "y": thumb.center().y, "button": "right"}), T);
@@ -2214,13 +2305,13 @@ fn an_album_menu_imports_into_that_album() {
     for i in 0..2u8 {
         let (w, h) = (40usize, 30usize);
         let data: Vec<[u8; 4]> = (0..w * h).map(|k| [(k % w * 6) as u8, i * 90, (k / w * 8) as u8, 255]).collect();
-        let img = lightcraft_raster::Rgba8 { width: w, height: h, data };
-        let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+        let img = lcc_raster::Rgba8 { width: w, height: h, data };
+        let png = lcc_codecs::encode_png(&lcc_codecs::EncodeImage::rgba8(&img), &lcc_codecs::EncodeMeta::default()).unwrap();
         std::fs::write(dir.join(format!("card{i}.png")), png).unwrap();
     }
     let picked = dir.to_string_lossy().to_string();
     let services = Services { png: None, pick_folder: Some(Box::new(move || Some(picked.clone()))), ..Default::default() };
-    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo().with_fs(), services);
+    let app = LccApp::new(lcc_engine::Session::with_demo().with_fs(), services);
     let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
     let r = h.request("ui.set", json!({"view": "photoGrid", "leftPanel": true}), T);
     assert_eq!(r["ok"], true, "{r}");
@@ -2229,7 +2320,13 @@ fn an_album_menu_imports_into_that_album() {
     let id_of = |name: &str| h.app.session.catalog.albums().find(|a| a.name == name).map(|a| a.id.0).expect(name);
     let (album, folder) = (id_of("Garden"), id_of("Travel 2026"));
     let right_click = |h: &mut Headless, id: &str| {
-        let row = widget(h, id);
+        // the Classic column can put the Collections panel below the window: scroll the row into view
+        let mut row = widget(h, id);
+        if row.bottom() > 850.0 {
+            scroll_sidebar(h, 500.0 - row.bottom());
+            row = widget(h, id);
+        }
+        assert!(row.bottom() <= 850.0 && row.top() >= 0.0, "{id} on screen: {row:?}");
         let r = h.request("ui.click", json!({"x": row.center().x, "y": row.center().y, "button": "right"}), T);
         assert_eq!(r["ok"], true, "{r}");
         h.step();
@@ -2288,12 +2385,12 @@ fn deleting_a_photo_asks_first_from_the_key_the_menu_and_the_right_click_menu() 
 
     // ⌫ and Photo ▸ Delete Photo ask; Cancel keeps the photo
     h.request("ui.key", json!({"key": "delete"}), T);
-    assert_eq!(h.app.ui.dialog, Some(Dialog::ConfirmDelete { count: 1 }), "the key asks");
+    assert_eq!(h.app.ui.dialog, Some(Dialog::ConfirmDelete { count: 1, disk_files: 0 }), "the key asks");
     h.request("ui.dialog.cancel", json!({}), T);
     assert!(!deleted(&h));
     // (what a click on the menu bar's item runs; `ui.menu.invoke` is the agents' engine.execute)
     crate::menubar::run_item(&mut h.app, "photo.delete", json!({})).unwrap();
-    assert_eq!(h.app.ui.dialog, Some(Dialog::ConfirmDelete { count: 1 }), "the menu asks");
+    assert_eq!(h.app.ui.dialog, Some(Dialog::ConfirmDelete { count: 1, disk_files: 0 }), "the menu asks");
     h.request("ui.dialog.cancel", json!({}), T);
     assert!(!deleted(&h));
 
@@ -2301,7 +2398,7 @@ fn deleting_a_photo_asks_first_from_the_key_the_menu_and_the_right_click_menu() 
     let thumb = format!("thumb:{}", photo.0);
     right_click(&mut h, &thumb);
     click(&mut h, "button:contextDeletePhoto");
-    assert_eq!(h.app.ui.dialog, Some(Dialog::ConfirmDelete { count: 1 }), "the right-click menu asks");
+    assert_eq!(h.app.ui.dialog, Some(Dialog::ConfirmDelete { count: 1, disk_files: 0 }), "the right-click menu asks");
     assert!(!deleted(&h), "nothing deleted before the answer");
     let r = h.request("ui.dialog.confirm", json!({}), T);
     assert_eq!(r["ok"], true, "{r}");
@@ -2323,7 +2420,7 @@ fn deleting_a_photo_asks_first_from_the_key_the_menu_and_the_right_click_menu() 
 fn new_album_can_leave_the_selected_photos_out() {
     let mut h = demo([1400.0, 900.0], json!({"view": "photoGrid", "leftPanel": true}));
     let has = |h: &Headless, id: &str| h.app.widgets.iter().any(|(w, _)| w == id);
-    let photo = lightcraft_catalog::PhotoId(h.app.session.visible_cloned()[1].0);
+    let photo = lcc_catalog::PhotoId(h.app.session.visible_cloned()[1].0);
     h.app.session.execute("library.select", &json!({"ids": [photo.0]})).unwrap();
     let create = |h: &mut Headless, command: &str, name: &str| {
         h.app.run(command, json!({"name": name})).unwrap();
@@ -2359,11 +2456,97 @@ fn new_album_can_leave_the_selected_photos_out() {
     confirm(&mut h);
 
     // nothing selected: no option, an empty album
-    h.app.session.selection = lightcraft_engine::Selection { ids: vec![], active: None };
+    h.app.session.selection = lcc_engine::Selection { ids: vec![], active: None };
     create(&mut h, "dialog.newAlbum", "Nothing");
     assert!(!has(&h, "check:albumIncludeSelected"), "no selection, no option");
     confirm(&mut h);
     assert!(photos(&h, "Nothing").is_empty());
+}
+
+/// Recently Deleted can be emptied from its view's button and from the sidebar row's right-click
+/// menu; both ask first, Cancel keeps the photos, and OK removes only the trashed photos.
+#[test]
+fn emptying_recently_deleted_asks_first_and_removes_only_trashed_photos() {
+    use crate::state::Dialog;
+    let mut h = demo([1400.0, 900.0], json!({"view": "photoGrid", "leftPanel": true}));
+    let all = h.app.session.visible_cloned();
+    let (gone, kept) = (vec![all[0].0, all[1].0], all.len() - 2);
+    exec(&mut h, "photo.delete", json!({"ids": gone}));
+    exec(&mut h, "library.source", json!({"kind": "recentlyDeleted"}));
+    h.settle(SETTLE);
+    click(&mut h, "button:emptyRecentlyDeleted");
+    assert_eq!(h.app.ui.dialog, Some(Dialog::ConfirmPurge { count: 2, all: true }), "the view's button asks");
+    h.request("ui.dialog.cancel", json!({}), T);
+    assert_eq!(h.app.session.catalog.len(), all.len(), "Cancel keeps them");
+    right_click(&mut h, "source:recentlyDeleted");
+    click(&mut h, "menu:emptyRecentlyDeleted");
+    assert_eq!(h.app.ui.dialog, Some(Dialog::ConfirmPurge { count: 2, all: true }), "the sidebar menu asks");
+    let r = h.request("ui.dialog.confirm", json!({}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(h.app.session.catalog.len(), kept, "only the trashed photos are gone");
+    assert!(h.app.session.catalog.photos().all(|p| !p.deleted));
+}
+
+/// Delete from Disk in confirmation dialog moves the file to trash and permanently deletes from catalog.
+#[test]
+fn delete_from_disk_dialog_trashes_file_and_removes_from_catalog() {
+    use crate::state::Dialog;
+    let mut h = demo([1400.0, 900.0], json!({"view": "photoGrid"}));
+
+    let tmp = std::env::temp_dir().join(format!("lcc-test-ui-delete-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).unwrap();
+    let file = tmp.join("disk_photo.jpg");
+    std::fs::write(&file, b"content").unwrap();
+
+    let id = h.app.session.catalog.alloc_photo_id();
+    let op = lcc_catalog::Op::AddPhoto {
+        photo: Box::new(lcc_catalog::Photo::new(
+            id,
+            lcc_catalog::Source::File { path: file.to_string_lossy().to_string() },
+            "disk_photo.jpg",
+            "JPEG",
+            100,
+            100,
+            "2026-01-01",
+        )),
+    };
+    h.app.session.commit("Add photo", op).unwrap();
+
+    let trashed = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let t_clone = trashed.clone();
+    h.app.session.trash = Some(std::sync::Arc::new(move |p: &std::path::Path| {
+        t_clone.lock().unwrap().push(p.to_path_buf());
+        Ok(())
+    }));
+
+    exec(&mut h, "library.select", json!({"ids": [id.0]}));
+    h.request("ui.key", json!({"key": "delete"}), T);
+
+    assert_eq!(h.app.ui.dialog, Some(Dialog::ConfirmDelete { count: 1, disk_files: 1 }));
+    h.step();
+    assert!(has(&h, "button:dialogDeleteFromDisk"));
+
+    click(&mut h, "button:dialogDeleteFromDisk");
+    assert_eq!(h.app.ui.dialog, None);
+    assert!(trashed.lock().unwrap().contains(&file));
+    assert!(h.app.session.catalog.photo(id).is_none());
+
+    exec(&mut h, "edit.undo", json!({}));
+    assert!(h.app.session.catalog.photo(id).is_some());
+
+    // with "Confirm before deleting" off, Photo ▸ Delete from Disk still asks first
+    h.app.ui.settings.confirm_delete = false;
+    exec(&mut h, "library.select", json!({"ids": [id.0]}));
+    crate::menubar::run_item(&mut h.app, "photo.deleteFromDisk", json!({})).unwrap();
+    assert_eq!(h.app.ui.dialog, Some(Dialog::ConfirmDelete { count: 1, disk_files: 1 }), "the menu asks");
+    h.request("ui.dialog.cancel", json!({}), T);
+    assert!(h.app.session.catalog.photo(id).is_some(), "cancel keeps the photo");
+    // and an agent calling the command directly has to confirm
+    assert!(h.app.session.execute("photo.deleteFromDisk", &json!({})).is_err());
+    assert!(h.app.session.catalog.photo(id).is_some());
+
+    let _ = std::fs::remove_dir_all(&tmp);
 }
 
 /// Histogram corner controls stay usable even before a histogram is available, and each
@@ -2408,4 +2591,22 @@ fn the_histogram_clipping_buttons_stay_clear_of_the_hovered_scroll_bar() {
     assert!(high.right() <= bar_left, "the highlight clipping button {high:?} is under the scroll bar (from x = {bar_left})");
     // and the shadow one keeps the same inset from its edge
     assert!(((low.left() - hist.left()) - (hist.right() - high.right())).abs() < 0.5, "{low:?} {high:?} in {hist:?}");
+}
+
+#[test]
+fn vrr_flicker_workaround_setting_toggles_and_persists() {
+    let mut h = demo([1400.0, 1000.0], json!({"view": "photoGrid"}));
+    assert!(!h.app.ui.settings.vrr_flicker_workaround);
+
+    // Opening settings dialog and switching to Display tab
+    h.request("ui.set", json!({"settingsTab": "display"}), T);
+    h.step();
+
+    // Verify toggle can be changed via settings
+    h.app.ui.settings.vrr_flicker_workaround = true;
+    let serialized = serde_json::to_string(&h.app.ui.settings).unwrap();
+    assert!(serialized.contains("\"vrrFlickerWorkaround\":true"));
+
+    let deserialized: crate::state::AppSettings = serde_json::from_str(&serialized).unwrap();
+    assert!(deserialized.vrr_flicker_workaround);
 }

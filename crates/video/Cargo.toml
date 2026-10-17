@@ -1,0 +1,52 @@
+[package]
+name = "lcc-video"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Video clips (L3): probe, frame reader and poster frames on FilmCraft's pure-Rust demuxer and decoders (native only)"
+
+[lints]
+workspace = true
+
+[dependencies]
+lcc-raster = { workspace = true }
+thiserror = { workspace = true }
+
+# Native only (plan/video-filmcraft.md §3): the web build shows videos as poster-less tiles.
+# Not `filmcraft-codecs`: it pulls symphonia (MPL-2.0), which deny.toml rejects; the MP4/MOV demuxer,
+# the Matroska / MPEG-TS / MXF demuxers and each decoder crate are used directly instead (every one is
+# std-only, MIT OR Apache-2.0, no unsafe).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+filmcraft-color = { git = "https://github.com/storytold/filmcraft", rev = "8309f21a6c3f34ddf190af7fd9bfd913053a1fd5" }
+filmcraft-frame = { git = "https://github.com/storytold/filmcraft", rev = "8309f21a6c3f34ddf190af7fd9bfd913053a1fd5" }
+filmcraft-time = { git = "https://github.com/storytold/filmcraft", rev = "8309f21a6c3f34ddf190af7fd9bfd913053a1fd5" }
+filmcraft-isobmff = { git = "https://github.com/storytold/filmcraft", rev = "8309f21a6c3f34ddf190af7fd9bfd913053a1fd5" }
+filmcraft-h264 = { git = "https://github.com/storytold/filmcraft", rev = "8309f21a6c3f34ddf190af7fd9bfd913053a1fd5" }
+filmcraft-hevc = { git = "https://github.com/storytold/filmcraft", rev = "8309f21a6c3f34ddf190af7fd9bfd913053a1fd5" }
+filmcraft-bitstream = { git = "https://github.com/storytold/filmcraft", rev = "8309f21a6c3f34ddf190af7fd9bfd913053a1fd5" }
+filmcraft-matroska = { git = "https://github.com/storytold/filmcraft", rev = "8309f21a6c3f34ddf190af7fd9bfd913053a1fd5" }
+filmcraft-mpegts = { git = "https://github.com/storytold/filmcraft", rev = "8309f21a6c3f34ddf190af7fd9bfd913053a1fd5" }
+filmcraft-mxf = { git = "https://github.com/storytold/filmcraft", rev = "8309f21a6c3f34ddf190af7fd9bfd913053a1fd5" }
+filmcraft-vp9 = { git = "https://github.com/storytold/filmcraft", rev = "8309f21a6c3f34ddf190af7fd9bfd913053a1fd5" }
+filmcraft-av1 = { git = "https://github.com/storytold/filmcraft", rev = "8309f21a6c3f34ddf190af7fd9bfd913053a1fd5" }
+filmcraft-prores = { git = "https://github.com/storytold/filmcraft", rev = "8309f21a6c3f34ddf190af7fd9bfd913053a1fd5" }
+filmcraft-mpeg2v = { git = "https://github.com/storytold/filmcraft", rev = "8309f21a6c3f34ddf190af7fd9bfd913053a1fd5" }
+filmcraft-apv = { git = "https://github.com/storytold/filmcraft", rev = "8309f21a6c3f34ddf190af7fd9bfd913053a1fd5" }
+filmcraft-dnx = { git = "https://github.com/storytold/filmcraft", rev = "8309f21a6c3f34ddf190af7fd9bfd913053a1fd5" }
+# audio (std-only, MIT OR Apache-2.0; puremp3 is MIT OR CC0-1.0, no unsafe)
+filmcraft-aac = { git = "https://github.com/storytold/filmcraft", rev = "8309f21a6c3f34ddf190af7fd9bfd913053a1fd5" }
+filmcraft-opus = { git = "https://github.com/storytold/filmcraft", rev = "8309f21a6c3f34ddf190af7fd9bfd913053a1fd5" }
+filmcraft-ac3 = { git = "https://github.com/storytold/filmcraft", rev = "8309f21a6c3f34ddf190af7fd9bfd913053a1fd5" }
+puremp3 = "0.1"
+
+# Dev-only `test_util::write_clip` (synthetic H.264 MP4s for other crates' tests); never on in a product build.
+filmcraft-h264enc = { git = "https://github.com/storytold/filmcraft", rev = "8309f21a6c3f34ddf190af7fd9bfd913053a1fd5", optional = true }
+
+[features]
+test-util = ["dep:filmcraft-h264enc"]
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+filmcraft-h264enc = { git = "https://github.com/storytold/filmcraft", rev = "8309f21a6c3f34ddf190af7fd9bfd913053a1fd5" }
+
+[dev-dependencies]
+image = { workspace = true }

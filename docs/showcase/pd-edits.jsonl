@@ -1,4 +1,4 @@
-# Public-domain showcase: run LightCraft with `--control 7980 corpus/images/pd` (see docs/showcase/README.md)
+# Public-domain showcase: run the app with `--control 7980 corpus/images/pd` (see docs/showcase/README.md)
 {"method":"ui.resize","params":{"width":1600,"height":1000}}
 {"method":"engine.execute","params":{"command":"photo.setMeta","params":{"ids":[1],"title":"The Tetons and the Snake River","creator":"Ansel Adams (1942), U.S. National Archives","keywords":["mountains","river","black and white","national park"]}}}
 {"method":"engine.execute","params":{"command":"photo.setMeta","params":{"ids":[2],"title":"Migrant Mother","creator":"Dorothea Lange (1936), Library of Congress","keywords":["portrait","documentary"]}}}

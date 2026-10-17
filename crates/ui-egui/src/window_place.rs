@@ -3,9 +3,11 @@
 //!
 //! The size is the window's as it is when neither zoomed nor full screen: a zoomed window opens
 //! zoomed, and goes back to that size when it is un-zoomed. Full screen is not remembered (the
-//! app opens as a window), and neither is where on the desktop the window was: the system places
-//! it. A place can be on a display that is gone, and only the window system knows which
-//! displays there are.
+//! app opens as a window). Where on the desktop the window was (its outer top-left, in the
+//! system's points) is remembered too and asked for when the window opens (issue #153: macOS
+//! otherwise opens it where it likes every time). A place that is no place (not a number, or
+//! further out than any desktop reaches) is not kept, and a place the window system does not
+//! report (Wayland) is never written: the system places the window there.
 //!
 //! Windows and Linux say whether a window is maximized. macOS says so only when the window opens
 //! and when the app zooms it itself, so there the window's size is gone by as well (`Unsaid`): a
@@ -57,6 +59,10 @@ pub struct WindowPlace {
     /// Zoomed (macOS) / maximized.
     #[serde(default)]
     pub zoomed: bool,
+    /// Its outer top-left while neither zoomed nor full screen, in the system's points (`None`:
+    /// unknown, the system places it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<[f32; 2]>,
 }
 
 fn size_is_one(size: [f32; 2]) -> bool {
@@ -67,6 +73,12 @@ fn size_is_one(size: [f32; 2]) -> bool {
 /// keep to the minimum, a script): what is remembered is always a size the window opens at.
 fn at_least_min(size: [f32; 2]) -> [f32; 2] {
     [size[0].max(MIN_SIZE[0]), size[1].max(MIN_SIZE[1])]
+}
+
+/// A top-left a window can have: a number, and no further from the main display's corner than
+/// the largest desktop reaches.
+fn position_is_one(pos: [f32; 2]) -> bool {
+    pos.iter().all(|p| p.is_finite() && (-MAX_SIDE..=MAX_SIDE).contains(p))
 }
 
 fn same(a: [f32; 2], b: [f32; 2]) -> bool {
@@ -88,7 +100,11 @@ impl WindowPlace {
     /// What the settings hold (which a person or another version may have written), as
     /// something a window can be: a size within bounds. `None` when the size is no size at all.
     pub fn checked(self) -> Option<WindowPlace> {
-        size_is_one(self.size).then(|| WindowPlace { size: at_least_min(self.size), zoomed: self.zoomed })
+        size_is_one(self.size).then(|| WindowPlace {
+            size: at_least_min(self.size),
+            zoomed: self.zoomed,
+            position: self.position.filter(|p| position_is_one(*p)),
+        })
     }
 
     /// Reads the window from the settings without letting it cost the rest of them: anything that
@@ -107,6 +123,8 @@ pub struct Seen {
     pub size: Option<[f32; 2]>,
     /// The size of the screen it is on.
     pub screen: Option<[f32; 2]>,
+    /// Its outer top-left, where the window system reports one (not Wayland).
+    pub position: Option<[f32; 2]>,
     /// What the window system last said of its being zoomed / maximized.
     pub zoomed: bool,
     pub full_screen: bool,
@@ -123,6 +141,7 @@ impl Seen {
         Seen {
             size: Some(scaled(content.size())).filter(|s| size_is_one(*s)),
             screen: info.monitor_size.map(scaled).filter(|s| size_is_one(*s)),
+            position: info.outer_rect.map(|r| scaled(r.min.to_vec2())).filter(|p| position_is_one(*p)),
             zoomed: info.maximized == Some(true),
             full_screen: info.fullscreen == Some(true),
             minimized: info.minimized == Some(true),
@@ -213,7 +232,11 @@ impl WindowWatch {
         if zoomed {
             // (its size now is the screen's, not the window's own: the size it goes back to stays)
             self.resting = None;
-            return Some(WindowPlace { size: remembered.map_or(DEFAULT_SIZE, |r| r.size), zoomed: true });
+            return Some(WindowPlace {
+                size: remembered.map_or(DEFAULT_SIZE, |r| r.size),
+                zoomed: true,
+                position: remembered.and_then(|r| r.position),
+            });
         }
         let Some(size) = seen.size else {
             self.resting = None;
@@ -224,7 +247,9 @@ impl WindowWatch {
             self.resting = None;
             return remembered;
         }
-        let place = WindowPlace { size: at_least_min(size), zoomed: false };
+        // (where no place is reported, the one remembered stays)
+        let position = seen.position.or_else(|| remembered.and_then(|r| r.position));
+        let place = WindowPlace { size: at_least_min(size), zoomed: false, position };
         if Some(place) == remembered {
             self.resting = None;
             return remembered;
@@ -329,7 +354,7 @@ mod tests {
     }
 
     fn place(size: [f32; 2], zoomed: bool) -> WindowPlace {
-        WindowPlace { size, zoomed }
+        WindowPlace { size, zoomed, position: None }
     }
 
     /// Given a window that is resized and comes to rest, when it is watched, then its new size
@@ -851,6 +876,35 @@ mod tests {
         assert_eq!(WindowWatch::told_live(true).at_exit(None, 3.0), None);
     }
 
+    /// Given a window that is moved (issue #153), when it rests at its new place, then the place
+    /// is remembered with its size; zoomed, the place it goes back to stays; and where the system
+    /// reports no place (Wayland), the one remembered is kept.
+    #[test]
+    fn where_the_window_rests_is_remembered() {
+        let at = |pos: [f32; 2]| Seen { position: Some(pos), ..window([1300.0, 800.0]) };
+        let rest = Some(WindowPlace { position: Some([100.0, 80.0]), ..place([1300.0, 800.0], false) });
+        let moved = Some(WindowPlace { position: Some([900.0, 300.0]), ..place([1300.0, 800.0], false) });
+        let mut watch = WindowWatch::told_live(true);
+        assert_eq!(watch.note(rest, &at([100.0, 80.0]), 0.0), rest);
+        assert_eq!(watch.note(rest, &at([900.0, 300.0]), 1.0), rest, "not at rest yet");
+        assert_eq!(watch.note(rest, &at([900.0, 300.0]), 1.6), moved);
+        // quits just after a move: the place it was let go at
+        let mut watch = WindowWatch::told_live(true);
+        watch.note(rest, &at([900.0, 300.0]), 1.0);
+        assert_eq!(watch.at_exit(rest, 1.3), moved);
+        // zoomed: where it goes back to stays
+        let mut watch = WindowWatch::told_live(true);
+        let zoomed = Seen { zoomed: true, position: Some([0.0, 25.0]), ..window([2560.0, 1415.0]) };
+        assert_eq!(watch.note(moved, &zoomed, 2.0), moved.map(|m| WindowPlace { zoomed: true, ..m }));
+        // no place reported: the one remembered stays with a new size
+        let mut watch = WindowWatch::told_live(true);
+        watch.note(moved, &window([1500.0, 900.0]), 3.0);
+        assert_eq!(
+            watch.note(moved, &window([1500.0, 900.0]), 3.6),
+            Some(WindowPlace { position: Some([900.0, 300.0]), ..place([1500.0, 900.0], false) })
+        );
+    }
+
     /// What egui holds of the window is read in the system's points: a size every platform
     /// reports (the rectangle the app draws in), brought back from the interface's own scale.
     #[test]
@@ -860,7 +914,15 @@ mod tests {
         let content = Rect::from_min_size(pos2(0.0, 0.0), vec2(650.0, 400.0));
         // (the interface at twice its size: egui's points are half the system's)
         let seen = Seen::of(&info, content, 2.0);
-        assert_eq!(seen, Seen { size: Some([1300.0, 800.0]), screen: Some([2560.0, 1440.0]), zoomed: true, full_screen: false, minimized: false });
+        assert_eq!(
+            seen,
+            Seen { size: Some([1300.0, 800.0]), screen: Some([2560.0, 1440.0]), position: None, zoomed: true, full_screen: false, minimized: false }
+        );
+        // a window on a display left of the main one, its place in the system's points
+        let placed = ViewportInfo { outer_rect: Some(Rect::from_min_size(pos2(-600.0, 50.0), vec2(650.0, 430.0))), ..info.clone() };
+        assert_eq!(Seen::of(&placed, content, 2.0).position, Some([-1200.0, 100.0]));
+        let lost = ViewportInfo { outer_rect: Some(Rect::from_min_size(pos2(f32::NAN, 0.0), vec2(1.0, 1.0))), ..info.clone() };
+        assert_eq!(Seen::of(&lost, content, 1.0).position, None, "no place");
         let away = ViewportInfo { maximized: Some(false), fullscreen: Some(true), minimized: Some(true), ..Default::default() };
         let seen = Seen::of(&away, content, 1.0);
         assert!(!seen.zoomed && seen.full_screen && seen.minimized);
@@ -886,8 +948,15 @@ mod tests {
         let read = |window: &str| serde_json::from_str::<Settings>(&format!(r#"{{"window":{window},"other":7}}"#)).map(|s| s.window);
         assert_eq!(read(r#"{"size":[1300.0,800.0],"zoomed":true}"#).unwrap(), Some(place([1300.0, 800.0], true)));
         assert_eq!(read(r#"{"size":[1300,800]}"#).unwrap(), Some(place([1300.0, 800.0], false)));
-        // (a place on the desktop, as a version that remembered one would write it, is passed over)
-        assert_eq!(read(r#"{"size":[1300,800],"position":[40,60],"zoomed":false}"#).unwrap(), Some(place([1300.0, 800.0], false)));
+        // a place on the desktop is kept; one that is no place is dropped, and the size kept
+        let at = |x: f32, y: f32| Some(WindowPlace { position: Some([x, y]), ..place([1300.0, 800.0], false) });
+        assert_eq!(read(r#"{"size":[1300,800],"position":[40,60],"zoomed":false}"#).unwrap(), at(40.0, 60.0));
+        assert_eq!(read(r#"{"size":[1300,800],"position":[-2000,60]}"#).unwrap(), at(-2000.0, 60.0));
+        for no_place in [r#"[1e30,60]"#, r#"[40]"#, r#""left""#, r#"[40,-1e9]"#] {
+            let got = read(&format!(r#"{{"size":[1300,800],"position":{no_place}}}"#)).unwrap();
+            assert!(got.is_none() || got == Some(place([1300.0, 800.0], false)), "{no_place}: {got:?}");
+        }
+        assert_eq!(WindowPlace { position: Some([f32::NAN, 0.0]), ..place([1300.0, 800.0], false) }.checked(), Some(place([1300.0, 800.0], false)));
         assert_eq!(read(r#"{"size":[200,100]}"#).unwrap().map(|p| p.size), Some(MIN_SIZE), "too small to be the app's window");
         for odd in [
             "null",

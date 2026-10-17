@@ -77,7 +77,7 @@ in depth and is not tested separately.
 ## Verified sensor decoding
 
 CRX version `0x100`, four Bayer planes and `ff01`/`ff02`/`ff03` marker headers
-support lossless RAW and three-level C-RAW with horizontal tiles. Uniform
+support lossless RAW and three-level C-RAW with horizontal tiles; vertical and grid tiles (version `0x100`) decode by the same overlap rule at top/bottom tile edges, covered by synthetic tests only. Uniform
 quantization values 4–43 are independently verified; 44 continues the sequence (step 102, checked against a measured step on an EOS R50 C-RAW file). Version `0x200` C-RAW
 supports the `ff11`/`ff12`/`ff13` marker family, a single 14-bit Bayer tile and
 its adaptive quantization map. C-RAW is quantized, so next to clipped highlights
@@ -104,8 +104,13 @@ control. The exact inputs and reference hashes are:
 | Canon RP C-RAW, raw.pixls.us 4672 | `bd3270610593d37ff8a399908bb9406a4e32f9151d55bf19ac1cf8f10d787b46` | `f48df06ca1d67382` |
 | Canon RP RAW, 1.6× crop, raw.pixls.us 4673 | `7d4ba45dc9264d598336133593c677b09774bcdf13b602ee770e72415a652a16` | `46808a9de3b3dcc7` |
 | Canon RP C-RAW, 1.6× crop, raw.pixls.us 4671 | `4a859ab137f792aedaf3416b0aad1497ebaab02052a49453902e226699154aa7` | `39a60c4efed4e1f4` |
+| Canon R6 RAW, private file 1 (not redistributable) | `7a8967ff68a21e076a3bd658fbdd2089c8b8285de0396da70feb5eb3ce8bfadf` | `00b01d2b9179a8cb` |
+| Canon R6 RAW, private file 2 (not redistributable) | `b8c26ebc480985f0bc7bf7c2cba33976e57e5bd4de148e171d49707fb613572e` | `f6636c02e7116eac` |
+| Canon R6 RAW, private file 3 (not redistributable) | `56a7b5e5131522e716c2d82ac38a4a2e132270c8508d6ff250ac702f4aa471af` | `d0062a8b5d5c5d35` |
+| Canon R6 RAW, private file 4 (not redistributable) | `bb9c4ab3da862029ef807ebc8e64ed77c08087586b3127dd58cf49c16a1e8af3` | `0a4c3b71b3a6efa4` |
+| Canon R6 RAW, private file 5 (not redistributable) | `0fe2f4c3a5695516056a295c87a35696939bae6f09b9d21137b93a601f41f8b1` | `e9450c7637487a3c` |
 
-The EOS R5 Mark II files (raw.pixls.us 7881–7884, CC0) are pinned to LightCraft's own decode; no external
+The EOS R5 Mark II files (raw.pixls.us 7881–7884, CC0) are pinned to the app's own decode; no external
 decoder was run on them:
 
 | File | Input SHA-256 | Sensor FNV-1a (u16 little-endian) |
@@ -123,9 +128,23 @@ The RP references came from the same release's Windows x64 binary (ZIP SHA-256
 `d3add6b71568bf5f7938468b0b40a0ee1eaec01e0057fe78dcc453188010be9a`), after it
 reproduced the M50 RAW hash above. The RP's 1.6× crop mode writes a single
 4032×2656 tile, where full frame (6384×4224) uses two 3192-wide horizontal
-tiles. All ten sensor comparisons pass. R8 HEVC preview tracks are distinguished from
+tiles. The R6 references came from the same release's Linux x64 binary, which
+reproduced the M50 RAW hash before checking the R6 files. All fifteen sensor
+comparisons pass. R8 HEVC preview tracks are distinguished from
 the primary Bayer RAW; the HEVC preview itself is not decoded. Missing corpus
 files are reported as skipped by the tests.
+
+In a tile with a neighbour on its right, the vertical high-pass bands of the level-1 and level-2
+low-pass columns (bands 8 and 5) are entropy coded at an odd width: an even band carries one extra
+column that synthesis does not use. No other band is extended, including the last level's (band 2).
+The decoder takes each band's coded width from this rule. It used to try the synthesis width and up to
+two more columns and keep the first that decoded to the exact end of the stream, but two widths can
+both do that and give different coefficients (#899). The rule was measured on every C-RAW plane in
+`cr3_corpus.rs`: two-tile files at tile widths 2816, 3144, 3192, 3444 and 3564 (G5 X Mark II, M50,
+R100, 250D, RP, R, 90D, M6 Mark II), whose left tiles extend bands 5 and 8 exactly where the rule says,
+and single-tile `0x100` and `0x200` files, which never extend a band. In every plane, each band decodes
+at its coded width and at no other width up to two columns wider, so all sensor hashes are unchanged.
+No public file has three or more C-RAW tiles; a middle tile follows the same rule, which is unverified.
 
 The version `0x200` QP predictor and entropy framing were checked independently.
 Controlled input mutations establish floor averaging of paired QP rows before
@@ -140,7 +159,7 @@ symbol is Rice coded with a limited-length escape: a quotient of 23 or more is w
 the terminating 1 and the symbol in 8 bits. This is the escape layout of ITU-T T.87 for a 32-bit
 code-length limit and 8-bit symbols, without that standard's minus-one offset. In the R8 maps only
 the first symbol needs more than 15 leading zeros, and its bits read the same whether taken as a
-32-bit literal or as an escape after 16 zeros with a 16-bit literal (the rule LightCraft used before).
+32-bit literal or as an escape after 16 zeros with a 16-bit literal (the rule the app used before).
 The R7 maps decoded to their exact ends under that rule, which a later long prefix would have broken;
 no R7 file was at hand to recheck them. R5 Mark II maps (QP 150–162) also jump by up to 12 where the Rice parameter is 0. That
 gives 18- to 22-zero prefixes, which the 16-zero rule misread as escapes ("Canon CRX adaptive QP value
@@ -186,7 +205,7 @@ sRAW / mRAW. HEIF stills are separate `.HIF` files, not CR3. One file per body i
 `RAW_SAMPLES`, `xtask/src/main.rs`): EOS-1D X Mark III, 90D, 250D, 850D, M200, M50 Mark II, M6 Mark II,
 R, R3, R5, R6, R6 Mark II, R6 Mark III, R7, R10, RP, R50, R50 V and PowerShot G5 X Mark II, G7 X Mark III,
 SX70 HS and V1, C-RAW where the body has a CC0 C-RAW sample. No external decoder was run: the sensor
-hashes pin LightCraft's own decode, and the check is black-box against the camera:
+hashes pin the app's own decode, and the check is black-box against the camera:
 
 - the green sites of the active area, on a 24 × 16 grid, follow the camera's own embedded JPEG
   (gamma-encoded Pearson r 0.93–0.99; 0.83 for the M6 Mark II and 0.71 for the G7 X Mark III, whose
@@ -221,7 +240,7 @@ here. The existing guarded embedded-JPEG fitting path now includes CR3, with
 both proxies oriented identically before gathering training pairs. A bounded
 crop/translation registration of the JPEG is confirmed on held-out edge
 directions before fitting colour; the existing held-out colour acceptance gates
-are unchanged. No lens distortion correction is applied (LightCraft has no lens
+are unchanged. No lens distortion correction is applied (the app has no lens
 profiles of its own yet), so lenses whose camera JPEG is strongly
 distortion-corrected may fail the gates and keep the neutral matrix. Render
 cache version 13 invalidates earlier thumbnails. All developed pixels still come

@@ -25,7 +25,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use lightcraft_catalog::{Op, Photo, PhotoId, Source};
+use lcc_catalog::{Op, Photo, PhotoId, Source};
 use serde::Serialize;
 
 use crate::sidecar::SidecarNaming;
@@ -352,7 +352,7 @@ pub(crate) trait MoveFs {
     fn packet_version(&self, path: &Path) -> std::io::Result<PacketVersion> {
         use std::io::Read;
         let mut file = std::fs::File::open(path)?;
-        let mut hash = lightcraft_preview::Hasher128::new();
+        let mut hash = lcc_preview::Hasher128::new();
         let mut len = 0u64;
         let mut buffer = [0u8; 16 * 1024];
         loop {
@@ -464,6 +464,15 @@ impl MoveFs for RealFs {
         std::fs::remove_file(p)
     }
 
+    fn listed(&self, p: &Path) -> bool {
+        let (Some(dir), Some(name)) = (p.parent(), p.file_name()) else { return self.is_file(p) };
+        let dir = if dir.as_os_str().is_empty() { Path::new(".") } else { dir };
+        match std::fs::read_dir(dir) {
+            Ok(entries) => self.is_file(p) && entries.flatten().any(|e| e.file_name() == name),
+            Err(_) => self.is_file(p),
+        }
+    }
+
     fn stem_sibling(&self, sidecar: &Path) -> Option<String> {
         crate::import_move::sibling_photo(sidecar)
     }
@@ -563,12 +572,12 @@ pub(crate) struct SidecarMove {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct PacketVersion {
     len: u64,
-    hash: lightcraft_preview::Hash128,
+    hash: lcc_preview::Hash128,
 }
 
 impl PacketVersion {
     fn of(bytes: &[u8]) -> Self {
-        Self { len: bytes.len() as u64, hash: lightcraft_preview::hash_bytes(bytes) }
+        Self { len: bytes.len() as u64, hash: lcc_preview::hash_bytes(bytes) }
     }
 }
 
@@ -886,7 +895,7 @@ fn set_file_ops_to(op: &Op, to: &HashSet<&str>, out: &mut Vec<Op>) {
 
 /// The photos among `ids` a rename handles, in order: photos sharing one file (virtual copies)
 /// rename once. No file-system calls.
-pub fn rename_photos(cat: &lightcraft_catalog::Catalog, ids: &[PhotoId]) -> Vec<std::sync::Arc<Photo>> {
+pub fn rename_photos(cat: &lcc_catalog::Catalog, ids: &[PhotoId]) -> Vec<std::sync::Arc<Photo>> {
     let mut seen_paths: HashSet<String> = HashSet::new();
     ids.iter()
         .filter_map(|id| cat.photo(*id))
@@ -1244,6 +1253,7 @@ pub(crate) mod tests {
         fn idx(&self, p: &Path) -> Option<usize> {
             let p = Self::norm(p);
             self.files.borrow().iter().position(|(f, _)| {
+                // tests may push host-joined paths straight into `files`
                 let f = f.replace('\\', "/");
                 if self.ci { folded_path(&f) == folded_path(&p) } else { f == p }
             })
@@ -1456,6 +1466,18 @@ pub(crate) mod tests {
         move_all(&fs, &moves).unwrap();
         s.catalog.apply(undo.clone()).unwrap();
         assert_eq!(fs.listing(), before);
+    }
+
+    /// On a case-insensitive volume (Windows, macOS) `a.XMP` answers for `a.xmp`: the sidecars
+    /// move by the spelling the folder lists, so they keep their extension's case.
+    #[test]
+    fn sidecars_move_by_their_listed_spelling_on_case_insensitive_volumes() {
+        let fs = FakeFs::new(true, &[("/p/a.jpg", "photo"), ("/p/a.xmp", "stem"), ("/p/a.jpg.XMP", "full")]);
+        move_file_with(&fs, "/p/a.jpg", "/p/Trip.jpg").unwrap();
+        assert_eq!(
+            fs.listing(),
+            vec![("/p/Trip.jpg".into(), "photo".into()), ("/p/Trip.jpg.XMP".into(), "full".into()), ("/p/Trip.xmp".into(), "stem".into())]
+        );
     }
 
     /// Issue #95: a case-only rename is a real change on a case-insensitive volume and never

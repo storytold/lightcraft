@@ -18,9 +18,9 @@
 use std::borrow::Cow;
 use std::sync::Mutex;
 
-use lightcraft_develop::{Crop, DevelopSettings, Geometry, Upright};
-use lightcraft_geom::{Homography, Point};
-use lightcraft_raster::{Plane, Rgb32f};
+use lcc_develop::{Crop, DevelopSettings, Geometry, Upright};
+use lcc_geom::{Homography, Point};
+use lcc_raster::{Plane, Rgb32f};
 
 use crate::SourceInfo;
 
@@ -78,7 +78,7 @@ pub fn detect_segments(lum: &Plane) -> Vec<Segment> {
     if w < 16 || h < 16 {
         return Vec::new();
     }
-    let img = lightcraft_raster::blur::gaussian(lum, 0.8);
+    let img = lcc_raster::blur::gaussian(lum, 0.8);
     let at = |x: usize, y: usize| img.data[y * w + x];
     let n = w * h;
     let mut mag = vec![0.0f32; n];
@@ -544,7 +544,7 @@ pub fn analyze_source(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings) -> A
     base.geometry = Geometry::default();
     base.crop = Crop::default();
     let key = crate::optics::fingerprint(src)
-        ^ lightcraft_develop::DevelopSettings { optics: s.optics, orientation: s.orientation, ..Default::default() }.hash64().rotate_left(17);
+        ^ lcc_develop::DevelopSettings { optics: s.optics, orientation: s.orientation, ..Default::default() }.hash64().rotate_left(17);
     if let Ok(c) = CACHE.lock()
         && let Some((_, a)) = c.iter().find(|(k, _)| *k == key)
     {
@@ -586,13 +586,19 @@ pub fn auto_transform(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, mode
 
 /// Fill in a missing automatic Upright transform (settings from XMP/CLI that name a mode but carry no analysis).
 pub fn resolve<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings) -> Cow<'a, DevelopSettings> {
-    let g = &s.geometry;
-    if matches!(g.upright, Upright::Off | Upright::Guided) || g.upright_transform.is_some() || !s.section_enabled("geometry") {
+    if !pending(s) {
         return Cow::Borrowed(s);
     }
+    let g = &s.geometry;
     let mut e = s.clone();
     e.geometry.upright_transform = Some(auto_transform(src, info, s, g.upright));
     Cow::Owned(e)
+}
+
+/// Whether [`resolve`] has an automatic transform to solve (a mode without its stored analysis).
+pub fn pending(s: &DevelopSettings) -> bool {
+    let g = &s.geometry;
+    !(matches!(g.upright, Upright::Off | Upright::Guided) || g.upright_transform.is_some() || !s.section_enabled("geometry"))
 }
 
 /// The Upright homography in effect for settings (stored automatic transform, or solved from guides).

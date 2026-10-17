@@ -1,6 +1,6 @@
 //! XMP sidecar commands: save/read metadata to/from files, sidecar preferences.
 
-use lightcraft_catalog::Op;
+use lcc_catalog::Op;
 use serde_json::{Value, json};
 
 use super::{CommandSpec, always, bad, cmd, has_selection, str_param};
@@ -14,9 +14,11 @@ fn save(s: &mut Session, p: &Value) -> Result<Value> {
     let mut failed = Vec::new();
     let ids = s.targets(p)?;
     let owners = crate::sidecar::StemOwners::among(&s.catalog, &ids);
+    let mut stamped = Vec::new();
     for id in ids {
         match s.save_sidecar_with(id, &owners) {
             Ok(r) => {
+                stamped.push(id);
                 let path = r.path.display().to_string();
                 if r.merged {
                     merged.push(path.clone());
@@ -29,6 +31,7 @@ fn save(s: &mut Session, p: &Value) -> Result<Value> {
             Err(e) => failed.push(json!({"id": id.0, "error": e.to_string()})),
         }
     }
+    s.record_xmp_stamps(&stamped, false);
     Ok(json!({"written": written, "merged": merged, "backups": backups, "failed": failed}))
 }
 
@@ -36,11 +39,17 @@ fn read(s: &mut Session, p: &Value) -> Result<Value> {
     let mut ops = Vec::new();
     let mut read = Vec::new();
     let mut failed = Vec::new();
+    let mut stamped = Vec::new();
     let mut warnings = Vec::new();
-    for id in s.targets(p)? {
-        match s.read_sidecar_op_with_warnings(id) {
-            Ok(Some((op, from, mut photo_warnings))) => {
+    let mut fields = Vec::new();
+    let ids = s.targets(p)?;
+    let namings = s.sidecar_namings(&ids);
+    for (id, naming) in ids.into_iter().zip(namings) {
+        match s.read_sidecar_op_named(id, naming) {
+            Ok(Some((op, from, mut photo_warnings, plugin_fields))) => {
                 ops.push(op);
+                fields.push((id, plugin_fields));
+                stamped.push(id);
                 read.push(json!({"id": id.0, "from": from.display().to_string()}));
                 warnings.append(&mut photo_warnings);
             }
@@ -50,16 +59,38 @@ fn read(s: &mut Session, p: &Value) -> Result<Value> {
     }
     if !ops.is_empty() {
         s.commit("Read Metadata from File", Op::Batch { ops })?;
+        // what was just read is what the catalog holds: in step with the file
+        s.record_xmp_stamps(&stamped, false);
         // Don't auto-write the sidecars just read: that would add our `lc:settings` to one that had
         // only another app's `crs:` settings, and later reads prefer `lc:settings`, so that app's
         // next edits would be ignored (issue #934). The next edit, or Save Metadata, writes them.
         s.skip_auto_write = true;
     }
+    let restored = crate::cmd::plugins::restore_fields(s, &fields);
     let mut result = json!({"read": read, "failed": failed});
+    if restored > 0 {
+        result["pluginFields"] = json!(restored);
+    }
     if !warnings.is_empty() {
         result["warnings"] = serde_json::to_value(warnings).unwrap_or_default();
     }
     Ok(result)
+}
+
+fn status(s: &mut Session, p: &Value) -> Result<Value> {
+    let mut counts = serde_json::Map::new();
+    let photos: Vec<Value> = s
+        .targets(p)?
+        .into_iter()
+        .map(|id| {
+            let st = serde_json::to_value(s.xmp_status(id)).unwrap_or_default();
+            let key = st.as_str().unwrap_or("unknown").to_string();
+            let n = counts.get(&key).and_then(Value::as_u64).unwrap_or(0);
+            counts.insert(key, json!(n + 1));
+            json!({"id": id.0, "status": st})
+        })
+        .collect();
+    Ok(json!({"photos": photos, "counts": counts}))
 }
 
 fn prefs(s: &mut Session, p: &Value) -> Result<Value> {
@@ -95,9 +126,18 @@ pub fn specs() -> Vec<CommandSpec> {
             "Read Metadata from File",
             ["Photo"],
             None,
-            "{ids?} — reads each photo's XMP sidecar (or a raw/DNG's embedded XMP): metadata and develop settings, one undo step; never writes the sidecar, even with auto-write on → {read, failed, warnings?: [{path, code, profile?, mode?, fields?}]}",
+            "{ids?} — reads each photo's XMP sidecar, or embedded XMP in raw/DNG and JPEG files when no sidecar exists: metadata and develop settings, one undo step; never writes the sidecar, even with auto-write on; JPEG uses the first complete standard XMP APP1 before SOS/EOI, within 16 MiB of headers and 4096 marker/fill steps; an unreadable sidecar fails without embedded fallback → {read, failed, warnings?: [{path, code, profile?, mode?, fields?}]}",
             has_selection,
             read
+        ),
+        cmd!(
+            query "photo.xmpStatus",
+            "Metadata File Status",
+            [],
+            None,
+            "{ids?} — per photo: unknown (never read from / written to its XMP) | inSync | changedInCatalog | changedOnDisk | conflict → {photos: [{id, status}], counts}",
+            always,
+            status
         ),
         cmd!(
             "library.xmpPreferences",

@@ -3,7 +3,7 @@
 //!
 //! Adding a model is: pick or drop a `.onnx` file → the engine inspects it (`faces.models.inspect`) →
 //! this dialog shows what it is and its terms → the user ticks "I accept" → `faces.models.install`.
-//! LightCraft fetches a model only when the user presses Download on a model it has a pinned address for: the
+//! The app fetches a model only when the user presses Download on a model it has a pinned address for: the
 //! same dialog shows its terms first, and accepting them downloads it (`faces.models.download`: checked against its
 //! size and SHA-256), installs it, starts using it and switches recognition on, with no further question. "Open
 //! page" opens the model's own page in the browser for anything else.
@@ -12,7 +12,7 @@ use egui::RichText;
 use serde_json::{Value, json};
 
 use super::settings::{check, heading, hint};
-use crate::LightcraftApp;
+use crate::LccApp;
 use crate::theme::Tokens;
 use crate::widgets::register;
 
@@ -20,7 +20,7 @@ use crate::widgets::register;
 /// while they drag, type or scroll; one photo at a time while they are around or the window is minimized; half the
 /// machine once they have been idle for a few seconds, or while another app has the keyboard but this window is still
 /// on screen; most of it while they are looking at the scan's progress.
-fn scan_pace(app: &LightcraftApp, ctx: &egui::Context, now: f64) -> (&'static str, bool) {
+fn scan_pace(app: &LccApp, ctx: &egui::Context, now: f64) -> (&'static str, bool) {
     let (focused, minimized) = ctx.input(|i| (i.focused, i.raw.viewports.get(&i.raw.viewport_id).and_then(|v| v.minimized).unwrap_or(false)));
     let watching =
         matches!(&app.ui.dialog, Some(crate::state::Dialog::Settings { tab }) if tab == "faces") || app.ui.view == crate::state::ViewMode::People;
@@ -29,7 +29,7 @@ fn scan_pace(app: &LightcraftApp, ctx: &egui::Context, now: f64) -> (&'static st
 
 /// The pace for other background work that reads the library's files (the focus-point reader): the face scan's, without
 /// the "watching" speed-up.
-pub(crate) fn background_pace(app: &LightcraftApp, ctx: &egui::Context, now: f64) -> &'static str {
+pub(crate) fn background_pace(app: &LccApp, ctx: &egui::Context, now: f64) -> &'static str {
     let (focused, minimized) = ctx.input(|i| (i.focused, i.raw.viewports.get(&i.raw.viewport_id).and_then(|v| v.minimized).unwrap_or(false)));
     pace_for(focused, minimized, now - app.caches.last_input, now - app.caches.last_move, false)
 }
@@ -62,7 +62,7 @@ fn list_id() -> egui::Id {
 }
 
 /// The engine's model list, re-read at most every [`REFRESH_SECS`], or at once after an action changed it.
-fn models(app: &mut LightcraftApp, ctx: &egui::Context) -> Value {
+fn models(app: &mut LccApp, ctx: &egui::Context) -> Value {
     let now = ctx.input(|i| i.time);
     let epoch = app.caches.faces_epoch;
     if let Some((e, at, v)) = ctx.data(|d| d.get_temp::<(u64, f64, Value)>(list_id()))
@@ -91,7 +91,7 @@ pub enum Setup {
 
 /// Where the user stands with face recognition. Cheap: the model list is read at most every 1.5 s, and not at all while
 /// recognition runs.
-pub fn setup(app: &mut LightcraftApp, ctx: &egui::Context) -> Setup {
+pub fn setup(app: &mut LccApp, ctx: &egui::Context) -> Setup {
     if app.caches.faces_active {
         return Setup::Running;
     }
@@ -131,7 +131,7 @@ impl Setup {
 }
 
 /// The prompt's button: switch recognition on, or open Settings ▸ Faces, where the model is one click away.
-pub fn take_step(app: &mut LightcraftApp, ctx: &egui::Context, step: Setup) {
+pub fn take_step(app: &mut LccApp, ctx: &egui::Context, step: Setup) {
     match step {
         Setup::TurnOn => {
             if app.run("faces.enable", json!({"enabled": true})).is_ok() {
@@ -148,7 +148,7 @@ pub fn take_step(app: &mut LightcraftApp, ctx: &egui::Context, step: Setup) {
 }
 
 /// A slim line under a view's heading offering to set recognition up, shown only while it is not set up.
-pub fn setup_banner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+pub fn setup_banner(app: &mut LccApp, ui: &mut egui::Ui) {
     let step = setup(app, ui.ctx());
     let Some((message, button)) = step.prompt() else { return };
     let t = Tokens::get(ui.ctx());
@@ -166,7 +166,7 @@ pub fn setup_banner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 
 /// Where the face models run (the GPU only once a check shows it gives the CPU's results faster), and the switch that
 /// keeps them on the CPU.
-fn gpu_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, gpu: &Value) {
+fn gpu_section(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, gpu: &Value) {
     heading(ui, t, "Processor");
     let mut cpu = gpu["cpuOnly"].as_bool().unwrap_or(false);
     let r = ui.checkbox(&mut cpu, crate::i18n::tr("Run face models on the CPU only"));
@@ -231,14 +231,14 @@ fn licence_line(m: &Value) -> String {
     format!("{name} · {terms}")
 }
 
-fn open_page(app: &mut LightcraftApp, url: &str) {
+fn open_page(app: &mut LccApp, url: &str) {
     if let Some(f) = app.services.open_url.as_mut() {
         let _ = f(url);
     }
 }
 
 /// The Settings ▸ Faces tab.
-pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+pub fn settings_tab(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
     let list = models(app, ui.ctx());
     heading(ui, t, "Face recognition");
     if list["dir"].is_null() {
@@ -305,7 +305,7 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
 }
 
 /// How the scan is going: a bar while photos are left, then how many faces it learned.
-fn scan_progress(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+fn scan_progress(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
     let (left, peak, faces) = (app.caches.faces_pending, app.caches.faces_peak.max(1), app.caches.faces_indexed);
     if left == 0 {
         hint(ui, t, &format!("{faces} faces learned."));
@@ -318,7 +318,7 @@ fn scan_progress(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     register(ui.ctx(), "faces:scanProgress", bar.rect);
 }
 
-fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, dl: Option<&Value>, can_run: bool) {
+fn model_row(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, dl: Option<&Value>, can_run: bool) {
     let id = m["id"].as_str().unwrap_or("").to_string();
     let detector = m["role"] == "detector";
     let (installed, selected) = (m["installed"].as_bool() == Some(true), m["selected"].as_bool() == Some(true));
@@ -441,14 +441,14 @@ fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, 
 
 /// The body of the "Add Face Model" dialog: what the file is, its terms, and the accept box.
 /// `info` is the engine's `faces.models.inspect` answer.
-pub fn model_dialog(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, info: &Value, accepted: &mut bool) {
+pub fn model_dialog(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, info: &Value, accepted: &mut bool) {
     let kind = info["kind"].as_str().unwrap_or("unsupported");
     let file = info["fileName"].as_str().unwrap_or("");
     if kind == "unsupported" {
         ui.label(RichText::new(crate::i18n::tr("This file cannot be used yet")).font(t.semibold(13.5)).color(t.caution));
         ui.add(
             egui::Label::new(
-                RichText::new(sentence(info["reason"].as_str().unwrap_or("It is not a face recognition model LightCraft understands")))
+                RichText::new(sentence(crate::i18n::tr(info["reason"].as_str().unwrap_or("It is not a face recognition model {app} understands"))))
                     .color(t.text_label),
             )
             .wrap(),
@@ -471,8 +471,9 @@ pub fn model_dialog(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, info
         ui.add(
             egui::Label::new(
                 RichText::new(format!(
-                    "Downloads from {host}. Once it has arrived and checked out, LightCraft installs it{}.",
-                    if detector { "" } else { ", starts using it and turns face recognition on" }
+                    "Downloads from {host}. Once it has arrived and checked out, {app} installs it{}.",
+                    if detector { "" } else { ", starts using it and turns face recognition on" },
+                    app = lcc_brand::DISPLAY_NAME
                 ))
                 .color(t.text_label),
             )
@@ -493,7 +494,7 @@ pub fn model_dialog(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, info
     }
     if kind == "draft" {
         ui.add_space(2.0);
-        ui.label(RichText::new(crate::i18n::tr("LightCraft does not know this model, so it assumed:")).color(t.text_label));
+        ui.label(RichText::new(crate::i18n::tr("{app} does not know this model, so it assumed:")).color(t.text_label));
         for a in info["assumptions"].as_array().into_iter().flatten().filter_map(Value::as_str) {
             ui.add(egui::Label::new(RichText::new(format!("•  {a}")).font(t.font(12.0)).color(t.text_dim)).wrap());
         }
@@ -508,16 +509,16 @@ pub fn model_dialog(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, info
     ui.add_space(4.0);
     check(ui, "faceModel.accept", accepted, "I have read these terms and accept them for my own use");
     let closing = if download {
-        "Nothing is fetched until you accept. The model is kept on this computer only; LightCraft never uploads or shares it."
+        "Nothing is fetched until you accept. The model is kept on this computer only; {app} never uploads or shares it."
     } else {
-        "The model is kept on this computer only. LightCraft never uploads or shares it."
+        "The model is kept on this computer only. {app} never uploads or shares it."
     };
-    ui.label(RichText::new(closing).font(t.font(11.5)).color(t.text_dim));
+    ui.label(RichText::new(crate::i18n::tr(closing)).font(t.font(11.5)).color(t.text_dim));
 }
 
 /// Pressing Download: the model's terms first, in the same dialog as a model file. Accepting them starts the download;
 /// nothing is fetched before.
-pub fn open_download_dialog(app: &mut LightcraftApp, m: &Value) {
+pub fn open_download_dialog(app: &mut LccApp, m: &Value) {
     let info = json!({
         "kind": "known",
         "fileName": m["id"],
@@ -533,7 +534,7 @@ pub fn open_download_dialog(app: &mut LightcraftApp, m: &Value) {
 }
 
 /// Photo ▸ Detect Faces without the detector: offer to download it (its terms first), the same as in Settings.
-pub fn offer_detector(app: &mut LightcraftApp) {
+pub fn offer_detector(app: &mut LccApp) {
     let list = app.session.execute("faces.models.list", &json!({})).unwrap_or(Value::Null);
     if let Some(m) = list["models"].as_array().and_then(|a| a.iter().find(|m| m["role"] == "detector" && m["installed"] != true)) {
         open_download_dialog(app, m);
@@ -541,7 +542,7 @@ pub fn offer_detector(app: &mut LightcraftApp) {
 }
 
 /// Inspect `path` and open the dialog for it (also what dropping a `.onnx` file on the window does).
-pub fn open_dialog(app: &mut LightcraftApp, path: &str) -> Result<Value, String> {
+pub fn open_dialog(app: &mut LccApp, path: &str) -> Result<Value, String> {
     let info = app.run("faces.models.inspect", json!({"path": path}))?;
     app.ui.dialog = Some(crate::state::Dialog::FaceModel { path: path.to_string(), info, accepted: false });
     Ok(Value::Null)
@@ -549,12 +550,12 @@ pub fn open_dialog(app: &mut LightcraftApp, path: &str) -> Result<Value, String>
 
 /// The dialog's OK (the engine refuses without the acceptance): for a download, start it and watch it; for a file,
 /// install it. Either way the model ends up installed, in use, with recognition on.
-pub fn install(app: &mut LightcraftApp, path: &str, info: &Value, accepted: bool) -> Result<Value, String> {
+pub fn install(app: &mut LccApp, path: &str, info: &Value, accepted: bool) -> Result<Value, String> {
     if !accepted {
         return Err("Tick the box to accept the model's terms first".into());
     }
     app.caches.faces_epoch += 1;
-    let back_to_settings = |app: &mut LightcraftApp| app.ui.dialog = Some(crate::state::Dialog::Settings { tab: "faces".into() });
+    let back_to_settings = |app: &mut LccApp| app.ui.dialog = Some(crate::state::Dialog::Settings { tab: "faces".into() });
     if let Some(id) = info["download"].as_str() {
         let r = app.run("faces.models.download", json!({"id": id, "acknowledged": true}));
         if r.is_ok() {
@@ -595,7 +596,7 @@ pub struct Hints {
 
 /// Suggestions for `photo`'s unnamed faces from what is already indexed (nothing is embedded for this: the background
 /// indexer does that). `None` while recognition is off. Asked again only when the catalog or the index changed.
-pub fn hints_for(app: &mut LightcraftApp, photo: u64) -> Option<std::sync::Arc<Hints>> {
+pub fn hints_for(app: &mut LccApp, photo: u64) -> Option<std::sync::Arc<Hints>> {
     if !app.caches.faces_active {
         return None;
     }
@@ -700,7 +701,7 @@ pub fn name_editor(
 
 /// Called every frame: keeps the background face indexer going while recognition is on, and notes whether it is
 /// running, how many faces it has done and how many photos are left (the loupe's suggestions depend on it).
-pub fn pump(app: &mut LightcraftApp, ctx: &egui::Context) {
+pub fn pump(app: &mut LccApp, ctx: &egui::Context) {
     watch_downloads(app, ctx);
     let now = ctx.input(|i| i.time);
     let (working, moving) = ctx.input(|i| {
@@ -765,7 +766,7 @@ fn due(rows: &[Value], watched: Vec<String>) -> (Vec<String>, Vec<String>) {
 
 /// Follows the downloads the user started: keeps redrawing while one runs (the progress bar), and says so when a
 /// model has been installed, is in use and recognition is on (the engine does all of that by itself).
-fn watch_downloads(app: &mut LightcraftApp, ctx: &egui::Context) {
+fn watch_downloads(app: &mut LccApp, ctx: &egui::Context) {
     if app.caches.faces_dl_watch.is_empty() {
         return;
     }

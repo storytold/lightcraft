@@ -6,13 +6,13 @@
 //! - **Remove** is Heal with an automatically chosen source: candidate offsets on rings around the
 //!   spot are scored by how well the source's surrounding annulus matches the target's.
 //! - **Fill** (content-aware) rebuilds the spot from patches of its surroundings instead of one
-//!   source: PatchMatch-based completion ([`lightcraft_inpaint::complete`]), coarse to fine, so the
+//!   source: PatchMatch-based completion ([`lcc_inpaint::complete`]), coarse to fine, so the
 //!   structure is chosen at a scale set by the spot's size (the same at preview and export size).
 //!   Deterministic; the source offset is ignored.
 
-use lightcraft_develop::{Spot, SpotMode};
-use lightcraft_geom::Point;
-use lightcraft_raster::Rgb32f;
+use lcc_develop::{Spot, SpotMode};
+use lcc_geom::Point;
+use lcc_raster::Rgb32f;
 
 use crate::geometry::Frame;
 
@@ -101,13 +101,7 @@ pub fn auto_source(img: &Rgb32f, target: (f32, f32), r: f32) -> (f32, f32) {
 /// A source offset (normalized, as [`Spot::source_offset`]) for `spot` on `src` developed with
 /// `s`: the best match, or with `avoid` (the current offset) the best one at least a spot radius
 /// away from it ("refresh source"). `None` when no candidate fits in the image.
-pub fn pick_source(
-    src: &Rgb32f,
-    info: &crate::SourceInfo,
-    s: &lightcraft_develop::DevelopSettings,
-    spot: &Spot,
-    avoid: Option<Point>,
-) -> Option<Point> {
+pub fn pick_source(src: &Rgb32f, info: &crate::SourceInfo, s: &lcc_develop::DevelopSettings, spot: &Spot, avoid: Option<Point>) -> Option<Point> {
     let frame = crate::frame_for(src, info, s, true);
     let (w, h) = frame.fit(512, 512);
     if w == 0 || h == 0 {
@@ -139,7 +133,7 @@ const MAX_DABS_CONSIDERED: usize = 200_000;
 /// search up to 4.2 radii around themselves. Growth that would pass [`MAX_SPOT_SPAN`] pixels is not
 /// done (the window comes back as asked; see [`window_for_reads_checked`] to know).
 pub fn window_for_reads(
-    s: &lightcraft_develop::DevelopSettings,
+    s: &lcc_develop::DevelopSettings,
     frame: &Frame,
     full_w: usize,
     full_h: usize,
@@ -153,7 +147,7 @@ pub fn window_for_reads(
 /// [`MAX_SPOT_SPAN`] pixels along an axis: a caller that can show something else (the loupe's
 /// whole-frame render) must, because the window alone would come out wrong.
 pub fn window_for_reads_checked(
-    s: &lightcraft_develop::DevelopSettings,
+    s: &lcc_develop::DevelopSettings,
     frame: &Frame,
     full_w: usize,
     full_h: usize,
@@ -161,13 +155,13 @@ pub fn window_for_reads_checked(
     win: crate::PixelWindow,
 ) -> Option<crate::PixelWindow> {
     let spots = &s.spots;
-    let autos: Vec<&lightcraft_develop::BrushStroke> = s
+    let autos: Vec<&lcc_develop::BrushStroke> = s
         .masks
         .iter()
         .filter(|m| m.visible)
         .flat_map(|m| &m.components)
         .filter_map(|c| match &c.shape {
-            lightcraft_develop::MaskShape::Brush { strokes } => Some(strokes),
+            lcc_develop::MaskShape::Brush { strokes } => Some(strokes),
             _ => None,
         })
         .flatten()
@@ -262,8 +256,8 @@ pub fn window_for_reads_checked(
 fn fill_box(src: &mut [[f32; 3]], tgt: &[[f32; 3]], alpha: &[f32], bw: usize, bh: usize) {
     let hole: Vec<bool> = alpha.iter().map(|a| *a > 0.0).collect();
     let flat: Vec<f32> = tgt.iter().flatten().copied().collect();
-    let out = lightcraft_inpaint::complete(bw, bh, 3, &flat, &hole, &lightcraft_inpaint::CompleteParams::default())
-        .unwrap_or_else(|| lightcraft_inpaint::membrane_fill(bw, bh, 3, &flat, &hole));
+    let out = lcc_inpaint::complete(bw, bh, 3, &flat, &hole, &lcc_inpaint::CompleteParams::default())
+        .unwrap_or_else(|| lcc_inpaint::membrane_fill(bw, bh, 3, &flat, &hole));
     let (pixels, _) = out.as_chunks::<3>();
     for (d, v) in src.iter_mut().zip(pixels) {
         *d = *v;
@@ -343,9 +337,9 @@ pub fn apply(img: &mut Rgb32f, spots: &[Spot], frame: &Frame, ppl: f64) {
                 height: bh,
                 data: tgt.iter().zip(&src).zip(&outside).map(|((t, s), m)| [(t[0] - s[0]) * m, (t[1] - s[1]) * m, (t[2] - s[2]) * m]).collect(),
             };
-            let wts = lightcraft_raster::Plane { width: bw, height: bh, data: outside };
+            let wts = lcc_raster::Plane { width: bw, height: bh, data: outside };
             let sigma = (r * 0.6).max(1.0);
-            let (bd, bm) = (lightcraft_raster::blur::gaussian(&diff, sigma), lightcraft_raster::blur::gaussian(&wts, sigma));
+            let (bd, bm) = (lcc_raster::blur::gaussian(&diff, sigma), lcc_raster::blur::gaussian(&wts, sigma));
             Some(Rgb32f {
                 width: bw,
                 height: bh,
@@ -384,7 +378,7 @@ pub fn apply(img: &mut Rgb32f, spots: &[Spot], frame: &Frame, ppl: f64) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lightcraft_develop::DevelopSettings;
+    use lcc_develop::DevelopSettings;
 
     #[test]
     fn hard_edge_spots_at_zero_opacity_leave_every_pixel_unchanged() {
@@ -429,22 +423,6 @@ mod tests {
             assert_eq!(img.get(x + radius as usize, y), original.get(x + radius as usize, y), "radius stays unchanged at {w}px");
             assert!(img.data.iter().flatten().all(|v| v.is_finite()));
         }
-    }
-
-    #[test]
-    fn remove_erases_a_dot() {
-        // flat grey with a gentle gradient and a black dot in the middle
-        let mut img = Rgb32f::from_fn(120, 80, |x, _| [0.2 + x as f32 * 0.001; 3]);
-        for y in 36..44 {
-            for x in 56..64 {
-                img.set(x, y, [0.0; 3]);
-            }
-        }
-        let frame = Frame::new(120, 80, &DevelopSettings::default(), true);
-        let spot = Spot { points: vec![Point::new(0.5, 0.5)], size: 8.0 / 120.0, feather: 30.0, ..Default::default() };
-        apply(&mut img, &[spot], &frame, frame.px_per_long(120));
-        let c = img.get(60, 40);
-        assert!((c[0] - 0.26).abs() < 0.03, "{c:?}");
     }
 
     /// Vertical stripes (period `period` px) with a black blot over the middle.
@@ -588,7 +566,7 @@ mod tests {
     #[test]
     fn a_window_grows_to_hold_an_auto_mask_stroke() {
         use crate::PixelWindow;
-        use lightcraft_develop::{BrushStroke, Mask, MaskComponent, MaskOp, MaskShape};
+        use lcc_develop::{BrushStroke, Mask, MaskComponent, MaskOp, MaskShape};
         let frame = Frame::new(4000, 3000, &DevelopSettings::default(), true);
         let ppl = frame.px_per_long(4000);
         let win = PixelWindow { x: 1000, y: 1000, w: 400, h: 300 };

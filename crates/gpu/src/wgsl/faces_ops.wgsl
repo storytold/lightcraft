@@ -1,4 +1,4 @@
-// The face networks' other operators (lightcraft-faces `net::program`), so activations stay on the device between layers.
+// The face networks' other operators (lcc-faces `net::program`), so activations stay on the device between layers.
 // Same bindings as faces_conv.wgsl: the parameters, three read-only operands and the output. Element kernels run one
 // thread per output value; `gavg` and `gemv` one workgroup per output value.
 //

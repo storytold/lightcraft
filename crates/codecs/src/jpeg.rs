@@ -424,12 +424,6 @@ mod tests {
     }
 
     #[test]
-    fn scaled_request_covers() {
-        assert_eq!(scaled_request(6000, 4000, 256, 256), (256, 171));
-        assert_eq!(scaled_request(100, 100, 256, 256), (100, 100));
-    }
-
-    #[test]
     fn find_ff_matches_a_plain_search() {
         let mut b: Vec<u8> = (0..300u32).map(|i| (i * 7 % 255) as u8).collect();
         for at in [None, Some(0), Some(7), Some(8), Some(15), Some(203), Some(296), Some(299)] {

@@ -1,6 +1,9 @@
 # GPU develop pipeline (M5.2)
 
-The CPU pipeline (`crates/pipeline`) is the reference ("oracle"). `lightcraft-gpu` (`crates/gpu`, L3)
+> Names in angle brackets (`<app>`, `<binary>`, `<cli>`, `<PREFIX>`, `<settings_dir>`, …) are the values set in
+> [`brand.toml`](../brand.toml); see the README.
+
+The CPU pipeline (`crates/pipeline`) is the reference ("oracle"). `lcc-gpu` (`crates/gpu`, L3)
 evaluates the same stages with wgpu compute shaders (WGSL) on Metal / Vulkan / DX12. Everything is
 pure Rust (wgpu, naga); the drivers are the system's. No GL backend is compiled in.
 
@@ -10,7 +13,7 @@ rounding otherwise can turn a blank edge pixel into a photo pixel. The mask
 uses one bit per output pixel (rows padded to 32 bits). Sampling and color
 corrections remain on the GPU, and existing geometry stage caching reuses the
 result. The mask is built per 32 × 16 block (`Warp::block_coverage`): the warp
-formulas are written once, generic over `lightcraft_geom::Real`, and evaluated
+formulas are written once, generic over `lcc_geom::Real`, and evaluated
 with outward-rounded `Interval`s over the block. Those bounds enclose the f64
 result of every pixel in the block, so a block whose bounds lie inside the
 image edges (the same f64 comparisons, no margin), or beyond one of them, is
@@ -25,9 +28,9 @@ when warped geometry rebuilds.
 wgpu loads the driver of **every** backend in an instance's set while it enumerates adapters — even
 when it then picks another one. A Vulkan driver that crashes there (issue #136: an access violation
 in Intel's `igvk64.dll` on a UHD 630 under Windows 11) takes the process down before any window
-appears, and a native crash cannot be caught. So LightCraft only lets wgpu touch the backends it
-means to use (`lightcraft_gpu::backend`), for its compute device *and* for the desktop window
-(eframe/egui-wgpu, `window_wgpu_options` in `apps/lightcraft/src/main.rs`):
+appears, and a native crash cannot be caught. So the app only lets wgpu touch the backends it
+means to use (`lcc_gpu::backend`), for its compute device *and* for the desktop window
+(eframe/egui-wgpu, `window_wgpu_options` in `apps/app/src/main.rs`):
 
 | platform | default (window and compute) |
 |---|---|
@@ -36,34 +39,34 @@ means to use (`lightcraft_gpu::backend`), for its compute device *and* for the d
 | Linux / BSD | Vulkan (the window also lists GL, eframe's default; no GL backend is compiled in) |
 
 Overrides (read once at launch):
-- `LIGHTCRAFT_GPU_BACKEND=dx12 | vulkan | metal | gl | auto | off` (comma lists allowed, e.g.
+- `<PREFIX>_GPU_BACKEND=dx12 | vulkan | metal | gl | auto | off` (comma lists allowed, e.g.
   `vulkan,dx12`): the backends for both the window and GPU rendering; `off` turns GPU rendering off
   (CPU pipeline) — the window still needs a backend and keeps the platform default. A backend this
   build doesn't contain (`gl`) is ignored with a warning.
 - else `WGPU_BACKEND` (wgpu's own variable, same names) — before #136 only the window honoured it,
   the compute device always used Vulkan + DX12 (+ Metal).
-- `LIGHTCRAFT_GPU=0`: GPU rendering off for the process (the window is unaffected).
+- `<PREFIX>_GPU=0`: GPU rendering off for the process (the window is unaffected).
 
 **DX12 shader compiler (issue #471).** Every instance (window and compute) compiles DX12 shaders with
-FXC (`d3dcompiler_47.dll`, part of Windows; `lightcraft_gpu::backend::backend_options`). wgpu's
-default, `Auto`, loads whichever `dxcompiler.dll` the DLL search path finds first. LightCraft ships
+FXC (`d3dcompiler_47.dll`, part of Windows; `lcc_gpu::backend::backend_options`). wgpu's
+default, `Auto`, loads whichever `dxcompiler.dll` the DLL search path finds first. The app ships
 none, so that copy belongs to another program (a Windows SDK, a folder on `PATH`). An older copy without
 `dxil.dll` beside it (e.g. DXC 1.7) warns that the DXIL is unsigned, wgpu treats the warning as a
 compile error, its indirect-validation pipelines fail, the device is lost, and the window never opened
 (`WGPU error: Parent device is lost`). `WGPU_DX12_COMPILER=dxc | auto | fxc` (wgpu's variable) still
-chooses; with `dxc`, put `dxcompiler.dll` *and* `dxil.dll` (DXC ≥ 1.8.2502) next to `lightcraft.exe`.
+chooses; with `dxc`, put `dxcompiler.dll` *and* `dxil.dll` (DXC ≥ 1.8.2502) next to `<binary>.exe`.
 FXC builds the compute kernels somewhat slower than DXC (≈ 9 s vs 7.5 s for the GPU test suite on an
 RTX 4080), off the startup path.
 
 **Off the startup path.** The compute device is created on a background thread once the window is
 up (`gpu::warm_up` from the first frame's settings), and never while GPU rendering is off: with
 Settings ▸ Performance ▸ *Use the GPU for rendering* unchecked (applied before the window opens),
-`LIGHTCRAFT_GPU=0` or `LIGHTCRAFT_GPU_BACKEND=off`, no GPU driver is loaded for rendering at all.
+`<PREFIX>_GPU=0` or `<PREFIX>_GPU_BACKEND=off`, no GPU driver is loaded for rendering at all.
 
 **Quitting.** The devices are never dropped, and renders run on worker threads: a render still inside
 the driver while the process exits crashes there (a SIGSEGV in the NVIDIA Vulkan driver on Linux,
 issue #620), which no panic hook catches. So every entry into a device counts as work in flight
-(`crates/gpu/src/exit.rs`), and the desktop app ends with `LightcraftApp::shutdown` (from `on_exit`,
+(`crates/gpu/src/exit.rs`), and the desktop app ends with `LccApp::shutdown` (from `on_exit`,
 after settings and library are saved): `gpu::begin_shutdown()` — from then on `gpu::render` returns
 `None`, no device is created, denoise tiles fail over and a render job gives up instead of rendering
 on the CPU — then the render pool stops (queued jobs dropped, running ones waited for) and
@@ -72,22 +75,22 @@ deadline of 2 s covers it all; past it the app quits anyway. A job pool that is 
 hosts, tests) waits for its running jobs the same way (`JobPool::shutdown`, `crates/preview/src/pool.rs`).
 
 **Crash sentinel.** The desktop app writes `gpu-init.marker` into its settings folder (next to
-`ui.json`: `%APPDATA%\LightCraft`, `~/Library/Application Support/LightCraft`,
-`~/.config/lightcraft`) just before the compute device is created and its kernels are compiled (and, on the first
+`ui.json`: `%APPDATA%\<settings_dir>`, `~/Library/Application Support/<settings_dir>`,
+`~/.config/<settings_dir>`) just before the compute device is created and its kernels are compiled (and, on the first
 AI denoise, before that network's kernels are) and removes it as soon as that returns, successfully or
 not (issue #250: Apple's Metal compiler, `MTLCompilerService`, aborting on a kernel on an older Intel
 Mac). A kernel the driver refuses without crashing is caught by wgpu error scopes: the log says why
-(`gpu: rendering on the CPU: …`) and renders stay on the CPU. `LIGHTCRAFT_GPU=0` (or Settings ▸
+(`gpu: rendering on the CPU: …`) and renders stay on the CPU. `<PREFIX>_GPU=0` (or Settings ▸
 uncheck *Use the GPU for rendering*) forces the CPU path from the start. If the marker is still there at the next launch, the process died inside
-the driver: LightCraft starts with GPU rendering off (the preference is saved unchecked), removes the
+the driver: the app starts with GPU rendering off (the preference is saved unchecked), removes the
 marker and says so in a notice. Checking *Use the GPU for rendering* again tries the GPU once more
-(and re-arms the sentinel). Not with `LIGHTCRAFT_NO_PREFS` (tests, scripts), and not in a `--memory` session,
+(and re-arms the sentinel). Not with `<PREFIX>_NO_PREFS` (tests, scripts), and not in a `--memory` session,
 which writes nothing: it neither arms the sentinel nor removes a marker it finds (it still starts with GPU
 rendering off when one is there, and the next ordinary launch reports and clears it). Killing the app during
 the ~0.3 s of device creation, or two instances starting at the same moment, can trip it falsely —
 harmless: rendering is then on the CPU until the box is checked again. The sentinel covers the compute
 device and every kernel build; a crash while the window's renderer starts is avoided by the backend defaults above
-or worked around with `LIGHTCRAFT_GPU_BACKEND`.
+or worked around with `<PREFIX>_GPU_BACKEND`.
 
 **The window's renderer and its fallback (Windows).** Before the window opens, each renderer is probed in
 order: DX12, Vulkan, GL, then eframe's OpenGL renderer (glow). A probe creates a device and builds egui's
@@ -95,20 +98,20 @@ pipeline inside wgpu error scopes, so a driver that cannot compile egui's shader
 incorrect. (0x80070057)" in `egui_pipeline`) is logged and skipped instead of killing the app. The renderer
 that worked is remembered in the settings folder (`window-renderer`); a start that dies before the window is up
 leaves `window-init.marker`, and the next start (relaunched automatically, at most 4 times) tries that
-renderer last. `LIGHTCRAFT_GPU_BACKEND=dx12 | vulkan | gl | glow` (or `WGPU_BACKEND`) forces one; DX12 stays
+renderer last. `<PREFIX>_GPU_BACKEND=dx12 | vulkan | gl | glow` (or `WGPU_BACKEND`) forces one; DX12 stays
 first because a broken Vulkan driver can crash the process uncatchably (#136). Compute keeps its own
 device and falls back to the CPU as before.
 
-**Troubleshooting a crash at startup (Windows).** Start LightCraft from a `.cmd` file or a terminal
-with `set LIGHTCRAFT_GPU_BACKEND=dx12` (the default since #136), or `=off` to keep the GPU out of
+**Troubleshooting a crash at startup (Windows).** Start the app from a `.cmd` file or a terminal
+with `set <PREFIX>_GPU_BACKEND=dx12` (the default since #136), or `=off` to keep the GPU out of
 rendering; `set VK_LOADER_DRIVERS_DISABLE=*igvk64*` (Vulkan loader) hides a specific Vulkan driver
 from every program started with it. Help ▸ System Info and `app.gpu` show the adapter and backend in
 use (e.g. `Intel(R) UHD Graphics 630 (Dx12)`).
 
-**LightCraft stops during an export or a render; the log says "device lost" (Windows, issue #1337).**
+**The app stops during an export or a render; the log says "device lost" (Windows, issue #1337).**
 When the graphics driver resets the GPU (the Windows watchdog, a driver hang: DXGI `0x887A0005`, "GPU
 device instance has been suspended"), renders fall back to the CPU, but the window's renderer (egui-wgpu)
-panics on the lost device and LightCraft stops. It says so ("LightCraft stopped unexpectedly", not "could
+panics on the lost device and the app stops. It says so ("<app> stopped unexpectedly", not "could
 not open its window") and records it in `gpu-lost.marker` in the settings folder: the next start turns
 *Use the GPU for rendering* off and says why once. Turn it back on in Settings ▸ Performance after a
 driver update.
@@ -120,15 +123,15 @@ walks the whole system drive while the window's GPU device is created (`D3D12Cre
 unresponsive window for minutes. The Vulkan driver shares that code, so another backend doesn't
 help. Set *Shader Cache Size* back to **Driver Default** (or any size); the setting is global, there
 is no per-program override. Other programs that create a DX12 or Vulkan device at startup hang the
-same way (PhotoCraft does). It is a driver issue: nothing in LightCraft itself
+same way (PhotoCraft does). It is a driver issue: nothing in the app itself
 walks the drive.
 
 ## Where it is used
-- `lightcraft_engine::media::develop` (called by every `RenderJob`): loupe / before / compare views,
+- `lcc_engine::media::develop` (called by every `RenderJob`): loupe / before / compare views,
   `render_now` (CLI, MCP, control channel renders) and exports render on the GPU when one is
   available; grid/filmstrip thumbnails (many small jobs in parallel) stay on the CPU.
 - Anything the GPU path cannot do returns `None` and the CPU renders instead: no adapter (CI
-  machines, software-only adapters), `LIGHTCRAFT_GPU=0` or `LIGHTCRAFT_GPU_BACKEND=off` (whole
+  machines, software-only adapters), `<PREFIX>_GPU=0` or `<PREFIX>_GPU_BACKEND=off` (whole
   process; see [Backends](#backends-environment-variables-and-troubleshooting-issue-136)), the `app.gpu {enabled}`
   command (runtime preference; `ui.inspect` → `perf.gpu` shows the adapter), a buffer larger than
   the device's storage-buffer limit, or a render the device did not complete correctly (see
@@ -140,7 +143,8 @@ walks the drive.
 - Shared parameters, so the two implementations cannot drift apart: `pipeline::plan` (effective
   settings, frame, output size, stage-cache keys), `Frame::sample_plan`, `local::{wb_matrix_for,
   nr_params, plane_sigmas, guided_fast_step, airlight_of}`, `finish::{FinishParams, mask_terms}`,
-  `masks::brush_dabs`; exact tables (tone LUT, sRGB LUT, curve LUTs, resample taps) and the OkLab
+  `masks::brush_dabs`; exact tables (tone LUT, sRGB LUT, curve LUTs, the masks' local Curves from
+  `finish::local_curve_luts`, resample taps) and the OkLab
   matrices are uploaded / generated into the WGSL prelude from the CPU values.
 - Buffers, not textures: images are `array<f32>` with the CPU's interleaved layout (RGB, 1–3
   channels), so upload / readback are plain copies of `Rgb32f` / `Plane` / `Rgba8` data.
@@ -163,12 +167,12 @@ walks the drive.
   the dark channel is recomputed). Dropped buffers are recycled (exact size, ≤ 2 GB pool) once the
   thread that dropped them has submitted — allocating and zero-filling fresh 100–300 MB buffers
   per pass cost as much as the passes.
-- `LIGHTCRAFT_PROFILE=1` prints GPU stage timings (each stage is then submitted and waited for).
+- `<PREFIX>_PROFILE=1` prints GPU stage timings (each stage is then submitted and waited for).
 
 ## Limits, failures and the CPU fallback
 Issue #78: on an Intel UHD (ICL GT1) iGPU with Mesa/Vulkan, exports from the desktop app came out
-as valid JPEGs that were entirely black, while previews, `lightcraft-cli render` and
-`LIGHTCRAFT_GPU=0` were fine — and the GPU export took ~15 s against ~3 s on the CPU. The readback
+as valid JPEGs that were entirely black, while previews, `<cli> render` and
+`<PREFIX>_GPU=0` were fine — and the GPU export took ~15 s against ~3 s on the CPU. The readback
 returned a buffer the per-pixel stage had never written, with no error. The likeliest cause: the
 whole export was recorded as one command submission lasting seconds on that GPU, and the driver
 reset it (GPU hang check / preemption timeout — the app's own window keeps the GPU busy, the CLI
@@ -207,20 +211,20 @@ cannot vouch for:
 | validation / internal error, device lost, readback failure or timeout, incomplete image, panic | CPU | CPU (whole process) |
 
 **Diagnosing.** `ui.inspect` → `perf.gpu` (adapter in use), `perf.gpuReason` (why renders don't use
-the GPU, e.g. `"disabled by LIGHTCRAFT_GPU=0"`, `"software adapter (llvmpipe (LLVM 21.1.8, 256 bits))
+the GPU, e.g. `"disabled by <PREFIX>_GPU=0"`, `"software adapter (llvmpipe (LLVM 21.1.8, 256 bits))
 skipped: …"`, `"stopped after a GPU failure: device lost …"`), `perf.gpuFallback` (the latest render
 redone on the CPU and why, e.g. `"6000×4000: the GPU returned an incomplete image (24000000 of
 24000000 pixels unwritten); the GPU is not used again"`). The same in `app.gpu` (`reason`,
-`lastFallback`), Help ▸ System Info and Settings ▸ Performance. `LIGHTCRAFT_PROFILE=1` prints the
+`lastFallback`), Help ▸ System Info and Settings ▸ Performance. `<PREFIX>_PROFILE=1` prints the
 fallback with the stage timings; `RUST_LOG=warn` logs it.
 `perf.gpuFallback` is one value for the whole process, overwritten by the latest render on any
-thread. A render's *own* reason comes from `lightcraft_gpu::try_render` (`Err(Fallback::Failed(why))`;
-`Fallback::NotTried` when the GPU was not used at all), which `lightcraft_engine::media::develop_reporting`
+thread. A render's *own* reason comes from `lcc_gpu::try_render` (`Err(Fallback::Failed(why))`;
+`Fallback::NotTried` when the GPU was not used at all), which `lcc_engine::media::develop_reporting`
 passes on as `RenderResult::gpu_fallback`; an export carries it as `Exported::gpu_fallback`, and
 each file of an `app.export` batch result has `gpuFallback` when its render fell back (issue #675).
-**Reproducing a smaller GPU:** `LIGHTCRAFT_GPU_LIMITS=webgpu` (or `downlevel`) creates the device
-with 128 MiB storage bindings / 256 MiB buffers, `LIGHTCRAFT_GPU_LIMITS=<n>` with n MiB / 2n MiB.
-Tests inject failures with `lightcraft_gpu::inject_fault` (`crates/gpu/tests/fallback.rs`,
+**Reproducing a smaller GPU:** `<PREFIX>_GPU_LIMITS=webgpu` (or `downlevel`) creates the device
+with 128 MiB storage bindings / 256 MiB buffers, `<PREFIX>_GPU_LIMITS=<n>` with n MiB / 2n MiB.
+Tests inject failures with `lcc_gpu::inject_fault` (`crates/gpu/tests/fallback.rs`,
 `export_falls_back_to_the_cpu_when_gpu_work_is_lost`). The fault is thread-local, and so are its
 consequences: a simulated fatal failure stops GPU use on the injecting thread only (`available()`
 false, `unavailable_reason()` set there), until `reset_failures()`, which undoes nothing else — a
@@ -245,7 +249,7 @@ cut back after the readback. The tests skip (pass with a note) when no adapter e
 non-Apple GPU verified: all 16 tests pass, 135 compared cases. 124 differ by max 1 LSB, 10 are
 bit-identical, and one (the point colour range overlay) has max 2 LSB on 0.0002% of pixels. Worst
 mean 0.0003 LSB. That is the same picture as on Metal, inside the bounds
-(`cargo test -p lightcraft-gpu --release --test equivalence -- --nocapture`).
+(`cargo test -p lcc-gpu --release --test equivalence -- --nocapture`).
 
 Remaining differences come from f32 vs f64 coordinate math, fast-math transcendental functions on
 Metal and summation order in the box filters — all far below one 8-bit step.
@@ -271,13 +275,25 @@ On Windows (Radeon 780M iGPU, DX12), a full-size JPEG export of the same raw wit
 1.9–2.0 s on the CPU: the horizontal box pass had each thread slide a running sum over 16 pixels, so
 the threads of a workgroup read pixels 16 apart, and it took 9–15× as long as the vertical pass.
 Summing each pixel's window instead (adjacent threads, adjacent pixels): 1.9–2.0 s, with the GPU's
-NR stage 1.5 → 0.4 s and spatial planes 0.89 → 0.29 s (`LIGHTCRAFT_PROFILE`). The ignored test
+NR stage 1.5 → 0.4 s and spatial planes 0.89 → 0.29 s (`<PREFIX>_PROFILE`). The ignored test
 `bench_kernels` (`crates/gpu/src/render.rs`) times the passes on a 24 MP plane.
 
 GPU timings include the readback of the 8-bit result and the histogram. Device creation + kernel
 compilation: ~0.4 s once per process — the desktop app starts it on a background thread at launch
-(`lightcraft_gpu::warm_up`), so the first loupe render doesn't wait for it; other processes create
-the device on their first GPU render. `lightcraft_gpu::ready()` asks without blocking.
+(`lcc_gpu::warm_up`), so the first loupe render doesn't wait for it; other processes create
+the device on their first GPU render. `lcc_gpu::ready()` asks without blocking.
+
+**Colour NR on the CPU (gap 26, 2026-10-13).** From a blur radius of `HALF_RES_NR_SIGMA` (4 px)
+on, a CPU *draft* render (slider drag) blurs the chromaticity at half resolution (2×2 box down, half the radius, bilinear back)
+instead of at full resolution; the luminance and the per-pixel mix stay at full resolution, and
+smaller radii and every full-quality render keep the full-resolution blur, so final renders match the GPU
+and the look existing edits always had (half-res on final renders broke that; fixed 2026-10-13). A test bounds the difference (mean < 0.002, worst
+< 0.02 linear). Measured by `colour_nr_timing` (`cargo test --release -p lcc-pipeline
+colour_nr_timing -- --ignored --nocapture`), both paths interleaved in one run on a machine at load
+average ≈ 105 on 32 threads, so compare the ratio, not the absolute numbers: 1936×1290 140 → 78 ms,
+6000×4000 670 → 336 ms (σ 6.8, best of 5). Full-resolution colour NR on the CPU is still over the
+16 ms slider budget at loupe size; the GPU path (unchanged, full-resolution blur, 10–18 ms for the
+whole NR drag) is the one that meets it.
 
 ## Opening a photo (M5.4)
 - The loupe shows a stand-in at once (`media::QuickJob`): the photo's cached view render for its
@@ -295,17 +311,17 @@ A view's stages keep an uploaded source only up to 96 MB (a Preview-level source
   sources, rendered previews) and the GPU renderer's device buffers (allocated, of which pooled
   and retired); `ui.inspect` → `memory` adds the loupe's stage caches (CPU images, GPU buffers)
   and the textures.
-- Heap profile: build `lightcraft-cli` with `--features dhat-heap`; `library.memory` then also
-  reports live/peak heap bytes and the run writes `dhat-heap.json` (`LIGHTCRAFT_DHAT_FILE`), whose
+- Heap profile: build `<cli>` with `--features dhat-heap`; `library.memory` then also
+  reports live/peak heap bytes and the run writes `dhat-heap.json` (`<PREFIX>_DHAT_FILE`), whose
   allocation sites at the peak (`t-gmax`) show who holds the memory.
 - Measuring the scenario (import 14 raws from `corpus/raw`, open the loupe, step 12 times):
-  `/usr/bin/time -l lightcraft-cli snapshot <files> --script steps.jsonl -o out.png` → "maximum
+  `/usr/bin/time -l <cli> snapshot <files> --script steps.jsonl -o out.png` → "maximum
   resident set size" and "peak memory footprint". Run it several times: the high-water mark is
   noisy (allocator caching, scheduling). On Apple silicon GPU buffers count in the footprint.
-- Imports read raw headers only (`lightcraft_raw::probe_info`): no pixel data is decompressed,
+- Imports read raw headers only (`lcc_raw::probe_info`): no pixel data is decompressed,
   except the first rows a few vendor formats need for facts their headers lack (Nikon NEF: the
   first 128 rows for the masked trailing columns, issue #708).
-- One budget (`memory::budget`, default min(25 % of RAM, 1.5 GiB); `LIGHTCRAFT_MEMORY_MB` or
+- One budget (`memory::budget`, default min(25 % of RAM, 1.5 GiB); `<PREFIX>_MEMORY_MB` or
   `app.memoryBudget {mb}`): half for the engine caches (decoded thumbnail / preview / full
   sources and rendered previews, evicted least recently used *across* them; the photo on screen
   stays), a quarter for decodes in flight (`memory::work_gate`: grid thumbnails, neighbour

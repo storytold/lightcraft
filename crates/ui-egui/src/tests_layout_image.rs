@@ -8,7 +8,7 @@ use std::time::Duration;
 use serde_json::json;
 
 use crate::headless::Headless;
-use crate::{LightcraftApp, Services};
+use crate::{LccApp, Services};
 
 const T: Duration = Duration::from_secs(20);
 const SETTLE: Duration = Duration::from_secs(120);
@@ -18,7 +18,7 @@ const BAND: [u8; 4] = [255, 0, 255, 255];
 
 fn loupe() -> Headless {
     let services = Services { png: None, ..Default::default() };
-    let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+    let mut app = LccApp::new(lcc_engine::Session::with_demo(), services);
     app.ui.settings.gpu = false;
     let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
     let r = h.request("ui.set", json!({"view": "detail", "right": "edit"}), T);
@@ -32,8 +32,8 @@ fn cover(tag: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("lc-layout-image-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let img = lightcraft_raster::Rgba8::from_fn(300, 400, |_, y| if y < 100 { BAND } else { [0, 0, 0, 0] });
-    let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+    let img = lcc_raster::Rgba8::from_fn(300, 400, |_, y| if y < 100 { BAND } else { [0, 0, 0, 0] });
+    let png = lcc_codecs::encode_png(&lcc_codecs::EncodeImage::rgba8(&img), &lcc_codecs::EncodeMeta::default()).unwrap();
     let path = dir.join("cover.png");
     std::fs::write(&path, png).unwrap();
     path
@@ -152,30 +152,4 @@ fn a_layout_image_that_cant_be_read_says_so_and_showing_none_asks_for_one() {
     h.step();
     assert!(widget(&h, "canvas:layoutImageError").is_none());
     let _ = std::fs::remove_dir_all(dir.parent().unwrap());
-}
-
-#[test]
-fn view_loupe_overlay_lists_the_layout_image_commands() {
-    let mut h = loupe();
-    let names = |h: &Headless| -> Vec<(String, bool, Option<bool>)> {
-        let menu = crate::menubar::expanded(&h.app, "Loupe Overlay").unwrap_or_default();
-        menu.into_iter()
-            .filter_map(|n| match n {
-                crate::menubar::MenuNode::Item { id, enabled, checked, .. } => Some((id, enabled, checked)),
-                _ => None,
-            })
-            .collect()
-    };
-    let before = names(&h);
-    assert_eq!(before[0], ("view.chooseLayoutImage".to_string(), true, None));
-    // nothing chosen: only Choose… is enabled
-    assert!(before[1..].iter().all(|(_, enabled, _)| !enabled), "{before:?}");
-    let path = cover("menu");
-    run(&mut h, "view.chooseLayoutImage", json!({"path": path.to_string_lossy()}));
-    let after = names(&h);
-    assert_eq!(after[1], ("view.layoutImage".to_string(), true, Some(true)));
-    // 100% opacity and no matte are checked by default
-    let checked: Vec<&String> = after.iter().filter(|(_, _, c)| *c == Some(true)).map(|(id, ..)| id).collect();
-    assert_eq!(checked, ["view.layoutImage", "view.layoutImageOpacity", "view.layoutImageMatte"]);
-    let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }

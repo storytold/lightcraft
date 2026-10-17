@@ -1,10 +1,10 @@
-//! Face networks on the GPU: an [`lightcraft_faces::net::Accelerator`] that runs the interpreter's convolutions (most of
+//! Face networks on the GPU: an [`lcc_faces::net::Accelerator`] that runs the interpreter's convolutions (most of
 //! YuNet's, SFace's and AuraFace's time) with a WGSL kernel (`wgsl/faces_conv.wgsl`). Everything else in the graph
 //! stays on the CPU interpreter, which is the reference: a net attaches this only after it agreed with the CPU on a
 //! test input (`Net::attach_checked`), and drops it on the first error.
 //!
 //! The device is a separate one (like denoise's), so a face scan and the interactive renders never share a queue, and
-//! it respects the same switches as GPU rendering (`LIGHTCRAFT_GPU`, `LIGHTCRAFT_GPU_BACKEND`, the GPU preference)
+//! it respects the same switches as GPU rendering (`{ENV_PREFIX}_GPU`, `{ENV_PREFIX}_GPU_BACKEND`, the GPU preference)
 //! and the crash sentinel around device creation. A model's weights are uploaded once, on first use, and stay on the
 //! device while the accelerator (one per loaded model) lives. Every failure is an `Err`, never a panic.
 
@@ -14,8 +14,8 @@ use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::Duration;
 
 use bytemuck::{Pod, Zeroable};
-use lightcraft_faces::net::program::{Arg, Binary, INPUT, Op, Program, Unary};
-use lightcraft_faces::net::{Accelerator, ConvJob};
+use lcc_faces::net::program::{Arg, Binary, INPUT, Op, Program, Unary};
+use lcc_faces::net::{Accelerator, ConvJob};
 use wgpu::util::DeviceExt;
 
 /// Longest wait for one convolution before the device is given up on.
@@ -86,7 +86,7 @@ fn dev() -> Result<&'static Dev, String> {
 }
 
 fn create_device() -> Result<Dev, String> {
-    let Some(backends) = crate::backend::compute_backends() else { return Err("disabled by LIGHTCRAFT_GPU_BACKEND=off".into()) };
+    let Some(backends) = crate::backend::compute_backends() else { return Err(format!("disabled by {}=off", lcc_brand::env_var("GPU_BACKEND"))) };
     crate::backend::with_init_marker(backends, || {
         std::panic::catch_unwind(|| make_device(backends)).unwrap_or_else(|_| Err("device creation panicked".into()))
     })
@@ -107,7 +107,7 @@ fn make_device(backends: wgpu::Backends) -> Result<Dev, String> {
     desc.backend_options = crate::backend::backend_options();
     desc.flags = crate::backend::instance_flags_from_env(desc.flags);
     let instance = wgpu::Instance::new(desc);
-    let wanted = std::env::var("LIGHTCRAFT_GPU_ADAPTER").ok().map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty());
+    let wanted = lcc_brand::env("GPU_ADAPTER").map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty());
     let adapter = match &wanted {
         Some(w) => pollster::block_on(instance.enumerate_adapters(backends))
             .into_iter()
@@ -134,7 +134,7 @@ fn make_device(backends: wgpu::Backends) -> Result<Dev, String> {
         return Err(format!("{} is too limited for the face kernels", info.name));
     }
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("lightcraft-faces"),
+        label: Some("lcc-faces"),
         required_limits: limits.clone(),
         ..Default::default()
     }))
@@ -904,11 +904,10 @@ mod tests {
     #[test]
     fn every_operator_on_the_gpu_gives_what_the_cpu_gives() {
         let Some(gpu) = gpu() else { return };
-        let net = lightcraft_faces::net::Net::new(lightcraft_faces::synthetic::every_operator_graph()).unwrap();
-        let inputs: Vec<lightcraft_faces::net::Tensor> = (0..3)
+        let net = lcc_faces::net::Net::new(lcc_faces::synthetic::every_operator_graph()).unwrap();
+        let inputs: Vec<lcc_faces::net::Tensor> = (0..3)
             .map(|s| {
-                lightcraft_faces::net::Tensor::new(vec![1, 4, 8, 8], (0..256).map(|i| (((i * 31 + s * 7) % 37) as f32 - 18.0) * 0.05).collect())
-                    .unwrap()
+                lcc_faces::net::Tensor::new(vec![1, 4, 8, 8], (0..256).map(|i| (((i * 31 + s * 7) % 37) as f32 - 18.0) * 0.05).collect()).unwrap()
             })
             .collect();
         let cpu: Vec<_> = inputs.iter().map(|x| net.run(x.clone()).unwrap()).collect();
@@ -934,10 +933,10 @@ mod tests {
         if gpu().is_none() {
             return;
         }
-        let det = lightcraft_faces::yunet::Detector::new(&std::fs::read(dir.join("face_detection_yunet_2023mar.onnx")).unwrap()).unwrap();
+        let det = lcc_faces::yunet::Detector::new(&std::fs::read(dir.join("face_detection_yunet_2023mar.onnx")).unwrap()).unwrap();
         let (w, h) = (900, 700);
         let rgb: Vec<u8> = (0..w * h * 3).map(|i| ((i / 3 % w) as f32 * 0.25 + (i / 3 / w) as f32 * 0.3 + (i * 7919 % 41) as f32) as u8).collect();
-        let opts = lightcraft_faces::yunet::Options { score: 0.0, ..Default::default() };
+        let opts = lcc_faces::yunet::Options { score: 0.0, ..Default::default() };
         let cpu = det.detect(&rgb, w, h, &opts).unwrap();
         det.accelerate(accelerator().unwrap(), false).unwrap();
         let fast = det.detect(&rgb, w, h, &opts).unwrap();
@@ -946,15 +945,14 @@ mod tests {
         for (a, b) in cpu.iter().zip(&fast) {
             assert!((a.score - b.score).abs() < 1e-3, "{} vs {}", a.score, b.score);
         }
-        for (file, sha) in [
-            ("face_recognition_sface_2021dec.onnx", lightcraft_faces::known::SFACE_SHA256),
-            ("glintr100.onnx", lightcraft_faces::known::AURAFACE_SHA256),
-        ] {
+        for (file, sha) in
+            [("face_recognition_sface_2021dec.onnx", lcc_faces::known::SFACE_SHA256), ("glintr100.onnx", lcc_faces::known::AURAFACE_SHA256)]
+        {
             let path = dir.join(file);
             if !path.exists() {
                 continue;
             }
-            let e = lightcraft_faces::runtime::Embedder::load(&path, &lightcraft_faces::known::lookup(sha).unwrap()).unwrap();
+            let e = lcc_faces::runtime::Embedder::load(&path, &lcc_faces::known::lookup(sha).unwrap()).unwrap();
             let (ew, eh) = e.input_size();
             let face: Vec<u8> = (0..ew * eh * 3).map(|i| ((i * 13) % 251) as u8).collect();
             let cpu = e.embed(&face).unwrap();
@@ -966,7 +964,7 @@ mod tests {
     }
 
     /// Timings, CPU against the GPU one convolution at a time and as whole programs (one face, and a batch of 16):
-    /// `LC_FACE_MODELS=<folder> cargo test --release -p lightcraft-gpu faces::tests::timings -- --ignored --nocapture`.
+    /// `LC_FACE_MODELS=<folder> cargo test --release -p lcc-gpu faces::tests::timings -- --ignored --nocapture`.
     #[test]
     #[ignore = "a benchmark: needs LC_FACE_MODELS and a GPU"]
     fn timings() {
@@ -980,10 +978,10 @@ mod tests {
             }
             t.elapsed().as_secs_f64() * 1000.0 / runs as f64
         };
-        let det = lightcraft_faces::yunet::Detector::new(&std::fs::read(dir.join("face_detection_yunet_2023mar.onnx")).unwrap()).unwrap();
+        let det = lcc_faces::yunet::Detector::new(&std::fs::read(dir.join("face_detection_yunet_2023mar.onnx")).unwrap()).unwrap();
         let (w, h) = (1024, 768);
         let rgb: Vec<u8> = (0..w * h * 3).map(|i| (i * 7 % 251) as u8).collect();
-        let opts = lightcraft_faces::yunet::Options::default();
+        let opts = lcc_faces::yunet::Options::default();
         let cpu = time(10, &mut || drop(det.detect(&rgb, w, h, &opts).unwrap()));
         PER_CONV.store(true, Ordering::Relaxed);
         det.accelerate(accelerator().unwrap(), false).unwrap();
@@ -993,11 +991,10 @@ mod tests {
         let whole = time(10, &mut || drop(det.detect(&rgb, w, h, &opts).unwrap()));
         assert!(det.net().accelerator().is_some());
         eprintln!("YuNet 640: CPU {cpu:.1} ms, GPU per convolution {per_conv:.1} ms, GPU whole network {whole:.1} ms");
-        for (file, sha) in [
-            ("face_recognition_sface_2021dec.onnx", lightcraft_faces::known::SFACE_SHA256),
-            ("glintr100.onnx", lightcraft_faces::known::AURAFACE_SHA256),
-        ] {
-            let e = lightcraft_faces::runtime::Embedder::load(&dir.join(file), &lightcraft_faces::known::lookup(sha).unwrap()).unwrap();
+        for (file, sha) in
+            [("face_recognition_sface_2021dec.onnx", lcc_faces::known::SFACE_SHA256), ("glintr100.onnx", lcc_faces::known::AURAFACE_SHA256)]
+        {
+            let e = lcc_faces::runtime::Embedder::load(&dir.join(file), &lcc_faces::known::lookup(sha).unwrap()).unwrap();
             let (ew, eh) = e.input_size();
             let faces: Vec<Vec<u8>> = (0..16).map(|s| (0..ew * eh * 3).map(|i| ((i + s * 101) * 13 % 251) as u8).collect()).collect();
             let refs: Vec<&[u8]> = faces.iter().map(Vec::as_slice).collect();

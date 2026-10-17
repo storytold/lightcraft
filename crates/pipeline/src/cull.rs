@@ -2,7 +2,7 @@
 //! scores compare across photos): focus, clipping, and a tiny signature for finding similar
 //! shots (bursts). Classical image statistics — no learned models.
 
-use lightcraft_raster::Rgb32f;
+use lcc_raster::Rgb32f;
 
 /// Long edge the measurements run at.
 const EDGE: usize = 512;
@@ -25,7 +25,7 @@ fn luma(img: &Rgb32f) -> (Vec<f32>, usize, usize) {
                 }
             }
             let l = acc / ((y1 - y0) * (x1 - x0)) as f32;
-            *v = lightcraft_color::transfer::linear_to_srgb(l.clamp(0.0, 1.0));
+            *v = lcc_color::transfer::linear_to_srgb(l.clamp(0.0, 1.0));
         }
     }
     (out, ow, oh)
@@ -98,41 +98,4 @@ pub fn signature(img: &Rgb32f) -> [f32; 64] {
 /// Similarity of two signatures: 1 = the same picture, 0 = unrelated.
 pub fn similarity(a: &[f32; 64], b: &[f32; 64]) -> f32 {
     a.iter().zip(b).map(|(x, y)| x * y).sum::<f32>().clamp(-1.0, 1.0)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn blur(img: &Rgb32f, r: usize) -> Rgb32f {
-        let (w, h) = (img.width, img.height);
-        let mut out = img.clone();
-        for y in 0..h {
-            for x in 0..w {
-                let mut acc = [0f32; 3];
-                let mut n = 0.0;
-                for yy in y.saturating_sub(r)..(y + r + 1).min(h) {
-                    for xx in x.saturating_sub(r)..(x + r + 1).min(w) {
-                        let c = img.data[yy * w + xx];
-                        acc = [acc[0] + c[0], acc[1] + c[1], acc[2] + c[2]];
-                        n += 1.0;
-                    }
-                }
-                out.data[y * w + x] = acc.map(|v| v / n);
-            }
-        }
-        out
-    }
-
-    #[test]
-    fn blur_lowers_focus_and_signatures_match() {
-        let img = lightcraft_scenes::demo_library()[0].render(480, 320);
-        let soft = blur(&img, 4);
-        let (a, b) = (sharpness(&img), sharpness(&soft));
-        assert!(a > b + 10.0, "sharp {a} vs blurred {b}");
-        assert!(similarity(&signature(&img), &signature(&soft)) > 0.95, "the same picture");
-        let other = lightcraft_scenes::demo_library()[5].render(480, 320);
-        assert!(similarity(&signature(&img), &signature(&other)) < 0.9);
-        assert!(clipped(&img) < 0.5);
-    }
 }

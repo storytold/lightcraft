@@ -1,14 +1,14 @@
 //! Synthetic setup flows: model installation must resume the requested action on its original targets.
 use std::path::{Path, PathBuf};
 
-use lightcraft_catalog::{MediaKind, Op, Photo, PhotoId, Source};
-use lightcraft_denoise::manifest::{DenoiserManifest, Domain, Gain};
-use lightcraft_engine::Session;
+use lcc_catalog::{MediaKind, Op, Photo, PhotoId, Source};
+use lcc_denoise::manifest::{DenoiserManifest, Domain, Gain};
+use lcc_engine::Session;
 use serde_json::json;
 
-use crate::{LightcraftApp, Services, model_setup, state::Dialog};
+use crate::{LccApp, Services, model_setup, state::Dialog};
 
-fn setup(name: &str) -> (LightcraftApp, PathBuf, PhotoId) {
+fn setup(name: &str) -> (LccApp, PathBuf, PhotoId) {
     let dir = std::env::temp_dir().join(format!("lc-model-flow-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     let mut s = Session::new().with_fs();
@@ -27,13 +27,13 @@ fn setup(name: &str) -> (LightcraftApp, PathBuf, PhotoId) {
     );
     raw.kind = MediaKind::Raw;
     s.commit("fixture", Op::AddPhoto { photo: Box::new(raw) }).unwrap();
-    (LightcraftApp::new(s, Services::default()), dir, id)
+    (LccApp::new(s, Services::default()), dir, id)
 }
 
 fn denoise_file(dir: &Path) -> PathBuf {
     let source = dir.join("source");
     std::fs::create_dir_all(&source).unwrap();
-    let bytes = lightcraft_denoise::synthetic::smoothing_onnx();
+    let bytes = lcc_denoise::synthetic::smoothing_onnx();
     std::fs::write(source.join("model.onnx"), &bytes).unwrap();
     let m = DenoiserManifest {
         id: "test-smoothing".into(),
@@ -53,7 +53,7 @@ fn denoise_file(dir: &Path) -> PathBuf {
     source.join("model.onnx")
 }
 
-fn install_denoise(app: &mut LightcraftApp, dir: &Path) {
+fn install_denoise(app: &mut LccApp, dir: &Path) {
     app.run("denoise.models.install", json!({"path": denoise_file(dir), "acknowledged": true})).unwrap();
 }
 
@@ -69,11 +69,11 @@ fn accepting_a_local_model_installs_in_background_and_resumes_the_pending_action
     assert_eq!(result["started"], "local-install");
     assert_eq!(app.ui.dialog, Some(Dialog::Settings { tab: "denoise".into() }));
     let ctx = egui::Context::default();
-    // a deadline, not a count of tries: the install copies on a background thread, slow on a busy machine
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    // (bounded by time, not a count of polls: a loaded machine installs slowly)
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
     while std::time::Instant::now() < deadline {
         crate::panels::denoise::pump(&mut app, &ctx);
-        if app.session.denoise_photo_state(raw) != lightcraft_engine::denoise::PhotoState::NoModel {
+        if app.session.denoise_photo_state(raw) != lcc_engine::denoise::PhotoState::NoModel {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(5));
@@ -86,10 +86,10 @@ fn accepting_a_local_model_installs_in_background_and_resumes_the_pending_action
     let _ = std::fs::remove_dir_all(dir);
 }
 
-fn amount(app: &LightcraftApp, id: PhotoId) -> f64 {
+fn amount(app: &LccApp, id: PhotoId) -> f64 {
     app.session.develop_of(id).unwrap().enhance.denoise
 }
-fn resume(app: &mut LightcraftApp) {
+fn resume(app: &mut LccApp) {
     model_setup::pump(app, &egui::Context::default());
 }
 

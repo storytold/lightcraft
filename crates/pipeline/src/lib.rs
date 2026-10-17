@@ -1,4 +1,4 @@
-//! The LightCraft develop pipeline (CPU reference implementation).
+//! The develop pipeline (CPU reference implementation).
 //!
 //! Input: a scene-referred, linear Rec.2020 source image (already EXIF-oriented) at any resolution
 //! (full size or a proxy), plus [`DevelopSettings`]. Output: a display-encoded sRGB image at the
@@ -24,20 +24,24 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod auto;
+pub mod auto_mask;
 pub mod blemish;
 pub mod colorops;
 pub mod cull;
 pub mod dust;
 pub mod finish;
 pub mod geometry;
+pub mod grade;
 pub mod local;
 pub mod local_tone;
 pub mod lut;
 pub mod masks;
 pub mod optics;
 pub mod output;
+pub mod plugin_filters;
 pub mod profiles;
 pub mod redeye;
+pub mod source_stage;
 pub mod spots;
 pub mod tone;
 pub mod transform;
@@ -47,12 +51,12 @@ pub mod visualize;
 pub use output::{DeepImage, DeepSamples, DisplaySpace, OutputDepth, OutputSpace, OutputTrc, Proof, ProofLut, proof_profile, register_proof_profile};
 pub use visualize::{MaskView, Overlay};
 
-use lightcraft_develop::{DevelopSettings, Treatment};
+use lcc_develop::{DevelopSettings, Treatment};
 use std::any::Any;
 use std::borrow::Cow;
 use std::sync::{Arc, Mutex};
 
-use lightcraft_raster::{Histogram, Plane, Rgb32f, Rgba8, par_rows};
+use lcc_raster::{Histogram, Plane, Rgb32f, Rgba8, par_rows};
 
 pub use tone::ToneMap;
 
@@ -62,16 +66,16 @@ pub use tone::ToneMap;
 #[derive(Debug, PartialEq)]
 pub struct CameraColor {
     /// The file's colour tags (its profile look left out: it is applied at load).
-    pub tags: lightcraft_raw::ColorData,
+    pub tags: lcc_raw::ColorData,
     /// The white the source pixels were developed for.
-    pub developed_for: lightcraft_color::Xy,
+    pub developed_for: lcc_color::Xy,
 }
 
 /// Facts about the source the settings are interpreted against.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SourceInfo {
     /// Lens corrections embedded in the file (DNG opcodes), relative to the EXIF-oriented source.
-    pub lens: Option<lightcraft_develop::EmbeddedLens>,
+    pub lens: Option<lcc_develop::EmbeddedLens>,
     /// Raw sources use absolute Kelvin white balance; rendered sources use a relative scale around
     /// their as-shot white.
     pub raw: bool,
@@ -81,7 +85,7 @@ pub struct SourceInfo {
     pub relative_wb: bool,
     /// The Kelvin scale comes from matrices measured for the camera model, not from the file: before those were
     /// used for white balance, this source was edited on the relative scale (6500 K / 0 = as shot), so settings
-    /// without a [`lightcraft_develop::WbScale`] are read that way ([`local::legacy_to_kelvin`]).
+    /// without a [`lcc_develop::WbScale`] are read that way ([`local::legacy_to_kelvin`]).
     pub legacy_relative_wb: bool,
     /// The camera's colour model (raw files with a colour matrix); `None`: white balance adapts
     /// the developed pixels (Bradford, linear Rec.2020).
@@ -92,10 +96,14 @@ pub struct SourceInfo {
     /// The raw's own local tone mapping (DNG `ProfileGainTableMap`), rendered only when the
     /// photo's Profile option asks for it ([`local_tone`]).
     pub local_tone: Option<Arc<local_tone::LocalTone>>,
+    /// Where pixel-filter plug-ins come from; `None`: the process default
+    /// ([`plugin_filters::set_default_host`]).
+    pub filters: Option<plugin_filters::FilterHostRef>,
     /// Long edge (px) of the original photo, when the source handed to the renderer is a smaller
     /// copy of it (the app's thumbnail and preview levels); `None`: the source is the original.
-    /// Noise reduction sizes its radii in the original's pixels ([`Plan::detail_scale`]), so a
-    /// preview looks like the full-size render scaled down (issue #960).
+    /// Noise reduction sizes its radii in the original's pixels ([`Plan::detail_scale`]), and
+    /// pixel-scale plug-in filters run at that scale ([`source_stage`]), so a preview looks like
+    /// the full-size render scaled down (issue #960).
     pub native_long: Option<usize>,
 }
 
@@ -112,6 +120,7 @@ impl Default for SourceInfo {
             camera_tone: None,
             mattes: None,
             local_tone: None,
+            filters: None,
             native_long: None,
         }
     }
@@ -171,6 +180,21 @@ impl PixelWindow {
     }
 }
 
+/// The longest output side a render may be asked for (TIFF/PNG/JPEG all fit within it).
+pub const MAX_OUTPUT_SIDE: usize = 65_535;
+/// The most output pixels a render may be asked for (the box it fits into, ≈ 1.07 Gpx).
+pub const MAX_OUTPUT_PIXELS: usize = 1 << 30;
+
+/// Rejects an output box past [`MAX_OUTPUT_SIDE`] or [`MAX_OUTPUT_PIXELS`] before anything is
+/// sized from it.
+pub fn check_output_size(max_w: usize, max_h: usize) -> Result<(), String> {
+    let pixels = max_w.checked_mul(max_h);
+    if max_w > MAX_OUTPUT_SIDE || max_h > MAX_OUTPUT_SIDE || pixels.is_none_or(|n| n > MAX_OUTPUT_PIXELS) {
+        return Err(format!("output size {max_w}×{max_h} is too large (at most {MAX_OUTPUT_SIDE} px per side and {MAX_OUTPUT_PIXELS} pixels)"));
+    }
+    Ok(())
+}
+
 impl RenderRequest {
     pub fn fit(max_w: usize, max_h: usize) -> Self {
         Self {
@@ -194,6 +218,9 @@ pub struct Rendered {
     pub histogram: Histogram,
     /// The high-bit-depth result when [`RenderRequest::depth`] asks for one.
     pub deep: Option<DeepImage>,
+    /// What went wrong without failing the render (e.g. a plug-in filter that isn't installed or
+    /// failed and was skipped).
+    pub warnings: Vec<String>,
 }
 
 /// Everything the per-pixel stage needs, precomputed at output resolution.
@@ -208,6 +235,8 @@ pub(crate) struct Prepared {
     pub base: Arc<Plane>,
     pub clarity_blur: Option<Arc<Plane>>,
     pub texture_blur: Option<Arc<Plane>>,
+    /// Log luminance blurred at the sharpen radius (the pixel-scale band sharpening boosts).
+    pub sharpen_blur: Option<Arc<Plane>>,
     pub dark: Option<Arc<Plane>>,
     /// Blurred chromaticity (`rgb / Y`) for local Moiré / Noise.
     pub chroma_blur: Option<Arc<Rgb32f>>,
@@ -263,11 +292,12 @@ impl StageCache {
     /// Drop everything (e.g. when memory is needed).
     pub fn clear(&self) {
         self.lock().clear();
+        source_stage::clear();
         *self.ext.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
 
     /// Per-view state of type `T` kept alongside this cache (created on first use). Lets another
-    /// renderer of the same view (e.g. `lightcraft-gpu`) keep its own stage cache with this one.
+    /// renderer of the same view (e.g. `lcc-gpu`) keep its own stage cache with this one.
     pub fn extension<T: Any + Send + Sync + Default>(&self) -> Arc<T> {
         let mut g = self.ext.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(e) = g.as_ref()
@@ -288,7 +318,7 @@ impl StageCache {
     /// Bytes of the intermediate images held (each buffer counted once; the sources they were
     /// made from belong to their owner and are not counted).
     pub fn bytes(&self) -> usize {
-        fn size<T>(i: &lightcraft_raster::Image<T>) -> usize {
+        fn size<T>(i: &lcc_raster::Image<T>) -> usize {
             i.data.len() * std::mem::size_of::<T>()
         }
         let mut seen: Vec<usize> = Vec::new();
@@ -301,12 +331,15 @@ impl StageCache {
         };
         for e in self.lock().iter() {
             add(Arc::as_ptr(&e.sampled) as usize, size(&e.sampled));
+            if let Some((_, f)) = &e.filtered {
+                add(Arc::as_ptr(f) as usize, size(f));
+            }
             if let Some((_, l)) = &e.lin {
                 add(Arc::as_ptr(l) as usize, size(l));
             }
             let pl = &e.planes;
             let planes = pl.log_l.iter().chain(pl.base.iter().map(|x| &x.1)).chain(pl.clarity.iter().map(|x| &x.1));
-            for p in planes.chain(pl.texture.iter().map(|x| &x.1)).chain(pl.dark.iter().map(|x| &x.1)) {
+            for p in planes.chain(pl.texture.iter().map(|x| &x.1)).chain(pl.sharpen.iter().map(|x| &x.1)).chain(pl.dark.iter().map(|x| &x.1)) {
                 add(Arc::as_ptr(p) as usize, size(p));
             }
         }
@@ -345,6 +378,8 @@ struct CacheEntry {
     src: Arc<Rgb32f>,
     geo: u64,
     sampled: Arc<Rgb32f>,
+    /// `sampled` after the Source plug-in filters, keyed by [`Plan::source_key`] (and draft).
+    filtered: Option<(u64, Arc<Rgb32f>)>,
     lin: Option<(u64, Arc<Rgb32f>)>,
     planes: local::Planes,
 }
@@ -356,7 +391,7 @@ fn hash_of(parts: impl std::hash::Hash) -> u64 {
 
 /// What a render resolves to before any pixel work: the effective settings (profile and Upright
 /// applied), the geometric frame, the output size and the stage-cache keys. Shared by the CPU
-/// renderer and the GPU renderer (`lightcraft-gpu`), so both key their caches identically.
+/// renderer and the GPU renderer (`lcc-gpu`), so both key their caches identically.
 pub struct Plan<'a> {
     pub settings: Cow<'a, DevelopSettings>,
     pub frame: geometry::Frame,
@@ -386,6 +421,14 @@ pub struct Plan<'a> {
     pub keep: Option<PixelWindow>,
     /// The source's segmentation mattes ([`SourceInfo::mattes`]).
     pub mattes: Option<Arc<masks::Mattes>>,
+    /// The Source-stage plug-in filters (resolved), whose key is part of [`Self::pre_nr_key`].
+    pub source_filters: Arc<plugin_filters::Stack>,
+    /// Where the rendered pixels sit in the whole output frame (`x, y, full_w, full_h`), for
+    /// position-dependent plug-in filters.
+    pub filter_frame: lcc_filters::FrameInfo,
+    /// The whole output frame (before any window), at which pixel-scale Source filters run
+    /// ([`source_stage`]).
+    pub whole_frame: geometry::Frame,
 }
 
 /// Long edge of the small render a windowed render estimates the whole frame's airlight from.
@@ -393,44 +436,53 @@ const AIRLIGHT_PROXY_EDGE: usize = 384;
 
 /// Resolve `s` against `src` for `req` (see [`Plan`]).
 pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &RenderRequest) -> Plan<'a> {
+    // the whole-photo helpers below read the photo as the Source plug-in filters turn it
+    let aux_cell = std::cell::OnceCell::new();
+    let aux = || -> &Rgb32f { aux_cell.get_or_init(|| source_stage::aux_source(src, info, s)).as_deref().unwrap_or(src) };
     let mut settings: Cow<'a, DevelopSettings> = match profiles::effective(s) {
-        Cow::Borrowed(b) => upright::resolve(src, info, b),
-        Cow::Owned(o) => Cow::Owned(upright::resolve(src, info, &o).into_owned()),
+        Cow::Borrowed(b) => upright::resolve(if upright::pending(b) { aux() } else { src }, info, b),
+        Cow::Owned(o) => Cow::Owned(upright::resolve(if upright::pending(&o) { aux() } else { src }, info, &o).into_owned()),
     };
     visualize::adjust_settings(req.overlay, &mut settings);
     // a window must not choose a spot's source from the pixels it happens to hold: fix them
     // from a fixed-size render of the whole frame first
     if req.window.is_some() && settings.spots.iter().any(|sp| sp.source_offset.is_none()) {
-        let picked: Vec<Option<lightcraft_geom::Point>> =
-            settings.spots.iter().map(|sp| sp.source_offset.or_else(|| spots::pick_source(src, info, &settings, sp, None))).collect();
+        let picked: Vec<Option<lcc_geom::Point>> =
+            settings.spots.iter().map(|sp| sp.source_offset.or_else(|| spots::pick_source(aux(), info, &settings, sp, None))).collect();
         for (sp, o) in settings.to_mut().spots.iter_mut().zip(picked) {
             sp.source_offset = o;
         }
     }
     let s = &*settings;
     let frame = frame_for(src, info, s, req.apply_crop);
+    let whole_frame = frame.clone();
     let (full_w, full_h) = frame.fit(req.max_w, req.max_h);
     // sizes and scale are those of the whole output; a window only narrows what is drawn
     let px_per_long = frame.px_per_long(full_w);
     let mut fixed_air = None;
     let mut keep = None;
+    let mut origin = (0, 0);
     let (frame, w, h) = match req.window {
         Some(win) => {
             let win = win.clamped(full_w, full_h);
             if s.section_enabled("effects") && (s.effects.dehaze != 0.0 || s.masks.iter().any(|m| m.adjust.dehaze != 0.0)) {
                 let k = (AIRLIGHT_PROXY_EDGE as f64 / full_w.max(full_h) as f64).min(1.0);
                 let (pw, ph) = (((full_w as f64 * k).round() as usize).max(1), ((full_h as f64 * k).round() as usize).max(1));
-                fixed_air = Some(local::frame_airlight(src, info, s, &frame, pw, ph));
+                fixed_air = Some(local::frame_airlight(aux(), info, s, &frame, pw, ph));
             }
             // (spots grow the rendered window; only 8-bit renders are cut back to the request)
             let work = if req.depth == OutputDepth::U8 { spots::window_for_reads(s, &frame, full_w, full_h, px_per_long, win) } else { win };
             if work != win {
                 keep = Some(PixelWindow { x: win.x - work.x, y: win.y - work.y, ..win });
             }
+            origin = (work.x, work.y);
             (frame.window(full_w, full_h, work), work.w, work.h)
         }
         None => (frame, full_w, full_h),
     };
+    let u = |v: usize| u32::try_from(v).unwrap_or(u32::MAX);
+    let filter_frame = lcc_filters::FrameInfo { x: u(origin.0), y: u(origin.1), full_w: u(full_w), full_h: u(full_h) };
+    let source_filters = Arc::new(plugin_filters::Stack::resolve(info, s, lcc_develop::FilterStage::Source));
     let src_long = src.width.max(src.height);
     // (an original reported smaller than the source is the source)
     let native_long = info.native_long.unwrap_or(0).max(src_long).max(1);
@@ -449,13 +501,44 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         // and the local tone mapping
         local_tone::enabled(info, s),
         src_long,
+        // the Source plug-in filters run before this stage
+        source_filters.key,
     ));
+    // a draft's colour NR may take the half-resolution blur: its result is never a final render's
+    let draft_nr = req.quality == Quality::Draft && d.nr_color > 0.0;
     let lin_key = hash_of((
         pre_nr_key,
         [d.nr_luminance, d.nr_detail, d.nr_color, d.nr_color_detail, d.nr_color_smoothness].map(f64::to_bits),
         detail_scale.to_bits(),
+        draft_nr,
     ));
-    Plan { settings, frame, w, h, px_per_long, src_long, detail_scale, geo, lin_key, pre_nr_key, eyes, fixed_air, keep, mattes: info.mattes.clone() }
+    // AI masks without a model: analysed once per photo look on the whole frame (cached)
+    let mattes = if auto_mask::needed(s) {
+        let mut m = info.mattes.as_deref().cloned().unwrap_or_default();
+        m.auto = Some(auto_mask::for_source(aux(), info, s));
+        Some(Arc::new(m))
+    } else {
+        info.mattes.clone()
+    };
+    Plan {
+        settings,
+        frame,
+        w,
+        h,
+        px_per_long,
+        src_long,
+        detail_scale,
+        geo,
+        lin_key,
+        pre_nr_key,
+        eyes,
+        fixed_air,
+        keep,
+        mattes,
+        source_filters,
+        filter_frame,
+        whole_frame,
+    }
 }
 
 /// Whether the scene-linear stage needs work only the CPU does (defringe, spot removal).
@@ -493,7 +576,7 @@ pub const HDR_HISTOGRAM_DRAG_EDGE: usize = 192;
 
 /// The histogram of an HDR edit's HDR rendition for a preview request `req`: a small float HDR
 /// render of the same framing ([`HDR_HISTOGRAM_EDGE`]), binned with SDR on the left half and the
-/// whole HDR range ([`Hdr::MAX_EV_LIMIT`](lightcraft_develop::Hdr::MAX_EV_LIMIT) stops above SDR
+/// whole HDR range ([`Hdr::MAX_EV_LIMIT`](lcc_develop::Hdr::MAX_EV_LIMIT) stops above SDR
 /// white, whatever the headroom limit, so the scale stays put) on the right ([`Histogram::of_hdr`]). A preview of
 /// an HDR edit shows its SDR rendition; this says how far its highlights go. `None` for SDR edits,
 /// high-bit-depth, windowed and proofed requests (their histogram stays the image's).
@@ -516,7 +599,7 @@ pub fn hdr_histogram(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, req: 
     };
     let deep = render(src, info, s, &hreq).deep?;
     let DeepSamples::F32(v) = &deep.samples else { return None };
-    Some(Histogram::of_hdr(v.as_chunks::<3>().0, lightcraft_develop::Hdr::MAX_EV_LIMIT as f32))
+    Some(Histogram::of_hdr(v.as_chunks::<3>().0, lcc_develop::Hdr::MAX_EV_LIMIT as f32))
 }
 
 /// Render `src` with settings `s`.
@@ -556,6 +639,7 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
     let plan = plan(src_img, info, s, req);
     let Plan { ref frame, w, h, px_per_long, detail_scale, geo, lin_key, .. } = plan;
     let s = &*plan.settings;
+    let mut warnings = Vec::new();
 
     let shared = match (&src, cache) {
         (Src::Shared(a), Some(c)) => Some((*a, c)),
@@ -568,13 +652,32 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
     };
     lap("sample", &mut t);
 
+    // Source plug-in filters: cached by their stack; a draft that can't reuse a result runs them
+    // on a reduced copy (its key marked, so a full render never takes it, nor what follows it)
+    let stack = &plan.source_filters;
+    let draft = req.quality == Quality::Draft;
+    let draft_key = hash_of((stack.key, "draft"));
+    let mut filtered = None;
+    let mut draft_src = false;
+    if !stack.is_empty() {
+        let hit = cached.as_ref().and_then(|e| e.filtered.clone()).filter(|(k, _)| *k == stack.key || (draft && *k == draft_key));
+        filtered = Some(match hit {
+            Some(h) => h,
+            None => source_stage::run(src_img, info, &plan, &sampled, draft, draft_key, &mut warnings),
+        });
+        draft_src = filtered.as_ref().is_some_and(|(k, _)| *k == draft_key);
+        lap("plug-in filters (source)", &mut t);
+    }
+    let lin_key = if draft_src { hash_of((lin_key, "draft source")) } else { lin_key };
+    let base = filtered.as_ref().map_or(&sampled, |(_, i)| i);
+
     let lin = match cached.as_ref().and_then(|e| e.lin.clone()).filter(|(k, _)| *k == lin_key) {
         Some((_, img)) => img,
         None => {
-            // Without a cache the resampled buffer is ours: work on it in place.
-            let mut img = if shared.is_some() { (*sampled).clone() } else { Arc::unwrap_or_clone(sampled.clone()) };
+            // Without a cache (or filters) the resampled buffer is ours: work on it in place.
+            let mut img = if shared.is_some() || filtered.is_some() { (**base).clone() } else { Arc::unwrap_or_clone(sampled.clone()) };
             lin_cpu(&mut img, info, &plan);
-            local::denoise(&mut img, s, detail_scale);
+            local::denoise_with(&mut img, s, detail_scale, req.quality == Quality::Draft);
             Arc::new(img)
         }
     };
@@ -594,16 +697,18 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
     }
     lap("prepare", &mut t);
     if let Some((a, c)) = shared {
-        c.put(CacheEntry { src: a.clone(), geo, sampled, lin: Some((lin_key, lin)), planes });
+        c.put(CacheEntry { src: a.clone(), geo, sampled, filtered, lin: Some((lin_key, lin)), planes });
     }
+    let display_filters = plugin_filters::Stack::resolve(info, s, lcc_develop::FilterStage::Display);
+    let post = finish::Post { stack: &display_filters, frame: plan.filter_frame, warnings: std::cell::RefCell::new(&mut warnings) };
     if req.depth != OutputDepth::U8 {
-        let deep = finish::finish_deep(&prep, s, frame, info, req.space, req.depth, req.proof);
+        let deep = finish::finish_deep(&prep, s, frame, info, req.space, req.depth, req.proof, &post);
         let image = deep.to_rgba8();
         let histogram = Histogram::of_srgb8(&image);
         lap("finish (deep)", &mut t);
-        return Rendered { image, histogram, deep: Some(deep) };
+        return Rendered { image, histogram, deep: Some(deep), warnings };
     }
-    let image = finish::finish(&prep, s, frame, info, req.space, req.display.as_ref(), req.proof);
+    let image = finish::finish(&prep, s, frame, info, req.space, req.display.as_ref(), req.proof, &post);
     lap("finish", &mut t);
     let cut = |i: &Rgba8| match plan.keep {
         Some(k) => i.crop(k.x, k.y, k.w, k.h),
@@ -627,19 +732,22 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
         }
         lap("visualize hdr", &mut t);
     }
-    Rendered { image, histogram, deep: None }
+    Rendered { image, histogram, deep: None, warnings }
 }
 
 /// The colour a colour-range mask would sample at normalized image point `p` (OkLab of the
-/// exposed scene colours, as [`MaskShape::ColorRange`](lightcraft_develop::MaskShape) compares
+/// exposed scene colours, as [`MaskShape::ColorRange`](lcc_develop::MaskShape) compares
 /// them), averaged over 3 × 3 pixels of a render fitting `req`. `None` outside the image.
-pub fn color_range_sample(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, p: lightcraft_geom::Point) -> Option<[f64; 3]> {
+pub fn color_range_sample(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, p: lcc_geom::Point) -> Option<[f64; 3]> {
     // Pick from the same settings as the render: disabled panels contribute nothing, and an
     // SDR preview of an HDR edit includes the SDR rendition's exposure offset.
     let effective = s.effective();
     let rendition = settings_for(&effective, req);
     let plan = plan(src, info, &rendition, req);
     let mut img = plan.frame.sample(src, plan.w, plan.h);
+    if !plan.source_filters.is_empty() {
+        img = Arc::unwrap_or_clone(source_stage::run(src, info, &plan, &img, false, 0, &mut Vec::new()).1);
+    }
     lin_cpu(&mut img, info, &plan);
     let o = plan.frame.norm_to_out(plan.w, plan.h).apply(p);
     let (cx, cy) = (o.x.floor() as i64, o.y.floor() as i64);
@@ -652,7 +760,7 @@ pub fn color_range_sample(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, 
     for y in (cy - 1).max(0)..=(cy + 1).min(plan.h as i64 - 1) {
         for x in (cx - 1).max(0)..=(cx + 1).min(plan.w as i64 - 1) {
             let c = img.data[y as usize * plan.w + x as usize].map(|v| v * gain);
-            let lab = lightcraft_color::perceptual::oklab_from_2020(masks::tonemap_for_select(c));
+            let lab = lcc_color::perceptual::oklab_from_2020(masks::tonemap_for_select(c));
             for k in 0..3 {
                 acc[k] += lab[k] as f64;
             }
@@ -695,7 +803,7 @@ fn overlay_alphas_all(o: Overlay, plan: &Plan<'_>, prep: &Prepared) -> Option<Ve
 /// (default look, keeping the crop so framing matches, under the photo's own rendering process).
 pub fn before_settings(s: &DevelopSettings) -> DevelopSettings {
     let mut b = DevelopSettings { crop: s.crop, orientation: s.orientation, process: s.process, ..DevelopSettings::default() };
-    b.wb = lightcraft_develop::WhiteBalance { mode: lightcraft_develop::WbMode::AsShot, ..b.wb };
+    b.wb = lcc_develop::WhiteBalance { mode: lcc_develop::WbMode::AsShot, ..b.wb };
     b
 }
 
@@ -703,13 +811,13 @@ pub(crate) fn is_bw(s: &DevelopSettings) -> bool {
     s.treatment == Treatment::Bw || s.profile.id == "lc.mono" || s.profile.id.starts_with("lc.bw.")
 }
 
-/// `LIGHTCRAFT_PROFILE` is set: print per-stage timings to stderr.
+/// `{ENV_PREFIX}_PROFILE` is set: print per-stage timings to stderr.
 pub fn profiling() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LIGHTCRAFT_PROFILE").is_some())
+    *ON.get_or_init(|| lcc_brand::env_is_set("PROFILE"))
 }
 
-/// Run `f`, printing its duration under `LIGHTCRAFT_PROFILE`.
+/// Run `f`, printing its duration under `{ENV_PREFIX}_PROFILE`.
 pub(crate) fn timed<R>(what: &str, f: impl FnOnce() -> R) -> R {
     if !profiling() {
         return f();
@@ -727,13 +835,21 @@ pub(crate) fn for_rows<T: Send>(data: &mut [T], w: usize, f: impl Fn(usize, &mut
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod tests_dehaze;
+#[cfg(test)]
 mod tests_geometry;
 #[cfg(test)]
 mod tests_hdr;
 #[cfg(test)]
-mod tests_local;
+mod tests_local_curve;
 #[cfg(test)]
 mod tests_nr_scale;
+#[cfg(test)]
+mod tests_pixel_scale;
+#[cfg(test)]
+mod tests_plugin_filters;
+#[cfg(test)]
+mod tests_sharpen;
 #[cfg(test)]
 mod tests_tone;
 #[cfg(test)]

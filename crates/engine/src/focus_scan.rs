@@ -1,12 +1,12 @@
 //! Reading the camera's focus point for photos already in the library (issue #1480).
 //!
-//! Import reads a photo's focus point ([`lightcraft_meta::focus`]); photos imported before that have none. This job
+//! Import reads a photo's focus point ([`lcc_meta::focus`]); photos imported before that have none. This job
 //! fills them in, cheaply enough to run over a whole library on a spinning disk: it opens only the photos from a body
 //! whose focus data is decoded (by the camera the catalog stores, so nothing else is opened), and reads only the few
-//! kilobytes of each file that hold the focus data ([`lightcraft_meta::focus::read_header`]: about 32 KB of a 75 MB α1
+//! kilobytes of each file that hold the focus data ([`lcc_meta::focus::read_header`]: about 32 KB of a 75 MB α1
 //! ARW), one file at a time on one worker thread.
 //!
-//! - **Commits** go in batches of [`COMMIT_EVERY`] photos (or every [`COMMIT_AFTER`]), as LightCraft's own bookkeeping
+//! - **Commits** go in batches of [`COMMIT_EVERY`] photos (or every [`COMMIT_AFTER`]), as the app's own bookkeeping
 //!   ([`Session::apply_system`]): no undo step, no sidecar write (the focus point is never written to XMP). Only
 //!   `meta.focus` changes, and only on a photo that still has none, still in the library at the same path.
 //! - **"Looked, found nothing"** (manual focus, a centre-only Multi report) is kept beside the library in
@@ -26,9 +26,9 @@ use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use lightcraft_catalog::{Op, PhotoId, Source};
-use lightcraft_meta::FocusPoint;
-use lightcraft_meta::focus::HeaderRead;
+use lcc_catalog::{Op, PhotoId, Source};
+use lcc_meta::FocusPoint;
+use lcc_meta::focus::HeaderRead;
 use serde_json::{Value, json};
 
 use crate::activity::{Cancel, TaskGuard};
@@ -76,7 +76,7 @@ pub fn read_focus(path: &str) -> std::result::Result<HeaderRead, String> {
     use std::io::{Read, Seek, SeekFrom};
     let mut file = std::fs::File::open(path).map_err(|e| format!("{path}: {e}"))?;
     let len = file.metadata().map_err(|e| format!("{path}: {e}"))?.len();
-    lightcraft_meta::focus::read_header(len, &mut |off, buf| {
+    lcc_meta::focus::read_header(len, &mut |off, buf| {
         file.seek(SeekFrom::Start(off))?;
         file.read_exact(buf)
     })
@@ -156,7 +156,7 @@ pub(crate) struct FocusScan {
 impl Default for FocusScan {
     fn default() -> Self {
         FocusScan {
-            record: Scanned::new(RECORD_MAGIC, &lightcraft_meta::focus::decoder_tag()),
+            record: Scanned::new(RECORD_MAGIC, &lcc_meta::focus::decoder_tag()),
             library: None,
             auto_checked: false,
             job: None,
@@ -182,8 +182,8 @@ fn follow_library(s: &mut Session) {
 /// The photos to read: in the library, no focus point yet, from a body whose focus data is decoded, a raw or JPEG file;
 /// with `ids`, those of them; without, every one not already looked at. In path order (neighbours on disk together).
 fn candidates(s: &Session, ids: Option<&[PhotoId]>) -> Vec<(PhotoId, String)> {
-    let wanted = |ph: &lightcraft_catalog::Photo| -> Option<(PhotoId, String)> {
-        if !ph.in_library() || ph.meta.focus.is_some() || !lightcraft_meta::focus::camera_supported(&ph.meta.camera) {
+    let wanted = |ph: &lcc_catalog::Photo| -> Option<(PhotoId, String)> {
+        if !ph.in_library() || ph.meta.focus.is_some() || !lcc_meta::focus::camera_supported(&ph.meta.camera) {
             return None;
         }
         let Source::File { path } = &ph.source else { return None };

@@ -1,0 +1,49 @@
+# Changing anything in [product] is safe at any time: rebuild and repackage.
+[product]
+display_name   = "LightCraft Classic"            # window title, menus, About, dialogs, docs
+short_name     = "LightCraft Classic"            # macOS menu bar, taskbar, notifications
+tagline        = "Photo library and raw development"
+vendor         = "LightCraft Classic contributors"
+homepage       = "https://github.com/emmertex/lightcraft-classic"
+repository     = "https://github.com/emmertex/lightcraft-classic"
+developer_id   = "com.emmertex.lightcraftclassic" # AppStream <developer id>: lowercase reverse-DNS of whoever ships it
+binary         = "lightcraft-classic"            # desktop executable name in packages
+cli_binary     = "lightcraft-classic-cli"
+env_prefix     = "LIGHTCRAFT_CLASSIC"            # <PREFIX>_LOG, <PREFIX>_GPU, …
+mcp_server     = "lightcraft-classic"            # MCP server id shown to agents
+icon_svg       = "brand/icon.svg"       # source for every generated icon
+logo_svg       = "brand/logo.svg"       # identity plate default, About box
+
+# Identifiers stored in users' files and OS registrations. Changing these is allowed, but the old
+# values MUST be appended to [legacy] in the same commit, so existing installs keep working.
+[identity]
+app_id          = "com.emmertex.LightCraftClassic"   # reverse-DNS: bundle id, Flatpak id, MIME/desktop ids
+settings_dir    = "LightCraft Classic"               # ~/.config/<x>, ~/Library/Application Support/<x>, %APPDATA%\<x>
+library_default = "LightCraft Classic Library"       # default catalog folder name under Pictures
+catalog_ext     = "lccat"
+preset_ext      = "lccpreset"
+url_scheme      = "lightcraft-classic"               # <scheme>:// deep links, OAuth redirects
+
+# Never derived from the product name: these stay valid across renames forever.
+[stable]
+xmp_namespace_uri    = "https://ns.example.invalid/develop/1.0/"
+xmp_namespace_prefix = "nnyd"
+catalog_magic        = "PHOTO-CATALOG"      # file-format magic; neutral on purpose
+
+# Previous identities, read on startup for migration (settings, catalogs, presets, env vars).
+[legacy]
+settings_dirs = ["NoNameYet", "LightCraft"]
+env_prefixes  = ["NONAMEYET", "LIGHTCRAFT"]
+preset_exts   = ["nnypreset", "lcpreset"]
+catalog_exts  = ["nnycat"]
+app_ids       = ["org.example.NoNameYet", "org.example.LightCraftClassic"]
+
+# The project this one is forked from, for docs that compare the two ({{upstream_name}}, … in `*.md.in`).
+[upstream]
+name       = "LightCraft"
+repository = "https://github.com/storytold/lightcraft"
+slug       = "storytold/lightcraft"
+
+# Ids of other applications the app looks for (not ours; never renamed with the brand).
+[third_party]
+photocraft_app_id = "ai.storyteller.photocraft"   # PhotoCraft's Flatpak / desktop-entry id (Photo > Edit In)

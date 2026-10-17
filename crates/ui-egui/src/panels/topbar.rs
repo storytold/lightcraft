@@ -3,14 +3,14 @@
 use egui::{Align2, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use serde_json::json;
 
-use crate::LightcraftApp;
+use crate::LccApp;
 use crate::icons::{Icon, paint};
 use crate::theme::Tokens;
 use crate::widgets::{icon_button, register};
 
 /// The bar doubles as the window's title bar: dragging its empty space moves the window and a
 /// double-click zooms or restores it. Registered before the bar's widgets so they win the click.
-fn window_handle(app: &LightcraftApp, ui: &mut egui::Ui, content: Rect, margin_left: f32, margin_right: f32, search_rect: Rect) {
+fn window_handle(app: &LccApp, ui: &mut egui::Ui, content: Rect, margin_left: f32, margin_right: f32, search_rect: Rect) {
     use crate::titlebar::{Gesture, WindowState, command_for};
     let bar = Rect::from_min_max(pos2(content.left() - margin_left, content.top()), pos2(content.right() + margin_right, content.bottom()));
     register(ui.ctx(), "region:titlebar", bar);
@@ -46,7 +46,7 @@ fn window_handle(app: &LightcraftApp, ui: &mut egui::Ui, content: Rect, margin_l
     }
 }
 
-pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+pub fn show(app: &mut LccApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     // room for the traffic lights; in full screen they are gone, and the sidebar button sits as far
     // from the left edge as the Discord button from the right (12 margin + 4)
@@ -80,11 +80,6 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 {
                     let _ = app.run("view.leftPanel", json!({}));
                 }
-                ui.add_space(8.0);
-                if icon_button(ui, "back", Icon::Back, vec2(30.0, 30.0), false, true, crate::i18n::tr("Back")).clicked() {
-                    let _ = app.run("view.back", json!({}));
-                }
-                icon_button(ui, "forward", Icon::Forward, vec2(30.0, 30.0), false, false, crate::i18n::tr("Forward"));
                 if !app.native_menu {
                     // no native menu bar (web, Windows, Linux): menus in the top bar
                     ui.add_space(10.0);
@@ -146,7 +141,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 },
             );
             // badge: how many filters are on, even with the filter bar closed
-            let active = lightcraft_engine::filter_chips(&app.session.filter, &app.session.catalog).len();
+            let active = lcc_engine::filter_chips(&app.session.filter, &app.session.catalog).len();
             if active > 0 {
                 let c = fr.right_top() + vec2(-3.0, 8.0);
                 ui.painter().circle_filled(c, 7.0, t.accent);
@@ -165,7 +160,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             // saving is failing: the cloud icon turns into a warning until a save succeeds
             let unsaved = app.session.unsaved().map(|(n, e)| {
                 crate::i18n::tr_format!(
-                    "{n} change{} saved in memory but not written to disk: {e}\nLightCraft retries automatically; quitting now would lose {}.",
+                    "{n} change{} saved in memory but not written to disk: {e}\n{app} retries automatically; quitting now would lose {}.",
                     if n == 1 { "" } else { "s" },
                     if n == 1 { "it" } else { "them" },
                     e = e,
@@ -180,7 +175,6 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 None => crate::i18n::tr("Import Photos…").to_string(),
             };
             for (id, icon, tip, cmd) in [
-                ("discord", Icon::Chat, "Join the ArtCraft community on Discord", "app.discord"),
                 ("cloud", Icon::Cloud, cloud_tip, ""),
                 ("help", Icon::Help, "Keyboard shortcuts", "app.shortcuts"),
                 ("share", Icon::Share, "Export", "dialog.export"),

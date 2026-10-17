@@ -5,8 +5,8 @@
 //! creator, keywords, capture time and GPS in the standard namespaces, plus our complete develop
 //! settings (`lc:settings`, JSON), the pick/reject flag (`lc:flag`) and location (`lc:location`).
 //!
-//! An existing sidecar is never replaced wholesale (issue #92): LightCraft's properties
-//! ([`OWNED`], [`OWNED_IF_STATED`]) are merged into it ([`lightcraft_meta::merge_xmp`]) and
+//! An existing sidecar is never replaced wholesale (issue #92): The app's properties
+//! ([`OWNED`], [`OWNED_IF_STATED`]) are merged into it ([`lcc_meta::merge_xmp`]) and
 //! everything else — another editor's `crs:` develop settings, `xmpMM` history, unknown
 //! namespaces — is kept byte for byte. A sidecar that can't be read as XMP is first copied to
 //! `<name>.xmp.bak-<time>` (never overwritten), then replaced. Writes are atomic (temp file,
@@ -17,18 +17,21 @@
 //! the first by file name — [`Session::sidecar_naming`]); the others use `<file>.xmp`
 //! (`IMG_0001.JPG.xmp`) for writing and reading, so neither overwrites the other.
 //!
-//! **Read** (on import, and `photo.readMetadataFromFile`): the sidecar wins for metadata, except
-//! the capture time: a time embedded in the file wins, and the sidecar's (`exif:DateTimeOriginal`,
+//! **Read** (on import, and `photo.readMetadataFromFile`): the sidecar wins for metadata (GPS
+//! included: a position in the sidecar replaces the one the camera embedded, as the MWG guidelines
+//! have it for XMP over Exif), except the capture time: a time embedded in the file wins, and the sidecar's (`exif:DateTimeOriginal`,
 //! else `photoshop:DateCreated`, else `xmp:CreateDate`) fills in only when the file has none; develop
 //! settings are restored from `lc:settings` when present, else mapped from interoperable `crs:`
 //! fields ([`crate::crs`]). For raw/DNG files without a sidecar the file's embedded XMP is used.
+//! Manual reads also accept the first complete standard XMP APP1 in a bounded JPEG header (see `read_jpeg_xmp`).
 
 use std::collections::HashMap;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use lightcraft_catalog::{ColorLabel, Flag, MediaKind, Op, Photo, PhotoId, Source};
-use lightcraft_develop::DevelopSettings;
+use lcc_catalog::{ColorLabel, Flag, MediaKind, Op, Photo, PhotoId, SidecarStat, Source, XmpStatus};
+use lcc_develop::DevelopSettings;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -112,15 +115,27 @@ pub struct SidecarData {
     pub country: Option<String>,
     pub alt_text: Option<String>,
     pub extended_description: Option<String>,
+    /// `exif:GPSLatitude` / `exif:GPSLongitude` (latitude, longitude): wins over a position embedded in the file.
+    pub gps: Option<(f64, f64)>,
     pub keywords: Option<Vec<String>>,
-    pub regions: Option<Vec<lightcraft_meta::Region>>,
+    pub regions: Option<Vec<lcc_meta::Region>>,
     /// Capture time (ISO 8601) from `exif:DateTimeOriginal`, `photoshop:DateCreated` or
     /// `xmp:CreateDate` (first found). Used only when the file itself has no capture time.
     pub captured: Option<String>,
     pub develop: Option<DevelopPatch>,
+    /// A video clip's trim (`lcvid:trimIn`, `lcvid:trimOut`; seconds, `None` out = the end), when stated.
+    pub video_trim: Option<(f64, Option<f64>)>,
+    /// A video clip's poster frame time (`lcvid:posterTime`), when stated.
+    pub video_poster: Option<f64>,
     /// Actionable diagnostics for foreign develop settings that were not fully carried over.
     /// These are surfaced in the photo import report and never persisted in the catalog.
     pub warnings: Vec<crate::import::ImportWarning>,
+    /// Plug-in custom metadata fields (`lcpf:fields`): `(plug-in id, key, value as text)`. They go back
+    /// to the plug-ins' own data ([`crate::cmd::plugins::restore_fields`]), not into the photo record.
+    pub plugin_fields: Vec<(String, String, String)>,
+    /// The pixel-filter plug-in stack (`lcpx:filters`), checked, uids reassigned; `None` when the sidecar has none
+    /// (then `lc:settings`, if any, decides).
+    pub plugin_filters: Option<Vec<lcc_develop::PluginFilter>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -135,10 +150,14 @@ pub enum DevelopPatch {
 /// ([`crate::crs::Target`]: absolute Kelvin for raws with a measured illuminant, a shift from the
 /// as-shot white for everything developed relative to it).
 pub fn parse_sidecar(xmp: &str, target: crate::crs::Target) -> std::result::Result<SidecarData, String> {
-    let d = lightcraft_meta::parse_xmp(xmp).map_err(|e| e.to_string())?;
+    let d = lcc_meta::parse_xmp(xmp).map_err(|e| e.to_string())?;
     let m = &d.metadata;
     let lc = |k: &str| d.properties.get(&format!("lc:{k}")).and_then(|v| v.first()).cloned();
     let mut out = SidecarData {
+        plugin_fields: lcc_meta::plugin_fields(&d),
+        // read a few more than fit, so skipped malformed entries don't hide good ones after them
+        plugin_filters: lcc_meta::plugin_filters(&d, lcc_develop::MAX_PLUGIN_FILTERS.saturating_mul(4))
+            .map(|e| crate::cmd::plugin_filters::stack_from_xmp(&e)),
         title: m.title.clone(),
         caption: m.caption.clone(),
         copyright: m.copyright.clone(),
@@ -152,17 +171,29 @@ pub fn parse_sidecar(xmp: &str, target: crate::crs::Target) -> std::result::Resu
         country: m.country.clone(),
         alt_text: m.alt_text.clone(),
         extended_description: m.extended_description.clone(),
+        gps: m.gps.map(|g| (g.latitude, g.longitude)),
         keywords: (!m.keywords.is_empty() || !m.hierarchical_keywords.is_empty())
-            .then(|| lightcraft_catalog::keywords::from_file(&m.keywords, &m.hierarchical_keywords)),
+            .then(|| lcc_catalog::keywords::from_file(&m.keywords, &m.hierarchical_keywords)),
         // A sidecar that has `mwg-rs:Regions` at all (even an empty list) was written by an app that
         // knows about regions, so it's authoritative: its list, empty or not, replaces the catalog's.
-        // One without it (most writers, LightCraft's own included, which keeps another app's
+        // One without it (most writers, the app's own included, which keeps another app's
         // `mwg-rs:Regions` byte for byte but never writes one) says nothing about regions, and the
         // photo's are kept.
         regions: d.values.contains_key("mwg-rs:Regions").then(|| m.regions.clone()),
         captured: m.capture_time.map(|d| d.to_iso()),
         ..Default::default()
     };
+    let vid = |k: &str| {
+        d.properties
+            .get(&format!("{}:{k}", lcc_meta::VIDEO_PREFIX))
+            .and_then(|v| v.first())
+            .and_then(|t| t.trim().parse::<f64>().ok())
+            .filter(|t| t.is_finite())
+    };
+    if let Some(t_in) = vid("trimIn") {
+        out.video_trim = Some((t_in, vid("trimOut")));
+    }
+    out.video_poster = vid("posterTime");
     if let Some(r) = m.rating {
         if r < 0 {
             out.flag = Some(Flag::Reject);
@@ -250,7 +281,8 @@ pub fn parse_sidecar(xmp: &str, target: crate::crs::Target) -> std::result::Resu
 /// Apply sidecar data to a photo record (the sidecar wins, except that a capture time embedded in
 /// the file is kept). Returns true if develop changed.
 pub fn merge_into(p: &mut Photo, sc: &SidecarData, now: &str) -> bool {
-    if p.captured.is_none() {
+    // (a date import guessed from the file's modification time is no capture time: the sidecar's wins)
+    if p.captured_stated().is_none() && sc.captured.is_some() {
         p.captured = sc.captured.clone();
     }
     if let Some(r) = sc.rating {
@@ -281,8 +313,11 @@ pub fn merge_into(p: &mut Photo, sc: &SidecarData, now: &str) -> bool {
             *dst = v.clone();
         }
     }
+    if let Some(gps) = sc.gps {
+        m.gps = Some(gps);
+    }
     if let Some(marked) = sc.copyright_marked {
-        m.copyright_status = lightcraft_catalog::CopyrightStatus::from_marked(Some(marked));
+        m.copyright_status = lcc_catalog::CopyrightStatus::from_marked(Some(marked));
     }
     if let Some(k) = &sc.keywords {
         m.keywords = k.clone();
@@ -290,17 +325,34 @@ pub fn merge_into(p: &mut Photo, sc: &SidecarData, now: &str) -> bool {
     if let Some(r) = &sc.regions {
         m.regions = r.clone();
     }
-    let develop = match &sc.develop {
+    // a clip's trim and poster, when the photo is a probed clip and the values fit it (bad ones are ignored)
+    if let Some(v) = p.video.as_mut() {
+        if let Some((t_in, t_out)) = sc.video_trim
+            && lcc_catalog::validate_trim(v.duration, t_in, t_out).is_ok()
+        {
+            (v.trim_in, v.trim_out) = (t_in, t_out);
+        }
+        if let Some(t) = sc.video_poster
+            && lcc_catalog::validate_poster(v.duration, Some(t)).is_ok()
+        {
+            v.poster_time = Some(t);
+        }
+    }
+    let mut develop = match &sc.develop {
         Some(DevelopPatch::Full(s)) => (**s).clone(),
         Some(DevelopPatch::Partial(v)) => {
             let mut v = v.clone();
             if p.width > 0 && p.height > 0 {
                 crate::crs_masks::refit_radials(&mut v, crate::crs_masks::DEFAULT_ASPECT, p.width as f64 / p.height as f64);
             }
-            lightcraft_develop::apply_partial(&p.develop, &v, 1.0)
+            lcc_develop::apply_partial(&p.develop, &v, 1.0)
         }
+        None if sc.plugin_filters.is_some() => (*p.develop).clone(),
         None => return false,
     };
+    if let Some(f) = &sc.plugin_filters {
+        develop.plugin_filters = f.clone();
+    }
     if develop == *p.develop {
         return false;
     }
@@ -312,7 +364,7 @@ pub fn merge_into(p: &mut Photo, sc: &SidecarData, now: &str) -> bool {
 impl SidecarData {
     /// Read the label through the catalog's label names: other editors write the label's name
     /// (a custom set's "To Do" as well as "Red"); unknown names clear the label.
-    pub fn resolve_label(mut self, cat: &lightcraft_catalog::Catalog) -> Self {
+    pub fn resolve_label(mut self, cat: &lcc_catalog::Catalog) -> Self {
         if let Some(t) = &self.label_text {
             self.label = Some(if t.is_empty() { None } else { cat.label_from_name(t) });
         }
@@ -322,16 +374,21 @@ impl SidecarData {
 
 /// The sidecar packet for a photo; the colour label is written by its name in `cat` (custom
 /// label names included, as other editors do).
-pub fn sidecar_packet(p: &Photo, cat: &lightcraft_catalog::Catalog) -> String {
+pub fn sidecar_packet(p: &Photo, cat: &lcc_catalog::Catalog) -> String {
     sidecar_packet_with(p, cat, false)
 }
 
 /// [`sidecar_packet`], without any location (GPS, sublocation, city, state, country) when
 /// `remove_location` is set (an export with "Remove location info").
-pub fn sidecar_packet_with(p: &Photo, cat: &lightcraft_catalog::Catalog, remove_location: bool) -> String {
+pub fn sidecar_packet_with(p: &Photo, cat: &lcc_catalog::Catalog, remove_location: bool) -> String {
+    packet(p, cat, remove_location, true)
+}
+
+/// [`sidecar_packet_with`]; the GPS position is left out unless `gps` is set.
+fn packet(p: &Photo, cat: &lcc_catalog::Catalog, remove_location: bool, gps: bool) -> String {
     let nz = |s: &str| (!s.trim().is_empty()).then(|| s.to_string());
-    let meta = lightcraft_meta::Metadata {
-        software: Some("LightCraft".into()),
+    let meta = lcc_meta::Metadata {
+        software: Some(lcc_brand::DISPLAY_NAME.into()),
         title: nz(&p.meta.title),
         caption: nz(&p.meta.caption),
         alt_text: nz(&p.meta.alt_text),
@@ -348,15 +405,24 @@ pub fn sidecar_packet_with(p: &Photo, cat: &lightcraft_catalog::Catalog, remove_
         keywords: p.meta.keywords.clone(),
         rating: Some(p.rating.min(5) as i8),
         label: p.label.map(|l| cat.label_name(l)),
-        capture_time: p.captured.as_deref().and_then(lightcraft_meta::DateTime::parse_iso),
-        gps: p.meta.gps.map(|(latitude, longitude)| lightcraft_meta::Gps { latitude, longitude, altitude: None }),
+        // (never the file's modification time standing in for a capture time nobody stated)
+        capture_time: p.captured_stated().and_then(lcc_meta::DateTime::parse_iso),
+        gps: p.meta.gps.filter(|_| gps).map(|(latitude, longitude)| lcc_meta::Gps { latitude, longitude, altitude: None }),
         ..Default::default()
     };
     let mut meta = meta;
     if remove_location {
         (meta.sublocation, meta.city, meta.state, meta.country, meta.gps) = (None, None, None, None, None);
     }
-    let settings = serde_json::to_string(&*p.develop).unwrap_or_default();
+    // the pixel-filter stack goes in its own namespace, not in `lc:settings`
+    let filters: Vec<lcc_meta::XmpPluginFilter> = p.develop.plugin_filters.iter().map(crate::cmd::plugin_filters::to_xmp).collect();
+    let settings = if filters.is_empty() {
+        serde_json::to_string(&*p.develop).unwrap_or_default()
+    } else {
+        let mut d = (*p.develop).clone();
+        d.plugin_filters.clear();
+        serde_json::to_string(&d).unwrap_or_default()
+    };
     let flag = match p.flag {
         Flag::None => "none",
         Flag::Pick => "pick",
@@ -366,11 +432,30 @@ pub fn sidecar_packet_with(p: &Photo, cat: &lightcraft_catalog::Catalog, remove_
     if !remove_location && !p.meta.location.trim().is_empty() {
         lc.push(("location", p.meta.location.as_str()));
     }
-    lightcraft_meta::write_xmp_lc(&meta, &lc)
+    // plug-in custom metadata fields, under their own namespace
+    let fields: Vec<(String, String, String)> = p
+        .plugin_fields
+        .iter()
+        .filter_map(|(k, v)| k.split_once('/').map(|(plugin, key)| (plugin.to_string(), key.to_string(), lcc_catalog::rules::plugin_value_text(v))))
+        .collect();
+    let fields: Vec<(&str, &str, &str)> = fields.iter().map(|(a, b, c)| (a.as_str(), b.as_str(), c.as_str())).collect();
+    // a video clip's trim and poster, in the fork's video namespace
+    let mut video: Vec<(&str, String)> = Vec::new();
+    if let Some(v) = &p.video {
+        video.push(("trimIn", v.trim_in.to_string()));
+        if let Some(o) = v.trim_out {
+            video.push(("trimOut", o.to_string()));
+        }
+        if let Some(t) = v.poster_time {
+            video.push(("posterTime", t.to_string()));
+        }
+    }
+    let video: Vec<(&str, &str)> = video.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    lcc_meta::write_xmp_filters(&meta, &lc, &fields, &video, &filters)
 }
 
-/// The properties LightCraft writes and owns in a sidecar: replaced on every save (removed when
-/// LightCraft has no value, so clearing a field clears it in the file too). All of them are read
+/// The properties the app writes and owns in a sidecar: replaced on every save (removed when
+/// The app has no value, so clearing a field clears it in the file too). All of them are read
 /// back on import and by Read Metadata from File.
 pub const OWNED: &[&str] = &[
     "xmp:Rating",
@@ -390,16 +475,18 @@ pub const OWNED: &[&str] = &[
     "xmpRights:UsageTerms",
     "xmpRights:WebStatement",
     "lc:*",
+    "lcvid:*",
+    "lcpx:*",
 ];
 
-/// Properties replaced only when LightCraft has a value (capture time; GPS, which LightCraft
-/// doesn't read from sidecars): otherwise the sidecar's own value stays. Anything else LightCraft
+/// Properties replaced only when the app has a value (capture time, GPS): otherwise the
+/// sidecar's own value stays. Anything else the app
 /// writes (`xmp:CreatorTool`) goes only into new sidecars.
 pub const OWNED_IF_STATED: &[&str] = &["exif:DateTimeOriginal", "photoshop:DateCreated", "exif:GPSLatitude", "exif:GPSLongitude"];
 
 /// Write `data` to `path` atomically: a temp file next to it, synced, then renamed over it.
 fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
-    lightcraft_catalog::safe_file::write_atomic(path, data)
+    lcc_catalog::safe_file::write_atomic(path, data)
 }
 
 /// Copy `path` to a new `<name>.bak-<stamp>` (`-1`, `-2`… if taken; never overwriting).
@@ -433,30 +520,38 @@ pub struct SidecarSaved {
     pub backup: Option<PathBuf>,
 }
 
-/// The new contents for the sidecar at `path`: `fresh` merged into the existing file, if any.
-/// Returns (contents, merged, backup).
-fn sidecar_contents(path: &Path, fresh: String, stamp: &str) -> std::io::Result<(String, bool, Option<PathBuf>)> {
+/// The new contents for photo `p`'s sidecar at `path`: its packet merged into the existing file,
+/// if any. Returns (contents, merged, backup).
+fn sidecar_contents(path: &Path, p: &Photo, cat: &lcc_catalog::Catalog, stamp: &str) -> std::io::Result<(String, bool, Option<PathBuf>)> {
     let bytes = match std::fs::read(path) {
         Ok(b) => b,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((fresh, false, None)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((sidecar_packet(p, cat), false, None)),
         // can't see what is there: never overwrite it blindly
         Err(e) => return Err(e),
     };
     if bytes.iter().all(u8::is_ascii_whitespace) {
-        return Ok((fresh, false, None));
+        return Ok((sidecar_packet(p, cat), false, None));
     }
-    let rules = lightcraft_meta::MergeRules { owned: OWNED, owned_if_present: OWNED_IF_STATED };
+    let rules = lcc_meta::MergeRules { owned: OWNED, owned_if_present: OWNED_IF_STATED };
     match std::str::from_utf8(&bytes)
         .map_err(|e| e.to_string())
-        .and_then(|old| lightcraft_meta::merge_xmp(old, &fresh, rules).map_err(|e| e.to_string()))
+        .and_then(|old| lcc_meta::merge_xmp(old, &packet(p, cat, false, !states_gps(old, p.meta.gps)), rules).map_err(|e| e.to_string()))
     {
         Ok(merged) => Ok((merged, true, None)),
         Err(why) => {
             let b = backup(path, stamp)?;
             log::warn!("{}: not readable as XMP ({why}); kept a copy as {} before replacing it", path.display(), b.display());
-            Ok((fresh, false, Some(b)))
+            Ok((sidecar_packet(p, cat), false, Some(b)))
         }
     }
+}
+
+/// Whether packet `old` already states position `gps` (to about a centimetre). Saving leaves such a
+/// position as the file writes it, in its own precision and form, rather than rewriting it from the
+/// library's copy: GPS read from a sidecar goes back unchanged unless it was changed here.
+fn states_gps(old: &str, gps: Option<(f64, f64)>) -> bool {
+    let (Some((lat, lon)), Some(g)) = (gps, lcc_meta::parse_xmp(old).ok().and_then(|d| d.metadata.gps)) else { return false };
+    (g.latitude - lat).abs() < 1e-7 && (g.longitude - lon).abs() < 1e-7
 }
 
 /// Key of the stem sidecar a file maps to (case-insensitive).
@@ -491,24 +586,93 @@ fn stem_key_into(key: &mut String, original: &str) {
     }
 }
 
-fn file_path(p: &Photo) -> Option<&str> {
+pub(crate) fn file_path(p: &Photo) -> Option<&str> {
     match &p.source {
         Source::File { path } => Some(path),
         Source::Demo { .. } => None,
     }
 }
 
-/// The XMP packet that describes a photo on disk: its sidecar, else (raw/DNG) the embedded XMP.
+/// The XMP packet that describes a photo on disk: its sidecar, else embedded raw/DNG or JPEG XMP.
 pub fn read_packet(original: &str, kind: MediaKind, naming: SidecarNaming) -> Option<(String, PathBuf)> {
-    if let Some(sc) = find_sidecar(original, naming)
-        && let Ok(s) = std::fs::read_to_string(&sc)
-    {
-        return Some((s, sc));
+    if let Some(sc) = find_sidecar(original, naming) {
+        // A discovered sidecar keeps precedence even when reading it fails.
+        return std::fs::read_to_string(&sc).ok().map(|s| (s, sc));
     }
     if kind == MediaKind::Raw {
         let bytes = std::fs::read(original).ok()?;
-        let x = lightcraft_meta::embedded(&bytes).xmp?;
+        let x = lcc_meta::embedded(&bytes).xmp?;
         return Some((x, PathBuf::from(original)));
+    }
+    if kind == MediaKind::Image {
+        let mut file = std::fs::File::open(original).ok()?;
+        let mut soi = [0; 2];
+        file.read_exact(&mut soi).ok()?;
+        file.seek(SeekFrom::Start(0)).ok()?;
+        // A JPEG is read only up to its first XMP segment; other images (TIFF, PNG, ...) whole.
+        let x = if soi == [0xff, 0xd8] {
+            read_jpeg_xmp(&mut file, JPEG_XMP_HEADER_SPAN, JPEG_XMP_HEADER_STEPS)?
+        } else {
+            let mut bytes = Vec::new();
+            file.read_to_end(&mut bytes).ok()?;
+            lcc_meta::embedded(&bytes).xmp?
+        };
+        return Some((x, PathBuf::from(original)));
+    }
+    None
+}
+
+const JPEG_XMP_HEADER_SPAN: u64 = 16 * 1024 * 1024;
+const JPEG_XMP_HEADER_STEPS: usize = 4096;
+
+/// Read from SOI at the current position, stopping at the first standard XMP packet or SOS/EOI.
+/// The span includes SOI, segment headers and skipped payloads; each marker/fill step after SOI
+/// consumes one iteration. Only a complete APP1 payload (at most 65533 bytes) reaches the shared
+/// parser, in a single SOI+APP1 wrapper (at most 65539 bytes). This does not validate the whole JPEG.
+fn read_jpeg_xmp(reader: &mut (impl Read + Seek), header_span: u64, marker_steps: usize) -> Option<String> {
+    let mut header = reader.take(header_span);
+    let mut soi = [0; 2];
+    header.read_exact(&mut soi).ok()?;
+    if soi != [0xff, 0xd8] {
+        return None;
+    }
+    let mut filled = false;
+    for _ in 0..marker_steps {
+        if !filled {
+            let mut prefix = [0];
+            header.read_exact(&mut prefix).ok()?;
+            if prefix != [0xff] {
+                return None;
+            }
+        }
+        let mut code = [0];
+        header.read_exact(&mut code).ok()?;
+        let [marker] = code;
+        filled = marker == 0xff;
+        match marker {
+            0xff | 0xd8 | 0xd0..=0xd7 | 0x01 => continue,
+            0xd9 | 0xda => return None,
+            _ => {}
+        }
+        let mut length = [0; 2];
+        header.read_exact(&mut length).ok()?;
+        let payload_len = u16::from_be_bytes(length).checked_sub(2)?;
+        let remaining = header.limit().checked_sub(u64::from(payload_len))?;
+        if marker != 0xe1 {
+            // Seeking must spend the same span budget as reading, before the seek is attempted.
+            header.set_limit(remaining);
+            header.get_mut().seek(SeekFrom::Current(i64::from(payload_len))).ok()?;
+            continue;
+        }
+        let segment_len = 6usize.checked_add(usize::from(payload_len))?;
+        let [hi, lo] = length;
+        let mut segment = Vec::with_capacity(segment_len);
+        segment.extend_from_slice(&[0xff, 0xd8, 0xff, 0xe1, hi, lo]);
+        segment.resize(segment_len, 0);
+        header.read_exact(segment.get_mut(6..)?).ok()?;
+        if let Some(xmp) = lcc_meta::jpeg_segments(&segment).xmp {
+            return Some(xmp);
+        }
     }
     None
 }
@@ -535,7 +699,7 @@ impl StemOwners {
     /// [`StemOwners::among`] must agree with for the photos it is asked about (this is how the
     /// owners were worked out before, for every write).
     #[cfg(test)]
-    pub(crate) fn of(cat: &lightcraft_catalog::Catalog) -> StemOwners {
+    pub(crate) fn of(cat: &lcc_catalog::Catalog) -> StemOwners {
         let mut best: HashMap<String, ((bool, String, u64), PhotoId, usize)> = HashMap::new();
         for p in cat.photos().filter(|p| p.copy_of.is_none()) {
             let Some(path) = file_path(p) else { continue };
@@ -552,7 +716,7 @@ impl StemOwners {
     /// The owners of the stems photos `ids` map to: all that naming those photos needs. The
     /// library is passed over once, and only files of those stems are looked at closer, so a
     /// sidecar written for one photo does not cost a table of the whole library.
-    pub(crate) fn among(cat: &lightcraft_catalog::Catalog, ids: &[PhotoId]) -> StemOwners {
+    pub(crate) fn among(cat: &lcc_catalog::Catalog, ids: &[PhotoId]) -> StemOwners {
         let wanted: std::collections::HashSet<String> =
             ids.iter().filter_map(|id| cat.photo(*id)).filter_map(|p| file_path(p)).map(stem_key).collect();
         if wanted.is_empty() {
@@ -562,7 +726,7 @@ impl StemOwners {
     }
 
     /// The owners of the shared stems in `wanted`.
-    fn where_wanted(cat: &lightcraft_catalog::Catalog, wanted: &std::collections::HashSet<String>) -> StemOwners {
+    fn where_wanted(cat: &lcc_catalog::Catalog, wanted: &std::collections::HashSet<String>) -> StemOwners {
         // per stem: (raw first, then file name, then id) of the best candidate; and how many
         let mut best: HashMap<String, ((bool, String, u64), PhotoId, usize)> = HashMap::new();
         let mut key = String::new();
@@ -593,7 +757,7 @@ impl StemOwners {
 
 /// How the sidecar of each of photos `ids` is named in library `cat`, whose naming is `naming`
 /// ([`Session::sidecar_namings`], for a thread that has the library and not the session).
-pub(crate) fn namings_in(cat: &lightcraft_catalog::Catalog, naming: SidecarNaming, ids: &[PhotoId]) -> Vec<SidecarNaming> {
+pub(crate) fn namings_in(cat: &lcc_catalog::Catalog, naming: SidecarNaming, ids: &[PhotoId]) -> Vec<SidecarNaming> {
     let owners = (naming == SidecarNaming::Stem).then(|| StemOwners::among(cat, ids));
     ids.iter()
         .map(|id| match (cat.photo(*id), &owners) {
@@ -627,7 +791,7 @@ impl Session {
     }
 
     pub(crate) fn save_sidecar_with(&mut self, id: PhotoId, owners: &StemOwners) -> Result<SidecarSaved> {
-        let p = self.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?;
+        let p = self.catalog.photo(id).ok_or(lcc_catalog::CatalogError::NoPhoto(id))?;
         if p.copy_of.is_some() {
             return Err(EngineError::Other(format!("{} is a virtual copy: its settings live only in the library", p.file_name)));
         }
@@ -656,9 +820,9 @@ impl Session {
         let listed = existing.iter().find(|path| crate::rename::RealFs.listed(path)).cloned();
         let path = listed.or_else(|| existing.into_iter().next()).unwrap_or(preferred);
         self.validate_sidecar_packets_for_paths(std::slice::from_ref(&path), &crate::rename::RealFs)?;
-        let p = self.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?;
+        let p = self.catalog.photo(id).ok_or(lcc_catalog::CatalogError::NoPhoto(id))?;
         let err = |e: std::io::Error| EngineError::Other(format!("{}: {e}", path.display()));
-        let (data, merged, backup) = sidecar_contents(&path, sidecar_packet(p, &self.catalog), &(self.clock)()).map_err(err)?;
+        let (data, merged, backup) = sidecar_contents(&path, p, &self.catalog, &(self.clock)()).map_err(err)?;
         write_atomic(&path, data.as_bytes()).map_err(err)?;
         self.note_sidecar_write(&path, data.as_bytes());
         Ok(SidecarSaved { path, merged, backup })
@@ -666,27 +830,44 @@ impl Session {
 
     /// The op that applies a photo's sidecar (or embedded XMP) to the catalog, if there is one.
     pub fn read_sidecar_op(&self, id: PhotoId) -> Result<Option<(Op, PathBuf)>> {
-        self.read_sidecar_op_with_warnings(id).map(|result| result.map(|(op, from, _)| (op, from)))
+        self.read_sidecar_op_with_warnings(id).map(|result| result.map(|(op, from, _, _)| (op, from)))
     }
 
     /// Like [`Session::read_sidecar_op`], retaining transient diagnostics for the command report.
-    pub fn read_sidecar_op_with_warnings(&self, id: PhotoId) -> Result<Option<(Op, PathBuf, Vec<crate::import::ImportWarning>)>> {
-        let p = self.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?;
+    /// The sidecar's plug-in fields come back too (see [`SidecarData::plugin_fields`]).
+    #[allow(clippy::type_complexity)]
+    pub fn read_sidecar_op_with_warnings(
+        &self,
+        id: PhotoId,
+    ) -> Result<Option<(Op, PathBuf, Vec<crate::import::ImportWarning>, Vec<(String, String, String)>)>> {
+        self.read_sidecar_op_named(id, self.sidecar_naming(id))
+    }
+
+    /// [`Session::read_sidecar_op_with_warnings`] with the photo's sidecar naming already worked
+    /// out ([`Session::sidecar_namings`] once for many photos: per photo it is quadratic).
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn read_sidecar_op_named(
+        &self,
+        id: PhotoId,
+        naming: SidecarNaming,
+    ) -> Result<Option<(Op, PathBuf, Vec<crate::import::ImportWarning>, Vec<(String, String, String)>)>> {
+        let p = self.catalog.photo(id).ok_or(lcc_catalog::CatalogError::NoPhoto(id))?;
         let Some(orig) = file_path(p) else { return Ok(None) };
-        let Some((packet, from)) = read_packet(orig, p.kind, self.sidecar_naming(id)) else { return Ok(None) };
+        let Some((packet, from)) = read_packet(orig, p.kind, naming) else { return Ok(None) };
         let sc = parse_sidecar(&packet, crate::crs::Target::for_photo(p)).map_err(|e| EngineError::Other(format!("{}: {e}", from.display())))?;
         let mut warnings = sc.warnings.clone();
         for warning in &mut warnings {
             warning.path = orig.to_string();
         }
+        let fields = sc.plugin_fields.clone();
         let op = self.sidecar_op(id, sc)?;
-        Ok(Some((op, from, warnings)))
+        Ok(Some((op, from, warnings, fields)))
     }
 
     /// The op that applies what a sidecar says (already read and parsed, e.g. on a worker
     /// thread) to photo `id`: the sidecar wins. No file is read.
     pub fn sidecar_op(&self, id: PhotoId, sc: SidecarData) -> Result<Op> {
-        let p = self.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?;
+        let p = self.catalog.photo(id).ok_or(lcc_catalog::CatalogError::NoPhoto(id))?;
         let sc = sc.resolve_label(&self.catalog);
         let mut q = (**p).clone();
         let develop_changed = merge_into(&mut q, &sc, &(self.clock)());
@@ -705,11 +886,58 @@ impl Session {
         Ok(Op::Batch { ops })
     }
 
+    /// What the file system says about photo `id`'s sidecar now (`None`: it has none, or isn't a file).
+    pub fn sidecar_stat(&self, id: PhotoId) -> Option<SidecarStat> {
+        self.sidecar_stat_named(id, self.sidecar_naming(id))
+    }
+
+    /// [`Session::sidecar_stat`] with the photo's sidecar naming already worked out (working it
+    /// out is a pass over the whole catalog: per photo of a large import it is quadratic).
+    fn sidecar_stat_named(&self, id: PhotoId, naming: SidecarNaming) -> Option<SidecarStat> {
+        let p = self.catalog.photo(id)?;
+        let orig = file_path(p)?;
+        let f = find_sidecar(orig, naming)?;
+        let m = std::fs::metadata(f).ok()?;
+        let mtime =
+            m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).and_then(|d| i64::try_from(d.as_secs()).ok()).unwrap_or(0);
+        Some(SidecarStat { mtime, size: m.len() })
+    }
+
+    /// The metadata-vs-XMP state of photo `id` (see [`lcc_catalog::xmp_state`]).
+    pub fn xmp_status(&self, id: PhotoId) -> XmpStatus {
+        match self.catalog.photo(id) {
+            Some(p) => p.xmp_status(self.sidecar_stat(id)),
+            None => XmpStatus::Unknown,
+        }
+    }
+
+    /// Record that the photos' catalog state and their sidecars are in step now (right after a
+    /// read from or write to the sidecar): app bookkeeping, journaled but not an undo step.
+    /// With `only_with_sidecar`, photos without a sidecar file are skipped.
+    pub(crate) fn record_xmp_stamps(&mut self, ids: &[PhotoId], only_with_sidecar: bool) {
+        let namings = self.sidecar_namings(ids);
+        for (id, naming) in ids.iter().zip(namings) {
+            let stat = self.sidecar_stat_named(*id, naming);
+            if only_with_sidecar && stat.is_none() {
+                continue;
+            }
+            let Some(p) = self.catalog.photo(*id) else { continue };
+            let stamp = Some(p.xmp_stamp_now(stat));
+            if p.xmp == stamp {
+                continue;
+            }
+            let op = Op::SetXmpStamp { id: *id, stamp };
+            if self.catalog.apply(op.clone()).is_ok() {
+                self.pending_log.push(op);
+            }
+        }
+    }
+
     /// Auto-write: sidecars for photos changed by `ops` (errors are logged, not returned).
     pub(crate) fn auto_write_sidecars(&mut self, ops: &[Op]) {
         let mut ids = Vec::new();
         ops.iter().for_each(|o| op_photos(o, &mut ids));
-        self.auto_write_sidecar_ids(ids);
+        self.auto_write_sidecars_of(ids);
     }
 
     /// Gather changed IDs before the saves mutate retained physical repair queues.
@@ -718,19 +946,22 @@ impl Session {
         if let Some(ops) = self.pending_log.get(log_start..) {
             ops.iter().for_each(|o| op_photos(o, &mut ids));
         }
-        self.auto_write_sidecar_ids(ids);
+        self.auto_write_sidecars_of(ids);
     }
 
-    fn auto_write_sidecar_ids(&mut self, ids: Vec<PhotoId>) {
+    /// [`Session::auto_write_sidecars`] for photos changed outside ops (plug-in fields).
+    pub(crate) fn auto_write_sidecars_of(&mut self, ids: Vec<PhotoId>) {
         if ids.is_empty() {
             return;
         }
         let owners = StemOwners::among(&self.catalog, &ids);
+        let mut written = Vec::new();
         for id in ids {
             if self.catalog.photo(id).is_some_and(|p| file_path(p).is_some() && p.copy_of.is_none()) {
                 match self.save_sidecar_with(id, &owners) {
                     Ok(_) => {
                         self.unsaved_sidecars.remove(&id);
+                        written.push(id);
                     }
                     Err(e) => {
                         // kept for a retry once the file is reachable: a network share that dropped out mustn't leave
@@ -741,6 +972,7 @@ impl Session {
                 }
             }
         }
+        self.record_xmp_stamps(&written, false);
     }
 
     /// How many photos have an automatic sidecar write waiting (it failed: the folder offline, read-only or full).
@@ -790,17 +1022,17 @@ mod tests {
     /// gives the photo its keywords as paths.
     #[test]
     fn sidecar_keywords_keep_their_hierarchy() {
-        let m = lightcraft_meta::Metadata {
+        let m = lcc_meta::Metadata {
             keywords: vec!["Lisbon".into(), "Places".into()],
             hierarchical_keywords: vec!["Places|Lisbon".into()],
             ..Default::default()
         };
-        let sc = super::parse_sidecar(&lightcraft_meta::write_xmp(&m, None), crate::crs::Target::Rendered).unwrap();
+        let sc = super::parse_sidecar(&lcc_meta::write_xmp(&m, None), crate::crs::Target::Rendered).unwrap();
         assert_eq!(sc.keywords, Some(vec!["Places|Lisbon".to_string()]));
     }
 
     use super::*;
-    use lightcraft_catalog::Meta;
+    use lcc_catalog::Meta;
 
     fn photo() -> Photo {
         let mut p = Photo::new(PhotoId(7), Source::File { path: "/x/IMG_1.jpg".into() }, "IMG_1.jpg", "JPEG", 40, 30, "2026-01-01T00:00:00");
@@ -822,9 +1054,152 @@ mod tests {
         d.light.exposure = 0.75;
         d.effects.clarity = 22.0;
         d.crop.geometry.angle = 2.5;
-        d.masks.push(lightcraft_develop::Mask { id: 1, ..Default::default() });
+        d.masks.push(lcc_develop::Mask { id: 1, ..Default::default() });
         p.develop = Arc::new(d);
         p
+    }
+
+    /// A clip's trim and poster go out under the fork's video namespace and come back; values that don't
+    /// fit the clip are ignored on read; a still photo writes none.
+    #[test]
+    fn video_trim_and_poster_roundtrip() {
+        let mut p = Photo::new(PhotoId(3), Source::File { path: "/v/c.mp4".into() }, "c.mp4", "MP4", 1, 1, "2026-01-01T00:00:00");
+        p.kind = lcc_catalog::MediaKind::Video;
+        let v = lcc_catalog::VideoMeta {
+            duration: 12.0,
+            fps_num: 25,
+            fps_den: 1,
+            width: 1280,
+            height: 720,
+            codec: "h264".into(),
+            has_audio: false,
+            trim_in: 1.25,
+            trim_out: Some(9.5),
+            poster_time: Some(3.0),
+        };
+        p.video = Some(v.clone());
+        let x = sidecar_packet(&p, &lcc_catalog::Catalog::new());
+        assert!(x.contains(&lcc_meta::video_ns()) && x.contains("<lcvid:trimIn>1.25</lcvid:trimIn>"), "{x}");
+        let sc = parse_sidecar(&x, crate::crs::Target::Rendered).unwrap();
+        assert_eq!((sc.video_trim, sc.video_poster), (Some((1.25, Some(9.5))), Some(3.0)));
+        let mut q = p.clone();
+        q.video = Some(lcc_catalog::VideoMeta { trim_in: 0.0, trim_out: None, poster_time: None, ..v.clone() });
+        merge_into(&mut q, &sc, "now");
+        assert_eq!(q.video, Some(v.clone()));
+        // a sidecar written for a longer clip: out of range, ignored
+        let other = x.replace("9.5</lcvid:trimOut>", "99</lcvid:trimOut>").replace(">3</lcvid:posterTime>", ">-4</lcvid:posterTime>");
+        let mut r = p.clone();
+        merge_into(&mut r, &parse_sidecar(&other, crate::crs::Target::Rendered).unwrap(), "now");
+        assert_eq!(r.video, Some(v));
+        // a still photo has no video properties
+        assert!(!sidecar_packet(&photo(), &lcc_catalog::Catalog::new()).contains("lcvid"));
+    }
+
+    fn filter(plugin: &str, stage: lcc_develop::FilterStage) -> lcc_develop::PluginFilter {
+        let mut params = serde_json::Map::new();
+        params.insert("strength".into(), serde_json::json!(0.5));
+        params.insert("mode".into(), serde_json::json!("a<b & \"c\""));
+        lcc_develop::PluginFilter {
+            uid: 40,
+            plugin: plugin.into(),
+            module_hash: "abc123".into(),
+            name: "Neg & <Pos>".into(),
+            params,
+            enabled: false,
+            stage,
+            analysis: Some(serde_json::json!({"base": [0.1, 0.2, 0.3]})),
+        }
+    }
+
+    /// The pixel-filter stack goes out under its own namespace (not in `lc:settings`), in order, and comes back
+    /// with fresh uids, through a merge into another writer's sidecar too.
+    #[test]
+    fn plugin_filter_stack_roundtrip() {
+        let mut p = photo();
+        let mut d = (*p.develop).clone();
+        d.plugin_filters = vec![filter("x.neg", lcc_develop::FilterStage::Source), filter("x.sharp", lcc_develop::FilterStage::Display)];
+        d.plugin_filters[1].enabled = true;
+        d.plugin_filters[1].analysis = None;
+        p.develop = Arc::new(d);
+        let x = sidecar_packet(&p, &lcc_catalog::Catalog::new());
+        assert!(x.contains(&lcc_meta::plugin_filters_ns()) && x.contains("<lcpx:filters>"), "{x}");
+        let sc = parse_sidecar(&x, crate::crs::Target::Rendered).unwrap();
+        let Some(DevelopPatch::Full(full)) = &sc.develop else { panic!("no lc:settings") };
+        assert!(full.plugin_filters.is_empty(), "the stack is not duplicated in lc:settings");
+        let got = sc.plugin_filters.clone().unwrap();
+        let plugins: Vec<&str> = got.iter().map(|f| f.plugin.as_str()).collect();
+        assert_eq!(plugins, ["x.neg", "x.sharp"]);
+        assert_eq!(got.iter().map(|f| f.uid).collect::<Vec<_>>(), [1, 2]);
+        let mut q = photo();
+        merge_into(&mut q, &sc, "now");
+        let strip = |v: &[lcc_develop::PluginFilter]| v.iter().map(|f| lcc_develop::PluginFilter { uid: 0, ..f.clone() }).collect::<Vec<_>>();
+        assert_eq!(strip(&q.develop.plugin_filters), strip(&p.develop.plugin_filters));
+        // merged into a sidecar another app wrote, the stack survives and a later empty stack removes it
+        let foreign = "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"><rdf:Description rdf:about=\"\" xmlns:xmp=\"http://ns.adobe.com/xap/1.0/\" xmp:Rating=\"2\"/></rdf:RDF></x:xmpmeta>";
+        let rules = lcc_meta::MergeRules { owned: OWNED, owned_if_present: OWNED_IF_STATED };
+        let merged = lcc_meta::merge_xmp(foreign, &x, rules).unwrap();
+        let back = parse_sidecar(&merged, crate::crs::Target::Rendered).unwrap().plugin_filters.unwrap();
+        assert_eq!(strip(&back), strip(&p.develop.plugin_filters));
+        let cleared = lcc_meta::merge_xmp(&merged, &sidecar_packet(&photo(), &lcc_catalog::Catalog::new()), rules).unwrap();
+        assert!(!cleared.contains("lcpx:filters"), "{cleared}");
+        let mut r = p.clone();
+        merge_into(&mut r, &parse_sidecar(&cleared, crate::crs::Target::Rendered).unwrap(), "now");
+        assert!(r.develop.plugin_filters.is_empty());
+    }
+
+    /// No stack: nothing of the namespace is written and `lc:settings` is the settings JSON as before.
+    #[test]
+    fn empty_plugin_filter_stack_writes_nothing() {
+        let p = photo();
+        let x = sidecar_packet(&p, &lcc_catalog::Catalog::new());
+        assert!(!x.contains("lcpx") && !x.contains(&lcc_meta::plugin_filters_ns()), "{x}");
+        let d = lcc_meta::parse_xmp(&x).unwrap();
+        assert_eq!(d.lc_settings.as_deref(), Some(serde_json::to_string(&*p.develop).unwrap().as_str()));
+        assert_eq!(parse_sidecar(&x, crate::crs::Target::Rendered).unwrap().plugin_filters, None);
+    }
+
+    /// Hostile stack entries are skipped (never a panic); the good ones around them are kept, and the count is capped.
+    #[test]
+    fn hostile_plugin_filter_entries_are_skipped() {
+        let ns = lcc_meta::plugin_filters_ns();
+        let li = |body: &str| format!("<rdf:li rdf:parseType=\"Resource\">{body}</rdf:li>");
+        let good = li("<p:plugin>ok.one</p:plugin><p:moduleHash>h</p:moduleHash><p:name>One</p:name>");
+        let big = "x".repeat(300);
+        let huge = "y".repeat(lcc_meta::MAX_FILTER_PART + 1);
+        let bad: Vec<String> = vec![
+            li("<p:moduleHash>h</p:moduleHash><p:name>no plugin</p:name>"),
+            li("<p:plugin>a</p:plugin><p:name>no hash</p:name>"),
+            li("<p:plugin>a</p:plugin><p:moduleHash>h</p:moduleHash>"),
+            li(&format!("<p:plugin>{big}</p:plugin><p:moduleHash>h</p:moduleHash><p:name>n</p:name>")),
+            li(&format!("<p:plugin>a</p:plugin><p:moduleHash>h</p:moduleHash><p:name>{huge}</p:name>")),
+            li("<p:plugin>a</p:plugin><p:moduleHash>h</p:moduleHash><p:name>n</p:name><p:stage>middle</p:stage>"),
+            li("<p:plugin>a</p:plugin><p:moduleHash>h</p:moduleHash><p:name>n</p:name><p:enabled>maybe</p:enabled>"),
+            li("<p:plugin>a</p:plugin><p:moduleHash>h</p:moduleHash><p:name>n</p:name><p:params>{not json</p:params>"),
+            li("<p:plugin>a</p:plugin><p:moduleHash>h</p:moduleHash><p:name>n</p:name><p:params>[1,2]</p:params>"),
+            li("<p:plugin>a</p:plugin><p:moduleHash>h</p:moduleHash><p:name>n</p:name><p:params>{\"k\":{\"nested\":1}}</p:params>"),
+            li("<p:plugin>a</p:plugin><p:moduleHash>h</p:moduleHash><p:name>n</p:name><p:params>{\"k\":1e999}</p:params>"),
+            li(&format!("<p:plugin>a</p:plugin><p:moduleHash>h</p:moduleHash><p:name>n</p:name><p:analysis>{}</p:analysis>", "[".repeat(5000))),
+            li("<p:plugin>a</p:plugin><p:moduleHash>h</p:moduleHash><p:name>n</p:name><p:analysis>nope</p:analysis>"),
+            li("<p:plugin><rdf:Bag><rdf:li>a</rdf:li></rdf:Bag></p:plugin>"),
+            "<rdf:li>just text</rdf:li>".into(),
+        ];
+        for b in &bad {
+            let x = format!(
+                "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"><rdf:Description xmlns:p=\"{ns}\"><p:filters><rdf:Seq>{good}{b}{good}</rdf:Seq></p:filters></rdf:Description></rdf:RDF></x:xmpmeta>"
+            );
+            let got = parse_sidecar(&x, crate::crs::Target::Rendered).unwrap().plugin_filters.unwrap();
+            assert_eq!(got.len(), 2, "{b}");
+            assert_eq!(got.iter().map(|f| f.uid).collect::<Vec<_>>(), [1, 2]);
+        }
+        // a lone value instead of a seq, and far too many entries
+        let many = good.repeat(lcc_develop::MAX_PLUGIN_FILTERS * 10);
+        for body in ["<p:filters>text</p:filters>".to_string(), format!("<p:filters><rdf:Seq>{many}</rdf:Seq></p:filters>")] {
+            let x = format!(
+                "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"><rdf:Description xmlns:p=\"{ns}\">{body}</rdf:Description></rdf:RDF></x:xmpmeta>"
+            );
+            let got = parse_sidecar(&x, crate::crs::Target::Rendered).unwrap().plugin_filters.unwrap_or_default();
+            assert!(got.len() <= lcc_develop::MAX_PLUGIN_FILTERS);
+        }
     }
 
     #[test]
@@ -836,7 +1211,7 @@ mod tests {
     #[test]
     fn packet_roundtrip_restores_everything() {
         let p = photo();
-        let x = sidecar_packet(&p, &lightcraft_catalog::Catalog::new());
+        let x = sidecar_packet(&p, &lcc_catalog::Catalog::new());
         let sc = parse_sidecar(&x, crate::crs::Target::Rendered).unwrap();
         assert_eq!(sc.rating, Some(4));
         assert_eq!(sc.flag, Some(Flag::Pick));
@@ -865,6 +1240,71 @@ mod tests {
         assert_eq!(p.develop.color.vibrance, 12.0);
         assert_eq!(p.develop.effects.clarity, before.effects.clarity, "crs partial keeps unrelated settings");
         assert_eq!(p.meta.title, "Dune & sky", "fields the sidecar doesn't state are kept");
+    }
+
+    /// Sidecars as other apps write them (issue #43): the rating and crop arrive whatever the
+    /// writer's prefixes, attribute/element form, `True`/`true` spelling or Description split.
+    #[test]
+    fn rating_and_crop_from_sidecars_of_other_writers() {
+        const RDF: &str = r#"xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#""#;
+        const XMP: &str = r#"xmlns:xmp="http://ns.adobe.com/xap/1.0/""#;
+        const CRS: &str = r#"xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/""#;
+        let wrap = |body: &str| {
+            format!(
+                r#"<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?><x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF {RDF}>{body}</rdf:RDF></x:xmpmeta><?xpacket end="w"?>"#
+            )
+        };
+        let crop = r#"crs:HasCrop="true" crs:CropTop="0.1" crs:CropLeft="0.2" crs:CropBottom="0.9" crs:CropRight="0.8" crs:CropAngle="-3.5" crs:CropConstrainToWarp="1""#;
+        let cases: Vec<(&str, String, u8, bool)> = vec![
+            // darktable: `photo.NEF.xmp`, its own history namespace (crop lives there, not in crs)
+            (
+                "darktable",
+                wrap(&format!(
+                    r#"<rdf:Description rdf:about="" {XMP} xmlns:darktable="http://darktable.sf.net/" xmp:Rating="3" darktable:xmp_version="5" darktable:history_end="2"><darktable:history><rdf:Seq><rdf:li darktable:operation="clipping" darktable:enabled="1"/></rdf:Seq></darktable:history></rdf:Description>"#
+                )),
+                3,
+                false,
+            ),
+            // element-form rating, lower-case `true`, older `xap` prefix
+            (
+                "element",
+                wrap(&format!(
+                    r#"<rdf:Description rdf:about="" xmlns:xap="http://ns.adobe.com/xap/1.0/" {CRS} {crop}><xap:Rating>4</xap:Rating></rdf:Description>"#
+                )),
+                4,
+                true,
+            ),
+            // ExifTool / Capture One / digiKam: one Description per namespace, rating as `5.0`
+            (
+                "split",
+                wrap(&format!(
+                    r#"<rdf:Description rdf:about="" xmlns:MicrosoftPhoto="http://ns.microsoft.com/photo/1.0/" MicrosoftPhoto:Rating="99"/><rdf:Description rdf:about="" {XMP} xmp:Rating=" 5.0 "/><rdf:Description rdf:about="" {CRS} {crop}/>"#
+                )),
+                5,
+                true,
+            ),
+            // Bridge / Camera Raw from Photoshop: crs elements rather than attributes
+            (
+                "acr-elements",
+                wrap(&format!(
+                    r#"<rdf:Description rdf:about="" {XMP} {CRS}><xmp:Rating>2</xmp:Rating><crs:HasCrop>True</crs:HasCrop><crs:CropLeft>0.2</crs:CropLeft><crs:CropTop>0.1</crs:CropTop><crs:CropRight>0.8</crs:CropRight><crs:CropBottom>0.9</crs:CropBottom><crs:CropAngle>-3.5</crs:CropAngle></rdf:Description>"#
+                )),
+                2,
+                true,
+            ),
+        ];
+        for (name, x, rating, has_crop) in cases {
+            let sc = parse_sidecar(&x, crate::crs::Target::RawAbsolute).unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert_eq!(sc.rating, Some(rating), "{name}");
+            let mut p = photo();
+            merge_into(&mut p, &sc, "t");
+            assert_eq!(p.rating, rating, "{name}");
+            let g = p.develop.to_json()["crop"]["geometry"].clone();
+            if has_crop {
+                assert!((g["rect"]["x0"].as_f64().unwrap_or(0.0) - 0.2).abs() < 1e-6, "{name}: {g}");
+                assert!((g["angle"].as_f64().unwrap_or(0.0) + 3.5).abs() < 1e-6, "{name}: {g}");
+            }
+        }
     }
 
     #[test]
@@ -899,3 +1339,220 @@ mod tests_repair_provenance;
 #[cfg(test)]
 #[path = "sidecar/tests_stem_owners.rs"]
 mod tests_stem_owners;
+
+#[cfg(test)]
+mod jpeg_header_tests {
+    use super::{JPEG_XMP_HEADER_SPAN, JPEG_XMP_HEADER_STEPS, read_jpeg_xmp};
+    use std::io::{self, Cursor, Read, Seek, SeekFrom};
+
+    struct CountedReader {
+        cursor: Cursor<Vec<u8>>,
+        bytes_read: usize,
+        largest_read: usize,
+        seeks: usize,
+        chunk: usize,
+        read_error_at: Option<u64>,
+        seek_error: bool,
+    }
+
+    impl CountedReader {
+        fn new(bytes: Vec<u8>) -> Self {
+            Self { cursor: Cursor::new(bytes), bytes_read: 0, largest_read: 0, seeks: 0, chunk: usize::MAX, read_error_at: None, seek_error: false }
+        }
+    }
+
+    impl Read for CountedReader {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            self.largest_read = self.largest_read.max(buf.len());
+            if self.read_error_at.is_some_and(|at| self.cursor.position() >= at) {
+                return Err(io::Error::other("injected header read failure"));
+            }
+            let len = buf.len().min(self.chunk);
+            let read = self.cursor.read(&mut buf[..len])?;
+            self.bytes_read += read;
+            Ok(read)
+        }
+    }
+
+    impl Seek for CountedReader {
+        fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+            self.seeks += 1;
+            if self.seek_error {
+                return Err(io::Error::other("injected header seek failure"));
+            }
+            self.cursor.seek(pos)
+        }
+    }
+
+    fn segment(marker: u8, payload: &[u8]) -> Vec<u8> {
+        let len = u16::try_from(payload.len() + 2).unwrap();
+        let mut bytes = vec![0xff, marker];
+        bytes.extend_from_slice(&len.to_be_bytes());
+        bytes.extend_from_slice(payload);
+        bytes
+    }
+
+    fn packet(rating: i8) -> String {
+        lcc_meta::write_xmp(&lcc_meta::Metadata { rating: Some(rating), ..Default::default() }, None)
+    }
+
+    fn xmp_segment(packet: &str) -> Vec<u8> {
+        let mut payload = b"http://ns.adobe.com/xap/1.0/\0".to_vec();
+        payload.extend_from_slice(packet.as_bytes());
+        segment(0xe1, &payload)
+    }
+
+    fn jpeg(packet: &str) -> Vec<u8> {
+        let mut bytes = vec![0xff, 0xd8];
+        bytes.extend(xmp_segment(packet));
+        bytes
+    }
+
+    #[test]
+    fn first_standard_packet_skips_other_segments_and_stops_before_tail() {
+        let first = packet(2);
+        let first_payload_len = xmp_segment(&first).len() - 4;
+        let mut bytes = vec![0xff, 0xd8];
+        bytes.extend(segment(0xe0, &[7; 17]));
+        bytes.extend(segment(0xe1, b"Exif\0\0tiny"));
+        let mut extended = b"http://ns.adobe.com/xmp/extension/\0".to_vec();
+        extended.extend_from_slice(&[0; 40]);
+        extended.extend_from_slice(b"not a standard packet");
+        bytes.extend(segment(0xe1, &extended));
+        bytes.extend(xmp_segment(&first));
+        let end = bytes.len();
+        bytes.extend(xmp_segment(&packet(5)));
+        bytes.extend_from_slice(&[0xff, 0xda, 0, 2]);
+        bytes.extend_from_slice(&[3; 128]);
+        let mut reader = CountedReader::new(bytes);
+        reader.read_error_at = Some(end as u64);
+        assert_eq!(read_jpeg_xmp(&mut reader, JPEG_XMP_HEADER_SPAN, JPEG_XMP_HEADER_STEPS), Some(first));
+        assert_eq!(reader.cursor.position(), end as u64, "later packets and image bytes are not read");
+        assert_eq!(reader.bytes_read, end - 17, "APP0 payload is skipped, not buffered");
+        assert_eq!(reader.seeks, 1);
+        assert_eq!(reader.largest_read, first_payload_len, "reads at most one complete APP1 payload at a time");
+    }
+
+    #[test]
+    fn stops_at_sos_or_eoi_without_reading_later_xmp() {
+        for stop in [0xda, 0xd9] {
+            let mut bytes = vec![0xff, 0xd8, 0xff, stop];
+            bytes.extend(xmp_segment(&packet(3)));
+            let mut reader = CountedReader::new(bytes);
+            reader.read_error_at = Some(4);
+            assert_eq!(read_jpeg_xmp(&mut reader, JPEG_XMP_HEADER_SPAN, JPEG_XMP_HEADER_STEPS), None);
+            assert_eq!((reader.bytes_read, reader.cursor.position(), reader.seeks), (4, 4, 0));
+        }
+    }
+
+    #[test]
+    fn rejects_incomplete_app1_even_when_partial_xmp_parses() {
+        let expected = packet(4);
+        let mut bytes = jpeg(&expected);
+        let declared = u16::from_be_bytes([bytes[4], bytes[5]]) + 7;
+        bytes[4..6].copy_from_slice(&declared.to_be_bytes());
+        let partial = lcc_meta::jpeg_segments(&bytes).xmp.unwrap();
+        assert_eq!(partial, expected, "the shared extractor tolerates a truncated declared payload");
+        assert_eq!(super::parse_sidecar(&partial, crate::crs::Target::Rendered).unwrap().rating, Some(4));
+        let len = bytes.len();
+        let mut reader = CountedReader::new(bytes);
+        assert_eq!(read_jpeg_xmp(&mut reader, JPEG_XMP_HEADER_SPAN, JPEG_XMP_HEADER_STEPS), None);
+        assert_eq!(reader.bytes_read, len);
+    }
+
+    #[test]
+    fn span_budget_counts_soi_headers_and_skipped_payloads() {
+        let expected = packet(3);
+        let mut bytes = vec![0xff, 0xd8];
+        bytes.extend(segment(0xe0, &[9; 23]));
+        bytes.extend(xmp_segment(&expected));
+        let end = bytes.len();
+        let mut exact = CountedReader::new(bytes.clone());
+        assert_eq!(read_jpeg_xmp(&mut exact, end as u64, JPEG_XMP_HEADER_STEPS), Some(expected));
+        assert_eq!(exact.cursor.position(), end as u64, "a complete early APP1 does not require EOI");
+        assert_eq!(exact.bytes_read, end - 23);
+        let mut short = CountedReader::new(bytes);
+        assert_eq!(read_jpeg_xmp(&mut short, (end - 1) as u64, JPEG_XMP_HEADER_STEPS), None);
+        assert_eq!((short.bytes_read, short.cursor.position(), short.seeks), (10, 33, 1), "reject before APP1 payload read");
+        assert_eq!(short.largest_read, 2);
+    }
+
+    #[test]
+    fn span_budget_rejects_skip_before_seeking() {
+        let mut bytes = vec![0xff, 0xd8];
+        bytes.extend(segment(0xe0, &[8; 18]));
+        bytes.extend(xmp_segment(&packet(1)));
+        let mut reader = CountedReader::new(bytes);
+        assert_eq!(read_jpeg_xmp(&mut reader, 6, JPEG_XMP_HEADER_STEPS), None);
+        assert_eq!((reader.bytes_read, reader.cursor.position(), reader.seeks), (6, 6, 0));
+    }
+
+    #[test]
+    fn marker_budget_counts_fill_and_standalone_markers() {
+        let expected = packet(1);
+        // Two fill steps, SOI, TEM, RST3, then APP1: six steps after the initial SOI.
+        let mut bytes = vec![0xff, 0xd8, 0xff, 0xff, 0xff, 0xd8, 0xff, 0x01, 0xff, 0xd3];
+        bytes.extend(xmp_segment(&expected));
+        for (steps, end) in [(0, 2), (5, 10)] {
+            let mut reader = CountedReader::new(bytes.clone());
+            assert_eq!(read_jpeg_xmp(&mut reader, JPEG_XMP_HEADER_SPAN, steps), None);
+            assert_eq!((reader.bytes_read, reader.cursor.position()), (end, end as u64));
+        }
+        let mut reader = CountedReader::new(bytes);
+        assert_eq!(read_jpeg_xmp(&mut reader, JPEG_XMP_HEADER_SPAN, 6), Some(expected));
+    }
+
+    #[test]
+    fn rejects_invalid_headers_and_segment_lengths() {
+        for bytes in [
+            vec![],
+            vec![0xff],
+            b"\x89PNG\r\n\x1a\n".to_vec(),
+            vec![0xff, 0xd8, 0, 0xe1, 0, 2],
+            vec![0xff, 0xd8, 0xff, 0xe1, 0],
+            vec![0xff, 0xd8, 0xff, 0xe1, 0, 0],
+            vec![0xff, 0xd8, 0xff, 0xe1, 0, 1],
+            vec![0xff, 0xd8, 0xff, 0xe1, 0, 3],
+        ] {
+            let len = bytes.len();
+            let mut reader = CountedReader::new(bytes);
+            assert_eq!(read_jpeg_xmp(&mut reader, JPEG_XMP_HEADER_SPAN, JPEG_XMP_HEADER_STEPS), None);
+            assert!(reader.bytes_read <= len);
+        }
+    }
+
+    #[test]
+    fn propagates_read_and_seek_failures() {
+        for at in [0, 6] {
+            let mut reader = CountedReader::new(jpeg(&packet(4)));
+            reader.read_error_at = Some(at);
+            assert_eq!(read_jpeg_xmp(&mut reader, JPEG_XMP_HEADER_SPAN, JPEG_XMP_HEADER_STEPS), None);
+            assert_eq!(reader.bytes_read as u64, at);
+        }
+        let mut bytes = vec![0xff, 0xd8];
+        bytes.extend(segment(0xe0, &[1]));
+        bytes.extend(xmp_segment(&packet(4)));
+        let mut reader = CountedReader::new(bytes);
+        reader.seek_error = true;
+        assert_eq!(read_jpeg_xmp(&mut reader, JPEG_XMP_HEADER_SPAN, JPEG_XMP_HEADER_STEPS), None);
+        assert_eq!((reader.bytes_read, reader.seeks), (6, 1));
+    }
+
+    #[test]
+    fn handles_short_reads_without_bypassing_span_limit() {
+        let expected = packet(2);
+        let bytes = jpeg(&expected);
+        let end = bytes.len();
+        let mut exact = CountedReader::new(bytes.clone());
+        exact.chunk = 1;
+        assert_eq!(read_jpeg_xmp(&mut exact, end as u64, JPEG_XMP_HEADER_STEPS), Some(expected));
+        assert_eq!(exact.bytes_read, end);
+        for (span, read) in [(0, 0), (1, 1), (end - 1, 6)] {
+            let mut reader = CountedReader::new(bytes.clone());
+            reader.chunk = 1;
+            assert_eq!(read_jpeg_xmp(&mut reader, span as u64, JPEG_XMP_HEADER_STEPS), None);
+            assert_eq!(reader.bytes_read, read);
+            assert!(reader.cursor.position() <= span as u64);
+        }
+    }
+}

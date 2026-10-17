@@ -12,9 +12,9 @@
 use std::sync::{Arc, Mutex, PoisonError};
 
 use egui::{Color32, Rect, pos2, vec2};
-use lightcraft_raster::Rgba8;
+use lcc_raster::Rgba8;
 
-use crate::LightcraftApp;
+use crate::LccApp;
 use crate::theme::Tokens;
 use crate::widgets::register;
 
@@ -66,12 +66,12 @@ pub fn fit_within(img: Rgba8, max: usize) -> Result<Rgba8, String> {
     }
     let s = max as f32 / w.max(h) as f32;
     let (nw, nh) = (((w as f32 * s).round() as usize).clamp(1, max), ((h as f32 * s).round() as usize).clamp(1, max));
-    let pre: lightcraft_raster::Image<[f32; 4]> = lightcraft_raster::Image::from_fn(w, h, |x, y| {
+    let pre: lcc_raster::Image<[f32; 4]> = lcc_raster::Image::from_fn(w, h, |x, y| {
         let p = img.get(x, y);
         let a = p[3] as f32 / 255.0;
         [p[0] as f32 * a, p[1] as f32 * a, p[2] as f32 * a, a]
     });
-    let scaled = lightcraft_raster::resample::resize(&pre, nw, nh, lightcraft_raster::resample::Filter::Mitchell);
+    let scaled = lcc_raster::resample::resize(&pre, nw, nh, lcc_raster::resample::Filter::Mitchell);
     Ok(Rgba8::from_fn(nw, nh, |x, y| {
         let [r, g, b, a] = scaled.get(x, y);
         let a = a.clamp(0.0, 1.0);
@@ -90,7 +90,7 @@ fn start(ctx: &egui::Context, path: &str) -> Loaded {
     };
     let (out, repaint, path) = (loaded.clone(), ctx.clone(), path.to_string());
     let work = move || {
-        let r = lightcraft_engine::export::read_graphic(&path).and_then(|img| fit_within(img, max));
+        let r = lcc_engine::export::read_graphic(&path).and_then(|img| fit_within(img, max));
         *out.lock().unwrap_or_else(PoisonError::into_inner) = Some(r);
         repaint.request_repaint();
     };
@@ -105,7 +105,7 @@ fn start(ctx: &egui::Context, path: &str) -> Loaded {
 
 /// Draws the layout image (when shown) over `photo`, the photo's rectangle on screen; `p` clips it
 /// to the canvas.
-pub fn draw(app: &LightcraftApp, p: &egui::Painter, photo: Rect) {
+pub fn draw(app: &LccApp, p: &egui::Painter, photo: Rect) {
     let li = &app.ui.layout_image;
     let path = li.path.trim();
     if !li.show || path.is_empty() || photo.width() < 1.0 || photo.height() < 1.0 {

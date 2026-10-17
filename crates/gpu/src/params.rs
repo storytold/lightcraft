@@ -1,12 +1,13 @@
 //! Parameter blocks: the per-pixel stage's [`FinishParams`] packed into the 32-bit words the
 //! `finish` kernel reads (`F_*` constants, generated from [`FIELDS`]), plus its auxiliary tables.
 
-use lightcraft_develop::VignetteStyle;
-use lightcraft_pipeline::colorops::POINT_WORDS;
-use lightcraft_pipeline::finish::{FinishParams, MASK_TERMS, srgb_lut};
+use lcc_color::spline::Lut1;
+use lcc_develop::VignetteStyle;
+use lcc_pipeline::colorops::POINT_WORDS;
+use lcc_pipeline::finish::{CURVE_LUT_N, FinishParams, MASK_TERMS, srgb_lut};
 
-/// Entries per tone-curve table (`lightcraft_pipeline::finish` builds them at this size).
-pub const CURVE_N: u32 = 1024;
+/// Entries per tone-curve table (`lcc_pipeline::finish` builds them at this size).
+pub const CURVE_N: u32 = CURVE_LUT_N as u32;
 
 /// Field name and number of 32-bit words.
 const FIELDS: &[(&str, usize)] = &[
@@ -17,6 +18,9 @@ const FIELDS: &[(&str, usize)] = &[
     ("SRGB_OFF", 1),
     ("CURVE_OFF", 1),
     ("CURVES", 1),
+    // the masks' local Curves: a slot per mask (its table set, or −1), then the table sets
+    ("LCURVE_OFF", 1),
+    ("LCURVES", 1),
     ("GAIN", 1),
     ("EV", 1),
     ("AIR", 1),
@@ -26,8 +30,14 @@ const FIELDS: &[(&str, usize)] = &[
     ("CLAR", 1),
     ("TEX", 1),
     ("DEHAZE", 1),
+    ("DEHAZE_V3", 1),
+    ("SHARPEN_V4", 1),
     ("SHARPEN", 1),
     ("SHARPEN_MASK", 1),
+    ("SHARPEN_LIMIT", 1),
+    ("SHARPEN_FADE", 1),
+    ("SHP_OFF", 1),
+    ("HAS_SHP", 1),
     ("HAS_CLAR", 1),
     ("HAS_TEX", 1),
     ("HAS_DARK", 1),
@@ -133,14 +143,17 @@ impl Block {
 pub struct Present {
     pub clarity: bool,
     pub texture: bool,
+    /// The sharpening blur plane (after the texture plane in `tex` when both are present).
+    pub sharpen: bool,
     pub dark: bool,
     /// The blurred chromaticity follows the mask planes in the `masks` buffer.
     pub chroma: bool,
 }
 
 /// The `finish` kernel's parameter block and auxiliary table (tone LUT | chroma curve | sRGB LUT | curve LUTs |
-/// mask terms) for `fp` with `masks` (their local adjustments' terms).
-pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Present) -> (Vec<u32>, Vec<f32>) {
+/// mask terms | local-curve slots | local-curve LUTs) for `fp` with `masks` (their local adjustments' terms) and
+/// `curves` (their local Curves, [`lcc_pipeline::finish::local_curve_luts`], in the same order).
+pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], curves: &[Option<[Lut1; 3]>], present: &Present) -> (Vec<u32>, Vec<f32>) {
     let mut aux: Vec<f32> = fp.tone.lut().to_vec();
     aux.extend_from_slice(fp.tone.chroma_lut());
     let srgb_off = aux.len();
@@ -156,6 +169,21 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     for m in masks {
         aux.extend_from_slice(m);
     }
+    // one slot per mask (the kernel reads `NMASK` of them), then each local Curve's three tables
+    let lcurve_off = aux.len();
+    let mut next = 0.0f32;
+    for k in 0..masks.len() {
+        match curves.get(k) {
+            Some(Some(_)) => {
+                aux.push(next);
+                next += 1.0;
+            }
+            _ => aux.push(-1.0),
+        }
+    }
+    for l in curves.iter().take(masks.len()).flatten().flatten() {
+        aux.extend_from_slice(&l.v);
+    }
 
     let mut p = Block::new();
     p.u("W", fp.w as u32);
@@ -165,6 +193,8 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     p.u("SRGB_OFF", srgb_off as u32);
     p.u("CURVE_OFF", curve_off as u32);
     p.b("CURVES", fp.curves.is_some());
+    p.u("LCURVE_OFF", lcurve_off as u32);
+    p.b("LCURVES", next > 0.0);
     p.f("REFINE_SAT", fp.refine_sat);
     p.f("GAIN", fp.gain);
     p.f("EV", fp.ev);
@@ -175,8 +205,14 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     p.f("CLAR", fp.clar);
     p.f("TEX", fp.tex);
     p.f("DEHAZE", fp.dehaze);
+    p.b("DEHAZE_V3", fp.dehaze_v3);
+    p.b("SHARPEN_V4", fp.sharpen_v4);
     p.f("SHARPEN", fp.sharpen);
     p.f("SHARPEN_MASK", fp.sharpen_mask);
+    p.f("SHARPEN_LIMIT", fp.sharpen_limit);
+    p.f("SHARPEN_FADE", fp.sharpen_fade);
+    p.u("SHP_OFF", if present.texture { (fp.w * fp.h) as u32 } else { 0 });
+    p.b("HAS_SHP", present.sharpen);
     p.b("HAS_CLAR", present.clarity);
     p.b("HAS_TEX", present.texture);
     p.b("HAS_DARK", present.dark);
@@ -203,7 +239,7 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
         p.f("BALANCE", *balance);
     }
     p.f("SKIN", ops.skin);
-    p.fs("BANDH", lightcraft_pipeline::colorops::band_hues());
+    p.fs("BANDH", lcc_pipeline::colorops::band_hues());
 
     if let Some(v) = &fp.vig {
         p.b("VIG", true);

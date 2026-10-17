@@ -1,6 +1,6 @@
 ---
 title: Troubleshooting
-description: Fixes for common LightCraft problems.
+description: Fixes for common LightCraft Classic problems.
 order: 30
 ---
 

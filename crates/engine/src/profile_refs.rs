@@ -8,7 +8,7 @@
 //! profiles; its other built-in profiles can't be used here and the import says so.
 //!
 //! References are resolved again whenever profiles are imported or deleted, so a pack works in
-//! either order. Only the user's own files are read; no profile content ships with LightCraft.
+//! either order. Only the user's own files are read; no profile content ships with the app.
 
 use serde_json::{Value, json};
 
@@ -17,7 +17,7 @@ use crate::cmd::lut_profiles::LutProfile;
 use crate::crs::Props;
 
 /// The profile named by a preset's `crs:Look`, as kept in its settings (`profile.look`):
-/// `{name, group?, uuid?, amount}` (amount in percent, like [`lightcraft_develop::Profile`]).
+/// `{name, group?, uuid?, amount}` (amount in percent, like [`lcc_develop::Profile`]).
 pub fn look_ref(props: &Props) -> Option<Value> {
     let field = |k: &str| props.get(&format!("crs:Look/crs:{k}")).and_then(|v| v.first()).map(|s| s.trim()).filter(|s| !s.is_empty());
     let name = field("Name")?;
@@ -198,7 +198,7 @@ mod tests {
              <crs:Group><rdf:Alt><rdf:li xml:lang="x-default">Erich McVey B&amp;W Profiles</rdf:li></rdf:Alt></crs:Group>
            </rdf:Description></crs:Look>
           </rdf:Description></rdf:RDF></x:xmpmeta>"#;
-        let props = lightcraft_meta::parse_xmp(x).unwrap().properties;
+        let props = lcc_meta::parse_xmp(x).unwrap().properties;
         assert_eq!(look_ref(&props), Some(json!({"name": "mb1 profile", "amount": 75.0, "group": "Erich McVey B&W Profiles", "uuid": "0a1b2c"})));
         assert_eq!(look_ref(&Props::new()), None);
     }

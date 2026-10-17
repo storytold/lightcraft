@@ -58,7 +58,7 @@ impl Write for FailedOutput {
 #[test]
 #[ignore = "subprocess helper for the bounded shutdown regression"]
 fn output_failure_child() {
-    let mode = std::env::var("LIGHTCRAFT_MCP_SHUTDOWN_CASE").unwrap();
+    let mode = lcc_brand::env("MCP_SHUTDOWN_CASE").unwrap();
     let mut server = Server::new(Box::new(ExportUntilCancelled { hook: None, retain_hook: mode == "retained-hook" }));
     if mode == "retained-hook" {
         let request = json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"export","arguments":{"dir":"unused"}}});
@@ -100,9 +100,10 @@ fn progress_flush_failure_does_not_wait_for_input_eof() {
 }
 
 fn run_shutdown_case(mode: &str) {
+    let _serial = crate::serial_sockets_and_children();
     let mut child = Command::new(std::env::current_exe().unwrap())
         .args(["--exact", "server::progress::shutdown_tests::output_failure_child", "--ignored", "--nocapture"])
-        .env("LIGHTCRAFT_MCP_SHUTDOWN_CASE", mode)
+        .env(lcc_brand::env_var("MCP_SHUTDOWN_CASE"), mode)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

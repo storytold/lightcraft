@@ -6,12 +6,12 @@
 //! picked colour is the one the adjustment will see (e.g. Point Color samples after the colour
 //! mixer, before vibrance, grading, vignette and curves).
 
-use lightcraft_color::perceptual::{lab_to_lch, oklab_from_2020};
-use lightcraft_color::spline::MonotoneCurve;
-use lightcraft_color::transfer::srgb_to_linear;
-use lightcraft_color::{REC2020, SRGB};
-use lightcraft_develop::{DevelopSettings, MAX_POINT_COLORS, MIXER_BANDS, PointColor, ToneCurve, Treatment, controls};
-use lightcraft_geom::Point;
+use lcc_color::perceptual::{lab_to_lch, oklab_from_2020};
+use lcc_color::spline::MonotoneCurve;
+use lcc_color::transfer::srgb_to_linear;
+use lcc_color::{REC2020, SRGB};
+use lcc_develop::{DevelopSettings, MAX_POINT_COLORS, MIXER_BANDS, PointColor, ToneCurve, Treatment, controls};
+use lcc_geom::Point;
 use serde_json::{Value, json};
 
 use super::{CommandSpec, bad, cmd, f64_req, has_active};
@@ -29,10 +29,10 @@ pub(crate) fn probe(s: &mut Session, c: &str, x: f64, y: f64, neutral: impl FnOn
     let info = s.source_info(id);
     let mut d = (*s.develop_of(id).unwrap_or_default()).clone();
     neutral(&mut d);
-    let req = lightcraft_pipeline::RenderRequest::fit(PROBE_EDGE, PROBE_EDGE);
-    let plan = lightcraft_pipeline::plan(&src, &info, &d, &req);
+    let req = lcc_pipeline::RenderRequest::fit(PROBE_EDGE, PROBE_EDGE);
+    let plan = lcc_pipeline::plan(&src, &info, &d, &req);
     let q = plan.frame.norm_to_out(plan.w, plan.h).apply(Point::new(x.clamp(0.0, 1.0), y.clamp(0.0, 1.0)));
-    let img = lightcraft_pipeline::render(&src, &info, &d, &req).image;
+    let img = lcc_pipeline::render(&src, &info, &d, &req).image;
     let (cx, cy) = (q.x.floor() as isize, q.y.floor() as isize);
     let mut acc = [0.0f32; 3];
     let mut n = 0.0;
@@ -136,7 +136,7 @@ fn targeted(s: &mut Session, p: &Value) -> Result<Value> {
                 after_mixer_neutral(d);
             })?;
             let [_, _, h] = encoded_to_oklch(e);
-            let w = lightcraft_pipeline::colorops::band_weights(h);
+            let w = lcc_pipeline::colorops::band_weights(h);
             let top = w.iter().cloned().fold(0.0f32, f32::max).max(1e-6);
             let bw = d.treatment == Treatment::Bw || d.profile.id == "lc.mono";
             label = if bw { "B&W Mix" } else { "Color Mixer" };

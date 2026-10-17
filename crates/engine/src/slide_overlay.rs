@@ -7,7 +7,7 @@
 //!
 //! **Where the drawing lives:** text needs the fonts (Inter plus the craft-fonts CJK fallbacks,
 //! [`crate::text`]) and tokens need the catalog's photo, both in the engine, so overlays are a
-//! second pass in the engine over `lightcraft_slideshow::compose_with`'s slide (its `behind` hook
+//! second pass in the engine over `lcc_slide::compose_with`'s slide (its `behind` hook
 //! draws an identity plate set to "render behind image" before the photo). The composer stays a
 //! layout-and-pixels crate with no fonts and no catalog.
 //!
@@ -23,9 +23,9 @@
 
 use std::sync::Arc;
 
-use lightcraft_catalog::Photo;
-use lightcraft_raster::{Image, Plane, Rgba8};
-use lightcraft_slideshow::{Layout, Rect, hex, parse_color};
+use lcc_catalog::Photo;
+use lcc_raster::{Image, Plane, Rgba8};
+use lcc_slide::{Layout, Rect, hex, parse_color};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
@@ -216,7 +216,7 @@ impl Default for IdentityPlate {
     fn default() -> Self {
         IdentityPlate {
             enabled: false,
-            text: "LightCraft".into(),
+            text: lcc_brand::DISPLAY_NAME.into(),
             image: String::new(),
             size: 0.05,
             color: [255, 255, 255],
@@ -918,7 +918,7 @@ fn shadow(img: &mut Rgba8, tl: &crate::text::TextLayout, x: f64, y: f64, sigma: 
             *m = (*m + cov).min(1.0);
         }
     });
-    let mask = if sigma > 0.3 { lightcraft_raster::blur::gaussian(&mask, sigma as f32) } else { mask };
+    let mask = if sigma > 0.3 { lcc_raster::blur::gaussian(&mask, sigma as f32) } else { mask };
     let (ox, oy) = (mx0 as i64, my0 as i64);
     for (i, k) in mask.data.iter().enumerate() {
         if *k > 1e-3 {
@@ -949,7 +949,7 @@ fn scaled_graphic(path: &str, src: &Arc<Rgba8>, w: usize, h: usize) -> Option<Ar
         let a = p[3] as f32 / 255.0;
         [p[0] as f32 * a, p[1] as f32 * a, p[2] as f32 * a, a]
     });
-    let scaled = Arc::new(lightcraft_raster::resample::resize(&pre, w, h, lightcraft_raster::resample::Filter::Mitchell));
+    let scaled = Arc::new(lcc_raster::resample::resize(&pre, w, h, lcc_raster::resample::Filter::Mitchell));
     *cache = Some((path.to_string(), id, w, h, scaled.clone()));
     Some(scaled)
 }
@@ -1030,7 +1030,7 @@ mod tests {
     use super::*;
 
     fn layout(w: usize, h: usize) -> Layout {
-        lightcraft_slideshow::layout(&lightcraft_slideshow::SlideSettings::default().merged(&json!({"margins": 0.1})).unwrap(), 1.5, w, h)
+        lcc_slide::layout(&lcc_slide::SlideSettings::default().merged(&json!({"margins": 0.1})).unwrap(), 1.5, w, h)
     }
 
     fn photo() -> Photo {
@@ -1175,7 +1175,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("plate.png");
         let red = Image::filled(40, 20, [255u8, 0, 0, 255]);
-        let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&red), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+        let png = lcc_codecs::encode_png(&lcc_codecs::EncodeImage::rgba8(&red), &lcc_codecs::EncodeMeta::default()).unwrap();
         std::fs::write(&path, png).unwrap();
         let l = layout(800, 500);
         let s = OverlaySettings::default()
@@ -1194,10 +1194,7 @@ mod tests {
         let behind = s.merged(&json!({"identityPlate": {"behind": true, "anchor": "center"}})).unwrap();
         let photo_img = Image::filled(30, 20, [0u8, 0, 255, 255]);
         let ob = SlideOverlays::resolve(&behind, None);
-        let (img, l2) =
-            lightcraft_slideshow::compose_with(&photo_img, None, &lightcraft_slideshow::SlideSettings::default(), 800, 500, &mut |i, l| {
-                ob.draw_behind(i, l)
-            });
+        let (img, l2) = lcc_slide::compose_with(&photo_img, None, &lcc_slide::SlideSettings::default(), 800, 500, &mut |i, l| ob.draw_behind(i, l));
         let _ = l2;
         assert_eq!(img.get(400, 250), [0, 0, 255, 255], "the photo is on top");
         // a missing file: reported, nothing drawn, no panic
@@ -1227,15 +1224,6 @@ mod tests {
                 assert!((va * 2.0 - vb).abs() <= 4.0, "{ka:?}: {ra:?} vs {rb:?}");
             }
         }
-    }
-
-    #[test]
-    fn watermark_takes_the_export_insets_and_rotation() {
-        let s = OverlaySettings::default().merged(&json!({"watermark": {"inset": 0.1, "insetY": 0.2, "rotation": 90}})).unwrap();
-        assert_eq!((s.watermark.inset_x, s.watermark.inset_y, s.watermark.rotation), (0.1, 0.2, 90));
-        let s = s.merged(&json!({"watermark": {"insetX": 0.05}})).unwrap();
-        assert_eq!((s.watermark.inset_x, s.watermark.inset_y), (0.05, 0.2));
-        assert!(OverlaySettings::default().merged(&json!({"watermark": {"rotation": 45}})).is_err());
     }
 
     #[test]
@@ -1293,7 +1281,7 @@ mod tests {
             let mut bare = photo();
             bare.meta = Default::default();
             for (w, h) in [(1, 1), (17, 9), (320, 200)] {
-                let l = lightcraft_slideshow::layout(&lightcraft_slideshow::SlideSettings::default(), f64::NAN, w, h);
+                let l = lcc_slide::layout(&lcc_slide::SlideSettings::default(), f64::NAN, w, h);
                 let o = SlideOverlays::resolve(&s, Some(&bare));
                 let mut img = blank(l.slide.width() as usize, l.slide.height() as usize);
                 o.draw_behind(&mut img, &l);
@@ -1317,7 +1305,7 @@ mod tests {
             .unwrap();
         let mut p = photo();
         p.rating = 5;
-        let l = lightcraft_slideshow::layout(&lightcraft_slideshow::SlideSettings::default(), 1.5, 4000, 2500);
+        let l = lcc_slide::layout(&lcc_slide::SlideSettings::default(), 1.5, 4000, 2500);
         let mut img = blank(4000, 2500);
         let t = std::time::Instant::now();
         SlideOverlays::resolve(&s, Some(&p)).draw_front(&mut img, &l);

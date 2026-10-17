@@ -4,7 +4,7 @@
 //! Tag identity: the ExifTool FujiFilm tag-name documentation names `0xf00b` GeometricDistortionParams and
 //! `0xf010` VignettingParams (signed rationals). Layout, units, radius normalisation and geometry were derived from
 //! the CC0 samples and the cameras' own JPEGs; see docs/fuji-lens-corrections.md. No lens database and no external
-//! decoder code. The lateral chromatic aberration table (`0xf00f`) is deliberately not applied: LightCraft's
+//! decoder code. The lateral chromatic aberration table (`0xf00f`) is deliberately not applied: the app's
 //! demosaic already registers the colour planes, so the stored shift over-corrects (see the document).
 //!
 //! Layout (`n` knots): `[scale, knot × n, value × n]`. `scale × n` is the half diagonal of the recorded image in
@@ -17,7 +17,7 @@
 //! - vignetting: relative illumination in percent at the source radius; the correction is the gain `100 / V`.
 
 use crate::{Opcode, Rect};
-use lightcraft_tiff::Ifd;
+use lcc_tiff::Ifd;
 
 const DISTORTION: u16 = 0xf00b;
 const VIGNETTING: u16 = 0xf010;
@@ -311,7 +311,7 @@ pub(super) fn corrections(model: &str, raw: &Ifd, active: Rect) -> Vec<Opcode> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lightcraft_tiff::{Entry, Value};
+    use lcc_tiff::{Entry, Value};
 
     pub(crate) const KNOTS9: [f64; 9] = [0.3535211268, 0.5, 0.6126760563, 0.7070422535, 0.7908450704, 0.8661971831, 0.9352112676, 1.0, 1.06056338];
     /// X-T4 with the XF16-55 at 16 mm (3913): the tables as ExifTool prints them.
@@ -368,7 +368,7 @@ mod tests {
 
     #[test]
     fn matches_the_measured_x_t4_geometry() {
-        // Free radial fit (data/testing/raf-lens/tools/fit_model.py) of the camera JPEG against LightCraft's uncorrected
+        // Free radial fit (data/testing/raf-lens/tools/fit_model.py) of the camera JPEG against the app's uncorrected
         // render of pixls 3913 at 600 px (maximum correlation 0.996 of the high-passed luminance), no table or zoom
         // model: source = s · r · (1 + k1 r² + k2 r⁴ + k3 r⁶), r in half diagonals.
         let measured = [1.0299688, -0.1024252, 0.0195257, 0.0183398];

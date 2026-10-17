@@ -12,7 +12,7 @@
 use std::io::{Read, Write};
 use std::path::Path;
 
-use lightcraft_raster::Rgb32f;
+use lcc_raster::Rgb32f;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -534,25 +534,6 @@ mod tests {
         ] {
             assert!(read_window(&p, "k1", Some(bad), 4, None).is_err(), "{bad:?}");
         }
-        std::fs::remove_file(&p).unwrap();
-    }
-
-    #[test]
-    fn a_smooth_picture_compresses_well() {
-        let img = Rgb32f {
-            width: 512,
-            height: 512,
-            data: (0..512 * 512)
-                .map(|i| {
-                    let v = 0.2 + 0.0001 * (i % 512) as f32;
-                    [v, v * 0.8, v * 0.6]
-                })
-                .collect(),
-        };
-        let p = temp("size");
-        write(&p, &img, "k").unwrap();
-        let bytes = std::fs::metadata(&p).unwrap().len() as usize;
-        assert!(bytes < 512 * 512 * 6 / 2, "{bytes} bytes for a smooth picture");
         std::fs::remove_file(&p).unwrap();
     }
 

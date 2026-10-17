@@ -3,11 +3,11 @@
 //! keyword gives it to the selected photos or takes it away; the arrow shows the photos with it.
 
 use egui::{Align2, Color32, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
-use lightcraft_catalog::keywords::{KeywordInfo, KeywordNode, same};
-use lightcraft_catalog::{Catalog, PhotoId};
+use lcc_catalog::keywords::{KeywordInfo, KeywordNode, same};
+use lcc_catalog::{Catalog, PhotoId};
 use serde_json::json;
 
-use crate::LightcraftApp;
+use crate::LccApp;
 use crate::icons::{Icon, paint};
 use crate::state::Dialog;
 use crate::theme::Tokens;
@@ -17,8 +17,8 @@ use crate::widgets::register;
 const ROW_H: f32 = 24.0;
 const INDENT: f32 = 14.0;
 
-/// The Keyword List section: a filter box, then the rows.
-pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+/// The Keyword List section with its own collapsible section header (for embedders like `RightPanel::Keywords`).
+pub fn show(app: &mut LccApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     crate::widgets::divider(ui);
     // the title, where a dragged keyword goes back to the top level
@@ -42,6 +42,27 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     if !open {
         return;
     }
+    show_body(app, ui);
+}
+
+/// When rendered under a Classic panel header, the header can accept a dropped keyword to move it
+/// to the top level.
+pub(crate) fn header_drop(app: &mut LccApp, ui: &mut egui::Ui, r: Rect) {
+    register(ui.ctx(), "keywordList:topLevel", r);
+    let Some(k) = app.ui.dragging_keyword.clone() else { return };
+    let (pointer, released) = ui.input(|i| (i.pointer.latest_pos(), i.pointer.any_released()));
+    if shown_under(ui, r, pointer) {
+        let t = Tokens::get(ui.ctx());
+        ui.painter().rect_stroke(r.shrink2(vec2(8.0, 2.0)), 4.0, Stroke::new(1.5, t.accent), StrokeKind::Inside);
+        if released {
+            drop_keyword(app, ui.ctx(), &k, None);
+        }
+    }
+}
+
+/// The Keyword List panel body without a section header (for Classic panel stack `PanelId::KeywordList`).
+pub fn show_body(app: &mut LccApp, ui: &mut egui::Ui) {
+    let t = Tokens::get(ui.ctx());
     let fid = egui::Id::new("keyword-list-filter");
     let mut filter: String = ui.data(|d| d.get_temp(fid)).unwrap_or_default();
     ui.horizontal(|ui| {
@@ -87,8 +108,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 
 /// After the keyword `from` became `to` (renamed, moved or merged), the list's pick and open
 /// levels follow it, and the levels containing it open so that it stays in sight.
-pub(crate) fn follow(app: &mut LightcraftApp, from: &str, to: &str) {
-    use lightcraft_catalog::keywords::{is_under, reparent};
+pub(crate) fn follow(app: &mut LccApp, from: &str, to: &str) {
+    use lcc_catalog::keywords::{is_under, reparent};
     let to = app.session.catalog.keyword_path(to).unwrap_or_else(|| to.to_string());
     if let Some(k) = app.ui.keyword_list_selected.clone()
         && is_under(&k, from)
@@ -118,7 +139,7 @@ fn shown_under(ui: &egui::Ui, rect: Rect, pointer: Option<egui::Pos2>) -> bool {
 /// A keyword being dragged, each frame (after the panels, which take the drop): its name follows
 /// the pointer, and the drag ends with the button's release wherever it is (the list may be gone
 /// by then) or with Esc.
-pub fn drag_feedback(app: &mut LightcraftApp, ctx: &egui::Context) {
+pub fn drag_feedback(app: &mut LccApp, ctx: &egui::Context) {
     let Some(keyword) = app.ui.dragging_keyword.clone() else { return };
     let (released, down, at, esc) =
         ctx.input(|i| (i.pointer.any_released(), i.pointer.any_down(), i.pointer.latest_pos(), i.key_pressed(egui::Key::Escape)));
@@ -139,12 +160,12 @@ pub fn drag_feedback(app: &mut LightcraftApp, ctx: &egui::Context) {
 
 /// Drop the dragged `keyword` inside `parent` (`None`: the top level). Where one of its name is
 /// already, ask before merging the two; where it is already, nothing happens.
-fn drop_keyword(app: &mut LightcraftApp, ctx: &egui::Context, keyword: &str, parent: Option<&str>) {
+fn drop_keyword(app: &mut LccApp, ctx: &egui::Context, keyword: &str, parent: Option<&str>) {
     app.ui.dragging_keyword = None;
     let cat = &app.session.catalog;
     let leaf = keyword.rsplit('|').next().unwrap_or(keyword);
     let parent = parent.map(|p| cat.keyword_path(p).unwrap_or_else(|| p.to_string()));
-    if parent.as_deref().is_some_and(|p| lightcraft_catalog::keywords::is_under(p, keyword)) {
+    if parent.as_deref().is_some_and(|p| lcc_catalog::keywords::is_under(p, keyword)) {
         return;
     }
     let to = parent.as_deref().map_or_else(|| leaf.to_string(), |p| format!("{p}|{leaf}"));
@@ -163,7 +184,7 @@ fn drop_keyword(app: &mut LightcraftApp, ctx: &egui::Context, keyword: &str, par
 
 /// One keyword's row: the triangle, the tick box, the name, the count, and on hover the arrow.
 /// `can_fold`: the triangle opens and closes the level (not while a filter opens it).
-fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId], ticks: &Ticks, can_fold: bool) {
+fn row(app: &mut LccApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId], ticks: &Ticks, can_fold: bool) {
     let t = Tokens::get(ui.ctx());
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::click_and_drag());
     crate::widgets::announce(&resp, r.path.clone());
@@ -278,7 +299,7 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId
 /// A row while a keyword or photos are dragged: outlined under the pointer when the drop would
 /// do something (a keyword never goes inside itself), and a release there does it: nests the
 /// keyword inside this one, or gives this keyword to the photos.
-fn drop_target(app: &mut LightcraftApp, ui: &mut egui::Ui, rect: Rect, path: &str) {
+fn drop_target(app: &mut LccApp, ui: &mut egui::Ui, rect: Rect, path: &str) {
     let (pointer, released) = ui.input(|i| (i.pointer.latest_pos(), i.pointer.any_released()));
     if !shown_under(ui, rect, pointer) {
         return;
@@ -286,7 +307,7 @@ fn drop_target(app: &mut LightcraftApp, ui: &mut egui::Ui, rect: Rect, path: &st
     let t = Tokens::get(ui.ctx());
     let outline = |ui: &egui::Ui| ui.painter().rect_stroke(rect.shrink2(vec2(16.0, 1.0)), 4.0, Stroke::new(1.5, t.accent), StrokeKind::Inside);
     if let Some(k) = app.ui.dragging_keyword.clone() {
-        if lightcraft_catalog::keywords::is_under(path, &k) {
+        if lcc_catalog::keywords::is_under(path, &k) {
             return;
         }
         outline(ui);
@@ -298,10 +319,7 @@ fn drop_target(app: &mut LightcraftApp, ui: &mut egui::Ui, rect: Rect, path: &st
         if released {
             // only the photos that didn't have it get it
             let lacking = |id: &u64| {
-                app.session
-                    .catalog
-                    .photo(PhotoId(*id))
-                    .is_some_and(|p| !p.meta.keywords.iter().any(|k| same(&lightcraft_catalog::keywords::clean(k), path)))
+                app.session.catalog.photo(PhotoId(*id)).is_some_and(|p| !p.meta.keywords.iter().any(|k| same(&lcc_catalog::keywords::clean(k), path)))
             };
             let n = ids.iter().filter(|id| lacking(id)).count();
             app.ui.dragging_photos = None;
@@ -322,7 +340,7 @@ fn drop_target(app: &mut LightcraftApp, ui: &mut egui::Ui, rect: Rect, path: &st
 }
 
 /// A keyword's context menu.
-fn menu(app: &mut LightcraftApp, ui: &mut egui::Ui, path: &str, selection: &[PhotoId]) {
+fn menu(app: &mut LccApp, ui: &mut egui::Ui, path: &str, selection: &[PhotoId]) {
     let name = path.replace('|', " › ");
     let item = |ui: &mut egui::Ui, id: &str, label: &str, enabled: bool| {
         let r = ui.add_enabled(enabled, egui::Button::new(label));
@@ -367,14 +385,14 @@ fn menu(app: &mut LightcraftApp, ui: &mut egui::Ui, path: &str, selection: &[Pho
 }
 
 /// Create Keyword Tag: inside the keyword picked in the list, else the default parent.
-pub(crate) fn create_dialog(app: &LightcraftApp) -> Dialog {
+pub(crate) fn create_dialog(app: &LccApp) -> Dialog {
     let picked = app.ui.keyword_list_selected.clone().filter(|k| app.session.catalog.has_keyword(k));
     create_dialog_inside(app, picked)
 }
 
 /// Create Keyword Tag for a keyword inside `parent`, else inside the default parent (Put New
 /// Keywords Inside This Keyword), else at the top level.
-pub(crate) fn create_dialog_inside(app: &LightcraftApp, parent: Option<String>) -> Dialog {
+pub(crate) fn create_dialog_inside(app: &LccApp, parent: Option<String>) -> Dialog {
     let parent = parent.or_else(|| app.session.catalog.default_keyword_parent());
     let d = KeywordInfo::default();
     Dialog::KeywordTag {
@@ -393,7 +411,7 @@ pub(crate) fn create_dialog_inside(app: &LightcraftApp, parent: Option<String>) 
 }
 
 /// Edit Keyword Tag for `path`, showing its name and attributes.
-pub(crate) fn edit_dialog(app: &LightcraftApp, path: &str) -> Dialog {
+pub(crate) fn edit_dialog(app: &LccApp, path: &str) -> Dialog {
     let path = app.session.catalog.keyword_path(path).unwrap_or_else(|| path.to_string());
     let info = app.session.catalog.keyword_info(&path).cloned().unwrap_or_default();
     Dialog::KeywordTag {
@@ -412,13 +430,13 @@ pub(crate) fn edit_dialog(app: &LightcraftApp, path: &str) -> Dialog {
 }
 
 /// Delete Keyword, saying how many photos have it.
-pub(crate) fn delete_dialog(app: &LightcraftApp, path: &str) -> Dialog {
+pub(crate) fn delete_dialog(app: &LccApp, path: &str) -> Dialog {
     let keyword = app.session.catalog.keyword_path(path).unwrap_or_else(|| path.to_string());
     let count = app
         .session
         .catalog
         .photos()
-        .filter(|p| p.in_library() && p.meta.keywords.iter().any(|k| lightcraft_catalog::keywords::is_under(k, &keyword)))
+        .filter(|p| p.in_library() && p.meta.keywords.iter().any(|k| lcc_catalog::keywords::is_under(k, &keyword)))
         .count();
     Dialog::DeleteKeyword { keyword, count }
 }
@@ -495,7 +513,7 @@ impl Ticks {
         for p in &photos {
             seen.clear();
             for k in &p.meta.keywords {
-                let key = lightcraft_catalog::keywords::clean(k).to_lowercase();
+                let key = lcc_catalog::keywords::clean(k).to_lowercase();
                 if seen.insert(key.clone()) {
                     *counts.entry(key).or_default() += 1;
                 }
@@ -507,7 +525,7 @@ impl Ticks {
     /// The tick box of `path`: a photo counts when it has the keyword itself (any case); one with
     /// only a keyword below it doesn't.
     pub(crate) fn tick(&self, path: &str) -> Tick {
-        match self.counts.get(&lightcraft_catalog::keywords::clean(path).to_lowercase()).copied().unwrap_or(0) {
+        match self.counts.get(&lcc_catalog::keywords::clean(path).to_lowercase()).copied().unwrap_or(0) {
             0 => Tick::No,
             n if n >= self.photos => Tick::All,
             _ => Tick::Some,
@@ -517,12 +535,12 @@ impl Ticks {
 
 /// The keyword is in the tree (any case).
 fn in_tree(tree: &[KeywordNode], path: &str) -> bool {
-    tree.iter().any(|n| same(&n.path, path) || (lightcraft_catalog::keywords::is_under(path, &n.path) && in_tree(&n.children, path)))
+    tree.iter().any(|n| same(&n.path, path) || (lcc_catalog::keywords::is_under(path, &n.path) && in_tree(&n.children, path)))
 }
 
 #[cfg(test)]
 mod tests {
-    use lightcraft_catalog::{Op, Photo, Source};
+    use lcc_catalog::{Op, Photo, Source};
 
     use super::*;
 

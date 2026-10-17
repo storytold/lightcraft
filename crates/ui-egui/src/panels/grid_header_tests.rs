@@ -1,6 +1,6 @@
 use egui::{Rect, vec2};
 
-use crate::{LightcraftApp, Services, headless::HeadlessView, i18n::Locale};
+use crate::{LccApp, Services, headless::HeadlessView, i18n::Locale};
 
 /// Issue #538: a breadcrumb opens its folder spelled as the path is, keeping a UNC share's leading
 /// `\\` and giving a bare drive its root back.
@@ -15,6 +15,22 @@ fn breadcrumbs_open_their_folder_as_spelled() {
     assert_eq!(to("relative/dir/"), pairs(&[("relative", "relative"), ("dir", "relative/dir")]));
     assert_eq!(to("/Fotos/día 1/写真"), pairs(&[("Fotos", "/Fotos"), ("día 1", "/Fotos/día 1"), ("写真", "/Fotos/día 1/写真")]));
     assert!(to("").is_empty() && to("/").is_empty() && to(r"\\").is_empty());
+}
+
+/// LRC-LIB-PUBLISH: a published collection's grid is split into New / Modified / Published
+/// sections, one header each, in the engine's order; photos without a section are left out.
+#[test]
+fn publish_sections_become_header_runs() {
+    use lcc_catalog::PhotoId;
+    let ids: Vec<PhotoId> = (1..=7).map(PhotoId).collect();
+    let m: std::collections::HashMap<PhotoId, u8> =
+        [(1, 0), (2, 0), (3, 1), (4, 2), (5, 2), (6, 3), (7, 9)].into_iter().map(|(i, r)| (PhotoId(i), r)).collect();
+    let runs = super::publish_runs(&m, &ids);
+    let got: Vec<(&str, usize, usize)> = runs.iter().map(|r| (r.key.as_str(), r.start, r.count)).collect();
+    assert_eq!(got, vec![("publish:new", 0, 2), ("publish:modified", 2, 1), ("publish:published", 3, 2), ("publish:remove", 5, 1)]);
+    assert!(runs.iter().all(|r| super::publish_section_label(&r.key).is_some()));
+    assert!(super::publish_runs(&m, &[]).is_empty());
+    assert_eq!(super::publish_section_label("2026-10-12"), None);
 }
 
 fn text_bounds(shape: &egui::Shape, out: &mut Vec<Rect>) {
@@ -36,8 +52,8 @@ fn local_folder_header_text_and_controls_do_not_overlap() {
                     (r"C:\Users\Photographer\Pictures\A very long folder name with many photographs to import", 2408),
                     ("/Pictures", 0),
                 ] {
-                    let mut app = LightcraftApp::new(lightcraft_engine::Session::new(), Services::default());
-                    let browse = lightcraft_engine::Browse { path: path.into(), subfolders: false };
+                    let mut app = LccApp::new(lcc_engine::Session::new(), Services::default());
+                    let browse = lcc_engine::Browse { path: path.into(), subfolders: false };
                     let ctx = egui::Context::default();
                     crate::i18n::set_language(locale);
                     crate::theme::install_fonts(&ctx);

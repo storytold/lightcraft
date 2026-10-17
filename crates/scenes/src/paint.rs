@@ -1,8 +1,8 @@
 //! Scene painters. Coordinates: `x` = u·aspect (isotropic), `v` = 0 (top) .. 1 (bottom).
 //! Colours are authored as linear sRGB and converted to linear Rec.2020 at the end.
 
-use lightcraft_color::{REC2020, SRGB};
-use lightcraft_raster::Rgb32f;
+use lcc_color::{REC2020, SRGB};
+use lcc_raster::Rgb32f;
 use rayon::prelude::*;
 
 use crate::Kind;
@@ -10,8 +10,26 @@ use crate::noise::{fbm, hash, noise, rand01, ridged};
 
 type C = [f32; 3];
 
+/// What a pixel shows, for [`render_labels`]: the reference masks an evaluation of the Sky /
+/// Subject / Landscape masks compares against. Painters set it as they decide what a sample is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Label {
+    Other = 0,
+    Sky = 1,
+    Subject = 2,
+    Water = 3,
+}
+
+thread_local! {
+    static LABEL: std::cell::Cell<Label> = const { std::cell::Cell::new(Label::Other) };
+}
+
+fn set_label(l: Label) {
+    LABEL.with(|c| c.set(l));
+}
+
 fn hex(v: u32) -> C {
-    let f = |c: u32| lightcraft_color::transfer::srgb_to_linear(((v >> c) & 0xff) as f32 / 255.0);
+    let f = |c: u32| lcc_color::transfer::srgb_to_linear(((v >> c) & 0xff) as f32 / 255.0);
     [f(16), f(8), f(0)]
 }
 #[inline]
@@ -62,6 +80,7 @@ struct Sky {
 }
 
 fn sky(p: &P, s: &Sky, x: f32, v: f32) -> C {
+    set_label(Label::Sky);
     let elev = ((s.horizon_v - v) / s.horizon_v).clamp(0.0, 1.0);
     let mut c = mix(s.horizon, s.zenith, elev.powf(0.55));
     let (dx, dy) = (x - s.sun.0, (v - s.sun.1) * 1.0);
@@ -180,6 +199,13 @@ fn pine(p: &P, x: f32, v: f32, ground: f32, height: f32, density: f32) -> Option
 }
 
 fn water(p: &P, x: f32, v: f32, wl: f32, calm: f32, above: &dyn Fn(f32, f32) -> C, tint: C, sun: (f32, f32), sun_col: C) -> C {
+    let c = water_px(p, x, v, wl, calm, above, tint, sun, sun_col);
+    // the reflection painted sky: the pixel is water
+    set_label(Label::Water);
+    c
+}
+
+fn water_px(p: &P, x: f32, v: f32, wl: f32, calm: f32, above: &dyn Fn(f32, f32) -> C, tint: C, sun: (f32, f32), sun_col: C) -> C {
     let d = v - wl;
     let rip = fbm(x * 9.0, d * 60.0 / (d + 0.05), p.seed ^ 0xaa, 4) * (1.0 - calm);
     let rv = (wl - d * 1.0 + rip * (0.01 + 0.06 * (1.0 - calm)) * (d * 10.0 + 0.2)).max(0.0);
@@ -201,7 +227,7 @@ pub fn render(kind: Kind, seed: u32, w: usize, h: usize) -> Rgb32f {
 }
 
 /// [`render`] on the calling thread alone, without rayon: the same pixels, for a caller that must
-/// not run other queued work while it waits for rows (see `lightcraft_engine::demo`).
+/// not run other queued work while it waits for rows (see `lcc_engine::demo`).
 pub fn render_serial(kind: Kind, seed: u32, w: usize, h: usize) -> Rgb32f {
     render_rows(kind, seed, w, h, false)
 }
@@ -246,6 +272,35 @@ fn render_rows(kind: Kind, seed: u32, w: usize, h: usize, parallel: bool) -> Rgb
 pub fn render_srgb_linear(kind: Kind, seed: u32, w: usize, h: usize) -> Rgb32f {
     let to709 = REC2020.to_space(&SRGB);
     render(kind, seed, w, h).map(|c| to709.apply_f32(c).map(|v| v.max(0.0)))
+}
+
+/// The reference labels of a scene at `w × h`: per pixel, the share (0..1) of its 4×4 samples
+/// showing each [`Label`] (index = `Label as usize`), so edges are fractional like a matte.
+pub fn render_labels(kind: Kind, seed: u32, w: usize, h: usize) -> Vec<[f32; 4]> {
+    let mut out = vec![[0.0f32; 4]; w.saturating_mul(h)];
+    if w == 0 || h == 0 {
+        return out;
+    }
+    let aspect = w as f32 / h as f32;
+    let p = P { seed, aspect };
+    const SS: usize = 4;
+    out.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
+        for (xi, px) in row.iter_mut().enumerate() {
+            for sy in 0..SS {
+                for sx in 0..SS {
+                    let u = (xi as f32 + (sx as f32 + 0.5) / SS as f32) / w as f32;
+                    let v = (y as f32 + (sy as f32 + 0.5) / SS as f32) / h as f32;
+                    set_label(Label::Other);
+                    let _ = shade(kind, &p, u * aspect, v);
+                    let l = LABEL.with(|c| c.get()) as usize;
+                    if let Some(s) = px.get_mut(l) {
+                        *s += 1.0 / (SS * SS) as f32;
+                    }
+                }
+            }
+        }
+    });
+    out
 }
 
 fn shade(kind: Kind, p: &P, x: f32, v: f32) -> C {
@@ -475,6 +530,7 @@ fn forest(p: &P, x: f32, v: f32) -> C {
     let sun_col = hex(0xfff0c8);
     let fog = hex(0xcfd6c8);
     let mut c = mix(hex(0xf4f0e0), hex(0xb8c4c0), (1.0 - v).powf(1.5));
+    set_label(Label::Sky);
     for i in 0..6 {
         let fi = i as f32;
         let ground = 0.5 + fi * 0.1;
@@ -484,6 +540,7 @@ fn forest(p: &P, x: f32, v: f32) -> C {
             || v > ground
         {
             c = col;
+            set_label(Label::Other);
         }
     }
     // volumetric light shafts in front of everything, strongest in the fog
@@ -559,6 +616,7 @@ fn macro_flower(p: &P, x: f32, v: f32) -> C {
     let rr = 0.28;
     // stem
     if (x - center.0 - (v - center.1) * 0.15).abs() < 0.008 && v > center.1 {
+        set_label(Label::Subject);
         return mix(hex(0x2a5a1a), hex(0x4a8a2a), 0.5);
     }
     let (dx, dy) = (x - center.0, v - center.1);
@@ -579,6 +637,7 @@ fn macro_flower(p: &P, x: f32, v: f32) -> C {
             col = mul(mix(hex(0xffb000), hex(0xffe060), 1.0 - r * 5.0), 0.8 + dots);
         }
         let light = 1.2 - 0.4 * (dx + dy + 0.2).clamp(-1.0, 1.0);
+        set_label(Label::Subject);
         return mul(col, light);
     }
     c
@@ -672,6 +731,7 @@ fn beach(p: &P, x: f32, v: f32) -> C {
         let foam = smooth(shore - 0.012, shore, v) * (0.6 + 0.4 * noise(x * 60.0, 0.0, p.seed));
         c = mix(c, hex(0xf4f8f8), foam);
         let refl = mul(sky(p, &sk, x, hz - (v - hz) * 0.8), 0.25 * (1.0 - t));
+        set_label(Label::Water);
         return add(c, refl);
     }
     let wet = smooth(shore + 0.04, shore, v);

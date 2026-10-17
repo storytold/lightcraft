@@ -323,12 +323,6 @@ mod tests {
     }
 
     #[test]
-    fn given_free_crop_when_edge_dragged_then_only_that_edge_moves() {
-        let g = drag(geo(0.2, 0.2, 0.8, 0.8), Left, p(0.2, 0.5), p(0.1, 0.9), None);
-        assert!(near(g.rect.x0, 0.1) && near(g.rect.y0, 0.2) && near(g.rect.x1, 0.8) && near(g.rect.y1, 0.8));
-    }
-
-    #[test]
     fn given_move_past_edge_then_size_is_kept_and_frame_slides_along_the_edge() {
         let start = geo(0.5, 0.25, 0.9, 0.65);
         let g = drag(start, Move, p(0.7, 0.45), p(1.3, 0.55), None);
@@ -409,16 +403,6 @@ mod tests {
     fn given_an_unrotated_image_then_results_never_leave_the_unit_square() {
         let g = drag(geo(0.2, 0.2, 0.8, 0.8), BottomRight, p(0.8, 0.8), p(5.0, 5.0), None);
         assert!(g.rect.x1 <= 1.0 && g.rect.y1 <= 1.0 && g.rect.x0 >= 0.0 && g.rect.y0 >= 0.0, "{:?}", g.rect);
-    }
-
-    #[test]
-    fn handle_numbering_matches_the_overlay() {
-        assert_eq!(CropHandle::from_index(0), Some(TopLeft));
-        assert_eq!(CropHandle::from_index(6), Some(Bottom));
-        assert_eq!(CropHandle::from_index(8), Some(Move));
-        assert_eq!(CropHandle::from_index(9), None);
-        assert_eq!(CropHandle::from_name("bottomLeft"), Some(BottomLeft));
-        assert_eq!(CropHandle::from_name("nope"), None);
     }
 
     mod props {

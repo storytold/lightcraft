@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use lightcraft_catalog::{Op, Photo, Source};
+use lcc_catalog::{Op, Photo, Source};
 use serde_json::{Value, json};
 
 use crate::Session;
@@ -113,12 +113,12 @@ fn pdf_pages(bytes: &[u8]) -> Vec<String> {
 }
 
 /// The JPEGs embedded in a PDF, decoded.
-fn pdf_images(bytes: &[u8]) -> Vec<lightcraft_raster::Rgba8> {
+fn pdf_images(bytes: &[u8]) -> Vec<lcc_raster::Rgba8> {
     let mut out = Vec::new();
     let mut at = 0;
     while let Some(start) = bytes[at..].windows(3).position(|v| v == [0xff, 0xd8, 0xff]).map(|p| p + at) {
         let end = bytes[start..].windows(10).position(|v| v == b"\nendstream").unwrap() + start;
-        out.push(lightcraft_codecs::decode(&bytes[start..end], Default::default()).unwrap().to_srgb8());
+        out.push(lcc_codecs::decode(&bytes[start..end], Default::default()).unwrap().to_srgb8());
         at = end;
     }
     out
@@ -145,7 +145,7 @@ fn pdf_has_a_page_per_slide_titles_included() {
     assert_eq!(images.len(), 5);
     assert!(images.iter().all(|i| (i.width, i.height) == (160, 90)));
     // the intro (black with white text) and a photo slide differ
-    let mean = |i: &lightcraft_raster::Rgba8| i.data.iter().map(|p| u64::from(p[1])).sum::<u64>() / i.data.len() as u64;
+    let mean = |i: &lcc_raster::Rgba8| i.data.iter().map(|p| u64::from(p[1])).sum::<u64>() / i.data.len() as u64;
     assert!(mean(&images[0]) < mean(&images[1]), "the intro screen is the first page");
     assert!(dir.files("").iter().all(|f| !f.ends_with(".part")));
     // no full screen; a 4:3 aspect makes 4:3 pages
@@ -163,7 +163,7 @@ fn jpeg_sequence_is_numbered_in_a_folder() {
     let r = export(&mut s, json!({"format": "jpeg", "path": out, "size": 128, "ids": ids}));
     assert_eq!(dir.files("Trip"), vec!["Trip-001.jpg", "Trip-002.jpg", "Trip-003.jpg"]);
     assert_eq!(r["files"].as_array().unwrap().len(), 3);
-    let img = lightcraft_codecs::decode(&std::fs::read(Path::new(&out).join("Trip-002.jpg")).unwrap(), Default::default()).unwrap().to_srgb8();
+    let img = lcc_codecs::decode(&std::fs::read(Path::new(&out).join("Trip-002.jpg")).unwrap(), Default::default()).unwrap().to_srgb8();
     assert_eq!((img.width, img.height), (128, 72));
     // a name of its own, and a portrait-free square check: the long side is the size
     let r = export(&mut s, json!({"format": "jpeg", "path": out, "size": 64, "name": "Slide", "ids": [ids[0]]}));

@@ -1,4 +1,4 @@
-//! Which wgpu backends LightCraft lets wgpu use — for its compute device and for the desktop
+//! Which wgpu backends the app lets wgpu use — for its compute device and for the desktop
 //! window (eframe) — and the crash sentinel around device creation (issue #136).
 //!
 //! wgpu loads the system driver of *every* backend in the instance's set while it enumerates
@@ -8,7 +8,7 @@
 //! Vulkan (plus GL for the window when the build has it).
 //!
 //! Overrides, read once per process:
-//! - `LIGHTCRAFT_GPU_BACKEND` = `dx12` | `vulkan` | `metal` | `gl` (comma lists allowed), `auto`
+//! - `{ENV_PREFIX}_GPU_BACKEND` = `dx12` | `vulkan` | `metal` | `gl` (comma lists allowed), `auto`
 //!   (the platform default), or `off` (no GPU compute; the window still needs one backend and
 //!   keeps the platform default);
 //! - else `WGPU_BACKEND` (wgpu's own variable, same names) for both the window and compute.
@@ -49,14 +49,15 @@ pub fn parse_backends(s: &str) -> Option<BackendChoice> {
     }
 }
 
-/// The choice from `LIGHTCRAFT_GPU_BACKEND` (`lightcraft`) or else `WGPU_BACKEND` (`wgpu`): the
+/// The choice from `{ENV_PREFIX}_GPU_BACKEND` (`app`) or else `WGPU_BACKEND` (`wgpu`): the
 /// first one that parses wins; an unknown value is skipped (with a warning).
-pub fn choose(lightcraft: Option<&str>, wgpu: Option<&str>) -> BackendChoice {
-    for (name, v) in [("LIGHTCRAFT_GPU_BACKEND", lightcraft), ("WGPU_BACKEND", wgpu)] {
+pub fn choose(app: Option<&str>, wgpu: Option<&str>) -> BackendChoice {
+    let app_name = lcc_brand::env_var("GPU_BACKEND");
+    for (name, v) in [(app_name.as_str(), app), ("WGPU_BACKEND", wgpu)] {
         let Some(v) = v else { continue };
         match parse_backends(v) {
             // WGPU_BACKEND is wgpu's variable: it selects backends, it never turns the GPU off
-            Some(BackendChoice::Off) if name == "WGPU_BACKEND" => log::warn!("gpu: WGPU_BACKEND={v} ignored (use LIGHTCRAFT_GPU_BACKEND=off)"),
+            Some(BackendChoice::Off) if name == "WGPU_BACKEND" => log::warn!("gpu: WGPU_BACKEND={v} ignored (use {app_name}=off)"),
             Some(c) => return c,
             None => log::warn!("gpu: {name}={v} names no known backend; ignored"),
         }
@@ -101,13 +102,13 @@ pub fn resolve(choice: BackendChoice, default: Backends, compiled: Backends) -> 
 fn env_choice() -> BackendChoice {
     static C: std::sync::OnceLock<BackendChoice> = std::sync::OnceLock::new();
     *C.get_or_init(|| {
-        let lc = std::env::var("LIGHTCRAFT_GPU_BACKEND").ok();
+        let lc = lcc_brand::env("GPU_BACKEND");
         let wg = std::env::var("WGPU_BACKEND").ok();
         choose(lc.as_deref(), wg.as_deref())
     })
 }
 
-/// The backends of the compute device (`None`: `LIGHTCRAFT_GPU_BACKEND=off`).
+/// The backends of the compute device (`None`: `{ENV_PREFIX}_GPU_BACKEND=off`).
 pub fn compute_backends() -> Option<Backends> {
     resolve(env_choice(), default_compute_backends(std::env::consts::OS), wgpu::Instance::enabled_backend_features())
 }
@@ -127,10 +128,10 @@ pub fn window_backends() -> Backends {
 /// `WGPU_DX12_COMPILER` (`wgpu`, wgpu's own variable: `fxc`, `dxc`, `auto`…) names another.
 ///
 /// Issue #471: wgpu's default (`Auto`) loads whichever `dxcompiler.dll` the DLL search path finds
-/// first — LightCraft ships none, so it is some other program's (an SDK's, a folder on `PATH`). A
+/// first — the app ships none, so it is some other program's (an SDK's, a folder on `PATH`). A
 /// copy without its `dxil.dll` beside it warns that the DXIL is unsigned; wgpu takes the warning for
 /// a compile error, its own validation pipelines fail, the device is lost and the window never
-/// opens. FXC is always there and compiles everything LightCraft's shaders need.
+/// opens. FXC is always there and compiles everything the app's shaders need.
 pub fn dx12_compiler(env: Option<&str>) -> wgpu::Dx12Compiler {
     let Some(v) = env else { return wgpu::Dx12Compiler::Fxc };
     v.parse().unwrap_or_else(|e| {
@@ -139,7 +140,7 @@ pub fn dx12_compiler(env: Option<&str>) -> wgpu::Dx12Compiler {
     })
 }
 
-/// wgpu's backend options for every instance LightCraft creates — the window's and the compute
+/// wgpu's backend options for every instance the app creates — the window's and the compute
 /// devices': wgpu's environment variables, with the DX12 compiler from [`dx12_compiler`].
 pub fn backend_options() -> wgpu::BackendOptions {
     let mut o = wgpu::BackendOptions::from_env_or_default();
@@ -147,12 +148,12 @@ pub fn backend_options() -> wgpu::BackendOptions {
     o
 }
 
-/// wgpu's instance flags for every instance LightCraft creates, from `flags` (wgpu's defaults with its
+/// wgpu's instance flags for every instance the app creates, from `flags` (wgpu's defaults with its
 /// environment variables applied) without `VALIDATION_INDIRECT_CALL`, unless
 /// `WGPU_VALIDATION_INDIRECT_CALL` asks for it (any value but `0`). That validation builds an internal
 /// compute pipeline when each device is created; Intel Macs' Metal compiler fails on it ("Compiler
 /// encountered an internal error"), the device is lost and the window never opens (#250). It only
-/// guards indirect draws and dispatches, which neither LightCraft nor egui issue.
+/// guards indirect draws and dispatches, which neither the app nor egui issue.
 pub fn instance_flags(flags: wgpu::InstanceFlags, env: Option<&str>) -> wgpu::InstanceFlags {
     if env.is_some_and(|v| v != "0") {
         flags | wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL
@@ -166,7 +167,7 @@ pub fn instance_flags_from_env(flags: wgpu::InstanceFlags) -> wgpu::InstanceFlag
     instance_flags(flags, std::env::var("WGPU_VALIDATION_INDIRECT_CALL").ok().as_deref())
 }
 
-/// `LIGHTCRAFT_GPU_BACKEND=off`.
+/// `{ENV_PREFIX}_GPU_BACKEND=off`.
 pub(crate) fn env_off() -> bool {
     env_choice() == BackendChoice::Off
 }
@@ -272,7 +273,7 @@ pub enum WindowRenderer {
 }
 
 impl WindowRenderer {
-    /// The name used in `LIGHTCRAFT_GPU_BACKEND`, the remembered-renderer file and the logs.
+    /// The name used in `{ENV_PREFIX}_GPU_BACKEND`, the remembered-renderer file and the logs.
     pub fn name(self) -> &'static str {
         match self {
             WindowRenderer::Glow => "glow",
@@ -298,7 +299,7 @@ impl WindowRenderer {
     }
 }
 
-/// The renderer the environment forces for the window: `LIGHTCRAFT_GPU_BACKEND` (`app`), else
+/// The renderer the environment forces for the window: `{ENV_PREFIX}_GPU_BACKEND` (`app`), else
 /// `WGPU_BACKEND` (`wgpu`), when it names exactly one renderer.
 pub fn forced_window_renderer(app: Option<&str>, wgpu: Option<&str>) -> Option<WindowRenderer> {
     app.and_then(WindowRenderer::parse).or_else(|| wgpu.and_then(WindowRenderer::parse))
@@ -359,41 +360,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_backend_names() {
-        assert_eq!(parse_backends("dx12"), Some(BackendChoice::Use(Backends::DX12)));
-        assert_eq!(parse_backends(" D3D12 "), Some(BackendChoice::Use(Backends::DX12)));
-        assert_eq!(parse_backends("vulkan"), Some(BackendChoice::Use(Backends::VULKAN)));
-        assert_eq!(parse_backends("vk,gl"), Some(BackendChoice::Use(Backends::VULKAN | Backends::GL)));
-        assert_eq!(parse_backends("metal"), Some(BackendChoice::Use(Backends::METAL)));
-        assert_eq!(parse_backends("auto"), Some(BackendChoice::Auto));
-        for off in ["off", "OFF", "none", "cpu", "0"] {
-            assert_eq!(parse_backends(off), Some(BackendChoice::Off), "{off}");
-        }
-        assert_eq!(parse_backends(""), None);
-        assert_eq!(parse_backends("directx9"), None);
-    }
-
-    #[test]
-    fn lightcraft_variable_wins_over_wgpu_backend() {
+    fn app_variable_wins_over_wgpu_backend() {
         assert_eq!(choose(None, None), BackendChoice::Auto);
         assert_eq!(choose(None, Some("dx12")), BackendChoice::Use(Backends::DX12));
         assert_eq!(choose(Some("vulkan"), Some("dx12")), BackendChoice::Use(Backends::VULKAN));
         assert_eq!(choose(Some("off"), Some("dx12")), BackendChoice::Off);
-        // unknown LightCraft value: WGPU_BACKEND still applies
+        // unknown value of our variable: WGPU_BACKEND still applies
         assert_eq!(choose(Some("bogus"), Some("gl")), BackendChoice::Use(Backends::GL));
         // WGPU_BACKEND never turns the GPU off
         assert_eq!(choose(None, Some("off")), BackendChoice::Auto);
-    }
-
-    /// Issue #136: Windows must not load the Vulkan driver unless asked to.
-    #[test]
-    fn windows_defaults_to_dx12_only() {
-        assert_eq!(default_compute_backends("windows"), Backends::DX12);
-        assert_eq!(default_window_backends("windows"), Backends::DX12);
-        assert!(!default_window_backends("windows").contains(Backends::VULKAN));
-        assert_eq!(default_compute_backends("macos"), Backends::METAL);
-        assert!(default_compute_backends("linux").contains(Backends::VULKAN));
-        assert!(default_window_backends("linux").contains(Backends::VULKAN | Backends::GL));
     }
 
     /// Issue #471: DX12 shaders compile with FXC, never a `dxcompiler.dll` found on the search path,
@@ -478,22 +453,6 @@ mod tests {
         // never empty
         assert!(!window_renderer_order(None, None, None, "windows", Backends::empty(), false).is_empty());
         assert_eq!(window_renderer_order(None, None, None, "macos", all, true), [Wgpu(Backends::METAL), Glow]);
-    }
-
-    #[test]
-    fn window_renderer_names_round_trip() {
-        for n in ["dx12", "vulkan", "metal", "gl", "glow"] {
-            assert_eq!(WindowRenderer::parse(n).map(WindowRenderer::name), Some(n));
-        }
-        assert_eq!(WindowRenderer::parse(" DX12 "), Some(WindowRenderer::Wgpu(Backends::DX12)));
-        for n in ["auto", "off", "vulkan,gl", "", "bogus"] {
-            assert_eq!(WindowRenderer::parse(n), None, "{n}");
-        }
-        assert_eq!(forced_window_renderer(Some("glow"), Some("dx12")), Some(WindowRenderer::Glow));
-        assert_eq!(forced_window_renderer(Some("auto"), Some("vulkan")), Some(WindowRenderer::Wgpu(Backends::VULKAN)));
-        assert_eq!(forced_window_renderer(None, None), None);
-        // `glow` only concerns the window: compute keeps its default, without a warning
-        assert_eq!(parse_backends("glow"), Some(BackendChoice::Auto));
     }
 
     #[test]

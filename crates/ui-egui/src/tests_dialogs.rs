@@ -1,7 +1,7 @@
 //! Modal application dialogs block background input while retaining their own controls.
 
 use crate::headless::Headless;
-use crate::{LightcraftApp, Services};
+use crate::{LccApp, Services};
 use serde_json::json;
 use std::time::Duration;
 
@@ -9,7 +9,7 @@ const T: Duration = Duration::from_secs(20);
 
 fn demo(size: [f32; 2], ui: serde_json::Value) -> Headless {
     let services = Services { png: None, ..Default::default() };
-    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+    let app = LccApp::new(lcc_engine::Session::with_demo(), services);
     let mut h = Headless::new(app, size, 1.0);
     let r = h.request("ui.set", ui, T);
     assert_eq!(r["ok"], true, "{r}");

@@ -10,8 +10,8 @@
 //! resumes from where it stopped. A file that fails its check is deleted, never kept.
 //!
 //! What to download and where from belongs to the caller: it passes the [`FileSpec`]s and the
-//! default mirrors (see [`mirrors`]). `lightcraft-segment` does so for the SAM 3 weights, which
-//! are never part of LightCraft (SAM License, see docs/ai-masks.md).
+//! default mirrors (see [`mirrors`]). `lcc-segment` does so for the SAM 3 weights, which
+//! are never part of the app (SAM License, see docs/ai-masks.md).
 //!
 //! Native only: on wasm32 this crate is empty (the web build downloads no models).
 
@@ -50,12 +50,17 @@ const MAX_REDIRECTS: usize = 8;
 
 /// The mirrors to try, in order: `env`'s (base URLs separated by commas, spaces or newlines), then
 /// the mirrors file's (one base URL per line, `#` comments), then `defaults`; duplicates and
-/// unusable URLs dropped, at most 16.
+/// unusable URLs dropped, at most 16. A mirror can be `http(s)://`, `file://<absolute path>` or an
+/// absolute folder path: files from a local folder are copied (then checked like a download).
 pub fn mirrors(env: Option<&str>, file: Option<&Path>, defaults: &[&str]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut add = |s: &str| {
-        let s = s.trim().trim_end_matches('/');
-        if !s.is_empty() && Url::parse(s).is_ok() && !out.iter().any(|m| m == s) && out.len() < MAX_MIRRORS {
+        let s = s.trim();
+        // a local folder (an absolute path) is the same as its `file://` URL
+        let s = if Path::new(s).is_absolute() { format!("file://{s}") } else { s.to_string() };
+        let s = s.trim_end_matches('/');
+        let usable = local_path(s).is_some() || Url::parse(s).is_ok();
+        if !s.is_empty() && usable && !out.iter().any(|m| m == s) && out.len() < MAX_MIRRORS {
             out.push(s.to_string());
         }
     };
@@ -79,7 +84,7 @@ pub struct Options {
     pub stall_timeout: Duration,
     /// Tries per mirror and file (each resumes where the last one stopped).
     pub attempts: u32,
-    /// The environment variable holding a bearer token, sent to each configured mirror's own host (only over https,
+    /// The environment variable (name after the app prefix, read with `lcc_brand::env`) holding a bearer token, sent to each configured mirror's own host (only over https,
     /// never to a host a redirect leads to), so list only mirrors that may see it. `None`: nothing is ever sent, so one model's token cannot leak to another's server.
     pub token_env: Option<&'static str>,
 }
@@ -202,7 +207,7 @@ fn download_source(
                     return Err(DownloadError::Cancelled);
                 }
                 let mut report = |n: u64, announced: u64| {
-                    let mirror = Url::parse(m).map(|u| u.display()).unwrap_or_default();
+                    let mirror = short(m);
                     progress(&Progress {
                         file: f.name.to_string(),
                         done: before.saturating_add(n),
@@ -282,6 +287,9 @@ fn bearer<'a>(token: Option<&'a str>, url: &Url, origin: &str) -> Option<&'a str
 
 /// A mirror for messages (no query string: it may hold a token).
 fn short(m: &str) -> String {
+    if local_path(m).is_some() {
+        return m.to_string();
+    }
     Url::parse(m).map(|u| u.display()).unwrap_or_else(|_| "mirror".into())
 }
 
@@ -343,8 +351,11 @@ fn fetch_file(f: &FileSpec<'_>, url: &str, dir: &Path, opts: &Options, cancel: &
         }
         Err(_) => 0,
     };
-    let fetched = f.size != Some(have) || have == 0;
-    if fetched {
+    let local = local_path(url);
+    let fetched = local.is_some() || f.size != Some(have) || have == 0;
+    if let Some(src) = local {
+        copy_local(&src, &part, limit, f.size, cancel, report)?;
+    } else if fetched {
         let limits = Limits { connect: opts.connect_timeout, stall: opts.stall_timeout, cancel };
         let mut url = Url::parse(url).map_err(|e| Fail::NextMirror(e.to_string()))?;
         let origin = url.host.clone();
@@ -355,7 +366,7 @@ fn fetch_file(f: &FileSpec<'_>, url: &str, dir: &Path, opts: &Options, cancel: &
                 headers.push(("Range", format!("bytes={have}-")));
             }
             // a token for the configured host only (never sent on to a redirect's host)
-            if let Some(t) = bearer(opts.token_env.and_then(|name| std::env::var(name).ok()).as_deref(), &url, &origin) {
+            if let Some(t) = bearer(opts.token_env.and_then(lcc_brand::env).as_deref(), &url, &origin) {
                 headers.push(("Authorization", format!("Bearer {t}")));
             }
             let r = http::get(&url, &headers, &limits).map_err(http_fail)?;
@@ -451,6 +462,52 @@ fn fetch_file(f: &FileSpec<'_>, url: &str, dir: &Path, opts: &Options, cancel: &
     }
     std::fs::rename(&part, dir.join(f.name)).map_err(disk)?;
     Ok(())
+}
+
+/// The local path of a `file://` URL (absolute only; `file:///C:/x` → `C:/x` on Windows).
+fn local_path(url: &str) -> Option<PathBuf> {
+    let rest = url.strip_prefix("file://")?;
+    let rest = if rest.get(2..3) == Some(":") { rest.strip_prefix('/').unwrap_or(rest) } else { rest };
+    let p = PathBuf::from(rest);
+    if p.is_absolute() && !rest.chars().any(char::is_control) { Some(p) } else { None }
+}
+
+/// Copy a file from a local mirror into `part` (from the start; it is checked afterwards like a download).
+fn copy_local(src: &Path, part: &Path, limit: u64, size: Option<u64>, cancel: &AtomicBool, report: &mut dyn FnMut(u64, u64)) -> Result<(), Fail> {
+    let disk = |e: std::io::Error| Fail::Disk(format!("{}: {e}", part.display()));
+    let meta = std::fs::metadata(src).map_err(|e| Fail::NextMirror(format!("{}: {e}", src.display())))?;
+    if !meta.is_file() {
+        return Err(Fail::NextMirror(format!("{} is not a file", src.display())));
+    }
+    if meta.len() > limit || size.is_some_and(|s| s != meta.len()) {
+        return Err(Fail::NextMirror(format!("{} has the wrong size ({} bytes)", src.display(), meta.len())));
+    }
+    let mut input = File::open(src).map_err(|e| Fail::NextMirror(format!("{}: {e}", src.display())))?;
+    let mut out = File::create(part).map_err(disk)?;
+    let announced = size.unwrap_or(meta.len());
+    let mut have = 0u64;
+    report(0, announced);
+    let mut buf = vec![0u8; 1 << 20];
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            drop(out);
+            let _ = std::fs::remove_file(part);
+            return Err(Fail::Cancelled);
+        }
+        let n = input.read(&mut buf).map_err(|e| Fail::NextMirror(format!("{}: {e}", src.display())))?;
+        if n == 0 {
+            break;
+        }
+        if have.saturating_add(n as u64) > limit {
+            drop(out);
+            let _ = std::fs::remove_file(part);
+            return Err(Fail::NextMirror(format!("{} grew past the expected {limit} bytes", src.display())));
+        }
+        out.write_all(buf.get(..n).unwrap_or_default()).map_err(disk)?;
+        have = have.saturating_add(n as u64);
+        report(have, announced);
+    }
+    out.sync_all().map_err(disk)
 }
 
 fn http_fail(e: HttpError) -> Fail {

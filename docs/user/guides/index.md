@@ -1,6 +1,6 @@
 ---
 title: Guides
-description: How to do one thing in LightCraft.
+description: How to do one thing in LightCraft Classic.
 order: 20
 ---
 

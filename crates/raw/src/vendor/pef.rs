@@ -19,9 +19,9 @@ use super::{black_from_columns, cfa_from_exif, white_from_data};
 
 use crate::tiffraw::{Packing, read_image_in};
 use crate::{BlackLevel, Cfa, ColorData, Mode, OpcodeLists, RawData, RawError, RawFormat, RawImage, Rect, Result};
-use lightcraft_geom::Orientation;
-use lightcraft_tiff::image::{ImageInfo, chunk_bytes};
-use lightcraft_tiff::{ByteOrder, Tiff, makernote, tags as t};
+use lcc_geom::Orientation;
+use lcc_tiff::image::{ImageInfo, chunk_bytes};
+use lcc_tiff::{ByteOrder, Tiff, makernote, tags as t};
 
 const CROP_ORIGIN: u16 = 0x0038;
 const CROP_SIZE: u16 = 0x0039;
@@ -316,7 +316,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         let g = (v[1] + v[2]) / 2.0;
         [(v[0] / g) as f32, 1.0, (v[3] / g) as f32]
     });
-    let mut metadata = lightcraft_meta::from_tiff(&tiff);
+    let mut metadata = lcc_meta::from_tiff(&tiff);
     metadata.width = Some(active.width as u32);
     metadata.height = Some(active.height as u32);
     let img = RawImage {
@@ -523,7 +523,7 @@ mod tests {
     /// `CFAPattern` `pattern` and an AOC maker note with the area tags (and, for 65535, a Huffman table). The samples
     /// are plain 16-bit words (1), packed 12-bit (32773) or Huffman coded (65535).
     fn pef_with_pattern(compression: u16, pattern: [u8; 4]) -> Vec<u8> {
-        use lightcraft_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
+        use lcc_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
         let (w, h) = (16usize, 8usize);
         let px: Vec<u16> = (0..w * h).map(|i| ((i * 37) % 900 + 100) as u16).collect();
         let (tb, codes) = test_table();
@@ -589,7 +589,7 @@ mod tests {
     /// A `w x h` big-endian 14-bit PEF of plain 16-bit words without area tags, whose maker note has only a
     /// BlackPoint of `black`, with `px(x, y)` as the samples.
     fn pef_with_black_point(w: usize, h: usize, black: u16, px: impl Fn(usize, usize) -> u16) -> Vec<u8> {
-        use lightcraft_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
+        use lcc_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
         let strip: Vec<u8> = (0..w * h).flat_map(|i| px(i % w, i / w).to_be_bytes()).collect();
         let build = |levels_at: u32| {
             let mut ifd = IfdBuilder::new();

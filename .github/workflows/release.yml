@@ -1,5 +1,22 @@
-# Release pipeline: every push to `release` builds signed installers for every platform and
-# creates or updates the draft GitHub Release "LightCraft v<version>". See docs/releasing.md.
+# Release pipeline: every push to `release` builds platform artifacts (signed where credentials
+# are configured) and creates or updates the draft GitHub Release "<display_name> v<version>".
+# See docs/releasing.md.
+#
+# The version job creates (or reuses) the draft; each platform job uploads its own files to it with
+# `gh release upload` (Actions artifacts crawl from the self-hosted runners), plus a few-byte checksum
+# artifact; the release job adds SHA256SUMS.txt, latest.json and notes. It never publishes.
+#
+# The signing jobs (macOS, Windows) and the release job run in the `release` environment (restricted
+# to the `release` branch), which holds the signing secrets. Every secret is optional: missing ones
+# produce unsigned artifacts and a warning, never a failed build. The jobs that sign nothing run
+# without it. Only the `release` branch drafts a release: elsewhere the version job refuses unless
+# it is a dry run.
+#
+# Every job runs on the maintainer's self-hosted runners (docs/ci.md, docs/releasing.md): Linux and
+# Flatpak in containers on gpu0, macOS on mac0, Windows x64 on win0, Windows ARM64 natively on
+# SNAPDRAGON. A manual dispatch is a dry run by default (`dry_run`): the signing jobs then run
+# without the `release` environment (unsigned), no draft is created and nothing is uploaded, so it
+# can't create or change a GitHub Release or tag.
 name: Release
 
 on:
@@ -11,35 +28,906 @@ on:
         description: "Version override for a test run, e.g. 0.2.0-rc.1 (empty: Cargo.toml)"
         type: string
         default: ""
+      dry_run:
+        description: "Dry run: build every platform unsigned, never draft or change a GitHub Release"
+        type: boolean
+        default: true
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ github.ref }}
+  # Never cancel a run mid-notarization or mid-upload; a newer push waits its turn.
   cancel-in-progress: false
 
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+  BUILD_SHA: ${{ github.sha }}
+  INPUT_VERSION: ${{ inputs.version }}
+  # a manual dispatch with dry_run (the default): no `release` environment, no draft release
+  DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '1' || '' }}
+
 jobs:
+  version:
+    timeout-minutes: 10
+    name: version
+    runs-on: [self-hosted, Linux, X64, lcc]
+    # No `environment: release` here or on the other jobs that sign nothing: no release secrets.
+    # contents: write only to create (or reuse) the draft release, never on a dry run or off `release`.
+    permissions:
+      contents: write
+    outputs:
+      # 'true': not a dry run and on `release`; the draft exists and every platform uploads to it
+      publish: ${{ steps.draft.outputs.publish }}
+      tag: ${{ steps.v.outputs.tag }}
+      version: ${{ steps.v.outputs.version }}
+      date: ${{ steps.v.outputs.date }}
+      prerelease: ${{ steps.v.outputs.prerelease }}
+      # brand.toml (the product name lives only there)
+      display_name: ${{ steps.v.outputs.display_name }}
+      binary: ${{ steps.v.outputs.binary }}
+      cli_binary: ${{ steps.v.outputs.cli_binary }}
+      app_id: ${{ steps.v.outputs.app_id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: v
+        name: Resolve version
+        run: |
+          . packaging/env.sh
+          v="${INPUT_VERSION#v}"
+          v="${v:-$VERSION}"
+          if ! printf '%s' "$v" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'; then
+            echo "::error::'$v' is not a version like 1.2.3 or 1.2.3-rc.1"
+            exit 1
+          fi
+          case "$v" in *-*) pre=true ;; *) pre=false ;; esac
+          {
+            echo "version=$v"
+            echo "tag=v$v"
+            echo "date=$(date -u +%Y-%m-%d)"
+            echo "prerelease=$pre"
+            echo "display_name=$BRAND_DISPLAY_NAME"
+            echo "binary=$BRAND_BINARY"
+            echo "cli_binary=$BRAND_CLI_BINARY"
+            echo "app_id=$BRAND_APP_ID"
+          } >>"$GITHUB_OUTPUT"
+          echo "### $BRAND_DISPLAY_NAME v$v (\`${GITHUB_SHA::9}\`)" >>"$GITHUB_STEP_SUMMARY"
+      - id: draft
+        name: Create or reuse the draft release
+        # Platform jobs upload into it as they finish; the release job adds checksums, latest.json and
+        # notes. It stays a draft: publishing is a separate, manual step (docs/releasing.md).
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ steps.v.outputs.tag }}
+          TITLE: ${{ steps.v.outputs.display_name }} v${{ steps.v.outputs.version }}
+          PRERELEASE: ${{ steps.v.outputs.prerelease }}
+        run: |
+          if [ -n "$DRY_RUN" ]; then
+            echo "Dry run: no draft release, nothing uploaded"
+            echo "publish=false" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$GITHUB_REF" != refs/heads/release ]; then
+            # the signing jobs' `release` environment refuses other branches too
+            echo "::error::Only the release branch drafts a release; dispatch elsewhere with dry_run=true"
+            exit 1
+          fi
+          bash .github/scripts/install-gh.sh
+          command -v gh >/dev/null || PATH="$(tail -n 1 "$GITHUB_PATH"):$PATH"
+          if draft="$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null)"; then
+            if [ "$draft" != "true" ]; then
+              echo "::error::Release $TAG is already published. Bump the version (cargo xtask version set) before pushing to release."
+              exit 1
+            fi
+            echo "Reusing draft $TAG: removing its old assets"
+            gh release view "$TAG" --json assets --jq '.assets[].name' | while read -r asset; do
+              gh release delete-asset "$TAG" "$asset" --yes
+            done
+            gh release edit "$TAG" --draft --title "$TITLE" --target "$GITHUB_SHA" --prerelease="$PRERELEASE"
+          else
+            pre=()
+            if [ "$PRERELEASE" = true ]; then pre=(--prerelease); fi
+            echo "Creating draft $TAG"
+            gh release create "$TAG" --draft --title "$TITLE" --target "$GITHUB_SHA" --generate-notes "${pre[@]}"
+          fi
+          echo "publish=true" >>"$GITHUB_OUTPUT"
+
+  macos:
+    timeout-minutes: 90
+    name: macOS universal
+    needs: version
+    # uploads its files to the draft release (only when version says publish)
+    permissions:
+      contents: write
+    # Self-hosted mac0 (Apple silicon). The certificate goes into a temporary keychain in
+    # $RUNNER_TEMP, deleted at the end of the job; the login keychain is never touched.
+    runs-on: [self-hosted, macOS, ARM64, lcc]
+    environment: ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run) && '' || 'release' }}
+    defaults:
+      run:
+        # low priority: mac0 is also used interactively
+        shell: nice -n 19 bash -e {0}
+    env:
+      PACKAGE_VERSION: ${{ needs.version.outputs.version }}
+      BUILD_DATE: ${{ needs.version.outputs.date }}
+    steps:
+      - name: Release build cache; no signing keychain left from an earlier run
+        run: |
+          echo "CARGO_TARGET_DIR=$HOME/.cache/lcc-release-target-$RUNNER_NAME" >>"$GITHUB_ENV"
+          # a run killed before its cleanup step could leave its keychain on the search list
+          keep=()
+          while IFS= read -r kc; do
+            kc="$(printf '%s' "$kc" | tr -d '"' | xargs)"
+            case "$kc" in */app-signing.keychain-db) security delete-keychain "$kc" 2>/dev/null || true ;; "") ;; *) keep+=("$kc") ;; esac
+          done < <(security list-keychains -d user)
+          security list-keychains -d user -s "${keep[@]}"
+          security list-keychains -d user
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Fonts (optional build input; required for releases): see craftrules standards/fonts.md.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: storytold/craft-fonts
+          ref: 3d9ab3a132ed0eff457e424226a435a901da30d3 # bump deliberately
+          path: craft-fonts
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+      - name: Apply version override
+        if: inputs.version != ''
+        run: cargo xtask version set "$PACKAGE_VERSION"
+      - name: Import signing certificate
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: packaging/macos/import-cert.sh
+      - name: Build, sign, notarize
+        env:
+          CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+          CRAFT_FONTS_REQUIRED: "1"
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: packaging/macos/package.sh --arch universal
+      # SHA-256 of what this job built: a few bytes the release job turns into SHA256SUMS.txt and latest.json.
+      - name: Checksums
+        run: |
+          mkdir -p sums
+          (cd dist/release && shasum -a 256 -- *) >"sums/sums-macos.txt"
+          cat "sums/sums-macos.txt"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sums-macos
+          path: sums/sums-macos.txt
+          if-no-files-found: error
+      # Straight to the draft release (fast from the self-hosted runners; Actions artifacts crawl there).
+      - name: GitHub CLI
+        if: needs.version.outputs.publish == 'true'
+        run: bash .github/scripts/install-gh.sh
+      - name: Upload to the draft release
+        if: needs.version.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.version.outputs.tag }}
+        run: gh release upload "$TAG" --clobber -- dist/release/*
+      - name: Remove temporary keychain
+        if: always()
+        run: |
+          # delete-keychain also takes it off the search list
+          if [ -n "${MACOS_KEYCHAIN:-}" ]; then security delete-keychain "$MACOS_KEYCHAIN" || true; fi
+          rm -f "$RUNNER_TEMP"/app-signing.*
+          security list-keychains -d user
+
+  windows:
+    timeout-minutes: 90
+    name: Windows ${{ matrix.arch }}
+    needs: version
+    # uploads its files to the draft release (only when version says publish)
+    permissions:
+      contents: write
+    # Self-hosted: x64 on win0, ARM64 natively on SNAPDRAGON (Windows on ARM with the ARM64 MSVC tools;
+    # win0 has none). Signing and WiX run the same on both. docs/releasing.md.
+    runs-on: ${{ fromJSON(matrix.runner) }}
+    environment: ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run) && '' || 'release' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x64, target: x86_64-pc-windows-msvc, jobs: default, runner: '["self-hosted", "Windows", "X64", "lcc"]' }
+          # SNAPDRAGON has 12 cores; the runner's own settings held cargo to 4. Two stay free for the desktop.
+          - { arch: arm64, target: aarch64-pc-windows-msvc, jobs: '10', runner: '["self-hosted", "Windows", "ARM64", "lcc"]' }
+    env:
+      CARGO_BUILD_JOBS: ${{ matrix.jobs }}
+      PACKAGE_VERSION: ${{ needs.version.outputs.version }}
+      BUILD_DATE: ${{ needs.version.outputs.date }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Fonts (optional build input; required for releases): see craftrules standards/fonts.md.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: storytold/craft-fonts
+          ref: 3d9ab3a132ed0eff457e424226a435a901da30d3 # bump deliberately
+          path: craft-fonts
+      - name: Low priority, release build cache
+        shell: pwsh
+        run: |
+          # `bash` steps need Git Bash, not the WSL launcher in System32 (SNAPDRAGON's PATH finds that first)
+          $gitBash = 'C:\Program Files\Git\bin'
+          if (Test-Path "$gitBash\bash.exe") { Add-Content -Path $env:GITHUB_PATH -Value $gitBash }
+          Get-Process -Name Runner.Worker -ErrorAction SilentlyContinue | ForEach-Object { $_.PriorityClass = 'BelowNormal' }
+          # a short path: rc.exe fails on long ones (under LocalSystem, LOCALAPPDATA is deep in System32)
+          $dir = "C:\lcc-ci\release-$env:RUNNER_NAME"
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          Add-Content -Path $env:GITHUB_ENV -Value "CARGO_TARGET_DIR=$dir"
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Apply version override
+        if: inputs.version != ''
+        shell: bash
+        run: cargo xtask version set "$PACKAGE_VERSION"
+      # The runner account can't write to Program Files: the .NET SDK and WiX go into the runner's tool cache.
+      - uses: actions/setup-dotnet@v4
+        env:
+          DOTNET_INSTALL_DIR: ${{ runner.tool_cache }}\dotnet
+        with:
+          dotnet-version: 8.0.x
+      - name: Install WiX
+        shell: pwsh
+        run: |
+          $tools = Join-Path $env:RUNNER_TOOL_CACHE 'wix-5.0.2'
+          if (-not (Test-Path (Join-Path $tools 'wix.exe'))) { dotnet tool install --tool-path $tools wix --version 5.0.2 }
+          Add-Content -Path $env:GITHUB_PATH -Value $tools
+      - name: Clang for ring (ARM64 only; kept in the runner tool cache)
+        if: runner.arch == 'ARM64'
+        # ring's aarch64-pc-windows-msvc build needs clang, which Visual Studio's ARM64 tools lack. LLVM's
+        # portable build is unpacked into the tool cache once (nothing installed or registered).
+        shell: pwsh
+        env:
+          LLVM_VERSION: 23.1.3
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path $env:RUNNER_TOOL_CACHE "llvm-$env:LLVM_VERSION-arm64-portable"
+          $clang = Get-ChildItem $root -Recurse -Filter clang.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $clang) {
+            # the portable tarball: msiexec is off limits to the runner account (error 1601)
+            $name = "clang+llvm-$env:LLVM_VERSION-aarch64-pc-windows-msvc"
+            New-Item -ItemType Directory -Force $root | Out-Null
+            $ok = $false
+            foreach ($ext in 'tar.zst', 'tar.xz') {
+              $tarball = Join-Path $env:RUNNER_TEMP "llvm.$ext"
+              Invoke-WebRequest -UseBasicParsing -OutFile $tarball "https://github.com/llvm/llvm-project/releases/download/llvmorg-$env:LLVM_VERSION/$name.$ext"
+              tar -xf $tarball -C $root
+              $code = $LASTEXITCODE
+              Remove-Item $tarball -Force
+              if ($code -eq 0) { $ok = $true; break }
+              Write-Output "tar could not unpack .$ext (exit $code)"
+            }
+            if (-not $ok) { throw "could not unpack LLVM" }
+            $clang = Get-ChildItem $root -Recurse -Filter clang.exe | Select-Object -First 1
+          }
+          Write-Output "clang: $($clang.FullName)"
+          Add-Content -Path $env:GITHUB_PATH -Value $clang.DirectoryName
+      - name: Build, sign, package
+        shell: pwsh
+        env:
+          CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+          CRAFT_FONTS_REQUIRED: "1"
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          AZURE_CERT_PROFILE: ${{ secrets.AZURE_CERT_PROFILE }}
+        run: ./packaging/windows/package.ps1 -Arch ${{ matrix.arch }}
+      # SHA-256 of what this job built: a few bytes the release job turns into SHA256SUMS.txt and latest.json.
+      - name: Checksums
+        shell: bash
+        run: |
+          mkdir -p sums
+          (cd dist/release && sha256sum -- *) >"sums/sums-windows-${{ matrix.arch }}.txt"
+          cat "sums/sums-windows-${{ matrix.arch }}.txt"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sums-windows-${{ matrix.arch }}
+          path: sums/sums-windows-${{ matrix.arch }}.txt
+          if-no-files-found: error
+      # Straight to the draft release (fast from the self-hosted runners; Actions artifacts crawl there).
+      - name: GitHub CLI
+        if: needs.version.outputs.publish == 'true'
+        shell: bash
+        run: bash .github/scripts/install-gh.sh
+      - name: Upload to the draft release
+        if: needs.version.outputs.publish == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.version.outputs.tag }}
+        run: gh release upload "$TAG" --clobber -- dist/release/*
+
+  linux:
+    timeout-minutes: 90
+    name: Linux ${{ matrix.arch }}
+    needs: version
+    # uploads its files to the draft release (only when version says publish)
+    permissions:
+      contents: write
+    # Self-hosted gpu0, in an Ubuntu 22.04 container, so the binaries only need glibc >= 2.35 (Ubuntu
+    # 22.04+, Debian 12+, Fedora 36+, RHEL 10). Rust, the cargo registry and the target dir live in
+    # named Docker volumes (incremental between runs; never the runners' own target dirs). See
+    # docs/releasing.md.
+    runs-on: [self-hosted, Linux, X64, lcc]
+    container:
+      image: ubuntu:22.04
+      volumes:
+        - lcc-release-cargo-jammy:/opt/cargo
+        - lcc-release-rustup-jammy:/opt/rustup
+        - lcc-release-target-linux:/ci-target
+    defaults:
+      run:
+        shell: nice -n 19 bash -e {0}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x86_64, deb: amd64 }
+    env:
+      PACKAGE_VERSION: ${{ needs.version.outputs.version }}
+      BUILD_DATE: ${{ needs.version.outputs.date }}
+      NFPM_VERSION: 2.47.0
+      CARGO_HOME: /opt/cargo
+      RUSTUP_HOME: /opt/rustup
+      CARGO_TARGET_DIR: /ci-target
+    steps:
+      - name: Install git (for the checkouts)
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates curl git
+          git config --global --add safe.directory '*'
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Fonts (optional build input; required for releases): see craftrules standards/fonts.md.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: storytold/craft-fonts
+          ref: 3d9ab3a132ed0eff457e424226a435a901da30d3 # bump deliberately
+          path: craft-fonts
+      - name: Install build and packaging tools
+        run: |
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential pkg-config file \
+            libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev \
+            desktop-file-utils appstream python3-yaml zsync
+          curl -fsSL -o "$RUNNER_TEMP/nfpm.deb" \
+            "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VERSION}/nfpm_${NFPM_VERSION}_${{ matrix.deb }}.deb"
+          dpkg -i "$RUNNER_TEMP/nfpm.deb"
+      - name: Install Rust (kept in a volume)
+        run: |
+          if [ ! -x "$CARGO_HOME/bin/rustup" ]; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable --no-modify-path
+          fi
+          "$CARGO_HOME/bin/rustup" update stable --no-self-update
+          "$CARGO_HOME/bin/rustup" default stable
+          echo "$CARGO_HOME/bin" >>"$GITHUB_PATH"
+      - name: Apply version override
+        if: inputs.version != ''
+        run: cargo xtask version set "$PACKAGE_VERSION"
+      - name: Build and package (AppImage, deb, rpm, tar.gz)
+        env:
+          CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+          CRAFT_FONTS_REQUIRED: "1"
+          # appimagetool is an AppImage; no FUSE in the container
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: packaging/linux/package.sh
+      - name: Check the packages
+        run: |
+          dpkg-deb --info dist/release/*.deb
+          . packaging/env.sh
+          dpkg-deb --contents dist/release/*.deb | grep -E "usr/bin/$BRAND_BINARY\$|metainfo|applications"
+          ldd "${CARGO_TARGET_DIR:-target}/release/app"
+          cargo xtask package --render-only
+          python3 -c "import yaml, os; a = os.environ['BRAND_APP_ID']; m = yaml.safe_load(open(os.path.join(os.environ.get('CARGO_TARGET_DIR', 'target'), f'package/linux/flatpak/{a}.yml'))); assert m['id'] == a"
+          for appimage in dist/release/*.AppImage; do
+            chmod +x "$appimage"
+            APPIMAGE_EXTRACT_AND_RUN=1 "$appimage" --version
+            # Update information is embedded, and the .zsync for delta updates sits beside it.
+            "$appimage" --appimage-updateinformation | grep -F 'gh-releases-zsync|'
+            test -s "$appimage.zsync"
+          done
+      # SHA-256 of what this job built: a few bytes the release job turns into SHA256SUMS.txt and latest.json.
+      - name: Checksums
+        run: |
+          mkdir -p sums
+          (cd dist/release && sha256sum -- *) >"sums/sums-linux-${{ matrix.arch }}.txt"
+          cat "sums/sums-linux-${{ matrix.arch }}.txt"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sums-linux-${{ matrix.arch }}
+          path: sums/sums-linux-${{ matrix.arch }}.txt
+          if-no-files-found: error
+      # Straight to the draft release (fast from the self-hosted runners; Actions artifacts crawl there).
+      - name: GitHub CLI
+        if: needs.version.outputs.publish == 'true'
+        run: bash .github/scripts/install-gh.sh
+      - name: Upload to the draft release
+        if: needs.version.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.version.outputs.tag }}
+        run: gh release upload "$TAG" --clobber -- dist/release/*
+      # Only a dry run hands the Flatpak job its tarball as an artifact (there is no draft to fetch it from).
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: needs.version.outputs.publish != 'true'
+        with:
+          name: dryrun-linux-tarball-${{ matrix.arch }}
+          path: dist/release/*.tar.gz
+          if-no-files-found: error
+      - name: Hand the workspace back to the runner user
+        if: always()
+        # the container runs as root; root-owned files would break the next checkout on the host
+        run: chown -R "$(stat -c %u:%g "$GITHUB_WORKSPACE/..")" "$GITHUB_WORKSPACE"
+
+  flatpak:
+    timeout-minutes: 90
+    name: Flatpak ${{ matrix.arch }}
+    needs: [version, linux]
+    # uploads its files to the draft release (only when version says publish)
+    permissions:
+      contents: write
+    # Off while the repo variable RELEASE_FLATPAK is 'false' (the container smoke test can't reach a D-Bus
+    # session yet); on otherwise.
+    if: vars.RELEASE_FLATPAK != 'false'
+    # Repackages the Linux job's tarball (the same binaries as the AppImage/deb/rpm); no Rust
+    # build here. Self-hosted gpu0, in an Ubuntu 24.04 container (flatpak-builder 1.4); privileged,
+    # because flatpak-builder and `flatpak run` sandbox with bubblewrap. The Flathub runtime and SDK
+    # stay in a named Docker volume between runs.
+    runs-on: [self-hosted, Linux, X64, lcc]
+    container:
+      image: ubuntu:24.04
+      options: --privileged
+      volumes:
+        - lcc-release-flatpak-user:/flatpak-user
+    defaults:
+      run:
+        shell: nice -n 19 bash -e {0}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x86_64 }
+    env:
+      PACKAGE_VERSION: ${{ needs.version.outputs.version }}
+      BUILD_DATE: ${{ needs.version.outputs.date }}
+      FLATPAK_USER_DIR: /flatpak-user
+      CARGO_TARGET_DIR: /tmp/flatpak-target
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install flatpak-builder
+        run: |
+          apt-get update
+          # librsvg2-common: the SVG pixbuf loader. flatpak-builder runs the host's
+          # `appstreamcli compose`, which renders the scalable icon and fails without it.
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            ca-certificates curl flatpak flatpak-builder librsvg2-common appstream git dbus
+      # The Linux job's tarball: from the draft release, or (a dry run, no draft) its small artifact.
+      - name: GitHub CLI
+        if: needs.version.outputs.publish == 'true'
+        run: bash .github/scripts/install-gh.sh
+      - name: Fetch the Linux tarball from the draft release
+        if: needs.version.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.version.outputs.tag }}
+          TARBALL: ${{ needs.version.outputs.binary }}-${{ needs.version.outputs.version }}-linux-${{ matrix.arch }}.tar.gz
+        run: gh release download "$TAG" --clobber --pattern "$TARBALL" --dir dist/linux
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: needs.version.outputs.publish != 'true'
+        with:
+          name: dryrun-linux-tarball-${{ matrix.arch }}
+          path: dist/linux
+      - name: Build the Flatpak bundle
+        # `flatpak run` (the bundle's smoke test) needs a system bus (else "Could not connect: No such
+        # file or directory"), a session bus and a runtime dir, none of which the container has.
+        run: |
+          mkdir -p /run/dbus
+          dbus-daemon --system --fork
+          XDG_RUNTIME_DIR="$(mktemp -d)"
+          export XDG_RUNTIME_DIR
+          dbus-run-session -- packaging/linux/flatpak-bundle.sh "dist/linux/${{ needs.version.outputs.binary }}-$PACKAGE_VERSION-linux-${{ matrix.arch }}.tar.gz"
+      # SHA-256 of what this job built: a few bytes the release job turns into SHA256SUMS.txt and latest.json.
+      - name: Checksums
+        run: |
+          mkdir -p sums
+          (cd dist/release && sha256sum -- *.flatpak) >"sums/sums-flatpak-${{ matrix.arch }}.txt"
+          cat "sums/sums-flatpak-${{ matrix.arch }}.txt"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sums-flatpak-${{ matrix.arch }}
+          path: sums/sums-flatpak-${{ matrix.arch }}.txt
+          if-no-files-found: error
+      # Straight to the draft release (fast from the self-hosted runners; Actions artifacts crawl there).
+      - name: GitHub CLI
+        if: needs.version.outputs.publish == 'true'
+        run: bash .github/scripts/install-gh.sh
+      - name: Upload to the draft release
+        if: needs.version.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.version.outputs.tag }}
+        run: gh release upload "$TAG" --clobber -- dist/release/*.flatpak
+      - name: Hand the workspace back to the runner user
+        if: always()
+        run: chown -R "$(stat -c %u:%g "$GITHUB_WORKSPACE/..")" "$GITHUB_WORKSPACE"
+
+  linux-riscv64:
+    timeout-minutes: 90
+    name: Linux riscv64
+    needs: version
+    # uploads its files to the draft release (only when version says publish)
+    permissions:
+      contents: write
+    # Disabled 2026-10-13 (maintainer): not built for releases. Set the repository variable
+    # RELEASE_RISCV64=true to re-enable; it then needs an Ubuntu 24.04 container on gpu0 (it uses sudo/apt).
+    if: vars.RELEASE_RISCV64 == 'true'
+    # Cross-compiled on x86_64 (no hosted RISC-V runners) against the runner's own Ubuntu release
+    # from ports.ubuntu.com, so the binaries need that release's glibc (24.04: 2.39). 22.04's
+    # riscv64 ports lag its amd64 updates, which breaks the multiarch install. tar.gz only; the
+    # CLI is smoke-tested under QEMU.
+    runs-on: [self-hosted, Linux, X64, lcc]
+    # No `environment: release`: this job signs nothing, so it gets no release secrets.
+    env:
+      PACKAGE_VERSION: ${{ needs.version.outputs.version }}
+      BUILD_DATE: ${{ needs.version.outputs.date }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Fonts (optional build input; required for releases): see craftrules standards/fonts.md.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: storytold/craft-fonts
+          ref: 3d9ab3a132ed0eff457e424226a435a901da30d3 # bump deliberately
+          path: craft-fonts
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          targets: riscv64gc-unknown-linux-gnu
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: release-linux-riscv64
+      - name: Apply version override
+        if: inputs.version != ''
+        run: cargo xtask version set "$PACKAGE_VERSION"
+      - name: Install cross-compilation dependencies
+        run: |
+          . /etc/os-release
+          sudo dpkg --add-architecture riscv64
+          # Pin the existing (archive.ubuntu.com) sources to amd64; riscv64 comes from ports.
+          if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
+            sudo sed -i '/^Types: deb/a Architectures: amd64' /etc/apt/sources.list.d/ubuntu.sources
+          fi
+          if [ -f /etc/apt/sources.list ]; then
+            sudo sed -i 's/^deb /deb [arch=amd64] /g' /etc/apt/sources.list
+            sudo sed -i 's/^deb-src /deb-src [arch=amd64] /g' /etc/apt/sources.list
+          fi
+          for suite in "$VERSION_CODENAME" "$VERSION_CODENAME-updates" "$VERSION_CODENAME-security"; do
+            echo "deb [arch=riscv64] http://ports.ubuntu.com/ubuntu-ports $suite main universe restricted multiverse"
+          done | sudo tee /etc/apt/sources.list.d/riscv64.list
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu libc6-dev-riscv64-cross libc6-dev:riscv64 qemu-user \
+            libxkbcommon-dev:riscv64 libwayland-dev:riscv64 libx11-dev:riscv64 libxrandr-dev:riscv64 \
+            libxi-dev:riscv64 libgl1-mesa-dev:riscv64
+      - name: Build and package (tar.gz)
+        env:
+          CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+          CRAFT_FONTS_REQUIRED: "1"
+          CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_LINKER: riscv64-linux-gnu-gcc
+          PKG_CONFIG_SYSROOT_DIR: /
+          PKG_CONFIG_PATH: /usr/lib/riscv64-linux-gnu/pkgconfig:/usr/share/pkgconfig
+          PKG_CONFIG_ALLOW_CROSS: "1"
+          CROSS_ARCH: riscv64
+          CROSS_TARGET: riscv64gc-unknown-linux-gnu
+          CROSS_COMPILE: riscv64-linux-gnu-
+          EMULATOR: qemu-riscv64
+          QEMU_LD_PREFIX: /usr/riscv64-linux-gnu
+        run: packaging/linux/package.sh --formats tar
+      - name: Check the tarball
+        run: |
+          . packaging/env.sh
+          tar -tzf "dist/release/$BRAND_BINARY-"*-linux-riscv64.tar.gz \
+            | grep -E "/bin/$BRAND_BINARY\$|/bin/$BRAND_CLI_BINARY\$|/share/applications/$BRAND_APP_ID\.desktop\$"
+      # SHA-256 of what this job built: a few bytes the release job turns into SHA256SUMS.txt and latest.json.
+      - name: Checksums
+        run: |
+          mkdir -p sums
+          (cd dist/release && sha256sum -- *.tar.gz) >"sums/sums-linux-riscv64.txt"
+          cat "sums/sums-linux-riscv64.txt"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sums-linux-riscv64
+          path: sums/sums-linux-riscv64.txt
+          if-no-files-found: error
+      # Straight to the draft release (fast from the self-hosted runners; Actions artifacts crawl there).
+      - name: GitHub CLI
+        if: needs.version.outputs.publish == 'true'
+        run: bash .github/scripts/install-gh.sh
+      - name: Upload to the draft release
+        if: needs.version.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.version.outputs.tag }}
+        run: gh release upload "$TAG" --clobber -- dist/release/*.tar.gz
+
+  freebsd:
+    name: FreeBSD x86_64
+    needs: version
+    # uploads its files to the draft release (only when version says publish)
+    permissions:
+      contents: write
+    # Disabled 2026-10-13 (maintainer): not built for releases. Set the repository variable
+    # RELEASE_FREEBSD=true to re-enable (the VM needs KVM on gpu0).
+    if: vars.RELEASE_FREEBSD == 'true'
+    # Build in a FreeBSD 14.3 VM, the same image and packages as .github/workflows/freebsd.yml.
+    runs-on: [self-hosted, Linux, X64, lcc]
+    timeout-minutes: 180
+    env:
+      PACKAGE_VERSION: ${{ needs.version.outputs.version }}
+      BUILD_DATE: ${{ needs.version.outputs.date }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Fonts (optional build input; required for releases): see craftrules standards/fonts.md.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: storytold/craft-fonts
+          ref: 3d9ab3a132ed0eff457e424226a435a901da30d3 # bump deliberately
+          path: craft-fonts
+      - name: Build and package in a FreeBSD VM (tar.gz)
+        # vmactions/freebsd-vm v1.5.9, pinned by commit (it runs our build).
+        uses: vmactions/freebsd-vm@c46abacb49f09938ca4e1702d15d836285d694cc # v1.5.9
+        with:
+          release: "14.3"
+          usesh: true
+          cpu: 4
+          mem: 12288
+          # Passed into the VM by name; never templated into the script below.
+          envs: "PACKAGE_VERSION BUILD_DATE BUILD_SHA INPUT_VERSION"
+          # The FreeBSD CI packages, plus bash for the packaging script.
+          prepare: |
+            pkg install -y bash git curl pkgconf cmake python3 libxkbcommon wayland libX11 libXcursor libXrandr libXi libxcb mesa-libs vulkan-loader gtk3 fontconfig freetype2 alsa-lib
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
+          run: |
+            set -e
+            . "$HOME/.cargo/env"
+            git config --global --add safe.directory "$PWD"
+            # Build outside the checkout so only dist/ is copied back out of the VM (copying the
+            # target dir back fails on large builds). 4 jobs: more runs the VM out of memory.
+            export CARGO_TARGET_DIR=/var/tmp/app-target CARGO_BUILD_JOBS=4
+            if [ -n "$INPUT_VERSION" ]; then cargo xtask version set "$PACKAGE_VERSION"; fi
+            # craft-fonts was checked out next to the sources and synced into the VM with them.
+            export CRAFT_FONTS_DIR="$PWD/craft-fonts" CRAFT_FONTS_REQUIRED=1
+            bash packaging/freebsd/package.sh
+            # env.sh is bash (BASH_SOURCE); the VM's run shell is sh
+            bash -e <<'CHECK'
+            . packaging/env.sh
+            tar -tzf "dist/release/$BRAND_BINARY-"*-freebsd-x86_64.tar.gz \
+              | grep -E "/bin/$BRAND_BINARY\$|/bin/$BRAND_CLI_BINARY\$|/share/applications/$BRAND_APP_ID\.desktop\$|/share/doc/$BRAND_BINARY/LICENSE\$"
+            CHECK
+      # SHA-256 of what this job built: a few bytes the release job turns into SHA256SUMS.txt and latest.json.
+      - name: Checksums
+        run: |
+          mkdir -p sums
+          (cd dist/release && sha256sum -- *) >"sums/sums-freebsd-x86_64.txt"
+          cat "sums/sums-freebsd-x86_64.txt"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sums-freebsd-x86_64
+          path: sums/sums-freebsd-x86_64.txt
+          if-no-files-found: error
+      # Straight to the draft release (fast from the self-hosted runners; Actions artifacts crawl there).
+      - name: GitHub CLI
+        if: needs.version.outputs.publish == 'true'
+        run: bash .github/scripts/install-gh.sh
+      - name: Upload to the draft release
+        if: needs.version.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.version.outputs.tag }}
+        run: gh release upload "$TAG" --clobber -- dist/release/*
+
+  web:
+    timeout-minutes: 90
+    name: Web (wasm)
+    needs: version
+    # uploads its files to the draft release (only when version says publish)
+    permissions:
+      contents: write
+    runs-on: [self-hosted, Linux, X64, lcc]
+    defaults:
+      run:
+        shell: nice -n 19 bash -e {0}
+    env:
+      PACKAGE_VERSION: ${{ needs.version.outputs.version }}
+      BUILD_DATE: ${{ needs.version.outputs.date }}
+      WASM_BINDGEN_VERSION: 0.2.129
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Fonts (optional build input; required for releases): see craftrules standards/fonts.md.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: storytold/craft-fonts
+          ref: 3d9ab3a132ed0eff457e424226a435a901da30d3 # bump deliberately
+          path: craft-fonts
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Release build cache
+        run: echo "CARGO_TARGET_DIR=$HOME/.cache/lcc-release-target-$RUNNER_NAME" >>"$GITHUB_ENV"
+      - name: Install wasm-bindgen CLI
+        run: |
+          # Must match the wasm-bindgen version in Cargo.lock exactly (cargo xtask web checks it).
+          # cargo install puts it in cargo's bin dir, which the runner's PATH may lack
+          bin="${CARGO_HOME:-$HOME/.cargo}/bin"
+          export PATH="$bin:$PATH"
+          echo "$bin" >>"$GITHUB_PATH"
+          if ! { command -v wasm-bindgen >/dev/null && wasm-bindgen --version | grep -q "$WASM_BINDGEN_VERSION"; }; then
+            cargo install wasm-bindgen-cli --version "$WASM_BINDGEN_VERSION" --locked
+          fi
+          wasm-bindgen --version
+      - name: Apply version override
+        if: inputs.version != ''
+        run: cargo xtask version set "$PACKAGE_VERSION"
+      - name: Build and zip
+        env:
+          CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+          CRAFT_FONTS_REQUIRED: "1"
+        run: packaging/web/package.sh
+      # SHA-256 of what this job built: a few bytes the release job turns into SHA256SUMS.txt and latest.json.
+      - name: Checksums
+        run: |
+          mkdir -p sums
+          (cd dist/release && sha256sum -- *) >"sums/sums-web.txt"
+          cat "sums/sums-web.txt"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sums-web
+          path: sums/sums-web.txt
+          if-no-files-found: error
+      # Straight to the draft release (fast from the self-hosted runners; Actions artifacts crawl there).
+      - name: GitHub CLI
+        if: needs.version.outputs.publish == 'true'
+        run: bash .github/scripts/install-gh.sh
+      - name: Upload to the draft release
+        if: needs.version.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.version.outputs.tag }}
+        run: gh release upload "$TAG" --clobber -- dist/release/*
+
   release:
-    # Intentionally tracked at @main (not SHA-pinned) so org-wide CI improvements, security fixes, and build optimizations propagate without PR churn across all craftapp repos.
-    uses: storytold/craft-common-actions/.github/workflows/release.yml@main
-    with:
-      app-name: lightcraft
-      app-title: LightCraft
-      craft-fonts-ref: 3d9ab3a132ed0eff457e424226a435a901da30d3
-      version: ${{ inputs.version }}
-    secrets:
-      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-      KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-      APPLE_ID: ${{ secrets.APPLE_ID }}
-      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-      WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
-      WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
-      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-      AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
-      AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
-      AZURE_CERT_PROFILE: ${{ secrets.AZURE_CERT_PROFILE }}
+    timeout-minutes: 10
+    name: Draft GitHub Release
+    needs: [version, macos, windows, linux, flatpak, linux-riscv64, freebsd, web]
+    # Finishes whatever built: a platform that failed is named in the run summary and the draft's notes,
+    # so testers get the rest. Cancelling the run, or the version job failing, still stops it.
+    # Never on a dry run (a manual dispatch defaults to one): there is no draft then.
+    # The files are already on the draft (each platform job uploaded its own); this job only adds
+    # SHA256SUMS.txt, latest.json and the notes, from the platforms' small checksum artifacts.
+    if: ${{ !cancelled() && needs.version.result == 'success' && needs.version.outputs.publish == 'true' }}
+    runs-on: [self-hosted, Linux, X64, lcc]
+    environment: release
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      TAG: ${{ needs.version.outputs.tag }}
+      PRERELEASE: ${{ needs.version.outputs.prerelease }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: GitHub CLI (gpu0 has none)
+        run: bash .github/scripts/install-gh.sh
+      - name: Start from an empty folder
+        run: rm -rf sums out && mkdir -p out
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: sums-*
+          path: sums
+          merge-multiple: true
+      - name: Platforms that did not build
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          # a job switched off (a repository variable) is skipped, not missing
+          missing="$(jq -r 'to_entries[] | select(.key != "version" and .value.result != "success" and .value.result != "skipped") | .key' <<<"$RESULTS" | paste -sd, - | sed 's/,/, /g')"
+          if [ -n "$missing" ]; then
+            echo "::warning::Drafting without: $missing"
+            echo "MISSING=$missing" >>"$GITHUB_ENV"
+          fi
+      - name: Checksums
+        run: |
+          # the platforms' own sums (binary-mode `*name` normalised), only for files on the draft
+          gh release view "$TAG" --json assets --jq '.assets[] | "\(.name) \(.size)"' | grep -v -e '^SHA256SUMS.txt ' -e '^latest.json ' >out/assets.txt || true
+          [ -s out/assets.txt ] || { echo "::error::draft $TAG has no assets"; exit 1; }
+          cat sums/*.txt 2>/dev/null | sed 's/^\([0-9a-f]\{64\}\) [ *]/\1  /' | sort -k2 -u >out/all-sums.txt
+          : >out/SHA256SUMS.txt
+          while read -r name _size; do
+            line="$(awk -v n="$name" '$2 == n { print; exit }' out/all-sums.txt)"
+            [ -n "$line" ] || { echo "::error::no checksum for $name"; exit 1; }
+            echo "$line" >>out/SHA256SUMS.txt
+          done <out/assets.txt
+          cat out/SHA256SUMS.txt
+      - name: Notes, checksums
+        working-directory: out
+        run: |
+          title="${{ needs.version.outputs.display_name }} v$VERSION"
+          notes="$(gh release view "$TAG" --json body --jq .body)"
+          # a re-run replaces an earlier run's line rather than stacking them
+          notes="$(printf '%s\n' "$notes" | sed '/^> \*\*Not in this build:\*\*/,/^$/d')"
+          if [ -n "${MISSING:-}" ]; then
+            notes="> **Not in this build:** $MISSING (the job failed; see the workflow run).
+
+          $notes"
+          fi
+          gh release edit "$TAG" --draft --notes "$notes"
+          gh release upload "$TAG" --clobber SHA256SUMS.txt
+          {
+            echo "Draft release **$title** at \`${GITHUB_SHA::9}\`:"
+            echo
+            sed 's/^/    /' SHA256SUMS.txt
+          } >>"$GITHUB_STEP_SUMMARY"
+      - name: Update manifest (latest.json)
+        working-directory: out
+        # What Help ▸ Check for Updates… reads (the in-app updater, crates/updater): the version, the
+        # release notes and, per platform, the file to download and its SHA-256. Published on every
+        # release — prereleases included, marked as such; the app only offers one to someone who
+        # ticked "Include prereleases" — it is a plain file on the release, so the check keeps
+        # working when GitHub's API is rate-limited. It is built after the notes are set so they are
+        # the published ones ("What's New" in the dialog). Sizes come from the draft's assets.
+        env:
+          DISPLAY_NAME: ${{ needs.version.outputs.display_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          rm -f latest.json latest.json.new
+          notes="$(gh release view "$TAG" --json body --jq .body)"
+          jq -n --arg version "$VERSION" --arg name "$DISPLAY_NAME v$VERSION" \
+                --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+                --arg tag "$TAG" --arg repo "$REPO" --arg notes "$notes" \
+                --argjson pre "$PRERELEASE" '{
+            version: $version,
+            name: $name,
+            pub_date: $date,
+            notes: $notes,
+            releases: [{
+              tag: $tag,
+              name: $name,
+              notes: $notes,
+              date: $date,
+              prerelease: $pre,
+              assets: []
+            }]
+          }' > latest.json
+          # every asset on the draft (the platforms' files) becomes an entry, with its size and SHA-256
+          while read -r f size; do
+            sha="$(awk -v name="$f" '$2 == name { print $1; exit }' SHA256SUMS.txt)"
+            [ -n "$sha" ] || { echo "::error::no checksum for $f"; exit 1; }
+            jq --arg name "$f" --arg url "https://github.com/$REPO/releases/download/$TAG/$f" \
+               --arg sha "$sha" --argjson size "$size" \
+               '.releases[0].assets += [{name: $name, url: $url, size: $size, sha256: $sha}]' \
+               latest.json > latest.json.new
+            /bin/mv -f latest.json.new latest.json
+          done <assets.txt
+          jq -e '.version != "" and (.releases[0].assets | length) > 0' latest.json >/dev/null
+          gh release upload "$TAG" --clobber latest.json
+          jq -r '.releases[0].assets[] | "\(.name) \(.size) \(.sha256)"' latest.json

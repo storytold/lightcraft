@@ -21,7 +21,7 @@ pub const MAX_PAGE_PIXELS: u64 = 100_000_000;
 pub const MAX_JOB_PIXELS: u64 = 200_000_000;
 
 /// One composed page, ready for output: row-major interleaved RGB, 16 bits per sample, encoded in
-/// Rec. 2020 ([`lightcraft_pipeline::OutputSpace::Rec2020`]; the transfer curve is that space's).
+/// Rec. 2020 ([`lcc_pipeline::OutputSpace::Rec2020`]; the transfer curve is that space's).
 /// The page covers its paper edge to edge: `width / ppi` by `height / ppi` inches.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PageRaster {

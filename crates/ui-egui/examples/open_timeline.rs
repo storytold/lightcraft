@@ -1,10 +1,10 @@
 //! Opening raw photos in the loupe, timed through the real app logic, headless (no compositor, so no frame
 //! throttling) but with the GPU on: import FILES into an in-memory library, open the first in Detail, then step to
 //! the next one once its neighbour prefetch is done and once more at once.
-//! `cargo run --release -p lightcraft-ui-egui --example open_timeline -- a.ARW b.ARW c.ARW`
-//! (`LIGHTCRAFT_PROFILE=1` adds the engine's stage timings; every line carries ms since start on stderr).
-use lightcraft_engine::Session;
-use lightcraft_ui_egui::{LightcraftApp, Services, headless::Headless};
+//! `cargo run --release -p lcc-ui-egui --example open_timeline -- a.ARW b.ARW c.ARW`
+//! (`<PREFIX>_PROFILE=1` adds the engine's stage timings; every line carries ms since start on stderr).
+use lcc_engine::Session;
+use lcc_ui_egui::{LccApp, Services, headless::Headless};
 use serde_json::{Value, json};
 use std::time::{Duration, Instant};
 
@@ -15,7 +15,7 @@ fn main() {
     let mut s = Session::new().with_fs();
     let r = s.execute("library.import", &json!({"paths": files})).expect("import");
     eprintln!("{:9.1} imported {}", ms(), r["imported"]);
-    let mut h = Headless::new(LightcraftApp::new(s, Services::default()), [1600.0, 1000.0], 1.0);
+    let mut h = Headless::new(LccApp::new(s, Services::default()), [1600.0, 1000.0], 1.0);
     let req = |h: &mut Headless, m: &str, p: Value| h.request(m, p, Duration::from_secs(60));
     let cmd = |h: &mut Headless, c: &str| req(h, "engine.execute", json!({"command": c}))["result"].clone();
     cmd(&mut h, "view.photoGrid");

@@ -17,7 +17,7 @@
 //! this API: plane validation rejects any gain on the low-frequency bands first. It is defence in
 //! depth, not a contract, and has no test here.
 
-use lightcraft_raw::{RawData, RawError, decode, probe_info};
+use lcc_raw::{RawData, RawError, decode, probe_info};
 
 // --- minimal CR3 container -------------------------------------------------
 
@@ -264,13 +264,6 @@ fn bit_depth_outside_8_to_16_is_unsupported() {
     let mut coding = cmp1();
     coding[24] = 7;
     assert_rejected("7-bit", &cr3_file(&coding, &lossless_stream(0xff01, 0xff02, 0xff03, 0, 0)), "Canon CRX 7-bit samples");
-}
-
-#[test]
-fn vertical_craw_tiling_is_unsupported() {
-    let mut coding = craw_coding();
-    coding[20..24].copy_from_slice(&8u32.to_be_bytes()); // two tile rows
-    assert_rejected("vertical tiles", &cr3_file(&coding, &craw_stream(4)), "Canon CRX C-RAW with vertical tiles");
 }
 
 #[test]

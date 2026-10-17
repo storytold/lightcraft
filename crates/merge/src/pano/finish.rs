@@ -9,7 +9,7 @@
 //! - **Fill edges**: transparent areas are filled by push–pull diffusion of the surrounding pixels
 //!   in log space (no patch synthesis).
 
-use lightcraft_raster::{Plane, Rgb32f};
+use lcc_raster::{Plane, Rgb32f};
 use rayon::prelude::*;
 
 use super::blend::{Buf, push_pull};
@@ -76,7 +76,7 @@ fn stretch(img: &Rgb32f, alpha: &Plane, amount: f64, vertical: bool) -> (Rgb32f,
             let src = lo[i] + t * (hi[i] - lo[i]);
             let s = (1.0 - amount) * (k as f64 + 0.5) + amount * src;
             let (sx, sy) = if vertical { (x as f32 + 0.5, s as f32) } else { (s as f32, y as f32 + 0.5) };
-            row[x] = img.sample_bilinear(sx, sy);
+            row[x] = img.sample_lanczos3(sx, sy);
             arow[x] = crate::features::bilinear(alpha, sx, sy);
         }
     });

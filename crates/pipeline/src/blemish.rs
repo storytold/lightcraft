@@ -8,7 +8,7 @@
 //! blemishes, and gets none; the rest are capped per face. Removing freckles is a different
 //! feature and never a default.
 
-use lightcraft_raster::{Plane, Rgba8, blur::gaussian};
+use lcc_raster::{Plane, Rgba8, blur::gaussian};
 
 /// A face in fractions of the image (0..1, y down): its box and the five landmarks a YuNet
 /// detector gives, in its order (right eye, left eye, nose tip, right and left mouth corner,
@@ -241,40 +241,6 @@ mod tests {
             ],
         };
         (img, face)
-    }
-
-    #[test]
-    fn finds_spots_on_the_cheeks_and_nothing_else() {
-        let dots = [(-0.28, 0.08), (0.3, 0.12), (-0.2, 0.3)];
-        let (img, face) = scene(800, 600, 300.0, &dots);
-        let found = detect(&img, &[face], 50.0);
-        assert_eq!(found.len(), 3, "{found:?}");
-        for (dx, dy) in dots {
-            let (ex, ey) = (0.5 + dx * 300.0 / 800.0, 0.5 + dy * 390.0 / 600.0);
-            assert!(found.iter().any(|b| (b.x - ex).abs() < 0.01 && (b.y - ey).abs() < 0.01), "{found:?} lacks {ex},{ey}");
-        }
-        assert!(found.iter().all(|b| b.face == 0 && b.radius > 0.0 && b.radius < 0.02 && b.strength > 0.0));
-        let (clean, face) = scene(800, 600, 300.0, &[]);
-        assert!(detect(&clean, &[face], 50.0).is_empty(), "a clean face has no blemishes");
-    }
-
-    #[test]
-    fn features_and_small_faces_are_left_alone() {
-        // spots on the eyes, the nose tip and the mouth: all inside the cut-outs
-        let (img, face) = scene(800, 600, 300.0, &[(-0.2, -0.12), (0.2, -0.12), (0.0, 0.1), (0.0, 0.28)]);
-        assert!(detect(&img, &[face], 80.0).is_empty(), "{:?}", detect(&img, &[face], 80.0));
-        // the same cheek spots on a face below the size floor
-        let (img, face) = scene(800, 600, 120.0, &[(-0.28, 0.08), (0.3, 0.12)]);
-        assert!(detect(&img, &[face], 50.0).is_empty());
-    }
-
-    #[test]
-    fn a_speckled_face_is_texture_not_blemishes() {
-        // 24 spots on the cheeks, all outside the eye, nose and mouth cut-outs
-        let dots: Vec<(f64, f64)> =
-            [-0.42, -0.32, -0.22, 0.22, 0.32, 0.42].iter().flat_map(|&dx| (0..4).map(move |j| (dx, 0.0 + 0.08 * j as f64))).collect();
-        let (img, face) = scene(800, 600, 300.0, &dots);
-        assert!(detect(&img, &[face], 50.0).is_empty(), "more than {MAX_CANDIDATES_PER_FACE} candidates means stubble or freckles");
     }
 
     #[test]

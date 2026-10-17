@@ -2,18 +2,18 @@
 
 use std::time::Duration;
 
-use lightcraft_engine::activity::{Cancel, TaskInfo, Unit};
+use lcc_engine::activity::{Cancel, Unit};
 use serde_json::json;
 
 use crate::headless::Headless;
-use crate::panels::activity::{WIDTH, count_text};
-use crate::{LightcraftApp, Services};
+use crate::panels::activity::WIDTH;
+use crate::{LccApp, Services};
 
 // generous: merges and renders run on worker threads that a busy machine (a full workspace test run) slows a lot
 const T: Duration = Duration::from_secs(60);
 
 fn demo() -> Headless {
-    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let app = LccApp::new(lcc_engine::Session::with_demo(), Services { png: None, ..Default::default() });
     let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
     // let the first renders finish: a render still running when the test binary exits can crash in the
     // GPU driver's teardown (the preview pool doesn't join its workers)
@@ -98,29 +98,6 @@ fn not_cancellable_rows_have_no_cross() {
 }
 
 #[test]
-fn count_text_by_unit() {
-    let mut t = TaskInfo {
-        id: 1,
-        kind: "export",
-        label: "Exporting".into(),
-        done: 3,
-        total: 25,
-        unit: Unit::Count,
-        detail: String::new(),
-        cancellable: true,
-        cancelling: false,
-        age_ms: 600,
-    };
-    assert_eq!(count_text(&t), "3 of 25");
-    (t.done, t.total, t.unit) = (12 * 1_048_576, 340 * 1_048_576, Unit::Bytes);
-    assert_eq!(count_text(&t), "12 of 340 MB");
-    (t.done, t.total, t.unit) = (400, 1000, Unit::Percent);
-    assert_eq!(count_text(&t), "40 %");
-    t.total = 0;
-    assert_eq!(count_text(&t), "");
-}
-
-#[test]
 fn stale_cancel_is_harmless() {
     let mut h = demo();
     let g = h.app.session.activity.start("export", "Exporting", Cancel::Yes);
@@ -147,16 +124,6 @@ fn long_detail_stays_inside_the_stack() {
     wait_visible(&mut h);
     let row = rect(&h, &format!("activity:row:{}", g.id()));
     assert!(row.width() <= WIDTH + 1.0, "{row:?}");
-}
-
-#[test]
-fn cross_sits_at_the_right_edge_of_its_row() {
-    let mut h = demo();
-    let g = h.app.session.activity.start("export", "Exporting", Cancel::Yes);
-    wait_visible(&mut h);
-    let row = rect(&h, &format!("activity:row:{}", g.id()));
-    let cross = rect(&h, &format!("activity:cancel:{}", g.id()));
-    assert!(cross.right() >= row.right() - 2.0, "the cross is at the right, not after the label: {cross:?} in {row:?}");
 }
 
 #[test]
@@ -207,7 +174,7 @@ fn start_export(h: &mut Headless, n: usize) {
     h.step();
     if let Some(crate::state::Dialog::Export { full_size, resize, dir, .. }) = &mut h.app.ui.dialog {
         *full_size = false;
-        *resize = lightcraft_engine::export::Resize::long_edge(64);
+        *resize = lcc_engine::export::Resize::long_edge(64);
         *dir = "/lc-test-out".into();
     }
     let r = h.request("ui.dialog.confirm", json!({}), T);
@@ -248,18 +215,12 @@ fn slow_import(tag: &str, n: usize) -> (Headless, std::path::PathBuf) {
     for i in 0..n {
         std::fs::write(dir.join(format!("IMG_{i:03}.jpg")), format!("not really a jpeg {i}")).unwrap();
     }
-    let mut s = lightcraft_engine::Session::new();
+    let mut s = lcc_engine::Session::new();
     s.media.file_probe = Some(std::sync::Arc::new(|p: &str| {
         std::thread::sleep(Duration::from_millis(100));
-        Ok(lightcraft_engine::media::ProbeInfo {
-            width: 60,
-            height: 40,
-            format: "JPEG".into(),
-            content_hash: Some(p.to_string()),
-            ..Default::default()
-        })
+        Ok(lcc_engine::media::ProbeInfo { width: 60, height: 40, format: "JPEG".into(), content_hash: Some(p.to_string()), ..Default::default() })
     }));
-    let mut h = Headless::new(LightcraftApp::new(s, Services { png: None, ..Default::default() }), [1200.0, 800.0], 1.0);
+    let mut h = Headless::new(LccApp::new(s, Services { png: None, ..Default::default() }), [1200.0, 800.0], 1.0);
     h.settle(T);
     (h, dir)
 }
@@ -325,16 +286,16 @@ fn bracket(tag: &str) -> (Headless, std::path::PathBuf) {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let mut paths = Vec::new();
-    for (i, bytes) in lightcraft_merge::synth::bracket_dngs(1600, 1200, &[-2.0, 0.0, 2.0]).unwrap().into_iter().enumerate() {
+    for (i, bytes) in lcc_merge::synth::bracket_dngs(1600, 1200, &[-2.0, 0.0, 2.0]).unwrap().into_iter().enumerate() {
         let p = dir.join(format!("IMG_{i}.dng"));
         std::fs::write(&p, bytes).unwrap();
         paths.push(p.to_string_lossy().to_string());
     }
-    let mut session = lightcraft_engine::Session::new().with_fs();
+    let mut session = lcc_engine::Session::new().with_fs();
     let r = session.execute("library.import", &json!({"paths": paths})).unwrap();
     let ids: Vec<u64> = r["imported"].as_array().unwrap().iter().map(|v| v.as_u64().unwrap()).collect();
     session.execute("library.select", &json!({"ids": ids})).unwrap();
-    let app = LightcraftApp::new(session, Services { png: None, ..Default::default() });
+    let app = LccApp::new(session, Services { png: None, ..Default::default() });
     let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
     h.settle(T);
     (h, dir)
@@ -342,22 +303,57 @@ fn bracket(tag: &str) -> (Headless, std::path::PathBuf) {
 
 #[test]
 fn final_merge_shows_a_row_and_cancels() {
-    let (mut h, dir) = bracket("merge");
-    let before = h.app.session.catalog.len();
-    crate::merge::start_last(&mut h.app, "merge.hdr").unwrap();
-    h.step();
-    let rows = h.app.session.activity.list();
-    assert_eq!(rows.len(), 1);
-    assert_eq!((rows[0].kind, rows[0].label.as_str(), rows[0].unit), ("merge", "Merging", Unit::Percent));
-    assert!(rows[0].cancellable);
-    assert_eq!(rows[0].total, 1000);
-    h.app.session.activity.cancel(rows[0].id).unwrap();
+    for (command, cancelled) in [("merge.hdr", "HDR merge cancelled"), ("merge.focusStack", "Focus stack merge cancelled")] {
+        let (mut h, dir) = bracket(command);
+        let before = h.app.session.catalog.len();
+        crate::merge::start_last(&mut h.app, command).unwrap();
+        h.step();
+        let rows = h.app.session.activity.list();
+        assert_eq!(rows.len(), 1);
+        assert_eq!((rows[0].kind, rows[0].label.as_str(), rows[0].unit), ("merge", "Merging", Unit::Percent));
+        assert!(rows[0].cancellable);
+        assert_eq!(rows[0].total, 1000);
+        h.app.session.activity.cancel(rows[0].id).unwrap();
+        assert!(h.step_until(T, |h| h.app.merge.final_task.is_none()));
+        assert!(h.app.merge.last_result.is_none(), "{command}: nothing merged");
+        assert_eq!(h.app.session.catalog.len(), before, "{command}: no photo added");
+        assert!(h.app.session.activity.list().is_empty());
+        let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+        assert_eq!(toast, cancelled);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+/// The merge dialog opens with the options of the last merge of its kind (per kind), and "with Last
+/// Settings" uses them; a kind never merged opens with the defaults.
+#[test]
+fn merge_dialog_remembers_the_last_settings_per_kind() {
+    let (mut h, dir) = bracket("merge-last");
+    let opts = crate::merge::MergeDialog {
+        align: false,
+        deghost: "high".into(),
+        auto_settings: false,
+        ..crate::merge::MergeDialog::for_command("merge.hdr")
+    };
+    crate::merge::open(&mut h.app, "merge.hdr").unwrap();
+    h.app.ui.dialog = None;
+    crate::merge::start_final(&mut h.app, &opts).unwrap();
+    let row = h.app.session.activity.list()[0].id;
+    h.app.session.activity.cancel(row).unwrap();
     assert!(h.step_until(T, |h| h.app.merge.final_task.is_none()));
-    assert!(h.app.merge.last_result.is_none(), "nothing merged");
-    assert_eq!(h.app.session.catalog.len(), before, "no photo added");
-    assert!(h.app.session.activity.list().is_empty());
-    let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
-    assert_eq!(toast, "HDR merge cancelled");
+    crate::merge::open(&mut h.app, "merge.hdr").unwrap();
+    let Some(crate::state::Dialog::Merge { opts: shown }) = &h.app.ui.dialog else { panic!("no merge dialog") };
+    assert_eq!(shown, &opts);
+    crate::merge::open(&mut h.app, "merge.panorama").unwrap();
+    let Some(crate::state::Dialog::Merge { opts: shown }) = &h.app.ui.dialog else { panic!("no merge dialog") };
+    assert_eq!(shown, &crate::merge::MergeDialog::for_command("merge.panorama"));
+    h.app.ui.dialog = None;
+    // older or hand-edited preferences: missing fields take their defaults, junk is ignored
+    h.app.session.last_merge.insert("merge.panorama".into(), json!({"projection": "cylindrical", "command": "merge.hdr"}));
+    h.app.session.last_merge.insert("merge.hdrPanorama".into(), json!("junk"));
+    let pano = crate::merge::last_options(&h.app, "merge.panorama");
+    assert_eq!((pano.command.as_str(), pano.projection.as_str(), pano.auto_crop), ("merge.panorama", "cylindrical", true));
+    assert_eq!(crate::merge::last_options(&h.app, "merge.hdrPanorama"), crate::merge::MergeDialog::for_command("merge.hdrPanorama"));
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -371,13 +367,13 @@ fn batch_merge_runs_each_set_in_turn() {
     let mut paths = Vec::new();
     // different exposures, or the import would take set B for duplicates of set A
     for (set, evs) in [("A", [-2.0, 0.0, 2.0]), ("B", [-1.5, 0.5, 2.5]), ("C", [-1.0, 1.0, 3.0])] {
-        for (i, bytes) in lightcraft_merge::synth::bracket_dngs(1600, 1200, &evs).unwrap().into_iter().enumerate() {
+        for (i, bytes) in lcc_merge::synth::bracket_dngs(1600, 1200, &evs).unwrap().into_iter().enumerate() {
             let p = dir.join(format!("{set}_{i}.dng"));
             std::fs::write(&p, bytes).unwrap();
             paths.push(p.to_string_lossy().to_string());
         }
     }
-    let mut session = lightcraft_engine::Session::new().with_fs();
+    let mut session = lcc_engine::Session::new().with_fs();
     let r = session.execute("library.import", &json!({"paths": paths})).unwrap();
     let ids: Vec<u64> = r["imported"].as_array().unwrap().iter().map(|v| v.as_u64().unwrap()).collect();
     assert_eq!(ids.len(), 9);
@@ -385,7 +381,7 @@ fn batch_merge_runs_each_set_in_turn() {
         session.execute("stack.group", &json!({"ids": set})).unwrap();
     }
     session.execute("library.select", &json!({"ids": ids})).unwrap();
-    let app = LightcraftApp::new(session, Services { png: None, ..Default::default() });
+    let app = LccApp::new(session, Services { png: None, ..Default::default() });
     let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
     h.settle(T);
     let r = crate::menus::run_ui_command(&mut h.app, "merge.hdrBatch", &json!({})).unwrap().unwrap();

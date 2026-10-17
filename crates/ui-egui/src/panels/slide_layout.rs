@@ -9,13 +9,13 @@
 //! [`DEBOUNCE`] seconds, so a drag doesn't queue a render per frame.
 
 use egui::{Align2, Color32, Rect, Sense, Stroke, pos2, vec2};
-use lightcraft_engine::slide::{Aspect, SlideSettings};
-use lightcraft_engine::slide_template::SlideLook;
-use lightcraft_slideshow::{MARGIN_MAX, SHADOW_OFFSET_MAX, SHADOW_RADIUS_MAX, STROKE_MAX};
+use lcc_engine::slide::{Aspect, SlideSettings};
+use lcc_engine::slide_template::SlideLook;
+use lcc_slide::{MARGIN_MAX, SHADOW_OFFSET_MAX, SHADOW_RADIUS_MAX, STROKE_MAX};
 use serde_json::{Value, json};
 
 use super::settings::{check, choices, heading, hint, row};
-use crate::LightcraftApp;
+use crate::LccApp;
 use crate::render::Slot;
 use crate::theme::Tokens;
 use crate::widgets::register;
@@ -32,12 +32,12 @@ enum Unit {
     Degrees,
 }
 
-fn set(app: &mut LightcraftApp, p: Value) {
+fn set(app: &mut LccApp, p: Value) {
     let _ = app.run("slideshow.layout", p);
 }
 
 /// A layout slider (`slider:{id}`): `key`'s value, 0–`max` (percent) or −180–180° (degrees).
-fn slider(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, key: &str, value: f64, max: f64, unit: Unit) {
+fn slider(app: &mut LccApp, ui: &mut egui::Ui, id: &str, key: &str, value: f64, max: f64, unit: Unit) {
     let (mut v, range, suffix) = match unit {
         Unit::Percent => (value * 100.0, 0.0..=max * 100.0, " %"),
         Unit::Degrees => (value, -180.0..=180.0, "°"),
@@ -59,7 +59,7 @@ fn slider(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, key: &str, value
 }
 
 /// A colour button (`button:{id}`) for `key`.
-fn colour(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, key: &str, value: [u8; 3]) {
+fn colour(app: &mut LccApp, ui: &mut egui::Ui, id: &str, key: &str, value: [u8; 3]) {
     let mut c = value;
     let r = egui::color_picker::color_edit_button_srgb(ui, &mut c);
     register(ui.ctx(), format!("button:{id}"), r.rect);
@@ -69,7 +69,7 @@ fn colour(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, key: &str, value
 }
 
 /// A checkbox (`check:settings.{id}`) for `key`; true when it is on.
-fn toggle(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, key: &str, value: bool, label: &str) -> bool {
+fn toggle(app: &mut LccApp, ui: &mut egui::Ui, id: &str, key: &str, value: bool, label: &str) -> bool {
     let mut v = value;
     if check(ui, &format!("settings.{id}"), &mut v, label) {
         set(app, json!({ key: v }));
@@ -78,7 +78,7 @@ fn toggle(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, key: &str, value
 }
 
 /// The Layout, Options and Backdrop sections.
-pub fn sections(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+pub fn sections(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
     let s = app.session.slide_layout.clone();
 
     heading(ui, t, "Layout");
@@ -135,7 +135,7 @@ pub fn sections(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         set(app, json!({"backgroundImage": if on { active.map(|a| a.0) } else { None }}));
     }
     if let Some(bid) = s.background_image {
-        let name = app.session.catalog.photo(lightcraft_catalog::PhotoId(bid)).map(|p| p.file_name.clone());
+        let name = app.session.catalog.photo(lcc_catalog::PhotoId(bid)).map(|p| p.file_name.clone());
         row(ui, t, "Photo", |ui| {
             let text = name.unwrap_or_else(|| crate::i18n::tr("(not in the library)").to_string());
             ui.label(egui::RichText::new(text).color(t.text));
@@ -163,7 +163,7 @@ fn screen_aspect(ctx: &egui::Context) -> f64 {
 }
 
 /// The small composed slide of the active photo, with the margin guides when they are on.
-pub fn preview(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+pub fn preview(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
     heading(ui, t, "Preview");
     // the template the pointer is over in the Template Browser, else the settings
     let template = super::slide_templates::hovered(ui.ctx()).and_then(|id| app.session.slide_template(&id).ok());
@@ -233,7 +233,7 @@ pub fn preview(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     if s.show_guides {
         // the margins, as lines across the slide (where the image cell's edges are)
         let aspect = app.session.slide_photo_aspect(id).unwrap_or(1.5);
-        let l = lightcraft_slideshow::layout(&s, aspect, tex.size[0], tex.size[1]);
+        let l = lcc_slide::layout(&s, aspect, tex.size[0], tex.size[1]);
         let (kx, ky) = (drawn.width() / tex.size[0].max(1) as f32, drawn.height() / tex.size[1].max(1) as f32);
         let stroke = Stroke::new(1.0, Color32::from_rgba_unmultiplied(120, 170, 255, 200));
         let x = |v: f64| drawn.left() + v as f32 * kx;
@@ -250,10 +250,10 @@ pub fn preview(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
 
 /// The preview showing title screen `title` (composed off the UI thread like the photo's slide,
 /// once its settings have been still for [`DEBOUNCE`] seconds).
-fn title_preview(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, rect: Rect, title: lightcraft_engine::slideshow::Title, look: &SlideLook) {
+fn title_preview(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, rect: Rect, title: lcc_engine::slideshow::Title, look: &SlideLook) {
     let ppp = ui.ctx().pixels_per_point();
     let (pw, ph) = (((rect.width() * ppp).round() as usize).max(16), ((rect.height() * ppp).round() as usize).max(16));
-    let compose = std::sync::Arc::new(lightcraft_engine::slide_title::TitleCompose::new(&look.titles, &look.overlays, title, pw, ph));
+    let compose = std::sync::Arc::new(lcc_engine::slide_title::TitleCompose::new(&look.titles, &look.overlays, title, pw, ph));
     let key = compose.key();
     let now = ui.input(|i| i.time);
     let mem = egui::Id::new("settingsSlideshowTitlePreviewKey");
@@ -263,14 +263,14 @@ fn title_preview(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, rect: R
     }
     let still = if last == key { now - since } else { 0.0 };
     // a title render in the slot (a photo's has its id): shown until the new one lands
-    let current = app.renderer.textures.get(&Slot::SlidePreview).filter(|tex| tex.photo == lightcraft_catalog::PhotoId(0));
+    let current = app.renderer.textures.get(&Slot::SlidePreview).filter(|tex| tex.photo == lcc_catalog::PhotoId(0));
     if current.is_none() || still >= DEBOUNCE {
         app.renderer.request_title(Slot::SlidePreview, compose, 90);
     } else {
         ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64((DEBOUNCE - still).clamp(0.01, DEBOUNCE)));
     }
     let p = ui.painter_at(rect.expand(1.0));
-    match app.renderer.textures.get(&Slot::SlidePreview).filter(|tex| tex.photo == lightcraft_catalog::PhotoId(0)) {
+    match app.renderer.textures.get(&Slot::SlidePreview).filter(|tex| tex.photo == lcc_catalog::PhotoId(0)) {
         Some(tex) => {
             let drawn = super::detail::fit_texture_rect(rect, tex.size);
             p.image(tex.tex.id(), drawn, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
@@ -283,14 +283,14 @@ fn title_preview(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, rect: R
     }
     let hint_text = match (title, look.titles.screen(title).enabled) {
         (_, false) => "This screen is off: turn it on under Titles to play it.",
-        (lightcraft_engine::slideshow::Title::Intro, true) => "The intro screen, before the first photo.",
-        (lightcraft_engine::slideshow::Title::Ending, true) => "The ending screen, after the last photo.",
+        (lcc_engine::slideshow::Title::Intro, true) => "The intro screen, before the first photo.",
+        (lcc_engine::slideshow::Title::Ending, true) => "The ending screen, after the last photo.",
     };
     hint(ui, t, hint_text);
 }
 
 /// The default layout (for the Reset button).
-pub fn reset(app: &mut LightcraftApp) {
+pub fn reset(app: &mut LccApp) {
     let d = SlideSettings::default().to_json();
     set(app, d);
 }

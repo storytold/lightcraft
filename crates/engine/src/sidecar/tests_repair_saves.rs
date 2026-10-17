@@ -2,7 +2,7 @@
 use super::*;
 use crate::rename::{MoveFs, RealFs};
 use crate::tests_xmp::same_path_or_file;
-use lightcraft_catalog::{Op, Photo, Source};
+use lcc_catalog::{Op, Photo, Source};
 use serde_json::json;
 
 struct PartialRename {
@@ -15,6 +15,9 @@ impl MoveFs for PartialRename {
     }
     fn is_file(&self, path: &Path) -> bool {
         RealFs.is_file(path)
+    }
+    fn listed(&self, path: &Path) -> bool {
+        RealFs.listed(path)
     }
     fn same_file(&self, a: &Path, b: &Path) -> bool {
         RealFs.same_file(a, b)
@@ -41,11 +44,11 @@ impl MoveFs for PartialRename {
     }
 }
 
-const FOREIGN: &[u8] = br#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:fixture="urn:lightcraft:repair-test" xmp:Rating="2" fixture:Marker="keep-me"/></rdf:RDF></x:xmpmeta>"#;
+const FOREIGN: &[u8] = br#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:fixture="urn:example:repair-test" xmp:Rating="2" fixture:Marker="keep-me"/></rdf:RDF></x:xmpmeta>"#;
 
 fn png(path: &Path) {
-    let image = lightcraft_raster::Rgba8::from_fn(4, 3, |_, _| [40, 80, 120, 255]);
-    let bytes = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&image), &Default::default()).unwrap();
+    let image = lcc_raster::Rgba8::from_fn(4, 3, |_, _| [40, 80, 120, 255]);
+    let bytes = lcc_codecs::encode_png(&lcc_codecs::EncodeImage::rgba8(&image), &Default::default()).unwrap();
     std::fs::write(path, bytes).unwrap();
 }
 fn queued(s: &Session) -> Vec<crate::rename::SidecarMove> {
@@ -54,6 +57,7 @@ fn queued(s: &Session) -> Vec<crate::rename::SidecarMove> {
 
 #[test]
 fn autowrite_repairs_partial_rename_before_merging_foreign_xmp_across_library_switch() {
+    crate::tests_xmp::skip_on_case_insensitive_volume!();
     for naming in [SidecarNaming::Stem, SidecarNaming::Full] {
         for save_naming in [SidecarNaming::Stem, SidecarNaming::Full] {
             for upper in [false, true] {

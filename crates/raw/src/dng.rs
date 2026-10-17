@@ -5,10 +5,10 @@ use crate::gaintable::GainTableMap;
 use crate::profile::{HsvTable, ProfileLook, ToneCurve};
 use crate::tiffraw::{Packing, read_image_in};
 use crate::{BlackLevel, Cfa, ColorData, Mat3, Mode, RawData, RawError, RawFormat, RawImage, Rect, Result, opcodes};
-use lightcraft_color::Xy;
-use lightcraft_geom::Orientation;
-use lightcraft_tiff::tags::{self as t, photometric};
-use lightcraft_tiff::{ByteOrder, Ifd, Tiff};
+use lcc_color::Xy;
+use lcc_geom::Orientation;
+use lcc_tiff::tags::{self as t, photometric};
+use lcc_tiff::{ByteOrder, Ifd, Tiff};
 
 /// The main raw IFD: full-resolution (NewSubfileType 0) CFA or LinearRaw image with the most pixels.
 pub(crate) fn raw_ifd(tiff: &Tiff) -> Option<&Ifd> {
@@ -122,6 +122,7 @@ pub(crate) fn color_data(ifd0: &Ifd, raw: &Ifd, order: ByteOrder) -> ColorData {
         baseline_sharpness: get(t::BASELINE_SHARPNESS).and_then(|v| v.first().copied()).filter(|v| v.is_finite() && *v > 0.0 && *v <= 16.0),
         profile: profile_look(ifd0, raw, order),
         kelvin_presets: None,
+        balanced_as_shot: None,
     }
 }
 
@@ -180,11 +181,12 @@ pub(crate) fn is_plain_cfa_tiff(tiff: &Tiff, bytes: &[u8]) -> bool {
     }
     match info.compression {
         t::compression::NONE => true,
-        t::compression::JPEG => info
-            .chunks(bytes.len() as u64)
-            .first()
-            .and_then(|c| lightcraft_tiff::image::chunk_bytes(bytes, c))
-            .is_some_and(|src| crate::ljpeg::frame_info(src).is_ok()),
+        t::compression::JPEG => info.chunks(bytes.len() as u64).first().and_then(|c| lcc_tiff::image::chunk_bytes(bytes, c)).is_some_and(|src| {
+            match crate::dctjpeg::is_dct(src) {
+                true => crate::dctjpeg::frame_info(src).is_ok(),
+                false => crate::ljpeg::frame_info(src).is_ok(),
+            }
+        }),
         _ => false,
     }
 }
@@ -306,10 +308,11 @@ pub(crate) fn decode_as(bytes: &[u8], mode: Mode, format: RawFormat) -> Result<R
         }
         // the tag is anchored at the top-left of the ActiveArea (DNG spec); `RawImage::cfa` is anchored at the
         // sensor origin (the crop to the active area shifts it back), so move the anchor out by the area's offset
-        // (LightCraft's own DNGs from before the writer followed the spec carry the sensor-origin pattern; they are marked by
-        // a bare "LightCraft" Software tag, the writer now says [`crate::dngwrite::SOFTWARE`], and keep their original reading)
+        // (the app's own DNGs from before the writer followed the spec carry the sensor-origin pattern; they are marked by
+        // a bare app-name Software tag ([`crate::dngwrite::is_legacy_software`]), the writer now says
+        // [`crate::dngwrite::software`], and keep their original reading)
         let at_origin = Cfa { width: cols, height: rows, pattern };
-        let legacy_writer = [raw, ifd0].iter().any(|i| i.string(t::SOFTWARE).as_deref().map(str::trim) == Some("LightCraft"));
+        let legacy_writer = [raw, ifd0].iter().any(|i| i.string(t::SOFTWARE).as_deref().is_some_and(crate::dngwrite::is_legacy_software));
         Some(if legacy_writer { at_origin } else { at_origin.shifted(cols - active_area.x % cols, rows - active_area.y % rows) })
     } else {
         None
@@ -319,7 +322,7 @@ pub(crate) fn decode_as(bytes: &[u8], mode: Mode, format: RawFormat) -> Result<R
     let opcodes =
         crate::OpcodeLists { list1: opcode_list(t::OPCODE_LIST_1), list2: opcode_list(t::OPCODE_LIST_2), list3: opcode_list(t::OPCODE_LIST_3) };
 
-    let mut metadata = lightcraft_meta::from_tiff(&tiff);
+    let mut metadata = lcc_meta::from_tiff(&tiff);
     metadata.width = Some(crop.width as u32);
     metadata.height = Some(crop.height as u32);
     let img = RawImage {

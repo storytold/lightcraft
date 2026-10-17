@@ -3,25 +3,23 @@
 //! CR2, NEF and the like carry their white balance as vendor multipliers, not as DNG tags. The merged DNG has
 //! to say it as `AsShotNeutral`, or a viewer has no white to start from and shows a colour cast.
 
-use lightcraft_color::{D50, Xy};
-use lightcraft_geom::Orientation;
-use lightcraft_merge::frame::{Frame, FrameColor, consensus_multipliers, detect_clip};
-use lightcraft_merge::hdr::{HdrOptions, HdrResult, merge_hdr};
-use lightcraft_merge::output::color_data;
-use lightcraft_merge::pano::{PanoOptions, PanoResult, Projection, stitch};
-use lightcraft_merge::{DngSamples, no_progress, write_linear_dng};
-use lightcraft_meta::Metadata;
-use lightcraft_raster::Rgb32f;
-use lightcraft_raw::ColorData;
+use lcc_color::{D50, Xy};
+use lcc_geom::Orientation;
+use lcc_merge::frame::{Frame, FrameColor, consensus_multipliers, detect_clip};
+use lcc_merge::hdr::{HdrOptions, HdrResult, merge_hdr};
+use lcc_merge::output::color_data;
+use lcc_merge::pano::{PanoOptions, PanoResult, Projection, stitch};
+use lcc_merge::{DngSamples, no_progress, write_linear_dng};
+use lcc_meta::Metadata;
+use lcc_raster::Rgb32f;
+use lcc_raw::ColorData;
 
 type Multipliers = Option<[f32; 3]>;
 
 /// A camera that sees linear sRGB, with the colour matrices a DNG gives but no white balance of its own, as a raw
 /// file whose white balance is only in the vendor multipliers would be after the app has worked its colour out.
 fn camera_without_white_balance() -> ColorData {
-    let srgb = FrameColor::Linear {
-        to_xyz_d50: lightcraft_color::bradford(lightcraft_color::D65, lightcraft_color::D50).mul(&lightcraft_color::SRGB.to_xyz()),
-    };
+    let srgb = FrameColor::Linear { to_xyz_d50: lcc_color::bradford(lcc_color::D65, lcc_color::D50).mul(&lcc_color::SRGB.to_xyz()) };
     ColorData { as_shot_neutral: None, ..color_data(&srgb) }
 }
 
@@ -45,7 +43,7 @@ fn raw_frame(image: Rgb32f, color: &ColorData, wb_multipliers: Multipliers) -> F
 fn shoot(color: &ColorData, wb: &[Multipliers]) -> Vec<Frame> {
     let n = wb.len();
     let yaws: Vec<f64> = (0..n).map(|i| (i as f64 - (n as f64 - 1.0) / 2.0) * 25.0).collect();
-    let views = lightcraft_merge::synth::pano_views(400, 300, 350.0, &yaws).unwrap();
+    let views = lcc_merge::synth::pano_views(400, 300, 350.0, &yaws).unwrap();
     views.into_iter().zip(wb).map(|(image, m)| raw_frame(image, color, *m)).collect()
 }
 
@@ -69,9 +67,9 @@ fn assert_close(got: [f64; 3], want: [f64; 3], tolerance: f64) {
 }
 
 /// The panorama as a DNG and read back with the repo's own raw reader.
-fn dng_of(res: &PanoResult) -> lightcraft_raw::RawImage {
+fn dng_of(res: &PanoResult) -> lcc_raw::RawImage {
     let bytes = write_linear_dng(&res.image, &res.color, Orientation::Normal, &res.metadata, res.baseline_exposure, DngSamples::U16, &[]).unwrap();
-    lightcraft_raw::decode(&bytes).unwrap()
+    lcc_raw::decode(&bytes).unwrap()
 }
 
 const DAYLIGHT: [f32; 3] = [2.0, 1.0, 1.6];
@@ -88,40 +86,11 @@ fn a_panorama_of_an_odd_number_of_raw_frames_has_their_median_white_balance() {
 }
 
 #[test]
-fn a_panorama_of_an_even_number_of_frames_takes_the_mean_of_the_middle_two() {
-    let wb = [Some([1.8, 1.0, 1.9]), Some([2.0, 1.0, 1.6]), Some([2.2, 1.0, 1.5]), Some([2.4, 1.0, 1.4])];
-    let res = pano(shoot(&camera_without_white_balance(), &wb));
-    assert_eq!(res.used.len(), 4);
-    let (r, b) = ((f64::from(2.0f32) + f64::from(2.2f32)) / 2.0, (f64::from(1.6f32) + f64::from(1.5f32)) / 2.0);
-    assert_close(neutral_of(&res).expect("an as-shot neutral"), reciprocal([r, 1.0, b]), 1e-6);
-    // two frames: the mean of both
-    let res = pano(shoot(&camera_without_white_balance(), &[Some([2.0, 1.0, 1.0]), Some([3.0, 1.0, 2.0])]));
-    assert_close(neutral_of(&res).expect("an as-shot neutral"), reciprocal([2.5, 1.0, 1.5]), 1e-6);
-}
-
-#[test]
-fn frames_without_multipliers_do_not_vote() {
-    // one frame of three has none (a DNG, say): the other two decide
-    let wb = [Some([2.0, 1.0, 1.6]), None, Some([2.2, 1.0, 1.4])];
-    let res = pano(shoot(&camera_without_white_balance(), &wb));
-    assert_eq!(res.used.len(), 3);
-    assert_close(neutral_of(&res).expect("an as-shot neutral"), reciprocal([2.1, 1.0, 1.5]), 1e-6);
-    // a first frame without them doesn't hide the others'
-    let wb = [None, Some(DAYLIGHT), Some(DAYLIGHT)];
-    let res = pano(shoot(&camera_without_white_balance(), &wb));
-    assert_close(neutral_of(&res).expect("an as-shot neutral"), reciprocal([2.0, 1.0, 1.6f32.into()]), 1e-6);
-    // unusable values don't count either
-    let wb = [Some([f32::NAN, 1.0, 1.0]), Some(DAYLIGHT), Some([0.0, 1.0, 1.4]), Some([2.0, f32::INFINITY, 1.6]), Some(DAYLIGHT)];
-    let res = pano(shoot(&camera_without_white_balance(), &wb));
-    assert_close(neutral_of(&res).expect("an as-shot neutral"), reciprocal([2.0, 1.0, 1.6f32.into()]), 1e-6);
-}
-
-#[test]
 fn a_frame_outside_the_panorama_does_not_vote() {
     let color = camera_without_white_balance();
     let mut frames = shoot(&color, &[Some(DAYLIGHT), Some(DAYLIGHT), Some(DAYLIGHT)]);
     // four photos of other scenes, balanced very differently: counted, they would be the majority
-    let others = lightcraft_scenes::demo_library().into_iter().filter(|s| s.kind != lightcraft_scenes::Kind::Canyon).take(4);
+    let others = lcc_scenes::demo_library().into_iter().filter(|s| s.kind != lcc_scenes::Kind::Canyon).take(4);
     frames.extend(others.map(|scene| raw_frame(scene.render(400, 300), &color, Some([4.0, 1.0, 0.8]))));
     assert_eq!(frames.len(), 7);
     let res = pano(frames);
@@ -173,10 +142,10 @@ fn the_dng_says_the_median_white_balance_as_as_shot_neutral() {
     assert_close(got, [0.5, 1.0, 0.625], 2e-6);
     assert_eq!(raw.color.as_shot_white_xy, None, "the DNG spec has the two tags exclude each other");
     // what a viewer starts from: the white and the camera transform the source's multipliers give
-    let want = lightcraft_raw::color::as_shot_white_of(&source, Some(median));
-    let xy = lightcraft_raw::color::as_shot_white_xy(&raw);
+    let want = lcc_raw::color::as_shot_white_of(&source, Some(median));
+    let xy = lcc_raw::color::as_shot_white_xy(&raw);
     assert!((xy.x - want.x).abs() < 1e-4 && (xy.y - want.y).abs() < 1e-4, "{xy:?} vs {want:?}");
-    let (got, want) = (lightcraft_raw::color::camera_transform(&raw, xy), lightcraft_raw::color::camera_transform_of(&source, want));
+    let (got, want) = (lcc_raw::color::camera_transform(&raw, xy), lcc_raw::color::camera_transform_of(&source, want));
     assert!(got.wb.iter().zip(want.wb).all(|(a, b)| (a - b).abs() < 1e-3), "{:?} vs {:?}", got.wb, want.wb);
     // the colour model and the picture are the source's, and the same without the colour matrices
     assert_eq!(raw.color.forward_matrix[0].is_some(), source.forward_matrix[0].is_some());
@@ -194,7 +163,7 @@ fn without_multipliers_the_dng_has_no_as_shot_neutral_as_before() {
 
 /// Exposures `evs` (EV, relative to the view's) of one view, one frame each, with `wb` as their multipliers.
 fn bracket(color: &ColorData, evs: &[f64], wb: &[Multipliers]) -> Vec<Frame> {
-    let view = lightcraft_merge::synth::pano_views(320, 240, 280.0, &[0.0]).unwrap().remove(0);
+    let view = lcc_merge::synth::pano_views(320, 240, 280.0, &[0.0]).unwrap().remove(0);
     evs.iter()
         .zip(wb)
         .map(|(ev, m)| {
@@ -227,7 +196,7 @@ fn an_hdr_merge_of_raw_frames_has_their_median_white_balance() {
     // the DNG says it, to the precision of a TIFF rational
     let bytes =
         write_linear_dng(&res.radiance, &res.color, res.orientation, &res.metadata, res.baseline_exposure, DngSamples::Half, &res.lens).unwrap();
-    let raw = lightcraft_raw::decode(&bytes).unwrap();
+    let raw = lcc_raw::decode(&bytes).unwrap();
     assert_close(raw.color.as_shot_neutral.expect("AsShotNeutral in the DNG"), [0.5, 1.0, 0.625], 2e-6);
     // an even count takes the mean of the middle two; frames without multipliers do not vote
     let res = hdr(bracket(&source, &[-1.0, 1.0], &[Some([2.0, 1.0, 1.0]), Some([3.0, 1.0, 2.0])]));

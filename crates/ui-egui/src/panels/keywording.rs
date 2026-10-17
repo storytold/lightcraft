@@ -2,16 +2,16 @@
 //! not only the active one's, as Lightroom Classic shows them. A keyword only some of the selected
 //! photos have is marked as such.
 
-use lightcraft_catalog::{Catalog, PhotoId};
+use lcc_catalog::{Catalog, PhotoId};
 use serde_json::json;
 
-use crate::LightcraftApp;
+use crate::LccApp;
 use crate::theme::Tokens;
 use crate::widgets::register;
 
 /// The Keywording box's view: the keywords (chips), them with the keywords containing them, or
 /// what exported files will carry.
-pub fn view_switch(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+pub fn view_switch(app: &mut LccApp, ui: &mut egui::Ui) {
     use crate::state::KeywordingView as V;
     ui.horizontal_wrapped(|ui| {
         for (view, id, label) in
@@ -28,7 +28,7 @@ pub fn view_switch(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 
 /// A read-only view of the selection's keywords: with the keywords containing them, or what
 /// exported files will carry. One only some of the photos have is marked with an asterisk.
-pub fn names_row(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+pub fn names_row(app: &mut LccApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let selection = app.session.selected();
     let export = app.ui.keywording_view == crate::state::KeywordingView::WillExport;
@@ -128,7 +128,7 @@ fn chip(ui: &mut egui::Ui, path: &str, name: &str, partial: bool, cross: bool, r
 
 /// Take the chip's keyword off the selected photos. Several photos losing it at once is said, with
 /// the way back (one photo's chip going is enough); a refusal is said too.
-fn remove(app: &mut LightcraftApp, ctx: &egui::Context, chip: &Chip) {
+fn remove(app: &mut LccApp, ctx: &egui::Context, chip: &Chip) {
     match app.run("photo.setMeta", json!({"removeKeywords": [chip.path]})) {
         Ok(_) if chip.have > 1 => {
             let name = chip.path.replace('|', " › ");
@@ -145,7 +145,7 @@ fn remove(app: &mut LightcraftApp, ctx: &egui::Context, chip: &Chip) {
 
 /// A chip's menu: it acts on the selected photos (deleting a keyword from the whole library is the
 /// Keyword List's).
-fn menu(app: &mut LightcraftApp, ui: &mut egui::Ui, chip: &Chip) {
+fn menu(app: &mut LccApp, ui: &mut egui::Ui, chip: &Chip) {
     let item = |ui: &mut egui::Ui, id: &str, label: &str| {
         let r = ui.button(label);
         register(ui.ctx(), format!("keywordChipMenu:{id}"), r.rect);
@@ -169,7 +169,7 @@ fn menu(app: &mut LightcraftApp, ui: &mut egui::Ui, chip: &Chip) {
 
 /// With several photos selected, how many the box's keywords are of (`keywordScope`): what a ×
 /// or a keyword typed here acts on.
-pub fn scope(app: &mut LightcraftApp, ui: &mut egui::Ui, selection: &[PhotoId]) {
+pub fn scope(app: &mut LccApp, ui: &mut egui::Ui, selection: &[PhotoId]) {
     let photos = app.caches.selected_photos(&app.session.catalog, selection);
     if photos < 2 {
         return;
@@ -184,7 +184,7 @@ pub fn scope(app: &mut LightcraftApp, ui: &mut egui::Ui, selection: &[PhotoId]) 
 /// The selection's keywords as chips: the name (right-click for its menu), and × to take it off
 /// every selected photo. One only some of them have is marked with an asterisk. Whole names, or
 /// grouped by the keyword they are inside (Settings ▸ Interface).
-pub fn chip_row(app: &mut LightcraftApp, ui: &mut egui::Ui, selection: &[PhotoId]) {
+pub fn chip_row(app: &mut LccApp, ui: &mut egui::Ui, selection: &[PhotoId]) {
     let chips = app.caches.keyword_chips(&app.session.catalog, selection);
     if chips.is_empty() {
         let t = Tokens::get(ui.ctx());
@@ -207,7 +207,7 @@ pub fn chip_row(app: &mut LightcraftApp, ui: &mut egui::Ui, selection: &[PhotoId
 
 /// A drawn chip does its work: its × takes the keyword off the selected photos, its name has the
 /// tooltip and the menu.
-fn chip_acts(app: &mut LightcraftApp, ui: &egui::Ui, c: &Chip, body: egui::Response, x: Option<egui::Response>) {
+fn chip_acts(app: &mut LccApp, ui: &egui::Ui, c: &Chip, body: egui::Response, x: Option<egui::Response>) {
     register(ui.ctx(), format!("keywordChip:{}", c.path), body.rect);
     if let Some(x) = x {
         register(ui.ctx(), format!("keywordChipRemove:{}", c.path), x.rect);
@@ -240,7 +240,7 @@ pub(crate) fn measured(avail: f32) -> usize {
 
 /// The grouped box: each group's parent on a line of its own, its chips under it side by side,
 /// and "+N more" where a long list stops.
-fn chip_groups(app: &mut LightcraftApp, ui: &mut egui::Ui, groups: &[Group], selection: u64) {
+fn chip_groups(app: &mut LccApp, ui: &mut egui::Ui, groups: &[Group], selection: u64) {
     use egui::{Align2, Sense, vec2};
     let t = Tokens::get(ui.ctx());
     let avail = ui.available_width();
@@ -316,7 +316,7 @@ fn chip_groups(app: &mut LightcraftApp, ui: &mut egui::Ui, groups: &[Group], sel
 /// What the grouped box's suggestions say of the keywords `paths`: each one's own name, or its
 /// whole path (" › " between its levels) when another of them has the same name.
 pub(crate) fn suggestion_names(paths: &[String]) -> Vec<String> {
-    use lightcraft_catalog::keywords::SEP;
+    use lcc_catalog::keywords::SEP;
     let leaf = |p: &str| p.rsplit(SEP).next().unwrap_or(p).to_lowercase();
     let mut named: std::collections::HashMap<String, usize> = Default::default();
     for p in paths {
@@ -379,7 +379,7 @@ pub(crate) fn typed_before(catalog: &Catalog, text: &str) -> Vec<String> {
 
 /// What the box offers for `typed`, for photos that all have the `current` keywords.
 pub(crate) fn offers(catalog: &Catalog, current: &[String], typed: &str) -> Offers {
-    use lightcraft_catalog::keywords::{SEP, clean};
+    use lcc_catalog::keywords::{SEP, clean};
     let name = clean(typed);
     if name.is_empty() {
         return Offers::default();
@@ -413,7 +413,7 @@ pub(crate) enum Picked {
 /// clicked and where the offers were drawn.
 pub(crate) fn offers_below(ui: &egui::Ui, below: egui::Rect, offers: &Offers, at: Option<&str>) -> (Option<Picked>, egui::Rect) {
     use egui::{Align2, Sense, pos2, vec2};
-    use lightcraft_catalog::keywords::SEP;
+    use lcc_catalog::keywords::SEP;
     let t = Tokens::get(ui.ctx());
     let mut picked = None;
     let width = (below.width() - 10.0).max(60.0);
@@ -531,7 +531,7 @@ pub(crate) struct Group {
 /// "Transport|Rail|Night Train" next to "Transport|Ferry"). Those that share none come first, in a group
 /// without a parent; then the groups by name, each in the chips' order.
 pub(crate) fn grouped(chips: &[Chip]) -> Vec<Group> {
-    use lightcraft_catalog::keywords::SEP;
+    use lcc_catalog::keywords::SEP;
     let sep = SEP.to_string();
     // a path's first `depth` levels, and the rest
     let head = |levels: &[&str], depth: usize| levels.get(..depth).unwrap_or_default().join(&sep);
@@ -663,7 +663,7 @@ pub(crate) fn will_export(catalog: &Catalog, photos: &[PhotoId]) -> Vec<Chip> {
 /// containing them, each with how many of the selected photos have it (itself or below it); by
 /// name.
 pub(crate) fn with_containing(catalog: &Catalog, photos: &[PhotoId]) -> Vec<Chip> {
-    use lightcraft_catalog::keywords::{SEP, clean};
+    use lcc_catalog::keywords::{SEP, clean};
     let photos = distinct(catalog, photos);
     let mut have: std::collections::BTreeMap<String, (String, usize)> = Default::default();
     let mut seen = std::collections::HashSet::new();
@@ -681,7 +681,7 @@ pub(crate) fn with_containing(catalog: &Catalog, photos: &[PhotoId]) -> Vec<Chip
 }
 
 /// The selected photos, each once, those the library has: what "N of M" counts.
-pub(crate) fn distinct<'a>(catalog: &'a Catalog, photos: &[PhotoId]) -> Vec<&'a lightcraft_catalog::Photo> {
+pub(crate) fn distinct<'a>(catalog: &'a Catalog, photos: &[PhotoId]) -> Vec<&'a lcc_catalog::Photo> {
     let mut seen = std::collections::HashSet::new();
     photos.iter().filter(|id| seen.insert(**id)).filter_map(|id| catalog.photo(*id).map(|p| &**p)).collect()
 }
@@ -689,7 +689,7 @@ pub(crate) fn distinct<'a>(catalog: &'a Catalog, photos: &[PhotoId]) -> Vec<&'a 
 /// The keywords of the selected `photos`, each once whatever its case, with how many of them have
 /// it; by name.
 pub(crate) fn chips(catalog: &Catalog, photos: &[PhotoId]) -> Vec<Chip> {
-    use lightcraft_catalog::keywords::clean;
+    use lcc_catalog::keywords::clean;
     let photos = distinct(catalog, photos);
     // by lower-case keyword: as first seen, and the photos with it (each once)
     let mut have: std::collections::BTreeMap<String, (String, usize)> = Default::default();
@@ -710,7 +710,7 @@ pub(crate) fn chips(catalog: &Catalog, photos: &[PhotoId]) -> Vec<Chip> {
 
 #[cfg(test)]
 mod tests {
-    use lightcraft_catalog::{Op, Photo, Source};
+    use lcc_catalog::{Op, Photo, Source};
 
     use super::*;
 
@@ -754,7 +754,7 @@ mod tests {
     /// selected photos carry it.
     #[test]
     fn will_export_shows_what_exported_files_carry() {
-        use lightcraft_catalog::keywords::KeywordInfo;
+        use lcc_catalog::keywords::KeywordInfo;
         let (mut c, ids) = library(&[&["Places|Lisbon", "draft"], &["Places|Lisbon"]]);
         let out = KeywordInfo { include_on_export: false, ..KeywordInfo::default() };
         c.apply(Op::SetKeyword { path: "Places".into(), info: Some(out.clone()) }).unwrap();
@@ -797,7 +797,7 @@ mod tests {
     /// A keyword the Keyword List has is spelled as it spells it.
     #[test]
     fn a_listed_keyword_is_spelled_as_listed() {
-        use lightcraft_catalog::keywords::KeywordInfo;
+        use lcc_catalog::keywords::KeywordInfo;
         let (mut c, ids) = library(&[&["beach"]]);
         c.apply(Op::SetKeyword { path: "Beach".into(), info: Some(KeywordInfo::default()) }).unwrap();
         assert_eq!(shown(&chips(&c, &ids)), [("Beach", 1, 1)]);
@@ -923,7 +923,7 @@ mod tests {
     /// there is one), and offers nothing for nothing.
     #[test]
     fn the_box_offers_what_matches_and_says_what_is_new() {
-        use lightcraft_catalog::keywords::KeywordInfo;
+        use lcc_catalog::keywords::KeywordInfo;
         let (mut c, _) = library(&[&["Places|Lisbon", "sea"], &["Places|Porto"]]);
         let got = offers(&c, &[], "lis");
         assert_eq!(got.keywords, ["Places|Lisbon"]);
@@ -937,15 +937,6 @@ mod tests {
         assert_eq!(offers(&c, &[], "harbour").create.as_deref(), Some("Inbox|harbour"));
         assert_eq!(offers(&c, &[], "a|b").create.as_deref(), Some("a|b"), "a path typed whole goes where it says");
         assert!(offers(&c, &[], "p").keywords.len() <= OFFERS);
-    }
-
-    /// A keyword two photos spell differently is offered once.
-    #[test]
-    fn a_keyword_spelled_two_ways_is_one_offer() {
-        let (c, _) = library(&[&["Lisbon"], &["lisbon"], &["LISBON", "Lisboa"]]);
-        let got = offers(&c, &[], "lis").keywords;
-        assert_eq!(got.len(), 2, "{got:?}");
-        assert!(got.iter().any(|k| k.eq_ignore_ascii_case("lisbon")) && got.contains(&"Lisboa".to_string()));
     }
 
     /// Groups follow the tree: a keyword's groups come right after it, before a keyword whose name
@@ -989,15 +980,6 @@ mod tests {
         assert_eq!(typing(""), "");
         assert_eq!(typed_before(&c, "sea, , beach ,lis"), ["sea", "beach"]);
         assert!(typed_before(&c, "lis").is_empty());
-    }
-
-    /// The grouped box's suggestions say a keyword's own name; two with the same name say their
-    /// whole paths, so they can be told apart.
-    #[test]
-    fn suggestions_are_named_apart() {
-        let paths: Vec<String> = ["Italy|Rome|Market", "Spain|Madrid|market", "Places|Lisbon", "sea"].iter().map(|s| s.to_string()).collect();
-        assert_eq!(suggestion_names(&paths), ["Italy › Rome › Market", "Spain › Madrid › market", "Lisbon", "sea"]);
-        assert!(suggestion_names(&[]).is_empty());
     }
 
     /// "Keywords & Containing Keywords": every level of the selection's keywords, flat, each

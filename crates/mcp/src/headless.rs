@@ -3,9 +3,9 @@
 
 use std::path::Path;
 
-use lightcraft_engine::Session;
-use lightcraft_engine::catalog::PhotoId;
-use lightcraft_raster::Rgba8;
+use lcc_engine::Session;
+use lcc_engine::catalog::PhotoId;
+use lcc_raster::Rgba8;
 use serde_json::{Value, json};
 
 use crate::backend::{Backend, ProgressHook};
@@ -29,8 +29,17 @@ impl Drop for Headless {
 
 impl Default for Headless {
     fn default() -> Self {
-        let session = Session::new().with_fs().with_default_denoise_models().with_system_clock().with_default_face_models();
-        Self::new(session.with_default_sam3_model().with_default_slide_templates())
+        Self::new(
+            Session::new()
+                .with_fs()
+                .with_default_denoise_models()
+                .with_system_clock()
+                .with_default_connections()
+                .with_default_face_models()
+                .with_default_lens_profiles()
+                .with_default_sam3_model()
+                .with_default_slide_templates(),
+        )
     }
 }
 
@@ -41,8 +50,17 @@ impl Headless {
 
     /// A headless session with the procedurally generated demo library.
     pub fn demo() -> Self {
-        let session = Session::with_demo().with_fs().with_default_denoise_models().with_system_clock().with_default_face_models();
-        Self::new(session.with_default_sam3_model().with_default_slide_templates())
+        Self::new(
+            Session::with_demo()
+                .with_fs()
+                .with_default_denoise_models()
+                .with_system_clock()
+                .with_default_connections()
+                .with_default_face_models()
+                .with_default_lens_profiles()
+                .with_default_sam3_model()
+                .with_default_slide_templates(),
+        )
     }
 
     fn photo_or_active(&self, p: &Value) -> Result<PhotoId, String> {
@@ -57,10 +75,10 @@ impl Headless {
     }
 
     /// The UI command `app.export`, emulated with the same parameters as the desktop app
-    /// (see `lightcraft_engine::export::ExportOptions::from_json`, plus `ids`, `dir`, `path`).
+    /// (see `lcc_engine::export::ExportOptions::from_json`, plus `ids`, `dir`, `path`).
     /// With `path` and no `format`, the format follows the path's extension.
     fn export(&mut self, p: &Value) -> Result<Value, String> {
-        use lightcraft_engine::export::{Destination, ExportFormat, ExportOptions, Resize, prepare_batch, run_batch};
+        use lcc_engine::export::{Destination, ExportFormat, ExportOptions, Resize, prepare_batch, run_batch};
         let p = &self.session.export_params(p)?;
         let mut opts = ExportOptions::from_params(p).map_err(|e| e.to_string())?;
         if !ExportOptions::has_size_param(p) {
@@ -70,6 +88,10 @@ impl Headless {
         if let (Some(path), None) = (exact, p.get("format")) {
             let ext = Path::new(path).extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_default();
             opts.format = ExportFormat::parse(&ext).unwrap_or(ExportFormat::Png);
+            // a movie path: the clip's movie format (the format stays a rendered one)
+            if let (None, Some(v)) = (p.get("videoFormat"), lcc_engine::export_video::VideoFormat::parse(&ext)) {
+                opts.video_format = v;
+            }
         }
         let ids: Vec<_> = match p.get("ids").and_then(Value::as_array) {
             Some(a) => a.iter().filter_map(|v| serde_json::from_value(v.clone()).ok()).collect(),
@@ -81,11 +103,21 @@ impl Headless {
             None => vec![self.photo_or_active(p)?],
         };
         let dir = p.get("dir").and_then(Value::as_str).unwrap_or("");
-        let write = &mut lightcraft_engine::export::write_file;
+        let write = &mut lcc_engine::export::write_file;
         // Add to Apple Photos: refused before anything is written when it can't be done
         let after = self.session.after_export(&opts)?;
-        let items = prepare_batch(&mut self.session, &ids, &opts)?;
+        let mut items = prepare_batch(&mut self.session, &ids, &opts)?;
         let total = items.len();
+        // video clips: a row in the activity stack whose cancel stops the movie within a frame
+        let _video_row = items.iter().any(|i| i.is_video()).then(|| {
+            let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let row = self.session.activity.start("export", "Exporting video", lcc_engine::activity::Cancel::Flag(cancel.clone()));
+            let h = row.handle();
+            let progress: lcc_engine::export_video::VideoProgress =
+                std::sync::Arc::new(move |name: &str, x: f64| h.detail(&format!("{name} {:.0}%", x.clamp(0.0, 1.0) * 100.0)));
+            lcc_engine::export::set_video_hooks(&mut items, &lcc_engine::export_video::VideoHooks { cancel, progress: Some(progress) });
+            row
+        });
         let mut hook = self.progress.take();
         let mut cancelled = false;
         let files = run_batch(
@@ -111,6 +143,11 @@ impl Headless {
         if let Some(photos) = after.run(&files, false) {
             out["applePhotos"] = photos;
         }
+        // plug-in export hooks, then the plug-in destination the export named (if any)
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(r) = lcc_engine::cmd::plugins::after_export(&mut self.session, &files, p.get("pluginDestination")) {
+            out["plugins"] = json!(r);
+        }
         out["files"] = json!(files);
         Ok(out)
     }
@@ -135,7 +172,7 @@ impl Backend for Headless {
             "engine.commands" => {
                 let mut v: Vec<Value> = self.session.commands().into_iter().map(|c| serde_json::to_value(c).unwrap_or_default()).collect();
                 v.push(json!({"id": "app.export", "label": "Export Now", "menu": [], "shortcut": null,
-                    "params": "{path?: output file (.jpg/.png/.tif/.webp/.avif/.jxl/.psd/.dng) | dir?, ids?, preset?, format?: jpeg|png|tiff|webp|avif|jxl|psd|dng|original, longEdge?|shortEdge?|width?|height?|megapixels?|percent? (default longEdge 3000; longEdge 0 = full size), dontEnlarge?, ppi?, quality?: 1..100, jxlLossless?, jxlEffort?: fast|normal, jxlProgressive?, limitKb?, colorSpace?: srgb|displayP3|adobeRgb|proPhoto|rec2020, bitDepth?: 8|10|16|32, hdr? (HDR output for HDR edits: gain map JPEG, PQ AVIF / PNG / JPEG XL, float TIFF), sharpen?: none|screen|matte|glossy, sharpenAmount?: low|standard|high, metadata?: all|allExceptCamera|copyright|none, removeLocation?, naming?, startNumber?, destinationMode?: specificFolder|sameAsOriginal (sameAsOriginal = each photo into its original's folder; `dir` unused), subfolder?, conflict?: unique|overwrite|skip, tiffCompression?: none|lzw|zip, dngCompression?: lossless|deflate|uncompressed, addToPhotos?: bool (macOS: then add the files written to Apple Photos; outcome in `applePhotos`), photosAlbum?: top-level album name (made when missing), watermark?: text | {text?, vertical? (upright columns, right to left), size? (text height, 0.005..0.5 of the short edge; default 0.035), opacity? (0..1; 0.7), anchor?: topLeft|top|topRight|left|center|right|bottomLeft|bottom|bottomRight, insetX? (margin from the left/right edge, 0..0.4 of the short edge; 0.025), insetY? (from the top/bottom edge; 0.025), inset? (sets both), rotation?: 0|90|180|270 (degrees clockwise; 0), color? [r,g,b] sRGB, shadow?, image? (graphic drawn instead of the text), imageWidth? (0.01..1 of the photo's width; 0.2)}} — an unknown parameter, an out-of-range watermark size or a value of the wrong kind is an error, not a default",
+                    "params": "{path?: output file (.jpg/.png/.tif/.webp/.avif/.jxl/.psd/.dng) | dir?, ids?, preset?, format?: jpeg|png|tiff|webp|avif|jxl|psd|dng|original, longEdge?|shortEdge?|width?|height?|megapixels?|percent? (default longEdge 3000; longEdge 0 = full size), dontEnlarge?, ppi?, quality?: 1..100, jxlLossless?, jxlEffort?: fast|normal, jxlProgressive?, videoFormat?: h264|prores (video clips export as movies: trim + video edits), videoQuality?: 1..100, videoMaxSide?: px (0 = clip size), limitKb?, colorSpace?: srgb|displayP3|adobeRgb|proPhoto|rec2020, bitDepth?: 8|10|16|32, hdr? (HDR output for HDR edits: gain map JPEG, PQ AVIF / PNG / JPEG XL, float TIFF), sharpen?: none|screen|matte|glossy, sharpenAmount?: low|standard|high, metadata?: all|allExceptCamera|copyright|none, removeLocation?, naming?, startNumber?, customText? (the {custom} token), destinationMode?: specificFolder|sameAsOriginal (sameAsOriginal = each photo into its original's folder; `dir` unused), subfolder? (one folder name), conflict?: unique|overwrite|skip, tiffCompression?: none|lzw|zip, dngCompression?: lossless|deflate|uncompressed, addToPhotos?: bool (macOS: then add the files written to Apple Photos; outcome in `applePhotos`), photosAlbum?: top-level album name (made when missing), watermark?: text | {text?, vertical? (upright columns, right to left), size? (text height, 0.005..0.5 of the short edge; default 0.035), opacity? (0..1; 0.7), anchor?: topLeft|top|topRight|left|center|right|bottomLeft|bottom|bottomRight, insetX? (margin from the left/right edge, 0..0.4 of the short edge; 0.025), insetY? (from the top/bottom edge; 0.025), inset? (sets both), rotation?: 0|90|180|270 (degrees clockwise; 0), color? [r,g,b] sRGB, shadow?, image? (graphic drawn instead of the text), imageWidth? (0.01..1 of the photo's width; 0.2)}} — an unknown parameter, an out-of-range watermark size or a value of the wrong kind is an error, not a default",
                     "enabled": self.session.active().is_some()}));
                 Ok(Value::Array(v))
             }
@@ -152,7 +189,7 @@ impl Backend for Headless {
             }
             "app.export" => self.export(&p),
             m if m.starts_with("ui.") || m == "app.quit" => {
-                Err(format!("`{m}` needs the desktop app: start `lightcraft --control 7980` and run the MCP server with `--connect`"))
+                Err(format!("`{m}` needs the desktop app: start `{} --control 7980` and run the MCP server with `--connect`", lcc_brand::BINARY))
             }
             other => Err(format!("unknown method `{other}`")),
         }
@@ -167,17 +204,16 @@ impl Backend for Headless {
     }
 }
 
-/// Expand folders (recursively, sorted; bounded, see `lightcraft_engine::walk`) into photo files
+/// Expand folders (recursively, sorted; bounded, see `lcc_engine::walk`) into photo files
 /// and make paths absolute. Folders take the extensions `library.import` takes
-/// (`lightcraft_engine::import::EXTENSIONS`), so the two can't drift apart (issue #1080).
+/// (`lcc_engine::import::EXTENSIONS`), so the two can't drift apart (issue #1080).
 pub fn expand_paths(paths: &[String]) -> Vec<String> {
     let absolute = |p: &Path| std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf()).to_string_lossy().to_string();
     let mut out = Vec::new();
     for p in paths {
         let path = Path::new(p);
         if path.is_dir() {
-            let w =
-                lightcraft_engine::walk::files_in(path, None, lightcraft_engine::walk::Limits::default(), lightcraft_engine::import::is_supported);
+            let w = lcc_engine::walk::files_in(path, None, lcc_engine::walk::Limits::default(), lcc_engine::import::is_supported);
             out.extend(w.files.iter().map(|f| absolute(f)));
         } else {
             // Explicit files are kept even with unknown extensions (the probe decides).
@@ -190,16 +226,16 @@ pub fn expand_paths(paths: &[String]) -> Vec<String> {
 /// Encode by extension: `.png` (default), `.jpg`/`.jpeg` (quality), `.tif`/`.tiff`, `.webp` (lossless),
 /// `.avif`, `.jxl` — via the shared export encoder (embeds an sRGB profile).
 pub fn encode_image(ext: &str, img: &Rgba8, quality: u8) -> Result<Vec<u8>, String> {
-    use lightcraft_engine::export::{ExportFormat, ExportOptions};
+    use lcc_engine::export::{ExportFormat, ExportOptions};
     let format = ExportFormat::parse(ext).unwrap_or(ExportFormat::Png);
-    lightcraft_engine::export::encode_image(img, &ExportOptions { format, quality: quality.clamp(1, 100), ..Default::default() })
+    lcc_engine::export::encode_image(img, &ExportOptions { format, quality: quality.clamp(1, 100), ..Default::default() })
 }
 
 /// Encode by the path's extension and write the file.
 pub fn write_image(path: &Path, img: &Rgba8, quality: u8) -> Result<(), String> {
     let ext = path.extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_default();
     let bytes = encode_image(&ext, img, quality)?;
-    lightcraft_engine::export::write_file(&path.to_string_lossy(), &bytes)
+    lcc_engine::export::write_file(&path.to_string_lossy(), &bytes)
 }
 
 #[cfg(test)]
@@ -209,7 +245,7 @@ mod tests {
     /// Headless sessions look for the SAM 3 model where the desktop app does, and `segment.model.status` reports it (issue #619).
     #[test]
     fn headless_sessions_get_the_sam3_model_folder() {
-        let dir = lightcraft_engine::config::default_sam3_dir();
+        let dir = lcc_engine::config::default_sam3_dir();
         assert_eq!(Headless::default().session.segmenter.dir, dir);
         assert_eq!(Headless::demo().session.segmenter.dir, dir);
         let dir = std::env::temp_dir().join("lc-mcp-sam3-dir");
@@ -226,7 +262,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("lc-mcp-expand-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        for e in lightcraft_engine::import::EXTENSIONS {
+        for e in lcc_engine::import::EXTENSIONS {
             std::fs::write(dir.join(format!("a.{e}")), b"x").unwrap();
         }
         std::fs::write(dir.join("B.HEIC"), b"x").unwrap();
@@ -236,7 +272,7 @@ mod tests {
         let ext = |f: &String| Path::new(f).extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_default();
         let mut got: Vec<String> = found.iter().map(ext).collect();
         got.sort();
-        let mut want: Vec<String> = lightcraft_engine::import::EXTENSIONS.iter().map(|e| e.to_string()).chain(["HEIC".to_string()]).collect();
+        let mut want: Vec<String> = lcc_engine::import::EXTENSIONS.iter().map(|e| e.to_string()).chain(["HEIC".to_string()]).collect();
         want.sort();
         assert_eq!(got, want);
     }

@@ -6,16 +6,16 @@
 
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
-use crate::LightcraftApp;
+use crate::LccApp;
 
 /// Applies a task's result to the app (on the UI thread).
-type Finish = Box<dyn FnOnce(&mut LightcraftApp, &egui::Context) + Send>;
+type Finish = Box<dyn FnOnce(&mut LccApp, &egui::Context) + Send>;
 
 struct Task {
     label: String,
     rx: Receiver<Finish>,
     /// Its row in the activity stack (none for quiet tasks); goes with the task.
-    _guard: Option<lightcraft_engine::activity::TaskGuard>,
+    _guard: Option<lcc_engine::activity::TaskGuard>,
 }
 
 /// The background tasks in flight.
@@ -45,17 +45,17 @@ impl Tasks {
 /// build, which has no threads, `work` runs at once and `done` on the next frame). With `kind`, the
 /// activity stack shows `label` meanwhile, without a count and without ✕ (the work can't be stopped).
 pub fn spawn<T: Send + 'static>(
-    app: &mut LightcraftApp,
+    app: &mut LccApp,
     label: &str,
     kind: Option<&'static str>,
     work: impl FnOnce() -> T + Send + 'static,
-    done: impl FnOnce(&mut LightcraftApp, &egui::Context, T) + Send + 'static,
+    done: impl FnOnce(&mut LccApp, &egui::Context, T) + Send + 'static,
 ) -> Result<(), String> {
     let (tx, rx) = channel::<Finish>();
     let repaint = app.tasks.repaint.clone();
     let job = move || {
         let t = work();
-        let _ = tx.send(Box::new(move |app: &mut LightcraftApp, ctx: &egui::Context| done(app, ctx, t)));
+        let _ = tx.send(Box::new(move |app: &mut LccApp, ctx: &egui::Context| done(app, ctx, t)));
         if let Some(c) = repaint {
             c.request_repaint();
         }
@@ -64,13 +64,13 @@ pub fn spawn<T: Send + 'static>(
     std::thread::Builder::new().name(format!("lc-task-{label}")).spawn(job).map_err(|e| format!("{label}: could not start: {e}"))?;
     #[cfg(target_arch = "wasm32")]
     job();
-    let guard = kind.map(|k| app.session.activity.start(k, label, lightcraft_engine::activity::Cancel::No));
+    let guard = kind.map(|k| app.session.activity.start(k, label, lcc_engine::activity::Cancel::No));
     app.tasks.running.push(Task { label: label.to_string(), rx, _guard: guard });
     Ok(())
 }
 
 /// Apply finished tasks (called every frame).
-pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
+pub fn poll(app: &mut LccApp, ctx: &egui::Context) {
     app.tasks.repaint = Some(ctx.clone());
     let mut i = 0;
     while i < app.tasks.running.len() {
@@ -93,7 +93,7 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
 }
 
 /// Wait for every task and apply it (tests, and commands asked to `wait`). `false` on timeout.
-pub fn wait(app: &mut LightcraftApp, ctx: &egui::Context, timeout: std::time::Duration) -> bool {
+pub fn wait(app: &mut LccApp, ctx: &egui::Context, timeout: std::time::Duration) -> bool {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let t0 = std::time::Instant::now();
@@ -119,7 +119,7 @@ pub fn wait(app: &mut LightcraftApp, ctx: &egui::Context, timeout: std::time::Du
 
 /// Wait for a specific task by label and apply finished tasks. Returns `true` once the labeled
 /// task finishes (or is removed), or `false` on timeout. Other background tasks may continue running.
-pub fn wait_for(app: &mut LightcraftApp, ctx: &egui::Context, label: &str, timeout: std::time::Duration) -> bool {
+pub fn wait_for(app: &mut LccApp, ctx: &egui::Context, label: &str, timeout: std::time::Duration) -> bool {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let t0 = std::time::Instant::now();

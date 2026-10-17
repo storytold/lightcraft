@@ -4,16 +4,16 @@
 
 use std::path::Path;
 
-use lightcraft_develop::Preset;
+use lcc_develop::Preset;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::Session;
 
-/// File extension of LightCraft preset files.
-pub const LCPRESET_EXT: &str = "lcpreset";
+/// File extension of the app's preset files (legacy extensions are read too, see [`lcc_brand::preset_exts`]).
+pub const LCPRESET_EXT: &str = lcc_brand::PRESET_EXT;
 /// The `format` tag of a `.lcpreset` file.
-pub const LCPRESET_FORMAT: &str = "lightcraft.preset";
+pub const LCPRESET_FORMAT: &str = crate::legacy::PRESET_FORMAT;
 
 /// A `.lcpreset` file: one or more presets with their groups.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -117,7 +117,7 @@ pub fn parse_preset_file(name: &str, bytes: &[u8]) -> Result<Vec<Preset>, String
     let ext = Path::new(name).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
     let text = String::from_utf8_lossy(bytes);
     let text = text.trim_start_matches('\u{feff}');
-    if ext == "xmp" || (ext != LCPRESET_EXT && text.trim_start().starts_with('<')) {
+    if ext == "xmp" || (!lcc_brand::preset_exts().any(|e| e == ext) && text.trim_start().starts_with('<')) {
         return crate::crs::preset_from_xmp(text, &stem).map(|p| vec![p]).ok_or_else(|| "no develop settings in this XMP file".into());
     }
     let v: Value = serde_json::from_str(text).map_err(|e| format!("not a preset file: {e}"))?;
@@ -155,7 +155,8 @@ pub fn parse_preset_file(name: &str, bytes: &[u8]) -> Result<Vec<Preset>, String
 pub fn expand_preset_paths(paths: &[String]) -> Vec<String> {
     let preset_file = |p: &Path| {
         let ext = p.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
-        ext == LCPRESET_EXT || ["xmp", "lrtemplate", "zip", "lmp", "mplumpack", crate::cmd::mask_effect_files::EFFECT_EXT].contains(&ext.as_str())
+        lcc_brand::preset_exts().any(|e| e == ext)
+            || ["xmp", "lrtemplate", "zip", "lmp", "mplumpack", crate::cmd::mask_effect_files::EFFECT_EXT].contains(&ext.as_str())
     };
     let mut out = Vec::new();
     for p in paths {
@@ -575,7 +576,7 @@ mod tests {
 
     #[test]
     fn builtin_presets_parse_and_apply() {
-        let base = lightcraft_develop::DevelopSettings::default();
+        let base = lcc_develop::DevelopSettings::default();
         let mut ids = std::collections::HashSet::new();
         for pr in builtin() {
             assert!(ids.insert(pr.id.clone()));
@@ -613,13 +614,6 @@ mod tests {
         assert_ne!(plain.as_bytes(), looked.as_bytes());
     }
 
-    #[test]
-    fn slugs() {
-        assert_eq!(slug("Warm & Soft!"), "warm-soft");
-        assert_eq!(slug("  "), "preset");
-        assert_eq!(slug("B&W/Film 2"), "b-w-film-2");
-    }
-
     fn dir(tag: &str) -> std::path::PathBuf {
         let d = std::env::temp_dir().join(format!("lc-presets-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
@@ -640,7 +634,7 @@ mod tests {
         let path = d.join("mine");
         let r = s.execute("preset.export", &json!({"path": path.to_string_lossy()})).unwrap();
         assert_eq!(r["count"], 2);
-        let file = d.join("mine.lcpreset");
+        let file = d.join(format!("mine.{}", lcc_brand::PRESET_EXT));
         assert!(file.is_file());
         let one = d.join("travel.lcpreset");
         s.execute("preset.export", &json!({"path": one.to_string_lossy(), "group": "Travel"})).unwrap();

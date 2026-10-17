@@ -7,10 +7,10 @@
 //!
 //! The work is split so the app can probe on a worker thread: [`stale`] lists what to probe (no
 //! file-system calls), [`probe`] reads the files without the session, and [`apply`] applies the
-//! results as LightCraft's own bookkeeping (journaled, not an undo step). Agents and tests use
+//! results as the app's own bookkeeping (journaled, not an undo step). Agents and tests use
 //! `library.recheckPreviewOnly`, which does all three at once.
 
-use lightcraft_catalog::{Catalog, Op, Photo, PhotoId};
+use lcc_catalog::{Catalog, Op, Photo, PhotoId};
 use serde_json::{Value, json};
 
 use super::{CommandSpec, always, bad, cmd};
@@ -45,7 +45,7 @@ impl Stale {
 /// were copied from). No file-system calls.
 pub fn stale(cat: &Catalog, all: bool) -> Vec<Stale> {
     cat.photos()
-        .filter(|p| p.copy_of.is_none() && p.preview_only.is_some() && (all || p.preview_only_stale()))
+        .filter(|p| p.copy_of.is_none() && p.preview_only.is_some() && !link_only(p) && (all || p.preview_only_stale()))
         .filter_map(|p| crate::cmd::missing::checked_path(p).map(|path| Stale::of(p, path)))
         .collect()
 }
@@ -122,8 +122,19 @@ pub fn specs() -> Vec<CommandSpec> {
         "Recheck Preview-Only Raws",
         [],
         None,
-        "{all?: bool} — probe again the raws shown from their embedded preview whose flag another LightCraft version set (the app does this in the background when a library opens; `all` rechecks every preview-only raw, e.g. when testing a decoder build of the same version), and bring each up to date as Reload from Disk would; not an undo step, develop settings and history are kept; files that can't be read are left for next time → {checked, updated: [ids], cleared: [ids] (develop from their raw data now)}",
+        "{all?: bool} — probe again the raws shown from their embedded preview whose flag another version of the app set (the app does this in the background when a library opens; `all` rechecks every preview-only raw, e.g. when testing a decoder build of the same version), and bring each up to date as Reload from Disk would; not an undo step, develop settings and history are kept; files that can't be read are left for next time → {checked, updated: [ids], cleared: [ids] (develop from their raw data now)}",
         always,
         recheck
     )]
+}
+
+/// An Immich link-only photo: it has no file of its own to probe, and its flag is not a decoder's decision.
+fn link_only(p: &lcc_catalog::Photo) -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    return p.preview_only.as_deref() == Some(crate::remote::LINK_ONLY);
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = p;
+        false
+    }
 }

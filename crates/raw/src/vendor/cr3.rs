@@ -20,8 +20,8 @@
 
 use super::{black_from_columns, crx, white_from_data};
 use crate::{BlackLevel, Cfa, ColorData, MAX_SAMPLES, Mode, OpcodeLists, RawData, RawError, RawFormat, RawImage, Rect, Result};
-use lightcraft_meta::cr3::{Cr3ImageArea, Cr3Track, Cr3TrackKind, parse_cr3};
-use lightcraft_tiff::{Ifd, Tiff};
+use lcc_meta::cr3::{Cr3ImageArea, Cr3Track, Cr3TrackKind, parse_cr3};
+use lcc_tiff::{Ifd, Tiff};
 
 const SENSOR_INFO: u16 = 0x00e0;
 const COLOR_DATA: u16 = 0x4001;
@@ -231,7 +231,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         None => BlackLevel::uniform(0.0),
     };
     let white = levels.white.unwrap_or_else(|| white_from_data(&data, u32::from(coding.bit_depth)));
-    let mut metadata = lightcraft_meta::extract(bytes);
+    let mut metadata = lcc_meta::extract(bytes);
     if metadata.lens_model.is_none() {
         metadata.lens_model = maker.and_then(|m| m.string(LENS_MODEL)).map(|s| s.trim().to_owned()).filter(|s| !s.is_empty());
     }
@@ -265,7 +265,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lightcraft_tiff::{IfdBuilder, Value};
+    use lcc_tiff::{IfdBuilder, Value};
 
     fn maker(version: u16, wb_at: usize, black_at: usize, white_at: usize) -> Ifd {
         let mut words = vec![0u16; white_at + 1];
@@ -274,7 +274,7 @@ mod tests {
         words[black_at..black_at + 4].copy_from_slice(&[100, 101, 102, 103]);
         words[white_at] = 15000;
         let b = IfdBuilder::new().with(COLOR_DATA, Value::Short(words));
-        let bytes = lightcraft_tiff::TiffWriter::new(lightcraft_tiff::ByteOrder::Little, false).write(&[b]).unwrap();
+        let bytes = lcc_tiff::TiffWriter::new(lcc_tiff::ByteOrder::Little, false).write(&[b]).unwrap();
         Tiff::parse(&bytes).unwrap().ifds.remove(0)
     }
 
@@ -304,7 +304,7 @@ mod tests {
     }
 
     fn synthetic_header_with(aspect: Option<[u32; 5]>) -> Vec<u8> {
-        use lightcraft_tiff::{ByteOrder, TiffWriter, tags as t};
+        use lcc_tiff::{ByteOrder, TiffWriter, tags as t};
         let tiff = |b: IfdBuilder| TiffWriter::new(ByteOrder::Little, false).write(&[b]).unwrap();
         let cmt1 = tiff(
             IfdBuilder::new()
@@ -443,8 +443,8 @@ mod tests {
     /// and `AspectInfo` applies from its origin.
     #[test]
     fn aspect_info_needs_a_consistent_recommended_crop() {
-        let aspect = lightcraft_tiff::IfdBuilder::new().with(ASPECT_INFO, Value::Long(vec![13, 5088, 3392, 0, 0]));
-        let bytes = lightcraft_tiff::TiffWriter::new(lightcraft_tiff::ByteOrder::Little, false).write(&[aspect]).unwrap();
+        let aspect = lcc_tiff::IfdBuilder::new().with(ASPECT_INFO, Value::Long(vec![13, 5088, 3392, 0, 0]));
+        let bytes = lcc_tiff::TiffWriter::new(lcc_tiff::ByteOrder::Little, false).write(&[aspect]).unwrap();
         let maker = Tiff::parse(&bytes).unwrap().ifds.remove(0);
         let area =
             |crop| Cr3ImageArea { width: 5376, height: 3574, crop, active: Some([132, 160, 5243, 3567]), masked_left: [0; 4], masked_top: None };

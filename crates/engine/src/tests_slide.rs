@@ -210,7 +210,7 @@ fn slide_preview_draws_the_overlays() {
     let kinds: Vec<&str> = r["overlays"].as_array().unwrap().iter().filter_map(|o| o["kind"].as_str()).collect();
     assert_eq!(kinds, ["identityPlate", "ratingStars", "text0"]);
     let img = s.slide_now(&s.slide_layout.clone(), photos[0], 640, 400).unwrap();
-    let count = |img: &lightcraft_raster::Rgba8, b: &serde_json::Value, want: fn([u8; 4]) -> bool| {
+    let count = |img: &lcc_raster::Rgba8, b: &serde_json::Value, want: fn([u8; 4]) -> bool| {
         let v: Vec<usize> = (0..4).map(|i| b[i].as_f64().unwrap() as usize).collect();
         (v[1]..v[3]).flat_map(|y| (v[0]..v[2]).map(move |x| (x, y))).filter(|&(x, y)| want(img.get(x, y))).count()
     };

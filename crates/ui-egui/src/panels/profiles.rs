@@ -3,9 +3,9 @@
 //! star, the applied profile's amount, a temporary loupe preview while hovering and apply on click.
 
 use egui::{Align2, Color32, Rect, Sense, Stroke, pos2, vec2};
-use lightcraft_catalog::PhotoId;
-use lightcraft_develop::DevelopSettings;
-use lightcraft_engine::presets::{PROFILES, profile_groups};
+use lcc_catalog::PhotoId;
+use lcc_develop::DevelopSettings;
+use lcc_engine::presets::{PROFILES, profile_groups};
 use serde_json::json;
 
 use super::presets::cover_uv;
@@ -13,14 +13,14 @@ use crate::icons::{Icon, paint};
 use crate::state::RightPanel;
 use crate::theme::Tokens;
 use crate::widgets::{divider, icon_button, one_line, register};
-use crate::{HoverPreview, LightcraftApp};
+use crate::{HoverPreview, LccApp};
 
 /// Long edge of the variant thumbnails (px).
 const THUMB_EDGE: usize = 256;
 /// Thumbnail columns.
 const COLUMNS: usize = 2;
 
-pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
+pub fn show(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
     let t = Tokens::get(ui.ctx());
     let d = (*app.session.develop_of(id).unwrap_or_default()).clone();
     // header: back + title
@@ -72,8 +72,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     }
     for (title, tag, imported, list) in sections {
         // an imported folder named like a built-in group still opens and closes on its own
-        let open_id = egui::Id::new(("profile-group", imported, title));
-        let open: bool = ui.data(|m| m.get_temp(open_id)).unwrap_or(true);
+        let key = if imported { format!("lut:{title}") } else { format!("profile:{title}") };
+        let holds_current = list.iter().any(|p| p.0 == d.profile.id);
+        let open = app.ui.group_is_open(&key, holds_current);
         let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::click());
         crate::widgets::announce(&resp, title.to_string());
         register(ui.ctx(), if imported { format!("profileGroup:lut:{title}") } else { format!("profileGroup:{title}") }, r);
@@ -92,7 +93,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         );
         ui.painter().text(pos2(r.right() - 22.0, r.center().y), Align2::RIGHT_CENTER, list.len().to_string(), t.font(12.0), t.text_dim);
         if resp.clicked() {
-            ui.data_mut(|m| m.insert_temp(open_id, !open));
+            app.ui.group_open.insert(key, !open);
         }
         if !open {
             continue;
@@ -140,16 +141,7 @@ fn with_profile_id(d: &DevelopSettings, profile_id: &str) -> DevelopSettings {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn cell_ui(
-    app: &mut LightcraftApp,
-    ui: &mut egui::Ui,
-    d: &DevelopSettings,
-    id: PhotoId,
-    tag: &str,
-    p: &(String, String, String),
-    cell: Rect,
-    th: f32,
-) {
+fn cell_ui(app: &mut LccApp, ui: &mut egui::Ui, d: &DevelopSettings, id: PhotoId, tag: &str, p: &(String, String, String), cell: Rect, th: f32) {
     let (p_id, p_name, p_group) = (p.0.as_str(), p.1.as_str(), p.2.as_str());
     let t = Tokens::get(ui.ctx());
     let key = if tag.is_empty() { format!("profileCell:{p_id}") } else { format!("profileCell:{tag}:{p_id}") };
@@ -192,7 +184,7 @@ fn cell_ui(
     let resp = resp.on_hover_text(format!(
         "{} ({})",
         crate::i18n::profile_label(p_id, p_name),
-        crate::i18n::builtin_label(p_group, lightcraft_engine::presets::profile(p_id).is_some())
+        crate::i18n::builtin_label(p_group, lcc_engine::presets::profile(p_id).is_some())
     ));
     if resp.clicked() {
         if resp.interact_pointer_pos().is_some_and(|q| star.contains(q)) {

@@ -1,0 +1,83 @@
+# Printing (LRC-PRINT-*): the pure-Rust IPP client against a real CUPS queue. The virtual IPP printer
+# (`lcc_print::testprinter`) already runs in every `cargo xtask ci`; this job adds CUPS itself with the
+# cups-pdf backend: `cups_test_printer_receives_a_job` reads the queue's paper sizes, prints a 2×2 contact sheet
+# PDF, follows the job to "completed", and the PDF must land in the cups-pdf output. See docs/print.md.
+name: Print
+
+on:
+  schedule:
+    - cron: '41 3 * * 1'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'crates/print/**'
+      - 'crates/layout/**'
+      - 'crates/pdf/**'
+      - 'crates/ui-egui/src/print_ui.rs'
+      - '.github/workflows/print.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: print-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  cups:
+    # Self-hosted gpu0 (docs/ci.md), in a Debian container that runs its own cupsd (needs Docker on
+    # the runner). Cargo's registry and target dir live in named Docker volumes, so runs are
+    # incremental; the runners' own target dirs are never used here.
+    runs-on: [self-hosted, Linux, X64, lcc]
+    container:
+      image: rust:1-bookworm
+      volumes:
+        - lcc-ci-cargo-registry:/usr/local/cargo/registry
+        - lcc-ci-target-print:/ci-target
+    timeout-minutes: 45
+    env:
+      CARGO_TARGET_DIR: /ci-target
+    defaults:
+      run:
+        shell: nice -n 19 bash -e {0}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: install CUPS and cups-pdf
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends cups cups-client cups-bsd printer-driver-cups-pdf
+          # no systemd in the container: run the scheduler directly (it daemonizes)
+          cupsd
+          for _ in $(seq 1 30); do lpstat -r >/dev/null 2>&1 && break; sleep 1; done
+          lpadmin -p PDF -E -v cups-pdf:/ -m lsb/usr/cups-pdf/CUPS-PDF_opt.ppd
+          lpstat -p PDF
+      - name: virtual IPP printer tests
+        run: "cargo test -p lcc-print --lib -- virtual_ ipp::"
+      - name: CUPS test printer
+        run: |
+          prefix=$(sed -n 's/^env_prefix *= *"\([A-Z0-9_]*\)".*/\1/p' brand.toml)
+          test -n "$prefix"
+          env "${prefix}_CUPS_TEST_PRINTER=ipp://localhost:631/printers/PDF" \
+            cargo test -p lcc-print --lib cups_test_printer -- --nocapture
+      - name: the job reached cups-pdf
+        run: |
+          for _ in $(seq 1 30); do
+            found=$(find /var/spool/cups-pdf "$HOME/PDF" -name '*.pdf' 2>/dev/null | head -n 1)
+            if [ -n "$found" ]; then
+              echo "printed: $found"
+              head -c 8 "$found" | grep -q '%PDF-'
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "no PDF from cups-pdf"
+          tail -n 100 /var/log/cups/error_log || true
+          exit 1
+      - name: hand the workspace back to the runner user
+        if: always()
+        # the container runs as root; root-owned files would break the next checkout on the host
+        run: chown -R "$(stat -c %u:%g "$GITHUB_WORKSPACE/..")" "$GITHUB_WORKSPACE"

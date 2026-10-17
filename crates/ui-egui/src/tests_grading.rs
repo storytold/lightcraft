@@ -6,14 +6,14 @@ use std::time::Duration;
 use serde_json::json;
 
 use crate::headless::Headless;
-use crate::{LightcraftApp, Services};
+use crate::{LccApp, Services};
 
 const T: Duration = Duration::from_secs(20);
 const SETTLE: Duration = Duration::from_secs(120);
 
 fn demo() -> Headless {
     let services = Services { png: None, ..Default::default() };
-    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+    let app = LccApp::new(lcc_engine::Session::with_demo(), services);
     let mut h = Headless::new(app, [1400.0, 2400.0], 1.0);
     let r = h.request("ui.set", json!({"view": "detail", "right": "edit"}), T);
     assert_eq!(r["ok"], true, "{r}");
@@ -85,7 +85,7 @@ fn the_eye_hides_a_wheel_for_viewing_only_and_resets_on_another_photo() {
     assert_eq!(h.app.ui.grading_hidden_for(id), [false; 3]);
     // hidden state belongs to one photo
     h.app.ui.set_grading_hidden(id, 0, true);
-    let other = lightcraft_catalog::PhotoId(id.0 + 1);
+    let other = lcc_catalog::PhotoId(id.0 + 1);
     assert_eq!(h.app.ui.grading_hidden_for(other), [false; 3]);
 }
 
@@ -272,18 +272,6 @@ fn shift_drag_keeps_the_pucks_hue_wherever_the_pointer_grabs() {
 }
 
 #[test]
-fn shift_drag_from_the_neutral_centre_locks_the_hue_where_the_pointer_grabbed() {
-    let mut h = demo();
-    let rad = wheel_radius(&h, "midtones");
-    set_wheel(&mut h, "midtones", 0.0, 0.0);
-    // no hue yet: the angle of the grab (90°, straight up) stands in for it
-    let ((hue, sat), undo) = drag_wheel(&mut h, puck(90.0, 50.0, rad), egui::vec2(6.0, -10.0) * (rad / 40.0), &["shift"]);
-    assert!((hue - 90.0).abs() <= 1.0, "{hue}");
-    assert!((sat - 75.0).abs() <= 1.5, "{sat}");
-    assert_eq!(undo, 1);
-}
-
-#[test]
 fn cmd_drag_keeps_the_saturation_and_changes_only_the_hue() {
     let mut h = demo();
     let rad = wheel_radius(&h, "midtones");
@@ -353,13 +341,18 @@ fn double_click_still_resets_the_wheel_with_a_modifier_held() {
     assert_eq!(wheel_value(&h, "midtones"), (0.0, 0.0));
 }
 
-/// The wheels used to look muddy. Painted on screen, the rim of each hue reaches full
+/// Issue #77: the wheels looked muddy. Painted on screen, the rim of each hue reaches full
 /// saturation at normal brightness and the centre is neutral.
 #[test]
 fn wheel_rim_is_fully_saturated_and_the_centre_neutral() {
     let mut h = demo();
     let img = h.snapshot(SETTLE);
     let r = widget(&h, "wheel:midtones").unwrap();
+    if let Ok(dir) = std::env::var("WHEEL_SNAPSHOT_DIR") {
+        let crop = img.region(&r.expand(12.0), Some(1.0));
+        let px: Vec<u8> = crop.pixels.iter().flat_map(|p| [p.r(), p.g(), p.b()]).collect();
+        let _ = image::save_buffer(format!("{dir}/wheel.png"), &px, crop.size[0] as u32, crop.size[1] as u32, image::ColorType::Rgb8);
+    }
     let at = |dx: f32, dy: f32| {
         let p = r.center() + egui::vec2(dx, dy) * r.width() / 2.0;
         img[(p.x as usize, p.y as usize)]

@@ -1,0 +1,4 @@
+# actionlint (packaging-lint.yml): the custom label of the self-hosted runners (docs/ci.md).
+self-hosted-runner:
+  labels:
+    - lcc

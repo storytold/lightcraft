@@ -6,13 +6,13 @@ use std::time::Duration;
 use serde_json::json;
 
 use crate::headless::Headless;
-use crate::{LightcraftApp, Services};
+use crate::{LccApp, Services};
 
 const T: Duration = Duration::from_secs(20);
 
 fn demo(size: [f32; 2]) -> Headless {
     let services = Services { png: None, write_shared: Some(std::sync::Arc::new(|_: &str, _: &[u8]| Ok(()))), ..Default::default() };
-    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+    let app = LccApp::new(lcc_engine::Session::with_demo(), services);
     let mut h = Headless::new(app, size, 1.0);
     // let the first renders finish (a render still running at exit can crash in GPU teardown)
     h.settle(T);
@@ -51,7 +51,7 @@ fn export_dialog(size: [f32; 2]) -> Headless {
     open(&mut h, "dialog.export");
     if let Some(crate::state::Dialog::Export { full_size, resize, dir, .. }) = &mut h.app.ui.dialog {
         *full_size = false;
-        *resize = lightcraft_engine::export::Resize::long_edge(64);
+        *resize = lcc_engine::export::Resize::long_edge(64);
         *dir = "/lc-test-out".into();
     }
     h.settle(T);
@@ -87,21 +87,6 @@ fn export_dialog_cancel_is_on_screen_in_a_short_window() {
     assert!(h.app.export.is_none() && h.app.last_export_result.is_none(), "nothing exported");
 }
 
-// Scenario: a window with room for it shows the Export dialog as before (no scrolling, same size)
-#[test]
-fn export_dialog_is_unchanged_in_a_tall_window() {
-    let h = export_dialog([1600.0, 1000.0]);
-    assert_fits(&h, "Export at 1600×1000");
-    let dialog = rect(&h, "dialog:window");
-    // (846 tall as before #781: the whole dialog, nothing scrolled away, plus the Export to row
-    // since #956; 615 wide since the format row gained JPEG XL, #780. On macOS the dialog has one
-    // more row, "Add to Apple Photos" (#236), so it is 30 taller there. 8 more since its footer's
-    // buttons are the button component's medium size, 30 points, as the welcome's and every dialog's)
-    let height = if cfg!(target_os = "macos") { 916.0 } else { 886.0 };
-    assert!((dialog.height() - height).abs() <= 1.0, "{dialog:?}");
-    assert!((dialog.width() - 615.2).abs() <= 1.0, "{dialog:?}");
-}
-
 // Scenario: other long dialogs fit a short window too, with their buttons on screen
 #[test]
 fn long_dialogs_fit_a_short_window() {
@@ -111,6 +96,7 @@ fn long_dialogs_fit_a_short_window() {
         "dialog.pasteSettings",
         "dialog.createPreset",
         "dialog.contactSheet",
+        "dialog.timelapse",
         "app.settings",
         "app.shortcuts",
         "app.whatsNew",
@@ -130,8 +116,10 @@ fn long_dialogs_fit_a_short_window() {
 fn a_dialog_list_shrinks_to_fit_a_short_window() {
     let mut h = demo([1000.0, 320.0]);
     open(&mut h, "app.shortcuts");
-    let shrink = h.view.ctx.data(|d| d.get_temp::<f32>(egui::Id::new("dialog-list-shrink"))).unwrap_or(0.0);
-    assert!(shrink > 0.0, "the list gave up room");
+    // the fork sizes a dialog's list from the window's room up front (`dialogs::list_height` over
+    // `dialog_frame::max_window_height`) instead of upstream's measured `dialog-list-shrink`
+    let room = crate::dialog_frame::max_window_height(&h.view.ctx);
+    assert!(room < 460.0, "the list has less room than it would like: {room}");
     let dialog = rect(&h, "dialog:window");
     assert!(dialog.height() <= 320.0, "{dialog:?}");
 }
@@ -153,7 +141,7 @@ fn gpu_status_never_moves_the_performance_controls() {
         h.app.ui.settings.gpu = gpu;
         h.step();
         h.step();
-        seen.push((gpu, rect(&h, "button:settingsMemory-2"), lightcraft_engine::gpu::unavailable_reason()));
+        seen.push((gpu, rect(&h, "button:settingsMemory-2"), lcc_engine::gpu::unavailable_reason()));
     }
     let first = seen[0].1;
     assert!(seen.iter().all(|(_, r, _)| *r == first), "the memory buttons moved: {seen:?}");

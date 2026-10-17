@@ -1,6 +1,6 @@
 # Fujifilm embedded lens corrections
 
-LightCraft reads the distortion and vignetting tables that Fujifilm cameras store in the raw IFD of every RAF
+The app reads the distortion and vignetting tables that Fujifilm cameras store in the raw IFD of every RAF
 (`0xf00b` GeometricDistortionParams, `0xf010` VignettingParams, signed rationals) and turns them into the existing
 `OpcodeList3` pair, `WarpRectilinear` and `FixVignetteRadial`. The profile-correction control, the CPU / GPU optics
 path, EXIF orientation handling and DNG export use them like any other embedded correction.
@@ -15,7 +15,7 @@ that was not understood, stay uncorrected.
 The tag names come from the [ExifTool FujiFilm tag-name documentation](https://exiftool.org/TagNames/FujiFilm.html);
 ExifTool was only run as a black box (`exiftool -j -n`, `-v3`) to print the arrays. Everything else was measured:
 the 129 CC0 RAFs with these tables under `raw.pixls.us` (Fujifilm, 65 bodies) against the camera's own embedded JPEG, which the
-cameras correct in-camera, and against LightCraft's uncorrected raw render. No other decoder's code or data,
+cameras correct in-camera, and against the app's uncorrected raw render. No other decoder's code or data,
 lens database or Adobe profile was consulted. Scripts and per-file results: `data/testing/raf-lens/` (local).
 
 ## Layout and units
@@ -59,7 +59,7 @@ Vignetting is the gain `100 / V(ρ(r))` at the source radius, fitted by a 5-term
 
 ## Validation
 
-Method: LightCraft's uncorrected render of each RAF (1200 px long edge) against the camera JPEG (`camera-jpeg/`,
+Method: the app's uncorrected render of each RAF (1200 px long edge) against the camera JPEG (`camera-jpeg/`,
 resized to the same size). Per file the high-passed luminance is correlated (NCC) after a warp with a free global scale and
 shift; the warp is (a) similarity only, (b) the table with its sign flipped, (c) the table, lookup at the output
 radius, (d) the table, lookup at the source radius with the computed zoom (adopted), (e) a free three-term radial
@@ -82,11 +82,11 @@ within 0.0047 on all 51.
 **Where the framing differs:** on five corrected combinations the camera did not zoom (XC16–50 at 16 mm on the X-A10,
 XC15–45 on the X-A5 and X-T100, the F770EXR and HS50EXR) and on two more it zoomed about 1 % differently (X-T30 III, XQ2):
 the shape matches but the JPEG shows 4 % more of the sensor than the computed zoom does. The same body and table
-zoom on other lenses (the X-A1 and X-A2 with the XC16–50), so the rule is not in the table. LightCraft uses the computed zoom
+zoom on other lenses (the X-A1 and X-A2 with the XC16–50), so the rule is not in the table. The app uses the computed zoom
 everywhere (no empty border, as for the Sony table). Six bodies whose shape did not match well enough (F550EXR, S1,
 SL1000, X10, XF1, XQ1) are not corrected.
 
-**Through the shipped code path** (`lightcraft-cli render` of the same 67 combinations with the embedded
+**Through the shipped code path** (`lcc-cli render` of the same 67 combinations with the embedded
 correction applied, then the free fit of the corrected render against the camera JPEG, global scale removed so
 the framing difference does not count): the residual radial shape error falls from a median of
 0.72 % of the half diagonal (largest 2.60 %) to a median of 0.05 % (largest 0.42 %), 54 of the 57 corrected combinations land within 0.25 %
@@ -112,7 +112,7 @@ curves from 30 files at a median 0.93 (31 above 0.8), with the table's sign, at 
 estimator reads 1.0–1.15 on a synthetic mosaic with the table applied). The camera JPEGs show no measurable red/blue
 shift, but 4:2:0 chroma shares the luminance edges, so that proves nothing.
 
-LightCraft's own demosaic, however, already registers the colour planes: its render shows red/blue shifts of only
+The app's own demosaic, however, already registers the colour planes: its render shows red/blue shifts of only
 0.05–0.2 px where the table has 1.5–5 px. Applying the table as per-channel warp planes (tried; the opcode supports
 them) shifted the planes the wrong way: the median measured shift rose from 0.10 to 0.13 px and grew by more than 1.5×
 on 11 of 28 curves (X-T4 blue 0.16 → 0.58 px, X-T3 red 0.06 → 0.59 px). The table is therefore not applied; a correction
@@ -125,4 +125,4 @@ before demosaicing would be needed.
 - `crates/raw/src/vendor/raf.rs`: a synthetic RAF through header and full decode, only for validated models, and a DNG
   round trip.
 - `crates/raw/tests/corpus.rs` `fuji_embedded_lens_tables_follow_the_validated_models`: the corpus' `raf-fuji-*` files,
-  or any folder of RAFs in `LIGHTCRAFT_FUJI` (the pixls set: 129 decoded, 88 warps, 98 vignette gains).
+  or any folder of RAFs in `<PREFIX>_FUJI` (the pixls set: 129 decoded, 88 warps, 98 vignette gains).

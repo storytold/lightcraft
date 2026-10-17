@@ -2,7 +2,7 @@
 use super::{SliderOut, slider, take_registry};
 use crate::headless::HeadlessView;
 use egui::{Event, Modifiers, PointerButton, Rect, vec2};
-use lightcraft_develop::controls;
+use lcc_develop::controls;
 
 fn frame(view: &mut HeadlessView, time: f64, enabled: bool, events: Vec<Event>) -> (SliderOut, Rect) {
     let spec = controls::find("light.exposure").unwrap();

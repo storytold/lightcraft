@@ -8,13 +8,13 @@ use serde_json::json;
 use crate::headless::Headless;
 use crate::menubar::MenuNode;
 use crate::state::{RightPanel, ToolOverlay};
-use crate::{LightcraftApp, Services};
+use crate::{LccApp, Services};
 
 const T: Duration = Duration::from_secs(20);
 
 fn detail(panel: &str) -> Headless {
     let services = Services { png: None, ..Default::default() };
-    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+    let app = LccApp::new(lcc_engine::Session::with_demo(), services);
     let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
     let r = h.request("ui.set", json!({"view": "detail"}), T);
     assert_eq!(r["ok"], true, "{r}");
@@ -156,9 +156,9 @@ fn shift_h_and_the_command_cycle_the_tool_overlay() {
         assert_eq!(r["ok"], false, "{r}");
     }
     assert_eq!(h.app.ui.tool_overlay, ToolOverlay::Selected);
-    // plain H still opens Remove (from Edit), and leaves the mode alone
+    // the Remove key (Q in the Classic set) still opens Remove (from Edit), and leaves the mode alone
     exec(&mut h, "panel.edit", json!({}));
-    h.request("ui.key", json!({"key": "h"}), T);
+    h.request("ui.key", json!({"key": "q"}), T);
     assert_eq!(h.app.ui.right, RightPanel::Remove);
     assert_eq!(h.app.ui.tool_overlay, ToolOverlay::Selected);
     assert_eq!(crate::shortcuts::shortcut_of(&h.app.ui.settings.keymap, "view.toolOverlay"), Some("Shift+H"));

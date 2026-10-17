@@ -1,7 +1,7 @@
 //! Exif / TIFF tags → [`Metadata`] (CIPA DC-008 Exif 2.32, TIFF 6.0, DNG 1.7 tag semantics).
 
 use crate::{DateTime, Flash, Gps, Metadata, Orientation};
-use lightcraft_tiff::{Ifd, Tiff, TiffError, tags as t};
+use lcc_tiff::{Ifd, Tiff, TiffError, tags as t};
 
 /// Strip an `Exif\0\0` (or `Exif\0\xff`) prefix as found in JPEG APP1 and some WebP `EXIF` chunks.
 pub fn strip_exif_header(b: &[u8]) -> &[u8] {
@@ -113,8 +113,8 @@ pub fn from_tiff(tiff: &Tiff) -> Metadata {
     if let Some(iptc) = ifd0.and_then(|i| i.value(t::IPTC_NAA)) {
         // IPTC-NAA is often typed LONG; re-serialise to bytes in file order.
         let bytes = match iptc {
-            lightcraft_tiff::Value::Byte(b) | lightcraft_tiff::Value::Undefined(b) => b.clone(),
-            other => lightcraft_tiff::writer::encode(tiff.order, other),
+            lcc_tiff::Value::Byte(b) | lcc_tiff::Value::Undefined(b) => b.clone(),
+            other => lcc_tiff::writer::encode(tiff.order, other),
         };
         m.fill_missing(&crate::parse_iptc(&bytes));
     }
@@ -127,20 +127,32 @@ pub fn from_tiff(tiff: &Tiff) -> Metadata {
     m
 }
 
+/// Degrees/minutes/seconds triplet as decimal degrees. A component that is present but not a number (a rational
+/// with a zero denominator, as in the placeholder GPS block phones write without a fix) makes the whole value unusable.
 fn dms(ifd: &Ifd, tag: u16) -> Option<f64> {
-    let v = ifd.f64s(tag)?;
-    let d = *v.first()?;
-    let deg = d + v.get(1).copied().unwrap_or(0.0) / 60.0 + v.get(2).copied().unwrap_or(0.0) / 3600.0;
+    let v = ifd.value(tag)?;
+    let part = |i: usize| if i < v.count() { v.get_f64(i) } else { Some(0.0) };
+    let d = v.get_f64(0)?;
+    let deg = d + part(1)? / 60.0 + part(2)? / 3600.0;
     deg.is_finite().then_some(deg)
+}
+
+/// `Some(true)` for the negative hemisphere (`neg`), `Some(false)` for `pos`, `None` when the ref is missing or invalid.
+fn hemisphere(g: &Ifd, tag: u16, pos: char, neg: char) -> Option<bool> {
+    match g.string(tag)?.trim_start().chars().next()?.to_ascii_uppercase() {
+        c if c == neg => Some(true),
+        c if c == pos => Some(false),
+        _ => None,
+    }
 }
 
 fn read_gps(g: &Ifd) -> Option<Gps> {
     let mut lat = dms(g, t::GPS_LATITUDE)?;
     let mut lon = dms(g, t::GPS_LONGITUDE)?;
-    if g.string(t::GPS_LATITUDE_REF).is_some_and(|s| s.starts_with('S')) {
+    if hemisphere(g, t::GPS_LATITUDE_REF, 'N', 'S')? {
         lat = -lat;
     }
-    if g.string(t::GPS_LONGITUDE_REF).is_some_and(|s| s.starts_with('W')) {
+    if hemisphere(g, t::GPS_LONGITUDE_REF, 'E', 'W')? {
         lon = -lon;
     }
     if !(-90.0..=90.0).contains(&lat) || !(-180.0..=180.0).contains(&lon) {
@@ -169,7 +181,7 @@ fn panasonic_lens(data: &[u8], tiff: &Tiff) -> Option<String> {
     }
     let e = exif.get(t::MAKER_NOTE)?;
     let make = tiff.ifds.first().and_then(|i| i.string(t::MAKE)).unwrap_or_default();
-    let mn = lightcraft_tiff::makernote::parse_makernote(data, e.offset, e.count() as u64, tiff.order, &make)?;
+    let mn = lcc_tiff::makernote::parse_makernote(data, e.offset, e.count() as u64, tiff.order, &make)?;
     text(Some(&mn.ifd), PANASONIC_LENS_TYPE)
 }
 
@@ -186,13 +198,13 @@ fn panasonic_jpg_from_raw_lens(tiff: &Tiff) -> Option<String> {
 const NIKON_LENS: u16 = 0x0084;
 
 /// The lens a Nikon camera records in its maker note, when it's plausible.
-fn nikon_lens_spec(exif: Option<&Ifd>, make: Option<&str>, order: lightcraft_tiff::ByteOrder) -> Option<[f64; 4]> {
+fn nikon_lens_spec(exif: Option<&Ifd>, make: Option<&str>, order: lcc_tiff::ByteOrder) -> Option<[f64; 4]> {
     let make = make?;
     if !make.trim().to_ascii_uppercase().starts_with("NIKON") {
         return None;
     }
     let note = exif?.bytes(t::MAKER_NOTE)?;
-    let mn = lightcraft_tiff::makernote::parse_makernote(note, 0, note.len() as u64, order, make)?;
+    let mn = lcc_tiff::makernote::parse_makernote(note, 0, note.len() as u64, order, make)?;
     let s = mn.ifd.f64s(NIKON_LENS)?;
     let [short, long, wide, narrow] = s.as_slice() else { return None };
     let focal = |f: f64| f.is_finite() && f > 0.0 && f < 10_000.0;
@@ -203,7 +215,7 @@ fn nikon_lens_spec(exif: Option<&Ifd>, make: Option<&str>, order: lightcraft_tif
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use lightcraft_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value};
+    use lcc_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value};
 
     /// An Exif block from a Panasonic body: no LensModel, the lens name in maker note tag 0x0051, whose value
     /// lies outside the note's IFD at an offset relative to the Exif TIFF header (as Panasonic writes it).
@@ -383,6 +395,28 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn placeholder_gps_block_is_no_location() {
+        // Android phones without a fix write NUL refs and 0/0 rationals (#1617).
+        let read = |lat_ref: &str, lat: Vec<(u32, u32)>| {
+            let mut gps = IfdBuilder::new();
+            gps.set(t::GPS_LATITUDE_REF, Value::Ascii(lat_ref.into()));
+            gps.set(t::GPS_LATITUDE, Value::Rational(lat));
+            gps.set(t::GPS_LONGITUDE_REF, Value::Ascii("E".into()));
+            gps.set(t::GPS_LONGITUDE, Value::Rational(vec![(151, 1), (12, 1), (4032, 100)]));
+            let mut ifd0 = IfdBuilder::new();
+            ifd0.set_child(t::GPS_IFD, gps);
+            read_exif(&TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap()).gps
+        };
+        let valid = vec![(33, 1), (51, 1), (3564, 100)];
+        assert!(read("N", valid.clone()).is_some());
+        assert_eq!(read("N", vec![(0, 0), (0, 0), (0, 0)]), None, "0/0 rationals");
+        assert_eq!(read("N", vec![(33, 1), (0, 0), (0, 0)]), None, "0/0 minutes");
+        assert_eq!(read(" ", valid.clone()), None, "NUL ref");
+        assert_eq!(read("", valid.clone()), None, "empty ref");
+        assert_eq!(read("X", valid), None, "invalid ref");
+    }
+
+    #[test]
     fn exif_prefix_and_garbage() {
         let mut b = b"Exif\0\0".to_vec();
         b.extend(sample_exif(ByteOrder::Little));
@@ -426,8 +460,8 @@ pub(crate) mod tests {
 /// `Exif\0\0` prefix): IFD0 (make, model, software, artist, copyright, description, orientation,
 /// date), the Exif IFD (capture settings, lens) and, when present, the GPS IFD.
 pub fn write_exif(meta: &Metadata) -> Vec<u8> {
-    use lightcraft_tiff::writer::{rational, srational};
-    use lightcraft_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value};
+    use lcc_tiff::writer::{rational, srational};
+    use lcc_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value};
     let ascii = |s: &Option<String>| s.as_ref().filter(|v| !v.is_empty()).map(|v| Value::Ascii(v.clone()));
     let mut ifd0 = IfdBuilder::new();
     for (tag, v) in [

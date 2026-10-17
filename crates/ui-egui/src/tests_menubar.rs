@@ -3,7 +3,7 @@
 //! pointer left on the title then opened the first row's submenu by itself.
 
 use crate::headless::Headless;
-use crate::{LightcraftApp, Services};
+use crate::{LccApp, Services};
 use serde_json::json;
 use std::time::Duration;
 
@@ -11,7 +11,7 @@ const T: Duration = Duration::from_secs(5);
 const SETTLE: Duration = Duration::from_secs(10);
 
 fn app(size: [f32; 2]) -> Headless {
-    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let app = LccApp::new(lcc_engine::Session::with_demo(), Services { png: None, ..Default::default() });
     let mut h = Headless::new(app, size, 1.0);
     h.settle(SETTLE);
     h
@@ -155,7 +155,7 @@ fn click_outside_and_escape_close_the_open_menu() {
 #[test]
 fn a_scrolled_menu_draws_no_scrollbar_over_its_shortcuts() {
     let mut widths = Vec::new();
-    for (size, scrolls) in [([1600.0, 700.0], true), ([1600.0, 1400.0], false)] {
+    for (size, scrolls) in [([1600.0, 700.0], true), ([1600.0, 2000.0], false)] {
         let what = format!("{} pt window", size[1]);
         let mut h = app(size);
         go(&mut h, "ui.clickWidget", "menu:View");

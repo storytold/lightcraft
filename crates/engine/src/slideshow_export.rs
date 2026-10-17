@@ -6,7 +6,7 @@
 //!   JPEG; each page carries the slide duration and a fade transition for viewers' presentation
 //!   mode, and "full screen" asks the viewer to open in it (`/PageMode /FullScreen`);
 //! - **JPEG sequence**: `<name>-001.jpg`, `<name>-002.jpg`… in a folder;
-//! - **video**: AV1 in MP4 or WebM ([`lightcraft_codecs::video`], our own muxers), the timeline
+//! - **video**: AV1 in MP4 or WebM ([`lcc_codecs::video`], our own muxers), the timeline
 //!   sampled at 24/25/30/60 fps: each slide held for its duration, fades rendered as blended
 //!   frames (crossfade, or through the fade colour). No audio track.
 //!
@@ -23,10 +23,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use lightcraft_catalog::PhotoId;
-use lightcraft_codecs::video::{Av1Encoder, Container, VideoConfig, VideoWriter};
-use lightcraft_pipeline::{OutputDepth, OutputSpace};
-use lightcraft_raster::Rgba8;
+use lcc_catalog::PhotoId;
+use lcc_codecs::video::{Av1Encoder, Container, VideoConfig, VideoWriter};
+use lcc_pipeline::{OutputDepth, OutputSpace};
+use lcc_raster::Rgba8;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
@@ -42,7 +42,7 @@ pub const MAX_SECONDS: f64 = 2.0 * 3600.0;
 pub const MAX_SLIDES: usize = 10_000;
 /// Long side of PDF pages and JPEGs, in pixels.
 pub const SIZE_MIN: usize = 64;
-pub const SIZE_MAX: usize = lightcraft_slideshow::MAX_SIDE;
+pub const SIZE_MAX: usize = lcc_slide::MAX_SIDE;
 /// Video frame height, in pixels.
 pub const VIDEO_MIN: usize = 64;
 pub const VIDEO_MAX: usize = 2160;
@@ -319,7 +319,7 @@ pub fn prepare(s: &mut Session, p: &Value) -> Result<Prepared, String> {
             continue;
         };
         let aspect = s.slide_photo_aspect(id).unwrap_or(1.5);
-        let (pw, ph) = lightcraft_slideshow::photo_size(&layout, aspect, width, height);
+        let (pw, ph) = lcc_slide::photo_size(&layout, aspect, width, height);
         let job = match s.export_job(id, pw.max(8), ph.max(8), OutputSpace::Srgb, OutputDepth::U8) {
             Ok(job) => job,
             Err(e) => {
@@ -353,7 +353,7 @@ pub fn prepare(s: &mut Session, p: &Value) -> Result<Prepared, String> {
                 MAX_SECONDS / 60.0
             ));
         }
-        if !lightcraft_codecs::video::AV1_AVAILABLE {
+        if !lcc_codecs::video::AV1_AVAILABLE {
             return Err("video export (AV1) is not available in this build".into());
         }
     }

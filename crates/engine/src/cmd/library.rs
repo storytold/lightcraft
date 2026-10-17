@@ -1,7 +1,7 @@
 //! Library commands: view source, filter/sort, selection, ratings/flags/labels, rotate, delete,
 //! metadata, albums, import.
 
-use lightcraft_catalog::{Album, AlbumId, ColorLabel, CopyrightStatus, Filter, Flag, GroupBy, Op, PhotoId, Sort, SortKey};
+use lcc_catalog::{Album, AlbumId, ColorLabel, CopyrightStatus, Filter, Flag, GroupBy, Op, PhotoId, Sort, SortKey};
 use serde_json::{Value, json};
 
 use super::{CommandSpec, always, bad, bool_or, cmd, has_active, has_library_selection, has_selection, ok, str_param};
@@ -98,6 +98,7 @@ pub fn import_params(s: &Session, p: &Value) -> Result<ImportRequest> {
         metadata_preset,
         convert_dng: bool_or(p, "dng", false),
         local: bool_or(p, "local", false),
+        import_duplicates: bool_or(p, "importDuplicates", false),
     };
     let album_name = str_param(p, "albumName").map(str::trim).filter(|n| !n.is_empty()).map(str::to_string);
     Ok(ImportRequest { paths, opts, album, album_name })
@@ -126,6 +127,9 @@ pub fn import_batch_done(s: &mut Session, report: crate::import::ImportReport, m
         s.execute("album.addPhotos", &json!({"id": a, "ids": imported}))?;
         report["album"] = json!(a);
     }
+    // the previews the library builds at import (library.previewSettings atImport)
+    let ids: Vec<PhotoId> = imported.iter().map(|i| PhotoId(*i)).collect();
+    crate::cmd::previews::build_after_import(s, &ids);
     Ok(report)
 }
 
@@ -147,6 +151,58 @@ fn strs(p: &Value, key: &str) -> Vec<String> {
 
 fn ids_param(p: &Value) -> Option<Vec<PhotoId>> {
     p.get("ids").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_u64).map(PhotoId).collect())
+}
+
+/// The regular album the library shows, if any (the one Custom Order sorts).
+fn custom_album(s: &Session) -> Option<AlbumId> {
+    match s.source {
+        crate::LibrarySource::Album(a) if s.catalog.has_custom_order(a) => Some(a),
+        _ => None,
+    }
+}
+
+/// The album's photos in the order the user sees them: its Custom Order, or — while the album is
+/// shown in another sort — the shown photos first, in the grid's order, then the rest.
+fn shown_order(s: &mut Session, a: AlbumId) -> Vec<PhotoId> {
+    let saved = s.catalog.album_photo_order(a);
+    if custom_album(s) != Some(a) || s.sort.key == SortKey::Custom {
+        return saved;
+    }
+    let members: std::collections::HashSet<PhotoId> = saved.iter().copied().collect();
+    let mut seen = std::collections::HashSet::new();
+    let mut out: Vec<PhotoId> = s.visible().iter().copied().filter(|x| members.contains(x) && seen.insert(*x)).collect();
+    out.extend(saved.into_iter().filter(|x| seen.insert(*x)));
+    out
+}
+
+/// `ids` for an ordering command: album members, repeats dropped; an id not in the album is an error.
+fn order_ids(s: &Session, a: AlbumId, p: &Value, c: &str) -> Result<Vec<PhotoId>> {
+    let Some(raw) = p.get("ids").and_then(Value::as_array) else { return Err(bad(c, "missing `ids` (an array of photo ids)")) };
+    let al = s.catalog.album(a).ok_or_else(|| bad(c, "no such album"))?;
+    let members: std::collections::HashSet<PhotoId> = al.photos.iter().copied().collect();
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for v in raw {
+        let id = v.as_u64().map(PhotoId).ok_or_else(|| bad(c, "`ids` must be photo ids"))?;
+        if !members.contains(&id) {
+            return Err(bad(c, format!("photo {} is not in the album", id.0)));
+        }
+        if seen.insert(id) {
+            out.push(id);
+        }
+    }
+    Ok(out)
+}
+
+/// Saves the album's Custom Order (one undo step) and sorts the view by it when it's shown.
+fn set_custom_order(s: &mut Session, a: AlbumId, order: Vec<PhotoId>, label: &str) -> Result<Value> {
+    if s.catalog.album(a).is_some_and(|al| al.photo_order != order) {
+        s.commit(label, Op::SetAlbumPhotoOrder { id: a, order: order.clone() })?;
+    }
+    if custom_album(s) == Some(a) && s.sort.key != SortKey::Custom {
+        s.sort = Sort { key: SortKey::Custom, ascending: true, ..s.sort };
+    }
+    Ok(json!({"order": order.iter().map(|x| x.0).collect::<Vec<_>>()}))
 }
 
 /// The targets an album can hold and how many were browsed (Local) photos, which album views
@@ -195,7 +251,7 @@ fn for_targets(s: &mut Session, p: &Value, label: &str, f: impl Fn(PhotoId) -> O
 fn change_rating(s: &mut Session, p: &Value, delta: i8, label: &str) -> Result<Value> {
     let mut ops = Vec::new();
     for id in s.targets(p)? {
-        let old = s.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?.rating;
+        let old = s.catalog.photo(id).ok_or(lcc_catalog::CatalogError::NoPhoto(id))?.rating;
         let rating = (i16::from(old) + i16::from(delta)).clamp(0, 5) as u8;
         if rating != old {
             ops.push(Op::SetRating { id, rating });
@@ -214,7 +270,7 @@ fn change_rating(s: &mut Session, p: &Value, delta: i8, label: &str) -> Result<V
 fn change_flag(s: &mut Session, p: &Value, label: &str, step: impl Fn(Flag) -> Flag) -> Result<Value> {
     let mut ops = Vec::new();
     for id in s.targets(p)? {
-        let old = s.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?.flag;
+        let old = s.catalog.photo(id).ok_or(lcc_catalog::CatalogError::NoPhoto(id))?.flag;
         let flag = step(old);
         if flag != old {
             ops.push(Op::SetFlag { id, flag });
@@ -265,7 +321,7 @@ fn rotate(s: &mut Session, p: &Value, cw: bool) -> Result<Value> {
             let mut d = (*d).clone();
             d.orientation = d.orientation.rotated(cw);
             // the crop lives in the oriented frame, so it turns with the image (else it keeps the old width and height and cuts the photo)
-            let turn = lightcraft_geom::Orientation::Normal.rotated(cw);
+            let turn = lcc_geom::Orientation::Normal.rotated(cw);
             d.crop.geometry.rect = turn.map_norm_rect(d.crop.geometry.rect);
             d.crop.aspect = d.crop.aspect.map(|(w, h)| (h, w));
             ops.extend(s.develop_op(id, d, "Rotate"));
@@ -295,16 +351,26 @@ fn flip(s: &mut Session, p: &Value, horizontal: bool) -> Result<Value> {
     Ok(json!({"changed": n}))
 }
 
+/// The active photo's metadata as `photo.copyMetadata` gives it (and `photo.setMeta` takes it).
+fn active_meta(s: &Session, c: &str) -> Result<Value> {
+    let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
+    let m = &s.catalog.photo(id).ok_or_else(|| bad(c, "no photo"))?.meta;
+    Ok(json!({"title": m.title, "caption": m.caption, "altText": m.alt_text, "extendedDescription": m.extended_description,
+        "copyright": m.copyright, "copyrightStatus": m.copyright_status.id(), "usageTerms": m.usage_terms, "copyrightUrl": m.copyright_url,
+        "creator": m.creator, "location": m.location, "city": m.city, "state": m.state, "country": m.country,
+        "keywords": m.keywords}))
+}
+
 /// `library.selectBy`: select the photos in view that match every given criterion.
 fn select_by(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "library.selectBy";
-    let flag: Option<lightcraft_catalog::Flag> = match p.get("flag") {
+    let flag: Option<lcc_catalog::Flag> = match p.get("flag") {
         Some(v) => Some(serde_json::from_value(v.clone()).map_err(|_| bad(C, "flag is pick, reject or none"))?),
         None => None,
     };
     let rating = p.get("rating").and_then(Value::as_u64).map(|r| r.min(5) as u8);
     let op = p.get("ratingOp").and_then(Value::as_str).unwrap_or("gte");
-    let label: Option<Option<lightcraft_catalog::ColorLabel>> = match p.get("label").and_then(Value::as_str) {
+    let label: Option<Option<lcc_catalog::ColorLabel>> = match p.get("label").and_then(Value::as_str) {
         Some("none") => Some(None),
         Some(l) => Some(Some(serde_json::from_value(json!(l)).map_err(|_| bad(C, format!("unknown label `{l}`")))?)),
         None => None,
@@ -312,7 +378,7 @@ fn select_by(s: &mut Session, p: &Value) -> Result<Value> {
     if flag.is_none() && rating.is_none() && label.is_none() {
         return Err(bad(C, "give flag, rating and/or label"));
     }
-    let matches = |ph: &lightcraft_catalog::Photo| {
+    let matches = |ph: &lcc_catalog::Photo| {
         flag.is_none_or(|f| ph.flag == f)
             && rating.is_none_or(|r| match op {
                 "eq" => ph.rating == r,
@@ -348,8 +414,8 @@ fn seed_param(p: &Value, cmd: &str, default: u64) -> Result<u64> {
 /// within one clock tick still differ (barring a 2^-53 collision). Kept below 2^53 so JSON
 /// clients that read numbers as doubles (web, MCP agents) get the same seed back.
 fn next_seed(prev: u64, now: &str) -> u64 {
-    let t = now.bytes().fold(0u64, |h, b| lightcraft_catalog::mix64(h ^ u64::from(b)));
-    (lightcraft_catalog::mix64(prev.wrapping_add(1)) ^ t) & (MAX_SEED - 1)
+    let t = now.bytes().fold(0u64, |h, b| lcc_catalog::mix64(h ^ u64::from(b)));
+    (lcc_catalog::mix64(prev.wrapping_add(1)) ^ t) & (MAX_SEED - 1)
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -360,7 +426,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Show Source",
             [],
             None,
-            "{kind: all|recentlyAdded|album|recentlyDeleted|picks|missing|libraryFolder, id?: albumId, path?: a path from library.folders (for libraryFolder)}",
+            "{kind: all|recentlyAdded|previousImport|previousExport|quickCollection|album|recentlyDeleted|picks|missing|libraryFolder, id?: albumId, path?: a path from library.folders (for libraryFolder)}",
             always,
             |s, p| {
                 let kind = str_param(p, "kind").unwrap_or("all");
@@ -370,6 +436,9 @@ pub fn specs() -> Vec<CommandSpec> {
                     "recentlyDeleted" => LibrarySource::RecentlyDeleted,
                     "picks" => LibrarySource::Picks,
                     "missing" => LibrarySource::Missing,
+                    "previousImport" => LibrarySource::PreviousImport,
+                    "quickCollection" => LibrarySource::QuickCollection,
+                    "previousExport" => LibrarySource::PreviousExport,
                     "album" => {
                         let a = album_param(p, "id", "library.source")?;
                         if s.catalog.album(a).is_none_or(|a| a.folder) {
@@ -378,9 +447,9 @@ pub fn specs() -> Vec<CommandSpec> {
                         LibrarySource::Album(a)
                     }
                     "libraryFolder" => {
-                        let path = str_param(p, "path").filter(|d| !d.trim().is_empty() && !lightcraft_catalog::query::folder_key(d).is_empty());
+                        let path = str_param(p, "path").filter(|d| !d.trim().is_empty() && !lcc_catalog::query::folder_key(d).is_empty());
                         let path = path.ok_or_else(|| bad("library.source", "libraryFolder needs the `path` of a folder from library.folders"))?;
-                        if lightcraft_catalog::folders::is_startup_disk(path) {
+                        if lcc_catalog::folders::is_startup_disk(path) {
                             return Err(bad("library.source", "the startup disk's path covers every disk: choose a folder in it"));
                         }
                         let f = Filter { library_folder: Some(path.to_string()), ..Default::default() };
@@ -407,11 +476,11 @@ pub fn specs() -> Vec<CommandSpec> {
             "Filter",
             [],
             None,
-            "partial Filter: {text?, rating?, ratingOp?: atLeast|exactly|atMost, flag?: pick|reject|none|null, label?, kind?, merged?: hdr|panorama|hdrPanorama|any, edited?, date?, libraryFolder?: a path from library.folders, keyword?, person?, camera?}",
+            "partial Filter: {text?, rating?, ratingOp?: atLeast|exactly|atMost, flag?: pick|reject|none|null, label?, kind?, merged?: hdr|panorama|hdrPanorama|focusStack|any, immich?: linked|notLinked|probable, edited?, date?, libraryFolder?: a path from library.folders, keyword?, person?, camera?, faces?: count|min+|range}",
             always,
             |s, p| {
                 let mut v = serde_json::to_value(&s.filter).unwrap_or_default();
-                lightcraft_develop::presets::deep_merge(&mut v, p);
+                lcc_develop::presets::deep_merge(&mut v, p);
                 let f: Filter = serde_json::from_value(v).map_err(|e| bad("library.filter", e.to_string()))?;
                 let mut f = f;
                 // a blank folder is no folder: no hidden "filters active" state
@@ -452,13 +521,13 @@ pub fn specs() -> Vec<CommandSpec> {
             |s, p| {
                 const C: &str = "library.removeFolder";
                 let path = str_param(p, "path").filter(|d| !d.trim().is_empty()).ok_or_else(|| bad(C, "missing `path`"))?;
-                if lightcraft_catalog::query::folder_key(path).is_empty() {
+                if lcc_catalog::query::folder_key(path).is_empty() {
                     return Err(bad(C, format!("{path}: not a folder")));
                 }
-                if lightcraft_catalog::folders::is_startup_disk(path) {
+                if lcc_catalog::folders::is_startup_disk(path) {
                     return Err(bad(C, "choose a folder, not the whole startup disk"));
                 }
-                if lightcraft_catalog::folders::is_disk_root(path) && !bool_or(p, "disk", false) {
+                if lcc_catalog::folders::is_disk_root(path) && !bool_or(p, "disk", false) {
                     return Err(bad(C, format!("{path} is a whole disk or share: pass `disk: true` to remove everything on it")));
                 }
                 let f = Filter { library_folder: Some(path.to_string()), ..Default::default() };
@@ -470,11 +539,11 @@ pub fn specs() -> Vec<CommandSpec> {
                     return Err(bad(C, format!("{path} holds whole disks: pass `disk: true` to remove everything on them")));
                 }
                 mark_deleted(s, &ids, "Remove Folder from Library")?;
-                if s.filter.library_folder.as_deref().is_some_and(|c| lightcraft_catalog::query::folder_within(c, path)) {
+                if s.filter.library_folder.as_deref().is_some_and(|c| lcc_catalog::query::folder_within(c, path)) {
                     s.filter.library_folder = None;
                 }
                 // the folder being shown is gone: back to everything, as for a deleted album
-                if s.library_folder.as_deref().is_some_and(|c| lightcraft_catalog::query::folder_within(c, path)) {
+                if s.library_folder.as_deref().is_some_and(|c| lcc_catalog::query::folder_within(c, path)) {
                     s.library_folder = None;
                     if s.source == LibrarySource::LibraryFolder {
                         s.source = LibrarySource::All;
@@ -521,7 +590,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Sort",
             ["View", "Sort"],
             None,
-            "{key?: captureDate|importDate|editDate|fileName|rating|fileSize|random, ascending?: bool, group?: auto|none|day|month|year, seed?: u64 (the shuffle `random` gives)}",
+            "{key?: captureDate|importDate|editDate|fileName|rating|fileSize|random|custom (Custom Order: a regular album's order set by hand), ascending?: bool, group?: auto|none|day|month|year, seed?: u64 (the shuffle `random` gives)}",
             always,
             |s, p| {
                 let key: SortKey = match p.get("key") {
@@ -534,11 +603,23 @@ pub fn specs() -> Vec<CommandSpec> {
                 };
                 let mut seed = seed_param(p, "library.sort", s.sort.seed)?;
                 let explicit = p.get("seed").is_some_and(|v| !v.is_null());
+                let mut ascending = bool_or(p, "ascending", s.sort.ascending);
+                if key == SortKey::Custom && s.sort.key != SortKey::Custom {
+                    let Some(a) = custom_album(s) else {
+                        return Err(bad("library.sort", "Custom Order sorts a regular album: open one first"));
+                    };
+                    // no order of its own yet: it starts from what is shown now
+                    if s.catalog.album(a).is_some_and(|al| al.photo_order.is_empty()) {
+                        let order = shown_order(s, a);
+                        s.commit("Custom Order", Op::SetAlbumPhotoOrder { id: a, order })?;
+                    }
+                    ascending = bool_or(p, "ascending", true);
+                }
                 if key == SortKey::Random && s.sort.key != SortKey::Random && !explicit {
                     // switching to Random is a fresh shuffle, not whatever seed was left behind
                     seed = next_seed(seed, &(s.clock)());
                 }
-                s.sort = Sort { key, ascending: bool_or(p, "ascending", s.sort.ascending), group, seed };
+                s.sort = Sort { key, ascending, group, seed };
                 ok()
             }
         ),
@@ -668,15 +749,37 @@ pub fn specs() -> Vec<CommandSpec> {
             Ok(serde_json::to_value(crate::devices::devices_now()).unwrap_or_default())
         }),
         cmd!(query "photo.copyMetadata", "Copy Metadata", ["Photo"], None, "{} — title, caption, copyright (notice, status, usage terms, info URL), creator, location and keywords of the active photo", has_active, |s, _| {
-            let id = s.active().ok_or_else(|| bad("photo.copyMetadata", "no active photo"))?;
-            let m = &s.catalog.photo(id).ok_or_else(|| bad("photo.copyMetadata", "no photo"))?.meta;
-            let v = json!({"title": m.title, "caption": m.caption, "altText": m.alt_text, "extendedDescription": m.extended_description,
-                "copyright": m.copyright, "copyrightStatus": m.copyright_status.id(), "usageTerms": m.usage_terms, "copyrightUrl": m.copyright_url,
-                "creator": m.creator, "location": m.location, "city": m.city, "state": m.state, "country": m.country,
-                "keywords": m.keywords});
+            let v = active_meta(s, "photo.copyMetadata")?;
             s.meta_clipboard = Some(v.clone());
             Ok(v)
         }),
+        cmd!(
+            "photo.syncMetadata",
+            "Sync Metadata",
+            ["Photo"],
+            None,
+            "{fields?: [title|caption|copyright|copyrightStatus|usageTerms|copyrightUrl|creator|location|keywords|…] (default: all)} — copy the active photo's metadata (as photo.copyMetadata) to the other selected photos, one undo step → as photo.setMeta",
+            has_selection,
+            |s, p| {
+                let c = "photo.syncMetadata";
+                let active = s.active().ok_or_else(|| bad(c, "no active photo"))?;
+                let others: Vec<u64> = s.selection.ids.iter().filter(|x| **x != active).map(|x| x.0).collect();
+                if others.is_empty() {
+                    return Err(bad(c, "select the photos to sync to as well as the active one"));
+                }
+                let v = active_meta(s, c)?;
+                let fields: Option<Vec<String>> =
+                    p.get("fields").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect());
+                let mut params = serde_json::Map::new();
+                for (k, v) in v.as_object().into_iter().flatten() {
+                    if fields.as_ref().is_none_or(|f| f.iter().any(|x| x == k)) {
+                        params.insert(k.clone(), v.clone());
+                    }
+                }
+                params.insert("ids".into(), json!(others));
+                s.execute("photo.setMeta", &Value::Object(params))
+            }
+        ),
         cmd!(
             "photo.pasteMetadata",
             "Paste Metadata",
@@ -874,7 +977,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 }
                 let mut meta = s.catalog.photo(id).ok_or_else(|| bad(C, "no such photo"))?.meta.clone();
                 let region = meta.regions.get_mut(index).ok_or_else(|| bad(C, "no such region"))?;
-                region.rect = lightcraft_geom::Rect { x0, y0, x1, y1 };
+                region.rect = lcc_geom::Rect { x0, y0, x1, y1 };
                 s.commit("Resize Face Box", Op::SetMeta { id, meta: Box::new(meta) })?;
                 s.skip_auto_write = true;
                 Ok(json!({"rect": {"x0": x0, "y0": y0, "x1": x1, "y1": y1}}))
@@ -918,6 +1021,20 @@ pub fn specs() -> Vec<CommandSpec> {
             select_after_deletion(s, &before);
             Ok(json!({"deleted": t.len()}))
         }),
+        cmd!(
+            "photo.deleteFromDisk",
+            "Delete from Disk",
+            ["Photo"],
+            None,
+            "{ids?} — moves the photos' files to the system trash and removes them from the library",
+            has_selection,
+            |s, p| {
+                let before = s.visible_cloned();
+                let r = crate::disk_delete::delete_from_disk(s, p)?;
+                select_after_deletion(s, &before);
+                Ok(r)
+            }
+        ),
         // ---- metadata
         cmd!(
             "photo.setMeta",
@@ -980,8 +1097,8 @@ pub fn specs() -> Vec<CommandSpec> {
                         }
                     }
                     // keywords are stored cleaned (`a | b ` is `a|b`), each once whatever its case
-                    use lightcraft_catalog::keywords::{clean, same};
-                    let add = |m: &mut lightcraft_catalog::Meta, k: &str| {
+                    use lcc_catalog::keywords::{clean, same};
+                    let add = |m: &mut lcc_catalog::Meta, k: &str| {
                         let k = clean(k);
                         if !k.is_empty() && !m.keywords.iter().any(|x| same(x, &k)) {
                             m.keywords.push(k);
@@ -1027,14 +1144,68 @@ pub fn specs() -> Vec<CommandSpec> {
                 }
                 let folder = bool_or(p, "folder", false);
                 let parent = p.get("parent").and_then(Value::as_u64).map(AlbumId);
-                let (photos, skipped) = if !folder && bool_or(p, "addSelected", false) { album_targets(s, s.selected()) } else { (vec![], 0) };
+                let (mut photos, skipped) = if !folder && bool_or(p, "addSelected", false) { album_targets(s, s.selected()) } else { (vec![], 0) };
+                // in the order they are shown (a Custom Order or sort carries over), not selection order
+                if photos.len() > 1 {
+                    let pos: std::collections::HashMap<PhotoId, usize> = s.visible().iter().enumerate().map(|(i, p)| (*p, i)).collect();
+                    photos.sort_by_key(|p| pos.get(p).copied().unwrap_or(usize::MAX));
+                }
                 let id = s.catalog.alloc_album_id();
                 let cover = photos.first().copied();
                 s.commit(
                     if folder { "New Folder" } else { "New Album" },
-                    Op::AddAlbum { album: Album { id, name, parent, folder, photos, cover, smart: None, quick: false, order: None } },
+                    Op::AddAlbum {
+                        album: Album {
+                            id,
+                            name,
+                            parent,
+                            folder,
+                            photos,
+                            cover,
+                            smart: None,
+                            quick: false,
+                            order: None,
+                            creation: None,
+                            photo_order: Vec::new(),
+                        },
+                    },
                 )?;
                 Ok(json!({"id": id.0, "skipped": skipped}))
+            }
+        ),
+        cmd!(
+            "album.duplicate",
+            "Duplicate Album",
+            [],
+            None,
+            "{id, name?} — a new regular album beside it with the same photos and Custom Order (a second order of the same photos) → {id}",
+            always,
+            |s, p| {
+                const C: &str = "album.duplicate";
+                let id = p.get("id").and_then(Value::as_u64).map(AlbumId).ok_or_else(|| bad(C, "missing `id`"))?;
+                let a = s.catalog.album(id).cloned().ok_or_else(|| bad(C, format!("no album {}", id.0)))?;
+                if a.folder || a.smart.is_some() || a.quick {
+                    return Err(bad(C, "only a regular album can be duplicated"));
+                }
+                let name =
+                    str_param(p, "name").map(str::trim).filter(|n| !n.is_empty()).map(str::to_string).unwrap_or_else(|| format!("{} copy", a.name));
+                let new = s.catalog.alloc_album_id();
+                let photo_order = s.catalog.album_photo_order(id);
+                let album = Album {
+                    id: new,
+                    name,
+                    parent: a.parent,
+                    folder: false,
+                    photos: a.photos.clone(),
+                    cover: a.cover,
+                    smart: None,
+                    quick: false,
+                    order: None,
+                    creation: None,
+                    photo_order,
+                };
+                s.commit("Duplicate Album", Op::AddAlbum { album })?;
+                Ok(json!({"id": new.0}))
             }
         ),
         cmd!(
@@ -1050,7 +1221,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     return Err(bad("album.createSmart", "empty name"));
                 }
                 let rules = match p.get("rules") {
-                    Some(r) => merge_rules(&lightcraft_catalog::Filter::default(), r, "album.createSmart", &s.catalog, None)?,
+                    Some(r) => merge_rules(&lcc_catalog::Filter::default(), r, "album.createSmart", &s.catalog, None)?,
                     None => view_rules(s),
                 };
                 let parent = p.get("parent").and_then(Value::as_u64).map(AlbumId);
@@ -1061,7 +1232,7 @@ pub fn specs() -> Vec<CommandSpec> {
             }
         ),
         cmd!(query "album.ruleFields", "Smart Album Rule Fields", [], None, "{} → [{field, label, kind (text|keywords|number|date|choice|bool|album: an album id), group (field-menu submenu, null at the top level), ops: [{op, label}], choices? (ids), choiceLabels? ({id: label})}] for ruleSet rules, in menu order", always, |_, _| {
-            use lightcraft_catalog::rules::{FIELDS, Kind, field_group, ops_for};
+            use lcc_catalog::rules::{FIELDS, Kind, field_group, ops_for};
             Ok(json!(FIELDS
                 .iter()
                 .map(|(id, label, kind)| {
@@ -1104,7 +1275,7 @@ pub fn specs() -> Vec<CommandSpec> {
                         .unwrap_or_default()
                         .into_iter()
                         .chain(s.catalog.album_filter_problem(&view, Some(id)))
-                        .filter(|p| p.issue == lightcraft_catalog::rules::Issue::AlbumLoop)
+                        .filter(|p| p.issue == lcc_catalog::rules::Issue::AlbumLoop)
                         .map(|p| p.to_string())
                         .collect();
                     if !loops.is_empty() {
@@ -1289,6 +1460,67 @@ pub fn specs() -> Vec<CommandSpec> {
             }
         ),
         cmd!(
+            "album.orderPhotos",
+            "Move in Custom Order",
+            [],
+            None,
+            "{album?: albumId (default: the album shown), ids: [photoIds], before?: photoId (default: to the end)} — moves the photos, in their current order, before `before`; sorts the view by Custom Order → {order}",
+            always,
+            |s, p| {
+                const C: &str = "album.orderPhotos";
+                let a = match opt_album_param(p, "album", C)? {
+                    Some(a) => a,
+                    None => custom_album(s).ok_or_else(|| bad(C, "missing `album` (no album is shown)"))?,
+                };
+                if !s.catalog.has_custom_order(a) {
+                    return Err(bad(C, "only regular albums have a custom order"));
+                }
+                let base = shown_order(s, a);
+                let moved = order_ids(s, a, p, C)?;
+                if moved.is_empty() {
+                    return Err(bad(C, "missing `ids`"));
+                }
+                let before = match p.get("before") {
+                    None | Some(Value::Null) => None,
+                    Some(v) => {
+                        let b = v.as_u64().map(PhotoId).ok_or_else(|| bad(C, "`before` must be a photo id or null"))?;
+                        if !base.contains(&b) {
+                            return Err(bad(C, format!("photo {} is not in the album", b.0)));
+                        }
+                        Some(b)
+                    }
+                };
+                // the moved photos keep their order among themselves
+                let moving: std::collections::HashSet<PhotoId> = moved.iter().copied().collect();
+                let in_order: Vec<PhotoId> = base.iter().copied().filter(|x| moving.contains(x)).collect();
+                // dropping before one of the moved photos: before the first photo after it that stays
+                let anchor = before.and_then(|b| base.iter().skip_while(|x| **x != b).find(|x| !moving.contains(x)).copied());
+                let mut order: Vec<PhotoId> = base.iter().copied().filter(|x| !moving.contains(x)).collect();
+                let at = anchor.and_then(|b| order.iter().position(|x| *x == b)).unwrap_or(order.len());
+                order.splice(at..at, in_order);
+                set_custom_order(s, a, order, "Move in Custom Order")
+            }
+        ),
+        cmd!(
+            "album.setPhotoOrder",
+            "Set Custom Order",
+            [],
+            None,
+            "{album: albumId, ids: [photoIds]} — the album's Custom Order (repeats ignored; members not listed follow in their current order) → {order}",
+            always,
+            |s, p| {
+                const C: &str = "album.setPhotoOrder";
+                let a = album_param(p, "album", C)?;
+                if !s.catalog.has_custom_order(a) {
+                    return Err(bad(C, "only regular albums have a custom order"));
+                }
+                let mut order = order_ids(s, a, p, C)?;
+                let listed: std::collections::HashSet<PhotoId> = order.iter().copied().collect();
+                order.extend(s.catalog.album_photo_order(a).into_iter().filter(|x| !listed.contains(x)));
+                set_custom_order(s, a, order, "Set Custom Order")
+            }
+        ),
+        cmd!(
             "album.toggleTarget",
             "Add to Target Album",
             [],
@@ -1350,6 +1582,41 @@ pub fn specs() -> Vec<CommandSpec> {
             ok()
         }),
         cmd!(
+            "library.showQuickCollection",
+            "Show Quick Collection",
+            [],
+            None,
+            "{} — the grid shows the Quick Collection → {count}",
+            always,
+            |s, _| { s.execute("library.source", &json!({"kind": "quickCollection"})) }
+        ),
+        cmd!(
+            "album.saveQuick",
+            "Save Quick Collection…",
+            [],
+            None,
+            "{name?: album name (default \"Quick Collection\"), clear?: bool (default true)} — a new album holding the Quick Collection's photos, which is then cleared; one undo step → {id, count}",
+            always,
+            |s, p| {
+                let quick = s.catalog.quick_collection();
+                let photos: Vec<PhotoId> = quick.and_then(|q| s.catalog.album(q)).map(|a| a.photos.clone()).unwrap_or_default();
+                if photos.is_empty() {
+                    return Err(bad("album.saveQuick", "the Quick Collection is empty"));
+                }
+                let name = str_param(p, "name").map(str::trim).filter(|n| !n.is_empty()).unwrap_or("Quick Collection");
+                let id = s.catalog.alloc_album_id();
+                let album = Album::new(id, name);
+                let cover = photos.first().copied();
+                let mut ops = vec![Op::AddAlbum { album }, Op::SetAlbumPhotos { id, photos: photos.clone() }, Op::SetAlbumCover { id, cover }];
+                if let Some(q) = quick.filter(|_| p.get("clear").and_then(Value::as_bool).unwrap_or(true)) {
+                    ops.push(Op::SetAlbumPhotos { id: q, photos: vec![] });
+                    ops.push(Op::SetAlbumCover { id: q, cover: None });
+                }
+                s.commit("Save Quick Collection", Op::Batch { ops })?;
+                Ok(json!({"id": id.0, "count": photos.len()}))
+            }
+        ),
+        cmd!(
             "library.autoImport",
             "Auto Import Settings",
             [],
@@ -1389,7 +1656,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     .catalog
                     .photos()
                     .filter_map(|p| match &p.source {
-                        lightcraft_catalog::Source::File { path } => Some(path.clone()),
+                        lcc_catalog::Source::File { path } => Some(path.clone()),
                         _ => None,
                     })
                     .collect();
@@ -1524,7 +1791,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Import Photos",
             ["File"],
             Some("Cmd+Shift+I"),
-            "{paths: [file or folder (recursive)], mode?: add|copy|move (add = reference the files in place; copy = into the library's Originals/YYYY/YYYY-MM-DD/; move = as copy, then each original and its XMP sidecars are removed from the source — only after the copy is verified (a hard link on the same volume, else copied, synced and compared byte for byte) and its catalog record is saved; failed, duplicate and unchecked files keep their sources; a taken name gets -1, -2…; undo removes the photos from the library but leaves the files at the destination), destination?: folder for copies / moves, organize?: date (YYYY/YYYY-MM-DD) | month (YYYY/YYYY-MM) | flat | a folder template, e.g. `{date:%Y}/{date:%Y%m%d}` → 2026/20260114 (the template's `/` make the folders, each level expanded with the rename tokens and made a safe folder name: never outside the destination; must be relative, no `..`; a level with missing metadata is `unknown`) — dated by capture time, else the import time, rename?: file-name template for copies, original extension added (tokens: {name} {num} {seq} {seq:N} {date} {date:%Y%m%d} {folder} {camera} {lens} {iso} {rating} {title} {creator} {ext}; photo.renameTokens explains each; blank = keep names), renameStart?: 1, metadataPreset?: name, dng?: bool (copy raws as DNG; copy only), local?: bool (browsing: the photos stay out of the library, like library.browse; not with move), album?: albumId, albumName?: new album, preset?: presetId, keywords?: [..], onDeleted?: restore|skip|fresh (a file that is in Recently Deleted: restore (default) = bring the photo back with its edits — relinked to the file when its own is gone, skip = leave it there and say so, fresh = delete the trashed record and import the file as new)} → {imported, duplicates: [{path, existing, reason, existingDeleted?}], restored?: [photoId], failed, warnings?: [{path, code: cameraProfile|uprightGeometry|unmappedXmp, profile?, mode?: off|auto|level|vertical|full|guided|unknown, fields?}], moved?: [{from, to, sidecars?}], kept?: [{path, reason}] (move: sources left in place and why), album?}",
+            "{paths: [file or folder (recursive)], mode?: add|copy|move (add = reference the files in place; copy = into the library's Originals/YYYY/YYYY-MM-DD/; move = as copy, then each original and its XMP sidecars are removed from the source — only after the copy is verified (a hard link on the same volume, else copied, synced and compared byte for byte) and its catalog record is saved; failed, duplicate and unchecked files keep their sources; a taken name gets -1, -2…; undo removes the photos from the library but leaves the files at the destination), destination?: folder for copies / moves, organize?: date (YYYY/YYYY-MM-DD) | month (YYYY/YYYY-MM) | flat | a folder template, e.g. `{date:%Y}/{date:%Y%m%d}` → 2026/20260114 (the template's `/` make the folders, each level expanded with the rename tokens and made a safe folder name: never outside the destination; must be relative, no `..`; a level with missing metadata is `unknown`) — dated by capture time, else the import time, rename?: file-name template for copies, original extension added (tokens: {name} {num} {seq} {seq:N} {date} {date:%Y%m%d} {folder} {camera} {lens} {iso} {rating} {title} {creator} {ext}; photo.renameTokens explains each; blank = keep names), renameStart?: 1, metadataPreset?: name, dng?: bool (copy raws as DNG; copy only), local?: bool (browsing: the photos stay out of the library, like library.browse; not with move), album?: albumId, albumName?: new album, preset?: presetId, keywords?: [..], onDeleted?: restore|skip|fresh (a file that is in Recently Deleted: restore (default) = bring the photo back with its edits — relinked to the file when its own is gone, skip = leave it there and say so, fresh = delete the trashed record and import the file as new), importDuplicates?: bool (false by default = Lightroom's Don't Import Suspected Duplicates: a file whose content the library already has is skipped; true imports it as a new photo — a path already in the library, or a photo in Recently Deleted, is still handled as above)} → {imported, duplicates: [{path, existing, reason, existingDeleted?}], restored?: [photoId], failed, warnings?: [{path, code: cameraProfile|uprightGeometry|unmappedXmp, profile?, mode?: off|auto|level|vertical|full|guided|unknown, fields?}], moved?: [{from, to, sidecars?}], kept?: [{path, reason}] (move: sources left in place and why), album?}",
             always,
             |s, p| {
                 let req = import_params(s, p)?;
@@ -1603,7 +1870,7 @@ pub fn specs() -> Vec<CommandSpec> {
             s.compact_library()?;
             ok()
         }),
-        cmd!("library.clearPreviews", "Clear Preview Cache", ["File"], None, "{}", always, |s, _| {
+        cmd!("library.clearPreviews", "Clear Preview Cache", ["Library", "Previews"], None, "{}", always, |s, _| {
             s.media.rendered.clear();
             s.media.clear_sources();
             ok()
@@ -1614,10 +1881,10 @@ pub fn specs() -> Vec<CommandSpec> {
 /// `base` with a partial Filter (JSON) merged on top.
 /// `patch` merged onto `base`, its rules brought up to date (`RuleSet::upgrade`), unchecked (see
 /// [`merge_rules`]).
-fn merge_filter(base: &lightcraft_catalog::Filter, patch: &Value, c: &str) -> Result<lightcraft_catalog::Filter> {
+fn merge_filter(base: &lcc_catalog::Filter, patch: &Value, c: &str) -> Result<lcc_catalog::Filter> {
     let mut v = serde_json::to_value(base).unwrap_or_default();
-    lightcraft_develop::presets::deep_merge(&mut v, patch);
-    let mut f: lightcraft_catalog::Filter = serde_json::from_value(v).map_err(|e| bad(c, e.to_string()))?;
+    lcc_develop::presets::deep_merge(&mut v, patch);
+    let mut f: lcc_catalog::Filter = serde_json::from_value(v).map_err(|e| bad(c, e.to_string()))?;
     if let Some(rules) = f.rule_set.as_mut() {
         rules.upgrade();
     }
@@ -1628,12 +1895,12 @@ fn merge_filter(base: &lightcraft_catalog::Filter, patch: &Value, c: &str) -> Re
 /// `owner` is the smart album the rules are for, so testing an album that leads back to it is a
 /// problem too).
 fn merge_rules(
-    base: &lightcraft_catalog::Filter,
+    base: &lcc_catalog::Filter,
     patch: &Value,
     c: &str,
-    cat: &lightcraft_catalog::Catalog,
+    cat: &lcc_catalog::Catalog,
     owner: Option<AlbumId>,
-) -> Result<lightcraft_catalog::Filter> {
+) -> Result<lcc_catalog::Filter> {
     let f = merge_filter(base, patch, c)?;
     // only rules this change sets are checked: one that stopped checking since (its album was
     // deleted) doesn't block editing the album's other settings
@@ -1655,14 +1922,14 @@ fn merge_rules(
 pub(crate) fn covers_other_disks(s: &Session, path: &str, ids: &[PhotoId]) -> bool {
     ids.iter()
         .filter_map(|id| s.catalog.photo(*id))
-        .filter_map(|p| lightcraft_catalog::folders::volume_of(p))
-        .any(|v| v != "/" && !lightcraft_catalog::query::folder_within(path, &v))
+        .filter_map(|p| lcc_catalog::folders::volume_of(p))
+        .any(|v| v != "/" && !lcc_catalog::query::folder_within(path, &v))
 }
 
 /// The current view (source + filter) as smart-album rules. Viewing a smart album starts from
 /// its rules with the filter bar's settings on top.
-fn view_rules(s: &Session) -> lightcraft_catalog::Filter {
-    use lightcraft_catalog::Filter;
+fn view_rules(s: &Session) -> lcc_catalog::Filter {
+    use lcc_catalog::Filter;
     let smart = match s.source {
         LibrarySource::Album(a) => s.catalog.album(a).and_then(|a| a.smart.as_deref().cloned()),
         _ => None,
@@ -1697,7 +1964,7 @@ fn view_rules(s: &Session) -> lightcraft_catalog::Filter {
 
 impl Session {
     /// The current view (source + filter) as smart-album rules (see `album.createSmart`).
-    pub fn view_rules(&self) -> lightcraft_catalog::Filter {
+    pub fn view_rules(&self) -> lcc_catalog::Filter {
         view_rules(self)
     }
 }
@@ -1758,3 +2025,6 @@ mod relative_rating_tests;
 #[cfg(test)]
 #[path = "library/tests_flag_cycle.rs"]
 mod flag_cycle_tests;
+#[cfg(test)]
+#[path = "../tests_custom_order.rs"]
+mod tests_custom_order;

@@ -1,0 +1,8 @@
+---
+title: FAQ
+description: Short answers about {{app}}, its price, platforms and file support.
+order: 40
+---
+
+- [Is {{app}} free, and does it need an account?](free-and-private.md)
+- [Which cameras and file types does {{app}} open?](supported-files.md)

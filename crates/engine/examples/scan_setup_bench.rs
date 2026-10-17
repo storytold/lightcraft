@@ -2,11 +2,11 @@
 //! naming one photo's sidecar costs, by the size of the library (`N`, default 100,000 photos; the
 //! folder looked at holds 500 of them).
 //!
-//! `N=3500000 cargo run --release -p lightcraft-engine --example scan_setup_bench`
+//! `N=3500000 cargo run --release -p lcc-engine --example scan_setup_bench`
 use std::time::Instant;
 
-use lightcraft_catalog::{Op, Photo, Source};
-use lightcraft_engine::Session;
+use lcc_catalog::{Op, Photo, Source};
+use lcc_engine::Session;
 
 fn main() {
     let n: u64 = std::env::var("N").ok().and_then(|v| v.parse().ok()).unwrap_or(100_000);
@@ -29,8 +29,8 @@ fn main() {
     for run in 0..3 {
         let ms = |t: Instant| t.elapsed().as_secs_f64() * 1e3;
         let t = Instant::now();
-        let f = lightcraft_catalog::Filter { library_folder: Some(folder.clone()), ..Default::default() };
-        let ids = s.catalog.query(&f, &lightcraft_catalog::Sort::default());
+        let f = lcc_catalog::Filter { library_folder: Some(folder.clone()), ..Default::default() };
+        let ids = s.catalog.query(&f, &lcc_catalog::Sort::default());
         let query = ms(t);
         let t = Instant::now();
         let namings = s.sidecar_namings(&ids);
@@ -39,17 +39,17 @@ fn main() {
         let one = ids.first().map(|id| s.sidecar_naming(*id));
         let naming_one = ms(t);
         let t = Instant::now();
-        let (input, paths) = lightcraft_engine::import::ScanInput::new(&mut s, std::slice::from_ref(&folder));
+        let (input, paths) = lcc_engine::import::ScanInput::new(&mut s, std::slice::from_ref(&folder));
         let scan = ms(t);
         // (the folder is not on this disk: the scan finds no file, and its cost is what it makes of the library)
         let t = Instant::now();
-        let out = lightcraft_engine::import::scan_with(input, &paths, &Default::default());
+        let out = lcc_engine::import::scan_with(input, &paths, &Default::default());
         let scanned = ms(t);
         let t = Instant::now();
-        let job = lightcraft_engine::import::ImportJob::new(&mut s, Default::default());
+        let job = lcc_engine::import::ImportJob::new(&mut s, Default::default());
         let import = ms(t);
         let t = Instant::now();
-        let sync = lightcraft_engine::sync::SyncInput::new(&mut s, &folder, false);
+        let sync = lcc_engine::sync::SyncInput::new(&mut s, &folder, false);
         let whole = ms(t);
         println!(
             "N={n} run {run}: query {query:.0} ms ({} ids) | sidecar_namings {naming:.0} ms | sidecar_naming of one {naming_one:.0} ms ({one:?}) | ScanInput::new {scan:.0} ms + scan_with {scanned:.0} ms ({} found) | ImportJob::new {import:.0} ms (ok {}) | SyncInput::new {whole:.0} ms (ok {})",

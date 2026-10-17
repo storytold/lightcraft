@@ -21,7 +21,7 @@ fn import(s: &mut Session, paths: Vec<String>) -> Vec<u64> {
 fn hdr_merge_command_creates_and_imports_a_dng() {
     let dir = temp_dir("hdr");
     let mut paths = Vec::new();
-    for (i, b) in lightcraft_merge::synth::bracket_dngs(480, 320, &[-2.0, 0.0, 2.0]).unwrap().into_iter().enumerate() {
+    for (i, b) in lcc_merge::synth::bracket_dngs(480, 320, &[-2.0, 0.0, 2.0]).unwrap().into_iter().enumerate() {
         let p = dir.join(format!("IMG_{i}.dng"));
         std::fs::write(&p, b).unwrap();
         paths.push(p.to_string_lossy().to_string());
@@ -40,10 +40,10 @@ fn hdr_merge_command_creates_and_imports_a_dng() {
     let r = s.execute("merge.hdr", &json!({"ids": ids, "autoSettings": true, "stack": true})).unwrap();
     let path = r["path"].as_str().unwrap();
     assert!(path.ends_with("IMG_0-HDR.dng"), "{path}");
-    let id = lightcraft_catalog::PhotoId(r["id"].as_u64().unwrap());
+    let id = lcc_catalog::PhotoId(r["id"].as_u64().unwrap());
     let p = s.catalog.photo(id).unwrap().clone();
     assert_eq!((p.width, p.height), (480, 320));
-    assert_eq!(p.kind, lightcraft_catalog::MediaKind::Raw);
+    assert_eq!(p.kind, lcc_catalog::MediaKind::Raw);
     assert_eq!(s.selection.active, Some(id));
     let d = s.develop_of(id).unwrap();
     assert!(d.light.exposure != 0.0 || d.light.highlights != 0.0, "auto settings applied");
@@ -55,15 +55,24 @@ fn hdr_merge_command_creates_and_imports_a_dng() {
     assert_eq!(st.photos[1..].iter().map(|p| p.0).collect::<Vec<_>>(), ids);
     assert!(st.collapsed);
     assert_eq!(s.visible_cloned(), vec![id]);
-    // the second merge doesn't overwrite the first
-    let r2 = s.execute("merge.hdr", &json!({"ids": ids, "autoSettings": false})).unwrap();
-    assert!(r2["path"].as_str().unwrap().ends_with("IMG_0-HDR-2.dng"));
-    let id2 = lightcraft_catalog::PhotoId(r2["id"].as_u64().unwrap());
-    assert!(s.catalog.stack_of(id2).is_none(), "no stack without the option");
+    // A repeated deterministic merge reuses the existing content instead of publishing an
+    // unimported uniquely named orphan.
+    s.execute("develop.set", &json!({"control": "light.exposure", "value": 0.73})).unwrap();
+    let edited = s.develop_of(id).unwrap().as_ref().clone();
+    let stack_before = s.catalog.stack_of(id).unwrap().clone();
+    let undo_before = s.undo.len();
+    let r2 = s.execute("merge.hdr", &json!({"ids": ids, "autoSettings": true, "stack": true})).unwrap();
+    assert_eq!(r2["id"].as_u64(), Some(id.0));
+    assert_eq!(r2["path"].as_str(), Some(path));
+    assert!(!dir.join("IMG_0-HDR-2.dng").exists(), "duplicate merge left an orphan");
+    assert_eq!(s.catalog.photos().count(), 4);
+    assert_eq!(s.undo.len(), undo_before, "reusing merge content added an undo step");
+    assert_eq!(s.develop_of(id).unwrap().as_ref(), &edited, "reusing merge content changed edits");
+    assert_eq!(s.catalog.stack_of(id), Some(&stack_before), "reusing merge content changed stack");
     // the type filter finds merge results (and only them)
     s.execute("library.filter", &json!({"merged": "hdr"})).unwrap();
     let found: std::collections::HashSet<_> = s.catalog.query(&s.filter, &Default::default()).into_iter().collect();
-    assert_eq!(found, [id, id2].into_iter().collect());
+    assert_eq!(found, [id].into_iter().collect());
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -73,15 +82,15 @@ fn hdr_merge_command_creates_and_imports_a_dng() {
 /// pixels unturned).
 #[test]
 fn hdr_merge_keeps_the_reference_frames_lens_corrections() {
-    use lightcraft_geom::{Orientation, Point};
-    use lightcraft_pipeline::optics::{embedded_vignette_gain, embedded_warp};
-    use lightcraft_raw::Opcode;
+    use lcc_geom::{Orientation, Point};
+    use lcc_pipeline::optics::{embedded_vignette_gain, embedded_warp};
+    use lcc_raw::Opcode;
     for orientation in [Orientation::Normal, Orientation::Rotate90] {
         let dir = temp_dir(&format!("hdr-lens-{orientation:?}"));
         let mut paths = Vec::new();
-        for (i, b) in lightcraft_merge::synth::bracket_dngs(480, 320, &[-2.0, 0.0, 2.0]).unwrap().into_iter().enumerate() {
-            let mut raw = lightcraft_raw::decode(&b).unwrap();
-            raw.crop = lightcraft_raw::Rect::new(10, 6, 452, 304);
+        for (i, b) in lcc_merge::synth::bracket_dngs(480, 320, &[-2.0, 0.0, 2.0]).unwrap().into_iter().enumerate() {
+            let mut raw = lcc_raw::decode(&b).unwrap();
+            raw.crop = lcc_raw::Rect::new(10, 6, 452, 304);
             raw.orientation = orientation;
             raw.metadata.orientation = Some(orientation);
             raw.opcodes.list3 = vec![
@@ -89,19 +98,19 @@ fn hdr_merge_keeps_the_reference_frames_lens_corrections() {
                 Opcode::FixVignetteRadial { k: [0.35, -0.05, 0.01, 0.0, 0.0], center: [0.48, 0.53] },
             ];
             let p = dir.join(format!("IMG_{i}.dng"));
-            std::fs::write(&p, lightcraft_raw::write_dng(&raw, &Default::default()).unwrap()).unwrap();
+            std::fs::write(&p, lcc_raw::write_dng(&raw, &Default::default()).unwrap()).unwrap();
             paths.push(p.to_string_lossy().to_string());
         }
         let mut s = Session::new().with_fs();
         let ids = import(&mut s, paths);
         let r = s.execute("merge.hdr", &json!({"ids": ids})).unwrap();
         assert_eq!(r["reference"].as_u64(), Some(ids[1]), "{r}");
-        let merged = s.catalog.photo(lightcraft_catalog::PhotoId(r["id"].as_u64().unwrap())).unwrap().clone();
-        let reference = s.catalog.photo(lightcraft_catalog::PhotoId(ids[1])).unwrap().clone();
+        let merged = s.catalog.photo(lcc_catalog::PhotoId(r["id"].as_u64().unwrap())).unwrap().clone();
+        let reference = s.catalog.photo(lcc_catalog::PhotoId(ids[1])).unwrap().clone();
         let expect = if orientation == Orientation::Normal { (452, 304) } else { (304, 452) };
         assert_eq!(((merged.width, merged.height), (reference.width, reference.height)), (expect, expect));
-        let a = reference.embedded_lens.expect("the source's correction");
-        let b = merged.embedded_lens.expect("the merged DNG carries the reference frame's correction");
+        let a = reference.embedded_lens.clone().expect("the source's correction");
+        let b = merged.embedded_lens.clone().expect("the merged DNG carries the reference frame's correction");
         let (wa, wb) = (a.warp.unwrap(), b.warp.unwrap());
         let (va, vb) = (a.vignette.unwrap(), b.vignette.unwrap());
         let (w, h) = (expect.0 as f64, expect.1 as f64);
@@ -125,21 +134,70 @@ fn a_merge_of_raws_without_colour_matrices_keeps_their_colour() {
     let dir = temp_dir("hdr-colour");
     let neutral = [0.5, 1.0, 0.7];
     let mut paths = Vec::new();
-    for (i, b) in lightcraft_merge::synth::bracket_dngs(240, 160, &[-1.0, 0.0, 1.0]).unwrap().into_iter().enumerate() {
+    for (i, b) in lcc_merge::synth::bracket_dngs(240, 160, &[-1.0, 0.0, 1.0]).unwrap().into_iter().enumerate() {
         // the same pixels with a white balance but no colour matrices
-        let mut raw = lightcraft_raw::decode(&b).unwrap();
-        raw.color = lightcraft_raw::ColorData { as_shot_neutral: Some(neutral), ..Default::default() };
+        let mut raw = lcc_raw::decode(&b).unwrap();
+        raw.color = lcc_raw::ColorData { as_shot_neutral: Some(neutral), ..Default::default() };
         let p = dir.join(format!("IMG_{i}.dng"));
-        std::fs::write(&p, lightcraft_raw::write_dng(&raw, &Default::default()).unwrap()).unwrap();
+        std::fs::write(&p, lcc_raw::write_dng(&raw, &Default::default()).unwrap()).unwrap();
         paths.push(p.to_string_lossy().to_string());
     }
     let mut s = Session::new().with_fs();
     let ids = import(&mut s, paths);
     let r = s.execute("merge.hdr", &json!({"ids": ids, "autoSettings": false})).unwrap();
-    let merged = lightcraft_raw::decode(&std::fs::read(r["path"].as_str().unwrap()).unwrap()).unwrap();
-    assert!(lightcraft_raw::color::has_matrix(&merged.color), "{:?}", merged.color);
+    let merged = lcc_raw::decode(&std::fs::read(r["path"].as_str().unwrap()).unwrap()).unwrap();
+    assert!(lcc_raw::color::has_matrix(&merged.color), "{:?}", merged.color);
     let got = merged.color.as_shot_neutral.expect("the sources' white balance");
     assert!(got.iter().zip(neutral).all(|(a, b)| (a - b).abs() < 1e-3), "{got:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn hdr_merge_refuses_stale_result_before_writing() {
+    let dir = temp_dir("hdr-stale");
+    let mut paths = Vec::new();
+    for (i, b) in lcc_merge::synth::bracket_dngs(240, 160, &[-2.0, 0.0, 2.0]).unwrap().into_iter().enumerate() {
+        let p = dir.join(format!("IMG_{i}.dng"));
+        std::fs::write(&p, b).unwrap();
+        paths.push(p.to_string_lossy().to_string());
+    }
+    let mut s = Session::new().with_fs();
+    let ids = import(&mut s, paths.clone());
+    let first = s.execute("merge.hdr", &json!({"ids": ids, "autoSettings": false})).unwrap();
+    let id = lcc_catalog::PhotoId(first["id"].as_u64().unwrap());
+    let path = first["path"].as_str().unwrap().to_string();
+    s.execute("develop.set", &json!({"control": "light.exposure", "value": 0.73})).unwrap();
+    let edited = s.develop_of(id).unwrap().as_ref().clone();
+    let stack_before = s.catalog.stack_of(id).cloned();
+
+    std::fs::remove_file(&path).unwrap();
+    let undo_before = s.undo.len();
+    let missing = s.execute("merge.hdr", &json!({"ids": ids, "autoSettings": true}));
+    assert!(missing.as_ref().unwrap_err().to_string().contains("missing or changed"));
+    assert!(!std::path::Path::new(&path).exists());
+    assert!(!dir.join("IMG_0-HDR-2.dng").exists());
+    assert_eq!(s.undo.len(), undo_before);
+    assert_eq!(s.develop_of(id).unwrap().as_ref(), &edited, "repair changed edits");
+    assert_eq!(s.catalog.stack_of(id).cloned(), stack_before);
+
+    std::fs::write(&path, std::fs::read(&paths[0]).unwrap()).unwrap();
+    let changed_bytes = std::fs::read(&path).unwrap();
+    let changed = s.execute("merge.hdr", &json!({"ids": ids, "autoSettings": true}));
+    assert!(changed.as_ref().unwrap_err().to_string().contains("missing or changed"));
+    assert_eq!(std::fs::read(&path).unwrap(), changed_bytes);
+    assert!(!dir.join("IMG_0-HDR-2.dng").exists());
+    assert_eq!(s.undo.len(), undo_before);
+    assert_eq!(s.develop_of(id).unwrap().as_ref(), &edited, "changed-source repair changed edits");
+    assert_eq!(s.catalog.stack_of(id).cloned(), stack_before);
+
+    s.execute("photo.delete", &json!({"ids": [id.0]})).unwrap();
+    let deleted_bytes = std::fs::read(&path).unwrap();
+    let undo_after_delete = s.undo.len();
+    let failed = s.execute("merge.hdr", &json!({"ids": ids, "autoSettings": false}));
+    assert!(failed.as_ref().unwrap_err().to_string().contains("deleted"));
+    assert_eq!(std::fs::read(&path).unwrap(), deleted_bytes);
+    assert!(!dir.join("IMG_0-HDR-3.dng").exists(), "failed import left an orphan");
+    assert_eq!(s.undo.len(), undo_after_delete);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -147,9 +205,9 @@ fn a_merge_of_raws_without_colour_matrices_keeps_their_colour() {
 fn panorama_command_with_auto_crop() {
     let dir = temp_dir("pano");
     let mut paths = Vec::new();
-    for (i, v) in lightcraft_merge::synth::pano_views(480, 360, 420.0, &[-25.0, 0.0, 25.0]).unwrap().into_iter().enumerate() {
+    for (i, v) in lcc_merge::synth::pano_views(480, 360, 420.0, &[-25.0, 0.0, 25.0]).unwrap().into_iter().enumerate() {
         let img = v.to_srgb8();
-        let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+        let png = lcc_codecs::encode_png(&lcc_codecs::EncodeImage::rgba8(&img), &lcc_codecs::EncodeMeta::default()).unwrap();
         let p = dir.join(format!("P_{i}.png"));
         std::fs::write(&p, png).unwrap();
         paths.push(p.to_string_lossy().to_string());
@@ -159,7 +217,7 @@ fn panorama_command_with_auto_crop() {
     let r = s.execute("merge.panorama", &json!({"ids": ids, "projection": "cylindrical", "autoCrop": true, "autoSettings": false})).unwrap();
     assert_eq!(r["projection"], "cylindrical");
     assert_eq!(r["used"].as_array().unwrap().len(), 3);
-    let id = lightcraft_catalog::PhotoId(r["id"].as_u64().unwrap());
+    let id = lcc_catalog::PhotoId(r["id"].as_u64().unwrap());
     let p = s.catalog.photo(id).unwrap().clone();
     assert!(p.width > 800 && p.height > 300, "{}×{}", p.width, p.height);
     let crop = s.develop_of(id).unwrap().crop.geometry.rect;
@@ -185,7 +243,7 @@ fn hdr_batch_merges_each_stack() {
     let mut paths = Vec::new();
     // different exposures, or the import would take set B for duplicates of set A
     for (set, evs) in [("A", [-2.0, 0.0, 2.0]), ("B", [-1.5, 0.5, 2.5])] {
-        for (i, b) in lightcraft_merge::synth::bracket_dngs(240, 160, &evs).unwrap().into_iter().enumerate() {
+        for (i, b) in lcc_merge::synth::bracket_dngs(240, 160, &evs).unwrap().into_iter().enumerate() {
             let p = dir.join(format!("{set}_{i}.dng"));
             std::fs::write(&p, b).unwrap();
             paths.push(p.to_string_lossy().to_string());
@@ -213,16 +271,111 @@ fn hdr_batch_merges_each_stack() {
 #[test]
 fn panorama_size_is_held_to_memory() {
     use crate::merge::{MIN_FITTED_MEGAPIXELS, fit_in_memory};
-    let full = lightcraft_merge::PanoOptions::default();
+    let full = lcc_merge::PanoOptions::default();
     let gb = |g: usize| Some(g << 30);
     let photos = 5.0 * 51e6; // five 51 MP photos
-    let mp = |o: lightcraft_merge::PanoOptions| o.max_megapixels;
-    assert_eq!(mp(fit_in_memory(&full, photos, gb(512))), lightcraft_merge::pano::MAX_MEGAPIXELS, "plenty of memory: the full size");
+    let mp = |o: lcc_merge::PanoOptions| o.max_megapixels;
+    assert_eq!(mp(fit_in_memory(&full, photos, gb(512))), lcc_merge::pano::MAX_MEGAPIXELS, "plenty of memory: the full size");
     let m16 = mp(fit_in_memory(&full, photos, gb(16)));
     assert!(m16 > MIN_FITTED_MEGAPIXELS && m16 < 512.0, "16 GB: {m16} MP");
     assert!(mp(fit_in_memory(&full, photos, gb(32))) > m16, "more memory, more pixels");
     assert_eq!(mp(fit_in_memory(&full, photos, gb(4))), MIN_FITTED_MEGAPIXELS, "never below 40 MP");
-    let asked = lightcraft_merge::PanoOptions { max_megapixels: 20.0, ..full.clone() };
+    let asked = lcc_merge::PanoOptions { max_megapixels: 20.0, ..full.clone() };
     assert_eq!(mp(fit_in_memory(&asked, photos, gb(16))), 20.0, "a size asked for is kept when it fits");
     assert_eq!(fit_in_memory(&full, 1e6, None), fit_in_memory(&full, 1e6, gb(8)), "memory unknown: taken as 8 GB");
+}
+
+/// A photo named twice is merged once (issue #1947): `[a, a, a]` is one photo, too few to merge, and `[a, b, a, b]`
+/// merges two frames rather than holding four in memory.
+#[test]
+fn a_photo_named_twice_is_merged_once() {
+    let dir = temp_dir("dup-ids");
+    let mut paths = Vec::new();
+    for (i, b) in lcc_merge::synth::bracket_dngs(96, 64, &[-1.0, 1.0]).unwrap().into_iter().enumerate() {
+        let p = dir.join(format!("IMG_{i}.dng"));
+        std::fs::write(&p, b).unwrap();
+        paths.push(p.to_string_lossy().to_string());
+    }
+    let mut s = Session::new().with_fs();
+    let ids = import(&mut s, paths);
+    let (a, b) = (ids[0], ids[1]);
+    for cmd in ["merge.hdr", "merge.panorama"] {
+        let e = s.execute(cmd, &json!({"ids": [a, a, a], "preview": true})).unwrap_err();
+        assert!(e.to_string().contains("at least 2"), "{cmd}: {e}");
+    }
+    let (kind, finish) = crate::merge::parse("merge.hdr", &json!({})).unwrap();
+    let job = s.plan_merge(kind, finish, &[a, b, a, b, a].map(lcc_catalog::PhotoId), true).unwrap();
+    assert_eq!(job.sources.iter().map(|(p, _)| p.0).collect::<Vec<_>>(), vec![a, b]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn focus_stack_command_creates_and_imports_a_dng() {
+    let dir = temp_dir("focus");
+    let mut paths = Vec::new();
+    let (_, frames) = lcc_merge::synth::focus_bracket(480, 320, 4).unwrap();
+    for (i, v) in frames.into_iter().enumerate() {
+        let png = lcc_codecs::encode_png(&lcc_codecs::EncodeImage::rgba8(&v.to_srgb8()), &lcc_codecs::EncodeMeta::default()).unwrap();
+        let p = dir.join(format!("F_{i}.png"));
+        std::fs::write(&p, png).unwrap();
+        paths.push(p.to_string_lossy().to_string());
+    }
+    let mut s = Session::new().with_fs();
+    let ids = import(&mut s, paths);
+    // preview: nothing added
+    let png = dir.join("preview.png");
+    let pv = s.execute("merge.focusStack", &json!({"ids": ids, "preview": true, "previewPath": png})).unwrap();
+    assert!(png.exists() && pv["previewSize"][0].as_u64().unwrap() > 100, "{pv}");
+    assert_eq!(s.catalog.photos().count(), 4);
+    // picked in any order, the photos stack in shooting order (capture time, then file name): each is
+    // aligned to its neighbour
+    let picked = [ids[2], ids[0], ids[3], ids[1]];
+    let r = s.execute("merge.focusStack", &json!({"ids": picked, "autoSettings": false, "stack": true})).unwrap();
+    assert!(r["path"].as_str().unwrap().ends_with("F_0-Focus.dng"), "{r}");
+    // the most magnified (last) frame is the reference
+    assert_eq!(r["reference"], ids[3]);
+    let models: Vec<&str> = r["alignment"].as_array().unwrap().iter().map(|a| a["model"].as_str().unwrap()).collect();
+    assert_eq!(models, ["similarity", "similarity", "similarity", "reference"], "{r}");
+    assert_eq!(r["skipped"], json!([]));
+    assert!(r["ev"].as_array().unwrap().iter().all(|v| v.as_f64().unwrap() == 0.0), "{r}");
+    let id = lcc_catalog::PhotoId(r["id"].as_u64().unwrap());
+    let p = s.catalog.photo(id).unwrap().clone();
+    assert_eq!((p.width, p.height), (480, 320));
+    assert_eq!(s.catalog.stack_of(id).expect("stacked on its sources").top(), id);
+    s.execute("library.filter", &json!({"merged": "focusStack"})).unwrap();
+    assert_eq!(s.catalog.query(&s.filter, &Default::default()), vec![id]);
+    assert!(s.execute("merge.focusStack", &json!({"ids": [ids[0]]})).is_err());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A preview whose options change reads and decodes its photos once: the second (another deghost amount) takes
+/// them from the session's frame cache.
+#[test]
+fn a_changed_preview_reuses_its_decoded_photos() {
+    let dir = temp_dir("preview-cache");
+    let mut paths = Vec::new();
+    for (i, b) in lcc_merge::synth::bracket_dngs(320, 240, &[-2.0, 0.0, 2.0]).unwrap().into_iter().enumerate() {
+        let p = dir.join(format!("IMG_{i}.dng"));
+        std::fs::write(&p, b).unwrap();
+        paths.push(p.to_string_lossy().to_string());
+    }
+    let mut s = Session::new().with_fs();
+    let ids = import(&mut s, paths);
+    let reads = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let r = reads.clone();
+    s.media.file_bytes = Some(std::sync::Arc::new(move |path: &str| {
+        r.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        std::fs::read(path).map_err(|e| e.to_string())
+    }));
+    let count = || reads.load(std::sync::atomic::Ordering::Relaxed);
+    s.execute("merge.hdr", &json!({"ids": ids, "preview": true})).unwrap();
+    assert_eq!(count(), 3);
+    assert_eq!(s.media.merge_frames.len(), 3);
+    s.execute("merge.hdr", &json!({"ids": ids, "preview": true, "deghost": "high"})).unwrap();
+    assert_eq!(count(), 3, "the second preview read its photos again");
+    // the full-size merge doesn't use (or fill) the preview cache
+    s.execute("merge.hdr", &json!({"ids": ids, "autoSettings": false})).unwrap();
+    assert_eq!(count(), 6);
+    assert_eq!(s.media.merge_frames.len(), 3);
+    let _ = std::fs::remove_dir_all(&dir);
 }

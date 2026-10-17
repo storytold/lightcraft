@@ -7,14 +7,14 @@
 //! save them when let go; text fields save when the edit ends (Return or leaving the field).
 
 use egui::RichText;
-use lightcraft_engine::export::Anchor;
-use lightcraft_engine::slide_overlay::{
+use lcc_engine::export::Anchor;
+use lcc_engine::slide_overlay::{
     ANCHORS, OFFSET_MAX, OverlaySettings, PLATE_SIZE_MAX, Placement, RelativeTo, SHADOW_OFFSET_MAX, SHADOW_RADIUS_MAX, STAR_SIZE_MAX, TEXT_SIZE_MAX,
 };
 use serde_json::{Value, json};
 
 use super::settings::{check, choices, heading, hint, row};
-use crate::LightcraftApp;
+use crate::LccApp;
 use crate::text_field::TextField;
 use crate::theme::Tokens;
 use crate::widgets::register;
@@ -26,12 +26,12 @@ enum Unit {
     Degrees,
 }
 
-fn set(app: &mut LightcraftApp, p: Value) {
+fn set(app: &mut LccApp, p: Value) {
     let _ = app.run("slideshow.overlays", p);
 }
 
 /// A slider (`slider:{id}`) over `lo..=hi`; `wrap(value)` makes the `slideshow.overlays` request.
-fn slider(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, value: f64, lo: f64, hi: f64, unit: Unit, wrap: &dyn Fn(f64) -> Value) {
+fn slider(app: &mut LccApp, ui: &mut egui::Ui, id: &str, value: f64, lo: f64, hi: f64, unit: Unit, wrap: &dyn Fn(f64) -> Value) {
     let (k, suffix) = match unit {
         Unit::Percent => (100.0, " %"),
         Unit::Degrees => (1.0, "°"),
@@ -51,7 +51,7 @@ fn slider(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, value: f64, lo: 
 }
 
 /// A colour button (`button:{id}`).
-fn colour(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, value: [u8; 3], wrap: &dyn Fn([u8; 3]) -> Value) {
+fn colour(app: &mut LccApp, ui: &mut egui::Ui, id: &str, value: [u8; 3], wrap: &dyn Fn([u8; 3]) -> Value) {
     let mut c = value;
     let r = egui::color_picker::color_edit_button_srgb(ui, &mut c);
     register(ui.ctx(), format!("button:{id}"), r.rect);
@@ -61,7 +61,7 @@ fn colour(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, value: [u8; 3], 
 }
 
 /// A checkbox (`check:settings.{id}`); true when it is on.
-fn toggle(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, value: bool, label: &str, wrap: &dyn Fn(bool) -> Value) -> bool {
+fn toggle(app: &mut LccApp, ui: &mut egui::Ui, id: &str, value: bool, label: &str, wrap: &dyn Fn(bool) -> Value) -> bool {
     let mut v = value;
     if check(ui, &format!("settings.{id}"), &mut v, label) {
         set(app, wrap(v));
@@ -70,7 +70,7 @@ fn toggle(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, value: bool, lab
 }
 
 /// A one-line text field (`field:{id}`), saved when the edit ends.
-fn text(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, value: &str, hint: &str, wrap: &dyn Fn(&str) -> Value) {
+fn text(app: &mut LccApp, ui: &mut egui::Ui, id: &str, value: &str, hint: &str, wrap: &dyn Fn(&str) -> Value) {
     let mem = egui::Id::new(("slideshow-overlay-field", id));
     let mut s: String = ui.data(|d| d.get_temp(mem)).unwrap_or_else(|| value.to_string());
     let widget = format!("field:{id}");
@@ -108,11 +108,11 @@ fn anchor_grid(ui: &mut egui::Ui, id: &str, value: &mut Anchor) -> bool {
 }
 
 /// Anchor, offsets and what the overlay is anchored to; `wrap` turns placement keys into the request.
-fn placement(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, id: &str, p: &Placement, photo_too: bool, wrap: &dyn Fn(Value) -> Value) {
+fn placement(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, id: &str, p: &Placement, photo_too: bool, wrap: &dyn Fn(Value) -> Value) {
     row(ui, t, "Position", |ui| {
         let mut a = p.anchor;
         if anchor_grid(ui, &format!("{id}Anchor"), &mut a) {
-            set(app, wrap(json!({"anchor": lightcraft_engine::slide_overlay::anchor_id(a)})));
+            set(app, wrap(json!({"anchor": lcc_engine::slide_overlay::anchor_id(a)})));
         }
     });
     if photo_too {
@@ -139,7 +139,7 @@ fn text_change(i: usize, n: usize, change: Value) -> Value {
 }
 
 /// The Overlays sections.
-pub fn sections(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+pub fn sections(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
     let s: OverlaySettings = app.session.slide_overlays.clone();
     heading(ui, t, "Overlays");
 
@@ -226,7 +226,7 @@ pub fn sections(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             });
         }
     }
-    if n < lightcraft_engine::slide_overlay::MAX_TEXTS && crate::widgets::text_button(ui, "slideshowAddText", "Add text overlay", false).clicked() {
+    if n < lcc_engine::slide_overlay::MAX_TEXTS && crate::widgets::text_button(ui, "slideshowAddText", "Add text overlay", false).clicked() {
         set(app, json!({"addText": {}}));
     }
     hint(
@@ -248,7 +248,7 @@ pub fn sections(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         row(ui, t, "Position", |ui| {
             let mut a = w.anchor;
             if anchor_grid(ui, "slideshowWatermarkAnchor", &mut a) {
-                set(app, wm(json!({"anchor": lightcraft_engine::slide_overlay::anchor_id(a)})));
+                set(app, wm(json!({"anchor": lcc_engine::slide_overlay::anchor_id(a)})));
             }
         });
         let export_wm = app.session.last_export.as_ref().and_then(|e| e.get("watermark")).filter(|v| v.is_object() || v.is_string()).cloned();

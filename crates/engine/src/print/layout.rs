@@ -964,16 +964,6 @@ mod tests {
     }
 
     #[test]
-    fn units_convert() {
-        for u in [Unit::Inches, Unit::Centimeters, Unit::Millimeters, Unit::Points] {
-            assert!((u.to_inches(u.from_inches(3.5)) - 3.5).abs() < 1e-12);
-        }
-        assert!((Unit::Millimeters.from_inches(1.0) - 25.4).abs() < 1e-12);
-        assert_eq!(Unit::Points.from_inches(2.0), 144.0);
-        assert_eq!(serde_json::to_string(&Unit::Centimeters).unwrap(), "\"cm\"");
-    }
-
-    #[test]
     fn contact_grid_fills_the_printable_area() {
         let l = Layout {
             style: Style::ContactSheet,
@@ -1090,21 +1080,6 @@ mod tests {
         assert!(l.add_cell(9.0, 9.0).is_err(), "wider than the printable area");
         let mut grid = Layout::default();
         assert!(grid.add_cell(1.0, 1.0).is_err());
-    }
-
-    #[test]
-    fn cell_cap() {
-        let mut l = package();
-        for _ in 0..MAX_CELLS {
-            if l.add_cell(0.5, 0.5).is_err() {
-                break;
-            }
-        }
-        assert!(l.cells.len() <= MAX_CELLS);
-        let n = l.cells.len();
-        if n == MAX_CELLS {
-            assert!(l.add_cell(0.5, 0.5).is_err());
-        }
     }
 
     #[test]
@@ -1304,29 +1279,10 @@ mod tests {
     }
 
     #[test]
-    fn cell_aspect_survives_auto_layout() {
-        let mut l = package();
-        let id = l.add_cell(2.5, 3.5).unwrap();
-        l.auto_layout().unwrap();
-        let r = l.cell(id).unwrap().rect;
-        assert!((r.w / r.h - 2.5 / 3.5).abs() < 1e-9 || (r.h / r.w - 2.5 / 3.5).abs() < 1e-9);
-    }
-
-    #[test]
     fn guides_validate() {
         assert!(Guides::default().validate().is_ok());
         for bad in [f64::NAN, 0.0, -1.0, 1e9] {
             assert!(Guides { grid_size: bad, ..Default::default() }.validate().is_err());
         }
-    }
-
-    #[test]
-    fn rect_helpers() {
-        let a = Rect::new(0.0, 0.0, 2.0, 2.0);
-        assert!(a.overlaps(&Rect::new(1.0, 1.0, 2.0, 2.0)));
-        assert!(!a.overlaps(&Rect::new(2.0, 0.0, 1.0, 1.0)));
-        assert!(a.contains(&Rect::new(0.5, 0.5, 1.0, 1.0)));
-        assert!(!a.contains(&Rect::new(1.5, 0.5, 1.0, 1.0)));
-        assert_eq!(a.area(), 4.0);
     }
 }

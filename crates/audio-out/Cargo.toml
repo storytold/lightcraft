@@ -1,0 +1,26 @@
+[package]
+name = "lcc-audio-out"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Audio output (L0): the one sound-card path (slideshow music, video playback) and its device clock; PulseAudio / PipeWire on Linux and the BSDs (pure Rust), cpal elsewhere with `audio-out`"
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# Play through the sound card with cpal (macOS CoreAudio, Windows WASAPI; on Linux cpal links the
+# system ALSA library, a C library, so the feature is off by default). Linux and the BSDs play
+# through a PulseAudio / PipeWire server without it (pure Rust, always on).
+audio-out = ["dep:cpal"]
+
+[dependencies]
+log = { workspace = true }
+cpal = { version = "0.15", optional = true } # Apache-2.0; links ALSA on Linux
+
+# PulseAudio native protocol (also spoken by PipeWire's pipewire-pulse), pure Rust:
+[target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "dragonfly", target_os = "netbsd", target_os = "openbsd"))'.dependencies]
+pulseaudio = "0.3" # MIT
+futures = { version = "0.3", default-features = false, features = ["executor"] } # MIT OR Apache-2.0
+lcc-brand = { workspace = true }

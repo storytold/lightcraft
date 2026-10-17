@@ -1,23 +1,20 @@
-//! Slideshow slides for LightCraft: the settings of Lightroom Classic's Slideshow Layout, Options
-//! and Backdrop panels ([`SlideSettings`]) and the CPU composer that draws one slide from a
-//! rendered photo ([`compose`]).
+//! The Classic Slideshow module's logic, independent of the UI: settings and templates
+//! ([`settings`]), text tokens ([`tokens`]), timing and order ([`timeline`]), the slide compositor
+//! ([`compose`]), music ([`music`]) and the JPEG-sequence export ([`export`]).
 //!
-//! No UI and no catalog here: playback, the settings preview, the `slideshow.preview` command and
-//! (later) slideshow export all call [`compose`], so every one of them draws the same pixels.
-//!
-//! **Resolution independence:** every length is relative to the slide: margins, the stroke width
-//! and the shadow's offset and radius are fractions of the slide's *shorter side* (so linked
-//! margins are equal in pixels, and a slide composed at two sizes has the same proportions).
-//! Angles are degrees counter-clockwise from the right (−45° points down and to the right).
-//!
-//! **Never crash:** settings are validated by [`SlideSettings::merged`] (a wrong type is an error)
-//! and clamped by [`SlideSettings::sanitized`] (NaN, ±∞, negative and huge values land in range);
-//! [`compose`] accepts any size and any photo (an empty one draws the backdrop alone).
+//! The UI (`crates/ui-egui/src/slideshow_ui.rs`) previews and plays slides with these; the full
+//! screen show of View ▸ Slideshow keeps working as the impromptu slideshow.
+
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-mod compose;
-mod settings;
+pub mod compose;
+pub mod export;
+pub mod music;
+pub mod settings;
+pub mod timeline;
+pub mod tokens;
 
-pub use compose::{Layout, Rect, compose, compose_with, layout, photo_size};
-pub use settings::{Aspect, MARGIN_MAX, MAX_SIDE, SHADOW_OFFSET_MAX, SHADOW_RADIUS_MAX, STROKE_MAX, SlideSettings, hex, parse_color};
+pub use settings::{SavedSlideshow, Settings, Template, builtin_templates};
+pub use timeline::{Frame, Plan, Segment};
+pub use tokens::SlideInfo;

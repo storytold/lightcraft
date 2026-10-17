@@ -12,7 +12,7 @@
 //! * Across devices (a share is another volume): the file is copied, checked and only then
 //!   removed; the copy goes to a hidden name and takes the photo's name only once complete.
 
-use lightcraft_catalog::{Op, Photo, PhotoId, Source};
+use lcc_catalog::{Op, Photo, PhotoId, Source};
 use serde_json::json;
 
 use crate::Session;

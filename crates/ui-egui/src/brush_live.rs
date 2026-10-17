@@ -1,6 +1,6 @@
 //! The brush stroke being painted, drawn on the photo while the button is held (issue #517).
 //!
-//! The committed stroke is rasterized by the pipeline ([`lightcraft_pipeline::masks::brush_dabs`]
+//! The committed stroke is rasterized by the pipeline ([`lcc_pipeline::masks::brush_dabs`]
 //! and friends): dabs a quarter radius apart along the path, each with a hard core and a smooth
 //! feather, flow accumulating up to density. The live stroke places and paints its dabs with the
 //! same functions, at screen resolution, so letting go of the button doesn't change what's
@@ -8,8 +8,8 @@
 //! one and uploads only the rectangle they touched.
 
 use egui::{Color32, ColorImage, Pos2, Rect, TextureHandle, TextureOptions, pos2};
-use lightcraft_geom::Point;
-use lightcraft_pipeline::masks::{accumulate, dab_alpha, pressure_flow, pressure_radius, push_dabs, push_pressures};
+use lcc_geom::Point;
+use lcc_pipeline::masks::{accumulate, dab_alpha, pressure_flow, pressure_radius, push_dabs, push_pressures};
 
 /// The largest live-stroke buffer edge (pixels); a bigger canvas is painted at a lower resolution.
 const MAX_SIDE: usize = 4096;

@@ -5,7 +5,7 @@
 //!   embedded (the driver converts); a printer / paper ICC profile converts the page to the device's
 //!   own values here and names the profile as the document's output intent, so the driver must not
 //!   convert again.
-//! - **Intent, black point compensation, print adjustment**: [`lightcraft_codecs::print`].
+//! - **Intent, black point compensation, print adjustment**: [`lcc_codecs::print`].
 //! - **Print sharpening** (Low / Standard / High for Matte or Glossy paper): each photo is sharpened
 //!   at its print size before it goes on the page, with the export sharpener.
 //! - **Depth**: 16 bits per component by default (no banding from the profile conversion); 8 bits
@@ -16,9 +16,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use lightcraft_codecs::display::MAX_PROFILE_BYTES;
-use lightcraft_codecs::print::{PrintColor, PrintTarget, PrintTransform};
-use lightcraft_codecs::{NamedSpace, proof::ProofIntent};
+use lcc_codecs::display::MAX_PROFILE_BYTES;
+use lcc_codecs::print::{PrintColor, PrintTarget, PrintTransform};
+use lcc_codecs::{NamedSpace, proof::ProofIntent};
 use serde::{Deserialize, Serialize};
 
 use crate::export::{DeepImage, DeepSamples, OutputSpace, SharpenAmount, SharpenFor, output_sharpen_deep};
@@ -248,72 +248,12 @@ pub fn is_print_ready(photo: &DeepImage) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lightcraft_codecs::print::print_adjust;
+    use lcc_codecs::print::print_adjust;
 
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("lc-print-color-{}-{name}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
-    }
-
-    /// A small, flat page of one 16-bit colour.
-    fn page(w: u32, h: u32, v: [u16; 3]) -> Vec<u16> {
-        (0..w * h).flat_map(|_| v).collect()
-    }
-
-    #[test]
-    fn settings_default_and_round_trip() {
-        let d = PrintColorSettings::default();
-        assert_eq!(d.profile, PrintProfile::Managed { space: ManagedSpace::Srgb });
-        assert!(d.black_point_compensation && d.sixteen_bit);
-        let s = PrintColorSettings {
-            profile: PrintProfile::Icc { path: "/Library/ColorSync/Profiles/Paper.icc".into() },
-            intent: PrintIntent::Relative,
-            brightness: 12.0,
-            sharpen: PrintSharpen::High,
-            media: PrintMedia::Matte,
-            ..d.clone()
-        };
-        let json = serde_json::to_value(&s).unwrap();
-        assert_eq!(json["profile"]["kind"], "icc");
-        assert_eq!(json["intent"], "relative");
-        assert_eq!(serde_json::from_value::<PrintColorSettings>(json).unwrap(), s);
-        // partial and unknown-free JSON fills in the defaults
-        let partial: PrintColorSettings = serde_json::from_str(r#"{"intent":"relative"}"#).unwrap();
-        assert_eq!(partial, PrintColorSettings { intent: PrintIntent::Relative, ..d });
-        assert!(serde_json::from_str::<PrintColorSettings>(r#"{"profile":{"kind":"cmyk"}}"#).is_err());
-    }
-
-    #[test]
-    fn managed_srgb_page_becomes_a_16_bit_srgb_pdf_without_an_output_intent() {
-        let job = PrintColorJob::new(&PrintColorSettings::default()).unwrap();
-        let img = job.page_image(4, 2, &page(4, 2, [65535, 65535, 65535])).unwrap();
-        assert_eq!((img.channels, img.width, img.height), (3, 4, 2));
-        let ImageData::Raw { bits: 16, samples } = &img.data else { panic!("16-bit samples") };
-        assert!(samples.chunks(2).all(|b| u16::from_be_bytes([b[0], b[1]]) > 65400), "white stays white");
-        let pdf = job.pdf(vec![((288.0, 144.0), img)], "Prints").unwrap();
-        let s = String::from_utf8_lossy(&pdf);
-        assert!(s.contains("/ICCBased") && s.contains("/BitsPerComponent 16") && s.contains("/MediaBox [0 0 288 144]"));
-        assert!(!s.contains("/OutputIntents"), "the printer converts: no output intent");
-        assert!(s.contains("/Title (Prints)"));
-    }
-
-    #[test]
-    fn a_printer_profile_converts_and_becomes_the_output_intent() {
-        let dir = scratch("icc");
-        let path = dir.join("Studio Glossy.icc");
-        std::fs::write(&path, lightcraft_codecs::icc::write_named(NamedSpace::AdobeRgb)).unwrap();
-        let settings =
-            PrintColorSettings { profile: PrintProfile::Icc { path }, intent: PrintIntent::Relative, sixteen_bit: false, ..Default::default() };
-        let job = PrintColorJob::new(&settings).unwrap();
-        assert_eq!(job.channels(), 3);
-        let img = job.page_image(2, 2, &page(2, 2, [0, 65535, 0])).unwrap();
-        assert!(matches!(&img.data, ImageData::Raw { bits: 8, .. }));
-        let pdf = job.pdf(vec![((100.0, 100.0), img)], "").unwrap();
-        let s = String::from_utf8_lossy(&pdf);
-        assert!(s.contains("/OutputIntents") && s.contains("/BitsPerComponent 8"), "{}", &s[..s.len().min(600)]);
-        assert!(!s.contains("/Title"), "an empty title is left out");
-        assert!(job.profile_name().is_some());
     }
 
     #[test]

@@ -2,7 +2,7 @@
 //! library's Playback settings (`slideshow.playback`: slide and fade durations, fade colour,
 //! random order, repeat, preparing previews in advance).
 //!
-//! The timeline is [`lightcraft_engine::slideshow::Playback`] (no egui, tested on its own); this
+//! The timeline is [`lcc_engine::slideshow::Playback`] (no egui, tested on its own); this
 //! module renders the slides, draws the frame it asks for and the playback controls.
 //!
 //! Smooth transitions: every slide is rendered into its own texture ([`Slot::Slide`]) off the UI
@@ -14,7 +14,7 @@
 //!
 //! Which picture a slide shows comes from one place, [`slide_job`]: the photo itself with the
 //! plain layout, else the slide composed with the library's layout (`slideshow.layout`: margins,
-//! zoom to fill, stroke, shadow, backdrop) by `lightcraft-slideshow` on the render worker. A
+//! zoom to fill, stroke, shadow, backdrop) by `lcc-slideshow` on the render worker. A
 //! composed slide is a screen-sized texture; the playback (fades, controls) is the same.
 //!
 //! Title screens (`slideshow.titles`: the intro before the first photo, the ending after the last
@@ -24,12 +24,12 @@
 //! in place of "n / N" while one is up (titles aren't photos, so N stays the number of photos).
 
 use egui::{Align2, Color32, Pos2, Rect, pos2, vec2};
-use lightcraft_catalog::PhotoId;
-use lightcraft_engine::slideshow::{Item, Playback, Tick, Title};
-use lightcraft_pipeline::geometry::Frame;
+use lcc_catalog::PhotoId;
+use lcc_engine::slideshow::{Item, Playback, Tick, Title};
+use lcc_pipeline::geometry::Frame;
 use serde_json::{Value, json};
 
-use crate::LightcraftApp;
+use crate::LccApp;
 use crate::icons::Icon;
 use crate::render::Slot;
 use crate::widgets::{icon_button, register};
@@ -58,7 +58,7 @@ pub struct Run {
 /// `seed` fixes the random order). The intro and ending screens that are on (`slideshow.titles`)
 /// play before the first photo and after the last one. With no photos in view there is nothing
 /// to show (titles alone don't make a slideshow).
-pub fn start(app: &mut LightcraftApp, p: &Value, now: f64) -> Result<Value, String> {
+pub fn start(app: &mut LccApp, p: &Value, now: f64) -> Result<Value, String> {
     let mut overrides = p.as_object().cloned().unwrap_or_default();
     if let Some(i) = overrides.remove("interval") {
         overrides.insert("slideDuration".into(), i);
@@ -89,14 +89,14 @@ pub fn start(app: &mut LightcraftApp, p: &Value, now: f64) -> Result<Value, Stri
 }
 
 /// End the slideshow (back to the view it started from, on the last photo shown).
-pub fn end(app: &mut LightcraftApp) {
+pub fn end(app: &mut LccApp) {
     app.ui.slideshow = None;
     app.ui.fullscreen = false;
     app.renderer.release_slides(&[]);
 }
 
 /// The slideshow's own commands (the playback controls and their keys).
-pub fn command(app: &mut LightcraftApp, id: &str, now: f64) -> Result<Value, String> {
+pub fn command(app: &mut LccApp, id: &str, now: f64) -> Result<Value, String> {
     let Some(run) = app.ui.slideshow.as_mut() else { return Err("no slideshow is playing".into()) };
     let t = match id {
         "slideshow.togglePause" => {
@@ -132,7 +132,7 @@ pub fn state(play: &Playback, now: f64) -> Value {
 }
 
 /// Act on what the timeline did: follow the slide with the selection, or end.
-fn after(app: &mut LightcraftApp, t: Tick) {
+fn after(app: &mut LccApp, t: Tick) {
     match t {
         Tick::Advanced(Item::Photo(id)) if app.session.active() != Some(id) => {
             let _ = app.run("library.select", json!({"ids": [id.0]}));
@@ -144,7 +144,7 @@ fn after(app: &mut LightcraftApp, t: Tick) {
 
 /// Can `item` be shown as a slide now: its texture exists (or it can't be rendered at all, and
 /// its stand-in is all there will be: playback goes on rather than waiting forever).
-pub fn ready(app: &LightcraftApp, item: Item) -> bool {
+pub fn ready(app: &LccApp, item: Item) -> bool {
     let slot = Slot::Slide(item);
     let rendered = match item {
         Item::Photo(id) => app.renderer.textures.get(&slot).is_some_and(|t| t.photo == id) || app.session.catalog.photo(id).is_none(),
@@ -154,7 +154,7 @@ pub fn ready(app: &LightcraftApp, item: Item) -> bool {
 }
 
 /// Advance a running slideshow (every frame, before drawing).
-pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
+pub fn tick(app: &mut LccApp, ctx: &egui::Context) {
     let Some(run) = app.ui.slideshow.as_ref() else {
         app.renderer.release_slides(&[]);
         return;
@@ -190,10 +190,10 @@ pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
 ///   pixels: the photo rendered at its image cell's size, then composed on the render worker, so
 ///   a slide is ready (and fades) like any other texture.
 ///
-/// [`SlideSettings::is_plain`]: lightcraft_engine::slide::SlideSettings::is_plain
-fn slide_job(app: &mut LightcraftApp, id: PhotoId, area: Rect, ppp: f32, texture_side: usize) -> Option<lightcraft_engine::RenderJob> {
+/// [`SlideSettings::is_plain`]: lcc_engine::slide::SlideSettings::is_plain
+fn slide_job(app: &mut LccApp, id: PhotoId, area: Rect, ppp: f32, texture_side: usize) -> Option<lcc_engine::RenderJob> {
     let photo = app.session.catalog.photo(id)?.clone();
-    let frame = Frame::with_lens(photo.width.max(1) as usize, photo.height.max(1) as usize, &photo.develop, true, photo.embedded_lens.as_ref());
+    let frame = Frame::with_lens(photo.width.max(1) as usize, photo.height.max(1) as usize, &photo.develop, true, photo.embedded_lens.as_deref());
     let native = super::detail::output_px(&frame);
     if !app.session.slides_plain() {
         let (w, h) = slide_px(area, ppp, texture_side);
@@ -214,7 +214,7 @@ fn slide_job(app: &mut LightcraftApp, id: PhotoId, area: Rect, ppp: f32, texture
 pub fn slide_px(area: Rect, ppp: f32, texture_side: usize) -> (usize, usize) {
     let px = |v: f32| if v.is_finite() { (v * ppp).round().max(16.0) as usize } else { 16 };
     let (w, h) = (px(area.width()), px(area.height()));
-    let cap = texture_side.clamp(16, lightcraft_slideshow::MAX_SIDE);
+    let cap = texture_side.clamp(16, lcc_slide::MAX_SIDE);
     let long = w.max(h);
     if long <= cap {
         return (w, h);
@@ -250,7 +250,7 @@ fn wanted(play: &Playback, now: f64) -> Vec<(Item, u32)> {
 /// The texture to draw for slide `item`: its own render, else (a photo) the loupe's or a
 /// thumbnail (a slide stepped to with ←/→ shows at once, sharp when its render lands). A title
 /// screen has nothing to stand in for it: the black canvas shows until it lands.
-fn texture(app: &LightcraftApp, item: Item) -> Option<&crate::render::Tex> {
+fn texture(app: &LccApp, item: Item) -> Option<&crate::render::Tex> {
     let Item::Photo(id) = item else { return app.renderer.textures.get(&Slot::Slide(item)) };
     app.renderer
         .textures
@@ -287,7 +287,7 @@ fn outside(outer: Rect, inner: Rect) -> Vec<Rect> {
 }
 
 /// Draw the slideshow (full screen) and its controls.
-pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+pub fn show(app: &mut LccApp, ui: &mut egui::Ui) {
     let canvas = ui.max_rect();
     app.canvas_rect = Some(canvas);
     // (`ui.pointer` positions are relative to it)
@@ -373,7 +373,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 
 /// The playback controls: previous, play / pause, next, slide n of N, end. They appear when the
 /// pointer moves and fade out [`CONTROLS_SECS`] after it stops (or stay while it is over them).
-fn controls(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect, now: f64) {
+fn controls(app: &mut LccApp, ui: &mut egui::Ui, canvas: Rect, now: f64) {
     let t = crate::theme::Tokens::get(ui.ctx());
     let pos = ui.input(|i| i.pointer.latest_pos());
     let pressed = ui.input(|i| i.pointer.any_pressed());

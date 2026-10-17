@@ -5,11 +5,11 @@
 //! `mask.*Effect` command.
 
 use egui::{Sense, vec2};
-use lightcraft_develop::Mask;
-use lightcraft_engine::cmd::mask_effects::{self as fx, FIELDS, MaskEffect};
+use lcc_develop::Mask;
+use lcc_engine::cmd::mask_effects::{self as fx, FIELDS, MaskEffect};
 use serde_json::{Value, json};
 
-use crate::LightcraftApp;
+use crate::LccApp;
 use crate::state::Dialog;
 use crate::theme::Tokens;
 use crate::widgets::register;
@@ -58,14 +58,14 @@ pub fn display_name(name: &str) -> String {
 }
 
 /// The effect the selected mask's tool last applied (what Update / Rename in the menu act on).
-fn last_applied(app: &LightcraftApp, mask: &Mask) -> Option<String> {
+fn last_applied(app: &LccApp, mask: &Mask) -> Option<String> {
     let tool = fx::mask_tool(mask)?;
     let name = app.session.mask_tool_effects.get(&tool)?;
     app.session.mask_effects.iter().find(|e| e.name.eq_ignore_ascii_case(name)).map(|e| e.name.clone())
 }
 
 /// Apply an effect to `mask` (and take the brush settings it carries).
-pub fn apply(app: &mut LightcraftApp, ctx: &egui::Context, name: &str, params: Value) {
+pub fn apply(app: &mut LccApp, ctx: &egui::Context, name: &str, params: Value) {
     let mut p = params;
     p["name"] = json!(name);
     match app.run("mask.applyEffect", p) {
@@ -74,7 +74,7 @@ pub fn apply(app: &mut LightcraftApp, ctx: &egui::Context, name: &str, params: V
     }
 }
 
-fn take_brush(app: &mut LightcraftApp, b: &Value) {
+fn take_brush(app: &mut LccApp, b: &Value) {
     let Some(b) = b.as_object() else { return };
     let f = |k: &str| b.get(k).and_then(Value::as_f64).filter(|v| v.is_finite());
     if let Some(v) = f("size") {
@@ -92,12 +92,12 @@ fn take_brush(app: &mut LightcraftApp, b: &Value) {
 }
 
 /// The brush settings in use, as an effect carries them.
-fn brush_now(app: &LightcraftApp) -> Value {
+fn brush_now(app: &LccApp) -> Value {
     json!({"size": app.ui.brush_size, "feather": app.ui.brush_feather, "flow": app.ui.brush_flow, "auto_mask": app.ui.brush_auto_mask})
 }
 
 /// Open the New Effect Preset dialog for the selected mask.
-pub fn open_save(app: &mut LightcraftApp) {
+pub fn open_save(app: &mut LccApp) {
     let brush = app.ui.tool == "brush";
     app.ui.dialog = Some(Dialog::SaveEffect {
         name: String::new(),
@@ -109,7 +109,7 @@ pub fn open_save(app: &mut LightcraftApp) {
 }
 
 /// Open the Manage Effect Presets window.
-pub fn open_manage(app: &mut LightcraftApp) {
+pub fn open_manage(app: &mut LccApp) {
     app.ui.dialog =
         Some(Dialog::ManageEffects { search: String::new(), selected: Vec::new(), rename: None, confirm_delete: false, new_group: String::new() });
 }
@@ -145,7 +145,7 @@ fn menu_rows(effects: &[MaskEffect], query: &str) -> Vec<(String, String, String
 }
 
 /// The Effect menu above the mask's sliders.
-pub fn effect_row(app: &mut LightcraftApp, ui: &mut egui::Ui, mask: &Mask) {
+pub fn effect_row(app: &mut LccApp, ui: &mut egui::Ui, mask: &Mask) {
     let t = Tokens::get(ui.ctx());
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 2, bottom: 4 }).show(ui, |ui| {
         ui.horizontal(|ui| {
@@ -161,7 +161,7 @@ pub fn effect_row(app: &mut LightcraftApp, ui: &mut egui::Ui, mask: &Mask) {
     });
 }
 
-fn menu(app: &mut LightcraftApp, ui: &mut egui::Ui, mask: &Mask, current: Option<&str>) {
+fn menu(app: &mut LccApp, ui: &mut egui::Ui, mask: &Mask, current: Option<&str>) {
     let t = Tokens::get(ui.ctx());
     ui.set_min_width(260.0);
     ui.set_max_width(320.0);
@@ -303,7 +303,7 @@ fn menu(app: &mut LightcraftApp, ui: &mut egui::Ui, mask: &Mask, current: Option
 }
 
 /// The photo with `name` applied to `mask`, shown while the pointer rests on it.
-fn preview(app: &mut LightcraftApp, mask: &Mask, name: &str) {
+fn preview(app: &mut LccApp, mask: &Mask, name: &str) {
     let Some(id) = app.session.active() else { return };
     let Some(e) = app.session.mask_effects.iter().find(|e| e.name == name) else { return };
     let Some(d) = app.session.develop_of(id) else { return };
@@ -314,8 +314,8 @@ fn preview(app: &mut LightcraftApp, mask: &Mask, name: &str) {
 }
 
 /// The right-click menu of an effect in the Effect menu.
-fn row_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, mask: &Mask, name: &str, fav: bool) {
-    let run = |app: &mut LightcraftApp, ui: &mut egui::Ui, text: &str, cmd: &str, p: Value| {
+fn row_menu(app: &mut LccApp, ui: &mut egui::Ui, mask: &Mask, name: &str, fav: bool) {
+    let run = |app: &mut LccApp, ui: &mut egui::Ui, text: &str, cmd: &str, p: Value| {
         let r = ui.button(crate::i18n::tr(text));
         register(ui.ctx(), format!("maskEffectRow:{text}"), r.rect);
         if r.clicked() {
@@ -354,7 +354,7 @@ fn row_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, mask: &Mask, name: &str,
 }
 
 /// The groups to move effects `names` to, None, and New Group….
-fn group_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, names: &[String]) {
+fn group_menu(app: &mut LccApp, ui: &mut egui::Ui, names: &[String]) {
     let groups: Vec<String> = fx::menu_order(&app.session.mask_effects).into_iter().map(|(g, _)| g).filter(|g| !g.is_empty()).collect();
     for g in groups.iter().map(String::as_str).chain(std::iter::once("")) {
         let label = if g.is_empty() { crate::i18n::tr("None").to_string() } else { g.to_string() };
@@ -373,7 +373,7 @@ fn group_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, names: &[String]) {
 
 /// The New Effect Preset dialog's body.
 pub fn save_body(
-    app: &LightcraftApp,
+    app: &LccApp,
     ui: &mut egui::Ui,
     name: &mut String,
     group: &mut String,
@@ -452,7 +452,7 @@ pub fn save_body(
 }
 
 /// Save from the New Effect Preset dialog.
-pub fn save_confirm(app: &mut LightcraftApp, name: &str, group: &str, fields: &[String], amount: bool, brush: bool) -> Result<Value, String> {
+pub fn save_confirm(app: &mut LccApp, name: &str, group: &str, fields: &[String], amount: bool, brush: bool) -> Result<Value, String> {
     if name.trim().is_empty() {
         return Err(crate::i18n::tr("Name the preset").to_string());
     }
@@ -474,7 +474,7 @@ pub fn save_confirm(app: &mut LightcraftApp, name: &str, group: &str, fields: &[
 
 /// The Manage Effect Presets window's body.
 pub fn manage_body(
-    app: &mut LightcraftApp,
+    app: &mut LccApp,
     ui: &mut egui::Ui,
     search: &mut String,
     selected: &mut Vec<String>,
@@ -682,7 +682,7 @@ pub fn manage_body(
 }
 
 /// The toast after an import (`preset.import` / `mask.importEffects` result): how many effects,
-/// in how many groups, and the settings they carry that LightCraft can't apply.
+/// in how many groups, and the settings they carry that the app can't apply.
 pub fn import_toast(v: &Value) -> String {
     let rows: Vec<&Value> = v["effects"].as_array().or_else(|| v["imported"].as_array()).into_iter().flatten().collect();
     let n = rows.len();

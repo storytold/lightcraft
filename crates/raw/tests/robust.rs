@@ -1,8 +1,6 @@
 //! Malformed-input robustness: decoding random or corrupted files must never panic.
 
-use lightcraft_raw::{
-    BlackLevel, Cfa, ColorData, DngCompression, DngWriteOptions, Method, OpcodeLists, Orientation, RawData, RawFormat, RawImage, Rect,
-};
+use lcc_raw::{BlackLevel, Cfa, ColorData, DngCompression, DngWriteOptions, Method, OpcodeLists, Orientation, RawData, RawFormat, RawImage, Rect};
 use proptest::prelude::*;
 
 fn sample(comp: DngCompression) -> Vec<u8> {
@@ -29,18 +27,18 @@ fn sample(comp: DngCompression) -> Vec<u8> {
         metadata: Default::default(),
         lens_metadata: Default::default(),
     };
-    lightcraft_raw::write_dng(&raw, &DngWriteOptions { compression: comp, ..Default::default() }).unwrap()
+    lcc_raw::write_dng(&raw, &DngWriteOptions { compression: comp, ..Default::default() }).unwrap()
 }
 
 fn exercise(bytes: &[u8]) {
-    let _ = lightcraft_raw::probe(bytes);
-    let _ = lightcraft_raw::embedded_preview(bytes);
-    if let Ok(img) = lightcraft_raw::decode(bytes)
+    let _ = lcc_raw::probe(bytes);
+    let _ = lcc_raw::embedded_preview(bytes);
+    if let Ok(img) = lcc_raw::decode(bytes)
         && img.width * img.height <= 1 << 16
     {
         let _ = img.develop(Method::Ahd);
-        let xy = lightcraft_raw::color::as_shot_white_xy(&img);
-        let _ = lightcraft_raw::color::camera_transform(&img, xy);
+        let xy = lcc_raw::color::as_shot_white_xy(&img);
+        let _ = lcc_raw::color::camera_transform(&img, xy);
     }
 }
 
@@ -71,7 +69,7 @@ proptest! {
     fn random_lj92_never_panics(data in proptest::collection::vec(any::<u8>(), 0..400)) {
         let mut s = vec![0xff, 0xd8, 0xff, 0xc3, 0, 11, 12, 0, 8, 0, 8, 1, 1, 0x11, 0];
         s.extend_from_slice(&data);
-        let _ = lightcraft_raw::ljpeg::decode(&s, 1 << 20);
+        let _ = lcc_raw::ljpeg::decode(&s, 1 << 20);
     }
 }
 
@@ -90,8 +88,8 @@ fn truncation_at_every_length() {
 #[test]
 fn hostile_dimensions_are_rejected_quickly() {
     // a DNG claiming a 60000 × 60000 16-bit image with 10 bytes of data
-    use lightcraft_tiff::tags as t;
-    use lightcraft_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
+    use lcc_tiff::tags as t;
+    use lcc_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
     let mut ifd = IfdBuilder::new();
     ifd.set(t::DNG_VERSION, Value::Byte(vec![1, 4, 0, 0]));
     ifd.set(t::IMAGE_WIDTH, Value::Long(vec![60000]));
@@ -103,7 +101,7 @@ fn hostile_dimensions_are_rejected_quickly() {
     ifd.set_image(ImageData::Tiles { tile_width: 60000, tile_height: 60000, tiles: vec![vec![0xff, 0xd8, 0xff, 0xd9]] });
     let bytes = TiffWriter::default().write(&[ifd]).unwrap();
     let t0 = std::time::Instant::now();
-    assert!(lightcraft_raw::decode(&bytes).is_err());
+    assert!(lcc_raw::decode(&bytes).is_err());
     assert!(t0.elapsed().as_secs_f64() < 2.0);
 }
 
@@ -113,8 +111,8 @@ fn hostile_dimensions_are_rejected_quickly() {
 /// read as 0 and non-finite samples as black: the photo develops to finite numbers.
 #[test]
 fn non_finite_black_levels_and_samples_develop() {
-    use lightcraft_tiff::tags as t;
-    use lightcraft_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
+    use lcc_tiff::tags as t;
+    use lcc_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
     let (w, h) = (32u32, 16u32);
     for black in [Value::Float(vec![f32::NAN]), Value::Double(vec![f64::INFINITY]), Value::Float(vec![64.0, f32::NAN, 64.0, 64.0])] {
         let mut ifd = IfdBuilder::new();
@@ -133,7 +131,7 @@ fn non_finite_black_levels_and_samples_develop() {
         let strip: Vec<u8> = (0..w * h).flat_map(|i| (100 + (i * 37 % 3000) as u16).to_le_bytes()).collect();
         ifd.set_image(ImageData::Strips { rows_per_strip: h, strips: vec![strip] });
         let bytes = TiffWriter::default().write(&[ifd]).unwrap();
-        let img = lightcraft_raw::decode(&bytes).unwrap_or_else(|e| panic!("{black:?}: {e}"));
+        let img = lcc_raw::decode(&bytes).unwrap_or_else(|e| panic!("{black:?}: {e}"));
         let rgb = img.develop(Method::Ahd).unwrap();
         assert!(rgb.data.iter().flatten().all(|v| v.is_finite()), "{black:?}: finite output");
         let _ = img.develop(Method::Ppg);
@@ -168,7 +166,7 @@ fn non_finite_black_levels_and_samples_develop() {
         lens_metadata: Default::default(),
         pixel_aspect: 1.0,
     };
-    for img in [raw.clone(), lightcraft_raw::decode(&lightcraft_raw::write_dng(&raw, &DngWriteOptions::default()).unwrap()).unwrap()] {
+    for img in [raw.clone(), lcc_raw::decode(&lcc_raw::write_dng(&raw, &DngWriteOptions::default()).unwrap()).unwrap()] {
         let rgb = img.develop(Method::Ahd).unwrap();
         assert!(rgb.data.iter().flatten().all(|v| v.is_finite()), "float NaN samples: finite output");
     }
@@ -283,13 +281,13 @@ mod cr3 {
 /// Both fixtures decode as built, so the mutations below hit live decode paths.
 #[test]
 fn cr3_fixtures_decode() {
-    let lossless = lightcraft_raw::decode(&cr3::lossless_file()).unwrap();
+    let lossless = lcc_raw::decode(&cr3::lossless_file()).unwrap();
     assert_eq!((lossless.width, lossless.height, lossless.bits), (4, 4, 14));
     assert_eq!(lossless.data.get(0), 8193.0);
-    let craw = lightcraft_raw::decode(&cr3::craw_file()).unwrap();
+    let craw = lcc_raw::decode(&cr3::craw_file()).unwrap();
     assert_eq!((craw.width, craw.height, craw.bits), (16, 16, 14));
     assert_eq!(craw.data.get(0), 8192.0);
-    assert_eq!(lightcraft_raw::probe_info(&cr3::craw_file()).unwrap(), craw.info());
+    assert_eq!(lcc_raw::probe_info(&cr3::craw_file()).unwrap(), craw.info());
 }
 
 proptest! {
@@ -309,6 +307,6 @@ proptest! {
         let keep = if cut % 3 == 0 { cut % data.len() } else { data.len() };
         exercise(&data[..keep]);
         // The header-only description path (used when importing) must hold up against the same mutations.
-        let _ = lightcraft_raw::probe_info(&data[..keep]);
+        let _ = lcc_raw::probe_info(&data[..keep]);
     }
 }

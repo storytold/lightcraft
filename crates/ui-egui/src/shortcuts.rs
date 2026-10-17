@@ -7,7 +7,13 @@ use std::sync::OnceLock;
 use egui::{Key, Modifiers};
 use serde_json::{Value, json};
 
-use crate::LightcraftApp;
+use crate::LccApp;
+
+/// The Classic keymap set and keymap files (fork-owned).
+#[path = "keymap_classic.rs"]
+mod classic;
+pub(crate) use classic::tab_bound;
+pub use classic::{CLASSIC, KeymapSet, active_set, choose_set, default_in, export_file, import_file, import_value, keymap_file, set_active};
 
 /// The user's changes to the keymap: command id → shortcut (`""` = no shortcut). Saved with the
 /// app settings (`ui.json`); commands not listed keep their declared shortcut.
@@ -37,7 +43,7 @@ pub fn bindable() -> &'static [Bindable] {
             }
         }
         let ui_keys: Vec<(Modifiers, Key)> = v.iter().filter_map(|b| b.default.and_then(parse)).collect();
-        for c in lightcraft_engine::command_specs() {
+        for c in lcc_engine::command_specs() {
             if v.iter().any(|b| b.id == c.id) {
                 continue;
             }
@@ -65,7 +71,7 @@ pub fn binding<'a>(keymap: &'a Keymap, id: &str, default: Option<&'a str>) -> Op
 
 /// The effective shortcut of command `id` (`None` for unknown commands).
 pub fn shortcut_of<'a>(keymap: &'a Keymap, id: &str) -> Option<&'a str> {
-    find_bindable(id).and_then(|b| binding(keymap, id, b.default))
+    find_bindable(id).and_then(|b| binding(keymap, id, b.default()))
 }
 
 /// Engine commands that intentionally share a key and are disambiguated by context in [`handle`].
@@ -77,7 +83,7 @@ pub fn conflicts(keymap: &Keymap, id: &str, sc: &str) -> Vec<&'static str> {
     bindable()
         .iter()
         .filter(|b| b.id != id && !CONTEXTUAL.iter().any(|(x, y)| (*x == id && *y == b.id) || (*y == id && *x == b.id)))
-        .filter(|b| binding(keymap, b.id, b.default).and_then(parse) == Some(key))
+        .filter(|b| binding(keymap, b.id, b.default()).and_then(parse) == Some(key))
         .map(|b| b.id)
         .collect()
 }
@@ -108,7 +114,7 @@ pub fn assign(keymap: &mut Keymap, id: &str, sc: Option<&str>) -> Result<Vec<&'s
 
 /// Store `sc` for `id`, dropping the entry when it equals the declared shortcut.
 fn set(keymap: &mut Keymap, id: &str, sc: Option<&str>) {
-    let default = find_bindable(id).and_then(|b| b.default);
+    let default = find_bindable(id).and_then(|b| b.default());
     let same = match (sc, default) {
         (None, None) => true,
         (Some(a), Some(b)) => parse(a) == parse(b),
@@ -124,11 +130,11 @@ fn set(keymap: &mut Keymap, id: &str, sc: Option<&str>) {
 /// Restore the declared shortcut of `id`, taking it away from a command the user gave it to.
 pub fn reset(keymap: &mut Keymap, id: &str) -> Result<Vec<&'static str>, String> {
     let b = find_bindable(id).ok_or_else(|| format!("unknown command: {id}"))?;
-    assign(keymap, id, b.default)
+    assign(keymap, id, b.default())
 }
 
 /// `app.setShortcut {id, shortcut?, reset?}`: `shortcut` null or `""` removes it.
-pub fn set_shortcut(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
+pub fn set_shortcut(app: &mut LccApp, p: &Value) -> Result<Value, String> {
     let id = p.get("id").and_then(Value::as_str).ok_or("missing id")?;
     let keymap = &mut app.ui.settings.keymap;
     let lost = if p.get("reset").and_then(Value::as_bool).unwrap_or(false) {
@@ -196,6 +202,8 @@ pub fn format(m: Modifiers, k: Key) -> Option<String> {
 /// primary keymap assigns elsewhere, see docs/ui-parity.md → Shortcuts). Shown in Help → Keyboard Shortcuts.
 pub const ALIASES: &[(&str, &str, &str)] = &[
     ("Cmd+D", "library.selectNone", "{}"),
+    // F11: the Windows / Linux full-screen key (issue #2)
+    ("F11", "view.enterFullScreen", "{}"),
     ("Shift+E", "dialog.export", "{}"),
     ("Cmd+E", "app.exportPrevious", "{}"),
     ("Space", "view.zoomToggle", "{}"),
@@ -207,6 +215,8 @@ pub const ALIASES: &[(&str, &str, &str)] = &[
     // grid thumbnail size: Classic's key is `=`; `+` (keypad, or Shift+= reported as Plus) agrees
     ("Plus", "view.thumbSizeUp", "{}"),
     ("Shift+Plus", "view.thumbSizeUp", "{}"),
+    // Lightroom Classic: Shift+P / X / U flag and advance in Library and Develop alike
+    ("Shift+P", "photo.flag", r#"{"flag": "pick", "advance": true}"#),
     ("Shift+X", "photo.flag", r#"{"flag": "reject", "advance": true}"#),
     ("Shift+Z", "photo.flag", r#"{"flag": "pick", "advance": true}"#),
     ("Shift+U", "photo.flag", r#"{"flag": "none", "advance": true}"#),
@@ -310,7 +320,7 @@ fn grid_bracket_command(keymap: &Keymap, grid: bool, id: &'static str, shortcut:
 
 /// Content widgets keep keyboard ownership, including text fields and arrow-driven sliders.
 /// Dock chrome owns activation, traversal, resizing and cancellation; its other keys reach commands.
-fn keyboard_owned(app: &LightcraftApp, ctx: &egui::Context) -> bool {
+fn keyboard_owned(app: &LccApp, ctx: &egui::Context) -> bool {
     if !ctx.egui_wants_keyboard_input() {
         // Escape drops egui focus before shortcuts run; keep the numeric edit's whole input batch.
         return ctx.input(|input| input.key_pressed(Key::Escape))
@@ -330,7 +340,7 @@ fn keyboard_owned(app: &LightcraftApp, ctx: &egui::Context) -> bool {
         .ui
         .docking
         .as_ref()
-        .is_some_and(|workspace| craft_ui::docking::DockArea::new(egui::Id::new("lightcraft-docking")).chrome_has_focus(ctx, &workspace.layout));
+        .is_some_and(|workspace| craft_ui::docking::DockArea::new(egui::Id::new("app-docking")).chrome_has_focus(ctx, &workspace.layout));
     if !chrome {
         return true;
     }
@@ -341,8 +351,10 @@ fn keyboard_owned(app: &LightcraftApp, ctx: &egui::Context) -> bool {
     })
 }
 
-pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
-    if !matches!(app.ui.dialog, Some(crate::state::Dialog::Shortcuts)) {
+pub fn handle(app: &mut LccApp, ctx: &egui::Context) {
+    // Space held over a tool ends when the key is up, whoever has the keyboard by then
+    crate::space_hand::tick(app, ctx);
+    if !classic::records_shortcuts(app.ui.dialog.as_ref()) {
         app.recording_shortcut = None;
     }
     // Dialogs own their keys (including Esc and text editing); background photo actions wait.
@@ -356,23 +368,33 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
     if keyboard_owned(app, ctx) || app.recording_shortcut.is_some() || app.ui.name_edit.is_some() {
         return;
     }
+    // a video in the loupe: Space plays / pauses, ←/→ step frames while paused
+    crate::video_ui::handle_keys(app, ctx);
+    canvas_nudge(app, ctx);
     let mut fire: Vec<String> = Vec::new();
     // shortcuts the native menu bar handles (it consumes those key presses itself)
     let native = |sc: &str| app.native_shortcuts.contains(sc);
     let mut aliased: Vec<(&str, serde_json::Value)> = Vec::new();
+    set_active(app.ui.settings.keymap_set);
     let keymap = &app.ui.settings.keymap;
     let grid = library_grid(app);
     // The grid navigation keys act on the photos in view, so they wait while the full-screen preview
     // covers the grid: a key must not move the selection onto photos nobody can see.
     let grid_navigation = grid && !app.ui.fullscreen;
-    // keys the user gave to a command: the fixed bindings below (aliases, ratings) yield to them
-    let taken: Vec<(Modifiers, Key)> = keymap.values().filter_map(|s| parse(s)).collect();
+    // keys the user gave to a command: the fixed bindings below (aliases, ratings) yield to them;
+    // so do keys the active set gives a command (Classic's ⇧E is the secondary loupe, not export)
+    let taken: Vec<(Modifiers, Key)> = keymap.values().filter_map(|s| parse(s)).chain(classic::taken()).collect();
     // an open popup (a menu, a date picker's calendar) closes on Esc itself: Esc's command (Back,
     // which also closes dialogs) waits until nothing is open
     let popup_open = egui::Popup::is_any_open(ctx);
     // Esc that just took a text field's focus away (it gives back the field's text) does nothing else
     let popup_open = popup_open || app.text_focus;
+    // Esc during a sidebar section's drag gives the drag up (`panels::left`), and does not also leave the loupe
+    let popup_open = popup_open || app.ui.dragging_section.is_some();
+    let (module_keys, mut consumed) = (classic::module_keys(app.ui.module), Vec::new());
+    classic::deferred_tabs(&mut app.deferred_tabs, keymap, &mut fire);
     ctx.input(|i| {
+        classic::module_key_presses(i, module_keys, keymap, &mut consumed, &mut aliased);
         // Enter opens the active grid photo; widgets, popups and custom bindings keep the key.
         if grid
             && app.session.active().is_some()
@@ -384,9 +406,10 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
             fire.push("view.detail".to_string());
         }
         for b in bindable() {
-            if let Some(sc) = binding(keymap, b.id, b.default)
+            if let Some(sc) = binding(keymap, b.id, b.default())
                 && let Some((m, k)) = parse(sc)
                 && !native(sc)
+                && !consumed.contains(&(m, k))
                 && !(k == Key::Escape && popup_open)
                 && matches(i, m, k)
                 && let Some(id) = grid_bracket_command(keymap, grid, b.id, (m, k))
@@ -394,9 +417,12 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
                 fire.push(id.to_string());
             }
         }
+        // a held Space repeats: it toggles the zoom (or takes the hand) once per press
+        let space_repeat = !i.events.iter().any(|e| matches!(e, egui::Event::Key { key: Key::Space, pressed: true, repeat: false, .. }));
         for (sc, id, params) in ALIASES {
             if let Some((m, k)) = parse(sc).filter(|_| !native(sc))
                 && !(k == Key::Escape && popup_open)
+                && !(k == Key::Space && space_repeat)
                 && !taken.contains(&(m, k))
                 && matches(i, m, k)
             {
@@ -435,7 +461,7 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
     use crate::panels::compare;
     // rating/flag/label keys: in Compare/Survey they act on the active photo only; Shift+key or
     // Auto Advance then moves on (next candidate in Compare, next photo elsewhere)
-    let cull = |app: &mut LightcraftApp, id: &str, mut params: serde_json::Value, advance: bool| {
+    let cull = |app: &mut LccApp, id: &str, mut params: serde_json::Value, advance: bool| {
         compare::target_active(app, &mut params);
         let ok = app.run(id, params).is_ok();
         if ok && (advance || app.ui.auto_advance) {
@@ -450,9 +476,16 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
             }
             continue;
         }
+        // over a tool on the photo, held Space is the view's hand; a tap toggles on its release
+        if id == "view.zoomToggle" && crate::space_hand::begin(app, ctx) {
+            continue;
+        }
         // flag/rate aliases (Shift+X…) go through the culling path: active photo in Compare/Survey,
         // `advance` moves to the next candidate there
-        if matches!(id, "photo.flag" | "photo.rate" | "photo.label") {
+        if id == "view.filterBar" && !library_grid(app) {
+            // Library's backslash is the filter bar in the grids; in a loupe it stays Show Original
+            let _ = app.run("view.showOriginal", params);
+        } else if matches!(id, "photo.flag" | "photo.rate" | "photo.label") {
             let mut params = params;
             let advance = params.get("advance").and_then(serde_json::Value::as_bool).unwrap_or(false);
             if let Some(o) = params.as_object_mut() {
@@ -466,6 +499,7 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
             app.toast(ctx, e);
         }
     }
+    classic::keep_focus_on_panel_toggle(ctx, &fire);
     for f in fire {
         // a slideshow: ←/→ step (a cut)
         if app.ui.slideshow.is_some() && matches!(f.as_str(), "library.next" | "library.previous") {
@@ -485,9 +519,6 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
             cull(app, &f, json!({}), false);
         } else if let Some(l) = f.strip_prefix("label:") {
             cull(app, "photo.label", json!({"label": l}), false);
-        } else if f == "panel.presets" && library_grid(app) {
-            // Classic's Shift+P picks and advances in Library; keep the Presets binding elsewhere.
-            cull(app, "photo.flag", json!({"flag": "pick"}), true);
         } else if f == "view.softProof" && matches!(app.ui.view, crate::state::ViewMode::PhotoGrid | crate::state::ViewMode::SquareGrid) {
             // S in a grid: expand / collapse the stack (Lightroom's Library binding)
             let _ = app.run("stack.toggle", json!({}));
@@ -523,9 +554,9 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
             cull(app, &f, json!({}), false);
             let flag = active.and_then(|id| app.session.catalog.photo(id)).map(|p| p.flag);
             match flag {
-                Some(lightcraft_catalog::Flag::Pick) => app.toast(ctx, crate::i18n::tr("Flagged as Pick")),
-                Some(lightcraft_catalog::Flag::Reject) => app.toast(ctx, crate::i18n::tr("Flagged as Reject")),
-                Some(lightcraft_catalog::Flag::None) => app.toast(ctx, crate::i18n::tr("Unflagged")),
+                Some(lcc_catalog::Flag::Pick) => app.toast(ctx, crate::i18n::tr("Flagged as Pick")),
+                Some(lcc_catalog::Flag::Reject) => app.toast(ctx, crate::i18n::tr("Flagged as Reject")),
+                Some(lcc_catalog::Flag::None) => app.toast(ctx, crate::i18n::tr("Unflagged")),
                 None => {}
             }
         } else if matches!(f.as_str(), "photo.pick" | "photo.reject" | "photo.unflag") && app.ui.right != crate::state::RightPanel::Crop {
@@ -571,7 +602,9 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
                 }
             }
             // B: the brush while editing; in the grids, add to the target album (Quick Collection)
-            if f == "tool.brush" && matches!(app.ui.view, crate::state::ViewMode::PhotoGrid | crate::state::ViewMode::SquareGrid) {
+            if f == "album.toggleTarget"
+                || (f == "tool.brush" && matches!(app.ui.view, crate::state::ViewMode::PhotoGrid | crate::state::ViewMode::SquareGrid))
+            {
                 if let Ok(r) = app.run("album.toggleTarget", json!({})) {
                     let n = app.session.selected().len();
                     let what = crate::i18n::tr_format!("{n} photo{}", if n == 1 { "" } else { "s" }, n = n);
@@ -620,10 +653,8 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
             }
             // Up / Down in the grids go to the cell above / below (the filmstrip steps one photo)
             if matches!(f.as_str(), "library.up" | "library.down") {
-                // over a slider the arrows nudge it (widgets::slider takes the key)
-                let over_slider =
-                    ctx.pointer_hover_pos().is_some_and(|p| app.widgets.iter().any(|(id, r)| id.starts_with("slider:") && r.contains(p)));
-                if over_slider {
+                // over a slider (or with one focused) the arrows nudge it instead (`widgets::slider`)
+                if crate::widgets::arrows_go_to_a_slider(ctx, &app.widgets) {
                     continue;
                 }
                 match crate::panels::grid::row_distance(app, f == "library.down") {
@@ -655,7 +686,55 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
     }
 }
 
-pub(crate) fn library_grid(app: &LightcraftApp) -> bool {
+/// Arrow keys reach the canvas tools from the keyboard (accessibility; the tools are otherwise
+/// pointer-only): while cropping they move the crop frame and with ⌥ move its right / bottom edge;
+/// in Remove they move the selected spot. 1 % of the image per press, ⇧ ×10; one undo step each.
+/// Outside these tools ← / → keep stepping through photos.
+fn canvas_nudge(app: &mut LccApp, ctx: &egui::Context) {
+    use crate::state::RightPanel as R;
+    if app.ui.view != crate::state::ViewMode::Detail {
+        return;
+    }
+    let crop = app.ui.right == R::Crop;
+    let spot = app.ui.right == R::Remove && app.session.active_spot.is_some();
+    if !crop && !spot {
+        return;
+    }
+    let arrows = [(Key::ArrowLeft, -1.0, 0.0), (Key::ArrowRight, 1.0, 0.0), (Key::ArrowUp, 0.0, -1.0), (Key::ArrowDown, 0.0, 1.0)];
+    let mut moves: Vec<(f64, f64, bool)> = Vec::new();
+    ctx.input_mut(|i| {
+        for (key, dx, dy) in arrows {
+            for (m, step, edge) in [
+                // most specific first: egui's matching ignores a Shift the pattern leaves out
+                (Modifiers::ALT | Modifiers::SHIFT, 0.1, true),
+                (Modifiers::ALT, 0.01, true),
+                (Modifiers::SHIFT, 0.1, false),
+                (Modifiers::NONE, 0.01, false),
+            ] {
+                if (crop || !edge) && i.consume_key(m, key) {
+                    moves.push((dx * step, dy * step, edge));
+                }
+            }
+        }
+    });
+    for (dx, dy, edge) in moves {
+        let r = if crop {
+            let handle = match (edge, dx != 0.0) {
+                (false, _) => "move",
+                (true, true) => "right",
+                (true, false) => "bottom",
+            };
+            app.run("crop.drag", json!({"handle": handle, "from": [0.5, 0.5], "to": [0.5 + dx, 0.5 + dy]}))
+        } else {
+            app.run("spot.update", json!({"move": [dx, dy]}))
+        };
+        if let Err(e) = r {
+            app.toast(ctx, e);
+        }
+    }
+}
+
+pub(crate) fn library_grid(app: &LccApp) -> bool {
     matches!(app.ui.view, crate::state::ViewMode::PhotoGrid | crate::state::ViewMode::SquareGrid)
 }
 
@@ -663,12 +742,12 @@ pub(crate) fn library_grid(app: &LightcraftApp) -> bool {
 mod tests {
 
     fn library() -> crate::headless::Headless {
-        use lightcraft_catalog::{Op, Photo, PhotoId, Source};
-        let mut session = lightcraft_engine::Session::new();
+        use lcc_catalog::{Op, Photo, PhotoId, Source};
+        let mut session = lcc_engine::Session::new();
         for id in 1..=4 {
             let photo = Photo::new(
                 PhotoId(id),
-                Source::File { path: format!("/lightcraft-shortcuts/{id}.jpg") },
+                Source::File { path: format!("/app-shortcuts/{id}.jpg") },
                 &format!("{id}.jpg"),
                 "JPEG",
                 100,
@@ -679,7 +758,7 @@ mod tests {
         }
         session.execute("library.sort", &json!({"key": "fileName", "ascending": true})).unwrap();
         session.execute("library.select", &json!({"ids": [1]})).unwrap();
-        let app = LightcraftApp::new(session, crate::Services { png: None, ..Default::default() });
+        let app = LccApp::new(session, crate::Services { png: None, ..Default::default() });
         let mut h = crate::headless::Headless::new(app, [1200.0, 800.0], 1.0);
         h.app.ui.view = crate::state::ViewMode::PhotoGrid;
         for _ in 0..3 {
@@ -702,7 +781,7 @@ mod tests {
     #[test]
     fn select_only_active_keeps_the_active_photo_and_the_edit_undo_step() {
         use crate::state::ViewMode;
-        use lightcraft_catalog::PhotoId;
+        use lcc_catalog::PhotoId;
         for view in [ViewMode::PhotoGrid, ViewMode::SquareGrid, ViewMode::Detail] {
             let mut h = library();
             h.app.ui.view = view;
@@ -721,7 +800,7 @@ mod tests {
 
     #[test]
     fn select_only_active_yields_to_a_focused_text_field() {
-        use lightcraft_catalog::PhotoId;
+        use lcc_catalog::PhotoId;
         let mut h = library();
         h.app.session.execute("library.select", &json!({"ids": [1, 2], "active": 2})).unwrap();
         let r = h.request("ui.clickWidget", json!({"id": "field:search"}), std::time::Duration::from_secs(20));
@@ -733,7 +812,7 @@ mod tests {
 
     #[test]
     fn select_only_active_follows_the_keymap() {
-        use lightcraft_catalog::PhotoId;
+        use lcc_catalog::PhotoId;
         let mut h = library();
         let both = vec![PhotoId(1), PhotoId(2)];
         h.app.session.execute("library.select", &json!({"ids": [1, 2], "active": 2})).unwrap();
@@ -763,7 +842,7 @@ mod tests {
 
     #[test]
     fn library_rating_labels_flags_and_undo() {
-        use lightcraft_catalog::{ColorLabel, Flag, PhotoId};
+        use lcc_catalog::{ColorLabel, Flag, PhotoId};
         for view in [crate::state::ViewMode::PhotoGrid, crate::state::ViewMode::SquareGrid] {
             let mut h = library();
             h.app.ui.view = view;
@@ -809,7 +888,7 @@ mod tests {
 
     #[test]
     fn shift_culling_keys_advance_exactly_once() {
-        use lightcraft_catalog::{ColorLabel, Flag, PhotoId};
+        use lcc_catalog::{ColorLabel, Flag, PhotoId};
         for auto in [false, true] {
             for (k, rating, label, flag) in [
                 ("0", 0, None, Flag::Pick),
@@ -840,23 +919,44 @@ mod tests {
         assert_eq!(h.app.session.active(), Some(PhotoId(4)), "last photo stays selected");
     }
 
+    /// Lightroom Classic (issue #1707): Shift+P / X / U flag and advance in the grids and in
+    /// Detail (Develop and its filmstrip) alike, in the grid order; the last photo stays put.
     #[test]
-    fn shift_pick_preserves_presets_outside_the_library_grids() {
+    fn shift_flag_keys_advance_in_every_view() {
+        use crate::state::ViewMode;
+        use lcc_catalog::{Flag, PhotoId};
+        for view in [ViewMode::PhotoGrid, ViewMode::SquareGrid, ViewMode::Detail] {
+            let mut h = library();
+            h.app.ui.view = view;
+            for (k, flag, next) in [("P", Flag::Pick, 2), ("X", Flag::Reject, 3), ("U", Flag::None, 4), ("P", Flag::Pick, 4)] {
+                let before = h.app.session.active().unwrap();
+                let other = if flag == Flag::Reject { "pick" } else { "reject" };
+                h.app.session.execute("photo.flag", &json!({"flag": other})).unwrap();
+                key(&mut h, k, true);
+                assert_eq!(h.app.session.catalog.photo(before).unwrap().flag, flag, "{view:?} Shift+{k}");
+                assert_eq!(h.app.session.active(), Some(PhotoId(next)), "{view:?} Shift+{k}");
+            }
+            assert!(!h.app.ui.presets, "{view:?}: Shift+P must not open Presets");
+            assert_eq!(h.app.ui.view, view);
+        }
+    }
+
+    /// Presets lost its default Shift+P; giving the key back to it in the keymap wins over the alias.
+    #[test]
+    fn shift_p_assigned_to_presets_opens_presets() {
         let mut h = library();
-        h.app.ui.view = crate::state::ViewMode::SquareGrid;
-        key(&mut h, "P", true);
-        assert_eq!(h.app.session.active(), Some(lightcraft_catalog::PhotoId(2)));
-        assert!(!h.app.ui.presets, "grid Shift+P must not open Presets");
-        assert_eq!(h.app.ui.view, crate::state::ViewMode::SquareGrid);
         h.app.ui.view = crate::state::ViewMode::Detail;
+        assert_eq!(shortcut_of(&h.app.ui.settings.keymap, "panel.presets"), None);
+        assign(&mut h.app.ui.settings.keymap, "panel.presets", Some("Shift+P")).unwrap();
         key(&mut h, "P", true);
         assert!(h.app.ui.presets);
-        assert_eq!(h.app.session.active(), Some(lightcraft_catalog::PhotoId(2)));
+        assert_eq!(h.app.session.active(), Some(lcc_catalog::PhotoId(1)));
+        assert_eq!(h.app.session.catalog.photo(lcc_catalog::PhotoId(1)).unwrap().flag, lcc_catalog::Flag::None);
     }
 
     #[test]
     fn shift_label_targets_only_candidate_in_compare() {
-        use lightcraft_catalog::{ColorLabel, PhotoId};
+        use lcc_catalog::{ColorLabel, PhotoId};
         let mut h = library();
         h.app.session.execute("library.select", &json!({"ids": [1, 2], "active": 1})).unwrap();
         crate::panels::compare::enter_compare(&mut h.app).unwrap();
@@ -868,7 +968,7 @@ mod tests {
 
     #[test]
     fn plain_culling_keys_auto_advance_once() {
-        use lightcraft_catalog::PhotoId;
+        use lcc_catalog::PhotoId;
         for k in ["0", "5", "6", "9", "P", "X", "U"] {
             let mut h = library();
             h.app.ui.auto_advance = true;
@@ -879,7 +979,7 @@ mod tests {
 
     #[test]
     fn color_label_actions_show_feedback_only_after_success() {
-        use lightcraft_catalog::PhotoId;
+        use lcc_catalog::PhotoId;
         let mut h = library();
         for shift in [false, true] {
             for (k, name) in [("6", "Red"), ("7", "Yellow"), ("8", "Green"), ("9", "Blue")] {
@@ -912,7 +1012,7 @@ mod tests {
 
     #[test]
     fn shifted_number_punctuation_rates_and_advances() {
-        use lightcraft_catalog::PhotoId;
+        use lcc_catalog::PhotoId;
         let mut h = library();
         // A real winit event on a layout with Shift+1 = !, rather than ui.key's logical Num1.
         for pressed in [true, false] {
@@ -931,7 +1031,7 @@ mod tests {
 
     #[test]
     fn library_keys_yield_to_search_and_crop_context() {
-        use lightcraft_catalog::{Flag, PhotoId};
+        use lcc_catalog::{Flag, PhotoId};
         let mut h = library();
         let r = h.request("ui.clickWidget", json!({"id": "field:search"}), std::time::Duration::from_secs(20));
         assert_eq!(r["ok"], true, "{r}");
@@ -972,7 +1072,7 @@ mod tests {
                 assert!(parse(sc).is_some(), "{id}: {sc}");
             }
         }
-        for c in lightcraft_engine::command_specs() {
+        for c in lcc_engine::command_specs() {
             if let Some(sc) = c.shortcut {
                 assert!(parse(sc).is_some(), "{}: {sc}", c.id);
             }
@@ -984,7 +1084,7 @@ mod tests {
         let ui: Vec<&str> = crate::menus::ui_commands().map(|c| c.0).collect();
         for (sc, id, params) in ALIASES {
             assert!(parse(sc).is_some(), "{id}: {sc}");
-            assert!(ui.contains(id) || lightcraft_engine::find_command(id).is_some(), "alias {sc} → unknown command {id}");
+            assert!(ui.contains(id) || lcc_engine::find_command(id).is_some(), "alias {sc} → unknown command {id}");
             assert!(serde_json::from_str::<serde_json::Value>(params).is_ok(), "alias {sc}: bad params");
         }
     }
@@ -1006,6 +1106,8 @@ mod tests {
 
     #[test]
     fn assigning_a_key_moves_it_and_reset_restores_it() {
+        // the Alternative set's keys (Classic gives D to Develop)
+        set_active(KeymapSet::Alternative);
         let mut keymap = Keymap::new();
         assert_eq!(shortcut_of(&keymap, "view.survey"), Some("N"));
         // D belongs to Detail: Survey takes it, Detail loses it
@@ -1040,6 +1142,7 @@ mod tests {
     /// Junk in a hand-edited `ui.json` keymap is ignored (the declared shortcut stays), never a panic.
     #[test]
     fn junk_keymap_entries_mean_no_shortcut() {
+        set_active(KeymapSet::Alternative);
         let mut keymap = Keymap::new();
         keymap.insert("view.survey".into(), "Hyper+☃".into());
         keymap.insert("no.suchCommand".into(), "K".into());
@@ -1070,7 +1173,7 @@ mod tests {
             ui.push((parse(sc).unwrap(), format!("alias {id}")));
         }
         let mut engine: Vec<((Modifiers, Key), &str)> = Vec::new();
-        for c in lightcraft_engine::command_specs() {
+        for c in lcc_engine::command_specs() {
             if let Some(k) = c.shortcut.and_then(parse) {
                 engine.push((k, c.id));
             }
@@ -1094,7 +1197,7 @@ mod tests {
     mod issue1771 {
         use super::*;
         use crate::state::{Dialog, ViewMode};
-        use lightcraft_catalog::PhotoId;
+        use lcc_catalog::PhotoId;
 
         fn grid(view: ViewMode) -> crate::headless::Headless {
             let mut h = library();
@@ -1269,3 +1372,7 @@ mod relative_rating_tests;
 #[cfg(test)]
 #[path = "shortcuts/tests_flag_cycle.rs"]
 mod flag_cycle_tests;
+
+#[cfg(test)]
+#[path = "shortcuts/tests_filter_bar_key.rs"]
+mod filter_bar_key_tests;

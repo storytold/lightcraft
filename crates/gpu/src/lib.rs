@@ -1,16 +1,16 @@
-//! The LightCraft develop pipeline on the GPU (wgpu compute, WGSL kernels).
+//! The develop pipeline on the GPU (wgpu compute, WGSL kernels).
 //!
-//! The CPU pipeline (`lightcraft-pipeline`) is the reference: every kernel here is a port of a CPU
-//! stage, both read the same resolved parameters ([`lightcraft_pipeline::Plan`],
-//! [`lightcraft_pipeline::finish::FinishParams`]), and the equivalence tests (`tests/`) render the
+//! The CPU pipeline (`lcc-pipeline`) is the reference: every kernel here is a port of a CPU
+//! stage, both read the same resolved parameters ([`lcc_pipeline::Plan`],
+//! [`lcc_pipeline::finish::FinishParams`]), and the equivalence tests (`tests/`) render the
 //! same settings on both and bound the difference in 8-bit sRGB. Stages without a kernel run on the
 //! CPU inside the same render (per-stage hybrid); see `docs/gpu-pipeline.md`.
 //!
-//! Which backends wgpu may load (DX12 only on Windows; `LIGHTCRAFT_GPU_BACKEND`, `WGPU_BACKEND`) and
+//! Which backends wgpu may load (DX12 only on Windows; `{ENV_PREFIX}_GPU_BACKEND`, `WGPU_BACKEND`) and
 //! the crash sentinel around device creation: [`backend`] (issue #136).
 //!
-//! Use [`render`]: it returns `None` when the GPU is unavailable, disabled (`LIGHTCRAFT_GPU=0`,
-//! `LIGHTCRAFT_GPU_BACKEND=off` or [`set_enabled`]), the render does not fit the device, or the device reported an error, ran out
+//! Use [`render`]: it returns `None` when the GPU is unavailable, disabled (`{ENV_PREFIX}_GPU=0`,
+//! `{ENV_PREFIX}_GPU_BACKEND=off` or [`set_enabled`]), the render does not fit the device, or the device reported an error, ran out
 //! of memory or returned an incomplete image — callers then render on the CPU. [`try_render`] is
 //! the same call reporting why *this* render fell back ([`Fallback`]); [`unavailable_reason`] and
 //! [`last_fallback`] (the latest fallback in the process) feed the status displays (`ui.inspect` →
@@ -25,12 +25,14 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use lightcraft_develop::DevelopSettings;
-use lightcraft_pipeline::{RenderRequest, Rendered, SourceInfo, StageCache};
-use lightcraft_raster::Rgb32f;
+use lcc_develop::DevelopSettings;
+use lcc_pipeline::{RenderRequest, Rendered, SourceInfo, StageCache};
+use lcc_raster::Rgb32f;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod backend;
+#[cfg(not(target_arch = "wasm32"))]
+mod budget;
 #[cfg(not(target_arch = "wasm32"))]
 mod ctx;
 #[cfg(not(target_arch = "wasm32"))]
@@ -43,6 +45,8 @@ pub mod nn;
 mod params;
 #[cfg(not(target_arch = "wasm32"))]
 mod render;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod video_lut;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use render::GpuStages;
@@ -72,21 +76,21 @@ fn record_fallback(reason: String) {
 }
 
 /// Why renders do not use the GPU, or `None` when they do (or will, once the device is created).
-/// E.g. "disabled by LIGHTCRAFT_GPU=0", "software adapter (llvmpipe …) skipped", "device lost …".
+/// E.g. "disabled by {ENV_PREFIX}_GPU=0", "software adapter (llvmpipe …) skipped", "device lost …".
 /// Never blocks.
 pub fn unavailable_reason() -> Option<String> {
     if env_disabled() {
         #[cfg(not(target_arch = "wasm32"))]
         if backend::env_off() {
-            return Some("disabled by LIGHTCRAFT_GPU_BACKEND=off".into());
+            return Some(format!("disabled by {}=off", lcc_brand::env_var("GPU_BACKEND")));
         }
-        return Some("disabled by LIGHTCRAFT_GPU=0".into());
+        return Some(format!("disabled by {}=0", lcc_brand::env_var("GPU")));
     }
     if !ENABLED.load(Ordering::Relaxed) {
         return Some("disabled by the GPU rendering preference (app.gpu)".into());
     }
     if shutting_down() {
-        return Some("LightCraft is closing".into());
+        return Some("the app is closing".into());
     }
     if BROKEN.load(Ordering::Relaxed) {
         let r = BROKEN_REASON.lock().unwrap_or_else(|e| e.into_inner()).clone().unwrap_or_else(|| "device error".into());
@@ -148,6 +152,9 @@ pub enum Fault {
     DropWork,
     /// A storage-buffer limit of this many bytes for this render.
     Limit(u64),
+    /// Every buffer the render asks for finds the device out of memory, on the first attempt
+    /// only: the retry with the device to itself succeeds.
+    OutOfMemory,
 }
 
 thread_local! {
@@ -194,7 +201,7 @@ pub fn reset_failures() {
     let _ = BROKEN_HERE.try_with(|b| *b.borrow_mut() = None);
 }
 
-/// Allow or forbid GPU rendering at runtime (a preference). `LIGHTCRAFT_GPU=0` forbids it for the
+/// Allow or forbid GPU rendering at runtime (a preference). `{ENV_PREFIX}_GPU=0` forbids it for the
 /// whole process regardless.
 pub fn set_enabled(on: bool) {
     ENABLED.store(on, Ordering::Relaxed);
@@ -246,16 +253,20 @@ pub fn wait_idle(timeout: std::time::Duration) -> bool {
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn switched_off() -> Option<String> {
     if env_disabled() {
-        return Some(if backend::env_off() { "disabled by LIGHTCRAFT_GPU_BACKEND=off" } else { "disabled by LIGHTCRAFT_GPU=0" }.into());
+        return Some(if backend::env_off() {
+            format!("disabled by {}=off", lcc_brand::env_var("GPU_BACKEND"))
+        } else {
+            format!("disabled by {}=0", lcc_brand::env_var("GPU"))
+        });
     }
     (!ENABLED.load(Ordering::Relaxed)).then(|| "disabled by the GPU rendering preference (app.gpu)".into())
 }
 
-/// `LIGHTCRAFT_GPU=0` (or `LIGHTCRAFT_GPU_BACKEND=off`): no GPU for the whole process.
+/// `{ENV_PREFIX}_GPU=0` (or `{ENV_PREFIX}_GPU_BACKEND=off`): no GPU for the whole process.
 fn env_disabled() -> bool {
     static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *OFF.get_or_init(|| {
-        let off = std::env::var("LIGHTCRAFT_GPU").is_ok_and(|v| matches!(v.trim(), "0" | "off" | "false" | "no"));
+        let off = lcc_brand::env("GPU").is_some_and(|v| matches!(v.trim(), "0" | "off" | "false" | "no"));
         #[cfg(not(target_arch = "wasm32"))]
         let off = off || backend::env_off();
         off
@@ -277,7 +288,7 @@ pub(crate) fn device() -> Option<&'static ctx::Gpu> {
     // creating the device is a long call into the driver: not once the process is ending
     let _work = exit::enter()?;
     GPU.get_or_init(|| {
-        let Some(backends) = backend::compute_backends() else { return Err("disabled by LIGHTCRAFT_GPU_BACKEND=off".into()) };
+        let Some(backends) = backend::compute_backends() else { return Err(format!("disabled by {}=off", lcc_brand::env_var("GPU_BACKEND"))) };
         let r = backend::with_init_marker(backends, || {
             std::panic::catch_unwind(|| ctx::Gpu::new(backends)).unwrap_or_else(|_| Err("device creation panicked".into()))
         });
@@ -439,12 +450,25 @@ pub fn render(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &R
     try_render(src, info, s, req, stages).ok()
 }
 
+/// Grade one video frame ([`lcc_pipeline::grade`]): on the GPU when it is available, else on the
+/// CPU. Returns the sRGB 8-bit frame and whether the GPU rendered it.
+pub fn grade_frame(img: &Arc<Rgb32f>, settings: &DevelopSettings, quality: lcc_pipeline::Quality) -> (lcc_raster::Rgba8, bool) {
+    use lcc_pipeline::grade;
+    let s = grade::video_settings(settings);
+    let req = grade::grade_request(img.width, img.height, quality);
+    let info = grade::video_source_info();
+    match try_render(img, &info, &s, &req, None) {
+        Ok(r) => (r.image, true),
+        Err(_) => (lcc_pipeline::render(img, &info, &s, &req).image, false),
+    }
+}
+
 /// Whether the GPU renders requests of this kind at all (a given render can still fall back to
 /// the CPU): the kernel writes 8-bit output, so high-bit-depth exports and soft proofs render on
 /// the CPU, and so does Visualize HDR, which needs the float HDR render. [`try_render`] follows it,
 /// and the loupe sizes its slider-drag drafts by it (issue #330), so the two can't drift apart.
-pub fn handles(depth: lightcraft_pipeline::OutputDepth, proofed: bool, overlay: lightcraft_pipeline::Overlay) -> bool {
-    depth == lightcraft_pipeline::OutputDepth::U8 && !proofed && overlay != lightcraft_pipeline::Overlay::HdrRange
+pub fn handles(depth: lcc_pipeline::OutputDepth, proofed: bool, overlay: lcc_pipeline::Overlay) -> bool {
+    depth == lcc_pipeline::OutputDepth::U8 && !proofed && overlay != lcc_pipeline::Overlay::HdrRange
 }
 
 /// [`render`], reporting why this render made no GPU image: [`Fallback::NotTried`] when the GPU
@@ -463,70 +487,92 @@ pub fn try_render(
         // sections switched off with their eye render as if at their defaults (issue #316)
         let effective = s.effective();
         let s: &DevelopSettings = &effective;
-        if !enabled() || !handles(req.depth, req.proof.is_some(), req.overlay) {
+        // pixel-filter plug-ins run in the CPU pipeline
+        if !enabled() || !handles(req.depth, req.proof.is_some(), req.overlay) || lcc_pipeline::plugin_filters::any_active(s) {
             return Err(Fallback::NotTried);
         }
-        let s = &*lightcraft_pipeline::settings_for(s, req);
+        let s = &*lcc_pipeline::settings_for(s, req);
         // in flight until this returns; not tried once the process is ending (issue #620)
         let _work = exit::enter().ok_or(Fallback::NotTried)?;
         let gpu = device().ok_or(Fallback::NotTried)?;
         let ext = stages.map(|c| c.extension::<GpuStages>());
-        let fault = take_fault();
+        let mut fault = take_fault();
         // A simulated failure stops GPU use on this thread only (see `BROKEN_HERE`).
-        let stop = |reason: &str| if fault.is_some() { mark_broken_here(reason) } else { mark_broken(reason) };
-        let _ = ctx::take_failure(); // nothing left over from an earlier render on this thread
-        let (r, scoped) = {
-            let _scope = ctx::RenderScope::new(gpu);
-            let errors = ctx::ErrorScopes::push(gpu);
-            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| render::render(gpu, src, info, s, req, ext.as_deref(), fault)));
-            (r, errors.pop())
-        };
-        // An error the device raised explains the readback failures that follow it; a buffer
-        // over the limit explains the errors its placeholder raises.
-        let failure = match (ctx::take_failure(), scoped) {
-            (Some(f), _) if f.kind == ctx::FailKind::Limit => Some(f),
-            (f, scoped) => scoped.or(f),
-        };
-        let reason = match (r, failure) {
-            (Err(_), _) => {
-                log::error!("gpu: render failed; using the CPU pipeline from now on");
-                stop("a GPU render panicked");
-                "a GPU render panicked; the GPU is not used again".to_string()
-            }
-            (Ok(r), Some(f)) => {
-                // the view's cached device stages may hold results of the failed passes
-                if let Some(e) = &ext {
-                    e.clear();
+        let simulated = fault.is_some();
+        let stop = |reason: &str| if simulated { mark_broken_here(reason) } else { mark_broken(reason) };
+        // Renders share the device's memory: wait for room instead of running out of it, and after
+        // running out anyway (the size is an estimate) try once more with the device to this
+        // render alone before the CPU takes over (upstream #1764).
+        static BUDGET: std::sync::OnceLock<budget::Budget> = std::sync::OnceLock::new();
+        let budget = BUDGET.get_or_init(|| budget::Budget::new(budget::initial(gpu.max_buffer)));
+        let need = budget::footprint(src.width, src.height);
+        let mut alone = false;
+        let reason = loop {
+            let _permit = budget.admit(need, alone, shutting_down).ok_or(Fallback::NotTried)?;
+            let _ = ctx::take_failure(); // nothing left over from an earlier render on this thread
+            let (r, scoped) = {
+                let _scope = ctx::RenderScope::new(gpu);
+                let errors = ctx::ErrorScopes::push(gpu);
+                let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| render::render(gpu, src, info, s, req, ext.as_deref(), fault)));
+                (r, errors.pop())
+            };
+            // An error the device raised explains the readback failures that follow it; a buffer
+            // over the limit or out of memory explains the errors its placeholder raises.
+            let failure = match (ctx::take_failure(), scoped) {
+                (Some(f), _) if matches!(f.kind, ctx::FailKind::Limit | ctx::FailKind::OutOfMemory) => Some(f),
+                (f, scoped) => scoped.or(f),
+            };
+            break match (r, failure) {
+                (Err(_), _) => {
+                    log::error!("gpu: render failed; using the CPU pipeline from now on");
+                    stop("a GPU render panicked");
+                    "a GPU render panicked; the GPU is not used again".to_string()
                 }
-                let what = match &r {
-                    Some(r) => format!("{}×{}", r.image.width, r.image.height),
-                    None => "GPU render".into(),
-                };
-                let reason = match f.kind {
-                    ctx::FailKind::Fatal => {
-                        stop(&f.reason);
-                        format!("{what}: {}; the GPU is not used again", f.reason)
+                (Ok(r), Some(f)) => {
+                    // the view's cached device stages may hold results of the failed passes
+                    if let Some(e) = &ext {
+                        e.clear();
                     }
-                    ctx::FailKind::OutOfMemory => {
-                        gpu.trim(0);
-                        format!("{what}: {}", f.reason)
+                    let what = match &r {
+                        Some(r) => format!("{}×{}", r.image.width, r.image.height),
+                        None => "GPU render".into(),
+                    };
+                    let reason = match f.kind {
+                        ctx::FailKind::Fatal => {
+                            stop(&f.reason);
+                            format!("{what}: {}; the GPU is not used again", f.reason)
+                        }
+                        ctx::FailKind::OutOfMemory => {
+                            gpu.trim(0);
+                            budget.out_of_memory();
+                            if !alone {
+                                fault = fault.filter(|f| *f != Fault::OutOfMemory);
+                                log::info!("gpu: {what}: {}; retrying with the device to this render alone", f.reason);
+                                alone = true;
+                                continue;
+                            }
+                            format!("{what}: {}", f.reason)
+                        }
+                        ctx::FailKind::Limit | ctx::FailKind::Blank => format!("{what}: {}", f.reason),
+                    };
+                    log::warn!("gpu: rendering on the CPU instead: {reason}");
+                    if render::profiling() {
+                        eprintln!("  gpu fallback to the CPU: {reason}");
                     }
-                    ctx::FailKind::Limit | ctx::FailKind::Blank => format!("{what}: {}", f.reason),
-                };
-                log::warn!("gpu: rendering on the CPU instead: {reason}");
-                if render::profiling() {
-                    eprintln!("  gpu fallback to the CPU: {reason}");
+                    reason
                 }
-                reason
-            }
-            // a device error on another thread or a lost device during the render
-            (Ok(Some(_)), None) if BROKEN.load(Ordering::Relaxed) => {
-                format!("device failure during the render: {}", unavailable_reason().unwrap_or_default())
-            }
-            (Ok(Some(r)), None) => return Ok(r),
-            // every path of `render::render` that gives up records a failure first; should one
-            // not, the CPU renders it rather than nothing
-            (Ok(None), None) => "GPU render: no image came back".to_string(),
+                // a device error on another thread or a lost device during the render
+                (Ok(Some(_)), None) if BROKEN.load(Ordering::Relaxed) => {
+                    format!("device failure during the render: {}", unavailable_reason().unwrap_or_default())
+                }
+                (Ok(Some(r)), None) => {
+                    budget.succeeded();
+                    return Ok(r);
+                }
+                // every path of `render::render` that gives up records a failure first; should one
+                // not, the CPU renders it rather than nothing
+                (Ok(None), None) => "GPU render: no image came back".to_string(),
+            };
         };
         record_fallback(reason.clone());
         Err(Fallback::Failed(reason))
@@ -540,7 +586,7 @@ pub fn try_render(
 
 #[cfg(test)]
 mod tests {
-    use lightcraft_pipeline::{OutputDepth, Overlay};
+    use lcc_pipeline::{OutputDepth, Overlay};
 
     // Given a request the 8-bit kernel can't draw (high bit depth, a soft proof, Visualize HDR),
     // the GPU doesn't take it; the loupe and diagnostic overlays it can draw stay on the GPU

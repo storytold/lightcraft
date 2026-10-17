@@ -4,7 +4,7 @@
 //! text or image) or a line of text, at a scale. [`TitleSettings`] is a library preference
 //! (`prefs.json`), edited with the `slideshow.titles` command; [`TitleCompose`] draws one screen.
 //!
-//! **One composer:** a title screen is a slide with no photo: `lightcraft_slideshow::compose`
+//! **One composer:** a title screen is a slide with no photo: `lcc_slide::compose`
 //! fills it with the title's colour, then the overlay code ([`crate::slide_overlay`]) draws the
 //! plate or text with the shared text renderer ([`crate::text`]). Playback, the Settings preview
 //! and `slideshow.preview {title}` all go through [`TitleCompose::compose`], so they draw the same
@@ -22,8 +22,8 @@
 
 use std::sync::Arc;
 
-use lightcraft_raster::Rgba8;
-use lightcraft_slideshow::{Layout, Rect, SlideSettings, hex, parse_color};
+use lcc_raster::Rgba8;
+use lcc_slide::{Layout, Rect, SlideSettings, hex, parse_color};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
@@ -267,7 +267,7 @@ pub struct TitleCompose {
 
 impl TitleCompose {
     /// Screen `title` of `titles` at `width × height` (a bigger one is drawn at the composer's
-    /// [`lightcraft_slideshow::MAX_SIDE`]),
+    /// [`lcc_slide::MAX_SIDE`]),
     /// with `overlays`' identity plate when the screen shows it.
     pub fn new(titles: &TitleSettings, overlays: &OverlaySettings, title: Title, width: usize, height: usize) -> Self {
         let s = titles.screen(title).clone().sanitized();
@@ -316,7 +316,7 @@ impl TitleCompose {
     }
 
     fn layout(&self) -> Layout {
-        lightcraft_slideshow::layout(&self.settings, 1.0, self.width, self.height)
+        lcc_slide::layout(&self.settings, 1.0, self.width, self.height)
     }
 
     /// Where the plate or text is on the screen (`None`: nothing is drawn but the colour).
@@ -340,7 +340,7 @@ impl TitleCompose {
     /// The screen's pixels.
     pub fn compose(&self) -> Rgba8 {
         let empty = Rgba8::new(0, 0);
-        let (mut img, l) = lightcraft_slideshow::compose_with(&empty, None, &self.settings, self.width, self.height, &mut |_, _| {});
+        let (mut img, l) = lcc_slide::compose_with(&empty, None, &self.settings, self.width, self.height, &mut |_, _| {});
         if let Some(o) = &self.overlays {
             o.draw_front(&mut img, &l);
         }
@@ -351,14 +351,14 @@ impl TitleCompose {
     /// under this screen's key. Title screens show no photo (`photo` is 0).
     pub fn result(&self, request_id: u64) -> crate::media::RenderResult {
         let image = self.compose();
-        let histogram = lightcraft_raster::Histogram::of_srgb8(&image);
+        let histogram = lcc_raster::Histogram::of_srgb8(&image);
         crate::media::RenderResult {
             request_id,
             source_key: None,
-            photo: lightcraft_catalog::PhotoId(0),
+            photo: lcc_catalog::PhotoId(0),
             level: crate::media::SourceLevel::Preview,
             key: self.key(),
-            rendered: Ok(lightcraft_pipeline::Rendered { image, histogram, deep: None }),
+            rendered: Ok(lcc_pipeline::Rendered { image, histogram, deep: None, warnings: Vec::new() }),
             loaded: None,
             quick: None,
             display: None,
@@ -521,7 +521,7 @@ mod tests {
         for (w, h) in [(0, 0), (1, 100_000), (usize::MAX, 3)] {
             let c = TitleCompose::new(&text_titles(0.5), &OverlaySettings::default(), Title::Intro, w, h);
             let img = c.compose();
-            assert!(img.width >= 1 && img.height >= 1 && img.width <= lightcraft_slideshow::MAX_SIDE);
+            assert!(img.width >= 1 && img.height >= 1 && img.width <= lcc_slide::MAX_SIDE);
         }
     }
 }

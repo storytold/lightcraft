@@ -2,7 +2,7 @@
 //!
 //! Other raw developers store their edits as `crs:` properties in XMP sidecars, in DNG-embedded
 //! XMP and in XMP preset files. This module maps the commonly used, documented-by-observation
-//! fields to a *partial* [`DevelopSettings`](lightcraft_develop::DevelopSettings) JSON object
+//! fields to a *partial* [`DevelopSettings`](lcc_develop::DevelopSettings) JSON object
 //! (only the fields present in the packet), which is then merged like a preset. Our pipeline is
 //! not theirs, so the result is a best-effort approximation of the look, not a pixel match.
 //! The full table is in `docs/xmp-interop.md`.
@@ -12,16 +12,16 @@
 
 use std::collections::BTreeMap;
 
-use lightcraft_develop::{MIXER_BANDS, Preset};
+use lcc_develop::{MIXER_BANDS, Preset};
 use serde_json::{Map, Value, json};
 
-/// Properties keyed `prefix:name` (as produced by [`lightcraft_meta::parse_xmp`]).
+/// Properties keyed `prefix:name` (as produced by [`lcc_meta::parse_xmp`]).
 pub type Props = BTreeMap<String, Vec<String>>;
 
 /// What the mapped settings will develop. It decides how a `crs:` white balance is read: a raw
 /// with a Kelvin scale (colour matrices in the file, or measured for its camera) takes `Temperature`
 /// as Kelvin; everything developed relative to its as-shot look (rendered files, and raws without
-/// matrices anywhere, [`lightcraft_catalog::relative_wb_camera`]) needs a shift from the other app's
+/// matrices anywhere, [`lcc_catalog::relative_wb_camera`]) needs a shift from the other app's
 /// as-shot white instead, because on that scale 6500 K / 0 means *as shot* (issue #510).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Target {
@@ -33,7 +33,7 @@ pub enum Target {
     /// A raw developed with an absolute white balance (DNG and other files with matrices, and raws
     /// whose camera has measured matrices): Kelvin as written.
     RawAbsolute,
-    /// A raw developed relative to its as-shot look ([`lightcraft_catalog::Photo::relative_wb`]).
+    /// A raw developed relative to its as-shot look ([`lcc_catalog::Photo::relative_wb`]).
     RawRelative,
 }
 
@@ -41,17 +41,17 @@ impl Target {
     /// The target for a file of this media kind and format (its extension or Lightroom's
     /// `fileFormat` name) shot on `camera` (Exif make and model as the catalog keeps them, or
     /// empty when unknown); `preview_only` for a raw that can't be decoded yet.
-    pub fn for_file(kind: lightcraft_catalog::MediaKind, format: &str, preview_only: bool, camera: &str) -> Target {
-        if kind != lightcraft_catalog::MediaKind::Raw || preview_only {
+    pub fn for_file(kind: lcc_catalog::MediaKind, format: &str, preview_only: bool, camera: &str) -> Target {
+        if kind != lcc_catalog::MediaKind::Raw || preview_only {
             Target::Rendered
-        } else if lightcraft_catalog::relative_wb_camera(format, camera) {
+        } else if lcc_catalog::relative_wb_camera(format, camera) {
             Target::RawRelative
         } else {
             Target::RawAbsolute
         }
     }
     /// The target for a photo in the catalog.
-    pub fn for_photo(p: &lightcraft_catalog::Photo) -> Target {
+    pub fn for_photo(p: &lcc_catalog::Photo) -> Target {
         Target::for_file(p.kind, &p.format, p.preview_only.is_some(), &p.meta.camera)
     }
 }
@@ -188,6 +188,9 @@ fn curve(props: &Props, k: &str) -> Option<Value> {
 /// Map the `crs:` fields of an XMP packet to a partial develop-settings JSON object.
 ///
 /// `target` decides how the white balance is read (see [`Target`]).
+/// `crs:HDRMaxValue` above this is read as a linear peak ratio rather than stops.
+const HDR_MAX_STOPS_READ: f64 = 6.0;
+
 pub fn to_partial(props: &Props, target: Target) -> Value {
     let mut out = Value::Object(Map::new());
     let o = &mut out;
@@ -206,6 +209,24 @@ pub fn to_partial(props: &Props, target: Target) -> Value {
     // Lightroom's Light panel "HDR" button
     if let Some(on) = boolean(props, "crs:HDREditMode") {
         put(o, "hdr.enabled", json!(on));
+    }
+    // the HDR panel's SDR rendition sliders (same −100..100 scale)
+    for (crs, path) in [
+        ("SDRBrightness", "hdr.sdr_brightness"),
+        ("SDRContrast", "hdr.sdr_contrast"),
+        ("SDRHighlights", "hdr.sdr_highlights"),
+        ("SDRShadows", "hdr.sdr_shadows"),
+        ("SDRWhites", "hdr.sdr_whites"),
+        ("SDRClarity", "hdr.sdr_clarity"),
+        ("SDRBlend", "hdr.sdr_blend"),
+    ] {
+        n(o, crs, path);
+    }
+    // the headroom limit. Adobe doesn't document its scale: small values are read as stops above SDR
+    // white (the Lightroom readout), larger ones as a linear peak ratio (assumption, see `Hdr`)
+    if let Some(v) = num(props, "crs:HDRMaxValue").filter(|v| v.is_finite() && *v >= 0.0) {
+        let stops = if v > HDR_MAX_STOPS_READ { v.log2() } else { v };
+        put(o, "hdr.max_ev", json!(stops.clamp(0.0, lcc_develop::Hdr::MAX_EV_LIMIT)));
     }
     // older process versions (most `.lrtemplate` presets): approximate the 2012 sliders from the
     // earlier ones, relative to their defaults (contrast 25, blacks 5, brightness 50)
@@ -383,6 +404,9 @@ pub fn to_partial(props: &Props, target: Target) -> Value {
     n(o, "GrainAmount", "grain.amount");
     n(o, "GrainSize", "grain.size");
     n(o, "GrainFrequency", "grain.roughness");
+    if let Some(seed) = num(props, "crs:GrainSeed").filter(|v| *v >= 0.0 && *v <= f64::from(u32::MAX)) {
+        put(o, "grain.seed", json!(seed as u32));
+    }
 
     // ---- Optics (manual corrections; lens profiles are ours, only the switch carries over).
     // Our profile corrections are the file's own (DNG-embedded) ones, which Lightroom applies
@@ -394,6 +418,10 @@ pub fn to_partial(props: &Props, target: Target) -> Value {
     if let Some(b) = boolean(props, "crs:AutoLateralCA") {
         put(o, "optics.remove_ca", json!(b));
     }
+    n(o, "LensProfileDistortionScale", "optics.profile_distortion");
+    n(o, "LensProfileVignettingScale", "optics.profile_vignetting");
+    n(o, "ChromaticAberrationR", "optics.ca_red");
+    n(o, "ChromaticAberrationB", "optics.ca_blue");
     n(o, "LensManualDistortionAmount", "optics.distortion");
     n(o, "VignetteAmount", "optics.vignetting");
     n(o, "VignetteMidpoint", "optics.vignetting_midpoint");
@@ -513,7 +541,7 @@ pub fn camera_profile_name(props: &Props) -> Option<&str> {
 }
 
 /// Whether an XMP packet contains a saved Lightroom Upright matrix. Lightroom's matrix uses a
-/// coordinate convention that LightCraft does not currently import.
+/// coordinate convention that the app does not currently import.
 pub fn has_saved_upright_transform(props: &Props) -> bool {
     props.keys().any(|key| {
         key.strip_prefix("crs:").is_some_and(|name| {
@@ -525,7 +553,7 @@ pub fn has_saved_upright_transform(props: &Props) -> bool {
 /// Read an XMP preset (`crs:` fields + `crs:Name` / `crs:Group`) into one of our presets.
 /// Returns `None` when the packet has no adjustments we understand.
 pub fn preset_from_xmp(xmp: &str, fallback_name: &str) -> Option<Preset> {
-    let d = lightcraft_meta::parse_xmp(xmp).ok()?;
+    let d = lcc_meta::parse_xmp(xmp).ok()?;
     let props = &d.properties;
     let settings = to_partial(props, Target::Any);
     if settings.as_object().is_none_or(Map::is_empty) {
@@ -541,7 +569,7 @@ pub fn preset_from_xmp(xmp: &str, fallback_name: &str) -> Option<Preset> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lightcraft_develop::{DevelopSettings, Upright, VignetteStyle, WbMode, apply_partial};
+    use lcc_develop::{DevelopSettings, Upright, VignetteStyle, WbMode, apply_partial};
 
     /// A hand-written sidecar in attribute form (as many tools write it).
     const SIDECAR: &str = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/">
@@ -573,7 +601,7 @@ mod tests {
 </x:xmpmeta>"#;
 
     fn props(x: &str) -> Props {
-        lightcraft_meta::parse_xmp(x).unwrap().properties
+        lcc_meta::parse_xmp(x).unwrap().properties
     }
 
     #[test]
@@ -608,7 +636,7 @@ mod tests {
         assert_eq!(s.geometry.upright, Upright::Level);
         assert_eq!(s.geometry.vertical, -10.0);
         assert!(s.optics.remove_ca);
-        assert_eq!(s.treatment, lightcraft_develop::Treatment::Color);
+        assert_eq!(s.treatment, lcc_develop::Treatment::Color);
         let cal = s.calibration;
         assert_eq!(
             (cal.shadows_tint, cal.red_hue, cal.red_sat, cal.green_hue, cal.green_sat, cal.blue_hue, cal.blue_sat),
@@ -640,6 +668,23 @@ mod tests {
     }
 
     #[test]
+    fn hdr_headroom_and_sdr_blend_are_read() {
+        let x = |a: &str| {
+            format!(
+                r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description
+                xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:HDREditMode="1" {a}/></rdf:RDF>"#
+            )
+        };
+        let got = |a: &str| apply_partial(&DevelopSettings::default(), &to_partial(&props(&x(a)), Target::RawAbsolute), 1.0).hdr;
+        let h = got(r#"crs:HDRMaxValue="+2.5" crs:SDRBlend="-40""#);
+        assert_eq!((h.max_ev, h.sdr_blend), (2.5, -40.0));
+        assert_eq!(got(r#"crs:HDRMaxValue="16""#).max_ev, 4.0, "a linear ratio becomes stops");
+        assert_eq!(got(r#"crs:HDRMaxValue="1e9""#).max_ev, lcc_develop::Hdr::MAX_EV_LIMIT);
+        assert_eq!(got(r#"crs:HDRMaxValue="-3""#).max_ev, lcc_develop::Hdr::DEFAULT_MAX_EV, "negative ignored");
+        assert_eq!(got(r#"crs:HDRMaxValue="NaN""#).max_ev, lcc_develop::Hdr::DEFAULT_MAX_EV);
+    }
+
+    #[test]
     fn hdr_edit_mode_turns_hdr_editing_on_or_off() {
         let x = |v: &str| {
             format!(
@@ -650,7 +695,7 @@ mod tests {
         let on = apply_partial(&DevelopSettings::default(), &to_partial(&props(&x("1")), Target::RawAbsolute), 1.0);
         assert!(on.hdr.enabled);
         assert_eq!(on.light.exposure, 1.5);
-        assert_eq!(on.hdr.max_ev, lightcraft_develop::Hdr::DEFAULT_MAX_EV, "the rest of the HDR settings keep their defaults");
+        assert_eq!(on.hdr.max_ev, lcc_develop::Hdr::DEFAULT_MAX_EV, "the rest of the HDR settings keep their defaults");
         let true_form = apply_partial(&DevelopSettings::default(), &to_partial(&props(&x("True")), Target::RawAbsolute), 1.0);
         assert!(true_form.hdr.enabled);
         let mut hdr = DevelopSettings::default();
@@ -674,7 +719,7 @@ mod tests {
           </rdf:Description></rdf:RDF></x:xmpmeta>"#;
         let p = props(x);
         let rendered = apply_partial(&DevelopSettings::default(), &to_partial(&p, Target::Rendered), 1.0);
-        assert_eq!(rendered.treatment, lightcraft_develop::Treatment::Bw);
+        assert_eq!(rendered.treatment, lcc_develop::Treatment::Bw);
         assert_eq!(rendered.bw_mix.blue, -35.0);
         assert!((rendered.wb.temp - rel_to_kelvin(25.0)).abs() < 1e-6 && rendered.wb.temp > 6500.0);
         assert_eq!(rendered.wb.tint, -6.0);
@@ -746,11 +791,11 @@ mod tests {
 
     #[test]
     fn target_follows_the_file() {
-        use lightcraft_catalog::MediaKind;
+        use lcc_catalog::MediaKind;
         assert_eq!(Target::for_file(MediaKind::Raw, "ARW", false, ""), Target::RawRelative);
         assert_eq!(Target::for_file(MediaKind::Raw, "nef", false, "NIKON CORPORATION NIKON D7500"), Target::RawRelative);
         // Lightroom's `fileFormat` name for proprietary raws
-        assert_eq!(Target::for_file(MediaKind::Raw, "RAW", false, "SONY ILCE-7M2"), Target::RawRelative);
+        assert_eq!(Target::for_file(MediaKind::Raw, "RAW", false, "SONY DSLR-A100"), Target::RawRelative);
         assert_eq!(Target::for_file(MediaKind::Raw, "DNG", false, ""), Target::RawAbsolute);
         // a raw shown from its embedded preview develops like a rendered file
         assert_eq!(Target::for_file(MediaKind::Raw, "ARW", true, "SONY ILCE-7M3"), Target::Rendered);
@@ -760,34 +805,33 @@ mod tests {
         assert_eq!(Target::for_file(MediaKind::Raw, "RAW", false, "ILCE-7M3"), Target::RawAbsolute);
         assert_eq!(Target::for_file(MediaKind::Raw, "NEF", false, "NIKON CORPORATION NIKON D850"), Target::RawAbsolute);
         assert_eq!(Target::for_file(MediaKind::Raw, "CR2", false, "Canon Canon EOS 5D Mark III"), Target::RawAbsolute);
-        let mut p =
-            lightcraft_catalog::Photo::new(lightcraft_catalog::PhotoId(1), lightcraft_catalog::Source::Demo { scene: 0 }, "a.arw", "ARW", 1, 1, "");
+        let mut p = lcc_catalog::Photo::new(lcc_catalog::PhotoId(1), lcc_catalog::Source::Demo { scene: 0 }, "a.arw", "ARW", 1, 1, "");
         p.kind = MediaKind::Raw;
         assert_eq!(Target::for_photo(&p), Target::RawRelative);
         p.meta.camera = "SONY ILCE-7M3".into();
         assert_eq!(Target::for_photo(&p), Target::RawAbsolute);
     }
 
-    /// Lightroom writes `crs:Temperature` as Kelvin for a raw whose camera LightCraft has matrices for: the value
+    /// Lightroom writes `crs:Temperature` as Kelvin for a raw whose camera the app has matrices for: the value
     /// is read as written, marked Kelvin, and the as-shot reference is not needed (issue #730); the same packet on
     /// a raw without matrices still takes the #510 shift.
     #[test]
     fn kelvin_is_direct_on_raws_whose_camera_has_matrices() {
-        use lightcraft_catalog::MediaKind;
+        use lcc_catalog::MediaKind;
         let x = r#"<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
              crs:WhiteBalance="Custom" crs:Temperature="4650" crs:Tint="+3" crs:AsShotTemperature="5400" crs:AsShotTint="-1"/>"#;
         let p = props(x);
         let a7m3 = Target::for_file(MediaKind::Raw, "ARW", false, "SONY ILCE-7M3");
         assert_eq!(to_partial(&p, a7m3)["wb"], json!({"mode": "custom", "temp": 4650.0, "tint": 3.0, "scale": "kelvin"}));
-        let a7m2 = Target::for_file(MediaKind::Raw, "ARW", false, "SONY ILCE-7M2");
-        let shifted = to_partial(&p, a7m2);
+        let a100 = Target::for_file(MediaKind::Raw, "ARW", false, "SONY DSLR-A100");
+        let shifted = to_partial(&p, a100);
         assert!(shifted["wb"]["temp"].as_f64().is_some_and(|t| t > 5000.0 && t < 6500.0), "{shifted}");
         assert_eq!(shifted["wb"]["tint"], 4.0);
         assert!(shifted["wb"].get("scale").is_none());
         // without the reference the Kelvin camera still reads it, the other stays As Shot
         let bare = props(&x.replace(r#" crs:AsShotTemperature="5400" crs:AsShotTint="-1""#, ""));
         assert_eq!(to_partial(&bare, a7m3)["wb"]["temp"], 4650.0);
-        assert_eq!(to_partial(&bare, a7m2)["wb"], json!({"mode": "asShot"}));
+        assert_eq!(to_partial(&bare, a100)["wb"], json!({"mode": "asShot"}));
         // a named preset carries no numbers either way
         let daylight = props(&x.replace(r#"crs:WhiteBalance="Custom""#, r#"crs:WhiteBalance="Daylight""#));
         assert_eq!(to_partial(&daylight, a7m3)["wb"], json!({"mode": "daylight"}));

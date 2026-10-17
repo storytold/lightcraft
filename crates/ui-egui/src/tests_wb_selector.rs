@@ -6,7 +6,7 @@ use serde_json::json;
 
 use crate::headless::Headless;
 use crate::state::ViewMode;
-use crate::{LightcraftApp, Services};
+use crate::{LccApp, Services};
 
 const T: Duration = Duration::from_secs(20);
 const SETTLE: Duration = Duration::from_secs(120);
@@ -16,7 +16,7 @@ const SETTLE: Duration = Duration::from_secs(120);
 /// Clicking it again disarms it.
 #[test]
 fn wb_selector_button_in_compare_opens_detail_like_w() {
-    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let app = LccApp::new(lcc_engine::Session::with_demo(), Services { png: None, ..Default::default() });
     let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
     let vis: Vec<u64> = h.app.session.visible_cloned().iter().map(|p| p.0).collect();
     h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [vis[0], vis[1]], "active": vis[0]}}), T);

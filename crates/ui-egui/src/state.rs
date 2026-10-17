@@ -231,38 +231,6 @@ impl LayoutImage {
     pub const OPACITY_STEPS: [f32; 4] = [0.25, 0.5, 0.75, 1.0];
     pub const MATTE_STEPS: [f32; 4] = [0.0, 0.25, 0.5, 0.75];
 }
-
-/// Lights Out (View ▸ Lights Out, Shift+L cycles On → Dim → Off → On; Esc turns the lights back
-/// on): everything but the photo is veiled in black, the panels stay where they are.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum LightsOut {
-    #[default]
-    On,
-    /// The interface at 20 % brightness.
-    Dim,
-    /// The interface black.
-    Off,
-}
-
-impl LightsOut {
-    pub fn next(self) -> LightsOut {
-        match self {
-            LightsOut::On => LightsOut::Dim,
-            LightsOut::Dim => LightsOut::Off,
-            LightsOut::Off => LightsOut::On,
-        }
-    }
-
-    /// Opacity of the black veil over everything but the photo.
-    pub fn veil(self) -> f32 {
-        match self {
-            LightsOut::On => 0.0,
-            LightsOut::Dim => 0.8,
-            LightsOut::Off => 1.0,
-        }
-    }
-}
 /// How many libraries File ▸ Open Recent Library remembers.
 pub const RECENT_LIBRARIES: usize = 8;
 
@@ -272,7 +240,7 @@ pub const RECENT_LIBRARIES: usize = 8;
 pub enum AppearanceMode {
     /// Follow the operating system's dark/light setting (dark when it gives no answer).
     Auto,
-    /// The dark theme, whatever the system says (the default: LightCraft's look so far).
+    /// The dark theme, whatever the system says (the default: the app's look so far).
     #[default]
     Dark,
     Light,
@@ -369,8 +337,15 @@ pub struct AppSettings {
     pub film_badges: bool,
     /// Grid: when to show the rating / flag / edited badges.
     pub grid_badges: GridBadges,
+    /// How far a mouse-wheel notch scrolls the grid and filmstrip, times [`crate::theme::WHEEL_STRIP_SHARE`]
+    /// (1 = a third of the view; Preferences → Interface → Wheel scroll speed).
+    pub wheel_scroll_speed: f32,
+    /// When a brush tool is active, the mouse wheel changes its size instead of zooming.
+    pub wheel_resizes_brush: bool,
     /// Shortcuts the user changed (Help ▸ Keyboard Shortcuts): command id → shortcut, `""` = none.
     pub keymap: crate::shortcuts::Keymap,
+    /// The keymap set the user's changes apply over (Classic by default).
+    pub keymap_set: crate::shortcuts::KeymapSet,
     /// Auto (follow the system), Dark or Light.
     pub appearance_mode: AppearanceMode,
     /// The theme of the dark appearance.
@@ -383,6 +358,8 @@ pub struct AppSettings {
     /// The monitor's ICC profile previews are shown through (`app.displayProfile`; "" = none:
     /// the display is treated as sRGB).
     pub display_profile: String,
+    /// The colour readout under the histogram: RGB, HSL or Lab (`view.colorReadout`).
+    pub color_readout: crate::color_readout::ColorReadout,
     /// The Keywording box: whole keyword paths, or grouped by the keyword they are inside.
     #[serde(deserialize_with = "lenient")]
     pub keyword_chips: KeywordChips,
@@ -391,6 +368,12 @@ pub struct AppSettings {
     /// View ▸ Zoom to Focus Point: Toggle Zoom (Z) centres the zoomed view on the camera's focus point
     /// when the photo has one (`view.zoomToFocus`).
     pub zoom_to_focus: bool,
+    /// Double-clicking a grid photo opens it in Develop instead of the Library loupe (issue #144;
+    /// off by default, as in Lightroom Classic).
+    pub double_click_develop: bool,
+    /// Windows only (inert elsewhere; the field stays on every platform so settings files remain portable).
+    /// Keep repainting continuously at display refresh rate to eliminate VRR / G-SYNC brightness flicker on OLED/VA panels.
+    pub vrr_flicker_workaround: bool,
 }
 
 impl Default for AppSettings {
@@ -411,15 +394,21 @@ impl Default for AppSettings {
             film_names: true,
             film_badges: true,
             grid_badges: GridBadges::Auto,
+            wheel_scroll_speed: 1.0,
+            wheel_resizes_brush: true,
             keymap: Default::default(),
+            keymap_set: Default::default(),
             appearance_mode: AppearanceMode::Dark,
             dark_theme: DarkTheme::Charcoal,
             light_theme: LightTheme::Silver,
             favorite_themes: Vec::new(),
             display_profile: String::new(),
+            color_readout: Default::default(),
             keyword_chips: KeywordChips::default(),
             focus_point: false,
             zoom_to_focus: true,
+            double_click_develop: false,
+            vrr_flicker_workaround: false,
         }
     }
 }
@@ -542,13 +531,13 @@ impl AppSettings {
     /// source level. A full-size decode would replace the open photo's single full-resolution
     /// source in the cache, and nothing is gained by it.
     pub fn prefetch_edge(&self, wanted_px: f32, native_long_edge: usize, texture_side: usize) -> usize {
-        self.loupe_edge(wanted_px, native_long_edge, texture_side).min(lightcraft_engine::SourceLevel::Preview.max_edge())
+        self.loupe_edge(wanted_px, native_long_edge, texture_side).min(lcc_engine::SourceLevel::Preview.max_edge())
     }
 
     /// Long edge for the hover (preset / profile) and Before renders, which are stand-ins drawn
     /// over the loupe: capped at the preview source level like the old default.
     pub fn stand_in_edge(&self, loupe_edge: usize, texture_side: usize) -> usize {
-        loupe_edge.min(lightcraft_engine::SourceLevel::Preview.max_edge()).min(texture_side.max(MIN_TEXTURE_SIDE))
+        loupe_edge.min(lcc_engine::SourceLevel::Preview.max_edge()).min(texture_side.max(MIN_TEXTURE_SIDE))
     }
 
     /// Long edge of the zoomed frame a window render is cut from, for a photo drawn `drawn_long`
@@ -566,8 +555,45 @@ impl AppSettings {
     }
 }
 
-/// Click-zoom ratios offered (percent): 1:1, 2:1, 3:1, 4:1, 8:1.
-pub const CLICK_ZOOMS: [u32; 5] = [100, 200, 300, 400, 800];
+/// Click-zoom ratios offered (percent): 1:1, 2:1, 3:1, 4:1, 8:1, 11:1.
+pub const CLICK_ZOOMS: [u32; 6] = [100, 200, 300, 400, 800, 1100];
+
+/// The deepest zoom (percent): 11:1.
+pub const MAX_ZOOM: f32 = 1100.0;
+
+/// The fixed zoom levels below Fit and Fill, as (name, percent): what Zoom In / Out step through
+/// and `view.zoomLevel` names.
+pub const ZOOM_LEVELS: [(&str, f32); 9] = [
+    ("1:4", 25.0),
+    ("1:3", 100.0 / 3.0),
+    ("1:2", 50.0),
+    ("1:1", 100.0),
+    ("2:1", 200.0),
+    ("3:1", 300.0),
+    ("4:1", 400.0),
+    ("8:1", 800.0),
+    ("11:1", 1100.0),
+];
+
+/// The zoom a level name stands for: `fit`, `fill` or one of [`ZOOM_LEVELS`].
+pub fn zoom_level(name: &str) -> Option<Zoom> {
+    match name {
+        "fit" | "Fit" => Some(Zoom::Fit),
+        "fill" | "Fill" => Some(Zoom::Fill),
+        _ => ZOOM_LEVELS.iter().find(|(n, _)| *n == name).map(|(_, p)| Zoom::Percent(*p)),
+    }
+}
+
+/// The next fixed level after `cur` (percent) going in (`up`) or out; `None` past the last one
+/// out (Fit).
+pub fn zoom_step(cur: f32, up: bool) -> Option<f32> {
+    // (a little slack: 1:3 is not a whole percentage)
+    if up {
+        Some(ZOOM_LEVELS.iter().map(|l| l.1).find(|p| *p > cur + 0.01).unwrap_or(MAX_ZOOM))
+    } else {
+        ZOOM_LEVELS.iter().rev().map(|l| l.1).find(|p| *p < cur - 0.01)
+    }
+}
 
 /// Grid thumbnail size (points): the bottom-bar slider's range, and the `=` / `-` keys' step
 /// (`view.thumbSizeUp` / `view.thumbSizeDown`), about a thirteenth of the range.
@@ -606,6 +632,37 @@ pub enum KeywordingView {
     Keywords,
     Containing,
     WillExport,
+}
+
+/// One of the Masking brush's A / B presets: each remembers its own size (fraction of the long
+/// edge), feather, flow and density (0..100), like Lightroom's brush A and B.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct BrushPreset {
+    pub size: f32,
+    pub feather: f32,
+    pub flow: f32,
+    pub density: f32,
+}
+
+impl Default for BrushPreset {
+    fn default() -> Self {
+        Self { size: 0.04, feather: 50.0, flow: 60.0, density: 100.0 }
+    }
+}
+
+impl BrushPreset {
+    /// Clamp values restored from disk (NaN falls back to the default).
+    pub fn sanitized(self) -> Self {
+        let d = Self::default();
+        let fix = |v: f32, lo: f32, hi: f32, def: f32| if v.is_finite() { v.clamp(lo, hi) } else { def };
+        Self {
+            size: fix(self.size, 0.002, 0.5, d.size),
+            feather: fix(self.feather, 0.0, 100.0, d.feather),
+            flow: fix(self.flow, 1.0, 100.0, d.flow),
+            density: fix(self.density, 0.0, 100.0, d.density),
+        }
+    }
 }
 
 /// How the Keywording box lays out the selection's keywords.
@@ -670,15 +727,25 @@ pub struct UiState {
     pub single_panel: bool,
     pub show_clipping: bool,
     pub histogram: bool,
+    /// Which distribution the Histogram panel draws and how tall its bins are, as the *names* of a
+    /// [`lcc_raster::HistogramMode`] / [`lcc_raster::HistogramScale`]
+    /// (`view.histogram.mode`, `view.histogram.scale`). Stored as text so a value another build
+    /// wrote reads as the default instead of failing the whole settings file, and read leniently so
+    /// even a value of the wrong *kind* costs only these two settings ([`UiState::sanitized`]
+    /// normalizes what they hold).
+    #[serde(deserialize_with = "lenient")]
+    pub histogram_mode: String,
+    #[serde(deserialize_with = "lenient")]
+    pub histogram_scale: String,
     /// Soft proofing (S in the loupe): render as `proof` would hold the photo.
     pub soft_proof: bool,
-    pub proof: lightcraft_engine::pipeline::Proof,
+    pub proof: lcc_engine::pipeline::Proof,
     /// Soft proofing against a printer / paper ICC profile: (file, name), the intent and Simulate
     /// Paper & Ink. With a profile, `proof.profile` names its table.
     #[serde(skip)]
     pub proof_profile: Option<(String, String)>,
     #[serde(skip)]
-    pub proof_intent: lightcraft_engine::proof::ProofIntent,
+    pub proof_intent: lcc_engine::proof::ProofIntent,
     pub proof_paper_ink: bool,
     /// Masking: show the selected mask as a rendered overlay (O), how (`MaskView` name, ⇧O cycles),
     /// in which colour and opacity (0..100, colour views), and whether pins are drawn.
@@ -711,10 +778,21 @@ pub struct UiState {
     pub face_boxes: bool,
     /// The left sidebar's sections: their order, which are hidden and which are folded shut.
     pub sidebar: crate::sidebar::SidebarLayout,
-    /// What settings files said before [`UiState::sidebar`]: the ids of the folded sections. Read
-    /// so they stay folded ([`UiState::sanitized`] moves them over), never written.
-    #[serde(skip_serializing)]
+    /// The ids of other folded panels (the Classic modules' `panel:<key>` panels), saved here. Settings files
+    /// from before [`UiState::sidebar`] listed the folded sidebar sections here too: [`UiState::sanitized`]
+    /// moves those over, so only the `panel:<key>` ids stay (unknown ids are dropped).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub collapsed_sidebar: Vec<String>,
+    /// Preset and profile groups the user folded or unfolded (`preset:<group>`, `profile:<group>`,
+    /// `lut:<group>` → open). A group not listed is folded, unless it holds the current preset or
+    /// profile ([`UiState::group_is_open`]).
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub group_open: std::collections::BTreeMap<String, bool>,
+    /// The folded or unfolded sections of the Book, Slideshow and Map side panels (`<module>:<title>` → open),
+    /// as the user left them; a section not listed shows its default. Entries that aren't `true`/`false`
+    /// are dropped on load, so a hand-edited file can't keep the other settings from loading.
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty", deserialize_with = "deserialize_section_open")]
+    pub section_open: std::collections::BTreeMap<String, bool>,
     /// A face's name being typed in the loupe.
     #[serde(skip)]
     pub name_edit: Option<NameEdit>,
@@ -804,6 +882,8 @@ pub struct UiState {
     pub dragging_section: Option<crate::sidebar::SidebarSection>,
     /// Selected curve channel in the Curve flyout.
     pub curve_channel: String,
+    /// Selected channel of a mask's Curve (no parametric one): "master" | "red" | "green" | "blue".
+    pub mask_curve_channel: String,
     /// Selected mixer mode: "hue" | "saturation" | "luminance" | "all".
     pub mixer_mode: String,
     /// Selected colour grading tab: "3way" | "shadows" | "midtones" | "highlights".
@@ -811,12 +891,19 @@ pub struct UiState {
     /// Colour grading wheels (shadows, midtones, highlights) hidden for viewing by their eye, and
     /// the photo that applies to: not an edit, and forgotten on moving to another photo or quitting.
     #[serde(skip)]
-    pub grading_hidden: Option<(lightcraft_catalog::PhotoId, [bool; 3])>,
+    pub grading_hidden: Option<(lcc_catalog::PhotoId, [bool; 3])>,
     /// Active on-canvas tool: "", "brush", "linear", "radial", "wbPicker", "straighten", "remove".
     pub tool: String,
     pub brush_size: f32,
     pub brush_feather: f32,
     pub brush_flow: f32,
+    /// Brush Density (0..100): the most a stroke's paint can reach.
+    pub brush_density: f32,
+    /// Which of Lightroom's two brush presets is in use: 0 = A, 1 = B.
+    pub brush_slot: u8,
+    /// The A and B brush presets; the slot in use is mirrored by the `brush_*` fields above and
+    /// saved back when switching (`brush.preset`).
+    pub brush_presets: [BrushPreset; 2],
     pub brush_erase: bool,
     /// Brush Auto Mask: dabs stick to areas like the one under the brush centre.
     pub brush_auto_mask: bool,
@@ -832,6 +919,9 @@ pub struct UiState {
     pub point_color_visualize: bool,
     /// Light panel "Visualize HDR": grey below SDR white, colour bands above (HDR edits).
     pub hdr_visualize: bool,
+    /// The sRGB colour under the pointer in the loupe and the pass it was read in (shown under
+    /// the histogram; [`crate::color_readout`]).
+    pub hover_color: Option<(u64, [u8; 3])>,
     /// Red Eye panel: selected correction, and whether new ones are pet eyes.
     pub eye: usize,
     pub eye_pet: bool,
@@ -851,14 +941,55 @@ pub struct UiState {
     pub auto_advance: bool,
     /// Full-screen preview (F): the photo alone on black, no chrome.
     pub fullscreen: bool,
-    /// Lights Out (Shift+L): not saved, every launch starts with the lights on.
-    #[serde(skip)]
-    pub lights_out: LightsOut,
     /// Window ▸ Second Window.
     pub second_window: bool,
-    /// The keyword painter: clicking a photo in the grid toggles this keyword on it.
+    /// The Classic module on screen, the one before it (⌘⌥↑), and every other module's saved
+    /// panel layout (see [`crate::module`]).
+    pub module: crate::module::ModuleId,
+    pub previous_module: Option<crate::module::ModuleId>,
+    pub layouts: std::collections::BTreeMap<crate::module::ModuleId, crate::module::ModuleLayout>,
+    /// Modules hidden from the picker (its context menu).
+    pub hidden_modules: Vec<crate::module::ModuleId>,
+    /// While a placeholder module is on screen: the view it was entered from (a view change leaves it).
     #[serde(skip)]
-    pub keyword_painter: Option<String>,
+    pub placeholder_from: Option<(ViewMode, RightPanel)>,
+    /// The module bar (F5), the right panel group (F8) and the toolbar (T).
+    pub module_bar: bool,
+    pub right_edge: bool,
+    pub toolbar: bool,
+    /// Edges that auto-show at the window edge when hidden, and those peeking now.
+    pub auto_show: crate::module::EdgeFlags,
+    /// Edges that, hidden, appear on a click at the window edge (Classic's "Auto Hide") and hide
+    /// again once the pointer leaves them.
+    pub auto_hide: crate::module::EdgeFlags,
+    #[serde(skip)]
+    pub peek: crate::module::EdgeFlags,
+    /// The right group's order and hidden panels for the module on screen.
+    pub panel_order: Vec<crate::module::PanelId>,
+    pub hidden_panels: Vec<crate::module::PanelId>,
+    /// Whether these settings know the Develop module's Classic left column. An older file has
+    /// never seen the optional "My Photos" panel that column offers, so [`Self::sanitized`] keeps
+    /// that panel hidden rather than letting it appear beside the column it works with.
+    #[serde(default)]
+    pub develop_classic: bool,
+    pub screen_mode: crate::module::ScreenMode,
+    #[serde(skip)]
+    pub lights_out: crate::module::LightsOut,
+    pub identity_plate: crate::module::IdentityPlate,
+    /// The Book module's book and view (Phase 3, `crate::book`).
+    pub book: crate::book::BookUi,
+    /// What the secondary window shows, and the photo a locked loupe holds.
+    pub second_mode: crate::module::SecondMode,
+    pub second_locked: Option<u64>,
+    /// The secondary window's own filter bar (its grid and filmstrip).
+    pub second_filter: crate::panels::second::SecondFilter,
+    /// The secondary window's filmstrip.
+    pub second_filmstrip: bool,
+    /// The grid cell under the pointer (the secondary window's Live loupe).
+    #[serde(skip)]
+    pub hovered_photo: Option<u64>,
+    /// Painter, grid cell style, Metadata panel preset ([`crate::libtools`]).
+    pub lib: crate::libtools::LibTools,
     /// What the Keywording box shows (Lightroom Classic's Keyword Tags views).
     pub keywording_view: KeywordingView,
     /// The Keywording box, grouped: every keyword of this selection (its hash) is shown, however
@@ -880,6 +1011,8 @@ pub struct UiState {
     /// A running slideshow (full screen; see [`crate::panels::slideshow`]).
     #[serde(skip)]
     pub slideshow: Option<Box<crate::panels::slideshow::Run>>,
+    /// The Slideshow module (templates, saved slideshows, the slide settings).
+    pub slides: crate::slideshow_ui::SlideshowState,
     /// Info overlay on the loupe.
     pub info_overlay: InfoOverlay,
     /// The loupe's layout image overlay (View ▸ Loupe Overlay).
@@ -899,7 +1032,7 @@ pub struct UiState {
     pub reference: Option<u64>,
     /// Transient toast text, expiry (seconds of app time), and optional colour-label styling.
     #[serde(skip)]
-    pub toast: Option<(String, f64, Option<lightcraft_catalog::ColorLabel>)>,
+    pub toast: Option<(String, f64, Option<lcc_catalog::ColorLabel>)>,
     /// The result of the last Find Missing Photos (it searches in the background).
     #[serde(skip)]
     pub last_find_missing: Option<serde_json::Value>,
@@ -918,6 +1051,18 @@ pub struct UiState {
     pub status: String,
     #[serde(skip)]
     pub dialog: Option<Dialog>,
+    /// A Settings section to bring into view once (`app.settings {section}`), e.g. `lensProfiles`.
+    #[serde(skip)]
+    pub settings_section: Option<String>,
+    /// The start-up update check has run (once per session; Help ▸ Check for Updates… is manual).
+    #[serde(skip)]
+    pub update_checked_at_startup: bool,
+    /// When an update check was last started (egui time, s).
+    #[serde(skip)]
+    pub update_checked_at: f64,
+    /// A newer release was found at start-up and the user has not been told yet.
+    #[serde(skip)]
+    pub update_pending: Option<String>,
     /// The Print dialog's page, selection and drag.
     #[serde(skip)]
     pub print: crate::print_view::PrintUi,
@@ -926,7 +1071,7 @@ pub struct UiState {
 /// Settings group ids (`SettingsGroup` serde names) a new preset includes by default: everything
 /// but crop, masks, spots and red eye.
 pub fn default_preset_groups() -> Vec<String> {
-    lightcraft_develop::SettingsGroup::default_copy().iter().filter_map(|g| serde_json::to_value(g).ok()?.as_str().map(str::to_string)).collect()
+    lcc_develop::SettingsGroup::default_copy().iter().filter_map(|g| serde_json::to_value(g).ok()?.as_str().map(str::to_string)).collect()
 }
 
 impl Dialog {
@@ -949,6 +1094,16 @@ pub struct NameEdit {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum Dialog {
+    /// File ▸ Export ▸ Timelapse Video… (`crate::timelapse_ui`); `size` is "WxH".
+    Timelapse {
+        fps: u32,
+        size: String,
+        fill: bool,
+        hold: u32,
+        crossfade: u32,
+        prores: bool,
+        quality: u8,
+    },
     /// A Lightroom import result stays readable after its activity row disappears.
     LightroomResult {
         summary: String,
@@ -960,11 +1115,11 @@ pub enum Dialog {
     /// and the selected cell are [`UiState::print`].
     Print,
     ContactSheet {
-        options: lightcraft_engine::contact_sheet::Options,
+        options: lcc_engine::contact_sheet::Options,
     },
     /// View ▸ Export Slideshow…: format, size, quality, frame rate, container.
     SlideshowExport {
-        settings: lightcraft_engine::slideshow_export::ExportSettings,
+        settings: lcc_engine::slideshow_export::ExportSettings,
     },
     /// `parent`: the folder to create it in (none: the top level). `include_selected`: the new album
     /// holds the selected photos (Lightroom's "Include selected photos"; folders hold none).
@@ -1109,6 +1264,9 @@ pub enum Dialog {
     SystemInfo {
         rows: Vec<(String, String)>,
     },
+    /// Help ▸ Check for Updates…: the release feed's answer, the download and the install
+    /// (the panel state lives in the session's updater; see [`crate::panels::update`]).
+    Update,
     /// Every metadata field of a photo's file (`photo.allMetadata`), filtered by `search`.
     AllMetadata {
         title: String,
@@ -1119,7 +1277,7 @@ pub enum Dialog {
     SmartRules {
         id: Option<u64>,
         name: String,
-        rules: lightcraft_catalog::RuleSet,
+        rules: lcc_catalog::RuleSet,
         /// The folder a new smart album is created in (ignored when editing).
         #[serde(default)]
         parent: Option<u64>,
@@ -1134,15 +1292,21 @@ pub enum Dialog {
     CopySettings {
         groups: Vec<String>,
     },
+    /// Synchronize Settings (Lightroom Classic's Sync…): the groups the active photo's settings
+    /// carry to the other selected photos, plus single Basic Tone controls when Light is unchecked.
+    SyncSettings {
+        groups: Vec<String>,
+        controls: Vec<String>,
+    },
     /// Paste Selected Settings: which of the copied groups to paste.
     PasteSettings {
         groups: Vec<String>,
     },
     /// `resize` is used unless `full_size`; `limit_kb` 0 = no limit; `dir` empty = default export folder.
     Export {
-        opts: lightcraft_engine::export::ExportOptions,
+        opts: lcc_engine::export::ExportOptions,
         full_size: bool,
-        resize: lightcraft_engine::export::Resize,
+        resize: lcc_engine::export::Resize,
         /// Name typed for "Save as Preset".
         #[serde(default)]
         preset_name: String,
@@ -1195,9 +1359,18 @@ pub enum Dialog {
     DeleteEffects {
         names: Vec<String>,
     },
-    /// Confirm moving photos to Recently Deleted.
+    /// Confirm moving photos to Recently Deleted or deleting from disk.
     ConfirmDelete {
         count: usize,
+        /// How many originals would be moved to the trash by "Delete from Disk".
+        #[serde(default)]
+        disk_files: usize,
+    },
+    /// Confirm removing photos from the library for good: the selection in Recently Deleted
+    /// (`photo.deletePermanently`), or `all` of it (`library.emptyRecentlyDeleted`).
+    ConfirmPurge {
+        count: usize,
+        all: bool,
     },
     /// Confirm moving photos dropped on a Folders row into that folder on disk
     /// (`photo.moveToFolder`). `name`: the folder's name, as the question says it.
@@ -1238,6 +1411,20 @@ pub enum Dialog {
     },
     About,
     Shortcuts,
+    /// Library ▸ View Options (⌘J): grid cell style, index numbers, badges.
+    ViewOptions,
+    /// Develop ▸ Optics ▸ Save as…: name the preset new photos start from.
+    NewPhotoDefault {
+        /// Empty = the engine's own name ([`lcc_engine::import::NEW_PHOTO_DEFAULT`]).
+        #[serde(default)]
+        name: String,
+    },
+    /// Edit ▸ Edit Watermarks…
+    Watermark {
+        wm: lcc_engine::export::Watermark,
+        #[serde(default)]
+        preset_name: String,
+    },
 }
 
 fn yes() -> bool {
@@ -1288,10 +1475,12 @@ impl Default for UiState {
             single_panel: false,
             show_clipping: false,
             histogram: true,
+            histogram_mode: lcc_raster::HistogramMode::default().name().into(),
+            histogram_scale: lcc_raster::HistogramScale::default().name().into(),
             soft_proof: false,
-            proof: lightcraft_engine::pipeline::Proof { dest_warning: false, ..Default::default() },
+            proof: lcc_engine::pipeline::Proof { dest_warning: false, ..Default::default() },
             proof_profile: None,
-            proof_intent: lightcraft_engine::proof::ProofIntent::Perceptual,
+            proof_intent: lcc_engine::proof::ProofIntent::Perceptual,
             proof_paper_ink: false,
             mask_overlay: true,
             mask_overlay_mode: "color".into(),
@@ -1309,6 +1498,8 @@ impl Default for UiState {
             face_boxes: true,
             sidebar: Default::default(),
             collapsed_sidebar: Vec::new(),
+            group_open: Default::default(),
+            section_open: Default::default(),
             name_edit: None,
             person_page: None,
             person_from: None,
@@ -1340,6 +1531,7 @@ impl Default for UiState {
             dragging_album: None,
             dragging_section: None,
             curve_channel: "parametric".into(),
+            mask_curve_channel: "master".into(),
             mixer_mode: "hue".into(),
             grading_mode: "3way".into(),
             grading_hidden: None,
@@ -1347,6 +1539,9 @@ impl Default for UiState {
             brush_size: 0.04,
             brush_feather: 50.0,
             brush_flow: 60.0,
+            brush_density: 100.0,
+            brush_slot: 0,
+            brush_presets: [BrushPreset::default(), BrushPreset { size: 0.012, feather: 20.0, flow: 100.0, density: 100.0 }],
             brush_erase: false,
             brush_auto_mask: false,
             brush_pressure: true,
@@ -1356,16 +1551,43 @@ impl Default for UiState {
             point_color: 0,
             point_color_visualize: false,
             hdr_visualize: false,
+            hover_color: None,
             eye: 0,
             eye_pet: false,
             visualize_spots: false,
             spots_threshold: 50.0,
             auto_advance: false,
             fullscreen: false,
-            lights_out: LightsOut::On,
             slideshow: None,
+            slides: Default::default(),
             second_window: false,
-            keyword_painter: None,
+            module: Default::default(),
+            previous_module: None,
+            layouts: Default::default(),
+            hidden_modules: Vec::new(),
+            placeholder_from: None,
+            module_bar: true,
+            right_edge: true,
+            toolbar: true,
+            auto_show: Default::default(),
+            auto_hide: Default::default(),
+            peek: Default::default(),
+            panel_order: Vec::new(),
+            // Develop's Classic column offers upstream's My Photos sidebar as a panel of its own:
+            // there, but out of the way until it is asked for (the panel header's menu, or
+            // `panel.show {"panel": "sources", "visible": true}`)
+            hidden_panels: vec![crate::module::PanelId::Sources],
+            develop_classic: true,
+            screen_mode: Default::default(),
+            lights_out: Default::default(),
+            identity_plate: Default::default(),
+            book: Default::default(),
+            second_mode: Default::default(),
+            second_locked: None,
+            second_filter: Default::default(),
+            second_filmstrip: true,
+            hovered_photo: None,
+            lib: Default::default(),
             keywording_view: KeywordingView::default(),
             keyword_chips_all: None,
             folded_sections: Vec::new(),
@@ -1390,6 +1612,10 @@ impl Default for UiState {
             rechecked_library: None,
             status: String::new(),
             dialog: None,
+            settings_section: None,
+            update_checked_at_startup: false,
+            update_checked_at: 0.0,
+            update_pending: None,
             print: Default::default(),
         }
     }
@@ -1397,7 +1623,7 @@ impl Default for UiState {
 
 impl UiState {
     /// Which colour grading wheels (shadows, midtones, highlights) are hidden for viewing `photo`.
-    pub fn grading_hidden_for(&self, photo: lightcraft_catalog::PhotoId) -> [bool; 3] {
+    pub fn grading_hidden_for(&self, photo: lcc_catalog::PhotoId) -> [bool; 3] {
         match self.grading_hidden {
             Some((p, h)) if p == photo => h,
             _ => [false; 3],
@@ -1405,7 +1631,7 @@ impl UiState {
     }
 
     /// Show or hide colour grading wheel `i` (0 shadows, 1 midtones, 2 highlights) on `photo`.
-    pub fn set_grading_hidden(&mut self, photo: lightcraft_catalog::PhotoId, i: usize, hidden: bool) {
+    pub fn set_grading_hidden(&mut self, photo: lcc_catalog::PhotoId, i: usize, hidden: bool) {
         let mut h = self.grading_hidden_for(photo);
         if let Some(slot) = h.get_mut(i) {
             *slot = hidden;
@@ -1450,9 +1676,28 @@ impl UiState {
             self.open_sections.drain(..keep);
         }
     }
-    /// Whether the sidebar section with this id is folded shut (an unknown id: no).
+    /// Whether the preset / profile group `key` is unfolded: as the user left it, else open only
+    /// when it holds the current preset or profile (`holds_current`).
+    pub fn group_is_open(&self, key: &str, holds_current: bool) -> bool {
+        self.group_open.get(key).copied().unwrap_or(holds_current)
+    }
+
+    /// Whether the sidebar section or panel with this id is folded shut (one never folded: no).
     pub fn sidebar_section_collapsed(&self, id: &str) -> bool {
-        crate::sidebar::SidebarSection::from_id(id).is_some_and(|s| self.sidebar.is_collapsed(s))
+        match crate::sidebar::SidebarSection::from_id(id) {
+            Some(s) => self.sidebar.is_collapsed(s),
+            None => self.collapsed_sidebar.iter().any(|c| c == id),
+        }
+    }
+    /// Fold or unfold the sidebar section or panel with this id.
+    pub fn toggle_sidebar_section(&mut self, id: &str) {
+        if let Some(s) = crate::sidebar::SidebarSection::from_id(id) {
+            self.sidebar.toggle_collapsed(s);
+        } else if self.collapsed_sidebar.iter().any(|c| c == id) {
+            self.collapsed_sidebar.retain(|c| c != id);
+        } else {
+            self.collapsed_sidebar.push(id.to_string());
+        }
     }
     pub fn flyout_open(&self, id: &str) -> bool {
         self.open_flyouts.iter().any(|s| s == id)
@@ -1470,7 +1715,34 @@ impl UiState {
         self.left_width = LEFT_WIDTH.clamp(self.left_width);
         self.right_width = RIGHT_WIDTH.clamp(self.right_width);
         self.brush_size = self.brush_size.clamp(0.002, 0.5);
-        self.sidebar.adopt_collapsed(&std::mem::take(&mut self.collapsed_sidebar));
+        // a histogram mode or scale another build wrote (or a hand-edited file) is the default
+        if lcc_raster::HistogramMode::parse(&self.histogram_mode).is_none() {
+            self.histogram_mode = lcc_raster::HistogramMode::default().name().into();
+        }
+        if lcc_raster::HistogramScale::parse(&self.histogram_scale).is_none() {
+            self.histogram_scale = lcc_raster::HistogramScale::default().name().into();
+        }
+        self.brush_slot = self.brush_slot.min(1);
+        self.brush_presets = self.brush_presets.map(BrushPreset::sanitized);
+        let cur = BrushPreset { size: self.brush_size, feather: self.brush_feather, flow: self.brush_flow, density: self.brush_density }.sanitized();
+        (self.brush_size, self.brush_feather, self.brush_flow, self.brush_density) = (cur.size, cur.feather, cur.flow, cur.density);
+        self.sidebar.adopt_collapsed(&self.collapsed_sidebar);
+        self.collapsed_sidebar.retain(|id| id.starts_with("panel:"));
+        // A settings file written before Develop had its Classic column knows nothing of the
+        // "My Photos" panel that column offers (upstream's sidebar, kept for upstream pulls): it
+        // starts hidden there, so the column is what Develop shows, as for a fresh install.
+        if !self.develop_classic {
+            self.develop_classic = true;
+            let hide = |hidden: &mut Vec<crate::module::PanelId>| {
+                if !hidden.contains(&crate::module::PanelId::Sources) {
+                    hidden.push(crate::module::PanelId::Sources);
+                }
+            };
+            hide(&mut self.hidden_panels);
+            for layout in self.layouts.values_mut() {
+                hide(&mut layout.hidden);
+            }
+        }
         self.dialog = None;
         self.fullscreen = false;
         if !crate::state::PREVIEW_LIMITS.contains(&self.settings.preview_limit) {
@@ -1483,6 +1755,13 @@ impl UiState {
         }
         self
     }
+}
+
+/// The `sectionOpen` map, keeping only `name: true|false` entries (anything else is ignored).
+fn deserialize_section_open<'de, D: serde::Deserializer<'de>>(d: D) -> Result<std::collections::BTreeMap<String, bool>, D::Error> {
+    let value = serde_json::Value::deserialize(d)?;
+    let Some(map) = value.as_object() else { return Ok(Default::default()) };
+    Ok(map.iter().filter_map(|(k, v)| v.as_bool().map(|b| (k.clone(), b))).take(1024).collect())
 }
 
 /// A setting read leniently: a value that isn't one of its own (a hand-edited file, a newer

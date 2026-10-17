@@ -4,11 +4,11 @@
 //! published primaries and curves, optional output sharpening and a JPEG file-size limit. Pure (bytes in, bytes out) so the desktop
 //! app, CLI, MCP and the web build share it; writing the file is the caller's job.
 
-use lightcraft_codecs::{ChromaSubsampling, EncodeImage, EncodeMeta, JxlColour, JxlOptions, NamedSpace, Samples, encode, icc};
-pub use lightcraft_codecs::{JxlEffort, TiffCompression};
-use lightcraft_meta::{DateTime, Gps, Metadata};
-pub use lightcraft_pipeline::{DeepImage, DeepSamples, OutputDepth, OutputSpace};
-use lightcraft_raster::Rgba8;
+use lcc_codecs::{ChromaSubsampling, EncodeImage, EncodeMeta, JxlColour, JxlOptions, NamedSpace, Samples, encode, icc};
+pub use lcc_codecs::{JxlEffort, TiffCompression};
+use lcc_meta::{DateTime, Gps, Metadata};
+pub use lcc_pipeline::{DeepImage, DeepSamples, OutputDepth, OutputSpace};
+use lcc_raster::Rgba8;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -185,7 +185,24 @@ impl DestinationMode {
     }
 }
 
+/// Why `name` can't be an export subfolder: it must be one plain folder name, created inside the
+/// destination folder, never a path out of it (no `..`, no absolute path, no separator).
+pub fn subfolder_problem(name: &str) -> Option<&'static str> {
+    let t = name.trim();
+    if t.is_empty() {
+        return None;
+    }
+    if t.chars().any(|c| matches!(c, '/' | '\\' | ':') || c.is_control()) {
+        return Some("the subfolder must be one folder name, without `/`, `\\`, `:` or control characters");
+    }
+    if t.chars().all(|c| c == '.') {
+        return Some("the subfolder can't be `.` or `..`");
+    }
+    None
+}
+
 impl Conflict {
+    /// `unique` / `overwrite` / `skip` (any case).
     pub fn parse(s: &str) -> Option<Self> {
         match s.to_ascii_lowercase().as_str() {
             "unique" => Some(Self::Unique),
@@ -499,7 +516,7 @@ pub(crate) fn watermark_logo(path: &str) -> Option<std::sync::Arc<Rgba8>> {
 /// watermark logo, the loupe's layout image. The error says why it couldn't be read or decoded.
 pub fn read_graphic(path: &str) -> Result<Rgba8, String> {
     let bytes = std::fs::read(path).map_err(|e| format!("can't read {path}: {e}"))?;
-    let decoded = lightcraft_codecs::decode(&bytes, Default::default()).map_err(|e| format!("can't decode {path}: {e}"))?;
+    let decoded = lcc_codecs::decode(&bytes, Default::default()).map_err(|e| format!("can't decode {path}: {e}"))?;
     Ok(decoded.to_srgb8())
 }
 
@@ -515,12 +532,12 @@ fn logo_coverage(width: usize, height: usize, wm: &Watermark, mut blend_px: impl
     }
     let lw = ((wm.image_width.clamp(0.01, 1.0) * width as f32).round() as usize).clamp(1, width);
     let lh = ((lw as f32 * logo.height as f32 / logo.width as f32).round() as usize).clamp(1, height);
-    let pre: lightcraft_raster::Image<[f32; 4]> = lightcraft_raster::Image::from_fn(logo.width, logo.height, |x, y| {
+    let pre: lcc_raster::Image<[f32; 4]> = lcc_raster::Image::from_fn(logo.width, logo.height, |x, y| {
         let p = logo.get(x, y);
         let a = p[3] as f32 / 255.0;
         [p[0] as f32 * a, p[1] as f32 * a, p[2] as f32 * a, a]
     });
-    let scaled = lightcraft_raster::resample::resize(&pre, lw, lh, lightcraft_raster::resample::Filter::Mitchell);
+    let scaled = lcc_raster::resample::resize(&pre, lw, lh, lcc_raster::resample::Filter::Mitchell);
     let short = width.min(height) as f32;
     let (ix, iy) = (wm.inset_x.clamp(0.0, 0.4) * short, wm.inset_y.clamp(0.0, 0.4) * short);
     let turns = wm.quarter_turns();
@@ -601,10 +618,10 @@ impl HdrCurve {
             _ => None,
         }
     }
-    fn codec(self) -> lightcraft_codecs::HdrTransfer {
+    fn codec(self) -> lcc_codecs::HdrTransfer {
         match self {
-            Self::Pq => lightcraft_codecs::HdrTransfer::Pq,
-            Self::Hlg => lightcraft_codecs::HdrTransfer::Hlg,
+            Self::Pq => lcc_codecs::HdrTransfer::Pq,
+            Self::Hlg => lcc_codecs::HdrTransfer::Hlg,
         }
     }
 }
@@ -631,6 +648,9 @@ pub struct ExportOptions {
     pub naming: String,
     /// First `{seq}` value.
     pub start_number: u32,
+    /// The text of the `{custom}` naming token (Lightroom's Custom Text, as in "Custom Name -
+    /// Sequence"); characters not allowed in file names are replaced.
+    pub custom_text: String,
     /// A specific folder for the whole batch, or each photo's own folder.
     pub destination_mode: DestinationMode,
     /// Created inside the destination folder (empty = none).
@@ -659,6 +679,8 @@ pub struct ExportOptions {
     /// TIFF with the highlights above SDR white kept. Other formats, and photos without an HDR
     /// edit, are SDR.
     pub hdr: bool,
+    /// The curve of an HDR AVIF: PQ (default) or HLG.
+    pub hdr_transfer: HdrCurve,
     /// JPEG XL: mathematically lossless instead of lossy (`quality` is then unused).
     pub jxl_lossless: bool,
     /// JPEG XL: encoder effort (time spent for a smaller file).
@@ -669,8 +691,12 @@ pub struct ExportOptions {
     pub add_to_photos: bool,
     /// The Photos album they go into, made when missing (empty = none).
     pub photos_album: String,
-    /// The curve of an HDR AVIF: PQ (default) or HLG.
-    pub hdr_transfer: HdrCurve,
+    /// Video clips in the batch (rendered formats only): the movie format.
+    pub video_format: crate::export_video::VideoFormat,
+    /// Video quality 1–100 (H.264 CRF 40…14, or the ProRes flavour).
+    pub video_quality: u8,
+    /// Video: longest output side in pixels (`None` = the clip's size; never upscales).
+    pub video_max_side: Option<u32>,
 }
 
 impl Default for ExportOptions {
@@ -685,6 +711,7 @@ impl Default for ExportOptions {
             sharpen_amount: SharpenAmount::Standard,
             naming: "{name}".into(),
             start_number: 1,
+            custom_text: String::new(),
             destination_mode: DestinationMode::SpecificFolder,
             subfolder: String::new(),
             conflict: Conflict::Unique,
@@ -696,19 +723,22 @@ impl Default for ExportOptions {
             color_space: OutputSpace::Srgb,
             bit_depth: None,
             hdr: false,
+            hdr_transfer: HdrCurve::Pq,
             jxl_lossless: false,
             jxl_effort: JxlEffort::Normal,
             jxl_progressive: false,
             add_to_photos: false,
             photos_album: String::new(),
-            hdr_transfer: HdrCurve::Pq,
+            video_format: crate::export_video::VideoFormat::H264,
+            video_quality: 80,
+            video_max_side: None,
         }
     }
 }
 
 /// The `app.export` params that are not export options: which photos, where to, a preset to start
 /// from, and the desktop app's background flag.
-pub const TARGET_PARAMS: &[&str] = &["id", "ids", "path", "dir", "preset", "background"];
+pub const TARGET_PARAMS: &[&str] = &["id", "ids", "path", "dir", "preset", "background", "pluginDestination"];
 
 /// The export option params [`ExportOptions::from_json`] reads (and [`ExportOptions::to_json`] writes).
 pub const OPTION_PARAMS: &[&str] = &[
@@ -728,6 +758,7 @@ pub const OPTION_PARAMS: &[&str] = &[
     "sharpenAmount",
     "naming",
     "startNumber",
+    "customText",
     "destinationMode",
     "subfolder",
     "conflict",
@@ -739,12 +770,15 @@ pub const OPTION_PARAMS: &[&str] = &[
     "colorSpace",
     "bitDepth",
     "hdr",
+    "hdrTransfer",
     "jxlLossless",
     "jxlEffort",
     "jxlProgressive",
     "addToPhotos",
     "photosAlbum",
-    "hdrTransfer",
+    "videoFormat",
+    "videoQuality",
+    "videoMaxSide",
 ];
 
 /// Why an export can't add its files to Apple Photos on this platform (`None`: it can, when the
@@ -874,8 +908,15 @@ impl ExportOptions {
                         return Err(bad(format!("`{k}` must be one of jpeg|png|tiff|webp|avif|jxl|dng|original")));
                     }
                 }
-                "quality" => {
+                "quality" | "videoQuality" => {
                     int(k, v, 1, 100)?;
+                }
+                "videoFormat" => one_of(k, v, crate::export_video::VideoFormat::NAMES)?,
+                "videoMaxSide" => {
+                    let (lo, hi) = crate::export_video::VIDEO_MAX_SIDE_RANGE;
+                    if !whole(v).is_some_and(|i| i == 0 || (i64::from(lo)..=i64::from(hi)).contains(&i)) {
+                        return Err(bad(format!("`{k}` must be 0 (the clip's size) or an integer {lo}..{hi}")));
+                    }
                 }
                 "ppi" => {
                     int(k, v, 1, u16::MAX as i64)?;
@@ -916,7 +957,12 @@ impl ExportOptions {
                         return Err(bad(format!("`{k}` can't contain a NUL character")));
                     }
                 }
-                "naming" | "subfolder" | "path" | "dir" | "preset" => {
+                "subfolder" => {
+                    if let Some(why) = subfolder_problem(string(cmd, k, v)?) {
+                        return Err(bad(format!("`{k}`: {why}")));
+                    }
+                }
+                "naming" | "customText" | "path" | "dir" | "preset" => {
                     string(cmd, k, v)?;
                 }
                 "sharpen" => parses(k, v, |s| SharpenFor::parse(s).is_some(), &["none", "screen", "matte", "glossy"])?,
@@ -937,6 +983,15 @@ impl ExportOptions {
                     }
                 }
                 "watermark" => Self::validate_watermark(cmd, v)?,
+                "pluginDestination" => {
+                    // {plugin, destination, args?}: a plug-in export destination run after the files are written
+                    let ok = v.get("plugin").is_some_and(Value::is_string)
+                        && v.get("destination").is_some_and(Value::is_string)
+                        && v.get("args").is_none_or(|a| a.is_object() || a.is_null());
+                    if !ok {
+                        return Err(bad(format!("`{k}` must be {{plugin, destination, args?: object}}")));
+                    }
+                }
                 "id" => {
                     int(k, v, 0, i64::MAX)?;
                 }
@@ -1036,8 +1091,13 @@ impl ExportOptions {
             sharpen_amount: s("sharpenAmount").and_then(SharpenAmount::parse).unwrap_or(d.sharpen_amount),
             naming: s("naming").map_or(d.naming, str::to_string),
             start_number: u("startNumber").map_or(d.start_number, |v| v.min(999_999) as u32),
+            custom_text: s("customText").map_or(d.custom_text, str::to_string),
             destination_mode: s("destinationMode").and_then(DestinationMode::parse).unwrap_or(d.destination_mode),
-            subfolder: s("subfolder").map_or(d.subfolder, |v| v.trim().replace(['\\', ':', '\0'], "_")),
+            // stored prefs are read leniently: a subfolder that is a path becomes one folder name
+            subfolder: s("subfolder").map_or(d.subfolder, |v| {
+                let v = v.trim().replace(['/', '\\', ':', '\0'], "_");
+                if subfolder_problem(&v).is_some() { String::new() } else { v }
+            }),
             conflict: s("conflict").and_then(Conflict::parse).unwrap_or(d.conflict),
             tiff_compression: match s("tiffCompression").map(str::to_ascii_lowercase).as_deref() {
                 Some("none") => TiffCompression::None,
@@ -1057,12 +1117,17 @@ impl ExportOptions {
             color_space: s("colorSpace").and_then(OutputSpace::parse).unwrap_or(d.color_space),
             bit_depth: u("bitDepth").filter(|b| matches!(b, 8 | 10 | 16 | 32)).map(|b| b as u8),
             hdr: p.get("hdr").and_then(Value::as_bool).unwrap_or(d.hdr),
+            hdr_transfer: s("hdrTransfer").and_then(HdrCurve::parse).unwrap_or(d.hdr_transfer),
             jxl_lossless: p.get("jxlLossless").and_then(Value::as_bool).unwrap_or(d.jxl_lossless),
             jxl_effort: s("jxlEffort").and_then(JxlEffort::parse).unwrap_or(d.jxl_effort),
             jxl_progressive: p.get("jxlProgressive").and_then(Value::as_bool).unwrap_or(d.jxl_progressive),
             add_to_photos: p.get("addToPhotos").and_then(Value::as_bool).unwrap_or(d.add_to_photos),
             photos_album: s("photosAlbum").map_or(d.photos_album, |a| a.trim().to_string()),
-            hdr_transfer: s("hdrTransfer").and_then(HdrCurve::parse).unwrap_or(d.hdr_transfer),
+            video_format: s("videoFormat").and_then(crate::export_video::VideoFormat::parse).unwrap_or(d.video_format),
+            video_quality: u("videoQuality").map_or(d.video_quality, |q| q.clamp(1, 100) as u8),
+            video_max_side: u("videoMaxSide").filter(|v| *v > 0).map(|v| {
+                v.clamp(u64::from(crate::export_video::VIDEO_MAX_SIDE_RANGE.0), u64::from(crate::export_video::VIDEO_MAX_SIDE_RANGE.1)) as u32
+            }),
         }
     }
 
@@ -1199,10 +1264,10 @@ impl ExportOptions {
 
     /// Output file name for photo `p` at 1-based position `seq` in a batch (the original's
     /// extension is kept for [`ExportFormat::Original`]).
-    pub fn file_name_for(&self, p: &lightcraft_catalog::Photo, seq: usize) -> String {
+    pub fn file_name_for(&self, p: &lcc_catalog::Photo, seq: usize) -> String {
         let base = if self.naming.trim().is_empty() { "{name}" } else { self.naming.as_str() };
         let n = seq + self.start_number.max(1) as usize - 1;
-        let name = crate::rename::expand_tokens(base, p, n, 3);
+        let name = crate::rename::expand_tokens(base, p, n, 3).replace("{custom}", self.custom_text.trim());
         let mut name: String = name.chars().map(|c| if matches!(c, '/' | '\\' | ':' | '\0') { '_' } else { c }).collect();
         let (stem, ext) = p.file_name.rsplit_once('.').unwrap_or((&p.file_name, ""));
         if name.trim().is_empty() {
@@ -1307,8 +1372,8 @@ pub fn encode_with_metadata(img: &Rgba8, o: &ExportOptions, meta: Option<&Metada
     let img = finish_8bit(img, o);
     let space = o.effective_space();
     let profile = icc::write_named(named_space(space));
-    let exif = meta.map(lightcraft_meta::write_exif);
-    let xmp = meta.map(|m| lightcraft_meta::write_xmp(m, None));
+    let exif = meta.map(lcc_meta::write_exif);
+    let xmp = meta.map(|m| lcc_meta::write_xmp(m, None));
     let meta = EncodeMeta { icc: Some(&profile), exif: exif.as_deref(), xmp: xmp.as_deref(), ppi: Some(o.ppi) };
     let e = EncodeImage::rgba8(&img);
     let r = match o.format {
@@ -1344,7 +1409,7 @@ pub fn encode_with_metadata(img: &Rgba8, o: &ExportOptions, meta: Option<&Metada
         ExportFormat::Psd => encode::encode_psd(&e, &meta),
         ExportFormat::Webp => encode::encode_webp_lossless(&e, &meta),
         ExportFormat::Avif => encode::encode_avif(&e, o.quality, 8, &meta),
-        ExportFormat::Jxl => lightcraft_codecs::encode_jxl(&e, &o.jxl(space, false), &meta),
+        ExportFormat::Jxl => lcc_codecs::encode_jxl(&e, &o.jxl(space, false), &meta),
         f @ (ExportFormat::Original | ExportFormat::Dng) => return Err(format!("{f:?} export does not encode pixels")),
         ExportFormat::RenderedDng => return Err("Render to DNG needs a float render".into()),
     };
@@ -1378,7 +1443,7 @@ fn finish_deep(img: &DeepImage, o: &ExportOptions) -> DeepImage {
 /// and the HDR rendition `hdr` (float linear, same space and size). The gain map is measured
 /// against the base as written, so its 8-bit rounding is handed back by the map.
 pub fn encode_gain_map_jpeg(sdr: &Rgba8, hdr: &DeepImage, o: &ExportOptions, meta: Option<&Metadata>) -> Result<Vec<u8>, String> {
-    use lightcraft_codecs::gainmap;
+    use lcc_codecs::gainmap;
     let base = finish_8bit(sdr, o);
     let hdr = finish_deep(hdr, o);
     let DeepSamples::F32(hv) = &hdr.samples else {
@@ -1394,8 +1459,8 @@ pub fn encode_gain_map_jpeg(sdr: &Rgba8, hdr: &DeepImage, o: &ExportOptions, met
     let hdr_lin: &[[f32; 3]] = hv.as_chunks::<3>().0;
     let (map, gm) = gainmap::compute(&sdr_lin, hdr_lin, w, h, space.luma(), &gainmap::GainMapOptions::default()).map_err(|e| e.to_string())?;
     let profile = icc::write_named(named_space(space));
-    let exif = meta.map(lightcraft_meta::write_exif);
-    let xmp = meta.map(|m| lightcraft_meta::write_xmp(m, None));
+    let exif = meta.map(lcc_meta::write_exif);
+    let xmp = meta.map(|m| lcc_meta::write_xmp(m, None));
     let em = EncodeMeta { icc: Some(&profile), exif: exif.as_deref(), xmp: xmp.as_deref(), ppi: Some(o.ppi) };
     let sub = if o.limit_kb.is_some() { ChromaSubsampling::S420 } else { ChromaSubsampling::S444 };
     gainmap::encode_jpeg(&EncodeImage::rgba8(&base), &map, &gm, o.quality, sub, &em).map_err(|e| e.to_string())
@@ -1417,8 +1482,8 @@ pub fn srgb8_in(space: OutputSpace, c: [u8; 3]) -> [u8; 3] {
     if space == OutputSpace::Srgb {
         return c;
     }
-    let lin = c.map(lightcraft_color::transfer::decode_srgb8);
-    let m = lightcraft_color::SRGB.to_space(&space.rgb_space()).to_f32();
+    let lin = c.map(lcc_color::transfer::decode_srgb8);
+    let m = lcc_color::SRGB.to_space(&space.rgb_space()).to_f32();
     let t = space.trc();
     std::array::from_fn(|i| {
         let v = m[i][0] * lin[0] + m[i][1] * lin[1] + m[i][2] * lin[2];
@@ -1428,7 +1493,7 @@ pub fn srgb8_in(space: OutputSpace, c: [u8; 3]) -> [u8; 3] {
 
 /// Encode a render according to `o`: its high-bit-depth samples when it has them (16-bit PNG/TIFF,
 /// 10-bit AVIF, 32-bit float linear TIFF), else its 8-bit image.
-pub fn encode_rendered(r: &lightcraft_pipeline::Rendered, o: &ExportOptions, meta: Option<&Metadata>) -> Result<Vec<u8>, String> {
+pub fn encode_rendered(r: &lcc_pipeline::Rendered, o: &ExportOptions, meta: Option<&Metadata>) -> Result<Vec<u8>, String> {
     match &r.deep {
         Some(d) if o.effective_depth() != OutputDepth::U8 => encode_deep(d, o, meta),
         _ => encode_with_metadata(&r.image, o, meta),
@@ -1440,11 +1505,11 @@ pub fn encode_deep(img: &DeepImage, o: &ExportOptions, meta: Option<&Metadata>) 
     let meta_src = meta;
     let img = finish_deep(img, o);
     let profile = match img.samples {
-        DeepSamples::F32(_) => icc::write_matrix_trc(&img.space.rgb_space(), &lightcraft_codecs::Trc::Linear),
+        DeepSamples::F32(_) => icc::write_matrix_trc(&img.space.rgb_space(), &lcc_codecs::Trc::Linear),
         DeepSamples::U16(_) => icc::write_named(named_space(img.space)),
     };
-    let exif = meta.map(lightcraft_meta::write_exif);
-    let xmp = meta.map(|m| lightcraft_meta::write_xmp(m, None));
+    let exif = meta.map(lcc_meta::write_exif);
+    let xmp = meta.map(|m| lcc_meta::write_xmp(m, None));
     let meta = EncodeMeta { icc: Some(&profile), exif: exif.as_deref(), xmp: xmp.as_deref(), ppi: Some(o.ppi) };
     let (w, h) = (img.width as u32, img.height as u32);
     let e = match &img.samples {
@@ -1452,22 +1517,20 @@ pub fn encode_deep(img: &DeepImage, o: &ExportOptions, meta: Option<&Metadata>) 
         DeepSamples::F32(v) => EncodeImage::new(w, h, 3, Samples::F32(v)),
     };
     let r = match (o.format, &img.samples) {
-        (ExportFormat::Png, DeepSamples::F32(v)) if img.space == OutputSpace::Rec2020 => lightcraft_codecs::encode_png_pq(w, h, v, &meta),
+        (ExportFormat::Png, DeepSamples::F32(v)) if img.space == OutputSpace::Rec2020 => lcc_codecs::encode_png_pq(w, h, v, &meta),
         (ExportFormat::Png, _) => encode::encode_png(&e, &meta),
         (ExportFormat::Tiff, _) => encode::encode_tiff(&e, o.tiff_compression, &meta),
         (ExportFormat::Psd, _) => encode::encode_psd(&e, &meta),
         (ExportFormat::RenderedDng, DeepSamples::F32(v)) => {
             let m = meta_src.cloned().unwrap_or_default();
-            return lightcraft_raw::write_rendered_dng(img.width, img.height, v, &img.space.rgb_space(), &m, xmp.clone()).map_err(|e| e.to_string());
+            return lcc_raw::write_rendered_dng(img.width, img.height, v, &img.space.rgb_space(), &m, xmp.clone()).map_err(|e| e.to_string());
         }
         (ExportFormat::Avif, DeepSamples::F32(v)) if img.space == OutputSpace::Rec2020 => {
-            lightcraft_codecs::encode_avif_hdr(w, h, v, o.quality, 8, &meta, o.hdr_transfer.codec())
+            lcc_codecs::encode_avif_hdr(w, h, v, o.quality, 8, &meta, o.hdr_transfer.codec())
         }
         (ExportFormat::Avif, _) => encode::encode_avif(&e, o.quality, 8, &meta),
-        (ExportFormat::Jxl, DeepSamples::F32(_)) if img.space == OutputSpace::Rec2020 => {
-            lightcraft_codecs::encode_jxl(&e, &o.jxl(img.space, true), &meta)
-        }
-        (ExportFormat::Jxl, DeepSamples::U16(_)) => lightcraft_codecs::encode_jxl(&e, &o.jxl(img.space, false), &meta),
+        (ExportFormat::Jxl, DeepSamples::F32(_)) if img.space == OutputSpace::Rec2020 => lcc_codecs::encode_jxl(&e, &o.jxl(img.space, true), &meta),
+        (ExportFormat::Jxl, DeepSamples::U16(_)) => lcc_codecs::encode_jxl(&e, &o.jxl(img.space, false), &meta),
         (f, _) => return Err(format!("{f:?} export is 8-bit only")),
     };
     r.map_err(|e| e.to_string())
@@ -1475,13 +1538,14 @@ pub fn encode_deep(img: &DeepImage, o: &ExportOptions, meta: Option<&Metadata>) 
 
 /// Whether the export of `photo` under `o` leaves out its location (GPS and place names).
 /// (`photo` and `catalog` let library-level privacy rules add to the export option.)
-pub fn removes_location(_photo: &lightcraft_catalog::Photo, _catalog: &lightcraft_catalog::Catalog, o: &ExportOptions) -> bool {
-    o.remove_location
+pub fn removes_location(photo: &lcc_catalog::Photo, catalog: &lcc_catalog::Catalog, o: &ExportOptions) -> bool {
+    // a photo inside a private saved location (Map module) is exported without its location
+    o.remove_location || photo.meta.gps.is_some_and(|g| catalog.is_private_location(g))
 }
 
 /// The metadata to embed for `photo` under `o.metadata` / `o.remove_location`. `None` = embed nothing.
 /// Keywords follow the catalog's keyword list (`Catalog::export_keywords`).
-pub fn export_metadata(photo: &lightcraft_catalog::Photo, catalog: &lightcraft_catalog::Catalog, o: &ExportOptions) -> Option<Metadata> {
+pub fn export_metadata(photo: &lcc_catalog::Photo, catalog: &lcc_catalog::Catalog, o: &ExportOptions) -> Option<Metadata> {
     let m = &photo.meta;
     let text = |s: &str| (!s.trim().is_empty()).then(|| s.to_string());
     // copyright info (also under "copyright only"): notice, creator, status, usage terms, info URL
@@ -1491,7 +1555,7 @@ pub fn export_metadata(photo: &lightcraft_catalog::Photo, catalog: &lightcraft_c
         usage_terms: text(&m.usage_terms),
         copyright_url: text(&m.copyright_url),
         artist: text(&m.creator),
-        software: Some("LightCraft".into()),
+        software: Some(lcc_brand::DISPLAY_NAME.into()),
         ..Default::default()
     };
     match o.metadata {
@@ -1503,7 +1567,8 @@ pub fn export_metadata(photo: &lightcraft_catalog::Photo, catalog: &lightcraft_c
     out.caption = text(&m.caption);
     out.alt_text = text(&m.alt_text);
     out.extended_description = text(&m.extended_description);
-    if !o.remove_location {
+    let remove_location = removes_location(photo, catalog, o);
+    if !remove_location {
         out.sublocation = text(&m.location);
         out.city = text(&m.city);
         out.state = text(&m.state);
@@ -1515,8 +1580,8 @@ pub fn export_metadata(photo: &lightcraft_catalog::Photo, catalog: &lightcraft_c
     out.capture_time = photo.captured.as_deref().and_then(DateTime::parse_iso);
     out.rating = (photo.rating > 0).then_some(photo.rating as i8);
     // Pixels are exported upright: orientation is baked in.
-    out.orientation = Some(lightcraft_meta::Orientation::Normal);
-    if !o.remove_location {
+    out.orientation = Some(lcc_meta::Orientation::Normal);
+    if !remove_location {
         out.gps = m.gps.map(|(latitude, longitude)| Gps { latitude, longitude, altitude: None });
     }
     if o.metadata == MetadataPolicy::All {
@@ -1524,7 +1589,7 @@ pub fn export_metadata(photo: &lightcraft_catalog::Photo, catalog: &lightcraft_c
         out.lens_model = text(&m.lens);
         out.focal_length = m.focal_mm.map(f64::from);
         out.f_number = m.aperture.map(f64::from);
-        out.exposure_time = lightcraft_catalog::parse_shutter_seconds(&m.shutter);
+        out.exposure_time = lcc_catalog::parse_shutter_seconds(&m.shutter);
         out.iso = m.iso;
     }
     Some(out)
@@ -1542,11 +1607,35 @@ pub struct Exported {
     /// Set when the render was tried on the GPU and fell back to the CPU: why (see
     /// `docs/gpu-pipeline.md`). The file holds the CPU render either way.
     pub gpu_fallback: Option<String>,
+    /// What the render reported without failing (e.g. a plug-in filter that was skipped).
+    pub warnings: Vec<String>,
+    /// A video clip's movie, in a temporary file (`bytes` is then empty): moved into place instead
+    /// of written ([`Exported::save`]).
+    pub video_file: Option<crate::export_video::TempFile>,
+}
+
+impl Exported {
+    /// Write the export to `path` (the movie moved there, else the bytes; sidecars not included).
+    pub fn save(&self, path: &str) -> Result<(), String> {
+        match &self.video_file {
+            Some(f) => f.move_to(path),
+            None => write_file(path, &self.bytes),
+        }
+    }
+
+    /// The exported file's size in bytes.
+    pub fn len(&self) -> u64 {
+        self.video_file.as_ref().map_or(self.bytes.len() as u64, |f| f.len())
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 /// Output size of photo `p` under `o` (its cropped full size when `o.resize` is `None`).
-pub fn output_size(p: &lightcraft_catalog::Photo, o: &ExportOptions) -> (usize, usize) {
-    let (w, h) = lightcraft_pipeline::native_output_size(p.width.max(1) as usize, p.height.max(1) as usize, &p.develop);
+pub fn output_size(p: &lcc_catalog::Photo, o: &ExportOptions) -> (usize, usize) {
+    let (w, h) = lcc_pipeline::native_output_size(p.width.max(1) as usize, p.height.max(1) as usize, &p.develop);
     // whole pixels first: a crop's float noise (5999.999… for 6000) must not decide a half-pixel tie
     let (w, h) = (w.round().max(1.0), h.round().max(1.0));
     match &o.resize {
@@ -1557,7 +1646,7 @@ pub fn output_size(p: &lightcraft_catalog::Photo, o: &ExportOptions) -> (usize, 
 
 /// Render photo `id` at the requested size and encode it (or copy / convert its original for
 /// [`ExportFormat::Original`] / [`ExportFormat::Dng`]).
-pub fn export_photo(session: &mut crate::Session, id: lightcraft_catalog::PhotoId, o: &ExportOptions, seq: usize) -> Result<Exported, String> {
+pub fn export_photo(session: &mut crate::Session, id: lcc_catalog::PhotoId, o: &ExportOptions, seq: usize) -> Result<Exported, String> {
     prepare_export(session, id, o, seq)?.run()
 }
 
@@ -1565,7 +1654,7 @@ pub fn export_photo(session: &mut crate::Session, id: lightcraft_catalog::PhotoI
 /// the heavy part (read, decode, render, encode) without the session, so it can run on another
 /// thread.
 pub struct PreparedExport {
-    pub photo: lightcraft_catalog::PhotoId,
+    pub photo: lcc_catalog::PhotoId,
     pub file_name: String,
     /// The folder of the photo's original on disk ([`DestinationMode::SameAsOriginal`]); `None`
     /// for a demo photo or one in the browser's storage.
@@ -1588,6 +1677,8 @@ struct RenderWork {
 
 enum Work {
     Render(Box<RenderWork>),
+    /// A video clip exported as a movie ([`crate::export_video`]).
+    Video(Box<crate::export_video::VideoWork>),
     /// [`ExportFormat::Original`] (the file's bytes + an XMP sidecar) or [`ExportFormat::Dng`] (the
     /// raw data re-encoded as a lossless DNG with the edits in its XMP).
     File {
@@ -1607,32 +1698,48 @@ enum Work {
 
 /// Set up the export of photo `id` at 1-based position `seq` of a batch. (For a whole batch use
 /// [`prepare_batch`]: it looks at the library's originals once.)
-pub fn prepare_export(
-    session: &mut crate::Session,
-    id: lightcraft_catalog::PhotoId,
-    o: &ExportOptions,
-    seq: usize,
-) -> Result<PreparedExport, String> {
+pub fn prepare_export(session: &mut crate::Session, id: lcc_catalog::PhotoId, o: &ExportOptions, seq: usize) -> Result<PreparedExport, String> {
     let guard = std::sync::Arc::new(session.original_guard());
     prepare_guarded(session, id, o, seq, guard)
 }
 
 /// [`prepare_export`] for each of `ids` in order (`{seq}` = position, from 1).
-pub fn prepare_batch(session: &mut crate::Session, ids: &[lightcraft_catalog::PhotoId], o: &ExportOptions) -> Result<Vec<PreparedExport>, String> {
+pub fn prepare_batch(session: &mut crate::Session, ids: &[lcc_catalog::PhotoId], o: &ExportOptions) -> Result<Vec<PreparedExport>, String> {
     let guard = std::sync::Arc::new(session.original_guard());
     ids.iter().enumerate().map(|(i, id)| prepare_guarded(session, *id, o, i + 1, guard.clone())).collect()
 }
 
 fn prepare_guarded(
     session: &mut crate::Session,
-    id: lightcraft_catalog::PhotoId,
+    id: lcc_catalog::PhotoId,
     o: &ExportOptions,
     seq: usize,
     guard: std::sync::Arc<crate::originals::OriginalGuard>,
 ) -> Result<PreparedExport, String> {
     let p = session.catalog.photo(id).ok_or("no such photo")?;
-    let file_name = o.file_name_for(p, seq);
+    let mut file_name = o.file_name_for(p, seq);
     let source_dir = original_folder(&p.source);
+    if let Some(v) = p.video.as_ref().filter(|_| o.format.is_rendered()) {
+        let lcc_catalog::Source::File { path } = &p.source else {
+            return Err(format!("{}: a video clip without a file", p.file_name));
+        };
+        let stem = file_name.strip_suffix(o.format.extension()).unwrap_or(&file_name).trim_end_matches('.');
+        file_name = format!("{stem}.{}", o.video_format.extension());
+        let px = (v.width as usize).saturating_mul(v.height as usize);
+        let work = crate::export_video::VideoWork {
+            src: std::path::PathBuf::from(path),
+            trim: (v.trim_in, v.trim_out),
+            settings: (*p.develop).clone(),
+            format: o.video_format,
+            quality: o.video_quality,
+            max_side: o.video_max_side,
+            file_name: file_name.clone(),
+            hooks: Default::default(),
+        };
+        // a decoded frame, its graded copy and the pipeline's planes, plus the encoder's frames
+        let weight = px.saturating_mul(96);
+        return Ok(PreparedExport { photo: id, file_name, source_dir, work: Work::Video(Box::new(work)), guard, weight });
+    }
     // HDR output only for photos edited in HDR; the rest of the batch exports as usual
     let sdr_opts;
     let o = if o.hdr && !p.develop.hdr.enabled {
@@ -1644,7 +1751,7 @@ fn prepare_guarded(
     let (full_px, long) = ((p.width as usize).saturating_mul(p.height as usize), p.width.max(p.height) as usize);
     let (work, weight) = if o.format.is_rendered() {
         let (w, h) = output_size(p, o);
-        let (nw, nh) = lightcraft_pipeline::native_output_size(p.width.max(1) as usize, p.height.max(1) as usize, &p.develop);
+        let (nw, nh) = lcc_pipeline::native_output_size(p.width.max(1) as usize, p.height.max(1) as usize, &p.develop);
         let native_px = (nw.round().max(1.0) * nh.round().max(1.0)) as usize;
         let label = p.file_name.clone();
         let meta = export_metadata(p, &session.catalog, o);
@@ -1657,7 +1764,7 @@ fn prepare_guarded(
         let hdr_job = if gain_map { Some(session.export_job(id, w, h, o.effective_space(), OutputDepth::F32Hdr)?) } else { None };
         (Work::Render(Box::new(RenderWork { job, hdr_job, meta, opts: o.clone() })), weight)
     } else {
-        let lightcraft_catalog::Source::File { path } = &p.source else {
+        let lcc_catalog::Source::File { path } = &p.source else {
             return Err(format!("{} is a generated demo photo: it has no original file to export", p.file_name));
         };
         let dng = (o.format == ExportFormat::Dng).then_some(o.dng_compression);
@@ -1684,8 +1791,8 @@ fn prepare_guarded(
 
 /// The folder a photo's original is in, for [`DestinationMode::SameAsOriginal`]. None for a demo
 /// photo, and on the web, where an original lives in the browser's storage, not in a folder.
-fn original_folder(source: &lightcraft_catalog::Source) -> Option<String> {
-    let lightcraft_catalog::Source::File { path } = source else { return None };
+fn original_folder(source: &lcc_catalog::Source) -> Option<String> {
+    let lcc_catalog::Source::File { path } = source else { return None };
     if cfg!(target_arch = "wasm32") {
         return None;
     }
@@ -1724,10 +1831,37 @@ fn render_weight(full_px: usize, long: usize, level: crate::media::SourceLevel, 
     src_px.saturating_mul(12).saturating_add(out_px.saturating_mul(36))
 }
 
+/// Give the clips among `items` the batch's cancel flag and progress callback.
+pub fn set_video_hooks(items: &mut [PreparedExport], hooks: &crate::export_video::VideoHooks) {
+    for i in items {
+        if let Work::Video(w) = &mut i.work {
+            w.hooks = hooks.clone();
+        }
+    }
+}
+
 impl PreparedExport {
+    /// Whether this item is a video clip exported as a movie.
+    pub fn is_video(&self) -> bool {
+        matches!(self.work, Work::Video(_))
+    }
+
     pub fn run(self) -> Result<Exported, String> {
         let file_name = self.file_name;
         match self.work {
+            Work::Video(w) => {
+                let out = crate::export_video::run(*w)?;
+                Ok(Exported {
+                    file_name,
+                    bytes: Vec::new(),
+                    width: out.width,
+                    height: out.height,
+                    sidecars: Vec::new(),
+                    gpu_fallback: None,
+                    warnings: Vec::new(),
+                    video_file: Some(out.file),
+                })
+            }
             Work::Render(w) => {
                 let RenderWork { job, hdr_job, meta, opts } = *w;
                 let result = job.run();
@@ -1741,7 +1875,16 @@ impl PreparedExport {
                     }
                     None => encode_rendered(&r, &opts, meta.as_ref())?,
                 };
-                Ok(Exported { file_name, bytes, width: r.image.width, height: r.image.height, sidecars: Vec::new(), gpu_fallback })
+                Ok(Exported {
+                    file_name,
+                    bytes,
+                    width: r.image.width,
+                    height: r.image.height,
+                    sidecars: Vec::new(),
+                    gpu_fallback,
+                    warnings: r.warnings.clone(),
+                    video_file: None,
+                })
             }
             Work::File { path, read, packet, dng, quality, lossy_edge, label, size, remove_location } => {
                 let bytes = match &read {
@@ -1750,10 +1893,10 @@ impl PreparedExport {
                 };
                 let Some(dng) = dng else {
                     // the file is copied byte for byte: refuse rather than leak a location it embeds
-                    if remove_location && lightcraft_meta::extract(&bytes).gps.is_some() {
-                        return Err(format!(
-                            "{label}: can't remove the location from an original file that embeds GPS; export as JPEG, TIFF or DNG instead"
-                        ));
+                    if remove_location && lcc_meta::embeds_location(&bytes) {
+                        // DNG only for what the DNG export below takes
+                        let instead = if lcc_raw::probe(&bytes).is_some() { "JPEG, TIFF or DNG" } else { "JPEG or TIFF" };
+                        return Err(format!("{label}: can't remove the location from an original file that embeds GPS; export as {instead} instead"));
                     }
                     return Ok(Exported {
                         file_name,
@@ -1762,25 +1905,34 @@ impl PreparedExport {
                         height: size.1,
                         sidecars: vec![("xmp", packet.into_bytes())],
                         gpu_fallback: None,
+                        warnings: Vec::new(),
+                        video_file: None,
                     });
                 };
-                if lightcraft_raw::probe(&bytes).is_none() {
+                if lcc_raw::probe(&bytes).is_none() {
                     return Err(format!("{label}: DNG export needs a raw photo"));
                 }
-                let mut raw = lightcraft_raw::decode(&bytes).map_err(|e| format!("{label}: {e}"))?;
+                let mut raw = lcc_raw::decode(&bytes).map_err(|e| format!("{label}: {e}"))?;
                 crate::camera_preview::with_starting_colour(&mut raw, &bytes);
                 drop(bytes);
                 let compression = match dng {
-                    DngCompression::Lossless => lightcraft_raw::DngCompression::Lj92 { tile: 256 },
-                    DngCompression::Deflate => lightcraft_raw::DngCompression::Deflate { tile: 256, half: false },
-                    DngCompression::Uncompressed => lightcraft_raw::DngCompression::Uncompressed,
-                    DngCompression::Lossy => {
-                        lightcraft_raw::DngCompression::LossyJpeg { tile: 256, quality: quality.clamp(1, 100), long_edge: lossy_edge }
-                    }
+                    DngCompression::Lossless => lcc_raw::DngCompression::Lj92 { tile: 256 },
+                    DngCompression::Deflate => lcc_raw::DngCompression::Deflate { tile: 256, half: false },
+                    DngCompression::Uncompressed => lcc_raw::DngCompression::Uncompressed,
+                    DngCompression::Lossy => lcc_raw::DngCompression::LossyJpeg { tile: 256, quality: quality.clamp(1, 100), long_edge: lossy_edge },
                 };
-                let dng = lightcraft_raw::write_dng(&raw, &lightcraft_raw::DngWriteOptions { xmp: Some(packet), compression, ..Default::default() })
+                let dng = lcc_raw::write_dng(&raw, &lcc_raw::DngWriteOptions { xmp: Some(packet), compression, ..Default::default() })
                     .map_err(|e| e.to_string())?;
-                Ok(Exported { file_name, bytes: dng, width: raw.width, height: raw.height, sidecars: Vec::new(), gpu_fallback: None })
+                Ok(Exported {
+                    file_name,
+                    bytes: dng,
+                    width: raw.width,
+                    height: raw.height,
+                    sidecars: Vec::new(),
+                    gpu_fallback: None,
+                    warnings: Vec::new(),
+                    video_file: None,
+                })
             }
         }
     }
@@ -1848,7 +2000,7 @@ impl AfterExport {
 
     /// Do it now for an export's per-photo results ([`run_batch`]'s: only the files written
     /// count), waiting for Photos: for a worker thread (the app's background export) or a caller
-    /// without a window (MCP, lightcraft-cli). `None` when there was nothing to do, else the
+    /// without a window (MCP, lcc-cli). `None` when there was nothing to do, else the
     /// outcome to report as the export's `applePhotos`: the finished job (`{job, running: false,
     /// requested, album}` with `{imported, ids, warning?}`, `{error}`, or `{skipped}` when the
     /// export was cancelled or wrote nothing). Never fails the export: its files are written
@@ -1913,7 +2065,7 @@ impl crate::Session {
 /// Export `ids` in order ([`prepare_batch`] + [`run_batch`]), stopping at the first error.
 pub fn export_batch(
     session: &mut crate::Session,
-    ids: &[lightcraft_catalog::PhotoId],
+    ids: &[lcc_catalog::PhotoId],
     o: &ExportOptions,
     to: &Destination,
     write: &mut dyn FnMut(&str, &[u8]) -> Result<(), String>,
@@ -1924,7 +2076,7 @@ pub fn export_batch(
 }
 
 /// Write an exported or rendered file on disk: its folder is created if needed, and the file is
-/// replaced atomically ([`lightcraft_catalog::safe_file::write_atomic_nosync`]: a temp file
+/// replaced atomically ([`lcc_catalog::safe_file::write_atomic_nosync`]: a temp file
 /// renamed into place), so a failure part-way leaves any previous file intact and no truncated
 /// one. Not synced to disk (issue #134): an export can always be made again from the original.
 /// The native writer behind exports, renders and screenshots (app, CLI, MCP).
@@ -1939,7 +2091,7 @@ pub fn write_file_durable(path: &str, bytes: &[u8]) -> Result<(), String> {
 }
 
 fn write_with(path: &str, bytes: &[u8], durable: bool) -> Result<(), String> {
-    use lightcraft_catalog::safe_file::{write_atomic, write_atomic_nosync};
+    use lcc_catalog::safe_file::{write_atomic, write_atomic_nosync};
     let p = std::path::Path::new(path);
     if let Some(dir) = p.parent().filter(|d| !d.as_os_str().is_empty()) {
         std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
@@ -2167,8 +2319,12 @@ impl<'a> Placer<'a> {
 
     /// The folder photo `name` (its original in `source_dir`) is written to: the batch's folder or
     /// the photo's own ([`DestinationMode`]), plus the subfolder. An error for a photo with no
-    /// folder of its own, or whose folder is gone: never a file written somewhere else instead.
+    /// folder of its own, whose folder is gone, or a subfolder that would leave the folder: never
+    /// a file written somewhere else instead.
     fn folder_for(&self, name: &str, source_dir: Option<&str>) -> Result<String, String> {
+        if let Some(why) = subfolder_problem(&self.o.subfolder) {
+            return Err(format!("{name}: {why}"));
+        }
         let base = match self.o.destination_mode {
             DestinationMode::SpecificFolder => self.to.dir.clone(),
             DestinationMode::SameAsOriginal => {
@@ -2183,14 +2339,15 @@ impl<'a> Placer<'a> {
                 d.to_string()
             }
         };
-        Ok(if self.o.subfolder.is_empty() { base } else { join_path(&base, &self.o.subfolder) })
+        let sub = self.o.subfolder.trim();
+        Ok(if sub.is_empty() { base } else { join_path(&base, sub) })
     }
 
     /// Place photo `photo`'s export result (file `name`, its original in `source_dir`): write it
     /// and record the outcome. `Err` only when it failed and `stop_on_error` is set.
     fn place(
         &mut self,
-        photo: lightcraft_catalog::PhotoId,
+        photo: lcc_catalog::PhotoId,
         name: String,
         source_dir: Option<&str>,
         guard: &crate::originals::OriginalGuard,
@@ -2243,7 +2400,10 @@ impl<'a> Placer<'a> {
             for f in &files {
                 guard.check(std::path::Path::new(f))?;
             }
-            write(&path, &e.bytes)?;
+            match &e.video_file {
+                Some(f) => f.move_to(&path)?,
+                None => write(&path, &e.bytes)?,
+            }
             let mut sidecars = Vec::new();
             for ((_, bytes), sc) in e.sidecars.iter().zip(files.iter().skip(1)) {
                 write(sc, bytes)?;
@@ -2254,9 +2414,15 @@ impl<'a> Placer<'a> {
         match written {
             Ok((path, files, sidecars)) => {
                 self.taken.extend(files);
-                let mut entry = json!({"path": path, "width": e.width, "height": e.height, "bytes": e.bytes.len(), "sidecars": sidecars});
+                let mut entry = json!({"path": path, "width": e.width, "height": e.height, "bytes": e.len(), "sidecars": sidecars});
+                if e.video_file.is_some() {
+                    entry["video"] = json!(true);
+                }
                 if let Some(why) = &e.gpu_fallback {
                     entry["gpuFallback"] = json!(why);
+                }
+                if !e.warnings.is_empty() {
+                    entry["warnings"] = json!(e.warnings);
                 }
                 self.out.push(entry);
             }
@@ -2317,7 +2483,7 @@ mod tests {
     /// a keyword left out of export. They used to carry the `a|b` paths in `dc:subject`.
     #[test]
     fn exported_keywords_follow_their_options() {
-        use lightcraft_catalog::{Catalog, Op, Photo, PhotoId, Source, keywords::KeywordInfo};
+        use lcc_catalog::{Catalog, Op, Photo, PhotoId, Source, keywords::KeywordInfo};
         let mut c = Catalog::new();
         c.apply(Op::SetKeyword { path: "Places".into(), info: Some(KeywordInfo { include_on_export: false, ..KeywordInfo::default() }) }).unwrap();
         c.apply(Op::SetKeyword { path: "draft".into(), info: Some(KeywordInfo { include_on_export: false, ..KeywordInfo::default() }) }).unwrap();
@@ -2327,17 +2493,17 @@ mod tests {
         assert_eq!(m.keywords, ["Lisbon", "Italy", "travel"]);
         assert_eq!(m.hierarchical_keywords, ["Places|Lisbon", "travel|Italy"]);
         let jpg = encode_with_metadata(&test_image(), &ExportOptions::default(), Some(&m)).unwrap();
-        let back = lightcraft_meta::extract(&jpg);
+        let back = lcc_meta::extract(&jpg);
         assert_eq!((back.keywords, back.hierarchical_keywords), (m.keywords.clone(), m.hierarchical_keywords.clone()));
     }
 
     #[test]
     fn metadata_policies() {
-        use lightcraft_catalog::{Catalog, Photo, PhotoId, Source};
+        use lcc_catalog::{Catalog, Photo, PhotoId, Source};
         let mut p = Photo::new(PhotoId(1), Source::Demo { scene: 0 }, "a.jpg", "jpeg", 10, 10, "2026-09-30T00:00:00");
         p.meta.camera = "Synthetic X2".into();
         p.meta.copyright = "(c) Me".into();
-        p.meta.copyright_status = lightcraft_catalog::CopyrightStatus::Copyrighted;
+        p.meta.copyright_status = lcc_catalog::CopyrightStatus::Copyrighted;
         p.meta.usage_terms = "Editorial use only".into();
         p.meta.copyright_url = "https://example.com/rights".into();
         p.meta.shutter = "1/250".into();
@@ -2359,7 +2525,7 @@ mod tests {
         assert!(export_metadata(&p, &Catalog::new(), &ExportOptions { metadata: MetadataPolicy::None, ..Default::default() }).is_none());
         // embedded and readable back from the JPEG
         let jpg = encode_with_metadata(&test_image(), &ExportOptions::default(), Some(&all)).unwrap();
-        let back = lightcraft_meta::extract(&jpg);
+        let back = lcc_meta::extract(&jpg);
         assert_eq!(back.model.as_deref(), Some("Synthetic X2"));
         assert_eq!(back.copyright.as_deref(), Some("(c) Me"));
         assert_eq!((back.copyright_marked, back.usage_terms.as_deref()), (Some(true), Some("Editorial use only")));
@@ -2373,7 +2539,7 @@ mod tests {
         for p in img.data.iter_mut() {
             *p = [0, 0, 0, 255];
         }
-        let o = ExportOptions::from_json(&serde_json::json!({"watermark": {"text": "LightCraft", "size": 0.08, "opacity": 1.0, "shadow": false}}));
+        let o = ExportOptions::from_json(&serde_json::json!({"watermark": {"text": "The app", "size": 0.08, "opacity": 1.0, "shadow": false}}));
         let wm = o.watermark.clone().unwrap();
         draw_watermark(&mut img, &wm);
         let lit = |x0: usize, x1: usize, y0: usize, y1: usize| {
@@ -2432,7 +2598,7 @@ mod tests {
             let (y0, y1) = (on.iter().map(|p| p.1).min().unwrap(), on.iter().map(|p| p.1).max().unwrap());
             (x0, x1, y0, y1, img)
         };
-        let base = Watermark { text: "LightCraft".into(), size: 0.08, opacity: 1.0, shadow: false, inset_x: 0.0, inset_y: 0.0, ..Default::default() };
+        let base = Watermark { text: "Watermark".into(), size: 0.08, opacity: 1.0, shadow: false, inset_x: 0.0, inset_y: 0.0, ..Default::default() };
         let (a0, a1, b0, b1, flat) = lit(&base);
         assert!(a1 - a0 > 2 * (b1 - b0), "unturned text is wide");
         for rotation in [90, 270] {
@@ -2458,7 +2624,7 @@ mod tests {
     /// clamped to 6 px in a 150 px export covers the same share of a 600 px preview.
     #[test]
     fn watermark_preview_scales_the_minimum_text_size() {
-        let wm = Watermark { text: "LightCraft".into(), size: 0.01, opacity: 1.0, shadow: false, ..Default::default() };
+        let wm = Watermark { text: "Watermark".into(), size: 0.01, opacity: 1.0, shadow: false, ..Default::default() };
         let rows = |img: &Rgba8| (0..img.height).filter(|&y| (0..img.width).any(|x| img.get(x, y)[0] > 64)).count() as f32;
         let mut export = Rgba8::new(200, 150);
         draw_watermark(&mut export, &wm);
@@ -2496,7 +2662,7 @@ mod tests {
     #[test]
     fn watermarks_work_without_craft_fonts() {
         assert_eq!(watermark_fonts(&[]).len(), 1, "Inter only");
-        for wm in [vertical_japanese(), Watermark { text: "LightCraft 日本語".into(), ..Watermark::default() }] {
+        for wm in [vertical_japanese(), Watermark { text: "The app 日本語".into(), ..Watermark::default() }] {
             let mut covered = 0usize;
             watermark_coverage(400, 300, &wm, &[], 1.0, |_, _, k, _| covered += usize::from(k > 0.0));
             assert!(covered > 0, "{:?} draws something", wm.text);
@@ -2507,7 +2673,7 @@ mod tests {
     fn biz_ud_vertical_watermarks_place_punctuation_at_the_top_right() {
         use ab_glyph::Font;
         let Some(entry) = crate::fonts::CRAFT_FONTS.iter().find(|f| f.family == "BIZ UDMincho") else {
-            lightcraft_testkit::skip!(Fonts, "built without BIZ UDMincho from craft-fonts");
+            lcc_testkit::skip!(Fonts, "built without BIZ UDMincho from craft-fonts");
             return;
         };
         let font = ab_glyph::FontRef::try_from_slice(entry.bytes).unwrap();
@@ -2579,7 +2745,7 @@ mod tests {
                 compare(composed, decomposed, crate::fonts::CRAFT_FONTS);
             }
         } else {
-            lightcraft_testkit::skip!(Fonts, "Japanese comparisons: built without BIZ UDMincho from craft-fonts");
+            lcc_testkit::skip!(Fonts, "Japanese comparisons: built without BIZ UDMincho from craft-fonts");
         }
     }
 
@@ -2603,7 +2769,7 @@ mod tests {
         use ab_glyph::Font;
         let fonts = watermark_fonts(crate::fonts::CRAFT_FONTS);
         if fonts.len() < 2 {
-            lightcraft_testkit::skip!(Fonts, "built without CRAFT_FONTS_DIR, so there is no Japanese watermark face");
+            lcc_testkit::skip!(Fonts, "built without CRAFT_FONTS_DIR, so there is no Japanese watermark face");
             return;
         }
         for c in "日本語の文字".chars() {
@@ -2640,7 +2806,7 @@ mod tests {
         let logo_path = dir.join("logo.png");
         // 40×20: left half opaque red, right half fully transparent
         let logo = Rgba8::from_fn(40, 20, |x, _| if x < 20 { [255, 0, 0, 255] } else { [0, 255, 0, 0] });
-        let png = lightcraft_codecs::encode_png(&EncodeImage::rgba8(&logo), &EncodeMeta::default()).unwrap();
+        let png = lcc_codecs::encode_png(&EncodeImage::rgba8(&logo), &EncodeMeta::default()).unwrap();
         std::fs::write(&logo_path, png).unwrap();
         let mut img = Rgba8::new(400, 300);
         img.data.iter_mut().for_each(|p| *p = [0, 0, 0, 255]);
@@ -2702,8 +2868,8 @@ mod tests {
         assert_eq!(ExportOptions { format: ExportFormat::Dng, ..Default::default() }.file_name_for(&named("a.cr2"), 1), "a.dng");
     }
 
-    fn named(file_name: &str) -> lightcraft_catalog::Photo {
-        use lightcraft_catalog::{Photo, PhotoId, Source};
+    fn named(file_name: &str) -> lcc_catalog::Photo {
+        use lcc_catalog::{Photo, PhotoId, Source};
         Photo::new(PhotoId(1), Source::Demo { scene: 0 }, file_name, "", 1, 1, "2026-01-01T00:00:00")
     }
 
@@ -2829,9 +2995,9 @@ mod tests {
         let cropped = |r: Resize, w: u32, h: u32, x1: f64| {
             let mut p = named("IMG.ARW");
             (p.width, p.height) = (w, h);
-            std::sync::Arc::make_mut(&mut p.develop).crop.geometry.rect = lightcraft_geom::Rect::new(0.0, 0.0, x1, 1.0);
+            std::sync::Arc::make_mut(&mut p.develop).crop.geometry.rect = lcc_geom::Rect::new(0.0, 0.0, x1, 1.0);
             let (bw, bh) = output_size(&p, &ExportOptions { resize: Some(r), ..Default::default() });
-            lightcraft_pipeline::output_size(w as usize, h as usize, &p.develop, &lightcraft_pipeline::RenderRequest::fit(bw, bh))
+            lcc_pipeline::output_size(w as usize, h as usize, &p.develop, &lcc_pipeline::RenderRequest::fit(bw, bh))
         };
         let rendered = |r: Resize, w: u32, h: u32| cropped(r, w, h, 1.0);
         let mode = |mode: ResizeMode, value: f32, height: u32| Resize { mode, value, height, dont_enlarge: true };
@@ -2893,18 +3059,18 @@ mod tests {
 
     /// A flat field of a saturated green inside Display P3 but outside sRGB, rendered into `space`.
     fn p3_green(space: OutputSpace) -> Rgba8 {
-        use lightcraft_color::{DISPLAY_P3, REC2020};
+        use lcc_color::{DISPLAY_P3, REC2020};
         let c = DISPLAY_P3.to_space(&REC2020).apply_f32([0.04, 0.45, 0.04]);
-        let src = lightcraft_raster::Rgb32f::filled(16, 16, c);
-        let req = lightcraft_pipeline::RenderRequest { space, ..lightcraft_pipeline::RenderRequest::fit(16, 16) };
-        lightcraft_pipeline::render(&src, &Default::default(), &Default::default(), &req).image
+        let src = lcc_raster::Rgb32f::filled(16, 16, c);
+        let req = lcc_pipeline::RenderRequest { space, ..lcc_pipeline::RenderRequest::fit(16, 16) };
+        lcc_pipeline::render(&src, &Default::default(), &Default::default(), &req).image
     }
 
     /// Decode `bytes` and return the centre pixel in linear sRGB primaries (unclamped), plus the
     /// recognised space of the embedded profile.
     fn decoded_in_srgb(bytes: &[u8]) -> ([f32; 3], Option<NamedSpace>) {
-        let d = lightcraft_codecs::decode(bytes, Default::default()).expect("decodes");
-        let m = d.space.to_space(&lightcraft_color::SRGB);
+        let d = lcc_codecs::decode(bytes, Default::default()).expect("decodes");
+        let m = d.space.to_space(&lcc_color::SRGB);
         (m.apply_f32(d.image.get(8, 8)), d.space.named)
     }
 
@@ -2924,12 +3090,9 @@ mod tests {
     #[test]
     fn every_space_embeds_its_own_profile_and_round_trips() {
         let grey = {
-            let src = lightcraft_raster::Rgb32f::filled(16, 16, [0.18; 3]);
-            let base = lightcraft_pipeline::RenderRequest::fit(16, 16);
-            move |space| {
-                lightcraft_pipeline::render(&src, &Default::default(), &Default::default(), &lightcraft_pipeline::RenderRequest { space, ..base })
-                    .image
-            }
+            let src = lcc_raster::Rgb32f::filled(16, 16, [0.18; 3]);
+            let base = lcc_pipeline::RenderRequest::fit(16, 16);
+            move |space| lcc_pipeline::render(&src, &Default::default(), &Default::default(), &lcc_pipeline::RenderRequest { space, ..base }).image
         };
         let reference =
             decoded_in_srgb(&encode_image(&grey(OutputSpace::Srgb), &ExportOptions { format: ExportFormat::Tiff, ..Default::default() }).unwrap()).0;
@@ -2968,14 +3131,14 @@ mod tests {
     }
 
     /// A shallow horizontal grey ramp (few 8-bit levels), rendered at `depth`.
-    fn ramp(depth: OutputDepth, space: OutputSpace) -> lightcraft_pipeline::Rendered {
-        let src = lightcraft_raster::Rgb32f::from_fn(1024, 4, |x, _| [0.10 + 0.03 * x as f32 / 1023.0; 3]);
-        let req = lightcraft_pipeline::RenderRequest { depth, space, ..lightcraft_pipeline::RenderRequest::fit(1024, 4) };
-        lightcraft_pipeline::render(&src, &Default::default(), &Default::default(), &req)
+    fn ramp(depth: OutputDepth, space: OutputSpace) -> lcc_pipeline::Rendered {
+        let src = lcc_raster::Rgb32f::from_fn(1024, 4, |x, _| [0.10 + 0.03 * x as f32 / 1023.0; 3]);
+        let req = lcc_pipeline::RenderRequest { depth, space, ..lcc_pipeline::RenderRequest::fit(1024, 4) };
+        lcc_pipeline::render(&src, &Default::default(), &Default::default(), &req)
     }
 
-    fn distinct_levels(bytes: &[u8]) -> (usize, lightcraft_codecs::Decoded) {
-        let d = lightcraft_codecs::decode(bytes, Default::default()).expect("decodes");
+    fn distinct_levels(bytes: &[u8]) -> (usize, lcc_codecs::Decoded) {
+        let d = lcc_codecs::decode(bytes, Default::default()).expect("decodes");
         let mut v: Vec<u32> = (0..d.image.width).map(|x| d.image.get(x, 1)[1].to_bits()).collect();
         v.dedup();
         (v.len(), d)
@@ -3068,7 +3231,7 @@ mod tests {
             let png = ExportOptions { format: ExportFormat::Png, color_space: space, ..Default::default() };
             let img = p3_green(space);
             let bytes = encode_image(&img, &o).unwrap();
-            assert_eq!(lightcraft_codecs::sniff(&bytes), Some(lightcraft_codecs::Format::Jxl));
+            assert_eq!(lcc_codecs::sniff(&bytes), Some(lcc_codecs::Format::Jxl));
             let (got, _) = decoded_in_srgb(&bytes);
             let (want, _) = decoded_in_srgb(&encode_image(&img, &png).unwrap());
             for c in 0..3 {
@@ -3333,7 +3496,7 @@ mod tests {
     #[allow(clippy::type_complexity)]
     fn lanes_batch(
         s: &mut crate::Session,
-        ids: &[lightcraft_catalog::PhotoId],
+        ids: &[lcc_catalog::PhotoId],
         o: &ExportOptions,
         lanes: usize,
         stop_on_error: bool,
@@ -3365,15 +3528,15 @@ mod tests {
     /// entry (`gpuFallback`, the render's own reason) and says nothing on the others.
     #[test]
     fn a_batch_reports_a_gpu_fallback_on_the_file_it_hit() {
-        if !lightcraft_gpu::available() {
-            lightcraft_testkit::skip!(Gpu, "no GPU adapter ({})", lightcraft_gpu::unavailable_reason().unwrap_or_default());
+        if !lcc_gpu::available() {
+            lcc_testkit::skip!(Gpu, "no GPU adapter ({})", lcc_gpu::unavailable_reason().unwrap_or_default());
             return;
         }
         let mut s = crate::Session::with_demo();
         let ids: Vec<_> = s.visible().iter().copied().take(2).collect();
         let o = ExportOptions::from_json(&json!({"format": "png", "width": 64}));
         // one lane: both photos render on this thread, and the fault hits the first render here
-        lightcraft_gpu::inject_fault(lightcraft_gpu::Fault::Limit(1 << 10));
+        lcc_gpu::inject_fault(lcc_gpu::Fault::Limit(1 << 10));
         let (files, _, _) = lanes_batch(&mut s, &ids, &o, 1, true, usize::MAX);
         let files = files.unwrap();
         assert_eq!(files.len(), 2, "{files:?}");
@@ -3381,7 +3544,7 @@ mod tests {
         assert_eq!(why.len(), 1, "exactly one file fell back: {files:?}");
         assert!(why[0].contains("limit"), "{files:?}");
         assert!(files[1].get("gpuFallback").is_none(), "the second render was fine: {files:?}");
-        assert!(lightcraft_gpu::available(), "a limit is no device failure");
+        assert!(lcc_gpu::available(), "a limit is no device failure");
     }
 
     // Issue #496: photos rendered side by side give the same files, names, order and progress as
@@ -3393,14 +3556,14 @@ mod tests {
         let dng = export_photo(&mut s, id, &ExportOptions::from_json(&json!({"format": "rendereddng", "width": 64})), 1).unwrap();
         assert!(dng.file_name.ends_with(".dng"), "{}", dng.file_name);
         let png = export_photo(&mut s, id, &ExportOptions::from_json(&json!({"format": "png", "width": 64})), 1).unwrap();
-        let raw = lightcraft_raw::decode(&dng.bytes).unwrap();
+        let raw = lcc_raw::decode(&dng.bytes).unwrap();
         assert_eq!((raw.width, raw.height, raw.cpp), (dng.width, dng.height, 3));
         assert!(raw.color.profile.tone_curve.is_some(), "identity tone curve keeps converters from adding one");
-        let back = raw.develop(lightcraft_raw::Method::Bilinear).unwrap();
-        let reference = lightcraft_codecs::decode_thumbnail(&png.bytes, 4096).unwrap().image;
+        let back = raw.develop(lcc_raw::Method::Bilinear).unwrap();
+        let reference = lcc_codecs::decode_thumbnail(&png.bytes, 4096).unwrap().image;
         assert_eq!((reference.width, reference.height), (back.width, back.height));
         // mean brightness: the PNG holds 8-bit sRGB, the DNG linear sRGB
-        let mean_dng: f32 = back.data.iter().map(|p| lightcraft_color::transfer::linear_to_srgb(p[1].min(1.0))).sum::<f32>() / back.data.len() as f32;
+        let mean_dng: f32 = back.data.iter().map(|p| lcc_color::transfer::linear_to_srgb(p[1].min(1.0))).sum::<f32>() / back.data.len() as f32;
         let mean_tif: f32 = reference.data.iter().map(|p| p[1] as f32 / 255.0).sum::<f32>() / reference.data.len() as f32;
         assert!((mean_dng - mean_tif).abs() < 0.02, "{mean_dng} vs {mean_tif}");
     }
@@ -3409,6 +3572,8 @@ mod tests {
     #[test]
     fn side_by_side_batches_match_one_at_a_time() {
         let mut s = crate::Session::with_demo();
+        // the newest demo photos come in different shapes
+        s.execute("library.sort", &json!({"ascending": false})).unwrap();
         let ids: Vec<_> = s.visible().iter().copied().take(5).collect();
         // one name for all: the Unique numbering follows the order the files are placed in
         let o = ExportOptions::from_json(&json!({"format": "png", "width": 40, "naming": "same"}));
@@ -3433,7 +3598,7 @@ mod tests {
     // stop_on_error the batch ends there and nothing after it is written
     #[test]
     fn side_by_side_batches_report_failures_in_order() {
-        use lightcraft_catalog::{Op, Photo, PhotoId, Source};
+        use lcc_catalog::{Op, Photo, PhotoId, Source};
         let mut s = crate::Session::with_demo();
         let mut ids: Vec<_> = s.visible().iter().copied().take(3).collect();
         let gone =

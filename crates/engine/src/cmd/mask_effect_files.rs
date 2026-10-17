@@ -7,7 +7,7 @@
 //! Read from the files' public structure and black-box observation; settings we have no slider
 //! for are reported and kept with the effect (an export carries them).
 
-use lightcraft_develop::LocalAdjustments;
+use lcc_develop::LocalAdjustments;
 use serde_json::{Map, Value, json};
 
 use super::mask_effects::{MaskEffect, upsert};
@@ -18,7 +18,7 @@ use crate::{Result, Session};
 /// File extension of exported effect presets (JSON).
 pub const EFFECT_EXT: &str = "lceffect";
 /// `format` tag of an exported effect-preset file.
-const FILE_FORMAT: &str = "lightcraft.maskEffects";
+const FILE_FORMAT: &str = crate::legacy::MASK_EFFECTS_FORMAT;
 /// The Lua `type` of a Lightroom local adjustment preset.
 const LR_LOCAL_TYPE: &str = "LocalizedAdjustmentPreset";
 /// Larger files aren't presets (or bundles of them).
@@ -136,7 +136,7 @@ fn build(name: String, values: Map<String, Value>, extra: Map<String, Value>) ->
 
 /// The local slider fields of a Camera Raw local correction preset: its top-level `crs:Local*`
 /// properties, or (a preset typed `Local` without them) its first correction's.
-fn xmp_local_fields(d: &lightcraft_meta::XmpData) -> Option<Map<String, Value>> {
+fn xmp_local_fields(d: &lcc_meta::XmpData) -> Option<Map<String, Value>> {
     let mut out = Map::new();
     for (k, v) in &d.properties {
         if let Some(name) = k.strip_prefix("crs:").filter(|n| n.starts_with("Local") && !n.contains('/'))
@@ -153,7 +153,7 @@ fn xmp_local_fields(d: &lightcraft_meta::XmpData) -> Option<Map<String, Value>> 
         return None;
     }
     let correction = crate::crs_masks::CONTAINERS.iter().find_map(|c| d.values.get(*c).and_then(|l| l.items().first()))?;
-    let lightcraft_meta::XmpValue::Struct(m) = correction else { return None };
+    let lcc_meta::XmpValue::Struct(m) = correction else { return None };
     for (k, v) in m {
         if let Some(name) = k.strip_prefix("crs:").filter(|n| n.starts_with("Local"))
             && let Some(x) = v.text()
@@ -166,13 +166,13 @@ fn xmp_local_fields(d: &lightcraft_meta::XmpData) -> Option<Map<String, Value>> 
 
 /// Is `text` a Camera Raw local correction preset (XMP)?
 pub fn is_local_xmp(text: &str) -> bool {
-    lightcraft_meta::parse_xmp(text.trim_start_matches('\u{feff}')).ok().and_then(|d| xmp_local_fields(&d)).is_some()
+    lcc_meta::parse_xmp(text.trim_start_matches('\u{feff}')).ok().and_then(|d| xmp_local_fields(&d)).is_some()
 }
 
 /// A Camera Raw local correction preset (XMP) → an effect named after `crs:Name` (else `stem`),
 /// in `crs:Group` if it names one.
 pub fn parse_local_xmp(text: &str, stem: &str) -> std::result::Result<(MaskEffect, Vec<String>), String> {
-    let d = lightcraft_meta::parse_xmp(text.trim_start_matches('\u{feff}')).map_err(|e| e.to_string())?;
+    let d = lcc_meta::parse_xmp(text.trim_start_matches('\u{feff}')).map_err(|e| e.to_string())?;
     let fields = xmp_local_fields(&d).ok_or("not a local correction preset (no crs:Local… settings)")?;
     let num = |v: &Value| v.as_str().map(|s| s.strip_prefix('+').unwrap_or(s)).and_then(|s| s.parse::<f64>().ok()).filter(|x| x.is_finite());
     let values = crate::crs_masks::local_values(|k| fields.get(k).and_then(num));

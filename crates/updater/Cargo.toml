@@ -1,0 +1,18 @@
+[package]
+name = "lcc-updater"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Auto updater (L0): GitHub Releases feed, platform asset selection, verified download, staged install"
+
+[lints]
+workspace = true
+
+# Native only: the web build updates by reloading the page (the crate is empty on wasm32).
+[dependencies]
+lcc-brand = { workspace = true }
+lcc-net = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+log = { workspace = true }
+

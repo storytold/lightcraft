@@ -13,8 +13,8 @@ pub const FONT_SEMIBOLD: &str = "semibold";
 const WEB_CHINESE_FONT: &str = "web Noto Sans CJK SC";
 
 /// Shared colour-label palette for badges, thumbnail surrounds and feedback.
-pub fn label_color(label: lightcraft_catalog::ColorLabel) -> Color32 {
-    use lightcraft_catalog::ColorLabel;
+pub fn label_color(label: lcc_catalog::ColorLabel) -> Color32 {
+    use lcc_catalog::ColorLabel;
     match label {
         ColorLabel::Red => Color32::from_rgb(222, 72, 72),
         ColorLabel::Yellow => Color32::from_rgb(232, 196, 58),
@@ -25,12 +25,12 @@ pub fn label_color(label: lightcraft_catalog::ColorLabel) -> Color32 {
 }
 
 /// A translucent label colour over thumbnail chrome; selection remains brighter.
-pub fn label_background(base: Color32, label: Option<lightcraft_catalog::ColorLabel>, selected: bool) -> Color32 {
+pub fn label_background(base: Color32, label: Option<lcc_catalog::ColorLabel>, selected: bool) -> Color32 {
     label.map_or(base, |l| base.lerp_to_gamma(label_color(l), if selected { 0.32 } else { 0.22 }))
 }
 
 /// Label confirmations use a pale colour and dark text, distinct from neutral/error HUDs.
-pub fn label_toast_colors(label: lightcraft_catalog::ColorLabel) -> (Color32, Color32) {
+pub fn label_toast_colors(label: lcc_catalog::ColorLabel) -> (Color32, Color32) {
     (Color32::WHITE.lerp_to_gamma(label_color(label), 0.3), Color32::from_rgb(36, 24, 24))
 }
 
@@ -129,10 +129,10 @@ impl Default for Tokens {
             inset: Color32::from_rgb(0x23, 0x23, 0x23),
             field: Color32::from_rgb(0x22, 0x22, 0x22),
             field_border: Color32::from_rgb(0x3c, 0x3c, 0x3c),
-            button: Color32::from_rgb(0x24, 0x24, 0x24),
-            button_border: Color32::from_rgb(0x4c, 0x4c, 0x4c),
-            hover: Color32::from_rgb(0x3a, 0x3a, 0x3a),
-            pressed: Color32::from_rgb(0x3f, 0x3f, 0x3f),
+            button: Color32::from_rgb(0x3d, 0x3d, 0x3d),
+            button_border: Color32::from_rgb(0x56, 0x56, 0x56),
+            hover: Color32::from_rgb(0x4a, 0x4a, 0x4a),
+            pressed: Color32::from_rgb(0x5e, 0x5e, 0x5e),
             tool_active: Color32::from_rgb(0x3f, 0x3f, 0x3f),
             text: Color32::from_rgb(0xe2, 0xe2, 0xe2),
             text_label: Color32::from_rgb(0xbc, 0xbc, 0xbc),
@@ -176,10 +176,10 @@ impl Tokens {
                 inset: rgb(0x181818),
                 field: rgb(0x161616),
                 field_border: rgb(0x333333),
-                button: rgb(0x191919),
-                button_border: rgb(0x404040),
-                hover: rgb(0x2e2e2e),
-                pressed: rgb(0x343434),
+                button: rgb(0x2e2e2e),
+                button_border: rgb(0x484848),
+                hover: rgb(0x3a3a3a),
+                pressed: rgb(0x4c4c4c),
                 tool_active: rgb(0x343434),
                 ..base
             },
@@ -191,10 +191,10 @@ impl Tokens {
                 cell_selected: rgb(0xb4b4b4),
                 divider: rgb(0xc4c4c4),
                 inset: rgb(0xdcdcdc),
-                field: rgb(0xf6f6f6),
+                field: rgb(0xffffff),
                 field_border: rgb(0xb8b8b8),
-                button: rgb(0xf2f2f2),
-                button_border: rgb(0xb0b0b0),
+                button: rgb(0xf3f3f3),
+                button_border: rgb(0xa0a0a0),
                 hover: rgb(0xd2d2d2),
                 pressed: rgb(0xc4c4c4),
                 tool_active: rgb(0xcacaca),
@@ -223,10 +223,10 @@ impl Tokens {
                 inset: rgb(0xf0f0f0),
                 field: rgb(0xffffff),
                 field_border: rgb(0xcccccc),
-                button: rgb(0xffffff),
-                button_border: rgb(0xc6c6c6),
-                hover: rgb(0xebebeb),
-                pressed: rgb(0xdedede),
+                button: rgb(0xeeeeee),
+                button_border: rgb(0xb4b4b4),
+                hover: rgb(0xe2e2e2),
+                pressed: rgb(0xd4d4d4),
                 tool_active: rgb(0xe2e2e2),
                 text: rgb(0x161616),
                 text_label: rgb(0x343434),
@@ -263,28 +263,25 @@ pub fn install_fonts(ctx: &egui::Context) {
 
 /// Install the browser's separately downloaded Chinese face alongside the embedded faces.
 pub fn install_fonts_with_chinese(ctx: &egui::Context, chinese: Option<&Arc<FontData>>) {
-    ctx.set_fonts(font_definitions_with_chinese(lightcraft_engine::CRAFT_FONTS, chinese));
+    ctx.set_fonts(font_definitions_with_chinese(lcc_engine::CRAFT_FONTS, chinese));
 }
 
 /// Inter remains the default UI face. Egui's default faces and craft-fonts cover other scripts;
 /// the browser's separate Chinese face precedes Japanese faces within the CJK fallback list.
 /// Without craft-fonts or that separate face, CJK text shows boxes.
-pub fn font_definitions(craft: &'static [lightcraft_engine::CraftFont]) -> FontDefinitions {
+pub fn font_definitions(craft: &'static [lcc_engine::CraftFont]) -> FontDefinitions {
     font_definitions_with_chinese(craft, None)
 }
 
 /// The web build keeps the large Simplified Chinese face outside the size-limited WASM module.
 /// Prefer it for Chinese UI text, including Traditional Chinese until it has its own face.
-pub fn font_definitions_with_chinese(craft: &'static [lightcraft_engine::CraftFont], chinese: Option<&Arc<FontData>>) -> FontDefinitions {
+pub fn font_definitions_with_chinese(craft: &'static [lcc_engine::CraftFont], chinese: Option<&Arc<FontData>>) -> FontDefinitions {
     let mut fonts = FontDefinitions::default();
     fonts.font_data.insert("Inter".into(), Arc::new(FontData::from_static(include_bytes!("../../../assets/fonts/Inter-Regular.ttf"))));
     fonts.font_data.insert("Inter-SemiBold".into(), Arc::new(FontData::from_static(include_bytes!("../../../assets/fonts/Inter-SemiBold.ttf"))));
     // Craft-fonts faces in preference order for a family drawn in `style`.
     let fallback = |style: &str| {
-        lightcraft_engine::fonts::ui_fallback(craft, crate::i18n::language().script(), style)
-            .into_iter()
-            .map(craft_font_name)
-            .collect::<Vec<String>>()
+        lcc_engine::fonts::ui_fallback(craft, crate::i18n::language().script(), style).into_iter().map(craft_font_name).collect::<Vec<String>>()
     };
     let (mut regular, mut bold) = (fallback("Regular"), fallback("Bold"));
     for name in regular.iter().chain(bold.iter()) {
@@ -336,7 +333,7 @@ pub fn font_definitions_with_chinese(craft: &'static [lightcraft_engine::CraftFo
 /// The font families used by this app instance, including the browser's separately loaded face.
 pub fn font_credits(chinese_loaded: bool) -> String {
     let mut families = vec!["Inter"];
-    for f in lightcraft_engine::CRAFT_FONTS {
+    for f in lcc_engine::CRAFT_FONTS {
         if !families.contains(&f.family) {
             families.push(f.family);
         }
@@ -363,7 +360,7 @@ fn strong_weight(bytes: &'static [u8]) -> Option<FontData> {
     Some(face.tweak(tweak))
 }
 
-fn craft_font_name(f: &lightcraft_engine::CraftFont) -> String {
+fn craft_font_name(f: &lcc_engine::CraftFont) -> String {
     format!("craft-fonts {} {}", f.family, f.style)
 }
 
@@ -379,7 +376,7 @@ pub const WHEEL_STRIP_SHARE: f32 = 1.0 / 3.0;
 pub const WHEEL_ZOOM_PER_POINT: f32 = 40.0 / 200.0 / WHEEL_LINE_POINTS;
 
 fn theme_id() -> egui::Id {
-    egui::Id::new("lightcraft-theme")
+    egui::Id::new("app-theme")
 }
 
 /// The theme `ctx` is styled with (none before the first [`apply_kind`]).
@@ -453,16 +450,20 @@ mod tests {
     use super::*;
     use crate::i18n::{Locale, set_language};
 
-    /// Every theme scrolls 100 points a wheel notch, and a zoom notch stays egui's stock ~1.22x
-    /// (`exp(40 / 200)`) instead of growing with the longer scroll.
+    /// #122: a button must not read as a text field. In every theme its fill stands apart from a
+    /// field's and the panel's; in the dark themes it is raised (lighter than the chrome).
     #[test]
-    fn a_wheel_notch_scrolls_further_but_zooms_as_before_in_every_theme() {
-        for kind in [ThemeKind::Charcoal, ThemeKind::Midnight, ThemeKind::Silver, ThemeKind::Paper] {
-            let ctx = egui::Context::default();
-            apply_kind(&ctx, kind);
-            let (line, zoom) = ctx.options(|o| (o.input_options.line_scroll_speed, o.input_options.scroll_zoom_speed));
-            assert_eq!(line, WHEEL_LINE_POINTS, "{kind:?}");
-            assert!(((zoom * line).exp() - (40.0_f32 / 200.0).exp()).abs() < 1e-4, "{kind:?}: a notch zooms {}", (zoom * line).exp());
+    fn buttons_are_raised_and_distinct_from_fields() {
+        let luma = |c: Color32| u32::from(c.r()) + u32::from(c.g()) + u32::from(c.b());
+        for kind in ThemeKind::ALL {
+            let t = Tokens::for_kind(kind);
+            if kind.is_dark() {
+                assert!(luma(t.button) > luma(t.chrome), "{kind:?}: button lighter than chrome");
+            }
+            assert_ne!(t.button, t.chrome, "{kind:?}: button and chrome fills differ");
+            assert!(luma(t.button).abs_diff(luma(t.field)) >= 30, "{kind:?}: button and field fills differ");
+            assert_ne!(t.hover, t.button, "{kind:?}: hover changes the fill");
+            assert_ne!(t.pressed, t.hover, "{kind:?}: press changes the fill");
         }
     }
 
@@ -470,13 +471,13 @@ mod tests {
     /// Exercise the Thai characters of the reported folder name through every egui family.
     #[test]
     fn thai_folder_name_has_glyphs_in_every_ui_family() {
-        if lightcraft_engine::CRAFT_FONTS.is_empty() {
-            lightcraft_testkit::skip!(Fonts, "built without CRAFT_FONTS_DIR: no craft-fonts to check");
+        if lcc_engine::CRAFT_FONTS.is_empty() {
+            lcc_testkit::skip!(Fonts, "built without CRAFT_FONTS_DIR: no craft-fonts to check");
             return;
         }
-        let thai = lightcraft_engine::CRAFT_FONTS.iter().find(|f| f.covers("Thai")).expect("font input includes Thai");
+        let thai = lcc_engine::CRAFT_FONTS.iter().find(|f| f.covers("Thai")).expect("font input includes Thai");
         set_language(Locale::En);
-        let definitions = font_definitions(lightcraft_engine::CRAFT_FONTS);
+        let definitions = font_definitions(lcc_engine::CRAFT_FONTS);
         let name = craft_font_name(thai);
         assert!(definitions.font_data.contains_key(&name));
         // (The strong family has the face's heavier twin instead when it is a variable font.)
@@ -503,14 +504,14 @@ mod tests {
 
     #[test]
     fn native_chinese_face_falls_back_after_default_faces() {
-        static FACES: &[lightcraft_engine::CraftFont] = &[
-            lightcraft_engine::CraftFont {
+        static FACES: &[lcc_engine::CraftFont] = &[
+            lcc_engine::CraftFont {
                 family: "BIZ UDPGothic",
                 style: "Regular",
                 scripts: &["Jpan", "Latn"],
                 bytes: include_bytes!("../../../assets/fonts/Inter-Regular.ttf"),
             },
-            lightcraft_engine::CraftFont {
+            lcc_engine::CraftFont {
                 family: "Noto Sans CJK SC",
                 style: "Regular",
                 scripts: &["Hans", "Latn"],
@@ -539,13 +540,13 @@ mod tests {
     fn separate_web_chinese_face_is_available_in_every_ui_family() {
         // Simulate the WASM build, which embeds only the Japanese face. The Chinese face arrives
         // as a separate file and must precede that face when the UI uses Chinese.
-        static JAPANESE: &[lightcraft_engine::CraftFont] = &[lightcraft_engine::CraftFont {
+        static JAPANESE: &[lcc_engine::CraftFont] = &[lcc_engine::CraftFont {
             family: "BIZ UDPGothic",
             style: "Regular",
             scripts: &["Jpan", "Latn"],
             bytes: include_bytes!("../../../assets/fonts/Inter-Regular.ttf"),
         }];
-        let embedded = lightcraft_engine::CRAFT_FONTS.iter().find(|font| font.family == "Noto Sans CJK SC" && font.style == "Regular");
+        let embedded = lcc_engine::CRAFT_FONTS.iter().find(|font| font.family == "Noto Sans CJK SC" && font.style == "Regular");
         let fallback: &'static [u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
         let source = embedded.map_or(fallback, |font| font.bytes);
         let chinese = Arc::new(FontData::from_static(source));
@@ -610,8 +611,8 @@ mod tests {
     }
 
     /// The craft-fonts face for Arabic, when it is a variable font with a weight axis.
-    fn variable_arabic_face() -> Option<&'static lightcraft_engine::CraftFont> {
-        let face = lightcraft_engine::CRAFT_FONTS.iter().find(|font| font.covers("Arab"))?;
+    fn variable_arabic_face() -> Option<&'static lcc_engine::CraftFont> {
+        let face = lcc_engine::CRAFT_FONTS.iter().find(|font| font.covers("Arab"))?;
         FontData::from_static(face.bytes).variation_axes().iter().any(|axis| axis.tag.to_be_bytes() == *b"wght").then_some(face)
     }
 
@@ -626,8 +627,8 @@ mod tests {
         }
         set_language(Locale::En);
         // When an Arabic word is laid out regular and strong at the same size
-        let (regular_width, regular_ink) = width_and_ink(font_definitions(lightcraft_engine::CRAFT_FONTS), ARABIC_WORD, FontFamily::Proportional);
-        let (strong_width, strong_ink) = width_and_ink(font_definitions(lightcraft_engine::CRAFT_FONTS), ARABIC_WORD, semibold_family());
+        let (regular_width, regular_ink) = width_and_ink(font_definitions(lcc_engine::CRAFT_FONTS), ARABIC_WORD, FontFamily::Proportional);
+        let (strong_width, strong_ink) = width_and_ink(font_definitions(lcc_engine::CRAFT_FONTS), ARABIC_WORD, semibold_family());
         eprintln!("{ARABIC_WORD}: regular {regular_width} px, ink {regular_ink}; strong {strong_width} px, ink {strong_ink}");
         // Then the strong one is wider and puts down more ink
         assert!(strong_width > regular_width, "strong Arabic is wider than regular: strong {strong_width} px, regular {regular_width} px");
@@ -645,7 +646,7 @@ mod tests {
         };
         set_language(Locale::En);
         // When the UI builds its fonts
-        let definitions = font_definitions(lightcraft_engine::CRAFT_FONTS);
+        let definitions = font_definitions(lcc_engine::CRAFT_FONTS);
         // Then the regular Arabic face is the font file untouched, and the only Arabic face of
         // the regular and monospace families
         let name = craft_font_name(arabic);
@@ -684,7 +685,7 @@ mod tests {
     #[test]
     fn a_static_face_has_no_strong_twin() {
         // Given a face without a weight axis for another script
-        static FACES: &[lightcraft_engine::CraftFont] = &[lightcraft_engine::CraftFont {
+        static FACES: &[lcc_engine::CraftFont] = &[lcc_engine::CraftFont {
             family: "Static Sans",
             style: "Regular",
             scripts: &["Thai"],

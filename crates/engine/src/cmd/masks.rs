@@ -1,7 +1,7 @@
 //! Masking and Remove (spot) commands on the active photo.
 
-use lightcraft_develop::{BrushStroke, LocalAdjustments, Mask, MaskComponent, MaskOp, MaskShape, RedEye, Spot, SpotMode};
-use lightcraft_geom::Point;
+use lcc_develop::{BrushStroke, LocalAdjustments, Mask, MaskComponent, MaskOp, MaskShape, RedEye, Spot, SpotMode};
+use lcc_geom::Point;
 use serde_json::{Value, json};
 
 use super::{CommandSpec, bad, bool_or, cmd, f64_or, has_active, ok, point, str_param};
@@ -61,7 +61,7 @@ fn points(p: &Value, key: &str) -> Vec<Point> {
 }
 
 /// A segmentation passed in (`seg`: a stored or replayed AI mask; the model isn't needed).
-fn seg_param(p: &Value) -> Option<lightcraft_develop::SegMask> {
+fn seg_param(p: &Value) -> Option<lcc_develop::SegMask> {
     p.get("seg").and_then(|v| serde_json::from_value(v.clone()).ok())
 }
 
@@ -387,8 +387,8 @@ pub fn specs() -> Vec<CommandSpec> {
                 let src = s.source_now(id, crate::media::SourceLevel::Thumb).map_err(|e| bad(c, e))?;
                 let info = s.source_info(id);
                 let d = s.develop_of(id).unwrap_or_default();
-                let req = lightcraft_pipeline::RenderRequest::fit(384, 384);
-                let lab = lightcraft_pipeline::color_range_sample(&src, &info, &d, &req, lightcraft_geom::Point::new(x, y))
+                let req = lcc_pipeline::RenderRequest::fit(384, 384);
+                let lab = lcc_pipeline::color_range_sample(&src, &info, &d, &req, lcc_geom::Point::new(x, y))
                     .ok_or_else(|| bad(c, "the point is outside the photo"))?;
                 let mid = mask_id(p, s.active_mask, c)?;
                 let comp = p.get("component").and_then(Value::as_u64).map(|v| v as usize);
@@ -538,7 +538,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Download AI Mask Model",
             [],
             None,
-            "{acknowledged: true} — download the SAM 3 model (about 3.4 GB, Meta's SAM License, not LightCraft's) in the background, from the configured mirrors; only after the user agreed to it. Watch segment.model.status; segment.model.cancel stops it (it resumes later) → {started, installed, downloading}",
+            "{acknowledged: true} — download the SAM 3 model (about 3.4 GB, Meta's SAM License, not the app's) in the background, from the configured mirrors; only after the user agreed to it. Watch segment.model.status; segment.model.cancel stops it (it resumes later) → {started, installed, downloading}",
             super::always,
             |s, p| {
                 let c = "segment.model.download";
@@ -567,6 +567,53 @@ pub fn specs() -> Vec<CommandSpec> {
             |s, _| Ok(json!({"cancelled": s.segmenter.cancel_download()}))
         ),
         cmd!(
+            query "segment.subject.status",
+            "Subject Mask Model Status",
+            [],
+            None,
+            "{} — the Subject / Background model (BiRefNet_lite, MIT): whether it is installed (and where), in use by masks, and its download's progress; a finished download is put to use here → {available, installed, active, dir, sizeBytes, license, licenseUrl, download: {running, done, total, file, error, finished}}",
+            super::always,
+            |s, _| {
+                s.segmenter.subject.sync(&s.activity);
+                let g = &s.segmenter.subject;
+                Ok(json!({
+                    "available": crate::segment::Segmenter::AVAILABLE,
+                    "installed": g.installed(),
+                    "active": g.active(),
+                    "dir": g.dir.as_ref().map(|d| d.display().to_string()),
+                    "sizeBytes": crate::segment::subject::MODEL_BYTES,
+                    "license": crate::segment::subject::LICENSE_NAME,
+                    "licenseUrl": crate::segment::subject::LICENSE_URL,
+                    "download": g.download_status(),
+                }))
+            }
+        ),
+        cmd!(
+            query "segment.subject.download",
+            "Download Subject Mask Model",
+            [],
+            None,
+            "{acknowledged: true} — download the Subject / Background model (BiRefNet_lite, about 178 MB, MIT) in the background from its author's Hugging Face repository (pinned revision, size and SHA-256); only after the user asked for it. Without it, Subject and Background use the photo analysis. Watch segment.subject.status → {started, installed, downloading}",
+            super::always,
+            |s, p| {
+                let c = "segment.subject.download";
+                if p.get("acknowledged").and_then(Value::as_bool) != Some(true) {
+                    return Err(bad(c, "the subject model is a 178 MB download: pass `acknowledged: true` once the user has asked for it"));
+                }
+                let started = s.segmenter.subject.start_download(&s.activity).map_err(ai_err)?;
+                Ok(json!({"started": started, "installed": s.segmenter.subject.installed(), "downloading": s.segmenter.subject.download_status().running}))
+            }
+        ),
+        cmd!(
+            query "segment.subject.cancel",
+            "Cancel Subject Mask Model Download",
+            [],
+            None,
+            "{} — stop the subject model download (it resumes later) → {cancelled}",
+            super::always,
+            |s, _| Ok(json!({"cancelled": s.segmenter.subject.cancel_download()}))
+        ),
+        cmd!(
             "mask.refine",
             "Refine Mask Edges",
             [],
@@ -584,6 +631,23 @@ pub fn specs() -> Vec<CommandSpec> {
             }
         ),
         cmd!(
+            "mask.feather",
+            "Feather Mask",
+            [],
+            None,
+            "{id?, value: 0..100} — soften the whole mask's edges (blur up to 2 % of the long edge; rendered on the CPU)",
+            has_active,
+            |s, p| {
+                let v = f64_or(p, "value", 0.0).clamp(0.0, 100.0);
+                let mid = mask_id(p, s.active_mask, "mask.feather")?;
+                masks_edit(s, "mask.feather", "Feather", |masks, _| {
+                    let i = find(masks, mid, "mask.feather")?;
+                    masks[i].feather = v;
+                    Ok(())
+                })
+            }
+        ),
+        cmd!(
             "mask.adjust",
             "Set Mask Adjustments",
             [],
@@ -596,7 +660,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 masks_edit(s, "mask.adjust", "Mask Adjustment", |masks, _| {
                     let i = find(masks, mid, "mask.adjust")?;
                     let mut v = serde_json::to_value(masks[i].adjust).unwrap_or_default();
-                    lightcraft_develop::presets::deep_merge(&mut v, &vals);
+                    lcc_develop::presets::deep_merge(&mut v, &vals);
                     let a: LocalAdjustments = serde_json::from_value(v).map_err(|e| bad("mask.adjust", e.to_string()))?;
                     masks[i].adjust = clamp_local(a);
                     Ok(())
@@ -757,7 +821,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 // the uncropped photo, so positions are the spots' own coordinates
                 let job = s.render_job(id, 1600, 1600, false, false).ok_or_else(|| bad(c, "no photo"))?;
                 let img = job.run().rendered.map_err(|e| bad(c, e))?.image;
-                let found = lightcraft_pipeline::dust::detect(&img, f64_or(p, "sensitivity", 50.0) as f32);
+                let found = lcc_pipeline::dust::detect(&img, f64_or(p, "sensitivity", 50.0) as f32);
                 let out: Vec<Value> = found.iter().map(|d| json!({"x": d.x, "y": d.y, "size": d.radius})).collect();
                 if !p.get("add").and_then(Value::as_bool).unwrap_or(true) || found.is_empty() {
                     return Ok(json!({"spots": out, "added": 0}));
@@ -795,11 +859,10 @@ pub fn specs() -> Vec<CommandSpec> {
                 let job = s.render_job(id, 1600, 1600, false, false).ok_or_else(|| bad(c, "no photo"))?;
                 let img = job.run().rendered.map_err(|e| bad(c, e))?.image;
                 let rgb: Vec<u8> = img.data.iter().flat_map(|px| [px[0], px[1], px[2]]).collect();
-                let faces =
-                    detector.detect(&rgb, img.width, img.height, &lightcraft_faces::yunet::Options::default()).map_err(|e| bad(c, e.to_string()))?;
-                let boxes: Vec<lightcraft_pipeline::blemish::FaceBox> = faces
+                let faces = detector.detect(&rgb, img.width, img.height, &lcc_faces::yunet::Options::default()).map_err(|e| bad(c, e.to_string()))?;
+                let boxes: Vec<lcc_pipeline::blemish::FaceBox> = faces
                     .iter()
-                    .map(|f| lightcraft_pipeline::blemish::FaceBox {
+                    .map(|f| lcc_pipeline::blemish::FaceBox {
                         x0: f64::from(f.x0),
                         y0: f64::from(f.y0),
                         x1: f64::from(f.x1),
@@ -808,7 +871,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     })
                     .collect();
                 let max_per_face = (f64_or(p, "maxPerFace", 6.0) as usize).clamp(1, 20);
-                let mut found = lightcraft_pipeline::blemish::detect(&img, &boxes, f64_or(p, "sensitivity", 50.0) as f32);
+                let mut found = lcc_pipeline::blemish::detect(&img, &boxes, f64_or(p, "sensitivity", 50.0) as f32);
                 let mut per_face = std::collections::BTreeMap::new();
                 found.retain(|b| {
                     let n = per_face.entry(b.face).or_insert(0usize);
@@ -1055,10 +1118,12 @@ fn spots_edit(s: &mut Session, c: &str, label: &str, f: impl FnOnce(&mut Vec<Spo
 }
 
 /// An automatic source for `spot` on photo `id` (a small proxy of the photo, framed by `d`).
-fn pick_source(s: &mut Session, id: crate::PhotoId, d: &lightcraft_develop::DevelopSettings, spot: &Spot, avoid: Option<Point>) -> Option<Point> {
+fn pick_source(s: &mut Session, id: crate::PhotoId, d: &lcc_develop::DevelopSettings, spot: &Spot, avoid: Option<Point>) -> Option<Point> {
     let src = s.source_now(id, crate::media::SourceLevel::Thumb).ok()?;
     let info = s.source_info(id);
-    lightcraft_pipeline::spots::pick_source(&src, &info, d, spot, avoid)
+    // (on the photo as the Source plug-in filters turn it)
+    let aux = lcc_pipeline::source_stage::aux_source(&src, &info, d);
+    lcc_pipeline::spots::pick_source(aux.as_deref().unwrap_or(&src), &info, d, spot, avoid)
 }
 
 pub(crate) fn clamp_local(mut a: LocalAdjustments) -> LocalAdjustments {

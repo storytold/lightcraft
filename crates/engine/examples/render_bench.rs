@@ -1,15 +1,15 @@
 //! End-to-end render benchmark (min of N runs, robust to a loaded machine):
-//! `cargo run --release -p lightcraft-engine --example render_bench -- corpus/raw/arw-sony-a7m3-compressed.arw`
+//! `cargo run --release -p lcc-engine --example render_bench -- corpus/raw/arw-sony-a7m3-compressed.arw`
 //! (`N=9` runs per scenario, `RAYON_NUM_THREADS=1` for algorithmic comparisons,
-//! `LIGHTCRAFT_PROFILE=1` for per-stage timings).
+//! `{ENV_PREFIX}_PROFILE=1` for per-stage timings).
 //!
 //! Without a file argument a procedural 6000×4000 source is used. Scenarios: a ~2.5 MP loupe render
 //! of the 2560 px preview (cold, and with a warm stage cache while a slider is dragged), a draft,
 //! and a full-size render + JPEG encode (export); `ONLY=batch` with several files times a full-size
 //! export of each (decode + render + encode). Prints minimum wall-clock and minimum process CPU
 //! time: on a shared machine the CPU time shows the work done, wall-clock also the wait for cores.
-//! Each scenario runs on the CPU pipeline and, when a GPU adapter exists, on `lightcraft-gpu`
-//! (second column; `LIGHTCRAFT_GPU=0` for the CPU only, `GPU_ONLY=1` for the GPU only).
+//! Each scenario runs on the CPU pipeline and, when a GPU adapter exists, on `lcc-gpu`
+//! (second column; `{ENV_PREFIX}_GPU=0` for the CPU only, `GPU_ONLY=1` for the GPU only).
 //!
 //! `ONLY=window`: a 1:1 zoom window cut from the full-size original (the loupe's `Slot::Region`):
 //! the first window of a photo, a pan, and exposure / draft / NR changes with a warm stage cache;
@@ -21,12 +21,12 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use lightcraft_develop::DevelopSettings;
-use lightcraft_engine::export::{ExportOptions, encode_image};
-use lightcraft_engine::media::develop;
-use lightcraft_pipeline::{Quality, RenderRequest, SourceInfo, StageCache};
-use lightcraft_raster::Rgb32f;
-use lightcraft_raster::resample::{Filter, fit};
+use lcc_develop::DevelopSettings;
+use lcc_engine::export::{ExportOptions, encode_image};
+use lcc_engine::media::develop;
+use lcc_pipeline::{Quality, RenderRequest, SourceInfo, StageCache};
+use lcc_raster::Rgb32f;
+use lcc_raster::resample::{Filter, fit};
 
 /// Process CPU time in ms (all threads). The only `unsafe` is this libc clock read, in a dev-only example.
 #[allow(unsafe_code)]
@@ -79,7 +79,7 @@ fn typical() -> DevelopSettings {
 }
 
 /// Max and mean |Δ| (8-bit, RGB) between two renders.
-fn diff(a: &lightcraft_raster::Rgba8, b: &lightcraft_raster::Rgba8) -> (u8, f64) {
+fn diff(a: &lcc_raster::Rgba8, b: &lcc_raster::Rgba8) -> (u8, f64) {
     let (mut max, mut sum) = (0u8, 0u64);
     for (p, q) in a.data.iter().zip(&b.data) {
         for c in 0..3 {
@@ -101,13 +101,13 @@ fn main() {
         for path in &args {
             let bytes = std::fs::read(path).expect("read");
             for edge in [256u32, 512, 1600, 2560] {
-                let o = lightcraft_codecs::DecodeOptions::fit(edge, edge);
-                let d = lightcraft_codecs::decode(&bytes, o).expect("decode");
+                let o = lcc_codecs::DecodeOptions::fit(edge, edge);
+                let d = lcc_codecs::decode(&bytes, o).expect("decode");
                 println!(
                     "  {path} fit {edge}: {}×{} {}",
                     d.image.width,
                     d.image.height,
-                    best(n, || drop(lightcraft_codecs::decode(&bytes, o).expect("decode")))
+                    best(n, || drop(lcc_codecs::decode(&bytes, o).expect("decode")))
                 );
             }
         }
@@ -120,36 +120,36 @@ fn main() {
             println!("{path}");
             if std::env::var("LOADONLY").is_ok() {
                 // only the preview load (for a profiler)
-                println!("  {:<36} {}", "load_bytes(2560):", best(n, || drop(lightcraft_engine::files::load_bytes(&bytes, 2560).expect("load"))));
+                println!("  {:<36} {}", "load_bytes(2560):", best(n, || drop(lcc_engine::files::load_bytes(&bytes, 2560).expect("load"))));
                 continue;
             }
             println!("  {:<36} {}", "file read:", best(n, || drop(std::fs::read(path).expect("read"))));
-            println!("  {:<36} {}", "raw decode:", best(n, || drop(lightcraft_raw::decode(&bytes).expect("decode"))));
-            let mut raw = lightcraft_raw::decode(&bytes).expect("decode");
-            if let lightcraft_raw::RawData::U16(d) = &raw.data {
+            println!("  {:<36} {}", "raw decode:", best(n, || drop(lcc_raw::decode(&bytes).expect("decode"))));
+            let mut raw = lcc_raw::decode(&bytes).expect("decode");
+            if let lcc_raw::RawData::U16(d) = &raw.data {
                 let sum = d.iter().enumerate().fold(0u64, |a, (i, &v)| a.wrapping_mul(31).wrapping_add(v as u64 ^ i as u64));
                 println!("  decode checksum: {sum:016x}");
             }
             if only == "load1" {
-                println!("  {:<36} {}", "load_bytes(2560):", best(n, || drop(lightcraft_engine::files::load_bytes(&bytes, 2560).expect("load"))));
+                println!("  {:<36} {}", "load_bytes(2560):", best(n, || drop(lcc_engine::files::load_bytes(&bytes, 2560).expect("load"))));
                 continue;
             }
             raw.opcodes.list3.retain(|op| !op.is_lens_correction());
-            if let Some(k) = lightcraft_engine::files::bin_factor(&raw, 2560) {
+            if let Some(k) = lcc_engine::files::bin_factor(&raw, 2560) {
                 println!("  {:<36} {}", format!("binned ×{k} masked:"), best(n, || drop(raw.develop_binned_masked(k, 0.99))));
             }
             for edge in [2560usize, 1600] {
                 println!(
                     "  {:<36} {}",
                     format!("embedded srgb, whole file ({edge}):"),
-                    best(n, || drop(lightcraft_engine::files::embedded_preview_srgb(&bytes, edge)))
+                    best(n, || drop(lcc_engine::files::embedded_preview_srgb(&bytes, edge)))
                 );
-                let quick = lightcraft_engine::files::fs_preview_loader();
+                let quick = lcc_engine::files::fs_preview_loader();
                 println!("  {:<36} {}", format!("fs_preview_loader ({edge}):"), best(n, || drop(quick(path, edge))));
             }
-            println!("  {:<36} {}", "load_bytes(2560):", best(n, || drop(lightcraft_engine::files::load_bytes(&bytes, 2560).expect("load"))));
-            let (loader, _) = lightcraft_engine::files::fs_hooks();
-            println!("  {:<36} {}", "fs loader (2560, read+load):", best(n, || drop(loader(path, 2560).expect("load"))));
+            println!("  {:<36} {}", "load_bytes(2560):", best(n, || drop(lcc_engine::files::load_bytes(&bytes, 2560).expect("load"))));
+            let (loader, _) = lcc_engine::files::fs_hooks();
+            println!("  {:<36} {}", "fs loader (2560, read+load):", best(n, || drop(loader(path, 2560, false).expect("load"))));
         }
         return;
     }
@@ -158,36 +158,32 @@ fn main() {
         for path in &args {
             let bytes = std::fs::read(path).expect("read");
             println!("{path}");
-            let mut raw = lightcraft_raw::decode(&bytes).expect("decode");
+            let mut raw = lcc_raw::decode(&bytes).expect("decode");
             // as the loader does: lens corrections are applied by the pipeline, not in the raw develop
             raw.opcodes.list3.retain(|op| !op.is_lens_correction());
             println!("  {}×{} cpp {} cfa {:?}", raw.width, raw.height, raw.cpp, raw.cfa.as_ref().map(|c| c.name()));
-            println!("  {:<36} {}", "raw decode:", best(n, || drop(lightcraft_raw::decode(&bytes).expect("decode"))));
+            println!("  {:<36} {}", "raw decode:", best(n, || drop(lcc_raw::decode(&bytes).expect("decode"))));
             println!("  {:<36} {}", "normalize:", best(n, || drop(raw.normalized().expect("norm"))));
             let norm = raw.normalized().expect("norm");
-            println!("  {:<36} {}", "demosaic AHD:", best(n, || drop(lightcraft_raw::demosaic(&norm, lightcraft_raw::Method::Ahd))));
-            if let Some(k) = lightcraft_engine::files::bin_factor(&raw, 2560) {
+            println!("  {:<36} {}", "demosaic AHD:", best(n, || drop(lcc_raw::demosaic(&norm, lcc_raw::Method::Ahd))));
+            if let Some(k) = lcc_engine::files::bin_factor(&raw, 2560) {
                 println!("  {:<36} {}", format!("binned ×{k} (2560 preview):"), best(n, || drop(raw.develop_binned(k, 0.99))));
                 let img = raw.develop_binned(k, 0.99).expect("bin").expect("binnable");
-                let t = lightcraft_raw::color::camera_transform(&raw, lightcraft_raw::color::as_shot_white_xy(&raw));
+                let t = lcc_raw::color::camera_transform(&raw, lcc_raw::color::as_shot_white_xy(&raw));
                 println!(
                     "  {:<36} {}",
                     "highlight reconstruct (binned):",
                     best(n, || {
                         let mut i = img.clone();
-                        lightcraft_raw::highlight::reconstruct(&mut i, t.wb, 0.99);
+                        lcc_raw::highlight::reconstruct(&mut i, t.wb, 0.99);
                     })
                 );
                 println!("  {:<36} {}", "clone (binned):", best(n, || drop(img.clone())));
                 println!("  {:<36} {}", "fit 2560 (binned):", best(n, || drop(fit(&img, 2560, 2560, Filter::Box))));
             }
-            println!("  {:<36} {}", "embedded preview (2560):", best(n, || drop(lightcraft_engine::files::load_embedded_preview(&bytes, 2560))));
+            println!("  {:<36} {}", "embedded preview (2560):", best(n, || drop(lcc_engine::files::load_embedded_preview(&bytes, 2560))));
             for edge in [512usize, 2560, usize::MAX] {
-                println!(
-                    "  {:<36} {}",
-                    format!("load_bytes({edge}):"),
-                    best(n, || drop(lightcraft_engine::files::load_bytes(&bytes, edge).expect("load")))
-                );
+                println!("  {:<36} {}", format!("load_bytes({edge}):"), best(n, || drop(lcc_engine::files::load_bytes(&bytes, edge).expect("load"))));
             }
         }
         return;
@@ -196,7 +192,7 @@ fn main() {
         Some(path) => {
             let bytes = std::fs::read(path).expect("read");
             let t = Instant::now();
-            let r = lightcraft_engine::files::load_bytes(&bytes, usize::MAX).expect("decode");
+            let r = lcc_engine::files::load_bytes(&bytes, usize::MAX).expect("decode");
             println!("decode full: {:.0} ms", t.elapsed().as_secs_f64() * 1e3);
             r
         }
@@ -210,10 +206,10 @@ fn main() {
     };
     let full = Arc::new(full);
     println!("source {}×{} ({:.1} MP), {n} runs each", full.width, full.height, (full.width * full.height) as f64 / 1e6);
-    // GPU column: `LIGHTCRAFT_GPU=0` (or no adapter) prints only the CPU column.
+    // GPU column: `{ENV_PREFIX}_GPU=0` (or no adapter) prints only the CPU column.
     let t = Instant::now();
-    let gpu = lightcraft_engine::gpu::available();
-    match lightcraft_engine::gpu::adapter_name().filter(|_| gpu) {
+    let gpu = lcc_engine::gpu::available();
+    match lcc_engine::gpu::adapter_name().filter(|_| gpu) {
         Some(a) => println!("gpu: {a} (device + kernels: {:.0} ms)", t.elapsed().as_secs_f64() * 1e3),
         None => println!("gpu: none"),
     }
@@ -288,7 +284,7 @@ fn main() {
     if run("window") {
         // a 1:1 zoom window (the loupe's `Slot::Region`): visible 1920×1200 + margin, snapped to the
         // 256 px grid, cut from the full-resolution original (`ui-egui` `region::window_for`)
-        use lightcraft_pipeline::PixelWindow;
+        use lcc_pipeline::PixelWindow;
         let (fw, fh) = (full.width, full.height);
         let win = |cx: usize, cy: usize| {
             let snap = |v: usize| v / 256 * 256;
@@ -300,7 +296,7 @@ fn main() {
         println!("window {}×{} at ({}, {}) of {fw}×{fh}", w0.w, w0.h, w0.x, w0.y);
         // first window of a photo: nothing cached (the GPU uploads the original: `shared_source`)
         row("window first (upload original):", &mut |g| {
-            lightcraft_engine::gpu::trim_pool(0);
+            lcc_engine::gpu::trim_pool(0);
             drop(develop(&full, &info, &s, &at(w0, Quality::Full), Some(&StageCache::default()), g))
         });
         let wc = [StageCache::default(), StageCache::default()];
@@ -382,21 +378,21 @@ fn main() {
     if run("batch") && args.len() > 1 {
         // full-size JPEG export of all the files given (decode + render + encode), as the Export
         // dialog runs it: several photos side by side (`export_parallelism`), files discarded
-        use lightcraft_engine::export::{Destination, export_batch};
-        let mut session = lightcraft_engine::Session::new().with_fs();
+        use lcc_engine::export::{Destination, export_batch};
+        let mut session = lcc_engine::Session::new().with_fs();
         let r = session.execute("library.import", &serde_json::json!({"paths": args})).expect("import");
-        let ids: Vec<_> = r["imported"].as_array().expect("ids").iter().filter_map(|v| v.as_u64()).map(lightcraft_engine::catalog::PhotoId).collect();
+        let ids: Vec<_> = r["imported"].as_array().expect("ids").iter().filter_map(|v| v.as_u64()).map(lcc_engine::catalog::PhotoId).collect();
         let o = ExportOptions::default();
-        let lanes = lightcraft_engine::export::export_parallelism(ids.len());
+        let lanes = lcc_engine::export::export_parallelism(ids.len());
         row(&format!("batch export of {} files, {lanes} at a time (decode+render+JPEG):", ids.len()), &mut |g| {
-            lightcraft_engine::gpu::set_enabled(g);
+            lcc_engine::gpu::set_enabled(g);
             let files = export_batch(&mut session, &ids, &o, &Destination::default(), &mut |_, _| Ok(()), &|_| false).expect("export");
             assert_eq!(files.len(), ids.len());
             for &id in &ids {
                 session.media.forget(id); // every original is decoded once per run
             }
         });
-        lightcraft_engine::gpu::set_enabled(true);
+        lcc_engine::gpu::set_enabled(true);
         return;
     }
     if run("export") {

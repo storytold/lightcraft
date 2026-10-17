@@ -1,17 +1,19 @@
-//! The backtick (`) key cycles the flag of the selection / active photo; Cmd+Up / Cmd+Down raise / lower it.
+//! In the Alternative keymap set the backtick (`) key cycles the flag of the selection / active
+//! photo; Cmd+Up / Cmd+Down raise / lower it. In the Classic set ` toggles the Pick flag
+//! (`photo.flagToggle`, covered in `tests_keymap`) and cycling has no key.
 use egui::{Key, Modifiers};
-use lightcraft_catalog::{Flag, Op, Photo, PhotoId, Source};
+use lcc_catalog::{Flag, Op, Photo, PhotoId, Source};
 use serde_json::json;
 
-use crate::LightcraftApp;
+use crate::LccApp;
 use crate::state::ViewMode;
 
-fn app() -> lightcraft_engine::Result<LightcraftApp> {
-    let mut s = lightcraft_engine::Session::new();
+fn app() -> lcc_engine::Result<LccApp> {
+    let mut s = lcc_engine::Session::new();
     for id in 1..=3 {
         let photo = Photo::new(
             PhotoId(id),
-            Source::File { path: format!("/lightcraft-flag-cycle-keys/{id}.jpg") },
+            Source::File { path: format!("/app-flag-cycle-keys/{id}.jpg") },
             &format!("{id}.jpg"),
             "JPEG",
             40,
@@ -22,14 +24,17 @@ fn app() -> lightcraft_engine::Result<LightcraftApp> {
     }
     s.execute("library.sort", &json!({"key": "fileName", "ascending": true}))?;
     s.execute("library.select", &json!({"ids": [2]}))?;
-    Ok(LightcraftApp::new(s, crate::Services { png: None, ..Default::default() }))
+    let mut app = LccApp::new(s, crate::Services { png: None, ..Default::default() });
+    app.ui.settings.keymap_set = super::KeymapSet::Alternative;
+    super::set_active(super::KeymapSet::Alternative);
+    Ok(app)
 }
 
-fn flags(app: &LightcraftApp) -> Vec<Flag> {
+fn flags(app: &LccApp) -> Vec<Flag> {
     (1..=3).map(|id| app.session.catalog.photo(PhotoId(id)).unwrap().flag).collect()
 }
 
-fn frame(app: &mut LightcraftApp, ctx: &egui::Context, key: Option<(Key, Modifiers)>, text: Option<&mut String>) {
+fn frame(app: &mut LccApp, ctx: &egui::Context, key: Option<(Key, Modifiers)>, text: Option<&mut String>) {
     let events =
         key.map(|(key, modifiers)| egui::Event::Key { key, physical_key: Some(key), pressed: true, repeat: false, modifiers }).into_iter().collect();
     let mut text = text;
@@ -45,7 +50,7 @@ fn frame(app: &mut LightcraftApp, ctx: &egui::Context, key: Option<(Key, Modifie
     out.textures_delta.clear();
 }
 
-fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
+fn tick(app: &mut LccApp, ctx: &egui::Context) {
     frame(app, ctx, Some((Key::Backtick, Modifiers::NONE)), None);
 }
 
@@ -53,7 +58,11 @@ fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
 fn backtick_parses_and_formats_as_the_grave_key() {
     assert_eq!(super::parse("`"), Some((Modifiers::NONE, Key::Backtick)));
     assert_eq!(super::format(Modifiers::NONE, Key::Backtick).as_deref(), Some("`"));
+    super::set_active(super::KeymapSet::Alternative);
     assert_eq!(super::shortcut_of(&Default::default(), "photo.cycleFlag"), Some("`"));
+    super::set_active(super::KeymapSet::Classic);
+    assert_eq!(super::shortcut_of(&Default::default(), "photo.cycleFlag"), None);
+    assert_eq!(super::shortcut_of(&Default::default(), "photo.flagToggle"), Some("`"));
 }
 
 #[test]

@@ -2,8 +2,13 @@
 
 pub mod activity;
 pub mod bottombar;
+pub mod cells;
 pub mod chips;
+pub mod classic;
+pub mod collections;
 pub mod compare;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod connections;
 pub mod crop_overlay;
 pub mod denoise;
 pub mod detail;
@@ -12,7 +17,9 @@ pub mod edit;
 pub mod empty_library;
 pub mod faces;
 pub mod filterbar;
+pub mod folders;
 pub mod grid;
+pub mod histogram;
 pub mod keymap;
 pub mod keyword_list;
 pub mod keywording;
@@ -21,11 +28,19 @@ pub mod left;
 pub mod library_problem;
 pub mod mask_effects;
 pub mod masking;
+pub mod metadata;
+pub mod navigator;
 pub mod notices;
 pub mod people;
 pub mod person;
+pub mod plugin_filters;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod plugins;
 pub mod presets;
 pub mod profiles;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod publish;
+pub mod quick_develop;
 pub mod right;
 pub mod rules_editor;
 pub mod second;
@@ -36,12 +51,16 @@ pub mod slide_templates;
 pub mod slide_titles;
 pub mod slideshow;
 pub mod strip;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod tether_bar;
 pub mod topbar;
 pub mod unnamed;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod update;
 
 use egui::{Align2, Rect, pos2, vec2};
 
-use crate::LightcraftApp;
+use crate::LccApp;
 use crate::theme::Tokens;
 
 /// Show a side panel the user resizes by dragging its inner edge. `width` (in [`crate::UiState`],
@@ -66,6 +85,9 @@ pub fn resizable_side(
     let panel = if left { egui::Panel::left(pid) } else { egui::Panel::right(pid) };
     let r = panel.frame(frame).resizable(true).size_range(limits.min..=max).default_size(limits.clamp(width).min(max)).show(ui, add);
     crate::widgets::register(ui.ctx(), format!("panel:{id}"), r.response.rect);
+    // the edge egui draws for resizing takes the pointer: screen readers get its name
+    let edge = if left { "Resize the left panel" } else { "Resize the right panel" };
+    crate::widgets::screen_reader_name(ui.ctx(), pid.with("__resize"), crate::i18n::tr(edge));
     // egui names the edge's drag widget `<panel id>.with("__resize")`; the width is measured from
     // the panel's fixed edge to the pointer (contents wider than the panel don't count)
     if !ui.ctx().is_being_dragged(pid.with("__resize")) {
@@ -77,7 +99,7 @@ pub fn resizable_side(
 }
 
 /// The HUD toast at the bottom centre of the canvas.
-pub fn toast(app: &mut LightcraftApp, ctx: &egui::Context) {
+pub fn toast(app: &mut LccApp, ctx: &egui::Context) {
     let now = ctx.input(|i| i.time);
     let Some((text, until, label)) = app.ui.toast.clone() else { return };
     if now > until {

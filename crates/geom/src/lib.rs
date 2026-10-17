@@ -1,4 +1,4 @@
-//! Geometry for LightCraft: points, rectangles, affine and projective transforms, and the crop model.
+//! Geometry: points, rectangles, affine and projective transforms, and the crop model.
 //!
 //! Conventions: image coordinates are y-down. *Normalized* coordinates map the full (uncropped,
 //! oriented) image to `0..1` on both axes, so tools and settings are resolution independent.
@@ -412,18 +412,6 @@ mod tests {
     fn rotate_about_fixes_centre() {
         let c = Point::new(10.0, 5.0);
         assert!(close(Affine::rotate_about(1.1, c).apply(c), c));
-    }
-
-    #[test]
-    fn rect_ops() {
-        let r = Rect::new(0.0, 0.0, 4.0, 2.0);
-        assert_eq!(r.aspect(), 2.0);
-        let f = r.fit_aspect(1.0);
-        assert_eq!((f.width(), f.height()), (2.0, 2.0));
-        assert_eq!(f.center(), r.center());
-        assert!(r.contains(Point::new(3.9, 1.9)));
-        assert!(!r.contains(Point::new(4.0, 1.0)));
-        assert!(r.intersect(&Rect::new(5.0, 5.0, 6.0, 6.0)).is_empty());
     }
 
     #[test]

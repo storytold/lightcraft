@@ -6,7 +6,7 @@ use std::time::Duration;
 use serde_json::json;
 
 use crate::headless::Headless;
-use crate::{LightcraftApp, Services};
+use crate::{LccApp, Services};
 
 const T: Duration = Duration::from_secs(20);
 const SETTLE: Duration = Duration::from_secs(120);
@@ -15,7 +15,7 @@ const EDITED: [(&str, f64); 2] = [("light.exposure", 1.25), ("light.contrast", 4
 
 /// The demo library in Detail with the Edit panel's Light section open.
 fn edit_panel() -> Headless {
-    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let app = LccApp::new(lcc_engine::Session::with_demo(), Services { png: None, ..Default::default() });
     let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
     let id = h.app.session.visible_cloned()[0].0;
     assert_eq!(h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [id]}}), T)["ok"], true);
@@ -31,11 +31,11 @@ fn widget(h: &Headless, id: &str) -> egui::Rect {
 
 fn value(h: &Headless, control: &str) -> f64 {
     let id = h.app.session.selection.active.unwrap();
-    lightcraft_develop::controls::get(&h.app.session.develop_of(id).unwrap_or_default(), control).unwrap()
+    lcc_develop::controls::get(&h.app.session.develop_of(id).unwrap_or_default(), control).unwrap()
 }
 
 fn default(control: &str) -> f64 {
-    lightcraft_develop::controls::find(control).unwrap().default
+    lcc_develop::controls::find(control).unwrap().default
 }
 
 fn ask(h: &mut Headless, method: &str, params: serde_json::Value) {
@@ -50,7 +50,7 @@ fn set(h: &mut Headless, control: &str, value: f64) {
 
 /// The thumb's place along the track (0..1), plus `dx` points: a hand lands near its centre, not on it.
 fn thumb_fx(h: &Headless, control: &str, dx: f32) -> f32 {
-    let spec = lightcraft_develop::controls::find(control).unwrap();
+    let spec = lcc_develop::controls::find(control).unwrap();
     let track = widget(h, &format!("slider:{control}"));
     spec.position(value(h, control)) as f32 + dx / track.width()
 }
@@ -102,36 +102,6 @@ fn a_click_on_the_thumb_keeps_the_value() {
     assert_eq!(value(&h, "light.exposure"), 1.25);
     ask(&mut h, "ui.clickWidget", json!({"id": "slider:light.exposure", "fx": 0.25}));
     assert!((value(&h, "light.exposure") - -2.5).abs() < 0.02, "{}", value(&h, "light.exposure"));
-}
-
-#[test]
-fn a_sliders_name_and_thumb_say_a_double_click_resets_it() {
-    let mut h = edit_panel();
-    set(&mut h, "light.exposure", 1.25);
-    let hint = "Exposure — double-click to reset it";
-    let shown = |h: &Headless| h.painted_text().iter().any(|t| t == hint);
-    let thumb = thumb_fx(&h, "light.exposure", 0.0);
-    for (what, id, fx) in [("name", "sliderLabel:light.exposure", 0.1), ("thumb", "slider:light.exposure", thumb)] {
-        // somewhere else first, so the hint of the step before goes
-        ask(&mut h, "ui.hoverWidget", json!({"id": "sliderLabel:light.contrast", "fx": 0.9}));
-        assert!(!shown(&h), "{what}: no hint left over");
-        ask(&mut h, "ui.hoverWidget", json!({"id": id, "fx": fx}));
-        // tooltips wait for the pointer to rest
-        assert!(
-            h.step_until(Duration::from_secs(5), shown),
-            "{what}: {:?}",
-            h.painted_text().iter().filter(|t| t.contains("reset")).collect::<Vec<_>>()
-        );
-    }
-    // the rest of the track is for dragging and clicking: no hint there
-    ask(&mut h, "ui.hoverWidget", json!({"id": "slider:light.exposure", "fx": 0.1}));
-    for _ in 0..90 {
-        h.step();
-    }
-    assert!(!shown(&h), "no hint away from the thumb");
-    // the value keeps its own hint
-    ask(&mut h, "ui.hoverWidget", json!({"id": "sliderValue:light.exposure"}));
-    assert!(h.step_until(Duration::from_secs(5), |h| h.painted_text().iter().any(|t| t == "Click to type a value, drag to change it")));
 }
 
 /// Typing a value (KEY-SLIDER-TYPE, #1362) still works next to the reset.

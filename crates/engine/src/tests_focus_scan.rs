@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use lightcraft_catalog::{Op, Photo, PhotoId, Source};
+use lcc_catalog::{Op, Photo, PhotoId, Source};
 use serde_json::{Value, json};
 
 use crate::Session;
@@ -18,7 +18,7 @@ fn temp_dir(tag: &str) -> PathBuf {
 }
 
 fn sony_arw(mode: u8, samples: usize) -> Vec<u8> {
-    lightcraft_meta::focus::synthetic_arw(mode, samples)
+    lcc_meta::focus::synthetic_arw(mode, samples)
 }
 
 /// A photo of `camera` at `path` (an import made before focus points were read: none stored).
@@ -39,7 +39,7 @@ fn add(s: &mut Session, photos: Vec<Photo>) {
     .unwrap();
 }
 
-fn focus(s: &Session, id: u64) -> Option<lightcraft_meta::FocusPoint> {
+fn focus(s: &Session, id: u64) -> Option<lcc_meta::FocusPoint> {
     s.catalog.photo(PhotoId(id)).unwrap().meta.focus.clone()
 }
 
@@ -63,7 +63,7 @@ fn the_header_read_reads_a_small_part_of_the_file() {
     std::fs::write(&path, &file).unwrap();
     let r = read_focus(&path.to_string_lossy()).unwrap();
     assert!(r.focus.is_some());
-    assert_eq!(r.focus, lightcraft_meta::extract(&file).focus, "the same point as a whole-file read");
+    assert_eq!(r.focus, lcc_meta::extract(&file).focus, "the same point as a whole-file read");
     assert!(r.bytes_read <= 32 * 1024 && r.bytes_read * 100 < file.len() as u64, "read {} of {}", r.bytes_read, file.len());
     assert!(read_focus(&dir.join("gone.ARW").to_string_lossy()).is_err());
 }
@@ -81,12 +81,8 @@ fn fills_missing_points_and_remembers_photos_without_one() {
     std::fs::write(&garbage, vec![0x5a; 70_000]).unwrap();
     let heif = dir.join("x.HIF");
     std::fs::write(&heif, sony_arw(3, 1000)).unwrap();
-    let known = lightcraft_meta::FocusPoint {
-        rect: lightcraft_geom::Rect { x0: 0.1, y0: 0.1, x1: 0.2, y1: 0.2 },
-        mode: Some("AF-S".into()),
-        area: None,
-        tracking: None,
-    };
+    let known =
+        lcc_meta::FocusPoint { rect: lcc_geom::Rect { x0: 0.1, y0: 0.1, x1: 0.2, y1: 0.2 }, mode: Some("AF-S".into()), area: None, tracking: None };
     let mut with_point = photo(4, &af, "SONY ILCE-1");
     with_point.meta.focus = Some(known.clone());
     let mut s = Session::new();
@@ -113,7 +109,7 @@ fn fills_missing_points_and_remembers_photos_without_one() {
         "{r}"
     );
     assert!(last["bytesRead"].as_u64().unwrap() <= 3 * 32 * 1024, "{r}");
-    assert_eq!(focus(&s, 1), lightcraft_meta::extract(&std::fs::read(&af).unwrap()).focus);
+    assert_eq!(focus(&s, 1), lcc_meta::extract(&std::fs::read(&af).unwrap()).focus);
     assert!(focus(&s, 1).is_some());
     assert_eq!(focus(&s, 1).unwrap().words(), vec!["AF-C", "Wide", "Animal Eye Tracking"]);
     assert_eq!(focus(&s, 2), None);
@@ -236,8 +232,7 @@ fn changes_under_a_running_job_are_respected() {
     assert_eq!(s.execute("focus.pump", &json!({"pace": "pause"})).unwrap()["running"]["total"], 6);
     // meanwhile: photo 1 removed, photo 2 relinked elsewhere, photo 3 given a point by the user's Reload, photo 4's file
     // replaced by garbage, photo 5's deleted
-    let mine =
-        lightcraft_meta::FocusPoint { rect: lightcraft_geom::Rect { x0: 0.5, y0: 0.5, x1: 0.6, y1: 0.6 }, mode: None, area: None, tracking: None };
+    let mine = lcc_meta::FocusPoint { rect: lcc_geom::Rect { x0: 0.5, y0: 0.5, x1: 0.6, y1: 0.6 }, mode: None, area: None, tracking: None };
     s.execute_fn("test.change", |s| {
         s.apply_system(Op::RemovePhoto { id: PhotoId(1) })?;
         let moved = dir.join("moved.ARW");
@@ -273,16 +268,16 @@ fn changes_under_a_running_job_are_respected() {
     assert_eq!(s.catalog.photos().count(), 0);
 }
 
-/// Opt-in measurement on real files: `LIGHTCRAFT_FOCUS_FILES=<a text file listing raw paths, one per line>` reads each
+/// Opt-in measurement on real files: `<PREFIX>_FOCUS_FILES=<a text file listing raw paths, one per line>` reads each
 /// whole and by header, asserts they give the same focus point, and prints the bytes the header read took. Skipped
 /// without it; no user file is part of the repository.
 #[test]
 fn real_files_header_read_matches_whole_file() {
-    let Ok(list) = std::env::var("LIGHTCRAFT_FOCUS_FILES") else { return };
+    let Some(list) = lcc_brand::env("FOCUS_FILES") else { return };
     let paths: Vec<String> = std::fs::read_to_string(list).unwrap().lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).collect();
     let (mut n, mut with_point, mut bytes, mut max) = (0u64, 0u64, 0u64, 0u64);
     for p in &paths {
-        let whole = lightcraft_meta::extract(&std::fs::read(p).unwrap()).focus;
+        let whole = lcc_meta::extract(&std::fs::read(p).unwrap()).focus;
         let r = read_focus(p).unwrap();
         assert_eq!(r.focus, whole, "{p}");
         n += 1;

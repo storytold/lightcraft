@@ -1,7 +1,7 @@
 //! Slider-drag latency through the whole app: the real session, renderer, job pool and GPU (when
 //! there is one), driven by a headless host at 60 frames a second, as a window with vsync would be.
 //!
-//! `cargo run --release -p lightcraft-ui-egui --example drag_latency -- LIBRARY_DIR PHOTO [CONTROL…]`
+//! `cargo run --release -p lcc-ui-egui --example drag_latency -- LIBRARY_DIR PHOTO [CONTROL…]`
 //! Env: `SIZE=1920x1200` (points), `SCALE=1`, `TICKS=30`, `GPU=0` for the CPU pipeline.
 //!
 //! Per control: a drag of `TICKS` value changes, one per frame; for each tick the frames (and ms)
@@ -13,10 +13,10 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use lightcraft_engine::Session;
-use lightcraft_ui_egui::headless::Headless;
-use lightcraft_ui_egui::render::Slot;
-use lightcraft_ui_egui::{LightcraftApp, Services};
+use lcc_engine::Session;
+use lcc_ui_egui::headless::Headless;
+use lcc_ui_egui::render::Slot;
+use lcc_ui_egui::{LccApp, Services};
 use serde_json::json;
 
 const FRAME: Duration = Duration::from_micros(16_667);
@@ -63,14 +63,13 @@ fn frame(h: &mut Headless, t0: Instant, n: &mut u32) -> f64 {
     t.elapsed().as_secs_f64() * 1e3
 }
 
-/// The view slot measured: the zoom window with `ZOOM=<percent>` (set after opening), else the loupe.
+/// The view slot measured: the loupe. (Zoomed views render as tiles here, which have no single
+/// slot to time, so there is no `ZOOM=` mode.)
 fn watch() -> Slot {
-    if ZOOMED.load(std::sync::atomic::Ordering::Relaxed) { Slot::Region } else { Slot::Main }
+    Slot::Main
 }
 
-static ZOOMED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-fn settle(h: &mut Headless, id: lightcraft_catalog::PhotoId) {
+fn settle(h: &mut Headless, id: lcc_catalog::PhotoId) {
     let t = Instant::now();
     while t.elapsed() < Duration::from_secs(120) {
         h.step();
@@ -105,30 +104,19 @@ fn main() {
     let mut s = Session::new().with_fs().with_system_clock();
     s.open_library(lib, false).unwrap();
     let r = s.execute("library.import", &json!({"paths": [file]})).unwrap();
-    let id = r["imported"].as_array().and_then(|a| a.first()).and_then(|v| v.as_u64()).map(lightcraft_catalog::PhotoId).unwrap_or_else(|| {
+    let id = r["imported"].as_array().and_then(|a| a.first()).and_then(|v| v.as_u64()).map(lcc_catalog::PhotoId).unwrap_or_else(|| {
         // already in the library
         let name = std::path::Path::new(file).file_name().unwrap().to_string_lossy().to_string();
         s.catalog.photos().find(|p| p.file_name == name).map(|p| p.id).expect("photo in library")
     });
     s.execute("library.select", &json!({"ids": [id.0]})).unwrap();
-    let mut app = LightcraftApp::new(s, Services::default());
+    let mut app = LccApp::new(s, Services::default());
     app.ui.settings.gpu = gpu;
     let mut h = Headless::new(app, [w, hgt], scale);
     let t = Duration::from_secs(60);
     h.request("ui.set", json!({"view": "detail", "right": "edit", "filmstrip": true}), t);
     let t_open = Instant::now();
     settle(&mut h, id);
-    if let Ok(z) = std::env::var("ZOOM") {
-        let pct: f64 = z.parse().unwrap();
-        h.app.run("view.navigate", json!({"zoom": {"percent": pct}, "pan": [0.5, 0.5]})).unwrap();
-        for _ in 0..5 {
-            h.step();
-        }
-        ZOOMED.store(true, std::sync::atomic::Ordering::Relaxed);
-        let t = Instant::now();
-        settle(&mut h, id);
-        eprintln!("zoomed to {pct} % in {:.0} ms", t.elapsed().as_secs_f64() * 1e3);
-    }
     let tex = h.app.renderer.textures.get(&watch()).map(|t| t.size);
     eprintln!("opened in {:.0} ms, loupe texture {tex:?}, gpu {gpu}", t_open.elapsed().as_secs_f64() * 1e3);
 

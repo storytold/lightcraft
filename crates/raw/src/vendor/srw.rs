@@ -15,8 +15,8 @@
 //!   NX1100): 12-bit samples, two in three bytes, rows without padding. The NX5/NX10/NX11 files read them MSB-first,
 //!   the others LSB-first; the file doesn't say which, the image does: in the wrong order neighbouring same-colour
 //!   samples differ 5 to 11 times more (10 files, every one decided by that margin), see [`lsb_is_smoother`].
-//! - Every other shape of those and of the other private values (32770 with fewer bytes: NX30, NX300, NX2000,
-//!   EK-GN120; 32772: NX mini, NX3000, NX3300; 32773: NX1, NX500) is a compressed coding: reported as unsupported.
+//! - The compressed codings (32770 with a row table: NX30, NX300, NX2000, EK-GN120; 32772: NX mini, NX3000, NX3300;
+//!   32773: NX1, NX500) are decoded by [`super::srwc`]; their `CFAPattern` is checked against the embedded JPEG.
 //! - The maker note is a plain IFD whose value offsets count from the start of the note, not of the TIFF. Several
 //!   vectors are stored offset by `EncryptionKey`, 11 integers in every file (element `i` of a vector uses key
 //!   `i mod 11`): `WB_RGGBLevelsUncorrected` and `WB_RGGBLevelsBlack` hold `value + key`, `RawData` holds
@@ -36,9 +36,9 @@
 use super::{black_from_columns, white_from_data};
 use crate::unpack::{read_u16s, unpack_lsb, unpack_msb};
 use crate::{BlackLevel, Cfa, ColorData, Mode, OpcodeLists, RawData, RawError, RawFormat, RawImage, Rect, Result};
-use lightcraft_geom::Orientation;
-use lightcraft_tiff::image::chunk_bytes;
-use lightcraft_tiff::{ByteOrder, Ifd, Tiff, tags as t};
+use lcc_geom::Orientation;
+use lcc_tiff::image::chunk_bytes;
+use lcc_tiff::{ByteOrder, Ifd, Tiff, tags as t};
 use rayon::prelude::*;
 
 const SENSOR_AREAS: u16 = 0xa010;
@@ -46,6 +46,8 @@ const ENCRYPTION_KEY: u16 = 0xa020;
 const WB_UNCORRECTED: u16 = 0xa021;
 const WB_BLACK: u16 = 0xa028;
 const RAW_DATA: u16 = 0xa048;
+/// In the raw IFD of compression 32770 files: the file offset of the row-offset table.
+const ROW_TABLE: u16 = 0xa010;
 
 /// The private `Compression` values of the raw image IFD.
 const COMPRESSIONS: std::ops::RangeInclusive<u16> = 32769..=32773;
@@ -53,8 +55,8 @@ const COMPRESSIONS: std::ops::RangeInclusive<u16> = 32769..=32773;
 /// The maker-note IFD (offsets relative to the note's own start).
 fn maker_note(bytes: &[u8], tiff: &Tiff) -> Option<Ifd> {
     let e = tiff.exif()?.get(t::MAKER_NOTE)?;
-    let opts = lightcraft_tiff::ParseOptions { max_ifds: 4, max_depth: 1, follow_children: false, ..Default::default() };
-    lightcraft_tiff::parse_ifd_at(bytes, e.offset, tiff.order, e.offset, false, &opts).ok().map(|(i, _)| i)
+    let opts = lcc_tiff::ParseOptions { max_ifds: 4, max_depth: 1, follow_children: false, ..Default::default() };
+    lcc_tiff::parse_ifd_at(bytes, e.offset, tiff.order, e.offset, false, &opts).ok().map(|(i, _)| i)
 }
 
 /// A key-offset vector: the entries of `tag` shifted by the maker note's key (`sign` is +1 or -1 times the key).
@@ -78,13 +80,22 @@ enum Coding {
     /// 12-bit samples, two in three bytes: read MSB-first (the NX5, NX10 and NX11 files) or LSB-first (the later
     /// bodies' files); the file does not say which, the smoother image does ([`lsb_is_smoother`]).
     Packed12,
+    /// Compression 32770 with a row-offset table (tag `0xa010` of the raw IFD): [`super::srwc::decode_v0`].
+    RowBlocks(u64),
+    /// Compression 32772: [`super::srwc::decode_v1`].
+    Huffman,
+    /// Compression 32773: [`super::srwc::decode_v2`].
+    Blocks16,
 }
 
-fn coding(compression: u16, w: usize, h: usize, strip: u64) -> Option<Coding> {
+fn coding(compression: u16, w: usize, h: usize, strip: u64, row_table: Option<u64>) -> Option<Coding> {
     let n = (w as u64).checked_mul(h as u64)?;
     match compression {
         32769 if strip == n.checked_mul(2)? => Some(Coding::Words),
         32770 if w.is_multiple_of(2) && strip == n.checked_mul(12)? / 8 => Some(Coding::Packed12),
+        32770 => row_table.map(Coding::RowBlocks),
+        32772 => Some(Coding::Huffman),
+        32773 => Some(Coding::Blocks16),
         _ => None,
     }
 }
@@ -98,17 +109,29 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     let n = w.checked_mul(h).filter(|n| *n > 0 && *n <= crate::MAX_SAMPLES).ok_or(RawError::Limit("image too large"))?;
     let chunks = info.chunks(bytes.len() as u64);
     let strip: u64 = chunks.iter().map(|c| c.len).sum();
-    let Some(coding) = coding(info.compression, w, h, strip).filter(|_| chunks.len() == 1) else {
+    let row_table = raw.u64s(ROW_TABLE).and_then(|v| v.first().copied());
+    let Some(coding) = coding(info.compression, w, h, strip, row_table).filter(|_| chunks.len() == 1) else {
         return Err(RawError::Unsupported(format!(
             "Samsung compressed raw (compression {}, {:.2} stored bits per sample)",
             info.compression,
             strip as f64 * 8.0 / n as f64
         )));
     };
+    let mut depth = None;
     let data = if mode == Mode::Full {
         let src = chunk_bytes(bytes, &chunks[0]).ok_or_else(|| RawError::Corrupt("SRW strip outside file".into()))?;
         let mut d = vec![0u16; n];
         match coding {
+            Coding::RowBlocks(table) => {
+                let table = usize::try_from(table).map_err(|_| RawError::Corrupt("SRW row table offset".into()))?;
+                let strip = usize::try_from(chunks[0].offset).map_err(|_| RawError::Corrupt("SRW strip offset".into()))?;
+                d = super::srwc::decode_v0(bytes, strip, table, w, h)?;
+            }
+            Coding::Huffman => d = super::srwc::decode_v1(src, w, h, u32::from(info.bits()))?,
+            Coding::Blocks16 => {
+                let (v, b) = super::srwc::decode_v2(src, w, h)?;
+                (d, depth) = (v, Some(b));
+            }
             Coding::Words => read_u16s(src, ByteOrder::Little, &mut d),
             Coding::Packed12 => {
                 let stride = w / 2 * 3;
@@ -134,12 +157,19 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         (Some([2, 2]), Some(p)) if p.len() == 4 && p.iter().all(|&c| c <= 2) => Cfa { width: 2, height: 2, pattern: p.to_vec() },
         _ => return Err(RawError::Unsupported("Samsung raw without a 2x2 CFAPattern".into())),
     };
+    // the compressed codings' CFAPattern is not reliable: the camera JPEG decides when it can
+    let cfa = match (&data, coding) {
+        (RawData::U16(d), Coding::RowBlocks(_) | Coding::Huffman | Coding::Blocks16) if !d.is_empty() => crate::preview::embedded_preview(bytes)
+            .and_then(|j| super::srwc::layout_from_preview(&j, d, w, active, 0.0))
+            .map_or(cfa, |pattern| Cfa { width: 2, height: 2, pattern }),
+        _ => cfa,
+    };
     // saturation levels and black levels (R, G1, G2, B), in the file's own words
     let levels = mn.as_ref().and_then(|m| keyed(m, RAW_DATA, 1)).filter(|v| v.len() == 12);
     let RawData::U16(samples) = &data else { return Err(RawError::Unsupported("float SRW".into())) };
     // saturation: the file's level, or lower where the samples pile up (EX1 clips at 15882 of its stated 16383)
     let stated = levels.as_ref().filter(|v| v[4..].iter().all(|&x| x == v[4]) && (255..=65535).contains(&v[4])).map(|v| v[4] as f32);
-    let bits = stated.map_or((info.bits() as u32).clamp(8, 16), |s| 32 - (s as u32).leading_zeros());
+    let bits = stated.or(depth.map(|b| ((1u32 << b) - 1) as f32)).map_or((info.bits() as u32).clamp(8, 16), |s| 32 - (s as u32).leading_zeros());
     let plateau = (!samples.is_empty()).then(|| white_from_data(&active_rows(samples, w, active), bits));
     let white = match (stated, plateau) {
         (Some(s), Some(p)) => s.min(p),
@@ -164,7 +194,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         let g = (v[1] + v[2]) as f64 / 2.0;
         [(v[0] as f64 / g) as f32, 1.0, (v[3] as f64 / g) as f32]
     });
-    let mut metadata = lightcraft_meta::from_tiff(&tiff);
+    let mut metadata = lcc_meta::from_tiff(&tiff);
     let crop = picture_crop(&tiff, active);
     metadata.width = Some(crop.width as u32);
     metadata.height = Some(crop.height as u32);
@@ -277,7 +307,7 @@ fn masked_black(d: &[u16], w: usize, h: usize, a: Rect, white: f32) -> BlackLeve
 mod tests {
     use super::*;
     use crate::{decode, probe, probe_info};
-    use lightcraft_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
+    use lcc_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
 
     const KEY: [u32; 11] = [305, 72, 737, 456, 282, 307, 519, 724, 13, 505, 193];
 
@@ -352,7 +382,7 @@ mod tests {
         }
         ifd0.set_child(t::EXIF_IFD, exif);
         ifd0.add_sub_ifd(raw);
-        TiffWriter::new(lightcraft_tiff::ByteOrder::Big, false).write(&[ifd0]).unwrap()
+        TiffWriter::new(lcc_tiff::ByteOrder::Big, false).write(&[ifd0]).unwrap()
     }
 
     /// The camera-stated description every test file carries: JPEG framing, white balance, levels.
@@ -471,23 +501,23 @@ mod tests {
         assert_eq!(r.cfa.unwrap().name(), "RGGB");
     }
 
-    /// Files whose strip is not exactly the uncompressed size (or that use another private value) are compressed
-    /// codings: reported as such, still recognised as SRW.
+    /// Files whose strip is not exactly the uncompressed size and that carry no coding we read (32770 without its
+    /// row table, 32769 short) are reported as unsupported, still recognised as SRW; garbage in the compressed codings
+    /// is an error or a decoded image, never a panic.
     #[test]
     fn compressed_codings_are_reported_not_misread() {
         let plain = |compression, strip: Vec<u8>| {
             srw(Spec { w: 64, h: 32, compression, strip, pattern: Some([2, 1, 1, 0]), note: Some(full_note([0, 0, 64, 32], 4095, 0)), picture: None })
         };
-        for bytes in [
-            plain(32770, vec![7; 64 * 32 * 12 / 8 - 3]),
-            plain(32772, vec![7; 4000]),
-            plain(32773, pack12(&ramp(64, 32, 4096))),
-            plain(32769, vec![0; 64 * 32]),
-        ] {
+        for bytes in [plain(32770, vec![7; 64 * 32 * 12 / 8 - 3]), plain(32769, vec![0; 64 * 32])] {
             assert_eq!(probe(&bytes), Some(RawFormat::Srw));
             let Err(RawError::Unsupported(why)) = decode(&bytes) else { panic!("expected Unsupported") };
             assert!(why.contains("compressed"), "{why}");
             assert!(probe_info(&bytes).is_err());
+        }
+        for bytes in [plain(32772, vec![7; 4000]), plain(32773, pack12(&ramp(64, 32, 4096))), plain(32773, vec![0; 10])] {
+            assert_eq!(probe(&bytes), Some(RawFormat::Srw));
+            let _ = decode(&bytes);
         }
     }
 

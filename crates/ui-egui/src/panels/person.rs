@@ -9,7 +9,7 @@ use std::sync::Arc;
 use egui::{Align2, Color32, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, pos2, vec2};
 use serde_json::{Value, json};
 
-use crate::LightcraftApp;
+use crate::LccApp;
 use crate::theme::Tokens;
 use crate::widgets::register;
 
@@ -21,7 +21,7 @@ const SECTION_H: f32 = 56.0;
 pub struct Face {
     pub photo: u64,
     pub index: usize,
-    pub rect: lightcraft_geom::Rect,
+    pub rect: lcc_geom::Rect,
     pub score: f32,
 }
 
@@ -38,7 +38,7 @@ pub struct PersonPage {
 }
 
 fn face_of(v: &Value) -> Option<Face> {
-    let rect = |r: &Value| Some(lightcraft_geom::Rect { x0: r["x0"].as_f64()?, y0: r["y0"].as_f64()?, x1: r["x1"].as_f64()?, y1: r["y1"].as_f64()? });
+    let rect = |r: &Value| Some(lcc_geom::Rect { x0: r["x0"].as_f64()?, y0: r["y0"].as_f64()?, x1: r["x1"].as_f64()?, y1: r["y1"].as_f64()? });
     Some(Face {
         photo: v["photo"].as_u64()?,
         index: usize::try_from(v["index"].as_u64()?).ok()?,
@@ -63,7 +63,7 @@ pub fn parse(v: &Value) -> PersonPage {
 
 /// The page for `name`, asked for again only when the catalog changed, or (while the scan runs) at most once a second
 /// as it learns more faces.
-fn page_for(app: &mut LightcraftApp, name: &str, now: f64) -> Arc<PersonPage> {
+fn page_for(app: &mut LccApp, name: &str, now: f64) -> Arc<PersonPage> {
     let (rev, indexed) = (app.session.catalog.revision, app.caches.faces_indexed);
     if let Some((n, r, i, at, page)) = &app.caches.person_page
         && n == name
@@ -93,7 +93,7 @@ fn at_or_above(more: &[&Face], score: f32) -> Vec<(u64, usize)> {
     more.iter().filter(|f| f.score >= score).map(|f| (f.photo, f.index)).collect()
 }
 
-fn confirm_above(app: &mut LightcraftApp, ctx: &egui::Context, name: &str, more: &[&Face], score: f32) {
+fn confirm_above(app: &mut LccApp, ctx: &egui::Context, name: &str, more: &[&Face], score: f32) {
     let faces: Vec<Value> = at_or_above(more, score).into_iter().map(|(photo, index)| json!({"photo": photo, "index": index})).collect();
     if !faces.is_empty()
         && let Err(error) = app.run("faces.nameFaces", json!({"faces": faces, "name": name}))
@@ -104,7 +104,7 @@ fn confirm_above(app: &mut LightcraftApp, ctx: &egui::Context, name: &str, more:
 
 /// The page-scoped A key takes precedence over View ▸ Visualize Spots only for a visible More tile. Called before the
 /// general shortcut dispatcher, using the previous frame's registered rectangles as the pointer's target.
-pub(crate) fn handle_bulk_key(app: &mut LightcraftApp, ctx: &egui::Context) -> bool {
+pub(crate) fn handle_bulk_key(app: &mut LccApp, ctx: &egui::Context) -> bool {
     if app.ui.view != crate::state::ViewMode::People || app.ui.dialog.is_some() || ctx.text_edit_focused() {
         return false;
     }
@@ -139,7 +139,7 @@ pub(crate) fn handle_bulk_key(app: &mut LightcraftApp, ctx: &egui::Context) -> b
     true
 }
 
-pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
+pub fn show(app: &mut LccApp, ui: &mut egui::Ui, name: &str) {
     let t = Tokens::get(ui.ctx());
     let now = ui.input(|i| i.time);
     let page = page_for(app, name, now);
@@ -288,7 +288,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
 
 /// One face tile. A confirmed one opens its photo when clicked; a "More" one is confirmed when clicked, and has a × that
 /// hides it.
-fn tile(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect, f: &Face, ppp: f32, more: bool, name: &str, above_count: usize) -> Hit {
+fn tile(app: &mut LccApp, ui: &mut egui::Ui, r: Rect, f: &Face, ppp: f32, more: bool, name: &str, above_count: usize) -> Hit {
     let t = Tokens::get(ui.ctx());
     let salt = if more { "more-face" } else { "person-face" };
     let resp = ui.interact(r, egui::Id::new((salt, f.photo, f.index)), Sense::click());
@@ -305,7 +305,7 @@ fn tile(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect, f: &Face, ppp: f32,
     let hovered = resp.hovered() || x_resp.as_ref().is_some_and(|x| x.hovered()) || above_resp.as_ref().is_some_and(|x| x.hovered());
     let p = ui.painter();
     p.rect_filled(r, 3.0, t.canvas);
-    if let Some(job) = app.session.face_job(lightcraft_catalog::PhotoId(f.photo), f.rect, (r.width() * ppp).ceil() as usize)
+    if let Some(job) = app.session.face_job(lcc_catalog::PhotoId(f.photo), f.rect, (r.width() * ppp).ceil() as usize)
         && let Some(tex) = app.renderer.variant(job)
     {
         p.image(tex.tex.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
@@ -363,7 +363,7 @@ mod tests {
 
     #[test]
     fn all_above_uses_score_including_later_ties_and_only_visible_faces() {
-        let face = |photo, score| Face { photo, index: 0, rect: lightcraft_geom::Rect { x0: 0.0, y0: 0.0, x1: 1.0, y1: 1.0 }, score };
+        let face = |photo, score| Face { photo, index: 0, rect: lcc_geom::Rect { x0: 0.0, y0: 0.0, x1: 1.0, y1: 1.0 }, score };
         // The tie is deliberately after a lower-score tile: an index slice would miss it.
         let candidates = [face(1, 0.95), face(2, 0.80), face(3, 0.70), face(4, 0.80), face(5, 0.60)];
         let dismissed = (2_u64, 0_usize);

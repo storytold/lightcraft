@@ -1,16 +1,16 @@
 //! The UI decides on what kind of error a command returned, not on its words (#1046): messages get
 //! reworded and translated, and a decision that reads them breaks silently when they do.
 
-use lightcraft_engine::segment::{DownloadStatus, NOT_INSTALLED, Segmenter};
-use lightcraft_engine::{AiModel, ErrorKind};
+use lcc_engine::segment::{DownloadStatus, NOT_INSTALLED, Segmenter};
+use lcc_engine::{AiModel, ErrorKind};
 use serde_json::json;
 
 use crate::headless::Headless;
 use crate::state::Dialog;
-use crate::{CommandError, LightcraftApp, Services};
+use crate::{CommandError, LccApp, Services};
 
 fn demo() -> Headless {
-    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let app = LccApp::new(lcc_engine::Session::with_demo(), Services { png: None, ..Default::default() });
     Headless::new(app, [1200.0, 800.0], 1.0)
 }
 

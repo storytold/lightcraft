@@ -4,18 +4,22 @@
 use egui::accesskit::Role;
 use egui::vec2;
 use egui_kittest::{Harness, kittest::NodeT};
-use lightcraft_ui_egui::{
-    LightcraftApp, Services,
+use lcc_ui_egui::{
+    LccApp, Services,
     state::{RightPanel, ViewMode},
 };
 
-fn harness(view: ViewMode, right: RightPanel) -> Harness<'static, LightcraftApp> {
-    let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+fn harness(view: ViewMode, right: RightPanel) -> Harness<'static, LccApp> {
+    let mut app = LccApp::new(lcc_engine::Session::with_demo(), Services { png: None, ..Default::default() });
     app.ui.left_panel = true;
     app.ui.view = view;
     app.ui.right = right;
+    // the editing tools are Develop's (in the fork, Library's right column is its Classic panels)
+    if matches!(right, RightPanel::Edit | RightPanel::Profiles | RightPanel::Crop | RightPanel::Remove | RightPanel::Masking | RightPanel::RedEye) {
+        app.ui.module = lcc_ui_egui::module::ModuleId::Develop;
+    }
     let mut h = Harness::builder().with_size(vec2(1500.0, 950.0)).build_ui_state(
-        |ui, app: &mut LightcraftApp| {
+        |ui, app: &mut LccApp| {
             app.logic(&ui.ctx().clone());
             app.ui(ui);
         },
@@ -49,7 +53,7 @@ fn interactive(role: Role) -> bool {
 }
 
 /// Every problem found in the harness's current tree, one line each.
-fn audit(h: &Harness<'_, LightcraftApp>, place: &str) -> Vec<String> {
+fn audit(h: &Harness<'_, LccApp>, place: &str) -> Vec<String> {
     let mut problems = Vec::new();
     let mut count = 0;
     for node in h.root().children_recursive() {
@@ -115,6 +119,7 @@ fn every_interactive_node_has_a_name_in_every_view_and_tool() {
         "dialog.saveMetadataPreset",
         "dialog.autoStack",
         "dialog.contactSheet",
+        "dialog.watermark",
     ] {
         let mut h = harness(ViewMode::PhotoGrid, RightPanel::None);
         if let Err(e) = h.state_mut().run(dialog, serde_json::json!({})) {
@@ -139,7 +144,7 @@ fn every_interactive_node_has_a_name_in_every_view_and_tool() {
     assert!(problems.is_empty(), "{} accessibility problems:\n{}", problems.len(), problems.join("\n"));
 }
 
-fn slider_value(h: &Harness<'_, LightcraftApp>, name: &str) -> Option<f64> {
+fn slider_value(h: &Harness<'_, LccApp>, name: &str) -> Option<f64> {
     h.root()
         .children_recursive()
         .map(|n| n.accesskit_node())
@@ -171,11 +176,14 @@ fn screen_reader_increment_moves_a_slider() {
 }
 
 /// The canvas tools' settings (crop angle and offsets, spot size, mask amount) are reachable with
-/// Tab alone, and the arrow keys then adjust them.
+/// Tab alone, and the arrow keys then adjust them. In the Alternative keymap set: the Classic set
+/// gives Tab to Hide/Show Side Panels, as Lightroom does.
 #[test]
 fn canvas_tool_sliders_are_reachable_with_tab() {
     for right in [RightPanel::Crop, RightPanel::Remove] {
         let mut h = harness(ViewMode::Detail, right);
+        h.state_mut().ui.settings.keymap_set = lcc_ui_egui::shortcuts::KeymapSet::Alternative;
+        h.run_steps(2);
         let mut reached = None;
         for _ in 0..300 {
             h.key_press(egui::Key::Tab);
@@ -218,26 +226,37 @@ fn canvas_handles_are_named_with_their_position() {
 fn tab_walks_the_right_panels_top_to_bottom() {
     for right in [RightPanel::Edit, RightPanel::Crop, RightPanel::Remove, RightPanel::Masking] {
         let mut h = harness(ViewMode::Detail, right);
-        let panel_left = 1500.0 - h.state().ui.right_width - 10.0;
+        // the Classic keymap's Tab hides the side panels (and never moves the focus in the app): walk
+        // with the Alternative set, where Tab is focus navigation
+        h.state_mut().ui.settings.keymap_set = lcc_ui_egui::shortcuts::KeymapSet::Alternative;
+        h.run_steps(2);
         // the tool strip beside the panel is a column of its own, walked before it
         let strip = h
             .root()
             .children_recursive()
             .map(|n| n.accesskit_node())
-            .find(|n| n.label().as_deref() == Some("Edit (E)"))
+            // (upstream's strip labels Edit "Edit (E)"; the fork's starts with Presets)
+            .find(|n| matches!(n.label().as_deref(), Some("Edit (E)" | "Presets")))
             .and_then(|n| n.bounding_box())
             .map(|b| b.x0 as f32)
             .unwrap_or(f32::INFINITY);
+        // the panel's left edge as drawn, not derived from the window and strip widths (they differ in the fork)
+        let panel = h.state().widgets.iter().find(|(w, _)| w == "panel:right_panel").map(|(_, r)| *r).expect("a right panel");
+        let panel_left = panel.left() - 1.0;
         let mut seen: Vec<(String, f32)> = Vec::new();
         for _ in 0..120 {
             h.key_press(egui::Key::Tab);
-            h.run_steps(1);
+            // (a control the focus scrolls into view is drawn there on the pass after)
+            h.run_steps(2);
             let Some(n) = h.root().children_recursive().map(|n| n.accesskit_node()).find(|n| n.is_focused()) else { continue };
             let Some(b) = n.bounding_box() else { continue };
             if (b.x0 as f32) < panel_left || (b.x0 as f32) >= strip - 1.0 {
                 continue;
             }
             let name = n.label().unwrap_or_default();
+            // the focus is never left on a control scrolled out of view (the top bar above is not the panel's)
+            let in_panel = b.y0 as f32 >= panel.top() - 1.0;
+            assert!(!in_panel || b.y1 as f32 <= panel.bottom() + 1.0, "{right:?}: {name:?} has the focus out of view at {b:?}");
             if seen.iter().any(|(s, y)| *s == name && (*y - b.y0 as f32).abs() < 1.0) && !name.is_empty() {
                 break;
             }

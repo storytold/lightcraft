@@ -8,7 +8,7 @@
 //! No lens database or external decoder code.
 
 use crate::{Opcode, Rect};
-use lightcraft_tiff::{ByteOrder, Ifd, ParseOptions, parse_ifd_at};
+use lcc_tiff::{ByteOrder, Ifd, ParseOptions, parse_ifd_at};
 
 const NEF_INFO: u16 = 0xc7d5;
 const DISTORTION_INFO: u16 = 0x0005;
@@ -38,7 +38,7 @@ fn rational(b: &[u8], at: usize, order: ByteOrder) -> Option<f64> {
 /// The NikonNEFInfo entries: the blob is `"Nikon\0"`, a 4-byte version, then a little TIFF stream.
 fn nef_info(raw: &Ifd) -> Option<(Ifd, ByteOrder)> {
     let tiff = raw.bytes(NEF_INFO)?.strip_prefix(b"Nikon\0")?.get(4..)?;
-    let (order, false) = lightcraft_tiff::Tiff::sniff(tiff)? else { return None };
+    let (order, false) = lcc_tiff::Tiff::sniff(tiff)? else { return None };
     let first = order.u32(tiff.get(4..8)?.try_into().ok()?);
     let opts = ParseOptions { follow_children: false, ..Default::default() };
     let (ifd, _) = parse_ifd_at(tiff, u64::from(first), order, 0, false, &opts).ok()?;
@@ -121,7 +121,7 @@ pub(super) fn distortion(model: &str, raw: &Ifd, active: Rect, crop: Rect) -> Op
 #[cfg(test)]
 pub(in crate::vendor) mod tests {
     use super::*;
-    use lightcraft_tiff::{Entry, IfdBuilder, TiffWriter, Value};
+    use lcc_tiff::{Entry, IfdBuilder, TiffWriter, Value};
 
     const AREA: Rect = Rect { x: 0, y: 0, width: 6064, height: 4040 };
     const CROP: Rect = Rect { x: 8, y: 8, width: 6048, height: 4024 };

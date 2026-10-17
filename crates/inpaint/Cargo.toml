@@ -1,5 +1,5 @@
 [package]
-name = "lightcraft-inpaint"
+name = "lcc-inpaint"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

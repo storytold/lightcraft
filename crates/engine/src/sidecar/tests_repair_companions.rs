@@ -2,7 +2,7 @@
 use super::*;
 use crate::rename::{MoveFs, RealFs};
 use crate::tests_xmp::{same_path_for_volume, same_path_or_file};
-use lightcraft_catalog::{Op, Photo, Source};
+use lcc_catalog::{Op, Photo, Source};
 use serde_json::json;
 
 struct Faults(Vec<PathBuf>);
@@ -12,6 +12,9 @@ impl MoveFs for Faults {
     }
     fn is_file(&self, p: &Path) -> bool {
         RealFs.is_file(p)
+    }
+    fn listed(&self, p: &Path) -> bool {
+        RealFs.listed(p)
     }
     fn same_file(&self, a: &Path, b: &Path) -> bool {
         RealFs.same_file(a, b)
@@ -35,7 +38,7 @@ impl MoveFs for Faults {
 }
 fn packet(marker: &str) -> String {
     format!(
-        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:fixture="urn:lightcraft:companion-test" xmp:Rating="2" fixture:Marker="{marker}"/></rdf:RDF></x:xmpmeta>"#
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:fixture="urn:example:companion-test" xmp:Rating="2" fixture:Marker="{marker}"/></rdf:RDF></x:xmpmeta>"#
     )
 }
 fn queues(s: &Session) -> Vec<crate::rename::SidecarMove> {
@@ -69,6 +72,7 @@ fn assert_fresh(path: &Path) {
 
 #[test]
 fn partial_move_companions_allow_save_and_autowrite_without_weakening_collisions() {
+    crate::tests_xmp::skip_on_case_insensitive_volume!();
     for upper_stem in [false, true] {
         for upper_full in [false, true] {
             for naming in [SidecarNaming::Stem, SidecarNaming::Full] {
@@ -154,6 +158,7 @@ fn partial_move_companions_allow_save_and_autowrite_without_weakening_collisions
 
 #[test]
 fn rollback_repair_and_shared_copy_keep_known_companions() {
+    crate::tests_xmp::skip_on_case_insensitive_volume!();
     for rollback in [false, true] {
         for naming in [SidecarNaming::Stem, SidecarNaming::Full] {
             let dir = crate::tests_xmp::temp_dir(&format!("r3-companion-rollback-{rollback}-{naming:?}"));

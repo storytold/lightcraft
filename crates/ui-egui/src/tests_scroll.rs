@@ -7,14 +7,14 @@ use std::time::Duration;
 use serde_json::json;
 
 use crate::headless::Headless;
-use crate::{LightcraftApp, Services};
+use crate::{LccApp, Services};
 
 const T: Duration = Duration::from_secs(20);
 const SETTLE: Duration = Duration::from_secs(120);
 
 fn demo(view: &str) -> Headless {
     let services = Services { png: None, ..Default::default() };
-    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+    let app = LccApp::new(lcc_engine::Session::with_demo(), services);
     let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
     // big thumbnails: the demo library is several screens tall
     let r = h.request("ui.set", json!({"view": view, "thumbSize": 480.0}), T);
@@ -268,4 +268,25 @@ fn a_wheel_notch_scrolls_a_third_of_the_filmstrip() {
     idle(&mut h, 120);
     let moved = film_x(&h) - x0;
     assert!((moved - strip.width() * crate::theme::WHEEL_STRIP_SHARE).abs() < 1.0, "a notch scrolled {moved} of {} points", strip.width());
+}
+
+/// The Wheel scroll speed preference scales the notch (issue: big collections took too many notches),
+/// and a hostile value from a settings file is clamped instead of jumping to the end or standing still.
+#[test]
+fn the_wheel_scroll_speed_preference_scales_a_notch() {
+    let mut h = demo("photoGrid");
+    h.app.ui.settings.wheel_scroll_speed = 2.0;
+    h.step();
+    let view = widget(&h, "grid:scroll");
+    h.request("ui.move", json!({"x": view.center().x, "y": view.center().y}), T);
+    let y0 = grid_y(&h);
+    notch(&mut h, -1.0);
+    idle(&mut h, 120);
+    let moved = grid_y(&h) - y0;
+    assert!((moved - 2.0 * view.height() * crate::theme::WHEEL_STRIP_SHARE).abs() < 1.0, "a fast notch scrolled {moved} of {} points", view.height());
+    h.app.ui.settings.wheel_scroll_speed = f32::NAN;
+    let y1 = grid_y(&h);
+    notch(&mut h, 1.0);
+    idle(&mut h, 120);
+    assert!((y1 - grid_y(&h) - view.height() * crate::theme::WHEEL_STRIP_SHARE).abs() < 1.0, "a NaN speed scrolls a plain notch");
 }

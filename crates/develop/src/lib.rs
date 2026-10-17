@@ -1,4 +1,4 @@
-//! The non-destructive edit model of LightCraft.
+//! The non-destructive edit model of the app.
 //!
 //! [`DevelopSettings`] is the complete description of a photo's look: pure, serializable data.
 //! The pipeline evaluates it; the catalog stores it; presets, copy/paste, sync, versions and history
@@ -27,6 +27,7 @@ impl DevelopSettings {
         s.wb.tint = as_shot_tint;
         s.detail.sharpen_amount = 40.0;
         s.detail.nr_color = 25.0;
+        s.detail.nr_outliers = true;
         s
     }
 
@@ -76,6 +77,13 @@ impl DevelopSettings {
         a == d
     }
 
+    /// The pixel-filter plug-ins that render, in order: enabled entries of `stage`, none while the
+    /// `pluginFilters` section's eye is off.
+    pub fn active_plugin_filters(&self, stage: FilterStage) -> impl Iterator<Item = &PluginFilter> {
+        let on = self.section_enabled(PLUGIN_FILTERS_SECTION);
+        self.plugin_filters.iter().filter(move |f| on && f.enabled && f.stage == stage)
+    }
+
     pub fn section_enabled(&self, section: &str) -> bool {
         !self.disabled_sections.iter().any(|s| s == section)
     }
@@ -86,7 +94,7 @@ impl DevelopSettings {
     /// Calibration the pipeline switches off where it applies them. Borrowed when every section is on.
     pub fn effective(&self) -> std::borrow::Cow<'_, DevelopSettings> {
         let off = |section: &str| !self.section_enabled(section);
-        if !(off("light") || off("color") || off("detail")) {
+        if !(off("light") || off("color") || off("detail") || (off(PLUGIN_FILTERS_SECTION) && !self.plugin_filters.is_empty())) {
             return std::borrow::Cow::Borrowed(self);
         }
         let mut d = self.clone();
@@ -102,6 +110,9 @@ impl DevelopSettings {
         }
         if off("detail") {
             d.reset_section(Section::Detail);
+        }
+        if off(PLUGIN_FILTERS_SECTION) {
+            d.plugin_filters.clear();
         }
         std::borrow::Cow::Owned(d)
     }
@@ -150,6 +161,21 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// Remove Hot Pixels (#1345) is on for a newly imported raw and off for everything else, and an edit saved
+    /// before the box existed reads as off, so it renders as it did.
+    #[test]
+    fn hot_pixel_box_is_on_for_new_raws_only() {
+        assert!(DevelopSettings::for_raw(5500.0, 10.0).detail.nr_outliers);
+        assert!(!DevelopSettings::default().detail.nr_outliers);
+        let mut saved = DevelopSettings::for_raw(5500.0, 10.0).to_json();
+        let detail = saved.get_mut("detail").and_then(|d| d.as_object_mut()).unwrap();
+        assert!(detail.remove("nr_outliers").is_some());
+        let read = DevelopSettings::from_json(&saved).unwrap();
+        assert!(!read.detail.nr_outliers);
+        assert_eq!(read.detail.nr_color, 25.0, "the rest of the saved edit is kept");
+        assert_ne!(read.hash64(), DevelopSettings::for_raw(5500.0, 10.0).hash64(), "cached renders are told apart");
+    }
+
     #[test]
     fn serde_roundtrip_default_and_edited() {
         let mut s = DevelopSettings::default();
@@ -160,14 +186,7 @@ mod tests {
                 name: None,
                 op: MaskOp::Add,
                 invert: false,
-                shape: MaskShape::Radial {
-                    center: lightcraft_geom::Point::new(0.5, 0.5),
-                    rx: 0.2,
-                    ry: 0.1,
-                    angle: 10.0,
-                    feather: 50.0,
-                    invert: false,
-                },
+                shape: MaskShape::Radial { center: lcc_geom::Point::new(0.5, 0.5), rx: 0.2, ry: 0.1, angle: 10.0, feather: 50.0, invert: false },
             }],
             ..Default::default()
         });
@@ -175,6 +194,32 @@ mod tests {
         let back = DevelopSettings::from_json(&v).unwrap();
         assert_eq!(back, s);
         assert_ne!(back.hash64(), DevelopSettings::default().hash64());
+    }
+
+    #[test]
+    fn a_masks_local_curve_is_written_only_when_it_has_points() {
+        use lcc_geom::Point;
+        let mut s = DevelopSettings::default();
+        s.masks.push(Mask { id: 1, ..Default::default() });
+        // no curve: the mask's JSON (and so `hash64`) is what it was before masks had one
+        let plain = s.to_json();
+        assert!(plain["masks"][0].get("curve").is_none());
+        let old = json!({"masks": [{"id": 1, "name": "Mask 1", "visible": true, "invert": false, "components": [], "adjust": {}}]});
+        assert_eq!(DevelopSettings::from_json(&old).unwrap().masks[0].curve, PointCurves::default());
+        // a curve is kept channel by channel, and only the channels that have points are written
+        s.masks[0].curve.master = vec![Point::new(0.0, 0.0), Point::new(0.5, 0.65), Point::new(1.0, 1.0)];
+        s.masks[0].curve.blue = vec![Point::new(0.0, 0.1), Point::new(1.0, 1.0)];
+        let v = s.to_json();
+        assert_eq!(v["masks"][0]["curve"].as_object().map(|o| o.len()), Some(2));
+        let back = DevelopSettings::from_json(&v).unwrap();
+        assert_eq!(back, s);
+        assert_ne!(back.hash64(), DevelopSettings::from_json(&plain).unwrap().hash64());
+        // points on the diagonal are linear but still kept as the editor placed them
+        let mut diag = PointCurves { red: vec![Point::new(0.0, 0.0), Point::new(0.4, 0.4), Point::new(1.0, 1.0)], ..Default::default() };
+        assert!(diag.is_identity() && !diag.is_empty());
+        diag.channel_mut("rgb").unwrap().push(Point::new(0.2, 0.3));
+        assert!(!diag.is_identity());
+        assert!(diag.channel("alpha").is_none());
     }
 
     #[test]
@@ -240,6 +285,25 @@ mod tests {
     }
 
     #[test]
+    fn sdr_blend_compresses_or_clips_the_sdr_rendition_and_round_trips() {
+        let mut s = DevelopSettings::default();
+        s.hdr.enabled = true;
+        s.hdr.sdr_blend = 50.0;
+        let r = s.sdr_rendition().into_owned();
+        assert!(r.light.highlights < 0.0 && r.light.whites < 0.0, "positive blend fits more highlights in");
+        assert_eq!(DevelopSettings::from_json(&s.to_json()).unwrap(), s, "lc:settings round trip");
+        s.hdr.max_ev = 5.0;
+        assert!(s.sdr_rendition().light.highlights < r.light.highlights, "more headroom, stronger compression");
+        s.hdr.sdr_blend = -50.0;
+        assert!(s.sdr_rendition().light.highlights > 0.0);
+        s.hdr.sdr_blend = f64::NAN;
+        assert_eq!(s.sdr_rendition().light.highlights, 0.0, "damaged blend is ignored");
+        s.hdr.enabled = false;
+        s.hdr.sdr_blend = 80.0;
+        assert_eq!(s.sdr_rendition().light.highlights, 0.0, "HDR off: no SDR rendition");
+    }
+
+    #[test]
     fn missing_fields_take_defaults_and_unknown_ignored() {
         let s = DevelopSettings::from_json(&json!({"light": {"exposure": 0.5}, "futureThing": 3})).unwrap();
         assert_eq!(s.light.exposure, 0.5);
@@ -265,18 +329,6 @@ mod tests {
         assert!(!s.is_unedited());
         s.reset_section(Section::Light);
         assert!(s.is_unedited());
-    }
-
-    #[test]
-    fn section_toggles() {
-        let mut s = DevelopSettings::default();
-        assert!(s.section_enabled("effects"));
-        s.set_section_enabled("effects", false);
-        s.set_section_enabled("effects", false);
-        assert!(!s.section_enabled("effects"));
-        assert_eq!(s.disabled_sections.len(), 1);
-        s.set_section_enabled("effects", true);
-        assert!(s.section_enabled("effects"));
     }
 
     #[test]

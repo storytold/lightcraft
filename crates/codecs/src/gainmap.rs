@@ -748,7 +748,7 @@ mod tests {
                 [v, v * 0.8, v * 0.6]
             })
             .collect();
-        // a luminance tone map (one scale per pixel, as LightCraft's renders do), so a single
+        // a luminance tone map (one scale per pixel, as the app's renders do), so a single
         // luminance gain can rebuild it exactly
         let sdr = hdr
             .iter()
@@ -792,7 +792,7 @@ mod tests {
         let (sdr, hdr) = renditions(w, h);
         let (g, m) = compute(&sdr, &hdr, w, h, [0.2126, 0.7152, 0.0722], &GainMapOptions::default()).unwrap();
         let base: Vec<u8> =
-            sdr.iter().flat_map(|p| p.map(|v| (lightcraft_color::transfer::linear_to_srgb(v.clamp(0.0, 1.0)) * 255.0).round() as u8)).collect();
+            sdr.iter().flat_map(|p| p.map(|v| (lcc_color::transfer::linear_to_srgb(v.clamp(0.0, 1.0)) * 255.0).round() as u8)).collect();
         let user_xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/"/></rdf:RDF></x:xmpmeta>"#;
         let meta = EncodeMeta { xmp: Some(user_xmp), ..EncodeMeta::default() };
         let file = encode_jpeg(&EncodeImage::new(w as u32, h as u32, 3, Samples::U8(&base)), &g, &m, 90, ChromaSubsampling::S444, &meta).unwrap();

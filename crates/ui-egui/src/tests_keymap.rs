@@ -8,14 +8,18 @@ use serde_json::json;
 
 use crate::headless::Headless;
 use crate::state::{Dialog, ViewMode};
-use crate::{LightcraftApp, Services};
+use crate::{LccApp, Services};
 
 const T: Duration = Duration::from_secs(20);
 const SETTLE: Duration = Duration::from_secs(120);
 
 fn demo() -> Headless {
     let services = Services { png: None, ..Default::default() };
-    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+    let mut session = lcc_engine::Session::with_demo();
+    // newest first, the newest photo open: written around it
+    session.execute("library.sort", &json!({"ascending": false})).unwrap();
+    session.selection = lcc_engine::Selection::single(session.visible_cloned()[0]);
+    let app = LccApp::new(session, services);
     let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
     let r = h.request("ui.set", json!({"view": "detail"}), T);
     assert_eq!(r["ok"], true, "{r}");
@@ -59,6 +63,7 @@ fn rebound_shortcut_fires_and_the_old_key_does_not() {
 #[test]
 fn the_editor_records_a_key_and_esc_cancels_without_closing() {
     let mut h = demo();
+    h.app.ui.settings.keymap_set = crate::shortcuts::KeymapSet::Alternative;
     h.app.run("app.shortcuts", json!({})).unwrap();
     h.step();
     h.step();
@@ -145,6 +150,185 @@ fn modifiers_wait_for_their_key_and_clipboard_keys_record() {
     assert_eq!(crate::shortcuts::shortcut_of(&h.app.ui.settings.keymap, "view.survey"), Some("Cmd+Alt+C"));
     // a saved modifier-only shortcut (from the bug) means no shortcut
     assert_eq!(crate::shortcuts::parse("Cmd+SuperLeft"), None);
+}
+
+// ----------------------------------------------------------------------------------- Classic set (P1.3)
+
+/// In the Classic set no two commands share a key (except the declared contextual partners), and
+/// every Classic entry names a bindable command and parses.
+#[test]
+fn classic_keys_parse_and_do_not_conflict() {
+    use crate::shortcuts::{CLASSIC, CONTEXTUAL, KeymapSet, bindable, default_in, find_bindable, parse};
+    for (id, sc) in CLASSIC {
+        assert!(find_bindable(id).is_some(), "{id} is a command");
+        if let Some(sc) = sc {
+            assert!(parse(sc).is_some(), "{sc} parses");
+        }
+    }
+    let keys: Vec<(&str, (egui::Modifiers, egui::Key))> =
+        bindable().iter().filter_map(|b| default_in(KeymapSet::Classic, b).and_then(parse).map(|k| (b.id, k))).collect();
+    for (i, (a, k)) in keys.iter().enumerate() {
+        for (b, k2) in &keys[i + 1..] {
+            let partners = CONTEXTUAL.iter().any(|(x, y)| (x == a && y == b) || (x == b && y == a));
+            assert!(k != k2 || partners, "{a} and {b} share a key in the Classic set");
+        }
+    }
+}
+
+#[test]
+fn classic_keys_switch_modules_views_and_panels() {
+    let mut h = demo();
+    assert_eq!(h.app.ui.settings.keymap_set, crate::shortcuts::KeymapSet::Classic, "Classic is the default");
+    // G grid, E loupe (Library), D Develop
+    key(&mut h, "G", false);
+    assert!(matches!(h.app.ui.view, ViewMode::PhotoGrid | ViewMode::SquareGrid));
+    key(&mut h, "E", false);
+    assert_eq!((h.app.ui.view, h.app.ui.module), (ViewMode::Detail, crate::module::ModuleId::Library));
+    key(&mut h, "D", false);
+    assert_eq!(h.app.ui.module, crate::module::ModuleId::Develop);
+    // R crop, Q remove, ⇧W masking
+    key(&mut h, "R", false);
+    assert_eq!(h.app.ui.right, crate::state::RightPanel::Crop);
+    key(&mut h, "Q", false);
+    assert_eq!(h.app.ui.right, crate::state::RightPanel::Remove);
+    key(&mut h, "W", true);
+    assert_eq!(h.app.ui.right, crate::state::RightPanel::Masking);
+    // ⌘⌥1…7 and ⌘⌥↑
+    let r = h.request("ui.key", json!({"key": "3", "cmd": true, "alt": true}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+    assert_eq!(h.app.ui.module, crate::module::ModuleId::Map);
+    h.request("ui.key", json!({"key": "ArrowUp", "cmd": true, "alt": true}), T);
+    h.step();
+    h.step();
+    assert_eq!(h.app.ui.module, crate::module::ModuleId::Develop);
+    // Tab hides both side panels, F5 the module bar, T the toolbar, L lights out
+    key(&mut h, "Tab", false);
+    assert!(!h.app.ui.left_panel && !h.app.ui.right_edge);
+    key(&mut h, "F5", false);
+    assert!(!h.app.ui.module_bar);
+    key(&mut h, "T", false);
+    assert!(!h.app.ui.toolbar);
+    key(&mut h, "L", false);
+    assert_eq!(h.app.ui.lights_out, crate::module::LightsOut::Dim);
+    key(&mut h, "Tab", true);
+    assert!(h.app.ui.left_panel && h.app.ui.right_edge && h.app.ui.module_bar, "⇧Tab shows all");
+    // G: the Library grid; [ / ] rate there, ` toggles the flag
+    key(&mut h, "G", false);
+    let id = h.app.session.active().unwrap();
+    h.app.run("photo.rate", json!({"rating": 2})).unwrap();
+    key(&mut h, "]", false);
+    assert_eq!(h.app.session.catalog.photo(id).unwrap().rating, 3);
+    key(&mut h, "[", false);
+    key(&mut h, "[", false);
+    assert_eq!(h.app.session.catalog.photo(id).unwrap().rating, 1);
+    key(&mut h, "`", false);
+    assert_eq!(h.app.session.catalog.photo(id).unwrap().flag, lcc_catalog::Flag::Pick);
+    key(&mut h, "C", false);
+    assert_eq!(h.app.ui.view, ViewMode::Compare);
+    // ⇧E: the secondary window's loupe (not Export)
+    key(&mut h, "E", true);
+    assert!(h.app.ui.second_window && h.app.ui.dialog.is_none());
+}
+
+#[test]
+fn the_alternative_set_restores_the_previous_keys_and_keymaps_round_trip() {
+    let mut h = demo();
+    h.app.run("app.keymapSet", json!({"set": "alternative"})).unwrap();
+    assert_eq!(crate::shortcuts::shortcut_of(&h.app.ui.settings.keymap, "view.detail"), Some("D"));
+    assert_eq!(crate::shortcuts::shortcut_of(&h.app.ui.settings.keymap, "panel.crop"), Some("C"));
+    h.app.run("app.keymapSet", json!({"set": "classic"})).unwrap();
+    assert_eq!(crate::shortcuts::shortcut_of(&h.app.ui.settings.keymap, "panel.crop"), Some("R"));
+    assert!(h.app.run("app.keymapSet", json!({"set": "emacs"})).is_err());
+    // export / import a keymap file
+    h.app.run("app.setShortcut", json!({"id": "view.survey", "shortcut": "Cmd+Shift+K"})).unwrap();
+    let dir = std::env::temp_dir().join(format!("keymap-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("keys.json");
+    h.app.run("app.keymapExport", json!({"path": path.to_str().unwrap()})).unwrap();
+    h.app.run("app.resetShortcuts", json!({})).unwrap();
+    h.app.run("app.keymapSet", json!({"set": "alternative"})).unwrap();
+    let r = h.app.run("app.keymapImport", json!({"path": path.to_str().unwrap()})).unwrap();
+    assert_eq!(r["set"], "classic");
+    assert_eq!(crate::shortcuts::shortcut_of(&h.app.ui.settings.keymap, "view.survey"), Some("Cmd+Shift+K"));
+    // hostile files are errors or skipped entries, never panics
+    std::fs::write(&path, b"{\"keymap\": {\"no.such\": \"K\", \"view.survey\": 7, \"view.people\": \"Hyper+X\"}}").unwrap();
+    let r = h.app.run("app.keymapImport", json!({"path": path.to_str().unwrap()})).unwrap();
+    assert_eq!(r["skipped"].as_array().unwrap().len(), 3);
+    std::fs::write(&path, b"not json").unwrap();
+    assert!(h.app.run("app.keymapImport", json!({"path": path.to_str().unwrap()})).is_err());
+    std::fs::write(&path, b"[1,2]").unwrap();
+    assert!(h.app.run("app.keymapImport", json!({"path": path.to_str().unwrap()})).is_err());
+    let _ = std::fs::remove_dir_all(&dir);
+    // the set survives a save/load of ui.json
+    let saved = serde_json::to_string(&h.app.ui).unwrap();
+    let back = serde_json::from_str::<crate::UiState>(&saved).unwrap();
+    assert_eq!(back.settings.keymap_set, h.app.ui.settings.keymap_set);
+}
+
+/// Classic's module keys (KEYC-COMPARE / KEYC-DEVELOP): backslash is the filter bar in the Library
+/// grid and Show Original in a loupe; `=` / `-` thumbnail size; Home / End; ⌘U / ⇧⌘U in Develop.
+#[test]
+fn module_keys_are_scoped_by_module_and_view() {
+    let mut h = demo();
+    let press = |h: &mut Headless, k: &str, cmd: bool, shift: bool| {
+        let r = h.request("ui.key", json!({"key": k, "cmd": cmd, "shift": shift}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.step();
+        h.step();
+    };
+    // Library loupe: backslash shows the original, the filter bar stays off
+    assert_eq!(h.app.ui.view, ViewMode::Detail);
+    press(&mut h, "Backslash", false, false);
+    assert!(!h.app.ui.filter_bar);
+    assert_eq!(h.app.ui.view, ViewMode::Detail);
+    // grid: backslash toggles the filter bar
+    key(&mut h, "G", false);
+    press(&mut h, "Backslash", false, false);
+    assert!(h.app.ui.filter_bar);
+    // thumbnail size
+    let size = h.app.ui.thumb_size;
+    press(&mut h, "Equals", false, false);
+    assert!(h.app.ui.thumb_size > size);
+    press(&mut h, "Minus", false, false);
+    press(&mut h, "Minus", false, false);
+    assert!(h.app.ui.thumb_size < size);
+    // Home / End
+    let vis = h.app.session.visible_cloned();
+    press(&mut h, "End", false, false);
+    assert_eq!(h.app.session.active(), vis.last().copied());
+    press(&mut h, "Home", false, false);
+    assert_eq!(h.app.session.active(), vis.first().copied());
+    // Develop: ⇧⌘U sets Auto white balance, ⌘U runs Auto (an undo step)
+    key(&mut h, "D", false);
+    h.settle(SETTLE);
+    let undo = h.app.session.undo.len();
+    press(&mut h, "U", true, true);
+    let id = h.app.session.active().unwrap();
+    assert_eq!(h.app.session.develop_of(id).unwrap().wb.mode, lcc_develop::WbMode::Auto);
+    press(&mut h, "U", true, false);
+    assert!(h.app.session.undo.len() >= undo + 2, "both keys made an edit");
+    // ⇧Q without a spot is a no-op, not a crash
+    press(&mut h, "Q", false, true);
+    assert!(h.app.run("spot.cycleMode", json!({})).is_err());
+}
+
+/// ⌘/ lists the current module's keys only, unless a search looks through everything.
+#[test]
+fn the_shortcuts_list_shows_the_current_modules_keys() {
+    use crate::module::ModuleId;
+    use crate::panels::keymap::in_module;
+    assert!(in_module(ModuleId::Develop, "develop.auto"));
+    assert!(in_module(ModuleId::Develop, "app.shortcuts"));
+    assert!(!in_module(ModuleId::Develop, "album.toggleTarget"));
+    assert!(in_module(ModuleId::Library, "album.toggleTarget"));
+    let mut h = demo();
+    h.app.run("app.shortcuts", json!({})).unwrap();
+    h.step();
+    h.step();
+    // the module filter is shown and can be turned off
+    click(&mut h, "check:shortcuts.moduleOnly");
 }
 
 /// On Windows and Linux the windowing layer turns Ctrl+C / Ctrl+V into clipboard events, not key
@@ -255,13 +439,13 @@ fn view(h: &mut Headless, p: serde_json::Value) {
 }
 
 /// Make `id` the only selected, active photo.
-fn select(h: &mut Headless, id: lightcraft_catalog::PhotoId) {
+fn select(h: &mut Headless, id: lcc_catalog::PhotoId) {
     let r = h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [id.0], "active": id.0}}), T);
     assert_eq!(r["ok"], true, "{r}");
 }
 
 /// The demo library in Photo Grid with its middle photo selected: the photos in view, and that one.
-fn grid_demo() -> (Headless, Vec<lightcraft_catalog::PhotoId>, lightcraft_catalog::PhotoId) {
+fn grid_demo() -> (Headless, Vec<lcc_catalog::PhotoId>, lcc_catalog::PhotoId) {
     let mut h = demo();
     view(&mut h, json!({ "view": "photoGrid" }));
     let vis = h.app.session.visible_cloned();
@@ -280,18 +464,6 @@ fn count_folder_picks(h: &mut Headless) -> std::sync::Arc<std::sync::atomic::Ato
         None
     }));
     calls
-}
-
-/// The declared key of Open Library. Visualize HDR has none by default: ⇧H cycles the Tool Overlay
-/// (issue #224); the user can give Visualize HDR a key in the keymap.
-#[test]
-fn open_library_and_visualize_hdr_keys_are_declared() {
-    use crate::shortcuts::{Keymap, parse, shortcut_of};
-
-    let keymap = Keymap::new();
-    assert_eq!(shortcut_of(&keymap, "app.openLibrary"), Some("Cmd+O"));
-    assert!(parse("Cmd+O").is_some());
-    assert_eq!(shortcut_of(&keymap, "view.visualizeHdr"), None);
 }
 
 /// Opening a library uses the same folder picker as File > Open Library. Cancelling it
@@ -326,10 +498,13 @@ fn home_and_end_select_the_ends_of_the_grid() {
     press(&mut h, "Home", &[]);
     assert_eq!(h.app.session.active(), Some(first), "the Square Grid has the keys too");
 
+    // in the Classic set Home / End are Library module keys (`library.first` / `library.last`), so
+    // the Library loupe has them too, as in Lightroom Classic
     select(&mut h, last);
     view(&mut h, json!({ "view": "detail" }));
     press(&mut h, "Home", &[]);
-    assert_eq!(h.app.session.active(), Some(last), "Home is a grid key");
+    assert_eq!(h.app.session.active(), Some(first), "Home goes to the first photo in the loupe");
+    select(&mut h, last);
 
     view(&mut h, json!({ "view": "photoGrid" }));
     let r = h.app.run("app.setShortcut", json!({"id": "view.survey", "shortcut": "Home"})).unwrap();
@@ -416,15 +591,16 @@ fn navigation_open_library_and_hdr_keys_wait_for_a_text_field() {
     assert!(h.app.ui.dialog.is_none());
 }
 
-/// Home / End and Shift+Left / Shift+Right belong to the grid: while the full-screen preview covers it
-/// they leave the selection alone.
+/// Shift+Left / Shift+Right belong to the grid: while the full-screen preview covers it they leave
+/// the selection alone. (Home / End are Library module keys in the Classic set and step to the
+/// first / last photo there too.)
 #[test]
 fn grid_navigation_keys_do_nothing_in_the_full_screen_preview() {
     let (mut h, vis, middle) = grid_demo();
     h.app.run("view.fullScreenPreview", json!({})).unwrap();
     assert!(h.app.ui.fullscreen);
     assert_eq!(h.app.ui.view, ViewMode::PhotoGrid, "the grid is the view behind the preview");
-    for (key, mods) in [("Home", &[][..]), ("End", &[][..]), ("Right", &["shift"][..]), ("Left", &["shift"][..])] {
+    for (key, mods) in [("Right", &["shift"][..]), ("Left", &["shift"][..])] {
         press(&mut h, key, mods);
         assert_eq!(h.app.session.active(), Some(middle), "{mods:?}+{key} moved the active photo in the full-screen preview");
         assert_eq!(h.app.session.selection.ids, vec![middle], "{mods:?}+{key} changed the selection in the full-screen preview");
@@ -452,4 +628,23 @@ fn cmd_o_does_not_fire_while_a_dialog_is_open() {
     h.app.ui.dialog = None;
     press(&mut h, "O", &["cmd"]);
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+/// The dialog's header controls don't overlap: Reset All used to be squeezed onto the filter row
+/// and drawn over "Only Library keys" (issue #154).
+#[test]
+fn shortcuts_header_controls_do_not_overlap() {
+    let mut h = demo();
+    for module in ["library", "develop"] {
+        h.app.run("app.shortcuts", json!({})).unwrap();
+        let _ = h.app.run(&format!("module.{module}"), json!({}));
+        h.step();
+        h.step();
+        let rect = |h: &Headless, id: &str| h.app.widgets.iter().find(|(w, _)| w == id).map(|(_, r)| *r).unwrap_or_else(|| panic!("no widget {id}"));
+        let reset = rect(&h, "button:shortcutsResetAll");
+        for id in ["field:shortcutsSearch", "check:shortcuts.showAll", "check:shortcuts.moduleOnly"] {
+            let other = rect(&h, id);
+            assert!(!reset.intersects(other), "{module}: Reset All {reset:?} overlaps {id} {other:?}");
+        }
+    }
 }

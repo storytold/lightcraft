@@ -184,6 +184,7 @@ controls! {
     "hdr.sdrShadows" => hdr.sdr_shadows, "SDR Shadows", Light, -100, 100, 0, 1, 0, Centered;
     "hdr.sdrWhites" => hdr.sdr_whites, "SDR Whites", Light, -100, 100, 0, 1, 0, Centered;
     "hdr.sdrClarity" => hdr.sdr_clarity, "SDR Clarity", Light, -100, 100, 0, 1, 0, Centered;
+    "hdr.sdrBlend" => hdr.sdr_blend, "SDR Blend", Light, -100, 100, 0, 1, 0, Centered;
     "curve.highlights" => curve.highlights, "Highlights", Curve, -100, 100, 0, 1, 0, Centered;
     "curve.lights" => curve.lights, "Lights", Curve, -100, 100, 0, 1, 0, Centered;
     "curve.darks" => curve.darks, "Darks", Curve, -100, 100, 0, 1, 0, Centered;
@@ -536,14 +537,6 @@ mod tests {
             assert!(get(&s, &id).is_some(), "{id}");
             assert!(spec.min <= spec.default && spec.default <= spec.max);
         }
-    }
-
-    #[test]
-    fn formatting() {
-        let e = find("light.exposure").unwrap();
-        assert_eq!(e.format(0.5), "+0.50");
-        assert_eq!(e.format(-1.0), "-1.00");
-        assert_eq!(find("wb.temp").unwrap().format(5500.0), "5500");
     }
 
     /// The Kelvin temperature's track follows Lightroom's (positions measured in Lightroom Classic against

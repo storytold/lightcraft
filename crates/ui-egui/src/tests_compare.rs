@@ -6,13 +6,13 @@ use serde_json::json;
 
 use crate::headless::Headless;
 use crate::state::Zoom;
-use crate::{LightcraftApp, Services};
+use crate::{LccApp, Services};
 
 const T: Duration = Duration::from_secs(20);
 const SETTLE: Duration = Duration::from_secs(120);
 
 fn demo() -> Headless {
-    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let app = LccApp::new(lcc_engine::Session::with_demo(), Services { png: None, ..Default::default() });
     Headless::new(app, [1400.0, 900.0], 1.0)
 }
 
@@ -22,7 +22,7 @@ fn demo() -> Headless {
 fn filmstrip_click_in_compare_keeps_the_active_photo_on_screen() {
     let mut h = demo();
     let vis: Vec<u64> = h.app.session.visible_cloned().iter().map(|p| p.0).collect();
-    let rating = |h: &Headless, id: u64| h.app.session.catalog.photo(lightcraft_catalog::PhotoId(id)).map(|p| p.rating);
+    let rating = |h: &Headless, id: u64| h.app.session.catalog.photo(lcc_catalog::PhotoId(id)).map(|p| p.rating);
     for zoom in [Zoom::Fit, Zoom::Percent(100.0)] {
         h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [vis[0], vis[1]], "active": vis[0]}}), T);
         let r = h.request("engine.execute", json!({"command": "view.compare"}), T);
@@ -102,10 +102,10 @@ fn modified_filmstrip_clicks_in_compare_change_the_selection_not_the_pair() {
     };
     let selected = |h: &Headless| -> Vec<u64> {
         let s = &h.app.session.selection;
-        vis.iter().copied().filter(|v| s.contains(lightcraft_catalog::PhotoId(*v))).collect()
+        vis.iter().copied().filter(|v| s.contains(lcc_catalog::PhotoId(*v))).collect()
     };
     let active = |h: &Headless| h.app.session.selection.active.map(|p| p.0);
-    let rating = |h: &Headless, id: u64| h.app.session.catalog.photo(lightcraft_catalog::PhotoId(id)).map(|p| p.rating);
+    let rating = |h: &Headless, id: u64| h.app.session.catalog.photo(lcc_catalog::PhotoId(id)).map(|p| p.rating);
     let others: Vec<u64> = vis.iter().copied().filter(|v| *v != sel && *v != cand).collect();
     assert!(others.len() >= 4, "the demo library has {} photos", vis.len());
     let before = active(&h);

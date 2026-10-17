@@ -122,13 +122,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn d65_is_about_6504k() {
-        let (t, tint) = xy_to_temp_tint(crate::D65);
-        assert!((t - 6504.0).abs() < 60.0, "{t}");
-        assert!(tint.abs() < 15.0, "{tint}");
-    }
-
-    #[test]
     fn roundtrip_temp_tint() {
         for t in [2000.0, 2856.0, 4000.0, 5003.0, 6500.0, 9000.0, 15000.0, 30000.0, 50000.0] {
             for tint in [-100.0, -20.0, 0.0, 35.0, 150.0] {

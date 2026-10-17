@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use lightcraft_develop::DevelopSettings;
+use lcc_develop::DevelopSettings;
 
 use super::*;
 
@@ -23,7 +23,7 @@ fn apply_and_inverse_roundtrip() {
         Op::SetLabel { id: a, label: Some(ColorLabel::Red) },
         Op::SetDevelop {
             id: a,
-            settings: Arc::new(DevelopSettings { treatment: lightcraft_develop::Treatment::Bw, ..Default::default() }),
+            settings: Arc::new(DevelopSettings { treatment: lcc_develop::Treatment::Bw, ..Default::default() }),
             label: "B&W".into(),
             edited: Some("x".into()),
         },
@@ -58,7 +58,19 @@ fn albums_and_folders() {
     let a = photo(&mut c, "a.jpg", "2026-04-01");
     let f = c.alloc_album_id();
     c.apply(Op::AddAlbum {
-        album: Album { id: f, name: "Trips".into(), parent: None, folder: true, photos: vec![], cover: None, smart: None, quick: false, order: None },
+        album: Album {
+            id: f,
+            name: "Trips".into(),
+            parent: None,
+            folder: true,
+            photos: vec![],
+            cover: None,
+            smart: None,
+            quick: false,
+            order: None,
+            creation: None,
+            photo_order: Vec::new(),
+        },
     })
     .unwrap();
     let al = c.alloc_album_id();
@@ -73,6 +85,8 @@ fn albums_and_folders() {
             smart: None,
             quick: false,
             order: None,
+            creation: None,
+            photo_order: Vec::new(),
         },
     })
     .unwrap();
@@ -101,7 +115,7 @@ fn filter_search_sort() {
     c.apply(Op::SetMeta { id: a, meta: Box::new(m) }).unwrap();
 
     let all = c.query(&Filter::default(), &Sort::default());
-    assert_eq!(all, vec![a, b, d], "newest first");
+    assert_eq!(all, vec![d, b, a], "oldest first, as in Lightroom Classic");
     let asc = c.query(&Filter::default(), &Sort { key: SortKey::FileName, ascending: true, ..Default::default() });
     assert_eq!(asc, vec![b, a, d]);
     assert_eq!(c.query(&Filter { rating: 4, ..Default::default() }, &Sort::default()), vec![b]);
@@ -254,6 +268,7 @@ fn merge_results_are_recognised() {
     assert_eq!(merged_kind("IMG_1-HDR.dng"), Some("hdr"));
     assert_eq!(merged_kind("IMG_1-Pano.dng"), Some("panorama"));
     assert_eq!(merged_kind("IMG_1-HDR-Pano.dng"), Some("hdrPanorama"));
+    assert_eq!(merged_kind("IMG_1-Focus.dng"), Some("focusStack"));
     assert_eq!(merged_kind("IMG_1-HDR-2.dng"), Some("hdr"), "a second merge of the same photo");
     assert_eq!(merged_kind("hdr.jpg"), None);
     assert_eq!(merged_kind("panorama.jpg"), None);
@@ -283,7 +298,7 @@ fn preview_only_survives_serde_and_set_content_undo() {
     assert_eq!(old.photo(a).unwrap().preview_only, None);
     assert!(old.photo(a).unwrap().develops_raw());
     // a newer build still can't decode it: the reason and the stamp of the version that decided
-    // it are recorded together (#662)
+    // it are recorded together (upstream #662)
     let op = Op::SetContent {
         id: a,
         width: 6000,
@@ -295,6 +310,7 @@ fn preview_only_survives_serde_and_set_content_undo() {
     };
     c.apply(op).unwrap();
     assert_eq!(c.photo(a).unwrap().preview_checked, "0.6.0");
+    assert!(c.photo(a).unwrap().preview_only_stale(), "decided by another version");
     // Reload: the file decodes now → cleared, with its stamp; undo (through the journal's JSON)
     // restores both
     let op =
@@ -306,6 +322,13 @@ fn preview_only_survives_serde_and_set_content_undo() {
     c.apply(inv).unwrap();
     assert_eq!(c.photo(a).unwrap().preview_only.as_deref(), Some("Nikon Huffman-compressed NEF"));
     assert_eq!(c.photo(a).unwrap().preview_checked, "0.6.0");
+    // this build's own decision is stamped with its version, and isn't stale
+    let mut p = (**c.photo(a).unwrap()).clone();
+    p.set_preview_only(Some("still not decoded".into()));
+    assert_eq!(p.preview_checked, APP_VERSION);
+    assert!(!p.preview_only_stale());
+    p.set_preview_only(None);
+    assert_eq!(p.preview_checked, "", "the stamp goes with the flag");
     assert_eq!(c.photo(a).unwrap().width, 6000);
 }
 
@@ -346,7 +369,7 @@ fn folder_identity_ignores_spelling() {
 /// first; pets and unnamed faces are not people; the `person` filter and `person:` token match.
 #[test]
 fn people_from_named_face_regions() {
-    use lightcraft_meta::{Rect, Region, RegionKind};
+    use lcc_meta::{Rect, Region, RegionKind};
     let region = |name: Option<&str>, kind: RegionKind| Region {
         rect: Rect { x0: 0.4, y0: 0.4, x1: 0.6, y1: 0.6 },
         kind,
@@ -415,9 +438,9 @@ fn empty_regions_are_not_serialized_and_default_when_missing() {
     let back: Meta = serde_json::from_value(v).unwrap();
     assert!(back.regions.is_empty());
     let mut with = m.clone();
-    with.regions.push(lightcraft_meta::Region {
-        rect: lightcraft_meta::Rect { x0: 0.1, y0: 0.1, x1: 0.2, y1: 0.2 },
-        kind: lightcraft_meta::RegionKind::Face,
+    with.regions.push(lcc_meta::Region {
+        rect: lcc_meta::Rect { x0: 0.1, y0: 0.1, x1: 0.2, y1: 0.2 },
+        kind: lcc_meta::RegionKind::Face,
         name: Some("A".into()),
         description: None,
     });
@@ -435,8 +458,8 @@ fn focus_point_is_not_serialized_when_unknown_and_round_trips() {
     let back: Meta = serde_json::from_value(v).unwrap();
     assert!(back.focus.is_none());
     let mut with = m.clone();
-    with.focus = Some(lightcraft_meta::FocusPoint {
-        rect: lightcraft_meta::Rect { x0: 0.36, y0: 0.33, x1: 0.38, y1: 0.36 },
+    with.focus = Some(lcc_meta::FocusPoint {
+        rect: lcc_meta::Rect { x0: 0.36, y0: 0.33, x1: 0.38, y1: 0.36 },
         mode: Some("AF-C".into()),
         area: Some("Wide".into()),
         tracking: None,
@@ -522,11 +545,11 @@ fn set_embedded_lens_is_undoable_and_journaled() {
         photo: Box::new(Photo::new(a, Source::File { path: "/x.rw2".into() }, "x.rw2", "RW2", 4000, 3000, "2026-10-06T00:00:00")),
     })
     .unwrap();
-    let lens = lightcraft_develop::EmbeddedLens { warp: Some(Default::default()), vignette: None, stages: Default::default() };
+    let lens = lcc_develop::EmbeddedLens { warp: Some(Default::default()), vignette: None, stages: Default::default() };
     let op = Op::SetEmbeddedLens { id: a, lens: Some(Box::new(lens)) };
     let op: Op = serde_json::from_str(&serde_json::to_string(&op).unwrap()).unwrap();
     let inv = c.apply(op).unwrap();
-    assert_eq!(c.photo(a).unwrap().embedded_lens, Some(lens));
+    assert_eq!(c.photo(a).unwrap().embedded_lens, Some(Box::new(lens)));
     let inv: Op = serde_json::from_str(&serde_json::to_string(&inv).unwrap()).unwrap();
     c.apply(inv).unwrap();
     assert_eq!(c.photo(a).unwrap().embedded_lens, None);
@@ -721,11 +744,11 @@ fn undated_photos_group_under_unknown_date_and_sort_together() {
     let p_undated1 = add_photo(&mut c, "undated1.jpg", None, "2026-10-05T00:00:00");
     let p_undated2 = add_photo(&mut c, "undated2.jpg", None, "2026-10-02T00:00:00");
 
-    // Descending sort (default, newest first): dated photos first (newest to oldest), undated photos at the end
+    // Descending sort (newest first): dated photos first (newest to oldest), undated photos at the end
     let desc = c.query(&Filter::default(), &Sort { key: SortKey::CaptureDate, ascending: false, ..Default::default() });
     assert_eq!(desc, vec![p_dated2, p_dated1, p_undated1, p_undated2]);
 
-    // Ascending sort (oldest first): undated photos at the beginning, dated photos from oldest to newest
+    // Ascending sort (the default, oldest first): undated photos at the beginning, dated photos from oldest to newest
     let asc = c.query(&Filter::default(), &Sort { key: SortKey::CaptureDate, ascending: true, ..Default::default() });
     assert_eq!(asc, vec![p_undated2, p_undated1, p_dated1, p_dated2]);
 
@@ -751,47 +774,146 @@ fn undated_photos_group_under_unknown_date_and_sort_together() {
     assert_eq!(c.query(&filter_year, &Sort { key: SortKey::CaptureDate, ascending: false, ..Default::default() }), vec![p_dated2, p_dated1]);
 }
 
-/// Photos with one import time and capture time, as one import batch or a burst gives them, added
-/// with ids that run opposite to their names.
-fn batch_with_reversed_ids(c: &mut Catalog) -> Vec<PhotoId> {
-    let names = ["DSC_0001.ARW", "DSC_0002.ARW", "DSC_0003.ARW", "DSC_0004.ARW"];
-    let mut ids = Vec::new();
-    for (n, name) in names.iter().enumerate() {
-        let id = PhotoId(1000 - n as u64);
-        let mut p = Photo::new(id, Source::Demo { scene: 1 }, name, "ARW", 10, 10, "2026-10-10T09:00:00");
-        p.captured = Some("2026-10-01T12:00:00".into());
-        c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
-        ids.push(id);
+#[test]
+fn saved_locations_apply_undo_and_privacy() {
+    let mut c = Catalog::new();
+    let home = lcc_geo::SavedLocation::new("Home", 48.85, 2.35, 300.0, true).unwrap();
+    let inv = c.apply(Op::SetSavedLocation { name: "home".into(), location: Some(home.clone()) }).unwrap();
+    assert_eq!(c.saved_location("HOME"), Some(&home));
+    assert!(c.is_private_location((48.851, 2.351)));
+    assert!(!c.is_private_location((48.9, 2.35)));
+    c.apply(inv).unwrap();
+    assert!(c.saved_location("home").is_none());
+    assert!(!c.is_private_location((48.851, 2.351)));
+    // invalid locations are refused, not stored
+    let bad = lcc_geo::SavedLocation { radius: f64::NAN, ..home };
+    assert!(c.apply(Op::SetSavedLocation { name: "x".into(), location: Some(bad) }).is_err());
+    assert!(c.apply(Op::SetSavedLocation { name: " ".into(), location: None }).is_err());
+}
+
+#[test]
+fn filter_by_face_count_and_matches_spec() {
+    use crate::query::matches_face_spec;
+    use lcc_meta::{Rect, Region, RegionKind};
+
+    // 1. Test matches_face_spec
+    assert!(matches_face_spec(0, "0"));
+    assert!(matches_face_spec(0, "none"));
+    assert!(!matches_face_spec(1, "0"));
+    assert!(matches_face_spec(1, "1"));
+    assert!(matches_face_spec(2, "=2"));
+    assert!(matches_face_spec(3, "3+"));
+    assert!(matches_face_spec(4, "3+"));
+    assert!(!matches_face_spec(2, "3+"));
+    assert!(matches_face_spec(3, ">=3"));
+    assert!(matches_face_spec(4, ">3"));
+    assert!(!matches_face_spec(3, ">3"));
+    assert!(matches_face_spec(2, "<=2"));
+    assert!(matches_face_spec(1, "<2"));
+    assert!(matches_face_spec(2, "1-3"));
+    assert!(matches_face_spec(1, "1-3"));
+    assert!(matches_face_spec(3, "1-3"));
+    assert!(!matches_face_spec(4, "1-3"));
+    assert!(matches_face_spec(2, "1..3"));
+    assert!(matches_face_spec(2, "any"));
+    assert!(!matches_face_spec(0, "any"));
+    // reversed ranges cover the same counts; unreadable specs are rejected where they're read
+    assert!(matches_face_spec(3, "5-2") && matches_face_spec(2, "5..2") && !matches_face_spec(6, "5-2"));
+    for bad in ["abc", "3 faces", "<0", "-", "+", "1-x", ">", "99999999999999999999999"] {
+        assert!(!matches_face_spec(0, bad) && !matches_face_spec(3, bad), "{bad}");
+        let r: std::result::Result<Filter, _> = serde_json::from_value(serde_json::json!({"faces": bad}));
+        assert!(r.is_err_and(|e| e.to_string().contains("faces")), "{bad} must be rejected");
     }
-    ids // in name order
-}
 
-#[test]
-fn one_import_batch_sorts_by_file_name_not_id() {
+    // 2. Test deserialization of Filter with faces
+    let f1: Filter = serde_json::from_value(serde_json::json!({"faces": 2})).unwrap();
+    assert_eq!(f1.faces.as_deref(), Some("2"));
+
+    let f2: Filter = serde_json::from_value(serde_json::json!({"faces": "3+"})).unwrap();
+    assert_eq!(f2.faces.as_deref(), Some("3+"));
+
+    let f3: Filter = serde_json::from_value(serde_json::json!({"faces": null})).unwrap();
+    assert_eq!(f3.faces, None);
+
+    let f4: Filter = serde_json::from_value(serde_json::json!({})).unwrap();
+    assert_eq!(f4.faces, None);
+
+    // 3. Catalog query with face count
     let mut c = Catalog::new();
-    let by_name = batch_with_reversed_ids(&mut c);
-    let sort = Sort { key: SortKey::ImportDate, ascending: true, ..Default::default() };
-    assert_eq!(c.query(&Filter::default(), &sort), by_name);
-}
+    let region = |name: Option<&str>, kind: RegionKind| Region {
+        rect: Rect { x0: 0.1, y0: 0.1, x1: 0.2, y1: 0.2 },
+        kind,
+        name: name.map(str::to_string),
+        description: None,
+    };
 
-#[test]
-fn burst_in_one_second_sorts_by_file_name_not_id() {
-    let mut c = Catalog::new();
-    let by_name = batch_with_reversed_ids(&mut c);
-    let sort = Sort { key: SortKey::CaptureDate, ascending: true, ..Default::default() };
-    assert_eq!(c.query(&Filter::default(), &sort), by_name);
-}
+    let make_photo = |id: u64, regions: Vec<Region>| {
+        let mut p = Photo::new(
+            PhotoId(id),
+            crate::Source::File { path: format!("/x/test_{id}.jpg") },
+            &format!("test_{id}.jpg"),
+            "JPEG",
+            100,
+            100,
+            "2026-04-12T10:00:00Z",
+        );
+        p.captured = Some("2026-04-12T10:00:00Z".into());
+        p.meta.regions = regions;
+        p
+    };
 
-#[test]
-fn cmp_name_ignores_case_without_allocating() {
-    use crate::query::cmp_name;
-    use std::cmp::Ordering::*;
-    assert_eq!(cmp_name("IMG_1.JPG", "img_1.jpg"), Equal);
-    assert_eq!(cmp_name("Ärger.jpg", "ärger.jpg"), Equal);
-    assert_eq!(cmp_name("a", "B"), Less);
-    assert_eq!(cmp_name("B", "a"), Greater);
-    assert_eq!(cmp_name("DSC_0001", "DSC_0002"), Less);
-    assert_eq!(cmp_name("a", "ab"), Less);
+    let p0 = make_photo(1, vec![]);
+    let p1 = make_photo(2, vec![region(Some("Alice"), RegionKind::Face)]);
+    let p2 = make_photo(3, vec![region(Some("Alice"), RegionKind::Face), region(Some("Bob"), RegionKind::Face)]);
+    let p3 = make_photo(
+        4,
+        vec![
+            region(Some("Alice"), RegionKind::Face),
+            region(None, RegionKind::Face), // unnamed face
+            region(Some("Charlie"), RegionKind::Face),
+            region(Some("Pet"), RegionKind::Pet), // pet should not count towards face_count
+        ],
+    );
+
+    assert_eq!(p0.face_count(), 0);
+    assert_eq!(p1.face_count(), 1);
+    assert_eq!(p2.face_count(), 2);
+    assert_eq!(p3.face_count(), 3);
+
+    for p in [p0, p1, p2, p3] {
+        c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    }
+
+    let q = |f: &Filter| c.query(f, &Sort::default());
+
+    // Exact 1 face
+    let f_one = Filter { faces: Some("1".into()), ..Default::default() };
+    assert_eq!(q(&f_one), vec![PhotoId(2)]);
+
+    // Exact 0 faces
+    let f_zero = Filter { faces: Some("0".into()), ..Default::default() };
+    assert_eq!(q(&f_zero), vec![PhotoId(1)]);
+
+    // 2+ faces
+    let f_two_plus = Filter { faces: Some("2+".into()), ..Default::default() };
+    assert_eq!(q(&f_two_plus), vec![PhotoId(3), PhotoId(4)]);
+
+    // Range 1-2 faces
+    let f_range = Filter { faces: Some("1-2".into()), ..Default::default() };
+    assert_eq!(q(&f_range), vec![PhotoId(2), PhotoId(3)]);
+
+    // 4. Token search in text: faces:1, faces:3+, faces:none
+    let f_tok1 = Filter { text: "faces:1".into(), ..Default::default() };
+    assert_eq!(q(&f_tok1), vec![PhotoId(2)]);
+
+    let f_tok_none = Filter { text: "faces:none".into(), ..Default::default() };
+    assert_eq!(q(&f_tok_none), vec![PhotoId(1)]);
+
+    let f_tok_plus = Filter { text: "faces:>=2".into(), ..Default::default() };
+    assert_eq!(q(&f_tok_plus), vec![PhotoId(3), PhotoId(4)]);
+
+    // 5. Describe
+    assert_eq!(f_two_plus.describe(), "faces 2+");
 }
 
 /// What the catalog remembers of its latest ops: which photos each changed and what of them, as long as that can be

@@ -2,10 +2,10 @@
 //! bit-exact decoder round-trip tests. The raw image is stored in IFD0 (allowed by DNG 1.7 §"File Structure").
 
 use crate::{RawData, RawError, RawImage, Result, ljpeg, opcodes};
-use lightcraft_color::Mat3;
-use lightcraft_tiff::tags::{self as t, compression, photometric};
-use lightcraft_tiff::writer::{rational, srational};
-use lightcraft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value};
+use lcc_color::Mat3;
+use lcc_tiff::tags::{self as t, compression, photometric};
+use lcc_tiff::writer::{rational, srational};
+use lcc_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value};
 use rayon::prelude::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -54,7 +54,7 @@ fn lossy_source(raw: &RawImage, long_edge: Option<u32>) -> Result<RawImage> {
             let s = edge as f64 / long as f64;
             let w = ((rgb.width as f64 * s).round() as usize).max(1);
             let h = ((rgb.height as f64 * s).round() as usize).max(1);
-            rgb = lightcraft_raster::resample::resize(&rgb, w, h, lightcraft_raster::resample::Filter::Lanczos3);
+            rgb = lcc_raster::resample::resize(&rgb, w, h, lcc_raster::resample::Filter::Lanczos3);
         }
     }
     let (w, h) = (rgb.width, rgb.height);
@@ -86,9 +86,19 @@ fn lossy_source(raw: &RawImage, long_edge: Option<u32>) -> Result<RawImage> {
     })
 }
 
-/// Software tag of the DNGs this writer makes. A bare "LightCraft" marks older files, whose CFAPattern is anchored at
-/// the sensor origin instead of the ActiveArea (the reader keeps their original reading).
-pub const SOFTWARE: &str = "LightCraft DNG 2";
+/// Software tag of the DNGs this writer makes: `<app> DNG 2`. A bare app name (this one's or a previous one's,
+/// see [`is_legacy_software`]) marks older files, whose CFAPattern is anchored at the sensor
+/// origin instead of the ActiveArea (the reader keeps their original reading).
+pub fn software() -> String {
+    format!("{} DNG 2", lcc_brand::DISPLAY_NAME)
+}
+
+/// Whether a DNG's Software tag is the bare app name the writer used before it anchored the CFAPattern at the
+/// ActiveArea: this app's name or a previous one ([`lcc_brand::LEGACY_SETTINGS_DIRS`], the upstream project's among them).
+pub fn is_legacy_software(software: &str) -> bool {
+    let s = software.trim();
+    s == lcc_brand::DISPLAY_NAME || lcc_brand::LEGACY_SETTINGS_DIRS.contains(&s)
+}
 
 /// zlib level of Deflate tiles. On a 67 MP focus-stack merge (half floats) level 6 took 7× as long as level 1
 /// (3.9 s vs 0.55 s on 4 cores) to save 3 % of the file (266 vs 275 MB); 5–12 % on raw and rendered DNGs.
@@ -203,10 +213,10 @@ pub fn write_dng(raw: &RawImage, opts: &DngWriteOptions) -> Result<Vec<u8>> {
     } else {
         format!("{make} {model}")
     };
-    ifd.set(t::UNIQUE_CAMERA_MODEL, Value::Ascii(if unique.is_empty() { "LightCraft".into() } else { unique }));
+    ifd.set(t::UNIQUE_CAMERA_MODEL, Value::Ascii(if unique.is_empty() { lcc_brand::DISPLAY_NAME.into() } else { unique }));
     ifd.set(t::ORIENTATION, Value::Short(vec![raw.orientation.to_exif()]));
-    ifd.set(t::SOFTWARE, Value::Ascii(SOFTWARE.into()));
-    let xmp = opts.xmp.clone().unwrap_or_else(|| lightcraft_meta::write_xmp(&raw.metadata, None));
+    ifd.set(t::SOFTWARE, Value::Ascii(software()));
+    let xmp = opts.xmp.clone().unwrap_or_else(|| lcc_meta::write_xmp(&raw.metadata, None));
     ifd.set(t::XMP, Value::Byte(xmp.into_bytes()));
 
     if let Some(cfa) = &raw.cfa {
@@ -485,8 +495,8 @@ pub fn write_dng(raw: &RawImage, opts: &DngWriteOptions) -> Result<Vec<u8>> {
 }
 
 /// Exif `LightSource` code of a white point the rendered DNG writer knows (D65 = 21, D50 = 23).
-fn illuminant_of(white: lightcraft_color::Xy) -> u16 {
-    if (white.x - lightcraft_color::D50.x).abs() < 1e-3 && (white.y - lightcraft_color::D50.y).abs() < 1e-3 { 23 } else { 21 }
+fn illuminant_of(white: lcc_color::Xy) -> u16 {
+    if (white.x - lcc_color::D50.x).abs() < 1e-3 && (white.y - lcc_color::D50.y).abs() < 1e-3 { 23 } else { 21 }
 }
 
 /// Render to DNG: a linear DNG (`LinearRaw`, 16-bit float Deflate tiles) of an already rendered,
@@ -499,8 +509,8 @@ pub fn write_rendered_dng(
     width: usize,
     height: usize,
     rgb: &[f32],
-    space: &lightcraft_color::RgbSpace,
-    metadata: &lightcraft_meta::Metadata,
+    space: &lcc_color::RgbSpace,
+    metadata: &lcc_meta::Metadata,
     xmp: Option<String>,
 ) -> Result<Vec<u8>> {
     let n = width.checked_mul(height).and_then(|p| p.checked_mul(3)).ok_or(RawError::Limit("image too large"))?;
@@ -510,7 +520,7 @@ pub fn write_rendered_dng(
     let src = rgb.get(..n).ok_or_else(|| RawError::Corrupt(format!("{} samples for a {width}×{height} RGB image", rgb.len())))?;
     let data: Vec<f32> = src.iter().map(|&v| if v.is_finite() { v.clamp(0.0, 65504.0) } else { 0.0 }).collect();
     let full = crate::Rect::new(0, 0, width, height);
-    let forward = lightcraft_color::bradford(space.white, lightcraft_color::D50).mul(&space.to_xyz());
+    let forward = lcc_color::bradford(space.white, lcc_color::D50).mul(&space.to_xyz());
     let color = crate::ColorData {
         illuminant: [illuminant_of(space.white), 0],
         color_matrix: [Some(space.from_xyz()), None],
@@ -534,7 +544,7 @@ pub fn write_rendered_dng(
         white: vec![1.0],
         active_area: full,
         crop: full,
-        orientation: lightcraft_geom::Orientation::Normal,
+        orientation: lcc_geom::Orientation::Normal,
         color,
         wb_multipliers: None,
         linearized: false,

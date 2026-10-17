@@ -1,18 +1,14 @@
 # README showcase
 
-The screenshots in `docs/images/` are captured by driving LightCraft over its control channel.
+The README screenshots in `docs/images/classic/` are rendered headless (no window) from the procedural demo
+library by [`classic.jsonl`](classic.jsonl), a list of control-protocol requests:
 
 ```sh
-# public-domain set (downloaded into the gitignored corpus/, see assets/ATTRIBUTION.md for sources)
-cargo run --release -p lightcraft -- --memory --control 7980 corpus/images/pd &
-python3 docs/showcase/run.py docs/showcase/pd-edits.jsonl
-
-# procedural demo library
-cargo run --release -p lightcraft -- --memory --control 7980 &
-python3 docs/showcase/run.py docs/showcase/demo.jsonl
-
-# compress for the repo (macOS)
-for f in docs/images/*.png; do sips -s format jpeg -s formatOptions 82 "$f" --out "${f%.png}.jpg" && rm "$f"; done
+cargo run --release -p lcc-cli -- snapshot --demo --script docs/showcase/classic.jsonl --size 1600x1000
+# compress for the repo (ImageMagick): 1280 px wide JPEGs, well under 300 KB each
+magick mogrify -format jpg -resize 1280x -quality 82 docs/images/classic/*.png && rm docs/images/classic/*.png
 ```
 
-`run.py` sends each JSON line (`{"method":…,"params":…}` or `{"sleep": seconds}`) to `127.0.0.1:7980`.
+`demo.jsonl` and `pd-edits.jsonl` are the upstream project's scripts for its own (non-Classic) layout; they drive a
+running app over the control channel with `run.py`, which sends each JSON line (`{"method":…,"params":…}` or
+`{"sleep": seconds}`) to `127.0.0.1:7980`. Their output is not kept in this repository.

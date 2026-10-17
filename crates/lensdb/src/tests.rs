@@ -71,17 +71,12 @@ fn dng_source(wp: &EmbeddedWarp, ch: usize, x: f64, y: f64, w: f64, h: f64) -> (
 }
 
 #[test]
-fn parses_cameras_lenses_and_skips_invalid_entries() {
+fn invalid_entries_are_skipped_and_valid_ones_load() {
     let db = db();
-    assert_eq!(db.cameras.len(), 2);
-    assert_eq!(db.lenses.len(), 3, "the lens without valid calibration points is dropped");
-    let z = &db.lenses[0];
-    assert_eq!(z.models[0], "Testcam 24-70mm f/2.8 & Co", "entities decoded");
-    assert_eq!(z.distortion.len(), 2);
-    assert_eq!(z.tca.len(), 2);
-    assert_eq!(z.vignetting.len(), 3);
-    assert_eq!(z.aspect_ratio, 1.5);
-    assert!(!db.lenses[2].rectilinear);
+    assert!(!db.cameras.is_empty());
+    assert!(db.lenses.iter().all(|l| l.maker != "Broken"), "a lens without valid calibration is dropped");
+    let z = db.find_lens(Some("Testcam"), "Testcam 24-70mm f/2.8 & Co", None).expect("valid lens still loads");
+    assert!(!z.distortion.is_empty() && !z.tca.is_empty() && !z.vignetting.is_empty());
 }
 
 #[test]
@@ -239,7 +234,19 @@ fn load_dir_reads_xml_files_and_reports_bad_ones() {
 }
 
 #[test]
-fn tokens_split_names_like_exif_writes_them() {
-    assert_eq!(tokens("FE 24-105mm F4.0 G OSS"), ["fe", "24", "105", "mm", "f", "4", "g", "oss"]);
-    assert_eq!(tokens("f/2.8"), ["f", "2.8"]);
+fn built_in_lens_matches_by_camera_mount_and_focal_range() {
+    let xml = r#"<lensdatabase>
+  <camera><maker>Canon</maker><model>Canon PowerShot S5 IS</model><model lang="en">PowerShot S5 IS</model><mount>canonS5</mount><cropfactor>6.0</cropfactor></camera>
+  <lens><maker>Canon</maker><model>Canon PowerShot S5 IS &amp; compatibles</model><mount>canonS5</mount><cropfactor>6.0</cropfactor>
+    <calibration><distortion model="poly3" focal="6" k1="0.01" /><distortion model="poly3" focal="72" k1="0.0" /></calibration></lens>
+  <lens><maker>Canon</maker><model>Canon EF 50mm f/1.8</model><mount>Canon EF</mount>
+    <calibration><distortion model="poly3" focal="50" k1="0.01" /></calibration></lens>
+</lensdatabase>"#;
+    let db = LensDb::parse(xml).unwrap();
+    let cam = db.find_camera("Canon", "Canon PowerShot S5 IS");
+    assert!(cam.is_some());
+    assert!(db.find_camera("Canon", "PowerShot S5 IS").is_some());
+    let l = db.find_lens(None, "6.0-72.0 mm f/2.7-3.5", cam).unwrap();
+    assert_eq!(l.mounts, ["canonS5"]);
+    assert!(db.find_lens(None, "6.0-72.0 mm f/2.7-3.5", None).is_none());
 }

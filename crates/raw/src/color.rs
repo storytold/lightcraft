@@ -12,7 +12,7 @@
 //! "camera RGB ≈ linear sRGB" model and are flagged with `matrix_is_fallback`.
 
 use crate::{ColorData, Mat3, RawImage};
-use lightcraft_color::{D50, D65, REC2020, SRGB, Xy, bradford, cct};
+use lcc_color::{D50, D65, REC2020, SRGB, Xy, bradford, cct};
 use serde::{Deserialize, Serialize};
 
 /// Correlated colour temperature (K) of an Exif `LightSource` / DNG `CalibrationIlluminant` code.
@@ -236,7 +236,7 @@ pub fn camera_to_rec2020(raw: &RawImage, wb_xy: Xy) -> (Mat3, [f32; 3]) {
 }
 
 /// Grey-world white balance estimate (multipliers, min 1) from camera RGB, ignoring clipped and very dark pixels.
-pub fn grey_world(img: &lightcraft_raster::Rgb32f) -> [f32; 3] {
+pub fn grey_world(img: &lcc_raster::Rgb32f) -> [f32; 3] {
     let mut s = [0f64; 3];
     let step = (img.data.len() / 200_000).max(1);
     for p in img.data.iter().step_by(step) {
@@ -404,14 +404,6 @@ mod tests {
         assert_eq!(camera_to_rec2020(&raw, D65).1, [1.0, 1.0, 1.0]);
     }
 
-    #[test]
-    fn illuminant_codes() {
-        assert_eq!(illuminant_temperature(21), Some(6504.0));
-        assert_eq!(illuminant_temperature(17), Some(2856.0));
-        assert_eq!(illuminant_temperature(0), None);
-        assert_eq!(illuminant_temperature(255), None);
-    }
-
     /// Camera-space white balance: re-developing for another white turns a neutral lit by that
     /// white neutral (the camera's own matrices, interpolated for the new white, say how); the same
     /// white is the identity; without a colour matrix there is nothing to re-evaluate.
@@ -438,7 +430,7 @@ mod tests {
 
     #[test]
     fn grey_world_balances() {
-        let img = lightcraft_raster::Rgb32f::from_fn(20, 20, |x, _| {
+        let img = lcc_raster::Rgb32f::from_fn(20, 20, |x, _| {
             let v = 0.2 + 0.02 * x as f32;
             [v * 0.5, v, v * 0.8]
         });

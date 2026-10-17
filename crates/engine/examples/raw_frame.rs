@@ -1,5 +1,5 @@
 //! Measure where a camera's own JPEG sits inside its raw sensor data, and which edge bands of that data hold no
-//! picture: `cargo xtask raw-frame [--json] FILE…` (or `cargo run --release -p lightcraft-engine --example raw_frame --
+//! picture: `cargo xtask raw-frame [--json] FILE…` (or `cargo run --release -p lcc-engine --example raw_frame --
 //! [--json] FILE…`). It checks the crop any decoder applies against the camera's own framing, and measures the entries
 //! of Nikon `MEASURED_BODIES` (`crates/raw/src/vendor/nef.rs`) for bodies that record
 //! no crop. It works for any colour-filter raw that embeds a full-size camera JPEG (checked on Nikon, Sony, Canon CR2 /
@@ -24,8 +24,8 @@
 //! survey aid: a dark band can also be deep shadow, so read it with the frame.
 use std::collections::BTreeMap;
 
-use lightcraft_codecs::DecodeOptions;
-use lightcraft_raw::RawData;
+use lcc_codecs::DecodeOptions;
+use lcc_raw::RawData;
 
 /// Smallest correlation peak worth trusting, and how far it must stand above the best offset outside its 3×3
 /// neighbourhood (measured: 0.75–0.88 on detailed D5100 / D7000 frames, runners-up ≥ 0.05 lower).
@@ -268,7 +268,7 @@ fn main() {
 
 fn measure(path: &str) -> Result<Measured, String> {
     let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
-    let raw = lightcraft_raw::decode(&bytes).map_err(|e| e.to_string())?;
+    let raw = lcc_raw::decode(&bytes).map_err(|e| e.to_string())?;
     let RawData::U16(d) = &raw.data else { return Err("not 16-bit integer sensor data".into()) };
     if raw.cpp != 1 || raw.cfa.is_none() {
         return Err("not colour-filter sensor data".into());
@@ -288,7 +288,7 @@ fn measure(path: &str) -> Result<Measured, String> {
     ];
     // the decoder's crop is relative to the active area: in sensor-data coordinates here
     let a = raw.active_area;
-    let c = lightcraft_raw::Rect::new(a.x + raw.crop.x, a.y + raw.crop.y, raw.crop.width, raw.crop.height);
+    let c = lcc_raw::Rect::new(a.x + raw.crop.x, a.y + raw.crop.y, raw.crop.width, raw.crop.height);
     let frame = frame(&bytes, d, w, h);
     let beyond = frame.as_ref().ok().filter(|f| f.clean()).map(|f| {
         let ((fx, fy), (fw, fh)) = (f.whole(), f.jpeg);
@@ -388,8 +388,8 @@ fn band(lines: impl Iterator<Item = Line>, black: f64, white: f64) -> Band {
 }
 
 fn frame(bytes: &[u8], d: &[u16], w: usize, h: usize) -> Result<Frame, String> {
-    let jpeg = lightcraft_raw::embedded_preview(bytes).ok_or("no embedded preview")?;
-    let jpeg = lightcraft_codecs::decode(&jpeg, DecodeOptions::default()).map_err(|e| e.to_string())?;
+    let jpeg = lcc_raw::embedded_preview(bytes).ok_or("no embedded preview")?;
+    let jpeg = lcc_codecs::decode(&jpeg, DecodeOptions::default()).map_err(|e| e.to_string())?;
     let (jw, jh) = (jpeg.image.width, jpeg.image.height);
     if jw > w || jh > h || jw * 10 < w * 9 || jh * 10 < h * 9 {
         return Err(format!("the largest preview ({jw}×{jh}) is not a full-size JPEG of the {w}×{h} data"));

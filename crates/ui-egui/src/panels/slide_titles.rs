@@ -7,13 +7,13 @@
 //! preview ([`super::slide_layout::preview`]) to that screen; its Photo / Intro / Ending buttons
 //! pick what it shows ([`preview_shows`]).
 
-use lightcraft_engine::slide_overlay::{PLATE_SIZE_MAX, SIZE_MIN};
-use lightcraft_engine::slide_title::{TitleContent, TitleScreen};
-use lightcraft_engine::slideshow::{SLIDE_MAX, SLIDE_MIN, Title};
+use lcc_engine::slide_overlay::{PLATE_SIZE_MAX, SIZE_MIN};
+use lcc_engine::slide_title::{TitleContent, TitleScreen};
+use lcc_engine::slideshow::{SLIDE_MAX, SLIDE_MIN, Title};
 use serde_json::{Value, json};
 
 use super::settings::{check, choices, heading, hint, row};
-use crate::LightcraftApp;
+use crate::LccApp;
 use crate::text_field::TextField;
 use crate::theme::Tokens;
 use crate::widgets::register;
@@ -44,7 +44,7 @@ pub fn preview_choice(ui: &mut egui::Ui) {
 }
 
 /// Change `key` of screen `t` (and show that screen in the preview).
-fn set(app: &mut LightcraftApp, ctx: &egui::Context, t: Title, key: &str, v: Value) {
+fn set(app: &mut LccApp, ctx: &egui::Context, t: Title, key: &str, v: Value) {
     let _ = app.run("slideshow.titles", json!({ t.id(): { key: v } }));
     set_preview_shows(ctx, Some(t));
 }
@@ -52,7 +52,7 @@ fn set(app: &mut LightcraftApp, ctx: &egui::Context, t: Title, key: &str, v: Val
 /// A slider (`slider:{id}`) for `key` of screen `t`; `k` scales the value for display.
 #[allow(clippy::too_many_arguments)]
 fn slider(
-    app: &mut LightcraftApp,
+    app: &mut LccApp,
     ui: &mut egui::Ui,
     id: &str,
     t: Title,
@@ -78,7 +78,7 @@ fn slider(
 }
 
 /// A colour button (`button:{id}`) for `key` of screen `t`.
-fn colour(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, t: Title, key: &str, value: [u8; 3]) {
+fn colour(app: &mut LccApp, ui: &mut egui::Ui, id: &str, t: Title, key: &str, value: [u8; 3]) {
     let mut c = value;
     let r = egui::color_picker::color_edit_button_srgb(ui, &mut c);
     register(ui.ctx(), format!("button:{id}"), r.rect);
@@ -88,7 +88,7 @@ fn colour(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, t: Title, key: &
 }
 
 /// The screen's text field (`field:{id}`), saved when the edit ends.
-fn text(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, t: Title, value: &str) {
+fn text(app: &mut LccApp, ui: &mut egui::Ui, id: &str, t: Title, value: &str) {
     let mem = egui::Id::new(("slideshow-title-field", id));
     let mut s: String = ui.data(|d| d.get_temp(mem)).unwrap_or_else(|| value.to_string());
     let widget = format!("field:{id}");
@@ -104,7 +104,7 @@ fn text(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, t: Title, value: &
 }
 
 /// One screen's controls; `name` prefixes the widget ids (`slideshowIntro…`).
-fn screen(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, title: Title, s: &TitleScreen) {
+fn screen(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, title: Title, s: &TitleScreen) {
     let (name, content_id, label) = match title {
         Title::Intro => ("slideshowIntro", "settingsSlideshowIntroContent", "Intro screen"),
         Title::Ending => ("slideshowEnding", "settingsSlideshowEndingContent", "Ending screen"),
@@ -151,7 +151,7 @@ fn screen(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, title: Title, 
 }
 
 /// The Titles section.
-pub fn sections(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+pub fn sections(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
     let s = app.session.slide_titles.clone();
     heading(ui, t, "Titles");
     screen(app, ui, t, Title::Intro, &s.intro);

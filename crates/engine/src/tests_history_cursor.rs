@@ -86,8 +86,8 @@ fn the_cursor_survives_the_op_log_and_old_catalogs_load_at_the_end() {
     }
     let (n, _) = list(&mut s);
     s.execute("history.restore", &json!({"index": n - 2})).unwrap();
-    let log: String = s.drain_log().iter().map(lightcraft_catalog::Catalog::op_to_log_line).collect();
-    let mut c = lightcraft_catalog::Catalog::from_snapshot(&snap).unwrap();
+    let log: String = s.drain_log().iter().map(lcc_catalog::Catalog::op_to_log_line).collect();
+    let mut c = lcc_catalog::Catalog::from_snapshot(&snap).unwrap();
     c.replay(&log).unwrap();
     assert_eq!(c.to_snapshot(), s.catalog.to_snapshot());
     let id = s.active().unwrap();
@@ -95,7 +95,7 @@ fn the_cursor_survives_the_op_log_and_old_catalogs_load_at_the_end() {
     // a photo written before the cursor existed has no `history_cursor` key: at the latest step
     let mut v = serde_json::to_value(c.photo(id).unwrap()).unwrap();
     v.as_object_mut().unwrap().remove("history_cursor");
-    let old: lightcraft_catalog::Photo = serde_json::from_value(v).unwrap();
+    let old: lcc_catalog::Photo = serde_json::from_value(v).unwrap();
     assert_eq!((old.history_cursor, old.history_index()), (None, Some(n - 1)));
 }
 

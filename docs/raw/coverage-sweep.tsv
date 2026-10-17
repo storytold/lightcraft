@@ -1,5 +1,5 @@
 # CC0 raw.pixls.us camera-coverage check, 2026-10-12; main 25ef65c8. File SHA-256 matches the public listing.
-# FNV-1a-64 pins LightCraft's own complete decoded samples, row-major little-endian, including masked borders.
+# FNV-1a-64 pins the app's own complete decoded samples, row-major little-endian, including masked borders.
 # Default renders at up to 1200 px; Pearson r on Lab L* at 200 px after orientation/aspect alignment, threshold 0.6.
 # Hasselblad PreviewTIFF references check image structure only. Own-matrix DNG tone remains subject to issue #1277.
 maker	camera	id	file	url	sha256	width	height	cpp	samples	fnv1a64	luma_r	reference	notes

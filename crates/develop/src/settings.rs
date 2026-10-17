@@ -3,7 +3,7 @@
 //! exception is `process`: missing (or unreadable), it is V1, the rendering those older files were
 //! made with.
 
-use lightcraft_geom::{CropGeometry, Homography, Orientation, Point};
+use lcc_geom::{CropGeometry, Homography, Orientation, Point};
 use serde::{Deserialize, Serialize};
 
 pub const SCHEMA_VERSION: u32 = 1;
@@ -13,7 +13,7 @@ pub const SCHEMA_VERSION: u32 = 1;
 /// photo keeps its look until someone updates it (`develop.updateProcess`). See
 /// `docs/process-versions.md`.
 ///
-/// Stored as a plain number: one written by a newer LightCraft loads, is kept as it is, and
+/// Stored as a plain number: one written by a newer version of the app loads, is kept as it is, and
 /// renders with the newest process this build knows ([`ProcessVersion::process`]). Reading is
 /// lenient: a whole number from 0 to 2^32 - 1 (also written as `2.0`) is that process; anything
 /// else (negative, fractional, too large, text, null, a list…) reads as V1, like a missing field,
@@ -40,7 +40,7 @@ impl<'de> Deserialize<'de> for ProcessVersion {
 }
 
 impl ProcessVersion {
-    /// The first process: LightCraft's rendering from before process versions existed. Frozen.
+    /// The first process: the app's rendering from before process versions existed. Frozen.
     pub const V1: ProcessVersion = Process::V1.version();
     /// The process new photos and Reset get.
     pub const LATEST: ProcessVersion = Process::LATEST.version();
@@ -58,8 +58,8 @@ impl ProcessVersion {
     }
 
     /// The process this build renders with: the newest one it knows that isn't newer than this
-    /// number (a number from a newer LightCraft renders with [`Process::LATEST`]; one below V1,
-    /// which no LightCraft writes, with V1).
+    /// number (a number from a newer version of the app renders with [`Process::LATEST`]; one below V1,
+    /// which no version of the app writes, with V1).
     pub fn process(self) -> Process {
         Process::ALL.into_iter().rev().find(|p| p.version() <= self).unwrap_or(Process::V1)
     }
@@ -79,22 +79,30 @@ impl ProcessVersion {
 /// makes the compiler point at every stage whose behaviour depends on it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Process {
-    /// The rendering of LightCraft before process versions existed (2026-10).
+    /// The rendering of the app before process versions existed (2026-10).
     V1,
     /// Highlights and Shadows keep the local contrast of the tones they move: their edge-aware base
     /// is taken of a fine median of log luminance (issue #632).
     V2,
+    /// Dehaze estimates haze from a patch-minimum dark channel, eases in, and never pushes a
+    /// pixel below a tenth of its darkest channel (issue #1237).
+    V3,
+    /// Sharpening is an unsharp mask at the Radius (in source pixels) with Detail soft-clipping its
+    /// halos, instead of a boost of the Texture band (upstream #757 / #762).
+    V4,
 }
 
 impl Process {
     /// Every process, oldest first.
-    pub const ALL: [Process; 2] = [Process::V1, Process::V2];
-    pub const LATEST: Process = Process::V2;
+    pub const ALL: [Process; 4] = [Process::V1, Process::V2, Process::V3, Process::V4];
+    pub const LATEST: Process = Process::V4;
 
     pub const fn version(self) -> ProcessVersion {
         match self {
             Process::V1 => ProcessVersion(1),
             Process::V2 => ProcessVersion(2),
+            Process::V3 => ProcessVersion(3),
+            Process::V4 => ProcessVersion(4),
         }
     }
 }
@@ -141,6 +149,63 @@ pub struct DevelopSettings {
     pub calibration: Calibration,
     /// Section on/off toggles (the "eye" buttons on panel headers): section id → enabled.
     pub disabled_sections: Vec<String>,
+    /// Pixel-filter plug-ins applied in order (section id `pluginFilters` for the eye toggle). Not written while
+    /// empty, so settings saved before plug-in filters keep their JSON and `hash64`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plugin_filters: Vec<PluginFilter>,
+}
+
+/// Section id of the pixel-filter plug-in stack (its eye toggle in `disabled_sections`).
+pub const PLUGIN_FILTERS_SECTION: &str = "pluginFilters";
+
+/// Most pixel-filter plug-ins one photo's stack holds (input-derived lengths are capped).
+pub const MAX_PLUGIN_FILTERS: usize = 32;
+
+/// Where in the pipeline a pixel-filter plug-in runs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FilterStage {
+    /// On the decoded source, before white balance and tone (e.g. negative conversion).
+    Source,
+    /// On the display-referred result, after the develop adjustments.
+    #[default]
+    Display,
+}
+
+/// One pixel-filter plug-in in a photo's stack.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PluginFilter {
+    /// Stable per photo: how the UI and commands name this entry.
+    pub uid: u32,
+    /// Plug-in id from its manifest.
+    pub plugin: String,
+    /// Hash of the wasm module the parameters were made for.
+    pub module_hash: String,
+    /// Display label cached from the manifest.
+    pub name: String,
+    /// Parameter values by manifest key.
+    pub params: serde_json::Map<String, serde_json::Value>,
+    pub enabled: bool,
+    pub stage: FilterStage,
+    /// Whole-image measurement the filter computed once (e.g. film base / black / white points).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub analysis: Option<serde_json::Value>,
+}
+
+impl Default for PluginFilter {
+    fn default() -> Self {
+        Self {
+            uid: 0,
+            plugin: String::new(),
+            module_hash: String::new(),
+            name: String::new(),
+            params: serde_json::Map::new(),
+            enabled: true,
+            stage: FilterStage::Display,
+            analysis: None,
+        }
+    }
 }
 
 impl Default for DevelopSettings {
@@ -174,6 +239,7 @@ impl Default for DevelopSettings {
             enhance: Enhance::default(),
             calibration: Calibration::default(),
             disabled_sections: Vec::new(),
+            plugin_filters: Vec::new(),
         }
     }
 }
@@ -271,7 +337,7 @@ impl WbMode {
 /// Raws whose camera has colour matrices (in the file, or measured for the model) edit white balance in Kelvin;
 /// before that, raws without matrices in the file were all edited relative to their as-shot look, where 6500 K / 0
 /// means *as shot*. Settings written then carry no scale and keep that meaning (`Legacy`): the pipeline turns them
-/// into the same colour change on the Kelvin scale (`lightcraft_pipeline::local::legacy_to_kelvin`), so no photo's
+/// into the same colour change on the Kelvin scale (`lcc_pipeline::local::legacy_to_kelvin`), so no photo's
 /// look changes. Settings written on the Kelvin scale say so (`Kelvin`). The scale is irrelevant on files the
 /// Kelvin scale does not reach (rendered photos, raws without matrices): their values keep the relative meaning.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -311,7 +377,7 @@ pub struct WhiteBalance {
 impl Default for WhiteBalance {
     fn default() -> Self {
         // (`Legacy`, like an absent field: a default photo's settings JSON stays what it was; the engine marks the
-        // scale when white balance is written on a raw that has one, `lightcraft_pipeline::local::normalize_wb`)
+        // scale when white balance is written on a raw that has one, `lcc_pipeline::local::normalize_wb`)
         Self { mode: WbMode::AsShot, temp: 6500.0, tint: 0.0, scale: WbScale::Legacy }
     }
 }
@@ -370,6 +436,73 @@ impl Default for ToneCurve {
 impl ToneCurve {
     pub fn point_curve_is_identity(pts: &[Point]) -> bool {
         pts.is_empty() || pts.iter().all(|p| (p.x - p.y).abs() < 1e-9)
+    }
+
+    /// The four point curves (the parametric curve and Refine Saturation left out).
+    pub fn points(&self) -> PointCurves {
+        PointCurves { master: self.master.clone(), red: self.red.clone(), green: self.green.clone(), blue: self.blue.clone() }
+    }
+
+    /// Replace the four point curves (the parametric curve and Refine Saturation stay).
+    pub fn set_points(&mut self, p: PointCurves) {
+        self.master = p.master;
+        self.red = p.red;
+        self.green = p.green;
+        self.blue = p.blue;
+    }
+}
+
+/// Point curves without a parametric part: a mask's local Curve. Points in 0..1 (in, out); a
+/// channel is linear when it is empty or every point lies on the diagonal. The RGB (`master`)
+/// curve applies to all three channels and each colour channel's curve after it, as in the Tone
+/// Curve.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PointCurves {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub master: Vec<Point>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub red: Vec<Point>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub green: Vec<Point>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub blue: Vec<Point>,
+}
+
+impl PointCurves {
+    /// The channels, in the order the curve editor shows them.
+    pub const CHANNELS: [&str; 4] = ["master", "red", "green", "blue"];
+
+    /// No points in any channel (the default).
+    pub fn is_empty(&self) -> bool {
+        self.master.is_empty() && self.red.is_empty() && self.green.is_empty() && self.blue.is_empty()
+    }
+
+    /// Every channel linear.
+    pub fn is_identity(&self) -> bool {
+        [&self.master, &self.red, &self.green, &self.blue].iter().all(|c| ToneCurve::point_curve_is_identity(c))
+    }
+
+    /// Channel `ch`: `master` (also `rgb`), `red`, `green` or `blue`.
+    pub fn channel(&self, ch: &str) -> Option<&Vec<Point>> {
+        match ch {
+            "master" | "rgb" => Some(&self.master),
+            "red" => Some(&self.red),
+            "green" => Some(&self.green),
+            "blue" => Some(&self.blue),
+            _ => None,
+        }
+    }
+
+    /// Channel `ch` to change (see [`PointCurves::channel`]).
+    pub fn channel_mut(&mut self, ch: &str) -> Option<&mut Vec<Point>> {
+        match ch {
+            "master" | "rgb" => Some(&mut self.master),
+            "red" => Some(&mut self.red),
+            "green" => Some(&mut self.green),
+            "blue" => Some(&mut self.blue),
+            _ => None,
+        }
     }
 }
 
@@ -623,6 +756,11 @@ pub struct Detail {
     pub nr_color: f64,
     pub nr_color_detail: f64,
     pub nr_color_smoothness: f64,
+    /// Replace single outlier photosites (noise spikes far above all their same-colour neighbours) in the
+    /// raw mosaic before demosaicing, so they do not become coloured dots (#1345). On for newly imported
+    /// raws ([`crate::DevelopSettings::for_raw`]); off for edits saved before it existed, so they look the
+    /// same. Raw files only.
+    pub nr_outliers: bool,
 }
 
 impl Default for Detail {
@@ -640,6 +778,7 @@ impl Default for Detail {
             nr_color: 0.0,
             nr_color_detail: 50.0,
             nr_color_smoothness: 50.0,
+            nr_outliers: false,
         }
     }
 }
@@ -690,9 +829,9 @@ impl Default for Optics {
 
 /// Lens corrections embedded in the file, converted to the oriented, default-cropped image: a DNG's `OpcodeList3`
 /// (`WarpRectilinear`, `FixVignetteRadial`), or a raw reader's equivalent of the camera's own correction (Panasonic /
-/// Leica RW2 distortion, `lightcraft_raw`'s `vendor/rw2.rs`). This is camera/file data (stored on the photo record, not in the develop
+/// Leica RW2 distortion, `lcc_raw`'s `vendor/rw2.rs`). This is camera/file data (stored on the photo record, not in the develop
 /// settings); "Enable Profile Corrections" applies it, scaled by the profile distortion/vignetting amounts.
-/// LightCraft never uses Adobe LCP lens profiles.
+/// The app never uses Adobe LCP lens profiles.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct EmbeddedLens {
@@ -1023,6 +1162,14 @@ pub struct Mask {
     /// Refine Edges 0..100: the mask's edges snap to the photo's (guided filter).
     #[serde(skip_serializing_if = "is_zero")]
     pub refine: f64,
+    /// Feather 0..100: the whole mask's edges soften (a Gaussian blur of up to 2 % of the long edge,
+    /// so previews and exports match).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub feather: f64,
+    /// The local Curve: point curves applied inside the mask, after the photo's Tone Curve. Not written while it has
+    /// no points, so masks without one keep their JSON (and every cached preview its `hash64`).
+    #[serde(skip_serializing_if = "PointCurves::is_empty")]
+    pub curve: PointCurves,
 }
 
 fn is_zero(v: &f64) -> bool {
@@ -1031,7 +1178,17 @@ fn is_zero(v: &f64) -> bool {
 
 impl Default for Mask {
     fn default() -> Self {
-        Self { id: 0, name: "Mask 1".into(), visible: true, invert: false, components: Vec::new(), adjust: LocalAdjustments::default(), refine: 0.0 }
+        Self {
+            id: 0,
+            name: "Mask 1".into(),
+            visible: true,
+            invert: false,
+            components: Vec::new(),
+            adjust: LocalAdjustments::default(),
+            refine: 0.0,
+            feather: 0.0,
+            curve: PointCurves::default(),
+        }
     }
 }
 
@@ -1134,6 +1291,16 @@ pub struct Hdr {
     pub sdr_shadows: f64,
     pub sdr_whites: f64,
     pub sdr_clarity: f64,
+    /// SDR blend (−100..100, own design; see [`DevelopSettings::sdr_rendition`]): positive values fit more
+    /// of the HDR highlight range into the SDR rendition (highlights and whites pulled down in proportion to
+    /// the headroom limit), negative ones clip it harder (highlights and whites pushed up).
+    pub sdr_blend: f64,
+    /// Set only on an SDR rendition ([`DevelopSettings::sdr_rendition`]): the HDR edit's peak
+    /// ([`Hdr::peak`]), whose highlights the SDR tone map rolls off into SDR white instead of
+    /// clipping them (see `lcc_pipeline::tone::ToneMap::sdr_rolloff`). 1 (the default) = none.
+    /// Never saved or read: settings files, presets and agents can't set it.
+    #[serde(skip, default = "Hdr::no_rolloff")]
+    pub rolloff_peak: f32,
 }
 
 impl Default for Hdr {
@@ -1147,6 +1314,8 @@ impl Default for Hdr {
             sdr_shadows: 0.0,
             sdr_whites: 0.0,
             sdr_clarity: 0.0,
+            sdr_blend: 0.0,
+            rolloff_peak: 1.0,
         }
     }
 }
@@ -1158,6 +1327,20 @@ impl Hdr {
     /// Whether these are the default HDR settings (HDR off, nothing changed).
     pub fn is_default(&self) -> bool {
         *self == Hdr::default()
+    }
+
+    fn no_rolloff() -> f32 {
+        1.0
+    }
+
+    /// The HDR peak an SDR rendition rolls its highlights off from: 1 (none) unless this is the
+    /// rendition of an HDR edit. Damaged values (non-finite, below 1) mean none; capped at the
+    /// largest HDR peak.
+    pub fn rolloff_peak(&self) -> f32 {
+        if self.enabled || !self.rolloff_peak.is_finite() {
+            return 1.0;
+        }
+        self.rolloff_peak.clamp(1.0, (Hdr::MAX_EV_LIMIT as f32).exp2())
     }
 
     /// Peak linear value of an HDR render relative to SDR white (1.0 when HDR is off). A non-finite headroom
@@ -1173,13 +1356,15 @@ impl Hdr {
 
 impl DevelopSettings {
     /// The settings an SDR render uses: unchanged when HDR is off; otherwise HDR off and the
-    /// SDR rendition offsets applied to exposure, contrast, highlights, shadows, whites, clarity.
+    /// SDR rendition offsets applied to exposure, contrast, highlights, shadows, whites, clarity,
+    /// and [`Hdr::rolloff_peak`] set so the tone map compresses the HDR highlights into SDR.
     pub fn sdr_rendition(&self) -> std::borrow::Cow<'_, DevelopSettings> {
         if !self.hdr.enabled {
             return std::borrow::Cow::Borrowed(self);
         }
         let h = self.hdr;
         let mut s = self.clone();
+        s.hdr.rolloff_peak = h.peak();
         s.hdr.enabled = false;
         let add = |v: f64, d: f64| (v + d).clamp(-100.0, 100.0);
         s.light.exposure = (s.light.exposure + h.sdr_brightness / 100.0).clamp(-5.0, 5.0);
@@ -1188,6 +1373,13 @@ impl DevelopSettings {
         s.light.shadows = add(s.light.shadows, h.sdr_shadows);
         s.light.whites = add(s.light.whites, h.sdr_whites);
         s.effects.clarity = add(s.effects.clarity, h.sdr_clarity);
+        // SDR blend: scaled by the headroom (stops, relative to the default limit) so a larger HDR range
+        // takes a stronger compression; damaged values contribute nothing
+        let blend = if h.sdr_blend.is_finite() { h.sdr_blend.clamp(-100.0, 100.0) } else { 0.0 };
+        let ev = if h.max_ev.is_finite() { h.max_ev.clamp(0.0, Hdr::MAX_EV_LIMIT) } else { Hdr::DEFAULT_MAX_EV };
+        let k = blend * (ev / Hdr::DEFAULT_MAX_EV).min(1.5);
+        s.light.highlights = add(s.light.highlights, -0.6 * k);
+        s.light.whites = add(s.light.whites, -0.3 * k);
         std::borrow::Cow::Owned(s)
     }
 }

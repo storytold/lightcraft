@@ -1,5 +1,5 @@
 //! Export presets: built-in ones ([`crate::export::builtin_presets`]) and the user's, saved with the
-//! library. `app.export {preset}` (desktop app, MCP, `lightcraft-cli run`) starts from a preset's
+//! library. `app.export {preset}` (desktop app, MCP, the CLI's `run`) starts from a preset's
 //! params; the call's own params override them (see [`Session::export_params`]).
 
 use serde_json::{Value, json};
@@ -78,7 +78,7 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(list(s))
 }
 
-/// `export.addToPhotos`: there is a runner (the desktop app and lightcraft-cli on macOS).
+/// `export.addToPhotos`: there is a runner (the desktop app and lcc-cli on macOS).
 #[cfg(not(target_arch = "wasm32"))]
 fn photos_enabled(s: &Session) -> std::result::Result<(), String> {
     match &s.apple_photos {
@@ -88,7 +88,7 @@ fn photos_enabled(s: &Session) -> std::result::Result<(), String> {
 }
 
 /// `export.addToPhotos {paths, album?, wait?}`: add files already on disk to Apple Photos, as a
-/// job: here (the default without a window: lightcraft-cli, the MCP server, scripts), or on a
+/// job: here (the default without a window: lcc-cli, the MCP server, scripts), or on a
 /// worker thread (the default in the desktop app, which answers control requests on its UI
 /// thread and must not wait minutes for Photos; see [`Session::apple_photos_background`]).
 #[cfg(not(target_arch = "wasm32"))]
@@ -192,6 +192,17 @@ pub fn specs() -> Vec<CommandSpec> {
             }
         ),
     ];
+    // upstream #497: photos → timelapse movie (native only: the encoders are)
+    #[cfg(not(target_arch = "wasm32"))]
+    v.push(cmd!(
+        query "export.timelapse",
+        "Export Timelapse Video",
+        [],
+        None,
+        "{path, ids?: photo ids (default: the selection in the shown order, Custom Order in an album), fps?: 1..120 (24), size?: \"WxH\" | [w, h] (1920x1080; even, 16..8192), fit?: fit|fill (fit = letterbox), hold?: frames per photo 1..1000 (1), crossfade?: extra frames blending each photo into the next 0..1000 (0), format?: h264|prores (from the extension, else h264), quality?: 1..100 (80)} → {path, frames, photos, skipped (video clips), width, height, duration, bytes}; frames = photos × hold + (photos − 1) × crossfade; each photo rendered with its own edits; no audio; written to path.partial and renamed, a cancel (activity ✕) leaves no file",
+        always,
+        |s, p| crate::timelapse::run_command(s, p).map_err(|e| bad("export.timelapse", e))
+    ));
     // Apple Events to Photos' import command (macOS); not in the web build. Not journaled: a
     // replay must not import again.
     #[cfg(not(target_arch = "wasm32"))]
@@ -200,7 +211,7 @@ pub fn specs() -> Vec<CommandSpec> {
         "Add to Apple Photos",
         [],
         None,
-        "{paths: [absolute file paths], album?: name (an album at the top level of Photos, made when missing; default none), wait?} → once Photos is done, {job, running: false, requested, album, imported, ids: [Photos media item ids], warning?}; with wait: false, at once {job, running: true, requested, album} and the outcome later from export.photosImports {job}. wait defaults to true without a window (lightcraft-cli, the MCP server) and to false in the desktop app, where wait: true is refused (its control requests are answered on the UI thread, which never waits for Photos). macOS: asks Photos to import the files (the first time, macOS asks the user to allow LightCraft to control Photos). One import runs at a time, and an export adding to Photos reserves it before writing: another is refused until it ends. app.export does this for the files it writes with `addToPhotos: true`",
+        "{paths: [absolute file paths], album?: name (an album at the top level of Photos, made when missing; default none), wait?} → once Photos is done, {job, running: false, requested, album, imported, ids: [Photos media item ids], warning?}; with wait: false, at once {job, running: true, requested, album} and the outcome later from export.photosImports {job}. wait defaults to true without a window (lcc-cli, the MCP server) and to false in the desktop app, where wait: true is refused (its control requests are answered on the UI thread, which never waits for Photos). macOS: asks Photos to import the files (the first time, macOS asks the user to allow the app to control Photos). One import runs at a time, and an export adding to Photos reserves it before writing: another is refused until it ends. app.export does this for the files it writes with `addToPhotos: true`",
         photos_enabled,
         add_to_photos
     ));

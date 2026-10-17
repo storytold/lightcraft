@@ -1,21 +1,22 @@
 [package]
-name = "lightcraft-gpu"
+name = "lcc-gpu"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "LightCraft GPU develop pipeline: wgpu compute (WGSL) twin of the CPU pipeline, which stays the reference (L3)"
+description = "GPU develop pipeline: wgpu compute (WGSL) twin of the CPU pipeline, which stays the reference (L3)"
 
 [lints]
 workspace = true
 
 [dependencies]
-lightcraft-denoise = { workspace = true, optional = true }
-lightcraft-geom = { workspace = true }
-lightcraft-color = { workspace = true }
-lightcraft-raster = { workspace = true }
-lightcraft-develop = { workspace = true }
-lightcraft-faces = { workspace = true }
-lightcraft-pipeline = { workspace = true }
+lcc-brand = { workspace = true }
+lcc-denoise = { workspace = true, optional = true }
+lcc-geom = { workspace = true }
+lcc-color = { workspace = true }
+lcc-raster = { workspace = true }
+lcc-develop = { workspace = true }
+lcc-faces = { workspace = true }
+lcc-pipeline = { workspace = true }
 log = { workspace = true }
 
 # Native only: Metal / Vulkan / DX12 through wgpu (pure Rust; the drivers are the system's).
@@ -27,10 +28,10 @@ bytemuck = { workspace = true }
 
 [features]
 default = []
-denoise = ["dep:lightcraft-denoise", "lightcraft-denoise/runtime"]
+denoise = ["dep:lcc-denoise", "lcc-denoise/runtime"]
 
 [dev-dependencies]
 # tests record why they skip (`cargo xtask ci` lists the skips)
-lightcraft-testkit = { workspace = true }
-lightcraft-scenes = { workspace = true }
-lightcraft-raw = { workspace = true }
+lcc-testkit = { workspace = true }
+lcc-scenes = { workspace = true }
+lcc-raw = { workspace = true }

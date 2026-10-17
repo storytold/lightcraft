@@ -1,17 +1,18 @@
 [package]
-name = "lightcraft-raster"
+name = "lcc-raster"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "LightCraft raster (L0)"
+description = "Raster (L0)"
 
 [lints]
 workspace = true
 
 [dependencies]
+lcc-brand = { workspace = true }
 serde = { workspace = true }
-lightcraft-geom = { workspace = true }
-lightcraft-color = { workspace = true }
+lcc-geom = { workspace = true }
+lcc-color = { workspace = true }
 rayon = { workspace = true, optional = true }
 
 [features]

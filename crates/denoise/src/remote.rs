@@ -1,7 +1,7 @@
 //! Remote denoise: run a model's tiles on another computer's graphics card over TCP. Meant for a LAN or a VPN such as
 //! Tailscale or WireGuard: the connection itself is not encrypted.
 //!
-//! [`Remote`] is a [`TileRunner`] that sends each tile to a server; [`serve`] runs one (`lightcraft-cli
+//! [`Remote`] is a [`TileRunner`] that sends each tile to a server; [`serve`] runs one (`lcc-cli
 //! denoise-serve`). Both ends must run the same model, checked by its identity ([`ModelId`]) when they greet.
 //!
 //! Protocol (version 1). Each message is one JSON line (`\n`-terminated, ≤ 4 KiB), optionally followed by a payload of

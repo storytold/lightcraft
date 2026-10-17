@@ -1,6 +1,6 @@
 //! Library view state: what the grid shows and what is selected.
 
-use lightcraft_catalog::{AlbumId, Catalog, Filter, PhotoId};
+use lcc_catalog::{AlbumId, Catalog, Filter, PhotoId};
 use serde::{Deserialize, Serialize};
 
 /// The "My Photos" source in the left panel.
@@ -22,6 +22,12 @@ pub enum LibrarySource {
     /// A folder the library's photos were imported from ([`crate::Session::library_folder`]),
     /// and the folders inside it (`library.folders`).
     LibraryFolder,
+    /// The photos of the latest import (one import shares one timestamp).
+    PreviousImport,
+    /// The Quick Collection (empty until something was added to it).
+    QuickCollection,
+    /// The photos of the last export ([`crate::Session::previous_export`]).
+    PreviousExport,
 }
 
 /// The folder a [`LibrarySource::Folder`] view shows.
@@ -43,16 +49,22 @@ impl LibrarySource {
             // everything imported in the 30 days up to the latest import (by import, newest first)
             LibrarySource::RecentlyAdded => {
                 let latest = cat.photos().filter(|p| p.in_library()).map(|p| p.imported.clone()).max().unwrap_or_default();
-                let from = lightcraft_catalog::stacks::iso_seconds(&latest)
-                    .map(|s| lightcraft_catalog::dates::civil(s - RECENT_DAYS * 86_400))
+                let from = lcc_catalog::stacks::iso_seconds(&latest)
+                    .map(|s| lcc_catalog::dates::civil(s - RECENT_DAYS * 86_400))
                     .unwrap_or_else(|| latest.get(..10).unwrap_or("").to_string());
                 f.imported_from = Some(from);
             }
             LibrarySource::Album(a) => f.album = Some(*a),
+            LibrarySource::PreviousImport => {
+                let latest = cat.photos().filter(|p| p.in_library()).map(|p| p.imported.clone()).max().unwrap_or_default();
+                f.imported_from = Some(latest);
+            }
+            // no Quick Collection yet: an album id no album has, so nothing shows
+            LibrarySource::QuickCollection => f.album = Some(cat.quick_collection().unwrap_or(AlbumId(u64::MAX))),
             LibrarySource::RecentlyDeleted => f.deleted = true,
-            LibrarySource::Picks => f.flag = Some(lightcraft_catalog::Flag::Pick),
+            LibrarySource::Picks => f.flag = Some(lcc_catalog::Flag::Pick),
             // the folder itself is filled in by the session (it holds the path)
-            LibrarySource::Folder | LibrarySource::Missing | LibrarySource::LibraryFolder => {}
+            LibrarySource::Folder | LibrarySource::Missing | LibrarySource::LibraryFolder | LibrarySource::PreviousExport => {}
         }
         f
     }
@@ -67,6 +79,9 @@ impl LibrarySource {
             LibrarySource::Folder => "Folder".into(),
             LibrarySource::LibraryFolder => "Folder".into(),
             LibrarySource::Missing => "Missing Photos".into(),
+            LibrarySource::PreviousImport => "Previous Import".into(),
+            LibrarySource::QuickCollection => "Quick Collection".into(),
+            LibrarySource::PreviousExport => "Previous Export".into(),
         }
     }
 }
@@ -112,8 +127,10 @@ impl Selection {
                 self.active = self.ids.last().copied();
             }
         } else {
+            // Lightroom Classic: adding to a selection keeps the photo that was active (the
+            // "most selected" one, e.g. the source of Sync Settings) active (#119).
             self.ids.push(id);
-            self.active = Some(id);
+            self.active = self.active.or(Some(id));
         }
     }
     /// Shift-click: select the range between the active photo and `id` in `order`.
@@ -129,7 +146,8 @@ impl Selection {
                 self.ids.push(*x);
             }
         }
-        self.active = Some(id);
+        // The anchor stays the active photo, as in Lightroom Classic (#119).
+        self.active = Some(anchor);
     }
 }
 
@@ -143,7 +161,7 @@ pub struct FilterChip {
 
 /// The chips for every constraint in the filter bar / search / sidebar (not the source itself).
 pub fn filter_chips(f: &Filter, cat: &Catalog) -> Vec<FilterChip> {
-    use lightcraft_catalog::{MediaKind, RatingOp};
+    use lcc_catalog::{MediaKind, RatingOp};
     use serde_json::{Value::Null, json};
     let mut v = Vec::new();
     let mut add = |label: String, clear: serde_json::Value| v.push(FilterChip { label, clear });
@@ -180,6 +198,7 @@ pub fn filter_chips(f: &Filter, cat: &Catalog) -> Vec<FilterChip> {
             "hdr" => "HDR",
             "panorama" => "Panoramas",
             "hdrPanorama" => "HDR panoramas",
+            "focusStack" => "Focus stacks",
             _ => "Merged",
         };
         add(format!("Type: {n}"), json!({"merged": Null}));
@@ -187,9 +206,13 @@ pub fn filter_chips(f: &Filter, cat: &Catalog) -> Vec<FilterChip> {
     if let Some(e) = f.edited {
         add(if e { "Edited".into() } else { "Unedited".into() }, json!({"edited": Null}));
     }
-    for (name, key, val) in
-        [("Camera", "camera", &f.camera), ("Lens", "lens", &f.lens), ("Keyword", "keyword", &f.keyword), ("Person", "person", &f.person)]
-    {
+    for (name, key, val) in [
+        ("Camera", "camera", &f.camera),
+        ("Lens", "lens", &f.lens),
+        ("Keyword", "keyword", &f.keyword),
+        ("Person", "person", &f.person),
+        ("Faces", "faces", &f.faces),
+    ] {
         if let Some(x) = val {
             add(format!("{name}: {x}"), json!({key: Null}));
         }
@@ -199,7 +222,7 @@ pub fn filter_chips(f: &Filter, cat: &Catalog) -> Vec<FilterChip> {
     }
     if let Some(d) = f.library_folder.as_deref().filter(|d| !d.trim().is_empty()) {
         // the last two names, so two folders called "Pictures" are told apart
-        let name = lightcraft_catalog::folders::folder_label(d);
+        let name = lcc_catalog::folders::folder_label(d);
         add(format!("Folder: {name}"), json!({"libraryFolder": Null}));
     }
     if let Some(d) = &f.imported {
@@ -236,7 +259,7 @@ fn date_label(d: &str) -> String {
 #[cfg(test)]
 mod selection_state_tests {
     use super::*;
-    use lightcraft_catalog::PhotoId;
+    use lcc_catalog::PhotoId;
 
     #[test]
     fn select_all_marks_the_others_selected_and_one_active() {
@@ -245,5 +268,19 @@ mod selection_state_tests {
         assert_eq!(s.state_of(ids[0]), SelectionState::Active);
         assert_eq!(s.state_of(ids[1]), SelectionState::Selected);
         assert_eq!(s.state_of(PhotoId(9)), SelectionState::NotSelected);
+    }
+
+    /// #119: the first photo clicked stays active (primary) when ⌘/Ctrl- or Shift-clicking more.
+    #[test]
+    fn adding_to_a_selection_keeps_the_first_photo_active() {
+        let order: Vec<PhotoId> = (1..=5).map(PhotoId).collect();
+        let mut s = Selection::single(order[1]);
+        s.toggle(order[3]);
+        assert_eq!(s.active, Some(order[1]));
+        s.extend_to(order[4], &order);
+        assert_eq!(s.active, Some(order[1]));
+        assert_eq!(s.ids.len(), 4);
+        s.toggle(order[1]);
+        assert!(s.active.is_some_and(|a| s.contains(a)));
     }
 }

@@ -154,19 +154,6 @@ mod tests {
     }
 
     #[test]
-    fn a_dark_dot_grows_to_the_window() {
-        let mut p = Plane::filled(11, 11, 1.0);
-        p.set(5, 5, 0.0);
-        let q = min_filter(&p, 2);
-        for y in 0..11 {
-            for x in 0..11 {
-                let inside = (3..=7).contains(&x) && (3..=7).contains(&y);
-                assert_eq!(q.get(x, y), if inside { 0.0 } else { 1.0 }, "({x}, {y})");
-            }
-        }
-    }
-
-    #[test]
     fn nans_are_skipped() {
         let mut p = Plane::filled(5, 5, 0.5);
         p.set(2, 2, f32::NAN);

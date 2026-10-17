@@ -1,8 +1,8 @@
 ---
 title: FAQ
-description: Short answers about LightCraft, its price, platforms and file support.
+description: Short answers about LightCraft Classic, its price, platforms and file support.
 order: 40
 ---
 
-- [Is LightCraft free, and does it need an account?](free-and-private.md)
-- [Which cameras and file types does LightCraft open?](supported-files.md)
+- [Is LightCraft Classic free, and does it need an account?](free-and-private.md)
+- [Which cameras and file types does LightCraft Classic open?](supported-files.md)

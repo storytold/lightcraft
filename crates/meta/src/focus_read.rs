@@ -14,7 +14,7 @@
 use std::io;
 
 use crate::focus::FocusPoint;
-use lightcraft_tiff::{ByteOrder, FieldType, Tiff, tags as t};
+use lcc_tiff::{ByteOrder, FieldType, Tiff, tags as t};
 
 /// Bytes read first: the α1's and A7S III's focus data ends before 16 KB, so one read covers it.
 pub const HEADER_PREFIX: u64 = 32 * 1024;
@@ -346,7 +346,7 @@ impl Want<'_> {
 
 /// What of a classic TIFF the focus decoder still needs, given what is `loaded`: IFD0 (Make, Model,
 /// the Exif pointer), the Exif IFD (the maker-note entry), the maker note's header and IFD as
-/// `lightcraft_tiff::makernote` locates it, and the focus tags' values.
+/// `lcc_tiff::makernote` locates it, and the focus tags' values.
 fn plan(buf: &[u8], loaded: &Loaded) -> Step {
     let Some((order, false)) = Tiff::sniff(buf) else { return Step::Nothing };
     let mut w = Want { buf, order, loaded, need: Vec::new() };

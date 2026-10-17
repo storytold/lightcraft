@@ -1,21 +1,22 @@
 [package]
-name = "lightcraft-merge"
+name = "lcc-merge"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "LightCraft Photo Merge: HDR merge (align, deghost) and panorama stitching (L3)"
+description = "Photo Merge: HDR merge (align, deghost) panorama stitching and focus stacking (L3)"
 
 [lints]
 workspace = true
 
 [dependencies]
-lightcraft-geom = { workspace = true }
-lightcraft-color = { workspace = true }
-lightcraft-raster = { workspace = true }
-lightcraft-raw = { workspace = true }
-lightcraft-codecs = { workspace = true }
-lightcraft-meta = { workspace = true }
-lightcraft-scenes = { workspace = true }
+lcc-brand = { workspace = true }
+lcc-geom = { workspace = true }
+lcc-color = { workspace = true }
+lcc-raster = { workspace = true }
+lcc-raw = { workspace = true }
+lcc-codecs = { workspace = true }
+lcc-meta = { workspace = true }
+lcc-scenes = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 rayon = { workspace = true }

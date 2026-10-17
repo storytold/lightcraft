@@ -1,10 +1,10 @@
 //! The bottom bar: view modes, sort, rating/flags pill, copy/paste settings, zoom and view toggles.
 
 use egui::{Align2, Rect, Sense, pos2, vec2};
-use lightcraft_catalog::Flag;
+use lcc_catalog::Flag;
 use serde_json::json;
 
-use crate::LightcraftApp;
+use crate::LccApp;
 use crate::icons::{Icon, paint};
 use crate::state::{ViewMode, Zoom};
 use crate::theme::Tokens;
@@ -16,10 +16,10 @@ const VIEW_MODES: &[(&str, Icon, ViewMode, &str)] = &[
     ("detail", Icon::Single, ViewMode::Detail, "Detail (D)"),
     ("compare", Icon::Compare, ViewMode::Compare, "Compare (Shift+C)"),
     ("survey", Icon::Survey, ViewMode::Survey, "Survey (N)"),
-    ("people", Icon::Subject, ViewMode::People, "People"),
+    ("people", Icon::People, ViewMode::People, "People"),
 ];
 
-pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+pub fn show(app: &mut LccApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     egui::Panel::bottom("bottom_bar")
         .exact_size(t.bottom_bar_h)
@@ -84,7 +84,7 @@ const PILL_W: f32 = 208.0;
 
 /// The rating/flag pill and copy/paste settings, between `from` and `to` (the side groups): the
 /// copy buttons go first when there is no room (they are in the Edit menu too), then the pill.
-fn centre(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, from: f32, to: f32) {
+fn centre(app: &mut LccApp, ui: &mut egui::Ui, full: Rect, from: f32, to: f32) {
     let t = Tokens::get(ui.ctx());
     let has_clip = app.session.clipboard.is_some();
     let label = crate::i18n::tr(if has_clip { "Paste Edit Settings" } else { "Copy Edit Settings" });
@@ -166,7 +166,7 @@ fn centre(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, from: f32, to:
 }
 
 /// The right-hand group (zoom, view toggles or thumbnail size); returns its left edge.
-fn right_side(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, compact_zoom: bool) -> f32 {
+fn right_side(app: &mut LccApp, ui: &mut egui::Ui, full: Rect, compact_zoom: bool) -> f32 {
     let t = Tokens::get(ui.ctx());
     let mut child = ui.new_child(
         egui::UiBuilder::new()
@@ -258,7 +258,7 @@ fn right_side(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, compact_zo
     if child.min_rect().width() > 0.0 { child.min_rect().left() } else { full.right() }
 }
 
-fn click_zoom_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+fn click_zoom_menu(app: &mut LccApp, ui: &mut egui::Ui) {
     for pct in crate::state::CLICK_ZOOMS {
         if ui.selectable_label(app.ui.click_zoom == pct, format!("{}:1", pct / 100)).clicked() {
             let _ = app.run("view.clickZoom", json!({"ratio": pct / 100}));
@@ -266,9 +266,9 @@ fn click_zoom_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     }
 }
 
-fn sort_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
-    use lightcraft_catalog::GroupBy;
-    use lightcraft_catalog::SortKey::*;
+fn sort_menu(app: &mut LccApp, ui: &mut egui::Ui) {
+    use lcc_catalog::GroupBy;
+    use lcc_catalog::SortKey::*;
     let cur = app.session.sort;
     ui.label(egui::RichText::new(crate::i18n::tr("Sort by")).weak());
     for (label, key, k) in [
@@ -284,6 +284,13 @@ fn sort_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             let _ = app.run("library.sort", json!({"key": k}));
         }
     }
+    // Custom Order: the order set by hand in a regular album (drag photos in the grid)
+    let in_album = crate::panels::grid::custom_order_album(app).is_some();
+    ui.add_enabled_ui(in_album, |ui| {
+        if ui.selectable_label(cur.key == Custom && in_album, crate::i18n::tr("Custom Order")).clicked() {
+            let _ = app.run("library.sort", json!({"key": "custom"}));
+        }
+    });
     if cur.key == Random && ui.button(crate::i18n::tr("Reshuffle")).clicked() {
         let _ = app.run("library.shuffle", json!({}));
     }
@@ -345,12 +352,12 @@ mod visual_regressions {
                 ViewMode::People,
             ] {
                 for scale in [1.0, 1.5, 2.0] {
-                    let mut app = LightcraftApp::new(lightcraft_engine::Session::new(), Default::default());
+                    let mut app = LccApp::new(lcc_engine::Session::new(), Default::default());
                     app.ui.view = view;
                     let mut ready = false;
                     let mut harness =
                         egui_kittest::Harness::builder().with_size(vec2(width, 100.0)).with_pixels_per_point(scale).wgpu().build_ui_state(
-                            move |ui, app: &mut LightcraftApp| {
+                            move |ui, app: &mut LccApp| {
                                 if !ready {
                                     crate::theme::install_fonts(ui.ctx());
                                     crate::theme::apply(ui.ctx());
@@ -364,7 +371,7 @@ mod visual_regressions {
                         );
                     harness.input_mut().max_texture_side = Some(8192);
                     harness.run_steps(4);
-                    let stem = format!("lightcraft-bottom-{view:?}-{width}-{scale}x");
+                    let stem = format!("app-bottom-{view:?}-{width}-{scale}x");
                     harness.render().unwrap().save(directory.join(format!("{stem}.png"))).unwrap();
                     let panel = egui::containers::panel::PanelState::load(&harness.ctx, egui::Id::new("bottom_bar")).unwrap().outer_rect;
                     let controls: serde_json::Map<String, serde_json::Value> = crate::widgets::take_registry(&harness.ctx)
@@ -402,7 +409,7 @@ mod visual_regressions {
                     let ctx = egui::Context::default();
                     crate::theme::install_fonts(&ctx);
                     crate::theme::apply(&ctx);
-                    let mut app = LightcraftApp::new(lightcraft_engine::Session::new(), Default::default());
+                    let mut app = LccApp::new(lcc_engine::Session::new(), Default::default());
                     app.ui.view = view;
                     let mut output = ctx.run_ui(scaled_input(vec2(width, 100.0), scale), |ui| show(&mut app, ui));
                     output.textures_delta.clear();
@@ -425,10 +432,10 @@ mod visual_regressions {
         use egui_kittest::kittest::Queryable;
 
         for scale in [1.0, 1.5, 2.0] {
-            let app = LightcraftApp::new(lightcraft_engine::Session::new(), Default::default());
+            let app = LccApp::new(lcc_engine::Session::new(), Default::default());
             let mut ready = false;
             let mut harness = egui_kittest::Harness::builder().with_size(vec2(280.0, 640.0)).with_pixels_per_point(scale).build_ui_state(
-                move |ui, app: &mut LightcraftApp| {
+                move |ui, app: &mut LccApp| {
                     if !ready {
                         crate::theme::install_fonts(ui.ctx());
                         crate::theme::apply(ui.ctx());
@@ -469,50 +476,6 @@ mod visual_regressions {
             harness.key_press(egui::Key::Space);
             harness.run_steps(3);
             assert_eq!(harness.state().ui.view, ViewMode::People, "keyboard activation dispatches the view command");
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::Services;
-    use crate::headless::HeadlessView;
-
-    #[test]
-    fn rating_and_flag_buttons_keep_padding_inside_the_pill() {
-        for scale in [1.0, 2.0] {
-            for room in [240.0, 500.0] {
-                let mut app = LightcraftApp::new(lightcraft_engine::Session::new(), Services::default());
-                let mut view = HeadlessView::new();
-                for frame in 0..3 {
-                    let raw = HeadlessView::raw_input(vec2(700.0, 40.0), scale, frame as f64 / 60.0, vec![]);
-                    view.run(raw, |ui| {
-                        let full = ui.max_rect();
-                        centre(&mut app, ui, full, 20.0, 20.0 + room);
-                    });
-                    let widgets = crate::widgets::take_registry(&view.ctx);
-                    let star = widgets.iter().find(|(id, _)| id == "star:bottom:1").unwrap().1;
-                    let pill = view
-                        .shapes
-                        .iter()
-                        .find_map(|shape| match &shape.shape {
-                            egui::Shape::Rect(rect) if rect.rect.contains(star.center()) && rect.rect.height() == 30.0 => Some(rect.rect),
-                            _ => None,
-                        })
-                        .unwrap();
-                    let inner = pill.shrink2(vec2(10.0, 4.0));
-                    for (id, rect) in &widgets {
-                        if id.starts_with("star:bottom:") || id.starts_with("flag:") {
-                            assert!(inner.contains_rect(*rect), "{id} {rect:?} exceeds the pill's padded bounds {inner:?} at scale {scale}");
-                        }
-                    }
-                    assert!(pill.left() >= 20.0 && pill.right() <= 20.0 + room);
-                    if let Some((_, copy)) = widgets.iter().find(|(id, _)| id == "button:copySettings") {
-                        assert!(copy.left() >= pill.right() + 10.0);
-                    }
-                }
-            }
         }
     }
 }

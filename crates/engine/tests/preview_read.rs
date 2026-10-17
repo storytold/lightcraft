@@ -2,7 +2,7 @@
 //! network share, which is where reading only the header instead of the whole raw matters:
 //!
 //!   LC_PREVIEW_RAW="/run/user/1000/gvfs/smb-share:.../DSCF0001.RAF" \
-//!     cargo test --release -p lightcraft-engine --test preview_read -- --ignored --nocapture
+//!     cargo test --release -p lcc-engine --test preview_read -- --ignored --nocapture
 //!
 //! It reports what the preview cost and fails when the read is not the small part of the file the
 //! header path promises. Skipped without `LC_PREVIEW_RAW` (there is no committed raw fixture: media
@@ -13,14 +13,14 @@ use std::time::Instant;
 #[ignore = "needs LC_PREVIEW_RAW pointing at a real raw file"]
 fn a_preview_reads_only_the_header_and_the_preview() {
     let Ok(path) = std::env::var("LC_PREVIEW_RAW") else {
-        lightcraft_testkit::skip!(Input, "set LC_PREVIEW_RAW=<path to a raw file>");
+        lcc_testkit::skip!(Input, "set LC_PREVIEW_RAW=<path to a raw file>");
         return;
     };
     let file_len = std::fs::metadata(&path).expect("the file exists").len();
     assert!(file_len > 0, "empty file");
 
     let started = Instant::now();
-    let window = lightcraft_engine::files::preview_window(&path, usize::MAX)
+    let window = lcc_engine::files::preview_window(&path, usize::MAX)
         .expect("the file reads")
         .expect("it carries an embedded preview the header can point at");
     let elapsed = started.elapsed();

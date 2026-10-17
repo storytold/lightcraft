@@ -1,6 +1,6 @@
 //! Filesystem history and retained XMP repair regressions.
 
-use lightcraft_catalog::{Op, Photo, PhotoId, Source};
+use lcc_catalog::{Op, Photo, PhotoId, Source};
 use serde_json::json;
 
 use crate::{Selection, Session};
@@ -9,13 +9,13 @@ fn select(s: &mut Session, ids: &[u64], active: u64) {
     s.execute("library.select", &json!({"ids": ids, "active": active})).unwrap();
 }
 
-fn memory_library(store: &lightcraft_catalog::MemStore) -> Session {
+fn memory_library(store: &lcc_catalog::MemStore) -> Session {
     let mut s = Session::new();
     s.open_library_in(
         crate::library::LibraryStores {
             dir: "history-regression".into(),
             catalog: Box::new(store.clone()),
-            files: Box::new(lightcraft_catalog::MemStore::new()),
+            files: Box::new(lcc_catalog::MemStore::new()),
             on_disk: false,
         },
         false,
@@ -41,7 +41,7 @@ fn file_source(s: &Session, id: u64) -> String {
     slash(path)
 }
 
-fn assert_file_catalog_and_journal(s: &Session, fs: &crate::rename::tests::FakeFs, store: &lightcraft_catalog::MemStore) {
+fn assert_file_catalog_and_journal(s: &Session, fs: &crate::rename::tests::FakeFs, store: &lcc_catalog::MemStore) {
     let files = fs.listing();
     for photo in s.catalog.photos() {
         let Source::File { path } = &photo.source else { panic!("synthetic file fixture") };
@@ -52,8 +52,8 @@ fn assert_file_catalog_and_journal(s: &Session, fs: &crate::rename::tests::FakeF
     assert_eq!(replayed.catalog.to_snapshot(), s.catalog.to_snapshot());
 }
 
-fn sidecar_history_fixture(redo: bool) -> (Session, crate::rename::tests::FakeFs, lightcraft_catalog::MemStore) {
-    let store = lightcraft_catalog::MemStore::new();
+fn sidecar_history_fixture(redo: bool) -> (Session, crate::rename::tests::FakeFs, lcc_catalog::MemStore) {
+    let store = lcc_catalog::MemStore::new();
     let mut s = memory_library(&store);
     let fs = crate::rename::tests::FakeFs::new(
         false,
@@ -92,7 +92,7 @@ fn merged_renames_coalesce_physical_moves_and_keep_retry_inverses_and_journal() 
     use crate::rename::tests::FakeFs;
     use crate::sidecar::{SidecarNaming, sidecar_path};
 
-    let store = lightcraft_catalog::MemStore::new();
+    let store = lcc_catalog::MemStore::new();
     let mut s = memory_library(&store);
     let fs = FakeFs::new(false, &[("/p/a.jpg", "Photo"), ("/p/a.xmp", "Edits"), ("/p/other.jpg", "Other")]);
     for (id, path) in [(1, "/p/a.jpg"), (2, "/p/other.jpg")] {
@@ -147,7 +147,7 @@ fn partial_file_history_failures_retry_without_losing_either_inverse_or_journal(
     use crate::rename::tests::FakeFs;
 
     for redo in [false, true] {
-        let store = lightcraft_catalog::MemStore::new();
+        let store = lcc_catalog::MemStore::new();
         let mut s = memory_library(&store);
         let fs = FakeFs::new(
             false,
@@ -342,7 +342,7 @@ fn history_repairs_a_sidecar_whose_rollback_failed_before_retrying_the_photo() {
 #[test]
 fn initial_partial_rename_keeps_sidecar_repairs_for_noop_retry_and_history() {
     use crate::rename::tests::FakeFs;
-    let store = lightcraft_catalog::MemStore::new();
+    let store = lcc_catalog::MemStore::new();
     let mut s = memory_library(&store);
     let fs = FakeFs::new(false, &[("/p/a.jpg", "Photo"), ("/p/a.xmp", "Stem edits"), ("/p/a.jpg.xmp", "Full edits")]);
     let photo = Photo::new(PhotoId(1), Source::File { path: "/p/a.jpg".into() }, "a.jpg", "JPEG", 16, 16, "");
@@ -385,7 +385,7 @@ fn initial_partial_rename_keeps_sidecar_repairs_for_noop_retry_and_history() {
 #[test]
 fn initial_sidecar_rollback_failure_keeps_a_repair_only_history_step() {
     use crate::rename::tests::FakeFs;
-    let store = lightcraft_catalog::MemStore::new();
+    let store = lcc_catalog::MemStore::new();
     let mut s = memory_library(&store);
     let fs = FakeFs::new(false, &[("/p/a.jpg", "Photo"), ("/p/a.XMP", "Stem edits"), ("/p/a.jpg.XMP", "Full edits")]);
     let photo = Photo::new(PhotoId(1), Source::File { path: "/p/a.jpg".into() }, "a.jpg", "JPEG", 16, 16, "");
@@ -397,7 +397,7 @@ fn initial_sidecar_rollback_failure_keeps_a_repair_only_history_step() {
     let plans = s.plan_rename_with(&fs, &[PhotoId(1)], "Trip", 1);
     *fs.fail.borrow_mut() = vec!["/p/a.jpg.XMP".into(), "/p/Trip.XMP".into()];
     assert!(s.execute_fn("photo.rename", |s| Ok(json!({"renamed": s.apply_rename_with(&fs, &plans)?}))).is_err());
-    assert_eq!(s.catalog.photo(PhotoId(1)).unwrap().source, Source::File { path: "/p/a.jpg".into() });
+    assert_eq!(file_source(&s, 1), "/p/a.jpg");
     assert_eq!(s.undo.len(), 1);
     assert_eq!(s.undo.last().unwrap().retry_sidecars.len(), 1);
     assert_file_catalog_and_journal(&s, &fs, &store);
@@ -499,7 +499,7 @@ fn discarded_file_history_keeps_sidecar_repairs_without_stale_catalog_inverses()
 fn merged_rename_failure_keeps_rolled_back_photo_identity() {
     use crate::rename::tests::FakeFs;
 
-    let store = lightcraft_catalog::MemStore::new();
+    let store = lcc_catalog::MemStore::new();
     let mut s = memory_library(&store);
     let fs = FakeFs::new(false, &[("/p/a.jpg", "Photo 1"), ("/p/a.xmp", "Photo 1 edits"), ("/p/b.jpg", "Photo 2")]);
     for (id, path) in [(1, "/p/a.jpg"), (2, "/p/b.jpg")] {

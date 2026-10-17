@@ -1,17 +1,17 @@
 //! Preview-only raws rechecked when a library opens (issue #662): a raw imported while its format
-//! couldn't be decoded is probed again when the library opens in another LightCraft version (see
-//! `lightcraft_engine::cmd::recheck`). The probe runs on a worker thread, so opening never waits
+//! couldn't be decoded is probed again when the library opens in another version of the app (see
+//! `lcc_engine::cmd::recheck`). The probe runs on a worker thread, so opening never waits
 //! for it; the result is applied back here, unless another library was opened meanwhile.
 
-use lightcraft_engine::cmd::recheck;
+use lcc_engine::cmd::recheck;
 
-use crate::LightcraftApp;
+use crate::LccApp;
 
 /// The activity stack's label while the files are read.
 pub const LABEL: &str = "Checking raw files";
 
 /// Once per opened library (called every frame): start the recheck when it has stale photos.
-pub fn tick(app: &mut LightcraftApp) {
+pub fn tick(app: &mut LccApp) {
     let library = app.session.library_generation();
     if app.ui.rechecked_library == Some(library) {
         return;
@@ -24,7 +24,7 @@ pub fn tick(app: &mut LightcraftApp) {
         return;
     }
     let work = move || recheck::probe(&probe, stale);
-    let done = move |app: &mut LightcraftApp, ctx: &egui::Context, results| {
+    let done = move |app: &mut LccApp, ctx: &egui::Context, results| {
         if app.session.library_generation() != library {
             return;
         }

@@ -6,7 +6,7 @@
 use egui::{Align2, RichText, vec2};
 use serde_json::json;
 
-use crate::LightcraftApp;
+use crate::LccApp;
 use crate::theme::Tokens;
 use crate::widgets::register;
 
@@ -24,6 +24,106 @@ pub struct LibraryProblem {
     /// Try Again reopens `path` as a library folder (`false` in the browser, whose storage isn't
     /// a folder: reloading the page tries again).
     pub can_retry: bool,
+    /// Not a problem (yet): the library's catalog is being upgraded to the current format on a
+    /// worker thread ([`start_upgrade`]); a progress window shows until it opens.
+    pub upgrading: bool,
+}
+
+/// Why a library didn't open, from its error: each gets its own words and actions. Only a catalog
+/// that failed an integrity check is called damaged (a first start used to call another app's
+/// library "corrupt").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProblemKind {
+    /// No folder to try (e.g. no home folder).
+    NoLocation,
+    /// The catalog's data failed its integrity check.
+    Damaged,
+    /// Another program has it open.
+    InUse,
+    /// Written by a newer version of the app.
+    Newer,
+    /// Another app's catalog (e.g. the upstream app's).
+    Foreign,
+    /// The folder or a file of it isn't there.
+    Missing,
+    /// Not allowed to read or write it.
+    Permission,
+    Other,
+}
+
+impl ProblemKind {
+    pub fn of(path: &str, error: &str) -> ProblemKind {
+        let e = error.to_lowercase();
+        let has = |words: &[&str]| words.iter().any(|w| e.contains(w));
+        if path.is_empty() {
+            ProblemKind::NoLocation
+        } else if has(&["corrupt catalog data"]) {
+            ProblemKind::Damaged
+        } else if has(&["already open in"]) {
+            ProblemKind::InUse
+        } else if has(&["newer version of the app"]) {
+            ProblemKind::Newer
+        } else if has(&["made by another app"]) {
+            ProblemKind::Foreign
+        } else if has(&["permission denied", "access is denied", "os error 13", "read-only file system", "os error 30"]) {
+            ProblemKind::Permission
+        } else if has(&["no such file", "not found", "cannot find", "os error 2)", "os error 3)"]) || !std::path::Path::new(path).exists() {
+            ProblemKind::Missing
+        } else {
+            ProblemKind::Other
+        }
+    }
+
+    /// `ui.inspect` → `libraryProblem.kind`.
+    pub fn id(self) -> &'static str {
+        match self {
+            ProblemKind::NoLocation => "noLocation",
+            ProblemKind::Damaged => "damaged",
+            ProblemKind::InUse => "inUse",
+            ProblemKind::Newer => "newer",
+            ProblemKind::Foreign => "foreign",
+            ProblemKind::Missing => "missing",
+            ProblemKind::Permission => "permission",
+            ProblemKind::Other => "other",
+        }
+    }
+
+    /// The window's title (English source; translated when shown).
+    pub fn title(self) -> &'static str {
+        match self {
+            ProblemKind::Damaged => "Your catalog is damaged",
+            ProblemKind::InUse => "Your catalog is open in another program",
+            ProblemKind::Newer => "Your catalog needs a newer version",
+            ProblemKind::Foreign => "This catalog belongs to another app",
+            ProblemKind::Missing => "Your catalog can't be found",
+            ProblemKind::Permission => "Your catalog can't be accessed",
+            ProblemKind::NoLocation | ProblemKind::Other => "Your library couldn't be opened",
+        }
+    }
+
+    /// What it means and what to do (English source; translated when shown).
+    pub fn advice(self) -> &'static str {
+        match self {
+            ProblemKind::Damaged => {
+                "The catalog failed its integrity check. Restore it from a backup (the message above says where the newest one is), or open or create another catalog."
+            }
+            ProblemKind::InUse => "Close {app} or the other program that has it open, then try again.",
+            ProblemKind::Newer => "It was saved by a newer version of {app}. Update {app} to open it; it was left unchanged.",
+            ProblemKind::Foreign => {
+                "It was made by another app, whose catalog format {app} can't open. It was left unchanged. Create a new catalog, or open another one."
+            }
+            ProblemKind::Missing => "If it is on a drive that isn't connected, connect it and try again. Otherwise open or create another catalog.",
+            ProblemKind::Permission => "{app} isn't allowed to read or write its folder. Check the folder's permissions, then try again.",
+            ProblemKind::NoLocation | ProblemKind::Other => {
+                "Your photos and edits in it are untouched. You can try again (e.g. after closing another program that has it open or reconnecting its drive), open a different library or create a new one, or continue without a library — then nothing you do is saved."
+            }
+        }
+    }
+
+    /// Try Again can help.
+    pub fn retryable(self) -> bool {
+        !matches!(self, ProblemKind::Foreign | ProblemKind::Newer | ProblemKind::NoLocation)
+    }
 }
 
 impl LibraryProblem {
@@ -31,9 +131,21 @@ impl LibraryProblem {
         LibraryProblem { path: path.into(), error: error.into(), can_retry: true, ..Default::default() }
     }
 
+    pub fn kind(&self) -> ProblemKind {
+        ProblemKind::of(&self.path, &self.error)
+    }
+
     /// `ui.inspect` → `libraryProblem`.
     pub fn to_json(&self) -> serde_json::Value {
-        json!({"path": self.path, "error": self.error, "temporarySession": self.dismissed, "pendingImport": self.pending_import.len()})
+        json!({
+            "path": self.path,
+            "error": self.error,
+            "temporarySession": self.dismissed,
+            "pendingImport": self.pending_import.len(),
+            "upgrading": self.upgrading,
+            "kind": self.kind().id(),
+            "upgrade": lcc_engine::library::migration_progress(),
+        })
     }
 }
 
@@ -41,13 +153,14 @@ impl LibraryProblem {
 enum Choice {
     Retry,
     Choose,
+    New,
     Temporary,
     Quit,
 }
 
 /// Open `path` (`None`: ask for a folder) through `app.openLibrary`; on success the problem is
 /// over (and command-line files are imported), else it shows the new error.
-fn open(app: &mut LightcraftApp, path: Option<String>) {
+fn open(app: &mut LccApp, path: Option<String>) {
     let params = match &path {
         Some(p) => json!({"path": p}),
         None => json!({}),
@@ -76,29 +189,117 @@ fn open(app: &mut LightcraftApp, path: Option<String>) {
 }
 
 /// Clear the problem once a library is open (e.g. through Settings → Open Library…).
-pub fn logic(app: &mut LightcraftApp) {
+pub fn logic(app: &mut LccApp) {
     if app.library_problem.is_some() && app.session.library.is_some() {
         app.library_problem = None;
     }
 }
 
-/// The blocking window (until a choice is made).
-pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
-    let Some(problem) = app.library_problem.clone() else { return };
-    if problem.dismissed {
-        return;
+/// Upgrade the catalog of the library in `dir` (an older format, see
+/// [`lcc_engine::library::needs_migration`]) on a worker thread, then open it; the window shows
+/// the progress meanwhile (a library of hundreds of thousands of photos takes tens of seconds,
+/// once). `files` are imported once it is open. A failure shows the usual problem window.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn start_upgrade(app: &mut LccApp, dir: std::path::PathBuf, files: Vec<String>) {
+    let path = dir.to_string_lossy().to_string();
+    app.library_problem = Some(LibraryProblem { upgrading: true, pending_import: files, ..LibraryProblem::new(path.clone(), "") });
+    let started = crate::tasks::spawn(
+        app,
+        "Upgrade catalog",
+        None,
+        move || lcc_engine::library::migrate_library(&dir).map_err(|e| e.to_string()),
+        move |app, _ctx, res: Result<bool, String>| {
+            if let Some(p) = app.library_problem.as_mut() {
+                p.upgrading = false;
+            }
+            match res {
+                Ok(_) => open(app, Some(path)),
+                Err(e) => {
+                    if let Some(p) = app.library_problem.as_mut() {
+                        p.error = e;
+                    }
+                }
+            }
+        },
+    );
+    if let Err(e) = started
+        && let Some(p) = app.library_problem.as_mut()
+    {
+        p.upgrading = false;
+        p.error = e;
     }
-    let t = Tokens::get(ctx);
+}
+
+/// Dim everything behind a blocking window; clicks there go nowhere.
+pub(crate) fn dim(ctx: &egui::Context) {
     let screen = ctx.content_rect();
     egui::Area::new(egui::Id::new("library-problem-dim")).order(egui::Order::Middle).fixed_pos(screen.min).interactable(true).show(ctx, |ui| {
         // swallows clicks: nothing behind the window can be used meanwhile
         ui.allocate_rect(screen, egui::Sense::click_and_drag());
         ui.painter().rect_filled(screen, 0.0, egui::Color32::from_black_alpha(160));
     });
+}
+
+/// The catalog upgrade's progress window.
+fn upgrade_window(ctx: &egui::Context, path: &str) {
+    let t = Tokens::get(ctx);
+    dim(ctx);
+    let progress = lcc_engine::library::migration_progress();
+    let frame = egui::Frame::window(&ctx.global_style()).inner_margin(egui::Margin::symmetric(18, 14));
+    egui::Window::new(crate::i18n::tr("Upgrading your library"))
+        .id(egui::Id::new("library-upgrade"))
+        .order(egui::Order::Foreground)
+        .collapsible(false)
+        .resizable(false)
+        .frame(frame)
+        .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
+        .default_width(460.0)
+        .show(ctx, |ui| {
+            ui.set_width(440.0);
+            ui.spacing_mut().item_spacing.y = 8.0;
+            ui.label(RichText::new(crate::i18n::tr("{app} is moving the library at")).color(t.text_label));
+            ui.label(RichText::new(path).font(t.semibold(12.5)).color(t.text));
+            ui.label(
+                RichText::new(crate::i18n::tr(
+                    "to its new catalog format. This happens once; a large library takes a minute. The old files are kept in the \
+                     library's backups folder.",
+                ))
+                .color(t.text_dim),
+            );
+            let (frac, text) = match &progress {
+                Some(p) => (p.fraction(), crate::i18n::tr(p.phase.label()).to_string()),
+                None => (0.0, crate::i18n::tr("Starting…").to_string()),
+            };
+            let text = match &progress {
+                Some(p) if p.phase == lcc_engine::catalog::progress::MigrationPhase::Writing => {
+                    format!("{text}… {} / {}", p.done, p.total)
+                }
+                _ => format!("{text}…"),
+            };
+            let r = ui.add(egui::ProgressBar::new(frac).desired_width(440.0).text(RichText::new(text).font(t.font(11.5))));
+            register(ui.ctx(), "progress:libraryUpgrade", r.rect);
+        });
+    ctx.request_repaint_after(std::time::Duration::from_millis(100));
+}
+
+/// The blocking window (until a choice is made).
+pub fn show(app: &mut LccApp, ctx: &egui::Context) {
+    let Some(problem) = app.library_problem.clone() else { return };
+    if problem.upgrading {
+        upgrade_window(ctx, &problem.path);
+        return;
+    }
+    if problem.dismissed {
+        return;
+    }
+    let t = Tokens::get(ctx);
+    dim(ctx);
     let mut choice = None;
     let frame = egui::Frame::window(&ctx.global_style()).inner_margin(egui::Margin::symmetric(18, 14));
-    egui::Window::new(crate::i18n::tr("Your library couldn't be opened"))
-        .id(egui::Id::new("library-problem"))
+    let kind = problem.kind();
+    let window_id = egui::Id::new("library-problem");
+    let shown = egui::Window::new(crate::i18n::tr(kind.title()))
+        .id(window_id)
         .order(egui::Order::Foreground)
         .collapsible(false)
         .resizable(false)
@@ -109,39 +310,46 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
             // a fixed width: a wrapped label in an auto-sized, centred window would move it every frame
             ui.set_width(440.0);
             ui.spacing_mut().item_spacing.y = 8.0;
-            if problem.path.is_empty() {
-                ui.label(RichText::new(crate::i18n::tr("LightCraft couldn't find where to keep your library.")).color(t.text));
-            } else {
-                ui.label(RichText::new(crate::i18n::tr("LightCraft couldn't open the library at")).color(t.text_label));
-                ui.label(RichText::new(&problem.path).font(t.semibold(12.5)).color(t.text));
-            }
-            ui.add(egui::Label::new(RichText::new(&problem.error).color(t.caution)).wrap());
-            ui.label(
-                RichText::new(
-                    "Your photos and edits in it are untouched. You can try again (e.g. after closing another program that has it open \
-                     or reconnecting its drive), open a different library or create a new one, or continue without a library — \
-                     then nothing you do is saved.",
-                )
-                .color(t.text_dim),
-            );
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                let mut button = |ui: &mut egui::Ui, id: &str, label: &str, enabled: bool, c: Choice| {
-                    let r = ui.add_enabled(enabled, egui::Button::new(crate::i18n::tr(label)).min_size(vec2(0.0, 26.0)));
-                    register(ui.ctx(), format!("button:{id}"), r.rect);
-                    if r.clicked() {
-                        choice = Some(c);
-                    }
-                };
-                button(ui, "libraryRetry", "Try Again", problem.can_retry && !problem.path.is_empty(), Choice::Retry);
-                button(ui, "libraryChoose", "Choose Another Library…", app.services.pick_folder.is_some(), Choice::Choose);
-                button(ui, "libraryTemporary", "Continue Without Saving", true, Choice::Temporary);
-                button(ui, "libraryQuit", "Quit", true, Choice::Quit);
+            let mut layout = crate::dialog_frame::ModalLayout::begin(ui, window_id);
+            layout.body(ui, |ui| {
+                if problem.path.is_empty() {
+                    ui.label(RichText::new(crate::i18n::tr("{app} couldn't find where to keep your library.")).color(t.text));
+                } else {
+                    ui.label(RichText::new(crate::i18n::tr("{app} couldn't open the library at")).color(t.text_label));
+                    ui.label(RichText::new(&problem.path).font(t.semibold(12.5)).color(t.text));
+                }
+                ui.add(egui::Label::new(RichText::new(&problem.error).color(t.caution)).wrap());
+                ui.label(RichText::new(crate::i18n::tr(kind.advice())).color(t.text_dim));
+            });
+            layout.footer(ui, |ui| {
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    let mut button = |ui: &mut egui::Ui, id: &str, label: &str, enabled: bool, c: Choice| {
+                        let r = ui.add_enabled(enabled, egui::Button::new(crate::i18n::tr(label)).min_size(vec2(0.0, 26.0)));
+                        register(ui.ctx(), format!("button:{id}"), r.rect);
+                        if r.clicked() {
+                            choice = Some(c);
+                        }
+                    };
+                    button(ui, "libraryRetry", "Try Again", problem.can_retry && kind.retryable(), Choice::Retry);
+                    button(ui, "libraryChoose", "Choose Another Library…", app.services.pick_folder.is_some(), Choice::Choose);
+                    button(ui, "libraryNew", "New Catalog…", true, Choice::New);
+                    button(ui, "libraryTemporary", "Continue Without Saving", true, Choice::Temporary);
+                    button(ui, "libraryQuit", "Quit", true, Choice::Quit);
+                });
             });
         });
+    crate::dialog_frame::ModalLayout::finish(ctx, window_id, shown.as_ref().map(|w| w.response.rect));
     match choice {
         Some(Choice::Retry) => open(app, Some(problem.path)),
         Some(Choice::Choose) => open(app, None),
+        Some(Choice::New) => {
+            // the New Catalog dialog (it opens the catalog it creates, which ends the problem)
+            if let Some(p) = app.library_problem.as_mut() {
+                p.dismissed = true;
+            }
+            new_catalog_dialog(app);
+        }
         Some(Choice::Temporary) => {
             if let Some(p) = app.library_problem.as_mut() {
                 p.dismissed = true;
@@ -159,8 +367,17 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
     }
 }
 
+/// New Catalog… from the problem window: the catalog dialog, under the Pictures folder by default.
+fn new_catalog_dialog(app: &mut LccApp) {
+    let parent = lcc_engine::library::default_dir().and_then(|d| d.parent().map(std::path::Path::to_path_buf));
+    let params = json!({"parent": parent.map(|d| d.to_string_lossy().into_owned())});
+    if let Err(e) = app.run("catalog.new", params) {
+        log::warn!("new catalog: {e}");
+    }
+}
+
 /// The banner under the top bar while the session is temporary (Continue Without Saving).
-pub fn banner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+pub fn banner(app: &mut LccApp, ui: &mut egui::Ui) {
     if !app.library_problem.as_ref().is_some_and(|p| p.dismissed) {
         return;
     }

@@ -1,10 +1,10 @@
-//! Photo Merge commands: `merge.hdr`, `merge.panorama`, `merge.hdrPanorama`, `merge.hdrBatch`.
+//! Photo Merge commands: `merge.hdr`, `merge.panorama`, `merge.hdrPanorama`, `merge.hdrBatch`, `merge.focusStack`.
 //!
 //! Run synchronously here (CLI, MCP, control channel); the desktop UI plans the same job with
 //! [`Session::plan_merge`] and runs it on a worker thread. `preview: true` merges ≤ 1024 px frames
 //! and (with `previewPath`) writes the rendered preview as PNG instead of adding a photo.
 
-use lightcraft_catalog::PhotoId;
+use lcc_catalog::PhotoId;
 use serde_json::{Value, json};
 
 use super::{CommandSpec, bad, bool_or, cmd, str_param};
@@ -28,8 +28,8 @@ fn run(s: &mut Session, id: &str, p: &Value) -> Result<Value> {
     let out = job.run(&|_, _| true).map_err(|e| bad(id, e))?;
     let mut info = out.info;
     if let (Some(path), Some(img)) = (str_param(p, "previewPath"), &out.preview) {
-        let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(img), &lightcraft_codecs::EncodeMeta::default())
-            .map_err(|e| bad(id, e.to_string()))?;
+        let png =
+            lcc_codecs::encode_png(&lcc_codecs::EncodeImage::rgba8(img), &lcc_codecs::EncodeMeta::default()).map_err(|e| bad(id, e.to_string()))?;
         s.check_write_target(path).map_err(|e| bad(id, e))?;
         crate::export::write_file(path, &png).map_err(|e| bad(id, e))?;
         info["previewPath"] = json!(path);
@@ -40,7 +40,7 @@ fn run(s: &mut Session, id: &str, p: &Value) -> Result<Value> {
     Ok(info)
 }
 
-/// `merge.hdrBatch`: an HDR merge of each bracket set among the photos ([`lightcraft_catalog::Catalog::bracket_sets`]),
+/// `merge.hdrBatch`: an HDR merge of each bracket set among the photos ([`lcc_catalog::Catalog::bracket_sets`]),
 /// one after the other. A set that fails is reported and the others still run.
 fn run_batch(s: &mut Session, p: &Value) -> Result<Value> {
     const ID: &str = "merge.hdrBatch";
@@ -97,6 +97,15 @@ pub fn specs() -> Vec<CommandSpec> {
             "{ids?, align=true, deghost=none|low|medium|high, autoSettings=true, stack=false}: an HDR merge of each bracket set among the photos (each stack, then photos taken less than a second apart at exposures ≥ ½ EV apart) → {merged: [{id, path, …}], failed: [{photos, error}]}",
             can_merge,
             run_batch
+        ),
+        cmd!(
+            "merge.focusStack",
+            "Focus Stack Merge",
+            [],
+            None,
+            "{ids?, align=true, autoSettings=true, stack=false, preview=false, previewPath?}",
+            can_merge,
+            |s, p| run(s, "merge.focusStack", p)
         ),
     ]
 }

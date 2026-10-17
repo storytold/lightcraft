@@ -1,13 +1,13 @@
 //! Scene-linear preparation: white balance + exposure, and the spatial planes the per-pixel stage
 //! needs (edge-aware base layer for highlights/shadows, clarity/texture bands, dehaze veil).
 
-use lightcraft_color::cct::{temp_tint_to_xy, wb_matrix, xy_to_temp_tint};
-use lightcraft_color::{REC2020, luminance_2020};
-use lightcraft_develop::{DevelopSettings, Process};
-use lightcraft_raster::blur::gaussian;
+use lcc_color::cct::{temp_tint_to_xy, wb_matrix, xy_to_temp_tint};
+use lcc_color::{REC2020, luminance_2020};
+use lcc_develop::{DevelopSettings, Process};
+use lcc_raster::blur::{gauss_taps, gaussian, gaussian_taps};
 use std::sync::Arc;
 
-use lightcraft_raster::{Plane, Rgb32f, par_join};
+use lcc_raster::{Plane, Rgb32f, par_join};
 
 use crate::geometry::Frame;
 use crate::{Prepared, Quality, SourceInfo, for_rows, masks, timed};
@@ -33,17 +33,17 @@ pub fn wb_matrix_for(info: &SourceInfo, s: &DevelopSettings) -> Option<[[f32; 3]
         return None;
     }
     if let Some(cc) = info.camera_color.as_deref().filter(|_| info.raw && !info.relative_wb)
-        && let Some(m) = lightcraft_raw::color::rebalance(&cc.tags, cc.developed_for, temp_tint_to_xy(t, tint))
+        && let Some(m) = lcc_raw::color::rebalance(&cc.tags, cc.developed_for, temp_tint_to_xy(t, tint))
     {
         return Some(m.to_f32());
     }
     let set = wb_matrix(&REC2020, effective_white(info, s));
     let shot = wb_matrix(&REC2020, temp_tint_to_xy(info.as_shot_temp, info.as_shot_tint));
-    let m = set.mul(&shot.inverse().unwrap_or(lightcraft_color::Mat3::IDENTITY));
+    let m = set.mul(&shot.inverse().unwrap_or(lcc_color::Mat3::IDENTITY));
     // Normalize so neutral luminance is preserved (WB shouldn't change exposure).
     let g = m.apply([1.0, 1.0, 1.0]);
     let y = g[0] * 0.2627 + g[1] * 0.6780 + g[2] * 0.0593;
-    Some(m.mul(&lightcraft_color::Mat3::diag(1.0 / y, 1.0 / y, 1.0 / y)).to_f32())
+    Some(m.mul(&lcc_color::Mat3::diag(1.0 / y, 1.0 / y, 1.0 / y)).to_f32())
 }
 
 fn wb_gain(img: &mut Rgb32f, info: &SourceInfo, s: &DevelopSettings, gain: f32) {
@@ -68,7 +68,7 @@ fn wb_gain(img: &mut Rgb32f, info: &SourceInfo, s: &DevelopSettings, gain: f32) 
 /// the relative scale before a raw's camera matrices reached its white balance give the same colour change on the
 /// Kelvin scale, see [`legacy_to_kelvin`]).
 pub fn effective_wb(info: &SourceInfo, s: &DevelopSettings) -> (f64, f64) {
-    use lightcraft_develop::WbMode;
+    use lcc_develop::WbMode;
     match s.wb.mode {
         WbMode::AsShot => (info.as_shot_temp, info.as_shot_tint),
         _ if legacy_wb(info, s) => legacy_to_kelvin(s.wb.temp, s.wb.tint, (info.as_shot_temp, info.as_shot_tint)),
@@ -80,9 +80,9 @@ pub fn effective_wb(info: &SourceInfo, s: &DevelopSettings) -> (f64, f64) {
 /// The source white the render adapts from the as-shot white to: [`effective_wb`] as a chromaticity, except that a
 /// white balance still on the relative scale is composed exactly ([`legacy_white`]) rather than read back through
 /// its rounded Kelvin / tint.
-fn effective_white(info: &SourceInfo, s: &DevelopSettings) -> lightcraft_color::Xy {
+fn effective_white(info: &SourceInfo, s: &DevelopSettings) -> lcc_color::Xy {
     if legacy_wb(info, s)
-        && s.wb.mode != lightcraft_develop::WbMode::AsShot
+        && s.wb.mode != lcc_develop::WbMode::AsShot
         && let Some(xy) = legacy_white(s.wb.temp, s.wb.tint, (info.as_shot_temp, info.as_shot_tint))
     {
         return xy;
@@ -93,7 +93,7 @@ fn effective_white(info: &SourceInfo, s: &DevelopSettings) -> lightcraft_color::
 
 /// Whether `s` holds a white balance written on the relative scale for a source that is edited in Kelvin today.
 fn legacy_wb(info: &SourceInfo, s: &DevelopSettings) -> bool {
-    info.raw && !info.relative_wb && info.legacy_relative_wb && s.wb.scale == lightcraft_develop::WbScale::Legacy
+    info.raw && !info.relative_wb && info.legacy_relative_wb && s.wb.scale == lcc_develop::WbScale::Legacy
 }
 
 /// The white that renders exactly as `(temp, tint)` did on the relative scale, where 6500 K / 0 meant *as shot* and
@@ -105,8 +105,8 @@ fn legacy_wb(info: &SourceInfo, s: &DevelopSettings) -> bool {
 /// over the old reference's, and the two renders give the same matrix (up to the scale the luminance
 /// normalisation removes). `None` when the arithmetic has nowhere to go (a non-finite input, a white outside the
 /// chromaticity plane).
-pub fn legacy_white(temp: f64, tint: f64, as_shot: (f64, f64)) -> Option<lightcraft_color::Xy> {
-    use lightcraft_color::{BRADFORD, Xy};
+pub fn legacy_white(temp: f64, tint: f64, as_shot: (f64, f64)) -> Option<lcc_color::Xy> {
+    use lcc_color::{BRADFORD, Xy};
     if !(temp.is_finite() && tint.is_finite() && as_shot.0.is_finite() && as_shot.1.is_finite()) {
         return None;
     }
@@ -146,7 +146,7 @@ pub fn legacy_to_kelvin(temp: f64, tint: f64, as_shot: (f64, f64)) -> (f64, f64)
 /// value, since the preset's Kelvin value would be a different look). Elsewhere the scale is cleared, so values
 /// edited on a rendered photo or a raw without matrices never pass for Kelvin when pasted onto one that has them.
 pub fn normalize_wb(d: &mut DevelopSettings, info: &SourceInfo) {
-    use lightcraft_develop::{WbMode, WbScale};
+    use lcc_develop::{WbMode, WbScale};
     if !info.raw || info.relative_wb {
         d.wb.scale = WbScale::Legacy;
         return;
@@ -194,7 +194,7 @@ fn guided_apply(p: &Plane, a: &Plane, b: &Plane) -> Plane {
 /// bilinearly upsampled; the output keeps full-resolution edges. Equivalent to [`guided`] for
 /// large windows at a fraction of the cost.
 pub fn guided_fast(p: &Plane, sigma: f32, eps: f32) -> Plane {
-    use lightcraft_raster::resample::{Filter, resize};
+    use lcc_raster::resample::{Filter, resize};
     let s = guided_fast_step(sigma);
     if s <= 1 {
         return guided(p, sigma, eps);
@@ -243,6 +243,69 @@ fn median_row(src: &[f32], out: &mut [f32], r: usize) {
     }
 }
 
+/// Separable minimum (`2r+1` px along each row, then each column; clamped edges): a square
+/// erosion. Dehaze's patch dark channel from process V3 (#1237).
+pub fn min_hv(p: &Plane, r: usize) -> Plane {
+    if r == 0 || p.data.is_empty() {
+        return p.clone();
+    }
+    let rows = |src: &Plane| {
+        let mut out = Plane::new(src.width, src.height);
+        for_rows(&mut out.data, src.width, |y, row| min_row(src.row(y), row, r));
+        out
+    };
+    transpose(&rows(&transpose(&rows(p))))
+}
+
+/// Minimum of `src` over `2r+1` taps (clamped to the row) into `out`, in O(1) per pixel (van Herk /
+/// Gil–Werman: block-wise running minima from both ends).
+fn min_row(src: &[f32], out: &mut [f32], r: usize) {
+    let n = src.len();
+    let k = 2 * r + 1;
+    // padded with +inf: r before, enough after to complete the last block
+    let len = (n + 2 * r).div_ceil(k) * k;
+    let at = |i: usize| if i >= r { src.get(i - r).copied().unwrap_or(f32::INFINITY) } else { f32::INFINITY };
+    let mut fwd = vec![f32::INFINITY; len];
+    let mut bwd = vec![f32::INFINITY; len];
+    for i in 0..len {
+        let v = at(i);
+        fwd[i] = if i % k == 0 { v } else { v.min(fwd[i - 1]) };
+    }
+    for i in (0..len).rev() {
+        let v = at(i);
+        bwd[i] = if i % k == k - 1 || i + 1 == len { v } else { v.min(bwd[i + 1]) };
+    }
+    for (x, o) in out.iter_mut().enumerate().take(n) {
+        // window [x, x + 2r] in padded coordinates
+        *o = bwd.get(x).copied().unwrap_or(f32::INFINITY).min(fwd.get(x + 2 * r).copied().unwrap_or(f32::INFINITY));
+    }
+}
+
+/// Patch radius of dehaze's dark channel from process V3, as a fraction of the long edge.
+pub const DEHAZE_PATCH: f64 = 0.005;
+/// Largest [`dehaze_patch_radius`] (px).
+pub const DEHAZE_PATCH_MAX: usize = 64;
+
+/// Patch (minimum) radius of the dehaze dark channel of `s`'s process at `px_per_long`: 0 (the
+/// per-pixel minimum) before V3.
+pub fn dehaze_patch_radius(s: &DevelopSettings, px_per_long: f64) -> usize {
+    match s.process.process() {
+        Process::V1 | Process::V2 => 0,
+        Process::V3 | Process::V4 => ((DEHAZE_PATCH * px_per_long).round().max(1.0) as usize).min(DEHAZE_PATCH_MAX),
+    }
+}
+
+/// Cache key of the dark-channel plane: its blur radius and patch radius.
+pub fn dark_key(sigma: f32, patch: usize) -> u64 {
+    u64::from(sigma.to_bits()) | ((patch as u64) << 32)
+}
+
+/// The dehaze dark channel: the Gaussian (`sigma`) of the `patch`-px minimum of each pixel's
+/// darkest channel.
+pub fn dark_plane(img: &Rgb32f, sigma: f32, patch: usize) -> Plane {
+    gaussian(&min_hv(&img.map(dark_of), patch), sigma)
+}
+
 fn transpose(p: &Plane) -> Plane {
     let (w, h) = (p.width, p.height);
     let mut t = Plane::new(h, w);
@@ -273,7 +336,7 @@ pub fn base_detail_radius(px_per_long: f64) -> usize {
 pub fn tone_base_detail(s: &DevelopSettings, px_per_long: f64) -> usize {
     match s.process.process() {
         Process::V1 => 0,
-        Process::V2 => base_detail_radius(px_per_long),
+        Process::V2 | Process::V3 | Process::V4 => base_detail_radius(px_per_long),
     }
 }
 
@@ -306,6 +369,11 @@ pub struct NrColor {
     pub t: f32,
 }
 
+/// Draft colour NR blurs at half resolution from this radius (px) on: the chromaticity is smooth at such
+/// radii, so a quarter of the pixels at half the radius gives the same result well within a
+/// display step, in about half the time (gap 26). Sources: own design (pyramid-level blur).
+pub const HALF_RES_NR_SIGMA: f32 = 4.0;
+
 /// Output pixels per pixel of the original photo for an output of `px_per_long` pixels per unit
 /// of the long edge of an original `native_long` pixels long, at most 1 ([`crate::Plan::detail_scale`]).
 pub fn detail_scale(px_per_long: f64, native_long: usize) -> f32 {
@@ -314,7 +382,7 @@ pub fn detail_scale(px_per_long: f64, native_long: usize) -> f32 {
 }
 
 /// Smallest radius (px) noise reduction filters a preview with: [`gaussian`] makes no blur below
-/// about 0.58 px and one 3-px box from there ([`lightcraft_raster::blur::box_sigma`]).
+/// about 0.58 px and one 3-px box from there ([`lcc_raster::blur::box_sigma`]).
 const NR_MIN_SIGMA: f32 = 1.0;
 
 /// Below this fade a preview's noise reduction is not drawn at all (less than 1 % of a 1-px blur).
@@ -327,7 +395,7 @@ fn nr_radius(sigma: f32) -> (f32, f32) {
     if sigma >= NR_MIN_SIGMA {
         return (sigma, 1.0);
     }
-    let made = lightcraft_raster::blur::box_sigma(NR_MIN_SIGMA);
+    let made = lcc_raster::blur::box_sigma(NR_MIN_SIGMA);
     (NR_MIN_SIGMA, (sigma / made).powi(2).min(1.0))
 }
 
@@ -356,14 +424,22 @@ pub fn nr_params(s: &DevelopSettings, scale: f32) -> (Option<NrLum>, Option<NrCo
 
 /// Noise reduction at output resolution: luminance via an edge-aware self-guided filter on
 /// log-luminance, colour by blurring chromaticity (rgb / Y) and re-applying the original luminance.
-/// `scale`: output pixels per pixel of the original ([`nr_params`]).
+/// `scale`: output pixels per pixel of the original ([`nr_params`]). A full-quality render
+/// ([`denoise_with`] for a draft).
 pub fn denoise(img: &mut Rgb32f, s: &DevelopSettings, scale: f32) {
-    let (lum, col) = nr_params(s, scale);
-    apply_nr(img, lum, col);
+    denoise_with(img, s, scale, false);
 }
 
-/// Noise reduction with explicit parameters (see [`denoise`]).
-pub fn apply_nr(img: &mut Rgb32f, lum: Option<NrLum>, col: Option<NrColor>) {
+/// [`denoise`] for a render that may be a draft. `draft`: a draft render (a slider drag) may blur
+/// the chromaticity at half resolution ([`HALF_RES_NR_SIGMA`]); a full-quality render always takes
+/// the full-resolution blur, so it matches the GPU path and the look the photo always had.
+pub fn denoise_with(img: &mut Rgb32f, s: &DevelopSettings, scale: f32, draft: bool) {
+    let (lum, col) = nr_params(s, scale);
+    apply_nr(img, lum, col, draft);
+}
+
+/// Noise reduction with explicit parameters (see [`denoise`]; `draft` as there).
+pub fn apply_nr(img: &mut Rgb32f, lum: Option<NrLum>, col: Option<NrColor>, draft: bool) {
     let w = img.width;
     if let Some(nr) = lum {
         let _t = crate::profiling().then(std::time::Instant::now);
@@ -383,22 +459,74 @@ pub fn apply_nr(img: &mut Rgb32f, lum: Option<NrLum>, col: Option<NrColor>) {
     }
     if let Some(nr) = col {
         let _t = crate::profiling().then(std::time::Instant::now);
-        let chroma = img.map(|c| {
-            let y = luminance_2020(c).max(1e-6);
-            [c[0] / y, c[1] / y, c[2] / y]
-        });
-        let b = gaussian(&chroma, nr.sigma);
-        for_rows(&mut img.data, w, |y, row| {
-            for (x, p) in row.iter_mut().enumerate() {
-                let i = y * w + x;
-                let yl = luminance_2020(*p);
-                let c0 = chroma.data[i];
-                let cb = b.data[i];
-                *p = [0, 1, 2].map(|k| ((c0[k] + (cb[k] - c0[k]) * nr.t) * yl).max(0.0));
-            }
-        });
+        // the half-resolution blur is a (slightly) different look: drafts only, never a final render
+        colour_nr(img, nr, draft && nr.sigma >= HALF_RES_NR_SIGMA);
         if let Some(t) = _t {
             eprintln!("    nr colour: {:.1} ms", t.elapsed().as_secs_f64() * 1e3);
+        }
+    }
+}
+
+/// Colour noise reduction: the chromaticity (rgb / Y) blurred, mixed in by `nr.t`, under the
+/// original luminance; with `half_res` the blur runs at half resolution ([`HALF_RES_NR_SIGMA`]).
+fn colour_nr(img: &mut Rgb32f, nr: NrColor, half_res: bool) {
+    let w = img.width;
+    {
+        let chroma_of = |c: [f32; 3]| {
+            let y = luminance_2020(c).max(1e-6);
+            [c[0] / y, c[1] / y, c[2] / y]
+        };
+        if half_res && img.width >= 2 && img.height >= 2 {
+            // chromaticity is smooth at these radii: blur it at half resolution (a quarter of
+            // the pixels, half the radius) and read it back bilinearly
+            let (hw, hh) = (img.width.div_ceil(2), img.height.div_ceil(2));
+            let src = &*img;
+            let mut half = Rgb32f::new(hw, hh);
+            for_rows(&mut half.data, hw, |y, row| {
+                for (x, o) in row.iter_mut().enumerate() {
+                    let (sx, sy) = (2 * x as isize, 2 * y as isize);
+                    let mut acc = [0.0f32; 3];
+                    for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                        let c = chroma_of(src.get_clamped(sx + dx, sy + dy));
+                        acc = [0, 1, 2].map(|k| acc[k] + 0.25 * c[k]);
+                    }
+                    *o = acc;
+                }
+            });
+            let b = gaussian(&half, nr.sigma * 0.5);
+            for_rows(&mut img.data, w, |y, row| {
+                // half-res pixel centres sit at 2x + 0.5 in full-res pixel units
+                let fy = ((y as f32 - 0.5) * 0.5).max(0.0);
+                let (y0, ty) = (fy as usize, fy.fract());
+                let y1 = (y0 + 1).min(hh - 1);
+                let (r0, r1) = (b.data.get(y0 * hw..(y0 + 1) * hw).unwrap_or(&[]), b.data.get(y1 * hw..(y1 + 1) * hw).unwrap_or(&[]));
+                for (x, p) in row.iter_mut().enumerate() {
+                    let fx = ((x as f32 - 0.5) * 0.5).max(0.0);
+                    let (x0, tx) = (fx as usize, fx.fract());
+                    let x1 = (x0 + 1).min(hw - 1);
+                    let g = |r: &[[f32; 3]], i: usize| r.get(i).copied().unwrap_or_default();
+                    let (a, bb, c, d) = (g(r0, x0), g(r0, x1), g(r1, x0), g(r1, x1));
+                    let cb = [0, 1, 2].map(|k| {
+                        let top = a[k] + (bb[k] - a[k]) * tx;
+                        let bot = c[k] + (d[k] - c[k]) * tx;
+                        top + (bot - top) * ty
+                    });
+                    let yl = luminance_2020(*p);
+                    let c0 = chroma_of(*p);
+                    *p = [0, 1, 2].map(|k| ((c0[k] + (cb[k] - c0[k]) * nr.t) * yl).max(0.0));
+                }
+            });
+        } else {
+            let chroma = img.map(chroma_of);
+            let b = gaussian(&chroma, nr.sigma);
+            for_rows(&mut img.data, w, |y, row| {
+                for (x, p) in row.iter_mut().enumerate() {
+                    let i = y * w + x;
+                    let yl = luminance_2020(*p);
+                    let (Some(&c0), Some(&cb)) = (chroma.data.get(i), b.data.get(i)) else { continue };
+                    *p = [0, 1, 2].map(|k| ((c0[k] + (cb[k] - c0[k]) * nr.t) * yl).max(0.0));
+                }
+            });
         }
     }
 }
@@ -419,8 +547,10 @@ pub(crate) struct Planes {
     pub base: Option<(BaseKey, Arc<Plane>)>,
     pub clarity: Option<(u32, Arc<Plane>)>,
     pub texture: Option<(u32, Arc<Plane>)>,
+    /// Sharpening blur (exact Gaussian at the sharpen radius).
+    pub sharpen: Option<(u32, Arc<Plane>)>,
     /// Dark channel and its airlight.
-    pub dark: Option<(u32, Arc<Plane>, f32)>,
+    pub dark: Option<(u64, Arc<Plane>, f32)>,
     /// Blurred chromaticity (local Moiré / Noise).
     pub chroma: Option<(u32, Arc<Rgb32f>)>,
 }
@@ -430,7 +560,7 @@ impl Planes {
     /// enough for a draft: the wide blurs (base, clarity, dehaze, chromaticity). Its `key` matches
     /// no image, so only another draft takes them.
     pub fn for_other_nr(self) -> Planes {
-        Planes { key: 0, pre_nr: self.pre_nr, log_l: None, texture: None, ..self }
+        Planes { key: 0, pre_nr: self.pre_nr, log_l: None, texture: None, sharpen: None, ..self }
     }
 }
 
@@ -482,15 +612,44 @@ pub struct PlaneSigmas {
     pub clarity: Option<f32>,
     /// Texture / sharpening band (Gaussian).
     pub texture: Option<f32>,
+    /// Sharpening blur (exact Gaussian, see [`sharpen_sigma`]).
+    pub sharpen: Option<f32>,
     /// Dehaze dark channel (Gaussian).
     pub dark: Option<f32>,
+    /// Patch radius (px) of that dark channel ([`dehaze_patch_radius`]: 0 before V3).
+    pub dark_patch: usize,
     /// Chromaticity blur for local Moiré / colour noise (Gaussian).
     pub chroma: Option<f32>,
 }
 
-pub fn plane_sigmas(s: &DevelopSettings, px_per_long: f64, q: Quality) -> PlaneSigmas {
+/// Sharpening blur radius in output pixels before clamping: Radius (source pixels) times the
+/// output pixels per source pixel (`src_long` = the oriented source's long edge), so a preview and
+/// an export show the same detail at the same displayed scale.
+pub fn sharpen_sigma_raw(s: &DevelopSettings, px_per_long: f64, src_long: f64) -> f32 {
+    let r = s.detail.sharpen_radius;
+    let radius = if r.is_finite() { r.clamp(0.1, 10.0) } else { 1.0 };
+    (radius * px_per_long / src_long.max(1.0)) as f32
+}
+
+/// Smallest and largest sigma (px) of the sharpening blur.
+pub const SHARPEN_SIGMA_MIN: f32 = 0.3;
+pub const SHARPEN_SIGMA_MAX: f32 = 4.0;
+
+/// The sharpening blur's sigma for a raw value of [`sharpen_sigma_raw`].
+pub fn sharpen_sigma(raw: f32) -> f32 {
+    raw.clamp(SHARPEN_SIGMA_MIN, SHARPEN_SIGMA_MAX)
+}
+
+/// How much of the sharpening survives at a raw sigma: none at or below 0.3 px, all from 0.5 px
+/// (a blur that small cannot tell detail from the pixel grid, so it fades instead of aliasing).
+pub fn sharpen_fade(raw: f32) -> f32 {
+    let t = ((raw - SHARPEN_SIGMA_MIN) / (0.5 - SHARPEN_SIGMA_MIN)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+pub fn plane_sigmas(s: &DevelopSettings, px_per_long: f64, src_long: f64, q: Quality) -> PlaneSigmas {
     let ppl = px_per_long as f32;
-    let local_any = |f: fn(&lightcraft_develop::LocalAdjustments) -> f64| s.masks.iter().any(|m| f(&m.adjust) != 0.0);
+    let local_any = |f: fn(&lcc_develop::LocalAdjustments) -> f64| s.masks.iter().any(|m| f(&m.adjust) != 0.0);
     let tone_active =
         s.light.highlights != 0.0 || s.light.shadows != 0.0 || s.masks.iter().any(|m| m.adjust.highlights != 0.0 || m.adjust.shadows != 0.0);
     // Edge-aware base at ~1.5% of the long edge (EV² epsilon: edges of > ~0.6 EV are preserved)
@@ -502,17 +661,23 @@ pub fn plane_sigmas(s: &DevelopSettings, px_per_long: f64, q: Quality) -> PlaneS
     });
     let clarity = (s.effects.clarity != 0.0 || local_any(|a| a.clarity)).then(|| (0.012 * ppl).max(1.0));
     // local Noise and Defringe read the fine detail band too
+    let v4 = crate::finish::sharpen_v4(s);
+    let sharpening = s.detail.sharpen_amount != 0.0 || local_any(|a| a.sharpness);
+    // before V4, sharpening boosts this band too
     let texture = (s.effects.texture != 0.0
-        || s.detail.sharpen_amount != 0.0
+        || (!v4 && sharpening)
         || local_any(|a| a.texture)
-        || local_any(|a| a.sharpness)
         || local_any(|a| a.noise)
         || s.masks.iter().any(|m| m.adjust.defringe > 0.0))
     .then(|| (0.0018 * ppl).max(0.6));
     let dark = (s.effects.dehaze != 0.0 || local_any(|a| a.dehaze)).then(|| (0.02 * ppl).max(1.0));
     let chroma = (local_any(|a| a.moire) || s.masks.iter().any(|m| m.adjust.noise > 0.0)).then(|| (CHROMA_SIGMA * ppl).max(1.0));
     let base_detail = if base.is_some() { tone_base_detail(s, px_per_long) } else { 0 };
-    PlaneSigmas { base, base_detail, clarity, texture, dark, chroma }
+    let dark_patch = if dark.is_some() { dehaze_patch_radius(s, px_per_long) } else { 0 };
+    // sharpening (Amount, or a mask's Sharpness) has its own pixel-scale band, off when it would fade away
+    let sharpen_raw = sharpen_sigma_raw(s, px_per_long, src_long);
+    let sharpen = (v4 && sharpening && sharpen_fade(sharpen_raw) > 0.0).then(|| sharpen_sigma(sharpen_raw));
+    PlaneSigmas { base, base_detail, clarity, texture, sharpen, dark, dark_patch, chroma }
 }
 
 /// The spatial planes the per-pixel stage needs for `img` (white-balanced, before exposure),
@@ -529,10 +694,18 @@ pub(crate) fn prepare(
     mattes: Option<&masks::Mattes>,
 ) -> Prepared {
     let log_l = planes.log_l.get_or_insert_with(|| Arc::new(timed("log_l", || img.map(log_lum)))).clone();
-    let PlaneSigmas { base: base_sigma, base_detail, clarity: clarity_sigma, texture: texture_sigma, dark: dark_sigma, chroma: chroma_sigma } =
-        plane_sigmas(s, px_per_long, q);
+    let PlaneSigmas {
+        base: base_sigma,
+        base_detail,
+        clarity: clarity_sigma,
+        texture: texture_sigma,
+        sharpen: sharpen_sigma_px,
+        dark: dark_sigma,
+        dark_patch,
+        chroma: chroma_sigma,
+    } = plane_sigmas(s, px_per_long, frame.ow.max(frame.oh), q);
 
-    let Planes { base: sb, clarity: sc, texture: st, dark: sd, chroma: sch, .. } = planes;
+    let Planes { base: sb, clarity: sc, texture: st, sharpen: ss, dark: sd, chroma: sch, .. } = planes;
     let chroma_blur = chroma_sigma.map(|sg| match sch {
         Some((k, c)) if *k == sg.to_bits() => c.clone(),
         _ => {
@@ -542,21 +715,26 @@ pub(crate) fn prepare(
         }
     });
     let l = &log_l;
-    let (base, (clarity_blur, (texture_blur, dark))) = par_join(
+    let (base, (clarity_blur, ((texture_blur, sharpen_blur), dark))) = par_join(
         || base_sigma.map(|sg| plane_at(sb, base_key(s, sg, base_detail), || timed("base", || tone_base(l, sg, base_detail)))),
         || {
             par_join(
                 || clarity_sigma.map(|sg| plane_at(sc, sg.to_bits(), || timed("clarity", || guided_fast(l, sg, CLARITY_EPS)))),
                 || {
                     par_join(
-                        || texture_sigma.map(|sg| plane_at(st, sg.to_bits(), || timed("texture", || gaussian(l, sg)))),
+                        || {
+                            par_join(
+                                || texture_sigma.map(|sg| plane_at(st, sg.to_bits(), || timed("texture", || gaussian(l, sg)))),
+                                || sharpen_sigma_px.map(|sg| plane_at(ss, sg.to_bits(), || timed("sharpen", || gaussian_taps(l, &gauss_taps(sg))))),
+                            )
+                        },
                         || {
                             dark_sigma.map(|sg| match sd {
-                                Some((k, d, air)) if *k == sg.to_bits() => (d.clone(), *air),
+                                Some((k, d, air)) if *k == dark_key(sg, dark_patch) => (d.clone(), *air),
                                 _ => {
-                                    let d = timed("dehaze", || Arc::new(gaussian(&img.map(dark_of), sg)));
+                                    let d = timed("dehaze", || Arc::new(dark_plane(&img, sg, dark_patch)));
                                     let air = airlight(&d);
-                                    *sd = Some((sg.to_bits(), d.clone(), air));
+                                    *sd = Some((dark_key(sg, dark_patch), d.clone(), air));
                                     (d, air)
                                 }
                             })
@@ -573,7 +751,7 @@ pub(crate) fn prepare(
     };
     let ev = s.light.exposure as f32;
     let masks = timed("masks", || masks::evaluate(&s.masks, frame, img.width, img.height, &img, &log_l, ev, mattes));
-    Prepared { img, log_l, base, clarity_blur, texture_blur, dark, chroma_blur, air, masks, px_per_long }
+    Prepared { img, log_l, base, clarity_blur, texture_blur, sharpen_blur, dark, chroma_blur, air, masks, px_per_long }
 }
 
 /// The airlight of the whole output frame, estimated on a small render of it (`proxy_w` px wide):
@@ -581,8 +759,9 @@ pub(crate) fn prepare(
 pub(crate) fn frame_airlight(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, frame: &Frame, proxy_w: usize, proxy_h: usize) -> f32 {
     let mut img = Rgb32f::clone(&frame_proxy(src, frame, proxy_w, proxy_h));
     white_balance(&mut img, info, s);
-    let sigma = (0.02 * frame.px_per_long(proxy_w)).max(1.0) as f32;
-    airlight(&gaussian(&img.map(dark_of), sigma))
+    let ppl = frame.px_per_long(proxy_w);
+    let sigma = (0.02 * ppl).max(1.0) as f32;
+    airlight(&dark_plane(&img, sigma, dehaze_patch_radius(s, ppl)))
 }
 
 /// How many airlight proxies [`frame_proxy`] keeps (one per photo and frame being zoomed into; each ≤ 1.8 MB).
@@ -649,7 +828,7 @@ mod tests {
         scene_linear_pre(&mut img, &info, &s);
         assert!((img.get(0, 0)[0] - 0.3).abs() < 1e-6);
         let mut warm = s.clone();
-        warm.wb.mode = lightcraft_develop::WbMode::Custom;
+        warm.wb.mode = lcc_develop::WbMode::Custom;
         warm.wb.temp = 9000.0;
         let mut img2 = Rgb32f::filled(4, 4, [0.3, 0.3, 0.3]);
         scene_linear_pre(&mut img2, &info, &warm);
@@ -672,7 +851,8 @@ mod tests {
         let fresh = |src: &Rgb32f, frame: &Frame| {
             let mut img = frame.sample(src, 48, 32);
             white_balance(&mut img, &info, &s);
-            airlight(&gaussian(&img.map(dark_of), (0.02 * frame.px_per_long(48)).max(1.0) as f32))
+            let ppl = frame.px_per_long(48);
+            airlight(&dark_plane(&img, (0.02 * ppl).max(1.0) as f32, dehaze_patch_radius(&s, ppl)))
         };
         let frame = crate::frame_for(&hazy, &info, &s, true);
         let kept = frame_proxy(&hazy, &frame, 48, 32);
@@ -696,43 +876,5 @@ mod tests {
         let mut img = Rgb32f::filled(2, 2, [0.1, 0.2, 0.3]);
         scene_linear_pre(&mut img, &SourceInfo::default(), &s);
         assert!((img.get(1, 1)[2] - 0.6).abs() < 1e-5);
-    }
-}
-
-#[cfg(test)]
-mod fast_tests {
-    use super::*;
-
-    #[test]
-    fn fast_guided_close_to_reference() {
-        let p = Plane::from_fn(160, 120, |x, y| ((x as f32 * 0.13).sin() + (y as f32 * 0.07).cos()) * 2.0 + if x > 80 { 1.5 } else { 0.0 });
-        let a = guided(&p, 12.0, 0.3);
-        let b = guided_fast(&p, 12.0, 0.3);
-        let err: f32 = a.data.iter().zip(&b.data).map(|(u, v)| (u - v).abs()).sum::<f32>() / a.len() as f32;
-        assert!(err < 0.08, "{err}");
-    }
-}
-
-#[cfg(test)]
-mod nr_tests {
-    use super::*;
-
-    #[test]
-    fn luminance_nr_reduces_noise_keeps_mean() {
-        let mut img = Rgb32f::from_fn(64, 64, |x, y| {
-            let n = (((x * 7919 + y * 104729) % 97) as f32 / 97.0 - 0.5) * 0.06;
-            [0.2 + n; 3]
-        });
-        let var = |im: &Rgb32f| {
-            let m = im.data.iter().map(|p| p[1]).sum::<f32>() / im.len() as f32;
-            (im.data.iter().map(|p| (p[1] - m).powi(2)).sum::<f32>() / im.len() as f32, m)
-        };
-        let (v0, m0) = var(&img);
-        let mut s = DevelopSettings::default();
-        s.detail.nr_luminance = 80.0;
-        denoise(&mut img, &s, 1.0);
-        let (v1, m1) = var(&img);
-        assert!(v1 < v0 * 0.5, "{v0} -> {v1}");
-        assert!((m1 - m0).abs() < 0.01);
     }
 }

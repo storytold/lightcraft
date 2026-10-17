@@ -2,8 +2,8 @@
 //! last view state and the preview cache.
 //!
 //! ```text
-//! LightCraft Library/
-//!   catalog.snap   catalog.log      (lightcraft-catalog journal)
+//! <Name> Library/
+//!   catalog.snap   catalog.log      (lcc-catalog journal)
 //!   presets.json   view.json        (user presets + favourites; last source/sort/selection)
 //!   prefs.json     (library preferences: XMP sidecars, import defaults, cache size, last export)
 //!   thumbs/        (rendered thumbnail cache, safe to delete)
@@ -18,19 +18,39 @@
 //! [`EngineError::NotSaved`]: its change stays applied in memory and queued, and every later save
 //! retries the queue ([`Session::unsaved`] reports it meanwhile), so nothing is lost once the
 //! disk is writable again. The log is compacted into a snapshot when it
-//! grows (see [`lightcraft_catalog::SnapshotPolicy`]; written by a worker thread on native, see
-//! [`lightcraft_catalog::journal`]) and on [`Session::close_library`].
+//! grows (see [`lcc_catalog::SnapshotPolicy`]; written by a worker thread on native, see
+//! [`lcc_catalog::journal`]) and on [`Session::close_library`].
 
 use std::path::{Path, PathBuf};
 
-use lightcraft_catalog::{FsStore, Journal, LibraryLock, LoadReport, Store};
-use lightcraft_develop::Preset;
+use lcc_catalog::{FsStore, Journal, LibraryLock, LoadReport, Store};
+use lcc_develop::Preset;
 use serde::{Deserialize, Serialize};
 
 use crate::{EngineError, LibrarySource, Result, Selection, Session};
 
-/// Library directory name inside the user's Pictures folder.
-pub const DEFAULT_NAME: &str = "LightCraft Library";
+/// The catalog migration (v3 → v4) running in this process, if any: what frontends show while
+/// [`migrate_library`] runs on a worker thread.
+pub fn migration_progress() -> Option<lcc_catalog::progress::MigrationProgress> {
+    lcc_catalog::progress::migration()
+}
+
+/// Whether opening the library in `dir` first upgrades its catalog (a one-time step that takes
+/// tens of seconds for a library of hundreds of thousands of photos).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn needs_migration(dir: &Path) -> bool {
+    lcc_catalog::library::needs_migration(dir)
+}
+
+/// Upgrade the catalog of the library in `dir` without opening it in a session, so a frontend
+/// can run it on a worker thread and show [`migration_progress`]; [`Session::open_library`] is
+/// then a plain open. The library is locked meanwhile (another process using it: `LibraryInUse`).
+/// `Ok(true)` when it was upgraded.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn migrate_library(dir: &Path) -> Result<bool> {
+    let _lock = LibraryLock::acquire(dir, &program_name()).map_err(|e| EngineError::LibraryInUse(e.to_string()))?;
+    Ok(lcc_catalog::library::migrate(dir)?)
+}
 
 /// The library folder `path` names. A library is a folder; naming one of its own files
 /// (`catalog.snap`, `catalog.log`, `catalog.lock`) means the folder that holds it. Any other
@@ -43,7 +63,7 @@ pub fn resolve_dir(path: &Path) -> Result<PathBuf> {
     let own = path
         .file_name()
         .and_then(|n| n.to_str())
-        .is_some_and(|n| [lightcraft_catalog::journal::SNAPSHOT, lightcraft_catalog::journal::LOG, lightcraft_catalog::lock::LOCK].contains(&n));
+        .is_some_and(|n| [lcc_catalog::journal::SNAPSHOT, lcc_catalog::journal::LOG, lcc_catalog::lock::LOCK].contains(&n));
     if !own {
         return Err(EngineError::Other(format!("{} is a file; a library is a folder", path.display())));
     }
@@ -55,17 +75,31 @@ pub fn resolve_dir(path: &Path) -> Result<PathBuf> {
 
 /// Whether `dir` already holds a library (its catalog files).
 pub fn is_library(dir: &Path) -> bool {
-    dir.join(lightcraft_catalog::journal::SNAPSHOT).is_file() || dir.join(lightcraft_catalog::journal::LOG).is_file()
+    dir.join(lcc_catalog::journal::SNAPSHOT).is_file() || dir.join(lcc_catalog::journal::LOG).is_file()
 }
 
-/// The default library location: `$LIGHTCRAFT_LIBRARY` if set, else `~/Pictures/LightCraft Library`
-/// (`%USERPROFILE%\Pictures\LightCraft Library` on Windows).
+/// Library directory name inside the user's Pictures folder.
+pub const DEFAULT_NAME: &str = lcc_brand::LIBRARY_DEFAULT;
+
+/// The default library location: `{ENV_PREFIX}_LIBRARY` if set, else `~/Pictures/<`[`DEFAULT_NAME`]`>`
+/// (`%USERPROFILE%\Pictures\…` on Windows). When that folder doesn't exist but a library under a
+/// previous default name does ([`lcc_brand::library_default_names`]), that one is used, so an
+/// existing library keeps opening after a rename.
 pub fn default_dir() -> Option<PathBuf> {
-    if let Some(p) = std::env::var_os("LIGHTCRAFT_LIBRARY").filter(|p| !p.is_empty()) {
+    if let Some(p) = lcc_brand::env_os("LIBRARY").filter(|p| !p.is_empty()) {
         return Some(PathBuf::from(p));
     }
     let home = if cfg!(windows) { std::env::var_os("USERPROFILE") } else { std::env::var_os("HOME") }?;
-    Some(PathBuf::from(home).join("Pictures").join(DEFAULT_NAME))
+    Some(default_in(&PathBuf::from(home).join("Pictures")))
+}
+
+/// The default library folder inside `pictures`: the current name, unless only a previous one exists.
+pub fn default_in(pictures: &Path) -> PathBuf {
+    let current = pictures.join(DEFAULT_NAME);
+    if current.exists() {
+        return current;
+    }
+    lcc_brand::library_default_names().into_iter().skip(1).map(|n| pictures.join(n)).find(|p| p.is_dir()).unwrap_or(current)
 }
 
 pub struct Library {
@@ -87,7 +121,7 @@ pub struct Library {
     /// When the frame loop may retry a failed append ([`Session::persist_if_dirty`] backs off).
     retry_at: Option<web_time::Instant>,
     /// What forgetting untouched Local records did when the library opened.
-    pub forgot_local: Option<lightcraft_catalog::ForgetPlan>,
+    pub forgot_local: Option<lcc_catalog::ForgetPlan>,
     /// What presets.json holds (see [`PresetsSaved`]).
     presets_saved: PresetsSaved,
     view_written: Vec<u8>,
@@ -180,8 +214,11 @@ struct ViewFile {
     library_folder: Option<String>,
     // No filter: a library opens unfiltered. A date, keyword or person left over from the last session
     // would silently hide photos, with only a small badge to say so.
-    sort: lightcraft_catalog::Sort,
+    sort: lcc_catalog::Sort,
     selection: Selection,
+    /// The photos of the last export (the Previous Export source).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    previous_export: Vec<lcc_catalog::PhotoId>,
 }
 
 impl Library {
@@ -200,6 +237,35 @@ impl Library {
     }
 }
 
+/// The library in `dir`'s stable id (its catalog settings' `libraryId`), made and saved the first
+/// time. When it can't be saved, an id derived from the folder stands in (stable while that lasts).
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn library_id(dir: &Path) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut cs = lcc_catalog::library::CatalogSettings::load(dir);
+    if let Some(id) = cs.library_id.as_ref().filter(|s| !s.is_empty()) {
+        return id.clone();
+    }
+    let hash = |fresh: bool| {
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        dir.hash(&mut h);
+        if fresh {
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or_default().hash(&mut h);
+            std::process::id().hash(&mut h);
+        }
+        format!("{:016x}", h.finish())
+    };
+    let id = hash(true);
+    cs.library_id = Some(id.clone());
+    match cs.save(dir) {
+        Ok(()) => id,
+        Err(e) => {
+            log::warn!("library id: {e}");
+            format!("path-{}", hash(false))
+        }
+    }
+}
+
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 struct PrefsFile {
@@ -207,6 +273,8 @@ struct PrefsFile {
     /// Parameters of the last export (for Export with Previous).
     #[serde(alias = "last_export")]
     last_export: Option<serde_json::Value>,
+    /// Options of the last Photo Merge, per command.
+    last_merge: std::collections::BTreeMap<String, serde_json::Value>,
     /// The user's export presets.
     export_presets: Vec<crate::export::ExportPreset>,
     /// Print templates.
@@ -217,6 +285,8 @@ struct PrefsFile {
     filter_presets: Vec<crate::cmd::filters::FilterPreset>,
     /// Point-curve presets.
     curve_presets: Vec<crate::cmd::curves::CurvePreset>,
+    /// The crop tool's saved and hidden aspect ratios.
+    crop_aspects: crate::cmd::crop_aspects::CropAspects,
     /// Mask effect presets.
     mask_effects: Vec<crate::cmd::mask_effects::MaskEffect>,
     /// The effect new masks of each kind start with.
@@ -229,6 +299,7 @@ struct PrefsFile {
     keyword_sets: Vec<crate::cmd::keywords::KeywordSet>,
     keyword_set: Option<String>,
     recent_keywords: Vec<String>,
+    keyword_shortcut: Option<String>,
     /// Develop defaults for imported photos.
     import: crate::import::ImportDefaults,
     /// Thumbnail disk cache budget (MB, 0 = default).
@@ -238,6 +309,8 @@ struct PrefsFile {
     /// Days after which untouched Local records of unbrowsed folders are forgotten (missing =
     /// the default, 0 = never).
     forget_local_days: Option<u32>,
+    /// Preview store settings (standard size, 1:1 discard, previews built at import).
+    previews: crate::cmd::previews::PreviewPrefs,
     /// Slideshow playback settings.
     slideshow: crate::slideshow::PlaybackSettings,
     /// Slideshow slide layout (margins, options, backdrop).
@@ -283,11 +356,12 @@ fn same_dir(a: &Path, b: &Path) -> bool {
     }
 }
 
-/// This program, for the lock owner note ("LightCraft", "lightcraft-cli").
+/// This program, for the lock owner note (the app's display name, or the executable's name).
 fn program_name() -> String {
     let exe = std::env::current_exe().ok().and_then(|p| p.file_stem().map(|s| s.to_string_lossy().to_string()));
     match exe.as_deref() {
-        Some("lightcraft") | None => "LightCraft".into(),
+        None => lcc_brand::DISPLAY_NAME.into(),
+        Some(n) if n == lcc_brand::BINARY || n == crate::legacy::BINARY => lcc_brand::DISPLAY_NAME.into(),
         Some(other) => other.to_string(),
     }
 }
@@ -312,7 +386,7 @@ impl SettingsLoad {
                 log::error!("library: {name}: {e}");
                 self.blocked.push(name);
                 self.warnings.push(format!(
-                    "{name} couldn't be read ({e}). LightCraft uses the defaults for now and won't overwrite the file; reopen the library to try again."
+                    "{name} couldn't be read ({e}). the app uses the defaults for now and won't overwrite the file; reopen the library to try again."
                 ));
                 return None;
             }
@@ -329,7 +403,7 @@ impl SettingsLoad {
             Err(w) => {
                 self.blocked.push(name);
                 self.warnings.push(format!(
-                    "{name} is damaged ({err}) and couldn't be set aside ({w}). LightCraft uses the defaults and won't overwrite the file."
+                    "{name} is damaged ({err}) and couldn't be set aside ({w}). the app uses the defaults and won't overwrite the file."
                 ));
             }
         }
@@ -399,13 +473,13 @@ impl Session {
     /// Open (or create) the library at `dir` into this session, replacing its catalog. With
     /// `seed_demo`, a newly created library starts with the procedural demo photos.
     ///
-    /// The library is locked for this session ([`lightcraft_catalog::lock`]): if another process
+    /// The library is locked for this session ([`lcc_catalog::lock`]): if another process
     /// has it open, this fails with [`EngineError::LibraryInUse`] and nothing is read or changed.
     /// Reopening the library this session already has open keeps its lock.
     ///
     /// A Lightroom Classic catalog folder, one of its `.lrdata` / `.lrcat-data` folders or an
     /// `.lrcat` file is refused with [`EngineError::LightroomCatalog`] before anything is
-    /// created ([`crate::lightroom_folder`]); a LightCraft library always opens, whatever else
+    /// created ([`crate::lightroom_folder`]); a library of the app always opens, whatever else
     /// its folder holds.
     pub fn open_library(&mut self, dir: impl AsRef<Path>, seed_demo: bool) -> Result<&LoadReport> {
         let dir = dir.as_ref().to_path_buf();
@@ -481,22 +555,33 @@ impl Session {
         self.interaction = None;
         self.pending_log.clear();
         self.selection = Selection::default();
+        self.previous_export.clear();
         self.source = LibrarySource::All;
         self.library_folder = None;
         if report.created && seed_demo {
             crate::demo::load(self);
             journal.snapshot(&self.catalog)?;
         }
+        // G19: the plug-in metadata field index (in memory only) from the plug-ins' own data, this
+        // library's (plug-in data is kept per library: photo ids are per library)
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let id = if on_disk { library_id(&dir) } else { String::new() };
+            self.plugin_library = id;
+            crate::cmd::plugins::sync_fields_with(self, false);
+        }
         let mut settings = SettingsLoad::default();
         // preferences
         let prefs = settings.read::<PrefsFile>(files.as_mut(), "prefs.json").unwrap_or_default();
         self.xmp = prefs.xmp;
         self.last_export = prefs.last_export;
+        self.last_merge = prefs.last_merge;
         self.export_presets = prefs.export_presets;
         self.print_templates = prefs.print_templates;
         self.metadata_presets = prefs.metadata_presets;
         self.filter_presets = prefs.filter_presets;
         self.curve_presets = prefs.curve_presets;
+        self.crop_aspects = prefs.crop_aspects.sanitized();
         self.mask_effects = prefs.mask_effects;
         self.mask_tool_effects = prefs.mask_tool_effects;
         self.label_sets = prefs.label_sets;
@@ -505,13 +590,24 @@ impl Session {
         self.keyword_sets = prefs.keyword_sets;
         self.keyword_set = prefs.keyword_set;
         self.recent_keywords = prefs.recent_keywords;
+        self.keyword_shortcut = prefs.keyword_shortcut;
         self.import_defaults = prefs.import;
         self.cache_mb = prefs.cache_mb;
+        self.preview_prefs = prefs.previews;
+        #[cfg(not(target_arch = "wasm32"))]
+        if on_disk {
+            // the catalog's own settings hold them (catalog-settings.json); prefs.json only for
+            // libraries written before they moved, migrated on the next save
+            let cs = lcc_catalog::library::CatalogSettings::load(&dir);
+            if let Some(v) = cs.previews.and_then(|v| serde_json::from_value(v).ok()) {
+                self.preview_prefs = v;
+            }
+        }
         self.slideshow = prefs.slideshow.sanitized();
         self.slide_layout = prefs.slide_layout.sanitized();
         self.slide_overlays = prefs.slide_overlays.sanitized();
         self.slide_titles = prefs.slide_titles.sanitized();
-        self.forget_local_days = prefs.forget_local_days.unwrap_or(lightcraft_catalog::DEFAULT_FORGET_DAYS);
+        self.forget_local_days = prefs.forget_local_days.unwrap_or(lcc_catalog::DEFAULT_FORGET_DAYS);
         self.hold_view = prefs.hold_view;
         self.refresh_view();
         self.smart_previews_dir = prefs.smart_previews_dir.filter(|_| on_disk).map(PathBuf::from);
@@ -540,14 +636,15 @@ impl Session {
             self.library_folder = v.library_folder.filter(|f| !f.trim().is_empty());
             if self.source == LibrarySource::LibraryFolder {
                 // a folder that is gone (or none): everything, not an empty grid
-                let f = lightcraft_catalog::Filter { library_folder: self.library_folder.clone(), ..Default::default() };
-                let any = self.library_folder.is_some() && !self.catalog.query(&f, &lightcraft_catalog::Sort::default()).is_empty();
+                let f = lcc_catalog::Filter { library_folder: self.library_folder.clone(), ..Default::default() };
+                let any = self.library_folder.is_some() && !self.catalog.query(&f, &lcc_catalog::Sort::default()).is_empty();
                 if !any {
                     self.source = LibrarySource::All;
                     self.library_folder = None;
                 }
             }
             self.sort = v.sort;
+            self.previous_export = v.previous_export.into_iter().filter(|id| self.catalog.photo(*id).is_some()).collect();
             self.selection = v.selection;
             self.selection.ids.retain(|id| self.catalog.photo(*id).is_some());
             self.selection.active = self.selection.active.filter(|id| self.catalog.photo(*id).is_some());
@@ -720,6 +817,7 @@ impl Session {
             library_folder: self.library_folder.clone().filter(|_| self.source == LibrarySource::LibraryFolder),
             sort: self.sort,
             selection: self.selection.clone(),
+            previous_export: self.previous_export.clone(),
         };
         serde_json::to_vec_pretty(&view).unwrap_or_default()
     }
@@ -746,11 +844,13 @@ impl Session {
         let v = serde_json::to_vec_pretty(&PrefsFile {
             xmp: self.xmp,
             last_export: self.last_export.clone(),
+            last_merge: self.last_merge.clone(),
             export_presets: self.export_presets.clone(),
             print_templates: self.print_templates.clone(),
             metadata_presets: self.metadata_presets.clone(),
             filter_presets: self.filter_presets.clone(),
             curve_presets: self.curve_presets.clone(),
+            crop_aspects: self.crop_aspects.clone(),
             mask_effects: self.mask_effects.clone(),
             mask_tool_effects: self.mask_tool_effects.clone(),
             label_sets: self.label_sets.clone(),
@@ -758,10 +858,13 @@ impl Session {
             keyword_sets: self.keyword_sets.clone(),
             keyword_set: self.keyword_set.clone(),
             recent_keywords: self.recent_keywords.clone(),
+            keyword_shortcut: self.keyword_shortcut.clone(),
             import: self.import_defaults.clone(),
             cache_mb: self.cache_mb,
             smart_previews_dir: self.smart_previews_dir.as_ref().map(|d| d.to_string_lossy().to_string()),
             forget_local_days: Some(self.forget_local_days),
+            // on disk they live in the catalog's settings (below)
+            previews: if self.library.as_ref().is_some_and(|l| l.on_disk) { Default::default() } else { self.preview_prefs },
             slideshow: self.slideshow.clone(),
             slide_layout: self.slide_layout.clone(),
             slide_overlays: self.slide_overlays.clone(),
@@ -770,6 +873,15 @@ impl Session {
         })
         .unwrap_or_default();
         let Some(lib) = self.library.as_mut() else { return Ok(()) };
+        #[cfg(not(target_arch = "wasm32"))]
+        if lib.on_disk {
+            let mut cs = lcc_catalog::library::CatalogSettings::load(&lib.dir);
+            let v = serde_json::to_value(self.preview_prefs).ok();
+            if cs.previews != v {
+                cs.previews = v;
+                cs.save(&lib.dir).map_err(|e| EngineError::Other(format!("catalog settings: {e}")))?;
+            }
+        }
         if lib.blocked.contains(&"prefs.json") {
             return Err(EngineError::Other(
                 "prefs: prefs.json couldn't be read when the library opened, so it isn't overwritten; reopen the library to save preferences".into(),
@@ -835,13 +947,76 @@ impl Session {
     }
 }
 
+/// Catalog-level operations (native: a catalog is a folder with a v4 store).
+#[cfg(not(target_arch = "wasm32"))]
+impl Session {
+    /// The open catalog's folder, when it is one on disk with a v4 store (backup, integrity
+    /// test, optimise, catalog settings need it).
+    pub fn catalog_dir(&self) -> Option<&Path> {
+        self.library.as_ref().filter(|l| l.on_disk && l.journal.has_db()).map(|l| l.dir.as_path())
+    }
+
+    /// Run `f` on the open catalog's journal and catalog, after the queued ops are written (so a
+    /// checkpoint holds them).
+    fn with_catalog_journal<T>(&mut self, f: impl FnOnce(&mut Journal, &lcc_catalog::Catalog) -> lcc_catalog::Result<T>) -> Result<T> {
+        if self.interaction.is_some() {
+            return Err(EngineError::Other("finish the edit in progress first".into()));
+        }
+        self.persist()?;
+        let lib = self.library.as_mut().filter(|l| l.on_disk && l.journal.has_db());
+        let lib = lib.ok_or_else(|| EngineError::Other("no catalog on disk is open (an in-memory or browser library has no backups)".into()))?;
+        Ok(f(&mut lib.journal, &self.catalog)?)
+    }
+
+    /// The open catalog's settings (`catalog-settings.json`); the defaults when none is on disk.
+    pub fn catalog_settings(&self) -> lcc_catalog::library::CatalogSettings {
+        self.catalog_dir().map(lcc_catalog::library::CatalogSettings::load).unwrap_or_default()
+    }
+
+    /// Save the open catalog's settings.
+    pub fn set_catalog_settings(&mut self, settings: &lcc_catalog::library::CatalogSettings) -> Result<()> {
+        let dir = self.catalog_dir().ok_or_else(|| EngineError::Other("no catalog on disk is open".into()))?.to_path_buf();
+        settings.save(&dir)?;
+        Ok(())
+    }
+
+    /// Back up the catalog into `root` (default: the catalog settings' backup folder). Returns
+    /// the backup's folder.
+    pub fn backup_catalog(&mut self, root: Option<&Path>) -> Result<PathBuf> {
+        let settings = self.catalog_settings();
+        let dir = self.catalog_dir().map(Path::to_path_buf).unwrap_or_default();
+        let root = root.map(Path::to_path_buf).unwrap_or_else(|| settings.backup_root(&dir));
+        self.with_catalog_journal(|j, c| j.backup(c, &root, settings.keep_backups))
+    }
+
+    /// Test the catalog's integrity (a checkpoint first).
+    pub fn check_catalog_integrity(&mut self) -> Result<lcc_catalog::library::IntegrityReport> {
+        self.with_catalog_journal(|j, c| j.check_integrity(c))
+    }
+
+    /// Optimise the catalog: its store rewritten, indexes rebuilt, compacted.
+    pub fn optimize_catalog(&mut self) -> Result<lcc_catalog::library::OptimizeReport> {
+        self.with_catalog_journal(|j, c| j.optimize(c))
+    }
+
+    /// The exit-time backup: when the catalog's schedule says one is due (with the integrity
+    /// test and optimise when set). `Ok(None)`: not due, or no catalog on disk.
+    pub fn backup_catalog_if_due(&mut self) -> Result<Option<PathBuf>> {
+        if self.catalog_dir().is_none() || !self.catalog_settings().backup_due(lcc_catalog::library::now_secs()) {
+            return Ok(None);
+        }
+        let _ = self.end_interaction();
+        self.with_catalog_journal(|j, c| j.backup_if_due(c))
+    }
+}
+
 /// The warning for a library opened without its one-program-at-a-time lock (issue #171): its
 /// file system can't lock `catalog.lock` (some network shares). It opens anyway, as documented —
 /// refusing would lock the user out — but the user must learn that a second program could open it.
 fn unlocked_warning(lock: Option<&LibraryLock>) -> Option<String> {
     lock.filter(|l| !l.held()).map(|_| {
         "This library could not be locked (its catalog.lock file can't be locked where it is stored, e.g. on some network \
-         shares), so it is open without protection against a second program: use it in one LightCraft app or command at \
+         shares), so it is open without protection against a second program: use it in one app or command at \
          a time, or changes made in one of them can be lost."
             .to_string()
     })
@@ -863,7 +1038,7 @@ mod resolve_tests {
         s.close_library().unwrap();
         drop(s);
         assert!(is_library(&dir));
-        let snap = dir.join(lightcraft_catalog::journal::SNAPSHOT);
+        let snap = dir.join(lcc_catalog::journal::SNAPSHOT);
         assert_eq!(resolve_dir(&snap).unwrap(), dir);
         let mut s = Session::new().with_fs();
         s.open_library(&snap, false).unwrap();

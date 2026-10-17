@@ -7,7 +7,7 @@ use serde_json::json;
 use crate::headless::{Headless, RenderGate};
 use crate::render::Slot;
 use crate::state::{BeforeAfter, ViewMode, Zoom};
-use crate::{LightcraftApp, Services};
+use crate::{LccApp, Services};
 
 const T: Duration = Duration::from_secs(20);
 const SETTLE: Duration = Duration::from_secs(120);
@@ -25,7 +25,7 @@ fn click_at(h: &mut Headless, pos: egui::Pos2) {
 /// view used to be mapped through the After view's rectangle, so they sampled the photo's edge.
 #[test]
 fn wb_selector_picks_the_same_point_in_the_before_view() {
-    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let app = LccApp::new(lcc_engine::Session::with_demo(), Services { png: None, ..Default::default() });
     let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
     let id = h.app.session.visible_cloned()[2];
     h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [id.0], "active": id.0}}), T);
@@ -77,7 +77,7 @@ fn wb_selector_picks_the_same_point_in_the_before_view() {
 /// the photo's edge (#1742).
 #[test]
 fn a_click_in_the_before_view_zooms_in_on_the_point_clicked() {
-    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let app = LccApp::new(lcc_engine::Session::with_demo(), Services { png: None, ..Default::default() });
     let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
     let r = h.request("ui.set", json!({"view": "detail", "right": "none", "filmstrip": false}), T);
     assert_eq!(r["ok"], true, "{r}");
@@ -136,7 +136,7 @@ fn assert_rect(actual: egui::Rect, expected: egui::Rect) {
 /// Start with both textures ready, then hold replacement renders so worker timing cannot hide
 /// a frame of the transition or replace a cached tile under the assertions.
 fn animation_view(mode: BeforeAfter, zoom: Zoom) -> (Headless, [egui::Rect; 2], std::rc::Rc<std::cell::Cell<bool>>) {
-    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let app = LccApp::new(lcc_engine::Session::with_demo(), Services { png: None, ..Default::default() });
     let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
     let r = h.request("ui.set", json!({"view": "detail", "right": "none", "filmstrip": false}), T);
     assert_eq!(r["ok"], true, "{r}");
@@ -233,61 +233,6 @@ fn both_before_after_panes_use_the_animated_rect_top_bottom() {
     check_click_animation(BeforeAfter::TopBottom);
 }
 
-fn check_region_animation(mode: BeforeAfter) {
-    let (mut h, [before, after], open) = animation_view(mode, Zoom::Percent(200.0));
-    let shift = before.center() - after.center();
-    let start = h.app.image_rect.expect("200 percent image");
-    let tiles = [(Slot::RegionBefore, before, true), (Slot::Region, after, false)].map(|(slot, pane, is_before)| {
-        let tex = &h.app.renderer.textures[&slot];
-        let tile = h.app.region_tiles[&(is_before, tex.key)];
-        pane_mesh(&h, slot, pane);
-        (slot, pane, tile, tex.key)
-    });
-    h.app.ui.zoom = Zoom::Percent(400.0);
-    h.app.ui.zoom_anim = true;
-    let mut intermediate = 0;
-    let mut keys = std::collections::HashSet::new();
-    for _ in 0..40 {
-        h.step();
-        keys.insert((h.app.renderer.wanted(Slot::RegionBefore), h.app.renderer.wanted(Slot::Region)));
-        let img = h.app.image_rect.expect("animated image");
-        if img.width() > start.width() + 1.0 && img.width() < start.width() * 2.0 - 1.0 {
-            intermediate += 1;
-        }
-        if img.width() <= start.width() + 1.0 {
-            continue;
-        }
-        for (slot, pane, tile, key) in tiles {
-            assert_eq!(h.app.renderer.textures[&slot].key, key, "the cached tile stays on screen while renders wait");
-            let full = if tile.before { img.translate(shift) } else { img };
-            let (fw, fh) = (tile.full.0 as f32, tile.full.1 as f32);
-            let w = tile.window;
-            let expected = egui::Rect::from_min_size(
-                full.min + egui::vec2(w.x as f32 / fw * full.width(), w.y as f32 / fh * full.height()),
-                egui::vec2(w.w as f32 / fw * full.width(), w.h as f32 / fh * full.height()),
-            );
-            assert_rect(pane_mesh(&h, slot, pane), expected);
-        }
-    }
-    assert!(intermediate > 0, "{mode:?}: inspected intermediate region frames");
-    assert!(!h.app.ui.zoom_anim);
-    assert!((h.app.image_rect.expect("settled image").width() - start.width() * 2.0).abs() < 1.0);
-    assert_eq!(keys.len(), 1, "region requests use the final target throughout the animation: {keys:?}");
-    open.set(true);
-    assert!(h.settle(SETTLE));
-}
-
-#[test]
-fn before_after_region_tiles_use_the_animated_rect_side_by_side() {
-    check_region_animation(BeforeAfter::SideBySide);
-}
-
-#[test]
-fn before_after_region_tiles_use_the_animated_rect_top_bottom() {
-    check_region_animation(BeforeAfter::TopBottom);
-}
-
-/// Mean (r, g, b) of the 41 × 41 screen pixels around `at`.
 fn mean_around(shot: &egui::ColorImage, at: egui::Pos2) -> [f32; 3] {
     let mut sum = [0.0f32; 3];
     let mut n = 0.0;
@@ -308,7 +253,7 @@ fn mean_around(shot: &egui::ColorImage, at: egui::Pos2) -> [f32; 3] {
 /// screen: the whole view was the Before, the original photo (#1351).
 #[test]
 fn zoomed_in_the_after_side_shows_the_edits() {
-    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let app = LccApp::new(lcc_engine::Session::with_demo(), Services { png: None, ..Default::default() });
     let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
     let r = h.request("ui.set", json!({"view": "detail", "right": "none", "filmstrip": false}), T);
     assert_eq!(r["ok"], true, "{r}");
@@ -361,7 +306,7 @@ fn show_original_does_not_light_the_before_after_button() {
     for mode in [BeforeAfter::SideBySide, BeforeAfter::Split, BeforeAfter::TopBottom, BeforeAfter::SplitTopBottom] {
         assert!(mode.is_layout(), "{mode:?}");
     }
-    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let app = LccApp::new(lcc_engine::Session::with_demo(), Services { png: None, ..Default::default() });
     let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
     let id = h.app.session.visible_cloned()[2];
     h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [id.0], "active": id.0}}), T);

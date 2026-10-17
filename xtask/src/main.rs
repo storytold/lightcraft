@@ -5,11 +5,20 @@
 
 mod assets;
 mod bench;
+mod brand;
 mod ci_report;
+mod dist;
+mod docs;
 mod ico;
+mod immich;
 mod layers;
+mod notes;
 mod parity;
+mod quarantine;
+mod rename;
+mod shortcuts;
 mod stats;
+mod upstream;
 mod version;
 mod web;
 
@@ -21,26 +30,70 @@ usage: cargo xtask <command>
 
 commands:
   assets          every image/icon/font/media file is attributed in assets/ATTRIBUTION.md; no Adobe assets
+  brand check|test|vars
+                  check: no product name (brand.toml's display_name/binary/env_prefix, or a legacy
+                  name) in any source file outside the allowlist (xtask/src/brand.rs);
+                  test: build the CLI with xtask/test-brand.toml and check help, UI snapshot,
+                  MCP serverInfo and config/log paths show only that brand; vars: list template keys
   bench [FILE] [--strict] [--threshold PCT]
                   run the render benchmark, append to target/bench/history.jsonl, compare CPU time with
                   the previous run (default input: corpus/raw/arw-sony-a7m3-compressed.arw)
+  sil [workflow|raw|monkey] [--seed N] [--steps N]
+                  software-in-the-loop: drive the real app headless through user workflows and a seeded
+                  monkey, checking invariants (docs/testing-sil.md)
+  bench-catalog [--photos N,N…] [--backend v3|v4] [--dir DIR]
+                  catalog scale benchmark: import throughput, snapshot time, then (in a fresh process)
+                  open time, peak RSS and filter latency (default 250000,1000000 photos, backend v4)
+  notes --check | --upstream | --release <version> [--dry-run]
+                  release notes, one file per change: --check (in ci) checks docs/whats-new/ and
+                  docs/changelog/unreleased/ entries and that docs/whats-new.md is upstream's as last recorded;
+                  --upstream records it after an upstream merge; --release gathers the changelog entries into
+                  docs/changelog/<version>.md and deletes them
+  deny            cargo deny check licenses (deny.toml), skipped with a message if cargo-deny is missing
+  shortcuts       regenerate docs/manual/keyboard-shortcuts.md from the command registry (builds lcc-cli)
+  docs [--check]  render README.md.in and docs/**/*.md.in ({{app}}, {{binary}}, … from brand.toml) into
+                  the .md next to each; --check fails when one is out of date
+  install [--prefix DIR] [--skip-build]
+                  release build, installed as brand.binary / brand.cli_binary into DIR/bin (default
+                  ~/.local), with man page, shell completions and (Linux) desktop entry and icons
+  package [--skip-build] [--render-only]
+                  release build + rendered packaging/**/*.in templates, branded binaries, man page and
+                  completions into target/package/ (installers: packaging/<os>/package.*)
+  rename-crates <prefix> [--from OLD] | --upstream [--since REV]
+                  change the internal crate prefix (lcc-*) everywhere; --upstream rewrites incoming
+                  upstream crate paths (UPSTREAM_PREFIX-*) in files changed since REV (fork-base)
+  run [--release] [ARGS…]
+                  build and run the app under its brand.binary name (target/<profile>/branded/)
+  immich up | down [--volumes] | seed
+                  pinned local Immich test server (xtask/immich/compose.yml) on 127.0.0.1:2284; seed creates an admin, an API key (target/immich/api-key) and a fixture album
   ico <out.ico> <in.png>...
                   pack square PNGs (<= 256 px) into a Windows .ico (see packaging/icons.sh)
   layers          enforce the crate dependency layering (plan/architecture.md §3)
   parity [--write]
                   check docs/parity-checklist.md (every cmd:/ctl: id and path it cites exists) and print the
                   Lightroom parity summary; --write refreshes the summary table in the document
+  quarantine check|filter|test [--platform linux|macos|windows]
+                  known-flaky tests (ci/quarantine.toml): validate, print the nextest filter, run the CI tests
   wasm            cargo check --target wasm32-unknown-unknown for the wasm-safe crates (+ the web app)
   web [--serve [port]] [--dev]
-                  build the browser app (apps/lightcraft-web) into <target>/web-site/;
+                  build the browser app (apps/web) into <target>/web-site/;
                   --serve serves it on http://127.0.0.1:<port> (default 8080)
-  ci [--hardware] [--summary-md]
-                  fmt --check, clippy -D warnings, heif, test, GPU probe, parity refs, layers, assets, wasm
-                  (stops at first failure); writes target/ci/report.json (machine, GPU adapters, data,
-                  steps, skipped tests) and target/ci/summary.md; --hardware also runs the GPU tests on
-                  every backend with a hardware adapter; --summary-md prints the Markdown summary
+  ci [--fast] [--hardware] [--summary-md]
+                  fmt --check, brand check, docs --check, notes --check, clippy -D warnings, heif, test, GPU probe, parity refs,
+                  layers, assets, deny, wasm (stops at first failure); writes target/ci/report.json (machine, GPU
+                  adapters, data, steps, skipped tests) and target/ci/summary.md; --fast (the PR gate) skips the
+                  test runs, which run in full before a release (docs/ci.md); --hardware also runs the GPU tests
+                  on every backend with a hardware adapter; --summary-md prints the Markdown summary
   corpus [--download]
-                  show where test corpora live; --download fetches PngSuite and CC0 raw samples (raw.pixls.us) into corpus/ and checks their sha256
+                  show where test corpora live; --download fetches PngSuite, CC0 raw samples (raw.pixls.us) and public-domain / CC-BY video clips into corpus/ and checks their sha256
+  upstream-merge [--ref REF] [--no-ci]
+                  merge upstream (default upstream/main) on merge/upstream-YYYYMMDD, keep our version of owned
+                  paths (upstream-owned.txt), write target/upstream/review-YYYYMMDD.md, map crate names, run ci
+  upstream-pr <branch> <commit>...
+                  replay commits onto a new branch off upstream/main with upstream crate names (never pushes)
+  shared-check [--strict]
+                  commits since the last upstream merge that change shared paths without `UPSTREAM-PR:`
+                  (warns; --strict fails)
   stats [--exact] count tests and lines per crate (--exact: ask the test harness via `-- --list`)
   raw-frame [--json] FILE…
                   measure where each raw's embedded camera JPEG sits in its sensor data, which edge bands hold no
@@ -53,17 +106,33 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
     let result = match args.first().map(String::as_str) {
+        Some("brand") => brand::run(&root(), &rest),
+        Some("docs") => docs::run(&root(), rest.contains(&"--check")),
+        Some("notes") => notes::run(&root(), &rest),
+        Some("deny") => cmd_deny(),
+        Some("run") => dist::cmd_run(&root(), &rest),
+        Some("install") => dist::cmd_install(&root(), &rest),
+        Some("package") => dist::cmd_package(&root(), &rest),
+        Some("rename-crates") => rename::run(&root(), &rest),
+        Some("immich") => immich::run(&root(), &rest),
         Some("ico") => ico::run(&rest),
         Some("version") => version::run(&root(), &rest),
         Some("layers") => cmd_layers(),
         Some("assets") => assets::run(&root()),
         Some("bench") => bench::run(&root(), &rest),
+        Some("sil") => cmd_sil(&rest),
+        Some("bench-catalog") => cmd_bench_catalog(&rest),
         Some("parity") => parity::run(&root(), rest.contains(&"--write")),
         Some("wasm") => cmd_wasm(),
         Some("web") => web::run(&rest),
-        Some("ci") => cmd_ci(&rest),
+        Some("ci") => cmd_ci_cli(&rest),
+        Some("quarantine") => quarantine::run(&root(), &rest),
         Some("corpus") => cmd_corpus(rest.contains(&"--download")),
+        Some("upstream-merge") => upstream::merge(&root(), &rest),
+        Some("upstream-pr") => upstream::pr(&root(), &rest),
+        Some("shared-check") => upstream::shared_check(&root(), &rest, false),
         Some("stats") => stats::run(&root(), rest.contains(&"--exact")),
+        Some("shortcuts") => shortcuts::run(&root()),
         Some("raw-frame") => cmd_raw_frame(&rest),
         Some("-h" | "--help" | "help") | None => {
             print!("{USAGE}");
@@ -80,14 +149,14 @@ fn main() -> ExitCode {
     }
 }
 
-/// `cargo xtask raw-frame FILE…`: runs the `raw_frame` example of `lightcraft-engine` on the files.
+/// `cargo xtask raw-frame FILE…`: runs the `raw_frame` example of `lcc-engine` on the files.
 fn cmd_raw_frame(files: &[&str]) -> Result<(), String> {
     if files.is_empty() {
         return Err("raw-frame needs one or more raw files (several per camera, with detail across the frame)".into());
     }
-    eprintln!("$ cargo run --release -p lightcraft-engine --example raw_frame -- {}", files.join(" "));
+    eprintln!("$ cargo run --release -p lcc-engine --example raw_frame -- {}", files.join(" "));
     let status = cargo()
-        .args(["run", "--release", "-q", "-p", "lightcraft-engine", "--example", "raw_frame", "--"])
+        .args(["run", "--release", "-q", "-p", "lcc-engine", "--example", "raw_frame", "--"])
         .args(files)
         .status()
         .map_err(|e| format!("raw_frame: {e}"))?;
@@ -109,7 +178,7 @@ pub fn cargo() -> Command {
     // Full Windows debuginfo plus one linker per CPU can exhaust RAM before any
     // tests run. Scope these overridable defaults to CI, including parity/WASM
     // subprocesses, without changing ordinary developer builds or GPU coverage.
-    if std::env::args().nth(1).as_deref() == Some("ci") {
+    if matches!(std::env::args().nth(1).as_deref(), Some("ci" | "quarantine")) {
         static JOBS: std::sync::OnceLock<(String, String)> = std::sync::OnceLock::new();
         let (build, threads) = JOBS.get_or_init(|| {
             let ram_mb = available_ram_mb().or_else(|| total_ram_gb().map(|gb| gb.saturating_mul(1024) / 2));
@@ -118,9 +187,12 @@ pub fn cargo() -> Command {
             // wall-clock frame-budget tests flaky on a loaded machine.
             (jobs.to_string(), jobs.min(4).to_string())
         });
-        for (key, value) in
-            [("CARGO_PROFILE_DEV_DEBUG", "line-tables-only"), ("CARGO_BUILD_JOBS", build.as_str()), ("RUST_TEST_THREADS", threads.as_str())]
-        {
+        for (key, value) in [
+            ("CARGO_PROFILE_DEV_DEBUG", "line-tables-only"),
+            ("CARGO_BUILD_JOBS", build.as_str()),
+            ("RUST_TEST_THREADS", threads.as_str()),
+            ("NEXTEST_TEST_THREADS", threads.as_str()),
+        ] {
             if std::env::var_os(key).is_none() {
                 c.env(key, value);
             }
@@ -244,7 +316,7 @@ fn wasm_set() -> Result<Vec<String>, String> {
             _ => false,
         })
         .map(|c| c.name)
-        .chain(std::iter::once("lightcraft-web".to_string()))
+        .chain(std::iter::once("lcc-web".to_string()))
         .collect())
 }
 
@@ -265,20 +337,59 @@ fn cmd_wasm() -> Result<(), String> {
     if failed == 0 { Ok(()) } else { Err(format!("{failed} crate(s) failed the wasm check")) }
 }
 
-fn cmd_ci(args: &[&str]) -> Result<(), String> {
-    let hardware = args.contains(&"--hardware");
-    let print_md = args.contains(&"--summary-md");
-    if let Some(other) = args.iter().find(|a| !matches!(**a, "--hardware" | "--summary-md")) {
+/// `bench-catalog`: the catalog crate's `bench_catalog` example, release build (see its docs).
+fn cmd_bench_catalog(rest: &[&str]) -> Result<(), String> {
+    let mut c = cargo();
+    c.args(["run", "--release", "-q", "-p", "lcc-catalog", "--example", "bench_catalog", "--"]);
+    if !rest.contains(&"--dir") {
+        c.args(["--dir", "target/bench-catalog"]);
+    }
+    c.args(rest);
+    run(c, "bench_catalog")
+}
+
+/// `cargo deny check licenses` with deny.toml; a clear skip when cargo-deny isn't installed (CI installs it).
+fn cmd_deny() -> Result<(), String> {
+    let installed = cargo().args(["deny", "--version"]).output().is_ok_and(|o| o.status.success());
+    if !installed {
+        eprintln!("deny: SKIPPED, cargo-deny is not installed (`cargo install --locked cargo-deny`); CI runs it");
+        return Ok(());
+    }
+    let mut c = cargo();
+    c.args(["deny", "check", "licenses"]);
+    run(c, "cargo deny check licenses")
+}
+
+/// The app's environment variable `<PREFIX>_<suffix>` (`env_prefix` from brand.toml), for the
+/// child processes CI starts; the bare suffix when the brand file can't be read.
+fn env_name(suffix: &str) -> String {
+    brand::Brand::current().ok().and_then(|b| b.get("env_prefix").map(|p| format!("{p}_{suffix}"))).unwrap_or_else(|| suffix.to_string())
+}
+
+/// `cargo xtask ci [--fast] [--hardware] [--summary-md]`.
+fn cmd_ci_cli(args: &[&str]) -> Result<(), String> {
+    if let Some(other) = args.iter().find(|a| !matches!(**a, "--fast" | "--hardware" | "--summary-md")) {
         return Err(format!("ci: unknown option `{other}`\n\n{USAGE}"));
     }
+    run_ci(args.contains(&"--fast"), args.contains(&"--hardware"), args.contains(&"--summary-md"), args)
+}
+
+/// `fast`: the PR gate, every check except the test runs (docs/ci.md); the full run is the release gate.
+pub fn cmd_ci(fast: bool) -> Result<(), String> {
+    run_ci(fast, false, false, if fast { &["--fast"] } else { &[] })
+}
+
+/// [`cmd_ci`]; `hardware` also runs the GPU tests on every backend with a hardware adapter,
+/// `print_md` prints the Markdown summary, `args` is the command line the report records.
+fn run_ci(fast: bool, hardware: bool, print_md: bool, args: &[&str]) -> Result<(), String> {
     let root = root();
     let report_dir = ci_report::prepare(&root)?;
     let started = std::time::Instant::now();
     let started_unix = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-    // test runs append the skips their tests record (`lightcraft_testkit::skip!`) to target/ci/skips-<step>.jsonl
+    // test runs append the skips their tests record (the testkit's `skip!`) to target/ci/skips-<step>.jsonl
     let test = |cargo_args: &[&str], step: &str| {
         let mut c = cargo();
-        c.args(cargo_args).env(ci_report::SKIP_LOG_ENV, ci_report::skip_log(&root, step));
+        c.args(cargo_args).env(ci_report::skip_log_env(), ci_report::skip_log(&root, step));
         run(c, &format!("cargo {}", cargo_args.join(" ")))
     };
     let gpu = std::cell::RefCell::new(serde_json::Value::Null);
@@ -305,6 +416,10 @@ fn cmd_ci(args: &[&str]) -> Result<(), String> {
                 run(c, "cargo fmt --all -- --check")
             }),
         ),
+        ("brand", Box::new(|| brand::check(&root))),
+        ("quarantine", Box::new(|| quarantine::run(&root, &["check"]))),
+        ("docs", Box::new(|| docs::run(&root, true))),
+        ("notes", Box::new(|| notes::check(&root))),
         (
             "clippy",
             Box::new(|| {
@@ -315,37 +430,54 @@ fn cmd_ci(args: &[&str]) -> Result<(), String> {
         ),
         (
             "heif",
-            Box::new(|| {
+            Box::new(move || {
                 // the optional HEIC/HEIF decoder is off in the workspace build above
                 let mut c = cargo();
-                c.args(["clippy", "-p", "lightcraft-codecs", "--features", "heif", "--all-targets", "--", "-D", "warnings"]);
-                run(c, "cargo clippy -p lightcraft-codecs --features heif --all-targets -- -D warnings")?;
-                test(&["test", "-p", "lightcraft-codecs", "-p", "lightcraft-heif", "--features", "lightcraft-codecs/heif"], "heif")?;
+                c.args(["clippy", "-p", "lcc-codecs", "--features", "heif", "--all-targets", "--", "-D", "warnings"]);
+                run(c, "cargo clippy -p lcc-codecs --features heif --all-targets -- -D warnings")?;
+                if fast {
+                    return Ok(());
+                }
+                test(&["test", "-p", "lcc-codecs", "-p", "lcc-heif", "--features", "lcc-codecs/heif"], "heif")?;
                 // the engine's HEIC import test, with the decoder (the workspace run checks the error)
-                test(&["test", "-p", "lightcraft-engine", "--lib", "--features", "lightcraft-codecs/heif", "heic"], "heif")
+                test(&["test", "-p", "lcc-engine", "--lib", "--features", "lcc-codecs/heif", "heic"], "heif")
             }),
         ),
-        ("test", Box::new(|| test(&["test", "--workspace"], "test"))),
+        (
+            "test",
+            Box::new(|| {
+                // on CI (`CI=true`): cargo-nextest with retries and the quarantine (ci/quarantine.toml);
+                // locally: strict `cargo test` unless `XTASK_NEXTEST=1` asks for the CI run
+                if std::env::var("CI").is_ok_and(|v| v == "true") || std::env::var_os("XTASK_NEXTEST").is_some() {
+                    return quarantine::ci_test(&root, quarantine::host_platform());
+                }
+                test(&["test", "--workspace"], "test")
+            }),
+        ),
     ];
+    if fast {
+        steps.retain(|(name, _)| *name != "test");
+    }
     if hardware {
         steps.push((
             "gpu-backends",
             Box::new(|| {
-                // the GPU tests once per backend with a hardware adapter (`LIGHTCRAFT_GPU_BACKEND`)
+                // the GPU tests once per backend with a hardware adapter (`<PREFIX>_GPU_BACKEND`)
                 probe();
                 let backends = ci_report::hardware_backends(&gpu.borrow());
                 if backends.is_empty() {
                     eprintln!("no hardware GPU adapter on any backend: nothing to run");
                 }
+                let backend_var = env_name("GPU_BACKEND");
                 let mut failed = Vec::new();
                 for (backend, adapter) in backends {
                     let step = format!("gpu-{backend}");
                     let mut c = cargo();
-                    c.args(["test", "-p", "lightcraft-gpu", "--features", "denoise"])
-                        .env("LIGHTCRAFT_GPU_BACKEND", &backend)
-                        .env(ci_report::SKIP_LOG_ENV, ci_report::skip_log(&root, &step));
+                    c.args(["test", "-p", "lcc-gpu", "--features", "denoise"])
+                        .env(&backend_var, &backend)
+                        .env(ci_report::skip_log_env(), ci_report::skip_log(&root, &step));
                     let t = std::time::Instant::now();
-                    let ok = run(c, &format!("LIGHTCRAFT_GPU_BACKEND={backend} cargo test -p lightcraft-gpu --features denoise")).is_ok();
+                    let ok = run(c, &format!("{backend_var}={backend} cargo test -p lcc-gpu --features denoise")).is_ok();
                     hardware_runs.borrow_mut().push(serde_json::json!({
                         "backend": backend,
                         "adapter": adapter,
@@ -361,8 +493,10 @@ fn cmd_ci(args: &[&str]) -> Result<(), String> {
         ));
     }
     steps.push(("parity", Box::new(|| parity::run(&root, false))));
+    steps.push(("shared-check", Box::new(|| upstream::shared_check(&root, &[], true))));
     steps.push(("layers", Box::new(cmd_layers)));
     steps.push(("assets", Box::new(|| assets::run(&root))));
+    steps.push(("deny", Box::new(cmd_deny)));
     steps.push(("wasm", Box::new(cmd_wasm)));
 
     let mut results = Vec::new();
@@ -439,13 +573,13 @@ fn cmd_ci(args: &[&str]) -> Result<(), String> {
     }
 }
 
-/// Run the ignored `gpu_probe` test of lightcraft-gpu: the pipeline's device (`None`) or one
+/// Run the ignored `gpu_probe` test of lcc-gpu: the pipeline's device (`None`) or one
 /// backend's adapters. `--workspace`, like the test step, so its build is reused. Its stdout, or why
 /// it failed (a driver that crashes while it is enumerated, issue #136, ends up here, not in xtask).
 fn probe_gpu(backend: Option<&str>) -> Result<String, String> {
     let mut c = cargo();
     c.args(["test", "-q", "--workspace", "--test", "gpu_probe", "--", "--ignored", "--exact", "gpu_probe", "--nocapture"]);
-    c.env("LIGHTCRAFT_GPU_PROBE", backend.unwrap_or(""));
+    c.env(env_name("GPU_PROBE"), backend.unwrap_or(""));
     let out = c.output().map_err(|e| format!("gpu_probe: {e}"))?;
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr);
@@ -1174,6 +1308,124 @@ const RAW_SAMPLES: &[(&str, &str, &str)] = &[
         "https://raw.pixls.us/getfile.php/1198/nice/Pentax%20-%20K-5%20II%20s%20-%2014bit%20%283:2%29.PEF",
         "e579e7360c35e512f9c3a5c0eb9519575b87b489c6f86be82590f7706a7ed17b",
     ),
+    // Canon CRW (CIFF): 10-bit (G2, S30, S40) and 12-bit with low bits (EOS D30 / D60 / 10D / 300D, later
+    // PowerShots), all three Huffman table sets; the CMYG G1 is refused.
+    (
+        "crw-canon-300d.crw",
+        "https://raw.pixls.us/data/Canon/EOS%20300D/CRW_8395.CRW",
+        "9e7f62239fe728046af28d0d4a8a722d35d40146a79794a5bda1775306af4383",
+    ),
+    (
+        "crw-canon-10d.crw",
+        "https://raw.pixls.us/data/Canon/EOS%2010D/CRW_7673.CRW",
+        "b0730eb3a67cc2281a32e0b2ee104199246928d954a68b7e5b72366514c73d02",
+    ),
+    (
+        "crw-canon-d30.crw",
+        "https://raw.pixls.us/data/Canon/EOS%20D30/CRW_2444.CRW",
+        "4ee482f2b6f9f1a8d370703ea04e9f2abaa49356973a7f56b229af93a78e8a2e",
+    ),
+    (
+        "crw-canon-d60.crw",
+        "https://raw.pixls.us/data/Canon/EOS%20D60/CRW_0099.CRW",
+        "2b98659ecff170af1dfe44f89b493139e75e995b2979686f6ff0847cfb56b97f",
+    ),
+    (
+        "crw-canon-g1.crw",
+        "https://raw.pixls.us/data/Canon/PowerShot%20G1/crw_1693.crw",
+        "f39be5acf14057ce04527fd8d0574e57ec8ed5fed082d7bfaff763075a44ee8a",
+    ),
+    (
+        "crw-canon-g2.crw",
+        "https://raw.pixls.us/data/Canon/PowerShot%20G2/RAW_CANON_G2.CRW",
+        "05bdd52c725dcd1aedb0f642731c7397711bdb91ed596f0bc12e1642b5ece98a",
+    ),
+    (
+        "crw-canon-g3.crw",
+        "https://raw.pixls.us/data/Canon/PowerShot%20G3/RAW_CANON_G3.CRW",
+        "2c6a006cb7948877e9b2ebb85428a6246c7c2755709af61ae5fd7cc8f4d30eb7",
+    ),
+    (
+        "crw-canon-g5.crw",
+        "https://raw.pixls.us/data/Canon/PowerShot%20G5/105_0506.CRW",
+        "bb084223d714871b99de4f549eaf00513e30a7080feeead700252c2008060196",
+    ),
+    (
+        "crw-canon-g6.crw",
+        "https://raw.pixls.us/data/Canon/PowerShot%20G6/CRW_2097.CRW",
+        "244378e1f5660b6cc6cefc93a75ed4928d0b28aa6304ff327b61c748538f4fef",
+    ),
+    (
+        "crw-canon-pro1.crw",
+        "https://raw.pixls.us/data/Canon/PowerShot%20Pro1/RAW_CANON_PRO1_ARGB.CRW",
+        "d4a11e5b861f93f10c40d16d3faf5a87682b0cd1793290df8cf188d656b71030",
+    ),
+    (
+        "crw-canon-s30.crw",
+        "https://raw.pixls.us/data/Canon/PowerShot%20S30/RAW_CANON_S30.CRW",
+        "585e9317b0804743371b53e6d6a785c68310d29a66aa331016d4a946376347d0",
+    ),
+    (
+        "crw-canon-s40.crw",
+        "https://raw.pixls.us/data/Canon/PowerShot%20S40/RAW_CANON_S40.CRW",
+        "9922aa8a49ef29617f42a2b4fb95df3c3b55b48e6f5c2177e7bf2c715b38670c",
+    ),
+    (
+        "crw-canon-s45.crw",
+        "https://raw.pixls.us/data/Canon/PowerShot%20S45/RAW_CANON_S45.CRW",
+        "6e7395e3adb1a3348efb987ad54ea933bae702f42829ebf9b4a3d24739f4d471",
+    ),
+    (
+        "crw-canon-s50.crw",
+        "https://raw.pixls.us/data/Canon/PowerShot%20S50/RAW_CANON_S50.CRW",
+        "db4d0e077f88949adb3435a4edb14cdd30f7a70ee6729035e83cc6bac363a090",
+    ),
+    (
+        "crw-canon-s60.crw",
+        "https://raw.pixls.us/data/Canon/PowerShot%20S60/RAW_CANON_S60_SRGB.CRW",
+        "f168bb5642e67d09866a87396725adbdc3f4aa549c626404ec4b596425d22c5c",
+    ),
+    (
+        "crw-canon-s70.crw",
+        "https://raw.pixls.us/data/Canon/PowerShot%20S70/RAW_CANON_S70_SRGB.CRW",
+        "8015f91a4f6d549fc882fe026a831bbf45f033b2b44ba11cb88e8cbf761f4f0e",
+    ),
+    // Minolta MRW: 16-bit words (DiMAGE 7, 7Hi), 12-bit packing (A1, A2, A200 with GBRG, Dynax / Maxxum 7D).
+    (
+        "mrw-minolta-7.mrw",
+        "https://raw.pixls.us/data/Minolta/DiMAGE%207/RAW_MINOLTA_DIMAGE7.MRW",
+        "4c5d4274bebb548f5f7b3001770903bc4023e7bfe4aeeebbd9d6fc08e81b03bb",
+    ),
+    (
+        "mrw-minolta-7hi.mrw",
+        "https://raw.pixls.us/data/Minolta/DiMAGE%207Hi/RAW_MINOLTA_DIMAGE_7HI.MRW",
+        "2919a05757197a5424e02970c016893bca5aa29363a67b62b1a4b36326a10f6a",
+    ),
+    (
+        "mrw-minolta-a1.mrw",
+        "https://raw.pixls.us/data/Minolta/DiMAGE%20A1/RAW_MINOLTA_A1.MRW",
+        "bde1e2cd788e49c9bef20dfdd41be948fb02c2ee198c6b0959a67a3f79fd41c9",
+    ),
+    (
+        "mrw-minolta-a2.mrw",
+        "https://raw.pixls.us/data/Minolta/DiMAGE%20A2/PICT0881.MRW",
+        "8655e3428461377dd7c6b28ae98a0b23d659314997ed16333985278f99c9a4b4",
+    ),
+    (
+        "mrw-minolta-a200.mrw",
+        "https://raw.pixls.us/data/Minolta/DiMAGE%20A200/RAW_MINOLTA_DIMAGE_A200.MRW",
+        "2a95f6af2168e536dfb6d02b47e3b6119b35b497eebf179d7c20a6e496c26641",
+    ),
+    (
+        "mrw-minolta-dynax7d.mrw",
+        "https://raw.pixls.us/data/Minolta/Dynax%207D/PICT3410.MRW",
+        "713819e33e5302ec864d576d57223cfc8dcf46e8d45e0ae744d1fec40290a89f",
+    ),
+    (
+        "mrw-minolta-maxxum7d.mrw",
+        "https://raw.pixls.us/data/Minolta/Maxxum%207D/PICT0041.MRW",
+        "ff57d7c632507e908e2f556fb1632d10c008f9d237d4001e583a2aedbacb585f",
+    ),
     // Samsung SRW, one file per packing: 12-bit MSB-first (NX10), 12-bit LSB-first (NX20), 16-bit words (EX1).
     (
         "srw-samsung-nx10.srw",
@@ -1189,6 +1441,41 @@ const RAW_SAMPLES: &[(&str, &str, &str)] = &[
         "srw-samsung-ex1.srw",
         "https://raw.pixls.us/getfile.php/1204/nice/Samsung%20-%20EX1%20-%2014bit%20%284:3%29.SRW",
         "a084890fd9d7995ceb746c18ecf5be48c95baf14286d5c0c480cc3daa25f3e37",
+    ),
+    (
+        "srw-samsung-nx300.srw",
+        "https://raw.pixls.us/data/Samsung/NX300/nx300.SRW",
+        "2087d4b351134e307c1c5e7a4fbf5691998a4c7b20451ba46f8f577d87b38052",
+    ),
+    (
+        "srw-samsung-nx3000.srw",
+        "https://raw.pixls.us/data/Samsung/NX3000/_3184416.SRW",
+        "b517dbe12d6d25a9b89116663892d0461e11f3160633e707ddc49c94e5469385",
+    ),
+    (
+        "srw-samsung-nx1.srw",
+        "https://raw.pixls.us/data/Samsung/NX1/2016-07-23-142101_sam_9364.srw",
+        "ec57f83c23094766b723ba9446cdf79388c527934d6689c1ac5b1b6ab3ea8378",
+    ),
+    (
+        "srw-samsung-nx500.srw",
+        "https://raw.pixls.us/data/Samsung/NX500/SAM_2922.SRW",
+        "3a1aeeb631b15dfa5be1bebe0e9c96f660ec96021eb6c45c073e33e982ab61b7",
+    ),
+    (
+        "srw-samsung-nx2000.srw",
+        "https://raw.pixls.us/data/Samsung/NX2000/_3240014.SRW",
+        "79ec05b29fbe86f978eac0e82ad76e026b8480e99772044142464505c32f2cd0",
+    ),
+    (
+        "srw-samsung-nx30.srw",
+        "https://raw.pixls.us/data/Samsung/NX30/2015-03-07-163604_sam_7204.srw",
+        "691438acdecd54ab96d326b96f83daa02fa68f7d66a38ff2fee4e8dd00c79d24",
+    ),
+    (
+        "srw-samsung-nxmini.srw",
+        "https://raw.pixls.us/data/Samsung/NX%20mini/SAM_0295.SRW",
+        "8e1bd19fff8c3b458f63bd6cf0ceda97e708efaf576424cf6c8ebf58eb0c3fc3",
     ),
     (
         "raf-fuji-xa2-12bit-bayer.raf",
@@ -1388,6 +1675,258 @@ const RAW_SAMPLES: &[(&str, &str, &str)] = &[
         "https://raw.pixls.us/getfile.php/4204/nice/Leica%20-%20D-Lux%207%20-%204:3.RWL",
         "4f6db6492da83f7f2a5012591e370557249d1ed44d4c948784016605b799327c",
     ),
+    // one CC0 file per popular body not otherwise sampled (Nikon Z / D, Fujifilm X, Canon CR2, Pentax), plus the ARW
+    // version 1 bodies (DSLR-A100, A200…A390) and the A850: per-model verification (gaps.md row 10)
+    (
+        "arw-sony-a100-arw1.arw",
+        "https://raw.pixls.us/data/Sony/DSLR-A100/_DSC0258.ARW",
+        "4df7981ac4baec9648b4f106751ea4b09a6e27bc70a15f8ef09bec051fec362d",
+    ),
+    (
+        "arw-sony-a200-arw1.arw",
+        "https://raw.pixls.us/data/Sony/DSLR-A200/DSC00108.ARW",
+        "04eacd403d92e0c90da9d91b87615af8eda1afc963350d3ab774557c36763eef",
+    ),
+    (
+        "arw-sony-a230-arw1.arw",
+        "https://raw.pixls.us/data/Sony/DSLR-A230/DSC08026.ARW",
+        "09b1e3d96a286f2e36cc0ae7cbeae1ac19457d147fad2f43e4112c15754749f0",
+    ),
+    (
+        "arw-sony-a290-arw1.arw",
+        "https://raw.pixls.us/data/Sony/DSLR-A290/DSC00014.ARW",
+        "f56febc3621e0c4039a993ab289f9024c873e54f5749324e44cbaed59c4c2b8a",
+    ),
+    (
+        "arw-sony-a300-arw1.arw",
+        "https://raw.pixls.us/data/Sony/DSLR-A300/RAW_SONY_A300.ARW",
+        "daaa25127006b1178c298bce14de41c80ef0fd95101f0b3513e5126dfb8cced2",
+    ),
+    (
+        "arw-sony-a330-arw1.arw",
+        "https://raw.pixls.us/data/Sony/DSLR-A330/RAW_SONY_A330.ARW",
+        "e5737fc8debb5ddea8d557de050565f3516635e093d246450ea2b3d1a27947a3",
+    ),
+    (
+        "arw-sony-a350-arw1.arw",
+        "https://raw.pixls.us/data/Sony/DSLR-A350/DSC05472.ARW",
+        "6eb2ba8974aba7af9eab4a9350f8ab3fc294dc47b5afcc9e0d04be26643b2923",
+    ),
+    (
+        "arw-sony-a380-arw1.arw",
+        "https://raw.pixls.us/data/Sony/DSLR-A380/DSC05353.ARW",
+        "1bdf11f9bcc65568b855c4ab9aa456d566ba6104a888a5567b237cf175e75a6b",
+    ),
+    (
+        "arw-sony-a390-arw1.arw",
+        "https://raw.pixls.us/data/Sony/DSLR-A390/RAW_SONY_A390.ARW",
+        "6a4b2d1eea77993d3a37d8aeb4b6a14523f372354b1aaa00e3d0bd4e2da695a6",
+    ),
+    (
+        "arw-sony-a850.arw",
+        "https://raw.pixls.us/data/Sony/DSLR-A850/RAW_SONY_A850.ARW",
+        "b33cba6cd13158919fcb44efe47eb8dd29c333a74d9aa33fd67f25752394ec9f",
+    ),
+    (
+        "cr2-canon-2000d.cr2",
+        "https://raw.pixls.us/data/Canon/EOS%202000D/IMG_0531.CR2",
+        "84015493df96c877c0387071a627d6940187d75695b0598694901ac0ff83876a",
+    ),
+    (
+        "cr2-canon-5div.cr2",
+        "https://raw.pixls.us/data/Canon/EOS%205D%20Mark%20IV/B13A0729.CR2",
+        "85bfec149261ffbae90797e45caae5e204e1e61ac62b92783925b5ee0f267d76",
+    ),
+    (
+        "cr2-canon-6dii.cr2",
+        "https://raw.pixls.us/data/Canon/EOS%206D%20Mark%20II/6DII-RAW.CR2",
+        "712815b910fa473f7aaeb97c0804292d996b16dd6b974a3ab9a7195a2e41d90c",
+    ),
+    (
+        "nef-nikon-d750.nef",
+        "https://raw.pixls.us/data/Nikon/D750/compressed_12_bit.NEF",
+        "e4a3f85e014275fc0a47600a373af95ec850872a5f6cf87649bcaa42b77ef2e4",
+    ),
+    ("nef-nikon-d780.nef", "https://raw.pixls.us/data/Nikon/D780/DSC_0334.NEF", "3178d0656e3b5fbe90176e38a1cd608d0b69292299445932dddc9a0b2d196b36"),
+    (
+        "nef-nikon-d850.nef",
+        "https://raw.pixls.us/data/Nikon/D850/Nikon-D850-12bit-compressed.NEF",
+        "ba11bc767b4f67144a8b7b5d27fa0fe2be8e69e5fcc5e0161f80623794f294f4",
+    ),
+    ("nef-nikon-z5.nef", "https://raw.pixls.us/data/Nikon/Z%205/DSC_0517.NEF", "9870248c45532080c2459f3b52cdcc4a07bc8846ad50cbb81c7c1c6dc5e36d91"),
+    ("nef-nikon-z50.nef", "https://raw.pixls.us/data/Nikon/Z%2050/DSC_0441.NEF", "b25081cf9adcd51fec020b6d227ff094bc0327cbd26d76bad7e1dee3fb4c034a"),
+    (
+        "nef-nikon-z6ii-packed14.nef",
+        "https://raw.pixls.us/getfile.php/4162/nice/Nikon%20-%20Z%206_2%20-%2014bit%20uncompressed%20%283:2%29.NEF",
+        "4c75e683bd4e751615c93842f519579cde8e0e7fbee3cc58ba7f6a1a23f060dc",
+    ),
+    (
+        "raf-fuji-finepix-e550.raf",
+        "https://raw.pixls.us/data/Fujifilm/FinePix%20E550/RAW_FUJI_E550.RAF",
+        "82d1010a1eb8cdf4b2de7ca30a3a4db4e96f290536f06ed2798a67c1fe81e6ae",
+    ),
+    (
+        "raf-fuji-finepix-e900.raf",
+        "https://raw.pixls.us/data/Fujifilm/FinePix%20E900/RAW_FUJI_E900.RAF",
+        "07adee4a49ae922c89786c96c2f86ce3c130fa128e18b25d0e498fa881d51b94",
+    ),
+    (
+        "raf-fuji-finepix-f550exr.raf",
+        "https://raw.pixls.us/data/Fujifilm/FinePix%20F550EXR/DSCF6714.RAF",
+        "95b6c8a9d5d885f60bbc965ddfd899d325f2225c99ab087d02739543a3ff7dd6",
+    ),
+    (
+        "raf-fuji-finepix-f600exr.raf",
+        "https://raw.pixls.us/data/Fujifilm/FinePix%20F600EXR/RAW_FUJI_F600XR.RAF",
+        "229295351ad9777b2c6a25c7ab46368626b4f7a63b8ec8a3657a624446f2d08a",
+    ),
+    (
+        "raf-fuji-finepix-f700.raf",
+        "https://raw.pixls.us/data/Fujifilm/FinePix%20F700/RAW_FUJI_F700.RAF",
+        "c3686a66f9159043bd27afb0d749d566c2912a0374319e38f68fa6255ea565b4",
+    ),
+    (
+        "raf-fuji-finepix-s1.raf",
+        "https://raw.pixls.us/data/Fujifilm/FinePix%20S1/DSCF0001.RAF",
+        "d77f104a9fa4ce11c78b5078ac40acf8b150d67ea837d187e0903d208bf2dbae",
+    ),
+    (
+        "raf-fuji-finepix-s100fs.raf",
+        "https://raw.pixls.us/data/Fujifilm/FinePix%20S100FS/DSCF8410.RAF",
+        "efa518d70b8122dcfe65f98c7c080f15a512d841a2a86bfe226032a327e1d25e",
+    ),
+    (
+        "raf-fuji-finepix-s200exr.raf",
+        "https://raw.pixls.us/data/Fujifilm/FinePix%20S200EXR/DSCF4754.RAF",
+        "2d4549067f92b33a222d7ded9460adb5ff6ce739ed92af9890c168e37170d4ff",
+    ),
+    (
+        "raf-fuji-finepix-s2pro.raf",
+        "https://raw.pixls.us/data/Fujifilm/FinePix%20S2Pro/DSCF0002.RAF",
+        "9fe1bf1361f015d9db862228e4a26b23d69e81015ed4a032eaefb8242ae9ad42",
+    ),
+    (
+        "raf-fuji-finepix-s3pro.raf",
+        "https://raw.pixls.us/data/Fujifilm/FinePix%20S3Pro/DSCF3694.RAF",
+        "038e5a13a22513f53d143e328a66e2de8071809565db696ecac84b4364fcb75b",
+    ),
+    (
+        "raf-fuji-finepix-s5000.raf",
+        "https://raw.pixls.us/data/Fujifilm/FinePix%20S5000/2007_0912Image0022.RAF",
+        "dabd5e74521a6980156be9fd4b88d0c37b0fe4d0e0e6f5c12db8cffff1b76297",
+    ),
+    (
+        "raf-fuji-finepix-s5200.raf",
+        "https://raw.pixls.us/data/Fujifilm/FinePix%20S5200/DSCF1523.RAF",
+        "93eada72efdf8261d9bfde5022a28a656e4c1c6d0ddac7b0c82686fdcb8ded99",
+    ),
+    (
+        "raf-fuji-finepix-s5600.raf",
+        "https://raw.pixls.us/data/Fujifilm/FinePix%20S5600/RAW_FUJI_S5600S5200.RAF",
+        "8d24ac05af61c8af0a2e7e97166e0db142b5cfb126655462704bf3de03d30d23",
+    ),
+    (
+        "raf-fuji-finepix-s5pro.raf",
+        "https://raw.pixls.us/data/Fujifilm/FinePix%20S5Pro/2018_06150003.RAF",
+        "aca2b2ebcf90d248b4f822ed78bfeb73e79f1b64164a87dc2051a96726cdfa0c",
+    ),
+    (
+        "raf-fuji-finepix-s6000fd.raf",
+        "https://raw.pixls.us/data/Fujifilm/FinePix%20S6000fd/DSCF1973.RAF",
+        "2c602e5a31b81683d8fb97f36c5cb3580836420e12b9ed5ae16241c68ff6201d",
+    ),
+    (
+        "raf-fuji-finepix-s6500fd.raf",
+        "https://raw.pixls.us/data/Fujifilm/FinePix%20S6500fd/DSCF1333.RAF",
+        "ee2a7afc2afc9e3a85ca9e5e237c68b612dc360fb45c6fb4495ef857abbab48e",
+    ),
+    (
+        "raf-fuji-finepix-s7000.raf",
+        "https://raw.pixls.us/data/Fujifilm/FinePix%20S7000/dscf3648.raf",
+        "098aa2c64dc6a026f3f48f1494476a55751e08af2d37789b7f557fd11a14cf49",
+    ),
+    (
+        "raf-fuji-finepix-s9500.raf",
+        "https://raw.pixls.us/data/Fujifilm/FinePix%20S9500/20170430_0041.RAF",
+        "b7a7bb3b8a69232866c75774ca6ba9296f3d4435d1e1bac327b4cdc6bea39144",
+    ),
+    (
+        "raf-fuji-finepix-s9600.raf",
+        "https://raw.pixls.us/data/Fujifilm/FinePix%20S9600/2007-11-10--16-32-45-original.raf",
+        "d4888ec28d89ce7f9cc6d1b852d2ea03da965bf5e8ce5874d1e3fa439f92dbc0",
+    ),
+    (
+        "raf-fujifilm-xh2s.raf",
+        "https://raw.pixls.us/data/Fujifilm/X-H2S/IMG-20221005-0665.raf",
+        "6738634a3d7256a9d05f943a78f4f0f1e08d8f1730d8964c7a9cfdbf113654f5",
+    ),
+    (
+        "nef-nikon-z8-lossless14.nef",
+        "https://raw.pixls.us/data/Nikon/Z%208/Nikon_Z8_raw_14_bit_lossless_compression.NEF",
+        "c13a8675294456b9c979e6c1e556951654f35377b2870af2874bfb556f21ce40",
+    ),
+    (
+        "nef-nikon-z9-lossless14.nef",
+        "https://raw.pixls.us/data/Nikon/Z%209/Nikon_-_NIKON_Z_9_-_14bit_compressed_(Lossless).NEF",
+        "99d0fe24a38f0f7623aeab21440d266a5ac09f9665cf5283f590337e84323c38",
+    ),
+    (
+        "nef-nikon-z7ii.nef",
+        "https://raw.pixls.us/data/Nikon/Z%207_2/Z72_0027.NEF",
+        "dc83d3e49db54ca9c3a1e41dc847afd213c822d482c40158e42d01ee8968f33b",
+    ),
+    ("nef-nikon-zfc.nef", "https://raw.pixls.us/data/Nikon/Z%20fc/_DSC0018.nef", "4099ecc46ebaca26e2a66a96a8313fed5e8c707b3836ccf0e77a134844b041c1"),
+    (
+        "pef-pentax-k1ii.pef",
+        "https://raw.pixls.us/data/Pentax/K-1%20Mark%20II/_IMG2388.PEF",
+        "c52a0c841dda9ce1e28c7dbb3176d1f00f1799d8b70bc2e642cff2a2f0a41580",
+    ),
+    (
+        "pef-pentax-k3iii.pef",
+        "https://raw.pixls.us/data/Pentax/K-3%20Mark%20III/IMGP9854.PEF",
+        "29714bc4cc754a81d2ab154a4ecf1eb5fa125d3901b10f3bd88d731c674f69c4",
+    ),
+    ("pef-pentax-k70.pef", "https://raw.pixls.us/data/Pentax/K-70/IMGP6854.PEF", "1d64c6aa71680642ba8f00b6f6105df3e66a4534e631f422fbf3316273c4408c"),
+    ("pef-pentax-kf.pef", "https://raw.pixls.us/data/Pentax/KF/IMGP0063.PEF", "ddc9cdf399a7210b203dee1765ab9f4165a2e695da59bce6bcabf75b77174a4b"),
+    (
+        "raf-fujifilm-x100v.raf",
+        "https://raw.pixls.us/data/Fujifilm/X100V/DSCF0733.RAF",
+        "c0011a458e2de30a8fb37b2284f525c2b986177acff56424f9d47b59a5ea6791",
+    ),
+    (
+        "raf-fujifilm-x100vi.raf",
+        "https://raw.pixls.us/data/Fujifilm/X100VI/DSCF0074.RAF",
+        "8e5e4d8d2e0a865ca79b3d40734b6abc2f4b00281afea8b9bd3d8c29808f2fb3",
+    ),
+    (
+        "raf-fujifilm-xe4.raf",
+        "https://raw.pixls.us/data/Fujifilm/X-E4/fuji_xe4_32_lossless.RAF",
+        "ce4215079e4c6c8a86d493e15f6e574e4aa7684b346ef3439026c835ed2c8948",
+    ),
+    (
+        "raf-fujifilm-xs10.raf",
+        "https://raw.pixls.us/data/Fujifilm/X-S10/Fujifilm-X-S10-compressed.RAF",
+        "9419d1408ebf850395e5dd563beb96309466546252caf541466034c9cb7e9724",
+    ),
+    (
+        "raf-fujifilm-xs20.raf",
+        "https://raw.pixls.us/data/Fujifilm/X-S20/DSCF2526.RAF",
+        "737c1551843282d4963ccb351a4d6409f3eaf172928d563bbaf72fe0f1f74fdd",
+    ),
+    (
+        "raf-fujifilm-xt30ii.raf",
+        "https://raw.pixls.us/data/Fujifilm/X-T30%20II/compressed_X-T30II.RAF",
+        "5e2678038377cc7f146ceb7693c08535fa1af162cec705d06b0446c3d3017d47",
+    ),
+    ("erf-epson-rd1.erf", "https://raw.pixls.us/data/Epson/R-D1/_EPS0672.ERF", "09d8e533d93116294a9f3e161ed868e929454c7b946e083b644bd6bb75bcb5e4"),
+    ("erf-epson-rd1s.erf", "https://raw.pixls.us/data/Epson/R-D1s/EPSN3575.ERF", "45bb0081baf1c813c7cd9e05b3e6ae734b90aba408dd1195118dc94dc6abbbb9"),
+    ("erf-epson-rd1x.erf", "https://raw.pixls.us/data/Epson/R-D1x/_EPS1919.ERF", "fa1bff3e0b9b9a14f83b8db9fae022c2aca8d455896bf4f25f2c1a0034e295e6"),
+    (
+        "mef-mamiya-zd.mef",
+        "https://raw.pixls.us/data/Mamiya/ZD/RAW_MAMIYA_ZD.MEF",
+        "bcd63507c3c4cc3ea1bad2945e3f88cb4677a1a3c762e1acc38df4445714eb7c",
+    ),
+    // upstream's per-model samples (CC0, raw.pixls.us)
     (
         "nef-nikon-d700.nef",
         "https://raw.pixls.us/getfile.php/2249/nice/Nikon%20-%20D700%20-%2014bit%2014bit%20compressed%20%28Lossless%29%20%283:2%29.NEF",
@@ -1489,16 +2028,6 @@ const RAW_SAMPLES: &[(&str, &str, &str)] = &[
         "26d58c21ed3019af5a22ef6bc02f017b863aad9eafcf84252ed375cd495c0efb",
     ),
     (
-        "nef-nikon-d780.nef",
-        "https://raw.pixls.us/getfile.php/3825/nice/Nikon%20-%20D780%20-%2012bit%2012bit%20compressed%20%28Lossless%29%20%283:2%29.NEF",
-        "3178d0656e3b5fbe90176e38a1cd608d0b69292299445932dddc9a0b2d196b36",
-    ),
-    (
-        "nef-nikon-d850.nef",
-        "https://raw.pixls.us/getfile.php/1835/nice/Nikon%20-%20D850%20-%2012bit%2012bit%20compressed%20%28Lossless%29%20%283:2%29.NEF",
-        "31b7fe298a5c91694c6ca8b3284a0a016e572a02c3964b502d4732e8e9283da8",
-    ),
-    (
         "raf-fujifilm-x-e2s.raf",
         "https://raw.pixls.us/getfile.php/745/nice/Fujifilm%20-%20X-E2S%20-%2014bit%2014bit%20uncompressed%20%283:2%29.RAF",
         "330fc84b597e7be6d7477aad5715705efaa99d4663eb05aa47e1250d6f421549",
@@ -1567,11 +2096,6 @@ const RAW_SAMPLES: &[(&str, &str, &str)] = &[
         "nef-nikon-d3x.nef",
         "https://raw.pixls.us/getfile.php/3708/nice/Nikon%20-%20D3X%20-%2014bit%2014bit%20uncompressed%20%283:2%29.NEF",
         "48dc0339ef86541aabcc6bb68a6452f603e23a7d7a5597dad0d267f69e3e79d4",
-    ),
-    (
-        "raf-fujifilm-x100v.raf",
-        "https://raw.pixls.us/getfile.php/3812/nice/Fujifilm%20-%20X100V%20-%2014bit%2014bit%20compressed%20%283:2%29.RAF",
-        "48f2055ab497c687347eee84103d4f48deb016fff711d2810eaf1317e506f621",
     ),
     (
         "nef-nikon-d4s.nef",
@@ -1732,11 +2256,6 @@ const RAW_SAMPLES: &[(&str, &str, &str)] = &[
         "nef-nikon-1-s1.nef",
         "https://raw.pixls.us/getfile.php/5661/nice/Nikon%20-%201%20S1%20-%2012bit%2012bit%20compressed%20%28Lossy%20%28type%202%29%29%20%283:2%29.NEF",
         "8e540d40b842f61de69161cb0b8be72b024629c752fd82b6f8d10e460bce88cb",
-    ),
-    (
-        "raf-fujifilm-x100vi.raf",
-        "https://raw.pixls.us/getfile.php/7300/nice/Fujifilm%20-%20X100VI%20-%2014bit%2014bit%20uncompressed%20%283:2%29.RAF",
-        "8e5e4d8d2e0a865ca79b3d40734b6abc2f4b00281afea8b9bd3d8c29808f2fb3",
     ),
     (
         "raf-fujifilm-x-t200.raf",
@@ -1937,11 +2456,6 @@ const RAW_SAMPLES: &[(&str, &str, &str)] = &[
         "raf-fujifilm-x-s1.raf",
         "https://raw.pixls.us/getfile.php/997/nice/Fujifilm%20-%20X-S1%20-%2012bit%2012bit%20uncompressed%20%284:3%29.RAF",
         "e4652f3710cc972712a25370988ad8d72c8bf368956215348ea77b17d95f36f7",
-    ),
-    (
-        "nef-nikon-d750.nef",
-        "https://raw.pixls.us/getfile.php/895/nice/Nikon%20-%20D750%20-%2012bit%2012bit%20compressed%20%28Lossy%20%28type%202%29%29%20%283:2%29.NEF",
-        "e4a3f85e014275fc0a47600a373af95ec850872a5f6cf87649bcaa42b77ef2e4",
     ),
     (
         "nef-nikon-d3100.nef",
@@ -2654,11 +3168,6 @@ const RAW_SAMPLES: &[(&str, &str, &str)] = &[
         "dd0d7b76d89039995d253adddcfb44d131414fad2179610d9ea4d8d4bb876b7b",
     ),
     (
-        "pef-pentax-kf.pef",
-        "https://raw.pixls.us/getfile.php/6664/nice/Pentax%20-%20KF%20-%2014bit%20%283:2%29.PEF",
-        "ddc9cdf399a7210b203dee1765ab9f4165a2e695da59bce6bcabf75b77174a4b",
-    ),
-    (
         "cr2-canon-powershot-g7-x.cr2",
         "https://raw.pixls.us/getfile.php/1277/nice/Canon%20-%20PowerShot%20G7%20X%20-%20RAW%20%283:2%29.CR2",
         "e4b0a64df6f43252ab96b4789f698ca334e86586ab151d1e9f5616b80172abcd",
@@ -2703,13 +3212,48 @@ const RAW_SAMPLES: &[(&str, &str, &str)] = &[
         "https://raw.pixls.us/getfile.php/1791/nice/Canon%20-%20EOS%2030D%20-%20RAW%20%283:2%29.CR2",
         "fb216f8df8d7abca4eb9d9f8dc594c1d2b69d0a6369fb8b4107743343c37144f",
     ),
-    ("erf-epson-rd1.erf", "https://raw.pixls.us/data/Epson/R-D1/_EPS0672.ERF", "09d8e533d93116294a9f3e161ed868e929454c7b946e083b644bd6bb75bcb5e4"),
-    ("erf-epson-rd1s.erf", "https://raw.pixls.us/data/Epson/R-D1s/EPSN3575.ERF", "45bb0081baf1c813c7cd9e05b3e6ae734b90aba408dd1195118dc94dc6abbbb9"),
-    ("erf-epson-rd1x.erf", "https://raw.pixls.us/data/Epson/R-D1x/_EPS1919.ERF", "fa1bff3e0b9b9a14f83b8db9fae022c2aca8d455896bf4f25f2c1a0034e295e6"),
+];
+
+/// Video test clips for M14 (`corpus/video/`), each `(file name, URL, sha256, licence and source)`.
+/// Public domain / CC0 first; CC-BY (Blender open movies) is acceptable in the gitignored corpus only, with the
+/// attribution kept here. Never committed. Not found yet as CC0/PD: HEVC Main10 (HLG) phone clip, ProRes MOV;
+/// tests synthesise those cases instead.
+const VIDEO_SAMPLES: &[(&str, &str, &str, &str)] = &[
     (
-        "mef-mamiya-zd.mef",
-        "https://raw.pixls.us/data/Mamiya/ZD/RAW_MAMIYA_ZD.MEF",
-        "bcd63507c3c4cc3ea1bad2945e3f88cb4677a1a3c762e1acc38df4445714eb7c",
+        "h264-aac-720p-nps-elk.mp4",
+        "https://archive.org/download/nps-video-yell-elk-bugle-three/yell-ElkBugle3_1280x720.mp4",
+        "81ccc045257c9d51b5dd3269f00833c31c33295fe1b52245e7d7879c276846bd",
+        "Public domain (US National Park Service, Neal Herbert; PDM 1.0), archive.org item nps-video-yell-elk-bugle-three: H.264 Constrained Baseline 1280x720 + AAC-LC 48 kHz, 5.8 MB",
+    ),
+    (
+        "h264-1080p-bbb.mp4",
+        "https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/1080/Big_Buck_Bunny_1080_10s_5MB.mp4",
+        "e131ad42621442758a3acb899bfbdfeeab0b40c7e2f7c7e66683f58a09a99aee",
+        "CC-BY 3.0, Big Buck Bunny (c) Blender Foundation, peach.blender.org; 10 s excerpt by test-videos.co.uk: H.264 High 1920x1080 yuv420p, no audio, 5.2 MB",
+    ),
+    (
+        "hevc-1080p-bbb.mp4",
+        "https://test-videos.co.uk/vids/bigbuckbunny/mp4/h265/1080/Big_Buck_Bunny_1080_10s_5MB.mp4",
+        "8c9460e1791765030aa39dda710d709c69aaddee92eda82f3920b8c2d7b4b613",
+        "CC-BY 3.0, Big Buck Bunny (c) Blender Foundation; test-videos.co.uk excerpt: HEVC Main 8-bit 1920x1080, no audio, 5.3 MB",
+    ),
+    (
+        "vp9-1080p-bbb.webm",
+        "https://test-videos.co.uk/vids/bigbuckbunny/webm/vp9/1080/Big_Buck_Bunny_1080_10s_5MB.webm",
+        "3011a3d7dc742d6c0f37194ba8273e6b09b90fe768d5f11386ff140bc6745d52",
+        "CC-BY 3.0, Big Buck Bunny (c) Blender Foundation; test-videos.co.uk excerpt: VP9 Profile 0 1920x1080 WebM, no audio, 5.2 MB",
+    ),
+    (
+        "av1-1080p-bbb.webm",
+        "https://test-videos.co.uk/vids/bigbuckbunny/webm/av1/1080/Big_Buck_Bunny_1080_10s_5MB.webm",
+        "5e43740e2916afc1b17de09f4948f038b83065a5d42f0fcb16643d7faeb00ad7",
+        "CC-BY 3.0, Big Buck Bunny (c) Blender Foundation; test-videos.co.uk excerpt: AV1 Main 1920x1080 WebM, no audio, 5.3 MB",
+    ),
+    (
+        "avchd-interlaced-1080i-jvc.mts",
+        "https://archive.org/download/JVC_X900/00002.MTS",
+        "c37e41922c05ca8b56798886eea012cee4092aff2cf6475d9156f0844a9688be",
+        "Public domain (Wolfgang Winne, archive.org item JVC_X900): AVCHD MPEG-TS, H.264 High 1920x1080 interlaced (tff) + AC-3 + PGS; expected to report \"unsupported\", 10.6 MB",
     ),
 ];
 
@@ -2719,18 +3263,38 @@ fn cmd_corpus(download: bool) -> Result<(), String> {
         "Test corpora live under {} (git-ignored, never committed).
 Tests that use a corpus skip cleanly when it is absent.
 
-  corpus/raw/        raw.pixls.us samples (CC0) — lightcraft-raw decodes every file.
+  corpus/raw/        raw.pixls.us samples (CC0) — lcc-raw decodes every file.
   corpus/images/     CC0 / public-domain JPEG/PNG/TIFF/HEIC samples (optional)
+  corpus/video/      public-domain / CC-BY test clips (see VIDEO_SAMPLES in xtask for provenance)
 ",
         corpus.display()
     );
     if !download {
         return Ok(());
     }
-    let dest = corpus.join("raw");
-    std::fs::create_dir_all(&dest).map_err(|e| format!("create {}: {e}", dest.display()))?;
     let mut bad = Vec::new();
-    for (name, url, sha256) in RAW_SAMPLES {
+    let raw: Vec<_> = RAW_SAMPLES.iter().map(|(n, u, h)| (*n, *u, *h)).collect();
+    fetch_pinned(&corpus.join("raw"), &raw, &mut bad)?;
+    let video: Vec<_> = VIDEO_SAMPLES.iter().map(|(n, u, h, _)| (*n, *u, *h)).collect();
+    fetch_pinned(&corpus.join("video"), &video, &mut bad)?;
+    if bad.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "{} corpus file(s) do not match their pinned sha256:
+  {}",
+        bad.len(),
+        bad.join(
+            "
+  "
+        )
+    ))
+}
+
+/// Downloads each missing `(name, url, sha256)` into `dest` and checks its hash; mismatches are deleted and listed in `bad`.
+fn fetch_pinned(dest: &Path, samples: &[(&str, &str, &str)], bad: &mut Vec<String>) -> Result<(), String> {
+    std::fs::create_dir_all(dest).map_err(|e| format!("create {}: {e}", dest.display()))?;
+    for (name, url, sha256) in samples {
         let out = dest.join(name);
         if !out.exists() {
             let mut curl = Command::new("curl");
@@ -2744,18 +3308,7 @@ Tests that use a corpus skip cleanly when it is absent.
             bad.push(format!("{name}: sha256 is {actual}, expected {sha256} (file deleted; source {url})"));
         }
     }
-    if bad.is_empty() {
-        return Ok(());
-    }
-    Err(format!(
-        "{} corpus file(s) do not match their pinned sha256:
-  {}",
-        bad.len(),
-        bad.join(
-            "
-  "
-        )
-    ))
+    Ok(())
 }
 
 fn file_sha256(path: &Path) -> Result<String, String> {
@@ -2785,7 +3338,19 @@ mod ci_jobs_tests {
 
 #[cfg(test)]
 mod corpus_tests {
-    use super::RAW_SAMPLES;
+    use super::{RAW_SAMPLES, VIDEO_SAMPLES};
+
+    #[test]
+    fn every_video_sample_has_a_unique_name_a_sha256_and_a_licence() {
+        let mut names: Vec<_> = VIDEO_SAMPLES.iter().map(|s| s.0).collect();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), VIDEO_SAMPLES.len(), "duplicate file name");
+        for (name, _, sha256, licence) in VIDEO_SAMPLES {
+            assert!(sha256.len() == 64 && sha256.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')), "{name}: not a lowercase sha256");
+            assert!(licence.starts_with("Public domain") || licence.starts_with("CC0") || licence.starts_with("CC-BY"), "{name}: licence");
+        }
+    }
 
     #[test]
     fn every_sample_has_a_unique_name_and_a_sha256() {
@@ -2797,4 +3362,30 @@ mod corpus_tests {
             assert!(sha256.len() == 64 && sha256.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')), "{name}: not a lowercase sha256");
         }
     }
+}
+
+/// `cargo xtask sil`: the SIL harness (`apps/cli/tests/sil.rs`, docs/testing-sil.md).
+fn cmd_sil(args: &[&str]) -> Result<(), String> {
+    let mut c = cargo();
+    c.args(["test", "-p", "lcc-cli", "--test", "sil"]);
+    let mut filter = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i] {
+            "--seed" | "--steps" => {
+                let v = args.get(i + 1).ok_or(format!("{} needs a value", args[i]))?;
+                c.env(if args[i] == "--seed" { "SIL_SEED" } else { "SIL_STEPS" }, v);
+                i += 1;
+            }
+            s if !s.starts_with('-') => filter = Some(format!("sil_{s}")),
+            other => return Err(format!("sil: unknown option `{other}`")),
+        }
+        i += 1;
+    }
+    if let Some(f) = &filter {
+        c.arg(f);
+    }
+    c.args(["--", "--nocapture"]);
+    let status = c.status().map_err(|e| format!("cargo test: {e}"))?;
+    if status.success() { Ok(()) } else { Err("SIL failed (see the report and replay paths above)".into()) }
 }

@@ -1,0 +1,16 @@
+[package]
+name = "lcc-camdb"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Per-model camera data with provenance: dual-illuminant colour matrices, white-balance presets, level overrides (L1)"
+
+[lints]
+workspace = true
+
+[dependencies]
+lcc-brand = { workspace = true }
+lcc-color = { workspace = true }
+lcc-raw = { workspace = true }
+serde = { workspace = true }
+toml = "1"

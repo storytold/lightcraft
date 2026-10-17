@@ -301,13 +301,23 @@ impl Op {
             | Op::SetFile { id, .. }
             | Op::Relink { id, .. }
             | Op::SetContent { id, .. }
+            | Op::SetSha1 { id, .. }
+            | Op::SetKind { id, .. }
+            | Op::SetXmpStamp { id, .. }
+            | Op::SetPreview { id, .. }
             | Op::SetEmbeddedLens { id, .. }
-            | Op::SetAsShotWb { id, .. } => out(*id),
+            | Op::SetAsShotWb { id, .. }
+            | Op::SetVideoMeta { id, .. }
+            | Op::SetVideoTrim { id, .. }
+            | Op::SetVideoPoster { id, .. } => out(*id),
+            Op::SetRemote { photo, .. } => out(*photo),
             Op::AddAlbum { album } => {
                 album.photos.iter().for_each(|p| out(*p));
                 album.cover.into_iter().for_each(&mut *out);
             }
-            Op::SetAlbumPhotos { photos, .. } | Op::SetStack { photos, .. } => photos.iter().for_each(|p| out(*p)),
+            Op::SetAlbumPhotos { photos, .. } | Op::SetAlbumPhotoOrder { order: photos, .. } | Op::SetStack { photos, .. } => {
+                photos.iter().for_each(|p| out(*p))
+            }
             Op::SetAlbumCover { cover, .. } => cover.iter().for_each(|p| out(*p)),
             Op::AddStack { stack } => stack.photos.iter().for_each(|p| out(*p)),
             Op::Batch { ops } => ops.iter().for_each(|o| o.photo_ids(out)),
@@ -315,12 +325,14 @@ impl Op {
             | Op::RenameAlbum { .. }
             | Op::MoveAlbum { .. }
             | Op::SetAlbumOrder { .. }
+            | Op::SetAlbumCreation { .. }
             | Op::SetAlbumRules { .. }
             | Op::RemoveStack { .. }
             | Op::SetLabelName { .. }
             | Op::SetKeyword { .. }
             | Op::SetBrowsed { .. }
-            | Op::SetFolderRecord { .. } => {}
+            | Op::SetFolderRecord { .. }
+            | Op::SetSavedLocation { .. } => {}
         }
     }
 }

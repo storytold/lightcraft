@@ -1,17 +1,17 @@
 //! Real app command dispatch using egui input, without rendering an image or linking a facade.
 use egui::{Key, Modifiers};
-use lightcraft_catalog::{Flag, Op, Photo, PhotoId, Source};
+use lcc_catalog::{Flag, Op, Photo, PhotoId, Source};
 use serde_json::json;
 
-use crate::LightcraftApp;
+use crate::LccApp;
 use crate::state::{Dialog, RightPanel, ViewMode};
 
-fn app() -> lightcraft_engine::Result<LightcraftApp> {
-    let mut s = lightcraft_engine::Session::new();
+fn app() -> lcc_engine::Result<LccApp> {
+    let mut s = lcc_engine::Session::new();
     for (id, rating) in [(1, 0), (2, 2), (3, 5)] {
         let mut photo = Photo::new(
             PhotoId(id),
-            Source::File { path: format!("/lightcraft-relative-rating-keys/{id}.jpg") },
+            Source::File { path: format!("/app-relative-rating-keys/{id}.jpg") },
             &format!("{id}.jpg"),
             "JPEG",
             40,
@@ -23,18 +23,16 @@ fn app() -> lightcraft_engine::Result<LightcraftApp> {
     }
     s.execute("library.sort", &json!({"key": "fileName", "ascending": true}))?;
     s.execute("library.select", &json!({"ids": [1, 2, 3], "active": 2}))?;
-    Ok(LightcraftApp::new(s, crate::Services { png: None, ..Default::default() }))
+    Ok(LccApp::new(s, crate::Services { png: None, ..Default::default() }))
 }
 
-fn ratings(app: &LightcraftApp) -> lightcraft_engine::Result<Vec<u8>> {
+fn ratings(app: &LccApp) -> lcc_engine::Result<Vec<u8>> {
     (1..=3)
-        .map(|id| {
-            app.session.catalog.photo(PhotoId(id)).map(|p| p.rating).ok_or_else(|| lightcraft_catalog::CatalogError::NoPhoto(PhotoId(id)).into())
-        })
+        .map(|id| app.session.catalog.photo(PhotoId(id)).map(|p| p.rating).ok_or_else(|| lcc_catalog::CatalogError::NoPhoto(PhotoId(id)).into()))
         .collect()
 }
 
-fn frame(app: &mut LightcraftApp, ctx: &egui::Context, key: Option<Key>, text: Option<&mut String>) {
+fn frame(app: &mut LccApp, ctx: &egui::Context, key: Option<Key>, text: Option<&mut String>) {
     let events = key
         .map(|key| egui::Event::Key { key, physical_key: Some(key), pressed: true, repeat: false, modifiers: Modifiers::NONE })
         .into_iter()
@@ -178,4 +176,25 @@ fn brackets_yield_to_text_focus_and_shortcut_recording() {
     frame(&mut app, &ctx, Some(Key::CloseBracket), None);
     assert_eq!(ratings(&app).unwrap(), [0, 2, 5]);
     assert!(app.session.undo.is_empty());
+}
+
+/// Lightroom's brush A / B: each preset keeps its own size, feather, flow and density; switching
+/// saves the brush in use and restores the other one, and a bad slot is an error, not a panic.
+#[test]
+fn brush_presets_a_and_b_remember_their_settings() -> lcc_engine::Result<()> {
+    let mut app = app()?;
+    assert_eq!(app.ui.brush_slot, 0);
+    (app.ui.brush_size, app.ui.brush_feather, app.ui.brush_flow, app.ui.brush_density) = (0.1, 10.0, 30.0, 70.0);
+    let r = app.run("brush.preset", json!({"slot": "b"})).unwrap();
+    assert_eq!(r["slot"], "b");
+    assert_eq!(app.ui.brush_slot, 1);
+    assert_ne!(app.ui.brush_size, 0.1);
+    app.ui.brush_density = 40.0;
+    // no slot: toggle back to A, which still has its settings
+    app.run("brush.preset", json!({})).unwrap();
+    assert_eq!((app.ui.brush_slot, app.ui.brush_size, app.ui.brush_feather, app.ui.brush_flow, app.ui.brush_density), (0, 0.1, 10.0, 30.0, 70.0));
+    app.run("brush.preset", json!({"slot": "B"})).unwrap();
+    assert_eq!(app.ui.brush_density, 40.0);
+    assert!(app.run("brush.preset", json!({"slot": "c"})).is_err());
+    Ok(())
 }

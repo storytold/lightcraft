@@ -8,12 +8,12 @@ fn demo() -> Session {
     Session::with_demo()
 }
 
-fn active_dev(s: &Session) -> lightcraft_develop::DevelopSettings {
+fn active_dev(s: &Session) -> lcc_develop::DevelopSettings {
     (*s.develop_of(s.active().unwrap()).unwrap()).clone()
 }
 
 /// Spread of the channels (a saturation proxy) at normalized `(x, y)`.
-fn chroma_at(img: &lightcraft_raster::Rgba8, x: f64, y: f64) -> i32 {
+fn chroma_at(img: &lcc_raster::Rgba8, x: f64, y: f64) -> i32 {
     let p = img.data[(img.height as f64 * y) as usize * img.width + (img.width as f64 * x) as usize];
     p[0].max(p[1]).max(p[2]) as i32 - p[0].min(p[1]).min(p[2]) as i32
 }
@@ -50,7 +50,7 @@ fn point_color_pick_and_adjust() {
     assert_eq!(active_dev(&s).point_colors.len(), 7);
     // survives the settings JSON (what the catalog and XMP sidecars store)
     let d = active_dev(&s);
-    assert_eq!(lightcraft_develop::DevelopSettings::from_json(&d.to_json()).unwrap(), d);
+    assert_eq!(lcc_develop::DevelopSettings::from_json(&d.to_json()).unwrap(), d);
 }
 
 #[test]
@@ -76,7 +76,7 @@ fn red_eye_commands_and_controls() {
     assert!(s.execute("redeye.delete", &json!({"index": 5})).is_err());
     assert!(s.execute("redeye.add", &json!({"rx": 0.03})).is_err());
     let d = active_dev(&s);
-    assert_eq!(lightcraft_develop::DevelopSettings::from_json(&d.to_json()).unwrap(), d);
+    assert_eq!(lcc_develop::DevelopSettings::from_json(&d.to_json()).unwrap(), d);
 }
 
 #[test]
@@ -86,9 +86,9 @@ fn pet_eye_catchlight_command() {
     s.execute("redeye.add", &json!({"center": [0.6, 0.4], "rx": 0.03, "ry": 0.03, "pet": true})).unwrap();
     assert!(s.execute("redeye.catchlight", &json!({"index": 0})).is_err(), "red eyes have no catchlight");
     s.execute("redeye.catchlight", &json!({"index": 1})).unwrap();
-    assert_eq!(active_dev(&s).red_eye[1].catchlight, Some(lightcraft_geom::Point::new(-0.35, -0.35)));
+    assert_eq!(active_dev(&s).red_eye[1].catchlight, Some(lcc_geom::Point::new(-0.35, -0.35)));
     s.execute("redeye.catchlight", &json!({"index": 1, "offset": [0.2, -3.0]})).unwrap();
-    assert_eq!(active_dev(&s).red_eye[1].catchlight, Some(lightcraft_geom::Point::new(0.2, -1.0)));
+    assert_eq!(active_dev(&s).red_eye[1].catchlight, Some(lcc_geom::Point::new(0.2, -1.0)));
     s.execute("redeye.catchlight", &json!({"index": 1, "on": false})).unwrap();
     assert_eq!(active_dev(&s).red_eye[1].catchlight, None);
 }
@@ -101,7 +101,7 @@ fn targeted_adjustment_on_curve_and_mixer() {
     let (k, v) = r.as_object().unwrap().iter().next().map(|(k, v)| (k.clone(), v.clone())).unwrap();
     assert!(k == "curve.lights" || k == "curve.highlights", "{r}");
     assert_eq!(v, 20.0);
-    assert_eq!(lightcraft_develop::controls::get(&active_dev(&s), &k), Some(20.0));
+    assert_eq!(lcc_develop::controls::get(&active_dev(&s), &k), Some(20.0));
     // the dark trees in the lower ones
     let r = s.execute("develop.targeted", &json!({"target": "curve", "x": 0.4, "y": 0.62, "delta": -10})).unwrap();
     assert!(r.get("curve.shadows").is_some() || r.get("curve.darks").is_some(), "{r}");
@@ -127,8 +127,8 @@ fn targeted_adjustment_on_curve_and_mixer() {
 /// the Custom Kelvin value that renders the same before applying an edit on top of it.
 #[test]
 fn white_balance_commands_write_kelvin_on_raws_whose_camera_has_matrices() {
-    use lightcraft_catalog::{MediaKind, Op, Photo, Source};
-    use lightcraft_develop::{DevelopSettings, WbMode, WbScale};
+    use lcc_catalog::{MediaKind, Op, Photo, Source};
+    use lcc_develop::{DevelopSettings, WbMode, WbScale};
     let mut s = Session::new();
     let add = |s: &mut Session, name: &str, camera: &str, as_shot: (f64, f64)| {
         let id = s.catalog.alloc_photo_id();
@@ -141,7 +141,7 @@ fn white_balance_commands_write_kelvin_on_raws_whose_camera_has_matrices() {
         id
     };
     let kelvin = add(&mut s, "a.arw", "SONY ILCE-7M3", (4986.0, -2.0));
-    let relative = add(&mut s, "b.arw", "SONY ILCE-7M2", (6500.0, 0.0));
+    let relative = add(&mut s, "b.arw", "SONY DSLR-A100", (6500.0, 0.0));
     let dev = |s: &Session, id| (*s.develop_of(id).unwrap()).clone();
     assert_eq!((dev(&s, kelvin).wb.scale, dev(&s, relative).wb.scale), (WbScale::Kelvin, WbScale::Legacy));
 
@@ -165,14 +165,14 @@ fn white_balance_commands_write_kelvin_on_raws_whose_camera_has_matrices() {
     let d = dev(&s, kelvin);
     assert_eq!((d.wb.mode, d.wb.temp, d.wb.tint, d.wb.scale), (WbMode::Custom, 5200.0, -2.0, WbScale::Kelvin));
     let info = s.source_info(kelvin);
-    assert_eq!(lightcraft_engine_effective(&info, &d), (5200.0, -2.0));
+    assert_eq!(engine_effective(&info, &d), (5200.0, -2.0));
 
     // settings from an older catalog on the Kelvin raw: a relative Custom value (6500 = as shot) with no scale
     let mut old = DevelopSettings::for_raw(6500.0, 0.0);
     (old.wb.mode, old.wb.temp, old.wb.tint) = (WbMode::Custom, 5800.0, 3.0);
     s.set_develop(kelvin, old.clone(), "old").unwrap();
-    let shown = lightcraft_engine_effective(&info, &old);
-    let expect = lightcraft_pipeline::local::legacy_to_kelvin(5800.0, 3.0, (4986.0, -2.0));
+    let shown = engine_effective(&info, &old);
+    let expect = lcc_pipeline::local::legacy_to_kelvin(5800.0, 3.0, (4986.0, -2.0));
     assert_eq!(shown, expect);
     assert!(shown.0 < 4986.0, "a warm relative shift is a lower Kelvin than as shot: {shown:?}");
     // nudging the tint converts the temperature to the Kelvin it rendered as, then applies the nudge
@@ -184,16 +184,16 @@ fn white_balance_commands_write_kelvin_on_raws_whose_camera_has_matrices() {
     let mut old = DevelopSettings::for_raw(6500.0, 0.0);
     (old.wb.mode, old.wb.temp, old.wb.tint) = (WbMode::Cloudy, 6500.0 * 6500.0 / 5500.0, 10.0);
     s.set_develop(kelvin, old.clone(), "old preset").unwrap();
-    assert_eq!(lightcraft_engine_effective(&info, &old), lightcraft_pipeline::local::legacy_to_kelvin(old.wb.temp, 10.0, (4986.0, -2.0)));
+    assert_eq!(engine_effective(&info, &old), lcc_pipeline::local::legacy_to_kelvin(old.wb.temp, 10.0, (4986.0, -2.0)));
     s.execute("develop.set", &json!({"control": "wb.tint", "value": 0})).unwrap();
     let d = dev(&s, kelvin);
     assert_eq!((d.wb.mode, d.wb.tint, d.wb.scale), (WbMode::Custom, 0.0, WbScale::Kelvin));
-    assert!(d.wb.temp != 6500.0 && (d.wb.temp - lightcraft_pipeline::local::legacy_to_kelvin(old.wb.temp, 10.0, (4986.0, -2.0)).0).abs() < 1e-6);
+    assert!(d.wb.temp != 6500.0 && (d.wb.temp - lcc_pipeline::local::legacy_to_kelvin(old.wb.temp, 10.0, (4986.0, -2.0)).0).abs() < 1e-6);
     // a partial without a scale (an old preset, `develop.merge`) keeps the relative meaning on the Kelvin raw
     s.execute("develop.merge", &json!({"settings": {"wb": {"mode": "custom", "temp": 6500.0, "tint": 0.0}}})).unwrap();
     let d = dev(&s, kelvin);
     assert_eq!(d.wb.scale, WbScale::Legacy);
-    assert_eq!(lightcraft_engine_effective(&info, &d), (4986.0, -2.0), "6500 / 0 without a scale is as shot");
+    assert_eq!(engine_effective(&info, &d), (4986.0, -2.0), "6500 / 0 without a scale is as shot");
     // Quick Develop on old settings: As Shot from an older catalog (no scale) nudges the Kelvin as-shot white, a
     // relative Custom value is converted to the Kelvin it rendered as first (never a Kelvin number read as relative)
     let mut old = DevelopSettings::for_raw(6500.0, 0.0);
@@ -217,6 +217,6 @@ fn white_balance_commands_write_kelvin_on_raws_whose_camera_has_matrices() {
     assert!(!s.catalog.photo(kelvin).unwrap().is_edited());
 }
 
-fn lightcraft_engine_effective(info: &lightcraft_pipeline::SourceInfo, d: &lightcraft_develop::DevelopSettings) -> (f64, f64) {
-    lightcraft_pipeline::local::effective_wb(info, d)
+fn engine_effective(info: &lcc_pipeline::SourceInfo, d: &lcc_develop::DevelopSettings) -> (f64, f64) {
+    lcc_pipeline::local::effective_wb(info, d)
 }

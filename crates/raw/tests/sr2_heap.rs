@@ -3,7 +3,7 @@
 //! it must not cost memory sized by its other entries: a hostile file can give it fields that each alias most of the
 //! file. Only the block's offset, length and key may be read. One test per binary (dhat's profiler is global).
 
-use lightcraft_tiff::{ByteOrder, IfdBuilder, ImageData, Tiff, TiffWriter, Value, tags as t};
+use lcc_tiff::{ByteOrder, IfdBuilder, ImageData, Tiff, TiffWriter, Value, tags as t};
 
 #[global_allocator]
 static ALLOC: dhat::Alloc = dhat::Alloc;
@@ -66,8 +66,8 @@ fn sr2_private_fields_cost_no_memory_sized_by_the_file() {
     // eight fields of 16 MiB each: 128 MiB if they were decoded, within the TIFF reader's default value budget
     let file = hostile_arw(16 << 20, 8);
     let _profiler = dhat::Profiler::builder().testing().build();
-    let header = lightcraft_raw::probe_info(&file).unwrap();
-    let full = lightcraft_raw::decode(&file).unwrap();
+    let header = lcc_raw::probe_info(&file).unwrap();
+    let full = lcc_raw::decode(&file).unwrap();
     let peak = dhat::HeapStats::get().max_bytes;
     // the block was still found and decrypted (its content is noise: no SR2SubIFD copies)
     for info in [&header, &full.info()] {

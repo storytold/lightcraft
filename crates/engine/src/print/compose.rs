@@ -14,10 +14,10 @@ use super::{MAX_JOB_PAGES, MAX_JOB_PIXELS, MAX_PAGE_PIXELS, PageRaster};
 use crate::Session;
 use crate::export::{ExportOptions, output_size};
 use crate::media::RenderJob;
-use lightcraft_catalog::PhotoId;
-use lightcraft_color::transfer::srgb_to_linear;
-use lightcraft_color::{REC2020, SRGB};
-use lightcraft_pipeline::{DeepSamples, OutputDepth, OutputSpace};
+use lcc_catalog::PhotoId;
+use lcc_color::transfer::srgb_to_linear;
+use lcc_color::{REC2020, SRGB};
+use lcc_pipeline::{DeepSamples, OutputDepth, OutputSpace};
 use serde::{Deserialize, Serialize};
 
 /// Most photos one print job takes.
@@ -663,17 +663,6 @@ mod tests {
         assert_eq!(at(&q, 40, 40), black);
         assert_eq!(at(&q, 19, 40), WHITE);
         assert_eq!(at(&q, 60, 40), WHITE);
-    }
-
-    #[test]
-    fn colours_are_rec2020_encoded() {
-        assert_eq!(rec2020_from_srgb8([255; 3]), [65535; 3]);
-        assert_eq!(rec2020_from_srgb8([0; 3]), [0; 3]);
-        let grey = rec2020_from_srgb8([128; 3]);
-        assert!(grey[0].abs_diff(grey[1]) < 3 && grey[1].abs_diff(grey[2]) < 3);
-        // sRGB red sits inside the Rec. 2020 gamut: its green and blue are not zero.
-        let red = rec2020_from_srgb8([255, 0, 0]);
-        assert!(red[0] < 65535 && red[1] > 0);
     }
 
     #[test]

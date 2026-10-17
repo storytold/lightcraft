@@ -2,11 +2,11 @@
 //!
 //! `docs/raw/coverage-sweep.tsv` records the file URLs, SHA-256 hashes, decoded dimensions,
 //! FNV-1a sensor hashes and camera-image comparisons measured on main 25ef65c8.
-//! Sensor hashes pin LightCraft's own output, not an independent decoder's output.
+//! Sensor hashes pin the app's own output, not an independent decoder's output.
 //! Hash input is every row-major sample in little-endian order, including masked borders.
 //! Fetch the CC0 files with `cargo xtask corpus --download`. Missing files are reported.
 
-use lightcraft_raw::{RawData, decode, probe_info};
+use lcc_raw::{RawData, decode, probe_info};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
@@ -14,8 +14,7 @@ const RECORDS: &str = include_str!("../../../docs/raw/coverage-sweep.tsv");
 
 #[test]
 fn coverage_sweep_sensor_decodes_are_pinned() {
-    let corpus =
-        std::env::var_os("LIGHTCRAFT_CORPUS").map(PathBuf::from).unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus"));
+    let corpus = lcc_brand::env_os("CORPUS").map(PathBuf::from).unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus"));
     let mut checked = 0;
     for line in RECORDS.lines().filter(|line| !line.starts_with('#')).skip(1) {
         let columns: Vec<_> = line.split('\t').collect();

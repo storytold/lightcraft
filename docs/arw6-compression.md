@@ -1,6 +1,6 @@
 # Sony ARW6 (Compressed RAW 2)
 
-LightCraft decodes the raw sensor data of Sony's *Compressed* and *Compressed (HQ)* ARW files (TIFF Compression 32766, SonyRawFileType 6, "ARW 6.0") written by the A7R VI (ILCE-7RM6) in pure Rust. The shared RAW decoder serves import, desktop previews, editing, CLI rendering, web and export. Before this decoder these files failed the full decode and silently rendered from their embedded JPEG. The ILCE-7M5 (A7 V) writes the same codec; no sample of it was available, so it is unverified.
+The app decodes the raw sensor data of Sony's *Compressed* and *Compressed (HQ)* ARW files (TIFF Compression 32766, SonyRawFileType 6, "ARW 6.0") written by the A7R VI (ILCE-7RM6) in pure Rust. The shared RAW decoder serves import, desktop previews, editing, CLI rendering, web and export. Before this decoder these files failed the full decode and silently rendered from their embedded JPEG. The ILCE-7M5 (A7 V) writes the same codec; no sample of it was available, so it is unverified.
 
 Decode timings: see the end of this document (measured in the performance pass).
 
@@ -50,7 +50,7 @@ Codes map through one monotone curve, the same for every file and both modes. It
 
 Each of the four scenes of the CC0 set (APS-C and full frame, landscape and portrait) has a lossless (LJ92) file and a Compressed and an HQ file, shot handheld one after another. Seven Compressed / HQ files share shutter, aperture and ISO with their lossless sibling. The eighth, APSC_land RAW-C (1/500 s against 1/1000 s), was left out: its brightness ratio to the lossless file is 1.37 rather than 2 and drifts with level, so the light changed between the shots.
 
-- Data: the ARW6 12-bit codes from LightCraft's decoder with the curve replaced by the identity, and the lossless 14-bit DN from LightCraft's LJ92 path. Both modes share the sensor origin (their crop tags are equal); the lossless frame is the ARW6 frame padded with zeros at the right and bottom.
+- Data: the ARW6 12-bit codes from the app's decoder with the curve replaced by the identity, and the lossless 14-bit DN from the app's LJ92 path. Both modes share the sensor origin (their crop tags are equal); the lossless frame is the ARW6 frame padded with zeros at the right and bottom.
 - Registration: the handheld shifts are large (median 3 to 102 green cells). Patches were registered locally on the green planes with a curve-independent rank transform, normalised cross-correlation and a neighbour-consistency filter.
 - Two estimators per pair and CFA channel, each capture with its own gain and offset (the gains' geometric mean fixed to 1, the offsets' mean to 0):
   - quantile (CDF) matching over all overlapping pixels: for each code, the mean lossless value over the slice of the distribution the code occupies (precise, slightly smoothed by compression noise);
@@ -129,7 +129,7 @@ LibRaw assumes the full-frame grid (s = 0) for every tile. On the APS-C crop tha
 
 These 12 files are CC0 1.0. RawDB's record of the set, <https://rawdb.dnglab.org/api/sets/Sony/ILCE-7RM6> (the data behind <https://rawdb.dnglab.org/sets/Sony/ILCE-7RM6>, accessed 2026-10-10), says `"license":"CC0 1.0"` for the set (uploaded by abbradar, 2026-08-29) and again for each of the 12 files, next to the SHA-256 values in the table.
 
-They live in the gitignored corpus. `cargo xtask corpus --download` fetches two of them, one per geometry and compression mode (full frame Compressed, APS-C HQ), and checks each against its SHA-256, pinned in `RAW_SAMPLES` (`xtask/src/main.rs`). Fetch the other ten by hand: the server answers 303 to a signed object URL, so `curl -L -o corpus/raw/<file> https://rawdb.dnglab.org/api/download/Sony/ILCE-7RM6/<source path>`, then compare with the SHA-256 above. `cargo test -p lightcraft-raw corpus_sony -- --nocapture` checks the decoder's sensor sum and position-weighted sum of the two pinned files and skips absent files. The sums are regression values from LightCraft's decoder with the derived curve; the 12-bit codes behind them were verified against the oracle in Phase 0.
+They live in the gitignored corpus. `cargo xtask corpus --download` fetches two of them, one per geometry and compression mode (full frame Compressed, APS-C HQ), and checks each against its SHA-256, pinned in `RAW_SAMPLES` (`xtask/src/main.rs`). Fetch the other ten by hand: the server answers 303 to a signed object URL, so `curl -L -o corpus/raw/<file> https://rawdb.dnglab.org/api/download/Sony/ILCE-7RM6/<source path>`, then compare with the SHA-256 above. `cargo test -p lcc-raw corpus_sony -- --nocapture` checks the decoder's sensor sum and position-weighted sum of the two pinned files and skips absent files. The sums are regression values from the app's decoder with the derived curve; the 12-bit codes behind them were verified against the oracle in Phase 0.
 
 Nine further full-frame HQ photos from the maintainer's A7R VI were compared with the oracle locally; they are private and never committed or published. On all 9 (ISO 100-12800, incl. two near-black night shots) the 12-bit codes matched the oracle over the full frame (0 mismatching pixels of 66.8 MP each).
 
@@ -162,7 +162,7 @@ Unconditional synthetic tests (encode -> decode round trips for both geometries,
 
 ## Timings
 
-Raw decode only, 4 CPUs, release build, best of 3 wall-clock (2026-10-10). Method: a small throwaway Rust program linking `lightcraft-raw` reads the file into memory, then times `lightcraft_raw::decode` alone with `std::time::Instant` (no render, no JPEG encode), three decodes in one process; the best is reported. Files were already in the page cache.
+Raw decode only, 4 CPUs, release build, best of 3 wall-clock (2026-10-10). Method: a small throwaway Rust program linking `lcc-raw` reads the file into memory, then times `lcc_raw::decode` alone with `std::time::Instant` (no render, no JPEG encode), three decodes in one process; the best is reported. Files were already in the page cache.
 
 | File | Size | Sensor | Decode |
 |---|---|---|---|
