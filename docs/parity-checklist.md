@@ -563,7 +563,7 @@ visible menu bar yet: the menu model is only exposed through the control channel
 | MENU-PHOTO-STACK | Stack submenu | P1 | ✅ | `cmd:stack.group`, `cmd:stack.ungroup`, `cmd:dialog.autoStack` | |
 | MENU-PHOTO-MERGE | Photo merge submenu | P2 | ✅ | `cmd:dialog.mergeHdr`, `cmd:dialog.mergePanorama`, `cmd:dialog.mergeHdrPanorama`, `cmd:merge.hdrLast`, `cmd:merge.hdrBatch` | |
 | MENU-PHOTO-ENHANCE | Enhance… | P2 | ⬜ | | |
-| MENU-PHOTO-AUTO | Auto settings | P0 | ✅ | `cmd:develop.auto` | |
+| MENU-PHOTO-AUTO | Auto settings | P0 | ✅ | `cmd:develop.auto` | acts on every selected photo, each from its own picture, as one undo step (Classic's Quick Develop Auto Tone; `ids` names photos) |
 | MENU-PHOTO-BW | Convert to B&W | P0 | ✅ | `cmd:develop.treatment` | |
 | MENU-PHOTO-RESET | Reset edits / crop | P0 | ✅ | `cmd:develop.reset`, `cmd:crop.reset` | |
 | MENU-PHOTO-UPDATEAI | Update AI settings | P2 | ⬜ | | |
@@ -609,7 +609,7 @@ From `06-shortcuts.md` part 1. Evidence is our binding; conflicts are explained 
 | KEY-CLIPBOARD | Copy / paste edit settings — ⌘C / ⌘V | P0 | ✅ | `cmd:develop.copy`, `cmd:develop.paste`, `crates/ui-egui/src/shortcuts.rs` (`matches`) | ⌘X has nothing to cut outside text fields; on Windows and Linux, where the windowing layer sends Ctrl+C / Ctrl+V as clipboard events rather than key presses, those run the shortcuts too (⇧Insert pastes plainly); there Ctrl+V only arrives while the system clipboard holds text (egui-winit drops it otherwise), so with an empty clipboard Paste Settings needs the menu |
 | KEY-UNDOREDO | Undo / redo — ⌘Z / ⇧⌘Z | P0 | ✅ | `cmd:edit.undo`, `cmd:edit.redo` | |
 | KEY-MINIMIZE | Minimize — ⌘M | P1 | ✅ | `apps/lightcraft/src/native_menu.rs` | native Window ▸ Minimize |
-| KEY-AUTO | Auto — ⇧A | P0 | ✅ | `cmd:develop.auto` | |
+| KEY-AUTO | Auto — ⇧A | P0 | ✅ | `cmd:develop.auto` | on every selected photo (#1752) |
 | KEY-PHOTOSHOP | External editor — ⇧⌘E | P2 | ✅ | `cmd:photo.editInPhotoCraft`, `cmd:photo.editInExternal` | ⇧⌘E as observed (Edit in PhotoCraft, LightCraft's Photoshop); ⌥⌘E the other editor; the export dialog is ⇧E |
 | KEY-ROTATE | Rotate — ⌘[ / ⌘] | P0 | ✅ | `cmd:photo.rotateLeft`, `cmd:photo.rotateRight` | |
 | KEY-ZOOM | Zoom in / out — ⌘= / ⌘− | P0 | ✅ | `cmd:view.zoomIn`, `cmd:view.zoomOut`, `crates/ui-egui/src/tests_zoom_keys.rs` | the keys zoom the photo only: egui's own interface zoom on ⌘= / ⌘− / ⌘0 (Ctrl on Windows and Linux, where no native menu bar took the keys first) is off (issue #566) |

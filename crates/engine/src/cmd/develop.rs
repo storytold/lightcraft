@@ -376,25 +376,59 @@ pub fn specs() -> Vec<CommandSpec> {
                 Ok(json!({"mix": m}))
             }
         ),
-        cmd!("develop.auto", "Auto Settings", ["Photo"], Some("Shift+A"), "{}", has_active, |s, _| {
-            let id = active(s, "develop.auto")?;
-            let src = s.source_now(id, SourceLevel::Thumb).map_err(|e| bad("develop.auto", e))?;
-            let info = s.source_info(id);
-            let d = s.develop_of(id).unwrap_or_default();
-            let a = lightcraft_pipeline::auto::auto_tone(&src, &info, &d);
-            edit(s, "develop.auto", "Auto", |d| {
-                d.light.exposure = a.exposure;
-                d.light.contrast = a.contrast;
-                d.light.highlights = a.highlights;
-                d.light.shadows = a.shadows;
-                d.light.whites = a.whites;
-                d.light.blacks = a.blacks;
-                d.color.vibrance = a.vibrance;
-                d.color.saturation = a.saturation;
-                Ok(())
-            })?;
-            Ok(serde_json::to_value(a).unwrap_or_default())
-        }),
+        cmd!(
+            "develop.auto",
+            "Auto Settings",
+            ["Photo"],
+            Some("Shift+A"),
+            "{ids?}: the target photos (`ids`, else the selection, else the active photo), each from its own picture, as one undo step → the values set on the last one",
+            has_selection,
+            |s, p| {
+                // every selected photo gets its own auto values (Lightroom Classic's Quick Develop
+                // Auto Tone), each worked out on its thumbnail-size source, as a single preview does
+                let ids = s.targets(p)?;
+                let mut autos = Vec::with_capacity(ids.len());
+                for id in ids {
+                    let src = s.source_now(id, SourceLevel::Thumb).map_err(|e| bad("develop.auto", e))?;
+                    let info = s.source_info(id);
+                    let d = s.develop_of(id).unwrap_or_default();
+                    autos.push((id, lightcraft_pipeline::auto::auto_tone(&src, &info, &d)));
+                }
+                let apply = |d: &mut DevelopSettings, a: &lightcraft_pipeline::auto::AutoTone| {
+                    d.light.exposure = a.exposure;
+                    d.light.contrast = a.contrast;
+                    d.light.highlights = a.highlights;
+                    d.light.shadows = a.shadows;
+                    d.light.whites = a.whites;
+                    d.light.blacks = a.blacks;
+                    d.color.vibrance = a.vibrance;
+                    d.color.saturation = a.saturation;
+                };
+                let (_, last) = autos.last().ok_or_else(|| bad("develop.auto", "no photo selected"))?;
+                let result = serde_json::to_value(last).unwrap_or_default();
+                match autos.as_slice() {
+                    // the active photo alone: the ordinary edit path (a running interaction previews it)
+                    [(id, a)] if Some(*id) == s.active() => {
+                        edit(s, "develop.auto", "Auto", |d| {
+                            apply(d, a);
+                            Ok(())
+                        })?;
+                    }
+                    _ => {
+                        let ops = autos
+                            .iter()
+                            .filter_map(|(id, a)| {
+                                let mut d = (*s.develop_of(*id).unwrap_or_default()).clone();
+                                apply(&mut d, a);
+                                s.develop_op(*id, d, "Auto")
+                            })
+                            .collect();
+                        s.commit("Auto", Op::Batch { ops })?;
+                    }
+                }
+                Ok(result)
+            }
+        ),
         cmd!(
             "develop.wb",
             "White Balance",
