@@ -155,6 +155,7 @@ checked (the per-model CC0 sweeps of October 2026); compressed ORF (OM / Olympus
 | SRW | uncompressed, 12-bit packed | ✅ | EX1 corpus; NX10, NX20 |
 | SRW | compressed 32770 / 32772 / 32773 | ⬜ | refused |
 | DNG | uncompressed, LJ92, lossy JPEG / Smart Preview, Deflate incl. float, LinearRaw, tiles / strips, row / column interleave | ✅ | 6 corpus DNGs; 4 ILCE-6400 JXL DNGs; 38 Leica Q3 DNGs (lossless JPEG, 14-bit, private check) |
+| DNG | 12-bit DCT JPEG tiles under compression 7 (Blackmagic lossy CinemaDNG: SOF1, one component, frame rows hold two tile rows) | ✅ | synthetic round trip; 3 corpus files (Pocket Cinema 4K x2, Micro Cinema) |
 | DNG | JPEG XL (DNG 1.7, lossless and lossy) | ✅ | synthetic bit-exact; real lossless and lossy files |
 | DNG | Apple ProRAW (incl. semantic mattes) | ✅ | iPhone 12 Pro corpus; ProfileGainTableMap read but off (ΔE00 19 against Lightroom with it on) |
 | DNG | phone DNGs (Pixel, Galaxy, Xiaomi…) | 🟡 | Pixel 2 XL corpus; 13 further Apple, Google and Samsung models in the pinned sweep; white-level pile-up fix #548 |
