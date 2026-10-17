@@ -1,5 +1,12 @@
 # What's new in LightCraft
 
+## 2026-10-17
+
+### Lightroom collections import when a print sits inside a collection
+- Lightroom Classic can save a print, book or slideshow inside a plain collection. Importing such a catalog failed at
+  the end with "parent must be an existing folder" and brought over no collections (issue #2165). That saved creation
+  now joins the collection set above it, or the top level, and the import report lists it under warnings.
+
 ## 2026-10-14
 
 ### Lightroom radial masks on the right side

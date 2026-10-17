@@ -863,6 +863,12 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, data: CatalogImport, contex
         albums.insert(number(collection, "id_local"), id);
     }
     let parents: HashMap<_, _> = data.collections.iter().map(|r| (number(r, "id_local"), number(r, "parent"))).collect();
+    let sets: HashSet<_> = data
+        .collections
+        .iter()
+        .filter(|r| text(r, "creationId").contains("group") && albums.contains_key(&number(r, "id_local")))
+        .map(|r| number(r, "id_local"))
+        .collect();
     let mut grouped_members: HashMap<i64, Vec<&Row>> = HashMap::new();
     for member in &data.members {
         grouped_members.entry(number(member, "collection")).or_default().push(member);
@@ -883,8 +889,19 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, data: CatalogImport, contex
     for collection in ordered {
         let Some(id) = albums.get(&number(collection, "id_local")).copied() else { continue };
         let mut album = Album::new(id, text(collection, "name"));
-        album.parent = albums.get(&number(collection, "parent")).copied();
         album.folder = text(collection, "creationId").contains("group");
+        // Lightroom Classic can save a print, book or slideshow inside a plain collection, but an album only nests
+        // in a folder: such a child joins the nearest collection set above it.
+        let mut at = number(collection, "parent");
+        let mut depth = 0;
+        while at != 0 && depth < 64 && !sets.contains(&at) {
+            depth += 1;
+            at = parents.get(&at).copied().unwrap_or(0);
+        }
+        album.parent = albums.get(&at).copied();
+        if album.parent != albums.get(&number(collection, "parent")).copied() {
+            warnings.push(format!("{}: was inside a collection, imported into the collection set above it", album.name));
+        }
         if text(collection, "creationId").contains("smart") {
             warnings.push(format!("{}: smart rules preserved in archive; imported current membership", album.name));
         }
@@ -1038,6 +1055,21 @@ mod tests {
         assert!(s.catalog.is_empty());
         assert!(s.catalog.albums().next().is_none());
         assert!(data.photos[1].settings.contains("CameraProfile")); // unmapped source stays intact
+    }
+    #[test]
+    fn creation_saved_inside_a_collection_joins_the_nearest_set() {
+        // Lightroom Classic can save a print or book inside a plain collection; LightCraft albums only nest in folders.
+        let mut s = crate::Session::new();
+        let mut data = sample();
+        data.collections.push(row(json!({"id_local":11,"parent":10,"name":"Print","creationId":"com.adobe.ag.print"})));
+        data.members.push(row(json!({"collection":11,"image":1,"positionInCollection":"a"})));
+        let r = apply(&mut s, data, false).unwrap();
+        assert_eq!(r["collections"], 3);
+        let travel = s.catalog.albums().find(|a| a.name == "Travel").unwrap().id;
+        let print = s.catalog.albums().find(|a| a.name == "Print").unwrap();
+        assert_eq!(print.parent, Some(travel));
+        assert_eq!(print.photos.len(), 1);
+        assert!(r["warnings"].as_array().unwrap().iter().any(|w| w.as_str().is_some_and(|w| w.contains("Print"))));
     }
     #[test]
     fn preserves_existing_edits_and_rejects_invalid_structure_before_mutation() {
