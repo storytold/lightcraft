@@ -3,6 +3,9 @@
 use crate::{ByteOrder, Entry, FieldType, Ifd, Result, Tiff, TiffError, Value, tags};
 use std::collections::HashSet;
 
+/// Aggregate directory slots accepted across one TIFF parse, including child IFDs.
+const MAX_TOTAL_IFD_ENTRIES: usize = 65_536;
+
 /// Limits applied while parsing. The defaults are generous for real files and safe for hostile ones.
 #[derive(Clone, Debug)]
 pub struct ParseOptions {
@@ -10,7 +13,7 @@ pub struct ParseOptions {
     pub max_ifds: usize,
     /// Maximum nesting depth of child IFDs.
     pub max_depth: usize,
-    /// Maximum number of entries read from one IFD.
+    /// Maximum number of entries read from one IFD (the aggregate parse limit is 65,536).
     pub max_entries: usize,
     /// Maximum total bytes of decoded values; `None` = `8 × input length + 1 MiB`.
     pub value_budget: Option<u64>,
@@ -167,7 +170,7 @@ pub(crate) fn parse(data: &[u8], opts: &ParseOptions) -> Result<Tiff> {
                 off = next;
             }
             Err(e) => {
-                if ifds.is_empty() {
+                if ifds.is_empty() || is_total_entry_limit(&e) {
                     return Err(e);
                 }
                 break;
@@ -195,12 +198,13 @@ struct Ctx<'a> {
     opts: &'a ParseOptions,
     visited: HashSet<u64>,
     budget: u64,
+    total_entries: usize,
 }
 
 impl<'a> Ctx<'a> {
     fn new(data: &'a [u8], order: ByteOrder, big: bool, opts: &'a ParseOptions) -> Self {
         let budget = opts.budget_for(data.len());
-        Self { data, order, big, opts, visited: HashSet::new(), budget }
+        Self { data, order, big, opts, visited: HashSet::new(), budget, total_entries: 0 }
     }
 
     fn read_off(&self, pos: usize) -> Option<u64> {
@@ -219,6 +223,11 @@ impl<'a> Ctx<'a> {
             return Err(TiffError::Invalid(format!("IFD loop at {offset}")));
         }
         let dir = directory_entries(self.data, offset, self.order, self.big, self.opts.max_entries)?;
+        let total_entries = self.total_entries.checked_add(dir.read).ok_or(TiffError::Limit("total IFD entries"))?;
+        if total_entries > MAX_TOTAL_IFD_ENTRIES {
+            return Err(TiffError::Limit("total IFD entries"));
+        }
+        self.total_entries = total_entries;
         let mut entries = Vec::with_capacity(dir.read);
         for p in dir.positions() {
             if let Some(e) = self.entry(p, base) {
@@ -239,33 +248,40 @@ impl<'a> Ctx<'a> {
         };
         let mut ifd = Ifd { offset, entries, ..Default::default() };
         if self.opts.follow_children {
-            self.children(&mut ifd, base, depth);
+            self.children(&mut ifd, base, depth)?;
         }
         Ok((ifd, next))
     }
 
-    fn children(&mut self, ifd: &mut Ifd, base: u64, depth: usize) {
+    fn children(&mut self, ifd: &mut Ifd, base: u64, depth: usize) -> Result<()> {
         if let Some(v) = ifd.value(tags::SUB_IFDS) {
             let offs = v.to_u64_vec();
             for o in offs {
-                if let Some(abs) = base.checked_add(o)
-                    && let Ok((sub, _)) = self.ifd(abs, base, depth + 1)
-                {
-                    ifd.sub_ifds.push(sub);
+                if let Some(abs) = base.checked_add(o) {
+                    match self.ifd(abs, base, depth + 1) {
+                        Ok((sub, _)) => ifd.sub_ifds.push(sub),
+                        Err(err) if is_total_entry_limit(&err) => return Err(err),
+                        Err(_) => {}
+                    }
                 }
             }
         }
-        let child = |tag: u16, ctx: &mut Self| -> Option<Box<Ifd>> {
-            let o = ifd.value(tag)?.get_u64(0)?;
-            let abs = base.checked_add(o)?;
-            ctx.ifd(abs, base, depth + 1).ok().map(|(i, _)| Box::new(i))
+        let child = |tag: u16, ctx: &mut Self| -> Result<Option<Box<Ifd>>> {
+            let Some(o) = ifd.value(tag).and_then(|value| value.get_u64(0)) else { return Ok(None) };
+            let Some(abs) = base.checked_add(o) else { return Ok(None) };
+            match ctx.ifd(abs, base, depth + 1) {
+                Ok((child, _)) => Ok(Some(Box::new(child))),
+                Err(err) if is_total_entry_limit(&err) => Err(err),
+                Err(_) => Ok(None),
+            }
         };
-        let exif = child(tags::EXIF_IFD, self);
-        let gps = child(tags::GPS_IFD, self);
-        let interop = child(tags::INTEROP_IFD, self);
+        let exif = child(tags::EXIF_IFD, self)?;
+        let gps = child(tags::GPS_IFD, self)?;
+        let interop = child(tags::INTEROP_IFD, self)?;
         ifd.exif = exif;
         ifd.gps = gps;
         ifd.interop = interop;
+        Ok(())
     }
 
     fn entry(&mut self, p: usize, base: u64) -> Option<Entry> {
@@ -277,6 +293,10 @@ impl<'a> Ctx<'a> {
         let bytes = self.data.get(usize::try_from(span.start).ok()?..usize::try_from(span.start + span.len).ok()?)?;
         Some(Entry { tag: span.tag, value: decode(self.order, span.field_type, bytes), offset: span.start })
     }
+}
+
+fn is_total_entry_limit(error: &TiffError) -> bool {
+    matches!(error, TiffError::Limit("total IFD entries"))
 }
 
 /// Decode `bytes` (exactly `count × size` long, or the first values of an entry) as values of type `typ`.

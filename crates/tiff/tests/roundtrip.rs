@@ -246,6 +246,45 @@ fn ifd_loops_are_detected() {
 }
 
 #[test]
+fn overlapping_ifd_tables_obey_total_entry_limit() {
+    const CHILD_IFDS: u32 = 9;
+    const ENTRIES_PER_IFD: u16 = 8192;
+    const FIRST_CHILD: u32 = 64;
+
+    let mut bytes = b"II*\0\x08\0\0\0".to_vec();
+    // One SubIFDs entry points to nine distinct table offsets, each 12 bytes after the previous one.
+    bytes.extend_from_slice(&1u16.to_le_bytes());
+    bytes.extend_from_slice(&330u16.to_le_bytes());
+    bytes.extend_from_slice(&4u16.to_le_bytes());
+    bytes.extend_from_slice(&CHILD_IFDS.to_le_bytes());
+    bytes.extend_from_slice(&26u32.to_le_bytes());
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    for index in 0..CHILD_IFDS {
+        bytes.extend_from_slice(&(FIRST_CHILD + index * 12).to_le_bytes());
+    }
+    bytes.resize(FIRST_CHILD as usize, 0);
+
+    let last_child = FIRST_CHILD + (CHILD_IFDS - 1) * 12;
+    let file_end = last_child as usize + 2 + ENTRIES_PER_IFD as usize * 12;
+    bytes.resize(file_end, 0);
+    for index in 0..CHILD_IFDS {
+        let count_offset = FIRST_CHILD as usize + index as usize * 12;
+        bytes[count_offset..count_offset + 2].copy_from_slice(&ENTRIES_PER_IFD.to_le_bytes());
+    }
+    // Entries are aligned at 12-byte offsets. Each next IFD count lands in the preceding entry's
+    // inline value, whose high two bytes encode the same 8192-entry count.
+    for index in 0..(ENTRIES_PER_IFD as usize + CHILD_IFDS as usize - 1) {
+        let entry = FIRST_CHILD as usize + 2 + index * 12;
+        bytes[entry..entry + 2].copy_from_slice(&1u16.to_le_bytes());
+        bytes[entry + 2..entry + 4].copy_from_slice(&4u16.to_le_bytes());
+        bytes[entry + 4..entry + 8].copy_from_slice(&1u32.to_le_bytes());
+        bytes[entry + 8..entry + 12].copy_from_slice(&0x2000_2000u32.to_le_bytes());
+    }
+
+    assert_eq!(Tiff::parse(&bytes), Err(TiffError::Limit("total IFD entries")));
+}
+
+#[test]
 fn out_of_range_entries_are_skipped() {
     let mut ifd = IfdBuilder::new();
     ifd.set(1, Value::Long(vec![1, 2, 3]));
