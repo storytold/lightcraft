@@ -10,7 +10,7 @@ other tools), and let LightCraft pick up edits made elsewhere.
 |---|---|
 | Name | `<stem>.xmp` by default (`IMG_0001.CR3` → `IMG_0001.xmp`); `<file>.xmp` (`IMG_0001.CR3.xmp`) with `naming: "full"`. Reading accepts either (preferred first) and `.XMP`. With stem naming, files sharing a stem don't share a sidecar: see *Shared names* below. |
 | Write | `photo.saveMetadataToFile {ids?}` (Photo ▸ Save Metadata to File, ⌘S), or automatically after every change with `library.xmpPreferences {autoWrite: true}` (File ▸ Automatically Write Changes into XMP). Slider drags are written once, when the drag ends; undo/redo rewrite the sidecar. An existing sidecar is **merged into, never replaced** (see *Saving into an existing sidecar*). Written atomically (temp file, fsync, rename). The result lists `written`, `merged` and `backups`. |
-| Read | On import (`library.import`, the report counts `sidecars`), and `photo.readMetadataFromFile {ids?}` (one undo step). For raw/DNG files without a sidecar, the XMP embedded in the file is used. `photo.readMetadataFromFile` never writes the sidecar, even with auto-write on: writing back what it has just read would add `lc:settings`, which later reads prefer over another app's `crs:` edits (issue #934). |
+| Read | On import (`library.import`, the report counts `sidecars`), and `photo.readMetadataFromFile {ids?}` (one undo step). Manual rereading uses embedded XMP in raw/DNG and JPEG files when no sidecar exists. A discovered sidecar that cannot be read or parsed is reported in `failed`, without applying embedded values. `photo.readMetadataFromFile` never writes the sidecar, even with auto-write on: writing back what it has just read would add `lc:settings`, which later reads prefer over another app's `crs:` edits (issue #934). |
 | Preferences | `library.xmpPreferences {autoWrite?, naming?: stem\|full}`, stored in the library's `prefs.json`. |
 
 What we write (standard namespaces, so other tools can read the metadata):
@@ -40,6 +40,29 @@ used — on import (it then also files a copied photo in its date folder) and by
 When foreign `crs:` settings are only partly transferable, `library.import` includes per-photo `warnings` in its
 report. Warnings identify unsupported profile names, saved Upright geometry that will be recalculated, and other
 unmapped adjustments; they do not change the source packet or become catalog edits.
+
+Manual rereading and undo leave the JPEG original unchanged. Manual rereading also leaves sidecar files unchanged,
+even with automatic XMP writing on. With automatic XMP writing off (the default), undo/redo leave sidecars unchanged;
+with it enabled, subsequent edits and undo/redo can trigger the existing sidecar writer. `photo.allMetadata` uses
+its already loaded file bytes for embedded XMP, with an existing sidecar taking precedence.
+
+Manual JPEG rereading uses the first standard XMP APP1 before the first SOS (scan) or EOI (end) marker.
+Scanning is limited to a 16 MiB header span, including SOI, segment headers and skipped payloads, and 4096
+marker/fill steps after SOI. Non-APP1 payloads are skipped without loading them. Each APP1 payload must be
+complete and is at most 65,533 bytes. Header extraction succeeds for the first complete
+standard XMP packet within both limits, including a packet ending exactly at either limit; otherwise it
+fails without a whole-file fallback, including on I/O errors or an incomplete APP1 whose available bytes
+form parseable XMP. A valid JPEG with
+XMP beyond those limits therefore cannot be manually reread through this path. Extended XMP assembly and
+packets between scans are not supported by manual JPEG rereading.
+
+Packet completeness is stricter than the shared best-effort JPEG extractor; it is not strict whole-JPEG
+validation. A complete early XMP packet can be returned without examining the remaining file. Import and
+`photo.allMetadata` retain their existing extraction paths. Command regressions in
+`crates/engine/src/tests_xmp.rs` cover metadata/undo and sidecar precedence, an over-nested XMP packet and a
+truncated APP1 without an XMP signature. Separate reader cases in `sidecar::jpeg_header_tests` use small
+counted readers and injected limits for span/step boundaries, complete versus truncated APP1, early stopping,
+short reads and I/O errors.
 
 ## Saving into an existing sidecar
 
