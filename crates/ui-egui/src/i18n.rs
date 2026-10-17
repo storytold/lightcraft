@@ -282,6 +282,13 @@ pub fn source_label(source: lightcraft_engine::LibrarySource, catalog: &lightcra
 /// two names (`photos/travel`; the folder's name is the user's and stays verbatim).
 pub fn source_title(session: &lightcraft_engine::Session) -> String {
     match (session.source, session.library_folder.as_deref()) {
+        // several chosen at once in the sidebar
+        (lightcraft_engine::LibrarySource::Album(_), _) if !session.also_albums.is_empty() => {
+            tr_format!("{n} albums", n = session.source_albums().len())
+        }
+        (lightcraft_engine::LibrarySource::LibraryFolder, Some(_)) if !session.also_library_folders.is_empty() => {
+            tr_format!("{n} folders", n = session.source_library_folders().len())
+        }
         (lightcraft_engine::LibrarySource::LibraryFolder, Some(path)) => lightcraft_catalog::folders::folder_label(path),
         (source, _) => source_label(source, &session.catalog),
     }

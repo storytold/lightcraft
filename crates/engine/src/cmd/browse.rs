@@ -457,9 +457,14 @@ fn move_to_folder(s: &mut Session, p: &Value) -> Result<Value> {
         return Ok(json!({"moved": 0, "folder": folder}));
     }
     let plural = |k: usize| if k == 1 { "" } else { "s" };
-    let _task = s.activity.start("move", &format!("Moving {n} photo{}", plural(n)), crate::activity::Cancel::No);
+    let task = s.activity.start("move", &format!("Moving {n} photo{}", plural(n)), crate::activity::Cancel::No);
     let name = dir.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_else(|| folder.to_string());
-    s.apply_file_plans(&crate::rename::RealFs, &plans, &|k| format!("Move {k} Photo{} to “{name}”", plural(k)))?;
+    let moved = s.apply_file_plans(&crate::rename::RealFs, &plans, &|k| format!("Move {k} Photo{} to “{name}”", plural(k)));
+    task.finish(match &moved {
+        Ok(_) => crate::activity::Outcome::default(),
+        Err(e) => crate::activity::Outcome::failed(e.to_string()),
+    });
+    moved?;
     Ok(json!({"moved": n, "folder": folder}))
 }
 
@@ -467,7 +472,17 @@ fn move_to_folder(s: &mut Session, p: &Value) -> Result<Value> {
 pub(crate) fn follow_folder(s: &mut Session, from: &str, to: &str) {
     // a library folder chosen at or below it follows too, as a source or as a filter
     follow_library_folder(&mut s.library_folder, from, to);
+    for other in &mut s.also_library_folders {
+        let mut chosen = Some(std::mem::take(other));
+        follow_library_folder(&mut chosen, from, to);
+        *other = chosen.unwrap_or_default();
+    }
     follow_library_folder(&mut s.filter.library_folder, from, to);
+    for other in &mut s.filter.library_folders {
+        let mut chosen = Some(std::mem::take(other));
+        follow_library_folder(&mut chosen, from, to);
+        *other = chosen.unwrap_or_default();
+    }
     if let Some(b) = &mut s.browse
         && let Ok(rel) = Path::new(&b.path).strip_prefix(from)
     {

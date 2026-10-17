@@ -28,6 +28,7 @@ pub mod menubar;
 pub mod menus;
 pub mod merge;
 mod model_setup;
+pub mod multi_select;
 pub mod panels;
 pub mod pick;
 pub mod print_view;
@@ -128,6 +129,8 @@ mod tests_masking_layout;
 #[cfg(test)]
 mod tests_menubar;
 #[cfg(test)]
+mod tests_multi_select;
+#[cfg(test)]
 mod tests_offline;
 #[cfg(test)]
 mod tests_open_lightroom;
@@ -145,6 +148,8 @@ mod tests_profiles_layout;
 mod tests_quit_unsaved;
 #[cfg(test)]
 mod tests_recheck;
+#[cfg(test)]
+mod tests_refusals;
 #[cfg(test)]
 mod tests_rename_person;
 #[cfg(test)]
@@ -190,6 +195,69 @@ pub use control::{ControlRequest, ControlResponse};
 pub use state::UiState;
 
 const TOAST_SECONDS: f64 = 1.4;
+/// How long a toast saying why a command was refused stays: a sentence to read, as
+/// [`LightcraftApp::toast_error`]'s.
+const REFUSAL_SECONDS: f64 = 6.0;
+
+/// A command that didn't run: the whole error (for agents, the log and the status) and what it
+/// says to the person who asked (the reason, without the command's id).
+struct Refusal {
+    error: String,
+    why: String,
+    /// What kind of error it is, for code that decides on it ([`LightcraftApp::run_typed`]).
+    kind: lightcraft_engine::ErrorKind,
+}
+
+impl Refusal {
+    /// An error that is already text (the interface's own commands). Mostly words for a person
+    /// as they are; a command that wraps an engine command hands on the engine's error already
+    /// turned into text, and of that only the reason is for the person. `error` stays whole.
+    fn plain(error: String) -> Refusal {
+        let why = engine_reason(&error).map(sentence).unwrap_or_else(|| error.clone());
+        Refusal { why, error, kind: lightcraft_engine::ErrorKind::Other }
+    }
+}
+
+/// A sentence starts with a capital, whatever the command wrote. Only when it starts with a word:
+/// a file name or a path ("img_0012.jpg is a virtual copy", "photos/a.jpg: …") is someone's
+/// spelling and stays as it is, and so does a letter whose capital is not one letter (ß).
+fn sentence(why: &str) -> String {
+    let first_word = why.split_whitespace().next().unwrap_or_default().trim_end_matches([',', ':', ';']);
+    let mut letters = why.chars();
+    match letters.next() {
+        Some(first) if first_word.chars().all(char::is_alphabetic) && first.to_uppercase().count() == 1 => {
+            first.to_uppercase().chain(letters).collect()
+        }
+        _ => why.to_string(),
+    }
+}
+
+/// The reason in an [`EngineError`](lightcraft_engine::EngineError) that is already text: what
+/// follows ``command `id` is not available right now: `` or ``invalid parameters for `id`: ``
+/// (its `Disabled` and `BadParams` formats). `None` for anything else, including text that only
+/// begins like one: the id must be a command's (letters, digits, `.`, `_`, `-`) between the
+/// backticks, so the reason is cut at the first separator and may hold colons and backticks.
+fn engine_reason(error: &str) -> Option<&str> {
+    const SHAPES: [(&str, &str); 2] = [("command `", "` is not available right now: "), ("invalid parameters for `", "`: ")];
+    SHAPES.iter().find_map(|(before, after)| {
+        let (id, reason) = error.strip_prefix(before)?.split_once(after)?;
+        let is_id = !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
+        (is_id && !reason.trim().is_empty()).then_some(reason)
+    })
+}
+
+impl From<lightcraft_engine::EngineError> for Refusal {
+    fn from(e: lightcraft_engine::EngineError) -> Refusal {
+        use lightcraft_engine::EngineError;
+        let why = match &e {
+            EngineError::Disabled(_, why) => why.clone(),
+            EngineError::BadParams { msg, .. } => msg.clone(),
+            other => other.to_string(),
+        };
+        Refusal { error: e.to_string(), why: sentence(&why), kind: e.kind() }
+    }
+}
+
 /// The `path` of a display profile read from the screen rather than chosen as a file.
 pub const SCREEN_PROFILE: &str = "screen";
 
@@ -437,6 +505,10 @@ pub struct LightcraftApp {
     pub sync_owns_changes: bool,
     /// A Synchronize Folder at work in the background.
     pub sync_run: Option<sync::SyncRun>,
+    /// A Synchronize Folder that waited in line, scanning its folder again before it runs.
+    pub sync_queued: Option<sync::SyncRescan>,
+    /// The scans of the Synchronize N Folders dialog, one folder after another.
+    pub sync_scans: Option<sync::ManyScan>,
     /// A Lightroom catalog inspect/import in progress.
     pub lightroom: Option<lightroom_import::LightroomTask>,
     /// Last terminal Lightroom result, exposed by the command's status/wait response.
@@ -476,8 +548,15 @@ pub struct LightcraftApp {
     /// The library failed to open at launch: the blocking window, then the temporary-session
     /// banner (issue #100). Cleared once a library opens.
     pub library_problem: Option<panels::library_problem::LibraryProblem>,
-    /// The activity stack shows every task, not just the first few ("+N more" was clicked).
-    pub activity_expanded: bool,
+    /// The list of running tasks under the top bar's bell is open (as of the last frame).
+    pub activity_open: bool,
+    /// `view.tasks` asked for the list to be opened or closed; the top bar does it on its next frame.
+    pub(crate) activity_set: Option<bool>,
+    /// The finished task whose failed files the list shows ("Show failed" was clicked).
+    pub(crate) activity_failures: Option<u64>,
+    /// The preview build seen running: its end is announced even when the next one in line has replaced it in
+    /// `session.preview_build` by then.
+    preview_watch: Option<std::sync::Arc<lightcraft_engine::cmd::previews::PreviewBuild>>,
 }
 
 impl LightcraftApp {
@@ -537,6 +616,8 @@ impl LightcraftApp {
             sync: None,
             sync_owns_changes: false,
             sync_run: None,
+            sync_queued: None,
+            sync_scans: None,
             lightroom: None,
             lightroom_last: None,
             lightroom_result: None,
@@ -555,7 +636,10 @@ impl LightcraftApp {
             screen_profile: None,
             screen_profile_read: None,
             library_problem: None,
-            activity_expanded: false,
+            activity_open: false,
+            activity_set: None,
+            activity_failures: None,
+            preview_watch: None,
             model_setup: Default::default(),
         }
     }
@@ -591,22 +675,54 @@ impl LightcraftApp {
         }
     }
 
-    /// Run a UI or engine command by id. The single entry point for every frontend path.
+    /// Run a UI or engine command by id. The single entry point for every frontend path: the
+    /// error comes back in full and nothing is shown, for agents (the control channel) and for
+    /// code that deals with the answer itself. A widget acting for the person uses [`Self::act`].
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
-        self.run_typed(id, params).map_err(|e| e.message)
+        self.run_told(id, params).map_err(|refusal| refusal.error)
     }
 
     /// [`LightcraftApp::run`], keeping what kind of error a refusal is: for code that decides on it
     /// (offer a model's download, treat a cancel as one) instead of reading the message.
     pub fn run_typed(&mut self, id: &str, params: Value) -> Result<Value, CommandError> {
+        self.run_told(id, params).map_err(|refusal| CommandError { message: refusal.error, kind: refusal.kind })
+    }
+
+    /// Run a command for the person at the interface (a click, a drop, a key): when it is
+    /// refused, a toast says why, so no widget has to pass that on by hand (or forget to).
+    /// `None` when it was refused: say a success of your own only on `Some`, or it writes over
+    /// the reason. `cargo xtask refusals` keeps the dropped form, `let _ = app.run(…)` (and
+    /// `let _ = app.session.execute(…)`, which goes round this), out of the interface: a widget
+    /// says which of `act`, [`Self::quiet`] and [`Self::run`] it means.
+    pub fn act(&mut self, id: &str, params: Value) -> Option<Value> {
+        match self.run_told(id, params) {
+            Ok(v) => Some(v),
+            Err(refusal) => {
+                // Native menu clicks can arrive before logic() updates last_time after an idle gap.
+                let now = self.tasks.repaint.as_ref().map(|ctx| ctx.input(|i| i.time)).unwrap_or(self.last_time);
+                self.ui.toast = Some((refusal.why, now + REFUSAL_SECONDS, None));
+                None
+            }
+        }
+    }
+
+    /// Run a command whose refusal is expected here and means nothing to the person (it is
+    /// tried on the off chance, or again on every frame of a gesture): nothing is shown. Say why
+    /// at the call. `None` when it was refused.
+    pub fn quiet(&mut self, id: &str, params: Value) -> Option<Value> {
+        self.run_told(id, params).ok()
+    }
+
+    /// [`Self::run`], keeping what a refusal says to a person apart from the whole error.
+    fn run_told(&mut self, id: &str, params: Value) -> Result<Value, Refusal> {
         if let Some(result) = model_setup::intercept(self, id, &params) {
-            return result.map_err(CommandError::from);
+            return result.map_err(Refusal::plain);
         }
         if let Some(r) = menus::run_ui_command(self, id, &params) {
             if r.is_ok() {
-                docking::reveal_command(self, id)?;
+                docking::reveal_command(self, id).map_err(Refusal::plain)?;
             }
-            return r.map_err(CommandError::from);
+            return r.map_err(Refusal::plain);
         }
         let params = if id == "crop.aspect"
             && params.get("aspect").and_then(Value::as_str) == Some("toggle")
@@ -617,7 +733,7 @@ impl LightcraftApp {
         } else {
             params
         };
-        let r = self.session.execute(id, &params).map_err(CommandError::from);
+        let r = self.session.execute(id, &params).map_err(Refusal::from);
         if r.is_ok() && matches!(id, "crop.aspect" | "crop.rotateAspect") {
             self.ui.crop_default_aspect = if id == "crop.aspect" && params.get("aspect").and_then(Value::as_str) == Some("original") {
                 Some(serde_json::json!("original"))
@@ -668,11 +784,11 @@ impl LightcraftApp {
             self.ui.toast = Some((text, now + TOAST_SECONDS, label));
         }
         match &r {
-            Err(e) => {
-                log::warn!("{id}: {e}");
-                self.ui.status = e.message.clone();
+            Err(refusal) => {
+                log::warn!("{id}: {}", refusal.error);
+                self.ui.status = refusal.error.clone();
                 // no detector yet: offer it (its terms first) instead of only saying so
-                if id == "faces.detect" && e.kind == ErrorKind::ModelMissing(AiModel::FaceDetector) {
+                if id == "faces.detect" && refusal.kind == ErrorKind::ModelMissing(AiModel::FaceDetector) {
                     panels::faces::offer_detector(self);
                 }
             }
@@ -684,9 +800,52 @@ impl LightcraftApp {
                     self.follow_renamed_person(from, &to);
                 }
             }
+            // (`place` tells a task put in line from the older `queued` counts of AI Denoise and Read Focus Points)
+            Ok(v) if v.get("queued").and_then(Value::as_u64).is_some() && v.get("place").and_then(Value::as_u64).is_some() => {
+                self.queued_toast(v.get("place").and_then(Value::as_u64).unwrap_or(1));
+            }
             Ok(_) => {}
         }
         r
+    }
+
+    /// Say that a task waits in line at `place` of its lane: without it, asking for it seems to do nothing.
+    pub(crate) fn queued_toast(&mut self, place: u64) {
+        // (counted as its row counts: the waiting tasks ahead of it, after the running one)
+        let text = if place <= 1 {
+            i18n::tr("Queued: it starts when the task ahead of it ends").to_string()
+        } else {
+            i18n::tr_format!("Queued: it starts after {n} more", n = place - 1)
+        };
+        let now = self.tasks.repaint.as_ref().map(|ctx| ctx.input(|i| i.time)).unwrap_or(self.last_time);
+        self.ui.toast = Some((text, now + TOAST_SECONDS, None));
+    }
+
+    /// Start the tasks waiting in line whose lane is free: the engine's ([`lightcraft_engine::Session::start_waiting`])
+    /// and the app's own (`app:import`, `app:synchronize`), each the way it was asked. One that can't start leaves a
+    /// row saying why, which can be retried; the next in line goes on.
+    fn start_waiting(&mut self, ctx: &egui::Context) {
+        self.session.start_waiting();
+        // The app's own wait while its slots are taken, row or no row yet: an import set this frame (Auto Import, its
+        // row comes at the next tick), a synchronize, or a Local folder being read (it becomes an import when read).
+        let held = self.import.is_some() || self.sync_run.is_some() || self.sync_queued.is_some() || self.scan.as_ref().is_some_and(|t| t.browse);
+        if held {
+            return;
+        }
+        // (bounded: each turn takes one task out of a line that is at most this long)
+        for _ in 0..lightcraft_engine::activity::MAX_WAITING {
+            let Some(w) = self.session.activity.take_ready_if(|r| r.command.starts_with("app:")) else { break };
+            let r = match w.request.command.as_str() {
+                import::IMPORT_REQUEST => import::start_request(self, ctx, &w.request),
+                sync::SYNC_REQUEST => sync::start_request(self, ctx, &w.request),
+                other => Err(format!("unknown request {other}")),
+            };
+            self.session.activity.started();
+            if let Err(e) = r {
+                log::warn!("{}: a task that waited could not start: {e}", w.request.command);
+                self.session.activity.could_not_start(w, &e);
+            }
+        }
     }
 
     /// The remembered ratio belongs to the tool until the user starts editing the crop.
@@ -738,29 +897,41 @@ impl LightcraftApp {
     /// Announce the end of a Build Previews run.
     fn preview_build_status(&mut self, ctx: &egui::Context) {
         use std::sync::atomic::Ordering;
+        // a build that ended after the next one in line took its place is still announced
+        if let Some(watched) = self.preview_watch.take_if(|b| b.finished.load(Ordering::Relaxed)) {
+            self.announce_preview_build(ctx, &watched);
+        }
         let Some(b) = self.session.preview_build.clone() else { return };
-        let key = std::sync::Arc::as_ptr(&b) as usize;
         if b.finished.load(Ordering::Relaxed) {
-            if self.ui.preview_build_seen != Some((key, true)) {
-                self.ui.preview_build_seen = Some((key, true));
-                let (done, failed) = (b.done.load(Ordering::Relaxed), b.failed.load(Ordering::Relaxed));
-                let plural = if done == 1 { "" } else { "s" };
-                let mut msg = match (b.error(), b.what) {
-                    (Some(e), what) => format!("{}: {e}", if what.is_empty() { "previews" } else { what }),
-                    (None, "") => crate::i18n::tr_format!("Previews ready for {done} photo{plural}", done = done, plural = plural),
-                    (None, what) => {
-                        crate::i18n::tr_format!("Done ({what}): {done} photo{plural}", done = done, plural = plural, what = crate::i18n::tr(what))
-                    }
-                };
-                if failed > 0 {
-                    msg.push_str(&crate::i18n::tr_format!(" · {failed} couldn't be rendered", failed = failed));
-                }
-                self.toast(ctx, msg);
-            }
+            self.announce_preview_build(ctx, &b);
         } else {
+            self.preview_watch = Some(b);
             // The activity stack shows the run while it works; poll for the end.
             ctx.request_repaint_after(std::time::Duration::from_millis(250));
         }
+    }
+
+    /// Say how the preview build `b` ended, once.
+    fn announce_preview_build(&mut self, ctx: &egui::Context, b: &std::sync::Arc<lightcraft_engine::cmd::previews::PreviewBuild>) {
+        use std::sync::atomic::Ordering;
+        let key = std::sync::Arc::as_ptr(b) as usize;
+        if self.ui.preview_build_seen == Some((key, true)) {
+            return;
+        }
+        self.ui.preview_build_seen = Some((key, true));
+        let (done, failed) = (b.done.load(Ordering::Relaxed), b.failed.load(Ordering::Relaxed));
+        let plural = if done == 1 { "" } else { "s" };
+        let mut msg = match (b.error(), b.what) {
+            (Some(e), what) => format!("{}: {e}", if what.is_empty() { "previews" } else { what }),
+            (None, "") => crate::i18n::tr_format!("Previews ready for {done} photo{plural}", done = done, plural = plural),
+            (None, what) => {
+                crate::i18n::tr_format!("Done ({what}): {done} photo{plural}", done = done, plural = plural, what = crate::i18n::tr(what))
+            }
+        };
+        if failed > 0 {
+            msg.push_str(&crate::i18n::tr_format!(" · {failed} couldn't be rendered", failed = failed));
+        }
+        self.toast(ctx, msg);
     }
 
     /// Announce when saving the library starts failing (changes then live only in memory and are
@@ -1109,12 +1280,16 @@ impl LightcraftApp {
         merge::poll(self, ctx);
         import::poll_scan(self, ctx);
         sync::poll(self, ctx);
+        sync::poll_many(self, ctx);
+        sync::poll_rescan(self, ctx);
         sync::poll_run(self, ctx);
         import::tick(self, ctx);
         lightroom_import::tick(self, ctx);
         recheck::tick(self);
         tasks::poll(self, ctx);
         self.preview_build_status(ctx);
+        // a task waiting in line whose lane freed while nothing was asked starts now (commands start the engine's too)
+        self.start_waiting(ctx);
         self.save_status(ctx);
         self.slideshow_tick(ctx);
         panels::faces::pump(self, ctx);
@@ -1135,12 +1310,8 @@ impl LightcraftApp {
         if let Some(folder) = self.session.import_defaults.auto_folder.clone() {
             const LABEL: &str = "Auto Import";
             let now = ctx.input(|i| i.time);
-            if now - self.ui.auto_import_at >= 3.0
-                && self.import.is_none()
-                && self.sync_run.is_none()
-                && self.lightroom.is_none()
-                && !self.tasks.is_running(LABEL)
-            {
+            // (it waits for the whole library lane: what runs, rescans or waits there goes first)
+            if now - self.ui.auto_import_at >= 3.0 && !import::library_busy(self) && self.lightroom.is_none() && !self.tasks.is_running(LABEL) {
                 self.ui.auto_import_at = now;
                 let work = move || lightcraft_engine::cmd::library::list_auto_import_folder(&folder);
                 let done = |app: &mut LightcraftApp, _ctx: &egui::Context, listing: Result<Vec<(String, u64)>, String>| {
@@ -1150,7 +1321,7 @@ impl LightcraftApp {
                     };
                     let p = serde_json::json!({"listing": listing, "start": false});
                     let Ok(r) = app.session.execute("library.autoImportScan", &p) else { return };
-                    let Some(mut params) = r.get("import").cloned().filter(|_| app.import.is_none()) else { return };
+                    let Some(mut params) = r.get("import").cloned().filter(|_| !import::library_busy(app)) else { return };
                     let paths: Vec<String> =
                         params["paths"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(str::to_string)).collect();
                     if let Some(o) = params.as_object_mut() {
@@ -1159,7 +1330,11 @@ impl LightcraftApp {
                     let undo0 = app.session.undo.len();
                     app.import = Some(import::ImportTask::new(paths, params, undo0, false).auto());
                 };
-                // listed every few seconds: quiet, no row in the activity stack
+                // listed every few seconds: quiet, no row in the activity stack (so nothing to say of how it ended)
+                let done = move |app: &mut LightcraftApp, ctx: &egui::Context, listing| {
+                    done(app, ctx, listing);
+                    lightcraft_engine::activity::Outcome::default()
+                };
                 if let Err(e) = tasks::spawn(self, LABEL, None, work, done) {
                     log::warn!("{e}");
                 }
@@ -1210,6 +1385,7 @@ impl LightcraftApp {
         focus_scan::pump(self, ctx);
         self.collect_screenshots(ctx);
         self.issue_screenshots(ctx);
+        panels::side_select::keys_frame(self, ctx);
         if self.fonts_ready {
             shortcuts::handle(self, ctx);
         }
@@ -1227,7 +1403,7 @@ impl LightcraftApp {
             }
             let (presets, photos) = split_presets(dropped);
             if !presets.is_empty() {
-                let _ = self.run("file.importPresets", serde_json::json!({"paths": presets}));
+                self.act("file.importPresets", serde_json::json!({"paths": presets}));
             }
             // read and added on a worker thread (dropped folders can be large, or on a slow drive)
             if !photos.is_empty() {
@@ -1244,6 +1420,7 @@ impl LightcraftApp {
     fn apply_settings(&mut self, ctx: &egui::Context) {
         if self.gpu_applied != Some(self.ui.settings.gpu) {
             self.gpu_applied = Some(self.ui.settings.gpu);
+            // refusal expected: a saved setting applied at start-up and when it changes, nobody's command; app.gpu takes either value
             let _ = self.session.execute("app.gpu", &serde_json::json!({"enabled": self.ui.settings.gpu}));
             // GPU device + kernels off the UI thread, once the window is up and only when GPU
             // rendering is on: a broken driver must not keep the window from appearing (issue #136)
@@ -1255,6 +1432,7 @@ impl LightcraftApp {
         // automatic at startup: leave the engine's default alone
         if self.memory_applied != Some(mb) && (mb > 0 || self.memory_applied.is_some()) {
             let mb = if mb == 0 { (lightcraft_engine::memory::default_budget() >> 20) as u32 } else { mb };
+            // refusal expected: a saved setting applied at start-up; out of range (a hand-edited file) the engine keeps its budget
             let _ = self.session.execute("app.memoryBudget", &serde_json::json!({"mb": mb}));
         }
         self.memory_applied = Some(mb);
@@ -1437,7 +1615,10 @@ impl LightcraftApp {
         self.ai_mask_detail(&ctx);
         self.place_names_outcome(&ctx);
         if self.ui.fullscreen {
-            // full-screen preview: the photo alone on black
+            // full-screen preview: the photo alone on black (no top bar: the list of tasks under its bell is closed,
+            // and a request to open it is not kept for later)
+            self.activity_open = false;
+            self.activity_set = None;
             egui::CentralPanel::default()
                 .frame(egui::Frame::NONE.fill(egui::Color32::BLACK))
                 .show(ui, |ui| if self.ui.slideshow.is_some() { panels::slideshow::show(self, ui) } else { panels::detail::show(self, ui) });
@@ -1465,7 +1646,6 @@ impl LightcraftApp {
         panels::library_problem::show(self, &ctx);
         export_task::poll(self, &ctx);
         slideshow_export::poll(self, &ctx);
-        panels::activity::show(self, &ctx);
         export_task::poll_photos(self, &ctx);
         pick::poll(self, &ctx);
         panels::grid::drag_feedback(self, &ctx);

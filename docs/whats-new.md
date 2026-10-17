@@ -1,7 +1,47 @@
 # What's new in LightCraft
 
+## 2026-10-15
+
+### Synchronize several folders at once
+- Choose several folders in the Folders list (Cmd/Ctrl+click, Shift+click) and right-click: Synchronize N Folders…
+  opens one dialog. It looks at the folders one after another and says, for each, what changed (new, moved, missing,
+  with changed sidecars) or that it is up to date; the choices below count them all.
+- Synchronize then brings the library up to date with each folder in turn, in the order the sidebar lists them, under
+  the bell. Each one removes or relinks only the photos its scan found, and a folder that is up to date, isn't there (moved,
+  renamed, or on a disk that isn't connected) or is a whole disk is passed over, and the dialog says why.
+- A folder inside another chosen one is taken in with it, not done twice. Cancel leaves nothing behind under the bell;
+  the rows waiting in line name their folder.
+
+### Imports and Synchronize Folder wait for each other
+- An import confirmed (or photos dropped on the window) while a Synchronize Folder runs, or a Synchronize Folder
+  confirmed while an import runs, now waits in line and starts by itself when the other ends. Before, it was refused
+  ("Wait for the import to finish", "A folder is being synchronized").
+- A waiting import checks for duplicates against the library as it is when its turn comes, so nothing is added twice.
+- A waiting Synchronize Folder looks at its folder again when its turn comes. It removes or relinks only the photos
+  its dialog showed: one that went missing while it waited is left alone, and the message at the end says so.
+- An import or Synchronize Folder that did not go well has Retry in its row under the bell.
+
+### A second preview build waits for the first
+- File ▸ Previews stays available while a build runs. Build Previews or Build / Discard Smart Previews chosen
+  meanwhile now waits in line and starts by itself when the builds ahead of it end, with the photos that were chosen
+  when you asked. Before, the items were greyed out until the build ended.
+- Waiting builds are listed under the bell below the running one, with when each starts and ✕ to take it out of the
+  line. The line beside the bell counts them ("2 waiting").
+- A build that did not go well has Retry in its row: it runs again for the same photos.
+- Nothing waits across a quit or another library: the files may have changed meanwhile. Quitting says how many would
+  not run.
+- Agents queue a build with `queue: true`, see it in `activity.list` (`waiting`, `place`, `lane`), take it out with
+  `activity.cancel` and ask again for one that did not go well with `activity.retry`.
+
 ## 2026-10-14
 
+### Every finished task leaves a row
+- Synchronize Folder, Build Previews and Smart Previews, Photo Merge, Lightroom catalogs, downloads, folder scans,
+  Fill Location from GPS, moving photos and Find Missing Photos now stay in the list under the bell when they end,
+  as exports and imports already did: until you dismiss them when they ran 10 seconds or more, were stopped or did
+  not go well. A Synchronize Folder lists the files it could not do, with the reason for each; a preview build says
+  how many photos it could not make.
+- The face scan and AI Denoise work through photos as they come: their row still goes when nothing is left.
 ### Lightroom radial masks on the right side
 - Radial masks brought over from Lightroom Classic (catalog import, XMP sidecars, edits inside DNGs and presets) now
   apply their effect inside the circle, as Lightroom does, instead of outside it (issue #1815). A mask inverted in
@@ -183,6 +223,23 @@
 
 ## 2026-10-13
 
+### What a finished export or import leaves behind
+- An export or import that ran for 10 seconds or more, was stopped, or did not go well for every file stays in the
+  list under the bell when it ends, until you dismiss it: what it did, how long it took, and for an export the files
+  that failed with the reason for each (Show failed, Copy all) and Show in Finder (Explorer, File Manager) for what
+  it made; an import says how many files it could not read. The message that passes still shows, as before; until
+  now it was the only record.
+- One that did not go well puts a mark on the bell until you dismiss it, and comes first in the list, under "Needs
+  attention". An export whose worker crashed says that it stopped unexpectedly.
+- With nothing else running, the top bar says for a few seconds how the task that just ended went.
+
+### Background tasks under the bell
+- Running tasks (imports, exports, preview builds…) no longer float over the top-left corner, where they covered the
+  top of the left panel for as long as a job ran. The bell in the top bar shows them: a ring for how far along they
+  are, and beside it, in a wide window, the task's name and percentage, or how many run (a narrower window keeps the
+  percentage or the count, and the bell's tooltip says the rest). Click the bell (or Window ▸ Tasks) for the list,
+  with ✕ to stop a task; it shows every task, the newest first, and scrolls. Esc or a click elsewhere closes it.
+- The bell used to open History. History is in the Window menu and on the tool strip, as before.
 ### Edits keep up in a large library
 - A small edit (a keyword, a rating, a flag, a slider) no longer has the grid's list worked out again from every
   photo: only the photos the edit touched are asked about again and put at their place in the order. In a library of
@@ -465,6 +522,27 @@
 - With several photos selected, the Keywords panel says how many photos its keywords belong to. The × on a keyword
   is a larger target that lights up on its own, and taking a keyword off several photos at once now says which
   keyword left how many photos, and that Edit ▸ Undo puts it back.
+### Several albums, folders, keywords or dates at once
+- In the left panel, Cmd+click (Ctrl+click on Windows and Linux) adds an album, a folder, a keyword or a date to the
+  ones chosen, or takes it away; Shift+click takes every row between the last one clicked and this one. The grid
+  shows the photos of any of them, each once. A plain click chooses one row alone, as before.
+- In the Keyword List (right panel ▸ Keywords) the same clicks pick several keywords.
+- Right-click one of several rows chosen to act on them all, as one step to undo: move albums into a folder, export
+  them, or delete them; give folders a colour label or remove them from the library; give keywords to the selected
+  photos, take them away, merge them or delete them. Deleting or removing several asks first and says what goes.
+  Right-click a row that is not among them and you get that row's own menu; the others stay chosen.
+- Dragging one of several albums or keywords moves them all (albums go into the folder they are dropped in or
+  beside; placing by hand among its neighbours stays one album's).
+- Right after choosing several rows with Cmd or Shift, the Delete key asks about those rows. Click anywhere else,
+  or select photos or change what is shown in any other way, and Delete is about the photos again; after a plain
+  click on an album it always was.
+- Cut, Copy and Paste in the albums' and keywords' menus: cut albums move into the folder where you choose Paste
+  (the Albums + menu pastes at the top level), copied albums are duplicated there with their photos; cut keywords
+  are nested inside the keyword where you choose Paste; copied keywords are text you can paste in a keyword box.
+- For agents: `library.source` takes `ids` (albums) or `paths` (folders), `library.filter` takes `keywords` and
+  `dates`; `album.delete`, `album.move` and the new `album.duplicate` take `ids`, `keyword.delete` and
+  `keyword.move` take `keywords`, `library.removeFolder` and `folder.label` take `paths`. `library.state` lists
+  `albums` and `libraryFolders`.
 
 ### HDR and panorama merges of CR2 keep their colour
 - Photo Merge of Canon CR2 (and other raws whose colour LightCraft fits from the camera's own JPEG, such as NEF and
@@ -568,6 +646,26 @@
 - Settings ▸ General ▸ External Editing: the format (PSD or TIFF), colour space and bit depth for PhotoCraft and for
   the other editor (Edit in Other Editor, now ⌥⌘E), and where PhotoCraft is if you use a portable copy.
 - Export can write PSD too (flat, 8- or 16-bit).
+
+### Refused commands say why
+- When something you click, drop, drag a slider for, choose from a menu or press a key for can't be done, a message
+  at the bottom of the photo says why ("No photos selected", "Smart album “Trips view” would include itself in folder
+  “Trips”…") and stays long enough to read. Before, most such clicks did nothing and said nothing; only a few places,
+  such as an export that couldn't start, explained themselves.
+- Nothing claims a success that didn't happen: pressing 3 with no photo selected no longer says "Rated ★★★", ⌘Z with
+  nothing to undo no longer says "Undo", and Auto, a preset or Paste Settings that couldn't be applied say why
+  instead of "applied".
+
+### Folders of albums
+- Clicking a folder in the sidebar's Albums section shows the photos of every album and smart album inside it,
+  folders inside it included, each photo once, as a collection set does in Lightroom Classic. The grid is titled with
+  the folder's name and follows the sort and the filter bar. The triangle beside the folder opens and closes it; a
+  click on the row no longer does.
+- A folder's view can be saved as a smart album that follows the folder, also after its rules are edited (editing
+  the rules of a saved album view used to drop the album). It can't be made in, or moved into, the folder it shows
+  (it would include itself): that folder is no drop target and isn't offered under Move to, and commands say why.
+- Agents show a folder with `library.source {"kind": "album", "id": <folder id>}`; `albums.list` reports a folder's
+  `count`.
 
 ### Faster GPU exports
 - Exports with noise reduction, Texture, Clarity, Dehaze or Highlights and Shadows can be much faster on the GPU,

@@ -234,6 +234,7 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "panel.presets",
             "panel.versions",
             "panel.activity",
+            "view.tasks",
             "panel.info",
             "panel.keywords",
             "---",
@@ -354,6 +355,7 @@ pub fn checked(app: &LightcraftApp, id: &str) -> Option<bool> {
         "view.navigator" => Some(u.navigator),
         "view.layoutImage" => Some(u.layout_image.show && !u.layout_image.path.trim().is_empty()),
         "library.holdView" => Some(app.session.hold_view),
+        "view.tasks" => Some(app.activity_open),
         "view.fullScreenPreview" => Some(u.fullscreen),
         "view.lightsOut" => Some(u.lights_out != crate::state::LightsOut::On),
         "view.enterFullScreen" => Some(app.window_is_fullscreen),
@@ -399,21 +401,22 @@ pub(crate) fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>>
         "Previews" => {
             let running = app.session.preview_build.as_ref().is_some_and(|b| !b.finished.load(std::sync::atomic::Ordering::Relaxed));
             let scope = if app.session.selection.ids.len() > 1 { "Selected" } else { "Visible" };
+            // (while a build runs, the next one waits in line for it: `queue`)
             vec![
                 item(
                     "library.buildPreviews",
-                    json!({"size": "standard", "edge": app.ui.settings.standard_preview_edge()}),
+                    json!({"size": "standard", "edge": app.ui.settings.standard_preview_edge(), "queue": true}),
                     crate::i18n::tr_format!("Build Standard-Sized Previews ({scope})", scope = crate::i18n::tr(scope)),
                     None,
-                    !running,
+                    true,
                     None,
                 ),
                 item(
                     "library.buildPreviews",
-                    json!({"size": "full"}),
+                    json!({"size": "full", "queue": true}),
                     crate::i18n::tr_format!("Build 1:1 Previews ({scope})", scope = crate::i18n::tr(scope)),
                     None,
-                    !running,
+                    true,
                     None,
                 ),
                 item("library.cancelPreviews", Value::Null, "Stop Building Previews", None, running, None),
@@ -421,18 +424,18 @@ pub(crate) fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>>
                 // (read and written on a worker thread: the originals may be on a slow drive)
                 item(
                     "library.smartPreviews",
-                    json!({"background": true}),
+                    json!({"background": true, "queue": true}),
                     crate::i18n::tr_format!("Build Smart Previews ({scope})", scope = crate::i18n::tr(scope)),
                     None,
-                    app.session.media.smart_dir.is_some() && !running,
+                    app.session.media.smart_dir.is_some(),
                     None,
                 ),
                 item(
                     "library.smartPreviews",
-                    json!({"discard": true, "background": true}),
+                    json!({"discard": true, "background": true, "queue": true}),
                     crate::i18n::tr_format!("Discard Smart Previews ({scope})", scope = crate::i18n::tr(scope)),
                     None,
-                    app.session.media.smart_dir.is_some() && !running,
+                    app.session.media.smart_dir.is_some(),
                     None,
                 ),
                 MenuNode::Separator,
@@ -839,6 +842,24 @@ pub fn menu_bar(app: &LightcraftApp) -> Vec<(String, Vec<MenuNode>)> {
 /// Run a menu item. Rating, flag and label items behave like their keys (the active photo only in
 /// Compare/Survey; Auto Advance moves on).
 pub fn run_item(app: &mut LightcraftApp, id: &str, params: Value) -> Result<Value, String> {
+    clicked_item(app, id, params, LightcraftApp::run, Result::is_ok).unwrap_or(Ok(Value::Null))
+}
+
+/// [`run_item`] for a click on the item: a refusal is said in a toast ([`LightcraftApp::act`]).
+/// `None` when it was refused.
+pub fn act_item(app: &mut LightcraftApp, id: &str, params: Value) -> Option<Value> {
+    clicked_item(app, id, params, LightcraftApp::act, Option::is_some).unwrap_or(Some(Value::Null))
+}
+
+/// A menu item run by `run`, which `went` says went through; `None` when the item only opened
+/// its confirmation.
+fn clicked_item<R>(
+    app: &mut LightcraftApp,
+    id: &str,
+    params: Value,
+    run: impl FnOnce(&mut LightcraftApp, &str, Value) -> R,
+    went: impl FnOnce(&R) -> bool,
+) -> Option<R> {
     let mut params = if params.is_null() { json!({}) } else { params };
     let culling_cmd = matches!(
         id,
@@ -856,13 +877,13 @@ pub fn run_item(app: &mut LightcraftApp, id: &str, params: Value) -> Result<Valu
         crate::panels::compare::target_active(app, &mut params);
     }
     if id == "photo.delete" && crate::menus::confirm_delete(app) {
-        return Ok(Value::Null);
+        return None;
     }
-    let r = app.run(id, params);
-    if culling_cmd && r.is_ok() && app.ui.auto_advance {
+    let r = run(app, id, params);
+    if culling_cmd && went(&r) && app.ui.auto_advance {
         crate::panels::compare::advance(app);
     }
-    r
+    Some(r)
 }
 
 /// Human-readable shortcut text for menus: `Cmd+Shift+Z` → `⌘⇧Z` on macOS, `Ctrl+Shift+Z` elsewhere.
@@ -961,13 +982,8 @@ pub fn show_in_window(app: &mut LightcraftApp, ui: &mut egui::Ui, max_width: f32
         });
     }
     if let Some((id, params)) = clicked {
-        let r = run_item(app, &id, params);
-        // an export that can't start (e.g. no folder) says why instead of doing nothing
-        if let Err(e) = r
-            && matches!(id.as_str(), "app.export" | "app.exportPrevious")
-        {
-            app.toast(ui.ctx(), e);
-        }
+        // an item that can't run (an export with no folder…) says why instead of doing nothing
+        act_item(app, &id, params);
     }
     ui.cursor().left() - start
 }
@@ -1529,7 +1545,7 @@ mod tests {
             move || {
                 let _ = rx_unblock.recv();
             },
-            |_app, _ctx, _| {},
+            |_app, _ctx, _| lightcraft_engine::activity::Outcome::default(),
         )
         .unwrap();
         assert!(app.tasks.is_running("Unrelated Long Background Task"));

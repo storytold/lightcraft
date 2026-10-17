@@ -78,11 +78,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 if icon_button(ui, "sidebar", Icon::Sidebar, vec2(30.0, 30.0), app.ui.left_panel, true, crate::i18n::tr("Show/hide My Photos panel"))
                     .clicked()
                 {
-                    let _ = app.run("view.leftPanel", json!({}));
+                    app.act("view.leftPanel", json!({}));
                 }
                 ui.add_space(8.0);
                 if icon_button(ui, "back", Icon::Back, vec2(30.0, 30.0), false, true, crate::i18n::tr("Back")).clicked() {
-                    let _ = app.run("view.back", json!({}));
+                    app.act("view.back", json!({}));
                 }
                 icon_button(ui, "forward", Icon::Forward, vec2(30.0, 30.0), false, false, crate::i18n::tr("Forward"));
                 if !app.native_menu {
@@ -125,7 +125,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 .response;
             if resp.changed() {
                 let q = app.ui.search.clone();
-                let _ = app.run("library.filter", json!({"text": q}));
+                app.act("library.filter", json!({"text": q}));
             }
             // filter icon right of the search field
             let fr = Rect::from_center_size(pos2(sr.right() + 22.0, sr.center().y), vec2(28.0, 28.0));
@@ -158,7 +158,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 crate::i18n::tr("Filter bar").into()
             });
             if fresp.clicked() {
-                let _ = app.run("view.filterBar", json!({}));
+                app.act("view.filterBar", json!({}));
             }
             // right icons
             let mut x = full.right() - 18.0;
@@ -185,7 +185,6 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 ("help", Icon::Help, "Keyboard shortcuts", "app.shortcuts"),
                 ("share", Icon::Share, "Export", "dialog.export"),
                 ("import", Icon::Plus, import_tip.as_str(), "file.addPhotos"),
-                ("bell", Icon::Bell, "Activity", "panel.activity"),
             ] {
                 let r = Rect::from_center_size(pos2(x, full.center().y), vec2(28.0, 28.0));
                 let resp = ui.interact(r, egui::Id::new(("top", id)), Sense::click()).on_hover_text(crate::i18n::tr(tip));
@@ -206,12 +205,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     ui.painter().text(c, Align2::CENTER_CENTER, "!", t.semibold(9.5), t.canvas);
                     register(ui.ctx(), "indicator:unsaved", r);
                 }
-                // a refusal says why (Import while a Lightroom catalog is coming in)
-                if resp.clicked()
-                    && !cmd.is_empty()
-                    && let Err(e) = app.run(cmd, json!({}))
-                {
-                    app.toast_error(ui.ctx(), e);
+                if resp.clicked() && !cmd.is_empty() {
+                    app.act(cmd, json!({}));
                 }
                 x -= 40.0;
             }
@@ -224,13 +219,13 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             register(ui.ctx(), "icon:appearance", r);
             paint(ui.painter(), r.shrink(5.0), icon, if resp.hovered() { t.text } else { t.icon });
             if resp.clicked() {
-                let _ = app.run("view.appearance", json!({}));
+                app.act("view.appearance", json!({}));
             }
             resp.context_menu(|ui| {
                 let settings = ui.button(crate::i18n::tr("Appearance Settings…"));
                 register(ui.ctx(), "menu:appearanceSettings", settings.rect);
                 if settings.clicked() {
-                    let _ = app.run("app.settings", json!({"tab": "interface"}));
+                    app.act("app.settings", json!({"tab": "interface"}));
                     ui.close();
                 }
                 let favorites = app.ui.settings.favorite_themes.clone();
@@ -244,12 +239,17 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                         let r = ui.selectable_label(app.ui.settings.theme(app.system_theme(ui.ctx())) == *kind, crate::i18n::tr(kind.label()));
                         register(ui.ctx(), format!("menu:themeFavorite-{}", kind.id()), r.rect);
                         if r.clicked() {
-                            let _ = app.run("view.theme", json!({"theme": kind.id()}));
+                            app.act("view.theme", json!({"theme": kind.id()}));
                             ui.close();
                         }
                     }
                 }
             });
+            // the bell, leftmost of the icons: what runs in the background, with the room up to the filter icon
+            // for naming it
+            x -= 40.0;
+            let bell = Rect::from_center_size(pos2(x, full.center().y), vec2(28.0, 28.0));
+            crate::panels::activity::bell(app, ui, &t, bell, fr.right() + 12.0);
             let _ = Align2::CENTER_CENTER;
         });
 }

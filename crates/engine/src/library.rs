@@ -178,6 +178,11 @@ struct ViewFile {
     browse: Option<crate::Browse>,
     /// The folder a `libraryFolder` source shows.
     library_folder: Option<String>,
+    /// The other albums and folders shown beside the source's own (several chosen at once).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    also_albums: Vec<lightcraft_catalog::AlbumId>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    also_library_folders: Vec<String>,
     // No filter: a library opens unfiltered. A date, keyword or person left over from the last session
     // would silently hide photos, with only a small badge to say so.
     sort: lightcraft_catalog::Sort,
@@ -459,6 +464,11 @@ impl Session {
         // Photo ids belong to one library; denoise work must not carry into the next.
         self.denoise.library_changed();
         self.media.denoise.clear();
+        // nor tasks waiting in line, or asked for again: they name the old library's photos and folders
+        let dropped = self.activity.library_changed();
+        if dropped > 0 {
+            log::info!("library: {dropped} task(s) waiting in line were dropped with the old library");
+        }
         // what was learned about the old library's faces is saved, and none of it carries over (photo ids are per library)
         #[cfg(not(target_arch = "wasm32"))]
         self.faces.library_changed();
@@ -483,6 +493,8 @@ impl Session {
         self.selection = Selection::default();
         self.source = LibrarySource::All;
         self.library_folder = None;
+        self.also_albums.clear();
+        self.also_library_folders.clear();
         if report.created && seed_demo {
             crate::demo::load(self);
             journal.snapshot(&self.catalog)?;
@@ -538,13 +550,35 @@ impl Session {
             self.source = v.source;
             self.browse = v.browse;
             self.library_folder = v.library_folder.filter(|f| !f.trim().is_empty());
+            // (albums that are gone, and folders without photos, leave when the view is first drawn)
+            self.also_albums = v.also_albums.into_iter().take(crate::cmd::library::MAX_SOURCES).collect();
+            // as a call would have them: folders only (not the startup disk), each once, not the source's own
+            let own = self.library_folder.as_deref().map(lightcraft_catalog::query::folder_key);
+            let mut keys: Vec<String> = Vec::new();
+            self.also_library_folders = v
+                .also_library_folders
+                .into_iter()
+                .filter(|f| !f.trim().is_empty() && !lightcraft_catalog::folders::is_startup_disk(f))
+                .filter(|f| {
+                    let key = lightcraft_catalog::query::folder_key(f);
+                    let new = !key.is_empty() && Some(&key) != own.as_ref() && !keys.contains(&key);
+                    keys.push(key);
+                    new
+                })
+                .take(crate::cmd::library::MAX_SOURCES)
+                .collect();
             if self.source == LibrarySource::LibraryFolder {
                 // a folder that is gone (or none): everything, not an empty grid
-                let f = lightcraft_catalog::Filter { library_folder: self.library_folder.clone(), ..Default::default() };
+                let f = lightcraft_catalog::Filter {
+                    library_folder: self.library_folder.clone(),
+                    library_folders: self.also_library_folders.clone(),
+                    ..Default::default()
+                };
                 let any = self.library_folder.is_some() && !self.catalog.query(&f, &lightcraft_catalog::Sort::default()).is_empty();
                 if !any {
                     self.source = LibrarySource::All;
                     self.library_folder = None;
+                    self.also_library_folders.clear();
                 }
             }
             self.sort = v.sort;
@@ -718,6 +752,8 @@ impl Session {
             browse: self.browse.clone(),
             // only while it is shown: a leftover would be a stale choice nobody made
             library_folder: self.library_folder.clone().filter(|_| self.source == LibrarySource::LibraryFolder),
+            also_albums: self.also_albums.clone().into_iter().filter(|_| matches!(self.source, LibrarySource::Album(_))).collect(),
+            also_library_folders: self.also_library_folders.clone().into_iter().filter(|_| self.source == LibrarySource::LibraryFolder).collect(),
             sort: self.sort,
             selection: self.selection.clone(),
         };

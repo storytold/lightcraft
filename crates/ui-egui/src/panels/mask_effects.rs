@@ -270,9 +270,9 @@ fn menu(app: &mut LightcraftApp, ui: &mut egui::Ui, mask: &Mask, current: Option
     };
     if item(ui, "maskEffectMenu:reset", crate::i18n::tr("Reset Sliders").to_string(), true) {
         let zero: serde_json::Map<String, Value> = FIELDS.iter().map(|k| (k.to_string(), json!(0.0))).collect();
-        let _ = app.run("mask.adjust", json!({"id": mask.id, "values": zero}));
+        app.act("mask.adjust", json!({"id": mask.id, "values": zero}));
         if let Some(tool) = fx::mask_tool(mask) {
-            let _ = app.run("mask.toolEffect", json!({"tool": tool}));
+            app.act("mask.toolEffect", json!({"tool": tool}));
         }
         ui.close();
     }
@@ -283,7 +283,7 @@ fn menu(app: &mut LightcraftApp, ui: &mut egui::Ui, mask: &Mask, current: Option
     if let Some(last) = last_applied(app, mask) {
         let text = crate::i18n::tr_format!("Update “{name}” with Current Settings", name = last);
         if item(ui, "maskEffectMenu:update", text, current != Some(last.as_str())) {
-            let _ = app.run("mask.updateEffect", json!({"name": last, "id": mask.id}));
+            app.act("mask.updateEffect", json!({"name": last, "id": mask.id}));
             ui.close();
         }
     }
@@ -292,12 +292,12 @@ fn menu(app: &mut LightcraftApp, ui: &mut egui::Ui, mask: &Mask, current: Option
         ui.close();
     }
     if item(ui, "maskEffectMenu:import", crate::i18n::tr("Import Presets…").to_string(), app.services.pick_preset_files.is_some()) {
-        let _ = app.run("file.importPresets", json!({}));
+        app.act("file.importPresets", json!({}));
         ui.close();
     }
     let any = !app.session.mask_effects.is_empty();
     if item(ui, "maskEffectMenu:export", crate::i18n::tr("Export Presets…").to_string(), any && app.services.save_preset_file.is_some()) {
-        let _ = app.run("file.exportMaskEffects", json!({}));
+        app.act("file.exportMaskEffects", json!({}));
         ui.close();
     }
 }
@@ -359,7 +359,7 @@ fn group_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, names: &[String]) {
     for g in groups.iter().map(String::as_str).chain(std::iter::once("")) {
         let label = if g.is_empty() { crate::i18n::tr("None").to_string() } else { g.to_string() };
         if ui.button(label).clicked() {
-            let _ = app.run("mask.setEffectGroup", json!({"names": names, "group": g}));
+            app.act("mask.setEffectGroup", json!({"names": names, "group": g}));
             ui.close();
         }
     }
@@ -579,7 +579,7 @@ pub fn manage_body(
         }
     });
     if let Some((name, on)) = toggle_star {
-        let _ = app.run("mask.favoriteEffect", json!({"name": name, "favorite": on}));
+        app.act("mask.favoriteEffect", json!({"name": name, "favorite": on}));
     }
     if let Some((old, to)) = commit_rename {
         *rename = None;
@@ -603,7 +603,7 @@ pub fn manage_body(
             let d = ui.button(crate::i18n::tr("Delete"));
             register(ui.ctx(), "button:effectDeleteConfirm", d.rect);
             if d.clicked() {
-                let _ = app.run("mask.deleteEffect", json!({"names": selected.clone()}));
+                app.act("mask.deleteEffect", json!({"names": selected.clone()}));
                 selected.clear();
                 *confirm_delete = false;
             }
@@ -629,7 +629,7 @@ pub fn manage_body(
         if button(ui, "Update", "Update with Mask", one.is_some() && mask.is_some())
             && let (Some(name), Some(mid)) = (&one, mask)
         {
-            let _ = app.run("mask.updateEffect", json!({"name": name, "id": mid}));
+            app.act("mask.updateEffect", json!({"name": name, "id": mid}));
         }
         if button(ui, "Rename", "Rename", one.is_some())
             && let Some(name) = &one
@@ -645,7 +645,7 @@ pub fn manage_body(
         }
         if button(ui, "Favorite", "★ Favorite", n > 0) {
             let all_fav = selected.iter().all(|s| effects.iter().any(|e| &e.name == s && e.favorite));
-            let _ = app.run("mask.favoriteEffect", json!({"names": selected.clone(), "favorite": !all_fav}));
+            app.act("mask.favoriteEffect", json!({"names": selected.clone(), "favorite": !all_fav}));
         }
         let g = ui.add_enabled(n > 0, egui::Button::new(crate::i18n::tr("Move to Group…")));
         register(ui.ctx(), "button:effectGroup", g.rect);
@@ -654,7 +654,7 @@ pub fn manage_body(
             for (grp, _) in fx::menu_order(&app.session.mask_effects) {
                 let label = if grp.is_empty() { crate::i18n::tr("None").to_string() } else { grp.clone() };
                 if ui.button(label).clicked() {
-                    let _ = app.run("mask.setEffectGroup", json!({"names": names, "group": grp}));
+                    app.act("mask.setEffectGroup", json!({"names": names, "group": grp}));
                     ui.close();
                 }
             }
@@ -664,13 +664,13 @@ pub fn manage_body(
                 .width(180.0)
                 .show(ui);
             if r.ending == Some(crate::text_field::Ending::Return) && !new_group.trim().is_empty() {
-                let _ = app.run("mask.setEffectGroup", json!({"names": names, "group": new_group.trim()}));
+                app.act("mask.setEffectGroup", json!({"names": names, "group": new_group.trim()}));
                 new_group.clear();
                 ui.close();
             }
         });
         if button(ui, "Export", "Export…", n > 0 && app.services.save_preset_file.is_some()) {
-            let _ = app.run("file.exportMaskEffects", json!({"names": selected.clone()}));
+            app.act("file.exportMaskEffects", json!({"names": selected.clone()}));
         }
         if button(ui, "Delete", "Delete…", n > 0) {
             *confirm_delete = true;

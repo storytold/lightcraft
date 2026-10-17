@@ -145,6 +145,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("panel.keywords", "Keywords", Some("K"), "Window"),
     ("panel.versions", "Versions", Some("Shift+V"), "Window"),
     ("panel.activity", "History", None, "Window"),
+    ("view.tasks", "Tasks", None, "Window"),
     ("panel.close", "Close Panel", None, ""),
     // {solo?}: true opens just that section (⌥-click on its header); otherwise opens or closes it
     ("section.light", "Light", Some("Cmd+1"), "Window>Edit Sections"),
@@ -296,7 +297,7 @@ fn adjust_brush(app: &mut LightcraftApp, k: f32, df: f32) -> Value {
             if df != 0.0 {
                 p["feather"] = json!(app.ui.remove_feather);
             }
-            let _ = app.run("spot.update", p);
+            app.act("spot.update", p);
         }
         json!({"size": app.ui.remove_size, "feather": app.ui.remove_feather})
     } else {
@@ -594,6 +595,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
                 && let Some(i) = vis.iter().position(|x| x.0 == r)
                 && let Some(next) = vis.get(i + 1).or(i.checked_sub(1).and_then(|j| vis.get(j)))
             {
+                // refusal expected: a step of view.reference, already inside `run`, which answers for the whole command
                 let _ = app.session.execute("library.select", &json!({"ids": [next.0]}));
             }
             app.ui.view = ViewMode::Reference;
@@ -759,6 +761,16 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         "view.navigator" => {
             app.ui.navigator = !app.ui.navigator;
             Ok(json!({"navigator": app.ui.navigator}))
+        }
+        "view.tasks" => {
+            // the list of running tasks under the top bar's bell: `show` opens or closes it, without it the list toggles
+            let show = p.get("show").and_then(Value::as_bool).unwrap_or(!app.activity_open);
+            if let Some(why) = crate::panels::activity::blocked(app).filter(|_| show) {
+                return Some(Err(format!("view.tasks: the list of tasks can't be shown now: {why}")));
+            }
+            app.activity_set = Some(show);
+            ctx.request_repaint();
+            Ok(json!({"tasks": show}))
         }
         "app.settings" => {
             let tab = p.get("tab").and_then(Value::as_str).unwrap_or("general");
@@ -1629,22 +1641,22 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
                         } else {
                             String::new()
                         };
-                        app.toast(
-                            ctx,
-                            crate::i18n::tr_format!(
-                                "Found {n} missing photo{}; {left} still missing{unsure}",
-                                if n == 1 { "" } else { "s" },
-                                left = left,
-                                n = n,
-                                unsure = unsure
-                            ),
+                        let said = crate::i18n::tr_format!(
+                            "Found {n} missing photo{}; {left} still missing{unsure}",
+                            if n == 1 { "" } else { "s" },
+                            left = left,
+                            n = n,
+                            unsure = unsure
                         );
+                        app.toast(ctx, said.clone());
                         app.ui.last_find_missing = Some(v.clone());
                         app.ui.last_find_missing_result = Some(Ok(v));
+                        lightcraft_engine::activity::Outcome { summary: said, ..Default::default() }
                     }
                     Err(e) => {
                         app.toast(ctx, e.clone());
-                        app.ui.last_find_missing_result = Some(Err(e));
+                        app.ui.last_find_missing_result = Some(Err(e.clone()));
+                        lightcraft_engine::activity::Outcome::failed(e)
                     }
                 }
             };
@@ -2129,6 +2141,7 @@ pub fn ui_enabled(app: &LightcraftApp, id: &str) -> bool {
     match id {
         "library.selectOnlyActive" => app.session.active().is_some(),
         "view.thumbSizeUp" | "view.thumbSizeDown" => thumb_size_view(app),
+        "view.tasks" => app.activity_open || crate::panels::activity::blocked(app).is_none(),
         "dialog.contactSheet" | "app.contactSheet" | "dialog.print" | "app.print" => {
             !cfg!(target_arch = "wasm32") && app.session.active().is_some() && app.export.is_none()
         }
