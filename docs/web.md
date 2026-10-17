@@ -88,7 +88,9 @@ are the same in every version, so serve them with `Cache-Control: no-cache` (not
   when the main thread can write it (`FileSystemFileHandle.createWritable`: Chrome, Edge,
   Firefox, recent Safari), otherwise IndexedDB. Both hold the same layout:
   - `library/catalog.snap`, `library/catalog.log`: the same crash-safe journal as the desktop app
-    (`lightcraft-catalog`), plus `presets.json`, `view.json`, `prefs.json` and `ui.json` (panel
+    (`lightcraft-catalog`), with the catalog in one file (the desktop app keeps the photos in
+    segment files beside it, see `docs/catalog-persistence.md`; a desktop library folder is not a
+    browser library), plus `presets.json`, `view.json`, `prefs.json` and `ui.json` (panel
     layout). The catalog `Store` is a memory mirror loaded at start-up; every change is flushed in
     the background within a frame or two, each file replaced atomically, in modification order
     (`apps/lightcraft-web/src/files.rs`). View state and UI prefs are saved every second when they
