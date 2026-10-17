@@ -104,8 +104,11 @@ pub fn always(_: &Session) -> std::result::Result<(), String> {
 pub fn has_active(s: &Session) -> std::result::Result<(), String> {
     s.active().map(|_| ()).ok_or_else(|| "no photo selected".into())
 }
+/// A selection of photos that are there: one whose photos an undo took away (they stay selected
+/// for the redo) is none, as [`Session::targets`] would be empty.
 pub fn has_selection(s: &Session) -> std::result::Result<(), String> {
-    if s.selection.ids.is_empty() && s.selection.active.is_none() { Err("no photos selected".into()) } else { Ok(()) }
+    let there = |id: &lightcraft_catalog::PhotoId| s.catalog.photo(*id).is_some();
+    if s.selection.ids.iter().chain(&s.selection.active).any(there) { Ok(()) } else { Err("no photos selected".into()) }
 }
 /// Albums hold library photos: a selection of only browsed (Local) photos has nothing an album
 /// can take (issue #684; Add to My Photos first).

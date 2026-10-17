@@ -569,6 +569,29 @@
   the other editor (Edit in Other Editor, now ⌥⌘E), and where PhotoCraft is if you use a portable copy.
 - Export can write PSD too (flat, 8- or 16-bit).
 
+### Folders of albums
+- Clicking a folder in the sidebar's Albums section shows the photos of every album and smart album inside it,
+  folders inside it included, each photo once, as a collection set does in Lightroom Classic. The grid is titled with
+  the folder's name and follows the sort and the filter bar. The triangle beside the folder opens and closes it; a
+  click on the row no longer does.
+- A folder's view can be saved as a smart album that follows the folder, also after its rules are edited (editing
+  the rules of a saved album view used to drop the album). It can't be made in, or moved into, the folder it shows
+  (it would include itself): that folder is no drop target and isn't offered under Move to, and commands say why.
+- The grid goes back to All Photos whenever the album, smart album or folder it shows goes away, by whatever way:
+  deleting it did already; undoing its creation, redoing its deletion or opening a library whose last view was of an
+  album since removed left an empty grid titled "Album". A filter that names such an album lets go of it (and does not
+  take it up again if the album comes back), a saved filter naming an album since deleted applies without it, and
+  `library.filter` refuses an album that doesn't exist. Opening another library starts with no filter, no target
+  album and no "previous photo", as after a restart: they named albums and photos of the library before.
+- When an undo takes selected photos away, commands on the selection act on the photos that are left; when none is
+  left they are not available, so nothing is recorded and redo still brings the photos back. Add to Album used to
+  write a missing photo into the album, and rating the selection failed for all of it.
+- A smart album saved from the view of an album or folder is marked ⚠ when that album is deleted, instead of being
+  quietly empty. OK in Edit Smart Album, or Update Rules from Current Filter, saves its rules without the album that
+  is gone and clears the mark.
+- Agents show a folder with `library.source {"kind": "album", "id": <folder id>}`; `albums.list` reports a folder's
+  `count`.
+
 ### Faster GPU exports
 - Exports with noise reduction, Texture, Clarity, Dehaze or Highlights and Shadows can be much faster on the GPU,
   depending on the graphics card. On a Windows laptop with an AMD Radeon 780M, a full-size export of a 24 MP raw
