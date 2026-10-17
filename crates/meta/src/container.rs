@@ -9,6 +9,8 @@
 //!   IPTC (33723) from IFD0.
 //! - Canon CR3 (ISO base media file, see [`crate::cr3`]): `CMT1`/`CMT2`/`CMT4` merged into one Exif block; the
 //!   XMP `uuid` box.
+//! - HEIF, HEIC and AVIF (ISO base media file, see `crate::heif`): the primary image's `Exif` item and XMP
+//!   (`mime`) item, found through `meta` / `iinf` / `iloc` / `iref`; no picture is decoded.
 
 use lightcraft_tiff::{Tiff, tags};
 
@@ -38,6 +40,9 @@ pub fn embedded(bytes: &[u8]) -> Embedded {
     }
     if let Some(c) = crate::cr3::parse_cr3(bytes) {
         return Embedded { exif: crate::cr3::merged_exif(&c), xmp: c.xmp.map(|b| String::from_utf8_lossy(b).into_owned()), ..Default::default() };
+    }
+    if let Some(e) = crate::heif::embedded(bytes) {
+        return e;
     }
     if bytes.starts_with(&[0xff, 0xd8]) {
         jpeg_segments(bytes)

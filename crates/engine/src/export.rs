@@ -1750,10 +1750,10 @@ impl PreparedExport {
                 };
                 let Some(dng) = dng else {
                     // the file is copied byte for byte: refuse rather than leak a location it embeds
-                    if remove_location && lightcraft_meta::extract(&bytes).gps.is_some() {
-                        return Err(format!(
-                            "{label}: can't remove the location from an original file that embeds GPS; export as JPEG, TIFF or DNG instead"
-                        ));
+                    if remove_location && lightcraft_meta::embeds_location(&bytes) {
+                        // DNG only for what the DNG export below takes
+                        let instead = if lightcraft_raw::probe(&bytes).is_some() { "JPEG, TIFF or DNG" } else { "JPEG or TIFF" };
+                        return Err(format!("{label}: can't remove the location from an original file that embeds GPS; export as {instead} instead"));
                     }
                     return Ok(Exported {
                         file_name,

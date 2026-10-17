@@ -1,4 +1,4 @@
-//! Photo metadata for LightCraft: EXIF (TIFF/raw files, JPEG APP1, PNG `eXIf`, WebP `EXIF`), XMP packets
+//! Photo metadata for LightCraft: EXIF (TIFF/raw files, JPEG APP1, PNG `eXIf`, WebP `EXIF`, HEIF `Exif` items), XMP packets
 //! (read + write, standard namespaces plus our own `lc:` namespace) and basic IPTC-IIM.
 //!
 //! Entry points:
@@ -7,7 +7,7 @@
 //! - [`parse_xmp`] / [`write_xmp`] — XMP packets (interchange fields + the opaque `lc:settings` JSON).
 //! - [`parse_iptc`] — IPTC-IIM record 2 datasets.
 //! - [`parse_gpx`] — GPS track logs (GPX) for geotagging by capture time.
-//! - [`extract`] — all of the above for a whole file (JPEG, PNG, WebP, TIFF/DNG/raw, Canon CR3).
+//! - [`extract`] — all of the above for a whole file (JPEG, PNG, WebP, TIFF/DNG/raw, Canon CR3, HEIF/HEIC/AVIF).
 //! - [`cr3`] — the Canon CR3 container (metadata blocks, XMP, the JPEG and raw tracks).
 #![forbid(unsafe_code)]
 
@@ -18,6 +18,7 @@ mod exif;
 pub mod focus;
 mod focus_read;
 mod gpx;
+mod heif;
 mod iptc;
 pub mod tags;
 mod xmp;
@@ -302,6 +303,14 @@ pub fn lens_spec_name(spec: [f64; 4]) -> Option<String> {
     let focal = if (long - short).abs() < 0.05 { format!("{short:.1}") } else { format!("{short:.1}-{long:.1}") };
     let aperture = if (narrow - wide).abs() < 0.05 { format!("{wide:.1}") } else { format!("{wide:.1}-{narrow:.1}") };
     Some(format!("{focal} mm f/{aperture}"))
+}
+
+/// Does the file embed a GPS position anywhere it can be read from? Export's "remove location"
+/// asks before copying an original byte for byte. For HEIF, HEIC and AVIF that is any EXIF or XMP
+/// item, whichever image it describes (a thumbnail's too), and an item that can't be read counts
+/// as a location; for other files, what [`extract`] reads.
+pub fn embeds_location(bytes: &[u8]) -> bool {
+    heif::embeds_location(bytes).unwrap_or_else(|| extract(bytes).gps.is_some())
 }
 
 /// Lenient number parsing used by XMP/IPTC: `"28/10"`, `"2.8"`, `"+0.7"`.
