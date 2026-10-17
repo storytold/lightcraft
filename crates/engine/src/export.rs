@@ -2013,6 +2013,9 @@ fn run_batch_with(
         ahead: lanes,
     };
     std::thread::scope(|sc| {
+        // stops the lanes however this thread leaves the scope: a panic in `progress` or the placer
+        // would otherwise leave them waiting and the scope's join would never return
+        let _stop = StopOnDrop(&queue);
         for k in 1..lanes {
             let q = &queue;
             // a lane that can't start leaves its photos to the others (and to this thread)
@@ -2030,11 +2033,18 @@ fn run_batch_with(
             }
             Ok::<_, String>(())
         };
-        let r = placed();
-        queue.stop();
-        r
+        placed()
     })?;
     Ok(std::mem::take(&mut placer.out))
+}
+
+/// Stops a [`Queue`] when dropped, also while unwinding from a panic.
+struct StopOnDrop<'a>(&'a Queue);
+
+impl Drop for StopOnDrop<'_> {
+    fn drop(&mut self) {
+        self.0.stop();
+    }
 }
 
 /// Run one photo's export holding its working memory from [`crate::memory::export_gate`]; a panic
@@ -3427,6 +3437,32 @@ mod tests {
         let (f, w, sn) = lanes_batch(&mut s, &ids, &o, 3, true, 2);
         assert_eq!(shape(&f.unwrap()), shape(&files[..2]));
         assert_eq!((w.len(), sn.len()), (2, 3), "photos past the cancel are never written");
+    }
+
+    // A panic in `progress` while lanes run must end the batch (the lanes stop waiting), not hang it
+    #[test]
+    fn a_panic_in_progress_does_not_hang_the_lanes() {
+        let mut s = crate::Session::with_demo();
+        let ids: Vec<_> = s.visible().iter().copied().take(5).collect();
+        let o = ExportOptions::from_json(&json!({"format": "png", "width": 40}));
+        let items = prepare_batch(&mut s, &ids, &o).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let to = Destination { dir: "out".into(), exact: None };
+            let mut write = |_: &str, _: &[u8]| Ok(());
+            let mut calls = 0;
+            let mut progress = |_: usize, _: &str| {
+                calls += 1;
+                assert!(calls < 2, "progress panics on its second call");
+                true
+            };
+            let r = crate::guard::catch("test batch", || {
+                run_batch_with(items, &mut Placer::new(&o, &to, &mut write, &|_| false, true), &mut progress, 2)
+            });
+            tx.send(r.and_then(|r| r)).ok();
+        });
+        let r = rx.recv_timeout(std::time::Duration::from_secs(60));
+        assert!(matches!(r, Ok(Err(_))), "the batch returns an error instead of hanging: {r:?}");
     }
 
     // A photo that fails is reported in its place while the others are exported; with
