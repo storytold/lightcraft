@@ -922,6 +922,32 @@ fn gps_typed_in_is_saved_to_xmp() {
     assert!(s.catalog.photo(id).unwrap().meta.gps.is_none());
 }
 
+/// Geotagging from the map (`photo.setGps`, `photo.removeGps`) writes the position back to the
+/// sidecar as EXIF GPS in XMP, and its undo rewrites it.
+#[test]
+fn map_geotag_writes_gps_to_the_sidecar_and_undo_rewrites_it() {
+    let src = temp_dir("geotag");
+    let lib = temp_dir("geotag-lib");
+    write_png(&src.join("g.png"), 7);
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    s.execute("library.xmpPreferences", &json!({"autoWrite": true})).unwrap();
+    let id = only(&s);
+    let sidecar = src.join("g.xmp");
+    let gps_in = |p: &Path| std::fs::read_to_string(p).ok().and_then(|x| lightcraft_meta::parse_xmp(&x).ok()).and_then(|m| m.metadata.gps);
+    s.execute("photo.setGps", &json!({"ids": [id.0], "lat": -33.8568, "lon": 151.2153})).unwrap();
+    let g = gps_in(&sidecar).expect("GPS written to the sidecar");
+    assert!((g.latitude + 33.8568).abs() < 1e-5 && (g.longitude - 151.2153).abs() < 1e-5, "{g:?}");
+    s.execute("photo.removeGps", &json!({"ids": [id.0]})).unwrap();
+    assert!(sidecar.is_file());
+    assert!(gps_in(&sidecar).is_none(), "removed from the sidecar");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(gps_in(&sidecar).is_some_and(|g| (g.latitude + 33.8568).abs() < 1e-5), "undo writes it back");
+    let _ = std::fs::remove_dir_all(&src);
+    let _ = std::fs::remove_dir_all(&lib);
+}
+
 /// DNG export compression: lossless, zip and none all decode; none is the biggest.
 #[test]
 fn dng_export_compression_choices() {

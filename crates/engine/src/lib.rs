@@ -52,7 +52,9 @@ pub mod lightroom_catalog;
 pub mod lightroom_folder;
 pub mod lightroom_job;
 mod lightroom_sqlite;
+pub mod locations;
 pub mod logging;
+pub mod map;
 pub mod media;
 pub mod memory;
 pub mod merge;
@@ -204,6 +206,11 @@ pub struct Session {
     pub filter: Filter,
     pub sort: Sort,
     pub selection: Selection,
+    /// A view's own filter over the library's (the Map view's location filter: Tagged,
+    /// Untagged, Visible on Map): `visible` keeps only the photos these rules match. It is not
+    /// part of `filter` (never saved, not shown as filter chips, not in smart albums made from
+    /// the view); the view that sets it clears it when it is left.
+    pub narrow: Option<lightcraft_catalog::RuleSet>,
     /// The grid order for the current source/filter/sort (cached by catalog revision).
     /// Shared, so frontends can hold it across frames without copying ([`Session::visible_shared`]).
     visible: Arc<[PhotoId]>,
@@ -226,6 +233,11 @@ pub struct Session {
     /// Identifies the current `visible` list: a new value (unique in the process) every time it
     /// is recomputed, so frontends can key their per-view caches on it instead of hashing the ids.
     visible_gen: u64,
+    /// `visible` before [`Session::narrow`] (the same list when there is none), its generation,
+    /// and what `visible` was last narrowed from (base generation, narrow rules).
+    visible_base: Arc<[PhotoId]>,
+    visible_base_gen: u64,
+    narrow_key: Option<(u64, String)>,
     /// Photos in the current source with no filter on (cached like `visible`).
     total: Option<((u64, String), usize)>,
     pub undo: Vec<UndoEntry>,
@@ -326,6 +338,11 @@ pub struct Session {
     pub lut_profiles: Vec<cmd::lut_profiles::LutProfile>,
     /// The target album B adds to (`None` = the Quick Collection).
     pub target_album: Option<lightcraft_catalog::AlbumId>,
+    /// Photos whose GPS position was set or cleared by a command in this session (map drops,
+    /// pins moved, Remove GPS, the Info panel): their sidecars take LightCraft's position as it
+    /// is, so a cleared one (or an undone geotag) is removed from the sidecar too. Other photos'
+    /// sidecar GPS is never removed (LightCraft doesn't read GPS from sidecars).
+    pub gps_edited: std::collections::HashSet<PhotoId>,
     /// Auto import: files seen in the watched folder and their size then (a file is imported once
     /// its size held between two scans).
     pub auto_import_seen: std::collections::HashMap<String, u64>,
@@ -377,6 +394,8 @@ pub struct Session {
     /// Untouched Local records of folders not browsed for this many days are forgotten when the
     /// library opens (0 = never; persisted in prefs.json). See `cmd/browse.rs`.
     pub forget_local_days: u32,
+    /// The map's tile source (persisted in prefs.json), tile cache folder and tile service.
+    pub map: map::MapState,
     /// Adds exported files to Apple Photos ([`apple_photos`]): `/usr/bin/osascript`, installed by
     /// [`Session::with_fs`] on macOS; `None` elsewhere and in sessions without a file system. Tests
     /// put a fake here.
@@ -413,6 +432,7 @@ impl Session {
             filter: Filter::default(),
             sort: Sort::default(),
             selection: Selection::default(),
+            narrow: None,
             visible: Vec::new().into(),
             visible_key: None,
             hold_view: false,
@@ -422,6 +442,9 @@ impl Session {
             #[cfg(test)]
             never_follow: false,
             visible_gen: 0,
+            visible_base: Vec::new().into(),
+            visible_base_gen: 0,
+            narrow_key: None,
             total: None,
             undo: Vec::new(),
             commits: 0,
@@ -472,6 +495,7 @@ impl Session {
             signatures: Default::default(),
             lut_profiles: Vec::new(),
             target_album: None,
+            gps_edited: Default::default(),
             auto_import_seen: Default::default(),
             keyword_sets: Vec::new(),
             keyword_set: None,
@@ -494,6 +518,7 @@ impl Session {
             slide_backdrop: Default::default(),
             smart_previews_dir: None,
             forget_local_days: lightcraft_catalog::DEFAULT_FORGET_DAYS,
+            map: map::MapState::default(),
             #[cfg(not(target_arch = "wasm32"))]
             apple_photos: None,
             #[cfg(not(target_arch = "wasm32"))]
@@ -963,8 +988,34 @@ impl Session {
 
     // ---------------------------------------------------------------- library view
 
-    /// Photos shown in the grid/filmstrip for the current source, filter and sort.
+    /// Photos shown in the grid/filmstrip for the current source, filter and sort, narrowed by
+    /// [`Session::narrow`] when a view sets it.
     pub fn visible(&mut self) -> &[PhotoId] {
+        self.visible_base();
+        let key = (self.visible_base_gen, self.narrow.as_ref().map(|n| format!("{n:?}")).unwrap_or_default());
+        if self.narrow_key.as_ref() != Some(&key) {
+            self.visible = match &self.narrow {
+                None => self.visible_base.clone(),
+                Some(rules) => {
+                    lightcraft_catalog::rules::set_now(Some((self.clock)()));
+                    let cat = &self.catalog;
+                    self.visible_base.iter().copied().filter(|id| cat.photo(*id).is_some_and(|p| rules.matches(p, cat))).collect::<Vec<_>>().into()
+                }
+            };
+            self.visible_gen = VISIBLE_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.narrow_key = Some(key);
+        }
+        &self.visible
+    }
+
+    /// The photos for the current source, filter and sort before [`Session::narrow`], with their
+    /// generation (as [`Session::visible_shared`]): what the Map view counts and pins.
+    pub fn visible_base_shared(&mut self) -> (u64, Arc<[PhotoId]>) {
+        self.visible_base();
+        (self.visible_base_gen, self.visible_base.clone())
+    }
+
+    fn visible_base(&mut self) {
         let mut key =
             (self.catalog.revision, format!("{:?}|{:?}|{:?}|{:?}|{:?}", self.source, self.filter, self.sort, self.browse, self.library_folder));
         // What a held view is told apart by: what is shown and how, and for a smart album its rules (rules that were
@@ -1041,7 +1092,7 @@ impl Session {
                 // an empty grid under the name of a folder that is gone from the sidebar
                 self.source = LibrarySource::All;
                 self.library_folder = None;
-                return self.visible();
+                return self.visible_base();
             }
             if matches!(self.source, LibrarySource::Album(_))
                 && self.sort.key == lightcraft_catalog::SortKey::CaptureDate
@@ -1082,11 +1133,10 @@ impl Session {
             if self.source != LibrarySource::RecentlyDeleted {
                 visible = self.catalog.arrange_stacks(&visible);
             }
-            self.visible = visible.into();
-            self.visible_gen = VISIBLE_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.visible_base = visible.into();
+            self.visible_base_gen = VISIBLE_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             self.visible_key = Some(key);
         }
-        &self.visible
     }
 
     /// `source` as a filter over `base` (the filter bar's, or none), with the folder it shows.
@@ -1118,11 +1168,13 @@ impl Session {
     #[cfg(test)]
     pub(crate) fn visible_in_full(&mut self) -> Vec<PhotoId> {
         let kept = (self.base.clone(), self.visible_key.clone(), self.visible.clone(), self.visible_gen, self.view_followed, self.view_worked_out);
+        let kept_narrow = (self.visible_base.clone(), self.visible_base_gen, self.narrow_key.clone());
         self.never_follow = true;
         self.visible_key = None;
         let whole = self.visible().to_vec();
         self.never_follow = false;
         (self.base, self.visible_key, self.visible, self.visible_gen, self.view_followed, self.view_worked_out) = kept;
+        (self.visible_base, self.visible_base_gen, self.narrow_key) = kept_narrow;
         whole
     }
 
@@ -1281,6 +1333,8 @@ mod tests_library;
 #[cfg(test)]
 mod tests_lightroom_folder;
 #[cfg(test)]
+mod tests_location;
+#[cfg(test)]
 mod tests_mask_effects;
 #[cfg(test)]
 mod tests_merge;
@@ -1300,6 +1354,8 @@ mod tests_print;
 mod tests_process;
 #[cfg(test)]
 mod tests_recheck;
+#[cfg(test)]
+mod tests_saved_locations;
 #[cfg(test)]
 mod tests_segment;
 #[cfg(test)]

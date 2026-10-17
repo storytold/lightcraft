@@ -745,6 +745,8 @@ fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         let r = ui.add(egui::TextEdit::singleline(&mut text).hint_text(crate::i18n::tr("latitude, longitude")).desired_width(f32::INFINITY));
         crate::widgets::screen_reader_name(ui.ctx(), r.id, "GPS");
         register(ui.ctx(), "field:gps", r.rect);
+        // the fields' width (the row below and the map keep to it)
+        let width = r.rect.width();
         if r.has_focus() {
             ui.data_mut(|d| d.insert_temp(gid, text.clone()));
         } else {
@@ -758,18 +760,37 @@ fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         }
         if let Some((la, lo)) = m.gps {
             let pretty = format!("{:.5}° {}, {:.5}° {}", la.abs(), if la >= 0.0 { "N" } else { "S" }, lo.abs(), if lo >= 0.0 { "E" } else { "W" });
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(pretty).size(11.0).color(t.text_dim));
-                if text_button(ui, "showOnMap", crate::i18n::tr("Show on Map"), false)
-                    .on_hover_text(crate::i18n::tr("Open the place in OpenStreetMap"))
-                    .clicked()
-                {
-                    let url = format!("https://www.openstreetmap.org/?mlat={la:.6}&mlon={lo:.6}#map=15/{la:.6}/{lo:.6}");
-                    if let Err(e) = crate::links::open(app, &url) {
-                        app.toast(ui.ctx(), e);
+            ui.add(egui::Label::new(egui::RichText::new(pretty).size(11.0).color(t.text_dim)).truncate());
+            // the map of the active photo's place (the active one only, with several selected); a
+            // click on it opens the Map view there, the button below opens OpenStreetMap's site
+            if let Some(pos) = lightcraft_map::LatLon::from_gps(m.gps) {
+                ui.add_space(6.0);
+                // in a private saved location the map stays hidden until asked for
+                let pass = ui.ctx().cumulative_pass_nr();
+                match super::map::locations::hides_mini_map(app, id, m.gps, pass) {
+                    Some(loc) => {
+                        ui.label(
+                            egui::RichText::new(crate::i18n::tr_format!("In the private location “{name}”: its map is hidden.", name = loc.name))
+                                .size(11.0)
+                                .color(t.text_dim),
+                        );
+                        if text_button(ui, "showPrivateMap", crate::i18n::tr("Show Map"), false).clicked() {
+                            app.map.loc.reveal_private = Some(id);
+                        }
                     }
+                    None => super::map::mini_map(app, ui, id, pos, width),
                 }
-            });
+            }
+            ui.add_space(6.0);
+            if text_button(ui, "showOnMap", crate::i18n::tr("Open in Browser"), false)
+                .on_hover_text(crate::i18n::tr("Open the place in OpenStreetMap"))
+                .clicked()
+            {
+                let url = format!("https://www.openstreetmap.org/?mlat={la:.6}&mlon={lo:.6}#map=15/{la:.6}/{lo:.6}");
+                if let Err(e) = crate::links::open(app, &url) {
+                    app.toast(ui.ctx(), e);
+                }
+            }
             if text_button(ui, "fillLocation", crate::i18n::tr("Fill Location"), false)
                 .on_hover_text(crate::i18n::tr("Fill empty City, State and Country from GPS (offline GeoNames place names)"))
                 .clicked()

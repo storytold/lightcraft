@@ -783,14 +783,21 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
         let _ = app.run("library.select", json!({"ids": [id.0]}));
         let _ = app.run("view.detail", json!({}));
     }
-    // drag the selection (this photo joins it, or replaces it when it wasn't selected)
     if resp.drag_started() {
-        if !app.session.selection.contains(id) {
-            let _ = app.run("library.select", json!({"ids": [id.0]}));
-        }
-        app.ui.dragging_photos = Some(app.session.selection.ids.iter().map(|p| p.0).collect());
+        start_photo_drag(app, id);
     }
     resp.context_menu(|ui| context_menu(app, ui, id));
+}
+
+/// A drag starting on photo `id` in the grid or the filmstrip drags the selection (this photo
+/// replaces it when it wasn't selected); drop targets (albums, keywords, the Map view) read
+/// `dragging_photos`, and [`drag_feedback`] shows the count at the pointer.
+pub fn start_photo_drag(app: &mut LightcraftApp, id: PhotoId) {
+    if !app.session.selection.contains(id) {
+        let _ = app.run("library.select", json!({"ids": [id.0]}));
+    }
+    let ids: Vec<u64> = app.session.selection.ids.iter().map(|p| p.0).collect();
+    app.ui.dragging_photos = Some(if ids.is_empty() { vec![id.0] } else { ids });
 }
 
 /// The header of a Local folder view: the path as a breadcrumb (each part opens that folder),

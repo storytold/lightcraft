@@ -295,5 +295,8 @@
   "Already in “{}”": "Уже в «{}»",
   "Move {n} photo{} to “{}”": "Переместить в «{1}» фото: {n}{0:.0}",
   "Move {n} photo{} to “{}”?": "Переместить в «{1}» фото: {n}{0:.0}?",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "В «{1}» перемещено фото: {n}{0:.0}. Правка → Отменить вернёт их."
+  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "В «{1}» перемещено фото: {n}{0:.0}. Правка → Отменить вернёт их.",
+  "Delete the saved location “{name}”?": "Удалить сохранённое место «{name}»?",
+  "In the private location “{name}”: its map is hidden.": "В частном месте «{name}»: карта скрыта.",
+  "within {d} of {lat}, {lon}": "в пределах {d} от {lat}, {lon}"
 }

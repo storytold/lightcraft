@@ -85,6 +85,8 @@ pub enum Icon {
     Chat,
     /// Face boxes on/off: four corner brackets round a small face.
     FaceBox,
+    /// The Map view: a map pin (a teardrop with a hole).
+    MapPin,
     /// Play (a triangle pointing right).
     Play,
     /// Pause (two bars).
@@ -531,6 +533,12 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, color: Color32, turn: Option<
             pen.line(&[(13.0, 17.5), (17.5, 17.5), (17.5, 13.0)]);
             pen.circle(10.0, 8.5, 2.4);
             pen.arc(10.0, 16.0, 4.5, 215.0, 325.0);
+        }
+        MapPin => {
+            // the round head (open at the bottom), its point, and the hole
+            pen.arc(10.0, 8.0, 5.5, 150.0, 390.0);
+            pen.line(&[(5.24, 10.75), (10.0, 17.5), (14.76, 10.75)]);
+            pen.circle(10.0, 8.0, 1.8);
         }
         Picker => {
             pen.line(&[(4.0, 16.0), (11.5, 8.5)]);

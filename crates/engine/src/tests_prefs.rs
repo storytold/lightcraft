@@ -373,6 +373,42 @@ fn reopening_a_library_retires_the_old_cache_so_its_jobs_cannot_write_after_a_cl
     let _ = std::fs::remove_dir_all(&lib);
 }
 
+/// The map's tile source is a library preference; a stored one is checked again when read.
+#[test]
+fn the_map_tile_source_persists_and_is_rechecked() {
+    let lib = temp_dir("map");
+    {
+        let mut s = Session::new().with_fs();
+        s.open_library(&lib, false).unwrap();
+        assert_eq!(s.map.source().id, "osm");
+        s.execute(
+            "map.tileSource",
+            &json!({"urlTemplate": "https://tiles.example.org/{z}/{x}/{y}.png", "attribution": "© Example", "maxZoom": 16, "id": "example"}),
+        )
+        .unwrap();
+        s.close_library().unwrap();
+    }
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    let src = s.map.source().clone();
+    assert_eq!((src.id.as_str(), src.max_zoom, src.attribution.as_str()), ("example", 16, "© Example"));
+    s.execute("map.tileSource", &json!({"offline": true})).unwrap();
+    drop(s);
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    assert!(s.map.source().is_offline());
+    drop(s);
+    // a hand-edited prefs.json pointing at plain http falls back to OpenStreetMap
+    let mut prefs: serde_json::Value = serde_json::from_slice(&std::fs::read(lib.join("prefs.json")).unwrap()).unwrap();
+    prefs["mapSource"] = json!({"id": "evil", "urlTemplate": "http://evil.example/{z}/{x}/{y}", "attribution": "x", "maxZoom": 19});
+    std::fs::write(lib.join("prefs.json"), serde_json::to_vec(&prefs).unwrap()).unwrap();
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    assert_eq!(*s.map.source(), lightcraft_map::TileSource::openstreetmap());
+    drop(s);
+    let _ = std::fs::remove_dir_all(&lib);
+}
+
 #[test]
 fn slideshow_playback_settings_persist_with_the_library() {
     let lib = temp_dir("slideshow");
