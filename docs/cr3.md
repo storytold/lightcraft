@@ -127,6 +127,18 @@ tiles. All ten sensor comparisons pass. R8 HEVC preview tracks are distinguished
 the primary Bayer RAW; the HEVC preview itself is not decoded. Missing corpus
 files are reported as skipped by the tests.
 
+In a tile with a neighbour on its right, the vertical high-pass bands of the level-1 and level-2
+low-pass columns (bands 8 and 5) are entropy coded at an odd width: an even band carries one extra
+column that synthesis does not use. No other band is extended, including the last level's (band 2).
+The decoder takes each band's coded width from this rule. It used to try the synthesis width and up to
+two more columns and keep the first that decoded to the exact end of the stream, but two widths can
+both do that and give different coefficients (#899). The rule was measured on every C-RAW plane in
+`cr3_corpus.rs`: two-tile files at tile widths 2816, 3144, 3192, 3444 and 3564 (G5 X Mark II, M50,
+R100, 250D, RP, R, 90D, M6 Mark II), whose left tiles extend bands 5 and 8 exactly where the rule says,
+and single-tile `0x100` and `0x200` files, which never extend a band. In every plane, each band decodes
+at its coded width and at no other width up to two columns wider, so all sensor hashes are unchanged.
+No public file has three or more C-RAW tiles; a middle tile follows the same rule, which is unverified.
+
 The version `0x200` QP predictor and entropy framing were checked independently.
 Controlled input mutations establish floor averaging of paired QP rows before
 the nonlinear integer table, then multiplication, division by eight, addition
