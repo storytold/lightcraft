@@ -27,7 +27,7 @@ enum Unit {
 }
 
 fn set(app: &mut LightcraftApp, p: Value) {
-    let _ = app.run("slideshow.overlays", p);
+    app.act("slideshow.overlays", p);
 }
 
 /// A slider (`slider:{id}`) over `lo..=hi`; `wrap(value)` makes the `slideshow.overlays` request.

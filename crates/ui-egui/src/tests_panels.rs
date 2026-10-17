@@ -999,6 +999,63 @@ fn section_chevrons_line_up_with_row_triangles() {
     }
 }
 
+/// A folder of albums is a source (a collection set in Lightroom Classic): given a folder whose
+/// albums share a photo, when its row is clicked, then the grid shows their photos once each
+/// under the folder's name, and the row stays open; only the triangle folds it. A folder with
+/// nothing in it can be shown too, and shows nothing.
+#[test]
+fn clicking_an_album_folder_shows_the_photos_of_its_albums() {
+    use lightcraft_catalog::AlbumId;
+    use lightcraft_engine::LibrarySource;
+    let mut h = demo([1400.0, 900.0], json!({"view": "photoGrid", "leftPanel": true}));
+    let ids: Vec<u64> = h.app.session.visible_cloned().iter().take(4).map(|p| p.0).collect();
+    let all = h.app.session.visible_cloned().len();
+    let make = |h: &mut Headless, params: serde_json::Value| h.app.session.execute("album.create", &params).unwrap()["id"].as_u64().unwrap();
+    let trips = make(&mut h, json!({"name": "Trips", "folder": true}));
+    let rome = make(&mut h, json!({"name": "Rome", "parent": trips}));
+    let paris = make(&mut h, json!({"name": "Paris", "parent": trips}));
+    let empty = make(&mut h, json!({"name": "Empty", "folder": true}));
+    h.app.session.selection.ids = ids.iter().map(|i| lightcraft_catalog::PhotoId(*i)).collect();
+    h.app.session.execute("album.addPhotos", &json!({"id": rome, "ids": [ids[0], ids[1]]})).unwrap();
+    h.app.session.execute("album.addPhotos", &json!({"id": paris, "ids": [ids[1], ids[2]]})).unwrap();
+    h.step();
+    h.step();
+    assert!(all > 3, "the demo library holds more than the folder will");
+    // the triangle only folds: the grid still shows All Photos
+    click(&mut h, &format!("albumToggle:{trips}"));
+    assert!(!has(&h, &format!("source:album:{rome}")), "folded");
+    assert_eq!(h.app.session.source, LibrarySource::All);
+    click(&mut h, &format!("albumToggle:{trips}"));
+    assert_eq!(h.app.session.source, LibrarySource::All);
+    // the row is the source; what is inside stays listed
+    click(&mut h, &format!("source:folder:{trips}"));
+    assert_eq!(h.app.session.source, LibrarySource::Album(AlbumId(trips)));
+    let mut shown: Vec<u64> = h.app.session.visible_cloned().iter().map(|p| p.0).collect();
+    shown.sort_unstable();
+    let mut want = ids[..3].to_vec();
+    want.sort_unstable();
+    assert_eq!(shown, want, "the shared photo once, the fourth photo not at all");
+    assert_eq!(crate::i18n::source_title(&h.app.session), "Trips");
+    assert!(has(&h, &format!("source:album:{rome}")) && has(&h, &format!("source:album:{paris}")), "a click doesn't fold it");
+    // folded, it is still what the grid shows
+    click(&mut h, &format!("albumToggle:{trips}"));
+    assert!(!has(&h, &format!("source:album:{rome}")), "folded");
+    assert_eq!(h.app.session.source, LibrarySource::Album(AlbumId(trips)));
+    assert_eq!(h.app.session.visible_cloned().len(), 3);
+    click(&mut h, &format!("albumToggle:{trips}"));
+    // an album inside is still its own source
+    click(&mut h, &format!("source:album:{rome}"));
+    assert_eq!(h.app.session.source, LibrarySource::Album(AlbumId(rome)));
+    assert_eq!(h.app.session.visible_cloned().len(), 2);
+    // a folder with nothing in it: no triangle, and nothing to show
+    click(&mut h, &format!("source:folder:{empty}"));
+    assert_eq!(h.app.session.source, LibrarySource::Album(AlbumId(empty)));
+    assert!(h.app.session.visible_cloned().is_empty());
+    // and back
+    click(&mut h, &format!("source:folder:{trips}"));
+    assert_eq!(h.app.session.visible_cloned().len(), 3);
+}
+
 /// Albums nest in folders like the other sidebar trees: a folder row has a disclosure triangle
 /// (`albumToggle:<id>`), plain albums have none, and folding a folder hides what is inside it.
 #[test]
@@ -1219,6 +1276,28 @@ impl AlbumTree {
         let (from, to) = (self.row(id).center(), self.row(onto).center());
         self.drag(from, &[(to, 3)]);
     }
+}
+
+/// Given a smart album that shows a folder (its view, saved), when it is dragged onto that folder
+/// or one inside it, then nothing happens (it would include itself, so the folder is no place to
+/// drop it: no outline, no refusal to read); another folder takes it.
+#[test]
+fn a_smart_album_cant_be_dropped_on_the_folder_it_shows() {
+    let mut t = album_tree();
+    t.h.app.session.execute("library.source", &json!({"kind": "album", "id": t.trips})).unwrap();
+    let view = t.h.app.session.execute("album.createSmart", &json!({"name": "Trips view"})).unwrap()["id"].as_u64().unwrap();
+    t.h.step();
+    t.h.step();
+    let steps = t.h.app.session.undo.len();
+    for folder in [t.trips, t.sub] {
+        t.drag_row(view, folder);
+        assert_eq!(t.parent(view), None);
+        assert!(t.h.app.ui.toast.is_none(), "not a drop at all: {:?}", t.h.app.ui.toast);
+        assert!(t.h.app.ui.dragging_album.is_none(), "the drag ended");
+    }
+    assert_eq!(t.h.app.session.undo.len(), steps);
+    t.drag_row(view, t.archive);
+    assert_eq!(t.parent(view), Some(t.archive));
 }
 
 /// Given albums and folders in the sidebar, when an album or folder is dragged onto a folder,
@@ -1510,6 +1589,27 @@ fn folders_app_with_services(paths: &[&str], size: [f32; 2], services: Services)
     h
 }
 
+/// A library whose folders nest as deep as `deep` (`/a/b/…/m`) with `x` and `y` at the end, every
+/// level opened. Each level holds a photo, so each is a row: folders that only lead from the disk
+/// to the first one that does would have none. (Tall enough for the whole chain.)
+fn deep_folders_app(deep: &str) -> Headless {
+    let mut paths = vec![format!("{deep}/x/1.jpg"), format!("{deep}/y/2.jpg")];
+    let mut levels = Vec::new();
+    let mut level = String::new();
+    for name in deep.split('/').filter(|n| !n.is_empty()) {
+        level.push('/');
+        level.push_str(name);
+        paths.push(format!("{level}/0.jpg"));
+        levels.push(level.clone());
+    }
+    let paths: Vec<&str> = paths.iter().map(String::as_str).collect();
+    let mut h = folders_app_sized(&paths, [1400.0, 1000.0]);
+    for level in &levels[..levels.len() - 1] {
+        click(&mut h, &format!("libraryFolderToggle:{level}"));
+    }
+    h
+}
+
 fn has(h: &Headless, id: &str) -> bool {
     h.app.widgets.iter().any(|(w, _)| w == id)
 }
@@ -1591,13 +1691,244 @@ fn the_grid_is_titled_after_the_folder() {
     assert_eq!(crate::i18n::source_title(&h.app.session), "All Photos");
 }
 
-/// A folder that holds nothing itself and leads to one folder starts open: the tree opens down to
-/// where the library branches.
+/// Given photos two folders below the home folder, when the Folders section is shown, then the
+/// disk opens at the first folder that holds photos or branches: the folders that only lead
+/// there (`Users`, `me`) have no row, and that folder sits one step inside its disk.
 #[test]
-fn a_chain_of_single_folders_starts_open() {
+fn a_disk_opens_at_the_first_folder_that_holds_photos_or_branches() {
     let h = folders_app(&["/Users/me/Pictures/2024/a.jpg", "/Users/me/Pictures/2025/b.jpg"]);
-    assert!(has(&h, "source:libfolder:/Users/me/Pictures"), "Users and me opened by themselves");
+    assert!(has(&h, "source:libfolder:/Users/me/Pictures"), "the first folder that branches is listed");
+    assert!(!has(&h, "source:libfolder:/Users") && !has(&h, "source:libfolder:/Users/me"), "the folders leading to it are passed over");
     assert!(!has(&h, "source:libfolder:/Users/me/Pictures/2024"), "the branching folder waits to be opened");
+    let step = widget(&h, "libraryFolderToggle:/Users/me/Pictures").center().x - widget(&h, "libraryFolderToggle:/").center().x;
+    assert!((step - 16.0).abs() < 0.5, "one step inside its disk, not three: {step}");
+    let counts = h.app.widgets.iter().filter(|(w, _)| w.starts_with("count:libfolder:")).count();
+    assert_eq!(counts, 2, "the disk and the folder: no count is repeated down a staircase");
+}
+
+/// A folder that only leads on further down the tree keeps its row, and starts open: only the
+/// way from a disk to the library's first folder is passed over.
+#[test]
+fn a_single_folder_inside_the_library_keeps_its_row() {
+    let mut h = folders_app(&["/pics/trip/2026/may/a.jpg", "/pics/home/b.jpg"]);
+    click(&mut h, "libraryFolderToggle:/pics");
+    assert!(has(&h, "source:libfolder:/pics/trip/2026"), "a folder the person made is a row");
+    assert!(has(&h, "source:libfolder:/pics/trip/2026/may"), "and it starts open, as before");
+}
+
+/// Given a disk that opens at `Pictures`, when Show Parent Folder is chosen from its menu, then
+/// the folder above it gets a row (and only that one); Hide This Parent on that row takes it
+/// away again.
+#[test]
+fn show_parent_folder_lists_the_folder_above_and_hide_this_parent_takes_it_away() {
+    let mut h = folders_app(&["/Users/me/Pictures/2024/a.jpg", "/Users/me/Pictures/2025/b.jpg"]);
+    right_click(&mut h, "source:libfolder:/Users/me/Pictures");
+    assert!(!has(&h, "folderHideParent"), "Pictures is no parent that was asked for");
+    click(&mut h, "folderShowParent");
+    assert!(!popup_open(&h), "choosing closes the menu");
+    assert!(has(&h, "source:libfolder:/Users/me") && !has(&h, "source:libfolder:/Users"), "one folder up");
+    assert!(has(&h, "source:libfolder:/Users/me/Pictures"), "what it leads to stays in view");
+    right_click(&mut h, "source:libfolder:/Users/me/Pictures");
+    assert!(!has(&h, "folderShowParent"), "its parent is listed now");
+    h.request("ui.key", json!({"key": "escape"}), T);
+    h.step();
+    h.step();
+    // the parent shown offers the one above it, and going away again
+    right_click(&mut h, "source:libfolder:/Users/me");
+    assert!(has(&h, "folderShowParent") && has(&h, "folderHideParent"));
+    click(&mut h, "folderShowParent");
+    assert!(has(&h, "source:libfolder:/Users") && has(&h, "source:libfolder:/Users/me"), "two folders up now");
+    // only the topmost can go: hiding one in the middle would draw a folder inside one it is not in
+    right_click(&mut h, "source:libfolder:/Users/me");
+    assert!(!has(&h, "folderHideParent") && !has(&h, "folderShowParent"), "the middle parent offers neither");
+    h.request("ui.key", json!({"key": "escape"}), T);
+    h.step();
+    h.step();
+    right_click(&mut h, "source:libfolder:/Users");
+    click(&mut h, "folderHideParent");
+    assert!(!has(&h, "source:libfolder:/Users") && has(&h, "source:libfolder:/Users/me"), "one level at a time");
+    right_click(&mut h, "source:libfolder:/Users/me");
+    click(&mut h, "folderHideParent");
+    assert!(!has(&h, "source:libfolder:/Users/me") && has(&h, "source:libfolder:/Users/me/Pictures"));
+    assert!(h.app.ui.folder_parents.is_empty());
+}
+
+/// Below a row that is drawn every folder is a row, so the tree never shows a folder inside one
+/// it is not directly in: a parent asked for two levels up brings the one between with it.
+#[test]
+fn a_shown_parent_brings_the_folders_between_with_it() {
+    let mut h = folders_app(&["/Users/me/Pictures/2024/a.jpg", "/Users/me/Pictures/2025/b.jpg"]);
+    exec(&mut h, "view.folderParent", json!({"path": "/Users", "show": true}));
+    assert!(has(&h, "source:libfolder:/Users") && has(&h, "source:libfolder:/Users/me") && has(&h, "source:libfolder:/Users/me/Pictures"));
+    let x = |h: &Headless, p: &str| widget(h, &format!("libraryFolderToggle:{p}")).center().x;
+    assert!(x(&h, "/Users/me") > x(&h, "/Users") && x(&h, "/Users/me/Pictures") > x(&h, "/Users/me"), "each inside the one above");
+}
+
+/// Hide This Parent on the folder the grid shows would seem to do nothing (what is shown always
+/// has its row): the item is there, off, and says why.
+#[test]
+fn hide_this_parent_is_off_while_the_grid_shows_that_folder() {
+    let mut h = folders_app(&["/Users/me/Pictures/2024/a.jpg", "/Users/me/Pictures/2025/b.jpg"]);
+    exec(&mut h, "view.folderParent", json!({"path": "/Users/me", "show": true}));
+    click(&mut h, "source:libfolder:/Users/me");
+    right_click(&mut h, "source:libfolder:/Users/me");
+    click(&mut h, "folderHideParent");
+    assert!(h.app.ui.folder_parents.contains("/Users/me"), "a click on the item that is off changes nothing");
+    assert!(has(&h, "source:libfolder:/Users/me"));
+}
+
+/// A folder asked for can always be taken off again, also once it no longer only leads on (a
+/// photo came into it): before, the command refused it as "always listed" and the entry stayed
+/// for good, counting toward the limit. At the limit, entries like that make room.
+#[test]
+fn a_parent_that_stopped_leading_on_can_still_be_hidden_and_takes_no_room() {
+    use lightcraft_catalog::{Op, Photo, Source};
+    let mut h = folders_app(&["/Users/me/Pictures/2024/a.jpg", "/Users/me/Pictures/2025/b.jpg"]);
+    exec(&mut h, "view.folderParent", json!({"path": "/Users/me", "show": true}));
+    let id = h.app.session.catalog.alloc_photo_id();
+    let p = Photo::new(id, Source::File { path: "/Users/me/c.jpg".into() }, "c.jpg", "JPEG", 60, 40, "2026-01-01T10:00:00");
+    h.app.session.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    h.step();
+    h.step();
+    right_click(&mut h, "source:libfolder:/Users/me");
+    assert!(!has(&h, "folderHideParent"), "it holds a photo now: listed for that, not because it was asked for");
+    h.request("ui.key", json!({"key": "escape"}), T);
+    h.step();
+    let r = exec(&mut h, "view.folderParent", json!({"path": "/Users/me", "show": false}));
+    assert_eq!(r["show"], false);
+    assert!(h.app.ui.folder_parents.is_empty(), "the entry is gone");
+    // the limit: entries of folders that no longer lead on are dropped before a new one is refused
+    h.app.ui.folder_parents = (0..crate::state::MAX_FOLDER_PARENTS).map(|i| format!("/gone/{i}")).collect();
+    let r = exec(&mut h, "view.folderParent", json!({"path": "/Users", "show": true}));
+    assert_eq!(r["show"], true);
+    assert_eq!(h.app.ui.folder_parents.iter().collect::<Vec<_>>(), ["/Users"]);
+}
+
+/// `view.folderParent` is the command behind both items: it shows, hides or flips a folder that
+/// only leads to the library's folders, and refuses any other folder, saying why.
+#[test]
+fn view_folder_parent_shows_and_hides_for_agents_and_refuses_other_folders() {
+    let mut h = folders_app(&["/Users/me/Pictures/2024/a.jpg", "/Users/me/Pictures/2025/b.jpg"]);
+    let r = exec(&mut h, "view.folderParent", json!({"path": "/Users/"}));
+    assert_eq!(r, json!({"path": "/Users", "show": true}), "spelled another way, it is the same folder");
+    assert!(has(&h, "source:libfolder:/Users"));
+    let r = exec(&mut h, "view.folderParent", json!({"path": "/Users"}));
+    assert_eq!(r["show"], false, "with no `show` it flips");
+    assert!(!has(&h, "source:libfolder:/Users"));
+    let r = exec(&mut h, "view.folderParent", json!({"path": "/Users", "show": false}));
+    assert_eq!(r["show"], false, "hiding what is hidden is no error");
+    for (params, why) in [
+        (json!({"path": "/Users/me/Pictures"}), "always listed"),
+        (json!({"path": "/Users/me/Pictures/2024"}), "always listed"),
+        (json!({"path": "/"}), "always listed"),
+        (json!({"path": "/nowhere"}), "holds no photo"),
+        (json!({}), "`path` is needed"),
+        (json!({"path": "/Users", "show": "yes"}), "true or false"),
+    ] {
+        let r = h.request("engine.execute", json!({"command": "view.folderParent", "params": params}), T);
+        assert_eq!(r["ok"], false, "{params}: {r}");
+        assert!(r["error"].as_str().is_some_and(|e| e.contains(why)), "{params}: {r}");
+    }
+    assert!(h.app.ui.folder_parents.is_empty(), "a refusal changes nothing");
+    // a folder listed because the one above it is: that one is what to show or hide
+    exec(&mut h, "view.folderParent", json!({"path": "/Users", "show": true}));
+    for show in [json!(true), json!(false), json!(null)] {
+        let r = h.request("engine.execute", json!({"command": "view.folderParent", "params": {"path": "/Users/me", "show": show}}), T);
+        assert!(r["error"].as_str().is_some_and(|e| e.contains("`/Users` above it")), "{show}: {r}");
+    }
+    assert_eq!(h.app.ui.folder_parents.iter().collect::<Vec<_>>(), ["/Users"]);
+    // showing what is shown is no error, and the answer names the folder the same way either way
+    assert_eq!(exec(&mut h, "view.folderParent", json!({"path": "/Users/", "show": true})), json!({"path": "/Users", "show": true}));
+    assert_eq!(exec(&mut h, "view.folderParent", json!({"path": "/Users/", "show": false})), json!({"path": "/Users", "show": false}));
+}
+
+/// Whatever is chosen is in view: a folder that would be passed over has its row while it is
+/// what the grid shows (an agent chose it, or its row was there when it was clicked).
+#[test]
+fn a_passed_over_folder_that_is_shown_in_the_grid_has_its_row() {
+    let mut h = folders_app(&["/Users/me/Pictures/2024/a.jpg", "/Users/me/Pictures/2025/b.jpg"]);
+    exec(&mut h, "library.source", json!({"kind": "libraryFolder", "path": "/Users/me"}));
+    assert!(has(&h, "source:libfolder:/Users/me") && has(&h, "highlight:libfolder:/Users/me"), "the chosen folder is listed and marked");
+    assert!(!has(&h, "source:libfolder:/Users"), "the one above it is still passed over");
+    click(&mut h, "source:all");
+    assert!(!has(&h, "source:libfolder:/Users/me"), "no longer chosen, it is passed over again");
+}
+
+/// A folder that carries a colour label says something of its own: it keeps its row.
+#[test]
+fn a_labelled_folder_is_never_passed_over() {
+    let mut h = folders_app(&["/Users/me/Pictures/2024/a.jpg", "/Users/me/Pictures/2025/b.jpg"]);
+    exec(&mut h, "folder.label", json!({"path": "/Users/me", "label": "red"}));
+    assert!(has(&h, "source:libfolder:/Users/me") && has(&h, "labelMark:libfolder:/Users/me"));
+    right_click(&mut h, "source:libfolder:/Users/me");
+    assert!(!has(&h, "folderHideParent"), "it is not listed because it was asked for");
+}
+
+/// The folders asked for are kept with the UI state, and a settings file can't make the list
+/// grow without bound.
+#[test]
+fn shown_parents_are_kept_with_the_ui_state() {
+    let mut u = crate::UiState::default();
+    u.folder_parents.insert("/Users/me".into());
+    let saved = serde_json::to_value(&u).unwrap();
+    assert_eq!(saved["folderParents"], json!(["/Users/me"]));
+    let back: crate::UiState = serde_json::from_value(saved).unwrap();
+    assert!(back.sanitized().folder_parents.contains("/Users/me"));
+    let many: Vec<String> = (0..5000).map(|i| format!("/p{i}")).collect();
+    let back: crate::UiState = serde_json::from_value(json!({"folderParents": many})).unwrap();
+    assert_eq!(back.sanitized().folder_parents.len(), crate::state::MAX_FOLDER_PARENTS);
+}
+
+/// In a panel too narrow for a deep row, the count gives way: it is drawn after the name, never
+/// over it or over the folder's icon.
+#[test]
+fn a_count_never_covers_the_name_of_a_deep_row() {
+    let mut paths = Vec::new();
+    let mut dir = String::new();
+    for name in ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"] {
+        dir.push('/');
+        dir.push_str(name);
+        paths.push(format!("{dir}/1.jpg"));
+    }
+    // (enough photos at the bottom for counts five digits wide all the way up)
+    paths.extend((0..12_000).map(|i| format!("{dir}/more-{i}.jpg")));
+    let refs: Vec<&str> = paths.iter().map(String::as_str).collect();
+    let mut h = folders_app_sized(&refs, [1400.0, 1000.0]);
+    let left = widget(&h, "panel:left_panel");
+    drag(&mut h, left.right() - 2.0, -1400.0);
+    assert_eq!(h.app.ui.left_width, crate::state::LEFT_WIDTH.min, "the panel at its narrowest");
+    let mut path = String::new();
+    for name in ["a", "b", "c", "d", "e", "f", "g", "h", "i"] {
+        path.push('/');
+        path.push_str(name);
+        click(&mut h, &format!("libraryFolderToggle:{path}"));
+    }
+    h.settle(SETTLE);
+    let deep = "/a/b/c/d/e/f/g/h/i/j";
+    let (label, count) = (widget(&h, &format!("label:libfolder:{deep}")), widget(&h, &format!("count:libfolder:{deep}")));
+    assert!(label.width() > 0.0, "the name is shown: {label:?}");
+    assert!(count.left() >= label.right(), "the count comes after the name: {label:?} {count:?}");
+    // a row with room keeps its count at the panel's visible edge
+    let panel = widget(&h, "panel:left_panel");
+    assert!(widget(&h, "count:all").right() <= panel.right());
+    // and no count is cut in two by that edge (5 digits wide here): it is whole, inside or past it
+    let mut past = 0;
+    for (id, r) in h.app.widgets.iter().filter(|(w, _)| w.starts_with("count:libfolder:")) {
+        assert!(r.right() <= panel.right() || r.left() >= panel.right(), "{id} straddles the edge: {r:?} / {panel:?}");
+        past += usize::from(r.left() >= panel.right());
+    }
+    assert!(past > 0, "the deepest rows' counts are past the edge");
+    // at every width, also where the content is only a little wider than the panel (a count that
+    // gave way used to be held back by the row's own end there, and was cut by the edge)
+    for width in (200..=330).step_by(2) {
+        let r = h.request("ui.set", json!({"leftWidth": width}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(SETTLE);
+        let panel = widget(&h, "panel:left_panel");
+        for (id, r) in h.app.widgets.iter().filter(|(w, _)| w.starts_with("count:libfolder:")) {
+            assert!(r.right() <= panel.right() || r.left() >= panel.right(), "at {width} pt {id} straddles the edge: {r:?} / {panel:?}");
+        }
+    }
 }
 
 /// Removing a folder from the library asks first, then moves its photos to Recently Deleted.
@@ -1800,8 +2131,7 @@ fn removing_a_disk_from_the_library_asks_first() {
 #[test]
 fn a_deep_chain_keeps_its_nesting_and_the_sidebar_scrolls_sideways() {
     let deep = "/a/b/c/d/e/f/g/h/i/j/k/l/m";
-    // (tall enough for the whole chain: Recently Deleted is above it now)
-    let mut h = folders_app_sized(&[&format!("{deep}/x/1.jpg"), &format!("{deep}/y/2.jpg")], [1400.0, 1000.0]);
+    let mut h = deep_folders_app(deep);
     let mut xs: Vec<f32> = Vec::new();
     let mut path = String::new();
     for name in deep.split('/').filter(|n| !n.is_empty()) {
@@ -1896,12 +2226,177 @@ fn a_long_name_alone_does_not_make_the_sidebar_scroll() {
 #[test]
 fn the_selection_bar_stays_inside_the_panel() {
     let deep = "/a/b/c/d/e/f/g/h/i/j/k/l/m";
-    // (tall enough for the whole chain: Recently Deleted is above it now)
-    let mut h = folders_app_sized(&[&format!("{deep}/x/1.jpg"), &format!("{deep}/y/2.jpg")], [1400.0, 1000.0]);
+    let mut h = deep_folders_app(deep);
     click(&mut h, "source:libfolder:/a/b/c/d/e/f/g/h/i/j/k/l");
     let panel = widget(&h, "panel:left_panel");
     let bar = widget(&h, "highlight:libfolder:/a/b/c/d/e/f/g/h/i/j/k/l");
     assert!(bar.right() <= panel.right(), "the bar {bar:?} ends inside the panel {panel:?}");
+}
+
+/// Given any of the four themes, when a source is chosen, then its row carries a bar at the
+/// panel's left edge that stands 4.5:1 against the panel beside it and the row's own fill, and
+/// its count reads as body text (both read from the pixels). A row the pointer rests on has no bar.
+#[test]
+fn the_row_of_what_is_shown_stands_out_in_every_theme() {
+    use crate::theme::{ThemeKind, contrast};
+    for kind in ThemeKind::ALL {
+        let mut h = demo([1400.0, 900.0], json!({"view": "photoGrid", "leftPanel": true}));
+        exec(&mut h, "view.theme", json!({"theme": kind.id()}));
+        click(&mut h, "source:picks");
+        let r = h.request("ui.hoverWidget", json!({"id": "source:recentlyAdded"}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        let img = h.snapshot(SETTLE);
+        assert_eq!(h.view.ctx.pixels_per_point(), 1.0, "the test samples pixels at point coordinates");
+        let t = crate::theme::Tokens::get(&h.view.ctx);
+        let px = |x: f32, y: f32| img.pixels[y.round() as usize * img.size[0] + x.round() as usize];
+        let (mark, bar) = (widget(&h, "currentMark:picks"), widget(&h, "highlight:picks"));
+        assert!(mark.width() >= 3.0 && mark.height() >= 24.0, "a bar, not a hairline: {mark:?}");
+        let (line, fill) = (px(mark.center().x, mark.center().y), px(bar.left() + 5.0, bar.center().y));
+        assert!(contrast(line, t.chrome) >= 4.5, "{kind:?}: the bar {line:?} against the panel {:?}", t.chrome);
+        assert!(contrast(line, fill) >= 4.5, "{kind:?}: the bar {line:?} against the row's fill {fill:?}");
+        // the count as it is drawn: the pixel of it that differs most from the fill
+        let count = widget(&h, "count:picks");
+        let mut best = 1.0f32;
+        for y in count.top().floor() as usize..count.bottom().ceil() as usize {
+            for x in count.left().floor() as usize..count.right().ceil() as usize {
+                best = best.max(contrast(img.pixels[y * img.size[0] + x], fill));
+            }
+        }
+        assert!(best >= 4.5, "{kind:?}: the count on the row's fill {fill:?} reaches {best}");
+        // a hovered row is a fill alone
+        assert!(!has(&h, "currentMark:recentlyAdded"), "{kind:?}");
+        let hover = widget(&h, "source:recentlyAdded");
+        let edge = px(mark.center().x, hover.center().y);
+        assert!(contrast(edge, t.chrome) < 1.5, "{kind:?}: a hovered row has no bar: {edge:?}");
+    }
+}
+
+/// The bar keeps clear of a row's disclosure triangle (an album folder at the top level has its
+/// triangle hard against the panel's edge), and the bars of rows chosen together run into one.
+#[test]
+fn the_bar_of_what_is_shown_keeps_clear_of_triangles_and_joins_for_neighbours() {
+    let mut h = demo([1400.0, 900.0], json!({"view": "photoGrid", "leftPanel": true}));
+    let folder = h.app.session.catalog.albums().find(|a| a.folder && a.parent.is_none()).map(|a| a.id.0).expect("a demo album folder");
+    exec(&mut h, "library.source", json!({"kind": "album", "id": folder}));
+    let (mark, toggle) = (widget(&h, &format!("currentMark:folder:{folder}")), widget(&h, &format!("albumToggle:{folder}")));
+    assert!(mark.right() <= toggle.left(), "the bar {mark:?} ends where the triangle's box {toggle:?} begins");
+    // two albums next to each other, chosen together
+    let inside: Vec<u64> = h.app.session.catalog.albums().filter(|a| a.parent.map(|p| p.0) == Some(folder)).map(|a| a.id.0).collect();
+    assert!(inside.len() >= 2, "the demo folder holds albums");
+    exec(&mut h, "library.source", json!({"kind": "album", "ids": inside}));
+    let mut bars: Vec<egui::Rect> = inside.iter().map(|id| widget(&h, &format!("currentMark:album:{id}"))).collect();
+    bars.sort_by(|a, b| a.top().total_cmp(&b.top()));
+    assert!(bars.windows(2).all(|w| (w[0].bottom() - w[1].top()).abs() < 0.5), "neighbours' bars touch: {bars:?}");
+}
+
+/// Scrolled sideways, the bar is still at the panel's edge, over the rows that slid under it and
+/// over the scroll area's shading of its edge: it reads as it does unscrolled (it used to fade to
+/// 2:1 there, with triangles and names drawn across it).
+#[test]
+fn the_bar_reads_the_same_when_the_rows_are_scrolled_sideways() {
+    use crate::theme::contrast;
+    let mut h = deep_folders_app("/a/b/c/d/e/f/g/h/i/j/k/l/m");
+    click(&mut h, "source:libfolder:/a");
+    let panel = widget(&h, "panel:left_panel");
+    assert!(crate::panels::left::content_width(&h.view.ctx) > panel.width() + 40.0, "there is somewhere to scroll to");
+    let r = h.request("ui.move", json!({"x": panel.center().x, "y": panel.center().y}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    let r = h.request("ui.scroll", json!({"dx": -60.0, "dy": 0.0}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    let img = h.snapshot(SETTLE);
+    assert!(widget(&h, "source:all").left() < panel.left() - 20.0, "the rows did scroll: {:?}", widget(&h, "source:all"));
+    let t = crate::theme::Tokens::get(&h.view.ctx);
+    let mark = widget(&h, "currentMark:libfolder:/a");
+    assert!((mark.left() - panel.left()).abs() <= 1.5, "the bar stays at the panel's edge: {mark:?} / {panel:?}");
+    for y in [mark.top() + 3.0, mark.center().y, mark.bottom() - 3.0] {
+        for x in [mark.left() + 0.5, mark.center().x, mark.right() - 0.5] {
+            let px = img.pixels[y.floor() as usize * img.size[0] + x.floor() as usize];
+            assert_eq!(px, t.selected_mark(), "nothing is drawn over the bar at {x},{y}");
+            assert!(contrast(px, t.chrome) >= 4.5 && contrast(px, t.canvas) >= 4.5);
+        }
+    }
+}
+
+/// Given an album is shown, when Albums is folded, then its header carries the bar and the
+/// album's name after its title, in place of the count of its rows (the row that would say so is
+/// out of sight); no other header does, and both go when something else is shown.
+#[test]
+fn a_folded_section_says_what_it_holds_of_what_is_shown() {
+    let mut h = demo([1400.0, 900.0], json!({"view": "photoGrid", "leftPanel": true}));
+    let album = h.app.session.catalog.albums().find(|a| !a.folder).map(|a| a.id.0).expect("a demo album");
+    exec(&mut h, "library.source", json!({"kind": "album", "id": album}));
+    let marks = |h: &Headless| -> Vec<String> {
+        let mut m: Vec<String> = h.app.widgets.iter().filter_map(|(w, _)| w.strip_prefix("sidebarSectionCurrent:").map(str::to_string)).collect();
+        m.sort();
+        m
+    };
+    assert!(marks(&h).is_empty(), "open, the section shows the row itself: no mark");
+    exec(&mut h, "view.sidebarSection", json!({"section": "albums", "collapsed": true}));
+    assert_eq!(marks(&h), ["albums"], "folded, the header says so");
+    let (said, plus) = (widget(&h, "sidebarSectionCurrentName:albums"), widget(&h, "icon:albumNew"));
+    assert!(said.width() > 0.0 && said.right() < plus.left(), "the name {said:?} stays clear of the button {plus:?}");
+    assert!(!has(&h, "sidebarSectionCount:albums"), "the count of its rows would read as the album's own");
+    // the bar is a shape of its own, as on a row
+    let img = h.snapshot(SETTLE);
+    let t = crate::theme::Tokens::get(&h.view.ctx);
+    let mark = widget(&h, "sidebarSectionCurrent:albums");
+    let px = img.pixels[mark.center().y.round() as usize * img.size[0] + mark.center().x.floor() as usize];
+    assert!(crate::theme::contrast(px, t.chrome) >= 4.5, "{px:?}");
+    for other in ["local", "byDate", "folders", "keywords"] {
+        exec(&mut h, "view.sidebarSection", json!({"section": other, "collapsed": true}));
+    }
+    assert_eq!(marks(&h), ["albums"], "only the section that holds it");
+    assert!(has(&h, "sidebarSectionCount:keywords"), "a section that holds none of it keeps its count");
+    // a long name in a narrow panel is cut at its end, before the + button
+    let whole = widget(&h, "sidebarSectionCurrentName:albums").width();
+    exec(&mut h, "album.rename", json!({"id": album, "name": "Travel and weddings and pets of every year so far"}));
+    let r = h.request("ui.set", json!({"leftWidth": 200.0}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    let (said, plus) = (widget(&h, "sidebarSectionCurrentName:albums"), widget(&h, "icon:albumNew"));
+    assert!(said.width() > whole.min(20.0) && said.right() < plus.left(), "cut before the button: {said:?} {plus:?}");
+    assert_eq!(marks(&h), ["albums"]);
+    click(&mut h, "source:all");
+    assert!(marks(&h).is_empty(), "All Photos is in no section");
+    assert!(has(&h, "sidebarSectionCount:albums"), "and the count is back");
+}
+
+/// What a folded section says is shown is what its rows say: a month by its name, a keyword by
+/// its own name, a folder by its own name (not "Folder", not the path), and several as the first
+/// and how many more, each counted once however the filter spells them.
+#[test]
+fn what_is_shown_is_named_as_its_row_names_it() {
+    use crate::panels::left::shown_in;
+    use crate::sidebar::SidebarSection as S;
+    let mut h = folders_app(&["/pics/trip/a.jpg", "/pics/home/b.jpg"]);
+    let said = |h: &Headless, s: S| shown_in(&h.app, s).map(|w| w.full());
+    assert_eq!(said(&h, S::Folders), None, "All Photos");
+    exec(&mut h, "library.source", json!({"kind": "libraryFolder", "path": "/pics/trip"}));
+    assert_eq!(said(&h, S::Folders).as_deref(), Some("trip"), "the row's own name");
+    exec(&mut h, "library.source", json!({"kind": "libraryFolder", "paths": ["/pics/trip", "/pics/home"]}));
+    assert_eq!(said(&h, S::Folders).as_deref(), Some("trip and 1 more"));
+    assert_eq!(said(&h, S::Albums), None);
+    // a filter that names one month twice names it once
+    exec(&mut h, "library.source", json!({"kind": "all"}));
+    exec(&mut h, "library.filter", json!({"date": "2026-01", "dates": ["2026-01"]}));
+    assert_eq!(said(&h, S::ByDate), Some(crate::i18n::date_group_label("2026-01", false)), "not the key, and not \"and 1 more\"");
+    exec(&mut h, "library.filter", json!({"dates": ["2026-01", "2026"]}));
+    assert_eq!(said(&h, S::ByDate), Some(format!("{} and 1 more", crate::i18n::date_group_label("2026-01", false))));
+    exec(&mut h, "library.filter", json!({"date": null, "dates": [], "keyword": "travel|lisbon"}));
+    assert_eq!(said(&h, S::Keywords).as_deref(), Some("lisbon"), "the keyword's own name, not its path");
+    // a keyword of any length (they come from files) is cut to what a panel can show, at once
+    let long = "weddings ".repeat(20_000);
+    exec(&mut h, "library.filter", json!({"keyword": long}));
+    let said_long = said(&h, S::Keywords).unwrap_or_default();
+    assert!(said_long.chars().count() < 1000 && said_long.starts_with("weddings"), "{} characters", said_long.chars().count());
+    exec(&mut h, "view.sidebarSection", json!({"section": "keywords", "collapsed": true}));
+    h.settle(SETTLE);
+    assert!(has(&h, "sidebarSectionCurrent:keywords"));
+    // Local: the folder browsed, by its name
+    h.app.session.source = lightcraft_engine::LibrarySource::Folder;
+    h.app.session.browse = Some(lightcraft_engine::Browse { path: "/somewhere/Weddings".into(), ..Default::default() });
+    assert_eq!(said(&h, S::Local).as_deref(), Some("Weddings"));
 }
 
 /// Select All in the loupe: every filmstrip cell of a selected photo is drawn selected, not just

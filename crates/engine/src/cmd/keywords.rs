@@ -32,6 +32,14 @@ fn commit_keywords(s: &mut Session, label: &str, op: lightcraft_catalog::Op, fol
     if let Some(k) = s.filter.keyword.clone() {
         s.filter.keyword = follow(&k);
     }
+    // several keywords filtered by: each follows, one that is gone leaves
+    let mut kept: Vec<String> = Vec::new();
+    for k in s.filter.keywords.iter().filter_map(|k| follow(k)) {
+        if !kept.iter().any(|o| lightcraft_catalog::keywords::same(o, &k)) {
+            kept.push(k);
+        }
+    }
+    s.filter.keywords = kept;
     Ok(json!({"changed": photos, "listed": listed}))
 }
 
@@ -49,6 +57,30 @@ fn info_from(p: &Value, base: KeywordInfo) -> KeywordInfo {
         person: bool_or(p, "person", base.person),
         new_keywords_inside: base.new_keywords_inside,
     }
+}
+
+/// How many keywords one call may name (far more than a person chooses in a list).
+const MAX_KEYWORDS: usize = 1000;
+
+/// The keywords a command names in `keywords`: a list of them, each once (whatever its case),
+/// none empty.
+fn keyword_list(p: &Value, command: &str) -> Result<Vec<String>> {
+    let list = p.get("keywords").and_then(Value::as_array).ok_or_else(|| bad(command, "`keywords` must be a list of keywords"))?;
+    if list.len() > MAX_KEYWORDS {
+        return Err(bad(command, format!("`keywords` names more than {MAX_KEYWORDS} keywords")));
+    }
+    let mut out: Vec<String> = Vec::new();
+    for k in list {
+        let k =
+            k.as_str().map(clean).filter(|k| !k.is_empty()).ok_or_else(|| bad(command, format!("`keywords` must be a list of keywords, not {k}")))?;
+        if !out.iter().any(|o| lightcraft_catalog::keywords::same(o, &k)) {
+            out.push(k);
+        }
+    }
+    if out.is_empty() {
+        return Err(bad(command, "`keywords` names no keyword"));
+    }
+    Ok(out)
 }
 
 /// The keyword a command names (`keyword`), as the library writes it.
@@ -374,15 +406,26 @@ pub fn specs() -> Vec<CommandSpec> {
             "Move Keyword",
             [],
             None,
-            "{keyword, parent: keyword | null (the top level), merge?: bool} — with the keywords below it; onto a name that is taken only with `merge: true`",
+            "{keyword, parent: keyword | null (the top level), merge?: bool} — with the keywords below it; onto a name that is taken only with `merge: true`. Several at once: {keywords: [keyword], parent} as one undo step (of a keyword and one below it the upper one moves); nothing merges then: a name that is taken, or two of them with one name, refuses the whole move",
             always,
             |s, p| {
-                let from = named_keyword(s, p, "keyword.move")?;
                 let parent = match p.get("parent") {
                     Some(Value::String(k)) => Some(k.clone()),
                     Some(Value::Null) => None,
                     _ => return Err(bad("keyword.move", "`parent` is a keyword, or null for the top level")),
                 };
+                if p.get("keywords").is_some_and(|k| !k.is_null()) {
+                    let keywords = keyword_list(p, "keyword.move")?;
+                    let (op, moves) = s
+                        .catalog
+                        .move_keywords_ops(&keywords, parent.as_deref())
+                        .map_err(|e| refused("keyword.move", e, ": moving would merge the two (move that one by itself, with merge: true)"))?;
+                    let label = if moves.len() == 1 { "Move Keyword".to_string() } else { format!("Move {} Keywords", moves.len()) };
+                    return commit_keywords(s, &label, op, |k| {
+                        Some(moves.iter().find(|(f, _)| is_under(k, f)).map_or_else(|| k.to_string(), |(f, t)| reparent(k, f, t)))
+                    });
+                }
+                let from = named_keyword(s, p, "keyword.move")?;
                 // where it lands, as the catalog spells it: a parent that doesn't exist yet is made
                 let leaf = from.rsplit('|').next().unwrap_or(&from).to_string();
                 let to = match parent.as_deref().map(|k| s.catalog.keyword_path(k).unwrap_or_else(|| clean(k))).filter(|k| !k.is_empty()) {
@@ -495,9 +538,16 @@ pub fn specs() -> Vec<CommandSpec> {
             "Delete Keyword",
             [],
             None,
-            "{keyword} — removes it (and the keywords below it) from every photo",
+            "{keyword} — removes it (and the keywords below it) from every photo. Several at once: {keywords: [keyword]}, as one undo step",
             always,
             |s, p| {
+                if p.get("keywords").is_some_and(|k| !k.is_null()) {
+                    let keywords = keyword_list(p, "keyword.delete")?;
+                    let op = s.catalog.delete_keywords_ops(&keywords).map_err(|e| bad("keyword.delete", e.to_string()))?;
+                    let gone: Vec<String> = keywords.iter().map(|k| clean(k)).collect();
+                    let label = if gone.len() == 1 { "Delete Keyword".to_string() } else { format!("Delete {} Keywords", gone.len()) };
+                    return commit_keywords(s, &label, op, |f| (!gone.iter().any(|g| is_under(f, g))).then(|| f.to_string()));
+                }
                 let k = str_param(p, "keyword").ok_or_else(|| bad("keyword.delete", "missing `keyword`"))?.to_string();
                 let op = s.catalog.delete_keyword_ops(&k).map_err(|e| bad("keyword.delete", e.to_string()))?;
                 let c = clean(&k);
