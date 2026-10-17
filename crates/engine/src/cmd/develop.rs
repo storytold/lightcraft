@@ -1103,11 +1103,8 @@ pub fn specs() -> Vec<CommandSpec> {
             |s, p| {
                 let c = "history.restore";
                 let id = active(s, c)?;
-                let i = f64_req(p, "index", c)?;
-                if !(i.is_finite() && i >= 0.0) {
-                    return Err(bad(c, "no such step"));
-                }
-                go_to_history_step(s, c, id, i as usize)
+                let i = index_req(p, "index", c)?;
+                go_to_history_step(s, c, id, i)
             }
         ),
         cmd!("history.previous", "Previous History Step", [], None, "{} — steps the History cursor back one step", has_history_before, |s, _| {
