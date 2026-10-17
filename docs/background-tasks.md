@@ -1,10 +1,50 @@
 # Long-running tasks and the activity stack
 
-Everything that takes a while runs off the UI thread and shows up in **one** place: the activity stack in the
-top-left corner under the top bar (issue #345). Each task has a row with its name, a progress bar (a sweep while
-the amount of work isn't known), the count and what it's working on, and ✕ if it can stop. Quitting asks first while
-a task that can stop is running. Agents see the same list through `activity.list` / `activity.cancel`, and
-`ui.inspect` reports it as `activity`.
+Everything that takes a while runs off the UI thread and shows up in **one** place: the activity stack, the list
+under the bell in the top bar (issue #345). While something runs the bell wears a ring (how far along the work is, a
+sweep while that isn't known) and a line beside it names the task ("Exporting · 40 %") or says how many run
+("3 tasks"). The line takes the room between the filter icon and the bell, so it depends on the window's width: a
+wide window has the name (cut short where it must be) and the percentage, a narrower one only the percentage or the
+count, and a narrow one the ring alone, with the count on the bell when several run and the rest in the bell's
+tooltip. A click on the bell or the line opens
+the list (Window ▸ Tasks, `view.tasks`): each task has a row with its name, a progress bar, the count and what it's
+working on, and ✕ if it can stop, the task started last at the top. "No tasks are running" when none is. Esc, a click
+elsewhere or a dialog closes it. Nothing floats over the panels: the list covers them only while it is open.
+A task that says how it ended stays in the list after it: what it did ("Exported 4,963 of 5,000 photos"), what else
+needs reading and how long it took, "Show failed (37)" for the files it could not do, each with its reason (the
+first five in the row, all that were kept through Copy all, with a line saying how many more there were), and "Show
+in Finder" (Explorer, File Manager) for one of the files it made. It stays until its ✕ or "Clear all" lets go of it,
+for this session. The toast that says how a job went still shows, as before: the row is what stays after it. A clean
+end leaves a row only when the task ran 10 s or more (a shorter one was watched to its end); one that did not go
+well always does: done with
+problems, failed, stopped, or stopped unexpectedly (its worker died). Those come first in the list, under "Needs
+attention", and put a mark on the bell until they are dismissed. With nothing running, a task that just ended is
+named beside the bell for a few seconds. Every job that ends reports this way: exports, imports, folder scans,
+Synchronize Folder (its scan and its run, which names the files it could not do), Build / Smart Previews (they count
+the photos they could not make), Photo Merge, Lightroom catalog inspect / import, model and place-name downloads,
+Fill Location from GPS, moving photos and Find Missing Photos. The face scan and AI Denoise are queues that work
+through what arrives rather than jobs someone waits for: when one empties, its row goes and leaves nothing. A scan
+that another replaced, or whose dialog was closed, leaves nothing either: only the row's ✕ makes it a stopped task.
+Quitting asks first while a task that can stop is running, or one waits in line. Agents see the same list through
+`activity.list` / `activity.cancel`, and `ui.inspect` reports it as `activity` (and whether the list is open as
+`activityOpen`).
+
+## Waiting in line
+
+Some jobs must not run side by side: they share a **lane** (`activity::Lane`). Today that is the preview lane: Build
+Previews and Build / Discard Smart Previews in the background, one preview build at a time. One asked for while its
+lane is busy waits in line instead of being refused (the File ▸ Previews items, `queue: true` for agents): its row is
+listed under "Waiting", below the running tasks, saying when it starts ("Starts next", "Starts after 2 more"), with
+✕ to take it out of the line; the line beside the bell counts them ("Building previews · 40 % · 2 waiting"), and a
+toast says it was queued. It keeps what it was asked, with everything that depends on the moment written out (the
+photos chosen then, not those chosen when its turn comes), and plans its work when it starts. It starts by itself
+once the tasks ahead of it in its lane have ended (`Session::start_waiting`, after every command and every frame),
+under the id it had while it waited, so an agent follows one id from the line to its row in `activity.finished`.
+One that can't start leaves a failed row saying why, and the next in line goes on. A task that kept what it was
+asked and did not end well has Retry in its row (`activity.retry`): the row goes and the same request waits at the
+end of its lane. Nothing waits across another library (photo ids and folders belong to one library: the line is
+dropped and old rows can't be retried) or a quit (the files may change before the next launch; the quit question
+says how many would not run). At most 100 tasks wait in all.
 
 The registry is `lightcraft_engine::activity` (`crates/engine/src/activity.rs`, `Session::activity`). The stack is
 `crates/ui-egui/src/panels/activity.rs`. Every job that can last more than a moment uses it; **don't add a progress
@@ -28,6 +68,14 @@ guard.progress(done as u64, total as u64);
 guard.detail(&file_name);
 ```
 
+- **Say how it ended:** `guard.finish(Outcome { ending, summary, detail, failures, failed, path })` in place of
+  letting the guard drop. `ending` is `Done`, `Problems` (not for every file), `Failed`, `Stopped`, or `Died` when
+  the job finds its worker gone; `summary` is the sentence the row shows (UI code passes it translated; engine code
+  leaves it empty and the row is worded from the label); `failures` are the files with their reasons (`failed`
+  when the job only counts them); `path` is one of the files it made. `Outcome::ended(ending)` and
+  `Outcome::failed(why)` cover the plain cases. Keep the toast that says how it went: the row is the record, not the
+  announcement. A guard that is only dropped leaves nothing, as before, unless a panic
+  dropped it: then the row says the task stopped unexpectedly.
 - **Keep the guard for exactly as long as the job runs.** Put it in the struct the UI polls (`ExportTask`, `ScanTask`,
   `SyncRun`…), or move it into the worker thread. Dropping it removes the row, also when the worker panics, so a
   dead job never leaves a stuck bar. A worker that only reports progress takes a `TaskHandle` (`guard.handle()`,
@@ -48,6 +96,10 @@ guard.detail(&file_name);
   - `set_cancellable(false)` for a phase that has to finish once started (a Lightroom import adding its photos).
 - **Quiet periodic work** shows no row: the auto-import folder listing runs every few seconds through
   `tasks::spawn(.., None, ..)`.
+- **Waiting in line** (for a job of a lane): give `Lane::of` its kind, write out what it was asked
+  (`activity::Request`: the command and its parameters, with the photos named) and keep it on the guard
+  (`guard.set_request`) so a failed run can be retried; while the lane is busy, `activity.enqueue(kind, label,
+  request)` instead of refusing. `start_waiting` runs the request through `Session::execute` when its turn comes.
 
 ## Examples in the code
 
@@ -66,5 +118,12 @@ guard.detail(&file_name);
 
 Assert the row (`session.activity.list()`: kind, label, total, `cancellable`), that `activity.cancel(id)` stops the
 job, and that the row is gone once the job ends. `crates/ui-egui/src/tests_activity.rs` has the helpers, and the
-job-specific tests show the pattern (`tests_sync.rs`, `export_task.rs`, `tests_denoise.rs`…). A row only appears
-on screen once its task is 0.5 s old, so tests that click its ✕ wait for `activity:cancel:<id>` first.
+job-specific tests show the pattern (`tests_sync.rs`, `export_task.rs`, `tests_denoise.rs`…). The bell shows a
+task once it is 0.5 s old (`activity:ring`; `activity:readout` is the line beside it, `activity:count` the count on
+the bell), and its row is on screen only while the list is open: tests that click a row's ✕ open the list first
+(`view.tasks` with `{"show": true}`, or a click on `icon:bell`) and wait for `activity:cancel:<id>`. For a job that
+reports how it ended, assert `session.activity.finished()` (ending, summary, failures);
+`session.activity.keep_after(0)` keeps a clean end's row however short the test's job.
+Ended rows are `activity:done:<id>` with `activity:dismiss:<id>`, `activity:failures:<id>`, `activity:copy:<id>`,
+`activity:reveal:<id>` and `activity:retry:<id>`; `activity:clear` is Clear all and `activity:attention` the mark on the
+bell. A waiting task's row is `activity:row:<id>` with `activity:cancel:<id>`.
