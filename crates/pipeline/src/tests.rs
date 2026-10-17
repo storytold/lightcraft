@@ -237,12 +237,16 @@ fn drafts_keep_wide_planes_across_a_noise_reduction_change_and_full_renders_do_n
     let full = RenderRequest { quality: Quality::Full, ..draft };
     let mut s = typical_edits();
     s.effects.clarity = 60.0;
+    s.detail.sharpen_amount = 80.0;
     render_cached(&src, &info, &s, &draft, &cache);
     let clarity_plane = |c: &StageCache| c.entries.lock().unwrap().first().and_then(|e| e.planes.clarity.clone()).unwrap().1;
+    let sharpen_plane = |c: &StageCache| c.entries.lock().unwrap().first().and_then(|e| e.planes.sharpen.clone()).unwrap().1;
     let first = clarity_plane(&cache);
+    let first_sharpen = sharpen_plane(&cache);
     s.detail.nr_luminance = 50.0;
     render_cached(&src, &info, &s, &draft, &cache);
     assert!(Arc::ptr_eq(&first, &clarity_plane(&cache)), "a draft redid the clarity plane for a noise-reduction change");
+    assert!(!Arc::ptr_eq(&first_sharpen, &sharpen_plane(&cache)), "a draft reused the old sharpening plane after noise reduction changed");
     for v in [10.0, 45.0, 80.0] {
         s.detail.nr_luminance = v;
         s.detail.nr_color = v / 2.0;
