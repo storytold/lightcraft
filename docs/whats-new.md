@@ -569,6 +569,21 @@
   the other editor (Edit in Other Editor, now ⌥⌘E), and where PhotoCraft is if you use a portable copy.
 - Export can write PSD too (flat, 8- or 16-bit).
 
+### Folders of albums
+- Clicking a folder in the sidebar's Albums section shows the photos of every album and smart album inside it,
+  folders inside it included, each photo once, as a collection set does in Lightroom Classic. The grid is titled with
+  the folder's name and follows the sort and the filter bar. The triangle beside the folder opens and closes it; a
+  click on the row no longer does.
+- A folder's view can be saved as a smart album that follows the folder, also after its rules are edited (editing
+  the rules of a saved album view used to drop the album). It can't be made in, or moved into, the folder it shows
+  (it would include itself): that folder is no drop target and isn't offered under Move to, and commands say why.
+- No edit can make a smart album include itself any more, whichever command, importer or task makes it: the library
+  itself refuses it and names the album. A library that already holds such a loop still opens; each album on the loop
+  is marked ⚠ and holds nothing (it used to hold different photos depending on which album was looked at first, and
+  many of them in one folder made the folder slow to show), and moving it out or changing its rules mends it.
+- Agents show a folder with `library.source {"kind": "album", "id": <folder id>}`; `albums.list` reports a folder's
+  `count`.
+
 ### Faster GPU exports
 - Exports with noise reduction, Texture, Clarity, Dehaze or Highlights and Shadows can be much faster on the GPU,
   depending on the graphics card. On a Windows laptop with an AMD Radeon 780M, a full-size export of a 24 MP raw
