@@ -56,8 +56,12 @@ keyboard input, and `X` in the Crop panel swaps the crop aspect.
 Shifted number keys also use the physical number key when the keyboard reports punctuation
 (for example, `Shift+1` as `!`). Letter shortcuts continue to follow the keyboard layout.
 
-`Shift+P` picks and advances in the two library grids. In other views it retains LightCraft's
-Presets-panel binding. `Shift+Z` remains an alternative pick-and-advance key in all views.
+`Shift+P`, `Shift+X` and `Shift+U` flag and advance in every photo view: Photo Grid, Square Grid,
+Detail (with its filmstrip), Compare and Survey, as in Lightroom Classic's Library and Develop.
+`Shift+Z` remains an alternative pick-and-advance key. Advancing follows the current grid and
+filmstrip order. The Presets panel therefore has no default key: open it from Window ▸ Presets or
+the edit strip, or give it a key in Help ▸ Keyboard Shortcuts (assigning it `Shift+P` brings back
+the old binding and turns off pick-and-advance on that key).
 
 The macOS native menu displays plain-key bindings but leaves execution to egui; only shortcuts
 AppKit delivers to the menu (Command, Control or function keys) are skipped by egui. The native

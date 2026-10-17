@@ -87,7 +87,6 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, b: &Bindable, sc:
     }
     // keys whose command changes in the Library grids (see `shortcuts::handle`)
     let hover = match b.id {
-        "panel.presets" => format!("{} — {}", b.id, crate::i18n::tr("In Photo Grid and Square Grid: Flag as Pick and advance")),
         "view.softProof" => format!("{} — {}", b.id, crate::i18n::tr("In Photo Grid and Square Grid: expand or collapse the stack")),
         _ => b.id.to_string(),
     };

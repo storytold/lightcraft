@@ -735,8 +735,7 @@ pub(crate) fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>>
 }
 
 fn node(app: &LightcraftApp, e: &MenuEntry) -> MenuNode {
-    // Shift+P picks and advances in Library; don't advertise it on Presets in those views.
-    let shortcut = if e.id == "panel.presets" && crate::shortcuts::library_grid(app) { None } else { e.shortcut.as_deref() };
+    let shortcut = e.shortcut.as_deref();
     // in an album the Delete key removes from the album (issue #1805): the menu says so
     let delete_key = crate::shortcuts::shortcut_of(&app.ui.settings.keymap, "photo.delete");
     let shortcut = match e.id.as_str() {
