@@ -14,7 +14,8 @@
 
 <p align="center">
   <a href="README.md">English</a> ·
-  <a href="README.zh-hans.md">简体中文</a>
+  <a href="README.zh-hans.md">简体中文</a> ·
+  <a href="README.ar.md">العربية</a>
 </p>
 
 <p align="center">
