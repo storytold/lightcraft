@@ -44,6 +44,21 @@ pub fn menu_button<'a, R>(ui: &mut Ui, atoms: impl egui::IntoAtoms<'a>, contents
     egui::InnerResponse::new(inner.map(|r| r.inner), response)
 }
 
+/// A context menu on `response`, as `Response::context_menu` gives, that a right-click moves
+/// (#1877). egui closes a menu on any click once it was open on the previous frame, and judges
+/// that by the menu's id: a right-click elsewhere on the same widget while its menu is open
+/// reopened the menu at the pointer and closed it again on the same frame, a one-frame flash.
+/// The click that opens (or moves) the menu is not the one that closes it.
+pub fn context_menu(response: &Response, add_contents: impl FnOnce(&mut Ui)) -> Option<egui::InnerResponse<()>> {
+    egui::Popup::context_menu(response).close_behavior(context_menu_close(response, egui::PopupCloseBehavior::CloseOnClick)).show(add_contents)
+}
+
+/// How a context menu on `response` closes this frame: `default`, except on the frame of the
+/// right-click that opens or moves it, which must not close it (see [`context_menu`]).
+pub fn context_menu_close(response: &Response, default: egui::PopupCloseBehavior) -> egui::PopupCloseBehavior {
+    if response.secondary_clicked() { egui::PopupCloseBehavior::IgnoreClicks } else { default }
+}
+
 // ------------------------------------------------------------------ automation registry
 
 #[derive(Clone, Default)]

@@ -682,7 +682,7 @@ fn package_cells(
             pu.drag = None;
         }
         let id = c.id;
-        resp.context_menu(|ui| {
+        crate::widgets::context_menu(&resp, |ui| {
             for (how, label) in
                 [("toFront", "Bring to Front"), ("forward", "Bring Forward"), ("backward", "Send Backward"), ("toBack", "Send to Back")]
             {

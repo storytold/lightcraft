@@ -226,7 +226,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             if resp.clicked() {
                 let _ = app.run("view.appearance", json!({}));
             }
-            resp.context_menu(|ui| {
+            crate::widgets::context_menu(&resp, |ui| {
                 let settings = ui.button(crate::i18n::tr("Appearance Settings…"));
                 register(ui.ctx(), "menu:appearanceSettings", settings.rect);
                 if settings.clicked() {

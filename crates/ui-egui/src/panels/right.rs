@@ -1319,25 +1319,29 @@ fn versions(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             } else if resp.clicked() && !current {
                 let _ = app.run("version.restore", json!({"index": i}));
             }
-            resp.on_hover_text(crate::i18n::tr(if current { "The photo has these settings" } else { "Click to restore · double-click to rename" }))
-                .context_menu(|ui| {
-                    if ui.button(crate::i18n::tr("Restore")).clicked() {
-                        let _ = app.run("version.restore", json!({"index": i}));
-                    }
-                    if ui.button(crate::i18n::tr("Update with Current Settings")).clicked() {
-                        let _ = app.run("version.update", json!({"index": i}));
-                    }
-                    if ui.button(crate::i18n::tr("Rename…")).clicked() {
-                        crate::panels::dialogs::prompt(app, "Rename Version", "Version name", &v.name, "version.rename", json!({"index": i}), "name");
-                    }
-                    if ui.button(crate::i18n::tr("Set as Before")).clicked() {
-                        let _ = app.run("beforeAfter.setBefore", json!({"source": "version", "name": v.name}));
-                    }
-                    ui.separator();
-                    if ui.button(crate::i18n::tr("Delete")).clicked() {
-                        let _ = app.run("version.delete", json!({"index": i}));
-                    }
-                });
+            let resp = resp.on_hover_text(crate::i18n::tr(if current {
+                "The photo has these settings"
+            } else {
+                "Click to restore · double-click to rename"
+            }));
+            crate::widgets::context_menu(&resp, |ui| {
+                if ui.button(crate::i18n::tr("Restore")).clicked() {
+                    let _ = app.run("version.restore", json!({"index": i}));
+                }
+                if ui.button(crate::i18n::tr("Update with Current Settings")).clicked() {
+                    let _ = app.run("version.update", json!({"index": i}));
+                }
+                if ui.button(crate::i18n::tr("Rename…")).clicked() {
+                    crate::panels::dialogs::prompt(app, "Rename Version", "Version name", &v.name, "version.rename", json!({"index": i}), "name");
+                }
+                if ui.button(crate::i18n::tr("Set as Before")).clicked() {
+                    let _ = app.run("beforeAfter.setBefore", json!({"source": "version", "name": v.name}));
+                }
+                ui.separator();
+                if ui.button(crate::i18n::tr("Delete")).clicked() {
+                    let _ = app.run("version.delete", json!({"index": i}));
+                }
+            });
         }
     });
 }
@@ -1409,7 +1413,7 @@ fn activity(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             if resp.clicked() {
                 let _ = app.run("history.restore", json!({"index": i}));
             }
-            resp.context_menu(|ui| {
+            crate::widgets::context_menu(&resp, |ui| {
                 if ui.button(crate::i18n::tr("Copy History Step Settings to Before")).clicked() {
                     let _ = app.run("beforeAfter.setBefore", json!({"source": "history", "index": i}));
                 }

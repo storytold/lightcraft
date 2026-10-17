@@ -291,7 +291,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             if r.clicked() {
                 let _ = app.run("filter.applyPreset", json!({"name": n}));
             }
-            r.context_menu(|ui| {
+            crate::widgets::context_menu(&r, |ui| {
                 if ui.button(crate::i18n::tr("Delete Preset")).clicked() {
                     let _ = app.run("filter.deletePreset", json!({"name": n}));
                 }

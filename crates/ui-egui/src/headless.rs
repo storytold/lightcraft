@@ -838,6 +838,70 @@ mod tests {
         assert!(egui::Popup::is_any_open(&h.view.ctx), "its context menu");
     }
 
+    /// #1877: a right-click while another photo's context menu is open closes that menu and
+    /// opens this photo's, which stays open (it flashed and closed again).
+    #[test]
+    fn right_clicking_elsewhere_moves_the_context_menu() {
+        let mut h = demo([1200.0, 760.0]);
+        let t = Duration::from_secs(10);
+        h.settle(SETTLE);
+        let thumbs: Vec<String> = h.app.widgets.iter().filter(|(w, _)| w.starts_with("thumb:")).map(|(w, _)| w.clone()).collect();
+        let (Some(a), Some(b)) = (thumbs.first().cloned(), thumbs.get(1).cloned()) else { panic!("two grid photos: {thumbs:?}") };
+        let popup = |w: &str| {
+            let id: u64 = w.trim_start_matches("thumb:").parse().expect("a photo id");
+            egui::Id::new(("cell", id)).with("popup")
+        };
+        assert!(!egui::Popup::is_any_open(&h.view.ctx));
+        let r = h.request("ui.clickWidget", json!({"id": a, "button": "right"}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(SETTLE);
+        assert!(egui::Popup::is_id_open(&h.view.ctx, popup(&a)), "the first photo's menu is open");
+        // A real click: the press and the release reach the UI on different frames, with the
+        // pointer resting on the photo in between (`ui.clickWidget` sends both on one frame).
+        let rect = h.app.widgets.iter().find(|(w, _)| *w == b).map(|(_, r)| *r).expect("the second photo on screen");
+        let at = egui::pos2(rect.left() + rect.width() * 0.9, rect.center().y);
+        let button = egui::PointerButton::Secondary;
+        let modifiers = egui::Modifiers::NONE;
+        h.app.synthetic.push(egui::Event::PointerMoved(at));
+        h.step();
+        h.step();
+        h.app.synthetic.push(egui::Event::PointerButton { pos: at, button, pressed: true, modifiers });
+        h.step();
+        h.step();
+        h.app.synthetic.push(egui::Event::PointerButton { pos: at, button, pressed: false, modifiers });
+        // one frame at a time: the menu flashed for a frame or two before it closed
+        for frame in 0..6 {
+            h.step();
+            assert!(!egui::Popup::is_id_open(&h.view.ctx, popup(&a)), "frame {frame}: the first photo's menu closed");
+            if frame > 0 {
+                assert!(egui::Popup::is_id_open(&h.view.ctx, popup(&b)), "frame {frame}: the second photo's menu is open");
+            }
+        }
+        h.settle(SETTLE);
+        assert!(egui::Popup::is_id_open(&h.view.ctx, popup(&b)), "the second photo's menu stays open");
+        // The same photo again, elsewhere on it (the menu that is open belongs to this very
+        // widget): the menu moves to the pointer and stays.
+        let before = h.view.ctx.read_response(popup(&b)).map(|r| r.rect).expect("the menu's area");
+        let at = egui::pos2(rect.left() + rect.width() * 0.2, rect.center().y);
+        h.app.synthetic.push(egui::Event::PointerMoved(at));
+        h.step();
+        h.step();
+        h.app.synthetic.push(egui::Event::PointerButton { pos: at, button, pressed: true, modifiers });
+        h.step();
+        h.step();
+        h.app.synthetic.push(egui::Event::PointerButton { pos: at, button, pressed: false, modifiers });
+        for frame in 0..6 {
+            h.step();
+            if frame > 0 {
+                assert!(egui::Popup::is_id_open(&h.view.ctx, popup(&b)), "frame {frame}: the menu is open after a right-click on the same photo");
+            }
+        }
+        h.settle(SETTLE);
+        assert!(egui::Popup::is_id_open(&h.view.ctx, popup(&b)), "the menu stays open");
+        let after = h.view.ctx.read_response(popup(&b)).map(|r| r.rect).expect("the menu's area");
+        assert!((after.left() - at.x).abs() < 4.0, "the menu moved to the pointer: {after:?} vs {at:?} (was {before:?})");
+    }
+
     /// #1171: Up / Down in the grid go to the cell above / below; in the filmstrip, one photo.
     #[test]
     fn up_and_down_move_through_the_grid_rows() {

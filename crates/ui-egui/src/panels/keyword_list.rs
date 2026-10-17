@@ -272,7 +272,7 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId
     if resp.double_clicked() {
         app.ui.dialog = Some(edit_dialog(app, &r.path));
     }
-    resp.context_menu(|ui| menu(app, ui, &r.path, selection));
+    crate::widgets::context_menu(&resp, |ui| menu(app, ui, &r.path, selection));
 }
 
 /// A row while a keyword or photos are dragged: outlined under the pointer when the drop would

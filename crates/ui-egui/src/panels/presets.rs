@@ -149,7 +149,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 if resp.clicked() {
                     ui.data_mut(|d| d.insert_temp(open_id, !open));
                 }
-                resp.context_menu(|ui| {
+                crate::widgets::context_menu(&resp, |ui| {
                     if ui.button(crate::i18n::tr("Export Group…")).clicked() {
                         let _ = app.run("file.exportPresets", json!({"group": g}));
                     }
@@ -205,7 +205,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                         app.toast(ui.ctx(), crate::i18n::tr_format!("Preset: {name}", name = name));
                     }
                     let (builtin, group) = (pr.builtin, pr.group.clone());
-                    resp.context_menu(|ui| {
+                    crate::widgets::context_menu(&resp, |ui| {
                         if ui.button(crate::i18n::tr(if fav { "Remove from Favorites" } else { "Add to Favorites" })).clicked() {
                             let _ = app.run("preset.favorite", json!({"id": pid}));
                         }

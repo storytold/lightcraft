@@ -413,7 +413,7 @@ fn section_header(app: &mut LightcraftApp, ui: &mut egui::Ui, section: SidebarSe
         ui.data_mut(|d| d.insert_temp(egui::Id::new("left-section-drag-from-pinned"), pinned));
         app.ui.dragging_section = Some(section);
     }
-    resp.context_menu(|ui| sections_menu(app, ui, Some(section)));
+    crate::widgets::context_menu(&resp, |ui| sections_menu(app, ui, Some(section)));
     let open = !app.ui.sidebar.is_collapsed(section);
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::CollapsingHeader, true, open, title));
     // what is visible of the header: its bar and count end at the panel's edge, like a row's
@@ -595,7 +595,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         let (hr, title) = ui.allocate_exact_size(vec2(ui.available_width(), 44.0), Sense::click());
         crate::widgets::announce(&title, crate::i18n::tr("My Photos"));
         register(ui.ctx(), "sidebarTitle", hr);
-        title.context_menu(|ui| sections_menu(app, ui, None));
+        crate::widgets::context_menu(&title, |ui| sections_menu(app, ui, None));
         // the open library's name under the title, so nobody edits in the wrong one (issue #902)
         let library = crate::panels::settings::open_library_name(app);
         let title_y = if library.is_some() { hr.center().y - 7.0 } else { hr.center().y };
@@ -1061,7 +1061,7 @@ fn folder_tree(
     {
         app.toast(ui.ctx(), e);
     }
-    resp.context_menu(|ui| {
+    crate::widgets::context_menu(&resp, |ui| {
         // the library actions of the Folders tree, when this folder (or one inside it) holds library photos
         let library = app.caches.folder_tree(&app.session.catalog);
         let held = library_node_for(&library, path);
@@ -1540,7 +1540,7 @@ fn drop_target(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response
 }
 
 fn folder_menu(app: &mut LightcraftApp, resp: &egui::Response, a: &Album) {
-    resp.context_menu(|ui| {
+    crate::widgets::context_menu(resp, |ui| {
         if a.folder {
             // the same commands as File ▸ New…, aimed at this folder
             crate::widgets::menu_button(ui, crate::i18n::tr("New"), |ui| {
@@ -1921,7 +1921,7 @@ fn row_menu(app: &mut LightcraftApp, resp: &egui::Response, n: &FolderNode) {
     if !n.volume {
         folder_menu_for_library(app, resp, n);
     } else if n.path != "/" {
-        resp.context_menu(|ui| {
+        crate::widgets::context_menu(resp, |ui| {
             folder_label_menu(app, ui, n);
             locate_missing_item(app, ui, n);
             synchronize_item(app, ui, n, &n.name);
@@ -2020,7 +2020,7 @@ fn folder_menu_for_library(app: &mut LightcraftApp, resp: &egui::Response, n: &F
     let name = std::path::Path::new(path).file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_else(|| path.to_string());
     // what dialogs call it: the last two names, so same-named folders are told apart
     let label = lightcraft_catalog::folders::folder_label(path);
-    resp.context_menu(|ui| {
+    crate::widgets::context_menu(resp, |ui| {
         if ui.button(crate::i18n::tr("Rename Folder…")).clicked() {
             app.ui.dialog = Some(crate::state::Dialog::TextPrompt {
                 title: crate::i18n::tr_format!("Rename “{name}”", name = label),
@@ -2116,7 +2116,7 @@ fn keyword_row(app: &mut LightcraftApp, ui: &mut egui::Ui, n: &KeywordNode, id: 
         browse_all_photos(app, !sel);
         let _ = app.run("library.filter", json!({"keyword": v}));
     }
-    resp.context_menu(|ui| {
+    crate::widgets::context_menu(&resp, |ui| {
         let has_sel = app.session.active().is_some();
         if ui.add_enabled(has_sel, egui::Button::new(crate::i18n::tr("Add to Selected Photos"))).clicked() {
             let _ = app.run("photo.setMeta", json!({"addKeywords": [n.path]}));
