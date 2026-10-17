@@ -23,6 +23,7 @@ lightcraft-engine = { workspace = true }
 lightcraft-slideshow = { workspace = true }
 lightcraft-preview = { workspace = true }
 egui = { workspace = true }
+kurbo = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }

@@ -105,10 +105,11 @@ fn row_sensed(
     } else if resp.hovered() {
         ui.painter().rect_filled(inner, 4.0, t.hover.gamma_multiply(0.6));
     }
+    // the selected row's icon is the filled variant
     paint(
         ui.painter(),
         Rect::from_min_size(pos2(r.left() + 18.0 + indent, r.center().y - 8.0), vec2(16.0, 16.0)),
-        icon,
+        if selected { icon.chosen() } else { icon },
         if selected { t.text } else { t.icon },
     );
     let font = t.font(13.5);
@@ -183,7 +184,7 @@ fn disclosure_chevron(ui: &mut egui::Ui, row: &egui::Response, indent: f32, open
     let tr = ui.interact(tri, id, Sense::click());
     register(ui.ctx(), widget, tri);
     let col = if tr.hovered() { t.text } else { t.text_dim };
-    paint(ui.painter(), Rect::from_center_size(c, vec2(16.0, 16.0)), if open { Icon::ChevronDown } else { Icon::ChevronRight }, col);
+    paint(ui.painter(), Rect::from_center_size(c, vec2(16.0, 16.0)), if open { Icon::CaretDown } else { Icon::CaretRight }, col);
     tr
 }
 
@@ -426,7 +427,7 @@ fn section_header(app: &mut LightcraftApp, ui: &mut egui::Ui, section: SidebarSe
     let c = pos2(r.left() + 10.0, r.center().y);
     register(ui.ctx(), format!("{widget}Chevron:{id}"), Rect::from_center_size(c, vec2(16.0, 16.0)));
     let col = if hovered { t.text } else { t.text_dim };
-    paint(ui.painter(), Rect::from_center_size(c, vec2(16.0, 16.0)), if open { Icon::ChevronDown } else { Icon::ChevronRight }, col);
+    paint(ui.painter(), Rect::from_center_size(c, vec2(16.0, 16.0)), if open { Icon::CaretDown } else { Icon::CaretRight }, col);
     ui.painter().text(pos2(r.left() + 18.0, r.center().y), Align2::LEFT_CENTER, title, t.semibold(13.5), t.text_label);
     let button = header_button(section);
     // (an album being dragged puts "Top Level" in the Albums header)

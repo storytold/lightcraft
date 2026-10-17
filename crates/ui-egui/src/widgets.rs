@@ -718,7 +718,8 @@ pub fn icon_button(ui: &mut Ui, id: &str, icon: Icon, size: egui::Vec2, active: 
         t.icon
     };
     let glyph = (size.x.min(size.y) * 0.62).min(22.0);
-    paint(p, Rect::from_center_size(r.center(), vec2(glyph, glyph)), icon, c);
+    // an active button shows the icon's filled variant where it has one
+    paint(p, Rect::from_center_size(r.center(), vec2(glyph, glyph)), if active { icon.chosen() } else { icon }, c);
     if !tooltip.is_empty() { resp.on_hover_text(tooltip) } else { resp }
 }
 

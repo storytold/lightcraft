@@ -1,5 +1,11 @@
 //! Our own vector icons, drawn in code on a 20×20 design grid (1.5 px strokes, rounded caps).
 //! Original work (see assets/ATTRIBUTION.md) — not derived from any third-party icon set.
+//!
+//! The library sidebar's and the bottom bar's icons (and their other uses) come from Tabler Icons
+//! (MIT, files in `assets/icons/tabler/`, drawn by [`svg`]), most with a filled variant for the
+//! selected row or mode ([`Icon::chosen`]; the `_Chosen` icons of issues #1591 and #1615).
+
+mod svg;
 
 use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke, pos2, vec2};
 
@@ -25,40 +31,96 @@ pub enum Icon {
     Versions,
     Activity,
     More,
+    /// Keyword (Tabler `tag`).
     Tag,
+    /// [`Icon::Tag`] filled: a selected keyword.
+    TagFilled,
     Info,
+    /// Photo Grid view (Tabler `layout-board`, turned so its columns are rows).
     GridPhoto,
+    /// [`Icon::GridPhoto`] filled: the Photo Grid view is on.
+    GridPhotoFilled,
+    /// Square Grid view (Tabler `layout-grid`).
     GridSquare,
+    /// [`Icon::GridSquare`] filled.
+    GridSquareFilled,
+    /// Detail view (Tabler `rectangle`).
     Single,
+    /// [`Icon::Single`] filled.
+    SingleFilled,
+    /// Compare view (Tabler `columns-2`).
     Compare,
+    /// [`Icon::Compare`] filled.
+    CompareFilled,
+    /// Survey view (Tabler `layout-dashboard`).
     Survey,
+    /// [`Icon::Survey`] filled.
+    SurveyFilled,
+    /// People view (Tabler `user`).
+    People,
+    /// [`Icon::People`] filled.
+    PeopleFilled,
+    /// Tabler `sort-descending`.
     Sort,
+    /// Tabler `star`.
     Star,
+    /// Tabler filled `star`: a rating star that is on.
     StarFilled,
+    /// Unflagged (Tabler `circle`).
     Circle,
+    /// Pick flag (Tabler `flag`).
     FlagPick,
+    /// [`Icon::FlagPick`] filled: the selected Picks row.
+    FlagPickFilled,
+    /// The pick flag with a cross in it.
     FlagReject,
+    /// Settings (Tabler `settings`).
     Gear,
+    /// [`Icon::Gear`] filled.
+    GearFilled,
+    /// Filmstrip on/off (Tabler `layout-bottombar`).
     Filmstrip,
+    /// [`Icon::Filmstrip`] filled: the filmstrip is shown.
+    FilmstripFilled,
+    /// Before/After (Tabler `contrast`).
     BeforeAfter,
+    /// [`Icon::BeforeAfter`] filled: a before/after layout is on.
+    BeforeAfterFilled,
     ChevronDown,
     ChevronRight,
     ChevronLeft,
     ChevronUp,
     ChevronDoubleLeft,
     ChevronDoubleRight,
+    /// Disclosure triangle of an open sidebar row (Tabler filled `caret-down`).
+    CaretDown,
+    /// Disclosure triangle of a closed sidebar row (Tabler filled `caret-right`).
+    CaretRight,
+    /// Tabler `plus`.
     Plus,
     Minus,
     Album,
     SmartAlbum,
     Stack,
+    /// Tabler `folder`.
     Folder,
+    /// [`Icon::Folder`] filled: a selected folder.
+    FolderFilled,
     /// Edit (a pencil).
     Pencil,
+    /// All Photos: a picture (Tabler `photo`).
     Photos,
+    /// [`Icon::Photos`] filled: the selected All Photos row.
+    PhotosFilled,
+    /// Tabler `clock`.
     Clock,
+    /// [`Icon::Clock`] filled: the selected Recently Added or date row.
+    ClockFilled,
     Calendar,
+    /// Tabler `trash`.
     Trash,
+    /// [`Icon::Trash`] filled: the selected Recently Deleted row.
+    TrashFilled,
     Curve,
     ProfileGrid,
     Close,
@@ -83,7 +145,7 @@ pub enum Icon {
     /// Community chat (opens the ArtCraft Discord): a speech bubble with three dots. Our own
     /// generic drawing, not any service's logo.
     Chat,
-    /// Face boxes on/off: four corner brackets round a small face.
+    /// Face boxes on/off (Tabler `face-id`).
     FaceBox,
     /// Play (a triangle pointing right).
     Play,
@@ -103,6 +165,76 @@ pub enum Icon {
     Sun,
     /// Appearance Mode ▸ Dark: a crescent moon.
     Moon,
+}
+
+impl Icon {
+    /// The icon shown when its row or item is selected: the filled variant where there is one.
+    pub fn chosen(self) -> Icon {
+        match self {
+            Icon::Photos => Icon::PhotosFilled,
+            Icon::Clock => Icon::ClockFilled,
+            Icon::FlagPick => Icon::FlagPickFilled,
+            Icon::Trash => Icon::TrashFilled,
+            Icon::Folder => Icon::FolderFilled,
+            Icon::Tag => Icon::TagFilled,
+            Icon::GridPhoto => Icon::GridPhotoFilled,
+            Icon::GridSquare => Icon::GridSquareFilled,
+            Icon::Single => Icon::SingleFilled,
+            Icon::Compare => Icon::CompareFilled,
+            Icon::Survey => Icon::SurveyFilled,
+            Icon::People => Icon::PeopleFilled,
+            Icon::Star => Icon::StarFilled,
+            Icon::Gear => Icon::GearFilled,
+            Icon::Filmstrip => Icon::FilmstripFilled,
+            Icon::BeforeAfter => Icon::BeforeAfterFilled,
+            other => other,
+        }
+    }
+
+    /// The SVG file this icon is drawn from, if it is not drawn in code.
+    fn svg(self) -> Option<svg::Svg> {
+        Some(match self {
+            Icon::Plus => svg::PLUS,
+            Icon::CaretDown => svg::CARET_DOWN,
+            Icon::CaretRight => svg::CARET_RIGHT,
+            Icon::Tag => svg::TAG,
+            Icon::TagFilled => svg::TAG_FILL,
+            Icon::Folder => svg::FOLDER,
+            Icon::FolderFilled => svg::FOLDER_FILL,
+            Icon::Photos => svg::PHOTO,
+            Icon::PhotosFilled => svg::PHOTO_FILL,
+            Icon::Clock => svg::CLOCK,
+            Icon::ClockFilled => svg::CLOCK_FILL,
+            Icon::Trash => svg::TRASH,
+            Icon::TrashFilled => svg::TRASH_FILL,
+            Icon::FlagPick => svg::FLAG,
+            Icon::FlagPickFilled => svg::FLAG_FILL,
+            Icon::GridPhoto => svg::LAYOUT_BOARD_ROWS,
+            Icon::GridPhotoFilled => svg::LAYOUT_BOARD_ROWS_FILL,
+            Icon::GridSquare => svg::LAYOUT_GRID,
+            Icon::GridSquareFilled => svg::LAYOUT_GRID_FILL,
+            Icon::Single => svg::RECTANGLE,
+            Icon::SingleFilled => svg::RECTANGLE_FILL,
+            Icon::Compare => svg::COLUMNS_2,
+            Icon::CompareFilled => svg::COLUMNS_2_FILL,
+            Icon::Survey => svg::LAYOUT_DASHBOARD,
+            Icon::SurveyFilled => svg::LAYOUT_DASHBOARD_FILL,
+            Icon::People => svg::USER,
+            Icon::PeopleFilled => svg::USER_FILL,
+            Icon::Sort => svg::SORT_DESCENDING,
+            Icon::Star => svg::STAR,
+            Icon::StarFilled => svg::STAR_FILL,
+            Icon::Circle => svg::CIRCLE,
+            Icon::Gear => svg::SETTINGS,
+            Icon::GearFilled => svg::SETTINGS_FILL,
+            Icon::Filmstrip => svg::LAYOUT_BOTTOMBAR,
+            Icon::FilmstripFilled => svg::LAYOUT_BOTTOMBAR_FILL,
+            Icon::BeforeAfter => svg::CONTRAST,
+            Icon::BeforeAfterFilled => svg::CONTRAST_FILL,
+            Icon::FaceBox => svg::FACE_ID,
+            _ => return None,
+        })
+    }
 }
 
 struct Pen<'a> {
@@ -158,23 +290,13 @@ impl Pen<'_> {
     }
 }
 
-fn star_pts(cx: f32, cy: f32, r: f32) -> Vec<(f32, f32)> {
-    (0..10)
-        .map(|i| {
-            let a = (-90.0 + i as f32 * 36.0f32).to_radians();
-            let rr = if i % 2 == 0 { r } else { r * 0.45 };
-            (cx + rr * a.cos(), cy + rr * a.sin())
-        })
-        .collect()
-}
-
 /// Paint `icon` centred in `rect` (square area used) with `color`.
 pub fn paint(p: &Painter, rect: Rect, icon: Icon, color: Color32) {
     paint_with(p, rect, icon, color, None);
 }
 
 /// [`paint`], turned `radians` clockwise about its centre. Only for icons drawn with lines, arcs
-/// and circles (rectangles stay square to the screen).
+/// and circles (rectangles stay square to the screen; icons from SVG files are not turned).
 pub fn paint_turned(p: &Painter, rect: Rect, icon: Icon, color: Color32, radians: f32) {
     paint_with(p, rect, icon, color, Some((radians.cos(), radians.sin())));
 }
@@ -199,9 +321,18 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, color: Color32, turn: Option<
     };
     let r = Rect::from_center_size(rect.center(), vec2(side, side));
     let k = side / 20.0;
+    if let Some(file) = icon.svg() {
+        svg::paint(p, r, file, color);
+        return;
+    }
     let pen = Pen { p, r, s: Stroke::new((1.5 * k).max(1.0), color), k, turn };
     use Icon::*;
     match icon {
+        // drawn from their files above
+        Plus | CaretDown | CaretRight | Tag | TagFilled | Folder | FolderFilled | Photos | PhotosFilled | Clock | ClockFilled | Trash
+        | TrashFilled | FlagPick | FlagPickFilled | GridPhoto | GridPhotoFilled | GridSquare | GridSquareFilled | Single | SingleFilled | Compare
+        | CompareFilled | Survey | SurveyFilled | People | PeopleFilled | Sort | Star | StarFilled | Circle | Gear | GearFilled | Filmstrip
+        | FilmstripFilled | BeforeAfter | BeforeAfterFilled | FaceBox => {}
         Sidebar => {
             pen.rect(3.0, 4.0, 17.0, 16.0, 1.5);
             pen.line(&[(8.0, 4.0), (8.0, 16.0)]);
@@ -335,82 +466,16 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, color: Color32, turn: Option<
                 pen.dot(x, 10.0, 1.3);
             }
         }
-        Tag => {
-            pen.closed(&[(3.0, 3.5), (10.0, 3.5), (17.0, 10.5), (10.5, 17.0), (3.0, 10.0)]);
-            pen.dot(7.0, 7.5, 1.2);
-        }
         Info => {
             pen.circle(10.0, 10.0, 7.5);
             pen.line(&[(10.0, 9.0), (10.0, 14.0)]);
             pen.dot(10.0, 6.3, 0.9);
         }
-        GridPhoto => {
-            pen.rect_fill(3.0, 4.0, 10.0, 9.5, 0.5);
-            pen.rect_fill(11.0, 4.0, 17.0, 9.5, 0.5);
-            pen.rect_fill(3.0, 10.5, 8.0, 16.0, 0.5);
-            pen.rect_fill(9.0, 10.5, 17.0, 16.0, 0.5);
-        }
-        GridSquare => {
-            pen.rect_fill(3.5, 4.0, 9.5, 9.5, 0.5);
-            pen.rect_fill(10.5, 4.0, 16.5, 9.5, 0.5);
-            pen.rect_fill(3.5, 10.5, 9.5, 16.0, 0.5);
-            pen.rect_fill(10.5, 10.5, 16.5, 16.0, 0.5);
-        }
-        Single => pen.rect_fill(3.0, 5.0, 17.0, 15.0, 0.5),
-        Survey => {
-            pen.rect(2.5, 3.5, 9.0, 9.0, 1.0);
-            pen.rect(11.0, 3.5, 17.5, 9.0, 1.0);
-            pen.rect(2.5, 11.0, 9.0, 16.5, 1.0);
-            pen.rect(11.0, 11.0, 17.5, 16.5, 1.0);
-        }
-        Compare => {
-            pen.rect_fill(2.0, 5.0, 8.8, 15.0, 0.5);
-            pen.rect_fill(11.2, 5.0, 18.0, 15.0, 0.5);
-        }
-        Sort => {
-            pen.line(&[(3.0, 5.0), (17.0, 5.0)]);
-            pen.line(&[(3.0, 10.0), (13.0, 10.0)]);
-            pen.line(&[(3.0, 15.0), (9.0, 15.0)]);
-        }
-        Star => pen.closed(&star_pts(10.0, 10.5, 7.5)),
-        StarFilled => {
-            let pts = star_pts(10.0, 10.5, 7.5);
-            // convex fan: fill triangles from the centre
-            for i in 0..10 {
-                let a = pts[i];
-                let b = pts[(i + 1) % 10];
-                pen.fill(&[(10.0, 10.5), a, b], color);
-            }
-        }
-        Circle => pen.circle(10.0, 10.0, 6.0),
-        FlagPick => {
-            pen.line(&[(5.0, 17.0), (5.0, 3.5)]);
-            pen.closed(&[(5.0, 3.5), (15.0, 3.5), (12.5, 7.0), (15.0, 10.5), (5.0, 10.5)]);
-        }
         FlagReject => {
-            pen.line(&[(5.0, 17.0), (5.0, 3.5)]);
-            pen.closed(&[(5.0, 3.5), (15.0, 3.5), (12.5, 7.0), (15.0, 10.5), (5.0, 10.5)]);
-            pen.line(&[(8.0, 5.0), (12.0, 9.0)]);
-            pen.line(&[(12.0, 5.0), (8.0, 9.0)]);
-        }
-        Gear => {
-            pen.circle(10.0, 10.0, 2.5);
-            for i in 0..8 {
-                let a = (i as f32 * 45.0f32).to_radians();
-                pen.line(&[(10.0 + 5.2 * a.cos(), 10.0 + 5.2 * a.sin()), (10.0 + 7.5 * a.cos(), 10.0 + 7.5 * a.sin())]);
-            }
-            pen.circle(10.0, 10.0, 5.2);
-        }
-        Filmstrip => {
-            pen.rect(2.5, 5.0, 17.5, 15.0, 1.0);
-            pen.rect_fill(5.0, 11.0, 8.5, 13.5, 0.3);
-            pen.rect_fill(9.5, 11.0, 13.0, 13.5, 0.3);
-            pen.line(&[(2.5, 9.5), (17.5, 9.5)]);
-        }
-        BeforeAfter => {
-            pen.rect(3.0, 4.0, 17.0, 16.0, 1.0);
-            pen.line(&[(10.0, 2.5), (10.0, 17.5)]);
-            pen.rect_fill(10.0, 4.0, 17.0, 16.0, 0.5);
+            // the pick flag, crossed out inside its cloth
+            svg::paint(p, r, svg::FLAG, color);
+            pen.line(&[(8.0, 6.0), (12.0, 10.0)]);
+            pen.line(&[(12.0, 6.0), (8.0, 10.0)]);
         }
         ChevronDown => pen.line(&[(5.0, 7.5), (10.0, 12.5), (15.0, 7.5)]),
         Forward | ChevronRight => pen.line(&[(7.5, 5.0), (12.5, 10.0), (7.5, 15.0)]),
@@ -424,10 +489,6 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, color: Color32, turn: Option<
             pen.line(&[(11.0, 5.0), (16.0, 10.0), (11.0, 15.0)]);
         }
         ChevronUp => pen.line(&[(5.0, 12.5), (10.0, 7.5), (15.0, 12.5)]),
-        Plus => {
-            pen.line(&[(10.0, 4.0), (10.0, 16.0)]);
-            pen.line(&[(4.0, 10.0), (16.0, 10.0)]);
-        }
         Minus => pen.line(&[(4.0, 10.0), (16.0, 10.0)]),
         Album => {
             pen.rect(3.0, 5.0, 15.0, 17.0, 1.0);
@@ -444,19 +505,9 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, color: Color32, turn: Option<
             // a small funnel: the album is a saved filter
             pen.closed(&[(5.5, 8.5), (12.5, 8.5), (10.0, 11.5), (10.0, 14.5), (8.0, 13.5), (8.0, 11.5)]);
         }
-        Folder => pen.closed(&[(2.5, 5.0), (8.0, 5.0), (9.5, 7.0), (17.5, 7.0), (17.5, 15.5), (2.5, 15.5)]),
         Pencil => {
             pen.closed(&[(4.0, 16.0), (4.5, 12.5), (13.5, 3.5), (16.5, 6.5), (7.5, 15.5)]);
             pen.line(&[(11.5, 5.5), (14.5, 8.5)]);
-        }
-        Photos => {
-            pen.rect(2.5, 4.0, 17.5, 16.0, 1.5);
-            pen.line(&[(2.5, 13.5), (7.0, 9.5), (11.0, 13.0), (13.5, 11.0), (17.5, 14.5)]);
-            pen.dot(13.5, 7.5, 1.3);
-        }
-        Clock => {
-            pen.circle(10.0, 10.0, 7.0);
-            pen.line(&[(10.0, 5.5), (10.0, 10.0), (13.5, 11.5)]);
         }
         Calendar => {
             // a page with a binding bar, two rings and a marked day
@@ -465,11 +516,6 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, color: Color32, turn: Option<
             pen.line(&[(7.0, 2.5), (7.0, 6.0)]);
             pen.line(&[(13.0, 2.5), (13.0, 6.0)]);
             pen.rect(11.0, 11.5, 14.0, 14.5, 0.5);
-        }
-        Trash => {
-            pen.line(&[(3.0, 5.5), (17.0, 5.5)]);
-            pen.line(&[(8.0, 5.5), (8.0, 3.0), (12.0, 3.0), (12.0, 5.5)]);
-            pen.closed(&[(5.0, 5.5), (15.0, 5.5), (14.0, 17.0), (6.0, 17.0)]);
         }
         Curve => {
             pen.rect(3.0, 3.0, 17.0, 17.0, 1.5);
@@ -523,14 +569,6 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, color: Color32, turn: Option<
         Pause => {
             pen.rect_fill(5.0, 4.0, 8.5, 16.0, 0.5);
             pen.rect_fill(11.5, 4.0, 15.0, 16.0, 0.5);
-        }
-        FaceBox => {
-            pen.line(&[(2.5, 7.0), (2.5, 2.5), (7.0, 2.5)]);
-            pen.line(&[(13.0, 2.5), (17.5, 2.5), (17.5, 7.0)]);
-            pen.line(&[(2.5, 13.0), (2.5, 17.5), (7.0, 17.5)]);
-            pen.line(&[(13.0, 17.5), (17.5, 17.5), (17.5, 13.0)]);
-            pen.circle(10.0, 8.5, 2.4);
-            pen.arc(10.0, 16.0, 4.5, 215.0, 325.0);
         }
         Picker => {
             pen.line(&[(4.0, 16.0), (11.5, 8.5)]);

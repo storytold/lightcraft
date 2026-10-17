@@ -572,7 +572,7 @@ Copyright (c) 2026 ArtCraft Team and the LightCraft contributors. 必需的声�
 *《地出》*（1968）；NASA，*《蓝色弹珠》*（1972）。演示图库由 LightCraft 程序生成。界面字体：
 Inter（SIL OFL 1.1）。用 [craft-fonts](https://github.com/storytold/craft-fonts) 构建的版本（所有正式发布版）
 还会内嵌它的中文和日文字体（Noto Sans CJK SC、BIZ UDPGothic、BIZ UDMincho、Shippori Mincho；SIL OFL 1.1），列在其
-[ATTRIBUTION.md](https://github.com/storytold/craft-fonts/blob/main/ATTRIBUTION.md) 中。所有图标均为原创。
+[ATTRIBUTION.md](https://github.com/storytold/craft-fonts/blob/main/ATTRIBUTION.md) 中。图库侧栏和底部栏的图标来自 [Tabler Icons](https://tabler.io/icons)（MIT 许可），其余图标均为原创。
 
 [`docs/brand/`](docs/brand/) 中的 ArtCraft 名称、字标和标志是
 ArtCraft 团队的商标，不在本许可范围内。它们只能在未修改的情况下，作为
