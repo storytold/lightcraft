@@ -863,6 +863,12 @@ fn the_catalog_remembers_which_photos_its_latest_ops_changed_and_what_of_them() 
     let before = c.revision;
     c.apply(Op::Batch { ops: vec![Op::SetRating { id: a, rating: 3 }, Op::RenameAlbum { id: album, name: "Journey".into() }] }).unwrap();
     assert_eq!(c.touched_since(before), None);
+    // the keyword list changes no photo: what was touched stays known, and the list is said to have changed
+    let before = c.revision;
+    c.apply(Op::SetKeyword { path: "travel|Rome".into(), info: Some(Default::default()) }).unwrap();
+    assert_eq!(c.touched_since(before), Some(vec![]));
+    assert_eq!(c.aspects_since(before), Some(Aspects::KEYWORD_LIST));
+    assert_eq!(c.aspects_since(c.revision), Some(Aspects::NONE), "and from after it, not");
     // more ops than are remembered: the oldest are answered with "anything"
     let long_ago = c.revision;
     for i in 0..9000u32 {
