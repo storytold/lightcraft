@@ -1,0 +1,5 @@
+# Python packages for tools/render_fidelity.py (docs/render-fidelity.md); everything else is the standard library.
+# These pins need Python 3.11+; on Python 3.9 / 3.10 numpy>=2.0 and tifffile>=2024.8 work too.
+#   python3 -m venv .venv-fidelity && .venv-fidelity/bin/pip install -r tools/requirements-render-fidelity.txt
+numpy==2.4.6
+tifffile==2026.9.15
