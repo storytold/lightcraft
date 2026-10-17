@@ -151,9 +151,29 @@ thread_local! {
     static LOCALE: std::cell::Cell<Locale> = const { std::cell::Cell::new(Locale::En) };
 }
 
-/// The UI language from the environment (`LIGHTCRAFT_LANGUAGE=zh-hans`), for headless runs.
+/// The UI language from the environment (`LIGHTCRAFT_LANGUAGE=zh-hans`), for headless runs; in the
+/// browser, the browser's languages.
 pub fn default_language() -> Locale {
+    #[cfg(target_arch = "wasm32")]
+    return resolve_system_language(&system_language_tags());
+    #[cfg(not(target_arch = "wasm32"))]
     std::env::var("LIGHTCRAFT_LANGUAGE").ok().and_then(|value| Locale::parse_tag(&value)).unwrap_or(Locale::En)
+}
+
+/// The shipped language for a list of BCP-47 tags in preference order (the browser's
+/// `navigator.languages`): the first tag that names one, else the source language.
+pub fn resolve_system_language(tags: &[String]) -> Locale {
+    tags.iter().find_map(|tag| Locale::parse_tag(tag)).unwrap_or(Locale::En)
+}
+
+/// The browser's languages in preference order: `navigator.languages`, else `navigator.language`.
+#[cfg(target_arch = "wasm32")]
+fn system_language_tags() -> Vec<String> {
+    let Some(navigator) = web_sys::window().map(|window| window.navigator()) else {
+        return Vec::new();
+    };
+    let tags: Vec<String> = navigator.languages().iter().filter_map(|tag| tag.as_string()).collect();
+    if tags.is_empty() { navigator.language().into_iter().collect() } else { tags }
 }
 
 pub fn set_language(language: Locale) {
@@ -462,6 +482,16 @@ pub fn rules_label(rules: &lightcraft_catalog::RuleSet, catalog: &lightcraft_cat
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn system_language_tags_pick_the_first_shipped_language() {
+        let tags = |list: &[&str]| list.iter().map(|tag| (*tag).to_string()).collect::<Vec<_>>();
+        assert_eq!(resolve_system_language(&tags(&["it-IT"])), Locale::It);
+        assert_eq!(resolve_system_language(&tags(&["xx", "de-AT", "fr"])), Locale::De);
+        assert_eq!(resolve_system_language(&tags(&["zh-TW"])), Locale::ZhHant);
+        assert_eq!(resolve_system_language(&tags(&["xx"])), Locale::En);
+        assert_eq!(resolve_system_language(&[]), Locale::En);
+    }
 
     #[test]
     fn czech_coverage_of_catalogs_commands_controls_and_rules_is_reported() {

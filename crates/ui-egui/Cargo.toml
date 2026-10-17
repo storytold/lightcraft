@@ -27,6 +27,10 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
 
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# the browser's language (`navigator.languages`) is the default UI language
+web-sys = { workspace = true, features = ["Navigator", "Window"] }
+
 [dev-dependencies]
 # tests record why they skip (`cargo xtask ci` lists the skips)
 lightcraft-testkit = { workspace = true }
