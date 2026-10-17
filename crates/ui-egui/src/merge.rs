@@ -108,8 +108,6 @@ pub struct MergeState {
     pub last_result: Option<Value>,
     /// Photos the dialog merges (the selection when it opened).
     pub ids: Vec<PhotoId>,
-    /// The options of the last merge started, per kind ("merge.hdr" …): Merge with Last Settings.
-    pub last: std::collections::HashMap<String, MergeDialog>,
     /// HDR for Each Bracket Set: the sets still to merge after the running one.
     pub batch: std::collections::VecDeque<Vec<PhotoId>>,
 }
@@ -148,7 +146,15 @@ fn spawn(app: &LightcraftApp, options: &MergeDialog, ids: &[PhotoId], preview: b
     Ok(MergeTask { preview, job, options: options.clone(), progress, cancel, rx, guard: None })
 }
 
-/// Open the merge dialog for the selection.
+/// The options of the last merge of kind `command` started (kept in the library preferences), or
+/// the defaults the first time. Fields missing from an older or hand-edited prefs.json take their
+/// defaults; options that don't parse at all fall back to the defaults.
+pub fn last_options(app: &LightcraftApp, command: &str) -> MergeDialog {
+    let saved = app.session.last_merge.get(command).and_then(|v| serde_json::from_value::<MergeDialog>(v.clone()).ok());
+    MergeDialog { command: command.into(), ..saved.unwrap_or_default() }
+}
+
+/// Open the merge dialog for the selection, with the options of the last merge of this kind.
 pub fn open(app: &mut LightcraftApp, command: &str) -> Result<Value, String> {
     let ids = app.session.selected();
     if ids.len() < 2 {
@@ -161,7 +167,7 @@ pub fn open(app: &mut LightcraftApp, command: &str) -> Result<Value, String> {
     if let Some(t) = app.merge.preview_task.take() {
         t.cancel.store(true, Ordering::Relaxed);
     }
-    app.ui.dialog = Some(crate::state::Dialog::Merge { opts: MergeDialog::for_command(command) });
+    app.ui.dialog = Some(crate::state::Dialog::Merge { opts: last_options(app, command) });
     Ok(json!({"photos": app.merge.ids.len()}))
 }
 
@@ -180,7 +186,10 @@ pub fn start_final(app: &mut LightcraftApp, opts: &MergeDialog) -> Result<Value,
     guard.progress(0, 1000);
     task.guard = Some(guard);
     app.merge.final_task = Some(task);
-    app.merge.last.insert(opts.command.clone(), opts.clone());
+    app.session.last_merge.insert(opts.command.clone(), opts.params());
+    if let Err(e) = app.session.save_prefs() {
+        log::warn!("merge: {e}");
+    }
     Ok(json!({"started": true, "photos": ids.len()}))
 }
 
@@ -192,7 +201,7 @@ pub fn start_last(app: &mut LightcraftApp, command: &str) -> Result<Value, Strin
         return Err("select at least 2 photos to merge".into());
     }
     app.merge.ids = ids;
-    let opts = app.merge.last.get(command).cloned().unwrap_or_else(|| MergeDialog::for_command(command));
+    let opts = last_options(app, command);
     start_final(app, &opts)
 }
 
@@ -217,7 +226,7 @@ pub fn start_batch(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> 
 fn next_in_batch(app: &mut LightcraftApp) -> Result<(), String> {
     let Some(ids) = app.merge.batch.pop_front() else { return Ok(()) };
     app.merge.ids = ids;
-    let opts = app.merge.last.get("merge.hdr").cloned().unwrap_or_else(|| MergeDialog::for_command("merge.hdr"));
+    let opts = last_options(app, "merge.hdr");
     start_final(app, &opts).map(|_| ())
 }
 

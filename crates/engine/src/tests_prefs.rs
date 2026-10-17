@@ -143,6 +143,25 @@ fn preferences_persist_with_the_library() {
 }
 
 #[test]
+fn last_merge_settings_persist_with_the_library() {
+    let lib = temp_dir("merge");
+    let opts = json!({"align": false, "deghost": "high"});
+    {
+        let mut s = Session::new().with_fs();
+        s.open_library(&lib, false).unwrap();
+        s.last_merge.insert("merge.hdr".into(), opts.clone());
+        s.save_prefs().unwrap();
+        s.close_library().unwrap();
+    }
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    assert_eq!(s.last_merge.get("merge.hdr"), Some(&opts));
+    assert!(!s.last_merge.contains_key("merge.panorama"));
+    drop(s);
+    let _ = std::fs::remove_dir_all(&lib);
+}
+
+#[test]
 fn default_copyright_and_creator_fill_gaps_on_import() {
     let dir = temp_dir("copyright");
     let lib = dir.join("lib");

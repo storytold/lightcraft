@@ -207,6 +207,8 @@ struct PrefsFile {
     /// Parameters of the last export (for Export with Previous).
     #[serde(alias = "last_export")]
     last_export: Option<serde_json::Value>,
+    /// Options of the last Photo Merge, per command.
+    last_merge: std::collections::BTreeMap<String, serde_json::Value>,
     /// The user's export presets.
     export_presets: Vec<crate::export::ExportPreset>,
     /// Print templates.
@@ -492,6 +494,7 @@ impl Session {
         let prefs = settings.read::<PrefsFile>(files.as_mut(), "prefs.json").unwrap_or_default();
         self.xmp = prefs.xmp;
         self.last_export = prefs.last_export;
+        self.last_merge = prefs.last_merge;
         self.export_presets = prefs.export_presets;
         self.print_templates = prefs.print_templates;
         self.metadata_presets = prefs.metadata_presets;
@@ -746,6 +749,7 @@ impl Session {
         let v = serde_json::to_vec_pretty(&PrefsFile {
             xmp: self.xmp,
             last_export: self.last_export.clone(),
+            last_merge: self.last_merge.clone(),
             export_presets: self.export_presets.clone(),
             print_templates: self.print_templates.clone(),
             metadata_presets: self.metadata_presets.clone(),
