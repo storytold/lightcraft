@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 use crate::Session;
 use crate::denoise::{Loader, Model, PhotoState, RunOn};
 use crate::export::{ExportOptions, export_photo};
-use crate::tests_xmp::{synthetic_dng_of, temp_dir};
+use crate::tests_xmp::{synthetic_dng_cfa, synthetic_dng_of, temp_dir};
 
 /// A model that makes every output pixel half of its cell's colour: a picture that is plainly not the plain one.
 struct Dim {
@@ -561,6 +561,103 @@ fn files_that_cannot_be_denoised_fail_with_a_reason_and_never_a_panic() {
         s.product = dir.join(format!("{cfa}.lcdn"));
         assert_eq!(make_product(&s, None), Ok(true), "{cfa}");
         assert_eq!(make_product(&s, None), Ok(false), "{cfa} is already there");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Only a Bayer pattern has a Bayer layout. 16 of X-Trans's 36 phases start with a 2 × 2 that reads as a Bayer cell
+/// (rows 2 and 3 at column 1 are R G / G B), so a file whose active area began at one of them would have had its
+/// X-Trans mosaic packed as Bayer.
+#[test]
+fn an_x_trans_phase_that_starts_like_a_bayer_cell_is_not_taken_for_one() {
+    use crate::denoise::layout_of;
+    use lightcraft_raw::Cfa;
+    let mut looks_bayer = 0;
+    for dy in 0..6 {
+        for dx in 0..6 {
+            let cfa = Cfa::xtrans().shifted(dx, dy);
+            let cell = [cfa.color_at(0, 0), cfa.color_at(1, 0), cfa.color_at(0, 1), cfa.color_at(1, 1)];
+            looks_bayer += usize::from(lightcraft_denoise::bayer::Layout::from_cell(cell).is_some());
+            assert_eq!(layout_of(&cfa), None, "X-Trans at phase ({dx}, {dy})");
+        }
+    }
+    assert_eq!(looks_bayer, 16, "the phases this test is about");
+    for name in ["RGGB", "GRBG", "GBRG", "BGGR"] {
+        assert!(layout_of(&Cfa::bayer(name).unwrap()).is_some(), "{name}");
+    }
+}
+
+/// X-Trans (and any other non-Bayer colour filter array) reaches the model through the RGGB re-mosaic:
+/// the picture comes out whole and the right size, where before the file was refused outright.
+#[test]
+fn a_non_bayer_sensor_is_denoised_through_the_rggb_remosaic() {
+    let dir = temp_dir("xtrans");
+    let (w, h) = (192usize, 160usize);
+    let data: Vec<u16> = (0..w * h).map(|i| 600 + ((i % w) * 30 + (i / w) * 35) as u16).collect();
+    let f = dir.join("xtrans.dng");
+    std::fs::write(&f, synthetic_dng_cfa(w, h, lightcraft_raw::Cfa::xtrans(), data, None, Default::default())).unwrap();
+    let runs = Arc::new(AtomicUsize::new(0));
+    let spec = crate::denoise::JobSpec {
+        path: f.to_string_lossy().into_owned(),
+        read: None,
+        product: dir.join("xtrans.lcdn"),
+        key: "k".into(),
+        manifest: manifest("stand-in"),
+        onnx: dir.join("model.onnx"),
+        model: Default::default(),
+        loader: dim_loader(&runs),
+        parallel: 2,
+        run_on: RunOn::Auto,
+    };
+    assert_eq!(crate::denoise::make_product(&spec, None), Ok(true));
+    let header = lightcraft_denoise::product::read_header_at(&spec.product).unwrap();
+    assert_eq!((header.width, header.height), (w, h), "the denoised picture keeps the sensor's size");
+    let rgb = lightcraft_denoise::product::read(&spec.product, "k", 1).unwrap();
+    assert_eq!((rgb.width, rgb.height), (w, h));
+    assert!(rgb.data.iter().flatten().all(|v| v.is_finite()), "no sample is left non-finite");
+    assert!(rgb.data.iter().any(|p| p.iter().any(|v| *v > 0.0)), "the picture is not all black");
+    assert_eq!(crate::denoise::make_product(&spec, None), Ok(false), "the product is already there");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The denoised picture of an X-Trans file is used where the photo is shown, not only made: in a preview binned 3 × 3
+/// (the only binning X-Trans allows) and at full size, from a default crop whose sides 3 does not divide. Before
+/// non-Bayer sensors could be denoised nothing ever read such a product, and a twin that does not match the plain
+/// picture's size is silently dropped, so a mismatch here would leave the Amount slider doing nothing in the loupe.
+#[test]
+fn an_x_trans_photo_shows_its_denoised_picture_binned_and_at_full_size() {
+    use crate::media::DenoiseSpec;
+    let dir = temp_dir("xtrans-twin");
+    let (w, h) = (384usize, 288usize);
+    let data: Vec<u16> = (0..w * h).map(|i| 900 + ((i % w) * 23 + (i / w) * 31 + (i * 7919) % 401) as u16).collect();
+    let mut raw = lightcraft_raw::decode(&synthetic_dng_cfa(w, h, lightcraft_raw::Cfa::xtrans(), data, None, Default::default())).unwrap();
+    raw.crop = lightcraft_raw::Rect::new(5, 7, 371, 271);
+    let bytes = lightcraft_raw::write_dng(&raw, &Default::default()).unwrap();
+    assert_eq!(lightcraft_raw::decode(&bytes).unwrap().crop, raw.crop, "the crop survives the DNG");
+    let f = dir.join("xtrans.dng");
+    std::fs::write(&f, &bytes).unwrap();
+    let spec = crate::denoise::JobSpec {
+        path: f.to_string_lossy().into_owned(),
+        read: None,
+        product: dir.join("xtrans.lcdn"),
+        key: "k".into(),
+        manifest: manifest("stand-in"),
+        onnx: dir.join("model.onnx"),
+        model: Default::default(),
+        loader: dim_loader(&Arc::new(AtomicUsize::new(0))),
+        parallel: 2,
+        run_on: RunOn::Auto,
+    };
+    assert_eq!(crate::denoise::make_product(&spec, None), Ok(true));
+    let twin = DenoiseSpec { product: spec.product.clone(), key: "k".into(), make: None };
+    for (max_edge, binned) in [(128, true), (100_000, false)] {
+        let (plain, denoised, _) = crate::files::load_vec_pair(bytes.clone(), max_edge, &twin).unwrap();
+        assert_eq!(plain.width < 371, binned, "max_edge {max_edge}: {}×{}", plain.width, plain.height);
+        let denoised = denoised.unwrap_or_else(|| panic!("max_edge {max_edge}: the denoised picture was dropped"));
+        assert_eq!((denoised.width, denoised.height), (plain.width, plain.height), "max_edge {max_edge}");
+        // the stand-in model halves every sample: the picture shown is the denoised one, not the plain one again
+        let mean = |img: &lightcraft_raster::Rgb32f| img.data.iter().map(|p| f64::from(p[1])).sum::<f64>() / img.data.len() as f64;
+        assert!(mean(&denoised) < 0.75 * mean(&plain), "max_edge {max_edge}: {} vs {}", mean(&denoised), mean(&plain));
     }
     let _ = std::fs::remove_dir_all(&dir);
 }

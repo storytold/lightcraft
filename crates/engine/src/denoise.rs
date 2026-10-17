@@ -876,8 +876,13 @@ fn loaded(spec: &JobSpec) -> Result<Arc<dyn Model>, MakeError> {
     Ok(m)
 }
 
-/// The cell `[(0,0), (1,0), (0,1), (1,1)]` colours of a Bayer mosaic and so its layout.
-fn layout_of(cfa: &lightcraft_raw::Cfa) -> Option<Layout> {
+/// The layout of a Bayer mosaic, from the colours of its cell `[(0,0), (1,0), (0,1), (1,1)]`; `None` for any other
+/// pattern. The pattern itself must be the 2 × 2 cell: 16 of X-Trans's 36 phases have a top-left 2 × 2 that reads as a
+/// Bayer cell, and one of those packed as Bayer would hand the model a sensor it was not looking at.
+pub(crate) fn layout_of(cfa: &lightcraft_raw::Cfa) -> Option<Layout> {
+    if !cfa.is_bayer() {
+        return None;
+    }
     Layout::from_cell([cfa.color_at(0, 0), cfa.color_at(1, 0), cfa.color_at(0, 1), cfa.color_at(1, 1)])
 }
 
@@ -909,16 +914,31 @@ pub(crate) fn make_product(spec: &JobSpec, progress: Option<&Progress>) -> Resul
             Err(e) => return Err(MakeError::Failed(e.to_string())),
         };
         drop(bytes);
-        if raw.cpp != 1 || !raw.cfa.as_ref().is_some_and(lightcraft_raw::Cfa::is_bayer) {
+        if raw.cpp != 1 || raw.cfa.is_none() {
             return Err(MakeError::Unsupported(
-                "only Bayer raw files can be denoised (this one has another sensor layout or is already demosaiced)".into(),
+                "only raw files with a colour filter array can be denoised (this one is monochrome or already demosaiced)".into(),
             ));
         }
         let n = raw.normalized().map_err(|e| MakeError::Failed(e.to_string()))?;
         drop(raw);
-        let layout =
-            n.cfa.as_ref().and_then(layout_of).ok_or_else(|| MakeError::Unsupported("the colour filter layout is not a Bayer pattern".into()))?;
+        let layout = n.cfa.as_ref().and_then(layout_of);
         (n, layout)
+    };
+    if cancelled() {
+        return Err(MakeError::Cancelled);
+    }
+    // X-Trans and the other non-Bayer layouts: the model's contract is four RGGB planes, so the mosaic is interpolated
+    // and rebuilt as RGGB first. The picture keeps its size and the sites the two patterns share keep their own
+    // samples; the rest reach the model already interpolated (see docs/denoise.md). This holds the mosaic, its green
+    // plane and the RGGB copy at once, after the decode's memory has gone back.
+    let (mosaic, layout) = match layout {
+        Some(layout) => (mosaic, layout),
+        None => {
+            let _held = crate::memory::work_gate().acquire(mosaic.data.len().saturating_mul(12));
+            let rggb = lightcraft_raw::demosaic::remosaic_rggb(&mosaic)
+                .ok_or_else(|| MakeError::Unsupported("this sensor layout cannot be read as a Bayer mosaic, so it cannot be denoised".into()))?;
+            (rggb, Layout { dx: 0, dy: 0 })
+        }
     };
     if cancelled() {
         return Err(MakeError::Cancelled);
