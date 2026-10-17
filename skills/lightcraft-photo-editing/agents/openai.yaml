@@ -1,0 +1,4 @@
+interface:
+  display_name: "LightCraft Photo Editing"
+  short_description: "Correct and finish existing photos with LightCraft"
+  default_prompt: "Use $lightcraft-photo-editing to correct the selected photos naturally and inspect the results."

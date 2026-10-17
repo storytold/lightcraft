@@ -60,6 +60,9 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 
 ## Closed recently (kept for calibration)
 
+- 2026-10-13: agent photo-editing workflow shipped as a skill and MCP resource, with explicit-target
+  auto tone/white balance and before/after settings (`docs/mcp.md`). This improves agent operation;
+  the image-quality, model and plug-in ecosystem gaps above remain open.
 - 2026-10-12: original-pixel detail at 100% (gap 4, LR-VIEW-ZOOM, #323): soft proofing gets zoom windows like
   Detail, Before/After, Compare, Reference and mask overlays; 1:1 tested equal to the full-size export.
 - 2026-10-11: Sony ILCA-99M2 profile.
@@ -77,6 +80,7 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-13 | minor | Record agent workflow support without changing Lightroom parity gaps or estimates |
 | 2026-10-14 | minor | Gap 26: at 100k photos stack and album lookups are indexed, so an "In a Stack" or "Album" smart album counts in ~14 ms (was 0.6–2.7 s); open time unchanged |
 | 2026-10-14 | minor | Gap 10: Camera-coverage sweep (#1327): 30 models verified on 40 CC0 files (coverage.py 515 → 545 verified); sensor verification does not establish colour parity (#1277) |
 | 2026-10-14 | minor | Gap 21: de, es, fr, ja and uk catalogs filled (97–99%); 55–90 h → 40–70 h |
