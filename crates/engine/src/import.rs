@@ -631,11 +631,21 @@ pub struct ScanOutput {
 
 impl ScanInput {
     pub fn new(s: &mut Session, paths: &[String]) -> (Self, Vec<String>) {
+        let probe = s.media.file_probe.clone();
+        Self::with_probe(s, paths, probe)
+    }
+
+    pub fn for_import(s: &mut Session, paths: &[String]) -> (Self, Vec<String>) {
+        let probe = s.media.header_probe.clone().or_else(|| s.media.file_probe.clone());
+        Self::with_probe(s, paths, probe)
+    }
+
+    fn with_probe(s: &mut Session, paths: &[String], probe: Option<crate::media::FileProbe>) -> (Self, Vec<String>) {
         let skip = s.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.clone());
         // (no table of the library here: this is the session's thread, and the library may hold
         // millions of photos. The scan looks up what it finds)
         let library = std::sync::Arc::new(s.catalog.clone());
-        let input = ScanInput { probe: s.media.file_probe.clone(), skip, library, cache: std::mem::take(&mut s.import_probes) };
+        let input = ScanInput { probe, skip, library, cache: std::mem::take(&mut s.import_probes) };
         (input, paths.to_vec())
     }
 
@@ -654,7 +664,7 @@ impl ScanInput {
 /// against the library and earlier candidates). Nothing is added; the probes are kept for the
 /// import that follows.
 pub fn scan(s: &mut Session, paths: &[String]) -> Vec<ImportCandidate> {
-    let (input, paths) = ScanInput::new(s, paths);
+    let (input, paths) = ScanInput::for_import(s, paths);
     let out = scan_with(input, &paths, &ScanProgress::default());
     s.import_probes = out.probes;
     out.candidates
@@ -917,8 +927,7 @@ impl ImportJob {
         }
         let fresh = opts.on_deleted == OnDeleted::Fresh;
         // a raw described from its headers has no hash to compare (nor does a browsed file)
-        let headers_only = opts.headers_only && mode == ImportMode::Add;
-        let probe = if headers_only { s.media.header_probe.clone().or_else(|| s.media.file_probe.clone()) } else { s.media.file_probe.clone() };
+        let probe = if opts.headers_only { s.media.header_probe.clone().or_else(|| s.media.file_probe.clone()) } else { s.media.file_probe.clone() };
         Ok(ImportJob {
             seq: opts.rename_start.max(1),
             opts,

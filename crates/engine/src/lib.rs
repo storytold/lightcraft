@@ -1270,6 +1270,8 @@ mod tests_hold_view;
 #[cfg(test)]
 mod tests_import;
 #[cfg(test)]
+mod tests_import_headers;
+#[cfg(test)]
 mod tests_import_move;
 #[cfg(test)]
 mod tests_keyword_list;

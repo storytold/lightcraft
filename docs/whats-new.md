@@ -2,6 +2,16 @@
 
 ## 2026-10-17
 
+### Folder imports read raws from their headers
+- Importing a folder (Add, Copy or Move) and the Import dialog's review now describe raws from their headers, as
+  Lightroom catalog imports do, instead of reading every file whole first: a DNG or CR3 is described from 2–3 % of
+  its bytes. NEF, ORF, PEF, ARW6, JPEG and other rendered files, and files under 4 MB, are still read whole, and so
+  is a folder shown in Local.
+- Copy and Move read each original once and check the copy against a hash taken while copying, so copied photos
+  still get a content hash. Photos added in place get none.
+- Copies are still found without that hash: files of the same size and dimensions are compared by their first
+  512 KB, and only then read whole. The 16-photo limit on that comparison is gone.
+
 ### Reliability
 - A damaged or crafted TIFF-based raw with a very large number of strips or tiles can no longer make an import hang
   while it reads the file's headers (issue #2128). Working out where each strip ends and which parts of the file to
