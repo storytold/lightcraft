@@ -519,7 +519,7 @@ fn paste_selected_settings_pastes_only_chosen_copied_groups() {
     assert_eq!(s.develop_of(ids[1]).unwrap().color.vibrance, 30.0);
 }
 
-/// A crop of no size (or a hair wide), as `crop.set` or a sidecar can set it, made the render's
+/// A crop of no size (or a hair wide), as a sidecar can set it, made the render's
 /// samplers read at infinite coordinates and its blurs ask for sigmas of millions of pixels: with a
 /// healing spot and masks on, render workers panicked (an i32 square in the blur, a bilinear
 /// neighbour past isize::MAX). Such a photo renders, quickly.
@@ -533,12 +533,22 @@ fn degenerate_crops_render_with_spots_and_masks() {
         s.execute("mask.add", &json!({"kind": "linear"})).unwrap();
         s.execute("develop.set", &json!({"control": "effects.clarity", "value": 80})).unwrap();
         s.execute("develop.set", &json!({"control": "effects.dehaze", "value": 50})).unwrap();
-        s.execute("crop.set", &json!({"rect": rect, "angle": 30})).unwrap();
+        set_crop_unchecked(&mut s, rect, 30.0);
         let t = std::time::Instant::now();
         let r = s.render_now(id, 700, 450).unwrap();
         assert!(r.image.width >= 1 && r.image.height >= 1, "{rect:?}");
         assert!(t.elapsed().as_secs_f64() < 60.0, "{rect:?}: {:?}", t.elapsed());
     }
+}
+
+/// Store a crop as a sidecar can, without `crop.set`'s minimum size, kept inside the turned photo.
+fn set_crop_unchecked(s: &mut Session, [x0, y0, x1, y1]: [f64; 4], angle: f64) {
+    let id = s.active().unwrap();
+    let p = s.catalog.photo(id).unwrap();
+    let (w, h) = (p.width as f64, p.height as f64);
+    let mut d = active_dev(s);
+    d.crop.geometry = lightcraft_geom::CropGeometry { rect: lightcraft_geom::Rect::new(x0, y0, x1, y1), angle }.constrained(w, h);
+    s.set_develop(id, d, "Crop").unwrap();
 }
 
 /// `crop.rotateAspect` on a crop of no size took its aspect from 0/0 = NaN and stored a NaN crop
@@ -547,7 +557,7 @@ fn degenerate_crops_render_with_spots_and_masks() {
 fn rotate_aspect_of_degenerate_crop_stays_finite() {
     for rect in [[0.5, 0.5, 0.5, 0.5], [0.2, 0.2, 0.2, 0.8], [0.2, 0.2, 0.8, 0.2]] {
         let mut s = demo();
-        s.execute("crop.set", &json!({"rect": rect})).unwrap();
+        set_crop_unchecked(&mut s, rect, 0.0);
         s.execute("crop.rotateAspect", &json!({})).unwrap();
         let r = active_dev(&s).crop.geometry.rect;
         assert!([r.x0, r.y0, r.x1, r.y1].iter().all(|v| v.is_finite()), "{rect:?}: {r:?}");
@@ -565,6 +575,22 @@ fn crop_set_huge_rect_stays_finite() {
         let r = active_dev(&s).crop.geometry.rect;
         assert!([r.x0, r.y0, r.x1, r.y1].iter().all(|v| v.is_finite() && (-1e-6..=1.0 + 1e-6).contains(v)), "{rect:?}: {r:?}");
     }
+}
+
+/// `crop.set` took a crop of no size (or a sliver), and the next export wrote a 1×1 image (#1952).
+/// It now refuses a crop smaller than a drag of the crop tool can make, and keeps the one it had.
+#[test]
+fn crop_set_refuses_a_crop_smaller_than_the_tool_allows() {
+    let mut s = demo();
+    s.execute("crop.set", &json!({"rect": [0.1, 0.1, 0.9, 0.9]})).unwrap();
+    let before = active_dev(&s).crop.geometry;
+    for rect in [[0.5, 0.5, 0.5, 0.5], [0.2, 0.2, 0.2, 0.8], [0.2, 0.4, 0.8, 0.4], [0.0, 0.0, 1e-9, 1.0]] {
+        let e = s.execute("crop.set", &json!({"rect": rect})).unwrap_err();
+        assert!(e.to_string().contains("smaller"), "{rect:?}: {e}");
+        assert_eq!(active_dev(&s).crop.geometry, before, "{rect:?}");
+    }
+    s.execute("crop.set", &json!({"rect": [0.45, 0.45, 0.55, 0.55]})).unwrap();
+    assert_eq!(active_dev(&s).crop.geometry.rect, lightcraft_geom::Rect::new(0.45, 0.45, 0.55, 0.55));
 }
 
 /// `mask.move` with a delta near `i64::MAX` overflowed `index + delta` (a panic wherever overflow
