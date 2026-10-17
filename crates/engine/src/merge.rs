@@ -375,6 +375,14 @@ fn output_names(first: &str, suffix: &str) -> impl Iterator<Item = std::path::Pa
     (1u64..).map(move |k| dir.join(if k == 1 { format!("{stem}-{suffix}.dng") } else { format!("{stem}-{suffix}-{k}.dng") }))
 }
 
+fn catalog_owns_path(s: &Session, path: &str) -> bool {
+    let key = lightcraft_catalog::query::folder_key(path);
+    s.catalog.photos().any(|p| match &p.source {
+        Source::File { path } => lightcraft_catalog::query::folder_key(path) == key,
+        _ => false,
+    })
+}
+
 /// Parse `merge.*` command parameters into a kind and finishing options.
 pub fn parse(id: &str, p: &Value) -> Result<(MergeKind, MergeFinish)> {
     let bad = |m: String| EngineError::BadParams { cmd: id.into(), msg: m };
@@ -428,29 +436,88 @@ impl Session {
     /// apply Auto Settings / the auto crop. Returns `{id, path, …info}`.
     pub fn finish_merge(&mut self, job: &MergeJob, out: MergeOutput) -> Result<Value> {
         let first = &job.sources.first().ok_or_else(|| EngineError::Other("nothing merged".into()))?.1;
-        // a new file under a free name (never replacing one), complete and synced before it appears
-        let path = lightcraft_catalog::safe_file::write_new_unique(&mut output_names(first, job.kind.suffix()), &out.dng)
-            .map_err(|e| EngineError::Other(format!("could not write the merged DNG next to {first}: {e}")))?
-            .to_string_lossy()
-            .to_string();
-        let report = crate::import::import(self, std::slice::from_ref(&path), crate::import::ImportMode::Add)?;
-        let id = report
-            .imported
-            .first()
-            .copied()
-            .map(PhotoId)
-            .ok_or_else(|| EngineError::Other(format!("the merged file {path} could not be imported: {:?}", report.failed)))?;
-        if job.finish.stack {
+        let output_hash = lightcraft_preview::hash_bytes(&out.dng).to_string();
+        // Import deduplicates by content. Reuse an existing merge only while its live source has
+        // matching bytes; stale, missing or deleted rows fail before another file is published.
+        let candidates: Vec<(PhotoId, String, bool)> = self
+            .catalog
+            .photos()
+            .filter_map(|p| {
+                if p.content_hash.as_deref() != Some(output_hash.as_str()) {
+                    return None;
+                }
+                let Source::File { path } = &p.source else { return None };
+                Some((p.id, path.clone(), p.deleted))
+            })
+            .collect();
+        let valid_existing = candidates
+            .iter()
+            .find(|(_, path, deleted)| {
+                if *deleted {
+                    return false;
+                }
+                let bytes = match &self.media.file_bytes {
+                    Some(read) => read(path).ok(),
+                    None => std::fs::read(path).ok(),
+                };
+                bytes.is_some_and(|bytes| lightcraft_preview::hash_bytes(&bytes).to_string() == output_hash)
+            })
+            .cloned();
+        // A missing or deleted catalog row still owns its path. Do not let a new merge
+        // publish there: import may otherwise restore that row instead of adding this result.
+        let catalogued_paths: std::collections::HashSet<String> = self
+            .catalog
+            .photos()
+            .filter_map(|p| match &p.source {
+                Source::File { path } => Some(lightcraft_catalog::query::folder_key(path)),
+                _ => None,
+            })
+            .collect();
+        let (id, path, reused) = if let Some((id, path, _)) = valid_existing {
+            (id, path, true)
+        } else if let Some((id, path, deleted)) = candidates.first() {
+            let state = if *deleted { "deleted" } else { "missing or changed" };
+            return Err(EngineError::Other(format!(
+                "existing merge result {id:?} has a {state} source at {path}; relink or remove it before repeating the merge"
+            )));
+        } else {
+            // A new file under a free name (never replacing one), complete and synced before it appears.
+            let mut names = output_names(first, job.kind.suffix())
+                .filter(|candidate| !catalogued_paths.contains(&lightcraft_catalog::query::folder_key(&candidate.to_string_lossy())));
+            let path = lightcraft_catalog::safe_file::write_new_unique(&mut names, &out.dng)
+                .map_err(|e| EngineError::Other(format!("could not write the merged DNG next to {first}: {e}")))?
+                .to_string_lossy()
+                .to_string();
+            let report = match crate::import::import(self, std::slice::from_ref(&path), crate::import::ImportMode::Add) {
+                Ok(report) => report,
+                Err(e) => {
+                    if !catalog_owns_path(self, &path) {
+                        let _ = std::fs::remove_file(&path);
+                    }
+                    return Err(e);
+                }
+            };
+            if let Some(id) = report.imported.first().copied().map(PhotoId) {
+                (id, path, false)
+            } else {
+                if !catalog_owns_path(self, &path) {
+                    let _ = std::fs::remove_file(&path);
+                }
+                return Err(EngineError::Other(format!("the merged file {path} could not be imported: {:?}", report.failed)));
+            }
+        };
+        if !reused && job.finish.stack {
             let sources: Vec<PhotoId> = job.sources.iter().map(|(p, _)| *p).collect();
             if let Some(op) = self.catalog.stack_with_ops(id, &sources) {
                 self.commit("Stack with Sources", op)?;
             }
         }
         self.selection = crate::Selection::single(id);
-        if job.finish.auto_settings {
+        if !reused && job.finish.auto_settings {
             self.execute("develop.auto", &json!({}))?;
         }
-        if let Some(c) = out.crop
+        if !reused
+            && let Some(c) = out.crop
             && let Some(d) = self.develop_of(id)
         {
             let mut d = (*d).clone();
