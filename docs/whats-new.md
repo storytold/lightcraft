@@ -156,6 +156,11 @@
 - A spot with Feather at 0 no longer draws black pixels exactly on its radius. This also fixes spots at 0% Opacity
   changing pixels along their edge. The hard edge now leaves pixels on the radius unchanged.
 
+### Search finds people
+- Typing a person's name in Search Photos finds the photos with that named face (issue #1449).
+- Quotes keep several words together: `person:"Jane Doe"` finds exactly that person, `"jane doe"` those words side
+  by side, and `keyword:"new york"` a keyword of two words.
+
 ### Where the camera focused
 - **View ▸ Show Focus Point** (⌥F) draws the autofocus frame the camera recorded over the photo, in Detail, Compare
   and Survey, following rotation and crops; the Info panel says how it focused (`AF-C · Wide · Animal Eye Tracking`).
