@@ -104,7 +104,8 @@ pub struct GeoNames {
 
 fn cell(p: LatLon) -> (i32, i32) {
     // valid positions only: |lat| ≤ 90, |lon| ≤ 180, so the casts are in range
-    (p.lat.floor() as i32, p.lon.floor() as i32)
+    // longitude 180 is the same meridian as -180: key it as column -180, the wrap `reverse` probes
+    (p.lat.floor() as i32, (p.lon.floor() as i32 + 180).rem_euclid(360) - 180)
 }
 
 fn short(s: &str) -> String {
@@ -251,6 +252,14 @@ mod tests {
     fn across_the_antimeridian() {
         let fiji = GeoNames::parse("1\tX\tX\t\t-17.0\t179.9\tP\tP\tFJ\t\t\n", None, None);
         assert_eq!(fiji.reverse(LatLon::new(-17.0, -179.95)).unwrap().city, "X");
+    }
+
+    #[test]
+    fn city_on_the_antimeridian_is_found() {
+        let g = GeoNames::parse("1\tTaveuni\tTaveuni\t\t0.0\t180.0\tP\tPPL\tFJ\t\t01\n", None, None);
+        for lon in [179.9, -179.9, 180.0, -180.0] {
+            assert_eq!(g.reverse(LatLon::new(0.0, lon)).map(|p| p.city).as_deref(), Some("Taveuni"), "from {lon}");
+        }
     }
 
     #[test]
