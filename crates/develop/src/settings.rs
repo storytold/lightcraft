@@ -84,17 +84,26 @@ pub enum Process {
     /// Highlights and Shadows keep the local contrast of the tones they move: their edge-aware base
     /// is taken of a fine median of log luminance (issue #632).
     V2,
+    /// Colour noise reduction filters the linear colour differences R−Y and B−Y, leaving Y alone, with
+    /// edge-aware weights from a denoised guide and a brake for isolated colour specks (issue #815).
+    V3,
+    /// Luminance noise reduction is a wavelet shrinkage of linear Y against a noise model measured on the
+    /// frame, with thin lines protected and Contrast acting on the coarse levels; the change of Y is
+    /// added to R, G and B (issue #1129).
+    V4,
 }
 
 impl Process {
     /// Every process, oldest first.
-    pub const ALL: [Process; 2] = [Process::V1, Process::V2];
-    pub const LATEST: Process = Process::V2;
+    pub const ALL: [Process; 4] = [Process::V1, Process::V2, Process::V3, Process::V4];
+    pub const LATEST: Process = Process::V4;
 
     pub const fn version(self) -> ProcessVersion {
         match self {
             Process::V1 => ProcessVersion(1),
             Process::V2 => ProcessVersion(2),
+            Process::V3 => ProcessVersion(3),
+            Process::V4 => ProcessVersion(4),
         }
     }
 }

@@ -187,6 +187,21 @@ fn noise_reduction_does_not_depend_on_the_window() {
     }
 }
 
+// Given luminance noise reduction on a frame larger than its statistics tiles, a zoomed window is
+// filtered like the same pixels of the whole render
+#[test]
+fn luminance_nr_at_depth_matches_the_whole_render() {
+    let mut s = DevelopSettings::default();
+    controls::set(&mut s, "detail.nrLuminance", 80.0);
+    let src = noisy_scene();
+    let (fw, fh) = (2400, 1600);
+    let f = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(fw, fh)).image;
+    let win = PixelWindow { x: 1100, y: 500, w: 512, h: 384 };
+    let w = render(&src, &SourceInfo::default(), &s, &RenderRequest { window: Some(win), ..RenderRequest::fit(fw, fh) }).image;
+    let (max, mean) = compare(&f, &w, win);
+    assert!(max <= 3 && mean <= 0.15, "max {max} (≤ 3), mean {mean:.3} (≤ 0.15)");
+}
+
 // Given a mask with Refine Edges, the refinement width follows the whole frame's size
 #[test]
 fn mask_edge_refinement_does_not_depend_on_the_window() {
@@ -406,4 +421,27 @@ fn auto_mask_strokes_match_the_whole_render() {
         ..Default::default()
     };
     check_noisy("auto mask", &s, PixelWindow { x: 400, y: 300, w: 300, h: 250 }, 2, 0.1);
+}
+
+/// Sampling many windows at once (the luminance NR's statistics tiles) gives each window's own
+/// sampling bit for bit, with the source oriented and prefiltered (downscaled) once.
+#[test]
+fn sampling_windows_at_once_matches_each_window() {
+    let src = lightcraft_scenes::demo_library()[0].render(1200, 800);
+    for o in [Orientation::Normal, Orientation::Rotate90] {
+        let mut s = DevelopSettings { orientation: o, ..Default::default() };
+        s.crop.geometry.rect = Rect::new(0.05, 0.1, 0.9, 0.95);
+        s.crop.geometry.angle = 3.0;
+        let plan = crate::plan(&src, &SourceInfo::default(), &s, &RenderRequest::fit(500, 500));
+        let (frame, fw, fh) = &plan.full;
+        let wins: Vec<PixelWindow> = [(0, 0, 64, 48), (100, 37, 128, 128), (*fw - 50, *fh - 40, 50, 40), (0, 0, *fw, *fh)]
+            .iter()
+            .map(|&(x, y, w, h)| PixelWindow { x, y, w, h })
+            .collect();
+        let together = frame.sample_windows(&src, *fw, *fh, &wins);
+        for (win, t) in wins.iter().zip(&together) {
+            let f = if (win.w, win.h) == (*fw, *fh) { frame.clone() } else { frame.window(*fw, *fh, *win) };
+            assert!(f.sample(&src, win.w, win.h).data == t.data, "{o:?} {win:?}");
+        }
+    }
 }
