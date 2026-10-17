@@ -49,6 +49,11 @@ objc2 = { workspace = true }
 objc2-app-kit = { workspace = true }
 objc2-foundation = { workspace = true }
 
+# Use eframe's monitor-aware native geometry persistence on Windows. Other platforms retain
+# LightCraft's existing window-size policy.
+[target.'cfg(windows)'.dependencies]
+eframe = { workspace = true, features = ["persistence"] }
+
 [dev-dependencies]
 # tests record why they skip (`cargo xtask ci` lists the skips)
 lightcraft-testkit = { workspace = true }

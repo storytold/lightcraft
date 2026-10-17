@@ -58,6 +58,12 @@ fn app_icon() -> egui::IconData {
 struct App(LightcraftApp, PrefsWriter, #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>);
 
 impl eframe::App for App {
+    fn persist_egui_memory(&self) -> bool {
+        // UiState already has its own persistence. Only native window geometry belongs in
+        // eframe storage; --memory and LIGHTCRAFT_NO_PREFS must not write it indirectly.
+        false
+    }
+
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         #[cfg(target_os = "macos")]
         if let Some(m) = self.2.as_mut()
@@ -226,9 +232,15 @@ fn config_dir() -> Option<std::path::PathBuf> {
     lightcraft_engine::config::config_dir()
 }
 
+/// Native geometry follows the same no-write modes as ui.json (#1839).
+fn remember_native_window(in_memory: bool, keep_prefs_file: bool, has_prefs_path: bool) -> bool {
+    !in_memory && !keep_prefs_file && has_prefs_path
+}
+
 /// The window at the size it was last used at, zoomed if it was (`window`), or at the usual size
 /// when nothing is remembered. A zoomed window is given the size it goes back to. Where it
-/// opens is the system's to say.
+/// opens is the system's to say on macOS/Linux; Windows additionally restores monitor-aware
+/// geometry through eframe's persistence when available.
 fn as_remembered(builder: egui::ViewportBuilder, window: Option<lightcraft_ui_egui::window_place::WindowPlace>) -> egui::ViewportBuilder {
     let builder = builder.with_inner_size(window.map_or(lightcraft_ui_egui::window_place::DEFAULT_SIZE, |w| w.size));
     // (only ever asked to zoom: asked not to, macOS un-zooms a window whose size fills the screen
@@ -937,6 +949,8 @@ fn main() -> eframe::Result {
             // Wayland matches the window to packaging/linux/ai.storyteller.lightcraft.desktop by this id
             .with_app_id(APP_ID),
         wgpu_options,
+        persist_window: cfg!(windows) && remember_native_window(in_memory, keep_prefs_file, prefs_path().is_some()),
+        persistence_path: config_dir().map(|d| d.join("window-state")),
         ..Default::default()
     };
     // the app's copy: `log_file` is still named in the message of a start that fails
@@ -1121,6 +1135,14 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    #[test]
+    fn native_window_persistence_respects_no_write_modes() {
+        assert!(remember_native_window(false, false, true));
+        assert!(!remember_native_window(true, false, true));
+        assert!(!remember_native_window(false, true, true));
+        assert!(!remember_native_window(false, false, false));
     }
 
     /// Issue #374: launch arguments that would walk a whole drive or home folder are reported,
