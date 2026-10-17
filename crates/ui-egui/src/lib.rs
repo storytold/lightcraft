@@ -33,6 +33,7 @@ pub mod pick;
 pub mod print_view;
 pub mod recheck;
 pub mod region;
+pub mod reload;
 pub mod render;
 pub mod shortcuts;
 pub mod sidebar;

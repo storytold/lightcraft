@@ -1799,13 +1799,16 @@ fn quick_develop(app: &mut LightcraftApp, ui: &mut egui::Ui, n: usize) {
 }
 
 /// The preview-only notice's Reload from Disk: re-read the photo's file (a raw a newer version can
-/// decode, whose drive was offline when the library opened), and say what came of it.
+/// decode, whose drive was offline when the library opened) in the background; a toast says what
+/// came of it once it's done (`crate::reload`).
 pub(crate) fn reload_preview_only(app: &mut LightcraftApp, ctx: &egui::Context, id: PhotoId) {
-    let r = app.run("photo.reload", json!({"ids": [id.0]}));
-    let decoded = app.session.catalog.photo(id).is_some_and(|p| p.preview_only.is_none());
-    match r {
+    match app.run("photo.reload", json!({"ids": [id.0]})) {
         Err(e) => app.toast_error(ctx, e),
-        Ok(_) if decoded => app.toast(ctx, crate::i18n::tr("This raw is now developed from its raw data")),
+        Ok(r) if r["background"] == true => {}
+        // nothing to read in the background (a photo without a file): answered in place
+        Ok(_) if app.session.catalog.photo(id).is_some_and(|p| p.preview_only.is_none()) => {
+            app.toast(ctx, crate::i18n::tr("This raw is now developed from its raw data"))
+        }
         Ok(_) => app.toast(ctx, crate::i18n::tr("This raw variant still can't be decoded")),
     }
 }

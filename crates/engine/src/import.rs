@@ -494,7 +494,7 @@ pub(crate) fn probe_with(probe: &crate::media::FileProbe, paths: &[String]) -> V
 
 /// Probe `paths` (several at once), counting each in `done`. Stops before the next file once
 /// `cancel` is set: the files not reached come back as errors.
-fn probe_all(
+pub(crate) fn probe_all(
     probe: Option<&crate::media::FileProbe>,
     paths: &[String],
     done: &std::sync::atomic::AtomicUsize,

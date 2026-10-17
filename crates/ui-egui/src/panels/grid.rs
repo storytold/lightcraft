@@ -1162,7 +1162,10 @@ pub fn context_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         }
     }
     if ui.button(crate::i18n::tr("Reload from Disk")).clicked() {
-        let _ = app.run("photo.reload", json!({}));
+        // the files are read in the background (activity row `reload`)
+        if let Err(e) = app.run("photo.reload", json!({})) {
+            app.toast_error(ui.ctx(), e);
+        }
     }
     if ui.button(crate::i18n::tr("Create Virtual Copy")).clicked() {
         let _ = app.run("photo.virtualCopy", json!({}));
