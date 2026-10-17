@@ -92,7 +92,8 @@ or worked around with `LIGHTCRAFT_GPU_BACKEND`.
 **The window's renderer and its fallback (Windows).** Before the window opens, each renderer is probed in
 order: DX12, Vulkan, GL, then eframe's OpenGL renderer (glow). A probe creates a device and builds egui's
 pipeline inside wgpu error scopes, so a driver that cannot compile egui's shaders ("The parameter is
-incorrect. (0x80070057)" in `egui_pipeline`) is logged and skipped instead of killing the app. The renderer
+incorrect. (0x80070057)" in `egui_pipeline`) is logged and skipped instead of killing the app; no pop-up
+unless that renderer was forced (#1624). The renderer
 that worked is remembered in the settings folder (`window-renderer`); a start that dies before the window is up
 leaves `window-init.marker`, and the next start (relaunched automatically, at most 4 times) tries that
 renderer last. `LIGHTCRAFT_GPU_BACKEND=dx12 | vulkan | gl | glow` (or `WGPU_BACKEND`) forces one; DX12 stays
