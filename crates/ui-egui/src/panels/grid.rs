@@ -687,10 +687,13 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
         p.rect_filled(br, 2.0, Color32::from_gray(26));
         p.galley(br.min + vec2(4.0, 1.5), g, t.text_label);
     }
-    let show_badges = match app.ui.settings.grid_badges {
-        crate::state::GridBadges::Auto => resp.hovered() || selected || photo.rating > 0 || photo.flag != Flag::None || photo.label.is_some(),
-        crate::state::GridBadges::Always => true,
-        crate::state::GridBadges::Never => false,
+    // Auto: the decision marks (flag, colour label) always show; the stars and the edited mark
+    // only while the photo is hovered or selected, so a mostly rated library stays clean.
+    let engaged = resp.hovered() || selected;
+    let (show_marks, show_extras) = match app.ui.settings.grid_badges {
+        crate::state::GridBadges::Auto => (true, engaged),
+        crate::state::GridBadges::Always => (true, true),
+        crate::state::GridBadges::Never => (false, false),
     };
     let badge_bar = Rect::from_min_max(pos2(img_rect.left(), img_rect.bottom() - 24.0), img_rect.right_bottom());
     if !square && photo.label.is_some() {
@@ -698,29 +701,53 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
         // over the photo's bottom edge (opaque, it would hide 24 px of every labelled photo).
         p.rect_filled(badge_bar, 0.0, crate::theme::label_background(t.cell, photo.label, selected).gamma_multiply(0.7));
     }
-    if show_badges {
-        let bar = badge_bar;
-        if (resp.hovered() || selected) && (square || photo.label.is_none()) {
-            p.rect_filled(bar, 0.0, Color32::from_black_alpha(120));
+    let bar = badge_bar;
+    // the marks are registered for the cells on screen only, not the prefetch band
+    let mark = |name: &str, rect: Rect| {
+        if onscreen {
+            register(ui.ctx(), format!("badge:{name}:{}", id.0), rect);
         }
-        let mut x = bar.left() + 6.0;
+    };
+    if engaged && show_extras && (square || photo.label.is_none()) {
+        p.rect_filled(bar, 0.0, Color32::from_black_alpha(120));
+    }
+    let stars_w = photo.rating as f32 * 13.0;
+    let stars_shown = show_extras && photo.rating > 0;
+    if stars_shown {
+        let star = Rect::from_min_size(pos2(bar.left() + 6.0, bar.center().y - 6.0), vec2(stars_w, 12.0));
         for i in 0..photo.rating {
-            paint(p, Rect::from_min_size(pos2(x + i as f32 * 13.0, bar.center().y - 6.0), vec2(12.0, 12.0)), Icon::StarFilled, t.star);
+            paint(p, Rect::from_min_size(pos2(star.left() + i as f32 * 13.0, star.top()), vec2(12.0, 12.0)), Icon::StarFilled, t.star);
         }
-        x += photo.rating as f32 * 13.0 + 4.0;
+        mark("stars", star);
+    }
+    // With the stars hidden the flag takes the place where they would start; when they show it
+    // follows them.
+    let x = bar.left() + 6.0 + if stars_shown { stars_w + 4.0 } else { 0.0 };
+    if show_marks {
+        let flag = Rect::from_min_size(pos2(x, bar.center().y - 7.0), vec2(14.0, 14.0));
         match photo.flag {
-            Flag::Pick => paint(p, Rect::from_min_size(pos2(x, bar.center().y - 7.0), vec2(14.0, 14.0)), Icon::FlagPick, t.pick),
-            Flag::Reject => paint(p, Rect::from_min_size(pos2(x, bar.center().y - 7.0), vec2(14.0, 14.0)), Icon::FlagReject, t.reject),
+            Flag::Pick => paint(p, flag, Icon::FlagPick, t.pick),
+            Flag::Reject => paint(p, flag, Icon::FlagReject, t.reject),
             Flag::None => {}
         }
-        let mut right = bar.right();
-        if photo.is_edited() {
-            paint(p, Rect::from_min_size(pos2(right - 20.0, bar.center().y - 7.0), vec2(14.0, 14.0)), Icon::Sliders, t.text_label);
-            right -= 20.0;
+        if photo.flag != Flag::None {
+            mark("flag", flag);
         }
-        if let Some(l) = photo.label {
-            p.circle(pos2(right - 12.0, bar.center().y), 5.0, label_color(l), Stroke::new(1.0, Color32::from_black_alpha(120)));
+    }
+    let mut right = bar.right();
+    if photo.is_edited() {
+        if show_extras {
+            let edited = Rect::from_min_size(pos2(right - 20.0, bar.center().y - 7.0), vec2(14.0, 14.0));
+            paint(p, edited, Icon::Sliders, t.text_label);
+            mark("edited", edited);
         }
+        // the label dot keeps its place when the edited mark appears on hover
+        right -= 20.0;
+    }
+    if show_marks && let Some(l) = photo.label {
+        let c = pos2(right - 12.0, bar.center().y);
+        p.circle(c, 5.0, label_color(l), Stroke::new(1.0, Color32::from_black_alpha(120)));
+        mark("label", Rect::from_center_size(c, vec2(10.0, 10.0)));
     }
     if let Some(name) = &photo.copy_name {
         // virtual copy: a folded-corner tag at the top right
