@@ -1,5 +1,15 @@
 # What's new in LightCraft
 
+## 2026-10-15
+
+### Automatic XMP writes don't hold up edits
+- With "Automatically write changes into XMP sidecars" on, the desktop app now writes each sidecar on a thread of its
+  own instead of inside the edit. On a network share a write is several round trips (about a third of a second per
+  edit on a NAS over 10 GbE, seconds over a VPN), which held up every rating, keyword and slider change. Changes
+  made to a photo before its sidecar is written go out as one write. Queued writes are finished before a file is
+  renamed, moved or deleted, before Save or Read Metadata, and when the library closes, and one that fails waits
+  for a retry as before.
+
 ## 2026-10-14
 
 ### Lightroom radial masks on the right side

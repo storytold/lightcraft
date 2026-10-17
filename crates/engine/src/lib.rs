@@ -70,6 +70,8 @@ pub mod proof;
 pub mod rename;
 pub mod segment;
 pub mod sidecar;
+#[cfg(not(target_arch = "wasm32"))]
+mod sidecar_writer;
 pub mod slide;
 pub mod slide_overlay;
 pub mod slide_template;
@@ -242,6 +244,9 @@ pub struct Session {
     /// Photos whose automatic XMP sidecar write failed (their folder offline, read-only or full), written again by
     /// [`Session::retry_unsaved_sidecars`] once their file is reachable.
     pub(crate) unsaved_sidecars: std::collections::BTreeSet<PhotoId>,
+    /// The background sidecar writer, when the host turned it on ([`Session::set_background_sidecar_writes`]).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) sidecar_writer: Option<sidecar_writer::Writer>,
     /// AI denoise: the model in use, the photos that have their picture and the work in progress.
     pub(crate) denoise: denoise::State,
     /// Where the host keeps face models (one folder each); `None` where there is no file system (the web).
@@ -430,6 +435,8 @@ impl Session {
             interaction: None,
             skip_auto_write: false,
             unsaved_sidecars: Default::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            sidecar_writer: None,
             denoise: Default::default(),
             face_models_dir: None,
             face_downloads: Default::default(),
@@ -602,6 +609,10 @@ impl Session {
     }
 
     fn apply_catalog(&mut self, op: Op) -> Result<Op> {
+        // a sidecar write still queued for a photo whose file moves, goes or changes would land at the old place
+        if op_moves_files(&op) {
+            self.flush_sidecar_writes();
+        }
         // Retain only cache IDs while the catalog consumes the operation. Cloning an import
         // batch here also cloned every photo, although commit already keeps the journal copy.
         let mut invalidated = Vec::new();
@@ -1316,3 +1327,16 @@ mod tests_sync;
 mod tests_view_follow;
 #[cfg(test)]
 mod tests_xmp;
+
+/// Whether `op` changes where a photo's file is, or removes or replaces it.
+fn op_moves_files(op: &Op) -> bool {
+    let mut pending = vec![op];
+    while let Some(op) = pending.pop() {
+        match op {
+            Op::SetFile { .. } | Op::Relink { .. } | Op::RemovePhoto { .. } | Op::SetContent { .. } => return true,
+            Op::Batch { ops } => pending.extend(ops),
+            _ => {}
+        }
+    }
+    false
+}

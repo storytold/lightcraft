@@ -1328,3 +1328,60 @@ fn a_failed_auto_write_waits_and_is_written_on_retry() {
     std::fs::set_permissions(&src, std::fs::Permissions::from_mode(0o755)).unwrap();
     let _ = std::fs::remove_dir_all(&src);
 }
+
+/// With background sidecar writes on (the desktop app's setting), an edit returns before its sidecar is written; the
+/// write lands on the writer thread, a photo changed again before its write started writes only its newest packet,
+/// and a file that is about to move has its queued write made first, so nothing lands at the old name.
+#[test]
+fn background_sidecar_writes_land_and_never_at_a_stale_path() {
+    let src = temp_dir("auto-background");
+    write_png(&src.join("a.png"), 4);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    s.execute("library.xmpPreferences", &json!({"autoWrite": true})).unwrap();
+    s.set_background_sidecar_writes(true);
+    for rating in 1..=5 {
+        s.execute("photo.rate", &json!({"rating": rating})).unwrap();
+    }
+    s.flush_sidecar_writes();
+    assert_eq!(s.sidecar_writes_pending(), 0);
+    let sidecar = src.join("a.xmp");
+    assert!(std::fs::read_to_string(&sidecar).unwrap().contains("<xmp:Rating>5</xmp:Rating>"), "the newest rating");
+    assert_eq!(s.unsaved_sidecars(), 0);
+    // an edit queued just before a rename: the write is made before the file (and its sidecar) moves
+    s.execute("photo.rate", &json!({"rating": 2})).unwrap();
+    let id = s.catalog.photos().next().unwrap().id;
+    s.execute("photo.rename", &json!({"ids": [id.0], "template": "renamed"})).unwrap();
+    s.flush_sidecar_writes();
+    assert!(!sidecar.exists(), "no sidecar left at the old name");
+    assert!(std::fs::read_to_string(src.join("renamed.xmp")).unwrap().contains("<xmp:Rating>2</xmp:Rating>"));
+    s.set_background_sidecar_writes(false);
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// A background write that fails (the folder is read-only, as a network share that went away) waits for a retry,
+/// as a write made in the command does.
+#[cfg(unix)]
+#[test]
+fn a_failed_background_write_waits_for_a_retry() {
+    use std::os::unix::fs::PermissionsExt;
+    let src = temp_dir("auto-background-fail");
+    write_png(&src.join("a.png"), 4);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    s.execute("library.xmpPreferences", &json!({"autoWrite": true})).unwrap();
+    s.set_background_sidecar_writes(true);
+    std::fs::set_permissions(&src, std::fs::Permissions::from_mode(0o555)).unwrap();
+    if std::fs::write(src.join(".probe"), b"x").is_ok() {
+        std::fs::set_permissions(&src, std::fs::Permissions::from_mode(0o755)).unwrap();
+        return;
+    }
+    s.execute("photo.rate", &json!({"rating": 4})).unwrap();
+    s.flush_sidecar_writes();
+    assert_eq!(s.unsaved_sidecars(), 1, "the failed write waits");
+    std::fs::set_permissions(&src, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let r = s.execute("library.retrySidecars", &json!({})).unwrap();
+    assert_eq!(r, json!({"written": 1, "waiting": 0}));
+    s.set_background_sidecar_writes(false);
+    let _ = std::fs::remove_dir_all(&src);
+}

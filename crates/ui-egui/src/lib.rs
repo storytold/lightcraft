@@ -1170,6 +1170,11 @@ impl LightcraftApp {
         // are reachable, and said once when they start waiting and once when they're written
         #[cfg(not(target_arch = "wasm32"))]
         {
+            // the automatic sidecar writes made in the background since the last frame
+            self.session.poll_sidecar_writes();
+            if self.session.sidecar_writes_pending() > 0 {
+                ctx.request_repaint_after(std::time::Duration::from_millis(100));
+            }
             if self.session.unsaved_sidecars() > 0 {
                 let now = ctx.input(|i| i.time);
                 if now - self.ui.sidecar_retry_at >= 10.0 {

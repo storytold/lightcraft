@@ -993,6 +993,8 @@ impl Session {
 
     /// Complete retained repairs before a file or folder change can stale their exact paths.
     pub(crate) fn repair_sidecars_with(&mut self, fs: &dyn MoveFs) -> Result<()> {
+        // files are about to move: a background sidecar write still queued would land at the old name
+        self.flush_sidecar_writes();
         for repair in self.pending_sidecar_repairs.iter().chain(self.undo.iter().chain(&self.redo).flat_map(|e| &e.retry_sidecars)) {
             repair.validate_repair(fs).map_err(EngineError::Other)?;
         }

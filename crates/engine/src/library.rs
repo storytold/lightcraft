@@ -686,6 +686,8 @@ impl Session {
             return Ok(());
         }
         let _ = self.end_interaction();
+        // the automatic sidecar writes still queued are made, and a failed one recorded, before the library goes
+        self.flush_sidecar_writes();
         let persisted = self.persist();
         self.save_view();
         let unlogged = if persisted.is_err() { self.pending_log.len() as u64 } else { 0 };
