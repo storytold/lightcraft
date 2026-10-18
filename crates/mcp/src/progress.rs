@@ -2,8 +2,8 @@
 //! serving thread; only stdin and stdout move to transport threads. Other calls wait in order.
 
 use std::collections::VecDeque;
-use std::io::{BufRead, Write};
-use std::sync::atomic::Ordering;
+use std::io::{BufRead, BufReader, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -13,12 +13,17 @@ use serde_json::{Value, json};
 use super::{Server, response};
 use crate::backend::ProgressHook;
 
-type Input = Option<std::io::Result<String>>;
+enum Input {
+    Line(std::io::Result<String>),
+    Closed,
+    OutputFailed,
+}
 
 #[derive(Clone)]
 pub(super) struct Wire {
     inbox: Arc<Mutex<Receiver<Input>>>,
-    out: Sender<String>,
+    out: Sender<Option<String>>,
+    failed: Arc<AtomicBool>,
     deferred: Arc<Mutex<VecDeque<Input>>>,
 }
 
@@ -26,56 +31,114 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+fn read_input(input: impl BufRead, tx: Sender<Input>) {
+    let read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        for line in input.lines() {
+            let failed = line.is_err();
+            if tx.send(Input::Line(line)).is_err() || failed {
+                return;
+            }
+        }
+        let _ = tx.send(Input::Closed);
+    }));
+    if read.is_err() {
+        let _ = tx.send(Input::Line(Err(std::io::Error::other("MCP input thread panicked"))));
+    }
+}
+
 impl Server {
+    /// Serve process stdin once, writing replies to `output` (normally stdout).
+    ///
+    /// The caller must finish the process after this returns. On output failure, the single
+    /// stdin worker can remain blocked until process exit; it owns no backend or borrowed data.
+    /// Further calls are refused, including after EOF, so blocked readers cannot accumulate.
+    pub fn serve_stdio(&mut self, output: impl Write + Send) -> std::io::Result<()> {
+        static STARTED: AtomicBool = AtomicBool::new(false);
+        if STARTED.swap(true, Ordering::AcqRel) {
+            return Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, "MCP stdin already claimed"));
+        }
+        let (in_tx, in_rx) = std::sync::mpsc::channel();
+        let reader_tx = in_tx.clone();
+        let reader = match std::thread::Builder::new().name("mcp-input".into()).spawn(move || read_input(BufReader::new(std::io::stdin()), reader_tx))
+        {
+            Ok(reader) => reader,
+            Err(error) => {
+                STARTED.store(false, Ordering::Release);
+                return Err(error);
+            }
+        };
+        let served = self.serve_messages(in_rx, in_tx, output);
+        let read = if reader.is_finished() { reader.join().map_err(|_| std::io::Error::other("MCP input thread panicked")) } else { Ok(()) };
+        served.and(read)
+    }
+
     pub(super) fn serve_wire(&mut self, input: impl BufRead + Send, output: impl Write + Send) -> std::io::Result<()> {
         std::thread::scope(|scope| {
-            let (in_tx, in_rx) = std::sync::mpsc::channel::<Input>();
-            let (out_tx, out_rx) = std::sync::mpsc::channel::<String>();
-            let wire = Wire { inbox: Arc::new(Mutex::new(in_rx)), out: out_tx, deferred: Arc::new(Mutex::new(VecDeque::new())) };
+            let (in_tx, in_rx) = std::sync::mpsc::channel();
+            let reader_tx = in_tx.clone();
+            let reader = std::thread::Builder::new().name("mcp-input".into()).spawn_scoped(scope, move || read_input(input, reader_tx))?;
+            let served = self.serve_messages(in_rx, in_tx, output);
+            let read = reader.join().map_err(|_| std::io::Error::other("MCP input thread panicked"));
+            served.and(read)
+        })
+    }
+
+    fn serve_messages(&mut self, in_rx: Receiver<Input>, in_tx: Sender<Input>, output: impl Write + Send) -> std::io::Result<()> {
+        std::thread::scope(|scope| {
+            let (out_tx, out_rx) = std::sync::mpsc::channel::<Option<String>>();
+            let failed = Arc::new(AtomicBool::new(false));
+            let wire =
+                Wire { inbox: Arc::new(Mutex::new(in_rx)), out: out_tx, failed: failed.clone(), deferred: Arc::new(Mutex::new(VecDeque::new())) };
             let writer = std::thread::Builder::new().name("mcp-output".into()).spawn_scoped(scope, move || -> std::io::Result<()> {
                 let mut output = output;
-                for line in out_rx {
-                    output.write_all(line.as_bytes())?;
-                    output.write_all(b"\n")?;
-                    output.flush()?;
-                }
-                Ok(())
-            })?;
-            let reader = match std::thread::Builder::new().name("mcp-input".into()).spawn_scoped(scope, move || {
-                for line in input.lines() {
-                    let failed = line.is_err();
-                    if in_tx.send(Some(line)).is_err() || failed {
-                        return;
+                let written = (|| -> std::io::Result<()> {
+                    while let Ok(Some(line)) = out_rx.recv() {
+                        output.write_all(line.as_bytes())?;
+                        output.write_all(b"\n")?;
+                        output.flush()?;
                     }
+                    Ok(())
+                })();
+                if written.is_err() {
+                    failed.store(true, Ordering::Release);
+                    let _ = in_tx.send(Input::OutputFailed);
                 }
-                let _ = in_tx.send(None);
-            }) {
-                Ok(reader) => reader,
-                Err(error) => {
-                    drop(wire);
-                    let _ = writer.join();
-                    return Err(error);
-                }
-            };
+                written
+            })?;
             self.wire = Some(wire.clone());
             let served = (|| -> std::io::Result<()> {
                 loop {
+                    if wire.failed.load(Ordering::Acquire) {
+                        return Ok(());
+                    }
                     let queued = lock(&wire.deferred).pop_front();
                     let line = match queued {
                         Some(line) => line,
-                        None => lock(&wire.inbox).recv().ok().flatten(),
+                        None => {
+                            if wire.failed.load(Ordering::Acquire) {
+                                return Ok(());
+                            }
+                            lock(&wire.inbox).recv().map_err(|_| std::io::Error::other("MCP input disconnected without EOF"))?
+                        }
                     };
-                    let Some(line) = line else { return Ok(()) };
-                    if let Some(reply) = self.handle_line(&line?) {
-                        wire.out.send(reply).map_err(|_| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "MCP output closed"))?;
+                    let line = match line {
+                        Input::Line(line) => line?,
+                        Input::Closed | Input::OutputFailed => return Ok(()),
+                    };
+                    if wire.failed.load(Ordering::Acquire) {
+                        return Ok(());
+                    }
+                    if let Some(reply) = self.handle_line(&line) {
+                        wire.out.send(Some(reply)).map_err(|_| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "MCP output closed"))?;
                     }
                 }
             })();
             self.wire = None;
+            // A backend that panicked while clearing its progress hook may still hold a sender.
+            let _ = wire.out.send(None);
             drop(wire);
             let written = writer.join().map_err(|_| std::io::Error::other("MCP output thread panicked")).and_then(|r| r);
-            let read = reader.join().map_err(|_| std::io::Error::other("MCP input thread panicked"));
-            served.and(written).and(read)
+            written.and(served)
         })
     }
 
@@ -91,16 +154,29 @@ impl Server {
         let mut reported: Option<Instant> = None;
         Some(Box::new(move |done, total, name| {
             while !closed {
+                if wire.failed.load(Ordering::Acquire) {
+                    suppress.store(true, Ordering::Relaxed);
+                    return false;
+                }
                 let next = lock(&wire.inbox).try_recv();
                 let line = match next {
-                    Ok(Some(Ok(line))) => line,
-                    Ok(Some(Err(error))) => {
-                        lock(&wire.deferred).push_back(Some(Err(error)));
+                    Ok(Input::Line(Ok(line))) => line,
+                    Ok(Input::Line(Err(error))) => {
+                        lock(&wire.deferred).push_back(Input::Line(Err(error)));
                         closed = true;
                         break;
                     }
-                    Ok(None) | Err(TryRecvError::Disconnected) => {
-                        lock(&wire.deferred).push_back(None);
+                    Ok(Input::OutputFailed) => {
+                        suppress.store(true, Ordering::Relaxed);
+                        return false;
+                    }
+                    Ok(Input::Closed) => {
+                        lock(&wire.deferred).push_back(Input::Closed);
+                        closed = true;
+                        break;
+                    }
+                    Err(TryRecvError::Disconnected) => {
+                        lock(&wire.deferred).push_back(Input::Line(Err(std::io::Error::other("MCP input disconnected without EOF"))));
                         closed = true;
                         break;
                     }
@@ -115,12 +191,13 @@ impl Server {
                         if msg.get("id").is_some_and(|i| i.is_string() || i.is_number())
                             && msg.get("params").is_none_or(|p| p.is_null() || p.is_object()) =>
                     {
-                        let _ = wire.out.send(response(msg["id"].clone(), json!({})).to_string());
+                        let _ = wire.out.send(Some(response(msg["id"].clone(), json!({})).to_string()));
                     }
-                    _ => lock(&wire.deferred).push_back(Some(Ok(line))),
+                    _ => lock(&wire.deferred).push_back(Input::Line(Ok(line))),
                 }
             }
-            if suppress.load(Ordering::Relaxed) {
+            if suppress.load(Ordering::Relaxed) || wire.failed.load(Ordering::Acquire) {
+                suppress.store(true, Ordering::Relaxed);
                 return false;
             }
             if let Some(token) = &token
@@ -137,12 +214,16 @@ impl Server {
                 };
                 let notification = json!({"jsonrpc":"2.0","method":"notifications/progress",
                     "params":{"progressToken":token,"progress":done,"total":total,"message":message}});
-                let _ = wire.out.send(notification.to_string());
+                let _ = wire.out.send(Some(notification.to_string()));
             }
             true
         }))
     }
 }
+
+#[cfg(test)]
+#[path = "progress_tests.rs"]
+mod shutdown_tests;
 
 #[cfg(test)]
 mod tests {

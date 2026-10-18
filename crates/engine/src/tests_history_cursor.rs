@@ -98,3 +98,20 @@ fn the_cursor_survives_the_op_log_and_old_catalogs_load_at_the_end() {
     let old: lightcraft_catalog::Photo = serde_json::from_value(v).unwrap();
     assert_eq!((old.history_cursor, old.history_index()), (None, Some(n - 1)));
 }
+
+/// A negative `index` must be an error on every indexed command, not element 0 (`-1.0 as usize`
+/// saturates to 0): `history.restore` guards it, `version.*` (and the other `index` commands)
+/// must too. A caller sending `index: -1` used to delete or restore version 0 silently.
+#[test]
+fn negative_indices_are_refused() {
+    let mut s = Session::with_demo();
+    let id = s.active().unwrap();
+    let versions = |s: &Session| s.catalog.photo(id).unwrap().versions.len();
+    s.execute("version.create", &json!({"name": "A"})).unwrap();
+    assert_eq!(versions(&s), 1);
+    assert!(s.execute("version.delete", &json!({"index": -1})).is_err(), "must not delete version 0");
+    assert_eq!(versions(&s), 1, "nothing was deleted");
+    assert!(s.execute("version.restore", &json!({"index": -1})).is_err());
+    assert!(s.execute("version.rename", &json!({"index": -1, "name": "B"})).is_err());
+    assert_eq!(s.catalog.photo(id).unwrap().versions[0].name, "A", "version 0 was not renamed");
+}

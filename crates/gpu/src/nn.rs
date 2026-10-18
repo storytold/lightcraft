@@ -907,7 +907,7 @@ mod tests {
         match runner(net, tile) {
             Ok(r) => Some(r),
             Err(e) => {
-                eprintln!("skipped: no GPU runner here ({e})");
+                lightcraft_testkit::skip!(Gpu, "no GPU runner here ({e})");
                 None
             }
         }

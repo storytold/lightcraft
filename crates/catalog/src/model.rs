@@ -199,6 +199,11 @@ pub struct Meta {
     /// Left out of the catalog JSON when empty (most photos), so older catalogs read unchanged.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub regions: Vec<lightcraft_meta::Region>,
+    /// Where the camera focused (read from the file's maker notes at import or Reload from Disk; Sony
+    /// bodies whose files have been checked), on the upright (EXIF-oriented) photo. Read-only: never
+    /// written to XMP. Left out of the catalog JSON when unknown, so older catalogs read unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub focus: Option<lightcraft_meta::FocusPoint>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -293,6 +298,12 @@ pub struct Photo {
     /// picture style baked in — so it is treated as a rendered (non-raw) source.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preview_only: Option<String>,
+    /// The app version (`CARGO_PKG_VERSION`) whose decoder set [`Photo::preview_only`]; empty when
+    /// it isn't set, and in catalogs from before format v9. A preview-only photo whose stamp
+    /// differs from the running version is rechecked when its library opens (issue #662): newer
+    /// builds may decode the file, older ones may decode less.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub preview_checked: String,
     /// A Local record: the fingerprint of its state when the browse catalogued it, to tell
     /// whether the user changed anything since (see [`crate::local`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -318,7 +329,7 @@ pub struct Analysis {
 /// file's white balance is edited relative to its as-shot look or in Kelvin depends on the camera:
 /// [`relative_wb_camera`].
 pub fn relative_wb_format(format: &str) -> bool {
-    ["ARW", "NEF", "NRW", "RW2", "RWL", "RAW", "RAF", "CR3", "CR2", "PEF", "SRW", "ORF"].iter().any(|f| format.eq_ignore_ascii_case(f))
+    ["ARW", "NEF", "NRW", "RW2", "RWL", "RAW", "RAF", "CR3", "CR2", "PEF", "SRW", "ORF", "ERF"].iter().any(|f| format.eq_ignore_ascii_case(f))
 }
 
 /// Whether a raw of `format` shot on `camera` (Exif make and model, as [`Meta::camera`] keeps them) is developed
@@ -330,6 +341,16 @@ pub fn relative_wb_format(format: &str) -> bool {
 /// its own presets. The engine's render path (`files.rs`) decides the same way from the file; both must agree.
 pub fn relative_wb_camera(format: &str, camera: &str) -> bool {
     relative_wb_format(format) && lightcraft_raw::spectral::find_camera(camera).is_none() && !lightcraft_raw::kelvin_presets::covers_camera(camera)
+}
+
+/// This build's version: what a photo's [`Photo::preview_checked`] stamp is compared with. Every
+/// workspace crate shares one version, so it is the app's.
+pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// The [`Photo::preview_checked`] stamp for a `preview_only` decided by this build: its version
+/// when the photo is preview-only, empty otherwise.
+pub fn preview_stamp(preview_only: &Option<String>) -> String {
+    if preview_only.is_some() { APP_VERSION.to_string() } else { String::new() }
 }
 
 impl Photo {
@@ -371,8 +392,19 @@ impl Photo {
             import_look: None,
             analysis: None,
             preview_only: None,
+            preview_checked: String::new(),
             local_baseline: None,
         }
+    }
+    /// Sets [`Photo::preview_only`] as this build decided it, with its stamp.
+    pub fn set_preview_only(&mut self, preview_only: Option<String>) {
+        self.preview_checked = preview_stamp(&preview_only);
+        self.preview_only = preview_only;
+    }
+    /// A preview-only photo whose flag was set by another app version (or before stamps existed),
+    /// so this build should probe its file again (issue #662).
+    pub fn preview_only_stale(&self) -> bool {
+        self.preview_only.is_some() && self.preview_checked != APP_VERSION
     }
     /// A raw file developed from its sensor data: not a rendered image, and not a raw shown from
     /// its embedded preview ([`Photo::preview_only`]).
@@ -577,6 +609,7 @@ mod edited_tests {
             ("a.cr2", "CR2", true),
             ("a.pef", "pef", true),
             ("a.orf", "ORF", true),
+            ("a.erf", "ERF", true),
             ("a.dng", "DNG", false),
         ] {
             let mut p = Photo::new(PhotoId(1), Source::Demo { scene: 0 }, name, format, 10, 10, "2026-10-01T00:00:00");
@@ -609,6 +642,8 @@ mod edited_tests {
             ("SONY ILCE-7RM4A", "ARW", false),
             ("NIKON CORPORATION NIKON D850", "NEF", false),
             ("Canon Canon EOS 5D Mark III", "CR2", false),
+            ("Canon Canon EOS R6m2", "CR3", false),
+            ("Canon Canon EOS R7", "CR3", true),
             ("FUJIFILM X-T4", "RAF", false),
             ("ILCE-7M3", "ARW", false),
             ("SONY ILCE-7M2", "ARW", true),
@@ -624,7 +659,11 @@ mod edited_tests {
             p.as_shot_wb = Some((4986.0, -2.0));
             assert_eq!(p.relative_wb(), relative, "{camera} {format}");
             assert_eq!(relative_wb_camera(format, camera), relative, "{camera} {format}");
-            assert_eq!(p.fitted_look(), format == "ARW" || format == "NEF" || format == "CR2" || format == "RAF", "{camera} {format}");
+            assert_eq!(
+                p.fitted_look(),
+                format == "ARW" || format == "NEF" || format == "CR2" || format == "CR3" || format == "RAF",
+                "{camera} {format}"
+            );
             let wb = p.camera_defaults().wb;
             assert_eq!((wb.temp, wb.tint), if relative { (6500.0, 0.0) } else { (4986.0, -2.0) }, "{camera} {format}");
             assert_eq!(wb.scale, if relative { WbScale::Legacy } else { WbScale::Kelvin }, "{camera} {format}");

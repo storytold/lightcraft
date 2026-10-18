@@ -25,7 +25,7 @@ mod reader;
 pub mod tags;
 pub mod writer;
 
-pub use reader::{ParseOptions, parse_ifd_at};
+pub use reader::{DirectoryEntries, EntrySpan, ParseOptions, decode as decode_value, directory_entries, entry_span, parse_ifd_at};
 pub use writer::{IfdBuilder, ImageData, TiffWriter};
 
 use serde::{Deserialize, Serialize};

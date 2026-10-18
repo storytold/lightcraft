@@ -18,6 +18,10 @@ later the TIFF/DNG exporters.
 - `image::ImageInfo` — width/height, bits, samples, compression, photometric, planar config, predictor,
   sample format and the strip or tile chunk list (`chunks()`, `chunk_bytes()`); missing byte counts are
   inferred.
+- `directory_entries`, `entry_span`, `ParseOptions::budget_for` and `decode_value` are the reader's own rules
+  (directory layout and entry limit, which entries it reads, its value budget, value decoding), for callers that
+  must select entries exactly as `parse_ifd_at` would without decoding the whole directory (`lightcraft-raw`'s
+  Sony `SR2Private` lookup).
 - `TiffWriter` writes IFD chains with strips or tiles, `SubIFDs` and pointer IFDs, in either byte order,
   classic or BigTIFF; `writer::rational` / `srational` approximate floats as rationals.
 
@@ -25,7 +29,9 @@ later the TIFF/DNG exporters.
 
 The reader never panics on malformed input (proptests feed random and mutated files): offsets are
 bounds-checked; out-of-range or unknown-type entries are skipped; IFD loops are detected; IFD count,
-nesting depth and entries per IFD are limited; the total bytes of decoded values are capped at
+nesting depth and entries per IFD are limited; a next-IFD pointer is followed only when every declared entry was
+read, with the counts compared as 64-bit numbers (a BigTIFF declaring 4,294,967,297 entries but holding one can't
+pass for a whole directory on a 32-bit target); the total bytes of decoded values are capped at
 `8 × input + 1 MiB` so a file cannot make us allocate far more than its own size.
 
 ## Sources

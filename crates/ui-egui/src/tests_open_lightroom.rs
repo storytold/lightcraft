@@ -88,8 +88,10 @@ fn open_library_on_a_lightroom_catalog_offers_its_import() {
     // library open now. (This fake catalog then fails to read: only its path matters here.)
     assert_eq!(h.request("ui.clickWidget", json!({"id": "button:dialogOk"}), T)["ok"], true);
     h.step();
-    assert!(h.app.ui.dialog.is_none());
-    h.step_until(T, |h| h.app.lightroom.is_none());
+    // A fast read failure can already have replaced the offer with its lasting result.
+    assert!(!matches!(h.app.ui.dialog, Some(Dialog::LightroomCatalog { .. })));
+    assert!(h.step_until(T, |h| h.app.lightroom.is_none()));
+    assert!(matches!(&h.app.ui.dialog, Some(Dialog::LightroomResult { summary, first: None, .. }) if summary.contains("failed")));
     let last = h.app.lightroom_last.clone().unwrap_or_default();
     assert_eq!(last["path"], json!(lrcat), "{last}");
     assert_eq!(h.app.session.library.as_ref().map(|l| l.dir.clone()), Some(lib.clone()));

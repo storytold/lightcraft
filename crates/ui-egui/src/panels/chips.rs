@@ -18,7 +18,8 @@ const TAIL: f32 = 170.0;
 /// "14 of 120 photos" when a filter narrows the source, else "14 photos".
 pub fn count_text(matching: usize, total: Option<usize>, filtering: bool) -> String {
     match total {
-        Some(t) if filtering && t != matching => crate::i18n::tr_format!("{matching} of {t} photos", matching = matching, t = t),
+        // (a held view can show more than now match its source: no "3 of 2")
+        Some(t) if filtering && t > matching => crate::i18n::tr_format!("{matching} of {t} photos", matching = matching, t = t),
         _ => crate::i18n::tr_format!("{matching} photos", matching = matching),
     }
 }
@@ -101,6 +102,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, chips: &[FilterChip]) {
         ui.painter().with_clip_rect(text_r).text(pos2(r.left() + 10.0, r.center().y), egui::Align2::LEFT_CENTER, &label, font.clone(), t.text);
         let xr = Rect::from_center_size(pos2(r.right() - 12.0, r.center().y), vec2(18.0, 18.0));
         let resp = ui.interact(xr, egui::Id::new(("filter-chip-x", i)), Sense::click()).on_hover_text(crate::i18n::tr("Remove this filter"));
+        crate::widgets::announce(&resp, format!("{}: {label}", crate::i18n::tr("Remove this filter")));
         register(ui.ctx(), format!("chip:{i}"), xr);
         let col = if resp.hovered() { t.text } else { t.text_dim };
         let m = 3.5;

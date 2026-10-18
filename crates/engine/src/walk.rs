@@ -47,10 +47,35 @@ fn hidden(p: &Path) -> bool {
     p.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.'))
 }
 
+/// What a folder's listing says an entry is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EntryKind {
+    File,
+    Folder,
+    /// A link, or an entry whose kind the listing did not say.
+    Other,
+}
+
+/// What [`files_in_noting`] hands over for each folder it lists: the folder, the name and kind
+/// of every entry in it (hidden ones too), and whether that is all of them (not when the walk
+/// stopped inside the folder, or an entry could not be read).
+pub type NoteFolder<'a> = &'a mut dyn FnMut(&Path, Vec<(std::ffi::OsString, EntryKind)>, bool);
+
 /// The files below folder `root` that `keep` accepts. Hidden entries (names starting with `.`)
 /// are left out, the folder `skip` (e.g. the library's own) is never entered, and the walk stops
 /// at `limits` (see [`Walked::truncated`]). Unreadable folders are skipped.
-pub fn files_in(root: &Path, skip: Option<&Path>, limits: Limits, mut keep: impl FnMut(&Path) -> bool) -> Walked {
+pub fn files_in(root: &Path, skip: Option<&Path>, limits: Limits, keep: impl FnMut(&Path) -> bool) -> Walked {
+    walk(root, skip, limits, keep, None)
+}
+
+/// [`files_in`], handing the listing of every folder it reads to `note`: who walks a folder to
+/// find its files has, with that, the answer to "is this name there" for everything in it, and
+/// need not ask the disk again (a round trip for each name on a network share).
+pub fn files_in_noting(root: &Path, skip: Option<&Path>, limits: Limits, keep: impl FnMut(&Path) -> bool, note: NoteFolder) -> Walked {
+    walk(root, skip, limits, keep, Some(note))
+}
+
+fn walk(root: &Path, skip: Option<&Path>, limits: Limits, mut keep: impl FnMut(&Path) -> bool, mut note: Option<NoteFolder>) -> Walked {
     let mut out = Walked::default();
     // canonical folders reached through a link, so a link loop is walked at most once
     let mut linked: HashSet<PathBuf> = HashSet::new();
@@ -77,17 +102,41 @@ pub fn files_in(root: &Path, skip: Option<&Path>, limits: Limits, mut keep: impl
         }
         let Ok(rd) = std::fs::read_dir(&path) else { continue };
         let mut children: Vec<(PathBuf, bool)> = Vec::new();
-        for e in rd.flatten() {
+        // (the folder's listing, for who asked for it; all of it unless something below says otherwise)
+        let mut listed = note.is_some().then(Vec::new);
+        let mut complete = true;
+        for e in rd {
+            let Ok(e) = e else {
+                complete = false;
+                continue;
+            };
             if out.entries >= limits.max_entries {
                 out.truncated = true;
+                complete = false;
                 break;
             }
             out.entries = out.entries.saturating_add(1);
             let p = e.path();
-            if hidden(&p) {
+            // (a hidden entry's kind is only asked for when the listing is wanted; every other
+            // entry's is asked once)
+            let is_hidden = hidden(&p);
+            if is_hidden && listed.is_none() {
                 continue;
             }
-            let Ok(ft) = e.file_type() else { continue };
+            let ft = e.file_type();
+            if let Some(listed) = listed.as_mut() {
+                let kind = match &ft {
+                    Ok(t) if t.is_symlink() => EntryKind::Other,
+                    Ok(t) if t.is_dir() => EntryKind::Folder,
+                    Ok(t) if t.is_file() => EntryKind::File,
+                    _ => EntryKind::Other,
+                };
+                listed.push((e.file_name(), kind));
+            }
+            if is_hidden {
+                continue;
+            }
+            let Ok(ft) = ft else { continue };
             let dir = if ft.is_symlink() {
                 // a link (or a Windows junction): a folder is entered once, a file is a file
                 match std::fs::metadata(&p) {
@@ -105,6 +154,9 @@ pub fn files_in(root: &Path, skip: Option<&Path>, limits: Limits, mut keep: impl
             };
             children.push((p, dir));
         }
+        if let (Some(note), Some(listed)) = (note.as_mut(), listed) {
+            note(&path, listed, complete);
+        }
         children.sort();
         let below = depth.saturating_add(1);
         stack.extend(children.into_iter().rev().map(|(p, d)| (p, below, d)));
@@ -121,6 +173,43 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    /// Given a folder with files, a folder inside it, a hidden file and a link, when it is walked
+    /// with its listings noted, then the walk finds what it finds without them, and each folder's
+    /// listing holds every entry by name with its kind (hidden ones too, a link as neither file nor
+    /// folder) and says it is all of them; a walk that stops inside a folder says it is not.
+    #[test]
+    fn a_walk_notes_each_folders_listing() {
+        let root = tmp("noting");
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        for name in ["a.jpg", ".hidden", "sub/b.jpg"] {
+            std::fs::write(root.join(name), b"x").unwrap();
+        }
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(root.join("a.jpg"), root.join("link.jpg")).unwrap();
+        let mut noted: Vec<(PathBuf, Vec<(String, EntryKind)>, bool)> = Vec::new();
+        let walked = files_in_noting(&root, None, Limits::default(), |_| true, &mut |dir, entries, complete| {
+            let mut entries: Vec<(String, EntryKind)> = entries.into_iter().map(|(n, k)| (n.to_string_lossy().to_string(), k)).collect();
+            entries.sort_by(|a, b| a.0.cmp(&b.0));
+            noted.push((dir.to_path_buf(), entries, complete));
+        });
+        assert_eq!(walked, files_in(&root, None, Limits::default(), |_| true), "the same walk, noted or not");
+        let named = |n: &str, k: EntryKind| (n.to_string(), k);
+        let mut top = vec![named(".hidden", EntryKind::File), named("a.jpg", EntryKind::File), named("sub", EntryKind::Folder)];
+        if cfg!(unix) {
+            top.insert(2, named("link.jpg", EntryKind::Other));
+        }
+        assert_eq!(noted, [(root.clone(), top, true), (root.join("sub"), vec![named("b.jpg", EntryKind::File)], true)]);
+
+        // stopped inside the first folder: its listing is not all of it
+        let mut cut = Vec::new();
+        let walked = files_in_noting(&root, None, Limits { max_depth: 8, max_entries: 2 }, |_| true, &mut |dir, entries, complete| {
+            cut.push((dir.to_path_buf(), entries.len(), complete))
+        });
+        assert!(walked.truncated);
+        assert_eq!(cut.first().map(|(dir, n, complete)| (dir.clone(), *n, *complete)), Some((root.clone(), 2, false)));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

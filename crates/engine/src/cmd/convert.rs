@@ -35,7 +35,8 @@ pub(crate) fn write_dng_with(file_bytes: Option<&crate::merge::ByteReader>, path
         Some(r) => r(path)?,
         None => std::fs::read(path).map_err(|e| format!("{path}: {e}"))?,
     };
-    let raw = lightcraft_raw::decode(&bytes).map_err(|e| format!("{path}: {e}"))?;
+    let mut raw = lightcraft_raw::decode(&bytes).map_err(|e| format!("{path}: {e}"))?;
+    crate::camera_preview::with_starting_colour(&mut raw, &bytes);
     drop(bytes);
     let dng = lightcraft_raw::write_dng(&raw, &lightcraft_raw::DngWriteOptions { xmp: (!packet.is_empty()).then_some(packet), ..Default::default() })
         .map_err(|e| e.to_string())?;
@@ -58,7 +59,7 @@ pub(crate) fn write_dng_with(file_bytes: Option<&crate::merge::ByteReader>, path
 
 fn convert(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "photo.convertToDng";
-    let ids = s.targets(p);
+    let ids = s.targets(p)?;
     let mut ops = Vec::new();
     let mut converted = Vec::new();
     let mut skipped = Vec::new();
@@ -124,7 +125,7 @@ pub fn specs() -> Vec<CommandSpec> {
 /// the library and stack it on top of the original. The host opens the file in the editor.
 fn edit_external(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "photo.editExternal";
-    let mut ids = s.targets(p);
+    let mut ids = s.targets(p)?;
     ids.dedup();
     if ids.is_empty() {
         return Err(bad(C, "no active photo"));
@@ -201,12 +202,16 @@ fn edit_copy(s: &mut Session, p: &Value, id: lightcraft_catalog::PhotoId, opts: 
 
 /// The op that brings a photo up to date with what its file is now (`info`, a fresh probe), or
 /// `None` when nothing changed. Covers a raw that became decodable (or stopped being: a different
-/// file relinked), i.e. a change of [`lightcraft_catalog::Photo::preview_only`].
+/// file relinked), i.e. a change of [`lightcraft_catalog::Photo::preview_only`], and a
+/// preview-only photo this version hasn't checked yet: its stamp is refreshed so it isn't probed
+/// again (see [`lightcraft_catalog::Photo::preview_checked`]).
 pub(crate) fn content_op(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::Photo, info: crate::media::ProbeInfo) -> Option<Op> {
+    let preview_checked = lightcraft_catalog::preview_stamp(&info.preview_only);
     let same = info.content_hash == ph.content_hash
         && info.file_size == ph.file_size
         && (info.width, info.height) == (ph.width, ph.height)
-        && info.preview_only == ph.preview_only;
+        && info.preview_only == ph.preview_only
+        && preview_checked == ph.preview_checked;
     (!same).then_some(Op::SetContent {
         id,
         width: info.width,
@@ -214,6 +219,7 @@ pub(crate) fn content_op(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalo
         file_size: info.file_size,
         content_hash: info.content_hash,
         preview_only: info.preview_only,
+        preview_checked,
     })
 }
 
@@ -234,6 +240,10 @@ fn fill_missing_meta(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::P
     m.aperture = m.aperture.or(src.aperture);
     m.iso = m.iso.or(src.iso);
     m.gps = m.gps.or(src.gps);
+    // the camera's focus point: photos imported before it was read get it here
+    if m.focus.is_none() {
+        m.focus = src.focus.clone();
+    }
     let mut ops = Vec::new();
     if m != before {
         ops.push(Op::SetMeta { id, meta: Box::new(m) });
@@ -271,10 +281,41 @@ pub(crate) fn as_shot_wb_op(id: lightcraft_catalog::PhotoId, ph: &lightcraft_cat
     (ph.develops_raw() && !ph.relative_wb() && ph.as_shot_wb != Some(read)).then_some(Op::SetAsShotWb { id, wb: Some(read) })
 }
 
+/// The ops that bring photo `id` and its virtual copies up to date with what their file is now
+/// (`info`, a fresh probe), appended to `ops`; the photos they change are appended to `changed`.
+/// Reload and the preview-only recheck (`library.recheckPreviewOnly`) share it.
+pub(crate) fn reload_ops(
+    cat: &lightcraft_catalog::Catalog,
+    id: lightcraft_catalog::PhotoId,
+    info: &crate::media::ProbeInfo,
+    ops: &mut Vec<Op>,
+    changed: &mut Vec<lightcraft_catalog::PhotoId>,
+) {
+    let Some(ph) = cat.photo(id) else { return };
+    // camera fields the catalog lacks (e.g. a raw imported before its format was read) are filled in;
+    // nothing already set is overwritten
+    let meta_ops = fill_missing_meta(id, ph, info);
+    let mut mine: Vec<Op> =
+        content_op(id, ph, info.clone()).into_iter().chain(meta_ops).chain(lens_ops(id, ph, info)).chain(as_shot_wb_op(id, ph, info)).collect();
+    if !mine.is_empty() {
+        ops.append(&mut mine);
+        changed.push(id);
+    }
+    // virtual copies share the file
+    for c in cat.photos().filter(|c| c.copy_of == Some(id)) {
+        let theirs: Vec<Op> =
+            content_op(c.id, c, info.clone()).into_iter().chain(lens_ops(c.id, c, info)).chain(as_shot_wb_op(c.id, c, info)).collect();
+        if !theirs.is_empty() {
+            ops.extend(theirs);
+            changed.push(c.id);
+        }
+    }
+}
+
 /// Re-read photos whose files changed on disk (an external editor saved them): new size,
 /// dimensions and content hash, cached sources dropped. → {reloaded: [ids]}
 fn reload(s: &mut Session, p: &Value) -> Result<Value> {
-    let ids = s.targets(p);
+    let ids = s.targets(p)?;
     let paths: Vec<(lightcraft_catalog::PhotoId, String)> = ids
         .iter()
         .filter_map(|id| match s.catalog.photo(*id).map(|ph| ph.source.clone()) {
@@ -286,25 +327,8 @@ fn reload(s: &mut Session, p: &Value) -> Result<Value> {
     let mut ops = Vec::new();
     let mut reloaded = Vec::new();
     for ((id, _), info) in paths.into_iter().zip(probed) {
-        let (Ok(info), Some(ph)) = (info, s.catalog.photo(id)) else { continue };
-        // camera fields the catalog lacks (e.g. a raw imported before its format was read) are filled in;
-        // nothing already set is overwritten
-        let meta_ops = fill_missing_meta(id, ph, &info);
-        let mut mine: Vec<Op> =
-            content_op(id, ph, info.clone()).into_iter().chain(meta_ops).chain(lens_ops(id, ph, &info)).chain(as_shot_wb_op(id, ph, &info)).collect();
-        if !mine.is_empty() {
-            ops.append(&mut mine);
-            reloaded.push(id);
-        }
-        // virtual copies share the file
-        for c in s.catalog.photos().filter(|c| c.copy_of == Some(id)) {
-            let theirs: Vec<Op> =
-                content_op(c.id, c, info.clone()).into_iter().chain(lens_ops(c.id, c, &info)).chain(as_shot_wb_op(c.id, c, &info)).collect();
-            if !theirs.is_empty() {
-                ops.extend(theirs);
-                reloaded.push(c.id);
-            }
-        }
+        let Ok(info) = info else { continue };
+        reload_ops(&s.catalog, id, &info, &mut ops, &mut reloaded);
     }
     for id in &reloaded {
         s.media.forget(*id);
@@ -320,7 +344,7 @@ fn reload(s: &mut Session, p: &Value) -> Result<Value> {
 fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "photo.duplicate";
     let mut made = Vec::new();
-    for id in s.targets(p) {
+    for id in s.targets(p)? {
         let Some(ph) = s.catalog.photo(id).map(|p| (**p).clone()) else { continue };
         let Source::File { path } = &ph.source else { return Err(bad(C, "a generated demo photo has no file to duplicate")) };
         let src = Path::new(path);
@@ -421,6 +445,27 @@ mod tests {
         assert!(fill_missing_meta(PhotoId(1), &ph, &info).is_empty());
     }
 
+    /// Reload from Disk gives a photo imported before focus points were read its camera focus point,
+    /// and never replaces one it has.
+    #[test]
+    fn reload_fills_a_missing_focus_point() {
+        let fp = |x: f64| lightcraft_meta::FocusPoint {
+            rect: lightcraft_meta::Rect { x0: x, y0: 0.4, x1: x + 0.02, y1: 0.42 },
+            mode: Some("AF-C".into()),
+            area: None,
+            tracking: None,
+        };
+        let mut ph = Photo::new(PhotoId(1), Source::File { path: "/x.arw".into() }, "x.arw", "ARW", 8640, 5760, "2026-10-06T00:00:00");
+        ph.captured = Some("2026-10-04T08:16:11".into());
+        let mut info = crate::media::ProbeInfo { captured: ph.captured.clone(), ..Default::default() };
+        info.meta.focus = Some(fp(0.3));
+        let ops = fill_missing_meta(PhotoId(1), &ph, &info);
+        let Some(Op::SetMeta { meta, .. }) = ops.first() else { panic!("{ops:?}") };
+        assert_eq!(meta.focus, Some(fp(0.3)));
+        ph.meta.focus = Some(fp(0.1));
+        assert!(fill_missing_meta(PhotoId(1), &ph, &info).is_empty(), "a known focus point is kept");
+    }
+
     fn lens() -> lightcraft_develop::EmbeddedLens {
         lightcraft_develop::EmbeddedLens {
             warp: Some(lightcraft_develop::EmbeddedWarp { planes: [[1.0, -0.1, 0.03, 0.0, 0.0, 0.0]; 3], ..Default::default() }),
@@ -494,7 +539,7 @@ mod tests {
             .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus"));
         let f = root.join("raw/rw2-panasonic-gx80.rw2");
         if !f.exists() {
-            eprintln!("skip: {} absent", f.display());
+            lightcraft_testkit::skip!(Corpus, "{} absent", f.display());
             return;
         }
         let mut s = Session::new().with_fs();

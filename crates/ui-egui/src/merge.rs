@@ -110,6 +110,8 @@ pub struct MergeState {
     pub ids: Vec<PhotoId>,
     /// The options of the last merge started, per kind ("merge.hdr" …): Merge with Last Settings.
     pub last: std::collections::HashMap<String, MergeDialog>,
+    /// HDR for Each Bracket Set: the sets still to merge after the running one.
+    pub batch: std::collections::VecDeque<Vec<PhotoId>>,
 }
 
 impl MergeState {
@@ -148,7 +150,7 @@ fn spawn(app: &LightcraftApp, options: &MergeDialog, ids: &[PhotoId], preview: b
 
 /// Open the merge dialog for the selection.
 pub fn open(app: &mut LightcraftApp, command: &str) -> Result<Value, String> {
-    let ids = app.session.targets(&json!({}));
+    let ids = app.session.selected();
     if ids.len() < 2 {
         return Err("select at least 2 photos to merge".into());
     }
@@ -185,13 +187,38 @@ pub fn start_final(app: &mut LightcraftApp, opts: &MergeDialog) -> Result<Value,
 /// Merge the selection without the dialog, with the options last used for `command` (the
 /// defaults the first time).
 pub fn start_last(app: &mut LightcraftApp, command: &str) -> Result<Value, String> {
-    let ids = app.session.targets(&json!({}));
+    let ids = app.session.selected();
     if ids.len() < 2 {
         return Err("select at least 2 photos to merge".into());
     }
     app.merge.ids = ids;
     let opts = app.merge.last.get(command).cloned().unwrap_or_else(|| MergeDialog::for_command(command));
     start_final(app, &opts)
+}
+
+/// HDR for Each Bracket Set (`merge.hdrBatch`): merge each bracket set among the photos in the background, one after
+/// the other, with the options last used for HDR (the defaults the first time).
+pub fn start_batch(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
+    if app.merge.final_task.is_some() {
+        return Err("a merge is already running".into());
+    }
+    let ids = app.session.targets(p).map_err(|e| e.to_string())?;
+    let sets = app.session.catalog.bracket_sets(&ids);
+    if sets.is_empty() {
+        return Err(lightcraft_engine::merge::NO_BRACKET_SETS.into());
+    }
+    let n = sets.len();
+    app.merge.batch = sets.into();
+    next_in_batch(app)?;
+    Ok(json!({"started": true, "sets": n}))
+}
+
+/// Start the next bracket set of a batch, if any.
+fn next_in_batch(app: &mut LightcraftApp) -> Result<(), String> {
+    let Some(ids) = app.merge.batch.pop_front() else { return Ok(()) };
+    app.merge.ids = ids;
+    let opts = app.merge.last.get("merge.hdr").cloned().unwrap_or_else(|| MergeDialog::for_command("merge.hdr"));
+    start_final(app, &opts).map(|_| ())
 }
 
 /// Per frame: keep the preview in sync with the dialog's options, collect finished jobs.
@@ -269,13 +296,25 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
                 });
                 match r.map_err(lightcraft_engine::EngineError::Other).and_then(|out| app.session.finish_merge(&t.job, out)) {
                     Ok(v) => {
+                        let message = added_message(what, &v);
                         app.merge.last_result = Some(v);
-                        app.toast(ctx, crate::i18n::tr_format!("{what} merge added", what = what));
+                        app.toast(ctx, message);
                     }
-                    Err(_) if t.cancel.load(Ordering::Relaxed) => app.toast(ctx, crate::i18n::tr_format!("{what} merge cancelled", what = what)),
+                    Err(_) if t.cancel.load(Ordering::Relaxed) => {
+                        // cancelling one merge of a batch stops the batch
+                        app.merge.batch.clear();
+                        app.toast(ctx, crate::i18n::tr_format!("{what} merge cancelled", what = what))
+                    }
                     Err(e) => {
                         app.ui.status = e.to_string();
                         app.toast(ctx, crate::i18n::tr_format!("{what} merge failed: {e}", e = e, what = what));
+                    }
+                }
+                // a failed set doesn't stop the others
+                while !app.merge.batch.is_empty() {
+                    match next_in_batch(app) {
+                        Ok(()) => break,
+                        Err(e) => app.toast(ctx, crate::i18n::tr_format!("{what} merge failed: {e}", e = e, what = what)),
                     }
                 }
             }
@@ -289,6 +328,27 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
                 ctx.request_repaint_after(std::time::Duration::from_millis(100));
             }
         }
+    }
+}
+
+/// The message for a finished merge (`what`: "Panorama", …; `info`: its result): a panorama
+/// smaller than its photos' resolution says why (issue #1455).
+fn added_message(what: &str, info: &Value) -> String {
+    let size = |k: &str| info[k].as_f64().map(|mp| format!("{mp:.0} MP"));
+    match (info["limit"].as_str(), size("megapixels"), size("nativeMegapixels")) {
+        (Some("memory"), Some(mp), Some(full)) => crate::i18n::tr_format!(
+            "{what} merge added at {mp}: its full size, {full}, needs more memory than this computer has",
+            what = what,
+            mp = mp,
+            full = full
+        ),
+        (Some("size"), Some(mp), Some(full)) => crate::i18n::tr_format!(
+            "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})",
+            what = what,
+            mp = mp,
+            full = full
+        ),
+        _ => crate::i18n::tr_format!("{what} merge added", what = what),
     }
 }
 
@@ -421,5 +481,27 @@ fn num(ui: &mut egui::Ui, spec: &lightcraft_develop::ControlSpec, v: &mut f64) -
             true
         }
         None => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Issue #1455: a panorama held to the computer's memory, or to the largest size, says so.
+    #[test]
+    fn a_smaller_panorama_says_why() {
+        let added = |info: Value| added_message("Panorama", &info);
+        assert_eq!(
+            added(json!({"limit": "memory", "megapixels": 166.2, "nativeMegapixels": 194.0})),
+            "Panorama merge added at 166 MP: its full size, 194 MP, needs more memory than this computer has"
+        );
+        assert_eq!(
+            added(json!({"limit": "size", "megapixels": 512.0, "nativeMegapixels": 700.4})),
+            "Panorama merge added at 512 MP, the largest a panorama can be (its full size is 700 MP)"
+        );
+        assert_eq!(added(json!({"limit": null, "megapixels": 90.0, "nativeMegapixels": 90.0})), "Panorama merge added");
+        assert_eq!(added(json!({"limit": "asked", "megapixels": 20.0, "nativeMegapixels": 90.0})), "Panorama merge added");
+        assert_eq!(added_message("HDR", &json!({"ev": [0.0]})), "HDR merge added");
     }
 }

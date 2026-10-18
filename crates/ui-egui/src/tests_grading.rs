@@ -352,3 +352,26 @@ fn double_click_still_resets_the_wheel_with_a_modifier_held() {
     h.step();
     assert_eq!(wheel_value(&h, "midtones"), (0.0, 0.0));
 }
+
+/// The wheels used to look muddy. Painted on screen, the rim of each hue reaches full
+/// saturation at normal brightness and the centre is neutral.
+#[test]
+fn wheel_rim_is_fully_saturated_and_the_centre_neutral() {
+    let mut h = demo();
+    let img = h.snapshot(SETTLE);
+    let r = widget(&h, "wheel:midtones").unwrap();
+    let at = |dx: f32, dy: f32| {
+        let p = r.center() + egui::vec2(dx, dy) * r.width() / 2.0;
+        img[(p.x as usize, p.y as usize)]
+    };
+    for deg in [0.0f32, 60.0, 120.0, 180.0, 240.0, 300.0] {
+        let a = deg.to_radians();
+        let p = at(a.cos() * 0.93, -a.sin() * 0.93);
+        let (hi, lo) = (p.r().max(p.g()).max(p.b()), p.r().min(p.g()).min(p.b()));
+        assert!(hi >= 225 && lo <= 40, "rim at {deg}° is not a vivid hue: {p:?}");
+    }
+    // just off the centre (the puck sits on it at zero), the disc is still close to neutral
+    let p = at(0.12, 0.12);
+    let (hi, lo) = (p.r().max(p.g()).max(p.b()), p.r().min(p.g()).min(p.b()));
+    assert!(hi - lo <= 40 && lo >= 100, "centre is not a neutral grey: {p:?}");
+}

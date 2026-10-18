@@ -116,3 +116,28 @@ pub fn wait(app: &mut LightcraftApp, ctx: &egui::Context, timeout: std::time::Du
         app.tasks.is_empty()
     }
 }
+
+/// Wait for a specific task by label and apply finished tasks. Returns `true` once the labeled
+/// task finishes (or is removed), or `false` on timeout. Other background tasks may continue running.
+pub fn wait_for(app: &mut LightcraftApp, ctx: &egui::Context, label: &str, timeout: std::time::Duration) -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let t0 = std::time::Instant::now();
+        loop {
+            poll(app, ctx);
+            if !app.tasks.is_running(label) {
+                return true;
+            }
+            if t0.elapsed() > timeout {
+                return false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = timeout;
+        poll(app, ctx);
+        !app.tasks.is_running(label)
+    }
+}

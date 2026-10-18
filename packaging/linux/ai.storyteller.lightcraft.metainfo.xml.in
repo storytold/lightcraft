@@ -35,8 +35,8 @@
   </keywords>
   <screenshots>
     <screenshot type="default">
-      <caption>Editing The Great Wave off Kanagawa with type layers and adjustment layers</caption>
-      <image>https://raw.githubusercontent.com/storytold/lightcraft/main/docs/images/lightcraft-demo.jpg</image>
+      <caption>Photo editing with The Tetons and the Snake River by Ansel Adams</caption>
+      <image type="source">https://raw.githubusercontent.com/storytold/lightcraft/3b4279fc2485bb51847c0071a1b3c514aa0f98f4/docs/images/hero-tetons.jpg</image>
     </screenshot>
   </screenshots>
   <branding>

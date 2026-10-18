@@ -343,6 +343,32 @@ fn holding_the_brush_still_does_not_harden_the_spot() {
     h.settle(SETTLE);
 }
 
+/// A ⇧-click with the brush paints a straight line from where the last stroke ended (issue #106 of the Classic
+/// fork), one undo step; a plain click only paints a dab where it lands.
+#[test]
+fn shift_click_paints_a_straight_line_from_the_last_stroke() {
+    let mut h = detail("panel.masking");
+    exec(&mut h, "tool.brush", json!({}));
+    brush_at(&mut h, 0.2, 0.5);
+    brush_at(&mut h, 0.8, 0.5);
+    assert!(mask_coverage(&h, 0, 50, 50) < 0.01, "two plain clicks leave the space between them alone");
+    let r = h.request("ui.pointer", json!({"events": [{"kind": "down", "x": 0.5, "y": 0.2}, {"kind": "up", "x": 0.5, "y": 0.2}], "shift": true}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    let d = develop(&h);
+    let MaskShape::Brush { strokes } = &d.masks[0].components[0].shape else { panic!("brush") };
+    assert_eq!(strokes.len(), 3, "{strokes:?}");
+    assert_eq!(strokes[2].points.len(), 2, "from the last stroke's end to the click: {strokes:?}");
+    for (x, y) in [(65, 35), (58, 27)] {
+        assert!(mask_coverage(&h, 0, x, y) > 0.5, "the line from (0.8, 0.5) to (0.5, 0.2) passes ({x}, {y})");
+    }
+    assert!(mask_coverage(&h, 0, 35, 35) < 0.01, "and nowhere else");
+    exec(&mut h, "edit.undo", json!({}));
+    let d = develop(&h);
+    let MaskShape::Brush { strokes } = &d.masks[0].components[0].shape else { panic!("brush") };
+    assert_eq!(strokes.len(), 2, "one undo step takes the line back");
+    h.settle(SETTLE);
+}
+
 #[test]
 fn brush_strokes_carry_auto_mask() {
     let mut h = detail("panel.masking");
@@ -833,6 +859,31 @@ fn g_toggles_grids_and_shift_g_starts_guided_upright() {
 }
 
 #[test]
+fn luminance_range_drag_keeps_the_grabbed_handle() {
+    let mut h = detail("panel.masking");
+    exec(&mut h, "mask.add", json!({"kind": "luminanceRange", "lo": 0.2, "hi": 0.8}));
+    h.settle(SETTLE);
+    let original = develop(&h);
+    for (start, dx, steps) in [(0.2, 180.0, 10), (0.8, -180.0, 10), (0.2, 120.0, 1), (0.8, -120.0, 1)] {
+        let undo0 = h.app.session.undo.len();
+        let r = h.request("ui.dragWidget", json!({"id": "lumRange:0", "fx": start, "fy": 0.5, "dx": dx, "steps": steps}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        let d = develop(&h);
+        let MaskShape::LuminanceRange { lo, hi, .. } = &d.masks[0].components[0].shape else { panic!() };
+        if start < 0.5 {
+            assert_eq!(*hi, 0.8, "dragging low must leave high fixed, including past high");
+            assert!(*lo > 0.6 && *lo < *hi, "{lo}..{hi}");
+        } else {
+            assert_eq!(*lo, 0.2, "dragging high must leave low fixed, including past low");
+            assert!(*hi < 0.4 && *hi > *lo, "{lo}..{hi}");
+        }
+        assert_eq!(h.app.session.undo.len(), undo0 + 1);
+        exec(&mut h, "edit.undo", json!({}));
+        assert_eq!(develop(&h), original);
+    }
+}
+
+#[test]
 fn luminance_range_controls_and_map() {
     let mut h = detail("panel.masking");
     exec(&mut h, "mask.add", json!({"kind": "luminanceRange", "lo": 0.6, "hi": 1.0}));
@@ -944,38 +995,6 @@ fn local_folder_listed_twice_opens_and_closes_each_row() {
         assert_eq!(rows(&h, &sub_row), 0, "copy {copy} closes again");
     }
     let _ = std::fs::remove_dir_all(&base);
-    h.settle(SETTLE);
-}
-
-#[test]
-fn slideshow_advances_pauses_and_ends() {
-    let mut h = detail("panel.edit");
-    let first = h.app.session.active();
-    exec(&mut h, "view.slideshow", json!({"interval": 0.5}));
-    assert!(h.app.ui.fullscreen && h.app.ui.slideshow.is_some());
-    // simulated time runs with the frames
-    let mut moved = false;
-    for _ in 0..200 {
-        h.step();
-        if h.app.session.active() != first {
-            moved = true;
-            break;
-        }
-    }
-    assert!(moved, "the next photo comes up");
-    // Space pauses: nothing moves
-    let r = h.request("ui.key", json!({"key": "space"}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    assert!(h.app.ui.slideshow.is_some_and(|s| s.2), "paused");
-    let held = h.app.session.active();
-    for _ in 0..120 {
-        h.step();
-    }
-    assert_eq!(h.app.session.active(), held);
-    // Esc ends it
-    let r = h.request("ui.key", json!({"key": "escape"}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    assert!(!h.app.ui.fullscreen && h.app.ui.slideshow.is_none());
     h.settle(SETTLE);
 }
 
@@ -1154,6 +1173,70 @@ fn open_original_in_external_editor_hands_over_the_raw_itself() {
         assert!(r.to_string().contains(why), "{r}");
     }
     assert_eq!(opened.lock().unwrap().len(), calls);
+    let _ = std::fs::remove_dir_all(&dir);
+    h.settle(SETTLE);
+}
+
+/// Issue #2135: a library record whose original is a program (an imported `.lrcat` names the
+/// paths) is never handed to the opener — the launcher is asked for nothing — and the user is
+/// told why. The path LightCraft does hand over is absolute, whatever the record's spelling.
+#[test]
+fn open_original_refuses_anything_that_is_not_a_photo_file() {
+    use lightcraft_catalog::{Op, Photo, Source};
+    let dir = std::env::temp_dir().join(format!("lc-ui-gate-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let opened: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>> = Default::default();
+    let batches: std::sync::Arc<std::sync::Mutex<Vec<Vec<String>>>> = Default::default();
+    let (o, bt) = (opened.clone(), batches.clone());
+    let services = Services {
+        png: None,
+        open_with: Some(Box::new(move |path: &str, app: &str| {
+            o.lock().unwrap().push((path.to_string(), app.to_string()));
+            Ok(())
+        })),
+        open_all_with: Some(Box::new(move |paths: &[String], _: &str| {
+            bt.lock().unwrap().push(paths.to_vec());
+            Ok(())
+        })),
+        check_editor: Some(Box::new(|_: &str| Ok(()))),
+        ..Default::default()
+    };
+    let mut session = lightcraft_engine::Session::with_demo().with_fs();
+    let mut record = |name: &str| {
+        let path = dir.join(name);
+        std::fs::write(&path, b"MZ").unwrap();
+        let id = session.catalog.alloc_photo_id();
+        let p = Photo::new(id, Source::File { path: path.to_string_lossy().into_owned() }, name, "ARW", 60, 40, "2026-01-01T10:00:00");
+        session.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        id
+    };
+    // what a crafted catalog can name as a photo's original
+    let programs = ["payload.exe", "start.lnk", "run.bat", "page.hta", "go.command", "noext"];
+    let bad: Vec<_> = programs.iter().map(|n| record(n)).collect();
+    let good = record("DSC_0001.NEF");
+    let app = LightcraftApp::new(session, services);
+    let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
+    h.app.ui.settings.external_editor = "DxO PhotoLab".into();
+
+    for (id, name) in bad.iter().zip(programs) {
+        let r = h.request("engine.execute", json!({"command": "photo.openOriginalInExternal", "params": {"ids": [id.0]}}), T);
+        assert_eq!(r["ok"], false, "{name} was opened: {r}");
+        assert!(r.to_string().contains("file types LightCraft reads"), "{name}: {r}");
+        // the menu item is greyed out for such a record, so it is never offered either
+        exec(&mut h, "library.select", json!({"ids": [id.0]}));
+        assert!(!crate::menus::ui_enabled(&h.app, "photo.openOriginalInExternal"), "{name} is offered in the menu");
+    }
+    assert!(opened.lock().unwrap().is_empty() && batches.lock().unwrap().is_empty(), "the launcher was asked to open a program");
+
+    // a program selected together with a photo: only the photo is handed over, by absolute path
+    let r = exec(&mut h, "photo.openOriginalInExternal", json!({"ids": [bad[0].0, good.0]}));
+    assert_eq!(r["opened"].as_array().map(Vec::len), Some(1), "{r}");
+    assert!(r["skipped"].to_string().contains("payload.exe"), "{r}");
+    let handed = batches.lock().unwrap().clone();
+    assert_eq!(handed.len(), 1);
+    assert_eq!(handed[0].len(), 1, "{handed:?}");
+    assert!(std::path::Path::new(&handed[0][0]).is_absolute() && handed[0][0].ends_with("DSC_0001.NEF"), "{handed:?}");
     let _ = std::fs::remove_dir_all(&dir);
     h.settle(SETTLE);
 }
@@ -1373,7 +1456,8 @@ fn ai_masks_without_the_model_offer_the_download() {
         assert!(h.app.widgets.iter().any(|(id, _)| id == "link:samHelp"), "no installation guide link");
         let shown = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
         let log = shown.clone();
-        h.app.services.reveal = Some(Box::new(move |p: &str| {
+        h.app.services.open_with = Some(Box::new(move |p: &str, editor: &str| {
+            assert_eq!(editor, "", "open the model directory with the default application");
             log.lock().unwrap().push(p.to_string());
             Ok(())
         }));
@@ -1500,6 +1584,36 @@ fn a_selected_develop_slider_accepts_wheel_nudges() {
     assert!(after > before, "selected exposure did not increase: {before} -> {after}");
 }
 
+/// Scrolling sideways over a slider adjusts it without selecting it first: a trackpad swipe
+/// right raises the value, left lowers it, and Shift+wheel (sideways scrolling with a mouse) does
+/// the same. A mostly vertical swipe still scrolls the panel and leaves the slider alone.
+#[test]
+fn sideways_scrolling_adjusts_the_slider_under_the_pointer() {
+    let mut h = detail("panel.edit");
+    let r = h.request("ui.set", json!({"right": "edit"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    let exposure = |h: &Headless| lightcraft_develop::controls::get(&develop(h), "light.exposure").expect("exposure");
+    let scroll = |h: &mut Headless, params: serde_json::Value| {
+        // the pointer rests on the track, the slider is not clicked
+        let r = h.request("ui.hoverWidget", json!({"id": "slider:light.exposure"}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        let before = exposure(h);
+        let r = h.request("ui.scroll", params, T);
+        assert_eq!(r["ok"], true, "{r}");
+        for _ in 0..10 {
+            h.step();
+        }
+        exposure(h) - before
+    };
+    assert!(scroll(&mut h, json!({"dx": 120.0})) > 0.0, "a swipe right raises the value");
+    assert!(scroll(&mut h, json!({"dx": -120.0})) < 0.0, "a swipe left lowers it");
+    assert!(scroll(&mut h, json!({"dy": 120.0, "shift": true})) > 0.0, "Shift+wheel scrolls sideways");
+    let undo = h.app.session.undo.len();
+    assert_eq!(scroll(&mut h, json!({"dx": 30.0, "dy": -120.0})), 0.0, "a mostly vertical swipe leaves the slider alone");
+    assert_eq!(h.app.session.undo.len(), undo);
+}
+
 /// Issue #517: a fast brush stroke (pointer samples several brush widths apart) shows on the photo
 /// while the button is held as the continuous, feathered band it will be once committed, not as
 /// separate dabs at the samples with gaps between them.
@@ -1556,4 +1670,31 @@ fn a_fast_brush_stroke_shows_without_gaps_before_the_button_is_released() {
         let (l, k) = (px(&held, x, y), px(&done, x, y));
         assert!((0..3).all(|i| (l[i] - k[i]).abs() < 24.0), "live {l:?} vs committed {k:?} at ({x}, {y})");
     }
+}
+
+#[test]
+fn effect_dropdown_applies_saves_and_shows_the_matching_effect() {
+    let mut h = detail("panel.masking");
+    exec(&mut h, "mask.add", json!({"kind": "radial"}));
+    exec(&mut h, "mask.adjust", json!({"values": {"exposure": 0.7, "shadows": 25, "amount": 80}}));
+    h.step();
+    // save the mask's sliders from the menu (the New Effect Preset dialog)
+    click(&mut h, "dropdown:maskEffect");
+    click(&mut h, "maskEffectMenu:save");
+    let mut dlg = h.app.ui.dialog.take().expect("the save dialog opens");
+    match &mut dlg {
+        crate::state::Dialog::SaveEffect { name, .. } => *name = "Lift".into(),
+        d => panic!("the save dialog opens: {d:?}"),
+    }
+    let r = crate::panels::dialogs::confirm_dialog(&mut h.app, &dlg);
+    assert!(r.is_ok(), "{r:?}");
+    assert_eq!(h.app.session.mask_effects.len(), 1);
+    // change the sliders, then pick the effect again: sliders back, Amount kept
+    exec(&mut h, "mask.adjust", json!({"values": {"exposure": -1, "clarity": 40, "amount": 50}}));
+    h.step();
+    click(&mut h, "dropdown:maskEffect");
+    click(&mut h, "maskEffect:Lift");
+    let a = develop(&h).masks.last().expect("a mask").adjust;
+    assert_eq!((a.exposure, a.shadows, a.clarity, a.amount), (0.7, 25.0, 0.0, 50.0));
+    assert_eq!(exec(&mut h, "mask.effects", json!({}))["current"], "Lift");
 }

@@ -2,10 +2,11 @@
 
 The interface ships in the language it is written in (English) plus every language in the table in
 `crates/ui-egui/src/i18n.rs`. Today that is English, Simplified Chinese (`zh-hans`), Traditional
-Chinese (`zh-hant`, Taiwan), Japanese (`ja`), Brazilian Portuguese (`pt-br`), Spanish (`es`), German (`de`), Russian (`ru`) and French (`fr`). This file is the reference for **adding or maintaining a language**; the per-language notes
+Chinese (`zh-hant`, Taiwan), Japanese (`ja`), Brazilian Portuguese (`pt-br`), Spanish (`es`), German (`de`), Russian (`ru`), French (`fr`), Ukrainian (`uk`), Czech (`cs`) and Georgian (`ka`). This file is the reference for **adding or maintaining a language**; the per-language notes
 are in [`localization-zh-hans.md`](localization-zh-hans.md), [`localization-zh-hant.md`](localization-zh-hant.md),
 [`localization-ja.md`](localization-ja.md), [`localization-pt-br.md`](localization-pt-br.md), [`localization-es.md`](localization-es.md),
-[`localization-de.md`](localization-de.md) and [`localization-ru.md`](localization-ru.md).
+[`localization-de.md`](localization-de.md), [`localization-ru.md`](localization-ru.md),
+[`localization-cs.md`](localization-cs.md) and [`localization-ka.md`](localization-ka.md).
 
 ## Adding a language
 
@@ -30,6 +31,9 @@ are in [`localization-zh-hans.md`](localization-zh-hans.md), [`localization-zh-h
        De, "de", "Deutsch", "Latn", include_str!("../locales/de.json");
        Ru, "ru", "Русский", "Cyrl", include_str!("../locales/ru.json");
        Uk, "uk", "Українська", "Cyrl", include_str!("../locales/uk.json");
+       Cs, "cs", "Čeština", "Latn", include_str!("../locales/cs.json");
+       It, "it", "Italiano", "Latn", include_str!("../locales/it.json");
+       Ka, "ka", "ქართული", "Geor", include_str!("../locales/ka.json");
    }
    ```
 
@@ -43,7 +47,9 @@ are in [`localization-zh-hans.md`](localization-zh-hans.md), [`localization-zh-h
 3. **Make sure the glyphs exist.** The script drives which craft-fonts faces the UI installs: a
    language whose script has no face in the build shows boxes (the test says so instead of failing).
    Fonts live in [storytold/craft-fonts](https://github.com/storytold/craft-fonts), never here; a
-   missing face is added there, not worked around in this repository.
+   missing face is added there, not worked around in this repository. Sentence-cased messages go
+   through `i18n::upper_first`, which leaves Georgian lowercase (upper-casing Mkhedruli would make
+   Mtavruli).
 4. Run `cargo xtask ci` (it includes `fmt`, `clippy`, the tests, `parity` and the wasm check).
 
 ## How a message is found

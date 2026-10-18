@@ -141,6 +141,29 @@ fn virtual_copies_are_independent_and_persist() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Issue #1493: soft-delete must drop the copy from the stack so `1/2` does not linger, and
+/// deleting `2/3` renumbers the rest to `1/2` `2/2`. Undo restores the stack.
+#[test]
+fn deleting_a_virtual_copy_drops_it_from_the_stack() {
+    let mut s = Session::with_demo();
+    let src = s.visible_cloned()[0];
+    s.execute("library.select", &json!({"ids": [src.0]})).unwrap();
+    let c1 = lightcraft_catalog::PhotoId(s.execute("photo.virtualCopy", &json!({})).unwrap()["ids"][0].as_u64().unwrap());
+    let c2 = lightcraft_catalog::PhotoId(s.execute("photo.virtualCopy", &json!({"ids": [src.0]})).unwrap()["ids"][0].as_u64().unwrap());
+    assert_eq!(s.catalog.stack_of(src).unwrap().photos, vec![src, c2, c1]);
+    s.execute("photo.delete", &json!({"ids": [c2.0]})).unwrap();
+    let left = s.catalog.stack_of(src).expect("two members remain stacked");
+    assert_eq!(left.photos, vec![src, c1]);
+    assert_eq!((left.position(src), left.position(c1), left.photos.len()), (Some(0), Some(1), 2), "1/2 and 2/2");
+    assert!(s.catalog.photo(c2).unwrap().deleted);
+    s.execute("photo.delete", &json!({"ids": [c1.0]})).unwrap();
+    assert!(s.catalog.stack_of(src).is_none(), "the original is unstacked once it is the only member");
+    assert!(s.catalog.photo(c1).unwrap().deleted);
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(!s.catalog.photo(c1).unwrap().deleted);
+    assert_eq!(s.catalog.stack_of(src).unwrap().photos, vec![src, c1]);
+}
+
 #[test]
 fn stacks_group_collapse_and_replay() {
     let dir = temp_dir("stacks");

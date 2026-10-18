@@ -266,7 +266,8 @@ impl<'a> DatePicker<'a> {
                 ui.separator();
             }
             ui.horizontal(|ui| {
-                let prev = ui.small_button("‹");
+                let prev = crate::widgets::arrow_button(ui, "", Icon::ChevronLeft, true);
+                prev.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), crate::i18n::tr("Previous page")));
                 register(ui.ctx(), format!("datePickerPrev:{id}"), prev.rect);
                 let title = match view.precision {
                     Precision::Day => crate::i18n::date_group_label(&format!("{:04}-{:02}", view.year, view.month), false),
@@ -278,7 +279,8 @@ impl<'a> DatePicker<'a> {
                 };
                 ui.label(RichText::new(title).strong());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let next = ui.small_button("›");
+                    let next = crate::widgets::arrow_button(ui, "", Icon::ChevronRight, false);
+                    next.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), crate::i18n::tr("Next page")));
                     register(ui.ctx(), format!("datePickerNext:{id}"), next.rect);
                     if next.clicked() {
                         view = step(view, true);

@@ -95,6 +95,9 @@ pub fn denoise_bayer(
     if mosaic.len() != pixels {
         return Err(Error::Input("the mosaic does not have width × height samples".into()));
     }
+    if mosaic.iter().any(|v| !v.is_finite()) {
+        return Err(Error::Input("the mosaic has samples that are not finite".into()));
+    }
     if !(16..=2048).contains(&p.tile) || p.overlap >= p.tile.div_ceil(2) || layout.dx > 1 || layout.dy > 1 {
         return Err(Error::Input("the tile size and overlap do not fit".into()));
     }
@@ -148,6 +151,9 @@ pub fn denoise_bayer(
                     return Err(Error::Model("numbers that are not finite".into()));
                 }
                 finish_tile(&input, &mut out, p, (bx, ax, by, ay));
+                if out.iter().any(|v| !v.is_finite()) {
+                    return Err(Error::Model("numbers that are not finite after scale matching or highlight protection".into()));
+                }
                 Ok(out)
             })
             .collect()
@@ -201,6 +207,9 @@ pub fn denoise_bayer(
             }
         }
     });
+    if acc.iter().flatten().any(|v| !v.is_finite()) {
+        return Err(Error::Model("numbers that are not finite after tile blending".into()));
+    }
     if std::env::var_os("LIGHTCRAFT_PROFILE").is_some() {
         eprintln!(
             "[denoise] {total} tiles, {} at once: tiles {:.0} ms (blending, {:.0} ms of it, overlaps the model), normalise {:.0} ms",
@@ -386,6 +395,53 @@ mod tests {
 
     fn params(tile: usize, overlap: usize, gain: Gain) -> Params {
         Params { tile, overlap, gain, clip: None, parallel: 2 }
+    }
+
+    #[test]
+    fn nonfinite_mosaics_are_rejected_before_inference() {
+        struct Counting(std::sync::atomic::AtomicUsize);
+        impl TileRunner for Counting {
+            fn run(&self, _: &[f32]) -> Result<Vec<f32>, Error> {
+                self.0.fetch_add(1, Ordering::Relaxed);
+                Ok(vec![0.0; 3 * 32 * 32])
+            }
+        }
+        let model = Counting(std::sync::atomic::AtomicUsize::new(0));
+        let layout = Layout { dx: 0, dy: 0 };
+        for sample in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert!(matches!(denoise_bayer(&[sample], 1, 1, layout, &model, &params(16, 0, Gain::None), &Control::default()), Err(Error::Input(_))));
+        }
+        assert_eq!(model.0.load(Ordering::Relaxed), 0);
+        // Finite scene-linear samples can be negative or exceed SDR white.
+        for sample in [-0.25, 2.0] {
+            assert!(denoise_bayer(&[sample], 1, 1, layout, &model, &params(16, 0, Gain::None), &Control::default()).is_ok());
+        }
+    }
+
+    #[test]
+    fn finite_model_output_that_overflows_during_gain_matching_is_rejected() {
+        struct Extreme;
+        impl TileRunner for Extreme {
+            fn run(&self, _: &[f32]) -> Result<Vec<f32>, Error> {
+                Ok(vec![f32::MAX; 3 * 32 * 32])
+            }
+        }
+        let p = params(16, 0, Gain::MatchMean { nominal: 1e-6, max_deviation: 0.0 });
+        assert!(matches!(denoise_bayer(&[0.5], 1, 1, Layout { dx: 0, dy: 0 }, &Extreme, &p, &Control::default()), Err(Error::Model(_))));
+    }
+
+    #[test]
+    fn overlapping_finite_tiles_that_overflow_the_accumulator_are_rejected() {
+        struct Extreme;
+        impl TileRunner for Extreme {
+            fn run(&self, _: &[f32]) -> Result<Vec<f32>, Error> {
+                Ok(vec![f32::MAX; 3 * 32 * 32])
+            }
+        }
+        assert!(matches!(
+            denoise_bayer(&vec![0.5; 48 * 48], 48, 48, Layout { dx: 0, dy: 0 }, &Extreme, &params(16, 4, Gain::None), &Control::default()),
+            Err(Error::Model(_))
+        ));
     }
 
     #[test]

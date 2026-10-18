@@ -428,3 +428,69 @@ fn dropping_photos_counts_those_that_get_the_keyword() {
     let toast = h.app.ui.toast.clone().map(|t| t.0).unwrap_or_default();
     assert!(toast.contains("1 photo") && !toast.contains("2 photos"), "{toast}");
 }
+
+/// Scrolled down a long list, ticking and unticking keywords leaves the tree where it is: the
+/// Keywording box above grows and shrinks out of sight instead of pushing the rows down.
+#[test]
+fn ticking_a_keyword_keeps_the_list_in_place() {
+    let (mut h, ids) = keywords_panel_at([1400.0, 640.0]);
+    run(&mut h, "photo.setMeta", json!({"ids": ids, "keywords": []}));
+    for i in 0..40 {
+        run(&mut h, "keyword.create", json!({"name": format!("zz{i:02}")}));
+    }
+    ask(&mut h, "ui.hoverWidget", json!({"id": "keywordList:topLevel"}));
+    let row = rect(&h, "keywordRow:zz30");
+    ask(&mut h, "ui.scroll", json!({"dx": 0, "dy": -(row.top() - 300.0)}));
+    assert!(rect(&h, "field:keyword").top() < 0.0, "the box is scrolled out of sight");
+    let mut box_moved = false;
+    let picked: Vec<String> = (30..36).map(|i| format!("zz{i}")).collect();
+    for (n, k) in picked.iter().chain(picked.iter().rev()).enumerate() {
+        let (before, box_top) = (rect(&h, &format!("keywordRow:{k}")), rect(&h, "field:keyword").top());
+        ask(&mut h, "ui.clickWidget", json!({"id": format!("keywordCheck:{k}")}));
+        assert_eq!(rect(&h, &format!("keywordRow:{k}")), before, "{k} stayed under the pointer");
+        // (the click found the row where it is drawn, not where a discarded pass had it)
+        assert_eq!(keywords_of(&h, ids[0]).contains(k), n < picked.len(), "{k} was the one ticked: {:?}", keywords_of(&h, ids[0]));
+        box_moved |= rect(&h, "field:keyword").top() != box_top;
+    }
+    assert!(keywords_of(&h, ids[0]).is_empty(), "ticked and unticked again");
+    assert!(box_moved, "the box changed height (the list was held, not left alone)");
+}
+
+/// At the top of the panel the box is in sight: a ticked keyword's chip pushes the list down,
+/// as before.
+#[test]
+fn at_the_top_the_box_grows_in_sight() {
+    let (mut h, ids) = keywords_panel_at([1400.0, 640.0]);
+    run(&mut h, "photo.setMeta", json!({"ids": ids, "keywords": []}));
+    let (title, box_top) = (rect(&h, "keywordList:topLevel"), rect(&h, "field:keyword"));
+    for k in ["aaa1", "aaa2", "aaa3", "aaa4", "aaa5", "aaa6"] {
+        run(&mut h, "keyword.create", json!({"name": k}));
+        ask(&mut h, "ui.clickWidget", json!({"id": format!("keywordCheck:{k}")}));
+    }
+    assert_eq!(rect(&h, "field:keyword"), box_top, "the panel stays at its top");
+    assert!(rect(&h, "keywordList:topLevel").top() > title.top(), "the chips pushed the list down");
+}
+
+/// Ticks clicked one right after another land on the rows clicked: a click looks a row up where
+/// it was last drawn, not where a pass drawn again (the list held in place) first had it.
+#[test]
+fn ticks_in_quick_succession_land_on_their_rows() {
+    let (mut h, ids) = keywords_panel_at([1400.0, 640.0]);
+    run(&mut h, "photo.setMeta", json!({"ids": ids, "keywords": []}));
+    for i in 0..40 {
+        run(&mut h, "keyword.create", json!({"name": format!("zz{i:02}")}));
+    }
+    ask(&mut h, "ui.hoverWidget", json!({"id": "keywordList:topLevel"}));
+    let row = rect(&h, "keywordRow:zz30");
+    ask(&mut h, "ui.scroll", json!({"dx": 0, "dy": -(row.top() - 300.0)}));
+    let picked: Vec<String> = (30..36).map(|i| format!("zz{i}")).collect();
+    for k in &picked {
+        // (no settling in between, as a script or a quick hand clicks)
+        let r = h.request("ui.clickWidget", json!({"id": format!("keywordCheck:{k}")}), T);
+        assert_eq!(r["ok"], true, "{r}");
+    }
+    h.settle(SETTLE);
+    let mut have = keywords_of(&h, ids[0]);
+    have.sort();
+    assert_eq!(have, picked);
+}

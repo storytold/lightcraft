@@ -76,10 +76,13 @@ impl eframe::App for App {
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
         self.0.raw_input_hook(raw);
     }
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        self.0.perf.host_frame_ms = frame.info().cpu_usage.map(|s| f64::from(s) * 1000.0);
         self.0.ui(ui);
     }
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        // (a size the window was just given is remembered too)
+        self.0.ui.window = self.1.window_at_exit(self.0.ui.window);
         if let Err(e) = self.1.save(&self.0) {
             log::error!("{e}");
         }
@@ -162,6 +165,46 @@ fn gpu_crash_notice(what: &str) -> String {
     )
 }
 
+/// Written when the window stopped drawing after the GPU device was lost (issue #1337): the next
+/// launch renders on the CPU and says why.
+fn gpu_lost_marker_path() -> Option<std::path::PathBuf> {
+    gpu_marker_path().map(|p| p.with_file_name("gpu-lost.marker"))
+}
+
+/// Why the GPU was lost, when the GPU pipeline stopped after a device failure in this process (a
+/// driver reset, a hang, the Windows watchdog): `None` for other reasons it is off, or when it
+/// never failed.
+fn gpu_lost_reason() -> Option<String> {
+    lightcraft_engine::gpu::unavailable_reason().and_then(|r| r.strip_prefix("stopped after a GPU failure: ").map(str::to_string))
+}
+
+/// Record that LightCraft stopped after the GPU was lost, for the next launch.
+fn record_gpu_lost(marker: Option<&std::path::Path>, reason: &str) {
+    let Some(m) = marker else { return };
+    if let Some(d) = m.parent() {
+        let _ = std::fs::create_dir_all(d);
+    }
+    if let Err(e) = std::fs::write(m, format!("{reason}\n")) {
+        log::warn!("could not write {}: {e}", m.display());
+    }
+}
+
+/// A GPU loss the last launch stopped on: its notice, once (the marker is removed, except by a
+/// `--memory` session, which leaves the disk as it found it).
+fn gpu_lost_check_at(marker: Option<&std::path::Path>, in_memory: bool) -> Option<String> {
+    let m = marker?;
+    let reason = std::fs::read_to_string(m).ok()?;
+    if !in_memory {
+        let _ = std::fs::remove_file(m);
+    }
+    Some(format!(
+        "LightCraft stopped last time after the graphics driver reset the GPU ({}) while photos rendered on it, so GPU rendering \
+         is now off and photos render on the CPU. To try the GPU again, turn on Settings ▸ Performance ▸ Use the GPU for rendering; \
+         an up-to-date graphics driver may help.",
+        reason.trim()
+    ))
+}
+
 /// Where the system keeps monitor profiles, for the Choose Profile dialog to start in: the user's
 /// own profiles first (Linux: colord / DisplayCAL; macOS: ColorSync), then the system's.
 fn display_profile_dir() -> Option<std::path::PathBuf> {
@@ -181,6 +224,16 @@ fn display_profile_dir() -> Option<std::path::PathBuf> {
 
 fn config_dir() -> Option<std::path::PathBuf> {
     lightcraft_engine::config::config_dir()
+}
+
+/// The window at the size it was last used at, zoomed if it was (`window`), or at the usual size
+/// when nothing is remembered. A zoomed window is given the size it goes back to. Where it
+/// opens is the system's to say.
+fn as_remembered(builder: egui::ViewportBuilder, window: Option<lightcraft_ui_egui::window_place::WindowPlace>) -> egui::ViewportBuilder {
+    let builder = builder.with_inner_size(window.map_or(lightcraft_ui_egui::window_place::DEFAULT_SIZE, |w| w.size));
+    // (only ever asked to zoom: asked not to, macOS un-zooms a window whose size fills the screen
+    // to a size of its own choosing)
+    if window.is_some_and(|w| w.zoomed) { builder.with_maximized(true) } else { builder }
 }
 
 /// `<config>/ui.json`, the saved UI state and app settings — `None` when nothing is read or
@@ -301,6 +354,11 @@ struct PrefsWriter {
     failing: bool,
     /// `ui.json` couldn't be read at launch: never overwrite it this session.
     keep_file: bool,
+    /// Follows the window, to remember the size it rests at (`UiState::window`).
+    window: lightcraft_ui_egui::window_place::WindowWatch,
+    /// When the window was first looked at: its watch goes by the clock from then on, not by
+    /// the interface's time, which stands still while the window is hidden.
+    window_since: Option<std::time::Instant>,
 }
 
 impl PrefsWriter {
@@ -331,8 +389,33 @@ impl PrefsWriter {
         Ok(())
     }
 
+    /// What to remember of the window as the app quits ([`WindowWatch::at_exit`]).
+    ///
+    /// [`WindowWatch::at_exit`]: lightcraft_ui_egui::window_place::WindowWatch::at_exit
+    fn window_at_exit(
+        &mut self,
+        remembered: Option<lightcraft_ui_egui::window_place::WindowPlace>,
+    ) -> Option<lightcraft_ui_egui::window_place::WindowPlace> {
+        match self.window_since {
+            Some(since) => self.window.at_exit(remembered, since.elapsed().as_secs_f64()),
+            None => remembered,
+        }
+    }
+
     fn tick(&mut self, app: &mut LightcraftApp, ctx: &egui::Context) {
-        let now = ctx.input(|i| i.time);
+        // (asked for before the input is read: the context is not asked from inside its own lock)
+        let zoom = ctx.zoom_factor();
+        let (now, seen) = ctx.input(|i| (i.time, lightcraft_ui_egui::window_place::Seen::of(i.viewport(), i.content_rect(), zoom)));
+        // how the window is, to open like that next time (written with the settings below). What
+        // the settings hold is checked first: a script may have set it (`ui.set`)
+        let remembered = app.ui.window.and_then(lightcraft_ui_egui::window_place::WindowPlace::checked);
+        let at = self.window_since.get_or_insert_with(std::time::Instant::now).elapsed().as_secs_f64();
+        app.ui.window = self.window.note(remembered, &seen, at);
+        if let Some(wait) = self.window.waits(at) {
+            // (a size is only remembered once the window has rested at it: look again then, though
+            // nothing else asks for a frame)
+            ctx.request_repaint_after(wait);
+        }
         let moved = app.ui.settings.library_path != self.library;
         if !moved && now - self.checked < 3.0 {
             return;
@@ -461,6 +544,14 @@ fn services(cc: &eframe::CreationContext<'_>, log_file: Option<&std::path::Path>
         })),
         pick_folder: Some(Box::new(|| {
             file_dialog().set_title(lightcraft_ui_egui::i18n::tr("Open Library")).pick_folder().map(|p| p.to_string_lossy().to_string())
+        })),
+        #[cfg(target_os = "linux")]
+        open_model_folder: Some(std::sync::Arc::new(|path: &str| {
+            std::process::Command::new("xdg-open")
+                .arg(path)
+                .status()
+                .map_err(|e| e.to_string())
+                .and_then(|s| if s.success() { Ok(()) } else { Err(format!("opening folder failed: {s}")) })
         })),
         open_with: Some(Box::new(editors::open_with)),
         open_all_with: Some(Box::new(editors::open_all_with)),
@@ -595,6 +686,24 @@ fn services(cc: &eframe::CreationContext<'_>, log_file: Option<&std::path::Path>
                 .save_file()
                 .map(|p| p.to_string_lossy().to_string())
         })),
+        pick_slideshow_templates: Some(Box::new(|| {
+            rfd::FileDialog::new()
+                .set_title(lightcraft_ui_egui::i18n::tr("Import Slideshow Templates"))
+                .add_filter_nocase(lightcraft_ui_egui::i18n::tr("Slideshow Templates"), &["json"])
+                .pick_files()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|p| p.to_string_lossy().to_string())
+                .collect()
+        })),
+        save_slideshow_template: Some(Box::new(|name: &str| {
+            rfd::FileDialog::new()
+                .set_title(lightcraft_ui_egui::i18n::tr("Export Slideshow Template"))
+                .add_filter_nocase(lightcraft_ui_egui::i18n::tr("Slideshow Templates"), &["json"])
+                .set_file_name(name)
+                .save_file()
+                .map(|p| p.to_string_lossy().to_string())
+        })),
         // atomic (temp file + sync + rename): a failed write never leaves a truncated file
         write_shared: Some(std::sync::Arc::new(lightcraft_engine::export::write_file)),
         write: Some(Box::new(lightcraft_engine::export::write_file)),
@@ -608,10 +717,12 @@ fn services(cc: &eframe::CreationContext<'_>, log_file: Option<&std::path::Path>
     }
 }
 
-/// The library session with the folder face models are kept in (`<config>/models`).
+/// The library session with the folders face models (`<config>/models`) and slideshow templates
+/// (`<config>/slideshow-templates`) are kept in.
 fn open_session(in_memory: bool, dir: Option<std::path::PathBuf>, seed_demo: bool) -> (Session, Option<LibraryProblem>) {
     let (mut s, problem) = open_library_session(in_memory, dir, seed_demo);
     s.face_models_dir = lightcraft_engine::config::default_face_models_dir();
+    s.slide_templates_dir = lightcraft_engine::config::config_dir().map(|d| d.join(lightcraft_engine::slide_template::DIR_NAME));
     // Control requests are answered on the UI thread: Add to Apple Photos must not wait there
     s.apple_photos_background = true;
     (s, problem)
@@ -666,7 +777,8 @@ OPTIONS:
   --version, --help
 
 ENVIRONMENT:
-  LIGHTCRAFT_CONFIG_DIR=DIR   use this settings folder instead of the platform default (empty = no settings folder)
+  LIGHTCRAFT_CONFIG_DIR=DIR   use this settings folder instead of the platform default (empty = no settings folder).
+                   Without it, a portable.txt file next to the program puts the folder beside it (LightCraftData)
   LIGHTCRAFT_GPU_BACKEND=dx12|vulkan|metal|auto|off   graphics backend (default: DX12 on Windows, Metal on macOS,
                    Vulkan on Linux; off = render on the CPU); else WGPU_BACKEND. LIGHTCRAFT_GPU=0: CPU rendering.
   LIGHTCRAFT_SAM3_DIR=DIR   the SAM 3 model for Object / Describe masks (default: <settings folder>/models/sam3;
@@ -799,7 +911,7 @@ fn main() -> eframe::Result {
     let library_dir = library_dir.or_else(lightcraft_engine::library::default_dir);
     // GPU compute: off if the preference says so, or if the last launch died creating the device
     // (issue #136) — before anything can create it
-    let gpu_crash = gpu_crash_check(in_memory);
+    let gpu_crash = gpu_crash_check(in_memory).or_else(|| gpu_lost_check_at(gpu_lost_marker_path().as_deref(), in_memory));
     let gpu_on = prefs.as_ref().is_none_or(|u| u.settings.gpu) && gpu_crash.is_none();
     lightcraft_engine::gpu::set_enabled(gpu_on);
     // the window's renderer: probed (Windows) and with a fallback chain, so a driver that can't
@@ -808,12 +920,15 @@ fn main() -> eframe::Result {
     let window_gpu::Chosen { renderer, wgpu_options, which: window_renderer, notice: window_notice } = window_gpu::choose(&win_files);
     win_files.arm(window_renderer);
     let win_files_app = win_files.clone();
+    // the window came up: a failure after this is LightCraft stopping, not a start that failed
+    let came_up = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let came_up_app = came_up.clone();
+    // how the window was when the app was last used (checked: the settings file is a file)
+    let opens_as = prefs.as_ref().and_then(|ui| ui.window).and_then(lightcraft_ui_egui::window_place::WindowPlace::checked);
     let options = eframe::NativeOptions {
         renderer,
-        viewport: egui::ViewportBuilder::default()
-            .with_title("LightCraft")
-            .with_inner_size([1600.0, 1000.0])
-            .with_min_inner_size([900.0, 560.0])
+        viewport: as_remembered(egui::ViewportBuilder::default().with_title("LightCraft"), opens_as)
+            .with_min_inner_size(lightcraft_ui_egui::window_place::MIN_SIZE)
             .with_drag_and_drop(true)
             .with_fullsize_content_view(true)
             .with_titlebar_shown(false)
@@ -845,6 +960,7 @@ fn main() -> eframe::Result {
             Box::new(move |cc| {
                 // the window's renderer is up (eframe calls this after creating it)
                 win_files_app.started(window_renderer);
+                came_up_app.store(true, std::sync::atomic::Ordering::Relaxed);
                 let (mut session, problem) = open_session(in_memory, library_dir, seed_demo && files.is_empty());
                 // AI masks: the SAM 3 checkpoint (facebook/sam3) in <config>/models/sam3, or LIGHTCRAFT_SAM3_DIR
                 // (never required: without it, AI masks offer to download it; see docs/ai-masks.md)
@@ -862,6 +978,11 @@ fn main() -> eframe::Result {
                 app.notices.extend(launch_notices);
                 app.notices.extend(window_notice);
                 app.gpu_notice = true;
+                // an empty library opens where Import is offered (a grid, with the sidebar); before
+                // the snapshot below, so this alone isn't written to the settings file
+                if problem.is_none() && files.is_empty() {
+                    lightcraft_ui_egui::panels::empty_library::open_on_empty_library(&mut app);
+                }
                 // what's on disk now: only changes are written
                 let writer = PrefsWriter {
                     path: if in_memory { None } else { prefs_path() },
@@ -906,6 +1027,31 @@ fn main() -> eframe::Result {
             }),
         )
     }));
+    if came_up.load(std::sync::atomic::Ordering::Relaxed) {
+        // the window was up: a panic that escaped it now is LightCraft stopping, typically the
+        // window's renderer after the graphics driver reset the GPU (issue #1337: egui-wgpu panics
+        // on the lost device). Not a failed start: no other renderer is tried, and the message
+        // says what happened.
+        let stopped = match started {
+            Ok(r) => r,
+            Err(_) => Err(eframe::Error::AppCreation("its window stopped drawing (the renderer panicked)".into())),
+        };
+        if let Err(e) = &stopped {
+            let lost = gpu_lost_reason();
+            if let Some(reason) = &lost
+                && !in_memory
+            {
+                record_gpu_lost(gpu_lost_marker_path().as_deref(), reason);
+            }
+            // (not "app creation error: …": the app had been created)
+            let what = match e {
+                eframe::Error::AppCreation(m) => m.to_string(),
+                e => e.to_string(),
+            };
+            stopped_while_running(&stopped_text(&what, lost.as_deref()), log_file.as_deref());
+        }
+        return stopped;
+    }
     // a panic that still escaped the renderer's start (the probe and error handler should
     // prevent it): an error like any other failed start
     let started = started.unwrap_or_else(|_| Err(eframe::Error::AppCreation("the window's renderer panicked while starting".into())));
@@ -918,6 +1064,34 @@ fn main() -> eframe::Result {
         startup_failed(&e.to_string(), log_file.as_deref());
     }
     started
+}
+
+/// What to tell the user when LightCraft stopped while running (`error`), and why when the GPU
+/// was lost (`lost`): GPU rendering is off from the next start.
+fn stopped_text(error: &str, lost: Option<&str>) -> String {
+    match lost {
+        Some(reason) => format!(
+            "{error}. The graphics driver reset the GPU ({reason}). LightCraft renders on the CPU from its next start; \
+             Settings ▸ Performance ▸ Use the GPU for rendering turns the GPU back on"
+        ),
+        None => error.to_string(),
+    }
+}
+
+/// LightCraft stopped while its window was up: say so in the log and in a native message box
+/// naming the log file (as [`startup_failed`] does for a start that failed).
+fn stopped_while_running(text: &str, log_file: Option<&std::path::Path>) {
+    log::error!("LightCraft stopped: {text}");
+    if std::env::var_os("LIGHTCRAFT_NO_PREFS").is_some() {
+        return; // tests and scripts: no dialog to click away
+    }
+    let (title, text) = lightcraft_ui_egui::i18n::stopped_message(text, log_file.map(|p| p.display().to_string()).as_deref());
+    let _ = rfd::MessageDialog::new()
+        .set_level(rfd::MessageLevel::Error)
+        .set_title(title)
+        .set_description(text)
+        .set_buttons(rfd::MessageButtons::Ok)
+        .show();
 }
 
 /// The window could not start (e.g. no usable graphics device): say so in the log and in a native
@@ -1122,6 +1296,37 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
     }
 
+    /// Issue #1337: the window stopped drawing after the graphics driver reset the GPU during an
+    /// export, and the dialog said the window "could not open". The stop is recorded; the next
+    /// launch says why once and renders on the CPU (a `--memory` session leaves the record).
+    #[test]
+    fn a_gpu_lost_while_running_turns_the_gpu_off_next_time() {
+        let d = dir("gpu-lost");
+        let m = d.join("gpu-lost.marker");
+        assert_eq!(gpu_lost_check_at(Some(&m), false), None, "nothing recorded");
+        assert_eq!(gpu_lost_check_at(None, false), None, "no settings folder");
+        record_gpu_lost(Some(&m), "device lost (Unknown): Device is lost");
+        let notice = gpu_lost_check_at(Some(&m), true).unwrap();
+        assert!(
+            notice.contains("(device lost (Unknown): Device is lost)")
+                && notice.contains("GPU rendering is now off")
+                && notice.contains("Use the GPU for rendering"),
+            "{notice}"
+        );
+        assert!(m.exists(), "a --memory session leaves it");
+        assert!(gpu_lost_check_at(Some(&m), false).is_some());
+        assert!(!m.exists());
+        assert_eq!(gpu_lost_check_at(Some(&m), false), None, "said once");
+        // the message box: LightCraft stopped (not "could not open its window"), and why
+        let text = stopped_text("its window stopped drawing (the renderer panicked)", Some("device lost (Unknown): Device is lost"));
+        assert!(text.contains("reset the GPU (device lost (Unknown)") && text.contains("renders on the CPU from its next start"), "{text}");
+        assert_eq!(stopped_text("its window stopped drawing", None), "its window stopped drawing");
+        let (title, body) = lightcraft_ui_egui::i18n::stopped_message(&text, Some("/logs/lightcraft.log"));
+        assert_eq!(title, "LightCraft stopped");
+        assert!(body.starts_with("LightCraft stopped unexpectedly: its window stopped drawing") && body.ends_with("/logs/lightcraft.log"), "{body}");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
     /// Issue #136: a GPU init marker left by a crashed launch is reported once and removed.
     #[test]
     fn gpu_crash_marker_is_reported_once() {
@@ -1226,6 +1431,96 @@ mod tests {
         let (loaded, warning, _) = load_prefs_at(&path, true);
         assert!(loaded.is_some() && warning.is_none());
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Given what the settings remember of the window, when the app's window is built, then it
+    /// opens at that size, zoomed if it was, where the system puts it; with nothing remembered it
+    /// opens at the usual size.
+    #[test]
+    fn the_window_opens_as_it_was() {
+        use lightcraft_ui_egui::window_place::{DEFAULT_SIZE, WindowPlace};
+        let fresh = as_remembered(egui::ViewportBuilder::default(), None);
+        assert_eq!((fresh.inner_size, fresh.position, fresh.maximized), (Some(egui::Vec2::from(DEFAULT_SIZE)), None, None));
+        let b = as_remembered(egui::ViewportBuilder::default(), Some(WindowPlace { size: [1300.0, 800.0], zoomed: true }));
+        assert_eq!((b.inner_size, b.position, b.maximized), (Some(egui::vec2(1300.0, 800.0)), None, Some(true)));
+        // (not asked to un-zoom: macOS would then resize a window that fills its screen)
+        let b = as_remembered(egui::ViewportBuilder::default(), Some(WindowPlace { size: [1300.0, 800.0], zoomed: false }));
+        assert_eq!((b.inner_size, b.position, b.maximized), (Some(egui::vec2(1300.0, 800.0)), None, None));
+    }
+
+    /// Given a window that rests at a size, when the settings are written and read again, then
+    /// they hold how it was. A window in the file that is not one (a hand edit, another version's)
+    /// reads as nothing remembered and costs no other setting; and a window resized just before
+    /// the app quits is remembered at that size.
+    #[test]
+    fn the_settings_keep_how_the_window_was() {
+        use lightcraft_ui_egui::window_place::{Seen, WindowPlace};
+        let d = dir("window");
+        let path = d.join("ui.json");
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services::default());
+        app.ui.settings.library_path = "/pictures/library".into();
+        let mut writer = PrefsWriter { path: Some(path.clone()), ..Default::default() };
+        writer.save(&app).unwrap();
+        assert!(!std::fs::read_to_string(&path).unwrap().contains("\"window\""), "nothing to remember yet");
+        let window = WindowPlace { size: [1300.0, 800.0], zoomed: true };
+        app.ui.window = Some(window);
+        writer.save(&app).unwrap();
+        let (restored, warning, _) = load_prefs_at(&path, false);
+        assert_eq!((restored.unwrap().window, warning), (Some(window), None));
+
+        // a window that is no window: the file is read all the same, with its other settings
+        let text = std::fs::read_to_string(&path).unwrap();
+        for odd in [r#""window": {}"#, r#""window": "wide""#, r#""window": {"size": [1, 2, 3]}"#, r#""window": {"size": [null, 800.0]}"#] {
+            let start = text.find("\"window\"").unwrap();
+            let end = start + text[start..].find('}').unwrap() + 1;
+            std::fs::write(&path, format!("{}{odd}{}", &text[..start], &text[end..])).unwrap();
+            let (restored, warning, keep) = load_prefs_at(&path, true);
+            let restored = restored.unwrap_or_else(|| panic!("{odd}: {warning:?}"));
+            assert_eq!((restored.window, restored.settings.library_path.as_str(), warning, keep), (None, "/pictures/library", None, false), "{odd}");
+        }
+
+        // resized, and the app quits a moment later: the new size is what is written
+        let mut writer = PrefsWriter { path: Some(path.clone()), ..Default::default() };
+        let rest = Some(WindowPlace { size: [1300.0, 800.0], zoomed: false });
+        writer.window.note(rest, &Seen { size: Some([1500.0, 900.0]), ..Default::default() }, 0.0);
+        writer.window_since = std::time::Instant::now().checked_sub(std::time::Duration::from_millis(400));
+        assert!(writer.window_since.is_some());
+        assert_eq!(writer.window_at_exit(rest), Some(WindowPlace { size: [1500.0, 900.0], zoomed: false }));
+        assert_eq!(PrefsWriter::default().window_at_exit(rest), rest, "a window that was never seen");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Given the app's window at a size, when the settings writer looks at it frame after frame,
+    /// then it asks to be woken while the size has still to rest, remembers the size once it has,
+    /// and asks for nothing more. A window in the settings that is not one (a script set it) is
+    /// put right before it is gone by.
+    #[test]
+    fn the_writer_follows_the_window_from_frame_to_frame() {
+        use lightcraft_ui_egui::window_place::WindowPlace;
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services::default());
+        let mut writer = PrefsWriter::default();
+        let ctx = egui::Context::default();
+        let pass = |look: &mut dyn FnMut(&egui::Context)| {
+            let raw =
+                egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1300.0, 800.0))), ..Default::default() };
+            let mut out = ctx.run_ui(raw, |ui| look(ui.ctx()));
+            out.textures_delta.clear();
+            out.viewport_output.get(&egui::ViewportId::ROOT).map(|v| v.repaint_delay)
+        };
+        // (egui's own first frames ask for another: let them pass)
+        for _ in 0..3 {
+            pass(&mut |_| {});
+        }
+        app.ui.window = Some(WindowPlace { size: [f32::NAN, 800.0], zoomed: true });
+        let asked = pass(&mut |ctx| writer.tick(&mut app, ctx));
+        assert_eq!(app.ui.window, None, "no window, and not yet at rest");
+        assert!(asked.is_some_and(|wait| wait <= std::time::Duration::from_secs(1)), "{asked:?}");
+        // a second later
+        writer.window_since = writer.window_since.and_then(|since| since.checked_sub(std::time::Duration::from_secs(1)));
+        pass(&mut |ctx| writer.tick(&mut app, ctx));
+        assert_eq!(app.ui.window, Some(WindowPlace { size: [1300.0, 800.0], zoomed: false }));
+        let asked = pass(&mut |ctx| writer.tick(&mut app, ctx));
+        assert!(asked.is_none_or(|wait| wait > std::time::Duration::from_secs(3600)), "at rest and remembered: {asked:?}");
     }
 
     /// #1331: on macOS the process ends inside `on_exit`, before eframe would tear the window down.

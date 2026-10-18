@@ -308,9 +308,12 @@ pub enum Outcome {
     Imported(Imported),
     /// Photos (or osascript) failed: why, for the user.
     Failed(String),
-    /// Photos wasn't asked: the export that reserved the import was cancelled, wrote no files or
-    /// stopped early.
-    Skipped(String),
+    /// Photos wasn't asked: the export that reserved the import was cancelled (`cancelled`), wrote
+    /// no files or stopped early. `why` is for people; code decides on `cancelled`.
+    Skipped {
+        why: String,
+        cancelled: bool,
+    },
 }
 
 /// One import: reserved by an export still writing its files, running, or finished.
@@ -402,9 +405,12 @@ impl ImportJob {
                 v["running"] = json!(false);
                 v["error"] = json!(e);
             }
-            Some(Outcome::Skipped(why)) => {
+            Some(Outcome::Skipped { why, cancelled }) => {
                 v["running"] = json!(false);
                 v["skipped"] = json!(why);
+                if cancelled {
+                    v["cancelled"] = json!(true);
+                }
             }
         }
         v
@@ -660,7 +666,7 @@ impl Reservation {
             None
         };
         if let Some(why) = skipped {
-            job.finish(Outcome::Skipped(why.into()));
+            job.finish(Outcome::Skipped { why: why.into(), cancelled });
             return Err(job.json());
         }
         if let Err(e) = check(&paths, &self.album) {
@@ -700,7 +706,7 @@ impl Reservation {
 impl Drop for Reservation {
     fn drop(&mut self) {
         if let Some(job) = self.job.take() {
-            job.finish(Outcome::Skipped("the export ended before writing its files".into()));
+            job.finish(Outcome::Skipped { why: "the export ended before writing its files".into(), cancelled: false });
         }
     }
 }
@@ -1009,8 +1015,10 @@ mod tests {
         // nothing written, or cancelled: Photos isn't asked, and the slot is free again
         let out = imports.reserve(runner.clone(), "").unwrap().run(&[json!({"skipped": "x"})], false);
         assert!(out["skipped"].as_str().unwrap().contains("wrote no files"), "{out}");
+        assert_eq!(out.get("cancelled"), None, "{out}");
         let out = imports.reserve(runner.clone(), "").unwrap().run(&exported, true);
         assert!(out["skipped"].as_str().unwrap().contains("cancelled"), "{out}");
+        assert_eq!(out["cancelled"], true, "the app decides on the flag, not on the words: {out}");
         assert_eq!(calls.lock().unwrap().len(), 1);
         assert!(imports.running().is_none());
         let _ = std::fs::remove_dir_all(dir);

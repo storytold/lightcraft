@@ -103,8 +103,10 @@ impl<'a> Bits<'a> {
     pub fn consumed_bits(&self) -> usize {
         self.pos * 8 - self.n as usize
     }
+    /// Whether more bits were handed out than the source holds (the zeros read past its end are lookahead padding,
+    /// not data; using them would fabricate samples).
     pub fn overrun(&self) -> bool {
-        self.pos > self.src.len() + 8
+        self.consumed_bits() > self.src.len() * 8
     }
 }
 
@@ -141,7 +143,13 @@ pub(crate) fn table(b: &[u8], order: ByteOrder) -> Result<Huffman> {
 
 /// Decode a `w × h` Huffman-coded image.
 pub(crate) fn decode_huffman(src: &[u8], h: &Huffman, w: usize, hgt: usize, bits_per: u32) -> Result<Vec<u16>> {
-    let mut out = vec![0u16; w * hgt];
+    // every sample takes at least one bit: a stream too short for the declared size is refused before its picture
+    // is allocated, so a few bytes can't ask for gigabytes (issue #1512)
+    let samples = w.checked_mul(hgt).ok_or(RawError::Limit("image too large"))?;
+    if (src.len() as u64).saturating_mul(8) < samples as u64 {
+        return Err(RawError::Corrupt(format!("PEF: {w} x {hgt} samples need more than the {} bytes of data there", src.len())));
+    }
+    let mut out = vec![0u16; samples];
     let mut bits = Bits::new(src);
     let mut vpred = [[0i32; 2]; 2];
     let max = (1i32 << bits_per.min(16)) - 1;
@@ -150,13 +158,17 @@ pub(crate) fn decode_huffman(src: &[u8], h: &Huffman, w: usize, hgt: usize, bits
         let row = &mut out[y * w..(y + 1) * w];
         for (x, o) in row.iter_mut().enumerate() {
             let d = diff(&mut bits, h).ok_or_else(|| RawError::Corrupt(format!("PEF: invalid Huffman code at row {y}")))?;
+            // a run of large differences in a corrupt stream can drive a predictor past i32 (issue #1515)
+            let overflow = || RawError::Corrupt(format!("PEF: predictor out of range at row {y}"));
             let p = if x < 2 {
-                vpred[y & 1][x] += d;
-                hpred[x] = vpred[y & 1][x];
-                hpred[x]
+                let v = vpred[y & 1][x].checked_add(d).ok_or_else(overflow)?;
+                vpred[y & 1][x] = v;
+                hpred[x] = v;
+                v
             } else {
-                hpred[x & 1] += d;
-                hpred[x & 1]
+                let v = hpred[x & 1].checked_add(d).ok_or_else(overflow)?;
+                hpred[x & 1] = v;
+                v
             };
             *o = p.clamp(0, max) as u16;
         }
@@ -237,7 +249,12 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         tiff.exif().and_then(|e| e.get(t::MAKER_NOTE)).and_then(|e| makernote::parse_makernote(bytes, e.offset, e.count() as u64, tiff.order, &make));
     let pair = |tag: u16| mn.as_ref().and_then(|m| m.ifd.u64s(tag)).filter(|v| v.len() == 2).map(|v| (v[0] as usize, v[1] as usize));
     let tagged = match (pair(CROP_ORIGIN), pair(CROP_SIZE)) {
-        (Some((x, y)), Some((cw, ch))) if cw > 0 && ch > 0 && x + cw <= w && y + ch <= hgt => Some(Rect::new(x, y, cw, ch)),
+        // checked: the tags are file data; `x + cw` on a hostile value would wrap past the bounds
+        (Some((x, y)), Some((cw, ch)))
+            if cw > 0 && ch > 0 && x.checked_add(cw).is_some_and(|end| end <= w) && y.checked_add(ch).is_some_and(|end| end <= hgt) =>
+        {
+            Some(Rect::new(x, y, cw, ch))
+        }
         _ => None,
     };
     // without crop tags the image area is found from the samples (dark borders)
@@ -318,8 +335,10 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         color: ColorData::default(),
         wb_multipliers: wb,
         linearized: false,
+        pixel_aspect: 1.0,
         opcodes: OpcodeLists::default(),
         metadata,
+        lens_metadata: Default::default(),
     };
     img.validate_for(mode)?;
     Ok(img)
@@ -350,6 +369,18 @@ mod tests {
         }
         b.extend(codes.iter().map(|c| c.1));
         (b, codes)
+    }
+
+    /// A compressed PEF declaring far more samples than its data could hold (one bit each at least) is refused
+    /// before its picture is allocated (issue #1512).
+    #[test]
+    fn a_stream_too_short_for_its_size_is_refused_before_allocating() {
+        let (tb, _) = test_table();
+        let h = table(&tb, ByteOrder::Big).unwrap();
+        let t = std::time::Instant::now();
+        let r = decode_huffman(&[0x55; 4096], &h, 30_000, 30_000, 12);
+        assert!(matches!(r, Err(RawError::Corrupt(ref m)) if m.contains("need more")), "{r:?}");
+        assert!(t.elapsed() < std::time::Duration::from_secs(1));
     }
 
     fn encode(px: &[u16], w: usize, codes: &[(u16, u8)]) -> Vec<u8> {
@@ -388,6 +419,49 @@ mod tests {
         // truncated data is reported, not a panic
         assert!(decode_huffman(&src[..src.len() / 3], &h, w, hgt, 14).is_err());
         assert!(table(&tb[..20], ByteOrder::Big).is_err());
+    }
+
+    /// Zero-padded lookahead past the end must not be decoded as samples: with no entropy at all, the zero bits
+    /// are a valid code (category 1) in this table, so a reader that only limits the refill position accepts them.
+    #[test]
+    fn symbols_decoded_from_padding_past_the_end_are_rejected() {
+        let (tb, codes) = test_table();
+        let h = table(&tb, ByteOrder::Big).unwrap();
+        assert!(decode_huffman(&[], &h, 2, 1, 14).is_err());
+        // the same image with its real entropy still decodes, including the last byte's padding bits
+        let px = [5u16, 9];
+        let src = encode(&px, 2, &codes);
+        assert_eq!(decode_huffman(&src, &h, 2, 1, 14).unwrap(), px);
+        // one byte short of the real entropy is rejected
+        assert!(decode_huffman(&src[..src.len() - 1], &h, 2, 1, 14).is_err());
+    }
+
+    /// A long run of the largest difference drove a predictor past i32: a panic in builds with overflow checks,
+    /// wrapped values otherwise (issue #1515). Both the row and the column predictors now stop with an error.
+    #[test]
+    fn predictor_overflow_is_an_error_not_a_panic() {
+        let (tb, codes) = test_table();
+        let h = table(&tb, ByteOrder::Big).unwrap();
+        let (c, l) = codes[14];
+        let d = (1u32 << 14) - 1;
+        let stream = |n: usize| {
+            let mut bits: Vec<bool> = Vec::with_capacity(n * (l as usize + 14));
+            for _ in 0..n {
+                (0..l).rev().for_each(|i| bits.push((c >> (12 - l)) >> i & 1 == 1));
+                (0..14).rev().for_each(|i| bits.push(d >> i & 1 == 1));
+            }
+            bits.chunks(8).map(|c| c.iter().enumerate().fold(0u8, |a, (i, &b)| a | (b as u8) << (7 - i))).collect::<Vec<u8>>()
+        };
+        // differences one predictor needs to pass i32::MAX
+        let steps = (i32::MAX as u32 / d) as usize + 2;
+        // along a row: every other sample adds to the same predictor
+        let w = 2 * steps + 2;
+        let err = decode_huffman(&stream(w), &h, w, 1, 14).unwrap_err();
+        assert!(matches!(err, RawError::Corrupt(ref m) if m.contains("predictor")), "{err}");
+        // down two columns: each row adds to the predictor of its parity
+        let rows = 2 * steps + 2;
+        let err = decode_huffman(&stream(2 * rows), &h, 2, rows, 14).unwrap_err();
+        assert!(matches!(err, RawError::Corrupt(ref m) if m.contains("predictor")), "{err}");
     }
 
     /// A big-endian one-strip PEF-style TIFF of `w × h` 12-bit samples with the given compression tag and strip

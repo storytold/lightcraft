@@ -145,8 +145,6 @@ const FORMAT8_FIXED: [(u16, &[u16]); 9] = [
 const DISTORTION_INFO: u16 = 0x0119;
 /// Fixed-point one of the distortion coefficients and zoom.
 const DISTORTION_ONE: f64 = 32768.0;
-/// Output radii sampled to fit the inverse mapping.
-const DISTORTION_SAMPLES: usize = 64;
 /// Largest error of the fitted inverse (relative to the half diagonal) accepted: real lenses fit within 1.2e-4.
 const DISTORTION_MAX_FIT_ERROR: f64 = 1e-3;
 /// Most strips seen in a file is 3 (the 12008 × 8008 high-resolution mode).
@@ -616,8 +614,10 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         color: ColorData::default(),
         wb_multipliers: wb,
         linearized: false,
+        pixel_aspect: 1.0,
         opcodes: OpcodeLists { list3: distortion(ifd0, active).into_iter().collect(), ..Default::default() },
         metadata,
+        lens_metadata: Default::default(),
     };
     img.validate_for(mode)?;
     Ok(img)
@@ -650,85 +650,10 @@ fn distortion(ifd: &Ifd, active: Rect) -> Option<Opcode> {
         let r2 = r * r;
         r * (1.0 + r2 * (k2 + r2 * (k4 + r2 * k6)))
     };
-    // the output corners show corrected radius `t_max`; the map must rise monotonically to it (a fold is no lens)
-    let t_max = half_diag * zoom / radius;
-    let mut top = None;
-    let mut prev = 0.0;
-    for i in 1..=4096 {
-        let r = 3.0 * t_max * i as f64 / 4096.0;
-        let v = corrected(r);
-        if v.is_nan() || v <= prev {
-            return None;
-        }
-        prev = v;
-        if v >= t_max {
-            top = Some(r);
-            break;
-        }
-    }
-    let top = top?;
-    let source = |t: f64| {
-        let (mut lo, mut hi) = (0.0, top);
-        for _ in 0..60 {
-            let m = 0.5 * (lo + hi);
-            if corrected(m) < t { lo = m } else { hi = m }
-        }
-        0.5 * (lo + hi)
-    };
-    // least-squares fit of source radius = u·(kr0 + kr1·u² + kr2·u⁴ + kr3·u⁶) over the output radii u ∈ [0, 1]
-    let samples: Vec<(f64, f64)> = (0..=DISTORTION_SAMPLES)
-        .map(|i| {
-            let u = i as f64 / DISTORTION_SAMPLES as f64;
-            (u, source(u * t_max) * radius / half_diag)
-        })
-        .collect();
-    let basis = |u: f64| {
-        let u2 = u * u;
-        [u, u * u2, u * u2 * u2, u * u2 * u2 * u2]
-    };
-    let mut a = [[0.0; 4]; 4];
-    let mut rhs = [0.0; 4];
-    for &(u, v) in &samples {
-        let f = basis(u);
-        for (i, fi) in f.iter().enumerate() {
-            for (j, fj) in f.iter().enumerate() {
-                a[i][j] += fi * fj;
-            }
-            rhs[i] += fi * v;
-        }
-    }
-    let k = solve4(a, rhs)?;
-    let fit = |u: f64| basis(u).iter().zip(&k).map(|(f, c)| f * c).sum::<f64>();
-    let worst = samples.iter().map(|&(u, v)| (fit(u) - v).abs()).fold(0.0, f64::max);
-    if worst.is_nan() || worst > DISTORTION_MAX_FIT_ERROR {
-        return None;
-    }
+    // work in DNG-normalised units (corner distance = 1), where the output corners sit at radius `zoom`
+    let scale = radius / half_diag;
+    let k = super::warp_from_forward_map(&|s| corrected(s / scale) * scale, zoom, DISTORTION_MAX_FIT_ERROR)?;
     Some(Opcode::WarpRectilinear { planes: vec![[k[0], k[1], k[2], k[3], 0.0, 0.0]], center: [0.5, 0.5] })
-}
-
-/// Solve the 4 × 4 system `a·x = b` (Gaussian elimination with partial pivoting); `None` when singular or not finite.
-fn solve4(mut a: [[f64; 4]; 4], mut b: [f64; 4]) -> Option<[f64; 4]> {
-    for c in 0..4 {
-        let p = (c..4).max_by(|&i, &j| a[i][c].abs().total_cmp(&a[j][c].abs()))?;
-        if a[p][c].is_nan() || a[p][c].abs() <= 1e-300 {
-            return None;
-        }
-        a.swap(c, p);
-        b.swap(c, p);
-        for r in c + 1..4 {
-            let f = a[r][c] / a[c][c];
-            for k in c..4 {
-                a[r][k] -= f * a[c][k];
-            }
-            b[r] -= f * b[c];
-        }
-    }
-    let mut x = [0.0; 4];
-    for c in (0..4).rev() {
-        let s: f64 = (c + 1..4).map(|k| a[c][k] * x[k]).sum();
-        x[c] = (b[c] - s) / a[c][c];
-    }
-    x.iter().all(|v| v.is_finite()).then_some(x)
 }
 
 #[cfg(test)]

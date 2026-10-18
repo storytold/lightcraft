@@ -238,6 +238,38 @@ fn a_mask_overlay_window_matches_the_whole_render() {
     }
 }
 
+// Given the Show All Masks view (issue #1712), a window of it matches the same pixels of the
+// whole render with that overlay: the union is composed from the same mask alphas, so the zoomed
+// loupe can show it as a window like a single mask's overlay (issue #547)
+#[test]
+fn an_all_masks_overlay_window_matches_the_whole_render() {
+    use crate::{MaskView, Overlay};
+    use lightcraft_develop::{LocalAdjustments, Mask, MaskComponent, MaskOp, MaskShape};
+    use lightcraft_geom::Point;
+    let shapes = [
+        (3, MaskShape::Radial { center: Point::new(0.45, 0.5), rx: 0.2, ry: 0.15, angle: 20.0, feather: 50.0, invert: false }, 0.0),
+        (4, MaskShape::Linear { start: Point::new(0.4, 0.55), end: Point::new(0.6, 0.5) }, 100.0),
+    ];
+    let mut s = DevelopSettings::default();
+    for (id, shape, refine) in shapes {
+        s.masks.push(Mask {
+            id,
+            components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape }],
+            adjust: LocalAdjustments { exposure: 1.0, ..Default::default() },
+            refine,
+            ..Default::default()
+        });
+    }
+    for view in [MaskView::Color, MaskView::WhiteOnBlack, MaskView::ImageOnBlack] {
+        let overlay = Overlay::AllMasks { view, color: [255, 0, 0], opacity: 70 };
+        let f = render(&noisy_scene(), &SourceInfo::default(), &s, &RenderRequest { overlay, ..RenderRequest::fit(W, H) }).image;
+        let w = render(&noisy_scene(), &SourceInfo::default(), &s, &RenderRequest { overlay, window: Some(MID), ..RenderRequest::fit(W, H) }).image;
+        let (max, mean) = compare(&f, &w, MID);
+        // (refine edges differs by a rounding step, as in `mask_edge_refinement_does_not_depend_on_the_window`)
+        assert!(max <= 3 && mean <= 0.25, "{view:?}: max {max} (≤ 3), mean {mean:.3} (≤ 0.25)");
+    }
+}
+
 // ---- Deep zoom: the wide stages' kernels are far wider than any margin -------------------------
 
 /// Hard-edged blocks of very different brightness at several scales: the wide stages' edge-aware

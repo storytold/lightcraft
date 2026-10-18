@@ -21,11 +21,11 @@ impl Catalog {
     }
     /// The stack a photo belongs to.
     pub fn stack_of(&self, photo: PhotoId) -> Option<&Stack> {
-        self.stacks.values().find(|s| s.photos.contains(&photo))
+        self.stack_id_of(photo).and_then(|id| self.stacks.get(&id))
     }
     /// Photo → (stack, position in the stack), for every stacked photo.
     pub fn stack_index(&self) -> HashMap<PhotoId, (StackId, usize)> {
-        self.stacks.values().flat_map(|s| s.photos.iter().enumerate().map(move |(i, p)| (*p, (s.id, i)))).collect()
+        self.stacks.iter().flat_map(|(id, s)| s.photos.iter().enumerate().map(move |(i, p)| (*p, (*id, i)))).collect()
     }
 
     pub(crate) fn validate_stack(&self, id: StackId, photos: &[PhotoId]) -> Result<()> {
@@ -41,7 +41,7 @@ impl Catalog {
                 return Err(CatalogError::NoPhoto(*p));
             }
         }
-        if self.stacks.values().any(|s| s.id != id && s.photos.iter().any(|p| seen.contains(p))) {
+        if photos.iter().any(|p| self.stack_id_of(*p).is_some_and(|s| s != id)) {
             return Err(CatalogError::Invalid("a photo can be in only one stack".into()));
         }
         Ok(())
@@ -70,7 +70,7 @@ impl Catalog {
             }
         }
         for sid in &touched {
-            for p in self.stacks[sid].photos.clone() {
+            for p in self.stacks.get(sid).map(|s| s.photos.clone()).unwrap_or_default() {
                 push(&mut order, p);
             }
         }
@@ -186,7 +186,10 @@ impl Catalog {
                     if !done.insert(*sid) {
                         continue;
                     }
-                    let s = &self.stacks[sid];
+                    let Some(s) = self.stacks.get(sid) else {
+                        out.push(*id);
+                        continue;
+                    };
                     let members = s.photos.iter().copied().filter(|p| present.contains(p));
                     if s.collapsed {
                         out.extend(members.take(1));
@@ -225,6 +228,60 @@ impl Catalog {
         }
         groups.retain(|g| g.len() >= 2);
         groups
+    }
+}
+
+impl Catalog {
+    /// The bracket sets among `ids`, an HDR merge each: every stack one of them is in (its photos, less earlier merge
+    /// results), then the unstacked ones in capture order, a set running while each starts within about a second of the
+    /// previous one's end (its shutter time; capture times are whole seconds). A run is a set when its exposures span at
+    /// least ½ EV: a burst at one exposure is no bracket. Photos without a capture time or shutter speed are left out.
+    pub fn bracket_sets(&self, ids: &[PhotoId]) -> Vec<Vec<PhotoId>> {
+        let merged = |p: &crate::Photo| crate::query::merged_kind(&p.file_name).is_some();
+        let mut sets: Vec<Vec<PhotoId>> = Vec::new();
+        let mut stacks = HashSet::new();
+        let mut loose = Vec::new();
+        for id in ids {
+            match self.stack_of(*id) {
+                Some(s) if stacks.insert(s.id) => {
+                    let set: Vec<PhotoId> = s.photos.iter().copied().filter(|p| self.photos.get(p).is_some_and(|p| !merged(p))).collect();
+                    if set.len() >= 2 {
+                        sets.push(set);
+                    }
+                }
+                Some(_) => {}
+                None => loose.push(*id),
+            }
+        }
+        // (capture second, file name, id, shutter seconds, EV)
+        let mut timed: Vec<(i64, &str, PhotoId, f64, f64)> = loose
+            .iter()
+            .filter_map(|id| self.photos.get(id))
+            .filter(|p| !p.deleted && !merged(p))
+            .filter_map(|p| {
+                let t = iso_seconds(p.captured.as_deref()?)?;
+                let s = crate::model::parse_shutter_seconds(&p.meta.shutter)?;
+                let n = p.meta.aperture.filter(|n| n.is_finite() && *n > 0.0).unwrap_or(1.0) as f64;
+                let iso = p.meta.iso.filter(|i| *i > 0).unwrap_or(100) as f64;
+                Some((t, p.file_name.as_str(), p.id, s, (s * iso / (n * n)).log2()))
+            })
+            .collect();
+        timed.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| cmp_name(a.1, b.1)).then(a.2.cmp(&b.2)));
+        timed.dedup_by_key(|x| x.2);
+        let mut runs: Vec<Vec<(i64, &str, PhotoId, f64, f64)>> = Vec::new();
+        for x in timed {
+            match runs.last_mut() {
+                Some(r) if r.last().is_some_and(|l| (x.0 - l.0) as f64 <= l.3.ceil() + 1.0) => r.push(x),
+                _ => runs.push(vec![x]),
+            }
+        }
+        for r in runs {
+            let (lo, hi) = r.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), x| (lo.min(x.4), hi.max(x.4)));
+            if r.len() >= 2 && hi - lo >= 0.5 {
+                sets.push(r.iter().map(|x| x.2).collect());
+            }
+        }
+        sets
     }
 }
 
@@ -353,6 +410,46 @@ mod tests {
         let back = Catalog::from_snapshot(&c.to_snapshot()).unwrap();
         assert_eq!(back.stack(id), c.stack(id));
         assert_eq!(back.clone().alloc_stack_id(), c.clone().alloc_stack_id());
+    }
+
+    #[test]
+    fn bracket_sets_by_time_and_exposure() {
+        // (time, shutter, ISO, file name)
+        let shots = [
+            ("2026-08-01T09:20:36", "1/125", 640, "A1.ARW"), // a handheld bracket
+            ("2026-08-01T09:20:36", "1/125", 200, "A2.ARW"),
+            ("2026-08-01T09:20:37", "1/125", 2000, "A3.ARW"),
+            ("2026-08-01T09:20:37", "", 0, "A3-HDR.dng"),    // an earlier merge of it
+            ("2026-08-01T09:20:44", "1/125", 800, "B1.ARW"), // 7 s later: the next bracket
+            ("2026-08-01T09:20:44", "1/125", 250, "B2.ARW"),
+            ("2026-08-01T09:20:50", "1/1000", 160, "C1.ARW"), // a burst at one exposure
+            ("2026-08-01T09:20:50", "1/1000", 160, "C2.ARW"),
+            ("2026-06-27T23:34:59", "2", 320, "N1.ARW"), // 2 s night frames, 2.1 s apart
+            ("2026-06-27T23:35:01", "2", 100, "N2.ARW"),
+            ("2026-06-27T23:35:04", "2", 800, "N3.ARW"),
+            ("2026-06-27T23:36:00", "1/40", 250, "S1.ARW"), // stacked by hand: merged whatever its times
+            ("2026-06-27T23:39:00", "1/40", 250, "S2.ARW"),
+        ];
+        let mut c = Catalog::new();
+        let mut ids = Vec::new();
+        for (t, sh, iso, name) in shots {
+            let id = c.alloc_photo_id();
+            let mut p = Photo::new(id, Source::Demo { scene: 1 }, name, "ARW", 60, 40, "2026-01-01T00:00:00");
+            p.captured = Some(t.into());
+            p.meta.shutter = sh.into();
+            p.meta.iso = Some(iso);
+            p.meta.aperture = Some(5.6);
+            c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+            ids.push(id);
+        }
+        let op = c.group_ops(ids[11], &[ids[12]], true).unwrap();
+        c.apply(op).unwrap();
+        let sets = c.bracket_sets(&ids);
+        assert_eq!(sets, vec![vec![ids[11], ids[12]], vec![ids[8], ids[9], ids[10]], vec![ids[0], ids[1], ids[2]], vec![ids[4], ids[5]]]);
+        // a stack's merge result on top is left out; a stack selected twice is merged once
+        let op = c.stack_with_ops(ids[3], &[ids[0], ids[1], ids[2]]).unwrap();
+        c.apply(op).unwrap();
+        assert_eq!(c.bracket_sets(&[ids[3], ids[0]]), vec![vec![ids[0], ids[1], ids[2]]]);
     }
 
     #[test]

@@ -11,6 +11,8 @@
   zip needs the Visual C++ redistributable. Signing is delegated to sign.ps1 (skipped with a
   warning when no signing secrets are set).
 
+  Fonts: uses CRAFT_FONTS_DIR or ../craft-fonts; downloads the pinned checkout if absent.
+
   Needs: Rust (MSVC toolchain + the target), the Windows SDK (rc.exe, signtool.exe),
   and WiX v5: dotnet tool install --global wix --version 5.0.2
   The WiX UI and Util extensions (installer dialogs, "Launch LightCraft" on Finish) are added to
@@ -81,6 +83,8 @@ if (-not $env:LIGHTCRAFT_BUILD_DATE) { $env:LIGHTCRAFT_BUILD_DATE = (Get-Date).T
 Write-Output "LightCraft $Version for Windows $Arch ($Target)"
 
 if (-not $SkipBuild) {
+  . (Join-Path $PSScriptRoot 'fonts.ps1')
+  Initialize-CraftFonts $Root
   # Static CRT: no VC++ redistributable needed. Scoped to the target so host build scripts and
   # proc-macros are unaffected.
   $flagVar = 'CARGO_TARGET_' + ($Target.ToUpper() -replace '-', '_') + '_RUSTFLAGS'
@@ -112,6 +116,9 @@ $Stage = Join-Path $TargetDir "windows-package\$Arch"
 Remove-Item -Recurse -Force $Stage -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $Stage | Out-Null
 Copy-Item (Join-Path $Bin 'lightcraft.exe'), (Join-Path $Bin 'lightcraft-cli.exe') $Stage
+# Include the embedded fonts' unmodified OFL texts in both installer and portable releases.
+. (Join-Path $PSScriptRoot 'font-licences.ps1')
+Write-FontLicences (Join-Path $Stage 'FONT-LICENCES.txt') (Join-Path $Root 'assets\fonts\OFL-Inter.txt') $env:CRAFT_FONTS_DIR
 
 & (Join-Path $PSScriptRoot 'sign.ps1') (Join-Path $Stage 'lightcraft.exe') (Join-Path $Stage 'lightcraft-cli.exe')
 
@@ -147,6 +154,7 @@ $Portable = Join-Path $TargetDir "windows-package\lightcraft-$Version-windows-$A
 Remove-Item -Recurse -Force $Portable -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $Portable | Out-Null
 Copy-Item (Join-Path $Stage '*.exe') $Portable
+Copy-Item (Join-Path $Stage 'FONT-LICENCES.txt') $Portable
 foreach ($f in 'README.md', 'LICENSE', 'LICENSE-MIT', 'LICENSE-APACHE', 'NOTICE') {
   $p = Join-Path $Root $f
   if (Test-Path $p) { Copy-Item $p $Portable }
@@ -163,7 +171,15 @@ Compress-Archive -Path $Portable -DestinationPath $Zip
 
 # Smoke-test the CLI when this machine can run it. An ARM64 build made on an x64 runner can't run
 # here; .github/workflows/windows-arm64.yml installs and runs it on ARM64 instead.
-$HostArch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant()
+# Windows PowerShell 5.1 can expose OSArchitecture as null. Use Windows' environment
+# variables instead; PROCESSOR_ARCHITEW6432 identifies the OS when the shell is emulated.
+$nativeArchitecture = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
+$HostArch = switch ($nativeArchitecture) {
+  'AMD64' { 'x64' }
+  'x86' { 'x86' }
+  'ARM64' { 'arm64' }
+  default { 'unknown' }
+}
 if ($Arch -ne 'arm64' -or $HostArch -eq 'arm64') {
   Invoke-Native 'lightcraft-cli --version' { & (Join-Path $Stage 'lightcraft-cli.exe') --version }
 } else {

@@ -1,14 +1,15 @@
 //! Every EXIF / TIFF / GPS tag of a file as readable `(group, name, value)` rows (the Info
 //! panel's "All Metadata"). Names follow the public TIFF 6.0 / EXIF 2.3 / DNG specifications;
 //! common enumerations are spelled out, everything else is shown as stored. Maker notes and
-//! binary blobs are summarised by size.
+//! binary blobs are summarised by size; of a maker note only the lens name is listed (the
+//! Panasonic one, as Panasonic writes no Exif LensModel).
 
 use lightcraft_tiff::{Ifd, Tiff, Value};
 
 /// One metadata row.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TagRow {
-    /// `TIFF`, `EXIF`, `GPS`, `Interop`.
+    /// `TIFF`, `EXIF`, `GPS`, `Interop`, or a maker note's (`Panasonic`).
     pub group: &'static str,
     pub tag: u16,
     pub name: String,
@@ -309,6 +310,13 @@ fn nikon_nef_compression(tiff: &Tiff, bytes: &[u8]) -> Option<&'static str> {
     nef_compression(mn.ifd.u32(0x0093)?)
 }
 
+/// The Panasonic maker note's lens name (LensType, `0x0051`) as a row, the name `photo.inspect` shows as the lens.
+fn panasonic_lens_row(data: &[u8], tiff: &Tiff, out: &mut Vec<TagRow>) {
+    if let Some(lens) = crate::exif::panasonic_maker_note_lens(data, tiff) {
+        out.push(TagRow { group: "Panasonic", tag: 0x0051, name: "Lens Type".into(), value: lens.trim().to_string() });
+    }
+}
+
 /// Every tag of a parsed TIFF structure (a TIFF-based raw, a TIFF, or an EXIF block): IFD0,
 /// then the EXIF, GPS and interoperability IFDs. A raw file's Compression row is the sensor
 /// image's, not IFD0's thumbnail's.
@@ -347,10 +355,15 @@ pub fn file_tag_rows(bytes: &[u8]) -> Vec<TagRow> {
         {
             row.value = words.to_string();
         }
+        panasonic_lens_row(bytes, &t, &mut rows);
         return rows;
     }
     let Some(exif) = crate::embedded(bytes).exif else { return Vec::new() };
-    Tiff::parse(crate::strip_exif_header(&exif)).map(|t| tag_rows(&t)).unwrap_or_default()
+    let data = crate::strip_exif_header(&exif);
+    let Ok(t) = Tiff::parse(data) else { return Vec::new() };
+    let mut rows = tag_rows(&t);
+    panasonic_lens_row(data, &t, &mut rows);
+    rows
 }
 
 #[cfg(test)]
@@ -460,5 +473,23 @@ mod tests {
     fn plain_tiff_keeps_its_own_compression() {
         let b = [b"II*    ".to_vec(), ifd(&[entry(0x0103, 3, 1, 8)])].concat();
         assert_eq!(compression(&file_tag_rows(&b)), ["Deflate"]);
+    }
+
+    #[test]
+    fn panasonic_lens_is_listed_from_the_maker_note() {
+        let lens = |rows: &[TagRow]| rows.iter().filter(|r| r.group == "Panasonic" && r.tag == 0x0051).map(|r| r.value.clone()).collect::<Vec<_>>();
+        // a RW2: the note is only in the JpgFromRaw's Exif
+        let rw2 = crate::exif::tests::panasonic_rw2("LUMIX S 85/F1.8");
+        assert_eq!(lens(&file_tag_rows(&rw2)), ["LUMIX S 85/F1.8"]);
+        // a JPEG: the note is in its own Exif
+        let exif = crate::exif::tests::panasonic_exif(lightcraft_tiff::ByteOrder::Big, Some("LUMIX G 25/F1.7"), None);
+        let mut jpg = vec![0xff, 0xd8, 0xff, 0xe1];
+        jpg.extend_from_slice(&((exif.len() + 8) as u16).to_be_bytes());
+        jpg.extend(b"Exif\0\0");
+        jpg.extend(exif);
+        jpg.extend_from_slice(&[0xff, 0xda, 0, 2, 0xff, 0xd9]);
+        assert_eq!(lens(&file_tag_rows(&jpg)), ["LUMIX G 25/F1.7"]);
+        // no Panasonic note, no row
+        assert!(lens(&file_tag_rows(&synthetic_raw(Some(3)))).is_empty());
     }
 }

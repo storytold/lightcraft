@@ -107,6 +107,21 @@ fn removing_a_folder_moves_its_photos_to_recently_deleted_and_undo_brings_them_b
 }
 
 #[test]
+fn removing_a_folder_drops_its_photos_from_stacks() {
+    let mut s = session();
+    let trip: Vec<_> =
+        s.catalog.photos().filter(|p| matches!(&p.source, Source::File { path } if path.contains("/pics/trip/"))).map(|p| p.id).collect();
+    assert_eq!(trip.len(), 2);
+    s.execute("library.select", &json!({"ids": [trip[0].0, trip[1].0], "active": trip[0].0})).unwrap();
+    s.execute("stack.group", &json!({})).unwrap();
+    assert_eq!(s.catalog.stack_of(trip[0]).unwrap().photos.len(), 2);
+    s.execute("library.removeFolder", &json!({"path": "/pics/trip"})).unwrap();
+    assert!(s.catalog.stack_of(trip[0]).is_none() && s.catalog.stack_of(trip[1]).is_none());
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.catalog.stack_of(trip[0]).unwrap().photos.len(), 2);
+}
+
+#[test]
 fn removing_a_folder_that_holds_nothing_or_a_whole_disk_is_refused() {
     let mut s = session();
     assert!(s.execute("library.removeFolder", &json!({"path": "/elsewhere"})).is_err());

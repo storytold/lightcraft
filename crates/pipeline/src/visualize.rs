@@ -199,12 +199,17 @@ pub fn apply(img: &mut Rgba8, o: Overlay, plan: &Plan<'_>, mask: Option<&Plane>,
             }
         }
         Overlay::AllMasks { view, color, opacity } => {
-            if let Some(planes) = masks {
-                for a in planes {
-                    if (a.width, a.height) == (img.width, img.height) {
-                        mask_view(img, a, view, color, opacity);
-                    }
+            // one view of the union of the masks: painting the planes one after another
+            // overwrites (White on Black, Image on Black…) or compounds (Color) the earlier ones
+            let mut union: Option<Plane> = None;
+            for a in masks.unwrap_or_default().iter().filter(|a| (a.width, a.height) == (img.width, img.height)) {
+                match &mut union {
+                    None => union = Some(a.clone()),
+                    Some(u) => u.data.iter_mut().zip(&a.data).for_each(|(u, a)| *u = u.max(*a)),
                 }
+            }
+            if let Some(u) = &union {
+                mask_view(img, u, view, color, opacity);
             }
         }
     }
@@ -425,7 +430,6 @@ mod tests {
             components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape: right }],
             ..Default::default()
         });
-        let plain = render(&src, &info, &s, &RenderRequest::fit(80, 40)).image;
         let o = Overlay::AllMasks { view: MaskView::WhiteOnBlack, color: [255, 0, 0], opacity: 100 };
         let img = render(&src, &info, &s, &RenderRequest { overlay: o, ..RenderRequest::fit(80, 40) }).image;
         let (in_l, in_r, mid) = (20 * 80 + 12, 20 * 80 + 60, 20 * 80 + 40);
@@ -435,7 +439,7 @@ mod tests {
         // a hidden mask is skipped
         s.masks[1].visible = false;
         let img2 = render(&src, &info, &s, &RenderRequest { overlay: o, ..RenderRequest::fit(80, 40) }).image;
-        assert_eq!(img2.data[in_r], plain.data[in_r], "hidden right mask not painted");
+        assert_eq!(img2.data[in_r], [0, 0, 0, 255], "hidden right mask not painted: black like everything outside");
         assert_eq!(img2.data[in_l], [255; 4], "visible left mask still painted");
         // parts round trip and a stable, distinct cache key
         let (k, v) = o.to_parts();

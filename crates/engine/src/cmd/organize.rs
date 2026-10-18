@@ -22,7 +22,7 @@ fn stacks_of(s: &Session, targets: &[PhotoId]) -> Vec<StackId> {
 
 fn in_stack(s: &Session) -> std::result::Result<(), String> {
     has_selection(s)?;
-    if stacks_of(s, &s.targets(&Value::Null)).is_empty() { Err("no stacked photo selected".into()) } else { Ok(()) }
+    if stacks_of(s, &s.selected()).is_empty() { Err("no stacked photo selected".into()) } else { Ok(()) }
 }
 
 fn has_stacks(s: &Session) -> std::result::Result<(), String> {
@@ -111,7 +111,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "{ids?, name?} → {ids: [new photo ids]} — a new catalog entry sharing the original file, with independent settings; stacked with its original and named `name` or \"Copy N\"",
             has_selection,
             |s, p| {
-                let targets = s.targets(p);
+                let targets = s.targets(p)?;
                 let name = str_param(p, "name").filter(|n| !n.trim().is_empty()).map(str::to_string);
                 let mut made = Vec::new();
                 for t in targets {
@@ -134,7 +134,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "{ids?, top?: photoId (default: the active photo), collapsed?: bool (default true)} — stacks the photos are already in are merged",
             has_selection,
             |s, p| {
-                let targets = s.targets(p);
+                let targets = s.targets(p)?;
                 let top = p
                     .get("top")
                     .and_then(Value::as_u64)
@@ -153,11 +153,11 @@ pub fn specs() -> Vec<CommandSpec> {
             }
         ),
         cmd!("stack.ungroup", "Ungroup Stack", ["Photo", "Stack"], Some("Cmd+Shift+G"), "{ids?}", in_stack, |s, p| {
-            let ops = s.catalog.ungroup_ops(&s.targets(p));
+            let ops = s.catalog.ungroup_ops(&s.targets(p)?);
             Ok(json!({"ungrouped": commit_ops(s, "Ungroup Stack", ops)?}))
         }),
         cmd!("stack.remove", "Remove from Stack", ["Photo", "Stack"], None, "{ids?}", in_stack, |s, p| {
-            let ops = s.catalog.remove_from_stacks_ops(&s.targets(p));
+            let ops = s.catalog.remove_from_stacks_ops(&s.targets(p)?);
             Ok(json!({"changed": commit_ops(s, "Remove from Stack", ops)?}))
         }),
         cmd!("stack.setTop", "Set as Top of Stack", ["Photo", "Stack"], Some("Shift+S"), "{id?} (default: the active photo)", in_stack, |s, p| {
@@ -189,7 +189,7 @@ pub fn specs() -> Vec<CommandSpec> {
             }
         ),
         cmd!("stack.toggle", "Expand/Collapse Stack", ["Photo", "Stack"], Some("S"), "{ids?, collapsed?: bool}", in_stack, |s, p| {
-            let stacks = stacks_of(s, &s.targets(p));
+            let stacks = stacks_of(s, &s.targets(p)?);
             let first = stacks.first().and_then(|id| s.catalog.stack(*id)).map(|st| st.collapsed).unwrap_or(false);
             let collapsed = bool_or(p, "collapsed", !first);
             set_collapsed(s, stacks, collapsed, if collapsed { "Collapse Stack" } else { "Expand Stack" })
@@ -212,7 +212,7 @@ pub fn specs() -> Vec<CommandSpec> {
             |s, p| {
                 let gap = f64_or(p, "gap", 60.0).max(0.0);
                 let explicit = p.get("ids").is_some();
-                let pool = if explicit || s.selection.ids.len() > 1 { s.targets(p) } else { s.visible_cloned() };
+                let pool = if explicit || s.selection.ids.len() > 1 { s.targets(p)? } else { s.visible_cloned() };
                 let groups = s.catalog.auto_stack_groups(&pool, gap);
                 let photos: usize = groups.iter().map(Vec::len).sum();
                 if bool_or(p, "preview", false) {

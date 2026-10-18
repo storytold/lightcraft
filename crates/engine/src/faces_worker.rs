@@ -127,6 +127,17 @@ fn pool_threads_for(cores: usize, pace: Pace, cap: Option<usize>) -> usize {
     cap.map_or(n, |c| n.min(c.max(1)))
 }
 
+/// How much of the GPU face models may take at `pace`: face model runs at once, and the share of the time it may be
+/// busy. Paused or light: one run at a time, busy a quarter of the time (the user is working, and the window renders
+/// on the same GPU); normal: two at once, busy most of the time; full: as fast as it goes.
+pub(crate) fn gpu_pace(pace: Pace) -> (usize, f32) {
+    match pace {
+        Pace::Pause | Pace::Light => (1, 0.25),
+        Pace::Normal => (2, 0.75),
+        Pace::Full => (4, 1.0),
+    }
+}
+
 /// One photo's faces to embed (and, if `detect`, to find first).
 pub(crate) struct Prepared {
     /// `<model id>@<sha256>` the embeddings are for.
@@ -134,6 +145,9 @@ pub(crate) struct Prepared {
     /// The session's face epoch when this was prepared: another library has been opened since if it differs.
     pub epoch: u64,
     pub id: PhotoId,
+    /// The photo's content key ([`crate::media::content_key`]) when this was prepared: its file was replaced (Reload
+    /// after an outside edit) since if it differs.
+    pub content: String,
     pub job: RenderJob,
     /// A raw's embedded preview, tried before the render job (much faster than decoding the raw).
     pub preview: Option<(String, PreviewLoader)>,
@@ -150,6 +164,7 @@ pub(crate) struct Done {
     pub tag: String,
     pub epoch: u64,
     pub id: PhotoId,
+    pub content: String,
     /// Each face's region, its embedding (`None` when it could not be made) and the box to show it by.
     pub results: Vec<(Rect, Option<Vec<f32>>, Rect)>,
     /// Faces were to be looked for in this photo.
@@ -177,7 +192,7 @@ fn face_rect(f: &Face) -> Option<Rect> {
 
 /// Do the work for one photo. Never panics: whatever goes wrong, its faces come back as `None`.
 pub(crate) fn process(p: Prepared, embedder: &Embedder) -> Done {
-    let Prepared { tag, epoch, id, job, preview, todo, detect, detector } = p;
+    let Prepared { tag, epoch, id, content, job, preview, todo, detect, detector } = p;
     let fallback = |todo: Vec<Rect>| todo.into_iter().map(|r| (r, None, r)).collect::<Vec<_>>();
     let rects = todo.clone();
     let run = catch_unwind(AssertUnwindSafe(|| {
@@ -197,7 +212,8 @@ pub(crate) fn process(p: Prepared, embedder: &Embedder) -> Done {
         let img = Rgb { data: &rgb, width: w, height: h };
         let (iw, ih) = embedder.input_size();
         let scaled = |f: &Face| f.landmarks.map(|(x, y)| (x * w as f32, y * h as f32));
-        let mut results: Vec<(Rect, Option<Vec<f32>>, Rect)> = todo
+        // every face's crop first, then all of them through the model at once (one GPU dispatch for a group photo)
+        let mut faces: Vec<(Rect, Option<Vec<u8>>, Rect)> = todo
             .into_iter()
             .map(|rect| {
                 let best = found.iter().map(|f| (overlap(&rect, f), f)).filter(|(o, _)| *o >= MATCH_IOU).max_by(|a, b| a.0.total_cmp(&b.0));
@@ -214,20 +230,18 @@ pub(crate) fn process(p: Prepared, embedder: &Embedder) -> Done {
                         ih,
                     ),
                 };
-                let v = crop.and_then(|c| embedder.embed(&c).ok());
                 // shown by the detector's box where it found this face: every face then has the same tightness
                 let view = best.and_then(|(_, f)| face_rect(f)).unwrap_or(rect);
-                (rect, v, view)
+                (rect, crop, view)
             })
             .collect();
         // a photo with no face regions: what the detector is sure of becomes its faces, embedded in the same pass
         let new_faces = if detect {
-            detected.map(|faces| {
+            detected.map(|found| {
                 let mut rects = Vec::new();
-                for f in faces.iter().filter(|f| f.score >= REGION_SCORE) {
+                for f in found.iter().filter(|f| f.score >= REGION_SCORE) {
                     let Some(rect) = face_rect(f) else { continue };
-                    let v = align_to_template(&img, &scaled(f), iw, ih).and_then(|c| embedder.embed(&c).ok());
-                    results.push((rect, v, rect));
+                    faces.push((rect, align_to_template(&img, &scaled(f), iw, ih), rect));
                     rects.push(rect);
                 }
                 rects
@@ -235,10 +249,14 @@ pub(crate) fn process(p: Prepared, embedder: &Embedder) -> Done {
         } else {
             None
         };
+        let crops: Vec<&[u8]> = faces.iter().filter_map(|(_, c, _)| c.as_deref()).collect();
+        let mut embedded = embedder.embed_batch(&crops).into_iter();
+        let results: Vec<(Rect, Option<Vec<f32>>, Rect)> =
+            faces.into_iter().map(|(rect, crop, view)| (rect, crop.and_then(|_| embedded.next().and_then(Result::ok)), view)).collect();
         (results, new_faces)
     }));
     let (results, found) = run.unwrap_or_else(|_| (fallback(rects), None));
-    Done { tag, epoch, id, results, detect_wanted: detect, found }
+    Done { tag, epoch, id, content, results, detect_wanted: detect, found }
 }
 
 type Job = (Arc<Embedder>, Prepared);

@@ -22,6 +22,14 @@ it open, `--library` on the same folder fails with "This library is already open
 `--demo` starts the headless session with the procedurally generated demo library;
 `--compact` lists only the helper tools (see below). In connect mode the server starts even when
 the app is not running yet and connects on the first call (and reconnects if the app restarts).
+A request is sent again only when it never reached the app. If the connection drops after a request
+was sent but before its reply, the tool fails with "the outcome is unknown" and nothing is resent, so a
+command such as undo can't run twice: check the app's state before retrying. Replies must be
+newline-terminated, at most 64 MiB before the newline (including encoded previews/screenshots),
+and carry the request's integer `id`, a boolean `ok`, and either a `result` or a string `error`.
+A malformed, incomplete, oversized or mismatched reply also closes the connection and reports
+an unknown outcome without resending. An idless `ok: false` with a string `error` is preserved
+as a pre-dispatch refusal (for example, too many control connections); the next call reconnects.
 
 Logs go to stderr; stdout carries only protocol messages.
 
@@ -200,6 +208,37 @@ JSON params (documented in each tool's description and by `list_commands`). Pass
 leave these per-command tools out when a client struggles with a large tool list; `run_command`
 still reaches every command.
 
+Slideshow slides, for example: `cmd_slideshow_layout` reads or changes the slide layout (margins,
+zoom to fill, stroke border, cast shadow, backdrop colour, colour wash, background image; saved with
+the library) and `cmd_slideshow_preview {id?, width?, height?, path?}` composes one slide with it —
+written as a PNG to `path`, or returned as base64 PNG in `png` — so an agent can look at a layout
+before playing it. `cmd_slideshow_playback` sets the timing and fades. `cmd_slideshow_overlays` sets the
+overlays drawn on every slide (identity plate text or image, rating stars, text overlays with tokens such as
+`{caption}` or `{exposure}`, the export watermark); its reply lists `warnings` (an unreadable plate image, tags that
+aren't tokens), and `cmd_slideshow_preview` returns each overlay's box. `cmd_slideshow_titles` sets the intro and ending
+screens (colour, the identity plate or a line of text, scale, duration), and `cmd_slideshow_preview {title: "intro"}`
+renders one. Templates bundle all four: `cmd_slideshow_templates_list` lists the built-in and user templates (and files
+it skipped), `cmd_slideshow_templates_apply {id}` replaces the settings with one (the replaced ones stay available as
+`{id: "previous"}` for the session), `cmd_slideshow_preview {template: id}` previews one without applying it, and
+`cmd_slideshow_templates_save` / `update` / `rename` / `delete` / `import` / `export` manage the user's own (JSON files
+in `<settings>/slideshow-templates`).
+`cmd_slideshow_export {format: "pdf"|"jpeg"|"video", path, size?, quality?, fps?, container?: "mp4"|"webm",
+fullScreen?, name?, ids?, wait?}` writes the slideshow (titles included) as a PDF (a page per slide), a numbered JPEG
+sequence in a folder, or an AV1 video (no audio). It runs in the background and returns `{taskId, total, …}`:
+`cmd_activity_list` shows its progress, `cmd_activity_cancel {id: taskId}` stops it (nothing is left on disk) and
+`cmd_slideshow_exportStatus` gives the result (`pages`, `files`, or `frames` / `samples` / `seconds` for video) or the
+error. With `wait: true` the call blocks and replies with the result.
+
+### Preview-only raws after an update
+
+A raw LightCraft couldn't decode when it was imported is shown from its embedded preview
+(`previewOnly` in `catalog.query`). The desktop app rechecks such photos in the background when a
+library opens in a newer (or older) LightCraft version, so a raw the new decoder handles develops
+from its raw data without a manual Reload. Headless sessions don't do this on their own: call
+`cmd_library_recheckPreviewOnly` (`{all: true}` ignores the version stamps, e.g. to test a decoder
+build) → `{checked, updated, cleared}`. Like the app's recheck, it isn't an undo step and keeps
+develop settings and history.
+
 ## Resources
 
 `resources/list` / `resources/read` serve JSON snapshots:
@@ -208,7 +247,7 @@ still reaches every command.
 |---|---|
 | `lightcraft://library` | Source, filter, sort, selection, undo/redo labels (`library.state`) |
 | `lightcraft://photos` | Photos in the current view (`catalog.query`) |
-| `lightcraft://photo/active` | Everything about the active photo (`photo.inspect`) |
+| `lightcraft://photo/active` | Everything about the active photo (`photo.inspect`), including the camera's focus point as `meta.focus` when the file records one ([focus-points.md](focus-points.md); `run_command photo.readFocusPoints {wait: true}` reads it for photos imported before it was read, a few KB per file) |
 | `lightcraft://develop/active` | The active photo's develop settings (`develop.get`) |
 | `lightcraft://controls` | Every develop control with its current value (`develop.controls`) |
 
@@ -285,7 +324,7 @@ lightcraft-cli calibrate --max 300 ~/Pictures/2026   # camera colour profiles (d
 `app.export` (MCP `export` tool, `lightcraft-cli run`, the desktop app) takes `addToPhotos: true` and
 `photosAlbum` to hand the files it wrote to Apple Photos, into that album (a top-level album of exactly that
 name, made when missing). The result's `applePhotos` is the import job: `{job, running, requested, album}`
-plus `{imported, ids, warning?}`, `{error}` or `{skipped}` once Photos is done; the files are written either
+plus `{imported, ids, warning?}`, `{error}` or `{skipped}` (with `cancelled: true` when the export was cancelled) once Photos is done; the files are written either
 way. Headless (this server, `lightcraft-cli`) waits for Photos by default; the desktop app (connect mode)
 answers with the running job and `export.photosImports {job}` gives the outcome. `export.addToPhotos {paths,
 album?, wait?}` does the same for files already on disk (`wait` defaults to true headless, false in the desktop
@@ -310,6 +349,16 @@ photo, suppressing its response. Unknown/completed request ids are ignored. A ph
 being processed finishes first: completed photos remain, each written with the existing atomic
 file writer, and there are no partial files to delete. Unrelated outputs and earlier exports
 are untouched. A failed export is an `isError` tool result. Transport mutexes recover poisoning.
+
+If a protocol write or flush fails, the CLI reports the output error and shuts down without
+waiting for stdin to close. Output failures are observable only when writing. An active direct
+headless export stops at the next photo boundary; a synchronous command and normal backend
+cleanup must finish first. Completed exports and library cleanup retain their usual guarantees.
+
+Library callers serving process stdin use `Server::serve_stdio(stdout())` once per process and
+exit after it returns. Its single stdin worker may remain blocked until process exit. The generic
+`Server::serve(input, output)` keeps borrowed input scoped: its caller must arrange input EOF or
+an input error, even when output fails.
 
 Connect mode and exports inside `command_batch` remain synchronous and do not report MCP
 progress or cancellation. Use a direct headless export call for this behavior.

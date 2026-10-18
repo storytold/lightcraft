@@ -705,6 +705,7 @@ fn a_photo_whose_file_changed_has_no_picture_until_it_is_made_again() {
             file_size: p.file_size + 1,
             content_hash: Some("ffffffffffffffffffffffffffffffff".into()),
             preview_only: None,
+            preview_checked: String::new(),
         },
     )
     .unwrap();

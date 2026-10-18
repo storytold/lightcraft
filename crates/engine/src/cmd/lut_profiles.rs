@@ -135,6 +135,8 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
         imported.push(json!({"id": id, "name": display, "group": group}));
     }
     s.save_prefs()?;
+    // presets that name these profiles use them now
+    crate::profile_refs::refresh(s);
     Ok(json!({"imported": imported, "failed": failed}))
 }
 
@@ -160,6 +162,7 @@ pub fn specs() -> Vec<CommandSpec> {
             }
             lightcraft_pipeline::lut::unregister(&id);
             s.save_prefs()?;
+            crate::profile_refs::refresh(s);
             Ok(json!({"deleted": id}))
         }),
     ]

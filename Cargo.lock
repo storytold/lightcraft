@@ -1073,6 +1073,11 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-docpath"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=82a24b006eefa036b43c09a67fb9a3fbd17ffe63#82a24b006eefa036b43c09a67fb9a3fbd17ffe63"
+
+[[package]]
 name = "craft-ui"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=5c874d51eeb3de70e735c8ce87a59a7dedd47675#5c874d51eeb3de70e735c8ce87a59a7dedd47675"
@@ -3073,7 +3078,7 @@ dependencies = [
 
 [[package]]
 name = "lightcraft"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "eframe",
  "egui",
@@ -3081,6 +3086,7 @@ dependencies = [
  "lightcraft-engine",
  "lightcraft-raster",
  "lightcraft-sysmem",
+ "lightcraft-testkit",
  "lightcraft-ui-egui",
  "log",
  "muda",
@@ -3097,7 +3103,7 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-catalog"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "crc32fast",
  "lightcraft-develop",
@@ -3114,7 +3120,7 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-cli"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "dhat",
  "lightcraft-codecs",
@@ -3130,7 +3136,7 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-codecs"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "avif-serialize",
  "bytemuck",
@@ -3144,6 +3150,7 @@ dependencies = [
  "lightcraft-geom",
  "lightcraft-heif",
  "lightcraft-raster",
+ "lightcraft-testkit",
  "moxcms 0.9.1",
  "png",
  "proptest",
@@ -3159,7 +3166,7 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-color"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "lightcraft-geom",
  "proptest",
@@ -3168,7 +3175,7 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-denoise"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "faer-core",
  "lightcraft-denoise-core",
@@ -3185,7 +3192,7 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-denoise-core"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "lightcraft-raster",
  "miniz_oxide 0.8.9",
@@ -3200,7 +3207,7 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-develop"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "lightcraft-color",
  "lightcraft-geom",
@@ -3212,9 +3219,10 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-engine"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "ab_glyph",
+ "craft-docpath",
  "harfrust",
  "jxl-oxide",
  "libc",
@@ -3239,6 +3247,8 @@ dependencies = [
  "lightcraft-raw",
  "lightcraft-scenes",
  "lightcraft-segment",
+ "lightcraft-slideshow",
+ "lightcraft-testkit",
  "lightcraft-tiff",
  "log",
  "miniz_oxide 0.8.9",
@@ -3252,8 +3262,9 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-faces"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
+ "lightcraft-testkit",
  "matrixmultiply",
  "ndarray",
  "proptest",
@@ -3266,7 +3277,7 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-fetch"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "log",
  "rustls",
@@ -3277,7 +3288,7 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-geocode"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "miniz_oxide 0.8.9",
  "serde",
@@ -3285,7 +3296,7 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-geom"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "proptest",
  "serde",
@@ -3293,17 +3304,19 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-gpu"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "bytemuck",
  "lightcraft-color",
  "lightcraft-denoise",
  "lightcraft-develop",
+ "lightcraft-faces",
  "lightcraft-geom",
  "lightcraft-pipeline",
  "lightcraft-raster",
  "lightcraft-raw",
  "lightcraft-scenes",
+ "lightcraft-testkit",
  "log",
  "pollster 1.0.1",
  "wgpu",
@@ -3311,7 +3324,7 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-heif"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "heic-rs",
  "rayon",
@@ -3319,14 +3332,14 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-inpaint"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "rayon",
 ]
 
 [[package]]
 name = "lightcraft-lensdb"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "lightcraft-develop",
  "lightcraft-geom",
@@ -3335,7 +3348,7 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-mcp"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "lightcraft-codecs",
  "lightcraft-engine",
@@ -3346,7 +3359,7 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-merge"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "lightcraft-codecs",
  "lightcraft-color",
@@ -3362,7 +3375,7 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-meta"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "lightcraft-geom",
  "lightcraft-tiff",
@@ -3374,7 +3387,7 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-pipeline"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "image",
  "lightcraft-color",
@@ -3392,7 +3405,7 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-preview"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "jpeg-encoder",
  "lightcraft-raster",
@@ -3404,7 +3417,7 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-raster"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "libc",
  "lightcraft-color",
@@ -3416,14 +3429,16 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-raw"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
+ "dhat",
  "jpeg-encoder",
  "jxl-oxide",
  "lightcraft-color",
  "lightcraft-geom",
  "lightcraft-meta",
  "lightcraft-raster",
+ "lightcraft-testkit",
  "lightcraft-tiff",
  "miniz_oxide 0.8.9",
  "proptest",
@@ -3438,7 +3453,7 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-scenes"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "image",
  "lightcraft-color",
@@ -3449,11 +3464,12 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-segment"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "candle-core",
  "candle-nn",
  "lightcraft-fetch",
+ "lightcraft-testkit",
  "log",
  "serde",
  "serde_json",
@@ -3461,12 +3477,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "lightcraft-slideshow"
+version = "0.8.0"
+dependencies = [
+ "lightcraft-raster",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "lightcraft-sysmem"
-version = "0.7.1"
+version = "0.8.0"
+
+[[package]]
+name = "lightcraft-testkit"
+version = "0.8.0"
 
 [[package]]
 name = "lightcraft-tiff"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "proptest",
  "serde",
@@ -3475,7 +3504,7 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-ui-egui"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "craft-ui",
  "egui",
@@ -3493,6 +3522,8 @@ dependencies = [
  "lightcraft-pipeline",
  "lightcraft-preview",
  "lightcraft-raster",
+ "lightcraft-slideshow",
+ "lightcraft-testkit",
  "log",
  "serde",
  "serde_json",
@@ -3502,7 +3533,7 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-web"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "crc32fast",
  "eframe",
@@ -6972,7 +7003,7 @@ checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
 
 [[package]]
 name = "xtask"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "brotli",
  "flate2",

@@ -76,6 +76,11 @@ impl Weights {
         self.entries.contains_key(name)
     }
 
+    /// The shape stored in the header for `name`, without reading its data.
+    pub fn shape(&self, name: &str) -> Option<&[usize]> {
+        self.entries.get(name).map(|e| e.shape.as_slice())
+    }
+
     /// Tensor `name` as stored, on the CPU.
     pub fn read(&self, name: &str) -> Result<Tensor> {
         let e = self.entries.get(name).ok_or_else(|| Error::Model(format!("missing tensor `{name}`")))?;
@@ -97,11 +102,13 @@ pub struct Backend(pub Arc<Weights>);
 
 impl SimpleBackend for Backend {
     fn get(&self, s: Shape, name: &str, _h: candle_nn::Init, dtype: DType, dev: &Device) -> candle_core::Result<Tensor> {
-        let t = self.get_unchecked(name, dtype, dev)?;
-        if t.shape() != &s {
-            candle_core::bail!("shape mismatch for {name}: expected {s:?}, got {:?}", t.shape())
+        // compare against the header first, so a wrong-shaped tensor is never read or copied to the device
+        if let Some(stored) = self.0.shape(name)
+            && stored != s.dims()
+        {
+            candle_core::bail!("shape mismatch for {name}: expected {s:?}, got {stored:?}")
         }
-        Ok(t)
+        self.get_unchecked(name, dtype, dev)
     }
 
     fn get_unchecked(&self, name: &str, dtype: DType, dev: &Device) -> candle_core::Result<Tensor> {
@@ -125,6 +132,19 @@ mod tests {
         b.extend(std::iter::repeat_n(0u8, data_len));
         std::fs::write(&p, b).unwrap();
         p
+    }
+
+    #[test]
+    fn wrong_expected_shape_fails_before_the_data_is_read() {
+        let p = write("shape", r#"{"a":{"dtype":"F32","shape":[2,2],"data_offsets":[0,16]}}"#, 16);
+        let backend = Backend(Weights::open(&p).unwrap());
+        let ok = backend.get(Shape::from((2, 2)), "a", candle_nn::Init::Const(0.0), DType::F32, &Device::Cpu).unwrap();
+        assert_eq!(ok.dims(), &[2, 2]);
+        // cut the data off after opening: a read would now fail with an I/O error instead of a shape error
+        std::fs::OpenOptions::new().write(true).open(&p).unwrap().set_len(8).unwrap();
+        let err = backend.get(Shape::from((3, 3)), "a", candle_nn::Init::Const(0.0), DType::F32, &Device::Cpu).unwrap_err().to_string();
+        assert!(err.contains("shape mismatch"), "{err}");
+        let _ = std::fs::remove_file(p);
     }
 
     #[test]

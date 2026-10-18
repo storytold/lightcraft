@@ -22,7 +22,7 @@ fn check(name: &str, hash: u64, sensor: (usize, usize), developed: (usize, usize
 fn check_against(name: &str, hash: u64, sensor: (usize, usize), developed: Option<(usize, usize)>, reference: &str) {
     let path = corpus().join("raw").join(name);
     let Ok(bytes) = std::fs::read(&path) else {
-        eprintln!("skip: {} absent", path.display());
+        lightcraft_testkit::skip!(Corpus, "{} absent", path.display());
         return;
     };
     let raw = decode(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
@@ -118,9 +118,127 @@ fn canon_m50_craw_crop_is_the_shot_aspect() {
     // which is (12, 12) inside the valid sensor area.
     let path = corpus().join("raw").join("cr3-canon-m50-craw.cr3");
     let Ok(bytes) = std::fs::read(&path) else {
-        eprintln!("skip: {} absent", path.display());
+        lightcraft_testkit::skip!(Corpus, "{} absent", path.display());
         return;
     };
     let raw = decode(&bytes).unwrap();
     assert_eq!((raw.crop.x, raw.crop.y, raw.crop.width, raw.crop.height), (1012, 12, 4000, 4000));
+}
+
+/// Green of the decoded mosaic against the camera's embedded JPEG, on a `gw × gh` grid of the active area
+/// (gamma-encoded, Pearson). A misread CRX stream (wrong tile, plane, band or quantiser) leaves a picture that
+/// no longer follows the camera's own rendering; lens-corrected compact JPEGs keep it well above 0.6.
+fn green_vs_camera_jpeg(raw: &lightcraft_raw::RawImage, jpeg: &[u8], gw: usize, gh: usize) -> f64 {
+    use zune_core::{bytestream::ZCursor, colorspace::ColorSpace, options::DecoderOptions};
+    let opts = DecoderOptions::default().jpeg_set_out_colorspace(ColorSpace::RGB);
+    let mut d = zune_jpeg::JpegDecoder::new_with_options(ZCursor::new(jpeg), opts);
+    let px = d.decode().unwrap();
+    let info = d.info().unwrap();
+    let (jw, jh) = (info.width as usize, info.height as usize);
+    let mean = |sum: Vec<f64>, n: Vec<f64>| sum.iter().zip(&n).map(|(s, n)| s / n.max(1.0)).collect::<Vec<f64>>();
+    let (mut js, mut jn) = (vec![0f64; gw * gh], vec![0f64; gw * gh]);
+    for y in 0..jh {
+        for x in 0..jw {
+            let i = (y * gh / jh) * gw + x * gw / jw;
+            js[i] += f64::from(px[(y * jw + x) * 3 + 1]);
+            jn[i] += 1.0;
+        }
+    }
+    let RawData::U16(samples) = &raw.data else { panic!("integer sensor data expected") };
+    let cfa = raw.cfa.clone().expect("Bayer layout");
+    let (a, black, white) = (raw.active_area, f64::from(raw.black.mean()), f64::from(raw.white_at(0)));
+    let (mut rs, mut rn) = (vec![0f64; gw * gh], vec![0f64; gw * gh]);
+    for y in a.y..a.y + a.height {
+        for x in a.x..a.x + a.width {
+            if cfa.pattern[(y % 2) * 2 + x % 2] == 1 {
+                let i = ((y - a.y) * gh / a.height) * gw + (x - a.x) * gw / a.width;
+                rs[i] += ((f64::from(samples[y * raw.width + x]) - black).max(0.0) / (white - black)).powf(1.0 / 2.2);
+                rn[i] += 1.0;
+            }
+        }
+    }
+    let (r, j) = (mean(rs, rn), mean(js, jn));
+    let n = r.len() as f64;
+    let (mr, mj) = (r.iter().sum::<f64>() / n, j.iter().sum::<f64>() / n);
+    let cov: f64 = r.iter().zip(&j).map(|(x, y)| (x - mr) * (y - mj)).sum();
+    let vr: f64 = r.iter().map(|x| (x - mr).powi(2)).sum();
+    let vj: f64 = j.iter().map(|y| (y - mj).powi(2)).sum();
+    cov / (vr * vj).sqrt()
+}
+
+/// One CC0 file per further CR3 body (raw.pixls.us; URLs and SHA-256 in `RAW_SAMPLES`, xtask/src/main.rs).
+/// No external decoder was run on these: the sensor hashes pin LightCraft's own decode, every CRX stream
+/// decodes, and the mosaic follows the camera's own embedded JPEG (`green_vs_camera_jpeg` on 24 × 16 cells).
+/// The renders were also inspected at 100 % for tile, band and quantiser artefacts (none). See docs/cr3.md.
+#[test]
+fn canon_cr3_bodies_decode_like_the_camera_jpeg() {
+    // (file, sensor width × height, pinned FNV-1a of the sensor samples)
+    let cases: &[(&str, (usize, usize), u64)] = &[
+        ("cr3-canon-m200.cr3", (6288, 4056), 0x4edf_3f62_a6ce_b2ba),
+        ("cr3-canon-r10.cr3", (6192, 4060), 0xc140_2394_bf17_c2a2),
+        ("cr3-canon-r50v.cr3", (6192, 4060), 0xd60f_f557_0928_8d27),
+        ("cr3-canon-r6m3.cr3", (7144, 4760), 0x47a4_cb40_1233_cc80),
+        ("cr3-canon-powershot-v1-craw.cr3", (5928, 3944), 0xbc54_037c_de0f_472a),
+        ("cr3-canon-1dxm3-craw.cr3", (5568, 3708), 0x3472_dbe7_a666_1a61),
+        ("cr3-canon-250d-craw.cr3", (6288, 4056), 0xf4c4_dbf8_1c93_2118),
+        ("cr3-canon-850d.cr3", (6288, 4056), 0xedac_1b6a_43cf_4204),
+        ("cr3-canon-90d-craw.cr3", (7128, 4732), 0xfaac_50ca_858e_5563),
+        ("cr3-canon-m50m2.cr3", (6288, 4056), 0xf36f_717a_9250_ec89),
+        ("cr3-canon-m6m2-craw.cr3", (7128, 4732), 0x6dc0_4c24_7f9b_6673),
+        ("cr3-canon-r3.cr3", (6192, 4152), 0x4728_af6f_18b1_cba1),
+        ("cr3-canon-r50-craw.cr3", (6192, 4060), 0x0354_0075_5fe5_a2a7),
+        ("cr3-canon-r5-craw.cr3", (8352, 5586), 0xdb64_0502_1fd7_ba92),
+        ("cr3-canon-r6-craw.cr3", (5568, 3708), 0xd3e0_567e_1ffb_07f4),
+        ("cr3-canon-r6m2-craw.cr3", (6188, 4120), 0x5b1d_6de8_9562_00d4),
+        ("cr3-canon-r7.cr3", (7128, 4732), 0xb725_758b_4410_f4af),
+        ("cr3-canon-r-craw.cr3", (6888, 4546), 0xf9cd_81a3_249f_cfc7),
+        ("cr3-canon-rp-craw.cr3", (6384, 4224), 0xf48d_f06c_a1d6_7382),
+        ("cr3-canon-g5xm2-craw.cr3", (5632, 3710), 0xfed8_f701_f231_442f),
+        ("cr3-canon-g7xm3.cr3", (5632, 3710), 0x902e_be92_2fe7_8046),
+        ("cr3-canon-sx70.cr3", (5344, 3950), 0x000c_7fe9_fbec_f4c2),
+    ];
+    let mut seen = 0;
+    for &(name, sensor, hash) in cases {
+        let path = corpus().join("raw").join(name);
+        let Ok(bytes) = std::fs::read(&path) else {
+            eprintln!("skip: {} absent", path.display());
+            continue;
+        };
+        check_against(name, hash, sensor, None, "the pinned LightCraft decode");
+        let raw = decode(&bytes).unwrap();
+        let jpeg = lightcraft_raw::embedded_preview(&bytes).unwrap_or_else(|| panic!("{name}: no camera JPEG"));
+        let r = green_vs_camera_jpeg(&raw, &jpeg, 24, 16);
+        eprintln!("{name:34} {}x{}: green follows the camera JPEG, r = {r:.3}", raw.width, raw.height);
+        assert!(r > 0.6, "{name}: decoded mosaic does not follow the camera JPEG (r = {r:.3})");
+        seen += 1;
+    }
+    eprintln!("CR3 bodies checked on {seen} files");
+}
+
+#[test]
+fn canon_rp_lossless_sensor_is_exact() {
+    // raw.pixls.us/getfile.php/4674; SHA256
+    // dcbd0f6f9929de2e2331b0fd10a9d01e7cfd04c5a5e4038456de1647d714cdf2
+    check("cr3-canon-rp-raw.cr3", 0x5cb0_f464_04b8_b663, (6384, 4224), (6240, 4160));
+}
+
+#[test]
+fn canon_rp_craw_sensor_is_exact() {
+    // raw.pixls.us/getfile.php/4672; SHA256
+    // bd3270610593d37ff8a399908bb9406a4e32f9151d55bf19ac1cf8f10d787b46
+    check("cr3-canon-rp-craw.cr3", 0xf48d_f06c_a1d6_7382, (6384, 4224), (6240, 4160));
+}
+
+#[test]
+fn canon_rp_crop_mode_lossless_sensor_is_exact() {
+    // 1.6x crop mode: a single tile. raw.pixls.us/getfile.php/4673; SHA256
+    // 7d4ba45dc9264d598336133593c677b09774bcdf13b602ee770e72415a652a16
+    check("cr3-canon-rp-raw-crop.cr3", 0x4680_8a9d_e3b3_dcc7, (4032, 2656), (3888, 2592));
+}
+
+#[test]
+fn canon_rp_crop_mode_craw_sensor_is_exact() {
+    // raw.pixls.us/getfile.php/4671; SHA256
+    // 4a859ab137f792aedaf3416b0aad1497ebaab02052a49453902e226699154aa7
+    check("cr3-canon-rp-craw-crop.cr3", 0x39a6_0c4e_fed4_e1f4, (4032, 2656), (3888, 2592));
 }

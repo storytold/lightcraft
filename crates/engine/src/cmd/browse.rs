@@ -6,11 +6,14 @@
 //! Each browse records when the folders it listed were browsed. Untouched records of folders
 //! not browsed for [`Session::forget_local_days`] are forgotten (when the library opens, or with
 //! `library.forgetLocal`); see [`lightcraft_catalog::local`] for what "untouched" means. Files
-//! and sidecars on disk are never touched, and browsing the folder again brings them back.
+//! and sidecars on disk are never touched, and browsing the folder again brings them back. A
+//! browse also forgets at once the untouched records of the folder's files that are gone from
+//! the disk (deleted or moved by another app), so the folder shows what is on disk.
 
 use std::path::Path;
 
-use lightcraft_catalog::{Op, PhotoId};
+use lightcraft_catalog::query::in_folder;
+use lightcraft_catalog::{Op, PhotoId, Source};
 use serde_json::{Value, json};
 
 use super::{CommandSpec, always, bad, bool_or, cmd, str_param};
@@ -42,11 +45,73 @@ fn browse(s: &mut Session, p: &Value) -> Result<Value> {
     // looking at a folder never brings its deleted photos back (importing the files does)
     let opts = ImportOptions { mode: ImportMode::Add, local: true, on_deleted: crate::import::OnDeleted::Skip, ..Default::default() };
     let report = import_with(s, &files, &opts)?;
+    let forgotten = forget_gone(s, &dir_s, subfolders, &files);
     stamp_browsed(s, &dir_s, &files);
     s.browse = Some(Browse { path: dir_s.clone(), subfolders });
     s.source = LibrarySource::Folder;
+    s.keep_active_in_view();
     let shown = s.visible().len();
-    Ok(json!({"path": dir_s, "subfolders": subfolders, "photos": shown, "new": report.imported.len(), "failed": report.failed.len()}))
+    Ok(json!({
+        "path": dir_s,
+        "subfolders": subfolders,
+        "photos": shown,
+        "new": report.imported.len(),
+        "failed": report.failed.len(),
+        "forgotten": forgotten,
+    }))
+}
+
+impl Session {
+    /// Forget the untouched Local records of files gone from the folder `dir` (with its subfolders when
+    /// `subfolders`) that a browse just listed as `files`: what `library.browse` does after reading a folder, for a
+    /// UI that reads it on a worker thread instead. Returns how many went.
+    pub fn forget_gone_from(&mut self, dir: &str, subfolders: bool, files: &[String]) -> usize {
+        forget_gone(self, dir, subfolders, files)
+    }
+}
+
+/// Local records in the browsed folder whose files are no longer on disk (deleted or moved by
+/// another app) and that nothing was changed on are forgotten, as `library.forgetLocal` forgets
+/// them: the folder shows what is on disk, not photos that fail to load (and log an error) on
+/// every visit (issue #1392). Records the user changed stay, shown as missing, and so do those
+/// the session holds (selected, edited, in the undo history) or with a smart preview. Returns how
+/// many went.
+fn forget_gone(s: &mut Session, dir: &str, subfolders: bool, files: &[String]) -> usize {
+    let listed: std::collections::HashSet<&str> = files.iter().map(String::as_str).collect();
+    let held = held(s);
+    let smart = s.media.smart_dir.clone();
+    let gone: Vec<PhotoId> = s
+        .catalog
+        .photos()
+        .filter(|p| p.local && !p.deleted && !held.contains(&p.id))
+        // a smart preview may be all that is left of the picture
+        .filter(|p| !smart.as_ref().is_some_and(|d| crate::smart::file_path(d, p).exists()))
+        .filter(|p| match &p.source {
+            // a file left out of the listing is checked on disk: another spelling of its path, or
+            // a listing that missed it, keeps it
+            Source::File { path } => in_folder(path, dir, subfolders) && !listed.contains(path.as_str()) && !Path::new(path).exists(),
+            Source::Demo { .. } => false,
+        })
+        .map(|p| p.id)
+        .collect();
+    if gone.is_empty() {
+        return 0;
+    }
+    let mut forgotten = 0;
+    for chunk in s.catalog.forgettable_local(&gone).chunks(2000) {
+        let op = Op::Batch { ops: chunk.iter().map(|id| Op::RemovePhoto { id: *id }).collect() };
+        match s.catalog.apply(op.clone()) {
+            Ok(_) => {
+                s.pending_log.push(op);
+                forgotten += chunk.len();
+            }
+            Err(e) => log::warn!("forget Local records of files gone from {dir}: {e}"),
+        }
+    }
+    if forgotten > 0 {
+        log::info!("forgot {forgotten} untouched Local record(s) of files gone from {dir}");
+    }
+    forgotten
 }
 
 /// Folders whose browse time is refreshed at most this often (keeps repeated browsing from
@@ -82,7 +147,15 @@ fn stamp_browsed(s: &mut Session, root: &str, files: &[String]) {
 /// Photos the session still needs, whatever their state: shown, selected, being edited, or
 /// referred to by an undo / redo step.
 fn in_use(s: &mut Session) -> std::collections::HashSet<PhotoId> {
-    let mut keep: std::collections::HashSet<PhotoId> = s.visible().iter().copied().collect();
+    let mut keep = held(s);
+    keep.extend(s.visible().iter().copied());
+    keep
+}
+
+/// Photos the session holds whatever is shown: selected, being edited, or referred to by an undo
+/// / redo step.
+fn held(s: &Session) -> std::collections::HashSet<PhotoId> {
+    let mut keep: std::collections::HashSet<PhotoId> = std::collections::HashSet::new();
     keep.extend(s.selection.ids.iter().copied());
     keep.extend(s.selection.active);
     keep.extend(s.previous_active);
@@ -151,7 +224,7 @@ fn forget_local(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// The browsed photos among `ids` (default: the selection) become library photos.
 fn add_to_library(s: &mut Session, p: &Value) -> Result<Value> {
-    let ids: Vec<PhotoId> = s.targets(p).into_iter().filter(|id| s.catalog.photo(*id).is_some_and(|ph| ph.local)).collect();
+    let ids: Vec<PhotoId> = s.targets(p)?.into_iter().filter(|id| s.catalog.photo(*id).is_some_and(|ph| ph.local)).collect();
     if ids.is_empty() {
         return Ok(json!({"added": 0}));
     }
@@ -337,7 +410,7 @@ fn move_to_folder(s: &mut Session, p: &Value) -> Result<Value> {
     if !dir.is_dir() {
         return Err(bad(C, format!("{folder} is not a folder (create it first with folder.create)")));
     }
-    let ids = s.targets(p);
+    let ids = s.targets(p)?;
     if ids.is_empty() {
         return Err(bad(C, "no photos to move: select some or give ids"));
     }

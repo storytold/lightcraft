@@ -1,16 +1,23 @@
-# Builds and tests the workspace on FreeBSD, inside a FreeBSD VM on a Linux runner
-# (GitHub has no FreeBSD runners). GPU tests skip themselves when the VM has no adapter.
+# FreeBSD build and package check in a QEMU VM.
 name: FreeBSD
 
 on:
   push:
     branches: [main]
-  pull_request:
     paths:
-      - Cargo.toml
-      - Cargo.lock
-      - "**/Cargo.toml"
-      - .github/workflows/freebsd.yml
+      - ".github/workflows/freebsd.yml"
+      - "packaging/freebsd/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "crates/**"
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/freebsd.yml"
+      - "packaging/freebsd/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "crates/**"
   workflow_dispatch:
 
 concurrency:
@@ -22,34 +29,8 @@ permissions:
 
 jobs:
   freebsd:
-    name: FreeBSD 14 (build + test)
-    runs-on: ubuntu-latest
-    timeout-minutes: 300
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # Optional font build input, so the Japanese font tests run (they skip without it).
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: storytold/craft-fonts
-          ref: 8dcdacd5153e64560d109541a47d806f26f048c0
-          path: craft-fonts
-      - name: Build and test in a FreeBSD VM
-        uses: vmactions/freebsd-vm@c46abacb49f09938ca4e1702d15d836285d694cc # v1.5.9
-        with:
-          release: "14.3"
-          usesh: true
-          cpu: 4
-          mem: 12288
-          # Nothing to bring back; copying the target dir out of the VM fails on large builds.
-          copyback: false
-          prepare: |
-            pkg install -y git curl pkgconf cmake python3 libxkbcommon wayland libX11 libXcursor libXrandr libXi libxcb mesa-libs vulkan-loader gtk3 fontconfig freetype2 alsa-lib
-            curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal
-          run: |
-            . "$HOME/.cargo/env"
-            # The checkout is synced in under another owner; let tests that call git read it.
-            git config --global --add safe.directory "*"
-            rustc --version
-            export CRAFT_FONTS_DIR="$PWD/craft-fonts" CRAFT_FONTS_REQUIRED=1
-            CARGO_PROFILE_DEV_DEBUG=0 cargo build --workspace --all-targets --locked
-            CARGO_PROFILE_DEV_DEBUG=0 cargo test --workspace --locked
+    # Intentionally tracked at @main (not SHA-pinned) so org-wide CI improvements, security fixes, and build optimizations propagate without PR churn across all craftapp repos.
+    uses: storytold/craft-common-actions/.github/workflows/freebsd.yml@main
+    with:
+      require-craft-fonts: true
+      craft-fonts-ref: 3d9ab3a132ed0eff457e424226a435a901da30d3

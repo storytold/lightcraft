@@ -69,10 +69,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         ui.painter().text(pos2(head.left() + PAD, head.center().y), Align2::LEFT_CENTER, crate::i18n::tr("Named People"), t.semibold(15.0), t.text);
     // the person page last left (a face opened from it, or its back button): one click returns to it
     if let Some(last) = app.ui.last_person.clone().filter(|n| people.iter().any(|p| &p.name == n)) {
-        let label = fit(ui.painter(), &format!("{last} ›"), t.font(13.0), 240.0);
-        let width = ui.painter().layout_no_wrap(label.clone(), t.font(13.0), Color32::WHITE).size().x + 24.0;
+        let label = fit(ui.painter(), &last, t.font(13.0), 224.0);
+        let width = ui.painter().layout_no_wrap(label.clone(), t.font(13.0), Color32::WHITE).size().x + 44.0;
         let r = Rect::from_min_size(pos2(title.right() + 14.0, head.center().y - 12.0), vec2(width, 24.0));
-        let b = ui.put(r, egui::Button::new(RichText::new(label).font(t.font(13.0))).wrap_mode(egui::TextWrapMode::Extend));
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(r));
+        let b = crate::widgets::arrow_button(&mut child, RichText::new(label).font(t.font(13.0)), crate::icons::Icon::ChevronRight, false);
         register(ui.ctx(), "people:last", b.rect);
         if b.on_hover_text(crate::i18n::tr("Back to this person")).clicked() {
             let _ = app.run("view.person", json!({"name": last}));
@@ -156,6 +157,7 @@ fn card(app: &mut LightcraftApp, ui: &mut egui::Ui, person: &Person, r: Rect, ed
     let t = Tokens::get(ui.ctx());
     let face = Rect::from_min_size(r.min, vec2(edge, edge));
     let resp = ui.interact(r, egui::Id::new(("person-card", &person.name)), Sense::click());
+    crate::widgets::announce(&resp, person.name.clone());
     register(ui.ctx(), format!("person:{}", person.name), r);
     let view = app.session.face_view(person.photo, person.face);
     let p = ui.painter();
@@ -181,9 +183,23 @@ fn card(app: &mut LightcraftApp, ui: &mut egui::Ui, person: &Person, r: Rect, ed
     p.text(pos2(r.left() + 2.0, face.bottom() + 14.0), Align2::LEFT_CENTER, name, t.semibold(13.0), t.text);
     let photos = crate::i18n::tr_format!("{n} photo{}", if person.count == 1 { "" } else { "s" }, n = person.count);
     p.text(pos2(r.left() + 2.0, face.bottom() + 32.0), Align2::LEFT_CENTER, photos, t.font(12.0), t.text_dim);
-    if resp.on_hover_text(crate::i18n::tr_format!("{} — show their photos", person.name)).clicked() {
+    let resp = resp.on_hover_text(crate::i18n::tr_format!("{} — show their photos", person.name));
+    let full = person.name.clone();
+    resp.context_menu(|ui| {
+        let r = ui.button(crate::i18n::tr("Rename Person…"));
+        register(ui.ctx(), "personMenu:rename", r.rect);
+        if r.clicked() {
+            open_rename(app, &full);
+        }
+    });
+    if resp.clicked() {
         let _ = app.run("view.person", json!({"name": person.name}));
     }
+}
+
+/// The Rename Person dialog, prefilled with the name the card shows.
+pub(crate) fn open_rename(app: &mut LightcraftApp, name: &str) {
+    app.ui.dialog = Some(crate::state::Dialog::RenamePerson { from: name.to_string(), to: name.to_string(), merge: false });
 }
 
 #[cfg(test)]

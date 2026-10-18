@@ -114,11 +114,7 @@ pub fn parse_gpx(s: &str) -> Result<Tracklog, GpxError> {
                 match name.as_slice() {
                     b"gpx" if path.is_empty() => seen_gpx = true,
                     b"trk" if parent == Some(b"gpx") => log.tracks += 1,
-                    b"trkseg" if parent == Some(b"trk") => {
-                        if log.points.last().is_some_and(|p| p.segment == segment) {
-                            segment += 1;
-                        }
-                    }
+                    b"trkseg" if parent == Some(b"trk") && log.points.last().is_some_and(|p| p.segment == segment) => segment += 1,
                     b"trkpt" if parent == Some(b"trkseg") => {
                         let mut p = Pending::default();
                         for a in e.attributes().with_checks(false).flatten() {

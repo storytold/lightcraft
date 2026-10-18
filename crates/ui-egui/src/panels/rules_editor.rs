@@ -51,7 +51,7 @@ fn match_combo(ui: &mut egui::Ui, salt: &str, m: &mut Match) {
         Match::Any => "any",
         Match::None => "none",
     };
-    egui::ComboBox::from_id_salt(format!("{salt}-match")).width(64.0).selected_text(crate::i18n::tr(label(*m))).show_ui(ui, |ui| {
+    crate::widgets::combo_box(format!("{salt}-match")).width(64.0).selected_text(crate::i18n::tr(label(*m))).show_ui(ui, |ui| {
         for x in [Match::All, Match::Any, Match::None] {
             ui.selectable_value(m, x, crate::i18n::tr(label(x)));
         }
@@ -149,7 +149,7 @@ fn value_editor(ui: &mut egui::Ui, field: &str, op: &str, v: &mut Value, salt: &
             let mut unit = stored_unit.to_lowercase();
             let mut changed =
                 ui.add(egui::DragValue::new(&mut n).range(1.0..=10_000.0).clamp_existing_to_range(false).speed(0.2).fixed_decimals(0)).changed();
-            egui::ComboBox::from_id_salt(format!("{salt}-unit")).width(70.0).selected_text(crate::i18n::tr(&unit)).show_ui(ui, |ui| {
+            crate::widgets::combo_box(format!("{salt}-unit")).width(70.0).selected_text(crate::i18n::tr(&unit)).show_ui(ui, |ui| {
                 for u in ["hours", "days", "weeks", "months", "years"] {
                     if ui.selectable_label(unit.trim_end_matches('s') == u.trim_end_matches('s'), crate::i18n::tr(u)).clicked() {
                         unit = u.to_string();
@@ -198,23 +198,20 @@ fn value_editor(ui: &mut egui::Ui, field: &str, op: &str, v: &mut Value, salt: &
         (Some(Kind::Number), _) => number_value(ui, v, field),
         (Some(Kind::Choice(c)), _) => {
             let cur = v.as_str().unwrap_or("").to_string();
-            egui::ComboBox::from_id_salt(format!("{salt}-choice")).width(120.0).selected_text(crate::i18n::choice_text(field, &cur)).show_ui(
-                ui,
-                |ui| {
-                    for (id, _) in c.iter() {
-                        if ui.selectable_label(cur == *id, crate::i18n::choice_text(field, id)).clicked() {
-                            *v = json!(id);
-                        }
+            crate::widgets::combo_box(format!("{salt}-choice")).width(120.0).selected_text(crate::i18n::choice_text(field, &cur)).show_ui(ui, |ui| {
+                for (id, _) in c.iter() {
+                    if ui.selectable_label(cur == *id, crate::i18n::choice_text(field, id)).clicked() {
+                        *v = json!(id);
                     }
-                },
-            );
+                }
+            });
         }
         (Some(Kind::Bool), _) => {
             // the catalog's reading of the value ("false" is no); one that is neither yes nor no is
             // shown as written and kept until a choice replaces it, so the dialog reports it
             let cur = bool_value(v);
             let text = cur.map_or_else(|| v.to_string(), |b| crate::i18n::bool_text(b).to_string());
-            egui::ComboBox::from_id_salt(format!("{salt}-bool")).width(60.0).selected_text(text).show_ui(ui, |ui| {
+            crate::widgets::combo_box(format!("{salt}-bool")).width(60.0).selected_text(text).show_ui(ui, |ui| {
                 for b in [true, false] {
                     if ui.selectable_label(cur == Some(b), crate::i18n::bool_text(b)).clicked() {
                         *v = json!(b);
@@ -235,38 +232,37 @@ fn value_editor(ui: &mut egui::Ui, field: &str, op: &str, v: &mut Value, salt: &
 fn field_menu(ui: &mut egui::Ui, salt: &str, field: &mut String, op: &mut String, value: &mut Value) {
     let label = field_label(field).unwrap_or(field.as_str()).to_string();
     let current = field.clone();
-    let r =
-        egui::ComboBox::from_id_salt(format!("{salt}-field")).width(150.0).height(400.0).selected_text(crate::i18n::tr(&label)).show_ui(ui, |ui| {
-            let mut pick = None;
-            let mut item = |ui: &mut egui::Ui, id: &'static str| {
-                let r = ui.selectable_label(current == id, crate::i18n::tr(field_label(id).unwrap_or(id)));
-                register(ui.ctx(), format!("ruleFieldItem:{id}:{salt}"), r.rect);
-                if r.clicked() {
-                    pick = Some(id);
-                    ui.close();
+    let r = crate::widgets::combo_box(format!("{salt}-field")).width(150.0).height(400.0).selected_text(crate::i18n::tr(&label)).show_ui(ui, |ui| {
+        let mut pick = None;
+        let mut item = |ui: &mut egui::Ui, id: &'static str| {
+            let r = ui.selectable_label(current == id, crate::i18n::tr(field_label(id).unwrap_or(id)));
+            register(ui.ctx(), format!("ruleFieldItem:{id}:{salt}"), r.rect);
+            if r.clicked() {
+                pick = Some(id);
+                ui.close();
+            }
+        };
+        for id in TOP_LEVEL_FIELDS {
+            item(ui, id);
+        }
+        ui.separator();
+        // submenu rows look like the items above them; the one holding the current field stands out
+        // (a transparent frame, not none: a frameless button drops its padding and hover fill)
+        let inactive = &mut ui.visuals_mut().widgets.inactive;
+        inactive.weak_bg_fill = egui::Color32::TRANSPARENT;
+        inactive.bg_stroke = egui::Stroke::NONE;
+        for (group, ids) in FIELD_GROUPS {
+            let text = RichText::new(crate::i18n::tr(group));
+            let text = if ids.contains(&current.as_str()) { text.strong() } else { text };
+            let r = crate::widgets::menu_button(ui, text, |ui| {
+                for id in *ids {
+                    item(ui, id);
                 }
-            };
-            for id in TOP_LEVEL_FIELDS {
-                item(ui, id);
-            }
-            ui.separator();
-            // submenu rows look like the items above them; the one holding the current field stands out
-            // (a transparent frame, not none: a frameless button drops its padding and hover fill)
-            let inactive = &mut ui.visuals_mut().widgets.inactive;
-            inactive.weak_bg_fill = egui::Color32::TRANSPARENT;
-            inactive.bg_stroke = egui::Stroke::NONE;
-            for (group, ids) in FIELD_GROUPS {
-                let text = RichText::new(crate::i18n::tr(group));
-                let text = if ids.contains(&current.as_str()) { text.strong() } else { text };
-                let r = ui.menu_button(text, |ui| {
-                    for id in *ids {
-                        item(ui, id);
-                    }
-                });
-                register(ui.ctx(), format!("ruleFieldGroup:{group}:{salt}"), r.response.rect);
-            }
-            pick
-        });
+            });
+            register(ui.ctx(), format!("ruleFieldGroup:{group}:{salt}"), r.response.rect);
+        }
+        pick
+    });
     register(ui.ctx(), format!("ruleField:{salt}"), r.response.rect);
     let Some(Some(id)) = r.inner else { return };
     if field == id {
@@ -321,7 +317,7 @@ pub fn edit(ui: &mut egui::Ui, rs: &mut RuleSet, salt: &str, depth: usize, path:
                     field_menu(ui, &rsalt, field, op, value);
                     let kind = field_kind(field).unwrap_or(Kind::Text);
                     let op_label = ops_for(kind).iter().find(|o| o.0 == op.as_str()).map_or(op.as_str(), |o| o.1).to_string();
-                    egui::ComboBox::from_id_salt(format!("{rsalt}-op")).width(110.0).selected_text(crate::i18n::tr(&op_label)).show_ui(ui, |ui| {
+                    crate::widgets::combo_box(format!("{rsalt}-op")).width(110.0).selected_text(crate::i18n::tr(&op_label)).show_ui(ui, |ui| {
                         for (id, l) in ops_for(kind) {
                             if ui.selectable_label(op == id, crate::i18n::tr(l)).clicked() && op != id {
                                 let was_special = matches!(op.as_str(), "between" | "inLast" | "notInLast" | "isEmpty" | "isNotEmpty");

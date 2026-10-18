@@ -207,7 +207,8 @@ pub(crate) fn decode_as(bytes: &[u8], mode: Mode, format: RawFormat) -> Result<R
     }
     let info = raw.image()?;
     let (w, h, cpp) = (info.width as usize, info.height as usize, info.samples_per_pixel as usize);
-    if !(1..=4).contains(&cpp) {
+    // one sample (CFA or monochrome), RGB or four colours; two are neither and can't be developed (issue #1511)
+    if !matches!(cpp, 1 | 3 | 4) {
         return Err(RawError::Unsupported(format!("{cpp} samples per pixel")));
     }
     let mut data = read_image_in(mode, bytes, &info, tiff.order, Packing::Msb)?;
@@ -251,12 +252,14 @@ pub(crate) fn decode_as(bytes: &[u8], mode: Mode, format: RawFormat) -> Result<R
         [r, c] if (1..=16).contains(r) && (1..=16).contains(c) => (*r as usize, *c as usize),
         _ => (1, 1),
     };
-    let mut values: Vec<f32> = raw.f64s(t::BLACK_LEVEL).unwrap_or_default().into_iter().map(|v| v as f32).collect();
+    // (a FLOAT / DOUBLE tag can hold NaN or infinity: such a level reads as 0, in its place)
+    let level = |v: f64| Some(v as f32).filter(|v| v.is_finite()).unwrap_or(0.0);
+    let mut values: Vec<f32> = raw.f64s(t::BLACK_LEVEL).unwrap_or_default().into_iter().map(level).collect();
     if values.len() != br * bc * cpp {
         values = vec![values.first().copied().unwrap_or(0.0)];
     }
     let (br, bc) = if values.len() == 1 { (1, 1) } else { (br, bc) };
-    let floats = |tag| raw.f64s(tag).unwrap_or_default().into_iter().map(|v| v as f32).collect::<Vec<f32>>();
+    let floats = |tag| raw.f64s(tag).unwrap_or_default().into_iter().map(level).collect::<Vec<f32>>();
     let black =
         BlackLevel { repeat_rows: br, repeat_cols: bc, values, delta_h: floats(t::BLACK_LEVEL_DELTA_H), delta_v: floats(t::BLACK_LEVEL_DELTA_V) };
 
@@ -303,7 +306,11 @@ pub(crate) fn decode_as(bytes: &[u8], mode: Mode, format: RawFormat) -> Result<R
         }
         // the tag is anchored at the top-left of the ActiveArea (DNG spec); `RawImage::cfa` is anchored at the
         // sensor origin (the crop to the active area shifts it back), so move the anchor out by the area's offset
-        Some(Cfa { width: cols, height: rows, pattern }.shifted(cols - active_area.x % cols, rows - active_area.y % rows))
+        // (LightCraft's own DNGs from before the writer followed the spec carry the sensor-origin pattern; they are marked by
+        // a bare "LightCraft" Software tag, the writer now says [`crate::dngwrite::SOFTWARE`], and keep their original reading)
+        let at_origin = Cfa { width: cols, height: rows, pattern };
+        let legacy_writer = [raw, ifd0].iter().any(|i| i.string(t::SOFTWARE).as_deref().map(str::trim) == Some("LightCraft"));
+        Some(if legacy_writer { at_origin } else { at_origin.shifted(cols - active_area.x % cols, rows - active_area.y % rows) })
     } else {
         None
     };
@@ -331,15 +338,34 @@ pub(crate) fn decode_as(bytes: &[u8], mode: Mode, format: RawFormat) -> Result<R
         color: color_data(ifd0, raw, tiff.order),
         wb_multipliers: None,
         linearized,
+        pixel_aspect: default_scale_aspect(raw.f64s(t::DEFAULT_SCALE).as_deref()),
         opcodes,
         metadata,
+        lens_metadata: Default::default(),
     };
     img.validate_for(mode)?;
     Ok(img)
 }
 
+/// Pixel height over width from `DefaultScale` (horizontal, vertical): only a clear 1.5 to 4 ratio counts (the rows stretch; a wider-than-tall pixel is left alone).
+fn default_scale_aspect(scale: Option<&[f64]>) -> f32 {
+    match scale {
+        Some([h, v]) if *h > 0.0 && *v > 0.0 && (1.5..=4.0).contains(&(v / h)) => (v / h) as f32,
+        _ => 1.0,
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn default_scale_makes_tall_pixels() {
+        assert_eq!(default_scale_aspect(Some(&[1.0, 2.0])), 2.0);
+        assert_eq!(default_scale_aspect(Some(&[1.0, 1.0])), 1.0);
+        assert_eq!(default_scale_aspect(Some(&[2.0, 1.0])), 1.0);
+        assert_eq!(default_scale_aspect(Some(&[1.0, 1.2])), 1.0);
+        assert_eq!(default_scale_aspect(None), 1.0);
+    }
+
     use super::*;
 
     /// Store `image` the way DNG 1.7 interleaves it: row `r` of the image is written to stored row

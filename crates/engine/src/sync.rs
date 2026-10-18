@@ -38,7 +38,7 @@
 //! not cancelled midway.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use lightcraft_catalog::{Catalog, Filter, Op, Photo, PhotoId, Sort, Source};
@@ -74,10 +74,14 @@ impl SyncProgress {
 pub struct SyncInput {
     folder: String,
     scan: ScanInput,
-    /// The library's photos in the folder, each with how its sidecar is named.
-    photos: Vec<(Arc<Photo>, SidecarNaming)>,
-    /// For the colour label names a sidecar may use.
-    labels: Catalog,
+    /// The library's photos in the folder.
+    ids: Vec<PhotoId>,
+    /// How the library names sidecars; how each photo's is named is worked out by the scan (a
+    /// pass over the library, which the session's thread does not wait for).
+    naming: SidecarNaming,
+    /// The library as it is now (the one the scan looks files up in): for those photos, their
+    /// sidecars' names and the colour label names a sidecar may use.
+    labels: Arc<Catalog>,
 }
 
 /// What changed in a folder since it came into the library.
@@ -176,10 +180,9 @@ impl SyncInput {
         if !disk && (lightcraft_catalog::folders::is_disk_root(path) || crate::cmd::library::covers_other_disks(s, path, &ids)) {
             return Err(invalid(format!("{path} is a whole disk or holds disks: pass `disk: true` to synchronize it")));
         }
-        let namings = s.sidecar_namings(&ids);
-        let photos = ids.iter().zip(namings).filter_map(|(id, naming)| s.catalog.photo(*id).map(|p| (Arc::clone(p), naming))).collect();
         let (scan, _) = ScanInput::new(s, &[path.to_string()]);
-        Ok(SyncInput { folder: path.to_string(), scan, photos, labels: s.catalog.clone() })
+        let labels = scan.library();
+        Ok(SyncInput { folder: path.to_string(), scan, ids, naming: s.xmp.naming, labels })
     }
 }
 
@@ -190,23 +193,47 @@ impl SyncInput {
 /// library's photos, which run on several threads too. Stops early when `progress.files.cancel`
 /// is set.
 pub fn scan_with(input: SyncInput, progress: &SyncProgress) -> FolderChanges {
-    let SyncInput { folder, scan, photos, labels } = input;
-    let seen: Vec<Arc<Photo>> = photos.iter().map(|(p, _)| Arc::clone(p)).collect();
+    let SyncInput { folder, scan, ids, naming, labels } = input;
+    let seen: Vec<Arc<Photo>> = ids.iter().filter_map(|id| labels.photo(*id)).map(Arc::clone).collect();
     if !cfg!(target_arch = "wasm32") && !Path::new(&folder).is_dir() {
         return FolderChanges { path: folder, seen, offline: true, ..Default::default() };
     }
+    // (how each photo's sidecar is named: a pass over the library, made here and not while the
+    // session waits, and not at all for a folder that is not there)
+    let namings = crate::sidecar::namings_in(&labels, naming, &ids);
+    let photos: Vec<(Arc<Photo>, SidecarNaming)> =
+        ids.iter().zip(namings).filter_map(|(id, naming)| labels.photo(*id).map(|p| (Arc::clone(p), naming))).collect();
+    // The folder is walked once, and its listing answers for the library's photos in it: on a
+    // network share that is one request for a folder's names where it was several for each
+    // photo. Then both halves wait on the disk at once: the new files are probed (on their own
+    // threads) beside the checks of the photos, which ask the disk only what the listing can't say.
+    // (how many photos there are to check is known before the walk: the count shows while it runs)
+    progress.to_check.store(photos.len(), std::sync::atomic::Ordering::Relaxed);
+    let mut listing = Listing::default();
+    let (files, _) = crate::import::expand_noting(
+        std::slice::from_ref(&folder),
+        scan.skip(),
+        crate::walk::Limits::default(),
+        Some(&mut |dir, names, complete| listing.note(dir, names, complete)),
+    );
+    let listing = &listing;
     // (no threads on the web: one after the other there)
     #[cfg(target_arch = "wasm32")]
-    let (out, checks) = (crate::import::scan_with(scan, std::slice::from_ref(&folder), &progress.files), check_photos(&photos, &labels, progress));
+    let (out, checks) = (crate::import::scan_files(scan, files, &progress.files), check_photos(&photos, &labels, listing, progress));
     #[cfg(not(target_arch = "wasm32"))]
     let (out, checks) = std::thread::scope(|sc| {
         let photos = &photos;
         let labels = &labels;
-        let checks = sc.spawn(move || check_photos(photos, labels, progress));
-        let out = crate::import::scan_with(scan, std::slice::from_ref(&folder), &progress.files);
+        let checks = sc.spawn(move || check_photos(photos, labels, listing, progress));
+        let out = crate::import::scan_files(scan, files, &progress.files);
         // (a check that panicked counts as nothing found; the scan still reports the rest)
         (out, checks.join().unwrap_or_default())
     });
+    log::debug!(
+        "synchronize: {} folders listed; the disk was asked {} times about the library's photos",
+        listing.folders.len(),
+        listing.asked.load(std::sync::atomic::Ordering::Relaxed)
+    );
     let mut changes = FolderChanges { path: folder, seen, ..Default::default() };
     for ((p, _), check) in photos.iter().zip(checks) {
         let Some(file) = crate::cmd::missing::checked_path(p) else { continue };
@@ -327,11 +354,136 @@ enum Check {
     News,
 }
 
-fn check_photo(p: &Photo, naming: SidecarNaming, labels: &Catalog) -> Check {
+/// The listings of the folders a scan walked: what is in each, by name. It answers "is this file
+/// there" for the library's photos and their sidecars without asking the disk, which on a
+/// network share is a round trip for every name (and a photo without a sidecar took five).
+///
+/// It answers only what holds on any file system. A name is there when the folder lists exactly
+/// that name ([`asks_the_disk`] aside). It is not there when the folder was listed to its end,
+/// every name in the folder is ASCII, the name asked about is plain ASCII ([`plain_name`]), and
+/// no name in the folder is that name in another case. Anything else is not answered, and the
+/// disk is asked as before: a name that differs in case only, a link, a folder that was not
+/// walked or not to its end, and every name that is not listed in a folder that holds a name
+/// outside ASCII. (File systems hold names outside ASCII equal in more ways than can be listed
+/// here: by case, where the capital sharp s is `SS`; by how accents are written; and some pass
+/// over marks altogether.)
+///
+/// Where the listing and a look-up would differ, the listing is the folder as the scan saw it:
+/// a file it lists is there though it could not be opened by its path (a folder that may be
+/// listed but not searched, a path longer than the system takes), and a share that drops after
+/// the walk does not turn every photo the listing answers for into a missing one.
+#[derive(Default)]
+pub(crate) struct Listing {
+    folders: HashMap<PathBuf, Listed>,
+    /// How often the disk was asked after all (for the tests, and the log).
+    pub(crate) asked: std::sync::atomic::AtomicUsize,
+}
+
+/// One folder's listing.
+struct Listed {
+    /// name → what it is.
+    names: HashMap<String, crate::walk::EntryKind>,
+    /// The names, lower-cased (only kept for a folder whose names are all ASCII): what a plain
+    /// name asked about could be in another case.
+    lower: std::collections::HashSet<String>,
+    /// Every entry was read, and every name is ASCII: a plain name that is not listed, in any
+    /// case, is not there.
+    sure: bool,
+}
+
+/// Whether the disk is asked about `name` whatever the listing holds: a name Windows takes for
+/// a device (`NUL`, `aux.jpg`: there in every folder, or not openable where it is listed).
+fn asks_the_disk(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or_default().trim_end_matches(' ').to_ascii_lowercase();
+    // (`COM` and `LPT` with any one digit, the superscript ones Windows also takes among them)
+    let numbered = ["com", "lpt"].iter().any(|port| {
+        let mut rest = stem.strip_prefix(port).unwrap_or_default().chars();
+        matches!((rest.next(), rest.next()), (Some(d), None) if d.is_ascii_digit() || ['\u{b9}', '\u{b2}', '\u{b3}'].contains(&d))
+    });
+    numbered || ["con", "prn", "aux", "nul", "conin$", "conout$", "clock$"].contains(&stem.as_str())
+}
+
+/// Whether `name` can only be found under itself in some case: ASCII, and nothing in it that a
+/// file system resolves another way (a short name with `~`, a stream after `:`, dots or spaces
+/// at its end, which Windows drops).
+fn plain_name(name: &str) -> bool {
+    name.is_ascii() && !name.contains(['~', ':']) && !name.ends_with(['.', ' ']) && !name.is_empty()
+}
+
+impl Listing {
+    /// Take the listing of `folder` from the walk ([`crate::walk::files_in_noting`]).
+    pub(crate) fn note(&mut self, folder: &Path, entries: Vec<(std::ffi::OsString, crate::walk::EntryKind)>, complete: bool) {
+        let mut sure = complete;
+        let mut names = HashMap::with_capacity(entries.len());
+        let mut lower = std::collections::HashSet::new();
+        for (name, kind) in entries {
+            match name.into_string() {
+                Ok(name) => {
+                    sure &= name.is_ascii();
+                    lower.insert(name.to_ascii_lowercase());
+                    names.insert(name, kind);
+                }
+                // (a name that is no text is not one a photo's path can be compared with)
+                Err(_) => sure = false,
+            }
+        }
+        if !sure {
+            lower.clear();
+        }
+        self.folders.insert(folder.to_path_buf(), Listed { names, lower, sure });
+    }
+
+    /// What the listing of `path`'s folder says of it: its kind when it is listed under exactly
+    /// this name, `Some(None)` when it is surely not there, `None` when the listing can't say.
+    fn kind(&self, path: &Path) -> Option<Option<crate::walk::EntryKind>> {
+        let name = path.file_name()?.to_str()?;
+        // (the path ends in that name: no `/.` or separator after it, which the disk would resolve)
+        if !path.to_str()?.ends_with(name) {
+            return None;
+        }
+        if asks_the_disk(name) {
+            return None;
+        }
+        let folder = self.folders.get(path.parent()?)?;
+        if let Some(kind) = folder.names.get(name) {
+            return Some(Some(*kind));
+        }
+        (folder.sure && plain_name(name) && !folder.lower.contains(&name.to_ascii_lowercase())).then_some(None)
+    }
+
+    /// `Path::exists`, where the listing can say.
+    pub(crate) fn exists(&self, path: &Path) -> Option<bool> {
+        match self.kind(path)? {
+            Some(crate::walk::EntryKind::Other) => None,
+            Some(_) => Some(true),
+            None => Some(false),
+        }
+    }
+
+    /// `Path::is_file`, where the listing can say.
+    pub(crate) fn is_file(&self, path: &Path) -> Option<bool> {
+        match self.kind(path)? {
+            Some(crate::walk::EntryKind::Other) => None,
+            Some(kind) => Some(kind == crate::walk::EntryKind::File),
+            None => Some(false),
+        }
+    }
+
+    /// The listing's answer, or the disk's where it has none.
+    fn or_ask(&self, answer: Option<bool>, ask: impl FnOnce() -> bool) -> bool {
+        answer.unwrap_or_else(|| {
+            self.asked.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            ask()
+        })
+    }
+}
+
+fn check_photo(p: &Photo, naming: SidecarNaming, labels: &Catalog, listing: &Listing) -> Check {
     let Some(file) = crate::cmd::missing::checked_path(p) else { return Check::Nothing };
-    if !Path::new(file).exists() {
+    let file = Path::new(file);
+    if !listing.or_ask(listing.exists(file), || file.exists()) {
         Check::Missing
-    } else if p.copy_of.is_none() && sidecar_has_news(labels, p, naming) {
+    } else if p.copy_of.is_none() && sidecar_has_news(labels, p, naming, listing) {
         Check::News
     } else {
         Check::Nothing
@@ -340,12 +492,12 @@ fn check_photo(p: &Photo, naming: SidecarNaming, labels: &Catalog) -> Check {
 
 /// [`check_photo`] for each photo, in order, on several threads (each file is a wait on the
 /// disk, not work for the CPU). Photos not reached before a cancel count as nothing found.
-fn check_photos(photos: &[(Arc<Photo>, SidecarNaming)], labels: &Catalog, progress: &SyncProgress) -> Vec<Check> {
+fn check_photos(photos: &[(Arc<Photo>, SidecarNaming)], labels: &Catalog, listing: &Listing, progress: &SyncProgress) -> Vec<Check> {
     use std::sync::atomic::Ordering::Relaxed;
     progress.to_check.store(photos.len(), Relaxed);
     let cancel = &progress.files.cancel;
     let check = |p: &Photo, naming: SidecarNaming| {
-        let c = check_photo(p, naming, labels);
+        let c = check_photo(p, naming, labels, listing);
         progress.checked.fetch_add(1, Relaxed);
         c
     };
@@ -413,10 +565,17 @@ impl Session {
 
 /// Whether `p`'s XMP sidecar file was saved after the library last had its say about the photo
 /// (imported, or edited here) and says something the library doesn't.
-fn sidecar_has_news(labels: &Catalog, p: &Photo, naming: SidecarNaming) -> bool {
+fn sidecar_has_news(labels: &Catalog, p: &Photo, naming: SidecarNaming, listing: &Listing) -> bool {
     let Source::File { path } = &p.source else { return false };
-    let Some(file) = crate::sidecar::find_sidecar(path, naming) else { return false };
-    let Ok(meta) = std::fs::metadata(&file) else { return false };
+    // ([`crate::sidecar::find_sidecar`], each name looked up in the listing before the disk)
+    // (a name the listing holds is read for its date next, and one that can't be read is passed
+    // over for the next name, as a name that is no file was)
+    let found = crate::sidecar::sidecar_candidates(path, naming).find_map(|c| {
+        let there = listing.or_ask(listing.is_file(&c), || c.is_file());
+        let meta = there.then(|| std::fs::metadata(&c).ok()).flatten().filter(std::fs::Metadata::is_file)?;
+        Some((c, meta))
+    });
+    let Some((file, meta)) = found else { return false };
     if meta.len() > MAX_SIDECAR_BYTES {
         return false;
     }
@@ -700,3 +859,7 @@ impl SyncCommit {
         self.report
     }
 }
+
+#[cfg(test)]
+#[path = "sync/tests_listing.rs"]
+mod tests_listing;

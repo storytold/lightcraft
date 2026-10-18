@@ -58,7 +58,7 @@ fn partial_reads_describe_raws_as_whole_files_do() {
         .filter(|p| p.is_file() && !p.extension().is_some_and(|e| e == "part" || e == "txt" || e == "md"))
         .collect();
     if paths.is_empty() {
-        eprintln!("skip: {} absent", dir.display());
+        lightcraft_testkit::skip!(Corpus, "{} absent", dir.display());
         return;
     }
     paths.sort();

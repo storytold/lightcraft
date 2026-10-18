@@ -268,6 +268,20 @@ lightcraft --control 7980 ~/Pictures/trip
   with the same font coverage as watermarks (CJK requires craft-fonts), with long names shortened in the middle.
   This is a contact-sheet workflow,
   not a printer-driver or custom picture-package layout editor.
+- **Print layouts (native app / CLI):** **File → Print…** opens the Print module's layout editor: Single Image,
+  Contact Sheet, Picture Package (Auto Layout packs cells onto pages) and Custom Package (drag and resize cells,
+  stacking order, snap to cells or a grid), Zoom to Fill / Rotate to Fit, Photo Border and Inner Stroke, paper
+  sizes from 4 × 6 to 13 × 19 and A3 to A5 or custom, margins, rulers in in/cm/mm/pt, page background, 72–720 ppi,
+  and saved templates. **Print to PDF…** renders in the background. Everything is a `print.*` command
+  (`print.get`, `print.set`, `print.cell.add`, `print.layout.autoLayout`, `print.exportPdf`,
+  `print.template.save`…), so the CLI and MCP drive it too:
+
+  ```sh
+  lightcraft-cli run --import ~/Pictures/shoot print.set 'layout={"style":"picturePackage","page":{"paper":"8x10"}}' \
+      print.cell.add width=5 height=7 print.cell.add width=2.5 height=3.5 print.layout.autoLayout print.exportPdf path=Package.pdf
+  ```
+
+  Printer colour management and page overlays (identity plate, watermark, page numbers) are not there yet.
 - **Every widget is addressable** (`ui.widgets`) and clickable by name, so agents operate the real UI, not a
   side door.
 - The screenshots in this README were produced end to end by the [`docs/showcase/`](docs/showcase/) scripts.
@@ -307,11 +321,11 @@ LightCraft is young and moving fast: **alpha**. **Where we honestly stand** (det
 
 - **By feature count we're at ~81%** of Lightroom (core features 98%), tracked row by row in
   [docs/parity-checklist.md](docs/parity-checklist.md).
-- **As a day-to-day Lightroom replacement we're nearer 61% for the whole product, ~49% for a typical working photographer and ~64% for
+- **As a day-to-day Lightroom replacement we're nearer 61% for the whole product, ~51% for a typical working photographer and ~65% for
   casual use.** It's great for JPEG/DNG and most Sony / Panasonic /
   Fujifilm / Nikon / older-Canon raws on one machine; see [docs/raw-parity.md](docs/raw-parity.md) for your camera.
 - **The biggest gaps:**
-  - **camera colour calibration:** Sony, Nikon, Panasonic, Fujifilm and Canon CR3 raws have guarded estimates from their camera JPEGs, with built-in ILCE-7CR, ILCE-7M4, X-H2S and X-T4 profiles; measured calibration is missing, and other raws or rejected fits retain a neutral matrix;
+  - **camera colour calibration:** Sony, Nikon, Panasonic, Fujifilm and Canon CR3 raws have guarded estimates from their camera JPEGs, with built-in ILCA-99M2, ILCE-7CR, ILCE-7M4, X-H2S, X-T4, Nikon Z 6II, Z 8 and D5300 profiles; measured calibration is missing, and other raws or rejected fits retain a neutral matrix;
   - **compressed Olympus raws and unsupported CR3 variants:** these use embedded JPEG previews when present. Fujifilm lossless/lossy compressed RAF now decodes sensor data; [verification and existing-library reload instructions](docs/raf-compression.md);
   - **AI masks and denoise:** subject and sky selection are classical heuristics;
   - **network libraries:** a preview reads the raw's header — or, for a CR3 or a TIFF raw whose preview tag sits past it, exactly the ranges the sparse planner names — and its embedded JPEG only (56.5 MB → 5.9 MB, 10 s → 1 s on the test share), but the *developed* picture still needs the sensor data over the wire; see [docs/raw-preview-reads.md](docs/raw-preview-reads.md);
@@ -337,7 +351,7 @@ LightCraft is young and moving fast: **alpha**. **Where we honestly stand** (det
 | Import: Add in place / Copy / Move, rename and folder templates, devices, duplicate detection, watched folders; Local folder browsing | ✅ |
 | MCP server (headless or live app, persistent libraries), CLI, control channel | ✅ |
 | XMP sidecars (read/write, auto-write), reading `crs:` develop settings, preset files (`.lcpreset`, XMP presets) | ✅ |
-| Optics (distortion, vignetting, auto + manual CA, defringe, lens corrections embedded in DNG files and Panasonic / Leica RW2 / RWL distortion data), Geometry (transforms, Constrain Crop), Upright (Auto/Level/Vertical/Full/Guided) | ✅ · camera lens profiles (our own) ⬜ |
+| Optics (distortion, vignetting, auto + manual CA, defringe, lens corrections embedded in DNG files, Panasonic / Leica RW2 / RWL distortion data and Nikon Z 6II / Z 8 / Z f distortion data), Geometry (transforms, Constrain Crop), Upright (Auto/Level/Vertical/Full/Guided) | ✅ · camera lens profiles (our own) ⬜ |
 | Photo Merge: HDR (auto-align, deghost), Panorama (spherical/cylindrical/perspective, boundary warp, auto crop), HDR Panorama → DNG | ✅ |
 | GPU pipeline (wgpu compute, CPU-exact within 1/255), CPU fallback on device limits / errors | ✅ · WebGPU in the browser 🚧 |
 | AI: segmentation masks, AI denoise, super resolution, faces; video | 🚧 (see [gaps](docs/gaps.md)) |
@@ -370,6 +384,38 @@ per CPU, otherwise exhaust RAM before any test runs. GPU coverage is unchanged. 
 `CARGO_PROFILE_DEV_DEBUG`, `CARGO_BUILD_JOBS` and `RUST_TEST_THREADS` settings
 override these defaults. Ordinary development commands keep their own settings.
 
+**Release builds on memory-constrained machines:** [#1196](https://github.com/storytold/lightcraft/issues/1196)
+reports Arch/AUR release-link OOM kills on a 16 GB machine when the desktop and CLI build concurrently
+with full debug information, thin LTO and one codegen unit. The CI defaults above do not apply to
+ordinary `cargo build --release`. Start with one job; two may be suitable if enough memory is available:
+
+```sh
+CARGO_BUILD_JOBS=1 cargo build --release -p lightcraft -p lightcraft-cli
+# Alternatively: CARGO_BUILD_JOBS=2 cargo build --release -p lightcraft -p lightcraft-cli
+```
+
+If a packaging environment enables full debug information or memory-heavy LTO settings, use
+command-local overrides for a lower-memory source build:
+
+```sh
+CARGO_BUILD_JOBS=1 CARGO_PROFILE_RELEASE_DEBUG=0 CARGO_PROFILE_RELEASE_LTO=false CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 cargo build --release -p lightcraft -p lightcraft-cli
+```
+
+These POSIX-shell assignments affect only this command, not global Cargo configuration or the
+repository's release profiles. Disabling LTO may change performance and binary size; disabling debug
+information reduces debugging detail. This is build guidance, not a guarantee that any machine has
+enough memory. Downstream packagers should serialize large binary builds and avoid full debug
+information combined with LTO and one codegen unit on low-memory builders. A PKGBUILD that exports
+its own profile settings can override inherited variables; adjust the packaging recipe locally or
+contact its maintainer rather than assuming an environment prefix on `makepkg` will take precedence.
+
+Tests that need a GPU, the corpus, the craft-fonts faces or a model pass without checking anything when
+those are missing (libtest has no "skipped" status), so `cargo xtask ci` lists them: tests record a skip
+with `lightcraft_testkit::skip!`, and the run ends with what the machine offered (OS, CPUs, RAM, GPU
+adapters per backend, corpus, fonts) and every skip by reason. It writes `target/ci/report.json` and
+`target/ci/summary.md`, a block to paste into a PR (`--summary-md` prints it); `--hardware` also runs the
+GPU tests on every backend that has a hardware adapter. Nothing is uploaded.
+
 **Chinese and Japanese text** need the shared font repo, an optional build input (official releases always include it):
 
 ```sh
@@ -380,12 +426,14 @@ CRAFT_FONTS_DIR=../craft-fonts cargo run --release -p lightcraft
 Without it LightCraft builds and runs the same, but Chinese and Japanese text have no glyphs. Fonts are never committed to this
 repo — the standard for what goes there lives with it: see the [craft-fonts README](https://github.com/storytold/craft-fonts#readme).
 
-**Interface language:** **Edit → Language** (English, 简体中文, 繁體中文（台灣）, 日本語, Português (Brasil), Español, Deutsch, Русский, Français) or **Settings → General →
+**Interface language:** **Edit → Language** (English, 简体中文, 繁體中文（台灣）, 日本語, Português (Brasil), Español, Deutsch, Русский, Français, Українська, Čeština, ქართული) or **Settings → General →
 Language**; the choice applies immediately and persists. See [docs/localization.md](docs/localization.md).
 
 **Logs:** the desktop app writes its log to standard error and to `logs/lightcraft.log` in its settings folder
 (Linux `$XDG_CONFIG_HOME/lightcraft/logs/`, by default `~/.config/lightcraft/logs/`; macOS
-`~/Library/Application Support/LightCraft/logs/`; Windows `%APPDATA%\LightCraft\logs\`), never in the library. A
+`~/Library/Application Support/LightCraft/logs/`; Windows `%APPDATA%\LightCraft\logs\`), never in the library.
+**Portable mode:** a file named `portable.txt` (or `LightCraft.portable`) next to the executable moves the settings
+folder to `LightCraftData` beside it. A
 launch from a desktop menu or the Dock has no terminal, so attach this file to a bug report (**Help ▸ Open Log
 Folder** shows it in the file manager). Each start moves the
 previous log to `lightcraft.1.log` and that one to `lightcraft.2.log`, so the log of a run that crashed survives the

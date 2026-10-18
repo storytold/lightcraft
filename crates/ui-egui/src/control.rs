@@ -113,7 +113,7 @@ pub fn inspect(app: &LightcraftApp, ctx: &egui::Context) -> Value {
         "selection": app.session.selection.ids.iter().map(|p| p.0).collect::<Vec<_>>(),
         "activeMask": app.session.active_mask,
         "widgetCount": app.widgets.len(),
-        "perf": {"frameMs": app.perf.frame_ms, "logicMs": app.perf.logic_ms, "updateMs": app.perf.update_ms, "maxUpdateMs": app.perf.max_update_ms, "fps": app.perf.fps, "lastRenderMs": app.renderer.last_main_ms, "renderQueue": app.renderer.queued(), "rendersInFlight": app.renderer.in_flight(), "pendingSlots": app.renderer.pending_slots(), "mergeRunning": app.merge.busy(), "lastMerge": app.merge.last_result, "rendersDone": app.renderer.completed, "thumbTextures": app.renderer.thumb_textures(), "variantTextures": app.renderer.variant_textures(), "gpu": (lightcraft_engine::gpu::ready() && lightcraft_engine::gpu::available()).then(lightcraft_engine::gpu::adapter_name).flatten(), "gpuReason": lightcraft_engine::gpu::unavailable_reason(), "gpuFallback": lightcraft_engine::gpu::last_fallback()},
+        "perf": {"viewFollowed": app.session.view_followed, "viewWorkedOut": app.session.view_worked_out, "frameMs": app.perf.frame_ms, "logicMs": app.perf.logic_ms, "updateMs": app.perf.update_ms, "maxUpdateMs": app.perf.max_update_ms, "fps": app.perf.fps, "lastRenderMs": app.renderer.last_main_ms, "renderQueue": app.renderer.queued(), "rendersInFlight": app.renderer.in_flight(), "pendingSlots": app.renderer.pending_slots(), "mergeRunning": app.merge.busy(), "lastMerge": app.merge.last_result, "rendersDone": app.renderer.completed, "thumbTextures": app.renderer.thumb_textures(), "variantTextures": app.renderer.variant_textures(), "gpu": (lightcraft_engine::gpu::ready() && lightcraft_engine::gpu::available()).then(lightcraft_engine::gpu::adapter_name).flatten(), "gpuReason": lightcraft_engine::gpu::unavailable_reason(), "gpuFallback": lightcraft_engine::gpu::last_fallback()},
         "loupe": app.loupe_shown.map(|(p, src)| json!({
             "photo": p.0,
             "source": src,
@@ -388,7 +388,10 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
                 if (r.is_err()
                     && matches!(
                         d,
-                        crate::state::Dialog::Import { .. } | crate::state::Dialog::SamModel { .. } | crate::state::Dialog::SmartRules { .. }
+                        crate::state::Dialog::Import { .. }
+                            | crate::state::Dialog::SamModel { .. }
+                            | crate::state::Dialog::SmartRules { .. }
+                            | crate::state::Dialog::SaveEffect { .. }
                     ))
                     || (r.is_ok() && crate::panels::dialogs::keeps_open(app, &d))
                 {
@@ -504,7 +507,8 @@ pub fn export_active(app: &mut LightcraftApp, p: &Value) -> Result<Value, String
     // An exact output file needs no folder. A folder given but left blank (the Export dialog's Folder
     // field cleared) is an error, like Lightroom refusing to export to an unspecified folder, rather
     // than a silent write into the working directory. No folder at all (e.g. File → Export with
-    // Preset): the last export's, else the default.
+    // Preset): the last export's, else the default. "Same folder as original photo" needs none:
+    // each photo goes to its own folder.
     let exact = p.get("path").and_then(Value::as_str).filter(|s| !s.trim().is_empty()).map(str::to_string);
     let dir = match p.get("dir").and_then(Value::as_str) {
         Some(d) => d.trim().to_string(),
@@ -514,7 +518,8 @@ pub fn export_active(app: &mut LightcraftApp, p: &Value) -> Result<Value, String
             last_dir.map(str::to_string).unwrap_or_else(default_export_dir)
         }
     };
-    if dir.is_empty() && exact.is_none() {
+    let own_folders = opts.destination_mode == lightcraft_engine::export::DestinationMode::SameAsOriginal;
+    if dir.is_empty() && exact.is_none() && !own_folders {
         return Err(NO_EXPORT_FOLDER.into());
     }
     let to = Destination { dir: dir.clone(), exact };

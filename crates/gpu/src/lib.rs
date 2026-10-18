@@ -35,6 +35,8 @@ pub mod backend;
 mod ctx;
 #[cfg(not(target_arch = "wasm32"))]
 mod exit;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod faces;
 #[cfg(all(feature = "denoise", not(target_arch = "wasm32")))]
 pub mod nn;
 #[cfg(not(target_arch = "wasm32"))]
@@ -239,9 +241,9 @@ pub fn wait_idle(timeout: std::time::Duration) -> bool {
     }
 }
 
-/// Why GPU compute that has a device of its own (denoise) is switched off by the user's settings, or `None`: the
+/// Why GPU compute that has a device of its own (denoise, faces) is switched off by the user's settings, or `None`: the
 /// environment switches and the rendering preference, but not a render-device failure (the devices are separate).
-#[cfg(all(feature = "denoise", not(target_arch = "wasm32")))]
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn switched_off() -> Option<String> {
     if env_disabled() {
         return Some(if backend::env_off() { "disabled by LIGHTCRAFT_GPU_BACKEND=off" } else { "disabled by LIGHTCRAFT_GPU=0" }.into());
@@ -437,6 +439,14 @@ pub fn render(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &R
     try_render(src, info, s, req, stages).ok()
 }
 
+/// Whether the GPU renders requests of this kind at all (a given render can still fall back to
+/// the CPU): the kernel writes 8-bit output, so high-bit-depth exports and soft proofs render on
+/// the CPU, and so does Visualize HDR, which needs the float HDR render. [`try_render`] follows it,
+/// and the loupe sizes its slider-drag drafts by it (issue #330), so the two can't drift apart.
+pub fn handles(depth: lightcraft_pipeline::OutputDepth, proofed: bool, overlay: lightcraft_pipeline::Overlay) -> bool {
+    depth == lightcraft_pipeline::OutputDepth::U8 && !proofed && overlay != lightcraft_pipeline::Overlay::HdrRange
+}
+
 /// [`render`], reporting why this render made no GPU image: [`Fallback::NotTried`] when the GPU
 /// was not used (callers can ask [`unavailable_reason`]), [`Fallback::Failed`] with the reason
 /// when the GPU render failed and the CPU must render it. The reason belongs to this call, unlike
@@ -453,13 +463,7 @@ pub fn try_render(
         // sections switched off with their eye render as if at their defaults (issue #316)
         let effective = s.effective();
         let s: &DevelopSettings = &effective;
-        // the kernel writes 8-bit output: high-bit-depth exports (and soft proofs) render on the CPU
-        // Visualize HDR needs the float HDR render: CPU too
-        if !enabled()
-            || req.depth != lightcraft_pipeline::OutputDepth::U8
-            || req.proof.is_some()
-            || req.overlay == lightcraft_pipeline::Overlay::HdrRange
-        {
+        if !enabled() || !handles(req.depth, req.proof.is_some(), req.overlay) {
             return Err(Fallback::NotTried);
         }
         let s = &*lightcraft_pipeline::settings_for(s, req);
@@ -531,5 +535,21 @@ pub fn try_render(
     {
         let _ = (src, info, s, req, stages);
         Err(Fallback::NotTried)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use lightcraft_pipeline::{OutputDepth, Overlay};
+
+    // Given a request the 8-bit kernel can't draw (high bit depth, a soft proof, Visualize HDR),
+    // the GPU doesn't take it; the loupe and diagnostic overlays it can draw stay on the GPU
+    #[test]
+    fn the_gpu_handles_8_bit_unproofed_renders_without_the_hdr_range() {
+        assert!(super::handles(OutputDepth::U8, false, Overlay::None));
+        assert!(super::handles(OutputDepth::U8, false, Overlay::Spots(50)));
+        assert!(!super::handles(OutputDepth::U16, false, Overlay::None));
+        assert!(!super::handles(OutputDepth::U8, true, Overlay::None));
+        assert!(!super::handles(OutputDepth::U8, false, Overlay::HdrRange));
     }
 }

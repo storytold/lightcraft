@@ -97,7 +97,12 @@ fn read_bytes(bytes: &[u8]) -> Result<Net, NetError> {
                 if next.input.len() != 1 || next.output.len() != 1 || next.attribute.iter().any(|a| a.name != "alpha") {
                     return invalid("malformed LeakyRelu");
                 }
-                let alpha = attr(next, "alpha").map_or(0.01, |a| a.f);
+                // only an omitted alpha gets the ONNX default; one that is not a single float must not read as 0
+                let alpha = match next.attribute.as_slice() {
+                    [] => 0.01,
+                    [AttributeProto { f: Some(f), kind: 0 | 1, .. }] => *f,
+                    _ => return invalid("LeakyRelu alpha is not a single float"),
+                };
                 i += 1;
                 let name = next.output.first().cloned().ok_or_else(|| NetError::Invalid("LeakyRelu without an output".into()))?;
                 return Ok((Some(alpha), name));
@@ -317,6 +322,25 @@ mod tests {
         assert!(net.fits_tile(tile) && !net.fits_tile(30));
 
         let _ = std::fs::remove_file(p);
+    }
+
+    #[test]
+    fn a_leaky_relu_alpha_that_is_not_a_float_is_rejected() {
+        let good = unet_onnx(4, 3, 1, 7);
+        assert!(read_bytes(&good).is_ok());
+        // an alpha attribute: float field 2, then the declared type (field 20) FLOAT
+        let mut alpha = vec![0x15];
+        alpha.extend_from_slice(&0.2f32.to_le_bytes());
+        let at = good.windows(alpha.len()).position(|w| w == alpha.as_slice()).unwrap() + alpha.len();
+        assert_eq!(good[at..at + 3], [0xa0, 0x01, 1]);
+        // declared INT: the float must not be taken as the slope
+        let mut wrong_type = good.clone();
+        wrong_type[at + 2] = 2;
+        assert!(matches!(read_bytes(&wrong_type), Err(NetError::Invalid(_))));
+        // declared FLOAT but no float value (the float field becomes an int field 3 = 0 of the same length): must not read as 0
+        let mut no_float = good.clone();
+        no_float[at - 5..at].copy_from_slice(&[0x18, 0x80, 0x80, 0x80, 0x00]);
+        assert!(matches!(read_bytes(&no_float), Err(NetError::Invalid(_))));
     }
 
     #[test]

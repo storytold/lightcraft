@@ -285,7 +285,12 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     let mn = maker_note(bytes, &tiff);
     let ip = mn.as_ref().and_then(|m| sub_ifd(bytes, m, IMAGE_PROCESSING));
     let active = match ip.as_ref().map(|i| CROP.map(|tag| i.u64(tag).map(|v| v as usize))) {
-        Some([Some(x), Some(y), Some(cw), Some(ch)]) if cw > 0 && ch > 0 && x + cw <= w && y + ch <= h => Rect::new(x, y, cw, ch),
+        // checked: the tags are file data; `x + cw` on a hostile value would wrap past the bounds
+        Some([Some(x), Some(y), Some(cw), Some(ch)])
+            if cw > 0 && ch > 0 && x.checked_add(cw).is_some_and(|end| end <= w) && y.checked_add(ch).is_some_and(|end| end <= h) =>
+        {
+            Rect::new(x, y, cw, ch)
+        }
         _ => Rect::new(0, 0, w, h),
     };
     let cfa = stated.unwrap_or_else(|| cfa_from_data(samples, w, active));
@@ -329,8 +334,10 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         color: ColorData::default(),
         wb_multipliers: wb,
         linearized: false,
+        pixel_aspect: 1.0,
         opcodes: OpcodeLists::default(),
         metadata,
+        lens_metadata: Default::default(),
     };
     img.validate_for(mode)?;
     Ok(img)

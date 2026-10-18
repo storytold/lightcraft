@@ -1,0 +1,19 @@
+{
+  "format": "lightcraft.slideshowTemplate",
+  "version": 1,
+  "name": "Cinema Wide",
+  "description": "A 16:9 frame with black bars above and below, the title in the corner, fades through black and a closing card.",
+  "playback": {"slideDuration": 6, "fadeDuration": 1.5, "fadeColor": "#000000", "randomOrder": false, "repeat": false},
+  "layout": {
+    "aspect": "16:9", "linkMargins": false, "marginLeft": 0, "marginRight": 0, "marginTop": 0.09, "marginBottom": 0.09,
+    "zoomToFill": true, "backdropColor": "#000000"
+  },
+  "overlays": {
+    "texts": [
+      {"text": "{title}", "size": 0.03, "color": "#f0ece4", "opacity": 0.9, "anchor": "bottomLeft", "offsetX": 0.04, "offsetY": -0.025, "relativeTo": "slide", "shadow": false}
+    ]
+  },
+  "titles": {
+    "ending": {"enabled": true, "color": "#000000", "content": "text", "text": "The End", "overrideColor": true, "textColor": "#e8e2d6", "scale": 0.07, "duration": 3}
+  }
+}

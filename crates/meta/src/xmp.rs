@@ -252,13 +252,11 @@ fn parse_tree(s: &str) -> Result<Node, XmpError> {
                     stack.push(node);
                 }
             }
-            Event::End(_) => {
-                if stack.len() > 1 {
-                    let n = stack.pop().expect("len > 1");
-                    scopes.pop();
-                    if let Some(parent) = stack.last_mut() {
-                        parent.children.push(n);
-                    }
+            Event::End(_) if stack.len() > 1 => {
+                let n = stack.pop().expect("len > 1");
+                scopes.pop();
+                if let Some(parent) = stack.last_mut() {
+                    parent.children.push(n);
                 }
             }
             Event::Text(t) => {
@@ -686,6 +684,7 @@ mod tests {
             // write_xmp doesn't emit regions yet (read-only interchange; see docs/xmp-interop.md), so the
             // roundtrip fixture must leave this empty or `roundtrip_all_fields` can't round-trip it.
             regions: Vec::new(),
+            focus: None,
             make: Some("Maker & Sons".into()),
             model: Some("X <1>".into()),
             serial_number: Some("SN1".into()),
