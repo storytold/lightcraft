@@ -1776,6 +1776,8 @@
   "ONNX model": "Modèle ONNX",
   "commercial use subject to GPL conditions": "usage commercial soumis aux conditions de la GPL",
   "Camera local tone mapping": "Mappage local des tons de l’appareil",
+  "Calibrated camera colour": "Couleur d'appareil calibrée",
+  "Start from the colour measured for this camera model instead of the look fitted to the camera's JPEG": "Partir de la couleur mesurée pour ce modèle d'appareil plutôt que du rendu ajusté au JPEG de l'appareil",
   "Apply the local tone mapping stored in the raw (Apple ProRAW), as the camera renders it": "Appliquer le mappage local des tons enregistré dans le fichier raw (Apple ProRAW), comme le rend l’appareil",
   "Decrease Rating": "Diminuer la note",
   "Increase Rating": "Augmenter la note",

@@ -982,6 +982,8 @@
   "Remove CA": "Убрать ХА",
   "Remove Chromatic Aberration": "Убрать хроматические аберрации",
   "Camera local tone mapping": "Локальное тональное отображение камеры",
+  "Calibrated camera colour": "Калиброванный цвет камеры",
+  "Start from the colour measured for this camera model instead of the look fitted to the camera's JPEG": "Брать цвет, измеренный для этой модели камеры, а не подогнанный под JPEG камеры",
   "Apply the local tone mapping stored in the raw (Apple ProRAW), as the camera renders it": "Применить локальное тональное отображение, сохранённое в RAW (Apple ProRAW), как его отображает камера",
   "Remove from Album": "Удалить из альбома",
   "Remove from Favorites": "Удалить из избранного",

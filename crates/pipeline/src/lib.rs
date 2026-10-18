@@ -97,6 +97,10 @@ pub struct SourceInfo {
     /// Noise reduction sizes its radii in the original's pixels ([`Plan::detail_scale`]), so a
     /// preview looks like the full-size render scaled down (issue #960).
     pub native_long: Option<usize>,
+    /// The raw has no colour matrices of its own, but its camera model has matrices from measured
+    /// spectral sensitivities, so the photo's Profile option can start from them instead of the
+    /// look fitted to its JPEG (`lightcraft_develop::CameraColour`).
+    pub colorimetric: bool,
 }
 
 impl Default for SourceInfo {
@@ -113,6 +117,7 @@ impl Default for SourceInfo {
             mattes: None,
             local_tone: None,
             native_long: None,
+            colorimetric: false,
         }
     }
 }

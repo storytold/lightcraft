@@ -1180,6 +1180,8 @@
   "Remove CA": "移除色差",
   "Remove Chromatic Aberration": "移除色差",
   "Camera local tone mapping": "相机局部色调映射",
+  "Calibrated camera colour": "校准的相机颜色",
+  "Start from the colour measured for this camera model instead of the look fitted to the camera's JPEG": "从为此相机型号测量的颜色开始，而不是拟合相机 JPEG 的外观",
   "Apply the local tone mapping stored in the raw (Apple ProRAW), as the camera renders it": "按相机的渲染方式应用 raw 中保存的局部色调映射（Apple ProRAW）",
   "Remove from Album": "从相册中移除",
   "Remove from Favorites": "从收藏夹中移除",

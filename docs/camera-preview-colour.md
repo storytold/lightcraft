@@ -199,6 +199,28 @@ still pools the uncorrected camera colour of covered models, so a profile can be
 No colour-difference measurement of the spectral matrices against the camera JPEG, or against the file-local fit,
 is recorded here yet. Whether they should come before the file-local fit for these models is open until one is.
 
+### Calibrated camera colour (the photo's choice)
+
+The order above is the photo's **Auto** Camera colour. For a raw without matrices of its own whose model has spectral
+matrices, the Profile section offers **Calibrated camera colour** (`profile.camera_colour`: `auto` | `colorimetric`,
+left out of the settings while `auto`, so existing edits keep their JSON and hash). **Colorimetric** starts from the
+spectral matrices with LightCraft's default tone curve and never reads the embedded JPEG: no per-photo fit, no
+camera profile's tone, no black-and-white tone (step 4 above, taken first). The same file then starts the same way
+whatever its JPEG shows (Picture Control, Active D-Lighting, DRO), and it renders exactly as a copy of it without its
+embedded JPEGs does. A model without spectral matrices, or a file with matrices of its own, starts as Auto does, and the
+option is not offered.
+
+The option is part of the decode (`media::LoadOptions`): a decoded source records the options it was made with, and one
+made with others is decoded again (and a late render of the old one is not taken back into the cache), unless the
+option can't change it (no measured colour for the model, a smart preview, a demo scene). Copy / Paste and Sync of the
+Profile group and presets of it carry the option both ways (`presets::extract_groups` writes it even while `auto`), so
+a per-camera Raw Default preset can give every new photo of a camera the calibrated colour.
+
+Not done yet, and open in [#1207](https://github.com/storytold/lightcraft/issues/1207): a look of its own for
+Colorimetric (it renders about 0.75–1.75 stop darker and 10–20 % less saturated than the fit on the Nikon Z f frames
+measured there, since it has no camera tone curve), matching the exposure between the two modes, and the option in DNG
+export / Convert to DNG and Photo Merge, which keep the Auto colour.
+
 ## Smart previews and the look version
 
 A smart preview keeps the result of the fit twice: the colour matrix is baked into its pixels and the tone and chroma curves are stored in its header. When the fit changes, a preview built earlier keeps the old look until it is rebuilt, and the render cache version does not reach it (renders are keyed on the library's files, proxies are files of their own).

@@ -1129,6 +1129,8 @@
   "Remove CA": "色収差を除去",
   "Remove Chromatic Aberration": "色収差を除去",
   "Camera local tone mapping": "カメラのローカルトーンマッピング",
+  "Calibrated camera colour": "キャリブレーション済みのカメラカラー",
+  "Start from the colour measured for this camera model instead of the look fitted to the camera's JPEG": "カメラのJPEGに合わせたルックではなく、このカメラ機種で測定された色から開始します",
   "Apply the local tone mapping stored in the raw (Apple ProRAW), as the camera renders it": "RAW に保存されたローカルトーンマッピング（Apple ProRAW）をカメラと同じように適用",
   "Remove from Album": "アルバムから削除",
   "Remove from Favorites": "お気に入りから削除",

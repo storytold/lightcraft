@@ -198,11 +198,35 @@ pub struct Profile {
     /// settings without it keep their JSON (and hash).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub camera_local_tone: bool,
+    /// Where a raw without colour matrices of its own takes its starting colour from
+    /// (`docs/camera-preview-colour.md`). Omitted when [`CameraColour::Auto`], so settings without
+    /// it keep their JSON (and hash).
+    #[serde(skip_serializing_if = "CameraColour::is_auto")]
+    pub camera_colour: CameraColour,
 }
 
 impl Default for Profile {
     fn default() -> Self {
-        Self { id: "lc.color".into(), amount: 100.0, camera_local_tone: false }
+        Self { id: "lc.color".into(), amount: 100.0, camera_local_tone: false, camera_colour: CameraColour::Auto }
+    }
+}
+
+/// The starting colour of a raw that carries no colour matrices (NEF, ARW, CR3, …).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CameraColour {
+    /// The first available of: a camera profile with tone fitted to the file's JPEG, a look fitted
+    /// to the file's JPEG, the model's spectral matrices, the neutral fallback.
+    #[default]
+    Auto,
+    /// The model's matrices from measured spectral sensitivities with LightCraft's default tone
+    /// curve, never the embedded JPEG; [`CameraColour::Auto`] for a model without them.
+    Colorimetric,
+}
+
+impl CameraColour {
+    pub fn is_auto(&self) -> bool {
+        *self == CameraColour::Auto
     }
 }
 

@@ -1136,6 +1136,8 @@
   "Remove CA": "Rimuovi AC",
   "Remove Chromatic Aberration": "Rimuovi aberrazione cromatica",
   "Camera local tone mapping": "Mappatura tonale locale della fotocamera",
+  "Calibrated camera colour": "Colore fotocamera calibrato",
+  "Start from the colour measured for this camera model instead of the look fitted to the camera's JPEG": "Partire dal colore misurato per questo modello di fotocamera invece che dall'aspetto adattato al JPEG della fotocamera",
   "Apply the local tone mapping stored in the raw (Apple ProRAW), as the camera renders it": "Applica la mappatura tonale locale salvata nel raw (Apple ProRAW), come la mostra la fotocamera",
   "Remove Disk from Library": "Rimuovi disco dalla libreria",
   "Remove Disk from Library…": "Rimuovi disco dalla libreria…",

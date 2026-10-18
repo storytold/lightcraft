@@ -5,6 +5,7 @@
 //! lime shirt olive that the camera kept lime): a hue/saturation table fitted to the residuals
 //! (applied like a DNG `ProfileHueSatMap`) corrects that when it also improves the held-out pixels.
 use lightcraft_color::{D50, D65, Mat3, PROPHOTO, REC2020, Xy, bradford, luminance_2020};
+use lightcraft_develop::CameraColour;
 use lightcraft_pipeline::tone::{CameraTone, ToneMap};
 use lightcraft_raster::{
     Rgb32f,
@@ -82,13 +83,16 @@ pub(crate) fn file_local_look(format: RawFormat) -> bool {
 /// `lens` is the file's own lens-correction warp ([`lens_geometry`], read before the caller removes it from
 /// `OpcodeList3`): the camera applied it to its JPEG, so the sensor proxy is warped the same way before pairing.
 /// `embedded` is the file's embedded lens vignetting, for the DNG tone fit.
+/// `colour` is the photo's Profile option: [`CameraColour::Colorimetric`] skips the JPEG (fit and black-and-white tone)
+/// for a model with spectral matrices, which then give the colour with LightCraft's default tone curve.
 pub(crate) fn starting_colour(
     raw: &mut RawImage,
     bytes: &[u8],
     lens: Option<&LensGeometry>,
     embedded: Option<&lightcraft_develop::EmbeddedLens>,
+    colour: CameraColour,
 ) -> (Xy, CameraTransform, Option<CameraLook>) {
-    let (xy, t, look) = starting_colour_with(raw, |raw, t| fit_preview(raw, bytes, t, lens), |raw, t| monochrome_look(raw, bytes, t, lens));
+    let (xy, t, look) = starting_colour_with(raw, colour, |raw, t| fit_preview(raw, bytes, t, lens), |raw, t| monochrome_look(raw, bytes, t, lens));
     if look.is_none() && dng_tone_eligible(raw, &t) {
         let look = fit_dng_tone(raw, bytes, &t, embedded);
         return (xy, t, look);
@@ -117,10 +121,21 @@ pub(crate) fn dng_tone_eligible(raw: &RawImage, t: &CameraTransform) -> bool {
         && p.gain_table_map.is_none()
 }
 
+/// Matrices from measured spectral sensitivities for the raw's camera model, when it has no colour matrices of its own
+/// and its starting look is otherwise fitted to its JPEG ([`file_local_look`]): what [`CameraColour::Colorimetric`]
+/// starts from.
+pub(crate) fn colorimetric_camera(raw: &RawImage) -> Option<&'static lightcraft_raw::spectral::Camera> {
+    if lightcraft_raw::color::has_matrix(&raw.color) || !file_local_look(raw.format) {
+        return None;
+    }
+    lightcraft_raw::spectral::find(raw.metadata.make.as_deref(), raw.metadata.model.as_deref()?)
+}
+
 /// [`starting_colour`] with the JPEG fit (the look, and whether the JPEG is black and white) and the black-and-white
 /// JPEG's tone fit passed in (tests pin the order with them).
 fn starting_colour_with(
     raw: &mut RawImage,
+    colour: CameraColour,
     fit: impl FnOnce(&RawImage, &CameraTransform) -> (Option<CameraLook>, bool),
     monochrome: impl FnOnce(&RawImage, &CameraTransform) -> Option<CameraLook>,
 ) -> (Xy, CameraTransform, Option<CameraLook>) {
@@ -130,6 +145,17 @@ fn starting_colour_with(
     };
     let (xy, t) = start(raw);
     if !t.matrix_is_fallback {
+        return (xy, t, None);
+    }
+    // Colorimetric: the measured matrices, never the JPEG (a model without them starts as Auto does)
+    if colour == CameraColour::Colorimetric
+        && let Some(camera) = colorimetric_camera(raw)
+    {
+        camera.fill(&mut raw.color);
+        if lightcraft_pipeline::profiling() {
+            eprintln!("[profile] {:?} camera colour from spectral sensitivities (Colorimetric): {} {}", raw.format, camera.make, camera.model);
+        }
+        let (xy, t) = start(raw);
         return (xy, t, None);
     }
     let (look, black_and_white) = fit(raw, &t);
@@ -162,7 +188,7 @@ pub(crate) fn starting_colour_tags(raw: &mut RawImage, bytes: &[u8]) -> Option<C
     let scale = crate::files::WbScaleOf::new(raw.format, &raw.color, raw.wb_multipliers, &raw.metadata);
     let white = scale.dng_white(&raw.color, lightcraft_raw::color::as_shot_white_xy(raw));
     // (a merge frame arrives without its lens warp: `lightcraft_merge` removes it before calling)
-    let (_, t, look) = starting_colour(raw, bytes, None, None);
+    let (_, t, look) = starting_colour(raw, bytes, None, None, CameraColour::Auto);
     dng_colour(&raw.color, &white, &t, look.as_ref())
 }
 
@@ -2555,6 +2581,7 @@ mod tests {
         let mut raw = raw_of(RawFormat::Cr2, "Canon", "Canon EOS 600D", color.clone());
         let (_, t, look) = starting_colour_with(
             &mut raw,
+            CameraColour::Auto,
             |_, _| panic!("no JPEG fit for a raw with its own matrices"),
             |_, _| panic!("no black-and-white JPEG fit for a raw with its own matrices"),
         );
@@ -2573,6 +2600,7 @@ mod tests {
             let fitted = dro_test_look(&std::array::from_fn(|i| 0.006 * 1.13f32.powi(i as i32)), &|x| x.sqrt());
             let (xy, t, look) = starting_colour_with(
                 &mut raw,
+                CameraColour::Auto,
                 |raw, t| {
                     assert!(t.matrix_is_fallback && !lightcraft_raw::color::has_matrix(&raw.color), "the fit sees the raw without spectral matrices");
                     (Some(fitted.clone()), false)
@@ -2593,14 +2621,19 @@ mod tests {
         assert!(crate::camera_profiles::get("ILCE-7M4").is_some());
         let camera = lightcraft_raw::spectral::find(Some("SONY"), "ILCE-7M4").unwrap();
         let mut raw = raw_of(RawFormat::Arw, "SONY", "ILCE-7M4", Default::default());
-        let (_, t, look) = starting_colour(&mut raw, &[], None, None);
+        let (_, t, look) = starting_colour(&mut raw, &[], None, None, CameraColour::Auto);
         assert!(look.is_none());
         assert_eq!(raw.color.color_matrix, camera.color_matrix.map(Some));
         assert!(!t.matrix_is_fallback);
 
         let camera = lightcraft_raw::spectral::find(Some("Canon"), "Canon EOS 600D").unwrap();
         let mut raw = raw_of(RawFormat::Cr2, "Canon", "Canon EOS 600D", Default::default());
-        let (xy, t, look) = starting_colour_with(&mut raw, |_, _| (None, false), |_, _| panic!("a colour JPEG never takes the black-and-white step"));
+        let (xy, t, look) = starting_colour_with(
+            &mut raw,
+            CameraColour::Auto,
+            |_, _| (None, false),
+            |_, _| panic!("a colour JPEG never takes the black-and-white step"),
+        );
         assert!(look.is_none());
         assert_eq!(raw.color.illuminant, [17, 21]);
         assert_eq!(raw.color.forward_matrix, camera.forward_matrix.map(Some));
@@ -2609,6 +2642,59 @@ mod tests {
         // white-balanced white stays white
         let w = t.matrix.apply([1.0; 3]);
         assert!(w.iter().all(|v| (v - 1.0).abs() < 1e-4), "{w:?}");
+    }
+
+    /// The Colorimetric Camera colour: a model with spectral matrices starts from them and its JPEG is never asked
+    /// (neither the fit nor the black-and-white tone); a model without them, or a file with matrices of its own,
+    /// starts as Auto does.
+    #[test]
+    fn colorimetric_starts_from_measured_colour_without_the_jpeg() {
+        let camera = lightcraft_raw::spectral::find(Some("NIKON CORPORATION"), "NIKON Z f").unwrap();
+        let mut raw = raw_of(RawFormat::Nef, "NIKON CORPORATION", "NIKON Z f", Default::default());
+        assert!(colorimetric_camera(&raw).is_some());
+        let (xy, t, look) = starting_colour_with(
+            &mut raw,
+            CameraColour::Colorimetric,
+            |_, _| panic!("Colorimetric never fits the JPEG"),
+            |_, _| panic!("nor reads its black-and-white tone"),
+        );
+        assert!(look.is_none(), "LightCraft's default tone curve");
+        assert!(!t.matrix_is_fallback);
+        assert_eq!(raw.color.forward_matrix, camera.forward_matrix.map(Some));
+        assert_eq!(xy, lightcraft_raw::color::as_shot_white_xy(&raw));
+        // the same file on Auto asks its JPEG first
+        let mut raw = raw_of(RawFormat::Nef, "NIKON CORPORATION", "NIKON Z f", Default::default());
+        let mut asked = false;
+        starting_colour_with(
+            &mut raw,
+            CameraColour::Auto,
+            |_, _| {
+                asked = true;
+                (None, false)
+            },
+            |_, _| None,
+        );
+        assert!(asked, "Auto fits the JPEG before the measured colour");
+
+        // no measured colour for the model: Colorimetric is Auto
+        let mut raw = raw_of(RawFormat::Nef, "NIKON CORPORATION", "NIKON Z 50", Default::default());
+        assert!(colorimetric_camera(&raw).is_none());
+        let mut asked = false;
+        let (_, t, _) = starting_colour_with(
+            &mut raw,
+            CameraColour::Colorimetric,
+            |_, _| {
+                asked = true;
+                (None, false)
+            },
+            |_, _| None,
+        );
+        assert!(asked && t.matrix_is_fallback, "the fit, then the neutral fallback");
+
+        // a file with colour matrices of its own keeps them, whatever the option
+        let own = lightcraft_raw::ColorData { color_matrix: camera.color_matrix.map(Some), illuminant: [17, 21], ..Default::default() };
+        let raw = raw_of(RawFormat::Dng, "NIKON CORPORATION", "NIKON Z f", own);
+        assert!(colorimetric_camera(&raw).is_none());
     }
 
     /// After step 4 or 5: a photo whose JPEG gave no fit and is black and white gets its tone curve on top of the
@@ -2625,6 +2711,7 @@ mod tests {
         let mut raw = raw_of(RawFormat::Cr2, "Canon", "Canon EOS 600D", Default::default());
         let (xy, t, look) = starting_colour_with(
             &mut raw,
+            CameraColour::Auto,
             |_, _| (None, true),
             |raw, t| {
                 assert!(!t.matrix_is_fallback && raw.color.forward_matrix == camera.forward_matrix.map(Some), "the spectral matrices are in");
@@ -2638,6 +2725,7 @@ mod tests {
         let mut raw = raw_of(RawFormat::Cr2, "Canon", "Canon EOS 7D", Default::default());
         let (_, t, look) = starting_colour_with(
             &mut raw,
+            CameraColour::Auto,
             |_, _| (None, true),
             |_, t| {
                 assert!(t.matrix_is_fallback, "outside the table: the neutral fallback's colour");
@@ -2652,13 +2740,13 @@ mod tests {
     #[test]
     fn a_camera_outside_the_table_keeps_the_fallback() {
         let mut raw = raw_of(RawFormat::Cr2, "Canon", "Canon EOS 7D", Default::default());
-        let (_, t, look) = starting_colour(&mut raw, &[], None, None);
+        let (_, t, look) = starting_colour(&mut raw, &[], None, None, CameraColour::Auto);
         assert!(look.is_none() && t.matrix_is_fallback);
         assert_eq!(raw.color, lightcraft_raw::ColorData::default());
         // without a model there is no table row
         let mut raw = raw_of(RawFormat::Cr2, "Canon", "", Default::default());
         raw.metadata.model = None;
-        assert!(starting_colour(&mut raw, &[], None, None).1.matrix_is_fallback);
+        assert!(starting_colour(&mut raw, &[], None, None, CameraColour::Auto).1.matrix_is_fallback);
     }
 
     /// The colour precedence on public raws (each skipped without its corpus file): a photo whose JPEG fit is
@@ -2684,7 +2772,7 @@ mod tests {
             let measured = lightcraft_raw::spectral::find(make, model).is_some();
             let covered = measured || lightcraft_raw::kelvin_presets::covers(make, model);
             let before = raw.color.clone();
-            let (_, t, fitted) = starting_colour(&mut raw, &bytes, lens.as_ref(), None);
+            let (_, t, fitted) = starting_colour(&mut raw, &bytes, lens.as_ref(), None, CameraColour::Auto);
             let spectral = !own && fitted.is_none() && measured;
             eprintln!("{name}: own matrices {own}, JPEG fit {}, spectral {spectral}", fitted.is_some());
             assert_eq!(raw.color != before, spectral, "{name}");
@@ -3734,6 +3822,7 @@ mod tests {
         let mut raw = raw_of(RawFormat::Arw, "SONY", "ILCE-7M4", Default::default());
         let (_, t, look) = starting_colour_with(
             &mut raw,
+            CameraColour::Auto,
             |_, _| (None, true),
             |_, t| {
                 assert!(!t.matrix_is_fallback, "on the spectral matrices");

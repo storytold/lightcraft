@@ -130,7 +130,21 @@ fn source_edge_needed(p: &Photo, settings: &DevelopSettings, apply_crop: bool, o
 }
 
 /// Decodes a file into a linear Rec.2020 image no larger than `max_edge` (set by the app).
-pub type FileLoader = Arc<dyn Fn(&str, usize) -> Result<(Rgb32f, SourceInfo), String> + Send + Sync>;
+pub type FileLoader = Arc<dyn Fn(&str, usize, LoadOptions) -> Result<(Rgb32f, SourceInfo), String> + Send + Sync>;
+
+/// The photo's settings a decode depends on: decoded sources are cached with them ([`DecodedSource::options`]) and
+/// decoded again when they change.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LoadOptions {
+    /// Where a raw without colour matrices takes its starting colour from (`Profile::camera_colour`).
+    pub colour: lightcraft_develop::CameraColour,
+}
+
+impl LoadOptions {
+    pub fn of(s: &DevelopSettings) -> LoadOptions {
+        LoadOptions { colour: s.profile.camera_colour }
+    }
+}
 
 /// A raw file's embedded (camera-rendered) preview as display sRGB, oriented, no larger than
 /// `max_edge` (set by the app). `None`: no usable preview.
@@ -153,7 +167,7 @@ pub struct DenoiseSpec {
 
 /// Decodes a raw file once and develops it twice: as usual, and from the denoised picture in `spec` when that can be
 /// read (`None` when it cannot). Both are at most `max_edge` long and the same size.
-pub type PairLoader = Arc<dyn Fn(&str, usize, &DenoiseSpec) -> Result<(Rgb32f, Option<Rgb32f>, SourceInfo), String> + Send + Sync>;
+pub type PairLoader = Arc<dyn Fn(&str, usize, &DenoiseSpec, LoadOptions) -> Result<(Rgb32f, Option<Rgb32f>, SourceInfo), String> + Send + Sync>;
 
 /// A photo's denoised picture next to its plain one, and the last mix of the two that was asked for.
 pub struct Twin {
@@ -183,11 +197,19 @@ pub struct DecodedSource {
     pub camera_tone: Option<lightcraft_pipeline::tone::CameraTone>,
     /// The same picture developed from the AI-denoised mosaic, when the photo has one cached.
     pub denoised: Option<Arc<Twin>>,
+    /// The settings the file was decoded with.
+    pub options: LoadOptions,
 }
 
 impl DecodedSource {
     pub fn new(image: Arc<Rgb32f>, info: Option<SourceInfo>) -> Self {
-        DecodedSource { image, info, camera_tone: None, denoised: None }
+        DecodedSource { image, info, camera_tone: None, denoised: None, options: LoadOptions::default() }
+    }
+
+    /// Whether these pixels are what decoding with `options` gives: decoded with them, or from a source the options
+    /// don't change (no measured colour to start from, a smart preview, a demo scene).
+    pub fn serves(&self, options: LoadOptions) -> bool {
+        self.options == options || !self.info.as_ref().is_some_and(|i| i.colorimetric)
     }
 
     /// The picture to develop for a Denoise `amount` (0 to 1, see [`DevelopSettings::denoise_amount`]): the plain one,
@@ -258,6 +280,8 @@ pub enum SourceRef {
         fallback: Option<std::path::PathBuf>,
         /// The photo has a cached denoised picture: load it with the plain one (see [`PairLoader`]).
         denoise: Option<(DenoiseSpec, PairLoader)>,
+        /// The photo's settings the decode depends on.
+        options: LoadOptions,
     },
     /// A smart preview standing in for a missing original.
     Smart {
@@ -281,9 +305,10 @@ impl SourceRef {
                 return Ok(DecodedSource { image: Arc::new(image), denoised: None, ..(**from).clone() });
             }
             SourceRef::Demo { scene, max_edge } => crate::demo::scene_pixels(scene, *max_edge)?,
-            SourceRef::File { path, max_edge, loader, fallback, denoise } => {
+            SourceRef::File { path, max_edge, loader, fallback, denoise, options } => {
                 let plain = || match loader {
-                    Some(l) => l(path, *max_edge).map(|(image, info)| DecodedSource::new(Arc::new(image), Some(info))),
+                    Some(l) => l(path, *max_edge, *options)
+                        .map(|(image, info)| DecodedSource { options: *options, ..DecodedSource::new(Arc::new(image), Some(info)) }),
                     None => Err(format!("no decoder available for {path}")),
                 };
                 // the denoised picture comes with the plain one from a single decode; when it cannot be read the
@@ -297,7 +322,7 @@ impl SourceRef {
                             None => true,
                         };
                         if made {
-                            pair(path, *max_edge, spec).and_then(|(image, twin, info)| {
+                            pair(path, *max_edge, spec, *options).and_then(|(image, twin, info)| {
                                 if spec.make.is_some() && twin.is_none() {
                                     return Err("the cached AI Denoise picture could not be read; clear the denoise cache and retry".into());
                                 }
@@ -306,6 +331,7 @@ impl SourceRef {
                                     info: Some(info),
                                     camera_tone: None,
                                     denoised: twin.map(|t| Arc::new(Twin::new(Arc::new(t)))),
+                                    options: *options,
                                 })
                             })
                         } else {
@@ -661,15 +687,23 @@ impl MediaCache {
     }
 
     fn source_ref_with(&mut self, p: &Photo, level: SourceLevel, cached: bool) -> SourceRef {
-        let mut r = self.source_ref_plain(p, level, cached);
+        let wanted = LoadOptions::of(&p.develop);
+        let mut r = self.source_ref_plain(p, level, cached, wanted);
+        if let SourceRef::File { options, .. } = &mut r {
+            *options = wanted;
+        }
         if let (SourceRef::File { denoise, .. }, Some((spec, loader))) = (&mut r, self.denoise.get(p.id)) {
             *denoise = Some((spec.clone(), loader.clone()));
         }
         r
     }
 
-    fn source_ref_plain(&mut self, p: &Photo, level: SourceLevel, cached: bool) -> SourceRef {
-        if cached && let Some(a) = self.get_source(p.id, level) {
+    fn source_ref_plain(&mut self, p: &Photo, level: SourceLevel, cached: bool, wanted: LoadOptions) -> SourceRef {
+        // (a source decoded with other settings is decoded again, and the new one replaces it in the cache)
+        if cached
+            && let Some(a) = self.get_source(p.id, level)
+            && a.serves(wanted)
+        {
             return SourceRef::Loaded(Box::new(a));
         }
         // a thumbnail of a photo whose preview is decoded (the one in the loupe) is cut from it; not
@@ -678,6 +712,7 @@ impl MediaCache {
             && level == SourceLevel::Thumb
             && self.denoise.spec(p.id).is_none()
             && let Some(big) = self.get_source(p.id, SourceLevel::Preview)
+            && big.serves(wanted)
         {
             return SourceRef::Fit { from: Box::new(big), max_edge: level.max_edge() };
         }
@@ -718,12 +753,24 @@ impl MediaCache {
                 }
                 match self.scenes.iter().find(|s| s.id == *scene) {
                     Some(s) => SourceRef::Demo { scene: Box::new(s.clone()), max_edge },
-                    None => SourceRef::File { path: format!("demo:{scene}"), max_edge, loader: None, fallback: None, denoise: None },
+                    None => SourceRef::File {
+                        path: format!("demo:{scene}"),
+                        max_edge,
+                        loader: None,
+                        fallback: None,
+                        denoise: None,
+                        options: LoadOptions::default(),
+                    },
                 }
             }
-            Source::File { path } => {
-                SourceRef::File { path: path.clone(), max_edge, loader: self.file_loader.clone(), fallback: None, denoise: None }
-            }
+            Source::File { path } => SourceRef::File {
+                path: path.clone(),
+                max_edge,
+                loader: self.file_loader.clone(),
+                fallback: None,
+                denoise: None,
+                options: LoadOptions::default(),
+            },
         }
     }
 }
@@ -1550,6 +1597,8 @@ impl crate::Session {
     pub fn accept(&mut self, r: &RenderResult) {
         if let Some(src) = &r.loaded
             && r.source_key.is_none_or(|key| self.catalog.photo(r.photo).is_some_and(|p| Hasher128::new().str(&content_key(p)).finish() == key))
+            // (not a source decoded with settings the photo no longer has: one decoded for them replaces it)
+            && self.catalog.photo(r.photo).is_none_or(|p| src.serves(LoadOptions::of(&p.develop)))
         {
             if let Some(info) = &src.info {
                 self.learn_as_shot_wb(r.photo, info);
@@ -1749,7 +1798,7 @@ mod thumbnail_hash_tests {
     #[test]
     fn source_from_before_content_reload_is_not_accepted() {
         let mut s = session();
-        s.media.file_loader = Some(Arc::new(|_, _| Ok((Rgb32f::new(8, 8), SourceInfo::default()))));
+        s.media.file_loader = Some(Arc::new(|_, _, _| Ok((Rgb32f::new(8, 8), SourceInfo::default()))));
         let old = s.thumb_job(PhotoId(1), 256).unwrap().run();
         assert!(old.loaded.is_some());
         s.catalog
@@ -1767,13 +1816,71 @@ mod thumbnail_hash_tests {
         s.accept(&old);
         assert_eq!(s.media.source_usage().0, 0);
     }
+    /// The photo's Camera colour option is part of the decode: a source decoded with another option is decoded again
+    /// (and a late render of the old one is not taken back into the cache); one the option doesn't change is reused.
+    #[test]
+    fn camera_colour_decodes_again_only_when_it_changes_the_source() {
+        use lightcraft_develop::CameraColour;
+        let decodes = |colorimetric: bool| {
+            let seen = Arc::new(std::sync::Mutex::new(Vec::<LoadOptions>::new()));
+            let log = seen.clone();
+            let loader: FileLoader = Arc::new(move |_, _, options| {
+                log.lock().unwrap().push(options);
+                Ok((Rgb32f::new(8, 8), SourceInfo { raw: true, colorimetric, ..SourceInfo::default() }))
+            });
+            (loader, seen)
+        };
+        let set = |s: &mut crate::Session, colour: CameraColour| {
+            let mut d = (*s.catalog.photo(PhotoId(1)).unwrap().develop).clone();
+            d.profile.camera_colour = colour;
+            s.catalog.apply(Op::SetDevelop { id: PhotoId(1), settings: Arc::new(d), label: "edit".into(), edited: None }).unwrap();
+        };
+        let render = |s: &mut crate::Session| {
+            let r = s.render_job(PhotoId(1), 64, 64, false, true).unwrap().run();
+            s.accept(&r);
+        };
+
+        let mut s = session();
+        let (loader, seen) = decodes(true);
+        s.media.file_loader = Some(loader);
+        render(&mut s);
+        // a job made before the option changes, finishing after it
+        let late = s.render_job(PhotoId(1), 64, 64, false, true).unwrap();
+        render(&mut s);
+        assert_eq!(seen.lock().unwrap().len(), 1, "the decoded source is reused while the option stays");
+        set(&mut s, CameraColour::Colorimetric);
+        render(&mut s);
+        assert_eq!(seen.lock().unwrap().len(), 2, "a new option decodes again");
+        assert_eq!(seen.lock().unwrap()[1].colour, CameraColour::Colorimetric, "with the option");
+        render(&mut s);
+        assert_eq!(seen.lock().unwrap().len(), 2, "and the new source is reused");
+        // the late job re-decodes with the old option (its source was the cached one: decode it from the file)
+        let mut late = late;
+        late.source = s.media.origin_ref(&Source::File { path: "hash-fixture.jpg".into() }, 64);
+        let late = late.run();
+        assert_eq!(late.loaded.as_ref().map(|l| l.options.colour), Some(CameraColour::Auto));
+        s.accept(&late);
+        let n = seen.lock().unwrap().len();
+        render(&mut s);
+        assert_eq!(seen.lock().unwrap().len(), n, "the Colorimetric source stayed in the cache");
+
+        // a camera without measured colour: the option changes nothing, so the source is kept
+        let mut s = session();
+        let (loader, seen) = decodes(false);
+        s.media.file_loader = Some(loader);
+        render(&mut s);
+        set(&mut s, CameraColour::Colorimetric);
+        render(&mut s);
+        assert_eq!(seen.lock().unwrap().len(), 1, "no second decode where the option has no effect");
+    }
+
     /// A panic while rendering (here in the decoder) used to end the pool's worker thread without
     /// an answer, so the view that asked showed "Rendering…" forever. It is the job's failure now,
     /// for renders and for stand-ins, answering the request it came from.
     #[test]
     fn a_render_that_panics_fails_instead_of_never_answering() {
         let mut s = session();
-        s.media.file_loader = Some(Arc::new(|_, _| panic!("decoder bug")));
+        s.media.file_loader = Some(Arc::new(|_, _, _| panic!("decoder bug")));
         let mut job = s.thumb_job(PhotoId(1), 256).unwrap();
         job.request_id = 42;
         let (key, level, source_key) = (job.key, job.level, job.source_key);
@@ -1859,13 +1966,14 @@ mod tests {
         job.source = SourceRef::File {
             path: "synthetic.arw".into(),
             max_edge: 64,
-            loader: Some(Arc::new(move |_, _| {
+            loader: Some(Arc::new(move |_, _, _| {
                 let mut image = Rgb32f::new(64, 64);
                 image.data.fill([0.1; 3]);
                 Ok((image, loaded_info.clone()))
             })),
             fallback: None,
             denoise: None,
+            options: Default::default(),
         };
         job.info = SourceInfo::default(); // Header facts cannot override decoder facts.
         job.settings = Arc::new(DevelopSettings::default());
@@ -1918,9 +2026,10 @@ mod tests {
         job.source = SourceRef::File {
             path: "/photos/DSC00001.ARW".into(),
             max_edge: 64,
-            loader: Some(Arc::new(move |_, _| Ok((loaded_pixels.clone(), loaded_info.clone())))),
+            loader: Some(Arc::new(move |_, _, _| Ok((loaded_pixels.clone(), loaded_info.clone())))),
             fallback: None,
             denoise: None,
+            options: Default::default(),
         };
         let undo_before = s.undo.len();
         let request = job.request;

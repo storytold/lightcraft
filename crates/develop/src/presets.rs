@@ -135,6 +135,11 @@ pub fn extract_groups(s: &DevelopSettings, groups: &[SettingsGroup]) -> Value {
             }
         }
     }
+    // the Camera colour is left out of the settings while it is Auto; a preset or a sync of the Profile group still
+    // carries it, so that applying it turns a Colorimetric photo back to Auto
+    if let Some(Value::Object(profile)) = out.get_mut("profile") {
+        profile.entry("camera_colour").or_insert_with(|| serde_json::to_value(s.profile.camera_colour).unwrap_or(Value::Null));
+    }
     Value::Object(out)
 }
 
@@ -163,7 +168,13 @@ fn scale_patch(base: &Value, patch: &Value, t: f64) -> Value {
             let mut out = Map::new();
             for (k, pv) in p {
                 let bv = b.get(k).unwrap_or(&Value::Null);
-                out.insert(k.clone(), scale_patch(bv, pv, t));
+                let v = scale_patch(bv, pv, t);
+                // a field the settings leave out while it has its default (`camera_colour`, `camera_local_tone`) keeps
+                // it below the halfway amount: a `null` would not deserialize, and the whole preset would not apply
+                if v.is_null() && !b.contains_key(k) {
+                    continue;
+                }
+                out.insert(k.clone(), v);
             }
             Value::Object(out)
         }

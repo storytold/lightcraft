@@ -975,7 +975,7 @@ fn dngs_of_raws_without_colour_matrices_carry_the_colour_they_open_with() {
         std::fs::write(&path, &bytes).unwrap();
         let mut opened = lightcraft_raw::decode(&bytes).unwrap();
         assert!(!has_matrix(&opened.color));
-        let (_, want, look) = crate::camera_preview::starting_colour(&mut opened, &bytes, None, None);
+        let (_, want, look) = crate::camera_preview::starting_colour(&mut opened, &bytes, None, None, lightcraft_develop::CameraColour::Auto);
         assert_eq!((want.matrix_is_fallback, look.is_none()), (!measured, true), "{model}");
 
         let mut s = Session::new().with_fs();

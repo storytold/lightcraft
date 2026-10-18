@@ -213,6 +213,8 @@
   "Camera": "Fotoaparát",
   "Camera Info": "Informace o fotoaparátu",
   "Camera local tone mapping": "Místní mapování tónů fotoaparátu",
+  "Calibrated camera colour": "Kalibrovaná barva fotoaparátu",
+  "Start from the colour measured for this camera model instead of the look fitted to the camera's JPEG": "Vycházet z barev naměřených pro tento model fotoaparátu místo vzhledu přizpůsobeného JPEG z fotoaparátu",
   "Camera make and model": "Výrobce a model fotoaparátu",
   "Cameras and Cards": "Fotoaparáty a karty",
   "Cancel": "Zrušit",

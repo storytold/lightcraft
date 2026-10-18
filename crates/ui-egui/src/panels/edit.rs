@@ -203,6 +203,20 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             }
         });
     }
+    // a raw without colour matrices whose camera model has measured ones: off starts from the look fitted to the
+    // camera's JPEG (Auto), on from the measured colour with LightCraft's own tone curve (Colorimetric)
+    if app.session.source_info(id).colorimetric {
+        egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 0, bottom: 10 }).show(ui, |ui| {
+            let mut on = d.profile.camera_colour == lightcraft_develop::CameraColour::Colorimetric;
+            let r = ui.checkbox(&mut on, crate::i18n::tr("Calibrated camera colour"));
+            crate::widgets::register(ui.ctx(), "check:profile.cameraColour", r.rect);
+            let tip = "Start from the colour measured for this camera model instead of the look fitted to the camera's JPEG";
+            if r.on_hover_text(crate::i18n::tr(tip)).changed() {
+                let mode = if on { "colorimetric" } else { "auto" };
+                let _ = app.run("develop.merge", json!({"settings": {"profile": {"camera_colour": mode}}, "label": "Calibrated Camera Colour"}));
+            }
+        });
+    }
     divider(ui);
 
     section(app, ui, &d, "light", "Light", |app, ui, d| {
