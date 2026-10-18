@@ -151,8 +151,8 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
                 return Ok(ProbeInfo {
                     width: w,
                     height: h,
-                    source_width: w,
-                    source_height: h,
+                    source_width: 0,
+                    source_height: 0,
                     format: ext_upper(name),
                     kind: MediaKind::Raw,
                     file_size: bytes.len() as u64,

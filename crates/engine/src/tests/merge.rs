@@ -187,8 +187,10 @@ fn panorama_memory_estimate_allows_projected_canvas_larger_than_source_area() {
         .into_iter()
         .map(|image| Frame::from_linear_rec2020(image, None))
         .collect();
-    let limit_error = lightcraft_merge::pano::stitch_with_output_pixel_limit(bounded_frames, &options, source_pixels, &|_, _| true).unwrap_err();
-    assert!(limit_error.to_string().contains("memory limit"), "{limit_error}");
+    let bounded = lightcraft_merge::pano::stitch_with_output_pixel_limit(bounded_frames, &options, source_pixels, &|_, _| true).unwrap();
+    let bounded_pixels = bounded.image.width.checked_mul(bounded.image.height).unwrap();
+    assert!(bounded_pixels <= source_pixels, "bounded canvas uses {bounded_pixels} pixels above its {source_pixels}-pixel limit");
+    assert!(bounded_pixels < output_pixels, "the native canvas should be scaled down to fit the pixel limit");
 
     let estimated = estimate_merge_working_bytes_with_budget(&MergeKind::Panorama { pano: options }, &[(480, 360); 3], None, usize::MAX).unwrap();
     assert!(

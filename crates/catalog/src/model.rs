@@ -266,7 +266,7 @@ pub struct Photo {
     pub width: u32,
     pub height: u32,
     /// Dimensions the source decoder reads before applying a raw's default crop. Rendered images
-    /// use their native dimensions. Zero means an older catalog did not record this geometry.
+    /// use their native dimensions. Zero means a probe or older catalog did not record this geometry.
     #[serde(default)]
     pub source_width: u32,
     #[serde(default)]
