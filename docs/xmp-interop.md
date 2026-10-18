@@ -9,7 +9,7 @@ other tools), and let LightCraft pick up edits made elsewhere.
 | | |
 |---|---|
 | Name | `<stem>.xmp` by default (`IMG_0001.CR3` → `IMG_0001.xmp`); `<file>.xmp` (`IMG_0001.CR3.xmp`) with `naming: "full"`. Reading accepts either (preferred first) and `.XMP`. With stem naming, files sharing a stem don't share a sidecar: see *Shared names* below. |
-| Write | `photo.saveMetadataToFile {ids?}` (Photo ▸ Save Metadata to File, ⌘S), or automatically after every change with `library.xmpPreferences {autoWrite: true}` (File ▸ Automatically Write Changes into XMP). Slider drags are written once, when the drag ends; undo/redo rewrite the sidecar. An existing sidecar is **merged into, never replaced** (see *Saving into an existing sidecar*). Written atomically (temp file, fsync, rename). The result lists `written`, `merged` and `backups`. |
+| Write | `photo.saveMetadataToFile {ids?}` (Photo ▸ Save Metadata to File, ⌘S), or automatically after every change with `library.xmpPreferences {autoWrite: true}` (File ▸ Automatically Write Changes into XMP). Slider drags are written once, when the drag ends; undo/redo rewrite the sidecar. Capture time edits (Edit Capture Time, their undo and redo) are written like any other change, with the same existing auto-write behaviour: a sidecar holding only another app's `crs:` settings then gets LightCraft's properties too, and a read-only sidecar is replaced (as a rating change does). An existing sidecar is **merged into, never replaced** (see *Saving into an existing sidecar*). Written atomically (temp file, fsync, rename). The result lists `written`, `merged` and `backups`. |
 | Read | On import (`library.import`, the report counts `sidecars`), and `photo.readMetadataFromFile {ids?}` (one undo step). For raw/DNG files without a sidecar, the XMP embedded in the file is used. `photo.readMetadataFromFile` never writes the sidecar, even with auto-write on: writing back what it has just read would add `lc:settings`, which later reads prefer over another app's `crs:` edits (issue #934). |
 | Preferences | `library.xmpPreferences {autoWrite?, naming?: stem\|full}`, stored in the library's `prefs.json`. |
 
@@ -26,6 +26,7 @@ What we write (standard namespaces, so other tools can read the metadata):
 | Capture time, GPS | `exif:DateTimeOriginal`, `photoshop:DateCreated`, `exif:GPSLatitude`/`GPSLongitude` |
 | Pick / reject flag | `lc:flag` (`pick`, `reject`, `none`) |
 | Location | `lc:location` |
+| Capture time LightCraft wrote | `lc:captureTime` (the `exif:DateTimeOriginal` / `photoshop:DateCreated` value of a time set in LightCraft, so a later save can tell its own from another app's) |
 | Develop settings | `lc:settings` — our complete `DevelopSettings` as JSON (exact round trip, incl. masks, spots, crop and the rendering process; settings without `process` are V1, see [process-versions.md](process-versions.md)) |
 
 `lc:` is `http://ns.lightcraft.app/lc/1.0/`.
@@ -34,6 +35,10 @@ Reading merges into the catalog with the **sidecar winning** for every field it 
 kept. The one exception is the **capture time**: a time embedded in the file (EXIF/IPTC) always wins; when the file
 has none, the sidecar's `exif:DateTimeOriginal`, else `photoshop:DateCreated`, else `xmp:CreateDate` (ISO 8601) is
 used — on import (it then also files a copied photo in its date folder) and by `photo.readMetadataFromFile` (undoable).
+A photo with no capture time anywhere is dated by the file's modification time, as Lightroom does; that guess is never
+written to a sidecar as `exif:DateTimeOriginal` / `photoshop:DateCreated`, and a sidecar's capture time read later
+replaces it. The library records where each capture time came from: the file or a sidecar (another app's or the camera's), set
+in LightCraft (even to the time it already had), or that guess; undo and redo keep track.
 `xmp:Rating="-1"` (the XMP convention for rejected) sets the reject flag. Develop settings come from
 `lc:settings` when present (exact); otherwise from the `crs:` fields below (approximate).
 
@@ -53,7 +58,20 @@ the only copy of those edits outside that application's catalog. Saving never dr
   (clearing a title in LightCraft clears it in the file). All of them are read back on import, so the library starts
   from what the sidecar said.
 - The **capture time** (`exif:DateTimeOriginal`, `photoshop:DateCreated`) and **GPS** (`exif:GPSLatitude`,
-  `exif:GPSLongitude`) are replaced only when LightCraft has a value; otherwise the file's stay.
+  `exif:GPSLongitude`) are replaced only when LightCraft has a value; otherwise the file's stay. For the capture time,
+  a property is LightCraft's own only while it is byte for byte the time noted in `lc:captureTime`; any other is
+  another app's. A time set in LightCraft is written and noted, unless it is the other app's own (in any spelling); a
+  time read from the file or sidecar is never noted, and leaves another app's time in the sidecar alone. When the photo
+  goes back from LightCraft's time (an undo), its own properties are rewritten with the file's time, or removed for a
+  file-date guess. Exported files' XMP carries the note for a time set in LightCraft.
+  **Limits:**
+  - A time another app wrote into the sidecar that LightCraft never read is lost when a time set in LightCraft writes
+    over it and that edit is undone (the sidecar no longer has it; saving over it lost it before this too).
+    Workaround: Read Metadata from File first, so the other app's time is the photo's, and undo goes back to it.
+  - A library from before catalog format 10 doesn't record which capture times were file-date guesses, so its guesses
+    count as times from the file and are written to sidecars, as before (Reload doesn't tell them apart either yet).
+  - A sidecar with two `exif:DateTimeOriginal` (or `photoshop:DateCreated`) properties in one description is malformed
+    RDF: LightCraft reads only the first value, and a save that removes its own time removes both.
 - **Everything else is kept byte for byte**: other namespaces (`crs:`, `xmpMM:`, `lr:hierarchicalSubject`, unknown
   ones), `xmp:CreatorTool`, comments, the packet wrapper and padding. LightCraft's properties go into one
   `rdf:Description` of their own; owned properties written by another application (in attribute or element form) are

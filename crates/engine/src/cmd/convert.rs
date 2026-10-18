@@ -249,7 +249,7 @@ fn fill_missing_meta(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::P
         ops.push(Op::SetMeta { id, meta: Box::new(m) });
     }
     if ph.captured.is_none() && info.captured.is_some() {
-        ops.push(Op::SetCaptured { id, captured: info.captured.clone() });
+        ops.push(Op::SetCaptured { id, captured: info.captured.clone(), from: lightcraft_catalog::CaptureProvenance::FromFile });
     }
     ops
 }

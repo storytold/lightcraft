@@ -46,6 +46,27 @@ pub enum MediaKind {
     Video,
 }
 
+/// Where a photo's capture time ([`Photo::captured`]) came from, which decides what saving the sidecar does with it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CaptureProvenance {
+    /// Read from the file or its sidecar: the camera's, or another application's (also catalogs from before this was
+    /// recorded). A save never claims it as LightCraft's own, and leaves a sidecar's own capture time alone.
+    #[default]
+    FromFile,
+    /// Set here (Edit Capture Time): LightCraft's own, written to the sidecar and noted as such.
+    Stated,
+    /// No capture time anywhere: import took the file's modification time instead, as Lightroom does. A guess, never
+    /// written to XMP; a capture time read from a sidecar later replaces it.
+    FileDate,
+}
+
+impl CaptureProvenance {
+    pub fn is_from_file(&self) -> bool {
+        *self == CaptureProvenance::FromFile
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Flag {
@@ -236,6 +257,12 @@ pub struct Photo {
     /// ISO 8601 local capture time.
     #[serde(default)]
     pub captured: Option<String>,
+    /// Where [`Photo::captured`] came from: the file (default, left out when saved), set here, or the
+    /// file's modification time standing in for one ([`Photo::captured_stated`]). Every capture time
+    /// set says where it came from, even one equal to the time before; undo restores it
+    /// ([`crate::Op::SetCaptured`]).
+    #[serde(default, skip_serializing_if = "CaptureProvenance::is_from_file")]
+    pub captured_from: CaptureProvenance,
     pub imported: String,
     #[serde(default)]
     pub meta: Meta,
@@ -371,6 +398,7 @@ impl Photo {
             height,
             file_size: 0,
             captured: None,
+            captured_from: CaptureProvenance::FromFile,
             imported: imported.to_string(),
             meta: Meta::default(),
             rating: 0,
@@ -395,6 +423,11 @@ impl Photo {
             preview_checked: String::new(),
             local_baseline: None,
         }
+    }
+    /// [`Photo::captured`], unless it is still the file-date guess import made
+    /// ([`CaptureProvenance::FileDate`]): a capture time the file, a sidecar or the user stated.
+    pub fn captured_stated(&self) -> Option<&str> {
+        self.captured.as_deref().filter(|_| self.captured_from != CaptureProvenance::FileDate)
     }
     /// Sets [`Photo::preview_only`] as this build decided it, with its stamp.
     pub fn set_preview_only(&mut self, preview_only: Option<String>) {

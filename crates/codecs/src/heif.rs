@@ -34,6 +34,11 @@ pub(crate) fn header(_bytes: &[u8]) -> Result<(u32, u32, u16)> {
     Err(Error::Unsupported(F, NOT_IN_BUILD))
 }
 
+#[cfg(not(feature = "heif"))]
+pub(crate) fn metadata(_bytes: &[u8]) -> Result<(Option<Vec<u8>>, Option<String>)> {
+    Err(Error::Unsupported(F, NOT_IN_BUILD))
+}
+
 #[cfg(feature = "heif")]
 fn err(e: lightcraft_heif::Error) -> Error {
     match e {
@@ -48,6 +53,12 @@ fn err(e: lightcraft_heif::Error) -> Error {
 pub(crate) fn header(bytes: &[u8]) -> Result<(u32, u32, u16)> {
     let info = lightcraft_heif::probe(bytes).map_err(err)?;
     Ok((info.width, info.height, 1))
+}
+
+/// The primary image's EXIF (TIFF structure) and XMP, from the container alone.
+#[cfg(feature = "heif")]
+pub(crate) fn metadata(bytes: &[u8]) -> Result<(Option<Vec<u8>>, Option<String>)> {
+    lightcraft_heif::read_metadata(bytes).map_err(err)
 }
 
 #[cfg(feature = "heif")]
@@ -121,6 +132,20 @@ mod tests {
         assert!(matches!(&r, Err(crate::Error::Unsupported(Format::Heif, why)) if why.contains("isn't included in this build")), "{r:?}");
         let h = crate::read_header(HEIC_HEADER);
         assert!(matches!(&h, Err(crate::Error::Unsupported(Format::Heif, why)) if why.contains("isn't included in this build")), "{h:?}");
+        let m = crate::heif_metadata(HEIC_HEADER);
+        assert!(matches!(&m, Err(crate::Error::Unsupported(Format::Heif, why)) if why.contains("isn't included in this build")), "{m:?}");
+    }
+
+    /// An iPhone photo's camera and capture time are in its container's `Exif` item: read without decoding a picture.
+    #[cfg(feature = "heif")]
+    #[test]
+    fn exif_comes_from_the_container() {
+        use lightcraft_heif::testdata::{Spec, build};
+        let exif = b"MM\0\x2a\0\0\0\x08\0\0".to_vec();
+        let grey = |_: u32, _: u32| [128u16, 128, 128];
+        let bytes = build(&Spec { exif: Some(exif.clone()), ..Spec::new(16, 16, &grey) });
+        assert_eq!(crate::heif_metadata(&bytes).unwrap(), (Some(exif), None));
+        assert!(crate::heif_metadata(&HEIC_RS_BOX_PANIC).is_err());
     }
 
     /// Found by PhotoCraft's `decode_heif` fuzz target: a malformed box makes heic-rs 0.1.1 slice

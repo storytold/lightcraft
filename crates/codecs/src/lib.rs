@@ -197,6 +197,14 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
         .unwrap_or_else(|_| Err(Error::Malformed(format, "header reader panicked".into())))
 }
 
+/// The EXIF (TIFF structure, without HEIF's offset header) and XMP packet of a HEIF / HEIC file's
+/// primary image, read from the container alone: no picture is decoded. (The other formats'
+/// metadata blocks are found by `lightcraft-meta`; HEIF's items take the HEIF reader, so a build
+/// without the `heif` feature answers [`Error::Unsupported`].) Never panics.
+pub fn heif_metadata(bytes: &[u8]) -> Result<(Option<Vec<u8>>, Option<String>)> {
+    std::panic::catch_unwind(|| heif::metadata(bytes)).unwrap_or_else(|_| Err(Error::Malformed(Format::Heif, "metadata reader panicked".into())))
+}
+
 /// [`read_header`] without the panic guard (for fuzzing our own code paths).
 #[doc(hidden)]
 pub fn read_header_unguarded(bytes: &[u8], format: Format) -> Result<Header> {

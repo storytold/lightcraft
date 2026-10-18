@@ -2,7 +2,7 @@
 
 use serde_json::{Value, json};
 
-use lightcraft_catalog::{ColorLabel, Op};
+use lightcraft_catalog::{CaptureProvenance, ColorLabel, Op};
 
 use super::{CommandSpec, always, bad, bool_or, cmd, f64_or, has_selection, str_param};
 use crate::Result;
@@ -228,8 +228,16 @@ pub fn specs() -> Vec<CommandSpec> {
                         continue;
                     };
                     out.push(json!(new));
-                    if s.catalog.photo(*id).and_then(|p| p.captured.as_deref()) != Some(new.as_str()) {
-                        ops.push(Op::SetCaptured { id: *id, captured: Some(new) });
+                    // A time given to every photo (`each`) is set here, even the time a photo already has from its
+                    // file or its file's date (a change too); otherwise every photo is shifted, and changes only when
+                    // its time moves (a zero shift changes nothing, not even a photo with no date).
+                    let Some(ph) = s.catalog.photo(*id) else { continue };
+                    let changes = match each {
+                        Some(_) => ph.captured.as_deref() != Some(new.as_str()) || ph.captured_from != CaptureProvenance::Stated,
+                        None => delta != 0 && ph.captured.as_deref() != Some(new.as_str()),
+                    };
+                    if changes {
+                        ops.push(Op::SetCaptured { id: *id, captured: Some(new), from: CaptureProvenance::Stated });
                     }
                 }
                 if out_of_range > 0 {

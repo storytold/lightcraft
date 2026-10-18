@@ -421,7 +421,7 @@ fn tracklog_auto_tag() {
     s.open_library(dir.join("lib"), true).unwrap();
     let ids: Vec<u64> = s.visible_cloned().iter().take(4).map(|p| p.0).collect();
     let set = |s: &mut Session, id: u64, t: &str| {
-        s.commit("t", Op::SetCaptured { id: PhotoId(id), captured: Some(t.into()) }).unwrap();
+        s.commit("t", Op::SetCaptured { id: PhotoId(id), captured: Some(t.into()), from: Default::default() }).unwrap();
     };
     set(&mut s, ids[0], "2026-05-01T12:00:30"); // camera clock on +02:00, no zone recorded
     set(&mut s, ids[1], "2026-05-01T12:01:00+02:00"); // zone recorded: exactly on the 2nd point

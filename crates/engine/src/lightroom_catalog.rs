@@ -938,7 +938,7 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
                 Op::SetFlag { id: p.id, flag: p.flag },
                 Op::SetLabel { id: p.id, label: p.label },
                 Op::SetMeta { id: p.id, meta: Box::new(p.meta.clone()) },
-                Op::SetCaptured { id: p.id, captured: p.captured.clone() },
+                Op::SetCaptured { id: p.id, captured: p.captured.clone(), from: lightcraft_catalog::CaptureProvenance::FromFile },
             ]);
             ops.push(Op::SetDevelop { id: p.id, settings: p.develop.clone(), label: "Lightroom catalog".into(), edited: p.edited.clone() });
         } else {
@@ -1456,7 +1456,7 @@ mod tests {
         s.close_library().unwrap();
         s.open_library(&dir, false).unwrap();
         let id = PhotoId(first["mapping"]["1"].as_u64().unwrap());
-        s.commit("Changed time", Op::SetCaptured { id, captured: None }).unwrap();
+        s.commit("Changed time", Op::SetCaptured { id, captured: None, from: Default::default() }).unwrap();
         let second = apply(&mut s, data, true).unwrap();
         assert_eq!(first["mapping"], second["mapping"]);
         assert_eq!(first["imported"], 2);

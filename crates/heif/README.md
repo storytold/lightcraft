@@ -23,6 +23,7 @@ let info = lightcraft_heif::probe(&bytes)?;           // size, depth, alpha: che
 let img = lightcraft_heif::decode(&bytes, &lightcraft_heif::Options::default())?;
 // img.width, img.height, img.has_alpha, img.bit_depth, img.data (RGB/RGBA u16), img.colour, img.icc, img.exif, img.xmp
 let thumb = lightcraft_heif::decode_thumbnail(&bytes, 256, &Default::default())?; // Option<Decoded>
+let (exif, xmp) = lightcraft_heif::read_metadata(&bytes)?;  // no picture decoded: for cataloguing
 ```
 
 Errors are `Error::Unsupported` (image sequences, overlays, 4:2:2/4:4:4, …), `Error::Limit` or

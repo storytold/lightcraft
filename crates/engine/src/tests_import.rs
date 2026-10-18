@@ -755,10 +755,11 @@ fn assisted_culling_groups_bursts_and_scores_focus() {
     let by_name = |s: &Session, n: &str| s.catalog.photos().find(|p| p.file_name == n).unwrap().id;
     for (i, n) in ["a_soft.png", "b_sharp.png", "c_softer.png"].iter().enumerate() {
         let id = by_name(&s, n);
-        s.commit("t", lightcraft_catalog::Op::SetCaptured { id, captured: Some(format!("2026-05-01T10:00:0{i}")) }).unwrap();
+        s.commit("t", lightcraft_catalog::Op::SetCaptured { id, captured: Some(format!("2026-05-01T10:00:0{i}")), from: Default::default() })
+            .unwrap();
     }
     let other = by_name(&s, "d_other.png");
-    s.commit("t", lightcraft_catalog::Op::SetCaptured { id: other, captured: Some("2026-05-01T10:00:04".into()) }).unwrap();
+    s.commit("t", lightcraft_catalog::Op::SetCaptured { id: other, captured: Some("2026-05-01T10:00:04".into()), from: Default::default() }).unwrap();
     let r = s.execute("photo.analyze", &json!({"ids": ids, "rejectBelow": 0.0, "pickBest": true})).unwrap();
     assert_eq!(r["groups"], 1, "{r}");
     let a = |s: &Session, n: &str| s.catalog.photo(by_name(s, n)).unwrap().analysis.unwrap();
@@ -1559,6 +1560,39 @@ fn heic_imports_as_a_normal_photo_or_says_why_not() {
         d.image.data.iter().map(|p| p[1]).sum::<f32>() / d.image.data.len() as f32
     };
     assert!(mean(&brighter.bytes) > mean(&plain.bytes) * 1.3, "exposure +1 brightens the HEIC");
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// An iPhone HEIC keeps its EXIF in an item of its container: the camera and the capture time come from
+/// there (they used to be blank, and the photo was dated by the file's modification time), and saving the
+/// sidecar writes that capture time.
+#[test]
+fn heic_camera_and_capture_time_come_from_its_exif() {
+    use lightcraft_heif::testdata::{Spec, build};
+    if !lightcraft_codecs::Format::Heif.can_decode() {
+        lightcraft_testkit::skip!(Feature, "HEIC needs the codecs' `heif` feature");
+        return;
+    }
+    let src = temp_dir("heic-exif");
+    let exif = lightcraft_meta::write_exif(&lightcraft_meta::Metadata {
+        make: Some("Apple".into()),
+        model: Some("iPhone 15".into()),
+        capture_time: lightcraft_meta::DateTime::parse_iso("2024-05-06T07:08:09"),
+        f_number: Some(1.6),
+        ..Default::default()
+    });
+    let grey = |_: u32, _: u32| [120u16, 120, 120];
+    std::fs::write(src.join("IMG_0001.HEIC"), build(&Spec { exif: Some(exif), ..Spec::new(32, 32, &grey) })).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let p = s.catalog.photos().next().unwrap().clone();
+    assert_eq!(p.meta.camera, "Apple iPhone 15");
+    assert_eq!(p.meta.aperture, Some(1.6));
+    assert_eq!(p.captured.as_deref(), Some("2024-05-06T07:08:09"), "the EXIF date, not the file's");
+    assert_eq!(p.captured_from, lightcraft_catalog::CaptureProvenance::FromFile);
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [p.id.0]})).unwrap();
+    let side = lightcraft_meta::parse_xmp(&std::fs::read_to_string(src.join("IMG_0001.xmp")).unwrap()).unwrap();
+    assert_eq!(side.properties.get("exif:DateTimeOriginal"), Some(&vec!["2024-05-06T07:08:09".to_string()]));
     let _ = std::fs::remove_dir_all(&src);
 }
 

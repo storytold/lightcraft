@@ -278,8 +278,10 @@ fn same_for_sync(a: &Arc<Photo>, b: &Arc<Photo>) -> bool {
         return true;
     }
     let meta = |p: &Photo| lightcraft_catalog::Meta { regions: Vec::new(), ..p.meta.clone() };
-    (&a.source, a.deleted, a.local, a.copy_of, &a.content_hash, a.file_size, a.rating, a.flag, a.label, &a.captured, &a.edited, &a.develop)
-        == (&b.source, b.deleted, b.local, b.copy_of, &b.content_hash, b.file_size, b.rating, b.flag, b.label, &b.captured, &b.edited, &b.develop)
+    // (where the capture time came from too: a sidecar stating a guessed time is news)
+    (&a.source, a.deleted, a.local, a.copy_of, &a.content_hash, a.file_size, a.rating, a.flag, a.label, &a.captured, a.captured_from)
+        == (&b.source, b.deleted, b.local, b.copy_of, &b.content_hash, b.file_size, b.rating, b.flag, b.label, &b.captured, b.captured_from)
+        && (&a.edited, &a.develop) == (&b.edited, &b.develop)
         && meta(a) == meta(b)
 }
 
@@ -590,7 +592,9 @@ fn sidecar_has_news(labels: &Catalog, p: &Photo, naming: SidecarNaming, listing:
     let sc = sc.resolve_label(labels);
     let mut q = p.clone();
     crate::sidecar::merge_into(&mut q, &sc, "");
-    (q.rating, q.flag, q.label, &q.meta, &q.captured, &q.develop) != (p.rating, p.flag, p.label, &p.meta, &p.captured, &p.develop)
+    // (the same time read from it, when the library's was a guess from the file's date, is news too)
+    (q.rating, q.flag, q.label, &q.meta, &q.captured, q.captured_from, &q.develop)
+        != (p.rating, p.flag, p.label, &p.meta, &p.captured, p.captured_from, &p.develop)
 }
 
 /// Act on `changes` as `choice` says, as one undo step ("Synchronize Folder"). A missing photo

@@ -177,10 +177,13 @@ pub enum Op {
         photos: Vec<PhotoId>,
         collapsed: bool,
     },
-    /// Set a photo's capture time (ISO 8601 local time; `None` = unknown).
+    /// Set a photo's capture time (ISO 8601 local time; `None` = unknown) and where it came from
+    /// ([`Photo::captured_from`]; left out when it is the file, as in records written before it was).
     SetCaptured {
         id: PhotoId,
         captured: Option<String>,
+        #[serde(default, skip_serializing_if = "CaptureProvenance::is_from_file")]
+        from: CaptureProvenance,
     },
     /// Assisted culling scores.
     SetAnalysis {
@@ -869,14 +872,16 @@ impl Catalog {
                 let p = self.photo_mut(id)?;
                 Op::SetAnalysis { id, analysis: std::mem::replace(&mut p.analysis, analysis) }
             }
-            Op::SetCaptured { id, captured } => {
+            Op::SetCaptured { id, captured, from } => {
                 if let Some(c) = &captured
                     && stacks::iso_seconds(c).is_none()
                 {
                     return Err(CatalogError::Invalid(format!("not a date: {c}")));
                 }
                 let p = self.photo_mut(id)?;
-                Op::SetCaptured { id, captured: std::mem::replace(&mut p.captured, captured) }
+                // (no capture time comes from nowhere in particular)
+                let from = std::mem::replace(&mut p.captured_from, if captured.is_some() { from } else { CaptureProvenance::FromFile });
+                Op::SetCaptured { id, captured: std::mem::replace(&mut p.captured, captured), from }
             }
             Op::Relink { id, file_name, source, format } => {
                 let p = self.photo_mut(id)?;

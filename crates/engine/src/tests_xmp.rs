@@ -922,6 +922,351 @@ fn gps_typed_in_is_saved_to_xmp() {
     assert!(s.catalog.photo(id).unwrap().meta.gps.is_none());
 }
 
+/// A photo with no capture time in the file or its sidecar is dated by the file's modification time, but
+/// that guess is never written to the sidecar as its capture time; a time read from the sidecar later, or
+/// set here, replaces it and is written.
+#[test]
+fn a_file_date_guess_is_never_saved_as_the_capture_time() {
+    let src = temp_dir("file-date");
+    write_png(&src.join("scan.png"), 3);
+    let rated = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="2"/>
+</rdf:RDF></x:xmpmeta>"#;
+    std::fs::write(src.join("scan.xmp"), rated).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    let p = s.catalog.photo(id).unwrap().clone();
+    assert!(p.captured.is_some(), "dated by the file, as Lightroom does");
+    assert_eq!(p.captured_from, lightcraft_catalog::CaptureProvenance::FileDate);
+    let dates = |src: &Path| {
+        let d = lightcraft_meta::parse_xmp(&std::fs::read_to_string(src.join("scan.xmp")).unwrap()).unwrap();
+        ["exif:DateTimeOriginal", "photoshop:DateCreated"].map(|k| d.properties.get(k).and_then(|v| v.first()).cloned())
+    };
+    s.execute("photo.rate", &json!({"ids": [id.0], "rating": 3})).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    assert_eq!(dates(&src), [None, None], "no capture time is made up");
+    // the sidecar learns the real time elsewhere: reading it replaces the guess
+    std::fs::write(
+        src.join("scan.xmp"),
+        rated.replace(
+            "xmp:Rating=\"2\"",
+            "xmp:Rating=\"2\" xmlns:exif=\"http://ns.adobe.com/exif/1.0/\" exif:DateTimeOriginal=\"2019-07-01T10:20:30\"",
+        ),
+    )
+    .unwrap();
+    s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap().captured.as_deref(), Some("2019-07-01T10:20:30"));
+    // a time set here is the user's, and is written
+    s.execute("photo.setCaptureTime", &json!({"ids": [id.0], "time": "2020-01-02T03:04:05"})).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    assert_eq!(dates(&src), [Some("2020-01-02T03:04:05".to_string()), Some("2020-01-02T03:04:05".to_string())]);
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// A sidecar's capture time properties: `exif:DateTimeOriginal`, `photoshop:DateCreated`.
+fn sidecar_dates(path: &Path) -> [Option<String>; 2] {
+    let d = lightcraft_meta::parse_xmp(&std::fs::read_to_string(path).unwrap()).unwrap();
+    ["exif:DateTimeOriginal", "photoshop:DateCreated"].map(|k| d.properties.get(k).and_then(|v| v.first()).cloned())
+}
+
+/// A capture time set here is stated even when it is the file's date: setting a photo back to the date import
+/// guessed is saved (it was dropped as "still the guess"), and Undo / Redo bring back whether the time was stated.
+#[test]
+fn a_capture_time_set_to_the_file_date_is_stated() {
+    let src = temp_dir("set-file-date");
+    write_png(&src.join("scan.png"), 3);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    let guess = s.catalog.photo(id).unwrap().captured.clone().unwrap();
+    let stated = |s: &Session| s.catalog.photo(id).unwrap().captured_stated().map(str::to_string);
+    let set = |s: &mut Session, time: &str| s.execute("photo.setCaptureTime", &json!({"ids": [id.0], "time": time, "each": true})).unwrap();
+    assert_eq!(stated(&s), None);
+    assert_eq!(set(&mut s, "2001-01-02T03:04:05")["changed"], 1);
+    assert_eq!(set(&mut s, &guess)["changed"], 1);
+    assert_eq!(stated(&s), Some(guess.clone()));
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    assert_eq!(sidecar_dates(&src.join("scan.xmp")), [Some(guess.clone()), Some(guess.clone())]);
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(stated(&s).as_deref(), Some("2001-01-02T03:04:05"));
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap().captured.as_deref(), Some(guess.as_str()));
+    assert_eq!(stated(&s), None, "undo is back to the guess");
+    s.execute("edit.redo", &json!({})).unwrap();
+    s.execute("edit.redo", &json!({})).unwrap();
+    assert_eq!(stated(&s), Some(guess.clone()), "redo states it again");
+    // setting the guessed date on a photo still dated by it states it too
+    s.execute("edit.undo", &json!({})).unwrap();
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(set(&mut s, &guess)["changed"], 1);
+    assert_eq!(stated(&s), Some(guess.clone()));
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// Undoing a capture time edit on a photo dated by its file takes the time LightCraft wrote back out of the sidecar
+/// (it stayed, and Read Metadata from File brought the undone edit back).
+#[test]
+fn undoing_a_capture_time_edit_takes_it_out_of_the_sidecar() {
+    let src = temp_dir("undo-capture");
+    write_png(&src.join("scan.png"), 3);
+    let side = src.join("scan.xmp");
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    let guess = s.catalog.photo(id).unwrap().captured.clone().unwrap();
+    s.execute("photo.setCaptureTime", &json!({"ids": [id.0], "time": "2001-01-02T03:04:05", "each": true})).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    let edited = Some("2001-01-02T03:04:05".to_string());
+    assert_eq!(sidecar_dates(&side), [edited.clone(), edited]);
+    s.execute("edit.undo", &json!({})).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    assert_eq!(sidecar_dates(&side), [None, None], "the undone time is not left in the sidecar");
+    s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap().captured.as_deref(), Some(guess.as_str()));
+    assert_eq!(s.catalog.photo(id).unwrap().captured_stated(), None);
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// [`undoing_a_capture_time_edit_takes_it_out_of_the_sidecar`] with auto-write on: the capture time edit, its undo and
+/// its redo each rewrite the sidecar (nothing did, so after the undo the file kept the time, and Read Metadata from
+/// File brought it back).
+#[test]
+fn undoing_a_capture_time_edit_takes_it_out_of_the_sidecar_with_auto_write() {
+    let src = temp_dir("undo-capture-auto");
+    let lib = temp_dir("undo-capture-auto-lib");
+    write_png(&src.join("scan.png"), 3);
+    let side = src.join("scan.xmp");
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    s.execute("library.xmpPreferences", &json!({"autoWrite": true, "naming": "stem"})).unwrap();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    let guess = s.catalog.photo(id).unwrap().captured.clone().unwrap();
+    s.execute("photo.setCaptureTime", &json!({"ids": [id.0], "time": "2001-01-02T03:04:05", "each": true})).unwrap();
+    let edited = Some("2001-01-02T03:04:05".to_string());
+    assert_eq!(sidecar_dates(&side), [edited.clone(), edited.clone()], "the edit is written");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(sidecar_dates(&side), [None, None], "the undo is written");
+    s.execute("edit.redo", &json!({})).unwrap();
+    assert_eq!(sidecar_dates(&side), [edited.clone(), edited], "the redo is written");
+    s.execute("edit.undo", &json!({})).unwrap();
+    s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap().captured.as_deref(), Some(guess.as_str()));
+    assert_eq!(s.catalog.photo(id).unwrap().captured_stated(), None);
+    let _ = s.close_library();
+    let _ = std::fs::remove_dir_all(&src);
+    let _ = std::fs::remove_dir_all(&lib);
+}
+
+/// Another application's capture time, spelled otherwise than LightCraft writes it (hundredths, `Z`, no seconds,
+/// milliseconds and an offset, a date-only `photoshop:DateCreated`), is read and saved, but stays the other app's: after
+/// the read is undone, a save keeps it (it was re-spelled and noted as LightCraft's own, then deleted).
+#[test]
+fn a_capture_time_another_app_spelled_otherwise_stays_in_the_sidecar() {
+    for (n, (dto, created)) in [
+        ("2024-05-01T10:00:00", "2024-05-01T10:00:00"),
+        ("2024-05-01T10:00:00.00", "2024-05-01T10:00:00.00"),
+        ("2024-05-01T10:00:00Z", "2024-05-01T10:00:00Z"),
+        ("2024-05-01T10:00", "2024-05-01T10:00"),
+        ("2024-05-01T10:00:00.000-07:00", "2024-05-01T10:00:00.000-07:00"),
+        ("2024-05-01T10:00:00.00", "2024-05-01"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let src = temp_dir(&format!("foreign-spelling-{n}"));
+        write_png(&src.join("scan.png"), 3);
+        let side = src.join("scan.xmp");
+        let mut s = Session::new().with_fs();
+        s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+        let id = only(&s);
+        let other = format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about="" xmlns:exif="http://ns.adobe.com/exif/1.0/" xmlns:photoshop="http://ns.adobe.com/photoshop/1.0/" exif:DateTimeOriginal="{dto}" photoshop:DateCreated="{created}"/>
+</rdf:RDF></x:xmpmeta>"#
+        );
+        std::fs::write(&side, other).unwrap();
+        s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+        assert!(s.catalog.photo(id).unwrap().captured_stated().is_some(), "{dto}: read");
+        s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+        s.execute("edit.undo", &json!({})).unwrap(); // the read
+        assert_eq!(s.catalog.photo(id).unwrap().captured_stated(), None);
+        s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+        let [dto_after, _] = sidecar_dates(&side);
+        let _ = std::fs::remove_dir_all(&src);
+        let dto_after = dto_after.unwrap_or_else(|| panic!("{dto}: the other app's capture time was removed"));
+        assert_eq!(lightcraft_meta::DateTime::parse_iso(&dto_after), lightcraft_meta::DateTime::parse_iso(dto), "{dto}");
+    }
+}
+
+/// Edit Capture Time that moves no time (a shift of zero, or the active photo's own time) changes nothing: no photo
+/// counts as changed, no undo step is added, and a date import took from the file stays a guess (it became a stated time,
+/// written to the sidecar).
+#[test]
+fn a_zero_capture_time_shift_changes_nothing() {
+    let src = temp_dir("zero-shift");
+    write_png(&src.join("a.png"), 3);
+    write_png(&src.join("b.png"), 4);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let ids: Vec<u64> = s.catalog.photos().map(|p| p.id.0).collect();
+    let before: Vec<_> = s.catalog.photos().map(|p| (p.captured.clone(), p.captured_stated().is_some())).collect();
+    let undo_steps = s.undo.len();
+    assert_eq!(s.execute("photo.setCaptureTime", &json!({"ids": ids, "hours": 0})).unwrap()["changed"], 0);
+    // the time the dialog opens with: the active photo's (else the first's)
+    let anchor = s.active().filter(|a| ids.contains(&a.0)).unwrap_or(PhotoId(ids[0]));
+    let own = s.catalog.photo(anchor).unwrap().captured.clone().unwrap();
+    assert_eq!(s.execute("photo.setCaptureTime", &json!({"ids": ids, "time": own})).unwrap()["changed"], 0);
+    let after: Vec<_> = s.catalog.photos().map(|p| (p.captured.clone(), p.captured_stated().is_some())).collect();
+    assert_eq!(before, after);
+    assert_eq!(s.undo.len(), undo_steps);
+    s.execute("photo.saveMetadataToFile", &json!({"ids": ids})).unwrap();
+    assert_eq!(sidecar_dates(&src.join("b.xmp")), [None, None]);
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// A zero shift leaves a photo with no capture time at all (its file's date is before 1970, so import had none to take)
+/// undated: it was given its import time as a stated capture time, and that was written to the sidecar.
+#[test]
+fn a_zero_capture_time_shift_leaves_an_undated_photo_undated() {
+    let src = temp_dir("zero-shift-undated");
+    let lib = temp_dir("zero-shift-undated-lib");
+    let f = src.join("scan.png");
+    write_png(&f, 3);
+    let before_1970 = std::time::UNIX_EPOCH - std::time::Duration::from_secs(10 * 365 * 86_400);
+    std::fs::File::options().write(true).open(&f).unwrap().set_modified(before_1970).unwrap();
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    s.execute("library.xmpPreferences", &json!({"autoWrite": true, "naming": "stem"})).unwrap();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    if s.catalog.photo(id).unwrap().captured.is_some() {
+        lightcraft_testkit::skip!(Feature, "this file system gave the file a modification time before 1970");
+    } else {
+        assert_eq!(s.execute("photo.setCaptureTime", &json!({"ids": [id.0], "shift": 0})).unwrap()["changed"], 0);
+        assert_eq!(s.catalog.photo(id).unwrap().captured, None);
+        assert!(src.join("scan.xmp").exists().then(|| sidecar_dates(&src.join("scan.xmp"))).is_none_or(|d| d[0].is_none()));
+    }
+    let _ = s.close_library();
+    let _ = std::fs::remove_dir_all(&src);
+    let _ = std::fs::remove_dir_all(&lib);
+}
+
+/// Another application's capture time survives the user editing it here and undoing: read, edited, undone (with
+/// auto-write, and saving by hand after each step). The time read from the file stays the file's, so LightCraft never
+/// notes it as its own (it did once it had overwritten it, and removed it when the photo went back to the file-date
+/// guess).
+#[test]
+fn a_capture_time_another_app_wrote_survives_an_edit_and_its_undo() {
+    let foreign = |side: &Path| {
+        let other = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about="" xmlns:exif="http://ns.adobe.com/exif/1.0/" xmlns:photoshop="http://ns.adobe.com/photoshop/1.0/" exif:DateTimeOriginal="2024-05-01T10:00:00" photoshop:DateCreated="2024-05-01T10:00:00"/>
+</rdf:RDF></x:xmpmeta>"#;
+        std::fs::write(side, other).unwrap();
+    };
+    let theirs = || [Some("2024-05-01T10:00:00".to_string()), Some("2024-05-01T10:00:00".to_string())];
+    let noted = |side: &Path| lightcraft_meta::parse_xmp(&std::fs::read_to_string(side).unwrap()).unwrap().properties.contains_key("lc:captureTime");
+    for auto in [true, false] {
+        // read, edit, undo the edit, undo the read
+        let src = temp_dir(&format!("foreign-undo-{auto}"));
+        let lib = temp_dir(&format!("foreign-undo-{auto}-lib"));
+        write_png(&src.join("scan.png"), 3);
+        let side = src.join("scan.xmp");
+        let mut s = Session::new().with_fs();
+        s.open_library(&lib, false).unwrap();
+        s.execute("library.xmpPreferences", &json!({"autoWrite": auto, "naming": "stem"})).unwrap();
+        s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+        let id = only(&s);
+        foreign(&side);
+        let step = |s: &mut Session, cmd: &str, params: serde_json::Value| {
+            s.execute(cmd, &params).unwrap();
+            if !auto {
+                s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+            }
+        };
+        step(&mut s, "photo.readMetadataFromFile", json!({"ids": [id.0]}));
+        step(&mut s, "photo.setCaptureTime", json!({"ids": [id.0], "time": "2001-01-02T03:04:05", "each": true}));
+        assert_eq!(sidecar_dates(&side)[0].as_deref(), Some("2001-01-02T03:04:05"), "auto {auto}");
+        step(&mut s, "edit.undo", json!({}));
+        assert_eq!(sidecar_dates(&side), theirs(), "auto {auto}: back to the other app's time");
+        assert!(!noted(&side), "auto {auto}: the other app's time is not noted as LightCraft's");
+        step(&mut s, "edit.undo", json!({}));
+        assert_eq!(sidecar_dates(&side), theirs(), "auto {auto}: kept when the photo is back to its file's date");
+        let _ = s.close_library();
+        let _ = std::fs::remove_dir_all(&src);
+        let _ = std::fs::remove_dir_all(&lib);
+    }
+}
+
+/// Synchronize Folder reads a newer sidecar that states the very time import guessed from the file's date: the time is
+/// the same text, but it is the file's now, not a guess (the scan saw no news and the photo stayed a guess).
+#[test]
+fn synchronize_reads_a_sidecar_stating_the_guessed_time() {
+    let src = temp_dir("sync-guess");
+    write_png(&src.join("scan.png"), 3);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    let guess = s.catalog.photo(id).unwrap().captured.clone().unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap().captured_from, lightcraft_catalog::CaptureProvenance::FileDate);
+    let side = src.join("scan.xmp");
+    let xmp = format!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about="" xmlns:exif="http://ns.adobe.com/exif/1.0/" exif:DateTimeOriginal="{guess}"/>
+</rdf:RDF></x:xmpmeta>"#
+    );
+    std::fs::write(&side, xmp).unwrap();
+    let later = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
+    std::fs::File::options().write(true).open(&side).unwrap().set_modified(later).unwrap();
+    let scan = s.execute("folder.scanChanges", &json!({"path": src.to_string_lossy()})).unwrap();
+    assert_eq!(scan["metadata"].as_array().map(Vec::len), Some(1), "{scan}");
+    let sync = s.execute("folder.synchronize", &json!({"path": src.to_string_lossy(), "scanned": true, "readMetadata": true})).unwrap();
+    assert_eq!(sync["read"], 1, "{sync}");
+    assert_eq!(s.catalog.photo(id).unwrap().captured_from, lightcraft_catalog::CaptureProvenance::FromFile);
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// A capture time another application wrote into the sidecar is never taken out by a save, though the photo is dated
+/// only by its file here: one written on its own, one that replaced the time LightCraft wrote, and one the user then
+/// also set here (it was in the file before LightCraft wrote it).
+#[test]
+fn a_capture_time_another_app_wrote_stays_in_the_sidecar() {
+    let src = temp_dir("foreign-capture");
+    write_png(&src.join("scan.png"), 3);
+    let side = src.join("scan.xmp");
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    let save = |s: &mut Session| s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    let foreign = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about="" xmlns:exif="http://ns.adobe.com/exif/1.0/" exif:DateTimeOriginal="2019-07-01T10:20:30"/>
+</rdf:RDF></x:xmpmeta>"#;
+    std::fs::write(&side, foreign).unwrap();
+    save(&mut s);
+    assert_eq!(sidecar_dates(&side), [Some("2019-07-01T10:20:30".to_string()), None]);
+    // the user states the same time here, saves, then undoes it: the other app's time stays
+    s.execute("photo.setCaptureTime", &json!({"ids": [id.0], "time": "2019-07-01T10:20:30", "each": true})).unwrap();
+    save(&mut s);
+    s.execute("edit.undo", &json!({})).unwrap();
+    save(&mut s);
+    assert_eq!(sidecar_dates(&side)[0].as_deref(), Some("2019-07-01T10:20:30"));
+    // LightCraft writes a time, another app replaces it, the edit is undone: the other app's time stays
+    s.execute("photo.setCaptureTime", &json!({"ids": [id.0], "time": "2001-01-02T03:04:05", "each": true})).unwrap();
+    save(&mut s);
+    let ours = std::fs::read_to_string(&side).unwrap();
+    let theirs = ours.replace(
+        "<exif:DateTimeOriginal>2001-01-02T03:04:05</exif:DateTimeOriginal>",
+        "<exif:DateTimeOriginal>2005-06-07T08:09:10</exif:DateTimeOriginal>",
+    );
+    assert_ne!(ours, theirs);
+    std::fs::write(&side, theirs).unwrap();
+    s.execute("edit.undo", &json!({})).unwrap();
+    save(&mut s);
+    assert_eq!(sidecar_dates(&side)[0].as_deref(), Some("2005-06-07T08:09:10"));
+    let _ = std::fs::remove_dir_all(&src);
+}
+
 /// DNG export compression: lossless, zip and none all decode; none is the biggest.
 #[test]
 fn dng_export_compression_choices() {
@@ -1046,7 +1391,7 @@ fn sidecar_capture_time_fills_in_when_the_file_has_none() {
 
     // Read Metadata from File fills in a missing capture time too
     let id = sample.id;
-    s.catalog.apply(lightcraft_catalog::Op::SetCaptured { id, captured: None }).unwrap();
+    s.catalog.apply(lightcraft_catalog::Op::SetCaptured { id, captured: None, from: Default::default() }).unwrap();
     std::fs::copy(src.join("sample.jpg.xmp"), format!("{path}.xmp")).unwrap();
     s.execute("library.select", &json!({"ids": [id.0]})).unwrap();
     s.execute("photo.readMetadataFromFile", &json!({})).unwrap();

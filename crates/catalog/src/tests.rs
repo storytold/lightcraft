@@ -309,6 +309,52 @@ fn preview_only_survives_serde_and_set_content_undo() {
     assert_eq!(c.photo(a).unwrap().width, 6000);
 }
 
+/// Where a capture time came from is stored with the photo (left out when it is the file, so older catalogs load as
+/// that), any capture time set says where it came from, even the same time, and the inverse (through the journal's
+/// JSON) restores it.
+#[test]
+fn capture_provenance_survives_serde_and_set_captured_undo() {
+    use CaptureProvenance::{FileDate, FromFile, Stated};
+    let mut c = Catalog::new();
+    let a = c.alloc_photo_id();
+    let guess = "2026-10-01T12:00:00";
+    let mut p = Photo::new(a, Source::File { path: "/x/scan.png".into() }, "scan.png", "PNG", 40, 24, "2026-10-02T00:00:00");
+    p.captured = Some(guess.into());
+    p.captured_from = FileDate;
+    c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    assert_eq!(c.photo(a).unwrap().captured_stated(), None);
+    let json = serde_json::to_string(&c).unwrap();
+    assert!(json.contains(r#""captured_from":"fileDate""#), "{json}");
+    let back: Catalog = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.photo(a).unwrap().captured_from, FileDate);
+    let mut v = serde_json::to_value(&c).unwrap();
+    let ph = v["photos"].as_object_mut().unwrap().values_mut().next().unwrap();
+    ph.as_object_mut().unwrap().remove("captured_from").expect("serialised when not the file");
+    let old: Catalog = serde_json::from_value(v).unwrap();
+    assert_eq!(old.photo(a).unwrap().captured_from, FromFile);
+    assert_eq!(old.photo(a).unwrap().captured_stated(), Some(guess));
+    // the user sets the same time: it is theirs now, and undo makes it the guess again
+    let inv = c.apply(Op::SetCaptured { id: a, captured: Some(guess.into()), from: Stated }).unwrap();
+    assert_eq!(c.photo(a).unwrap().captured_stated(), Some(guess));
+    let inv: Op = serde_json::from_str(&serde_json::to_string(&inv).unwrap()).unwrap();
+    assert_eq!(inv, Op::SetCaptured { id: a, captured: Some(guess.into()), from: FileDate });
+    let redo = c.apply(inv).unwrap();
+    assert_eq!(c.photo(a).unwrap().captured_stated(), None);
+    assert_eq!(redo, Op::SetCaptured { id: a, captured: Some(guess.into()), from: Stated });
+    // read from a sidecar; left out of the JSON as the default
+    let inv = c.apply(Op::SetCaptured { id: a, captured: Some(guess.into()), from: FromFile }).unwrap();
+    assert!(!serde_json::to_string(&c).unwrap().contains("captured_from"), "left out when it is the file");
+    assert_eq!(inv, Op::SetCaptured { id: a, captured: Some(guess.into()), from: FileDate });
+    // an op written before the field existed reads as from the file, and writes the same JSON
+    let v9 = format!(r#"{{"op":"setCaptured","id":{},"captured":"{guess}"}}"#, a.0);
+    let op: Op = serde_json::from_str(&v9).unwrap();
+    assert_eq!(op, Op::SetCaptured { id: a, captured: Some(guess.into()), from: FromFile });
+    assert_eq!(serde_json::to_string(&op).unwrap(), v9);
+    // no time is never a file date
+    c.apply(Op::SetCaptured { id: a, captured: None, from: FileDate }).unwrap();
+    assert_eq!(c.photo(a).unwrap().captured_from, FromFile);
+}
+
 /// Equivalent spellings of one folder (separators, trailing or doubled separators, `.`/`..`,
 /// drive-letter case, verbatim and UNC prefixes) share an identity; different folders don't.
 #[test]

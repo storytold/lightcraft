@@ -29,7 +29,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use lightcraft_catalog::{ColorLabel, Flag, MediaKind, Op, Photo, PhotoId, Source};
+use lightcraft_catalog::{CaptureProvenance, ColorLabel, Flag, MediaKind, Op, Photo, PhotoId, Source};
 use lightcraft_develop::DevelopSettings;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -252,8 +252,10 @@ pub fn parse_sidecar(xmp: &str, target: crate::crs::Target) -> std::result::Resu
 /// Apply sidecar data to a photo record (the sidecar wins, except that a capture time embedded in
 /// the file is kept). Returns true if develop changed.
 pub fn merge_into(p: &mut Photo, sc: &SidecarData, now: &str) -> bool {
-    if p.captured.is_none() {
+    // (a date import guessed from the file's modification time is no capture time: the sidecar's wins)
+    if p.captured_stated().is_none() && sc.captured.is_some() {
         p.captured = sc.captured.clone();
+        p.captured_from = CaptureProvenance::FromFile;
     }
     if let Some(r) = sc.rating {
         p.rating = r;
@@ -331,6 +333,30 @@ pub fn sidecar_packet(p: &Photo, cat: &lightcraft_catalog::Catalog) -> String {
 /// [`sidecar_packet`], without any location (GPS, sublocation, city, state, country) when
 /// `remove_location` is set (an export with "Remove location info").
 pub fn sidecar_packet_with(p: &Photo, cat: &lightcraft_catalog::Catalog, remove_location: bool) -> String {
+    packet(p, cat, remove_location, &CaptureOut::of(p))
+}
+
+/// `lc:captureTime`: where LightCraft notes a capture time it set and wrote (`exif:DateTimeOriginal`,
+/// `photoshop:DateCreated`), so that a later save can tell its own from another application's ([`sidecar_contents`]).
+const CAPTURE_MARK: &str = "captureTime";
+
+/// The capture time a packet writes, and LightCraft's notes about it.
+struct CaptureOut {
+    time: Option<lightcraft_meta::DateTime>,
+    /// Note it as LightCraft's own ([`CAPTURE_MARK`]).
+    mark: bool,
+}
+
+impl CaptureOut {
+    /// For a new packet: the photo's capture time unless it is a file-date guess, noted when it was set here.
+    fn of(p: &Photo) -> CaptureOut {
+        let time = p.captured_stated().and_then(lightcraft_meta::DateTime::parse_iso);
+        CaptureOut { time, mark: p.captured_from == CaptureProvenance::Stated }
+    }
+}
+
+/// [`sidecar_packet_with`], writing the capture time `capture`.
+fn packet(p: &Photo, cat: &lightcraft_catalog::Catalog, remove_location: bool, capture: &CaptureOut) -> String {
     let nz = |s: &str| (!s.trim().is_empty()).then(|| s.to_string());
     let meta = lightcraft_meta::Metadata {
         software: Some("LightCraft".into()),
@@ -350,7 +376,8 @@ pub fn sidecar_packet_with(p: &Photo, cat: &lightcraft_catalog::Catalog, remove_
         keywords: p.meta.keywords.clone(),
         rating: Some(p.rating.min(5) as i8),
         label: p.label.map(|l| cat.label_name(l)),
-        capture_time: p.captured.as_deref().and_then(lightcraft_meta::DateTime::parse_iso),
+        // (never the file's modification time standing in for a capture time nobody stated)
+        capture_time: capture.time,
         gps: p.meta.gps.map(|(latitude, longitude)| lightcraft_meta::Gps { latitude, longitude, altitude: None }),
         ..Default::default()
     };
@@ -367,6 +394,10 @@ pub fn sidecar_packet_with(p: &Photo, cat: &lightcraft_catalog::Catalog, remove_
     let mut lc = vec![("settings", settings.as_str()), ("flag", flag)];
     if !remove_location && !p.meta.location.trim().is_empty() {
         lc.push(("location", p.meta.location.as_str()));
+    }
+    let captured = meta.capture_time.filter(|_| capture.mark).map(|d| d.to_iso());
+    if let Some(c) = &captured {
+        lc.push((CAPTURE_MARK, c.as_str()));
     }
     lightcraft_meta::write_xmp_lc(&meta, &lc)
 }
@@ -435,28 +466,60 @@ pub struct SidecarSaved {
     pub backup: Option<PathBuf>,
 }
 
-/// The new contents for the sidecar at `path`: `fresh` merged into the existing file, if any.
+/// The new contents for the sidecar of `p` at `path`: its packet merged into the existing file, if any.
 /// Returns (contents, merged, backup).
-fn sidecar_contents(path: &Path, fresh: String, stamp: &str) -> std::io::Result<(String, bool, Option<PathBuf>)> {
+///
+/// The capture time follows where it came from ([`CaptureProvenance`]). A capture time property is LightCraft's own
+/// only while it is byte for byte the time noted in [`CAPTURE_MARK`]; any other is another application's.
+/// - Set here: written, and noted, unless the sidecar already has it as another application's time (in any spelling).
+/// - From the file: never noted. Another application's time in the sidecar stays; LightCraft's own is replaced by the
+///   photo's (also written where the sidecar has none).
+/// - A file-date guess, or none: nothing is written. LightCraft's own time is removed; another application's stays.
+///
+/// (A time another application wrote that LightCraft never read, then wrote over with one set here, is lost when that
+/// edit is undone: the sidecar no longer has it. Reading the sidecar first makes it the file's time, which undo
+/// restores.)
+fn sidecar_contents(path: &Path, p: &Photo, cat: &lightcraft_catalog::Catalog, stamp: &str) -> std::io::Result<(String, bool, Option<PathBuf>)> {
     let bytes = match std::fs::read(path) {
         Ok(b) => b,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((fresh, false, None)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((packet(p, cat, false, &CaptureOut::of(p)), false, None)),
         // can't see what is there: never overwrite it blindly
         Err(e) => return Err(e),
     };
     if bytes.iter().all(u8::is_ascii_whitespace) {
-        return Ok((fresh, false, None));
+        return Ok((packet(p, cat, false, &CaptureOut::of(p)), false, None));
     }
-    let rules = lightcraft_meta::MergeRules { owned: OWNED, owned_if_present: OWNED_IF_STATED };
-    match std::str::from_utf8(&bytes)
-        .map_err(|e| e.to_string())
-        .and_then(|old| lightcraft_meta::merge_xmp(old, &fresh, rules).map_err(|e| e.to_string()))
-    {
+    let merged = std::str::from_utf8(&bytes).map_err(|e| e.to_string()).and_then(|old| {
+        use lightcraft_meta::DateTime;
+        let props = lightcraft_meta::parse_xmp(old.strip_prefix('\u{feff}').unwrap_or(old)).map(|d| d.properties).unwrap_or_default();
+        let get = |k: &str| props.get(k).and_then(|v| v.first()).map(String::as_str);
+        let dates = ["exif:DateTimeOriginal", "photoshop:DateCreated"];
+        let noted = get(&format!("lc:{CAPTURE_MARK}"));
+        let ours = |k: &str| noted.is_some() && get(k) == noted;
+        let foreign = |k: &str| get(k).is_some() && !ours(k);
+        // the same time however it is spelled (`.00`, `Z`, no seconds…)
+        let same = |v: &str, t: &str| v == t || DateTime::parse_iso(v).is_some_and(|d| d.to_iso() == t);
+        let time = p.captured_stated().and_then(DateTime::parse_iso);
+        let (capture, written): (CaptureOut, Vec<&str>) = match (p.captured_from, time.map(|d| d.to_iso())) {
+            (CaptureProvenance::Stated, Some(t)) => {
+                let theirs = dates.iter().any(|k| foreign(k) && get(k).is_some_and(|v| same(v, &t)));
+                (CaptureOut { time, mark: !theirs }, dates.to_vec())
+            }
+            (CaptureProvenance::FromFile, Some(_)) => (CaptureOut { time, mark: false }, dates.iter().copied().filter(|k| !foreign(k)).collect()),
+            _ => (CaptureOut { time: None, mark: false }, dates.iter().copied().filter(|k| ours(k)).collect()),
+        };
+        let mut owned = OWNED.to_vec();
+        owned.extend(written);
+        let gps: Vec<&str> = OWNED_IF_STATED.iter().copied().filter(|k| !dates.contains(k)).collect();
+        let rules = lightcraft_meta::MergeRules { owned: &owned, owned_if_present: &gps };
+        lightcraft_meta::merge_xmp(old, &packet(p, cat, false, &capture), rules).map_err(|e| e.to_string())
+    });
+    match merged {
         Ok(merged) => Ok((merged, true, None)),
         Err(why) => {
             let b = backup(path, stamp)?;
             log::warn!("{}: not readable as XMP ({why}); kept a copy as {} before replacing it", path.display(), b.display());
-            Ok((fresh, false, Some(b)))
+            Ok((packet(p, cat, false, &CaptureOut::of(p)), false, Some(b)))
         }
     }
 }
@@ -518,7 +581,12 @@ pub fn read_packet(original: &str, kind: MediaKind, naming: SidecarNaming) -> Op
 /// Photo ids touched by an op (for auto-write).
 pub(crate) fn op_photos(op: &Op, out: &mut Vec<PhotoId>) {
     match op {
-        Op::SetRating { id, .. } | Op::SetFlag { id, .. } | Op::SetLabel { id, .. } | Op::SetDevelop { id, .. } | Op::SetMeta { id, .. }
+        Op::SetRating { id, .. }
+        | Op::SetFlag { id, .. }
+        | Op::SetLabel { id, .. }
+        | Op::SetDevelop { id, .. }
+        | Op::SetMeta { id, .. }
+        | Op::SetCaptured { id, .. }
             if !out.contains(id) =>
         {
             out.push(*id);
@@ -664,7 +732,7 @@ impl Session {
         self.validate_sidecar_packets_for_paths(std::slice::from_ref(&path), &crate::rename::RealFs)?;
         let p = self.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?;
         let err = |e: std::io::Error| EngineError::Other(format!("{}: {e}", path.display()));
-        let (data, merged, backup) = sidecar_contents(&path, sidecar_packet(p, &self.catalog), &(self.clock)()).map_err(err)?;
+        let (data, merged, backup) = sidecar_contents(&path, p, &self.catalog, &(self.clock)()).map_err(err)?;
         write_atomic(&path, data.as_bytes()).map_err(err)?;
         self.note_sidecar_write(&path, data.as_bytes());
         Ok(SidecarSaved { path, merged, backup })
@@ -702,8 +770,8 @@ impl Session {
             Op::SetLabel { id, label: q.label },
             Op::SetMeta { id, meta: Box::new(q.meta.clone()) },
         ];
-        if q.captured != p.captured {
-            ops.push(Op::SetCaptured { id, captured: q.captured.clone() });
+        if q.captured != p.captured || q.captured_from != p.captured_from {
+            ops.push(Op::SetCaptured { id, captured: q.captured.clone(), from: q.captured_from });
         }
         if develop_changed {
             ops.extend(self.develop_op(id, (*q.develop).clone(), "Read Metadata from File"));
@@ -906,11 +974,12 @@ mod tests {
                     Op::SetRating { id: PhotoId(1), rating: 2 },
                     Op::SetFlag { id: PhotoId(1), flag: Flag::Pick },
                     Op::SetLabel { id: PhotoId(3), label: None },
+                    Op::SetCaptured { id: PhotoId(4), captured: None, from: Default::default() },
                 ],
             },
             &mut v,
         );
-        assert_eq!(v, vec![PhotoId(1), PhotoId(3)]);
+        assert_eq!(v, vec![PhotoId(1), PhotoId(3), PhotoId(4)]);
     }
 }
 
