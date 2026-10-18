@@ -191,3 +191,28 @@ fn close_fails_when_nothing_can_be_saved() {
     s.close_library().unwrap();
     assert_eq!(s.unsaved(), None);
 }
+
+#[test]
+fn logging_public_import_reports_failed_journal_after_applied_counts() {
+    let thread = crate::import::lifecycle_tests::capture();
+    let store = Flaky::default();
+    let mut s = open(&store, false);
+    let base = crate::tests_xmp::temp_dir("PRIVATE-logging-persist");
+    let path = base.join("PRIVATE.jpg");
+    std::fs::write(&path, b"synthetic").unwrap();
+    s.media.file_probe = Some(Arc::new(|_| Ok(crate::media::ProbeInfo { width: 32, height: 24, format: "JPEG".into(), ..Default::default() })));
+    store.set_failing(true);
+    assert!(matches!(s.execute("library.import", &json!({"paths":[path],"mode":"add"})), Err(EngineError::NotSaved(_))));
+    assert_eq!(s.catalog.len(), 1);
+    assert!(s.unsaved().is_some());
+    let records = crate::import::lifecycle_tests::rows(thread, "import");
+    assert_eq!(records.len(), 2, "{records:?}");
+    assert!(records[1].contains("event=terminal status=error cause=persist"), "{records:?}");
+    assert!(records[1].contains("persist=failed"), "{records:?}");
+    assert!(records[1].contains("imported=1"), "applied count survives failed append: {records:?}");
+    assert!(!records.join(" ").contains("PRIVATE"));
+    store.set_failing(false);
+    s.persist().unwrap();
+    assert_eq!(open(&store, false).catalog.len(), 1);
+    std::fs::remove_dir_all(base).unwrap();
+}

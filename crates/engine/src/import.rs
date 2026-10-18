@@ -614,6 +614,79 @@ fn library_files(library: &lightcraft_catalog::Catalog, files: &[String]) -> Has
     by_path
 }
 
+static IMPORT_RUN_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+pub fn begin_import_log(source: &'static str, mode: &str) -> (u64, web_time::Instant) {
+    let id = IMPORT_RUN_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let started = web_time::Instant::now();
+    let mode = match mode {
+        "add" => "add",
+        "copy" => "copy",
+        "move" => "move",
+        _ => "unknown",
+    };
+    log::info!(target: "lightcraft::import", "kind=import run_id={id} event=start source={source} mode={mode} elapsed_ms=0");
+    (id, started)
+}
+
+pub fn import_persist_outcome(s: &Session) -> &'static str {
+    if s.unsaved().is_some() {
+        "failed"
+    } else if s.library.as_ref().is_some_and(|l| l.on_disk) {
+        "ok"
+    } else {
+        "memory_only"
+    }
+}
+
+pub fn finish_import_log(
+    id: u64,
+    started: web_time::Instant,
+    status: &'static str,
+    cause: &'static str,
+    persist: &'static str,
+    counts: &serde_json::Value,
+) {
+    let count = |key: &str| counts.get(key).and_then(|v| v.as_u64().or_else(|| v.as_array().map(|a| a.len() as u64))).unwrap_or(0);
+    log::info!(target: "lightcraft::import", "kind=import run_id={id} event=terminal status={status} cause={cause} elapsed_ms={} scanned={} done={} total={} imported={} restored={} duplicates={} failed={} moved={} kept={} scan_id={} owner_detached={} persist={persist}",
+        started.elapsed().as_millis(), count("scanned"), count("done"), count("total"), count("imported"), count("restored"), count("duplicates"), count("failed"), count("moved"), count("kept"), count("scanId"), counts.get("ownerDetached").and_then(serde_json::Value::as_bool).unwrap_or(false));
+}
+
+pub(crate) fn command_import_terminal(
+    id: u64,
+    started: web_time::Instant,
+    s: &Session,
+    result: &crate::Result<serde_json::Value>,
+    observed: &serde_json::Value,
+) {
+    let persist = if matches!(result, Err(crate::EngineError::NotSaved(_))) {
+        "failed"
+    } else if result.is_err() && s.unsaved().is_none() {
+        "not_applicable"
+    } else {
+        import_persist_outcome(s)
+    };
+    let empty = serde_json::Value::Null;
+    let counts = if observed.is_null() { result.as_ref().unwrap_or(&empty) } else { observed };
+    let failed = counts.get("failed").is_some_and(|v| v.as_u64().is_some_and(|n| n > 0) || v.as_array().is_some_and(|a| !a.is_empty()));
+    let status = if result.is_err() || failed || persist == "failed" { "error" } else { "success" };
+    let cause = if persist == "failed" {
+        "persist"
+    } else if result.is_err() {
+        "command"
+    } else if failed {
+        "probe"
+    } else {
+        "none"
+    };
+    finish_import_log(id, started, status, cause, persist, counts);
+}
+
+pub(crate) fn import_report_counts(value: &serde_json::Value) -> serde_json::Value {
+    let count = |key: &str| value.get(key).and_then(|v| v.as_u64().or_else(|| v.as_array().map(|a| a.len() as u64))).unwrap_or(0);
+    serde_json::json!({"scanned":count("scanned"),"done":count("scanned"),"total":count("scanned"),"imported":count("imported"),"restored":count("restored"),"duplicates":count("duplicates"),"failed":count("failed"),"moved":count("moved"),"kept":count("kept")})
+}
+
 /// Progress and cancellation of a running [`scan_with`].
 #[derive(Default)]
 pub struct ScanProgress {
@@ -622,6 +695,82 @@ pub struct ScanProgress {
     pub done: std::sync::atomic::AtomicUsize,
     /// Shared with the scan's row in the activity stack (its ✕ sets it).
     pub cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    started: std::sync::OnceLock<(u64, web_time::Instant)>,
+    terminal: std::sync::atomic::AtomicBool,
+    found: std::sync::atomic::AtomicUsize,
+    delivery_tracked: std::sync::atomic::AtomicBool,
+    summary: std::sync::OnceLock<(usize, usize, usize)>,
+}
+
+impl ScanProgress {
+    pub fn begin(&self) {
+        self.started.get_or_init(|| {
+            let id = IMPORT_RUN_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let started = web_time::Instant::now();
+            log::info!(target: "lightcraft::import", "kind=scan run_id={id} event=start elapsed_ms=0");
+            (id, started)
+        });
+    }
+    pub fn run_id(&self) -> Option<u64> {
+        self.started.get().map(|s| s.0)
+    }
+    /// Defer the worker terminal until its result has been offered to the UI owner.
+    pub fn track_delivery(&self) {
+        self.delivery_tracked.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    pub fn delivered(&self, accepted: bool) {
+        if !accepted {
+            self.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        self.terminal(false);
+    }
+    pub fn worker_error(&self) {
+        self.terminal(true);
+    }
+    fn computed(&self, output: &ScanOutput) {
+        let _ = self.summary.set((
+            output.candidates.len(),
+            output.candidates.iter().filter(|c| c.error.is_some()).count(),
+            output.candidates.iter().filter(|c| c.duplicate.is_some()).count(),
+        ));
+        if !self.delivery_tracked.load(std::sync::atomic::Ordering::Relaxed) {
+            self.terminal(false);
+        }
+    }
+    fn terminal(&self, worker_failed: bool) {
+        let Some((id, started)) = self.started.get() else { return };
+        if self.terminal.swap(true, std::sync::atomic::Ordering::AcqRel) {
+            return;
+        }
+        let load = |v: &std::sync::atomic::AtomicUsize| v.load(std::sync::atomic::Ordering::Relaxed);
+        let (candidates, failed, duplicates) = self.summary.get().copied().unwrap_or_default();
+        let cancelled = self.cancel.load(std::sync::atomic::Ordering::Relaxed);
+        let status = if worker_failed {
+            "error"
+        } else if cancelled {
+            "cancelled"
+        } else if failed > 0 {
+            "error"
+        } else {
+            "success"
+        };
+        let cause = if worker_failed {
+            "worker"
+        } else if cancelled {
+            "cancelled"
+        } else if failed > 0 {
+            "probe"
+        } else {
+            "none"
+        };
+        log::info!(target: "lightcraft::import", "kind=scan run_id={id} event=terminal status={status} cause={cause} elapsed_ms={} found={} done={} total={} candidates={candidates} duplicates={duplicates} failed={failed} persist=not_applicable",
+            started.elapsed().as_millis(), load(&self.found), load(&self.done), load(&self.total));
+    }
+}
+impl Drop for ScanProgress {
+    fn drop(&mut self) {
+        self.worker_error();
+    }
 }
 
 /// The result of [`scan_with`]: the candidates, and the probes to keep for the import that follows.
@@ -672,8 +821,10 @@ impl ScanInput {
 /// against the library and earlier candidates). Nothing is added; the probes are kept for the
 /// import that follows.
 pub fn scan(s: &mut Session, paths: &[String]) -> Vec<ImportCandidate> {
+    let progress = ScanProgress::default();
+    progress.begin();
     let (input, paths) = ScanInput::for_import(s, paths);
-    let out = scan_with(input, &paths, &ScanProgress::default());
+    let out = scan_with(input, &paths, &progress);
     s.import_probes = out.probes;
     out.candidates
 }
@@ -681,12 +832,15 @@ pub fn scan(s: &mut Session, paths: &[String]) -> Vec<ImportCandidate> {
 /// [`scan`] without the session, so it can run on a worker thread. Stops early (returning what it
 /// has) when `progress.cancel` is set.
 pub fn scan_with(input: ScanInput, paths: &[String], progress: &ScanProgress) -> ScanOutput {
+    progress.begin();
     let files = expand(paths, input.skip.as_deref());
     scan_files(input, files, progress)
 }
 
 /// [`scan_with`] for files that were found already (`paths` expanded, [`expand`]).
 pub(crate) fn scan_files(mut input: ScanInput, files: Vec<String>, progress: &ScanProgress) -> ScanOutput {
+    progress.begin();
+    progress.found.store(files.len(), std::sync::atomic::Ordering::Relaxed);
     let _originals = input.originals.bind();
     use std::sync::atomic::Ordering::Relaxed;
     let by_path = library_files(&input.library, &files);
@@ -745,7 +899,9 @@ pub(crate) fn scan_files(mut input: ScanInput, files: Vec<String>, progress: &Sc
         }
         out.push(c);
     }
-    ScanOutput { candidates: out, probes: kept }
+    let output = ScanOutput { candidates: out, probes: kept };
+    progress.computed(&output);
+    output
 }
 
 /// Import files/folders. See the module docs.
@@ -1918,3 +2074,6 @@ mod prepared_tests {
         assert!(prepared.items.is_empty());
     }
 }
+
+#[cfg(test)]
+pub(crate) mod lifecycle_tests;

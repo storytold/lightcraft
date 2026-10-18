@@ -516,18 +516,36 @@ impl Session {
 
     /// Run a command by id. THE entry point for every frontend.
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value> {
-        let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
-        // a command that validates the photos a call names isn't held back by the selection
-        if !(spec.explicit_targets && cmd::names_photos(params)) {
-            (spec.enabled)(self).map_err(|why| EngineError::Disabled(id.to_string(), why))?;
+        let timing = (id == "library.import" && self.depth == 0)
+            .then(|| import::begin_import_log("command", params.get("mode").and_then(Value::as_str).unwrap_or("add")));
+        let mut observed = Value::Null;
+        let result = (|| {
+            let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
+            // a command that validates the photos a call names isn't held back by the selection
+            if !(spec.explicit_targets && cmd::names_photos(params)) {
+                (spec.enabled)(self).map_err(|why| EngineError::Disabled(id.to_string(), why))?;
+            }
+            let empty = Value::Object(Default::default());
+            let params = if params.is_null() { &empty } else { params };
+            self.run_command(id, spec.journal.then_some(params), |s| {
+                let result = (spec.run)(s, params);
+                if timing.is_some()
+                    && let Ok(value) = &result
+                {
+                    observed = import::import_report_counts(value);
+                }
+                result
+            })
+            .map_err(|e| match e {
+                // a shared parameter check ([`Session::targets`]) names the command it ran for
+                EngineError::BadParams { cmd, msg } if cmd.is_empty() => EngineError::BadParams { cmd: id.to_string(), msg },
+                e => e,
+            })
+        })();
+        if let Some((run_id, started)) = timing {
+            import::command_import_terminal(run_id, started, self, &result, &observed);
         }
-        let empty = Value::Object(Default::default());
-        let params = if params.is_null() { &empty } else { params };
-        self.run_command(id, spec.journal.then_some(params), |s| (spec.run)(s, params)).map_err(|e| match e {
-            // a shared parameter check ([`Session::targets`]) names the command it ran for
-            EngineError::BadParams { cmd, msg } if cmd.is_empty() => EngineError::BadParams { cmd: id.to_string(), msg },
-            e => e,
-        })
+        result
     }
 
     /// Run `f` as command `id` with what [`Session::execute`] does around every command: the
