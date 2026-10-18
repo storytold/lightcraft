@@ -120,6 +120,7 @@ language_table! {
     ZhHans, "zh-hans", "简体中文", "Hans", include_str!("../locales/zh-hans.json");
     ZhHant, "zh-hant", "繁體中文（台灣）", "Hant", include_str!("../locales/zh-hant.json");
     Ja, "ja", "日本語", "Jpan", include_str!("../locales/ja.json");
+    Ko, "ko", "한국어", "Kore", include_str!("../locales/ko.json");
     PtBr, "pt-br", "Português (Brasil)", "Latn", include_str!("../locales/pt-br.json");
     Es, "es", "Español", "Latn", include_str!("../locales/es.json");
     De, "de", "Deutsch", "Latn", include_str!("../locales/de.json");
@@ -772,6 +773,7 @@ mod tests {
             ("app.language.english", Locale::En),
             ("app.language.simplifiedChinese", Locale::ZhHans),
             ("app.language.japanese", Locale::Ja),
+            ("app.language.korean", Locale::Ko),
             ("app.language.portuguese", Locale::PtBr),
             ("app.language.french", Locale::Fr),
             ("app.language.spanish", Locale::Es),
@@ -1004,6 +1006,27 @@ mod tests {
             let Outcome::Done(reply) = crate::control::handle(&mut app, &ctx, &request) else { panic!("expected reply") };
             assert_eq!(reply["ok"], true);
             assert_eq!(language(), Locale::Uk);
+        }
+        set_language(Locale::En);
+    }
+
+    #[test]
+    fn korean_switches_formats_counts_and_dates() {
+        let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default());
+        app.run("app.language.korean", serde_json::json!({})).unwrap();
+        assert_eq!(app.ui.language, Locale::Ko);
+        assert_eq!(crate::menubar::checked(&app, "app.language.korean"), Some(true));
+        assert_eq!(tr("Light"), "조명");
+        assert_eq!(date_group_label("2026-09-20", false), "2026년 9월 20일 일요일");
+        assert_eq!(date_group_label("2026-09", false), "2026년 9월");
+        for n in [0, 1, 2, 5, 21] {
+            assert_eq!(tr_format!("Imported {} photo{}", n, if n == 1 { "" } else { "s" }), format!("사진 {n}장을 가져왔습니다"));
+        }
+        assert_eq!(tr_format!("Added {n} photo{} to “{}”", "s", "Trip", n = 3), "“Trip”에 3장을 추가했습니다");
+        let saved = serde_json::to_string(&app.ui).unwrap();
+        assert!(saved.contains(r#""language":"ko""#));
+        for code in ["ko", "ko-KR", "ko_KR.UTF-8", "ko-Kore-KR"] {
+            assert_eq!(Locale::parse_tag(code), Some(Locale::Ko));
         }
         set_language(Locale::En);
     }
