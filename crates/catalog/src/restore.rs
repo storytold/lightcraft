@@ -524,6 +524,10 @@ pub fn stage(backup: &Path, library: &Path, options: &RestoreOptions<'_>, watch:
         return Err(BackupError::Exists(options.aside.to_string()));
     }
     let wanted = |name: &str| name == SNAPSHOT || name == LOG || segments::valid_name(name) || options.also.contains(&name);
+    // (stopped or given up before it began: it must not clear away a copy that is not its own)
+    if watch.cancelled() {
+        return Err(BackupError::Cancelled);
+    }
     std::fs::create_dir_all(library).map_err(|e| backup::io("can't make the folder", library, e))?;
     // what a restore that never got to move a file left: a folder of that name that holds
     // anything else is somebody's, and stays

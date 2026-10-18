@@ -542,8 +542,6 @@ impl Session {
         if let Some(place) = crate::lightroom_folder::lightroom_catalog_at(&dir) {
             return Err(EngineError::LightroomCatalog { path: dir, catalog: place.catalog });
         }
-        // a restore that is still copying its backup is of the library as it was open: given up
-        crate::cmd::backup::give_up(self);
         let dir = resolve_dir(&dir)?;
         // a backup is not worked in where it is (and not written to: no lock file, no log); also
         // not when it is named by one of its files
@@ -568,14 +566,20 @@ impl Session {
                 return Err(EngineError::Other(e.to_string()));
             }
         };
-        // (and what one that never got that far left: a copy of a backup)
-        lightcraft_catalog::restore::clear_leftover(&dir);
+        // (and what one that never got that far left: a copy of a backup, but not the one of a
+        // restore of this session that is under way: it removes its own when it is over)
+        if !crate::cmd::backup::restoring(self, &dir) {
+            lightcraft_catalog::restore::clear_leftover(&dir);
+        }
         if let Err(e) = self.open_stores(stores, seed_demo, &mut lock) {
             if reusing && let Some(lib) = self.library.as_mut() {
                 lib.lock = lock.take();
             }
             return Err(e);
         }
+        // a restore that is still copying its backup is of the library as it was open: given up
+        // (not before the library is open: a failed open leaves it as it was, and the restore with it)
+        crate::cmd::backup::give_up(self);
         if let (Some(r), Some(lib)) = (finished, self.library.as_mut()) {
             log::warn!("library: finished a restore from {} that was cut short", r.backup.display());
             let kept = r.aside.map_or(String::new(), |a| format!(" What the library held before is in {}.", a.display()));

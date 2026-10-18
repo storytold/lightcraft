@@ -276,6 +276,9 @@ fn restore_library(s: &mut Session, p: &Value) -> Result<Value> {
         if restore_status(s).is_some_and(|r| r.running()) {
             return Err(bad(C, "a restore of this library is already under way"));
         }
+        if copying(s, &target) {
+            return Err(bad(C, "a restore of this library is still being stopped; restore again in a moment"));
+        }
         if s.library.as_ref().is_some_and(|l| l.stuck.is_some()) {
             return Err(bad(C, "a restore of this library stopped part-way; open the library again to finish it"));
         }
@@ -307,7 +310,7 @@ fn restore_library(s: &mut Session, p: &Value) -> Result<Value> {
     if in_place && background {
         // the backup is copied and checked on a worker while the library stays in use; its files
         // are moved into place by `settle`, between commands
-        let job = Arc::new(RestoreJob { library: target, from, aside, ..Default::default() });
+        let job = Arc::new(RestoreJob { library: target, from, aside, alive: AtomicBool::new(true), ..Default::default() });
         s.restore = Some(job.clone());
         let task = s.activity.start("restore", "Restoring the library", Cancel::Flag(job.cancel.clone()));
         task.set_unit(Unit::Bytes);
@@ -317,6 +320,7 @@ fn restore_library(s: &mut Session, p: &Value) -> Result<Value> {
             copy(&worker, task);
         });
         if let Err(e) = spawned {
+            job.alive.store(false, Ordering::SeqCst);
             // (said once, by the command: there is no restore to report on)
             job.end(Err(format!("could not start: {e}")));
             s.restore = None;
@@ -358,6 +362,9 @@ pub struct RestoreJob {
     /// Its files are being moved into place (the library is closed and opened again for that,
     /// which is no reason to give it up).
     placing: AtomicBool,
+    /// Its worker is at work (it started, and has not ended): what it copies into the library
+    /// folder is its own until then, also when the restore was given up meanwhile.
+    alive: AtomicBool,
 }
 
 /// Why a restore that was stopped, or given up, made no change.
@@ -426,6 +433,8 @@ fn copy(job: &Arc<RestoreJob>, task: TaskGuard) {
             if !self.1 {
                 self.0.end(Err("the restore stopped on an internal error".into()));
             }
+            // (last: from here on the library folder's `restore.partial` is nobody's)
+            self.0.alive.store(false, Ordering::SeqCst);
         }
     }
     let mut over = Over(job, false);
@@ -510,11 +519,28 @@ pub(crate) fn give_up(s: &Session) {
     }
 }
 
+/// Whether the worker of a restore of the library `dir` is still at work in its folder: also
+/// after the restore was given up or stopped, until the worker sees that and removes its copy.
+/// While it is, the folder's `restore.partial` is its (the copy is removed when it ends), so no
+/// other restore is started there and nothing clears it away.
+pub(crate) fn copying(s: &Session, dir: &Path) -> bool {
+    s.restore.as_ref().is_some_and(|job| job.alive.load(Ordering::SeqCst) && same_folder(&job.library, dir))
+}
+
+/// Whether a restore of the library `dir` that is not over is in `s` (copying, or copied and
+/// waiting to be moved into place): its copy is the restore's own to remove.
+pub(crate) fn restoring(s: &Session, dir: &Path) -> bool {
+    s.restore.as_ref().is_some_and(|job| (job.running() || job.alive.load(Ordering::SeqCst)) && same_folder(&job.library, dir))
+}
+
 /// `library.restore` can run: no restore or backup of the open library is under way, and none
 /// has left it half moved.
 fn can_restore(s: &Session) -> std::result::Result<(), String> {
     if restore_status(s).is_some_and(|r| r.running()) {
         return Err("a restore of this library is under way".into());
+    }
+    if s.library.as_ref().is_some_and(|l| copying(s, &l.dir)) {
+        return Err("a restore of this library is still being stopped".into());
     }
     if status(s).is_some_and(|b| !b.finished.load(Ordering::Relaxed)) {
         return Err("a backup of this library is running".into());

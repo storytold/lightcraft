@@ -904,3 +904,64 @@ fn restore_is_not_offered_while_a_restore_or_backup_runs() {
     drop(s);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A restore that was given up has a worker that is still at work in the library folder until it
+/// sees so. It must not clear away what another restore of the library copied there meanwhile:
+/// no other restore is started (or its copy cleared as a leftover) while it is, and the worker
+/// that was given up before it began copies nothing.
+#[test]
+fn given_up_worker_must_not_remove_the_next_restores_copy() {
+    let dir = temp_dir("given-up-worker");
+    let mut s = open(&dir);
+    let made = back_up(&mut s);
+    s.execute("photo.rate", &json!({"rating": 3})).unwrap();
+    let enabled = |s: &Session| (crate::cmd::command_specs().iter().find(|c| c.id == "library.restore").unwrap().enabled)(s);
+    s.restore_hold.store(true, Ordering::SeqCst);
+    s.execute("library.restore", &json!({"dir": made.to_string_lossy(), "background": true})).unwrap();
+    // the library is opened again: the restore is given up, its worker is held where it is
+    s.close_library().unwrap();
+    s.open_library(&dir, false).unwrap();
+    assert_eq!(s.restore.as_ref().map(|r| r.running()), Some(false));
+    // another restore is refused while the worker of the first is there (it would share `restore.partial`)
+    let e = s.execute("library.restore", &json!({"dir": made.to_string_lossy(), "background": true})).unwrap_err();
+    assert!(e.to_string().contains("still being stopped"), "{e}");
+    assert!(enabled(&s).is_err_and(|e| e.contains("stopped")));
+    s.restore_hold.store(false, Ordering::SeqCst);
+    let t0 = std::time::Instant::now();
+    while !s.activity.list().is_empty() && t0.elapsed() < std::time::Duration::from_secs(20) {
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    assert!(s.activity.list().is_empty());
+    // the worker that was given up copied nothing, and left nothing
+    assert!(!dir.join("restore.partial").exists() && !dir.join("Replaced").exists());
+    // and a restore is possible again once it is over
+    assert_eq!(enabled(&s), Ok(()));
+    s.execute("library.restore", &json!({"dir": made.to_string_lossy(), "background": true})).unwrap();
+    assert!(pump(&mut s).expect("the restore ends")["error"].is_null());
+    drop(s);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An open that fails leaves a restore that is under way alone: it is given up only once another
+/// library is open (or this one again), not by an attempt that came to nothing.
+#[test]
+fn a_failed_open_does_not_give_up_a_restore() {
+    let dir = temp_dir("failed-open");
+    let mut s = open(&dir);
+    let made = back_up(&mut s);
+    s.execute("photo.rate", &json!({"rating": 3})).unwrap();
+    let then = s.catalog.to_snapshot();
+    s.restore_hold.store(true, Ordering::SeqCst);
+    s.execute("library.restore", &json!({"dir": made.to_string_lossy(), "background": true})).unwrap();
+    // (a file that is none of a library's own: a library is a folder)
+    let file = dir.join("not-a-library.txt");
+    std::fs::write(&file, b"x").unwrap();
+    assert!(s.open_library(&file, false).is_err());
+    assert_eq!(s.restore.as_ref().map(|r| r.running()), Some(true), "the restore was given up by an open that failed");
+    s.restore_hold.store(false, Ordering::SeqCst);
+    let done = pump(&mut s).expect("the restore ends");
+    assert!(done["error"].is_null(), "{done}");
+    assert_ne!(s.catalog.to_snapshot(), then);
+    drop(s);
+    let _ = std::fs::remove_dir_all(&dir);
+}
