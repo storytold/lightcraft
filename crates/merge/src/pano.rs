@@ -275,7 +275,7 @@ pub fn stitch_with_output_pixel_limit(
     // of a frame is then one pixel of the photo, and nothing is upsampled past that.
     let lens = used.iter().filter_map(|&i| exif_focal(&frames[i])).fold(0.0, f64::max);
     let native = if fmed > 0.0 { (lens / fmed).max(1.0) } else { 1.0 };
-    let canvas_at_scale = |scale: f64| -> Option<(usize, usize, usize, usize)> {
+    let canvas_at_scale = |scale: f64| -> Option<(usize, usize, usize, usize, usize, usize, usize)> {
         let width = ((bx1 - bx0) * scale).ceil();
         let height = ((by1 - by0) * scale).ceil();
         if !width.is_finite() || !height.is_finite() || width < 0.0 || height < 0.0 {
@@ -288,10 +288,10 @@ pub fn stitch_with_output_pixel_limit(
         let pw = cw.div_ceil(unit).checked_mul(unit)?;
         let ph = ch.div_ceil(unit).checked_mul(unit)?;
         let output_pixels = pw.checked_mul(ph)?;
-        Some((pw, ph, output_pixels, unit))
+        Some((cw, ch, levels, unit, pw, ph, output_pixels))
     };
     let mut s = (max_px / surface).sqrt().min(MAX_EDGE / (bx1 - bx0).max(by1 - by0)).min(native);
-    let Some((mut pw, mut ph, mut output_pixels, mut unit)) = canvas_at_scale(s) else {
+    let Some((mut cw, mut ch, mut levels, mut unit, mut pw, mut ph, mut output_pixels)) = canvas_at_scale(s) else {
         return Err(MergeError::NoOverlap("the panorama output dimensions overflow".into()));
     };
     if output_pixels > max_output_pixels {
@@ -300,7 +300,7 @@ pub fn stitch_with_output_pixel_limit(
         let (mut low, mut high) = (0.0, s);
         for _ in 0..64 {
             let candidate = low + (high - low) * 0.5;
-            if canvas_at_scale(candidate).is_some_and(|dims| dims.2 <= max_output_pixels) {
+            if canvas_at_scale(candidate).is_some_and(|dims| dims.6 <= max_output_pixels) {
                 low = candidate;
             } else {
                 high = candidate;
@@ -310,7 +310,7 @@ pub fn stitch_with_output_pixel_limit(
         let Some(dims) = canvas_at_scale(s) else {
             return Err(MergeError::NoOverlap("the panorama output dimensions overflow".into()));
         };
-        (pw, ph, output_pixels, unit) = dims;
+        (cw, ch, levels, unit, pw, ph, output_pixels) = dims;
     }
     let f_out = fmed * s;
     let (ox, oy) = (bx0 * s, by0 * s);
