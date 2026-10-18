@@ -145,7 +145,7 @@ fn raw_probe(bytes: &[u8]) -> RawProbe {
 }
 
 /// [`probe_bytes`], with the content hash only when `hash` (a buffer read in part has none).
-fn probe_bytes_with(name: &str, bytes: &[u8], hash: bool) -> Result<ProbeInfo, String> {
+pub(crate) fn probe_bytes_with(name: &str, bytes: &[u8], hash: bool) -> Result<ProbeInfo, String> {
     describe(name, bytes, raw_probe(bytes), hash)
 }
 
@@ -202,6 +202,7 @@ fn describe(name: &str, bytes: &[u8], raw: RawProbe, hash: bool) -> Result<Probe
             xmp: lightcraft_meta::embedded(bytes).xmp,
             preview_only: None,
             head_hash,
+            native_read: None,
         });
     }
     let fmt = lightcraft_codecs::sniff(bytes).ok_or("unrecognized file format")?;
@@ -236,6 +237,7 @@ fn describe(name: &str, bytes: &[u8], raw: RawProbe, hash: bool) -> Result<Probe
         xmp: None,
         preview_only: None,
         head_hash,
+        native_read: None,
     })
 }
 
@@ -813,6 +815,7 @@ fn fit_box(max_edge: usize) -> lightcraft_codecs::DecodeOptions {
 /// the whole file, which is what the decode of one can hold.
 pub fn fs_preview_loader() -> PreviewLoader {
     Arc::new(|path: &str, max_edge: usize| {
+        let _binding = crate::originals::standalone_binding();
         let len = std::fs::metadata(path).map(|m| usize::try_from(m.len()).unwrap_or(usize::MAX)).unwrap_or(0);
         let gate = crate::memory::work_gate();
         let _permit = if crate::memory::is_background() { gate.acquire(len.saturating_mul(2)) } else { gate.acquire_urgent(len.saturating_mul(2)) };
@@ -823,7 +826,7 @@ pub fn fs_preview_loader() -> PreviewLoader {
         {
             return Some(image);
         }
-        embedded_preview_srgb(&std::fs::read(path).ok()?, max_edge)
+        embedded_preview_srgb(&crate::originals::read_whole(path).ok()?, max_edge)
     })
 }
 
@@ -1058,11 +1061,12 @@ fn quick_image_srgb(header: &[u8], window: &[u8], adobe_rgb: bool, max_edge: usi
 /// denoised picture. It holds two pictures at once, so it counts for more at the memory gate than a plain load.
 pub fn fs_pair_loader() -> PairLoader {
     Arc::new(|path: &str, max_edge: usize, spec: &DenoiseSpec| {
+        let _binding = crate::originals::standalone_binding();
         let len = std::fs::metadata(path).map(|m| m.len() as usize).unwrap_or(0);
         let weight = len * if max_edge <= crate::media::SourceLevel::Thumb.max_edge() { 4 } else { 10 };
         let gate = crate::memory::work_gate();
         let _permit = if crate::memory::is_background() { gate.acquire(weight) } else { gate.acquire_urgent(weight) };
-        let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+        let bytes = crate::originals::read_whole(path).map_err(|e| format!("{path}: {e}"))?;
         let r = load_vec_pair(bytes, max_edge, spec);
         crate::memory::release();
         r
@@ -1078,11 +1082,12 @@ pub fn fs_pair_loader() -> PairLoader {
 /// yields to them.
 pub fn fs_hooks() -> (FileLoader, FileProbe) {
     let loader: FileLoader = Arc::new(|path: &str, max_edge: usize| {
+        let _binding = crate::originals::standalone_binding();
         let len = std::fs::metadata(path).map(|m| usize::try_from(m.len()).unwrap_or(usize::MAX)).unwrap_or(0);
         let weight = len * if max_edge <= crate::media::SourceLevel::Thumb.max_edge() { 3 } else { 6 };
         let gate = crate::memory::work_gate();
         let _permit = if crate::memory::is_background() { gate.acquire(weight) } else { gate.acquire_urgent(weight) };
-        let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+        let bytes = crate::originals::read_whole(path).map_err(|e| format!("{path}: {e}"))?;
         let r = load_vec(bytes, max_edge);
         // the file, the samples and the intermediate images are gone: give their pages back
         crate::memory::release();
@@ -1093,10 +1098,14 @@ pub fn fs_hooks() -> (FileLoader, FileProbe) {
 
 /// Probe a whole file (its bytes are read once, and hashed).
 fn probe_file(path: &str) -> Result<ProbeInfo, String> {
+    let _binding = crate::originals::standalone_binding();
     let len = std::fs::metadata(path).map(|m| usize::try_from(m.len()).unwrap_or(usize::MAX)).unwrap_or(0);
     let _permit = crate::memory::work_gate().acquire(len);
-    let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
-    let mut info = probe_bytes(path, &bytes)?;
+    let capture = crate::originals::ReadCapture::new();
+    let (bytes, hash) = crate::originals::read_with_hash(path).map_err(|e| format!("{path}: {e}"))?;
+    let mut info = probe_bytes_with(path, &bytes, false)?;
+    info.content_hash = Some(hash.to_string());
+    info.native_read = crate::originals::probe_evidence(path, &info, capture.fingerprint(path));
     info.file_modified = file_modified(path);
     Ok(info)
 }
@@ -1120,6 +1129,7 @@ const PARTIAL_SHARE: u64 = 6;
 /// the file — is probed whole, with its hash.
 pub fn fs_header_probe() -> FileProbe {
     Arc::new(|path: &str| {
+        let _binding = crate::originals::standalone_binding();
         let info = match probe_partial(path) {
             Ok(Some(mut info)) => {
                 info.file_modified = file_modified(path);
@@ -1136,7 +1146,8 @@ pub fn fs_header_probe() -> FileProbe {
 /// [`fs_header_probe`]'s partial read: `None` when the file has to be probed whole.
 fn probe_partial(path: &str) -> std::io::Result<Option<ProbeInfo>> {
     use lightcraft_raw::sparse::{Ranges, header_plan, preview_plan};
-    let mut file = std::fs::File::open(path)?;
+    let mut read = crate::originals::HeaderRead::open(path)?;
+    let file = &mut read.file;
     let len = file.metadata()?.len();
     if !(PARTIAL_MIN..=PARTIAL_MAX).contains(&len) {
         return Ok(None);
@@ -1147,17 +1158,17 @@ fn probe_partial(path: &str) -> std::io::Result<Option<ProbeInfo>> {
     // zero-filled pages are only allocated once written or read, so the bytes never read cost nothing
     let mut buf = vec![0u8; size];
     let mut loaded = Ranges::new();
-    load_range(&mut file, &mut buf, &mut loaded, 0, PARTIAL_PREFIX.min(len))?;
-    if read_planned(&mut file, &mut buf, &mut loaded, PARTIAL_ROUNDS, PARTIAL_SHARE, header_plan)? != Planned::Ready {
+    load_range(file, &mut buf, &mut loaded, 0, PARTIAL_PREFIX.min(len))?;
+    if read_planned(file, &mut buf, &mut loaded, PARTIAL_ROUNDS, PARTIAL_SHARE, header_plan)? != Planned::Ready {
         return Ok(None);
     }
     // what the raw reader says; reading the preview below doesn't change it
     let raw = raw_probe(&buf);
     // a raw shown from its embedded preview (a coding not decoded yet): read the preview first
-    if matches!(raw, Some(Err(_))) && read_planned(&mut file, &mut buf, &mut loaded, PARTIAL_ROUNDS, PARTIAL_SHARE, preview_plan)? != Planned::Ready {
+    if matches!(raw, Some(Err(_))) && read_planned(file, &mut buf, &mut loaded, PARTIAL_ROUNDS, PARTIAL_SHARE, preview_plan)? != Planned::Ready {
         return Ok(None);
     }
-    Ok(describe(path, &buf, raw, false).ok().filter(|i| i.kind == MediaKind::Raw))
+    describe(path, &buf, raw, false).ok().filter(|i| i.kind == MediaKind::Raw).map(|info| read.finish(info)).transpose()
 }
 
 /// What reading a file in part came to ([`read_planned`]).
@@ -1222,12 +1233,7 @@ impl crate::Session {
     /// Install the filesystem file hooks (desktop, CLI, MCP headless), and on macOS the Apple Photos
     /// runner ([`crate::apple_photos::osascript`]; installed, not run).
     pub fn with_fs(mut self) -> Self {
-        let (l, p) = fs_hooks();
-        self.media.file_loader = Some(l);
-        self.media.file_probe = Some(p);
-        self.media.header_probe = Some(fs_header_probe());
-        self.media.preview_loader = Some(fs_preview_loader());
-        self.media.denoise.loader = Some(fs_pair_loader());
+        self.install_native_hooks();
         #[cfg(target_os = "macos")]
         {
             self.apple_photos = Some(crate::apple_photos::osascript());
@@ -1717,6 +1723,7 @@ pub(crate) mod tests {
     /// reading all of it, but without a content hash; a file too small to gain is read whole.
     #[test]
     fn header_probe_describes_a_raw_as_reading_all_of_it_does() {
+        let _binding = crate::originals::standalone_binding();
         let dir = crate::tests_xmp::temp_dir("header-probe");
         let (w, h) = (2000usize, 1500usize);
         let mut x = 0x9e37_79b9u32;
@@ -1745,7 +1752,10 @@ pub(crate) mod tests {
         let whole = probe_file(&big).unwrap();
         assert!(whole.content_hash.is_some() && partial.content_hash.is_none());
         assert!(partial.file_modified.is_some(), "the file's date, as a whole read gives it");
-        assert_eq!(format!("{partial:?}"), format!("{:?}", ProbeInfo { content_hash: None, ..whole }));
+        assert_eq!(
+            format!("{:?}", ProbeInfo { native_read: None, ..partial.clone() }),
+            format!("{:?}", ProbeInfo { content_hash: None, native_read: None, ..whole })
+        );
         assert_eq!(partial.meta.camera, "Example Camera");
         assert!(partial.xmp.is_some_and(|x| x.contains("Rating")));
         let small = dir.join("small.dng");

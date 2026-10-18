@@ -196,6 +196,8 @@ static LIBRARY_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64:
 
 pub struct Session {
     library_generation: u64,
+    pub(crate) originals: originals::Originals,
+    native_hooks: Option<originals::NativeHooks>,
     /// Auto Sync: edits to the active photo also change the other selected photos (the settings
     /// that changed, nothing else).
     pub auto_sync: bool,
@@ -407,6 +409,8 @@ impl Session {
     pub fn new() -> Session {
         Session {
             library_generation: LIBRARY_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            originals: Default::default(),
+            native_hooks: None,
             auto_sync: false,
             catalog: Catalog::new(),
             source: LibrarySource::All,
@@ -534,6 +538,8 @@ impl Session {
     }
 
     fn run_command(&mut self, id: &str, journal: Option<&Value>, f: impl FnOnce(&mut Session) -> Result<Value>) -> Result<Value> {
+        self.learn_read_hashes()?;
+        let _originals = self.originals.bind();
         let log_start = self.pending_log.len();
         let was_active = self.active();
         self.depth += 1;
@@ -560,6 +566,9 @@ impl Session {
             if r.is_ok() && !skip && self.xmp.auto_write && self.interaction.is_none() && self.pending_log.len() > log_start {
                 self.auto_write_sidecars_since(log_start);
             }
+        }
+        if self.depth == 0 {
+            self.learn_read_hashes()?;
         }
         if self.depth == 0 && self.library.is_some() {
             // Make the command durable before reporting success. When the command's own records
@@ -634,6 +643,7 @@ impl Session {
                 let _ = std::fs::remove_file(crate::denoise::product_path(&dir, &key));
             }
         }
+        self.originals.refresh(self);
         invalidation.map_err(|e| EngineError::Other(format!("cannot invalidate replaced photo caches: {e}; replacement was not applied")))
     }
 
@@ -641,6 +651,7 @@ impl Session {
         // Retain only cache IDs while the catalog consumes the operation. Cloning an import
         // batch here also cloned every photo, although commit already keeps the journal copy.
         let mut invalidated = Vec::new();
+        let mut relocated = Vec::new();
         let mut replaced = Vec::new();
         let mut states = std::collections::HashMap::new();
         let mut retirements: Vec<(lightcraft_catalog::Photo, Option<crate::cache_identity::PhysicalIdentity>, bool)> = Vec::new();
@@ -704,6 +715,7 @@ impl Session {
                 }
                 Op::SetFile { id, source, .. } | Op::Relink { id, source, .. } => {
                     invalidated.push(*id);
+                    relocated.push(*id);
                     let state = states.entry(*id).or_insert_with(|| {
                         self.catalog
                             .photo(*id)
@@ -759,8 +771,9 @@ impl Session {
         }
         let inv = self.catalog.apply(op)?;
         self.media.identities.confirm(&retired_sources);
-        for id in invalidated {
-            self.media.forget(id);
+        self.originals.drop_membership(&invalidated);
+        for id in &invalidated {
+            self.media.forget(*id);
         }
         #[cfg(not(target_arch = "wasm32"))]
         for id in replaced {
@@ -769,6 +782,8 @@ impl Session {
         }
         #[cfg(target_arch = "wasm32")]
         let _ = replaced;
+        self.originals.refresh(self);
+        self.originals.adopt_candidates(self, &relocated);
         Ok(inv)
     }
 
@@ -866,6 +881,7 @@ impl Session {
     }
 
     pub(crate) fn undo_step_with(&mut self, fs: &dyn rename::MoveFs) -> Result<String> {
+        let _binding = self.originals.bind();
         let mut e = self.undo.pop().ok_or_else(|| EngineError::Other("nothing to undo".into()))?;
         let redo = match self.apply_with_files(&mut e, fs) {
             Ok(r) => r,
@@ -891,6 +907,7 @@ impl Session {
     }
 
     pub(crate) fn redo_step_with(&mut self, fs: &dyn rename::MoveFs) -> Result<String> {
+        let _binding = self.originals.bind();
         let mut e = self.redo.pop().ok_or_else(|| EngineError::Other("nothing to redo".into()))?;
         let undo = match self.apply_with_files(&mut e, fs) {
             Ok(r) => r,

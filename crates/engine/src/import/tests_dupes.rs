@@ -255,9 +255,15 @@ fn f_repair_undo_import_learning_preserves_existing_photo_sources_and_faces() {
     s.media.file_loader = Some(Arc::new(|_, _| Err("must retain decoded original".into())));
     s.faces.scanned.insert(id.0);
     let ticket = s.media.identities.ticket(s.catalog.photo(id).unwrap());
+    s.execute("library.select", &serde_json::json!({"ids": [id.0]})).unwrap();
+    s.execute("photo.rate", &serde_json::json!({"rating": 3})).unwrap();
+    let steps = s.undo.len();
     add(&mut s, &[duplicate]);
+    assert_eq!(s.undo.len(), steps, "duplicate comparison learning is system metadata");
     assert!(s.catalog.photo(id).unwrap().content_hash.is_some());
     s.undo_step().unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap().rating, 0);
+    assert!(s.catalog.photo(id).unwrap().content_hash.is_some());
     assert!(s.media.has_source(id, SourceLevel::Preview));
     assert!(s.faces.scanned.contains(id.0));
     assert!(ticket.current());

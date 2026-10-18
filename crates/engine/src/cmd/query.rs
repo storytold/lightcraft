@@ -132,7 +132,7 @@ pub fn specs() -> Vec<CommandSpec> {
             };
             let bytes = match &s.media.file_bytes {
                 Some(r) => r(path),
-                None => std::fs::read(path).map_err(|e| format!("{path}: {e}")),
+                None => crate::originals::read_whole(path).map_err(|e| format!("{path}: {e}")),
             }
             .map_err(|e| super::bad("photo.allMetadata", e))?;
             let exif: Vec<Value> = lightcraft_meta::file_tag_rows(&bytes)
@@ -140,7 +140,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 .map(|r| json!({"group": r.group, "tag": r.tag, "name": r.name, "value": r.value}))
                 .collect();
             // XMP: the sidecar if there is one, else the file's own packet
-            let packet = crate::sidecar::read_packet(path, ph.kind, s.sidecar_naming(ph.id)).map(|(x, _)| x).or_else(|| lightcraft_meta::embedded(&bytes).xmp);
+            let packet = crate::sidecar::read_packet_with(path, ph.kind, s.sidecar_naming(ph.id), Some(&bytes)).map(|(x, _)| x).or_else(|| lightcraft_meta::embedded(&bytes).xmp);
             let xmp: Vec<Value> = packet
                 .and_then(|x| lightcraft_meta::parse_xmp(&x).ok())
                 .map(|d| d.properties.into_iter().filter(|(k, _)| !k.starts_with("lc:")).map(|(k, v)| json!({"name": k, "value": v.join("; ")})).collect())

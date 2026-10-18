@@ -88,7 +88,7 @@ fn a_scan_knows_who_has_the_contents_it_probed() {
     let probe = |h: &str| ProbeInfo { content_hash: Some(h.to_string()), ..ProbeInfo::default() };
     let (mut with_shared, mut with_nobody) = (probe(&shared), probe(&nobody));
     let mut known = dupes::Duplicates::default();
-    known.add_library_matching(c.photos(), &[&with_shared, &with_nobody]);
+    known.add_library_matching(c.photos(), &[&with_shared, &with_nobody], |_| true);
     assert_eq!(known.hash_count(), 1);
     let whole: HashMap<String, PhotoId> = c.photos().filter_map(|p| p.content_hash.clone().map(|h| (h, p.id))).collect();
     let found = known.find("/elsewhere/a.jpg", &mut with_shared).flatten();

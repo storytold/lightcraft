@@ -99,7 +99,9 @@ impl Headless {
                 cancelled = hook.as_mut().is_some_and(|h| !h(done, total, name));
                 !cancelled
             },
-        )?;
+        );
+        let saved = self.session.persist().map_err(|e| e.to_string());
+        let files = saved.and(files)?;
         if !cancelled && let Some(hook) = hook.as_mut() {
             cancelled = !hook(total, total, "");
         }

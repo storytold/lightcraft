@@ -503,7 +503,9 @@ fn files_that_cannot_be_denoised_fail_with_a_reason_and_never_a_panic() {
     let dir = temp_dir("makefails");
     let spec = |path: &Path| crate::denoise::JobSpec {
         path: path.to_string_lossy().into_owned(),
-        read: None,
+        read: crate::originals::Originals::default().reader(),
+        content_fingerprint: None,
+        published: Default::default(),
         source_ticket: None,
         product: dir.join("p.lcdn"),
         key: "k".into(),
@@ -574,7 +576,9 @@ fn two_threads_making_the_same_picture_make_it_once() {
     let runs = Arc::new(AtomicUsize::new(0));
     let spec = crate::denoise::JobSpec {
         path: f.to_string_lossy().into_owned(),
-        read: None,
+        read: crate::originals::Originals::default().reader(),
+        content_fingerprint: None,
+        published: Default::default(),
         source_ticket: None,
         product: dir.join("p.lcdn"),
         key: "k".into(),
@@ -881,12 +885,14 @@ fn a_denoise_product_cannot_publish_after_its_original_was_replaced() {
     let (a, b) = (started.clone(), release.clone());
     let spec = crate::denoise::JobSpec {
         path: f.to_string_lossy().into_owned(),
-        read: Some(Arc::new(move |path| {
+        read: Arc::new(move |path| {
             let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
             a.wait();
             b.wait();
             Ok(bytes)
-        })),
+        }),
+        content_fingerprint: None,
+        published: Default::default(),
         source_ticket: Some(identities.ticket(&p)),
         product: dir.join("late.lcdn"),
         key: "late".into(),
@@ -956,7 +962,7 @@ fn f_repair_immediate_export_discovers_fallback_without_reindex() {
         let settings = s.develop_of(id).unwrap().clone();
         let (spec, _) = s.denoise_for_export(id, &settings).unwrap().unwrap();
         assert_eq!(spec.key, key);
-        assert!(spec.make.unwrap()().unwrap());
+        assert!(spec.make.unwrap()().unwrap().is_some());
         assert_eq!(x.runs.load(Ordering::Relaxed), 0);
         assert!(s.media.denoise.spec(id).is_none(), "no pump/reindex before export");
         let reads = Arc::new(AtomicUsize::new(0));
@@ -1022,7 +1028,7 @@ fn f_repair_export_selects_valid_authorized_hash_first_without_pump_io() {
             }
         }
         if case != "retired" {
-            assert!(spec.make.unwrap()().unwrap());
+            assert!(spec.make.unwrap()().unwrap().is_some());
             assert_eq!(x.runs.load(Ordering::Relaxed), 0);
             x.s.media.denoise.set(id, crate::media::DenoiseSpec { product: spec.product, key: spec.key, make: None });
             let before = crate::denoise::product_checks();
@@ -1076,7 +1082,7 @@ fn f_repair_export_uses_fallback_while_primary_job_is_running() {
     let settings = x.s.develop_of(id).unwrap().clone();
     let (spec, _) = x.s.denoise_for_export(id, &settings).unwrap().unwrap();
     assert_eq!(spec.key, fallback);
-    assert!(spec.make.unwrap()().unwrap());
+    assert!(spec.make.unwrap()().unwrap().is_some());
     assert_eq!(x.runs.load(Ordering::Relaxed), 0);
     release_tx.send(()).unwrap();
     pump_until_ready(&mut x.s, 1);
@@ -1222,4 +1228,113 @@ fn f_repair_unconfirmed_durable_catalog_retains_h2() {
 #[test]
 fn f_repair_unconfirmed_first_marker_byte_failure_reopen_rejects_h1() {
     check_unconfirmed_replacement("marker-bytes");
+}
+
+#[test]
+fn g_denoise_first_read_publishes_under_its_own_content_hash() {
+    let mut x = setup("g-denoise-first-hash", true);
+    let id = photo(&x.s);
+    let p = x.s.catalog.photo(id).unwrap().clone();
+    x.s.apply_system(lightcraft_catalog::Op::SetContent {
+        id,
+        width: p.width,
+        height: p.height,
+        file_size: p.file_size,
+        content_hash: None,
+        preview_only: p.preview_only.clone(),
+        preview_checked: p.preview_checked.clone(),
+    })
+    .unwrap();
+    set_amount(&mut x.s, 100.0);
+    let before = x.s.originals.counts();
+    let exported = export_photo(&mut x.s, id, &ExportOptions::default(), 1).unwrap();
+    assert!(!exported.bytes.is_empty());
+    x.s.persist().unwrap();
+    let hash = x.s.catalog.photo(id).unwrap().content_hash.clone().unwrap();
+    let model = x.s.denoise.active.as_ref().unwrap().fingerprint.clone();
+    let key = crate::denoise::product_key_for(&model, &hash);
+    let product = crate::denoise::product_path(&x.s.denoise_products_dir().unwrap(), &key);
+    assert!(lightcraft_denoise::product::is_current(&product, &key), "maker must publish by the hash of the bytes it read");
+    let after = x.s.originals.counts();
+    assert_eq!((after.0 - before.0, after.1 - before.1), (2, 2), "existing model read and paired render read; no added original pass");
+    drop(x.s);
+    std::fs::remove_dir_all(x.dir).unwrap();
+}
+
+#[test]
+fn g_learning_migrates_smart_and_denoise_aliases_for_master_and_copy() {
+    use lightcraft_catalog::{Op, PhotoId, Source};
+    let mut x = setup("g-cache-migration", true);
+    let id = photo(&x.s);
+    let p = x.s.catalog.photo(id).unwrap().clone();
+    x.s.apply_system(Op::SetContent {
+        id,
+        width: p.width,
+        height: p.height,
+        file_size: p.file_size,
+        content_hash: None,
+        preview_only: p.preview_only.clone(),
+        preview_checked: p.preview_checked.clone(),
+    })
+    .unwrap();
+    let p = x.s.catalog.photo(id).unwrap().clone();
+    let mut copy = (*p).clone();
+    copy.id = PhotoId(id.0 + 1);
+    copy.copy_of = Some(id);
+    x.s.commit("Copy", Op::AddPhoto { photo: Box::new(copy.clone()) }).unwrap();
+    let alias = crate::media::content_key(&p);
+    let model = x.s.denoise.active.as_ref().unwrap().fingerprint.clone();
+    let old_key = crate::denoise::product_key_for(&model, &alias);
+    let products = x.s.denoise_products_dir().unwrap();
+    let old_product = crate::denoise::product_path(&products, &old_key);
+    let rgb = lightcraft_raster::Rgb32f::new(p.width as usize, p.height as usize);
+    lightcraft_denoise::product::write(&old_product, &rgb, &old_key).unwrap();
+    let smart = x.s.media.smart_dir.clone().unwrap();
+    let old_proxy = crate::smart::paths_for_keys(&smart, std::slice::from_ref(&alias))[1].clone();
+    std::fs::create_dir_all(old_proxy.parent().unwrap()).unwrap();
+    std::fs::write(&old_proxy, crate::smart::encode(&rgb, None).unwrap()).unwrap();
+    x.s.denoise_reindex();
+    assert_eq!(x.s.media.denoise.spec(id).unwrap().key, old_key);
+    let old_spec = x.s.media.denoise.spec(id).unwrap().clone();
+    let path = match &p.source {
+        Source::File { path } => path.clone(),
+        _ => panic!("file fixture"),
+    };
+    set_amount(&mut x.s, 100.0);
+    let before = x.s.originals.counts();
+    let result = x.s.thumb_job(id, 256).unwrap().run();
+    assert!(result.rendered.is_ok());
+    x.s.accept(&result);
+    x.s.persist().unwrap();
+    let hash = x.s.catalog.photo(id).unwrap().content_hash.clone().unwrap();
+    let new_key = crate::denoise::product_key_for(&model, &hash);
+    let new_product = crate::denoise::product_path(&products, &new_key);
+    assert!(lightcraft_denoise::product::is_current(&new_product, &new_key), "migration rewrites the embedded product key");
+    let new_proxy = crate::smart::paths_for_keys(&smart, std::slice::from_ref(&hash))[0].clone();
+    assert!(crate::smart::is_valid(&new_proxy));
+    assert!(lightcraft_denoise::product::is_current(&old_spec.product, &old_spec.key), "in-flight readers keep their valid old address");
+    assert_eq!(x.s.media.denoise.spec(id).unwrap().key, new_key);
+    assert_eq!(x.s.media.denoise.spec(copy.id).unwrap().key, new_key);
+    let next = x.s.thumb_job(id, 256).unwrap();
+    let (cache, key) = next.cache.as_ref().unwrap();
+    assert!(cache.get(*key).is_some(), "first-read thumbnail uses its actual denoise product salt");
+    assert!(matches!(next.source, crate::media::SourceRef::Loaded(_)), "pure migration preserves decoded pixels and their denoised twin");
+    let after = x.s.originals.counts();
+    assert_eq!((after.0 - before.0, after.1 - before.1), (1, 1));
+    assert_eq!(x.runs.load(Ordering::Relaxed), 0);
+    std::fs::remove_file(old_product).unwrap();
+    std::fs::remove_file(old_proxy).unwrap();
+    std::fs::rename(&path, x.dir.join("offline.dng")).unwrap();
+    drop(x.s);
+    let mut s = Session::new().with_fs();
+    s.set_denoise_models_dir(Some(x.dir.join("denoise-models")));
+    s.open_library(x.dir.join("library"), false).unwrap();
+    s.denoise_refresh_active(true);
+    s.denoise_reindex();
+    for current in [id, copy.id] {
+        assert_eq!(s.media.denoise.spec(current).unwrap().key, new_key);
+        assert!(s.thumb_job(current, 256).unwrap().run().rendered.is_ok());
+    }
+    drop(s);
+    std::fs::remove_dir_all(x.dir).unwrap();
 }

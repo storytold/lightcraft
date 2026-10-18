@@ -883,7 +883,7 @@ fn reload_picks_up_changed_files() {
 }
 
 /// A photo with no content hash on record (a Lightroom catalog's originals are added from their
-/// headers) is left alone by Reload while its file is the same: no undo step, the same render key.
+/// headers) learns its hash through Reload without an undo step; its path-key previews remain fallbacks.
 /// A file that did change is picked up as before, hash included.
 #[test]
 fn reload_leaves_an_unchanged_photo_without_a_hash_alone() {
@@ -907,8 +907,8 @@ fn reload_leaves_an_unchanged_photo_without_a_hash_alone() {
     let (undo0, key0) = (s.undo.len(), s.thumb_job(id, 128).unwrap().key);
     assert_eq!(s.execute("photo.reload", &json!({})).unwrap()["reloaded"], json!([]), "the same file is not a change");
     assert_eq!(s.undo.len(), undo0, "no Reload Changed Files step");
-    assert_eq!(s.thumb_job(id, 128).unwrap().key, key0, "previews keep their key");
-    assert!(s.catalog.photo(id).unwrap().content_hash.is_none());
+    assert_ne!(s.thumb_job(id, 128).unwrap().key, key0, "learned content hash becomes the primary key");
+    assert!(s.catalog.photo(id).unwrap().content_hash.is_some());
     write_png(&f, 200);
     assert_eq!(s.execute("photo.reload", &json!({})).unwrap()["reloaded"], json!([id.0]), "a changed file still is");
     assert!(s.catalog.photo(id).unwrap().content_hash.is_some());

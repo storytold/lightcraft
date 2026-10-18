@@ -576,7 +576,75 @@ fn a_source_changed_during_the_copy_is_refused() {
     let r = import_copy(&mut s, &card, &dest);
     inject(Fault::None);
     assert_eq!((len(&r, "imported"), len(&r, "failed")), (0, 1), "{r}");
-    assert!(r.to_string().contains("changed while it was copied"), "{r}");
+    assert!(r.to_string().contains("original changed while"), "{r}");
     assert_eq!(files_under(&dest), Vec::<String>::new());
     let _ = std::fs::remove_dir_all(&base);
+}
+
+#[cfg(unix)]
+#[test]
+fn hard_link_move_finish_reads_no_bytes_even_after_shared_changes() {
+    use crate::import_move::{finish, place, read_bytes};
+    let base = temp_dir("hard-link-no-read");
+    let src = base.join("original.jpg");
+    std::fs::write(&src, b"nonempty original").unwrap();
+    let before = read_bytes();
+    let p = place(&src, &base.join("dest"), "original.jpg").unwrap();
+    assert_eq!(p.hash, None);
+    std::fs::write(&src, b"shared modification").unwrap();
+    finish(&p).unwrap();
+    assert_eq!(read_bytes(), before);
+    assert!(!src.exists());
+    assert_eq!(std::fs::read(&p.dst).unwrap(), b"shared modification");
+    std::fs::remove_dir_all(base).unwrap();
+}
+
+#[test]
+fn distinct_or_replaced_move_destinations_require_byte_verification() {
+    use crate::import_move::{finish, place, read_bytes};
+    let base = temp_dir("finish-distinct");
+    let src = base.join("original.jpg");
+    for (i, bytes) in [b"original".as_slice(), b"differnt"].into_iter().enumerate() {
+        std::fs::write(&src, b"original").unwrap();
+        let p = place(&src, &base.join("dest"), &format!("{i}.jpg")).unwrap();
+        std::fs::remove_file(&p.dst).unwrap();
+        std::fs::write(&p.dst, bytes).unwrap();
+        let before = read_bytes();
+        assert_eq!(finish(&p).is_ok(), i == 0);
+        assert!(read_bytes() > before, "a different inode must be compared");
+        assert_eq!(src.exists(), i != 0);
+    }
+    std::fs::remove_dir_all(base).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn move_finish_keeps_source_when_destination_is_a_symlink_or_missing() {
+    use crate::import_move::{finish, place};
+    let base = temp_dir("finish-symlink");
+    let src = base.join("original.jpg");
+    std::fs::write(&src, b"original").unwrap();
+    let p = place(&src, &base.join("dest"), "original.jpg").unwrap();
+    std::fs::remove_file(&p.dst).unwrap();
+    assert!(finish(&p).is_err());
+    std::os::unix::fs::symlink(&src, &p.dst).unwrap();
+    assert!(finish(&p).is_err());
+    assert_eq!(std::fs::read(&src).unwrap(), b"original");
+    std::fs::remove_dir_all(base).unwrap();
+}
+
+#[test]
+fn move_finish_rechecks_names_after_verification() {
+    use crate::import_move::{finish, place};
+    let base = temp_dir("finish-name-recheck");
+    let src = base.join("original.jpg");
+    std::fs::write(&src, b"original").unwrap();
+    let p = place(&src, &base.join("dest"), "original.jpg").unwrap();
+    inject(Fault::SwapAfterVerify);
+    let result = finish(&p);
+    inject(Fault::None);
+    assert!(result.is_err());
+    assert_eq!(std::fs::read(&src).unwrap(), b"original");
+    assert_eq!(std::fs::read(&p.dst).unwrap(), b"replaced destination");
+    std::fs::remove_dir_all(base).unwrap();
 }

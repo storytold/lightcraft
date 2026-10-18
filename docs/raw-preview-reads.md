@@ -144,10 +144,18 @@ A raw added this way (Add) has no content hash:
   and dimensions by a hash of their first 512 KiB, and only when those match are both read whole
   and their full hashes compared. Nothing is called a duplicate without the full hash, and the hash
   read on the way is kept.
-- **Copy and Move** read each original whole to copy it, and hash it while copying: those photos
-  keep a full hash.
+- **Copy** hashes the original while streaming and verifies the destination. A cross-volume
+  **Move** copies and verifies before removing its source. On Unix, same-file live-handle identity
+  allows a genuine hard-link Move to finish without reading bytes; different files still use byte
+  verification. Such a no-read Move stays hashless until a later whole read.
 - **Find Missing Photos** matches a photo without a hash by name and size only, and **Reload from
-  Disk** takes its file as unchanged when its size, dimensions and preview state are the same.
+  Disk** can learn from its existing whole probe without adding an undo step for the hash alone.
+
+Later native whole reads (decode, metadata, export, conversion and streamed matching) share the
+session reader and owner sink described in [architecture.md](architecture.md#whole-original-reads).
+They learn from the bytes already needed by the operation, with lifecycle and physical-identity
+validation before saving; partial previews never fill in a full hash. Decoded sources and authorized
+smart/denoise products survive pure learning. Replacements retire old aliases durably instead.
 
 ## Tests
 

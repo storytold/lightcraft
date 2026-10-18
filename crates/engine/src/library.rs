@@ -599,6 +599,7 @@ impl Session {
                 lib.forgot_local = Some(plan);
             }
         }
+        self.reset_originals();
         // smart previews written by an older camera-look fit are brought up to date in the background
         #[cfg(not(target_arch = "wasm32"))]
         if on_disk {
@@ -612,6 +613,7 @@ impl Session {
     /// Called after every top-level command; cheap when nothing changed. Fails (with
     /// [`EngineError::NotSaved`]) only when the queued ops couldn't be written; they stay queued.
     pub fn persist(&mut self) -> Result<()> {
+        self.learn_read_hashes()?;
         let Some(lib) = self.library.as_mut() else { return Ok(()) };
         if !self.pending_log.is_empty() {
             if let Err(e) = lib.journal.append(&self.pending_log) {
@@ -664,6 +666,9 @@ impl Session {
     /// Persist if commands left ops pending (cheap; frontends call it once per frame for state
     /// changed outside [`Session::execute`]).
     pub fn persist_if_dirty(&mut self) {
+        if let Err(e) = self.learn_read_hashes() {
+            log::error!("original read identity: {e}");
+        }
         let backing_off = self.library.as_ref().and_then(|l| l.retry_at).is_some_and(|t| web_time::Instant::now() < t);
         if self.library.is_some() && !self.pending_log.is_empty() && !backing_off {
             let _ = self.persist();

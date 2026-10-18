@@ -32,8 +32,9 @@ pub(crate) struct Duplicates {
 }
 
 impl Duplicates {
-    pub(crate) fn add_library(&mut self, p: &Photo) {
-        if let Some(h) = &p.content_hash {
+    pub(crate) fn add_library(&mut self, p: &Photo, authorized: bool) {
+        let hash = p.content_hash.as_ref().filter(|_| authorized);
+        if let Some(h) = hash {
             self.by_hash.insert(base_hash(h).to_string(), Some(p.id));
         }
         let Source::File { path } = &p.source else { return };
@@ -41,11 +42,16 @@ impl Duplicates {
             return;
         }
         if let Some(k) = key(p.file_size, p.width, p.height) {
-            self.by_key.entry(k).or_default().push(Known { existing: Some(p.id), path: path.clone(), hash: p.content_hash.clone(), head: None });
+            self.by_key.entry(k).or_default().push(Known { existing: Some(p.id), path: path.clone(), hash: hash.cloned(), head: None });
         }
     }
 
-    pub(crate) fn add_library_matching<'a>(&mut self, library: impl Iterator<Item = &'a std::sync::Arc<Photo>>, probes: &[&ProbeInfo]) {
+    pub(crate) fn add_library_matching<'a>(
+        &mut self,
+        library: impl Iterator<Item = &'a std::sync::Arc<Photo>>,
+        probes: &[&ProbeInfo],
+        authorized: impl Fn(&Photo) -> bool,
+    ) {
         let hashes: HashSet<&str> = probes.iter().filter_map(|i| i.content_hash.as_deref()).map(base_hash).collect();
         let keys: HashSet<Key> = probes.iter().filter_map(|i| key(i.file_size, i.width, i.height)).collect();
         if hashes.is_empty() && keys.is_empty() {
@@ -54,7 +60,7 @@ impl Duplicates {
         for p in library {
             let by_hash = p.content_hash.as_deref().is_some_and(|h| hashes.contains(base_hash(h)));
             if by_hash || key(p.file_size, p.width, p.height).is_some_and(|k| keys.contains(&k)) {
-                self.add_library(p);
+                self.add_library(p, authorized(p));
             }
         }
     }

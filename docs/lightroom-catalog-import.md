@@ -107,7 +107,8 @@ hashes compared (and the hash taken is kept). A copy is never called a duplicate
 Files that share size and dimensions with more than 256 photos are not compared. Until a photo has a hash, Find
 Missing Photos matches its file by name and size only, and Reload from Disk takes the same file as
 unchanged (its size, dimensions and preview state decide: no undo step, previews kept). A
-background pass filling in the missing hashes would lift both limits. Sidecars are looked for in a listing of each folder,
+later validated whole read fills a missing hash through the session reader without an extra
+original read or undo entry. This is opportunistic learning, not a background hashing pass. Sidecars are looked for in a listing of each folder,
 read once, rather than by asking the drive for each possible name (slow for files that aren't there
 on exFAT and network drives).
 

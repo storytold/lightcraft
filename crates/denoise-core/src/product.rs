@@ -243,6 +243,62 @@ pub fn is_current(path: &Path, key: &str) -> bool {
     check().unwrap_or(false)
 }
 
+/// Stage a complete product with a new key, retaining the old address for active readers.
+/// `publish` atomically places the completed temporary file while the caller validates its source.
+pub fn copy_rekey(
+    from: &Path,
+    to: &Path,
+    old_key: &str,
+    new_key: &str,
+    publish: impl FnOnce(&Path) -> Result<(), ProductError>,
+) -> Result<(), ProductError> {
+    use std::io::{Seek, SeekFrom};
+    if new_key.len() > MAX_HEADER {
+        return Err(ProductError::Format("the header is too large".into()));
+    }
+    let mut input = std::fs::File::open(from)?;
+    let start = read_start(&mut input)?;
+    if start.header.key != old_key {
+        return Err(ProductError::Stale);
+    }
+    if input.metadata()?.len() != start.expected_len {
+        return Err(ProductError::Format("the product is incomplete".into()));
+    }
+    input.rewind()?;
+    let mut fixed = [0; 12];
+    input.read_exact(&mut fixed)?;
+    let old_len = fixed
+        .get(8..12)
+        .and_then(|b| <[u8; 4]>::try_from(b).ok())
+        .map(u32::from_le_bytes)
+        .ok_or_else(|| ProductError::Format("missing header length".into()))?;
+    let header = serde_json::to_vec(&Header { key: new_key.to_owned(), ..start.header }).map_err(|e| ProductError::Format(e.to_string()))?;
+    if header.len() > MAX_HEADER {
+        return Err(ProductError::Format("the header is too large".into()));
+    }
+    let length = u32::try_from(header.len()).map_err(|_| ProductError::Format("the header is too large".into()))?;
+    fixed.get_mut(8..12).ok_or_else(|| ProductError::Format("missing header length".into()))?.copy_from_slice(&length.to_le_bytes());
+    input.seek(SeekFrom::Start(12 + u64::from(old_len)))?;
+    let tmp = to.with_extension("rekey-tmp");
+    let result = (|| -> Result<(), ProductError> {
+        if let Some(parent) = to.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let mut output = std::fs::File::create(&tmp)?;
+        output.write_all(&fixed)?;
+        output.write_all(&header)?;
+        let copied = std::io::copy(&mut input.take(start.expected_len.saturating_sub(12 + u64::from(old_len)).saturating_add(1)), &mut output)?;
+        if copied != start.expected_len.saturating_sub(12 + u64::from(old_len)) {
+            return Err(ProductError::Format("the product changed while copying".into()));
+        }
+        output.sync_all()?;
+        drop(output);
+        publish(&tmp)
+    })();
+    let _ = std::fs::remove_file(&tmp);
+    result
+}
+
 /// A rectangle of a product, in the product's pixels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Window {
@@ -612,5 +668,34 @@ mod tests {
     #[test]
     fn crc_matches_the_standard_check_value() {
         assert_eq!(crc(b"123456789"), 0xcbf4_3926);
+    }
+}
+
+#[cfg(test)]
+mod migration_tests {
+    use super::*;
+    #[test]
+    fn rekey_preserves_payload_rejects_bad_headers_and_refused_publication() {
+        let dir = std::env::temp_dir().join(format!("lc-product-rekey-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (old, new) = (dir.join("old.lcdn"), dir.join("new.lcdn"));
+        let mut rgb = Rgb32f::new(3, 2);
+        rgb.data.fill([0.25, 0.5, 1.0]);
+        write(&old, &rgb, "old").unwrap();
+        let original = std::fs::read(&old).unwrap();
+        assert!(copy_rekey(&old, &new, "wrong", "new", |_| panic!("stale header cannot publish")).is_err());
+        assert!(copy_rekey(&old, &new, "old", &"x".repeat(MAX_HEADER + 1), |_| panic!("oversized key cannot publish")).is_err());
+        assert!(copy_rekey(&old, &new, "old", "new", |_| Err(ProductError::Stale)).is_err());
+        assert!(!new.exists());
+        assert!(!new.with_extension("rekey-tmp").exists());
+        copy_rekey(&old, &new, "old", "new", |tmp| std::fs::rename(tmp, &new).map_err(Into::into)).unwrap();
+        assert!(is_current(&new, "new"));
+        assert!(!is_current(&new, "old"));
+        assert_eq!(read(&new, "new", 1).unwrap().data, rgb.data);
+        assert_eq!(std::fs::read(&old).unwrap(), original);
+        std::fs::remove_file(&new).unwrap();
+        std::fs::write(&old, &original[..original.len() - 1]).unwrap();
+        assert!(copy_rekey(&old, &new, "old", "new", |_| panic!("truncated product cannot publish")).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

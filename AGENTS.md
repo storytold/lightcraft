@@ -39,8 +39,10 @@ of it. Full standard: `../craftrules/standards/never-crash.md`
   fallback (`unwrap_or…`) only where it can't silently corrupt a document. An unfinished feature returns an
   "unsupported" error or is disabled. Sole exception: a provably infallible literal, as `#[allow(clippy::expect_used)]`
   + `.expect("why it can't fail")`.
-- **`unsafe` lives only in `crates/sysmem`** (one FFI call, `malloc_zone_pressure_relief`, that returns freed
-  allocator pages to macOS after raw decodes). Every other production crate root has `#![forbid(unsafe_code)]`. A new
+- **`unsafe` lives only in `crates/sysmem`** (`malloc_zone_pressure_relief`, returning freed allocator pages
+  to macOS) **and `crates/file-identity-sys`** (`GetFileInformationByHandleEx(FileIdInfo)`, querying the full
+  Windows identity of a borrowed open File; explicit user approval, 2026-10-17). Each isolates one checked
+  OS call behind a safe API. Every other production crate root has `#![forbid(unsafe_code)]`. A new
   unsafe need goes in an isolated, well-tested helper crate like it: `// SAFETY:` on every block, a safe API, a safe
   fallback where possible, and a line here naming it.
 - **Input-derived numbers are hostile:** `get()` instead of `[i]`/`[a..b]` for offsets from files, users, agents or

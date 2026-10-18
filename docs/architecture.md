@@ -14,7 +14,7 @@ L5 depends on egui, eframe, winit or rfd, and that each crate only uses lower la
 | Layer | Crates (lines) | Role |
 |---|---|---|
 | 2026-10-17 | minor | Content cache aliases, virtual-copy identity and durable source replacement fences |
-| L0 | `geom` (1.4k), `color` (0.9k), `raster` (0.8k), `tiff` (2.0k), `fetch` (1.4k), `sysmem` (0.1k) | Matrices and warps, colour spaces and transfer functions, float image buffers, TIFF/IFD read and write, pinned HTTPS model downloads, the one `unsafe` FFI call (`malloc_zone_pressure_relief`) |
+| L0 | `geom` (1.4k), `color` (0.9k), `raster` (0.8k), `tiff` (2.0k), `fetch` (1.4k), `sysmem` (0.1k), `file-identity-sys` | Matrices and warps, colour spaces and transfer functions, float image buffers, TIFF/IFD read and write, pinned HTTPS model downloads, isolated allocator relief and full Windows file-ID queries |
 | L1 | `raw` (22.3k), `codecs` (7.3k), `meta` (4.3k), `develop` (2.5k), `denoise-core` (2.2k), `denoise` (2.7k), `faces` (5.3k), `scenes` (1.0k), `heif` (2.1k, optional) | Raw decoders and demosaic, DNG colour model; standard codecs and encoders; EXIF/XMP/IPTC; the non-destructive edit model and control specs; AI denoise; face detection and recognition; procedural demo photos; HEIC |
 | L2 | `pipeline` (9.8k) | The develop pipeline: scene-referred float, resolution independent; the CPU reference (oracle) for everything else |
 | L3 | `catalog` (11.0k), `gpu` (5.1k), `preview` (1.3k), `merge` (3.8k), `segment` (2.3k) | Library model and persistence; wgpu compute twin of the pipeline; thumbnail/preview cache and job pool; HDR and panorama merge; SAM 3 segmentation |
@@ -68,6 +68,30 @@ resolved source exactly matches it, including after journal replay. Missing or l
 bodies remain unresolved. An unused marker store is absent; an existing empty store is unresolved
 even without a sentinel. A lost marker store remains conservative across reopen and later invalidations. Marker and sentinel directory-sync errors propagate on Unix;
 Windows retains the persistence helper's best-effort directory durability.
+
+## Whole-original reads
+
+Native whole-original reads go through the session's `originals::Originals` reader, including
+streamed copy, verification and comparisons. Worker jobs capture that reader; synchronous helpers
+require its scoped binding. Standalone operations create a reader explicitly at their boundary.
+Headers, embedded-preview ranges and duplicate head hashes remain partial reads and never establish
+a full fingerprint. A full read hashes the same buffer or stream when the source needs learning or
+validation; it does not open the original a second time. Already authorized hashed sources skip
+incidental hashing. Duplicate retains the operating system's clone/copy path.
+
+Only the owner accepts fingerprints: before commands, after synchronous command work, when results
+arrive, and before saving or closing. Detached export completion also saves, including after a write
+failure or cancellation. Acceptance checks library and photo membership, the source ticket, retained
+handle identity and current file metadata. Missing platform proof withholds learning and cache
+confirmation without failing otherwise successful bytes or copy hashing. A validated no-op read can
+resolve a quarantined expected identity without an undo entry or a new source lifecycle. Cached
+products use their own read's hash; migration keeps authorized old addresses for active readers and
+rewrites a denoise product's bounded key header before publishing its new name. Publication shares
+the replacement fence; staging derived data does not hold that fence. There is no background hasher.
+Windows retains the same READ|DELETE/denyWRITE handle used for bytes and compares its full
+128-bit FileIdInfo plus volume with a fresh current-path handle. The isolated `file-identity-sys`
+helper only borrows that handle; unsupported queries withhold confirmation per source, with no
+legacy 64-bit ID or timestamp fallback. New whole-read entry points need a read-count and owner-learning regression beside their caller.
 
 ## Agent control
 

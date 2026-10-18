@@ -183,6 +183,44 @@ impl CacheIdentity {
         keys
     }
 
+    pub(crate) fn needs_validation(&self, p: &Photo) -> bool {
+        !self.keys(p).contains(&crate::media::content_key(p))
+    }
+
+    pub(crate) fn reconcile(&self, p: &Photo, ticket: &SourceTicket, validate: impl FnOnce() -> bool) -> std::io::Result<bool> {
+        let mut state = self.0.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !Arc::ptr_eq(&self.0, &ticket.cache.0) || !state.active || state.epochs.get(&ticket.path).copied().unwrap_or(0) != ticket.epoch {
+            return Ok(false);
+        }
+        if !validate() {
+            return Ok(false);
+        }
+        let Some(alias) = path_key(p) else { return Ok(false) };
+        let hash = alias_hash(&alias);
+        if state.uncertain || state.pending.contains(&ticket.path) || state.invalid.contains_key(&hash) {
+            let expected = PhysicalIdentity::of(p);
+            state.invalid.insert(hash, expected.clone());
+            state.pending.insert(ticket.path.clone());
+            if let Some(dir) = &state.dir {
+                std::fs::create_dir_all(dir)?;
+                if state.uncertain {
+                    write_marker(&dir.join("uncertain"), b"source invalidation history unavailable\n")?;
+                }
+                let mut body = b"LCI1\n".to_vec();
+                body.extend(serde_json::to_vec(&expected).map_err(std::io::Error::other)?);
+                if body.len() > MAX_MARKER_BYTES {
+                    return Err(std::io::Error::other("source cache identity is too long"));
+                }
+                write_marker(&dir.join(format!("{hash}.invalid")), &body)?;
+                if let Some(parent) = dir.parent() {
+                    write_marker(&parent.join("source-invalidations-enabled"), b"1\n")?;
+                }
+            }
+            state.pending.remove(&ticket.path);
+        }
+        Ok(true)
+    }
+
     pub fn tag(&self, p: &Photo, key: &str) -> String {
         let state = self.0.read().unwrap_or_else(std::sync::PoisonError::into_inner);
         let epoch = match &p.source {

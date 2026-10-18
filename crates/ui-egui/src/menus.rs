@@ -1602,6 +1602,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             if app.tasks.is_running(LABEL) {
                 return Some(Err("Find Missing Photos is already searching".into()));
             }
+            let originals = app.session.original_reader();
             let mut candidates = lightcraft_engine::cmd::missing::find_candidates(&app.session.catalog);
             if let Some(within) = within {
                 candidates.retain(|candidate| lightcraft_catalog::query::folder_within(&candidate.path, &within));
@@ -1613,7 +1614,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
                 if let Some(d) = test_delay {
                     std::thread::sleep(d);
                 }
-                lightcraft_engine::cmd::missing::plan_find_missing(&candidates, &folder)
+                originals.in_scope(|| lightcraft_engine::cmd::missing::plan_find_missing(&candidates, &folder))
             };
             let done = |app: &mut LightcraftApp, ctx: &egui::Context, plan: Result<lightcraft_engine::cmd::missing::FindPlan, String>| {
                 // relinked under the session as it is now: photos relinked meanwhile and files

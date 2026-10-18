@@ -109,8 +109,7 @@ pub struct ImportOptions {
     pub metadata_preset: Option<String>,
     /// Copy: raws are copied as DNG (Copy as DNG).
     pub convert_dng: bool,
-    /// Add: raws are described from their headers ([`crate::media::Media::header_probe`]), their
-    /// pixel data never read: an import of many files from a slow drive (a Lightroom catalog's
+    /// Probe raws from their headers ([`crate::media::MediaCache::header_probe`]) before any transfer: an import of many files from a slow drive (a Lightroom catalog's
     /// originals) reads a few percent of their bytes. Such files get no content hash, so a copy of
     /// one elsewhere is found by its content only when it is hashed on demand.
     pub headers_only: bool,
@@ -560,8 +559,8 @@ fn probe_all(
 
 /// Copy `src` into `dir` as `name` (default: its own name), made unique with -1, -2…; returns the
 /// new path. The copy is verified ([`crate::import_move::copy_new`]: a new file, synced and
-/// checked against `probe_hash`, the content hash the probe computed — or compared byte for byte
-/// with the source when there is none); a bad one is removed and the photo reported as failed.
+/// checked against the hash accumulated during its source stream and, when present, `probe_hash`;
+/// a bad copy is removed and the photo reported as failed.
 fn copy_into(dir: &Path, src: &str, name: Option<&str>, probe_hash: Option<&str>) -> Result<(String, String), String> {
     let name = name
         .map(str::to_string)
@@ -573,6 +572,8 @@ fn copy_into(dir: &Path, src: &str, name: Option<&str>, probe_hash: Option<&str>
 /// What a [`scan`] needs from the session, so it can run on another thread (a folder on a network
 /// share can take minutes to read).
 pub struct ScanInput {
+    identities: crate::cache_identity::CacheIdentity,
+    originals: crate::originals::Originals,
     probe: Option<crate::media::FileProbe>,
     skip: Option<PathBuf>,
     /// The library as it is now (photos are shared with the session, not copied): looked up for
@@ -645,7 +646,14 @@ impl ScanInput {
         // (no table of the library here: this is the session's thread, and the library may hold
         // millions of photos. The scan looks up what it finds)
         let library = std::sync::Arc::new(s.catalog.clone());
-        let input = ScanInput { probe, skip, library, cache: std::mem::take(&mut s.import_probes) };
+        let input = ScanInput {
+            identities: s.media.identities.clone(),
+            originals: s.originals.clone(),
+            probe,
+            skip,
+            library,
+            cache: std::mem::take(&mut s.import_probes),
+        };
         (input, paths.to_vec())
     }
 
@@ -679,6 +687,7 @@ pub fn scan_with(input: ScanInput, paths: &[String], progress: &ScanProgress) ->
 
 /// [`scan_with`] for files that were found already (`paths` expanded, [`expand`]).
 pub(crate) fn scan_files(mut input: ScanInput, files: Vec<String>, progress: &ScanProgress) -> ScanOutput {
+    let _originals = input.originals.bind();
     use std::sync::atomic::Ordering::Relaxed;
     let by_path = library_files(&input.library, &files);
     let todo: Vec<String> = files.iter().filter(|f| !by_path.contains_key(Path::new(f))).cloned().collect();
@@ -701,7 +710,9 @@ pub(crate) fn scan_files(mut input: ScanInput, files: Vec<String>, progress: &Sc
     let mut probes: HashMap<String, Result<ProbeInfo, String>> = todo.into_iter().zip(probed).collect();
     let mut dups = dupes::Duplicates::default();
     let probed_infos: Vec<&ProbeInfo> = probes.values().filter_map(|r| r.as_ref().ok()).collect();
-    dups.add_library_matching(input.library.photos(), &probed_infos);
+    dups.add_library_matching(input.library.photos(), &probed_infos, |p| {
+        crate::media::physical_photo(&input.library, p.id).is_some_and(|p| !input.identities.needs_validation(&p))
+    });
     let mut out = Vec::with_capacity(files.len());
     let mut kept = HashMap::new();
     for f in files {
@@ -760,6 +771,8 @@ pub fn import_with(s: &mut Session, paths: &[String], opts: &ImportOptions) -> c
 /// [`ImportJob::prepare`] may be called for several batches in turn (renamed copies keep counting,
 /// duplicates are found across batches); each batch is then [`commit_prepared`] on the session.
 pub struct ImportJob {
+    identities: crate::cache_identity::CacheIdentity,
+    originals: crate::originals::Originals,
     pub opts: ImportOptions,
     /// The mode in effect (Copy / Move become Add in a library without its own folder).
     mode: ImportMode,
@@ -797,6 +810,7 @@ pub struct ImportJob {
 /// The outcome of [`ImportJob::prepare`] for one batch, in file order.
 #[derive(Debug, Default)]
 pub struct Prepared {
+    origin: Option<crate::originals::ReaderOrigin>,
     pub scanned: usize,
     items: Vec<PreparedItem>,
     /// Content hashes computed on demand for photos already in the library, saved with the batch.
@@ -813,6 +827,7 @@ enum PreparedItem {
         existing: Option<PhotoId>,
         reason: &'static str,
         hash: Option<String>,
+        evidence: Option<Box<crate::originals::ProbeEvidence>>,
     },
     Failed(String, String),
     Kept(Kept),
@@ -867,7 +882,9 @@ impl Prepared {
             if let Source::File { path } = &photo.source {
                 paths.insert(normalize_import_path(path), photo.id);
             }
-            if let Some(hash) = &photo.content_hash {
+            if let Some(hash) = &photo.content_hash
+                && s.source_hash_authorized(photo.id)
+            {
                 hashes.insert(hash.clone(), photo.id);
             }
         }
@@ -889,6 +906,7 @@ impl Prepared {
                     existing: Some(existing),
                     reason: if existing_path.is_some() { "path" } else { "content" },
                     hash: info.content_hash,
+                    evidence: info.native_read.map(Box::new),
                 });
             } else {
                 items.push(PreparedItem::Ready(Box::new(ReadyFile { path, stored, info, sidecar, placed })));
@@ -930,6 +948,8 @@ impl ImportJob {
         // a raw described from its headers has no hash to compare (nor does a browsed file)
         let probe = if opts.headers_only { s.media.header_probe.clone().or_else(|| s.media.file_probe.clone()) } else { s.media.file_probe.clone() };
         Ok(ImportJob {
+            identities: s.media.identities.clone(),
+            originals: s.originals.clone(),
             seq: opts.rename_start.max(1),
             opts,
             mode,
@@ -939,7 +959,7 @@ impl ImportJob {
             by_path: HashMap::new(),
             dups: dupes::Duplicates::default(),
             probe,
-            file_bytes: s.media.file_bytes.clone(),
+            file_bytes: Some(s.media.file_bytes.clone().unwrap_or_else(|| s.originals.reader())),
             cache: std::mem::take(&mut s.import_probes),
             naming: s.xmp.naming,
             now: (s.clock)(),
@@ -985,17 +1005,19 @@ impl ImportJob {
             if let Source::File { path } = &p.source {
                 self.by_path.insert(path.clone(), (p.id, p.local));
             }
-            self.dups.add_library(p);
+            let authorized = crate::media::physical_photo(&library, p.id).is_some_and(|p| !self.identities.needs_validation(&p));
+            self.dups.add_library(p, authorized);
         }
     }
 
     /// [`ImportJob::prepare`] for files [`ImportJob::expand`] returned.
     pub fn prepare_files(&mut self, files: Vec<String>, cancel: &std::sync::atomic::AtomicBool) -> Prepared {
+        let _originals = self.originals.bind();
         use std::sync::atomic::Ordering::Relaxed;
         self.look_up_library();
         let opts = self.opts.clone();
         let mode = self.mode;
-        let mut out = Prepared { scanned: files.len(), ..Prepared::default() };
+        let mut out = Prepared { origin: Some(self.originals.origin()), scanned: files.len(), ..Prepared::default() };
         let mut todo = Vec::new();
         for f in files {
             match self.by_path.get(f.as_str()).copied() {
@@ -1006,7 +1028,7 @@ impl ImportJob {
                     self.done.fetch_add(1, Relaxed);
                 }
                 Some((id, _)) => {
-                    out.items.push(PreparedItem::Duplicate { path: f, existing: Some(id), reason: "path", hash: None });
+                    out.items.push(PreparedItem::Duplicate { path: f, existing: Some(id), reason: "path", hash: None, evidence: None });
                     self.done.fetch_add(1, Relaxed);
                 }
                 None => todo.push(f),
@@ -1061,7 +1083,8 @@ impl ImportJob {
             {
                 self.done.fetch_add(1, Relaxed);
                 let hash = info.content_hash.clone();
-                plan.slots.push(Slot::Item(PreparedItem::Duplicate { path, existing, reason: "content", hash }));
+                let evidence = self.originals.candidate_probe(&path, &info).map(Box::new);
+                plan.slots.push(Slot::Item(PreparedItem::Duplicate { path, existing, reason: "content", hash, evidence }));
                 continue;
             }
             // the XMP sidecar (or a raw's embedded XMP), read before copying: its capture time files
@@ -1143,6 +1166,9 @@ impl ImportJob {
                 && let Some(h) = self.dups.learned(&r.path)
             {
                 r.info.content_hash = Some(h.clone());
+                if r.info.native_read.is_some() {
+                    r.info.native_read = self.originals.candidate_probe(&r.stored, &r.info);
+                }
             }
         }
         out.hashes.extend(self.dups.take_filled());
@@ -1214,7 +1240,7 @@ fn hash_file(path: &str) -> Option<String> {
     FULL_HASHES.with(|n| n.set(n.get() + 1));
     let len = std::fs::metadata(path).ok()?.len();
     let _permit = crate::memory::work_gate().acquire(usize::try_from(len).unwrap_or(usize::MAX));
-    std::fs::read(path).ok().map(|b| lightcraft_preview::hash_bytes(&b).to_string())
+    crate::originals::hash_whole(path).ok().map(|fp| fp.hash.to_string())
 }
 
 #[cfg(test)]
@@ -1313,7 +1339,9 @@ fn run_transfers(
     done: &std::sync::atomic::AtomicUsize,
 ) -> Vec<Option<PreparedItem>> {
     use std::sync::atomic::Ordering::Relaxed;
+    let originals = crate::originals::bound_reader();
     let one = |t: Transfer| {
+        let _originals = originals.as_ref().map(crate::originals::Originals::bind);
         if cancel.load(Relaxed) {
             return None;
         }
@@ -1367,6 +1395,8 @@ fn run_transfers(
 /// Copy or move one planned file (and Copy as DNG); its item.
 fn run_transfer(t: Transfer, file_bytes: Option<&crate::merge::ByteReader>) -> PreparedItem {
     let Transfer { path, mut info, sidecar, dir, how, dng, .. } = t;
+    let capture = crate::originals::ReadCapture::new();
+    let source_evidence = info.native_read.clone();
     let mut placed = None;
     let mut stored = match how {
         How::Place { name } => match crate::import_move::place(Path::new(&path), &dir, &name) {
@@ -1392,15 +1422,34 @@ fn run_transfer(t: Transfer, file_bytes: Option<&crate::merge::ByteReader>) -> P
         // decoding the raw twice and encoding it takes several times the file's size in memory
         let weight = usize::try_from(info.file_size).unwrap_or(usize::MAX).saturating_mul(6);
         let _permit = crate::memory::work_gate().acquire(weight);
+        let raw_copy = capture.fingerprint(&stored);
         match crate::cmd::convert::write_dng_with(file_bytes, &stored, String::new()) {
             Ok(dng) => {
-                let _ = std::fs::remove_file(&stored);
+                if raw_copy.as_ref().is_some_and(|fp| fp.current(&stored)) {
+                    let _ = std::fs::remove_file(&stored);
+                } else {
+                    log::warn!("import {path}: unproven raw copy left at {stored}");
+                }
+                if let Some(fp) = &raw_copy {
+                    fp.release();
+                }
+                if let Some(reader) = crate::originals::bound_reader() {
+                    reader.discard_candidate(&stored);
+                }
                 stored = dng;
-                info.format = "DNG".into();
+                if let Some(output) = capture.fingerprint(&stored).and_then(|fp| fp.probe_info()) {
+                    info = output;
+                } else {
+                    info.format = "DNG".into();
+                    info.content_hash = None;
+                }
             }
             Err(e) => log::warn!("import {path}: copy as DNG: {e}"),
         }
     }
+    info.file_size = std::fs::metadata(&stored).map(|m| m.len()).unwrap_or(info.file_size);
+    info.native_read = crate::originals::bound_reader()
+        .map(|reader| reader.transfer_probe(&path, source_evidence.as_ref(), &stored, &info, capture.fingerprint(&stored)));
     PreparedItem::Ready(Box::new(ReadyFile { path, stored, info, sidecar, placed }))
 }
 
@@ -1418,9 +1467,15 @@ fn trashed_file_is_gone(cat: &lightcraft_catalog::Catalog, id: PhotoId) -> bool 
 /// a Move's sources are removed once it is saved). On a failed commit a Move's placed files are
 /// taken back.
 pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepared: Prepared) -> crate::Result<ImportReport> {
+    if prepared.origin.as_ref().is_some_and(|origin| !s.originals.accepts_origin(origin)) {
+        prepared.rollback();
+        return Err(crate::EngineError::Other("the library changed while preparing the import; retry the import".into()));
+    }
+    s.learn_read_hashes()?;
     let now = now.to_string();
     let mut report = ImportReport { scanned: prepared.scanned, ..Default::default() };
     let mut ops = Vec::new();
+    let mut evidence = Vec::new();
     // Move: placed at the destination, sources untouched until the records are committed
     let mut placed: Vec<crate::import_move::Placed> = Vec::new();
     // photos added by this batch, by content (a duplicate of a file earlier in the import names it)
@@ -1439,31 +1494,22 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
     }
     let mut purge: Vec<PhotoId> = Vec::new();
     let mut purged: std::collections::HashSet<PhotoId> = Default::default();
-    // hashes computed on demand (to compare a new file with photos added from their headers) are kept
-    let path_hashes: Vec<_> = s
-        .catalog
-        .photos()
-        .filter_map(|p| {
-            let Source::File { path } = &p.source else { return None };
-            let hash = prepared.learned_paths.get(path)?;
-            if p.content_hash.is_some() || p.copy_of.is_some() {
-                return None;
-            }
+    // The shared reader has already accepted current hashes above; prepared values only resolve IDs.
+    for (id, hash) in &prepared.hashes {
+        if s.catalog.photo(*id).is_some_and(|p| {
+            p.content_hash.as_deref().is_some_and(|known| crate::sync::base_hash(known) == crate::sync::base_hash(hash))
+                && s.source_hash_authorized(*id)
+        }) {
+            new_hash.insert(hash.clone(), *id);
+        }
+    }
+    for p in s.catalog.photos() {
+        let Source::File { path } = &p.source else { continue };
+        if let Some(hash) = prepared.learned_paths.get(path)
+            && p.content_hash.as_deref().is_some_and(|known| crate::sync::base_hash(known) == crate::sync::base_hash(hash))
+            && s.source_hash_authorized(p.id)
+        {
             new_hash.insert(hash.clone(), p.id);
-            Some((p.id, hash.clone()))
-        })
-        .collect();
-    for (id, hash) in prepared.hashes.iter().chain(&path_hashes) {
-        if let Some(p) = s.catalog.photo(*id).filter(|p| p.content_hash.is_none()) {
-            ops.push(Op::SetContent {
-                id: *id,
-                width: p.width,
-                height: p.height,
-                file_size: p.file_size,
-                content_hash: Some(hash.clone()),
-                preview_only: p.preview_only.clone(),
-                preview_checked: p.preview_checked.clone(),
-            });
         }
     }
     for it in prepared.items {
@@ -1474,11 +1520,33 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                 }
                 report.imported.push(id.0);
             }
-            PreparedItem::Duplicate { path, existing, reason, hash } => {
+            PreparedItem::Duplicate { path, existing, reason, hash, evidence } => {
+                let stale = evidence.as_ref().is_some_and(|proof| {
+                    proof.stale() || (reason == "content" && !hash.as_deref().is_some_and(|hash| proof.confirms_hash(&s.originals, &path, hash)))
+                });
+                if let Some(proof) = &evidence {
+                    proof.release();
+                }
+                if stale {
+                    s.import_probes.remove(&path);
+                    report.failed.push((path, "the source changed or its native read proof expired; retry the import".into()));
+                    continue;
+                }
+                let expected = hash.clone();
                 let existing = existing.or_else(|| {
                     let h = hash?;
                     new_hash.get(&h).copied().or_else(|| s.catalog.photos().find(|p| p.content_hash.as_deref() == Some(h.as_str())).map(|p| p.id))
                 });
+                if reason == "content"
+                    && let (Some(id), Some(hash)) = (existing, expected.as_deref())
+                    && s.catalog.photo(id).is_some_and(|p| {
+                        p.content_hash.as_deref().is_none_or(|known| crate::sync::base_hash(known) != crate::sync::base_hash(hash))
+                            || !s.source_hash_authorized(id)
+                    })
+                {
+                    report.failed.push((path, "the original changed during duplicate comparison; retry the import".into()));
+                    continue;
+                }
                 let trashed = existing.filter(|id| s.catalog.photo(*id).is_some_and(|p| p.deleted));
                 match trashed {
                     // (browsing a folder in Local only looks: it never restores)
@@ -1500,8 +1568,22 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
             PreparedItem::Kept(k) => report.kept.push(k),
             PreparedItem::Ready(r) => {
                 let ReadyFile { path, stored, info, sidecar, placed: pl } = *r;
+                if info.native_read.as_ref().is_some_and(|proof| proof.stale()) {
+                    if let Some(proof) = &info.native_read {
+                        proof.release();
+                    }
+                    report
+                        .failed
+                        .push((path, format!("the stored file changed after probing; original retained; inspect {stored} and retry the import")));
+                    continue;
+                }
                 placed.extend(pl);
+                let native = info.native_read.is_some();
+                let proof = info.native_read.as_ref().filter(|proof| proof.matches(&s.originals, &stored, &info)).cloned();
                 let id = s.catalog.alloc_photo_id();
+                if let Some(proof) = proof {
+                    evidence.push((id, proof));
+                }
                 if let Some(h) = &info.content_hash {
                     new_hash.insert(h.clone(), id);
                 }
@@ -1519,7 +1601,7 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                 p.captured = info.captured;
                 p.meta = info.meta;
                 p.as_shot_wb = info.as_shot_wb;
-                p.content_hash = info.content_hash;
+                p.content_hash = if native { None } else { info.content_hash };
                 p.embedded_lens = info.embedded_lens;
                 p.set_preview_only(info.preview_only.clone());
                 apply_import_defaults(s, &mut p);
@@ -1574,6 +1656,10 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
         placed.iter().for_each(crate::import_move::rollback);
         return Err(e);
     }
+    for (id, proof) in evidence {
+        s.originals.adopt_probe(s, id, &proof);
+    }
+    s.learn_read_hashes()?;
     if !placed.is_empty() {
         finish_moves(s, placed, log0, &mut report);
     }
@@ -1652,6 +1738,8 @@ impl Session {
         let source = self.media.origin_ref(&p.source, level.max_edge());
         let key = lightcraft_preview::Hasher128::new().str(&c.path).u64(c.file_size).u64(edge as u64).finish().0 as u64;
         let small = crate::media::RenderJob {
+            cache_recipe: None,
+            cache_profile: crate::camera_profiles::cache_key(),
             request_id: 0,
             cache_generation: self.media.rendered.generation(),
             cache_fallback: Vec::new(),

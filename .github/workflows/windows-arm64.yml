@@ -7,7 +7,7 @@ name: Windows ARM64
 
 on:
   push:
-    branches: [main]
+    branches: [main, lr-import-header-reads]
     paths:
       - ".github/workflows/windows-arm64.yml"
       - "packaging/windows/**"
@@ -38,3 +38,82 @@ jobs:
     with:
       app-name: lightcraft
       app-dir: LightCraft
+
+  windows-runtime:
+    name: native Windows x64 reader and helper tests
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      CARGO_TERM_COLOR: never
+      CARGO_INCREMENTAL: 0
+      LIGHTCRAFT_SKIP_LOG: ${{ github.workspace }}\target\windows-runtime\skips.jsonl
+      LIGHTCRAFT_CONFIG_DIR: ${{ github.workspace }}\target\windows-runtime\config
+      GIT_AUTHOR_NAME: lightcraft-fork
+      GIT_AUTHOR_EMAIL: 341603927+lightcraft-fork@users.noreply.github.com
+      GIT_COMMITTER_NAME: lightcraft-fork
+      GIT_COMMITTER_EMAIL: 341603927+lightcraft-fork@users.noreply.github.com
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: windows-native-reader-tests
+      - name: Record exact source and native toolchain
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force target/windows-runtime | Out-Null
+          $head = git -c user.name=lightcraft-fork -c user.email=341603927+lightcraft-fork@users.noreply.github.com rev-parse HEAD
+          if ($LASTEXITCODE -ne 0 -or $head -ne $env:GITHUB_SHA) { throw 'checkout does not match github.sha' }
+          @("repository=$env:GITHUB_REPOSITORY", "ref=$env:GITHUB_REF", "sha=$head", 'runner=windows-latest; target=native x64') | Set-Content target/windows-runtime/source.log
+          rustc -vV 2>&1 | Tee-Object -FilePath target/windows-runtime/source.log -Append
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Run borrowed-file helper tests
+        shell: pwsh
+        run: |
+          cargo test --locked -p lightcraft-file-identity-sys --lib -- --nocapture 2>&1 | Tee-Object -FilePath target/windows-runtime/helper.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $log = Get-Content target/windows-runtime/helper.log -Raw
+          foreach ($test in @('tests::borrowed_query_preserves_file_and_cursor', 'tests::full_identity_distinguishes_files_and_matches_hard_links')) {
+            if (-not $log.Contains("$test ... ok")) { throw "required helper test did not execute successfully: $test" }
+          }
+      - name: Run engine reader, denoise and SAM tests
+        shell: pwsh
+        run: |
+          cargo test --locked -p lightcraft-engine --lib --features denoise,sam -- --nocapture 2>&1 | Tee-Object -FilePath target/windows-runtime/engine.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $log = Get-Content target/windows-runtime/engine.log -Raw
+          $required = @(
+            'originals::reads::windows_tests::retained_read_denies_writes_allows_rename_and_revokes_every_clone',
+            'originals::reads::windows_tests::existing_writer_and_unsupported_query_preserve_bytes_and_stream_hash_without_proof',
+            'originals::reads::windows_tests::destination_verification_remains_compatible_with_the_synced_writer',
+            'originals::reads::windows_tests::full_identity_rejects_a_difference_only_in_the_high_64_bits',
+            'originals::reads::windows_tests::ancestor_retarget_rejects_equal_size_and_preserved_time',
+            'originals::reads::windows_tests::junction_retarget_rejects_the_old_fingerprint',
+            'originals::reads::boundary_tests::g_retirement_revokes_new_proofs_after_released_fingerprints_fill_the_registry',
+            'originals::reads::boundary_tests::g_concurrent_retirement_revokes_reads_registered_on_either_side',
+            'originals::reads::boundary_tests::g_delayed_read_rejects_replacement_even_with_preserved_mtime',
+            'tests_import_headers::g_one_metadata_read_is_saved_before_immediate_reopen',
+            'tests_import_headers::g_quarantined_relink_validates_same_read_before_primary_authorization',
+            'tests_import_headers::g_same_bytes_relink_reconciles_the_probe_without_set_content_or_reread',
+            'segment::tests::f_inventory_sam_rejects_a_completion_paused_across_reload',
+            'segment::tests::f_inventory_sam_rejects_a_completion_paused_across_relink',
+            'segment::tests::f_inventory_sam_rejects_a_completion_paused_across_library_switch',
+            'segment::tests::f_inventory_sam_accepts_a_completion_paused_across_hash_learning',
+            'segment::tests::f_repair_sam_rejects_a_completion_paused_across_recheck'
+          )
+          foreach ($test in $required) {
+            if (-not $log.Contains("$test ... ok")) { throw "required Windows regression did not execute successfully: $test" }
+          }
+      - name: Retain runtime evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: lightcraft-windows-runtime-${{ github.sha }}
+          path: target/windows-runtime/
+          if-no-files-found: warn
+          retention-days: 7
