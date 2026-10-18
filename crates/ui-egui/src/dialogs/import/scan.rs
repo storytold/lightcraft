@@ -30,6 +30,15 @@ pub(crate) fn busy_synchronizing(app: &LightcraftApp) -> Result<(), String> {
     if app.sync_run.is_some() { Err(crate::i18n::tr("A folder is being synchronized").to_string()) } else { Ok(()) }
 }
 
+/// Refuse starting a background import while sync, an import, or a review scan is active.
+pub(crate) fn ensure_can_start(app: &LightcraftApp) -> Result<(), String> {
+    busy_synchronizing(app)?;
+    if running(app) {
+        return Err(crate::i18n::tr("An import is running").to_string());
+    }
+    Ok(())
+}
+
 /// Settings → Import → "Show the import review when a camera or card is connected", called with
 /// each device scan while it's on. The first look only notes the cards already in. A card that
 /// shows up after that opens Import from Device once nothing else is open, and a card that is

@@ -1,4 +1,4 @@
-use super::scan::{busy_synchronizing, running};
+use super::scan::{busy_synchronizing, ensure_can_start};
 use super::{ImportDialog, ImportUprightMode, ImportWarning, ImportWarningCode, LightcraftApp, Ordering, Value, json};
 
 /// Files per batch in the browser build (each batch joins the catalog as it is ready, so the
@@ -260,10 +260,7 @@ pub fn start(app: &mut LightcraftApp, d: &ImportDialog) -> Result<Value, String>
 
 /// Start importing `paths` (files or folders) in the background, e.g. dropped on the window.
 pub fn start_paths(app: &mut LightcraftApp, paths: Vec<String>) -> Result<Value, String> {
-    busy_synchronizing(app)?;
-    if running(app) {
-        return Err(crate::i18n::tr("An import is running").to_string());
-    }
+    ensure_can_start(app)?;
     let undo0 = app.session.undo.len();
     let total = paths.len();
     app.import = Some(ImportTask::new(paths, json!({"mode": "add"}), undo0, false));
