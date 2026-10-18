@@ -85,11 +85,16 @@ fn a_scan_knows_who_has_the_contents_it_probed() {
     // (the content of /pics/006/a.jpg, which /pics/007/c.jpg has too; and one nobody has)
     let shared = format!("{:032x}", 6 * 3);
     let nobody = format!("{:032x}", 999_999);
-    let known = library_hashes(&c, [shared.as_str(), nobody.as_str()].into_iter());
-    assert_eq!(known.len(), 1);
+    let probe = |h: &str| ProbeInfo { content_hash: Some(h.to_string()), ..ProbeInfo::default() };
+    let (mut with_shared, mut with_nobody) = (probe(&shared), probe(&nobody));
+    let mut known = dupes::Duplicates::default();
+    known.add_library_matching(c.photos(), &[&with_shared, &with_nobody], |_| true);
+    assert_eq!(known.hash_count(), 1);
     let whole: HashMap<String, PhotoId> = c.photos().filter_map(|p| p.content_hash.clone().map(|h| (h, p.id))).collect();
-    assert_eq!(known.get(&shared), whole.get(&shared));
-    assert!(matches!(&c.photo(known[&shared]).unwrap().source, Source::File { path } if path == "/pics/007/c.jpg"));
+    let found = known.find("/elsewhere/a.jpg", &mut with_shared).flatten();
+    assert_eq!(found.as_ref(), whole.get(&shared));
+    assert!(matches!(&c.photo(found.unwrap()).unwrap().source, Source::File { path } if path == "/pics/007/c.jpg"));
+    assert_eq!(known.find("/elsewhere/b.jpg", &mut with_nobody), None);
 }
 
 /// Given a session with a library, when an import is set up, then no table of the library is
@@ -100,10 +105,10 @@ fn an_import_looks_the_library_up_when_it_prepares_files() {
     let mut s = Session::new();
     s.catalog = library(50);
     let mut job = ImportJob::new(&mut s, ImportOptions { mode: ImportMode::Add, ..ImportOptions::default() }).unwrap();
-    assert!(job.by_path.is_empty() && job.by_hash.is_empty() && job.library.is_some(), "nothing is looked up yet");
+    assert!(job.by_path.is_empty() && job.dups.hash_count() == 0 && job.library.is_some(), "nothing is looked up yet");
     let out = job.prepare_files(vec!["/pics/007/a.jpg".into()], &std::sync::atomic::AtomicBool::new(false));
     assert!(job.library.is_none(), "looked up once");
-    assert_eq!((job.by_path.len(), job.by_hash.len()), (150, 100));
+    assert_eq!((job.by_path.len(), job.dups.hash_count()), (150, 100));
     assert!(matches!(out.items.as_slice(), [PreparedItem::Duplicate { reason: "path", existing: Some(_), .. }]), "found by its path");
     // what the options said when the import was set up decides, whatever is made of them after
     let id = s.catalog.photos().next().unwrap().id;
@@ -129,6 +134,6 @@ fn a_trashed_photo_is_not_looked_up_when_imports_replace_it() {
         job.prepare_files(Vec::new(), &std::sync::atomic::AtomicBool::new(false));
         assert_eq!(job.by_path.len(), expected, "{on_deleted:?}");
         let its_content = s.catalog.photo(id).and_then(|p| p.content_hash.clone()).unwrap();
-        assert_eq!(job.by_hash.contains_key(&its_content), on_deleted == OnDeleted::Skip, "{on_deleted:?}");
+        assert_eq!(job.dups.knows_hash(&its_content), on_deleted == OnDeleted::Skip, "{on_deleted:?}");
     }
 }

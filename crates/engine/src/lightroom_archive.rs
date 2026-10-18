@@ -524,6 +524,7 @@ mod tests {
             members: Vec::new(),
             collection_content: Vec::new(),
             warnings: Vec::new(),
+            rejected_masters: Default::default(),
         }
     }
 
@@ -547,6 +548,7 @@ mod tests {
             members: vec![BTreeMap::from([("image".into(), serde_json::json!(7))])],
             collection_content: vec![BTreeMap::from([("rule".into(), serde_json::json!("rating > 3"))])],
             warnings: vec!["one warning".into()],
+            rejected_masters: Default::default(),
         }
     }
 

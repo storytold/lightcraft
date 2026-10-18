@@ -146,6 +146,28 @@ shows a warning (widget `indicator:unsaved`). Queries and commands that change n
 compaction (snapshot) is not a failed command — the log is kept whole — and only shows in `library.info` →
 `lastError`.
 
+### Scan and import timing records
+
+At INFO level, target `lightcraft::import` emits one `event=start` and one `event=terminal` for each
+`kind=scan` or `kind=import`, correlated by a process-local `run_id`. A desktop import's terminal includes
+`scan_id` when it followed an import review. `elapsed_ms` uses a monotonic clock: scan time includes folder
+expansion and probes; import time starts when the import is accepted and includes preparation, owner commits
+and persistence. Time spent reviewing candidates is outside both phases. Desktop batches do not produce
+separate import terminals. These records contain categorical outcomes and counts, without source paths,
+filenames, command parameters or raw error messages.
+
+`status` is `success`, `cancelled` or `error`; `cause` classifies the outcome. `persist=ok` means the persistent
+session has no pending journal operations, `memory_only` means no disk library, and `failed` records a save
+failure. Scan records use `not_applicable`. A dropped import owner emits `cancel_requested` immediately and
+its sole terminal after the worker exits, with `owner_detached=true`, final worker progress, last committed
+counts and `persist=unknown`; it does not claim a durable completed import. A dropped scan owner requests
+cancellation. Scan terminals wait for computation and delivery attempt; receiver loss is cancellation, while
+successful delivery does not mean the user accepted the review or imported its candidates.
+
+For a comparable import measurement, use the exact recorded binary and a fresh, empty, separate library and
+configuration. Keep any existing library intact. Record scan and import terminal durations separately; do not
+include the human review interval or infer an earlier run's duration from the current UI state.
+
 ### When the library can't be opened
 
 If the desktop app can't open its library at launch (another program has it open, an unreadable or newer-format

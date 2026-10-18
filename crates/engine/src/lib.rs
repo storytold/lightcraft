@@ -18,6 +18,7 @@ pub mod activity;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod apple_photos;
 pub mod availability;
+pub mod cache_identity;
 pub(crate) mod camera_preview;
 pub mod camera_profiles;
 pub mod cmd;
@@ -197,6 +198,8 @@ static LIBRARY_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64:
 
 pub struct Session {
     library_generation: u64,
+    pub(crate) originals: originals::Originals,
+    native_hooks: Option<originals::NativeHooks>,
     /// Auto Sync: edits to the active photo also change the other selected photos (the settings
     /// that changed, nothing else).
     pub auto_sync: bool,
@@ -408,6 +411,8 @@ impl Session {
     pub fn new() -> Session {
         Session {
             library_generation: LIBRARY_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            originals: Default::default(),
+            native_hooks: None,
             auto_sync: false,
             catalog: Catalog::new(),
             source: LibrarySource::All,
@@ -513,18 +518,36 @@ impl Session {
 
     /// Run a command by id. THE entry point for every frontend.
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value> {
-        let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
-        // a command that validates the photos a call names isn't held back by the selection
-        if !(spec.explicit_targets && cmd::names_photos(params)) {
-            (spec.enabled)(self).map_err(|why| EngineError::Disabled(id.to_string(), why))?;
+        let timing = (id == "library.import" && self.depth == 0)
+            .then(|| import::begin_import_log("command", params.get("mode").and_then(Value::as_str).unwrap_or("add")));
+        let mut observed = Value::Null;
+        let result = (|| {
+            let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
+            // a command that validates the photos a call names isn't held back by the selection
+            if !(spec.explicit_targets && cmd::names_photos(params)) {
+                (spec.enabled)(self).map_err(|why| EngineError::Disabled(id.to_string(), why))?;
+            }
+            let empty = Value::Object(Default::default());
+            let params = if params.is_null() { &empty } else { params };
+            self.run_command(id, spec.journal.then_some(params), |s| {
+                let result = (spec.run)(s, params);
+                if timing.is_some()
+                    && let Ok(value) = &result
+                {
+                    observed = import::import_report_counts(value);
+                }
+                result
+            })
+            .map_err(|e| match e {
+                // a shared parameter check ([`Session::targets`]) names the command it ran for
+                EngineError::BadParams { cmd, msg } if cmd.is_empty() => EngineError::BadParams { cmd: id.to_string(), msg },
+                e => e,
+            })
+        })();
+        if let Some((run_id, started)) = timing {
+            import::command_import_terminal(run_id, started, self, &result, &observed);
         }
-        let empty = Value::Object(Default::default());
-        let params = if params.is_null() { &empty } else { params };
-        self.run_command(id, spec.journal.then_some(params), |s| (spec.run)(s, params)).map_err(|e| match e {
-            // a shared parameter check ([`Session::targets`]) names the command it ran for
-            EngineError::BadParams { cmd, msg } if cmd.is_empty() => EngineError::BadParams { cmd: id.to_string(), msg },
-            e => e,
-        })
+        result
     }
 
     /// Run `f` as command `id` with what [`Session::execute`] does around every command: the
@@ -535,6 +558,8 @@ impl Session {
     }
 
     fn run_command(&mut self, id: &str, journal: Option<&Value>, f: impl FnOnce(&mut Session) -> Result<Value>) -> Result<Value> {
+        self.learn_read_hashes()?;
+        let _originals = self.originals.bind();
         let log_start = self.pending_log.len();
         let was_active = self.active();
         self.depth += 1;
@@ -561,6 +586,9 @@ impl Session {
             if r.is_ok() && !skip && self.xmp.auto_write && self.interaction.is_none() && self.pending_log.len() > log_start {
                 self.auto_write_sidecars_since(log_start);
             }
+        }
+        if self.depth == 0 {
+            self.learn_read_hashes()?;
         }
         if self.depth == 0 && self.library.is_some() {
             // Make the command durable before reporting success. When the command's own records
@@ -602,35 +630,180 @@ impl Session {
         Ok(())
     }
 
+    fn invalidate_cache_source(
+        &mut self,
+        old: &lightcraft_catalog::Photo,
+        expected: Option<crate::cache_identity::PhysicalIdentity>,
+        replace_faces: bool,
+    ) -> Result<()> {
+        let identities = self.media.identities.clone();
+        let ids: Vec<_> = self.catalog.photos().filter(|p| p.source == old.source || p.id == old.id).map(|p| p.id).collect();
+        let invalidation = identities.invalidate(old, expected, || {
+            self.media.rendered.clear();
+            for id in ids {
+                self.media.forget(id);
+                self.media.denoise.remove(id);
+                #[cfg(not(target_arch = "wasm32"))]
+                if replace_faces {
+                    self.faces.content_replaced(id);
+                }
+                #[cfg(target_arch = "wasm32")]
+                let _ = replace_faces;
+            }
+        });
+        if let Some(alias) = crate::cache_identity::path_key(old) {
+            if let Some(dir) = &self.media.smart_dir {
+                for path in crate::smart::paths_for_keys(dir, std::slice::from_ref(&alias)) {
+                    let _ = std::fs::remove_file(path);
+                }
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            if let (Some(dir), Some(active)) = (self.denoise_products_dir(), self.denoise.active.as_ref()) {
+                let key = crate::denoise::product_key_for(&active.fingerprint, &alias);
+                let _ = std::fs::remove_file(crate::denoise::product_path(&dir, &key));
+            }
+        }
+        self.originals.refresh(self);
+        invalidation.map_err(|e| EngineError::Other(format!("cannot invalidate replaced photo caches: {e}; replacement was not applied")))
+    }
+
     fn apply_catalog(&mut self, op: Op) -> Result<Op> {
         // Retain only cache IDs while the catalog consumes the operation. Cloning an import
         // batch here also cloned every photo, although commit already keeps the journal copy.
         let mut invalidated = Vec::new();
-        // photos whose file was replaced: the faces made from the old pixels go too (issue #1524)
+        let mut relocated = Vec::new();
         let mut replaced = Vec::new();
+        let mut states = std::collections::HashMap::new();
+        let mut retirements: Vec<(lightcraft_catalog::Photo, Option<crate::cache_identity::PhysicalIdentity>, bool)> = Vec::new();
+        let mut retired = std::collections::HashMap::new();
+        let mut retire = |photo: &lightcraft_catalog::Photo, expected: Option<crate::cache_identity::PhysicalIdentity>, faces: bool| {
+            let Some(key) = crate::cache_identity::path_key(photo) else { return };
+            if let Some(index) = retired.get(&key).copied() {
+                if let Some((_, previous, replace_faces)) = retirements.get_mut(index) {
+                    *previous = expected;
+                    *replace_faces |= faces;
+                }
+            } else {
+                retired.insert(key, retirements.len());
+                retirements.push((photo.clone(), expected, faces));
+            }
+        };
+        let mut retired_sources = Vec::new();
         let mut pending = vec![&op];
         while let Some(op) = pending.pop() {
             match op {
-                Op::SetContent { id, .. } => {
-                    invalidated.push(*id);
-                    replaced.push(*id);
+                Op::SetContent { id, width, height, file_size, content_hash, preview_only, .. } => {
+                    let state = states.entry(*id).or_insert_with(|| {
+                        self.catalog
+                            .photo(*id)
+                            .map(|p| (p.width, p.height, p.file_size, p.content_hash.clone(), p.preview_only.clone(), p.source.clone()))
+                    });
+                    if let Some((w, h, size, hash, preview, source)) = state {
+                        let changed = (*w, *h, *size) != (*width, *height, *file_size)
+                            || hash.as_deref().is_some_and(|old| {
+                                content_hash.as_deref().is_some_and(|new| crate::sync::base_hash(old) != crate::sync::base_hash(new))
+                            })
+                            || preview != preview_only;
+                        if changed {
+                            let mut old = lightcraft_catalog::Photo::new(*id, source.clone(), "", "", *w, *h, "");
+                            old.file_size = *size;
+                            old.content_hash = hash.clone();
+                            old.preview_only = preview.clone();
+                            let mut destination = old.clone();
+                            destination.width = *width;
+                            destination.height = *height;
+                            destination.file_size = *file_size;
+                            destination.content_hash = content_hash.clone();
+                            destination.preview_only = preview_only.clone();
+                            let expected = crate::cache_identity::PhysicalIdentity::of(&destination);
+                            for photo in [&old, &destination] {
+                                retire(photo, expected.clone(), true);
+                            }
+                            for photo in self.catalog.photos().filter(|p| p.source == *source) {
+                                invalidated.push(photo.id);
+                                replaced.push(photo.id);
+                            }
+                            invalidated.push(*id);
+                            replaced.push(*id);
+                        }
+                        *w = *width;
+                        *h = *height;
+                        *size = *file_size;
+                        *hash = content_hash.clone();
+                        *preview = preview_only.clone();
+                    }
                 }
-                Op::SetFile { id, .. } | Op::Relink { id, .. } | Op::RemovePhoto { id } => invalidated.push(*id),
-                Op::AddPhoto { photo } => invalidated.push(photo.id),
-                Op::Batch { ops } => pending.extend(ops),
+                Op::SetFile { id, source, .. } | Op::Relink { id, source, .. } => {
+                    invalidated.push(*id);
+                    relocated.push(*id);
+                    let state = states.entry(*id).or_insert_with(|| {
+                        self.catalog
+                            .photo(*id)
+                            .map(|p| (p.width, p.height, p.file_size, p.content_hash.clone(), p.preview_only.clone(), p.source.clone()))
+                    });
+                    if let Some(state) = state {
+                        if state.5 != *source {
+                            let mut old = lightcraft_catalog::Photo::new(*id, state.5.clone(), "", "", state.0, state.1, "");
+                            old.file_size = state.2;
+                            old.content_hash = state.3.clone();
+                            old.preview_only = state.4.clone();
+                            let mut destination = old.clone();
+                            destination.source = source.clone();
+                            let relink = matches!(op, Op::Relink { .. });
+                            let expected = (!relink).then(|| crate::cache_identity::PhysicalIdentity::of(&destination)).flatten();
+                            for photo in [&old, &destination] {
+                                retire(photo, expected.clone(), relink);
+                            }
+                            if matches!(op, Op::Relink { .. }) {
+                                replaced.push(*id);
+                            }
+                        }
+                        state.5 = source.clone();
+                    }
+                }
+                Op::RemovePhoto { id } => {
+                    invalidated.push(*id);
+                    states.insert(*id, None);
+                }
+                Op::AddPhoto { photo } => {
+                    invalidated.push(photo.id);
+                    states.insert(
+                        photo.id,
+                        Some((
+                            photo.width,
+                            photo.height,
+                            photo.file_size,
+                            photo.content_hash.clone(),
+                            photo.preview_only.clone(),
+                            photo.source.clone(),
+                        )),
+                    );
+                }
+                Op::Batch { ops } => pending.extend(ops.iter().rev()),
                 _ => {}
             }
         }
+        for (photo, expected, faces) in retirements {
+            if let lightcraft_catalog::Source::File { path } = &photo.source {
+                retired_sources.push(path.clone());
+            }
+            self.invalidate_cache_source(&photo, expected, faces)?;
+        }
         let inv = self.catalog.apply(op)?;
-        for id in invalidated {
-            self.media.forget(id);
+        self.media.identities.confirm(&retired_sources);
+        self.originals.drop_membership(&invalidated);
+        for id in &invalidated {
+            self.media.forget(*id);
         }
         #[cfg(not(target_arch = "wasm32"))]
         for id in replaced {
+            self.media.denoise.remove(id);
             self.faces.content_replaced(id);
         }
         #[cfg(target_arch = "wasm32")]
         let _ = replaced;
+        self.originals.refresh(self);
+        self.originals.adopt_candidates(self, &relocated);
         Ok(inv)
     }
 
@@ -660,7 +833,7 @@ impl Session {
     /// an undo step, and it leaves the redo stack alone.
     pub(crate) fn apply_system(&mut self, op: Op) -> Result<()> {
         let fwd = op.clone();
-        self.catalog.apply(op)?;
+        self.apply_catalog(op)?;
         self.pending_log.push(fwd);
         Ok(())
     }
@@ -728,6 +901,7 @@ impl Session {
     }
 
     pub(crate) fn undo_step_with(&mut self, fs: &dyn rename::MoveFs) -> Result<String> {
+        let _binding = self.originals.bind();
         let mut e = self.undo.pop().ok_or_else(|| EngineError::Other("nothing to undo".into()))?;
         let redo = match self.apply_with_files(&mut e, fs) {
             Ok(r) => r,
@@ -753,6 +927,7 @@ impl Session {
     }
 
     pub(crate) fn redo_step_with(&mut self, fs: &dyn rename::MoveFs) -> Result<String> {
+        let _binding = self.originals.bind();
         let mut e = self.redo.pop().ok_or_else(|| EngineError::Other("nothing to redo".into()))?;
         let undo = match self.apply_with_files(&mut e, fs) {
             Ok(r) => r,
@@ -808,10 +983,20 @@ impl Session {
         let op = &entry.op;
         let folder = entry.folder.as_ref();
         if let Some(f) = folder {
-            cmd::browse::folder_on_disk(&f.from, &f.to).map_err(|e| EngineError::Other(format!("can't move the folder back: {e}")))?;
+            for path in [&f.from, &f.to].into_iter().filter(|p| !p.is_empty()) {
+                self.originals.revoke_under(std::path::Path::new(path));
+            }
+            if let Err(e) = cmd::browse::folder_on_disk(&f.from, &f.to) {
+                self.originals.refresh(self);
+                return Err(EngineError::Other(format!("can't move the folder back: {e}")));
+            }
         }
+        let folder_reader = self.originals.clone();
         let undo_folder = || {
             if let Some(f) = folder {
+                for path in [&f.from, &f.to].into_iter().filter(|p| !p.is_empty()) {
+                    folder_reader.revoke_under(std::path::Path::new(path));
+                }
                 let _ = cmd::browse::folder_on_disk(&f.to, &f.from);
             }
         };
@@ -826,6 +1011,7 @@ impl Session {
             // now, so the opposite history direction still restores the entire original step.
             inverses.append(&mut entry.retry_inverse);
             entry.retry_inverse = inverses;
+            self.originals.refresh(self);
             return Err(EngineError::Other(format!("can't move the files back: {message}")));
         }
         match self.apply_catalog(op.clone()) {
@@ -848,9 +1034,11 @@ impl Session {
                 let back: Vec<(String, String)> = moves.iter().rev().map(|(a, b)| (b.clone(), a.clone())).collect();
                 if let Err(mut be) = rename::move_all(fs, &back) {
                     entry.retry_sidecars.append(&mut be.pending_sidecars);
+                    self.originals.refresh(self);
                     return Err(EngineError::Other(format!("{e}; the files could not all be moved back: {}", be.message)));
                 }
                 undo_folder();
+                self.originals.refresh(self);
                 Err(e)
             }
         }
@@ -1271,6 +1459,8 @@ mod tests_history_cursor;
 mod tests_hold_view;
 #[cfg(test)]
 mod tests_import;
+#[cfg(test)]
+mod tests_import_headers;
 #[cfg(test)]
 mod tests_import_move;
 #[cfg(test)]

@@ -761,9 +761,9 @@ pub(crate) fn eligible(p: &Photo) -> bool {
 }
 
 /// A product's name: what it was made from and with.
-pub(crate) fn product_key(fingerprint: &str, p: &Photo) -> String {
+pub(crate) fn product_key_for(fingerprint: &str, content: &str) -> String {
     let mut h = Hasher128::new();
-    h.str("lcdn").u64(u64::from(product::ALGORITHM)).str(fingerprint).str(&crate::media::content_key(p));
+    h.str("lcdn").u64(u64::from(product::ALGORITHM)).str(fingerprint).str(content);
     h.finish().to_string()
 }
 
@@ -793,6 +793,11 @@ fn making() -> &'static (Mutex<HashSet<PathBuf>>, Condvar) {
 struct Slot(PathBuf);
 
 impl Slot {
+    fn try_enter(path: &Path) -> Option<Slot> {
+        let (set, _) = making();
+        let mut set = set.lock().unwrap_or_else(PoisonError::into_inner);
+        set.insert(path.to_path_buf()).then(|| Slot(path.to_path_buf()))
+    }
     fn enter(path: &Path) -> Slot {
         let (set, cv) = making();
         let mut g = set.lock().unwrap_or_else(PoisonError::into_inner);
@@ -812,6 +817,48 @@ impl Drop for Slot {
     }
 }
 
+pub(crate) fn migrate_product(
+    dir: &Path,
+    model: &str,
+    keys: &[String],
+    hash: &str,
+    ticket: &crate::cache_identity::SourceTicket,
+    validate: impl Fn() -> bool,
+) {
+    let new_key = product_key_for(model, hash);
+    let target = product_path(dir, &new_key);
+    for old in keys {
+        let old_key = product_key_for(model, old);
+        if old_key == new_key {
+            continue;
+        }
+        let source = product_path(dir, &old_key);
+        let Some(_source_slot) = Slot::try_enter(&source) else { continue };
+        let Some(_target_slot) = Slot::try_enter(&target) else { continue };
+        if !ticket.current() || !validate() {
+            return;
+        }
+        let copied = product::copy_rekey(&source, &target, &old_key, &new_key, |tmp| {
+            ticket
+                .publish(|| {
+                    if !validate() {
+                        return Err(product::ProductError::Stale);
+                    }
+                    let _writing = PRODUCT_WRITE.lock().unwrap_or_else(PoisonError::into_inner);
+                    if product::is_current(&target, &new_key) {
+                        return Ok(());
+                    }
+                    std::fs::rename(tmp, &target).map_err(product::ProductError::from)
+                })
+                .unwrap_or(Err(product::ProductError::Stale))
+        })
+        .is_ok();
+        if copied {
+            break;
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------------------------------------------------
 // making a product
 
@@ -820,7 +867,10 @@ impl Drop for Slot {
 pub(crate) struct JobSpec {
     /// The original file.
     pub path: String,
-    pub read: Option<ByteReader>,
+    pub read: ByteReader,
+    pub content_fingerprint: Option<String>,
+    pub published: Arc<Mutex<Option<(PathBuf, String)>>>,
+    pub source_ticket: Option<crate::cache_identity::SourceTicket>,
     pub product: PathBuf,
     pub key: String,
     pub manifest: DenoiserManifest,
@@ -881,11 +931,16 @@ fn layout_of(cfa: &lightcraft_raw::Cfa) -> Option<Layout> {
     Layout::from_cell([cfa.color_at(0, 0), cfa.color_at(1, 0), cfa.color_at(0, 1), cfa.color_at(1, 1)])
 }
 
+static PRODUCT_WRITE: Mutex<()> = Mutex::new(());
+
 /// Make the product of `spec` unless it is there: decode the photo, run the model over its mosaic, write the result.
 /// `Ok(true)` when it was made now, `Ok(false)` when it already existed.
 pub(crate) fn make_product(spec: &JobSpec, progress: Option<&Progress>) -> Result<bool, MakeError> {
+    if spec.source_ticket.as_ref().is_some_and(|ticket| !ticket.current()) {
+        return Err(MakeError::Cancelled);
+    }
     let _slot = Slot::enter(&spec.product);
-    if product::is_current(&spec.product, &spec.key) {
+    if product_current(&spec.product, &spec.key) {
         return Ok(false);
     }
     let began = web_time::Instant::now();
@@ -893,10 +948,27 @@ pub(crate) fn make_product(spec: &JobSpec, progress: Option<&Progress>) -> Resul
     if cancelled() {
         return Err(MakeError::Cancelled);
     }
-    let bytes = match &spec.read {
-        Some(r) => r(&spec.path).map_err(MakeError::Failed)?,
-        None => std::fs::read(&spec.path).map_err(|e| MakeError::Failed(format!("{}: {e}", spec.path)))?,
-    };
+    let capture = crate::originals::ReadCapture::new();
+    let bytes = (spec.read)(&spec.path).map_err(MakeError::Failed)?;
+    let target = capture
+        .fingerprint(&spec.path)
+        .zip(spec.content_fingerprint.as_ref())
+        .and_then(|(fp, model)| {
+            let key = product_key_for(model, &fp.hash.to_string());
+            spec.product.parent().map(|dir| (product_path(dir, &key), key))
+        })
+        .unwrap_or_else(|| (spec.product.clone(), spec.key.clone()));
+    if product_current(&target.0, &target.1) {
+        let publish = || {
+            *spec.published.lock().unwrap_or_else(PoisonError::into_inner) = Some(target.clone());
+        };
+        if let Some(ticket) = &spec.source_ticket {
+            ticket.publish(publish).ok_or(MakeError::Cancelled)?;
+        } else {
+            publish();
+        }
+        return Ok(false);
+    }
     // the decode and the normalised mosaic wait their turn at the process-wide memory gate, as every decode does
     let (mosaic, layout) = {
         let _held = crate::memory::work_gate().acquire(bytes.len().saturating_mul(4));
@@ -959,7 +1031,18 @@ pub(crate) fn make_product(spec: &JobSpec, progress: Option<&Progress>) -> Resul
         return Err(MakeError::Cancelled);
     }
     let ran = began.elapsed();
-    product::write(&spec.product, &rgb, &spec.key).map_err(|e| MakeError::Failed(format!("could not save the denoised picture: {e}")))?;
+    let write = || -> Result<(), MakeError> {
+        let _write = PRODUCT_WRITE.lock().unwrap_or_else(PoisonError::into_inner);
+        if !product_current(&target.0, &target.1) {
+            product::write(&target.0, &rgb, &target.1).map_err(|e| MakeError::Failed(format!("could not save the denoised picture: {e}")))?;
+        }
+        *spec.published.lock().unwrap_or_else(PoisonError::into_inner) = Some(target.clone());
+        Ok(())
+    };
+    match &spec.source_ticket {
+        Some(ticket) => ticket.publish(write).ok_or(MakeError::Cancelled)??,
+        None => write()?,
+    };
     if std::env::var_os("LIGHTCRAFT_PROFILE").is_some() {
         eprintln!(
             "[denoise] read + decode {:.0} ms, model (set-up, tiles, blend) {:.0} ms, write {:.0} ms",
@@ -1056,6 +1139,7 @@ struct Running {
     product: PathBuf,
     progress: Arc<Progress>,
     outcome: Arc<Mutex<Option<Outcome>>>,
+    published: Arc<Mutex<Option<(PathBuf, String)>>>,
     started: web_time::Instant,
 }
 
@@ -1140,6 +1224,18 @@ impl State {
     }
 }
 
+#[cfg(test)]
+thread_local! { static PRODUCT_CHECKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+#[cfg(test)]
+pub(crate) fn product_checks() -> usize {
+    PRODUCT_CHECKS.get()
+}
+fn product_current(path: &Path, key: &str) -> bool {
+    #[cfg(test)]
+    PRODUCT_CHECKS.set(PRODUCT_CHECKS.get().saturating_add(1));
+    product::is_current(path, key)
+}
+
 impl Session {
     /// Where the active model's tiles run (see [`Model::device`]); `{kind: "none"}` while no model is loaded.
     pub(crate) fn denoise_device(&self) -> Value {
@@ -1191,11 +1287,38 @@ impl Session {
         self.denoise.queue.clear();
         self.denoise.failed.clear();
         self.denoise.dirty = true;
+        self.originals.refresh(self);
+    }
+
+    pub(crate) fn denoise_rebind_learned(&mut self, id: PhotoId) {
+        let Some(p) = self.catalog.photo(id) else { return };
+        let Some((dir, model)) = self.denoise_products_dir().zip(self.denoise.active.as_ref().map(|a| a.fingerprint.clone())) else { return };
+        let resolved = self.cache_photo(id);
+        let keys = self.media.content_keys(resolved.as_deref().unwrap_or(p));
+        let Some(primary) = keys.first().map(|key| product_key_for(&model, key)) else { return };
+        let Some(old) = self.media.denoise.spec(id) else { return };
+        if old.key == primary || !keys.iter().any(|key| product_key_for(&model, key) == old.key) {
+            return;
+        }
+        let product = product_path(&dir, &primary);
+        if product_current(&product, &primary) {
+            self.media.denoise.set(id, DenoiseSpec { product, key: primary, make: None });
+        }
     }
 
     fn denoise_spec(&self, p: &Photo) -> Option<(DenoiseSpec, String)> {
+        self.denoise_spec_with_discovery(p, false)
+    }
+
+    fn denoise_spec_with_discovery(&self, p: &Photo, discover: bool) -> Option<(DenoiseSpec, String)> {
         let (dir, active) = (self.denoise_products_dir()?, self.denoise.active.as_ref()?);
-        let key = product_key(&active.fingerprint, p);
+        let resolved = self.cache_photo(p.id);
+        let keys: Vec<_> =
+            self.media.content_keys(resolved.as_deref().unwrap_or(p)).iter().map(|k| product_key_for(&active.fingerprint, k)).collect();
+        let found = discover.then(|| keys.iter().find(|key| product_current(&product_path(&dir, key), key)).cloned()).flatten();
+        let key = found
+            .or_else(|| self.media.denoise.spec(p.id).filter(|spec| keys.contains(&spec.key)).map(|spec| spec.key.clone()))
+            .or_else(|| keys.first().cloned())?;
         Some((DenoiseSpec { product: product_path(&dir, &key), key: key.clone(), make: None }, key))
     }
 
@@ -1212,8 +1335,14 @@ impl Session {
                 products_in(&dir).into_iter().filter_map(|(p, _, _)| p.file_stem().and_then(|s| s.to_str()).map(str::to_string)).collect();
             if !names.is_empty() {
                 for p in self.catalog.photos().filter(|p| eligible(p) && running != Some(p.id)) {
-                    let key = product_key(&active.fingerprint, p);
-                    if names.contains(&key) {
+                    let resolved = self.cache_photo(p.id);
+                    if let Some(key) = self
+                        .media
+                        .content_keys(resolved.as_deref().unwrap_or(p))
+                        .iter()
+                        .map(|k| product_key_for(&active.fingerprint, k))
+                        .find(|key| names.contains(key))
+                    {
                         now.insert(p.id, DenoiseSpec { product: product_path(&dir, &key), key, make: None });
                     }
                 }
@@ -1256,7 +1385,7 @@ impl Session {
                 self.media.forget(id);
                 self.denoise.generation += 1;
             }
-            None if spec.product.is_file() && product::is_current(&spec.product, &spec.key) => {
+            None if spec.product.is_file() && product_current(&spec.product, &spec.key) => {
                 // made by an export, or by another session
                 self.media.denoise.set(id, spec);
                 self.media.forget(id);
@@ -1359,13 +1488,16 @@ impl Session {
             .collect()
     }
 
-    fn denoise_job_spec(&self, p: &Photo, parallel: usize) -> Option<JobSpec> {
+    fn denoise_job_spec(&self, p: &Photo, parallel: usize, discover: bool) -> Option<JobSpec> {
         let Source::File { path } = &p.source else { return None };
-        let (spec, _) = self.denoise_spec(p)?;
+        let (spec, _) = self.denoise_spec_with_discovery(p, discover)?;
         let active = self.denoise.active.as_ref()?;
         Some(JobSpec {
             path: path.clone(),
-            read: self.media.file_bytes.clone(),
+            read: self.media.file_bytes.clone().unwrap_or_else(|| self.originals.reader()),
+            content_fingerprint: Some(active.fingerprint.clone()),
+            published: Default::default(),
+            source_ticket: Some(self.media.identities.ticket(p)),
             product: spec.product,
             key: spec.key,
             manifest: active.manifest.clone(),
@@ -1384,15 +1516,16 @@ impl Session {
             if !eligible(&p) || self.media.denoise.spec(id).is_some() {
                 continue;
             }
-            let Some(spec) = self.denoise_job_spec(&p, parallel) else { continue };
+            let Some(spec) = self.denoise_job_spec(&p, parallel, false) else { continue };
             // another session or an export may have made it since it was queued
-            if product::is_current(&spec.product, &spec.key) {
+            if product_current(&spec.product, &spec.key) {
                 self.denoise_check_photo(id);
                 continue;
             }
             let progress = Arc::new(Progress::default());
             let outcome: Arc<Mutex<Option<Outcome>>> = Arc::new(Mutex::new(None));
             let (key, product) = (spec.key.clone(), spec.product.clone());
+            let published = spec.published.clone();
             let (worker_progress, worker_outcome) = (progress.clone(), outcome.clone());
             let started = std::thread::Builder::new().name("denoise".into()).stack_size(STACK).spawn(move || {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| make_product(&spec, Some(&worker_progress))));
@@ -1407,7 +1540,7 @@ impl Session {
             });
             match started {
                 Ok(_) => {
-                    self.denoise.running = Some(Running { photo: id, key, product, progress, outcome, started: web_time::Instant::now() });
+                    self.denoise.running = Some(Running { photo: id, key, product, progress, outcome, published, started: web_time::Instant::now() });
                 }
                 Err(e) => {
                     self.denoise.failed.insert(id, Failure { key, why: format!("could not start the denoiser: {e}"), unsupported: false });
@@ -1422,7 +1555,11 @@ impl Session {
     fn denoise_poll(&mut self) {
         let Some(r) = &self.denoise.running else { return };
         let Some(outcome) = r.outcome.lock().unwrap_or_else(PoisonError::into_inner).take() else { return };
-        let Some(r) = self.denoise.running.take() else { return };
+        let Some(mut r) = self.denoise.running.take() else { return };
+        if let Some((product, key)) = r.published.lock().unwrap_or_else(PoisonError::into_inner).clone() {
+            r.product = product;
+            r.key = key;
+        }
         match outcome {
             Outcome::Done => {
                 self.denoise.made += 1;
@@ -1627,14 +1764,19 @@ impl Session {
             return Err(format!("{name}: Denoise needs a library on disk to keep its pictures in"));
         }
         self.denoise_check_photo(id);
-        let Some(job) = self.denoise_job_spec(&p, Pace::Full.parallel(std::thread::available_parallelism().map_or(1, |n| n.get()), None)) else {
+        let Some(job) = self.denoise_job_spec(&p, Pace::Full.parallel(std::thread::available_parallelism().map_or(1, |n| n.get()), None), true)
+        else {
             return Ok(None);
         };
         let label = name.clone();
         let spec = job.clone();
         let make: MakeProduct = Arc::new(move || match make_product(&spec, None) {
-            Ok(_) => Ok(true),
-            Err(MakeError::Unsupported(_)) => Ok(false),
+            Ok(_) => {
+                let (product, key) =
+                    spec.published.lock().unwrap_or_else(PoisonError::into_inner).clone().unwrap_or_else(|| (spec.product.clone(), spec.key.clone()));
+                Ok(Some(DenoiseSpec { product, key, make: None }))
+            }
+            Err(MakeError::Unsupported(_)) => Ok(None),
             Err(MakeError::Failed(why)) => Err(format!("{label}: could not denoise: {why}")),
             Err(MakeError::Cancelled) => Err(format!("{label}: denoise was cancelled")),
         });

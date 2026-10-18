@@ -3234,6 +3234,7 @@ dependencies = [
  "lightcraft-develop",
  "lightcraft-faces",
  "lightcraft-fetch",
+ "lightcraft-file-identity-sys",
  "lightcraft-geocode",
  "lightcraft-geom",
  "lightcraft-gpu",
@@ -3284,6 +3285,13 @@ dependencies = [
  "rustls-rustcrypto",
  "sha2",
  "webpki-roots",
+]
+
+[[package]]
+name = "lightcraft-file-identity-sys"
+version = "0.9.1"
+dependencies = [
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

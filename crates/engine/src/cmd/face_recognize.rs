@@ -353,7 +353,7 @@ mod imp {
     /// for its picture. `None` when there is nothing to do.
     fn prepare(s: &mut Session, id: PhotoId, search: bool) -> Option<Prepared> {
         let tag = s.faces.index.tag.clone();
-        let photo = s.catalog.photo(id)?.clone();
+        let photo = s.cache_photo(id)?;
         let todo: Vec<Rect> =
             photo.meta.regions.iter().filter(|r| r.kind == RegionKind::Face && s.faces.index.needs(id.0, &r.rect)).map(|r| r.rect).collect();
         // finding faces needs the detector the user may not have downloaded: such a photo is left unsearched, not marked as searched
@@ -364,7 +364,17 @@ mod imp {
         }
         let job = s.preview_job(id, EDGE, EDGE, false, &DevelopSettings::default())?;
         let preview = s.scan_preview_of(&photo);
-        Some(Prepared { tag, epoch: s.faces.epoch, id, content: crate::media::content_key(&photo), job, preview, todo, detect, detector })
+        Some(Prepared {
+            tag,
+            epoch: s.faces.epoch,
+            id,
+            content: s.media.identities.tag(&photo, &crate::media::content_key(&photo)),
+            job,
+            preview,
+            todo,
+            detect,
+            detector,
+        })
     }
 
     /// The faces the detector found in a photo that had none become its face regions: unnamed, marked as detected (so a
@@ -395,7 +405,7 @@ mod imp {
         if d.epoch != s.faces.epoch || d.tag != s.faces.index.tag {
             return (0, 0);
         }
-        if s.catalog.photo(d.id).is_none_or(|p| crate::media::content_key(p) != d.content) {
+        if s.cache_photo(d.id).is_none_or(|p| !s.media.content_keys(&p).iter().any(|key| s.media.identities.tag(&p, key) == d.content)) {
             return (0, 0);
         }
         if d.detect_wanted {
@@ -925,8 +935,35 @@ mod imp {
         }
 
         fn finished(s: &Session, id: PhotoId, found: Option<Vec<Rect>>, results: Vec<(Rect, Option<Vec<f32>>, Rect)>) -> Done {
-            let content = s.catalog.photo(id).map(|p| crate::media::content_key(p)).unwrap_or_default();
+            let content = s.cache_photo(id).map(|p| s.media.identities.tag(&p, &crate::media::content_key(&p))).unwrap_or_default();
             Done { tag: s.faces.index.tag.clone(), epoch: s.faces.epoch, id, content, results, detect_wanted: true, found }
+        }
+
+        #[test]
+        fn a_face_scan_finishing_after_the_hash_keeps_its_faces() {
+            let (mut s, d) = loaded("hash-learned-faces");
+            let (a, _) = two_photos(&s);
+            let old = (**s.catalog.photo(a).unwrap()).clone();
+            let mut unhashed = old.clone();
+            unhashed.content_hash = None;
+            unhashed.source = lightcraft_catalog::Source::File { path: "face-hash-fixture.jpg".into() };
+            s.catalog.apply(Op::RemovePhoto { id: a }).unwrap();
+            s.catalog.apply(Op::AddPhoto { photo: Box::new(unhashed.clone()) }).unwrap();
+            let found = region(0.3, None).rect;
+            let done = finished(&s, a, Some(vec![found]), vec![(found, Some(unit(&[(0, 1.0)])), found)]);
+            s.apply_system(Op::SetContent {
+                id: a,
+                width: old.width,
+                height: old.height,
+                file_size: old.file_size,
+                content_hash: Some("learned".into()),
+                preview_only: old.preview_only,
+                preview_checked: old.preview_checked,
+            })
+            .unwrap();
+            assert_eq!(ingest(&mut s, done), (1, 0));
+            assert_eq!(s.catalog.photo(a).unwrap().meta.regions.len(), 1);
+            let _ = std::fs::remove_dir_all(d);
         }
 
         #[test]

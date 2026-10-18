@@ -249,7 +249,10 @@ fn copy_import_refuses_a_file_changed_since_the_review() {
     let mut s = session();
     let r = s.execute("library.importPreview", &json!({"paths": [card.to_string_lossy()]})).unwrap();
     assert_eq!(r["scanned"], 1, "{r}");
-    write_png(&card.join("a.png"), 9); // other pixels
+    #[cfg(windows)]
+    assert!(std::fs::File::options().write(true).open(card.join("a.png")).is_err(), "live review proof must deny in-place writes");
+    write_png(&card.join("replacement.png"), 9);
+    std::fs::rename(card.join("replacement.png"), card.join("a.png")).unwrap();
     let r = s
         .execute(
             "library.import",
@@ -519,14 +522,141 @@ fn finish_keeps_the_original_when_the_copy_changed_to_the_same_length() {
     // a copy replaced by other bytes of the same length: the original stays
     std::fs::write(&src, b"original bytes").unwrap();
     let placed = place(&src, &dest, "IMG_1.jpg").unwrap();
-    std::fs::write(&placed.dst, b"different byte").unwrap();
+    std::fs::write(base.join("replacement-copy"), b"different byte").unwrap();
+    std::fs::rename(base.join("replacement-copy"), &placed.dst).unwrap();
     assert!(finish(&placed).is_err());
     assert_eq!(std::fs::read(&src).unwrap(), b"original bytes");
     // an original edited meanwhile to other bytes of the same length: it stays too
     let placed = place(&src, &dest, "IMG_1.jpg").unwrap();
-    std::fs::write(&src, b"edited  bytes!").unwrap();
+    std::fs::write(base.join("replacement-original"), b"edited  bytes!").unwrap();
+    std::fs::rename(base.join("replacement-original"), &src).unwrap();
     assert!(finish(&placed).is_err());
     assert_eq!(std::fs::read(&src).unwrap(), b"edited  bytes!");
     inject(Fault::None);
     let _ = std::fs::remove_dir_all(&base);
+}
+
+fn without_probe_hashes(s: &mut Session) {
+    let probe = s.media.file_probe.clone().unwrap();
+    s.media.file_probe = Some(std::sync::Arc::new(move |path: &str| {
+        probe(path).map(|mut info| {
+            info.content_hash = None;
+            info
+        })
+    }));
+}
+
+fn import_copy(s: &mut Session, card: &Path, dest: &Path) -> Value {
+    s.execute(
+        "library.import",
+        &json!({"paths": [card.to_string_lossy()], "mode": "copy", "destination": dest.to_string_lossy(), "organize": "flat"}),
+    )
+    .unwrap()
+}
+
+#[test]
+fn a_copy_without_a_probe_hash_keeps_the_hash_it_copied() {
+    let base = temp_dir("copyhashless");
+    let (card, dest) = (base.join("card"), base.join("out"));
+    write_png(&card.join("a.png"), 4);
+    let source = std::fs::read(card.join("a.png")).unwrap();
+    let mut s = session();
+    without_probe_hashes(&mut s);
+    let r = import_copy(&mut s, &card, &dest);
+    assert_eq!(len(&r, "imported"), 1, "{r}");
+    let photo = s.catalog.photos().next().unwrap();
+    assert_eq!(photo.content_hash, Some(lightcraft_preview::hash_bytes(&source).to_string()));
+    assert_eq!(std::fs::read(dest.join("a.png")).unwrap(), source);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn a_source_changed_during_the_copy_is_refused() {
+    let base = temp_dir("copygrow");
+    let (card, dest) = (base.join("card"), base.join("out"));
+    write_png(&card.join("a.png"), 5);
+    let source = card.join("a.png");
+    let before = std::fs::metadata(&source).unwrap().len();
+    let writer = std::fs::OpenOptions::new().append(true).open(&source).unwrap();
+    let growth = crate::import_move::grow_using(writer);
+    let mut s = session();
+    without_probe_hashes(&mut s);
+    inject(Fault::Grow);
+    let r = import_copy(&mut s, &card, &dest);
+    inject(Fault::None);
+    drop(growth);
+    assert_eq!(std::fs::metadata(&source).unwrap().len(), before + 4, "the injector actually changed the writable source");
+    assert!(s.catalog.is_empty(), "mutable source must not receive a confirmed catalog hash");
+    assert_eq!((len(&r, "imported"), len(&r, "failed")), (0, 1), "{r}");
+    assert!(r.to_string().contains("original changed while"), "{r}");
+    assert_eq!(files_under(&dest), Vec::<String>::new());
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[cfg(unix)]
+#[test]
+fn hard_link_move_finish_reads_no_bytes_even_after_shared_changes() {
+    use crate::import_move::{finish, place, read_bytes};
+    let base = temp_dir("hard-link-no-read");
+    let src = base.join("original.jpg");
+    std::fs::write(&src, b"nonempty original").unwrap();
+    let before = read_bytes();
+    let p = place(&src, &base.join("dest"), "original.jpg").unwrap();
+    assert_eq!(p.hash, None);
+    std::fs::write(&src, b"shared modification").unwrap();
+    finish(&p).unwrap();
+    assert_eq!(read_bytes(), before);
+    assert!(!src.exists());
+    assert_eq!(std::fs::read(&p.dst).unwrap(), b"shared modification");
+    std::fs::remove_dir_all(base).unwrap();
+}
+
+#[test]
+fn distinct_or_replaced_move_destinations_require_byte_verification() {
+    use crate::import_move::{finish, place, read_bytes};
+    let base = temp_dir("finish-distinct");
+    let src = base.join("original.jpg");
+    for (i, bytes) in [b"original".as_slice(), b"differnt"].into_iter().enumerate() {
+        std::fs::write(&src, b"original").unwrap();
+        let p = place(&src, &base.join("dest"), &format!("{i}.jpg")).unwrap();
+        std::fs::remove_file(&p.dst).unwrap();
+        std::fs::write(&p.dst, bytes).unwrap();
+        let before = read_bytes();
+        assert_eq!(finish(&p).is_ok(), i == 0);
+        assert!(read_bytes() > before, "a different inode must be compared");
+        assert_eq!(src.exists(), i != 0);
+    }
+    std::fs::remove_dir_all(base).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn move_finish_keeps_source_when_destination_is_a_symlink_or_missing() {
+    use crate::import_move::{finish, place};
+    let base = temp_dir("finish-symlink");
+    let src = base.join("original.jpg");
+    std::fs::write(&src, b"original").unwrap();
+    let p = place(&src, &base.join("dest"), "original.jpg").unwrap();
+    std::fs::remove_file(&p.dst).unwrap();
+    assert!(finish(&p).is_err());
+    std::os::unix::fs::symlink(&src, &p.dst).unwrap();
+    assert!(finish(&p).is_err());
+    assert_eq!(std::fs::read(&src).unwrap(), b"original");
+    std::fs::remove_dir_all(base).unwrap();
+}
+
+#[test]
+fn move_finish_rechecks_names_after_verification() {
+    use crate::import_move::{finish, place};
+    let base = temp_dir("finish-name-recheck");
+    let src = base.join("original.jpg");
+    std::fs::write(&src, b"original").unwrap();
+    let p = place(&src, &base.join("dest"), "original.jpg").unwrap();
+    inject(Fault::SwapAfterVerify);
+    let result = finish(&p);
+    inject(Fault::None);
+    assert!(result.is_err());
+    assert_eq!(std::fs::read(&src).unwrap(), b"original");
+    assert_eq!(std::fs::read(&p.dst).unwrap(), b"replaced destination");
+    std::fs::remove_dir_all(base).unwrap();
 }

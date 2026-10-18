@@ -79,13 +79,12 @@ impl Session {
 fn forget_gone(s: &mut Session, dir: &str, subfolders: bool, files: &[String]) -> usize {
     let listed: std::collections::HashSet<&str> = files.iter().map(String::as_str).collect();
     let held = held(s);
-    let smart = s.media.smart_dir.clone();
     let gone: Vec<PhotoId> = s
         .catalog
         .photos()
         .filter(|p| p.local && !p.deleted && !held.contains(&p.id))
         // a smart preview may be all that is left of the picture
-        .filter(|p| !smart.as_ref().is_some_and(|d| crate::smart::file_path(d, p).exists()))
+        .filter(|p| !s.smart_preview_paths(p).iter().any(|path| path.exists()))
         .filter(|p| match &p.source {
             // a file left out of the listing is checked on disk: another spelling of its path, or
             // a listing that missed it, keeps it
@@ -177,10 +176,8 @@ impl Session {
         let days = days.unwrap_or(self.forget_local_days);
         let now = (self.clock)();
         let keep = in_use(self);
-        let smart = self.media.smart_dir.clone();
-        let plan = self
-            .catalog
-            .forget_local_plan(&now, days, &|p| keep.contains(&p.id) || smart.as_ref().is_some_and(|d| crate::smart::file_path(d, p).exists()));
+        let plan =
+            self.catalog.forget_local_plan(&now, days, &|p| keep.contains(&p.id) || self.smart_preview_paths(p).iter().any(|path| path.exists()));
         if dry_run {
             return plan;
         }
@@ -502,7 +499,12 @@ pub(crate) fn move_folder(s: &mut Session, from: &str, to: &str) -> std::result:
     // Repairs retain their exact old paths, including those on surviving history entries.
     // Complete them before the directory moves; an unavailable repair leaves it in place.
     s.repair_sidecars_with(&crate::rename::RealFs).map_err(|e| e.to_string())?;
-    rename_folder_on_disk(from, to)?;
+    s.originals.revoke_under(src);
+    s.originals.revoke_under(dst);
+    if let Err(error) = rename_folder_on_disk(from, to) {
+        s.originals.refresh(s);
+        return Err(error);
+    }
     let mut ops: Vec<Op> = s
         .catalog
         .photos()
@@ -527,6 +529,7 @@ pub(crate) fn move_folder(s: &mut Session, from: &str, to: &str) -> std::result:
     if let Err(e) = s.commit_with_folder(&label, Op::Batch { ops }, folder) {
         // the catalog didn't take it: put the folder back where the photos still point
         let back = rename_folder_on_disk(to, from).err().map(|b| format!("; moving it back failed too: {b}")).unwrap_or_default();
+        s.originals.refresh(s);
         return Err(format!("{e}{back}"));
     }
     follow_folder(s, from, to);

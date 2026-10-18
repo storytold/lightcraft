@@ -242,7 +242,8 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
             app.export = None;
             // Photos refused (permission, not installed…): leave the way out on screen longer
             let photos_failed = matches!(&r, Ok((_, Some(p), _)) if p.get("error").is_some());
-            let msg = match r {
+            let saved = app.session.persist();
+            let mut msg = match r {
                 Ok((files, photos, _)) => {
                     let sheet = files.first().filter(|f| f["contactSheet"] == true);
                     let ok = files.iter().filter(|f| f.get("path").is_some()).count();
@@ -274,6 +275,12 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
                 }
                 Err(e) => e,
             };
+            if let Err(error) = saved {
+                msg += &format!(" · {error}");
+                if let Some(result) = app.last_export_result.as_mut() {
+                    result["saveError"] = json!(error.to_string());
+                }
+            }
             if photos_failed {
                 app.toast_for(ctx, msg, 15.0);
             } else {
@@ -287,7 +294,11 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
         }
         Err(std::sync::mpsc::TryRecvError::Disconnected) => {
             app.export = None;
-            app.toast(ctx, crate::i18n::tr("Export stopped unexpectedly"));
+            let mut message = crate::i18n::tr("Export stopped unexpectedly").to_string();
+            if let Err(error) = app.session.persist() {
+                message += &format!(" · {error}");
+            }
+            app.toast(ctx, message);
         }
     }
 }

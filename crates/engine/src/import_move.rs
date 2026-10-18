@@ -11,7 +11,7 @@
 //!    source stays as it was.
 //! 2. Only after the catalog records pointing at the destinations were committed and saved
 //!    does [`finish`] remove each source — after checking once more that its destination is
-//!    still there with the same size. A source that can't be removed (a read-only card, a
+//!    still names the same live file, or verifying its bytes and rechecking both names. A source that can't be removed (a read-only card, a
 //!    locked file) stays and is reported; the photo is then imported from the copy.
 //!
 //! A `IMG_1.xmp` sidecar is shared by `IMG_1.CR3` and `IMG_1.JPG`: it is copied along with each,
@@ -21,7 +21,7 @@
 //! and on Unix it silently replaces an existing destination.)
 
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 /// A photo put in place by [`place`]; its source is untouched.
@@ -30,6 +30,7 @@ pub(crate) struct Placed {
     pub src: PathBuf,
     pub dst: PathBuf,
     pub sidecars: Vec<PlacedSidecar>,
+    pub hash: Option<lightcraft_preview::Hash128>,
 }
 
 #[derive(Clone, Debug)]
@@ -59,11 +60,39 @@ pub(crate) enum Fault {
     /// Each copy takes a little longer and notes the thread it ran on ([`copy_threads`]), to see
     /// an import's copies run side by side.
     Slow,
+    Grow,
+    SwapAfterVerify,
 }
 
 #[cfg(test)]
 thread_local! {
     static FAULT: std::cell::Cell<Fault> = const { std::cell::Cell::new(Fault::None) };
+    static GROW_WRITER: std::cell::RefCell<Option<File>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn read_bytes() -> u64 {
+    crate::originals::read_bytes()
+}
+
+#[cfg(test)]
+pub(crate) struct GrowthWriter(Option<File>);
+#[cfg(test)]
+impl Drop for GrowthWriter {
+    fn drop(&mut self) {
+        GROW_WRITER.with(|writer| writer.replace(self.0.take()));
+    }
+}
+#[cfg(test)]
+pub(crate) fn grow_using(file: File) -> GrowthWriter {
+    GrowthWriter(GROW_WRITER.with(|writer| writer.replace(Some(file))))
+}
+fn grow_source(src: &Path) -> io::Result<()> {
+    #[cfg(test)]
+    if let Some(result) = GROW_WRITER.with(|writer| writer.borrow_mut().as_mut().map(|file| file.write_all(b"more"))) {
+        return result;
+    }
+    OpenOptions::new().append(true).open(src)?.write_all(b"more")
 }
 
 /// Inject a fault for the calling thread's next moves (tests only).
@@ -153,11 +182,13 @@ pub(crate) fn place(src: &Path, dir: &Path, name: &str) -> Result<Placed, String
         _ => (name.to_string(), String::new()),
     };
     let mut dst = None;
+    let mut hash = None;
     for i in 0..100_000u32 {
         let d = if i == 0 { dir.join(name) } else { dir.join(format!("{stem}-{i}{ext}")) };
         match link_or_copy(src, &d) {
-            Ok(()) => {
+            Ok(copied) => {
                 dst = Some(d);
+                hash = copied;
                 break;
             }
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
@@ -165,7 +196,7 @@ pub(crate) fn place(src: &Path, dir: &Path, name: &str) -> Result<Placed, String
         }
     }
     let Some(dst) = dst else { return Err(format!("move {}: no free name in {}", src.display(), dir.display())) };
-    let mut placed = Placed { src: src.to_path_buf(), dst, sidecars: Vec::new() };
+    let mut placed = Placed { src: src.to_path_buf(), dst, sidecars: Vec::new(), hash };
     for (sc, stem_named) in sidecars_of(src) {
         let sc_ext = sc.extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_else(|| "xmp".into());
         let sc_dst =
@@ -177,7 +208,7 @@ pub(crate) fn place(src: &Path, dir: &Path, name: &str) -> Result<Placed, String
                 Err(e) => Err(format!("{}: {e} (the original is kept)", sc_dst.display())),
             }
         } else {
-            link_or_copy(&sc, &sc_dst).map(|()| true).map_err(|e| format!("move {}: {e} (the original is kept)", sc.display()))
+            link_or_copy(&sc, &sc_dst).map(|_| true).map_err(|e| format!("move {}: {e} (the original is kept)", sc.display()))
         };
         match r {
             Ok(created) => placed.sidecars.push(PlacedSidecar { src: sc, dst: sc_dst, created, stem: stem_named }),
@@ -200,7 +231,12 @@ pub(crate) fn place(src: &Path, dir: &Path, name: &str) -> Result<Placed, String
 /// a third read of the card (issue #134). It also catches a source that changed since the probe
 /// (whose recorded metadata and hash would be stale). Without one the copy is compared byte for
 /// byte with the source.
-pub(crate) fn copy_new(src: &Path, dir: &Path, name: &str, expect: Option<lightcraft_preview::Hash128>) -> Result<PathBuf, String> {
+pub(crate) fn copy_new(
+    src: &Path,
+    dir: &Path,
+    name: &str,
+    expect: Option<lightcraft_preview::Hash128>,
+) -> Result<(PathBuf, lightcraft_preview::Hash128), String> {
     fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let (stem, ext) = match name.rsplit_once('.') {
         Some((s, e)) if !s.is_empty() => (s.to_string(), format!(".{e}")),
@@ -208,8 +244,8 @@ pub(crate) fn copy_new(src: &Path, dir: &Path, name: &str, expect: Option<lightc
     };
     for i in 0..100_000u32 {
         let d = if i == 0 { dir.join(name) } else { dir.join(format!("{stem}-{i}{ext}")) };
-        match copy_verified(src, &d, expect) {
-            Ok(()) => return Ok(d),
+        match copy_hashed(src, &d, expect) {
+            Ok(hash) => return Ok((d, hash)),
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
             Err(e) => return Err(format!("copy {}: {e} (nothing was imported from it; the original is untouched)", src.display())),
         }
@@ -229,16 +265,38 @@ pub(crate) fn rollback(p: &Placed) {
 /// destination is still there with the same bytes. Then its sidecars, unless another photo still
 /// uses a shared one. `Err` = the source was kept (why); `Ok` lists sidecars kept (path, why).
 pub(crate) fn finish(p: &Placed) -> Result<Vec<(String, String)>, String> {
-    // compare the bytes now: either file may have changed since the copy was verified
-    let same = match (fs::metadata(&p.src), fs::metadata(&p.dst)) {
-        (Ok(s), Ok(d)) => s.is_file() && d.is_file() && same_bytes(&p.src, &p.dst).unwrap_or(false),
-        _ => false,
-    };
-    if !same {
+    let _binding = crate::originals::standalone_binding();
+    let verified = (|| -> io::Result<(File, File, fs::Metadata, fs::Metadata)> {
+        if !fs::symlink_metadata(&p.src)?.is_file() || !fs::symlink_metadata(&p.dst)?.is_file() {
+            return Err(io::Error::other("the source or destination is not a regular file"));
+        }
+        let (mut src, mut dst) = (File::open(&p.src)?, File::open(&p.dst)?);
+        let (sm, dm) = (src.metadata()?, dst.metadata()?);
+        if !sm.is_file()
+            || !dm.is_file()
+            || sm.len() != dm.len()
+            || (!same_handle_identity(&sm, &dm) && !same_open_bytes(&p.src, &p.dst, &mut src, &mut dst)?)
+        {
+            return Err(io::Error::other("the destination differs from the source"));
+        }
+        if !same_file_state(&sm, &src.metadata()?) || !same_file_state(&dm, &dst.metadata()?) {
+            return Err(io::Error::other("a file changed while it was verified"));
+        }
+        Ok((src, dst, sm, dm))
+    })();
+    let Ok((_src, _dst, src_meta, dst_meta)) = verified else {
         return Err(format!("{} is missing or changed: the original is kept", p.dst.display()));
+    };
+    #[cfg(test)]
+    if injected(Fault::SwapAfterVerify) {
+        fs::remove_file(&p.dst).map_err(|e| e.to_string())?;
+        fs::write(&p.dst, b"replaced destination").map_err(|e| e.to_string())?;
     }
     if injected(Fault::FailRemove) {
         return Err("could not remove the original (injected): it stays where it was".into());
+    }
+    if !current_name_matches(&p.src, &_src, &src_meta) || !current_name_matches(&p.dst, &_dst, &dst_meta) {
+        return Err("a source or destination name changed after verification: the original is kept".into());
     }
     fs::remove_file(&p.src).map_err(|e| format!("could not remove the original ({e}): it stays where it was"))?;
     let mut kept = Vec::new();
@@ -273,14 +331,14 @@ pub(crate) fn sibling_photo(sidecar: &Path) -> Option<String> {
 
 /// `dst` = `src` without touching `src`: a hard link, else a verified copy. Never overwrites
 /// (`AlreadyExists` when `dst` is taken).
-fn link_or_copy(src: &Path, dst: &Path) -> io::Result<()> {
+fn link_or_copy(src: &Path, dst: &Path) -> io::Result<Option<lightcraft_preview::Hash128>> {
     let force_copy = injected(Fault::NoLink) || injected(Fault::FailWrite) || injected(Fault::Corrupt);
     if !force_copy && !is_symlink(src) {
         match fs::hard_link(src, dst) {
             Ok(()) => {
                 let (a, b) = (fs::metadata(src)?, fs::metadata(dst)?);
                 if a.len() == b.len() {
-                    return Ok(());
+                    return Ok(None);
                 }
                 let _ = fs::remove_file(dst);
                 return Err(io::Error::other("the link doesn't match the original"));
@@ -291,21 +349,49 @@ fn link_or_copy(src: &Path, dst: &Path) -> io::Result<()> {
         }
     }
     // Move keeps the byte-for-byte comparison: the source is deleted on the strength of it
-    copy_verified(src, dst, None)
+    copy_verified(src, dst, None).map(Some)
 }
 
 /// Copy into a new file, sync it to disk and verify it: against `expect` (the probe's hash of the
 /// source) when given, else byte for byte against the source. On any failure the partial copy is
 /// removed.
-pub(crate) fn copy_verified(src: &Path, dst: &Path, expect: Option<lightcraft_preview::Hash128>) -> io::Result<()> {
+pub(crate) fn copy_verified(src: &Path, dst: &Path, expect: Option<lightcraft_preview::Hash128>) -> io::Result<lightcraft_preview::Hash128> {
+    copy_checked(src, dst, |_| match expect {
+        Some(h) if hash_file(dst)? != h => Err(io::Error::other(CHANGED_SINCE_READ)),
+        Some(_) => Ok(()),
+        None if !same_bytes(src, dst)? => Err(io::Error::other("the copy differs from the original")),
+        None => Ok(()),
+    })
+}
+
+const CHANGED_SINCE_READ: &str = "the copy differs from the original as it was read for the import (a bad copy, or the file changed meanwhile)";
+
+pub(crate) fn copy_hashed(src: &Path, dst: &Path, expect: Option<lightcraft_preview::Hash128>) -> io::Result<lightcraft_preview::Hash128> {
+    copy_checked(src, dst, |copied| {
+        if expect.is_some_and(|h| h != copied) {
+            return Err(io::Error::other(CHANGED_SINCE_READ));
+        }
+        if hash_file(dst)? != copied {
+            return Err(io::Error::other("the copy differs from the original"));
+        }
+        Ok(())
+    })
+}
+
+fn copy_checked(
+    src: &Path,
+    dst: &Path,
+    verify: impl FnOnce(lightcraft_preview::Hash128) -> io::Result<()>,
+) -> io::Result<lightcraft_preview::Hash128> {
+    let _binding = crate::originals::standalone_binding();
+    let before = fs::metadata(src)?;
     let mut out = OpenOptions::new().write(true).create_new(true).open(dst)?;
     let r = (|| {
-        let mut inp = File::open(src)?;
         if injected(Fault::FailWrite) {
             out.write_all(b"partial")?;
             return Err(io::Error::other("write failed (injected)"));
         }
-        io::copy(&mut inp, &mut out)?;
+        let (copied, len) = stream_copy(&mut out, src)?;
         #[cfg(test)]
         if injected(Fault::Slow) {
             COPY_THREADS.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(std::thread::current().id());
@@ -315,67 +401,116 @@ pub(crate) fn copy_verified(src: &Path, dst: &Path, expect: Option<lightcraft_pr
             out.write_all(b"!")?;
         }
         out.sync_all()?;
-        if let Ok(m) = fs::metadata(src).and_then(|m| m.modified()) {
+        let after = fs::metadata(src)?;
+        if len != before.len() || after.len() != before.len() || after.modified().ok() != before.modified().ok() {
+            return Err(io::Error::other("the original changed while it was copied"));
+        }
+        if let Ok(m) = after.modified() {
             let _ = out.set_modified(m);
         }
-        match expect {
-            Some(h) if hash_file(dst)? != h => {
-                Err(io::Error::other("the copy differs from the original as it was read for the import (a bad copy, or the file changed meanwhile)"))
-            }
-            Some(_) => Ok(()),
-            None if !same_bytes(src, dst)? => Err(io::Error::other("the copy differs from the original")),
-            None => Ok(()),
-        }
+        Ok(copied)
     })();
     drop(out);
+    let r = r.and_then(|copied| {
+        verify(copied)?;
+        Ok(copied)
+    });
     if r.is_err() {
         let _ = fs::remove_file(dst);
+        if let Some(reader) = crate::originals::bound_reader() {
+            if let Some(path) = src.to_str() {
+                reader.discard_candidate(path);
+            }
+            if let Some(path) = dst.to_str() {
+                reader.discard_candidate(path);
+            }
+        }
     }
     r
 }
 
-/// [`lightcraft_preview::hash_bytes`] of a file's content, read in chunks.
-fn hash_file(path: &Path) -> io::Result<lightcraft_preview::Hash128> {
-    let mut f = File::open(path)?;
-    let mut h = lightcraft_preview::Hasher128::new();
-    let mut buf = vec![0u8; 1 << 20];
-    loop {
-        let n = fill(&mut f, &mut buf)?;
-        if n == 0 {
-            return Ok(h.finish());
-        }
-        h.update(buf.get(..n).unwrap_or(&[]));
+fn stream_copy(out: &mut File, src: &Path) -> io::Result<(lightcraft_preview::Hash128, u64)> {
+    struct CopyWriter<'a> {
+        out: &'a mut File,
+        src: &'a Path,
+        wrote: bool,
     }
+    impl Write for CopyWriter<'_> {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            let n = self.out.write(bytes)?;
+            if n > 0 && !self.wrote {
+                self.wrote = true;
+                if injected(Fault::Grow) {
+                    grow_source(self.src)?;
+                }
+            }
+            Ok(n)
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            self.out.flush()
+        }
+    }
+    let path = src.to_str().ok_or_else(|| io::Error::other("original path is not UTF-8"))?;
+    let fp = crate::originals::copy_whole(path, &mut CopyWriter { out, src, wrote: false })?;
+    Ok((fp.hash, fp.len()))
+}
+
+fn hash_file(path: &Path) -> io::Result<lightcraft_preview::Hash128> {
+    crate::originals::hash_whole(path.to_str().ok_or_else(|| io::Error::other("original path is not UTF-8"))?).map(|fp| fp.hash)
 }
 
 /// Do two files hold the same bytes?
 pub(crate) fn same_bytes(a: &Path, b: &Path) -> io::Result<bool> {
+    let _binding = crate::originals::standalone_binding();
     if fs::metadata(a)?.len() != fs::metadata(b)?.len() {
         return Ok(false);
     }
     let (mut fa, mut fb) = (File::open(a)?, File::open(b)?);
-    let (mut ba, mut bb) = (vec![0u8; 1 << 20], vec![0u8; 1 << 20]);
-    loop {
-        let (na, nb) = (fill(&mut fa, &mut ba)?, fill(&mut fb, &mut bb)?);
-        if na != nb || ba.get(..na) != bb.get(..nb) {
-            return Ok(false);
-        }
-        if na == 0 {
-            return Ok(true);
-        }
+    same_open_bytes(a, b, &mut fa, &mut fb)
+}
+
+fn current_name_matches(path: &Path, held: &File, before: &fs::Metadata) -> bool {
+    if !fs::symlink_metadata(path).is_ok_and(|m| m.is_file() && same_file_state(before, &m)) {
+        return false;
+    }
+    #[cfg(windows)]
+    {
+        let Ok(current) = File::open(path) else { return false };
+        lightcraft_file_identity_sys::identity(held).ok().is_some_and(|id| lightcraft_file_identity_sys::identity(&current).ok() == Some(id))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = held;
+        true
     }
 }
 
-/// Read until `buf` is full or the file ends.
-fn fill(f: &mut File, buf: &mut [u8]) -> io::Result<usize> {
-    let mut n = 0;
-    while let Some(rest) = buf.get_mut(n..).filter(|r| !r.is_empty()) {
-        match f.read(rest) {
-            Ok(0) => break,
-            Ok(k) => n += k,
-            Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
-            Err(e) => return Err(e),
-        }
+fn same_handle_identity(a: &fs::Metadata, b: &fs::Metadata) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        a.dev() != 0 && a.ino() != 0 && a.dev() == b.dev() && a.ino() == b.ino()
     }
-    Ok(n)
+    #[cfg(not(unix))]
+    {
+        let _ = (a, b);
+        false
+    }
+}
+fn same_file_state(a: &fs::Metadata, b: &fs::Metadata) -> bool {
+    let same = a.is_file() && b.is_file() && a.len() == b.len() && a.modified().ok().zip(b.modified().ok()).is_some_and(|(a, b)| a == b);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        same && same_handle_identity(a, b) && a.ctime() == b.ctime() && a.ctime_nsec() == b.ctime_nsec()
+    }
+    #[cfg(not(unix))]
+    {
+        same
+    }
+}
+fn same_open_bytes(a: &Path, b: &Path, fa: &mut File, fb: &mut File) -> io::Result<bool> {
+    let a = a.to_str().ok_or_else(|| io::Error::other("original path is not UTF-8"))?;
+    let b = b.to_str().ok_or_else(|| io::Error::other("original path is not UTF-8"))?;
+    crate::originals::compare_open(a, b, fa, fb)
 }

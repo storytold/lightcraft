@@ -259,3 +259,53 @@ fn browsing_again_forgets_untouched_records_of_deleted_files() {
     assert_eq!(s.catalog.to_snapshot(), expect);
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn f_inventory_learned_local_proxy_is_kept_and_can_be_discarded() {
+    use lightcraft_catalog::Op;
+    let root = temp_dir("learned-proxy");
+    let (folder, lib) = (root.join("photos"), root.join("lib"));
+    let source = folder.join("a.png");
+    png(&source, 1);
+    let clock = Arc::new(Mutex::new("2026-08-01T10:00:00".to_string()));
+    let mut s = open(&lib, &clock);
+    s.execute("library.browse", &json!({"path": folder})).unwrap();
+    let p = s.catalog.photos().next().unwrap().clone();
+    s.catalog
+        .apply(Op::SetContent {
+            id: p.id,
+            width: p.width,
+            height: p.height,
+            file_size: p.file_size,
+            content_hash: None,
+            preview_only: None,
+            preview_checked: String::new(),
+        })
+        .unwrap();
+    s.execute("library.smartPreviews", &json!({"ids":[p.id.0]})).unwrap();
+    s.apply_system(Op::SetContent {
+        id: p.id,
+        width: p.width,
+        height: p.height,
+        file_size: p.file_size,
+        content_hash: Some("learned".into()),
+        preview_only: None,
+        preview_checked: String::new(),
+    })
+    .unwrap();
+    let mut baseline = (**s.catalog.photo(p.id).unwrap()).clone();
+    baseline.set_local_baseline();
+    s.catalog.apply(Op::RemovePhoto { id: p.id }).unwrap();
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(baseline) }).unwrap();
+    look_elsewhere(&mut s);
+    set(&clock, "2027-08-01T10:00:00");
+    assert!(s.forget_local(true, Some(1)).evict.is_empty());
+    std::fs::remove_file(source).unwrap();
+    assert_eq!(s.forget_gone_from(&folder.to_string_lossy(), false, &[]), 0);
+    assert_eq!(s.execute("photo.smartPreview", &json!({"id":p.id.0})).unwrap()["smartPreview"], true);
+    let r = s.execute("library.smartPreviews", &json!({"ids":[p.id.0],"discard":true})).unwrap();
+    assert_eq!(r["removed"], 1);
+    assert_eq!(s.execute("photo.smartPreview", &json!({"id":p.id.0})).unwrap()["smartPreview"], false);
+    drop(s);
+    std::fs::remove_dir_all(root).unwrap();
+}

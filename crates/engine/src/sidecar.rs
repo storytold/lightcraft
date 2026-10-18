@@ -502,14 +502,24 @@ fn file_path(p: &Photo) -> Option<&str> {
 
 /// The XMP packet that describes a photo on disk: its sidecar, else (raw/DNG) the embedded XMP.
 pub fn read_packet(original: &str, kind: MediaKind, naming: SidecarNaming) -> Option<(String, PathBuf)> {
+    read_packet_with(original, kind, naming, None)
+}
+pub(crate) fn read_packet_with(original: &str, kind: MediaKind, naming: SidecarNaming, bytes: Option<&[u8]>) -> Option<(String, PathBuf)> {
     if let Some(sc) = find_sidecar(original, naming)
         && let Ok(s) = std::fs::read_to_string(&sc)
     {
         return Some((s, sc));
     }
     if kind == MediaKind::Raw {
-        let bytes = std::fs::read(original).ok()?;
-        let x = lightcraft_meta::embedded(&bytes).xmp?;
+        let owned;
+        let bytes = match bytes {
+            Some(bytes) => bytes,
+            None => {
+                owned = crate::originals::read_whole(original).ok()?;
+                &owned
+            }
+        };
+        let x = lightcraft_meta::embedded(bytes).xmp?;
         return Some((x, PathBuf::from(original)));
     }
     None
@@ -677,6 +687,7 @@ impl Session {
 
     /// Like [`Session::read_sidecar_op`], retaining transient diagnostics for the command report.
     pub fn read_sidecar_op_with_warnings(&self, id: PhotoId) -> Result<Option<(Op, PathBuf, Vec<crate::import::ImportWarning>)>> {
+        let _binding = self.originals.bind();
         let p = self.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?;
         let Some(orig) = file_path(p) else { return Ok(None) };
         let Some((packet, from)) = read_packet(orig, p.kind, self.sidecar_naming(id)) else { return Ok(None) };

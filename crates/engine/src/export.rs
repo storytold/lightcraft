@@ -1558,7 +1558,9 @@ pub fn output_size(p: &lightcraft_catalog::Photo, o: &ExportOptions) -> (usize, 
 /// Render photo `id` at the requested size and encode it (or copy / convert its original for
 /// [`ExportFormat::Original`] / [`ExportFormat::Dng`]).
 pub fn export_photo(session: &mut crate::Session, id: lightcraft_catalog::PhotoId, o: &ExportOptions, seq: usize) -> Result<Exported, String> {
-    prepare_export(session, id, o, seq)?.run()
+    let result = prepare_export(session, id, o, seq)?.run();
+    let saved = session.persist().map_err(|e| e.to_string());
+    saved.and(result)
 }
 
 /// One photo's export, set up from the session ([`prepare_export`]). [`PreparedExport::run`] does
@@ -1665,7 +1667,7 @@ fn prepare_guarded(
         let weight = (p.file_size as usize).saturating_add(if dng.is_some() { full_px.saturating_mul(6) } else { 0 });
         let work = Work::File {
             path: path.clone(),
-            read: session.media.file_bytes.clone(),
+            read: Some(session.media.file_bytes.clone().unwrap_or_else(|| session.originals.reader())),
             packet: crate::sidecar::sidecar_packet_with(p, &session.catalog, removes_location(p, &session.catalog, o)),
             dng,
             quality: o.quality,
@@ -1746,7 +1748,7 @@ impl PreparedExport {
             Work::File { path, read, packet, dng, quality, lossy_edge, label, size, remove_location } => {
                 let bytes = match &read {
                     Some(r) => r(&path)?,
-                    None => std::fs::read(&path).map_err(|e| format!("{path}: {e}"))?,
+                    None => crate::originals::read_whole(&path).map_err(|e| format!("{path}: {e}"))?,
                 };
                 let Some(dng) = dng else {
                     // the file is copied byte for byte: refuse rather than leak a location it embeds
@@ -1920,7 +1922,9 @@ pub fn export_batch(
     exists: &dyn Fn(&str) -> bool,
 ) -> Result<Vec<serde_json::Value>, String> {
     let items = prepare_batch(session, ids, o)?;
-    run_batch(items, o, to, write, exists, true, &mut |_, _| true)
+    let result = run_batch(items, o, to, write, exists, true, &mut |_, _| true);
+    let saved = session.persist().map_err(|e| e.to_string());
+    saved.and(result)
 }
 
 /// Write an exported or rendered file on disk: its folder is created if needed, and the file is
@@ -1963,7 +1967,8 @@ fn sidecar_path(main: &str, ext: &str) -> String {
 /// Several photos render side by side ([`export_parallelism`], within the memory of
 /// [`crate::memory::export_gate`]), so one photo's decode, encode or GPU wait overlaps another's
 /// render (issue #496). Paths, writes, results and `progress` still follow the batch order, and the
-/// files are the same as one at a time.
+/// files are the same as one at a time. After completion (including errors or cancellation),
+/// the owner must call `Session::persist` to accept and save hashes learned by detached reads.
 pub fn run_batch(
     items: Vec<PreparedExport>,
     o: &ExportOptions,

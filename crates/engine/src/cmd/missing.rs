@@ -71,9 +71,11 @@ fn relink(s: &mut Session, p: &Value) -> Result<Value> {
     // the file may differ from the one imported (another export, a raw that decodes now or not):
     // its size, dimensions and preview-only state follow it
     let mut ops = vec![relink_op(id, &abs)];
+    let mut evidence = None;
     if s.media.file_probe.is_some()
         && let (Some(Ok(info)), Some(ph)) = (crate::import::probe_paths(s, std::slice::from_ref(&abs)).pop(), s.catalog.photo(id))
     {
+        evidence = info.native_read.clone();
         ops.extend(crate::cmd::convert::content_op(id, ph, info));
     }
     let op = match <[Op; 1]>::try_from(ops) {
@@ -81,6 +83,9 @@ fn relink(s: &mut Session, p: &Value) -> Result<Value> {
         Err(ops) => Op::Batch { ops },
     };
     s.commit("Relink Photo", op)?;
+    if let Some(evidence) = evidence {
+        s.originals.adopt_probe(s, id, &evidence);
+    }
     s.media.forget(id);
     Ok(json!({"id": id.0, "path": abs}))
 }
@@ -92,7 +97,7 @@ fn stored_hash(p: &Photo) -> Option<&str> {
 
 /// The content hash of the file at `path` (as import computes it), if it can be read.
 fn file_hash(path: &str) -> Option<String> {
-    std::fs::read(path).ok().map(|b| lightcraft_preview::hash_bytes(&b).to_string())
+    crate::originals::hash_whole(path).ok().map(|fp| fp.hash.to_string())
 }
 
 /// An in-scope photo ([`checked_path`]) as Find Missing Photos sees it: its file, the size and
@@ -213,6 +218,7 @@ impl FindPlan {
 /// Files that are already some photo's original, or that another photo was just matched with,
 /// are not used.
 pub fn plan_find_missing(candidates: &[FindCandidate], folder: &str) -> std::result::Result<FindPlan, String> {
+    let _standalone = crate::originals::standalone_binding();
     if !Path::new(folder).is_dir() {
         return Err(format!("{folder}: not a folder"));
     }

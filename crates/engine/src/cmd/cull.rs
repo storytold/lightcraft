@@ -91,10 +91,12 @@ fn find_similar(s: &mut Session, p: &Value) -> Result<Value> {
     let min = p.get("similarity").and_then(Value::as_f64).unwrap_or(0.8) as f32;
     let all: Vec<PhotoId> = s.catalog.photos().filter(|q| q.in_library()).map(|q| q.id).collect();
     let sig = |s: &mut Session, id: PhotoId| -> Option<[f32; 64]> {
-        let key = s.catalog.photo(id).map(|p| crate::media::content_key(p))?;
-        if let Some(v) = s.signatures.get(&key) {
+        let photo = s.cache_photo(id)?;
+        let keys: Vec<_> = s.media.content_keys(&photo).iter().map(|key| s.media.identities.tag(&photo, key)).collect();
+        if let Some(v) = keys.iter().find_map(|key| s.signatures.get(key)) {
             return Some(*v);
         }
+        let key = keys.into_iter().next()?;
         let src = s.source_now(id, crate::media::SourceLevel::Thumb).ok()?;
         let v = lightcraft_pipeline::cull::signature(&src);
         s.signatures.insert(key, v);
@@ -138,4 +140,39 @@ pub fn specs() -> Vec<CommandSpec> {
             analyze
         ),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn f_inventory_signatures_are_not_reused_after_source_retirement() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        let mut s = Session::new();
+        let p = lightcraft_catalog::Photo::new(
+            PhotoId(1),
+            lightcraft_catalog::Source::File { path: "signature.raw".into() },
+            "signature.raw",
+            "RAW",
+            16,
+            16,
+            "",
+        );
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(p.clone()) }).unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let seen = calls.clone();
+        s.media.file_loader = Some(Arc::new(move |_, _| {
+            seen.fetch_add(1, Ordering::Relaxed);
+            Ok((lightcraft_raster::Rgb32f::new(16, 16), Default::default()))
+        }));
+        s.execute("library.findSimilar", &json!({"id":1})).unwrap();
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+        s.media.identities.invalidate(&p, None, || ()).unwrap();
+        s.media.forget(p.id);
+        s.execute("library.findSimilar", &json!({"id":1})).unwrap();
+        assert_eq!(calls.load(Ordering::Relaxed), 2);
+    }
 }

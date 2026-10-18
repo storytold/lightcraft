@@ -448,10 +448,16 @@ impl MoveFs for RealFs {
             .find(|p| !self.exists(p))
             .ok_or_else(|| std::io::Error::other(format!("no free temporary name beside {}", b.display())))?;
         let copied = (|| {
-            let mut from = std::fs::File::open(a)?;
+            let _binding = crate::originals::standalone_binding();
             let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(&partial)?;
-            std::io::copy(&mut from, &mut f)?;
-            f.sync_all()
+            let _capture = crate::originals::ReadCapture::new();
+            let path = a.to_string_lossy();
+            let fp = crate::originals::copy_whole(&path, &mut f)?;
+            let result = f.sync_all();
+            if let Some(reader) = crate::originals::bound_reader() {
+                reader.discard_scratch(&path, &fp);
+            }
+            result
         })();
         let placed = copied.and_then(|()| self.rename_no_replace(&partial, b));
         if placed.is_err() {
@@ -486,37 +492,12 @@ fn move_across_volumes(fs: &RealFs, a: &Path, b: &Path) -> std::io::Result<()> {
 /// Whether files `a` and `b` hold the same bytes: lengths first, then 1 MiB chunks at a time, so
 /// a large raw or video is never read into memory whole.
 fn same_contents(a: &Path, b: &Path) -> std::io::Result<bool> {
-    const CHUNK: usize = 1 << 20;
+    let _binding = crate::originals::standalone_binding();
     let (mut fa, mut fb) = (std::fs::File::open(a)?, std::fs::File::open(b)?);
     if fa.metadata()?.len() != fb.metadata()?.len() {
         return Ok(false);
     }
-    let (mut ba, mut bb) = (vec![0u8; CHUNK], vec![0u8; CHUNK]);
-    loop {
-        let n = read_full(&mut fa, &mut ba)?;
-        let m = read_full(&mut fb, &mut bb)?;
-        if n != m || ba.get(..n) != bb.get(..m) {
-            return Ok(false);
-        }
-        if n == 0 {
-            return Ok(true);
-        }
-    }
-}
-
-/// Fill `buf` from `r` as far as the file goes; the number of bytes read (less than the buffer
-/// only at the end of the file).
-fn read_full(r: &mut impl std::io::Read, buf: &mut [u8]) -> std::io::Result<usize> {
-    let mut filled = 0;
-    while let Some(rest) = buf.get_mut(filled..).filter(|r| !r.is_empty()) {
-        match r.read(rest) {
-            Ok(0) => break,
-            Ok(k) => filled = filled.saturating_add(k),
-            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
-            Err(e) => return Err(e),
-        }
-    }
-    Ok(filled)
+    crate::originals::compare_open(&a.to_string_lossy(), &b.to_string_lossy(), &mut fa, &mut fb)
 }
 
 /// `from` → `to` differs only in letter case and `to` is that very file (a case-insensitive
@@ -1051,6 +1032,7 @@ impl Session {
     /// (all or nothing), then commit one undoable op, labelled `label(count)`, that points the
     /// photos (and their virtual copies) at the new paths. Undo moves the files back.
     pub(crate) fn apply_file_plans(&mut self, fs: &dyn MoveFs, plans: &[RenamePlan], label: &dyn Fn(usize) -> String) -> Result<usize> {
+        let _binding = self.originals.bind();
         // A partly completed rename can already have the requested photo name. Repair
         // its sidecars before treating that empty move list as a successful retry.
         self.repair_sidecars_with(fs)?;
@@ -1219,6 +1201,31 @@ pub(crate) mod tests {
         assert!(same_contents(&a, &b).unwrap());
         assert!(same_contents(&a, &dir.join("missing")).is_err());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn g_cross_volume_stream_and_verification_learn_without_an_extra_original_pass() {
+        let dir = crate::tests_xmp::temp_dir("g-rename-cross-volume");
+        std::fs::create_dir_all(&dir).unwrap();
+        let (a, b) = (dir.join("original.dng"), dir.join("moved.dng"));
+        let bytes = crate::tests_xmp::synthetic_dng_with(None, Default::default());
+        std::fs::write(&a, &bytes).unwrap();
+        let mut s = Session::new().with_fs();
+        let id = PhotoId(901);
+        let mut photo = Photo::new(id, Source::File { path: a.to_string_lossy().into_owned() }, "original.dng", "DNG", 8, 8, "");
+        photo.file_size = bytes.len() as u64;
+        s.commit("Add", Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        let before = crate::originals::read_bytes();
+        s.original_reader().in_scope(|| move_across_volumes(&RealFs, &a, &b)).unwrap();
+        assert!(!a.exists());
+        assert_eq!(std::fs::read(&b).unwrap(), bytes);
+        s.commit("Move", Op::SetFile { id, file_name: "moved.dng".into(), source: Source::File { path: b.to_string_lossy().into_owned() } }).unwrap();
+        s.persist().unwrap();
+        assert_eq!(s.catalog.photo(id).unwrap().content_hash, Some(lightcraft_preview::hash_bytes(&bytes).to_string()));
+        assert_eq!(s.originals.counts().0, 3, "one streamed copy plus existing source/destination verification");
+        assert_eq!(crate::originals::read_bytes() - before, 3 * bytes.len() as u64);
+        drop(s);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     /// A model volume: files by path with contents; case-insensitive (default APFS/NTFS) or

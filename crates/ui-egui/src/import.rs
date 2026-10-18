@@ -91,6 +91,8 @@ pub struct ImportDialog {
     /// The candidate clicked last: where a Shift-click range starts ([`ImportDialog::click`]).
     #[serde(skip)]
     pub last_clicked: Option<usize>,
+    #[serde(skip)]
+    pub scan_id: Option<u64>,
 }
 
 /// A candidate's file type, as the review groups them: its format, or its extension when the
@@ -270,12 +272,99 @@ pub struct ImportTask {
     run: Option<ImportRun>,
     /// The import's row in the activity stack (its ✕ and `activity.cancel` set the run's cancel flag).
     guard: Option<lightcraft_engine::activity::TaskGuard>,
+    scan_id: Option<u64>,
+    completion: std::sync::Arc<std::sync::Mutex<ImportCompletion>>,
+}
+
+#[derive(Debug, Default)]
+struct ImportCompletion {
+    id: u64,
+    started: Option<web_time::Instant>,
+    worker_done: bool,
+    worker_failed: bool,
+    owner_detached: bool,
+    emitted: bool,
+    had_errors: bool,
+    persist_failed: bool,
+    batches: usize,
+    persist: &'static str,
+    counts: Value,
+}
+impl ImportCompletion {
+    fn new(mode: &str) -> Self {
+        let (id, started) = lightcraft_engine::import::begin_import_log("desktop", mode);
+        Self { id, started: Some(started), worker_done: true, persist: "not_applicable", ..Default::default() }
+    }
+    fn snapshot(&mut self, task: &ImportTask) {
+        self.counts = json!({"done":task.done,"total":task.total,"scanned":task.done,"imported":task.imported,"restored":task.restored,"duplicates":task.duplicates,"failed":task.failed,"moved":task.moved,"kept":task.kept,"scanId":task.scan_id.unwrap_or(0),"ownerDetached":self.owner_detached});
+    }
+    fn emit(&mut self, status: &'static str, cause: &'static str, persist: &'static str) {
+        if self.emitted {
+            return;
+        }
+        self.emitted = true;
+        if let Some(started) = self.started {
+            lightcraft_engine::import::finish_import_log(self.id, started, status, cause, persist, &self.counts);
+        }
+    }
+    fn detached_terminal(&mut self) {
+        if self.owner_detached && self.worker_done {
+            self.emit("cancelled", "owner_detached", "unknown");
+        }
+    }
+}
+
+impl Drop for ImportTask {
+    fn drop(&mut self) {
+        if let Some(run) = &self.run {
+            run.cancel.store(true, Ordering::Relaxed);
+        }
+        let mut completion = self.completion.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if completion.emitted || completion.started.is_none() {
+            return;
+        }
+        completion.owner_detached = true;
+        completion.snapshot(self);
+        if let Some(run) = &self.run {
+            completion.counts["done"] = json!(run.done.load(Ordering::Relaxed));
+            completion.counts["scanned"] = completion.counts["done"].clone();
+            completion.counts["total"] = json!(run.total.load(Ordering::Relaxed));
+        }
+        log::info!(target: "lightcraft::import", "kind=import run_id={} event=cancel_requested owner_detached=true elapsed_ms={} last_persist={}", completion.id, completion.started.map_or(0, |s| s.elapsed().as_millis()), completion.persist);
+        completion.detached_terminal();
+    }
 }
 
 impl ImportTask {
     /// An import of `paths` (files or folders) with `library.import` params (without `paths`).
     pub fn new(paths: Vec<String>, params: Value, undo0: usize, browse: bool) -> Self {
-        ImportTask { total: paths.len(), queue: paths, params, undo0, browse, ..Default::default() }
+        let completion = ImportCompletion::new(params.get("mode").and_then(Value::as_str).unwrap_or("add"));
+        ImportTask {
+            total: paths.len(),
+            queue: paths,
+            done: 0,
+            params,
+            imported: 0,
+            restored: 0,
+            duplicates: 0,
+            existing: Vec::new(),
+            failed: 0,
+            moved: 0,
+            kept: 0,
+            warnings: Vec::new(),
+            undo0,
+            first: None,
+            browse,
+            cancelled: false,
+            auto: false,
+            keep_selection: None,
+            left: None,
+            moved_on: false,
+            run: None,
+            guard: None,
+            scan_id: None,
+            completion: std::sync::Arc::new(std::sync::Mutex::new(completion)),
+        }
     }
 
     /// An Auto Import (see [`ImportTask::auto`]).
@@ -308,6 +397,7 @@ struct ImportRun {
     now: String,
     album: Option<u64>,
     album_name: Option<String>,
+    completion: std::sync::Arc<std::sync::Mutex<ImportCompletion>>,
 }
 
 impl std::fmt::Debug for ImportRun {
@@ -320,6 +410,12 @@ impl Drop for ImportRun {
     /// A dropped import (replaced, or the app closing) stops its worker at the next file.
     fn drop(&mut self) {
         self.cancel.store(true, Ordering::Relaxed);
+        let mut completion = self.completion.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        #[cfg(target_arch = "wasm32")]
+        {
+            completion.worker_done = true;
+        }
+        completion.detached_terminal();
     }
 }
 
@@ -330,12 +426,14 @@ impl ImportRun {
         album: Option<u64>,
         album_name: Option<String>,
         ctx: &egui::Context,
+        completion: std::sync::Arc<std::sync::Mutex<ImportCompletion>>,
     ) -> Result<Self, String> {
         let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let (total, done) = (job.total.clone(), job.done.clone());
         let (opts, now) = (job.opts.clone(), job.now().to_string());
-        let runner = Self::spawn(job, queue, cancel.clone(), ctx)?;
-        Ok(ImportRun { runner, cancel, total, done, opts, now, album, album_name })
+        completion.lock().unwrap_or_else(std::sync::PoisonError::into_inner).worker_done = false;
+        let runner = Self::spawn(job, queue, cancel.clone(), ctx, completion.clone())?;
+        Ok(ImportRun { runner, cancel, total, done, opts, now, album, album_name, completion })
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -344,27 +442,38 @@ impl ImportRun {
         queue: Vec<String>,
         cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
         ctx: &egui::Context,
+        completion: std::sync::Arc<std::sync::Mutex<ImportCompletion>>,
     ) -> Result<Runner, String> {
         let (tx, rx) = std::sync::mpsc::channel();
         let ctx = ctx.clone();
+        let worker_done = job.done.clone();
+        let worker_total = job.total.clone();
         let work = move || {
-            let files = job.expand(&queue);
-            for chunk in files.chunks(lightcraft_engine::import::batch_size()) {
-                if cancel.load(Ordering::Relaxed) {
-                    break;
+            let failed = lightcraft_engine::guard::catch("import", || {
+                let files = job.expand(&queue);
+                for chunk in files.chunks(lightcraft_engine::import::batch_size()) {
+                    if cancel.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let prepared = job.prepare_files(chunk.to_vec(), &cancel);
+                    if let Err(unsent) = tx.send(prepared) {
+                        unsent.0.rollback();
+                        break;
+                    }
+                    ctx.request_repaint();
                 }
-                let prepared = match lightcraft_engine::guard::catch("import", || job.prepare_files(chunk.to_vec(), &cancel)) {
-                    Ok(p) => p,
-                    Err(_) => break, // logged; the files readied so far are added
-                };
-                if let Err(unsent) = tx.send(prepared) {
-                    // the import was dropped: nothing will add these, so take back what a Move placed
-                    unsent.0.rollback();
-                    break;
-                }
-                ctx.request_repaint();
-            }
+            })
+            .is_err();
             ctx.request_repaint();
+            let mut completion = completion.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            completion.worker_failed |= failed;
+            completion.worker_done = true;
+            if completion.owner_detached {
+                completion.counts["done"] = json!(worker_done.load(Ordering::Relaxed));
+                completion.counts["scanned"] = completion.counts["done"].clone();
+                completion.counts["total"] = json!(worker_total.load(Ordering::Relaxed));
+            }
+            completion.detached_terminal();
         };
         std::thread::Builder::new().name("lc-import".into()).spawn(work).map(|_| Runner::Thread(rx)).map_err(|e| format!("could not start: {e}"))
     }
@@ -375,6 +484,7 @@ impl ImportRun {
         queue: Vec<String>,
         _cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
         _ctx: &egui::Context,
+        _completion: std::sync::Arc<std::sync::Mutex<ImportCompletion>>,
     ) -> Result<Runner, String> {
         Ok(Runner::Inline { job: Box::new(job), queue, files: None })
     }
@@ -420,6 +530,7 @@ impl ImportRun {
 pub struct ScanTask {
     progress: std::sync::Arc<ScanProgress>,
     rx: std::sync::mpsc::Receiver<ScanOutput>,
+    received: bool,
     /// Open the review with "copy into the library" checked (a camera / card).
     pub copy: bool,
     /// Open the review with this album chosen (an album's context menu ▸ Import…).
@@ -430,6 +541,14 @@ pub struct ScanTask {
     sources: Vec<String>,
     /// The scan's row in the activity stack (its ✕ and `activity.cancel` set `progress.cancel`).
     guard: lightcraft_engine::activity::TaskGuard,
+}
+
+impl Drop for ScanTask {
+    fn drop(&mut self) {
+        if !self.received {
+            self.progress.cancel.store(true, Ordering::Relaxed);
+        }
+    }
 }
 
 /// The activity row of a scan: the review's ("Scanning folder") or the Local view's ("Reading folder").
@@ -472,19 +591,31 @@ pub fn open(app: &mut LightcraftApp, paths: Vec<String>) -> Result<Value, String
         return Err("a scan is already running".into());
     }
     let sources = paths.clone();
-    let (input, paths) = ScanInput::new(&mut app.session, &paths);
     let progress = std::sync::Arc::new(ScanProgress::default());
+    progress.begin();
+    progress.track_delivery();
+    let (input, paths) = ScanInput::for_import(&mut app.session, &paths);
     let (tx, rx) = std::sync::mpsc::channel();
     let p = progress.clone();
     let job = move || {
-        let _ = tx.send(scan_with(input, &paths, &p));
+        if lightcraft_engine::guard::catch("scan", || {
+            let output = scan_with(input, &paths, &p);
+            p.delivered(tx.send(output).is_ok());
+        })
+        .is_err()
+        {
+            p.worker_error();
+        }
     };
     #[cfg(not(target_arch = "wasm32"))]
-    std::thread::spawn(job);
+    std::thread::Builder::new().name("lc-scan".into()).spawn(job).map_err(|e| {
+        progress.worker_error();
+        format!("could not start scan: {e}")
+    })?;
     #[cfg(target_arch = "wasm32")]
     job();
     let guard = scan_guard(app, &progress, false);
-    app.scan = Some(ScanTask { progress, rx, copy: false, album: None, browse: false, sources, guard });
+    app.scan = Some(ScanTask { progress, rx, received: false, copy: false, album: None, browse: false, sources, guard });
     Ok(json!({"scanning": true}))
 }
 
@@ -517,39 +648,51 @@ pub fn browse(app: &mut LightcraftApp, path: &str, subfolders: Option<bool>) -> 
     app.session.source = lightcraft_engine::LibrarySource::Folder;
     // the photos the library already knows from this folder show at once: keep or pick the active one
     app.session.keep_active_in_view();
-    let (input, _) = ScanInput::new(&mut app.session, std::slice::from_ref(&dir_s));
     let progress = std::sync::Arc::new(ScanProgress::default());
+    progress.begin();
+    progress.track_delivery();
+    let (input, _) = ScanInput::new(&mut app.session, std::slice::from_ref(&dir_s));
     let (tx, rx) = std::sync::mpsc::channel();
     let p = progress.clone();
     let root = dir_s.clone();
     let job = move || {
-        let files: Vec<String> = if subfolders {
-            lightcraft_engine::import::expand(&[root], None)
-        } else {
-            let mut v: Vec<String> = std::fs::read_dir(&root)
-                .map(|rd| {
-                    rd.flatten()
-                        .map(|e| e.path())
-                        .filter(|f| {
-                            f.is_file()
-                                && lightcraft_engine::import::is_supported(f)
-                                && !f.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.'))
-                        })
-                        .map(|f| f.to_string_lossy().to_string())
-                        .collect()
-                })
-                .unwrap_or_default();
-            v.sort();
-            v
-        };
-        let _ = tx.send(scan_with(input, &files, &p));
+        if lightcraft_engine::guard::catch("scan", || {
+            let files: Vec<String> = if subfolders {
+                lightcraft_engine::import::expand(&[root], None)
+            } else {
+                let mut v: Vec<String> = std::fs::read_dir(&root)
+                    .map(|rd| {
+                        rd.flatten()
+                            .map(|e| e.path())
+                            .filter(|f| {
+                                f.is_file()
+                                    && lightcraft_engine::import::is_supported(f)
+                                    && !f.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.'))
+                            })
+                            .map(|f| f.to_string_lossy().to_string())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                v.sort();
+                v
+            };
+            let output = scan_with(input, &files, &p);
+            p.delivered(tx.send(output).is_ok());
+        })
+        .is_err()
+        {
+            p.worker_error();
+        }
     };
     #[cfg(not(target_arch = "wasm32"))]
-    std::thread::spawn(job);
+    std::thread::Builder::new().name("lc-scan".into()).spawn(job).map_err(|e| {
+        progress.worker_error();
+        format!("could not start scan: {e}")
+    })?;
     #[cfg(target_arch = "wasm32")]
     job();
     let guard = scan_guard(app, &progress, true);
-    app.scan = Some(ScanTask { progress, rx, copy: false, album: None, browse: true, sources: Vec::new(), guard });
+    app.scan = Some(ScanTask { progress, rx, received: false, copy: false, album: None, browse: true, sources: Vec::new(), guard });
     app.renderer.forget_imports();
     Ok(json!({"path": dir_s, "subfolders": subfolders, "scanning": true}))
 }
@@ -578,7 +721,8 @@ pub fn poll_scan(app: &mut LightcraftApp, ctx: &egui::Context) {
             return;
         }
     };
-    let Some(task) = app.scan.take() else { return };
+    let Some(mut task) = app.scan.take() else { return };
+    task.received = true;
     if task.progress.cancel.load(Ordering::Relaxed) {
         return;
     }
@@ -597,7 +741,9 @@ pub fn poll_scan(app: &mut LightcraftApp, ctx: &egui::Context) {
             let undo0 = app.session.undo.len();
             let total = queue.len();
             let _ = total;
-            app.import = Some(ImportTask::new(queue, json!({"mode": "add", "local": true}), undo0, true));
+            let mut import = ImportTask::new(queue, json!({"mode": "add", "local": true}), undo0, true);
+            import.scan_id = task.progress.run_id();
+            app.import = Some(import);
         }
         return;
     }
@@ -607,6 +753,7 @@ pub fn poll_scan(app: &mut LightcraftApp, ctx: &egui::Context) {
     }
     app.renderer.forget_imports();
     let mut d = ImportDialog::new(out.candidates);
+    d.scan_id = task.progress.run_id();
     let trashed = d
         .candidates
         .iter()
@@ -619,7 +766,7 @@ pub fn poll_scan(app: &mut LightcraftApp, ctx: &egui::Context) {
     d.copy = task.copy;
     // only an album the review offers (it may have been deleted while the scan ran)
     d.album = task.album.filter(|id| app.session.catalog.album(lightcraft_catalog::AlbumId(*id)).is_some_and(|a| !a.folder && !a.is_smart()));
-    d.sources = task.sources;
+    d.sources = std::mem::take(&mut task.sources);
     app.ui.dialog = Some(crate::state::Dialog::Import { opts: Box::new(d) });
 }
 
@@ -677,7 +824,9 @@ pub fn start(app: &mut LightcraftApp, d: &ImportDialog) -> Result<Value, String>
         }
     }
     let total = queue.len();
-    app.import = Some(ImportTask::new(queue, params, undo0, false));
+    let mut task = ImportTask::new(queue, params, undo0, false);
+    task.scan_id = d.scan_id;
+    app.import = Some(task);
     app.renderer.forget_imports();
     Ok(json!({"importing": total}))
 }
@@ -704,7 +853,7 @@ pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
         let started = lightcraft_engine::cmd::library::import_params(&app.session, &p)
             .and_then(|req| Ok((lightcraft_engine::import::ImportJob::new(&mut app.session, req.opts)?, req.album, req.album_name)))
             .map_err(|e| e.to_string())
-            .and_then(|(job, album, name)| ImportRun::start(job, std::mem::take(&mut task.queue), album, name, ctx));
+            .and_then(|(job, album, name)| ImportRun::start(job, std::mem::take(&mut task.queue), album, name, ctx, task.completion.clone()));
         if task.auto {
             task.keep_selection = Some(app.session.selection.clone());
         }
@@ -715,6 +864,11 @@ pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
                 task.run = Some(run);
             }
             Err(e) => {
+                let mut completion = task.completion.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                completion.worker_done = true;
+                completion.snapshot(&task);
+                completion.emit("error", "start", "not_applicable");
+                drop(completion);
                 log::warn!("import: {e}");
                 app.toast(ctx, crate::i18n::tr_format!("Import failed: {e}", e = e));
                 return;
@@ -767,6 +921,13 @@ fn commit_batch(app: &mut LightcraftApp, task: &mut ImportTask, prepared: lightc
         let report = lightcraft_engine::import::commit_prepared(s, opts, now, prepared)?;
         lightcraft_engine::cmd::library::import_batch_done(s, report, album, album_name.as_deref())
     });
+    {
+        let mut completion = task.completion.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        completion.batches = completion.batches.saturating_add(1);
+        completion.had_errors |= r.is_err();
+        completion.persist_failed |= matches!(&r, Err(lightcraft_engine::EngineError::NotSaved(_))) || app.session.unsaved().is_some();
+        completion.persist = lightcraft_engine::import::import_persist_outcome(&app.session);
+    }
     match r {
         Ok(v) => {
             // a new album (named in the params) is created with the first photos; later batches join it
@@ -854,6 +1015,33 @@ fn xmp_warnings_text(warnings: &[ImportWarning]) -> String {
 /// The import is done (or cancelled): one undo step, show and select the first photo (unless the
 /// user chose another meanwhile), say what happened.
 fn finish(app: &mut LightcraftApp, ctx: &egui::Context, task: ImportTask) {
+    {
+        let mut completion = task.completion.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        completion.worker_done = true;
+        completion.snapshot(&task);
+        let persist = if completion.batches == 0 { "not_applicable" } else { lightcraft_engine::import::import_persist_outcome(&app.session) };
+        let status = if task.cancelled {
+            "cancelled"
+        } else if completion.worker_failed || completion.had_errors || task.failed > 0 || persist == "failed" {
+            "error"
+        } else {
+            "success"
+        };
+        let cause = if completion.worker_failed {
+            "worker"
+        } else if completion.persist_failed || persist == "failed" {
+            "persist"
+        } else if completion.had_errors {
+            "commit"
+        } else if task.failed > 0 {
+            "probe"
+        } else if task.cancelled {
+            "cancelled"
+        } else {
+            "none"
+        };
+        completion.emit(status, cause, persist);
+    }
     let steps = app.session.undo.len().saturating_sub(task.undo0);
     let plural = |n: usize| if n == 1 { "" } else { "s" };
     let label = if task.imported == 0 && task.restored > 0 {
@@ -1716,3 +1904,6 @@ mod tests {
         assert_eq!(d.checked, [true, true, false, false, true, true]);
     }
 }
+
+#[cfg(test)]
+pub(crate) mod lifecycle_tests;
