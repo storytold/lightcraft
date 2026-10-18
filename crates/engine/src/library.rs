@@ -35,6 +35,19 @@ use crate::{EngineError, LibrarySource, Result, Selection, Session};
 /// Library directory name inside the user's Pictures folder.
 pub const DEFAULT_NAME: &str = "LightCraft Library";
 
+/// A backup is refused where a library is wanted: it is restored, not worked in.
+fn refuse_backup(dir: &Path) -> Result<()> {
+    if lightcraft_catalog::backup::is_backup(dir) {
+        return Err(EngineError::Other(format!(
+            "{} is a backup, not a library to work in. Restore it (`library.restore`): into the library it is of, or into a folder of its own with `to`. \
+             (A folder that is to be worked in after all is a library once its {} is removed.)",
+            dir.display(),
+            lightcraft_catalog::backup::MARKER
+        )));
+    }
+    Ok(())
+}
+
 /// The library folder `path` names. A library is a folder; naming one of its own files
 /// (`catalog.snap`, `catalog.log`, `catalog.lock`) means the folder that holds it. Any other
 /// existing file is an error that says so, instead of the OS's "File exists" from creating the
@@ -497,6 +510,7 @@ impl Session {
             return Err(EngineError::LightroomCatalog { path: dir, catalog: place.catalog });
         }
         let dir = resolve_dir(&dir)?;
+        refuse_backup(&dir)?;
         if !dir.exists() {
             return Ok(dir);
         }
@@ -528,16 +542,10 @@ impl Session {
         if let Some(place) = crate::lightroom_folder::lightroom_catalog_at(&dir) {
             return Err(EngineError::LightroomCatalog { path: dir, catalog: place.catalog });
         }
-        // a backup is not worked in where it is (and not written to: no lock file, no log)
-        if lightcraft_catalog::backup::is_backup(&dir) {
-            return Err(EngineError::Other(format!(
-                "{} is a backup, not a library to work in. Restore it (`library.restore`): into the library it is of, or into a folder of its own with `to`. \
-                 (A folder that is to be worked in after all is a library once its {} is removed.)",
-                dir.display(),
-                lightcraft_catalog::backup::MARKER
-            )));
-        }
         let dir = resolve_dir(&dir)?;
+        // a backup is not worked in where it is (and not written to: no lock file, no log); also
+        // not when it is named by one of its files
+        refuse_backup(&dir)?;
         let open = || FsStore::open(&dir).map_err(|e| EngineError::Other(format!("can't open library {}: {e}", dir.display())));
         let stores = LibraryStores { catalog: Box::new(open()?), files: Box::new(open()?), on_disk: true, dir: dir.clone() };
         // the library open in this session (same directory): hand its lock over

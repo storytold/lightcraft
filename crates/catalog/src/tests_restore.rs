@@ -96,7 +96,7 @@ fn a_restored_library_is_the_backup_and_what_it_replaced_is_kept() {
     // the backup is untouched, and not shared with the library (which goes on changing)
     assert_eq!(backup::check(&made.dir).unwrap().contents, made.contents);
     for name in made.contents.keys() {
-        assert!(!cfg!(unix) || !same_file(&made.dir.join(name), &dir.join(name)), "{name}");
+        assert_ne!(same_file(&made.dir.join(name), &dir.join(name)), Some(true), "{name}");
     }
     let top: Vec<String> = files(&dir).into_iter().filter(|n| !n.starts_with("segments/")).collect();
     assert_eq!(top, ["Backups", "Replaced", "catalog.log", "catalog.snap", "presets.json"]);

@@ -104,6 +104,16 @@ fn a_backup_is_not_opened_as_a_library() {
     assert!(e.to_string().contains("backup") && e.to_string().contains("library.restore"), "{e}");
     assert!(other.library.is_none());
     assert_eq!(names(&made), before);
+    // naming one of its files is naming it: also refused, the lock not taken, nothing written
+    for file in [lightcraft_catalog::journal::SNAPSHOT, lightcraft_catalog::journal::LOG] {
+        let e = other.open_library(made.join(file), false).unwrap_err();
+        assert!(e.to_string().contains("backup") && e.to_string().contains("library.restore"), "{file}: {e}");
+        let e = other.check_library(made.join(file)).unwrap_err();
+        assert!(e.to_string().contains("backup"), "{file}: {e}");
+        assert!(other.library.is_none());
+        assert_eq!(names(&made), before, "{file}");
+    }
+    assert!(other.check_library(&made).is_err());
     assert_eq!(s.execute("library.checkBackup", &json!({"dir": made.to_string_lossy()})).unwrap()["ok"], json!(true));
     // nor is the open library replaced by it that way
     let e = s.open_library(&made, false).unwrap_err();
