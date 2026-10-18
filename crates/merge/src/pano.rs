@@ -230,7 +230,19 @@ fn exif_focal(frame: &Frame) -> Option<f64> {
 }
 
 /// Stitch `frames` (oriented, linear) into a panorama.
-pub fn stitch(mut frames: Vec<Frame>, opts: &PanoOptions, progress: &Progress) -> Result<PanoResult> {
+pub fn stitch(frames: Vec<Frame>, opts: &PanoOptions, progress: &Progress) -> Result<PanoResult> {
+    stitch_with_output_pixel_limit(frames, opts, usize::MAX, progress)
+}
+
+/// Stitch a panorama only if its padded output canvas fits within `max_output_pixels`.
+///
+/// The check runs after projection geometry is known and before tile or blend buffers are allocated.
+pub fn stitch_with_output_pixel_limit(
+    mut frames: Vec<Frame>,
+    opts: &PanoOptions,
+    max_output_pixels: usize,
+    progress: &Progress,
+) -> Result<PanoResult> {
     let n = frames.len();
     if n < 2 {
         return Err(MergeError::TooFew(n, 2));
@@ -270,6 +282,12 @@ pub fn stitch(mut frames: Vec<Frame>, opts: &PanoOptions, progress: &Progress) -
     let levels = ((cw.min(ch) as f64).log2() - 3.0).floor().clamp(1.0, 7.0) as usize;
     let unit = 1usize << levels;
     let (pw, ph) = (cw.div_ceil(unit) * unit, ch.div_ceil(unit) * unit);
+    let output_pixels = pw.checked_mul(ph).ok_or_else(|| MergeError::NoOverlap("the panorama output dimensions overflow".into()))?;
+    if output_pixels > max_output_pixels {
+        return Err(MergeError::NoOverlap(format!(
+            "the projected panorama needs {output_pixels} output pixels, above the Photo Merge memory limit of {max_output_pixels}; lower the panorama size or select fewer photos"
+        )));
+    }
     check(progress, 0.45, "Projecting")?;
 
     // exposure from EXIF relative to the first used frame

@@ -80,6 +80,79 @@ fn hdr_batch_checks_each_bracket_set_before_reading_its_sources() {
     assert_eq!(reads.load(Ordering::Relaxed), 1, "the oversized bracket was read, or the small bracket read more than once");
 }
 
+#[test]
+fn merge_memory_fallback_is_representable_on_32_bit_targets() {
+    use crate::merge::{merge_memory_bytes, unknown_ram_fallback};
+
+    let simulated_32_bit_max = u32::MAX as usize;
+    let fallback = unknown_ram_fallback(simulated_32_bit_max);
+    assert_eq!(fallback, simulated_32_bit_max, "8 GiB must clamp to the largest representable 32-bit byte count");
+    assert!(merge_memory_bytes(Some(fallback), 0) > 0);
+    assert!(merge_memory_bytes(None, 0) > 0, "the native unknown-RAM fallback must stay nonzero");
+}
+
+#[test]
+fn raw_merge_estimate_uses_uncropped_decoder_dimensions() {
+    use crate::merge::{MergeKind, estimate_merge_working_bytes_with_source_dimensions};
+
+    let source = lightcraft_merge::synth::bracket_dngs(512, 384, &[0.0]).unwrap().remove(0);
+    let mut raw = lightcraft_raw::decode(&source).unwrap();
+    raw.crop = lightcraft_raw::Rect::new(0, 0, 16, 12);
+    let bytes = lightcraft_raw::write_dng(&raw, &Default::default()).unwrap();
+    let probe = crate::files::probe_bytes("cropped.dng", &bytes).unwrap();
+    assert_eq!((probe.width, probe.height), (16, 12));
+    assert_eq!((probe.source_width, probe.source_height), (512, 384));
+
+    let decoded = lightcraft_raw::decode(&bytes).unwrap();
+    let bytes_per_sample = match &decoded.data {
+        lightcraft_raw::RawData::U16(_) => std::mem::size_of::<u16>(),
+        lightcraft_raw::RawData::F32(_) => std::mem::size_of::<f32>(),
+    };
+    let raw_sample_bytes = decoded.data.len().checked_mul(bytes_per_sample).unwrap();
+    let estimated = estimate_merge_working_bytes_with_source_dimensions(
+        &MergeKind::Hdr { hdr: Default::default() },
+        &[((probe.width, probe.height), (probe.source_width, probe.source_height)); 2],
+        None,
+        usize::MAX,
+    )
+    .unwrap();
+    assert!(
+        estimated >= raw_sample_bytes,
+        "the decoder estimate {estimated} must include at least one raw input's {raw_sample_bytes} sensor samples"
+    );
+}
+
+#[test]
+fn panorama_memory_estimate_allows_projected_canvas_larger_than_source_area() {
+    use crate::merge::{MergeKind, estimate_merge_working_bytes_with_budget};
+    use lightcraft_merge::{Frame, PanoOptions, Projection};
+
+    let frames: Vec<Frame> = lightcraft_merge::synth::pano_views(480, 360, 420.0, &[-35.0, 0.0, 35.0])
+        .unwrap()
+        .into_iter()
+        .map(|image| Frame::from_linear_rec2020(image, None))
+        .collect();
+    let source_pixels: usize = frames.iter().map(|frame| frame.width() * frame.height()).sum();
+    let options = PanoOptions { projection: Projection::Perspective, max_megapixels: 4.0, ..Default::default() };
+    let stitched = lightcraft_merge::stitch(frames, &options, &|_, _| true).unwrap();
+    let output_pixels = stitched.image.width.checked_mul(stitched.image.height).unwrap();
+    assert!(output_pixels > source_pixels, "fixture must reproduce output larger than source area");
+
+    let bounded_frames: Vec<Frame> = lightcraft_merge::synth::pano_views(480, 360, 420.0, &[-35.0, 0.0, 35.0])
+        .unwrap()
+        .into_iter()
+        .map(|image| Frame::from_linear_rec2020(image, None))
+        .collect();
+    let limit_error = lightcraft_merge::pano::stitch_with_output_pixel_limit(bounded_frames, &options, source_pixels, &|_, _| true).unwrap_err();
+    assert!(limit_error.to_string().contains("memory limit"), "{limit_error}");
+
+    let estimated = estimate_merge_working_bytes_with_budget(&MergeKind::Panorama { pano: options }, &[(480, 360); 3], None, usize::MAX).unwrap();
+    assert!(
+        estimated >= output_pixels.checked_mul(68).unwrap(),
+        "estimated panorama working set {estimated} must cover at least the output blend buffer for {output_pixels} pixels"
+    );
+}
+
 fn temp_dir(tag: &str) -> std::path::PathBuf {
     let d = std::env::temp_dir().join(format!("lc-merge-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
