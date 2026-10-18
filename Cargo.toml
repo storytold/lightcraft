@@ -172,3 +172,8 @@ jpeg-decoder = { opt-level = 3 }
 jpeg-encoder = { opt-level = 3 }
 png = { opt-level = 3 }
 miniz_oxide = { opt-level = 3 }
+
+# collab-craft 80bfaec pins storytold/craft-libs@289d562; unify with the encode-async tip.
+[patch."https://github.com/storytold/craft-libs"]
+craft-cloud = { git = "https://github.com/wdunn001/craft-libs", rev = "441d918" }
+craft-ui = { git = "https://github.com/wdunn001/craft-libs", rev = "441d918" }
