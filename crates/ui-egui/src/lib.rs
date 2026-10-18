@@ -225,6 +225,9 @@ pub type CheckEditorFn = Box<dyn Fn(&str) -> Result<(), String>>;
 /// Something the host does with the session (web: back up or restore the library in browser
 /// storage); the work may finish asynchronously.
 pub type HostAction = Box<dyn FnMut(&mut Session) -> Result<Value, String>>;
+/// Store photo bytes in the host's durable store and queue an import (web: Originals + OPFS).
+/// Used by CollabCraft Cloud Open so the browser never writes through `std::fs`.
+pub type StoreBytesFn = Box<dyn FnMut(String, Vec<u8>)>;
 
 /// The system's dark/light appearance where egui doesn't report one (Linux desktops whose
 /// windowing layer says nothing, e.g. many Wayland compositors). The host answers from what it
@@ -302,6 +305,9 @@ pub struct Services {
     pub restore_library: Option<HostAction>,
     /// The system appearance for Appearance Mode ▸ Auto, ahead of egui's own report.
     pub system_theme: Option<SystemThemeFn>,
+    /// Browser (and any host without a real filesystem): put CollabCraft Open bytes into
+    /// durable storage and queue them for import, the same path a drag-drop uses.
+    pub store_bytes: Option<StoreBytesFn>,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -489,6 +495,9 @@ pub struct LightcraftApp {
     pub presence: craft_ui::presence::PresenceBar,
     /// Which cloud page the user opened from the File menu, if any.
     pub cloud_page: Option<cloud::CloudPage>,
+    /// Library generation when a CollabCraft Open (`Busy::Opening`) began. A late answer after a
+    /// library switch is refused so the photo cannot land in the wrong catalog.
+    pub(crate) cloud_open_library: Option<u64>,
 }
 
 impl LightcraftApp {
@@ -572,6 +581,7 @@ impl LightcraftApp {
             share: Default::default(),
             presence: Default::default(),
             cloud_page: None,
+            cloud_open_library: None,
         }
     }
 

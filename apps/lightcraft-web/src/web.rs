@@ -185,10 +185,19 @@ fn download(path: &str, bytes: &[u8]) -> Result<(), String> {
 fn services(originals: Originals, backend: Option<Backend>, files: Files, frozen: Rc<Cell<bool>>, ctx: egui::Context) -> Services {
     let (backup_backend, backup_files) = (backend.clone(), files);
     let restore_backend = backend.clone();
+    let store_originals = originals.clone();
+    let store_backend = backend.clone();
+    let store_ctx = ctx.clone();
     Services {
         picker: None,
         pick_display_profile: None,
         screen_profile: None,
+        store_bytes: Some(Box::new(move |name: String, bytes: Vec<u8>| {
+            let (originals, backend, ctx) = (store_originals.clone(), store_backend.clone(), store_ctx.clone());
+            wasm_bindgen_futures::spawn_local(async move {
+                store_file(originals, backend, name, bytes, ctx).await;
+            });
+        })),
         backup_library: Some(Box::new(move |session: &mut Session| {
             let Some(b) = backup_backend.clone() else { return Err("nothing is stored in this browser session (?store=memory)".into()) };
             // the photos' own names for the originals in the zip

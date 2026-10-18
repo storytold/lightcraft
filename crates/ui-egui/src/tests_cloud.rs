@@ -221,6 +221,77 @@ fn cloud_modal_renders_when_cloud_page_is_set() {
     assert!(!has_modal, "modal must not render after cloud_page is cleared");
 }
 
+/// Suggested Save names use a writable extension so RAW photos are not uploaded
+/// as JPEG bytes under a `.cr3` / `.dng` name.
+#[test]
+fn cloud_save_name_rewrites_raw_and_keeps_writable() {
+    use crate::cloud::cloud_save_name;
+    assert_eq!(cloud_save_name("portrait.CR3"), "portrait.jpg");
+    assert_eq!(cloud_save_name("scan.dng"), "scan.jpg");
+    assert_eq!(cloud_save_name("photo.bmp"), "photo.jpg");
+    assert_eq!(cloud_save_name("photo.jxl"), "photo.jpg");
+    assert_eq!(cloud_save_name("trip.JPEG"), "trip.JPEG");
+    assert_eq!(cloud_save_name("flat.png"), "flat.png");
+}
+
+/// Encoding refuses open-only destination names instead of writing JPEG under them.
+#[test]
+fn encode_refuses_raw_destination_name() {
+    use craft_ui::cloud::{CloudApp, Destination};
+    let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services::default());
+    let Some(uid) = app.active() else { return };
+    let err = CloudApp::encode(&mut app, uid, Destination::new("portrait.CR3")).expect_err("RAW destination must be refused");
+    assert!(err.contains("JPEG") || err.contains("rename"), "refusal must say which formats work: {err}");
+}
+
+/// A pending CollabCraft Open blocks library switch the same way an import does.
+#[test]
+fn can_switch_library_refuses_while_cloud_open_is_busy() {
+    use crate::cloud::Busy;
+    use crate::panels::settings::can_switch_library;
+    let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services::default());
+    assert!(can_switch_library(&app).is_ok());
+    app.cloud.busy = Some(Busy::Opening { name: "shot.jpg".into() });
+    let err = can_switch_library(&app).expect_err("must refuse while Opening");
+    assert!(err.contains("cloud"), "{err}");
+}
+
+/// Cloud Open through store_bytes never touches the filesystem (the browser path).
+#[test]
+fn open_bytes_uses_store_bytes_when_configured() {
+    use craft_ui::cloud::CloudApp;
+    use std::sync::{Arc, Mutex};
+    let got = Arc::new(Mutex::new(None));
+    let slot = got.clone();
+    let services = Services {
+        store_bytes: Some(Box::new(move |name, bytes| {
+            *slot.lock().unwrap() = Some((name, bytes));
+        })),
+        ..Default::default()
+    };
+    let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+    app.cloud_open_library = Some(app.session.library_generation());
+    let r = CloudApp::open_bytes(&mut app, "from-cloud.jpg", b"fake-jpeg".to_vec());
+    assert_eq!(r, Ok(None));
+    let (name, bytes) = got.lock().unwrap().take().expect("store_bytes must run");
+    assert_eq!(name, "from-cloud.jpg");
+    assert_eq!(bytes, b"fake-jpeg");
+}
+
+/// A late Cloud Open answer after the library generation changed is refused.
+#[test]
+fn open_bytes_refuses_after_library_generation_change() {
+    use craft_ui::cloud::CloudApp;
+    let services = Services {
+        store_bytes: Some(Box::new(|_, _| {})),
+        ..Default::default()
+    };
+    let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+    app.cloud_open_library = Some(app.session.library_generation().wrapping_add(1));
+    let err = CloudApp::open_bytes(&mut app, "late.jpg", b"x".to_vec()).expect_err("stale library must refuse");
+    assert!(err.contains("library changed"), "{err}");
+}
+
 /// The cloud Open entry in the File menu is reachable end-to-end: clicking it
 /// in the headless menu bar sets `cloud_page` to `Some(Open)`, proving the
 /// entire path from menu item → command handler → state is wired.

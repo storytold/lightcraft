@@ -200,9 +200,20 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     // left-click is handled by the account badge itself (sign in/out);
                     // right-click opens the cloud file browser directly from the top bar.
                     let overlay = ui.interact(badge_rect, egui::Id::new("cloud-badge-ctx"), egui::Sense::click());
+                    if let Some(tip) = unsaved.as_deref() {
+                        overlay.clone().on_hover_text(tip);
+                    }
                     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(badge_rect));
                     crate::cloud::who(app, &mut child);
                     register(ui.ctx(), "icon:cloud", badge_rect);
+                    // Keep the persistent local-save warning even when the account badge replaced
+                    // the static cloud icon; a six-second toast alone is not enough.
+                    if unsaved.is_some() {
+                        let c = badge_rect.right_top() + vec2(-5.0, 6.0);
+                        ui.painter().circle_filled(c, 6.0, t.reject);
+                        ui.painter().text(c, Align2::CENTER_CENTER, "!", t.semibold(9.5), t.canvas);
+                        register(ui.ctx(), "indicator:unsaved", badge_rect);
+                    }
                     overlay.context_menu(|ui| {
                         let open = ui.button(crate::i18n::tr("Open from CollabCraft…"));
                         register(ui.ctx(), "menu:cloudOpen", open.rect);

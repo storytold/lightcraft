@@ -715,6 +715,8 @@ fn services(cc: &eframe::CreationContext<'_>, log_file: Option<&std::path::Path>
         backup_library: None,
         restore_library: None,
         system_theme: appearance::service(),
+        // Desktop Cloud Open writes into Originals/Cloud via std::fs; browser uses store_bytes.
+        store_bytes: None,
     }
 }
 
