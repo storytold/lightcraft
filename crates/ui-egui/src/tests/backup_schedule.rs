@@ -348,3 +348,29 @@ fn a_library_in_memory_quits_without_a_question() {
     h.step();
     assert!(may_close(&mut h.app));
 }
+
+/// Given a key bound to Back Up Library, when it is pressed, then the backup goes on in the
+/// background like one from the menu (the window is not held up until it is made); the control
+/// channel's own `library.backup` still returns when the backup is made.
+#[test]
+fn a_key_bound_to_back_up_library_backs_up_in_the_background() {
+    use std::sync::atomic::Ordering;
+    let dir = temp("key");
+    let mut h = app_with_a_library_in(&dir);
+    h.app.run("app.setShortcut", json!({"id": "library.backup", "shortcut": "F9"})).unwrap();
+    h.app.session.backup_hold.store(true, Ordering::SeqCst);
+    // (a key that waited for the backup would wait for ever: let go after a while, to fail)
+    let hold = h.app.session.backup_hold.clone();
+    let letting_go = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(5));
+        hold.store(false, Ordering::SeqCst);
+    });
+    let r = h.request("ui.key", json!({"key": "F9"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    let running = h.app.session.backup.as_ref().is_some_and(|b| !b.finished.load(Ordering::Relaxed));
+    h.app.session.backup_hold.store(false, Ordering::SeqCst);
+    assert!(running, "the key's backup waited for the backup to be made");
+    assert!(h.step_until(T, |h| backups(&dir) == 1));
+    let _ = std::fs::remove_dir_all(&dir);
+}
