@@ -361,7 +361,7 @@ fn a_key_bound_to_back_up_library_backs_up_in_the_background() {
     h.app.session.backup_hold.store(true, Ordering::SeqCst);
     // (a key that waited for the backup would wait for ever: let go after a while, to fail)
     let hold = h.app.session.backup_hold.clone();
-    let letting_go = std::thread::spawn(move || {
+    std::thread::spawn(move || {
         std::thread::sleep(Duration::from_secs(5));
         hold.store(false, Ordering::SeqCst);
     });
@@ -371,6 +371,6 @@ fn a_key_bound_to_back_up_library_backs_up_in_the_background() {
     let running = h.app.session.backup.as_ref().is_some_and(|b| !b.finished.load(Ordering::Relaxed));
     h.app.session.backup_hold.store(false, Ordering::SeqCst);
     assert!(running, "the key's backup waited for the backup to be made");
-    assert!(h.step_until(T, |h| backups(&dir) == 1));
+    assert!(h.step_until(T, |_| backups(&dir) == 1));
     let _ = std::fs::remove_dir_all(&dir);
 }
