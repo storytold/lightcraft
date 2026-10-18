@@ -395,6 +395,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 // every selected photo gets its own auto values (Lightroom Classic's Quick Develop
                 // Auto Tone), each worked out on its thumbnail-size source, as a single preview does
                 let ids = s.targets(p)?;
+                let named = ["ids", "id"].iter().any(|k| p.get(*k).is_some_and(|v| !v.is_null()));
                 let mut autos = Vec::with_capacity(ids.len());
                 for id in ids {
                     let src = s.source_now(id, SourceLevel::Thumb).map_err(|e| bad("develop.auto", e))?;
@@ -415,8 +416,8 @@ pub fn specs() -> Vec<CommandSpec> {
                 let (_, last) = autos.last().ok_or_else(|| bad("develop.auto", "no photo selected"))?;
                 let result = serde_json::to_value(last).unwrap_or_default();
                 match autos.as_slice() {
-                    // the active photo alone: the ordinary edit path (a running interaction previews it)
-                    [(id, a)] if Some(*id) == s.active() => {
+                    // the active photo alone, unnamed: the ordinary edit path (a running interaction previews it)
+                    [(id, a)] if !named && Some(*id) == s.active() => {
                         edit(s, "develop.auto", "Auto", |d| {
                             apply(d, a);
                             Ok(())

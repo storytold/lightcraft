@@ -438,6 +438,20 @@ fn auto_settings_apply_to_every_selected_photo() {
     assert!(s.execute("develop.auto", &json!({"ids": [999_999]})).is_err(), "unknown ids are an error");
 }
 
+/// Named photos are the only ones Auto Settings changes: with Auto Sync on, `ids` naming just the
+/// active photo leaves the rest of the selection alone (#1752).
+#[test]
+fn auto_settings_on_named_active_photo_skips_auto_sync() {
+    let mut s = demo();
+    let ids: Vec<u64> = s.visible_cloned().iter().take(2).map(|p| p.0).collect();
+    let dev = |s: &Session, id: u64| s.develop_of(lightcraft_catalog::PhotoId(id)).unwrap_or_default();
+    s.execute("library.select", &json!({"ids": [ids[0], ids[1]], "active": ids[0]})).unwrap();
+    s.execute("develop.autoSync", &json!({"on": true})).unwrap();
+    s.execute("develop.auto", &json!({"ids": [ids[0]]})).unwrap();
+    assert!(!dev(&s, ids[0]).is_unedited(), "the named photo gets auto settings");
+    assert!(dev(&s, ids[1]).is_unedited(), "the other selected photo is left alone");
+}
+
 #[test]
 fn versions_history_and_reset() {
     let mut s = demo();
