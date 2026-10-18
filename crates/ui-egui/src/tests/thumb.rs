@@ -47,7 +47,12 @@ fn hover_says(h: &mut Headless, id: &str, says: impl Fn(&str) -> bool) -> bool {
 #[test]
 fn a_virtual_copy_is_tagged_in_the_filmstrip_as_it_is_in_the_grid() {
     let mut h = demo();
-    let master = first_photos(&mut h, 1)[0];
+    // (a landscape photo: a copy in a stack on a narrow portrait one has no room for its tag beside the
+    // stack badge in the filmstrip, which then leaves it out by design)
+    let master = first_photos(&mut h, 12)
+        .into_iter()
+        .find(|id| h.app.session.catalog.photo(*id).is_some_and(|p| p.width > p.height))
+        .expect("a landscape photo");
     run(&mut h, "photo.virtualCopy", json!({"ids": [master.0]}));
     let copy = h.app.session.catalog.photos().find(|p| p.copy_name.is_some()).map(|p| p.id).expect("a virtual copy");
     h.settle(SETTLE);

@@ -413,6 +413,9 @@ pub(crate) struct Thumb<'a> {
     pub stack: Option<(StackId, usize)>,
     /// Whether the marks row is drawn (Settings → Interface).
     pub marks: bool,
+    /// Whether the stars and the edited mark are in it (the grid's Stars on hover shows only the
+    /// flag and the colour label until the photo is hovered or chosen).
+    pub extras: bool,
     /// The pointer is over the cell, or it is chosen: the row's band shows even without marks.
     pub hot: bool,
     /// Why the thumbnail could not be drawn, when it could not.
@@ -438,10 +441,10 @@ pub(crate) fn overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, th: &Thumb) ->
         failure_mark(app, ui, th, &t, error);
     }
     let bar = if th.marks {
-        marks_row(&p, &t, &m, th, false)
+        marks_row(ui.ctx(), &p, &t, &m, th, false)
     } else if !th.surround && photo.label.is_some() {
         // the setting is about ratings and flags: where no tinted surround says the label, its dot stays
-        marks_row(&p, &t, &m, th, true)
+        marks_row(ui.ctx(), &p, &t, &m, th, true)
     } else {
         None
     };
@@ -471,9 +474,21 @@ fn failure_mark(app: &LightcraftApp, ui: &mut egui::Ui, th: &Thumb, t: &Tokens, 
 }
 
 /// Draws the marks row; returns the strip it covers, if it drew anything.
-fn marks_row(p: &Painter, t: &Tokens, m: &Metrics, th: &Thumb, only_label: bool) -> Option<Rect> {
+fn marks_row(ctx: &egui::Context, p: &Painter, t: &Tokens, m: &Metrics, th: &Thumb, only_label: bool) -> Option<Rect> {
     let (photo, rect) = (th.photo, th.rect);
-    let marks = if only_label { Marks { label: true, ..Marks::default() } } else { Marks::of(photo) };
+    // (each mark drawn is registered as `badge:{name}:{id}`, in the filmstrip `film:badge:…`)
+    let mark = |name: &str, at: Rect| {
+        let prefix = if th.surface == Surface::Grid { "badge" } else { "film:badge" };
+        // painted only, nothing here takes a click: geometry, not a widget
+        crate::widgets::register_geometry(ctx, format!("{prefix}:{name}:{}", photo.id.0), at);
+    };
+    let marks = if only_label {
+        Marks { label: true, ..Marks::default() }
+    } else if th.extras {
+        Marks::of(photo)
+    } else {
+        Marks { rating: 0, edited: false, ..Marks::of(photo) }
+    };
     let layout = bar_layout(rect.width(), marks, m, !th.surround);
     let bar = marks_extent(rect, marks, th.hot, only_label, !th.surround, m)?;
     if !only_label && (th.hot || m.band) {
@@ -484,11 +499,14 @@ fn marks_row(p: &Painter, t: &Tokens, m: &Metrics, th: &Thumb, only_label: bool)
     match layout.stars {
         Stars::None => {}
         Stars::Row(n) => {
-            x += crate::rating::paint_rating(p, pos2(x, y), n, m.rating, t.star);
+            let width = crate::rating::paint_rating(p, pos2(x, y), n, m.rating, t.star);
+            mark("stars", Rect::from_min_size(pos2(x, y - m.star / 2.0), vec2(width, m.star)));
+            x += width;
         }
         Stars::Compact(n) => {
             paint(p, Rect::from_min_size(pos2(x, y - m.star / 2.0), vec2(m.star, m.star)), Icon::StarFilled, t.star);
             p.text(pos2(x + m.star + 1.0, y), Align2::LEFT_CENTER, n.to_string(), t.semibold(m.font), t.star);
+            mark("stars", Rect::from_min_size(pos2(x, y - m.star / 2.0), vec2(m.star + 1.0 + m.digit, m.star)));
             x += m.star + 1.0 + m.digit;
         }
     }
@@ -499,17 +517,20 @@ fn marks_row(p: &Painter, t: &Tokens, m: &Metrics, th: &Thumb, only_label: bool)
             Flag::Reject => paint(p, at, Icon::FlagReject, t.reject),
             Flag::None => {}
         }
+        mark("flag", at);
     }
     let mut right = bar.right() - m.pad;
     if layout.label
         && let Some(l) = photo.label
     {
         p.circle(pos2(right - m.label / 2.0, y), m.dot, crate::theme::label_color(l), Stroke::new(1.0, Color32::from_black_alpha(120)));
+        mark("label", Rect::from_center_size(pos2(right - m.label / 2.0, y), vec2(m.label, m.label)));
         right -= m.label;
     }
     if layout.edited {
         let at = Rect::from_center_size(pos2(right - m.edited / 2.0, y), vec2(m.edited_icon, m.edited_icon));
         paint(p, at, Icon::Sliders, t.text_label);
+        mark("edited", at);
     }
     Some(bar)
 }

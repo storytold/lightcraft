@@ -35,6 +35,7 @@ mod focus_point;
 mod folder_drop;
 mod grading;
 mod grid;
+mod grid_badges;
 mod grid_drag;
 mod guided_guides;
 mod histogram_drag;

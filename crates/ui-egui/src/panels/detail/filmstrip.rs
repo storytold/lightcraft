@@ -143,6 +143,7 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
                     rect: photo_rect,
                     stack,
                     marks: app.ui.settings.film_badges,
+                    extras: app.ui.settings.film_badges,
                     hot: false,
                     failure,
                     surround: true,
