@@ -624,6 +624,14 @@ impl LightcraftApp {
         } else {
             params
         };
+        // Auto Settings on several photos reads them in the background (`auto_settings_status` sets the values)
+        let params = if id == "develop.auto" && params.get("background").is_none() {
+            let mut p = if params.is_object() { params } else { serde_json::json!({}) };
+            p["background"] = serde_json::json!(true);
+            p
+        } else {
+            params
+        };
         let r = self.session.execute(id, &params).map_err(CommandError::from);
         if r.is_ok() && matches!(id, "crop.aspect" | "crop.rotateAspect") {
             self.ui.crop_default_aspect = if id == "crop.aspect" && params.get("aspect").and_then(Value::as_str) == Some("original") {
@@ -753,6 +761,17 @@ impl LightcraftApp {
     }
 
     /// Announce the end of a Build Previews run.
+    /// Photo ▸ Auto Settings on several photos: take in what its worker has read, and say when the values are set.
+    fn auto_settings_status(&mut self, ctx: &egui::Context) {
+        use lightcraft_engine::auto_settings::AutoOutcome;
+        match self.session.pump_auto_settings() {
+            None if self.session.auto_settings.is_some() => ctx.request_repaint_after(std::time::Duration::from_millis(50)),
+            None | Some(AutoOutcome::Cancelled) => {}
+            Some(AutoOutcome::Applied(_)) => self.toast(ctx, crate::i18n::tr("Auto settings applied")),
+            Some(AutoOutcome::Failed(e)) => self.toast(ctx, e.to_string()),
+        }
+    }
+
     fn preview_build_status(&mut self, ctx: &egui::Context) {
         use std::sync::atomic::Ordering;
         let Some(b) = self.session.preview_build.clone() else { return };
@@ -1134,6 +1153,7 @@ impl LightcraftApp {
         recheck::tick(self);
         tasks::poll(self, ctx);
         self.preview_build_status(ctx);
+        self.auto_settings_status(ctx);
         self.save_status(ctx);
         self.slideshow_tick(ctx);
         panels::faces::pump(self, ctx);

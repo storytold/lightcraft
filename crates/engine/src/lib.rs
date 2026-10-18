@@ -17,6 +17,7 @@ extern crate lightcraft_denoise_core as lightcraft_denoise;
 pub mod activity;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod apple_photos;
+pub mod auto_settings;
 pub mod availability;
 pub(crate) mod camera_preview;
 pub mod camera_profiles;
@@ -360,6 +361,8 @@ pub struct Session {
     pub slideshow_export: Option<std::sync::Arc<slideshow_export::ExportRun>>,
     /// The last (or running) Build Previews.
     pub preview_build: Option<std::sync::Arc<cmd::previews::PreviewBuild>>,
+    /// Photo ▸ Auto Settings running in the background (`develop.auto {background: true}`).
+    pub auto_settings: Option<auto_settings::AutoJob>,
     /// Develop defaults applied on import (persisted in prefs.json).
     pub import_defaults: import::ImportDefaults,
     /// Disk budget of the library's thumbnail cache in MB (0 = default; persisted in prefs.json).
@@ -494,6 +497,7 @@ impl Session {
             folder_changes: None,
             activity: Default::default(),
             preview_build: None,
+            auto_settings: None,
             slideshow_export: None,
             import_defaults: import::ImportDefaults::default(),
             cache_mb: 0,

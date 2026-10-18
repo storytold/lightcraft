@@ -3,6 +3,7 @@
 use lightcraft_catalog::{Op, PhotoId, Version};
 use lightcraft_develop::{DevelopSettings, Preset, ProcessVersion, Section, SettingsGroup, Treatment, Upright, WbMode, controls};
 use lightcraft_geom::{CropGeometry, CropHandle, MIN_CROP_FRACTION, Point, Rect, crop_fit_angle, drag_crop};
+use lightcraft_pipeline::auto::AutoTone;
 use serde_json::{Value, json};
 
 use super::{CommandSpec, always, bad, bool_or, cmd, f64_or, f64_req, has_active, has_clipboard, has_selection, index_req, ok, str_param};
@@ -19,6 +20,37 @@ fn edit(s: &mut Session, c: &str, label: &str, f: impl FnOnce(&mut DevelopSettin
     f(&mut d)?;
     s.set_develop(id, d, label)?;
     ok()
+}
+
+/// Auto Settings' values for photo `id`, from its thumbnail-size source `src`.
+pub(crate) fn auto_values(s: &Session, id: PhotoId, src: &lightcraft_raster::Rgb32f) -> AutoTone {
+    let info = s.source_info(id);
+    let d = s.develop_of(id).unwrap_or_default();
+    lightcraft_pipeline::auto::auto_tone(src, &info, &d)
+}
+
+fn apply_auto(d: &mut DevelopSettings, a: &AutoTone) {
+    d.light.exposure = a.exposure;
+    d.light.contrast = a.contrast;
+    d.light.highlights = a.highlights;
+    d.light.shadows = a.shadows;
+    d.light.whites = a.whites;
+    d.light.blacks = a.blacks;
+    d.color.vibrance = a.vibrance;
+    d.color.saturation = a.saturation;
+}
+
+/// Set each photo's auto values on its current settings, as one undo step.
+pub(crate) fn commit_autos(s: &mut Session, autos: &[(PhotoId, AutoTone)]) -> Result<()> {
+    let ops = autos
+        .iter()
+        .filter_map(|(id, a)| {
+            let mut d = (*s.develop_of(*id).unwrap_or_default()).clone();
+            apply_auto(&mut d, a);
+            s.develop_op(*id, d, "Auto")
+        })
+        .collect();
+    s.commit("Auto", Op::Batch { ops })
 }
 
 fn section_param(p: &Value, c: &str) -> Result<Section> {
@@ -384,60 +416,48 @@ pub fn specs() -> Vec<CommandSpec> {
                 Ok(json!({"mix": m}))
             }
         ),
-        cmd!(
-            "develop.auto",
-            "Auto Settings",
-            ["Photo"],
-            Some("Shift+A"),
-            "{ids?}: the target photos (`ids`, else the selection, else the active photo), each from its own picture, as one undo step → the values set on the last one",
-            has_selection,
-            |s, p| {
-                // every selected photo gets its own auto values (Lightroom Classic's Quick Develop
-                // Auto Tone), each worked out on its thumbnail-size source, as a single preview does
-                let ids = s.targets(p)?;
-                let named = ["ids", "id"].iter().any(|k| p.get(*k).is_some_and(|v| !v.is_null()));
-                let mut autos = Vec::with_capacity(ids.len());
-                for id in ids {
-                    let src = s.source_now(id, SourceLevel::Thumb).map_err(|e| bad("develop.auto", e))?;
-                    let info = s.source_info(id);
-                    let d = s.develop_of(id).unwrap_or_default();
-                    autos.push((id, lightcraft_pipeline::auto::auto_tone(&src, &info, &d)));
-                }
-                let apply = |d: &mut DevelopSettings, a: &lightcraft_pipeline::auto::AutoTone| {
-                    d.light.exposure = a.exposure;
-                    d.light.contrast = a.contrast;
-                    d.light.highlights = a.highlights;
-                    d.light.shadows = a.shadows;
-                    d.light.whites = a.whites;
-                    d.light.blacks = a.blacks;
-                    d.color.vibrance = a.vibrance;
-                    d.color.saturation = a.saturation;
-                };
-                let (_, last) = autos.last().ok_or_else(|| bad("develop.auto", "no photo selected"))?;
-                let result = serde_json::to_value(last).unwrap_or_default();
-                match autos.as_slice() {
-                    // the active photo alone, unnamed: the ordinary edit path (a running interaction previews it)
-                    [(id, a)] if !named && Some(*id) == s.active() => {
-                        edit(s, "develop.auto", "Auto", |d| {
-                            apply(d, a);
-                            Ok(())
-                        })?;
+        CommandSpec {
+            explicit_targets: true,
+            ..cmd!(
+                "develop.auto",
+                "Auto Settings",
+                ["Photo"],
+                Some("Shift+A"),
+                "{ids?, background?: false}: the target photos (`ids`, else the selection, else the active photo), each from its own picture, as one undo step → the values set on the last one. With `background` (the app) and more than one photo, the pictures are read on a worker with a row in the activity stack, and the values are set when all are read (a cancel sets none) → {background, total, taskId}",
+                has_selection,
+                |s, p| {
+                    const C: &str = "develop.auto";
+                    if s.auto_settings.is_some() {
+                        return Err(bad(C, "Auto Settings is already running (activity.cancel stops it)"));
                     }
-                    _ => {
-                        let ops = autos
-                            .iter()
-                            .filter_map(|(id, a)| {
-                                let mut d = (*s.develop_of(*id).unwrap_or_default()).clone();
-                                apply(&mut d, a);
-                                s.develop_op(*id, d, "Auto")
-                            })
-                            .collect();
-                        s.commit("Auto", Op::Batch { ops })?;
+                    // every selected photo gets its own auto values (Lightroom Classic's Quick Develop
+                    // Auto Tone), each worked out on its thumbnail-size source, as a single preview does
+                    let ids = s.targets(p)?;
+                    if ids.len() > 1 && bool_or(p, "background", false) && !cfg!(target_arch = "wasm32") {
+                        return crate::auto_settings::start(s, ids);
                     }
+                    let named = ["ids", "id"].iter().any(|k| p.get(*k).is_some_and(|v| !v.is_null()));
+                    let mut autos = Vec::with_capacity(ids.len());
+                    for id in ids {
+                        let src = s.source_now(id, SourceLevel::Thumb).map_err(|e| bad(C, e))?;
+                        autos.push((id, auto_values(s, id, &src)));
+                    }
+                    let (_, last) = autos.last().ok_or_else(|| bad(C, "no photo selected"))?;
+                    let result = serde_json::to_value(last).unwrap_or_default();
+                    match autos.as_slice() {
+                        // the active photo alone, unnamed: the ordinary edit path (a running interaction previews it)
+                        [(id, a)] if !named && Some(*id) == s.active() => {
+                            edit(s, C, "Auto", |d| {
+                                apply_auto(d, a);
+                                Ok(())
+                            })?;
+                        }
+                        _ => commit_autos(s, &autos)?,
+                    }
+                    Ok(result)
                 }
-                Ok(result)
-            }
-        ),
+            )
+        },
         cmd!(
             "develop.wb",
             "White Balance",

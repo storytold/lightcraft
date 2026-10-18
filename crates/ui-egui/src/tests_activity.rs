@@ -509,3 +509,25 @@ fn immediate_library_commands_and_auto_sync_show_completion() {
     assert!(h.app.run("library.compact", json!({})).is_err());
     assert!(h.app.ui.toast.is_none());
 }
+
+/// Photo ▸ Auto Settings (⇧A) on several photos runs in the background in the app: a row in the stack while the
+/// pictures are read, then every photo's values in one undo step (#1752).
+#[test]
+fn auto_settings_on_a_selection_run_in_the_background() {
+    let mut h = demo();
+    let ids: Vec<u64> = h.app.session.visible_cloned().iter().take(3).map(|p| p.0).collect();
+    h.app.session.execute("library.select", &json!({"ids": ids, "active": ids[0]})).unwrap();
+    let undo = h.app.session.undo.len();
+    let r = h.app.run("develop.auto", json!({})).unwrap();
+    assert_eq!(r["background"], true, "{r}");
+    assert!(h.app.session.activity.list().iter().any(|t| t.kind == "autoSettings" && t.cancellable));
+    let t0 = std::time::Instant::now();
+    while h.app.session.auto_settings.is_some() {
+        assert!(t0.elapsed() < T, "the run never ended");
+        h.step();
+    }
+    let edited = |h: &Headless, id: u64| !h.app.session.develop_of(lightcraft_catalog::PhotoId(id)).unwrap_or_default().is_unedited();
+    assert!(ids.iter().all(|id| edited(&h, *id)), "every selected photo");
+    assert_eq!(h.app.session.undo.len(), undo + 1, "one undo step");
+    assert!(h.app.session.activity.list().iter().all(|t| t.kind != "autoSettings"));
+}

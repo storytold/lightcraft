@@ -564,7 +564,7 @@ visible menu bar yet: the menu model is only exposed through the control channel
 | MENU-PHOTO-STACK | Stack submenu | P1 | ✅ | `cmd:stack.group`, `cmd:stack.ungroup`, `cmd:dialog.autoStack` | |
 | MENU-PHOTO-MERGE | Photo merge submenu | P2 | ✅ | `cmd:dialog.mergeHdr`, `cmd:dialog.mergePanorama`, `cmd:dialog.mergeHdrPanorama`, `cmd:merge.hdrLast`, `cmd:merge.hdrBatch` | |
 | MENU-PHOTO-ENHANCE | Enhance… | P2 | ⬜ | | |
-| MENU-PHOTO-AUTO | Auto settings | P0 | ✅ | `cmd:develop.auto` | acts on every selected photo, each from its own picture, as one undo step (Classic's Quick Develop Auto Tone; `ids` names photos, and only those change, Auto Sync or not) |
+| MENU-PHOTO-AUTO | Auto settings | P0 | ✅ | `cmd:develop.auto` | acts on every selected photo, each from its own picture, as one undo step (Classic's Quick Develop Auto Tone; `ids` names photos, and only those change, Auto Sync or not); several photos are read in the background with a row in the activity stack, and a cancel sets none |
 | MENU-PHOTO-BW | Convert to B&W | P0 | ✅ | `cmd:develop.treatment` | |
 | MENU-PHOTO-RESET | Reset edits / crop | P0 | ✅ | `cmd:develop.reset`, `cmd:crop.reset` | |
 | MENU-PHOTO-UPDATEAI | Update AI settings | P2 | ⬜ | | |

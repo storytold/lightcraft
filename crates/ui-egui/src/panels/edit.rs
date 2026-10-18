@@ -110,8 +110,10 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 8.0;
             if text_button(ui, "auto", crate::i18n::tr("Auto"), false).clicked() {
-                let _ = app.run("develop.auto", json!({}));
-                app.toast(ui.ctx(), crate::i18n::tr("Auto settings applied"));
+                // (several photos: said when the background run sets them)
+                if !app.run("develop.auto", json!({})).is_ok_and(|v| v["background"] == true) {
+                    app.toast(ui.ctx(), crate::i18n::tr("Auto settings applied"));
+                }
             }
             let bw = crate::is_bw(&d);
             if text_button(ui, "bw", crate::i18n::tr("B&W"), bw).clicked() {
