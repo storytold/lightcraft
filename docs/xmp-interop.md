@@ -31,7 +31,12 @@ What we write (standard namespaces, so other tools can read the metadata):
 `lc:` is `http://ns.lightcraft.app/lc/1.0/`.
 
 Reading merges into the catalog with the **sidecar winning** for every field it states; fields it doesn't state are
-kept. The one exception is the **capture time**: a time embedded in the file (EXIF/IPTC) always wins; when the file
+kept. That includes **GPS**: a sidecar's `exif:GPSLatitude`/`GPSLongitude` replaces the position the camera embedded in
+the file (the Metadata Working Group's rule: XMP over Exif), so a photo geotagged in another app keeps that place. A
+sidecar position off the globe (latitude beyond ±90°, longitude beyond ±180°, the limits `photo.setMeta` and the Exif
+reader use), with a negative number before its hemisphere letter (`-10,30N`) or with the other axis's letter (a
+latitude in E/W) isn't read. The
+one exception is the **capture time**: a time embedded in the file (EXIF/IPTC) always wins; when the file
 has none, the sidecar's `exif:DateTimeOriginal`, else `photoshop:DateCreated`, else `xmp:CreateDate` (ISO 8601) is
 used — on import (it then also files a copied photo in its date folder) and by `photo.readMetadataFromFile` (undoable).
 `xmp:Rating="-1"` (the XMP convention for rejected) sets the reject flag. Develop settings come from
@@ -53,7 +58,35 @@ the only copy of those edits outside that application's catalog. Saving never dr
   (clearing a title in LightCraft clears it in the file). All of them are read back on import, so the library starts
   from what the sidecar said.
 - The **capture time** (`exif:DateTimeOriginal`, `photoshop:DateCreated`) and **GPS** (`exif:GPSLatitude`,
-  `exif:GPSLongitude`) are replaced only when LightCraft has a value; otherwise the file's stay.
+  `exif:GPSLongitude`) are replaced only when LightCraft has a value; otherwise the file's stay (GPS: see the removal rule below). A position the
+  sidecar already states that matches the library's (to within about a centimetre) is kept as written there, in its
+  own precision. When the library has a position, a save writes it over a different one in the sidecar, including one
+  another app wrote after LightCraft last read the file (Read Metadata from File first to take it).
+  A position removed in LightCraft (`photo.setMeta` with `gps: null`) is remembered in the library (not in the file).
+  While the photo has no position, a save whose sidecar states that position (within 15 m along the globe, whatever its
+  spelling: 180°E and 180°W, or any longitude at a pole, are one place) or no position at all removes every
+  `exif:GPS*` tag (altitude, time stamp, direction, destination…) and `exifEX:GPSHPositioningError` from the
+  sidecar's descriptions; other tags stay. A sidecar that states several positions (in separate descriptions) loses
+  them only when every one is the removed place. A different position, or an `exif:GPSLatitude`/`GPSLongitude`
+  LightCraft can't read, was written by another app after the removal: saves keep it (and any other position the
+  file states), and Read Metadata from File takes a readable one (clearing it then removes it). The removal
+  belongs to the photo's metadata, not to a save: undo and redo bring it back with the position, and a failed save
+  changes nothing. A photo whose position LightCraft never set keeps the one its sidecar states. Read Metadata from
+  File takes the sidecar's position whenever the sidecar states one, and forgets the removal.
+  Limits: the removal lives only in this library, so a re-import (or another library) reads the file afresh and gets
+  the camera's embedded position back, as does `photo.reload`. Clearing again while the library already has no
+  position changes nothing (`photo.setMeta` with only `gps` reports `changed: 0`), so another app's position written
+  since stays until a read shows it. Likewise, setting the position the library already has changes nothing, so with
+  auto-write on it doesn't rewrite the sidecar over another app's position written since (a manual save does). A
+  position more than 15 m off counts as a different place and stays (minutes to
+  2 decimals are at most about 13 m off, whole seconds up to about 22 m). A
+  position typed in and cleared again before any save is the one remembered: a different position the sidecar still
+  holds from before stays (save in between, or use auto-write). An Original export copies the file's bytes, so a
+  camera position embedded in them goes with it. The `exif:GPSLatitude`/`GPSLongitude` fields inside IPTC Extension
+  location structs (`Iptc4xmpExt:LocationCreated`, `LocationShown`) aren't touched by a clear. Malformed or rare
+  shapes are read simply: a latitude and a longitude in descriptions that name different RDF subjects (`rdf:about`) are
+  still read as one position, and of a file that states more than one position, reading takes the first; a save whose
+  library position matches that first one keeps the file's GPS as written, a different second position included.
 - **Everything else is kept byte for byte**: other namespaces (`crs:`, `xmpMM:`, `lr:hierarchicalSubject`, unknown
   ones), `xmp:CreatorTool`, comments, the packet wrapper and padding. LightCraft's properties go into one
   `rdf:Description` of their own; owned properties written by another application (in attribute or element form) are

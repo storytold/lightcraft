@@ -951,11 +951,16 @@ pub fn specs() -> Vec<CommandSpec> {
                     ),
                     None => None,
                 };
+                // a call that sets only GPS skips photos it leaves unchanged (a second clear is `changed: 0`)
+                let only_gps = gps.is_some() && p.as_object().is_some_and(|o| o.keys().all(|k| matches!(k.as_str(), "gps" | "ids" | "id")));
                 let mut ops = Vec::new();
                 for id in targets {
                     let Some(ph) = s.catalog.photo(id) else { continue };
                     let mut m = ph.meta.clone();
                     if let Some(g) = gps {
+                        // a clear remembers the position it removes, so a save removes it from the sidecar (a second
+                        // clear keeps the first one's); setting a position forgets it
+                        m.gps_removed = if g.is_none() { ph.meta.gps.or(ph.meta.gps_removed) } else { None };
                         m.gps = g;
                     }
                     if let Some(st) = status {
@@ -1000,10 +1005,15 @@ pub fn specs() -> Vec<CommandSpec> {
                         let k = clean(&k);
                         m.keywords.retain(|x| !same(&clean(x), &k));
                     }
+                    if only_gps && m == ph.meta {
+                        continue;
+                    }
                     ops.push(Op::SetMeta { id, meta: Box::new(m) });
                 }
                 let n = ops.len();
-                s.commit("Edit Info", Op::Batch { ops })?;
+                if n > 0 || !only_gps {
+                    s.commit("Edit Info", Op::Batch { ops })?;
+                }
                 // keywords just added become the Recent Keywords set
                 let added: Vec<String> = strs("addKeywords").unwrap_or_default().into_iter().chain(strs("keywords").unwrap_or_default()).collect();
                 if n > 0 && !added.is_empty() {

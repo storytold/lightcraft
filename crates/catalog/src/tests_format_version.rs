@@ -97,6 +97,36 @@ fn v6_preview_only_photo_loads_unstamped_and_is_upgraded() {
     assert_eq!(snapshot_version(&m), u64::from(VERSION));
 }
 
+/// A v9 library (before a GPS clear was remembered) opens with no removal on its photos, positions and
+/// all, and is rewritten in the current format, which keeps a removal.
+#[test]
+fn v9_library_loads_without_gps_removals_and_is_upgraded() {
+    let mut c = Catalog::new();
+    let op = photo(&mut c);
+    c.apply(op).unwrap();
+    let id = c.photos().next().unwrap().id;
+    let mut meta = c.photo(id).unwrap().meta.clone();
+    meta.gps = Some((10.5, 20.25));
+    c.apply(Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
+    let snap = c.to_snapshot();
+    assert!(!snap.contains("gps_removed"), "an unset removal isn't written");
+    let m = MemStore::new();
+    m.set(SNAPSHOT, format!("{{\"format\":\"lightcraft-catalog\",\"version\":9,\"seq\":2,\"catalog\":{snap}}}\n").into_bytes());
+    let (mut j, loaded, r) = Journal::open(Box::new(m.clone())).unwrap();
+    let p = loaded.photo(id).unwrap();
+    assert_eq!((p.meta.gps, p.meta.gps_removed), (Some((10.5, 20.25)), None));
+    assert_eq!(r.upgraded_from, Some(9));
+    assert_eq!(snapshot_version(&m), u64::from(VERSION));
+    // a removal made after the upgrade is kept on reopening
+    let mut meta = p.meta.clone();
+    (meta.gps, meta.gps_removed) = (None, Some((10.5, 20.25)));
+    j.append(&[Op::SetMeta { id, meta: Box::new(meta) }]).unwrap();
+    drop(j);
+    let (_, reopened, r) = Journal::open(Box::new(m)).unwrap();
+    assert_eq!(reopened.photo(id).unwrap().meta.gps_removed, Some((10.5, 20.25)));
+    assert_eq!(r.upgraded_from, None);
+}
+
 #[test]
 fn versionless_log_only_library_is_upgraded() {
     let mut c = Catalog::new();
@@ -238,8 +268,8 @@ fn op_variants_are_versioned() {
             Op::SetHistoryCursor { .. } => 8,
         }
     }
-    /// v9: `Photo.preview_checked` and `Op::SetContent.preview_checked`.
-    const NEWEST_FIELDS: u32 = 9;
+    /// v10: `Meta.gps_removed`.
+    const NEWEST_FIELDS: u32 = 10;
     let newest = since(&Op::SetHistoryCursor { id: PhotoId(1), cursor: None });
     assert_eq!(newest.max(NEWEST_FIELDS), VERSION, "the newest op's or fields' version must be the current format version");
 }

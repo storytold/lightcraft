@@ -179,6 +179,14 @@ pub struct Meta {
     pub state: String,
     pub country: String,
     pub gps: Option<(f64, f64)>,
+    /// The position (latitude, longitude) removed on purpose with `photo.setMeta` `gps: null`: while `gps`
+    /// is unset, a save removes the sidecar's GPS tags if the sidecar states this position (or none), and
+    /// keeps a different one (another app wrote it later). It is the user's intent, so only
+    /// `photo.setMeta` (a clear sets it, a position forgets it) and Read Metadata from File taking a
+    /// position the sidecar states change it; a save never does, so undo and redo bring it back together
+    /// with the position. Left out of the catalog JSON when unset, so older catalogs read unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gps_removed: Option<(f64, f64)>,
     pub title: String,
     pub caption: String,
     /// Accessibility text and long description.

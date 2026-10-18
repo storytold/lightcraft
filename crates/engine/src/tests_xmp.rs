@@ -922,6 +922,58 @@ fn gps_typed_in_is_saved_to_xmp() {
     assert!(s.catalog.photo(id).unwrap().meta.gps.is_none());
 }
 
+/// A PNG whose EXIF places it at (`lat`, `lon`), as a camera's GPS does.
+fn write_png_at(path: &Path, lat: f64, lon: f64) {
+    let img = lightcraft_raster::Rgba8 { width: 8, height: 8, data: vec![[90, 120, 150, 255]; 64] };
+    let gps = lightcraft_meta::Metadata { gps: Some(lightcraft_meta::Gps { latitude: lat, longitude: lon, altitude: None }), ..Default::default() };
+    let exif = lightcraft_meta::write_exif(&gps);
+    let meta = lightcraft_codecs::EncodeMeta { exif: Some(&exif), ..Default::default() };
+    std::fs::write(path, lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &meta).unwrap()).unwrap();
+}
+
+/// A sidecar's GPS wins over the camera's (MWG: XMP over Exif), on import and on Read Metadata from
+/// File; saving leaves the sidecar's position as it was written, and writes it only when it was
+/// changed here.
+#[test]
+fn sidecar_gps_wins_over_the_cameras_and_survives_a_save() {
+    let src = temp_dir("sidecar-gps");
+    write_png_at(&src.join("walk.png"), 10.5, 20.25);
+    let sidecar = |lat: &str, lon: &str| {
+        format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about="" xmlns:exif="http://ns.adobe.com/exif/1.0/" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="2">
+   <exif:GPSLatitude>{lat}</exif:GPSLatitude>
+   <exif:GPSLongitude>{lon}</exif:GPSLongitude>
+  </rdf:Description>
+</rdf:RDF></x:xmpmeta>"#
+        )
+    };
+    std::fs::write(src.join("walk.xmp"), sidecar("12,30.12345N", "45,15.54321W")).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    let near = |(a, b): (f64, f64), (c, d): (f64, f64)| (a - c).abs() < 1e-6 && (b - d).abs() < 1e-6;
+    let gps = |s: &Session| s.catalog.photo(id).unwrap().meta.gps.unwrap();
+    assert!(near(gps(&s), (12.5020575, -45.2590535)), "the sidecar's position, not the camera's: {:?}", gps(&s));
+    // a save that didn't change the position leaves it in the file exactly as written
+    s.execute("photo.rate", &json!({"ids": [id.0], "rating": 4})).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    let saved = std::fs::read_to_string(src.join("walk.xmp")).unwrap();
+    assert!(saved.contains("<exif:GPSLatitude>12,30.12345N</exif:GPSLatitude>"), "{saved}");
+    assert!(saved.contains("<exif:GPSLongitude>45,15.54321W</exif:GPSLongitude>"), "{saved}");
+    assert_eq!(lightcraft_meta::parse_xmp(&saved).unwrap().metadata.rating, Some(4), "the save happened");
+    // another app moved the photo: reading the sidecar again takes its position
+    std::fs::write(src.join("walk.xmp"), sidecar("5,6.60000S", "100,30.30000E")).unwrap();
+    s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    assert!(near(gps(&s), (-5.11, 100.505)), "{:?}", gps(&s));
+    // a position typed in here is written
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "gps": "1.2345, 6.789"})).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    let g = lightcraft_meta::parse_xmp(&std::fs::read_to_string(src.join("walk.xmp")).unwrap()).unwrap().metadata.gps.unwrap();
+    assert!(near((g.latitude, g.longitude), (1.2345, 6.789)), "{g:?}");
+    let _ = std::fs::remove_dir_all(&src);
+}
+
 /// DNG export compression: lossless, zip and none all decode; none is the biggest.
 #[test]
 fn dng_export_compression_choices() {
@@ -1326,5 +1378,603 @@ fn a_failed_auto_write_waits_and_is_written_on_retry() {
     s.execute("library.retrySidecars", &json!({})).unwrap();
     assert_eq!(s.unsaved_sidecars(), 0);
     std::fs::set_permissions(&src, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+#[test]
+fn gps_clear_survives_save_and_read() {
+    let src = temp_dir("agent-review-gps-clear");
+    let image = src.join("p.png");
+    let xmp = src.join("p.xmp");
+    write_png(&image, 3);
+    let meta =
+        lightcraft_meta::Metadata { gps: Some(lightcraft_meta::Gps { latitude: 10.5, longitude: 20.25, altitude: None }), ..Default::default() };
+    std::fs::write(&xmp, lightcraft_meta::write_xmp(&meta, None)).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [image.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "gps": [10.5, 20.25]})).unwrap();
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "gps": null})).unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap().meta.gps, None);
+    let saved = s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    assert_eq!(saved["written"].as_array().unwrap().len(), 1, "{saved}");
+    assert_eq!(saved["failed"], json!([]), "{saved}");
+    let file_gps = lightcraft_meta::parse_xmp(&std::fs::read_to_string(&xmp).unwrap()).unwrap().metadata.gps;
+    eprintln!("GPS after explicit clear: catalog None; after save: file {file_gps:?}");
+    let read = s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    assert_eq!(read["failed"], json!([]), "{read}");
+    assert_eq!(s.catalog.photo(id).unwrap().meta.gps, None, "saving and reading should not undo an explicit GPS removal");
+    std::fs::remove_dir_all(src).unwrap();
+}
+
+/// A sidecar another app wrote with a position (degrees, minutes and hemisphere, as XMP writes it).
+fn gps_sidecar(lat: &str, lon: &str) -> String {
+    format!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about="" xmlns:exif="http://ns.adobe.com/exif/1.0/" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="2">
+   <exif:GPSLatitude>{lat}</exif:GPSLatitude>
+   <exif:GPSLongitude>{lon}</exif:GPSLongitude>
+  </rdf:Description>
+</rdf:RDF></x:xmpmeta>"#
+    )
+}
+
+/// The position the sidecar at `xmp` states, as (latitude, longitude).
+fn sidecar_position(xmp: &Path) -> Option<(f64, f64)> {
+    lightcraft_meta::parse_xmp(&std::fs::read_to_string(xmp).unwrap()).unwrap().metadata.gps.map(|g| (g.latitude, g.longitude))
+}
+
+/// The catalog's position for photo `id`.
+fn catalog_position(s: &Session, id: PhotoId) -> Option<(f64, f64)> {
+    s.catalog.photo(id).unwrap().meta.gps
+}
+
+fn same_position(got: Option<(f64, f64)>, want: Option<(f64, f64)>) -> bool {
+    match (got, want) {
+        (Some((a, b)), Some((c, d))) => (a - c).abs() < 1e-6 && (b - d).abs() < 1e-6,
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+/// Clearing a position makes saves remove it from the sidecar; the marker is the user's intent, so a save leaves it.
+/// Read Metadata from File takes whatever position the sidecar states, with or without a save first.
+/// A position the catalog never set keeps the one its sidecar states; undo restores a cleared position.
+#[test]
+fn gps_clear_contract_save_read_and_undo() {
+    let src = temp_dir("gps-clear-contract");
+    let image = src.join("p.png");
+    let xmp = src.join("p.xmp");
+    write_png(&image, 4);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [image.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    let set = |s: &mut Session, gps: serde_json::Value| s.execute("photo.setMeta", &json!({"ids": [id.0], "gps": gps})).unwrap();
+    let save = |s: &mut Session| s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    let read = |s: &mut Session| s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+
+    // never set in the catalog: another app's position survives an unrelated save
+    std::fs::write(&xmp, gps_sidecar("10,30N", "20,15E")).unwrap();
+    s.execute("photo.rate", &json!({"ids": [id.0], "rating": 4})).unwrap();
+    save(&mut s);
+    assert!(same_position(sidecar_position(&xmp), Some((10.5, 20.25))), "an unrelated save keeps it");
+    assert!(same_position(catalog_position(&s, id), None), "and the catalog doesn't take it on a save");
+
+    // set, clear, save: the sidecar loses the position, and the marker stays (a save never changes the catalog)
+    set(&mut s, json!([10.5, 20.25]));
+    set(&mut s, json!(null));
+    assert_eq!(s.catalog.photo(id).unwrap().meta.gps_removed, Some((10.5, 20.25)), "a clear remembers the position it removes");
+    save(&mut s);
+    assert!(same_position(sidecar_position(&xmp), None), "the save removes the cleared position");
+    assert!(s.catalog.photo(id).unwrap().meta.gps_removed.is_some(), "the save leaves the marker");
+    // ...and a read leaves it cleared
+    read(&mut s);
+    assert!(same_position(catalog_position(&s, id), None), "a read after the saved clear stays cleared");
+
+    // undo the clear: the position is back, and a save writes it again
+    set(&mut s, json!([10.5, 20.25]));
+    set(&mut s, json!(null));
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(same_position(catalog_position(&s, id), Some((10.5, 20.25))), "undo restores the position");
+    assert!(s.catalog.photo(id).unwrap().meta.gps_removed.is_none(), "undo leaves no marker");
+    save(&mut s);
+    assert!(same_position(sidecar_position(&xmp), Some((10.5, 20.25))), "after undo, a save writes the position");
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// Read Metadata from File takes a position another app writes: after a saved clear, and before any save.
+#[test]
+fn gps_clear_then_another_app_writes_a_position_the_read_takes_it() {
+    let src = temp_dir("gps-clear-read");
+    let image = src.join("p.png");
+    let xmp = src.join("p.xmp");
+    write_png(&image, 5);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [image.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    let set = |s: &mut Session, gps: serde_json::Value| s.execute("photo.setMeta", &json!({"ids": [id.0], "gps": gps})).unwrap();
+    let save = |s: &mut Session| s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    let read = |s: &mut Session| s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+
+    // after a saved clear, another app writes a position: the read takes it and the catalog holds it
+    set(&mut s, json!([10.5, 20.25]));
+    save(&mut s);
+    set(&mut s, json!(null));
+    save(&mut s);
+    std::fs::write(&xmp, gps_sidecar("1,0N", "2,0E")).unwrap();
+    read(&mut s);
+    assert!(same_position(catalog_position(&s, id), Some((1.0, 2.0))), "the read takes the position another app wrote");
+    assert!(s.catalog.photo(id).unwrap().meta.gps_removed.is_none());
+
+    // before any save, a clear followed by a read takes the sidecar's position (explicit read from file)
+    set(&mut s, json!(null));
+    assert!(s.catalog.photo(id).unwrap().meta.gps_removed.is_some());
+    std::fs::write(&xmp, gps_sidecar("3,0N", "4,0E")).unwrap();
+    read(&mut s);
+    assert!(same_position(catalog_position(&s, id), Some((3.0, 4.0))), "read from file overrides the unsaved clear");
+    assert!(s.catalog.photo(id).unwrap().meta.gps_removed.is_none(), "taking a position clears the marker");
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// A save that fails to write leaves the marker set, so the next save still removes the position.
+#[test]
+fn failed_save_keeps_the_gps_clear_marker() {
+    use std::os::unix::fs::PermissionsExt;
+    let src = temp_dir("gps-clear-failed-save");
+    let image = src.join("p.png");
+    let xmp = src.join("p.xmp");
+    write_png(&image, 6);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [image.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "gps": [10.5, 20.25]})).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "gps": null})).unwrap();
+    std::fs::set_permissions(&src, std::fs::Permissions::from_mode(0o555)).unwrap();
+    // (root writes anyway: nothing to test there)
+    if std::fs::write(src.join(".probe"), b"x").is_ok() {
+        std::fs::set_permissions(&src, std::fs::Permissions::from_mode(0o755)).unwrap();
+        return;
+    }
+    let failed = match s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})) {
+        Err(_) => true,
+        Ok(r) => r["failed"] != json!([]),
+    };
+    assert!(failed, "the save into a read-only folder fails");
+    assert!(s.catalog.photo(id).unwrap().meta.gps_removed.is_some(), "a failed save keeps the marker");
+    assert!(same_position(sidecar_position(&xmp), Some((10.5, 20.25))), "and the sidecar is untouched");
+    std::fs::set_permissions(&src, std::fs::Permissions::from_mode(0o755)).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    assert!(same_position(sidecar_position(&xmp), None), "the retry removes the position");
+    assert!(s.catalog.photo(id).unwrap().meta.gps_removed.is_some(), "and leaves the marker too");
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// A PNG imported into a fresh session: (folder, its sidecar path, session, photo).
+fn gps_setup(tag: &str, seed: u8) -> (PathBuf, PathBuf, Session, PhotoId) {
+    let src = temp_dir(tag);
+    let image = src.join("p.png");
+    let xmp = src.join("p.xmp");
+    write_png(&image, seed);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [image.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    (src, xmp, s, id)
+}
+
+/// Redo of a GPS clear removes the position again, even when a save came between the clear and the undo.
+#[test]
+fn redo_of_a_saved_gps_clear_removes_the_position_on_save() {
+    let (src, xmp, mut s, id) = gps_setup("gps-redo", 21);
+    let save = |s: &mut Session| s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "gps": [10.5, 20.25]})).unwrap();
+    save(&mut s);
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "gps": null})).unwrap();
+    save(&mut s);
+    assert!(same_position(sidecar_position(&xmp), None));
+    s.execute("edit.undo", &json!({})).unwrap();
+    save(&mut s);
+    assert!(same_position(sidecar_position(&xmp), Some((10.5, 20.25))), "undo + save writes it back");
+    s.execute("edit.redo", &json!({})).unwrap();
+    save(&mut s);
+    assert!(same_position(sidecar_position(&xmp), None), "redo of the clear + save must remove the position");
+    s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    assert!(same_position(catalog_position(&s, id), None));
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// With auto-write on, clear → undo → redo leaves the sidecar without the position.
+#[test]
+fn redo_of_a_gps_clear_with_auto_write_removes_the_position() {
+    let (src, xmp, mut s, id) = gps_setup("gps-redo-auto", 22);
+    s.execute("library.xmpPreferences", &json!({"autoWrite": true})).unwrap();
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "gps": [10.5, 20.25]})).unwrap();
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "gps": null})).unwrap();
+    assert!(same_position(sidecar_position(&xmp), None), "auto-write removed it");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(same_position(sidecar_position(&xmp), Some((10.5, 20.25))));
+    s.execute("edit.redo", &json!({})).unwrap();
+    assert!(same_position(catalog_position(&s, id), None));
+    assert!(same_position(sidecar_position(&xmp), None), "redo of the clear must remove the position");
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// A removed position takes every GPS tag with it (altitude, time stamp, direction, destination…);
+/// the sidecar's other properties stay.
+#[test]
+fn gps_clear_removes_every_gps_tag_from_the_sidecar() {
+    let src = temp_dir("gps-clear-all-tags");
+    let image = src.join("p.png");
+    let xmp = src.join("p.xmp");
+    write_png(&image, 24);
+    std::fs::write(&xmp, r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about="" xmlns:exif="http://ns.adobe.com/exif/1.0/" xmlns:exifEX="http://cipa.jp/exif/1.0/" xmlns:tiff="http://ns.adobe.com/tiff/1.0/">
+   <exif:GPSVersionID>2.3.0.0</exif:GPSVersionID>
+   <exif:GPSLatitude>10,30N</exif:GPSLatitude>
+   <exif:GPSLongitude>20,15E</exif:GPSLongitude>
+   <exif:GPSAltitudeRef>0</exif:GPSAltitudeRef>
+   <exif:GPSAltitude>1234/10</exif:GPSAltitude>
+   <exif:GPSTimeStamp>2026-10-01T12:00:00Z</exif:GPSTimeStamp>
+   <exif:GPSImgDirection>90/1</exif:GPSImgDirection>
+   <exif:GPSDestLatitude>10,30.5N</exif:GPSDestLatitude>
+   <exif:GPSDestLongitude>20,16E</exif:GPSDestLongitude>
+   <exifEX:GPSHPositioningError>5/1</exifEX:GPSHPositioningError>
+   <exif:ExposureBiasValue>-1/3</exif:ExposureBiasValue>
+   <exifEX:LensModel>Synthetic 50mm</exifEX:LensModel>
+   <tiff:Make>Synthetic</tiff:Make>
+  </rdf:Description>
+</rdf:RDF></x:xmpmeta>"#).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [image.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    assert!(same_position(catalog_position(&s, id), Some((10.5, 20.25))));
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "gps": null})).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    let saved = std::fs::read_to_string(&xmp).unwrap();
+    assert!(same_position(sidecar_position(&xmp), None));
+    let left: Vec<&str> = [
+        "GPSAltitude",
+        "GPSAltitudeRef",
+        "GPSTimeStamp",
+        "GPSImgDirection",
+        "GPSDestLatitude",
+        "GPSDestLongitude",
+        "GPSVersionID",
+        "GPSHPositioningError",
+    ]
+    .into_iter()
+    .filter(|t| saved.contains(&format!("exif:{t}")) || saved.contains(&format!("exifEX:{t}")))
+    .collect();
+    assert!(left.is_empty(), "a removed position leaves location tags behind: {left:?}\n{saved}");
+    for kept in ["exif:ExposureBiasValue", "exifEX:LensModel", "tiff:Make"] {
+        assert!(saved.contains(kept), "{kept} is not a GPS tag and stays\n{saved}");
+    }
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// Undoing an unrelated edit after a saved clear doesn't make the next save delete a position another app
+/// wrote since: the save behaves as it does without the undo.
+#[test]
+fn undoing_an_unrelated_edit_keeps_a_position_written_after_a_saved_clear() {
+    let (src, xmp, mut s, id) = gps_setup("gps-undo-unrelated", 23);
+    let save = |s: &mut Session| s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "gps": [10.5, 20.25]})).unwrap();
+    save(&mut s);
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "gps": null})).unwrap();
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "caption": "hello"})).unwrap();
+    save(&mut s);
+    assert!(same_position(sidecar_position(&xmp), None));
+    let mut text = std::fs::read_to_string(&xmp).unwrap();
+    // another app geotags it, in a description of its own (redeclaring `exif` on LightCraft's would make
+    // a repeated attribute: not XML, so the save would back the file up and replace it)
+    text = text.replacen(
+        "</rdf:RDF>",
+        "<rdf:Description rdf:about=\"\" xmlns:exif=\"http://ns.adobe.com/exif/1.0/\" exif:GPSLatitude=\"1,0N\" exif:GPSLongitude=\"2,0E\"/>\n </rdf:RDF>",
+        1,
+    );
+    std::fs::write(&xmp, &text).unwrap();
+    assert!(same_position(sidecar_position(&xmp), Some((1.0, 2.0))));
+    s.execute("edit.undo", &json!({})).unwrap(); // the caption only
+    assert_eq!(s.catalog.photo(id).unwrap().meta.caption, "");
+    save(&mut s);
+    assert!(same_position(sidecar_position(&xmp), Some((1.0, 2.0))), "undoing a caption edit must not delete another app's position");
+    let names: Vec<String> = std::fs::read_dir(&src).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    assert!(!names.iter().any(|n| n.contains(".bak-")), "the sidecar was merged, not replaced: {names:?}");
+    // ...nor does redoing it
+    s.execute("edit.redo", &json!({})).unwrap();
+    save(&mut s);
+    assert!(same_position(sidecar_position(&xmp), Some((1.0, 2.0))), "an unrelated save keeps another app's later position");
+    // reading the file takes it
+    s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    assert!(same_position(catalog_position(&s, id), Some((1.0, 2.0))));
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// Another app geotags the sidecar at `xmp` in a description of its own, keeping everything else.
+fn foreign_geotag(xmp: &Path, lat: &str, lon: &str) {
+    let text = std::fs::read_to_string(xmp).unwrap().replacen(
+        "</rdf:RDF>",
+        &format!("<rdf:Description rdf:about=\"\" xmlns:exif=\"http://ns.adobe.com/exif/1.0/\" exif:GPSLatitude=\"{lat}\" exif:GPSLongitude=\"{lon}\"/>\n </rdf:RDF>"),
+        1,
+    );
+    std::fs::write(xmp, text).unwrap();
+}
+
+/// After a saved clear, another app geotags the photo and Read Metadata from File takes it: clearing that
+/// position (which the user can see) removes it from the sidecar on the next save.
+#[test]
+fn a_clear_after_reading_another_apps_position_removes_it() {
+    let (src, xmp, mut s, id) = gps_setup("gps-read-then-clear", 31);
+    let save = |s: &mut Session| s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "gps": [10.5, 20.25]})).unwrap();
+    save(&mut s);
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "gps": null})).unwrap();
+    save(&mut s);
+    foreign_geotag(&xmp, "1,0N", "2,0E");
+    s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    assert!(same_position(catalog_position(&s, id), Some((1.0, 2.0))), "the read takes the other app's position");
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "gps": null})).unwrap();
+    save(&mut s);
+    assert!(same_position(sidecar_position(&xmp), None), "a clear of a position the user can see removes it from the sidecar");
+    s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    assert!(same_position(catalog_position(&s, id), None));
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// [`a_clear_after_reading_another_apps_position_removes_it`] with auto-write on (a read never writes the sidecar,
+/// so the clear's write is the first after the read).
+#[test]
+fn a_clear_after_reading_another_apps_position_removes_it_with_auto_write() {
+    let (src, xmp, mut s, id) = gps_setup("gps-read-then-clear-auto", 32);
+    s.execute("library.xmpPreferences", &json!({"autoWrite": true})).unwrap();
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "gps": [10.5, 20.25]})).unwrap();
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "gps": null})).unwrap();
+    assert!(same_position(sidecar_position(&xmp), None));
+    foreign_geotag(&xmp, "1,0N", "2,0E");
+    s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    assert!(same_position(catalog_position(&s, id), Some((1.0, 2.0))));
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "gps": null})).unwrap();
+    assert!(same_position(sidecar_position(&xmp), None), "the auto-written clear removes the position");
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// A second clear while the library already has no position changes nothing, and says so: a position another app
+/// wrote since (unread, so not shown) stays until Read Metadata from File takes it.
+#[test]
+fn a_second_clear_changes_nothing() {
+    let (src, xmp, mut s, id) = gps_setup("gps-second-clear", 33);
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "gps": [10.5, 20.25]})).unwrap();
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "gps": null})).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    foreign_geotag(&xmp, "1,0N", "2,0E");
+    let r = s.execute("photo.setMeta", &json!({"ids": [id.0], "gps": null})).unwrap();
+    assert_eq!(r["changed"], json!(0), "{r}");
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    assert!(same_position(sidecar_position(&xmp), Some((1.0, 2.0))));
+    s.execute("edit.undo", &json!({})).unwrap(); // the first clear: the no-op added no undo step
+    assert!(same_position(catalog_position(&s, id), Some((10.5, 20.25))));
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// The removed position is recognised in the sidecar in another app's spelling and precision (seconds, rounded),
+/// while a position a few metres away is another app's and stays.
+#[test]
+fn a_clear_recognises_its_position_in_another_spelling() {
+    let (src, xmp, mut s, id) = gps_setup("gps-clear-spelling", 34);
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "gps": [10.5, 20.25]})).unwrap();
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "gps": null})).unwrap();
+    // the same place, re-spelt in degrees, minutes and seconds to 1/100″
+    std::fs::write(&xmp, gps_sidecar("10,30,0.00N", "20,15,0.004E")).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    assert!(same_position(sidecar_position(&xmp), None), "the removed position, spelt differently, is removed");
+    // about 25 m north: not the removed position
+    std::fs::write(&xmp, gps_sidecar("10,30.0135N", "20,15E")).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    assert!(same_position(sidecar_position(&xmp), Some((10.500225, 20.25))), "another place stays");
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// Three PNGs imported into one library: (folder, session, ids in file-name order).
+fn three_photos(tag: &str) -> (PathBuf, Session, Vec<PhotoId>) {
+    let src = temp_dir(tag);
+    let paths: Vec<String> = (0..3u8)
+        .map(|i| {
+            let image = src.join(format!("p{i}.png"));
+            write_png(&image, 60 + i);
+            image.to_string_lossy().into_owned()
+        })
+        .collect();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": paths})).unwrap();
+    let mut ids: Vec<(String, PhotoId)> = s.catalog.photos().map(|p| (p.file_name.clone(), p.id)).collect();
+    ids.sort();
+    (src, s, ids.into_iter().map(|(_, id)| id).collect())
+}
+
+/// Only a GPS-only `photo.setMeta` skips photos it leaves unchanged: re-applying a keyword (directly or through a
+/// metadata preset) still makes it the most recent keyword.
+#[test]
+fn reapplying_a_keyword_keeps_it_the_most_recent() {
+    let (src, mut s, ids) = three_photos("gps-recent-keywords");
+    s.execute("photo.setMeta", &json!({"ids": [ids[0].0], "addKeywords": ["beach"]})).unwrap();
+    s.execute("photo.setMeta", &json!({"ids": [ids[1].0], "addKeywords": ["sunset"]})).unwrap();
+    assert_eq!(s.recent_keywords.first().map(String::as_str), Some("sunset"));
+    s.execute("photo.setMeta", &json!({"ids": [ids[0].0], "addKeywords": ["beach"]})).unwrap();
+    assert_eq!(s.recent_keywords.first().map(String::as_str), Some("beach"), "a keyword just applied is the most recent");
+    s.execute("metadata.savePreset", &json!({"name": "Trip", "fields": {"keywords": ["sunset"], "creator": "Someone"}})).unwrap();
+    s.execute("metadata.applyPreset", &json!({"name": "Trip", "ids": [ids[1].0]})).unwrap();
+    assert_eq!(s.recent_keywords.first().map(String::as_str), Some("sunset"), "and so is one a preset re-applies");
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// The removed position is recognised by distance on the globe: across the 180th meridian and at a pole.
+#[test]
+fn a_clear_recognises_its_position_across_the_antimeridian_and_at_a_pole() {
+    for (tag, gps, lat, lon) in [("gps-clear-180", [-10.5, 180.0], "10,30.0S", "180,0.0W"), ("gps-clear-pole", [90.0, 10.0], "90,0.0N", "0,0.0E")] {
+        let (src, xmp, mut s, id) = gps_setup(tag, 50);
+        s.execute("photo.setMeta", &json!({"ids": [id.0], "gps": gps})).unwrap();
+        s.execute("photo.setMeta", &json!({"ids": [id.0], "gps": null})).unwrap();
+        std::fs::write(&xmp, gps_sidecar(lat, lon)).unwrap();
+        s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+        assert!(same_position(sidecar_position(&xmp), None), "{lat} {lon} is the removed {gps:?}");
+        let _ = std::fs::remove_dir_all(&src);
+    }
+}
+
+/// A camera position another app copied into the sidecar in coarser precision (minutes to 2 decimals) is the
+/// same place: a clear removes it, also when the rounding is close to the worst case (about 13 m).
+#[test]
+fn a_clear_recognises_its_position_in_coarser_precision() {
+    // (camera position, the sidecar's 2-decimal-minute spelling of it, roughly how far apart in metres)
+    for (i, (camera, lat, lon, metres)) in
+        [((10.512345, 20.254321), "10,30.74N", "20,15.26E", 1.5), ((10.0 + 30.7449 / 60.0, 20.0 + 15.2649 / 60.0), "10,30.74N", "20,15.26E", 12.7)]
+            .into_iter()
+            .enumerate()
+    {
+        let src = temp_dir(&format!("gps-clear-coarse-{i}"));
+        let image = src.join("walk.png");
+        let xmp = src.join("walk.xmp");
+        write_png_at(&image, camera.0, camera.1);
+        let mut s = Session::new().with_fs();
+        s.execute("library.import", &json!({"paths": [image.to_string_lossy()]})).unwrap();
+        let id = only(&s);
+        std::fs::write(&xmp, gps_sidecar(lat, lon)).unwrap();
+        let (a, b) = (catalog_position(&s, id).unwrap(), sidecar_position(&xmp).unwrap());
+        let off = 111_195.0 * ((a.0 - b.0).powi(2) + ((a.1 - b.1) * a.0.to_radians().cos()).powi(2)).sqrt();
+        assert!((off - metres).abs() < 0.5, "the two spellings are {off:.1} m apart, not {metres} m");
+        s.execute("photo.setMeta", &json!({"ids": [id.0], "gps": null})).unwrap();
+        s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+        assert!(same_position(sidecar_position(&xmp), None), "the same place, ~{metres} m off, is removed");
+        let _ = std::fs::remove_dir_all(&src);
+    }
+}
+
+/// After a saved clear, a position another app writes in a spelling LightCraft can't read is kept by an unrelated
+/// save, like any different position.
+#[test]
+fn an_unreadable_position_written_after_a_clear_is_kept() {
+    for (i, (lat, lon)) in [("1.0", "2.0"), ("1/1,0/1,0/1N", "2/1,0/1,0/1E"), ("-1.0", "-2.0")].into_iter().enumerate() {
+        let (src, xmp, mut s, id) = gps_setup(&format!("gps-clear-unreadable-{i}"), 53);
+        s.execute("photo.setMeta", &json!({"ids": [id.0], "gps": [10.5, 20.25]})).unwrap();
+        s.execute("photo.setMeta", &json!({"ids": [id.0], "gps": null})).unwrap();
+        s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+        foreign_geotag(&xmp, lat, lon);
+        s.execute("photo.rate", &json!({"ids": [id.0], "rating": 4})).unwrap();
+        s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+        let saved = std::fs::read_to_string(&xmp).unwrap();
+        assert!(
+            saved.contains(&format!("exif:GPSLatitude=\"{lat}\"")) && saved.contains(&format!("exif:GPSLongitude=\"{lon}\"")),
+            "{lat} {lon}\n{saved}"
+        );
+        let _ = std::fs::remove_dir_all(&src);
+    }
+}
+
+/// A sidecar position off the globe, or a negative degree with a hemisphere letter, isn't read into the library
+/// (the limits `photo.setMeta` and the Exif reader use); like any position LightCraft can't read, a save keeps it.
+#[test]
+fn a_sidecar_position_off_the_globe_is_not_read() {
+    for (i, (lat, lon)) in [("95,0N", "200,0E"), ("1e308,1e308N", "1e308E"), ("-10,30N", "20,15E"), ("10,30N", "-20,15E")].into_iter().enumerate() {
+        let src = temp_dir(&format!("gps-off-globe-{i}"));
+        let image = src.join("p.png");
+        let xmp = src.join("p.xmp");
+        write_png(&image, 90);
+        std::fs::write(&xmp, gps_sidecar(lat, lon)).unwrap();
+        let mut s = Session::new().with_fs();
+        s.execute("library.import", &json!({"paths": [image.to_string_lossy()]})).unwrap();
+        let id = only(&s);
+        assert_eq!(catalog_position(&s, id), None, "{lat} {lon} is not a position");
+        s.execute("photo.rate", &json!({"ids": [id.0], "rating": 4})).unwrap();
+        s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+        let saved = std::fs::read_to_string(&xmp).unwrap();
+        assert!(saved.contains(&format!("<exif:GPSLatitude>{lat}</exif:GPSLatitude>")), "{lat} {lon} stays in the file\n{saved}");
+        let _ = std::fs::remove_dir_all(&src);
+    }
+}
+
+/// A sidecar that states two positions (one per description) loses them only if both are the removed place.
+#[test]
+fn a_clear_keeps_every_position_when_the_sidecar_states_another_too() {
+    let (src, xmp, mut s, id) = gps_setup("gps-clear-two-positions", 82);
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "gps": [10.5, 20.25]})).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "gps": null})).unwrap();
+    // the removed place, and another app's in a description of its own
+    std::fs::write(&xmp, gps_sidecar("10,30N", "20,15E")).unwrap();
+    foreign_geotag(&xmp, "1,0N", "2,0E");
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    let saved = std::fs::read_to_string(&xmp).unwrap();
+    assert!(saved.contains("10,30N") && saved.contains("1,0N"), "both positions stay\n{saved}");
+    // both the removed place: both go
+    std::fs::write(&xmp, gps_sidecar("10,30N", "20,15E")).unwrap();
+    foreign_geotag(&xmp, "10,30.0001N", "20,15E");
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    let saved = std::fs::read_to_string(&xmp).unwrap();
+    assert!(!saved.contains("GPSLatitude"), "{saved}");
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// A latitude takes only N/S and a longitude only E/W.
+#[test]
+fn a_hemisphere_letter_on_the_wrong_axis_is_not_a_position() {
+    let src = temp_dir("gps-axis-letters");
+    let image = src.join("p.png");
+    write_png(&image, 102);
+    std::fs::write(src.join("p.xmp"), gps_sidecar("10,30E", "20,15N")).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [image.to_string_lossy()]})).unwrap();
+    assert_eq!(catalog_position(&s, only(&s)), None, "latitude requires N/S and longitude requires E/W");
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// A sidecar description with GPS in attribute form from one writer and element form from another.
+fn attr_and_element_gps_sidecar(attr: (&str, &str), elem: (&str, &str)) -> String {
+    format!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about="" xmlns:exif="http://ns.adobe.com/exif/1.0/" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="2" exif:GPSLatitude="{}" exif:GPSLongitude="{}">
+   <exif:GPSLatitude>{}</exif:GPSLatitude>
+   <exif:GPSLongitude>{}</exif:GPSLongitude>
+  </rdf:Description>
+</rdf:RDF></x:xmpmeta>"#,
+        attr.0, attr.1, elem.0, elem.1
+    )
+}
+
+/// A sidecar description stating two positions as repeated elements.
+fn repeated_element_gps_sidecar(a: (&str, &str), b: (&str, &str)) -> String {
+    format!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about="" xmlns:exif="http://ns.adobe.com/exif/1.0/" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="2">
+   <exif:GPSLatitude>{}</exif:GPSLatitude>
+   <exif:GPSLongitude>{}</exif:GPSLongitude>
+   <exif:GPSLatitude>{}</exif:GPSLatitude>
+   <exif:GPSLongitude>{}</exif:GPSLongitude>
+  </rdf:Description>
+</rdf:RDF></x:xmpmeta>"#,
+        a.0, a.1, b.0, b.1
+    )
+}
+
+/// A clear keeps the file's GPS when one description states the removed position and another one: attribute
+/// form plus element form, and repeated elements.
+#[test]
+fn a_clear_keeps_another_position_in_the_same_description_attr_and_element() {
+    clear_keeps_a_second_position_in_one_description("gps-clear-attr-elem", 201, attr_and_element_gps_sidecar);
+}
+
+#[test]
+fn a_clear_keeps_another_position_in_the_same_description_repeated() {
+    clear_keeps_a_second_position_in_one_description("gps-clear-repeated", 202, repeated_element_gps_sidecar);
+}
+
+fn clear_keeps_a_second_position_in_one_description(tag: &str, seed: u8, sidecar: fn((&str, &str), (&str, &str)) -> String) {
+    let (src, xmp, mut s, id) = gps_setup(tag, seed);
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "gps": [10.5, 20.25]})).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "gps": null})).unwrap();
+    std::fs::write(&xmp, sidecar(("10,30N", "20,15E"), ("1,0N", "2,0E"))).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    let saved = std::fs::read_to_string(&xmp).unwrap();
+    assert!(saved.contains("1,0N") && saved.contains("2,0E"), "another position the user never saw was removed by the clear\n{saved}");
     let _ = std::fs::remove_dir_all(&src);
 }

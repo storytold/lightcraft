@@ -19,8 +19,9 @@
 //! the first by file name — [`Session::sidecar_naming`]); the others use `<file>.xmp`
 //! (`IMG_0001.JPG.xmp`) for writing and reading, so neither overwrites the other.
 //!
-//! **Read** (on import, and `photo.readMetadataFromFile`): the sidecar wins for metadata, except
-//! the capture time: a time embedded in the file wins, and the sidecar's (`exif:DateTimeOriginal`,
+//! **Read** (on import, and `photo.readMetadataFromFile`): the sidecar wins for metadata (GPS
+//! included: a position in the sidecar replaces the one the camera embedded, as the MWG guidelines
+//! have it for XMP over Exif), except the capture time: a time embedded in the file wins, and the sidecar's (`exif:DateTimeOriginal`,
 //! else `photoshop:DateCreated`, else `xmp:CreateDate`) fills in only when the file has none; develop
 //! settings are restored from `lc:settings` when present, else mapped from interoperable `crs:`
 //! fields ([`crate::crs`]). For raw/DNG files without a sidecar the file's embedded XMP is used.
@@ -114,6 +115,8 @@ pub struct SidecarData {
     pub country: Option<String>,
     pub alt_text: Option<String>,
     pub extended_description: Option<String>,
+    /// `exif:GPSLatitude` / `exif:GPSLongitude` (latitude, longitude): wins over a position embedded in the file.
+    pub gps: Option<(f64, f64)>,
     pub keywords: Option<Vec<String>>,
     pub regions: Option<Vec<lightcraft_meta::Region>>,
     /// Capture time (ISO 8601) from `exif:DateTimeOriginal`, `photoshop:DateCreated` or
@@ -154,6 +157,7 @@ pub fn parse_sidecar(xmp: &str, target: crate::crs::Target) -> std::result::Resu
         country: m.country.clone(),
         alt_text: m.alt_text.clone(),
         extended_description: m.extended_description.clone(),
+        gps: m.gps.map(|g| (g.latitude, g.longitude)),
         keywords: (!m.keywords.is_empty() || !m.hierarchical_keywords.is_empty())
             .then(|| lightcraft_catalog::keywords::from_file(&m.keywords, &m.hierarchical_keywords)),
         // A sidecar that has `mwg-rs:Regions` at all (even an empty list) was written by an app that
@@ -283,6 +287,10 @@ pub fn merge_into(p: &mut Photo, sc: &SidecarData, now: &str) -> bool {
             *dst = v.clone();
         }
     }
+    if let Some(gps) = sc.gps {
+        m.gps = Some(gps);
+        m.gps_removed = None;
+    }
     if let Some(marked) = sc.copyright_marked {
         m.copyright_status = lightcraft_catalog::CopyrightStatus::from_marked(Some(marked));
     }
@@ -331,6 +339,11 @@ pub fn sidecar_packet(p: &Photo, cat: &lightcraft_catalog::Catalog) -> String {
 /// [`sidecar_packet`], without any location (GPS, sublocation, city, state, country) when
 /// `remove_location` is set (an export with "Remove location info").
 pub fn sidecar_packet_with(p: &Photo, cat: &lightcraft_catalog::Catalog, remove_location: bool) -> String {
+    packet(p, cat, remove_location, true)
+}
+
+/// [`sidecar_packet_with`]; the GPS position is left out unless `gps` is set.
+fn packet(p: &Photo, cat: &lightcraft_catalog::Catalog, remove_location: bool, gps: bool) -> String {
     let nz = |s: &str| (!s.trim().is_empty()).then(|| s.to_string());
     let meta = lightcraft_meta::Metadata {
         software: Some("LightCraft".into()),
@@ -351,7 +364,7 @@ pub fn sidecar_packet_with(p: &Photo, cat: &lightcraft_catalog::Catalog, remove_
         rating: Some(p.rating.min(5) as i8),
         label: p.label.map(|l| cat.label_name(l)),
         capture_time: p.captured.as_deref().and_then(lightcraft_meta::DateTime::parse_iso),
-        gps: p.meta.gps.map(|(latitude, longitude)| lightcraft_meta::Gps { latitude, longitude, altitude: None }),
+        gps: p.meta.gps.filter(|_| gps).map(|(latitude, longitude)| lightcraft_meta::Gps { latitude, longitude, altitude: None }),
         ..Default::default()
     };
     let mut meta = meta;
@@ -394,10 +407,52 @@ pub const OWNED: &[&str] = &[
     "lc:*",
 ];
 
-/// Properties replaced only when LightCraft has a value (capture time; GPS, which LightCraft
-/// doesn't read from sidecars): otherwise the sidecar's own value stays. Anything else LightCraft
+/// Properties replaced only when LightCraft has a value (capture time, GPS): otherwise the
+/// sidecar's own value stays. Anything else LightCraft
 /// writes (`xmp:CreatorTool`) goes only into new sidecars.
 pub const OWNED_IF_STATED: &[&str] = &["exif:DateTimeOriginal", "photoshop:DateCreated", "exif:GPSLatitude", "exif:GPSLongitude"];
+
+/// Every GPS tag a sidecar can state: the Exif GPS IFD as the XMP Exif schema maps it, all named
+/// `exif:GPS*` (`GPSVersionID`, `GPSLatitude`, `GPSLongitude`, `GPSAltitudeRef`, `GPSAltitude`,
+/// `GPSTimeStamp`, `GPSSatellites`, `GPSStatus`, `GPSMeasureMode`, `GPSDOP`, `GPSSpeedRef`, `GPSSpeed`,
+/// `GPSTrackRef`, `GPSTrack`, `GPSImgDirectionRef`, `GPSImgDirection`, `GPSMapDatum`, `GPSDestLatitude`,
+/// `GPSDestLongitude`, `GPSDestBearingRef`, `GPSDestBearing`, `GPSDestDistanceRef`, `GPSDestDistance`,
+/// `GPSProcessingMethod`, `GPSAreaInformation`, `GPSDifferential`), plus Exif 2.3's
+/// `exifEX:GPSHPositioningError`. A save that removes a position ([`removes_gps`]) removes all of them,
+/// so no altitude, time, direction or destination of the old place is left behind; nothing else in the
+/// `exif:` namespace starts with `GPS`.
+const GPS_PROPS: &[&str] = &["exif:GPS*", "exifEX:GPSHPositioningError"];
+
+/// How far apart (metres, along the globe) a sidecar's position and the one removed in LightCraft may
+/// be and still be the same place: the library's copy is a float, the file's text is degrees and
+/// minutes (or seconds) in its writer's precision. Minutes to 2 decimals (±0.005′, up to about 13 m
+/// diagonally) and finer are within it; a geotag this close to the removed one is that tag written
+/// again, and stripping it is what the user meant.
+const SAME_PLACE_M: f64 = 15.0;
+
+/// Great-circle distance in metres between two (latitude, longitude) positions in degrees (haversine on
+/// the mean Earth radius): 180°E and 180°W, or any two longitudes at a pole, are the same place.
+fn distance_m((lat1, lon1): (f64, f64), (lat2, lon2): (f64, f64)) -> f64 {
+    let (p1, p2) = (lat1.to_radians(), lat2.to_radians());
+    let (dp, dl) = (p2 - p1, (lon2 - lon1).to_radians());
+    let h = (dp / 2.0).sin().powi(2) + p1.cos() * p2.cos() * (dl / 2.0).sin().powi(2);
+    2.0 * 6_371_008.8 * h.clamp(0.0, 1.0).sqrt().asin()
+}
+
+/// Whether saving photo `p` over the sidecar packet `old` (parsed, when it parses) removes the packet's
+/// GPS ([`GPS_PROPS`]): `p`'s position was removed in LightCraft ([`lightcraft_catalog::Meta::gps_removed`])
+/// and not set again, and `old` states no position at all, or only that one (within [`SAME_PLACE_M`];
+/// every position when its descriptions state several). A different position, or one LightCraft can't
+/// read, was written by another app after the removal; it stays (with any other), as on a photo whose
+/// position LightCraft never set, until Read Metadata from File takes it. A save doesn't change the
+/// catalog (undo and redo would disagree with it), so this is decided by comparing with the file each time.
+fn removes_gps(old: Option<&lightcraft_meta::XmpData>, p: &Photo) -> bool {
+    let (None, Some(removed), Some(d)) = (p.meta.gps, p.meta.gps_removed, old) else { return false };
+    let stated = |k: &str| d.properties.get(k).map_or(&[][..], Vec::as_slice);
+    let (lats, lons) = (stated("exif:GPSLatitude"), stated("exif:GPSLongitude"));
+    lats.len() == lons.len()
+        && lats.iter().zip(lons).all(|(la, lo)| lightcraft_meta::parse_gps_position(la, lo).is_some_and(|g| distance_m(g, removed) < SAME_PLACE_M))
+}
 
 /// Write `data` to `path` atomically: a temp file next to it, synced, then renamed over it.
 fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
@@ -435,30 +490,43 @@ pub struct SidecarSaved {
     pub backup: Option<PathBuf>,
 }
 
-/// The new contents for the sidecar at `path`: `fresh` merged into the existing file, if any.
-/// Returns (contents, merged, backup).
-fn sidecar_contents(path: &Path, fresh: String, stamp: &str) -> std::io::Result<(String, bool, Option<PathBuf>)> {
+/// The new contents for photo `p`'s sidecar at `path`: its packet merged into the existing file,
+/// if any. Returns (contents, merged, backup).
+fn sidecar_contents(path: &Path, p: &Photo, cat: &lightcraft_catalog::Catalog, stamp: &str) -> std::io::Result<(String, bool, Option<PathBuf>)> {
     let bytes = match std::fs::read(path) {
         Ok(b) => b,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((fresh, false, None)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((sidecar_packet(p, cat), false, None)),
         // can't see what is there: never overwrite it blindly
         Err(e) => return Err(e),
     };
     if bytes.iter().all(u8::is_ascii_whitespace) {
-        return Ok((fresh, false, None));
+        return Ok((sidecar_packet(p, cat), false, None));
     }
-    let rules = lightcraft_meta::MergeRules { owned: OWNED, owned_if_present: OWNED_IF_STATED };
-    match std::str::from_utf8(&bytes)
-        .map_err(|e| e.to_string())
-        .and_then(|old| lightcraft_meta::merge_xmp(old, &fresh, rules).map_err(|e| e.to_string()))
-    {
+    let merge = |old: &str| {
+        let stated = lightcraft_meta::parse_xmp(old).ok();
+        let mut owned = OWNED.to_vec();
+        if removes_gps(stated.as_ref(), p) {
+            owned.extend_from_slice(GPS_PROPS);
+        }
+        let rules = lightcraft_meta::MergeRules { owned: &owned, owned_if_present: OWNED_IF_STATED };
+        lightcraft_meta::merge_xmp(old, &packet(p, cat, false, !states_gps(stated.as_ref(), p.meta.gps)), rules)
+    };
+    match std::str::from_utf8(&bytes).map_err(|e| e.to_string()).and_then(|old| merge(old).map_err(|e| e.to_string())) {
         Ok(merged) => Ok((merged, true, None)),
         Err(why) => {
             let b = backup(path, stamp)?;
             log::warn!("{}: not readable as XMP ({why}); kept a copy as {} before replacing it", path.display(), b.display());
-            Ok((fresh, false, Some(b)))
+            Ok((sidecar_packet(p, cat), false, Some(b)))
         }
     }
+}
+
+/// Whether packet `old` (parsed) already states position `gps` (to about a centimetre). Saving leaves
+/// such a position as the file writes it, in its own precision and form, rather than rewriting it from
+/// the library's copy: GPS read from a sidecar goes back unchanged unless it was changed here.
+fn states_gps(old: Option<&lightcraft_meta::XmpData>, gps: Option<(f64, f64)>) -> bool {
+    let (Some((lat, lon)), Some(g)) = (gps, old.and_then(|d| d.metadata.gps)) else { return false };
+    (g.latitude - lat).abs() < 1e-7 && (g.longitude - lon).abs() < 1e-7
 }
 
 /// Key of the stem sidecar a file maps to (case-insensitive).
@@ -664,7 +732,7 @@ impl Session {
         self.validate_sidecar_packets_for_paths(std::slice::from_ref(&path), &crate::rename::RealFs)?;
         let p = self.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?;
         let err = |e: std::io::Error| EngineError::Other(format!("{}: {e}", path.display()));
-        let (data, merged, backup) = sidecar_contents(&path, sidecar_packet(p, &self.catalog), &(self.clock)()).map_err(err)?;
+        let (data, merged, backup) = sidecar_contents(&path, p, &self.catalog, &(self.clock)()).map_err(err)?;
         write_atomic(&path, data.as_bytes()).map_err(err)?;
         self.note_sidecar_write(&path, data.as_bytes());
         Ok(SidecarSaved { path, merged, backup })
