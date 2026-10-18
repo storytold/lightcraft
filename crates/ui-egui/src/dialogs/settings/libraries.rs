@@ -6,7 +6,8 @@ use super::{LightcraftApp, Value, json};
 /// remaining batches would be committed into the new library (issue #1509). So is a switch while
 /// Move Folder To… waits for its destination: the move runs when the dialog closes, and in another
 /// library it would move the folder on disk with nothing to relink, leaving this library's photos
-/// missing (issue #3140).
+/// missing (issue #3140). The same applies to a pending CollabCraft Open: the answer would
+/// otherwise import into the library opened later.
 pub(crate) fn can_switch_library(app: &LightcraftApp) -> Result<(), String> {
     if crate::lightroom_import::is_running(app) {
         return Err("wait for Lightroom catalog import to finish before switching libraries".into());
@@ -16,6 +17,9 @@ pub(crate) fn can_switch_library(app: &LightcraftApp) -> Result<(), String> {
     }
     if app.pending_picks.iter().any(|p| p.command == "folder.move") {
         return Err("wait for Move Folder To… to finish before switching libraries".into());
+    }
+    if matches!(app.cloud.busy, Some(crate::cloud::Busy::Opening { .. })) {
+        return Err("wait for the cloud photo to finish opening before switching libraries".into());
     }
     // they were meant for the library open now (issue #2779)
     if !app.waiting_import.files.is_empty() {

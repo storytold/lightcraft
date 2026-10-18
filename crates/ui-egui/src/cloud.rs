@@ -29,8 +29,8 @@ pub use craft_cloud::{Capability, Entry, EntryKind};
 pub use craft_ui::cloud::{
     Account, Busy, CloudApp, CloudBackend, CloudFiles, Conflict, CopyFormat, Destination, DocumentKind, Event, Fault, Folder, Job, Link, Origin,
     Post, Source, UNAVAILABLE, available, browse, can_converse, conflict_modal, destination_name, has_target, link, load_shared, open_entry,
-    open_page, origin, parent_of, prefers_cloud, progress, pump, reload_active, save, save_as, save_page, share_button, shares, sign_in, sign_out,
-    start, who, work_together,
+    open_page, origin, parent_of, prefers_cloud, progress, reload_active, save, save_as, save_page, share_button, shares, sign_in, sign_out, start,
+    who, work_together,
 };
 
 use crate::LightcraftApp;
@@ -90,27 +90,78 @@ pub fn status(app: &LightcraftApp) -> Json {
 
 // ---------------------------------------------------------------- export format from destination
 
+/// Extensions CollabCraft Save can actually encode (developed output, not RAW originals).
+const WRITABLE: &[&str] = &["jpg", "jpeg", "png", "tif", "tiff", "webp"];
+
 /// The export format to write for a given cloud destination.
 ///
 /// The name is the first answer. The content type is the second. Both are
 /// needed: a provider hands back `application/octet-stream` for a perfectly
 /// good JPEG, and a file exported by a web application often has a correct
 /// content type and a bare name.
-fn export_format_for(into: Destination<'_>) -> lightcraft_engine::export::ExportFormat {
+///
+/// RAW and other open-only extensions are refused rather than writing JPEG
+/// bytes under a `.cr3` / `.dng` name.
+fn export_format_for(into: Destination<'_>) -> Result<lightcraft_engine::export::ExportFormat, String> {
     use lightcraft_engine::export::ExportFormat;
     let ext = into.extension();
     let mime = into.mime.unwrap_or("");
     match ext.as_str() {
-        "jpg" | "jpeg" => ExportFormat::Jpeg,
-        "png" => ExportFormat::Png,
-        "tif" | "tiff" => ExportFormat::Tiff,
-        "webp" => ExportFormat::Webp,
-        _ if mime.starts_with("image/jpeg") => ExportFormat::Jpeg,
-        _ if mime.starts_with("image/png") => ExportFormat::Png,
-        _ if mime.starts_with("image/tiff") => ExportFormat::Tiff,
-        _ if mime.starts_with("image/webp") => ExportFormat::Webp,
-        // Default: JPEG, which every viewer can read.
-        _ => ExportFormat::Jpeg,
+        "jpg" | "jpeg" => Ok(ExportFormat::Jpeg),
+        "png" => Ok(ExportFormat::Png),
+        "tif" | "tiff" => Ok(ExportFormat::Tiff),
+        "webp" => Ok(ExportFormat::Webp),
+        _ if mime.starts_with("image/jpeg") => Ok(ExportFormat::Jpeg),
+        _ if mime.starts_with("image/png") => Ok(ExportFormat::Png),
+        _ if mime.starts_with("image/tiff") => Ok(ExportFormat::Tiff),
+        _ if mime.starts_with("image/webp") => Ok(ExportFormat::Webp),
+        _ => Err(format!(
+            "CollabCraft save writes JPEG, PNG, TIFF, or WebP; rename to .{}.jpg (or .png / .tif / .webp)",
+            std::path::Path::new(into.name).file_stem().and_then(|s| s.to_str()).unwrap_or("photo")
+        )),
+    }
+}
+
+/// Suggested cloud Save name: keep a writable extension, otherwise use `.jpg`.
+pub(crate) fn cloud_save_name(file_name: &str) -> String {
+    let base = file_name.rsplit(['/', '\\']).next().unwrap_or(file_name).trim();
+    if base.is_empty() {
+        return String::new();
+    }
+    let ext = std::path::Path::new(base).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    if WRITABLE.iter().any(|w| *w == ext) {
+        return base.to_owned();
+    }
+    let stem = std::path::Path::new(base).file_stem().and_then(|s| s.to_str()).unwrap_or(base);
+    format!("{stem}.jpg")
+}
+
+/// Durable path for a cloud Open on desktop: under the library's `Originals/Cloud/` when the
+/// library is on disk, otherwise a process-unique folder under the OS temp directory.
+fn durable_cloud_path(app: &LightcraftApp, name: &str) -> Result<std::path::PathBuf, String> {
+    let base = name.rsplit(['/', '\\']).next().unwrap_or(name);
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+    let file_name = format!("{stamp}-{base}");
+    let dir = app
+        .session
+        .library
+        .as_ref()
+        .filter(|l| l.on_disk)
+        .map(|l| l.dir.join("Originals").join("Cloud"))
+        .unwrap_or_else(|| std::env::temp_dir().join(format!("lightcraft-cloud-{}", std::process::id())));
+    std::fs::create_dir_all(&dir).map_err(|e| format!("could not create cloud import folder: {e}"))?;
+    Ok(dir.join(file_name))
+}
+
+/// Drain CollabCraft answers, and remember which library a Cloud Open started in.
+pub fn pump(app: &mut LightcraftApp, ctx: &egui::Context) {
+    if matches!(app.cloud.busy, Some(Busy::Opening { .. })) {
+        app.cloud_open_library.get_or_insert_with(|| app.session.library_generation());
+    }
+    craft_ui::cloud::pump(app, ctx);
+    if !matches!(app.cloud.busy, Some(Busy::Opening { .. })) {
+        // Success consumes the stamp inside open_bytes; a failed read leaves it — drop it.
+        app.cloud_open_library = None;
     }
 }
 
@@ -137,48 +188,55 @@ impl CloudApp for LightcraftApp {
     }
 
     /// The file name of one photo, for a Save As field.
+    ///
+    /// RAW and other open-only names become `.jpg` so the suggested CollabCraft
+    /// name matches the developed bytes encode will write.
     fn title(&self, uid: u64) -> String {
-        self.session.catalog.photo(PhotoId(uid)).map(|p| p.file_name.clone()).unwrap_or_default()
+        let raw = self.session.catalog.photo(PhotoId(uid)).map(|p| p.file_name.clone()).unwrap_or_default();
+        cloud_save_name(&raw)
     }
 
     /// Turn bytes from cloud storage into an imported photo.
     ///
-    /// LightCraft's import is asynchronous: the bytes are written to a temporary
-    /// file and queued for the import worker. `Ok(None)` signals that the
-    /// application has taken the bytes and will show the result itself once the
-    /// import completes.
+    /// On the web the host stores the bytes in Originals (same path as a drop or
+    /// keyed invite) via [`Services::store_bytes`]. On desktop the bytes are
+    /// written under the library's `Originals/Cloud/` when the library is on
+    /// disk, then imported in place so the catalog keeps a durable source path.
+    /// `Ok(None)` means the import is asynchronous.
     fn open_bytes(&mut self, name: &str, bytes: Vec<u8>) -> Result<Option<u64>, String> {
-        // Write to a named temporary file so the existing import pipeline can
-        // read it as a file-backed photo. The OS temp dir is writable on every
-        // platform this runs on.
-        let dir = std::env::temp_dir().join("lightcraft-cloud");
-        std::fs::create_dir_all(&dir).map_err(|e| format!("could not create temp folder: {e}"))?;
-
-        // Use a timestamp suffix so simultaneous cloud opens do not collide.
-        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
-        let file_name = format!("{stamp}-{name}");
-        let path = dir.join(&file_name);
-        std::fs::write(&path, &bytes).map_err(|e| format!("could not write {name} to a temporary file: {e}"))?;
-
-        let path_str = path.to_string_lossy().to_string();
-        crate::import::start_paths(self, vec![path_str])?;
-        Ok(None)
+        if let Some(expected) = self.cloud_open_library.take() {
+            if expected != self.session.library_generation() {
+                return Err("the library changed before the cloud photo arrived; open it again".into());
+            }
+        }
+        if let Some(store) = self.services.store_bytes.as_mut() {
+            store(name.to_owned(), bytes);
+            return Ok(None);
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            return Err("this browser host cannot store a cloud photo (missing store_bytes)".into());
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let path = durable_cloud_path(self, name)?;
+            std::fs::write(&path, &bytes).map_err(|e| format!("could not write {name} into the library: {e}"))?;
+            let path_str = path.to_string_lossy().to_string();
+            // Already inside Originals (or a process-scoped durable folder): add in place.
+            crate::import::start_paths(self, vec![path_str])?;
+            Ok(None)
+        }
     }
 
     /// Turn the active photo into bytes to send to cloud storage.
     ///
-    /// The export format follows the destination: JPEG unless the name or
-    /// content type says TIFF, PNG or WebP. A photo opened as a raw file goes
-    /// back as a developed JPEG (or the format the destination asks for) rather
-    /// than as the original raw bytes, which would not be what the destination
-    /// expects to receive and which most viewers cannot open.
-    ///
-    /// An application that cannot write what the destination asks for should
-    /// refuse and say which formats it can write. A refusal a person can act
-    /// on beats a file that silently is not what it claims.
+    /// The export format follows the destination: JPEG, PNG, TIFF, or WebP.
+    /// A photo opened as a raw file goes back as a developed image in one of
+    /// those formats. A destination name that still looks like RAW (or another
+    /// open-only extension) is refused so the uploaded file is not mislabeled.
     fn encode(&mut self, uid: u64, into: Destination<'_>) -> Result<Vec<u8>, String> {
         let id = PhotoId(uid);
-        let format = export_format_for(into);
+        let format = export_format_for(into)?;
         let opts = lightcraft_engine::export::ExportOptions { format, ..Default::default() };
         let item = lightcraft_engine::export::prepare_export(&mut self.session, id, &opts, 1)
             .map_err(|e| format!("could not prepare photo for export: {e}"))?;

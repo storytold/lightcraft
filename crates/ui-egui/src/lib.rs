@@ -380,6 +380,9 @@ pub struct LightcraftApp {
     pub presence: craft_ui::presence::PresenceBar,
     /// Which cloud page the user opened from the File menu, if any.
     pub cloud_page: Option<cloud::CloudPage>,
+    /// Library generation when a CollabCraft Open (`Busy::Opening`) began. A late answer after a
+    /// library switch is refused so the photo cannot land in the wrong catalog.
+    pub(crate) cloud_open_library: Option<u64>,
 }
 
 /// How long a screenshot waits for in-flight renders before it is captured anyway (and the
