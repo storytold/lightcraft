@@ -29,14 +29,14 @@ pub fn run_batch(
 
 /// How many photos of a batch of `n` render side by side. Each render already spreads its rows
 /// over every core, but parts of it (decode, Smooth Skin, encode) run on one thread, so on a big
-/// machine more lanes keep the cores busy: half the cores, up to 14 (memory still caps them
+/// machine more lanes keep the cores busy: half the cores, up to 12 (memory still caps them
 /// through [`crate::memory::export_gate`]). One on wasm32 (no threads).
 pub fn export_parallelism(n: usize) -> usize {
     if cfg!(target_arch = "wasm32") {
         return 1;
     }
     let cores = std::thread::available_parallelism().map_or(1, |c| c.get());
-    (cores / 2).clamp(1, 14).min(n.max(1))
+    (cores / 2).clamp(1, 12).min(n.max(1))
 }
 
 /// [`run_batch`] with `lanes` photos in flight (the calling thread is one of them).
