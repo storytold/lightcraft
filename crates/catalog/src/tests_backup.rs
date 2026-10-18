@@ -384,6 +384,8 @@ fn only_a_finished_backup_of_the_same_files_is_shared_with() {
 /// is in nobody's way while it may still be written (the folder, or its `segments` folder where a
 /// backup writes most, changed less than an hour ago), and is removed by a later backup once it
 /// is old. A folder of that name that holds anything else is not touched.
+// (a folder's time is set through a handle on the folder, which Windows does not give to File::open)
+#[cfg(unix)]
 #[test]
 fn what_a_backup_cut_short_left_is_cleared_away_later() {
     let (lib, dest) = (temp("lib"), temp("dest"));
