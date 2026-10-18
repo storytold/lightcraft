@@ -205,6 +205,13 @@ pub fn builtin_presets() -> Vec<ExportPreset> {
         p("JPEG (Large)", serde_json::json!({"format": "jpeg", "quality": 92, "longEdge": 0, "colorSpace": "srgb"})),
         p("Original + Settings", serde_json::json!({"format": "original"})),
         p("DNG", serde_json::json!({"format": "dng"})),
+        p("Instagram Feed", serde_json::json!({"format": "jpeg", "quality": 85, "longEdge": 1080, "colorSpace": "srgb", "sharpen": "screen"})),
+        p(
+            "Instagram Story / Reel",
+            serde_json::json!({"format": "jpeg", "quality": 85, "longEdge": 1920, "colorSpace": "srgb", "sharpen": "screen"}),
+        ),
+        p("Web / Portfolio", serde_json::json!({"format": "jpeg", "quality": 85, "longEdge": 2048, "colorSpace": "srgb", "metadata": "copyright"})),
+        p("Full Resolution Master", serde_json::json!({"format": "jpeg", "quality": 95, "longEdge": 0, "colorSpace": "displayP3"})),
     ]
 }
 

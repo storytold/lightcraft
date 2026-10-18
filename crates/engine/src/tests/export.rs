@@ -190,6 +190,38 @@ fn presets_conflicts_and_subfolders() {
 }
 
 #[test]
+fn named_builtin_presets_expand_round_trip_and_apply() {
+    let mut s = Session::with_demo();
+    // the issue's four named built-ins are listed, marked builtin
+    let builtin: Vec<String> = s
+        .execute("export.presets", &json!({}))
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|p| p["builtin"].as_bool().unwrap())
+        .map(|p| p["name"].as_str().unwrap().to_string())
+        .collect();
+    for name in ["Instagram Feed", "Instagram Story / Reel", "Web / Portfolio", "Full Resolution Master"] {
+        assert!(builtin.contains(&name.to_string()), "{builtin:?}");
+    }
+    // expanding one yields exactly the issue's settings, and they validate as app.export params
+    let feed = s.export_params(&json!({"preset": "Instagram Feed"})).unwrap();
+    assert_eq!(feed, json!({"format": "jpeg", "quality": 85, "longEdge": 1080, "colorSpace": "srgb", "sharpen": "screen"}));
+    ExportOptions::validate("app.export", &feed).unwrap();
+    // round trip: save as a user preset → expand again → identical ExportOptions
+    s.execute("export.savePreset", &json!({"name": "My Feed", "params": feed})).unwrap();
+    let mine = s.export_params(&json!({"preset": "My Feed"})).unwrap();
+    assert_eq!(ExportOptions::from_json(&feed), ExportOptions::from_json(&mine));
+    // built-in names (the new ones too) are reserved
+    assert!(s.execute("export.savePreset", &json!({"name": "web / portfolio", "params": {}})).is_err());
+    // applying the preset really renders: the long edge lands at 1080
+    let id = s.active().unwrap();
+    let e = export_photo(&mut s, id, &ExportOptions::from_json(&feed), 1).unwrap();
+    assert_eq!(e.width.max(e.height), 1080, "{}×{}", e.width, e.height);
+}
+
+#[test]
 fn prepared_exports_run_on_another_thread() {
     fn send<T: Send>(_: &T) {}
     let mut s = Session::with_demo();
