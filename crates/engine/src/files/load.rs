@@ -1,7 +1,7 @@
 use super::colour::bin_factor;
 use super::preview::{fit_box, load_embedded_preview};
 use super::probe::preview_reason;
-use super::{Arc, CameraColourModel, DenoiseSpec, Filter, HIGHLIGHT_CLIP, Orientation, Rgb32f, SourceInfo, fit, xy_to_temp_tint};
+use super::{Arc, CameraColourModel, DenoiseSpec, Filter, HIGHLIGHT_CLIP, LoadOptions, Orientation, Rgb32f, SourceInfo, fit, xy_to_temp_tint};
 
 /// Decode a file into a linear Rec.2020 image no larger than `max_edge`, oriented.
 ///
@@ -9,27 +9,46 @@ use super::{Arc, CameraColourModel, DenoiseSpec, Filter, HIGHLIGHT_CLIP, Orienta
 /// instead of each one waking the pool from outside and waiting for it (which costs more than the
 /// loops themselves when the machine is busy).
 pub fn load_bytes(bytes: &[u8], max_edge: usize) -> Result<(Rgb32f, SourceInfo), String> {
-    rayon::scope(|_| load_bytes_now(std::borrow::Cow::Borrowed(bytes), max_edge, None, false).map(|(img, _, info, _)| (img, info)))
+    load_bytes_with(bytes, max_edge, LoadOptions::default())
+}
+
+/// [`load_bytes`] with the photo's settings the decode depends on.
+pub fn load_bytes_with(bytes: &[u8], max_edge: usize, options: LoadOptions) -> Result<(Rgb32f, SourceInfo), String> {
+    rayon::scope(|_| load_bytes_now(std::borrow::Cow::Borrowed(bytes), max_edge, None, false, options).map(|(img, _, info, _)| (img, info)))
 }
 
 /// [`load_bytes`] taking the file's bytes: a raw file's bytes are freed as soon as it is decoded
 /// (less memory held while it is developed).
 pub fn load_vec(bytes: Vec<u8>, max_edge: usize) -> Result<(Rgb32f, SourceInfo), String> {
-    rayon::scope(move |_| load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, None, false).map(|(img, _, info, _)| (img, info)))
+    load_vec_with(bytes, max_edge, LoadOptions::default())
+}
+
+/// [`load_vec`] with the photo's settings the decode depends on.
+pub fn load_vec_with(bytes: Vec<u8>, max_edge: usize, options: LoadOptions) -> Result<(Rgb32f, SourceInfo), String> {
+    rayon::scope(move |_| load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, None, false, options).map(|(img, _, info, _)| (img, info)))
 }
 
 /// [`load_vec`] for a thumbnail: a DNG that keeps reduced-resolution copies of its raw image (Lightroom's HDR and
 /// panorama merges) develops the smallest that covers `max_edge` instead of the whole image. The flag says whether
 /// it did: such a picture is not the full image, and an export never renders from it.
-pub fn load_vec_reduced(bytes: Vec<u8>, max_edge: usize) -> Result<(Rgb32f, SourceInfo, bool), String> {
-    rayon::scope(move |_| load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, None, true).map(|(img, _, info, reduced)| (img, info, reduced)))
+pub fn load_vec_reduced(bytes: Vec<u8>, max_edge: usize, options: LoadOptions) -> Result<(Rgb32f, SourceInfo, bool), String> {
+    rayon::scope(move |_| {
+        load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, None, true, options).map(|(img, _, info, reduced)| (img, info, reduced))
+    })
 }
 
 /// [`load_vec`] that also develops the photo's cached denoised picture (`spec`) from the same decode: the plain
 /// picture, the denoised one (`None` when it cannot be read or does not fit this raw: the plain one is then all
 /// there is) and the source facts. Both pictures are the same size.
-pub fn load_vec_pair(bytes: Vec<u8>, max_edge: usize, spec: &DenoiseSpec) -> Result<(Rgb32f, Option<Rgb32f>, SourceInfo), String> {
-    rayon::scope(move |_| load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, Some(spec), false).map(|(img, twin, info, _)| (img, twin, info)))
+pub fn load_vec_pair(
+    bytes: Vec<u8>,
+    max_edge: usize,
+    spec: &DenoiseSpec,
+    options: LoadOptions,
+) -> Result<(Rgb32f, Option<Rgb32f>, SourceInfo), String> {
+    rayon::scope(move |_| {
+        load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, Some(spec), false, options).map(|(img, twin, info, _)| (img, twin, info))
+    })
 }
 
 /// The denoised camera RGB of `raw` from its cached product, as the plain development would have it: the default
@@ -59,6 +78,7 @@ fn load_bytes_now(
     max_edge: usize,
     denoise: Option<&DenoiseSpec>,
     allow_reduced: bool,
+    options: LoadOptions,
 ) -> Result<(Rgb32f, Option<Rgb32f>, SourceInfo, bool), String> {
     if lightcraft_raw::probe(&bytes).is_some() {
         // a thumbnail (`allow_reduced`, never an export) of a DNG that keeps smaller copies of its raw image
@@ -95,13 +115,15 @@ fn load_bytes_now(
         // Which scale white balance is edited on, and the as-shot white on it, from the file's own colour tags or
         // the camera's measured matrices (`Photo::relative_wb` decides the same from the catalog's camera)
         let scale = WbScaleOf::new(raw.format, &raw.color, raw.wb_multipliers, &raw.metadata);
+        // (whether the photo's Profile option can start from measured colour: decided before the colour is chosen)
+        let colorimetric = crate::camera_preview::colorimetric_camera(&raw).is_some();
         // the source's segmentation mattes (DNG semantic masks), read while the starting colour is fitted
         let ((xy, t, camera_look), mattes) = rayon::join(
             || {
                 let removed = dng_lens_ops.map(|ops| std::mem::replace(&mut raw.opcodes.list3, ops));
                 // With the opcodes restored, the proxy already includes vignetting; do not apply it twice.
                 let embedded = if removed.is_some() { None } else { lens.as_ref() };
-                let colour = crate::camera_preview::starting_colour(&mut raw, &bytes, lens_geometry.as_ref(), embedded);
+                let colour = crate::camera_preview::starting_colour(&mut raw, &bytes, lens_geometry.as_ref(), embedded, options.colour);
                 if let Some(ops) = removed {
                     raw.opcodes.list3 = ops;
                 }
@@ -202,6 +224,7 @@ fn load_bytes_now(
                 local_tone,
                 // (the catalog knows the original's size: `media::source_info`)
                 native_long: None,
+                colorimetric,
             },
             used_reduced,
         ));

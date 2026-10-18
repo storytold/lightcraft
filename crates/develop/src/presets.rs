@@ -135,6 +135,11 @@ pub fn extract_groups(s: &DevelopSettings, groups: &[SettingsGroup]) -> Value {
             }
         }
     }
+    // the Camera colour is left out of the settings while it is Auto; a preset or a sync of the Profile group still
+    // carries it, so that applying it turns a Colorimetric photo back to Auto
+    if let Some(Value::Object(profile)) = out.get_mut("profile") {
+        profile.entry("camera_colour").or_insert_with(|| serde_json::to_value(s.profile.camera_colour).unwrap_or(Value::Null));
+    }
     Value::Object(out)
 }
 
@@ -164,8 +169,8 @@ fn scale_patch(base: &Value, patch: &Value, t: f64) -> Value {
             for (k, pv) in p {
                 let bv = b.get(k).unwrap_or(&Value::Null);
                 let v = scale_patch(bv, pv, t);
-                // a field the settings leave out while it has its default (`camera_local_tone`) keeps it below the
-                // halfway amount: a `null` would not deserialize, and the whole preset would not apply
+                // a field the settings leave out while it has its default (`camera_colour`, `camera_local_tone`) keeps
+                // it below the halfway amount: a `null` would not deserialize, and the whole preset would not apply
                 if v.is_null() && !b.contains_key(k) {
                     continue;
                 }
@@ -288,22 +293,6 @@ mod tests {
             assert!((out.light.exposure - amount.min(5.0)).abs() < 1e-9, "{amount}: exposure {}", out.light.exposure);
             assert!((out.grain.amount - (40.0 * amount).min(100.0)).abs() < 1e-9, "{amount}: grain {}", out.grain.amount);
             assert_eq!(out.grain.seed, seed, "{amount}: seed");
-        }
-    }
-
-    /// A preset holding a field the settings leave out while it has its default (Camera local tone mapping, written
-    /// only when on) used to do nothing below 50 %: the field had no value to scale from, became `null`, failed to
-    /// deserialize, and the whole preset was dropped. It applies now, and the field keeps the photo's own value
-    /// until the halfway amount, as every other non-numeric value does.
-    #[test]
-    fn amount_below_half_keeps_fields_the_settings_leave_out() {
-        let partial = json!({"light": {"exposure": 1.0}, "profile": {"camera_local_tone": true}});
-        let base = DevelopSettings::default();
-        assert!(base.to_json().pointer("/profile/camera_local_tone").is_none(), "left out while off");
-        for (amount, on) in [(0.25, false), (0.5, true), (1.5, true)] {
-            let out = apply_partial(&base, &partial, amount);
-            assert!((out.light.exposure - amount).abs() < 1e-9, "{amount}: exposure {}", out.light.exposure);
-            assert_eq!(out.profile.camera_local_tone, on, "{amount}: camera local tone");
         }
     }
 

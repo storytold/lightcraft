@@ -1,6 +1,8 @@
 use super::look_fit::{fit_dng_tone, fit_preview, look_proxies};
 use super::mono::{fit_dark_tone, monochrome_look};
 use super::proxy::LensGeometry;
+use lightcraft_develop::CameraColour;
+
 use super::{CameraLook, CameraTone, CameraTransform, ColorData, D50, D65, Mat3, ProfileLook, REC2020, RawFormat, RawImage, ToneCurve, Xy, bradford};
 
 /// Long edge of the sensor/JPEG proxy a single photo's look is fitted on (the acceptance gates
@@ -44,14 +46,19 @@ pub(crate) fn file_local_look(format: RawFormat) -> bool {
 /// `OpcodeList3`): the camera applied it to its JPEG, so the sensor proxy is warped the same way before pairing.
 /// `embedded` is the file's embedded lens correction: its vignetting is applied to the sensor proxy of every fit, as
 /// the render applies it.
+/// `colour` is the photo's Profile option: [`CameraColour::Colorimetric`] skips the JPEG (the fit, the black-and-white
+/// tone and the near-black tone) for a model with spectral matrices, which then give the colour with LightCraft's
+/// default tone curve.
 pub(crate) fn starting_colour(
     raw: &mut RawImage,
     bytes: &[u8],
     lens: Option<&LensGeometry>,
     embedded: Option<&lightcraft_develop::EmbeddedLens>,
+    colour: CameraColour,
 ) -> (Xy, CameraTransform, Option<CameraLook>) {
     let (xy, t, look) = starting_colour_with(
         raw,
+        colour,
         |raw, t| fit_preview(raw, bytes, t, lens, embedded),
         |raw, t| monochrome_look(raw, bytes, t, lens, embedded),
         |raw, t| {
@@ -89,10 +96,21 @@ pub(crate) fn dng_tone_eligible(raw: &RawImage, t: &CameraTransform) -> bool {
     raw.format == RawFormat::Dng && !t.matrix_is_fallback && identity_tone_curve(p.tone_curve.as_ref()) && p.gain_table_map.is_none()
 }
 
+/// Matrices from measured spectral sensitivities for the raw's camera model, when it has no colour matrices of its own
+/// and its starting look is otherwise fitted to its JPEG ([`file_local_look`]): what [`CameraColour::Colorimetric`]
+/// starts from.
+pub(crate) fn colorimetric_camera(raw: &RawImage) -> Option<&'static lightcraft_raw::spectral::Camera> {
+    if lightcraft_raw::color::has_matrix(&raw.color) || !file_local_look(raw.format) {
+        return None;
+    }
+    lightcraft_raw::spectral::find(raw.metadata.make.as_deref(), raw.metadata.model.as_deref()?)
+}
+
 /// [`starting_colour`] with the JPEG fit (the look, and whether the JPEG is black and white) and the black-and-white
 /// JPEG's tone fit and the near-black tone fallback passed in (tests pin the order with them).
 pub(super) fn starting_colour_with(
     raw: &mut RawImage,
+    colour: CameraColour,
     fit: impl FnOnce(&RawImage, &CameraTransform) -> (Option<CameraLook>, bool),
     monochrome: impl FnOnce(&RawImage, &CameraTransform) -> Option<CameraLook>,
     dark: impl FnOnce(&RawImage, &CameraTransform) -> Option<CameraLook>,
@@ -103,6 +121,17 @@ pub(super) fn starting_colour_with(
     };
     let (xy, t) = start(raw);
     if !t.matrix_is_fallback {
+        return (xy, t, None);
+    }
+    // Colorimetric: the measured matrices, never the JPEG (a model without them starts as Auto does)
+    if colour == CameraColour::Colorimetric
+        && let Some(camera) = colorimetric_camera(raw)
+    {
+        camera.fill(&mut raw.color);
+        if lightcraft_pipeline::profiling() {
+            eprintln!("[profile] {:?} camera colour from spectral sensitivities (Colorimetric): {} {}", raw.format, camera.make, camera.model);
+        }
+        let (xy, t) = start(raw);
         return (xy, t, None);
     }
     let (look, black_and_white) = fit(raw, &t);
@@ -135,7 +164,7 @@ pub(crate) fn starting_colour_tags(raw: &mut RawImage, bytes: &[u8]) -> Option<C
     let scale = crate::files::WbScaleOf::new(raw.format, &raw.color, raw.wb_multipliers, &raw.metadata);
     let white = scale.dng_white(&raw.color, lightcraft_raw::color::as_shot_white_xy(raw));
     // (a merge frame arrives without its lens warp: `lightcraft_merge` removes it before calling)
-    let (_, t, look) = starting_colour(raw, bytes, None, None);
+    let (_, t, look) = starting_colour(raw, bytes, None, None, CameraColour::Auto);
     dng_colour(&raw.color, &white, &t, look.as_ref())
 }
 

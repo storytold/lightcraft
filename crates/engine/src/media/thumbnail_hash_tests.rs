@@ -70,7 +70,7 @@ fn hash_cache_is_bounded_weak_and_shared_settings_remain_independent() {
 #[test]
 fn source_from_before_content_reload_is_not_accepted() {
     let mut s = session();
-    s.media.file_loader = Some(Arc::new(|_, _| Ok((Rgb32f::new(8, 8), SourceInfo::default()))));
+    s.media.file_loader = Some(Arc::new(|_, _, _| Ok((Rgb32f::new(8, 8), SourceInfo::default()))));
     let old = s.thumb_job(PhotoId(1), 256).unwrap().run();
     assert!(old.loaded.is_some());
     s.catalog
@@ -88,13 +88,81 @@ fn source_from_before_content_reload_is_not_accepted() {
     s.accept(&old);
     assert_eq!(s.media.source_usage().0, 0);
 }
+/// The photo's Camera colour option is part of the decode: a source decoded with another option is decoded again
+/// (and a late render of the old one is not taken back into the cache); one the option doesn't change is reused.
+#[test]
+fn camera_colour_decodes_again_only_when_it_changes_the_source() {
+    use lightcraft_develop::CameraColour;
+    let decodes = |colorimetric: bool| {
+        let seen = Arc::new(std::sync::Mutex::new(Vec::<LoadOptions>::new()));
+        let log = seen.clone();
+        let loader: FileLoader = Arc::new(move |_, _, options| {
+            log.lock().unwrap().push(options);
+            Ok((Rgb32f::new(8, 8), SourceInfo { raw: true, colorimetric, ..SourceInfo::default() }))
+        });
+        (loader, seen)
+    };
+    let set = |s: &mut crate::Session, colour: CameraColour| {
+        let mut d = (*s.catalog.photo(PhotoId(1)).unwrap().develop).clone();
+        d.profile.camera_colour = colour;
+        s.catalog.apply(Op::SetDevelop { id: PhotoId(1), settings: Arc::new(d), label: "edit".into(), edited: None }).unwrap();
+    };
+    let render = |s: &mut crate::Session| {
+        let r = s.render_job(PhotoId(1), 64, 64, false, true).unwrap().run();
+        s.accept(&r);
+    };
+
+    let mut s = session();
+    let (loader, seen) = decodes(true);
+    s.media.file_loader = Some(loader);
+    render(&mut s);
+    // a job made before the option changes, finishing after it
+    let late = s.render_job(PhotoId(1), 64, 64, false, true).unwrap();
+    render(&mut s);
+    assert_eq!(seen.lock().unwrap().len(), 1, "the decoded source is reused while the option stays");
+    set(&mut s, CameraColour::Colorimetric);
+    render(&mut s);
+    assert_eq!(seen.lock().unwrap().len(), 2, "a new option decodes again");
+    assert_eq!(seen.lock().unwrap()[1].colour, CameraColour::Colorimetric, "with the option");
+    render(&mut s);
+    assert_eq!(seen.lock().unwrap().len(), 2, "and the new source is reused");
+    // the late job re-decodes with the old option (its source was the cached one: decode it from the file)
+    let mut late = late;
+    late.source = s.media.origin_ref(&Source::File { path: "hash-fixture.jpg".into() }, 64);
+    let late = late.run();
+    assert_eq!(late.loaded.as_ref().map(|l| l.options.colour), Some(CameraColour::Auto));
+    s.accept(&late);
+    let n = seen.lock().unwrap().len();
+    render(&mut s);
+    assert_eq!(seen.lock().unwrap().len(), n, "the Colorimetric source stayed in the cache");
+
+    // a preset's preview with the other option is decoded with it, and its source doesn't replace the photo's own
+    let mut auto = (*s.catalog.photo(PhotoId(1)).unwrap().develop).clone();
+    auto.profile.camera_colour = CameraColour::Auto;
+    let preview = s.variant_job(PhotoId(1), &auto, 64).unwrap().run();
+    assert_eq!(preview.loaded.as_ref().map(|l| l.options.colour), Some(CameraColour::Auto), "the preview's own option");
+    s.accept(&preview);
+    let n = seen.lock().unwrap().len();
+    render(&mut s);
+    assert_eq!(seen.lock().unwrap().len(), n, "the photo's Colorimetric source is still the cached one");
+
+    // a camera without measured colour: the option changes nothing, so the source is kept
+    let mut s = session();
+    let (loader, seen) = decodes(false);
+    s.media.file_loader = Some(loader);
+    render(&mut s);
+    set(&mut s, CameraColour::Colorimetric);
+    render(&mut s);
+    assert_eq!(seen.lock().unwrap().len(), 1, "no second decode where the option has no effect");
+}
+
 /// A panic while rendering (here in the decoder) used to end the pool's worker thread without
 /// an answer, so the view that asked showed "Rendering…" forever. It is the job's failure now,
 /// for renders and for stand-ins, answering the request it came from.
 #[test]
 fn a_render_that_panics_fails_instead_of_never_answering() {
     let mut s = session();
-    s.media.file_loader = Some(Arc::new(|_, _| panic!("decoder bug")));
+    s.media.file_loader = Some(Arc::new(|_, _, _| panic!("decoder bug")));
     let mut job = s.thumb_job(PhotoId(1), 256).unwrap();
     job.request_id = 42;
     let (key, level, source_key) = (job.key, job.level, job.source_key);

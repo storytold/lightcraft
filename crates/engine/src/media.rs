@@ -40,8 +40,8 @@ pub use render::{RenderJob, RenderResult, develop, develop_reporting, fit_for_di
 use settings_hash::SETTINGS_HASH_ENTRIES;
 use settings_hash::SettingsHashes;
 pub use source::{
-    DISK_CACHE_BYTES, DecodedSource, DenoiseSpec, FACE_EDGE_STEP, FileLoader, FileProbe, MakeProduct, PairLoader, PreviewLoader, ProbeInfo,
-    RENDER_CACHE_VERSION, ReducedLoader, SourceLevel, SourceRef, THUMB_SIZES, Twin, face_edge, thumb_bucket,
+    DISK_CACHE_BYTES, DecodedSource, DenoiseSpec, FACE_EDGE_STEP, FileLoader, FileProbe, LoadOptions, MakeProduct, PairLoader, PreviewLoader,
+    ProbeInfo, RENDER_CACHE_VERSION, ReducedLoader, SourceLevel, SourceRef, THUMB_SIZES, Twin, face_edge, thumb_bucket,
 };
 
 pub struct MediaCache {
