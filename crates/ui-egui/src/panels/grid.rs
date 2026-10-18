@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use egui::{Align2, Color32, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
-use lightcraft_catalog::{Catalog, ColorLabel, DateRun, Flag, GroupBy, PhotoId, SortKey, StackId};
+use lightcraft_catalog::{Catalog, ColorLabel, DateRun, GroupBy, PhotoId, SortKey, StackId};
 use serde_json::json;
 
 use crate::LightcraftApp;
