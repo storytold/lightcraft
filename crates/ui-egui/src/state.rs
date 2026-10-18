@@ -1590,6 +1590,7 @@ impl UiState {
         self.toasts.last()
     }
 
+    /// A toast already over at `now` (`until < now`) is not shown at all.
     /// `now` is the app time of the push: toasts whose time is already over go first, so a gone one never costs a
     /// showing one its place (notices arrive before the frame that expires them).
     /// Show `text` until `until` (app time, s), in `label`'s colours if given, below the toasts already showing: one
@@ -1597,6 +1598,9 @@ impl UiState {
     /// place and stays until the later of its times. Past [`MAX_TOASTS`] the oldest goes.
     pub fn push_toast(&mut self, now: f64, text: impl Into<String>, until: f64, label: Option<lightcraft_catalog::ColorLabel>) {
         self.expire_toasts(now);
+        if until < now {
+            return;
+        }
         self.push(text.into(), until, label, None);
     }
 
@@ -1612,6 +1616,9 @@ impl UiState {
         label: Option<lightcraft_catalog::ColorLabel>,
     ) {
         self.expire_toasts(now);
+        if until < now {
+            return;
+        }
         self.toasts.retain(|t| t.3 != Some(topic));
         self.push(text.into(), until, label, Some(topic));
     }

@@ -134,3 +134,19 @@ fn an_expired_toast_never_costs_a_showing_one_its_place() {
     assert!(!texts(&ui).contains(&"saved"), "{:?}", texts(&ui));
     assert_eq!(texts(&ui), vec!["live two", "new", "later"]);
 }
+
+/// Given a full stack of showing toasts, when a toast whose time is already over is pushed, then nothing is
+/// inserted, nothing is evicted and a topic toast it would replace stays.
+#[test]
+fn a_toast_already_over_is_not_shown_and_evicts_nothing() {
+    let mut ui = UiState::default();
+    ui.push_toast(0.0, "one", 20.0, None);
+    ui.push_toast_on(0.0, "save", "two", 20.0, None);
+    ui.push_toast(0.0, "three", 20.0, None);
+    ui.push_toast(5.0, "late", 3.0, None);
+    ui.push_toast_on(5.0, "save", "late save", 3.0, None);
+    assert_eq!(texts(&ui), vec!["one", "two", "three"]);
+    // one ending exactly now still shows
+    ui.push_toast(5.0, "edge", 5.0, None);
+    assert_eq!(texts(&ui), vec!["two", "three", "edge"]);
+}
