@@ -130,7 +130,7 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         if out.drag_started {
             app.ui.crop_angle_from = Some(d.crop.geometry);
         }
-        let from = app.ui.crop_angle_from;
+        let from = (!out.reset).then_some(app.ui.crop_angle_from).flatten();
         crate::panels::edit::apply_slider_out(app, &spec, out, |app, v| {
             let from = from.map(|c| json!({"rect": [c.rect.x0, c.rect.y0, c.rect.x1, c.rect.y1], "angle": c.angle}));
             match from {
