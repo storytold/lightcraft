@@ -2356,7 +2356,7 @@
   "Finish Lightroom catalog import before adding photos": "写真を追加する前に Lightroom カタログの読み込みを完了してください",
   "Continue in Background": "バックグラウンドで続行",
   "Folder not found": "フォルダが見つかりません",
-  "Dismiss": "閉じる",
+  "Dismiss": "消去",
   "Review…": "確認…",
   "Open Synchronize Folder with what the scan found": "スキャンの結果を「フォルダを同期」で開く",
   "You can go on working: a notice at the top left says when the scan is done.": "作業を続けられます。スキャンが終わると左上に通知が表示されます。"
