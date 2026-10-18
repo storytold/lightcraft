@@ -1100,7 +1100,9 @@ pub fn specs() -> Vec<CommandSpec> {
                     let prepared = prepare_photo_for_wb_partial(&d, &preset.settings, &info);
                     let on_kelvin_scale = prepared.is_some() && info.raw && !info.relative_wb;
                     let base: &DevelopSettings = prepared.as_ref().unwrap_or(&d);
-                    let mut next = preset.apply(base, amount);
+                    // the preset composes on the photo's original state, not the visible edits (issue #2159)
+                    let original = s.catalog.photo(id).map(|p| p.import_defaults()).unwrap_or_default();
+                    let mut next = preset.apply_on(base, &original, amount);
                     if on_kelvin_scale {
                         lightcraft_pipeline::local::normalize_wb(&mut next, &info);
                     }
