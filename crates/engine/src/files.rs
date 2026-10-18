@@ -153,7 +153,8 @@ pub(crate) fn probe_bytes_with(name: &str, bytes: &[u8], hash: bool) -> Result<P
 fn describe(name: &str, bytes: &[u8], raw: RawProbe, hash: bool) -> Result<ProbeInfo, String> {
     let content_hash = hash.then(|| lightcraft_preview::hash_bytes(bytes).to_string());
     let head_hash = Some(head_hash(bytes));
-    let m = lightcraft_meta::extract(bytes);
+    let blocks = lightcraft_meta::embedded(bytes);
+    let m = lightcraft_meta::extract_embedded(&blocks);
     let (meta, captured) = meta_of(&m);
     if let Some(raw) = raw {
         let raw = match raw.map_err(|e| preview_reason(bytes, e)) {
@@ -171,7 +172,7 @@ fn describe(name: &str, bytes: &[u8], raw: RawProbe, hash: bool) -> Result<Probe
                     meta,
                     as_shot_wb: None,
                     content_hash,
-                    xmp: lightcraft_meta::embedded(bytes).xmp,
+                    xmp: blocks.xmp,
                     preview_only: Some(why),
                     head_hash,
                     ..Default::default()
@@ -199,7 +200,7 @@ fn describe(name: &str, bytes: &[u8], raw: RawProbe, hash: bool) -> Result<Probe
             meta,
             as_shot_wb,
             content_hash,
-            xmp: lightcraft_meta::embedded(bytes).xmp,
+            xmp: blocks.xmp,
             preview_only: None,
             head_hash,
             native_read: None,
@@ -1244,6 +1245,40 @@ impl crate::Session {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    #[test]
+    fn same_read_raw_facts_keep_embedded_xmp_and_metadata_overlays() {
+        let packet = lightcraft_meta::write_xmp(
+            &lightcraft_meta::Metadata {
+                artist: Some("XMP artist".into()),
+                title: Some("XMP title".into()),
+                caption: Some("XMP caption".into()),
+                ..Default::default()
+            },
+            Some("{\"test\":true}"),
+        );
+        let bytes = crate::tests_xmp::synthetic_dng_with(
+            Some(&packet),
+            lightcraft_meta::Metadata {
+                make: Some("Example".into()),
+                model: Some("RawTest".into()),
+                artist: Some("EXIF artist".into()),
+                ..Default::default()
+            },
+        );
+        let info = probe_bytes_with("same-read.dng", &bytes, false).unwrap();
+        assert_eq!((info.width, info.height), (32, 24));
+        assert_eq!(info.file_size, bytes.len() as u64);
+        assert!(info.preview_only.is_none());
+        assert_eq!(info.xmp.as_deref(), Some(packet.as_str()));
+        assert_eq!(info.meta.camera, "Example RawTest");
+        assert_eq!(info.meta.creator, "XMP artist");
+        assert_eq!(info.meta.title, "XMP title");
+        assert_eq!(info.meta.caption, "XMP caption");
+        assert!(info.content_hash.is_none(), "same-read facts must not add a second content hash");
+        assert!(info.native_read.is_none(), "byte-only metadata must not fabricate source proof");
+        assert_eq!(info.head_hash.as_deref(), Some(head_hash(&bytes).as_str()));
+    }
+
     /// Keywords from a file keep their hierarchy: the paths of `lr:hierarchicalSubject`, not the
     /// flat names of `dc:subject` that LightCraft's exports (and Lightroom Classic) write besides
     /// them; an exported `travel|Italy|Rome` comes back as itself.
