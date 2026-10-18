@@ -4,7 +4,7 @@
 //! the same crop as `crop.straighten` (the rotate handle, the Straighten slider, the Angle field)
 //! and `crop.set {angle}`.
 
-use lightcraft_geom::{CropGeometry, Rect};
+use lightcraft_geom::{CropGeometry, Rect, crop_fit_angle};
 use serde_json::{Value, json};
 
 use crate::Session;
@@ -124,6 +124,32 @@ fn a_locked_aspect_survives_rotating() {
         // and the crop is whole again at 0°, not left shrunk
         let back = geometry(&s).rect.scale(w, h);
         assert!((back.width() - drawn.scale(w, h).width()).abs() < 1e-6, "{lock} came home at {} not {}", back.width(), drawn.scale(w, h).width());
+    }
+}
+
+#[test]
+fn a_rotate_drag_started_turned_measures_against_that_angle() {
+    // The engine has to pass the angle the crop was drawn at, not the angle it has reached. Reach the
+    // largest crop at 30°, then drive the angle home: the answer is the largest crop of its aspect at
+    // each step. With the running angle instead, the crop is called "not the largest" from the second
+    // step and stays at the 30° size, which is exactly the bug (PR #1876 review).
+    //
+    // Every other test in this file presses at 0°, where the two angles agree, so dropping the press
+    // angle at the `crop.straighten` call site leaves them all green. This one is the test with teeth.
+    let mut s = Session::with_demo();
+    let (w, h) = dims(&s);
+    s.execute("crop.reset", &json!({})).unwrap();
+    s.execute("crop.straighten", &json!({"angle": 30.0})).unwrap();
+    let drawn = geometry(&s);
+    assert_eq!(drawn.angle, 30.0);
+    assert!(close(drawn, crop_fit_angle(w, h, 30.0, None)), "30° left the largest crop of its aspect: {drawn:?}");
+    let from = json!({"rect": [drawn.rect.x0, drawn.rect.y0, drawn.rect.x1, drawn.rect.y1], "angle": drawn.angle});
+    for angle in [20.0, 10.0, 0.0] {
+        s.execute("crop.straighten", &json!({"angle": angle, "from": from})).unwrap();
+        let got = geometry(&s);
+        let want = crop_fit_angle(w, h, angle, None);
+        assert!(close(got, want), "at {angle}°: {got:?} vs {want:?}");
+        assert!(got.is_within_image(w, h), "at {angle}°: {got:?}");
     }
 }
 
