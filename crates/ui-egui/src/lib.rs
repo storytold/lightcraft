@@ -383,6 +383,8 @@ pub struct LightcraftApp {
     /// Library generation when a CollabCraft Open (`Busy::Opening`) began. A late answer after a
     /// library switch is refused so the photo cannot land in the wrong catalog.
     pub(crate) cloud_open_library: Option<u64>,
+    /// Activity-stack row while a CollabCraft Save is encoding off the UI thread.
+    pub(crate) cloud_encode: Option<lightcraft_engine::activity::TaskGuard>,
 }
 
 /// How long a screenshot waits for in-flight renders before it is captured anyway (and the

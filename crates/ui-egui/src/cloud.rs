@@ -28,9 +28,9 @@ use serde_json::Value as Json;
 pub use craft_cloud::{Capability, Entry, EntryKind};
 pub use craft_ui::cloud::{
     Account, Busy, CloudApp, CloudBackend, CloudFiles, Conflict, CopyFormat, Destination, DocumentKind, Event, Fault, Folder, Job, Link, Origin,
-    Post, Source, UNAVAILABLE, available, browse, can_converse, conflict_modal, destination_name, has_target, link, load_shared, open_entry,
-    open_page, origin, parent_of, prefers_cloud, progress, reload_active, save, save_as, save_page, share_button, shares, sign_in, sign_out, start,
-    who, work_together,
+    Post, SaveIntent, Source, UNAVAILABLE, available, browse, can_converse, conflict_modal, destination_name, has_target, link, load_shared,
+    open_entry, open_page, origin, parent_of, prefers_cloud, progress, reload_active, save, save_as, save_page, share_button, shares, sign_in,
+    sign_out, start, who, work_together,
 };
 
 use crate::LightcraftApp;
@@ -122,6 +122,31 @@ fn export_format_for(into: Destination<'_>) -> Result<lightcraft_engine::export:
     }
 }
 
+fn encode_prepared(
+    item: lightcraft_engine::export::PreparedExport,
+    opts: &lightcraft_engine::export::ExportOptions,
+) -> Result<Vec<u8>, String> {
+    let dest = lightcraft_engine::export::Destination { dir: String::new(), exact: Some("cloud_export".into()) };
+    let mut captured = Vec::new();
+    lightcraft_engine::export::run_batch(
+        vec![item],
+        opts,
+        &dest,
+        &mut |_path, b| {
+            captured = b.to_vec();
+            Ok(())
+        },
+        &|_| false,
+        true,
+        &mut |_, _| true,
+    )
+    .map_err(|e| format!("could not export photo: {e}"))?;
+    if captured.is_empty() {
+        return Err("photo export produced no bytes".into());
+    }
+    Ok(captured)
+}
+
 /// Suggested cloud Save name: keep a writable extension, otherwise use `.jpg`.
 pub(crate) fn cloud_save_name(file_name: &str) -> String {
     let base = file_name.rsplit(['/', '\\']).next().unwrap_or(file_name).trim();
@@ -162,6 +187,10 @@ pub fn pump(app: &mut LightcraftApp, ctx: &egui::Context) {
     if !matches!(app.cloud.busy, Some(Busy::Opening { .. })) {
         // Success consumes the stamp inside open_bytes; a failed read leaves it — drop it.
         app.cloud_open_library = None;
+    }
+    // Drop the activity row once encode finished (Saving, idle, or failed).
+    if !matches!(app.cloud.busy, Some(Busy::Encoding { .. })) {
+        app.cloud_encode = None;
     }
 }
 
@@ -234,31 +263,59 @@ impl CloudApp for LightcraftApp {
     /// A photo opened as a raw file goes back as a developed image in one of
     /// those formats. A destination name that still looks like RAW (or another
     /// open-only extension) is refused so the uploaded file is not mislabeled.
+    /// Prefer [`CloudApp::begin_encode`] for Save; this sync path is for tests
+    /// and the default craft-ui fallback.
     fn encode(&mut self, uid: u64, into: Destination<'_>) -> Result<Vec<u8>, String> {
-        let id = PhotoId(uid);
         let format = export_format_for(into)?;
         let opts = lightcraft_engine::export::ExportOptions { format, ..Default::default() };
-        let item = lightcraft_engine::export::prepare_export(&mut self.session, id, &opts, 1)
+        let item = lightcraft_engine::export::prepare_export(&mut self.session, PhotoId(uid), &opts, 1)
             .map_err(|e| format!("could not prepare photo for export: {e}"))?;
-        let dest = lightcraft_engine::export::Destination { dir: String::new(), exact: Some("cloud_export".into()) };
-        let mut captured = Vec::new();
-        lightcraft_engine::export::run_batch(
-            vec![item],
-            &opts,
-            &dest,
-            &mut |_path, b| {
-                captured = b.to_vec();
-                Ok(())
-            },
-            &|_| false,
-            true,
-            &mut |_, _| true,
-        )
-        .map_err(|e| format!("could not export photo: {e}"))?;
-        if captured.is_empty() {
-            return Err("photo export produced no bytes".into());
+        encode_prepared(item, &opts)
+    }
+
+    /// Prepare on the UI thread, encode on a worker (desktop) with an activity
+    /// row, then post [`Event::Encoded`]. Wasm encodes on the calling task.
+    fn begin_encode(&mut self, intent: SaveIntent) -> Result<(), String> {
+        if self.cloud_encode.is_some() {
+            return Err("a cloud save is already preparing".into());
         }
-        Ok(captured)
+        let dest = Destination { name: &intent.name, mime: intent.mime.as_deref() };
+        let format = export_format_for(dest)?;
+        let opts = lightcraft_engine::export::ExportOptions { format, ..Default::default() };
+        let item = lightcraft_engine::export::prepare_export(&mut self.session, PhotoId(intent.uid), &opts, 1)
+            .map_err(|e| format!("could not prepare photo for export: {e}"))?;
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            let bytes = encode_prepared(item, &opts).map_err(Fault::Refused);
+            self.cloud.post(Event::Encoded { intent, bytes });
+            return Ok(());
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            use lightcraft_engine::activity::Cancel;
+            use std::sync::atomic::{AtomicBool, Ordering};
+            use std::sync::Arc;
+
+            let cancel = Arc::new(AtomicBool::new(false));
+            let guard = self.session.activity.start("cloud-save", "Preparing cloud save", Cancel::Flag(cancel.clone()));
+            self.cloud_encode = Some(guard);
+            let tx = self.cloud.event_sender();
+            let work = move || {
+                let bytes = if cancel.load(Ordering::Relaxed) {
+                    Err(Fault::Refused("the cloud save was cancelled".into()))
+                } else {
+                    encode_prepared(item, &opts).map_err(Fault::Refused)
+                };
+                let _ = tx.send(Event::Encoded { intent, bytes });
+            };
+            std::thread::Builder::new().name("cloud-encode".into()).spawn(work).map_err(|e| {
+                self.cloud_encode = None;
+                format!("could not start cloud encode: {e}")
+            })?;
+            Ok(())
+        }
     }
 
     /// Closing a cloud photo in LightCraft means nothing special: the photo
