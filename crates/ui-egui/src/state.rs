@@ -192,7 +192,7 @@ pub struct UiState {
     /// The crop as it stood when the Straighten slider drag began, so every step of that drag is
     /// measured against the drawn crop rather than the previous step's shrunken one (issue #1794).
     #[serde(skip)]
-    pub crop_angle_from: Option<lightcraft_geom::Rect>,
+    pub crop_angle_from: Option<lightcraft_geom::CropGeometry>,
     pub search: String,
     /// Focus the search field on the next frame (Edit → Find…).
     #[serde(skip)]

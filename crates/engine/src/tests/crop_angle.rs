@@ -77,7 +77,7 @@ fn a_rotate_drag_keeps_the_crop_it_started_from() {
     let (w, h) = dims(&s);
     let drawn = Rect::new(0.1, 0.1, 0.9, 0.9);
     s.execute("crop.set", &json!({"rect": [drawn.x0, drawn.y0, drawn.x1, drawn.y1]})).unwrap();
-    let from = json!([drawn.x0, drawn.y0, drawn.x1, drawn.y1]);
+    let from = json!({"rect": [drawn.x0, drawn.y0, drawn.x1, drawn.y1], "angle": 0.0});
     for angle in [10.0, 20.0, 30.0, 20.0, 10.0, 0.0] {
         s.execute("crop.straighten", &json!({"angle": angle, "from": from})).unwrap();
         assert!(geometry(&s).is_within_image(w, h), "{angle}°");
@@ -86,8 +86,16 @@ fn a_rotate_drag_keeps_the_crop_it_started_from() {
     let want = drawn.scale(w, h);
     assert!((got.width() - want.width()).abs() < 1e-6, "the drawn crop must come home whole: {} -> {}", want.width(), got.width());
 
-    // a malformed `from` is ignored, not trusted
-    for bad in [json!([0.9, 0.9, 0.1, 0.1]), json!([0.1, 0.1]), json!([0.1, 0.1, 0.9])] {
+    // a malformed `from` is ignored, not trusted: a bare rect (the shape before the press angle
+    // came with it), a rect without its angle, a rect of the wrong length, a non-numeric angle
+    for bad in [
+        json!([0.1, 0.1, 0.9, 0.9]),
+        json!({"rect": [0.9, 0.9, 0.1, 0.1], "angle": 0.0}),
+        json!({"rect": [0.1, 0.1], "angle": 0.0}),
+        json!({"rect": [0.1, 0.1, 0.9], "angle": 0.0}),
+        json!({"rect": [0.1, 0.1, 0.9, 0.9]}),
+        json!({"rect": [0.1, 0.1, 0.9, 0.9], "angle": "x"}),
+    ] {
         s.execute("crop.straighten", &json!({"angle": 0.0, "from": bad})).unwrap();
     }
 }
@@ -103,9 +111,11 @@ fn a_locked_aspect_survives_rotating() {
         s.execute("crop.set", &json!({"rect": [0.2, 0.2, 0.8, 0.8]})).unwrap();
         s.execute("crop.aspect", &json!({"aspect": lock})).unwrap();
         let drawn = geometry(&s).rect;
+        let drawn_angle = geometry(&s).angle;
         let want = drawn.scale(w, h).width() / drawn.scale(w, h).height();
         for angle in [10.0, 25.0, -25.0, 0.0] {
-            s.execute("crop.straighten", &json!({"angle": angle, "from": [drawn.x0, drawn.y0, drawn.x1, drawn.y1]})).unwrap();
+            s.execute("crop.straighten", &json!({"angle": angle, "from": {"rect": [drawn.x0, drawn.y0, drawn.x1, drawn.y1], "angle": drawn_angle}}))
+                .unwrap();
             let g = geometry(&s);
             let px = g.rect.scale(w, h);
             assert!((px.width() / px.height() - want).abs() < 1e-9, "{lock} at {angle}°: aspect {:.9}, want {want:.9}", px.width() / px.height());

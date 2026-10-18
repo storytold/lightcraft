@@ -128,11 +128,11 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         // with, each step measures against the previous step's shrunken crop and it never grows
         // back (issue #1794, the same gap the rotate handle closes with `Gesture::CropRotate`).
         if out.drag_started {
-            app.ui.crop_angle_from = Some(d.crop.geometry.rect);
+            app.ui.crop_angle_from = Some(d.crop.geometry);
         }
         let from = app.ui.crop_angle_from;
         crate::panels::edit::apply_slider_out(app, &spec, out, |app, v| {
-            let from = from.map(|r| json!([r.x0, r.y0, r.x1, r.y1]));
+            let from = from.map(|c| json!({"rect": [c.rect.x0, c.rect.y0, c.rect.x1, c.rect.y1], "angle": c.angle}));
             match from {
                 Some(f) => app.run("crop.straighten", json!({"angle": v, "from": f})),
                 None => app.run("crop.straighten", json!({"angle": v})),
@@ -178,14 +178,17 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 }
                 if r.drag_started() {
                     // same as the slider: measure the whole drag against the drawn crop (issue #1794)
-                    app.ui.crop_angle_from = Some(d.crop.geometry.rect);
+                    app.ui.crop_angle_from = Some(d.crop.geometry);
                 }
                 if r.changed() && !escaped && angle.is_finite() && angle != d.crop.geometry.angle {
                     let a = (angle.clamp(spec.min, spec.max) * 100.0).round() / 100.0;
                     let from = app.ui.crop_angle_from;
                     let _ = match from {
                         // a dragged field is a drag: every step from the drawn crop
-                        Some(base) if r.dragged() => app.run("crop.straighten", json!({"angle": a, "from": [base.x0, base.y0, base.x1, base.y1]})),
+                        Some(base) if r.dragged() => app.run(
+                            "crop.straighten",
+                            json!({"angle": a, "from": {"rect": [base.rect.x0, base.rect.y0, base.rect.x1, base.rect.y1], "angle": base.angle}}),
+                        ),
                         // a typed value is one shot: the crop as it stands is the base
                         _ => app.run("crop.straighten", json!({"angle": a})),
                     };
