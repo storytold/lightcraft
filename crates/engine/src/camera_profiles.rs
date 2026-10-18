@@ -29,10 +29,15 @@ pub const BUNDLED: &[(&str, &str)] = &[
     ("ILCE-7CR", include_str!("../../../assets/camera-profiles/ILCE-7CR.json")),
     ("ILCE-7M4", include_str!("../../../assets/camera-profiles/ILCE-7M4.json")),
     ("NIKON D5300", include_str!("../../../assets/camera-profiles/NIKON_D5300.json")),
+    ("NIKON D70", include_str!("../../../assets/camera-profiles/NIKON_D70.json")),
+    ("NIKON D700", include_str!("../../../assets/camera-profiles/NIKON_D700.json")),
     ("NIKON Z 6_2", include_str!("../../../assets/camera-profiles/NIKON_Z_6_2.json")),
     ("NIKON Z 8", include_str!("../../../assets/camera-profiles/NIKON_Z_8.json")),
     ("X-H2S", include_str!("../../../assets/camera-profiles/X-H2S.json")),
+    ("X-T1", include_str!("../../../assets/camera-profiles/X-T1.json")),
     ("X-T4", include_str!("../../../assets/camera-profiles/X-T4.json")),
+    ("X100T", include_str!("../../../assets/camera-profiles/X100T.json")),
+    ("X20", include_str!("../../../assets/camera-profiles/X20.json")),
 ];
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
