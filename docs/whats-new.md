@@ -599,6 +599,12 @@
   the full count took about 14 s instead of about 23 s on a heavily loaded machine; the rest is the text rules of
   the albums themselves. The counts are the same as before, including for albums that loop through each other.
 
+### Cleaner thumbnails in the grid
+- With Settings ▸ Interface ▸ Grid ▸ Ratings & flags set to Stars on hover (the default, which used to read "When rated
+  or hovered"), a photo now shows its stars and its edited mark only while the pointer is on it or it is selected.
+  Before, every rated photo wore the badge bar, which in a mostly rated library made it look like Always. Pick and
+  reject flags and colour labels stay on every thumbnail. Always and Never work as before.
+
 ### Selection rings you can see in the light themes
 - The active photo's white outline vanished on Silver and Paper's light grid, and told the active photo from the other
   selected ones by lightness alone. Now the active photo has a heavier ring (3 pt, with a thin line against the photo so
