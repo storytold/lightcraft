@@ -4598,7 +4598,7 @@ mod tests {
                 let expected = locale.tr(key);
                 assert_eq!(h.request("ui.key", json!({"key": "i", "cmd": true}), t)["ok"], true);
                 assert_eq!(serde_json::to_value(h.app.ui.info_overlay).unwrap(), json!(mode));
-                assert_eq!(h.app.ui.toast.as_ref().expect("overlay toast").0, expected);
+                assert_eq!(h.app.ui.toast().expect("overlay toast").0, expected);
                 h.step();
                 let painted = h.painted_text();
                 assert!(painted.iter().any(|text| text == expected), "{painted:?}");

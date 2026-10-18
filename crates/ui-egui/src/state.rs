@@ -1590,17 +1590,28 @@ impl UiState {
         self.toasts.last()
     }
 
+    /// `now` is the app time of the push: toasts whose time is already over go first, so a gone one never costs a
+    /// showing one its place (notices arrive before the frame that expires them).
     /// Show `text` until `until` (app time, s), in `label`'s colours if given, below the toasts already showing: one
     /// no longer hides another. The same message again (same text and label) is not shown twice: it moves to the newest
     /// place and stays until the later of its times. Past [`MAX_TOASTS`] the oldest goes.
-    pub fn push_toast(&mut self, text: impl Into<String>, until: f64, label: Option<lightcraft_catalog::ColorLabel>) {
+    pub fn push_toast(&mut self, now: f64, text: impl Into<String>, until: f64, label: Option<lightcraft_catalog::ColorLabel>) {
+        self.expire_toasts(now);
         self.push(text.into(), until, label, None);
     }
 
     /// [`UiState::push_toast`] for a message that says the state of `topic` ("save", "flag", "panel"…): it replaces
     /// the toasts still showing about that topic, which no longer hold ("Library saved" takes the place of the
     /// warning that it couldn't be; Auto Sync Off of Auto Sync On).
-    pub fn push_toast_on(&mut self, topic: &'static str, text: impl Into<String>, until: f64, label: Option<lightcraft_catalog::ColorLabel>) {
+    pub fn push_toast_on(
+        &mut self,
+        now: f64,
+        topic: &'static str,
+        text: impl Into<String>,
+        until: f64,
+        label: Option<lightcraft_catalog::ColorLabel>,
+    ) {
+        self.expire_toasts(now);
         self.toasts.retain(|t| t.3 != Some(topic));
         self.push(text.into(), until, label, Some(topic));
     }

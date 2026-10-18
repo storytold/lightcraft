@@ -34,8 +34,8 @@ fn texts(ui: &UiState) -> Vec<&str> {
 #[test]
 fn a_new_toast_joins_the_ones_showing_instead_of_replacing_them() {
     let mut ui = UiState::default();
-    ui.push_toast("Red Label", 10.0, Some(ColorLabel::Red));
-    ui.push_toast("Previews ready for 24 photos", 6.0, None);
+    ui.push_toast(0.0, "Red Label", 10.0, Some(ColorLabel::Red));
+    ui.push_toast(0.0, "Previews ready for 24 photos", 6.0, None);
     assert_eq!(texts(&ui), vec!["Red Label", "Previews ready for 24 photos"]);
     assert_eq!(ui.toast().map(|t| t.0.as_str()), Some("Previews ready for 24 photos"));
     // the newer one is gone first: the older one stays until its own time
@@ -50,16 +50,16 @@ fn a_new_toast_joins_the_ones_showing_instead_of_replacing_them() {
 #[test]
 fn the_same_message_again_is_one_toast_that_stays_longer() {
     let mut ui = UiState::default();
-    ui.push_toast("Red Label", 4.0, Some(ColorLabel::Red));
-    ui.push_toast("Library saved", 5.0, None);
-    ui.push_toast("Red Label", 8.0, Some(ColorLabel::Red));
+    ui.push_toast(0.0, "Red Label", 4.0, Some(ColorLabel::Red));
+    ui.push_toast(0.0, "Library saved", 5.0, None);
+    ui.push_toast(0.0, "Red Label", 8.0, Some(ColorLabel::Red));
     assert_eq!(texts(&ui), vec!["Library saved", "Red Label"]);
     assert_eq!(ui.toast().map(|t| t.1), Some(8.0));
     // a shorter one doesn't cut the time it already had
-    ui.push_toast("Red Label", 6.0, Some(ColorLabel::Red));
+    ui.push_toast(0.0, "Red Label", 6.0, Some(ColorLabel::Red));
     assert_eq!(ui.toast().map(|t| t.1), Some(8.0));
     // the same words in another label are another message
-    ui.push_toast("Red Label", 8.0, None);
+    ui.push_toast(0.0, "Red Label", 8.0, None);
     assert_eq!(ui.toasts.len(), 3);
 }
 
@@ -68,7 +68,7 @@ fn the_same_message_again_is_one_toast_that_stays_longer() {
 fn a_burst_of_toasts_keeps_the_newest_few() {
     let mut ui = UiState::default();
     for i in 0..MAX_TOASTS + 2 {
-        ui.push_toast(format!("message {i}"), 10.0, None);
+        ui.push_toast(0.0, format!("message {i}"), 10.0, None);
     }
     assert_eq!(ui.toasts.len(), MAX_TOASTS);
     assert_eq!(ui.toasts.first().map(|t| t.0.clone()), Some("message 2".to_string()));
@@ -81,11 +81,11 @@ fn a_burst_of_toasts_keeps_the_newest_few() {
 #[test]
 fn a_new_state_takes_the_place_of_the_old_one_on_its_topic() {
     let mut ui = UiState::default();
-    ui.push_toast_on("save", "2 changes saved in memory but not written to disk", 6.0, None);
-    ui.push_toast("Exported 3 photos", 6.0, None);
-    ui.push_toast_on("flag", "Flagged as Pick", 6.0, None);
-    ui.push_toast_on("save", "Library saved", 2.0, None);
-    ui.push_toast_on("flag", "Flagged as Reject", 6.0, None);
+    ui.push_toast_on(0.0, "save", "2 changes saved in memory but not written to disk", 6.0, None);
+    ui.push_toast(0.0, "Exported 3 photos", 6.0, None);
+    ui.push_toast_on(0.0, "flag", "Flagged as Pick", 6.0, None);
+    ui.push_toast_on(0.0, "save", "Library saved", 2.0, None);
+    ui.push_toast_on(0.0, "flag", "Flagged as Reject", 6.0, None);
     assert_eq!(texts(&ui), vec!["Exported 3 photos", "Library saved", "Flagged as Reject"]);
 }
 
@@ -110,9 +110,27 @@ fn toasts_stack_on_screen_the_newest_where_a_toast_always_was() {
     // a slideshow: at the top, clear of the playback controls, the newest on top
     let r = h.app.run("view.slideshow", serde_json::json!({}));
     assert!(r.is_ok(), "{r:?}");
-    h.app.ui.push_toast("Slideshow paused", h.app.last_time + 10.0, None);
+    h.app.ui.push_toast(h.app.last_time, "Slideshow paused", h.app.last_time + 10.0, None);
     h.step();
     h.step();
     let (top, below) = (rect(&h, "toast:0"), rect(&h, "toast:1"));
     assert!(top.bottom() <= below.top(), "the newest is on top: {top:?} {below:?}");
+}
+
+/// Given a full stack with one toast whose time is over but that no frame has expired yet (a notice arrives before
+/// the frame that would), when a new toast is pushed, then the over one goes and the showing ones stay.
+#[test]
+fn an_expired_toast_never_costs_a_showing_one_its_place() {
+    let mut ui = UiState::default();
+    ui.push_toast(0.0, "gone", 1.0, None);
+    ui.push_toast(0.0, "live one", 20.0, None);
+    ui.push_toast(0.0, "live two", 20.0, None);
+    assert_eq!(ui.toasts.len(), MAX_TOASTS);
+    ui.push_toast(5.0, "new", 25.0, None);
+    assert_eq!(texts(&ui), vec!["live one", "live two", "new"]);
+    // a topic message expires first too
+    ui.push_toast_on(5.0, "save", "saved", 3.0, None);
+    ui.push_toast(10.0, "later", 30.0, None);
+    assert!(!texts(&ui).contains(&"saved"), "{:?}", texts(&ui));
+    assert_eq!(texts(&ui), vec!["live two", "new", "later"]);
 }
