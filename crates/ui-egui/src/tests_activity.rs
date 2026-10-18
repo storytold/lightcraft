@@ -531,3 +531,20 @@ fn auto_settings_on_a_selection_run_in_the_background() {
     assert_eq!(h.app.session.undo.len(), undo + 1, "one undo step");
     assert!(h.app.session.activity.list().iter().all(|t| t.kind != "autoSettings"));
 }
+
+/// The Edit panel's Auto button says "applied" only when it applied something: refused while a background run is
+/// going, it says why instead, for long enough to read.
+#[test]
+fn auto_button_refused_during_a_background_run_says_why() {
+    let mut h = demo();
+    let ids: Vec<u64> = h.app.session.visible_cloned().iter().take(3).map(|p| p.0).collect();
+    h.app.session.execute("library.select", &json!({"ids": ids, "active": ids[0]})).unwrap();
+    assert_eq!(h.app.run("develop.auto", json!({})).unwrap()["background"], true);
+    h.app.ui.toast = None;
+    // (no frame in between: the run is still going)
+    let ctx = h.view.ctx.clone();
+    crate::panels::edit::auto_clicked(&mut h.app, &ctx);
+    let (text, until, _) = h.app.ui.toast.clone().expect("a toast");
+    assert!(text.contains("already running"), "{text}");
+    assert!(until - ctx.input(|i| i.time) > 5.0, "an error toast stays up");
+}

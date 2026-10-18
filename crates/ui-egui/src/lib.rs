@@ -768,7 +768,7 @@ impl LightcraftApp {
             None if self.session.auto_settings.is_some() => ctx.request_repaint_after(std::time::Duration::from_millis(50)),
             None | Some(AutoOutcome::Cancelled) => {}
             Some(AutoOutcome::Applied(_)) => self.toast(ctx, crate::i18n::tr("Auto settings applied")),
-            Some(AutoOutcome::Failed(e)) => self.toast(ctx, e.to_string()),
+            Some(AutoOutcome::Failed(e)) => self.toast_error(ctx, e.to_string()),
         }
     }
 

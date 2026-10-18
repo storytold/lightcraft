@@ -74,6 +74,15 @@ fn rel_to_k(r: f64) -> f64 {
     1e6 / (1e6 / 6500.0 - r * 0.8)
 }
 
+/// The Auto button. Several photos are said when the background run sets them.
+pub(crate) fn auto_clicked(app: &mut LightcraftApp, ctx: &egui::Context) {
+    match app.run("develop.auto", json!({})) {
+        Ok(v) if v["background"] == true => {}
+        Ok(_) => app.toast(ctx, crate::i18n::tr("Auto settings applied")),
+        Err(e) => app.toast_error(ctx, e),
+    }
+}
+
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let t = Tokens::get(ui.ctx());
     let d = app.session.develop_of(id).unwrap_or_default();
@@ -110,10 +119,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 8.0;
             if text_button(ui, "auto", crate::i18n::tr("Auto"), false).clicked() {
-                // (several photos: said when the background run sets them)
-                if !app.run("develop.auto", json!({})).is_ok_and(|v| v["background"] == true) {
-                    app.toast(ui.ctx(), crate::i18n::tr("Auto settings applied"));
-                }
+                auto_clicked(app, ui.ctx());
             }
             let bw = crate::is_bw(&d);
             if text_button(ui, "bw", crate::i18n::tr("B&W"), bw).clicked() {
