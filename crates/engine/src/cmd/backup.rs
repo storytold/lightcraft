@@ -414,7 +414,8 @@ impl RestoreJob {
         let outcome = self.outcome();
         let made = outcome.as_ref().and_then(|o| o.as_ref().ok());
         json!({
-            "running": outcome.is_none(),
+            // (also while its worker still clears away its copy: another restore is refused till then)
+            "running": outcome.is_none() || self.alive.load(Ordering::SeqCst),
             "cancelled": self.cancel.load(Ordering::Relaxed) && outcome.as_ref().is_some_and(|o| o.is_err()),
             "library": self.library.to_string_lossy(),
             "backup": self.from.to_string_lossy(),

@@ -926,6 +926,10 @@ fn given_up_worker_must_not_remove_the_next_restores_copy() {
     let e = s.execute("library.restore", &json!({"dir": made.to_string_lossy(), "background": true})).unwrap_err();
     assert!(e.to_string().contains("still being stopped"), "{e}");
     assert!(enabled(&s).is_err_and(|e| e.contains("stopped")));
+    // its status stays `running` while the worker is at work, so that whoever waits for it to end
+    // (the command line) does not start another restore into the refusal
+    let status = s.execute("library.restoreStatus", &json!({})).unwrap();
+    assert_eq!(status["running"], json!(true), "{status}");
     s.restore_hold.store(false, Ordering::SeqCst);
     let t0 = std::time::Instant::now();
     while !s.activity.list().is_empty() && t0.elapsed() < std::time::Duration::from_secs(20) {
