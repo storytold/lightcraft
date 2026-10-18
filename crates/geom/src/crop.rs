@@ -122,7 +122,7 @@ impl CropGeometry {
     /// Any other crop never grows: a crop dragged in from a corner still touches two edges of the
     /// photo, and turning it used to swap it for the largest crop of its aspect (issue #1794).
     pub fn with_angle(&self, angle_deg: f64, w: f64, h: f64) -> CropGeometry {
-        self.with_angle_from(self.rect, angle_deg, w, h)
+        self.with_angle_from(self.rect, self.angle, angle_deg, w, h)
     }
 
     /// [`with_angle`](Self::with_angle), but shrinking `from` rather than the current rectangle.
@@ -131,11 +131,17 @@ impl CropGeometry {
     /// already the shrunken crop, which is by definition the largest of its aspect that fits and
     /// so grows back on the next step (issue #1794). Passing the rectangle the drag started from
     /// keeps every step measured against the crop the user drew, which only ever shrinks.
-    pub fn with_angle_from(&self, from: Rect, angle_deg: f64, w: f64, h: f64) -> CropGeometry {
+    ///
+    /// `from_angle` is the angle `from` was drawn at. Whether `from` was the largest crop of its
+    /// aspect is a property of the crop the user drew, not of where the drag has got to, so it is
+    /// asked once, at that angle. Asking it at the running `self.angle` re-classified the crop
+    /// mid-drag: a drag that began on the largest crop at a turned angle was declared "not the
+    /// largest" on its second step and stopped growing back as the angle returned.
+    pub fn with_angle_from(&self, from: Rect, from_angle: f64, angle_deg: f64, w: f64, h: f64) -> CropGeometry {
         let r = from.scale(w, h);
         // a degenerate rect has no aspect to keep: fall back to the image's own
         let aspect = Some(r.width() / r.height()).filter(|a| a.is_finite() && *a > 0.0);
-        let largest = crop_fit_angle(w, h, self.angle, aspect).rect;
+        let largest = crop_fit_angle(w, h, from_angle, aspect).rect;
         let is_largest =
             [(from.x0, largest.x0), (from.y0, largest.y0), (from.x1, largest.x1), (from.y1, largest.y1)].iter().all(|(a, b)| (a - b).abs() < 1e-9);
         let cand = CropGeometry { rect: from, angle: angle_deg };
@@ -322,7 +328,7 @@ mod tests {
         let width_of = |r: Rect| r.scale(w, h).width();
         let mut c = CropGeometry { rect: drawn, angle: 0.0 };
         for ang in [10.0, 20.0, 25.0, 30.0, 20.0, 10.0, 5.0, 0.0] {
-            c = c.with_angle_from(drawn, ang, w, h);
+            c = c.with_angle_from(drawn, 0.0, ang, w, h);
             assert!(c.is_within_image(w, h), "{ang}°: {c:?}");
         }
         let end = width_of(c.rect);
@@ -330,12 +336,12 @@ mod tests {
         // and the path is symmetric: reaching 10° directly or by way of 30° gives the same crop,
         // because every step is measured against the same drawn rect
         let mut direct = CropGeometry { rect: drawn, angle: 0.0 };
-        direct = direct.with_angle_from(drawn, 10.0, w, h);
+        direct = direct.with_angle_from(drawn, 0.0, 10.0, w, h);
         let mut via = CropGeometry { rect: drawn, angle: 0.0 };
         for ang in [30.0, 20.0] {
-            via = via.with_angle_from(drawn, ang, w, h);
+            via = via.with_angle_from(drawn, 0.0, ang, w, h);
         }
-        via = via.with_angle_from(drawn, 10.0, w, h);
+        via = via.with_angle_from(drawn, 0.0, 10.0, w, h);
         assert!((direct.rect.width() - via.rect.width()).abs() < 1e-9, "{direct:?} vs {via:?}");
     }
 
@@ -348,9 +354,29 @@ mod tests {
             let start = crop_fit_angle(w, h, 0.0, aspect).rect;
             let mut c = CropGeometry { rect: start, angle: 0.0 };
             for ang in [10.0, 25.0, -25.0, 0.0] {
-                c = c.with_angle_from(start, ang, w, h);
+                c = c.with_angle_from(start, 0.0, ang, w, h);
                 let want = crop_fit_angle(w, h, ang, aspect).rect;
                 assert!((c.rect.width() - want.width()).abs() < 1e-9, "{aspect:?} at {ang}°: {c:?} vs {want:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn with_angle_from_grows_a_crop_back_when_the_drag_starts_turned() {
+        // the crop the drag began on is the largest of its aspect, but the drag starts at 30°, not
+        // at 0°: the classification belongs to the crop the user drew, so it is asked once, at the
+        // angle that crop was drawn at. Re-deriving it against the angle each step happens to be at
+        // (issue #1388's test above asks at 0°, where the two agree) calls the crop "not the
+        // largest" from the second step, and it stays shrunk when the angle comes home
+        // (PR #1876 review: 413.017532, 371.281292, 371.281292 where the answer is 413, 481, 600)
+        let (w, h) = (600.0_f64, 400.0_f64);
+        for aspect in [None, Some(1.0)] {
+            let start = crop_fit_angle(w, h, 30.0, aspect).rect;
+            let mut c = CropGeometry { rect: start, angle: 30.0 };
+            for ang in [20.0, 10.0, 0.0] {
+                c = c.with_angle_from(start, 30.0, ang, w, h);
+                let want = crop_fit_angle(w, h, ang, aspect).rect;
+                assert!((c.rect.width() - want.width()).abs() < 1e-9, "{aspect:?} at {ang}°: {} vs {}", c.rect.width(), want.width());
             }
         }
     }
