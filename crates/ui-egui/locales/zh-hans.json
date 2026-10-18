@@ -2179,5 +2179,11 @@
   "Checking the GPU…": "正在检查 GPU…",
   "CPU": "CPU",
   "A face model uses the GPU only when a check shows it gives the same results faster.": "只有检查表明 GPU 能更快给出相同结果时，人脸模型才会使用 GPU。",
-  "Checking the GPU for faces": "正在检查用于人脸的 GPU"
+  "Checking the GPU for faces": "正在检查用于人脸的 GPU",
+  "Check for Updates…": "检查更新…",
+  "Update Available": "有可用更新",
+  "Later": "稍后",
+  "Checking for updates": "正在检查更新",
+  "Update Status": "更新状态",
+  "Download opens the release page in your browser; your library and edits stay as they are.": "“下载”会在浏览器中打开发布页面；您的图库和编辑内容保持不变。"
 }

@@ -172,6 +172,8 @@ mod tests_tool_overlay;
 #[cfg(test)]
 mod tests_unsaved;
 #[cfg(test)]
+mod tests_updates;
+#[cfg(test)]
 mod tests_view_cost;
 #[cfg(test)]
 mod tests_wb_selector;
@@ -813,6 +815,24 @@ impl LightcraftApp {
         }
     }
 
+    /// Help ▸ Check for Updates: offer a newer release (Download opens its page), or say the
+    /// version is the latest or why the check failed. A result waits while another dialog is open.
+    fn update_outcome(&mut self, ctx: &egui::Context) {
+        use lightcraft_engine::cmd::updates::UpdateOutcome;
+        if self.ui.dialog.is_some() {
+            return;
+        }
+        match self.session.updates.take_outcome() {
+            Some(UpdateOutcome::Available { latest, url }) => self.ui.dialog = Some(crate::state::Dialog::UpdateAvailable { latest, url }),
+            Some(UpdateOutcome::UpToDate { .. }) => {
+                self.toast(ctx, crate::i18n::tr_format!("LightCraft {} is the latest version.", env!("CARGO_PKG_VERSION")));
+            }
+            Some(UpdateOutcome::Failed(e)) => self.toast_error(ctx, e),
+            None if self.session.updates.checking() => ctx.request_repaint_after(std::time::Duration::from_millis(500)),
+            None => {}
+        }
+    }
+
     /// AI masks: apply finished background requests (clicks, descriptions, detail passes) and
     /// show their errors; start a zoomed-in detail pass once the clicking stops
     /// (`ui.detail_due`); watch the model download. Never waits for the model.
@@ -1436,6 +1456,7 @@ impl LightcraftApp {
         self.hover_preview = None;
         self.ai_mask_detail(&ctx);
         self.place_names_outcome(&ctx);
+        self.update_outcome(&ctx);
         if self.ui.fullscreen {
             // full-screen preview: the photo alone on black
             egui::CentralPanel::default()

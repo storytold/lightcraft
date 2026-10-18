@@ -251,6 +251,8 @@ pub struct Session {
     pub face_downloads: face_download::Downloads,
     /// Reverse geocoding: the parsed place names and their download (`metadata.*PlaceNames`).
     pub place_names: cmd::geocode::PlaceNames,
+    /// Help ▸ Check for Updates: the last check and whether one is running (`app.checkForUpdates`).
+    pub updates: cmd::updates::Updates,
     /// The user's own list of models to download (`catalog.json` in the models folder), as last read.
     pub(crate) face_catalog: lightcraft_faces::catalog::Catalog,
     /// The loaded recognition model and the face embeddings made with it.
@@ -435,6 +437,7 @@ impl Session {
             face_models_dir: None,
             face_downloads: Default::default(),
             place_names: Default::default(),
+            updates: Default::default(),
             face_catalog: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             faces: Default::default(),

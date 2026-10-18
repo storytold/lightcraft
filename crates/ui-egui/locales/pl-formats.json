@@ -295,5 +295,8 @@
   "Already in “{}”": "Już w „{}”",
   "Move {n} photo{} to “{}”": "Przenieś do „{1}” — zdjęcia: {n}{0:.0}",
   "Move {n} photo{} to “{}”?": "Przenieść do „{1}” — zdjęcia: {n}{0:.0}?",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Przeniesiono do „{1}” — zdjęcia: {n}{0:.0}. Edytuj → Cofnij przywróci je."
+  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Przeniesiono do „{1}” — zdjęcia: {n}{0:.0}. Edytuj → Cofnij przywróci je.",
+  "LightCraft {latest} is available.": "Dostępny jest LightCraft {latest}.",
+  "You have version {}.": "Masz wersję {}.",
+  "LightCraft {} is the latest version.": "LightCraft {} to najnowsza wersja."
 }

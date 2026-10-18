@@ -2338,5 +2338,11 @@
   "Checking the GPU…": "Перевірка ГП…",
   "CPU": "ЦП",
   "A face model uses the GPU only when a check shows it gives the same results faster.": "Модель облич використовує ГП, лише якщо перевірка показала, що він дає ті самі результати швидше.",
-  "Checking the GPU for faces": "Перевірка ГП для облич"
+  "Checking the GPU for faces": "Перевірка ГП для облич",
+  "Check for Updates…": "Перевірити оновлення…",
+  "Update Available": "Доступне оновлення",
+  "Later": "Пізніше",
+  "Checking for updates": "Перевірка оновлень",
+  "Update Status": "Стан оновлень",
+  "Download opens the release page in your browser; your library and edits stay as they are.": "«Завантажити» відкриває сторінку випуску в браузері; бібліотека й редагування залишаються без змін."
 }

@@ -256,6 +256,7 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "app.systemInfo",
             "app.openLogFolder",
             "---",
+            "app.checkForUpdates",
             "app.about",
         ],
     ),

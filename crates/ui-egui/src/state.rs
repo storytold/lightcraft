@@ -1088,6 +1088,11 @@ pub enum Dialog {
     },
     /// Help ▸ What's New.
     WhatsNew,
+    /// Help ▸ Check for Updates found a newer release: its version and release page (Download opens it).
+    UpdateAvailable {
+        latest: String,
+        url: String,
+    },
     /// Photo ▸ Assisted Culling: reject photos below this focus score (0 = none), pick the best
     /// of each burst.
     Cull {

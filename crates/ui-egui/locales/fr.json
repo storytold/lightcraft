@@ -2338,5 +2338,11 @@
   "Checking the GPU…": "Vérification du GPU…",
   "CPU": "Processeur",
   "A face model uses the GPU only when a check shows it gives the same results faster.": "Un modèle de visages n’utilise le GPU que si une vérification montre qu’il donne les mêmes résultats plus vite.",
-  "Checking the GPU for faces": "Vérification du GPU pour les visages"
+  "Checking the GPU for faces": "Vérification du GPU pour les visages",
+  "Check for Updates…": "Rechercher des mises à jour…",
+  "Update Available": "Mise à jour disponible",
+  "Later": "Plus tard",
+  "Checking for updates": "Recherche de mises à jour",
+  "Update Status": "État des mises à jour",
+  "Download opens the release page in your browser; your library and edits stay as they are.": "Télécharger ouvre la page de la version dans votre navigateur ; votre bibliothèque et vos retouches restent inchangées."
 }

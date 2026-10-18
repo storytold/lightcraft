@@ -1,6 +1,6 @@
 # Lightroom parity checklist
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (integration batch 36: slideshow module, print-ready PDF fixes, local adjustment presets, Layout Image loupe overlay, Delete in an album removes from it, new languages Czech, Polish, Italian-ready catalogs; many rows' notes updated by their PRs) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-18 · **Change:** minor (MENU-APP-UPDATES: Help ▸ Check for Updates… (#1553); integration batch 36: slideshow module, print-ready PDF fixes, local adjustment presets, Layout Image loupe overlay, Delete in an album removes from it, new languages Czech, Polish, Italian-ready catalogs; many rows' notes updated by their PRs) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 The measured, row-by-row checklist: one row per Lightroom feature, menu item and shortcut, what we
 have and what is missing. It answers *does the feature exist?* (feature breadth). Whether it is good
@@ -50,12 +50,12 @@ cited here still exists. Formerly docs/parity.md.
 | V. Preferences (PREF) | 6 | 2 | 2 | 2 | 1/1 (100%) | 4/5 (80%) |
 | W. Cloud & AI infrastructure (CLOUD / AI) | 1 | 0 | 1 | 2 | — | — |
 | X. Cross-cutting behaviours (BEHAV) | 23 | 6 | 1 | 1 | 8/8 (100%) | 7/10 (70%) |
-| Y. Menus | 84 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
+| Y. Menus | 85 | 0 | 3 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 78 | 4 | 2 | 1 | 49/52 (94%) | 24/26 (92%) |
 | Lightroom Classic extras | 40 | 23 | 23 | 8 | — | 24/26 (92%) |
-| **Total** | 419 | 61 | 59 | 35 | 194/201 (97%) | 148/161 (92%) |
+| **Total** | 420 | 61 | 58 | 35 | 194/201 (97%) | 148/161 (92%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.4%** of 539 in-scope rows — P0 98.3% of 201 · P1 95.0% of 161 · P2 55.7% of 176.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.6%** of 539 in-scope rows — P0 98.3% of 201 · P1 95.0% of 161 · P2 56.2% of 176.
 <!-- /parity:summary -->
 
 ## Top gaps and shortcut notes
@@ -497,7 +497,7 @@ visible menu bar yet: the menu model is only exposed through the control channel
 | MENU-BAR | Menu bar rendering | P1 | ✅ | `crates/ui-egui/src/menubar.rs`, `apps/lightcraft/src/native_menu.rs` | native macOS menu bar (muda) with live labels/enabled/checked; in-window menus on web/Windows/Linux (with one menu open, the pointer on another title switches to it, as in native menu bars); ⌫ and X stay egui-handled (contextual), so they show no key in the native menu; a scrolled menu draws no scrollbar over its rows: the ▲ / ▼ strips, the wheel and dragging scroll it (issue #691: egui's floating bar hid the shortcut text's last character; `crates/ui-egui/src/tests_menubar.rs`) |
 | MENU-APP-ABOUT | About | P2 | ✅ | `cmd:app.about` | |
 | MENU-APP-SETTINGS | Settings… | P0 | ✅ | `cmd:app.settings` | app menu on macOS, Edit menu elsewhere |
-| MENU-APP-UPDATES | Check for updates | P2 | ⬜ | | |
+| MENU-APP-UPDATES | Check for updates | P2 | ✅ | `cmd:app.checkForUpdates`, `cmd:app.updateStatus`, `crates/engine/src/cmd/updates.rs` | Help ▸ Check for Updates…, on demand only: asks GitHub for the latest release in the background, offers a newer one (Download opens its release page) or says the version is the latest (#1553); no automatic check, no download or install |
 | MENU-APP-SYNC | Sync status / pause | OOS | 🚫 | | |
 | MENU-APP-SIGNOUT | Sign out | OOS | 🚫 | | |
 | MENU-APP-HIDE | Hide / hide others / show all | P1 | ✅ | `apps/lightcraft/src/native_menu.rs` | the system's own items in the app menu (⌘H, ⌥⌘H) |
@@ -797,6 +797,7 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-13 | minor | MENU-APP-UPDATES: Help ▸ Check for Updates… asks GitHub for the latest release on demand and offers a newer one's page (#1553); ⬜ → ✅ |
 | 2026-10-12 | minor | LR-EDIT-OPTICS-PROFILE: Sony ARW shading, CA and distortion tables decoded with settings and provenance (raw IFD, `SR2SubIFD` fallback); applied corrections unchanged (ILCE-7RM4A and ILCE-7RM6 distortion); status unchanged (🟡) |
 | 2026-10-14 | minor | LR-IMP-CAMERA-COVERAGE: Camera-coverage sweep (#1327): 30 models verified on 40 CC0 files (coverage.py 515 → 545 verified); sensor verification does not establish colour parity (#1277); status unchanged (🟡) |
 | 2026-10-13 | minor | LR-MERGE-PANO: a panorama's DNG takes its `AsShotNeutral` from the median of its frames' vendor white-balance multipliers (CR2, NEF, ARW…) instead of the first frame's tags, and frames now carry the multipliers (issue #1144); status unchanged (✅) |

@@ -183,6 +183,14 @@
 
 ## 2026-10-13
 
+### Check for Updates
+- Help ▸ Check for Updates… asks GitHub for the latest LightCraft release (issue #1553). When it is newer than the
+  version you run, a dialog says so; **Download** opens its release page in your browser, **Later** closes it.
+  Otherwise a message says you have the latest version, or why the check couldn't be made.
+- Only when you choose it: nothing is checked at startup, no photo or library data is sent, and nothing is downloaded
+  or installed. The check shows in the activity stack while it runs.
+- Agents: `app.checkForUpdates` starts the check, `app.updateStatus` reports `{current, checking, last}`.
+
 ### Edits keep up in a large library
 - A small edit (a keyword, a rating, a flag, a slider) no longer has the grid's list worked out again from every
   photo: only the photos the edit touched are asked about again and put at their place in the order. In a library of
