@@ -1022,7 +1022,7 @@ name = "collabcraft-share"
 version = "0.1.0"
 source = "git+https://github.com/wdunn001/collab-craft?rev=80bfaec#80bfaec3e581213bb5bcfedc42079525aec5a1af"
 dependencies = [
- "craft-cloud",
+ "craft-cloud 0.1.0 (git+https://github.com/storytold/craft-libs?rev=289d562cc6e8b567819aee51f759a78f41a65454)",
  "craft-cloud-client",
  "craft-ui 0.1.0 (git+https://github.com/storytold/craft-libs?rev=289d562cc6e8b567819aee51f759a78f41a65454)",
  "wasm-bindgen-futures",
@@ -1162,11 +1162,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-cloud"
+version = "0.1.0"
+source = "git+https://github.com/wdunn001/craft-libs?rev=441d918#441d91842de500fa3a344d4ffaab688a7b18716c"
+dependencies = [
+ "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-cloud-client"
 version = "0.1.0"
 source = "git+https://github.com/wdunn001/collab-craft?rev=80bfaec#80bfaec3e581213bb5bcfedc42079525aec5a1af"
 dependencies = [
- "craft-cloud",
+ "craft-cloud 0.1.0 (git+https://github.com/storytold/craft-libs?rev=289d562cc6e8b567819aee51f759a78f41a65454)",
  "craft-collab",
  "js-sys",
  "log",
@@ -1202,17 +1211,19 @@ name = "craft-ui"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=289d562cc6e8b567819aee51f759a78f41a65454#289d562cc6e8b567819aee51f759a78f41a65454"
 dependencies = [
- "craft-cloud",
+ "craft-cloud 0.1.0 (git+https://github.com/storytold/craft-libs?rev=289d562cc6e8b567819aee51f759a78f41a65454)",
  "egui",
 ]
 
 [[package]]
 name = "craft-ui"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=5c874d51eeb3de70e735c8ce87a59a7dedd47675#5c874d51eeb3de70e735c8ce87a59a7dedd47675"
+source = "git+https://github.com/wdunn001/craft-libs?rev=441d918#441d91842de500fa3a344d4ffaab688a7b18716c"
 dependencies = [
+ "craft-cloud 0.1.0 (git+https://github.com/wdunn001/craft-libs?rev=441d918)",
  "egui",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -3655,8 +3666,8 @@ dependencies = [
 name = "lightcraft-ui-egui"
 version = "0.10.0"
 dependencies = [
- "craft-cloud",
- "craft-ui 0.1.0 (git+https://github.com/storytold/craft-libs?rev=5c874d51eeb3de70e735c8ce87a59a7dedd47675)",
+ "craft-cloud 0.1.0 (git+https://github.com/wdunn001/craft-libs?rev=441d918)",
+ "craft-ui 0.1.0 (git+https://github.com/wdunn001/craft-libs?rev=441d918)",
  "egui",
  "egui_kittest",
  "lightcraft-catalog",
