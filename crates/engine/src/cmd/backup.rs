@@ -666,14 +666,16 @@ fn backups(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// Take note of a backup of the open library that has ended: one that was made, in the folder
-/// the library's backups go to, is when the library was last backed up (saved with it). Once
-/// per backup; between commands (see [`settle`]).
+/// the library's backups go to now, is when the library was last backed up (saved with it). One
+/// that was made in the folder they went to before it was changed meanwhile is not, for the
+/// library has no backup in the folder they go to now. Once per backup; between commands (see
+/// [`settle`]).
 pub fn note_finished(s: &mut Session) {
     let Some(job) = status(s).cloned() else { return };
     if !job.finished.load(Ordering::Relaxed) || job.noted.swap(true, Ordering::Relaxed) {
         return;
     }
-    if job.own && job.outcome().is_some_and(|o| o.is_ok()) {
+    if job.own && backup_folder(s).is_some_and(|(folder, _)| folder == job.dest) && job.outcome().is_some_and(|o| o.is_ok()) {
         s.last_backup = Some(job.started.clone());
         if let Err(e) = s.save_prefs() {
             log::warn!("library: the time of the backup was not saved: {e}");
@@ -858,7 +860,11 @@ pub fn specs() -> Vec<CommandSpec> {
             None,
             "{} → the backup of the open library that is under way, or the last one made of it in this session, as `library.backup` returns it | null",
             always,
-            |s, _| Ok(status(s).map_or(Value::Null, |b| b.json()))
+            |s, _| {
+                // (a backup that ended is noted when anybody looks, not only when a frame loop calls `settle`)
+                note_finished(s);
+                Ok(status(s).map_or(Value::Null, |b| b.json()))
+            }
         ),
         cmd!(query
             "library.checkBackup",

@@ -149,7 +149,7 @@ fn backup_under_way(app: &LightcraftApp) -> bool {
 /// that can't be started is a backup that failed ([`backup_failed`]).
 fn back_up_then_quit(app: &mut LightcraftApp) {
     if !backup_under_way(app)
-        && let Err(e) = app.run("library.backup", serde_json::json!({}))
+        && let Err(e) = app.run("library.backup", serde_json::json!({"background": true}))
     {
         backup_failed(app, &e);
         return;

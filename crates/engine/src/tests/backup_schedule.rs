@@ -318,3 +318,51 @@ fn a_choice_this_version_does_not_know_costs_no_other_preference() {
         let _ = std::fs::remove_dir_all(d);
     }
 }
+
+/// Given a backup of the library's own folder that is running when the folder backups go to is
+/// changed, then it ends in the old folder and does not count as a backup in the new one: the new
+/// folder has none, so one is due there at once.
+#[test]
+fn a_backup_that_ends_after_the_folder_changed_does_not_count_in_the_new_folder() {
+    let (dir, other) = (temp_dir("changed-while-running"), temp_dir("changed-while-running-other"));
+    let (mut s, _) = open(&dir);
+    prefs(&mut s, json!({"every": "month"}));
+    s.backup_hold.store(true, std::sync::atomic::Ordering::SeqCst);
+    s.execute("library.backup", &json!({"background": true})).unwrap();
+    let p = prefs(&mut s, json!({"dir": other.to_string_lossy()}));
+    assert!(p["lastBackup"].is_null(), "{p}");
+    s.backup_hold.store(false, std::sync::atomic::Ordering::SeqCst);
+    finish(&mut s);
+    assert!(prefs(&mut s, json!({}))["lastBackup"].is_null(), "the backup is in the old folder");
+    assert!(due_backup(&mut s), "nothing is backed up in the new folder");
+    finish(&mut s);
+    assert_eq!(backups_in(&other), 1);
+    drop(s);
+    for d in [dir, other] {
+        let _ = std::fs::remove_dir_all(d);
+    }
+}
+
+/// Given a backup in the background that ends, when nobody but a script asks how it went
+/// (`library.backupStatus`: no frame loop calls `persist_if_dirty`), then it counts as the last
+/// backup and is saved with the library, so the next session does not find one due again.
+#[test]
+fn a_backup_in_the_background_is_noted_when_its_status_is_asked() {
+    let dir = temp_dir("noted-by-status");
+    let (mut s, _) = open(&dir);
+    prefs(&mut s, json!({"every": "month"}));
+    s.execute("library.backup", &json!({"background": true})).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while backup::status(&s).is_some_and(|b| !b.finished.load(std::sync::atomic::Ordering::Relaxed)) {
+        assert!(std::time::Instant::now() < deadline, "the backup did not finish");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let status = s.execute("library.backupStatus", &json!({})).unwrap();
+    assert_eq!(status["running"], json!(false), "{status}");
+    assert_eq!(prefs(&mut s, json!({}))["lastBackup"].as_str(), Some("2026-10-11T09:00:00"));
+    drop(s);
+    let (mut again, _) = open(&dir);
+    assert_eq!(prefs(&mut again, json!({}))["lastBackup"].as_str(), Some("2026-10-11T09:00:00"), "saved with the library");
+    drop(again);
+    let _ = std::fs::remove_dir_all(&dir);
+}
