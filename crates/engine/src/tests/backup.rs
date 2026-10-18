@@ -22,10 +22,19 @@ fn open(dir: &Path) -> Session {
 
 /// The backup in `made`, restored into a folder of its own and opened: a backup is not opened
 /// where it is.
-fn restored(s: &mut Session, made: &Path, tag: &str) -> Session {
+/// The folder is removed when the returned guard is dropped (also when a test fails).
+fn restored(s: &mut Session, made: &Path, tag: &str) -> (Session, RemoveOnDrop) {
     let to = temp_dir(tag);
     s.execute("library.restore", &json!({"dir": made.to_string_lossy(), "to": to.to_string_lossy()})).unwrap();
-    open(&to)
+    (open(&to), RemoveOnDrop(to))
+}
+
+struct RemoveOnDrop(PathBuf);
+
+impl Drop for RemoveOnDrop {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }
 
 fn backups(dir: &Path) -> Vec<String> {
@@ -52,7 +61,7 @@ fn a_backup_opens_as_the_library() {
     let expect = s.catalog.to_snapshot();
     // the library goes on; the backup is what it was
     s.execute("photo.rate", &json!({"rating": 1})).unwrap();
-    let back = restored(&mut s, &made, "opens-restored");
+    let (back, _gone) = restored(&mut s, &made, "opens-restored");
     assert_eq!(back.catalog.to_snapshot(), expect);
     assert_eq!(back.catalog.photo(id).unwrap().rating, 4);
     assert_eq!(s.execute("library.backupStatus", &json!({})).unwrap()["report"]["dir"], r["report"]["dir"]);
@@ -203,7 +212,8 @@ fn a_backup_holds_what_was_not_saved_yet() {
     for name in ["catalog.snap", "prefs.json", "backup.json"] {
         assert!(made.join(name).is_file(), "{name}");
     }
-    assert_eq!(restored(&mut s, &made, "unsaved-restored").catalog.photo(id).unwrap().rating, 5);
+    let (back, _gone) = restored(&mut s, &made, "unsaved-restored");
+    assert_eq!(back.catalog.photo(id).unwrap().rating, 5);
     drop(s);
     let _ = std::fs::remove_dir_all(&dir);
 }
