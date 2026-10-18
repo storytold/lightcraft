@@ -1156,6 +1156,36 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
     #[test]
+    fn w_copy_failure_revokes_unowned_proof_without_changing_the_original() {
+        let dir = crate::tests_xmp::temp_dir("w-copy-failure-proof");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("source.bin");
+        std::fs::write(&path, b"unchanged source").unwrap();
+        let original = File::open(&path).unwrap();
+        let stamp = Stamp::of(&original.metadata().unwrap()).unwrap();
+        let reader = Originals::default();
+        let fp = reader.hash_whole(path.to_str().unwrap()).unwrap();
+        assert!(fp.current(path.to_str().unwrap()));
+        crate::import_move::inject(crate::import_move::Fault::FailWrite);
+        let result = reader.in_scope(|| crate::import_move::copy_new(&path, &dir.join("out"), "copy.bin", None));
+        crate::import_move::inject(crate::import_move::Fault::None);
+        assert!(result.is_err());
+        let current = File::open(&path).unwrap();
+        assert!(same_file_handles(&original, &current));
+        assert_eq!(Stamp::of(&current.metadata().unwrap()).as_ref(), Some(&stamp));
+        assert_eq!(std::fs::read(&path).unwrap(), b"unchanged source");
+        assert!(!dir.join("out/copy.bin").exists());
+        assert!(!fp.current(path.to_str().unwrap()), "cleanup revokes proof without changing physical identity");
+        assert!(!reader.candidates.lock().unwrap().contains_key(path.to_str().unwrap()));
+        assert!(reader.drain().is_empty());
+        let fresh = reader.hash_whole(path.to_str().unwrap()).unwrap();
+        assert!(fresh.current(path.to_str().unwrap()), "a new read may learn the unchanged source");
+        reader.retire();
+        drop((original, current));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn w_fix_standalone_scope_releases_only_its_own_proof() {
         let dir = crate::tests_xmp::temp_dir("w-standalone-scope");
         let path = dir.join("source.bin");
@@ -1820,17 +1850,28 @@ mod windows_tests {
     #[test]
     fn protected_source_append_is_denied_and_copy_failure_keeps_original() {
         let (reader, dir, path) = source("w-protected-grow");
+        let original = File::open(&path).unwrap();
+        let before = Stamp::of(&original.metadata().unwrap()).unwrap();
         let fp = reader.hash_whole(&path).unwrap();
         assert!(fp.current(&path));
+        let denied = File::options().append(true).open(&path).unwrap_err();
+        assert_eq!(denied.raw_os_error(), Some(32), "the live source proof must deny an in-place append");
         crate::import_move::inject(crate::import_move::Fault::Grow);
         let result = reader.in_scope(|| crate::import_move::copy_new(std::path::Path::new(&path), &dir.join("out"), "copy.bin", None));
         crate::import_move::inject(crate::import_move::Fault::None);
         assert!(result.is_err(), "the denied in-place append must fail the copy safely");
         assert_eq!(std::fs::read(&path).unwrap(), b"same bytes");
         assert!(!dir.join("out/copy.bin").exists());
-        assert!(fp.current(&path), "the protected original remains the same physical object");
+        let current = File::open(&path).unwrap();
+        assert!(same_file_handles(&original, &current), "the protected original remains the same physical object");
+        assert_eq!(Stamp::of(&current.metadata().unwrap()).as_ref(), Some(&before));
+        assert!(!fp.current(&path), "failed-copy cleanup revokes the unowned candidate proof");
+        assert!(!reader.candidates.lock().unwrap().contains_key(&path));
+        assert!(reader.drain().is_empty());
+        assert!(File::options().append(true).open(&path).is_ok(), "cleanup must release the unowned write-denial lease");
         reader.retire();
         assert!(File::options().write(true).open(&path).is_ok());
+        drop((original, current));
         std::fs::remove_dir_all(dir).unwrap();
     }
 
