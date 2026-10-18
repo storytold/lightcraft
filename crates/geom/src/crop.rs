@@ -376,7 +376,11 @@ mod tests {
             for ang in [20.0, 10.0, 0.0] {
                 c = c.with_angle_from(start, 30.0, ang, w, h);
                 let want = crop_fit_angle(w, h, ang, aspect).rect;
-                assert!((c.rect.width() - want.width()).abs() < 1e-9, "{aspect:?} at {ang}°: {} vs {}", c.rect.width(), want.width());
+                // the whole rect, not just its width: a larger crop with a moved centre is not the fit
+                let moved =
+                    (c.rect.x0 - want.x0).abs().max((c.rect.y0 - want.y0).abs()).max((c.rect.x1 - want.x1).abs()).max((c.rect.y1 - want.y1).abs());
+                assert!(moved < 1e-9, "{aspect:?} at {ang}°: {:?} vs {want:?}", c.rect);
+                assert!(c.is_within_image(w, h), "{aspect:?} at {ang}°: {c:?}");
             }
         }
     }
