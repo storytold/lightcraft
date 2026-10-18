@@ -116,7 +116,7 @@ fn export_format_for(into: Destination<'_>) -> Result<lightcraft_engine::export:
         _ if mime.starts_with("image/tiff") => Ok(ExportFormat::Tiff),
         _ if mime.starts_with("image/webp") => Ok(ExportFormat::Webp),
         _ => Err(format!(
-            "CollabCraft save writes JPEG, PNG, TIFF, or WebP; rename to .{}.jpg (or .png / .tif / .webp)",
+            "CollabCraft save writes JPEG, PNG, TIFF, or WebP; rename to {}.jpg (or .png / .tif / .webp)",
             std::path::Path::new(into.name).file_stem().and_then(|s| s.to_str()).unwrap_or("photo")
         )),
     }
@@ -125,7 +125,9 @@ fn export_format_for(into: Destination<'_>) -> Result<lightcraft_engine::export:
 fn encode_prepared(
     item: lightcraft_engine::export::PreparedExport,
     opts: &lightcraft_engine::export::ExportOptions,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
 ) -> Result<Vec<u8>, String> {
+    use std::sync::atomic::Ordering;
     let dest = lightcraft_engine::export::Destination { dir: String::new(), exact: Some("cloud_export".into()) };
     let mut captured = Vec::new();
     lightcraft_engine::export::run_batch(
@@ -138,9 +140,12 @@ fn encode_prepared(
         },
         &|_| false,
         true,
-        &mut |_, _| true,
+        &mut |_, _| cancel.map(|c| !c.load(Ordering::Relaxed)).unwrap_or(true),
     )
     .map_err(|e| format!("could not export photo: {e}"))?;
+    if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+        return Err("the cloud save was cancelled".into());
+    }
     if captured.is_empty() {
         return Err("photo export produced no bytes".into());
     }
@@ -248,11 +253,20 @@ impl CloudApp for LightcraftApp {
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
+            // Refuse before writing: start_paths fails the same way, and a written-but-unimported
+            // file under Originals/Cloud would pile up on every retry while Auto Import is busy.
+            crate::import::busy_synchronizing(self)?;
+            if self.import.is_some() || self.scan.as_ref().is_some_and(|t| !t.browse) {
+                return Err("an import is running".into());
+            }
             let path = durable_cloud_path(self, name)?;
             std::fs::write(&path, &bytes).map_err(|e| format!("could not write {name} into the library: {e}"))?;
             let path_str = path.to_string_lossy().to_string();
             // Already inside Originals (or a process-scoped durable folder): add in place.
-            crate::import::start_paths(self, vec![path_str])?;
+            if let Err(e) = crate::import::start_paths(self, vec![path_str]) {
+                let _ = std::fs::remove_file(&path);
+                return Err(e);
+            }
             Ok(None)
         }
     }
@@ -270,7 +284,7 @@ impl CloudApp for LightcraftApp {
         let opts = lightcraft_engine::export::ExportOptions { format, ..Default::default() };
         let item = lightcraft_engine::export::prepare_export(&mut self.session, PhotoId(uid), &opts, 1)
             .map_err(|e| format!("could not prepare photo for export: {e}"))?;
-        encode_prepared(item, &opts)
+        encode_prepared(item, &opts, None)
     }
 
     /// Prepare on the UI thread, encode on a worker (desktop) with an activity
@@ -287,7 +301,7 @@ impl CloudApp for LightcraftApp {
 
         #[cfg(target_arch = "wasm32")]
         {
-            let bytes = encode_prepared(item, &opts).map_err(Fault::Refused);
+            let bytes = encode_prepared(item, &opts, None).map_err(Fault::Refused);
             self.cloud.post(Event::Encoded { intent, bytes });
             return Ok(());
         }
@@ -306,7 +320,12 @@ impl CloudApp for LightcraftApp {
                 let bytes = if cancel.load(Ordering::Relaxed) {
                     Err(Fault::Refused("the cloud save was cancelled".into()))
                 } else {
-                    encode_prepared(item, &opts).map_err(Fault::Refused)
+                    encode_prepared(item, &opts, Some(cancel.as_ref())).map_err(Fault::Refused)
+                };
+                // Cancel after encode still refuses upload so a cancelled save cannot overwrite.
+                let bytes = match bytes {
+                    Ok(b) if cancel.load(Ordering::Relaxed) => Err(Fault::Refused("the cloud save was cancelled".into())),
+                    other => other,
                 };
                 let _ = tx.send(Event::Encoded { intent, bytes });
             };

@@ -161,17 +161,28 @@ fn fault(e: Error) -> Fault {
     }
 }
 
+/// Auth paths against the configured CollabCraft origin.
+///
+/// Same-origin CollabCraft pages use relative `/auth/…`. A page that points at
+/// another host via `<meta name="craft-cloud-url">` must sign in and out there,
+/// not on the page host (which may have no auth routes).
+fn auth_url(path: &str) -> String {
+    let base = Client::from_page().base().trim_end_matches('/');
+    if base.is_empty() {
+        path.to_owned()
+    } else {
+        format!("{base}{path}")
+    }
+}
+
 fn offer_login() {
     let Some(window) = web_sys::window() else { return };
     let Ok(path) = window.location().pathname() else { return };
     if path.starts_with("/auth/") {
         return;
     }
-    let _ = window.location().set_href("/auth/login");
+    let _ = window.location().set_href(&auth_url("/auth/login"));
 }
-
-/// CollabCraft's sign-out route. Must stay in sync with the service router.
-const LOGOUT_PATH: &str = "/auth/logout";
 
 async fn fetch_logout() -> Result<(), String> {
     let global = js_sys::global();
@@ -182,7 +193,8 @@ async fn fetch_logout() -> Result<(), String> {
     let init = web_sys::RequestInit::new();
     init.set_method("POST");
     init.set_credentials(web_sys::RequestCredentials::Include);
-    let req = web_sys::Request::new_with_str_and_init(LOGOUT_PATH, &init).map_err(|e| format!("{e:?}"))?;
+    let logout = auth_url("/auth/logout");
+    let req = web_sys::Request::new_with_str_and_init(&logout, &init).map_err(|e| format!("{e:?}"))?;
     let promised = fetch.call1(global.as_ref(), req.as_ref()).map_err(|e| format!("{e:?}"))?;
     let promised: js_sys::Promise = promised.dyn_into().map_err(|_| "not a promise".to_owned())?;
     let value = wasm_bindgen_futures::JsFuture::from(promised).await.map_err(|e| format!("{e:?}"))?;
