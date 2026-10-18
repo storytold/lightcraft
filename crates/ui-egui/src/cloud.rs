@@ -255,10 +255,7 @@ impl CloudApp for LightcraftApp {
         {
             // Refuse before writing: start_paths fails the same way, and a written-but-unimported
             // file under Originals/Cloud would pile up on every retry while Auto Import is busy.
-            crate::import::busy_synchronizing(self)?;
-            if self.import.is_some() || self.scan.as_ref().is_some_and(|t| !t.browse) {
-                return Err("an import is running".into());
-            }
+            crate::import::ensure_can_start(self)?;
             let path = durable_cloud_path(self, name)?;
             std::fs::write(&path, &bytes).map_err(|e| format!("could not write {name} into the library: {e}"))?;
             let path_str = path.to_string_lossy().to_string();
@@ -324,7 +321,7 @@ impl CloudApp for LightcraftApp {
                 };
                 // Cancel after encode still refuses upload so a cancelled save cannot overwrite.
                 let bytes = match bytes {
-                    Ok(b) if cancel.load(Ordering::Relaxed) => Err(Fault::Refused("the cloud save was cancelled".into())),
+                    Ok(_) if cancel.load(Ordering::Relaxed) => Err(Fault::Refused("the cloud save was cancelled".into())),
                     other => other,
                 };
                 let _ = tx.send(Event::Encoded { intent, bytes });
