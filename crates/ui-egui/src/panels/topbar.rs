@@ -196,12 +196,12 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 if id == "cloud" && crate::cloud::available(app) {
                     // Account badge + presence. Both draw inside the allocated rect.
                     let badge_rect = Rect::from_center_size(pos2(x, full.center().y), vec2(28.0, full.height()));
-                    // A transparent interaction on the badge area provides the context menu:
-                    // left-click is handled by the account badge itself (sign in/out);
-                    // right-click opens the cloud file browser directly from the top bar.
-                    let overlay = ui.interact(badge_rect, egui::Id::new("cloud-badge-ctx"), egui::Sense::click());
+                    // Hover-only so the account badge keeps left-click (sign in/out).
+                    // Right-click is read from pointer input: the badge button sits on
+                    // top of any Sense::click overlay and would otherwise eat secondary.
+                    let hover = ui.interact(badge_rect, egui::Id::new("cloud-badge-ctx"), Sense::hover());
                     if let Some(tip) = unsaved.as_deref() {
-                        overlay.clone().on_hover_text(tip);
+                        hover.on_hover_text(tip);
                     }
                     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(badge_rect));
                     crate::cloud::who(app, &mut child);
@@ -214,21 +214,30 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                         ui.painter().text(c, Align2::CENTER_CENTER, "!", t.semibold(9.5), t.canvas);
                         register(ui.ctx(), "indicator:unsaved", badge_rect);
                     }
-                    overlay.context_menu(|ui| {
-                        let open = ui.button(crate::i18n::tr("Open from CollabCraft…"));
-                        register(ui.ctx(), "menu:cloudOpen", open.rect);
-                        if open.clicked() {
-                            let _ = app.run("file.cloudOpen", json!({}));
-                            ui.close();
-                        }
-                        let has_photo = app.session.active().is_some();
-                        let save = ui.add_enabled(has_photo, egui::Button::new(crate::i18n::tr("Save to CollabCraft…")));
-                        register(ui.ctx(), "menu:cloudSave", save.rect);
-                        if save.clicked() {
-                            let _ = app.run("file.cloudSave", json!({}));
-                            ui.close();
-                        }
-                    });
+                    let menu_id = egui::Id::new("cloud-badge-files");
+                    let open_menu = ui.rect_contains_pointer(badge_rect)
+                        && ui.input(|i| i.pointer.button_clicked(egui::PointerButton::Secondary));
+                    egui::Popup::new(menu_id, ui.ctx().clone(), badge_rect, ui.layer_id())
+                        .kind(egui::PopupKind::Menu)
+                        .open_memory(open_menu.then_some(egui::SetOpenCommand::Bool(true)))
+                        .at_pointer_fixed()
+                        .layout(egui::Layout::top_down_justified(egui::Align::Min))
+                        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                        .show(|ui| {
+                            let open = ui.button(crate::i18n::tr("Open from CollabCraft…"));
+                            register(ui.ctx(), "menu:cloudOpen", open.rect);
+                            if open.clicked() {
+                                let _ = app.run("file.cloudOpen", json!({}));
+                                ui.close();
+                            }
+                            let has_photo = app.session.active().is_some();
+                            let save = ui.add_enabled(has_photo, egui::Button::new(crate::i18n::tr("Save to CollabCraft…")));
+                            register(ui.ctx(), "menu:cloudSave", save.rect);
+                            if save.clicked() {
+                                let _ = app.run("file.cloudSave", json!({}));
+                                ui.close();
+                            }
+                        });
                     x -= 40.0;
                     continue;
                 }

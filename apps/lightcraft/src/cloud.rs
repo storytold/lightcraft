@@ -307,6 +307,12 @@ fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 }
 
 fn open_browser(url: &str) -> std::io::Result<()> {
+    // Same rule as Services::open_url: only HTTPS. A compromised or malicious
+    // service could otherwise hand back a file: URL, UNC path, or local
+    // executable and have cmd/open/xdg-open launch it.
+    if !url.starts_with("https://") {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "only https URLs are opened"));
+    }
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt as _;
@@ -326,8 +332,16 @@ fn open_browser(url: &str) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{token_for_service, write_private};
+    use super::{open_browser, token_for_service, write_private};
     use serde_json::json;
+
+    #[test]
+    fn open_browser_rejects_non_https() {
+        for bad in ["http://craft.example/auth", "file:///etc/passwd", "C:\\Windows\\System32\\calc.exe", ""] {
+            let err = open_browser(bad).expect_err("non-https must be refused");
+            assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        }
+    }
 
     #[test]
     fn saved_token_is_bound_to_its_service() {

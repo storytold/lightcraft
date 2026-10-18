@@ -462,20 +462,18 @@ impl WebApp {
         let frozen = Rc::new(Cell::new(false));
         let mut app = LightcraftApp::new(session, services(originals.clone(), backend.clone(), files.clone(), frozen.clone(), cc.egui_ctx.clone()))
             .with_chinese_font(chinese_font);
-        // Cloud storage through CollabCraft, when the app is served from its origin.
-        // Same-origin cookies carry the session; no token file on web.
-        // This block is always compiled (we are in the wasm32 module), but the
-        // cloud module itself is gated to wasm32, which is the only target that
-        // builds this file.
-        {
+        // Cloud storage through CollabCraft only when this page is meant to talk
+        // to it: an explicit craft-cloud-url meta, or the collabcraft_app cookie
+        // CollabCraft sets while serving the wasm. Standalone hosts stay local.
+        if crate::cloud::configured() {
             use crate::cloud::Service as CloudService;
             let svc = CloudService::new(cc.egui_ctx.clone());
             app.cloud.connect(svc);
             app.share.connect(collabcraft_share::CollabCraft::from_fn(|| Some(craft_cloud_client::Client::from_page())).for_app("lightcraft"));
+            // Kick off the initial account probe and root-folder listing so the
+            // cloud controls are populated from the first frame.
+            lightcraft_ui_egui::cloud::start(&mut app);
         }
-        // Kick off the initial account probe and root-folder listing so the cloud
-        // controls are populated from the first frame (matches WordCraft/DeckCraft).
-        lightcraft_ui_egui::cloud::start(&mut app);
         let ui_written = files.get("ui.json").unwrap_or_default();
         if let Ok(ui) = serde_json::from_slice::<UiState>(&ui_written) {
             app.ui = ui;
