@@ -272,12 +272,13 @@ fn restore_library(s: &mut Session, p: &Value) -> Result<Value> {
     if !backup::is_backup(&from) {
         return Err(bad(C, format!("{} is not a backup (it has no {})", from.display(), backup::MARKER)));
     }
+    // (`restore.partial` of the folder is the worker's until it is over, whichever restore asks)
+    if copying(s, &target) {
+        return Err(bad(C, "a restore of this library is still being stopped; restore again in a moment"));
+    }
     if in_place {
         if restore_status(s).is_some_and(|r| r.running()) {
             return Err(bad(C, "a restore of this library is already under way"));
-        }
-        if copying(s, &target) {
-            return Err(bad(C, "a restore of this library is still being stopped; restore again in a moment"));
         }
         if s.library.as_ref().is_some_and(|l| l.stuck.is_some()) {
             return Err(bad(C, "a restore of this library stopped part-way; open the library again to finish it"));

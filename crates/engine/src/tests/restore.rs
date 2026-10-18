@@ -965,3 +965,66 @@ fn a_failed_open_does_not_give_up_a_restore() {
     drop(s);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A restore that was given up has a worker in the library folder that wakes after another
+/// session took the folder over (the first one let go of its lock) and copied a backup into it:
+/// the worker sees it was given up before it clears or makes anything, so the other session's
+/// copy is still there and its restore is made.
+#[test]
+fn a_given_up_worker_that_wakes_late_leaves_the_next_sessions_copy_alone() {
+    let (dir, other) = (temp_dir("late-worker"), temp_dir("late-worker-other"));
+    let mut first = open(&dir);
+    let made = back_up(&mut first);
+    let then = first.catalog.to_snapshot();
+    first.execute("photo.rate", &json!({"rating": 3})).unwrap();
+    first.persist_if_dirty();
+    first.restore_hold.store(true, Ordering::SeqCst);
+    first.execute("library.restore", &json!({"dir": made.to_string_lossy(), "background": true})).unwrap();
+    // given up as another library is opened: the folder's lock is let go, the worker is still held
+    first.close_library().unwrap();
+    first.open_library(&other, true).unwrap();
+    assert_eq!(first.restore.as_ref().map(|r| r.running()), Some(false));
+    // another session has the folder, and its restore has copied the backup in
+    let mut second = open(&dir);
+    second.execute("library.restore", &json!({"dir": made.to_string_lossy(), "background": true})).unwrap();
+    copied(&second);
+    assert!(dir.join("restore.partial").join("catalog.snap").is_file());
+    // the first worker wakes
+    first.restore_hold.store(false, Ordering::SeqCst);
+    let t0 = std::time::Instant::now();
+    while !first.activity.list().is_empty() && t0.elapsed() < std::time::Duration::from_secs(20) {
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    assert!(first.activity.list().is_empty());
+    assert!(dir.join("restore.partial").join("catalog.snap").is_file(), "the other session's copy was removed");
+    assert!(pump(&mut second).expect("the restore ends")["error"].is_null());
+    assert_eq!(second.catalog.to_snapshot(), then);
+    drop((first, second));
+    for d in [dir, other] {
+        let _ = std::fs::remove_dir_all(&d);
+    }
+}
+
+/// A restore into another folder (`to`) is refused as well while the worker of a given-up
+/// restore of that folder is still at work in it.
+#[test]
+fn a_restore_into_a_folder_whose_given_up_worker_still_runs_is_refused() {
+    let (dir, other) = (temp_dir("to-late"), temp_dir("to-late-other"));
+    let mut s = open(&dir);
+    let made = back_up(&mut s);
+    s.restore_hold.store(true, Ordering::SeqCst);
+    s.execute("library.restore", &json!({"dir": made.to_string_lossy(), "background": true})).unwrap();
+    s.close_library().unwrap();
+    s.open_library(&other, true).unwrap();
+    let e = s.execute("library.restore", &json!({"dir": made.to_string_lossy(), "to": dir.to_string_lossy()})).unwrap_err();
+    assert!(e.to_string().contains("still being stopped"), "{e}");
+    s.restore_hold.store(false, Ordering::SeqCst);
+    let t0 = std::time::Instant::now();
+    while !s.activity.list().is_empty() && t0.elapsed() < std::time::Duration::from_secs(20) {
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    drop(s);
+    for d in [dir, other] {
+        let _ = std::fs::remove_dir_all(&d);
+    }
+}
