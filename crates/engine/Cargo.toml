@@ -9,6 +9,8 @@ description = "LightCraft engine: session, command registry, history, render job
 workspace = true
 
 [dependencies]
+# Paths stored in a Lightroom catalog are followed only to local files or the catalog's share.
+craft-docpath = { workspace = true }
 lightcraft-geom = { workspace = true }
 lightcraft-color = { workspace = true }
 lightcraft-raster = { workspace = true }

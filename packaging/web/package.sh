@@ -12,6 +12,15 @@ set -euo pipefail
 HERE="$ROOT/packaging/web"
 
 if [ "${1:-}" != "--skip-build" ]; then
+  # CI (the shared release workflow installs only trunk): install the wasm-bindgen CLI at the
+  # version in Cargo.lock. Locally, `cargo xtask web` says which version to install.
+  if [ -n "${CI:-}" ]; then
+    WASM_BINDGEN_VERSION="$(awk '$0 == "name = \"wasm-bindgen\"" { getline; gsub(/version = |"/, ""); print; exit }' "$ROOT/Cargo.lock")"
+    [ -n "$WASM_BINDGEN_VERSION" ] || { echo "error: wasm-bindgen not found in Cargo.lock" >&2; exit 1; }
+    if ! { command -v wasm-bindgen >/dev/null && wasm-bindgen --version | grep -qF " $WASM_BINDGEN_VERSION"; }; then
+      cargo install wasm-bindgen-cli --version "$WASM_BINDGEN_VERSION" --locked
+    fi
+  fi
   (cd "$ROOT" && cargo xtask web)
 fi
 

@@ -122,3 +122,12 @@ the path relative to the catalog that Lightroom records for root folders on the 
 (`relativePathFromCatalog`), when that is a folder, and reports the remapping as a warning. Copying
 a project folder with its catalog inside it therefore keeps its originals linked. Other moved
 originals stay missing; use LightCraft's missing-photo relinking tools to update their paths.
+
+Original and root folder paths are resolved with the catalog as the document and are looked at
+only when they are on this computer or on the network share the catalog itself is on
+(`crates/engine/src/doc_path.rs`). An original on another computer (`\\server\share\…`,
+`//server/…`, `file://server/…`), a device path, or one whose folder or file name in the catalog is
+an absolute path is not looked at: the import lists it as missing with a warning and leaves the
+photo and its virtual copies out of the library. To import originals on a share, open the catalog
+from that share. A path that is not a path on this computer (a Windows drive path read on macOS or
+Linux) is not looked at either and stays catalogued as missing.

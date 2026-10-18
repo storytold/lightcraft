@@ -73,6 +73,10 @@ ICC profiles are parsed with `moxcms` (v2/v4, `curv`/`para` TRCs, `chad`); sRGB,
 Adobe RGB (1998), ProPhoto (ROMM) and Rec.2020 are recognised by colorants. `icc::write_matrix_trc`
 emits v4 display profiles (D50 PCS, Bradford `chad`) for export embedding.
 
+Before colour conversion, positive-infinity float samples become 1.0; NaN and negative infinity
+become 0.0. This also applies to alpha. Finite samples keep their existing range: matrix/TRC paths
+preserve values above 1.0 and below 0.0, while CMS inputs and alpha remain bounded to 0..1.
+
 ## Dependencies and licences
 
 All pure Rust, verified with `cargo info` / `cargo tree`:

@@ -123,6 +123,27 @@ fn filter_search_sort() {
     assert_eq!(c.keywords(), vec![("ocean".to_string(), 1), ("summer".to_string(), 1)]);
 }
 
+/// A search word with a colon whose left part is not a known field ("10:30", "Re:") is plain
+/// text, not a fielded token that matches nothing.
+#[test]
+fn free_text_with_a_colon_searches_the_text_fields() {
+    let mut c = Catalog::new();
+    let a = photo(&mut c, "meeting.jpg", "2026-05-01T10:00:00");
+    let _b = photo(&mut c, "other.jpg", "2026-04-01T10:00:00");
+    let mut m = c.photo(a).unwrap().meta.clone();
+    m.caption = "Meeting at 10:30 with Re: notes".into();
+    m.iso = Some(1600);
+    c.apply(Op::SetMeta { id: a, meta: Box::new(m) }).unwrap();
+    let q = |text: &str| c.query(&Filter { text: text.into(), ..Default::default() }, &Sort::default());
+    assert_eq!(q("meeting"), vec![a]);
+    assert_eq!(q("10:30"), vec![a], "a free-text token with a colon");
+    assert_eq!(q("re:"), vec![a]);
+    assert_eq!(q("RE: notes"), vec![a], "case-insensitive, one token per word");
+    assert_eq!(q("iso:>800"), vec![a], "known fields stay fielded");
+    assert_eq!(q("iso:>2000"), Vec::<PhotoId>::new());
+    assert_eq!(q("11:45"), Vec::<PhotoId>::new(), "an unknown field matching no text finds nothing");
+}
+
 /// A `captured` string that is not ASCII (the Lightroom importer copies `captureTime` into an
 /// `AddPhoto` op verbatim, and a JSON snapshot is valid UTF-8 whatever it holds) must not be
 /// sliced on a byte index in `date_groups`: grouping counts the well-formed dates and ignores

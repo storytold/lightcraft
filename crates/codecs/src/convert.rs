@@ -44,8 +44,20 @@ impl Buf {
         match self {
             Buf::U8(v) => v[i] as f32 / 255.0,
             Buf::U16(v) => v[i] as f32 / 65535.0,
-            Buf::F32(v) => v[i],
+            Buf::F32(v) => normalize_float(v[i]),
         }
+    }
+}
+
+/// Clip non-finite device samples before colour conversion, preserving finite extended range.
+#[inline]
+fn normalize_float(value: f32) -> f32 {
+    if value == f32::INFINITY {
+        1.0
+    } else if value.is_finite() {
+        value
+    } else {
+        0.0
     }
 }
 
@@ -218,10 +230,7 @@ fn linearize(raw: &Raw, ch: usize, trc: &[Trc; 3]) -> Rgb32f {
             par_rows(&mut img.data, w, |y, row| {
                 for (x, o) in row.iter_mut().enumerate() {
                     let i = (y * w + x) * ch;
-                    let s = |c: usize| {
-                        let val = v[i + c];
-                        if val.is_finite() { val } else { 0.0 }
-                    };
+                    let s = |c: usize| normalize_float(v[i + c]);
                     *o = if gray {
                         let l = if lin { s(0) } else { trc[1].to_linear(s(0)) };
                         [l, l, l]

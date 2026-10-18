@@ -77,6 +77,7 @@ fn relative_ratings_and_history_use_auto_write() {
     std::fs::create_dir_all(&dir).unwrap();
     // Metadata-only fixtures: no import, image decoding or model/service dependency.
     for id in 1..=4 {
+        std::fs::write(dir.join(format!("{id}.jpg")), b"original").unwrap();
         s.catalog
             .apply(Op::SetFile {
                 id: PhotoId(id),

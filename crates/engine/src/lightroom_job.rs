@@ -45,6 +45,18 @@ fn stage_archive(archive_dir: Option<&Path>, data: &mut CatalogImport) -> crate:
     Ok(archive_path)
 }
 
+fn rejected_master_ids(data: &CatalogImport) -> HashSet<i64> {
+    let mut refused = data.rejected_masters.clone();
+    refused.extend(
+        data.photos
+            .iter()
+            .filter(|photo| lightroom_catalog::number_for_job(&photo.image, "masterImage") == 0)
+            .filter(|photo| matches!(photo.original, lightroom_catalog::Original::Refused(_)))
+            .map(|photo| photo.source_id),
+    );
+    refused
+}
+
 /// Memory identity of the library which owns a prepared completion.
 ///
 /// Each successful open/close refreshes session identity, including reopening the same path.
@@ -81,6 +93,7 @@ pub struct LightroomStart {
     index: ImportIndex,
     archive_path: Option<PathBuf>,
     warnings: Vec<String>,
+    rejected_masters: HashSet<i64>,
     collections: Vec<Row>,
     members: Vec<Row>,
     photos: usize,
@@ -243,6 +256,8 @@ pub struct LightroomJob {
     shapes: HashMap<i64, Shape>,
     /// The originals looked for so far (by [`key`]).
     seen: HashSet<String>,
+    /// Refused master IDs are captured before batching so their copies cannot slip through later.
+    rejected_masters: HashSet<i64>,
 }
 
 impl LightroomJob {
@@ -277,6 +292,7 @@ impl LightroomJob {
             queue: VecDeque::new(),
             shapes: HashMap::new(),
             seen: HashSet::new(),
+            rejected_masters: HashSet::new(),
         })
     }
 
@@ -310,6 +326,8 @@ impl LightroomJob {
         let archive_path = stage_archive(self.archive_dir.as_deref(), &mut data)?;
         let index_path = self.archive_dir.as_ref().map(|dir| dir.join("lightroom-index.json"));
         let index = lightroom_catalog::load_index(index_path.as_deref())?;
+        let rejected_masters = rejected_master_ids(&data);
+        self.rejected_masters.clone_from(&rejected_masters);
         let mut photos = std::mem::take(&mut data.photos);
         photos.sort_by_key(|p| lightroom_catalog::number_for_job(&p.image, "masterImage") != 0);
         // history and snapshots were for the archive only
@@ -330,6 +348,7 @@ impl LightroomJob {
             index,
             archive_path,
             warnings: data.warnings,
+            rejected_masters,
             collections: data.collections,
             members: data.members,
             photos: n,
@@ -365,7 +384,7 @@ impl LightroomJob {
             if !self.seen.insert(k.clone()) {
                 continue;
             }
-            if Path::new(&p.path).is_file() {
+            if p.original_is_file() && !self.rejected_masters.contains(&p.source_id) {
                 paths.push(p.path.clone());
             } else {
                 missing_sources.insert(k);
@@ -428,8 +447,9 @@ impl LightroomImport {
         if !start.token.matches(s) {
             return Err(error("Lightroom import belongs to a different open library"));
         }
+        let rejected_masters = start.rejected_masters;
         Ok(Self {
-            apply: LightroomApply::new(s, start.source, start.update_existing, start.index, start.warnings, start.now.clone()),
+            apply: LightroomApply::new(s, start.source, start.update_existing, start.index, start.warnings, start.now.clone(), rejected_masters),
             collections: start.collections,
             members: start.members,
             archive_path: start.archive_path,
@@ -515,6 +535,7 @@ mod tests {
             uuid: format!("fixture-{id}"),
             path: path.into(),
             image: image(id, extra),
+            original: lightroom_catalog::Original::Local,
             settings: String::new(),
             xmp: String::new(),
             keywords: Vec::new(),
@@ -529,6 +550,7 @@ mod tests {
             index: ImportIndex::default(),
             archive_path: None,
             warnings: Vec::new(),
+            rejected_masters: HashSet::new(),
             collections: Vec::new(),
             members: Vec::new(),
             photos,
@@ -550,6 +572,33 @@ mod tests {
             })
             .collect();
         LightroomBatch { photos, normal: Prepared::default(), missing_sources, token: LightroomLibraryToken::capture(s) }
+    }
+
+    #[test]
+    fn rejected_master_ids_survive_non_media_filter_before_worker_batches() {
+        let mut unsupported = photo(20, "/catalog/payload.exe", &[]);
+        let mut unsupported_copy = photo(21, "/catalog/payload.exe", &[("masterImage", serde_json::json!(20))]);
+        unsupported.original = lightroom_catalog::Original::Local;
+        unsupported_copy.original = lightroom_catalog::Original::Local;
+        let mut refused = photo(30, "/remote/refused.jpg", &[]);
+        refused.original = lightroom_catalog::Original::Refused("remote source".into());
+        let mut not_here = photo(40, "/elsewhere/offline.jpg", &[]);
+        not_here.original = lightroom_catalog::Original::NotHere;
+        let mut data = CatalogImport {
+            source: "fixture.lrcat".into(),
+            photos: vec![unsupported_copy, unsupported, refused.clone(), not_here],
+            collections: Vec::new(),
+            members: Vec::new(),
+            collection_content: Vec::new(),
+            warnings: Vec::new(),
+            rejected_masters: HashSet::new(),
+        };
+        lightroom_catalog::refuse_non_media(&mut data);
+        assert!(data.photos.iter().all(|photo| ![20, 21].contains(&photo.source_id)));
+        assert!(data.photos.iter().any(|photo| photo.source_id == 30));
+        assert!(data.photos.iter().any(|photo| photo.source_id == 40));
+        assert_eq!(rejected_master_ids(&data), HashSet::from([20, 30]));
+        assert!(data.warnings.iter().any(|warning| warning.contains("payload.exe")));
     }
 
     fn import_all(s: &mut crate::Session, batches: Vec<Vec<CatalogPhoto>>) -> LightroomCompletion {
@@ -664,6 +713,8 @@ mod tests {
         assert_eq!(session.catalog.photo(id).map(|photo| photo.develop.clone()), before);
         assert_eq!(session.catalog.photo(id).map(|photo| photo.rating), Some(5));
         assert_eq!(session.undo.len(), 3);
+        session.undo_step().unwrap();
+        assert_eq!(session.catalog.photo(id).map(|photo| photo.rating), Some(4), "undo restores the prior imported rating");
     }
 
     #[test]
@@ -687,6 +738,71 @@ mod tests {
         assert_eq!(session.undo.len(), 1);
         session.undo_step().unwrap();
         assert!(session.catalog.is_empty());
+    }
+
+    #[test]
+    fn refused_master_and_unsupported_master_do_not_leak_copies_across_batches() {
+        let mut session = crate::Session::new();
+        let mut refused = photo(10, "/external/refused.jpg", &[]);
+        refused.original = lightroom_catalog::Original::Refused("outside the catalog folder".into());
+        let unsupported = photo(20, "/catalog/payload.exe", &[]);
+        let accepted = photo(30, "/missing/accepted.jpg", &[]);
+        // The owner must carry the refusal forward even with no worker-precomputed ID set.
+        let mut import = LightroomImport::begin(&session, start(&session, 5)).unwrap();
+        let b = batch(&session, vec![accepted, refused, unsupported]);
+        import.commit(&mut session, b).unwrap();
+        assert_eq!(session.catalog.len(), 1);
+        assert!(session.catalog.photos().any(|p| matches!(&p.source, Source::File { path } if path.ends_with("accepted.jpg"))));
+
+        let refused_copy = photo(11, "/external/refused.jpg", &[("masterImage", serde_json::json!(10))]);
+        let unsupported_copy = photo(21, "/catalog/payload.exe", &[("masterImage", serde_json::json!(20))]);
+        let b = batch(&session, vec![refused_copy, unsupported_copy]);
+        import.commit(&mut session, b).unwrap();
+        let completion = import.finish(&mut session, true).unwrap();
+        assert_eq!(completion.report["photos"], 1);
+        assert!(completion.report["mapping"].get("10").is_none());
+        assert!(completion.report["mapping"].get("11").is_none());
+        assert!(completion.report["mapping"].get("20").is_none());
+        assert!(completion.report["mapping"].get("21").is_none());
+        assert!(completion.report["missing"].to_string().contains("refused.jpg"));
+        let warnings = completion.report["warnings"].to_string();
+        assert!(warnings.contains("image 11: not imported"), "{warnings}");
+        assert!(warnings.contains("payload.exe"), "{warnings}");
+        assert_eq!(session.catalog.len(), 1);
+    }
+
+    #[test]
+    fn direct_owner_rejects_refused_and_non_media_records() {
+        let mut session = crate::Session::new();
+        let mut refused = photo(1, "/external/blocked.jpg", &[]);
+        refused.original = lightroom_catalog::Original::Refused("remote path".into());
+        let mut import = LightroomImport::begin(&session, start(&session, 2)).unwrap();
+        let b = batch(&session, vec![refused]);
+        import.commit(&mut session, b).unwrap();
+        let mut refused_copy = photo(2, "/external/blocked.jpg", &[("masterImage", serde_json::json!(1))]);
+        refused_copy.original = lightroom_catalog::Original::Local;
+        let b = batch(&session, vec![refused_copy]);
+        import.commit(&mut session, b).unwrap();
+        let completion = import.finish(&mut session, true).unwrap();
+        assert_eq!(completion.report["photos"], 0);
+        assert!(completion.report["mapping"].as_object().is_some_and(|mapping| mapping.is_empty()));
+        assert!(completion.report["missing"].to_string().contains("blocked.jpg"));
+        assert!(completion.report["warnings"].to_string().contains("image 2: not imported"));
+        assert!(session.catalog.is_empty());
+    }
+
+    #[test]
+    fn not_here_master_and_virtual_copy_remain_offline_records() {
+        let mut session = crate::Session::new();
+        let mut master = photo(1, "/other-computer/trip.jpg", &[]);
+        master.original = lightroom_catalog::Original::NotHere;
+        let mut copy = photo(2, "/other-computer/trip.jpg", &[("masterImage", serde_json::json!(1))]);
+        copy.original = lightroom_catalog::Original::NotHere;
+        let completion = import_all(&mut session, vec![vec![copy, master]]);
+        assert_eq!(completion.report["photos"], 2);
+        assert_eq!(session.catalog.len(), 2);
+        assert_eq!(session.catalog.photos().filter(|p| p.copy_of.is_some()).count(), 1);
+        assert!(completion.report["missing"].to_string().contains("trip.jpg"));
     }
 
     #[test]
@@ -728,6 +844,7 @@ mod tests {
             members: Vec::new(),
             collection_content: Vec::new(),
             warnings: Vec::new(),
+            rejected_masters: HashSet::new(),
         };
         data.photos = (0..5_000)
             .map(|source_id| {
@@ -807,7 +924,11 @@ mod tests {
             .map(|i| {
                 let path = dir.join(format!("p{i}.jpg"));
                 std::fs::write(&path, format!("jpeg {i}")).unwrap();
-                photo(i, &path.to_string_lossy(), &[])
+                let mut photo = photo(i, &path.to_string_lossy(), &[]);
+                if i == 1 {
+                    photo.image.insert("rating".into(), serde_json::json!(5));
+                }
+                photo
             })
             .collect();
         let n = photos.len();
@@ -835,6 +956,10 @@ mod tests {
         let report = import.finish(&mut session, true).unwrap().report;
         assert_eq!((report["photos"].as_u64(), report["imported"].as_u64()), (Some(n as u64), Some(n as u64)));
         assert!(session.catalog.photos().all(|p| (p.width, p.height) == (4, 3) && p.content_hash.is_none()));
+        assert_eq!(
+            session.catalog.photos().find(|p| p.source == Source::File { path: dir.join("p1.jpg").to_string_lossy().into_owned() }).map(|p| p.rating),
+            Some(5)
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

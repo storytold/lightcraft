@@ -269,7 +269,7 @@ fn inspect_report(data: lightcraft_engine::lightroom_catalog::CatalogImport) -> 
     json!({
         "photos": data.photos.len(),
         "collections": data.collections.iter().filter(|r| r.get("systemOnly").and_then(Value::as_f64).unwrap_or(0.0) == 0.0).count(),
-        "missing": data.photos.iter().filter(|p| !std::path::Path::new(&p.path).is_file()).map(|p| &p.path).collect::<Vec<_>>(),
+        "missing": data.photos.iter().filter(|p| !p.original_is_file()).map(|p| &p.path).collect::<Vec<_>>(),
         "warnings": data.warnings,
     })
 }
@@ -780,14 +780,16 @@ mod tests {
 
     #[test]
     fn inspect_report_keeps_empty_catalog_shape() {
-        let report = inspect_report(CatalogImport {
-            source: "synthetic.lrcat".into(),
-            photos: Vec::new(),
-            collections: Vec::new(),
-            members: Vec::new(),
-            collection_content: Vec::new(),
-            warnings: vec!["warning".into()],
-        });
+        let data: CatalogImport = serde_json::from_value(serde_json::json!({
+            "source": "synthetic.lrcat",
+            "photos": [],
+            "collections": [],
+            "members": [],
+            "collection_content": [],
+            "warnings": ["warning"]
+        }))
+        .unwrap();
+        let report = inspect_report(data);
         assert_eq!(report["photos"], 0);
         assert_eq!(report["collections"], 0);
         assert_eq!(report["missing"], serde_json::json!([]));

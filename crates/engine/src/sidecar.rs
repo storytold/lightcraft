@@ -4,6 +4,8 @@
 //! change when [`XmpPrefs::auto_write`] is on): rating, colour label, title, caption, copyright,
 //! creator, keywords, capture time and GPS in the standard namespaces, plus our complete develop
 //! settings (`lc:settings`, JSON), the pick/reject flag (`lc:flag`) and location (`lc:location`).
+//! A sidecar is written only beside an original that is an existing file at an absolute path;
+//! otherwise the save fails.
 //!
 //! An existing sidecar is never replaced wholesale (issue #92): LightCraft's properties
 //! ([`OWNED`], [`OWNED_IF_STATED`]) are merged into it ([`lightcraft_meta::merge_xmp`]) and
@@ -642,6 +644,10 @@ impl Session {
             return Err(EngineError::Other(format!("{} is a virtual copy: its settings live only in the library", p.file_name)));
         }
         let orig = file_path(p).ok_or_else(|| EngineError::Other(format!("{} is not a file on disk", p.file_name)))?;
+        // A relative path would be taken from the working directory.
+        if Path::new(orig).is_relative() || !Path::new(orig).is_file() {
+            return Err(EngineError::Other(format!("{}: the original {orig} is missing; no XMP sidecar is written", p.file_name)));
+        }
         let naming = owners.naming(p, self.xmp.naming);
         let preferred = sidecar_path(orig, naming);
         let other = if naming == SidecarNaming::Stem { SidecarNaming::Full } else { SidecarNaming::Stem };
@@ -797,6 +803,30 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn sidecars_are_written_only_beside_an_existing_original() {
+        let dir = std::env::temp_dir().join(format!("lightcraft-sidecar-local-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("IMG_1.jpg"), b"original").unwrap();
+        let originals = [
+            (r"\\192.0.2.1\share\IMG_1.jpg".to_string(), false),
+            (dir.join("IMG_2.jpg").to_string_lossy().to_string(), false),
+            (dir.join("IMG_1.jpg").to_string_lossy().to_string(), true),
+        ];
+        for (original, written) in originals {
+            let _ = std::fs::remove_file(dir.join("IMG_1.xmp"));
+            let mut s = Session::new();
+            let p = Photo::new(PhotoId(1), Source::File { path: original.clone() }, "IMG_1.jpg", "JPEG", 4, 3, "2026-01-01T00:00:00");
+            s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+            assert_eq!(s.save_sidecar(PhotoId(1)).is_ok(), written, "{original}");
+            assert_eq!(dir.join("IMG_1.xmp").is_file(), written, "{original}");
+            assert!(!dir.join("IMG_2.xmp").exists(), "{original}");
+            assert!(!Path::new(r"\\192.0.2.1\share\IMG_1.xmp").exists(), "{original}");
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     /// A sidecar written by Lightroom Classic (names flat, paths in `lr:hierarchicalSubject`)
     /// gives the photo its keywords as paths.
     #[test]

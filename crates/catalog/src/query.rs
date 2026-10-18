@@ -173,11 +173,18 @@ fn token_matches(p: &Photo, tok: &str) -> bool {
             "date" => p.captured.as_deref().is_some_and(|c| c.starts_with(val)),
             "copy" | "virtual" => (val == "true" || val == "yes") == p.copy_of.is_some(),
             "name" | "file" => p.file_name.to_lowercase().contains(val),
-            _ => false,
+            // Not a known field: the colon is part of a plain word ("10:30", "Re:").
+            _ => text_matches(p, &t),
         };
     }
+    text_matches(p, &t)
+}
+
+/// Whether the lower-cased word `t` is in the file name, title, caption, camera, lens, location,
+/// format or a keyword of `p`.
+fn text_matches(p: &Photo, t: &str) -> bool {
     let hay = [&p.file_name, &p.meta.title, &p.meta.caption, &p.meta.camera, &p.meta.lens, &p.meta.location, &p.format];
-    hay.iter().any(|h| h.to_lowercase().contains(&t)) || p.meta.keywords.iter().any(|k| k.to_lowercase().contains(&t))
+    hay.iter().any(|h| h.to_lowercase().contains(t)) || p.meta.keywords.iter().any(|k| k.to_lowercase().contains(t))
 }
 
 /// Whether `p` has a named face region called `name` (case-insensitive).

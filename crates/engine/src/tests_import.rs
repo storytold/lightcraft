@@ -778,6 +778,50 @@ fn assisted_culling_groups_bursts_and_scores_focus() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Assisted culling: two look-alike shots one second apart across midnight form a burst at the end of
+/// every month, including those with fewer than 31 days.
+#[test]
+fn assisted_culling_groups_bursts_across_month_end() {
+    let dir = temp_dir("cull-month-end");
+    for (name, (w, h)) in [("a.png", (480, 320)), ("b.png", (482, 321))] {
+        let img = lightcraft_scenes::demo_library()[0].render(w, h);
+        let data: Vec<[u8; 4]> = img
+            .data
+            .iter()
+            .map(|c| {
+                let e = |v: f32| (lightcraft_color::transfer::linear_to_srgb(v.clamp(0.0, 1.0)) * 255.0).round() as u8;
+                [e(c[0]), e(c[1]), e(c[2]), 255]
+            })
+            .collect();
+        let png = lightcraft_codecs::encode_png(
+            &lightcraft_codecs::EncodeImage::rgba8(&lightcraft_raster::Rgba8 { width: img.width, height: img.height, data }),
+            &Default::default(),
+        )
+        .unwrap();
+        std::fs::write(dir.join(name), png).unwrap();
+    }
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [dir.to_string_lossy()]})).unwrap();
+    let ids: Vec<u64> = r["imported"].as_array().unwrap().iter().filter_map(Value::as_u64).collect();
+    let by_name = |s: &Session, n: &str| s.catalog.photos().find(|p| p.file_name == n).unwrap().id;
+    let (a, b) = (by_name(&s, "a.png"), by_name(&s, "b.png"));
+    for (before, after) in [
+        ("2026-01-31T23:59:59", "2026-02-01T00:00:00"),
+        ("2026-02-28T23:59:59", "2026-03-01T00:00:00"),
+        ("2026-04-30T23:59:59", "2026-05-01T00:00:00"),
+        ("2026-06-30T23:59:59", "2026-07-01T00:00:00"),
+        ("2026-09-30T23:59:59", "2026-10-01T00:00:00"),
+        ("2026-11-30T23:59:59", "2026-12-01T00:00:00"),
+        ("2026-12-31T23:59:59", "2027-01-01T00:00:00"),
+    ] {
+        s.commit("t", lightcraft_catalog::Op::SetCaptured { id: a, captured: Some(before.into()) }).unwrap();
+        s.commit("t", lightcraft_catalog::Op::SetCaptured { id: b, captured: Some(after.into()) }).unwrap();
+        let r = s.execute("photo.analyze", &json!({"ids": ids})).unwrap();
+        assert_eq!(r["groups"], 1, "shots 1 s apart ({before} / {after}) must form a burst: {r}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Find Dust Spots: soft dark spots on a smooth sky are found and healed (one undo step).
 #[test]
 fn dust_spots_are_found_and_healed() {
