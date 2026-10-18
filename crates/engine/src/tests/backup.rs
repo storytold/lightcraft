@@ -389,3 +389,22 @@ fn choosing_with_a_dialog_is_refused_where_there_is_none() {
     drop(s);
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// Given preferences that can't be saved (prefs.json was unreadable when the library opened, so it
+/// is not overwritten), when a folder for backups is chosen, then the choice fails and is not made:
+/// backups go where they went.
+#[test]
+fn a_backup_folder_that_could_not_be_saved_is_not_chosen() {
+    let (dir, other) = (temp_dir("unsaved-choice"), temp_dir("unsaved-choice-other"));
+    let mut s = open(&dir);
+    s.library.as_mut().unwrap().blocked.push("prefs.json");
+    let e = s.execute("library.backupPreferences", &json!({"dir": other.to_string_lossy()})).unwrap_err().to_string();
+    assert!(e.contains("prefs"), "{e}");
+    assert!(s.backup_dir.is_none());
+    let p = s.execute("library.backupPreferences", &json!({})).unwrap();
+    assert_eq!(p["dir"], json!(null), "{p}");
+    drop(s);
+    for d in [dir, other] {
+        let _ = std::fs::remove_dir_all(d);
+    }
+}

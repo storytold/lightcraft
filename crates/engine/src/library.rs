@@ -115,7 +115,7 @@ pub struct Library {
     pub settings_warnings: Vec<String>,
     warnings_reported: usize,
     /// Settings files that couldn't be read or set aside: never overwritten this session.
-    blocked: Vec<&'static str>,
+    pub(crate) blocked: Vec<&'static str>,
     /// Why nothing is written to the catalog any more: a restore stopped while it was moving the
     /// library's files, so they are no longer the ones this session has open (`library.restore`).
     /// Changes are refused meanwhile; opening the library again finishes the restore.

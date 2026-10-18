@@ -701,6 +701,7 @@ fn preferences(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "library.backupPreferences";
     let choose = flag(C, p, "choose")?;
     if let Some(dir) = p.get("dir") {
+        let before = s.backup_dir.clone();
         s.backup_dir = match dir {
             Value::Null => None,
             dir => {
@@ -711,7 +712,12 @@ fn preferences(s: &mut Session, p: &Value) -> Result<Value> {
                 (!usual).then_some(dir)
             }
         };
-        s.save_prefs()?;
+        // (a choice that was not saved is not made: Settings and the next backup would use a folder the
+        // next session does not know)
+        if let Err(e) = s.save_prefs() {
+            s.backup_dir = before;
+            return Err(e);
+        }
     } else if choose {
         // (the app asks with a folder dialog before the command gets here)
         return Err(bad(C, "there is no folder dialog here to `choose` with: give the folder as `dir`"));
