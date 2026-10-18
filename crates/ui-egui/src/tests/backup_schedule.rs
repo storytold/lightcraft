@@ -208,7 +208,7 @@ fn a_backup_that_runs_already_is_the_one_quitting_waits_for() {
     let mut h = app_with_a_library_in(&dir);
     prefs(&mut h, json!({"onClose": "always"}));
     h.app.session.backup_hold.store(true, Ordering::SeqCst);
-    h.app.run("library.backup", json!({})).unwrap();
+    h.app.run("library.backup", json!({"background": true})).unwrap();
     assert!(!may_close(&mut h.app));
     assert!(matches!(h.app.quit_prompt, Some(QuitPrompt::BackingUp(_))), "waited for, not asked about as a task: {:?}", h.app.quit_prompt);
     let job = h.app.session.backup.clone().unwrap();
@@ -315,7 +315,7 @@ fn another_librarys_backup_is_a_task_like_any_other() {
     let dir = temp("other-library");
     let mut h = app_with_a_library_in(&dir);
     h.app.session.backup_hold.store(true, Ordering::SeqCst);
-    h.app.run("library.backup", json!({})).unwrap();
+    h.app.run("library.backup", json!({"background": true})).unwrap();
     // on to another library, which is backed up when LightCraft quits
     h.app.run("app.openLibrary", json!({"path": dir.join("second").to_string_lossy()})).unwrap();
     prefs(&mut h, json!({"onClose": "always"}));
