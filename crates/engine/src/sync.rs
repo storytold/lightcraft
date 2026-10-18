@@ -602,10 +602,14 @@ impl Session {
             return None;
         }
         let f = Filter { library_folder: Some(path.to_string()), ..Default::default() };
-        // (virtual copies made or deleted meanwhile are not files: the folder holds what it held)
+        // (virtual copies made or deleted meanwhile are not files: the folder holds what it held,
+        // except for copies of photos the scan relinks or removes, which are acted on by id and
+        // would be left behind)
+        let acted: std::collections::HashSet<u64> = c.moved.iter().map(|m| m.id).chain(c.missing.iter().map(|m| m.id)).collect();
+        let counts = |p: &Photo| p.copy_of.is_none_or(|o| acted.contains(&o.0));
         let mut now: Vec<PhotoId> =
-            self.catalog.query(&f, &Sort::default()).into_iter().filter(|id| self.catalog.photo(*id).is_some_and(|p| p.copy_of.is_none())).collect();
-        let mut then: Vec<PhotoId> = c.seen.iter().filter(|p| p.copy_of.is_none()).map(|p| p.id).collect();
+            self.catalog.query(&f, &Sort::default()).into_iter().filter(|id| self.catalog.photo(*id).is_some_and(|p| counts(p))).collect();
+        let mut then: Vec<PhotoId> = c.seen.iter().filter(|p| counts(p)).map(|p| p.id).collect();
         now.sort();
         then.sort();
         let read: std::collections::HashSet<u64> = c.metadata.iter().map(|m| m.id).collect();

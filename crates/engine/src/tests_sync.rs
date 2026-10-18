@@ -506,6 +506,21 @@ fn working_on_the_folders_photos_meanwhile_leaves_the_scan_current() {
     assert_eq!(s.catalog.photo(a).unwrap().rating, 2, "and the work stays");
 }
 
+/// A virtual copy made, meanwhile, of a photo whose file the scan found missing would be left
+/// behind by removing the photo (the scan acts on exact ids): that scan is refused.
+#[test]
+fn a_virtual_copy_of_a_missing_photo_made_meanwhile_makes_the_scan_stale() {
+    let dir = Scratch::new("stale-copy-of-missing");
+    let mut s = library(&dir);
+    let b = s.catalog.photos().find(|p| p.file_name == "b.png").unwrap().id;
+    std::fs::remove_file(dir.path("trip/day1/b.png")).unwrap();
+    scan(&mut s, &dir.path("trip"));
+    s.selection = crate::Selection::single(b);
+    s.execute("photo.virtualCopy", &json!({"ids": [b.0]})).unwrap();
+    let e = s.execute("folder.synchronize", &json!({"path": dir.path("trip"), "scanned": true, "removeMissing": true})).unwrap_err().to_string();
+    assert!(e.contains("scan again"), "{e}");
+}
+
 /// What the scan found is no longer true once the folder holds other photos, or one of them is
 /// another file now: then it is refused, never redone on the spot.
 #[test]
