@@ -307,6 +307,6 @@
   "Where should the Lightroom catalog “{catalog}” go?": "Lightroom 目錄「{catalog}」要匯入到哪裡？",
   "Merge into the open library “{library}” ({count} photo{})": "合併到目前開啟的照片庫「{library}」（{count} 張照片）{:.0}",
   "Changes found: {n}": "找到的變更：{n}",
-  "“{name}” is still being scanned: wait for it, or stop it with ✕ on its row": "「{name}」仍在掃描：請等待完成，或用其所在列的 ✕ 停止",
+  "“{name}” is still being scanned: wait for it, or stop it with ✕ on its row": "「{name}」仍在掃描：請等待完成，或用其所在列的 × 停止",
   "Look at the changes found in “{name}” first, or dismiss them": "請先檢視在「{name}」中找到的變更，或將其忽略"
 }
