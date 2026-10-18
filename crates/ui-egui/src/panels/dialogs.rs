@@ -1486,6 +1486,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                         | Dialog::KeywordSet { .. }
                         | Dialog::SynchronizeFolder { .. }
                         | Dialog::SaveEffect { .. }
+                        | Dialog::UpdateAvailable { .. }
                 ) =>
             {
                 app.toast(ctx, e)
