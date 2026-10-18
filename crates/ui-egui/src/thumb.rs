@@ -551,6 +551,8 @@ fn stack_badge(app: &mut LightcraftApp, ui: &mut egui::Ui, th: &Thumb, t: &Token
     let br = Rect::from_min_size(th.rect.min + vec2(m.inset, m.inset), vec2(w, m.badge));
     let hit = br.intersect(th.rect);
     let resp = ui.interact(hit, egui::Id::unique((th.surface, "stack-badge", id.0)), Sense::click()).on_hover_text(stack_tip(collapsed));
+    // a button to assistive technology, named as its tooltip (the click is handled by the caller)
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, stack_tip(collapsed)));
     register(ui, th.surface.widget(Mark::Stack, id), hit);
     let fill = if resp.hovered() { Color32::from_black_alpha(220) } else { Color32::from_black_alpha(165) };
     p.rect_filled(br, m.badge / 2.0, fill);
