@@ -708,7 +708,7 @@ fn preferences(s: &mut Session, p: &Value) -> Result<Value> {
                 let dir = destination(s, C, "dir", dir)?;
                 // (`Backups` in the library folder is the usual place, not a choice: it goes
                 // with the library when the library is moved)
-                let usual = s.library.as_ref().is_some_and(|l| l.dir.join(BACKUPS) == dir);
+                let usual = s.library.as_ref().is_some_and(|l| same_folder(&l.dir.join(BACKUPS), &dir));
                 (!usual).then_some(dir)
             }
         };
