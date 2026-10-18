@@ -25,6 +25,38 @@ impl Service {
     }
 }
 
+/// Whether this page is meant to talk to CollabCraft.
+///
+/// `Client::from_page()` falls back to the page origin when no
+/// `<meta name="craft-cloud-url">` is present, which is correct for a build
+/// CollabCraft itself serves, but wrong for a standalone wasm host (trunk,
+/// a static mirror) that has no `/auth/login`. Connect only when the page
+/// names a service or CollabCraft has set its app cookie while serving us.
+pub fn configured() -> bool {
+    if meta_content("craft-cloud-url").is_some() {
+        return true;
+    }
+    cookie_has("collabcraft_app")
+}
+
+fn meta_content(name: &str) -> Option<String> {
+    let document = web_sys::window()?.document()?;
+    let element = document.query_selector(&format!("meta[name=\"{name}\"]")).ok()??;
+    let content = element.get_attribute("content")?;
+    let trimmed = content.trim();
+    if trimmed.is_empty() { None } else { Some(trimmed.to_owned()) }
+}
+
+fn cookie_has(name: &str) -> bool {
+    let Some(document) = web_sys::window().and_then(|w| w.document()) else {
+        return false;
+    };
+    let Ok(cookie) = document.cookie() else {
+        return false;
+    };
+    cookie.split(';').map(str::trim).any(|part| part == name || part.starts_with(&format!("{name}=")))
+}
+
 impl CloudBackend for Service {
     fn submit(&self, job: Job, post: Post) {
         let worker = self.clone();
@@ -58,8 +90,14 @@ impl Service {
                 post(Event::Linked(answer));
             }
             Job::SignOut => {
-                let _ = fetch_logout().await;
-                let _ = web_sys::window().and_then(|w| w.location().reload().ok());
+                // Only reload after the service confirmed logout. Reloading on a
+                // failed request would leave the cookie alive while the UI looks signed out.
+                match fetch_logout().await {
+                    Ok(()) => {
+                        let _ = web_sys::window().and_then(|w| w.location().reload().ok());
+                    }
+                    Err(e) => log::warn!("sign-out did not complete: {e}"),
+                }
             }
             Job::List(path) => {
                 let entries = self.client.list(&path).await.map_err(fault);
@@ -135,6 +173,10 @@ async fn fetch_logout() -> Result<(), String> {
     let req = web_sys::Request::new_with_str_and_init(LOGOUT_PATH, &init).map_err(|e| format!("{e:?}"))?;
     let promised = fetch.call1(global.as_ref(), req.as_ref()).map_err(|e| format!("{e:?}"))?;
     let promised: js_sys::Promise = promised.dyn_into().map_err(|_| "not a promise".to_owned())?;
-    wasm_bindgen_futures::JsFuture::from(promised).await.map_err(|e| format!("{e:?}"))?;
+    let value = wasm_bindgen_futures::JsFuture::from(promised).await.map_err(|e| format!("{e:?}"))?;
+    let response: web_sys::Response = value.dyn_into().map_err(|_| "logout did not return a Response".to_owned())?;
+    if !response.ok() {
+        return Err(format!("logout returned HTTP {}", response.status()));
+    }
     Ok(())
 }
