@@ -264,19 +264,28 @@ fn previous(dest: &Path) -> Option<(PathBuf, BTreeMap<String, Segment>)> {
     })
 }
 
+/// A file an operating system writes into a folder that somebody looked at (Finder, Explorer): not
+/// the backup's, and no change to it, so it does not make a sound backup fail its check.
+fn os_metadata(name: &str) -> bool {
+    let name = name.rsplit('/').next().unwrap_or(name);
+    matches!(name, ".DS_Store" | "Thumbs.db" | "desktop.ini") || name.starts_with("._")
+}
+
 /// Remove what a backup that was cut short left in `dest`: folders `<name>.partial` an hour old
-/// or more (one being written now, by this or another program, is younger) that hold nothing
-/// but what a backup holds. Anything else of that name is left alone.
+/// or more (one being written now, by this or another program, is younger: the folder or its
+/// `segments` folder, which is where a backup writes most, was changed less than an hour ago)
+/// that hold nothing but what a backup holds. Anything else of that name is left alone.
 fn sweep(dest: &Path, also: &[&str]) {
     let Ok(entries) = std::fs::read_dir(dest) else { return };
+    let age = |p: &Path| std::fs::symlink_metadata(p).and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok());
     for entry in entries.flatten() {
         let (Ok(name), path) = (entry.file_name().into_string(), entry.path()) else { continue };
-        let old = std::fs::symlink_metadata(&path).and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|age| age >= STALE);
+        let old = age(&path).is_some_and(|a| a >= STALE) && age(&path.join(segments::SEGMENT_DIR)).is_none_or(|a| a >= STALE);
         if !name.ends_with(PARTIAL) || !old || !std::fs::symlink_metadata(&path).is_ok_and(|m| m.is_dir()) {
             continue;
         }
         let ours = held(&path).is_ok_and(|names| {
-            names.iter().all(|n| n == SNAPSHOT || n == LOG || n == MARKER || also.contains(&n.as_str()) || segments::valid_name(n))
+            names.iter().all(|n| n == SNAPSHOT || n == LOG || n == MARKER || also.contains(&n.as_str()) || segments::valid_name(n) || os_metadata(n))
         });
         if ours && let Err(e) = std::fs::remove_dir_all(&path) {
             log::warn!("backup: can't remove {}: {e}", path.display());
@@ -514,7 +523,7 @@ pub fn check(dir: &Path) -> Result<BackupReport, BackupError> {
         }
     }
     for name in held(dir).map_err(|e| changed(format!("{e}, and was not part of the backup")))? {
-        if name != MARKER && !report.contents.contains_key(&name) {
+        if name != MARKER && !report.contents.contains_key(&name) && !os_metadata(&name) {
             return Err(changed(format!("{name} was not part of the backup")));
         }
     }

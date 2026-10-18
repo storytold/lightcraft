@@ -36,7 +36,9 @@ pub struct UiState {
     /// The Build Previews run last announced (its identity, finished?).
     #[serde(skip)]
     pub preview_build_seen: Option<(usize, bool)>,
-    /// The library backup whose end was announced (see `backup_status`).
+    /// The library backup whose end was announced (see `backup_status`): an address, only good
+    /// for this run.
+    #[serde(skip)]
     pub backup_seen: Option<usize>,
     /// Saving the library is failing (announced with a toast; the top bar shows a warning until
     /// a later save succeeds).

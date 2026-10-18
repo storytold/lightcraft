@@ -96,18 +96,19 @@ fn segments(dir: &Path) -> Vec<String> {
     files(dir).into_iter().filter(|n| n.starts_with(SEGMENT_PREFIX)).collect()
 }
 
-/// Whether two paths are the same file on disk (one a hard link of the other).
-fn same_file(a: &Path, b: &Path) -> bool {
+/// Whether two paths are the same file on disk (one a hard link of the other): `None` where that
+/// can't be told (not on Unix), so that an assertion on it is skipped there, not passed.
+fn same_file(a: &Path, b: &Path) -> Option<bool> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
         let (a, b) = (std::fs::metadata(a).unwrap(), std::fs::metadata(b).unwrap());
-        (a.dev(), a.ino()) == (b.dev(), b.ino())
+        Some((a.dev(), a.ino()) == (b.dev(), b.ino()))
     }
     #[cfg(not(unix))]
     {
         let _ = (a, b);
-        true
+        None
     }
 }
 
@@ -160,7 +161,7 @@ fn a_second_backup_shares_the_files_that_did_not_change() {
     let shared: Vec<&String> = new.iter().filter(|n| old.contains(n)).collect();
     assert_eq!(shared.len(), 2);
     for name in shared {
-        assert!(same_file(&first.dir.join(name), &second.dir.join(name)), "{name} was copied");
+        assert_ne!(same_file(&first.dir.join(name), &second.dir.join(name)), Some(false), "{name} was copied");
     }
     // each backup is the library of its day
     assert_eq!(opened(&second.dir).to_snapshot(), c.to_snapshot());
@@ -338,7 +339,7 @@ fn a_damaged_file_in_the_backup_before_is_not_shared() {
     std::fs::write(first.dir.join(&name), &bytes).unwrap();
     let second = back_up(&lib, &dest, "b");
     assert_eq!((second.linked, second.segments), (2, 3));
-    assert!(!same_file(&first.dir.join(&name), &second.dir.join(&name)));
+    assert_ne!(same_file(&first.dir.join(&name), &second.dir.join(&name)), Some(true));
     backup::check(&second.dir).unwrap();
     assert_eq!(opened(&second.dir).to_snapshot(), c.to_snapshot());
 }
@@ -364,7 +365,7 @@ fn only_a_finished_backup_of_the_same_files_is_shared_with() {
     let second = back_up(&lib, &dest, "b");
     assert_eq!(second.linked, 3);
     for name in segments(&second.dir) {
-        assert!(same_file(&first.dir.join(&name), &second.dir.join(&name)), "{name}");
+        assert_ne!(same_file(&first.dir.join(&name), &second.dir.join(&name)), Some(false), "{name}");
     }
     // a backup whose snapshot states another checksum for a file of the same name
     let (other_lib, other_dest) = (temp("lib"), temp("dest"));
@@ -380,16 +381,19 @@ fn only_a_finished_backup_of_the_same_files_is_shared_with() {
 }
 
 /// A folder left by a backup that was cut short (`<name>.partial`) is never taken for a backup,
-/// is in nobody's way while it may still be written, and is removed by a later backup once it
+/// is in nobody's way while it may still be written (the folder, or its `segments` folder where a
+/// backup writes most, changed less than an hour ago), and is removed by a later backup once it
 /// is old. A folder of that name that holds anything else is not touched.
 #[test]
 fn what_a_backup_cut_short_left_is_cleared_away_later() {
     let (lib, dest) = (temp("lib"), temp("dest"));
     let (j, _c) = library(&lib, 12);
     drop(j);
+    let then = || std::time::SystemTime::now() - std::time::Duration::from_secs(2 * 3600);
+    let old_top = |dir: &Path| std::fs::File::open(dir).unwrap().set_modified(then()).unwrap();
     let old = |dir: &Path| {
-        let then = std::time::SystemTime::now() - std::time::Duration::from_secs(2 * 3600);
-        std::fs::File::open(dir).unwrap().set_modified(then).unwrap();
+        old_top(&dir.join("segments"));
+        old_top(dir);
     };
     let partial = |name: &str, extra: Option<&str>| {
         let dir = dest.join(name);
@@ -402,13 +406,17 @@ fn what_a_backup_cut_short_left_is_cleared_away_later() {
         dir
     };
     let (stale, fresh, foreign) = (partial("x.partial", None), partial("y.partial", None), partial("z.partial", Some("thesis.txt")));
+    // one whose folder is quiet but whose segments are being written now (another backup, to the same place)
+    let writing = partial("w.partial", None);
     old(&stale);
     old(&foreign);
+    old_top(&writing);
     // a name whose partial folder is there is taken
     assert!(matches!(backup::back_up(&lib, &dest, &options("y"), &()), Err(BackupError::Exists(_))));
     back_up(&lib, &dest, "a");
     assert!(!stale.exists(), "an old one is removed");
     assert!(fresh.exists(), "one that may be being written is not");
+    assert!(writing.join("segments").exists(), "one whose segments are being written is not");
     assert!(foreign.join("thesis.txt").exists(), "a folder holding something else is not ours to remove");
 }
 
@@ -461,6 +469,15 @@ fn a_backup_that_was_touched_is_found_out() {
     // a file that wasn't there
     let copy = copy_of(&made.dir, "added");
     std::fs::write(copy.join("notes.txt"), b"mine").unwrap();
+    assert!(matches!(backup::check(&copy), Err(BackupError::Changed(msg)) if msg.contains("notes.txt")));
+    // what a file manager writes into a folder somebody looked at is no change of the backup,
+    // beside it and among its segments; a file that is none of those is
+    let copy = copy_of(&made.dir, "looked-at");
+    for name in [".DS_Store", "Thumbs.db", "desktop.ini", "._catalog.snap", "segments/.DS_Store"] {
+        std::fs::write(copy.join(name), b"os").unwrap();
+    }
+    assert_eq!(backup::check(&copy).unwrap(), made);
+    std::fs::write(copy.join("segments/notes.txt"), b"mine").unwrap();
     assert!(matches!(backup::check(&copy), Err(BackupError::Changed(msg)) if msg.contains("notes.txt")));
     // a link to the file elsewhere is not the file: the backup has to stand on its own
     #[cfg(unix)]

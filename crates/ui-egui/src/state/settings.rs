@@ -448,6 +448,18 @@ mod loupe_info_tests {
         assert!(!newer.film_names, "the rest of the settings are still read");
     }
 
+    /// The backup whose end was announced is an address in this run: a settings file never keeps
+    /// it (it could silence the next run's first backup announcement).
+    #[test]
+    fn the_announced_backup_is_not_saved() {
+        use crate::state::UiState;
+        let ui = UiState { backup_seen: Some(0x1234), ..UiState::default() };
+        let saved = serde_json::to_string(&ui).unwrap();
+        assert!(!saved.contains("backupSeen") && !saved.contains("backup_seen"), "{saved}");
+        let read: UiState = serde_json::from_str(&saved).unwrap();
+        assert_eq!(read.backup_seen, None);
+    }
+
     /// Show message when loading or rendering photos is on until it is turned off, and is saved
     /// with the app's settings.
     #[test]
