@@ -408,6 +408,8 @@ fn what_a_backup_cut_short_left_is_cleared_away_later() {
     let (stale, fresh, foreign) = (partial("x.partial", None), partial("y.partial", None), partial("z.partial", Some("thesis.txt")));
     // one whose folder is quiet but whose segments are being written now (another backup, to the same place)
     let writing = partial("w.partial", None);
+    // (one that Finder visited is still ours)
+    std::fs::write(stale.join(".DS_Store"), b"os").unwrap();
     old(&stale);
     old(&foreign);
     old_top(&writing);

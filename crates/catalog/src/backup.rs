@@ -22,7 +22,8 @@
 //!
 //! **A backup says what it holds.** Its marker file, `backup.json`, lists every file with its
 //! size and CRC-32 (the segments' are also in `catalog.snap`). [`check`] reads a backup against
-//! that list: a file that was edited, damaged, removed or added is named.
+//! that list: a file that was edited, damaged, removed or added is named (not what Finder or
+//! Explorer write into a folder somebody looked at: `.DS_Store`, `Thumbs.db`, `desktop.ini`, `._…`).
 //!
 //! **Nothing half-made counts.** A backup is written as `<name>.partial` and renamed when it is
 //! whole; a backup that fails or is cancelled removes it. One cut short by the program ending
@@ -277,10 +278,16 @@ fn os_metadata(name: &str) -> bool {
 /// that hold nothing but what a backup holds. Anything else of that name is left alone.
 fn sweep(dest: &Path, also: &[&str]) {
     let Ok(entries) = std::fs::read_dir(dest) else { return };
+    // None: no age to go by (a time yet to come, or unreadable): not old. A folder that is not
+    // there has no age either, and is told apart below.
     let age = |p: &Path| std::fs::symlink_metadata(p).and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok());
+    let quiet = |p: &Path| match std::fs::symlink_metadata(p) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => true,
+        _ => age(p).is_some_and(|a| a >= STALE),
+    };
     for entry in entries.flatten() {
         let (Ok(name), path) = (entry.file_name().into_string(), entry.path()) else { continue };
-        let old = age(&path).is_some_and(|a| a >= STALE) && age(&path.join(segments::SEGMENT_DIR)).is_none_or(|a| a >= STALE);
+        let old = age(&path).is_some_and(|a| a >= STALE) && quiet(&path.join(segments::SEGMENT_DIR));
         if !name.ends_with(PARTIAL) || !old || !std::fs::symlink_metadata(&path).is_ok_and(|m| m.is_dir()) {
             continue;
         }
@@ -493,7 +500,8 @@ pub fn back_up(library: &Path, dest: &Path, options: &BackupOptions<'_>, watch: 
 }
 
 /// Read the backup in `dir` against what its marker lists: every file there, with the size and
-/// CRC-32 it had when the backup was made, and no other file. The first thing that isn't so is
+/// CRC-32 it had when the backup was made, and no other file (but what a file manager writes into
+/// a folder somebody looked at: `.DS_Store`, `Thumbs.db`, `desktop.ini`, `._…`). The first thing that isn't so is
 /// the error, naming the file. Returns the backup's report.
 pub fn check(dir: &Path) -> Result<BackupReport, BackupError> {
     let changed = BackupError::Changed;
