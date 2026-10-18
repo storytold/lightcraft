@@ -67,11 +67,32 @@ pub(crate) enum Fault {
 #[cfg(test)]
 thread_local! {
     static FAULT: std::cell::Cell<Fault> = const { std::cell::Cell::new(Fault::None) };
+    static GROW_WRITER: std::cell::RefCell<Option<File>> = const { std::cell::RefCell::new(None) };
 }
 
 #[cfg(test)]
 pub(crate) fn read_bytes() -> u64 {
     crate::originals::read_bytes()
+}
+
+#[cfg(test)]
+pub(crate) struct GrowthWriter(Option<File>);
+#[cfg(test)]
+impl Drop for GrowthWriter {
+    fn drop(&mut self) {
+        GROW_WRITER.with(|writer| writer.replace(self.0.take()));
+    }
+}
+#[cfg(test)]
+pub(crate) fn grow_using(file: File) -> GrowthWriter {
+    GrowthWriter(GROW_WRITER.with(|writer| writer.replace(Some(file))))
+}
+fn grow_source(src: &Path) -> io::Result<()> {
+    #[cfg(test)]
+    if let Some(result) = GROW_WRITER.with(|writer| writer.borrow_mut().as_mut().map(|file| file.write_all(b"more"))) {
+        return result;
+    }
+    OpenOptions::new().append(true).open(src)?.write_all(b"more")
 }
 
 /// Inject a fault for the calling thread's next moves (tests only).
@@ -420,7 +441,7 @@ fn stream_copy(out: &mut File, src: &Path) -> io::Result<(lightcraft_preview::Ha
             if n > 0 && !self.wrote {
                 self.wrote = true;
                 if injected(Fault::Grow) {
-                    OpenOptions::new().append(true).open(self.src)?.write_all(b"more")?;
+                    grow_source(self.src)?;
                 }
             }
             Ok(n)

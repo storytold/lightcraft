@@ -236,13 +236,15 @@ pub(crate) struct HeaderRead {
     before: Option<Stamp>,
     share_safe: bool,
     reader: Originals,
+    registration: Arc<()>,
 }
 impl HeaderRead {
     pub(crate) fn open(path: &str) -> io::Result<Self> {
         let reader = current_reader()?;
+        let registration = reader.registration();
         let (file, share_safe) = open_read(path, true)?;
         let before = file.metadata().ok().as_ref().and_then(Stamp::of);
-        Ok(Self { file, path: path.to_owned(), before, share_safe, reader })
+        Ok(Self { file, path: path.to_owned(), before, share_safe, reader, registration })
     }
     pub(crate) fn finish(self, mut info: crate::media::ProbeInfo) -> io::Result<crate::media::ProbeInfo> {
         let after = self.file.metadata().ok().as_ref().and_then(Stamp::of);
@@ -250,7 +252,7 @@ impl HeaderRead {
             return Err(io::Error::other("original changed while reading headers"));
         }
         let proof = ReadProof::new(self.file, self.share_safe);
-        self.reader.track(&proof);
+        self.reader.track(&self.path, &proof, &self.registration);
         let header = self.before.zip(proof).map(|(stamp, proof)| HeaderObservation { stamp, proof });
         let mut native = evidence(&self.reader, &self.path, &info, None, None);
         native.header = header;
@@ -316,13 +318,14 @@ pub(crate) struct ReadEvent {
 struct State {
     active: bool,
     wanted: HashMap<String, Arc<Watch>>,
+    registration: Arc<()>,
 }
 #[derive(Clone)]
 pub struct Originals {
     state: Arc<RwLock<State>>,
     sink: Arc<Mutex<Vec<ReadEvent>>>,
     candidates: Arc<Mutex<HashMap<String, Fingerprint>>>,
-    proofs: Arc<Mutex<Vec<std::sync::Weak<ReadProof>>>>,
+    proofs: Arc<Mutex<Vec<(String, std::sync::Weak<ReadProof>)>>>,
     overflow_reported: Arc<std::sync::atomic::AtomicBool>,
     #[cfg(test)]
     reads: Arc<std::sync::atomic::AtomicUsize>,
@@ -332,7 +335,7 @@ pub struct Originals {
 impl Default for Originals {
     fn default() -> Self {
         Self {
-            state: Arc::new(RwLock::new(State { active: true, wanted: HashMap::new() })),
+            state: Arc::new(RwLock::new(State { active: true, wanted: HashMap::new(), registration: Arc::new(()) })),
             sink: Default::default(),
             candidates: Default::default(),
             proofs: Default::default(),
@@ -346,9 +349,13 @@ impl Default for Originals {
 }
 thread_local! { static CURRENT: RefCell<Option<Originals>> = const { RefCell::new(None) }; }
 thread_local! { static LAST_READ: RefCell<Option<(String, Fingerprint)>> = const { RefCell::new(None) }; }
+#[cfg(test)]
+thread_local! { static COMPARE_OPENED: RefCell<Option<Box<dyn FnOnce()>>> = const { RefCell::new(None) }; }
+thread_local! { static CAPTURES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
 pub(crate) struct ReadCapture(Option<(String, Fingerprint)>);
 impl ReadCapture {
     pub(crate) fn new() -> Self {
+        CAPTURES.with(|depth| depth.set(depth.get().saturating_add(1)));
         Self(LAST_READ.with(|slot| slot.take()))
     }
     pub(crate) fn fingerprint(&self, path: &str) -> Option<Fingerprint> {
@@ -358,6 +365,7 @@ impl ReadCapture {
 impl Drop for ReadCapture {
     fn drop(&mut self) {
         LAST_READ.with(|slot| slot.replace(self.0.take()));
+        CAPTURES.with(|depth| depth.set(depth.get().saturating_sub(1)));
     }
 }
 fn remember(path: &str, fp: &Fingerprint) {
@@ -365,11 +373,18 @@ fn remember(path: &str, fp: &Fingerprint) {
         slot.replace(Some((path.to_owned(), fp.clone())));
     });
 }
-pub(crate) struct Binding(Option<Originals>);
+pub(crate) struct Binding {
+    previous: Option<Originals>,
+    _capture: ReadCapture,
+    standalone: Option<Originals>,
+}
 impl Drop for Binding {
     fn drop(&mut self) {
+        if let Some(reader) = self.standalone.take() {
+            reader.retire();
+        }
         CURRENT.with(|slot| {
-            slot.replace(self.0.take());
+            slot.replace(self.previous.take());
         });
     }
 }
@@ -450,32 +465,77 @@ impl Originals {
             fp.release();
         }
     }
+    fn native_scope<T>(&self, path: &str, f: impl FnOnce() -> T) -> T {
+        let binding = self.bind();
+        let result = f();
+        let fp = binding._capture.fingerprint(path);
+        drop(binding);
+        if CAPTURES.with(|depth| depth.get() > 0)
+            && let Some(fp) = fp
+        {
+            remember(path, &fp);
+        }
+        result
+    }
     pub fn in_scope<T>(&self, f: impl FnOnce() -> T) -> T {
         let _binding = self.bind();
         f()
     }
     pub(crate) fn bind(&self) -> Binding {
-        Binding(CURRENT.with(|slot| slot.replace(Some(self.clone()))))
+        let previous = CURRENT.with(|slot| slot.replace(Some(self.clone())));
+        Binding { previous, _capture: ReadCapture::new(), standalone: None }
     }
     pub(crate) fn retire(&self) {
         self.state.write().unwrap_or_else(std::sync::PoisonError::into_inner).active = false;
-        for proof in self.proofs.lock().unwrap_or_else(std::sync::PoisonError::into_inner).drain(..).filter_map(|p| p.upgrade()) {
+        for proof in self.proofs.lock().unwrap_or_else(std::sync::PoisonError::into_inner).drain(..).filter_map(|(_, p)| p.upgrade()) {
             proof.release();
         }
         self.sink.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
         self.candidates.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
     }
-    fn track(&self, proof: &Option<Arc<ReadProof>>) {
+    fn registration(&self) -> Arc<()> {
+        self.state.read().unwrap_or_else(std::sync::PoisonError::into_inner).registration.clone()
+    }
+    pub(crate) fn revoke_under(&self, root: &std::path::Path) {
+        let under = |path: &str| std::path::Path::new(path).starts_with(root);
+        let mut state = self.state.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Opens not registered yet must not publish a proof across this mutation fence.
+        state.registration = Arc::new(());
+        state.wanted.retain(|path, _| !under(path));
+        self.proofs.lock().unwrap_or_else(std::sync::PoisonError::into_inner).retain(|(path, weak)| {
+            if let Some(proof) = weak.upgrade() {
+                if under(path) {
+                    proof.release();
+                    return false;
+                }
+                return proof.file.lock().unwrap_or_else(std::sync::PoisonError::into_inner).is_some();
+            }
+            false
+        });
+        self.sink.lock().unwrap_or_else(std::sync::PoisonError::into_inner).retain(|event| !under(&event.path));
+        self.candidates.lock().unwrap_or_else(std::sync::PoisonError::into_inner).retain(|path, _| !under(path));
+    }
+    pub(crate) fn discard_scratch(&self, path: &str, fp: &Fingerprint) {
+        if self.watch_any(path).is_some() {
+            return;
+        }
+        let mut candidates = self.candidates.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if candidates.get(path).is_some_and(|saved| saved.proof.as_ref().zip(fp.proof.as_ref()).is_some_and(|(a, b)| Arc::ptr_eq(a, b))) {
+            candidates.remove(path);
+        }
+        fp.release();
+    }
+    fn track(&self, path: &str, proof: &Option<Arc<ReadProof>>, registration: &Arc<()>) {
         let Some(proof) = proof else { return };
         let state = self.state.read().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if !state.active {
+        if !state.active || !Arc::ptr_eq(&state.registration, registration) {
             proof.release();
             return;
         }
         let mut proofs = self.proofs.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        proofs.retain(|weak| weak.upgrade().is_some_and(|proof| proof.file.lock().unwrap_or_else(std::sync::PoisonError::into_inner).is_some()));
+        proofs.retain(|(_, weak)| weak.upgrade().is_some_and(|proof| proof.file.lock().unwrap_or_else(std::sync::PoisonError::into_inner).is_some()));
         if proofs.len() < 128 && proofs.try_reserve(1).is_ok() {
-            proofs.push(Arc::downgrade(proof));
+            proofs.push((path.to_owned(), Arc::downgrade(proof)));
         } else {
             proof.release();
         }
@@ -569,6 +629,7 @@ impl Originals {
         self.read_buffer(path, false).map(|(bytes, fp, _)| (bytes, fp))
     }
     fn read_buffer(&self, path: &str, force: bool) -> io::Result<(Vec<u8>, Option<Fingerprint>, Option<Hash128>)> {
+        let registration = self.registration();
         let watch = if force { self.watch_any(path) } else { self.watch(path) };
         let (mut file, share_safe) = open_read(path, watch.is_some() || force)?;
         let before = file.metadata().ok().as_ref().and_then(Stamp::of);
@@ -601,7 +662,7 @@ impl Originals {
                 .filter(|fp| fp.current(path))
         });
         if let Some(fp) = &fp {
-            self.track(&fp.proof);
+            self.track(path, &fp.proof, &registration);
             remember(path, fp);
             if let Some(watch) = &watch {
                 self.migrate(path, fp, watch);
@@ -650,6 +711,7 @@ impl Originals {
         self.copy_stream(path, out, true)
     }
     fn copy_stream(&self, path: &str, out: &mut impl Write, observe: bool) -> io::Result<Fingerprint> {
+        let registration = self.registration();
         let watch = observe.then(|| self.watch(path)).flatten();
         let (mut file, share_safe) = open_read(path, observe)?;
         let before = file.metadata().ok().as_ref().and_then(Stamp::of);
@@ -678,7 +740,7 @@ impl Originals {
         if !fp.observed(path) {
             return Err(io::Error::other("original changed while reading"));
         }
-        self.track(&fp.proof);
+        self.track(path, &fp.proof, &registration);
         remember(path, &fp);
         if observe && watch.is_none() && fp.current(path) {
             let mut candidates = self.candidates.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -778,7 +840,12 @@ fn current_reader() -> io::Result<Originals> {
     CURRENT.with(|slot| slot.borrow().clone()).ok_or_else(|| io::Error::other("original read requires a session reader binding"))
 }
 pub(crate) fn standalone_binding() -> Option<Binding> {
-    CURRENT.with(|slot| slot.borrow().is_none()).then(|| Originals::default().bind())
+    CURRENT.with(|slot| slot.borrow().is_none()).then(|| {
+        let reader = Originals::default();
+        let mut binding = reader.bind();
+        binding.standalone = Some(reader);
+        binding
+    })
 }
 pub fn read_whole(path: &str) -> io::Result<Vec<u8>> {
     current_reader()?.read_whole(path).map(|(bytes, _)| bytes)
@@ -871,33 +938,18 @@ impl NativeHooks {
     fn new(reader: &Originals) -> Self {
         let (loader, probe) = crate::files::fs_hooks();
         let a = reader.clone();
-        let loader: crate::media::FileLoader = Arc::new(move |p, e| {
-            let _binding = a.bind();
-            loader(p, e)
-        });
+        let loader: crate::media::FileLoader = Arc::new(move |p, e| a.native_scope(p, || loader(p, e)));
         let a = reader.clone();
-        let probe: crate::media::FileProbe = Arc::new(move |p| {
-            let _binding = a.bind();
-            probe(p)
-        });
+        let probe: crate::media::FileProbe = Arc::new(move |p| a.native_scope(p, || probe(p)));
         let header = crate::files::fs_header_probe();
         let a = reader.clone();
-        let header: crate::media::FileProbe = Arc::new(move |p| {
-            let _binding = a.bind();
-            header(p)
-        });
+        let header: crate::media::FileProbe = Arc::new(move |p| a.native_scope(p, || header(p)));
         let preview = crate::files::fs_preview_loader();
         let a = reader.clone();
-        let preview: crate::media::PreviewLoader = Arc::new(move |p, e| {
-            let _binding = a.bind();
-            preview(p, e)
-        });
+        let preview: crate::media::PreviewLoader = Arc::new(move |p, e| a.native_scope(p, || preview(p, e)));
         let pair = crate::files::fs_pair_loader();
         let a = reader.clone();
-        let pair: crate::media::PairLoader = Arc::new(move |p, e, s| {
-            let _binding = a.bind();
-            pair(p, e, s)
-        });
+        let pair: crate::media::PairLoader = Arc::new(move |p, e, s| a.native_scope(p, || pair(p, e, s)));
         Self { loader, probe, header, preview, pair, bytes: reader.reader() }
     }
     fn install(&self, s: &mut crate::Session, old: Option<&Self>) {
@@ -1103,6 +1155,320 @@ mod tests {
         assert!(read_whole(path).is_err());
         std::fs::remove_dir_all(dir).unwrap();
     }
+    #[test]
+    fn w_fix_standalone_scope_releases_only_its_own_proof() {
+        let dir = crate::tests_xmp::temp_dir("w-standalone-scope");
+        let path = dir.join("source.bin");
+        std::fs::write(&path, b"unchanged bytes").unwrap();
+        let path = path.to_str().unwrap();
+        let fp = {
+            let _binding = standalone_binding().unwrap();
+            hash_whole(path).unwrap()
+        };
+        assert!(!fp.current(path), "temporary standalone owner must not leave a retained lease");
+        assert!(LAST_READ.with(|last| last.borrow().is_none()));
+        let reader = Originals::default();
+        {
+            let _outer = reader.bind();
+            let fp = hash_whole(path).unwrap();
+            {
+                let _nested = reader.bind();
+                hash_whole(path).unwrap();
+            }
+            assert!(fp.current(path), "nested shared binding must not retire its reader or pending proof");
+        }
+        assert!(reader.hash_whole(path).unwrap().current(path));
+        reader.retire();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn w_fix_completed_sidecar_copy_drops_only_unwatched_evidence() {
+        use crate::rename::MoveFs;
+        let dir = crate::tests_xmp::temp_dir("w-sidecar-proof");
+        let source = dir.join("a.xmp");
+        std::fs::write(&source, b"retained edits").unwrap();
+        let reader = Originals::default();
+        reader.in_scope(|| crate::rename::RealFs.copy_no_replace(&source, &dir.join("b.xmp"))).unwrap();
+        assert!(
+            reader.candidates.lock().unwrap().get(source.to_str().unwrap()).is_none_or(|fp| !fp.current(source.to_str().unwrap())),
+            "completed sidecar copy has no pending catalog hash consumer"
+        );
+        #[cfg(windows)]
+        assert!(File::options().write(true).open(&source).is_ok());
+        assert!(reader.state.read().unwrap().active);
+        reader.retire();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn w_fix_folder_history_revokes_registered_header_proofs() {
+        let dir = crate::tests_xmp::temp_dir("w-folder-proof");
+        let from = dir.join("Trip");
+        let to = dir.join("Holiday");
+        std::fs::create_dir(&from).unwrap();
+        std::fs::write(from.join("a.jpg"), b"unchanged bytes").unwrap();
+        let unrelated = dir.join("unrelated.bin");
+        std::fs::write(&unrelated, b"other bytes").unwrap();
+        let mut s = crate::Session::new();
+        let mut photo = lightcraft_catalog::Photo::new(
+            PhotoId(1),
+            Source::File { path: from.join("a.jpg").to_string_lossy().into_owned() },
+            "a.jpg",
+            "JPG",
+            1,
+            1,
+            "2026-01-01T00:00:00",
+        );
+        photo.file_size = 15;
+        photo.content_hash = Some(lightcraft_preview::hash_bytes(b"unchanged bytes").to_string());
+        s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        s.originals.refresh(&s);
+        for (command, params, source, destination) in [
+            ("folder.rename", serde_json::json!({"path":from,"name":"Holiday"}), &from, &to),
+            ("edit.undo", serde_json::json!({}), &to, &from),
+            ("edit.redo", serde_json::json!({}), &from, &to),
+        ] {
+            let reader = s.originals.clone();
+            let binding = reader.bind();
+            let info = HeaderRead::open(source.join("a.jpg").to_str().unwrap()).unwrap().finish(crate::media::ProbeInfo::default()).unwrap();
+            let header = info.native_read.as_ref().unwrap().header.as_ref().unwrap();
+            let other = reader.hash_whole(unrelated.to_str().unwrap()).unwrap();
+            s.execute(command, &params).unwrap();
+            assert!(
+                !header.proof.current(destination.join("a.jpg").to_str().unwrap(), &header.stamp),
+                "{command} must release even header-only proof clones before directory mutation"
+            );
+            assert!(other.current(unrelated.to_str().unwrap()), "unrelated source proof must remain valid");
+            assert!(destination.join("a.jpg").is_file());
+            drop(binding);
+        }
+        s.originals.retire();
+        drop(s);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn w_fix_compare_open_cannot_adopt_pre_fence_leases_after_refused_rename() {
+        let dir = crate::tests_xmp::temp_dir("w-compare-fence");
+        let from = dir.join("Trip");
+        let occupied = dir.join("Holiday");
+        std::fs::create_dir(&from).unwrap();
+        std::fs::create_dir(&occupied).unwrap();
+        std::fs::write(occupied.join("occupied"), b"keep").unwrap();
+        let a = from.join("a.bin");
+        let b = from.join("b.bin");
+        let other = dir.join("unrelated.bin");
+        for path in [&a, &b, &other] {
+            std::fs::write(path, b"same bytes").unwrap();
+        }
+        let mut s = crate::Session::new();
+        let photo = lightcraft_catalog::Photo::new(
+            PhotoId(1),
+            Source::File { path: a.to_string_lossy().into_owned() },
+            "a.bin",
+            "JPG",
+            1,
+            1,
+            "2026-01-01T00:00:00",
+        );
+        s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        s.originals.refresh(&s);
+        let unrelated = s.originals.hash_whole(other.to_str().unwrap()).unwrap();
+        let reader = s.originals.clone();
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (resume_tx, resume_rx) = std::sync::mpsc::channel();
+        let (wa, wb) = (a.clone(), b.clone());
+        let worker = std::thread::spawn(move || {
+            let mut fa = File::open(&wa).unwrap();
+            let mut fb = File::open(&wb).unwrap();
+            COMPARE_OPENED.with(|hook| {
+                *hook.borrow_mut() = Some(Box::new(move || {
+                    entered_tx.send(()).unwrap();
+                    resume_rx.recv().unwrap();
+                }))
+            });
+            reader.compare_open(wa.to_str().unwrap(), wb.to_str().unwrap(), &mut fa, &mut fb).unwrap()
+        });
+        entered_rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        assert!(s.execute("folder.rename", &serde_json::json!({"path":from,"name":"Holiday"})).is_err());
+        assert!(a.is_file());
+        resume_tx.send(()).unwrap();
+        assert!(worker.join().unwrap(), "comparison bytes still succeed");
+        assert!(s.originals.drain().is_empty(), "pre-fence comparison cannot report on rebuilt watches");
+        assert!(!s.originals.candidates.lock().unwrap().contains_key(b.to_str().unwrap()), "pre-fence comparison cannot become an unowned candidate");
+        assert!(unrelated.current(other.to_str().unwrap()));
+        let mut fa = File::open(&a).unwrap();
+        let mut fb = File::open(&b).unwrap();
+        assert!(s.originals.compare_open(a.to_str().unwrap(), b.to_str().unwrap(), &mut fa, &mut fb).unwrap());
+        assert_eq!(s.originals.drain().len(), 1, "new comparison can learn on fresh watches");
+        assert!(s.originals.candidates.lock().unwrap().contains_key(b.to_str().unwrap()));
+        s.originals.retire();
+        drop((fa, fb, s));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn w_fix_inflight_header_registration_cannot_cross_folder_fence() {
+        let dir = crate::tests_xmp::temp_dir("w-header-fence");
+        let from = dir.join("Trip");
+        std::fs::create_dir(&from).unwrap();
+        let path = from.join("a.bin");
+        std::fs::write(&path, b"unchanged bytes").unwrap();
+        let mut s = crate::Session::new();
+        let photo = lightcraft_catalog::Photo::new(
+            PhotoId(1),
+            Source::File { path: path.to_string_lossy().into_owned() },
+            "a.bin",
+            "JPG",
+            1,
+            1,
+            "2026-01-01T00:00:00",
+        );
+        s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        s.originals.refresh(&s);
+        let reader = s.originals.clone();
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (resume_tx, resume_rx) = std::sync::mpsc::channel();
+        let worker_path = path.clone();
+        let worker = std::thread::spawn(move || {
+            let _binding = reader.bind();
+            let pending = HeaderRead::open(worker_path.to_str().unwrap()).unwrap();
+            entered_tx.send(()).unwrap();
+            let _ = resume_rx.recv();
+            pending.finish(crate::media::ProbeInfo::default()).unwrap()
+        });
+        entered_rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        let result = s.execute("folder.rename", &serde_json::json!({"path":from,"name":"Holiday"}));
+        let current = if result.is_ok() {
+            dir.join("Holiday/a.bin")
+        } else {
+            assert!(path.is_file());
+            path.clone()
+        };
+        resume_tx.send(()).unwrap();
+        let info = worker.join().unwrap();
+        let header = info.native_read.as_ref().unwrap().header.as_ref().unwrap();
+        assert!(
+            !header.proof.current(current.to_str().unwrap(), &header.stamp),
+            "a pre-fence open cannot register a fresh authoritative proof after mutation or refusal"
+        );
+        let fresh = dir.join("new-unowned.bin");
+        std::fs::write(&fresh, b"new source").unwrap();
+        let reader = s.originals.clone();
+        let _binding = reader.bind();
+        let info = HeaderRead::open(fresh.to_str().unwrap()).unwrap().finish(crate::media::ProbeInfo::default()).unwrap();
+        assert!(!info.native_read.as_ref().unwrap().stale(), "new unowned/Add reads after the fence remain supported");
+        reader.retire();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn w_fix_failed_folder_mutation_restores_fresh_watches_only() {
+        for phase in ["forward", "undo", "redo", "rollback", "forward-rollback"] {
+            let dir = crate::tests_xmp::temp_dir(&format!("w-folder-failure-{phase}"));
+            let from = dir.join("Trip");
+            let to = dir.join("Holiday");
+            std::fs::create_dir(&from).unwrap();
+            let bytes = crate::tests_xmp::synthetic_dng_with(None, Default::default());
+            std::fs::write(from.join("a.dng"), &bytes).unwrap();
+            let library = dir.join("library");
+            let smart = crate::smart::dir(&library);
+            std::fs::create_dir_all(&smart).unwrap();
+            crate::smart::mark_look_checked(&smart).unwrap();
+            let mut s = crate::Session::new().with_fs();
+            s.open_library(&library, false).unwrap();
+            let original = from.join("a.dng");
+            let info = crate::files::probe_bytes_with(original.to_str().unwrap(), &bytes, false).unwrap();
+            let id = PhotoId(1);
+            let mut photo = lightcraft_catalog::Photo::new(
+                id,
+                Source::File { path: original.to_string_lossy().into_owned() },
+                "a.dng",
+                "DNG",
+                info.width,
+                info.height,
+                "2026-01-01T00:00:00",
+            );
+            photo.file_size = bytes.len() as u64;
+            s.commit("Legacy hashless fixture", lightcraft_catalog::Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+            s.persist().unwrap();
+            if phase != "forward" && phase != "forward-rollback" {
+                s.execute("folder.rename", &serde_json::json!({"path":from,"name":"Holiday"})).unwrap();
+            }
+            if phase == "redo" {
+                s.execute("edit.undo", &serde_json::json!({})).unwrap();
+            }
+            let (current, occupied, command, params) = match phase {
+                "undo" | "rollback" => (&to, &from, "edit.undo", serde_json::json!({})),
+                "redo" => (&from, &to, "edit.redo", serde_json::json!({})),
+                _ => (&from, &to, "folder.rename", serde_json::json!({"path":from,"name":"Holiday"})),
+            };
+            if phase != "rollback" && phase != "forward-rollback" {
+                std::fs::create_dir(occupied).unwrap();
+            }
+            s.originals.refresh(&s);
+            let path = current.join("a.dng").to_string_lossy().into_owned();
+            s.originals.read_whole(&path).unwrap();
+            let old = s.originals.drain().pop().unwrap();
+            assert!(s.originals.same_lifecycle(&old));
+            let fault = (phase == "rollback" || phase == "forward-rollback").then(|| lightcraft_catalog::safe_file::fail_writes_after(0));
+            assert!(s.execute(command, &params).is_err(), "{phase} must reach its injected failure");
+            drop(fault);
+            assert!(std::path::Path::new(&path).is_file());
+            assert!(!s.originals.same_lifecycle(&old), "{phase}: old event stays fenced even though physical mutation failed");
+            assert!(!old.fingerprint.current(&path));
+            s.originals.read_whole(&path).unwrap();
+            s.persist().unwrap();
+            assert_eq!(
+                s.catalog.photo(id).unwrap().content_hash.as_deref(),
+                Some(lightcraft_preview::hash_bytes(&bytes).to_string().as_str()),
+                "{phase}: new watch must allow fresh learning after failure"
+            );
+            drop(s);
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    }
+    #[test]
+    fn w_fix_shared_binding_and_sidecar_copy_preserve_pending_owner_learning() {
+        use crate::rename::MoveFs;
+        let dir = crate::tests_xmp::temp_dir("w-owner-proof");
+        let path = dir.join("source.dng");
+        let bytes = crate::tests_xmp::synthetic_dng_with(None, Default::default());
+        std::fs::write(&path, &bytes).unwrap();
+        let info = crate::files::probe_bytes_with(path.to_str().unwrap(), &bytes, false).unwrap();
+        let mut s = crate::Session::new().with_fs();
+        let mut photo = lightcraft_catalog::Photo::new(
+            PhotoId(1),
+            Source::File { path: path.to_string_lossy().into_owned() },
+            "source.dng",
+            "DNG",
+            info.width,
+            info.height,
+            "2026-01-01T00:00:00",
+        );
+        photo.file_size = bytes.len() as u64;
+        s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        s.originals.refresh(&s);
+        let reader = s.originals.clone();
+        let fp = {
+            let _outer = reader.bind();
+            let (_, fp) = reader.read_whole(path.to_str().unwrap()).unwrap();
+            let sidecar = dir.join("a.xmp");
+            std::fs::write(&sidecar, b"retained edits").unwrap();
+            {
+                let _nested = reader.bind();
+                crate::rename::RealFs.copy_no_replace(&sidecar, &dir.join("b.xmp")).unwrap();
+            }
+            fp.unwrap()
+        };
+        assert!(fp.current(path.to_str().unwrap()), "explicit owner evidence survives both shared binding exits");
+        s.persist().unwrap();
+        assert_eq!(s.catalog.photo(PhotoId(1)).unwrap().content_hash.as_deref(), Some(lightcraft_preview::hash_bytes(&bytes).to_string().as_str()));
+        assert!(!fp.current(path.to_str().unwrap()), "owner acceptance releases its own proof");
+        assert_eq!(reader.counts(), (2, 2), "one original read plus one sidecar copy, no reread for learning");
+        reader.retire();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }
 
 #[cfg(test)]
@@ -1300,6 +1666,7 @@ mod lifecycle_tests {
 }
 impl Originals {
     pub(crate) fn compare_open(&self, a: &str, b: &str, fa: &mut File, fb: &mut File) -> io::Result<bool> {
+        let registration = self.registration();
         #[cfg(windows)]
         let ((mut leased_a, safe_a), (mut leased_b, safe_b)) = (open_read(a, true)?, open_read(b, true)?);
         #[cfg(windows)]
@@ -1310,6 +1677,12 @@ impl Originals {
         let (fa, fb) = (if safe_a { &mut leased_a } else { fa }, if safe_b { &mut leased_b } else { fb });
         #[cfg(not(windows))]
         let (safe_a, safe_b) = (cfg!(unix), cfg!(unix));
+        #[cfg(test)]
+        COMPARE_OPENED.with(|hook| {
+            if let Some(hook) = hook.borrow_mut().take() {
+                hook();
+            }
+        });
         let (wa, wb) = (self.watch(a), self.watch(b));
         let (sa, sb) = (fa.metadata().ok().as_ref().and_then(Stamp::of), fb.metadata().ok().as_ref().and_then(Stamp::of));
         let (mut ha, mut hb) = (wa.as_ref().map(|_| Hasher128::new()), Some(Hasher128::new()));
@@ -1343,7 +1716,7 @@ impl Originals {
                 if let Some(stamp) = stamp.filter(|s| s.len == len && file.metadata().ok().as_ref().and_then(Stamp::of).as_ref() == Some(s)) {
                     let proof = file.try_clone().ok().and_then(|file| ReadProof::new(file, safe));
                     let fp = Fingerprint { hash: hash.finish(), stamp, proof, facts: None, replaced: false };
-                    self.track(&fp.proof);
+                    self.track(path, &fp.proof, &registration);
                     if equal && watch.is_none() && fp.current(path) {
                         let mut candidates = self.candidates.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                         if candidates.len() < 4096 && candidates.try_reserve(1).is_ok() {
@@ -1445,6 +1818,23 @@ mod windows_tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
     #[test]
+    fn protected_source_append_is_denied_and_copy_failure_keeps_original() {
+        let (reader, dir, path) = source("w-protected-grow");
+        let fp = reader.hash_whole(&path).unwrap();
+        assert!(fp.current(&path));
+        crate::import_move::inject(crate::import_move::Fault::Grow);
+        let result = reader.in_scope(|| crate::import_move::copy_new(std::path::Path::new(&path), &dir.join("out"), "copy.bin", None));
+        crate::import_move::inject(crate::import_move::Fault::None);
+        assert!(result.is_err(), "the denied in-place append must fail the copy safely");
+        assert_eq!(std::fs::read(&path).unwrap(), b"same bytes");
+        assert!(!dir.join("out/copy.bin").exists());
+        assert!(fp.current(&path), "the protected original remains the same physical object");
+        reader.retire();
+        assert!(File::options().write(true).open(&path).is_ok());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn full_identity_rejects_a_difference_only_in_the_high_64_bits() {
         let (_, dir, path) = source("g-windows-high-id");
         let (file, safe) = open_read(&path, true).unwrap();
@@ -1492,7 +1882,18 @@ mod windows_tests {
         let reader = Originals::default();
         let fp = reader.hash_whole(path.to_str().unwrap()).unwrap();
         let time = std::fs::metadata(&path).unwrap().modified().unwrap();
-        std::fs::rename(&parent, dir.join("retired-parent")).unwrap();
+        let retired = dir.join("retired-parent");
+        if let Err(error) = std::fs::rename(&parent, &retired) {
+            assert!(error.kind() == io::ErrorKind::PermissionDenied || error.raw_os_error() == Some(32), "unexpected rename failure: {error}");
+            assert!(fp.current(path.to_str().unwrap()), "OS prevention must leave the existing source valid");
+            assert!(File::options().write(true).open(&path).is_err());
+            reader.retire();
+            std::fs::rename(&parent, &retired).unwrap();
+            assert!(File::options().write(true).open(retired.join("source")).is_ok(), "retirement releases the owned lease");
+            eprintln!("ancestor rename prevented until explicit retirement");
+        } else {
+            eprintln!("ancestor rename succeeded; replacement must reject the old proof");
+        }
         std::fs::create_dir(&parent).unwrap();
         std::fs::write(&path, b"same bytes").unwrap();
         File::options().write(true).open(&path).unwrap().set_times(std::fs::FileTimes::new().set_modified(time)).unwrap();

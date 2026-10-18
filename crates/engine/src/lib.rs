@@ -981,10 +981,20 @@ impl Session {
         let op = &entry.op;
         let folder = entry.folder.as_ref();
         if let Some(f) = folder {
-            cmd::browse::folder_on_disk(&f.from, &f.to).map_err(|e| EngineError::Other(format!("can't move the folder back: {e}")))?;
+            for path in [&f.from, &f.to].into_iter().filter(|p| !p.is_empty()) {
+                self.originals.revoke_under(std::path::Path::new(path));
+            }
+            if let Err(e) = cmd::browse::folder_on_disk(&f.from, &f.to) {
+                self.originals.refresh(self);
+                return Err(EngineError::Other(format!("can't move the folder back: {e}")));
+            }
         }
+        let folder_reader = self.originals.clone();
         let undo_folder = || {
             if let Some(f) = folder {
+                for path in [&f.from, &f.to].into_iter().filter(|p| !p.is_empty()) {
+                    folder_reader.revoke_under(std::path::Path::new(path));
+                }
                 let _ = cmd::browse::folder_on_disk(&f.to, &f.from);
             }
         };
@@ -999,6 +1009,7 @@ impl Session {
             // now, so the opposite history direction still restores the entire original step.
             inverses.append(&mut entry.retry_inverse);
             entry.retry_inverse = inverses;
+            self.originals.refresh(self);
             return Err(EngineError::Other(format!("can't move the files back: {message}")));
         }
         match self.apply_catalog(op.clone()) {
@@ -1021,9 +1032,11 @@ impl Session {
                 let back: Vec<(String, String)> = moves.iter().rev().map(|(a, b)| (b.clone(), a.clone())).collect();
                 if let Err(mut be) = rename::move_all(fs, &back) {
                     entry.retry_sidecars.append(&mut be.pending_sidecars);
+                    self.originals.refresh(self);
                     return Err(EngineError::Other(format!("{e}; the files could not all be moved back: {}", be.message)));
                 }
                 undo_folder();
+                self.originals.refresh(self);
                 Err(e)
             }
         }

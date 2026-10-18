@@ -499,7 +499,12 @@ pub(crate) fn move_folder(s: &mut Session, from: &str, to: &str) -> std::result:
     // Repairs retain their exact old paths, including those on surviving history entries.
     // Complete them before the directory moves; an unavailable repair leaves it in place.
     s.repair_sidecars_with(&crate::rename::RealFs).map_err(|e| e.to_string())?;
-    rename_folder_on_disk(from, to)?;
+    s.originals.revoke_under(src);
+    s.originals.revoke_under(dst);
+    if let Err(error) = rename_folder_on_disk(from, to) {
+        s.originals.refresh(s);
+        return Err(error);
+    }
     let mut ops: Vec<Op> = s
         .catalog
         .photos()
@@ -524,6 +529,7 @@ pub(crate) fn move_folder(s: &mut Session, from: &str, to: &str) -> std::result:
     if let Err(e) = s.commit_with_folder(&label, Op::Batch { ops }, folder) {
         // the catalog didn't take it: put the folder back where the photos still point
         let back = rename_folder_on_disk(to, from).err().map(|b| format!("; moving it back failed too: {b}")).unwrap_or_default();
+        s.originals.refresh(s);
         return Err(format!("{e}{back}"));
     }
     follow_folder(s, from, to);

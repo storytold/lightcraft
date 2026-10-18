@@ -853,6 +853,9 @@ fn g_final_review_legacy_proxy_migration_checks_same_read_physical_facts_after_r
         new.resize(len, 0);
         let original = write(&base, "original.dng", &old);
         let library = base.join("library");
+        let smart_dir = crate::smart::dir(&library);
+        std::fs::create_dir_all(&smart_dir).unwrap();
+        crate::smart::mark_look_checked(&smart_dir).unwrap();
         let mut s = Session::new().with_fs();
         s.open_library(&library, false).unwrap();
         let r = import(&mut s, &[&original], "add", &base.join("out"));

@@ -249,7 +249,10 @@ fn copy_import_refuses_a_file_changed_since_the_review() {
     let mut s = session();
     let r = s.execute("library.importPreview", &json!({"paths": [card.to_string_lossy()]})).unwrap();
     assert_eq!(r["scanned"], 1, "{r}");
-    write_png(&card.join("a.png"), 9); // other pixels
+    #[cfg(windows)]
+    assert!(std::fs::File::options().write(true).open(card.join("a.png")).is_err(), "live review proof must deny in-place writes");
+    write_png(&card.join("replacement.png"), 9);
+    std::fs::rename(card.join("replacement.png"), card.join("a.png")).unwrap();
     let r = s
         .execute(
             "library.import",
@@ -519,12 +522,14 @@ fn finish_keeps_the_original_when_the_copy_changed_to_the_same_length() {
     // a copy replaced by other bytes of the same length: the original stays
     std::fs::write(&src, b"original bytes").unwrap();
     let placed = place(&src, &dest, "IMG_1.jpg").unwrap();
-    std::fs::write(&placed.dst, b"different byte").unwrap();
+    std::fs::write(base.join("replacement-copy"), b"different byte").unwrap();
+    std::fs::rename(base.join("replacement-copy"), &placed.dst).unwrap();
     assert!(finish(&placed).is_err());
     assert_eq!(std::fs::read(&src).unwrap(), b"original bytes");
     // an original edited meanwhile to other bytes of the same length: it stays too
     let placed = place(&src, &dest, "IMG_1.jpg").unwrap();
-    std::fs::write(&src, b"edited  bytes!").unwrap();
+    std::fs::write(base.join("replacement-original"), b"edited  bytes!").unwrap();
+    std::fs::rename(base.join("replacement-original"), &src).unwrap();
     assert!(finish(&placed).is_err());
     assert_eq!(std::fs::read(&src).unwrap(), b"edited  bytes!");
     inject(Fault::None);
@@ -570,11 +575,18 @@ fn a_source_changed_during_the_copy_is_refused() {
     let base = temp_dir("copygrow");
     let (card, dest) = (base.join("card"), base.join("out"));
     write_png(&card.join("a.png"), 5);
+    let source = card.join("a.png");
+    let before = std::fs::metadata(&source).unwrap().len();
+    let writer = std::fs::OpenOptions::new().append(true).open(&source).unwrap();
+    let growth = crate::import_move::grow_using(writer);
     let mut s = session();
     without_probe_hashes(&mut s);
     inject(Fault::Grow);
     let r = import_copy(&mut s, &card, &dest);
     inject(Fault::None);
+    drop(growth);
+    assert_eq!(std::fs::metadata(&source).unwrap().len(), before + 4, "the injector actually changed the writable source");
+    assert!(s.catalog.is_empty(), "mutable source must not receive a confirmed catalog hash");
     assert_eq!((len(&r, "imported"), len(&r, "failed")), (0, 1), "{r}");
     assert!(r.to_string().contains("original changed while"), "{r}");
     assert_eq!(files_under(&dest), Vec::<String>::new());

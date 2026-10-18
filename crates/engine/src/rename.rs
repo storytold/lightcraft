@@ -450,8 +450,14 @@ impl MoveFs for RealFs {
         let copied = (|| {
             let _binding = crate::originals::standalone_binding();
             let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(&partial)?;
-            crate::originals::copy_whole(&a.to_string_lossy(), &mut f)?;
-            f.sync_all()
+            let _capture = crate::originals::ReadCapture::new();
+            let path = a.to_string_lossy();
+            let fp = crate::originals::copy_whole(&path, &mut f)?;
+            let result = f.sync_all();
+            if let Some(reader) = crate::originals::bound_reader() {
+                reader.discard_scratch(&path, &fp);
+            }
+            result
         })();
         let placed = copied.and_then(|()| self.rename_no_replace(&partial, b));
         if placed.is_err() {
