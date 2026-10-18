@@ -662,32 +662,10 @@ impl Session {
                     let (decoder_width, decoder_height) = if p.source_width > 0 && p.source_height > 0 {
                         (p.source_width, p.source_height)
                     } else if p.kind == lightcraft_catalog::MediaKind::Raw && p.preview_only.is_none() {
-                        let Some(probe) = &self.media.file_probe else {
-                            return Err(EngineError::Other(format!(
-                                "Photo Merge cannot safely estimate source memory for older raw {} because its uncropped dimensions are missing; open the library with file access and reimport that original to refresh it",
-                                p.file_name
-                            )));
-                        };
-                        let file_bytes = usize::try_from(p.file_size).map_err(|_| {
-                            EngineError::Other(format!(
-                                "Photo Merge cannot safely probe the source dimensions for {}: file size overflows",
-                                p.file_name
-                            ))
-                        })?;
-                        if file_bytes == 0 || file_bytes > available {
-                            return Err(EngineError::Other(format!(
-                                "Photo Merge cannot safely probe the missing raw source dimensions for {} within the available memory budget; reimport the original when its file is accessible",
-                                p.file_name
-                            )));
-                        }
-                        let info = probe(path).map_err(|e| EngineError::Other(format!("could not inspect {} for Photo Merge: {e}", p.file_name)))?;
-                        if info.source_width == 0 || info.source_height == 0 {
-                            return Err(EngineError::Other(format!(
-                                "Photo Merge could not determine uncropped source dimensions for {}",
-                                p.file_name
-                            )));
-                        }
-                        (info.source_width, info.source_height)
+                        return Err(EngineError::Other(format!(
+                            "Photo Merge cannot safely estimate uncropped source dimensions for older raw {}; reimport the original to refresh its catalog metadata",
+                            p.file_name
+                        )));
                     } else {
                         (p.width, p.height)
                     };

@@ -40,6 +40,50 @@ fn hdr_merge_rejects_over_budget_dimensions_before_reading_sources() {
 }
 
 #[test]
+fn older_raw_without_source_dimensions_fails_before_probe_or_read() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let mut s = Session::new();
+    let mut ids = Vec::new();
+    for i in 0..2 {
+        let id = s.catalog.alloc_photo_id();
+        let path = format!("legacy-raw-{i}.dng");
+        let mut photo = lightcraft_catalog::Photo::new(
+            id,
+            lightcraft_catalog::Source::File { path: path.clone() },
+            &path,
+            "DNG",
+            100,
+            100,
+            "2026-10-18T00:00:00Z",
+        );
+        photo.kind = lightcraft_catalog::MediaKind::Raw;
+        photo.source_width = 0;
+        photo.source_height = 0;
+        s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        ids.push(id.0);
+    }
+
+    let probes = std::sync::Arc::new(AtomicUsize::new(0));
+    let probe_count = probes.clone();
+    s.media.file_probe = Some(std::sync::Arc::new(move |_| {
+        probe_count.fetch_add(1, Ordering::Relaxed);
+        Ok(crate::media::ProbeInfo { source_width: 100, source_height: 100, ..Default::default() })
+    }));
+    let reads = std::sync::Arc::new(AtomicUsize::new(0));
+    let read_count = reads.clone();
+    s.media.file_bytes = Some(std::sync::Arc::new(move |_| {
+        read_count.fetch_add(1, Ordering::Relaxed);
+        Err("source reader should not be called".into())
+    }));
+
+    let error = s.execute("merge.hdr", &json!({"ids": ids})).unwrap_err().to_string();
+    assert!(error.contains("reimport the original"), "{error}");
+    assert_eq!(probes.load(Ordering::Relaxed), 0, "Photo Merge probed a source before deciding it could not estimate its memory");
+    assert_eq!(reads.load(Ordering::Relaxed), 0, "Photo Merge read source bytes before estimating its memory");
+}
+
+#[test]
 fn hdr_batch_checks_each_bracket_set_before_reading_its_sources() {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
