@@ -13,11 +13,32 @@ use crate::{LightcraftApp, QuitBackup, QuitPrompt, Services};
 
 const T: Duration = Duration::from_secs(10);
 
-fn temp(tag: &str) -> PathBuf {
+/// A scratch folder, removed when the test ends (also when it fails).
+struct Temp(PathBuf);
+
+impl std::ops::Deref for Temp {
+    type Target = PathBuf;
+    fn deref(&self) -> &PathBuf {
+        &self.0
+    }
+}
+
+impl AsRef<Path> for Temp {
+    fn as_ref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for Temp {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn temp(tag: &str) -> Temp {
     let dir = std::env::temp_dir().join(format!("lc-ui-backupschedule-{tag}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    dir
+    Temp(dir)
 }
 
 /// The app with a library on disk in `dir/library`.
@@ -74,7 +95,6 @@ fn the_schedule_is_chosen_in_settings() {
     click(&mut h, "button:settingsBackupOnClose-0");
     let p = prefs(&mut h, json!({}));
     assert_eq!((p["every"].as_str(), p["onClose"].as_str()), (Some("never"), Some("never")));
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Given a library to be backed up once a day that never was, when the app a person has open
@@ -97,7 +117,6 @@ fn a_backup_that_is_due_is_made_while_the_library_is_open() {
         h.step();
     }
     assert_eq!(backups(&dir), 1, "not due again");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Given the same library in a headless session (a snapshot, an agent's), then nothing is backed
@@ -113,7 +132,6 @@ fn a_headless_session_does_not_back_up_by_itself() {
     }
     assert_eq!(backups(&dir), 0);
     assert!(h.app.session.last_backup.is_none() && h.app.session.backup_tried.is_none());
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Given a library that asks for a backup when LightCraft quits, when the person quits, then
@@ -133,7 +151,6 @@ fn quitting_asks_for_a_backup_and_quits_once_it_is_made() {
     assert!(h.step_until(T, |h| h.quit_requested()), "quits once the backup is made: {:?}", h.app.quit_prompt);
     assert_eq!(backups(&dir), 1);
     assert!(h.app.quit_prompt.is_none() && may_close(&mut h.app));
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// "Skip" quits without a backup. "Cancel" goes back to work, and the next quit asks again.
@@ -154,7 +171,6 @@ fn a_backup_on_quitting_can_be_skipped_or_the_quit_cancelled() {
     assert!(h.step_until(T, |h| h.quit_requested()) && h.app.quit_prompt.is_none(), "{:?}", h.app.quit_prompt);
     assert_eq!(backups(&dir), 0);
     assert!(may_close(&mut h.app), "the window may close: not asked twice");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Given a library that is always backed up when LightCraft quits, when the person quits, then
@@ -169,7 +185,6 @@ fn quitting_always_backs_up_first_where_that_was_chosen() {
     assert!(matches!(h.app.quit_prompt, Some(QuitPrompt::BackingUp(_))), "{:?}", h.app.quit_prompt);
     assert!(h.step_until(T, |h| h.quit_requested()), "quits once the backup is made: {:?}", h.app.quit_prompt);
     assert_eq!(backups(&dir), 1);
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Given the backup on quitting can't be made (the folder for backups can't be), then LightCraft
@@ -195,7 +210,6 @@ fn a_backup_on_quitting_that_fails_asks_whether_to_quit_anyway() {
     click(&mut h, "button:quitAnyway");
     assert!(h.step_until(T, |h| h.quit_requested()), "{:?}", h.app.quit_prompt);
     assert_eq!(backups(&dir), 0);
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Given a backup of the library is running already when the person quits (one made by hand, or
@@ -216,7 +230,6 @@ fn a_backup_that_runs_already_is_the_one_quitting_waits_for() {
     h.app.session.backup_hold.store(false, Ordering::SeqCst);
     assert!(h.step_until(T, |h| h.quit_requested()), "{:?}", h.app.quit_prompt);
     assert_eq!(backups(&dir), 1, "the one backup");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// "Quit Without Waiting" stops the backup and quits; nothing half made is left as a backup.
@@ -249,7 +262,6 @@ fn the_wait_for_the_backup_can_be_cut_short_or_called_off() {
     h.app.session.backup_hold.store(false, Ordering::SeqCst);
     assert!(h.step_until(T, |h| h.app.session.backup.as_ref().is_some_and(|b| b.outcome().is_some())));
     assert_eq!(backups(&dir), 1, "the stopped one is no backup");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Given the backup was skipped in a quit that then did not happen (a task had started, and its
@@ -273,7 +285,6 @@ fn a_quit_that_is_called_off_starts_over_next_time() {
     drop(task);
     assert!(!may_close(&mut h.app), "asked again");
     assert!(matches!(h.app.quit_prompt, Some(QuitPrompt::BackUp(_))), "{:?}", h.app.quit_prompt);
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Given a quit that waits for its backup, when another question of quitting comes up and is
@@ -303,7 +314,6 @@ fn a_quit_cancelled_while_it_waited_does_not_happen_by_itself() {
     }
     assert!(!h.quit_requested(), "no quit by itself");
     drop(task);
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Given a backup of another library is still running after a switch, when the person quits a
@@ -323,7 +333,6 @@ fn another_librarys_backup_is_a_task_like_any_other() {
     let prompt = h.app.quit_prompt.clone();
     h.app.session.backup_hold.store(false, Ordering::SeqCst);
     assert!(matches!(&prompt, Some(QuitPrompt::Tasks(text)) if text.contains("Backing up")), "{prompt:?}");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Given a library to be backed up once a day whose backup can't be started, then the person is
@@ -337,7 +346,6 @@ fn a_due_backup_that_cannot_start_is_said() {
     prefs(&mut h, json!({"every": "day"}));
     assert!(h.step_until(T, |h| h.app.ui.toast.as_ref().is_some_and(|t| t.0.contains("not backed up"))), "{:?}", h.app.ui.toast);
     assert_eq!(backups(&dir), 0);
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A library that is not a folder on disk is not asked about: there is no backup to make.
@@ -372,5 +380,4 @@ fn a_key_bound_to_back_up_library_backs_up_in_the_background() {
     h.app.session.backup_hold.store(false, Ordering::SeqCst);
     assert!(running, "the key's backup waited for the backup to be made");
     assert!(h.step_until(T, |_| backups(&dir) == 1));
-    let _ = std::fs::remove_dir_all(&dir);
 }
