@@ -195,6 +195,9 @@ pub struct AppSettings {
     /// gets a new one, or always merge (issue #2672; the window's "Don't ask again" picks that).
     #[serde(deserialize_with = "lenient")]
     pub lightroom_import: LightroomImport,
+    /// Settings ▸ Interface ▸ Reduce motion: things that move or turn stand still; fades stay
+    /// (`view.reduceMotion`; see [`crate::motion`]).
+    pub reduce_motion: bool,
 }
 
 /// Where File ▸ Import Lightroom Catalog… puts a catalog (Settings ▸ General ▸ Library). Saved as
@@ -245,6 +248,7 @@ impl Default for AppSettings {
             zoom_to_focus: true,
             loupe_info: LoupeInfo::default(),
             lightroom_import: LightroomImport::Ask,
+            reduce_motion: false,
         }
     }
 }

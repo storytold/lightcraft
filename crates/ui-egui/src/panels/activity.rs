@@ -154,3 +154,16 @@ pub(crate) fn bar(ui: &mut egui::Ui, task: &TaskInfo, width: f32) -> egui::Respo
     crate::widgets::screen_reader_name(ui.ctx(), response.id, tr(&task.label));
     response
 }
+
+/// The progress bar; while the amount of work isn't known, a segment sweeps across.
+/// The sweeping segment of an indeterminate bar, as offsets from the bar's left edge. Reduced motion
+/// leaves a still segment (a quarter of the bar, at its left end) that says "working" without moving.
+pub(crate) fn indeterminate_span(width: f32, time: f64, reduced: bool) -> (f32, f32) {
+    if reduced {
+        return (0.0, width * 0.25);
+    }
+    let phase = (time * 0.7).fract() as f32;
+    let w = width * 0.3;
+    let x = (width + w) * phase - w;
+    (x.max(0.0), (x + w).min(width))
+}

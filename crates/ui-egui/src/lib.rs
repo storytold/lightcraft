@@ -34,6 +34,7 @@ pub mod links;
 pub mod menus;
 mod missing_sweep;
 mod model_setup;
+pub mod motion;
 pub mod panels;
 pub mod pick;
 pub mod recheck;

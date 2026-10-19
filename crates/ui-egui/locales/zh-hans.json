@@ -2389,5 +2389,8 @@
   "Set up name suggestions…": "设置姓名建议…",
   "Top bar": "顶部栏",
   "Tool strip": "工具栏",
-  "Bottom bar": "底部栏"
+  "Bottom bar": "底部栏",
+  "Reduce Motion": "减少动态效果",
+  "Reduce motion": "减少动态效果",
+  "Turns off zoom and spinner animations. Fades stay.": "关闭缩放和旋转指示器的动画。淡入淡出效果保留。"
 }
