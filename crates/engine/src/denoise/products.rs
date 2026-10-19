@@ -2,8 +2,8 @@ use super::builtin::{BuiltinModel, builtin_marker};
 use super::model::{Loader, Model, ModelSlot, RunOn, STACK};
 use super::settings::EXT;
 use super::{
-    Arc, AtomicBool, AtomicUsize, ByteReader, Condvar, Control, DenoiserManifest, HashSet, Hasher128, Layout, Mutex, OnceLock, Ordering, Params,
-    Path, PathBuf, Photo, PoisonError, RunError, Source, SystemTime, denoise_bayer, product,
+    Arc, AtomicBool, AtomicUsize, ByteReader, Condvar, Control, DenoiserManifest, Domain, HashSet, Hasher128, Layout, Mutex, OnceLock, Ordering,
+    Params, Path, PathBuf, Photo, PoisonError, RunError, Source, SystemTime, denoise_bayer, denoise_linear_rgb, product,
 };
 
 /// Samples at or above this (white = 1) are clipped: the model leaves them as the camera recorded them.
@@ -150,6 +150,11 @@ fn layout_of(cfa: &lightcraft_raw::Cfa) -> Option<Layout> {
     Layout::from_cell([cfa.color_at(0, 0), cfa.color_at(1, 0), cfa.color_at(0, 1), cfa.color_at(1, 1)])
 }
 
+enum DenoiseInput {
+    Bayer { mosaic: lightcraft_raw::Normalized, layout: Layout },
+    LinearRgb { camera_rgb: lightcraft_raster::Rgb32f },
+}
+
 /// Make the product of `spec` unless it is there: decode the photo, run the model over its mosaic, write the result.
 /// `Ok(true)` when it was made now, `Ok(false)` when it already existed.
 pub(crate) fn make_product(spec: &JobSpec, progress: Option<&Progress>) -> Result<bool, MakeError> {
@@ -167,7 +172,7 @@ pub(crate) fn make_product(spec: &JobSpec, progress: Option<&Progress>) -> Resul
         None => std::fs::read(&spec.path).map_err(|e| MakeError::Failed(format!("{}: {e}", spec.path)))?,
     };
     // the decode and the normalised mosaic wait their turn at the process-wide memory gate, as every decode does
-    let (mosaic, layout) = {
+    let input = {
         let _held = crate::memory::work_gate().acquire(bytes.len().saturating_mul(4));
         if lightcraft_raw::probe(&bytes).is_none() {
             return Err(MakeError::Unsupported("not a raw file".into()));
@@ -178,16 +183,33 @@ pub(crate) fn make_product(spec: &JobSpec, progress: Option<&Progress>) -> Resul
             Err(e) => return Err(MakeError::Failed(e.to_string())),
         };
         drop(bytes);
-        if raw.cpp != 1 || !raw.cfa.as_ref().is_some_and(lightcraft_raw::Cfa::is_bayer) {
-            return Err(MakeError::Unsupported(
-                "only Bayer raw files can be denoised (this one has another sensor layout or is already demosaiced)".into(),
-            ));
+        match spec.manifest.domain {
+            Domain::BayerToRgb => {
+                if raw.cpp != 1 || !raw.cfa.as_ref().is_some_and(lightcraft_raw::Cfa::is_bayer) {
+                    return Err(MakeError::Unsupported(
+                        "only Bayer raw files can be denoised with a Bayer model (this one has another sensor layout or is already demosaiced)".into(),
+                    ));
+                }
+                let n = raw.normalized().map_err(|e| MakeError::Failed(e.to_string()))?;
+                drop(raw);
+                let layout = n
+                    .cfa
+                    .as_ref()
+                    .and_then(layout_of)
+                    .ok_or_else(|| MakeError::Unsupported("the colour filter layout is not a Bayer pattern".into()))?;
+                DenoiseInput::Bayer { mosaic: n, layout }
+            }
+            Domain::LinearRgb => {
+                if raw.cpp != 1 && raw.cpp != 3 {
+                    return Err(MakeError::Unsupported("only raw files with 1 or 3 samples per pixel can be denoised".into()));
+                }
+                let n = raw.normalized().map_err(|e| MakeError::Failed(e.to_string()))?;
+                let camera_rgb = lightcraft_raw::demosaic(&n, lightcraft_raw::Method::Ahd);
+                drop(n);
+                drop(raw);
+                DenoiseInput::LinearRgb { camera_rgb }
+            }
         }
-        let n = raw.normalized().map_err(|e| MakeError::Failed(e.to_string()))?;
-        drop(raw);
-        let layout =
-            n.cfa.as_ref().and_then(layout_of).ok_or_else(|| MakeError::Unsupported("the colour filter layout is not a Bayer pattern".into()))?;
-        (n, layout)
     };
     if cancelled() {
         return Err(MakeError::Cancelled);
@@ -199,8 +221,15 @@ pub(crate) fn make_product(spec: &JobSpec, progress: Option<&Progress>) -> Resul
         model.bytes_per_tile().saturating_add(128usize.saturating_mul(spec.manifest.tile as usize).saturating_mul(spec.manifest.tile as usize));
     let (_, budget) = crate::memory::work_gate().usage();
     let parallel = spec.parallel.clamp(1, 4).min((budget / scratch.max(1)).max(1));
-    let _held = crate::memory::work_gate().acquire(mosaic.data.len().saturating_mul(20).saturating_add(scratch.saturating_mul(parallel)));
-    model.prepare(&mosaic.data, mosaic.width, mosaic.height);
+    let (pixel_count, byte_multiplier) = match &input {
+        DenoiseInput::Bayer { mosaic, .. } => (mosaic.data.len(), 20),
+        DenoiseInput::LinearRgb { camera_rgb } => (camera_rgb.data.len(), 24),
+    };
+    let _held = crate::memory::work_gate().acquire(pixel_count.saturating_mul(byte_multiplier).saturating_add(scratch.saturating_mul(parallel)));
+    // the built-in denoiser measures the whole photo's noise once, from its mosaic; a linear-RGB model has no mosaic to measure
+    if let DenoiseInput::Bayer { mosaic, .. } = &input {
+        model.prepare(&mosaic.data, mosaic.width, mosaic.height);
+    }
     if cancelled() {
         return Err(MakeError::Cancelled);
     }
@@ -226,8 +255,12 @@ pub(crate) fn make_product(spec: &JobSpec, progress: Option<&Progress>) -> Resul
         .thread_name(|i| format!("denoise-{i}"))
         .build()
         .map_err(|e| MakeError::Failed(format!("could not start the worker threads: {e}")))?;
-    let rgb = pool.install(|| denoise_bayer(&mosaic.data, mosaic.width, mosaic.height, layout, runner, &params, &ctl))?;
-    drop(mosaic);
+    let rgb = match input {
+        DenoiseInput::Bayer { mosaic, layout } => {
+            pool.install(|| denoise_bayer(&mosaic.data, mosaic.width, mosaic.height, layout, runner, &params, &ctl))?
+        }
+        DenoiseInput::LinearRgb { camera_rgb } => pool.install(|| denoise_linear_rgb(&camera_rgb, runner, &params, &ctl))?,
+    };
     if cancelled() {
         return Err(MakeError::Cancelled);
     }
