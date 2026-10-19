@@ -261,7 +261,7 @@ fn resync_is_not_quadratic_in_line_length() {
     probe.set(LOG, hostile);
 
     let t0 = Instant::now();
-    let (mut j2, mut _c2, report) = Journal::open(Box::new(probe.clone())).unwrap();
+    let (j2, _c2, report) = Journal::open(Box::new(probe.clone())).unwrap();
     let elapsed = t0.elapsed();
 
     assert!(elapsed.as_secs_f64() < 1.0, "Journal::open took {elapsed:?} on a hostile 2 MB line");
