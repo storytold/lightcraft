@@ -77,6 +77,17 @@ pub fn tile_count(width: usize, height: usize, layout: Layout, tile: usize, over
     sx.len().saturating_mul(sy.len())
 }
 
+/// The tile grid of a picture for linear RGB: `(starts across, starts down)`.
+pub fn grid_linear_rgb(width: usize, height: usize, tile: usize, overlap: usize) -> (Vec<usize>, Vec<usize>) {
+    (starts(width, tile, overlap), starts(height, tile, overlap))
+}
+
+/// How many model calls [`denoise_linear_rgb`] makes for a picture.
+pub fn tile_count_linear_rgb(width: usize, height: usize, tile: usize, overlap: usize) -> usize {
+    let (sx, sy) = grid_linear_rgb(width, height, tile, overlap);
+    sx.len().saturating_mul(sy.len())
+}
+
 /// Denoise (and demosaic) the normalised mosaic `mosaic` of `width × height` samples, laid out as `layout`.
 /// Gives camera RGB at the mosaic's resolution.
 pub fn denoise_bayer(
@@ -227,6 +238,134 @@ pub fn denoise_bayer(
     Ok(Rgb32f { width, height, data: acc })
 }
 
+/// Denoise a linear camera RGB image `image` of `width × height` pixels using a tile model.
+/// Gives camera RGB at the image's original resolution. Sensor-agnostic (works for X-Trans, Bayer, HDR merges, etc.).
+pub fn denoise_linear_rgb(image: &Rgb32f, runner: &dyn TileRunner, p: &Params, ctl: &Control<'_>) -> Result<Rgb32f, Error> {
+    let (width, height) = (image.width, image.height);
+    let pixels = width
+        .checked_mul(height)
+        .filter(|&n| n > 0 && n <= MAX_PIXELS)
+        .ok_or_else(|| Error::Input("the picture has no size, or is too large".into()))?;
+    if image.data.len() != pixels {
+        return Err(Error::Input("the image does not have width × height samples".into()));
+    }
+    if image.data.iter().flatten().any(|v| !v.is_finite()) {
+        return Err(Error::Input("the image has samples that are not finite".into()));
+    }
+    if !(16..=2048).contains(&p.tile) || p.overlap >= p.tile.div_ceil(2) {
+        return Err(Error::Input("the tile size and overlap do not fit".into()));
+    }
+    if let Gain::MatchMean { nominal, max_deviation } = p.gain
+        && !(nominal.is_finite() && (1e-6..=1e12).contains(&nominal) && max_deviation.is_finite() && (0.0..=0.5).contains(&max_deviation))
+    {
+        return Err(Error::Input("the model gain is not finite or within its supported range".into()));
+    }
+    if p.clip.is_some_and(|v| !v.is_finite() || v <= 0.0) {
+        return Err(Error::Input("the highlight clip must be finite and positive".into()));
+    }
+    let (sx, sy) = (starts(width, p.tile, p.overlap), starts(height, p.tile, p.overlap));
+    let (cols, rows) = (sx.len(), sy.len());
+    if cols == 0 || rows == 0 {
+        return Err(Error::Input("the picture needs too many tiles".into()));
+    }
+    let tiles: Vec<(usize, usize, bool, bool, bool, bool)> = sy
+        .iter()
+        .enumerate()
+        .flat_map(|(j, &y0)| sx.iter().enumerate().map(move |(i, &x0)| (x0, y0, i > 0, i + 1 < cols, j > 0, j + 1 < rows)))
+        .collect();
+    let total = tiles.len();
+
+    let mut acc = allocate(pixels, [0f32; 3])?;
+    let mut wsum = allocate(pixels, 0f32)?;
+    let group = p.parallel.clamp(1, 4);
+    let mut done = 0;
+    let (mut t_wait, mut t_total) = (std::time::Duration::ZERO, std::time::Duration::ZERO);
+    let began = web_time::Instant::now();
+
+    type Tile = (usize, usize, bool, bool, bool, bool);
+    let compute = |chunk: &[Tile]| -> Vec<Result<Vec<f32>, Error>> {
+        chunk
+            .par_iter()
+            .map(|&(x0, y0, bx, ax, by, ay)| {
+                let mut input = allocate(3 * p.tile * p.tile, 0f32)?;
+                if !pack_tile_linear_rgb(image, x0 as isize, y0 as isize, p.tile, &mut input) {
+                    return Err(Error::Input("a tile could not be packed".into()));
+                }
+                let mut out = runner.run(&input)?;
+                let side = p.tile;
+                if out.len() != 3 * side * side {
+                    return Err(Error::Model(format!("{} numbers for a tile, not the {} expected", out.len(), 3 * side * side)));
+                }
+                if out.iter().any(|v| !v.is_finite()) {
+                    return Err(Error::Model("numbers that are not finite".into()));
+                }
+                finish_tile_linear_rgb(&input, &mut out, p, (bx, ax, by, ay));
+                if out.iter().any(|v| !v.is_finite()) {
+                    return Err(Error::Model("numbers that are not finite after scale matching or highlight protection".into()));
+                }
+                Ok(out)
+            })
+            .collect()
+    };
+    let mut blend = |chunk: &[Tile], outs: Vec<Result<Vec<f32>, Error>>| -> Result<(), Error> {
+        for (&(x0, y0, bx, ax, by, ay), r) in chunk.iter().zip(outs) {
+            blend_tile_linear_rgb(&r?, &mut acc, &mut wsum, (width, height), (x0, y0), p, (bx, ax, by, ay));
+            done += 1;
+            if let Some(f) = ctl.progress {
+                f(done, total);
+            }
+        }
+        Ok(())
+    };
+    let mut previous: Option<(&[Tile], Vec<Result<Vec<f32>, Error>>)> = None;
+    for chunk in tiles.chunks(group) {
+        if ctl.cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+            return Err(Error::Cancelled);
+        }
+        let (outs, blended) = rayon::join(
+            || compute(chunk),
+            || match previous.take() {
+                Some((c, o)) => {
+                    let started = web_time::Instant::now();
+                    let r = blend(c, o);
+                    (r, started.elapsed())
+                }
+                None => (Ok(()), std::time::Duration::ZERO),
+            },
+        );
+        blended.0?;
+        t_wait += blended.1;
+        previous = Some((chunk, outs));
+    }
+    if let Some((c, o)) = previous.take() {
+        let started = web_time::Instant::now();
+        blend(c, o)?;
+        t_wait += started.elapsed();
+    }
+    t_total += began.elapsed();
+    let started = web_time::Instant::now();
+    acc.par_chunks_mut(width).zip(wsum.par_chunks(width)).for_each(|(row, wrow)| {
+        for (px, &w) in row.iter_mut().zip(wrow) {
+            if w > 0.0 {
+                *px = px.map(|v| v / w);
+            }
+        }
+    });
+    if acc.iter().flatten().any(|v| !v.is_finite()) {
+        return Err(Error::Model("numbers that are not finite after tile blending".into()));
+    }
+    if std::env::var_os("LIGHTCRAFT_PROFILE").is_some() {
+        eprintln!(
+            "[denoise-linear-rgb] {total} tiles, {} at once: tiles {:.0} ms (blending, {:.0} ms of it, overlaps the model), normalise {:.0} ms",
+            group,
+            t_total.as_secs_f64() * 1e3,
+            t_wait.as_secs_f64() * 1e3,
+            started.elapsed().as_secs_f64() * 1e3
+        );
+    }
+    Ok(Rgb32f { width, height, data: acc })
+}
+
 /// Bring a tile's output to the input's scale and keep clipped highlights as they were (in place).
 fn finish_tile(input: &[f32], out: &mut [f32], p: &Params, edges: (bool, bool, bool, bool)) {
     let t = p.tile;
@@ -363,6 +502,187 @@ fn blend_tile(
                     px[1] += w * g;
                     px[2] += w * bl;
                 }
+            }
+        }
+    }
+}
+
+/// Pack the `tile × tile` window whose top-left pixel is `(x0, y0)` into `out` as three planes `[R, G, B]`
+/// (`3 · tile²` values, NCHW). Pixels outside the picture are mirrored ping-pong without repeating edges.
+/// Returns `false` (and writes nothing) when the sizes do not fit.
+pub fn pack_tile_linear_rgb(image: &Rgb32f, x0: isize, y0: isize, tile: usize, out: &mut [f32]) -> bool {
+    let Some(plane) = tile.checked_mul(tile) else { return false };
+    let Some(values) = plane.checked_mul(3) else { return false };
+    if image.width == 0 || image.height == 0 || tile == 0 || image.width.checked_mul(image.height) != Some(image.data.len()) || out.len() != values {
+        return false;
+    }
+    let Ok(last) = isize::try_from(tile.saturating_sub(1)) else { return false };
+    if x0.checked_add(last).is_none() || y0.checked_add(last).is_none() {
+        return false;
+    }
+    let (r_plane, rest) = out.split_at_mut(plane);
+    let (g_plane, b_plane) = rest.split_at_mut(plane);
+    for j in 0..tile {
+        let y = crate::bayer::reflect(y0.saturating_add(j as isize), image.height);
+        let Some(row) = image.data.get(y * image.width..(y + 1) * image.width) else { return false };
+        let Some(r_row) = r_plane.get_mut(j * tile..(j + 1) * tile) else { return false };
+        let Some(g_row) = g_plane.get_mut(j * tile..(j + 1) * tile) else { return false };
+        let Some(b_row) = b_plane.get_mut(j * tile..(j + 1) * tile) else { return false };
+        for i in 0..tile {
+            let x = crate::bayer::reflect(x0.saturating_add(i as isize), image.width);
+            let Some(px) = row.get(x) else { return false };
+            if let (Some(r), Some(g), Some(b)) = (r_row.get_mut(i), g_row.get_mut(i), b_row.get_mut(i)) {
+                *r = px[0];
+                *g = px[1];
+                *b = px[2];
+            }
+        }
+    }
+    true
+}
+
+/// Bring a linear RGB tile's output to the input's scale and keep clipped highlights as they were (in place).
+fn finish_tile_linear_rgb(input: &[f32], out: &mut [f32], p: &Params, edges: (bool, bool, bool, bool)) {
+    let t = p.tile;
+    if let Gain::MatchMean { nominal, max_deviation } = p.gain {
+        let m = p.overlap / 2;
+        let (i0, i1) = (if edges.0 { m } else { 0 }, t - if edges.1 { m } else { 0 });
+        let (j0, j1) = (if edges.2 { m } else { 0 }, t - if edges.3 { m } else { 0 });
+        if i1 > i0 && j1 > j0 {
+            let cells = ((i1 - i0) * (j1 - j0)) as f64;
+            for c in 0..3 {
+                let plane_offset = c * t * t;
+                let in_sum: f64 = (j0..j1)
+                    .map(|j| {
+                        input.get(plane_offset + j * t + i0..plane_offset + j * t + i1).map_or(0.0, |r| r.iter().map(|&v| f64::from(v)).sum::<f64>())
+                    })
+                    .sum();
+                let mean_in = in_sum / cells;
+
+                let out_sum: f64 = (j0..j1)
+                    .map(|j| {
+                        out.get(plane_offset + j * t + i0..plane_offset + j * t + i1).map_or(0.0, |r| r.iter().map(|&v| f64::from(v)).sum::<f64>())
+                    })
+                    .sum();
+                let mean_out = out_sum / cells;
+
+                let measured = if mean_in as f32 >= MIN_SIGNAL && mean_out > 0.0 { (mean_out / mean_in) as f32 } else { nominal };
+                let g = measured.clamp(nominal * (1.0 - max_deviation), nominal * (1.0 + max_deviation));
+                if g.is_finite() && g > 0.0 {
+                    let inv = 1.0 / g;
+                    if let Some(plane) = out.get_mut(plane_offset..plane_offset + t * t) {
+                        plane.iter_mut().for_each(|v| *v *= inv);
+                    }
+                }
+            }
+        }
+    }
+    if let Some(clip) = p.clip {
+        protect_clipped_linear_rgb(input, out, t, clip);
+    }
+}
+
+/// Where the linear RGB picture is at (or within a pixel of) white, the output becomes the plain pixel values again, so a clipped
+/// area stays exactly as clipped as the camera recorded it (highlight recovery later depends on that).
+fn protect_clipped_linear_rgb(input: &[f32], out: &mut [f32], t: usize, clip: f32) {
+    let plane = t * t;
+    let (Some(r), Some(g), Some(b)) = (input.get(0..plane), input.get(plane..2 * plane), input.get(2 * plane..3 * plane)) else {
+        return;
+    };
+    let mut m: Vec<f32> = (0..plane)
+        .map(|i| {
+            let rv = r.get(i).copied().unwrap_or(0.0);
+            let gv = g.get(i).copied().unwrap_or(0.0);
+            let bv = b.get(i).copied().unwrap_or(0.0);
+            rv.max(gv).max(bv)
+        })
+        .collect();
+    if !m.iter().any(|&v| v >= clip) {
+        return;
+    }
+    // 3×3 maximum over pixels (separable)
+    let dilate = |src: &[f32], horizontal: bool| -> Vec<f32> {
+        (0..plane)
+            .map(|i| {
+                let (x, y) = (i % t, i / t);
+                let mut best = src.get(i).copied().unwrap_or(0.0);
+                for d in [-1isize, 1] {
+                    let (nx, ny) = if horizontal { (x as isize + d, y as isize) } else { (x as isize, y as isize + d) };
+                    if nx >= 0
+                        && ny >= 0
+                        && (nx as usize) < t
+                        && (ny as usize) < t
+                        && let Some(&v) = src.get(ny as usize * t + nx as usize)
+                    {
+                        best = best.max(v);
+                    }
+                }
+                best
+            })
+            .collect()
+    };
+    m = dilate(&dilate(&m, true), false);
+    let lo = clip - 0.03;
+    for j in 0..t {
+        for i in 0..t {
+            let k = j * t + i;
+            let mk = m.get(k).copied().unwrap_or(0.0);
+            let s = ((mk - lo) / (clip - lo)).clamp(0.0, 1.0);
+            if s <= 0.0 {
+                continue;
+            }
+            let s = s * s * (3.0 - 2.0 * s);
+            let plain = [r.get(k).copied().unwrap_or(0.0), g.get(k).copied().unwrap_or(0.0), b.get(k).copied().unwrap_or(0.0)];
+            for (c, &pv) in plain.iter().enumerate() {
+                if let Some(v) = out.get_mut(c * plane + k) {
+                    *v += (pv - *v) * s;
+                }
+            }
+        }
+    }
+}
+
+/// Add a finished linear RGB tile to the picture with its blend weights.
+fn blend_tile_linear_rgb(
+    out: &[f32],
+    acc: &mut [[f32; 3]],
+    wsum: &mut [f32],
+    size: (usize, usize),
+    at: (usize, usize),
+    p: &Params,
+    edges: (bool, bool, bool, bool),
+) {
+    let (width, height) = size;
+    let t = p.tile;
+    let plane = t * t;
+    let fade = p.overlap;
+    let wx: Vec<f32> = (0..t).map(|i| weight(i, t, fade, edges.0, edges.1)).collect();
+    let wy: Vec<f32> = (0..t).map(|j| weight(j, t, fade, edges.2, edges.3)).collect();
+    for j in 0..t {
+        let y = at.1 + j;
+        if y >= height {
+            continue;
+        }
+        let Some(&b) = wy.get(j) else { continue };
+        for i in 0..t {
+            let x = at.0 + i;
+            if x >= width {
+                continue;
+            }
+            let Some(&a) = wx.get(i) else { continue };
+            let w = a * b;
+            let pixel_idx = y * width + x;
+            if let Some(s) = wsum.get_mut(pixel_idx) {
+                *s += w;
+            }
+            let tile_idx = j * t + i;
+            let (Some(&r), Some(&g), Some(&bl)) = (out.get(tile_idx), out.get(plane + tile_idx), out.get(2 * plane + tile_idx)) else {
+                continue;
+            };
+            if let Some(px) = acc.get_mut(pixel_idx) {
+                px[0] += w * r;
+                px[1] += w * g;
+                px[2] += w * bl;
             }
         }
     }
@@ -661,5 +981,144 @@ mod tests {
             denoise_bayer(&[], MAX_PIXELS + 1, 1, layout, &model, &p, &Control::default()),
             Err(Error::Input(message)) if message == "the picture has no size, or is too large"
         ));
+    }
+
+    struct MockLinearRgb {
+        scale: f32,
+    }
+    impl TileRunner for MockLinearRgb {
+        fn run(&self, input: &[f32]) -> Result<Vec<f32>, Error> {
+            Ok(input.iter().map(|&v| v * self.scale).collect())
+        }
+    }
+
+    fn rgb_test_image(w: usize, h: usize) -> Rgb32f {
+        let data = (0..w * h)
+            .map(|i| {
+                let (x, y) = (i % w, i / w);
+                [
+                    0.5 * (0.6 + 0.4 * ((x as f32 / 17.0).sin() * (y as f32 / 29.0).cos())),
+                    0.3 * (0.6 + 0.4 * ((x as f32 / 23.0).cos() * (y as f32 / 19.0).sin())),
+                    0.2 * (0.6 + 0.4 * ((x as f32 / 31.0).sin() * (y as f32 / 13.0).sin())),
+                ]
+            })
+            .collect();
+        Rgb32f { width: w, height: h, data }
+    }
+
+    #[test]
+    fn linear_rgb_identity_runner_reconstructs_input_for_various_dimensions() {
+        let model = MockLinearRgb { scale: 1.0 };
+        for (w, h, tile, overlap) in [
+            (150, 110, 32, 8),
+            (64, 64, 32, 8),
+            (20, 14, 64, 16), // smaller than tile: padded by reflection
+            (97, 103, 32, 8), // prime dimensions
+        ] {
+            let img = rgb_test_image(w, h);
+            let got = denoise_linear_rgb(&img, &model, &params(tile, overlap, Gain::None), &Control::default()).unwrap();
+            assert_eq!((got.width, got.height), (w, h));
+            for (i, (a, b)) in got.data.iter().zip(&img.data).enumerate() {
+                for c in 0..3 {
+                    assert!((a[c] - b[c]).abs() < 1e-5, "dimension ({w}, {h}) at pixel {i} channel {c}: got {} vs want {}", a[c], b[c]);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn linear_rgb_scale_of_its_own_is_taken_out_tile_by_tile() {
+        let (w, h) = (150usize, 110usize);
+        let img = rgb_test_image(w, h);
+        let gain = Gain::MatchMean { nominal: 1.0e6, max_deviation: 0.05 };
+        let got = denoise_linear_rgb(&img, &MockLinearRgb { scale: 1.02e6 }, &params(32, 8, gain), &Control::default()).unwrap();
+        let mean = |im: &Rgb32f, c: usize| im.data.iter().map(|p| f64::from(p[c])).sum::<f64>() / im.data.len() as f64;
+        for c in 0..3 {
+            let (a, b) = (mean(&got, c), mean(&img, c));
+            assert!((a - b).abs() / b < 0.01, "channel {c}: {a} vs {b}");
+        }
+        // a scale far from nominal is clamped rather than trusted
+        let wild = denoise_linear_rgb(&img, &MockLinearRgb { scale: 3.0e6 }, &params(32, 8, gain), &Control::default()).unwrap();
+        assert!(mean(&wild, 1) > 2.0 * mean(&img, 1));
+    }
+
+    #[test]
+    fn linear_rgb_clipped_highlights_stay_clipped() {
+        struct DimLinear(MockLinearRgb);
+        impl TileRunner for DimLinear {
+            fn run(&self, input: &[f32]) -> Result<Vec<f32>, Error> {
+                Ok(self.0.run(input)?.into_iter().map(|v| v * 0.9).collect())
+            }
+        }
+        let (w, h) = (96usize, 96usize);
+        let data: Vec<[f32; 3]> = (0..w * h)
+            .map(|i| {
+                let x = i % w;
+                let val = if x > 40 && x < 70 { 1.0 } else { 0.4 };
+                [val, val, val]
+            })
+            .collect();
+        let img = Rgb32f { width: w, height: h, data };
+        let mut p = params(32, 8, Gain::None);
+        p.clip = Some(0.99);
+        let got = denoise_linear_rgb(&img, &DimLinear(MockLinearRgb { scale: 1.0 }), &p, &Control::default()).unwrap();
+        let mid = got.data[48 * w + 55];
+        assert!(mid.iter().all(|&v| v > 0.995), "clipped plateau preserved: {mid:?}");
+        let dark = got.data[48 * w + 10];
+        assert!(dark.iter().all(|&v| (v - 0.36).abs() < 0.01), "unclipped area dimmed: {dark:?}");
+    }
+
+    #[test]
+    fn linear_rgb_cancellation_and_progress_work() {
+        let (w, h) = (150usize, 110usize);
+        let img = rgb_test_image(w, h);
+        let cancel = AtomicBool::new(true);
+        let r =
+            denoise_linear_rgb(&img, &MockLinearRgb { scale: 1.0 }, &params(32, 8, Gain::None), &Control { cancel: Some(&cancel), progress: None });
+        assert!(matches!(r, Err(Error::Cancelled)));
+
+        let seen = std::sync::Mutex::new(Vec::new());
+        let f = |d: usize, n: usize| seen.lock().unwrap().push((d, n));
+        denoise_linear_rgb(&img, &MockLinearRgb { scale: 1.0 }, &params(32, 8, Gain::None), &Control { cancel: None, progress: Some(&f) }).unwrap();
+        let seen = seen.into_inner().unwrap();
+        let total = tile_count_linear_rgb(w, h, 32, 8);
+        assert!(total > 1);
+        assert_eq!(seen.last(), Some(&(total, total)));
+        assert!(seen.windows(2).all(|p| p[1].0 == p[0].0 + 1));
+    }
+
+    #[test]
+    fn linear_rgb_hostile_and_nonfinite_inputs_are_errors() {
+        let mock = MockLinearRgb { scale: 1.0 };
+        let p = params(32, 8, Gain::None);
+        let empty = Rgb32f { width: 0, height: 0, data: vec![] };
+        assert!(matches!(denoise_linear_rgb(&empty, &mock, &p, &Control::default()), Err(Error::Input(_))));
+        let bad_size = Rgb32f { width: 4, height: 4, data: vec![[0.0; 3]; 10] };
+        assert!(matches!(denoise_linear_rgb(&bad_size, &mock, &p, &Control::default()), Err(Error::Input(_))));
+
+        // Non-finite pixel rejected
+        let nan_img = Rgb32f { width: 4, height: 4, data: vec![[f32::NAN, 0.0, 0.0]; 16] };
+        assert!(matches!(denoise_linear_rgb(&nan_img, &mock, &p, &Control::default()), Err(Error::Input(_))));
+
+        // Model returning wrong tile size or non-finite output
+        struct Bad(Vec<f32>);
+        impl TileRunner for Bad {
+            fn run(&self, _: &[f32]) -> Result<Vec<f32>, Error> {
+                Ok(self.0.clone())
+            }
+        }
+        let good_img = Rgb32f { width: 4, height: 4, data: vec![[0.5; 3]; 16] };
+        assert!(matches!(denoise_linear_rgb(&good_img, &Bad(vec![0.0; 5]), &p, &Control::default()), Err(Error::Model(_))));
+        assert!(matches!(denoise_linear_rgb(&good_img, &Bad(vec![f32::NAN; 3 * 32 * 32]), &p, &Control::default()), Err(Error::Model(_))));
+    }
+
+    #[test]
+    fn linear_rgb_grid_and_tile_counts() {
+        let (sx, sy) = grid_linear_rgb(100, 80, 32, 8);
+        assert_eq!(sx[0], 0);
+        assert_eq!(*sx.last().unwrap(), 100 - 32);
+        assert_eq!(sy[0], 0);
+        assert_eq!(*sy.last().unwrap(), 80 - 32);
+        assert_eq!(tile_count_linear_rgb(100, 80, 32, 8), sx.len() * sy.len());
     }
 }
