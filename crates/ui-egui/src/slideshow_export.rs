@@ -63,6 +63,7 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
             let mut m = crate::i18n::tr_format!("Slideshow exported: {what}", what = what);
             if let Some(n) = r["skipped"].as_u64().filter(|n| *n > 0) {
                 m += &crate::i18n::tr_format!(" · {n} skipped (could not be rendered)", n = n);
+                failed = true;
             }
             m
         }

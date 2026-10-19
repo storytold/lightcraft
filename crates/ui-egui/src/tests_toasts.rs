@@ -101,19 +101,41 @@ fn a_pointer_resting_on_the_toast_holds_it_and_leaving_gives_a_second_and_a_half
 
 #[test]
 fn the_toast_does_not_take_clicks_from_what_is_under_it() {
-    let mut h = app();
+    use lightcraft_catalog::{Op, Photo, PhotoId, Source};
+    let mut s = lightcraft_engine::Session::new();
+    for id in 1..=12 {
+        let p = Photo::new(PhotoId(id), Source::Demo { scene: 1 }, &format!("{id}.jpg"), "JPEG", 640, 480, "2026-10-08");
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    }
+    s.execute("library.sort", &json!({"key": "fileName", "ascending": true, "group": "none"})).unwrap();
+    s.execute("library.select", &json!({"ids": [1]})).unwrap();
+    let mut h = Headless::new(LightcraftApp::new(s, Services { png: None, ..Default::default() }), [1000.0, 700.0], 1.0);
+    h.app.ui.view = crate::state::ViewMode::SquareGrid;
+    h.app.ui.right = crate::state::RightPanel::None;
+    h.app.ui.thumb_size = 300.0;
+    for _ in 0..10 {
+        h.step();
+    }
     let c = ctx(&h);
     h.app.toast(&c, "Library saved");
+    h.step();
     let p = toast_centre(&h);
+    let (cell, rect) = h
+        .app
+        .widgets
+        .iter()
+        .find_map(|(w, r)| w.strip_prefix("thumb:").filter(|_| r.contains(p)).map(|id| (id.to_string(), *r)))
+        .expect("a thumbnail lies under the toast");
+    let id: u64 = cell.parse().unwrap();
+    assert!(rect.contains(p));
+    assert_ne!(h.app.session.selected(), vec![PhotoId(id)], "not selected yet");
     point_at(&mut h, p);
-    assert!(h.app.ui.toast.is_some());
-    let before = h.app.ui.dialog.clone();
     h.events.push(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
     h.step();
     h.events.push(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
     h.step();
-    assert!(shown(&h), "a click neither dismisses nor extends it beyond the hold");
-    assert_eq!(h.app.ui.dialog, before);
+    h.step();
+    assert_eq!(h.app.session.selected(), vec![PhotoId(id)], "the click went through to the thumbnail");
 }
 
 /// How far the painted pixel at the toast's left padding moved from the background.
@@ -167,4 +189,21 @@ fn a_different_text_replaces_it_and_fades_in_again() {
     let next = h.app.ui.toast.clone().unwrap();
     assert_eq!(next.text, "Undo");
     assert!(next.shown_at > first.shown_at);
+}
+
+#[test]
+fn a_hovered_toast_stays_without_a_repaint_timer_and_resumes_after() {
+    let mut h = app();
+    let c = ctx(&h);
+    h.app.toast(&c, "Library saved");
+    let p = toast_centre(&h);
+    point_at(&mut h, p);
+    run_for(&mut h, 1.0);
+    let t = h.app.ui.toast.clone().unwrap();
+    assert!(t.hovered);
+    assert!(!crate::toast::needs_repaint(t.hovered, h.time(), t.shown_at), "static once faded in: no 30 ms timer");
+    point_at(&mut h, egui::pos2(5.0, 5.0));
+    let t = h.app.ui.toast.clone().unwrap();
+    assert!(!t.hovered);
+    assert!(crate::toast::needs_repaint(t.hovered, h.time(), t.shown_at), "the fade-out is animated again");
 }

@@ -99,14 +99,21 @@ pub fn toast(app: &mut LightcraftApp, ctx: &egui::Context) {
     // a slideshow's playback controls sit at the bottom: the toast goes to the top there, clear of them
     let y = if app.ui.slideshow.is_some() { canvas.top() + 60.0 } else { canvas.bottom() - 60.0 };
     let r = Rect::from_center_size(pos2(canvas.center().x, y), size);
-    // while the pointer rests on it, the clock stops: it stays at least 1.5 s after the pointer leaves
-    if ctx.pointer_hover_pos().is_some_and(|p| r.contains(p)) {
+    // while the pointer rests on it, the clock stops; the first frame after it leaves starts the 1.5 s hold
+    let hovered = ctx.pointer_hover_pos().is_some_and(|p| r.contains(p));
+    if hovered {
         shown.until = shown.until.max(now + HOVER_HOLD);
+    } else if shown.hovered {
+        shown.until = now + HOVER_HOLD;
     }
+    shown.hovered = hovered;
     let alpha = toast_alpha(now, shown.shown_at, shown.until);
     painter.rect_filled(r, 6.0, background.gamma_multiply(alpha));
     painter.galley_with_override_text_color(r.center() - galley.size() / 2.0, galley, foreground.gamma_multiply(alpha));
-    ctx.request_repaint_after(std::time::Duration::from_millis(30));
+    // a toast held under the pointer is static once faded in: no timer, the pointer leaving wakes the app
+    if crate::toast::needs_repaint(hovered, now, shown.shown_at) {
+        ctx.request_repaint_after(std::time::Duration::from_millis(30));
+    }
 }
 
 /// Paint a centred, dimmed message (empty states).

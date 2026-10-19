@@ -1037,7 +1037,7 @@ pub struct UiState {
     /// Reference view: the reference photo.
     #[serde(skip)]
     pub reference: Option<u64>,
-    /// The HUD toast on screen (the only writer is [`UiState::show_toast`]).
+    /// The HUD toast on screen (shown only through [`UiState::show_toast`]; the painter then extends `until` while hovered and clears it).
     #[serde(skip)]
     pub toast: Option<crate::toast::Toast>,
     /// The result of the last Find Missing Photos (it searches in the background).
@@ -1588,7 +1588,7 @@ impl UiState {
                 t.until = t.until.max(until);
                 t.label = label;
             }
-            slot => *slot = Some(crate::toast::Toast { text, shown_at: now, until, label }),
+            slot => *slot = Some(crate::toast::Toast { text, shown_at: now, until, hovered: false, label }),
         }
     }
 

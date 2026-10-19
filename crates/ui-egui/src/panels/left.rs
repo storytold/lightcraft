@@ -1609,7 +1609,7 @@ fn drop_target(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response
     if super::grid::local_only(app, &photos) {
         ui.ctx().set_cursor_icon(egui::CursorIcon::NotAllowed);
         if released {
-            app.toast(ui.ctx(), super::grid::albums_hint());
+            app.toast_error(ui.ctx(), super::grid::albums_hint());
             app.ui.dragging_photos = None;
         }
         return;

@@ -19,6 +19,8 @@ pub struct Toast {
     /// App time the toast first appeared; a re-shown identical text keeps it (no fade-in flicker).
     pub shown_at: f64,
     pub until: f64,
+    /// The pointer rested on it last frame (the painter holds `until` ahead meanwhile).
+    pub hovered: bool,
     /// Colour-label styling.
     pub label: Option<ColorLabel>,
 }
@@ -42,6 +44,11 @@ pub fn reading_seconds(text: &str) -> f64 {
         })
         .sum();
     (1.0 + words / 3.0).min(MAX_READING)
+}
+
+/// Does the toast need another frame soon? Not while held under the pointer once faded in.
+pub fn needs_repaint(hovered: bool, now: f64, shown_at: f64) -> bool {
+    !hovered || now - shown_at < FADE_IN
 }
 
 /// Opacity (0–1) at `now`: the lower of the ease-out fade-in and the linear fade-out.
@@ -105,6 +112,13 @@ mod tests {
         assert_eq!(Toast::duration("Hi", 6.0), 6.0);
         assert_eq!(Toast::duration(&"word ".repeat(500), 12.0), 12.0);
         assert_eq!(Toast::duration(&"word ".repeat(500), 1.4), 10.0);
+    }
+
+    #[test]
+    fn a_hovered_toast_asks_for_frames_only_while_fading_in() {
+        assert!(needs_repaint(true, 5.05, 5.0));
+        assert!(!needs_repaint(true, 5.2, 5.0));
+        assert!(needs_repaint(false, 9.0, 5.0));
     }
 
     #[test]
