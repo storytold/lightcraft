@@ -445,10 +445,7 @@ fn drop_target(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response
     let (library, there) = dragged_and_there(app, a, &ids);
     let fresh = library.saturating_sub(there);
     if fresh == 0 {
-        crate::panels::grid::drag_hint(ui.ctx(), crate::i18n::tr_format!("Already in “{}”", a.name));
-        if released {
-            app.ui.dragging_photos = None;
-        }
+        drop_adds_nothing(app, ui, a, ids.len() - library, released);
         return;
     }
     crate::panels::grid::drag_hint(

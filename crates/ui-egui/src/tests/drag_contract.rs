@@ -144,6 +144,24 @@ fn esc_gives_up_a_photo_drag_and_does_nothing_else() {
     assert_eq!(toast(&h), "");
 }
 
+/// Esc and the button's release in one frame: the drag is given up, and Esc's own command (Back)
+/// doesn't also run.
+#[test]
+fn esc_on_the_frame_the_button_is_released_only_gives_up_the_drag() {
+    let mut h = app();
+    let (outside, _) = photos_around(&mut h, GARDEN);
+    h.app.ui.lights_out = crate::state::LightsOut::Dim;
+    let target = drag_photos(&mut h, &outside, &format!("source:album:{GARDEN}"));
+    let before = members(&h, GARDEN);
+    h.events.push(egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE });
+    h.events.push(egui::Event::PointerButton { pos: target, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+    h.step();
+    h.step();
+    assert_eq!(h.app.ui.dragging_photos, None, "the drag is over");
+    assert_eq!(h.app.ui.lights_out, crate::state::LightsOut::Dim, "Esc only gave up the drag");
+    assert_eq!(members(&h, GARDEN), before, "Esc beat the release: nothing was added");
+}
+
 #[test]
 fn esc_only_gives_up_an_album_or_keyword_drag() {
     let mut h = app();
@@ -240,6 +258,33 @@ fn a_drop_on_an_album_that_adds_nothing_does_nothing() {
     assert_eq!(members(&h, GARDEN), before);
     assert_eq!(h.app.session.undo.len(), undo, "no undo step for nothing");
     assert_eq!(toast(&h), "", "and nothing to say");
+    assert_eq!(h.app.ui.dragging_photos, None);
+}
+
+/// A drag of a photo the album holds and a Local one: nothing is added, and the row says why the
+/// Local one stays out instead of only "Already in".
+#[test]
+fn an_album_row_explains_the_local_photos_of_a_drag_it_adds_nothing_of() {
+    use lightcraft_catalog::{Op, Photo, Source};
+    let mut h = app();
+    let (_, inside) = photos_around(&mut h, GARDEN);
+    let id = h.app.session.catalog.alloc_photo_id();
+    let mut local = Photo::new(id, Source::File { path: "/nowhere/local.png".into() }, "local.png", "PNG", 8, 8, "2026-01-01T10:00:00");
+    local.local = true;
+    h.app.session.catalog.apply(Op::AddPhoto { photo: Box::new(local) }).unwrap();
+    let before = members(&h, GARDEN);
+    let undo = h.app.session.undo.len();
+    let target = drag_photos(&mut h, &[inside], &format!("source:album:{GARDEN}"));
+    // the Local photo joins the drag (the grid shows none; a folder view's selection would)
+    h.app.ui.dragging_photos = Some(vec![inside, id.0]);
+    h.step();
+    let said = hint(&h).expect("the row says what a drop does");
+    assert!(said.contains("Add to My Photos first"), "{said}");
+    assert_eq!(h.last_cursor, egui::CursorIcon::NotAllowed);
+    release(&mut h, target);
+    assert!(toast(&h).contains("1 Local photo skipped"), "{}", toast(&h));
+    assert_eq!(members(&h, GARDEN), before);
+    assert_eq!(h.app.session.undo.len(), undo);
     assert_eq!(h.app.ui.dragging_photos, None);
 }
 
