@@ -115,10 +115,10 @@ fn egui_easing_stops_with_reduce_motion_on_and_returns_when_off() {
 
 #[test]
 fn the_activity_bar_stands_still_with_reduce_motion_on() {
-    use crate::panels::activity::indeterminate_span;
-    let still: Vec<_> = (0..120).map(|f| indeterminate_span(200.0, f as f64 / 60.0, true)).collect();
+    use crate::progress::sweep_span;
+    let still: Vec<_> = (0..120).map(|f| sweep_span(200.0, f as f64 / 60.0, true)).collect();
     assert!(still.windows(2).all(|w| w[0] == w[1]), "no movement between frames");
     assert!(still[0].1 > still[0].0, "but something is shown");
-    let moving: Vec<_> = (0..120).map(|f| indeterminate_span(200.0, f as f64 / 60.0, false)).collect();
+    let moving: Vec<_> = (0..120).map(|f| sweep_span(200.0, f as f64 / 60.0, false)).collect();
     assert!(moving.windows(2).any(|w| w[0] != w[1]), "it sweeps when motion is on");
 }

@@ -404,8 +404,11 @@ impl<'a> Button<'a> {
             let slot_rect = Rect::from_center_size(pos2(x + slot / 2.0, rect.center().y), vec2(slot, slot));
             if self.busy {
                 if ui.is_rect_visible(rect) {
-                    crate::progress::paint_spinner(p, slot_rect, lk.content, ui.input(|i| i.time));
-                    ui.ctx().request_repaint_after(std::time::Duration::from_millis(33));
+                    let reduced = crate::motion::reduced(ui.ctx());
+                    crate::progress::paint_spinner(p, slot_rect, lk.content, ui.input(|i| i.time), reduced);
+                    if !reduced {
+                        ui.ctx().request_repaint_after(std::time::Duration::from_millis(33));
+                    }
                 }
             } else if let Some(icon) = self.icon {
                 paint(p, slot_rect, icon, lk.content);
