@@ -280,7 +280,12 @@ impl Metadata {
 /// Read everything we understand from a whole file (JPEG, PNG, WebP, TIFF-based incl. DNG/raw).
 /// Precedence: EXIF, then IPTC fills gaps, then XMP overrides user fields and fills the rest.
 pub fn extract(bytes: &[u8]) -> Metadata {
-    let e = embedded(bytes);
+    from_embedded(&embedded(bytes))
+}
+
+/// [`extract`] from blocks already taken out of a file (by [`embedded`], or by a codec that reads a
+/// container [`embedded`] doesn't walk, like PSD image resources), with the same precedence.
+pub fn from_embedded(e: &Embedded) -> Metadata {
     let mut m = e.exif.as_deref().map(read_exif).unwrap_or_default();
     if let Some(i) = e.iptc.as_deref() {
         m.fill_missing(&parse_iptc(i));

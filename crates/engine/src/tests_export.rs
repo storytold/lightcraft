@@ -649,6 +649,51 @@ fn metadata_policy_holds_for_original_and_dng_exports() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A PSD's EXIF and XMP live in its image resources, which the generic metadata reader doesn't
+/// walk: the Original guards read them through the codec, so a PSD that embeds what the metadata
+/// setting leaves out (or a location to remove) is refused, not copied (#1505 review).
+#[test]
+fn original_psd_export_refuses_embedded_metadata_excluded_by_policy() {
+    let dir = temp_dir("export-psd-policy");
+    let src = dir.join("Private.psd");
+    let img = lightcraft_raster::Rgba8::from_fn(8, 6, |x, y| [(x * 20) as u8, (y * 30) as u8, 90, 255]);
+    let m = lightcraft_meta::Metadata {
+        make: Some("Procedural Camera".into()),
+        model: Some("Test Body".into()),
+        artist: Some("Private Creator".into()),
+        title: Some("Private Title".into()),
+        gps: Some(lightcraft_meta::Gps { latitude: 48.85, longitude: 2.35, altitude: None }),
+        ..Default::default()
+    };
+    let exif = lightcraft_meta::write_exif(&m);
+    let xmp = lightcraft_meta::write_xmp(&m, None);
+    let meta = lightcraft_codecs::EncodeMeta { exif: Some(&exif), xmp: Some(&xmp), ..Default::default() };
+    let bytes = lightcraft_codecs::encode_psd(&lightcraft_codecs::EncodeImage::rgba8(&img), &meta).unwrap();
+    std::fs::write(&src, &bytes).unwrap();
+    // a PSD without any metadata of its own
+    let plain = dir.join("Plain.psd");
+    std::fs::write(&plain, lightcraft_codecs::encode_psd(&lightcraft_codecs::EncodeImage::rgba8(&img), &Default::default()).unwrap()).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy(), plain.to_string_lossy()]})).unwrap();
+    let id = |s: &Session, n: &str| s.catalog.photos().find(|p| p.file_name == n).unwrap().id;
+    let (pid, plain_id) = (id(&s, "Private.psd"), id(&s, "Plain.psd"));
+    let opts = |policy: &str, remove: bool| ExportOptions::from_json(&json!({"format": "original", "metadata": policy, "removeLocation": remove}));
+
+    let e = export_photo(&mut s, pid, &opts("all", false), 1).unwrap();
+    assert_eq!(e.bytes, bytes, "copied unchanged");
+    for policy in ["none", "copyright", "allExceptCamera"] {
+        let err = export_photo(&mut s, pid, &opts(policy, false), 1).err().unwrap_or_else(|| panic!("{policy}: the PSD was copied"));
+        assert!(err.contains("copied unchanged") && err.contains(policy) && err.contains("export as JPEG"), "{err}");
+    }
+    let err = export_photo(&mut s, pid, &opts("all", true), 1).err().unwrap();
+    assert!(err.contains("can't remove the location"), "{err}");
+    // nothing embedded: nothing to refuse
+    for policy in ["none", "copyright", "allExceptCamera"] {
+        assert!(export_photo(&mut s, plain_id, &opts(policy, true), 1).is_ok(), "{policy}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// `metadata: "NONE"` as `app.export` sends it: the JPEG carries no location or camera data
 /// (it used to be read as `all` and carry both).
 #[test]

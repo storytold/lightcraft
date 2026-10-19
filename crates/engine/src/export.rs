@@ -1768,6 +1768,27 @@ fn render_weight(full_px: usize, long: usize, level: crate::media::SourceLevel, 
     src_px.saturating_mul(12).saturating_add(out_px.saturating_mul(36))
 }
 
+/// The metadata a file embeds, for the guards of an export that copies it unchanged.
+/// [`lightcraft_meta::extract`] walks JPEG, PNG, WebP, TIFF and raw containers; the other formats
+/// (PSD image resources, HEIF, AVIF, JPEG XL boxes) are read by their codec. A file whose metadata
+/// can't be read is an error: the guard can't tell whether the copy would leak what it must not.
+fn embedded_metadata(bytes: &[u8], label: &str) -> Result<Metadata, String> {
+    use lightcraft_codecs::Format;
+    match lightcraft_codecs::sniff(bytes) {
+        None | Some(Format::Jpeg | Format::Png | Format::WebP | Format::Tiff | Format::RawTiffLike | Format::RawOther) => {
+            Ok(lightcraft_meta::extract(bytes))
+        }
+        Some(_) => {
+            let d = lightcraft_codecs::decode(bytes, lightcraft_codecs::DecodeOptions::fit(64, 64)).map_err(|e| {
+                format!(
+                    "{label}: can't read the metadata of the original file ({e}), so it can't be copied unchanged; export as JPEG or TIFF instead"
+                )
+            })?;
+            Ok(lightcraft_meta::from_embedded(&lightcraft_meta::Embedded { exif: d.exif, xmp: d.xmp, ..Default::default() }))
+        }
+    }
+}
+
 impl PreparedExport {
     pub fn run(self) -> Result<Exported, String> {
         let file_name = self.file_name;
@@ -1793,20 +1814,22 @@ impl PreparedExport {
                     None => std::fs::read(&path).map_err(|e| format!("{path}: {e}"))?,
                 };
                 let Some(dng) = dng else {
-                    // the file is copied byte for byte: refuse rather than leak a location it embeds
-                    if remove_location && lightcraft_meta::extract(&bytes).gps.is_some() {
+                    // the file is copied byte for byte: refuse rather than leak a location or other
+                    // metadata it embeds that the settings leave out
+                    let embedded = if remove_location || policy != MetadataPolicy::All { Some(embedded_metadata(&bytes, &label)?) } else { None };
+                    if remove_location && embedded.as_ref().is_some_and(|m| m.gps.is_some()) {
                         return Err(format!(
                             "{label}: can't remove the location from an original file that embeds GPS; export as JPEG, TIFF or DNG instead"
                         ));
                     }
-                    if policy != MetadataPolicy::All {
-                        let embedded = lightcraft_meta::extract(&bytes);
-                        if policy.restrict(&embedded) != embedded {
-                            return Err(format!(
-                                "{label}: an original file is copied unchanged, and this one embeds metadata that the \"{}\" metadata setting leaves out; export as JPEG or TIFF instead",
-                                policy.name()
-                            ));
-                        }
+                    if policy != MetadataPolicy::All
+                        && let Some(embedded) = &embedded
+                        && policy.restrict(embedded) != *embedded
+                    {
+                        return Err(format!(
+                            "{label}: an original file is copied unchanged, and this one embeds metadata that the \"{}\" metadata setting leaves out; export as JPEG or TIFF instead",
+                            policy.name()
+                        ));
                     }
                     return Ok(Exported {
                         file_name,
