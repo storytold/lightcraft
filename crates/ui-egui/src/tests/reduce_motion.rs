@@ -85,15 +85,19 @@ fn the_setting_survives_saving_and_loading_the_ui_settings() {
     run(&mut h, "view.reduceMotion", json!({"on": true}));
     let saved = serde_json::to_string(&h.app.ui).unwrap();
     let back = serde_json::from_str::<crate::UiState>(&saved).unwrap().sanitized();
-    assert!(back.settings.reduce_motion);
-    assert!(!crate::state::AppSettings::default().reduce_motion, "off by default");
+    assert_eq!(back.settings.reduce_motion, Some(true));
+    assert_eq!(crate::state::AppSettings::default().reduce_motion, None, "follows the system by default");
+    let mut old = serde_json::to_value(&h.app.ui).unwrap();
+    old["settings"].as_object_mut().unwrap().remove("reduceMotion").expect("saved under its camelCase key");
+    let loaded = serde_json::from_value::<crate::UiState>(old).unwrap().sanitized();
+    assert_eq!(loaded.settings.reduce_motion, None, "state saved before the setting existed still loads");
 }
 
 #[test]
 fn the_command_toggles_and_sets_the_setting() {
     let mut h = detail();
     assert_eq!(run(&mut h, "view.reduceMotion", json!({}))["on"], true);
-    assert!(h.app.ui.settings.reduce_motion);
+    assert_eq!(h.app.ui.settings.reduce_motion, Some(true));
     assert_eq!(run(&mut h, "view.reduceMotion", json!({}))["on"], false);
     assert_eq!(run(&mut h, "view.reduceMotion", json!({"on": true}))["on"], true);
     assert_eq!(run(&mut h, "view.reduceMotion", json!({"on": true}))["on"], true, "set, not toggled");
@@ -121,4 +125,68 @@ fn the_activity_bar_stands_still_with_reduce_motion_on() {
     assert!(still[0].1 > still[0].0, "but something is shown");
     let moving: Vec<_> = (0..120).map(|f| sweep_span(200.0, f as f64 / 60.0, false)).collect();
     assert!(moving.windows(2).any(|w| w[0] != w[1]), "it sweeps when motion is on");
+}
+
+/// A headless app whose system says `system` (shared, so a test can change it).
+fn with_system(system: std::rc::Rc<std::cell::Cell<Option<bool>>>) -> Headless {
+    let mut app = LightcraftApp::new(
+        lightcraft_engine::Session::with_demo(),
+        Services { png: None, system_reduce_motion: Some(Box::new(move || system.get())), ..Default::default() },
+    );
+    app.ui.settings.gpu = false;
+    let mut h = Headless::new(app, [1000.0, 700.0], 1.0);
+    h.request("ui.set", json!({"view": "detail", "right": "none"}), T);
+    h.settle(SETTLE);
+    h
+}
+
+#[test]
+fn the_system_setting_is_followed_until_the_user_chooses() {
+    let system = std::rc::Rc::new(std::cell::Cell::new(Some(true)));
+    let mut h = with_system(system.clone());
+    assert_eq!(h.app.ui.settings.reduce_motion, None);
+    assert_eq!(h.view.ctx.global_style().animation_time, 0.0, "the system says reduce");
+    click_photo(&mut h);
+    h.step();
+    let next = h.app.image_rect.unwrap();
+    h.settle(SETTLE);
+    assert_eq!(next, h.app.image_rect.unwrap(), "zoomed at once");
+    click_photo_back(&mut h);
+    // the user chooses to keep motion: the system no longer decides
+    let r = run(&mut h, "view.reduceMotion", json!({"on": false}));
+    assert_eq!((r["on"].clone(), r["followsSystem"].clone()), (json!(false), json!(false)));
+    click_photo(&mut h);
+    h.step();
+    let next = h.app.image_rect.unwrap();
+    h.settle(SETTLE);
+    assert_ne!(next, h.app.image_rect.unwrap(), "animates although the system says reduce");
+    click_photo_back(&mut h);
+    // back to following
+    let r = run(&mut h, "view.reduceMotion", json!({"follow": true}));
+    assert_eq!((r["on"].clone(), r["followsSystem"].clone()), (json!(true), json!(true)));
+    assert_eq!(h.app.ui.settings.reduce_motion, None);
+    // the system switches while the app runs: noticed within about a second
+    system.set(Some(false));
+    for _ in 0..90 {
+        h.step();
+    }
+    assert!(!h.app.reduce_motion());
+    assert_eq!(h.view.ctx.global_style().animation_time, 0.08);
+    // no params toggles what is in effect
+    let r = run(&mut h, "view.reduceMotion", json!({}));
+    assert_eq!((r["on"].clone(), r["followsSystem"].clone()), (json!(true), json!(false)));
+}
+
+fn click_photo_back(h: &mut Headless) {
+    let pos = h.app.image_rect.expect("image").center();
+    h.app.synthetic.extend([
+        egui::Event::PointerMoved(pos),
+        egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() },
+        egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() },
+    ]);
+    while !h.app.synthetic.is_empty() {
+        h.step();
+    }
+    h.settle(SETTLE);
+    assert_eq!(h.app.ui.zoom, Zoom::Fit, "back at Fit");
 }

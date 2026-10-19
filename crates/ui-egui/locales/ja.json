@@ -2427,5 +2427,5 @@
   "Get Started": "始める",
   "Reduce Motion": "動きを減らす",
   "Reduce motion": "動きを減らす",
-  "Turns off zoom and spinner animations. Fades stay.": "ズームとスピナーのアニメーションをオフにします。フェードはそのまま残ります。"
+  "Turns off zoom and spinner animations. Fades stay. Follows the system's Reduce Motion until you change it here.": "ズームとスピナーのアニメーションをオフにします。フェードはそのまま残ります。ここで変更するまで、システムの「視差効果を減らす」設定に従います。"
 }

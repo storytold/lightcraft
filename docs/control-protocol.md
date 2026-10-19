@@ -153,7 +153,7 @@ The camera's focus point ([focus-points.md](focus-points.md)) is `meta.focus` in
 x1, y1}, mode?, area?, tracking?}`, normalized to the upright photo (absent when the file records none).
 `view.focusPoint {on?}` shows it over the photo (no params toggles; replies `{on}`), and `view.zoomToFocus {on?}`
 (on by default) makes `view.zoomToggle` zoom in centred on it, replying `{focus: [x, y]}` (the `pan` it set).
-`view.reduceMotion {on?}` (off by default; no params toggles; replies `{on}`) is Settings ▸ Interface ▸ Reduce motion: the
+`view.reduceMotion {on?, follow?}` (follows macOS Reduce Motion until set; `{on}` sets it, `{follow: true}` goes back to the system, no params toggles what is in effect; replies `{on, followsSystem}`) is Settings ▸ Interface ▸ Reduce motion: the
 click-zoom and `view.zoomToggle` land at once, egui's widget easing and the spinners stop, and the activity bar's sweep
 stands still; fades (toasts, the slideshow) stay.
 `photo.readFocusPoints {ids?, wait?}` reads the point for photos imported before it was read, from a few KB of each

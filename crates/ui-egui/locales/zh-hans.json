@@ -2428,5 +2428,5 @@
   "Get Started": "开始使用",
   "Reduce Motion": "减少动态效果",
   "Reduce motion": "减少动态效果",
-  "Turns off zoom and spinner animations. Fades stay.": "关闭缩放和旋转指示器的动画。淡入淡出效果保留。"
+  "Turns off zoom and spinner animations. Fades stay. Follows the system's Reduce Motion until you change it here.": "关闭缩放和旋转指示器的动画。淡入淡出效果保留。在你于此处更改之前，跟随系统的“减弱动态效果”设置。"
 }

@@ -2635,5 +2635,5 @@
   "Get Started": "Начать",
   "Reduce Motion": "Уменьшить движение",
   "Reduce motion": "Уменьшить движение",
-  "Turns off zoom and spinner animations. Fades stay.": "Отключает анимацию масштабирования и индикаторов работы. Плавные затухания остаются."
+  "Turns off zoom and spinner animations. Fades stay. Follows the system's Reduce Motion until you change it here.": "Отключает анимацию масштабирования и индикаторов работы. Плавные затухания остаются. Пока вы не измените это здесь, действует системная настройка «Уменьшение движения»."
 }
