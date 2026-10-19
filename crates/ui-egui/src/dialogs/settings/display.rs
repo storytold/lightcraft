@@ -78,6 +78,9 @@ pub(super) fn display_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens
 pub(super) fn interface_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let system = app.system_theme(ui.ctx());
     appearance(ui, t, &mut app.ui.settings, system);
+    let r = ui.checkbox(&mut app.ui.settings.reduce_motion, crate::i18n::tr("Reduce motion"));
+    register(ui, "check:settings.reduceMotion".to_string(), r.rect);
+    r.on_hover_text(crate::i18n::tr("Turns off zoom and spinner animations. Fades stay."));
     heading(ui, t, crate::i18n::tr("Filmstrip"));
     check(ui, "settings.filmNames", &mut app.ui.settings.film_names, "Show file names");
     check(ui, "settings.filmBadges", &mut app.ui.settings.film_badges, "Show ratings, flags and edit badges");

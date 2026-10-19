@@ -2632,5 +2632,8 @@
   "Start the app with --control 7980 (or LIGHTCRAFT_CONTROL_PORT), then lightcraft-cli mcp --connect attaches one to it.": "Запустите приложение с --control 7980 (или LIGHTCRAFT_CONTROL_PORT), и команда lightcraft-cli mcp --connect подключит к нему одного агента.",
   "Welcome": "Добро пожаловать",
   "Next": "Далее",
-  "Get Started": "Начать"
+  "Get Started": "Начать",
+  "Reduce Motion": "Уменьшить движение",
+  "Reduce motion": "Уменьшить движение",
+  "Turns off zoom and spinner animations. Fades stay.": "Отключает анимацию масштабирования и индикаторов работы. Плавные затухания остаются."
 }

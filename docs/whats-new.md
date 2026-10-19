@@ -38,6 +38,13 @@
   process 5: new photos (and Reset) get it, photos you already edited keep their look until you choose Photo ▸ Update
   to Current Process. See [process versions](process-versions.md).
 
+### Reduce motion
+- **Settings ▸ Interface ▸ Reduce motion** (also View ▸ Reduce Motion, `view.reduceMotion`) turns off the animations
+  that move or turn: a click on the photo or Z zooms at once instead of easing in, the interface's own small easing
+  stops, the Synchronize Folder spinner becomes a still dot, and the activity panel's sweeping bar becomes a still
+  segment. Fades that tell you something changed (toasts, the slideshow's crossfade and its control bar) stay. Off by
+  default; pinch and scroll zoom were never animated.
+
 ## 2026-11-02
 
 ### The Windows title bar is readable from the moment the window opens

@@ -2425,5 +2425,8 @@
   "Start the app with --control 7980 (or LIGHTCRAFT_CONTROL_PORT), then lightcraft-cli mcp --connect attaches one to it.": "先以 --control 7980 (或 LIGHTCRAFT_CONTROL_PORT) 启动应用，lightcraft-cli mcp --connect 即可将一个智能体接入其中。",
   "Welcome": "欢迎",
   "Next": "下一步",
-  "Get Started": "开始使用"
+  "Get Started": "开始使用",
+  "Reduce Motion": "减少动态效果",
+  "Reduce motion": "减少动态效果",
+  "Turns off zoom and spinner animations. Fades stay.": "关闭缩放和旋转指示器的动画。淡入淡出效果保留。"
 }
