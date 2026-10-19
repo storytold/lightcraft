@@ -85,7 +85,7 @@ fn rawnind_linear() -> Known {
         space: LinearSpace::LinRec2020,
         tile: 512,
         overlap: 64,
-        gain: Gain::MatchMean { nominal: 1.0, max_deviation: 0.15 },
+        gain: Gain::MatchMean { nominal: -3.184e9, max_deviation: 0.15 },
     };
     let download = Download {
         id: manifest.id.clone(),
