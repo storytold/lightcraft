@@ -388,6 +388,20 @@ fn view_tasks_opens_and_closes_the_list() {
 }
 
 #[test]
+fn two_view_tasks_toggles_in_one_frame_end_where_they_began() {
+    let mut h = demo();
+    open_list(&mut h);
+    let first = crate::menus::run_ui_command(&mut h.app, "view.tasks", &json!({})).unwrap().unwrap();
+    let second = crate::menus::run_ui_command(&mut h.app, "view.tasks", &json!({})).unwrap().unwrap();
+    assert_eq!(first["tasks"], false);
+    assert_eq!(second["tasks"], true);
+    for _ in 0..4 {
+        h.step();
+    }
+    assert!(has(&h, "activity:list"));
+}
+
+#[test]
 fn stale_cancel_is_harmless() {
     let mut h = demo();
     let g = h.app.session.activity.start("export", "Exporting", Cancel::Yes);
