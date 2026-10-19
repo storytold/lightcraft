@@ -140,7 +140,7 @@ fn folder_worker_keeps_frames_running_and_delivers_failure_before_retry() {
     release.send(Err("opening folder failed: exit status: 23".into())).unwrap();
     assert!(h.step_until(T, |h| h.app.tasks.is_empty()));
     assert!(h.app.session.activity.list().is_empty(), "completion retires the task before retry");
-    assert_eq!(h.app.ui.toast.as_ref().map(|t| t.0.as_str()), Some("opening folder failed: exit status: 23"));
+    assert_eq!(h.app.ui.toast.as_ref().map(|t| t.text.as_str()), Some("opening folder failed: exit status: 23"));
     assert_eq!(h.app.ui.dialog, pending);
     assert!(!h.app.session.segmenter.download_status().running);
 

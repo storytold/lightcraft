@@ -440,7 +440,7 @@ fn remove(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                         },
                     );
                 }
-                Err(e) => app.toast(ui.ctx(), e),
+                Err(e) => app.toast_error(ui.ctx(), e),
             }
         }
         ui.add_space(4.0);
@@ -759,7 +759,7 @@ fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             && text.trim() != gps
             && let Err(e) = app.run("photo.setMeta", json!({"gps": text.trim()}))
         {
-            app.toast(ui.ctx(), e);
+            app.toast_error(ui.ctx(), e);
         }
         if let Some((la, lo)) = m.gps {
             let pretty = format!("{:.5}° {}, {:.5}° {}", la.abs(), if la >= 0.0 { "N" } else { "S" }, lo.abs(), if lo >= 0.0 { "E" } else { "W" });
@@ -771,7 +771,7 @@ fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 {
                     let url = format!("https://www.openstreetmap.org/?mlat={la:.6}&mlon={lo:.6}#map=15/{la:.6}/{lo:.6}");
                     if let Err(e) = crate::links::open(app, &url) {
-                        app.toast(ui.ctx(), e);
+                        app.toast_error(ui.ctx(), e);
                     }
                 }
             });

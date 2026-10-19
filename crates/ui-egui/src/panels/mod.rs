@@ -78,29 +78,35 @@ pub fn resizable_side(
     Some(w.round().clamp(limits.min, max))
 }
 
-/// The HUD toast at the bottom centre of the canvas.
+/// The HUD toast at the bottom centre of the canvas. It fades in, holds while the pointer rests
+/// on it, and fades out; it only reads the pointer position and never takes a click.
 pub fn toast(app: &mut LightcraftApp, ctx: &egui::Context) {
+    use crate::toast::{HOVER_HOLD, toast_alpha};
     let now = ctx.input(|i| i.time);
-    let Some((text, until, label)) = app.ui.toast.clone() else { return };
-    if now > until {
+    let Some(shown) = app.ui.toast.as_mut() else { return };
+    if now > shown.until {
         app.ui.toast = None;
         return;
     }
     let Some(canvas) = app.canvas_rect else { return };
     let t = Tokens::get(ctx);
-    let fade = ((until - now) / 0.25).clamp(0.0, 1.0) as f32;
     let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("toast")));
     // long messages (a save warning, the web build's notices) wrap within the canvas
     let wrap = (canvas.width() - 80.0).clamp(200.0, 720.0);
-    let (background, foreground) = label.map(crate::theme::label_toast_colors).unwrap_or((egui::Color32::from_black_alpha(200), t.text));
-    let foreground = foreground.gamma_multiply(fade);
-    let galley = painter.layout(text, t.font(14.0), foreground, wrap);
+    let (background, foreground) = shown.label.map(crate::theme::label_toast_colors).unwrap_or((egui::Color32::from_black_alpha(200), t.text));
+    let galley = painter.layout(shown.text.clone(), t.font(14.0), foreground, wrap);
     let size = vec2(galley.size().x + 40.0, (galley.size().y + 22.0).max(40.0));
     // a slideshow's playback controls sit at the bottom: the toast goes to the top there, clear of them
     let y = if app.ui.slideshow.is_some() { canvas.top() + 60.0 } else { canvas.bottom() - 60.0 };
     let r = Rect::from_center_size(pos2(canvas.center().x, y), size);
-    painter.rect_filled(r, 6.0, background.gamma_multiply(fade));
-    painter.galley(r.center() - galley.size() / 2.0, galley, foreground);
+    // while the pointer rests on it, the clock stops: it stays at least 1.5 s after the pointer leaves
+    if ctx.pointer_hover_pos().is_some_and(|p| r.contains(p)) {
+        shown.until = shown.until.max(now + HOVER_HOLD);
+    }
+    let alpha = toast_alpha(now, shown.shown_at, shown.until);
+    let galley = painter.layout(shown.text.clone(), t.font(14.0), foreground.gamma_multiply(alpha), wrap);
+    painter.rect_filled(r, 6.0, background.gamma_multiply(alpha));
+    painter.galley(r.center() - galley.size() / 2.0, galley, foreground.gamma_multiply(alpha));
     ctx.request_repaint_after(std::time::Duration::from_millis(30));
 }
 

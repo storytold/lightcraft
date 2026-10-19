@@ -98,7 +98,7 @@ fn confirm_above(app: &mut LightcraftApp, ctx: &egui::Context, name: &str, more:
     if !faces.is_empty()
         && let Err(error) = app.run("faces.nameFaces", json!({"faces": faces, "name": name}))
     {
-        app.toast(ctx, error);
+        app.toast_error(ctx, error);
     }
 }
 

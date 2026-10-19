@@ -520,7 +520,7 @@ impl WebApp {
         // a dialog is on screen (the card said so while the files hovered): nothing is read or imported
         // (files read from an earlier drop still finish below)
         if !dropped.is_empty() && self.app.ui.dialog.is_some() {
-            self.app.toast(ctx, lightcraft_ui_egui::i18n::tr("Close the open dialog, then drop the files again"));
+            self.app.toast_error(ctx, lightcraft_ui_egui::i18n::tr("Close the open dialog, then drop the files again"));
             return;
         }
         for f in dropped {
@@ -546,7 +546,7 @@ impl WebApp {
                 }
                 Err(e) => {
                     log::warn!("import: {e}");
-                    self.app.toast(ctx, lightcraft_ui_egui::i18n::dropped_import_failed(&e));
+                    self.app.toast_error(ctx, lightcraft_ui_egui::i18n::dropped_import_failed(&e));
                 }
             }
         }
@@ -680,7 +680,7 @@ impl eframe::App for WebApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         for text in safety::take_notices() {
             let now = ctx.input(|i| i.time);
-            self.app.ui.toast = Some((text, now + NOTICE_SECS, None));
+            self.app.ui.show_toast(now, text, NOTICE_SECS, None);
         }
         self.run_inbox();
         self.import_dropped(ctx);

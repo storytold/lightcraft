@@ -985,7 +985,7 @@ fn folder_header(app: &mut LightcraftApp, ui: &mut egui::Ui, b: &lightcraft_engi
                     let n = local.len();
                     match app.run("photo.addToLibrary", json!({"ids": local})) {
                         Ok(_) => app.toast(ui.ctx(), crate::i18n::tr_format!("Added {n} photo{} to My Photos", if n == 1 { "" } else { "s" }, n = n)),
-                        Err(e) => app.toast(ui.ctx(), e),
+                        Err(e) => app.toast_error(ui.ctx(), e),
                     }
                 }
             }
@@ -1242,7 +1242,7 @@ pub fn context_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                     crate::i18n::tr_format!("{n} similar photo{} · View ▸ Clear Filters to see all", if n == 1 { "" } else { "s" }, n = n),
                 );
             }
-            Err(e) => app.toast(ui.ctx(), e),
+            Err(e) => app.toast_error(ui.ctx(), e),
         }
     }
     let live = super::compare::live(app, id);
@@ -1284,7 +1284,7 @@ pub fn context_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 if b.clicked() {
                     match app.run("album.addPhotos", json!({"id": aid})) {
                         Ok(r) => toast_skipped(app, ui.ctx(), &r),
-                        Err(e) => app.toast(ui.ctx(), e),
+                        Err(e) => app.toast_error(ui.ctx(), e),
                     }
                 }
             }
@@ -1327,7 +1327,7 @@ pub fn context_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         {
             match app.run("photo.moveToFolder", json!({"folder": into})) {
                 Ok(r) => app.toast(ui.ctx(), crate::i18n::tr_format!("Moved {} photo(s)", r["moved"])),
-                Err(e) => app.toast(ui.ctx(), e),
+                Err(e) => app.toast_error(ui.ctx(), e),
             }
         }
     }
@@ -1420,7 +1420,7 @@ pub fn context_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                         let n = r["files"].as_array().map_or(0, Vec::len);
                         app.toast(ui.ctx(), crate::i18n::tr_format!("Exported {n} photo{}", if n == 1 { "" } else { "s" }, n = n));
                     }
-                    Err(e) => app.toast(ui.ctx(), e),
+                    Err(e) => app.toast_error(ui.ctx(), e),
                 }
             }
         }

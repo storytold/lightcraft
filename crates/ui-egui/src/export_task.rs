@@ -220,7 +220,7 @@ pub fn poll_photos(app: &mut LightcraftApp, ctx: &egui::Context) {
             let outcome = job.json();
             let msg = apple_photos_note(&outcome);
             if outcome.get("error").is_some() {
-                app.toast_for(ctx, msg, 15.0);
+                app.toast_error_for(ctx, msg, 15.0);
             } else {
                 app.toast(ctx, msg);
             }
@@ -242,6 +242,8 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
             app.export = None;
             // Photos refused (permission, not installed…): leave the way out on screen longer
             let photos_failed = matches!(&r, Ok((_, Some(p), _)) if p.get("error").is_some());
+            let errored = r.is_err();
+            let mut had_failures = false;
             let msg = match r {
                 Ok((files, photos, _)) => {
                     let sheet = files.first().filter(|f| f["contactSheet"] == true);
@@ -259,6 +261,7 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
                     if skipped > 0 {
                         m += &crate::i18n::tr_format!(" · {skipped} skipped (file exists)", skipped = skipped);
                     }
+                    had_failures = !failed.is_empty();
                     if let Some(first) = failed.first() {
                         m += &crate::i18n::tr_format!(" · {} failed: {}", failed.len(), first["error"].as_str().unwrap_or("error"));
                     }
@@ -275,7 +278,9 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
                 Err(e) => e,
             };
             if photos_failed {
-                app.toast_for(ctx, msg, 15.0);
+                app.toast_error_for(ctx, msg, 15.0);
+            } else if errored || had_failures {
+                app.toast_error(ctx, msg);
             } else {
                 app.toast(ctx, msg);
             }
@@ -287,7 +292,7 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
         }
         Err(std::sync::mpsc::TryRecvError::Disconnected) => {
             app.export = None;
-            app.toast(ctx, crate::i18n::tr("Export stopped unexpectedly"));
+            app.toast_error(ctx, crate::i18n::tr("Export stopped unexpectedly"));
         }
     }
 }

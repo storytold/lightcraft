@@ -120,7 +120,7 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
         Err(_) => {
             app.sync = None;
             app.ui.dialog = None;
-            app.toast(ctx, crate::i18n::tr("Scan failed"));
+            app.toast_error(ctx, crate::i18n::tr("Scan failed"));
             return;
         }
     };
@@ -386,6 +386,6 @@ pub fn poll_run(app: &mut LightcraftApp, ctx: &egui::Context) {
     if not_saved.is_empty() && !crashed {
         app.toast(ctx, format!("{name}: {text}"));
     } else {
-        app.toast_for(ctx, format!("{name}: {text}"), 12.0);
+        app.toast_error_for(ctx, format!("{name}: {text}"), 12.0);
     }
 }

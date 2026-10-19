@@ -326,6 +326,6 @@ fn photos_dropped_with_no_library_open_wait_for_one() {
     // a preset belongs to a library: refused, not imported into the session the library replaces
     h.app.ui.toast = None;
     drop_files(&mut h, &[dir.path("warm.lcpreset")], false);
-    let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+    let toast = h.app.ui.toast.as_ref().map(|t| t.text.clone()).unwrap_or_default();
     assert!(toast.contains("drop the presets again"), "{toast}");
 }

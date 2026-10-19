@@ -50,6 +50,7 @@ pub mod tasks;
 pub mod text_field;
 pub mod theme;
 pub mod titlebar;
+pub mod toast;
 pub mod widgets;
 pub mod window_place;
 
@@ -204,6 +205,8 @@ mod tests_temp_slider;
 #[cfg(test)]
 mod tests_titlebar;
 #[cfg(test)]
+mod tests_toasts;
+#[cfg(test)]
 mod tests_tool_overlay;
 #[cfg(test)]
 mod tests_unsaved;
@@ -226,6 +229,8 @@ pub use control::{ControlRequest, ControlResponse};
 pub use state::UiState;
 
 const TOAST_SECONDS: f64 = 1.4;
+/// How long an error toast stays at least.
+const ERROR_TOAST_SECONDS: f64 = 6.0;
 /// The `path` of a display profile read from the screen rather than chosen as a file.
 pub const SCREEN_PROFILE: &str = "screen";
 
@@ -713,7 +718,7 @@ impl LightcraftApp {
             if let Some(message) = completed {
                 // Menu clicks can arrive before the next frame updates last_time.
                 let now = self.tasks.repaint.as_ref().map(|ctx| ctx.input(|i| i.time)).unwrap_or(self.last_time);
-                self.ui.toast = Some((message, now + TOAST_SECONDS, None));
+                self.ui.show_toast(now, message, TOAST_SECONDS, None);
             }
         }
         if r.is_ok() && id == "photo.label" {
@@ -728,7 +733,7 @@ impl LightcraftApp {
             };
             // Native menu clicks can arrive before logic() updates last_time after an idle gap.
             let now = self.tasks.repaint.as_ref().map(|ctx| ctx.input(|i| i.time)).unwrap_or(self.last_time);
-            self.ui.toast = Some((text, now + TOAST_SECONDS, label));
+            self.ui.show_toast(now, text, TOAST_SECONDS, label);
         }
         match &r {
             Err(e) => {
@@ -823,7 +828,11 @@ impl LightcraftApp {
                 if failed > 0 {
                     msg.push_str(&crate::i18n::tr_format!(" · {failed} couldn't be rendered", failed = failed));
                 }
-                self.toast(ctx, msg);
+                if failed > 0 {
+                    self.toast_error(ctx, msg);
+                } else {
+                    self.toast(ctx, msg);
+                }
             }
         } else {
             // The activity stack shows the run while it works; poll for the end.
@@ -838,17 +847,15 @@ impl LightcraftApp {
         match (unsaved, self.ui.unsaved_seen) {
             (Some((n, e)), false) => {
                 self.ui.unsaved_seen = true;
-                let t = ctx.input(|i| i.time);
-                self.ui.toast = Some((
+                self.toast_error(
+                    ctx,
                     crate::i18n::tr_format!(
                         "{n} change{} saved in memory but not written to disk: {e} — LightCraft will retry",
                         if n == 1 { "" } else { "s" },
                         n = n,
                         e = e
                     ),
-                    t + 6.0,
-                    None,
-                ));
+                );
             }
             (None, true) => {
                 self.ui.unsaved_seen = false;
@@ -878,7 +885,7 @@ impl LightcraftApp {
     /// A toast that stays `secs` seconds (messages that say where to look or what to do next).
     pub fn toast_for(&mut self, ctx: &egui::Context, text: impl Into<String>, secs: f64) {
         let t = ctx.input(|i| i.time);
-        self.ui.toast = Some((text.into(), t + secs, None));
+        self.ui.show_toast(t, text.into(), secs, None);
     }
 
     /// Reverse geocoding: say how a place-names download ended (a failure stays readable, with what to do).
@@ -965,8 +972,14 @@ impl LightcraftApp {
 
     /// A toast for an error the user has to read and act on (stays 6 s).
     pub fn toast_error(&mut self, ctx: &egui::Context, text: impl Into<String>) {
+        self.toast_error_for(ctx, text, ERROR_TOAST_SECONDS);
+    }
+
+    /// An error toast that stays at least `secs` seconds (never under the 6 s of [`Self::toast_error`]):
+    /// a failure with a way out to read, such as a batch's list of files that failed.
+    pub fn toast_error_for(&mut self, ctx: &egui::Context, text: impl Into<String>, secs: f64) {
         let t = ctx.input(|i| i.time);
-        self.ui.toast = Some((text.into(), t + 6.0, None));
+        self.ui.show_toast(t, text.into(), secs.max(ERROR_TOAST_SECONDS), None);
     }
 
     fn drain_control(&mut self, ctx: &egui::Context) {
@@ -1262,7 +1275,7 @@ impl LightcraftApp {
             }
             let waiting = self.session.unsaved_sidecars();
             if waiting > 0 && self.ui.sidecars_waiting == 0 {
-                self.toast_for(
+                self.toast_error_for(
                     ctx,
                     crate::i18n::tr_format!(
                         "The XMP sidecars of {n} photos couldn't be written (is their folder offline?). LightCraft keeps trying.",
@@ -1310,19 +1323,19 @@ impl LightcraftApp {
         }
         // a dialog is on screen: the review would replace it, losing what it holds
         if self.ui.dialog.is_some() {
-            self.toast(ctx, crate::i18n::tr("Close the open dialog, then drop the files again"));
+            self.toast_error(ctx, crate::i18n::tr("Close the open dialog, then drop the files again"));
             return;
         }
         let drop = drop_overlay::classify(dropped);
         if let Some(model) = drop.models.first()
             && let Err(e) = panels::faces::open_dialog(self, model)
         {
-            self.toast(ctx, e);
+            self.toast_error(ctx, e);
         }
         if !drop.presets.is_empty() {
             // presets live in a library: with none open they would go with the session it replaces
             if panels::library_problem::holds_drops(self) {
-                self.toast(ctx, crate::i18n::tr("Open a library first, then drop the presets again"));
+                self.toast_error(ctx, crate::i18n::tr("Open a library first, then drop the presets again"));
             } else {
                 let _ = self.run("file.importPresets", serde_json::json!({"paths": drop.presets}));
             }
@@ -1333,11 +1346,11 @@ impl LightcraftApp {
         // no library open yet (the launch list, a library that failed to open): they wait for one
         let Some(photos) = panels::library_problem::hold_dropped(self, ctx, drop.photos) else { return };
         if self.lightroom.is_some() {
-            self.toast(ctx, crate::i18n::tr("Finish Lightroom catalog import before adding photos"));
+            self.toast_error(ctx, crate::i18n::tr("Finish Lightroom catalog import before adding photos"));
             return;
         }
         if import::running(self) {
-            self.toast(ctx, crate::i18n::tr("An import is running"));
+            self.toast_error(ctx, crate::i18n::tr("An import is running"));
             return;
         }
         let started = if self.ui.settings.import_dropped_directly {
@@ -1347,7 +1360,7 @@ impl LightcraftApp {
             import::open(self, photos).map(|_| ())
         };
         if let Err(e) = started {
-            self.toast(ctx, e);
+            self.toast_error(ctx, e);
         }
     }
 

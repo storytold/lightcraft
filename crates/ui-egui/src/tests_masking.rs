@@ -1209,7 +1209,7 @@ fn edit_in_reports_an_editor_that_wont_open_without_failing() {
     assert_eq!(r["ok"], true, "{r}");
     assert_eq!(r["result"]["failed"], "the editor quit", "{r}");
     assert_eq!(h.app.session.catalog.len(), n + 1, "the copy stays in the library");
-    let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+    let toast = h.app.ui.toast.as_ref().map(|t| t.text.clone()).unwrap_or_default();
     assert!(toast.contains("the editor quit"), "{toast}");
     let _ = std::fs::remove_dir_all(&dir);
     h.settle(SETTLE);
@@ -1248,7 +1248,7 @@ fn edit_in_photocraft_opens_a_psd_copy() {
     assert_eq!(r["ok"], false, "{r}");
     assert_eq!((h.app.session.catalog.len(), opened.lock().unwrap().len()), (n, 0), "no copy without PhotoCraft");
     // and it says so, however it was asked for (menu, shortcut, context menu)
-    let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+    let toast = h.app.ui.toast.as_ref().map(|t| t.text.clone()).unwrap_or_default();
     assert!(!toast.is_empty(), "the missing editor is reported");
     h.app.ui.toast = None;
     let r = h.app.run("photo.editInPhotoCraft", json!({}));

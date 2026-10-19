@@ -272,7 +272,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                         {
                             match app.run("preset.update", json!({"id": pid})) {
                                 Ok(_) => app.toast(ui.ctx(), crate::i18n::tr_format!("Updated “{name}”", name = name)),
-                                Err(e) => app.toast(ui.ctx(), e),
+                                Err(e) => app.toast_error(ui.ctx(), e),
                             }
                         }
                         if ui.button(crate::i18n::tr("Rename…")).clicked() {

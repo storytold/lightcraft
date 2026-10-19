@@ -52,6 +52,7 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
         return;
     }
     app.slideshow_export_reported = true;
+    let mut failed = false;
     let msg = match run.result() {
         Some(Ok(r)) => {
             let what = match r["format"].as_str() {
@@ -65,10 +66,20 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
             }
             m
         }
-        Some(Err(e)) => e,
-        None => crate::i18n::tr("Export stopped unexpectedly").to_string(),
+        Some(Err(e)) => {
+            failed = true;
+            e
+        }
+        None => {
+            failed = true;
+            crate::i18n::tr("Export stopped unexpectedly").to_string()
+        }
     };
-    app.toast(ctx, msg);
+    if failed {
+        app.toast_error(ctx, msg);
+    } else {
+        app.toast(ctx, msg);
+    }
 }
 
 #[cfg(test)]
@@ -113,7 +124,7 @@ mod tests {
         let run = h.app.session.slideshow_export.clone().unwrap();
         let mut r = run.result().unwrap().unwrap();
         r["sawRow"] = json!(seen_row);
-        r["toast"] = json!(h.app.ui.toast.as_ref().map(|t| t.0.clone()));
+        r["toast"] = json!(h.app.ui.toast.as_ref().map(|t| t.text.clone()));
         r
     }
 

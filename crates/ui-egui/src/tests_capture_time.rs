@@ -22,7 +22,7 @@ fn painted(h: &Headless, part: &str) -> bool {
 }
 
 fn toast(h: &Headless) -> String {
-    h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default()
+    h.app.ui.toast.as_ref().map(|t| t.text.clone()).unwrap_or_default()
 }
 
 /// Select `ids` with `active` and open Edit Capture Time.

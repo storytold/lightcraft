@@ -478,7 +478,7 @@ fn auto_straighten_says_when_it_finds_nothing() {
     let r = h.request("ui.clickWidget", json!({"id": "button:straightenAuto"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
-    assert!(h.app.ui.toast.as_ref().is_some_and(|t| t.0 == "No horizon or vertical lines to level by"), "{:?}", h.app.ui.toast);
+    assert!(h.app.ui.toast.as_ref().is_some_and(|t| t.text == "No horizon or vertical lines to level by"), "{:?}", h.app.ui.toast);
     assert_eq!(angle(&h), 0.0);
     let _ = std::fs::remove_dir_all(dir);
 }
