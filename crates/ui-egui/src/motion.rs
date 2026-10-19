@@ -7,7 +7,7 @@
 //! [`LightcraftApp::sync_theme`](crate::LightcraftApp::sync_theme) stores the setting in the egui
 //! context every frame ([`sync`]), so drawing code needs only the `Context`, not the app.
 
-use egui::{Context, Id, Sense, Ui, vec2};
+use egui::{Context, Id};
 
 /// egui's widget easing time when motion is on.
 const ANIMATION_TIME: f32 = 0.08;
@@ -41,16 +41,4 @@ pub fn animation_time(reduced: bool) -> f32 {
 /// How long a click-zoom tween runs: none when reduced.
 pub fn zoom_tween_seconds(ctx: &Context) -> f32 {
     if reduced(ctx) { 0.0 } else { ZOOM_TWEEN_SECONDS }
-}
-
-/// A "working" indicator: egui's turning spinner, or with reduced motion a still dot of the same size
-/// (so the layout doesn't move).
-pub fn spinner(ui: &mut Ui) {
-    if !reduced(ui.ctx()) {
-        ui.spinner();
-        return;
-    }
-    let side = ui.spacing().interact_size.y;
-    let (rect, _) = ui.allocate_exact_size(vec2(side, side), Sense::hover());
-    ui.painter().circle_filled(rect.center(), side * 0.18, ui.visuals().text_color());
 }
