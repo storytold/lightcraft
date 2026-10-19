@@ -141,6 +141,7 @@ fn reused_im2col_clears_all_edge_padding_between_images() {
     }
 }
 
+/// Helper generating and reading a synthetic linear RGB U-Net ONNX model for CPU testing.
 fn linear_rgb_net(tile: usize, ch: u64, depth: usize, seed: u64) -> Net {
     let p = std::env::temp_dir().join(format!("lc-purecpu-lin-{}-{tile}-{ch}-{depth}-{seed}.onnx", std::process::id()));
     std::fs::write(&p, synthetic::unet_linear_rgb_onnx(tile as u64, ch, depth, seed)).unwrap();
@@ -149,6 +150,7 @@ fn linear_rgb_net(tile: usize, ch: u64, depth: usize, seed: u64) -> Net {
     n
 }
 
+/// Tests that optimized CPU NetRunner produces equivalent results to the scalar reference runner on linear RGB nets.
 #[test]
 fn linear_rgb_operators_match_scalar_on_random_nets() {
     for (t, ch, d) in [(1, 3, 0), (4, 4, 1), (12, 6, 1), (32, 8, 2)] {

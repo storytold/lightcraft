@@ -121,6 +121,7 @@ impl Builder {
         self.conv_as(src, cin, cout, k, leaky, &out)
     }
 
+    /// `Conv` with explicit output node name; returns the resulting tensor name.
     fn conv_as(&mut self, src: &str, cin: u64, cout: u64, k: u64, leaky: bool, out_name: &str) -> String {
         let (w, b) = (self.name("w"), self.name("b"));
         let w = self.weights(&w, &[cout, cin, k, k], (cin * k * k) as usize);
@@ -140,6 +141,7 @@ impl Builder {
         act
     }
 
+    /// `MaxPool` 2×2 with stride 2.
     fn pool(&mut self, src: &str) -> String {
         let out = self.name("pool");
         self.nodes.push(node(
@@ -151,6 +153,7 @@ impl Builder {
         out
     }
 
+    /// `ConvTranspose` 2×2 with stride 2.
     fn up(&mut self, src: &str, cin: u64, cout: u64) -> String {
         let (w, b, out) = (self.name("uw"), self.name("ub"), self.name("up"));
         let w = self.weights(&w, &[cin, cout, 2, 2], (cin * 4) as usize);
@@ -164,6 +167,7 @@ impl Builder {
         out
     }
 
+    /// `Concat` along channel axis 1.
     fn concat(&mut self, a: &str, b: &str) -> String {
         let out = self.name("cat");
         self.nodes.push(node("Concat", &[a, b], &out, &[("axis", A::Int(1))]));

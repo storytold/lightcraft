@@ -211,10 +211,7 @@ pub(crate) fn make_product(spec: &JobSpec, progress: Option<&Progress>) -> Resul
                 if raw.cpp != 1 && raw.cpp != 3 {
                     return Err(MakeError::Unsupported("only raw files with 1 or 3 samples per pixel can be denoised".into()));
                 }
-                let n = raw.normalized().map_err(|e| MakeError::Failed(e.to_string()))?;
-                let mut camera_rgb = lightcraft_raw::demosaic(&n, lightcraft_raw::Method::Ahd);
-                drop(n);
-                let color_transform = match spec.manifest.space {
+                let color_transform_info = match spec.manifest.space {
                     LinearSpace::CameraRgb => None,
                     LinearSpace::LinRec2020 => {
                         let as_shot_xy = lightcraft_raw::color::as_shot_white_xy(&raw);
@@ -223,6 +220,19 @@ pub(crate) fn make_product(spec: &JobSpec, progress: Option<&Progress>) -> Resul
                             return Err(MakeError::Failed("invalid camera white balance multipliers".into()));
                         }
                         let inv_matrix = matrix.inverse().ok_or_else(|| MakeError::Failed("camera color matrix is not invertible".into()))?;
+                        Some((matrix, inv_matrix, wb))
+                    }
+                };
+                let n = raw.normalized().map_err(|e| MakeError::Failed(e.to_string()))?;
+                drop(raw);
+                drop(_held);
+                let pixels = (n.width as usize).saturating_mul(n.height as usize);
+                let _demosaic_permit = crate::memory::work_gate().acquire(pixels.saturating_mul(16).saturating_add(16 * 1024 * 1024));
+                let mut camera_rgb = lightcraft_raw::demosaic(&n, lightcraft_raw::Method::Ahd);
+                drop(n);
+                let color_transform = match color_transform_info {
+                    None => None,
+                    Some((matrix, inv_matrix, wb)) => {
                         let m = matrix.to_f32();
                         camera_rgb.data.par_iter_mut().for_each(|px| {
                             let balanced = [px[0] * wb[0], px[1] * wb[1], px[2] * wb[2]];
@@ -234,7 +244,6 @@ pub(crate) fn make_product(spec: &JobSpec, progress: Option<&Progress>) -> Resul
                         Some(LinearRec2020Transform { inv_matrix, wb })
                     }
                 };
-                drop(raw);
                 DenoiseInput::LinearRgb { camera_rgb, color_transform }
             }
         }

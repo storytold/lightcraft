@@ -324,6 +324,7 @@ mod tests {
         let _ = std::fs::remove_file(p);
     }
 
+    /// Verifies that a linear RGB U-Net with 3-channel input and output is parsed and passes shape checks.
     #[test]
     fn a_linear_rgb_u_net_is_read_and_fits_tile() {
         let tile = 64usize;

@@ -364,6 +364,7 @@ mod tests {
         let _ = std::fs::remove_file(p);
     }
 
+    /// Verifies that a linear RGB model loads into CpuRunner, executes tiles, and passes runtime self-test checks.
     #[test]
     fn linear_rgb_model_loads_runs_and_passes_self_test() {
         let mut m = manifest(64, 1.0);

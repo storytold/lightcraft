@@ -113,7 +113,7 @@ pub fn denoise_bayer(
         return Err(Error::Input("the tile size and overlap do not fit".into()));
     }
     if let Gain::MatchMean { nominal, max_deviation } = p.gain
-        && !(nominal.is_finite() && (1e-6..=1e12).contains(&nominal.abs()) && max_deviation.is_finite() && (0.0..=0.5).contains(&max_deviation))
+        && !(nominal.is_finite() && (1e-6..=1e12).contains(&nominal) && max_deviation.is_finite() && (0.0..=0.5).contains(&max_deviation))
     {
         return Err(Error::Input("the model gain is not finite or within its supported range".into()));
     }
@@ -995,11 +995,13 @@ mod tests {
         scale: f32,
     }
     impl TileRunner for MockLinearRgb {
+        /// Linear RGB mock runner multiplying all input samples by a constant scale factor.
         fn run(&self, input: &[f32]) -> Result<Vec<f32>, Error> {
             Ok(input.iter().map(|&v| v * self.scale).collect())
         }
     }
 
+    /// Procedurally generated synthetic linear RGB test image with non-trivial spatial color variation.
     fn rgb_test_image(w: usize, h: usize) -> Rgb32f {
         let data = (0..w * h)
             .map(|i| {
@@ -1014,6 +1016,7 @@ mod tests {
         Rgb32f { width: w, height: h, data }
     }
 
+    /// Verifies that an identity model reconstructs exact linear RGB input images across various dimensions.
     #[test]
     fn linear_rgb_identity_runner_reconstructs_input_for_various_dimensions() {
         let model = MockLinearRgb { scale: 1.0 };
@@ -1034,6 +1037,7 @@ mod tests {
         }
     }
 
+    /// Verifies that model scale deviations are normalized tile-by-tile via gain matching.
     #[test]
     fn linear_rgb_scale_of_its_own_is_taken_out_tile_by_tile() {
         let (w, h) = (150usize, 110usize);
@@ -1050,10 +1054,12 @@ mod tests {
         assert!(mean(&wild, 1) > 2.0 * mean(&img, 1));
     }
 
+    /// Verifies that clipped highlights in linear RGB remain clipped as recorded.
     #[test]
     fn linear_rgb_clipped_highlights_stay_clipped() {
         struct DimLinear(MockLinearRgb);
         impl TileRunner for DimLinear {
+            /// Dimming runner implementation for highlight clipping preservation tests.
             fn run(&self, input: &[f32]) -> Result<Vec<f32>, Error> {
                 Ok(self.0.run(input)?.into_iter().map(|v| v * 0.9).collect())
             }
@@ -1076,6 +1082,7 @@ mod tests {
         assert!(dark.iter().all(|&v| (v - 0.36).abs() < 0.01), "unclipped area dimmed: {dark:?}");
     }
 
+    /// Verifies cancellation and tile progress reporting for linear RGB denoising.
     #[test]
     fn linear_rgb_cancellation_and_progress_work() {
         let (w, h) = (150usize, 110usize);
@@ -1095,6 +1102,7 @@ mod tests {
         assert!(seen.windows(2).all(|p| p[1].0 == p[0].0 + 1));
     }
 
+    /// Tests validation of hostile and non-finite inputs to denoise_linear_rgb.
     #[test]
     fn linear_rgb_hostile_and_nonfinite_inputs_are_errors() {
         let mock = MockLinearRgb { scale: 1.0 };
@@ -1111,6 +1119,7 @@ mod tests {
         // Model returning wrong tile size or non-finite output
         struct Bad(Vec<f32>);
         impl TileRunner for Bad {
+            /// Runner returning predetermined faulty responses for testing validation logic.
             fn run(&self, _: &[f32]) -> Result<Vec<f32>, Error> {
                 Ok(self.0.clone())
             }
@@ -1120,6 +1129,7 @@ mod tests {
         assert!(matches!(denoise_linear_rgb(&good_img, &Bad(vec![f32::NAN; 3 * 32 * 32]), &p, &Control::default()), Err(Error::Model(_))));
     }
 
+    /// Tests linear RGB grid computation and tile count calculation.
     #[test]
     fn linear_rgb_grid_and_tile_counts() {
         let (sx, sy) = grid_linear_rgb(100, 80, 32, 8);
@@ -1130,6 +1140,7 @@ mod tests {
         assert_eq!(tile_count_linear_rgb(100, 80, 32, 8), sx.len() * sy.len());
     }
 
+    /// Verifies that global scalar gain matching in linear RGB preserves inter-channel color ratios.
     #[test]
     fn linear_rgb_gain_matching_preserves_color_ratios() {
         let t = 16;

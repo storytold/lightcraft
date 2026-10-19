@@ -914,6 +914,7 @@ struct DimLinear {
 }
 
 impl TileRunner for DimLinear {
+    /// Test linear model runner that counts executions and scales samples by 0.5.
     fn run(&self, input: &[f32]) -> Result<Vec<f32>, lightcraft_denoise::Error> {
         self.runs.fetch_add(1, Ordering::Relaxed);
         Ok(input.iter().map(|&v| v * 0.5).collect())
@@ -921,20 +922,24 @@ impl TileRunner for DimLinear {
 }
 
 impl Model for DimLinear {
+    /// Returns reference to self as TileRunner with requested concurrency.
     fn runner(&self, _: RunOn, threads: usize) -> (&dyn TileRunner, usize) {
         (self, threads)
     }
 
+    /// Self-test stub reporting success.
     fn self_test(&self, _: RunOn) -> Result<Value, String> {
         Ok(json!({"ok": true}))
     }
 }
 
+/// Creates a mock model loader providing DimLinear instances tracking invocation count.
 fn dim_linear_loader(runs: &Arc<AtomicUsize>) -> Loader {
     let runs = runs.clone();
     Arc::new(move |_, _| Ok(Arc::new(DimLinear { runs: runs.clone() }) as Arc<dyn Model>))
 }
 
+/// Generates a test DenoiserManifest for a linear RGB model.
 fn linear_manifest(id: &str) -> DenoiserManifest {
     DenoiserManifest {
         id: id.into(),
@@ -953,6 +958,7 @@ fn linear_manifest(id: &str) -> DenoiserManifest {
     }
 }
 
+/// Writes placeholder model files (manifest + stand-in weights) for linear RGB model installation testing.
 fn linear_model_files(dir: &Path, id: &str) -> PathBuf {
     let src = dir.join(format!("src-{id}"));
     std::fs::create_dir_all(&src).unwrap();
@@ -961,6 +967,7 @@ fn linear_model_files(dir: &Path, id: &str) -> PathBuf {
     src.join("model.onnx")
 }
 
+/// Creates a synthetic Fujifilm X-Trans pattern DNG with valid camera color matrices for testing.
 fn synthetic_xtrans_dng_of(w: usize, h: usize, data: Vec<u16>) -> Vec<u8> {
     use lightcraft_raw::*;
     let cfa = Cfa::xtrans();
@@ -996,6 +1003,8 @@ fn synthetic_xtrans_dng_of(w: usize, h: usize, data: Vec<u16>) -> Vec<u8> {
     write_dng(&raw, &DngWriteOptions::default()).unwrap()
 }
 
+/// Verifies that an X-Trans raw photo is rejected by Bayer-only models with an informative error,
+/// but succeeds and denoises properly when processed with a LinearRgb model.
 #[test]
 fn an_xtrans_photo_is_rejected_by_bayer_model_but_denoised_by_linear_rgb_model() {
     let dir = temp_dir("xtrans-denoise");
@@ -1062,6 +1071,8 @@ fn an_xtrans_photo_is_rejected_by_bayer_model_but_denoised_by_linear_rgb_model()
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Verifies that an X-Trans raw photo denoised via LinRec2020 space color transformation
+/// transforms correctly back into camera space and exports successfully.
 #[test]
 fn an_xtrans_photo_denoised_by_linear_rec2020_model_transforms_and_exports_cleanly() {
     let dir = temp_dir("xtrans-rec2020-denoise");

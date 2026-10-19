@@ -155,8 +155,13 @@ pub fn validate(m: &DenoiserManifest) -> Result<(), ManifestError> {
         return bad("space", "only linearRgb models can specify a color space other than cameraRgb");
     }
     if let Gain::MatchMean { nominal, max_deviation } = m.gain {
-        if !(nominal.is_finite() && (1e-6..=1e12).contains(&nominal.abs())) {
-            return bad("gain.nominal", "must be between 0.000001 and 1000000000000 (absolute value)");
+        let valid_nominal = if m.domain == Domain::LinearRgb {
+            nominal.is_finite() && (1e-6..=1e12).contains(&nominal.abs())
+        } else {
+            nominal.is_finite() && (1e-6..=1e12).contains(&nominal)
+        };
+        if !valid_nominal {
+            return bad("gain.nominal", "must be between 0.000001 and 1000000000000 (negative values only allowed for linearRgb)");
         }
         if !(max_deviation.is_finite() && (0.0..=0.5).contains(&max_deviation)) {
             return bad("gain.maxDeviation", "must be between 0 and 0.5");
@@ -205,6 +210,7 @@ mod tests {
         assert_eq!(parse(&json).unwrap(), m);
     }
 
+    /// A manifest specifying Domain::LinearRgb and LinearSpace::LinRec2020 serializes and round-trips cleanly.
     #[test]
     fn linear_rgb_manifest_round_trips() {
         let mut m = sample();
