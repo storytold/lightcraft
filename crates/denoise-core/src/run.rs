@@ -113,7 +113,7 @@ pub fn denoise_bayer(
         return Err(Error::Input("the tile size and overlap do not fit".into()));
     }
     if let Gain::MatchMean { nominal, max_deviation } = p.gain
-        && !(nominal.is_finite() && (1e-6..=1e12).contains(&nominal) && max_deviation.is_finite() && (0.0..=0.5).contains(&max_deviation))
+        && !(nominal.is_finite() && (1e-6..=1e12).contains(&nominal.abs()) && max_deviation.is_finite() && (0.0..=0.5).contains(&max_deviation))
     {
         return Err(Error::Input("the model gain is not finite or within its supported range".into()));
     }
@@ -256,7 +256,7 @@ pub fn denoise_linear_rgb(image: &Rgb32f, runner: &dyn TileRunner, p: &Params, c
         return Err(Error::Input("the tile size and overlap do not fit".into()));
     }
     if let Gain::MatchMean { nominal, max_deviation } = p.gain
-        && !(nominal.is_finite() && (1e-6..=1e12).contains(&nominal) && max_deviation.is_finite() && (0.0..=0.5).contains(&max_deviation))
+        && !(nominal.is_finite() && (1e-6..=1e12).contains(&nominal.abs()) && max_deviation.is_finite() && (0.0..=0.5).contains(&max_deviation))
     {
         return Err(Error::Input("the model gain is not finite or within its supported range".into()));
     }
@@ -566,9 +566,14 @@ fn finish_tile_linear_rgb(input: &[f32], out: &mut [f32], p: &Params, edges: (bo
                     .sum();
                 let mean_out = out_sum / cells;
 
-                let measured = if mean_in as f32 >= MIN_SIGNAL && mean_out > 0.0 { (mean_out / mean_in) as f32 } else { nominal };
-                let g = measured.clamp(nominal * (1.0 - max_deviation), nominal * (1.0 + max_deviation));
-                if g.is_finite() && g > 0.0 {
+                let measured = if mean_in as f32 >= MIN_SIGNAL && mean_out.abs() > 0.0 { (mean_out / mean_in) as f32 } else { nominal };
+                let (min_g, max_g) = if nominal >= 0.0 {
+                    (nominal * (1.0 - max_deviation), nominal * (1.0 + max_deviation))
+                } else {
+                    (nominal * (1.0 + max_deviation), nominal * (1.0 - max_deviation))
+                };
+                let g = measured.clamp(min_g, max_g);
+                if g.is_finite() && g != 0.0 {
                     let inv = 1.0 / g;
                     if let Some(plane) = out.get_mut(plane_offset..plane_offset + t * t) {
                         plane.iter_mut().for_each(|v| *v *= inv);

@@ -83,14 +83,14 @@ fn self_test(runner: &dyn TileRunner, manifest: &DenoiserManifest, load_ms: f64)
             let side = if is_linear_rgb { t } else { 2 * t };
             let mean_in = base.iter().map(|&v| f64::from(v)).sum::<f64>() / base.len().max(1) as f64;
             let mean_out = a.iter().map(|&v| f64::from(v)).sum::<f64>() / a.len().max(1) as f64;
-            scale = if mean_in > 0.0 { mean_out / mean_in } else { 0.0 };
+            scale = if mean_in.abs() > 0.0 { mean_out / mean_in } else { 0.0 };
             if let Gain::MatchMean { nominal, max_deviation } = manifest.gain {
                 let ratio = scale / f64::from(nominal);
                 let tolerance = f64::from(max_deviation).max(0.05) * 4.0;
                 checks.push((format!("its scale is the {nominal:.3e} the description says (found {scale:.3e})"), (ratio - 1.0).abs() <= tolerance));
             }
             // noise left after bringing the answer back to the input's scale, against the noise that went in
-            let g = if scale > 0.0 { 1.0 / scale } else { 1.0 };
+            let g = if scale.abs() > 0.0 { 1.0 / scale } else { 1.0 };
             let (mut noise_in, mut noise_out, mut n_in, mut n_out) = (0.0f64, 0.0f64, 0usize, 0usize);
             for (i, (&v, &s)) in input.iter().zip(base.iter().cycle()).enumerate() {
                 // centre of each plane only: edges are the model's guess

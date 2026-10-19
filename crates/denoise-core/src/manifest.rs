@@ -131,8 +131,8 @@ pub fn validate(m: &DenoiserManifest) -> Result<(), ManifestError> {
         return bad("overlap", "must be even, at least 16 and less than half the tile");
     }
     if let Gain::MatchMean { nominal, max_deviation } = m.gain {
-        if !(nominal.is_finite() && (1e-6..=1e12).contains(&nominal)) {
-            return bad("gain.nominal", "must be between 0.000001 and 1000000000000");
+        if !(nominal.is_finite() && (1e-6..=1e12).contains(&nominal.abs())) {
+            return bad("gain.nominal", "must be between 0.000001 and 1000000000000 (absolute value)");
         }
         if !(max_deviation.is_finite() && (0.0..=0.5).contains(&max_deviation)) {
             return bad("gain.maxDeviation", "must be between 0 and 0.5");
