@@ -1,9 +1,11 @@
+use rayon::prelude::*;
+
 use super::builtin::{BuiltinModel, builtin_marker};
 use super::model::{Loader, Model, ModelSlot, RunOn, STACK};
 use super::settings::EXT;
 use super::{
-    Arc, AtomicBool, AtomicUsize, ByteReader, Condvar, Control, DenoiserManifest, Domain, HashSet, Hasher128, Layout, Mutex, OnceLock, Ordering,
-    Params, Path, PathBuf, Photo, PoisonError, RunError, Source, SystemTime, denoise_bayer, denoise_linear_rgb, product,
+    Arc, AtomicBool, AtomicUsize, ByteReader, Condvar, Control, DenoiserManifest, Domain, HashSet, Hasher128, Layout, LinearSpace, Mutex, OnceLock,
+    Ordering, Params, Path, PathBuf, Photo, PoisonError, RunError, Source, SystemTime, denoise_bayer, denoise_linear_rgb, product,
 };
 
 /// Samples at or above this (white = 1) are clipped: the model leaves them as the camera recorded them.
@@ -150,9 +152,14 @@ fn layout_of(cfa: &lightcraft_raw::Cfa) -> Option<Layout> {
     Layout::from_cell([cfa.color_at(0, 0), cfa.color_at(1, 0), cfa.color_at(0, 1), cfa.color_at(1, 1)])
 }
 
+struct LinearRec2020Transform {
+    inv_matrix: lightcraft_color::Mat3,
+    wb: [f32; 3],
+}
+
 enum DenoiseInput {
     Bayer { mosaic: lightcraft_raw::Normalized, layout: Layout },
-    LinearRgb { camera_rgb: lightcraft_raster::Rgb32f },
+    LinearRgb { camera_rgb: lightcraft_raster::Rgb32f, color_transform: Option<LinearRec2020Transform> },
 }
 
 /// Make the product of `spec` unless it is there: decode the photo, run the model over its mosaic, write the result.
@@ -205,10 +212,30 @@ pub(crate) fn make_product(spec: &JobSpec, progress: Option<&Progress>) -> Resul
                     return Err(MakeError::Unsupported("only raw files with 1 or 3 samples per pixel can be denoised".into()));
                 }
                 let n = raw.normalized().map_err(|e| MakeError::Failed(e.to_string()))?;
-                let camera_rgb = lightcraft_raw::demosaic(&n, lightcraft_raw::Method::Ahd);
+                let mut camera_rgb = lightcraft_raw::demosaic(&n, lightcraft_raw::Method::Ahd);
                 drop(n);
+                let color_transform = match spec.manifest.space {
+                    LinearSpace::CameraRgb => None,
+                    LinearSpace::LinRec2020 => {
+                        let as_shot_xy = lightcraft_raw::color::as_shot_white_xy(&raw);
+                        let (matrix, wb) = lightcraft_raw::color::camera_to_rec2020(&raw, as_shot_xy);
+                        if wb.iter().any(|&w| !w.is_finite() || w <= 0.0) {
+                            return Err(MakeError::Failed("invalid camera white balance multipliers".into()));
+                        }
+                        let inv_matrix = matrix.inverse().ok_or_else(|| MakeError::Failed("camera color matrix is not invertible".into()))?;
+                        let m = matrix.to_f32();
+                        camera_rgb.data.par_iter_mut().for_each(|px| {
+                            let balanced = [px[0] * wb[0], px[1] * wb[1], px[2] * wb[2]];
+                            let r = m[0][0] * balanced[0] + m[0][1] * balanced[1] + m[0][2] * balanced[2];
+                            let g = m[1][0] * balanced[0] + m[1][1] * balanced[1] + m[1][2] * balanced[2];
+                            let b = m[2][0] * balanced[0] + m[2][1] * balanced[1] + m[2][2] * balanced[2];
+                            *px = [r, g, b];
+                        });
+                        Some(LinearRec2020Transform { inv_matrix, wb })
+                    }
+                };
                 drop(raw);
-                DenoiseInput::LinearRgb { camera_rgb }
+                DenoiseInput::LinearRgb { camera_rgb, color_transform }
             }
         }
     };
@@ -224,7 +251,7 @@ pub(crate) fn make_product(spec: &JobSpec, progress: Option<&Progress>) -> Resul
     let parallel = spec.parallel.clamp(1, 4).min((budget / scratch.max(1)).max(1));
     let (pixel_count, byte_multiplier) = match &input {
         DenoiseInput::Bayer { mosaic, .. } => (mosaic.data.len(), 20),
-        DenoiseInput::LinearRgb { camera_rgb } => (camera_rgb.data.len(), 24),
+        DenoiseInput::LinearRgb { camera_rgb, .. } => (camera_rgb.data.len(), 24),
     };
     let _held = crate::memory::work_gate().acquire(pixel_count.saturating_mul(byte_multiplier).saturating_add(scratch.saturating_mul(parallel)));
     // the built-in denoiser measures the whole photo's noise once, from its mosaic; a linear-RGB model has no mosaic to measure
@@ -256,12 +283,27 @@ pub(crate) fn make_product(spec: &JobSpec, progress: Option<&Progress>) -> Resul
         .thread_name(|i| format!("denoise-{i}"))
         .build()
         .map_err(|e| MakeError::Failed(format!("could not start the worker threads: {e}")))?;
-    let rgb = match input {
+    let (mut rgb, color_transform) = match input {
         DenoiseInput::Bayer { mosaic, layout } => {
-            pool.install(|| denoise_bayer(&mosaic.data, mosaic.width, mosaic.height, layout, runner, &params, &ctl))?
+            (pool.install(|| denoise_bayer(&mosaic.data, mosaic.width, mosaic.height, layout, runner, &params, &ctl))?, None)
         }
-        DenoiseInput::LinearRgb { camera_rgb } => pool.install(|| denoise_linear_rgb(&camera_rgb, runner, &params, &ctl))?,
+        DenoiseInput::LinearRgb { camera_rgb, color_transform } => {
+            (pool.install(|| denoise_linear_rgb(&camera_rgb, runner, &params, &ctl))?, color_transform)
+        }
     };
+    if let Some(transform) = color_transform {
+        let inv_m = transform.inv_matrix.to_f32();
+        let wb = transform.wb;
+        rgb.data.par_iter_mut().for_each(|px| {
+            let r = inv_m[0][0] * px[0] + inv_m[0][1] * px[1] + inv_m[0][2] * px[2];
+            let g = inv_m[1][0] * px[0] + inv_m[1][1] * px[1] + inv_m[1][2] * px[2];
+            let b = inv_m[2][0] * px[0] + inv_m[2][1] * px[1] + inv_m[2][2] * px[2];
+            let cr = (r / wb[0]).max(0.0);
+            let cg = (g / wb[1]).max(0.0);
+            let cb = (b / wb[2]).max(0.0);
+            *px = [if cr.is_finite() { cr } else { 0.0 }, if cg.is_finite() { cg } else { 0.0 }, if cb.is_finite() { cb } else { 0.0 }];
+        });
+    }
     if cancelled() {
         return Err(MakeError::Cancelled);
     }

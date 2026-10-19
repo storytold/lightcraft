@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use lightcraft_denoise::manifest::{DenoiserManifest, Domain, Gain};
+use lightcraft_denoise::manifest::{DenoiserManifest, Domain, Gain, LinearSpace};
 use lightcraft_denoise::run::TileRunner;
 use serde_json::{Value, json};
 
@@ -66,6 +66,7 @@ fn manifest(id: &str) -> DenoiserManifest {
         size_bytes: None,
         provenance: "made up for a test".into(),
         domain: Domain::BayerToRgb,
+        space: LinearSpace::CameraRgb,
         tile: 64,
         overlap: 16,
         gain: Gain::None,
@@ -945,6 +946,7 @@ fn linear_manifest(id: &str) -> DenoiserManifest {
         size_bytes: None,
         provenance: "made up for a linear test".into(),
         domain: Domain::LinearRgb,
+        space: LinearSpace::CameraRgb,
         tile: 64,
         overlap: 16,
         gain: Gain::None,
@@ -1053,6 +1055,56 @@ fn an_xtrans_photo_is_rejected_by_bayer_model_but_denoised_by_linear_rgb_model()
     assert!(denoised < plain - 3.0, "denoised {denoised} vs plain {plain}");
 
     // Test export with Linear-RGB denoise on X-Trans
+    let o = ExportOptions::from_json(&json!({"format": "png", "width": 160, "height": 160}));
+    let export_res = export_photo(&mut s, id, &o, 1).unwrap();
+    assert!(!export_res.bytes.is_empty());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn an_xtrans_photo_denoised_by_linear_rec2020_model_transforms_and_exports_cleanly() {
+    let dir = temp_dir("xtrans-rec2020-denoise");
+    let originals = dir.join("originals");
+    std::fs::create_dir_all(&originals).unwrap();
+    let data: Vec<u16> = (0..192 * 160).map(|i| 600 + ((i % 192) * 30 + (i / 192) * 35) as u16).collect();
+    let xtrans_path = originals.join("xtrans.dng");
+    std::fs::write(&xtrans_path, synthetic_xtrans_dng_of(192, 160, data)).unwrap();
+
+    let runs_linear = Arc::new(AtomicUsize::new(0));
+    let mut s = Session::new().with_fs();
+    s.open_library(dir.join("library"), false).unwrap();
+    s.execute("library.import", &json!({"paths": [xtrans_path.to_string_lossy()]})).unwrap();
+    let id = s.catalog.photos().next().unwrap().id;
+    s.execute("library.select", &json!({"ids": [id.0]})).unwrap();
+    s.set_denoise_models_dir(Some(dir.join("denoise-models")));
+
+    s.denoise.loader = dim_linear_loader(&runs_linear);
+    let mut manifest = linear_manifest("stand-in-rec2020");
+    manifest.space = LinearSpace::LinRec2020;
+    let src = dir.join("src-stand-in-rec2020");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(src.join("denoise-model.json"), serde_json::to_vec(&manifest).unwrap()).unwrap();
+    std::fs::write(src.join("model.onnx"), "stand-in for rec2020").unwrap();
+    let linear_onnx = src.join("model.onnx");
+
+    s.execute("denoise.models.install", &json!({"path": linear_onnx.to_string_lossy(), "acknowledged": true})).unwrap();
+
+    set_amount(&mut s, 100.0);
+    // Pump until ready
+    let r = pump_until_ready(&mut s, 1);
+    assert_eq!(r["ready"], 1);
+    assert_eq!(s.denoise_photo_state(id), PhotoState::Ready);
+    assert!(runs_linear.load(Ordering::Relaxed) >= 4);
+
+    let plain = {
+        set_amount(&mut s, 0.0);
+        rendered_mean(&mut s, id)
+    };
+    set_amount(&mut s, 100.0);
+    let denoised = rendered_mean(&mut s, id);
+    assert!(denoised < plain - 3.0, "denoised {denoised} vs plain {plain}");
+
     let o = ExportOptions::from_json(&json!({"format": "png", "width": 160, "height": 160}));
     let export_res = export_photo(&mut s, id, &o, 1).unwrap();
     assert!(!export_res.bytes.is_empty());

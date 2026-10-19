@@ -23,7 +23,7 @@ use std::time::{Duration, SystemTime};
 
 use lightcraft_catalog::{Photo, PhotoId, Source};
 use lightcraft_denoise::bayer::Layout;
-use lightcraft_denoise::manifest::{DenoiserManifest, Domain};
+use lightcraft_denoise::manifest::{DenoiserManifest, Domain, LinearSpace};
 use lightcraft_denoise::run::{Control, Params, TileRunner, denoise_bayer, denoise_linear_rgb};
 use lightcraft_denoise::{Error as RunError, product};
 use lightcraft_develop::DevelopSettings;

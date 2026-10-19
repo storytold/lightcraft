@@ -1068,7 +1068,7 @@ mod tests {
     #[test]
     #[ignore = "needs the real model: see the doc comment"]
     fn real_model_on_the_gpu_matches_cpu() {
-        use lightcraft_denoise::manifest::{DenoiserManifest, Domain, Gain};
+        use lightcraft_denoise::manifest::{DenoiserManifest, Domain, Gain, LinearSpace};
         use lightcraft_denoise::runtime::CpuRunner;
         use std::time::Instant;
         let Some(model) = std::env::var_os("LC_DENOISE_MODEL") else { return };
@@ -1091,6 +1091,7 @@ mod tests {
             size_bytes: None,
             provenance: String::new(),
             domain: Domain::BayerToRgb,
+            space: LinearSpace::CameraRgb,
             tile: 512,
             overlap: 64,
             gain: Gain::MatchMean { nominal: 1.0e6, max_deviation: 0.05 },

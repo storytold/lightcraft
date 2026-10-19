@@ -8,7 +8,7 @@ use crate::licence::{Commercial, Licence};
 
 use crate::manifest::DenoiserManifest;
 #[cfg(any(feature = "rawnind-model", test))]
-use crate::manifest::{Domain, Gain};
+use crate::manifest::{Domain, Gain, LinearSpace};
 
 /// A known model, and how to get it.
 pub struct Known {
@@ -43,6 +43,7 @@ fn rawnind_bayer() -> Known {
                      published on Wikimedia Commons and by the University of Louvain). Paper: arXiv 2501.08924."
             .into(),
         domain: Domain::BayerToRgb,
+        space: LinearSpace::CameraRgb,
         tile: 512,
         overlap: 64,
         gain: Gain::MatchMean { nominal: 1.0e6, max_deviation: 0.05 },
@@ -81,9 +82,10 @@ fn rawnind_linear() -> Known {
                      published on Wikimedia Commons and by the University of Louvain). Paper: arXiv 2501.08924."
             .into(),
         domain: Domain::LinearRgb,
+        space: LinearSpace::LinRec2020,
         tile: 512,
         overlap: 64,
-        gain: Gain::MatchMean { nominal: -3.184e9, max_deviation: 0.05 },
+        gain: Gain::MatchMean { nominal: 1.0, max_deviation: 0.15 },
     };
     let download = Download {
         id: manifest.id.clone(),

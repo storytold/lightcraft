@@ -1,5 +1,5 @@
 use super::*;
-use lightcraft_denoise::manifest::{Domain, Gain};
+use lightcraft_denoise::manifest::{Domain, Gain, LinearSpace};
 
 /// A folder of the test's own: the card's set-up leaves its marker beside the model.
 fn folder(name: &str) -> PathBuf {
@@ -24,6 +24,7 @@ fn model(name: &str, tile: u64) -> (Arc<dyn Model>, lightcraft_denoise::runtime:
         size_bytes: None,
         provenance: String::new(),
         domain: Domain::BayerToRgb,
+        space: LinearSpace::CameraRgb,
         tile: tile as u32,
         overlap: 16,
         gain: Gain::MatchMean { nominal: 1.0, max_deviation: 0.05 },
@@ -87,6 +88,7 @@ fn with_remote(path: &Path, tile: u64, addr: &str, sha256: &str) -> Network {
         size_bytes: None,
         provenance: String::new(),
         domain: Domain::BayerToRgb,
+        space: LinearSpace::CameraRgb,
         tile: tile as u32,
         overlap: 16,
         gain: Gain::MatchMean { nominal: 1.0, max_deviation: 0.05 },

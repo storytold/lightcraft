@@ -236,7 +236,7 @@ pub fn check_tile_linear_rgb(t: usize) -> Vec<f32> {
 mod tests {
     use super::*;
     use crate::licence::Licence;
-    use crate::manifest::Domain;
+    use crate::manifest::{Domain, LinearSpace};
     use crate::synthetic;
     use crate::synthetic_proto::{len_field, value_info_bytes};
 
@@ -336,6 +336,7 @@ mod tests {
             size_bytes: None,
             provenance: String::new(),
             domain: Domain::BayerToRgb,
+            space: LinearSpace::CameraRgb,
             tile,
             overlap: 16,
             gain: Gain::MatchMean { nominal, max_deviation: 0.05 },
@@ -488,6 +489,7 @@ mod cpu_tests {
             size_bytes: None,
             provenance: "synthetic test".into(),
             domain: crate::manifest::Domain::BayerToRgb,
+            space: crate::manifest::LinearSpace::CameraRgb,
             tile: 64,
             overlap: 16,
             gain: Gain::None,
