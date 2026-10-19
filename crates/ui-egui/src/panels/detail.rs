@@ -9,6 +9,7 @@ use lightcraft_pipeline::geometry::Frame;
 use serde_json::json;
 
 use crate::LightcraftApp;
+use crate::panels::spot_outline;
 use crate::render::Slot;
 use crate::state::{BeforeAfter, RightPanel, ToolOverlay, Zoom};
 use crate::theme::Tokens;
@@ -2649,8 +2650,12 @@ fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respo
     if painting {
         pins.set_invisible();
     }
-    // (spot, is source, screen centre, radius) of everything that can be grabbed
+    // (spot, is source, screen centre, radius) of every pin: the keyboard handles
     let mut grips: Vec<(usize, bool, Pos2, f32)> = Vec::new();
+    // (spot, is source, screen points of the stroke, radius) of everything that can be grabbed: the pin, and
+    // anywhere within the radius of the stroke's points (the source's, shifted by its offset, for the selected spot)
+    let mut bodies: Vec<(usize, bool, Vec<Pos2>, f32)> = Vec::new();
+    let clip = p.clip_rect();
     for (i, s) in d.spots.iter().enumerate() {
         let r = (s.size * long) as f32;
         let sel = Some(i) == active;
@@ -2658,39 +2663,41 @@ fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respo
             continue;
         }
         let p = &pins;
-        let col = Color32::from_white_alpha(if sel { 230 } else { 150 });
-        for q in &s.points {
-            p.circle_stroke(map.screen(*q), r, Stroke::new(if sel { 1.5 } else { 1.0 }, col));
+        let target: Vec<Pos2> = s.points.iter().map(|q| map.screen(*q)).collect();
+        let light = if sel { Stroke::new(1.25, Color32::from_white_alpha(230)) } else { Stroke::new(1.0, Color32::from_white_alpha(120)) };
+        if touches(&target, r, clip) {
+            draw_outline(p, &spot_outline::union_outline(&target, r), light, false);
         }
-        let Some(&t) = s.points.first() else { continue };
-        let tq = map.screen(t);
+        let Some(&tq) = target.first() else { continue };
         if let Some(o) = s.source_offset.filter(|_| sel) {
-            let sq = map.screen(Point::new(t.x + o.x, t.y + o.y));
-            for q in &s.points {
-                p.circle_stroke(map.screen(Point::new(q.x + o.x, q.y + o.y)), r, Stroke::new(1.0, Color32::from_white_alpha(170)));
+            let source: Vec<Pos2> = s.points.iter().map(|q| map.screen(Point::new(q.x + o.x, q.y + o.y))).collect();
+            if touches(&source, r, clip) {
+                draw_outline(p, &spot_outline::union_outline(&source, r), Stroke::new(1.0, Color32::from_white_alpha(150)), true);
             }
+            let sq = source[0];
             let dir = (tq - sq).normalized();
-            p.arrow(sq + dir * r, (tq - sq) - dir * (2.0 * r).min((tq - sq).length()), Stroke::new(1.0, Color32::from_white_alpha(200)));
+            let (from, by) = (sq + dir * r, (tq - sq) - dir * (2.0 * r).min((tq - sq).length()));
+            p.arrow(from, by, Stroke::new(2.5, Color32::from_black_alpha(110)));
+            p.arrow(from, by, Stroke::new(1.0, Color32::from_white_alpha(200)));
             register(ui.ctx(), format!("spotSource:{i}"), Rect::from_center_size(sq, vec2(14.0, 14.0)));
             grips.push((i, true, sq, r));
+            bodies.push((i, true, source, r));
         }
         pin(p, tq, sel);
         register(ui.ctx(), format!("spotPin:{i}"), Rect::from_center_size(tq, vec2(14.0, 14.0)));
         grips.push((i, false, tq, r));
+        bodies.push((i, false, target, r));
     }
     if spot_keys(app, ui, map, d, &grips) {
         return;
     }
     let r = (app.ui.remove_size as f64 * long) as f32;
-    // a target or source under `q`: the selected spot's first, then the nearest pin
+    // a target or source under `q` (its pin or anywhere along its stroke): the selected spot's first, then the nearest
     let hit = |q: Pos2| {
-        grips
+        bodies
             .iter()
-            .filter(|g| g.2.distance(q) < g.3.max(8.0))
-            .min_by(|a, b| {
-                (Some(a.0) != active, a.2.distance(q)).partial_cmp(&(Some(b.0) != active, b.2.distance(q))).unwrap_or(std::cmp::Ordering::Equal)
-            })
-            .copied()
+            .filter_map(|(spot, source, pts, r)| Some((*spot, *source, spot_outline::grab_distance(pts, q, r.max(8.0))?)))
+            .min_by(|a, b| (Some(a.0) != active, a.2).partial_cmp(&(Some(b.0) != active, b.2)).unwrap_or(std::cmp::Ordering::Equal))
     };
     let hover = resp.hover_pos().and_then(hit);
     if let Some(h) = resp.hover_pos() {
@@ -2735,18 +2742,23 @@ fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respo
         return;
     }
     if let Some(q) = resp.interact_pointer_pos()
-        && (resp.drag_started() || resp.dragged() || resp.clicked())
+        && (resp.drag_started() || resp.dragged() || resp.clicked() || resp.drag_stopped())
     {
         let n = map.norm(q);
         match &mut app.gesture {
-            Some(Gesture::Spot { points }) => points.push(n),
+            // a point every r/4 of movement; a held pointer stores nothing, and the release adds where it ended
+            Some(Gesture::Spot { points }) => {
+                let last = points.last().map(|l| map.screen(*l));
+                if last.is_none_or(|l| spot_outline::adds_point(l, q, r, resp.drag_stopped())) {
+                    points.push(n);
+                }
+            }
             _ => app.gesture = Some(Gesture::Spot { points: vec![n] }),
         }
     }
     if let Some(Gesture::Spot { points }) = &app.gesture {
-        for q in points {
-            p.circle_filled(map.screen(*q), r, Color32::from_white_alpha(60));
-        }
+        let screen: Vec<Pos2> = points.iter().map(|q| map.screen(*q)).collect();
+        draw_outline(&p, &spot_outline::union_outline(&screen, r), Stroke::new(1.25, Color32::from_white_alpha(230)), false);
     }
     if (resp.drag_stopped() || resp.clicked())
         && let Some(Gesture::Spot { points }) = app.gesture.take()
@@ -2762,6 +2774,25 @@ fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respo
             "spot.add",
             json!({"mode": mode, "points": pts, "size": app.ui.remove_size, "feather": app.ui.remove_feather, "opacity": app.ui.remove_opacity}),
         );
+    }
+}
+
+/// Whether the discs of radius `r` at `pts` can show in `clip`.
+fn touches(pts: &[Pos2], r: f32, clip: Rect) -> bool {
+    pts.iter().any(|q| clip.expand(r).contains(*q))
+}
+
+/// A spot's outline in `light`, over a dark under-stroke so a thin line stays visible on light and dark areas alike.
+fn draw_outline(p: &egui::Painter, lines: &[Vec<Pos2>], light: Stroke, dashed: bool) {
+    let dark = Stroke::new(light.width + 1.5, Color32::from_black_alpha(110));
+    for stroke in [dark, light] {
+        for l in lines {
+            if dashed {
+                p.extend(egui::Shape::dashed_line(l, stroke, 6.0, 4.0));
+            } else {
+                p.add(egui::Shape::line(l.clone(), stroke));
+            }
+        }
     }
 }
 

@@ -37,6 +37,7 @@ pub mod slide_overlays;
 pub mod slide_templates;
 pub mod slide_titles;
 pub mod slideshow;
+pub mod spot_outline;
 pub mod strip;
 pub mod topbar;
 pub mod unnamed;

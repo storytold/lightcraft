@@ -321,3 +321,39 @@ fn mask_and_spot_targets_preserve_explicit_defaults_and_selection_clearing() {
     s.execute("mask.brushStroke", &json!({"points": [[0.5, 0.5]]})).unwrap();
     assert_eq!(s.develop_of(s.active().unwrap()).unwrap().masks.len(), 3);
 }
+
+/// A brushed stroke recorded a point per frame (issue #2359): stationary repeats and points closer than a
+/// quarter of the size collapse, the ends stay, and a click is still one point.
+#[test]
+fn spot_add_thins_a_stroke_to_a_quarter_of_the_size() {
+    let mut s = Session::with_demo();
+    let size = 0.04;
+    // 60 samples along x (a point every 0.001), with 5 stationary repeats at the start and end
+    let mut pts: Vec<[f64; 2]> = vec![[0.3, 0.5]; 5];
+    pts.extend((0..60).map(|i| [0.3 + 0.001 * f64::from(i), 0.5]));
+    pts.extend(vec![[0.359, 0.5]; 5]);
+    s.execute("spot.add", &json!({"mode": "heal", "points": pts, "size": size, "source": [0.1, 0.0]})).unwrap();
+    let p = spots(&s)[0].points.clone();
+    // the demo photo's shape decides how far a quarter of the size is along x
+    let dims = {
+        let ph = s.catalog.photo(s.active().unwrap()).unwrap();
+        let (w, h) = (f64::from(ph.width), f64::from(ph.height));
+        if ph.develop.orientation.swaps_axes() { (h, w) } else { (w, h) }
+    };
+    let long = dims.0.max(dims.1);
+    let steps = 0.059 * dims.0 / long / (size / 4.0);
+    assert!((p.len() as f64 - (steps + 1.0)).abs() <= 2.0, "a stroke of {steps:.1} spacings is about {} points, got {p:?}", steps + 1.0);
+    assert!(p.len() < 20, "60 samples and 10 repeats collapse: {}", p.len());
+    assert_eq!((p[0].x, p[0].y), (0.3, 0.5), "first point kept");
+    assert!((p.last().unwrap().x - 0.359).abs() < 1e-9, "last point kept: {p:?}");
+    // the spacing counts in long-edge units, so no two neighbours are closer than size/4 (bar the last)
+    for w in p.windows(2).take(p.len().saturating_sub(2)) {
+        let d = ((w[1].x - w[0].x) * dims.0 / long).hypot((w[1].y - w[0].y) * dims.1 / long);
+        assert!(d >= size / 4.0 - 1e-12, "spacing {d} between {w:?}");
+    }
+    // a click and a held click stay one point
+    s.execute("spot.add", &json!({"points": [[0.5, 0.5]], "size": size, "source": [0.1, 0.0]})).unwrap();
+    assert_eq!(spots(&s)[1].points.len(), 1);
+    s.execute("spot.add", &json!({"points": [[0.5, 0.5], [0.5, 0.5], [0.5001, 0.5]], "size": size, "source": [0.1, 0.0]})).unwrap();
+    assert_eq!(spots(&s)[2].points.len(), 1, "a jitter below the spacing is the same spot");
+}

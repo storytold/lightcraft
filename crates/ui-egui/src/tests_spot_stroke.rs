@@ -1,0 +1,89 @@
+//! Headless tests of the Remove tool's brush stroke (issue #2359): points are recorded at a spacing, not one per
+//! frame, and a stroke can be grabbed anywhere along it.
+
+use std::time::Duration;
+
+use serde_json::json;
+
+use crate::headless::Headless;
+use crate::{LightcraftApp, Services};
+
+const T: Duration = Duration::from_secs(20);
+
+fn remove_tool() -> Headless {
+    let services = Services { png: None, ..Default::default() };
+    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+    let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
+    for (req, params) in [("ui.set", json!({"view": "detail"})), ("engine.execute", json!({"command": "panel.remove"}))] {
+        let r = h.request(req, params, T);
+        assert_eq!(r["ok"], true, "{r}");
+    }
+    // spots show and can be grabbed whatever the pointer does
+    let r = h.request("engine.execute", json!({"command": "view.toolOverlay", "params": {"mode": "always"}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.app.ui.remove_size = 0.04;
+    h
+}
+
+fn pointer(h: &mut Headless, kind: &str, x: f64, y: f64) {
+    let r = h.request("ui.pointer", json!({"events": [{"kind": kind, "x": x, "y": y}]}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+}
+
+fn spots(h: &Headless) -> Vec<lightcraft_develop::Spot> {
+    h.app.session.develop_of(h.app.session.active().expect("active photo")).unwrap_or_default().spots.clone()
+}
+
+#[test]
+fn a_brushed_stroke_stores_points_at_a_spacing_and_ignores_a_held_pointer() {
+    let mut h = remove_tool();
+    pointer(&mut h, "down", 0.3, 0.5);
+    // 40 frames of 0.002 of the photo's width each: about 1.4 px at this size, a point every r/4 = 8 px
+    for i in 1..=40 {
+        pointer(&mut h, "drag", 0.3 + 0.002 * f64::from(i), 0.5);
+    }
+    // held still for a while: no point per frame
+    for _ in 0..15 {
+        pointer(&mut h, "drag", 0.38, 0.5);
+    }
+    pointer(&mut h, "up", 0.38, 0.5);
+    let s = spots(&h);
+    assert_eq!(s.len(), 1, "one spot");
+    let p = &s[0].points;
+    assert!((3..=12).contains(&p.len()), "a stroke of ~64 px with a point every ~8 px is a handful of points, got {}", p.len());
+    assert!((p[0].x - 0.3).abs() < 0.02, "starts where the button went down: {:?}", p[0]);
+    let end = p[p.len() - 1];
+    assert!((end.x - 0.38).abs() < 0.003 && (end.y - 0.5).abs() < 0.003, "reaches where the pointer was released: {end:?}");
+}
+
+#[test]
+fn a_click_is_still_a_single_point_spot() {
+    let mut h = remove_tool();
+    pointer(&mut h, "down", 0.6, 0.4);
+    pointer(&mut h, "up", 0.6, 0.4);
+    let s = spots(&h);
+    assert_eq!((s.len(), s[0].points.len()), (1, 1));
+}
+
+#[test]
+fn a_stroke_is_grabbed_anywhere_along_it() {
+    let mut h = remove_tool();
+    let r = h.request(
+        "engine.execute",
+        json!({"command": "spot.add", "params": {"mode": "heal", "points": [[0.3, 0.5], [0.34, 0.5], [0.38, 0.5], [0.42, 0.5]], "size": 0.04, "source": [0.0, 0.2]}}),
+        T,
+    );
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(spots(&h)[0].points.len(), 4);
+    // the third point is 0.08 of the width (about 60 px) from the pin: grabbing there moves the spot, adds none
+    pointer(&mut h, "move", 0.38, 0.5);
+    pointer(&mut h, "down", 0.38, 0.5);
+    pointer(&mut h, "drag", 0.38, 0.55);
+    pointer(&mut h, "drag", 0.38, 0.6);
+    pointer(&mut h, "up", 0.38, 0.6);
+    let s = spots(&h);
+    assert_eq!(s.len(), 1, "grabbed the stroke instead of painting a new spot");
+    assert!((s[0].points[0].y - 0.6).abs() < 0.03 && (s[0].points[0].x - 0.3).abs() < 0.01, "{:?}", s[0].points);
+    assert_eq!(s[0].points.len(), 4);
+}

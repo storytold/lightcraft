@@ -194,6 +194,8 @@ mod tests_slideshow;
 #[cfg(test)]
 mod tests_solo_sections;
 #[cfg(test)]
+mod tests_spot_stroke;
+#[cfg(test)]
 mod tests_switch_library;
 #[cfg(test)]
 mod tests_sync;
