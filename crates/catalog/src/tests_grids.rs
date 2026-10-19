@@ -1,7 +1,7 @@
 //! Issue #2154: a snapshot keeps each distinct segmentation grid once (`Catalog.grids`) and the
-//! masks of the settings, versions and history steps refer to it by index, so an unchanged mask
-//! no longer repeats with every history step. In-memory catalogs and log records always hold the
-//! grids inline; older catalogs (inline everywhere) load and are upgraded.
+//! masks of the develop settings, versions, history steps and import look refer to it by index,
+//! so an unchanged mask no longer repeats with every history step. In-memory catalogs and log
+//! records always hold the grids inline; older catalogs (inline everywhere) load and are upgraded.
 
 use std::sync::Arc;
 
@@ -40,6 +40,26 @@ fn settings_with_seg(seg: SegMask, exposure: f64) -> DevelopSettings {
         ..Default::default()
     });
     s
+}
+
+/// One mask (`id`) whose only component is an Object segmentation `seg`.
+fn object_mask(id: u32, seg: SegMask) -> Mask {
+    Mask {
+        id,
+        components: vec![MaskComponent {
+            name: None,
+            op: MaskOp::Add,
+            invert: false,
+            shape: MaskShape::Object {
+                hint: vec![lightcraft_geom::Point::new(0.5, 0.5)],
+                exclude: vec![],
+                seg: Some(seg),
+                detail: vec![],
+                edge: 0.0,
+            },
+        }],
+        ..Default::default()
+    }
 }
 
 /// A catalog of one photo whose history is `steps` slider edits over the same mask, plus the
@@ -222,4 +242,53 @@ fn versions_share_the_grid_too() {
     assert_eq!(body.match_indices(&blob).count(), 1, "the version and the step share the grid");
     let (_, loaded, _) = open(&m);
     assert_eq!(loaded.to_snapshot(), live.to_snapshot());
+}
+
+/// The import look (`Photo.import_look`, the settings a default preset gave the photo on import)
+/// can hold AI masks, and their grids can be grids the develop settings or a history step hold.
+/// Every settings holder shares the snapshot's table, so the look's masks are referenced and
+/// resolved on load like the others; a grid only the look holds is in the table too.
+#[test]
+fn import_look_masks_share_the_table_and_resolve_on_load() {
+    let shared = SegMask::from_logits(64, &vec![0.5f32; 64 * 64]);
+    let look_only = SegMask::from_logits(64, &vec![-0.5f32; 64 * 64]);
+    let mut look = DevelopSettings::default();
+    look.masks.push(object_mask(1, shared.clone()));
+    look.masks.push(object_mask(2, look_only.clone()));
+    let mut edit = DevelopSettings::default();
+    edit.light.exposure = 0.7;
+    edit.masks.push(object_mask(1, shared.clone()));
+    let edit = Arc::new(edit);
+
+    let id = PhotoId(1);
+    let mut photo = Photo::new(id, Source::File { path: "/p/2.jpg".into() }, "2.jpg", "JPEG", 60, 40, "2026-01-01");
+    photo.develop = edit.clone();
+    photo.import_look = Some(Arc::new(look));
+    photo.history.push(HistoryStep { label: "Exposure".into(), settings: edit });
+    let add = Op::AddPhoto { photo: Box::new(photo) };
+    let mut live = Catalog::new();
+    live.apply(add.clone()).unwrap();
+
+    let m = MemStore::new();
+    let (mut j, _, _) = open(&m);
+    j.append(&[add]).unwrap();
+    j.snapshot(&live).unwrap();
+    drop(j);
+    let snap_bytes = m.get(SNAPSHOT).unwrap();
+    let body = std::str::from_utf8(&snap_bytes).unwrap();
+    assert_eq!(body.match_indices(&shared.data).count(), 1, "the grid of the look and of the edit is stored once");
+    assert_eq!(body.match_indices(&look_only.data).count(), 1);
+
+    let (_, loaded, report) = open(&m);
+    assert_eq!(report.repaired, Vec::<String>::new(), "{:?}", report.repaired);
+    let p = loaded.photo(id).unwrap();
+    let look_masks = &p.import_look.as_ref().unwrap().masks;
+    assert_eq!(look_masks.len(), 2);
+    for (mask, want) in look_masks.iter().zip([&shared, &look_only]) {
+        let MaskShape::Object { seg: Some(seg), .. } = &mask.components[0].shape else { panic!("an Object mask") };
+        assert_eq!((seg.data.as_str(), seg.grid), (want.data.as_str(), None), "the look's grid is back inline");
+    }
+    assert_eq!(loaded.to_snapshot(), live.to_snapshot());
+    let v: serde_json::Value = serde_json::from_str(body).unwrap();
+    assert_eq!(v["catalog"]["grids"].as_array().unwrap().len(), 2, "one table entry per distinct grid, the look's included");
 }

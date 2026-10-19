@@ -367,9 +367,10 @@ impl std::fmt::Debug for PlansMemo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("PlansMemo")
     }
+}
 
-/// Resolves the shared-grid references of one settings holder (`develop`, a version's or a
-/// history step's settings) against a snapshot's grid table: each referenced mask takes its
+/// Resolves the shared-grid references of one settings holder (see [`Photo::settings_holders`])
+/// against a snapshot's grid table: each referenced mask takes its
 /// grid's data and the reference is cleared. A reference past the table (a damaged snapshot)
 /// leaves the mask empty — it renders nothing, like any other damaged grid. Data present on the
 /// mask itself wins over a stray reference. Returns the dangling count added to `dangling`.
@@ -1222,12 +1223,8 @@ impl Catalog {
             let mut dangling = 0usize;
             for p in self.photos.values_mut() {
                 let photo = Arc::make_mut(p);
-                dangling = resolve_grids(&mut photo.develop, &grids, dangling);
-                for v in &mut photo.versions {
-                    dangling = resolve_grids(&mut v.settings, &grids, dangling);
-                }
-                for h in &mut photo.history {
-                    dangling = resolve_grids(&mut h.settings, &grids, dangling);
+                for settings in photo.settings_holders_mut() {
+                    dangling = resolve_grids(settings, &grids, dangling);
                 }
             }
             if dangling > 0 {

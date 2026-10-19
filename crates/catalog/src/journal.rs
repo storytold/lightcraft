@@ -23,9 +23,10 @@
 //!   as `catalog.log.damaged-<seq>`, and a fresh snapshot is written so the library stays usable.
 //!
 //! Segmentation grids are shared within a snapshot (issue #2154): each distinct grid is written
-//! once into `Catalog.grids` and the masks of the photo's settings, versions and history steps
-//! refer to it by index, so an unchanged mask no longer repeats with every history step. The
-//! table lives only in the snapshot file; log records keep the full grids inline.
+//! once into `Catalog.grids` and the masks of the photo's develop settings, versions, history
+//! steps and import look refer to it by index, so an unchanged mask no longer repeats with every
+//! history step. The table lives only in the snapshot file; log records keep the full grids
+//! inline.
 //!
 //! **Background compaction** ([`Journal::snapshot_in_background`], when the store offers a
 //! [`Store::background_writer`]): a worker thread writes the snapshot of a copy of the catalog at
@@ -306,10 +307,10 @@ fn resync(line: &[u8], last: u64) -> Option<(usize, (u64, Op))> {
 /// Write `catalog.snap` for the state after op `seq`, streaming the JSON into the store (no
 /// whole-file string). The bytes are exactly
 /// `{"format":"lightcraft-catalog","version":1,"seq":N,"catalog":<serde_json of the catalog>}\n`,
-/// as before streaming. Each distinct segmentation grid of the photo settings, versions and
-/// history steps is written once (`Catalog.grids`), with the masks referring to it by index, so
-/// an unchanged mask does not repeat with every history step (issue #2154). Fills in the
-/// serialise / write+sync times and the size.
+/// as before streaming. Each distinct segmentation grid of the photos' settings holders (see
+/// `Photo::settings_holders`) is written once (`Catalog.grids`), with the masks referring to it
+/// by index, so an unchanged mask does not repeat with every history step (issue #2154). Fills
+/// in the serialise / write+sync times and the size.
 fn write_snapshot(store: &mut dyn Store, seq: u64, catalog: &Catalog) -> std::io::Result<SnapshotTiming> {
     let t0 = web_time::Instant::now();
     let mut serialize_ms = 0.0;
@@ -336,12 +337,8 @@ fn write_snapshot(store: &mut dyn Store, seq: u64, catalog: &Catalog) -> std::io
                 });
             };
             for p in catalog.photos.values() {
-                see(&p.develop);
-                for v in &p.versions {
-                    see(&v.settings);
-                }
-                for h in &p.history {
-                    see(&h.settings);
+                for settings in p.settings_holders() {
+                    see(settings);
                 }
             }
         }
