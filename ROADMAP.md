@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~14 points and ~340–600 h away
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-18 · **Change:** minor (LR-CROP-DIMMING: crop-mask opacity; checklist breadth 83.4%) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-19 · **Change:** minor (LR-CROP-DIMMING: 60% default restores the prior crop-mask strength and labels are translated in all 13 catalogs; checklist breadth 83.4%) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 One-page summary of how close LightCraft is to Adobe Lightroom. Agents: read this, then pick work
 from [docs/gaps.md](docs/gaps.md). The full assessment, method and evidence are in
@@ -183,6 +183,7 @@ Ranked toward beta; detail in [docs/roadmap.md](docs/roadmap.md), gaps in [docs/
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-19 | minor | LR-CROP-DIMMING: default 60% renders at alpha 153, close to the former alpha 150; both crop-mask labels are translated in all 13 catalogs; headline numbers unchanged |
 | 2026-10-18 | minor | LR-CROP-DIMMING: adjustable crop-mask opacity closes the remaining crop UI gap; checklist breadth updates to 83.4% of 540 rows; readiness estimates unchanged |
 | 2026-10-12 | minor | Italian interface (`it`, #1192): 2,201 of 2,398 messages, locale, menu command and tests; headline numbers unchanged |
 | 2026-10-13 | minor | Sony ILCA-99M2 camera colour profile in the log; numbers unchanged |

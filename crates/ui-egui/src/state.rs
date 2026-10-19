@@ -1,6 +1,7 @@
 //! UI state (serde: saved as preferences, readable/settable through the control channel).
 
-use serde::{Deserialize, Serialize};
+use serde::de::IgnoredAny;
+use serde::{Deserialize, Deserializer, Serialize};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -92,17 +93,27 @@ pub enum CropOverlay {
 }
 
 /// Crop-mask dimming strengths offered from the crop photo's context menu, in percent.
-pub(crate) const CROP_MASK_OPACITY_LEVELS: [u8; 5] = [0, 20, 50, 80, 100];
-pub(crate) const DEFAULT_CROP_MASK_OPACITY: u8 = 50;
+pub(crate) const CROP_MASK_OPACITY_LEVELS: [u8; 6] = [0, 20, 50, 60, 80, 100];
+pub(crate) const DEFAULT_CROP_MASK_OPACITY: u8 = 60;
 
 fn default_crop_mask_opacity() -> u8 {
     DEFAULT_CROP_MASK_OPACITY
 }
 
-fn deserialize_crop_mask_opacity<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u8, D::Error> {
-    let value = serde_json::Value::deserialize(d)?;
-    let opacity = serde_json::from_value::<u8>(value).unwrap_or(DEFAULT_CROP_MASK_OPACITY);
-    Ok(if CROP_MASK_OPACITY_LEVELS.contains(&opacity) { opacity } else { DEFAULT_CROP_MASK_OPACITY })
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum CropMaskOpacityValue {
+    Integer(u8),
+    Other(IgnoredAny),
+}
+
+fn deserialize_crop_mask_opacity<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u8, D::Error> {
+    let value = CropMaskOpacityValue::deserialize(deserializer)?;
+    let opacity = match value {
+        CropMaskOpacityValue::Integer(opacity) if CROP_MASK_OPACITY_LEVELS.contains(&opacity) => opacity,
+        CropMaskOpacityValue::Integer(_) | CropMaskOpacityValue::Other(_) => DEFAULT_CROP_MASK_OPACITY,
+    };
+    Ok(opacity)
 }
 
 /// Tool Overlay: when the retouching tools' pins (Remove / Heal / Clone spots, mask pins) show on

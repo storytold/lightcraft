@@ -1066,10 +1066,10 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         }
         "view.cropMaskOpacity" => {
             let Some(opacity) = p.get("opacity").and_then(Value::as_u64).and_then(|value| u8::try_from(value).ok()) else {
-                return Some(Err("view.cropMaskOpacity: opacity must be 0, 20, 50, 80, or 100".into()));
+                return Some(Err("view.cropMaskOpacity: opacity must be 0, 20, 50, 60, 80, or 100".into()));
             };
             if !crate::state::CROP_MASK_OPACITY_LEVELS.contains(&opacity) {
-                return Some(Err("view.cropMaskOpacity: opacity must be 0, 20, 50, 80, or 100".into()));
+                return Some(Err("view.cropMaskOpacity: opacity must be 0, 20, 50, 60, 80, or 100".into()));
             }
             app.ui.crop_mask_opacity = opacity;
             Ok(json!({"opacity": opacity}))

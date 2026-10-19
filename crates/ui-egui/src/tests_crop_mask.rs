@@ -61,7 +61,7 @@ fn crop_mask_context_menu_sets_opacity() {
     let menu = text_rect(&h, "Crop Mask").expect("the submenu label is painted");
     click(&mut h, menu.center(), "left");
     let labels = h.painted_text();
-    for label in ["Off", "20%", "50%", "80%", "100%"] {
+    for label in ["Off", "20%", "50%", "60%", "80%", "100%"] {
         assert!(labels.iter().any(|t| t == label), "missing {label}: {labels:?}");
     }
 
@@ -73,7 +73,7 @@ fn crop_mask_context_menu_sets_opacity() {
 #[test]
 fn crop_mask_opacity_command_accepts_supported_values_and_rejects_others() {
     let mut h = crop_tool();
-    for opacity in [0, 20, 50, 80, 100] {
+    for opacity in [0, 20, 50, 60, 80, 100] {
         let r = set_opacity(&mut h, json!(opacity));
         assert_eq!(r["ok"], true, "{r}");
         assert_eq!(h.app.ui.crop_mask_opacity, opacity);
@@ -101,10 +101,31 @@ fn crop_mask_opacity_is_saved_leniently() {
     let restored: UiState = serde_json::from_value(saved).expect("an unsupported saved level falls back");
     assert_eq!(restored.crop_mask_opacity, DEFAULT_CROP_MASK_OPACITY);
 
+    for malformed in [json!("60"), json!(true), Value::Null, json!([]), json!({}), json!(-1), json!(256), json!(60.0)] {
+        let mut saved = serde_json::to_value(&default).expect("UiState serializes");
+        saved["cropMaskOpacity"] = malformed;
+        let restored: UiState = serde_json::from_value(saved).expect("wrong-type opacity falls back without rejecting the settings");
+        assert_eq!(restored.crop_mask_opacity, DEFAULT_CROP_MASK_OPACITY);
+    }
+
+    let mut saved = serde_json::to_value(&default).expect("UiState serializes");
+    saved["cropMaskOpacity"] = json!(60);
+    let restored: UiState = serde_json::from_value(saved).expect("a supported level restores");
+    assert_eq!(restored.crop_mask_opacity, 60);
+
     let mut saved = serde_json::to_value(&default).expect("UiState serializes");
     saved["cropMaskOpacity"] = json!(80);
     let restored: UiState = serde_json::from_value(saved).expect("a supported level restores");
     assert_eq!(restored.crop_mask_opacity, 80);
+}
+
+#[test]
+fn crop_mask_labels_are_translated_in_every_catalog() {
+    for locale in crate::i18n::Locale::ALL {
+        for label in ["Crop Mask", "Crop Mask Opacity"] {
+            assert_eq!(*locale == crate::i18n::Locale::En, locale.tr(label) == label, "{label} in {locale:?}");
+        }
+    }
 }
 
 #[test]
@@ -126,7 +147,7 @@ fn crop_mask_opacity_changes_the_outside_area_dimming() {
     assert!(luma(baseline_outside) > 120, "the outside sample should contain visible photo detail: {baseline_outside:?}");
 
     let mut previous_luma = luma(baseline_outside);
-    for opacity in [20, 50, 80, 100] {
+    for opacity in [20, 50, 60, 80, 100] {
         set_opacity(&mut h, json!(opacity));
         h.settle(SETTLE);
         let rendered = h.paint();
