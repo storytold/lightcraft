@@ -132,7 +132,11 @@ pub(super) fn card_tile_ms(runner: &dyn TileRunner, input: &[f32]) -> f64 {
 /// Set the card up for the model at `path`: kernels built, the check tile run on both and compared, both timed.
 #[cfg(feature = "denoise")]
 pub(super) fn make_gpu(cpu: &lightcraft_denoise::runtime::CpuRunner, path: &Path, tile: usize) -> Result<GpuSide, String> {
-    let input = Arc::new(lightcraft_denoise::runtime::check_tile(tile));
+    let input = if cpu.net().in_channels == 3 {
+        Arc::new(lightcraft_denoise::runtime::check_tile_linear_rgb(tile))
+    } else {
+        Arc::new(lightcraft_denoise::runtime::check_tile(tile))
+    };
     let (on_card, net) = (input.clone(), cpu.net().clone());
     let card = move || -> Result<_, String> {
         let runner = lightcraft_gpu::nn::runner(&net, tile)?;
