@@ -306,7 +306,11 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     }
     let is_linear_rgb = all.iter().any(|m| m["selected"] == true && m["domain"] == "linearRgb");
     if is_linear_rgb {
-        hint(ui, t, "Works on raw files from cameras with standard (Bayer) or Fujifilm X-Trans sensors. Other files keep their normal noise reduction.");
+        hint(
+            ui,
+            t,
+            "Works on raw files from cameras with standard (Bayer) or Fujifilm X-Trans sensors. Other files keep their normal noise reduction.",
+        );
     } else {
         hint(ui, t, "Works on raw files from cameras with a standard (Bayer) sensor. Other files keep their normal noise reduction.");
     }

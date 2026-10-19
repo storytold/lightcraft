@@ -187,7 +187,8 @@ pub(crate) fn make_product(spec: &JobSpec, progress: Option<&Progress>) -> Resul
             Domain::BayerToRgb => {
                 if raw.cpp != 1 || !raw.cfa.as_ref().is_some_and(lightcraft_raw::Cfa::is_bayer) {
                     return Err(MakeError::Unsupported(
-                        "only Bayer raw files can be denoised with a Bayer model (this one has another sensor layout or is already demosaiced)".into(),
+                        "only Bayer raw files can be denoised with a Bayer model (this one has another sensor layout or is already demosaiced)"
+                            .into(),
                     ));
                 }
                 let n = raw.normalized().map_err(|e| MakeError::Failed(e.to_string()))?;

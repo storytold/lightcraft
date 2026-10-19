@@ -1059,4 +1059,3 @@ fn an_xtrans_photo_is_rejected_by_bayer_model_but_denoised_by_linear_rgb_model()
 
     let _ = std::fs::remove_dir_all(&dir);
 }
-
