@@ -6,10 +6,27 @@ impl LightcraftApp {
         self.services.system_theme.as_ref().and_then(|read| read(ctx)).or_else(|| ctx.system_theme())
     }
 
+    /// Whether motion is reduced: the user's choice, else the system's Reduce Motion (off when unknown).
+    pub fn reduce_motion(&self) -> bool {
+        self.ui.settings.reduce_motion.unwrap_or(self.system_reduce_motion.unwrap_or(false))
+    }
+
+    /// Read the system's Reduce Motion (`services.system_reduce_motion`) at most once a second.
+    fn follow_system_reduce_motion(&mut self) {
+        let now = self.tick_now();
+        if self.system_reduce_motion_read.is_some_and(|t| (0.0..1.0).contains(&(now - t))) {
+            return;
+        }
+        let Some(read) = self.services.system_reduce_motion.as_mut() else { return };
+        self.system_reduce_motion_read = Some(now);
+        self.system_reduce_motion = read();
+    }
+
     /// Restyle `ctx` when the theme the settings select (Appearance Mode, the dark and light
     /// themes, the system's appearance in Auto) is not the one it shows. A no-op otherwise.
     pub fn sync_theme(&mut self, ctx: &egui::Context) {
-        motion::sync(ctx, self.ui.settings.reduce_motion);
+        self.follow_system_reduce_motion();
+        motion::sync(ctx, self.reduce_motion());
         let wanted = self.ui.settings.theme(self.system_theme(ctx));
         if theme::current(ctx) != Some(wanted) {
             theme::apply_kind(ctx, wanted);

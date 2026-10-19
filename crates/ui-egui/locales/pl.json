@@ -2318,5 +2318,5 @@
   "Bottom bar": "Dolny pasek",
   "Reduce Motion": "Ogranicz ruch",
   "Reduce motion": "Ogranicz ruch",
-  "Turns off zoom and spinner animations. Fades stay.": "Wyłącza animacje powiększania i wskaźników pracy. Zanikanie i przenikanie zostają."
+  "Turns off zoom and spinner animations. Fades stay. Follows the system's Reduce Motion until you change it here.": "Wyłącza animacje powiększania i wskaźników pracy. Zanikanie i przenikanie zostają. Dopóki nie zmienisz tego tutaj, program stosuje systemowe ustawienie Ogranicz ruch."
 }

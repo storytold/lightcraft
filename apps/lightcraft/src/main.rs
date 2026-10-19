@@ -36,6 +36,7 @@ mod logging;
 #[cfg(target_os = "macos")]
 mod native_menu;
 #[cfg(target_os = "macos")]
+mod reduce_motion;
 mod screen_profile;
 mod window_gpu;
 
