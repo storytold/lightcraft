@@ -21,6 +21,9 @@ pub enum Domain {
     /// `[R, G1, G2, B]` of its 2 × 2 cells, forced to RGGB; gives camera RGB at the mosaic's resolution, so
     /// the picture is denoised and demosaiced in one step and must not be demosaiced again.
     BayerToRgb,
+    /// Demosaiced linear camera RGB packed as three planes `[R, G, B]` (NCHW); gives linear camera RGB at the
+    /// same resolution. Sensor-agnostic (works for X-Trans, Bayer, Foveon, linear DNG, HDR merges).
+    LinearRgb,
 }
 
 /// How the model's output scale is brought back to the input's.
@@ -174,6 +177,16 @@ mod tests {
     fn a_good_manifest_round_trips() {
         let m = sample();
         let json = serde_json::to_vec(&m).unwrap();
+        assert_eq!(parse(&json).unwrap(), m);
+    }
+
+    #[test]
+    fn linear_rgb_manifest_round_trips() {
+        let mut m = sample();
+        m.id = "linear-denoiser".into();
+        m.domain = Domain::LinearRgb;
+        let json = serde_json::to_vec(&m).unwrap();
+        assert!(String::from_utf8_lossy(&json).contains("\"domain\":\"linearRgb\""));
         assert_eq!(parse(&json).unwrap(), m);
     }
 
