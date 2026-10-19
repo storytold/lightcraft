@@ -296,7 +296,7 @@ fn channel_dim(v: &ValueInfoProto) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::synthetic::unet_onnx;
+    use crate::synthetic::{self, unet_onnx};
 
     fn temp_model(name: &str, bytes: &[u8]) -> std::path::PathBuf {
         let p = std::env::temp_dir().join(format!("lc-denoise-onnx-{name}-{}.onnx", std::process::id()));
@@ -319,6 +319,18 @@ mod tests {
             "every 3 × 3 convolution has its activation"
         );
         assert_eq!((net.in_channels, net.out_channels(), net.depth()), (4, 3, 2));
+        assert!(net.fits_tile(tile) && !net.fits_tile(30));
+
+        let _ = std::fs::remove_file(p);
+    }
+
+    #[test]
+    fn a_linear_rgb_u_net_is_read_and_fits_tile() {
+        let tile = 64usize;
+        let p = temp_model("unet-lin-64", &synthetic::unet_linear_rgb_onnx(tile as u64, 8, 2, 99));
+        let net = read(&p).unwrap();
+        assert!(matches!(net.ops().last(), Some(crate::net::Op::Conv(c)) if c.cout == 3 && c.k == 1));
+        assert_eq!((net.in_channels, net.out_channels(), net.depth()), (3, 3, 2));
         assert!(net.fits_tile(tile) && !net.fits_tile(30));
 
         let _ = std::fs::remove_file(p);

@@ -70,11 +70,11 @@ impl NetRunner {
         if tile == 0
             || tile > MAX_TILE
             || !net.fits_tile(tile)
-            || net.in_channels != 4
+            || !(net.in_channels == 4 || net.in_channels == 3)
             || net.out_channels() != 3
             || net.shape(0).is_none_or(|s| s.channels != net.in_channels)
         {
-            return Err(bad("the tile or Bayer-to-RGB contract does not fit the network"));
+            return Err(bad("the tile or Bayer/Linear-RGB contract does not fit the network"));
         }
         let mut last = vec![0; net.ops().len() + 1];
         for (i, op) in net.ops().iter().enumerate() {

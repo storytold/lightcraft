@@ -140,6 +140,33 @@ fn reused_im2col_clears_all_edge_padding_between_images() {
         }
     }
 }
+
+fn linear_rgb_net(tile: usize, ch: u64, depth: usize, seed: u64) -> Net {
+    let p = std::env::temp_dir().join(format!("lc-purecpu-lin-{}-{tile}-{ch}-{depth}-{seed}.onnx", std::process::id()));
+    std::fs::write(&p, synthetic::unet_linear_rgb_onnx(tile as u64, ch, depth, seed)).unwrap();
+    let n = crate::onnx::read(&p).unwrap();
+    std::fs::remove_file(p).unwrap();
+    n
+}
+
+#[test]
+fn linear_rgb_operators_match_scalar_on_random_nets() {
+    for (t, ch, d) in [(1, 3, 0), (4, 4, 1), (12, 6, 1), (32, 8, 2)] {
+        for seed in [11, 42] {
+            let n = linear_rgb_net(t, ch, d, seed);
+            assert_eq!(n.in_channels, 3);
+            assert_eq!(n.out_channels(), 3);
+            let r = NetRunner::new(&n, t).unwrap();
+            let x = random(3 * t * t, seed as u32);
+            let got = r.run(&x).unwrap();
+            assert_eq!(got.len(), 3 * t * t);
+            let want = reference::run(&n, t, &x).unwrap();
+            agree(&got, &want);
+            assert_eq!(r.run(&x).unwrap(), got);
+        }
+    }
+}
+
 #[test]
 #[ignore = "needs LC_DENOISE_MODEL; one tile with LIGHTCRAFT_PROFILE=1"]
 fn profile_one_real_tile() {
