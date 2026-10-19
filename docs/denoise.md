@@ -160,7 +160,7 @@ The synchronous command remains available for scripts that require the result im
 
 The supported model contracts are `bayerToRgb` and `linearRgb`:
 - `bayerToRgb`: normalized, black-subtracted, non-white-balanced RGGB planes `[1, 4, tile, tile]` produce camera RGB `[1, 3, 2*tile, 2*tile]`. RawNIND uses a 512-cell tile, 64-cell overlap and a mean-matched nominal gain of 1e6.
-- `linearRgb`: demosaiced linear camera RGB planes `[1, 3, tile, tile]` produce denoised camera RGB `[1, 3, tile, tile]`. Supports Fujifilm X-Trans (aperiodic $6 \times 6$ sensor mosaic, directional demosaicing) as well as Bayer and monochrome/linear RAW files.
+- `linearRgb`: demosaiced linear camera RGB planes `[1, 3, tile, tile]` produce denoised camera RGB `[1, 3, tile, tile]`. Supports Fujifilm X-Trans (aperiodic $6 \times 6$ sensor mosaic, directional demosaicing) as well as Bayer and monochrome/linear RAW files. Models can specify optional `space`: `"cameraRgb"` (default, native sensor camera RGB) or `"linRec2020"` (standardized Linear Rec. 2020; mapped from as-shot balanced Camera RGB before inference and inverted back after denoising).
 See `DenoiserManifest` for the validated JSON schema.
 
 ## Photos, previews and exports
