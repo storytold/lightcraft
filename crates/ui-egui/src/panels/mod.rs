@@ -104,9 +104,8 @@ pub fn toast(app: &mut LightcraftApp, ctx: &egui::Context) {
         shown.until = shown.until.max(now + HOVER_HOLD);
     }
     let alpha = toast_alpha(now, shown.shown_at, shown.until);
-    let galley = painter.layout(shown.text.clone(), t.font(14.0), foreground.gamma_multiply(alpha), wrap);
     painter.rect_filled(r, 6.0, background.gamma_multiply(alpha));
-    painter.galley(r.center() - galley.size() / 2.0, galley, foreground.gamma_multiply(alpha));
+    painter.galley_with_override_text_color(r.center() - galley.size() / 2.0, galley, foreground.gamma_multiply(alpha));
     ctx.request_repaint_after(std::time::Duration::from_millis(30));
 }
 
