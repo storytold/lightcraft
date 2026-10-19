@@ -119,6 +119,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.visualizeSpots", "Visualize Spots", Some("A"), "View"),
     ("view.cropOverlay", "Cycle Crop Overlay", Some("Shift+O"), "View"),
     ("view.cropOverlayOrientation", "Cycle Crop Overlay Orientation", None, "View"),
+    ("view.cropMaskOpacity", "Crop Mask Opacity", None, ""),
     ("view.back", "Back to Grid", Some("Escape"), ""),
     ("tool.done", "Done", Some("Enter"), ""),
     ("view.filterBar", "Filter Bar", Some("Shift+F"), "View"),
@@ -1062,6 +1063,16 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         "view.cropOverlayOrientation" => {
             app.ui.crop_overlay_orient = (app.ui.crop_overlay_orient + 1) % 4;
             Ok(json!({"orientation": app.ui.crop_overlay_orient}))
+        }
+        "view.cropMaskOpacity" => {
+            let Some(opacity) = p.get("opacity").and_then(Value::as_u64).and_then(|value| u8::try_from(value).ok()) else {
+                return Some(Err("view.cropMaskOpacity: opacity must be 0, 20, 50, 80, or 100".into()));
+            };
+            if !crate::state::CROP_MASK_OPACITY_LEVELS.contains(&opacity) {
+                return Some(Err("view.cropMaskOpacity: opacity must be 0, 20, 50, 80, or 100".into()));
+            }
+            app.ui.crop_mask_opacity = opacity;
+            Ok(json!({"opacity": opacity}))
         }
         "local.addRoot" => {
             // a folder kept in Local's sidebar (saved with the UI state); nothing on disk changes

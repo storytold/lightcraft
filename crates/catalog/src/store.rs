@@ -244,8 +244,6 @@ impl Store for MemStore {
 
 #[cfg(test)]
 mod tests_staging {
-    use super::*;
-
     /// A link planted at a staging name (`<name>.tmp`) is removed, never followed: the file it points to keeps its
     /// bytes and the save still lands (issue #1502).
     #[cfg(unix)]
@@ -253,7 +251,7 @@ mod tests_staging {
     fn a_link_at_the_staging_name_is_never_written_through() {
         let dir = std::env::temp_dir().join(format!("lc-staging-link-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let mut store = FsStore::open(&dir).unwrap();
+        let mut store = super::FsStore::open(&dir).unwrap();
         let victim = dir.join("victim.txt");
         std::fs::write(&victim, b"keep").unwrap();
         std::os::unix::fs::symlink(&victim, dir.join("catalog.snap.tmp")).unwrap();

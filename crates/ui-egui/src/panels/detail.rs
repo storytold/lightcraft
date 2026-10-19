@@ -898,6 +898,17 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         preview_only_pill(ui, canvas, why);
     }
     resp.context_menu(|ui| {
+        if app.ui.right == crate::state::RightPanel::Crop && !matches!(app.ui.tool.as_str(), "guidedUpright" | "straighten") {
+            crate::widgets::menu_button(ui, crate::i18n::tr("Crop Mask"), |ui| {
+                for opacity in crate::state::CROP_MASK_OPACITY_LEVELS {
+                    let label = if opacity == 0 { crate::i18n::tr("Off").to_owned() } else { format!("{opacity}%") };
+                    if ui.radio(app.ui.crop_mask_opacity == opacity, label).clicked() {
+                        let _ = app.run("view.cropMaskOpacity", json!({"opacity": opacity}));
+                    }
+                }
+            });
+            ui.separator();
+        }
         crate::widgets::menu_button(ui, crate::i18n::tr("Zoom"), |ui| {
             for (label, cmd) in [("Fit", "view.zoomFit"), ("100%", "view.zoom100"), ("Zoom In", "view.zoomIn"), ("Zoom Out", "view.zoomOut")] {
                 if ui.button(crate::i18n::tr(label)).clicked() {
@@ -1502,8 +1513,9 @@ fn crop_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
     // darken outside the crop (the box's corners in screen order: a flipped photo shows its
     // top-left corner elsewhere)
     let quad = flipped_corners(&pts, frame.flip_h, frame.flip_v);
-    if pts.len() == 4 {
-        p.add(outside_crop_mesh(map.rect, &quad, Color32::from_black_alpha(150)));
+    if pts.len() == 4 && app.ui.crop_mask_opacity > 0 {
+        let alpha = ((u16::from(app.ui.crop_mask_opacity) * 255 + 50) / 100) as u8;
+        p.add(outside_crop_mesh(map.rect, &quad, Color32::from_black_alpha(alpha)));
     }
     p.add(egui::Shape::closed_line(pts.clone(), Stroke::new(1.0, Color32::WHITE)));
     // overlay guides
