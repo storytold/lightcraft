@@ -80,6 +80,34 @@ fn bad_ratios_and_names_are_refused_and_change_nothing() {
     assert_eq!(s.crop_aspects, before);
 }
 
+/// What `crop.saveAspect` keeps, `crop.aspect` applies: a ratio whose numbers round to zero
+/// hundredths (the precision `crop.aspect` stores) is refused when saved and dropped on load,
+/// instead of becoming a menu entry that can't be used (#1856 review).
+#[test]
+fn a_saved_ratio_can_always_be_applied() {
+    let mut s = Session::with_demo();
+    for tiny in [[0.001, 0.001], [0.0049, 0.0049], [3.0, 0.004]] {
+        let applied = s.execute("crop.aspect", &json!({"aspect": tiny}));
+        assert!(applied.is_err(), "crop.aspect refuses {tiny:?}");
+        assert!(!crate::cmd::crop_aspects::valid_ratio(tiny[0], tiny[1]), "{tiny:?}");
+        assert!(s.execute("crop.saveAspect", &json!({"name": "Tiny", "aspect": tiny})).is_err(), "saving {tiny:?}");
+    }
+    assert!(s.crop_aspects.custom.is_empty());
+    for small in [[0.005, 0.005], [0.01, 0.01], [3.0, 2.0]] {
+        s.execute("crop.saveAspect", &json!({"name": "Small", "aspect": small})).unwrap();
+        s.execute("crop.aspect", &json!({"aspect": small})).unwrap();
+    }
+    let loaded = crate::cmd::crop_aspects::CropAspects {
+        custom: vec![
+            crate::cmd::crop_aspects::CustomAspect { name: "Tiny".into(), aspect: [0.001, 0.001] },
+            crate::cmd::crop_aspects::CustomAspect { name: "Small".into(), aspect: [0.005, 0.005] },
+        ],
+        hidden: Vec::new(),
+    }
+    .sanitized();
+    assert_eq!(loaded.custom.iter().map(|a| a.name.as_str()).collect::<Vec<_>>(), ["Small"]);
+}
+
 #[test]
 fn saved_ratios_move_and_delete() {
     let mut s = Session::with_demo();

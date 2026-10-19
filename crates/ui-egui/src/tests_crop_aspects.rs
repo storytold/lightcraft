@@ -58,6 +58,10 @@ fn type_into(h: &mut Headless, field: &str, text: &str) {
     h.step();
 }
 
+fn toast(h: &Headless) -> String {
+    h.app.ui.toast.clone().map(|t| t.0).unwrap_or_default()
+}
+
 fn custom_names(h: &Headless) -> Vec<String> {
     h.app.session.crop_aspects.custom.iter().map(|a| a.name.clone()).collect()
 }
@@ -112,6 +116,31 @@ fn the_custom_row_saves_a_named_ratio_and_uses_it() {
     type_into(&mut h, "field:cropCustomName", "");
     click(&mut h, "button:cropCustomSave");
     assert_eq!(custom_names(&h), ["Instagram"]);
+}
+
+/// A Save that can't be done says why and leaves the menu open, rather than closing as if it
+/// had worked: a ratio too small to apply, a built-in name (#1856 review).
+#[test]
+fn a_custom_save_that_fails_says_why_and_keeps_the_menu_open() {
+    let mut h = crop_panel();
+    let before = h.app.crop_tool_aspect();
+    open_menu(&mut h);
+    type_into(&mut h, "field:cropCustomW", "0.001");
+    type_into(&mut h, "field:cropCustomH", "0.001");
+    type_into(&mut h, "field:cropCustomName", "Tiny");
+    click(&mut h, "button:cropCustomSave");
+    assert!(custom_names(&h).is_empty(), "nothing saved");
+    assert_eq!(h.app.crop_tool_aspect(), before, "nor applied");
+    assert!(toast(&h).contains("aspect"), "the reason is shown: {:?}", toast(&h));
+    assert!(!widgets(&mut h, "cropAspectPreset:").is_empty(), "the menu stays open");
+    h.app.ui.toast = None;
+    type_into(&mut h, "field:cropCustomW", "3");
+    type_into(&mut h, "field:cropCustomH", "2");
+    type_into(&mut h, "field:cropCustomName", "Free");
+    click(&mut h, "button:cropCustomSave");
+    assert!(custom_names(&h).is_empty());
+    assert!(toast(&h).contains("built-in"), "{:?}", toast(&h));
+    assert!(!widgets(&mut h, "cropAspectPreset:").is_empty(), "the menu stays open");
 }
 
 #[test]

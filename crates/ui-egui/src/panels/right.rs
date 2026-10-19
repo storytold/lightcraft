@@ -188,23 +188,35 @@ fn custom_aspect(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         let go = text_button(ui, "cropCustomSave", "Save", false);
         save = go.clicked() || n.ending == Some(Ending::Return);
     });
-    // Accept `3`, `2.5` and `3,5`; anything else (zero, negative, text, too wide) is ignored.
+    // Accept `3`, `2.5` and `3,5`. A ratio `crop.aspect` can't take (zero, negative, text, too
+    // wide, too small) or a Save the engine refuses says why and leaves the menu open.
+    let save = save && !name.trim().is_empty();
+    if !(save || apply) {
+        ui.data_mut(|d| d.insert_temp(key, (w, h, name)));
+        return;
+    }
     let num = |t: &str| t.trim().replace(',', ".").parse::<f64>().ok();
-    let ratio = match (num(&w), num(&h)) {
-        (Some(x), Some(y)) if lightcraft_engine::cmd::crop_aspects::valid_ratio(x, y) => Some((x, y)),
-        _ => None,
-    };
-    if let Some((x, y)) = ratio {
-        if save && !name.trim().is_empty() {
-            if app.run("crop.saveAspect", json!({"name": name.trim(), "aspect": [x, y]})).is_ok() {
-                let _ = app.run("crop.aspect", json!({"aspect": [x, y]}));
-                name.clear();
-                ui.close();
+    let done = match (num(&w), num(&h)) {
+        (Some(x), Some(y)) if lightcraft_engine::cmd::crop_aspects::valid_ratio(x, y) => {
+            let saved = if save { app.run("crop.saveAspect", json!({"name": name.trim(), "aspect": [x, y]})) } else { Ok(json!(null)) };
+            match saved.and_then(|_| app.run("crop.aspect", json!({"aspect": [x, y]}))) {
+                Ok(_) => true,
+                Err(e) => {
+                    app.toast_error(ui.ctx(), e);
+                    false
+                }
             }
-        } else if apply {
-            let _ = app.run("crop.aspect", json!({"aspect": [x, y]}));
-            ui.close();
         }
+        _ => {
+            app.toast_error(ui.ctx(), crate::i18n::tr("The aspect needs two positive numbers with a ratio between 1:20 and 20:1"));
+            false
+        }
+    };
+    if done {
+        if save {
+            name.clear();
+        }
+        ui.close();
     }
     ui.data_mut(|d| d.insert_temp(key, (w, h, name)));
 }

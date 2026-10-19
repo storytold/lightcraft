@@ -66,16 +66,11 @@ impl CropAspects {
     }
 }
 
-/// A ratio `crop.aspect` takes as `[w, h]`: both positive and finite, at most 20:1 either way.
+/// A ratio `crop.aspect` takes as `[w, h]`: both positive and finite, at most 20:1 either way,
+/// and each at least 0.005 so it doesn't round to zero hundredths (what `crop.aspect` stores).
+/// The same check `crop.aspect` makes, so a ratio saved in the menu can always be applied.
 pub fn valid_ratio(w: f64, h: f64) -> bool {
-    let r = w / h;
-    w.is_finite()
-        && h.is_finite()
-        && w > 0.0
-        && h > 0.0
-        && w * 100.0 <= f64::from(u32::MAX)
-        && h * 100.0 <= f64::from(u32::MAX)
-        && (1.0 / lightcraft_geom::MAX_RATIO..=lightcraft_geom::MAX_RATIO).contains(&r)
+    super::develop::aspect_tuple("crop.aspect", w, h).is_ok()
 }
 
 /// A built-in ratio the menu may leave out (every one but Free and Original).
