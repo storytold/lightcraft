@@ -342,7 +342,9 @@ fn write_snapshot(store: &mut dyn Store, seq: u64, catalog: &Catalog) -> std::io
                 }
             }
         }
-        let mut snapshot = catalog.clone(); // cheap: photos are shared (Arc)
+        // `photos` holds `Arc<Photo>`, so this copies one pointer per photo, not the photos. The
+        // other tables (albums, stacks, folders, keywords) are copied; the derived indexes start empty.
+        let mut snapshot = catalog.clone();
         snapshot.grids = pool;
         match lightcraft_develop::with_grid_interner(index, || serde_json::to_writer(&mut b, &snapshot)) {
             // no interner can be active here (snapshot writes don't nest), so `None` is a bug:
