@@ -207,3 +207,38 @@ fn a_hovered_toast_stays_without_a_repaint_timer_and_resumes_after() {
     assert!(!t.hovered);
     assert!(crate::toast::needs_repaint(t.hovered, h.time(), t.shown_at), "the fade-out is animated again");
 }
+
+#[test]
+fn a_toast_held_through_an_idle_gap_still_gets_its_hold_after_the_pointer_leaves() {
+    let mut h = app();
+    let c = ctx(&h);
+    h.app.toast(&c, "Library saved");
+    let p = toast_centre(&h);
+    point_at(&mut h, p);
+    run_for(&mut h, 0.2);
+    // an idle app runs no frames while the pointer rests: `until` was not extended meanwhile
+    h.app.ui.toast.as_mut().unwrap().until = h.time() - 0.1;
+    assert!(h.app.ui.toast.as_ref().unwrap().hovered);
+    point_at(&mut h, egui::pos2(5.0, 5.0));
+    let t = h.app.ui.toast.clone().expect("still shown after leaving");
+    assert!((t.until - (h.time() + crate::toast::HOVER_HOLD)).abs() < 0.1, "until {} time {}", t.until, h.time());
+    run_for(&mut h, 1.9);
+    assert!(!shown(&h));
+}
+
+#[test]
+fn a_hidden_canvas_cannot_pin_a_hovered_toast() {
+    let mut h = app();
+    let c = ctx(&h);
+    h.app.toast(&c, "Library saved");
+    let p = toast_centre(&h);
+    point_at(&mut h, p);
+    assert!(h.app.ui.toast.as_ref().unwrap().hovered);
+    let canvas = h.app.canvas_rect.take();
+    crate::panels::toast(&mut h.app, &c);
+    assert!(!h.app.ui.toast.as_ref().unwrap().hovered);
+    h.app.canvas_rect = canvas;
+    h.app.ui.toast.as_mut().unwrap().until = h.time() - 0.1;
+    h.step();
+    assert!(!shown(&h));
+}
