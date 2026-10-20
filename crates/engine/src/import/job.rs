@@ -115,13 +115,13 @@ impl Prepared {
     /// Preparation may have run while another import added the same path or content.
     pub fn revalidate_add(&mut self, s: &Session) {
         let mut paths = HashMap::new();
-        let mut hashes = HashMap::new();
+        let mut hashes: HashMap<String, (bool, PhotoId)> = HashMap::new();
         for photo in s.catalog.photos() {
             if let Source::File { path } = &photo.source {
                 paths.insert(normalize_import_path(path), photo.id);
             }
             if let Some(hash) = &photo.content_hash {
-                hashes.insert(hash.clone(), photo.id);
+                note_content(&mut hashes, hash, photo.id);
             }
         }
         let mut items = Vec::with_capacity(self.items.len());
@@ -132,7 +132,7 @@ impl Prepared {
             };
             let ReadyFile { path, stored, info, sidecar, placed } = *ready;
             let existing_path = paths.get(&normalize_import_path(&stored)).copied().or_else(|| paths.get(&normalize_import_path(&path)).copied());
-            let existing_hash = info.content_hash.as_ref().and_then(|hash| hashes.get(hash).copied());
+            let existing_hash = info.content_hash.as_ref().and_then(|hash| hashes.get(crate::sync::base_hash(hash)).map(|(_, id)| *id));
             if let Some(existing) = existing_path.or(existing_hash) {
                 if let Some(placed) = &placed {
                     crate::import_move::rollback(placed);

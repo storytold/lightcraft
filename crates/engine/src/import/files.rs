@@ -323,6 +323,22 @@ mod prepared_tests {
         assert!(matches!(prepared.items.get(1), Some(PreparedItem::Ready(_))));
     }
 
+    /// A photo whose key is `<hash>:dup<id>` still stands for its content: a file with that
+    /// content that became Ready meanwhile is a duplicate, not a new photo.
+    #[test]
+    fn revalidate_add_matches_a_duplicate_keyed_photo_by_its_content() {
+        let mut s = Session::new();
+        let path = std::env::temp_dir().join("lightcraft-revalidate-dupkey.jpg");
+        let mut twin = Photo::new(PhotoId(7), Source::File { path: "/elsewhere/twin.jpg".into() }, "twin.jpg", "JPG", 1, 1, "now");
+        twin.content_hash = Some("abc123:dup5".into());
+        s.commit("twin", Op::AddPhoto { photo: Box::new(twin) }).unwrap();
+        let info = ProbeInfo { format: "JPG".into(), content_hash: Some("abc123".into()), ..ProbeInfo::default() };
+        let ready = ReadyFile { path: path.to_string_lossy().into(), stored: path.to_string_lossy().into(), info, sidecar: None, placed: None };
+        let mut prepared = Prepared { scanned: 1, items: vec![PreparedItem::Ready(Box::new(ready))] };
+        prepared.revalidate_add(&s);
+        assert!(matches!(prepared.items.first(), Some(PreparedItem::Duplicate { reason: "content", existing: Some(PhotoId(7)), .. })));
+    }
+
     fn unread_paths(n: usize) -> Vec<String> {
         (0..n).map(|i| std::env::temp_dir().join(format!("lightcraft-probe-progress-{i}.jpg")).to_string_lossy().into()).collect()
     }
