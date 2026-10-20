@@ -105,6 +105,23 @@ fn the_command_toggles_and_sets_the_setting() {
 }
 
 #[test]
+fn the_command_refuses_params_that_are_not_true_or_false_and_changes_nothing() {
+    let mut h = detail();
+    run(&mut h, "view.reduceMotion", json!({"on": true}));
+    for (params, says) in [
+        (json!({"on": "false"}), "`on` must be true or false"),
+        (json!({"on": 0}), "`on` must be true or false"),
+        (json!({"follow": "yes"}), "`follow` must be true or false"),
+        (json!({"follow": 1, "on": false}), "`follow` must be true or false"),
+    ] {
+        let r = h.request("engine.execute", json!({"command": "view.reduceMotion", "params": params}), T);
+        assert_eq!(r["ok"], false, "{params}: {r}");
+        assert!(r.to_string().contains(says), "{params}: {r}");
+        assert_eq!(h.app.ui.settings.reduce_motion, Some(true), "{params} changed the setting");
+    }
+}
+
+#[test]
 fn egui_easing_stops_with_reduce_motion_on_and_returns_when_off() {
     let mut h = detail();
     let still = egui::style::ScrollAnimation::none();
