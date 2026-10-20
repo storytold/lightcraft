@@ -71,7 +71,8 @@ pub fn check(roots: &[CrateRoot]) -> Vec<Violation> {
 }
 
 /// Collect the (package name, root source path) pairs for every workspace lib/bin target.
-/// `src_path` from cargo metadata is absolute; libs default to the manifest's `src/lib.rs`.
+/// `src_path` from cargo metadata is absolute and is used as it is; without it, libs default to the
+/// manifest's `src/lib.rs` and binaries to `src/main.rs`.
 /// Library kinds include `rlib`/`cdylib` so roots like the web build's `crate-type =
 /// ["cdylib", "rlib"]` are covered, and `proc-macro`, which cargo reports as a kind of its own.
 pub fn root_paths(meta: &serde_json::Value) -> Result<Vec<(String, PathBuf)>, String> {
@@ -87,14 +88,13 @@ pub fn root_paths(meta: &serde_json::Value) -> Result<Vec<(String, PathBuf)>, St
             let kinds: Vec<&str> = t["kind"].as_array().into_iter().flatten().filter_map(|k| k.as_str()).collect();
             let is_lib = kinds.iter().any(|&k| matches!(k, "lib" | "rlib" | "dylib" | "cdylib" | "staticlib" | "proc-macro"));
             let is_bin = kinds.contains(&"bin");
-            if is_lib {
-                out.push((name.clone(), manifest_dir.join("src/lib.rs")));
-            }
-            if is_bin {
-                match t["src_path"].as_str() {
-                    Some(s) => out.push((name.clone(), PathBuf::from(s))),
-                    None => out.push((name.clone(), manifest_dir.join("src/main.rs"))),
-                }
+            if is_lib || is_bin {
+                let fallback = if is_lib { "src/lib.rs" } else { "src/main.rs" };
+                let root = match t["src_path"].as_str() {
+                    Some(s) => PathBuf::from(s),
+                    None => manifest_dir.join(fallback),
+                };
+                out.push((name.clone(), root));
             }
         }
     }
@@ -206,5 +206,32 @@ mod tests {
     fn deny_must_contain_all_six_lints() {
         let v = check(&[root("lightcraft-foo", "#![forbid(unsafe_code)]\n#![deny(clippy::unwrap_used, clippy::expect_used)]\nfn f() {}\n")]);
         assert!(matches!(&v[..], [Violation::MissingDeny { .. }]), "{v:?}");
+    }
+
+    #[test]
+    fn library_root_follows_the_declared_lib_path() {
+        let meta = serde_json::json!({
+            "packages": [
+                { "name": "lightcraft-custom", "manifest_path": "/ws/custom/Cargo.toml",
+                  "targets": [ { "kind": ["lib"], "src_path": "/ws/custom/src/core.rs" } ] },
+            ]
+        });
+        let paths = root_paths(&meta).expect("metadata should parse");
+        assert_eq!(paths, vec![("lightcraft-custom".to_owned(), PathBuf::from("/ws/custom/src/core.rs"))]);
+    }
+
+    #[test]
+    fn targets_without_src_path_fall_back_to_the_default_files() {
+        let meta = serde_json::json!({
+            "packages": [
+                { "name": "lightcraft-plain", "manifest_path": "/ws/plain/Cargo.toml",
+                  "targets": [ { "kind": ["lib"] } ] },
+                { "name": "lightcraft-tool", "manifest_path": "/ws/tool/Cargo.toml",
+                  "targets": [ { "kind": ["bin"] } ] },
+            ]
+        });
+        let paths = root_paths(&meta).expect("metadata should parse");
+        assert_eq!(paths[0].1, PathBuf::from("/ws/plain/src/lib.rs"));
+        assert_eq!(paths[1].1, PathBuf::from("/ws/tool/src/main.rs"));
     }
 }
