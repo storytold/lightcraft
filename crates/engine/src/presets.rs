@@ -777,14 +777,15 @@ mod tests {
         assert_eq!(dv.light.contrast, 12.0, "a setting the preset names takes its value");
     }
 
-    /// Amount 0 applies nothing to a photo with no import look: the photo keeps every value.
+    /// Amount 0 applies nothing to a photo with no import look: the photo keeps every value, also
+    /// the exposure that Bright & Airy names (a camera-default original would reset it to 0).
     #[test]
     fn amount_zero_applies_nothing_to_a_photo_without_an_import_look() {
         let mut s = Session::with_demo();
         s.execute("develop.set", &json!({"control": "light.exposure", "value": 2.0})).unwrap();
         let id = s.active().unwrap();
         let before = s.develop_of(id).unwrap();
-        s.execute("preset.apply", &json!({"id": "lc.crisp-landscape", "amount": 0})).unwrap();
+        s.execute("preset.apply", &json!({"id": "lc.bright-airy", "amount": 0})).unwrap();
         assert_eq!(s.develop_of(id).unwrap(), before);
     }
 
