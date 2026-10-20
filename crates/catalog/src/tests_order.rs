@@ -244,3 +244,87 @@ fn a_loaded_library_builds_an_order_once() {
     let again = loaded.index.orders.held(sort.key).unwrap();
     assert!(Arc::ptr_eq(&kept, &again), "the order was made again");
 }
+
+/// How many times the kept orders were made from every photo while `f` ran.
+fn fresh_sorts(f: impl FnOnce()) -> usize {
+    let before = crate::order::FRESH_SORTS.with(std::cell::Cell::get);
+    f();
+    crate::order::FRESH_SORTS.with(std::cell::Cell::get) - before
+}
+
+/// Photos added (keys before, among and after the ones there, and tied with them) and removed, in one batch or many:
+/// every order follows without sorting every photo again, and equals a fresh sort.
+#[test]
+fn photos_added_and_removed_leave_every_order_right_without_a_full_sort() {
+    let mut c = library_of(300);
+    agree(&c).unwrap();
+    let new = |i: u64| {
+        let mut p = photo(i);
+        // before (2024), among (2025-0x) and after (2027) the dates there; names that tie with the others'
+        p.captured = match i % 3 {
+            0 => Some("2024-12-31T00:00:00".into()),
+            1 => Some("2025-01-01T00:00:00".into()),
+            _ => Some("2027-01-01T00:00:00".into()),
+        };
+        p.imported = format!("2026-01-0{}T00:00:00", 1 + i % 5);
+        p.rating = (i % 6) as u8;
+        p.file_size = i % 5;
+        p
+    };
+    let n = fresh_sorts(|| {
+        c.apply(Op::Batch { ops: (301..=340).map(|i| Op::AddPhoto { photo: Box::new(new(i)) }).collect() }).unwrap();
+        agree(&c).unwrap_or_else(|e| panic!("{e}"));
+        // several imports in a row, each followed by a query
+        for i in 341..=360 {
+            c.apply(Op::AddPhoto { photo: Box::new(new(i)) }).unwrap();
+            if i % 7 == 0 {
+                agree(&c).unwrap_or_else(|e| panic!("{e}"));
+            }
+        }
+        // an import undone, and some photos removed
+        c.apply(Op::Batch { ops: (301..=340).map(|i| Op::RemovePhoto { id: PhotoId(i) }).collect() }).unwrap();
+        c.apply(Op::Batch { ops: (1..=30).map(|i| Op::RemovePhoto { id: PhotoId(i * 3) }).collect() }).unwrap();
+        agree(&c).unwrap_or_else(|e| panic!("{e}"));
+    });
+    // (`agree` makes a fresh sort per sort to compare with: 12 each time, five times)
+    assert_eq!(n, 12 * 5, "only the sorts the test itself makes: {n}");
+}
+
+/// What changed is no longer remembered (more ops than the memory holds, between two queries): the photos that
+/// came or went are found by their ids and the order is sorted again from where it was, not from every photo.
+#[test]
+fn an_order_follows_added_photos_when_the_changes_are_no_longer_remembered() {
+    let mut c = library_of(300);
+    agree(&c).unwrap();
+    // (more edits than the memory holds, of the photos' ratings among others)
+    for i in 0..9000u64 {
+        c.apply(Op::SetRating { id: PhotoId(i % 300 + 1), rating: (i % 6) as u8 }).unwrap();
+    }
+    c.apply(Op::Batch { ops: (301..=340).map(|i| Op::AddPhoto { photo: Box::new(photo(i)) }).collect() }).unwrap();
+    c.apply(Op::Batch { ops: (1..=20).map(|i| Op::RemovePhoto { id: PhotoId(i * 5) }).collect() }).unwrap();
+    for sort in sorts() {
+        let mut got = None;
+        let n = fresh_sorts(|| got = c.kept_ids(&sort));
+        assert_eq!(n, 0, "{sort:?} was sorted from every photo");
+        assert_eq!(got, Some(c.sorted_from_scratch(&sort)), "{sort:?}");
+    }
+}
+
+/// An edit of a sort key still moves its photo: with the changes remembered, and with them forgotten (where the
+/// photo is found by sorting, not by being named).
+#[test]
+fn an_edited_sort_key_is_still_sorted_again() {
+    let mut c = library_of(300);
+    agree(&c).unwrap();
+    c.apply(Op::SetRating { id: PhotoId(4), rating: 5 }).unwrap();
+    c.apply(Op::SetCaptured { id: PhotoId(9), captured: Some("2030-01-01T00:00:00".into()) }).unwrap();
+    c.apply(Op::SetFile { id: PhotoId(12), file_name: "zzz.jpg".into(), source: Source::Demo { scene: 1 } }).unwrap();
+    agree(&c).unwrap();
+    for i in 0..9000u64 {
+        c.apply(Op::SetRating { id: PhotoId(i % 300 + 1), rating: (i % 6) as u8 }).unwrap();
+    }
+    c.apply(Op::SetRating { id: PhotoId(77), rating: 5 }).unwrap();
+    c.apply(Op::SetCaptured { id: PhotoId(78), captured: Some("2000-01-01T00:00:00".into()) }).unwrap();
+    c.apply(Op::SetFile { id: PhotoId(79), file_name: "AAA.jpg".into(), source: Source::Demo { scene: 1 } }).unwrap();
+    agree(&c).unwrap();
+}

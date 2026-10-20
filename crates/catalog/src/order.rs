@@ -10,8 +10,9 @@
 //! whether the photo is in the catalog), so a rating edit moves a photo only in the rating order. Up to
 //! `IN_PLACE` such photos are moved in the list itself (a search for each, a shift of the part between); more,
 //! or a photo that came or went, are taken out and put back in one pass over the list. When that is not known
-//! (too long ago, the catalog was loaded) the list is made again from every photo, or dropped when the query
-//! is of a small part of the library. A catalog copy starts without them, like the other [`crate::index`]
+//! (too long ago, the catalog was loaded) the photos that came or went are found by comparing ids and the list is
+//! sorted again from where it was ([`Catalog::remade`]: nearly in order, so about one pass), or dropped when the
+//! query is of a small part of the library. A catalog copy starts without them, like the other [`crate::index`]
 //! lookups.
 
 use std::collections::{HashMap, HashSet};
@@ -19,6 +20,12 @@ use std::sync::{Arc, Mutex};
 
 use crate::query::{Sort, SortKey};
 use crate::{Aspects, Catalog, Photo, PhotoId};
+
+#[cfg(test)]
+thread_local! {
+    /// How many times every photo was sorted from scratch on this thread: what a kept order is there to avoid.
+    pub(crate) static FRESH_SORTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
 /// A place that is no photo's.
 const GONE: u32 = u32::MAX;
@@ -160,7 +167,7 @@ impl Catalog {
             if kept.revision == self.revision && kept.order.ids.len() == self.len() {
                 return;
             }
-            kept.order = Arc::new(self.sorted_afresh(sort));
+            kept.order = Arc::new(self.remade(sort, &kept.order));
             kept.revision = self.revision;
             return;
         };
@@ -243,8 +250,39 @@ impl Catalog {
         if sorted.len() == ids.len() { Order { ids, sorted } } else { self.sorted_afresh(sort) }
     }
 
+    /// `old` worked out again when what changed since is not known (too many ops ago, the catalog was loaded): the
+    /// photos that came or went are found by comparing the ids (both lists are in id order), and the rest is
+    /// sorted from where `old` had them. Sorting that is nearly in order takes one pass and a merge, where
+    /// sorting every photo from scratch takes `n·log n` comparisons, and a photo whose key changed is put right
+    /// as well (the sort does not rely on `old` being right).
+    fn remade(&self, sort: &Sort, old: &Order) -> Order {
+        let photos: Vec<&Photo> = self.photos().map(|p| p.as_ref()).collect();
+        let ids: Vec<PhotoId> = photos.iter().map(|p| p.id).collect();
+        let now = places_now(&old.ids, &ids);
+        let mut placed = vec![false; ids.len()];
+        let mut sorted: Vec<u32> = Vec::with_capacity(ids.len());
+        for at in &old.sorted {
+            if let Some(n) = now.get(*at as usize).copied().filter(|n| *n != GONE) {
+                if let Some(p) = placed.get_mut(n as usize) {
+                    *p = true;
+                }
+                sorted.push(n);
+            }
+        }
+        // (the photos that came go after, in id order: runs for the sort to merge in)
+        sorted.extend((0..u32::try_from(ids.len()).unwrap_or(u32::MAX)).filter(|at| !placed.get(*at as usize).copied().unwrap_or(true)));
+        // (the order is total, so a stable sort gives the one order; it is the one that finds the runs already there)
+        sorted.sort_by(|a, b| match (photos.get(*a as usize), photos.get(*b as usize)) {
+            (Some(a), Some(b)) => sort.order(a, b),
+            _ => a.cmp(b),
+        });
+        Order { ids, sorted }
+    }
+
     /// Every photo, sorted.
     fn sorted_afresh(&self, sort: &Sort) -> Order {
+        #[cfg(test)]
+        FRESH_SORTS.with(|n| n.set(n.get() + 1));
         let photos: Vec<&Photo> = self.photos().map(|p| p.as_ref()).collect();
         let mut sorted: Vec<u32> = (0..u32::try_from(photos.len()).unwrap_or(u32::MAX)).collect();
         // (the order is total: no two photos tie, so the sort need not keep equal ones as they were)
