@@ -2641,8 +2641,10 @@ fn brush_in_use(app: &LightcraftApp, right: RightPanel) -> bool {
     right == RightPanel::Remove || (right == RightPanel::Masking && app.ui.tool == "brush")
 }
 
-/// The mouse wheel over the photo resizes the brush in use (up: larger, ×1.1 a notch) and
-/// Shift+wheel feathers it (+5 a notch), as `]` / `[` and ⇧`]` / ⇧`[` do, the selected spot too.
+/// The mouse wheel over the photo resizes the brush in use for the next stroke (up: larger, ×1.1 a
+/// notch) and Shift+wheel feathers it (+5 a notch). Over a Remove spot it resizes and feathers that
+/// spot instead (selecting it), so a stroke just painted can still be adjusted; elsewhere it lets go
+/// of the selected spot, whose settings the brush otherwise follows.
 /// As in Lightroom, a smooth-scrolling mouse and a two-finger trackpad swipe do the same (a line's
 /// worth of points a notch) instead of zooming or panning; pinch and ⌘-wheel still zoom.
 fn brush_wheel(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, right: RightPanel) {
@@ -2671,7 +2673,26 @@ fn brush_wheel(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response
     if size != 0.0 || feather != 0.0 {
         ui.input_mut(|i| i.events.retain(|e| ours(e).is_none()));
         ui.data_mut(|d| d.insert_temp(id, true));
-        let _ = crate::menus::adjust_brush(app, 1.1f32.powf(size.clamp(-10.0, 10.0)), 5.0 * feather.clamp(-10.0, 10.0));
+        let (k, df) = (1.1f32.powf(size.clamp(-10.0, 10.0)), 5.0 * feather.clamp(-10.0, 10.0));
+        match ui.data(|d| d.get_temp::<HoveredSpot>(egui::Id::new(HOVERED_SPOT))).filter(|_| right == RightPanel::Remove) {
+            Some(HoveredSpot { index, size, feather }) => {
+                if app.session.active_spot != Some(index) {
+                    let _ = app.run("spot.select", json!({"index": index}));
+                }
+                let mut p = json!({"index": index});
+                if k != 1.0 {
+                    p["size"] = json!((size * k as f64).clamp(0.001, 0.25));
+                }
+                if df != 0.0 {
+                    p["feather"] = json!((feather + df as f64).clamp(0.0, 100.0));
+                }
+                let _ = app.run("spot.update", p);
+            }
+            None => {
+                deselect_spot(app, right);
+                let _ = crate::menus::resize_brush(app, k, df);
+            }
+        }
     }
     // egui glides a wheel's scroll over the next frames: none of it may pan or zoom the photo
     if ui.data(|d| d.get_temp::<bool>(id)).unwrap_or(false) {
@@ -2682,9 +2703,16 @@ fn brush_wheel(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response
     }
 }
 
-/// ⌃⌥-drag (or ⌥-right-drag) on the photo sets the brush in use the way Photoshop does: across for
-/// the size, up and down for the feather (down: softer), shown on the circle where the drag
-/// started. True while it owns the pointer (nothing is painted).
+/// Lets go of the selected Remove spot, so the brush (which shows a selected spot's settings) is the next stroke's alone.
+fn deselect_spot(app: &mut LightcraftApp, right: RightPanel) {
+    if right == RightPanel::Remove && app.session.active_spot.is_some() {
+        let _ = app.run("spot.select", json!({"index": null}));
+    }
+}
+
+/// ⌃⌥-drag (or ⌥-right-drag) on the photo sets the brush in use for the next stroke the way
+/// Photoshop does: across for the size, up and down for the feather (down: softer), shown on the
+/// circle where the drag started. True while it owns the pointer (nothing is painted).
 fn brush_drag(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, right: RightPanel, map: &CanvasMap) -> bool {
     let id = egui::Id::new("brush-resize");
     if !brush_in_use(app, right) {
@@ -2700,11 +2728,9 @@ fn brush_drag(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response,
         && ((mods.ctrl && mods.alt) || (mods.alt && secondary))
         && let Some(o) = ui.input(|i| i.pointer.press_origin())
     {
+        deselect_spot(app, right);
         let (s0, f0) = current(app);
         ui.data_mut(|d| d.insert_temp(id, (o, s0, f0)));
-        if remove && app.session.active_spot.is_some() {
-            let _ = app.run("develop.beginInteraction", json!({"label": "Edit Spot"}));
-        }
     }
     let Some((o, s0, f0)) = ui.data(|d| d.get_temp::<(Pos2, f32, f32)>(id)) else { return false };
     if let Some(q) = ui.input(|i| i.pointer.latest_pos()) {
@@ -2713,7 +2739,7 @@ fn brush_drag(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response,
         let size = s0 * (dv.x / 200.0).exp();
         let feather = (f0 + dv.y * 0.3).clamp(0.0, 100.0);
         if size != s || feather != f {
-            let _ = crate::menus::adjust_brush(app, size / s.max(1e-6), feather - f);
+            let _ = crate::menus::resize_brush(app, size / s.max(1e-6), feather - f);
         }
     }
     let (s, f) = current(app);
@@ -2731,14 +2757,20 @@ fn brush_drag(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response,
     p.galley(rect.center() - galley.size() / 2.0, galley, Color32::WHITE);
     if !ui.input(|i| i.pointer.any_down()) {
         ui.data_mut(|d| d.remove_temp::<(Pos2, f32, f32)>(id));
-        if remove && app.session.interaction.is_some() {
-            let _ = app.run("develop.endInteraction", json!({}));
-        }
     }
     true
 }
 
 // ------------------------------------------------------------------------ remove
+
+/// The Remove spot under the pointer as of the last frame, with its size and feather.
+#[derive(Clone, Copy, Debug, Default)]
+struct HoveredSpot {
+    index: usize,
+    size: f64,
+    feather: f64,
+}
+const HOVERED_SPOT: &str = "remove-hovered-spot";
 
 /// The Remove tool on the photo: every spot's outline and pin (the selected one with its source),
 /// click a pin to select its spot, drag a target or source to move it, paint elsewhere to add one.
@@ -2750,6 +2782,11 @@ fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respo
     let (mode, live) = (app.ui.tool_overlay, pins_live(app, resp, map));
     // Auto also hides them while a new spot is painted
     let painting = mode == ToolOverlay::Auto && matches!(app.gesture, Some(Gesture::Spot { .. }));
+    // while a spot's target or source is dragged, its target's outline is hidden, so the edge being matched shows
+    let moving = match app.gesture {
+        Some(Gesture::SpotMove { spot, .. }) => Some(spot),
+        _ => None,
+    };
     let p = ui.painter_at(app.canvas_rect.unwrap_or(map.rect));
     let mut pins = p.clone();
     if painting {
@@ -2771,7 +2808,7 @@ fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respo
         let p = &pins;
         let target: Vec<Pos2> = s.points.iter().map(|q| map.screen(*q)).collect();
         let light = if sel { Stroke::new(1.25, Color32::from_white_alpha(230)) } else { Stroke::new(1.0, Color32::from_white_alpha(120)) };
-        if touches(&target, r, clip) {
+        if touches(&target, r, clip) && moving != Some(i) {
             draw_spot(p, &target, band, light, false, sel);
         }
         let Some(&tq) = target.first() else { continue };
@@ -2807,6 +2844,14 @@ fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respo
             .min_by(|a, b| (Some(a.0) != active, a.2).partial_cmp(&(Some(b.0) != active, b.2)).unwrap_or(std::cmp::Ordering::Equal))
     };
     let hover = resp.hover_pos().and_then(hit);
+    // the mouse wheel resizes the spot under the pointer instead of the brush (`brush_wheel`, next frame)
+    let hovered = hover.and_then(|(index, ..)| d.spots.get(index).map(|s| HoveredSpot { index, size: s.size, feather: s.feather }));
+    ui.data_mut(|m| {
+        m.remove_temp::<HoveredSpot>(egui::Id::new(HOVERED_SPOT));
+        if let Some(h) = hovered {
+            m.insert_temp(egui::Id::new(HOVERED_SPOT), h);
+        }
+    });
     if let Some(h) = resp.hover_pos() {
         if hover.is_some() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);

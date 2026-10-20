@@ -135,3 +135,31 @@ fn a_smooth_scrolling_mouse_sizes_the_brush_too() {
     assert_eq!(h.app.ui.remove_feather, feather - 5.0, "Shift+scroll feathers");
     assert_eq!((h.app.ui.zoom, h.app.ui.pan), (zoom, pan), "nor does it zoom or pan");
 }
+
+#[test]
+fn the_wheel_sizes_the_spot_under_the_pointer_and_elsewhere_the_next_stroke() {
+    let mut h = remove_tool();
+    let r = h.request(
+        "engine.execute",
+        json!({"command": "spot.add", "params": {"mode": "heal", "points": [[0.3, 0.5]], "size": 0.04, "feather": 40.0, "source": [0.0, 0.2]}}),
+        T,
+    );
+    assert_eq!(r["ok"], true, "{r}");
+    // away from the spot just added (still selected): the brush changes, the spot doesn't
+    pointer(&mut h, "move", 0.7, 0.5);
+    let brush = h.app.ui.remove_size;
+    wheel(&mut h, 1.0, egui::Modifiers::NONE);
+    assert!((h.app.ui.remove_size / brush - 1.1).abs() < 0.01, "the next stroke's brush grows");
+    assert_eq!(spots(&h)[0].size, 0.04, "the selected spot keeps its size");
+    assert_eq!(h.app.session.active_spot, None, "and is let go, so the brush no longer shows its settings");
+    h.step();
+    assert!((h.app.ui.remove_size / brush - 1.1).abs() < 0.01, "the brush keeps its new size");
+    // over the spot: that spot changes (and is selected again)
+    pointer(&mut h, "move", 0.3, 0.5);
+    wheel(&mut h, 1.0, egui::Modifiers::NONE);
+    wheel(&mut h, -1.0, egui::Modifiers::SHIFT);
+    let s = spots(&h);
+    assert!((s[0].size / 0.04 - 1.1).abs() < 0.01, "the spot under the pointer grows, got {}", s[0].size);
+    assert_eq!(s[0].feather, 35.0, "and Shift+wheel feathers it");
+    assert_eq!(h.app.session.active_spot, Some(0));
+}
