@@ -67,7 +67,7 @@ pub fn check(roots: &[CrateRoot]) -> Vec<Violation> {
 }
 
 /// The lint names listed by a `#![deny(...)]` attribute (whitespace removed), or `None` for any other
-/// attribute. Names are compared whole, so `clippy::panic_in_result_fn` is not `clippy::panic`.
+/// attribute. Names are compared whole, so a longer name that starts with a listed name does not count.
 fn deny_lints(attr: &str) -> Option<Vec<&str>> {
     let list = attr.strip_prefix("#![deny(")?.strip_suffix(")]")?;
     Some(list.split(',').collect())
@@ -155,7 +155,7 @@ fn skip_block_comment(b: &[u8], mut i: usize) -> usize {
 }
 
 /// Collect the (package name, root source path) pairs for every workspace lib/bin target.
-/// `src_path` from cargo metadata is absolute and is used as it is; without it, libs default to the
+/// `src_path` from the package metadata is absolute and is used as it is; without it, libs default to the
 /// manifest's `src/lib.rs` and binaries to `src/main.rs`.
 /// Library kinds include `rlib`/`cdylib` so roots like the web build's `crate-type =
 /// ["cdylib", "rlib"]` are covered, and `proc-macro`, which cargo reports as a kind of its own.
