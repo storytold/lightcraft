@@ -50,11 +50,10 @@ pub fn check(roots: &[CrateRoot]) -> Vec<Violation> {
     let mut out = Vec::new();
     for r in roots {
         let is_unsafe_exception = UNSAFE_EXCEPTION.contains(&r.name.as_str());
-        // scan only the head: inner attributes precede the first item (30 = longest current doc
-        // header, segment at 25, plus margin)
-        let head: Vec<&str> = r.src.lines().take(30).collect();
-        let has_forbid = head.iter().any(|l| l.trim() == "#![forbid(unsafe_code)]");
-        let has_deny = head.iter().any(|l| deny_lints(l).is_some_and(|names| DENY_LINTS.iter().all(|lint| names.contains(lint))));
+        // the inner attributes before the first item, however long the doc header above them is
+        let attrs = inner_attrs(&r.src);
+        let has_forbid = attrs.iter().any(|a| a == "#![forbid(unsafe_code)]");
+        let has_deny = attrs.iter().any(|a| deny_lints(a).is_some_and(|names| DENY_LINTS.iter().all(|lint| names.contains(lint))));
         if !has_forbid && !is_unsafe_exception {
             out.push(Violation::MissingForbid { name: r.name.clone(), path: r.root.clone() });
         }
@@ -67,12 +66,92 @@ pub fn check(roots: &[CrateRoot]) -> Vec<Violation> {
     out
 }
 
-/// The lint names listed by a `#![deny(...)]` line, ignoring a trailing `//` comment; `None` for any
-/// other line. Names are compared whole, so `clippy::panic_in_result_fn` is not `clippy::panic`.
-fn deny_lints(line: &str) -> Option<Vec<&str>> {
-    let code = line.split_once("//").map_or(line, |(code, _)| code).trim();
-    let list = code.strip_prefix("#![deny(")?.strip_suffix(")]")?;
-    Some(list.split(',').map(str::trim).collect())
+/// The lint names listed by a `#![deny(...)]` attribute (whitespace removed), or `None` for any other
+/// attribute. Names are compared whole, so `clippy::panic_in_result_fn` is not `clippy::panic`.
+fn deny_lints(attr: &str) -> Option<Vec<&str>> {
+    let list = attr.strip_prefix("#![deny(")?.strip_suffix(")]")?;
+    Some(list.split(',').collect())
+}
+
+/// The inner attributes (`#![...]`) at the top of a crate root, each with its whitespace removed.
+/// Blank lines and comments before them are skipped, and the scan stops at the first item, so the
+/// length of the doc header does not matter and an attribute inside a nested module is never read.
+fn inner_attrs(src: &str) -> Vec<String> {
+    let b = src.as_bytes();
+    let mut out = Vec::new();
+    let mut i = skip_trivia(b, 0);
+    while b.get(i..).is_some_and(|rest| rest.starts_with(b"#![")) {
+        let start = i;
+        let mut depth = 0usize;
+        let mut in_str = false;
+        while let Some(&c) = b.get(i) {
+            i += 1;
+            if in_str {
+                match c {
+                    b'\\' => i += 1,
+                    b'"' => in_str = false,
+                    _ => {}
+                }
+            } else {
+                match c {
+                    b'"' => in_str = true,
+                    b'[' => depth += 1,
+                    b']' => {
+                        depth = depth.saturating_sub(1);
+                        if depth == 0 {
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let Some(text) = src.get(start..i) else { break };
+        out.push(text.split_whitespace().collect());
+        i = skip_trivia(b, i);
+    }
+    out
+}
+
+/// The first index at or after `i` that is neither whitespace nor part of a comment.
+fn skip_trivia(b: &[u8], mut i: usize) -> usize {
+    loop {
+        while b.get(i).is_some_and(u8::is_ascii_whitespace) {
+            i += 1;
+        }
+        let rest = b.get(i..).unwrap_or_default();
+        if rest.starts_with(b"//") {
+            while b.get(i).is_some_and(|&c| c != b'\n') {
+                i += 1;
+            }
+        } else if rest.starts_with(b"/*") {
+            i = skip_block_comment(b, i);
+        } else {
+            return i;
+        }
+    }
+}
+
+/// The index just past the block comment that starts at `i` (block comments nest, as in Rust).
+fn skip_block_comment(b: &[u8], mut i: usize) -> usize {
+    let mut depth = 0usize;
+    loop {
+        match b.get(i..) {
+            Some(rest) if rest.starts_with(b"/*") => {
+                depth += 1;
+                i += 2;
+            }
+            Some(rest) if rest.starts_with(b"*/") => {
+                depth = depth.saturating_sub(1);
+                i += 2;
+                if depth == 0 {
+                    return i;
+                }
+            }
+            Some(_) => i += 1,
+            None => return i,
+        }
+    }
 }
 
 /// Collect the (package name, root source path) pairs for every workspace lib/bin target.
@@ -236,6 +315,33 @@ mod tests {
     fn lint_names_must_match_whole() {
         let src = "#![forbid(unsafe_code)]\n#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic_in_result_fn, clippy::unimplemented, clippy::todo, clippy::unreachable)]\nfn f() {}\n";
         let v = check(&[root("lightcraft-foo", src)]);
+        assert!(matches!(&v[..], [Violation::MissingDeny { .. }]), "{v:?}");
+    }
+
+    #[test]
+    fn attributes_after_a_long_header_are_found() {
+        let header: String = (0..40).map(|n| format!("//! header line {n}\n")).collect();
+        let src = format!("{header}\n#![forbid(unsafe_code)]\n#![deny({DENY})]\nfn f() {{}}\n");
+        assert!(check(&[root("lightcraft-foo", &src)]).is_empty());
+    }
+
+    #[test]
+    fn multi_line_deny_attribute_is_read() {
+        let src = "#![forbid(unsafe_code)]\n#![deny(\n    clippy::unwrap_used,\n    clippy::expect_used,\n    clippy::panic,\n    clippy::unimplemented,\n    clippy::todo,\n    clippy::unreachable,\n)]\nfn f() {}\n";
+        assert!(check(&[root("lightcraft-foo", src)]).is_empty());
+    }
+
+    #[test]
+    fn attributes_of_a_nested_module_do_not_count() {
+        let src = format!("#![forbid(unsafe_code)]\nfn f() {{}}\nmod inner {{\n    #![deny({DENY})]\n}}\n");
+        let v = check(&[root("lightcraft-foo", &src)]);
+        assert!(matches!(&v[..], [Violation::MissingDeny { .. }]), "{v:?}");
+    }
+
+    #[test]
+    fn a_commented_out_attribute_does_not_count() {
+        let src = format!("#![forbid(unsafe_code)]\n/*\n#![deny({DENY})]\n*/\nfn f() {{}}\n");
+        let v = check(&[root("lightcraft-foo", &src)]);
         assert!(matches!(&v[..], [Violation::MissingDeny { .. }]), "{v:?}");
     }
 
