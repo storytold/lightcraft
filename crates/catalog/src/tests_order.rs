@@ -245,11 +245,13 @@ fn a_loaded_library_builds_an_order_once() {
     assert!(Arc::ptr_eq(&kept, &again), "the order was made again");
 }
 
-/// How many times the kept orders were made from every photo while `f` ran.
-fn fresh_sorts(f: impl FnOnce()) -> usize {
-    let before = crate::order::FRESH_SORTS.with(std::cell::Cell::get);
-    f();
-    crate::order::FRESH_SORTS.with(std::cell::Cell::get) - before
+/// How many times every photo was sorted from scratch for `$c`'s orders while `$body` ran.
+macro_rules! fresh_sorts {
+    ($c:expr, $body:expr) => {{
+        let before = $c.full_sorts();
+        $body;
+        $c.full_sorts() - before
+    }};
 }
 
 /// Photos added (keys before, among and after the ones there, and tied with them) and removed, in one batch or many:
@@ -271,7 +273,7 @@ fn photos_added_and_removed_leave_every_order_right_without_a_full_sort() {
         p.file_size = i % 5;
         p
     };
-    let n = fresh_sorts(|| {
+    let n = fresh_sorts!(c, {
         c.apply(Op::Batch { ops: (301..=340).map(|i| Op::AddPhoto { photo: Box::new(new(i)) }).collect() }).unwrap();
         agree(&c).unwrap_or_else(|e| panic!("{e}"));
         // several imports in a row, each followed by a query
@@ -303,8 +305,8 @@ fn an_order_follows_added_photos_when_the_changes_are_no_longer_remembered() {
     c.apply(Op::Batch { ops: (301..=340).map(|i| Op::AddPhoto { photo: Box::new(photo(i)) }).collect() }).unwrap();
     c.apply(Op::Batch { ops: (1..=20).map(|i| Op::RemovePhoto { id: PhotoId(i * 5) }).collect() }).unwrap();
     for sort in sorts() {
-        let mut got = None;
-        let n = fresh_sorts(|| got = c.kept_ids(&sort));
+        let got;
+        let n = fresh_sorts!(c, got = c.kept_ids(&sort));
         assert_eq!(n, 0, "{sort:?} was sorted from every photo");
         assert_eq!(got, Some(c.sorted_from_scratch(&sort)), "{sort:?}");
     }
@@ -327,4 +329,108 @@ fn an_edited_sort_key_is_still_sorted_again() {
     c.apply(Op::SetCaptured { id: PhotoId(78), captured: Some("2000-01-01T00:00:00".into()) }).unwrap();
     c.apply(Op::SetFile { id: PhotoId(79), file_name: "AAA.jpg".into(), source: Source::Demo { scene: 1 } }).unwrap();
     agree(&c).unwrap();
+}
+
+/// A library big enough for its first sort to be made on another thread.
+fn big() -> Catalog {
+    let mut c = Catalog::new();
+    c.apply(Op::Batch { ops: (1..=50_000).map(|i| Op::AddPhoto { photo: Box::new(photo(i)) }).collect() }).unwrap();
+    c
+}
+
+fn sort_of(key: SortKey) -> Sort {
+    Sort { key, ascending: false, ..Sort::default() }
+}
+
+/// An order made on another thread equals a fresh sort, and the first query for it sorts nothing.
+#[test]
+fn an_order_made_on_another_thread_equals_a_fresh_sort() {
+    let c = big();
+    for key in KEYS {
+        let sort = sort_of(key);
+        c.prebuild_order(&sort);
+        assert!(c.index.orders.pending(key), "{key:?}: not started");
+        c.index.orders.wait_built(key);
+        let got;
+        assert_eq!(fresh_sorts!(c, got = c.kept_ids(&sort)), 0, "{key:?}: sorted every photo");
+        assert_eq!(got, Some(c.sorted_from_scratch(&sort)), "{key:?}");
+        assert!(!c.index.orders.pending(key));
+    }
+}
+
+/// What changed while it was being made (photos added and removed, keys edited, more ops than are remembered) is
+/// brought in when it is used: the order is right for the catalog as it is then.
+#[test]
+fn an_order_made_for_an_older_revision_is_brought_up_to_date() {
+    for many in [false, true] {
+        let mut c = big();
+        let sorts = [sort_of(SortKey::CaptureDate), sort_of(SortKey::Rating), sort_of(SortKey::FileName)];
+        for s in &sorts {
+            c.prebuild_order(s);
+        }
+        c.apply(Op::Batch { ops: (50_001..=50_040).map(|i| Op::AddPhoto { photo: Box::new(photo(i)) }).collect() }).unwrap();
+        c.apply(Op::Batch { ops: (1..=20).map(|i| Op::RemovePhoto { id: PhotoId(i * 7) }).collect() }).unwrap();
+        c.apply(Op::SetRating { id: PhotoId(9), rating: 5 }).unwrap();
+        c.apply(Op::SetCaptured { id: PhotoId(10), captured: Some("2031-01-01T00:00:00".into()) }).unwrap();
+        c.apply(Op::SetFile { id: PhotoId(11), file_name: "AAA.jpg".into(), source: Source::Demo { scene: 1 } }).unwrap();
+        if many {
+            for i in 0..9000u64 {
+                c.apply(Op::SetRating { id: PhotoId(i % 300 + 200), rating: (i % 6) as u8 }).unwrap();
+            }
+        }
+        for s in &sorts {
+            c.index.orders.wait_built(s.key);
+            let got;
+            assert_eq!(fresh_sorts!(c, got = c.kept_ids(s)), 0, "{s:?}: sorted every photo");
+            assert_eq!(got, Some(c.sorted_from_scratch(s)), "{s:?} (many: {many})");
+        }
+    }
+}
+
+/// A result is for the catalog that asked, in the key it asked: a copy, another key, a library that was forgotten or
+/// dropped, and a library too small for a thread get nothing of it.
+#[test]
+fn an_order_made_on_another_thread_reaches_only_the_catalog_and_key_it_was_made_for() {
+    let c = big();
+    let sort = sort_of(SortKey::Rating);
+    c.prebuild_order(&sort);
+    c.prebuild_order(&sort);
+    assert_eq!(c.index.orders.count(), 0);
+    let copy = c.clone();
+    assert!(!copy.index.orders.pending(SortKey::Rating), "a copy starts without");
+    c.index.orders.wait_built(SortKey::Rating);
+    // another key sorts for itself
+    let other = sort_of(SortKey::FileSize);
+    let got;
+    assert_eq!(fresh_sorts!(c, got = c.kept_ids(&other)), 1);
+    assert_eq!(got, Some(c.sorted_from_scratch(&other)));
+    // forgotten before it was used
+    let mut c = c;
+    c.index.orders.forget();
+    assert!(!c.index.orders.pending(SortKey::Rating));
+    assert_eq!(fresh_sorts!(c, drop(c.kept_ids(&sort))), 1, "the result of a forgotten order was used");
+    // dropped while being made
+    let gone = big();
+    gone.prebuild_order(&sort);
+    drop(gone);
+    // too small, and a shuffle
+    let small = library_of(400);
+    small.prebuild_order(&sort);
+    c.prebuild_order(&Sort { key: SortKey::Random, ..Sort::default() });
+    assert!(!small.index.orders.pending(SortKey::Rating));
+    assert!(!c.index.orders.pending(SortKey::Random));
+}
+
+/// A big view that sorts for itself first leaves nothing of an order being made for it: the worker is overtaken and
+/// its result dropped, not held.
+#[test]
+fn a_query_that_sorts_for_itself_drops_the_order_being_made() {
+    let c = big();
+    let sort = sort_of(SortKey::CaptureDate);
+    c.prebuild_order(&sort);
+    assert!(c.index.orders.pending(sort.key));
+    // (asked at once: the worker is not done, or if it is, its result is used; either way nothing is left)
+    assert_eq!(c.kept_ids(&sort), Some(c.sorted_from_scratch(&sort)));
+    assert!(!c.index.orders.pending(sort.key), "an order is still being held");
+    assert_eq!(c.index.orders.count(), 1);
 }

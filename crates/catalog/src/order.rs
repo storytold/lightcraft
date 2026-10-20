@@ -16,16 +16,11 @@
 //! lookups.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::query::{Sort, SortKey};
 use crate::{Aspects, Catalog, Photo, PhotoId};
-
-#[cfg(test)]
-thread_local! {
-    /// How many times every photo was sorted from scratch on this thread: what a kept order is there to avoid.
-    pub(crate) static FRESH_SORTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
 
 /// A place that is no photo's.
 const GONE: u32 = u32::MAX;
@@ -37,6 +32,20 @@ pub(crate) struct Order {
     ids: Vec<PhotoId>,
     /// Places in `ids`, in sort order.
     sorted: Vec<u32>,
+}
+
+impl Order {
+    /// `photos` (in id order) sorted by `sort`.
+    fn of<'a>(photos: impl Iterator<Item = &'a Photo>, sort: &Sort) -> Order {
+        let photos: Vec<&Photo> = photos.collect();
+        let mut sorted: Vec<u32> = (0..u32::try_from(photos.len()).unwrap_or(u32::MAX)).collect();
+        // (the order is total: no two photos tie, so the sort need not keep equal ones as they were)
+        sorted.sort_unstable_by(|a, b| match (photos.get(*a as usize), photos.get(*b as usize)) {
+            (Some(a), Some(b)) => sort.order(a, b),
+            _ => a.cmp(b),
+        });
+        Order { ids: photos.iter().map(|p| p.id).collect(), sorted }
+    }
 }
 
 /// An order and the revision of the catalog it is right for (outside the order, so that nothing having
@@ -53,10 +62,24 @@ struct Held {
     /// The keys a query of a middling share of the library had to sort for itself, for want of an order (see
     /// [`Catalog::order_for`]): asked again, they get one.
     missed: HashSet<SortKey>,
+    /// The orders being made on another thread ([`Catalog::prebuild_order`]), by key. Each is filled by its worker
+    /// and read here: a catalog that is dropped, or [`Orders::forget`]s, drops them, so a result never reaches
+    /// another catalog (a library that was switched to) or an order that was forgotten.
+    pending: HashMap<SortKey, Arc<Mutex<Option<Built>>>>,
 }
 
+/// An order made on a thread of its own, from the photos as they were at `revision`.
+#[derive(Debug)]
+struct Built {
+    revision: u64,
+    order: Order,
+}
+
+/// Below this many photos an order is sorted when first asked for (about 50 ms at most): a thread is not worth it.
+const PREBUILD_FROM: usize = 50_000;
+
 #[derive(Debug, Default)]
-pub(crate) struct Orders(Mutex<Held>);
+pub(crate) struct Orders(Mutex<Held>, AtomicUsize);
 
 impl Orders {
     /// Forget every order (the catalog was changed other than by ops).
@@ -70,6 +93,28 @@ impl Orders {
     #[cfg(test)]
     pub(crate) fn held(&self, key: SortKey) -> Option<Arc<Order>> {
         self.0.lock().ok()?.kept.get(&key).map(|k| k.order.clone())
+    }
+
+    /// Whether an order is being made for `key`.
+    #[cfg(test)]
+    pub(crate) fn pending(&self, key: SortKey) -> bool {
+        self.0.lock().is_ok_and(|h| h.pending.contains_key(&key))
+    }
+
+    /// Waits until the order being made for `key` is there (for a test); panics after a minute.
+    #[cfg(test)]
+    pub(crate) fn wait_built(&self, key: SortKey) {
+        let by = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while !self.ready(key) {
+            assert!(std::time::Instant::now() < by, "the order for {key:?} was not made in a minute");
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+
+    /// Whether `key` has an order that is kept, or one that was made on another thread and is waiting to be used.
+    fn ready(&self, key: SortKey) -> bool {
+        let Ok(held) = self.0.lock() else { return false };
+        held.kept.contains_key(&key) || held.pending.get(&key).is_none_or(|slot| slot.lock().is_ok_and(|b| b.is_some()))
     }
 
     /// How many orders are kept.
@@ -141,6 +186,15 @@ impl Catalog {
         let sort = ascending(sort);
         let mut held = self.index.orders.0.lock().ok()?;
         let share = sorting(matching) / sorting(n).max(1.0);
+        // (an order made on another thread, once it is there, is as one that was kept: brought up to date below)
+        let ready = if held.kept.contains_key(&sort.key) { None } else { held.pending.get(&sort.key).cloned() };
+        if let Some(slot) = ready
+            && let Ok(mut built) = slot.lock()
+            && let Some(Built { revision, order }) = built.take()
+        {
+            held.pending.remove(&sort.key);
+            held.kept.insert(sort.key, Kept { revision, order: Arc::new(order) });
+        }
         if let Some(kept) = held.kept.get_mut(&sort.key) {
             // what changed is no longer known: a small query is not worth making the whole order again
             if share < 1.0 / 16.0 && kept.revision != self.revision && self.photos_changed_since(kept.revision, reads(sort.key)).is_none() {
@@ -153,9 +207,59 @@ impl Catalog {
         if share < 1.0 / 16.0 || (share < 0.25 && held.missed.insert(sort.key)) {
             return None;
         }
+        // (an order being made on another thread is overtaken: its result is not wanted)
+        held.pending.remove(&sort.key);
         let order = Arc::new(self.sorted_afresh(&sort));
         held.kept.insert(sort.key, Kept { revision: self.revision, order: order.clone() });
         Some(order)
+    }
+
+    /// How many times every photo was sorted from scratch for this catalog's orders (a diagnostic: what a kept order
+    /// and [`Catalog::prebuild_order`] are there to avoid).
+    #[doc(hidden)]
+    pub fn full_sorts(&self) -> usize {
+        self.index.orders.1.load(Ordering::Relaxed)
+    }
+
+    /// Whether the order for `key` is there to be used: kept, or made on another thread and waiting (a diagnostic).
+    /// `true` too when none is being made.
+    #[doc(hidden)]
+    pub fn order_ready(&self, key: SortKey) -> bool {
+        self.index.orders.ready(key)
+    }
+
+    /// Starts making the order for `sort`'s key on a thread of its own, when the library is big enough for the first
+    /// sort to be felt and no order is kept or being made: the sort that a frame would otherwise wait for (the
+    /// first big view in a sort after the library was opened) is then done by the time it is asked for. The thread
+    /// gets the photos as they are now (they are shared, not copied; an edit after this copies the photo it edits)
+    /// and its result is tagged with the revision they were at: asked for, it is brought up to date like any kept
+    /// order, so it is never wrong; asked for before it is ready, the query sorts as it did. Nothing is started
+    /// where a thread can't be (it only costs that sort).
+    pub fn prebuild_order(&self, sort: &Sort) {
+        if sort.key == SortKey::Random || self.len() < PREBUILD_FROM || u32::try_from(self.len()).is_err() {
+            return;
+        }
+        let Ok(mut held) = self.index.orders.0.lock() else { return };
+        if held.kept.contains_key(&sort.key) || held.pending.contains_key(&sort.key) {
+            return;
+        }
+        let sort = ascending(sort);
+        let photos: Vec<Arc<Photo>> = self.photos().cloned().collect();
+        let revision = self.revision;
+        let slot = Arc::new(Mutex::new(None));
+        let theirs = Arc::downgrade(&slot);
+        let work = move || {
+            let order = Order::of(photos.iter().map(|p| p.as_ref()), &sort);
+            // (nobody to hand it to when the catalog is gone)
+            if let Some(slot) = theirs.upgrade()
+                && let Ok(mut s) = slot.lock()
+            {
+                *s = Some(Built { revision, order });
+            }
+        };
+        if std::thread::Builder::new().name("kept-order".into()).spawn(work).is_ok() {
+            held.pending.insert(sort.key, slot);
+        }
     }
 
     /// Brings `kept` up to date: the ops since its revision changed nothing it reads (it stays as it is, not
@@ -281,16 +385,8 @@ impl Catalog {
 
     /// Every photo, sorted.
     fn sorted_afresh(&self, sort: &Sort) -> Order {
-        #[cfg(test)]
-        FRESH_SORTS.with(|n| n.set(n.get() + 1));
-        let photos: Vec<&Photo> = self.photos().map(|p| p.as_ref()).collect();
-        let mut sorted: Vec<u32> = (0..u32::try_from(photos.len()).unwrap_or(u32::MAX)).collect();
-        // (the order is total: no two photos tie, so the sort need not keep equal ones as they were)
-        sorted.sort_unstable_by(|a, b| match (photos.get(*a as usize), photos.get(*b as usize)) {
-            (Some(a), Some(b)) => sort.order(a, b),
-            _ => a.cmp(b),
-        });
-        Order { ids: photos.iter().map(|p| p.id).collect(), sorted }
+        self.index.orders.1.fetch_add(1, Ordering::Relaxed);
+        Order::of(self.photos().map(|p| p.as_ref()), sort)
     }
 
     /// Every photo's id in `sort`, made afresh from every photo, never from a kept order: what a kept order
