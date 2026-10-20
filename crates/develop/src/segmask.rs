@@ -29,9 +29,11 @@ pub struct SegMask {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rect: Option<[f64; 4]>,
     /// Index into the catalog snapshot's shared grid table (`Catalog::grids`) this mask refers
-    /// to instead of carrying its own `data`. Purely a serialization detail of snapshots: never
-    /// set in memory (cleared when a snapshot is read), never written to log records, presets
-    /// or XMP.
+    /// to instead of carrying its own `data`. A serialization detail of snapshots only: the
+    /// snapshot writer sets it (through the interner, into its own table), `Catalog::repair`
+    /// resolves it when a snapshot is read, and no other serialization writes it. A `grid` that
+    /// arrives from any other document (a command, a preset, XMP, a log record) is read but
+    /// never written back, so it cannot point a snapshot at another mask's grid.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grid: Option<u32>,
 }
@@ -109,17 +111,16 @@ impl Serialize for SegMask {
             }
             return map.end();
         }
-        // Without a table hit: exactly the derived form (field order and skips included), so
-        // every serialization that doesn't dedup keeps its bytes (`hash64`, cache keys).
-        let len = 2 + usize::from(self.rect.is_some()) + usize::from(self.grid.is_some());
+        // Without a table hit: exactly the pre-v10 derived form (field order and skips included),
+        // so every serialization that doesn't dedup keeps its bytes (`hash64`, cache keys). `grid`
+        // is never written here: a value read from some document is dropped on save, and only the
+        // interner above can write a reference (into the table of the snapshot being written).
+        let len = 2 + usize::from(self.rect.is_some());
         let mut map = serializer.serialize_map(Some(len))?;
         map.serialize_entry("side", &self.side)?;
         map.serialize_entry("data", &self.data)?;
         if let Some(rect) = self.rect {
             map.serialize_entry("rect", &rect)?;
-        }
-        if let Some(grid) = self.grid {
-            map.serialize_entry("grid", &grid)?;
         }
         map.end()
     }
@@ -261,6 +262,19 @@ mod tests {
         assert!(m.logits().is_none(), "absurd size");
         assert!(SegMask { side: 8, data: "not base64 !".into(), rect: None, grid: None }.logits().is_none());
         assert!(SegMask { rect: Some([0.5, 0.0, 0.2, 1.0]), ..SegMask::from_logits(2, &[0.0; 4]) }.bounds().is_none());
+    }
+
+    /// A `grid` read from a document is never written outside the snapshot interner, with or
+    /// without data: the bytes stay the pre-v10 form, so `hash64` and cache keys don't depend on
+    /// a stray value (issue #2154).
+    #[test]
+    fn stray_grid_is_never_written_outside_the_interner() {
+        let empty = SegMask { side: 4, data: String::new(), rect: None, grid: None };
+        let stray = SegMask { grid: Some(3), ..empty.clone() };
+        assert_eq!(serde_json::to_string(&stray).unwrap(), "{\"side\":4,\"data\":\"\"}");
+        assert_eq!(serde_json::to_string(&stray).unwrap(), serde_json::to_string(&empty).unwrap());
+        let with_data = SegMask { grid: Some(3), ..SegMask::from_logits(4, &[1.0; 16]) };
+        assert!(!serde_json::to_string(&with_data).unwrap().contains("grid"), "no grid key outside the interner");
     }
 
     /// Without the snapshot interner the JSON is exactly the derived form it always was; with

@@ -292,3 +292,41 @@ fn import_look_masks_share_the_table_and_resolve_on_load() {
     let v: serde_json::Value = serde_json::from_str(body).unwrap();
     assert_eq!(v["catalog"]["grids"].as_array().unwrap().len(), 2, "one table entry per distinct grid, the look's included");
 }
+
+/// A `grid` that arrives from a document (a command's mask JSON, a preset, a merged partial) is
+/// not a reference and is never written as one: a snapshot must not resolve it to another mask's
+/// grid. Here photo two's mask carries `grid: 0` with empty data, while photo one's grid is the
+/// table's entry 0; before the fix the inline form wrote `"grid":0` and the load filled photo two
+/// with photo one's grid.
+#[test]
+fn stray_grid_from_a_document_is_not_written_as_a_reference() {
+    let shared = SegMask::from_logits(64, &vec![0.5f32; 64 * 64]);
+    let stray: SegMask = serde_json::from_str(r#"{"side":64,"data":"","grid":0}"#).unwrap();
+    assert_eq!(stray.grid, Some(0), "a document can set grid");
+    let mut stray_settings = DevelopSettings::default();
+    stray_settings.masks.push(object_mask(1, stray));
+
+    let (one, two) = (PhotoId(1), PhotoId(2));
+    let photo = |id: PhotoId, name: &str| Photo::new(id, Source::File { path: format!("/p/{name}") }, name, "JPEG", 60, 40, "2026-01-01");
+    let ops = [
+        Op::AddPhoto { photo: Box::new(photo(one, "1.jpg")) },
+        Op::SetDevelop { id: one, settings: Arc::new(settings_with_seg(shared.clone(), 0.2)), label: "Exposure".into(), edited: Some("t1".into()) },
+        Op::AddPhoto { photo: Box::new(photo(two, "2.jpg")) },
+        Op::SetDevelop { id: two, settings: Arc::new(stray_settings), label: "Edit".into(), edited: Some("t2".into()) },
+    ];
+    let mut live = Catalog::new();
+    for op in &ops {
+        live.apply(op.clone()).unwrap();
+    }
+
+    let m = MemStore::new();
+    let (mut j, _, _) = open(&m);
+    j.append(&ops).unwrap();
+    j.snapshot(&live).unwrap();
+    drop(j);
+    let (_, loaded, report) = open(&m);
+    assert_eq!(report.repaired, Vec::<String>::new(), "{:?}", report.repaired);
+    let MaskShape::Object { seg: Some(seg), .. } = &loaded.photo(two).unwrap().develop.masks[0].components[0].shape else { panic!("an Object mask") };
+    assert_eq!((seg.data.as_str(), seg.grid), ("", None), "the stray reference is not resolved to photo one's grid");
+    assert_eq!(loaded.to_snapshot(), live.to_snapshot());
+}
