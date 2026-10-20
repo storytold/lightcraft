@@ -228,6 +228,7 @@ fn without_a_system_setting_there_is_nothing_to_hand_back() {
     run(&mut h, "app.settings", json!({"tab": "interface"}));
     run(&mut h, "view.reduceMotion", json!({"on": true}));
     h.settle(SETTLE);
+    assert!(h.app.widgets.iter().any(|(id, _)| id == "check:settings.reduceMotion"), "the Interface tab is drawn");
     let r = h.request("ui.clickWidget", json!({"id": "button:settings.reduceMotionFollow"}), T);
     assert_ne!(r["ok"], true, "{r}");
 }
