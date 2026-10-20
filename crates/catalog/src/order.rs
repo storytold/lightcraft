@@ -21,7 +21,7 @@ use crate::{Aspects, Catalog, Photo, PhotoId};
 const GONE: u32 = u32::MAX;
 
 /// Every photo in one sort key's ascending order.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct Order {
     /// The photos' ids, in id order: the place of a photo in `sorted` is its place here.
     ids: Vec<PhotoId>,
@@ -62,6 +62,23 @@ impl Orders {
         self.0.lock().map_or(0, |h| h.kept.len())
     }
 }
+
+/// What a sort key's comparison reads of a photo, as the aspects of the ops that change it ([`Sort::order`]: the
+/// key's own field, then the file name, then the id). The import date is set when a photo is added and by no
+/// other op, and the file size only by `SetContent`, which says [`Aspects::ALL`]: those read nothing more.
+fn reads(key: SortKey) -> Aspects {
+    let key_reads = match key {
+        SortKey::CaptureDate => Aspects::CAPTURED,
+        SortKey::EditDate => Aspects::DEVELOP,
+        SortKey::Rating => Aspects::RATING,
+        SortKey::ImportDate | SortKey::FileName | SortKey::FileSize | SortKey::Random => Aspects::NONE,
+    };
+    // (the file name breaks every tie but a name sort's own; a photo that comes or goes is in every order)
+    key_reads.with(Aspects::FILE).with(Aspects::PRESENCE)
+}
+
+/// Up to this many photos touched, an order is followed by moving each in the list; more are worked out together.
+const IN_PLACE: usize = 16;
 
 /// `sort` made ascending: the one order that is kept for its key.
 fn ascending(sort: &Sort) -> Sort {
@@ -107,32 +124,79 @@ impl Catalog {
     fn order_for(&self, sort: &Sort, n: usize, matching: usize) -> Option<Arc<Order>> {
         let sort = ascending(sort);
         let mut held = self.index.orders.0.lock().ok()?;
-        let order = match held.kept.get(&sort.key) {
-            Some(old) => self.followed(&sort, old),
-            None => {
-                let share = sorting(matching) / sorting(n).max(1.0);
-                if share < 1.0 / 16.0 || (share < 0.25 && held.missed.insert(sort.key)) {
-                    return None;
-                }
-                Arc::new(self.sorted_afresh(&sort))
-            }
-        };
+        if let Some(kept) = held.kept.get_mut(&sort.key) {
+            self.catch_up(&sort, kept);
+            return Some(kept.order.clone());
+        }
+        let share = sorting(matching) / sorting(n).max(1.0);
+        if share < 1.0 / 16.0 || (share < 0.25 && held.missed.insert(sort.key)) {
+            return None;
+        }
+        let order = Arc::new(self.sorted_afresh(&sort));
         held.kept.insert(sort.key, Kept { revision: self.revision, order: order.clone() });
         Some(order)
     }
 
-    /// What `old` kept, after the ops since its revision: the same order when they changed nothing it reads.
-    fn followed(&self, sort: &Sort, old: &Kept) -> Arc<Order> {
-        let Some(touched) = self.photos_changed_since(old.revision, Aspects::ORDER) else { return Arc::new(self.sorted_afresh(sort)) };
-        if touched.is_empty() && old.order.ids.len() == self.len() {
-            return old.order.clone();
+    /// Brings `kept` up to date: the ops since its revision changed nothing it reads (it stays as it is, not
+    /// copied), a few photos (each is moved in the list itself), or many or the photos in the catalog (it is
+    /// worked out again from the old one).
+    fn catch_up(&self, sort: &Sort, kept: &mut Kept) {
+        let Some(touched) = self.photos_changed_since(kept.revision, reads(sort.key)) else {
+            kept.order = Arc::new(self.sorted_afresh(sort));
+            kept.revision = self.revision;
+            return;
+        };
+        if !(touched.is_empty() && kept.order.ids.len() == self.len()) {
+            let moved = touched.len() <= IN_PLACE && self.move_in_place(sort, &mut kept.order, &touched);
+            if !moved {
+                kept.order = Arc::new(self.rebuilt(sort, &kept.order, &touched));
+            }
         }
-        let old = &old.order;
+        kept.revision = self.revision;
+    }
+
+    /// Moves the `touched` photos (few, sorted by id, each once) to where they sort now, in `order` itself: no
+    /// copy of it unless a query's result still shares it, a search for each in the list, and a shift of the part
+    /// of the list between. `false` when that does not apply (a photo came or went: the list is of other photos),
+    /// with `order` as it was or made afresh.
+    fn move_in_place(&self, sort: &Sort, order: &mut Arc<Order>, touched: &[PhotoId]) -> bool {
+        if order.ids.len() != self.len() {
+            return false;
+        }
+        let places: Option<Vec<u32>> = touched
+            .iter()
+            .map(|id| if self.photo(*id).is_some() { order.ids.binary_search(id).ok().and_then(|i| u32::try_from(i).ok()) } else { None })
+            .collect();
+        let Some(places) = places else { return false };
+        let Order { ids, sorted } = Arc::make_mut(order);
+        // all out first: what is left is in order, so each goes back by a search
+        for at in &places {
+            let Some(from) = sorted.iter().position(|a| a == at) else {
+                *order = Arc::new(self.sorted_afresh(sort));
+                return true;
+            };
+            sorted.remove(from);
+        }
+        for at in places {
+            let key = |at: u32| ids.get(at as usize).and_then(|id| self.photo(*id));
+            let Some(p) = key(at) else { continue };
+            let to = sorted.partition_point(|other| key(*other).is_some_and(|o| sort.order(o, p).is_lt()));
+            sorted.insert(to, at);
+        }
+        if sorted.len() != ids.len() {
+            *order = Arc::new(self.sorted_afresh(sort));
+        }
+        true
+    }
+
+    /// `old` worked out again after the ops that touched the photos `touched` (sorted by id, each once), from
+    /// the list of `old` and one pass over the photos: those taken out and put back by their keys.
+    fn rebuilt(&self, sort: &Sort, old: &Order, touched: &[PhotoId]) -> Order {
         let photos: Vec<&Photo> = self.photos().map(|p| p.as_ref()).collect();
         let ids: Vec<PhotoId> = photos.iter().map(|p| p.id).collect();
         // where each photo of the old list is now (the touched ones are taken out, to go back by their new keys)
         let mut now = places_now(&old.ids, &ids);
-        for id in &touched {
+        for id in touched {
             if let Ok(i) = old.ids.binary_search(id)
                 && let Some(n) = now.get_mut(i)
             {
@@ -158,7 +222,7 @@ impl Catalog {
             from = to;
         }
         sorted.extend_from_slice(kept.get(from..).unwrap_or_default());
-        Arc::new(if sorted.len() == ids.len() { Order { ids, sorted } } else { self.sorted_afresh(sort) })
+        if sorted.len() == ids.len() { Order { ids, sorted } } else { self.sorted_afresh(sort) }
     }
 
     /// Every photo, sorted.

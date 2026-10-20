@@ -27,8 +27,12 @@ fn photo(i: u64) -> Photo {
 }
 
 fn library() -> Catalog {
+    library_of(PHOTOS)
+}
+
+fn library_of(n: u64) -> Catalog {
     let mut c = Catalog::new();
-    for i in 1..=PHOTOS {
+    for i in 1..=n {
         c.apply(Op::AddPhoto { photo: Box::new(photo(i)) }).unwrap();
     }
     c
@@ -164,4 +168,36 @@ fn a_narrow_query_does_not_build_an_order_for_the_whole_library() {
     assert_eq!(c.index.orders.count(), 0);
     assert_eq!(c.query(&third, &sort), sorted(&third));
     assert_eq!(c.index.orders.count(), 1);
+}
+
+/// Each key follows only what its comparison reads: a single op of each kind, on every photo, with several
+/// values, moves the photo in every order that reads what it changed (and leaves the others alone).
+#[test]
+fn every_kind_of_edit_alone_leaves_every_order_right() {
+    for kind in 0..12 {
+        for n in 0..PHOTOS + 2 {
+            for v in 0..6 {
+                let mut c = library();
+                agree(&c).unwrap();
+                if c.apply(op(kind, n, v)).is_ok() {
+                    agree(&c).unwrap_or_else(|e| panic!("kind {kind} photo {n} value {v}: {e}"));
+                }
+            }
+        }
+    }
+}
+
+/// More photos touched than are moved in the list one by one: they are put back together.
+#[test]
+fn many_edits_at_once_leave_every_order_right() {
+    let mut c = library_of(80);
+    agree(&c).unwrap();
+    for i in 1..=40u64 {
+        c.apply(Op::SetRating { id: PhotoId(i * 2), rating: (i % 6) as u8 }).unwrap();
+        c.apply(Op::SetCaptured { id: PhotoId(i), captured: Some(format!("2024-0{}-0{}T01:00:00", 1 + i % 9, 1 + i % 7)) }).unwrap();
+    }
+    agree(&c).unwrap();
+    c.apply(Op::RemovePhoto { id: PhotoId(7) }).unwrap();
+    c.apply(Op::SetRating { id: PhotoId(9), rating: 5 }).unwrap();
+    agree(&c).unwrap();
 }
