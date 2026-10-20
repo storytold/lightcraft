@@ -109,3 +109,29 @@ fn the_wheel_over_the_photo_sizes_and_feathers_the_brush_instead_of_zooming() {
     wheel(&mut h, -1.0, egui::Modifiers::SHIFT);
     assert_eq!(h.app.ui.remove_feather, feather - 5.0, "Shift+wheel feathers");
 }
+
+#[test]
+fn a_smooth_scrolling_mouse_sizes_the_brush_too() {
+    // macOS reports a Magic Mouse, a smooth-scrolling wheel and a trackpad in points, not lines
+    let mut h = remove_tool();
+    let c = h.app.image_rect.expect("photo drawn").center();
+    h.request("ui.move", json!({"x": c.x, "y": c.y}), T);
+    h.step();
+    let (zoom, pan, size, feather) = (h.app.ui.zoom, h.app.ui.pan, h.app.ui.remove_size, h.app.ui.remove_feather);
+    let line = h.view.ctx.options(|o| o.input_options.line_scroll_speed);
+    for (y, modifiers) in [(line, egui::Modifiers::NONE), (line, egui::Modifiers::NONE), (-line, egui::Modifiers::SHIFT)] {
+        h.events.push(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, y),
+            phase: egui::TouchPhase::Move,
+            modifiers,
+        });
+        h.step();
+    }
+    for _ in 0..30 {
+        h.step();
+    }
+    assert!((h.app.ui.remove_size / size - 1.21).abs() < 0.01, "two lines' worth of points: ×1.1², got {} from {size}", h.app.ui.remove_size);
+    assert_eq!(h.app.ui.remove_feather, feather - 5.0, "Shift+scroll feathers");
+    assert_eq!((h.app.ui.zoom, h.app.ui.pan), (zoom, pan), "nor does it zoom or pan");
+}

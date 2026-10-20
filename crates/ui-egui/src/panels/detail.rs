@@ -3,7 +3,7 @@
 
 use egui::{Align2, Color32, Pos2, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use lightcraft_catalog::PhotoId;
-use lightcraft_develop::{DevelopSettings, MaskShape};
+use lightcraft_develop::{DevelopSettings, MaskShape, SpotMode};
 use lightcraft_geom::{Affine, Point};
 use lightcraft_pipeline::geometry::Frame;
 use serde_json::json;
@@ -2643,20 +2643,24 @@ fn brush_in_use(app: &LightcraftApp, right: RightPanel) -> bool {
 
 /// The mouse wheel over the photo resizes the brush in use (up: larger, ×1.1 a notch) and
 /// Shift+wheel feathers it (+5 a notch), as `]` / `[` and ⇧`]` / ⇧`[` do, the selected spot too.
-/// The wheel then doesn't zoom; a trackpad still pans and pinch / ⌘-wheel still zoom.
+/// As in Lightroom, a smooth-scrolling mouse and a two-finger trackpad swipe do the same (a line's
+/// worth of points a notch) instead of zooming or panning; pinch and ⌘-wheel still zoom.
 fn brush_wheel(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, right: RightPanel) {
     let id = egui::Id::new("brush-wheel");
     if !brush_in_use(app, right) || !resp.hovered() {
         ui.data_mut(|d| d.remove_temp::<bool>(id));
         return;
     }
+    let line = ui.ctx().options(|o| o.input_options.line_scroll_speed).max(1.0);
     let ours = |e: &egui::Event| match e {
-        egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Line | egui::MouseWheelUnit::Page, delta, modifiers, .. } if delta.is_finite() => {
+        egui::Event::MouseWheel { unit, delta, modifiers, .. } if delta.is_finite() => {
+            // macOS reports most mice in points (Magic Mouse, smooth-scrolling wheels), a notched wheel in lines
+            let notches = if *unit == egui::MouseWheelUnit::Point { *delta / line } else { *delta };
             if *modifiers == egui::Modifiers::NONE {
-                Some((delta.y, 0.0))
+                Some((notches.y, 0.0))
             } else if *modifiers == egui::Modifiers::SHIFT {
                 // some platforms turn Shift+wheel into a sideways scroll
-                Some((0.0, delta.y + delta.x))
+                Some((0.0, notches.y + notches.x))
             } else {
                 None
             }
@@ -2717,10 +2721,8 @@ fn brush_drag(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response,
     let r = s * long;
     let p = ui.painter_at(app.canvas_rect.unwrap_or(map.rect));
     ui.ctx().set_cursor_icon(egui::CursorIcon::None);
-    for (rr, col) in [(r, Color32::WHITE), (r * (1.0 - f / 100.0).max(0.05), Color32::from_white_alpha(140))] {
-        p.circle_stroke(o, rr, Stroke::new(2.5, Color32::from_black_alpha(110)));
-        p.circle_stroke(o, rr, Stroke::new(1.0, col));
-    }
+    let band = if remove { spot_band(feather_band(app.ui.tool == "fill", r, f)) } else { (r * (1.0 - f / 100.0), r) };
+    brush_circles(&p, o, band);
     let label = format!("{} {:.0} · {} {:.0}", crate::i18n::tr("Size"), s * 1000.0, crate::i18n::tr("Feather"), f);
     let at = o + vec2(0.0, r + 14.0);
     let galley = p.layout_no_wrap(label, egui::FontId::proportional(12.0), Color32::WHITE);
@@ -2760,7 +2762,8 @@ fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respo
     let mut bodies: Vec<(usize, bool, Vec<Pos2>, f32)> = Vec::new();
     let clip = p.clip_rect();
     for (i, s) in d.spots.iter().enumerate() {
-        let r = (s.size * long) as f32;
+        let band = feather_band(s.mode == SpotMode::Fill, (s.size * long) as f32, s.feather as f32);
+        let r = band.1 + OUTLINE_GAP;
         let sel = Some(i) == active;
         if !mode.shows(sel, live) {
             continue;
@@ -2769,13 +2772,13 @@ fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respo
         let target: Vec<Pos2> = s.points.iter().map(|q| map.screen(*q)).collect();
         let light = if sel { Stroke::new(1.25, Color32::from_white_alpha(230)) } else { Stroke::new(1.0, Color32::from_white_alpha(120)) };
         if touches(&target, r, clip) {
-            draw_outline(p, &spot_outline::union_outline(&target, r), light, false);
+            draw_spot(p, &target, band, light, false, sel);
         }
         let Some(&tq) = target.first() else { continue };
         if let Some(o) = s.source_offset.filter(|_| sel) {
             let source: Vec<Pos2> = s.points.iter().map(|q| map.screen(Point::new(q.x + o.x, q.y + o.y))).collect();
             if touches(&source, r, clip) {
-                draw_outline(p, &spot_outline::union_outline(&source, r), Stroke::new(1.0, Color32::from_white_alpha(150)), true);
+                draw_spot(p, &source, band, Stroke::new(1.0, Color32::from_white_alpha(150)), true, false);
             }
             let sq = source[0];
             let dir = (tq - sq).normalized();
@@ -2795,6 +2798,7 @@ fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respo
         return;
     }
     let r = (app.ui.remove_size as f64 * long) as f32;
+    let band = feather_band(app.ui.tool == "fill", r, app.ui.remove_feather);
     // a target or source under `q` (its pin or anywhere along its stroke): the selected spot's first, then the nearest
     let hit = |q: Pos2| {
         bodies
@@ -2808,8 +2812,7 @@ fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respo
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
         } else {
             ui.ctx().set_cursor_icon(egui::CursorIcon::None);
-            p.circle_stroke(h, r, Stroke::new(1.0, Color32::WHITE));
-            p.circle_stroke(h, r * (1.0 - app.ui.remove_feather / 100.0).max(0.05), Stroke::new(1.0, Color32::from_white_alpha(110)));
+            brush_circles(&p, h, spot_band(band));
         }
     }
     let press = ui.input(|i| i.pointer.press_origin()).or(resp.interact_pointer_pos());
@@ -2861,7 +2864,7 @@ fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respo
     }
     if let Some(Gesture::Spot { points }) = &app.gesture {
         let screen: Vec<Pos2> = points.iter().map(|q| map.screen(*q)).collect();
-        draw_outline(&p, &spot_outline::union_outline(&screen, r), Stroke::new(1.25, Color32::from_white_alpha(230)), false);
+        draw_spot(&p, &screen, band, Stroke::new(1.25, Color32::from_white_alpha(230)), false, true);
     }
     if (resp.drag_stopped() || resp.clicked())
         && let Some(Gesture::Spot { points }) = app.gesture.take()
@@ -2885,9 +2888,44 @@ fn touches(pts: &[Pos2], r: f32, clip: Rect) -> bool {
     pts.iter().any(|q| clip.expand(r).contains(*q))
 }
 
+/// Where a spot of radius `r` starts and stops blending into the photo, as `pipeline::spots` does it: Heal and
+/// Clone feather inside the radius (over its outer 80 % at full feather), Fill replaces all of it and feathers
+/// outside, up to 0.3 radii further.
+fn feather_band(outside: bool, r: f32, feather: f32) -> (f32, f32) {
+    let f = (feather / 100.0).clamp(0.0, 1.0);
+    if outside { (r, r * (1.0 + 0.3 * f)) } else { (r * (1.0 - 0.8 * f), r) }
+}
+
+/// How far outside the blend a spot's outline runs (screen points), so the line never covers the edge being matched.
+const OUTLINE_GAP: f32 = 3.0;
+
+/// A spot over `pts` blending across `band`: its outline just outside the blend and, with `feather`, a faint
+/// dashed line where the blend is full, so the feather between the two shows.
+fn draw_spot(p: &egui::Painter, pts: &[Pos2], band: (f32, f32), light: Stroke, dashed: bool, feather: bool) {
+    draw_outline(p, &spot_outline::union_outline(pts, band.1 + OUTLINE_GAP), light, dashed);
+    if feather && band.1 - band.0 >= 3.0 && band.0 >= 2.0 {
+        for l in spot_outline::union_outline(pts, band.0) {
+            p.extend(egui::Shape::dashed_line(&l, Stroke::new(1.0, Color32::from_white_alpha(110)), 3.0, 3.0));
+        }
+    }
+}
+
+/// A Remove brush's `band` as its cursor shows it: the outer circle where a spot's outline will run.
+fn spot_band(band: (f32, f32)) -> (f32, f32) {
+    (band.0, band.1 + OUTLINE_GAP)
+}
+
+/// The brush cursor: a solid circle at the outer edge of `band`, a faint one at its inner edge (where the blend is full).
+fn brush_circles(p: &egui::Painter, at: Pos2, band: (f32, f32)) {
+    for (rr, col) in [(band.1, Color32::WHITE), (band.0.max(1.0), Color32::from_white_alpha(140))] {
+        p.circle_stroke(at, rr, Stroke::new(2.0, Color32::from_black_alpha(90)));
+        p.circle_stroke(at, rr, Stroke::new(1.0, col));
+    }
+}
+
 /// A spot's outline in `light`, over a dark under-stroke so a thin line stays visible on light and dark areas alike.
 fn draw_outline(p: &egui::Painter, lines: &[Vec<Pos2>], light: Stroke, dashed: bool) {
-    let dark = Stroke::new(light.width + 1.5, Color32::from_black_alpha(110));
+    let dark = Stroke::new(light.width + 1.0, Color32::from_black_alpha(90));
     for stroke in [dark, light] {
         for l in lines {
             if dashed {
