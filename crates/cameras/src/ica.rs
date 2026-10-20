@@ -45,6 +45,9 @@ const FIRST_LOOK_MIN: Duration = Duration::from_millis(300);
 const MAIN_WAIT: Duration = Duration::from_secs(5);
 /// How long opening a session may take (a phone asks its user to trust the computer first).
 const OPEN_WAIT: Duration = Duration::from_secs(60);
+/// How long an iPhone or iPad that refused the session may take to lift its access restriction
+/// (it does a moment later when unlocked, or once its user unlocks it and trusts this Mac).
+const UNLOCK_WAIT: Duration = Duration::from_secs(30);
 /// The catalog of a full card can take a while; it fails only when it stops growing this long.
 const CATALOG_STALL: Duration = Duration::from_secs(60);
 /// Bytes asked for per read, and how many reads are queued at once (the next is on its way while
@@ -86,6 +89,9 @@ struct CatalogState {
     items: usize,
     ready: bool,
     removed: bool,
+    /// An iPhone or iPad restricting access (`Some(true)`), or no longer (`Some(false)`); `None`
+    /// until it says either.
+    restricted: Option<bool>,
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -277,10 +283,14 @@ define_class!(
         }
 
         #[unsafe(method(cameraDeviceDidRemoveAccessRestriction:))]
-        fn did_remove_access_restriction(&self, _device: &ICDevice) {}
+        fn did_remove_access_restriction(&self, _device: &ICDevice) {
+            lock(self.ivars()).restricted = Some(false);
+        }
 
         #[unsafe(method(cameraDeviceDidEnableAccessRestriction:))]
-        fn did_enable_access_restriction(&self, _device: &ICDevice) {}
+        fn did_enable_access_restriction(&self, _device: &ICDevice) {
+            lock(self.ivars()).restricted = Some(true);
+        }
     }
 
     // Required by the protocol but never asked for (no thumbnails or metadata are requested);
@@ -461,10 +471,31 @@ impl Session {
         let opened = on_main(move |mtm| open_on_main(mtm, owned))??;
         let (key, state, rx) = opened;
         let session = Session { key, id: id.to_string(), state };
-        if let Some(rx) = rx {
-            // dropping `session` on failure closes the camera again
-            recv(&rx, OPEN_WAIT, None)?.map_err(Error::Device)?;
+        // dropping `session` on failure closes the camera again
+        let Some(rx) = rx else { return Ok(session) };
+        let Err(refused) = recv(&rx, OPEN_WAIT, None)? else { return Ok(session) };
+        // An iPhone or iPad refuses the first session while it restricts access ("Please unlock
+        // …"), even when it is unlocked, and lifts the restriction a moment later: wait for that
+        // (or for its user to unlock it), then ask again.
+        let reported = lock(&session.state).restricted.is_some();
+        let owned = id.to_string();
+        if !reported && !on_main(move |_| restricted_on_main(&owned))? {
+            return Err(Error::Device(refused));
         }
+        let start = Instant::now();
+        let lifted = wait_for(|| {
+            let s = lock(&session.state);
+            if s.removed || start.elapsed() >= UNLOCK_WAIT {
+                return Some(Ok(false));
+            }
+            (s.restricted == Some(false)).then_some(Ok(true))
+        })?;
+        if !lifted {
+            return Err(Error::Device(refused));
+        }
+        let owned = id.to_string();
+        let rx = on_main(move |_| reopen_on_main(&owned))??;
+        recv(&rx, OPEN_WAIT, None)?.map_err(Error::Device)?;
         Ok(session)
     }
 
@@ -561,19 +592,39 @@ fn open_on_main(mtm: MainThreadMarker, id: String) -> Result<Opened, Error> {
     .ok_or_else(|| Error::Device("busy".into()))??;
     let (key, state, start) = found;
     let Some((camera, delegate)) = start else { return Ok((key, state, None)) };
-    let (tx, rx) = mpsc::channel();
-    let done = RcBlock::new(move |e: *mut NSError| {
-        let _ = tx.send(if e.is_null() { Ok(()) } else { Err(describe(e)) });
-    });
     // SAFETY: the delegate is retained in `MAIN.open` while the session is (the camera holds it
-    // weakly); the presentation is one of the framework's constants; no options; the block lives as long as the framework needs it (it copies it).
+    // weakly); the presentation is one of the framework's constants.
     unsafe {
         camera.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
         // the files as they are on the device (a phone would otherwise offer JPEG copies of HEICs)
         camera.setMediaPresentation(ICMediaPresentation::OriginalAssets);
-        camera.requestOpenSessionWithOptions_completion(None, &done);
     }
-    Ok((key, state, Some(rx)))
+    Ok((key, state, Some(request_open(&camera))))
+}
+
+/// Ask `camera` for a session; the receiver gets the answer.
+fn request_open(camera: &ICCameraDevice) -> Receiver<Result<(), String>> {
+    let (tx, rx) = mpsc::channel();
+    let done = RcBlock::new(move |e: *mut NSError| {
+        let _ = tx.send(if e.is_null() { Ok(()) } else { Err(describe(e)) });
+    });
+    // SAFETY: no options; the framework copies the block and calls it once.
+    unsafe { camera.requestOpenSessionWithOptions_completion(None, &done) };
+    rx
+}
+
+/// Camera `id` (already in `MAIN.open`) is an iPhone or iPad restricting access.
+fn restricted_on_main(id: &str) -> bool {
+    let camera = with_main(|m| m.open.get(id).map(|o| o.camera.clone())).flatten();
+    // SAFETY: property getter without arguments.
+    camera.is_some_and(|c| unsafe { c.isAccessRestrictedAppleDevice() })
+}
+
+/// Ask camera `id` (already in `MAIN.open`) for its session again.
+fn reopen_on_main(id: &str) -> Result<Receiver<Result<(), String>>, Error> {
+    let camera = with_main(|m| m.open.get(id).map(|o| o.camera.clone())).flatten();
+    let camera = camera.ok_or_else(|| Error::Device("the camera's session has ended".into()))?;
+    Ok(request_open(&camera))
 }
 
 fn close_on_main(key: u64, id: &str) {

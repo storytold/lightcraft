@@ -800,7 +800,8 @@
   use. The system keeps the connection, so Image Capture and other apps can stay open. Same flow as on Windows:
   only new photos are copied, with progress and ✕, then the import review opens with **Move** checked (issue #1005).
   Checked with a Leica M11-P over USB 2.0: 352 photos (12.7 GB) listed in under 0.1 s once the camera has built
-  its catalog, DNGs copied at about 24 MB/s, byte-identical, with the camera's capture times.
+  its catalog, DNGs copied at about 24 MB/s, byte-identical, with the camera's capture times. iPhones work the same
+  way: unlock the phone (and tap Trust the first time); LightCraft waits up to 30 s for it.
 
 ### Model downloads time out on a name that doesn't resolve
 - Model downloads (AI denoise, faces, SAM) give up on a server name that doesn't resolve within the connect timeout,
