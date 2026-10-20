@@ -25,7 +25,7 @@ const GONE: u32 = u32::MAX;
 
 /// Every photo in one sort key's ascending order.
 #[derive(Clone, Debug)]
-struct Order {
+pub(crate) struct Order {
     /// The photos' ids, in id order: the place of a photo in `sorted` is its place here.
     ids: Vec<PhotoId>,
     /// Places in `ids`, in sort order.
@@ -57,6 +57,12 @@ impl Orders {
         if let Ok(h) = self.0.get_mut() {
             *h = Held::default();
         }
+    }
+
+    /// The order kept for `key`, to tell whether it is made again (`Arc::ptr_eq`).
+    #[cfg(test)]
+    pub(crate) fn held(&self, key: SortKey) -> Option<Arc<Order>> {
+        self.0.lock().ok()?.kept.get(&key).map(|k| k.order.clone())
     }
 
     /// How many orders are kept.
@@ -130,7 +136,7 @@ impl Catalog {
         let share = sorting(matching) / sorting(n).max(1.0);
         if let Some(kept) = held.kept.get_mut(&sort.key) {
             // what changed is no longer known: a small query is not worth making the whole order again
-            if share < 1.0 / 16.0 && self.photos_changed_since(kept.revision, reads(sort.key)).is_none() {
+            if share < 1.0 / 16.0 && kept.revision != self.revision && self.photos_changed_since(kept.revision, reads(sort.key)).is_none() {
                 held.kept.remove(&sort.key);
                 return None;
             }
@@ -150,6 +156,10 @@ impl Catalog {
     /// worked out again from the old one).
     fn catch_up(&self, sort: &Sort, kept: &mut Kept) {
         let Some(touched) = self.photos_changed_since(kept.revision, reads(sort.key)) else {
+            // (no op since, in a library just loaded: right as it is)
+            if kept.revision == self.revision && kept.order.ids.len() == self.len() {
+                return;
+            }
             kept.order = Arc::new(self.sorted_afresh(sort));
             kept.revision = self.revision;
             return;

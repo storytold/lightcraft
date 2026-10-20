@@ -225,3 +225,22 @@ fn a_small_query_does_not_remake_an_order_after_forgotten_changes() {
     assert_eq!(c.query(&few, &sort), want.iter().map(|p| p.id).collect::<Vec<_>>());
     assert_eq!(c.index.orders.count(), 0);
 }
+
+/// A library just loaded remembers no changes (its revision was set from outside): with no op since, a kept order
+/// is still right, so alternating a big view and a small one builds it once.
+#[test]
+fn a_loaded_library_builds_an_order_once() {
+    let mut loaded = Catalog::from_snapshot(&library_of(400).to_snapshot()).unwrap();
+    // (a loaded library takes a revision of its own, which is not the one its changes are remembered at)
+    loaded.revision = 1_000_000;
+    let sort = Sort { key: SortKey::FileName, ascending: true, ..Sort::default() };
+    // (a few photos: sorted alone, never a reason to drop the order)
+    let few = Filter { rating: 5, rating_op: RatingOp::Exactly, ..Filter::default() };
+    let all = Filter::default();
+    let first = loaded.query(&all, &sort);
+    let kept = loaded.index.orders.held(sort.key).unwrap();
+    loaded.query(&few, &sort);
+    assert_eq!(loaded.query(&all, &sort), first);
+    let again = loaded.index.orders.held(sort.key).unwrap();
+    assert!(Arc::ptr_eq(&kept, &again), "the order was made again");
+}
