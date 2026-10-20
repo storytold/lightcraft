@@ -163,3 +163,27 @@ fn the_wheel_sizes_the_spot_under_the_pointer_and_elsewhere_the_next_stroke() {
     assert_eq!(s[0].feather, 35.0, "and Shift+wheel feathers it");
     assert_eq!(h.app.session.active_spot, Some(0));
 }
+
+#[test]
+fn notches_on_consecutive_frames_all_count_and_undo_as_one_step() {
+    let mut h = remove_tool();
+    let r = h.request(
+        "engine.execute",
+        json!({"command": "spot.add", "params": {"mode": "heal", "points": [[0.3, 0.5]], "size": 0.04, "feather": 40.0, "source": [0.0, 0.2]}}),
+        T,
+    );
+    assert_eq!(r["ok"], true, "{r}");
+    pointer(&mut h, "move", 0.3, 0.5);
+    // a spun wheel: a notch on each of four frames
+    for _ in 0..4 {
+        wheel(&mut h, 1.0, egui::Modifiers::NONE);
+    }
+    let grown = spots(&h)[0].size;
+    assert!((grown / 0.04 - 1.1f64.powi(4)).abs() < 0.01, "four notches: ×1.1⁴, got {grown}");
+    // the gesture ends off the spot; one undo takes back all of it
+    pointer(&mut h, "move", 0.7, 0.5);
+    assert!(h.app.session.interaction.is_none(), "the wheel gesture is committed");
+    let r = h.request("engine.execute", json!({"command": "edit.undo"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(spots(&h)[0].size, 0.04, "one undo step for the whole gesture");
+}
