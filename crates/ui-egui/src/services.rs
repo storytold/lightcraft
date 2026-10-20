@@ -76,7 +76,8 @@ pub struct Services {
     /// Display (macOS, whose windows aren't colour-managed: issue #787).
     pub screen_profile: Option<ScreenProfileFn>,
     /// The system's Reduce Motion setting (macOS), followed while Settings ▸ Interface ▸ Reduce motion
-    /// has not been changed by the user; read about once a second, as people switch it while the app runs.
+    /// has not been changed by the user; read at most once a second, on frames the app draws (an idle
+    /// window notices on its next input), as people switch it while the app runs.
     pub system_reduce_motion: Option<SystemReduceMotionFn>,
     /// Save dialog for an exported `.lcpreset` file.
     pub save_preset_file: Option<SaveFile>,

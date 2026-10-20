@@ -144,6 +144,8 @@ pub(crate) fn services(cc: &eframe::CreationContext<'_>, log_file: Option<&std::
         // Follow System Settings ▸ Accessibility ▸ Display ▸ Reduce motion until the user chooses
         #[cfg(target_os = "macos")]
         system_reduce_motion: Some(Box::new(reduce_motion::system)),
+        #[cfg(not(target_os = "macos"))]
+        system_reduce_motion: None,
         // Linux: the profile the desktop assigns in colord, read off the UI thread
         #[cfg(target_os = "linux")]
         screen_profile: Some(colord::service()),

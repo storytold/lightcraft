@@ -2599,5 +2599,7 @@
   "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Предотвращать мерцание G-SYNC/FreeSync (после перезапуска)",
   "Reduce Motion": "Уменьшить движение",
   "Reduce motion": "Уменьшить движение",
-  "Turns off zoom and spinner animations. Fades stay. Follows the system's Reduce Motion until you change it here.": "Отключает анимацию масштабирования и индикаторов работы. Плавные затухания остаются. Пока вы не измените это здесь, действует системная настройка «Уменьшение движения»."
+  "Turns off zoom and spinner animations. Fades stay. Follows the system's Reduce Motion until you change it here.": "Отключает анимацию масштабирования и индикаторов работы. Плавные затухания остаются. Пока вы не измените это здесь, действует системная настройка «Уменьшение движения».",
+  "Use the system setting": "Использовать настройку системы",
+  "Turns off zoom and spinner animations. Fades stay.": "Отключает анимацию масштабирования и индикаторов работы. Плавные затухания остаются."
 }
