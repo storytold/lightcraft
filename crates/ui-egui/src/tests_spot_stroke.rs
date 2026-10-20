@@ -87,3 +87,25 @@ fn a_stroke_is_grabbed_anywhere_along_it() {
     assert!((s[0].points[0].y - 0.6).abs() < 0.03 && (s[0].points[0].x - 0.3).abs() < 0.01, "{:?}", s[0].points);
     assert_eq!(s[0].points.len(), 4);
 }
+
+fn wheel(h: &mut Headless, dy: f32, modifiers: egui::Modifiers) {
+    h.events.push(egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Line, delta: egui::vec2(0.0, dy), phase: egui::TouchPhase::Move, modifiers });
+    h.step();
+}
+
+#[test]
+fn the_wheel_over_the_photo_sizes_and_feathers_the_brush_instead_of_zooming() {
+    let mut h = remove_tool();
+    let c = h.app.image_rect.expect("photo drawn").center();
+    h.request("ui.move", json!({"x": c.x, "y": c.y}), T);
+    h.step();
+    let (zoom, size, feather) = (h.app.ui.zoom, h.app.ui.remove_size, h.app.ui.remove_feather);
+    wheel(&mut h, 2.0, egui::Modifiers::NONE);
+    for _ in 0..30 {
+        h.step();
+    }
+    assert!((h.app.ui.remove_size / size - 1.21).abs() < 0.01, "two notches up: ×1.1², got {} from {size}", h.app.ui.remove_size);
+    assert_eq!(h.app.ui.zoom, zoom, "the wheel doesn't zoom while the Remove tool is open");
+    wheel(&mut h, -1.0, egui::Modifiers::SHIFT);
+    assert_eq!(h.app.ui.remove_feather, feather - 5.0, "Shift+wheel feathers");
+}

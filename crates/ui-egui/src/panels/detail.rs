@@ -555,6 +555,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let mut img_rect = animated_rect(ui.ctx(), &mut app.ui.zoom_anim, target_rect);
     let in_pane = |pane: Rect, image: Rect| image.translate(pane.center() - main_area.center());
     let mut navigating = false;
+    brush_wheel(app, ui, &resp, right);
     for &view_area in &areas {
         let view_img = in_pane(view_area, img_rect);
         if navigate_gesture(app, ui, &resp, view_area, view_img, native) || middle_pan(app, ui, &resp, view_area, view_img) {
@@ -929,7 +930,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     if !matches!(right, RightPanel::Crop | RightPanel::Masking | RightPanel::Remove | RightPanel::RedEye) {
         general_cursor(app, ui, &resp, img_rect, main_area);
     }
-    if !navigating {
+    if !navigating && !brush_drag(app, ui, &resp, right, &map) {
         match right {
             RightPanel::Crop => crop_overlay(app, ui, &resp, &map, &frame, &d, id),
             RightPanel::Masking => mask_overlay(app, ui, &resp, &map, &d),
@@ -2631,6 +2632,108 @@ fn pins_live(app: &LightcraftApp, resp: &egui::Response, map: &CanvasMap) -> boo
 fn pin(p: &egui::Painter, c: Pos2, sel: bool) {
     p.circle_filled(c, 6.0, if sel { Color32::from_rgb(1, 101, 221) } else { Color32::from_gray(200) });
     p.circle_stroke(c, 6.0, Stroke::new(1.5, Color32::WHITE));
+}
+
+// ------------------------------------------------------------------------ brush by mouse
+
+/// The brush the pointer paints with on the photo: the Remove tool's, or the Masking brush.
+fn brush_in_use(app: &LightcraftApp, right: RightPanel) -> bool {
+    right == RightPanel::Remove || (right == RightPanel::Masking && app.ui.tool == "brush")
+}
+
+/// The mouse wheel over the photo resizes the brush in use (up: larger, ×1.1 a notch) and
+/// Shift+wheel feathers it (+5 a notch), as `]` / `[` and ⇧`]` / ⇧`[` do, the selected spot too.
+/// The wheel then doesn't zoom; a trackpad still pans and pinch / ⌘-wheel still zoom.
+fn brush_wheel(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, right: RightPanel) {
+    let id = egui::Id::new("brush-wheel");
+    if !brush_in_use(app, right) || !resp.hovered() {
+        ui.data_mut(|d| d.remove_temp::<bool>(id));
+        return;
+    }
+    let ours = |e: &egui::Event| match e {
+        egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Line | egui::MouseWheelUnit::Page, delta, modifiers, .. } if delta.is_finite() => {
+            if *modifiers == egui::Modifiers::NONE {
+                Some((delta.y, 0.0))
+            } else if *modifiers == egui::Modifiers::SHIFT {
+                // some platforms turn Shift+wheel into a sideways scroll
+                Some((0.0, delta.y + delta.x))
+            } else {
+                None
+            }
+        }
+        _ => None,
+    };
+    let (size, feather) = ui.input(|i| i.events.iter().filter_map(ours).fold((0.0f32, 0.0f32), |a, b| (a.0 + b.0, a.1 + b.1)));
+    if size != 0.0 || feather != 0.0 {
+        ui.input_mut(|i| i.events.retain(|e| ours(e).is_none()));
+        ui.data_mut(|d| d.insert_temp(id, true));
+        let _ = crate::menus::adjust_brush(app, 1.1f32.powf(size.clamp(-10.0, 10.0)), 5.0 * feather.clamp(-10.0, 10.0));
+    }
+    // egui glides a wheel's scroll over the next frames: none of it may pan or zoom the photo
+    if ui.data(|d| d.get_temp::<bool>(id)).unwrap_or(false) {
+        if ui.input(|i| i.smooth_scroll_delta == egui::Vec2::ZERO) {
+            ui.data_mut(|d| d.remove_temp::<bool>(id));
+        }
+        ui.input_mut(|i| i.smooth_scroll_delta = egui::Vec2::ZERO);
+    }
+}
+
+/// ⌃⌥-drag (or ⌥-right-drag) on the photo sets the brush in use the way Photoshop does: across for
+/// the size, up and down for the feather (down: softer), shown on the circle where the drag
+/// started. True while it owns the pointer (nothing is painted).
+fn brush_drag(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, right: RightPanel, map: &CanvasMap) -> bool {
+    let id = egui::Id::new("brush-resize");
+    if !brush_in_use(app, right) {
+        ui.data_mut(|d| d.remove_temp::<(Pos2, f32, f32)>(id));
+        return false;
+    }
+    let remove = right == RightPanel::Remove;
+    let current = |app: &LightcraftApp| {
+        if remove { (app.ui.remove_size, app.ui.remove_feather) } else { (app.ui.brush_size, app.ui.brush_feather) }
+    };
+    let (mods, secondary) = ui.input(|i| (i.modifiers, i.pointer.secondary_down()));
+    if resp.drag_started()
+        && ((mods.ctrl && mods.alt) || (mods.alt && secondary))
+        && let Some(o) = ui.input(|i| i.pointer.press_origin())
+    {
+        let (s0, f0) = current(app);
+        ui.data_mut(|d| d.insert_temp(id, (o, s0, f0)));
+        if remove && app.session.active_spot.is_some() {
+            let _ = app.run("develop.beginInteraction", json!({"label": "Edit Spot"}));
+        }
+    }
+    let Some((o, s0, f0)) = ui.data(|d| d.get_temp::<(Pos2, f32, f32)>(id)) else { return false };
+    if let Some(q) = ui.input(|i| i.pointer.latest_pos()) {
+        let dv = q - o;
+        let (s, f) = current(app);
+        let size = s0 * (dv.x / 200.0).exp();
+        let feather = (f0 + dv.y * 0.3).clamp(0.0, 100.0);
+        if size != s || feather != f {
+            let _ = crate::menus::adjust_brush(app, size / s.max(1e-6), feather - f);
+        }
+    }
+    let (s, f) = current(app);
+    let long = map.rect.width().max(map.rect.height());
+    let r = s * long;
+    let p = ui.painter_at(app.canvas_rect.unwrap_or(map.rect));
+    ui.ctx().set_cursor_icon(egui::CursorIcon::None);
+    for (rr, col) in [(r, Color32::WHITE), (r * (1.0 - f / 100.0).max(0.05), Color32::from_white_alpha(140))] {
+        p.circle_stroke(o, rr, Stroke::new(2.5, Color32::from_black_alpha(110)));
+        p.circle_stroke(o, rr, Stroke::new(1.0, col));
+    }
+    let label = format!("{} {:.0} · {} {:.0}", crate::i18n::tr("Size"), s * 1000.0, crate::i18n::tr("Feather"), f);
+    let at = o + vec2(0.0, r + 14.0);
+    let galley = p.layout_no_wrap(label, egui::FontId::proportional(12.0), Color32::WHITE);
+    let rect = Rect::from_center_size(at, galley.size() + vec2(10.0, 4.0));
+    p.rect_filled(rect, 4.0, Color32::from_black_alpha(160));
+    p.galley(rect.center() - galley.size() / 2.0, galley, Color32::WHITE);
+    if !ui.input(|i| i.pointer.any_down()) {
+        ui.data_mut(|d| d.remove_temp::<(Pos2, f32, f32)>(id));
+        if remove && app.session.interaction.is_some() {
+            let _ = app.run("develop.endInteraction", json!({}));
+        }
+    }
+    true
 }
 
 // ------------------------------------------------------------------------ remove
