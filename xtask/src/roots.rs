@@ -54,10 +54,7 @@ pub fn check(roots: &[CrateRoot]) -> Vec<Violation> {
         // header, segment at 25, plus margin)
         let head: Vec<&str> = r.src.lines().take(30).collect();
         let has_forbid = head.iter().any(|l| l.trim() == "#![forbid(unsafe_code)]");
-        let has_deny = head.iter().any(|l| {
-            let t = l.trim();
-            t.starts_with("#![deny(") && DENY_LINTS.iter().all(|lint| t.contains(lint))
-        });
+        let has_deny = head.iter().any(|l| deny_lints(l).is_some_and(|names| DENY_LINTS.iter().all(|lint| names.contains(lint))));
         if !has_forbid && !is_unsafe_exception {
             out.push(Violation::MissingForbid { name: r.name.clone(), path: r.root.clone() });
         }
@@ -68,6 +65,14 @@ pub fn check(roots: &[CrateRoot]) -> Vec<Violation> {
     out.sort_by_key(|v| v.to_string());
     out.dedup();
     out
+}
+
+/// The lint names listed by a `#![deny(...)]` line, ignoring a trailing `//` comment; `None` for any
+/// other line. Names are compared whole, so `clippy::panic_in_result_fn` is not `clippy::panic`.
+fn deny_lints(line: &str) -> Option<Vec<&str>> {
+    let code = line.split_once("//").map_or(line, |(code, _)| code).trim();
+    let list = code.strip_prefix("#![deny(")?.strip_suffix(")]")?;
+    Some(list.split(',').map(str::trim).collect())
 }
 
 /// Collect the (package name, root source path) pairs for every workspace lib/bin target.
@@ -218,6 +223,20 @@ mod tests {
         });
         let paths = root_paths(&meta).expect("metadata should parse");
         assert_eq!(paths, vec![("lightcraft-custom".to_owned(), PathBuf::from("/ws/custom/src/core.rs"))]);
+    }
+
+    #[test]
+    fn a_lint_named_only_in_a_trailing_comment_does_not_count() {
+        let src = "#![forbid(unsafe_code)]\n#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo)] // clippy::unreachable\nfn f() {}\n";
+        let v = check(&[root("lightcraft-foo", src)]);
+        assert!(matches!(&v[..], [Violation::MissingDeny { .. }]), "{v:?}");
+    }
+
+    #[test]
+    fn lint_names_must_match_whole() {
+        let src = "#![forbid(unsafe_code)]\n#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic_in_result_fn, clippy::unimplemented, clippy::todo, clippy::unreachable)]\nfn f() {}\n";
+        let v = check(&[root("lightcraft-foo", src)]);
+        assert!(matches!(&v[..], [Violation::MissingDeny { .. }]), "{v:?}");
     }
 
     #[test]
