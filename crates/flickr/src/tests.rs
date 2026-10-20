@@ -203,6 +203,40 @@ fn transient_failures_are_retried_and_account_failures_are_not() {
 }
 
 #[test]
+fn a_lost_answer_is_not_retried() {
+    // Flickr takes the whole photo, then the answer never comes (or a gateway gives up):
+    // the photo may be on Flickr already, so it is sent once and the error says so
+    for (delay, status) in [(Duration::from_secs(5), 200), (Duration::ZERO, 502), (Duration::ZERO, 504)] {
+        let seen = Arc::new(Mutex::new(0usize));
+        let count = seen.clone();
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", l.local_addr().unwrap());
+        std::thread::spawn(move || {
+            for s in l.incoming() {
+                let Ok(mut s) = s else { break };
+                let _ = read_request(&mut s);
+                *count.lock().unwrap() += 1;
+                std::thread::sleep(delay);
+                let _ = write!(s, "HTTP/1.1 {status} X\r\nContent-Length: 0\r\n\r\n");
+            }
+        });
+        let mut c = Client::new(ApiKey { key: KEY.into(), secret: SECRET.into() });
+        c.endpoints = Endpoints::all(&base);
+        c.stall_timeout = Duration::from_millis(300);
+        c.retry_pause = Duration::from_millis(10);
+        let e = c.upload(&token(), &PhotoInfo::default(), "a.jpg", b"x", &AtomicBool::new(false)).unwrap_err();
+        assert!(e.outcome_unknown() && !e.is_transient(), "{status}: {e:?}");
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(*seen.lock().unwrap(), 1, "HTTP {status}: sent once, not retried");
+    }
+    // no connection at all: nothing reached Flickr, so it is safe to try again
+    let closed = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap();
+    let e = Error::Http(lightcraft_fetch::http::HttpError::Connect(format!("{closed}: refused")));
+    assert!(e.is_transient() && !e.outcome_unknown());
+    assert!(!Error::Flickr { code: 3, message: "General upload failure".into() }.is_transient());
+}
+
+#[test]
 fn a_cancelled_upload_stops() {
     let f = fake(|_, _| (503, "busy".into()));
     let mut c = client(&f);

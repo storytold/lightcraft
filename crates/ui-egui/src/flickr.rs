@@ -173,6 +173,8 @@ mod native {
         rx: Receiver<Value>,
         /// Its row in the activity stack (`activity.cancel` sets `cancel`).
         guard: TaskGuard,
+        /// The sign-in it uses: a refusal signs out only that one.
+        account: String,
     }
 
     impl UploadTask {
@@ -336,7 +338,7 @@ mod native {
             return Err("an upload to Flickr is already running".into());
         }
         let job = lightcraft_engine::flickr::prepare_upload(&mut app.session, p)?;
-        let total = job.len();
+        let (total, account) = (job.len(), job.account());
         let progress = Arc::new(Mutex::new((0, String::new())));
         let cancel = Arc::new(AtomicBool::new(false));
         let (tx, rx) = channel();
@@ -363,7 +365,7 @@ mod native {
         std::thread::Builder::new().name("flickr-upload".into()).spawn(work).map_err(|e| format!("could not start the upload: {e}"))?;
         let guard = app.session.activity.start("upload", "Uploading to Flickr", Cancel::Flag(cancel.clone()));
         guard.progress(0, total as u64);
-        app.flickr.upload = Some(UploadTask { total, progress, cancel, rx, guard });
+        app.flickr.upload = Some(UploadTask { total, progress, cancel, rx, guard, account });
         Ok(json!({"background": true, "total": total}))
     }
 
@@ -371,8 +373,8 @@ mod native {
         let Some(task) = &app.flickr.upload else { return };
         match task.rx.try_recv() {
             Ok(r) => {
-                app.flickr.upload = None;
-                app.session.flickr_record_upload(&r);
+                let account = app.flickr.upload.take().map(|t| t.account).unwrap_or_default();
+                app.session.flickr_record_upload(&r, &account);
                 let (ok, total, failed) = (r["uploaded"].as_u64().unwrap_or(0), r["total"].as_u64().unwrap_or(0), r["failed"].as_u64().unwrap_or(0));
                 let mut m =
                     crate::i18n::tr_format!("Uploaded {ok} of {total} photo{} to Flickr", if total == 1 { "" } else { "s" }, ok = ok, total = total);

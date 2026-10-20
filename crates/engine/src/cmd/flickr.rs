@@ -47,8 +47,9 @@ fn albums(s: &mut Session, _: &Value) -> Result<Value> {
 fn upload(s: &mut Session, p: &Value) -> Result<Value> {
     const ID: &str = "flickr.upload";
     let job = crate::flickr::prepare_upload(s, p).map_err(|e| bad(ID, e))?;
+    let account = job.account();
     let result = job.run(&mut |_, _| true, &AtomicBool::new(false));
-    s.flickr_record_upload(&result);
+    s.flickr_record_upload(&result, &account);
     Ok(result)
 }
 

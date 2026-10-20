@@ -313,3 +313,33 @@ fn a_new_album_that_cannot_be_made_leaves_the_photos_uploaded() {
         assert!(e.contains(why), "{p}: {e}");
     }
 }
+
+#[test]
+fn keywords_left_out_of_export_never_become_tags() {
+    let (base, seen) = fake(flickr_ok);
+    let mut s = signed_in(&base);
+    let id = s.catalog.photos().next().unwrap().id.0;
+    s.execute("photo.setMeta", &json!({"ids": [id], "keywords": ["private client", "Places|Wyoming", "dunes"]})).unwrap();
+    s.execute("keyword.edit", &json!({"keyword": "private client", "includeOnExport": false})).unwrap();
+    let info = crate::flickr::photo_info(s.catalog.photo(lightcraft_catalog::PhotoId(id)).unwrap(), &s.catalog, &Default::default());
+    assert!(!info.tags.iter().any(|t| t.contains("private")), "{:?}", info.tags);
+    assert!(!info.tags.iter().any(|t| t.contains('|')), "a nested keyword goes by its name: {:?}", info.tags);
+    assert!(info.tags.iter().any(|t| t == "Wyoming") && info.tags.iter().any(|t| t == "dunes"), "{:?}", info.tags);
+    // and what goes to Flickr is what the exported file carries
+    s.execute("flickr.upload", &json!({"ids": [id], "longEdge": 128})).unwrap();
+    let body = String::from_utf8_lossy(&seen.lock().unwrap()[0].body).to_string();
+    let tags = body.split("name=\"tags\"\r\n\r\n").nth(1).and_then(|t| t.split("\r\n").next()).unwrap_or_default().to_string();
+    assert!(!tags.contains("private") && !tags.contains('|') && tags.contains("Wyoming"), "{tags}");
+}
+
+#[test]
+fn a_refused_sign_in_signs_out_only_the_account_that_uploaded() {
+    let mut s = signed_in("http://127.0.0.1:9");
+    let refused = json!({"signInNeeded": true});
+    // the upload used an earlier sign-in; someone else has signed in since: they stay
+    s.flickr_record_upload(&refused, "an-older-token");
+    assert_eq!(s.flickr_status()["signedIn"], true);
+    // the sign-in that was refused is the current one: forgotten
+    s.flickr_record_upload(&refused, "acc");
+    assert_eq!(s.flickr_status()["signedIn"], false);
+}

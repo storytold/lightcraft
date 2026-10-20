@@ -47,16 +47,27 @@ pub enum Error {
 }
 
 impl Error {
-    /// Worth trying again shortly: the network or Flickr had a moment, not a problem with the
-    /// request or the account.
+    /// Safe to send again: Flickr certainly didn't act on the request. Either it never reached
+    /// Flickr (no connection), or Flickr answered that it didn't take it and to try later (HTTP
+    /// 429 or 503, Flickr's 105 "service unavailable" and 106 "write failed"). Anything else
+    /// that goes wrong once the request is on its way may have happened after Flickr accepted
+    /// it ([`Error::outcome_unknown`]), and sending it again could upload a photo twice.
     pub fn is_transient(&self) -> bool {
         match self {
-            Error::Http(HttpError::Cancelled | HttpError::BadUrl(_) | HttpError::Tls(_)) => false,
-            Error::Http(_) => true,
-            Error::Status(s, _) => *s >= 500 || *s == 429,
-            // 105 service unavailable, 106 write failed, 3 general upload failure
-            Error::Flickr { code, .. } => matches!(code, 3 | 105 | 106),
-            Error::Protocol(_) => false,
+            Error::Http(HttpError::Connect(_)) => true,
+            Error::Status(s, _) => *s == 429 || *s == 503,
+            Error::Flickr { code, .. } => matches!(code, 105 | 106),
+            _ => false,
+        }
+    }
+
+    /// The request went out but its answer was lost (the connection dropped or stalled, or a
+    /// gateway gave up waiting): Flickr may or may not have acted on it.
+    pub fn outcome_unknown(&self) -> bool {
+        match self {
+            Error::Http(HttpError::Stalled | HttpError::Io(_) | HttpError::Protocol(_)) => true,
+            Error::Status(s, _) => *s >= 500 && *s != 503,
+            _ => false,
         }
     }
 
@@ -354,7 +365,9 @@ impl Client {
     }
 
     /// Upload `bytes` (an encoded image named `file_name`) to the account of `token`; the new
-    /// photo's id. Transient failures are retried ([`Error::is_transient`]).
+    /// photo's id. Only failures where Flickr certainly didn't take the photo are retried
+    /// ([`Error::is_transient`]): a lost answer is reported, not retried, so a photo is never
+    /// uploaded twice by a retry.
     pub fn upload(&self, token: &Token, info: &PhotoInfo, file_name: &str, bytes: &[u8], cancel: &AtomicBool) -> Result<String, Error> {
         let mut pause = self.retry_pause;
         let mut attempt = 1;

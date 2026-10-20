@@ -4,7 +4,7 @@ Flickr uploads for LightCraft, in pure Rust (L1, native only):
 
 - `oauth`: OAuth 1.0a request signing (HMAC-SHA1), checked against the specification's worked example;
 - `Client`: Flickr's out-of-band sign-in (`request_token` → `authorize_url` → `access_token`) and signed multipart
-  uploads (`upload`), with retries of transient failures and a cancel flag, over `lightcraft-fetch`'s HTTPS client;
+  uploads (`upload`), retried only when Flickr certainly didn't take them (never after a lost answer), with a cancel flag, over `lightcraft-fetch`'s HTTPS client;
 - `reply`: Flickr's form and XML answers, parsed without trusting them;
 - `account`: the saved API key and sign-in (`flickr.json`, atomic, owner-only on Unix).
 

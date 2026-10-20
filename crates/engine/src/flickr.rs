@@ -174,10 +174,12 @@ impl Session {
         self.save_flickr()
     }
 
-    /// Remember the results of an upload (`flickr.status` → `lastUpload`); a refused sign-in
-    /// signs out, so the next upload asks for a new one.
-    pub fn flickr_record_upload(&mut self, result: &Value) {
-        if result["signInNeeded"] == true {
+    /// Remember the results of an upload (`flickr.status` → `lastUpload`). When Flickr refused
+    /// the sign-in the upload used (`account`, [`UploadJob::account`]), that sign-in is forgotten
+    /// so the next upload asks for a new one; a different account signed in while the upload ran
+    /// (or the same one signed in afresh) is left alone.
+    pub fn flickr_record_upload(&mut self, result: &Value, account: &str) {
+        if result["signInNeeded"] == true && self.flickr_token().is_some_and(|t| t.token == account) {
             let _ = self.flickr_sign_out();
         }
         self.flickr.last_upload = Some(result.clone());
@@ -311,8 +313,10 @@ pub fn prepare_upload(s: &mut Session, p: &Value) -> Result<UploadJob, String> {
         return Err(format!("choose at most {MAX_PHOTOS} photos to upload at once"));
     }
     let eo = opts.export_options();
-    let infos: Vec<PhotoInfo> =
-        ids.iter().map(|id| s.catalog.photo(*id).map(|ph| photo_info(ph, &opts)).ok_or(format!("no photo {}", id.0))).collect::<Result<_, _>>()?;
+    let infos: Vec<PhotoInfo> = ids
+        .iter()
+        .map(|id| s.catalog.photo(*id).map(|ph| photo_info(ph, &s.catalog, &opts)).ok_or(format!("no photo {}", id.0)))
+        .collect::<Result<_, _>>()?;
     let exports = crate::export::prepare_batch(s, &ids, &eo)?;
     let items = exports.into_iter().zip(infos).map(|(export, info)| Item { export, info }).collect();
     Ok(UploadJob { items, client, token, album: opts.album, new_album: opts.new_album })
@@ -334,8 +338,11 @@ pub fn list_albums(client: &Client, token: &Token, cancel: &AtomicBool) -> Resul
 pub const MAX_PHOTOS: usize = 500;
 
 /// What Flickr is told about photo `p`: its title (else its file name without the extension),
-/// caption and keywords as the options say.
-pub fn photo_info(p: &lightcraft_catalog::Photo, o: &UploadOptions) -> PhotoInfo {
+/// caption and keywords as the options say. Keywords become tags the way an export writes them
+/// into the file ([`lightcraft_catalog::Catalog::export_keywords`]): a keyword left out of export
+/// is never sent, and a nested one goes by its own name (plus its containing keywords and
+/// synonyms when their options say so), never as a `Parent|Child` path.
+pub fn photo_info(p: &lightcraft_catalog::Photo, catalog: &lightcraft_catalog::Catalog, o: &UploadOptions) -> PhotoInfo {
     let title = if p.meta.title.trim().is_empty() {
         std::path::Path::new(&p.file_name).file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default()
     } else {
@@ -344,13 +351,19 @@ pub fn photo_info(p: &lightcraft_catalog::Photo, o: &UploadOptions) -> PhotoInfo
     PhotoInfo {
         title,
         description: if o.description { p.meta.caption.trim().to_string() } else { String::new() },
-        tags: if o.tags { p.meta.keywords.clone() } else { Vec::new() },
+        tags: if o.tags { catalog.export_keywords(&p.meta.keywords).flat } else { Vec::new() },
         privacy: o.privacy,
         hidden: o.hidden,
     }
 }
 
 impl UploadJob {
+    /// Which sign-in the upload uses (its token's public half; never the secret), for
+    /// [`Session::flickr_record_upload`].
+    pub fn account(&self) -> String {
+        self.token.token.clone()
+    }
+
     pub fn len(&self) -> usize {
         self.items.len()
     }
@@ -391,7 +404,12 @@ impl UploadJob {
                     if err.is_cancelled() {
                         cancelled = true;
                     }
-                    err.to_string()
+                    if err.outcome_unknown() {
+                        // not retried: it may be on Flickr already
+                        format!("{err}. Flickr may have received this photo: check your photostream before sharing it again")
+                    } else {
+                        err.to_string()
+                    }
                 })
             });
             match result {

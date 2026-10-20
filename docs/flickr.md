@@ -14,12 +14,14 @@ republished and nothing on Flickr is changed or deleted afterwards (see `LRC-LIB
    secret and click **Continue**.
 2. **Sign in.** Continue goes straight on: Flickr's approval page opens in your browser. Approve LightCraft (it asks
    to upload, nothing more), then paste the code Flickr shows (like `123-456-789`) into the Code field; it is sent as
-   soon as it is complete. LightCraft never sees your Flickr password.
+   soon as it is complete. LightCraft never sees your Flickr password. While an upload runs, the sign-in can't be changed.
 3. **Upload.** Select photos, then **File ▸ Share ▸ Flickr…**:
    - **Size**: 1024, 2048 (default) or 4096 px on the long edge, or full size; never enlarged.
    - **Quality**: JPEG quality, 90 by default.
    - **Visibility**: public, friends, family, friends & family, or only you.
-   - **Keywords as tags**, **caption as description** (both on by default). The title is the photo's title, or its
+   - **Keywords as tags**, **caption as description** (both on by default). Tags are the keywords the exported file
+     carries: a keyword whose *Include on Export* is off is never sent, and a nested keyword goes by its own name
+     (with its containing keywords and synonyms when their options say so). The title is the photo's title, or its
      file name without the extension.
    - **Remove location info** (on by default): GPS is left out of the file, so the photo isn't placed on Flickr's map.
      Turn it off to share where it was taken.
@@ -64,7 +66,8 @@ At most 500 photos per upload. In the app, `flickr.upload` returns `{background:
 
 - `crates/flickr` (`lightcraft-flickr`, L1): OAuth 1.0a request signing (HMAC-SHA1, RustCrypto `hmac` + `sha1`),
   Flickr's out-of-band sign-in, signed `multipart/form-data` uploads to `up.flickr.com` (every field but the photo
-  signed), retries of transient failures (connection, HTTP 5xx / 429, Flickr 3 / 105 / 106), the account file. It
+  signed), retries only when Flickr certainly didn't take the request (no connection, HTTP 429 / 503, Flickr 105 / 106; a lost
+  answer after the photo was sent is reported, never retried, so a retry can't upload a photo twice), the account file. It
   speaks HTTPS through `lightcraft-fetch` (pure Rust rustls), so there is no C. Tests run against a local stand-in
   that checks each signature; the signer is also checked against the OAuth specification's worked example.
 - `crates/engine/src/flickr.rs`: the session's account, `prepare_upload` (catalog → export jobs + title, caption,

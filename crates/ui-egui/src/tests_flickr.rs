@@ -307,3 +307,50 @@ fn share_lives_in_the_file_menu_and_the_top_bar() {
     }
     assert!(matches!(&h.app.ui.dialog, Some(Dialog::FlickrUpload { .. })), "{:?}", h.app.ui.dialog.is_some());
 }
+
+#[test]
+fn a_refused_upload_does_not_sign_out_an_account_connected_meanwhile() {
+    // Flickr refuses the upload's (old) sign-in, slowly
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", l.local_addr().unwrap());
+    std::thread::spawn(move || {
+        for s in l.incoming() {
+            let Ok(mut s) = s else { break };
+            let mut buf = [0u8; 65536];
+            let mut got = Vec::new();
+            while !got.windows(4).any(|w| w == b"\r\n\r\n") {
+                let Ok(n) = s.read(&mut buf) else { break };
+                if n == 0 {
+                    break;
+                }
+                got.extend_from_slice(&buf[..n]);
+            }
+            std::thread::sleep(Duration::from_millis(800));
+            let body = "<rsp stat=\"fail\"><err code=\"98\" msg=\"Invalid auth token\" /></rsp>";
+            let _ = write!(s, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+        }
+    });
+    let (mut h, _) = app(&base);
+    signed_in(&mut h);
+    let id = h.app.session.catalog.photos().next().unwrap().id.0;
+    h.app.run("flickr.upload", json!({"ids": [id], "longEdge": 128})).unwrap();
+    // while it runs, Settings won't sign out or in
+    settings(&mut h);
+    let disabled = |h: &Headless, id: &str| h.app.flickr.uploading() && has(h, id);
+    assert!(disabled(&h, "button:flickrSignOut"), "Sign Out is shown but held while uploading");
+    assert!(h.app.run("flickr.signIn", json!({})).is_err() || h.app.flickr.busy.is_some() || h.app.flickr.uploading());
+    // another account signs in anyway (through the engine, as an agent could)
+    h.app
+        .session
+        .flickr_finish_sign_in(lightcraft_engine::flickr::Token {
+            token: "account-b".into(),
+            secret: "b-secret".into(),
+            user_nsid: "8@N01".into(),
+            username: "dorothea".into(),
+            fullname: String::new(),
+        })
+        .unwrap();
+    assert!(h.step_until(T, |h| h.app.flickr.last_result.is_some()), "the upload ends");
+    assert_eq!(h.app.flickr.last_result.as_ref().unwrap()["signInNeeded"], true);
+    assert_eq!(h.app.session.flickr_status()["username"], "dorothea", "the account connected meanwhile stays signed in");
+}

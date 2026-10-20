@@ -63,7 +63,8 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         app.flickr.secret.clear();
         app.flickr.loaded = true;
     }
-    let busy = app.flickr.busy;
+    // (an upload keeps the sign-in it started with: no signing out or in until it ends)
+    let busy = app.flickr.busy.or(app.flickr.uploading().then_some("Uploading to Flickr"));
     let (signed_in, pending, has_key) = (status["signedIn"] == true, status["pending"] == true, status["hasKey"] == true);
 
     if signed_in {
@@ -124,7 +125,7 @@ fn connected(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, status: &Va
         if button(ui, "flickrPhotostream", "Open Your Photostream", true) {
             open(app, &format!("https://www.flickr.com/photos/{}/", status["userNsid"].as_str().unwrap_or("me")));
         }
-        if button(ui, "flickrSignOut", "Sign Out", app.flickr.busy.is_none()) {
+        if button(ui, "flickrSignOut", "Sign Out", app.flickr.busy.is_none() && !app.flickr.uploading()) {
             run(app, "flickr.signOut", json!({}));
         }
     });
