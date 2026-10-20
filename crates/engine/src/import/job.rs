@@ -1,7 +1,7 @@
 use super::commit::{How, Plan, Slot, Transfer, commit_prepared, name_family, run_transfers, system_clock};
-use super::files::{Seen, expand, probe_all, reusable_probes, sidecars_of};
+use super::files::{Seen, expand, probe_all, reusable_probes};
 use super::types::{FileFacts, ImportCandidate, ImportMode, ImportOptions, ImportReport, Kept, OnDeleted};
-use super::{HashMap, MediaKind, Path, PathBuf, Photo, PhotoId, ProbeInfo, Session, Source};
+use super::{HashMap, ListedFolders, MediaKind, Path, PathBuf, Photo, PhotoId, ProbeInfo, Session, Source};
 
 /// Import files/folders. See the module docs.
 pub fn import(s: &mut Session, paths: &[String], mode: ImportMode) -> crate::Result<ImportReport> {
@@ -46,6 +46,8 @@ pub struct ImportJob {
     /// Probes from a preceding scan (not read again).
     pub(super) cache: HashMap<String, ProbeInfo>,
     naming: crate::sidecar::SidecarNaming,
+    /// The `.xmp` names in the folders [`ImportJob::expand`] listed.
+    listed: ListedFolders,
     now: String,
     /// Next rename number; `None` once the final representable value has been reserved.
     seq: Option<usize>,
@@ -198,6 +200,7 @@ impl ImportJob {
             file_bytes: s.media.file_bytes.clone(),
             cache: std::mem::take(&mut s.import_probes),
             naming: s.xmp.naming,
+            listed: ListedFolders::default(),
             now: (s.clock)(),
             total: Default::default(),
             done: Default::default(),
@@ -215,10 +218,33 @@ impl ImportJob {
         self.prepare_files(files, cancel)
     }
 
+    /// Hand the job the folders the review that started it listed ([`ScanOutput::listed`]).
+    #[must_use]
+    pub fn with_listed(mut self, listed: ListedFolders) -> Self {
+        self.listed = listed;
+        self
+    }
+
     /// Expand `paths` (folders recursively, the library's own folder skipped) into the files an
     /// import would handle; counted in [`ImportJob::total`].
-    pub fn expand(&self, paths: &[String]) -> Vec<String> {
-        let files = expand(paths, self.lib_dir.as_deref());
+    pub fn expand(&mut self, paths: &[String]) -> Vec<String> {
+        // (a file the review listed is a file: no round trip to a share to ask)
+        let mut listed = std::mem::take(&mut self.listed);
+        let mut walked = ListedFolders::default();
+        let (files, _) = expand_knowing(
+            paths,
+            self.lib_dir.as_deref(),
+            crate::walk::Limits::default(),
+            Some(&mut |dir, names, complete, modified| {
+                walked.note(dir, names, complete, modified);
+                true
+            }),
+            true,
+            &|p| listed.is_known_file(p),
+        );
+        listed.absorb(walked);
+        listed.forget_files();
+        self.listed = listed;
         self.total.fetch_add(files.len(), std::sync::atomic::Ordering::Relaxed);
         files
     }
@@ -254,6 +280,7 @@ impl ImportJob {
         use std::sync::atomic::Ordering::Relaxed;
         // the library as it was, kept for the ownership of the shared stem sidecars below
         let library = self.look_up_library();
+        self.listed.new_batch();
         let opts = self.opts.clone();
         let mode = self.mode;
         let mut out = Prepared { scanned: files.len(), items: Vec::new() };
@@ -295,20 +322,6 @@ impl ImportJob {
             library.as_ref(),
             todo.iter().zip(&probed).filter_map(|(path, info)| info.as_ref().ok().map(|i| (path.as_str(), i.kind))),
         );
-        // The sidecar of every file that was probed, looked up for the batch at once: each is a few
-        // names asked of the disk, which on a network share made a folder of thousands of photos wait
-        // a round trip per name, one name after another.
-        let asked: Vec<&str> = todo.iter().zip(&probed).filter(|(_, p)| p.is_ok()).map(|(f, _)| f.as_str()).collect();
-        // (a file whose content the library has is skipped below as a duplicate: it asks the disk nothing)
-        let known: std::collections::HashSet<&str> = todo
-            .iter()
-            .zip(&probed)
-            .filter(|(_, p)| !opts.local && p.as_ref().is_ok_and(|i| i.content_hash.as_ref().is_some_and(|h| self.by_hash.contains_key(h))))
-            .map(|(f, _)| f.as_str())
-            .collect();
-        let mut found =
-            sidecars_of(&asked, cancel, |f| if known.contains(f) { None } else { crate::sidecar::find_sidecar_for_import(&stems, self.naming, f) })
-                .into_iter();
         // Files are planned one by one, in order (duplicates, sidecars, names, folders); their
         // copies or moves — the slow part, reading and writing every byte and verifying it — are
         // collected and run on several threads (issue #367), then their outcomes take their places.
@@ -326,8 +339,6 @@ impl ImportJob {
                     continue;
                 }
             };
-            // (this file's place in the lookups above: files that failed to probe have none)
-            let found_sidecar = found.next().flatten();
             // a copy of a file whose transfer is still pending: a duplicate only if that one succeeds
             if !opts.local
                 && let Some(h) = &info.content_hash
@@ -347,7 +358,10 @@ impl ImportJob {
             let packet = if duplicate_of.is_some() && info.captured.is_some() {
                 None
             } else {
-                found_sidecar.and_then(|f| std::fs::read_to_string(f).ok()).or_else(|| info.xmp.clone().filter(|_| raw))
+                self.listed
+                    .find_for_import(&stems, self.naming, &path)
+                    .and_then(|f| std::fs::read_to_string(f).ok())
+                    .or_else(|| info.xmp.clone().filter(|_| raw))
             };
             let target = crate::crs::Target::for_file(info.kind, &info.format, info.preview_only.is_some(), &info.meta.camera);
             let sidecar = packet.and_then(|x| match crate::sidecar::parse_sidecar(&x, target) {

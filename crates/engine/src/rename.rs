@@ -72,4 +72,8 @@ pub struct RenamePlan {
 }
 
 #[cfg(test)]
+#[path = "rename/tests_listed_sources.rs"]
+mod tests_listed_sources;
+
+#[cfg(test)]
 pub(crate) mod tests;

@@ -239,12 +239,15 @@ pub fn browse(app: &mut LightcraftApp, path: &str, subfolders: Option<bool>) -> 
         let candidates =
             queue.iter().cloned().map(|path| lightcraft_engine::import::ImportCandidate { path, ..Default::default() }).chain(known).collect();
         // the probes of earlier scans go back to the session with the result, for the import that follows
+        // (a browse imports nothing from a review, so no folder listing goes with it)
+        let listed = lightcraft_engine::import::ListedFolders::default();
         let _ = tx.send(ScanEnd::Done(lightcraft_engine::import::ScanOutput {
             candidates,
             probes: input.take_probes(),
             truncated: false,
             unreadable: 0,
             unsupported: 0,
+            listed,
         }));
     };
     #[cfg(not(target_arch = "wasm32"))]
@@ -341,6 +344,7 @@ pub fn poll_scan(app: &mut LightcraftApp, ctx: &egui::Context) {
     if cancelled {
         return;
     }
+    app.review_listed = None;
     if task.browse {
         // the folder and the ones its photos are in count as browsed now, as `library.browse` records them, so
         // their untouched Local photos aren't forgotten while the folder is in use
@@ -393,6 +397,7 @@ pub fn poll_scan(app: &mut LightcraftApp, ctx: &egui::Context) {
     d.album = task.album.filter(|id| app.session.catalog.album(lightcraft_catalog::AlbumId(*id)).is_some_and(|a| !a.folder && !a.is_smart()));
     d.sources = task.sources;
     d.library = Some(app.session.library_generation());
+    app.review_listed = Some(out.listed);
     app.review_pending = Some(crate::state::Dialog::Import { opts: Box::new(d) });
     show_pending_review(app, ctx);
 }

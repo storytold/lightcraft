@@ -74,6 +74,7 @@ fn a_scan_closed_with_its_cross_hands_back_its_probes_when_the_worker_ends() {
         truncated: false,
         unreadable: 0,
         unsupported: 0,
+        listed: Default::default(),
     }))
     .unwrap();
     assert!(h.step_until(T, kept), "the probes came back");

@@ -331,6 +331,8 @@ pub struct LightcraftApp {
     pub(crate) scans_stopping: import::StoppingScans,
     /// Files that waited for a library and wait for the running import or Synchronize Folder too.
     pub waiting_import: panels::library_problem::WaitingImport,
+    /// The folders the last review's scan listed, for the import that review starts (and no other).
+    pub review_listed: Option<lightcraft_engine::import::ListedFolders>,
     /// A Synchronize Folder scan in progress (feeds its dialog).
     pub sync: Option<sync::SyncTask>,
     /// `session.folder_changes` came from the Synchronize Folder dialog (and goes with it).

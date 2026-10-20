@@ -113,6 +113,7 @@ impl LightcraftApp {
             scan: None,
             scans_stopping: Default::default(),
             waiting_import: Default::default(),
+            review_listed: None,
             sync: None,
             sync_owns_changes: false,
             sync_run: None,

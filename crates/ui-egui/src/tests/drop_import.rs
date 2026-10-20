@@ -1230,6 +1230,7 @@ fn auto_import_waits_for_a_browse_that_starts_during_its_listing() {
         truncated: false,
         unreadable: 0,
         unsupported: 0,
+        listed: Default::default(),
     }))
     .unwrap();
     drop(tx);
