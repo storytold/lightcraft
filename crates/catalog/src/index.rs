@@ -20,6 +20,8 @@ pub(crate) struct Indexes {
     stacks: OnceLock<Option<HashMap<PhotoId, StackId>>>,
     /// Album → its photos (regular albums; a smart album's list is empty).
     albums: OnceLock<HashMap<AlbumId, HashSet<PhotoId>>>,
+    /// Every photo in each sort order, see [`crate::order`].
+    pub(crate) orders: crate::order::Orders,
 }
 
 /// A copy builds its own when asked (copies are made to be saved, not queried).

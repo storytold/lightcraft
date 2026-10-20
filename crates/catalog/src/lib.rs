@@ -26,6 +26,7 @@ pub mod lock;
 #[cfg(not(target_arch = "wasm32"))]
 mod log_writer;
 pub mod model;
+mod order;
 pub mod query;
 pub mod rules;
 pub mod safe_file;
@@ -332,6 +333,9 @@ impl Aspects {
     pub const ANALYSIS: Aspects = Aspects(1 << 7);
     /// Whether it is in the library at all: added, removed, deleted, restored, taken in from Local.
     pub const PRESENCE: Aspects = Aspects(1 << 8);
+    /// What a sort order reads of a photo: rating, capture date, edit date, file name, file size, the import
+    /// date and presence in the catalog (every op that sets the others says `ALL`, which this includes).
+    pub const ORDER: Aspects = Aspects(1 | 1 << 3 | 1 << 5 | 1 << 6 | 1 << 8);
     /// Everything: the photo may count differently for any tally.
     pub const ALL: Aspects = Aspects(u16::MAX);
 
@@ -719,6 +723,23 @@ impl Catalog {
         ids.dedup();
         Some(ids)
     }
+
+    /// The photos whose `reads` (what a derived list reads of them) changed since the catalog was at `revision`,
+    /// added and removed photos included, each once, sorted by id. Ops that change no photo of their own (an
+    /// album, a stack, the keyword list) are not asked about. `None` when that is not known: too long ago, or the
+    /// catalog was set from outside (a library loaded).
+    pub(crate) fn photos_changed_since(&self, revision: u64, reads: Aspects) -> Option<Vec<PhotoId>> {
+        // (every op that changes a photo says which, in `photo_mut` or as it adds or removes it: the ops
+        // `apply_inner` marks broad change no photo)
+        if !(self.changes.seen == self.revision && revision <= self.revision && revision >= self.changes.floor) {
+            return None;
+        }
+        let mut ids: Vec<PhotoId> = self.changes.touched.iter().filter(|(r, _, a)| *r > revision && a.any_of(reads)).map(|(_, id, _)| *id).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        Some(ids)
+    }
+
     fn album_mut(&mut self, id: AlbumId) -> Result<&mut Album> {
         self.albums.get_mut(&id).ok_or(CatalogError::NoAlbum(id))
     }
@@ -1218,6 +1239,7 @@ impl Catalog {
     /// wrote).
     pub fn repair(&mut self) -> Vec<String> {
         let mut changed = Vec::new();
+        self.index.orders.forget();
         // Segmentation grids shared by the snapshot this was read from (issue #2154): each
         // reference takes its grid's data, and the table is not kept — a live catalog always
         // stores the data inline, so masks render and serialize without the snapshot's table.
@@ -1542,6 +1564,8 @@ mod tests_local;
 mod tests_lock;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests_log_thread;
+#[cfg(test)]
+mod tests_order;
 #[cfg(test)]
 mod tests_repair;
 #[cfg(test)]
