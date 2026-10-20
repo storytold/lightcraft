@@ -318,6 +318,11 @@
   read; reload the page to try again.
 ## 2026-10-14
 
+### Synchronize Folder can bring in files already in the library elsewhere
+- Synchronize Folder has a "Don't import files already in the library" box under Import new photos, ticked as before; unticked, files whose content a photo of another folder already has come in as photos of their own, and the library remembers the choice for next time.
+- A copy of a photo in Recently Deleted stays out either way.
+- For scripts and agents: `folder.scanChanges` now returns `duplicates` as a list of those files, each with the photo it matches (`existing`), where it used to return a count; `library.importPreview` still returns a number under `duplicates`, and `folder.synchronize` takes `importDuplicates`.
+
 ### Model downloads time out on a name that doesn't resolve
 - Model downloads (AI denoise, faces, SAM) give up on a server name that doesn't resolve within the connect timeout,
   and Cancel stops a download that is still looking the name up (issue #1532). The lookup used to block with no time
