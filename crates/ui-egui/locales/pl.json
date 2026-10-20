@@ -2351,5 +2351,7 @@
   "Stopped at the scan limit: there may be more photos": "Zatrzymano na limicie skanowania: możliwe, że jest więcej zdjęć",
   "Reduce Motion": "Ogranicz ruch",
   "Reduce motion": "Ogranicz ruch",
-  "Turns off zoom and spinner animations. Fades stay. Follows the system's Reduce Motion until you change it here.": "Wyłącza animacje powiększania i wskaźników pracy. Zanikanie i przenikanie zostają. Dopóki nie zmienisz tego tutaj, program stosuje systemowe ustawienie Ogranicz ruch."
+  "Turns off zoom and spinner animations. Fades stay. Follows the system's Reduce Motion until you change it here.": "Wyłącza animacje powiększania i wskaźników pracy. Zanikanie i przenikanie zostają. Dopóki nie zmienisz tego tutaj, program stosuje systemowe ustawienie Ogranicz ruch.",
+  "Use the system setting": "Użyj ustawienia systemu",
+  "Turns off zoom and spinner animations. Fades stay.": "Wyłącza animacje powiększania i wskaźników pracy. Zanikanie i przenikanie zostają."
 }

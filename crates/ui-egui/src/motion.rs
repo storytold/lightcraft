@@ -1,7 +1,7 @@
 //! The one place every animation asks whether motion is reduced (Settings ▸ Interface ▸ Reduce motion).
 //!
 //! The rule: with reduce motion on, things that move or turn stop moving (the click-zoom tween,
-//! egui's own widget easing, spinners, the activity bar's sweep); opacity fades that tell a state
+//! egui's own widget easing, scrolling to a photo (it jumps instead of gliding), spinners, the activity bar's sweep); opacity fades that tell a state
 //! change stay (toasts, the slideshow crossfade and its control bar).
 //!
 //! [`LightcraftApp::sync_theme`](crate::LightcraftApp::sync_theme) stores the setting in the egui
@@ -25,7 +25,13 @@ pub fn sync(ctx: &Context, reduced: bool) {
     }
     ctx.data_mut(|d| d.insert_temp(id(), reduced));
     let time = animation_time(reduced);
-    ctx.all_styles_mut(|s| s.animation_time = time);
+    // `scroll_to_rect` / `scroll_to_me` (follow-the-active-photo in the grid and filmstrip, pickers)
+    // glide by `scroll_animation`, not `animation_time`: reduced, they jump.
+    let scroll = if reduced { egui::style::ScrollAnimation::none() } else { egui::style::ScrollAnimation::default() };
+    ctx.all_styles_mut(|s| {
+        s.animation_time = time;
+        s.scroll_animation = scroll;
+    });
 }
 
 /// Whether things that move or turn should stand still.

@@ -39,6 +39,7 @@ mod native_menu;
 mod profile_file;
 #[cfg(target_os = "macos")]
 mod reduce_motion;
+#[cfg(target_os = "macos")]
 mod screen_profile;
 #[cfg(windows)]
 mod win_screen_profile;

@@ -79,14 +79,25 @@ pub(super) fn interface_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Toke
     let system = app.system_theme(ui.ctx());
     appearance(ui, t, &mut app.ui.settings, system);
     let mut reduce = app.reduce_motion();
-    let r = ui.checkbox(&mut reduce, crate::i18n::tr("Reduce motion"));
-    register(ui, "check:settings.reduceMotion".to_string(), r.rect);
-    if r.changed() {
-        app.ui.settings.reduce_motion = Some(reduce);
-    }
-    r.on_hover_text(crate::i18n::tr(
-        "Turns off zoom and spinner animations. Fades stay. Follows the system's Reduce Motion until you change it here.",
-    ));
+    let has_system = app.services.system_reduce_motion.is_some();
+    ui.horizontal(|ui| {
+        let r = ui.checkbox(&mut reduce, crate::i18n::tr("Reduce motion"));
+        register(ui, "check:settings.reduceMotion".to_string(), r.rect);
+        if r.changed() {
+            app.ui.settings.reduce_motion = Some(reduce);
+        }
+        r.on_hover_text(crate::i18n::tr(if has_system {
+            "Turns off zoom and spinner animations. Fades stay. Follows the system's Reduce Motion until you change it here."
+        } else {
+            "Turns off zoom and spinner animations. Fades stay."
+        }));
+        if has_system
+            && app.ui.settings.reduce_motion.is_some()
+            && crate::widgets::text_button(ui, "settings.reduceMotionFollow", "Use the system setting", false).clicked()
+        {
+            app.ui.settings.reduce_motion = None;
+        }
+    });
     heading(ui, t, crate::i18n::tr("Filmstrip"));
     check(ui, "settings.filmNames", &mut app.ui.settings.film_names, "Show file names");
     check(ui, "settings.filmBadges", &mut app.ui.settings.film_badges, "Show ratings, flags and edit badges");

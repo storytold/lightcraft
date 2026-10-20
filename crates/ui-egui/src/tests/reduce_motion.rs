@@ -107,14 +107,19 @@ fn the_command_toggles_and_sets_the_setting() {
 #[test]
 fn egui_easing_stops_with_reduce_motion_on_and_returns_when_off() {
     let mut h = detail();
+    let still = egui::style::ScrollAnimation::none();
     assert_eq!(h.view.ctx.global_style().animation_time, 0.08);
+    assert_eq!(h.view.ctx.global_style().scroll_animation, egui::style::ScrollAnimation::default());
     run(&mut h, "view.reduceMotion", json!({"on": true}));
     assert_eq!(h.view.ctx.global_style().animation_time, 0.0);
+    assert_eq!(h.view.ctx.global_style().scroll_animation, still, "scrolling to a photo jumps");
     // a theme change restyles egui: the easing stays off
     run(&mut h, "view.appearance", json!({"mode": "light"}));
     assert_eq!(h.view.ctx.global_style().animation_time, 0.0);
+    assert_eq!(h.view.ctx.global_style().scroll_animation, still);
     run(&mut h, "view.reduceMotion", json!({"on": false}));
     assert_eq!(h.view.ctx.global_style().animation_time, 0.08);
+    assert_eq!(h.view.ctx.global_style().scroll_animation, egui::style::ScrollAnimation::default());
 }
 
 #[test]
@@ -189,4 +194,54 @@ fn click_photo_back(h: &mut Headless) {
     }
     h.settle(SETTLE);
     assert_eq!(h.app.ui.zoom, Zoom::Fit, "back at Fit");
+}
+
+#[test]
+fn follow_false_is_the_same_as_no_params() {
+    let mut h = detail();
+    let r = run(&mut h, "view.reduceMotion", json!({"follow": false}));
+    assert_eq!((r["on"].clone(), r["followsSystem"].clone()), (json!(true), json!(false)), "toggled like no params");
+}
+
+#[test]
+fn the_settings_window_can_hand_the_choice_back_to_the_system() {
+    let system = std::rc::Rc::new(std::cell::Cell::new(Some(true)));
+    let mut h = with_system(system.clone());
+    run(&mut h, "app.settings", json!({"tab": "interface"}));
+    h.settle(SETTLE);
+    let no_button = h.request("ui.clickWidget", json!({"id": "button:settings.reduceMotionFollow"}), T);
+    assert_ne!(no_button["ok"], true, "no button while following the system");
+    let r = h.request("ui.clickWidget", json!({"id": "check:settings.reduceMotion"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert_eq!(h.app.ui.settings.reduce_motion, Some(false), "the tick box shows the system's true and the click turns it off");
+    let r = h.request("ui.clickWidget", json!({"id": "button:settings.reduceMotionFollow"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert_eq!(h.app.ui.settings.reduce_motion, None);
+    assert!(h.app.reduce_motion(), "follows the system again");
+}
+
+#[test]
+fn without_a_system_setting_there_is_nothing_to_hand_back() {
+    let mut h = detail();
+    run(&mut h, "app.settings", json!({"tab": "interface"}));
+    run(&mut h, "view.reduceMotion", json!({"on": true}));
+    h.settle(SETTLE);
+    let r = h.request("ui.clickWidget", json!({"id": "button:settings.reduceMotionFollow"}), T);
+    assert_ne!(r["ok"], true, "{r}");
+}
+
+#[test]
+fn the_sync_spinner_is_a_still_dot_when_reduced() {
+    let ctx = egui::Context::default();
+    let shapes = |reduced: bool| {
+        crate::motion::sync(&ctx, reduced);
+        let mut out = ctx.run_ui(Default::default(), crate::motion::spinner);
+        out.textures_delta.clear();
+        out.shapes.iter().map(|s| format!("{:?}", s.shape)).collect::<Vec<_>>()
+    };
+    let (a, b) = (shapes(true), shapes(true));
+    assert_eq!(a, b, "still");
+    assert!(a.iter().any(|s| s.contains("Circle")), "a dot is painted: {a:?}");
 }

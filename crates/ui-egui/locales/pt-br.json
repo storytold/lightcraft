@@ -2273,5 +2273,7 @@
   "Get Started": "Começar",
   "Reduce Motion": "Reduzir movimento",
   "Reduce motion": "Reduzir movimento",
-  "Turns off zoom and spinner animations. Fades stay. Follows the system's Reduce Motion until you change it here.": "Desativa as animações de zoom e dos indicadores de atividade. As transições de opacidade continuam. Segue o ajuste Reduzir movimento do sistema até você alterá-lo aqui."
+  "Turns off zoom and spinner animations. Fades stay. Follows the system's Reduce Motion until you change it here.": "Desativa as animações de zoom e dos indicadores de atividade. As transições de opacidade continuam. Segue o ajuste Reduzir movimento do sistema até você alterá-lo aqui.",
+  "Use the system setting": "Usar o ajuste do sistema",
+  "Turns off zoom and spinner animations. Fades stay.": "Desativa as animações de zoom e dos indicadores de atividade. As transições de opacidade continuam."
 }

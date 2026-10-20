@@ -42,9 +42,11 @@
 - **Settings ▸ Interface ▸ Reduce motion** (`view.reduceMotion` for scripts and agents) turns off the animations
   that move or turn: a click on the photo or Z zooms at once instead of easing in, the interface's own small easing
   stops, the Synchronize Folder spinner becomes a still dot, and the activity panel's sweeping bar becomes a still
-  segment. Fades that tell you something changed (toasts, the slideshow's crossfade and its control bar) stay. On macOS
-  it follows System Settings ▸ Accessibility ▸ Display ▸ Reduce motion until you change it in Settings; on Windows and
-  Linux it is manual for now (off by default). Pinch and scroll zoom were never animated.
+  segment, and scrolling to a photo (the grid and the filmstrip following the active photo) jumps instead of
+  gliding. Fades that tell you something changed (toasts, the slideshow's crossfade and its control bar) stay. On macOS
+  it follows System Settings ▸ Accessibility ▸ Display ▸ Reduce motion until you change it in Settings; **Use the
+  system setting** beside the tick box hands the choice back. On Windows, Linux and the web version it is manual for
+  now (off by default). Pinch and scroll zoom were never animated.
 
 ## 2026-11-02
 
