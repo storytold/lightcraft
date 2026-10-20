@@ -3730,7 +3730,9 @@ fn a_cancelled_reviews_listing_is_not_used_by_another_import() {
     h.settle(SETTLE);
     h.step_until(SETTLE, |h| matches!(h.app.ui.dialog, Some(crate::state::Dialog::Import { .. })));
     assert!(matches!(h.app.ui.dialog, Some(crate::state::Dialog::Import { .. })), "the review is open");
-    h.app.ui.dialog = None; // cancelled
+    assert!(h.app.review_listed.is_some(), "the review holds its listing");
+    h.request("ui.dialog.cancel", json!({}), t);
+    assert!(h.app.review_listed.is_none(), "cancelling the review drops the listing");
     let was = std::fs::metadata(&dir).unwrap().modified().unwrap();
     std::fs::write(
         dir.join("a.xmp"),

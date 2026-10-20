@@ -466,6 +466,7 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
         "ui.dialog.cancel" => {
             if matches!(app.ui.dialog, Some(crate::state::Dialog::Import { .. })) {
                 app.renderer.forget_imports();
+                app.review_listed = None;
             }
             app.ui.dialog = None;
             ok(Value::Null)
