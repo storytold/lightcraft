@@ -82,6 +82,17 @@
   library you open and are imported into it, as files given on the command line are; presets dropped then are
   refused with a note, since they belong to a library.
 
+### Toasts stay long enough to read
+- A toast now stays for the time its text takes to read (about a second plus a third of a second per word, at most
+  10 seconds, unless a message asks for longer), instead of a fixed time. A short "Library saved" still goes in under two seconds;
+  a hint such as "Smart albums update automatically: change their rules, or use Photo ▸ Delete Photo" stays over
+  five.
+- Messages that tell you something failed (a command that couldn't run, a refused drop, a scan that failed) stay
+  at least 6 seconds, including some that used to vanish after 1.4 seconds.
+- Rest the pointer on a toast and it stays; after you move away it stays another second and a half. It never takes
+  a click from what is underneath it.
+- A toast fades in over a fraction of a second, as it already faded out.
+
 ## 2026-10-22
 
 ### Reliability
@@ -207,17 +218,6 @@
   `{date:%Y}/{date:%B}` files photos into 2026/January, 2026/February…, the layout many existing libraries already
   use. The names are English in every interface language, so folders don't change when the language does. Rename
   Photos and export file names take them too.
-
-### Toasts stay long enough to read
-- A toast now stays for the time its text takes to read (about a second plus a third of a second per word, at most
-  10 seconds), instead of 1.4 seconds whatever it said. A short "Library saved" still goes in under two seconds;
-  a hint such as "Smart albums update automatically: change their rules, or use Photo ▸ Delete Photo" stays over
-  five.
-- Messages that tell you something failed (a command that couldn't run, a refused drop, a scan that failed) stay
-  at least 6 seconds, including some that used to vanish after 1.4 seconds.
-- Rest the pointer on a toast and it stays; after you move away it stays another second and a half. It never takes
-  a click from what is underneath it.
-- A toast fades in over a fraction of a second, as it already faded out.
 
 ## 2026-10-20
 

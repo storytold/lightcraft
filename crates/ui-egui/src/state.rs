@@ -1584,7 +1584,7 @@ impl UiState {
     pub fn show_toast(&mut self, now: f64, text: String, floor: f64, label: Option<lightcraft_catalog::ColorLabel>) {
         let until = now + crate::toast::Toast::duration(&text, floor);
         match &mut self.toast {
-            Some(t) if t.text == text && now <= t.until => {
+            Some(t) if t.text == text && (now <= t.until || t.hovered) => {
                 t.until = t.until.max(until);
                 t.label = label;
             }

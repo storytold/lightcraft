@@ -242,3 +242,21 @@ fn a_hidden_canvas_cannot_pin_a_hovered_toast() {
     h.step();
     assert!(!shown(&h));
 }
+
+#[test]
+fn the_same_text_shown_again_under_a_still_pointer_keeps_its_fade_and_hover() {
+    let mut h = app();
+    let c = ctx(&h);
+    h.app.toast(&c, "Library saved");
+    let p = toast_centre(&h);
+    point_at(&mut h, p);
+    run_for(&mut h, 0.2);
+    // an idle app runs no frames while the pointer rests: `until` is stale
+    h.app.ui.toast.as_mut().unwrap().until = h.time() - 0.1;
+    let first = h.app.ui.toast.clone().unwrap();
+    assert!(first.hovered);
+    h.app.toast(&c, "Library saved");
+    let again = h.app.ui.toast.clone().unwrap();
+    assert_eq!(again.shown_at, first.shown_at, "no fade-in again");
+    assert!(again.hovered);
+}

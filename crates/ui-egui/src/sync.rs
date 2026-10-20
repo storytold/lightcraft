@@ -383,7 +383,7 @@ pub fn poll_run(app: &mut LightcraftApp, ctx: &egui::Context) {
         parts.push(format!("{}: {e}", crate::i18n::tr("Not saved")));
     }
     let text = if parts.is_empty() { crate::i18n::tr("The library is up to date with this folder.").to_string() } else { parts.join(" · ") };
-    if not_saved.is_empty() && !crashed {
+    if not_saved.is_empty() && !crashed && r.failed.is_empty() {
         app.toast(ctx, format!("{name}: {text}"));
     } else {
         app.toast_error_for(ctx, format!("{name}: {text}"), 12.0);
