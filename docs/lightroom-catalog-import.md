@@ -44,13 +44,14 @@ retained. Oldest managed archives are retired; legacy `.json` archives remain un
 `Interop/lightroom-index.json` records imported identities. Source catalogs and originals are
 never overwritten.
 
-Each native `.lrcat` database and WAL file is independently limited to 1 GiB
-(1,073,741,824 bytes). This bounds the current whole-file reader; referenced photo sizes and
-photo counts are not part of that limit. XMP packets are capped at 16 MiB and each table at one million rows.
-The in-tree, read-only Rust SQLite B-tree reader follows SQLite’s public file-format
-specification; it introduces no dependency or C runtime. Table payloads are capped at 256 MiB.
-Optional history, keyword and collection tables that exceed limits are skipped with warnings;
-required photo tables still report errors. Unrelated unsupported schemas are ignored. A needed
+Native import is bounded to a 4 GiB database/WAL, 64 MiB per record and 16 MiB XMP packets. The
+in-tree, read-only Rust SQLite B-tree reader follows SQLite’s public file-format specification;
+it introduces no dependency or C runtime. Tables are streamed to the importer one row at a time,
+so memory follows what the importer keeps (mapped columns, never BLOBs), not the table's size:
+large develop settings, history and metadata tables have no per-table cap. Develop settings that
+can't be read fail the import with a clear error (otherwise every photo would arrive unedited).
+Optional history, snapshot, metadata, keyword and collection tables that can't be read are
+skipped with warnings; required photo tables still report errors. Unrelated unsupported schemas are ignored. A needed
 WITHOUT ROWID or virtual table produces an explicit error, handled as a warning when optional.
 
 Develop settings reuse the existing XMP/preset mapper. Supported sliders, curves and supported
