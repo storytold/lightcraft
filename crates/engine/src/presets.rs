@@ -182,8 +182,17 @@ impl Session {
     pub fn preset_applied(&self, id: PhotoId, preset: &Preset, amount: f64) -> Option<DevelopSettings> {
         let current = self.develop_of(id)?;
         let photo = self.catalog.photo(id)?;
-        let original = if photo.import_look.is_some() { photo.import_defaults() } else { (*current).clone() };
-        Some(preset.apply_on(&current, &original, amount))
+        // The original is read only below 100 %: the panel asks for every visible row at 100 % on
+        // every frame, and then neither the import state nor a copy of the photo's settings is built.
+        let look;
+        let original: &DevelopSettings = match &photo.import_look {
+            Some(_) if (amount - 1.0).abs() >= 1e-9 => {
+                look = photo.import_defaults();
+                &look
+            }
+            _ => &current,
+        };
+        Some(preset.apply_on(&current, original, amount))
     }
 
     /// Add imported presets. Identical presets (same name, group and settings) already present are

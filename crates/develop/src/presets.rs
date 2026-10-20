@@ -206,6 +206,11 @@ const REPAIR_KEYS: [&str; 3] = ["masks", "spots", "red_eye"];
 /// photo's current value, edits included. Pixel repairs compose on the photo's own values, as they
 /// always have.
 fn compose_named(current: &DevelopSettings, original: &DevelopSettings, settings: &Value, amount: f64) -> DevelopSettings {
+    // At 100 % the preset's own values apply as they are, and `original` is not read. The presets
+    // panel calls this for every visible row on every frame, so the scaling base is built below only.
+    if (amount - 1.0).abs() < 1e-9 {
+        return current.merged(settings).unwrap_or_else(|_| current.clone());
+    }
     let cur = current.to_json();
     let mut base = original.to_json();
     if let (Some(b), Some(c)) = (base.as_object_mut(), cur.as_object()) {
@@ -215,13 +220,9 @@ fn compose_named(current: &DevelopSettings, original: &DevelopSettings, settings
             }
         }
     }
-    let composed = if (amount - 1.0).abs() < 1e-9 {
-        settings.clone()
-    } else {
-        match settings.as_object() {
-            Some(patch) => Value::Object(interpolate_object(base.as_object(), patch, amount)),
-            None => Value::Object(Map::new()),
-        }
+    let composed = match settings.as_object() {
+        Some(patch) => Value::Object(interpolate_object(base.as_object(), patch, amount)),
+        None => Value::Object(Map::new()),
     };
     // `merged` deep-merges: the named settings replace, everything else stays as `current` has it
     current.merged(&composed).unwrap_or_else(|_| current.clone())
