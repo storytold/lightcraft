@@ -5,13 +5,13 @@
 //! reverses a total order), built on first use and never saved. A photo is named by its place in the
 //! catalog's id order, so a query marks what matches in one pass over the photos (which come in that order)
 //! and reads the marks along the list, without looking a photo up by id. Each list remembers the revision it
-//! was made at. When asked again, [`Catalog::photos_changed_since`] names the photos an op added, removed or
+//! was right for. When asked again, [`Catalog::photos_changed_since`] names the photos an op added, removed or
 //! changed in what an order reads ([`Aspects::ORDER`]) since: those are taken out and put back where they sort
 //! now, in one pass over the list. When that is not known (too long ago, the catalog was loaded) or the result
 //! is not one place per photo, the list is made again from every photo. A catalog copy starts without them,
 //! like the other [`crate::index`] lookups.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use crate::query::{Sort, SortKey};
@@ -20,25 +20,46 @@ use crate::{Aspects, Catalog, Photo, PhotoId};
 /// A place that is no photo's.
 const GONE: u32 = u32::MAX;
 
-/// Every photo in one sort key's ascending order, as the catalog was at `revision`.
+/// Every photo in one sort key's ascending order.
 #[derive(Debug)]
 struct Order {
-    revision: u64,
     /// The photos' ids, in id order: the place of a photo in `sorted` is its place here.
     ids: Vec<PhotoId>,
     /// Places in `ids`, in sort order.
     sorted: Vec<u32>,
 }
 
+/// An order and the revision of the catalog it is right for (outside the order, so that nothing having
+/// changed moves it on without copying the lists).
+#[derive(Debug)]
+struct Kept {
+    revision: u64,
+    order: Arc<Order>,
+}
+
 #[derive(Debug, Default)]
-pub(crate) struct Orders(Mutex<HashMap<SortKey, Arc<Order>>>);
+struct Held {
+    kept: HashMap<SortKey, Kept>,
+    /// The keys a query of a middling share of the library had to sort for itself, for want of an order (see
+    /// [`Catalog::order_for`]): asked again, they get one.
+    missed: HashSet<SortKey>,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct Orders(Mutex<Held>);
 
 impl Orders {
     /// Forget every order (the catalog was changed other than by ops).
     pub(crate) fn forget(&mut self) {
-        if let Ok(m) = self.0.get_mut() {
-            m.clear();
+        if let Ok(h) = self.0.get_mut() {
+            *h = Held::default();
         }
+    }
+
+    /// How many orders are kept.
+    #[cfg(test)]
+    pub(crate) fn count(&self) -> usize {
+        self.0.lock().map_or(0, |h| h.kept.len())
     }
 }
 
@@ -47,14 +68,28 @@ fn ascending(sort: &Sort) -> Sort {
     Sort { ascending: true, ..*sort }
 }
 
+/// The work of sorting `n` things, in comparisons.
+fn sorting(n: usize) -> f64 {
+    let n = n as f64;
+    if n < 2.0 { 0.0 } else { n * n.log2() }
+}
+
 impl Catalog {
-    /// The photos that are `wanted`, in `sort` order, taken from the kept order of the whole library. `None` when
-    /// none is kept for `sort` (a shuffle is never kept; a library of more than `u32::MAX` photos, or a lock a
-    /// panic poisoned, has none either).
+    /// The photos that are `wanted`, in `sort` order. From the kept order of the whole library when one is kept
+    /// or worth making ([`Catalog::order_for`]); else the matches are sorted alone. `None` for a shuffle (never
+    /// kept), a library of more than `u32::MAX` photos, or when the matches can't be paired with the photos.
     pub(crate) fn pick_in_order(&self, sort: &Sort, wanted: impl Fn(&Photo) -> bool) -> Option<Vec<PhotoId>> {
-        let order = self.kept_order(sort)?;
-        // (the photos come in id order, as `ids` does)
+        if sort.key == SortKey::Random || u32::try_from(self.len()).is_err() {
+            return None;
+        }
+        // (the photos come in id order, as `ids` of an order does)
         let marks: Vec<bool> = self.photos().map(|p| wanted(p)).collect();
+        let matching = marks.iter().filter(|m| **m).count();
+        let Some(order) = self.order_for(sort, marks.len(), matching) else {
+            let mut v: Vec<&Photo> = self.photos().zip(&marks).filter(|(_, m)| **m).map(|(p, _)| p.as_ref()).collect();
+            v.sort_by(|a, b| sort.order(a, b));
+            return Some(v.into_iter().map(|p| p.id).collect());
+        };
         if marks.len() != order.ids.len() {
             return None;
         }
@@ -65,28 +100,34 @@ impl Catalog {
         Some(if sort.ascending { order.sorted.iter().filter_map(pick).collect() } else { order.sorted.iter().rev().filter_map(pick).collect() })
     }
 
-    /// The order kept for `sort`'s key, made or brought up to date now.
-    fn kept_order(&self, sort: &Sort) -> Option<Arc<Order>> {
-        if sort.key == SortKey::Random || u32::try_from(self.len()).is_err() {
-            return None;
-        }
+    /// The order kept for `sort`'s key, brought up to date now; made when that pays: a query of `matching` of the
+    /// `n` photos is better sorted alone while an order is not kept, as sorting every photo costs `n·log n` to its
+    /// `m·log m`. Under 1/16 of that, never (a folder, a search); under 1/4, the second time the key is asked
+    /// (a view that comes back is worth it); beyond, at once. `None`: sort the matches alone.
+    fn order_for(&self, sort: &Sort, n: usize, matching: usize) -> Option<Arc<Order>> {
         let sort = ascending(sort);
-        let mut kept = self.index.orders.0.lock().ok()?;
-        let order = match kept.get(&sort.key) {
+        let mut held = self.index.orders.0.lock().ok()?;
+        let order = match held.kept.get(&sort.key) {
             Some(old) => self.followed(&sort, old),
-            None => self.sorted_afresh(&sort),
+            None => {
+                let share = sorting(matching) / sorting(n).max(1.0);
+                if share < 1.0 / 16.0 || (share < 0.25 && held.missed.insert(sort.key)) {
+                    return None;
+                }
+                Arc::new(self.sorted_afresh(&sort))
+            }
         };
-        let order = Arc::new(order);
-        kept.insert(sort.key, order.clone());
+        held.kept.insert(sort.key, Kept { revision: self.revision, order: order.clone() });
         Some(order)
     }
 
-    /// `old`, after the ops since its revision (`old` itself when they changed nothing it reads).
-    fn followed(&self, sort: &Sort, old: &Arc<Order>) -> Order {
-        let Some(touched) = self.photos_changed_since(old.revision, Aspects::ORDER) else { return self.sorted_afresh(sort) };
-        if touched.is_empty() && old.ids.len() == self.len() {
-            return Order { revision: self.revision, ids: old.ids.clone(), sorted: old.sorted.clone() };
+    /// What `old` kept, after the ops since its revision: the same order when they changed nothing it reads.
+    fn followed(&self, sort: &Sort, old: &Kept) -> Arc<Order> {
+        let Some(touched) = self.photos_changed_since(old.revision, Aspects::ORDER) else { return Arc::new(self.sorted_afresh(sort)) };
+        if touched.is_empty() && old.order.ids.len() == self.len() {
+            return old.order.clone();
         }
+        let old = &old.order;
         let photos: Vec<&Photo> = self.photos().map(|p| p.as_ref()).collect();
         let ids: Vec<PhotoId> = photos.iter().map(|p| p.id).collect();
         // where each photo of the old list is now (the touched ones are taken out, to go back by their new keys)
@@ -117,7 +158,7 @@ impl Catalog {
             from = to;
         }
         sorted.extend_from_slice(kept.get(from..).unwrap_or_default());
-        if sorted.len() == ids.len() { Order { revision: self.revision, ids, sorted } } else { self.sorted_afresh(sort) }
+        Arc::new(if sorted.len() == ids.len() { Order { ids, sorted } } else { self.sorted_afresh(sort) })
     }
 
     /// Every photo, sorted.
@@ -129,7 +170,7 @@ impl Catalog {
             (Some(a), Some(b)) => sort.order(a, b),
             _ => a.cmp(b),
         });
-        Order { revision: self.revision, ids: photos.iter().map(|p| p.id).collect(), sorted }
+        Order { ids: photos.iter().map(|p| p.id).collect(), sorted }
     }
 
     /// Every photo's id in `sort`, made afresh from every photo, never from a kept order: what a kept order

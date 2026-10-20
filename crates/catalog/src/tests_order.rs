@@ -137,3 +137,31 @@ fn an_order_is_made_again_when_the_changes_are_no_longer_remembered() {
     }
     assert_eq!(c.kept_ids(&sort), Some(c.sorted_from_scratch(&sort)));
 }
+
+/// A query of a small share of the library (a folder, a search) on a key with no kept order sorts its own matches:
+/// sorting the whole library for it would cost far more than the query.
+#[test]
+fn a_narrow_query_does_not_build_an_order_for_the_whole_library() {
+    let mut c = Catalog::new();
+    for i in 1..=400 {
+        let mut p = photo(i);
+        p.rating = if i % 100 == 0 { 5 } else { u8::from(i % 4 == 1) };
+        c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    }
+    let sort = Sort { key: SortKey::FileName, ascending: false, ..Sort::default() };
+    let sorted = |f: &Filter| {
+        let mut want: Vec<&Photo> = c.photos().map(|p| p.as_ref()).filter(|p| f.matches(p, &c)).collect();
+        want.sort_by(|a, b| sort.order(a, b));
+        want.iter().map(|p| p.id).collect::<Vec<_>>()
+    };
+    let few = Filter { rating: 5, rating_op: RatingOp::Exactly, ..Filter::default() };
+    assert_eq!(c.query(&few, &sort), sorted(&few));
+    assert_eq!(c.query(&few, &sort), sorted(&few));
+    assert_eq!(c.index.orders.count(), 0, "no order for 4 of 400 photos, however often asked");
+    // about a quarter: sorted alone the first time, an order is made when the key is asked again
+    let third = Filter { rating: 1, rating_op: RatingOp::Exactly, ..Filter::default() };
+    assert_eq!(c.query(&third, &sort), sorted(&third));
+    assert_eq!(c.index.orders.count(), 0);
+    assert_eq!(c.query(&third, &sort), sorted(&third));
+    assert_eq!(c.index.orders.count(), 1);
+}

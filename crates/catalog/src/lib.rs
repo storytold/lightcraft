@@ -335,7 +335,7 @@ impl Aspects {
     pub const PRESENCE: Aspects = Aspects(1 << 8);
     /// What a sort order reads of a photo: rating, capture date, edit date, file name, file size, the import
     /// date and presence in the catalog (every op that sets the others says `ALL`, which this includes).
-    pub const ORDER: Aspects = Aspects(1 | 1 << 3 | 1 << 5 | 1 << 6 | 1 << 8);
+    pub const ORDER: Aspects = Aspects(Self::RATING.0 | Self::DEVELOP.0 | Self::CAPTURED.0 | Self::FILE.0 | Self::PRESENCE.0);
     /// Everything: the photo may count differently for any tally.
     pub const ALL: Aspects = Aspects(u16::MAX);
 
