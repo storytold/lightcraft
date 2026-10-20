@@ -219,7 +219,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     } else if resp.hovered() {
                         ui.painter().rect_filled(r, 0.0, t.hover.gamma_multiply(0.7));
                     }
-                    // the preview is what a click commits: the preset composed on the photo's original state
+                    // the preview is what a click commits: the same composition as `preset.apply` (`Session::preset_applied`)
                     let look = if thumbs || resp.hovered() { active.and_then(|id| app.session.preset_applied(id, &pr, 1.0)) } else { None };
                     let mut text_x = r.left() + 40.0;
                     if thumbs && let (Some(id), Some(s)) = (active, look.as_ref()) {

@@ -172,14 +172,17 @@ pub fn expand_preset_paths(paths: &[String]) -> Vec<String> {
 }
 
 impl Session {
-    /// The settings after applying `preset` to photo `id` at `amount`: the preset composes on the
-    /// photo's original state ([`lightcraft_catalog::Photo::import_defaults`]) — each group it
-    /// covers is computed there and replaces the photo's own, so presets stack on the original
-    /// image instead of the visible edits (issue #2159). The `preset.apply` command and the UI's
-    /// hover previews share this, so hovering shows exactly what a click commits.
+    /// The settings after applying `preset` to photo `id` at `amount`. The settings the preset
+    /// names are computed on the photo's import state ([`lightcraft_catalog::Photo::import_defaults`])
+    /// when a default preset recorded one (`import_look`); a photo without one (its settings came
+    /// from an XMP sidecar or a catalog import, which record none) composes them on its current
+    /// settings instead, since the camera defaults are not its import state. Either way, the
+    /// settings the preset does not name keep the photo's values (issue #2159). The `preset.apply`
+    /// command and the UI's hover previews share this, so hovering shows exactly what a click commits.
     pub fn preset_applied(&self, id: PhotoId, preset: &Preset, amount: f64) -> Option<DevelopSettings> {
         let current = self.develop_of(id)?;
-        let original = self.catalog.photo(id).map(|p| p.import_defaults()).unwrap_or_default();
+        let photo = self.catalog.photo(id)?;
+        let original = if photo.import_look.is_some() { photo.import_defaults() } else { (*current).clone() };
         Some(preset.apply_on(&current, &original, amount))
     }
 
@@ -715,9 +718,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
     }
 
-    /// Issue #2159: a color preset after a B&W one brings the colors back — each preset composes
-    /// on the photo's original state, so the B&W preset's values don't survive in the groups the
-    /// color preset styles.
+    /// Issue #2159: a color preset after a B&W one brings the colors back. The treatment and the
+    /// settings the color preset names take its values; a setting it does not name keeps the
+    /// value the B&W preset gave it.
     #[test]
     fn a_color_preset_after_a_bw_one_returns_the_colors() {
         let mut s = Session::with_demo();
@@ -728,22 +731,97 @@ mod tests {
         let dv = s.develop_of(s.active().unwrap()).unwrap();
         assert_eq!(dv.treatment, lightcraft_develop::Treatment::Color, "the color preset restores the treatment");
         assert_eq!(dv.light.contrast, 8.0, "the color preset's values, not the B&W preset's");
-        assert_eq!(dv.light.whites, 0.0, "the B&W preset's leftovers in the covered group are restored");
+        assert_eq!(dv.light.whites, 20.0, "a setting the color preset doesn't name keeps the B&W preset's value");
     }
 
-    /// Issue #2159: presets stack on the original image: a manual edit in a group the preset
-    /// covers is replaced by original + the preset's values, at any amount.
+    /// A manual edit to a setting a preset does not name survives it, though the preset styles
+    /// the same group (Bright & Airy names exposure, contrast, highlights, shadows and whites).
     #[test]
-    fn a_preset_composes_on_the_original_not_the_visible_edits() {
+    fn a_preset_keeps_a_setting_it_does_not_name_in_the_group_it_styles() {
+        let mut s = Session::with_demo();
+        s.execute("develop.set", &json!({"control": "light.blacks", "value": -30.0})).unwrap();
+        s.execute("preset.apply", &json!({"id": "lc.bright-airy"})).unwrap();
+        let dv = s.develop_of(s.active().unwrap()).unwrap();
+        assert_eq!(dv.light.blacks, -30.0, "blacks is not named by the preset");
+        assert_eq!(dv.light.exposure, 0.45, "exposure is named by the preset and takes its value");
+    }
+
+    /// Colours a partial preset does not name keep the photo's values. Deep Sky names only the
+    /// blue and aqua mixer colours, and only their luminance and saturation.
+    #[test]
+    fn a_preset_keeps_the_mixer_colours_it_does_not_name() {
+        let mut s = Session::with_demo();
+        s.execute("develop.set", &json!({"control": "mixer.red.sat", "value": 20.0})).unwrap();
+        s.execute("develop.set", &json!({"control": "mixer.blue.hue", "value": 15.0})).unwrap();
+        s.execute("preset.apply", &json!({"id": "lc.deep-sky"})).unwrap();
+        let dv = s.develop_of(s.active().unwrap()).unwrap();
+        assert_eq!(dv.mixer.red.sat, 20.0, "a colour the preset doesn't name");
+        assert_eq!(dv.mixer.blue.hue, 15.0, "a setting of a named colour that the preset doesn't name");
+        assert_eq!(dv.mixer.blue.lum, -25.0, "a setting the preset names takes its value");
+    }
+
+    /// Settings that came from an XMP sidecar or a catalog import record no import look, so the
+    /// camera defaults are not their original: a preset that names only some of their group keeps
+    /// the rest.
+    #[test]
+    fn xmp_imported_exposure_whites_and_blacks_survive_crisp_landscape() {
+        let mut s = Session::with_demo();
+        s.execute("develop.set", &json!({"control": "light.exposure", "value": 0.7})).unwrap();
+        s.execute("develop.set", &json!({"control": "light.whites", "value": 10.0})).unwrap();
+        s.execute("develop.set", &json!({"control": "light.blacks", "value": -20.0})).unwrap();
+        let id = s.active().unwrap();
+        assert!(s.catalog.photo(id).unwrap().import_look.is_none());
+        s.execute("preset.apply", &json!({"id": "lc.crisp-landscape"})).unwrap();
+        let dv = s.develop_of(id).unwrap();
+        assert_eq!((dv.light.exposure, dv.light.whites, dv.light.blacks), (0.7, 10.0, -20.0));
+        assert_eq!(dv.light.contrast, 12.0, "a setting the preset names takes its value");
+    }
+
+    /// Amount 0 applies nothing to a photo with no import look: the photo keeps every value.
+    #[test]
+    fn amount_zero_applies_nothing_to_a_photo_without_an_import_look() {
         let mut s = Session::with_demo();
         s.execute("develop.set", &json!({"control": "light.exposure", "value": 2.0})).unwrap();
-        s.execute("preset.apply", &json!({"id": "lc.crisp-landscape"})).unwrap();
-        let dv = s.develop_of(s.active().unwrap()).unwrap();
-        assert_eq!(dv.light.exposure, 0.0, "back to the original: the preset's groups replace the visible ones");
-        assert_eq!(dv.light.contrast, 12.0);
+        let id = s.active().unwrap();
+        let before = s.develop_of(id).unwrap();
+        s.execute("preset.apply", &json!({"id": "lc.crisp-landscape", "amount": 0})).unwrap();
+        assert_eq!(s.develop_of(id).unwrap(), before);
+    }
+
+    /// With no import look, a preset's amount moves the named settings from the photo's current
+    /// values: 50 % of Bright & Airy's exposure (0.45) from 2.0 is 1.225.
+    #[test]
+    fn a_preset_amount_without_an_import_look_is_measured_from_the_current_settings() {
+        let mut s = Session::with_demo();
         s.execute("develop.set", &json!({"control": "light.exposure", "value": 2.0})).unwrap();
         s.execute("preset.apply", &json!({"id": "lc.bright-airy", "amount": 50})).unwrap();
         let dv = s.develop_of(s.active().unwrap()).unwrap();
-        assert!((dv.light.exposure - 0.225).abs() < 1e-9, "{}", dv.light.exposure);
+        assert!((dv.light.exposure - 1.225).abs() < 1e-9, "{}", dv.light.exposure);
+    }
+
+    /// A photo whose default preset recorded an import look measures a preset's amount from that
+    /// look: 50 % is halfway from the look to the preset whatever the photo was edited to, and
+    /// 0 % gives the look's value for the settings the preset names.
+    #[test]
+    fn a_preset_amount_is_measured_from_the_import_look_when_there_is_one() {
+        let mut s = Session::with_demo();
+        let id = s.active().unwrap();
+        let mut p = (**s.catalog.photo(id).unwrap()).clone();
+        let mut look = p.camera_defaults();
+        look.light.exposure = 0.5;
+        look.light.blacks = -10.0;
+        p.import_look = Some(std::sync::Arc::new(look.clone()));
+        p.develop = std::sync::Arc::new(look);
+        s.catalog.apply(lightcraft_catalog::Op::RemovePhoto { id: p.id }).unwrap();
+        s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        s.execute("develop.set", &json!({"control": "light.exposure", "value": 2.0})).unwrap();
+        s.execute("develop.set", &json!({"control": "light.blacks", "value": -30.0})).unwrap();
+        s.execute("preset.apply", &json!({"id": "lc.bright-airy", "amount": 50})).unwrap();
+        let dv = s.develop_of(id).unwrap();
+        assert!((dv.light.exposure - 0.475).abs() < 1e-9, "{}", dv.light.exposure);
+        assert_eq!(dv.light.blacks, -30.0, "a setting the preset doesn't name keeps the photo's edit");
+        s.execute("preset.apply", &json!({"id": "lc.bright-airy", "amount": 0})).unwrap();
+        let dv = s.develop_of(id).unwrap();
+        assert_eq!(dv.light.exposure, 0.5, "amount 0 gives the import look's value for a setting the preset names");
     }
 }
