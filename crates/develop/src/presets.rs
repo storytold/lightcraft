@@ -218,23 +218,47 @@ fn compose_named(current: &DevelopSettings, original: &DevelopSettings, settings
     let composed = if (amount - 1.0).abs() < 1e-9 {
         settings.clone()
     } else {
-        let mut scaled = scale_patch(&base, settings, amount);
-        remove_nulls(&mut scaled);
-        scaled
+        match settings.as_object() {
+            Some(patch) => Value::Object(interpolate_object(base.as_object(), patch, amount)),
+            None => Value::Object(Map::new()),
+        }
     };
     // `merged` deep-merges: the named settings replace, everything else stays as `current` has it
     current.merged(&composed).unwrap_or_else(|_| current.clone())
 }
 
-/// Drop `null` entries, recursively: `scale_patch` writes them where the base lacks the key and
-/// `amount` is below 50 %, and a single null would make the whole settings fail to deserialize —
-/// which silently no-ops the preset.
-fn remove_nulls(v: &mut Value) {
-    if let Value::Object(o) = v {
-        o.retain(|_, x| !x.is_null());
-        for x in o.values_mut() {
-            remove_nulls(x);
+/// The leaves of `patch` that apply at `t` (below 100 %), each computed from the same place in
+/// `base`. A leaf the amount does not reach is left out, so the photo keeps its own value there.
+fn interpolate_object(base: Option<&Map<String, Value>>, patch: &Map<String, Value>, t: f64) -> Map<String, Value> {
+    let mut out = Map::new();
+    for (k, pv) in patch {
+        let bv = base.and_then(|b| b.get(k));
+        let v = match pv {
+            Value::Object(p) => Some(Value::Object(interpolate_object(bv.and_then(Value::as_object), p, t))),
+            _ => interpolate_leaf(bv, pv, t),
+        };
+        if let Some(v) = v {
+            out.insert(k.clone(), v);
         }
+    }
+    out
+}
+
+/// One leaf at `t`. Numbers move from `base` towards `patch`. Other values switch to the preset's
+/// at half amount and up, and below it take the base's value. A null in the base is the baseline
+/// value the import state recorded (a cleared option, such as a free crop aspect): below half
+/// amount it applies and clears the photo's value, as the amount contract promises. A null the
+/// preset writes is a value like any other, so it applies at half amount and up (a preset can
+/// clear an option field such as a crop aspect).
+fn interpolate_leaf(base: Option<&Value>, patch: &Value, t: f64) -> Option<Value> {
+    match (base, patch) {
+        // integer fields (the grain seed, ids) are discrete like strings: see `scale_patch`
+        (Some(Value::Number(b)), Value::Number(p)) if b.is_f64() || p.is_f64() => {
+            let (b, p) = (b.as_f64().unwrap_or(0.0), p.as_f64().unwrap_or(0.0));
+            serde_json::Number::from_f64(b + (p - b) * t).map(Value::Number)
+        }
+        _ if t >= 0.5 => Some(patch.clone()),
+        _ => base.cloned(),
     }
 }
 
@@ -512,6 +536,48 @@ mod tests {
         };
         let out = clearing.apply_on(&current, &original, 1.0);
         assert_eq!(out.spots.len(), 0, "a preset that names spots replaces them, as before");
+    }
+
+    /// A null a preset writes into an option field (here a crop aspect: null is "free") is the
+    /// preset's value, so it clears the photo's aspect from half amount up, as any value of the
+    /// preset does; below half amount the import baseline applies, which here is null as well.
+    #[test]
+    fn a_preset_null_clears_an_option_field_from_half_amount() {
+        let mut current = DevelopSettings::default();
+        current.crop.aspect = Some((3, 2));
+        let original = DevelopSettings::default(); // the import state has no aspect
+        let p = Preset {
+            id: "p".into(),
+            name: "P".into(),
+            group: "G".into(),
+            settings: json!({"crop": {"aspect": null}}),
+            favorite: false,
+            builtin: false,
+        };
+        for amount in [1.0, 0.7, 0.5] {
+            assert_eq!(p.apply_on(&current, &original, amount).crop.aspect, None, "amount {amount}: the preset's null clears the aspect");
+        }
+        assert_eq!(p.apply_on(&current, &original, 0.3).crop.aspect, None, "below half amount the import baseline (no aspect) applies");
+    }
+
+    /// The import state has no aspect, and that null is the baseline below half amount (the amount
+    /// contract: a named setting moves between the import state and the preset's value); from half
+    /// amount the preset's aspect applies.
+    #[test]
+    fn a_null_in_the_original_is_the_baseline_below_half_amount() {
+        let mut current = DevelopSettings::default();
+        current.crop.aspect = Some((3, 2));
+        let original = DevelopSettings::default();
+        let p = Preset {
+            id: "p".into(),
+            name: "P".into(),
+            group: "G".into(),
+            settings: json!({"crop": {"aspect": [16, 9]}}),
+            favorite: false,
+            builtin: false,
+        };
+        assert_eq!(p.apply_on(&current, &original, 0.4).crop.aspect, None, "40 %: the import baseline (no aspect) applies");
+        assert_eq!(p.apply_on(&current, &original, 0.6).crop.aspect, Some((16, 9)), "60 %: the preset's aspect applies");
     }
 
     #[test]

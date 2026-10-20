@@ -825,4 +825,32 @@ mod tests {
         let dv = s.develop_of(id).unwrap();
         assert_eq!(dv.light.exposure, 0.5, "amount 0 gives the import look's value for a setting the preset names");
     }
+
+    /// A photo whose import look records a free crop aspect (null) but whose edits locked one
+    /// gets the import value back at 0 % from a preset that names the aspect: the lock is not
+    /// kept (the baseline of the amount contract), the cleared option is restored.
+    #[test]
+    fn amount_zero_restores_a_null_import_aspect() {
+        let mut s = Session::with_demo();
+        let id = s.active().unwrap();
+        let mut p = (**s.catalog.photo(id).unwrap()).clone();
+        let look = p.camera_defaults();
+        p.import_look = Some(std::sync::Arc::new(look.clone()));
+        p.develop = std::sync::Arc::new(look);
+        s.catalog.apply(lightcraft_catalog::Op::RemovePhoto { id: p.id }).unwrap();
+        s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        s.execute("crop.aspect", &json!({"aspect": [3, 2]})).unwrap();
+        assert!(s.develop_of(id).unwrap().crop.aspect.is_some(), "the aspect is locked for this test");
+        let added = s.add_presets(vec![lightcraft_develop::Preset {
+            id: "user.free-aspect".into(),
+            name: "Free aspect".into(),
+            group: "Test".into(),
+            settings: json!({"crop": {"aspect": null}}),
+            favorite: false,
+            builtin: false,
+        }]);
+        s.execute("preset.apply", &json!({"id": added[0], "amount": 0})).unwrap();
+        let dv = s.develop_of(id).unwrap();
+        assert_eq!(dv.crop.aspect, None, "amount 0 gives the import look's free aspect back");
+    }
 }
