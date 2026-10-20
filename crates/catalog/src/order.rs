@@ -6,10 +6,13 @@
 //! catalog's id order, so a query marks what matches in one pass over the photos (which come in that order)
 //! and reads the marks along the list, without looking a photo up by id. Each list remembers the revision it
 //! was right for. When asked again, [`Catalog::photos_changed_since`] names the photos an op added, removed or
-//! changed in what an order reads ([`Aspects::ORDER`]) since: those are taken out and put back where they sort
-//! now, in one pass over the list. When that is not known (too long ago, the catalog was loaded) or the result
-//! is not one place per photo, the list is made again from every photo. A catalog copy starts without them,
-//! like the other [`crate::index`] lookups.
+//! changed in what the key's comparison reads (`reads`: its own field, the file name that breaks ties, and
+//! whether the photo is in the catalog), so a rating edit moves a photo only in the rating order. Up to
+//! `IN_PLACE` such photos are moved in the list itself (a search for each, a shift of the part between); more,
+//! or a photo that came or went, are taken out and put back in one pass over the list. When that is not known
+//! (too long ago, the catalog was loaded) the list is made again from every photo, or dropped when the query
+//! is of a small part of the library. A catalog copy starts without them, like the other [`crate::index`]
+//! lookups.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -124,11 +127,16 @@ impl Catalog {
     fn order_for(&self, sort: &Sort, n: usize, matching: usize) -> Option<Arc<Order>> {
         let sort = ascending(sort);
         let mut held = self.index.orders.0.lock().ok()?;
+        let share = sorting(matching) / sorting(n).max(1.0);
         if let Some(kept) = held.kept.get_mut(&sort.key) {
+            // what changed is no longer known: a small query is not worth making the whole order again
+            if share < 1.0 / 16.0 && self.photos_changed_since(kept.revision, reads(sort.key)).is_none() {
+                held.kept.remove(&sort.key);
+                return None;
+            }
             self.catch_up(&sort, kept);
             return Some(kept.order.clone());
         }
-        let share = sorting(matching) / sorting(n).max(1.0);
         if share < 1.0 / 16.0 || (share < 0.25 && held.missed.insert(sort.key)) {
             return None;
         }

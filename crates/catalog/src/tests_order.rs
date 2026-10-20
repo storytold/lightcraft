@@ -201,3 +201,27 @@ fn many_edits_at_once_leave_every_order_right() {
     c.apply(Op::SetRating { id: PhotoId(9), rating: 5 }).unwrap();
     agree(&c).unwrap();
 }
+
+/// Once the changes are no longer remembered, a small query drops the kept order and sorts its own matches, where a
+/// big one makes the order again.
+#[test]
+fn a_small_query_does_not_remake_an_order_after_forgotten_changes() {
+    let mut c = library_of(400);
+    for (i, r) in [(100, 5u8), (200, 5)] {
+        c.apply(Op::SetRating { id: PhotoId(i), rating: r }).unwrap();
+    }
+    let sort = Sort { key: SortKey::Rating, ascending: false, ..Sort::default() };
+    let few = Filter { rating: 5, rating_op: RatingOp::Exactly, ..Filter::default() };
+    c.kept_ids(&sort);
+    assert_eq!(c.index.orders.count(), 1);
+    for i in 0..9000u64 {
+        c.apply(Op::SetRating { id: PhotoId(i % 400 + 1), rating: (i % 4) as u8 }).unwrap();
+    }
+    for i in [100, 200] {
+        c.apply(Op::SetRating { id: PhotoId(i), rating: 5 }).unwrap();
+    }
+    let mut want: Vec<&Photo> = c.photos().map(|p| p.as_ref()).filter(|p| few.matches(p, &c)).collect();
+    want.sort_by(|a, b| sort.order(a, b));
+    assert_eq!(c.query(&few, &sort), want.iter().map(|p| p.id).collect::<Vec<_>>());
+    assert_eq!(c.index.orders.count(), 0);
+}
