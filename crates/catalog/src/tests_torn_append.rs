@@ -4,7 +4,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use crate::journal::LOG;
+use crate::journal::{LOG, RESYNC_CANDIDATES};
 use crate::*;
 
 /// A store whose next append writes only a prefix of its data, then fails.
@@ -227,8 +227,6 @@ fn fs_store_truncates_a_missing_file_quietly() {
 /// it must still be recovered.
 #[test]
 fn resync_is_not_quadratic_in_line_length() {
-    use std::time::Instant;
-
     let probe = MemStore::new();
 
     // Build a valid snapshot + an initial record so `j.seq()` is non-zero and the `seq <= last + 1`
@@ -260,11 +258,11 @@ fn resync_is_not_quadratic_in_line_length() {
 
     probe.set(LOG, hostile);
 
-    let t0 = Instant::now();
+    // Count the start markers resync decodes instead of timing it: a slow worker must not fail this.
+    RESYNC_CANDIDATES.with(|c| c.set(0));
     let (j2, _c2, report) = Journal::open(Box::new(probe.clone())).unwrap();
-    let elapsed = t0.elapsed();
-
-    assert!(elapsed.as_secs_f64() < 1.0, "Journal::open took {elapsed:?} on a hostile 2 MB line");
+    let candidates = RESYNC_CANDIDATES.with(|c| c.get());
+    assert!(candidates <= 1, "resync decoded {candidates} start markers of a hostile 2 MB line; only the last one may be decoded");
     assert_eq!(j2.seq(), next_seq, "resync should have recovered the retried record after the fragment");
     assert_eq!(report.torn_fragments, 1, "resync should report exactly one torn fragment");
 }

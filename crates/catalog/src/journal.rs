@@ -270,6 +270,12 @@ fn newer(what: String) -> CatalogError {
 /// and reports, same state as before, minus the CPU.
 const RESYNC_BUDGET_BYTES: usize = 64 << 20; // 64 MiB
 
+#[cfg(test)]
+thread_local! {
+    /// Start markers that `resync` decoded on this thread (test builds only; see the cost test).
+    pub(crate) static RESYNC_CANDIDATES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// A line that doesn't decode but ends with a whole record: a fragment of a failed append followed
 /// by the record that retried it (the retry re-encodes the same ops with the same `seq`s). Returns
 /// the fragment's length and the record, if that record continues the log (`seq <= last + 1`).
@@ -282,6 +288,8 @@ fn resync(line: &[u8], last: u64) -> Option<(usize, (u64, Op))> {
     let whole = std::str::from_utf8(line).ok();
     let mut spent = 0usize;
     let i = line.windows(START.len()).rposition(|w| w == START).filter(|&i| i > 0)?;
+    #[cfg(test)]
+    RESYNC_CANDIDATES.with(|c| c.set(c.get() + 1));
     let text = match &whole {
         Some(t) => &t[i..],
         None => {
