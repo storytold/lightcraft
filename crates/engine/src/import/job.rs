@@ -1,5 +1,6 @@
 use super::commit::{How, Plan, Slot, Transfer, commit_prepared, name_family, run_transfers, system_clock};
 use super::files::{expand, probe_all};
+use super::scan::note_content;
 use super::types::{ImportCandidate, ImportMode, ImportOptions, ImportReport, Kept, OnDeleted};
 use super::*;
 
@@ -228,6 +229,7 @@ impl ImportJob {
     /// of the shared stem sidecars they read ([`crate::sidecar::ImportStems`]).
     fn look_up_library(&mut self) -> Option<lightcraft_catalog::Catalog> {
         let (library, fresh) = self.library.take()?;
+        let mut by_hash = HashMap::new();
         for p in library.photos() {
             // a trashed photo is replaced by a fresh import, so it doesn't count as a duplicate
             if p.deleted && fresh {
@@ -240,9 +242,10 @@ impl ImportJob {
             if let Some(h) = &p.content_hash
                 && (p.deleted || !self.opts.import_duplicates)
             {
-                self.by_hash.insert(h.clone(), Some(p.id));
+                note_content(&mut by_hash, h, Some(p.id));
             }
         }
+        self.by_hash.extend(by_hash.into_iter().map(|(h, (_, id))| (h, id)));
         Some(library)
     }
 

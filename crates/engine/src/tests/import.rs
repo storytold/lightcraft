@@ -112,6 +112,65 @@ fn files_imported_although_a_photo_has_their_content_get_keys_of_their_own() {
     let _ = std::fs::remove_dir_all(&src);
 }
 
+/// A library whose only photo of one content is a Duplicate (key `<hash>:dup<id>`): the original
+/// with the content's own key was imported first, the copy in `topic/` came in anyway, then the
+/// original was removed for good. Returns the session, the folder and the Duplicate's id.
+fn only_a_duplicate_keyed_photo_remains(tag: &str) -> (Session, std::path::PathBuf, u64) {
+    let src = temp_dir(tag);
+    write_png(&src.join("a.png"), 1);
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [src.join("a.png").to_string_lossy()]})).unwrap();
+    let original = r["imported"][0].as_u64().unwrap();
+    std::fs::create_dir_all(src.join("topic")).unwrap();
+    std::fs::copy(src.join("a.png"), src.join("topic/a.png")).unwrap();
+    let topic = src.join("topic").to_string_lossy().to_string();
+    let r = s.execute("library.import", &json!({"paths": [topic], "importDuplicates": true})).unwrap();
+    let twin = r["imported"][0].as_u64().unwrap();
+    let key = s.catalog.photo(lightcraft_catalog::PhotoId(twin)).unwrap().content_hash.clone().unwrap();
+    assert!(key.contains(":dup"), "{key}");
+    s.execute("photo.delete", &json!({"ids": [original]})).unwrap();
+    s.execute("photo.deletePermanently", &json!({"ids": [original]})).unwrap();
+    assert!(s.catalog.photo(lightcraft_catalog::PhotoId(original)).is_none());
+    (s, src, twin)
+}
+
+/// The Duplicate left alone still has the content: importing another copy without
+/// `importDuplicates` finds it and leaves the file out, as it did while the original was there.
+#[test]
+fn a_duplicate_keyed_photo_still_stands_for_its_content_in_an_import() {
+    let (mut s, src, twin) = only_a_duplicate_keyed_photo_remains("dupkey-import");
+    write_png(&src.join("c.png"), 1);
+    let r = s.execute("library.import", &json!({"paths": [src.join("c.png").to_string_lossy()]})).unwrap();
+    assert_eq!((ids(&r, "imported"), ids(&r, "duplicates")), (0, 1), "{r}");
+    assert_eq!(r["duplicates"][0]["existing"].as_u64(), Some(twin), "{r}");
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// The same for a Synchronize Folder scan: the copy is a duplicate, not new.
+#[test]
+fn a_duplicate_keyed_photo_still_stands_for_its_content_in_a_scan() {
+    let (mut s, src, twin) = only_a_duplicate_keyed_photo_remains("dupkey-scan");
+    std::fs::copy(src.join("a.png"), src.join("topic/c.png")).unwrap();
+    let r = s.execute("folder.scanChanges", &json!({"path": src.join("topic").to_string_lossy()})).unwrap();
+    assert_eq!((ids(&r, "new"), ids(&r, "duplicates")), (0, 1), "{r}");
+    assert_eq!(r["duplicates"][0]["existing"].as_u64(), Some(twin), "{r}");
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// A trashed Duplicate (key `<hash>:dup<id>`) is replaced by a Fresh import of a file with its
+/// content, like any trashed photo.
+#[test]
+fn a_fresh_import_replaces_a_trashed_duplicate_keyed_photo() {
+    let (mut s, src, twin) = only_a_duplicate_keyed_photo_remains("dupkey-fresh");
+    s.execute("photo.delete", &json!({"ids": [twin]})).unwrap();
+    write_png(&src.join("c.png"), 1);
+    let r = s.execute("library.import", &json!({"paths": [src.join("c.png").to_string_lossy()], "onDeleted": "fresh"})).unwrap();
+    assert_eq!(ids(&r, "imported"), 1, "{r}");
+    assert!(s.catalog.photo(lightcraft_catalog::PhotoId(twin)).is_none(), "the trashed record is replaced");
+    assert_eq!(s.catalog.len(), 1);
+    let _ = std::fs::remove_dir_all(&src);
+}
+
 #[test]
 fn copy_into_library_and_persist() {
     let src = temp_dir("copysrc");

@@ -1,6 +1,7 @@
 use super::defaults::apply_import_defaults;
 use super::files::copy_into;
 use super::job::{Prepared, PreparedItem, ReadyFile};
+use super::scan::note_content;
 use super::types::{Duplicate, ImportOptions, ImportReport, Kept, Moved, OnDeleted};
 use super::*;
 
@@ -221,11 +222,12 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
         Default::default()
     };
     // Fresh: trashed photos a new import replaces (by content or by file), each removed once
-    let (mut trash_hash, mut trash_path): (HashMap<String, PhotoId>, HashMap<String, PhotoId>) = Default::default();
+    let mut trash_content: HashMap<String, (bool, PhotoId)> = HashMap::new();
+    let mut trash_path: HashMap<String, PhotoId> = HashMap::new();
     if opts.on_deleted == OnDeleted::Fresh {
         for p in s.catalog.photos().filter(|p| p.deleted) {
             if let Some(h) = &p.content_hash {
-                trash_hash.insert(h.clone(), p.id);
+                note_content(&mut trash_content, h, p.id);
             }
             if let Source::File { path } = &p.source {
                 trash_path.insert(path.clone(), p.id);
@@ -273,7 +275,8 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                 if let Some(h) = &info.content_hash {
                     new_hash.entry(h.clone()).or_insert(id);
                 }
-                for old in info.content_hash.as_ref().and_then(|h| trash_hash.get(h)).into_iter().chain(trash_path.get(&stored)) {
+                for old in info.content_hash.as_ref().and_then(|h| trash_content.get(h)).map(|(_, id)| id).into_iter().chain(trash_path.get(&stored))
+                {
                     if purged.insert(*old) {
                         purge.push(*old);
                     }
