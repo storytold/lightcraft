@@ -322,5 +322,7 @@
   "View › Detail View ({keys}).": "Xem › Chế độ xem chi tiết ({keys}).",
   "File › Export… · File › Print… ({keys}).": "Tệp › Xuất… · Tệp › In… ({keys}).",
   "{n} folder{} could not be read": "Thư mục không đọc được: {n}{:.0}",
-  "{n} file{} skipped (not a supported photo type)": "Đã bỏ qua tệp (không phải loại ảnh được hỗ trợ): {n}{:.0}"
+  "{n} file{} skipped (not a supported photo type)": "Đã bỏ qua tệp (không phải loại ảnh được hỗ trợ): {n}{:.0}",
+  "Rule {n} of {m}: {what}. Move with the arrow keys": "Quy tắc {n}/{m}: {what}. Di chuyển bằng phím mũi tên",
+  "Group {n} of {m}: match {mode}, {count} inside. Move with the arrow keys": "Nhóm {n}/{m}: khớp {mode}, bên trong: {count}. Di chuyển bằng phím mũi tên"
 }

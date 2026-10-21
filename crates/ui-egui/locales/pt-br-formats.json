@@ -326,5 +326,7 @@
   "{name} is installed and in use: face recognition is on": "{name} está instalado e em uso: o reconhecimento facial está ativado",
   "Bring photos in with File › Import Photos… ({keys}).": "Traga fotos com Arquivo › Importar fotos… ({keys}).",
   "View › Detail View ({keys}).": "Exibir › Exibição de detalhe ({keys}).",
-  "File › Export… · File › Print… ({keys}).": "Arquivo › Exportar… · Arquivo › Imprimir… ({keys})."
+  "File › Export… · File › Print… ({keys}).": "Arquivo › Exportar… · Arquivo › Imprimir… ({keys}).",
+  "Rule {n} of {m}: {what}. Move with the arrow keys": "Regra {n} de {m}: {what}. Mova com as setas",
+  "Group {n} of {m}: match {mode}, {count} inside. Move with the arrow keys": "Grupo {n} de {m}: igualar {mode}, {count} dentro. Mova com as setas"
 }

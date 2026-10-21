@@ -2590,5 +2590,8 @@
   "Welcome": "Benvenuto",
   "Next": "Avanti",
   "Get Started": "Inizia",
-  "Stopped at the scan limit: there may be more photos": "Fermati al limite di scansione: potrebbero esserci altre foto"
+  "Stopped at the scan limit: there may be more photos": "Fermati al limite di scansione: potrebbero esserci altre foto",
+  "Drag to move, or use the arrow keys": "Trascina per spostare, oppure usa le frecce",
+  "A group can't go inside itself": "Un gruppo non può stare dentro se stesso",
+  "Groups can't nest any deeper": "I gruppi non si possono annidare più in profondità"
 }
