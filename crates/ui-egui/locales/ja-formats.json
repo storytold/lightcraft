@@ -295,5 +295,18 @@
   "Renames {n} face{} across the library. The files are not changed.": "ライブラリ全体で{n}件の顔の名前を変更します。ファイルは変更されません。{:.0}",
   "“{to}” is already a person. Combining them makes one person; Undo separates them again.": "「{to}」はすでに別の人物です。まとめると1人になり、元に戻すと再び分かれます。",
   "{what} merge added at {mp}: its full size, {full}, needs more memory than this computer has": "{what}合成を{mp}で追加しました：フルサイズ（{full}）にはこのコンピューターのメモリが足りません",
-  "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "{what}合成を{mp}で追加しました。パノラマの最大サイズです（フルサイズ：{full}）"
+  "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "{what}合成を{mp}で追加しました。パノラマの最大サイズです（フルサイズ：{full}）",
+  "Model in use: {name}": "使用中のモデル：{name}",
+  "Works · {ms} ms per photo": "動作します · 1 枚あたり {ms} ms",
+  "{got} of {total} from {host}": "{host} から {got} / {total}",
+  "Downloads {size} from {host}, once. Each file is checked against its recorded checksum; then LightCraft starts using it.": "{host} から {size} を一度だけダウンロードします。各ファイルは記録済みのチェックサムで確認され、その後 LightCraft が使用を開始します。",
+  "about {m} min left": "残り約{m}分",
+  "about {h} h {m} min left": "残り約{h}時間{m}分",
+  "{n} of {total} photos indexed": "{total}枚中{n}枚をインデックス化",
+  "Stopped at {n} of {total} photos.": "{total}枚中{n}枚で停止しました。",
+  "All {total} photos are indexed.": "{total}枚すべてインデックス化済みです。",
+  "{n} of {total} photos indexed.": "{total}枚中{n}枚をインデックス化済み。",
+  "{n} photos could not be read.": "{n}枚の写真を読み込めませんでした。",
+  "{n} photos are offline: they are indexed when their drive is back.": "{n}枚の写真がオフラインです：ドライブが戻るとインデックス化されます。",
+  "Index: {size}": "インデックス：{size}"
 }

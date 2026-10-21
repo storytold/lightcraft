@@ -1,0 +1,456 @@
+//! The background part of indexing photo contents: one thread that owns the content model's image tower and embeds
+//! the photos it is handed, a batch at a time, so the session thread (the window) never waits for the model.
+//!
+//! For each photo of a batch it takes the unedited picture, upright and uncropped: a raw's embedded JPEG when its long
+//! edge is at least [`MIN_PREVIEW_EDGE`] (no raw decode), else the photo rendered with default settings at
+//! [`EDGE`] pixels. The pictures are read in parallel, then go through the model in one forward pass. All of it runs on
+//! a thread pool sized by the pace ([`Pace`]), so a Normal scan leaves the rest of the machine to the user.
+//!
+//! The session side ([`State`], driven by `content.pump`) prepares the batches (which needs the catalog), takes the
+//! embeddings into the index ([`crate::content_index`]) and keeps the row in the activity stack.
+
+use std::collections::{HashMap, HashSet};
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::{Arc, OnceLock};
+use std::time::Instant;
+
+use lightcraft_catalog::PhotoId;
+use lightcraft_vision::{ContentModel, Manifest, Rgb8, Towers};
+
+use crate::content_index::{Hash, Index};
+use crate::media::{PreviewLoader, RenderJob};
+
+/// Long edge of the picture a photo is embedded from (the model squashes it to 256 px; a little more keeps the resize
+/// honest).
+pub(crate) const EDGE: usize = 512;
+/// A raw's embedded preview is used when its long edge is at least this.
+pub(crate) const MIN_PREVIEW_EDGE: usize = 256;
+
+/// How hard indexing may work: the user's choice (Settings ▸ Search, `content.pace`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub(crate) enum Pace {
+    /// A few threads, small batches: barely noticeable.
+    Low,
+    /// Half the machine.
+    #[default]
+    Normal,
+    /// Most of the machine.
+    Fast,
+}
+
+impl Pace {
+    /// `low`, `normal` or `fast`; anything else is `None`.
+    pub fn parse(name: &str) -> Option<Pace> {
+        match name {
+            "low" => Some(Pace::Low),
+            "normal" => Some(Pace::Normal),
+            "fast" => Some(Pace::Fast),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Pace::Low => "low",
+            Pace::Normal => "normal",
+            Pace::Fast => "fast",
+        }
+    }
+
+    /// Threads the model and the decodes use at this pace on a machine with `cores` threads.
+    pub fn threads(self, cores: usize) -> usize {
+        match self {
+            Pace::Low => (cores / 4).clamp(1, 4),
+            Pace::Normal => (cores / 2).max(1),
+            Pace::Fast => (cores * 4 / 5).max(1),
+        }
+    }
+
+    /// Photos per forward pass: larger batches are a little faster per photo, smaller ones stop sooner when cancelled.
+    pub fn batch(self) -> usize {
+        match self {
+            Pace::Low => 8,
+            Pace::Normal => 16,
+            Pace::Fast => 32,
+        }
+    }
+}
+
+fn cores() -> usize {
+    std::thread::available_parallelism().map_or(1, |n| n.get())
+}
+
+/// The thread pool for `pace`: made when first needed, its idle threads cost nothing. The model's matrix products and
+/// the decodes run inside it (rayon's global pool serves the interactive work, which must not wait behind a scan).
+fn pool(pace: Pace) -> Option<&'static rayon::ThreadPool> {
+    static POOLS: [OnceLock<Option<rayon::ThreadPool>>; 3] = [OnceLock::new(), OnceLock::new(), OnceLock::new()];
+    let i = match pace {
+        Pace::Low => 0,
+        Pace::Normal => 1,
+        Pace::Fast => 2,
+    };
+    POOLS
+        .get(i)?
+        .get_or_init(|| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(pace.threads(cores()))
+                .thread_name(move |t| format!("lightcraft-content-{i}-{t}"))
+                .build()
+                .ok()
+        })
+        .as_ref()
+}
+
+/// Loads a content model from its folder (the real one: [`lightcraft_vision::load`]; tests use a stand-in).
+pub(crate) type Loader = Arc<dyn Fn(&Path, &Manifest, Towers) -> Result<Box<dyn ContentModel>, String> + Send + Sync>;
+
+/// The real loader.
+pub(crate) fn default_loader() -> Loader {
+    Arc::new(|dir: &Path, m: &Manifest, towers: Towers| lightcraft_vision::load(dir, m, towers).map_err(|e| e.to_string()))
+}
+
+/// One photo to embed.
+pub(crate) struct Item {
+    pub id: PhotoId,
+    /// Its content hash when it was prepared.
+    pub hash: Hash,
+    /// A raw's embedded preview (tried first).
+    pub preview: Option<(String, PreviewLoader)>,
+    /// The photo rendered with default settings.
+    pub job: Option<RenderJob>,
+    /// Its original, to tell an offline photo from an unreadable one.
+    pub path: Option<String>,
+}
+
+pub(crate) struct Batch {
+    pub items: Vec<Item>,
+    pub pace: Pace,
+}
+
+/// What became of one photo.
+#[derive(Debug)]
+pub(crate) enum Outcome {
+    Embedded(Vec<f32>),
+    /// Its file is not there (a drive that is not connected): tried again later.
+    Offline,
+    /// It could not be read or embedded: not tried again this session (unless its file changes).
+    Failed(String),
+    /// Not looked at (the scan was cancelled first).
+    Skipped,
+}
+
+pub(crate) struct Done {
+    pub results: Vec<(PhotoId, Hash, Outcome)>,
+    /// Wall time of the batch, and how many photos it embedded.
+    pub ms: f64,
+    pub embedded: usize,
+    /// The model could not be loaded: nothing will work until it changes.
+    pub model_error: Option<String>,
+}
+
+fn to_rgb(img: &lightcraft_raster::Rgba8) -> Rgb8 {
+    Rgb8 { width: img.width, height: img.height, data: img.data.iter().map(|p| [p[0], p[1], p[2]]).collect() }
+}
+
+/// The picture of one photo, or why there is none.
+fn picture(item: Item) -> (PhotoId, Hash, Result<Rgb8, Outcome>) {
+    let Item { id, hash, preview, job, path } = item;
+    let run = catch_unwind(AssertUnwindSafe(|| {
+        if let Some(img) = preview.and_then(|(p, load)| load(&p, EDGE)).filter(|img| img.width.max(img.height) >= MIN_PREVIEW_EDGE) {
+            return Ok(to_rgb(&img));
+        }
+        let Some(job) = job else { return Err("nothing to render it from".to_string()) };
+        match job.run().rendered {
+            Ok(r) if r.image.width > 0 && r.image.height > 0 => Ok(to_rgb(&r.image)),
+            Ok(_) => Err("it rendered empty".into()),
+            Err(e) => Err(e),
+        }
+    }));
+    let r = match run {
+        Ok(Ok(img)) => Ok(img),
+        Ok(Err(why)) => Err(why),
+        Err(_) => Err("reading it stopped unexpectedly".into()),
+    };
+    (
+        id,
+        hash,
+        r.map_err(|why| match path {
+            Some(p) if !Path::new(&p).exists() => Outcome::Offline,
+            _ => Outcome::Failed(why.chars().take(200).collect()),
+        }),
+    )
+}
+
+/// Embed one batch with `model` (already on the pace's pool).
+fn embed(model: &dyn ContentModel, items: Vec<Item>) -> Vec<(PhotoId, Hash, Outcome)> {
+    use rayon::prelude::*;
+    let pictures: Vec<(PhotoId, Hash, Result<Rgb8, Outcome>)> = items.into_par_iter().map(picture).collect();
+    let (mut keys, mut images, mut out) = (Vec::new(), Vec::new(), Vec::new());
+    for (id, hash, r) in pictures {
+        match r {
+            Ok(img) => {
+                keys.push((id, hash));
+                images.push(img);
+            }
+            Err(o) => out.push((id, hash, o)),
+        }
+    }
+    for (keys, images) in keys.chunks(lightcraft_vision::MAX_BATCH).zip(images.chunks(lightcraft_vision::MAX_BATCH)) {
+        let run = catch_unwind(AssertUnwindSafe(|| model.embed_images(images)));
+        match run {
+            Ok(Ok(vectors)) if vectors.len() == keys.len() => {
+                out.extend(keys.iter().zip(vectors).map(|((id, hash), v)| (*id, *hash, Outcome::Embedded(v))));
+            }
+            _ => {
+                // one bad picture fails the whole pass: find it by doing them one at a time
+                for ((id, hash), img) in keys.iter().zip(images) {
+                    let one = catch_unwind(AssertUnwindSafe(|| model.embed_images(std::slice::from_ref(img))));
+                    let outcome = match one {
+                        Ok(Ok(v)) if v.len() == 1 => v.into_iter().next().map_or(Outcome::Failed("the model made nothing".into()), Outcome::Embedded),
+                        Ok(Err(e)) => Outcome::Failed(e.to_string().chars().take(200).collect()),
+                        _ => Outcome::Failed("the model could not embed it".into()),
+                    };
+                    out.push((*id, *hash, outcome));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The thread that owns the model.
+pub(crate) struct Worker {
+    jobs: Sender<Batch>,
+    done: Receiver<Done>,
+    /// Batches handed over and not yet back.
+    pub busy: usize,
+    /// Set when the session lets go of the worker: batches still queued are not started.
+    dropped: Arc<AtomicBool>,
+}
+
+impl Drop for Worker {
+    fn drop(&mut self) {
+        self.dropped.store(true, Ordering::SeqCst);
+    }
+}
+
+impl Worker {
+    /// Start the thread for the model in `home` described by `manifest`. The model is loaded on that thread, with the
+    /// first batch. A batch handed over after `cancel` is set comes back untouched.
+    pub fn start(home: PathBuf, manifest: Manifest, loader: Loader, cancel: Arc<AtomicBool>) -> Result<Worker, String> {
+        let (jobs, job_rx) = channel::<Batch>();
+        let (done_tx, done) = channel::<Done>();
+        let dropped = Arc::new(AtomicBool::new(false));
+        let gone = dropped.clone();
+        std::thread::Builder::new()
+            .name("lightcraft-content-index".into())
+            .spawn(move || {
+                let mut model: Option<Box<dyn ContentModel>> = None;
+                let mut model_error: Option<String> = None;
+                // ends when the session drops its sender (indexing stopped, the model or the library changed)
+                while let Ok(batch) = job_rx.recv() {
+                    // indexing stopped, or the model or the library changed: what is still queued is not wanted
+                    if gone.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    let started = Instant::now();
+                    let skip = |items: Vec<Item>| items.into_iter().map(|i| (i.id, i.hash, Outcome::Skipped)).collect::<Vec<_>>();
+                    if cancel.load(Ordering::SeqCst) {
+                        let _ = done_tx.send(Done { results: skip(batch.items), ms: 0.0, embedded: 0, model_error: None });
+                        continue;
+                    }
+                    if model.is_none() && model_error.is_none() {
+                        let loaded = catch_unwind(AssertUnwindSafe(|| loader(&home, &manifest, Towers { image: true, text: false })));
+                        match loaded {
+                            Ok(Ok(m)) => model = Some(m),
+                            Ok(Err(e)) => model_error = Some(e),
+                            Err(_) => model_error = Some("loading the model stopped unexpectedly".into()),
+                        }
+                    }
+                    let Some(m) = model.as_deref() else {
+                        let _ = done_tx.send(Done { results: skip(batch.items), ms: 0.0, embedded: 0, model_error: model_error.clone() });
+                        continue;
+                    };
+                    let work = || embed(m, batch.items);
+                    let results = match pool(batch.pace) {
+                        Some(p) => p.install(work),
+                        None => work(),
+                    };
+                    let embedded = results.iter().filter(|r| matches!(r.2, Outcome::Embedded(_))).count();
+                    let ms = started.elapsed().as_secs_f64() * 1e3;
+                    if done_tx.send(Done { results, ms, embedded, model_error: None }).is_err() {
+                        break;
+                    }
+                }
+            })
+            .map_err(|e| format!("could not start indexing: {e}"))?;
+        Ok(Worker { jobs, done, busy: 0, dropped })
+    }
+
+    pub fn submit(&mut self, batch: Batch) -> bool {
+        let ok = self.jobs.send(batch).is_ok();
+        if ok {
+            self.busy += 1;
+        }
+        ok
+    }
+
+    /// Batches finished since the last call.
+    pub fn finished(&mut self) -> Vec<Done> {
+        let out: Vec<Done> = self.done.try_iter().collect();
+        self.busy = self.busy.saturating_sub(out.len());
+        out
+    }
+}
+
+/// The model in use, as the session last looked it up.
+#[derive(Clone)]
+pub(crate) struct Current {
+    pub id: String,
+    /// `<model id>@<sha256 of the weights>`.
+    pub tag: String,
+    pub home: PathBuf,
+    pub manifest: Manifest,
+}
+
+/// The loaded text tower (for searches), kept while it is used.
+pub(crate) struct TextModel {
+    pub tag: String,
+    pub model: Arc<dyn ContentModel>,
+    pub used: Instant,
+    /// Embeddings of recent searches.
+    pub queries: HashMap<String, Vec<f32>>,
+}
+
+/// Counts over the library, made when the queue is.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Counts {
+    /// Photos that can be indexed (in the library, not videos).
+    pub total: usize,
+    /// Of those, indexed at their current content.
+    pub indexed: usize,
+    /// Indexed at an older content (their original was replaced): queued again.
+    pub stale: usize,
+}
+
+/// What content indexing keeps between calls (`Session::content`).
+#[derive(Default)]
+pub(crate) struct State {
+    /// The selected model and whether indexing is on, and when that was last read from the settings.
+    pub current: Option<Current>,
+    pub enabled: bool,
+    pub pace: Pace,
+    pub checked: Option<Instant>,
+    /// The index of the current model, for this library.
+    pub index: Option<Index>,
+    pub worker: Option<Worker>,
+    /// Set by the activity row's ✕ (or `content.pump {cancel}`): the scan stops after the batch it is on.
+    pub cancel: Arc<AtomicBool>,
+    pub task: Option<crate::activity::TaskGuard>,
+    /// Stopped by the user (cancelled): nothing new starts until indexing is started again.
+    pub held: bool,
+    /// Photos to do, the next last, and the catalog revision and time the list was made at.
+    pub queue: Vec<PhotoId>,
+    pub queue_stamp: Option<u64>,
+    pub queue_at: Option<Instant>,
+    pub in_flight: HashSet<PhotoId>,
+    /// Photos that could not be read, with the content hash they failed at (tried again only when it changes).
+    pub failed: HashMap<u64, (Hash, String)>,
+    /// Photos whose file was missing, tried again a minute later.
+    pub offline: HashSet<u64>,
+    pub offline_at: Option<Instant>,
+    /// Photos to embed again although their record is current (`content.reindex`).
+    pub force: HashSet<u64>,
+    /// The model could not be loaded (`tag`, why): indexing waits until the model or the setting changes.
+    pub error: Option<(String, String)>,
+    pub saved_at: Option<Instant>,
+    /// Embedded this session, and the measured cost of one photo (moving average, milliseconds).
+    pub embedded: u64,
+    pub ms_per_photo: Option<f64>,
+    pub counts: Counts,
+    /// The catalog revision and index size the counts were made at (a status with nothing changed does not count again).
+    pub counts_stamp: Option<(u64, usize)>,
+    pub text: Option<TextModel>,
+    /// Test hook: a stand-in for [`lightcraft_vision::load`].
+    pub loader: Option<Loader>,
+    /// Bumped when another library opens.
+    pub epoch: u64,
+}
+
+impl State {
+    /// Stop the scan: the worker ends after the batch it is on (its results are dropped), the row goes, the index is
+    /// written.
+    pub fn stop(&mut self) {
+        self.worker = None;
+        self.task = None;
+        self.in_flight.clear();
+        self.queue.clear();
+        self.queue_stamp = None;
+        self.save();
+    }
+
+    /// Write the index (a failure is kept in the index's `save_error` and logged).
+    pub fn save(&mut self) {
+        if let Some(i) = self.index.as_mut()
+            && i.has_unsaved()
+            && let Err(e) = i.save()
+        {
+            log::warn!("content index: {e}");
+        }
+        self.saved_at = Some(Instant::now());
+    }
+
+    /// Another library is being opened: the index of the old one is saved and dropped (photo ids belong to one library).
+    pub fn library_changed(&mut self) {
+        self.stop();
+        self.index = None;
+        self.failed.clear();
+        self.offline.clear();
+        self.force.clear();
+        self.held = false;
+        self.counts = Counts::default();
+        self.counts_stamp = None;
+        self.cancel = Arc::new(AtomicBool::new(false));
+        self.epoch = self.epoch.wrapping_add(1);
+    }
+
+    pub fn loader(&self) -> Loader {
+        self.loader.clone().unwrap_or_else(default_loader)
+    }
+}
+
+impl crate::Session {
+    /// Load content models with `loader` instead of [`lightcraft_vision::load`] (tests of the frontends use a small
+    /// stand-in; a host could bring its own runtime). It is called with the model's folder, its manifest and the towers
+    /// wanted, on the indexing thread or (the text tower, for a search) on the session's.
+    pub fn set_content_model_loader(&mut self, loader: Arc<dyn Fn(&Path, &Manifest, Towers) -> Result<Box<dyn ContentModel>, String> + Send + Sync>) {
+        self.content.stop();
+        self.content.text = None;
+        self.content.loader = Some(loader);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_pace_sets_threads_and_batches() {
+        use Pace::*;
+        assert_eq!([Low, Normal, Fast].map(|p| p.threads(32)), [4, 16, 25]);
+        assert_eq!([Low, Normal, Fast].map(|p| p.threads(8)), [2, 4, 6]);
+        assert_eq!([Low, Normal, Fast].map(|p| p.threads(1)), [1, 1, 1]);
+        assert_eq!([Low, Normal, Fast].map(|p| p.threads(0)), [1, 1, 1]);
+        assert_eq!([Low, Normal, Fast].map(Pace::batch), [8, 16, 32]);
+        assert!([Low, Normal, Fast].iter().all(|p| p.batch() <= lightcraft_vision::MAX_BATCH));
+        assert_eq!(["low", "normal", "fast", "turbo", ""].map(Pace::parse), [Some(Low), Some(Normal), Some(Fast), None, None]);
+        assert!([Low, Normal, Fast].iter().all(|p| Pace::parse(p.name()) == Some(*p)));
+        for p in [Low, Normal, Fast] {
+            let pool = pool(p).expect("a pool");
+            assert_eq!(pool.current_num_threads(), p.threads(cores()));
+        }
+    }
+}

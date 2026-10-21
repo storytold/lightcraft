@@ -295,5 +295,18 @@
   "Already in “{}”": "Bereits in „{}“",
   "Move {n} photo{} to “{}”": "{n} Foto{0} nach „{1}“ verschieben",
   "Move {n} photo{} to “{}”?": "{n} Foto{0} nach „{1}“ verschieben?",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "{n} Foto{0} nach „{1}“ verschoben. Bearbeiten → Rückgängig holt sie zurück."
+  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "{n} Foto{0} nach „{1}“ verschoben. Bearbeiten → Rückgängig holt sie zurück.",
+  "Model in use: {name}": "Verwendetes Modell: {name}",
+  "Works · {ms} ms per photo": "Funktioniert · {ms} ms pro Foto",
+  "{got} of {total} from {host}": "{got} von {total} von {host}",
+  "Downloads {size} from {host}, once. Each file is checked against its recorded checksum; then LightCraft starts using it.": "Lädt {size} einmalig von {host} herunter. Jede Datei wird mit ihrer hinterlegten Prüfsumme verglichen; dann verwendet LightCraft das Modell.",
+  "about {m} min left": "noch etwa {m} Min.",
+  "about {h} h {m} min left": "noch etwa {h} Std. {m} Min.",
+  "{n} of {total} photos indexed": "{n} von {total} Fotos indiziert",
+  "Stopped at {n} of {total} photos.": "Angehalten bei {n} von {total} Fotos.",
+  "All {total} photos are indexed.": "Alle {total} Fotos sind indiziert.",
+  "{n} of {total} photos indexed.": "{n} von {total} Fotos indiziert.",
+  "{n} photos could not be read.": "{n} Fotos konnten nicht gelesen werden.",
+  "{n} photos are offline: they are indexed when their drive is back.": "{n} Fotos sind offline: Sie werden indiziert, sobald ihr Laufwerk wieder da ist.",
+  "Index: {size}": "Index: {size}"
 }
