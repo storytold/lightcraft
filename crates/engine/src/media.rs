@@ -352,6 +352,10 @@ pub struct MediaCache {
     budget: usize,
     pub file_loader: Option<FileLoader>,
     pub file_probe: Option<FileProbe>,
+    /// Probes a file from its headers where its format allows, without a content hash (an import
+    /// that adds files where they are: [`crate::import::ImportOptions::headers_only`]); `None` =
+    /// [`Self::file_probe`].
+    pub header_probe: Option<FileProbe>,
     pub preview_loader: Option<PreviewLoader>,
     /// Reads a photo file's bytes (Photo Merge); `None` = the local file system.
     pub file_bytes: Option<crate::merge::ByteReader>,
@@ -427,6 +431,7 @@ impl Default for MediaCache {
             budget,
             file_loader: None,
             file_probe: None,
+            header_probe: None,
             preview_loader: None,
             file_bytes: None,
             smart_dir: None,
