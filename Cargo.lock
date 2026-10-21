@@ -1782,6 +1782,58 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "28dea519a9695b9977216879a3ebfddf92f1c08c05d984f8996aecd6ecdc811d"
 
 [[package]]
+name = "filmcraft-bitstream"
+version = "0.6.0"
+source = "git+https://github.com/storytold/filmcraft?rev=156086dc87282026aeec33f8a220e4629bccbe31#156086dc87282026aeec33f8a220e4629bccbe31"
+
+[[package]]
+name = "filmcraft-color"
+version = "0.6.0"
+source = "git+https://github.com/storytold/filmcraft?rev=156086dc87282026aeec33f8a220e4629bccbe31#156086dc87282026aeec33f8a220e4629bccbe31"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "filmcraft-h264"
+version = "0.6.0"
+source = "git+https://github.com/storytold/filmcraft?rev=156086dc87282026aeec33f8a220e4629bccbe31#156086dc87282026aeec33f8a220e4629bccbe31"
+dependencies = [
+ "filmcraft-bitstream",
+ "rayon",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "filmcraft-h264enc"
+version = "0.6.0"
+source = "git+https://github.com/storytold/filmcraft?rev=156086dc87282026aeec33f8a220e4629bccbe31#156086dc87282026aeec33f8a220e4629bccbe31"
+dependencies = [
+ "filmcraft-bitstream",
+ "rayon",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "filmcraft-isobmff"
+version = "0.6.0"
+source = "git+https://github.com/storytold/filmcraft?rev=156086dc87282026aeec33f8a220e4629bccbe31#156086dc87282026aeec33f8a220e4629bccbe31"
+dependencies = [
+ "filmcraft-bitstream",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "filmcraft-prores"
+version = "0.6.0"
+source = "git+https://github.com/storytold/filmcraft?rev=156086dc87282026aeec33f8a220e4629bccbe31#156086dc87282026aeec33f8a220e4629bccbe31"
+dependencies = [
+ "filmcraft-bitstream",
+ "rayon",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "find-msvc-tools"
 version = "0.1.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3251,6 +3303,7 @@ dependencies = [
  "lightcraft-slideshow",
  "lightcraft-testkit",
  "lightcraft-tiff",
+ "lightcraft-video-encode",
  "log",
  "miniz_oxide 0.8.9",
  "rayon",
@@ -3530,6 +3583,19 @@ dependencies = [
  "serde_json",
  "toml",
  "web-time",
+]
+
+[[package]]
+name = "lightcraft-video-encode"
+version = "0.9.1"
+dependencies = [
+ "filmcraft-color",
+ "filmcraft-h264",
+ "filmcraft-h264enc",
+ "filmcraft-isobmff",
+ "filmcraft-prores",
+ "lightcraft-raster",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

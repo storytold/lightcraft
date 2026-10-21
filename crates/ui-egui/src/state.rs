@@ -949,6 +949,16 @@ pub struct NameEdit {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum Dialog {
+    /// File ▸ Timelapse Video… (issue #497; `crate::export_task::start_timelapse`); `size` is "WxH".
+    Timelapse {
+        fps: u32,
+        size: String,
+        fill: bool,
+        hold: u32,
+        crossfade: u32,
+        prores: bool,
+        quality: u8,
+    },
     /// A Lightroom import result stays readable after its activity row disappears.
     LightroomResult {
         summary: String,

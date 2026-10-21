@@ -80,6 +80,7 @@ pub mod slideshow_export;
 pub mod smart;
 pub mod sync;
 pub mod text;
+pub mod timelapse;
 mod view;
 pub mod walk;
 
@@ -1318,6 +1319,8 @@ mod tests_slideshow_export;
 mod tests_spots;
 #[cfg(test)]
 mod tests_sync;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests_timelapse;
 #[cfg(test)]
 mod tests_view_follow;
 #[cfg(test)]

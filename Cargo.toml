@@ -27,6 +27,7 @@ lightcraft-meta = { path = "crates/meta" }
 lightcraft-develop = { path = "crates/develop" }
 lightcraft-lensdb = { path = "crates/lensdb" }
 lightcraft-inpaint = { path = "crates/inpaint" }
+lightcraft-video-encode = { path = "crates/video-encode" }
 lightcraft-scenes = { path = "crates/scenes" }
 lightcraft-pipeline = { path = "crates/pipeline" }
 lightcraft-gpu = { path = "crates/gpu" }

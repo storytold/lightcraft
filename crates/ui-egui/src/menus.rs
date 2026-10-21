@@ -202,6 +202,9 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("app.print", "Print to PDF", None, ""),
     ("dialog.contactSheet", "Contact Sheet PDF…", None, "File"),
     ("app.contactSheet", "Export Contact Sheet PDF", None, ""),
+    // issue #497: {path?, …export.timelapse options}; asks for the file when `path` is missing
+    ("dialog.timelapse", "Timelapse Video…", None, "File"),
+    ("app.timelapse", "Export Timelapse Video", None, ""),
     ("photo.editInPhotoCraft", "Edit in PhotoCraft", Some("Cmd+Shift+E"), "Photo>Edit In"),
     ("photo.editInExternal", "Edit in Other Editor", Some("Cmd+Alt+E"), "Photo>Edit In"),
     // {ids?, app?}: the original files themselves (a raw stays a raw: no render, no copy), opened
@@ -1406,6 +1409,30 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             }
             crate::export_task::start_contact_sheet(app, &params)
         }
+        "dialog.timelapse" => {
+            app.ui.dialog = Some(crate::export_task::timelapse_dialog());
+            Ok(Value::Null)
+        }
+        "app.timelapse" => {
+            if app.export.is_some() {
+                return Some(Err("an export is already running".into()));
+            }
+            let mut params = p.clone();
+            if p.get("path").is_none() {
+                let prores = p.get("format").and_then(Value::as_str) == Some("prores");
+                let (filter, ext, name): (&str, &'static [&'static str], &str) =
+                    if prores { ("QuickTime", &["mov"], "Timelapse.mov") } else { ("MPEG-4", &["mp4"], "Timelapse.mp4") };
+                let req = PickRequest::save("Timelapse Video", filter, ext, name);
+                let paths = match crate::pick::ask(app, id, p, "path", req, |_| None) {
+                    Picked::Now(paths) => paths,
+                    Picked::Later => return Some(Ok(Value::Null)),
+                    Picked::Unavailable => return Some(Err("no save dialog on this platform; supply path".into())),
+                };
+                let Some(path) = paths.first() else { return Some(Ok(Value::Null)) };
+                params["path"] = json!(path);
+            }
+            crate::export_task::start_timelapse(app, &params)
+        }
         "dialog.export" => {
             let prev = app.session.last_export.clone().unwrap_or_default();
             let u = |k: &str, d: u64| prev.get(k).and_then(Value::as_u64).unwrap_or(d);
@@ -2129,7 +2156,7 @@ pub fn ui_enabled(app: &LightcraftApp, id: &str) -> bool {
     match id {
         "library.selectOnlyActive" => app.session.active().is_some(),
         "view.thumbSizeUp" | "view.thumbSizeDown" => thumb_size_view(app),
-        "dialog.contactSheet" | "app.contactSheet" | "dialog.print" | "app.print" => {
+        "dialog.contactSheet" | "app.contactSheet" | "dialog.print" | "app.print" | "dialog.timelapse" | "app.timelapse" => {
             !cfg!(target_arch = "wasm32") && app.session.active().is_some() && app.export.is_none()
         }
         "dialog.slideshowExport" | "app.slideshowExport" => {

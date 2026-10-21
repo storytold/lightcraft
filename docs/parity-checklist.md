@@ -43,7 +43,7 @@ cited here still exists. Formerly docs/parity.md.
 | O. Merge (MERGE) | 3 | 1 | 0 | 0 | — | — |
 | P. Enhance (ENH) | 0 | 0 | 2 | 0 | — | — |
 | Q. HDR (HDR) | 2 | 3 | 0 | 0 | — | — |
-| R. Video (VID) | 0 | 0 | 5 | 1 | — | 0/2 (0%) |
+| R. Video (VID) | 0 | 1 | 5 | 1 | — | 0/2 (0%) |
 | S. Export (EXP) | 15 | 4 | 0 | 0 | 7/7 (100%) | 7/7 (100%) |
 | T. Share (SHARE) | 0 | 0 | 0 | 4 | — | — |
 | U. Map & location (MAP) | 0 | 1 | 1 | 0 | — | 0/1 (0%) |
@@ -383,6 +383,7 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 | LR-VID-EDIT | Edits on video | P2 | ⬜ | | |
 | LR-VID-COVER | Cover frame | P2 | ⬜ | | |
 | LR-VID-EXPORT | Video export | P2 | ⬜ | | |
+| LR-VID-TIMELAPSE | Photos as a timelapse video (issue #497; Lightroom Classic only has Slideshow ▸ Export Video) | P2 | 🟡 | `cmd:export.timelapse`, `cmd:dialog.timelapse`, `crates/engine/src/timelapse.rs`, `crates/video-encode/src/native.rs`, `crates/engine/src/tests_timelapse.rs` | File ▸ Timelapse Video…: the selection in the shown order, each photo with its own edits, fit (letterbox) or fill (crop) one frame size, 1–120 fps, frames per photo, cross-fade frames, H.264 MP4 or ProRes 422 MOV (FilmCraft encoders); worker + activity row with ✕; `.partial` then rename. Missing: audio/music, deflicker, pan/zoom, non-integer rates (29.97), web |
 | LR-VID-PHOTO2VIDEO | Photo to video (generative) | OOS | 🚫 | | |
 
 ## S. Export (EXP)
@@ -817,6 +818,7 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 | 2026-10-15 | patch | LR-VIEW-BEFOREAFTER: side by side and stacked panes share click-zoom animation for whole-frame images, window tiles and input; render requests keep the final target (#1821); status unchanged |
 | 2026-10-14 | patch | LR-MASK-BRUSH: ⇧-click with the brush draws a straight stroke from where the last stroke ended, tapering when the brush changed in between (`cmd:mask.brushStroke` `connect`); status unchanged |
 | 2026-10-14 | minor | LR-VIEW-ZOOM 🟡 → ✅: soft proofing gets zoom windows (mask overlays already had them; row text corrected), 1:1 pixels tested equal to the full-size export, slider-drag latency at 1:1 measured on Linux |
+| 2026-10-13 | minor | LR-VID-TIMELAPSE: photos → timelapse video (H.264 MP4 / ProRes MOV), issue #497 |
 | 2026-10-13 | patch | LR-VIEW-COMPARE, LRC-LIB-COMPARE: ⌘/Ctrl- and Shift-clicks on the filmstrip in Compare change the selection as in the grid; the two photos shown stay selected and the active photo is unchanged (#187); statuses unchanged |
 | 2026-10-13 | minor | KEYC-SELECTONLYACTIVE: Edit → Select Only Active Photo (⌘⇧D) lands as a new row; status 🟡 (headless-tested, native macOS menu path unverified) |
 | 2026-10-13 | patch | LRC-LIB-CATALOG-IMPORT: a catalog whose tables are all still in its `-wal` file (main file schema format 0) opens instead of failing as an unsupported schema format; status unchanged |

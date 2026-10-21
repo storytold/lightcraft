@@ -192,6 +192,17 @@ pub fn specs() -> Vec<CommandSpec> {
             }
         ),
     ];
+    // issue #497: photos → timelapse movie (native only: the encoders are)
+    #[cfg(not(target_arch = "wasm32"))]
+    v.push(cmd!(
+        query "export.timelapse",
+        "Export Timelapse Video",
+        [],
+        None,
+        "{path, ids?: photo ids (default: the selection in the shown order), fps?: 1..120 (24), size?: \"WxH\" | [w, h] (1920x1080; even, 16..8192), fit?: fit|fill (fit = letterbox), hold?: frames per photo 1..1000 (1), crossfade?: extra frames blending each photo into the next 0..1000 (0), format?: h264|prores (from the extension, else h264), quality?: 1..100 (80)} → {path, frames, photos, width, height, duration, bytes}; frames = photos × hold + (photos − 1) × crossfade; each photo rendered with its own edits; no audio; written to path.partial and renamed, a cancel (activity ✕) leaves no file",
+        always,
+        |s, p| crate::timelapse::run_command(s, p).map_err(|e| bad("export.timelapse", e))
+    ));
     // Apple Events to Photos' import command (macOS); not in the web build. Not journaled: a
     // replay must not import again.
     #[cfg(not(target_arch = "wasm32"))]

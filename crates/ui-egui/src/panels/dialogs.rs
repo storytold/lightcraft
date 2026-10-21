@@ -254,6 +254,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
         Dialog::PasteSettings { .. } => "Paste Selected Settings",
         Dialog::Export { .. } => "Export",
         Dialog::ContactSheet { .. } => "Contact Sheet PDF",
+        Dialog::Timelapse { .. } => "Timelapse Video",
         Dialog::SlideshowExport { .. } => "Export Slideshow",
         Dialog::Print => "Print",
         Dialog::Merge { opts } => opts.title(),
@@ -735,6 +736,41 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     ui.checkbox(&mut options.captions, crate::i18n::tr("Filename captions"));
                     ui.label(crate::i18n::tr("150 dpi · sRGB · current edits · fit without cropping"));
                     ui.label(crate::i18n::tr("Choose a PDF destination after confirming. Print the PDF from your viewer."));
+                }
+                Dialog::Timelapse { fps, size, fill, hold, crossfade, prores, quality } => {
+                    let n = app.session.targets(&json!({})).map_or(0, |v| v.len()) as u64;
+                    let frames = (n * u64::from(*hold) + n.saturating_sub(1) * u64::from(*crossfade)).max(1);
+                    ui.label(
+                        egui::RichText::new(crate::i18n::tr_format!(
+                            "{n} photos · {frames} frames · {secs} s",
+                            n = n,
+                            frames = frames,
+                            secs = format!("{:.1}", frames as f64 / f64::from((*fps).max(1)))
+                        ))
+                        .color(t.text_dim),
+                    );
+                    field(ui, "Size", |ui| {
+                        let shown = crate::export_task::TIMELAPSE_SIZES.iter().find(|s| s.0 == size.as_str()).map_or(size.as_str(), |s| s.1).to_string();
+                        let c = egui::ComboBox::from_id_salt("timelapseSize").selected_text(shown).show_ui(ui, |ui| {
+                            for (v, l) in crate::export_task::TIMELAPSE_SIZES {
+                                ui.selectable_value(size, v.to_string(), *l);
+                            }
+                        });
+                        crate::widgets::register(ui.ctx(), "combo:timelapseSize", c.response.rect);
+                    });
+                    choices(ui, "Frame", "timelapseFit", &[(false, "Fit (letterbox)"), (true, "Fill (crop)")], fill);
+                    choices(ui, "Frame Rate", "timelapseFps", &[(24, "24"), (25, "25"), (30, "30"), (50, "50"), (60, "60")], fps);
+                    field(ui, "Frames per Photo", |ui| {
+                        ui.add(egui::DragValue::new(hold).range(1..=lightcraft_engine::timelapse::MAX_HOLD));
+                    });
+                    field(ui, "Cross-Fade Frames", |ui| {
+                        ui.add(egui::DragValue::new(crossfade).range(0..=lightcraft_engine::timelapse::MAX_HOLD));
+                    });
+                    choices(ui, "Format", "timelapseFormat", &[(false, "H.264 (MP4)"), (true, "ProRes 422 (MOV)")], prores);
+                    field(ui, "Quality", |ui| {
+                        ui.add(egui::Slider::new(quality, 1..=100));
+                    });
+                    ui.label(egui::RichText::new(crate::i18n::tr("Each photo with its own edits, in the order shown. No audio.")).color(t.text_dim));
                 }
                 Dialog::Export { opts, full_size, resize, preset_name, limit_kb, dir } => {
                     use lightcraft_engine::export::{ExportFormat as F, MetadataPolicy as M, SharpenAmount as A, SharpenFor as S};
@@ -1349,6 +1385,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     }
                     Dialog::LightroomResult { first: Some(_), .. } => "Show in Library",
                     Dialog::ContactSheet { .. } => "Choose PDF…",
+                    Dialog::Timelapse { .. } => "Choose File…",
                     Dialog::SlideshowExport { .. } => "Export…",
                     Dialog::Print => "Print to PDF…",
                     Dialog::Merge { .. } => "Merge",
@@ -1461,6 +1498,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     Dialog::Import { .. }
                         | Dialog::Export { .. }
                         | Dialog::ContactSheet { .. }
+                        | Dialog::Timelapse { .. }
                         | Dialog::SlideshowExport { .. }
                         | Dialog::Print
                         | Dialog::NewAlbum { .. }
@@ -1901,6 +1939,7 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
             }),
         ),
         Dialog::ContactSheet { options } => app.run("app.contactSheet", json!(options)),
+        Dialog::Timelapse { .. } => app.run("app.timelapse", crate::export_task::timelapse_params(dlg).unwrap_or_default()),
         Dialog::SlideshowExport { settings } => app.run("app.slideshowExport", json!(settings)),
         Dialog::Print => app.run("app.print", json!({})),
         Dialog::CopySettings { groups } => app.run("develop.copy", json!({"groups": groups})),
