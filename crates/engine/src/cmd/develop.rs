@@ -58,7 +58,7 @@ fn numbers(v: Option<&Value>) -> Option<Vec<f64>> {
 
 /// A width × height lock stored as hundredths. Rejects non-finite, non-positive and
 /// extreme (beyond 20:1) shapes, which would give an empty or unusable crop.
-fn aspect_tuple(c: &str, x: f64, y: f64) -> Result<(u32, u32)> {
+pub(crate) fn aspect_tuple(c: &str, x: f64, y: f64) -> Result<(u32, u32)> {
     let ratio = x / y;
     if !(x.is_finite()
         && y.is_finite()
