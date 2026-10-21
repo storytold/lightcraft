@@ -305,5 +305,8 @@
   "Drop to review {n} item{} for import": "Släpp för att granska {n} objekt före import{:.0}",
   "Inside: {names}": "Inuti: {names}",
   "Where should the Lightroom catalog “{catalog}” go?": "Vart ska Lightroom-katalogen ”{catalog}” importeras?",
-  "Merge into the open library “{library}” ({count} photo{})": "Slå samman med det öppna biblioteket ”{library}” ({count} foto{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Slå samman med det öppna biblioteket ”{library}” ({count} foto{:.0})",
+  "Exported contact sheet: {photos} photos, {pages} pages": "Kontaktark exporterat (foton: {photos}, sidor: {pages})",
+  "Printed to PDF: {photos} photos, {pages} pages": "Utskrivet till PDF (foton: {photos}, sidor: {pages})",
+  "{} import warning{}": "Importvarningar: {}{:.0}"
 }

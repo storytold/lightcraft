@@ -4,7 +4,8 @@ Everything that takes a while runs off the UI thread and shows up in **one** pla
 top-left corner under the top bar (issue #345). Each task has a row with its name, a progress bar (a sweep while
 the amount of work isn't known), the count and what it's working on, and ✕ if it can stop. Quitting asks first while
 a task that can stop is running. Agents see the same list through `activity.list` / `activity.cancel`, and
-`ui.inspect` reports it as `activity`.
+`ui.inspect` reports it as `activity`; the tasks that ended and left a row are `activity.finished` /
+`activity.dismiss` and `activityFinished`.
 
 The registry is `lightcraft_engine::activity` (`crates/engine/src/activity.rs`, `Session::activity`). The stack is
 `crates/ui-egui/src/panels/activity.rs`. Every job that can last more than a moment uses it; **don't add a progress
@@ -48,6 +49,14 @@ guard.detail(&file_name);
   - `set_cancellable(false)` for a phase that has to finish once started (a Lightroom import adding its photos).
 - **Quiet periodic work** shows no row: the auto-import folder listing runs every few seconds through
   `tasks::spawn(.., None, ..)`.
+- **Say how it ended:** `guard.finish(Outcome { ending, summary, detail, failures, failed, path })` in place of
+  letting the guard drop; exports and imports do so far. `ending` is `Done`, `Problems` (not for every file),
+  `Failed`, `Stopped`, or `Died` when the job finds its worker gone; `summary` is the sentence the row shows (UI code
+  passes it translated); `failures` are the files with their reasons (`failed` when the job only counts them); `path`
+  is one of the files it made. The row stays in `activity.finished` until `activity.dismiss` lets go of it, for this
+  session: always for a task that did not end well, and for one that ended well only if it ran 10 s or more. Keep the
+  toast that says how it went: the row is the record, not the announcement. A guard that is only dropped leaves
+  nothing, as before, unless a panic dropped it: then the row says the task stopped unexpectedly.
 
 ## Examples in the code
 
@@ -68,4 +77,6 @@ guard.detail(&file_name);
 Assert the row (`session.activity.list()`: kind, label, total, `cancellable`), that `activity.cancel(id)` stops the
 job, and that the row is gone once the job ends. `crates/ui-egui/src/tests_activity.rs` has the helpers, and the
 job-specific tests show the pattern (`tests_sync.rs`, `export_task.rs`, `tests_denoise.rs`…). A row only appears
-on screen once its task is 0.5 s old, so tests that click its ✕ wait for `activity:cancel:<id>` first.
+on screen once its task is 0.5 s old, so tests that click its ✕ wait for `activity:cancel:<id>` first. For a job
+that reports how it ended, assert `session.activity.finished()` (ending, summary, failures);
+`session.activity.keep_after(0)` keeps a clean end's row however short the test's job.

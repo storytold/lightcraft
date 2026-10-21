@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, channel};
 use std::sync::{Arc, Mutex};
 
-use lightcraft_engine::activity::{Cancel, TaskGuard};
+use lightcraft_engine::activity::{Cancel, Ending, Failure, Outcome, TaskGuard};
 use lightcraft_engine::export::{AfterExport, Destination, ExportOptions, PreparedExport, run_batch};
 use serde_json::{Value, json};
 
@@ -27,6 +27,8 @@ pub struct ExportTask {
     rx: Receiver<Result<(Vec<Value>, Option<Value>, bool), String>>,
     /// The export's row in the activity stack (`activity.cancel` sets `cancel`).
     guard: TaskGuard,
+    /// The folder the files go to, for the row the export leaves when it ends.
+    folder: Option<String>,
 }
 
 impl ExportTask {
@@ -49,6 +51,7 @@ pub fn start(app: &mut LightcraftApp, items: Vec<PreparedExport>, opts: ExportOp
     let cancel = Arc::new(AtomicBool::new(false));
     let (tx, rx) = channel();
     let (p, c) = (progress.clone(), cancel.clone());
+    let folder = Some(to.dir.clone()).filter(|dir| !dir.is_empty());
     let guard = app.session.activity.start("export", "Exporting", Cancel::Flag(cancel.clone()));
     guard.progress(0, total as u64);
     let row = guard.handle();
@@ -81,7 +84,7 @@ pub fn start(app: &mut LightcraftApp, items: Vec<PreparedExport>, opts: ExportOp
     std::thread::Builder::new().name("export".into()).spawn(work).map_err(|e| e.to_string())?;
     #[cfg(target_arch = "wasm32")]
     work();
-    app.export = Some(ExportTask { total, progress, cancel, rx, guard });
+    app.export = Some(ExportTask { total, progress, cancel, rx, guard, folder });
     Ok(json!({"background": true, "total": total}))
 }
 
@@ -128,7 +131,7 @@ pub fn start_contact_sheet(app: &mut LightcraftApp, params: &Value) -> Result<Va
     work();
     let row = app.session.activity.start("export", "Exporting contact sheet", Cancel::Flag(cancel.clone()));
     row.progress(0, total as u64);
-    app.export = Some(ExportTask { total, progress, cancel, rx, guard: row });
+    app.export = Some(ExportTask { total, progress, cancel, rx, guard: row, folder: None });
     Ok(json!({"background": true, "total": total}))
 }
 
@@ -153,6 +156,8 @@ pub fn start_print(app: &mut LightcraftApp, params: &Value) -> Result<Value, Str
     let (p, c) = (progress.clone(), cancel.clone());
     let (tx, rx) = channel();
     let photos = ids.len();
+    // (where the PDF went, for the row the print leaves when it ends)
+    let folder = std::path::Path::new(&path).parent().map(|d| d.to_string_lossy().into_owned()).filter(|d| !d.is_empty());
     let work = move || {
         let result = prepared
             .run(&mut |done, name| {
@@ -181,7 +186,7 @@ pub fn start_print(app: &mut LightcraftApp, params: &Value) -> Result<Value, Str
     work();
     let row = app.session.activity.start("export", "Printing to PDF", Cancel::Flag(cancel.clone()));
     row.progress(0, total as u64);
-    app.export = Some(ExportTask { total, progress, cancel, rx, guard: row });
+    app.export = Some(ExportTask { total, progress, cancel, rx, guard: row, folder });
     Ok(json!({"background": true, "total": total}))
 }
 
@@ -232,63 +237,113 @@ pub fn poll_photos(app: &mut LightcraftApp, ctx: &egui::Context) {
 #[cfg(target_arch = "wasm32")]
 pub fn poll_photos(_: &mut LightcraftApp, _: &egui::Context) {}
 
-/// Per frame: keep the activity row up to date; when the batch finishes, report it.
+/// How an export that ran ended, for the activity stack. Photos taking only some of the files is a warning, and
+/// Photos not asked at all (`skipped`: the export wrote no files, an earlier request still running…) is not an error
+/// either: not all went well in both cases.
+fn export_ending(cancelled: bool, ok: usize, failed: usize, photos: Option<&Value>) -> Ending {
+    let photos_short = photos.is_some_and(|p| ["error", "warning", "skipped"].iter().any(|k| p.get(k).is_some()));
+    if cancelled {
+        Ending::Stopped
+    } else if failed > 0 && ok == 0 {
+        Ending::Failed
+    } else if failed > 0 || photos_short {
+        Ending::Problems
+    } else {
+        Ending::Done
+    }
+}
+
+/// An export that came back as an error. The error is the row's detail: its headline stays empty, so the row reads
+/// "Exporting: failed" (or "Printing to PDF: failed") under the task's own name.
+fn failed_outcome(error: String, stopped: bool) -> Outcome {
+    Outcome { ending: if stopped { Ending::Stopped } else { Ending::Failed }, detail: error, ..Default::default() }
+}
+
+/// Per frame: keep the activity row up to date; when the batch finishes, report it: in a toast, as ever, and to
+/// the activity stack, where an export that ran long or did not go well stays in `activity.finished` with its
+/// failed files and where its results are.
 pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
     let Some(task) = &app.export else { return };
-    match task.rx.try_recv() {
-        Ok(r) => {
-            let cancelled = matches!(&r, Ok((_, _, true)));
-            let total = task.total;
-            app.export = None;
-            // Photos refused (permission, not installed…): leave the way out on screen longer
-            let photos_failed = matches!(&r, Ok((_, Some(p), _)) if p.get("error").is_some());
-            let msg = match r {
-                Ok((files, photos, _)) => {
-                    let sheet = files.first().filter(|f| f["contactSheet"] == true);
-                    let ok = files.iter().filter(|f| f.get("path").is_some()).count();
-                    let failed: Vec<&Value> = files.iter().filter(|f| f.get("error").is_some()).collect();
-                    let skipped = files.iter().filter(|f| f.get("skipped").is_some()).count();
-                    let mut m =
-                        crate::i18n::tr_format!("Exported {ok} of {total} photo{}", if total == 1 { "" } else { "s" }, ok = ok, total = total);
-                    if let Some(sheet) = sheet {
-                        m = format!("Exported contact sheet: {} photos, {} pages", sheet["photos"], sheet["pages"]);
-                    }
-                    if let Some(pdf) = files.first().filter(|f| f["print"] == true) {
-                        m = format!("Printed to PDF: {} photos, {} pages", pdf["photos"], pdf["pages"]);
-                    }
-                    if skipped > 0 {
-                        m += &crate::i18n::tr_format!(" · {skipped} skipped (file exists)", skipped = skipped);
-                    }
-                    if let Some(first) = failed.first() {
-                        m += &crate::i18n::tr_format!(" · {} failed: {}", failed.len(), first["error"].as_str().unwrap_or("error"));
-                    }
-                    if cancelled {
-                        m += " · cancelled";
-                    }
-                    if let Some(photos) = &photos {
-                        m += " · ";
-                        m += &apple_photos_note(photos);
-                    }
-                    app.last_export_result = Some(json!({"files": files, "cancelled": cancelled, "applePhotos": photos}));
-                    m
-                }
-                Err(e) => e,
-            };
-            if photos_failed {
-                app.toast_for(ctx, msg, 15.0);
-            } else {
-                app.toast(ctx, msg);
-            }
-        }
+    let r = match task.rx.try_recv() {
+        Ok(r) => Some(r),
         Err(std::sync::mpsc::TryRecvError::Empty) => {
             let (done, current) = task.progress.lock().map(|g| g.clone()).unwrap_or_default();
             task.guard.progress(done as u64, task.total as u64);
             task.guard.detail(&current);
+            return;
         }
-        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-            app.export = None;
-            app.toast(ctx, crate::i18n::tr("Export stopped unexpectedly"));
+        Err(std::sync::mpsc::TryRecvError::Disconnected) => None,
+    };
+    let Some(task) = app.export.take() else { return };
+    let total = task.total;
+    let folder = task.folder.clone();
+    // (a contact sheet that was stopped comes back as an error: it was stopped all the same)
+    let stopped = task.cancel.load(Ordering::Relaxed);
+    let Some(r) = r else {
+        let msg = crate::i18n::tr("Export stopped unexpectedly");
+        task.guard.finish(Outcome { ending: Ending::Died, summary: msg.to_string(), path: folder, ..Default::default() });
+        app.toast(ctx, msg);
+        return;
+    };
+    let cancelled = matches!(&r, Ok((_, _, true)));
+    // Photos refused (permission, not installed…): leave the way out on screen longer
+    let photos_failed = matches!(&r, Ok((_, Some(p), _)) if p.get("error").is_some());
+    let (msg, outcome) = match r {
+        Ok((files, photos, _)) => {
+            let sheet = files.first().filter(|f| f["contactSheet"] == true);
+            let ok = files.iter().filter(|f| f.get("path").is_some()).count();
+            let failed: Vec<&Value> = files.iter().filter(|f| f.get("error").is_some()).collect();
+            let skipped = files.iter().filter(|f| f.get("skipped").is_some()).count();
+            let mut m = crate::i18n::tr_format!("Exported {ok} of {total} photo{}", if total == 1 { "" } else { "s" }, ok = ok, total = total);
+            // (the finished row keeps this headline: it is translated like the toast's)
+            if let Some(sheet) = sheet {
+                m = crate::i18n::tr_format!(
+                    "Exported contact sheet: {photos} photos, {pages} pages",
+                    photos = sheet["photos"],
+                    pages = sheet["pages"]
+                );
+            }
+            if let Some(pdf) = files.first().filter(|f| f["print"] == true) {
+                m = crate::i18n::tr_format!("Printed to PDF: {photos} photos, {pages} pages", photos = pdf["photos"], pages = pdf["pages"]);
+            }
+            // what was done is the row's first line; the rest is what needs reading under it
+            let summary = m.clone();
+            if skipped > 0 {
+                m += &crate::i18n::tr_format!(" · {skipped} skipped (file exists)", skipped = skipped);
+            }
+            if let Some(first) = failed.first() {
+                m += &crate::i18n::tr_format!(" · {} failed: {}", failed.len(), first["error"].as_str().unwrap_or("error"));
+            }
+            if cancelled {
+                m += " · ";
+                m += crate::i18n::tr("cancelled");
+            }
+            if let Some(photos) = &photos {
+                m += " · ";
+                m += &apple_photos_note(photos);
+            }
+            let ending = export_ending(cancelled, ok, failed.len(), photos.as_ref());
+            // one of the files written shows where they all are (a subfolder of the folder asked for, maybe)
+            let path = files.iter().find_map(|f| f["path"].as_str()).map(str::to_string).or(folder);
+            let failures = failed
+                .iter()
+                .map(|f| Failure {
+                    name: f["file"].as_str().unwrap_or_default().to_string(),
+                    reason: f["error"].as_str().unwrap_or("error").to_string(),
+                })
+                .collect();
+            let detail = m.get(summary.len()..).unwrap_or_default().trim_start_matches(" · ").to_string();
+            app.last_export_result = Some(json!({"files": files, "cancelled": cancelled, "applePhotos": photos}));
+            (m, Outcome { ending, summary, detail, failures, path, ..Default::default() })
         }
+        // (the folder stays on the row, as for a worker that died: something may have been written there)
+        Err(e) => (e.clone(), Outcome { path: folder, ..failed_outcome(e, stopped) }),
+    };
+    task.guard.finish(outcome);
+    if photos_failed {
+        app.toast_for(ctx, msg, 15.0);
+    } else {
+        app.toast(ctx, msg);
     }
 }
 
@@ -423,5 +478,25 @@ mod tests {
             apple_photos_note(&json!({"skipped": "an earlier, cancelled request is still running"})),
             "not added to Apple Photos: an earlier, cancelled request is still running"
         );
+    }
+
+    /// An Apple Photos step that did not add the files (error, warning, or skipped without a cancel) is a problem.
+    #[test]
+    fn export_ending_counts_an_uncancelled_photos_skip_as_a_problem() {
+        let skipped = json!({"skipped": "the export wrote no files"});
+        assert_eq!(export_ending(false, 3, 0, Some(&skipped)), Ending::Problems);
+        assert_eq!(export_ending(false, 3, 0, Some(&json!({"warning": "added 1 of 3"}))), Ending::Problems);
+        assert_eq!(export_ending(false, 3, 0, Some(&json!({"imported": 3}))), Ending::Done);
+        assert_eq!(export_ending(false, 3, 0, None), Ending::Done);
+        assert_eq!(export_ending(false, 0, 2, None), Ending::Failed);
+        assert_eq!(export_ending(true, 3, 0, Some(&json!({"skipped": "cancelled", "cancelled": true}))), Ending::Stopped);
+    }
+
+    /// A failed export keeps its name in the row's headline; the error goes under it.
+    #[test]
+    fn a_failed_export_says_why_under_its_name() {
+        let o = failed_outcome("The disk is full".into(), false);
+        assert_eq!((o.ending, o.summary.as_str(), o.detail.as_str()), (Ending::Failed, "", "The disk is full"));
+        assert_eq!(failed_outcome("x".into(), true).ending, Ending::Stopped);
     }
 }

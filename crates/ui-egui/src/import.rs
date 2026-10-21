@@ -925,7 +925,7 @@ fn xmp_warnings_text(warnings: &[ImportWarning]) -> String {
 
 /// The import is done (or cancelled): one undo step, show and select the first photo (unless the
 /// user chose another meanwhile), say what happened.
-fn finish(app: &mut LightcraftApp, ctx: &egui::Context, task: ImportTask) {
+fn finish(app: &mut LightcraftApp, ctx: &egui::Context, mut task: ImportTask) {
     let steps = app.session.undo.len().saturating_sub(task.undo0);
     let plural = |n: usize| if n == 1 { "" } else { "s" };
     let label = if task.imported == 0 && task.restored > 0 {
@@ -937,6 +937,9 @@ fn finish(app: &mut LightcraftApp, ctx: &egui::Context, task: ImportTask) {
     };
     app.session.merge_undo(steps, &label);
     if task.auto {
+        let summary = crate::i18n::tr_format!("Auto Import: added {} photo{}", task.imported, plural(task.imported));
+        let detail = with_warnings(not_readable_text(task.failed), &task);
+        report(&mut task, summary, detail);
         if !task.warnings.is_empty() {
             app.toast_for(ctx, xmp_warnings_text(&task.warnings), 8.0);
         } else if task.imported > 0 {
@@ -945,6 +948,9 @@ fn finish(app: &mut LightcraftApp, ctx: &egui::Context, task: ImportTask) {
         return;
     }
     if task.browse {
+        // (no summary: the row is worded from its name, "Reading folder", and says how many files could not be read)
+        let detail = with_warnings(not_readable_text(task.failed), &task);
+        report(&mut task, String::new(), detail);
         if !task.warnings.is_empty() {
             app.toast_for(ctx, xmp_warnings_text(&task.warnings), 8.0);
         } else if task.failed > 0 {
@@ -963,15 +969,13 @@ fn finish(app: &mut LightcraftApp, ctx: &egui::Context, task: ImportTask) {
     let plural = |n: usize| if n == 1 { "" } else { "s" };
     // nothing new, only files the library already has: show where they are (Recently Deleted is
     // easy to miss, and the side panel that lists it starts collapsed)
-    if task.imported == 0
+    // (still reported to the activity stack below: the toast is the only part this takes the place of)
+    let existing_shown = task.imported == 0
         && task.restored == 0
         && task.failed == 0
         && task.warnings.is_empty()
         && !task.cancelled
-        && show_existing(app, ctx, &task.existing)
-    {
-        return;
-    }
+        && show_existing(app, ctx, &task.existing);
     let mut msg = if task.cancelled {
         crate::i18n::tr_format!("Import cancelled · {} photo{} added", task.imported, plural(task.imported))
     } else if task.imported == 0 && task.restored > 0 {
@@ -979,6 +983,8 @@ fn finish(app: &mut LightcraftApp, ctx: &egui::Context, task: ImportTask) {
     } else {
         crate::i18n::tr_format!("Imported {} photo{}", task.imported, plural(task.imported))
     };
+    // what was done is the first line of the row the import leaves; the rest is what needs reading under it
+    let summary = msg.clone();
     if task.restored > 0 && (task.imported > 0 || task.cancelled) {
         msg.push_str(&crate::i18n::tr_format!(" · {} restored from Recently Deleted", task.restored));
     }
@@ -998,12 +1004,60 @@ fn finish(app: &mut LightcraftApp, ctx: &egui::Context, task: ImportTask) {
     if task.failed > 0 {
         msg.push_str(&crate::i18n::tr_format!(" · {} not readable", task.failed));
     }
+    let detail = msg.get(summary.len()..).unwrap_or_default().trim_start_matches(" · ").to_string();
+    let detail = with_warnings(detail, &task);
+    report(&mut task, summary, detail);
+    if existing_shown {
+        return;
+    }
     if task.warnings.is_empty() {
         app.toast(ctx, msg);
     } else {
         msg.push_str("\n\n");
         msg.push_str(&xmp_warnings_text(&task.warnings));
         app.toast_for(ctx, msg, 8.0);
+    }
+}
+
+/// How an import ended: stopped, failed to read every file, with problems, or well.
+fn ending_of(task: &ImportTask) -> lightcraft_engine::activity::Ending {
+    use lightcraft_engine::activity::Ending;
+    if task.cancelled {
+        Ending::Stopped
+    } else if task.failed > 0 && task.imported == 0 && task.restored == 0 {
+        Ending::Failed
+    } else if task.failed > 0 || !task.warnings.is_empty() {
+        Ending::Problems
+    } else {
+        Ending::Done
+    }
+}
+
+/// The unreadable files, as the second line of an import's row (nothing when all could be read).
+fn not_readable_text(failed: usize) -> String {
+    if failed == 0 { String::new() } else { crate::i18n::tr_format!("{} photo{} not readable", failed, if failed == 1 { "" } else { "s" }) }
+}
+
+/// `detail` with how many XMP warnings the import met (the toast that spells them out passes; the row stays).
+fn with_warnings(mut detail: String, task: &ImportTask) -> String {
+    let n = task.warnings.len();
+    if n > 0 {
+        if !detail.is_empty() {
+            detail.push_str(" · ");
+        }
+        detail.push_str(&crate::i18n::tr_format!("{} import warning{}", n, if n == 1 { "" } else { "s" }));
+    }
+    detail
+}
+
+/// The import says how it ended to the activity stack, on every way out of [`finish`] (a task dropped without
+/// saying is no row at all): one that ran long, was stopped or could not read every file stays in
+/// `activity.finished`. (Which files could not be read is not kept: only how many.)
+fn report(task: &mut ImportTask, summary: String, detail: String) {
+    use lightcraft_engine::activity::Outcome;
+    let ending = ending_of(task);
+    if let Some(guard) = task.guard.take() {
+        guard.finish(Outcome { ending, summary, detail, failed: task.failed, ..Default::default() });
     }
 }
 
@@ -1795,5 +1849,62 @@ mod tests {
         d.last_clicked = Some(99);
         d.click(2, true);
         assert_eq!(d.checked, [true, true, false, false, true, true]);
+    }
+
+    /// Every way out of `finish` tells the activity stack how the import ended (a guard dropped without
+    /// saying leaves no row): an Auto Import and a folder read that met unreadable files, and an import that
+    /// only found duplicates it showed.
+    #[test]
+    fn every_way_an_import_ends_leaves_its_row_when_it_needs_one() {
+        use lightcraft_engine::activity::{Cancel, Ending};
+        let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), crate::Services { png: None, ..Default::default() });
+        let mut h = crate::headless::Headless::new(app, [1200.0, 800.0], 1.0);
+        h.app.session.activity.keep_after(0);
+        let ctx = egui::Context::default();
+        let started = |h: &mut crate::headless::Headless| h.app.session.activity.start("import", "Importing", Cancel::Yes);
+        // an Auto Import that could not read a file, though it was short
+        let mut auto = ImportTask::new(vec![], json!({}), 0, false).auto();
+        auto.failed = 1;
+        auto.imported = 2;
+        auto.guard = Some(started(&mut h));
+        finish(&mut h.app, &ctx, auto);
+        // a folder read for the Local view that could read none
+        let mut browse = ImportTask::new(vec![], json!({}), 0, true);
+        browse.failed = 3;
+        browse.guard = Some(started(&mut h));
+        finish(&mut h.app, &ctx, browse);
+        // one that found only photos the library has, which it shows (and says so in a toast, as ever)
+        let existing: Vec<u64> = h.app.session.catalog.photos().take(2).map(|p| p.id.0).collect();
+        let mut quiet = ImportTask::new(vec![], json!({}), 0, false);
+        quiet.existing = existing;
+        quiet.guard = Some(started(&mut h));
+        finish(&mut h.app, &ctx, quiet);
+        let rows = h.app.session.activity.finished();
+        assert!(h.app.session.activity.list().is_empty());
+        let endings: Vec<(Ending, usize)> = rows.iter().rev().map(|r| (r.ending, r.failed)).collect();
+        assert_eq!(endings, vec![(Ending::Problems, 1), (Ending::Failed, 3), (Ending::Done, 0)], "{rows:?}");
+    }
+
+    /// An import that met XMP warnings says so in its row, not only in the toast that passes.
+    #[test]
+    fn an_import_with_xmp_warnings_says_so_in_its_row() {
+        use lightcraft_engine::activity::Cancel;
+        let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), crate::Services { png: None, ..Default::default() });
+        let mut h = crate::headless::Headless::new(app, [1200.0, 800.0], 1.0);
+        h.app.session.activity.keep_after(0);
+        let ctx = egui::Context::default();
+        let warning =
+            || ImportWarning { path: "a.jpg".into(), code: ImportWarningCode::UnmappedXmp, profile: None, mode: None, fields: vec!["x".into()] };
+        for (auto, browse) in [(true, false), (false, true), (false, false)] {
+            let mut task = ImportTask::new(vec![], json!({}), 0, browse);
+            task.auto = auto;
+            task.imported = 1;
+            task.warnings = vec![warning()];
+            task.guard = Some(h.app.session.activity.start("import", "Importing", Cancel::Yes));
+            finish(&mut h.app, &ctx, task);
+        }
+        let rows = h.app.session.activity.finished();
+        assert_eq!(rows.len(), 3, "{rows:?}");
+        assert!(rows.iter().all(|r| r.detail.contains("1 import warning")), "{rows:?}");
     }
 }
