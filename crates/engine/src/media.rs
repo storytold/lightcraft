@@ -115,6 +115,14 @@ impl SourceLevel {
     }
 }
 
+/// `s` without its crop box and straighten angle (flips and the aspect lock kept): what an
+/// uncropped render (the crop tool's view) depends on.
+fn without_crop(s: &DevelopSettings) -> DevelopSettings {
+    let mut s = s.clone();
+    s.crop.geometry = lightcraft_geom::CropGeometry::default();
+    s
+}
+
 /// Pixels along the source's long edge that an output `out_long` pixels long needs: a crop shows
 /// only part of the photo, so its pixels come from a source that many times larger (the source
 /// level is chosen from this, or a tight crop shown at its own pixels would be a stretched preview).
@@ -1215,6 +1223,10 @@ impl crate::Session {
     ) -> Option<RenderJob> {
         let p = self.catalog.photo(id)?.clone();
         let settings = if before { Arc::new(self.before_settings(&p)) } else { p.develop.clone() };
+        // the crop tool's uncropped view doesn't depend on the crop box or the straighten angle: a
+        // drag of either must not re-render it (issue #1643)
+        let uncropped = !apply_crop && !settings.crop.geometry.is_identity();
+        let settings = if uncropped { Arc::new(without_crop(&settings)) } else { settings };
         let level = SourceLevel::for_size(if thumb_bucket.is_some() {
             max_w.max(max_h) // (grid thumbnails of tight crops stay cheap)
         } else {
@@ -1229,7 +1241,7 @@ impl crate::Session {
         let source_key = Hasher128::new().str(&content_key).finish();
         let content = source_key.0 as u64;
         // Temporary "before" settings must not replace the photo's cached develop hash.
-        let settings_hash = if before { settings.hash64() } else { self.media.settings_hashes.get(id, &settings) };
+        let settings_hash = if before || uncropped { settings.hash64() } else { self.media.settings_hashes.get(id, &settings) };
         let salt = self.media.denoise_salt(id, &settings);
         let key = settings_hash
             ^ ((max_w as u64) << 40)
@@ -1397,7 +1409,7 @@ impl crate::Session {
         Hasher128::new()
             .str(&content_key(p))
             .str("view")
-            .u64(p.develop.hash64())
+            .u64(if apply_crop { p.develop.hash64() } else { without_crop(&p.develop).hash64() })
             .u64(apply_crop as u64)
             .u64(RENDER_CACHE_VERSION)
             .u64(crate::camera_profiles::cache_key())
@@ -1720,6 +1732,27 @@ mod thumbnail_hash_tests {
         s.catalog.apply(undo).unwrap();
         s.thumb_job(PhotoId(1), 256).unwrap();
         assert_eq!(s.media.settings_hashes.computations, 3);
+    }
+    /// Issue #1643: straightening or moving the crop box in the crop tool doesn't re-render its
+    /// uncropped view; the cropped view (and anything else) still changes with the crop.
+    #[test]
+    fn the_uncropped_view_ignores_the_crop_box_and_angle() {
+        let mut s = session();
+        let keys = |s: &mut crate::Session| {
+            let open = s.loupe_job(PhotoId(1), 800, 600, false).unwrap();
+            let shut = s.loupe_job(PhotoId(1), 800, 600, true).unwrap();
+            (open.key, open.view_cache.unwrap().1, shut.key)
+        };
+        let before = keys(&mut s);
+        let mut edit = (*s.catalog.photo(PhotoId(1)).unwrap().develop).clone();
+        edit.crop.geometry = lightcraft_geom::CropGeometry { rect: lightcraft_geom::Rect::new(0.2, 0.2, 0.7, 0.8), angle: 7.5 };
+        s.catalog.apply(Op::SetDevelop { id: PhotoId(1), settings: Arc::new(edit.clone()), label: "crop".into(), edited: None }).unwrap();
+        let cropped = keys(&mut s);
+        assert_eq!((before.0, before.1), (cropped.0, cropped.1), "the uncropped view is the same render");
+        assert_ne!(before.2, cropped.2, "the cropped view follows the crop");
+        edit.light.exposure = 1.0;
+        s.catalog.apply(Op::SetDevelop { id: PhotoId(1), settings: Arc::new(edit), label: "edit".into(), edited: None }).unwrap();
+        assert_ne!(keys(&mut s).0, cropped.0, "other edits still re-render it");
     }
     #[test]
     fn hash_cache_is_bounded_weak_and_shared_settings_remain_independent() {

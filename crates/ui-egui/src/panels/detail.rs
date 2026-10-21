@@ -31,10 +31,13 @@ pub enum Gesture {
         spot: usize,
         source: bool,
     },
+    /// Crop tool: resizing by handle `handle` (0..7), or moving the photo under the box (8).
     CropHandle {
         handle: u8,
         start: lightcraft_geom::Rect,
         angle: f64,
+        /// The view as the drag started: pointer positions mean photo points through it.
+        map: CanvasMap,
     },
     /// Straighten tool: a line drawn along something that should be level (or plumb).
     StraightenLine {
@@ -72,7 +75,7 @@ pub enum Gesture {
 }
 
 /// Screen ↔ normalized-image mapping for the displayed frame.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CanvasMap {
     rect: Rect,
     to_norm: Affine,
@@ -94,6 +97,97 @@ impl CanvasMap {
         let q = self.from_norm.apply(n);
         pos2(self.rect.left() + q.x as f32 / self.k, self.rect.top() + q.y as f32 / self.k)
     }
+}
+
+/// How the crop tool holds its view still while the crop changes (issue #1643). As in Lightroom the
+/// crop box stays upright on screen and the photo turns and moves beneath it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum CropLayout {
+    /// Straightening, rotating or moving: the box keeps its centre on screen (`centre`) and the
+    /// scale (`k` points per pixel of the oriented photo); the photo turns and slides under it.
+    Pinned { centre: Pos2, k: f32 },
+    /// Resizing: the photo stays where it is and the box follows the handle.
+    Frozen(CanvasMap),
+}
+
+/// The loupe's zoom, pan and display scale, which the crop tool's unpinned layout follows.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ViewPort {
+    pub zoom: Zoom,
+    pub pan: (f32, f32),
+    pub ppp: f32,
+}
+
+/// The crop tool's view of the photo: the crop box upright, the whole photo around it, turned by
+/// the straighten angle.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct CropView {
+    /// Normalized photo ↔ screen, through the crop box (upright on screen).
+    pub map: CanvasMap,
+    /// The photo's corners on screen (top-left, top-right, bottom-right, bottom-left of the
+    /// uncropped render).
+    pub photo: [Pos2; 4],
+    /// The crop box's centre on screen, and screen points per pixel of the oriented photo.
+    pub centre: Pos2,
+    pub k: f32,
+}
+
+impl CropView {
+    /// The photo's bounding box on screen.
+    pub fn bounds(&self) -> Rect {
+        Rect::from_points(&self.photo)
+    }
+}
+
+/// Lay the crop tool's view out in `area`: held as `layout` says while the crop is being changed,
+/// otherwise the turned photo fitted into `area`. `frame` is the uncropped frame the loupe renders.
+pub(crate) fn crop_view(frame: &Frame, crop: lightcraft_geom::CropGeometry, area: Rect, layout: Option<CropLayout>, view: ViewPort) -> CropView {
+    let cf = Frame { crop, ..frame.clone() };
+    let (nw, nh) = cf.native_size();
+    let (nw, nh) = ((nw as f32).max(1e-3), (nh as f32).max(1e-3));
+    // the uncropped render's corners, as normalized photo points (its flips included)
+    let uv_to_norm = frame.out_to_norm(1, 1);
+    let corners = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)].map(|(u, v)| uv_to_norm.apply(Point::new(u, v)));
+    let finite = |k: f32| k.is_finite() && k > 0.0;
+    let map = match layout {
+        Some(CropLayout::Frozen(m)) => m,
+        _ => {
+            let (centre, k) = match layout {
+                Some(CropLayout::Pinned { centre, k }) if centre.is_finite() && finite(k) => (centre, k),
+                _ => {
+                    // the turned photo at one point per pixel around a box centred on the origin,
+                    // scaled and placed to fit the area
+                    let unit = CanvasMap::new(&cf, Rect::from_center_size(Pos2::ZERO, vec2(nw, nh)));
+                    let b = Rect::from_points(&corners.map(|c| unit.screen(c)));
+                    // the turned photo's bounds placed as the loupe places a photo (Fit, Fill or a
+                    // zoom percentage, panned), so zoom and pan reach the crop tool too
+                    let (bw, bh) = (b.width().max(1e-3), b.height().max(1e-3));
+                    let px = [bw.round().max(1.0) as usize, bh.round().max(1.0) as usize];
+                    let placed = fit_rect(area, bw / bh, view.zoom, px, view.ppp, view.pan);
+                    let k = placed.width() / bw;
+                    let k = if finite(k) { k } else { 1.0 };
+                    (placed.center() - b.center().to_vec2() * k, k)
+                }
+            };
+            CanvasMap::new(&cf, Rect::from_center_size(centre, vec2(nw * k, nh * k)))
+        }
+    };
+    let photo = corners.map(|c| map.screen(c));
+    let quad = cf.crop_quad_norm().map(|c| map.screen(c));
+    let centre = pos2(quad.iter().map(|q| q.x).sum::<f32>() / 4.0, quad.iter().map(|q| q.y).sum::<f32>() / 4.0);
+    let k = quad[0].distance(quad[1]) / nw;
+    CropView { map, photo, centre, k: if finite(k) { k } else { 1.0 } }
+}
+
+/// The uncropped render drawn turned and placed as the crop tool's view lays it out.
+fn crop_view_mesh(tex: egui::TextureId, view: &CropView) -> egui::Shape {
+    let mut mesh = egui::epaint::Mesh::with_texture(tex);
+    for (pos, uv) in view.photo.iter().zip([(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]) {
+        mesh.vertices.push(egui::epaint::Vertex { pos: *pos, uv: pos2(uv.0, uv.1), color: Color32::WHITE });
+    }
+    mesh.add_triangle(0, 1, 2);
+    mesh.add_triangle(0, 2, 3);
+    egui::Shape::mesh(mesh)
 }
 
 pub(crate) fn fit_rect(area: Rect, aspect: f32, zoom: Zoom, img_px: [usize; 2], ppp: f32, pan: (f32, f32)) -> Rect {
@@ -507,15 +601,42 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let mut target_rect = fit_rect(main_area, display_aspect, app.ui.zoom, native, ppp, app.ui.pan);
     let mut img_rect = animated_rect(ui.ctx(), &mut app.ui.zoom_anim, target_rect);
     let in_pane = |pane: Rect, image: Rect| image.translate(pane.center() - main_area.center());
+    // the crop tool: the crop box upright and the photo turned around it, held still while the crop
+    // changes so the photo moves under the box (issue #1643). Laid out before the zoom gestures,
+    // which act on the turned photo's bounds as the view places them.
+    if !crop_tool || app.session.interaction.is_none() {
+        app.crop_layout = None;
+    }
+    let make_crop_view = |app: &LightcraftApp| {
+        crop_tool.then(|| crop_view(&frame, d.crop.geometry, main_area, app.crop_layout, ViewPort { zoom: app.ui.zoom, pan: app.ui.pan, ppp }))
+    };
+    let mut crop_view = make_crop_view(app);
     let mut navigating = false;
     for &view_area in &areas {
-        let view_img = in_pane(view_area, img_rect);
-        if navigate_gesture(app, ui, &resp, view_area, view_img, native) {
+        let (gesture_rect, gesture_px) = match &crop_view {
+            Some(v) => {
+                let b = v.bounds();
+                (b, [(b.width() / v.k).round().max(1.0) as usize, (b.height() / v.k).round().max(1.0) as usize])
+            }
+            None => (img_rect, native),
+        };
+        let view_img = in_pane(view_area, gesture_rect);
+        if navigate_gesture(app, ui, &resp, view_area, view_img, gesture_px) {
             navigating = true;
             target_rect = fit_rect(main_area, display_aspect, app.ui.zoom, native, ppp, app.ui.pan);
             img_rect = target_rect;
+            crop_view = make_crop_view(app);
             break;
         }
+    }
+    if let Some(v) = &crop_view {
+        if app.session.interaction.is_some() && app.crop_layout.is_none() {
+            app.crop_layout = Some(CropLayout::Pinned { centre: v.centre, k: v.k });
+        }
+        let b = v.bounds();
+        // (the size of the render: the uncropped photo at the view's scale)
+        target_rect = Rect::from_center_size(b.center(), vec2(frame.ow as f32 * v.k, frame.oh as f32 * v.k));
+        img_rect = b;
     }
     let before_img = in_pane(areas[0], img_rect);
     let before_target = in_pane(areas[0], target_rect);
@@ -546,7 +667,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         native_long,
         texture_side,
         draft,
-        windows: overlay_supports_window(overlay),
+        // (the crop tool shows the whole photo, turned: no zoomed windows)
+        windows: !crop_tool && overlay_supports_window(overlay),
     };
     let mut plan = crate::region::plan(&app.ui.settings, sizes);
     if plan.window_edge.is_some_and(|edge| app.window_refused == Some((id, look, edge))) {
@@ -692,8 +814,15 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         } else {
             return "none";
         };
-        let image_rect = fit_texture_rect(r, tex.size);
-        p.with_clip_rect(clip).image(tex.tex.id(), image_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+        match &crop_view {
+            Some(v) if r == img_rect => {
+                p.with_clip_rect(clip).add(crop_view_mesh(tex.tex.id(), v));
+            }
+            _ => {
+                let image_rect = fit_texture_rect(r, tex.size);
+                p.with_clip_rect(clip).image(tex.tex.id(), image_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+            }
+        }
         what
     };
     // soft proofing: a paper-white surround and the proof's name, as Lightroom shows it
@@ -786,7 +915,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     // View ▸ Loupe Overlay ▸ Layout Image, over the photo (the After view in a before/after)
     super::layout_overlay::draw(app, &p, img_rect);
     register(ui.ctx(), "canvas:image", img_rect);
-    let map = CanvasMap::new(&frame, img_rect);
+    let map = crop_view.map_or_else(|| CanvasMap::new(&frame, img_rect), |v| v.map);
     info_overlay(app, &p, canvas, &photo);
     if !fullscreen {
         filter_pill(app, ui, canvas);
@@ -1484,13 +1613,13 @@ fn crop_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
         return;
     }
     if app.ui.tool == "straighten" {
-        straighten_overlay(app, ui, resp, false);
+        straighten_overlay(app, ui, resp, false, d.crop.geometry.angle);
         return;
     }
     // hold ⌘ and drag: draw a straighten line without leaving the crop tool
     let cmd_drag = resp.drag_started() && ui.input(|i| i.modifiers.command);
     if cmd_drag || matches!(app.gesture, Some(Gesture::StraightenLine { .. })) {
-        straighten_overlay(app, ui, resp, true);
+        straighten_overlay(app, ui, resp, true, d.crop.geometry.angle);
         return;
     }
     if resp.hovered() && ui.input(|i| i.modifiers.command) {
@@ -1503,8 +1632,12 @@ fn crop_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
     // top-left corner elsewhere)
     let quad = flipped_corners(&pts, frame.flip_h, frame.flip_v);
     if pts.len() == 4 {
-        p.add(outside_crop_mesh(map.rect, &quad, Color32::from_black_alpha(150)));
+        let uv_to_norm = frame.out_to_norm(1, 1);
+        let photo = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)].map(|(u, v)| map.screen(uv_to_norm.apply(Point::new(u, v))));
+        p.add(outside_crop_mesh(&photo, &quad, Color32::from_black_alpha(150)));
     }
+    // the box's centre: what a rotation turns the photo about (it stays put on screen)
+    let box_centre = pos2(pts.iter().map(|q| q.x).sum::<f32>() / 4.0, pts.iter().map(|q| q.y).sum::<f32>() / 4.0);
     p.add(egui::Shape::closed_line(pts.clone(), Stroke::new(1.0, Color32::WHITE)));
     // overlay guides
     let lerp = |a: Pos2, b: Pos2, t: f32| a + (b - a) * t;
@@ -1592,24 +1725,31 @@ fn crop_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
             return;
         }
         let d = app.session.develop_of(id).unwrap_or_default();
-        app.gesture = Some(match handles.iter().position(|h| h.distance(q) < 12.0) {
-            Some(h) => Gesture::CropHandle { handle: h as u8, start: d.crop.geometry.rect, angle: d.crop.geometry.angle },
-            None if inside(q) => Gesture::CropHandle { handle: 8, start: d.crop.geometry.rect, angle: d.crop.geometry.angle },
-            None => {
-                let c = map.screen(Point::new(0.5, 0.5));
-                Gesture::CropRotate { start_angle: d.crop.geometry.angle, a0: (q - c).angle() }
-            }
-        });
+        let (start, angle, map) = (d.crop.geometry.rect, d.crop.geometry.angle, *map);
+        // screen points per pixel of the photo: the box's width on screen over its width in pixels
+        let native_w = Frame { crop: d.crop.geometry, ..frame.clone() }.native_size().0 as f32;
+        let k = pts[0].distance(pts[1]) / native_w.max(1e-3);
+        let pinned = Some(CropLayout::Pinned { centre: box_centre, k });
+        let (gesture, layout) = match handles.iter().position(|h| h.distance(q) < 12.0) {
+            Some(h) => (Gesture::CropHandle { handle: h as u8, start, angle, map }, Some(CropLayout::Frozen(map))),
+            None if inside(q) => (Gesture::CropHandle { handle: 8, start, angle, map }, pinned),
+            None => (Gesture::CropRotate { start_angle: angle, a0: (q - box_centre).angle() }, pinned),
+        };
+        app.gesture = Some(gesture);
+        app.crop_layout = layout;
     }
     if resp.dragged()
         && let Some(q) = resp.interact_pointer_pos()
     {
         match app.gesture.clone() {
-            Some(Gesture::CropHandle { handle, start, angle }) => {
+            Some(Gesture::CropHandle { handle, start, angle, map }) => {
                 // The crop model decides what the drag does (anchor, aspect lock, image bounds): see
                 // `lightcraft_geom::drag_crop`; the UI only reports where the pointer started and is.
                 let n = to_straight(map.norm(q), angle, frame);
                 let orig = ui.input(|i| i.pointer.press_origin()).map(|q0| to_straight(map.norm(q0), angle, frame)).unwrap_or(n);
+                // moving: the photo follows the pointer under the box, so the box moves the other way
+                // over the photo
+                let (orig, n) = if handle == 8 { (n, orig) } else { (orig, n) };
                 // Shift keeps the current proportions for this drag only; the Lock toggle is untouched.
                 let keep_ratio = ui.input(|i| i.modifiers.shift);
                 let _ = app.run(
@@ -1618,9 +1758,11 @@ fn crop_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
                 );
             }
             Some(Gesture::CropRotate { start_angle, a0 }) => {
-                let c = map.screen(Point::new(0.5, 0.5));
-                let a = (q - c).angle();
-                let ang = (start_angle + (a - a0).to_degrees() as f64).clamp(-45.0, 45.0);
+                let a = (q - box_centre).angle();
+                // (the turn since the press, taken the short way round: the pointer crossing the box's
+                // left side flips the angle between -180 and 180 degrees)
+                let turn = (a - a0 + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+                let ang = (start_angle + turn.to_degrees() as f64).clamp(-45.0, 45.0);
                 shown_angle = (ang * 100.0).round() / 100.0;
                 let _ = app.run("crop.straighten", json!({"angle": shown_angle}));
             }
@@ -1629,6 +1771,7 @@ fn crop_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
     }
     if resp.drag_stopped() {
         app.gesture = None;
+        app.crop_layout = None;
         let _ = app.run("develop.endInteraction", json!({}));
     }
     if let Some(at) = readout_at {
@@ -1679,7 +1822,9 @@ fn crop_keys(
         // the drag runs in the straightened crop frame, as a pointer drag from the handle would;
         // the arrows follow the screen
         let angle = d.crop.geometry.angle;
-        let to_q = at + vec2(dx as f32 * map.rect.width(), dy as f32 * map.rect.height());
+        // (a step is a fraction of the photo's size on screen: in the crop tool `map.rect` is the crop box)
+        let photo = app.image_rect.map_or(map.rect.size(), |r| r.size());
+        let to_q = at + vec2(dx as f32 * photo.x, dy as f32 * photo.y);
         let (from, to) = (to_straight(map.norm(at), angle, frame), to_straight(map.norm(to_q), angle, frame));
         let started = app.run("develop.beginInteraction", json!({"label": "Crop"})).and_then(|_| app.begin_crop().map(|_| serde_json::Value::Null));
         if let Err(e) = started {
@@ -1775,7 +1920,8 @@ fn angle_readout(ui: &egui::Ui, at: Pos2, angle: f64, bounds: Rect) {
 /// Guided Upright: draw up to four guides along lines that should be vertical or horizontal. Guides are
 /// stored in lens-corrected (pre-perspective) coordinates, so they stay attached to the image as it warps.
 fn guided_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, map: &CanvasMap, frame: &Frame, d: &DevelopSettings) {
-    let p = ui.painter_at(map.rect.expand(8.0));
+    // in the crop tool `map.rect` is the crop box: guides on the photo around it must still show
+    let p = ui.painter_at(app.canvas_rect.unwrap_or(map.rect.expand(8.0)));
     let col = Color32::from_rgb(255, 196, 40);
     let draw = |a: Pos2, b: Pos2| {
         p.line_segment([a, b], Stroke::new(3.0, Color32::from_black_alpha(120)));
@@ -1832,7 +1978,7 @@ fn flipped_corners(pts: &[Pos2], flip_h: bool, flip_v: bool) -> [Pos2; 4] {
     order.map(at)
 }
 
-/// The dimming outside the crop box: the photo's rectangle minus the crop quad, as one mesh of
+/// The dimming outside the crop box: the photo (a convex quad, turned in the crop tool) minus the crop quad, as one mesh of
 /// non-overlapping convex pieces. The quad is a rotated rectangle, so its opposite sides are
 /// parallel and the plane outside it splits into four disjoint half-strips: outside edge `i`
 /// and inside edge `i + 1`. Each is clipped to the photo and fanned into triangles.
@@ -1841,9 +1987,9 @@ fn flipped_corners(pts: &[Pos2], flip_h: bool, flip_v: bool) -> [Pos2; 4] {
 /// the two rectangles are aligned. Rotated, those quads cross themselves and each other, which
 /// showed as dimmed wedges inside the crop and doubly dark ones outside, growing with the angle.
 /// A degenerate quad (a point, a line, a non-finite corner) dims nothing.
-fn outside_crop_mesh(img: Rect, quad: &[Pos2; 4], color: Color32) -> egui::epaint::Mesh {
+fn outside_crop_mesh(photo: &[Pos2; 4], quad: &[Pos2; 4], color: Color32) -> egui::epaint::Mesh {
     let mut mesh = egui::epaint::Mesh::default();
-    if !quad.iter().all(|q| q.x.is_finite() && q.y.is_finite()) || !img.is_finite() {
+    if !quad.iter().chain(photo).all(|q| q.x.is_finite() && q.y.is_finite()) {
         return mesh;
     }
     let centre = pos2((quad[0].x + quad[1].x + quad[2].x + quad[3].x) / 4.0, (quad[0].y + quad[1].y + quad[2].y + quad[3].y) / 4.0);
@@ -1871,11 +2017,10 @@ fn outside_crop_mesh(img: Rect, quad: &[Pos2; 4], color: Color32) -> egui::epain
         }
         Some(out)
     };
-    let photo = [img.left_top(), img.right_top(), img.right_bottom(), img.left_bottom()];
     for i in 0..4 {
         let outside = |q: Pos2| side(i, q).map(|d| -d);
         let inside_next = |q: Pos2| side(i + 1, q);
-        let Some(strip) = clip(&photo, &outside).and_then(|poly| clip(&poly, &inside_next)) else { return egui::epaint::Mesh::default() };
+        let Some(strip) = clip(photo, &outside).and_then(|poly| clip(&poly, &inside_next)) else { return egui::epaint::Mesh::default() };
         if strip.len() < 3 {
             continue;
         }
@@ -2753,7 +2898,9 @@ mod preview_geometry_tests {
 /// Straighten tool: drag along a horizon (or a vertical) to set the crop angle; double-click = Auto.
 /// The image is shown unrotated in the crop view, so the line's on-screen angle is its image angle.
 /// `held`: drawn with ⌘ held in the crop tool, which stays active afterwards.
-fn straighten_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, held: bool) {
+/// The Straighten tool's level line. The crop tool shows the photo already turned by `angle`: a
+/// line drawn on screen at some slope lies at that slope minus `angle` in the photo.
+fn straighten_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, held: bool, angle: f64) {
     ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
     if !held && resp.double_clicked() {
         let _ = app.run("crop.autoStraighten", json!({}));
@@ -2775,15 +2922,22 @@ fn straighten_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::R
         app.gesture = None;
         let v = b - a;
         if v.length() > 8.0 {
-            let mut deg = v.y.atan2(v.x).to_degrees() as f64;
-            // fold to the nearest axis: a line closer to vertical straightens plumb lines
-            while deg > 45.0 {
-                deg -= 90.0;
+            // the line's slope in the photo, folded to the nearest axis: a line closer to vertical
+            // straightens plumb lines
+            let fold = |mut deg: f64| {
+                while deg > 45.0 {
+                    deg -= 90.0;
+                }
+                while deg < -45.0 {
+                    deg += 90.0;
+                }
+                deg
+            };
+            let deg = v.y.atan2(v.x).to_degrees() as f64 - angle;
+            if deg.is_finite() {
+                let deg = fold(deg);
+                let _ = app.run("crop.straighten", json!({"angle": (-deg * 100.0).round() / 100.0}));
             }
-            while deg < -45.0 {
-                deg += 90.0;
-            }
-            let _ = app.run("crop.straighten", json!({"angle": (-deg * 100.0).round() / 100.0}));
         }
         if !held {
             app.ui.tool.clear();
@@ -2831,6 +2985,10 @@ mod tests {
     use egui::{Color32, Pos2, Rect, pos2};
 
     /// A rotated `w` × `h` box centred on `centre`.
+    fn corners(r: Rect) -> [Pos2; 4] {
+        [r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom()]
+    }
+
     fn box_at(centre: Pos2, w: f32, h: f32, angle: f32) -> [Pos2; 4] {
         let (s, c) = angle.to_radians().sin_cos();
         [(-w, -h), (w, -h), (w, h), (-w, h)].map(|(x, y)| pos2(centre.x + (x * c - y * s) / 2.0, centre.y + (x * s + y * c) / 2.0))
@@ -2856,51 +3014,59 @@ mod tests {
     #[test]
     fn the_dimming_outside_a_rotated_crop_is_exactly_the_photo_minus_the_box() {
         let img = Rect::from_min_max(pos2(100.0, 50.0), pos2(500.0, 650.0));
-        // boxes inside the photo, poking out of it, and bigger than it
+        // boxes inside the photo, poking out of it, and bigger than it; the photo upright (the box
+        // turned) or turned under an upright box, as the crop tool shows it (issue #1643)
         for (w, h) in [(240.0, 360.0), (420.0, 300.0), (700.0, 900.0)] {
             for angle in [0.0f32, 5.0, 15.0, 30.0, -45.0, 90.0, 137.0, 200.0] {
                 let quad = box_at(img.center() + egui::vec2(30.0, -20.0), w, h, angle);
-                let mesh = outside_crop_mesh(img, &quad, Color32::BLACK);
-                let tris: Vec<[Pos2; 3]> = mesh
-                    .indices
-                    .chunks(3)
-                    .map(|t| [mesh.vertices[t[0] as usize].pos, mesh.vertices[t[1] as usize].pos, mesh.vertices[t[2] as usize].pos])
-                    .collect();
-                let (mut inside, mut outside) = (0, 0);
-                let mut y = img.top() - 20.0;
-                while y < img.bottom() + 20.0 {
-                    let mut x = img.left() - 20.0;
-                    while x < img.right() + 20.0 {
-                        let p = pos2(x, y);
-                        let in_box = sides(&quad, p);
-                        let in_img = sides(&[img.left_top(), img.right_top(), img.right_bottom(), img.left_bottom()], p);
-                        // a pixel on an edge may fall either way: skip the boundaries themselves
-                        if in_box.iter().chain(&in_img).any(|d| d.abs() < 1.0) {
-                            x += 7.0;
-                            continue;
-                        }
-                        let expected = if in_img.iter().all(|d| *d > 0.0) && !in_box.iter().all(|d| *d > 0.0) { 1 } else { 0 };
-                        // a sample on the seam between two of a strip's fan triangles is in both
-                        // or in neither, depending on rounding: count it both ways
-                        let covered = |eps: f32| tris.iter().filter(|t| sides(*t, p).iter().all(|d| *d > eps)).count();
-                        let (at_least, at_most) = (covered(0.01), covered(-0.01));
-                        assert!(
-                            at_least <= expected && expected <= at_most,
-                            "{w}×{h} box at {angle}°: ({x}, {y}) lies in {at_least}..={at_most} triangle(s), not {expected}"
-                        );
-                        if expected == 1 {
-                            outside += 1
-                        } else if in_img.iter().all(|d| *d > 0.0) {
-                            inside += 1
-                        }
-                        x += 7.0;
-                    }
-                    y += 7.0;
-                }
-                // (a box bigger than the photo swallows it whole at some angles)
-                assert!(inside > 50 && (outside > 50 || w > img.width()), "{w}×{h} at {angle}°: {outside} dimmed, {inside} clear samples");
+                assert_dims_photo_minus_box(&corners(img), &quad, w > img.width(), &format!("{w}×{h} box at {angle}°"));
+                let turned = box_at(img.center(), img.width(), img.height(), -angle);
+                let upright = box_at(img.center() + egui::vec2(30.0, -20.0), w, h, 0.0);
+                assert_dims_photo_minus_box(&turned, &upright, w > img.width(), &format!("{w}×{h} box on a photo at {angle}°"));
             }
         }
+    }
+
+    /// Every sampled point of `photo` outside `quad` lies in exactly one of the dimming mesh's
+    /// triangles; no point inside the box or outside the photo lies in any.
+    fn assert_dims_photo_minus_box(photo: &[Pos2; 4], quad: &[Pos2; 4], swallowed: bool, what: &str) {
+        let mesh = outside_crop_mesh(photo, quad, Color32::BLACK);
+        let tris: Vec<[Pos2; 3]> = mesh
+            .indices
+            .chunks(3)
+            .map(|t| [mesh.vertices[t[0] as usize].pos, mesh.vertices[t[1] as usize].pos, mesh.vertices[t[2] as usize].pos])
+            .collect();
+        let bounds = Rect::from_points(photo);
+        let (mut inside, mut outside) = (0, 0);
+        let mut y = bounds.top() - 20.0;
+        while y < bounds.bottom() + 20.0 {
+            let mut x = bounds.left() - 20.0;
+            while x < bounds.right() + 20.0 {
+                let p = pos2(x, y);
+                let in_box = sides(quad, p);
+                let in_img = sides(photo, p);
+                // a pixel on an edge may fall either way: skip the boundaries themselves
+                if in_box.iter().chain(&in_img).any(|d| d.abs() < 1.0) {
+                    x += 7.0;
+                    continue;
+                }
+                let expected = if in_img.iter().all(|d| *d > 0.0) && !in_box.iter().all(|d| *d > 0.0) { 1 } else { 0 };
+                // a sample on the seam between two of a strip's fan triangles is in both or in
+                // neither, depending on rounding: count it both ways
+                let covered = |eps: f32| tris.iter().filter(|t| sides(*t, p).iter().all(|d| *d > eps)).count();
+                let (at_least, at_most) = (covered(0.01), covered(-0.01));
+                assert!(at_least <= expected && expected <= at_most, "{what}: ({x}, {y}) lies in {at_least}..={at_most} triangle(s), not {expected}");
+                if expected == 1 {
+                    outside += 1
+                } else if in_img.iter().all(|d| *d > 0.0) {
+                    inside += 1
+                }
+                x += 7.0;
+            }
+            y += 7.0;
+        }
+        // (a box bigger than the photo swallows it whole at some angles)
+        assert!(inside > 50 && (outside > 50 || swallowed), "{what}: {outside} dimmed, {inside} clear samples");
     }
 
     /// A flat or broken box dims nothing rather than something arbitrary (or panicking).
@@ -2911,9 +3077,9 @@ mod tests {
         let line = [pos2(10.0, 10.0), pos2(90.0, 10.0), pos2(90.0, 10.0), pos2(10.0, 10.0)];
         let nan = [pos2(f32::NAN, 10.0), pos2(90.0, 10.0), pos2(90.0, 50.0), pos2(10.0, 50.0)];
         for quad in [point, line, nan] {
-            assert!(outside_crop_mesh(img, &quad, Color32::BLACK).indices.is_empty(), "{quad:?}");
+            assert!(outside_crop_mesh(&corners(img), &quad, Color32::BLACK).indices.is_empty(), "{quad:?}");
         }
-        assert!(outside_crop_mesh(Rect::NAN, &box_at(pos2(50.0, 50.0), 20.0, 20.0, 10.0), Color32::BLACK).indices.is_empty());
+        assert!(outside_crop_mesh(&corners(Rect::NAN), &box_at(pos2(50.0, 50.0), 20.0, 20.0, 10.0), Color32::BLACK).indices.is_empty());
     }
 
     /// A raw's embedded JPEG shown while the raw decodes, or the last render while an edit renders,

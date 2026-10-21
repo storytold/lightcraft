@@ -68,6 +68,8 @@ mod tests_compare;
 #[cfg(test)]
 mod tests_copy_paste_dialogs;
 #[cfg(test)]
+mod tests_crop_frame;
+#[cfg(test)]
 mod tests_crop_rotate;
 #[cfg(test)]
 mod tests_crop_tool;
@@ -401,6 +403,8 @@ pub struct LightcraftApp {
     pub widgets: Vec<(String, egui::Rect)>,
     /// In-progress on-canvas gesture (brush stroke points, gradient drag…).
     pub gesture: Option<panels::detail::Gesture>,
+    /// The crop tool's view held still while the crop is dragged, rotated or straightened (issue #1643).
+    pub crop_layout: Option<panels::detail::CropLayout>,
     /// The brush stroke being painted, as drawn on the photo until it's committed (issue #517).
     pub brush_live: Option<brush_live::LiveStroke>,
     /// What the loupe drew last frame: photo and source ("render", "cached", "embedded", "small",
@@ -520,6 +524,7 @@ impl LightcraftApp {
             film_scroll: None,
             widgets: vec![],
             gesture: None,
+            crop_layout: None,
             brush_live: None,
             loupe_shown: None,
             region_view: None,
