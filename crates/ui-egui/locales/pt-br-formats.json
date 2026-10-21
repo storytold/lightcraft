@@ -295,5 +295,10 @@
   "Renames {n} face{} across the library. The files are not changed.": "Renomeia {n} rosto{} na biblioteca. Os arquivos não são alterados.",
   "“{to}” is already a person. Combining them makes one person; Undo separates them again.": "“{to}” já é uma pessoa. Combiná-las deixa uma só; Desfazer as separa de novo.",
   "{what} merge added at {mp}: its full size, {full}, needs more memory than this computer has": "{what} mesclagem adicionada em {mp}: o tamanho completo, {full}, precisa de mais memória do que este computador tem",
-  "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "{what} mesclagem adicionada em {mp}, o maior tamanho possível para um panorama (tamanho completo: {full})"
+  "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "{what} mesclagem adicionada em {mp}, o maior tamanho possível para um panorama (tamanho completo: {full})",
+  "Couldn't move {count} photo{} to the {bin}: {error}": "Não foi possível mover {count} foto{} para a {bin}: {error}",
+  "Delete the {count} rejected photos from disk, or just remove them from the library?": "Excluir as {count} fotos rejeitadas do disco ou apenas removê-las da biblioteca?",
+  "Delete the {count} selected photos from disk, or just remove them from the library?": "Excluir as {count} fotos selecionadas do disco ou apenas removê-las da biblioteca?",
+  "Delete from Disk moves the files and their XMP sidecars to the {bin} and removes the photos from the library. Undo can't bring the files back: restore them from the {bin}.": "Excluir do disco move os arquivos e seus arquivos XMP associados para a {bin} e remove as fotos da biblioteca. Desfazer não traz os arquivos de volta: restaure-os da {bin}.",
+  "Moved {n} file{} to the {bin}": "{n} arquivo{0} movido{0} para a {bin}"
 }

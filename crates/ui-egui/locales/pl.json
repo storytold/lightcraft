@@ -2157,5 +2157,17 @@
   "This is a Lightroom catalog, not a LightCraft library. Import it into a LightCraft library instead?": "To jest katalog Lightrooma, a nie biblioteka LightCraft. Zaimportować go zamiast tego do biblioteki LightCraft?",
   "Unnamed Faces": "Nienazwane twarze",
   "Vertical inset (% of short edge)": "Margines pionowy (% krótszego boku)",
-  "not added to Apple Photos (cancelled)": "nie dodano do aplikacji Zdjęcia (anulowano)"
+  "not added to Apple Photos (cancelled)": "nie dodano do aplikacji Zdjęcia (anulowano)",
+  "Delete from Disk": "Usuń z dysku",
+  "Delete from Disk…": "Usuń z dysku…",
+  "Delete Rejected Photos…": "Usuń odrzucone zdjęcia…",
+  "Remove from Library": "Usuń z biblioteki",
+  "Nothing was deleted from disk for them. Remove them from the library instead? The files stay on disk.": "Nic z nich nie zostało usunięte z dysku. Czy zamiast tego usunąć je z biblioteki? Pliki pozostaną na dysku.",
+  "Delete the rejected photo from disk, or just remove it from the library?": "Usunąć odrzucone zdjęcie z dysku, czy tylko usunąć je z biblioteki?",
+  "Delete the selected photo from disk, or just remove it from the library?": "Usunąć zaznaczone zdjęcie z dysku, czy tylko usunąć je z biblioteki?",
+  "Remove takes them out of the library for good; the files stay on disk.": "Usuń trwale wyjmuje je z biblioteki; pliki pozostają na dysku.",
+  "Remove moves them to Recently Deleted; the files stay on disk.": "Usuń przenosi je do Ostatnio usuniętych; pliki pozostają na dysku.",
+  "There are no rejected photos here": "Nie ma tu odrzuconych zdjęć",
+  "Trash": "Kosz",
+  "Recycle Bin": "Kosz"
 }

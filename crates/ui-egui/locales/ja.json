@@ -2340,5 +2340,17 @@
   "Checking the GPU…": "GPU を確認中…",
   "CPU": "CPU",
   "A face model uses the GPU only when a check shows it gives the same results faster.": "顔モデルが GPU を使うのは、同じ結果をより速く出せると確認できた場合だけです。",
-  "Checking the GPU for faces": "顔用の GPU を確認中"
+  "Checking the GPU for faces": "顔用の GPU を確認中",
+  "Delete from Disk": "ディスクから削除",
+  "Delete from Disk…": "ディスクから削除…",
+  "Delete Rejected Photos…": "除外した写真を削除…",
+  "Remove from Library": "ライブラリから除去",
+  "Nothing was deleted from disk for them. Remove them from the library instead? The files stay on disk.": "これらはディスクから何も削除されていません。代わりにライブラリから除去しますか？ファイルはディスクに残ります。",
+  "Delete the rejected photo from disk, or just remove it from the library?": "除外した写真をディスクから削除しますか？それともライブラリから除去するだけにしますか？",
+  "Delete the selected photo from disk, or just remove it from the library?": "選択した写真をディスクから削除しますか？それともライブラリから除去するだけにしますか？",
+  "Remove takes them out of the library for good; the files stay on disk.": "除去すると、ライブラリから完全に取り除かれます。ファイルはディスクに残ります。",
+  "Remove moves them to Recently Deleted; the files stay on disk.": "除去すると、「最近削除した写真」に移動します。ファイルはディスクに残ります。",
+  "There are no rejected photos here": "ここには除外した写真がありません",
+  "Trash": "ゴミ箱",
+  "Recycle Bin": "ごみ箱"
 }

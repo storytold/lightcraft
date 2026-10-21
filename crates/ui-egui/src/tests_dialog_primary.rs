@@ -48,7 +48,7 @@ fn the_import_review_puts_its_confirm_on_the_right_as_the_primary_action() {
 fn constructive_confirms_are_primary_and_destructive_ones_plain() {
     use crate::state::Dialog;
     assert_eq!(confirm_style(&Dialog::AutoStack { gap: 60.0 }), ConfirmStyle::Primary);
-    assert_eq!(confirm_style(&Dialog::ConfirmDelete { count: 3 }), ConfirmStyle::Plain);
+    assert_eq!(confirm_style(&Dialog::ConfirmDelete { count: 3, ids: vec![1, 2, 3], rejected: false, error: None }), ConfirmStyle::Plain);
     // a dialog that only shows something has nothing to confirm: its Close is plain
     assert_eq!(confirm_style(&Dialog::About), ConfirmStyle::Plain);
 }

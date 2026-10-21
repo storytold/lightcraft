@@ -295,5 +295,10 @@
   "Renames {n} face{} across the library. The files are not changed.": "ライブラリ全体で{n}件の顔の名前を変更します。ファイルは変更されません。{:.0}",
   "“{to}” is already a person. Combining them makes one person; Undo separates them again.": "「{to}」はすでに別の人物です。まとめると1人になり、元に戻すと再び分かれます。",
   "{what} merge added at {mp}: its full size, {full}, needs more memory than this computer has": "{what}合成を{mp}で追加しました：フルサイズ（{full}）にはこのコンピューターのメモリが足りません",
-  "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "{what}合成を{mp}で追加しました。パノラマの最大サイズです（フルサイズ：{full}）"
+  "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "{what}合成を{mp}で追加しました。パノラマの最大サイズです（フルサイズ：{full}）",
+  "Couldn't move {count} photo{} to the {bin}: {error}": "{count}枚{:.0}の写真を{bin}に移動できませんでした：{error}",
+  "Delete the {count} rejected photos from disk, or just remove them from the library?": "除外した{count}枚の写真をディスクから削除しますか？それともライブラリから除去するだけにしますか？",
+  "Delete the {count} selected photos from disk, or just remove them from the library?": "選択した{count}枚の写真をディスクから削除しますか？それともライブラリから除去するだけにしますか？",
+  "Delete from Disk moves the files and their XMP sidecars to the {bin} and removes the photos from the library. Undo can't bring the files back: restore them from the {bin}.": "「ディスクから削除」は、ファイルとXMPサイドカーを{bin}に移動し、写真をライブラリから除去します。取り消してもファイルは戻りません。{bin}から戻してください。",
+  "Moved {n} file{} to the {bin}": "{n}個{:.0}のファイルを{bin}に移動しました"
 }

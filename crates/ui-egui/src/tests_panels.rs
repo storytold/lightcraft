@@ -2288,12 +2288,12 @@ fn deleting_a_photo_asks_first_from_the_key_the_menu_and_the_right_click_menu() 
 
     // ⌫ and Photo ▸ Delete Photo ask; Cancel keeps the photo
     h.request("ui.key", json!({"key": "delete"}), T);
-    assert_eq!(h.app.ui.dialog, Some(Dialog::ConfirmDelete { count: 1 }), "the key asks");
+    assert!(matches!(h.app.ui.dialog, Some(Dialog::ConfirmDelete { count: 1, .. })), "the key asks");
     h.request("ui.dialog.cancel", json!({}), T);
     assert!(!deleted(&h));
     // (what a click on the menu bar's item runs; `ui.menu.invoke` is the agents' engine.execute)
     crate::menubar::run_item(&mut h.app, "photo.delete", json!({})).unwrap();
-    assert_eq!(h.app.ui.dialog, Some(Dialog::ConfirmDelete { count: 1 }), "the menu asks");
+    assert!(matches!(h.app.ui.dialog, Some(Dialog::ConfirmDelete { count: 1, .. })), "the menu asks");
     h.request("ui.dialog.cancel", json!({}), T);
     assert!(!deleted(&h));
 
@@ -2301,7 +2301,7 @@ fn deleting_a_photo_asks_first_from_the_key_the_menu_and_the_right_click_menu() 
     let thumb = format!("thumb:{}", photo.0);
     right_click(&mut h, &thumb);
     click(&mut h, "button:contextDeletePhoto");
-    assert_eq!(h.app.ui.dialog, Some(Dialog::ConfirmDelete { count: 1 }), "the right-click menu asks");
+    assert!(matches!(h.app.ui.dialog, Some(Dialog::ConfirmDelete { count: 1, .. })), "the right-click menu asks");
     assert!(!deleted(&h), "nothing deleted before the answer");
     let r = h.request("ui.dialog.confirm", json!({}), T);
     assert_eq!(r["ok"], true, "{r}");

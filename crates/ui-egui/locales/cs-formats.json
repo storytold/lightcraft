@@ -295,5 +295,10 @@
   "Already in “{}”": "Již v „{}“",
   "Move {n} photo{} to “{}”": "Přesunout do „{1}“ fotografie: {n}{0:.0}",
   "Move {n} photo{} to “{}”?": "Přesunout do „{1}“ fotografie: {n}{0:.0}?",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Do „{1}“ přesunuto fotografií: {n}{0:.0}. Úpravy → Zpět je vrátí."
+  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Do „{1}“ přesunuto fotografií: {n}{0:.0}. Úpravy → Zpět je vrátí.",
+  "Couldn't move {count} photo{} to the {bin}: {error}": "Nepodařilo se přesunout {count} foto{} do {bin}: {error}",
+  "Delete from Disk moves the files and their XMP sidecars to the {bin} and removes the photos from the library. Undo can't bring the files back: restore them from the {bin}.": "Smazat z disku přesune soubory a jejich soubory XMP do {bin} a odebere fotografie z knihovny. Zpět to soubory neobnoví: obnovte je z {bin}.",
+  "Delete the {count} rejected photos from disk, or just remove them from the library?": "Smazat {count} zamítnutých fotografií z disku, nebo je jen odebrat z knihovny?",
+  "Delete the {count} selected photos from disk, or just remove them from the library?": "Smazat {count} vybraných fotografií z disku, nebo je jen odebrat z knihovny?",
+  "Moved {n} file{} to the {bin}": "Přesunuto {n} soubor{} do {bin}"
 }

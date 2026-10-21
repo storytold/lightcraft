@@ -2338,5 +2338,17 @@
   "Checking the GPU…": "Перевірка ГП…",
   "CPU": "ЦП",
   "A face model uses the GPU only when a check shows it gives the same results faster.": "Модель облич використовує ГП, лише якщо перевірка показала, що він дає ті самі результати швидше.",
-  "Checking the GPU for faces": "Перевірка ГП для облич"
+  "Checking the GPU for faces": "Перевірка ГП для облич",
+  "Delete from Disk": "Видалити з диска",
+  "Delete from Disk…": "Видалити з диска…",
+  "Delete Rejected Photos…": "Видалити відхилені фото…",
+  "Remove from Library": "Прибрати з бібліотеки",
+  "Nothing was deleted from disk for them. Remove them from the library instead? The files stay on disk.": "З диска для них нічого не видалено. Прибрати їх із бібліотеки натомість? Файли залишаться на диску.",
+  "Delete the rejected photo from disk, or just remove it from the library?": "Видалити відхилене фото з диска чи лише прибрати його з бібліотеки?",
+  "Delete the selected photo from disk, or just remove it from the library?": "Видалити вибране фото з диска чи лише прибрати його з бібліотеки?",
+  "Remove takes them out of the library for good; the files stay on disk.": "«Прибрати» остаточно прибирає їх із бібліотеки; файли залишаться на диску.",
+  "Remove moves them to Recently Deleted; the files stay on disk.": "«Прибрати» переміщує їх до «Нещодавно видалені»; файли залишаться на диску.",
+  "There are no rejected photos here": "Тут немає відхилених фото",
+  "Trash": "Кошик",
+  "Recycle Bin": "Кошик"
 }
