@@ -737,13 +737,13 @@ fn open_library_session(in_memory: bool, dir: Option<std::path::PathBuf>, seed_d
     if in_memory {
         return (if seed_demo { Session::with_demo() } else { Session::new() }.with_fs().with_default_denoise_models().with_system_clock(), None);
     }
-    let unopened = || Session::new().with_fs().with_default_denoise_models().with_system_clock();
+    let unopened = || Session::new().with_fs().with_default_denoise_models().with_system_clock().with_default_flickr();
     let Some(dir) = dir else {
         log::warn!("no library location (set --library or LIGHTCRAFT_LIBRARY)");
         return (unopened(), Some(LibraryProblem::new("", "There is no home folder to keep the library in. Choose a folder for it.")));
     };
     let t0 = std::time::Instant::now();
-    let mut s = Session::new().with_fs().with_default_denoise_models().with_system_clock();
+    let mut s = Session::new().with_fs().with_default_denoise_models().with_system_clock().with_default_flickr();
     match s.open_library(&dir, seed_demo) {
         Ok(r) => {
             let (replayed, torn) = (r.replayed, r.torn_bytes);

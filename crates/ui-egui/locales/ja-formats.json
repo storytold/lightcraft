@@ -295,5 +295,12 @@
   "Renames {n} face{} across the library. The files are not changed.": "ライブラリ全体で{n}件の顔の名前を変更します。ファイルは変更されません。{:.0}",
   "“{to}” is already a person. Combining them makes one person; Undo separates them again.": "「{to}」はすでに別の人物です。まとめると1人になり、元に戻すと再び分かれます。",
   "{what} merge added at {mp}: its full size, {full}, needs more memory than this computer has": "{what}合成を{mp}で追加しました：フルサイズ（{full}）にはこのコンピューターのメモリが足りません",
-  "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "{what}合成を{mp}で追加しました。パノラマの最大サイズです（フルサイズ：{full}）"
+  "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "{what}合成を{mp}で追加しました。パノラマの最大サイズです（フルサイズ：{full}）",
+  "Signed in as {name}": "{name}としてサインイン中",
+  "Signed in to Flickr as {name}": "{name}としてFlickrにサインインしました",
+  "Upload {n} photo{} to Flickr as {name}": "{name}として{n}枚の写真をFlickrにアップロード{:.0}",
+  "Uploaded {ok} of {total} photo{} to Flickr": "{total}枚中{ok}枚をFlickrにアップロードしました{:.0}",
+  " · {} not added to the album": " · {}枚はアルバムに追加されませんでした",
+  " · the album couldn't be made: {}": " · アルバムを作成できませんでした：{}",
+  " · new album “{}”": " · 新しいアルバム「{}」"
 }

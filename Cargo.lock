@@ -3235,6 +3235,7 @@ dependencies = [
  "lightcraft-develop",
  "lightcraft-faces",
  "lightcraft-fetch",
+ "lightcraft-flickr",
  "lightcraft-geocode",
  "lightcraft-geom",
  "lightcraft-gpu",
@@ -3285,6 +3286,18 @@ dependencies = [
  "rustls-rustcrypto",
  "sha2",
  "webpki-roots",
+]
+
+[[package]]
+name = "lightcraft-flickr"
+version = "0.10.0"
+dependencies = [
+ "hmac",
+ "lightcraft-fetch",
+ "log",
+ "serde",
+ "serde_json",
+ "sha1",
 ]
 
 [[package]]
@@ -5483,6 +5496,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6662b5879511e06e8999a8a235d848113e942c9124f211511b16466ee2995f26"
 dependencies = [
  "serde_core",
+]
+
+[[package]]
+name = "sha1"
+version = "0.10.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a978451301f4db1d02937a4ab3ccce137717b81826e79b7d49ffe3244a13c3b8"
+dependencies = [
+ "cfg-if",
+ "cpufeatures",
+ "digest",
 ]
 
 [[package]]

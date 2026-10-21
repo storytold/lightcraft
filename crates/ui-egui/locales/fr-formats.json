@@ -295,5 +295,12 @@
   "Already in “{}”": "Déjà dans « {} »",
   "Move {n} photo{} to “{}”": "Déplacer {n} photo{} vers « {} »",
   "Move {n} photo{} to “{}”?": "Déplacer {n} photo{} vers « {} » ?",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "{n} photo{} déplacée(s) vers « {} ». Modifier → Annuler les remet en place."
+  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "{n} photo{} déplacée(s) vers « {} ». Modifier → Annuler les remet en place.",
+  "Signed in as {name}": "Connecté en tant que {name}",
+  "Signed in to Flickr as {name}": "Connecté à Flickr en tant que {name}",
+  "Upload {n} photo{} to Flickr as {name}": "Envoyer {n} photo{} sur Flickr en tant que {name}",
+  "Uploaded {ok} of {total} photo{} to Flickr": "{ok} photo{} sur {total} envoyée(s) sur Flickr",
+  " · {} not added to the album": " · {} non ajoutée(s) à l'album",
+  " · the album couldn't be made: {}": " · l'album n'a pas pu être créé : {}",
+  " · new album “{}”": " · nouvel album « {} »"
 }

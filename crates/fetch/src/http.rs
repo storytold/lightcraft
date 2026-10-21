@@ -1,13 +1,14 @@
-//! A small HTTP/1.1 GET client for model downloads, in pure Rust: `std::net` sockets and, for
-//! `https://`, rustls with the RustCrypto provider (`rustls-rustcrypto`; no `ring` or
+//! A small HTTP/1.1 client for model downloads and uploads, in pure Rust: `std::net` sockets and,
+//! for `https://`, rustls with the RustCrypto provider (`rustls-rustcrypto`; no `ring` or
 //! `aws-lc-rs`, so nothing is compiled from C or assembly) and the Mozilla root certificates
 //! (`webpki-roots`).
 //!
-//! Only what a large-file download needs: one request per connection (`Connection: close`),
-//! `Range` requests for resuming, redirects (followed by the caller), `Content-Length`,
-//! chunked and read-to-close bodies. Every read waits at most `stall` for data and checks the
-//! cancel flag at least twice a second, so a dead server or a cancelled download never hangs
-//! the downloading thread. No proxies (see docs/ai-masks.md).
+//! Only what a large-file download or a form upload needs: `GET` and `POST` with a body of known
+//! length, one request per connection (`Connection: close`), `Range` requests for resuming,
+//! redirects (followed by the caller), `Content-Length`, chunked and read-to-close bodies. Every
+//! read and write waits at most `stall` for progress and checks the cancel flag at least twice a
+//! second, so a dead server or a cancelled transfer never hangs the calling thread. No proxies
+//! (see docs/ai-masks.md).
 
 use std::io::{ErrorKind, Read, Write};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
@@ -165,6 +166,8 @@ pub struct Limits<'a> {
 const TICK: Duration = Duration::from_millis(250);
 /// Longest status line + headers accepted.
 const MAX_HEAD: usize = 64 * 1024;
+/// Request body bytes handed to TLS at a time.
+const WRITE_PIECE: usize = 64 * 1024;
 
 enum Stream {
     Plain(TcpStream),
@@ -302,10 +305,13 @@ impl Stream {
                 Ok(())
             }
             Stream::Tls(conn, sock) => {
-                // buffered by rustls, then sent as TLS records
-                conn.writer().write_all(data).map_err(|e| HttpError::Tls(e.to_string()))?;
-                while conn.wants_write() {
-                    Self::retry(limits, || conn.write_tls(sock))?;
+                // buffered by rustls, then sent as TLS records; a piece at a time, so a large
+                // upload is never held twice in memory and the cancel flag is checked as it goes
+                for piece in data.chunks(WRITE_PIECE) {
+                    conn.writer().write_all(piece).map_err(|e| HttpError::Tls(e.to_string()))?;
+                    while conn.wants_write() {
+                        Self::retry(limits, || conn.write_tls(sock))?;
+                    }
                 }
                 Ok(())
             }
@@ -442,6 +448,22 @@ impl Response {
         }
     }
 
+    /// The whole body, refused when it grows past `max` bytes (an API answer, not a download).
+    pub fn read_to_end(&mut self, max: usize, limits: &Limits) -> Result<Vec<u8>, HttpError> {
+        let mut out = Vec::new();
+        let mut buf = [0u8; 16 * 1024];
+        loop {
+            let n = self.read(&mut buf, limits)?;
+            if n == 0 {
+                return Ok(out);
+            }
+            if out.len().saturating_add(n) > max {
+                return Err(HttpError::Protocol(format!("response larger than {max} bytes")));
+            }
+            out.extend_from_slice(buf.get(..n).unwrap_or_default());
+        }
+    }
+
     /// Read body bytes into `out` (0 at the end of the body).
     pub fn read(&mut self, out: &mut [u8], limits: &Limits) -> Result<usize, HttpError> {
         match &mut self.body {
@@ -505,8 +527,18 @@ impl Response {
 
 /// Send `GET url` with extra `headers` and read the status line and headers.
 pub fn get(url: &Url, headers: &[(&str, String)], limits: &Limits) -> Result<Response, HttpError> {
+    request("GET", url, headers, None, limits)
+}
+
+/// Send `POST url` with extra `headers` (the caller names the `Content-Type`) and `body`, then
+/// read the status line and headers. The body is sent with its `Content-Length`.
+pub fn post(url: &Url, headers: &[(&str, String)], body: &[u8], limits: &Limits) -> Result<Response, HttpError> {
+    request("POST", url, headers, Some(body), limits)
+}
+
+fn request(method: &str, url: &Url, headers: &[(&str, String)], body: Option<&[u8]>, limits: &Limits) -> Result<Response, HttpError> {
     let mut req = format!(
-        "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: LightCraft/{}\r\nAccept: */*\r\nAccept-Encoding: identity\r\nConnection: close\r\n",
+        "{method} {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: LightCraft/{}\r\nAccept: */*\r\nAccept-Encoding: identity\r\nConnection: close\r\n",
         url.path,
         url.host_header(),
         env!("CARGO_PKG_VERSION")
@@ -517,9 +549,15 @@ pub fn get(url: &Url, headers: &[(&str, String)], limits: &Limits) -> Result<Res
         }
         req.push_str(&format!("{k}: {v}\r\n"));
     }
+    if let Some(body) = body {
+        req.push_str(&format!("Content-Length: {}\r\n", body.len()));
+    }
     req.push_str("\r\n");
     let mut stream = Stream::connect(url, limits)?;
     stream.write_all(req.as_bytes(), limits)?;
+    if let Some(body) = body {
+        stream.write_all(body, limits)?;
+    }
     let mut conn = Conn { stream, buf: Vec::new(), pos: 0 };
     let status_line = conn.line(MAX_HEAD, limits)?;
     let mut parts = status_line.split_whitespace();
@@ -662,5 +700,59 @@ mod tests {
     #[test]
     fn the_tls_config_builds_with_the_pure_rust_provider() {
         assert!(tls_config().is_ok());
+    }
+
+    /// One request read whole by a local server (head up to the blank line, then
+    /// `Content-Length` bytes of body), answered with `reply`.
+    fn serve_once(reply: &'static str) -> (String, std::thread::JoinHandle<(String, Vec<u8>)>) {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = format!("http://{}", l.local_addr().unwrap());
+        let h = std::thread::spawn(move || {
+            let (mut s, _) = l.accept().unwrap();
+            let mut got = Vec::new();
+            let mut buf = [0u8; 4096];
+            let head_end = loop {
+                let n = s.read(&mut buf).unwrap();
+                got.extend_from_slice(&buf[..n]);
+                if let Some(i) = got.windows(4).position(|w| w == b"\r\n\r\n") {
+                    break i + 4;
+                }
+            };
+            let head = String::from_utf8_lossy(&got[..head_end]).to_string();
+            let len: usize = head.lines().find_map(|l| l.strip_prefix("Content-Length: ")).map(|v| v.trim().parse().unwrap()).unwrap_or(0);
+            while got.len() < head_end + len {
+                let n = s.read(&mut buf).unwrap();
+                got.extend_from_slice(&buf[..n]);
+            }
+            s.write_all(reply.as_bytes()).unwrap();
+            (head, got[head_end..].to_vec())
+        });
+        (addr, h)
+    }
+
+    #[test]
+    fn posts_a_body_with_its_length_and_reads_the_answer() {
+        let (addr, server) = serve_once("HTTP/1.1 200 OK\r\nContent-Length: 11\r\n\r\nhello world");
+        let cancel = AtomicBool::new(false);
+        let limits = Limits { connect: Duration::from_secs(5), stall: Duration::from_secs(5), cancel: &cancel };
+        let body = vec![7u8; 200_000];
+        let url = Url::parse(&format!("{addr}/upload")).unwrap();
+        let mut r = post(&url, &[("Content-Type", "application/octet-stream".into())], &body, &limits).unwrap();
+        assert_eq!(r.status, 200);
+        assert_eq!(r.read_to_end(1024, &limits).unwrap(), b"hello world");
+        let (head, got) = server.join().unwrap();
+        assert!(head.starts_with("POST /upload HTTP/1.1\r\n"), "{head}");
+        assert!(head.contains("Content-Length: 200000\r\n") && head.contains("Content-Type: application/octet-stream\r\n"), "{head}");
+        assert_eq!(got, body);
+    }
+
+    #[test]
+    fn read_to_end_refuses_an_answer_over_its_cap() {
+        let (addr, server) = serve_once("HTTP/1.1 200 OK\r\nContent-Length: 11\r\n\r\nhello world");
+        let cancel = AtomicBool::new(false);
+        let limits = Limits { connect: Duration::from_secs(5), stall: Duration::from_secs(5), cancel: &cancel };
+        let mut r = get(&Url::parse(&addr).unwrap(), &[], &limits).unwrap();
+        assert!(matches!(r.read_to_end(4, &limits), Err(HttpError::Protocol(_))));
+        server.join().unwrap();
     }
 }

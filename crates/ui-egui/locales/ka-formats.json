@@ -295,5 +295,12 @@
   "Already in “{}”": "Already in “{}”",
   "Move {n} photo{} to “{}”": "Move {n} photo{} to “{}”",
   "Move {n} photo{} to “{}”?": "Move {n} photo{} to “{}”?",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Moved {n} photo{} to “{}”. Edit → Undo moves them back."
+  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Moved {n} photo{} to “{}”. Edit → Undo moves them back.",
+  "Signed in as {name}": "შესული ხართ როგორც {name}",
+  "Signed in to Flickr as {name}": "Flickr-ში შესული ხართ როგორც {name}",
+  "Upload {n} photo{} to Flickr as {name}": "Flickr-ზე ატვირთვა როგორც {name} – ფოტო: {n}{:.0}",
+  "Uploaded {ok} of {total} photo{} to Flickr": "Flickr-ზე ატვირთულია ფოტო: {ok} / {total}{:.0}",
+  " · {} not added to the album": " · ალბომს არ დაემატა: {}",
+  " · the album couldn't be made: {}": " · ალბომის შექმნა ვერ მოხერხდა: {}",
+  " · new album “{}”": " · ახალი ალბომი „{}“"
 }

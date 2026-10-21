@@ -16,6 +16,7 @@ pub mod credits;
 pub mod date_picker;
 pub mod docking;
 pub mod export_task;
+pub mod flickr;
 mod focus_scan;
 pub mod headless;
 pub mod i18n;
@@ -89,6 +90,8 @@ mod tests_empty_library;
 mod tests_error_kinds;
 #[cfg(test)]
 mod tests_filmstrip;
+#[cfg(test)]
+mod tests_flickr;
 #[cfg(test)]
 mod tests_focus_point;
 #[cfg(test)]
@@ -451,6 +454,8 @@ pub struct LightcraftApp {
     pub tasks: tasks::Tasks,
     /// The files of the last finished background export (`ui.inspect` → `export.last`).
     pub last_export_result: Option<Value>,
+    /// Flickr sign-in steps and uploads (Settings ▸ Accounts, File ▸ Share ▸ Flickr…).
+    pub flickr: flickr::FlickrUi,
     /// The last slideshow export's end has been told (a toast).
     pub slideshow_export_reported: bool,
     /// The look the loupe shows while the pointer rests on a preset or profile (set by the
@@ -544,6 +549,7 @@ impl LightcraftApp {
             export: None,
             tasks: Default::default(),
             last_export_result: None,
+            flickr: Default::default(),
             slideshow_export_reported: true,
             hover_preview: None,
             window_is_fullscreen: false,
@@ -1464,6 +1470,7 @@ impl LightcraftApp {
         panels::dialogs::show(self, &ctx);
         panels::library_problem::show(self, &ctx);
         export_task::poll(self, &ctx);
+        flickr::poll(self, &ctx);
         slideshow_export::poll(self, &ctx);
         panels::activity::show(self, &ctx);
         export_task::poll_photos(self, &ctx);
