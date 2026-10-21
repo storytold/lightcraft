@@ -73,7 +73,7 @@ impl Unit {
 pub struct TaskInfo {
     pub id: u64,
     /// A stable id: `import`, `export`, `scan`, `previews`, `smartPreviews`, `lightroom`, `merge`, `download`,
-    /// `faces`, `denoise`, `findMissing`, `applePhotos`, `cache`, `focus`.
+    /// `faces`, `content`, `denoise`, `findMissing`, `applePhotos`, `cache`, `focus`.
     pub kind: &'static str,
     /// English; the frontend translates it.
     pub label: String,
@@ -100,6 +100,8 @@ struct Entry {
     detail: Mutex<String>,
     cancel: Option<Arc<AtomicBool>>,
     cancellable: AtomicBool,
+    /// Quitting cuts nothing short (the job saves what it did and carries on next time): no question on quit.
+    resumable: AtomicBool,
     /// Held while a cancel is decided ([`Activity::cancel`], [`Activity::cancel_all`]) and while
     /// cancelling is switched ([`TaskGuard::set_cancellable`], [`TaskHandle::set_cancellable`]): a
     /// step that turns it off and then reads the cancel flag either sees a cancel that was
@@ -187,6 +189,7 @@ impl Activity {
             unit: AtomicU8::new(Unit::Count.to_u8()),
             detail: Mutex::new(String::new()),
             cancellable: AtomicBool::new(cancel.is_some()),
+            resumable: AtomicBool::new(false),
             cancel,
             gate: Mutex::new(()),
         });
@@ -215,7 +218,11 @@ impl Activity {
 
     /// Tasks that quitting would cut short: cancellable ones not already stopping.
     pub fn running_cancellable(&self) -> Vec<TaskInfo> {
-        lock(&self.inner.tasks).iter().filter(|e| e.is_cancellable() && !e.is_cancelled()).map(|e| e.info()).collect()
+        lock(&self.inner.tasks)
+            .iter()
+            .filter(|e| e.is_cancellable() && !e.is_cancelled() && !e.resumable.load(Ordering::Relaxed))
+            .map(|e| e.info())
+            .collect()
     }
 }
 
@@ -247,6 +254,12 @@ impl TaskGuard {
     /// A step that must not be cut short (the Lightroom import's commit) turns cancelling off for its duration.
     pub fn set_cancellable(&self, yes: bool) {
         self.entry.set_cancellable(yes);
+    }
+
+    /// A job that picks up where it stopped (content indexing saves what it did and carries on next time) can be
+    /// cancelled but does not make quitting ask first.
+    pub fn set_resumable(&self, yes: bool) {
+        self.entry.resumable.store(yes, Ordering::Relaxed);
     }
 
     pub fn cancel_flag(&self) -> Option<Arc<AtomicBool>> {
@@ -358,6 +371,18 @@ mod tests {
         let (_x, _y, _z) = (a.start("export", "E", Cancel::Yes), a.start("import", "I", Cancel::Yes), a.start("faces", "F", Cancel::No));
         assert_eq!(a.cancel_all(), 2);
         assert!(a.running_cancellable().is_empty());
+    }
+
+    #[test]
+    fn a_resumable_task_can_be_cancelled_without_making_quit_ask() {
+        let a = Activity::default();
+        let flag = Arc::new(AtomicBool::new(false));
+        let g = a.start("content", "Indexing photo contents", Cancel::Flag(flag.clone()));
+        assert_eq!(a.running_cancellable().len(), 1);
+        g.set_resumable(true);
+        assert!(a.running_cancellable().is_empty(), "quitting loses nothing");
+        a.cancel(g.id()).unwrap();
+        assert!(flag.load(Ordering::Relaxed) && g.is_cancelled());
     }
 
     #[test]

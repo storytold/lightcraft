@@ -92,6 +92,136 @@ pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Decoded> {
     finish(F, raw, meta, (w, h), opts)
 }
 
+/// A TIFF decoded straight to (about) the size `opts` asks for, from a reader: strip by strip (or tile by tile), each
+/// averaged into blocks of `k` × `k` pixels as it is read, so neither the file nor the full-size image is ever held
+/// (a 2.3 GB layered Photoshop TIFF of 8640 × 5760 × 16 bits becomes a 540 × 360 picture in a few megabytes).
+///
+/// `Ok(None)`: not worth it or not covered here (no target size, an image less than twice the target, palette,
+/// planar or sub-byte samples, an unusual sample type): decode it whole instead.
+pub(crate) fn decode_reduced<R: std::io::Read + std::io::Seek>(reader: R, opts: &DecodeOptions) -> Result<Option<Decoded>> {
+    let Some((mw, mh)) = opts.max_size.filter(|(w, h)| *w > 0 && *h > 0) else { return Ok(None) };
+    let mut d = Decoder::new(reader).map_err(err)?.with_limits(limits(opts));
+    let (w, h) = d.dimensions().map_err(err)?;
+    check_size(F, w as u64, h as u64, opts)?;
+    let ct = d.colortype().map_err(err)?;
+    let planar = d.get_tag_u32(Tag::PlanarConfiguration).ok() == Some(2);
+    let compression = d.get_tag_u32(Tag::Compression).ok();
+    let (model, n_color, n_samples, bits) = layout(ct, compression, planar)?;
+    if planar || bits < 8 || matches!(ct, ColorType::Palette(_)) {
+        return Ok(None);
+    }
+    // whole blocks: the result still covers the box asked for
+    let k = (w / mw).min(h / mh);
+    if k < 2 {
+        return Ok(None);
+    }
+    let icc = tag_bytes(&mut d, Tag::IccProfile);
+    let xmp = tag_bytes(&mut d, Tag::from_u16_exhaustive(700)).map(|v| String::from_utf8_lossy(&v).trim_end_matches('\0').to_string());
+    let orientation = d.get_tag_u32(Tag::Orientation).ok().map(|v| v as u16);
+    let extra = d.get_tag_u16_vec(Tag::ExtraSamples).ok().unwrap_or_default();
+    let has_alpha = n_samples > n_color;
+    let premultiplied = has_alpha && extra.first() == Some(&1);
+
+    let (wu, hu, ku, s) = (w as usize, h as usize, k as usize, n_samples);
+    let (ow, oh) = (wu.div_ceil(ku), hu.div_ceil(ku));
+    let mut sum = vec![0f64; ow.checked_mul(oh).and_then(|n| n.checked_mul(s)).ok_or_else(|| err("image too large"))?];
+    let mut count = vec![0u32; ow * oh];
+    let (cw, ch) = match d.get_chunk_type() {
+        tiff::decoder::ChunkType::Strip => {
+            let rows = d.get_tag_u32(Tag::RowsPerStrip).unwrap_or(h).clamp(1, h);
+            (w, rows)
+        }
+        tiff::decoder::ChunkType::Tile => {
+            let tw = d.get_tag_u32(Tag::TileWidth).map_err(err)?;
+            let th = d.get_tag_u32(Tag::TileLength).map_err(err)?;
+            (tw, th)
+        }
+    };
+    if cw == 0 || ch == 0 {
+        return Err(err("empty strips or tiles"));
+    }
+    let (across, down) = (w.div_ceil(cw) as usize, h.div_ceil(ch) as usize);
+    let chunks = across.checked_mul(down).ok_or_else(|| err("too many tiles"))?;
+    // the kind of samples, which every chunk must keep
+    let mut kind: Option<u8> = None;
+    for i in 0..chunks {
+        let (x0, y0) = ((i % across) * cw as usize, (i / across) * ch as usize);
+        // what is left of the image at this chunk (the last row and column of chunks are cut short)
+        let (dw, dh) = ((cw as usize).min(wu - x0), (ch as usize).min(hu - y0));
+        let index = u32::try_from(i).map_err(|_| err("too many tiles"))?;
+        let chunk = d.read_chunk(index).map_err(err)?;
+        let (this, len) = match &chunk {
+            DecodingResult::U8(v) => (8u8, v.len()),
+            DecodingResult::U16(v) => (16, v.len()),
+            DecodingResult::F32(v) => (32, v.len()),
+            _ => return Ok(None),
+        };
+        if *kind.get_or_insert(this) != this {
+            return Err(err("sample type changes between strips"));
+        }
+        // a chunk's rows may be padded to the tile width
+        let stride = len.checked_div(dh).unwrap_or(0);
+        if stride < dw * s {
+            return Err(err("short strip or tile"));
+        }
+        let block = Block { x0, y0, dw, dh, stride, s, k: ku, ow };
+        match &chunk {
+            DecodingResult::U8(v) => block.add(v, &mut sum, &mut count),
+            DecodingResult::U16(v) => block.add(v, &mut sum, &mut count),
+            DecodingResult::F32(v) => block.add(v, &mut sum, &mut count),
+            _ => {}
+        }
+    }
+    let mean = |i: usize| sum.get(i).copied().unwrap_or(0.0) / f64::from(count.get(i / s).copied().unwrap_or(1).max(1));
+    let n = ow * oh;
+    let mut buf = match kind {
+        Some(8) => Buf::U8((0..n * s).map(|i| mean(i).round().clamp(0.0, 255.0) as u8).collect()),
+        Some(16) => Buf::U16((0..n * s).map(|i| mean(i).round().clamp(0.0, 65535.0) as u16).collect()),
+        Some(_) => Buf::F32((0..n * s).map(|i| mean(i) as f32).collect()),
+        None => return Err(err("no image data")),
+    };
+    drop(sum);
+    let keep = n_color + has_alpha as usize;
+    if n_samples != keep {
+        buf = select_channels(buf, n, n_samples, keep);
+    }
+    let raw = Raw { width: ow, height: oh, model, alpha: has_alpha, premultiplied, buf, bit_depth: bits };
+    let meta = Meta { icc, xmp, orientation, ..Default::default() };
+    finish(F, raw, meta, (w, h), opts).map(Some)
+}
+
+/// Where one strip or tile of [`decode_reduced`] lies, and how its samples are laid out.
+struct Block {
+    x0: usize,
+    y0: usize,
+    dw: usize,
+    dh: usize,
+    stride: usize,
+    s: usize,
+    k: usize,
+    ow: usize,
+}
+
+impl Block {
+    /// Add the chunk's samples to the sums of the output pixels they fall in.
+    fn add<T: Copy + Into<f64>>(&self, v: &[T], sum: &mut [f64], count: &mut [u32]) {
+        let s = self.s;
+        for y in 0..self.dh {
+            let oy = (self.y0 + y) / self.k;
+            let Some(row) = v.get(y * self.stride..y * self.stride + self.dw * s) else { return };
+            for (x, px) in row.chunks_exact(s).enumerate() {
+                let o = oy * self.ow + (self.x0 + x) / self.k;
+                if let (Some(c), Some(acc)) = (count.get_mut(o), sum.get_mut(o * s..o * s + s)) {
+                    *c += 1;
+                    for (a, x) in acc.iter_mut().zip(px) {
+                        *a += (*x).into();
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn limits(opts: &DecodeOptions) -> Limits {
     let mut limits = Limits::default();
     limits.decoding_buffer_size = opts.max_pixels.saturating_mul(4 * 8).min(usize::MAX as u64) as usize;

@@ -594,6 +594,15 @@ pub(crate) fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>>
             .into_iter()
             .map(|(label, key, k)| item("library.sort", json!({"key": k}), label, None, true, Some(cur.key == key)))
             .collect();
+            // best match first: only while searching by contents
+            v.push(item(
+                "library.sort",
+                json!({"key": "relevance", "ascending": false}),
+                "Relevance",
+                None,
+                app.session.content_ask().is_some(),
+                Some(cur.key == Relevance),
+            ));
             v.push(item("library.shuffle", json!({}), "Reshuffle", None, cur.key == Random, None));
             v.push(MenuNode::Separator);
             // a shuffle has no direction worth choosing

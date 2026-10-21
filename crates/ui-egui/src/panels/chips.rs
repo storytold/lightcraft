@@ -4,6 +4,7 @@
 
 use egui::{Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use lightcraft_engine::FilterChip;
+use lightcraft_engine::content_query::{ContentAsk, ContentHint, ContentState};
 use serde_json::json;
 
 use crate::LightcraftApp;
@@ -75,6 +76,111 @@ pub(crate) fn display_label(chip: &FilterChip, filter: &lightcraft_catalog::Filt
     tr(&chip.label).to_string()
 }
 
+/// The search by contents in view, and what the search bar's Contents mode needs to say (`None`: nothing to show).
+pub(crate) fn content_strip_state(app: &mut LightcraftApp) -> Option<(Option<lightcraft_engine::content_query::ContentView>, Option<ContentHint>)> {
+    let view = app.session.content_view();
+    let hint = match &view {
+        Some(v) => v.hint.clone(),
+        None if app.ui.search_mode == crate::state::SearchMode::Contents => app.session.content_hint(),
+        None => None,
+    };
+    (view.is_some() || hint.is_some()).then_some((view, hint))
+}
+
+/// The strip of the search by contents, above the other chips: a chip "Contents: beach" (or "Similar to …") with ✕,
+/// Fewer and More, how it went (preparing, best matches, a problem), and a hint while the index is incomplete or
+/// indexing is off (with a button to Settings → Search).
+pub fn content_strip(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    let Some((view, hint)) = content_strip_state(app) else { return };
+    let t = Tokens::get(ui.ctx());
+    let (bar, _) = ui.allocate_exact_size(vec2(ui.available_width(), HEIGHT), Sense::hover());
+    ui.painter().rect_filled(bar, 0.0, t.canvas);
+    register(ui.ctx(), "contentchips", bar);
+    let mut child = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(Rect::from_min_max(pos2(bar.left() + 20.0, bar.top() + 4.0), pos2(bar.right() - 16.0, bar.bottom() - 4.0)))
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+    );
+    child.spacing_mut().item_spacing.x = 8.0;
+    let font = t.font(12.0);
+    if let Some(v) = &view {
+        // the chip: its label and ✕
+        let label = match &v.ask {
+            ContentAsk::Text(q) => format!("{}: {q}", crate::i18n::tr("Contents")),
+            ContentAsk::Similar(_) => {
+                let name = v.label.strip_prefix("Similar to ").unwrap_or(&v.label);
+                crate::i18n::tr_format!("Similar to {name}", name = name)
+            }
+        };
+        let w = (chip_width(&child, &label, font.clone())).min(child.available_width() * 0.5);
+        let (r, _) = child.allocate_exact_size(vec2(w, 22.0), Sense::hover());
+        child.painter().rect(r, 11.0, t.field, Stroke::new(1.0, t.accent), StrokeKind::Inside);
+        let text_r = Rect::from_min_max(r.min, pos2(r.right() - 22.0, r.max.y));
+        child.painter().with_clip_rect(text_r).text(pos2(r.left() + 10.0, r.center().y), egui::Align2::LEFT_CENTER, &label, font.clone(), t.text);
+        register(child.ctx(), "chip:contents", r);
+        let xr = Rect::from_center_size(pos2(r.right() - 12.0, r.center().y), vec2(18.0, 18.0));
+        let resp = child.interact(xr, egui::Id::new("content-chip-x"), Sense::click()).on_hover_text(crate::i18n::tr("End the search by contents"));
+        register(child.ctx(), "chip:contents:x", xr);
+        let col = if resp.hovered() { t.text } else { t.text_dim };
+        let m = 3.5;
+        let (a, b) = (xr.center() - vec2(m, m), xr.center() + vec2(m, m));
+        child.painter().line_segment([a, b], Stroke::new(1.3, col));
+        child.painter().line_segment([pos2(a.x, b.y), pos2(b.x, a.y)], Stroke::new(1.3, col));
+        if resp.clicked() {
+            let _ = app.run("content.clearQuery", json!({}));
+            if app.ui.search_mode == crate::state::SearchMode::Contents || matches!(v.ask, ContentAsk::Text(_)) {
+                // (the words typed were the question)
+                let (asked, rest) = lightcraft_catalog::query::split_contents(&app.ui.search);
+                app.ui.search = if app.ui.search_mode == crate::state::SearchMode::Contents || asked.is_none() { String::new() } else { rest };
+            }
+        }
+        child.add_enabled_ui(v.can_fewer, |ui| {
+            if crate::widgets::text_button(ui, "contentsFewer", "Fewer", false).on_hover_text(crate::i18n::tr("Show fewer, closer matches")).clicked()
+            {
+                let _ = app.run("content.fewer", json!({}));
+            }
+        });
+        child.add_enabled_ui(v.can_more, |ui| {
+            if crate::widgets::text_button(ui, "contentsMore", "More", false).on_hover_text(crate::i18n::tr("Show more, looser matches")).clicked() {
+                let _ = app.run("content.more", json!({}));
+            }
+        });
+        let (status, colour) = match &v.state {
+            ContentState::Preparing => {
+                // the answer comes from another thread: look again soon
+                ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
+                (crate::i18n::tr("Preparing search…").to_string(), t.text_dim)
+            }
+            ContentState::Problem(p) => (crate::i18n::tr(p).to_string(), t.caution),
+            ContentState::Ready if v.best_matches => (crate::i18n::tr_format!("Best {n} matches", n = v.matches), t.text_dim),
+            ContentState::Ready => (crate::i18n::tr_format!("{n} matches", n = v.matches), t.text_dim),
+        };
+        // (no model: the hint below says what to do, once)
+        let said_below =
+            hint == Some(ContentHint::TurnOnIndexing) && matches!(&v.state, ContentState::Problem(p) if p.starts_with("No content model"));
+        if !said_below {
+            let l = child.label(egui::RichText::new(status).font(font.clone()).color(colour));
+            register(child.ctx(), "label:contentsStatus", l.rect);
+        }
+    }
+    match hint {
+        Some(ContentHint::Partial { percent }) => {
+            let l = child
+                .label(egui::RichText::new(crate::i18n::tr_format!("Indexed {percent} % of photos", percent = percent)).font(font).color(t.text_dim));
+            register(child.ctx(), "label:contentsHint", l.rect);
+        }
+        Some(ContentHint::TurnOnIndexing) => {
+            let l =
+                child.label(egui::RichText::new(crate::i18n::tr("Turn on Index photo contents in Settings → Search")).font(font).color(t.caution));
+            register(child.ctx(), "label:contentsHint", l.rect);
+            if crate::widgets::text_button(&mut child, "contentsSettings", "Open Settings…", false).clicked() {
+                let _ = app.run("app.settings", json!({"tab": "search"}));
+            }
+        }
+        None => {}
+    }
+}
+
 /// Draws the strip; does nothing without chips.
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, chips: &[FilterChip]) {
     if chips.is_empty() {
@@ -144,6 +250,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, chips: &[FilterChip]) {
     }
     if crate::widgets::text_button(&mut child, "chipsClearAll", crate::i18n::tr("Clear all"), false).clicked() {
         app.ui.search.clear();
+        app.ui.search_due = None;
         let _ = app.run("library.clearFilter", json!({}));
     }
 }
