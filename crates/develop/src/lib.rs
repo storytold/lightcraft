@@ -18,6 +18,19 @@ pub use settings::*;
 
 use serde_json::Value;
 
+/// The settings sections behind an Edit-panel section (its eye switches them all off).
+pub fn panel_sections(panel: &str) -> &'static [Section] {
+    match panel {
+        "light" => &[Section::Light, Section::Curve],
+        "color" => &[Section::Color, Section::Mixer, Section::BwMix, Section::Grading, Section::PointColor],
+        "effects" => &[Section::Effects, Section::Vignette, Section::Grain],
+        "detail" => &[Section::Detail],
+        "optics" => &[Section::Optics],
+        "calibration" => &[Section::Calibration],
+        _ => &[],
+    }
+}
+
 impl DevelopSettings {
     /// Settings for a freshly imported raw file (Lightroom applies capture sharpening and colour
     /// noise reduction by default to raw files).
@@ -115,20 +128,60 @@ impl DevelopSettings {
             return std::borrow::Cow::Borrowed(self);
         }
         let mut d = self.clone();
-        if off("light") {
-            d.reset_section(Section::Light);
-            d.reset_section(Section::Curve);
+        for panel in ["light", "color", "detail"] {
+            if off(panel) {
+                for &section in panel_sections(panel) {
+                    d.reset_section(section);
+                }
+            }
         }
         if off("color") {
-            for section in [Section::Color, Section::Mixer, Section::BwMix, Section::Grading, Section::PointColor] {
-                d.reset_section(section);
-            }
             d.point_colors.clear();
         }
-        if off("detail") {
-            d.reset_section(Section::Detail);
-        }
         std::borrow::Cow::Owned(d)
+    }
+
+    /// Does control `id` hold a different value from `base`? A white balance slider differs
+    /// when the mode does; left As Shot on both sides it never does, whatever numbers each holds
+    /// (those are the file's, read again when it renders). A control `base` has no value for (a
+    /// point colour it lacks) is compared with the control's default. An unknown id differs in
+    /// nothing.
+    pub fn control_differs(&self, base: &DevelopSettings, id: &str) -> bool {
+        if id.starts_with("wb.") {
+            if self.wb.mode != base.wb.mode {
+                return true;
+            }
+            if self.wb.mode == WbMode::AsShot {
+                return false;
+            }
+        }
+        let Some(v) = controls::get(self, id) else { return false };
+        let b = controls::get(base, id).or_else(|| controls::find(id).map(|c| c.default));
+        b.is_some_and(|b| (v - b).abs() > 1e-9)
+    }
+
+    /// Does the Edit-panel section `panel` (`"light"`, `"color"`, …) differ from `base`, the
+    /// photo's starting settings ([`panel_sections`])? An unknown name differs in nothing.
+    pub fn panel_differs(&self, base: &DevelopSettings, panel: &str) -> bool {
+        panel_sections(panel).iter().any(|&s| self.section_differs(base, s))
+    }
+
+    /// Does any setting of `section` differ from `base`: its sliders ([`Self::control_differs`],
+    /// so a white balance mode change counts), and the settings that aren't sliders (the tone
+    /// curve, point colours, lens switches…)?
+    pub fn section_differs(&self, base: &DevelopSettings, section: Section) -> bool {
+        controls::in_section(section).any(|c| self.control_differs(base, c.id))
+            || match section {
+                Section::Light => self.hdr.enabled != base.hdr.enabled,
+                Section::Curve => self.curve != base.curve,
+                // black and white is the Color panel's: its mixer becomes the B&W Mixer
+                Section::Color => self.treatment != base.treatment,
+                Section::PointColor => self.point_colors != base.point_colors,
+                Section::Vignette => self.vignette.amount != 0.0 && self.vignette.style != base.vignette.style,
+                Section::Detail => self.enhance.denoise_on != base.enhance.denoise_on,
+                Section::Optics => self.optics.remove_ca != base.optics.remove_ca || self.optics.lens_profile != base.optics.lens_profile,
+                _ => false,
+            }
     }
 
     /// How much of the AI-denoised picture to mix in, 0 (none) to 1 (all of it): the Denoise amount, unless the Detail
@@ -200,6 +253,44 @@ mod tests {
         let back = DevelopSettings::from_json(&v).unwrap();
         assert_eq!(back, s);
         assert_ne!(back.hash64(), DevelopSettings::default().hash64());
+    }
+
+    #[test]
+    fn a_panel_differs_only_where_it_was_edited() {
+        let base = DevelopSettings::for_raw(5200.0, 4.0);
+        // a raw's own defaults (sharpening 40, colour noise reduction 25) are no edit
+        assert!(["light", "color", "effects", "detail", "optics", "calibration"].iter().all(|p| !base.panel_differs(&base, p)));
+        let mut s = base.clone();
+        controls::set(&mut s, "light.exposure", 0.35);
+        assert!(s.panel_differs(&base, "light"));
+        assert!(!s.panel_differs(&base, "color"));
+        // a tone curve edit is Light's
+        let mut c = base.clone();
+        c.curve.darks = -12.0;
+        assert!(c.section_differs(&base, Section::Curve) && c.panel_differs(&base, "light"));
+        // As Shot reads the file again: the stored numbers don't count, a mode change does
+        let mut w = base.clone();
+        w.wb.temp = 5600.0;
+        assert!(!w.panel_differs(&base, "color"));
+        w.wb.mode = WbMode::Custom;
+        assert!(w.panel_differs(&base, "color"));
+        assert!(!s.panel_differs(&base, "nonsense"));
+        // black and white is a Color edit
+        let mut bw = base.clone();
+        bw.treatment = Treatment::Bw;
+        assert!(bw.panel_differs(&base, "color"));
+    }
+
+    #[test]
+    fn a_control_the_base_lacks_is_compared_with_its_default() {
+        let base = DevelopSettings::default();
+        let mut s = base.clone();
+        s.point_colors.push(PointColor::default());
+        assert!(controls::get(&base, "pointColor.0.hueShift").is_none(), "the base has no point colour");
+        assert!(!s.control_differs(&base, "pointColor.0.hueShift"), "a new point colour at its defaults is no edit");
+        controls::set(&mut s, "pointColor.0.hueShift", 30.0);
+        assert!(s.control_differs(&base, "pointColor.0.hueShift"), "a point colour's slider off its default is");
+        assert!(!s.control_differs(&base, "no.such.control"));
     }
 
     #[test]
