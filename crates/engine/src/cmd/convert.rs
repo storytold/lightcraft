@@ -316,11 +316,17 @@ pub(crate) fn reload_ops(
 /// dimensions and content hash, cached sources dropped. → {reloaded: [ids]}
 fn reload(s: &mut Session, p: &Value) -> Result<Value> {
     let ids = s.targets(p)?;
+    let mut seen = std::collections::HashSet::new();
     let paths: Vec<(lightcraft_catalog::PhotoId, String)> = ids
         .iter()
-        .filter_map(|id| match s.catalog.photo(*id).map(|ph| ph.source.clone()) {
-            Some(Source::File { path }) => Some((*id, path)),
-            _ => None,
+        .filter_map(|id| {
+            let ph = s.catalog.photo(*id)?;
+            // Reload the shared file once, even when only copies (or several siblings) are selected.
+            let ph = ph.copy_of.and_then(|id| s.catalog.photo(id)).unwrap_or(ph);
+            match &ph.source {
+                Source::File { path } if seen.insert(ph.id) => Some((ph.id, path.clone())),
+                _ => None,
+            }
         })
         .collect();
     let probed = crate::import::probe_paths(s, &paths.iter().map(|(_, p)| p.clone()).collect::<Vec<_>>());

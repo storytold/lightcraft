@@ -226,6 +226,33 @@ fn raf() -> Vec<u8> {
     raf_file(W, H, 16, strip, Some(layout), b"\xff\xd8\xff\xd9")
 }
 
+/// The measured compressed ORF header and independently hand-coded zero residuals. Contexts
+/// reset each row: the first three pixels of each parity use four remainder bits, then two.
+fn compressed_orf() -> Vec<u8> {
+    let mut bits = Vec::new();
+    for _ in 0..H {
+        for x in 0..W {
+            bits.extend([false; 3]);
+            bits.push(true);
+            bits.extend(std::iter::repeat_n(false, if x < 6 { 4 } else { 2 }));
+        }
+    }
+    let mut strip = vec![0, 0, 0, 0, 1, 0, 0];
+    strip.extend(bits.chunks(8).map(|chunk| chunk.iter().enumerate().fold(0u8, |v, (i, b)| v | (u8::from(*b) << (7 - i)))));
+    let mut ifd = IfdBuilder::new();
+    ifd.set(t::IMAGE_WIDTH, Value::Long(vec![W]));
+    ifd.set(t::IMAGE_LENGTH, Value::Long(vec![H]));
+    ifd.set(t::BITS_PER_SAMPLE, Value::Short(vec![16]));
+    ifd.set(t::COMPRESSION, Value::Short(vec![1]));
+    ifd.set(t::PHOTOMETRIC, Value::Short(vec![1]));
+    ifd.set(t::MAKE, Value::Ascii("OLYMPUS".into()));
+    ifd.set_image(ImageData::Strips { rows_per_strip: H, strips: vec![strip] });
+    let mut bytes = TiffWriter::new(ByteOrder::Little, false).write(&[ifd]).unwrap();
+    bytes[..4].copy_from_slice(b"IIRO");
+    assert_eq!(lightcraft_raw::decode(&bytes).unwrap().data.len(), (W * H) as usize);
+    bytes
+}
+
 fn samples() -> Vec<Vec<u8>> {
     vec![
         cfa_tiff("NIKON CORPORATION", 1, 12, ByteOrder::Big),
@@ -238,6 +265,7 @@ fn samples() -> Vec<Vec<u8>> {
         cfa_tiff("SAMSUNG", 1, 12, ByteOrder::Little),
         cfa_tiff("ACME", 1, 16, ByteOrder::Little),
         magic_tiff(b"IIRO", "OLYMPUS IMAGING CORP."),
+        compressed_orf(),
         rw2(),
         cr2(),
         raf(),

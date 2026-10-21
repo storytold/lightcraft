@@ -27,9 +27,6 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
-# Olympus ORF bodies that write uncompressed / packed data (crates/raw/src/vendor/orf.rs). Everything else
-# writes compressed ORF, which is preview-only (the E-M5 II / PEN-F high-res mode alone is decoded).
-ORF_DECODED = re.compile(r"^(E-1|E-10|E-20|EVOLT E-300|EVOLT E-330|EVOLT E-400|EVOLT E-500|E-300|E-330|E-500|Camedia C-\S+.*|Stylus XZ-2 iHS)$")
 # Samsung SRW bodies with compressed raw data (crates/raw/src/vendor/srw.rs refuses 32770 / 32772 / 32773).
 SRW_COMPRESSED = re.compile(r"(^|\W)(NX1|NX30|NX300|NX300M|NX500|NX2000|NX3000|NX3300|NX mini|EK-GN\d+|EK-KN\d+)(\W|$)")
 # Fujifilm bodies before the X series whose RAF has no raw IFD (crates/raw/src/vendor/raf.rs).
@@ -75,9 +72,7 @@ def classify(maker, camera, ext_field):
         if e == "PEF":
             return "unverified", "PEF", "PEF decoder (uncompressed, Huffman, packed 12-bit)"
         if e == "ORF":
-            if ORF_DECODED.match(camera):
-                return "unverified", "ORF", "uncompressed / packed ORF"
-            return "preview", "ORF", "compressed ORF is not decoded"
+            return "unverified", "ORF", "ORF decoder (uncompressed, packed / two-field / 12.8-bpp, lossless compressed); unknown stream headers refused"
         if e == "SRW":
             if SRW_COMPRESSED.search(camera):
                 return "preview", "SRW", "compressed SRW is not decoded"
