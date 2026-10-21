@@ -1,5 +1,6 @@
 // The per-pixel stage: a straight port of `lightcraft_pipeline::finish` (keep in step with it).
-// Bindings: img (rgb, pre-exposure), log_l, base, clar, tex, dark, masks (NMASK planes, then the
+// Bindings: img (rgb, pre-exposure), log_l, base, clar, tex, dark (V1 / V2: the dehaze dark plane;
+// V4: the haze map's interleaved a / b coefficients), masks (NMASK planes, then the
 // blurred chromaticity when HAS_CHROMA), aux
 // (tone LUT | chroma curve | sRGB LUT | curve LUTs | mask terms), out (packed RGBA8).
 
@@ -252,6 +253,171 @@ fn out_encode(v: f32) -> f32 {
     return 1.099 * pow(l, 0.45) - 0.099;
 }
 
+// --- process V4's Dehaze: `lightcraft_pipeline::haze::dehaze_at` with the whole frame's haze map
+// (its a / b coefficients interleaved in `dark`, airlight and compensation LUT in `P`).
+
+fn hz_finite(v: f32) -> bool {
+    return abs(v) <= 3.40282347e38;
+}
+
+// `haze::encode` / `haze::decode` (the square-root encoding: square root and square)
+fn hz_encode(v: f32) -> f32 {
+    if (hz_finite(v) && v > 0.0) {
+        return sqrt(v);
+    }
+    return 0.0;
+}
+
+fn hz_decode(v: f32) -> f32 {
+    if (hz_finite(v) && v > 0.0) {
+        return v * v;
+    }
+    return 0.0;
+}
+
+fn hz_air() -> vec3<f32> {
+    return vec3<f32>(pf(F_HAZE_AIR), pf(F_HAZE_AIR + 1u), pf(F_HAZE_AIR + 2u));
+}
+
+// `HazeMap::air_lin` (the airlight is finite and at least HZ_AIR_FLOOR: `decode` is its square)
+fn hz_air_lin() -> vec3<f32> {
+    let a = hz_air();
+    return a * a;
+}
+
+fn hz_pos(v: f32) -> f32 {
+    if (hz_finite(v) && v > 0.0) {
+        return v;
+    }
+    return 0.0;
+}
+
+// `haze::norm_dark_lin` (`inv`: `haze::inv_air_lin`)
+fn hz_norm_dark_lin(lin: vec3<f32>, inv: vec3<f32>) -> f32 {
+    let r = min(min(hz_pos(lin.x) * inv.x, hz_pos(lin.y) * inv.y), hz_pos(lin.z) * inv.z);
+    let g = hz_encode(r);
+    if (hz_finite(g)) {
+        return clamp(g, 0.0, HZ_G_MAX);
+    }
+    return 0.0;
+}
+
+// `haze::Axis::new`: (i0, i1, f) of frame-normalised `n` over `len` (≥ 1) proxy pixels.
+fn hz_axis(n0: f32, len: u32) -> vec3<f32> {
+    var n = n0;
+    if (!hz_finite(n)) {
+        n = 0.5;
+    }
+    let p = clamp(n * f32(len) - 0.5, 0.0, f32(len - 1u));
+    let i0 = floor(p);
+    return vec3<f32>(i0, min(i0 + 1.0, f32(len - 1u)), p - i0);
+}
+
+fn hz_at(x: u32, y: u32, w: u32) -> vec2<f32> {
+    let j = 2u * (y * w + x);
+    return vec2<f32>(dark[j], dark[j + 1u]);
+}
+
+// `HazeMap::coeffs`: (a, b) bilinear over the proxy's pixel centres, the two rows blended first,
+// then the two columns (HAS_HAZE is only set with a map, and a map is at least 1×1).
+fn hz_coeffs(nx: f32, ny: f32) -> vec2<f32> {
+    let w = pu(F_HAZE_W);
+    let h = pu(F_HAZE_H);
+    let ax = hz_axis(nx, w);
+    let ay = hz_axis(ny, h);
+    let x0 = u32(ax.x);
+    let x1 = u32(ax.y);
+    let y0 = u32(ay.x);
+    let y1 = u32(ay.y);
+    let left = hz_at(x0, y0, w) + (hz_at(x0, y1, w) - hz_at(x0, y0, w)) * ay.z;
+    let right = hz_at(x1, y0, w) + (hz_at(x1, y1, w) - hz_at(x1, y0, w)) * ay.z;
+    return left + (right - left) * ax.z;
+}
+
+// `HazeMap::comp`: the exposure compensation at amount `k`.
+fn hz_comp_at(j: u32) -> f32 {
+    if (j == 0u) {
+        return 1.0;
+    }
+    return pf(F_HAZE_COMP + j - 1u);
+}
+
+fn hz_comp(k: f32) -> f32 {
+    if (!(k > 0.0)) {
+        return 1.0;
+    }
+    let f = clamp(min(k, 1.0) * f32(HZ_COMP_N), 0.0, f32(HZ_COMP_N));
+    let i = u32(floor(f));
+    let lo = hz_comp_at(i);
+    let hi = hz_comp_at(min(i + 1u, HZ_COMP_N));
+    return lo + (hi - lo) * (f - f32(i));
+}
+
+// `haze::dehaze_at` (with `haze::Ctx` and `haze::Amount` computed per pixel): `c` is the exposed
+// colour, `gain` (> 0) the exposure gain; returns the dehazed colour.
+fn hz_dehaze(nx: f32, ny: f32, c: vec3<f32>, gain: f32, k0: f32) -> vec3<f32> {
+    var k = 0.0;
+    if (hz_finite(k0)) {
+        k = clamp(k0, -1.0, 1.0);
+    }
+    if (k == 0.0) {
+        return c;
+    }
+    let lin = c * (1.0 / gain);
+    let air = hz_air();
+    let air_lin = hz_air_lin();
+    let ab = hz_coeffs(nx, ny);
+    var d = ab.x * hz_norm_dark_lin(lin, 1.0 / max(air_lin, vec3<f32>(HZ_AIR_FLOOR * HZ_AIR_FLOOR))) + ab.y;
+    if (hz_finite(d)) {
+        d = clamp(d, 0.0, 1.0);
+    } else {
+        d = 0.0;
+    }
+    // `haze::recover_with`
+    let air_g = air_lin * gain;
+    var j = c;
+    if (k > 0.0) {
+        let omega = HZ_OMEGA * pow(k, HZ_OMEGA_POWER);
+        let tmin = 1.0 + (HZ_T_FLOOR - 1.0) * k;
+        var t = max(1.0 - omega * hz_decode(d), tmin);
+        // sky weight (`haze::Ctx::sky_distance`, `haze::sky_weight_at`)
+        let top = max(max(max(HZ_AIR_FLOOR, air.x), air.y), air.z);
+        let e = vec3<f32>(hz_encode(lin.x), hz_encode(lin.y), hz_encode(lin.z));
+        let de = abs(e - air);
+        let m = max(max(max(0.0, de.x), de.y), de.z) * (1.0 / top);
+        var w = 1.0;
+        if (hz_finite(m)) {
+            w = sstep(0.0, HZ_SKY_K, m);
+        }
+        t = clamp(t / max(t + (1.0 - t) * w, 1e-6), HZ_T_FLOOR, 1.0);
+        j = max(air_g + (c - air_g) * (1.0 / t), vec3<f32>(0.0));
+        // `haze::finish_recovery`: exposure compensation (weighted by the sky weight), some of
+        // the input's chroma back
+        j = j * (1.0 + (hz_comp(k) - 1.0) * w);
+        let yj = lum2020(j);
+        let yc = lum2020(c);
+        if (yj > 1e-9 && yc > 1e-9) {
+            let s = yj / yc;
+            j = j + (c * s - j) * HZ_CHROMA_KEEP;
+        }
+    } else {
+        // veil toward the airlight, mixed in a square-root encoding
+        let t = 1.0 - HZ_VEIL * -k * (HZ_VEIL_BASE + (1.0 - HZ_VEIL_BASE) * d);
+        // toward the airlight scaled to at most HZ_VEIL_TOP (`haze::veil_air`)
+        let top = max(max(air_lin.x, air_lin.y), air_lin.z);
+        var vs = 1.0;
+        if (top > HZ_VEIL_TOP) {
+            vs = HZ_VEIL_TOP / top;
+        }
+        let r = sqrt(max(c, vec3<f32>(0.0))) * t + sqrt(max(air_lin * vs * gain, vec3<f32>(0.0))) * (1.0 - t);
+        j = r * r;
+    }
+    if (hz_finite(j.x) && hz_finite(j.y) && hz_finite(j.z)) {
+        return j;
+    }
+    return c;
+}
+
 @compute @workgroup_size(16, 16)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let w = pu(F_W);
@@ -323,10 +489,25 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // --- dehaze (scene linear)
     let dz = pf(F_DEHAZE) + lt[10];
-    if (dz != 0.0 && pu(F_HAS_DARK) != 0u) {
+    if (dz != 0.0 && pu(F_HAS_HAZE) != 0u) {
+        // V4: the whole frame's haze map, sampled where this pixel sits in the whole output frame
+        // (a window dehazes like the whole render)
+        let nx = (pf(F_VIG_VIEW) + f32(x) + 0.5) / pf(F_VIG_VIEW + 2u);
+        let ny = (pf(F_VIG_VIEW + 1u) + f32(y) + 0.5) / pf(F_VIG_VIEW + 3u);
+        if (gain > 0.0 && hz_finite(gain)) {
+            c = hz_dehaze(nx, ny, c, gain, dz);
+        }
+    } else if (dz != 0.0 && pu(F_HAS_DARK) != 0u) {
         let d = clamp(dark[i] / pf(F_AIR_PRE), 0.0, 1.0);
         let air = pf(F_AIR);
-        if (dz > 0.0) {
+        if (dz > 0.0 && pu(F_DEHAZE_V3) != 0u) {
+            // process V3 (`finish::dehaze_v3_pixel`)
+            let k0 = clamp(dz, 0.0, 1.0);
+            let k = k0 * (0.4 + 0.6 * k0);
+            let t = max(1.0 - 0.95 * k * d, 0.3);
+            let veil = min(air * (1.0 - t), 0.9 * max(min(c.x, min(c.y, c.z)), 0.0));
+            c = max((c - veil) / t, vec3<f32>(0.0));
+        } else if (dz > 0.0) {
             let t = max(1.0 - 0.95 * min(dz, 1.0) * d, 0.12);
             c = max((c - air * (1.0 - t)) / t, vec3<f32>(0.0));
         } else {

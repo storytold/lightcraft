@@ -8,6 +8,7 @@ use lightcraft_develop::DevelopSettings;
 use lightcraft_geom::Orientation;
 use lightcraft_pipeline::finish::{FinishParams, MASK_TERMS, mask_terms};
 use lightcraft_pipeline::geometry::SampleMode;
+use lightcraft_pipeline::haze::HazeMap;
 use lightcraft_pipeline::local::plane_at;
 use lightcraft_pipeline::{Plan, RenderRequest, Rendered, SourceInfo, local};
 use lightcraft_raster::resample::Filter;
@@ -23,9 +24,30 @@ pub struct GpuStages {
     entries: Mutex<Vec<Entry>>,
     /// The uploaded source (a view renders one photo at several sizes).
     source: Mutex<Option<(Arc<Rgb32f>, Arc<Buf>)>>,
+    /// The uploaded coefficients of process V4's haze map (the map is cached per photo on the
+    /// CPU; a tone drag must not upload them again on every tick).
+    haze: Mutex<Option<(Arc<HazeMap>, Arc<Buf>)>>,
+    /// Haze maps uploaded so far (diagnostics and tests).
+    haze_uploads: std::sync::atomic::AtomicU64,
 }
 
 const CAPACITY: usize = 2;
+
+/// The device copy of `of` kept in `slot`: the one there when it was uploaded from this very `of`,
+/// else a fresh upload (the previous buffer freed first) that replaces it. Also returns whether
+/// it uploaded.
+fn upload_once<T>(slot: &Mutex<Option<(Arc<T>, Arc<Buf>)>>, of: &Arc<T>, upload: impl FnOnce() -> Buf) -> (Arc<Buf>, bool) {
+    let mut g = slot.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((k, b)) = &*g
+        && Arc::ptr_eq(k, of)
+    {
+        return (b.clone(), false);
+    }
+    *g = None; // free the previous buffer first
+    let b = Arc::new(upload());
+    *g = Some((of.clone(), b.clone()));
+    (b, true)
+}
 
 #[derive(Clone)]
 struct Entry {
@@ -44,7 +66,7 @@ struct Planes {
     base: Option<(local::BaseKey, Arc<Buf>)>,
     clarity: Option<(u32, Arc<Buf>)>,
     texture: Option<(u32, Arc<Buf>)>,
-    dark: Option<(u32, Arc<Buf>, f32)>,
+    dark: Option<(u64, Arc<Buf>, f32)>,
     chroma: Option<(u32, Arc<Buf>)>,
 }
 
@@ -63,16 +85,21 @@ impl GpuStages {
     }
 
     fn source(&self, src: &Arc<Rgb32f>, upload: impl FnOnce() -> Buf) -> Arc<Buf> {
-        let mut g = self.source.lock().unwrap_or_else(|e| e.into_inner());
-        match &*g {
-            Some((s, b)) if Arc::ptr_eq(s, src) => b.clone(),
-            _ => {
-                *g = None; // free the previous photo's buffer first
-                let b = Arc::new(upload());
-                *g = Some((src.clone(), b.clone()));
-                b
-            }
+        upload_once(&self.source, src, upload).0
+    }
+
+    /// The device copy of `map`'s coefficients, uploaded only when the map changes.
+    fn haze(&self, map: &Arc<HazeMap>, upload: impl FnOnce() -> Buf) -> Arc<Buf> {
+        let (b, uploaded) = upload_once(&self.haze, map, upload);
+        if uploaded {
+            self.haze_uploads.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
+        b
+    }
+
+    /// Haze maps these stages uploaded so far.
+    pub fn haze_uploads(&self) -> u64 {
+        self.haze_uploads.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Vec<Entry>> {
@@ -110,6 +137,9 @@ impl GpuStages {
         if let Some((_, b)) = &*self.source.lock().unwrap_or_else(|e| e.into_inner()) {
             add(b);
         }
+        if let Some((_, b)) = &*self.haze.lock().unwrap_or_else(|e| e.into_inner()) {
+            add(b);
+        }
         total
     }
 
@@ -117,6 +147,7 @@ impl GpuStages {
     pub fn clear(&self) {
         self.lock().clear();
         *self.source.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        *self.haze.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
 
     pub fn is_empty(&self) -> bool {
@@ -328,6 +359,19 @@ fn median_hv(cx: &mut Cx<'_>, p: &Buf, w: usize, h: usize, r: usize) -> Buf {
     cx.run("median_h", &pr, &[Some(p), Some(&tmp)], groups2(w, h, [16, 16]));
     let out = cx.gpu.buffer(w * h);
     cx.run("median_v", &pr, &[Some(&tmp), Some(&out)], groups2(w, h, [16, 16]));
+    out
+}
+
+/// Separable minimum of a plane (`local::min_hv`).
+fn min_hv(cx: &mut Cx<'_>, p: Buf, w: usize, h: usize, r: usize) -> Buf {
+    if r == 0 || w * h == 0 {
+        return p;
+    }
+    let pr = [w as u32, h as u32, 1, r.min(local::DEHAZE_PATCH_MAX) as u32];
+    let tmp = cx.gpu.buffer(w * h);
+    cx.run("min_h", &pr, &[Some(&p), Some(&tmp)], groups2(w, h, [16, 16]));
+    let out = cx.gpu.buffer(w * h);
+    cx.run("min_v", &pr, &[Some(&tmp), Some(&out)], groups2(w, h, [16, 16]));
     out
 }
 
@@ -678,8 +722,20 @@ pub fn render(
         dark: prep.dark.is_some(),
         chroma: masks.is_some() && prep.chroma.is_some(),
     };
-    let (p, aux) = finish_block(&fp, &terms, &present);
+    // process V4's Dehaze: the whole frame's haze map (built on the CPU with the plan, so no
+    // airlight readback), its coefficients bound where V1 / V2 bind the dark plane
+    let haze_map = plan.haze.as_ref().filter(|_| prep.dark.is_none());
+    let haze = haze_map.map(|m| &**m);
+    let (p, aux) = finish_block(&fp, &terms, &present, haze);
     let aux = gpu.upload(&aux);
+    // (kept with the view's stages: uploaded once per map, not on every tick)
+    let haze_buf = haze_map.map(|m| {
+        let upload = || gpu.upload(&crate::params::haze_coeffs(m));
+        match stages {
+            Some(c) => c.haze(m, upload),
+            None => Arc::new(upload()),
+        }
+    });
     // cleared, so that work which never ran cannot pass for an image (see the check below)
     let out = cx.zeroed(n);
     if fault == Some(crate::Fault::Validation) {
@@ -701,7 +757,7 @@ pub fn render(
                 Some(&prep.base),
                 prep.clarity.as_deref(),
                 prep.texture.as_deref(),
-                prep.dark.as_deref(),
+                prep.dark.as_deref().or(haze_buf.as_deref()),
                 masks.as_ref(),
                 Some(&aux),
                 Some(&out),
@@ -882,10 +938,11 @@ fn prepare(cx: &mut Cx<'_>, lin: &Buf, plan: &Plan<'_>, req: &RenderRequest, pla
     let (dark, air) = match sig.dark {
         None => (None, 1.0),
         Some(sg) => match &planes.dark {
-            Some((k, d, air)) if *k == sg.to_bits() => (Some(d.clone()), *air),
+            Some((k, d, air)) if *k == local::dark_key(sg, sig.dark_patch) => (Some(d.clone()), *air),
             _ => {
                 let d0 = cx.gpu.buffer(n);
                 map(cx, "dark_k", n, &[], [Some(lin), None, None], &d0);
+                let d0 = min_hv(cx, d0, w, h, sig.dark_patch);
                 let d = gaussian(cx, &d0, w, h, 1, sg);
                 // airlight: a percentile of every 7th value, as on the CPU
                 let m = n.div_ceil(local::AIRLIGHT_STEP);
@@ -894,7 +951,7 @@ fn prepare(cx: &mut Cx<'_>, lin: &Buf, plan: &Plan<'_>, req: &RenderRequest, pla
                 let air = local::airlight_of(cx.read(&sub, m));
                 cx.flush();
                 let b = Arc::new(d);
-                planes.dark = Some((sg.to_bits(), b.clone(), air));
+                planes.dark = Some((local::dark_key(sg, sig.dark_patch), b.clone(), air));
                 (Some(b), air)
             }
         },

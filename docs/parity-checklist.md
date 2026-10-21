@@ -1,6 +1,6 @@
 # Lightroom parity checklist
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-20 · **Change:** minor (LR-VIEW-ZOOM: only a full-size drag within 20 ms clears a slow-drag verdict) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-20 · **Change:** minor (LR-EDIT-EFFECTS-DEHAZE, LRC-DEV-PROCESS: process V4's haze-map Dehaze on top of V3's, #1237; LRC-PRINT-PAGE: Print Page Options) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 The measured, row-by-row checklist: one row per Lightroom feature, menu item and shortcut, what we
 have and what is missing. It answers *does the feature exist?* (feature breadth). Whether it is good
@@ -31,7 +31,7 @@ cited here still exists. Formerly docs/parity.md.
 | C. Views & navigation (VIEW) | 16 | 1 | 1 | 0 | 9/9 (100%) | 4/4 (100%) |
 | D. Search & filter (FILT) | 11 | 1 | 1 | 0 | 4/4 (100%) | 4/4 (100%) |
 | E. Metadata (META) | 5 | 1 | 0 | 0 | 2/2 (100%) | 2/2 (100%) |
-| F. Edit panel — global adjustments (EDIT) | 44 | 2 | 3 | 1 | 28/28 (100%) | 13/14 (93%) |
+| F. Edit panel — global adjustments (EDIT) | 43 | 3 | 3 | 1 | 27/28 (96%) | 13/14 (93%) |
 | G. Profiles (PROF) | 7 | 1 | 3 | 0 | 3/4 (75%) | 3/3 (100%) |
 | H. Crop & rotate (CROP) | 9 | 0 | 0 | 1 | 6/6 (100%) | 3/3 (100%) |
 | I. Remove / healing (REM) | 8 | 1 | 2 | 2 | 4/4 (100%) | 2/3 (67%) |
@@ -53,9 +53,9 @@ cited here still exists. Formerly docs/parity.md.
 | Y. Menus | 84 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 78 | 4 | 2 | 1 | 49/52 (94%) | 24/26 (92%) |
 | Lightroom Classic extras | 40 | 23 | 23 | 8 | — | 24/26 (92%) |
-| **Total** | 419 | 61 | 59 | 35 | 194/201 (97%) | 148/161 (92%) |
+| **Total** | 418 | 62 | 59 | 35 | 193/201 (96%) | 148/161 (92%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.4%** of 539 in-scope rows — P0 98.3% of 201 · P1 95.0% of 161 · P2 55.7% of 176.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.3%** of 539 in-scope rows — P0 98.0% of 201 · P1 95.0% of 161 · P2 55.7% of 176.
 <!-- /parity:summary -->
 
 ## Top gaps and shortcut notes
@@ -203,7 +203,7 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 | LR-EDIT-COLOR-GRADING | Colour grading wheels | P0 | ✅ | `ctl:grading.*`, `crates/ui-egui/src/panels/edit.rs` (`grading`) | 3-Way / Shadows / Midtones / Highlights tabs; a range tab shows one large wheel with Hue, Saturation and Luminance sliders; Blending and Balance in every tab; 3-Way shows the hovered wheel's hue and saturation; every wheel marks its neutral centre; wheel modifiers as in Lightroom: Shift-drag keeps the puck's hue and changes saturation only (the spoke is the guide; a puck at the centre has no hue, so it takes the angle where the pointer pressed), Cmd/Ctrl-drag keeps the saturation and changes hue only (the circle is the guide), Alt/Option-drag fine-adjusts at 0.1x and combines with either lock, and a hover tooltip lists them (issues #559, #1160; tests `shift_dragging_across_the_tangent_keeps_the_hue_and_moves_saturation`, `shift_drag_keeps_the_pucks_hue_wherever_the_pointer_grabs`, `cmd_drag_keeps_the_saturation_and_changes_only_the_hue`, `alt_drag_fine_adjusts_to_a_tenth_of_the_pointers_travel`, `alt_works_with_shift_and_cmd_constraints` in `crates/ui-egui/src/tests_grading.rs`); the large wheel adds 25/50/75 % saturation rings (issue #559); each wheel's eye hides its effect for viewing only (`RenderJob::with_hidden_grading`, not saved, export unaffected) (issue #737). No Global wheel tab yet |
 | LR-EDIT-EFFECTS-TEXTURE | Texture | P0 | ✅ | `ctl:effects.texture` | |
 | LR-EDIT-EFFECTS-CLARITY | Clarity | P0 | ✅ | `ctl:effects.clarity` | |
-| LR-EDIT-EFFECTS-DEHAZE | Dehaze | P0 | ✅ | `ctl:effects.dehaze` | |
+| LR-EDIT-EFFECTS-DEHAZE | Dehaze | P0 | 🟡 | `ctl:effects.dehaze`, `crates/pipeline/src/haze.rs`, `crates/pipeline/src/finish.rs`, `crates/pipeline/src/local.rs`, `crates/pipeline/src/tests_dehaze.rs`, `crates/pipeline/src/tests_dehaze_v4.rs` | globally and in masks. Process V4 (#1237, on top of V3's patch-minimum dark channel, eased response and veil limit): a dark-channel haze map of the whole frame (patch minimum, guided refinement, colour airlight) built once per image on a 768 px proxy (~12 ms), a gentle recovery with a smooth sky tolerance and exposure compensation; negative amounts add a soft veil. Every #1237 acceptance band passes on the hazy valley and the misty demo scenes (`tests_dehaze_v4`): median +25 −0.14..−0.16 EV, +50 −0.24..−0.26, +100 −0.53..−0.73, no extra black, no halo, neutral-grey hue drift 1.1° (+25 → +100), flat grey 0 LSB, −100 +0.66..+0.85 EV on the fog scenes with no extra clipping (V1: +100 −2.03 EV, 6.5 % black, 55 px halo; −100 +1.52 EV); preview, windows, export, CPU and GPU match. Still 🟡: not yet compared with Lightroom renders, and the CPU per-pixel cost (~18 ns/px, ≈3 ms a tick at 2.5 MP on 16 threads) is over the 2 ms budget (the GPU renders it interactively); V1 / V2 edits keep the old, too-strong Dehaze (Gaussian-blurred min(R,G,B), scalar airlight) and V3 edits the patch-minimum one, until Update to Current Process |
 | LR-EDIT-EFFECTS-VIGNETTE | Post-crop vignette | P0 | ✅ | `ctl:vignette.*`, `crates/pipeline/src/finish.rs`, `crates/ui-egui/src/panels/edit.rs` | style picker (Highlight / Color / Paint) in the Effects section |
 | LR-EDIT-EFFECTS-GRAIN | Grain | P1 | ✅ | `ctl:grain.*` | |
 | LR-EDIT-DETAIL-SHARPEN | Sharpening | P0 | ✅ | `ctl:detail.sharpenAmount`, `ctl:detail.sharpenRadius`, `ctl:detail.sharpenDetail`, `ctl:detail.sharpenMasking` | no Alt-drag mask preview |
@@ -728,7 +728,7 @@ From `08-lightroom-classic-extras.md` (Classic-only features) and part 2 of `06-
 | LRC-DEV-CALIB | Calibration panel | P1 | ✅ | `ctl:calibration.*` | |
 | LRC-DEV-TAT | Targeted adjustment tools | P1 | ✅ | `cmd:develop.targeted` (`target`: curve / hue / sat / lum) | |
 | LRC-DEV-DEFAULTS | Per-camera raw defaults | P1 | ✅ | `cmd:library.preferences` (`camera`, `import.perCamera`), `crates/ui-egui/src/panels/settings.rs` | Settings → Import: raw default and per-camera presets |
-| LRC-DEV-PROCESS | Process versions, Update to Current Process | P1 | ✅ | `cmd:develop.updateProcess`, `cmd:develop.reset`, `cmd:develop.get`, `crates/develop/src/settings.rs`, `crates/pipeline/src/finish.rs`, `docs/process-versions.md` | each photo records the rendering process its settings are interpreted by: settings saved before this existed load as V1, new photos and Reset get the latest, virtual copies inherit, copy / paste / sync / presets keep each photo's own; Photo ▸ Update to Current Process (one undo step, enabled while a selected photo is on an older process); a number from a newer LightCraft is kept and renders with the newest known process. Only V1 exists so far: this is what lets a retuned default tone (#146) or stronger Light sliders (#196) ship without changing existing edits |
+| LRC-DEV-PROCESS | Process versions, Update to Current Process | P1 | ✅ | `cmd:develop.updateProcess`, `cmd:develop.reset`, `cmd:develop.get`, `crates/develop/src/settings.rs`, `crates/pipeline/src/finish.rs`, `docs/process-versions.md` | each photo records the rendering process its settings are interpreted by: settings saved before this existed load as V1, new photos and Reset get the latest, virtual copies inherit, copy / paste / sync / presets keep each photo's own; Photo ▸ Update to Current Process (one undo step, enabled while a selected photo is on an older process); a number from a newer LightCraft is kept and renders with the newest known process. V1, V2 (Highlights / Shadows keep detail, #632) V3 (Dehaze from a patch-minimum dark channel, #1237; renders like V2 without Dehaze) and V4 (the haze-map Dehaze, #1237; renders like V3 without Dehaze) exist; the stage-cache keys include the process. This is what lets a retuned default tone (#146) or stronger Light sliders (#196) ship without changing existing edits |
 | LRC-DEV-VIEWOPTIONS | Develop view options | P2 | ⬜ | | |
 | LRC-DEV-LOUPEOVERLAY | Loupe overlay: layout image | P2 | 🟡 | `cmd:view.chooseLayoutImage`, `cmd:view.layoutImage`, `cmd:view.layoutImageOpacity`, `cmd:view.layoutImageMatte`, `crates/ui-egui/src/panels/layout_overlay.rs` | View ▸ Loupe Overlay: a PNG with transparency (a cover layout, a banner's safe areas) fitted and centred over the loupe photo, following zoom and pan; opacity and matte (the photo darkened outside the graphic's box) in steps; ⌥⌘O shows / hides it; read off the UI thread; saved with the UI state. Not yet: the Grid and Guides overlays, moving and resizing the layout with ⌘ held, free opacity / matte sliders |
 | LRC-DEV-VIDEO | Video frame capture | P2 | ⬜ | | |
@@ -799,6 +799,7 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 |---|---|---|
 | 2026-10-20 | patch | LR-VIEW-ZOOM: the 20 ms rule clears a slow-drag verdict only on a drag timed at full size; a drag that drafts small leaves it unchanged, as the code does; status unchanged |
 | 2026-10-19 | patch | LR-VIEW-ZOOM: the slow slider-drag verdict is described as per photo and control, as the code keys it; status unchanged |
+| 2026-10-18 | minor | LR-EDIT-EFFECTS-DEHAZE, LRC-DEV-PROCESS: the haze-map Dehaze moves to process V4, on top of V3's patch-minimum dark channel (#1283); V1 / V2 / V3 edits keep their Dehaze; statuses unchanged (🟡 / ✅) |
 | 2026-10-15 | minor | LR-VIEW-ZOOM: a slow slider-drag verdict needs two drags over 20 ms and expires after 30 s (doubling to 240 s); hidden-window frame times are ignored; the slow set forgets its oldest entry, not all (issue #330); status unchanged |
 | 2026-10-15 | minor | LR-BEHAV-BG-TASKS: Reload from Disk reads its files on a worker thread with a cancellable activity row instead of freezing the window on a selection of raws; its result is committed through the command wrapper (XMP sidecars auto-written as before) and an older reload finishing late no longer overwrites a newer one; status unchanged (✅) |
 | 2026-10-14 | patch | LR-EXP-TYPE: opaque 8-bit PNG/TIFF/WebP use RGB; transparent exports retain alpha (#1670). Statuses and feature counts unchanged. |
@@ -836,6 +837,10 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 | 2026-10-13 | minor | LR-IMP-DEVICE: Settings → Import → Cameras and Cards can open the import review when a camera or card is connected; status unchanged (✅) |
 | 2026-10-13 | minor | KEY-SLIDER-SCRUB: drag a slider's value sideways to scrub it, as in Lightroom (new row) |
 | 2026-10-13 | minor | KEY-SLIDER-RESET: hovering a slider's name or thumb says a double-click resets it; a double-click on the thumb is one undo step, not two; a disabled slider's name doesn't reset it (issue #1436); status unchanged (✅) |
+| 2026-10-12 | minor | LR-EDIT-EFFECTS-DEHAZE: V3 Dehaze tuned (gentler veil, smooth sky tolerance, no light band at the horizon, 768 px map); every #1237 acceptance band passes and is tested; stays 🟡 (no Lightroom comparison yet, CPU tick over the 2 ms budget) |
+| 2026-10-12 | minor | LR-EDIT-EFFECTS-DEHAZE and LRC-DEV-PROCESS: process V3's Dehaze landed (haze map, CPU and GPU, #1237); the row stays 🟡 until it is compared with Lightroom, and V1 / V2 keep the old Dehaze |
+| 2026-10-12 | minor | LRC-DEV-PROCESS: process V3 added and made the latest, for the new Dehaze (#1237); the row no longer says only V1 exists |
+| 2026-10-12 | minor | LR-EDIT-EFFECTS-DEHAZE ✅ → 🟡: far stronger than Lightroom's and no guided refinement (#1237); a V3 dehaze is in progress |
 | 2026-10-11 | minor | LR-MERGE-HDR: HDR and panorama merges of raws without colour matrices (CR2, NEF, ARW…) write the colour they open with as DNG tags (issue #965); status unchanged |
 | 2026-10-12 | minor | LR-META-XMP: Read Metadata from File no longer auto-writes the sidecar it has just read, which added `lc:settings` and hid another app's later `crs:` edits (#934); status unchanged (✅) |
 | 2026-10-12 | patch | LR-IMP-CAMERA-COVERAGE: CR2 white level from the active area, not the saturated masked rows above it (issue #1272); status unchanged (🟡) |

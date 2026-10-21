@@ -1,6 +1,6 @@
 # Gaps: where LightCraft falls short of Lightroom
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-15 · **Change:** minor (gap 15: Print Page Options — page numbers, page info, crop marks)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-18 · **Change:** minor (gap 30: Dehaze on older edits, process V4's haze-map Dehaze on top of V3's (#1237); gap 15: Print Page Options — page numbers, page info, crop marks)
 
 Every known shortfall, one entry each, ranked by user impact (how many Lightroom users hit it, and
 how hard it blocks them), then by effort. **Agents pick work from the top** (the first entry nobody is
@@ -17,7 +17,7 @@ Hours are Opus 5.5 agent wall-clock hours (see [target-app-parity.md](target-app
 |---:|---|---|---|---:|---|
 | 1 B | **Camera colour is estimated, not measured** (LR-PROF-CAMERACOLOR). Raws start from a per-file fit to the camera JPEG, 5 bundled profiles or 52 spectral matrices (plus same-sensor bodies, e.g. the X-T30 through the X-T3); others use a neutral matrix (a black-and-white camera JPEG gives its tone curve only, #577; dark JPEG tones also guide the toe, #1307) | ΔE vs camera JPEG 2.9–10 after fitting (raw-parity.md); 0 chart-calibrated models vs 1,500 Adobe Standard profiles | every raw shooter sees colour that is close but not Lightroom's; some get neutral-matrix colour | 50–90 | [raw-parity](raw-parity.md#colour) |
 | 2 B | **CR3 variants no public file uses** (LR-IMP-FORMATS): `crx.rs` refuses vertical-tile C-RAW, partial-subband and other plane coding, multi-tile 0x200 and adaptive low-frequency gains, and those files fall back to the preview. All 110 CC0 CR3s on raw.pixls.us (31 folders) decode from sensor data, so none of these variants has a public sample; 26 CR3 bodies are verified (M50 / R100 / R8 exact, R5 Mark II pinned, 22 more pinned on one CC0 file each and checked against the camera JPEG, [cr3.md](cr3.md#further-bodies-one-cc0-file-each)). HEIF stills are `.HIF` files, not CR3; no CR3 sRAW / mRAW sample exists | measured: Canon's share whose camera fully works 73% → 94% (raw-parity.md); 18 of 22 popular Canon bodies write CR3, all 18 now verified | +0.3 points of photographers; the variants surface only as user files that open as a preview | 10–25 | [raw-parity](raw-parity.md#remaining-work-ranked-by-photographers-unlocked-per-hour) |
-| 3 B | **Render fidelity unmeasured** (LR-BEHAV-RENDER-FIDELITY): tone, highlights, texture / clarity / dehaze, NR and sharpening are tuned by eye | no side-by-side suite; a retune needs a new process version (only V1 exists) | edits imported from Lightroom look different; the look "isn't Lightroom's" | 30–60 | [raw-parity](raw-parity.md), [process-versions](process-versions.md) |
+| 3 B | **Render fidelity unmeasured** (LR-BEHAV-RENDER-FIDELITY): tone, highlights, texture / clarity / dehaze, NR and sharpening are tuned by eye | no side-by-side suite; a retune needs a new process version (V1, V2, V3 and V4 exist; see [process-versions](process-versions.md)) | edits imported from Lightroom look different; the look "isn't Lightroom's" | 30–60 | [raw-parity](raw-parity.md), [process-versions](process-versions.md) |
 | 4 | ~~Original-pixel detail at 100%~~ (LR-VIEW-ZOOM): closed 2026-10-12, see Closed recently | checklist row ✅ | — | 0 | [ui-parity](ui-parity.md) |
 | 5 B | **AI masks: Subject, Sky, People, Background, Landscape** are heuristics; Object / Describe run SAM 3 but its download has no mirror configured | `crates/segment`; ai-masks.md; MASK rows 67% | masking is how most Lightroom users edit today | 40–70 + model decision | [target-app-parity](target-app-parity.md#ai) |
 | 6 B | **Compressed ORF** (every Olympus / OM body since ~2008) | measured: 66 of 78 Olympus / OM models preview-only; `orf.rs` refuses; OM bucket 3% of photographers, 3% of them fully work | +2.6 points; best gain per hour of any raw gap (~0.2) | 8–15 | [raw-parity](raw-parity.md#compressed-orf-a-clean-room-starting-point) (the two Olympus patents that describe the method) |
@@ -44,6 +44,7 @@ Hours are Opus 5.5 agent wall-clock hours (see [target-app-parity.md](target-app
 | 27 | **Windows / Linux runtime coverage**: Windows installer UI unverified on Windows (#79); GPU path proven on Apple and on one AMD GPU on Linux (Radeon 8060S, Vulkan); NVIDIA, Intel and DX12 unverified; the Linux riscv64 tarball (new in 0.6.0, #844) is cross-compiled and never run beyond a QEMU smoke test | ROADMAP, issues, `release.yml` | non-Mac users find bugs first | 13–27 | [hardware-parity](hardware-parity.md) |
 | 29 | **HDR merge leftovers** (LR-MERGE-HDR): AI Denoise doesn't run on merged (linear) DNGs; JPEG brackets are treated as linear (no camera response curve); every frame is held as 32-bit float, ~0.86 GB per 67 MP frame (half-float frames would halve it) | tested on Sony A7R VI brackets 2026-10-14 ([merge.md](merge.md)); Lightroom's Denoise supports HDR DNGs | HDR shooters who denoise their merges, merge JPEGs, or merge 7+ frames of high-resolution raws on 16 GB machines | 10–20 (+ denoise linear-RGB contract, gap 11) | [merge](merge.md) |
 | 28 | **Small Classic shortcuts and keys**: rating `[` `]`, flag cycling, filter-bar keys, F1 help, panel keys (Tab, F5, F8; F6 and F7 toggle the filmstrip and the left panel) | [ui-parity](ui-parity.md#shortcuts) | Classic muscle memory | 4–8 | [ui-parity](ui-parity.md) |
+| 30 | **Dehaze on older edits and against Lightroom** (LR-EDIT-EFFECTS-DEHAZE, #1237): process V4's Dehaze (guided dark-channel haze map of the whole frame, gentle recovery, soft veil when negative) is in and meets every #1237 acceptance band; photos edited under V1 / V2 keep the old one (V3 has #1283's patch-minimum dark channel) (+20–30 darkens the whole photo, crushes shadows, dark halos from +10) until Update to Current Process; V4 is not yet compared with Lightroom renders, and its CPU tick (~3 ms at 2.5 MP) is over the 2 ms budget | measured: V4 +50 −0.24..−0.26 EV median, +100 −0.53..−0.73, no extra black, no halo, grey hue drift 1.1°, −100 +0.66..+0.85 EV on fog (V1 +100: −2.03 EV, 6.5 % black, 55 px halo); checklist row 🟡 | photos edited with Dehaze before V4, and anyone matching Lightroom's look | 2–4 | [process-versions](process-versions.md) |
 
 Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform work they need around them,
 **~340–600 h** to beta (incl. 40–80 h for the ~92 open core-path user issues) (see [target-app-parity.md](target-app-parity.md#stage)).
@@ -55,7 +56,7 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 - **File format:** 2, 6, 7, 10, 13, 20, 25 (raw ones in [raw-parity.md](raw-parity.md))
 - **Hardware:** 14, 17, 22, 27
 - **Localization:** 21
-- **Quality / fidelity:** 1, 3
+- **Quality / fidelity:** 1, 3, 30
 - **Stability and platforms:** 9, 26, 27
 
 ## Closed recently (kept for calibration)
@@ -77,6 +78,7 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-18 | minor | Gap 30 (was 29 on its branch; 29 is now the HDR merge): process V4 carries the haze-map Dehaze on top of V3's patch-minimum one (#1283); V1 / V2 / V3 edits keep theirs; gap 3 lists V1–V4 |
 | 2026-10-18 | patch | Gap 1: six X-Trans CMOS 4 Fujifilm bodies (X-T30 …) take the X-T3's spectral matrices instead of the neutral matrix |
 | 2026-10-15 | minor | Gap 15 shrinks: the Page panel's Page Options (Page Numbers, Page Info, Crop Marks) print on Single Image and Contact Sheet pages; identity plate, watermark, photo info, Cut Guides, direct printing and JPEG output remain |
 | 2026-10-14 | minor | Gap 26: at 100k photos stack and album lookups are indexed, so an "In a Stack" or "Album" smart album counts in ~14 ms (was 0.6–2.7 s); open time unchanged |
@@ -91,6 +93,10 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 | 2026-10-12 | minor | Gap 20 shrinks: Mamiya MEF decodes (`vendor/mef.rs`) and is imported; gap 10 count 240 → 241 |
 | 2026-10-12 | minor | Gap 20 shrinks: Epson ERF decodes (`vendor/erf.rs`), 3 bodies verified; gap 10 count 237 → 240 |
 | 2026-10-13 | minor | Gap 28: F6 (filmstrip) and F7 (left panel) are bound, so the entry no longer lists them as missing; hours unchanged |
+| 2026-10-12 | minor | Gap 29: V3 Dehaze tuned and measured (every #1237 band met, gentler negatives, no horizon band); stays open for the Lightroom comparison, V1 / V2 edits and the CPU tick; 3–6 h → 2–4 h |
+| 2026-10-12 | minor | Gap 29: process V3's Dehaze landed (CPU and GPU); retitled to what remains: V1 / V2 edits keep the old Dehaze, no Lightroom comparison yet; 8–15 h → 3–6 h |
+| 2026-10-12 | minor | Gap 29: process V3 added (the latest) to carry the new Dehaze; it renders like V2 until that lands. Gap 3 lists V1–V3 |
+| 2026-10-12 | minor | Gap 29 added: Dehaze far stronger than Lightroom's, no guided refinement (#1237; V3 dehaze in progress); gap 3's stale "only V1 exists" fixed (V1 and V2 exist) |
 | 2026-10-11 | minor | Gap 10 shrinks: Leica Q3 verified by a recorded check of 38 private DNGs (236 models verified; Leica 14); gap not closed |
 | 2026-10-12 | minor | Camera-look deep shadows follow the JPEG toe (#1307); camera calibration remains partial |
 | 2026-10-12 | minor | Gap 23 (accessibility): crop handles, spots, gradient handles and mask pins by keyboard; 4–8 h → 2–4 h; gap not closed |

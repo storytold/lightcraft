@@ -22,6 +22,7 @@ const MODULES: &[Module] = &[
             ("base_p", false, "f32"),
             ("clar", false, "f32"),
             ("tex", false, "f32"),
+            // V1 / V2: the dehaze dark plane; V4: the haze map's a / b coefficients (`HAS_HAZE`)
             ("dark", false, "f32"),
             ("masks", false, "f32"),
             ("aux", false, "f32"),
@@ -32,7 +33,7 @@ const MODULES: &[Module] = &[
     Module {
         src: include_str!("wgsl/blur.wgsl"),
         bindings: &[("src", false, "f32"), ("dst", true, "f32")],
-        entries: &["box_h", "box_v", "median_h", "median_v"],
+        entries: &["box_h", "box_v", "median_h", "median_v", "min_h", "min_v"],
     },
     Module {
         src: include_str!("wgsl/resize.wgsl"),
@@ -259,6 +260,24 @@ fn constants() -> String {
     use lightcraft_pipeline::masks::{AUTO_TOL_CHROMA, AUTO_TOL_EV};
     s += &format!("const AUTO_TOL_EV: f32 = {AUTO_TOL_EV:?};\nconst AUTO_TOL_CHROMA: f32 = {AUTO_TOL_CHROMA:?};\n");
     s += &format!("const SHADOW_TINT_K: f32 = {:?};\n", lightcraft_pipeline::colorops::SHADOW_TINT);
+    {
+        use lightcraft_pipeline::haze as hz;
+        for (name, v) in [
+            ("HZ_AIR_FLOOR", hz::AIR_FLOOR),
+            ("HZ_G_MAX", hz::G_MAX),
+            ("HZ_OMEGA", hz::OMEGA),
+            ("HZ_OMEGA_POWER", hz::OMEGA_POWER),
+            ("HZ_T_FLOOR", hz::T_FLOOR),
+            ("HZ_SKY_K", hz::SKY_K),
+            ("HZ_CHROMA_KEEP", hz::CHROMA_KEEP),
+            ("HZ_VEIL", hz::VEIL),
+            ("HZ_VEIL_BASE", hz::VEIL_BASE),
+            ("HZ_VEIL_TOP", hz::VEIL_TOP),
+        ] {
+            s += &format!("const {name}: f32 = {v:?};\n");
+        }
+        s += &format!("const HZ_COMP_N: u32 = {}u;\n", hz::COMP_N);
+    }
     for (i, h) in GRAIN_HASH.iter().enumerate() {
         s += &format!("const GRAIN_H{i}: u32 = {h}u;\n");
     }

@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use lightcraft_catalog::{Photo, PhotoId, Source};
-use lightcraft_develop::{DevelopSettings, ProcessVersion};
+use lightcraft_develop::{DevelopSettings, Process, ProcessVersion};
 use serde_json::json;
 
 use crate::{EngineError, Session};
@@ -261,4 +261,23 @@ fn update_to_current_process_checks_named_photos_not_the_selection() {
     }
     // `ids: null` names nothing: the selection decides (and there is none)
     assert!(matches!(s.execute("develop.updateProcess", &json!({"ids": null})), Err(EngineError::Disabled(..))));
+}
+
+/// Issue #1237: V4 (the new Dehaze) is the latest; photos edited on V1 and V2 move to it only with
+/// Update to Current Process, keep their sliders, and undo puts each back on its own process.
+#[test]
+fn v1_and_v2_photos_update_to_v4() {
+    assert_eq!(ProcessVersion::LATEST, Process::V4.version());
+    let mut s = Session::with_demo();
+    let ids: Vec<PhotoId> = s.visible_cloned().into_iter().take(3).collect();
+    let (v1, v2) = (Process::V1.version(), Process::V2.version());
+    put(&mut s, ids[0], v1, 0.5);
+    put(&mut s, ids[1], v2, -0.5);
+    select(&mut s, &ids);
+    let r = s.execute("develop.updateProcess", &json!({})).unwrap();
+    assert_eq!(r, json!({"changed": 2, "process": 4}));
+    assert_eq!(ids.iter().map(|id| process(&s, *id)).collect::<Vec<_>>(), [Process::V4.version(); 3]);
+    assert_eq!([s.develop_of(ids[0]).unwrap().light.exposure, s.develop_of(ids[1]).unwrap().light.exposure], [0.5, -0.5]);
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!([process(&s, ids[0]), process(&s, ids[1]), process(&s, ids[2])], [v1, v2, Process::V4.version()]);
 }

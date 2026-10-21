@@ -443,6 +443,20 @@ pub fn stage_bytes(stages: &StageCache) -> usize {
     }
 }
 
+/// Process V4 haze maps a view's GPU stages (kept with its [`StageCache`]) uploaded so far: one
+/// per map, not one per render (a diagnostic); 0 when it has none.
+pub fn haze_uploads(stages: &StageCache) -> u64 {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        stages.peek_extension::<GpuStages>().map(|g| g.haze_uploads()).unwrap_or(0)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = stages;
+        0
+    }
+}
+
 /// Render `src` with `s` on the GPU, reusing the device-resident stages kept with `stages` (the
 /// view's CPU stage cache). `None`: render on the CPU instead. [`try_render`] also says why.
 pub fn render(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, stages: Option<&StageCache>) -> Option<Rendered> {

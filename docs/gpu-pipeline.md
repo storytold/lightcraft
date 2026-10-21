@@ -161,8 +161,13 @@ walks the drive.
 - Stage cache: `GpuStages` mirrors `StageCache` (same keys: source identity + `geo`, `lin_key`,
   per-plane radii) and lives in it as an extension, so the UI needs no change. The uploaded source is
   kept per view. A tone / colour / exposure drag re-runs one dispatch of `finish` plus the readback.
-- One command encoder per render; the only mid-render readback is the airlight samples (dehaze, when
-  the dark channel is recomputed). Dropped buffers are recycled (exact size, ≤ 2 GB pool) once the
+- One command encoder per render; the only mid-render readback is the airlight samples (process V1 / V2 / V3
+  dehaze, when the dark channel is recomputed). Process V4's Dehaze (issue #1237) needs none: its haze
+  map is built on the CPU with the plan (a fixed proxy of the whole frame, cached per image) and the
+  `finish` kernel samples its a / b coefficients (uploaded in the `dark` slot once per map and kept
+  with the view's `GpuStages`, so a tone drag uploads nothing new) bilinearly at each
+  pixel's frame-normalised position, with the airlight and compensation LUT in the parameter block,
+  so windows and whole renders dehaze alike. Dropped buffers are recycled (exact size, ≤ 2 GB pool) once the
   thread that dropped them has submitted — allocating and zero-filling fresh 100–300 MB buffers
   per pass cost as much as the passes.
 - `LIGHTCRAFT_PROFILE=1` prints GPU stage timings (each stage is then submitted and waited for).
@@ -241,7 +246,10 @@ fresh ones. `windows_match` runs the settings cases again as a window of a 3000 
 (`RenderRequest::window`, the zoomed loupe, issue #323) plus a vignette in a corner and a spot reading
 from outside the window: the vignette geometry arrives as the `VIG_VIEW` parameter, the airlight and
 noise-reduction size come from the whole frame, and a window that spots or Auto Mask strokes grew is
-cut back after the readback. The tests skip (pass with a note) when no adapter exists.
+cut back after the readback. `v4_dehaze_matches` covers process V4's Dehaze on the hazy valley
+(−100..+100, rendered and raw sources, exposed, with the typical edit, masks added to the slider and
+clamped, Effects off, three windows of a 3000 × 2000 frame) and V1 / V2's: max 1 LSB. The tests skip
+(pass with a note) when no adapter exists.
 
 **AMD Radeon 8060S (RADV STRIX_HALO, Vulkan 1.4, Mesa 26.2.4, Linux 7.2), 2026-10-12**, the first
 non-Apple GPU verified: all 16 tests pass, 135 compared cases. 124 differ by max 1 LSB, 10 are

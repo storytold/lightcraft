@@ -550,7 +550,7 @@ fn estimate_lateral_ca_uncached(img: &Rgb32f) -> [f64; 2] {
 const PURPLE_HUES: (f32, f32) = (240.0, 360.0);
 const GREEN_HUES: (f32, f32) = (90.0, 210.0);
 
-fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
+pub(crate) fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
     let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
 }
@@ -589,7 +589,7 @@ pub fn defringe(img: &mut Rgb32f, s: &DevelopSettings, scale: f64) {
     // perceptual lightness and its local range (dilated contrast)
     let lab: Vec<[f32; 3]> = img.data.iter().map(|p| oklab_from_2020([p[0].max(0.0), p[1].max(0.0), p[2].max(0.0)])).collect();
     let l = Plane { width: w, height: h, data: lab.iter().map(|p| p[0]).collect() };
-    let (lo, hi) = (min_filter(&l, radius, false), min_filter(&l, radius, true));
+    let (lo, hi) = (lightcraft_raster::morph::min_filter(&l, radius), lightcraft_raster::morph::max_filter(&l, radius));
     let range = |lo: f64, hi: f64, span: (f32, f32)| {
         let a = span.0 + (span.1 - span.0) * (lo / 100.0) as f32;
         let b = span.0 + (span.1 - span.0) * (hi / 100.0) as f32;
@@ -621,32 +621,6 @@ pub fn defringe(img: &mut Rgb32f, s: &DevelopSettings, scale: f64) {
             *px = oklab_to_2020([ll, a * f, b * f]).map(|v| v.max(0.0));
         }
     });
-}
-
-/// Separable square min (or max) filter of radius `r`.
-fn min_filter(p: &Plane, r: usize, max: bool) -> Plane {
-    let (w, h) = (p.width, p.height);
-    let pick = |a: f32, b: f32| if max { a.max(b) } else { a.min(b) };
-    let mut tmp = Plane::new(w, h);
-    for_rows(&mut tmp.data, w, |y, row| {
-        let src = &p.data[y * w..(y + 1) * w];
-        for (x, v) in row.iter_mut().enumerate() {
-            let (a, b) = (x.saturating_sub(r), (x + r).min(w - 1));
-            *v = src[a..=b].iter().copied().fold(src[x], pick);
-        }
-    });
-    let mut out = Plane::new(w, h);
-    for_rows(&mut out.data, w, |y, row| {
-        let (a, b) = (y.saturating_sub(r), (y + r).min(h - 1));
-        for (x, v) in row.iter_mut().enumerate() {
-            let mut m = tmp.data[y * w + x];
-            for yy in a..=b {
-                m = pick(m, tmp.data[yy * w + x]);
-            }
-            *v = m;
-        }
-    });
-    out
 }
 
 #[cfg(test)]

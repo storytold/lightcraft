@@ -15,6 +15,7 @@ use lightcraft_geom::Point;
 use lightcraft_raster::Rgb32f;
 use lightcraft_raw::gaintable::{GainTableMap, SourcePlacement};
 
+use crate::geometry::Frame;
 use crate::{Plan, SourceInfo};
 use lightcraft_develop::DevelopSettings;
 
@@ -33,10 +34,14 @@ pub fn enabled(info: &SourceInfo, s: &DevelopSettings) -> bool {
 /// Multiply the resampled, not yet white-balanced source `img` (the output frame of `p`) by the
 /// local tone gain at each pixel. Blank canvas (outside a lens / perspective warp) is left alone.
 pub fn apply(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>) {
-    let Some(lt) = info.local_tone.as_deref().filter(|_| enabled(info, &p.settings)) else { return };
+    apply_frame(img, info, &p.settings, &p.frame);
+}
+
+/// [`apply`] for `img`, a resampling of the whole of `frame` (at any size) developed with `s`.
+pub fn apply_frame(img: &mut Rgb32f, info: &SourceInfo, s: &DevelopSettings, frame: &Frame) {
+    let Some(lt) = info.local_tone.as_deref().filter(|_| enabled(info, s)) else { return };
     let Some(eval) = lt.map.evaluator() else { return };
     let (w, h) = (img.width, img.height);
-    let frame = &p.frame;
     let (ow, oh) = (frame.ow.max(1e-9), frame.oh.max(1e-9));
     let o2t = frame.out_to_oriented(w, h);
     let user = frame.orient.inverse();

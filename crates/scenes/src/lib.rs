@@ -7,12 +7,14 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod haze;
 mod noise;
 mod paint;
 
 use lightcraft_raster::Rgb32f;
 use serde::Serialize;
 
+pub use haze::{HAZE_LAYOUT, HazeLayout, hazy_valley};
 pub use paint::render_srgb_linear;
 
 /// Kinds of scene the generator knows.

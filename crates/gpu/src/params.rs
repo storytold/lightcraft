@@ -4,6 +4,7 @@
 use lightcraft_develop::VignetteStyle;
 use lightcraft_pipeline::colorops::POINT_WORDS;
 use lightcraft_pipeline::finish::{FinishParams, MASK_TERMS, srgb_lut};
+use lightcraft_pipeline::haze::{COMP_N, HazeMap};
 
 /// Entries per tone-curve table (`lightcraft_pipeline::finish` builds them at this size).
 pub const CURVE_N: u32 = 1024;
@@ -26,12 +27,20 @@ const FIELDS: &[(&str, usize)] = &[
     ("CLAR", 1),
     ("TEX", 1),
     ("DEHAZE", 1),
+    ("DEHAZE_V3", 1),
     ("SHARPEN", 1),
     ("SHARPEN_MASK", 1),
     ("HAS_CLAR", 1),
     ("HAS_TEX", 1),
     ("HAS_DARK", 1),
     ("HAS_CHROMA", 1),
+    // process V4's haze map (`lightcraft_pipeline::haze`): its a / b proxy (interleaved) is bound
+    // in place of the V1 / V2 dark plane, which V4 doesn't compute
+    ("HAS_HAZE", 1),
+    ("HAZE_W", 1),
+    ("HAZE_H", 1),
+    ("HAZE_AIR", 3),
+    ("HAZE_COMP", COMP_N),
     ("OPS_IDENTITY", 1),
     ("VIBRANCE", 1),
     ("SATURATION", 1),
@@ -57,7 +66,8 @@ const FIELDS: &[(&str, usize)] = &[
     ("VIG_POWER", 1),
     ("VIG_HL", 1),
     ("VIG_STYLE", 1),
-    // the window's offset in the whole output and the whole output's size (pixels)
+    // the window's offset in the whole output and the whole output's size (pixels; the vignette
+    // and V4's haze map read it)
     ("VIG_VIEW", 4),
     ("GRAIN", 1),
     ("GRAIN_AMT", 1),
@@ -139,8 +149,9 @@ pub struct Present {
 }
 
 /// The `finish` kernel's parameter block and auxiliary table (tone LUT | chroma curve | sRGB LUT | curve LUTs |
-/// mask terms) for `fp` with `masks` (their local adjustments' terms).
-pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Present) -> (Vec<u32>, Vec<f32>) {
+/// mask terms) for `fp` with `masks` (their local adjustments' terms) and, for process V4's Dehaze,
+/// `haze`, the map whose coefficients ([`haze_coeffs`]) are bound in the `dark` slot.
+pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Present, haze: Option<&HazeMap>) -> (Vec<u32>, Vec<f32>) {
     let mut aux: Vec<f32> = fp.tone.lut().to_vec();
     aux.extend_from_slice(fp.tone.chroma_lut());
     let srgb_off = aux.len();
@@ -175,12 +186,22 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     p.f("CLAR", fp.clar);
     p.f("TEX", fp.tex);
     p.f("DEHAZE", fp.dehaze);
+    p.b("DEHAZE_V3", fp.dehaze_v3);
     p.f("SHARPEN", fp.sharpen);
     p.f("SHARPEN_MASK", fp.sharpen_mask);
     p.b("HAS_CLAR", present.clarity);
     p.b("HAS_TEX", present.texture);
     p.b("HAS_DARK", present.dark);
     p.b("HAS_CHROMA", present.chroma);
+    p.fs("VIG_VIEW", &fp.view);
+    if let Some(m) = haze {
+        let (w, h) = m.size();
+        p.b("HAS_HAZE", true);
+        p.u("HAZE_W", w as u32);
+        p.u("HAZE_H", h as u32);
+        p.fs("HAZE_AIR", &m.air);
+        p.fs("HAZE_COMP", &m.comp);
+    }
 
     let ops = &fp.ops;
     p.b("OPS_IDENTITY", ops.is_identity());
@@ -213,7 +234,6 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
         p.f("VIG_ASPECT_MIX", v.aspect_mix);
         p.f("VIG_POWER", v.power);
         p.f("VIG_HL", v.highlights);
-        p.fs("VIG_VIEW", &fp.view);
         p.u(
             "VIG_STYLE",
             match v.style {
@@ -245,4 +265,10 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
         p.fs("GRAIN_AFF", &[(a * kx) as f32, (b * ky) as f32, (c * kx) as f32, (d * ky) as f32, (e * kx) as f32, (f * ky) as f32]);
     }
     (p.0, aux)
+}
+
+/// The haze map's guided-filter coefficients, interleaved `a, b` per proxy pixel (row-major), as
+/// the `finish` kernel samples them.
+pub fn haze_coeffs(m: &HazeMap) -> Vec<f32> {
+    m.a.data.iter().zip(&m.b.data).flat_map(|(a, b)| [*a, *b]).collect()
 }

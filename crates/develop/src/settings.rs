@@ -84,17 +84,26 @@ pub enum Process {
     /// Highlights and Shadows keep the local contrast of the tones they move: their edge-aware base
     /// is taken of a fine median of log luminance (issue #632).
     V2,
+    /// Dehaze estimates haze from a patch-minimum dark channel, eases in, and never pushes a
+    /// pixel below a tenth of its darkest channel (issue #1237).
+    V3,
+    /// Dehaze estimates haze with a dark-channel prior on a fixed proxy of the whole frame (patch
+    /// minimum, guided refinement, colour airlight) and recovers it gently, so +25..+50 no longer
+    /// darkens the photo and crushes shadows (issue #1237). Without Dehaze it renders like V3.
+    V4,
 }
 
 impl Process {
     /// Every process, oldest first.
-    pub const ALL: [Process; 2] = [Process::V1, Process::V2];
-    pub const LATEST: Process = Process::V2;
+    pub const ALL: [Process; 4] = [Process::V1, Process::V2, Process::V3, Process::V4];
+    pub const LATEST: Process = Process::V4;
 
     pub const fn version(self) -> ProcessVersion {
         match self {
             Process::V1 => ProcessVersion(1),
             Process::V2 => ProcessVersion(2),
+            Process::V3 => ProcessVersion(3),
+            Process::V4 => ProcessVersion(4),
         }
     }
 }

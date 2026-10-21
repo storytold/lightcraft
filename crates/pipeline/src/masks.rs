@@ -635,6 +635,18 @@ pub fn auto_refine(r: f64) -> (f32, f32) {
 /// Guided filter of `p` steered by `guide` (He et al.), clamped to 0..1: `p`'s edges snap to the
 /// guide's.
 pub fn guided_cross(guide: &Plane, p: &Plane, sigma: f32, eps: f32) -> Plane {
+    let (ma, mb) = guided_cross_coeffs(guide, p, sigma, eps);
+    let mut q = Plane::new(p.width, p.height);
+    for i in 0..q.data.len() {
+        q.data[i] = (ma.data[i] * guide.data[i] + mb.data[i]).clamp(0.0, 1.0);
+    }
+    q
+}
+
+/// The blurred linear coefficients `(mean a, mean b)` of [`guided_cross`]: its output is
+/// `mean_a · guide + mean_b` (clamped). Kept apart so they can be applied to another guide, e.g. at
+/// another resolution (the dehaze haze map, [`crate::haze`]). `guide` and `p` have the same size.
+pub fn guided_cross_coeffs(guide: &Plane, p: &Plane, sigma: f32, eps: f32) -> (Plane, Plane) {
     use lightcraft_raster::blur::gaussian;
     let mi = gaussian(guide, sigma);
     let mp = gaussian(p, sigma);
@@ -648,12 +660,7 @@ pub fn guided_cross(guide: &Plane, p: &Plane, sigma: f32, eps: f32) -> Plane {
         a.data[i] = k;
         b.data[i] = mp.data[i] - k * mi.data[i];
     }
-    let (ma, mb) = (gaussian(&a, sigma), gaussian(&b, sigma));
-    let mut q = Plane::new(p.width, p.height);
-    for i in 0..q.data.len() {
-        q.data[i] = (ma.data[i] * guide.data[i] + mb.data[i]).clamp(0.0, 1.0);
-    }
-    q
+    (gaussian(&a, sigma), gaussian(&b, sigma))
 }
 
 /// Stamp brush strokes into `out` (max-combine; erase strokes subtract). Auto Mask strokes weight
