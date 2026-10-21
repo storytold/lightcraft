@@ -67,7 +67,10 @@ of it. Full standard: `../craftrules/standards/never-crash.md`
   label, cancel)` for its whole run. It adopts the cancel flag the job already checks (`Cancel::Flag`), or uses
   `Cancel::No` when the job can't stop. No progress window, panel or progress toast of its own; its tests assert the row.
 - **Resolution independence:** settings use normalized image coordinates and relative radii; previews and exports must match.
-- **Quality gates** before every commit: `cargo xtask ci` (fmt, clippy -D warnings, tests, layers, assets, wasm).
+- **Quality gates** before every commit: `cargo xtask ci --quick` (fmt, clippy -D warnings, the changed packages'
+  tests, layers, assets, and heif / parity / wasm when touched). GitHub runs the full `cargo xtask ci` on every PR
+  (`.github/workflows/ci.yml`); run the full one locally before merging branches (below) or when `--quick` can't see
+  the risk. One `ci` runs at a time per machine; others wait their turn (`xtask/src/ci_lock.rs`).
 - **Commits:** one task id per commit (`M2.3: local Laplacian highlights/shadows`). Only green states. End messages with the attribution line required by the environment.
 
 ## Assets: icons, images, fonts (ABSOLUTE RULE — never violate)
@@ -118,6 +121,9 @@ of it. Full standard: `../craftrules/standards/never-crash.md`
   Cut / Copy / Paste / Select All menu, Esc restoring the text, and reports how an edit ended. Give each a widget id
   that is unique on screen. Older fields still on `TextEdit` move over as they are touched.
 - Shell gotcha: `mv`/`cp` are aliased interactive here — use `/bin/mv -f` / `/bin/cp -f`.
+- New worktree: run `cargo xtask warm` first; it clones the main checkout's build so only what differs recompiles
+  (refresh the seed with `cargo xtask warm --seed` in the main checkout on a clean `main`). When `ci` warns that the
+  seed moved since the warm, run `cargo xtask warm --force`: reused tests read fixtures from the seed checkout.
 - Parallel agents: separate git worktrees and `CARGO_TARGET_DIR=target/agent-<name>`; each agent uses its **own control port** (pick one in 18000–19999, never the default 7980) and its own scratch subfolder (`<scratch>/<agent-name>/`) — never `rm -rf` shared paths; delete your target dir when done (disk is shared); keep every `Cargo.toml` valid at all times (the `crates/*` glob means one broken manifest breaks everyone).
 - Test corpora: `cargo xtask corpus --download` into `corpus/` (gitignored, CC0 only). Never commit media.
 - Shared real-file test corpora (Photoshop-authored PSDs, etc.) live in [`storytold/photocraft-corpus`](https://github.com/storytold/photocraft-corpus), explained in [craftrules `standards/test-corpora.md`](https://github.com/storytold/craftrules/blob/main/standards/test-corpora.md). Never commit large binary fixtures to this repo; fetch them pinned by commit and sha256-verified, as PhotoCraft does with `cargo xtask corpus`.

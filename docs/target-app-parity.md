@@ -1,6 +1,6 @@
 # Target-app parity: LightCraft vs Adobe Lightroom
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (RAW: 83% of Adobe's models decode, 38% verified after the camera-coverage sweep #1327) · **Target:** Adobe Lightroom Classic 15.5 (August 2026) and Lightroom 9.6 (desktop)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-19 · **Change:** patch (stability: `cargo xtask ci` runs on every PR on Linux x64) · **Target:** Adobe Lightroom Classic 15.5 (August 2026) and Lightroom 9.6 (desktop)
 
 The authoritative assessment of how close LightCraft is to Lightroom. The row-by-row checklist is
 [parity-checklist.md](parity-checklist.md); the ranked work list is [gaps.md](gaps.md); deep areas
@@ -158,7 +158,7 @@ essentials replaces its guessed 45% raw look with 84% × 0.75 (+1 point).
 | Discount | Mainstream | Essentials | Evidence |
 |---|---:|---:|---|
 | Interaction fidelity / UI clarity | ×0.95 | ×0.95 | brush live preview gaps and feathering (#517, #518); crop artefacts and limits (#731, #742, #770, #771); Compare white-balance selector (#743–#745); low-res slider previews (#330); dialogs taller than the window (#781); mouse-wheel scroll (#714) |
-| Stability on real machines | ×0.92 | ×0.92 | launch and quit crashes or silent startup failures (#250 macOS 12 Intel, #315 Windows Intel GPU, #431 Intel Mac, #260, #462, #783 Linux / Nouveau, #790 Windows installer); tests run in CI on FreeBSD only (gap 9) |
+| Stability on real machines | ×0.92 | ×0.92 | launch and quit crashes or silent startup failures (#250 macOS 12 Intel, #315 Windows Intel GPU, #431 Intel Mac, #260, #462, #783 Linux / Nouveau, #790 Windows installer); tests run in CI on Linux x64 and FreeBSD only (gap 9) |
 | File exchange with Lightroom users (mainstream) / opening files people send (essentials) | ×0.92 | ×0.95 | Adobe XMP sidecars change colours (#290), XMP CameraProfile and Upright ignored (#204, #205), catalog import fails (#599), same Light values render differently (#523, #209), no write-back to `.lrcat`; for casual users: CR3 beyond verified bodies, compressed ORF, HE NEF open as previews (#473, #485, #556), HEIC trouble (#693) |
 | **Product** | **×0.804** | **×0.830** | |
 
@@ -300,6 +300,7 @@ P2 items 12–25 h; look tuning, performance, packaging, hardening 25–45 h.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-19 | patch | Stability note: tests run in CI on Linux x64 (every PR) as well as FreeBSD; macOS and Windows remain (gap 9) |
 | 2026-10-14 | minor | Localization ~52% → ~55% (mean of the 12 key languages): de, es, fr, ja and uk catalogs filled |
 | 2026-10-12 | minor | UI/UX remaining 34–58 h → 32–54 h (canvas tools by keyboard); headline numbers unchanged |
 | 2026-10-14 | minor | Merge and HDR: merge 100% → 88% (LR-MERGE-HDR ✅ → 🟡 after testing on real 67 MP brackets; gap 29); area percentages unchanged |

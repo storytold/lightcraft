@@ -5,12 +5,15 @@
 
 mod assets;
 mod bench;
+mod ci_lock;
+mod ci_quick;
 mod ci_report;
 mod ico;
 mod layers;
 mod parity;
 mod stats;
 mod version;
+mod warm;
 mod web;
 
 use std::path::{Path, PathBuf};
@@ -30,15 +33,23 @@ commands:
   parity [--write]
                   check docs/parity-checklist.md (every cmd:/ctl: id and path it cites exists) and print the
                   Lightroom parity summary; --write refreshes the summary table in the document
+  warm [--from SEED] [--force] | warm --seed
+                  start this worktree's target/ from a copy-on-write clone of the main checkout's (or
+                  SEED's): only the packages that differ rebuild. --seed (in the seed checkout) does
+                  ci's clippy and test builds there first. See xtask/src/warm.rs
   wasm            cargo check --target wasm32-unknown-unknown for the wasm-safe crates (+ the web app)
   web [--serve [port]] [--dev]
                   build the browser app (apps/lightcraft-web) into <target>/web-site/;
                   --serve serves it on http://127.0.0.1:<port> (default 8080)
-  ci [--hardware] [--summary-md]
+  ci [--hardware] [--summary-md] [--quick [--base REF]]
                   fmt --check, clippy -D warnings, heif, test, GPU probe, parity refs, layers, assets, wasm
                   (stops at first failure); writes target/ci/report.json (machine, GPU adapters, data,
                   steps, skipped tests) and target/ci/summary.md; --hardware also runs the GPU tests on
-                  every backend with a hardware adapter; --summary-md prints the Markdown summary
+                  every backend with a hardware adapter; --summary-md prints the Markdown summary.
+                  --quick: only what the changes since the merge base with origin/main (or REF) can
+                  break: clippy, the changed packages' tests, and heif / parity / wasm when they apply.
+                  One ci runs at a time per machine; others wait (LIGHTCRAFT_CI_SLOTS=N for N at once,
+                  LIGHTCRAFT_CI_LOCK=off to skip the lock)
   corpus [--download]
                   show where test corpora live; --download fetches PngSuite and CC0 raw samples (raw.pixls.us) into corpus/ and checks their sha256
   stats [--exact] count tests and lines per crate (--exact: ask the test harness via `-- --list`)
@@ -61,6 +72,7 @@ fn main() -> ExitCode {
         Some("parity") => parity::run(&root(), rest.contains(&"--write")),
         Some("wasm") => cmd_wasm(),
         Some("web") => web::run(&rest),
+        Some("warm") => warm::run(&root(), &rest),
         Some("ci") => cmd_ci(&rest),
         Some("corpus") => cmd_corpus(rest.contains(&"--download")),
         Some("stats") => stats::run(&root(), rest.contains(&"--exact")),
@@ -110,23 +122,29 @@ pub fn cargo() -> Command {
     // tests run. Scope these overridable defaults to CI, including parity/WASM
     // subprocesses, without changing ordinary developer builds or GPU coverage.
     if std::env::args().nth(1).as_deref() == Some("ci") {
-        static JOBS: std::sync::OnceLock<(String, String)> = std::sync::OnceLock::new();
-        let (build, threads) = JOBS.get_or_init(|| {
-            let ram_mb = available_ram_mb().or_else(|| total_ram_gb().map(|gb| gb.saturating_mul(1024) / 2));
-            let jobs = ci_jobs(ram_mb, std::thread::available_parallelism().map_or(4, |n| n.get()));
-            // More test threads barely shorten CI (a few heavy tests dominate) but make the
-            // wall-clock frame-budget tests flaky on a loaded machine.
-            (jobs.to_string(), jobs.min(4).to_string())
-        });
-        for (key, value) in
-            [("CARGO_PROFILE_DEV_DEBUG", "line-tables-only"), ("CARGO_BUILD_JOBS", build.as_str()), ("RUST_TEST_THREADS", threads.as_str())]
-        {
-            if std::env::var_os(key).is_none() {
-                c.env(key, value);
-            }
-        }
+        ci_env(&mut c);
     }
     c
+}
+
+/// The build settings of `cargo xtask ci` (also used by `warm --seed`, whose builds `ci` must
+/// find fresh: a different debuginfo level is a different build).
+pub fn ci_env(c: &mut Command) {
+    static JOBS: std::sync::OnceLock<(String, String)> = std::sync::OnceLock::new();
+    let (build, threads) = JOBS.get_or_init(|| {
+        let ram_mb = available_ram_mb().or_else(|| total_ram_gb().map(|gb| gb.saturating_mul(1024) / 2));
+        let jobs = ci_jobs(ram_mb, std::thread::available_parallelism().map_or(4, |n| n.get()));
+        // More test threads barely shorten CI (a few heavy tests dominate) but make the
+        // wall-clock frame-budget tests flaky on a loaded machine.
+        (jobs.to_string(), jobs.min(4).to_string())
+    });
+    for (key, value) in
+        [("CARGO_PROFILE_DEV_DEBUG", "line-tables-only"), ("CARGO_BUILD_JOBS", build.as_str()), ("RUST_TEST_THREADS", threads.as_str())]
+    {
+        if std::env::var_os(key).is_none() {
+            c.env(key, value);
+        }
+    }
 }
 
 /// CI build jobs: one per 1.5 GB of RAM available when CI starts, at most one per CPU, 4 when it
@@ -182,6 +200,60 @@ fn total_ram_gb() -> Option<u64> {
     };
     // round to the nearest GB: "8 GB" machines report slightly less
     Some(bytes.saturating_add(1 << 29) >> 30)
+}
+
+/// `ci --quick`'s tests: build every workspace test target, then run only the test binaries of
+/// `packages`. Building with `-p` instead would resolve features per selection: different
+/// artifacts from `ci`'s and a warm worktree's (`cargo xtask warm`) workspace builds, so it would
+/// recompile ~130 crates. Doc tests are left to the full `ci`.
+fn test_selected(root: &Path, packages: &std::collections::BTreeSet<String>, skip_log: &Path) -> Result<(), String> {
+    let manifests: std::collections::BTreeMap<String, String> = metadata()?["packages"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|p| Some((p["manifest_path"].as_str()?.to_owned(), p["name"].as_str()?.to_owned())))
+        .filter(|(_, name)| packages.contains(name))
+        .collect();
+    let what = "cargo test --workspace --no-run";
+    eprintln!("$ {what} (then the test binaries of {})", packages.iter().map(String::as_str).collect::<Vec<_>>().join(", "));
+    let out = cargo()
+        .args(["test", "--workspace", "--no-run", "--message-format=json-render-diagnostics"])
+        .stderr(std::process::Stdio::inherit())
+        .output()
+        .map_err(|e| format!("{what}: failed to spawn: {e}"))?;
+    if !out.status.success() {
+        return Err(format!("{what}: exited with {}", out.status));
+    }
+    let mut binaries = Vec::new();
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        let Ok(msg) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+        if msg["reason"] != "compiler-artifact" || msg["profile"]["test"] != true {
+            continue;
+        }
+        let (Some(exe), Some(manifest)) = (msg["executable"].as_str(), msg["manifest_path"].as_str()) else { continue };
+        if let Some(name) = manifests.get(manifest) {
+            binaries.push((name.clone(), manifest.to_owned(), exe.to_owned()));
+        }
+    }
+    if binaries.is_empty() {
+        println!("no test binaries in {}", packages.iter().map(String::as_str).collect::<Vec<_>>().join(", "));
+        return Ok(());
+    }
+    let mut failed = Vec::new();
+    for (name, manifest, exe) in &binaries {
+        let dir = Path::new(manifest).parent().unwrap_or(root);
+        let mut c = Command::new(exe);
+        c.current_dir(dir).env("CARGO_MANIFEST_DIR", dir).env("CARGO_PKG_NAME", name).env(ci_report::SKIP_LOG_ENV, skip_log);
+        if std::env::var_os("RUST_TEST_THREADS").is_none() {
+            // as the cargo runs of ci (`cargo()`): more threads make the frame-budget tests flaky
+            c.env("RUST_TEST_THREADS", std::thread::available_parallelism().map_or(4, |n| n.get()).min(4).to_string());
+        }
+        let file = Path::new(exe).file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
+        if run(c, &format!("{name}: {file}")).is_err() {
+            failed.push(format!("{name} ({file})"));
+        }
+    }
+    if failed.is_empty() { Ok(()) } else { Err(format!("tests failed in {}", failed.join(", "))) }
 }
 
 pub fn run(mut cmd: Command, what: &str) -> Result<(), String> {
@@ -249,7 +321,16 @@ fn wasm_set() -> Result<Vec<String>, String> {
 }
 
 fn cmd_wasm() -> Result<(), String> {
-    let set = wasm_set()?;
+    cmd_wasm_for(None)
+}
+
+/// The wasm check of the wasm-safe crates, or only those of them in `only` (`ci --quick`).
+fn cmd_wasm_for(only: Option<&std::collections::BTreeSet<String>>) -> Result<(), String> {
+    let set: Vec<String> = wasm_set()?.into_iter().filter(|p| only.is_none_or(|o| o.contains(p))).collect();
+    if set.is_empty() {
+        println!("wasm32-unknown-unknown check: no changed crate builds for wasm32");
+        return Ok(());
+    }
     let mut results = Vec::new();
     for pkg in &set {
         let mut c = cargo();
@@ -268,10 +349,41 @@ fn cmd_wasm() -> Result<(), String> {
 fn cmd_ci(args: &[&str]) -> Result<(), String> {
     let hardware = args.contains(&"--hardware");
     let print_md = args.contains(&"--summary-md");
-    if let Some(other) = args.iter().find(|a| !matches!(**a, "--hardware" | "--summary-md")) {
+    let quick = args.contains(&"--quick");
+    let base_at = args.iter().position(|a| *a == "--base");
+    let base = base_at.map(|i| args.get(i + 1).copied().ok_or("ci: --base needs a ref")).transpose()?;
+    let unknown = args
+        .iter()
+        .enumerate()
+        .find(|(i, a)| !matches!(**a, "--hardware" | "--summary-md" | "--quick" | "--base") && base_at.is_none_or(|b| *i != b + 1));
+    if let Some((_, other)) = unknown {
         return Err(format!("ci: unknown option `{other}`\n\n{USAGE}"));
     }
+    if base.is_some() && !quick {
+        return Err("ci: --base only applies to --quick".into());
+    }
     let root = root();
+    let command = std::iter::once("cargo xtask ci").chain(args.iter().copied()).collect::<Vec<_>>().join(" ");
+    // held until ci returns: one run at a time per machine (ci_lock.rs)
+    let _slot = ci_lock::acquire(&root, &command)?;
+    // a warmed target whose seed has moved: said at the start and again after the summary
+    let seed_drift = warm::seed_drift(&root);
+    if let Some(w) = &seed_drift {
+        eprintln!("{w}");
+    }
+    let plan = if quick {
+        let (base, files) = ci_quick::changed_files(&root, base)?;
+        let plan = ci_quick::plan(&files, &ci_quick::packages(&root, &metadata()?), base);
+        let packages: Vec<&str> = plan.packages.iter().map(String::as_str).collect();
+        eprintln!("=== ci --quick: {} changed file(s) since {} ===", plan.files, plan.base);
+        eprintln!("  packages: {}", if packages.is_empty() { "none".to_owned() } else { packages.join(", ") });
+        if plan.workspace_wide {
+            eprintln!("  a workspace-wide file changed: testing every package");
+        }
+        Some(plan)
+    } else {
+        None
+    };
     let report_dir = ci_report::prepare(&root)?;
     let started = std::time::Instant::now();
     let started_unix = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
@@ -296,6 +408,16 @@ fn cmd_ci(args: &[&str]) -> Result<(), String> {
     };
 
     type Step<'a> = (&'static str, Box<dyn Fn() -> Result<(), String> + 'a>);
+    // `--quick`: which steps apply (all of them in a full run) and the packages to test
+    let wants = |step: &str| match &plan {
+        None => true,
+        Some(p) => match step {
+            "clippy" | "test" | "wasm" => p.rust(),
+            "heif" => p.heif,
+            "parity" => p.parity,
+            _ => true,
+        },
+    };
     let mut steps: Vec<Step> = vec![
         (
             "fmt",
@@ -325,8 +447,15 @@ fn cmd_ci(args: &[&str]) -> Result<(), String> {
                 test(&["test", "-p", "lightcraft-engine", "--lib", "--features", "lightcraft-codecs/heif", "heic"], "heif")
             }),
         ),
-        ("test", Box::new(|| test(&["test", "--workspace"], "test"))),
+        (
+            "test",
+            Box::new(|| match &plan {
+                Some(p) if !p.workspace_wide => test_selected(&root, &p.packages, &ci_report::skip_log(&root, "test")),
+                _ => test(&["test", "--workspace"], "test"),
+            }),
+        ),
     ];
+    steps.retain(|(name, _)| wants(name));
     if hardware {
         steps.push((
             "gpu-backends",
@@ -360,10 +489,17 @@ fn cmd_ci(args: &[&str]) -> Result<(), String> {
             }),
         ));
     }
-    steps.push(("parity", Box::new(|| parity::run(&root, false))));
+    if wants("parity") {
+        steps.push(("parity", Box::new(|| parity::run(&root, false))));
+    }
     steps.push(("layers", Box::new(cmd_layers)));
     steps.push(("assets", Box::new(|| assets::run(&root))));
-    steps.push(("wasm", Box::new(cmd_wasm)));
+    if wants("wasm") {
+        match plan.as_ref().filter(|p| !p.workspace_wide) {
+            Some(p) => steps.push(("wasm", Box::new(|| cmd_wasm_for(Some(&p.packages))))),
+            None => steps.push(("wasm", Box::new(cmd_wasm))),
+        }
+    }
 
     let mut results = Vec::new();
     let mut failure = None;
@@ -373,7 +509,7 @@ fn cmd_ci(args: &[&str]) -> Result<(), String> {
         let r = f();
         let status = if r.is_ok() { "ok" } else { "fail" };
         results.push(serde_json::json!({"name": name, "status": status, "seconds": t.elapsed().as_secs_f64()}));
-        if *name == "test" {
+        if *name == "test" && plan.is_none() {
             // right after the workspace tests, before parity and wasm build other feature sets
             probe();
         }
@@ -383,7 +519,8 @@ fn cmd_ci(args: &[&str]) -> Result<(), String> {
         }
     }
     if gpu.borrow().is_null() {
-        *gpu.borrow_mut() = serde_json::json!({"error": "not probed: the test step did not run"});
+        let why = if plan.is_some() { "not probed: --quick" } else { "not probed: the test step did not run" };
+        *gpu.borrow_mut() = serde_json::json!({"error": why});
     }
     let done: Vec<&str> = steps.iter().take(results.len()).map(|(n, _)| *n).collect();
     match &failure {
@@ -407,7 +544,8 @@ fn cmd_ci(args: &[&str]) -> Result<(), String> {
     let ram_mb = available_ram_mb();
     let report = serde_json::json!({
         "schema": ci_report::SCHEMA,
-        "command": std::iter::once("cargo xtask ci").chain(args.iter().copied()).collect::<Vec<_>>().join(" "),
+        "command": command,
+        "quick": plan.as_ref().map(|p| serde_json::json!({"base": p.base, "files": p.files, "packages": p.packages, "workspace_wide": p.workspace_wide})),
         "result": if failure.is_some() { "fail" } else { "pass" },
         "failed_step": failure.as_ref().map(|(n, _)| *n),
         "started_unix": started_unix,
@@ -432,6 +570,9 @@ fn cmd_ci(args: &[&str]) -> Result<(), String> {
     }
     if print_md {
         println!("\n{md}");
+    }
+    if let Some(w) = &seed_drift {
+        eprintln!("\n{w}");
     }
     match failure {
         Some((name, _)) => Err(format!("ci failed at `{name}`")),

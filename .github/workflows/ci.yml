@@ -1,0 +1,70 @@
+# The quality gate (`cargo xtask ci`: fmt, clippy, heif, tests, parity, layers, assets, wasm) on
+# every pull request and every push to main, so the full run happens here rather than on the
+# machine of everyone with a branch open. Locally, `cargo xtask ci --quick` checks what a branch's
+# changes can break in a few minutes; this job is the merge gate.
+#
+# Linux only: macOS / Windows test jobs are #1148. Standard GitHub-hosted runner (free for public
+# repositories), never a larger one.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # superseded PR pushes only: every push to main keeps its own full run
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # a fresh build every run: incremental state is only overhead, and it bloats the cache
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+  # one job per runner: the machine-wide CI lock (xtask/src/ci_lock.rs) has nothing to wait for
+  LIGHTCRAFT_CI_LOCK: "off"
+
+jobs:
+  xtask-ci:
+    name: cargo xtask ci (Linux x86_64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+      CRAFT_FONTS_REQUIRED: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # the font build input, so the Japanese and Chinese font tests run (they skip without it)
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: storytold/craft-fonts
+          ref: 3d9ab3a132ed0eff457e424226a435a901da30d3 # as freebsd.yml; bump deliberately
+          path: craft-fonts
+          persist-credentials: false
+      - name: Install system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      # dependencies only (rust-cache drops the workspace's own artifacts), saved from main and
+      # restored by pull requests
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: ci
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: cargo xtask ci
+        run: cargo xtask ci
+      - name: Job summary
+        if: ${{ !cancelled() }}
+        run: cat target/ci/summary.md >> "$GITHUB_STEP_SUMMARY" || true

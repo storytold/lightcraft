@@ -399,7 +399,25 @@ cargo run --release -p lightcraft -- --control 7980     # with the automation ch
 cargo xtask web --serve                                 # the same app in the browser: http://127.0.0.1:8080/
 cargo run --release -p lightcraft-cli -- render photo.jpg -o out.jpg --set light.exposure=0.5
 cargo xtask ci                                          # fmt, clippy, HEIF, tests, parity, layers, assets, WASM
+cargo xtask ci --quick                                  # only what your branch's changes can break (minutes)
 ```
+
+`cargo xtask ci --quick` compares with the merge base of `origin/main` (`--base REF` for another)
+and runs fmt, clippy, the tests of the changed packages, layers and assets, plus HEIF, parity and
+the wasm check when the changes touch them; a change to `Cargo.toml`, `Cargo.lock` or the lint
+config tests everything. GitHub runs the full `cargo xtask ci` on every pull request
+(`.github/workflows/ci.yml`). Only one `ci` runs at a time per machine: a second one, from another
+worktree say, waits for the first and names it, since several at once take longer in total than in
+turn. `LIGHTCRAFT_CI_SLOTS=2` allows two; `LIGHTCRAFT_CI_LOCK=off` skips the lock.
+
+**New worktrees:** `cargo xtask warm` starts a worktree's `target/` from a copy-on-write clone of the
+main checkout's (macOS APFS, Linux reflinks: seconds, no extra disk), so the first build recompiles
+only the packages that differ from it, not all of LightCraft (sccache can't share the workspace's
+own crates between checkouts). Keep the main checkout on a clean `main` and fill it with
+`cargo xtask warm --seed` (ci's clippy and test builds). The clone waits for and holds the CI lock, so
+it never copies a `ci` or `warm --seed` build in progress. Reused crates read files through the seed's
+`CARGO_MANIFEST_DIR`, so `warm` records the seed's commit and `cargo xtask ci` warns when the seed
+has moved since (re-warm with `cargo xtask warm --force`); details in `xtask/src/warm.rs`.
 
 CI defaults to line-table debug information and one build job per 1.5 GB of RAM
 available when it starts (at most one per CPU; 4 if memory can't be read), so an
