@@ -770,3 +770,29 @@ fn denoise_serve_runs_tiles_for_another_computer() {
     let _ = child.wait();
     let _ = std::fs::remove_dir_all(&models);
 }
+
+#[test]
+fn mcp_refuses_automation_roots_with_connect() {
+    let o = Command::new(BIN)
+        .args(["mcp", "--connect", "127.0.0.1:7980", "--automation-read-root", "C:\\"])
+        .output()
+        .unwrap();
+    assert!(!o.status.success());
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(err.contains("--automation-read-root and --automation-write-root confine the in-process server; a running app is not confined by them, so drop --connect"), "{err}");
+}
+
+#[test]
+fn mcp_validates_automation_root_flags() {
+    // Missing argument value
+    let o = Command::new(BIN).args(["mcp", "--automation-read-root"]).output().unwrap();
+    assert!(!o.status.success());
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(err.contains("--automation-read-root needs a folder"), "{err}");
+
+    // Non-existent directory
+    let o = Command::new(BIN).args(["mcp", "--automation-read-root", "non_existent_dir_12345"]).output().unwrap();
+    assert!(!o.status.success());
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(err.contains("cannot open the automation read root"), "{err}");
+}

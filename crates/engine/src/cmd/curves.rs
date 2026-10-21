@@ -312,7 +312,7 @@ fn import_presets(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let (mut imported, mut failed) = (Vec::new(), Vec::new());
     for f in &paths {
-        match std::fs::read(f).map_err(|e| e.to_string()).and_then(|b| parse_file(&b)) {
+        match crate::file_access::check_read(f).map_err(|e| e.to_string()).and_then(|_| std::fs::read(f).map_err(|e| e.to_string())).and_then(|b| parse_file(&b)) {
             Ok(list) => {
                 for mut preset in list {
                     preset.name = preset.name.trim().to_string();

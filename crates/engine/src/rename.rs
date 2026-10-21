@@ -350,6 +350,7 @@ pub(crate) trait MoveFs {
     /// Content observed in a packet, independent of its pathname or inode. Model volumes
     /// override this; disk implementations stream a bounded buffer without retaining the XML.
     fn packet_version(&self, path: &Path) -> std::io::Result<PacketVersion> {
+        crate::file_access::check_read(path).map_err(|e| std::io::Error::new(std::io::ErrorKind::PermissionDenied, e))?;
         use std::io::Read;
         let mut file = std::fs::File::open(path)?;
         let mut hash = lightcraft_preview::Hasher128::new();
@@ -415,6 +416,8 @@ impl MoveFs for RealFs {
     }
 
     fn rename_no_replace(&self, a: &Path, b: &Path) -> std::io::Result<()> {
+        crate::file_access::check_write(a).map_err(|e| std::io::Error::new(std::io::ErrorKind::PermissionDenied, e))?;
+        crate::file_access::check_write(b).map_err(|e| std::io::Error::new(std::io::ErrorKind::PermissionDenied, e))?;
         if self.exists(b) {
             return Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, format!("{} already exists", b.display())));
         }
@@ -433,6 +436,8 @@ impl MoveFs for RealFs {
     }
 
     fn copy_no_replace(&self, a: &Path, b: &Path) -> std::io::Result<()> {
+        crate::file_access::check_read(a).map_err(|e| std::io::Error::new(std::io::ErrorKind::PermissionDenied, e))?;
+        crate::file_access::check_write(b).map_err(|e| std::io::Error::new(std::io::ErrorKind::PermissionDenied, e))?;
         if self.exists(b) {
             return Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, format!("{} already exists", b.display())));
         }
@@ -461,6 +466,7 @@ impl MoveFs for RealFs {
     }
 
     fn remove_file(&self, p: &Path) -> std::io::Result<()> {
+        crate::file_access::check_write(p).map_err(|e| std::io::Error::new(std::io::ErrorKind::PermissionDenied, e))?;
         std::fs::remove_file(p)
     }
 
@@ -1052,6 +1058,14 @@ impl Session {
     /// (all or nothing), then commit one undoable op, labelled `label(count)`, that points the
     /// photos (and their virtual copies) at the new paths. Undo moves the files back.
     pub(crate) fn apply_file_plans(&mut self, fs: &dyn MoveFs, plans: &[RenamePlan], label: &dyn Fn(usize) -> String) -> Result<usize> {
+        for plan in plans {
+            if let Some(ref from) = plan.from_path {
+                crate::file_access::check_write(from).map_err(EngineError::Other)?;
+            }
+            if let Some(ref to) = plan.to_path {
+                crate::file_access::check_write(to).map_err(EngineError::Other)?;
+            }
+        }
         // A partly completed rename can already have the requested photo name. Repair
         // its sidecars before treating that empty move list as a successful retry.
         self.repair_sidecars_with(fs)?;

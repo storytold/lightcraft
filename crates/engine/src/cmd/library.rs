@@ -99,6 +99,16 @@ pub fn import_params(s: &Session, p: &Value) -> Result<ImportRequest> {
         convert_dng: bool_or(p, "dng", false),
         local: bool_or(p, "local", false),
     };
+    if matches!(mode, crate::import::ImportMode::Copy | crate::import::ImportMode::Move) {
+        if let Some(dest) = str_param(p, "destination").filter(|d| !d.trim().is_empty()) {
+            crate::file_access::check_write(dest).map_err(crate::EngineError::Other)?;
+        }
+    }
+    if mode == crate::import::ImportMode::Move {
+        for path in &paths {
+            crate::file_access::check_write(path).map_err(crate::EngineError::Other)?;
+        }
+    }
     let album_name = str_param(p, "albumName").map(str::trim).filter(|n| !n.is_empty()).map(str::to_string);
     Ok(ImportRequest { paths, opts, album, album_name })
 }
@@ -1487,7 +1497,11 @@ pub fn specs() -> Vec<CommandSpec> {
         "{path: .lrcat} → {photos, collections, missing, warnings}; read-only, no Lightroom required",
         always, |_, p| {
             let path = str_param(p,"path").ok_or_else(|| bad("library.inspectLightroom","missing path"))?;
-            let data = crate::lightroom_catalog::read(std::path::Path::new(path)).map_err(|e| bad("library.inspectLightroom",e))?;
+            let catalog_path = std::path::Path::new(path);
+            crate::file_access::check_read(catalog_path).map_err(|e| bad("library.inspectLightroom", e))?;
+            let wal_path = std::path::PathBuf::from(format!("{}-wal", catalog_path.display()));
+            crate::file_access::check_read(&wal_path).map_err(|e| bad("library.inspectLightroom", e))?;
+            let data = crate::lightroom_catalog::read(catalog_path).map_err(|e| bad("library.inspectLightroom",e))?;
             Ok(json!({"photos":data.photos.len(),"collections":data.collections.iter().filter(|r|r.get("systemOnly").and_then(Value::as_f64).unwrap_or(0.0)==0.0).count(),"missing":data.photos.iter().filter(|p| !p.original_is_file()).map(|p|&p.path).collect::<Vec<_>>(),"warnings":data.warnings}))
         }),
         cmd!(
@@ -1499,7 +1513,11 @@ pub fn specs() -> Vec<CommandSpec> {
             always,
             |s, p| {
                 let path = str_param(p, "path").ok_or_else(|| bad("library.importLightroom", "missing path"))?;
-                crate::lightroom_catalog::import(s, std::path::Path::new(path), bool_or(p, "updateExisting", false))
+                let catalog_path = std::path::Path::new(path);
+                crate::file_access::check_read(catalog_path).map_err(|e| bad("library.importLightroom", e))?;
+                let wal_path = std::path::PathBuf::from(format!("{}-wal", catalog_path.display()));
+                crate::file_access::check_read(&wal_path).map_err(|e| bad("library.importLightroom", e))?;
+                crate::lightroom_catalog::import(s, catalog_path, bool_or(p, "updateExisting", false))
             }
         ),
         cmd!(
@@ -1513,6 +1531,9 @@ pub fn specs() -> Vec<CommandSpec> {
                 let paths = strs(p, "paths");
                 if paths.is_empty() {
                     return Err(bad("library.importPreview", "no paths"));
+                }
+                for path in &paths {
+                    crate::file_access::check_read(path).map_err(|e| bad("library.importPreview", e))?;
                 }
                 let c = crate::import::scan(s, &paths);
                 let dups = c.iter().filter(|c| c.duplicate.is_some()).count();

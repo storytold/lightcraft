@@ -24,6 +24,10 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
     let mut effects = Vec::new();
     let mut effect_failed = Vec::new();
     for top in &paths {
+        if let Err(e) = crate::file_access::check_read(top) {
+            failed.push(json!([top, e]));
+            continue;
+        }
         let from_dir = std::path::Path::new(top).is_dir();
         for f in expand_preset_paths(std::slice::from_ref(top)) {
             // presets in a folder go to a group named after it (unless the file names its own)

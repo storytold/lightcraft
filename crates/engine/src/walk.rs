@@ -88,9 +88,15 @@ fn walk(root: &Path, skip: Option<&Path>, limits: Limits, mut keep: impl FnMut(&
     let mut stack: Vec<(PathBuf, usize, bool)> = vec![(root.to_path_buf(), 0, true)];
     while let Some((path, depth, is_dir)) = stack.pop() {
         if !is_dir {
+            if crate::file_access::check_read(&path).is_err() {
+                continue;
+            }
             if keep(&path) {
                 out.files.push(path);
             }
+            continue;
+        }
+        if crate::file_access::check_read(&path).is_err() {
             continue;
         }
         if skip.is_some_and(|s| path == s) || skip_canonical.as_ref().is_some_and(|s| std::fs::canonicalize(&path).is_ok_and(|p| p.starts_with(s))) {
@@ -141,6 +147,9 @@ fn walk(root: &Path, skip: Option<&Path>, limits: Limits, mut keep: impl FnMut(&
                 // a link (or a Windows junction): a folder is entered once, a file is a file
                 match std::fs::metadata(&p) {
                     Ok(m) if m.is_dir() => {
+                        if crate::file_access::check_read(&p).is_err() {
+                            continue;
+                        }
                         let Ok(c) = std::fs::canonicalize(&p) else { continue };
                         if !linked.insert(c) {
                             continue;

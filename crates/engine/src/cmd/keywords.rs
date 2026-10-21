@@ -104,6 +104,7 @@ const CAPTURE_ONE_REFUSES: [char; 4] = [';', ',', '<', '>'];
 /// A keyword list file's text: at most `MAX_LIST_BYTES`, UTF-8 (with or without a byte-order mark).
 fn read_list(path: &str) -> Result<String> {
     use std::io::Read;
+    crate::file_access::check_read(path).map_err(|e| bad("keyword.import", e))?;
     let file = std::fs::File::open(path).map_err(|e| bad("keyword.import", format!("{path}: {e}")))?;
     let mut bytes = Vec::new();
     file.take(MAX_LIST_BYTES + 1).read_to_end(&mut bytes).map_err(|e| bad("keyword.import", format!("{path}: {e}")))?;
@@ -445,6 +446,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 let mut r = json!({"keywords": file.written.len(), "captureOneRefuses": refuses, "unwritable": file.unwritable});
                 match str_param(p, "path").map(str::trim).filter(|x| !x.is_empty()) {
                     Some(path) => {
+                        crate::file_access::check_write(path).map_err(crate::EngineError::Other)?;
                         std::fs::write(path, &file.text).map_err(|e| crate::EngineError::Other(format!("{path}: {e}")))?;
                         r["path"] = json!(path);
                     }

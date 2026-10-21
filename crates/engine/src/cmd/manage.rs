@@ -174,6 +174,14 @@ pub fn specs() -> Vec<CommandSpec> {
             |s, p| {
                 let (ids, template, start) = rename_args(s, p, "photo.rename")?;
                 let plans = s.plan_rename(&ids, &template, start);
+                for plan in &plans {
+                    if let Some(ref from) = plan.from_path {
+                        crate::file_access::check_write(from).map_err(|e| bad("photo.rename", e))?;
+                    }
+                    if let Some(ref to) = plan.to_path {
+                        crate::file_access::check_write(to).map_err(|e| bad("photo.rename", e))?;
+                    }
+                }
                 let n = s.apply_rename(&plans)?;
                 Ok(json!({"renamed": n, "plans": plans}))
             }
