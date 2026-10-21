@@ -761,6 +761,10 @@ pub struct RenderJob {
     /// A face tile that can be cut from the raw's embedded preview, tried before `source`
     /// ([`crate::Session::face_job`]; `None` for every other job).
     pub preview_cut: Option<crate::face_tiles::PreviewCut>,
+    /// Don't hand the decoded source back for the session's cache: a grid thumbnail of a tight
+    /// crop decodes a preview-sized source, which must not push the loupe's preview out of the
+    /// few the session keeps (its result goes to the thumbnail cache anyway).
+    pub discard_source: bool,
 }
 
 pub struct RenderResult {
@@ -1002,7 +1006,7 @@ impl RenderJob {
                     key: self.key,
                     rendered: Ok(rendered),
                     gpu_fallback,
-                    loaded: (!was_loaded).then_some(source),
+                    loaded: (!was_loaded && !self.discard_source).then_some(source),
                     quick: None,
                     display,
                 }
@@ -1215,12 +1219,20 @@ impl crate::Session {
     ) -> Option<RenderJob> {
         let p = self.catalog.photo(id)?.clone();
         let settings = if before { Arc::new(self.before_settings(&p)) } else { p.develop.clone() };
-        let level = SourceLevel::for_size(if thumb_bucket.is_some() {
-            max_w.max(max_h) // (grid thumbnails of tight crops stay cheap)
-        } else {
-            source_edge_needed(&p, &settings, apply_crop, max_w.max(max_h))
-        });
-        let source = self.media.source_ref(&p, level);
+        let needed = source_edge_needed(&p, &settings, apply_crop, max_w.max(max_h));
+        // a cropped grid thumbnail stretches the thumbnail source up to 2x; past that (issue #1918:
+        // the tighter the crop, the softer) it reads a source of the size it needs, at most the
+        // preview, never the original
+        let level = match thumb_bucket {
+            Some(b) if needed <= b.saturating_mul(2) => SourceLevel::Thumb,
+            Some(_) => SourceLevel::Preview,
+            None => SourceLevel::for_size(needed),
+        };
+        let mut source = self.media.source_ref(&p, level);
+        let discard_source = thumb_bucket.is_some() && level == SourceLevel::Preview;
+        if discard_source && let SourceRef::File { max_edge, .. } | SourceRef::Demo { max_edge, .. } = &mut source {
+            *max_edge = needed.min(*max_edge);
+        }
         let request = RenderRequest { apply_crop, ..RenderRequest::fit(max_w, max_h) };
         // the photo id is part of the key: two photos with the same settings and size must not
         // share a result (a view slot showing photo A would otherwise look current for photo B)
@@ -1246,6 +1258,10 @@ impl crate::Session {
             if salt != 0 {
                 k.u64(salt);
             }
+            // (likewise the level: a cropped thumbnail cached from the thumbnail source renders again)
+            if level != SourceLevel::Thumb {
+                k.u64(level as u64);
+            }
             (self.media.rendered.clone(), k.finish())
         });
         Some(RenderJob {
@@ -1266,6 +1282,7 @@ impl crate::Session {
             display: None,
             slide: None,
             preview_cut: None,
+            discard_source,
         })
     }
 
@@ -1319,6 +1336,7 @@ impl crate::Session {
             display: None,
             slide: None,
             preview_cut: None,
+            discard_source: false,
         })
     }
 
@@ -1373,6 +1391,7 @@ impl crate::Session {
             display: None,
             slide: None,
             preview_cut,
+            discard_source: false,
         })
     }
 
@@ -2143,6 +2162,82 @@ mod tests {
         assert_eq!(s.render_job(id, 1600, 1600, false, false).unwrap().level, SourceLevel::Preview);
         // and a crop shown small enough still reads the preview
         assert_eq!(s.render_job(id, 600, 600, false, true).unwrap().level, SourceLevel::Preview);
+    }
+
+    // Issue #1918: after an edit, a tight crop's grid thumbnail was cut from the decoded preview
+    // shrunk to the 512 px thumbnail source and stretched back up, so it lost the detail the
+    // cropped photo shown at that size has
+    #[test]
+    fn a_tight_crops_thumbnail_is_as_sharp_as_the_crop_rendered_at_its_size() {
+        let mut s = crate::Session::new();
+        let p = Photo::new(PhotoId(1), Source::File { path: "/nowhere/a.ARW".into() }, "a.ARW", "ARW", 5120, 3414, "");
+        s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(p.clone()) }).unwrap();
+        // the preview the loupe decoded while the photo was edited: stripes 2 px wide, detail a
+        // 512 px source can't hold
+        let stripes = |x: usize, _| if (x / 2).is_multiple_of(2) { [0.1, 0.1, 0.1] } else { [0.6, 0.6, 0.6] };
+        s.media.insert(p.id, SourceLevel::Preview, Arc::new(Rgb32f::from_fn(2560, 1707, stripes)));
+        let mut d = (*s.develop_of(p.id).unwrap()).clone();
+        d.crop.geometry.rect = lightcraft_geom::Rect { x0: 0.4, y0: 0.4, x1: 0.6, y1: 0.6 };
+        s.set_develop(p.id, d, "Crop").unwrap();
+        // mean step between neighbouring pixels: what a stretched small source smooths away
+        let detail = |img: &Rgba8| {
+            let (w, h) = (img.width, img.height);
+            let mut sum = 0u64;
+            for y in 0..h - 1 {
+                for x in 0..w - 1 {
+                    let (p, r, b) = (img.data[y * w + x], img.data[y * w + x + 1], img.data[(y + 1) * w + x]);
+                    sum += (0..3).map(|k| u64::from(p[k].abs_diff(r[k])) + u64::from(p[k].abs_diff(b[k]))).sum::<u64>();
+                }
+            }
+            sum as f64 / ((w - 1) * (h - 1)) as f64
+        };
+        let thumb = s.thumb_job(p.id, 512).unwrap().run().rendered.unwrap().image;
+        let reference = s.render_job(p.id, 512, 512, false, true).unwrap().run().rendered.unwrap().image;
+        assert_eq!((thumb.width, thumb.height), (reference.width, reference.height));
+        let (t, r) = (detail(&thumb), detail(&reference));
+        assert!(t >= 0.9 * r, "the thumbnail has {t:.2} of detail, the crop rendered at its size {r:.2}");
+    }
+
+    // Issue #1918: a grid thumbnail stretches the thumbnail source up to 2x before it reads a larger
+    // one, and then decodes only the pixels its crop needs
+    #[test]
+    fn a_cropped_thumbnail_reads_a_larger_source_only_past_twice_its_size() {
+        let mut s = crate::Session::with_demo();
+        let id = s.catalog.photos().next().unwrap().id;
+        let thumb_with_crop = |s: &mut crate::Session, side: f64| {
+            let mut d = (*s.develop_of(id).unwrap()).clone();
+            d.crop.geometry.rect = lightcraft_geom::Rect { x0: 0.0, y0: 0.0, x1: side, y1: side };
+            s.set_develop(id, d, "Crop").unwrap();
+            s.thumb_job(id, 512).unwrap()
+        };
+        // a slight crop (a straightened horizon, a trimmed edge) keeps the cheap source
+        assert_eq!(thumb_with_crop(&mut s, 0.9).level, SourceLevel::Thumb);
+        assert_eq!(thumb_with_crop(&mut s, 0.6).level, SourceLevel::Thumb);
+        // a crop to 40 % needs 512 / 0.4 = 1280 px of the source: decoded at that, not at 2560
+        let job = thumb_with_crop(&mut s, 0.4);
+        assert_eq!(job.level, SourceLevel::Preview);
+        assert!(matches!(job.source, SourceRef::Demo { max_edge, .. } if (1270..=1290).contains(&max_edge)));
+    }
+
+    // Issue #1918: the filmstrip's thumbnails of tightly cropped neighbours must not push the
+    // preview of the photo being edited out of the session, or the next slider move decodes it again
+    #[test]
+    fn thumbnails_of_tight_crops_leave_the_loupes_preview_in_place() {
+        let mut s = crate::Session::with_demo();
+        let ids: Vec<PhotoId> = s.catalog.photos().map(|p| p.id).take(6).collect();
+        let (shown, others) = ids.split_first().unwrap();
+        s.media.insert(*shown, SourceLevel::Preview, Arc::new(Rgb32f::from_fn(2560, 1707, |_, _| [0.5, 0.5, 0.5])));
+        for &id in others {
+            let mut d = (*s.develop_of(id).unwrap()).clone();
+            d.crop.geometry.rect = lightcraft_geom::Rect { x0: 0.4, y0: 0.4, x1: 0.6, y1: 0.6 };
+            s.set_develop(id, d, "Crop").unwrap();
+            let job = s.thumb_job(id, 512).unwrap();
+            assert_eq!(job.level, SourceLevel::Preview);
+            let r = job.run();
+            assert!(r.rendered.is_ok());
+            s.accept(&r);
+        }
+        assert!(s.media.has_source(*shown, SourceLevel::Preview), "the loupe's preview was evicted by the thumbnails");
     }
 
     // a window whose spot reads from further away than a render can hold is refused
