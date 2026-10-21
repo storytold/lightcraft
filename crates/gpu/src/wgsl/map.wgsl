@@ -171,6 +171,63 @@ fn nr_col(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups) 
     put_rgb(i, max((c0 + (cb - c0) * t) * yl, vec3<f32>(0.0)));
 }
 
+fn chroma_at(i: u32) -> vec3<f32> {
+    let c0 = rgb_a(i);
+    return c0 / max(lum2020(c0), 1e-6);
+}
+
+// `local::chroma_half`: 2x box average of the chromaticity of `a` (edges clamped).
+// P[0] = half pixel count, P[1] = w, P[2] = h, P[3] = half width.
+@compute @workgroup_size(256)
+fn chroma_half_k(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups) nw: vec3<u32>) {
+    let i = lin_index(g, nw);
+    if (i >= pu(0u)) {
+        return;
+    }
+    let w = pu(1u);
+    let h = pu(2u);
+    let hw = pu(3u);
+    let x = i % hw;
+    let y = i / hw;
+    let x0 = min(2u * x, w - 1u);
+    let x1 = min(2u * x + 1u, w - 1u);
+    let y0 = min(2u * y, h - 1u);
+    let y1 = min(2u * y + 1u, h - 1u);
+    put_rgb(i, 0.25 * (chroma_at(y0 * w + x0) + chroma_at(y0 * w + x1) + chroma_at(y1 * w + x0) + chroma_at(y1 * w + x1)));
+}
+
+fn c_rgb(i: u32) -> vec3<f32> {
+    return vec3<f32>(c[3u * i], c[3u * i + 1u], c[3u * i + 2u]);
+}
+
+// `local::denoise_color` at half resolution (a: image, c: blurred half chroma, sampled by
+// `local::sample_half`). P[1] = t, P[2] = w, P[3] = half width, P[4] = half height.
+@compute @workgroup_size(256)
+fn nr_col_half(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups) nw: vec3<u32>) {
+    let i = lin_index(g, nw);
+    if (i >= pu(0u)) {
+        return;
+    }
+    let w = pu(2u);
+    let hw = pu(3u);
+    let hh = pu(4u);
+    let fx = clamp(f32(i % w) * 0.5 - 0.25, 0.0, f32(hw - 1u));
+    let fy = clamp(f32(i / w) * 0.5 - 0.25, 0.0, f32(hh - 1u));
+    let x0 = u32(fx);
+    let y0 = u32(fy);
+    let x1 = min(x0 + 1u, hw - 1u);
+    let y1 = min(y0 + 1u, hh - 1u);
+    let tx = fx - f32(x0);
+    let ty = fy - f32(y0);
+    let top = mix(c_rgb(y0 * hw + x0), c_rgb(y0 * hw + x1), tx);
+    let bot = mix(c_rgb(y1 * hw + x0), c_rgb(y1 * hw + x1), tx);
+    let cb = mix(top, bot, ty);
+    let p = rgb_a(i);
+    let yl = lum2020(p);
+    let c0 = p / max(yl, 1e-6);
+    put_rgb(i, max((c0 + (cb - c0) * pf(1u)) * yl, vec3<f32>(0.0)));
+}
+
 // Every P[1]-th value of `a` (airlight sampling). P[0] = output count.
 @compute @workgroup_size(256)
 fn subsample(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups) nw: vec3<u32>) {

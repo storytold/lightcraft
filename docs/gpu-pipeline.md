@@ -151,7 +151,8 @@ walks the drive.
   with the CPU's taps; Mitchell prefilter, box/bilinear for the fast guided filter), `blur` (box
   passes, three each way = the CPU's Gaussian: horizontal ones sum each pixel's window, so adjacent
   threads read adjacent pixels; vertical ones slide running sums down chunks of a column), `map`
-  (log luminance, dark channel, guided-filter steps, white balance, luminance / colour NR, airlight
+  (log luminance, dark channel, guided-filter steps, white balance, luminance / colour NR — colour NR from a sigma of 3 px
+  blurs a 2x box-averaged chromaticity and samples it back bilinearly, like `local::denoise_color` —, airlight
   sampling), `mask` (linear / radial / luminance / colour range / brush shapes, combine, finalize),
   `finish` (the whole per-pixel stage) — each mirrors a named CPU function.
 - Per-stage hybrid: defringe and spot removal (rare, CPU-only for now) download the resampled image,

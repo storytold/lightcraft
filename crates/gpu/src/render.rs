@@ -833,11 +833,21 @@ fn denoise(cx: &mut Cx<'_>, img: Buf, plan: &Plan<'_>) -> Buf {
         img = out;
     }
     if let Some(nr) = col {
-        let chroma = cx.gpu.buffer(n * 3);
-        map(cx, "chroma_k", n, &[], [Some(&img), None, None], &chroma);
-        let b = gaussian(cx, &chroma, w, h, 3, nr.sigma);
         let out = cx.gpu.buffer(n * 3);
-        map(cx, "nr_col", n, &[nr.t.to_bits()], [Some(&img), Some(&chroma), Some(&b)], &out);
+        match local::nr_color_half(w, h, nr.sigma) {
+            Some((hw, hh, hs)) => {
+                let small = cx.gpu.buffer(hw * hh * 3);
+                map(cx, "chroma_half_k", hw * hh, &[w as u32, h as u32, hw as u32], [Some(&img), None, None], &small);
+                let b = gaussian(cx, &small, hw, hh, 3, hs);
+                map(cx, "nr_col_half", n, &[nr.t.to_bits(), w as u32, hw as u32, hh as u32], [Some(&img), None, Some(&b)], &out);
+            }
+            None => {
+                let chroma = cx.gpu.buffer(n * 3);
+                map(cx, "chroma_k", n, &[], [Some(&img), None, None], &chroma);
+                let b = gaussian(cx, &chroma, w, h, 3, nr.sigma);
+                map(cx, "nr_col", n, &[nr.t.to_bits()], [Some(&img), Some(&chroma), Some(&b)], &out);
+            }
+        }
         img = out;
     }
     img

@@ -52,6 +52,8 @@ const MODULES: &[Module] = &[
             "nr_lum",
             "chroma_k",
             "nr_col",
+            "chroma_half_k",
+            "nr_col_half",
             "subsample",
             "redeye_k",
             "xguided_pre",

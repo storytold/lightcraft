@@ -383,22 +383,110 @@ pub fn apply_nr(img: &mut Rgb32f, lum: Option<NrLum>, col: Option<NrColor>) {
     }
     if let Some(nr) = col {
         let _t = crate::profiling().then(std::time::Instant::now);
-        let chroma = img.map(|c| {
-            let y = luminance_2020(c).max(1e-6);
-            [c[0] / y, c[1] / y, c[2] / y]
-        });
-        let b = gaussian(&chroma, nr.sigma);
-        for_rows(&mut img.data, w, |y, row| {
-            for (x, p) in row.iter_mut().enumerate() {
-                let i = y * w + x;
-                let yl = luminance_2020(*p);
-                let c0 = chroma.data[i];
-                let cb = b.data[i];
-                *p = [0, 1, 2].map(|k| ((c0[k] + (cb[k] - c0[k]) * nr.t) * yl).max(0.0));
-            }
-        });
+        let half = nr_color_half(img.width, img.height, nr.sigma);
+        denoise_color(img, nr, half);
         if let Some(t) = _t {
-            eprintln!("    nr colour: {:.1} ms", t.elapsed().as_secs_f64() * 1e3);
+            eprintln!("    nr colour{}: {:.1} ms", if half.is_some() { " (half resolution)" } else { "" }, t.elapsed().as_secs_f64() * 1e3);
+        }
+    }
+}
+
+/// Chromaticity `rgb / Y` (colour NR).
+fn chroma_of(c: [f32; 3]) -> [f32; 3] {
+    let y = luminance_2020(c).max(1e-6);
+    [c[0] / y, c[1] / y, c[2] / y]
+}
+
+/// Smallest colour-NR radius (full-size px) blurred at half resolution. A blur this wide loses
+/// nothing visible to 2x subsampling (`colour_nr_half_resolution_matches_full`); the raw default
+/// (Color 25) is at it on a full-size render.
+pub const NR_COLOR_HALF_SIGMA: f32 = 3.0;
+
+/// Whether colour NR at `sigma` on a `w x h` image runs at half resolution:
+/// `Some((half_w, half_h, half_sigma))`, else `None`. The GPU twin takes the same decision.
+pub fn nr_color_half(w: usize, h: usize, sigma: f32) -> Option<(usize, usize, f32)> {
+    if sigma.is_nan() || sigma < NR_COLOR_HALF_SIGMA || w < 4 || h < 4 {
+        return None;
+    }
+    // The 2x box and the bilinear upsample each add about 0.25 px² of variance at full size.
+    let full = (sigma * sigma - 0.5).max(0.25).sqrt();
+    Some((w.div_ceil(2), h.div_ceil(2), full / 2.0))
+}
+
+/// 2x box average of the chromaticity of `img` (`hw x hh`, edges clamped).
+pub fn chroma_half(img: &Rgb32f, hw: usize, hh: usize) -> Rgb32f {
+    let (w, h) = (img.width, img.height);
+    let mut out = Rgb32f::new(hw, hh);
+    if w == 0 || h == 0 {
+        return out;
+    }
+    for_rows(&mut out.data, hw, |y, row| {
+        let (y0, y1) = ((2 * y).min(h - 1), (2 * y + 1).min(h - 1));
+        for (x, o) in row.iter_mut().enumerate() {
+            let (x0, x1) = ((2 * x).min(w - 1), (2 * x + 1).min(w - 1));
+            let mut acc = [0.0f32; 3];
+            for (xx, yy) in [(x0, y0), (x1, y0), (x0, y1), (x1, y1)] {
+                let c = chroma_of(img.data.get(yy * w + xx).copied().unwrap_or_default());
+                for k in 0..3 {
+                    acc[k] += 0.25 * c[k];
+                }
+            }
+            *o = acc;
+        }
+    });
+    out
+}
+
+/// Bilinear sample of a half-resolution plane at full-size pixel `(x, y)` (centre `x / 2 - 0.25`).
+#[inline]
+pub fn sample_half(b: &Rgb32f, x: usize, y: usize) -> [f32; 3] {
+    let (hw, hh) = (b.width, b.height);
+    if hw == 0 || hh == 0 {
+        return [0.0; 3];
+    }
+    let fx = (x as f32 * 0.5 - 0.25).clamp(0.0, (hw - 1) as f32);
+    let fy = (y as f32 * 0.5 - 0.25).clamp(0.0, (hh - 1) as f32);
+    let (x0, y0) = (fx as usize, fy as usize);
+    let (x1, y1) = ((x0 + 1).min(hw - 1), (y0 + 1).min(hh - 1));
+    let (tx, ty) = (fx - x0 as f32, fy - y0 as f32);
+    let at = |xx: usize, yy: usize| b.data.get(yy * hw + xx).copied().unwrap_or_default();
+    let (p00, p10, p01, p11) = (at(x0, y0), at(x1, y0), at(x0, y1), at(x1, y1));
+    [0, 1, 2].map(|k| {
+        let top = p00[k] + (p10[k] - p00[k]) * tx;
+        let bot = p01[k] + (p11[k] - p01[k]) * tx;
+        top + (bot - top) * ty
+    })
+}
+
+/// Colour NR: chromaticity towards its blur, luminance kept. `half` ([`nr_color_half`]) blurs a
+/// 2x-subsampled chromaticity and samples it back bilinearly: a quarter of the blur work and no
+/// full-size chromaticity buffer.
+pub fn denoise_color(img: &mut Rgb32f, nr: NrColor, half: Option<(usize, usize, f32)>) {
+    let w = img.width;
+    let mix = |p: &mut [f32; 3], c0: [f32; 3], cb: [f32; 3]| {
+        let yl = luminance_2020(*p);
+        *p = [0, 1, 2].map(|k| ((c0[k] + (cb[k] - c0[k]) * nr.t) * yl).max(0.0));
+    };
+    match half {
+        Some((hw, hh, hs)) => {
+            let b = gaussian(&chroma_half(img, hw, hh), hs);
+            for_rows(&mut img.data, w, |y, row| {
+                for (x, p) in row.iter_mut().enumerate() {
+                    let c0 = chroma_of(*p);
+                    mix(p, c0, sample_half(&b, x, y));
+                }
+            });
+        }
+        None => {
+            let chroma = img.map(chroma_of);
+            let b = gaussian(&chroma, nr.sigma);
+            for_rows(&mut img.data, w, |y, row| {
+                for (x, p) in row.iter_mut().enumerate() {
+                    let i = y * w + x;
+                    let (Some(c0), Some(cb)) = (chroma.data.get(i), b.data.get(i)) else { continue };
+                    mix(p, *c0, *cb);
+                }
+            });
         }
     }
 }
@@ -734,5 +822,79 @@ mod nr_tests {
         let (v1, m1) = var(&img);
         assert!(v1 < v0 * 0.5, "{v0} -> {v1}");
         assert!((m1 - m0).abs() < 0.01);
+    }
+
+    /// An image with fine colour noise over a few colour edges and a luminance ramp.
+    fn noisy(w: usize, h: usize) -> Rgb32f {
+        Rgb32f::from_fn(w, h, |x, y| {
+            let n = |k: usize| (((x * 7919 + y * 104729 + k * 31337) % 211) as f32 / 211.0 - 0.5) * 0.08;
+            let base = if (x / 37 + y / 23) % 2 == 0 { [0.30, 0.20, 0.15] } else { [0.15, 0.22, 0.35] };
+            let l = 0.5 + x as f32 / w as f32;
+            [(base[0] + n(0)) * l, (base[1] + n(1)) * l, (base[2] + n(2)) * l]
+        })
+    }
+
+    /// Colour NR at half resolution matches the full-resolution path: radii from the threshold
+    /// up, odd and even sizes, every channel compared as a share of the pixel value.
+    #[test]
+    fn colour_nr_half_resolution_matches_full() {
+        for (w, h) in [(160, 120), (161, 97)] {
+            let src = noisy(w, h);
+            for sigma in [NR_COLOR_HALF_SIGMA, 4.5, 7.5, 15.0] {
+                let nr = NrColor { sigma, t: 0.8 };
+                let half = nr_color_half(w, h, sigma);
+                assert!(half.is_some());
+                let (mut full_img, mut half_img) = (src.clone(), src.clone());
+                denoise_color(&mut full_img, nr, None);
+                denoise_color(&mut half_img, nr, half);
+                let (mut sum, mut max, mut moved) = (0.0f64, 0.0f32, 0.0f64);
+                for ((a, b), o) in full_img.data.iter().zip(&half_img.data).zip(&src.data) {
+                    for k in 0..3 {
+                        let d = (a[k] - b[k]).abs() / a[k].max(0.02);
+                        sum += f64::from(d);
+                        max = max.max(d);
+                        moved += f64::from((a[k] - o[k]).abs() / a[k].max(0.02));
+                    }
+                }
+                let (mean, moved) = (sum / (src.data.len() * 3) as f64, moved / (src.data.len() * 3) as f64);
+                // Under 1 % on average, and a small share of what colour NR itself changes (the
+                // rest is the box-blur radius rounding, which differs between the two sizes).
+                assert!(mean < 0.01 && mean < 0.1 * moved && max < 0.1, "{w}x{h} sigma {sigma}: mean {mean}, max {max}, moved {moved}");
+            }
+        }
+    }
+
+    #[test]
+    fn colour_nr_small_radii_and_tiny_images_stay_full_resolution() {
+        assert!(nr_color_half(1000, 1000, NR_COLOR_HALF_SIGMA - 0.01).is_none());
+        assert!(nr_color_half(3, 1000, 10.0).is_none());
+        assert!(nr_color_half(1000, 1000, f32::NAN).is_none());
+        let mut img = noisy(3, 2);
+        let mut s = DevelopSettings::default();
+        s.detail.nr_color = 100.0;
+        denoise(&mut img, &s, 1.0);
+        assert!(img.data.iter().all(|p| p.iter().all(|v| v.is_finite())));
+        // An empty half plane samples to zero rather than panicking.
+        assert_eq!(sample_half(&Rgb32f::new(0, 0), 5, 5), [0.0; 3]);
+    }
+
+    /// Timing (ignored: `cargo test --release -p lightcraft-pipeline -- --ignored colour_nr_timing --nocapture`).
+    #[test]
+    #[ignore]
+    fn colour_nr_timing() {
+        let src = noisy(6000, 4000);
+        for sigma in [3.0f32, 7.5, 15.0] {
+            let nr = NrColor { sigma, t: 0.8 };
+            let mut best = [f64::MAX; 2];
+            for _ in 0..5 {
+                for (k, half) in [None, nr_color_half(6000, 4000, sigma)].into_iter().enumerate() {
+                    let mut img = src.clone();
+                    let t = std::time::Instant::now();
+                    denoise_color(&mut img, nr, half);
+                    best[k] = best[k].min(t.elapsed().as_secs_f64() * 1e3);
+                }
+            }
+            eprintln!("24 MP colour NR sigma {sigma}: full {:.1} ms, half {:.1} ms", best[0], best[1]);
+        }
     }
 }

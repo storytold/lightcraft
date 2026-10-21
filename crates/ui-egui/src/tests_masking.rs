@@ -1306,7 +1306,8 @@ fn second_window_shows_the_active_photo() {
     h.settle(SETTLE);
 }
 
-/// Frame time of the photo grid on a 100k-photo library (ignored:
+/// Frame time of the photo grid on a 100k-photo library, still and while scrolling, against the
+/// 16 ms frame budget (ignored, it needs a release build:
 /// `cargo test --release -p lightcraft-ui-egui -- --ignored grid_frame_100k --nocapture`).
 #[test]
 #[ignore]
@@ -1337,13 +1338,42 @@ fn grid_frame_100k() {
     for _ in 0..5 {
         h.step();
     }
-    let t = std::time::Instant::now();
-    let n = 30;
-    for _ in 0..n {
-        h.step();
-    }
-    let ms = t.elapsed().as_secs_f64() * 1e3 / n as f64;
-    eprintln!("grid frame at 100k photos: {ms:.1} ms (UI thread, renders excluded)");
+    assert_eq!(h.app.session.visible_cloned().len(), 100_000);
+    // Median frame time of `n` frames, each after `before`.
+    let median = |h: &mut Headless, n: usize, before: &mut dyn FnMut(&mut Headless)| {
+        let mut ms: Vec<f64> = (0..n)
+            .map(|_| {
+                before(h);
+                let t = std::time::Instant::now();
+                h.step();
+                t.elapsed().as_secs_f64() * 1e3
+            })
+            .collect();
+        ms.sort_by(f64::total_cmp);
+        ms[n / 2]
+    };
+    let still = median(&mut h, 31, &mut |_| {});
+    let w = h.request("ui.widgets", json!({}), T);
+    let thumb = w["result"]
+        .as_array()
+        .and_then(|a| a.iter().find(|x| x["id"].as_str().is_some_and(|id| id.starts_with("thumb:"))))
+        .map(|x| x["id"].clone())
+        .expect("a thumbnail on screen");
+    h.request("ui.hoverWidget", json!({"id": thumb}), T);
+    let start = h.request("ui.inspect", json!({}), T)["result"]["scroll"]["grid"].clone();
+    let scrolling = median(&mut h, 31, &mut |h| {
+        // Queue the wheel event; the timed `step` is the frame that consumes it.
+        h.app.synthetic.push(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, -2000.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::NONE,
+        });
+    });
+    let end = h.request("ui.inspect", json!({}), T)["result"]["scroll"]["grid"].clone();
+    assert_ne!(start, end, "the grid scrolled");
+    eprintln!("grid frame at 100k photos (UI thread, renders excluded): still {still:.1} ms, scrolling {scrolling:.1} ms");
+    assert!(still <= 16.0 && scrolling <= 16.0, "over the 16 ms frame budget: still {still:.1} ms, scrolling {scrolling:.1} ms");
 }
 
 #[test]
