@@ -206,28 +206,6 @@ fn refine_saturation(before: vec3<f32>, after: vec3<f32>, refine: f32) -> vec3<f
     return y1 + (after - y1) * k;
 }
 
-fn ghash(i: i32, j: i32, seed: u32) -> f32 {
-    var v = (bitcast<u32>(i) * GRAIN_H0) ^ (bitcast<u32>(j) * GRAIN_H1) ^ (seed * GRAIN_H2);
-    v ^= v >> 13u;
-    v = v * GRAIN_H3;
-    v ^= v >> 15u;
-    return f32(v & 0xffffu) / 32768.0 - 1.0;
-}
-
-fn grain_noise(x: f32, y: f32, seed: u32) -> f32 {
-    let x0 = floor(x);
-    let y0 = floor(y);
-    let fx = x - x0;
-    let fy = y - y0;
-    let i = i32(x0);
-    let j = i32(y0);
-    let u = fx * fx * (3.0 - 2.0 * fx);
-    let v = fy * fy * (3.0 - 2.0 * fy);
-    let a = ghash(i, j, seed) + (ghash(i + 1, j, seed) - ghash(i, j, seed)) * u;
-    let b = ghash(i, j + 1, seed) + (ghash(i + 1, j + 1, seed) - ghash(i, j + 1, seed)) * u;
-    return a + (b - a) * v;
-}
-
 fn enc8(v: f32) -> u32 {
     return u32(clamp(v, 0.0, 1.0) * 255.0 + 0.5);
 }
@@ -488,7 +466,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         r = yy + (r - yy) * tg;
     }
 
-    // --- encode, curves, grain
+    // --- encode, curves (active grain uses the CPU renderer)
     var e = vec3<f32>(encode_srgb(r.x), encode_srgb(r.y), encode_srgb(r.z));
     if (pu(F_CURVES) != 0u) {
         let e0 = e;
@@ -497,20 +475,6 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         if (rs < 1.0) {
             e = refine_saturation(e0, e, rs);
         }
-    }
-    if (pu(F_GRAIN) != 0u) {
-        let px = f32(x) + 0.5;
-        let py = f32(y) + 0.5;
-        let gx = pf(F_GRAIN_AFF) * px + pf(F_GRAIN_AFF + 2u) * py + pf(F_GRAIN_AFF + 4u);
-        let gy = pf(F_GRAIN_AFF + 1u) * px + pf(F_GRAIN_AFF + 3u) * py + pf(F_GRAIN_AFF + 5u);
-        let sc = pf(F_GRAIN_SC);
-        let rough = pf(F_GRAIN_ROUGH);
-        let seed = pu(F_GRAIN_SEED);
-        var g = grain_noise(gx * sc, gy * sc, seed);
-        g = g * (1.0 - rough * 0.5) + grain_noise(gx * sc * 2.3, gy * sc * 2.3, seed ^ 0x55u) * rough * 0.7;
-        let lum = 0.2126 * e.x + 0.7152 * e.y + 0.0722 * e.z;
-        let k = pf(F_GRAIN_AMT) * g * (0.35 + 2.6 * lum * (1.0 - lum));
-        e = e + k;
     }
     e = vec3<f32>(out_encode(e.x), out_encode(e.y), out_encode(e.z));
     out[i] = enc8(e.x) | (enc8(e.y) << 8u) | (enc8(e.z) << 16u) | (255u << 24u);

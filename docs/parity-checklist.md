@@ -1,6 +1,6 @@
 # Lightroom parity checklist
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (LRC-PRINT-PAGE: Print Page Options) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-19 · **Change:** minor (LR-EDIT-EFFECTS-GRAIN: CPU particle renderer; intentional saved-edit appearance change and remaining fidelity/performance limits; summary refreshed; retains LRC-PRINT-PAGE Print Page Options) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 The measured, row-by-row checklist: one row per Lightroom feature, menu item and shortcut, what we
 have and what is missing. It answers *does the feature exist?* (feature breadth). Whether it is good
@@ -31,7 +31,7 @@ cited here still exists. Formerly docs/parity.md.
 | C. Views & navigation (VIEW) | 16 | 1 | 1 | 0 | 9/9 (100%) | 4/4 (100%) |
 | D. Search & filter (FILT) | 11 | 1 | 1 | 0 | 4/4 (100%) | 4/4 (100%) |
 | E. Metadata (META) | 5 | 1 | 0 | 0 | 2/2 (100%) | 2/2 (100%) |
-| F. Edit panel — global adjustments (EDIT) | 44 | 2 | 3 | 1 | 28/28 (100%) | 13/14 (93%) |
+| F. Edit panel — global adjustments (EDIT) | 43 | 3 | 3 | 1 | 28/28 (100%) | 12/14 (86%) |
 | G. Profiles (PROF) | 7 | 1 | 3 | 0 | 3/4 (75%) | 3/3 (100%) |
 | H. Crop & rotate (CROP) | 9 | 0 | 0 | 1 | 6/6 (100%) | 3/3 (100%) |
 | I. Remove / healing (REM) | 8 | 1 | 2 | 2 | 4/4 (100%) | 2/3 (67%) |
@@ -53,9 +53,9 @@ cited here still exists. Formerly docs/parity.md.
 | Y. Menus | 84 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 78 | 4 | 2 | 1 | 49/52 (94%) | 24/26 (92%) |
 | Lightroom Classic extras | 40 | 23 | 23 | 8 | — | 24/26 (92%) |
-| **Total** | 419 | 61 | 59 | 35 | 194/201 (97%) | 148/161 (92%) |
+| **Total** | 418 | 62 | 59 | 35 | 194/201 (97%) | 147/161 (91%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.4%** of 539 in-scope rows — P0 98.3% of 201 · P1 95.0% of 161 · P2 55.7% of 176.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.3%** of 539 in-scope rows — P0 98.3% of 201 · P1 94.7% of 161 · P2 55.7% of 176.
 <!-- /parity:summary -->
 
 ## Top gaps and shortcut notes
@@ -205,7 +205,7 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 | LR-EDIT-EFFECTS-CLARITY | Clarity | P0 | ✅ | `ctl:effects.clarity` | |
 | LR-EDIT-EFFECTS-DEHAZE | Dehaze | P0 | ✅ | `ctl:effects.dehaze` | |
 | LR-EDIT-EFFECTS-VIGNETTE | Post-crop vignette | P0 | ✅ | `ctl:vignette.*`, `crates/pipeline/src/finish.rs`, `crates/ui-egui/src/panels/edit.rs` | style picker (Highlight / Color / Paint) in the Effects section |
-| LR-EDIT-EFFECTS-GRAIN | Grain | P1 | ✅ | `ctl:grain.*` | |
+| LR-EDIT-EFFECTS-GRAIN | Grain | P1 | 🟡 | `ctl:grain.*`, `crates/pipeline/src/grain.rs` | Experimental fork: particle grain only (CPU); old settings migrate without numeric loss but intentionally change appearance. No legacy selector/kernel; not calibrated film or Boolean-reference/Lightroom equivalence. See `docs/experimental-medium-grain.md` |
 | LR-EDIT-DETAIL-SHARPEN | Sharpening | P0 | ✅ | `ctl:detail.sharpenAmount`, `ctl:detail.sharpenRadius`, `ctl:detail.sharpenDetail`, `ctl:detail.sharpenMasking` | no Alt-drag mask preview |
 | LR-EDIT-DETAIL-NR | Luminance noise reduction | P0 | ✅ | `ctl:detail.nrLuminance`, `ctl:detail.nrDetail`, `ctl:detail.nrContrast` | radii in the original's pixels, so grid, loupe and smaller exports look like the full-size render scaled down (`local::nr_params`, `Plan::detail_scale`, #960) |
 | LR-EDIT-DETAIL-CNR | Colour noise reduction | P0 | ✅ | `ctl:detail.nrColor`, `ctl:detail.nrColorDetail`, `ctl:detail.nrColorSmoothness` | preview-size independent like luminance NR (#960) |
@@ -797,6 +797,7 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-19 | minor | LR-EDIT-EFFECTS-GRAIN: sole signed-particle CPU renderer; stored numerics preserved but appearance intentionally changes. Status 🟡 for remaining fidelity/performance limitations; summary refreshed. |
 | 2026-10-14 | patch | LR-EXP-TYPE: opaque 8-bit PNG/TIFF/WebP use RGB; transparent exports retain alpha (#1670). Statuses and feature counts unchanged. |
 | 2026-10-15 | minor | LRC-PRINT-PAGE: Page Options (Page Numbers, Page Info, Crop Marks) on Single Image and Contact Sheet pages, in the Print dialog, `print.set` and templates; still 🟡 (no identity plate, watermark, photo info or Cut Guides) |
 | 2026-10-15 | minor | LR-IMP-FORMATS: Hasselblad 3FR and FFF show their uncompressed RGB preview (no JPEG in these files) in the grid and loupe until developed, and as the stand-in when a file fails to decode; status unchanged (🟡) |

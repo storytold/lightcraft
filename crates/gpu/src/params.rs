@@ -59,12 +59,6 @@ const FIELDS: &[(&str, usize)] = &[
     ("VIG_STYLE", 1),
     // the window's offset in the whole output and the whole output's size (pixels)
     ("VIG_VIEW", 4),
-    ("GRAIN", 1),
-    ("GRAIN_AMT", 1),
-    ("GRAIN_SC", 1),
-    ("GRAIN_ROUGH", 1),
-    ("GRAIN_SEED", 1),
-    ("GRAIN_AFF", 6),
     ("REFINE_SAT", 1),
     ("CALIB", 1),
     ("CALIB_M", 9),
@@ -233,16 +227,5 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     let (trc, gamma) = fp.out_trc.code();
     p.u("OUT_TRC", trc);
     p.f("OUT_GAMMA", gamma);
-    if let Some((amt, cell, rough, seed)) = fp.grain {
-        p.b("GRAIN", true);
-        p.f("GRAIN_AMT", amt);
-        p.f("GRAIN_SC", fp.px_per_long as f32 / cell);
-        p.f("GRAIN_ROUGH", rough);
-        p.u("GRAIN_SEED", seed);
-        let long = fp.ow.max(fp.oh);
-        let [a, b, c, d, e, f] = fp.out_to_norm.0;
-        let (kx, ky) = (fp.ow / long, fp.oh / long);
-        p.fs("GRAIN_AFF", &[(a * kx) as f32, (b * ky) as f32, (c * kx) as f32, (d * ky) as f32, (e * kx) as f32, (f * ky) as f32]);
-    }
     (p.0, aux)
 }

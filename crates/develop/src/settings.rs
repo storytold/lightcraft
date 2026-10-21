@@ -597,6 +597,8 @@ impl Default for Vignette {
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Grain {
+    /// This fork has one renderer. Old process names migrate to the particle process.
+    pub process: GrainProcess,
     pub amount: f64,
     pub size: f64,
     pub roughness: f64,
@@ -604,9 +606,17 @@ pub struct Grain {
     pub seed: u32,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum GrainProcess {
+    #[default]
+    #[serde(alias = "legacy")]
+    MediumParticlesV1,
+}
+
 impl Default for Grain {
     fn default() -> Self {
-        Self { amount: 0.0, size: 25.0, roughness: 50.0, seed: 0 }
+        Self { process: GrainProcess::MediumParticlesV1, amount: 0.0, size: 25.0, roughness: 0.0, seed: 0 }
     }
 }
 

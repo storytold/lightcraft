@@ -467,6 +467,10 @@ pub fn try_render(
             return Err(Fallback::NotTried);
         }
         let s = &*lightcraft_pipeline::settings_for(s, req);
+        // Grain in this fork is CPU-only; callers render every NotTried request on the CPU.
+        if s.section_enabled("effects") && s.grain.amount > 0.0 {
+            return Err(Fallback::NotTried);
+        }
         // in flight until this returns; not tried once the process is ending (issue #620)
         let _work = exit::enter().ok_or(Fallback::NotTried)?;
         let gpu = device().ok_or(Fallback::NotTried)?;

@@ -3320,6 +3320,7 @@ dependencies = [
  "lightcraft-testkit",
  "log",
  "pollster 1.0.1",
+ "serde_json",
  "wgpu",
 ]
 

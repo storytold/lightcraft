@@ -114,7 +114,7 @@ fn preview_noise_reduction_matches() {
 }
 
 /// A render big enough for the per-pixel stage to run in several bands of rows (and the render
-/// in many submissions), with grain (position-dependent) and masks.
+/// in many submissions), with position-dependent vignette and masks.
 #[test]
 fn banded_full_size_render_matches() {
     if !gpu() {
@@ -124,7 +124,6 @@ fn banded_full_size_render_matches() {
     let src = scene(3, w, h);
     let mut s = DevelopSettings::default();
     typical(&mut s);
-    s.grain.amount = 30.0;
     s.vignette.amount = -30.0;
     s.masks = vec![Mask {
         components: vec![MaskComponent {
@@ -211,10 +210,12 @@ fn cases() -> Vec<(&'static str, Edit)> {
             s.vignette.amount = -40.0;
             s.vignette.style = VignetteStyle::PaintOverlay;
         }),
-        ("grain", |s| {
+        // Active grain is CPU-only in this fork (covered by medium_grain.rs).
+        ("disabled grain", |s| {
             s.grain.amount = 50.0;
             s.grain.size = 40.0;
             s.grain.roughness = 60.0;
+            s.disabled_sections.push("effects".into());
         }),
         ("dehaze -", |s| s.effects.dehaze = -50.0),
         ("dehaze +", |s| s.effects.dehaze = 60.0),
@@ -735,7 +736,6 @@ fn saturated(s: &mut DevelopSettings) {
     s.color.vibrance = 40.0;
     s.curve.highlights = 30.0;
     s.curve.shadows = -20.0;
-    s.grain.amount = 30.0;
 }
 
 #[test]

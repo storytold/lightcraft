@@ -84,27 +84,6 @@ fn vignette(s: &DevelopSettings) -> Option<Vig> {
     })
 }
 
-/// Hash constants of [`grain_noise`] (shared with the GPU kernel).
-pub const GRAIN_HASH: [u32; 4] = [0x8da6_b343, 0xd816_3841, 0xcb1a_b31f, 0x5bd1_e995];
-
-#[inline]
-fn grain_noise(x: f32, y: f32, seed: u32) -> f32 {
-    let (x0, y0) = (x.floor(), y.floor());
-    let (fx, fy) = (x - x0, y - y0);
-    let h = |i: i32, j: i32| {
-        let mut v = (i as u32).wrapping_mul(GRAIN_HASH[0]) ^ (j as u32).wrapping_mul(GRAIN_HASH[1]) ^ seed.wrapping_mul(GRAIN_HASH[2]);
-        v ^= v >> 13;
-        v = v.wrapping_mul(GRAIN_HASH[3]);
-        v ^= v >> 15;
-        (v & 0xffff) as f32 / 32768.0 - 1.0
-    };
-    let (i, j) = (x0 as i32, y0 as i32);
-    let (u, v) = (fx * fx * (3.0 - 2.0 * fx), fy * fy * (3.0 - 2.0 * fy));
-    let a = h(i, j) + (h(i + 1, j) - h(i, j)) * u;
-    let b = h(i, j + 1) + (h(i + 1, j + 1) - h(i, j + 1)) * u;
-    a + (b - a) * v
-}
-
 /// Number of per-mask terms in [`mask_terms`].
 pub const MASK_TERMS: usize = 21;
 
@@ -181,8 +160,9 @@ pub struct FinishParams {
     pub air_pre: f32,
     pub gain: f32,
     pub ev: f32,
-    /// Grain: amount, cell size (px), roughness, seed.
-    pub grain: Option<(f32, f32, f32, u32)>,
+    /// The fork's sole grain renderer (CPU only).
+    pub(crate) particles: Option<crate::grain::Particles>,
+    pub(crate) native_scale: f64,
     /// Output px → normalized oriented coordinates.
     pub out_to_norm: lightcraft_geom::Affine,
     pub ow: f64,
@@ -218,10 +198,8 @@ impl FinishParams {
         };
         let ev = s.light.exposure as f32;
         let gain = 2f32.powf(ev);
-        let grain = (s.grain.amount > 0.0 && effects).then(|| {
-            let cell = (0.0006 + (s.grain.size / 100.0) as f32 * 0.0024) * px_per_long as f32;
-            ((s.grain.amount / 100.0) as f32 * 0.13, cell.max(0.6), (s.grain.roughness / 100.0) as f32, s.grain.seed)
-        });
+        let native_long = info.native_long.map_or(frame.ow.max(frame.oh), |v| v.max(1) as f64);
+        let particles = if effects { crate::grain::Particles::new(&s.grain, native_long, px_per_long) } else { None };
         let calibration = s.section_enabled("calibration");
         let peak = s.hdr.peak();
         FinishParams {
@@ -249,7 +227,8 @@ impl FinishParams {
             air_pre,
             gain,
             ev,
-            grain,
+            particles,
+            native_scale: native_long / frame.ow.max(frame.oh).max(1.0),
             out_to_norm: frame.out_to_norm(w, h),
             ow: frame.ow,
             oh: frame.oh,
@@ -365,32 +344,11 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
 ) -> Vec<T> {
     let (w, h) = (p.img.width, p.img.height);
     let p_lut = fp.lut.clone();
-    let FinishParams {
-        tone,
-        ops,
-        curves,
-        vig,
-        to_out,
-        out_luma,
-        hl,
-        sh,
-        clar,
-        tex,
-        dehaze,
-        sharpen,
-        sharpen_mask,
-        air,
-        air_pre,
-        gain,
-        ev,
-        grain,
-        ..
-    } = fp;
+    let FinishParams { tone, ops, curves, vig, to_out, out_luma, hl, sh, clar, tex, dehaze, sharpen, sharpen_mask, air, air_pre, gain, ev, .. } = fp;
     let (hl, sh, clar, tex, dehaze, sharpen, sharpen_mask, air, air_pre, gain, ev) =
         (*hl, *sh, *clar, *tex, *dehaze, *sharpen, *sharpen_mask, *air, *air_pre, *gain, *ev);
     let terms: Vec<[f32; MASK_TERMS]> = p.masks.iter().map(|m| mask_terms(&m.adjust)).collect();
     let out_to_norm = fp.out_to_norm;
-    let long = fp.ow.max(fp.oh);
     let [vx, vy, vw, vh] = fp.view;
     // the vignette belongs to the whole output frame, not to the window being drawn
     let aspect = vw / vh;
@@ -637,17 +595,10 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                     e = refine_saturation(e0, e, fp.refine_sat);
                 }
             }
-            if let Some((amt, cell, rough, seed)) = *grain {
+            if let Some(particles) = &fp.particles {
                 let n = out_to_norm.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
-                let (gx, gy) = ((n.x * fp.ow) as f32 / long as f32, (n.y * fp.oh) as f32 / long as f32);
-                let sc = fp.px_per_long as f32 / cell;
-                let mut g = grain_noise(gx * sc, gy * sc, seed);
-                g = g * (1.0 - rough * 0.5) + grain_noise(gx * sc * 2.3, gy * sc * 2.3, seed ^ 0x55) * rough * 0.7;
-                let mut lum = 0.2126 * e[0] + 0.7152 * e[1] + 0.0722 * e[2];
-                if hdr {
-                    lum = lum.clamp(0.0, 1.0);
-                }
-                let k = amt * g * (0.35 + 2.6 * lum * (1.0 - lum));
+                let lum = 0.2126 * e[0] + 0.7152 * e[1] + 0.0722 * e[2];
+                let k = particles.residual(n.x * fp.ow * fp.native_scale, n.y * fp.oh * fp.native_scale, lum);
                 e = e.map(|v| v + k);
             }
             let e = match &p_lut {

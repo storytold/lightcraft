@@ -1289,6 +1289,8 @@ mod tests_lightroom_folder;
 #[cfg(test)]
 mod tests_mask_effects;
 #[cfg(test)]
+mod tests_medium_grain;
+#[cfg(test)]
 mod tests_merge;
 #[cfg(test)]
 mod tests_move_to_share;

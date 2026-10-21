@@ -201,8 +201,10 @@ fn sidecars_keep_the_process_and_interchange_edits_get_the_latest() {
     assert_eq!((d.process, d.light.exposure), (NEWER, 0.3));
     put(&mut s, id, ProcessVersion::V1, 0.3);
     let packet = sidecar_packet(s.catalog.photo(id).unwrap(), &s.catalog);
-    assert!(!packet.contains("process"), "{packet}");
     let Some(DevelopPatch::Full(d)) = parse_sidecar(&packet, crate::crs::Target::Rendered).unwrap().develop else { panic!("no lc:settings") };
+    // Only the top-level tone process is omitted. This fork always names its grain process.
+    assert!(d.to_json().get("process").is_none(), "{packet}");
+    assert_eq!(d.to_json()["grain"]["process"], "mediumParticlesV1");
     assert_eq!(d.process, ProcessVersion::V1);
     // a damaged process value reads as V1 and costs nothing else: the sidecar's edits still come back
     for bad in ["-1", "1.5", "\"two\"", "null", "4294967296"] {
