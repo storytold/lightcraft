@@ -59,6 +59,10 @@ pub fn handle(ui: &mut Ui, key: &str, name: &str, value: String, at: Pos2) -> Ha
         return out;
     }
     ui.data_mut(|d| d.insert_temp(focused_key(), id));
+    // the arrows move the handle: without the lock egui also moves the focus to the next widget
+    // that way, often another handle a few points off
+    let lock = egui::EventFilter { horizontal_arrows: true, vertical_arrows: true, ..Default::default() };
+    ui.memory_mut(|m| m.set_focus_lock_filter(id, lock));
     // a ring shows where the focus is
     ui.painter().circle_stroke(at, 9.0, egui::Stroke::new(2.0, ui.visuals().selection.stroke.color));
     ui.painter().circle_stroke(at, 11.0, egui::Stroke::new(1.0, egui::Color32::BLACK));

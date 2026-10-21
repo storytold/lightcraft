@@ -80,6 +80,23 @@ fn red_eye_commands_and_controls() {
 }
 
 #[test]
+fn red_eye_update_moves_and_resizes_a_correction() {
+    let mut s = demo();
+    s.execute("redeye.add", &json!({"center": [0.3, 0.4], "rx": 0.03, "ry": 0.02, "darken": 80})).unwrap();
+    s.execute("redeye.update", &json!({"index": 0, "move": [0.1, -0.05]})).unwrap();
+    let e = active_dev(&s).red_eye[0];
+    assert!((e.center.x - 0.4).abs() < 1e-9 && (e.center.y - 0.35).abs() < 1e-9, "{e:?}");
+    assert_eq!((e.rx, e.ry, e.darken), (0.03, 0.02, 80.0), "a move keeps the size and the sliders");
+    s.execute("redeye.update", &json!({"index": 0, "rx": 0.05, "ry": 9.0})).unwrap();
+    let e = active_dev(&s).red_eye[0];
+    assert_eq!((e.rx, e.ry), (0.05, 0.5), "radii are clamped as in redeye.add");
+    // the centre stays on the photo
+    s.execute("redeye.update", &json!({"index": 0, "move": [5.0, -5.0]})).unwrap();
+    assert_eq!(active_dev(&s).red_eye[0].center, lightcraft_geom::Point::new(1.0, 0.0));
+    assert!(s.execute("redeye.update", &json!({"index": 3, "move": [0.1, 0.0]})).is_err());
+}
+
+#[test]
 fn pet_eye_catchlight_command() {
     let mut s = demo();
     s.execute("redeye.add", &json!({"center": [0.3, 0.4], "rx": 0.03, "ry": 0.03})).unwrap();

@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (zoom row: soft proofing sharp at 1:1; canvas tools by keyboard; focus-order test; ~50 unnamed hand-drawn widgets named) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (red-eye corrections by keyboard) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 How LightCraft's interaction compares with Lightroom's: views, panels, tools and handles, modifier
 keys, shortcuts, zoom, context menus and feel. Rows for individual menu items and shortcuts live in
@@ -32,11 +32,11 @@ assessment and the notes that don't fit a row. Visual reference for agents: `pla
 | Shortcuts | Lightroom desktop and Classic keymaps | Lightroom-desktop keymap with Classic additions, editable | 85% | deliberate differences below; no Classic keymap layer |
 | Context menus | everywhere | 26 sites (grid, filmstrip, albums, folders, keywords, masks, presets…) | 70% | unaudited against Lightroom's menus item by item |
 | Text fields | native editing behaviour | custom text field (LR-BEHAV-TEXTFIELD) | 70% | IME and selection edge cases |
-| Accessibility | VoiceOver / Narrator, keyboard navigation | AccessKit tree audited by a test in every view, Develop tool and the main dialogs: every control named, sliders with value, range and Increment / Decrement, dialogs titled, tool sliders reachable with Tab; crop handles, spots, gradient handles and mask pins by keyboard | 75% | brush strokes and red-eye ellipses need the pointer; not tried with a real screen reader ([audit](#accessibility-audit)) |
+| Accessibility | VoiceOver / Narrator, keyboard navigation | AccessKit tree audited by a test in every view, Develop tool and the main dialogs: every control named, sliders with value, range and Increment / Decrement, dialogs titled, tool sliders reachable with Tab; crop handles, spots, red-eye corrections, gradient handles and mask pins by keyboard | 80% | brush strokes need the pointer; not tried with a real screen reader ([audit](#accessibility-audit)) |
 | Feel and responsiveness | GPU-interactive sliders (15.3) | ≤ 16 ms slider budget on GPU; background renders | 75% | colour NR at half resolution, 100k-photo grid test |
 | **UI/UX overall** | | | **~70%** | estimated, weighted by use (develop and library 60%, tools 25%, rest 15%) |
 
-Remaining: **32–54 h** (zoom detail 8–15 h, brush and masking feel 8–12 h, accessibility 2–4
+Remaining: **31–53 h** (zoom detail 8–15 h, brush and masking feel 8–12 h, accessibility 1–3
 h, Classic keymap layer 4–8 h, context-menu audit 4–8 h, text-field and IME polish 4–8 h). Output
 modules and AI tools are counted with their features in [target-app-parity.md](target-app-parity.md).
 
@@ -123,13 +123,18 @@ through the Edit, Crop, Remove and Masking panels and checks that it goes top to
 strip beside them is its own column, walked first). No reordering was needed once nothing
 unnamed was in the way.
 
-Not done: brush strokes and red-eye ellipses still need a pointer. Nobody has tried the app with
+Red-eye corrections work by keyboard too: a New red eye correction point that Return turns into
+a correction, and each correction's centre, right edge and bottom edge, announced with position
+and size; focusing one selects it, so Delete removes it.
+
+Not done: brush strokes still need a pointer. Nobody has tried the app with
 a real screen reader on any platform yet.
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | minor | Accessibility: red-eye corrections added, moved, resized and deleted by keyboard; 75% → 80%; UI remaining 32–54 h → 31–53 h |
 | 2026-10-14 | patch | Shortcuts: Visualize HDR loses its default ⇧H, which cycles the Tool Overlay (issue #224); both PRs had claimed it |
 | 2026-10-12 | minor | Accessibility: crop handles, spots, gradient handles and mask pins operable by keyboard with AccessKit names and values; Tab order test for the right panels; hand-drawn icons and rows named; 55% → 75%; UI remaining 34–58 h → 32–54 h |
 | 2026-10-13 | minor | Shortcuts: Tool Overlay modes for spot and mask pins on ⇧H (H stays Remove; issue #224), listed with the deliberate differences; dropped from the missing list |

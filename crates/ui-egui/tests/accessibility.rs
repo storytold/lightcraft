@@ -210,6 +210,22 @@ fn canvas_handles_are_named_with_their_position() {
     }
     let h = harness(ViewMode::Detail, RightPanel::Remove);
     assert!(h.root().children_recursive().any(|n| n.accesskit_node().label().is_some_and(|l| l.starts_with("New spot"))));
+    let mut h = harness(ViewMode::Detail, RightPanel::RedEye);
+    if let Err(e) = h.state_mut().run("redeye.add", serde_json::json!({"center": [0.3, 0.4], "rx": 0.03, "ry": 0.02})) {
+        panic!("redeye.add: {e}");
+    }
+    h.run_steps(4);
+    let found: Vec<(String, String)> = h
+        .root()
+        .children_recursive()
+        .map(|n| n.accesskit_node())
+        .filter(|n| n.role() == Role::Button)
+        .map(|n| (n.label().unwrap_or_default(), n.value().unwrap_or_default()))
+        .collect();
+    for (name, value) in [("Red Eye 1", "x 30%, y 40%"), ("Red Eye 1 right edge", "width 6%"), ("Red Eye 1 bottom edge", "height 4%")] {
+        assert!(found.iter().any(|(l, v)| l == name && v.contains(value)), "{name}: {found:?}");
+    }
+    assert!(found.iter().any(|(l, _)| l.starts_with("New red eye correction")), "{found:?}");
 }
 
 /// Tab walks each right panel from top to bottom (rows left to right): the order a sighted user
