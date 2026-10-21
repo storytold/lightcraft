@@ -22,6 +22,7 @@
   "Add “{}” to Favorites": "Ajouter « {} » aux favoris",
   "Added {n} photo{} to My Photos": "{n} photo{} ajoutée(s) à Mes photos",
   "Added {n} photo{} to “{}”": "{n} photo{} ajoutée(s) à « {} »",
+  "Added {n} sample photos, with albums under “{folder}” and keywords to try": "{n} photos d’exemple ajoutées, avec des albums dans « {folder} » et des mots-clés à essayer",
   "Added {what} to {name}": "{what} ajouté à {name}",
   "Adding photos… {} of {}": "Ajout des photos… {} sur {}",
   "All {n} selected photos move by the same amount.": "Les {n} photos sélectionnées se déplacent de la même valeur.",

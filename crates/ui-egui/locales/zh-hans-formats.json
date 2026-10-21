@@ -12,6 +12,7 @@
   "Add “{}” to Favorites": "将“{0}”添加到收藏夹",
   "Added {n} photo{} to My Photos": "已将 {n} 张照片添加到我的照片{0:.0}",
   "Added {n} photo{} to “{}”": "已将 {n} 张照片添加到“{1}”{0:.0}",
+  "Added {n} sample photos, with albums under “{folder}” and keywords to try": "已添加 {n} 张示例照片，相册在“{folder}”下，并附有关键字",
   "All {n} selected photos move by the same amount.": "所选 {n} 张照片将按相同幅度移动。",
   "Already in “{}”": "已在“{}”中",
   "Auto Sync: edits apply to {n} photos": "自动同步：编辑将应用到 {n} 张照片",

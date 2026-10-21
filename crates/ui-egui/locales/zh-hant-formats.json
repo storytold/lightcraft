@@ -12,6 +12,7 @@
   "Add “{}” to Favorites": "將「{}」加入喜好項目",
   "Added {n} photo{} to My Photos": "已將 {n} 張照片加入我的照片{:.0}",
   "Added {n} photo{} to “{}”": "已將 {n} 張照片加入「{1}」{0:.0}",
+  "Added {n} sample photos, with albums under “{folder}” and keywords to try": "已加入 {n} 張範例照片，相簿在「{folder}」下，並附有關鍵字",
   "Adding photos… {} of {}": "正在新增照片… {}／{}",
   "All {n} selected photos move by the same amount.": "所有 {n} 張選取的照片會調整相同的時間。",
   "Already in “{}”": "已在「{}」中",

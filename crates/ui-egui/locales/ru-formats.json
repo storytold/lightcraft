@@ -24,6 +24,7 @@
   "Add “{}” to Favorites": "Добавить «{}» в избранное",
   "Added {n} photo{} to My Photos": "В «Мои фото» добавлено фото: {n}{:.0}",
   "Added {n} photo{} to “{}”": "В «{1}» добавлено фото: {n}{0:.0}",
+  "Added {n} sample photos, with albums under “{folder}” and keywords to try": "Добавлены примеры фото ({n}) с альбомами в «{folder}» и ключевыми словами",
   "Added {what} to {name}": "{what}: добавлено в {name}",
   "Adding photos… {} of {}": "Добавление фото… {} из {}",
   "All {n} selected photos move by the same amount.": "Все выбранные фото ({n}) сдвигаются на одно и то же значение.",
