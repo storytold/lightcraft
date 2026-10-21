@@ -594,6 +594,8 @@ pub(crate) fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>>
             .into_iter()
             .map(|(label, key, k)| item("library.sort", json!({"key": k}), label, None, true, Some(cur.key == key)))
             .collect();
+            let in_album = crate::panels::grid::custom_order_album(app).is_some();
+            v.push(item("library.sort", json!({"key": "custom"}), "Custom Order", None, in_album, Some(in_album && cur.key == Custom)));
             v.push(item("library.shuffle", json!({}), "Reshuffle", None, cur.key == Random, None));
             v.push(MenuNode::Separator);
             // a shuffle has no direction worth choosing

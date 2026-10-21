@@ -2533,6 +2533,64 @@ mod tests {
         assert!(h.app.ui.dragging_photos.is_none(), "the drag ended");
     }
 
+    /// Custom Order: dragging a thumbnail onto the left half of another one in a regular album
+    /// moves it there, and the sort becomes Custom Order (Lightroom Classic's drag to reorder).
+    #[test]
+    fn drag_photos_to_reorder_an_album() {
+        let mut h = demo([1300.0, 900.0]);
+        let t = Duration::from_secs(10);
+        let ids: Vec<u64> = h.app.session.visible_cloned().iter().take(4).map(|p| p.0).collect();
+        let r = h.request("engine.execute", json!({"command": "album.create", "params": {"name": "Story"}}), t);
+        let album = r["result"]["id"].as_u64().unwrap_or_else(|| panic!("{r}"));
+        h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [ids[0]]}}), t);
+        h.request("engine.execute", json!({"command": "album.addPhotos", "params": {"id": album, "ids": ids}}), t);
+        h.request("engine.execute", json!({"command": "library.source", "params": {"kind": "album", "id": album}}), t);
+        h.request("engine.execute", json!({"command": "library.sort", "params": {"key": "fileName", "ascending": true}}), t);
+        h.settle(SETTLE);
+        let shown: Vec<u64> = h.app.session.visible_cloned().iter().map(|p| p.0).collect();
+        let rect = |h: &mut Headless, id: &str| {
+            let w = h.request("ui.widgets", json!({"filter": id}), t);
+            let r = w["result"]
+                .as_array()
+                .and_then(|a| a.iter().find(|x| x["id"] == id))
+                .map(|x| x["rect"].clone())
+                .unwrap_or_else(|| panic!("{id}: {w}"));
+            let f = |i: usize| r[i].as_f64().unwrap();
+            (f(0), f(1), f(2), f(3))
+        };
+        let (x, y, w, hh) = rect(&mut h, &format!("thumb:{}", shown[3]));
+        let (tx, ty, _, th) = rect(&mut h, &format!("thumb:{}", shown[1]));
+        let r = h.request("ui.drag", json!({"x": x + w / 2.0, "y": y + hh / 2.0, "toX": tx + 6.0, "toY": ty + th / 2.0, "steps": 12}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(SETTLE);
+        assert_eq!(h.app.session.sort.key, lightcraft_catalog::SortKey::Custom);
+        let now: Vec<u64> = h.app.session.visible_cloned().iter().map(|p| p.0).collect();
+        assert_eq!(now, vec![shown[0], shown[3], shown[1], shown[2]]);
+        assert!(h.app.ui.dragging_photos.is_none(), "the drag ended");
+        // exporting the selection numbers it in Custom Order, however it was selected
+        let out = std::env::temp_dir().join(format!("lc-ui-custom-order-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&out);
+        h.app.services.write_shared = Some(Arc::new(|p: &str, bytes: &[u8]| lightcraft_engine::export::write_file(p, bytes)));
+        let picked: Vec<u64> = now.iter().rev().copied().collect();
+        h.request("engine.execute", json!({"command": "library.select", "params": {"ids": picked}}), t);
+        let p = json!({"dir": out.to_string_lossy(), "longEdge": 32, "naming": "{seq}_{name}", "background": true});
+        let r = h.request("engine.execute", json!({"command": "app.export", "params": p}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        let t0 = Instant::now();
+        while h.app.export.is_some() {
+            assert!(t0.elapsed() < Duration::from_secs(30), "the export finishes");
+            h.step();
+        }
+        for (i, id) in now.iter().enumerate() {
+            let name = h.app.session.catalog.photo(lightcraft_catalog::PhotoId(*id)).unwrap().file_name.clone();
+            let stem = name.rsplit_once('.').map_or(name.as_str(), |(s, _)| s).to_string();
+            let want = format!("{:03}_{stem}", i + 1);
+            let found = std::fs::read_dir(&out).unwrap().filter_map(|e| e.ok()).any(|e| e.file_name().to_string_lossy().starts_with(&want));
+            assert!(found, "{want} in {:?}", std::fs::read_dir(&out).unwrap().map(|e| e.unwrap().file_name()).collect::<Vec<_>>());
+        }
+        let _ = std::fs::remove_dir_all(&out);
+    }
+
     /// Issue #10: a raw shown from its embedded JPEG (an undecodable raw variant) says so — a badge
     /// on its grid thumbnail, a pill on the loupe, a notice in Edit and Info — and other photos
     /// show none of it.

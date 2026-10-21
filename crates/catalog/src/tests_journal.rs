@@ -60,6 +60,7 @@ fn op_for(c: &mut Catalog, kind: u8, a: u8, b: u8) -> Op {
                     smart: None,
                     quick: false,
                     order: None,
+                    photo_order: vec![],
                 },
             }
         }
@@ -87,6 +88,10 @@ fn op_for(c: &mut Catalog, kind: u8, a: u8, b: u8) -> Op {
             }),
         },
         9 if b % 11 == 4 => c.folder_label_op(&format!("/p/f{}", a % 4), ColorLabel::ALL.get(usize::from(b % 6)).copied()),
+        9 if b % 13 == 6 => match c.album(aid) {
+            Some(al) => Op::SetAlbumPhotoOrder { id: aid, order: al.photos.iter().rev().copied().chain([pid]).collect() },
+            None => Op::SetAlbumOrder { id: aid, order: None },
+        },
         9 if b % 7 == 3 => Op::SetAlbumOrder { id: aid, order: (!b.is_multiple_of(3)).then_some(u32::from(b % 5)) },
         9 if b.is_multiple_of(2) => {
             Op::SetFile { id: pid, file_name: format!("Renamed_{b}.jpg"), source: Source::File { path: format!("/p/Renamed_{b}.jpg") } }

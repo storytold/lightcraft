@@ -1608,6 +1608,24 @@ fn folder_menu(app: &mut LightcraftApp, resp: &egui::Response, a: &Album) {
             });
             crate::widgets::register(ui.ctx(), "button:albumImport", menu.response.rect);
         }
+        if !a.folder
+            && !a.is_smart()
+            && !a.quick
+            && ui
+                .button(crate::i18n::tr("Duplicate Album"))
+                .on_hover_text(crate::i18n::tr("Another album with the same photos, to arrange in its own order"))
+                .clicked()
+        {
+            match app.run("album.duplicate", json!({"id": a.id.0})) {
+                Ok(r) => {
+                    if let Some(n) = r["id"].as_u64() {
+                        let _ = app.run("library.source", json!({"kind": "album", "id": n}));
+                    }
+                }
+                Err(e) => app.toast(ui.ctx(), e),
+            }
+            ui.close();
+        }
         if !a.folder && !a.is_smart() {
             let is_target = app.session.target_album == Some(a.id) || (app.session.target_album.is_none() && a.quick);
             if !is_target && ui.button(crate::i18n::tr("Set as Target Album (B adds to it)")).clicked() {

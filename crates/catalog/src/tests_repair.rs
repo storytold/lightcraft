@@ -15,6 +15,7 @@ fn album(id: u64, parent: Option<u64>, folder: bool, photos: Vec<PhotoId>) -> Al
         smart: None,
         quick: false,
         order: None,
+        photo_order: Vec::new(),
     }
 }
 

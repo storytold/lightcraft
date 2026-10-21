@@ -537,12 +537,28 @@ pub struct Album {
     /// hand (see [`crate::Catalog::album_children`]); `None`: listed by name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub order: Option<u32>,
+    /// Custom Order: the photos in the order the user set by hand ([`crate::SortKey::Custom`],
+    /// format version 10). Only members; photos added later (not listed) follow in the order they
+    /// were added. Empty: no custom order yet.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub photo_order: Vec<PhotoId>,
 }
 
 impl Album {
     /// A regular (manual) album.
     pub fn new(id: AlbumId, name: impl Into<String>) -> Album {
-        Album { id, name: name.into(), parent: None, folder: false, photos: Vec::new(), cover: None, smart: None, quick: false, order: None }
+        Album {
+            id,
+            name: name.into(),
+            parent: None,
+            folder: false,
+            photos: Vec::new(),
+            cover: None,
+            smart: None,
+            quick: false,
+            order: None,
+            photo_order: Vec::new(),
+        }
     }
     pub fn is_smart(&self) -> bool {
         self.smart.is_some()

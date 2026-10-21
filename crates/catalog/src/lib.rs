@@ -156,6 +156,12 @@ pub enum Op {
         id: AlbumId,
         photos: Vec<PhotoId>,
     },
+    /// The album's Custom Order ([`Album::photo_order`]; empty clears it). Ids that aren't members
+    /// and repeats are dropped. Format version 10.
+    SetAlbumPhotoOrder {
+        id: AlbumId,
+        order: Vec<PhotoId>,
+    },
     SetAlbumCover {
         id: AlbumId,
         cover: Option<PhotoId>,
@@ -658,6 +664,7 @@ impl Catalog {
             | Op::MoveAlbum { .. }
             | Op::SetAlbumOrder { .. }
             | Op::SetAlbumPhotos { .. }
+            | Op::SetAlbumPhotoOrder { .. }
             | Op::SetAlbumCover { .. }
             | Op::SetAlbumRules { .. }
             | Op::AddStack { .. }
@@ -821,9 +828,29 @@ impl Catalog {
                         if a.folder { "folders can't hold photos" } else { "smart albums update automatically" }.into(),
                     ));
                 }
-                let old = std::mem::replace(&mut a.photos, photos);
+                // photos taken out leave the custom order: added again, they go at the end
+                let kept: Vec<PhotoId> = {
+                    let members: std::collections::HashSet<PhotoId> = photos.iter().copied().collect();
+                    a.photo_order.iter().copied().filter(|p| members.contains(p)).collect()
+                };
+                let old_photos = std::mem::replace(&mut a.photos, photos);
                 self.index.album_changed(id, Some(&a.photos));
-                Op::SetAlbumPhotos { id, photos: old }
+                if kept.len() == a.photo_order.len() {
+                    Op::SetAlbumPhotos { id, photos: old_photos }
+                } else {
+                    let old_order = std::mem::replace(&mut a.photo_order, kept);
+                    Op::Batch { ops: vec![Op::SetAlbumPhotos { id, photos: old_photos }, Op::SetAlbumPhotoOrder { id, order: old_order }] }
+                }
+            }
+            Op::SetAlbumPhotoOrder { id, order } => {
+                let a = self.album_mut(id)?;
+                if (a.folder || a.smart.is_some()) && !order.is_empty() {
+                    return Err(CatalogError::Invalid("only regular albums have a custom order".into()));
+                }
+                let members: std::collections::HashSet<PhotoId> = a.photos.iter().copied().collect();
+                let mut seen = std::collections::HashSet::new();
+                let order: Vec<PhotoId> = order.into_iter().filter(|p| members.contains(p) && seen.insert(*p)).collect();
+                Op::SetAlbumPhotoOrder { id, order: std::mem::replace(&mut a.photo_order, order) }
             }
             Op::SetAlbumCover { id, cover } => {
                 let a = self.album_mut(id)?;
@@ -1145,6 +1172,8 @@ mod tests;
 mod tests_album_order;
 #[cfg(test)]
 mod tests_background;
+#[cfg(test)]
+mod tests_custom_order;
 #[cfg(test)]
 mod tests_folder_records;
 #[cfg(test)]

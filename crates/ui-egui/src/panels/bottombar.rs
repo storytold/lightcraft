@@ -284,6 +284,13 @@ fn sort_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             let _ = app.run("library.sort", json!({"key": k}));
         }
     }
+    // Custom Order: the order set by hand in a regular album (drag photos in the grid)
+    let in_album = crate::panels::grid::custom_order_album(app).is_some();
+    ui.add_enabled_ui(in_album, |ui| {
+        if ui.selectable_label(cur.key == Custom && in_album, crate::i18n::tr("Custom Order")).clicked() {
+            let _ = app.run("library.sort", json!({"key": "custom"}));
+        }
+    });
     if cur.key == Random && ui.button(crate::i18n::tr("Reshuffle")).clicked() {
         let _ = app.run("library.shuffle", json!({}));
     }

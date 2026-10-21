@@ -307,7 +307,9 @@ impl Op {
                 album.photos.iter().for_each(|p| out(*p));
                 album.cover.into_iter().for_each(&mut *out);
             }
-            Op::SetAlbumPhotos { photos, .. } | Op::SetStack { photos, .. } => photos.iter().for_each(|p| out(*p)),
+            Op::SetAlbumPhotos { photos, .. } | Op::SetAlbumPhotoOrder { order: photos, .. } | Op::SetStack { photos, .. } => {
+                photos.iter().for_each(|p| out(*p))
+            }
             Op::SetAlbumCover { cover, .. } => cover.iter().for_each(|p| out(*p)),
             Op::AddStack { stack } => stack.photos.iter().for_each(|p| out(*p)),
             Op::Batch { ops } => ops.iter().for_each(|o| o.photo_ids(out)),
