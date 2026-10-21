@@ -121,8 +121,10 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 /// Edit in an external editor, the engine half: render the photo with its edits as a 16-bit
-/// TIFF (or PSD, or 8-bit) next to the original (`<name>-Edit.tif`, never overwriting), add it to
-/// the library and stack it on top of the original. The host opens the file in the editor.
+/// TIFF (or PSD, or 8-bit) next to the original (`<name>-Edit.tif`, never overwriting, linked to
+/// the original by `xmpMM:DerivedFrom`), add it to the library and stack it directly above the
+/// original ([`super::external_edit`]). The host opens the file in the editor; with `app` + `wait`
+/// the command starts it with `--wait` itself and reloads the copy when it exits.
 fn edit_external(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "photo.editExternal";
     let mut ids = s.targets(p)?;
@@ -157,6 +159,13 @@ fn edit_external(s: &mut Session, p: &Value) -> Result<Value> {
         conflict: crate::export::Conflict::Unique,
         ..Default::default()
     };
+    // refuse before any file is written when the editor can't be waited for
+    if let Some(app) = super::str_param(p, "app").filter(|a| !a.trim().is_empty())
+        && p.get("wait").and_then(Value::as_bool) == Some(true)
+        && !super::external_edit::editor::capabilities(app.trim()).wait
+    {
+        return Err(bad(C, format!("{} can't be waited for (it doesn't take --wait)", app.trim())));
+    }
     let mut copies = Vec::new();
     for id in ids {
         copies.push(edit_copy(s, p, id, &opts)?);
@@ -164,14 +173,19 @@ fn edit_external(s: &mut Session, p: &Value) -> Result<Value> {
     let new: Vec<lightcraft_catalog::PhotoId> = copies.iter().filter_map(|c| c["id"].as_u64()).map(lightcraft_catalog::PhotoId).collect();
     s.selection = crate::Selection { active: new.first().copied(), ids: new };
     let first = copies.first().cloned().unwrap_or(Value::Null);
-    Ok(json!({"path": first["path"], "id": first["id"], "original": first["original"], "copies": copies}))
+    let mut r = json!({"path": first["path"], "id": first["id"], "original": first["original"], "copies": copies});
+    if let Some(o) = first.get("opened") {
+        r["opened"] = o.clone();
+    }
+    Ok(r)
 }
 
 /// Most photos one Edit In renders (each becomes a full-size file on disk and a library photo).
 const MAX_EDIT_COPIES: usize = 50;
 
 /// One photo's edit copy for [`edit_external`]: rendered with `opts` next to its original (a demo
-/// photo into `dir`), added to the library and stacked on top of the original, expanded.
+/// photo into `dir`, its XMP linked to the original by `xmpMM:DerivedFrom`), added to the library
+/// and stacked directly above the original, expanded; with `app` + `wait`, opened and reloaded.
 fn edit_copy(s: &mut Session, p: &Value, id: lightcraft_catalog::PhotoId, opts: &crate::export::ExportOptions) -> Result<Value> {
     const C: &str = "photo.editExternal";
     let ph = s.catalog.photo(id).cloned().ok_or_else(|| bad(C, format!("no photo {}", id.0)))?;
@@ -182,6 +196,9 @@ fn edit_copy(s: &mut Session, p: &Value, id: lightcraft_catalog::PhotoId, opts: 
             None => return Err(bad(C, "a generated demo photo has no folder: give `dir`")),
         },
     };
+    let derived_from =
+        super::external_edit::link::DerivedFrom { document_id: super::external_edit::link::source_document_id(&ph), file_path: ph.file_name.clone() };
+    let opts = &crate::export::ExportOptions { derived_from: Some(derived_from), ..opts.clone() };
     let mut written = Vec::new();
     let mut write = |path: &str, bytes: &[u8]| -> std::result::Result<(), String> {
         // durable: the TIFF becomes a library photo the external editor then changes
@@ -195,9 +212,16 @@ fn edit_copy(s: &mut Session, p: &Value, id: lightcraft_catalog::PhotoId, opts: 
     let out = written.into_iter().find(|w| w.ends_with(&ext)).ok_or_else(|| bad(C, "nothing was written"))?;
     let r = s.execute("library.import", &json!({"paths": [out]}))?;
     let new = r["imported"].get(0).and_then(Value::as_u64).ok_or_else(|| bad(C, "the edit copy could not be added"))?;
-    // stack: the edit on top of the original, expanded so both show
-    let _ = s.execute("stack.group", &json!({"ids": [new, id.0], "top": new, "collapsed": false}));
-    Ok(json!({"path": out, "id": new, "original": id.0}))
+    // import may already have stacked it from the DerivedFrom link: this places it directly above
+    // the original either way, expanded so both show
+    super::external_edit::stack_edit(s, lightcraft_catalog::PhotoId(new), id)?;
+    let mut r = json!({"path": out, "id": new, "original": id.0});
+    if let Some(app) = super::str_param(p, "app").filter(|a| !a.trim().is_empty())
+        && p.get("wait").and_then(Value::as_bool) == Some(true)
+    {
+        r["opened"] = super::external_edit::wait_and_reload(s, app.trim(), Path::new(&out), new, C)?;
+    }
+    Ok(r)
 }
 
 /// The op that brings a photo up to date with what its file is now (`info`, a fresh probe), or
@@ -410,7 +434,7 @@ pub fn edit_specs() -> Vec<CommandSpec> {
             "Edit Copy for External Editor",
             [],
             None,
-            "{ids?, colorSpace?: adobeRgb (default) | proPhoto | displayP3 | srgb, format?: tiff (default) | psd, bitDepth?: 16 (default) | 8, dir?} — render each selected photo (or `ids`, at most 50) with its edits as `<name>-Edit.tif` (or `.psd`, flat, which PhotoCraft saves back to in place) next to it, add each stacked on its original and select the copies → {path, id, original (the first copy), copies: [{path, id, original}]} (the app then opens them in the external editor)",
+            "{ids?, colorSpace?: adobeRgb (default) | proPhoto | displayP3 | srgb, format?: tiff (default) | psd, bitDepth?: 16 (default) | 8, dir?, app?, wait?: false} — render each selected photo (or `ids`, at most 50) with its edits as `<name>-Edit.tif` (or `.psd`, flat, which PhotoCraft saves back to in place) next to it (its XMP links it to the original: xmpMM:DerivedFrom, so a re-import stacks it again), add each directly above its original (inside the original's stack when it has one) and select the copies → {path, id, original, opened? (the first copy), copies: [{path, id, original, opened?}]} (the app then opens them in the external editor). With app (an editor that takes --wait: PhotoCraft, feature-detected) and wait: true, start it with --wait for each copy, return when it exits and reload the copy → opened: {waited, saved, reloaded}",
             has_active,
             edit_external
         ),

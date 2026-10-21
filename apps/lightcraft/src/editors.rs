@@ -28,6 +28,33 @@ pub fn check(app: &str) -> Result<(), String> {
     launcher(app).map(|_| ())
 }
 
+/// The program file `app` runs as, when there is one to start directly: PhotoCraft where its
+/// installers put it (on macOS the executable inside the bundle), or a named program. `None` for
+/// the system default, a macOS application name and the Flatpak (those open through
+/// [`open_with`]). Edit In asks it for `--wait` support (`--version --json`) and runs it with that.
+pub fn locate(app: &str) -> Option<String> {
+    match launcher(app).ok()? {
+        Launcher::Program(p) => Some(p.to_string_lossy().to_string()),
+        Launcher::MacApp(a) => bundle_executable(Path::new(&a)).map(|p| p.to_string_lossy().to_string()),
+        Launcher::Default | Launcher::Flatpak => None,
+    }
+}
+
+/// `<bundle>.app/Contents/MacOS/<name>`: the executable a macOS application bundle starts.
+fn bundle_executable(bundle: &Path) -> Option<PathBuf> {
+    if bundle.extension().is_none_or(|e| !e.eq_ignore_ascii_case("app")) {
+        return None;
+    }
+    let dir = bundle.join("Contents/MacOS");
+    let stem = bundle.file_stem()?;
+    let named = dir.join(stem);
+    if named.is_file() {
+        return Some(named);
+    }
+    let lower = dir.join(stem.to_string_lossy().to_ascii_lowercase());
+    lower.is_file().then_some(lower)
+}
+
 /// Open `path` in `app` (see [`check`]). Spawned, never waited for: the editor runs alongside.
 pub fn open_with(path: &str, app: &str) -> Result<(), String> {
     let mut c = match launcher(app)? {
@@ -280,6 +307,19 @@ mod tests {
         let dirs = desktop_entry_dirs(|k| (k == "HOME").then(|| "/home/simon".to_string()));
         assert_eq!(dirs[0], PathBuf::from("/home/simon/.local/share/applications"));
         assert!(dirs.contains(&PathBuf::from("/usr/share/applications")));
+    }
+
+    #[test]
+    fn a_bundle_gives_its_executable() {
+        let d = std::env::temp_dir().join(format!("lc-editors-bundle-{}", std::process::id()));
+        let exe = d.join("PhotoCraft.app/Contents/MacOS/photocraft");
+        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        std::fs::write(&exe, b"").unwrap();
+        assert_eq!(bundle_executable(&d.join("PhotoCraft.app")), Some(exe));
+        assert_eq!(bundle_executable(&d.join("Other.app")), None);
+        assert_eq!(bundle_executable(Path::new("PhotoCraft")), None, "a name, not a bundle");
+        assert_eq!(locate(""), None, "the system default has no program file");
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

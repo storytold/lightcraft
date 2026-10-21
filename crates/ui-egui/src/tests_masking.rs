@@ -1032,6 +1032,13 @@ fn edit_in_external_editor_opens_the_copy() {
     h.app.ui.settings.external_editor = "PhotoCraft".into();
     let r = h.request("engine.execute", json!({"command": "photo.editInExternal", "params": {"dir": dir.to_string_lossy()}}), T);
     assert_eq!(r["ok"], true, "{r}");
+    // a PhotoCraft setting is asked whether it takes --wait first (on a worker thread); one that
+    // can't be found opens through `open_with` like any editor
+    let t0 = std::time::Instant::now();
+    while opened.lock().unwrap().is_empty() && t0.elapsed() < std::time::Duration::from_secs(10) {
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
     let calls = opened.lock().unwrap().clone();
     assert_eq!(calls.len(), 1);
     assert!(calls[0].0.ends_with("-Edit.tif") && std::path::Path::new(&calls[0].0).exists(), "{calls:?}");

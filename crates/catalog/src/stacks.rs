@@ -94,6 +94,38 @@ impl Catalog {
         self.group_ops(result, sources, true)
     }
 
+    /// Put `new` into `anchor`'s stack directly above it (Lightroom's Edit In: the edited version
+    /// sits on the photo it was made from, inside the stack that photo already belongs to), or
+    /// stack `[new, anchor]` when `anchor` isn't stacked. `new` leaves any stack it was in first.
+    /// `collapsed` sets the stack's state. `None` when either photo is missing or they're the same.
+    pub fn insert_above_ops(&mut self, new: PhotoId, anchor: PhotoId, collapsed: bool) -> Option<Op> {
+        if new == anchor || !self.photos.contains_key(&new) || !self.photos.contains_key(&anchor) {
+            return None;
+        }
+        let mut ops: Vec<Op> = Vec::new();
+        if let Some(old) = self.stack_of(new).filter(|s| !s.photos.contains(&anchor)).cloned() {
+            let rest: Vec<PhotoId> = old.photos.iter().copied().filter(|p| *p != new).collect();
+            ops.push(if rest.len() < 2 {
+                Op::RemoveStack { id: old.id }
+            } else {
+                Op::SetStack { id: old.id, photos: rest, collapsed: old.collapsed }
+            });
+        }
+        match self.stack_of(anchor).cloned() {
+            Some(st) => {
+                let mut photos: Vec<PhotoId> = st.photos.iter().copied().filter(|p| *p != new).collect();
+                let at = photos.iter().position(|p| *p == anchor)?;
+                photos.insert(at, new);
+                ops.push(Op::SetStack { id: st.id, photos, collapsed });
+            }
+            None => {
+                let id = self.alloc_stack_id();
+                ops.push(Op::AddStack { stack: Stack { id, photos: vec![new, anchor], collapsed } });
+            }
+        }
+        Some(Op::Batch { ops })
+    }
+
     /// Move `photo` `delta` places within its stack (towards the top for negative; index 0 is the
     /// top). `None` when it isn't stacked or can't move.
     pub fn move_in_stack_ops(&self, photo: PhotoId, delta: isize) -> Option<Op> {
@@ -389,6 +421,32 @@ mod tests {
         c2.apply(Op::Batch { ops: c2.ungroup_ops(&[b]) }).unwrap();
         assert_eq!(c2.stacks().count(), 0);
         let _ = inv;
+    }
+
+    #[test]
+    fn insert_above_joins_the_anchor_stack() {
+        let (mut c, ids) = cat(5, &[]);
+        let [a, b, x, n1, n2] = ids[..] else { panic!("five ids") };
+        // unstacked anchor: a new two-photo stack, the new version on top
+        let op = c.insert_above_ops(n1, b, false).unwrap();
+        c.apply(op).unwrap();
+        assert_eq!(c.stack_of(b).unwrap().photos, vec![n1, b]);
+        // anchor inside a stack: directly above it, the rest keep their order
+        let op = c.group_ops(a, &[a, n1, b, x], true).unwrap();
+        c.apply(op).unwrap();
+        assert_eq!(c.stack_of(a).unwrap().photos, vec![a, n1, b, x]);
+        let op = c.insert_above_ops(n2, x, false).unwrap();
+        c.apply(op).unwrap();
+        let st = c.stack_of(a).unwrap();
+        assert_eq!(st.photos, vec![a, n1, b, n2, x]);
+        assert!(!st.collapsed);
+        // moving within the same stack
+        let op = c.insert_above_ops(n2, a, false).unwrap();
+        c.apply(op).unwrap();
+        assert_eq!(c.stack_of(a).unwrap().photos, vec![n2, a, n1, b, x]);
+        assert_eq!(c.stacks().count(), 1);
+        assert!(c.insert_above_ops(a, a, false).is_none());
+        assert!(c.insert_above_ops(PhotoId(999), a, false).is_none());
     }
 
     #[test]

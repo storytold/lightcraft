@@ -2315,25 +2315,26 @@ fn edit_in(app: &mut LightcraftApp, ctx: &egui::Context, p: &Value, photocraft: 
         }
     }
     let r = app.session.execute("photo.editExternal", &params).map_err(|e| e.to_string())?;
-    // every selected photo got a copy (#920); each opens in the editor
+    // every selected photo got a copy (#920); each is watched (a save comes back without a focus
+    // change: modification-time poll) and opens in the editor
     let copies: Vec<(String, Option<u64>)> = r["copies"]
         .as_array()
         .map(|c| c.iter().map(|c| (c["path"].as_str().unwrap_or_default().to_string(), c["id"].as_u64())).collect())
         .unwrap_or_else(|| vec![(r["path"].as_str().unwrap_or_default().to_string(), r["id"].as_u64())]);
-    let mut failed = None;
+    // the program PhotoCraft runs as, where the host found it: asked for `--wait` support and run
+    // with it on a worker thread; anything else (or no program file) opens through `open_with`
+    let mut failed: Option<String> = None;
+    let exe = if lightcraft_engine::cmd::external_edit::editor::is_photocraft(editor.trim()) {
+        app.services.locate_editor.as_ref().and_then(|f| f(editor.trim()))
+    } else {
+        None
+    };
     for (path, id) in &copies {
         if let Some(id) = id {
-            app.ui.external_edits.push(*id);
+            crate::external_edit::watch(app, std::path::Path::new(path), *id);
         }
-        // the copy is LightCraft's own render, but it goes through the same gate as any other
-        // path handed to the system opener (#2135)
-        match lightcraft_engine::open_path::openable(path, "") {
-            Err(e) => failed = Some(e),
-            Ok(absolute) => {
-                if let Some(Err(e)) = app.services.open_with.as_mut().map(|f| f(&absolute, &editor)) {
-                    failed = Some(e);
-                }
-            }
+        if let Err(e) = crate::external_edit::open(app, std::path::Path::new(path), editor.trim(), exe.as_deref()) {
+            failed.get_or_insert(e);
         }
     }
     match (failed, copies.as_slice()) {
@@ -2342,7 +2343,7 @@ fn edit_in(app: &mut LightcraftApp, ctx: &egui::Context, p: &Value, photocraft: 
             let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
             app.toast(ctx, crate::i18n::tr_format!("{name} opened for editing; it is stacked with the original", name = name));
         }
-        _ => app.toast(ctx, crate::i18n::tr_format!("{n} photos opened for editing; each is stacked with its original", n = copies.len())),
+        (None, _) => app.toast(ctx, crate::i18n::tr_format!("{n} photos opened for editing; each is stacked with its original", n = copies.len())),
     }
     Ok(r)
 }

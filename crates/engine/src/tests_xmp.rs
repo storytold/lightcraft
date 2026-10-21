@@ -861,6 +861,148 @@ fn external_edit_copy_as_psd_round_trips() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Edit in External Editor stacks like Lightroom's Edit In: an edit of an edit goes directly above
+/// it inside the same stack; an edit of a virtual copy stacks with the copy and its master. The
+/// TIFF links back to its source (xmpMM:DerivedFrom), so importing the folder into a new library
+/// stacks the copies again.
+#[test]
+fn external_edit_stacks_above_its_source_and_relinks_on_import() {
+    let dir = temp_dir("extedit-stack");
+    let src = dir.join("dune.png");
+    write_png(&src, 3);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let orig = s.active().unwrap();
+    let e1 = PhotoId(s.execute("photo.editExternal", &json!({})).unwrap()["id"].as_u64().unwrap());
+    assert_eq!(s.catalog.stack_of(orig).unwrap().photos, vec![e1, orig]);
+    // the edit of the original again: directly above the original, below the first edit
+    s.selection = crate::Selection::single(orig);
+    let e2 = PhotoId(s.execute("photo.editExternal", &json!({})).unwrap()["id"].as_u64().unwrap());
+    assert_eq!(s.catalog.stack_of(orig).unwrap().photos, vec![e1, e2, orig]);
+    // an edit of an edit joins the same stack, directly above it
+    s.selection = crate::Selection::single(e1);
+    let e3 = PhotoId(s.execute("photo.editExternal", &json!({})).unwrap()["id"].as_u64().unwrap());
+    let st = s.catalog.stack_of(orig).unwrap();
+    assert_eq!((st.photos.clone(), st.collapsed), (vec![e3, e1, e2, orig], false));
+    assert_eq!(s.catalog.stacks().count(), 1);
+    // the TIFF names its source
+    let tif = std::fs::read(dir.join("dune-Edit.tif")).unwrap();
+    let xmp = crate::cmd::external_edit::link::file_xmp(&dir.join("dune-Edit.tif")).expect("an XMP packet");
+    let link = crate::cmd::external_edit::link::read_link(&xmp);
+    assert_eq!(link.derived_path.as_deref(), Some("dune.png"));
+    assert!(link.document_id.is_some_and(|d| d.starts_with("xmp.did:")));
+    assert!(lightcraft_meta::parse_xmp(&xmp).is_ok(), "{xmp}");
+    assert!(!tif.is_empty());
+
+    // a fresh library importing the folder stacks each copy on its source again
+    let mut t = Session::new().with_fs();
+    t.execute("library.import", &json!({"paths": [dir.to_string_lossy()]})).unwrap();
+    let by_name = |n: &str| t.catalog.photos().find(|p| p.file_name == n).map(|p| p.id).unwrap();
+    let (o, a) = (by_name("dune.png"), by_name("dune-Edit.tif"));
+    let st = t.catalog.stack_of(o).expect("restacked");
+    assert!(st.photos.contains(&a) && st.photos.len() == 4, "{:?}", st.photos);
+    assert_eq!(t.catalog.stacks().count(), 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A PSD edit copy (Edit in PhotoCraft) carries the same DerivedFrom link in its XMP resource
+/// (1060), survives PhotoCraft saving the document back in place when the editor keeps the XMP,
+/// and is stacked on its source again when the folder is imported into a new library.
+#[test]
+fn external_edit_psd_copy_links_and_restacks_on_import() {
+    let dir = temp_dir("extedit-psd-link");
+    let src = dir.join("reef.png");
+    write_png(&src, 6);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let orig = s.active().unwrap();
+    let e = PhotoId(s.execute("photo.editExternal", &json!({"format": "psd"})).unwrap()["id"].as_u64().unwrap());
+    assert_eq!(s.catalog.stack_of(orig).unwrap().photos, vec![e, orig]);
+    let psd = dir.join("reef-Edit.psd");
+    let xmp = crate::cmd::external_edit::link::file_xmp(&psd).expect("an XMP resource");
+    let link = crate::cmd::external_edit::link::read_link(&xmp);
+    assert_eq!(link.derived_path.as_deref(), Some("reef.png"));
+    assert!(link.document_id.is_some_and(|d| d.starts_with("xmp.did:")));
+    // an edit of the PSD copy joins the stack directly above it
+    s.selection = crate::Selection::single(e);
+    let e2 = PhotoId(s.execute("photo.editExternal", &json!({"format": "psd"})).unwrap()["id"].as_u64().unwrap());
+    assert_eq!(s.catalog.stack_of(orig).unwrap().photos, vec![e2, e, orig]);
+
+    let mut t = Session::new().with_fs();
+    t.execute("library.import", &json!({"paths": [dir.to_string_lossy()]})).unwrap();
+    let by_name = |n: &str| t.catalog.photos().find(|p| p.file_name == n).map(|p| p.id).unwrap();
+    let (o, a, b) = (by_name("reef.png"), by_name("reef-Edit.psd"), by_name("reef-Edit-Edit.psd"));
+    let st = t.catalog.stack_of(o).expect("restacked");
+    assert!(st.photos.contains(&a) && st.photos.contains(&b) && st.photos.len() == 3, "{:?}", st.photos);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn external_edit_of_a_virtual_copy_stacks_with_its_master() {
+    let dir = temp_dir("extedit-vc");
+    let src = dir.join("pier.png");
+    write_png(&src, 4);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let master = s.active().unwrap();
+    let vc = PhotoId(s.execute("photo.virtualCopy", &json!({})).unwrap()["ids"][0].as_u64().unwrap());
+    s.selection = crate::Selection::single(vc);
+    let e = PhotoId(s.execute("photo.editExternal", &json!({})).unwrap()["id"].as_u64().unwrap());
+    // a virtual copy is stacked under its master: the edit goes directly above the copy
+    assert_eq!(s.catalog.stack_of(master).expect("stacked with the master").photos, vec![master, e, vc]);
+    // once unstacked, the edit takes the copy and its master into one stack again
+    s.execute("stack.ungroup", &json!({"ids": [master.0]})).unwrap();
+    s.selection = crate::Selection::single(vc);
+    let e2 = PhotoId(s.execute("photo.editExternal", &json!({})).unwrap()["id"].as_u64().unwrap());
+    assert_eq!(s.catalog.stack_of(master).expect("restacked").photos, vec![e2, vc, master]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `wait`: an editor that takes --wait (a stand-in PhotoCraft that answers `--version --json`)
+/// is started with it; the command returns once it exits, with an activity row meanwhile, and the
+/// copy it saved is reloaded.
+#[cfg(unix)]
+#[test]
+fn external_edit_waits_for_photocraft_and_reloads() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = temp_dir("extedit-wait");
+    let src = dir.join("cliff.png");
+    write_png(&src, 5);
+    // what the "editor" saves: a TIFF of another size
+    let px = vec![200u8; 12 * 10 * 3];
+    let img = lightcraft_codecs::EncodeImage::new(12, 10, 3, lightcraft_codecs::Samples::U8(&px));
+    let saved = lightcraft_codecs::encode_tiff(&img, lightcraft_codecs::TiffCompression::None, &Default::default()).unwrap();
+    std::fs::write(dir.join("saved.tif"), saved).unwrap();
+    let editor = dir.join("photocraft");
+    let log = dir.join("args.txt");
+    std::fs::write(
+        &editor,
+        format!(
+            "#!/bin/sh\nif [ \"$1\" = --version ]; then echo '{{\"app\":\"photocraft\",\"features\":[\"events\",\"wait\",\"singleInstance\"]}}'; exit 0; fi\necho \"$@\" > '{log}'\nfor f; do :; done\ncp '{saved}' \"$f\"\n",
+            log = log.display(),
+            saved = dir.join("saved.tif").display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&editor, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let r = s.execute("photo.editExternal", &json!({"app": editor.to_string_lossy(), "wait": true})).unwrap();
+    let id = r["id"].as_u64().unwrap();
+    assert_eq!(r["opened"]["waited"], true, "{r}");
+    assert_eq!(r["opened"]["saved"], true, "{r}");
+    assert_eq!(r["opened"]["reloaded"], json!([id]), "{r}");
+    let args = std::fs::read_to_string(&log).unwrap();
+    assert!(args.starts_with("--wait --single-instance ") && args.trim_end().ends_with("cliff-Edit.tif"), "{args}");
+    assert_eq!(s.catalog.photo(PhotoId(id)).unwrap().width, 12, "reloaded");
+    assert!(s.activity.list().is_empty(), "the row is gone once the editor exits");
+    // an editor that can't be waited for is an error, not a hang
+    s.selection = crate::Selection::single(PhotoId(id));
+    let e = s.execute("photo.editExternal", &json!({"app": "/bin/true", "wait": true})).unwrap_err();
+    assert!(e.to_string().contains("--wait"), "{e}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Reload: a file changed on disk (an external editor saved it) gets its new size / hash, the
 /// cached source is dropped and renders change; unchanged files are left alone.
 #[test]
@@ -1327,4 +1469,30 @@ fn a_failed_auto_write_waits_and_is_written_on_retry() {
     assert_eq!(s.unsaved_sidecars(), 0);
     std::fs::set_permissions(&src, std::fs::Permissions::from_mode(0o755)).unwrap();
     let _ = std::fs::remove_dir_all(&src);
+}
+
+/// An edit of an edit names its parent by the document id inside the parent's own file. Renaming
+/// the parent leaves that id the only way to find it, so importing the folder into a new library
+/// still stacks the child on it (review of #910).
+#[test]
+fn external_edit_of_an_edit_relinks_after_the_parent_is_renamed() {
+    let dir = temp_dir("extedit-renamed-parent");
+    let src = dir.join("cove.png");
+    write_png(&src, 9);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let orig = s.active().unwrap();
+    let e1 = PhotoId(s.execute("photo.editExternal", &json!({})).unwrap()["id"].as_u64().unwrap());
+    s.selection = crate::Selection::single(e1);
+    s.execute("photo.editExternal", &json!({})).unwrap();
+    assert_eq!(s.catalog.stack_of(orig).unwrap().photos.len(), 3);
+    std::fs::rename(dir.join("cove-Edit.tif"), dir.join("moved-parent.tif")).unwrap();
+
+    let mut t = Session::new().with_fs();
+    t.execute("library.import", &json!({"paths": [dir.to_string_lossy()]})).unwrap();
+    let by_name = |n: &str| t.catalog.photos().find(|p| p.file_name == n).map(|p| p.id).unwrap();
+    let (parent, child) = (by_name("moved-parent.tif"), by_name("cove-Edit-Edit.tif"));
+    let st = t.catalog.stack_of(parent).expect("the child is stacked with its renamed parent");
+    assert!(st.photos.contains(&child), "{:?}", st.photos);
+    let _ = std::fs::remove_dir_all(&dir);
 }

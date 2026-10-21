@@ -1474,6 +1474,9 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
     if !placed.is_empty() {
         finish_moves(s, placed, log0, &mut report);
     }
+    // external-editor copies (a TIFF with an xmpMM:DerivedFrom link) stack on their source again
+    let imported: Vec<PhotoId> = report.imported.iter().map(|i| PhotoId(*i)).collect();
+    crate::cmd::external_edit::link::stack_derived(s, &imported);
     Ok(report)
 }
 

@@ -15,6 +15,7 @@ pub(crate) mod denoise;
 mod develop;
 mod edit;
 mod export;
+pub mod external_edit;
 pub(crate) mod face_detect;
 mod face_models;
 mod face_recognize;
