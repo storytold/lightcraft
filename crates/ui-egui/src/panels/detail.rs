@@ -2650,12 +2650,17 @@ fn brush_in_use(app: &LightcraftApp, right: RightPanel) -> bool {
 fn brush_wheel(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, right: RightPanel) {
     let id = egui::Id::new("brush-wheel");
     let now = ui.input(|i| i.time);
-    let hovered = ui.data(|d| d.get_temp::<HoveredSpot>(egui::Id::new(HOVERED_SPOT))).filter(|_| right == RightPanel::Remove);
+    // the spot under the pointer now (last frame's outlines, this frame's pointer: it may have moved with the wheel)
+    let hovered = ui
+        .data(|d| d.get_temp::<SpotBodies>(egui::Id::new(SPOT_BODIES)))
+        .filter(|_| right == RightPanel::Remove)
+        .and_then(|b| spot_under(&b.bodies, b.active, resp.hover_pos()?))
+        .map(|(index, ..)| index);
     let in_use = brush_in_use(app, right) && resp.hovered();
     // one wheel gesture on a spot is one undo step: it ends after a pause, off that spot, or when the tool goes
     if let Some((spot, last)) = ui.data(|d| d.get_temp::<(usize, f64)>(egui::Id::new(WHEEL_EDIT))) {
         let pressed = ui.input(|i| i.pointer.any_down());
-        if !in_use || pressed || hovered.map(|h| h.index) != Some(spot) || now - last > WHEEL_EDIT_PAUSE {
+        if !in_use || pressed || hovered != Some(spot) || now - last > WHEEL_EDIT_PAUSE {
             end_wheel_edit(app, ui.ctx());
         } else {
             ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(WHEEL_EDIT_PAUSE));
@@ -2687,7 +2692,7 @@ fn brush_wheel(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response
         ui.data_mut(|d| d.insert_temp(id, true));
         let (k, df) = (1.1f32.powf(size.clamp(-10.0, 10.0)), 5.0 * feather.clamp(-10.0, 10.0));
         match hovered {
-            Some(HoveredSpot { index }) => {
+            Some(index) => {
                 // the spot as it is now: the overlay saw it before this frame's edits
                 let current =
                     app.session.active().and_then(|p| app.session.develop_of(p)).and_then(|d| d.spots.get(index).map(|s| (s.size, s.feather)));
@@ -2806,12 +2811,23 @@ fn brush_drag(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response,
 
 // ------------------------------------------------------------------------ remove
 
-/// The Remove spot under the pointer as of the last frame.
-#[derive(Clone, Copy, Debug, Default)]
-struct HoveredSpot {
-    index: usize,
+/// What of each Remove spot can be grabbed, as last drawn: `(spot, is source, screen points of
+/// its stroke, radius)`, and the selected spot. `brush_wheel` finds the spot under the pointer in it.
+#[derive(Clone, Debug, Default)]
+struct SpotBodies {
+    bodies: Vec<(usize, bool, Vec<Pos2>, f32)>,
+    active: Option<usize>,
 }
-const HOVERED_SPOT: &str = "remove-hovered-spot";
+const SPOT_BODIES: &str = "remove-spot-bodies";
+
+/// The target or source among `bodies` under `q` (its pin or anywhere along its stroke) as `(spot, is
+/// source, distance)`: the selected spot's first, then the nearest.
+fn spot_under(bodies: &[(usize, bool, Vec<Pos2>, f32)], active: Option<usize>, q: Pos2) -> Option<(usize, bool, f32)> {
+    bodies
+        .iter()
+        .filter_map(|(spot, source, pts, r)| Some((*spot, *source, spot_outline::grab_distance(pts, q, r.max(8.0))?)))
+        .min_by(|a, b| (Some(a.0) != active, a.2).partial_cmp(&(Some(b.0) != active, b.2)).unwrap_or(std::cmp::Ordering::Equal))
+}
 
 /// The Remove tool on the photo: every spot's outline and pin (the selected one with its source),
 /// click a pin to select its spot, drag a target or source to move it, paint elsewhere to add one.
@@ -2877,22 +2893,10 @@ fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respo
     }
     let r = (app.ui.remove_size as f64 * long) as f32;
     let band = feather_band(app.ui.tool == "fill", r, app.ui.remove_feather);
-    // a target or source under `q` (its pin or anywhere along its stroke): the selected spot's first, then the nearest
-    let hit = |q: Pos2| {
-        bodies
-            .iter()
-            .filter_map(|(spot, source, pts, r)| Some((*spot, *source, spot_outline::grab_distance(pts, q, r.max(8.0))?)))
-            .min_by(|a, b| (Some(a.0) != active, a.2).partial_cmp(&(Some(b.0) != active, b.2)).unwrap_or(std::cmp::Ordering::Equal))
-    };
+    let hit = |q: Pos2| spot_under(&bodies, active, q);
     let hover = resp.hover_pos().and_then(hit);
     // the mouse wheel resizes the spot under the pointer instead of the brush (`brush_wheel`, next frame)
-    let hovered = hover.map(|(index, ..)| HoveredSpot { index });
-    ui.data_mut(|m| {
-        m.remove_temp::<HoveredSpot>(egui::Id::new(HOVERED_SPOT));
-        if let Some(h) = hovered {
-            m.insert_temp(egui::Id::new(HOVERED_SPOT), h);
-        }
-    });
+    ui.data_mut(|m| m.insert_temp(egui::Id::new(SPOT_BODIES), SpotBodies { bodies: bodies.clone(), active }));
     if let Some(h) = resp.hover_pos() {
         if hover.is_some() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);

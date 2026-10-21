@@ -209,3 +209,25 @@ fn leaving_the_loupe_ends_a_wheel_gesture() {
     assert_eq!(r["ok"], true, "{r}");
     assert_eq!(spots(&h)[0].size, 0.04, "and is one undo step");
 }
+
+#[test]
+fn the_wheel_sizes_the_spot_the_pointer_has_just_moved_onto() {
+    let mut h = remove_tool();
+    for x in [0.3, 0.7] {
+        let r = h.request(
+            "engine.execute",
+            json!({"command": "spot.add", "params": {"mode": "heal", "points": [[x, 0.5]], "size": 0.04, "source": [0.0, 0.2]}}),
+            T,
+        );
+        assert_eq!(r["ok"], true, "{r}");
+    }
+    pointer(&mut h, "move", 0.3, 0.5);
+    // in one frame the pointer moves onto the other spot and the wheel turns
+    let img = h.app.image_rect.expect("photo drawn");
+    let to = egui::pos2(img.min.x + 0.7 * img.width(), img.min.y + 0.5 * img.height());
+    h.events.push(egui::Event::PointerMoved(to));
+    wheel(&mut h, 1.0, egui::Modifiers::NONE);
+    let s = spots(&h);
+    assert_eq!(s[0].size, 0.04, "the spot the pointer left keeps its size");
+    assert!((s[1].size / 0.04 - 1.1).abs() < 0.01, "the spot under the pointer grows, got {}", s[1].size);
+}
