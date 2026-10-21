@@ -98,6 +98,10 @@ load/render and 0%/100% behavior, but partial Amount is currently unsupported: t
 before fitting, which cannot be reproduced by clipping an arbitrary blended function. LightCraft reports the
 limitation and keeps the current edit and undo history. This is not a claim of Lightroom pixel parity.
 
+Direct JSON merges (`develop.merge`, `render --settings`) clamp newly supplied sparse curve
+handles to 0..1. Curves omitted from the merge and checked function payloads retain their exact
+values. Native saved settings and exact preset Amount endpoints keep the lossless behavior above.
+
 ## Saving into an existing sidecar
 
 A sidecar may already hold another application's data — e.g. its `crs:` develop settings and `xmpMM:History` — often

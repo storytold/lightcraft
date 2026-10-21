@@ -1,5 +1,34 @@
 # Lightroom fidelity handoff
 
+The 2026-10-21 integration rebases the accepted fidelity branch onto upstream `main` at
+`abb49bdd` (0.10.0), 108 commits after its previous base. The fidelity investigation remains
+paused. Main adds open-ended luminance masks, bounded JSON settings/crops, an applied-profile
+hover fix and support for larger TIFF strips. This range changes no D3500 NEF, camera-preview,
+pipeline or GPU rendering code; the PR's saved-edit, continuous-curve and imported-profile work
+remains relevant. Other-camera matrix/preview additions are outside the D3500 verification scope.
+
+Integration preserves existing saved and function curves while clamping newly authored sparse
+JSON handles. Checked preset Amount endpoints remain exact. Unsupported-local warnings use
+upstream's correct Refine Saturation neutral value without losing warnings when all mask
+components are unsupported. Catalog **14**, camera-look **10** and render-cache **66** remain
+unchanged. The remaining D3500 colour and master Refine Saturation mismatch is unresolved.
+
+Optimized-development CLI `56a941ead4ba` reproduces all four accepted D3500 controls exactly:
+complete 6000×4000 RGB16 pixel hashes, ICC bytes, saved settings and diagnostics retain their
+baseline results. Source and sidecar guards pass. These CNR0 controls establish preservation,
+not a new fidelity gain or active preview-NR equivalence. No Lightroom access was used.
+Temporary full TIFFs and 327 MB of verified duplicate capture data were retired; receipts and
+retained equivalents remain in `plan/rebase-20261021/` and the earlier measurement directory.
+
+All eight `cargo xtask ci` gates pass, including CPU/GPU comparisons on Apple M4 Metal.
+The report records 165 checks skipped for absent optional corpus, fonts or model data.
+The existing merged-settings test was extended; no new test functions or infrastructure were
+added. Final source guards, formatting and focused develop Clippy also pass. The normal CLI
+build and the workspace-feature build both retain the four native results; only the normal
+CLI is retained as the current integration binary. Private evidence: `plan/rebase-20261021/`.
+
+## Previous integration (2026-10-15)
+
 The 2026-10-15 integration rebases the accepted fidelity branch onto upstream `main` at
 `0da998f2` (0.8.0), 699 commits after its previous base. The user's fidelity investigation remains
 paused. No new Lightroom exports or calibration candidates are part of this integration.

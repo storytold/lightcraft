@@ -261,13 +261,7 @@ pub fn masks(values: &Values, aspect: f64) -> (Vec<Value>, Vec<String>) {
             if flag(c, "crs:CorrectionActive") == Some(false) {
                 continue;
             }
-            if let XmpValue::Struct(fields) = c {
-                for field in fields.keys().filter(|k| k.starts_with("crs:Local")) {
-                    if !LOCAL.iter().any(|(name, _, _)| field.trim_start_matches("crs:") == *name) && num(c, field).is_some_and(|v| v != 0.0) {
-                        skipped.push(field.trim_start_matches("crs:").to_string());
-                    }
-                }
-            }
+            skipped.extend(unmapped_local(c));
             let comps = c.field("crs:CorrectionMasks").map(XmpValue::items).unwrap_or_default();
             let mut parts = Vec::new();
             for m in comps {
@@ -279,7 +273,6 @@ pub fn masks(values: &Values, aspect: f64) -> (Vec<Value>, Vec<String>) {
             if parts.is_empty() {
                 continue;
             }
-            skipped.extend(unmapped_local(c));
             // brush dabs of one correction are one brush component
             let mut merged: Vec<Value> = Vec::new();
             for p in parts {

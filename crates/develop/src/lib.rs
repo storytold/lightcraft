@@ -72,6 +72,31 @@ impl DevelopSettings {
     pub fn merged(&self, partial: &Value) -> Result<DevelopSettings, serde_json::Error> {
         let mut v = serde_json::to_value(self)?;
         presets::deep_merge(&mut v, partial);
+        // Clamp only newly authored sparse handles. Existing saved curves and checked function
+        // payloads are authoritative; an unrelated slider merge must not rewrite their outputs.
+        // Do this before deserialization so an extreme but finite handle cannot overflow the
+        // checked curve evaluator before being brought into its authored range.
+        for name in ["master", "red", "green", "blue"] {
+            if partial.get("curve").and_then(|curve| curve.get(name)).is_some_and(Value::is_array)
+                && let Some(points) = v.get_mut("curve").and_then(|curve| curve.get_mut(name)).and_then(Value::as_array_mut)
+                && points.len() <= MAX_POINT_CURVE_POINTS
+            {
+                for point in points {
+                    for (index, axis) in ["x", "y"].into_iter().enumerate() {
+                        let value = match point {
+                            Value::Array(coords) if coords.len() == 2 => coords.get_mut(index),
+                            Value::Object(coords) => coords.get_mut(axis),
+                            _ => None,
+                        };
+                        if let Some(value) = value
+                            && let Some(number) = value.as_f64().filter(|number| number.is_finite())
+                        {
+                            *value = Value::from(number.clamp(0.0, 1.0));
+                        }
+                    }
+                }
+            }
+        }
         let mut out = DevelopSettings::from_json(&v)?;
         if let Some(wb) = partial.get("wb").and_then(Value::as_object)
             && (wb.contains_key("temp") || wb.contains_key("tint"))
@@ -84,7 +109,7 @@ impl DevelopSettings {
     }
 
     /// What crs XMP import does to the values it reads, for settings that arrive as JSON (presets, `develop.merge`,
-    /// `render --settings`; issue #1946): every slider clamped through its control spec, point curves in 0..1, and a
+    /// `render --settings`; issue #1946): every slider clamped through its control spec, and a
     /// crop with no area left as it was in `before`. Unrotated, the crop is clipped to the photo first; a turned crop
     /// may reach past 0..1 and is left to the crop tools, which know the photo's size.
     fn keep_in_range(&mut self, before: &DevelopSettings) {
@@ -92,10 +117,6 @@ impl DevelopSettings {
             if let Some(v) = controls::get(self, c.id) {
                 controls::set(self, c.id, v);
             }
-        }
-        let c = &mut self.curve;
-        for p in [&mut c.master, &mut c.red, &mut c.green, &mut c.blue].into_iter().flatten() {
-            *p = lightcraft_geom::Point::new(p.x.clamp(0.0, 1.0), p.y.clamp(0.0, 1.0));
         }
         let g = &mut self.crop.geometry;
         if g.angle == 0.0 {
@@ -404,13 +425,22 @@ mod tests {
         // issue #1946: `develop.merge`, `render --settings` and presets stored whatever the JSON said
         let mut base = DevelopSettings::default();
         base.crop.geometry.rect = lightcraft_geom::Rect::new(0.1, 0.2, 0.8, 0.9);
+        base.curve.red = vec![lightcraft_geom::Point::new(0.0, -0.1), lightcraft_geom::Point::new(1.0, 1.2)].into();
+        base.curve.green = PointCurve::default().affine(1.5, -0.25).unwrap();
         let m = base
             .merged(&json!({"light": {"exposure": 1e308}, "vignette": {"amount": -1e308}, "geometry": {"scale": 0}, "optics": {"distortion": 1e308}}))
             .unwrap();
         assert_eq!((m.light.exposure, m.vignette.amount, m.geometry.scale, m.optics.distortion), (5.0, -100.0, 50.0, 100.0));
+        assert_eq!(m.curve, base.curve, "unrelated merges retain saved sparse and function curves");
         // point curves stay in 0..1, as an imported XMP curve does
         let m = base.merged(&json!({"curve": {"master": [{"x": -3, "y": 0}, {"x": 1, "y": 1e308}]}})).unwrap();
-        assert_eq!(m.curve.master, vec![lightcraft_geom::Point::new(0.0, 0.0), lightcraft_geom::Point::new(1.0, 1.0)]);
+        assert_eq!(m.curve.master, vec![lightcraft_geom::Point::new(0.0, 0.0), lightcraft_geom::Point::new(1.0, 1.0)].into());
+        assert_eq!(m.curve.red, base.curve.red);
+        assert_eq!(m.curve.green, base.curve.green);
+        let sequence = base.merged(&json!({"curve": {"master": [[-3, 0], [1, 1e308]]}})).unwrap();
+        assert_eq!(sequence.curve.master, m.curve.master, "both accepted point encodings share the authored range");
+        let m = base.merged(&json!({"curve": {"blue": base.curve.green}})).unwrap();
+        assert_eq!(m.curve.blue, base.curve.green, "authored functions retain signed outputs and coefficients");
         // a crop with no area is left out, as XMP import leaves out one whose edges are inverted
         for rect in
             [json!({"x0": 0.9, "x1": 0.1, "y0": 0, "y1": 1}), json!({"x0": 1e308, "x1": -1e308, "y0": 0, "y1": 1}), json!({"x0": 0.5, "x1": 0.5})]
