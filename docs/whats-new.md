@@ -1,5 +1,17 @@
 # What's new in LightCraft
 
+## 2026-10-15
+
+### Slider drags stay smooth in a large library
+- A slider tick (or any develop edit) no longer reworks views that don't look at develop settings: the grid keeps
+  its list, its date headers and its stack badges, the source's count stays as it was, and the side panels keep their
+  keyword lists, the filter bar's cameras, lenses and keywords, People, the rule dialog's count and the Missing
+  Photos count. In a library of 67,000 photos the frame after a tick went from about 21 ms to about 3 ms, with the
+  grid alone or with both side panels open (an idle frame takes about 2 ms there).
+- Views that do look at develop settings still follow each tick: Edited / Unedited and the `edited:` search, the
+  Edit Date sort, smart albums testing Has Edits, Edit Date, Cropped, Treatment or a photo's size and shape (and
+  albums that test those), and the Photo Grid's rows, which follow a crop or a rotation.
+
 ## 2026-10-14
 
 ### Model downloads time out on a name that doesn't resolve

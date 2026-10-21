@@ -766,7 +766,8 @@ fn missing_count(app: &mut LightcraftApp, ui: &mut egui::Ui) -> usize {
     let now = ui.input(|i| i.time);
     let rev = app.session.catalog.revision;
     let mut job: Job = ui.data(|d| d.get_temp(id)).unwrap_or(Job { rev: u64::MAX, at: f64::MIN, ..Default::default() });
-    let fresh = now - job.at < 5.0 && job.rev == rev;
+    // (which files the library expects is no develop state: a slider drag doesn't check them all again)
+    let fresh = now - job.at < 5.0 && crate::still_right(&app.session.catalog, job.rev, crate::READS_NO_DEVELOP);
     if !fresh && !job.running.load(Relaxed) {
         // the same scope as the Missing Photos view: library photos only, never Local browse records
         let paths = lightcraft_engine::cmd::missing::candidates(&app.session.catalog);
