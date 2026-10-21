@@ -279,6 +279,17 @@ impl Shared {
     }
 }
 
+/// Held by the walk for as long as readers may run: when it ends, however it ends (a panic in
+/// `keep` or `note` too), the readers are told to stop, so the scope can end and the panic reach
+/// the caller.
+struct Halt<'a>(&'a Shared);
+
+impl Drop for Halt<'_> {
+    fn drop(&mut self) {
+        self.0.halt();
+    }
+}
+
 /// Held while a reader lists a folder: if the reader dies before handing the listing over, the
 /// walk is told, and lists the folder itself instead of waiting for ever.
 struct Reading<'a> {
@@ -381,6 +392,7 @@ fn walk_with(
     let cfg = ReadCfg { skip: skipper, want_all, max_depth: limits.max_depth, max_entries: limits.max_entries };
     let shared = Shared { pool: Mutex::new(Pool::default()), changed: Condvar::new() };
     let read_by_workers = std::thread::scope(|scope| {
+        let _halt = Halt(&shared);
         let mut readers = Vec::new();
         let mut stopped = false;
         // (path, depth of the folder it is in, is a folder); popped in path order
@@ -929,6 +941,22 @@ mod tests {
             assert!(by_workers <= limits.max_entries + WORKERS, "{by_workers} listed by readers");
             assert!(by_workers < 600, "{by_workers}");
         }
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Given a tree wide enough to start readers, when `keep` panics, then the panic reaches the
+    /// caller (the readers are stopped, so the walk's scope can end) instead of the walk hanging.
+    #[test]
+    fn a_panic_during_a_walk_reaches_the_caller() {
+        let (d, lib) = tree("panic");
+        let (tx, rx) = std::sync::mpsc::channel();
+        let root = d.clone();
+        std::thread::spawn(move || {
+            let r = std::panic::catch_unwind(|| files_in(&root, Some(&lib), Limits::default(), |_| panic!("keep failed")));
+            let _ = tx.send(r.is_err());
+        });
+        let got = rx.recv_timeout(std::time::Duration::from_secs(20));
+        assert_eq!(got, Ok(true), "the walk hung or did not panic");
         let _ = std::fs::remove_dir_all(&d);
     }
 }
