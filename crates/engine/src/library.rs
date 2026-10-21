@@ -482,6 +482,7 @@ impl Session {
         self.redo.clear();
         self.interaction = None;
         self.pending_log.clear();
+        self.place_names.fill_job = None;
         self.selection = Selection::default();
         self.source = LibrarySource::All;
         self.library_folder = None;

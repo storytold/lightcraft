@@ -19,6 +19,7 @@ pub mod keywording;
 pub mod layout_overlay;
 pub mod left;
 pub mod library_problem;
+pub mod locations;
 pub mod mask_effects;
 pub mod masking;
 pub mod notices;

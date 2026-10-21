@@ -147,7 +147,7 @@ fn row(ui: &mut egui::Ui, t: &Tokens, task: &TaskInfo, width: f32) -> bool {
 }
 
 /// The progress bar; while the amount of work isn't known, a segment sweeps across.
-fn bar(ui: &mut egui::Ui, t: &Tokens, task: &TaskInfo, width: f32) {
+pub(super) fn bar(ui: &mut egui::Ui, t: &Tokens, task: &TaskInfo, width: f32) -> Rect {
     let (rect, _) = ui.allocate_exact_size(vec2(width, 5.0), Sense::hover());
     let p = ui.painter();
     p.rect_filled(rect, 2.5, t.field);
@@ -163,4 +163,5 @@ fn bar(ui: &mut egui::Ui, t: &Tokens, task: &TaskInfo, width: f32) {
     if fill.width() > 0.0 {
         p.rect_filled(fill, 2.5, if task.cancelling { t.text_dim } else { t.accent });
     }
+    rect
 }

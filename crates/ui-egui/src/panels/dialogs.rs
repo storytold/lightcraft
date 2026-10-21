@@ -423,6 +423,17 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     if !xmp.is_empty() {
                         groups.push(("XMP".into(), xmp));
                     }
+                    let fields: Vec<_> = rows["catalog"].as_array().into_iter().flatten().filter_map(|r| {
+                        let (name, value) = (r["name"].as_str()?, r["value"].as_str()?);
+                        keep(name, value).then(|| (name.to_string(), value.to_string()))
+                    }).collect();
+                    if !fields.is_empty() {
+                        groups.insert(0, (crate::i18n::tr("Catalog · saved values").into(), fields));
+                    }
+                    if !groups.is_empty() && crate::widgets::text_button(ui,"copyMetadata","Copy displayed metadata",false).clicked() {
+                        let text=groups.iter().map(|(g,fields)|format!("{g}\n{}",fields.iter().map(|(n,v)|format!("{n}: {v}")).collect::<Vec<_>>().join("\n"))).collect::<Vec<_>>().join("\n\n");
+                        ui.ctx().copy_text(text);
+                    }
                     egui::ScrollArea::vertical().max_height(list_height(ui, 440.0)).auto_shrink([false, true]).show(ui, |ui| {
                         if groups.is_empty() {
                             ui.label(egui::RichText::new(crate::i18n::tr(rows["note"].as_str().unwrap_or("No metadata found"))).color(t.text_dim));

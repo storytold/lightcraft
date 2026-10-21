@@ -47,6 +47,88 @@ pub struct PlaceNames {
     shared: Arc<Mutex<DownloadShared>>,
     /// (cities file, its size, its modification time, the parsed names).
     cache: Option<(PathBuf, u64, Option<SystemTime>, Arc<GeoNames>)>,
+    pub(crate) fill_job: Option<FillJob>,
+}
+
+/// A snapshot of the visible photos; apply against fresh metadata only when the whole lookup finishes.
+pub(crate) struct FillJob {
+    epoch: u64,
+    todo: Vec<(PhotoId, LatLon)>,
+    cursor: usize,
+    found: Vec<(PhotoId, LatLon, lightcraft_geocode::Place)>,
+    names: Arc<GeoNames>,
+    task: crate::activity::TaskGuard,
+}
+
+fn start_fill(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "metadata.fillLocations";
+    if s.place_names.fill_job.is_some() {
+        return Err(bad(C, "location filling is already running"));
+    }
+    let mut ids = if p.get("ids").is_some() { s.targets(p)? } else { s.visible_cloned() };
+    ids.sort_unstable();
+    ids.dedup();
+    let todo: Vec<_> = ids
+        .into_iter()
+        .filter_map(|id| {
+            let ph = s.catalog.photo(id)?;
+            if ph.deleted || (!ph.meta.city.trim().is_empty() && !ph.meta.state.trim().is_empty() && !ph.meta.country.trim().is_empty()) {
+                return None;
+            }
+            let (lat, lon) = ph.meta.gps?;
+            let at = LatLon::new(lat, lon);
+            at.is_valid().then_some((id, at))
+        })
+        .collect();
+    if todo.is_empty() {
+        return Ok(json!({"started":false,"total":0}));
+    }
+    let dir = dataset_dir(p).ok_or_else(|| bad(C, "no settings folder: give `dataset`"))?;
+    let names = s.place_names.load(&dir).map_err(|e| bad(C, format!("{e}: download the place names first (Photo → Download Place Names)")))?;
+    let total = todo.len();
+    let task = s.activity.start("geocode", "Filling locations", Cancel::Yes);
+    task.progress(0, total as u64);
+    s.place_names.fill_job = Some(FillJob { epoch: s.library_generation(), todo, cursor: 0, found: Vec::new(), names, task });
+    Ok(json!({"started":true,"total":total}))
+}
+
+fn pump_fill(s: &mut Session, _: &Value) -> Result<Value> {
+    let Some(mut job) = s.place_names.fill_job.take() else {
+        return Ok(json!({"active":false}));
+    };
+    if job.epoch != s.library_generation() || job.task.is_cancelled() {
+        return Ok(json!({"active":false,"cancelled":true}));
+    }
+    let total = job.todo.len();
+    let end = job.cursor.saturating_add(256).min(total);
+    for &(id, at) in job.todo.get(job.cursor..end).unwrap_or_default() {
+        if let Some(place) = job.names.reverse(at) {
+            job.found.push((id, at, place));
+        }
+    }
+    job.cursor = end;
+    job.task.progress(end as u64, total as u64);
+    if end < total {
+        s.place_names.fill_job = Some(job);
+        return Ok(json!({"active":true,"done":end,"total":total}));
+    }
+    let mut ops = Vec::new();
+    for (id, at, place) in job.found {
+        let Some(ph) = s.catalog.photo(id) else { continue };
+        if ph.deleted || ph.meta.gps != Some((at.lat, at.lon)) {
+            continue;
+        }
+        let mut meta = ph.meta.clone();
+        fill(&mut meta, &place, false);
+        if meta != ph.meta {
+            ops.push(Op::SetMeta { id, meta: Box::new(meta) });
+        }
+    }
+    let changed = ops.len();
+    if changed > 0 {
+        s.commit("Fill locations in view", Op::Batch { ops })?;
+    }
+    Ok(json!({"active":false,"complete":true,"changed":changed,"total":total}))
 }
 
 impl PlaceNames {
@@ -267,6 +349,17 @@ pub fn specs() -> Vec<CommandSpec> {
     #[allow(unused_mut)]
     let mut v = vec![
         cmd!(
+            "metadata.fillLocations",
+            "Fill Locations in Current View",
+            ["Photo"],
+            None,
+            "{ids?, dataset?: folder} — fill missing City / State / Country for a snapshot of the current view (folder, subfolders and filters included); lookup advances with metadata.pumpLocations, cancellable, one undo step; saves in catalog and follows existing XMP preferences",
+            always,
+            start_fill
+        ),
+        cmd!(query "metadata.pumpLocations", "Advance Location Filling", [], None,
+            "{} → {active, done?, total?, complete?, changed?, cancelled?} — advance a bounded batch of offline lookups; current metadata is preserved", always, pump_fill),
+        cmd!(
             "metadata.reverseGeocode",
             "Fill Location from GPS",
             ["Photo"],
@@ -315,6 +408,108 @@ mod tests {
         meta.country.clear();
         meta.location.clear();
         s.commit("test", Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
+    }
+
+    fn view_photo(s: &mut Session, id: u64, path: &str, gps: Option<(f64, f64)>) {
+        let mut photo =
+            lightcraft_catalog::Photo::new(PhotoId(id), lightcraft_catalog::Source::File { path: path.into() }, path, "JPEG", 10, 10, "2026-10-19");
+        photo.local = true;
+        photo.meta.gps = gps;
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+    }
+
+    #[test]
+    fn view_fill_respects_local_folder_filters_and_saves_on_reopen() {
+        let dir = dataset("view-fill");
+        let library = dir.join("library");
+        let mut s = Session::new();
+        s.open_library(&library, false).unwrap();
+        for (id, path, gps) in [
+            (1, "/photos/a.jpg", Some((48.86, 2.34))),
+            (2, "/photos/child/b.jpg", Some((51.5, -0.1))),
+            (3, "/outside/c.jpg", Some((48.86, 2.34))),
+            (4, "/photos/no-gps.jpg", None),
+        ] {
+            let mut photo = lightcraft_catalog::Photo::new(
+                PhotoId(id),
+                lightcraft_catalog::Source::File { path: path.into() },
+                path,
+                "JPEG",
+                10,
+                10,
+                "2026-10-19",
+            );
+            photo.local = true;
+            photo.meta.gps = gps;
+            s.commit("fixture", Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        }
+        s.source = crate::LibrarySource::Folder;
+        s.browse = Some(crate::Browse { path: "/photos".into(), subfolders: false });
+        assert_eq!(s.execute("metadata.fillLocations", &json!({"dataset":dir})).unwrap()["total"], 1);
+        let done = s.execute("metadata.pumpLocations", &json!({})).unwrap();
+        assert_eq!(done["changed"], 1);
+        assert_eq!(s.catalog.photo(PhotoId(1)).unwrap().meta.city, "Paris");
+        assert!(s.catalog.photo(PhotoId(2)).unwrap().meta.city.is_empty());
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert!(s.catalog.photo(PhotoId(1)).unwrap().meta.city.is_empty());
+        s.browse.as_mut().unwrap().subfolders = true;
+        s.filter.text = "b.jpg".into();
+        assert_eq!(s.execute("metadata.fillLocations", &json!({"dataset":dir})).unwrap()["total"], 1);
+        s.execute("metadata.pumpLocations", &json!({})).unwrap();
+        assert_eq!(s.catalog.photo(PhotoId(2)).unwrap().meta.city, "London");
+        assert!(s.catalog.photo(PhotoId(3)).unwrap().meta.city.is_empty());
+        s.close_library().unwrap();
+        drop(s);
+        let mut reopened = Session::new();
+        reopened.open_library(&library, false).unwrap();
+        assert_eq!(reopened.catalog.photo(PhotoId(2)).unwrap().meta.city, "London");
+        assert_eq!(reopened.catalog.photo(PhotoId(2)).unwrap().meta.country, "United Kingdom");
+    }
+
+    #[test]
+    fn cancelling_view_fill_is_atomic_and_late_edits_are_kept() {
+        let dir = dataset("cancel-view-fill");
+        let mut s = Session::new();
+        for id in 1..=300 {
+            view_photo(&mut s, id, &format!("/photos/{id}.jpg"), Some((48.86, 2.34)));
+        }
+        s.source = crate::LibrarySource::Folder;
+        s.browse = Some(crate::Browse { path: "/photos".into(), subfolders: true });
+        s.execute("metadata.fillLocations", &json!({"dataset":dir})).unwrap();
+        assert_eq!(s.execute("metadata.pumpLocations", &json!({})).unwrap()["done"], 256);
+        assert!(s.catalog.photo(PhotoId(1)).unwrap().meta.city.is_empty());
+        let id = s.activity.list()[0].id;
+        s.activity.cancel(id).unwrap();
+        assert_eq!(s.execute("metadata.pumpLocations", &json!({})).unwrap()["cancelled"], true);
+        assert!(s.catalog.photos().all(|p| p.meta.city.is_empty()));
+        s.execute("metadata.fillLocations", &json!({"dataset":dir})).unwrap();
+        s.execute("metadata.pumpLocations", &json!({})).unwrap();
+        set_gps(&mut s, PhotoId(1), Some((48.86, 2.34)), "My city");
+        set_gps(&mut s, PhotoId(2), Some((51.5, -0.1)), "");
+        s.execute("metadata.pumpLocations", &json!({})).unwrap();
+        assert_eq!(s.catalog.photo(PhotoId(1)).unwrap().meta.city, "My city");
+        assert!(s.catalog.photo(PhotoId(2)).unwrap().meta.city.is_empty(), "Changed GPS must not receive a stale lookup");
+        assert_eq!(s.catalog.photo(PhotoId(3)).unwrap().meta.city, "Paris");
+        assert!(s.activity.list().is_empty());
+    }
+
+    #[test]
+    fn manual_fill_persists_and_all_metadata_shows_saved_catalog_values() {
+        let dir = dataset("saved-values");
+        let library = dir.join("library");
+        let mut s = Session::new();
+        s.open_library(&library, false).unwrap();
+        crate::demo::load(&mut s);
+        let id = s.visible_cloned()[0];
+        set_gps(&mut s, id, Some((48.86, 2.34)), "");
+        s.execute("metadata.reverseGeocode", &json!({"ids":[id.0],"dataset":dir})).unwrap();
+        s.close_library().unwrap();
+        drop(s);
+        let mut s = Session::new();
+        s.open_library(&library, false).unwrap();
+        assert_eq!(s.catalog.photo(id).unwrap().meta.city, "Paris");
+        let rows = s.execute("photo.allMetadata", &json!({"id":id.0})).unwrap();
+        assert!(rows["catalog"].as_array().unwrap().iter().any(|r| r["name"] == "City" && r["value"] == "Paris"));
     }
 
     #[test]
