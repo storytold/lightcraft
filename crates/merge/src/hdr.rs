@@ -317,8 +317,19 @@ pub fn merge_hdr(mut frames: Vec<Frame>, opts: &HdrOptions, progress: &Progress)
         }
     });
     check(progress, 0.9, "Merging")?;
+    // from here on only the reference's pixels and saturation are read: free the other frames' full-size buffers
+    // before the detail pass allocates its own
+    let mut sat = sat;
+    let sat_ref = sat.get_mut(reference).map(std::mem::take).unwrap_or_default();
+    drop(sat);
+    drop(valid);
+    for (i, f) in frames.iter_mut().enumerate() {
+        if i != reference {
+            f.image = Rgb32f::new(0, 0);
+        }
+    }
     // 6. the reference's own fine detail where it is well exposed
-    reference_detail(&mut out, &frames[reference], &sat[reference]);
+    reference_detail(&mut out, &frames[reference], &sat_ref);
     check(progress, 0.92, "Merging")?;
 
     let ghost = match &ghost_small {
