@@ -109,6 +109,10 @@ pub struct ImportOptions {
     pub metadata_preset: Option<String>,
     /// Copy: raws are copied as DNG (Copy as DNG).
     pub convert_dng: bool,
+    /// Import files whose content the library already has as new photos (Lightroom's "Don't
+    /// Import Suspected Duplicates" unchecked). A file at a path the library already lists, or one
+    /// in Recently Deleted, is still handled as a duplicate.
+    pub import_duplicates: bool,
 }
 
 /// How copies are filed in the destination. The date is the capture time, else the time of the
@@ -978,7 +982,10 @@ impl ImportJob {
             if let Source::File { path } = &p.source {
                 self.by_path.insert(path.clone(), (p.id, p.local));
             }
-            if let Some(h) = &p.content_hash {
+            // importing suspected duplicates: only a trashed photo's content still matches
+            if let Some(h) = &p.content_hash
+                && (p.deleted || !self.opts.import_duplicates)
+            {
                 self.by_hash.insert(h.clone(), Some(p.id));
             }
         }
@@ -1141,7 +1148,9 @@ impl ImportJob {
                 }
                 _ => path.clone(),
             };
-            if let Some(h) = &info.content_hash {
+            if let Some(h) = &info.content_hash
+                && !self.opts.import_duplicates
+            {
                 self.by_hash.insert(h.clone(), None);
             }
             self.done.fetch_add(1, Relaxed);
@@ -1165,6 +1174,7 @@ impl ImportJob {
             };
             if let PreparedItem::Ready(r) = &item
                 && let Some(h) = &r.info.content_hash
+                && !self.opts.import_duplicates
             {
                 self.by_hash.insert(h.clone(), None);
             }
@@ -1372,6 +1382,13 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
             }
         }
     }
+    // "Don't Import Suspected Duplicates" off: contents already in the library (or earlier in this
+    // import), so a copy gets its own `<hash>:dup<id>` key, as Photo > Duplicate does
+    let mut live_hash: std::collections::HashSet<String> = if opts.import_duplicates {
+        s.catalog.photos().filter(|p| !p.deleted).filter_map(|p| p.content_hash.clone()).collect()
+    } else {
+        Default::default()
+    };
     let mut purge: Vec<PhotoId> = Vec::new();
     let mut purged: std::collections::HashSet<PhotoId> = Default::default();
     for it in prepared.items {
@@ -1428,6 +1445,12 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                 p.meta = info.meta;
                 p.as_shot_wb = info.as_shot_wb;
                 p.content_hash = info.content_hash;
+                if opts.import_duplicates
+                    && let Some(h) = p.content_hash.clone()
+                    && !live_hash.insert(h.clone())
+                {
+                    p.content_hash = Some(format!("{h}:dup{}", id.0));
+                }
                 p.embedded_lens = info.embedded_lens;
                 p.set_preview_only(info.preview_only.clone());
                 apply_import_defaults(s, &mut p);

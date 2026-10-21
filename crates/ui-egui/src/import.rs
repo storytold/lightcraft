@@ -88,6 +88,9 @@ pub struct ImportDialog {
     /// What to do with those: `restore` (the default: the photo comes back with its edits), `fresh`
     /// (imported as a new photo, the old record deleted) or "" (leave them) — the `onDeleted` param.
     pub on_deleted: String,
+    /// "Don't Import Suspected Duplicates" unchecked: files whose content the library already has
+    /// can be checked and come in as new photos (the `importDuplicates` param).
+    pub import_duplicates: bool,
     /// The candidate clicked last: where a Shift-click range starts ([`ImportDialog::click`]).
     #[serde(skip)]
     pub last_clicked: Option<usize>,
@@ -133,6 +136,24 @@ impl ImportDialog {
     /// is in Recently Deleted — even with "Leave them", a click picks it (issue #1285).
     pub fn importable(&self, i: usize) -> bool {
         self.candidates.get(i).is_some_and(|c| c.error.is_none() && (c.duplicate.is_none() || self.is_trashed(i)))
+            || (self.import_duplicates && self.is_suspected_duplicate(i))
+    }
+    /// Candidate `i` has the same content as a photo the library has (not in Recently Deleted) or
+    /// as a file earlier in the list: Lightroom's "suspected duplicate".
+    pub fn is_suspected_duplicate(&self, i: usize) -> bool {
+        self.candidates.get(i).is_some_and(|c| c.error.is_none() && c.duplicate.as_deref() == Some("content")) && !self.is_trashed(i)
+    }
+    /// Tick or untick "Don't Import Suspected Duplicates" (`skip`): the suspected duplicates are
+    /// unchecked, or checked to be imported as new photos.
+    pub fn set_skip_duplicates(&mut self, skip: bool) {
+        self.import_duplicates = !skip;
+        for i in 0..self.candidates.len() {
+            if self.is_suspected_duplicate(i)
+                && let Some(c) = self.checked.get_mut(i)
+            {
+                *c = !skip;
+            }
+        }
     }
     /// Candidate `i` is checked by Check All and the file type toggles: with "Leave them", a file in
     /// Recently Deleted is only checked by hand.
@@ -652,6 +673,9 @@ pub fn start(app: &mut LightcraftApp, d: &ImportDialog) -> Result<Value, String>
     if !d.on_deleted.is_empty() {
         params["onDeleted"] = json!(d.on_deleted);
     }
+    if d.import_duplicates {
+        params["importDuplicates"] = json!(true);
+    }
     if let Some(a) = album {
         params["album"] = json!(a);
     }
@@ -994,8 +1018,11 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
             ui.label(egui::RichText::new(crate::i18n::tr_format!("· {dups} already in the library", dups = dups)).color(t.text_dim));
         }
         if in_source > 0 {
-            ui.label(egui::RichText::new(crate::i18n::tr_format!("· {in_source} identical copies", in_source = in_source)).color(t.text_dim))
-                .on_hover_text(crate::i18n::tr("Files with the same content as another file in this import: only the first is imported."));
+            let r = ui.label(egui::RichText::new(crate::i18n::tr_format!("· {in_source} identical copies", in_source = in_source)).color(t.text_dim));
+            // (with duplicates enabled the copies can be selected too, so the hint would be wrong)
+            if !d.import_duplicates {
+                r.on_hover_text(crate::i18n::tr("Files with the same content as another file in this import: only the first is imported."));
+            }
         }
         if trashed > 0 {
             ui.label(egui::RichText::new(crate::i18n::tr_format!("· {trashed} in Recently Deleted", trashed = trashed)).color(t.text_dim));
@@ -1212,6 +1239,14 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
             );
         }
     }
+    field(ui, "Duplicates", |ui| {
+        let mut skip = !d.import_duplicates;
+        let r = ui.checkbox(&mut skip, crate::i18n::tr("Don't Import Suspected Duplicates"));
+        register(ui.ctx(), "check:importSkipDuplicates", r.rect);
+        if r.changed() {
+            d.set_skip_duplicates(skip);
+        }
+    });
     if d.trashed.iter().any(|t| *t) {
         field(ui, "In Recently Deleted", |ui| {
             let cur = match d.on_deleted.as_str() {
@@ -1353,6 +1388,7 @@ fn candidate_cell(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDial
         (Some(_), _) if in_trash && on => Some(if d.on_deleted == "fresh" { "Will be replaced" } else { "Will be restored" }),
         (Some(_), _) if in_trash => Some("In Recently Deleted"),
         (Some(r), _) if r == "path" => Some("In library"),
+        (Some(_), _) if on => Some("Will be copied"),
         (Some(_), _) => Some("Duplicate"),
         (None, Some(_)) => Some("Unreadable"),
         _ => None,
@@ -1599,6 +1635,19 @@ mod tests {
         let mut candidates: Vec<ImportCandidate> = (0..6).map(|i| ImportCandidate { path: format!("img{i}.jpg"), ..Default::default() }).collect();
         candidates[3].duplicate = Some("content".into());
         ImportDialog::new(candidates)
+    }
+
+    /// Unticking "Don't Import Suspected Duplicates" checks the content duplicates (they can then be
+    /// imported as copies); a file at a path the library has stays out.
+    #[test]
+    fn unticking_dont_import_duplicates_checks_the_copies() {
+        let mut d = dialog();
+        d.candidates[5].duplicate = Some("path".into());
+        d.checked[5] = false;
+        d.set_skip_duplicates(false);
+        assert!(d.checked[3] && d.importable(3) && !d.importable(5), "{:?}", d.checked);
+        d.set_skip_duplicates(true);
+        assert!(!d.checked[3] && !d.importable(3));
     }
 
     /// Identical copies inside the source folder are not "already in the library" (a fresh library

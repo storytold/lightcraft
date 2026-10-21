@@ -1695,6 +1695,38 @@ fn upper_and_mixed_case_extensions_are_found_by_import_browse_and_sidecar_lookup
     }
     let _ = std::fs::remove_dir_all(&src);
 }
+
+/// "Don't Import Suspected Duplicates" off (`importDuplicates: true`): a copy of a photo the
+/// library already has (same bytes, another path) comes in as a new photo; on (the default) it is
+/// skipped. A photo in Recently Deleted is still restored, not copied.
+#[test]
+fn importing_suspected_duplicates_adds_copies_when_asked() {
+    let src = temp_dir("dup-copies");
+    write_png(&src.join("a.png"), 7);
+    std::fs::create_dir_all(src.join("copy")).unwrap();
+    write_png(&src.join("copy/a.png"), 7);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.join("a.png").to_string_lossy()]})).unwrap();
+    let copy = src.join("copy/a.png").to_string_lossy().to_string();
+    let r = s.execute("library.import", &json!({"paths": [copy]})).unwrap();
+    assert_eq!((ids(&r, "imported"), ids(&r, "duplicates")), (0, 1), "skipped by default: {r}");
+    let r = s.execute("library.import", &json!({"paths": [copy], "importDuplicates": true})).unwrap();
+    assert_eq!((ids(&r, "imported"), ids(&r, "duplicates")), (1, 0), "{r}");
+    assert_eq!(s.catalog.len(), 2);
+    // the copy has its own content key, so content matching (relink, duplicate lookups) tells them apart
+    let hashes: Vec<_> = s.catalog.photos().filter_map(|p| p.content_hash.clone()).collect();
+    assert_eq!(hashes.len(), 2);
+    assert_ne!(hashes[0], hashes[1], "{hashes:?}");
+    assert!(hashes.iter().any(|h| h.contains(":dup")), "{hashes:?}");
+    let _ = std::fs::remove_dir_all(&src);
+
+    let (mut s, src, id) = trashed_photo("dup-copies-trash");
+    let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()], "importDuplicates": true})).unwrap();
+    assert_eq!(r["restored"], json!([id]), "{r}");
+    assert_eq!(s.catalog.len(), 1, "restored, not copied");
+    let _ = std::fs::remove_dir_all(&src);
+}
+
 /// Sidecars are found and read whatever their name's case, header or byte-order mark, so a
 /// raw's rating and crop never silently stay behind while the file's own IPTC comes in (fork #43).
 #[test]
