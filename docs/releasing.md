@@ -74,6 +74,31 @@ UI faces and includes their OFL licences in the package. Download failures or in
 stop packaging with an error. `--skip-build` (`-SkipBuild` on Windows) packages existing binaries without downloading fonts or
 changing what they embed; pass the same `CRAFT_FONTS_DIR` used to compile them so their licences ship.
 
+## WinGet community repository
+
+Every **published** release is submitted to the [WinGet community repository](https://github.com/microsoft/winget-pkgs)
+automatically: `.github/workflows/winget.yml` runs [vedantmgoyal9/winget-releaser](https://github.com/vedantmgoyal9/winget-releaser)
+(pinned by commit), which generates the winget manifests from the release assets with
+[Komac](https://github.com/russellbanks/Komac) and opens a PR against winget-pkgs for the package id
+`ArtCraft.LightCraft`. Once that PR merges, Windows users install and update with
+`winget install ArtCraft.LightCraft` / `winget upgrade ArtCraft.LightCraft`, and the package follows
+every release here.
+
+No manifests or installer hashes are stored in this repo, and there is nothing to fill in per release:
+the releaser downloads the release's `lightcraft-<version>-windows-{x86,x64,arm64}.msi` assets from
+`https://github.com/storytold/lightcraft/releases` (its `installers-regex: '\.msi$'` ignores the
+portable zips and the non-Windows builds), takes the manifest version from the release tag minus its
+`v` prefix, and computes the installer SHA-256 itself. Draft releases never trigger the workflow
+(`types: [released]`), and prereleases are excluded on purpose — winget-pkgs wants stable versions
+only. A release's winget PR therefore appears after the release is published here, and its availability
+in `winget` lags until the winget-pkgs maintainers merge it (the PR URL is in the workflow run's log).
+
+One-time maintainer setup: add a `WINGET_TOKEN` **repository secret** — a GitHub PAT with the
+`public_repo` scope, from an account that can open PRs against winget-pkgs (it must have signed the
+Microsoft Pre-Release Software License, which happens when opening one's first winget-pkgs PR). Without
+the secret the workflow fails with a clear error; the release itself is unaffected. A missed release can
+be resubmitted with `gh workflow run winget.yml -f release-tag=v<version>`.
+
 ## Signing credentials
 
 All credentials are stored as secrets in the GitHub `release` environment. Signing is optional:
