@@ -12,6 +12,7 @@ use crate::{LightcraftApp, Services};
 const T: Duration = Duration::from_secs(20);
 const SETTLE: Duration = Duration::from_secs(120);
 
+/// Open the real crop panel on a procedural demo photo and wait for its preview.
 fn crop_tool() -> Headless {
     let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
     let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
@@ -23,14 +24,17 @@ fn crop_tool() -> Headless {
     h
 }
 
+/// Submit an opacity through the public command path, retaining its success or validation error.
 fn set_opacity(h: &mut Headless, opacity: Value) -> Value {
     h.request("engine.execute", json!({"command": "view.cropMaskOpacity", "params": {"opacity": opacity}}), T)
 }
 
+/// Read a known in-bounds sample from a one-pixel-per-point headless screenshot.
 fn pixel(image: &egui::ColorImage, p: Pos2) -> Color32 {
     image.pixels[p.y.round() as usize * image.size[0] + p.x.round() as usize]
 }
 
+/// Collect menu text from the renderer's nested shape groups for real pointer targeting.
 fn text_shapes(shape: &egui::Shape, out: &mut Vec<egui::epaint::TextShape>) {
     match shape {
         egui::Shape::Text(text) => out.push(text.clone()),
@@ -39,18 +43,21 @@ fn text_shapes(shape: &egui::Shape, out: &mut Vec<egui::epaint::TextShape>) {
     }
 }
 
+/// Locate a painted menu choice by its exact label, excluding unrelated labels.
 fn text_rect(h: &Headless, label: &str) -> Option<Rect> {
     let mut texts = Vec::new();
     h.view.painted_shapes().iter().for_each(|s| text_shapes(s, &mut texts));
     texts.into_iter().find(|t| t.galley.job.text == label).map(|t| Rect::from_min_size(t.pos, t.galley.size()))
 }
 
+/// Send a control-channel pointer click and settle the resulting menu or preview change.
 fn click(h: &mut Headless, at: Pos2, button: &str) {
     let r = h.request("ui.click", json!({"x": at.x, "y": at.y, "button": button}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
 }
 
+/// The crop context menu exposes every supported level and dispatches the selected value.
 #[test]
 fn crop_mask_context_menu_sets_opacity() {
     let mut h = crop_tool();
@@ -70,6 +77,7 @@ fn crop_mask_context_menu_sets_opacity() {
     assert_eq!(h.app.ui.crop_mask_opacity, 80);
 }
 
+/// Only supported integer levels change the preference; rejected values leave it untouched.
 #[test]
 fn crop_mask_opacity_command_accepts_supported_values_and_rejects_others() {
     let mut h = crop_tool();
@@ -86,6 +94,7 @@ fn crop_mask_opacity_command_accepts_supported_values_and_rejects_others() {
     }
 }
 
+/// Missing, unsupported and wrong-type saved values recover without losing the UI settings.
 #[test]
 fn crop_mask_opacity_is_saved_leniently() {
     let default = UiState::default();
@@ -119,6 +128,7 @@ fn crop_mask_opacity_is_saved_leniently() {
     assert_eq!(restored.crop_mask_opacity, 80);
 }
 
+/// Every shipped non-English catalog contains both crop-mask labels.
 #[test]
 fn crop_mask_labels_are_translated_in_every_catalog() {
     for locale in crate::i18n::Locale::ALL {
@@ -128,6 +138,7 @@ fn crop_mask_labels_are_translated_in_every_catalog() {
     }
 }
 
+/// Increasing opacity darkens only outside-crop pixels and reaches opaque black at 100%.
 #[test]
 fn crop_mask_opacity_changes_the_outside_area_dimming() {
     let mut h = crop_tool();

@@ -244,6 +244,9 @@ impl Store for MemStore {
 
 #[cfg(test)]
 mod tests_staging {
+    #[cfg(unix)]
+    use super::Store;
+
     /// A link planted at a staging name (`<name>.tmp`) is removed, never followed: the file it points to keeps its
     /// bytes and the save still lands (issue #1502).
     #[cfg(unix)]

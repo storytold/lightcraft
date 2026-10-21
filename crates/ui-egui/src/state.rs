@@ -96,6 +96,7 @@ pub enum CropOverlay {
 pub(crate) const CROP_MASK_OPACITY_LEVELS: [u8; 6] = [0, 20, 50, 60, 80, 100];
 pub(crate) const DEFAULT_CROP_MASK_OPACITY: u8 = 60;
 
+/// Keep older settings and invalid saved values near the historical crop-mask darkness.
 fn default_crop_mask_opacity() -> u8 {
     DEFAULT_CROP_MASK_OPACITY
 }
@@ -107,6 +108,7 @@ enum CropMaskOpacityValue {
     Other(IgnoredAny),
 }
 
+/// Fall back for an unsupported or wrong-type opacity without rejecting otherwise valid UI settings.
 fn deserialize_crop_mask_opacity<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u8, D::Error> {
     let value = CropMaskOpacityValue::deserialize(deserializer)?;
     let opacity = match value {
