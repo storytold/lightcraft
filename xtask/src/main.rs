@@ -2,6 +2,8 @@
 //!
 //! Pure Rust (std + serde_json; flate2/brotli for the web bundle). External tools (`cargo`, `curl`, `tar`) are
 //! invoked through `std::process::Command`.
+#![forbid(unsafe_code)]
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod assets;
 mod bench;
@@ -9,6 +11,7 @@ mod ci_report;
 mod ico;
 mod layers;
 mod parity;
+mod roots;
 mod stats;
 mod version;
 mod web;
@@ -27,6 +30,8 @@ commands:
   ico <out.ico> <in.png>...
                   pack square PNGs (<= 256 px) into a Windows .ico (see packaging/icons.sh)
   layers          enforce the crate dependency layering (plan/architecture.md §3)
+  roots           every production crate root carries #![forbid(unsafe_code)] and the six-lint
+                  deny list (AGENTS.md; crates/sysmem is exempt from the forbid only)
   parity [--write]
                   check docs/parity-checklist.md (every cmd:/ctl: id and path it cites exists) and print the
                   Lightroom parity summary; --write refreshes the summary table in the document
@@ -35,7 +40,7 @@ commands:
                   build the browser app (apps/lightcraft-web) into <target>/web-site/;
                   --serve serves it on http://127.0.0.1:<port> (default 8080)
   ci [--hardware] [--summary-md]
-                  fmt --check, clippy -D warnings, heif, test, GPU probe, parity refs, layers, assets, wasm
+                  fmt --check, clippy -D warnings, heif, test, GPU probe, parity refs, layers, assets, roots, wasm
                   (stops at first failure); writes target/ci/report.json (machine, GPU adapters, data,
                   steps, skipped tests) and target/ci/summary.md; --hardware also runs the GPU tests on
                   every backend with a hardware adapter; --summary-md prints the Markdown summary
@@ -56,6 +61,7 @@ fn main() -> ExitCode {
         Some("ico") => ico::run(&rest),
         Some("version") => version::run(&root(), &rest),
         Some("layers") => cmd_layers(),
+        Some("roots") => roots::run(),
         Some("assets") => assets::run(&root()),
         Some("bench") => bench::run(&root(), &rest),
         Some("parity") => parity::run(&root(), rest.contains(&"--write")),
@@ -100,6 +106,7 @@ pub fn root() -> PathBuf {
     // when the checkout moves and the cached xtask binary isn't rebuilt
     let dir = std::env::var_os("CARGO_MANIFEST_DIR").map(PathBuf::from).filter(|d| d.join("Cargo.toml").is_file());
     let dir = dir.unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")));
+    #[allow(clippy::expect_used)] // the workspace manifest always sits one level under its parent
     dir.parent().expect("xtask has a parent dir").to_path_buf()
 }
 
@@ -363,6 +370,7 @@ fn cmd_ci(args: &[&str]) -> Result<(), String> {
     steps.push(("parity", Box::new(|| parity::run(&root, false))));
     steps.push(("layers", Box::new(cmd_layers)));
     steps.push(("assets", Box::new(|| assets::run(&root))));
+    steps.push(("roots", Box::new(roots::run)));
     steps.push(("wasm", Box::new(cmd_wasm)));
 
     let mut results = Vec::new();
