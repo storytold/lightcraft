@@ -298,7 +298,7 @@ pub fn stitch(mut frames: Vec<Frame>, opts: &PanoOptions, progress: &Progress) -
                     let wx = 1.0 - (2.0 * px / fw - 1.0).abs();
                     let wy = 1.0 - (2.0 * py / fh - 1.0).abs();
                     let w = (wx * wy).max(1e-6) as f32;
-                    row[tx] = fr.image.sample_bilinear(px as f32, py as f32);
+                    row[tx] = fr.image.sample_lanczos3(px as f32, py as f32);
                     wrow[tx] = w;
                 }
             });

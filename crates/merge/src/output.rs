@@ -17,6 +17,7 @@ use lightcraft_geom::Orientation;
 use lightcraft_meta::Metadata;
 use lightcraft_raster::Rgb32f;
 use lightcraft_raw::{BlackLevel, ColorData, DngCompression, DngWriteOptions, Opcode, OpcodeLists, RawData, RawFormat, RawImage, Rect};
+use rayon::prelude::*;
 
 use crate::frame::FrameColor;
 use crate::{MergeError, Result};
@@ -77,7 +78,7 @@ pub fn write_linear_dng(
     if w == 0 || h == 0 {
         return Err(MergeError::Output("empty image".into()));
     }
-    let peak = img.data.iter().flat_map(|p| p.iter()).copied().filter(|v| v.is_finite()).fold(0.0f32, f32::max);
+    let peak = img.data.par_iter().flat_map_iter(|p| p.iter()).copied().filter(|v| v.is_finite()).reduce(|| 0.0f32, f32::max);
     let target = 0.95f32;
     // never brighten: values ≤ 1 keep their scale (so a plain panorama keeps its white level)
     let scale = if peak > target { target / peak } else { 1.0 };
@@ -86,10 +87,10 @@ pub fn write_linear_dng(
     let clean = |v: f32| if v.is_finite() { (v * scale).max(0.0) } else { 0.0 };
     let (data, bits, white) = match samples {
         DngSamples::Half | DngSamples::Float => {
-            (RawData::F32(img.data.iter().flat_map(|p| p.map(clean)).collect()), if samples == DngSamples::Half { 16 } else { 32 }, 1.0)
+            (RawData::F32(img.data.par_iter().flat_map_iter(|p| p.map(clean)).collect()), if samples == DngSamples::Half { 16 } else { 32 }, 1.0)
         }
         DngSamples::U16 => {
-            (RawData::U16(img.data.iter().flat_map(|p| p.map(|v| (clean(v) * 65535.0).round().min(65535.0) as u16)).collect()), 16, 65535.0)
+            (RawData::U16(img.data.par_iter().flat_map_iter(|p| p.map(|v| (clean(v) * 65535.0).round().min(65535.0) as u16)).collect()), 16, 65535.0)
         }
     };
     let mut meta = metadata.clone();

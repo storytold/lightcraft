@@ -280,6 +280,9 @@ fn filter_chips_clear_one_filter_and_total_ignores_the_filter() {
         s.execute("library.filter", &c.clear).unwrap();
     }
     assert_eq!(s.filter, Default::default());
+    // a Photo Merge type names its kind, not just "Merged"
+    s.execute("library.filter", &json!({"merged": "focusStack"})).unwrap();
+    assert_eq!(crate::filter_chips(&s.filter, &s.catalog)[0].label, "Type: Focus stacks");
 }
 
 /// A shuffle is part of the saved view: the same seed (and so the same grid) is back on the next launch.

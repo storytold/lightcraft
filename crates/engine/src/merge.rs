@@ -1,10 +1,10 @@
-//! Photo Merge (HDR, Panorama, HDR Panorama) in the library.
+//! Photo Merge (HDR, Panorama, HDR Panorama, Focus Stack) in the library.
 //!
 //! A merge is planned from the session ([`crate::Session::plan_merge`] → [`MergeJob`], which is
 //! `Send` and self-contained), run anywhere (a worker thread in the app, inline for the CLI/MCP:
 //! [`MergeJob::run`], with progress and cancellation), and finished on the session
 //! ([`crate::Session::finish_merge`]): the DNG is written next to the first source photo
-//! (`<name>-HDR.dng`, `-Pano.dng`, `-HDR-Pano.dng`), imported, selected, and given Auto Settings /
+//! (`<name>-HDR.dng`, `-Pano.dng`, `-HDR-Pano.dng`, `-Focus.dng`), imported, selected, and given Auto Settings /
 //! the auto-crop rectangle when asked. A *preview* run works on ≤ 1024 px frames and returns a
 //! rendered image (with the deghost overlay when asked) instead of a file.
 
@@ -13,7 +13,7 @@ use std::sync::Arc;
 use lightcraft_catalog::{PhotoId, Source};
 use lightcraft_develop::DevelopSettings;
 use lightcraft_merge::pano::MAX_MEGAPIXELS;
-use lightcraft_merge::{Deghost, Frame, HdrOptions, PanoOptions, Projection};
+use lightcraft_merge::{Deghost, FocusOptions, Frame, HdrOptions, PanoOptions, Projection};
 use lightcraft_pipeline::{Quality, RenderRequest, SourceInfo};
 use lightcraft_raster::{Rgb32f, Rgba8};
 use serde::{Deserialize, Serialize};
@@ -43,6 +43,10 @@ pub enum MergeKind {
         pano: PanoOptions,
         bracket: usize,
     },
+    /// Photos focused at different distances → one sharp throughout.
+    FocusStack {
+        focus: FocusOptions,
+    },
 }
 
 impl MergeKind {
@@ -51,6 +55,7 @@ impl MergeKind {
             MergeKind::Hdr { .. } => "HDR",
             MergeKind::Panorama { .. } => "Pano",
             MergeKind::HdrPanorama { .. } => "HDR-Pano",
+            MergeKind::FocusStack { .. } => "Focus",
         }
     }
     fn min_photos(&self) -> usize {
@@ -144,7 +149,7 @@ impl MergeJob {
                 let info = json!({
                     "reference": self.sources[r.reference].0.0,
                     "ev": r.ev, "evExif": r.ev_exif,
-                    "alignment": r.alignments.iter().map(|a| json!({"model": a.model, "inliers": a.inliers, "rmsPx": a.rms})).collect::<Vec<_>>(),
+                    "alignment": r.alignments.iter().zip(&r.local_shift).map(|(a, l)| json!({"model": a.model, "inliers": a.inliers, "rmsPx": a.rms, "localPx": l})).collect::<Vec<_>>(),
                 });
                 let ghost = (!r.ghost.data.is_empty()).then(|| r.ghost.oriented(r.orientation));
                 (r.radiance, r.color, r.orientation, r.metadata, r.baseline_exposure, lightcraft_merge::DngSamples::Half, None, info, ghost)
@@ -212,6 +217,48 @@ impl MergeJob {
                     info,
                     None,
                 )
+            }
+            MergeKind::FocusStack { focus } => {
+                use lightcraft_merge::MergeError;
+                use lightcraft_merge::focus::Load;
+                // frames are read twice (small to align, then full size) and never all held at once,
+                // except a preview's: its small versions are what it stacks
+                let small = Some(self.preview.map_or(lightcraft_merge::align::WORK_EDGE, |e| e.min(lightcraft_merge::align::WORK_EDGE)));
+                let kept: std::sync::Mutex<std::collections::HashMap<usize, Frame>> = Default::default();
+                let reuse = small == self.preview;
+                let no_colour = |_: &mut lightcraft_raw::RawImage, _: &[u8]| None;
+                let load = |i: usize, what: Load| {
+                    if what == Load::Stack
+                        && let Some(f) = kept.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(&i)
+                    {
+                        return Ok(f);
+                    }
+                    let path = self.sources.get(i).map(|s| s.1.as_str()).unwrap_or_default();
+                    let bytes = (self.read)(path).map_err(MergeError::Decode)?;
+                    // only the reference's colour is the result's
+                    let colour: &lightcraft_merge::RawColour =
+                        if what == Load::Reference { &crate::camera_preview::starting_colour_tags } else { &no_colour };
+                    let f = lightcraft_merge::load_frame_with(&bytes, if what == Load::Align { small } else { self.preview }, false, colour)
+                        .map_err(|e| match e {
+                            MergeError::Decode(m) => MergeError::Decode(format!("{path}: {m}")),
+                            e => e,
+                        })?;
+                    if reuse && what == Load::Align {
+                        kept.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(i, f.clone());
+                    }
+                    Ok(f)
+                };
+                let p = sub(0.0, 0.9);
+                let mut r = lightcraft_merge::stack_focus(self.sources.len(), &load, focus, &p).map_err(err)?;
+                lens = std::mem::take(&mut r.lens);
+                let id = |i: usize| self.sources.get(i).map(|s| s.0.0);
+                let info = json!({
+                    "reference": id(r.reference),
+                    "alignment": r.alignments.iter().map(|a| json!({"model": a.model, "inliers": a.inliers, "rmsPx": a.rms})).collect::<Vec<_>>(),
+                    "skipped": r.skipped.iter().filter_map(|&i| id(i)).collect::<Vec<_>>(),
+                    "ev": r.ev,
+                });
+                (r.image, r.color, r.orientation, r.metadata, r.baseline_exposure, lightcraft_merge::DngSamples::U16, None, info, None)
             }
         };
         if !progress(0.9, "Writing DNG") {
@@ -393,6 +440,7 @@ pub fn parse(id: &str, p: &Value) -> Result<(MergeKind, MergeFinish)> {
     let kind = match id {
         "merge.hdr" => MergeKind::Hdr { hdr },
         "merge.panorama" => MergeKind::Panorama { pano },
+        "merge.focusStack" => MergeKind::FocusStack { focus: FocusOptions { align: hdr.align } },
         _ => MergeKind::HdrPanorama { hdr, pano, bracket: p.get("bracket").and_then(Value::as_u64).unwrap_or(0) as usize },
     };
     let finish = MergeFinish {
@@ -416,6 +464,11 @@ impl Session {
         }
         if sources.len() < kind.min_photos() {
             return Err(EngineError::Other(format!("select at least {} photos to merge", kind.min_photos())));
+        }
+        if matches!(kind, MergeKind::FocusStack { .. }) {
+            // each frame is aligned to its neighbour: shooting order, whatever order they were picked in
+            let key = |id: &PhotoId| self.catalog.photo(*id).map(|p| (p.captured.clone(), p.file_name.clone()));
+            sources.sort_by_cached_key(|(id, _)| key(id));
         }
         let read: ByteReader = match &self.media.file_bytes {
             Some(r) => r.clone(),

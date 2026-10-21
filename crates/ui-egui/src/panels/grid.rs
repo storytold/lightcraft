@@ -1211,7 +1211,12 @@ pub fn context_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     }
     crate::widgets::menu_button(ui, crate::i18n::tr("Photo Merge"), |ui| {
         let n = app.session.selected().len();
-        for (id, label) in [("dialog.mergeHdr", "HDR…"), ("dialog.mergePanorama", "Panorama…"), ("dialog.mergeHdrPanorama", "HDR Panorama…")] {
+        for (id, label) in [
+            ("dialog.mergeHdr", "HDR…"),
+            ("dialog.mergePanorama", "Panorama…"),
+            ("dialog.mergeHdrPanorama", "HDR Panorama…"),
+            ("dialog.mergeFocusStack", "Focus Stack…"),
+        ] {
             if ui.add_enabled(n >= 2, egui::Button::new(crate::i18n::tr(label))).clicked() {
                 let _ = app.run(id, json!({}));
             }

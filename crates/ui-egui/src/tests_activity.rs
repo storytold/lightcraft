@@ -342,23 +342,25 @@ fn bracket(tag: &str) -> (Headless, std::path::PathBuf) {
 
 #[test]
 fn final_merge_shows_a_row_and_cancels() {
-    let (mut h, dir) = bracket("merge");
-    let before = h.app.session.catalog.len();
-    crate::merge::start_last(&mut h.app, "merge.hdr").unwrap();
-    h.step();
-    let rows = h.app.session.activity.list();
-    assert_eq!(rows.len(), 1);
-    assert_eq!((rows[0].kind, rows[0].label.as_str(), rows[0].unit), ("merge", "Merging", Unit::Percent));
-    assert!(rows[0].cancellable);
-    assert_eq!(rows[0].total, 1000);
-    h.app.session.activity.cancel(rows[0].id).unwrap();
-    assert!(h.step_until(T, |h| h.app.merge.final_task.is_none()));
-    assert!(h.app.merge.last_result.is_none(), "nothing merged");
-    assert_eq!(h.app.session.catalog.len(), before, "no photo added");
-    assert!(h.app.session.activity.list().is_empty());
-    let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
-    assert_eq!(toast, "HDR merge cancelled");
-    let _ = std::fs::remove_dir_all(dir);
+    for (command, cancelled) in [("merge.hdr", "HDR merge cancelled"), ("merge.focusStack", "Focus stack merge cancelled")] {
+        let (mut h, dir) = bracket(command);
+        let before = h.app.session.catalog.len();
+        crate::merge::start_last(&mut h.app, command).unwrap();
+        h.step();
+        let rows = h.app.session.activity.list();
+        assert_eq!(rows.len(), 1);
+        assert_eq!((rows[0].kind, rows[0].label.as_str(), rows[0].unit), ("merge", "Merging", Unit::Percent));
+        assert!(rows[0].cancellable);
+        assert_eq!(rows[0].total, 1000);
+        h.app.session.activity.cancel(rows[0].id).unwrap();
+        assert!(h.step_until(T, |h| h.app.merge.final_task.is_none()));
+        assert!(h.app.merge.last_result.is_none(), "{command}: nothing merged");
+        assert_eq!(h.app.session.catalog.len(), before, "{command}: no photo added");
+        assert!(h.app.session.activity.list().is_empty());
+        let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+        assert_eq!(toast, cancelled);
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }
 
 /// The merge dialog opens with the options of the last merge of its kind (per kind), and "with Last

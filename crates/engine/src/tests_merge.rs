@@ -226,3 +226,43 @@ fn panorama_size_is_held_to_memory() {
     assert_eq!(mp(fit_in_memory(&asked, photos, gb(16))), 20.0, "a size asked for is kept when it fits");
     assert_eq!(fit_in_memory(&full, 1e6, None), fit_in_memory(&full, 1e6, gb(8)), "memory unknown: taken as 8 GB");
 }
+
+#[test]
+fn focus_stack_command_creates_and_imports_a_dng() {
+    let dir = temp_dir("focus");
+    let mut paths = Vec::new();
+    let (_, frames) = lightcraft_merge::synth::focus_bracket(480, 320, 4).unwrap();
+    for (i, v) in frames.into_iter().enumerate() {
+        let png =
+            lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&v.to_srgb8()), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+        let p = dir.join(format!("F_{i}.png"));
+        std::fs::write(&p, png).unwrap();
+        paths.push(p.to_string_lossy().to_string());
+    }
+    let mut s = Session::new().with_fs();
+    let ids = import(&mut s, paths);
+    // preview: nothing added
+    let png = dir.join("preview.png");
+    let pv = s.execute("merge.focusStack", &json!({"ids": ids, "preview": true, "previewPath": png})).unwrap();
+    assert!(png.exists() && pv["previewSize"][0].as_u64().unwrap() > 100, "{pv}");
+    assert_eq!(s.catalog.photos().count(), 4);
+    // picked in any order, the photos stack in shooting order (capture time, then file name): each is
+    // aligned to its neighbour
+    let picked = [ids[2], ids[0], ids[3], ids[1]];
+    let r = s.execute("merge.focusStack", &json!({"ids": picked, "autoSettings": false, "stack": true})).unwrap();
+    assert!(r["path"].as_str().unwrap().ends_with("F_0-Focus.dng"), "{r}");
+    // the most magnified (last) frame is the reference
+    assert_eq!(r["reference"], ids[3]);
+    let models: Vec<&str> = r["alignment"].as_array().unwrap().iter().map(|a| a["model"].as_str().unwrap()).collect();
+    assert_eq!(models, ["similarity", "similarity", "similarity", "reference"], "{r}");
+    assert_eq!(r["skipped"], json!([]));
+    assert!(r["ev"].as_array().unwrap().iter().all(|v| v.as_f64().unwrap() == 0.0), "{r}");
+    let id = lightcraft_catalog::PhotoId(r["id"].as_u64().unwrap());
+    let p = s.catalog.photo(id).unwrap().clone();
+    assert_eq!((p.width, p.height), (480, 320));
+    assert_eq!(s.catalog.stack_of(id).expect("stacked on its sources").top(), id);
+    s.execute("library.filter", &json!({"merged": "focusStack"})).unwrap();
+    assert_eq!(s.catalog.query(&s.filter, &Default::default()), vec![id]);
+    assert!(s.execute("merge.focusStack", &json!({"ids": [ids[0]]})).is_err());
+    let _ = std::fs::remove_dir_all(&dir);
+}

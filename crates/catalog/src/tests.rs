@@ -296,6 +296,7 @@ fn merge_results_are_recognised() {
     assert_eq!(merged_kind("IMG_1-HDR.dng"), Some("hdr"));
     assert_eq!(merged_kind("IMG_1-Pano.dng"), Some("panorama"));
     assert_eq!(merged_kind("IMG_1-HDR-Pano.dng"), Some("hdrPanorama"));
+    assert_eq!(merged_kind("IMG_1-Focus.dng"), Some("focusStack"));
     assert_eq!(merged_kind("IMG_1-HDR-2.dng"), Some("hdr"), "a second merge of the same photo");
     assert_eq!(merged_kind("hdr.jpg"), None);
     assert_eq!(merged_kind("panorama.jpg"), None);

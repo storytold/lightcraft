@@ -296,5 +296,8 @@
   "Already in “{}”": "Already in “{}”",
   "Move {n} photo{} to “{}”": "Move {n} photo{} to “{}”",
   "Move {n} photo{} to “{}”?": "Move {n} photo{} to “{}”?",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Moved {n} photo{} to “{}”. Edit → Undo moves them back."
+  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Moved {n} photo{} to “{}”. Edit → Undo moves them back.",
+  "{} photos · not aligned": "{} ფოტო · არ არის გასწორებული",
+  "{} photos · {} aligned": "{} ფოტო · {} გასწორებული",
+  "{} photos · {} aligned · {} left out": "{} ფოტო · {} გასწორებული · {} გამოტოვებული"
 }

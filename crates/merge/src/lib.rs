@@ -1,4 +1,5 @@
-//! LightCraft Photo Merge: HDR merge and panorama stitching (layer L3, no UI dependencies).
+//! LightCraft Photo Merge: HDR merge, panorama stitching and focus stacking (layer L3, no UI
+//! dependencies).
 //!
 //! - [`frame`]: inputs — scene-linear frames from raw files (camera RGB) or standard images.
 //! - [`hdr`]: exposure brackets → one scene-linear radiance image (auto-align, exposure
@@ -6,6 +7,8 @@
 //! - [`pano`]: overlapping photos → one panorama (features, matching, RANSAC, rotation bundle
 //!   adjustment, spherical/cylindrical/perspective projection, exposure compensation, seams,
 //!   multi-band blending, boundary warp, auto crop, fill edges).
+//! - [`focus`]: photos focused at different distances → one photo sharp throughout (chained
+//!   alignment, sharpness-weighted multi-band fusion, one frame in memory at a time).
 //! - [`output`]: results as linear DNGs (16-bit float for HDR) with the source's colour tags.
 //!
 //! Every algorithm here is our own implementation from published papers (cited in each module);
@@ -15,14 +18,19 @@
 
 pub mod align;
 pub mod features;
+pub mod flow;
+pub mod focus;
 pub mod frame;
 pub mod hdr;
 pub mod linalg;
+pub mod metrics;
 pub mod output;
 pub mod pano;
 pub mod ransac;
+pub mod refine;
 pub mod synth;
 
+pub use focus::{FocusOptions, FocusResult, stack_focus};
 pub use frame::{Frame, FrameColor, RawColour, load_frame, load_frame_with};
 pub use hdr::{Deghost, HdrOptions, HdrResult, merge_hdr};
 pub use output::{DngSamples, write_linear_dng};

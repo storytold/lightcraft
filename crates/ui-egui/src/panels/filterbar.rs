@@ -211,6 +211,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         Some("hdr") => "HDR",
         Some("panorama") => "Panoramas",
         Some("hdrPanorama") => "HDR Panoramas",
+        Some("focusStack") => "Focus Stacks",
         Some(_) => "Merged",
         None => kind_label,
     };
@@ -229,7 +230,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         .into_iter()
         .map(|(l, v, k)| (l.to_string(), json!({"kind": v, "merged": null}), f.kind == k && f.merged.is_none()))
         .chain(
-            [("HDR", "hdr"), ("Panoramas", "panorama"), ("HDR Panoramas", "hdrPanorama")]
+            [("HDR", "hdr"), ("Panoramas", "panorama"), ("HDR Panoramas", "hdrPanorama"), ("Focus Stacks", "focusStack")]
                 .into_iter()
                 .map(|(l, m)| (l.to_string(), json!({"kind": null, "merged": m}), f.merged.as_deref() == Some(m))),
         )

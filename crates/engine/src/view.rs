@@ -180,6 +180,7 @@ pub fn filter_chips(f: &Filter, cat: &Catalog) -> Vec<FilterChip> {
             "hdr" => "HDR",
             "panorama" => "Panoramas",
             "hdrPanorama" => "HDR panoramas",
+            "focusStack" => "Focus stacks",
             _ => "Merged",
         };
         add(format!("Type: {n}"), json!({"merged": Null}));

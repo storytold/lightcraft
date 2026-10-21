@@ -1,4 +1,4 @@
-//! Photo Merge in the UI: the HDR / Panorama / HDR Panorama dialog (options + live preview) and
+//! Photo Merge in the UI: the HDR / Panorama / HDR Panorama / Focus Stack dialog (options + live preview) and
 //! the background merge jobs.
 //!
 //! Previews and the final merge run [`lightcraft_engine::merge::MergeJob`]s on worker threads with
@@ -23,7 +23,7 @@ use crate::LightcraftApp;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct MergeDialog {
-    /// "merge.hdr" | "merge.panorama" | "merge.hdrPanorama".
+    /// "merge.hdr" | "merge.panorama" | "merge.hdrPanorama" | "merge.focusStack".
     pub command: String,
     pub align: bool,
     /// none | low | medium | high
@@ -66,14 +66,15 @@ impl MergeDialog {
         match self.command.as_str() {
             "merge.panorama" => "Panorama Merge Preview",
             "merge.hdrPanorama" => "HDR Panorama Merge Preview",
+            "merge.focusStack" => "Focus Stack Merge Preview",
             _ => "HDR Merge Preview",
         }
     }
     pub fn is_hdr(&self) -> bool {
-        self.command != "merge.panorama"
+        matches!(self.command.as_str(), "merge.hdr" | "merge.hdrPanorama")
     }
     pub fn is_pano(&self) -> bool {
-        self.command != "merge.hdr"
+        matches!(self.command.as_str(), "merge.panorama" | "merge.hdrPanorama")
     }
     pub fn params(&self) -> Value {
         serde_json::to_value(self).unwrap_or_default()
@@ -296,12 +297,11 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
         match t.rx.try_recv() {
             Ok(r) => {
                 let Some(t) = app.merge.final_task.take() else { return };
-                let what = crate::i18n::tr(if t.options.command == "merge.panorama" {
-                    "Panorama"
-                } else if t.options.command == "merge.hdrPanorama" {
-                    "HDR panorama"
-                } else {
-                    "HDR"
+                let what = crate::i18n::tr(match t.options.command.as_str() {
+                    "merge.panorama" => "Panorama",
+                    "merge.hdrPanorama" => "HDR panorama",
+                    "merge.focusStack" => "Focus stack",
+                    _ => "HDR",
                 });
                 match r.map_err(lightcraft_engine::EngineError::Other).and_then(|out| app.session.finish_merge(&t.job, out)) {
                     Ok(v) => {
@@ -361,6 +361,23 @@ fn added_message(what: &str, info: &Value) -> String {
     }
 }
 
+/// The focus-stack preview's info line. `alignment` has one entry per photo: "reference" and "similarity" were used,
+/// "failed" was left out (its id in `skipped`), and the entries are "none" when Auto Align is off (the reference may
+/// still say "reference").
+fn focus_stack_line(info: &Value) -> String {
+    let models: Vec<&str> = info["alignment"].as_array().map(|a| a.iter().map(|a| a["model"].as_str().unwrap_or("")).collect()).unwrap_or_default();
+    let skipped = info["skipped"].as_array().map_or(0, Vec::len);
+    if models.contains(&"none") {
+        return crate::i18n::tr_format!("{} photos · not aligned", models.len());
+    }
+    let used = models.iter().filter(|m| matches!(**m, "reference" | "similarity")).count();
+    if skipped > 0 {
+        crate::i18n::tr_format!("{} photos · {} aligned · {} left out", models.len(), used, skipped)
+    } else {
+        crate::i18n::tr_format!("{} photos · {} aligned", models.len(), used)
+    }
+}
+
 fn last_failed_matches(app: &LightcraftApp, opts: &MergeDialog) -> bool {
     app.merge.failed_options.as_ref() == Some(opts)
 }
@@ -403,6 +420,8 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut MergeDialog) 
                         info["fov"][0].as_f64().unwrap_or(0.0),
                         info["fov"][1].as_f64().unwrap_or(0.0)
                     )
+                } else if opts.command == "merge.focusStack" {
+                    focus_stack_line(&info)
                 } else {
                     let ev: Vec<String> =
                         info["ev"].as_array().map(|a| a.iter().filter_map(Value::as_f64).map(|v| format!("{v:+.1}")).collect()).unwrap_or_default();
@@ -450,6 +469,10 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut MergeDialog) 
                         opts.bracket = b.round() as u32;
                     }
                 }
+                ui.add_space(4.0);
+            }
+            if opts.command == "merge.focusStack" {
+                ui.checkbox(&mut opts.align, crate::i18n::tr("Auto Align"));
                 ui.add_space(4.0);
             }
             ui.checkbox(&mut opts.auto_settings, crate::i18n::tr("Auto Settings"));
@@ -512,5 +535,18 @@ mod tests {
         assert_eq!(added(json!({"limit": null, "megapixels": 90.0, "nativeMegapixels": 90.0})), "Panorama merge added");
         assert_eq!(added(json!({"limit": "asked", "megapixels": 20.0, "nativeMegapixels": 90.0})), "Panorama merge added");
         assert_eq!(added_message("HDR", &json!({"ev": [0.0]})), "HDR merge added");
+    }
+
+    #[test]
+    fn focus_stack_line_counts_the_frames_used_and_left_out() {
+        let entry = |m: &str| json!({"model": m, "inliers": 0, "rmsPx": 0.0});
+        let off = json!({"alignment": [entry("none"), entry("none"), entry("none")]});
+        assert_eq!(super::focus_stack_line(&off), "3 photos · not aligned");
+        let off = json!({"alignment": [entry("none"), entry("none"), entry("reference")]});
+        assert_eq!(super::focus_stack_line(&off), "3 photos · not aligned");
+        let all = json!({"alignment": [entry("similarity"), entry("similarity"), entry("reference")], "skipped": []});
+        assert_eq!(super::focus_stack_line(&all), "3 photos · 3 aligned");
+        let some = json!({"alignment": [entry("failed"), entry("similarity"), entry("reference")], "skipped": [7]});
+        assert_eq!(super::focus_stack_line(&some), "3 photos · 2 aligned · 1 left out");
     }
 }

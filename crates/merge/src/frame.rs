@@ -8,6 +8,8 @@ use lightcraft_raster::Rgb32f;
 use lightcraft_raster::resample::{Filter, fit};
 use lightcraft_raw::{ColorData, Opcode, RawImage};
 
+use rayon::prelude::*;
+
 use crate::{MergeError, Result};
 
 /// What the RGB values of a frame mean.
@@ -132,21 +134,20 @@ fn median(mut v: Vec<f64>) -> Option<f64> {
 /// The saturation level of a frame: 1.0, or the (lower) level at which values pile up when the
 /// file's white level is optimistic. Returned slightly below the level.
 pub fn detect_clip(img: &Rgb32f) -> f32 {
-    let maxv = img.data.iter().map(|p| p[0].max(p[1]).max(p[2])).fold(0.0f32, f32::max);
+    let maxv = img.data.par_iter().map(|p| p[0].max(p[1]).max(p[2])).reduce(|| 0.0f32, f32::max);
     if maxv.is_nan() || maxv <= 0.0 {
         return 1.0;
     }
     let level = maxv.min(1.0);
     // a pile-up: the top 0.5 % of the range is ≥ 4× denser than the 2 % just below it
-    let (mut near, mut below) = (0usize, 0usize);
-    for p in &img.data {
-        let m = p[0].max(p[1]).max(p[2]);
-        if m >= level * 0.995 {
-            near += 1;
-        } else if m >= level * 0.97 && m < level * 0.99 {
-            below += 1;
-        }
-    }
+    let (near, below) = img
+        .data
+        .par_iter()
+        .map(|p| {
+            let m = p[0].max(p[1]).max(p[2]);
+            (usize::from(m >= level * 0.995), usize::from(m < level * 0.995 && m >= level * 0.97 && m < level * 0.99))
+        })
+        .reduce(|| (0, 0), |a, b| (a.0 + b.0, a.1 + b.1));
     let piled = near as f64 > img.data.len() as f64 * 1e-4 && near >= 4 && near as f64 / 0.005 > 4.0 * below as f64 / 0.02;
     if maxv >= 1.0 || piled { level * 0.995 } else { 1.0 }
 }
@@ -181,6 +182,7 @@ pub fn load_frame_with(bytes: &[u8], max_edge: Option<usize>, orient: bool, colo
     {
         image = fit(&image, m, m, Filter::Box);
     }
+    sanitize(&mut image);
     let clip = detect_clip(&image);
     let mut f = Frame {
         image,
@@ -228,12 +230,8 @@ fn raw_frame(
     if let Some(color) = colour(&mut raw, bytes) {
         raw.color = color;
     }
-    let small = max_edge.is_some_and(|m| m <= 1200);
-    let method = if small { lightcraft_raw::Method::Bilinear } else { lightcraft_raw::Method::Ahd };
-    let mut image = raw.develop(method).map_err(|e| MergeError::Decode(e.to_string()))?;
-    for p in image.data.iter_mut() {
-        *p = p.map(|v| v.max(0.0));
-    }
+    let mut image = develop(&raw, max_edge)?;
+    sanitize(&mut image);
     let clip = detect_clip(&image);
     if let Some(m) = max_edge
         && image.width.max(image.height) > m
@@ -259,6 +257,29 @@ fn raw_frame(
         f.orient();
     }
     Ok(f)
+}
+
+/// A raw's pixels at full size (AHD), or for a size limit of 1200 px or less a quick version: whole
+/// `k × k` blocks of the mosaic binned ([`lightcraft_raw::RawImage::develop_binned`]) to no less than
+/// the limit, else a bilinear demosaic.
+fn develop(raw: &lightcraft_raw::RawImage, max_edge: Option<usize>) -> Result<Rgb32f> {
+    let err = |e: lightcraft_raw::RawError| MergeError::Decode(e.to_string());
+    let Some(m) = max_edge.filter(|m| (1..=1200).contains(m)) else { return raw.develop(lightcraft_raw::Method::Ahd).map_err(err) };
+    let crop = raw.develop_crop(raw.active_area.width, raw.active_area.height);
+    for k in (2..=crop.width.max(crop.height) / m).rev() {
+        if raw.can_bin(k)
+            && let Some(img) = raw.develop_binned(k, 0.99).map_err(err)?
+        {
+            return Ok(img);
+        }
+    }
+    raw.develop(lightcraft_raw::Method::Bilinear).map_err(err)
+}
+
+/// Negative values to 0, and NaN / infinite ones (a damaged float file) too: one would spread over
+/// every filter that reads it.
+fn sanitize(img: &mut Rgb32f) {
+    img.data.par_iter_mut().for_each(|p| *p = p.map(|v| if v.is_finite() { v.max(0.0) } else { 0.0 }));
 }
 
 #[cfg(test)]
