@@ -17,6 +17,7 @@ const VIEW_MODES: &[(&str, Icon, ViewMode, &str)] = &[
     ("compare", Icon::Compare, ViewMode::Compare, "Compare (Shift+C)"),
     ("survey", Icon::Survey, ViewMode::Survey, "Survey (N)"),
     ("people", Icon::Subject, ViewMode::People, "People"),
+    ("map", Icon::MapPin, ViewMode::Map, "Map"),
 ];
 
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
@@ -33,7 +34,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             let left_end = left_ui
                 .horizontal_centered(|ui| {
                     ui.spacing_mut().item_spacing.x = 2.0;
-                    if left_rect.width() >= 270.0 {
+                    // Seven 32 px view buttons, the separator and Sort need about 300 px.
+                    if left_rect.width() >= 304.0 {
                         for &(id, icon, mode, tip) in VIEW_MODES {
                             if icon_button(ui, id, icon, vec2(32.0, 32.0), app.ui.view == mode, true, tip).clicked() {
                                 let _ = app.run(&format!("view.{id}"), json!({}));
@@ -343,6 +345,7 @@ mod visual_regressions {
                 ViewMode::Survey,
                 ViewMode::Reference,
                 ViewMode::People,
+                ViewMode::Map,
             ] {
                 for scale in [1.0, 1.5, 2.0] {
                     let mut app = LightcraftApp::new(lightcraft_engine::Session::new(), Default::default());
@@ -397,6 +400,7 @@ mod visual_regressions {
                 ViewMode::Survey,
                 ViewMode::Reference,
                 ViewMode::People,
+                ViewMode::Map,
             ] {
                 for scale in [1.0, 1.5, 2.0] {
                     let ctx = egui::Context::default();

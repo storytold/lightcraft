@@ -31,6 +31,8 @@ pub fn default_value(field: &str, op: &str) -> Value {
         (Some(Kind::Bool), _) => json!(true),
         // picked from the list
         (Some(Kind::Album), _) => Value::Null,
+        // the whole world: a rule that means something, to narrow from
+        (Some(Kind::Area), _) => lightcraft_catalog::rules::GpsArea::WORLD.to_value(),
         _ => json!(""),
     }
 }
@@ -128,11 +130,31 @@ fn album_value(ui: &mut egui::Ui, v: &mut Value, salt: &str, env: &Env) {
     }
 }
 
+/// A GPS Area rule's value: south, west, north, east in degrees. A value that isn't an area is
+/// shown as the whole world and kept until an edge is changed, so the check can mark it.
+fn area_value(ui: &mut egui::Ui, v: &mut Value) {
+    let edge = |k: &str, d: f64| v.get(k).and_then(Value::as_f64).filter(|x| x.is_finite()).unwrap_or(d);
+    let w = lightcraft_catalog::rules::GpsArea::WORLD;
+    let mut e = [edge("south", w.south), edge("west", w.west), edge("north", w.north), edge("east", w.east)];
+    let mut changed = false;
+    for (i, (name, max)) in [("South", 90.0), ("West", 180.0), ("North", 90.0), ("East", 180.0)].into_iter().enumerate() {
+        ui.label(crate::i18n::tr(name));
+        if let Some(x) = e.get_mut(i) {
+            changed |= ui.add(egui::DragValue::new(x).range(-max..=max).speed(0.1).max_decimals(6)).changed();
+        }
+    }
+    if changed {
+        let [south, west, north, east] = e;
+        *v = json!({"south": south, "west": west, "north": north, "east": east});
+    }
+}
+
 /// The value editor for one rule.
 fn value_editor(ui: &mut egui::Ui, field: &str, op: &str, v: &mut Value, salt: &str, env: &Env) {
     match (field_kind(field), op) {
         (_, "isEmpty" | "isNotEmpty") => {}
         (Some(Kind::Album), _) => album_value(ui, v, salt, env),
+        (Some(Kind::Area), _) => area_value(ui, v),
         (Some(Kind::Date), "inLast" | "notInLast") => {
             // shown as stored ({n, unit}, or a plain number of days) and only written when changed:
             // drawing never turns "0 days" into 1 or 20,000 into the spinner's 10,000
@@ -402,6 +424,7 @@ mod tests {
                     Kind::Number => v.is_number(),
                     Kind::Bool => v.is_boolean(),
                     Kind::Album => v.is_null(),
+                    Kind::Area => lightcraft_catalog::rules::GpsArea::parse(v).is_ok(),
                     Kind::Text | Kind::Keywords | Kind::Date => v.is_string(),
                 };
                 match *op {
