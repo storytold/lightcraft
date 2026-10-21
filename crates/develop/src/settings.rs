@@ -133,6 +133,11 @@ pub struct DevelopSettings {
     /// value that isn't a process number.
     #[serde(default = "ProcessVersion::legacy", skip_serializing_if = "ProcessVersion::is_legacy")]
     pub process: ProcessVersion,
+    /// Convert Negative: a scanned film negative rendered as a positive, before every other stage.
+    /// Not written while it is the default, so settings of ordinary photos keep their JSON and
+    /// `hash64` (and every cached preview stays valid).
+    #[serde(skip_serializing_if = "Negative::is_default")]
+    pub negative: Negative,
     pub profile: Profile,
     pub treatment: Treatment,
     pub wb: WhiteBalance,
@@ -173,6 +178,7 @@ impl Default for DevelopSettings {
         Self {
             version: SCHEMA_VERSION,
             process: ProcessVersion::LATEST,
+            negative: Negative::default(),
             profile: Profile::default(),
             treatment: Treatment::Color,
             wb: WhiteBalance::default(),
@@ -201,6 +207,109 @@ impl Default for DevelopSettings {
             disabled_sections: Vec::new(),
         }
     }
+}
+
+/// Convert Negative (Photo ▸ Convert Negative): the photo is a scan of a film negative (a camera or
+/// scanner capture of colour or black-and-white film), rendered as a positive by the film model of
+/// `lightcraft-film` before every other develop stage, which then edit the positive as usual.
+///
+/// What belongs to the scan (the film base, each channel's black and white point, the neutral
+/// balance) is measured once on the whole image when the conversion is switched on and kept in
+/// [`Negative::measured`], so every render of the photo converts with the same numbers. What
+/// belongs to the film is the [`Negative::preset`]; the sliders are the panel's. The Simple panel
+/// shows the preset and six sliders; with [`Negative::advanced`] the rest apply too.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Negative {
+    pub enabled: bool,
+    /// The Advanced panel: the film base and gray point picked from the scan, tone, white balance
+    /// and colour controls apply. Off, the conversion is the Simple one and those are ignored.
+    pub advanced: bool,
+    /// The film preset's name (`lightcraft_film::PRESETS`; any spelling, unknown names are
+    /// Standard).
+    pub preset: String,
+    /// Stops.
+    pub exposure: f64,
+    /// −50..50 (the film model's units, as are the rest).
+    pub brightness: f64,
+    pub contrast: f64,
+    pub temp: f64,
+    pub tint: f64,
+    pub saturation: f64,
+    /// Advanced: the tone profile (`lightcraft_film::Tone` names); empty is the preset's.
+    pub tone: String,
+    /// Advanced: the colour model (`lightcraft_film::Look` names); empty is the preset's.
+    pub look: String,
+    /// Advanced: a white-balance preset (`lightcraft_film::WbPreset` names); empty is As Shot.
+    pub wb: String,
+    pub highlights: f64,
+    pub shadows: f64,
+    pub whites: f64,
+    pub blacks: f64,
+    /// −100..100.
+    pub fade: f64,
+    pub glow: f64,
+    /// Stops of scene brightness between black and white (1..10).
+    pub range: f64,
+    /// Advanced: the film base picked from the unexposed border (linear sRGB, 0..1). Over the
+    /// measured base; the measured white point still applies.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base: Option<[f64; 3]>,
+    /// Advanced: a scan colour that should come out grey (linear sRGB, 0..1).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gray: Option<[f64; 3]>,
+    /// The whole-scan measurement; `None` converts from the film base alone (the picked one, else
+    /// the preset's typical mask colour).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub measured: Option<NegativeMeasurement>,
+}
+
+impl Default for Negative {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            advanced: false,
+            preset: "Standard".into(),
+            exposure: 0.0,
+            brightness: 0.0,
+            contrast: 0.0,
+            temp: 0.0,
+            tint: 0.0,
+            saturation: 0.0,
+            tone: String::new(),
+            look: String::new(),
+            wb: String::new(),
+            highlights: 0.0,
+            shadows: 0.0,
+            whites: 0.0,
+            blacks: 0.0,
+            fade: 0.0,
+            glow: 0.0,
+            range: 3.0,
+            base: None,
+            gray: None,
+            measured: None,
+        }
+    }
+}
+
+impl Negative {
+    pub fn is_default(&self) -> bool {
+        *self == Negative::default()
+    }
+}
+
+/// A scan's measurement for [`Negative`]: scan values in linear sRGB, 0..1, per channel.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NegativeMeasurement {
+    /// The film base (unexposed film): scene black.
+    pub base: [f64; 3],
+    /// The brightest value that still counts as exposed, and the densest: black and white.
+    pub black: [f64; 3],
+    pub white: [f64; 3],
+    /// Per-channel mid-tone gammas that make the scene average grey (1 = none).
+    pub balance: [f64; 3],
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
