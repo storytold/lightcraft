@@ -112,6 +112,58 @@ fn soft_frames_dont_soften_the_merge() {
     assert!(gain > 0.95, "detail gain {gain}");
 }
 
+/// Where something moved between the frames (a leaf in the wind) and nothing removes the ghost, the merge is a blend
+/// of what the frames saw there; the reference's detail must not be laid over that blend. It was: a dark disc moving
+/// 12 px per frame came out with hard, stepped double edges, brighter and darker than any frame saw.
+#[test]
+fn moving_things_get_no_stepped_edges() {
+    const R: f64 = 60.0;
+    let leaf_x = |i: usize| 1000.0 + 12.0 * i as f64;
+    // the scene with the leaf (radiance × 0.3, a 0.7 px edge) where frame i saw it
+    let seen = |i: usize, x: f64, y: f64| {
+        let d = ((x - leaf_x(i)).powi(2) + (y - 1200.0).powi(2)).sqrt() - R;
+        scene(x, y) * (1.0 - 0.7 / (1.0 + (d / 0.35).exp()) as f32)
+    };
+    let ks = [0.25f32, 1.0, 4.0];
+    let frames: Vec<Frame> = (0..3)
+        .map(|i| {
+            let mut rng = Rng(i as u64 * 0x9e37_79b9 + 11);
+            let mut img = Rgb32f::from_fn(W, H, |x, y| [seen(i, x as f64 + 0.5, y as f64 + 0.5) * ks[i]; 3]);
+            for p in img.data.iter_mut() {
+                let s = p[0].max(0.0);
+                let v = ((s + (2e-5 * s + 2e-8).sqrt() * rng.gauss()).clamp(0.0, 1.0) * 16383.0).round() / 16383.0;
+                *p = [v; 3];
+            }
+            let mut f = Frame::from_linear_rec2020(img, Some((ks[i] as f64).log2()));
+            f.raw = true;
+            f.clip = 1.0;
+            f
+        })
+        .collect();
+    let r = merge_hdr(frames, &HdrOptions { align: false, deghost: Deghost::None }, &no_progress).unwrap();
+    // in the band the leaf swept, every merged pixel lies between what the frames saw (10 % for noise)
+    let (mut out, mut n) = (0usize, 0usize);
+    for y in 1120..1280 {
+        for x in 930..1100 {
+            let (fx, fy) = (x as f64 + 0.5, y as f64 + 0.5);
+            let v: Vec<f32> = (0..3).map(|i| seen(i, fx, fy)).collect();
+            let (lo, hi) = (v.iter().copied().fold(f32::INFINITY, f32::min), v.iter().copied().fold(0.0, f32::max));
+            if hi - lo < 0.2 * hi {
+                continue;
+            }
+            let m = r.radiance.get(x, y)[1];
+            n += 1;
+            if m > hi * 1.1 || m < lo * 0.9 {
+                out += 1;
+            }
+        }
+    }
+    let share = out as f64 / n.max(1) as f64;
+    eprintln!("moving leaf: {out} of {n} pixels outside what the frames saw ({:.1} %)", share * 100.0);
+    assert!(n > 1000, "too few pixels where the leaf moved: {n}");
+    assert!(share < 0.01, "{:.1} % of the pixels where the leaf moved are outside what the frames saw", share * 100.0);
+}
+
 /// The reference's clipped highlights don't leak into their surroundings: next to the bright disc (clipped in the
 /// reference, its radiance from the darker frame) the merge stays as bright as the scene.
 #[test]

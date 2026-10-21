@@ -38,7 +38,9 @@ matched within ±5 px, outliers against their neighbours' median dropped, gaps f
 frame is resampled once through the homography plus the local shift. Where the reference is well exposed the
 merge's finest detail (below a σ = 2 px blur, on luminance) is the reference's own, the one frame neither resampled
 nor aligned to only a fraction of a pixel; it fades out towards the reference's clip and its shadows, where other
-frames carry cleaner detail. Frames are resampled with Lanczos-3, held to
+frames carry cleaner detail, and within 4 px of where something moved between the frames (leaves in the wind, with
+deghosting off): there the merge and the reference disagree over whole areas, not as detail, and the reference's
+edges laid over the blend came out as hard, stepped double edges. Frames are resampled with Lanczos-3, held to
 the range of their 4 × 4 neighbours so edges don't ring (`lightcraft_raster::sample`); bilinear lost a third of the
 finest detail. Exposure ratios are measured
 (median log ratio of well-exposed pixels between brightness neighbours), EXIF is the fallback.

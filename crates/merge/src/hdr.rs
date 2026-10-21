@@ -390,6 +390,15 @@ pub fn merge_hdr(mut frames: Vec<Frame>, opts: &HdrOptions, progress: &Progress)
 /// Below this scale (Gaussian σ, pixels) the merge's detail comes from the reference where it is well exposed.
 const DETAIL_SIGMA: f32 = 2.0;
 
+/// `|blur(d)|` relative to the local `√Y` (see [`reference_detail`]) from which the detail pass fades out: something
+/// moved there. On a static handheld bracket (33 MP, after alignment) it stays under 0.045; where the wind moved
+/// leaves between frames it reaches 0.1 and more.
+const MOVED_FROM: f32 = 0.04;
+/// … and from which it is off.
+const MOVED_TO: f32 = 0.10;
+/// How far (pixels) the pass stays away from such areas: its own blur reaches about this far.
+const MOVED_MARGIN: usize = 4;
+
 /// Give `out` (the merged radiance, in the reference's units) the reference frame's finest detail where the reference
 /// is well exposed. Every other frame was resampled into the reference's geometry (Lanczos-3 still softens the finest
 /// detail a little) and is aligned to a fraction of a pixel, not exactly; the brightest frames carry the most weight
@@ -397,7 +406,10 @@ const DETAIL_SIGMA: f32 = 2.0;
 /// `√Y' = √Y + α · (d − blur(d))` with `d = √Y_ref − √Y`, i.e. the merge's detail below [`DETAIL_SIGMA`] swapped for the
 /// reference's, and every channel scaled by `Y'/Y` so colour stays the merge's. `α` fades out where the reference nears
 /// its clip (its highlights come from darker frames) and where it is dark (there its detail is mostly noise, and the
-/// brighter frames' is cleaner).
+/// brighter frames' is cleaner). It also fades out where something moved between the frames and no deghosting took
+/// it out (leaves in the wind): there the merge is a blend of things in different places, `d` is far from zero over
+/// whole areas rather than alternating as detail does, and the reference's edges laid over the blend came out as
+/// hard, stepped double edges.
 fn reference_detail(out: &mut Rgb32f, rf: &Frame, sat: &[f32]) {
     let (w, h) = (out.width, out.height);
     if rf.image.width != w || rf.image.height != h || sat.len() != w * h || w == 0 {
@@ -425,7 +437,21 @@ fn reference_detail(out: &mut Rgb32f, rf: &Frame, sat: &[f32]) {
     // d's blur over the pixels it applies to only (normalised by α's blur): the reference's clipped highlights,
     // where d is far below zero, must not pull their neighbours' blur down (that left a bright rim around them)
     let (ba, bad) = (gaussian(&alpha, DETAIL_SIGMA), gaussian(&ad, DETAIL_SIGMA));
-    drop(ad);
+    // where something moved: |blur(d)| against the local √Y (`ad`'s buffer reused), spread by the margin
+    let mut moved = ad;
+    moved.data.par_chunks_mut(w).enumerate().for_each(|(row, mrow)| {
+        for (x, v) in mrow.iter_mut().enumerate() {
+            let i = row * w + x;
+            let (Some(&wa), Some(&wd)) = (ba.data.get(i), bad.data.get(i)) else { continue };
+            let (m, r) = (out.data.get(i).copied().unwrap_or_default(), rf.image.data.get(i).copied().unwrap_or_default());
+            let s = 0.5 * (y(m).sqrt() + y(r).sqrt()) + 1e-3;
+            let rel = if wa > 1e-4 { (wd / wa).abs() / s } else { 0.0 };
+            *v = if rel.is_finite() { rel } else { 0.0 };
+        }
+    });
+    max_filter(&mut moved, MOVED_MARGIN);
+    alpha.data.par_iter_mut().zip(moved.data.par_iter()).for_each(|(a, m)| *a *= 1.0 - smoothstep(MOVED_FROM, MOVED_TO, *m));
+    drop(moved);
     out.data.par_chunks_mut(w).enumerate().for_each(|(row, orow)| {
         for (x, p) in orow.iter_mut().enumerate() {
             let i = row * w + x;
@@ -443,6 +469,30 @@ fn reference_detail(out: &mut Rgb32f, rf: &Frame, sat: &[f32]) {
             let scale = sq * sq / ym;
             if scale.is_finite() {
                 *p = p.map(|v| v * scale);
+            }
+        }
+    });
+}
+
+/// Each value of `p` replaced by the largest within `r` pixels (a square), in place: a row pass then a column pass.
+fn max_filter(p: &mut Plane, r: usize) {
+    let (w, h) = (p.width, p.height);
+    if w == 0 || h == 0 || r == 0 {
+        return;
+    }
+    let mut rows = Plane::new(w, h);
+    rows.data.par_chunks_mut(w).zip(p.data.par_chunks(w)).for_each(|(o, row)| {
+        for (x, v) in o.iter_mut().enumerate() {
+            let span = row.get(x.saturating_sub(r)..=(x + r).min(w - 1)).unwrap_or_default();
+            *v = span.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        }
+    });
+    p.data.par_chunks_mut(w).enumerate().for_each(|(y, o)| {
+        o.fill(f32::NEG_INFINITY);
+        for src in y.saturating_sub(r)..=(y + r).min(h - 1) {
+            let Some(row) = rows.data.get(src * w..(src + 1) * w) else { continue };
+            for (v, s) in o.iter_mut().zip(row) {
+                *v = v.max(*s);
             }
         }
     });
