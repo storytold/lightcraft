@@ -57,6 +57,12 @@ siphasher = "1"
 libc = "0.2" # dev-only: process CPU time in benches
 dhat = "0.3" # opt-in heap profiling (lightcraft-cli --features dhat-heap) and heap tests; never in product builds
 
+# The host's time zone: the catalog stores local civil times, so a file's modification time and
+# the session clock need the UTC offset in force at that instant (DST included). Native only; the
+# web build keeps its fixed clock. Zero dependencies on Unix (it reads the system tzdb); on Windows
+# it embeds one, since Windows has no canonical copy.
+jiff = { version = "0.2", default-features = false, features = ["std", "tz-system", "tzdb-zoneinfo", "tzdb-bundle-platform"] }
+
 # formats
 quick-xml = "0.38"
 miniz_oxide = "0.8"
