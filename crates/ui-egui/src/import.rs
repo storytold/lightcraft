@@ -422,6 +422,9 @@ pub struct ScanTask {
     rx: std::sync::mpsc::Receiver<ScanOutput>,
     /// Open the review with "copy into the library" checked (a camera / card).
     pub copy: bool,
+    /// …and Move checked too (a camera's staged photos: each leaves the staging folder once it is
+    /// in the library).
+    pub move_files: bool,
     /// Open the review with this album chosen (an album's context menu ▸ Import…).
     pub album: Option<u64>,
     /// Browsing a folder (Local): the photos are read in place instead of opening the review.
@@ -447,21 +450,29 @@ pub(crate) fn busy_synchronizing(app: &LightcraftApp) -> Result<(), String> {
 /// Settings → Import → "Show the import review when a camera or card is connected", called with
 /// each device scan while it's on. The first look only notes the cards already in. A card that
 /// shows up after that opens Import from Device once nothing else is open, and a card that is
-/// taken out and put back in asks again.
+/// taken out and put back in asks again. A camera that doesn't mount as a disk is known by its id
+/// (it has no volume root) and has its new photos fetched first, as from the menu.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn cards_seen(app: &mut LightcraftApp, now: Vec<lightcraft_engine::devices::Device>) {
+    let key = |d: &lightcraft_engine::devices::Device| d.camera.clone().unwrap_or_else(|| d.root.clone());
     let Some(known) = app.ui.known_cards.as_mut() else {
-        app.ui.known_cards = Some(now.into_iter().map(|d| d.root).collect());
+        app.ui.known_cards = Some(now.iter().map(key).collect());
         return;
     };
-    known.retain(|root| now.iter().any(|d| d.root == *root));
-    let Some(card) = now.into_iter().find(|d| !known.contains(&d.root)) else { return };
+    known.retain(|k| now.iter().any(|d| key(d) == *k));
+    let Some(card) = now.into_iter().find(|d| !known.contains(&key(d))) else { return };
     // busy: ask when the window is free (the card isn't noted until then)
-    if app.import.is_some() || app.scan.is_some() || app.sync_run.is_some() || app.lightroom.is_some() || app.ui.dialog.is_some() {
+    if app.import.is_some()
+        || app.scan.is_some()
+        || app.camera.is_some()
+        || app.sync_run.is_some()
+        || app.lightroom.is_some()
+        || app.ui.dialog.is_some()
+    {
         return;
     }
-    known.push(card.root);
-    if let Err(e) = app.run("file.addFromDevice", json!({"path": card.path})) {
+    known.push(key(&card));
+    if let Err(e) = app.run("file.addFromDevice", crate::camera_import::device_params(&card)) {
         log::warn!("import from {}: {e}", card.name);
     }
 }
@@ -484,8 +495,21 @@ pub fn open(app: &mut LightcraftApp, paths: Vec<String>) -> Result<Value, String
     #[cfg(target_arch = "wasm32")]
     job();
     let guard = scan_guard(app, &progress, false);
-    app.scan = Some(ScanTask { progress, rx, copy: false, album: None, browse: false, sources, guard });
+    app.scan = Some(ScanTask { progress, rx, copy: false, move_files: false, album: None, browse: false, sources, guard });
     Ok(json!({"scanning": true}))
+}
+
+/// Review a camera's staged photos (`camera_import`): scanned like any files, then the review opens
+/// with Copy and Move checked (and `album` chosen), its source shown as the staging folder `source`.
+pub fn open_staged(app: &mut LightcraftApp, files: Vec<String>, source: String, album: Option<u64>) -> Result<Value, String> {
+    let r = open(app, files)?;
+    if let Some(t) = &mut app.scan {
+        t.copy = true;
+        t.move_files = true;
+        t.sources = vec![source];
+        t.album = album;
+    }
+    Ok(r)
 }
 
 /// Show a folder's photos in the Local view (`library.browse` from the UI): the view switches at
@@ -549,7 +573,7 @@ pub fn browse(app: &mut LightcraftApp, path: &str, subfolders: Option<bool>) -> 
     #[cfg(target_arch = "wasm32")]
     job();
     let guard = scan_guard(app, &progress, true);
-    app.scan = Some(ScanTask { progress, rx, copy: false, album: None, browse: true, sources: Vec::new(), guard });
+    app.scan = Some(ScanTask { progress, rx, copy: false, move_files: false, album: None, browse: true, sources: Vec::new(), guard });
     app.renderer.forget_imports();
     Ok(json!({"path": dir_s, "subfolders": subfolders, "scanning": true}))
 }
@@ -617,6 +641,7 @@ pub fn poll_scan(app: &mut LightcraftApp, ctx: &egui::Context) {
         .collect();
     d.set_trashed(trashed);
     d.copy = task.copy;
+    d.move_files = task.copy && task.move_files;
     // only an album the review offers (it may have been deleted while the scan ran)
     d.album = task.album.filter(|id| app.session.catalog.album(lightcraft_catalog::AlbumId(*id)).is_some_and(|a| !a.folder && !a.is_smart()));
     d.sources = task.sources;

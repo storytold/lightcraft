@@ -1600,7 +1600,8 @@ fn folder_menu(app: &mut LightcraftApp, resp: &egui::Response, a: &Album) {
                         ui.add_enabled(false, egui::Button::new(crate::i18n::tr("No Camera or Card Found")));
                     }
                     for (i, d) in devices.into_iter().enumerate() {
-                        let params = json!({"path": d.path, "album": a.id.0});
+                        let mut params = crate::camera_import::device_params(&d);
+                        params["album"] = json!(a.id.0);
                         entry(ui, format!("{}…", d.name), format!("button:albumImportDevice:{i}"), "file.addFromDevice", params);
                     }
                 });

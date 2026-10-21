@@ -3185,6 +3185,7 @@ mod tests {
             name: "NIKON Z 8".into(),
             path: root.join("DCIM").to_string_lossy().to_string(),
             root: root.to_string_lossy().to_string(),
+            camera: None,
         };
         h.app.ui.dialog = None;
         // first look: the card was already in
@@ -3208,6 +3209,25 @@ mod tests {
         h.step();
         assert!(h.app.ui.known_cards.is_none());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A camera that doesn't mount as a disk (PTP/MTP, issue #1005) is known by its id, not by a
+    /// volume root (it has none), and connecting one starts fetching its new photos.
+    #[test]
+    fn a_connected_camera_starts_a_fetch() {
+        let mut h = demo([1200.0, 900.0]);
+        let camera =
+            |id: &str| lightcraft_engine::devices::Device { name: "X100T".into(), path: String::new(), root: String::new(), camera: Some(id.into()) };
+        h.app.ui.dialog = None;
+        crate::import::cards_seen(&mut h.app, vec![camera("cam-a")]);
+        assert!(h.app.camera.is_none(), "a camera that was already in doesn't ask");
+        // a second camera with the same (empty) root is still new
+        crate::import::cards_seen(&mut h.app, vec![camera("cam-a"), camera("cam-b")]);
+        assert!(h.app.camera.is_some(), "a new camera starts a fetch");
+        assert_eq!(h.app.ui.known_cards.as_deref(), Some(&["cam-a".to_string(), "cam-b".to_string()][..]));
+        // while the fetch runs, nothing else is started
+        crate::import::cards_seen(&mut h.app, vec![camera("cam-a"), camera("cam-b"), camera("cam-c")]);
+        assert_eq!(h.app.ui.known_cards.as_ref().map(Vec::len), Some(2), "a busy window waits");
     }
 
     /// The folder scan runs in the background: the request returns at once and the review opens

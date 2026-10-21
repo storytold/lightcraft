@@ -295,5 +295,9 @@
   "Already in “{}”": "Bereits in „{}“",
   "Move {n} photo{} to “{}”": "{n} Foto{0} nach „{1}“ verschieben",
   "Move {n} photo{} to “{}”?": "{n} Foto{0} nach „{1}“ verschieben?",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "{n} Foto{0} nach „{1}“ verschoben. Bearbeiten → Rückgängig holt sie zurück."
+  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "{n} Foto{0} nach „{1}“ verschoben. Bearbeiten → Rückgängig holt sie zurück.",
+  "Couldn't read {name}: {error}": "{name} konnte nicht gelesen werden: {error}",
+  "Couldn't read {n} photo{s} from {name}": "{name}: {n} Foto{s} nicht lesbar",
+  "No new photos on {name} ({n} already in the library)": "Keine neuen Fotos auf {name} ({n} bereits in der Bibliothek)",
+  "No photos found on {name}": "Keine Fotos auf {name} gefunden"
 }

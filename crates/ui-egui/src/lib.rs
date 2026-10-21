@@ -9,6 +9,7 @@
 pub mod album_picker;
 pub mod brush_live;
 pub mod button;
+pub mod camera_import;
 pub mod canvas_keys;
 mod command_error;
 pub mod control;
@@ -431,6 +432,8 @@ pub struct LightcraftApp {
     pub import: Option<import::ImportTask>,
     /// A folder scan in progress (feeds the import review).
     pub scan: Option<import::ScanTask>,
+    /// A camera being read for File → Import from Device (`camera_import`).
+    pub camera: Option<camera_import::CameraTask>,
     /// A Synchronize Folder scan in progress (feeds its dialog).
     pub sync: Option<sync::SyncTask>,
     /// `session.folder_changes` came from the Synchronize Folder dialog (and goes with it).
@@ -534,6 +537,7 @@ impl LightcraftApp {
             merge: merge::MergeState::default(),
             import: None,
             scan: None,
+            camera: None,
             sync: None,
             sync_owns_changes: false,
             sync_run: None,
@@ -1107,6 +1111,7 @@ impl LightcraftApp {
         }
         self.renderer.poll(ctx, &mut self.session);
         merge::poll(self, ctx);
+        camera_import::poll(self, ctx);
         import::poll_scan(self, ctx);
         sync::poll(self, ctx);
         sync::poll_run(self, ctx);
