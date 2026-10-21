@@ -592,6 +592,8 @@
   "Lock": "ロック",
   "Lock Crop Aspect": "切り抜きの縦横比を固定",
   "Locked": "ロック中",
+  "Lock Aspect": "縦横比をロック",
+  "Aspect Locked": "縦横比をロック中",
   "Lush Greens": "鮮やかな緑",
   "Mask Adjustment": "マスクの調整",
   "Match Total Exposures": "露出の合計を一致",

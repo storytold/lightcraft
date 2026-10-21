@@ -230,32 +230,28 @@ fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 custom_aspect(app, ui);
             });
             let locked = app.crop_tool_aspect().is_some();
-            if text_button(ui, "cropLock", if locked { "Locked" } else { "Lock" }, locked).clicked() {
+            let (icon, label) = if locked { (Icon::Link, "Aspect Locked") } else { (Icon::Unlink, "Lock Aspect") };
+            if cmd_icon(app, ui, "cropLock", icon, label, None, locked).clicked() {
                 let _ = app.run("crop.aspect", json!({"aspect": "toggle"}));
             }
         });
         ui.add_space(6.0);
-        ui.horizontal_wrapped(|ui| {
-            if text_button(ui, "cropRotateLeft", crate::i18n::tr("Rotate Left"), false).clicked() {
-                let _ = app.run("photo.rotateLeft", json!({}));
-            }
-            if text_button(ui, "cropRotateRight", crate::i18n::tr("Rotate Right"), false).clicked() {
-                let _ = app.run("photo.rotateRight", json!({}));
-            }
-        });
-        ui.add_space(6.0);
-        ui.horizontal_wrapped(|ui| {
-            if text_button(ui, "cropFlipH", crate::i18n::tr("Flip H"), d.crop.flip_h).clicked() {
-                let _ = app.run("photo.flipHorizontal", json!({}));
-            }
-            if text_button(ui, "cropFlipV", crate::i18n::tr("Flip V"), d.crop.flip_v).clicked() {
-                let _ = app.run("photo.flipVertical", json!({}));
-            }
-            if text_button(ui, "cropSwapAspect", crate::i18n::tr("Swap Aspect (X)"), false).clicked() {
-                let _ = app.run("crop.rotateAspect", json!({}));
-            }
-            if text_button(ui, "cropReset", crate::i18n::tr("Reset"), false).clicked() {
-                let _ = app.run("crop.reset", json!({}));
+        // one row of icon buttons, as in the suite's transform panels (issue #972); each command's
+        // name and shortcut show on hover
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            let row = [
+                ("cropRotateLeft", Icon::RotateLeft, "Rotate Left", "photo.rotateLeft", false),
+                ("cropRotateRight", Icon::RotateRight, "Rotate Right", "photo.rotateRight", false),
+                ("cropFlipH", Icon::FlipH, "Flip Horizontal", "photo.flipHorizontal", d.crop.flip_h),
+                ("cropFlipV", Icon::FlipV, "Flip Vertical", "photo.flipVertical", d.crop.flip_v),
+                ("cropSwapAspect", Icon::SwapAspect, "Rotate Crop Aspect", "crop.rotateAspect", false),
+                ("cropReset", Icon::Reset, "Reset Crop", "crop.reset", false),
+            ];
+            for (id, icon, label, command, on) in row {
+                if cmd_icon(app, ui, id, icon, label, Some(command), on).clicked() {
+                    let _ = app.run(command, json!({}));
+                }
             }
         });
     });
@@ -310,13 +306,13 @@ fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     padded(ui, |ui| {
         ui.horizontal(|ui| {
             let on = app.ui.tool == "straighten";
-            if text_button(ui, "straightenTool", crate::i18n::tr("Straighten Tool"), on)
+            if cmd_icon(app, ui, "straightenTool", Icon::Straighten, "Straighten Tool", None, on)
                 .on_hover_text(crate::i18n::tr("Drag along the horizon; double-click for Auto"))
                 .clicked()
             {
                 app.ui.tool = if on { String::new() } else { "straighten".into() };
             }
-            if text_button(ui, "straightenAuto", crate::i18n::tr("Auto"), false).clicked() {
+            if cmd_icon(app, ui, "straightenAuto", Icon::Auto, "Auto Straighten", Some("crop.autoStraighten"), false).clicked() {
                 let _ = app.run("crop.autoStraighten", json!({}));
             }
         });
@@ -326,21 +322,23 @@ fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         {
             use crate::state::CropOverlay as O;
             let opts = [
-                (O::Thirds, "Thirds", "thirds"),
-                (O::Grid, "Grid", "grid"),
-                (O::Golden, "Golden", "golden"),
-                (O::Diagonal, "Diagonal", "diagonal"),
-                (O::Triangle, "Triangle", "triangle"),
-                (O::Spiral, "Spiral", "spiral"),
-                (O::None, "None", "none"),
+                (O::Thirds, Icon::OverlayThirds, "Thirds", "thirds"),
+                (O::Grid, Icon::OverlayGrid, "Grid", "grid"),
+                (O::Golden, Icon::OverlayGolden, "Golden", "golden"),
+                (O::Diagonal, Icon::OverlayDiagonal, "Diagonal", "diagonal"),
+                (O::Triangle, Icon::OverlayTriangle, "Triangle", "triangle"),
+                (O::Spiral, Icon::OverlaySpiral, "Spiral", "spiral"),
+                (O::None, Icon::OverlayNone, "None", "none"),
             ];
-            let items: Vec<(&str, &str)> = opts.iter().map(|(_, l, k)| (*l, *k)).collect();
-            let active = opts.iter().position(|(o, _, _)| *o == app.ui.crop_overlay);
-            if let Some(i) = crate::widgets::segmented(ui, "cropOverlay", &items, active, 4) {
-                app.ui.crop_overlay = opts[i].0;
+            let items: Vec<(Icon, &str, &str)> = opts.iter().map(|(_, i, l, k)| (*i, *l, *k)).collect();
+            let active = opts.iter().position(|(o, ..)| *o == app.ui.crop_overlay);
+            if let Some(i) = crate::widgets::icon_segmented(ui, "cropOverlay", &items, active)
+                && let Some(o) = opts.get(i)
+            {
+                app.ui.crop_overlay = o.0;
             }
             if matches!(app.ui.crop_overlay, O::Triangle | O::Spiral)
-                && text_button(ui, "cropOverlayOrient", crate::i18n::tr("Flip Overlay (⇧O)"), false).clicked()
+                && cmd_icon(app, ui, "cropOverlayOrient", Icon::FlipH, "Flip Overlay (⇧O)", None, false).clicked()
             {
                 let _ = app.run("view.cropOverlayOrientation", json!({}));
             }
@@ -1424,6 +1422,17 @@ fn activity(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             });
         }
     });
+}
+
+/// A panel icon button for `label` (translated: the accessible name), its hover text the label plus
+/// `command`'s current shortcut. Addressable as `button:{id}` (as the text button it replaced was)
+/// and `icon:{id}`.
+fn cmd_icon(app: &LightcraftApp, ui: &mut egui::Ui, id: &str, icon: Icon, label: &str, command: Option<&str>, active: bool) -> egui::Response {
+    let sc = command.and_then(|c| crate::shortcuts::shortcut_of(&app.ui.settings.keymap, c));
+    let tip = crate::widgets::command_tooltip(ui, label, sc);
+    let r = crate::widgets::icon_button_named(ui, id, icon, vec2(28.0, 24.0), active, true, crate::i18n::tr(label), &tip);
+    register(ui.ctx(), format!("button:{id}"), r.rect);
+    r
 }
 
 #[cfg(test)]

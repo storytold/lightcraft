@@ -143,14 +143,15 @@ fn mask_adjustments_hide_overlay_without_disabling_the_mask() {
     // Changing the shape needs the overlay; changing the image needs an unobscured preview.
     exec(&mut h, "mask.refine", json!({"value": 10.0}));
     assert!(h.app.ui.mask_overlay);
-    // The dock header pushes this adjustment below the initial viewport. Exercise the
+    // The dock header can push this adjustment below the initial viewport. Exercise the
     // actual visible slider rather than sending a synthetic click outside its clipped body.
     let panel = h.app.widgets.iter().find(|(id, _)| id == "panel:right_panel").unwrap().1;
     let slider = h.app.widgets.iter().find(|(id, _)| id == "slider:exposure").unwrap().1;
-    assert!(!panel.contains_rect(slider), "exposure initially needs scrolling: {slider:?} in {panel:?}");
-    h.request("ui.move", json!({"x": panel.center().x, "y": panel.center().y}), T);
-    h.request("ui.scroll", json!({"dy": -160.0}), T);
-    h.settle(SETTLE);
+    if !panel.contains_rect(slider) {
+        h.request("ui.move", json!({"x": panel.center().x, "y": panel.center().y}), T);
+        h.request("ui.scroll", json!({"dy": -160.0}), T);
+        h.settle(SETTLE);
+    }
     let slider = h.app.widgets.iter().find(|(id, _)| id == "slider:exposure").unwrap().1;
     assert!(panel.contains_rect(slider), "exposure is visible before clicking: {slider:?} in {panel:?}");
     let r = h.request("ui.clickWidget", json!({"id": "slider:exposure", "fx": 0.7}), T);
@@ -1670,6 +1671,23 @@ fn a_fast_brush_stroke_shows_without_gaps_before_the_button_is_released() {
         let (l, k) = (px(&held, x, y), px(&done, x, y));
         assert!((0..3).all(|i| (l[i] - k[i]).abs() < 24.0), "live {l:?} vs committed {k:?} at ({x}, {y})");
     }
+}
+
+/// The mask actions are icon buttons (issue #972): hovering one names it; Invert still inverts.
+#[test]
+fn mask_action_icons_name_themselves_on_hover() {
+    let mut h = detail("panel.masking");
+    exec(&mut h, "mask.add", json!({"kind": "sky"}));
+    h.settle(SETTLE);
+    for (id, tip) in [("button:maskAddComp", "Add"), ("button:maskIntComp", "Intersect"), ("button:maskPlus:1", "Add to this mask")] {
+        let r = h.request("ui.hoverWidget", json!({"id": id}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        let shown = h.step_until(std::time::Duration::from_secs(5), |h| h.painted_text().iter().any(|t| t == tip));
+        assert!(shown, "{id}: {tip:?} on hover");
+    }
+    let before = develop(&h).masks[0].invert;
+    click(&mut h, "button:maskInvert");
+    assert_ne!(develop(&h).masks[0].invert, before, "Invert inverts");
 }
 
 #[test]

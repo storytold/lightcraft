@@ -1899,6 +1899,8 @@
   "Lock": "Заблокировать",
   "Lock Crop Aspect": "Зафиксировать пропорции кадра",
   "Locked": "Заблокировано",
+  "Lock Aspect": "Зафиксировать пропорции",
+  "Aspect Locked": "Пропорции зафиксированы",
   "Lossy DNG files and Smart Previews open as raw photos.": "DNG с потерями и смарт-просмотры открываются как RAW-фото.",
   "Luminar looks: `.lmp` files and `.mplumpack` collections import as presets (grouped by collection); the sliders": "Стили Luminar: файлы `.lmp` и коллекции `.mplumpack` импортируются как пресеты (группируются по коллекции); ползунки",
   "Mask Adjustment": "Коррекция маски",

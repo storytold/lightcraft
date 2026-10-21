@@ -577,6 +577,8 @@
   "Lock": "鎖定",
   "Lock Crop Aspect": "鎖定裁切長寬比",
   "Locked": "已鎖定",
+  "Lock Aspect": "鎖定長寬比",
+  "Aspect Locked": "長寬比已鎖定",
   "Mask Adjustment": "遮色片調整",
   "Memory budget": "記憶體預算",
   "Merged": "已合併",

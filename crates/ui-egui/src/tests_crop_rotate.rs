@@ -416,6 +416,42 @@ fn rotating_the_crop_dims_nothing_inside_the_box() {
     assert!(lum(pixel(&rotated, corner_px)) < lum(pixel(&plain, corner_px)), "the photo's corner, outside the box, is dimmed");
 }
 
+/// The Crop and Geometry rows are icon buttons (issue #972): each keeps its `button:` id and its
+/// command, and hovering it shows its name and shortcut.
+#[test]
+fn crop_icon_buttons_show_name_and_shortcut_on_hover_and_keep_their_commands() {
+    let mut h = crop_tool();
+    let mac = h.view.ctx.os() == egui::os::OperatingSystem::Mac;
+    let lock = if h.app.crop_tool_aspect().is_some() { "Aspect Locked" } else { "Lock Aspect" };
+    let with_key = |name: &str, sc: &str| format!("{name} ({})", crate::menubar::shortcut_text(sc, mac));
+    for (id, tip) in [
+        ("cropRotateLeft", with_key("Rotate Left", "Cmd+[")),
+        ("cropSwapAspect", with_key("Rotate Crop Aspect", "X")),
+        ("cropReset", with_key("Reset Crop", "Cmd+Alt+R")),
+        ("cropLock", lock.to_string()),
+        ("cropFlipH", "Flip Horizontal".to_string()),
+        ("cropOverlay-spiral", "Spiral".to_string()),
+    ] {
+        assert!(has(&h, &format!("button:{id}")), "{id} is still addressable");
+        let r = h.request("ui.hoverWidget", json!({"id": format!("button:{id}")}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        let shown = h.step_until(Duration::from_secs(5), |h| h.painted_text().contains(&tip));
+        assert!(shown, "{id}: {tip:?} on hover; painted {:?}", h.painted_text());
+    }
+    // a click still runs the command
+    let id = h.app.session.active().expect("a photo");
+    let flipped = |h: &Headless| h.app.session.catalog.photo(id).map(|p| p.develop.crop.flip_h);
+    let before = flipped(&h);
+    let r = h.request("ui.clickWidget", json!({"id": "button:cropFlipH"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert_ne!(flipped(&h), before, "Flip Horizontal flips");
+    let r = h.request("ui.clickWidget", json!({"id": "button:cropOverlay-grid"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert_eq!(h.app.ui.crop_overlay, crate::state::CropOverlay::Grid);
+}
+
 fn crop_rect(h: &Headless) -> lightcraft_geom::Rect {
     let id = h.app.session.active().expect("a photo");
     h.app.session.catalog.photo(id).expect("the photo").develop.crop.geometry.rect

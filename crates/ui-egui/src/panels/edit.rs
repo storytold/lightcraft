@@ -285,7 +285,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         control(app, ui, d, "color.saturation", true);
         ui.add_space(6.0);
         let open = app.ui.flyout_open("mixer");
-        if flyout_row(ui, "mixer", if crate::is_bw(d) { "B&W Mixer" } else { "Color Mixer" }, Icon::Radial, open).clicked() {
+        if flyout_row(ui, "mixer", if crate::is_bw(d) { "B&W Mixer" } else { "Color Mixer" }, Icon::Palette, open).clicked() {
             app.ui.toggle_flyout("mixer");
         }
         if open {
@@ -301,7 +301,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             }
         }
         let open = app.ui.flyout_open("grading");
-        if flyout_row(ui, "grading", crate::i18n::tr("Color Grading"), Icon::Presets, open).clicked() {
+        if flyout_row(ui, "grading", crate::i18n::tr("Color Grading"), Icon::GradeAll, open).clicked() {
             app.ui.toggle_flyout("grading");
         }
         if open {
