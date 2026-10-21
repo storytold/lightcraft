@@ -8,8 +8,9 @@
 //! It never chooses where to walk: callers pass a folder the user named. Nothing in the app walks
 //! at startup or on the UI thread.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
+use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
 
 /// How far a walk may go.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -105,7 +106,268 @@ pub fn files_in_noting(root: &Path, skip: Option<&Path>, limits: Limits, keep: i
     walk(root, skip, limits, keep, Some(note))
 }
 
-fn walk(root: &Path, skip: Option<&Path>, limits: Limits, mut keep: impl FnMut(&Path) -> bool, mut note: Option<NoteFolder>) -> Walked {
+/// Folder listings read at the same time. A folder on a network share costs a round trip, so
+/// many folders listed one after another cost a chain of them; the listing is latency, not work,
+/// and a few threads waiting at once cut it by about that many.
+const WORKERS: usize = 8;
+/// Listed entries held ahead of the walk: the readers pause when this many wait to be used.
+const READ_AHEAD: usize = 200_000;
+
+/// An entry as the folder's listing gave it, with what the walk would otherwise ask the disk for
+/// one entry at a time (the kind, where a link leads).
+struct Entry {
+    name: std::ffi::OsString,
+    path: PathBuf,
+    hidden: bool,
+    /// `None`: not asked for (a hidden entry nobody wants listed) or could not be read.
+    file_type: Option<std::fs::FileType>,
+    link: Link,
+}
+
+/// Where a link leads.
+enum Link {
+    /// Not a link.
+    No,
+    /// A link to something that is not a folder.
+    File,
+    /// A link to this (canonical) folder.
+    Folder(PathBuf),
+    /// A link to a folder whose canonical path could not be had.
+    Unresolved,
+}
+
+/// One folder as read from the disk.
+struct Listing {
+    /// The folder is the one to skip (or inside it).
+    skipped: bool,
+    /// Its entries in listing order (`Err`: one that could not be read); `None` if the folder
+    /// could not be opened.
+    entries: Option<Vec<Result<Entry, ()>>>,
+    /// How many of `entries` could be read (are not `Err`).
+    oks: usize,
+    /// The folder holds more entries than were read: reading stopped at the cap.
+    cut: bool,
+}
+
+impl Listing {
+    fn none(skipped: bool) -> Self {
+        Listing { skipped, entries: None, oks: 0, cut: false }
+    }
+
+    /// Folders (or links, which may lead to one) in it.
+    fn folders(&self) -> usize {
+        let entries = self.entries.as_deref().unwrap_or_default();
+        entries.iter().flatten().filter(|e| !e.hidden && e.file_type.is_some_and(|t| t.is_dir() || t.is_symlink())).count()
+    }
+
+    fn held(&self) -> usize {
+        self.entries.as_ref().map_or(0, Vec::len)
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Skip<'a> {
+    path: Option<&'a Path>,
+    canonical: Option<&'a PathBuf>,
+}
+
+impl Skip<'_> {
+    fn skips(&self, path: &Path) -> bool {
+        self.path.is_some_and(|s| path == s) || self.canonical.is_some_and(|s| std::fs::canonicalize(path).is_ok_and(|p| p.starts_with(s)))
+    }
+}
+
+/// Reads folder `path`: everything the walk needs from the disk for it, in the order the
+/// listing gives, but no more than `cap` entries (a folder with more is `cut`: nothing past the
+/// cap is asked of the disk). `want_all`: hidden entries' kinds too (the listing is handed on).
+fn load(path: &Path, skip: Skip, want_all: bool, cap: usize) -> Listing {
+    if skip.skips(path) {
+        return Listing::none(true);
+    }
+    let Ok(rd) = std::fs::read_dir(path) else { return Listing::none(false) };
+    let mut entries = Vec::new();
+    let mut oks = 0usize;
+    let mut cut = false;
+    for e in rd {
+        let Ok(e) = e else {
+            entries.push(Err(()));
+            continue;
+        };
+        if oks >= cap {
+            cut = true;
+            break;
+        }
+        oks = oks.saturating_add(1);
+        let path = e.path();
+        let hidden = is_hidden_entry(&e);
+        let file_type = if hidden && !want_all { None } else { e.file_type().ok() };
+        let link = match file_type {
+            Some(t) if t.is_symlink() && !hidden => match std::fs::metadata(&path) {
+                Ok(m) if m.is_dir() => std::fs::canonicalize(&path).map_or(Link::Unresolved, Link::Folder),
+                _ => Link::File,
+            },
+            _ => Link::No,
+        };
+        entries.push(Ok(Entry { name: e.file_name(), path, hidden, file_type, link }));
+    }
+    Listing { skipped: false, entries: Some(entries), oks, cut }
+}
+
+enum Slot {
+    Queued,
+    Running,
+    Done(Listing),
+}
+
+#[derive(Default)]
+struct Pool {
+    /// Folders for the readers to read, with their depth: the folders in listings, in the order
+    /// the listings came back (the walk may take any of them first).
+    queue: VecDeque<(PathBuf, usize)>,
+    slots: HashMap<PathBuf, Slot>,
+    /// Entries in finished listings the walk has not used yet.
+    buffered: usize,
+    /// What reading has cost in all, by anyone: the entries read, and at least one for each folder
+    /// (an empty folder still costs a listing).
+    read_entries: usize,
+    stop: bool,
+    /// Folders the readers (not the walk itself) have listed: opened, not the skipped one, whether
+    /// or not the walk went on to use the listing.
+    read_by_workers: usize,
+}
+
+struct Shared {
+    pool: Mutex<Pool>,
+    changed: Condvar,
+}
+
+impl Shared {
+    fn lock(&self) -> MutexGuard<'_, Pool> {
+        self.pool.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Queues the folders in `listing` (a folder at `depth`) for the readers, in path order. Only
+    /// plain folders: a link to a folder is entered, if at all, by the walk itself, in the order it
+    /// goes through them (which of several links to one folder wins depends on that order).
+    fn enqueue(&self, pool: &mut Pool, listing: &Listing, depth: usize, max_depth: usize) {
+        let below = depth.saturating_add(1);
+        if pool.stop || below >= max_depth {
+            return; // (the walk does not list those, it only reports it stopped)
+        }
+        let Some(entries) = listing.entries.as_ref() else { return };
+        let mut dirs: Vec<PathBuf> = entries
+            .iter()
+            .flatten()
+            .filter(|e| !e.hidden && matches!(e.link, Link::No) && e.file_type.is_some_and(|t| t.is_dir()))
+            .map(|e| e.path.clone())
+            .collect();
+        dirs.sort();
+        for d in dirs {
+            if pool.slots.insert(d.clone(), Slot::Queued).is_none() {
+                pool.queue.push_back((d, below));
+            }
+        }
+        self.changed.notify_all();
+    }
+
+    /// The walk is done or needs no more: nothing more is read ahead.
+    fn halt(&self) {
+        let mut pool = self.lock();
+        pool.stop = true;
+        pool.queue.clear();
+        self.changed.notify_all();
+    }
+}
+
+/// Held while a reader lists a folder: if the reader dies before handing the listing over, the
+/// walk is told, and lists the folder itself instead of waiting for ever.
+struct Reading<'a> {
+    shared: &'a Shared,
+    path: PathBuf,
+    handed_over: bool,
+}
+
+impl Drop for Reading<'_> {
+    fn drop(&mut self) {
+        if !self.handed_over {
+            self.shared.lock().slots.remove(&self.path);
+            self.shared.changed.notify_all();
+        }
+    }
+}
+
+/// What the readers need to know about the walk.
+#[derive(Clone, Copy)]
+struct ReadCfg<'a> {
+    skip: Skip<'a>,
+    want_all: bool,
+    max_depth: usize,
+    max_entries: usize,
+}
+
+/// A reader: takes the next queued folder, lists it, queues the folders in it.
+fn read_ahead(shared: &Shared, cfg: ReadCfg) {
+    // (no more than the walk could use of one folder, and nothing once as much has been read as
+    // the walk may count: what is left it lists itself, or stops at)
+    let cap = cfg.max_entries.min(READ_AHEAD);
+    loop {
+        let (path, depth) = {
+            let mut pool = shared.lock();
+            loop {
+                if pool.stop {
+                    return;
+                }
+                let paused = pool.buffered >= READ_AHEAD || pool.read_entries >= cfg.max_entries;
+                match if paused { None } else { pool.queue.pop_front() } {
+                    // (the walk may have taken it to list itself)
+                    Some((path, depth)) if matches!(pool.slots.get(&path), Some(Slot::Queued)) => {
+                        pool.slots.insert(path.clone(), Slot::Running);
+                        break (path, depth);
+                    }
+                    Some(_) => {}
+                    None => pool = shared.changed.wait(pool).unwrap_or_else(PoisonError::into_inner),
+                }
+            }
+        };
+        let mut reading = Reading { shared, path, handed_over: false };
+        let listing = load(&reading.path, cfg.skip, cfg.want_all, cap);
+        let mut pool = shared.lock();
+        pool.read_entries = pool.read_entries.saturating_add(listing.oks.max(1));
+        if !listing.cut {
+            // (a cut one is not worth the walk's folders: it stops in it, or lists it again)
+            shared.enqueue(&mut pool, &listing, depth, cfg.max_depth);
+        }
+        pool.buffered = pool.buffered.saturating_add(listing.held());
+        if listing.entries.is_some() && !listing.skipped {
+            pool.read_by_workers = pool.read_by_workers.saturating_add(1);
+        }
+        pool.slots.insert(reading.path.clone(), Slot::Done(listing));
+        reading.handed_over = true;
+        shared.changed.notify_all();
+    }
+}
+
+fn walk(root: &Path, skip: Option<&Path>, limits: Limits, keep: impl FnMut(&Path) -> bool, note: Option<NoteFolder>) -> Walked {
+    walk_with(root, skip, limits, keep, note, WORKERS).0
+}
+
+/// The walk, with up to `workers` threads reading folders ahead of it (none: one folder at a
+/// time); the second value is how many folders they read that the walk used.
+///
+/// The walk itself is one thread going through the folders depth first, in path order, exactly as
+/// a single-threaded walk would: it alone counts entries against the limits, enters linked
+/// folders, and calls `keep` and `note`. The readers only fetch what it is about to ask the disk
+/// for, so the result does not depend on how many there are or how fast each folder comes back. A
+/// folder the readers have not got to, it lists itself, as it does every folder reached through a
+/// link; and once a limit stops the walk, the readers stop too.
+fn walk_with(
+    root: &Path,
+    skip: Option<&Path>,
+    limits: Limits,
+    mut keep: impl FnMut(&Path) -> bool,
+    mut note: Option<NoteFolder>,
+    workers: usize,
+) -> (Walked, usize) {
     let mut out = Walked::default();
     // canonical folders reached through a link, so a link loop is walked at most once
     let mut linked: HashSet<PathBuf> = HashSet::new();
@@ -114,86 +376,156 @@ fn walk(root: &Path, skip: Option<&Path>, limits: Limits, mut keep: impl FnMut(&
     }
     // Include aliases to the library in the exclusion, not just its lexical path.
     let skip_canonical = skip.and_then(|p| std::fs::canonicalize(p).ok());
-    // (path, depth of the folder it is in, is a folder); popped in path order
-    let mut stack: Vec<(PathBuf, usize, bool)> = vec![(root.to_path_buf(), 0, true)];
-    while let Some((path, depth, is_dir)) = stack.pop() {
-        if !is_dir {
-            if keep(&path) {
-                out.files.push(path);
-            }
-            continue;
-        }
-        if skip.is_some_and(|s| path == s) || skip_canonical.as_ref().is_some_and(|s| std::fs::canonicalize(&path).is_ok_and(|p| p.starts_with(s))) {
-            continue;
-        }
-        if depth >= limits.max_depth {
-            out.truncated = true;
-            continue;
-        }
-        let Ok(rd) = std::fs::read_dir(&path) else { continue };
-        let mut children: Vec<(PathBuf, bool)> = Vec::new();
-        // (the folder's listing, for who asked for it; all of it unless something below says otherwise)
-        let mut listed = note.is_some().then(Vec::new);
-        let mut complete = true;
-        for e in rd {
-            let Ok(e) = e else {
-                complete = false;
+    let skipper = Skip { path: skip, canonical: skip_canonical.as_ref() };
+    let want_all = note.is_some();
+    let cfg = ReadCfg { skip: skipper, want_all, max_depth: limits.max_depth, max_entries: limits.max_entries };
+    let shared = Shared { pool: Mutex::new(Pool::default()), changed: Condvar::new() };
+    let read_by_workers = std::thread::scope(|scope| {
+        let mut readers = Vec::new();
+        let mut stopped = false;
+        // (path, depth of the folder it is in, is a folder); popped in path order
+        let mut stack: Vec<(PathBuf, usize, bool)> = vec![(root.to_path_buf(), 0, true)];
+        while let Some((path, depth, is_dir)) = stack.pop() {
+            if !is_dir {
+                if keep(&path) {
+                    out.files.push(path);
+                }
                 continue;
+            }
+            if depth >= limits.max_depth {
+                if !skipper.skips(&path) {
+                    out.truncated = true;
+                }
+                continue;
+            }
+            // what the readers made of it, if they got to it
+            let taken = {
+                let mut pool = shared.lock();
+                loop {
+                    match pool.slots.get(&path) {
+                        Some(Slot::Running) => pool = shared.changed.wait(pool).unwrap_or_else(PoisonError::into_inner),
+                        Some(Slot::Done(_)) => {
+                            if let Some(Slot::Done(l)) = pool.slots.remove(&path) {
+                                pool.buffered = pool.buffered.saturating_sub(l.held());
+                                shared.changed.notify_all();
+                                break Some(l);
+                            }
+                        }
+                        Some(Slot::Queued) => {
+                            pool.slots.remove(&path); // the readers pass it by
+                            break None;
+                        }
+                        None => break None,
+                    }
+                }
             };
-            if out.entries >= limits.max_entries {
+            // (as many entries as the walk may still count, and one more to know it stops)
+            let room = limits.max_entries.saturating_sub(out.entries);
+            let (listing, own) = match taken {
+                Some(l) if !l.cut || l.oks >= room => (l, false),
+                _ => {
+                    let l = load(&path, skipper, want_all, room);
+                    let mut pool = shared.lock();
+                    pool.read_entries = pool.read_entries.saturating_add(l.oks.max(1));
+                    (l, true)
+                }
+            };
+            // a first folder with folders in it is worth readers; one without, or a chain of single
+            // folders, is not; nor is one the walk stops in
+            if own && !stopped && !listing.cut && (!readers.is_empty() || (workers > 0 && listing.folders() >= 2)) {
+                if readers.is_empty() {
+                    for _ in 0..workers {
+                        let shared = &shared;
+                        if let Ok(h) = std::thread::Builder::new().name("walk-read".into()).spawn_scoped(scope, move || read_ahead(shared, cfg)) {
+                            readers.push(h);
+                        }
+                    }
+                }
+                let mut pool = shared.lock();
+                shared.enqueue(&mut pool, &listing, depth, limits.max_depth);
+            }
+            if listing.skipped {
+                continue;
+            }
+            let cut = listing.cut;
+            let Some(entries) = listing.entries else { continue };
+            let mut children: Vec<(PathBuf, bool)> = Vec::new();
+            // (the folder's listing, for who asked for it; all of it unless something below says otherwise)
+            let mut listed = note.is_some().then(Vec::new);
+            let mut complete = true;
+            let mut tripped = false;
+            for e in entries {
+                let Ok(e) = e else {
+                    complete = false;
+                    continue;
+                };
+                if out.entries >= limits.max_entries {
+                    tripped = true;
+                    break;
+                }
+                out.entries = out.entries.saturating_add(1);
+                // (a hidden entry's kind is only asked for when the listing is wanted)
+                if e.hidden && listed.is_none() {
+                    continue;
+                }
+                if let Some(listed) = listed.as_mut() {
+                    let kind = match &e.file_type {
+                        Some(t) if t.is_symlink() => EntryKind::Other,
+                        Some(t) if t.is_dir() => EntryKind::Folder,
+                        Some(t) if t.is_file() => EntryKind::File,
+                        _ => EntryKind::Other,
+                    };
+                    listed.push((e.name, kind));
+                }
+                if e.hidden {
+                    continue;
+                }
+                let Some(ft) = e.file_type else { continue };
+                let dir = if ft.is_symlink() {
+                    // a link (or a Windows junction): a folder is entered once, a file is a file
+                    match e.link {
+                        Link::Folder(c) => {
+                            if !linked.insert(c) {
+                                continue;
+                            }
+                            true
+                        }
+                        Link::Unresolved => continue,
+                        Link::File | Link::No => false,
+                    }
+                } else {
+                    ft.is_dir()
+                };
+                children.push((e.path, dir));
+            }
+            // (more entries than could be read: the limit is next)
+            tripped |= cut;
+            if tripped {
                 out.truncated = true;
                 complete = false;
+                if !stopped {
+                    stopped = true;
+                    shared.halt();
+                }
+            }
+            // (`note` says whether to go on: `false` ends the walk here, and the readers stop below;
+            // `Walked::truncated` is left alone, who stopped the walk knows)
+            if let (Some(note), Some(listed)) = (note.as_mut(), listed)
+                && !note(&path, listed, complete)
+            {
                 break;
             }
-            out.entries = out.entries.saturating_add(1);
-            let p = e.path();
-            // (a hidden entry's kind is only asked for when the listing is wanted; every other
-            // entry's is asked once)
-            let is_hidden = is_hidden_entry(&e);
-            if is_hidden && listed.is_none() {
-                continue;
-            }
-            let ft = e.file_type();
-            if let Some(listed) = listed.as_mut() {
-                let kind = match &ft {
-                    Ok(t) if t.is_symlink() => EntryKind::Other,
-                    Ok(t) if t.is_dir() => EntryKind::Folder,
-                    Ok(t) if t.is_file() => EntryKind::File,
-                    _ => EntryKind::Other,
-                };
-                listed.push((e.file_name(), kind));
-            }
-            if is_hidden {
-                continue;
-            }
-            let Ok(ft) = ft else { continue };
-            let dir = if ft.is_symlink() {
-                // a link (or a Windows junction): a folder is entered once, a file is a file
-                match std::fs::metadata(&p) {
-                    Ok(m) if m.is_dir() => {
-                        let Ok(c) = std::fs::canonicalize(&p) else { continue };
-                        if !linked.insert(c) {
-                            continue;
-                        }
-                        true
-                    }
-                    _ => false,
-                }
-            } else {
-                ft.is_dir()
-            };
-            children.push((p, dir));
+            children.sort();
+            let below = depth.saturating_add(1);
+            stack.extend(children.into_iter().rev().map(|(p, d)| (p, below, d)));
         }
-        if let (Some(note), Some(listed)) = (note.as_mut(), listed)
-            && !note(&path, listed, complete)
-        {
-            break;
+        shared.halt();
+        for r in readers {
+            let _ = r.join(); // (a reader that died has told the walk, which listed its folder itself)
         }
-        children.sort();
-        let below = depth.saturating_add(1);
-        stack.extend(children.into_iter().rev().map(|(p, d)| (p, below, d)));
-    }
-    out
+        shared.lock().read_by_workers
+    });
+    (out, read_by_workers)
 }
 
 #[cfg(test)]
@@ -356,6 +688,247 @@ mod tests {
         assert!(!w.truncated, "{w:?}");
         assert!(w.files.len() <= 2, "{w:?}");
         assert!(w.files.iter().any(|p| p.ends_with("a/b/p.jpg")), "{w:?}");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// What a walk gives back and calls, to compare two walks of the same tree.
+    type Seen = (Walked, Vec<(PathBuf, Vec<(std::ffi::OsString, EntryKind)>, bool)>);
+
+    fn seen(root: &Path, skip: Option<&Path>, limits: Limits, workers: usize) -> (Seen, usize) {
+        let mut noted = Vec::new();
+        let (walked, by_workers) = walk_with(
+            root,
+            skip,
+            limits,
+            |p| p.extension().is_some_and(|e| e == "jpg"),
+            Some(&mut |d, e, c| {
+                noted.push((d.to_path_buf(), e, c));
+                true
+            }),
+            workers,
+        );
+        ((walked, noted), by_workers)
+    }
+
+    /// A tree with wide and deep parts, hidden entries, a skipped folder, links to folders (twice
+    /// to one, one up the tree) and to a file, and a folder that cannot be read.
+    fn tree(tag: &str) -> (PathBuf, PathBuf) {
+        let d = tmp(tag);
+        for i in 0..40 {
+            for j in 0..3 {
+                let dir = d.join(format!("w{i:02}/s{j}"));
+                std::fs::create_dir_all(&dir).unwrap();
+                for k in 0..3 {
+                    std::fs::write(dir.join(format!("{k}.jpg")), b"x").unwrap();
+                }
+                std::fs::write(dir.join(".hidden.jpg"), b"x").unwrap();
+            }
+            std::fs::write(d.join(format!("w{i:02}/top.jpg")), b"x").unwrap();
+        }
+        let mut deep = d.join("deep");
+        for i in 0..10 {
+            deep = deep.join(format!("l{i}"));
+            std::fs::create_dir_all(&deep).unwrap();
+            std::fs::write(deep.join("p.jpg"), b"x").unwrap();
+        }
+        std::fs::create_dir_all(d.join(".hidden/in")).unwrap();
+        std::fs::write(d.join(".hidden/in/h.jpg"), b"x").unwrap();
+        std::fs::create_dir_all(d.join("lib/x")).unwrap();
+        std::fs::write(d.join("lib/x/l.jpg"), b"x").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            symlink(d.join("w05"), d.join("alias-a")).unwrap();
+            symlink(d.join("w05"), d.join("alias-b")).unwrap();
+            symlink(&d, d.join("w07/s1/up")).unwrap();
+            symlink(d.join("deep/l0"), d.join("w39/to-deep")).unwrap();
+            symlink(d.join("w01/top.jpg"), d.join("w39/file-link.jpg")).unwrap();
+            symlink(d.join("nowhere"), d.join("w39/dangling")).unwrap();
+        }
+        (d.clone(), d.join("lib"))
+    }
+
+    /// Given a tree with every kind of entry the walk treats specially, when it is walked with
+    /// readers at the same time, then the files, the counts, the stop flag and every listing it
+    /// hands over (and their order) equal those of the walk that lists one folder at a time, for
+    /// each way of limiting it.
+    #[test]
+    fn readers_at_the_same_time_give_the_one_at_a_time_result() {
+        let (d, lib) = tree("equal");
+        let (oracle, by_workers) = seen(&d, Some(&lib), Limits::default(), 0);
+        assert_eq!(by_workers, 0);
+        assert!(oracle.0.files.len() > 400 && !oracle.0.truncated, "{}", oracle.0.files.len());
+        let all = oracle.0.entries;
+        let mut limits = vec![Limits::default()];
+        limits.extend([1, 2, 3, 5, 11, 12, 13].map(|max_depth| Limits { max_depth, max_entries: MAX_ENTRIES }));
+        limits.extend([0, 1, 7, 100, 401, 777, all - 1, all, all + 1].map(|max_entries| Limits { max_depth: MAX_DEPTH, max_entries }));
+        limits.push(Limits { max_depth: 4, max_entries: 500 });
+        for limits in limits {
+            let (serial, _) = seen(&d, Some(&lib), limits, 0);
+            for workers in [1, 3, 8] {
+                let (parallel, _) = seen(&d, Some(&lib), limits, workers);
+                assert_eq!(parallel, serial, "{limits:?} with {workers} readers");
+            }
+        }
+        // without the folder to skip, and without a listing wanted
+        let (serial, _) = seen(&d, None, Limits::default(), 0);
+        assert_eq!(seen(&d, None, Limits::default(), 8).0, serial);
+        let plain = |w| walk_with(&d, Some(&lib), Limits::default(), |_| true, None, w).0;
+        assert_eq!(plain(8), plain(0));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// The readers do the listing of a tree with many folders (and the walk alone lists a tree
+    /// that is one folder, or a chain, without them).
+    #[test]
+    fn many_folders_are_read_by_the_readers_and_a_small_tree_by_the_walk() {
+        let (d, lib) = tree("who");
+        let (_, by_workers) = seen(&d, Some(&lib), Limits::default(), 8);
+        assert!(by_workers > 20, "{by_workers}");
+
+        let flat = tmp("flat");
+        std::fs::write(flat.join("a.jpg"), b"x").unwrap();
+        assert_eq!(seen(&flat, None, Limits::default(), 8).1, 0);
+        let chain = tmp("chain");
+        std::fs::create_dir_all(chain.join("a/b/c")).unwrap();
+        assert_eq!(seen(&chain, None, Limits::default(), 8).1, 0);
+        for p in [d, flat, chain] {
+            let _ = std::fs::remove_dir_all(p);
+        }
+    }
+
+    /// A folder that cannot be opened is passed over by both, and its siblings still come.
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_folder_is_skipped_by_both() {
+        use std::os::unix::fs::PermissionsExt;
+        let (d, lib) = tree("unreadable");
+        let locked = d.join("w10/s1");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let readable = std::fs::read_dir(&locked).is_ok(); // (running as root)
+        let (serial, _) = seen(&d, Some(&lib), Limits::default(), 0);
+        let (parallel, _) = seen(&d, Some(&lib), Limits::default(), 8);
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(parallel, serial);
+        assert!(readable || !serial.0.files.iter().any(|p| p.starts_with(&locked)));
+        assert!(serial.0.files.iter().any(|p| p.starts_with(d.join("w10/s2"))));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A walk that stops early leaves no reader running: it returns (the scope would not end
+    /// otherwise) and a second walk is as good as the first.
+    #[test]
+    fn a_walk_that_stops_early_returns() {
+        let (d, lib) = tree("early");
+        let limits = Limits { max_depth: MAX_DEPTH, max_entries: 5 };
+        let a = seen(&d, Some(&lib), limits, 8).0;
+        assert!(a.0.truncated);
+        assert_eq!(seen(&d, Some(&lib), limits, 8).0, a);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A listing noted that answers `false` ends the walk there, however many readers are ahead of
+    /// it: the walk returns (the scope would not end otherwise), is not truncated, and has noted no
+    /// folder after the one that said stop.
+    #[test]
+    fn a_note_that_says_stop_ends_a_parallel_walk() {
+        let (d, lib) = tree("note-stop");
+        let mut noted = 0;
+        let (walked, _) = walk_with(
+            &d,
+            Some(&lib),
+            Limits::default(),
+            |p| p.extension().is_some_and(|e| e == "jpg"),
+            Some(&mut |_, _, _| {
+                noted += 1;
+                noted < 4
+            }),
+            8,
+        );
+        assert_eq!(noted, 4, "no folder is noted after the one that said stop");
+        assert!(!walked.truncated, "who stopped the walk knows: it is not a limit");
+        assert!(walked.files.len() < 400, "the walk ended early: {} files", walked.files.len());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Given two links to one folder with subfolders, one deep in the tree and one in a folder
+    /// that is listed sooner, when it is walked, then the folder is entered once, by the first link
+    /// the walk meets, and the readers never list anything the walk does not use.
+    #[cfg(unix)]
+    #[test]
+    fn readers_do_not_read_what_a_second_link_to_a_folder_leads_to() {
+        let d = tmp("two-links");
+        let target = d.join("t");
+        for i in 0..4 {
+            std::fs::create_dir_all(target.join(format!("s{i}/u"))).unwrap();
+            std::fs::write(target.join(format!("s{i}/u/p.jpg")), b"x").unwrap();
+        }
+        std::fs::create_dir_all(d.join("a/x/y")).unwrap();
+        std::fs::create_dir_all(d.join("b")).unwrap();
+        std::fs::create_dir_all(d.join("c")).unwrap();
+        std::os::unix::fs::symlink(&target, d.join("a/x/y/link1")).unwrap();
+        std::os::unix::fs::symlink(&target, d.join("b/link2")).unwrap();
+        let (serial, _) = seen(&d, None, Limits::default(), 0);
+        for _ in 0..50 {
+            let (parallel, by_workers) = seen(&d, None, Limits::default(), 8);
+            assert_eq!(parallel, serial);
+            assert!(by_workers <= parallel.1.len(), "{by_workers} read, {} listed", parallel.1.len());
+        }
+        let listed = |p: &PathBuf| serial.1.iter().filter(|(dir, ..)| dir.starts_with(p)).count();
+        assert_eq!((listed(&d.join("a")), listed(&d.join("b"))), (3 + 4 + 4 + 1, 1), "entered through a/x/y/link1 only, by the walk's order");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// The entry limit bounds what is read: a listing stops at its cap, and the readers start no
+    /// folder once what has been read (an empty folder counts one) reaches the limit, so they list
+    /// at most `max_entries + WORKERS` folders however the tree is shaped.
+    #[test]
+    fn the_entry_limit_bounds_what_is_read() {
+        let d = tmp("cap");
+        for i in 0..50 {
+            std::fs::write(d.join(format!("{i:02}.jpg")), b"x").unwrap();
+        }
+        let none = Skip { path: None, canonical: None };
+        let l = load(&d, none, false, 21);
+        assert_eq!((l.oks, l.cut, l.held()), (21, true, 21));
+        let l = load(&d, none, false, 50);
+        assert_eq!((l.oks, l.cut), (50, false));
+        let l = load(&d, none, false, 0);
+        assert_eq!((l.oks, l.cut), (0, true));
+        let _ = std::fs::remove_dir_all(&d);
+
+        let (d, lib) = tree("cap-walk");
+        for max_entries in [7, 100, 401] {
+            let limits = Limits { max_depth: MAX_DEPTH, max_entries };
+            for _ in 0..20 {
+                let (parallel, by_workers) = seen(&d, Some(&lib), limits, 8);
+                assert_eq!(parallel, seen(&d, Some(&lib), limits, 0).0, "{limits:?}");
+                assert!(by_workers <= parallel.1.len() + 2 * WORKERS, "{limits:?}: {by_workers} read, {} listed", parallel.1.len());
+            }
+        }
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Given a folder of many files next to one of thousands of empty folders, when the entry limit
+    /// is reached in the files, then the readers have not listed the empty folders: they list at
+    /// most `max_entries + WORKERS` folders (an empty one costs one entry's worth).
+    #[test]
+    fn readers_do_not_run_through_empty_folders_past_the_limit() {
+        let d = tmp("empties");
+        std::fs::create_dir_all(d.join("a")).unwrap();
+        for i in 0..200 {
+            std::fs::write(d.join(format!("a/{i:03}.jpg")), b"x").unwrap();
+        }
+        for i in 0..600 {
+            std::fs::create_dir_all(d.join(format!("b/{i:03}"))).unwrap();
+        }
+        let limits = Limits { max_depth: MAX_DEPTH, max_entries: 100 };
+        for _ in 0..20 {
+            let (walked, by_workers) = seen(&d, None, limits, 8);
+            assert_eq!(walked, seen(&d, None, limits, 0).0);
+            assert!(by_workers <= limits.max_entries + WORKERS, "{by_workers} listed by readers");
+            assert!(by_workers < 600, "{by_workers}");
+        }
         let _ = std::fs::remove_dir_all(&d);
     }
 }
