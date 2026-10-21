@@ -187,3 +187,25 @@ fn notches_on_consecutive_frames_all_count_and_undo_as_one_step() {
     assert_eq!(r["ok"], true, "{r}");
     assert_eq!(spots(&h)[0].size, 0.04, "one undo step for the whole gesture");
 }
+
+#[test]
+fn leaving_the_loupe_ends_a_wheel_gesture() {
+    let mut h = remove_tool();
+    let r = h.request(
+        "engine.execute",
+        json!({"command": "spot.add", "params": {"mode": "heal", "points": [[0.3, 0.5]], "size": 0.04, "source": [0.0, 0.2]}}),
+        T,
+    );
+    assert_eq!(r["ok"], true, "{r}");
+    pointer(&mut h, "move", 0.3, 0.5);
+    wheel(&mut h, 1.0, egui::Modifiers::NONE);
+    assert!(h.app.session.interaction.is_some(), "the wheel gesture is open");
+    // straight to the grid, where the loupe (and its wheel handling) no longer draws
+    let r = h.request("ui.set", json!({"view": "photoGrid"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    assert!(h.app.session.interaction.is_none(), "the wheel gesture is committed, so no later edit joins it");
+    let r = h.request("engine.execute", json!({"command": "edit.undo"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(spots(&h)[0].size, 0.04, "and is one undo step");
+}

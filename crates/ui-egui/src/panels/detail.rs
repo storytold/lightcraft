@@ -11,7 +11,7 @@ use serde_json::json;
 use crate::LightcraftApp;
 use crate::panels::spot_outline;
 use crate::render::Slot;
-use crate::state::{BeforeAfter, RightPanel, ToolOverlay, Zoom};
+use crate::state::{BeforeAfter, RightPanel, ToolOverlay, ViewMode, Zoom};
 use crate::theme::Tokens;
 use crate::widgets::register;
 
@@ -2656,7 +2656,7 @@ fn brush_wheel(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response
     if let Some((spot, last)) = ui.data(|d| d.get_temp::<(usize, f64)>(egui::Id::new(WHEEL_EDIT))) {
         let pressed = ui.input(|i| i.pointer.any_down());
         if !in_use || pressed || hovered.map(|h| h.index) != Some(spot) || now - last > WHEEL_EDIT_PAUSE {
-            end_wheel_edit(app, ui);
+            end_wheel_edit(app, ui.ctx());
         } else {
             ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(WHEEL_EDIT_PAUSE));
         }
@@ -2730,9 +2730,19 @@ const WHEEL_EDIT: &str = "brush-wheel-edit";
 const WHEEL_EDIT_PAUSE: f64 = 0.5;
 
 /// Commits a wheel gesture's spot edits as one undo step.
-fn end_wheel_edit(app: &mut LightcraftApp, ui: &mut egui::Ui) {
-    if ui.data_mut(|d| d.remove_temp::<(usize, f64)>(egui::Id::new(WHEEL_EDIT))).is_some() && app.session.interaction.is_some() {
+fn end_wheel_edit(app: &mut LightcraftApp, ctx: &egui::Context) {
+    if ctx.data_mut(|d| d.remove_temp::<(usize, f64)>(egui::Id::new(WHEEL_EDIT))).is_some() && app.session.interaction.is_some() {
         let _ = app.run("develop.endInteraction", json!({}));
+    }
+}
+
+/// Every frame, whatever is drawn: ends a wheel gesture whose loupe is gone (another view, another
+/// tool), which `brush_wheel` no longer runs to end, or that has paused, so no later edit joins it.
+pub(crate) fn settle_wheel_edit(app: &mut LightcraftApp, ctx: &egui::Context) {
+    let Some((_, last)) = ctx.data(|d| d.get_temp::<(usize, f64)>(egui::Id::new(WHEEL_EDIT))) else { return };
+    let drawn = app.ui.view == ViewMode::Detail && app.ui.right == RightPanel::Remove && !app.ui.fullscreen;
+    if !drawn || ctx.input(|i| i.time) - last > WHEEL_EDIT_PAUSE {
+        end_wheel_edit(app, ctx);
     }
 }
 
