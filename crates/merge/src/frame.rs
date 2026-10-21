@@ -200,6 +200,24 @@ pub fn load_frame_with(bytes: &[u8], max_edge: Option<usize>, orient: bool, colo
     Ok(f)
 }
 
+/// A raw's pixels at full size (AHD), or for a size limit of 1200 px or less a quick version: whole `k × k` blocks
+/// of the mosaic binned ([`lightcraft_raw::RawImage::develop_binned`]) to no less than the limit, else a bilinear
+/// demosaic. A preview of a 48 MP raw demosaiced at full size first took 1.7 GB and 2 s, and a panorama preview
+/// read a dozen at once.
+fn develop(raw: &RawImage, max_edge: Option<usize>) -> Result<Rgb32f> {
+    let err = |e: lightcraft_raw::RawError| MergeError::Decode(e.to_string());
+    let Some(m) = max_edge.filter(|m| (1..=1200).contains(m)) else { return raw.develop(lightcraft_raw::Method::Ahd).map_err(err) };
+    let crop = raw.develop_crop(raw.active_area.width, raw.active_area.height);
+    for k in (2..=crop.width.max(crop.height) / m).rev() {
+        if raw.can_bin(k)
+            && let Some(img) = raw.develop_binned(k, 0.99).map_err(err)?
+        {
+            return Ok(img);
+        }
+    }
+    raw.develop(lightcraft_raw::Method::Bilinear).map_err(err)
+}
+
 /// A decoded raw (from `bytes`, which `colour` may read) as a frame: developed to camera RGB, with its colour tags,
 /// its as-shot white-balance multipliers and its orientation.
 fn raw_frame(
@@ -228,9 +246,7 @@ fn raw_frame(
     if let Some(color) = colour(&mut raw, bytes) {
         raw.color = color;
     }
-    let small = max_edge.is_some_and(|m| m <= 1200);
-    let method = if small { lightcraft_raw::Method::Bilinear } else { lightcraft_raw::Method::Ahd };
-    let mut image = raw.develop(method).map_err(|e| MergeError::Decode(e.to_string()))?;
+    let mut image = develop(&raw, max_edge)?;
     for p in image.data.iter_mut() {
         *p = p.map(|v| v.max(0.0));
     }
