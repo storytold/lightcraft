@@ -49,7 +49,7 @@ pub(super) fn folder_tree(
         }
         crate::widgets::context_menu(&resp, |ui| {
             // the library actions of the Folders tree, when this folder (or one inside it) holds library photos
-            let library = app.caches.folder_tree(&app.session.catalog);
+            let library = app.caches.folder_tree(&app.session.catalog, app.session.library_generation());
             let held = library_node_for(&library, path);
             if (transient || indent > 0.0)
                 && ui

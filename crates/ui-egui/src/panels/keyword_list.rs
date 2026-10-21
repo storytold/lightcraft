@@ -56,7 +56,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         if plus.clicked() {
             app.ui.dialog = Some(create_dialog(app));
         }
-        let picked = app.ui.keyword_list_selected.clone().filter(|k| in_tree(&app.caches.keyword_tree(&app.session.catalog), k));
+        let library = app.session.library_generation();
+        let picked = app.ui.keyword_list_selected.clone().filter(|k| in_tree(&app.caches.keyword_tree(&app.session.catalog, library), k));
         let minus = ui.add_enabled(picked.is_some(), egui::Button::new("−")).on_hover_text(crate::i18n::tr("Delete Keyword"));
         register(ui, "keywordList:delete", minus.rect);
         if minus.clicked()
@@ -67,7 +68,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     });
     ui.data_mut(|d| d.insert_temp(fid, filter.clone()));
     ui.add_space(6.0);
-    let tree = app.caches.keyword_tree(&app.session.catalog);
+    let tree = app.caches.keyword_tree(&app.session.catalog, app.session.library_generation());
     let open = app.ui.keyword_list_open.clone();
     let rows = rows(&tree, &filter, &|p| open.iter().any(|o| same(o, p)));
     if rows.is_empty() {
