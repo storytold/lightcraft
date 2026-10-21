@@ -1291,6 +1291,7 @@ pub struct SyncCounts {
 }
 
 impl Default for UiState {
+    /// Start with usable panel and tool preferences, including the historical crop-mask darkness.
     fn default() -> Self {
         UiState {
             window: None,
