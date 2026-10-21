@@ -3101,11 +3101,20 @@ mod tests {
         .unwrap();
         std::fs::write(dir.join("a.png"), &png).unwrap();
         std::fs::write(sub.join("b.png"), &png).unwrap();
+        let jpeg = lightcraft_codecs::encode_jpeg(
+            &lightcraft_codecs::EncodeImage::rgba8(&img),
+            90,
+            lightcraft_codecs::ChromaSubsampling::default(),
+            &lightcraft_codecs::EncodeMeta::default(),
+        )
+        .unwrap();
+        std::fs::write(dir.join("c.jpe"), &jpeg).unwrap();
+        std::fs::write(sub.join("d.JFIF"), &jpeg).unwrap();
         let r = h.request("engine.execute", json!({"command": "file.addFolder", "params": {"path": dir.to_string_lossy()}}), t);
         assert_eq!(r["ok"], true, "{r}");
         h.settle(SETTLE);
         let Some(crate::state::Dialog::Import { opts }) = &h.app.ui.dialog else { panic!("no import review: {:?}", h.app.ui.dialog) };
-        assert_eq!(opts.candidates.len(), 2, "both files, the subfolder's too");
+        assert_eq!(opts.candidates.len(), 4, "PNGs and JPE/JFIF JPEGs, the subfolder's too");
         assert!(!opts.copy, "a folder is added in place by default");
         // the review names its source; scanning doesn't save a Local location
         assert_eq!(opts.sources, vec![dir.to_string_lossy().to_string()]);

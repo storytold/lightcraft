@@ -170,13 +170,13 @@ fn a_check_from_the_listing_is_the_check_from_the_disk() {
     crate::walk::files_in_noting(&dir, None, crate::walk::Limits::default(), |_| true, &mut |d, names, complete| with.note(d, names, complete));
     let (with, without) = (asked(&with), asked(&Listing::default()));
     // (without: each photo's file, and the names of its sidecar up to the one that is there: 20 questions where
-    // names are found in any case, 21 where they are not)
+    // names are found in any case, more where they are not)
     assert!(without >= 20, "{without}");
-    // (with: this folder holds `Größe.*`, so what it does not list is still asked about: the nine names of the
-    // sidecar `plain.jpg` has not (`.xmp`, `.XMP` and `.Xmp` of `plain`, `plain.jpg` and `plain.JPG`), the three
+    // (with: this folder holds `Größe.*`, so what it does not list is still asked about: the 24 names of the
+    // sidecar `plain.jpg` has not (eight XMP suffix cases of `plain`, `plain.jpg` and `plain.JPG`), the eight
     // `full.jpg` has not, `upper.xmp`, and the two photos that are gone. What it lists is not asked about, nor
     // anything in `sub`, whose names are all ASCII)
-    assert_eq!(with, 15, "asked {with} times with the listing, {without} without");
+    assert_eq!(with, 35, "asked {with} times with the listing, {without} without");
 
     // a folder of plain names only: the disk is asked nothing at all
     let sub = dir.join("sub");

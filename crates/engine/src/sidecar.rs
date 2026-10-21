@@ -36,6 +36,9 @@ use serde_json::Value;
 
 use crate::{EngineError, Result, Session};
 
+/// Every ASCII XMP suffix case, retaining the original read/save precedence first.
+pub(crate) const XMP_SUFFIXES: [&str; 8] = ["xmp", "XMP", "Xmp", "xmP", "xMp", "xMP", "XmP", "XMp"];
+
 /// Sidecar file naming.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -65,7 +68,7 @@ pub fn sidecar_path(original: &str, naming: SidecarNaming) -> PathBuf {
 }
 
 /// An existing sidecar for `original`: the preferred naming first, then the other one (also
-/// accepting `.XMP` and `.Xmp`, and a full name whose photo extension differs in case, such as
+/// accepting any ASCII case of `.xmp`, and a full name whose photo extension differs in case, such as
 /// `IMG_1.cr3.xmp` beside `IMG_1.CR3`, which a case-sensitive file system would otherwise miss).
 pub fn find_sidecar(original: &str, naming: SidecarNaming) -> Option<PathBuf> {
     sidecar_candidates(original, naming).find(|p| p.is_file())
@@ -73,7 +76,7 @@ pub fn find_sidecar(original: &str, naming: SidecarNaming) -> Option<PathBuf> {
 
 /// The names `original`'s sidecar can have, in the order they are looked for: under `naming`,
 /// then under the other naming (the full name also with the photo extension in the other case),
-/// each as `.xmp`, `.XMP` and `.Xmp`.
+/// each with every ASCII case of `.xmp` (the existing `.xmp`, `.XMP`, `.Xmp` precedence first).
 pub(crate) fn sidecar_candidates(original: &str, naming: SidecarNaming) -> impl Iterator<Item = PathBuf> {
     let other = if naming == SidecarNaming::Stem { SidecarNaming::Full } else { SidecarNaming::Stem };
     let ext = Path::new(original).extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_default();
@@ -89,7 +92,7 @@ pub(crate) fn sidecar_candidates(original: &str, naming: SidecarNaming) -> impl 
             }
             v
         })
-        .flat_map(|p| [p.clone(), p.with_extension("XMP"), p.with_extension("Xmp")])
+        .flat_map(|p| XMP_SUFFIXES.map(|ext| p.with_extension(ext)))
 }
 
 /// What a sidecar (or embedded XMP packet) says about a photo. `None` = not stated.
@@ -646,7 +649,7 @@ impl Session {
             .filter(|n| *n != SidecarNaming::Stem || owners.naming(p, SidecarNaming::Stem) == SidecarNaming::Stem)
             .flat_map(|n| {
                 let path = sidecar_path(orig, n);
-                [path.clone(), path.with_extension("XMP")]
+                XMP_SUFFIXES.map(|ext| path.with_extension(ext))
             })
             .collect();
         // A separated packet is still the photo's metadata. Repair it before a fresh write
@@ -657,10 +660,8 @@ impl Session {
         // subsequent Undo/Redo writes. Shared stems owned by another photo were excluded above.
         // On a case-insensitive volume `a.xmp` also answers for `a.XMP`: the spelling the folder
         // lists comes first, so the atomic write doesn't rename the packet.
-        use crate::rename::MoveFs;
-        let existing: Vec<PathBuf> = candidates.into_iter().filter(|path| path.is_file()).collect();
-        let listed = existing.iter().find(|path| crate::rename::RealFs.listed(path)).cloned();
-        let path = listed.or_else(|| existing.into_iter().next()).unwrap_or(preferred);
+        let existing = crate::rename::listed_packets(&crate::rename::RealFs, &candidates).map_err(EngineError::Other)?;
+        let path = existing.into_iter().next().unwrap_or(preferred);
         self.validate_sidecar_packets_for_paths(std::slice::from_ref(&path), &crate::rename::RealFs)?;
         let p = self.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?;
         let err = |e: std::io::Error| EngineError::Other(format!("{}: {e}", path.display()));
@@ -792,6 +793,30 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
+    /// Every ASCII case of the XMP suffix is offered even on case-sensitive volumes.
+    #[test]
+    fn sidecar_candidates_cover_every_xmp_suffix_case() {
+        for ext in ["JPE", "JFIF"] {
+            let original = format!("photos/IMG.{ext}");
+            for naming in [SidecarNaming::Stem, SidecarNaming::Full] {
+                let candidates: Vec<_> = sidecar_candidates(&original, naming).collect();
+                let preferred = sidecar_path(&original, naming);
+                assert_eq!(&candidates[..3], &[preferred.clone(), preferred.with_extension("XMP"), preferred.with_extension("Xmp")]);
+                for suffix in ["xmp", "xmP", "xMp", "xMP", "Xmp", "XmP", "XMp", "XMP"] {
+                    for base in ["photos/IMG".to_string(), original.clone(), format!("photos/IMG.{}", ext.to_lowercase())] {
+                        let expected = PathBuf::from(format!("{base}.{suffix}"));
+                        assert!(candidates.contains(&expected), "missing {expected:?} under {naming:?}");
+                    }
+                }
+                let other = if naming == SidecarNaming::Stem { SidecarNaming::Full } else { SidecarNaming::Stem };
+                let fallback = sidecar_path(&original, other);
+                let last_preferred = candidates.iter().rposition(|p| p.with_extension("xmp") == preferred).unwrap();
+                let first_fallback = candidates.iter().position(|p| p == &fallback).unwrap();
+                assert!(last_preferred < first_fallback, "preferred naming is searched before the fallback");
+            }
+        }
+    }
+
     #[test]
     fn sidecars_are_written_only_beside_an_existing_original() {
         let dir = std::env::temp_dir().join(format!("lightcraft-sidecar-local-{}", std::process::id()));
