@@ -305,5 +305,7 @@
   "Could not read {name}: {e}": "Impossible de lire {name} : {e}",
   "Added {n} photo{}": "{n} photo{} ajoutée(s)",
   "Where should the Lightroom catalog “{catalog}” go?": "Où importer le catalogue Lightroom « {catalog} » ?",
-  "Merge into the open library “{library}” ({count} photo{})": "Fusionner avec la bibliothèque ouverte « {library} » ({count} photo{})"
+  "Merge into the open library “{library}” ({count} photo{})": "Fusionner avec la bibliothèque ouverte « {library} » ({count} photo{})",
+  "Rule {n} of {m}: {what}. Move with the arrow keys": "Règle {n} sur {m} : {what}. Déplacer avec les flèches",
+  "Group {n} of {m}: match {mode}, {count} inside. Move with the arrow keys": "Groupe {n} sur {m} : correspondre à {mode}, {count} à l’intérieur. Déplacer avec les flèches"
 }
