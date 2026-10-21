@@ -1220,6 +1220,109 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Settings ▸ Search lists the content models; Download shows the model's terms first and fetches nothing until the
+    /// box is ticked; then the download runs in the activity stack, with its progress and a Cancel in the tab (a local
+    /// server stands in for Hugging Face).
+    #[test]
+    fn settings_search_lists_models_and_downloads_only_after_the_terms_are_accepted() {
+        use crate::state::Dialog;
+        use std::io::{BufRead, BufReader, Write};
+        let mut h = demo([1400.0, 900.0]);
+        let t = Duration::from_secs(10);
+        let dir = std::env::temp_dir().join(format!("lc-ui-contentmodel-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let content = dir.join("models").join("content");
+        std::fs::create_dir_all(&content).unwrap();
+        h.app.session.content_models_dir = Some(content.clone());
+        // a small model of the user's catalog, served slowly from a local mirror
+        let body: Vec<u8> = (0..400_000u32).map(|i| (i % 251) as u8).collect();
+        let mut m = lightcraft_vision::manifest::builtin_siglip2_b16_256();
+        m.id = "tiny".into();
+        m.name = "Tiny".into();
+        m.files = vec![lightcraft_vision::manifest::FileSpec {
+            name: "model.safetensors".into(),
+            size: body.len() as u64,
+            sha256: lightcraft_faces::hash::sha256_hex(&body),
+        }];
+        std::fs::write(content.join("catalog.json"), serde_json::to_vec(&json!({"models": [m]})).unwrap()).unwrap();
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        std::fs::write(dir.join("models").join("content-mirrors.txt"), format!("http://{}/m\n", l.local_addr().unwrap())).unwrap();
+        std::thread::spawn(move || {
+            for mut s in l.incoming().flatten() {
+                let body = body.clone();
+                std::thread::spawn(move || {
+                    let mut r = BufReader::new(s.try_clone().unwrap());
+                    loop {
+                        let mut line = String::new();
+                        if r.read_line(&mut line).unwrap_or(0) == 0 || line.trim().is_empty() {
+                            break;
+                        }
+                    }
+                    let _ = s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).as_bytes());
+                    for c in body.chunks(1024) {
+                        if s.write_all(c).is_err() {
+                            break;
+                        }
+                        std::thread::sleep(Duration::from_millis(25));
+                    }
+                });
+            }
+        });
+
+        h.request("engine.execute", json!({"command": "app.settings", "params": {"tab": "search"}}), t);
+        h.settle(SETTLE);
+        h.step();
+        h.request("ui.widgets", json!({}), t);
+        h.step();
+        let w = h.request("ui.widgets", json!({"filter": "content:"}), t).to_string();
+        for id in [
+            "content:download:siglip2-b16-256",
+            "content:download:siglip2-b16-384",
+            "content:download:siglip2-so400m-16-384",
+            "content:download:tiny",
+        ] {
+            assert!(w.contains(&format!("\"{id}\"")), "{id} missing: {w}");
+        }
+        assert!(h.request("ui.widgets", json!({"filter": "check:settings.content"}), t).to_string().contains("contentEnabled"));
+
+        // Download: the terms first, nothing fetched
+        let r = h.request("ui.clickWidget", json!({"id": "content:download:tiny"}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        h.step();
+        h.step();
+        let Some(dlg) = h.app.ui.dialog.clone() else { panic!("no dialog") };
+        let Dialog::ContentModel { info, accepted } = &dlg else { panic!("the terms did not replace Settings: {dlg:?}") };
+        assert_eq!((info["id"].as_str(), *accepted), (Some("tiny"), false));
+        assert!(crate::panels::dialogs::confirm_dialog(&mut h.app, &dlg).is_err(), "OK before the box is ticked");
+        assert!(h.app.session.content_jobs.running().is_none() && !content.join("tiny").exists());
+        assert!(h.app.session.activity.list().is_empty());
+        // ticking the box and confirming starts it, back in Settings ▸ Search
+        let r = h.request("ui.clickWidget", json!({"id": "check:contentModel.accept"}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        h.step();
+        assert!(matches!(&h.app.ui.dialog, Some(Dialog::ContentModel { accepted: true, .. })));
+        let r = h.request("ui.dialog.confirm", json!({}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        assert_eq!(h.app.ui.dialog, Some(Dialog::Settings { tab: "search".into() }));
+        let rows = h.app.session.activity.list();
+        assert!(rows.iter().any(|r| r.kind == "download" && r.label == "Downloading model" && r.detail == "Tiny" && r.cancellable), "{rows:?}");
+        // the tab shows the progress and a Cancel, which stops it and leaves nothing
+        h.step();
+        h.step();
+        let w = h.request("ui.widgets", json!({"filter": "content:"}), t).to_string();
+        assert!(w.contains("content:progress:tiny") && w.contains("content:cancel:tiny"), "{w}");
+        let r = h.request("ui.clickWidget", json!({"id": "content:cancel:tiny"}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        h.step();
+        let started = std::time::Instant::now();
+        while h.app.session.content_jobs.running().is_some() {
+            assert!(started.elapsed() < Duration::from_secs(10), "the download did not stop");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(!content.join("tiny").exists(), "a cancelled download leaves nothing");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Until face recognition is set up, the People view and the loupe's name box say so and offer the next step: with no
     /// model, a button that opens Settings ▸ Faces; with a model installed but recognition off, one that switches it on.
     #[test]

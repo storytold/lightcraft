@@ -295,5 +295,9 @@
   "Already in “{}”": "Already in “{}”",
   "Move {n} photo{} to “{}”": "Move {n} photo{} to “{}”",
   "Move {n} photo{} to “{}”?": "Move {n} photo{} to “{}”?",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Moved {n} photo{} to “{}”. Edit → Undo moves them back."
+  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Moved {n} photo{} to “{}”. Edit → Undo moves them back.",
+  "Downloads {size} from {host}, once. Each file is checked against its recorded checksum; then LightCraft starts using it.": "ერთხელ ჩამოტვირთავს {size}-ს {host}-დან. თითოეული ფაილი მოწმდება ჩაწერილი საკონტროლო ჯამით; შემდეგ LightCraft დაიწყებს მის გამოყენებას.",
+  "Model in use: {name}": "გამოყენებული მოდელი: {name}",
+  "Works · {ms} ms per photo": "მუშაობს · {ms} ms ფოტოზე",
+  "{got} of {total} from {host}": "{got} / {total} — {host}-დან"
 }

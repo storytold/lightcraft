@@ -23,6 +23,7 @@ pub mod camera_profiles;
 pub mod cmd;
 pub mod config;
 pub mod contact_sheet;
+pub mod content_models;
 pub mod crs;
 pub mod crs_masks;
 pub mod demo;
@@ -247,6 +248,10 @@ pub struct Session {
     pub(crate) denoise: denoise::State,
     /// Where the host keeps face models (one folder each); `None` where there is no file system (the web).
     pub face_models_dir: Option<std::path::PathBuf>,
+    /// Where the host keeps content models (`<config>/models/content`); `None` where there is no file system (the web).
+    pub content_models_dir: Option<std::path::PathBuf>,
+    /// Content model downloads and self-tests started this session.
+    pub content_jobs: content_models::Jobs,
     /// Face model downloads started this session (the staged files wait in `<face_models_dir>/.downloads`).
     pub face_downloads: face_download::Downloads,
     /// Reverse geocoding: the parsed place names and their download (`metadata.*PlaceNames`).
@@ -438,6 +443,8 @@ impl Session {
             denoise: Default::default(),
             face_models_dir: None,
             face_downloads: Default::default(),
+            content_models_dir: None,
+            content_jobs: Default::default(),
             place_names: Default::default(),
             face_catalog: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -1248,6 +1255,8 @@ mod tests_album_remove;
 mod tests_albums_local;
 #[cfg(test)]
 mod tests_color;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests_content_models;
 #[cfg(test)]
 mod tests_crop_angle;
 #[cfg(test)]

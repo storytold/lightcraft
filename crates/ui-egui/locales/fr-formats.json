@@ -295,5 +295,9 @@
   "Already in “{}”": "Déjà dans « {} »",
   "Move {n} photo{} to “{}”": "Déplacer {n} photo{} vers « {} »",
   "Move {n} photo{} to “{}”?": "Déplacer {n} photo{} vers « {} » ?",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "{n} photo{} déplacée(s) vers « {} ». Modifier → Annuler les remet en place."
+  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "{n} photo{} déplacée(s) vers « {} ». Modifier → Annuler les remet en place.",
+  "Model in use: {name}": "Modèle utilisé : {name}",
+  "Works · {ms} ms per photo": "Fonctionne · {ms} ms par photo",
+  "{got} of {total} from {host}": "{got} sur {total} depuis {host}",
+  "Downloads {size} from {host}, once. Each file is checked against its recorded checksum; then LightCraft starts using it.": "Télécharge {size} depuis {host}, une seule fois. Chaque fichier est vérifié avec sa somme de contrôle enregistrée ; LightCraft commence ensuite à l’utiliser."
 }
