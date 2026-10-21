@@ -11,6 +11,7 @@ mod ci_report;
 mod ico;
 mod layers;
 mod parity;
+mod refusals;
 mod stats;
 mod version;
 mod web;
@@ -37,7 +38,7 @@ commands:
                   build the browser app (apps/lightcraft-web) into <target>/web-site/;
                   --serve serves it on http://127.0.0.1:<port> (default 8080)
   ci [--hardware] [--summary-md] [--quick [--base REF]]
-                  fmt --check, clippy -D warnings, heif, test, GPU probe, parity refs, layers, assets, wasm
+                  fmt --check, clippy -D warnings, heif, test, GPU probe, parity refs, layers, refusals, assets, wasm
                   (stops at first failure). Tests run under cargo test (cargo nextest with
                   LIGHTCRAFT_NEXTEST=1), without examples, then doctests with cargo test --doc; after
                   them it prints the translation gaps report (never a failure). Writes
@@ -48,6 +49,7 @@ commands:
                   break: clippy, the changed packages' tests, and heif / parity / wasm when they apply.
                   One ci runs at a time per machine; others wait (LIGHTCRAFT_CI_SLOTS=N for N at once,
                   LIGHTCRAFT_CI_LOCK=off to skip the lock)
+  refusals        check that the interface drops no command's refusal (`let _ = app.run(…)`): act, quiet or deal with it
   corpus [--download]
                   show where test corpora live; --download fetches PngSuite and CC0 raw samples (raw.pixls.us) into corpus/ and checks their sha256
   stats [--exact] count tests and lines per crate (--exact: ask the test harness via `-- --list`)
@@ -65,6 +67,7 @@ fn main() -> ExitCode {
         Some("ico") => ico::run(&rest),
         Some("version") => version::run(&root(), &rest),
         Some("layers") => cmd_layers(),
+        Some("refusals") => refusals::run(&root()),
         Some("assets") => assets::run(&root()),
         Some("bench") => bench::run(&root(), &rest),
         Some("parity") => parity::run(&root(), rest.contains(&"--write")),
@@ -559,6 +562,7 @@ fn cmd_ci(args: &[&str]) -> Result<(), String> {
         steps.push(("parity", Box::new(|| parity::run(&root, false))));
     }
     steps.push(("layers", Box::new(cmd_layers)));
+    steps.push(("refusals", Box::new(|| refusals::run(&root))));
     steps.push(("assets", Box::new(|| assets::run(&root))));
     if wants("wasm") {
         match plan.as_ref().filter(|p| !p.workspace_wide) {

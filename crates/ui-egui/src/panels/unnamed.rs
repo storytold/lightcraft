@@ -101,7 +101,7 @@ fn click(app: &mut LightcraftApp, list: &Unnamed, i: usize, shift: bool) {
 /// Name `faces` (photo, region) `name`, as one undo step.
 fn name(app: &mut LightcraftApp, faces: &[(u64, usize)], name: &str) {
     let list: Vec<Value> = faces.iter().map(|(photo, index)| json!({"photo": photo, "index": index})).collect();
-    let _ = app.run("faces.nameFaces", json!({"faces": list, "name": name}));
+    app.act("faces.nameFaces", json!({"faces": list, "name": name}));
 }
 
 /// The bar above the faces while some are selected: how many, a box to name them all, and the people already named.
@@ -206,7 +206,7 @@ pub fn section_header(app: &mut LightcraftApp, ui: &mut egui::Ui, list: &Unnamed
         let b = ui.put(r, egui::Button::new(crate::i18n::tr("Open Settings")));
         register(ui.ctx(), "unnamed:openSettings", b.rect);
         if b.clicked() {
-            let _ = app.run("app.settings", json!({"tab": "faces"}));
+            app.act("app.settings", json!({"tab": "faces"}));
         }
     } else if !list.faces.is_empty() {
         let r = Rect::from_min_size(pos2(right - 130.0, at.y + 12.0), vec2(130.0, 22.0));
@@ -269,8 +269,8 @@ pub fn tile(app: &mut LightcraftApp, ui: &mut egui::Ui, list: &Unnamed, i: usize
     }
     // a double click opens the photo, as in the grid; its second click must not undo the first one's selection
     if resp.double_clicked() {
-        let _ = app.run("library.select", json!({"ids": [f.photo], "active": f.photo}));
-        let _ = app.run("view.detail", json!({}));
+        app.act("library.select", json!({"ids": [f.photo], "active": f.photo}));
+        app.act("view.detail", json!({}));
         // Escape comes back to the faces
         app.ui.person_from = Some((None, f.photo));
     } else if resp.clicked() {
