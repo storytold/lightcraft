@@ -138,7 +138,7 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
     let m = lightcraft_meta::extract(bytes);
     let (meta, captured) = meta_of(&m);
     if lightcraft_raw::probe(bytes).is_some() {
-        let raw = match lightcraft_raw::probe_info(bytes).map_err(|e| preview_reason(bytes, e)) {
+        let mut raw = match lightcraft_raw::probe_info(bytes).map_err(|e| preview_reason(bytes, e)) {
             Ok(r) => r,
             Err(Ok(why)) => {
                 // a raw variant we can't decode yet: describe it from its embedded preview
@@ -165,6 +165,7 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
         if raw.orientation.swaps_axes() {
             std::mem::swap(&mut w, &mut h);
         }
+        crate::camera_profiles::apply_dcp(&mut raw.color, &raw.metadata);
         let scale = WbScaleOf::new(raw.format, &raw.color, raw.wb_multipliers, &raw.metadata);
         let as_shot_wb = Some(scale.as_shot(lightcraft_raw::color::as_shot_white_xy_of(&raw)));
         let embedded_lens = crate::lens_profiles::for_raw(&raw, || m.clone());
@@ -366,20 +367,36 @@ pub fn bin_factor(raw: &lightcraft_raw::RawImage, max_edge: usize) -> Option<usi
 /// instead of each one waking the pool from outside and waiting for it (which costs more than the
 /// loops themselves when the machine is busy).
 pub fn load_bytes(bytes: &[u8], max_edge: usize) -> Result<(Rgb32f, SourceInfo), String> {
-    rayon::scope(|_| load_bytes_now(std::borrow::Cow::Borrowed(bytes), max_edge, None).map(|(img, _, info)| (img, info)))
+    rayon::scope(|_| load_bytes_now(std::borrow::Cow::Borrowed(bytes), max_edge, None, None).map(|(img, _, info)| (img, info)))
 }
 
 /// [`load_bytes`] taking the file's bytes: a raw file's bytes are freed as soon as it is decoded
 /// (less memory held while it is developed).
 pub fn load_vec(bytes: Vec<u8>, max_edge: usize) -> Result<(Rgb32f, SourceInfo), String> {
-    rayon::scope(move |_| load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, None).map(|(img, _, info)| (img, info)))
+    load_vec_as(bytes, max_edge, None)
+}
+
+/// [`load_vec`] with the photo's camera-profile choice (`profile.camera`: empty for the camera's default, `lc` for
+/// LightCraft's own colour, `dcp:<id>` for an imported `.dcp`; see `camera_profiles::apply_choice`).
+pub fn load_vec_as(bytes: Vec<u8>, max_edge: usize, camera: Option<String>) -> Result<(Rgb32f, SourceInfo), String> {
+    rayon::scope(move |_| load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, None, camera.as_deref()).map(|(img, _, info)| (img, info)))
 }
 
 /// [`load_vec`] that also develops the photo's cached denoised picture (`spec`) from the same decode: the plain
 /// picture, the denoised one (`None` when it cannot be read or does not fit this raw: the plain one is then all
 /// there is) and the source facts. Both pictures are the same size.
 pub fn load_vec_pair(bytes: Vec<u8>, max_edge: usize, spec: &DenoiseSpec) -> Result<(Rgb32f, Option<Rgb32f>, SourceInfo), String> {
-    rayon::scope(move |_| load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, Some(spec)))
+    load_vec_pair_as(bytes, max_edge, spec, None)
+}
+
+/// [`load_vec_pair`] with the photo's camera-profile choice (see [`load_vec_as`]).
+pub fn load_vec_pair_as(
+    bytes: Vec<u8>,
+    max_edge: usize,
+    spec: &DenoiseSpec,
+    camera: Option<String>,
+) -> Result<(Rgb32f, Option<Rgb32f>, SourceInfo), String> {
+    rayon::scope(move |_| load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, Some(spec), camera.as_deref()))
 }
 
 /// The denoised camera RGB of `raw` from its cached product, as the plain development would have it: the default
@@ -408,6 +425,7 @@ fn load_bytes_now(
     bytes: std::borrow::Cow<'_, [u8]>,
     max_edge: usize,
     denoise: Option<&DenoiseSpec>,
+    camera: Option<&str>,
 ) -> Result<(Rgb32f, Option<Rgb32f>, SourceInfo), String> {
     if lightcraft_raw::probe(&bytes).is_some() {
         let mut raw = match lightcraft_raw::decode(&bytes).map_err(|e| preview_reason(&bytes, e)) {
@@ -420,6 +438,8 @@ fn load_bytes_now(
             }
             Err(Err(e)) => return Err(e),
         };
+        // the photo's `.dcp` (or its camera's default one) replaces the file's colour model (personal fork)
+        let dcp = crate::camera_profiles::apply_choice(&mut raw.color, &raw.metadata, camera).is_some();
         // Embedded lens corrections are applied by the pipeline ("Enable Profile Corrections"), not baked in
         // (removed before the camera look's binned sensor proxy too, which needs an empty `OpcodeList3`).
         let info = raw.info();
@@ -432,7 +452,7 @@ fn load_bytes_now(
         let scale = WbScaleOf::new(raw.format, &raw.color, raw.wb_multipliers, &raw.metadata);
         // the source's segmentation mattes (DNG semantic masks), read while the starting colour is fitted
         let ((xy, t, camera_look), mattes) = rayon::join(
-            || crate::camera_preview::starting_colour(&mut raw, &bytes, lens_geometry.as_ref(), lens.as_ref()),
+            || crate::camera_preview::starting_colour_as(&mut raw, &bytes, lens_geometry.as_ref(), lens.as_ref(), dcp),
             || dng_mattes(&bytes, &info),
         );
         drop(bytes);
@@ -504,7 +524,9 @@ fn load_bytes_now(
         // on top of it). A model's measured matrices never do: they only give the Kelvin scale its numbers, and the
         // picture is adapted from the as-shot white as every fitted look is (so settings from before that scale
         // existed render exactly as they did, `lightcraft_pipeline::local::legacy_white`).
-        let camera_color = (scale.own_matrix && !t.matrix_is_fallback && (camera_look.is_none() || raw.format == lightcraft_raw::RawFormat::Dng))
+        let camera_color = (scale.own_matrix
+            && !t.matrix_is_fallback
+            && (camera_look.is_none() || raw.format == lightcraft_raw::RawFormat::Dng || dcp))
             .then(|| {
                 let tags = lightcraft_raw::ColorData { profile: Default::default(), ..raw.color.clone() };
                 Arc::new(lightcraft_pipeline::CameraColor { tags, developed_for: xy })
@@ -1041,12 +1063,13 @@ fn quick_image_srgb(header: &[u8], window: &[u8], adobe_rgb: bool, max_edge: usi
 /// denoised picture. It holds two pictures at once, so it counts for more at the memory gate than a plain load.
 pub fn fs_pair_loader() -> PairLoader {
     Arc::new(|path: &str, max_edge: usize, spec: &DenoiseSpec| {
+        let (path, camera) = crate::camera_profiles::split_camera(path);
         let len = std::fs::metadata(path).map(|m| m.len() as usize).unwrap_or(0);
         let weight = len * if max_edge <= crate::media::SourceLevel::Thumb.max_edge() { 4 } else { 10 };
         let gate = crate::memory::work_gate();
         let _permit = if crate::memory::is_background() { gate.acquire(weight) } else { gate.acquire_urgent(weight) };
         let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
-        let r = load_vec_pair(bytes, max_edge, spec);
+        let r = load_vec_pair_as(bytes, max_edge, spec, camera.map(str::to_string));
         crate::memory::release();
         r
     })
@@ -1061,12 +1084,13 @@ pub fn fs_pair_loader() -> PairLoader {
 /// yields to them.
 pub fn fs_hooks() -> (FileLoader, FileProbe) {
     let loader: FileLoader = Arc::new(|path: &str, max_edge: usize| {
+        let (path, camera) = crate::camera_profiles::split_camera(path);
         let len = std::fs::metadata(path).map(|m| usize::try_from(m.len()).unwrap_or(usize::MAX)).unwrap_or(0);
         let weight = len * if max_edge <= crate::media::SourceLevel::Thumb.max_edge() { 3 } else { 6 };
         let gate = crate::memory::work_gate();
         let _permit = if crate::memory::is_background() { gate.acquire(weight) } else { gate.acquire_urgent(weight) };
         let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
-        let r = load_vec(bytes, max_edge);
+        let r = load_vec_as(bytes, max_edge, camera.map(str::to_string));
         // the file, the samples and the intermediate images are gone: give their pages back
         crate::memory::release();
         r
@@ -1094,6 +1118,8 @@ impl crate::Session {
     /// Install the filesystem file hooks (desktop, CLI, MCP headless), and on macOS the Apple Photos
     /// runner ([`crate::apple_photos::osascript`]; installed, not run).
     pub fn with_fs(mut self) -> Self {
+        // installed `.dcp` camera profiles, before anything asks which camera has a colour model
+        crate::camera_profiles::install_dcps();
         let (l, p) = fs_hooks();
         self.media.file_loader = Some(l);
         self.media.file_probe = Some(p);

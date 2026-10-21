@@ -4,7 +4,14 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>LightCraft</title>
-  <link rel="icon" href="data:,">
+  <link rel="icon" href="icon-256.png">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icon-256.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="LightCraft">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="theme-color" content="#1c1c1c">
   <meta name="description" content="LightCraft: open-source photo library and raw developer, running in your browser (WASM).">
   <style>
     :root { color-scheme: dark; }
@@ -21,6 +28,12 @@
   <canvas id="lightcraft_canvas"></canvas>
   <div id="lightcraft_loading">Loading LightCraft…</div>
   <div id="lightcraft_status" aria-live="polite"></div>
+  <script>
+    // offline support: keep the app's files once loaded (see sw.js); needs https:// or localhost
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("./sw.js").catch((e) => console.warn("offline support unavailable:", e));
+    }
+  </script>
   <script type="module">
     import init, { start, command } from "./lightcraft_web.js";
     (async () => {

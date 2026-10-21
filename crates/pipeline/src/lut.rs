@@ -59,6 +59,25 @@ impl Lut3d {
         Ok(Lut3d { size, data, domain_min: min, domain_max: max, title })
     }
 
+    /// The LUT as a `.cube` file ([`Self::parse_cube`] reads it back).
+    pub fn to_cube(&self) -> String {
+        let mut s = String::with_capacity(self.data.len() * 28 + 128);
+        if let Some(t) = self.title.as_deref().filter(|t| !t.trim().is_empty()) {
+            s.push_str(&format!("TITLE \"{}\"\n", t.replace('"', "'")));
+        }
+        s.push_str(&format!("LUT_3D_SIZE {}\n", self.size));
+        if self.domain_min != [0.0; 3] || self.domain_max != [1.0; 3] {
+            let [a, b, c] = self.domain_min;
+            s.push_str(&format!("DOMAIN_MIN {a} {b} {c}\n"));
+            let [a, b, c] = self.domain_max;
+            s.push_str(&format!("DOMAIN_MAX {a} {b} {c}\n"));
+        }
+        for v in &self.data {
+            s.push_str(&format!("{:.6} {:.6} {:.6}\n", v[0], v[1], v[2]));
+        }
+        s
+    }
+
     /// Look up `c` (trilinear).
     pub fn apply(&self, c: [f32; 3]) -> [f32; 3] {
         let n = self.size;
@@ -139,5 +158,13 @@ mod tests {
         assert!((v[0] - 0.8).abs() < 1e-5 && (v[2] - 0.1).abs() < 1e-5, "{v:?}");
         assert!(Lut3d::parse_cube("LUT_1D_SIZE 4\n0 0 0").is_err());
         assert!(Lut3d::parse_cube("LUT_3D_SIZE 2\n0 0 0\n").is_err(), "too few entries");
+    }
+
+    #[test]
+    fn cube_round_trip() {
+        let l = Lut3d::parse_cube(&cube(|c| [c[0] * 0.5, c[1], 1.0 - c[2]], 5)).unwrap();
+        let back = Lut3d::parse_cube(&l.to_cube()).unwrap();
+        assert_eq!((back.size, back.title.as_deref()), (5, Some("test")));
+        assert!(back.data.iter().zip(&l.data).all(|(a, b)| (0..3).all(|k| (a[k] - b[k]).abs() < 1e-5)));
     }
 }

@@ -198,11 +198,16 @@ pub struct Profile {
     /// settings without it keep their JSON (and hash).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub camera_local_tone: bool,
+    /// How a raw is decoded (personal fork): empty for its camera's default, `lc` for LightCraft's
+    /// own colour, `dcp:<id>` for an imported `.dcp` camera profile. Omitted when empty, so
+    /// settings without it keep their JSON (and hash).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub camera: String,
 }
 
 impl Default for Profile {
     fn default() -> Self {
-        Self { id: "lc.color".into(), amount: 100.0, camera_local_tone: false }
+        Self { id: "lc.color".into(), amount: 100.0, camera_local_tone: false, camera: String::new() }
     }
 }
 

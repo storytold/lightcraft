@@ -23,6 +23,7 @@ mod focus;
 pub mod geocode;
 pub mod keywords;
 pub mod library;
+pub mod dcp_profiles;
 pub mod lut_profiles;
 pub mod manage;
 pub mod mask_effect_files;
@@ -152,6 +153,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(manage::specs());
         v.extend(previews::specs());
         v.extend(lut_profiles::specs());
+        v.extend(dcp_profiles::specs());
         v.extend(mask_effects::specs());
         v.extend(cull::specs());
         v.extend(convert::specs());

@@ -165,7 +165,7 @@ pub fn cache_key() -> u64 {
             .into_iter()
             .flatten()
             .flatten()
-            .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+            .filter(|e| e.path().extension().is_some_and(|x| x == "json" || x.eq_ignore_ascii_case("dcp")))
             .filter_map(|e| {
                 let meta = e.metadata().ok()?;
                 let modified = meta.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs();
@@ -182,6 +182,125 @@ pub fn cache_key() -> u64 {
         }
         h.finish().0 as u64
     })
+}
+
+// --- External `.dcp` camera profiles (personal fork) -------------------------------------------
+//
+// Imported profiles are kept in `<profiles>/dcp/`; the active one for a camera model is a copy at
+// `<profiles>/<model>.dcp`. The active ones are read once per process ([`install_dcps`]), like the
+// JSON profiles, and are part of [`cache_key`], so a change takes effect on the next start.
+
+/// Where imported `.dcp` files are kept.
+pub fn dcp_library_dir() -> Option<PathBuf> {
+    dir().map(|d| d.join("dcp"))
+}
+
+/// File name of `model`'s active `.dcp`.
+pub fn dcp_file_name(model: &str) -> String {
+    let json = file_name(model);
+    format!("{}.dcp", json.trim_end_matches(".json"))
+}
+
+/// Read a `.dcp` file.
+pub fn load_dcp(path: &Path) -> Result<lightcraft_raw::dcp::Dcp, String> {
+    let size = std::fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?.len();
+    if size > lightcraft_raw::dcp::MAX_FILE as u64 {
+        return Err(format!("{}: {size} bytes is too large for a camera profile", path.display()));
+    }
+    let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    lightcraft_raw::dcp::parse(&bytes).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// The active `.dcp` files in [`dir`] and what they are (damaged ones skipped with a warning).
+pub fn active_dcps() -> Vec<(PathBuf, lightcraft_raw::dcp::Dcp)> {
+    let Some(d) = dir() else { return Vec::new() };
+    let Ok(entries) = std::fs::read_dir(&d) else { return Vec::new() };
+    let mut paths: Vec<PathBuf> =
+        entries.flatten().map(|e| e.path()).filter(|p| p.is_file() && p.extension().is_some_and(|x| x.eq_ignore_ascii_case("dcp"))).collect();
+    paths.sort();
+    paths
+        .into_iter()
+        .filter_map(|p| match load_dcp(&p) {
+            Ok(d) => Some((p, d)),
+            Err(e) => {
+                eprintln!("lightcraft: ignoring camera profile {e}");
+                None
+            }
+        })
+        .collect()
+}
+
+/// The imported `.dcp` files in [`dcp_library_dir`]: `(id, profile)`, the id being `dcp:<file stem>`.
+pub fn library_dcps() -> Vec<(String, lightcraft_raw::dcp::Dcp)> {
+    let Some(d) = dcp_library_dir() else { return Vec::new() };
+    let Ok(entries) = std::fs::read_dir(&d) else { return Vec::new() };
+    let mut paths: Vec<PathBuf> =
+        entries.flatten().map(|e| e.path()).filter(|p| p.is_file() && p.extension().is_some_and(|x| x.eq_ignore_ascii_case("dcp"))).collect();
+    paths.sort();
+    paths
+        .into_iter()
+        .filter_map(|p| {
+            let stem = p.file_stem()?.to_string_lossy().to_string();
+            match load_dcp(&p) {
+                Ok(d) => Some((format!("dcp:{stem}"), d)),
+                Err(e) => {
+                    eprintln!("lightcraft: ignoring camera profile {e}");
+                    None
+                }
+            }
+        })
+        .collect()
+}
+
+/// Install the active `.dcp` profiles (each camera's default) and the imported library (chosen per
+/// photo) for this process (once; later calls do nothing).
+pub fn install_dcps() {
+    static DONE: OnceLock<()> = OnceLock::new();
+    DONE.get_or_init(|| {
+        let list: Vec<_> = active_dcps().into_iter().map(|(_, d)| d).collect();
+        if !list.is_empty() {
+            log::info!("camera profiles (.dcp): {}", list.iter().map(|d| format!("{} ({})", d.name, d.model)).collect::<Vec<_>>().join(", "));
+        }
+        lightcraft_raw::dcp::install(list);
+        lightcraft_raw::dcp::install_library(library_dcps());
+    });
+}
+
+/// Separates a photo's camera-profile choice from its file path in a [`crate::media::SourceRef`]
+/// (a character no file name holds).
+const CAMERA_SEP: char = '\u{1f}';
+
+/// `path` carrying a photo's camera-profile choice to the file loader (unchanged when the choice is
+/// the default, empty).
+pub fn with_camera(path: &str, camera: &str) -> String {
+    if camera.is_empty() { path.to_string() } else { format!("{path}{CAMERA_SEP}{camera}") }
+}
+
+/// The file path and camera-profile choice [`with_camera`] joined.
+pub fn split_camera(path: &str) -> (&str, Option<&str>) {
+    match path.split_once(CAMERA_SEP) {
+        Some((p, c)) if !c.is_empty() => (p, Some(c)),
+        Some((p, _)) => (p, None),
+        None => (path, None),
+    }
+}
+
+/// Replace `color` with the colour model a photo's camera-profile choice names (see
+/// [`lightcraft_raw::dcp::resolve`]): an imported `.dcp`, its camera's default `.dcp`, or nothing
+/// (LightCraft's own colour). Returns the profile's name when one was applied.
+pub fn apply_choice(color: &mut lightcraft_raw::ColorData, meta: &lightcraft_meta::Metadata, camera: Option<&str>) -> Option<String> {
+    let model = meta.model.as_deref()?;
+    let dcp = lightcraft_raw::dcp::resolve(camera.unwrap_or(""), meta.make.as_deref(), model)?;
+    dcp.apply(color);
+    if lightcraft_pipeline::profiling() {
+        eprintln!("[profile] camera colour from {:?} ({})", dcp.name, dcp.model);
+    }
+    Some(dcp.name.clone())
+}
+
+/// [`apply_choice`] with the camera's default.
+pub fn apply_dcp(color: &mut lightcraft_raw::ColorData, meta: &lightcraft_meta::Metadata) -> Option<String> {
+    apply_choice(color, meta, None)
 }
 
 /// Per camera model: the photos read and their pooled colour pairs.

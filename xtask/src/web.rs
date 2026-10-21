@@ -24,7 +24,13 @@ const CHINESE_FONT_FILE: &str = "lightcraft_zh_hans.otf";
 const CHINESE_FONT_LICENSE_FILE: &str = "OFL-noto-sans-cjk-sc.txt";
 
 /// Files copied from `apps/lightcraft-web/` into the bundle as they are.
-const STATIC_FILES: [&str; 2] = ["index.html", "worker.js"];
+const STATIC_FILES: [&str; 4] = ["index.html", "worker.js", "sw.js", "manifest.webmanifest"];
+
+/// The home-screen icons (`assets/app-icon/`, original work): `(source, bundle name)`.
+const ICONS: [(&str, &str); 2] = [
+    ("assets/app-icon/hicolor/256x256/apps/ai.storyteller.lightcraft.png", "icon-256.png"),
+    ("assets/app-icon/hicolor/512x512/apps/ai.storyteller.lightcraft.png", "icon-512.png"),
+];
 
 /// Bundle files that get precompressed copies.
 const COMPRESSED: [&str; 4] = ["index.html", "worker.js", "lightcraft_web.js", "lightcraft_web_bg.wasm"];
@@ -138,6 +144,9 @@ pub fn run(args: &[&str]) -> Result<(), String> {
     for f in STATIC_FILES {
         std::fs::copy(root().join("apps/lightcraft-web").join(f), out.join(f)).map_err(|e| format!("copy {f}: {e}"))?;
     }
+    for (from, to) in ICONS {
+        std::fs::copy(root().join(from), out.join(to)).map_err(|e| format!("copy {from}: {e}"))?;
+    }
     let chinese_font = copy_chinese_font(&out)?;
 
     // precompressed copies (skipped for --dev: they'd only slow the edit loop down)
@@ -191,6 +200,7 @@ fn mime(path: &Path) -> &'static str {
         "wasm" => "application/wasm",
         "css" => "text/css; charset=utf-8",
         "json" => "application/json",
+        "webmanifest" => "application/manifest+json",
         "png" => "image/png",
         "jpg" | "jpeg" => "image/jpeg",
         "otf" => "font/otf",

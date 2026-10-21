@@ -89,8 +89,20 @@ pub(crate) fn starting_colour(
     lens: Option<&LensGeometry>,
     embedded: Option<&lightcraft_develop::EmbeddedLens>,
 ) -> (Xy, CameraTransform, Option<CameraLook>) {
+    starting_colour_as(raw, bytes, lens, embedded, false)
+}
+
+/// [`starting_colour`] for a raw whose colour model an imported `.dcp` replaced (`dcp`): like a DNG, a profile
+/// without a tone curve of its own gets its tone fitted to the camera's JPEG, whatever the raw format.
+pub(crate) fn starting_colour_as(
+    raw: &mut RawImage,
+    bytes: &[u8],
+    lens: Option<&LensGeometry>,
+    embedded: Option<&lightcraft_develop::EmbeddedLens>,
+    dcp: bool,
+) -> (Xy, CameraTransform, Option<CameraLook>) {
     let (xy, t, look) = starting_colour_with(raw, |raw, t| fit_preview(raw, bytes, t, lens), |raw, t| monochrome_look(raw, bytes, t, lens));
-    if look.is_none() && dng_tone_eligible(raw, &t) {
+    if look.is_none() && (dng_tone_eligible(raw, &t) || (dcp && dcp_tone_eligible(raw, &t))) {
         let look = fit_dng_tone(raw, bytes, &t, embedded);
         return (xy, t, look);
     }
@@ -115,6 +127,13 @@ fn identity_tone_curve(curve: Option<&lightcraft_raw::profile::ToneCurve>) -> bo
 pub(crate) fn dng_tone_eligible(raw: &RawImage, t: &CameraTransform) -> bool {
     let p = &raw.color.profile;
     raw.format == RawFormat::Dng && !t.matrix_is_fallback && identity_tone_curve(p.tone_curve.as_ref()) && p.gain_table_map.is_none()
+}
+
+/// A raw developed through a `.dcp` whose tone is not defined by the profile ([`dng_tone_eligible`]
+/// without the DNG requirement).
+fn dcp_tone_eligible(raw: &RawImage, t: &CameraTransform) -> bool {
+    let p = &raw.color.profile;
+    !t.matrix_is_fallback && identity_tone_curve(p.tone_curve.as_ref()) && p.look_table.is_none() && p.gain_table_map.is_none()
 }
 
 /// [`starting_colour`] with the JPEG fit (the look, and whether the JPEG is black and white) and the black-and-white
