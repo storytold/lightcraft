@@ -7,12 +7,15 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod controls;
+pub mod point_curve;
 pub mod presets;
 pub mod segmask;
 pub mod settings;
+pub mod unsupported_edits;
 
 pub use controls::{CONTROLS, ControlSpec, Section, Track};
-pub use presets::{Preset, SettingsGroup, apply_partial, extract_groups};
+pub use point_curve::{FunctionCurve, MAX_POINT_CURVE_POINTS, POINT_CURVE_LUT_SIZE, PointCurve, PointCurveError};
+pub use presets::{Preset, PresetError, SettingsGroup, apply_partial, extract_groups, try_apply_partial};
 pub use segmask::SegMask;
 pub use settings::*;
 
@@ -30,12 +33,36 @@ impl DevelopSettings {
         s
     }
 
+    /// Minimum wire schema needed by the authored features; legacy markers remain unchanged.
+    pub fn required_schema_version(&self) -> u32 {
+        if self.wb.scale == WbScale::Kelvin {
+            WB_SCALE_SCHEMA_VERSION
+        } else if self.profile.imported.as_ref().is_some_and(|look| look.look_table.is_some()) {
+            LOOK_TABLE_SCHEMA_VERSION
+        } else if self.profile.imported.as_ref().is_some_and(|look| look.convert_to_grayscale) {
+            PROFILE_TREATMENT_SCHEMA_VERSION
+        } else if self.profile.imported.is_some() {
+            IMPORTED_LOOK_SCHEMA_VERSION
+        } else if [&self.curve.master, &self.curve.red, &self.curve.green, &self.curve.blue].iter().any(|c| c.is_function()) {
+            POINT_CURVE_SCHEMA_VERSION
+        } else {
+            0
+        }
+    }
+
+    /// Promote only settings that need a newer feature schema; never downgrade saved markers.
+    pub fn normalize_schema(&mut self) {
+        self.version = self.version.max(self.required_schema_version());
+    }
+
     pub fn to_json(&self) -> Value {
         serde_json::to_value(self).unwrap_or(Value::Null)
     }
 
     pub fn from_json(v: &Value) -> Result<DevelopSettings, serde_json::Error> {
-        serde_json::from_value(v.clone())
+        let mut settings: DevelopSettings = serde_json::from_value(v.clone())?;
+        settings.normalize_schema();
+        Ok(settings)
     }
 
     /// Merge a partial JSON object into these settings (fields not mentioned are kept). A white balance that
@@ -43,8 +70,33 @@ impl DevelopSettings {
     /// partial from before the scale existed, or one that never said, must not become Kelvin by landing on
     /// Kelvin settings. Out-of-range values are brought back into range ([`DevelopSettings::keep_in_range`]).
     pub fn merged(&self, partial: &Value) -> Result<DevelopSettings, serde_json::Error> {
-        let mut v = self.to_json();
+        let mut v = serde_json::to_value(self)?;
         presets::deep_merge(&mut v, partial);
+        // Clamp only newly authored sparse handles. Existing saved curves and checked function
+        // payloads are authoritative; an unrelated slider merge must not rewrite their outputs.
+        // Do this before deserialization so an extreme but finite handle cannot overflow the
+        // checked curve evaluator before being brought into its authored range.
+        for name in ["master", "red", "green", "blue"] {
+            if partial.get("curve").and_then(|curve| curve.get(name)).is_some_and(Value::is_array)
+                && let Some(points) = v.get_mut("curve").and_then(|curve| curve.get_mut(name)).and_then(Value::as_array_mut)
+                && points.len() <= MAX_POINT_CURVE_POINTS
+            {
+                for point in points {
+                    for (index, axis) in ["x", "y"].into_iter().enumerate() {
+                        let value = match point {
+                            Value::Array(coords) if coords.len() == 2 => coords.get_mut(index),
+                            Value::Object(coords) => coords.get_mut(axis),
+                            _ => None,
+                        };
+                        if let Some(value) = value
+                            && let Some(number) = value.as_f64().filter(|number| number.is_finite())
+                        {
+                            *value = Value::from(number.clamp(0.0, 1.0));
+                        }
+                    }
+                }
+            }
+        }
         let mut out = DevelopSettings::from_json(&v)?;
         if let Some(wb) = partial.get("wb").and_then(Value::as_object)
             && (wb.contains_key("temp") || wb.contains_key("tint"))
@@ -57,7 +109,7 @@ impl DevelopSettings {
     }
 
     /// What crs XMP import does to the values it reads, for settings that arrive as JSON (presets, `develop.merge`,
-    /// `render --settings`; issue #1946): every slider clamped through its control spec, point curves in 0..1, and a
+    /// `render --settings`; issue #1946): every slider clamped through its control spec, and a
     /// crop with no area left as it was in `before`. Unrotated, the crop is clipped to the photo first; a turned crop
     /// may reach past 0..1 and is left to the crop tools, which know the photo's size.
     fn keep_in_range(&mut self, before: &DevelopSettings) {
@@ -65,10 +117,6 @@ impl DevelopSettings {
             if let Some(v) = controls::get(self, c.id) {
                 controls::set(self, c.id, v);
             }
-        }
-        let c = &mut self.curve;
-        for p in [&mut c.master, &mut c.red, &mut c.green, &mut c.blue].into_iter().flatten() {
-            *p = lightcraft_geom::Point::new(p.x.clamp(0.0, 1.0), p.y.clamp(0.0, 1.0));
         }
         let g = &mut self.crop.geometry;
         if g.angle == 0.0 {
@@ -91,6 +139,13 @@ impl DevelopSettings {
         h
     }
 
+    /// Compare edit values independently of the supported wire schema marker.
+    pub fn same_values(&self, other: &Self) -> bool {
+        let mut current = self.clone();
+        current.version = other.version;
+        current == *other
+    }
+
     /// True if nothing differs from a fresh default (ignoring white balance "as shot" values, and
     /// the rendering process: that is not an edit).
     pub fn is_unedited(&self) -> bool {
@@ -98,11 +153,21 @@ impl DevelopSettings {
         let d = DevelopSettings::default();
         a.wb = d.wb;
         a.process = d.process;
+        a.version = d.version;
         a == d
     }
 
     pub fn section_enabled(&self, section: &str) -> bool {
         !self.disabled_sections.iter().any(|s| s == section)
+    }
+
+    /// Effective treatment, including a profile's independent monochrome conversion.
+    /// Amount zero does not turn a monochrome profile into a color profile.
+    pub fn is_bw(&self) -> bool {
+        self.treatment == Treatment::Bw
+            || self.profile.id == "lc.mono"
+            || self.profile.id.starts_with("lc.bw.")
+            || self.profile.imported_look().is_some_and(|look| look.convert_to_grayscale)
     }
 
     /// The settings as rendered: an Edit-panel section whose eye is off contributes nothing (issue
@@ -200,6 +265,29 @@ mod tests {
         let back = DevelopSettings::from_json(&v).unwrap();
         assert_eq!(back, s);
         assert_ne!(back.hash64(), DevelopSettings::default().hash64());
+
+        s.profile.id = IMPORTED_LOOK_ID.into();
+        s.profile.imported = Some(ImportedLook { contrast: 25.0, shadows: -15.0, ..Default::default() });
+        // Catalogs serialize the struct directly; stale markers still cannot hide new features.
+        let direct = serde_json::to_value(&s).unwrap();
+        assert_eq!(direct["version"], IMPORTED_LOOK_SCHEMA_VERSION);
+        let loaded: DevelopSettings = serde_json::from_value(direct).unwrap();
+        s.normalize_schema();
+        assert_eq!(loaded, s);
+        assert_eq!(loaded.light.exposure, 1.25);
+        assert_eq!(loaded.profile.imported_look(), s.profile.imported.as_ref());
+        assert!(loaded.to_json()["profile"]["imported"].get("convert_to_grayscale").is_none());
+        let legacy_wire = serde_json::to_string(&loaded).unwrap();
+        let legacy: DevelopSettings = serde_json::from_str(&legacy_wire).unwrap();
+        assert_eq!(serde_json::to_string(&legacy).unwrap(), legacy_wire);
+        s.profile.imported.as_mut().unwrap().convert_to_grayscale = true;
+        let direct = serde_json::to_value(&s).unwrap();
+        assert_eq!(direct["version"], PROFILE_TREATMENT_SCHEMA_VERSION);
+        assert_eq!(direct["profile"]["imported"]["convert_to_grayscale"], true);
+        assert!(DevelopSettings::from_json(&direct).unwrap().is_bw());
+        s.profile.imported = None;
+        assert!(serde_json::to_value(&s).is_err());
+        assert!(s.merged(&json!({"light":{"exposure":2.0}})).is_err());
     }
 
     #[test]
@@ -209,12 +297,16 @@ mod tests {
         let s = DevelopSettings::from_json(&old).unwrap();
         assert_eq!(s.wb.scale, WbScale::Legacy);
         assert_eq!(s.to_json()["wb"], old["wb"]);
+        assert_eq!(s.to_json()["version"], 1);
         assert_eq!(DevelopSettings::default().wb.scale, WbScale::Legacy);
         assert!(DevelopSettings::default().to_json()["wb"].get("scale").is_none());
         // written on the Kelvin scale: said so, and read back
         let mut k = s.clone();
         k.wb.scale = WbScale::Kelvin;
         assert_eq!(k.to_json()["wb"]["scale"], json!("kelvin"));
+        assert_eq!(k.to_json()["version"], WB_SCALE_SCHEMA_VERSION);
+        k.normalize_schema();
+        assert_eq!(k.version, WB_SCALE_SCHEMA_VERSION);
         assert_eq!(DevelopSettings::from_json(&k.to_json()).unwrap(), k);
         assert_ne!(k.hash64(), s.hash64());
         // an unknown scale from a newer build is an error, not a panic
@@ -225,11 +317,17 @@ mod tests {
     fn a_partial_white_balance_without_a_scale_is_legacy() {
         let mut base = DevelopSettings::default();
         base.wb.scale = WbScale::Kelvin;
+        base.wb.temp = 5100.0;
+        base.wb.tint = -4.0;
         // an old preset's white balance lands on Kelvin settings: it keeps its relative meaning
         let out = apply_partial(&base, &json!({"wb": {"mode": "custom", "temp": 5800.0}}), 1.0);
         assert_eq!((out.wb.scale, out.wb.temp), (WbScale::Legacy, 5800.0));
+        assert_eq!(out.wb.tint, base.wb.tint, "the omitted axis is preserved");
+        assert_eq!(out.version, WB_SCALE_SCHEMA_VERSION, "merging never downgrades the saved schema");
+        assert!(out.to_json()["wb"].get("scale").is_none());
         let out = apply_partial(&base, &json!({"wb": {"tint": 12.0}}), 1.0);
         assert_eq!(out.wb.scale, WbScale::Legacy);
+        assert_eq!((out.wb.temp, out.wb.tint), (base.wb.temp, 12.0));
         // one that says Kelvin stays Kelvin; a mode alone leaves the scale as it was
         let out = apply_partial(&base, &json!({"wb": {"mode": "custom", "temp": 5800.0, "scale": "kelvin"}}), 1.0);
         assert_eq!(out.wb.scale, WbScale::Kelvin);
@@ -269,6 +367,33 @@ mod tests {
         let s = DevelopSettings::from_json(&json!({"light": {"exposure": 0.5}, "futureThing": 3})).unwrap();
         assert_eq!(s.light.exposure, 0.5);
         assert_eq!(s.grading.blending, 50.0);
+        assert_eq!(serde_json::to_value(Profile::default()).unwrap(), json!({"id":"lc.color","amount":100.0}));
+        assert!(ImportedLook::default().validate().is_ok());
+        for bad in [
+            json!({"name":"x".repeat(MAX_IMPORTED_LOOK_TEXT_BYTES + 1)}),
+            json!({"source_id":"bad\nidentifier"}),
+            json!({"highlights":101.0}),
+            json!({"clarity":null}),
+            json!({"master":[{"x":0.0,"y":-0.1},{"x":1.0,"y":1.0}]}),
+            json!({"unknown_table":[]}),
+        ] {
+            assert!(serde_json::from_value::<ImportedLook>(bad).is_err());
+        }
+        assert!(serde_json::from_value::<Profile>(json!({"id":IMPORTED_LOOK_ID})).is_err());
+        assert!(serde_json::from_value::<Profile>(json!({"id":IMPORTED_LOOK_ID,"imported":null})).is_err());
+        let invalid = ImportedLook { contrast: f64::NAN, ..Default::default() };
+        assert!(serde_json::to_value(&invalid).is_err());
+    }
+
+    #[test]
+    fn future_schema_is_rejected_by_direct_and_value_deserialization() {
+        let future = json!({"version": SCHEMA_VERSION + 1, "light": {"exposure": 0.5}});
+        assert!(DevelopSettings::from_json(&future).is_err());
+        assert!(serde_json::from_value::<DevelopSettings>(future.clone()).is_err());
+        assert!(serde_json::from_str::<DevelopSettings>(&future.to_string()).is_err());
+        for legacy in [json!({}), json!({"version": 0}), json!({"version": SCHEMA_VERSION})] {
+            assert!(serde_json::from_value::<DevelopSettings>(legacy).is_ok());
+        }
     }
 
     #[test]
@@ -278,6 +403,21 @@ mod tests {
         assert_eq!(m.light.contrast, 20.0);
         assert_eq!(m.effects.clarity, 10.0);
         assert_eq!(m.light.exposure, 0.0);
+
+        let imported = s.merged(&json!({"profile":{"id":IMPORTED_LOOK_ID,"imported":{"name":"First","contrast":20.0}}})).unwrap();
+        assert_eq!(imported.profile.imported_look().unwrap().contrast, 20.0);
+        let amount = imported.merged(&json!({"profile":{"amount":75.0}})).unwrap();
+        assert_eq!(amount.profile.imported, imported.profile.imported);
+        let replaced = imported.merged(&json!({"profile":{"imported":{"name":"Second","clarity":10.0}}})).unwrap();
+        assert_eq!(replaced.profile.imported_look().unwrap().contrast, 0.0);
+        assert_eq!(replaced.profile.imported_look().unwrap().clarity, 10.0);
+        for patch in [json!({"profile":{"id":"lc.color"}}), json!({"profile":{"id":"lc.color","imported":null}})] {
+            let builtin = imported.merged(&patch).unwrap();
+            assert_eq!(builtin.profile, Profile::default());
+            assert!(builtin.profile.imported_look().is_none());
+        }
+        assert!(imported.merged(&json!({"profile":{"imported":null}})).is_err());
+        assert_eq!(imported.profile.imported_look().unwrap().contrast, 20.0);
     }
 
     #[test]
@@ -285,13 +425,22 @@ mod tests {
         // issue #1946: `develop.merge`, `render --settings` and presets stored whatever the JSON said
         let mut base = DevelopSettings::default();
         base.crop.geometry.rect = lightcraft_geom::Rect::new(0.1, 0.2, 0.8, 0.9);
+        base.curve.red = vec![lightcraft_geom::Point::new(0.0, -0.1), lightcraft_geom::Point::new(1.0, 1.2)].into();
+        base.curve.green = PointCurve::default().affine(1.5, -0.25).unwrap();
         let m = base
             .merged(&json!({"light": {"exposure": 1e308}, "vignette": {"amount": -1e308}, "geometry": {"scale": 0}, "optics": {"distortion": 1e308}}))
             .unwrap();
         assert_eq!((m.light.exposure, m.vignette.amount, m.geometry.scale, m.optics.distortion), (5.0, -100.0, 50.0, 100.0));
+        assert_eq!(m.curve, base.curve, "unrelated merges retain saved sparse and function curves");
         // point curves stay in 0..1, as an imported XMP curve does
         let m = base.merged(&json!({"curve": {"master": [{"x": -3, "y": 0}, {"x": 1, "y": 1e308}]}})).unwrap();
-        assert_eq!(m.curve.master, vec![lightcraft_geom::Point::new(0.0, 0.0), lightcraft_geom::Point::new(1.0, 1.0)]);
+        assert_eq!(m.curve.master, vec![lightcraft_geom::Point::new(0.0, 0.0), lightcraft_geom::Point::new(1.0, 1.0)].into());
+        assert_eq!(m.curve.red, base.curve.red);
+        assert_eq!(m.curve.green, base.curve.green);
+        let sequence = base.merged(&json!({"curve": {"master": [[-3, 0], [1, 1e308]]}})).unwrap();
+        assert_eq!(sequence.curve.master, m.curve.master, "both accepted point encodings share the authored range");
+        let m = base.merged(&json!({"curve": {"blue": base.curve.green}})).unwrap();
+        assert_eq!(m.curve.blue, base.curve.green, "authored functions retain signed outputs and coefficients");
         // a crop with no area is left out, as XMP import leaves out one whose edges are inverted
         for rect in
             [json!({"x0": 0.9, "x1": 0.1, "y0": 0, "y1": 1}), json!({"x0": 1e308, "x1": -1e308, "y0": 0, "y1": 1}), json!({"x0": 0.5, "x1": 0.5})]
@@ -362,5 +511,18 @@ mod tests {
         assert!(s.enhance.denoise_enabled());
         s.reset_section(Section::Detail);
         assert_eq!(s.enhance.denoise_on, None);
+    }
+
+    #[test]
+    fn point_curve_identity_requires_full_domain_and_finite_knots() {
+        use lightcraft_geom::Point;
+        let points = |p: &[(f64, f64)]| p.iter().map(|&(x, y)| Point::new(x, y)).collect::<Vec<_>>();
+        assert!(ToneCurve::point_curve_is_identity(&[]));
+        assert!(ToneCurve::point_curve_is_identity(&points(&[(1.0, 1.0), (0.25, 0.25), (0.0, 0.0)])));
+        assert!(!ToneCurve::point_curve_is_identity(&points(&[(0.25, 0.25), (0.75, 0.75)])));
+        assert!(!ToneCurve::point_curve_is_identity(&points(&[(0.0, 0.0), (0.75, 0.75)])));
+        assert!(!ToneCurve::point_curve_is_identity(&points(&[(0.25, 0.25), (1.0, 1.0)])));
+        assert!(!ToneCurve::point_curve_is_identity(&points(&[(0.0, 0.0), (0.5, 0.6), (1.0, 1.0)])));
+        assert!(!ToneCurve::point_curve_is_identity(&points(&[(0.0, 0.0), (f64::NAN, f64::NAN), (1.0, 1.0)])));
     }
 }

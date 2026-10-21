@@ -67,10 +67,15 @@ fn new_settings_get_the_latest_process() {
     assert_eq!(DevelopSettings::for_raw(5200.0, 4.0).process, ProcessVersion::LATEST);
     assert_eq!(ProcessVersion::LATEST, Process::LATEST.version());
     assert_eq!(ProcessVersion::V1, ProcessVersion(1));
-    // the processes are listed oldest first, the latest last, each with its own number
+    assert_eq!(ProcessVersion::V2, ProcessVersion(2));
+    assert_eq!(ProcessVersion::LATEST, ProcessVersion::V2);
+    assert!(ProcessVersion::V1.is_outdated());
+    // the processes are listed oldest first, the newest supported last, each with its own number
     let versions: Vec<u32> = Process::ALL.iter().map(|p| p.version().0).collect();
     assert!(versions.windows(2).all(|w| w[0] < w[1]), "{versions:?}");
-    assert_eq!(Process::ALL.last(), Some(&Process::LATEST));
+    assert_eq!(Process::ALL.last(), Some(&Process::V3));
+    assert_eq!(ProcessVersion::V3, ProcessVersion(3));
+    assert!(!ProcessVersion::V3.is_outdated());
     assert!(Process::ALL.iter().all(|p| p.version().process() == *p && p.version().is_known()));
 }
 
@@ -91,7 +96,7 @@ fn unknown_process_numbers_load_and_render_with_the_newest_known() {
     // written by a newer LightCraft: kept as it is, rendered with the latest process this build has
     let s = DevelopSettings::from_json(&json!({"process": 7, "light": {"exposure": 0.5}})).unwrap();
     assert_eq!(s.process, ProcessVersion(7));
-    assert_eq!(s.process.process(), Process::LATEST);
+    assert_eq!(s.process.process(), Process::V3);
     assert!(!s.process.is_known());
     assert!(!s.process.is_outdated(), "never downgraded by Update to Current Process");
     assert_eq!(s.to_json()["process"], json!(7));
@@ -100,7 +105,7 @@ fn unknown_process_numbers_load_and_render_with_the_newest_known() {
     let zero = DevelopSettings::from_json(&json!({"process": 0})).unwrap().process;
     assert_eq!((zero.process(), zero.is_known(), zero.is_outdated()), (Process::V1, false, true));
     let max = DevelopSettings::from_json(&json!({"process": u32::MAX})).unwrap().process;
-    assert_eq!(max.process(), Process::LATEST);
+    assert_eq!(max.process(), Process::V3);
     // a whole number written as a float is that number
     assert_eq!(DevelopSettings::from_json(&json!({"process": 2.0})).unwrap().process, ProcessVersion(2));
 }
@@ -125,7 +130,11 @@ fn a_damaged_process_value_reads_as_v1_and_keeps_the_edits() {
         v["process"] = bad.clone();
         let s = DevelopSettings::from_json(&v).unwrap_or_else(|e| panic!("{bad}: {e}"));
         assert_eq!(s.process, ProcessVersion::V1, "{bad}");
-        assert_eq!((s.light.exposure, s.masks.len(), s.curve.master.len()), (0.4, 1, 3), "{bad}: the rest of the settings load");
+        assert_eq!(
+            (s.light.exposure, s.masks.len(), s.curve.master.sparse_points().unwrap().len()),
+            (0.4, 1, 3),
+            "{bad}: the rest of the settings load"
+        );
         // nested in other records too (history, versions, the catalog)
         let nested: Vec<DevelopSettings> = serde_json::from_value(json!([v])).unwrap();
         assert_eq!(nested[0].process, ProcessVersion::V1);
@@ -134,13 +143,13 @@ fn a_damaged_process_value_reads_as_v1_and_keeps_the_edits() {
 
 #[test]
 fn the_process_is_not_an_edit_nor_part_of_copied_settings() {
-    let mut s = DevelopSettings { process: ProcessVersion(LATEST_PLUS_ONE), ..Default::default() };
+    let mut s = DevelopSettings { process: ProcessVersion(NEWEST_PLUS_ONE), ..Default::default() };
     assert!(s.is_unedited(), "a photo on another process is not edited for that");
     s.light.exposure = 1.0;
     assert!(!s.is_unedited());
     // resetting a section or a slider leaves the process alone
     s.reset_section(Section::Light);
-    assert_eq!(s.process, ProcessVersion(LATEST_PLUS_ONE));
+    assert_eq!(s.process, ProcessVersion(NEWEST_PLUS_ONE));
     // copy / paste / sync / presets: no group carries the process, so the target keeps its own
     assert!(SettingsGroup::ALL.iter().all(|g| !g.keys().contains(&"process")));
     s.light.exposure = 1.0;
@@ -155,8 +164,121 @@ fn the_process_is_not_an_edit_nor_part_of_copied_settings() {
     let half = preset.apply(&target, 0.5);
     assert_eq!((half.process, half.light.exposure), (ProcessVersion(1), 0.7));
     // a partial that names a process explicitly (Apply Settings JSON) sets it
-    assert_eq!(target.merged(&json!({"process": LATEST_PLUS_ONE})).unwrap().process, ProcessVersion(LATEST_PLUS_ONE));
+    assert_eq!(target.merged(&json!({"process": NEWEST_PLUS_ONE})).unwrap().process, ProcessVersion(NEWEST_PLUS_ONE));
 }
 
-/// A process other than the latest: a newer LightCraft's number (no older one than V1 exists).
-const LATEST_PLUS_ONE: u32 = ProcessVersion::LATEST.0 + 1;
+/// A process newer than the latest: preserved without assuming a particular current number.
+const NEWEST_PLUS_ONE: u32 = ProcessVersion::V3.0 + 1;
+
+#[test]
+fn sparse_schema_markers_keep_legacy_wire_and_hash_with_process_and_hdr_omitted() {
+    // FNV-1a of the historical LEGACY fixture's compact, original-order wire, changing only
+    // its schema marker. These constants do not come from the new PointCurve serializer.
+    for (version, expected_hash) in [(0, 0xa9b9_3888_0e9c_e961), (1, 0x2656_2488_7e99_a10e), (2, 0xb5ca_4299_c8d8_70d7)] {
+        let mut wire = legacy();
+        wire["version"] = json!(version);
+        let settings = DevelopSettings::from_json(&wire).unwrap();
+        assert_eq!(settings.version, version);
+        assert!(settings.curve.master.sparse_points().is_some());
+        assert_eq!(settings.to_json(), wire);
+        assert!(settings.to_json().get("process").is_none());
+        assert!(settings.to_json().get("hdr").is_none());
+        assert_eq!(settings.hash64(), expected_hash, "schema {version}");
+        let saved = serde_json::to_string(&settings).unwrap();
+        let loaded: DevelopSettings = serde_json::from_str(&saved).unwrap();
+        assert_eq!(loaded, settings);
+        assert_eq!(serde_json::to_string(&loaded).unwrap(), saved);
+    }
+}
+
+#[test]
+fn functions_keep_hdr_camera_tone_and_future_process_while_using_schema2() {
+    let settings = DevelopSettings::from_json(&json!({
+        "version": 2,
+        "process": 77,
+        "profile": {"camera_local_tone": true},
+        "hdr": {"enabled": true, "max_ev": 4.0, "sdr_brightness": 12.0, "sdr_highlights": -30.0},
+        "curve": {"master": {
+            "kind": "function", "version": 1,
+            "base": {"pieces": [{"end": 1.0, "hermite": [0.1, 0.9, 0.8, 0.8]}]},
+            "adjustments": []
+        }}
+    }))
+    .unwrap();
+    assert_eq!((settings.version, settings.process), (2, ProcessVersion(77)));
+    assert!(settings.curve.master.is_function());
+    assert!(settings.profile.camera_local_tone);
+    assert_eq!((settings.hdr.enabled, settings.hdr.max_ev, settings.hdr.sdr_brightness, settings.hdr.sdr_highlights), (true, 4.0, 12.0, -30.0));
+    let saved = serde_json::to_string(&settings).unwrap();
+    let loaded: DevelopSettings = serde_json::from_str(&saved).unwrap();
+    assert_eq!(loaded, settings);
+    assert_eq!(loaded.hash64(), settings.hash64());
+    assert_eq!(loaded.to_json(), settings.to_json());
+    let mut another_process = settings.clone();
+    another_process.process = ProcessVersion(78);
+    assert_ne!(another_process.hash64(), settings.hash64());
+    assert!(!another_process.same_values(&settings));
+    another_process.process = ProcessVersion::V1;
+    assert!(another_process.to_json().get("process").is_none());
+    assert_eq!(another_process.to_json()["version"], 2);
+    let sdr = settings.sdr_rendition();
+    assert_eq!(sdr.curve, settings.curve);
+    assert_eq!(sdr.process, settings.process);
+}
+
+#[test]
+fn curve_and_hdr_presets_keep_integer_fields_and_captured_process_contract() {
+    let mut base = DevelopSettings { process: ProcessVersion(7), ..Default::default() };
+    base.hdr.enabled = true;
+    base.hdr.max_ev = 2.0;
+    let mut target = base.clone();
+    target.process = ProcessVersion(99);
+    target.hdr.max_ev = 4.0;
+    target.light.exposure = 1.0;
+    target.grain.seed = 12345;
+    target.grain.amount = 40.0;
+    target.curve.master = PointCurve::try_from_points(vec![
+        lightcraft_geom::Point::new(0.0, 0.1),
+        lightcraft_geom::Point::new(0.4, 0.7),
+        lightcraft_geom::Point::new(1.0, 0.95),
+    ])
+    .unwrap();
+    let preset = Preset::from_settings("p", "P", "User", &target, &SettingsGroup::ALL);
+    assert!(preset.settings.get("process").is_none());
+    assert!(preset.settings.get("hdr").is_some());
+    assert_eq!(preset.try_apply(&base, 0.0).unwrap(), base);
+    for (amount, seed) in [(0.3, 0), (0.5, 12345), (1.0, 12345), (1.5, 12345)] {
+        let out = preset.try_apply(&base, amount).unwrap();
+        assert_eq!(out.process, base.process);
+        assert_eq!(out.grain.seed, seed);
+        assert!((out.light.exposure - amount).abs() < 1e-12);
+        assert!((out.grain.amount - 40.0 * amount).abs() < 1e-12);
+        assert!((out.hdr.max_ev - (2.0 + 2.0 * amount)).abs() < 1e-12);
+        let expected = 0.4 + amount * (target.curve.master.eval(0.4).unwrap() - 0.4);
+        assert!((out.curve.master.eval(0.4).unwrap() - expected).abs() < 1e-11);
+    }
+    // Preserve the documented upstream exception: explicit JSON, including a hand-written
+    // preset, may name process. Capturing groups above is what normally keeps it out.
+    let mut explicit = preset;
+    explicit.settings["process"] = json!(88);
+    assert_eq!(explicit.try_apply(&base, 1.0).unwrap().process, ProcessVersion(88));
+    assert_eq!(try_apply_partial(&base, &json!({"process": 89}), 1.0).unwrap().process, ProcessVersion(89));
+}
+
+#[test]
+fn future_schema_and_duplicate_wire_markers_remain_checked_with_process_enabled() {
+    for version in [json!(crate::SCHEMA_VERSION + 1), json!(u64::MAX), json!(-1), json!(1.5)] {
+        let wire = json!({"version": version, "process": 77, "light": {"exposure": 1.0}});
+        assert!(DevelopSettings::from_json(&wire).is_err());
+        assert!(serde_json::from_str::<DevelopSettings>(&wire.to_string()).is_err());
+        assert!(try_apply_partial(&DevelopSettings::default(), &wire, 1.0).is_err());
+    }
+    for wire in [r#"{"version":5,"version":1,"process":77}"#, r#"{"version":1,"version":5,"process":77}"#] {
+        assert!(serde_json::from_str::<DevelopSettings>(wire).is_err());
+    }
+    let raw = DevelopSettings::for_raw(5210.0, -4.0);
+    assert_eq!(raw.version, 1, "ordinary sparse settings keep the legacy wire marker");
+    let loaded = DevelopSettings::from_json(&raw.to_json()).unwrap();
+    assert_eq!(loaded, raw);
+    assert_eq!(loaded.hash64(), raw.hash64());
+}

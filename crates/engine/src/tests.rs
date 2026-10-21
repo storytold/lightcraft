@@ -918,11 +918,74 @@ fn auto_sync_carries_only_the_changed_settings() {
 }
 
 #[test]
+fn auto_sync_carries_the_entire_function_curve_and_undoes_every_photo() {
+    use lightcraft_catalog::PhotoId;
+    use lightcraft_develop::PointCurve;
+    use lightcraft_geom::Point;
+    let mut s = demo();
+    let ids: Vec<PhotoId> = s.catalog.photos().take(3).map(|p| p.id).collect();
+    let base: PointCurve = vec![Point::new(0.0, 0.05), Point::new(0.3, 0.18), Point::new(0.75, 0.9), Point::new(1.0, 0.97)].into();
+    let target: PointCurve = vec![Point::new(0.0, 0.12), Point::new(0.65, 0.42), Point::new(1.0, 0.92)].into();
+    let source = base.blend(&target, 0.37).unwrap();
+    let other = base.blend(&target, 0.81).unwrap();
+    let initial = [source.clone(), target, other];
+    for (i, id) in ids.iter().enumerate() {
+        let mut settings = (*s.develop_of(*id).unwrap()).clone();
+        settings.curve.master = initial[i].clone();
+        settings.curve.green = vec![Point::new(0.0, 0.01 * i as f64), Point::new(1.0, 0.93)].into();
+        settings.light.contrast = i as f64 * 15.0;
+        s.set_develop(*id, settings, "Curve sync fixture").unwrap();
+    }
+    s.execute("library.select", &json!({"ids": ids.iter().map(|id| id.0).collect::<Vec<_>>()})).unwrap();
+    s.selection.active = Some(ids[0]);
+    s.execute("develop.autoSync", &json!({"on":true})).unwrap();
+    let before: Vec<_> = ids.iter().map(|id| s.develop_of(*id).unwrap()).collect();
+    let undo_before = s.undo.len();
+    s.begin_interaction("Tone Curve").unwrap();
+    let added = s.execute("develop.curvePoint", &json!({"action":"add", "x":0.5, "y":0.73})).unwrap();
+    s.execute("develop.curvePoint", &json!({"action":"move", "index":added["index"], "x":0.55, "y":0.68})).unwrap();
+    let edited = s.develop_of(ids[0]).unwrap().curve.master.clone();
+    assert!(edited.is_function());
+    assert_eq!(serde_json::to_value(&edited).unwrap()["base"], serde_json::to_value(&source).unwrap()["base"]);
+    for i in 1..ids.len() {
+        assert_eq!(s.develop_of(ids[i]).unwrap(), before[i], "auto-sync waits until the drag ends");
+    }
+    s.end_interaction().unwrap();
+    for (i, id) in ids.iter().enumerate() {
+        let actual = s.develop_of(*id).unwrap();
+        assert_eq!(actual.curve.master, edited, "photo {id:?} receives the source base and adjustments together");
+        assert_eq!(actual.curve.green, before[i].curve.green, "other curve channels stay");
+        assert_eq!(actual.light.contrast, before[i].light.contrast);
+    }
+    let after: Vec<_> = ids.iter().map(|id| s.develop_of(*id).unwrap()).collect();
+    assert_eq!(s.undo.len(), undo_before + 1, "one undo step covers the drag and synced photos");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(ids.iter().map(|id| s.develop_of(*id).unwrap()).collect::<Vec<_>>(), before);
+    s.execute("edit.redo", &json!({})).unwrap();
+    assert_eq!(ids.iter().map(|id| s.develop_of(*id).unwrap()).collect::<Vec<_>>(), after);
+}
+
+#[test]
 fn json_delta_keeps_only_changes() {
     let a = json!({"light": {"exposure": 0, "contrast": 5}, "masks": [1], "x": 1});
     let b = json!({"light": {"exposure": 1, "contrast": 5}, "masks": [1, 2], "x": 1});
     assert_eq!(crate::json_delta(&a, &b), Some(json!({"light": {"exposure": 1}, "masks": [1, 2]})));
     assert_eq!(crate::json_delta(&a, &a), None);
+}
+
+#[test]
+fn json_delta_keeps_function_curve_models_atomic() {
+    use lightcraft_develop::PointCurve;
+    use lightcraft_geom::Point;
+    let sparse: PointCurve = vec![Point::new(0.0, 0.05), Point::new(0.35, 0.2), Point::new(1.0, 0.95)].into();
+    let old = sparse.blend(&PointCurve::default(), 0.4).unwrap();
+    let mut new = old.clone();
+    new.try_add_point(Point::new(0.5, 0.7)).unwrap();
+    let curve = |model: &PointCurve| json!({"curve":{"master":model,"shadows":18},"light":{"contrast":25}});
+    for (a, b) in [(&old, &new), (&sparse, &new), (&new, &sparse)] {
+        assert_eq!(crate::json_delta(&curve(a), &curve(b)), Some(json!({"curve":{"master":b}})));
+    }
+    assert_eq!(crate::json_delta(&curve(&new), &curve(&new)), None);
 }
 
 #[test]
@@ -1163,20 +1226,25 @@ fn curve_reset_by_channel_and_whole() {
     // one channel
     s.execute("curve.reset", &json!({"channel": "red"})).unwrap();
     let c = active_dev(&s).curve;
-    assert!(c.red.is_empty() && c.green.len() == 4 && c.master.len() == 4, "only red resets");
+    assert!(
+        c.red.sparse_points().unwrap().is_empty() && c.green.sparse_points().unwrap().len() == 4 && c.master.sparse_points().unwrap().len() == 4,
+        "only red resets"
+    );
     assert_eq!(c.shadows, 30.0);
     // parametric only
     s.execute("curve.reset", &json!({"channel": "parametric"})).unwrap();
     let c = active_dev(&s).curve;
     assert_eq!(c.shadows, 0.0);
-    assert_eq!(c.master.len(), 4, "point curves stay");
+    assert_eq!(c.master.sparse_points().unwrap().len(), 4, "point curves stay");
     // all point curves, then undo restores them in one step
     s.execute("curve.reset", &json!({"channel": "point"})).unwrap();
     let c = active_dev(&s).curve;
-    assert!(c.master.is_empty() && c.green.is_empty() && c.blue.is_empty());
+    assert!(
+        c.master.sparse_points().unwrap().is_empty() && c.green.sparse_points().unwrap().is_empty() && c.blue.sparse_points().unwrap().is_empty()
+    );
     assert_eq!(c.refine_saturation, 50.0);
     s.execute("edit.undo", &json!({})).unwrap();
-    assert_eq!(active_dev(&s).curve.master.len(), 4);
+    assert_eq!(active_dev(&s).curve.master.sparse_points().unwrap().len(), 4);
     // everything (the default)
     s.execute("curve.reset", &json!({})).unwrap();
     assert_eq!(active_dev(&s).curve, lightcraft_develop::ToneCurve::default());
@@ -1681,4 +1749,122 @@ fn malformed_photo_targets_are_refused_not_widened() {
     // a preset's id is not a photo target
     let preset = s.presets.first().unwrap().id.clone();
     s.execute("preset.apply", &json!({"id": preset})).unwrap();
+}
+
+fn invalid_selected_curve_sync_fixture() -> (Session, lightcraft_catalog::PhotoId, lightcraft_catalog::PhotoId) {
+    use lightcraft_catalog::Op;
+    use lightcraft_develop::{MAX_POINT_CURVE_POINTS, PointCurve};
+    use lightcraft_geom::Point;
+    let mut s = demo();
+    let ids: Vec<_> = s.catalog.photos().take(2).map(|p| p.id).collect();
+    let (active, other) = (ids[0], ids[1]);
+    let curve: PointCurve = vec![Point::new(0.0, 0.05), Point::new(0.35, 0.2), Point::new(1.0, 0.95)].into();
+    let mut original = (*s.develop_of(active).unwrap()).clone();
+    original.curve.master = curve.blend(&PointCurve::default(), 0.35).unwrap();
+    s.set_develop(active, original, "Original function").unwrap();
+
+    // Simulate in-memory legacy settings that predate the bounded curve reader. Current native
+    // readers refuse these bytes; direct catalog construction isolates the checked-sync failure.
+    let mut invalid = (*s.develop_of(other).unwrap()).clone();
+    invalid.curve.blue = PointCurve::Sparse(vec![Point::new(0.5, 0.5); MAX_POINT_CURVE_POINTS + 1]);
+    s.catalog.apply(Op::SetDevelop { id: other, settings: std::sync::Arc::new(invalid), label: "Legacy fixture".into(), edited: None }).unwrap();
+    s.execute("library.select", &json!({"ids":[active.0, other.0]})).unwrap();
+    s.selection.active = Some(active);
+    s.execute("develop.autoSync", &json!({"on":true})).unwrap();
+    (s, active, other)
+}
+
+#[test]
+fn failed_interaction_sync_keeps_preview_and_can_retry_with_one_undo() {
+    let (mut s, active, other) = invalid_selected_curve_sync_fixture();
+    let original = s.develop_of(active).unwrap();
+    let other_before = s.develop_of(other).unwrap();
+    let history =
+        |entries: &[crate::UndoEntry]| entries.iter().map(|entry| (entry.label.clone(), entry.op.clone(), entry.folder.clone())).collect::<Vec<_>>();
+    let undo_before = history(&s.undo);
+    let redo_before = history(&s.redo);
+    s.begin_interaction("Tone Curve").unwrap();
+    s.execute("develop.curvePoint", &json!({"action":"add", "x":0.5, "y":0.72})).unwrap();
+    let preview = s.develop_of(active).unwrap();
+    assert_ne!(preview, original);
+    assert!(preview.curve.master.is_function());
+    let revision_before = s.catalog.revision;
+    let log_before = s.pending_log.clone();
+
+    let error = s.end_interaction().unwrap_err();
+    assert!(error.to_string().contains("1024"), "{error}");
+    assert_eq!(s.develop_of(active).unwrap(), preview, "failed release retains the current visible edit");
+    assert_eq!(s.develop_of(other).unwrap(), other_before);
+    assert_eq!(history(&s.undo), undo_before);
+    assert_eq!(history(&s.redo), redo_before);
+    assert_eq!(s.catalog.revision, revision_before, "validation happens before any catalog mutation");
+    assert_eq!(s.pending_log, log_before);
+    let interaction = s.interaction.as_ref().expect("failed sync leaves the interaction available");
+    assert_eq!(interaction.photo, active);
+    assert_eq!(interaction.label, "Tone Curve");
+    assert_eq!(interaction.original, original);
+
+    s.execute("develop.autoSync", &json!({"on":false})).unwrap();
+    s.end_interaction().unwrap();
+    assert!(s.interaction.is_none());
+    assert_eq!(s.develop_of(active).unwrap(), preview);
+    assert_eq!(s.develop_of(other).unwrap(), other_before);
+    assert_eq!(s.undo.len(), undo_before.len() + 1, "retry commits the whole drag exactly once");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.develop_of(active).unwrap(), original);
+    assert_eq!(s.develop_of(other).unwrap(), other_before);
+    assert_eq!(history(&s.undo), undo_before);
+    s.execute("edit.redo", &json!({})).unwrap();
+    assert_eq!(s.develop_of(active).unwrap(), preview);
+}
+
+#[test]
+fn failed_noninteractive_sync_preserves_current_edit_and_history() {
+    let (mut s, active, other) = invalid_selected_curve_sync_fixture();
+    let original = s.develop_of(active).unwrap();
+    let other_before = s.develop_of(other).unwrap();
+    let history =
+        |entries: &[crate::UndoEntry]| entries.iter().map(|entry| (entry.label.clone(), entry.op.clone(), entry.folder.clone())).collect::<Vec<_>>();
+    let undo_before = history(&s.undo);
+    let redo_before = history(&s.redo);
+    let revision_before = s.catalog.revision;
+    let log_before = s.pending_log.clone();
+    let mut next = (*original).clone();
+    next.curve.master.try_add_point(lightcraft_geom::Point::new(0.5, 0.72)).unwrap();
+    let error = s.set_develop(active, next.clone(), "Tone Curve").unwrap_err();
+    assert!(error.to_string().contains("1024"), "{error}");
+    assert_eq!(s.develop_of(active).unwrap(), original);
+    assert_eq!(s.develop_of(other).unwrap(), other_before);
+    assert_eq!(history(&s.undo), undo_before);
+    assert_eq!(history(&s.redo), redo_before);
+    assert_eq!(s.catalog.revision, revision_before);
+    assert_eq!(s.pending_log, log_before);
+    assert!(s.interaction.is_none());
+
+    s.execute("develop.autoSync", &json!({"on":false})).unwrap();
+    s.set_develop(active, next.clone(), "Tone Curve").unwrap();
+    assert_eq!(*s.develop_of(active).unwrap(), next);
+    assert_eq!(s.undo.len(), undo_before.len() + 1);
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.develop_of(active).unwrap(), original);
+    assert_eq!(history(&s.undo), undo_before);
+}
+
+#[test]
+fn supported_sparse_schema_versions_keep_the_raw_import_preview_predicate() {
+    use lightcraft_catalog::{MediaKind, Photo, PhotoId, Source};
+    use std::sync::Arc;
+    let mut photo =
+        Photo::new(PhotoId(103), Source::File { path: "/legacy/IMG_0103.DNG".into() }, "IMG_0103.DNG", "DNG", 60, 40, "2026-08-01T10:00:00");
+    photo.kind = MediaKind::Raw;
+    photo.as_shot_wb = Some((5210.0, -4.0));
+    let defaults = photo.camera_defaults();
+    for version in [0, 1, lightcraft_develop::SCHEMA_VERSION] {
+        let mut settings = defaults.clone();
+        settings.version = version;
+        photo.develop = Arc::new(settings);
+        assert!(crate::import::has_import_look(&photo), "version {version} alone does not change the camera look");
+        Arc::make_mut(&mut photo.develop).curve.master = vec![lightcraft_geom::Point::new(0.0, 0.1), lightcraft_geom::Point::new(1.0, 0.9)].into();
+        assert!(!crate::import::has_import_look(&photo), "a real curve edit still disables the camera preview: {version}");
+    }
 }

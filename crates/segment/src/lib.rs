@@ -8,7 +8,7 @@
 //! The expensive part, the 32-layer ViT over the 1008 × 1008 input, runs once per image
 //! ([`Sam3::encode`]); each click or prompt then reuses the [`Encoded`] features.
 //!
-//! On macOS the model runs on the GPU through Metal; elsewhere (for now) on the CPU. The
+//! On macOS the model uses Metal when available, falling back to the CPU; elsewhere it uses the CPU. The
 //! weights are not part of LightCraft: they are the `facebook/sam3` checkpoint (SAM License),
 //! read from a directory the user downloads them to ([`Sam3::load`]).
 //!
@@ -91,10 +91,20 @@ pub fn is_model_dir(dir: &Path) -> bool {
 /// The best device here: Metal on macOS (when a GPU is available), else the CPU.
 pub fn best_device() -> Device {
     #[cfg(target_os = "macos")]
-    if let Ok(d) = Device::new_metal(0) {
-        return d;
+    {
+        // Candle 0.9.2 indexes its device list before returning a Result. A headless
+        // Mac can expose no Metal device, so check the same native provider first.
+        type NativeMetalDevice = <candle_core::MetalDevice as std::ops::Deref>::Target;
+        if let Some(d) = optional_device(NativeMetalDevice::system_default().is_some(), || Device::new_metal(0)) {
+            return d;
+        }
     }
     Device::Cpu
+}
+
+#[cfg(all(not(target_arch = "wasm32"), any(target_os = "macos", test)))]
+fn optional_device(available: bool, create: impl FnOnce() -> candle_core::Result<Device>) -> Option<Device> {
+    if available { create().ok() } else { None }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -262,4 +272,26 @@ pub use detector::Output as DetectorOutput;
 /// Wait for queued GPU work to finish (benchmarks).
 pub fn sync(model: &Sam3) -> Result<()> {
     Ok(model.device.synchronize()?)
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn absent_optional_device_never_initializes_ordinal_zero() {
+        let device = optional_device(false, || {
+            let mut devices: Vec<Device> = Vec::new();
+            Ok(devices.swap_remove(0))
+        });
+        assert!(device.is_none());
+        assert!(optional_device(true, || Err(candle_core::Error::Msg("unavailable".into()))).is_none());
+        assert!(matches!(optional_device(true, || Ok(Device::Cpu)), Some(Device::Cpu)));
+    }
+
+    #[test]
+    fn automatic_device_is_usable_without_a_model() {
+        let tensor = Tensor::new(&[0.25f32, 0.75], &best_device()).unwrap();
+        assert_eq!(tensor.to_vec1::<f32>().unwrap(), [0.25, 0.75]);
+    }
 }

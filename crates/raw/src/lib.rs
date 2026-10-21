@@ -359,6 +359,17 @@ pub fn decode(bytes: &[u8]) -> Result<RawImage> {
     decode_with(bytes, Mode::Full)
 }
 
+/// Whether a DNG contains a preferred enhanced image. Callers must not fall back to a decoder
+/// that silently develops the retained original image when this image cannot be decoded.
+pub fn is_enhanced_dng(bytes: &[u8]) -> bool {
+    probe(bytes) == Some(RawFormat::Dng)
+        && lightcraft_tiff::Tiff::parse(bytes)
+            .ok()
+            .as_ref()
+            .and_then(dng::raw_ifd)
+            .is_some_and(|ifd| ifd.u32(lightcraft_tiff::tags::NEW_SUBFILE_TYPE) == Some(16))
+}
+
 /// Everything [`decode`] learns about a raw file except its samples: geometry, orientation, CFA,
 /// colour data, as-shot white balance, opcode lists (embedded lens corrections), metadata — read
 /// from the headers without decompressing the pixel data, for imports. Equal to

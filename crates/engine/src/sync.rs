@@ -10,15 +10,17 @@
 //!   [`crate::cmd::missing::checked_path`]);
 //! - **metadata** updates: photos whose XMP sidecar file was saved after the photo came into the
 //!   library or was last edited here, and says something the library doesn't (rating, flag,
-//!   label, metadata, capture time or develop settings). Reading one makes the sidecar win, as
-//!   Read Metadata from File does. Embedded XMP in a raw is not a sidecar and is not looked at.
+//!   label, metadata, capture time, develop settings or unsupported saved settings). A newer
+//!   packet that cannot be read or parsed is also a candidate: reading reports an error and keeps the edit.
+//!   Reading a valid one makes the sidecar win, as Read Metadata from File does. Embedded XMP in
+//!   a raw is not a sidecar and is not looked at.
 //!
 //! [`synchronize`] then imports the new files (in place), relinks the moved photos, moves the
 //! missing photos to Recently Deleted and reads the metadata updates — each only when chosen — as
 //! one undo step. It runs in halves ([`SyncJob`]) so that, in the app, every file it reads is
 //! read on a worker thread and only the catalog changes happen on the UI thread — with what every
-//! command does after them there: the library's durable save and, with XMP auto-write on, the
-//! sidecars of the photos whose metadata was read.
+//! command does after them there, including the library's durable save. Reading metadata never
+//! auto-writes its source sidecar, even when automatic writes are enabled for later edits.
 //!
 //! The scan runs without the session ([`SyncInput`] + [`scan_with`]), so the app can run it on a
 //! worker thread: a folder on a sleeping network share must never stall a frame.
@@ -280,6 +282,7 @@ fn same_for_sync(a: &Arc<Photo>, b: &Arc<Photo>) -> bool {
     let meta = |p: &Photo| lightcraft_catalog::Meta { regions: Vec::new(), ..p.meta.clone() };
     (&a.source, a.deleted, a.local, a.copy_of, &a.content_hash, a.file_size, a.rating, a.flag, a.label, &a.captured, &a.edited, &a.develop)
         == (&b.source, b.deleted, b.local, b.copy_of, &b.content_hash, b.file_size, b.rating, b.flag, b.label, &b.captured, &b.edited, &b.develop)
+        && a.unsupported_edits == b.unsupported_edits
         && meta(a) == meta(b)
 }
 
@@ -585,12 +588,16 @@ fn sidecar_has_news(labels: &Catalog, p: &Photo, naming: SidecarNaming, listing:
     if seen.is_some_and(|t| saved <= t) {
         return false;
     }
-    let Ok(text) = std::fs::read_to_string(&file) else { return false };
-    let Ok(sc) = crate::sidecar::parse_sidecar(&text, crate::crs::Target::for_photo(p)) else { return false };
+    // A newer packet whose saved edit cannot be read is not evidence that the folder is current.
+    // Keep it as a candidate: the selected read reports the read/parse error without applying defaults
+    // or falling back from unreadable authoritative native settings to foreign settings.
+    let Ok(text) = std::fs::read_to_string(&file) else { return true };
+    let Ok(sc) = crate::sidecar::parse_sidecar(&text, crate::crs::Target::for_photo(p)) else { return true };
     let sc = sc.resolve_label(labels);
     let mut q = p.clone();
     crate::sidecar::merge_into(&mut q, &sc, "");
-    (q.rating, q.flag, q.label, &q.meta, &q.captured, &q.develop) != (p.rating, p.flag, p.label, &p.meta, &p.captured, &p.develop)
+    (q.rating, q.flag, q.label, &q.meta, &q.captured, &q.develop, &q.unsupported_edits)
+        != (p.rating, p.flag, p.label, &p.meta, &p.captured, &p.develop, &p.unsupported_edits)
 }
 
 /// Act on `changes` as `choice` says, as one undo step ("Synchronize Folder"). A missing photo
@@ -837,6 +844,12 @@ impl SyncCommit {
                 }
                 let n = ops.len();
                 if n > 0 {
+                    // Both folder.synchronize and the app's execute_fn-wrapped steps pass through
+                    // command auto-write. A read must not rewrite the packet it just consumed.
+                    // Direct depth-zero callers must not suppress an unrelated later command.
+                    if s.depth > 0 {
+                        s.skip_auto_write = true;
+                    }
                     match s.commit("Read Metadata from File", Op::Batch { ops }) {
                         Ok(()) => report.read += n,
                         Err(e) => report.failed.push((String::new(), e.to_string())),

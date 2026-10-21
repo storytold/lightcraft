@@ -1,12 +1,30 @@
 //! The develop settings schema. Every field has a neutral default; serde uses `#[serde(default)]` so
-//! older/newer files load (unknown fields are ignored, missing fields take defaults). The one
-//! exception is `process`: missing (or unreadable), it is V1, the rendering those older files were
-//! made with.
+//! older files load (unknown fields in supported schemas are ignored, missing fields take defaults).
+//! Declared future schemas are refused before settings can be applied or rewritten.
+//! The rendering process is independent: a missing or unreadable `process` stays V1.
 
+use crate::PointCurve;
 use lightcraft_geom::{CropGeometry, Homography, Orientation, Point};
 use serde::{Deserialize, Serialize};
 
-pub const SCHEMA_VERSION: u32 = 1;
+pub const POINT_CURVE_SCHEMA_VERSION: u32 = 2;
+pub const IMPORTED_LOOK_SCHEMA_VERSION: u32 = 3;
+pub const PROFILE_TREATMENT_SCHEMA_VERSION: u32 = 4;
+pub const LOOK_TABLE_SCHEMA_VERSION: u32 = 5;
+pub const WB_SCALE_SCHEMA_VERSION: u32 = 6;
+pub const SCHEMA_VERSION: u32 = WB_SCALE_SCHEMA_VERSION;
+
+fn deserialize_schema_version<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<u32, D::Error> {
+    let version = u32::deserialize(deserializer)?;
+    if version > SCHEMA_VERSION {
+        return Err(serde::de::Error::custom(format!(
+            "develop settings version {version} requires a newer LightCraft (supported: {SCHEMA_VERSION})"
+        )));
+    }
+    // Preserve the wire marker: Local photo baselines include serialized settings. Merely
+    // reading an older catalog must not change its fingerprint or bless an edited baseline.
+    Ok(version)
+}
 
 /// The rendering process a photo's settings are interpreted by (what Lightroom calls the process
 /// version). A change that would alter how existing settings render ships as a new process, so a
@@ -42,6 +60,10 @@ impl<'de> Deserialize<'de> for ProcessVersion {
 impl ProcessVersion {
     /// The first process: LightCraft's rendering from before process versions existed. Frozen.
     pub const V1: ProcessVersion = Process::V1.version();
+    /// Fixed ProPhoto primaries with sRGB transfer for global and imported-profile curves.
+    pub const V2: ProcessVersion = Process::V2.version();
+    /// The combined median-base process, available through explicit settings.
+    pub const V3: ProcessVersion = Process::V3.version();
     /// The process new photos and Reset get.
     pub const LATEST: ProcessVersion = Process::LATEST.version();
 
@@ -58,7 +80,7 @@ impl ProcessVersion {
     }
 
     /// The process this build renders with: the newest one it knows that isn't newer than this
-    /// number (a number from a newer LightCraft renders with [`Process::LATEST`]; one below V1,
+    /// number (a number from a newer LightCraft renders with the newest supported process; one below V1,
     /// which no LightCraft writes, with V1).
     pub fn process(self) -> Process {
         Process::ALL.into_iter().rev().find(|p| p.version() <= self).unwrap_or(Process::V1)
@@ -81,28 +103,31 @@ impl ProcessVersion {
 pub enum Process {
     /// The rendering of LightCraft before process versions existed (2026-10).
     V1,
-    /// Highlights and Shadows keep the local contrast of the tones they move: their edge-aware base
-    /// is taken of a fine median of log luminance (issue #632).
+    /// Output-independent curves in ProPhoto D50 primaries, with the sRGB transfer curve.
     V2,
+    /// V2 curves with a median-prefiltered Highlights/Shadows base (issue #632). Explicit opt-in.
+    V3,
 }
 
 impl Process {
     /// Every process, oldest first.
-    pub const ALL: [Process; 2] = [Process::V1, Process::V2];
+    pub const ALL: [Process; 3] = [Process::V1, Process::V2, Process::V3];
     pub const LATEST: Process = Process::V2;
 
     pub const fn version(self) -> ProcessVersion {
         match self {
             Process::V1 => ProcessVersion(1),
             Process::V2 => ProcessVersion(2),
+            Process::V3 => ProcessVersion(3),
         }
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(default)]
 pub struct DevelopSettings {
     /// Schema version of this structure (not the rendering process, see `process`).
+    #[serde(deserialize_with = "deserialize_schema_version")]
     pub version: u32,
     /// The rendering process ([`ProcessVersion`]): the latest for new settings, V1 for settings
     /// saved without the field (the field-level default: not the struct's `Default`) or with a
@@ -143,10 +168,56 @@ pub struct DevelopSettings {
     pub disabled_sections: Vec<String>,
 }
 
+impl Serialize for DevelopSettings {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        if self.profile.id == IMPORTED_LOOK_ID && self.profile.imported.is_none() {
+            return Err(serde::ser::Error::custom("an imported profile requires its look definition"));
+        }
+        // Keep the existing field order and omission rules: old settings retain their hashes.
+        let fields = 26 + usize::from(!self.process.is_legacy()) + usize::from(!self.hdr.is_default());
+        let mut out = serializer.serialize_struct("DevelopSettings", fields)?;
+        out.serialize_field("version", &self.version.max(self.required_schema_version()))?;
+        if !self.process.is_legacy() {
+            out.serialize_field("process", &self.process)?;
+        }
+        out.serialize_field("profile", &self.profile)?;
+        out.serialize_field("treatment", &self.treatment)?;
+        out.serialize_field("wb", &self.wb)?;
+        out.serialize_field("light", &self.light)?;
+        if !self.hdr.is_default() {
+            out.serialize_field("hdr", &self.hdr)?;
+        }
+        out.serialize_field("curve", &self.curve)?;
+        out.serialize_field("color", &self.color)?;
+        out.serialize_field("mixer", &self.mixer)?;
+        out.serialize_field("point_colors", &self.point_colors)?;
+        out.serialize_field("bw_mix", &self.bw_mix)?;
+        out.serialize_field("grading", &self.grading)?;
+        out.serialize_field("effects", &self.effects)?;
+        out.serialize_field("vignette", &self.vignette)?;
+        out.serialize_field("grain", &self.grain)?;
+        out.serialize_field("detail", &self.detail)?;
+        out.serialize_field("optics", &self.optics)?;
+        out.serialize_field("geometry", &self.geometry)?;
+        out.serialize_field("crop", &self.crop)?;
+        out.serialize_field("orientation", &self.orientation)?;
+        out.serialize_field("masks", &self.masks)?;
+        out.serialize_field("spots", &self.spots)?;
+        out.serialize_field("red_eye", &self.red_eye)?;
+        out.serialize_field("lens_blur", &self.lens_blur)?;
+        out.serialize_field("enhance", &self.enhance)?;
+        out.serialize_field("calibration", &self.calibration)?;
+        out.serialize_field("disabled_sections", &self.disabled_sections)?;
+        out.end()
+    }
+}
+
 impl Default for DevelopSettings {
     fn default() -> Self {
         Self {
-            version: SCHEMA_VERSION,
+            // Sparse curves retain the legacy marker; authored functions require schema2.
+            version: 1,
             process: ProcessVersion::LATEST,
             profile: Profile::default(),
             treatment: Treatment::Color,
@@ -186,8 +257,167 @@ pub enum Treatment {
     Bw,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
+/// The profile id for a look whose checked definition travels with the settings.
+pub const IMPORTED_LOOK_ID: &str = "lc.imported";
+pub const MAX_IMPORTED_LOOK_TEXT_BYTES: usize = 256;
+
+/// A saved runtime table reference. The definition and its local path are never settings.
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize)]
+#[serde(transparent)]
+pub struct LookTableRef(String);
+
+impl LookTableRef {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::str::FromStr for LookTableRef {
+    type Err = &'static str;
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        if value.len() != 32 || !value.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err("look table reference must contain exactly 32 hexadecimal digits");
+        }
+        Ok(Self(value.to_ascii_uppercase()))
+    }
+}
+
+impl<'de> Deserialize<'de> for LookTableRef {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct Reference;
+        impl serde::de::Visitor<'_> for Reference {
+            type Value = LookTableRef;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a 32-hex table reference")
+            }
+            fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<LookTableRef, E> {
+                value.parse().map_err(E::custom)
+            }
+        }
+        d.deserialize_str(Reference)
+    }
+}
+
+/// A profile's own parameters, independent of the user's global sliders and curves.
+/// Table definitions are supplied separately at runtime; only their checked reference is saved.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ImportedLook {
+    #[serde(deserialize_with = "deserialize_look_text")]
+    pub name: String,
+    #[serde(deserialize_with = "deserialize_look_text")]
+    pub source_id: String,
+    /// The profile converts to monochrome independently of global Treatment and Amount.
+    /// Absent in older native settings: never infer it from a name or a flattened Treatment.
+    pub convert_to_grayscale: bool,
+    pub look_table: Option<LookTableRef>,
+    #[serde(deserialize_with = "deserialize_look_scalar")]
+    pub contrast: f64,
+    #[serde(deserialize_with = "deserialize_look_scalar")]
+    pub highlights: f64,
+    #[serde(deserialize_with = "deserialize_look_scalar")]
+    pub shadows: f64,
+    #[serde(deserialize_with = "deserialize_look_scalar")]
+    pub clarity: f64,
+    #[serde(deserialize_with = "deserialize_look_curve")]
+    pub master: PointCurve,
+    #[serde(deserialize_with = "deserialize_look_curve")]
+    pub red: PointCurve,
+    #[serde(deserialize_with = "deserialize_look_curve")]
+    pub green: PointCurve,
+    #[serde(deserialize_with = "deserialize_look_curve")]
+    pub blue: PointCurve,
+}
+
+fn valid_look_text(text: &str) -> bool {
+    text.len() <= MAX_IMPORTED_LOOK_TEXT_BYTES && !text.chars().any(char::is_control)
+}
+
+fn deserialize_look_text<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    struct Text;
+    impl serde::de::Visitor<'_> for Text {
+        type Value = String;
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("an imported-look name or identifier of at most 256 bytes, without control characters")
+        }
+        fn visit_str<E: serde::de::Error>(self, text: &str) -> Result<String, E> {
+            if !valid_look_text(text) {
+                return Err(E::custom("invalid imported-look name or identifier"));
+            }
+            Ok(text.to_string())
+        }
+    }
+    deserializer.deserialize_str(Text)
+}
+
+fn deserialize_look_scalar<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<f64, D::Error> {
+    let value = f64::deserialize(deserializer)?;
+    if !value.is_finite() || !(-100.0..=100.0).contains(&value) {
+        return Err(serde::de::Error::custom("imported-look scalar must be finite and between -100 and 100"));
+    }
+    Ok(value)
+}
+
+fn validate_look_curve(curve: &PointCurve) -> Result<(), String> {
+    curve.effective_function().map_err(|e| e.to_string())?;
+    if curve.sparse_points().is_some_and(|points| points.iter().any(|p| !(0.0..=1.0).contains(&p.x) || !(0.0..=1.0).contains(&p.y))) {
+        return Err("imported-look curve points must be between zero and one".into());
+    }
+    if curve.render_lut().v.iter().any(|v| !v.is_finite() || !(0.0..=1.0).contains(v)) {
+        return Err("imported-look curve outputs must be finite and between zero and one".into());
+    }
+    Ok(())
+}
+
+fn deserialize_look_curve<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<PointCurve, D::Error> {
+    let curve = PointCurve::deserialize(deserializer)?;
+    validate_look_curve(&curve).map_err(serde::de::Error::custom)?;
+    Ok(curve)
+}
+
+impl ImportedLook {
+    /// Validate a definition built in-process before applying or persisting it.
+    pub fn validate(&self) -> Result<(), String> {
+        if !valid_look_text(&self.name) || !valid_look_text(&self.source_id) {
+            return Err("invalid imported-look name or identifier".into());
+        }
+        if [self.contrast, self.highlights, self.shadows, self.clarity].iter().any(|v| !v.is_finite() || !(-100.0..=100.0).contains(v)) {
+            return Err("imported-look scalar must be finite and between -100 and 100".into());
+        }
+        for curve in [&self.master, &self.red, &self.green, &self.blue] {
+            validate_look_curve(curve)?;
+        }
+        Ok(())
+    }
+}
+
+impl Serialize for ImportedLook {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        self.validate().map_err(serde::ser::Error::custom)?;
+        let mut out =
+            serializer.serialize_struct("ImportedLook", 10 + usize::from(self.convert_to_grayscale) + usize::from(self.look_table.is_some()))?;
+        out.serialize_field("name", &self.name)?;
+        out.serialize_field("source_id", &self.source_id)?;
+        if self.convert_to_grayscale {
+            out.serialize_field("convert_to_grayscale", &true)?;
+        }
+        if let Some(reference) = &self.look_table {
+            out.serialize_field("look_table", reference)?;
+        }
+        out.serialize_field("contrast", &self.contrast)?;
+        out.serialize_field("highlights", &self.highlights)?;
+        out.serialize_field("shadows", &self.shadows)?;
+        out.serialize_field("clarity", &self.clarity)?;
+        out.serialize_field("master", &self.master)?;
+        out.serialize_field("red", &self.red)?;
+        out.serialize_field("green", &self.green)?;
+        out.serialize_field("blue", &self.blue)?;
+        out.end()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Profile {
     /// Profile id from the profile registry (e.g. `lc.color`, `lc.vivid`, `lc.mono`).
     pub id: String,
@@ -198,11 +428,43 @@ pub struct Profile {
     /// settings without it keep their JSON (and hash).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub camera_local_tone: bool,
+    /// An imported profile definition, kept with the edit instead of baked into global controls.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub imported: Option<ImportedLook>,
 }
 
 impl Default for Profile {
     fn default() -> Self {
-        Self { id: "lc.color".into(), amount: 100.0, camera_local_tone: false }
+        Self { id: "lc.color".into(), amount: 100.0, camera_local_tone: false, imported: None }
+    }
+}
+
+impl Profile {
+    pub fn imported_look(&self) -> Option<&ImportedLook> {
+        if self.id == IMPORTED_LOOK_ID { self.imported.as_ref() } else { None }
+    }
+}
+
+impl<'de> Deserialize<'de> for Profile {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(default)]
+        struct Wire {
+            id: String,
+            amount: f64,
+            camera_local_tone: bool,
+            imported: Option<ImportedLook>,
+        }
+        impl Default for Wire {
+            fn default() -> Self {
+                Self { id: "lc.color".into(), amount: 100.0, camera_local_tone: false, imported: None }
+            }
+        }
+        let value = Wire::deserialize(deserializer)?;
+        if value.id == IMPORTED_LOOK_ID && value.imported.is_none() {
+            return Err(serde::de::Error::custom("an imported profile requires its look definition"));
+        }
+        Ok(Self { id: value.id, amount: value.amount, camera_local_tone: value.camera_local_tone, imported: value.imported })
     }
 }
 
@@ -339,10 +601,10 @@ pub struct ToneCurve {
     pub split_mid: f64,
     pub split_highlights: f64,
     /// Point curves in 0..1 (identity = empty or [(0,0),(1,1)]).
-    pub master: Vec<Point>,
-    pub red: Vec<Point>,
-    pub green: Vec<Point>,
-    pub blue: Vec<Point>,
+    pub master: PointCurve,
+    pub red: PointCurve,
+    pub green: PointCurve,
+    pub blue: PointCurve,
     /// Refine Saturation 0..100: 100 keeps the saturation a curve produces, lower values pull it
     /// back towards the saturation before the curve (strong contrast curves oversaturate).
     pub refine_saturation: f64,
@@ -358,10 +620,10 @@ impl Default for ToneCurve {
             split_shadows: 25.0,
             split_mid: 50.0,
             split_highlights: 75.0,
-            master: Vec::new(),
-            red: Vec::new(),
-            green: Vec::new(),
-            blue: Vec::new(),
+            master: PointCurve::default(),
+            red: PointCurve::default(),
+            green: PointCurve::default(),
+            blue: PointCurve::default(),
             refine_saturation: 100.0,
         }
     }
@@ -369,7 +631,21 @@ impl Default for ToneCurve {
 
 impl ToneCurve {
     pub fn point_curve_is_identity(pts: &[Point]) -> bool {
-        pts.is_empty() || pts.iter().all(|p| (p.x - p.y).abs() < 1e-9)
+        if pts.is_empty() {
+            return true;
+        }
+        // The spline clamps outside its endpoints: an interior diagonal segment is not
+        // identity. Scan all knots because native settings can arrive unsorted.
+        let mut covers_black = false;
+        let mut covers_white = false;
+        for p in pts {
+            if !p.x.is_finite() || !p.y.is_finite() || (p.x - p.y).abs() >= 1e-9 {
+                return false;
+            }
+            covers_black |= p.x <= 0.0;
+            covers_white |= p.x >= 1.0;
+        }
+        covers_black && covers_white
     }
 }
 

@@ -7,7 +7,8 @@
 use std::sync::Arc;
 
 use lightcraft_develop::{
-    BrushStroke, DevelopSettings, Mask, MaskComponent, MaskOp, MaskShape, Process, Spot, Treatment, VignetteStyle, WbMode, Wheel,
+    BrushStroke, DevelopSettings, LocalAdjustments, Mask, MaskComponent, MaskOp, MaskShape, Process, ProcessVersion, Spot, Treatment, VignetteStyle,
+    WbMode, Wheel,
 };
 use lightcraft_geom::{Orientation, Point, Rect};
 use lightcraft_pipeline::{Quality, RenderRequest, SourceInfo, StageCache, render};
@@ -22,6 +23,194 @@ fn gpu() -> bool {
         lightcraft_testkit::skip!(Gpu, "no GPU adapter");
     }
     ok
+}
+
+#[test]
+fn color_nr_preserves_black_edges_and_very_dark_colors() {
+    if !gpu() {
+        return;
+    }
+    let src = Arc::new(Rgb32f::from_fn(320, 80, |x, _| match x / 64 {
+        0 => [0.0; 3],
+        1 => [0.18; 3],
+        2 => [0.8, 0.03, 0.01],
+        3 => [0.01, 0.06, 0.9],
+        _ => [4e-7, 1e-7, 0.0],
+    }));
+    let mut s = DevelopSettings::default();
+    s.detail.nr_luminance = 0.0;
+    s.detail.sharpen_amount = 0.0;
+    for amount in [25.0, 100.0] {
+        s.detail.nr_color = amount;
+        check("color NR black edges", &src, &SourceInfo::default(), &s, &RenderRequest::fit(320, 80));
+    }
+}
+
+#[test]
+fn noise_reduction_uses_native_scale_and_crop_on_cached_gpu_path() {
+    if !gpu() {
+        return;
+    }
+    let src = scene(2, 320, 160);
+    let mut s = DevelopSettings::default();
+    s.detail.nr_color = 75.0;
+    s.detail.nr_luminance = 50.0;
+    let cache = StageCache::default();
+    for (native_long, crop, window) in [(320, false, false), (640, false, false), (640, true, false), (640, true, true), (320, false, false)] {
+        s.crop.geometry.rect = if crop { Rect::new(0.25, 0.0, 0.75, 1.0) } else { Rect::new(0.0, 0.0, 1.0, 1.0) };
+        let info = SourceInfo { native_long, ..Default::default() };
+        let mut req = RenderRequest::fit(if crop { 160 } else { 320 }, 160);
+        if window {
+            req.window = Some(lightcraft_pipeline::PixelWindow { x: 16, y: 16, w: 112, h: 112 });
+        }
+        let cpu = render(&src, &info, &s, &req).image;
+        let warm = lightcraft_gpu::render(&src, &info, &s, &req, Some(&cache)).expect("gpu").image;
+        let (mean, max, _) = diff(&cpu, &warm);
+        assert!(mean < MEAN_LSB && max <= MAX_LSB, "NR native={native_long}, crop={crop}, window={window}: mean {mean}, max {max}");
+        let cold = lightcraft_gpu::render(&src, &info, &s, &req, None).expect("gpu").image;
+        assert_eq!(warm.data, cold.data, "stale GPU NR cache");
+    }
+}
+
+#[test]
+fn disabled_develop_sections_use_the_shared_render_plan() {
+    if !gpu() {
+        return;
+    }
+    let src = scene(2, 320, 240);
+    let mut s = DevelopSettings::default();
+    s.light.exposure = 2.0;
+    s.curve.master = vec![Point::new(0.0, 0.15), Point::new(1.0, 0.8)].into();
+    s.color.saturation = -80.0;
+    s.wb.mode = WbMode::Custom;
+    s.wb.temp = 9000.0;
+    s.detail.nr_color = 100.0;
+    s.detail.sharpen_amount = 120.0;
+    for section in ["light", "color", "detail"] {
+        s.set_section_enabled(section, false);
+        check(section, &src, &SourceInfo::default(), &s, &RenderRequest::fit(320, 240));
+    }
+}
+
+#[test]
+fn local_sharpening_masking_and_detail_bypass_match_on_gpu() {
+    if !gpu() {
+        return;
+    }
+    let src = Arc::new(Rgb32f::from_fn(240, 120, |x, _| [0.18 * (1.0 + 0.12 * (x as f32 * 1.1).sin()); 3]));
+    let info = SourceInfo::default();
+    let req = RenderRequest::fit(240, 120);
+    let cache = StageCache::default();
+    let mut s = DevelopSettings::default();
+    s.masks.push(Mask {
+        id: 1,
+        components: vec![MaskComponent {
+            name: None,
+            op: MaskOp::Add,
+            invert: false,
+            shape: MaskShape::Linear { start: Point::new(0.45, 0.5), end: Point::new(0.46, 0.5) },
+        }],
+        adjust: LocalAdjustments { sharpness: 100.0, ..Default::default() },
+        ..Default::default()
+    });
+    for process in [ProcessVersion::V1, ProcessVersion::V2, ProcessVersion::V3] {
+        let mut local = s.clone();
+        local.process = process;
+        let expected = lightcraft_gpu::render(&src, &info, &local, &req, Some(&cache)).expect("gpu").image;
+        let plain = lightcraft_gpu::render(&src, &info, &DevelopSettings { process, ..Default::default() }, &req, None).expect("gpu").image;
+        assert!(expected.data != plain.data, "fixture must exercise local sharpening on the GPU in {process:?}");
+        for (masking, enabled) in [(100.0, true), (50.0, true), (100.0, false), (100.0, true), (0.0, true)] {
+            local.detail.sharpen_masking = masking;
+            local.set_section_enabled("detail", enabled);
+            check("local sharpening masking", &src, &info, &local, &req);
+            let actual = lightcraft_gpu::render(&src, &info, &local, &req, Some(&cache)).expect("gpu").image;
+            let cold = lightcraft_gpu::render(&src, &info, &local, &req, None).expect("gpu").image;
+            assert_eq!(actual.data, cold.data, "{process:?}: Masking {masking}, Detail enabled={enabled}: stale local sharpening cache on the GPU");
+            if enabled && masking > 0.0 {
+                assert!(actual.data != expected.data, "{process:?}: Masking {masking} must change local sharpening on the GPU");
+            } else {
+                assert!(
+                    actual.data == expected.data,
+                    "{process:?}: Masking {masking}, Detail enabled={enabled}: incorrect effective Masking on the GPU"
+                );
+            }
+        }
+        // The shared global control must still mask global sharpening when it is enabled.
+        local.masks.clear();
+        local.detail.sharpen_amount = 80.0;
+        local.detail.sharpen_masking = 0.0;
+        let unmasked = lightcraft_gpu::render(&src, &info, &local, &req, Some(&cache)).expect("gpu").image;
+        local.detail.sharpen_masking = 100.0;
+        let masked = lightcraft_gpu::render(&src, &info, &local, &req, Some(&cache)).expect("gpu").image;
+        assert!(unmasked.data != masked.data, "{process:?}: global Masking must retain its global-sharpening effect on the GPU");
+        check("global sharpening masking", &src, &info, &local, &req);
+    }
+}
+
+#[test]
+fn function_curves_profiles_bypass_and_cached_gpu_match_cpu() {
+    if !gpu() {
+        return;
+    }
+    let src = scene(2, 320, 240);
+    let info = SourceInfo::default();
+    let request = RenderRequest::fit(320, 240);
+    let cache = StageCache::default();
+    let mut settings = DevelopSettings::default();
+    // Reuse the same cache across both processes, including the reverse transition.
+    for process in [
+        lightcraft_develop::ProcessVersion::V1,
+        lightcraft_develop::ProcessVersion::V2,
+        lightcraft_develop::ProcessVersion::V3,
+        lightcraft_develop::ProcessVersion::V1,
+    ] {
+        settings.process = process;
+        for (amount, profile, bypass) in [
+            (0.25, "lc.color", false),
+            (0.5, "lc.color", false),
+            (0.75, "lc.color", false),
+            (1.5, "lc.muted.matte-soft", false),
+            (0.5, "lc.film.faded-slide", false),
+            (0.5, "lc.film.faded-slide", true),
+            (0.5, "lc.film.faded-slide", false),
+            (0.0, lightcraft_develop::IMPORTED_LOOK_ID, false),
+            (0.5, lightcraft_develop::IMPORTED_LOOK_ID, false),
+            (1.0, lightcraft_develop::IMPORTED_LOOK_ID, true),
+            (2.0, lightcraft_develop::IMPORTED_LOOK_ID, false),
+            (0.5, "lc.color", false),
+        ] {
+            for (i, curve) in
+                [&mut settings.curve.master, &mut settings.curve.red, &mut settings.curve.green, &mut settings.curve.blue].into_iter().enumerate()
+            {
+                let source =
+                    lightcraft_develop::PointCurve::from(vec![Point::new(0.0, 0.0), Point::new(0.25 + i as f64 * 0.03, 0.15), Point::new(1.0, 1.0)]);
+                let target =
+                    lightcraft_develop::PointCurve::from(vec![Point::new(0.0, 0.05), Point::new(0.7 - i as f64 * 0.03, 0.85), Point::new(1.0, 0.95)]);
+                *curve = source.blend(&target, amount).unwrap();
+            }
+            settings.profile.id = profile.into();
+            settings.profile.imported = (profile == lightcraft_develop::IMPORTED_LOOK_ID).then(|| lightcraft_develop::ImportedLook {
+                convert_to_grayscale: amount == 0.0 || bypass,
+                contrast: 8.0,
+                highlights: -12.0,
+                shadows: 10.0,
+                clarity: 15.0,
+                master: vec![Point::new(0.0, 0.02), Point::new(0.45, 0.65), Point::new(1.0, 0.98)].into(),
+                red: vec![Point::new(0.0, 0.0), Point::new(0.7, 0.6), Point::new(1.0, 1.0)].into(),
+                blue: vec![Point::new(0.0, 0.01), Point::new(1.0, 0.95)].into(),
+                ..Default::default()
+            });
+            settings.profile.amount = if settings.profile.imported.is_some() { amount * 100.0 } else { 100.0 };
+            settings.curve.refine_saturation = if settings.profile.imported.is_some() { 0.0 } else { 100.0 };
+            settings.set_section_enabled("curve", !bypass);
+            let cpu = render(&src, &info, &settings, &request).image;
+            let warm = lightcraft_gpu::render(&src, &info, &settings, &request, Some(&cache)).expect("gpu").image;
+            let (mean, max, _) = diff(&cpu, &warm);
+            assert!(mean < MEAN_LSB && max <= MAX_LSB, "amount{amount}, profile{profile}, bypass{bypass}: mean{mean},max{max}");
+            let cold = lightcraft_gpu::render(&src, &info, &settings, &request, None).expect("gpu").image;
+            assert_eq!(warm.data, cold.data, "stale cached function curve");
+        }
+    }
 }
 
 #[test]
@@ -48,6 +237,17 @@ fn camera_tone_and_relative_wb() {
     let info = SourceInfo { camera_tone: Some(curve), ..info };
     check("camera chroma curve", &src, &info, &DevelopSettings::default(), &RenderRequest::fit(320, 240));
     check("camera chroma curve edited", &src, &info, &s, &RenderRequest::fit(320, 240));
+
+    // A profile with an exact white endpoint needs the same split LUT cell on both paths.
+    let src = Arc::new(Rgb32f::from_fn(320, 32, |x, _| [0.95 + x as f32 / 3190.0; 3]));
+    let curve = lightcraft_pipeline::tone::CameraTone::new(std::array::from_fn(|i| {
+        let x = 2f32.powf(-12.0 + 12.0 * i as f32 / 31.0);
+        [x, x]
+    }))
+    .unwrap();
+    let info = SourceInfo { raw: true, relative_wb: true, camera_tone: Some(curve), ..Default::default() };
+    check("camera exact white", &src, &info, &DevelopSettings::default(), &RenderRequest::fit(320, 32));
+    check("camera exact white edited", &src, &info, &s, &RenderRequest::fit(320, 32));
 }
 
 fn scene(i: usize, w: usize, h: usize) -> Arc<Rgb32f> {
@@ -107,7 +307,7 @@ fn preview_noise_reduction_matches() {
     s.detail.nr_color = 60.0;
     s.detail.nr_color_smoothness = 50.0;
     // a preview level of a 6000-px original: loupe-, grid- and tiny-thumbnail-sized outputs
-    let info = SourceInfo { raw: true, native_long: Some(6000), ..Default::default() };
+    let info = SourceInfo { raw: true, native_long: 6000, ..Default::default() };
     for (name, edge) in [("NR preview 640 of 6000", 640), ("NR preview 320 of 6000", 320), ("NR preview 128 of 6000", 128)] {
         check(name, &src, &info, &s, &RenderRequest::fit(edge, edge));
     }
@@ -190,11 +390,11 @@ fn cases() -> Vec<(&'static str, Edit)> {
         ("tone curves", |s| {
             s.curve.highlights = -30.0;
             s.curve.shadows = 25.0;
-            s.curve.master = vec![Point::new(0.0, 0.05), Point::new(0.5, 0.55), Point::new(1.0, 0.95)];
-            s.curve.blue = vec![Point::new(0.0, 0.0), Point::new(0.5, 0.45), Point::new(1.0, 1.0)];
+            s.curve.master = vec![Point::new(0.0, 0.05), Point::new(0.5, 0.55), Point::new(1.0, 0.95)].into();
+            s.curve.blue = vec![Point::new(0.0, 0.0), Point::new(0.5, 0.45), Point::new(1.0, 1.0)].into();
         }),
         ("tone curves + refine saturation", |s| {
-            s.curve.master = vec![Point::new(0.0, 0.0), Point::new(0.25, 0.15), Point::new(0.75, 0.88), Point::new(1.0, 1.0)];
+            s.curve.master = vec![Point::new(0.0, 0.0), Point::new(0.25, 0.15), Point::new(0.75, 0.88), Point::new(1.0, 1.0)].into();
             s.curve.lights = 30.0;
             s.curve.refine_saturation = 20.0;
         }),
@@ -225,6 +425,15 @@ fn cases() -> Vec<(&'static str, Edit)> {
         ("sharpen masking", |s| {
             s.detail.sharpen_amount = 90.0;
             s.detail.sharpen_masking = 60.0;
+        }),
+        ("sharpen radius small", |s| {
+            s.detail.sharpen_amount = 90.0;
+            s.detail.sharpen_radius = 0.5;
+        }),
+        ("sharpen radius large with texture", |s| {
+            s.detail.sharpen_amount = 90.0;
+            s.detail.sharpen_radius = 3.0;
+            s.effects.texture = 50.0;
         }),
         ("white balance", |s| {
             s.wb.mode = WbMode::Custom;
@@ -574,7 +783,7 @@ fn cached_renders_match_uncached() {
 }
 
 /// Issue #632: the Highlights / Shadows base of each process (V1: the edge-aware filter of log
-/// luminance; V2: of its fine median, a radius that grows with the render) matches the CPU's, and
+/// luminance; V3: of its fine median, a radius that grows with the render) matches the CPU's, and
 /// a warm cache never hands one process the other's base.
 #[test]
 fn highlights_shadows_base_matches_on_every_process() {
@@ -605,7 +814,7 @@ fn highlights_shadows_base_matches_on_every_process() {
             }];
             check(&format!("{p:?} local highlights {w}"), &src, &raw, &s, &req);
         }
-        for p in [Process::V1, Process::V2, Process::V1, Process::V2] {
+        for p in [Process::V1, Process::V2, Process::V3, Process::V2, Process::V1] {
             let mut s = DevelopSettings { process: p.version(), ..DevelopSettings::default() };
             s.light.highlights = -100.0;
             let warm = lightcraft_gpu::render(&src, &raw, &s, &req, Some(&cache)).expect("gpu");
@@ -748,12 +957,15 @@ fn output_spaces_match() {
     use lightcraft_pipeline::OutputSpace;
     let src = scene(0, 900, 600);
     let raw = SourceInfo { raw: true, ..Default::default() };
-    for space in OutputSpace::ALL {
-        for (name, edit) in [("typical", typical as Edit), ("saturated + curves + grain", saturated as Edit)] {
-            let mut s = DevelopSettings::default();
-            edit(&mut s);
-            let req = RenderRequest { space, ..RenderRequest::fit(640, 640) };
-            check(&format!("{space:?} {name}"), &src, &raw, &s, &req);
+    for process in lightcraft_develop::Process::ALL {
+        for space in OutputSpace::ALL {
+            for (name, edit) in [("typical", typical as Edit), ("saturated + curves + grain", saturated as Edit)] {
+                let mut s = DevelopSettings::default();
+                edit(&mut s);
+                s.process = process.version();
+                let req = RenderRequest { space, ..RenderRequest::fit(640, 640) };
+                check(&format!("{space:?} {name}"), &src, &raw, &s, &req);
+            }
         }
     }
 }

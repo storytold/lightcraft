@@ -12,7 +12,8 @@
 
 use std::collections::BTreeMap;
 
-use lightcraft_develop::{MIXER_BANDS, Preset};
+use lightcraft_develop::{IMPORTED_LOOK_ID, ImportedLook, MIXER_BANDS, Preset, ToneCurve};
+use lightcraft_geom::Point;
 use serde_json::{Map, Value, json};
 
 /// Properties keyed `prefix:name` (as produced by [`lightcraft_meta::parse_xmp`]).
@@ -168,21 +169,119 @@ pub fn rel_to_kelvin(r: f64) -> f64 {
 
 /// Parse a point curve stored as an `rdf:Seq` of `"x, y"` strings in 0..255.
 fn curve(props: &Props, k: &str) -> Option<Value> {
-    note(k);
     let items = props.get(k)?;
     let mut pts = Vec::new();
     for it in items {
         let (x, y) = it.split_once(',')?;
-        // (`parse` reads "NaN" and "inf" too: a curve with such a point is not a curve)
-        let (x, y) = (x.trim().parse::<f64>().ok().filter(|v| v.is_finite())?, y.trim().parse::<f64>().ok().filter(|v| v.is_finite())?);
-        pts.push(json!({"x": (x / 255.0).clamp(0.0, 1.0), "y": (y / 255.0).clamp(0.0, 1.0)}));
+        let (x, y) = (x.trim().parse::<f64>().ok()?, y.trim().parse::<f64>().ok()?);
+        if !x.is_finite() || !y.is_finite() {
+            return None;
+        }
+        pts.push(Point::new((x / 255.0).clamp(0.0, 1.0), (y / 255.0).clamp(0.0, 1.0)));
     }
     if pts.len() < 2 {
         return None;
     }
-    // A straight 0,0 → 255,255 line is the identity: store it as "no curve".
-    let identity = pts.len() == 2 && items.iter().all(|it| it.split(',').map(|v| v.trim()).collect::<Vec<_>>().windows(2).all(|w| w[0] == w[1]));
-    Some(if identity { json!([]) } else { Value::Array(pts) })
+    note(k);
+    Some(if ToneCurve::point_curve_is_identity(&pts) { json!([]) } else { json!(pts) })
+}
+
+/// Keep the supported portion of a saved Look separate from the user's controls. Opaque
+/// tables and other parameters remain reported as unsupported; no bundled profile is used.
+fn imported_look(props: &Props) -> Option<Value> {
+    if !props.keys().any(|key| key == "crs:Look" || key.starts_with("crs:Look/")) {
+        return None;
+    }
+    let mut payload = json!({
+        "name": first(props, "crs:Look/crs:Name").unwrap_or("Imported profile"),
+        "source_id": first(props, "crs:Look/crs:UUID").unwrap_or("")
+    });
+    let conversion = boolean(props, "crs:Look/crs:Parameters/crs:ConvertToGrayscale");
+    if let Some(bw) = conversion {
+        payload["convert_to_grayscale"] = json!(bw);
+    }
+    let table_key = "crs:Look/crs:Parameters/crs:LookTable";
+    if let Some(values) = props.get(table_key) {
+        match values.as_slice() {
+            [value] => match value.parse::<lightcraft_develop::LookTableRef>() {
+                Ok(reference) => {
+                    payload["look_table"] = json!(reference);
+                    note(table_key);
+                }
+                Err(_) => skipped("LookTable (invalid fingerprint)"),
+            },
+            _ => skipped("LookTable (ambiguous reference)"),
+        }
+    }
+    let conversion_payload = payload.clone();
+    // Independently checked components survive unsupported curves/scalars. An invalid Amount
+    // must never activate a table at an invented amount; only grayscale is Amount-independent.
+    let checked_subset = |amount: f64, keep_table: bool| {
+        let mut subset = conversion_payload.clone();
+        if !keep_table && let Some(object) = subset.as_object_mut() {
+            object.remove("look_table");
+        }
+        (conversion.is_some() || conversion_payload.get("look_table").is_some()).then(|| {
+            let look = serde_json::from_value::<ImportedLook>(subset.clone()).unwrap_or_else(|_| ImportedLook {
+                convert_to_grayscale: conversion.unwrap_or(false),
+                look_table: subset.get("look_table").and_then(Value::as_str).and_then(|s| s.parse().ok()),
+                ..Default::default()
+            });
+            json!({"id": IMPORTED_LOOK_ID, "amount": amount, "imported": look})
+        })
+    };
+    let amount_key = "crs:Look/crs:Amount";
+    let amount = if props.contains_key(amount_key) {
+        let Some(v) = num(props, amount_key).filter(|v| (0.0..=2.0).contains(v)) else {
+            skipped("Look (invalid profile amount)");
+            if conversion_payload.get("look_table").is_some() {
+                skipped("LookTable (invalid profile amount)");
+            }
+            return checked_subset(100.0, false);
+        };
+        v * 100.0
+    } else {
+        100.0
+    };
+    for (field, target) in [("Contrast2012", "contrast"), ("Highlights2012", "highlights"), ("Shadows2012", "shadows"), ("Clarity2012", "clarity")] {
+        let key = format!("crs:Look/crs:Parameters/crs:{field}");
+        if props.contains_key(&key) {
+            let Some(v) = num(props, &key).filter(|v| (-100.0..=100.0).contains(v)) else {
+                skipped("Look (invalid profile parameter)");
+                return checked_subset(amount, true);
+            };
+            payload[target] = json!(v);
+        }
+    }
+    for (field, target) in
+        [("ToneCurvePV2012", "master"), ("ToneCurvePV2012Red", "red"), ("ToneCurvePV2012Green", "green"), ("ToneCurvePV2012Blue", "blue")]
+    {
+        let key = format!("crs:Look/crs:Parameters/crs:{field}");
+        if props.contains_key(&key) {
+            // Bound before constructing the JSON; the native curve reader validates knots too.
+            let valid_points = |points: &&Vec<String>| {
+                points.len() <= lightcraft_develop::MAX_POINT_CURVE_POINTS
+                    && points.iter().all(|point| {
+                        point
+                            .split_once(',')
+                            .is_some_and(|(x, y)| [x, y].iter().all(|v| v.trim().parse::<f64>().is_ok_and(|v| (0.0..=255.0).contains(&v))))
+                    })
+            };
+            let Some(v) = props.get(&key).filter(valid_points).and_then(|_| curve(props, &key)) else {
+                skipped("Look (invalid profile curve)");
+                return checked_subset(amount, true);
+            };
+            payload[target] = v;
+        }
+    }
+    // An explicitly replaced Look with only unsupported components still replaces the old
+    // supported definition with a neutral subset. Otherwise rereading a table-only profile
+    // would leave the previous profile's curves active. The unmapped Look warning remains.
+    let Ok(look) = serde_json::from_value::<ImportedLook>(payload) else {
+        skipped("Look (invalid profile definition)");
+        return checked_subset(amount, true);
+    };
+    Some(json!({"id": IMPORTED_LOOK_ID, "amount": amount, "imported": look}))
 }
 
 /// Map the `crs:` fields of an XMP packet to a partial develop-settings JSON object.
@@ -247,22 +346,30 @@ pub fn to_partial(props: &Props, target: Target) -> Value {
         "flash" => "flash",
         _ => "custom",
     });
-    let abs = num(props, "crs:Temperature").map(|t| (t, num(props, "crs:Tint")));
-    let rel = num(props, "crs:IncrementalTemperature")
-        .or(num(props, "crs:IncrementalTint").map(|_| 0.0))
-        .map(|t| (rel_to_kelvin(t), num(props, "crs:IncrementalTint")));
+    let pair = |temperature, tint| {
+        let (temperature, tint) = (num(props, temperature), num(props, tint));
+        (temperature.is_some() || tint.is_some()).then_some((temperature, tint))
+    };
+    let abs = pair("crs:Temperature", "crs:Tint");
+    let rel = pair("crs:IncrementalTemperature", "crs:IncrementalTint").map(|(t, tint)| (t.map(rel_to_kelvin), tint));
     // A Kelvin value for something we develop relative to its as-shot look: the other app's
     // as-shot white (`AsShotTemperature` / `AsShotTint`, written next to the edit) is the
     // reference, so the edit is the same mired shift from ours (issue #510).
     let shifted = || {
         let (t, tint) = abs?;
-        let as_shot = num(props, "crs:AsShotTemperature").filter(|k| *k > 0.0)?;
-        if t <= 0.0 {
-            return None;
-        }
-        let r = (1e6 / as_shot - 1e6 / t) / 0.8;
+        // A tint-only partial has no temperature to convert. Do not invent 6500 K or
+        // require an unrelated temperature reference just to preserve that tint edit.
+        let temperature = if let Some(t) = t {
+            let as_shot = num(props, "crs:AsShotTemperature").filter(|k| *k > 0.0)?;
+            if t <= 0.0 {
+                return None;
+            }
+            Some(rel_to_kelvin((1e6 / as_shot - 1e6 / t) / 0.8))
+        } else {
+            None
+        };
         let tint = tint.map(|v| v - num(props, "crs:AsShotTint").unwrap_or(0.0));
-        Some((rel_to_kelvin(r), tint))
+        Some((temperature, tint))
     };
     let wb = match target {
         Target::RawAbsolute => abs,
@@ -271,10 +378,16 @@ pub fn to_partial(props: &Props, target: Target) -> Value {
         Target::RawRelative => rel.or_else(shifted),
     };
     match (mode, wb) {
-        (Some(m), _) if m != "custom" => put(o, "wb.mode", json!(m)),
-        (m, Some((t, tint))) => {
-            put(o, "wb.mode", json!(m.unwrap_or("custom")));
-            put(o, "wb.temp", json!(t));
+        (Some("asShot"), _) => put(o, "wb.mode", json!("asShot")),
+        (_, Some((t, tint))) => {
+            // Named/Auto modes also store the resolved camera-dependent white point. Preserve
+            // that result instead of resolving our different preset or auto algorithm again.
+            put(o, "wb.mode", json!("custom"));
+            // Keep the unstated coordinate from the destination settings. Choose the
+            // source family above as a unit; never fill it from the lower-priority family.
+            if let Some(t) = t {
+                put(o, "wb.temp", json!(t));
+            }
             if let Some(tint) = tint {
                 put(o, "wb.tint", json!(tint));
             }
@@ -289,15 +402,25 @@ pub fn to_partial(props: &Props, target: Target) -> Value {
         // the photo stays As Shot (ΔE 12 there) and the report says so
         (_, None) if target == Target::RawRelative && abs.is_some() => {
             put(o, "wb.mode", json!("asShot"));
-            skipped("Temperature, Tint (custom white balance without AsShotTemperature: kept As Shot)");
+            skipped("WhiteBalance (missing AsShotTemperature)");
         }
         (Some(m), None) => put(o, "wb.mode", json!(m)),
         (None, None) => {}
     }
 
     // ---- Treatment + B&W mix
+    // Keep the outer treatment independent: the Look's own conversion travels with its
+    // payload through profile-only copy/paste, presets and sync, even at Amount zero.
     if let Some(bw) = boolean(props, "crs:ConvertToGrayscale") {
         put(o, "treatment", json!(if bw { "bw" } else { "color" }));
+    }
+    if let Some(profile) = imported_look(props) {
+        if profile.pointer("/imported/look_table").is_some_and(|v| !v.is_null()) {
+            put(o, "version", json!(lightcraft_develop::LOOK_TABLE_SCHEMA_VERSION));
+        } else if profile.pointer("/imported/convert_to_grayscale").and_then(Value::as_bool) == Some(true) {
+            put(o, "version", json!(lightcraft_develop::PROFILE_TREATMENT_SCHEMA_VERSION));
+        }
+        put(o, "profile", profile);
     }
     for (band, crs) in MIXER_BANDS.iter().zip(CRS_BANDS) {
         n(o, &format!("HueAdjustment{crs}"), &format!("mixer.{band}.hue"));
@@ -315,7 +438,7 @@ pub fn to_partial(props: &Props, target: Target) -> Value {
     n(o, "ParametricMidtoneSplit", "curve.split_mid");
     n(o, "ParametricHighlightSplit", "curve.split_highlights");
     n(o, "CurveRefineSaturation", "curve.refine_saturation");
-    if let Some(c) = curve(props, "crs:ToneCurve").filter(|c| c.as_array().is_some_and(|a| !a.is_empty())) {
+    if let Some(c) = curve(props, "crs:ToneCurve") {
         // the older single curve, used when no 2012 curve is present
         if !props.contains_key("crs:ToneCurvePV2012") {
             put(o, "curve.master", c);
@@ -486,13 +609,8 @@ pub fn to_partial_report(props: &Props, values: Option<&crate::crs_masks::Values
     // Point Color slots that are all empty (-1)
     let value_is = |k: &str, f: &dyn Fn(&[String]) -> bool| props.get(&format!("crs:{k}")).is_some_and(|v| f(v));
     let empty_points = |v: &[String]| v.iter().all(|s| s.split(',').all(|n| n.trim().parse::<f64>().is_ok_and(|x| x == -1.0) || n.trim().is_empty()));
-    let quiet = |k: &str| {
-        k.starts_with("Enable")
-            || k.starts_with("ToneCurveName")
-            || k == "AutoTone"
-            || k == "AutoGrayscaleMix"
-            || (k == "PointColors" && value_is(k, &empty_points))
-    };
+    let quiet =
+        |k: &str| k.starts_with("ToneCurveName") || k == "AutoTone" || k == "AutoGrayscaleMix" || (k == "PointColors" && value_is(k, &empty_points));
     let mut unmapped: Vec<String> = props
         .keys()
         .filter(|k| k.starts_with("crs:"))
@@ -527,7 +645,7 @@ pub fn has_saved_upright_transform(props: &Props) -> bool {
 pub fn preset_from_xmp(xmp: &str, fallback_name: &str) -> Option<Preset> {
     let d = lightcraft_meta::parse_xmp(xmp).ok()?;
     let props = &d.properties;
-    let settings = to_partial(props, Target::Any);
+    let (settings, unmapped) = to_partial_report(props, Some(&d.values), Target::Any, crate::crs_masks::DEFAULT_ASPECT);
     if settings.as_object().is_none_or(Map::is_empty) {
         return None;
     }
@@ -535,13 +653,324 @@ pub fn preset_from_xmp(xmp: &str, fallback_name: &str) -> Option<Preset> {
     let group = first(props, "crs:Group").unwrap_or("Imported Presets").to_string();
     let uuid = first(props, "crs:UUID").map(|u| u.to_ascii_lowercase());
     let id = format!("user.xmp.{}", uuid.unwrap_or_else(|| crate::presets::slug(&format!("{group}-{name}"))));
-    Some(Preset { id, name, group, settings, favorite: false, builtin: false })
+    let unsupported_edits = lightcraft_develop::unsupported_edits::bounded_names(unmapped.iter().map(String::as_str));
+    Some(Preset { id, name, group, settings, unsupported_edits, favorite: false, builtin: false })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use lightcraft_develop::{DevelopSettings, Upright, VignetteStyle, WbMode, apply_partial};
+
+    #[test]
+    fn direct_xmp_preset_preserves_structured_masks_and_nested_bw() {
+        const MASK: &str = r#"<crs:GradientBasedCorrections><rdf:Seq><rdf:li><rdf:Description crs:What="Correction" crs:CorrectionAmount="1" crs:CorrectionActive="true" crs:CorrectionName="Own gradient" crs:LocalExposure2012="-0.25"><crs:CorrectionMasks><rdf:Seq><rdf:li crs:What="Mask/Gradient" crs:MaskBlendMode="0" crs:FullX="0.5" crs:FullY="0" crs:ZeroX="0.5" crs:ZeroY="0.6"/></rdf:Seq></crs:CorrectionMasks></rdf:Description></rdf:li></rdf:Seq></crs:GradientBasedCorrections>"#;
+        const BW: &str = r#"<crs:Look><rdf:Description><crs:Parameters><rdf:Description crs:ConvertToGrayscale="True"/></crs:Parameters></rdf:Description></crs:Look>"#;
+        for (attributes, body, has_mask, grayscale) in
+            [(r#"crs:Exposure2012="0.2""#, format!("{MASK}{BW}"), true, true), ("", MASK.to_string(), true, false), ("", BW.to_string(), false, true)]
+        {
+            let xml = format!(
+                r#"<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:Name="Own structured probe" crs:UUID="own-structured-probe" {attributes}>{body}</rdf:Description>"#
+            );
+            let imported = crate::preset_import::read_presets("own.xmp", xml.as_bytes(), None).unwrap().remove(0);
+            let direct = preset_from_xmp(&xml, "Own structured probe").expect("mask-only presets also contain usable adjustments");
+            assert_eq!(direct.settings, imported.preset.settings);
+            assert_eq!(direct.unsupported_edits, imported.preset.unsupported_edits);
+            if grayscale {
+                assert_eq!(direct.settings["version"], lightcraft_develop::PROFILE_TREATMENT_SCHEMA_VERSION);
+                let file = crate::presets::to_lcpreset(std::slice::from_ref(&direct));
+                let envelope: Value = serde_json::from_str(&file).unwrap();
+                assert_eq!(envelope["format"], crate::presets::LCPRESET_FUNCTION_FORMAT);
+                assert_eq!(envelope["presets"][0]["settings"]["version"], lightcraft_develop::PROFILE_TREATMENT_SCHEMA_VERSION);
+                let reloaded = crate::presets::parse_preset_file("own.lcpreset", file.as_bytes()).unwrap().remove(0);
+                assert_eq!(reloaded.settings, direct.settings);
+            }
+            let parsed = crate::presets::parse_preset_file("own.xmp", xml.as_bytes()).unwrap().remove(0);
+            assert_eq!(parsed.settings, direct.settings);
+            let sniffed = crate::preset_import::read_presets("own.probe", xml.as_bytes(), None).unwrap().remove(0);
+            assert_eq!(sniffed.preset.settings, direct.settings);
+            assert_eq!(sniffed.unmapped, direct.unsupported_edits);
+            let settings = direct.apply(&DevelopSettings::default(), 1.0);
+            assert_eq!(settings.masks.len(), usize::from(has_mask));
+            if let Some(mask) = settings.masks.first() {
+                assert_eq!(mask.name, "Own gradient");
+                assert_eq!(mask.adjust.exposure, -1.0);
+            }
+            assert_eq!(settings.treatment, lightcraft_develop::Treatment::Color);
+            assert_eq!(settings.is_bw(), grayscale);
+        }
+        let fingerprint = "E96CB8AF6484F8402BB0E6ECFC8AD0FC";
+        for amount in ["1", "NaN", "3"] {
+            let xml = format!(
+                r#"<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"><crs:Look rdf:parseType="Resource" crs:Amount="{amount}"><crs:Parameters rdf:parseType="Resource" crs:ConvertToGrayscale="True" crs:LookTable="{fingerprint}"/></crs:Look></rdf:Description>"#
+            );
+            let direct = preset_from_xmp(&xml, "Own reference").unwrap();
+            let imported = crate::preset_import::read_presets("own.xmp", xml.as_bytes(), None).unwrap().remove(0);
+            assert_eq!(direct.settings, imported.preset.settings);
+            let applied = direct.apply(&DevelopSettings::default(), 1.0);
+            let look = applied.profile.imported_look().unwrap();
+            assert!(look.convert_to_grayscale);
+            if amount == "1" {
+                assert_eq!(look.look_table.as_ref().unwrap().as_str(), fingerprint);
+                assert_eq!(direct.settings["version"], lightcraft_develop::LOOK_TABLE_SCHEMA_VERSION);
+                let file = crate::presets::to_lcpreset(std::slice::from_ref(&direct));
+                let reloaded = crate::presets::parse_preset_file("own.lcpreset", file.as_bytes()).unwrap().remove(0);
+                assert_eq!(reloaded.settings, direct.settings);
+            } else {
+                assert!(look.look_table.is_none(), "an invalid Amount must not activate a table at 100 percent");
+                assert!(direct.unsupported_edits.iter().any(|s| s == "LookTable (invalid profile amount)"));
+            }
+        }
+    }
+
+    #[test]
+    fn monochrome_look_keeps_supported_profile_parameters_separate() {
+        for look in [
+            r#"<crs:Look rdf:parseType="Resource" crs:Name="Procedural look"><crs:Parameters rdf:parseType="Resource" crs:ConvertToGrayscale="True" crs:Exposure2012="3" crs:Clarity2012="50" crs:LookTable="procedural-unsupported-table"/></crs:Look>"#,
+            r#"<crs:Look><rdf:Description crs:Name="Procedural look"><crs:Parameters><rdf:Description crs:ConvertToGrayscale="True" crs:Exposure2012="3" crs:Clarity2012="50" crs:LookTable="procedural-unsupported-table"/></crs:Parameters></rdf:Description></crs:Look>"#,
+            r#"<crs:Look rdf:parseType="Resource"><crs:Name>Procedural look</crs:Name><crs:Parameters rdf:parseType="Resource"><crs:ConvertToGrayscale>True</crs:ConvertToGrayscale><crs:Exposure2012>3</crs:Exposure2012><crs:Clarity2012>50</crs:Clarity2012><crs:LookTable>procedural-unsupported-table</crs:LookTable></crs:Parameters></crs:Look>"#,
+        ] {
+            let xml = format!(
+                r#"<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:GrayMixerBlue="-35">{look}</rdf:Description>"#
+            );
+            let packet = lightcraft_meta::parse_xmp(&xml).unwrap();
+            let (partial, unmapped) = to_partial_report(&packet.properties, Some(&packet.values), Target::RawAbsolute, 1.5);
+            let settings = apply_partial(&DevelopSettings::default(), &partial, 1.0);
+            assert_eq!(settings.treatment, lightcraft_develop::Treatment::Color);
+            assert!(settings.is_bw());
+            assert_eq!(settings.bw_mix.blue, -35.0);
+            assert_eq!(settings.light.exposure, 0.0, "profile parameters must not become global edits");
+            assert_eq!(settings.effects.clarity, 0.0);
+            assert_eq!(settings.profile.imported_look().unwrap().clarity, 50.0);
+            assert_eq!(settings.profile.amount, 100.0);
+            assert!(unmapped.iter().any(|k| k == "Look"), "unsupported profile details remain visible");
+            assert!(has_adjustments(&packet.properties));
+        }
+        let mut fields = Props::from([("crs:Look/crs:Parameters/crs:Contrast2012".into(), vec!["20".into()])]);
+        let before = apply_partial(&DevelopSettings::default(), &to_partial(&fields, Target::RawAbsolute), 1.0);
+        fields.clear();
+        fields.insert("crs:Look/crs:Name".into(), vec!["Other table-only look".into()]);
+        let replaced = apply_partial(&before, &to_partial(&fields, Target::RawAbsolute), 1.0);
+        assert_eq!(replaced.profile.imported_look().unwrap().contrast, 0.0, "an explicit Look replaces the prior definition");
+        fields.insert("crs:Look/crs:Parameters/crs:ToneCurvePV2012".into(), vec!["0,0".into(), "255,510".into()]);
+        let (partial, unmapped) = to_partial_report(&fields, None, Target::RawAbsolute, 1.5);
+        assert!(partial.get("profile").is_none(), "invalid profile knots must not silently clamp into a replacement");
+        assert!(unmapped.iter().any(|s| s == "Look (invalid profile curve)"));
+    }
+
+    #[test]
+    fn either_explicit_grayscale_conversion_applies_without_guessing_profile_names() {
+        for (outer, nested, name, expected, effective_bw) in [
+            (Some("False"), Some("True"), "Procedural look", Some("color"), true),
+            (Some("True"), Some("False"), "Procedural look", Some("bw"), true),
+            (Some("False"), Some("False"), "Procedural look", Some("color"), false),
+            (Some("False"), None, "Procedural look", Some("color"), false),
+            (None, Some("False"), "Procedural look", None, false),
+            (None, Some("True"), "Procedural look", None, true),
+            (None, None, "Adobe Monochrome", None, false),
+        ] {
+            let outer = outer.map_or(String::new(), |v| format!(r#"crs:ConvertToGrayscale="{v}""#));
+            let nested = nested.map_or(String::new(), |v| format!(r#"crs:ConvertToGrayscale="{v}""#));
+            let xml = format!(
+                r#"<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" {outer}><crs:Look><rdf:Description crs:Name="{name}"><crs:Parameters><rdf:Description {nested}/></crs:Parameters></rdf:Description></crs:Look></rdf:Description>"#
+            );
+            let partial = to_partial(&props(&xml), Target::RawAbsolute);
+            assert_eq!(partial.get("treatment").and_then(Value::as_str), expected);
+            assert_eq!(apply_partial(&DevelopSettings::default(), &partial, 1.0).is_bw(), effective_bw);
+        }
+        for (field, values, warning) in [
+            ("Parameters/crs:ToneCurvePV2012", vec!["0,0", "255,510"], "curve"),
+            ("Parameters/crs:Contrast2012", vec!["101"], "parameter"),
+            ("Amount", vec!["NaN"], "amount"),
+        ] {
+            for bw in [false, true] {
+                let fields = Props::from([
+                    ("crs:ConvertToGrayscale".into(), vec!["False".into()]),
+                    ("crs:Look/crs:Parameters/crs:ConvertToGrayscale".into(), vec![bw.to_string()]),
+                    (format!("crs:Look/crs:{field}"), values.iter().map(|s| s.to_string()).collect()),
+                ]);
+                let (partial, unmapped) = to_partial_report(&fields, None, Target::RawAbsolute, 1.5);
+                let mut previous = DevelopSettings::default();
+                previous.profile.id = IMPORTED_LOOK_ID.into();
+                previous.profile.imported = Some(ImportedLook { convert_to_grayscale: !bw, contrast: 35.0, ..Default::default() });
+                let settings = apply_partial(&previous, &partial, 1.0);
+                assert_eq!(settings.treatment, lightcraft_develop::Treatment::Color);
+                assert_eq!(settings.is_bw(), bw, "conversion survives invalid {field} independently");
+                assert_eq!(settings.profile.imported_look().unwrap().contrast, 0.0, "no stale profile survives");
+                assert!(settings.profile.imported_look().unwrap().master.is_identity());
+                assert!(unmapped.iter().any(|s| s == &format!("Look (invalid profile {warning})")));
+            }
+        }
+    }
+
+    #[test]
+    fn saved_named_and_auto_white_balance_keep_resolved_numeric_values() {
+        for mode in ["Auto", "Daylight", "Cloudy", "Shade", "Tungsten", "Fluorescent", "Flash", "Custom"] {
+            let p = props(&format!(
+                r#"<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:WhiteBalance="{mode}" crs:Temperature="5275" crs:Tint="13"/>"#
+            ));
+            let settings = apply_partial(&DevelopSettings::default(), &to_partial(&p, Target::RawAbsolute), 1.0);
+            assert_eq!(settings.wb.mode, WbMode::Custom);
+            assert_eq!((settings.wb.temp, settings.wb.tint), (5275.0, 13.0));
+        }
+    }
+
+    fn wb_props(fields: &str) -> Props {
+        props(&format!(
+            r#"<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" {fields}/>"#
+        ))
+    }
+
+    #[test]
+    fn partial_white_balance_keeps_unstated_coordinates_on_each_target_scale() {
+        let mut original = DevelopSettings::for_raw(4800.0, 7.0);
+        original.wb.mode = WbMode::Custom;
+        let shifted = rel_to_kelvin((1e6 / 5000.0 - 1e6 / 5400.0) / 0.8);
+        for (target, field, value, references, coordinate, expected) in [
+            (Target::RawAbsolute, "Temperature", "5400", "", "temp", (5400.0, 7.0)),
+            (Target::RawAbsolute, "Tint", "-12", "", "tint", (4800.0, -12.0)),
+            (Target::Rendered, "IncrementalTemperature", "25", "", "temp", (rel_to_kelvin(25.0), 7.0)),
+            (Target::Rendered, "IncrementalTint", "-12", "", "tint", (4800.0, -12.0)),
+            (Target::RawRelative, "IncrementalTemperature", "25", "", "temp", (rel_to_kelvin(25.0), 7.0)),
+            (Target::RawRelative, "IncrementalTint", "-12", "", "tint", (4800.0, -12.0)),
+            (Target::RawRelative, "Temperature", "5400", r#"crs:AsShotTemperature="5000""#, "temp", (shifted, 7.0)),
+            (Target::RawRelative, "Tint", "-12", r#"crs:AsShotTint="-2""#, "tint", (4800.0, -10.0)),
+            (Target::RawRelative, "Tint", "-12", "", "tint", (4800.0, -12.0)),
+            (Target::Rendered, "Temperature", "5400", r#"crs:AsShotTemperature="5000""#, "temp", (shifted, 7.0)),
+            (Target::Rendered, "Tint", "-12", r#"crs:AsShotTint="-2""#, "tint", (4800.0, -10.0)),
+            (Target::Rendered, "Temperature", "5400", "", "temp", (5400.0, 7.0)),
+            (Target::Any, "Temperature", "5400", "", "temp", (5400.0, 7.0)),
+            (Target::Any, "Tint", "-12", "", "tint", (4800.0, -12.0)),
+            (Target::Any, "IncrementalTemperature", "25", "", "temp", (rel_to_kelvin(25.0), 7.0)),
+            (Target::Any, "IncrementalTint", "-12", "", "tint", (4800.0, -12.0)),
+        ] {
+            let fields = format!(r#"crs:{field}="{value}" {references}"#);
+            let (partial, unmapped) = to_partial_report(&wb_props(&fields), None, target, 1.5);
+            let wb = partial["wb"].as_object().unwrap();
+            let kelvin = matches!(target, Target::RawAbsolute | Target::Any) && !field.starts_with("Incremental");
+            assert_eq!(
+                wb.len(),
+                if kelvin { 3 } else { 2 },
+                "{target:?}/{field}: only mode, the stated coordinate, and its scale belong in the patch"
+            );
+            assert_eq!(wb.get("scale"), kelvin.then_some(&json!("kelvin")));
+            assert_eq!(wb.get("mode"), Some(&json!("custom")));
+            assert!(wb.contains_key(coordinate));
+            assert!(!wb.contains_key(if coordinate == "temp" { "tint" } else { "temp" }));
+            assert!(unmapped.is_empty(), "{target:?}/{field}: {unmapped:?}");
+            let settings = apply_partial(&original, &partial, 1.0);
+            assert_eq!(settings.wb.mode, WbMode::Custom);
+            assert_eq!((settings.wb.temp, settings.wb.tint), expected, "{target:?}/{field}");
+            if target == Target::Any {
+                let xml = format!(
+                    r#"<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" {fields}/>"#
+                );
+                let preset = preset_from_xmp(&xml, "One WB coordinate").expect("a one-coordinate WB preset remains importable");
+                assert_eq!(preset.apply(&original, 1.0).wb, settings.wb);
+            }
+        }
+    }
+
+    #[test]
+    fn partial_white_balance_selects_a_whole_coordinate_family_without_axis_leakage() {
+        let mut original = DevelopSettings::for_raw(4800.0, 7.0);
+        original.wb.mode = WbMode::Custom;
+        for (fields, expected) in [
+            (
+                r#"crs:Temperature="5150" crs:Tint="13" crs:IncrementalTemperature="25" crs:IncrementalTint="-6""#,
+                [(5150.0, 13.0), (5150.0, 13.0), (rel_to_kelvin(25.0), -6.0), (rel_to_kelvin(25.0), -6.0)],
+            ),
+            (
+                r#"crs:Tint="13" crs:IncrementalTemperature="25" crs:IncrementalTint="-6""#,
+                [(4800.0, 13.0), (4800.0, 13.0), (rel_to_kelvin(25.0), -6.0), (rel_to_kelvin(25.0), -6.0)],
+            ),
+            (r#"crs:Temperature="5150" crs:Tint="13" crs:IncrementalTint="-6""#, [(5150.0, 13.0), (5150.0, 13.0), (4800.0, -6.0), (4800.0, -6.0)]),
+            (
+                r#"crs:Tint="13" crs:IncrementalTemperature="25""#,
+                [(4800.0, 13.0), (4800.0, 13.0), (rel_to_kelvin(25.0), 7.0), (rel_to_kelvin(25.0), 7.0)],
+            ),
+            (r#"crs:Tint="13" crs:AsShotTint="3""#, [(4800.0, 13.0), (4800.0, 13.0), (4800.0, 10.0), (4800.0, 10.0)]),
+        ] {
+            let p = wb_props(fields);
+            for (target, expected) in [Target::RawAbsolute, Target::Any, Target::Rendered, Target::RawRelative].into_iter().zip(expected) {
+                let settings = apply_partial(&original, &to_partial(&p, target), 1.0);
+                assert_eq!((settings.wb.temp, settings.wb.tint), expected, "{target:?}: {fields}");
+                assert_eq!(settings.wb.mode, WbMode::Custom);
+            }
+        }
+        // Incremental coordinates belong to relative targets; they cannot fill an absent
+        // absolute family for a DNG or another raw with a measured illuminant.
+        for fields in [r#"crs:IncrementalTemperature="25""#, r#"crs:IncrementalTint="-6""#] {
+            assert!(to_partial(&wb_props(fields), Target::RawAbsolute).get("wb").is_none());
+        }
+    }
+
+    #[test]
+    fn partial_white_balance_as_shot_ignores_numeric_coordinates_on_all_targets() {
+        for fields in [
+            r#"crs:Temperature="5150" crs:Tint="13" crs:IncrementalTemperature="25" crs:IncrementalTint="-6""#,
+            r#"crs:Tint="13" crs:IncrementalTint="-6""#,
+            r#"crs:Temperature="5150""#,
+        ] {
+            let p = wb_props(&format!(r#"crs:WhiteBalance="As Shot" {fields}"#));
+            for target in [Target::RawAbsolute, Target::Any, Target::Rendered, Target::RawRelative] {
+                let (partial, unmapped) = to_partial_report(&p, None, target, 1.5);
+                assert_eq!(partial, json!({"wb": {"mode": "asShot"}}));
+                assert!(unmapped.is_empty(), "explicit As Shot ignores numeric coordinates: {unmapped:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn partial_named_and_auto_wb_preserve_resolved_numeric_axis_as_custom() {
+        let mut original = DevelopSettings::for_raw(4800.0, 7.0);
+        original.wb.mode = WbMode::Custom;
+        for mode in ["Auto", "Daylight", "Cloudy", "Shade", "Tungsten", "Fluorescent", "Flash", "Custom"] {
+            for (target, fields, expected) in [
+                (Target::RawAbsolute, r#"crs:Tint="13""#, (4800.0, 13.0)),
+                (Target::Any, r#"crs:Tint="13""#, (4800.0, 13.0)),
+                (Target::Rendered, r#"crs:IncrementalTint="13""#, (4800.0, 13.0)),
+                (Target::RawRelative, r#"crs:Tint="13" crs:AsShotTint="3""#, (4800.0, 10.0)),
+            ] {
+                let p = wb_props(&format!(r#"crs:WhiteBalance="{mode}" {fields}"#));
+                let settings = apply_partial(&original, &to_partial(&p, target), 1.0);
+                assert_eq!(settings.wb.mode, WbMode::Custom, "{target:?}/{mode}");
+                assert_eq!((settings.wb.temp, settings.wb.tint), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn relative_raw_temperature_without_reference_keeps_upstream_guard_and_bounded_diagnostic() {
+        for reference in ["", r#"crs:AsShotTemperature="0""#, r#"crs:AsShotTemperature="-1""#, r#"crs:AsShotTemperature="NaN""#] {
+            for tint in ["", r#"crs:Tint="13" crs:AsShotTint="3""#] {
+                let fields = format!(r#"crs:Temperature="5150" crs:Exposure2012="0.3" {reference} {tint}"#);
+                let (partial, unmapped) = to_partial_report(&wb_props(&fields), None, Target::RawRelative, 1.5);
+                assert_eq!(partial, json!({"wb": {"mode": "asShot"}, "light": {"exposure": 0.3}}));
+                assert_eq!(unmapped, ["WhiteBalance (missing AsShotTemperature)"]);
+            }
+        }
+        // Presence of an incremental tint selects that family even if the Kelvin family
+        // cannot be shifted; do not leak its temperature or its unsupported-name warning.
+        let p = wb_props(r#"crs:Temperature="5150" crs:Tint="13" crs:IncrementalTint="-6""#);
+        let (partial, unmapped) = to_partial_report(&p, None, Target::RawRelative, 1.5);
+        assert_eq!(partial, json!({"wb": {"mode": "custom", "tint": -6.0}}));
+        assert!(unmapped.is_empty());
+    }
+
+    #[test]
+    fn panel_enable_switches_remain_reported_without_unverified_resets() {
+        let p = props(
+            r#"<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:EnableToneCurve="false" crs:ParametricShadows="80" crs:EnableDetail="False" crs:Sharpness="90" crs:EnableEffects="false" crs:GrainAmount="80" crs:Clarity2012="20" crs:EnableMystery="false"/>"#,
+        );
+        let (partial, unmapped) = to_partial_report(&p, None, Target::RawAbsolute, 1.5);
+        let settings = apply_partial(&DevelopSettings::default(), &partial, 1.0);
+        assert_eq!(settings.curve.shadows, 80.0);
+        assert_eq!(settings.detail.sharpen_amount, 90.0);
+        assert_eq!(settings.grain.amount, 80.0);
+        assert_eq!(settings.effects.clarity, 20.0);
+        assert_eq!(unmapped, vec!["EnableDetail", "EnableEffects", "EnableMystery", "EnableToneCurve"]);
+    }
 
     /// A hand-written sidecar in attribute form (as many tools write it).
     const SIDECAR: &str = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/">
@@ -592,10 +1021,11 @@ mod tests {
         assert_eq!(s.mixer.blue.sat, -22.0);
         assert_eq!(s.mixer.aqua.lum, 13.0);
         assert_eq!((s.curve.shadows, s.curve.highlights, s.curve.split_mid), (5.0, -8.0, 55.0));
-        assert_eq!(s.curve.master.len(), 4);
+        let master = s.curve.master.sparse_points().unwrap();
+        assert_eq!(master.len(), 4);
         assert_eq!(s.curve.refine_saturation, 40.0);
-        assert!((s.curve.master[1].x - 64.0 / 255.0).abs() < 1e-9 && (s.curve.master[1].y - 52.0 / 255.0).abs() < 1e-9);
-        assert!(s.curve.red.is_empty(), "identity channel curve maps to no curve");
+        assert!((master[1].x - 64.0 / 255.0).abs() < 1e-9 && (master[1].y - 52.0 / 255.0).abs() < 1e-9);
+        assert!(s.curve.red.sparse_points().unwrap().is_empty(), "identity channel curve maps to no curve");
         assert_eq!((s.grading.shadows.hue, s.grading.shadows.sat), (210.0, 14.0));
         assert_eq!((s.grading.highlights.hue, s.grading.highlights.sat), (40.0, 9.0));
         assert_eq!((s.grading.midtones.hue, s.grading.midtones.sat), (120.0, 6.0));
@@ -626,8 +1056,8 @@ mod tests {
             let x = SIDECAR.replace("<rdf:li>64, 52</rdf:li>", &format!("<rdf:li>{bad}</rdf:li>"));
             let partial = to_partial(&props(&x), Target::RawAbsolute);
             let s = apply_partial(&DevelopSettings::for_raw(5000.0, 0.0), &partial, 1.0);
-            assert!(s.curve.master.is_empty(), "{bad}: {:?}", s.curve.master);
-            assert!(s.curve.master.iter().all(|p| p.x.is_finite() && p.y.is_finite()));
+            assert_eq!(s.curve.master.sparse_points(), Some([].as_slice()), "{bad}: {:?}", s.curve.master);
+            assert!(s.curve.master.is_identity());
         }
     }
 
@@ -687,7 +1117,7 @@ mod tests {
         let x = r#"<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
              crs:WhiteBalance="Daylight" crs:Temperature="5500" crs:Tint="10" crs:AlreadyApplied="True"/>"#;
         let p = props(x);
-        assert_eq!(to_partial(&p, Target::RawAbsolute), json!({"wb": {"mode": "daylight"}}));
+        assert_eq!(to_partial(&p, Target::RawAbsolute), json!({"wb": {"mode": "custom", "temp": 5500.0, "tint": 10.0, "scale": "kelvin"}}));
         assert!(!has_adjustments(&p));
         let bookkeeping = r#"<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
              xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:Version="1" crs:HasSettings="True"/>"#;
@@ -733,8 +1163,7 @@ mod tests {
         let (partial, unmapped) = to_partial_report(&p, None, Target::RawRelative, 1.5);
         assert_eq!(partial["wb"], json!({"mode": "asShot"}));
         assert_eq!(partial["light"]["exposure"], 0.3);
-        assert_eq!(unmapped.len(), 1, "{unmapped:?}");
-        assert!(unmapped[0].starts_with("Temperature, Tint"), "{unmapped:?}");
+        assert_eq!(unmapped, ["WhiteBalance (missing AsShotTemperature)"]);
         // a raw with a measured illuminant and a rendered file read it as before, and report nothing
         assert_eq!(to_partial(&p, Target::RawAbsolute)["wb"]["temp"], 3578.0);
         assert_eq!(to_partial(&p, Target::Rendered)["wb"]["temp"], 3578.0);
@@ -788,8 +1217,10 @@ mod tests {
         let bare = props(&x.replace(r#" crs:AsShotTemperature="5400" crs:AsShotTint="-1""#, ""));
         assert_eq!(to_partial(&bare, a7m3)["wb"]["temp"], 4650.0);
         assert_eq!(to_partial(&bare, a7m2)["wb"], json!({"mode": "asShot"}));
-        // a named preset carries no numbers either way
-        let daylight = props(&x.replace(r#"crs:WhiteBalance="Custom""#, r#"crs:WhiteBalance="Daylight""#));
+        // Resolved numbers take precedence over the name; a name-only preset keeps its mode.
+        let daylight_xml = x.replace(r#"crs:WhiteBalance="Custom""#, r#"crs:WhiteBalance="Daylight""#);
+        assert_eq!(to_partial(&props(&daylight_xml), a7m3)["wb"], json!({"mode": "custom", "temp": 4650.0, "tint": 3.0, "scale": "kelvin"}));
+        let daylight = props(&daylight_xml.replace(r#" crs:Temperature="4650" crs:Tint="+3""#, ""));
         assert_eq!(to_partial(&daylight, a7m3)["wb"], json!({"mode": "daylight"}));
     }
 
@@ -879,5 +1310,59 @@ mod tests {
         assert!(apply_partial(&d, &to_partial(&p, Target::Any), 1.0).optics.lens_profile);
         let on = props(&preset_packet("", "").replace(r#"crs:LensProfileEnable="0""#, r#"crs:LensProfileEnable="1""#));
         assert!(apply_partial(&DevelopSettings::default(), &to_partial(&on, Target::Any), 1.0).optics.lens_profile);
+    }
+    #[test]
+    fn legacy_and_modern_identity_curves_reset_existing_points() {
+        let mut before = DevelopSettings::default();
+        before.curve.master = vec![lightcraft_geom::Point::new(0.0, 0.1), lightcraft_geom::Point::new(1.0, 0.9)].into();
+        for key in ["crs:ToneCurve", "crs:ToneCurvePV2012"] {
+            let p = Props::from([(key.to_string(), vec!["0, 0".into(), "255, 255".into()])]);
+            let patch = to_partial(&p, Target::RawAbsolute);
+            assert_eq!(patch["curve"]["master"], json!([]));
+            assert!(apply_partial(&before, &patch, 1.0).curve.master.sparse_points().unwrap().is_empty(), "{key}");
+        }
+        let p = Props::from([
+            ("crs:ToneCurve".into(), vec!["0, 0".into(), "255, 255".into()]),
+            ("crs:ToneCurvePV2012".into(), vec!["0, 10".into(), "255, 240".into()]),
+        ]);
+        let s = apply_partial(&before, &to_partial(&p, Target::RawAbsolute), 1.0);
+        let master = s.curve.master.sparse_points().unwrap();
+        assert_eq!(master.len(), 2);
+        assert!((master[0].y - 10.0 / 255.0).abs() < 1e-12, "modern curve still wins");
+    }
+
+    #[test]
+    fn malformed_curve_keeps_valid_exposure_and_existing_curve() {
+        let mut before = DevelopSettings::default();
+        before.curve.master = vec![lightcraft_geom::Point::new(0.0, 0.1), lightcraft_geom::Point::new(1.0, 0.9)].into();
+        for bad in ["NaN, 128", "128, NaN", "inf, 128", "128, -inf"] {
+            let p = Props::from([
+                ("crs:Exposure2012".into(), vec!["2".into()]),
+                ("crs:ToneCurvePV2012".into(), vec!["0, 0".into(), bad.into(), "255, 255".into()]),
+            ]);
+            let (patch, unmapped) = to_partial_report(&p, None, Target::RawAbsolute, 1.5);
+            let s = apply_partial(&before, &patch, 1.0);
+            assert_eq!(s.light.exposure, 2.0, "{bad}");
+            assert_eq!(s.curve.master, before.curve.master, "{bad}");
+            assert!(unmapped.iter().any(|k| k == "ToneCurvePV2012"), "{bad}");
+        }
+    }
+
+    #[test]
+    fn interior_diagonal_curve_knots_survive_crs_import() {
+        for (key, channel) in
+            [("ToneCurvePV2012", "master"), ("ToneCurvePV2012Red", "red"), ("ToneCurvePV2012Green", "green"), ("ToneCurvePV2012Blue", "blue")]
+        {
+            // The upstream importer requires a complete quartet before applying RGB curves.
+            let mut p = Props::from(
+                ["ToneCurvePV2012", "ToneCurvePV2012Red", "ToneCurvePV2012Green", "ToneCurvePV2012Blue"]
+                    .map(|k| (format!("crs:{k}"), vec!["0, 0".into(), "255, 255".into()])),
+            );
+            p.insert(format!("crs:{key}"), vec!["64, 64".into(), "192, 192".into()]);
+            let patch = to_partial(&p, Target::RawAbsolute);
+            assert_eq!(patch["curve"][channel].as_array().unwrap().len(), 2, "{key}");
+            p.insert(format!("crs:{key}"), vec!["0.0, 0".into(), "128, 128".into(), "255, 255.0".into()]);
+            assert_eq!(to_partial(&p, Target::RawAbsolute)["curve"][channel], json!([]), "{key}");
+        }
     }
 }

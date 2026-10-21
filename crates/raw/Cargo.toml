@@ -18,6 +18,7 @@ serde = { workspace = true }
 thiserror = { workspace = true }
 rayon = { workspace = true }
 miniz_oxide = { workspace = true }
+md-5 = { workspace = true }
 zune-jpeg = { workspace = true }
 zune-core = { workspace = true }
 jpeg-encoder = { workspace = true }

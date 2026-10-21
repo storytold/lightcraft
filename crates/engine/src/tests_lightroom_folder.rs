@@ -174,6 +174,9 @@ fn odd_folders_never_fail_the_check() {
         std::fs::write(lr.join("b.lrcat"), b"x").unwrap();
         assert_eq!(lightroom_catalog_at(&lr), Some(LightroomPlace { catalog: Some(lr.join("b.lrcat")) }), "non-UTF-8 entries skipped");
         // a symlink to a catalog folder is one too; a dangling one is not
+        let lr = root.join("catalog-target");
+        std::fs::create_dir_all(&lr).unwrap();
+        std::fs::write(lr.join("b.lrcat"), b"x").unwrap();
         std::os::unix::fs::symlink(&lr, root.join("link")).unwrap();
         assert!(lightroom_catalog_at(&root.join("link")).is_some());
         std::os::unix::fs::symlink(root.join("nowhere"), root.join("dangling")).unwrap();

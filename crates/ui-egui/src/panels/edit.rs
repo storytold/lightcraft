@@ -16,6 +16,40 @@ use crate::state::RightPanel;
 use crate::theme::Tokens;
 use crate::widgets::{BAND_COLORS, SliderOut, divider, flyout_row, hex, register, section_header, slider, text_button};
 
+/// Keep a dragged knot between its neighbours, including tightly spaced imported knots.
+/// Invalid/stale indices or malformed ordering leave the saved curve untouched.
+fn dragged_curve_point(points: &[Point], index: usize, pointer: Point) -> Option<Point> {
+    let current = points.get(index)?;
+    if !current.x.is_finite() || !(0.0..=1.0).contains(&current.x) || !pointer.x.is_finite() || !pointer.y.is_finite() {
+        return None;
+    }
+    let mut lo = 0.0;
+    if let Some(previous) = index.checked_sub(1).and_then(|i| points.get(i)) {
+        if !previous.x.is_finite() || previous.x < 0.0 || previous.x >= current.x {
+            return None;
+        }
+        lo = previous.x + (0.5 * (current.x - previous.x)).min(0.01);
+        // At representational limits, retaining the current x still preserves order.
+        if lo <= previous.x || lo > current.x {
+            lo = current.x;
+        }
+    }
+    let mut hi = 1.0;
+    if let Some(next) = index.checked_add(1).and_then(|i| points.get(i)) {
+        if !next.x.is_finite() || next.x > 1.0 || next.x <= current.x {
+            return None;
+        }
+        hi = next.x - (0.5 * (next.x - current.x)).min(0.01);
+        if hi >= next.x || hi < current.x {
+            hi = current.x;
+        }
+    }
+    if !lo.is_finite() || !hi.is_finite() || lo > hi {
+        return None;
+    }
+    Some(Point::new(pointer.x.max(lo).min(hi), pointer.y.clamp(0.0, 1.0)))
+}
+
 /// Commit a slider interaction: begin → live updates → end, so a drag is one undo step.
 pub fn apply_slider_out(
     app: &mut LightcraftApp,
@@ -95,6 +129,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         wb.tint = tint;
     }
     let preview_only = app.session.catalog.photo(id).and_then(|p| p.preview_only.clone());
+    let unsupported_edits = app.session.unsupported_edits(id);
 
     if app.ui.histogram {
         histogram(app, ui, id);
@@ -142,6 +177,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         if reload {
             reload_preview_only(app, ui.ctx(), id);
         }
+    }
+    if !unsupported_edits.is_empty() {
+        egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 0, bottom: 12 }).show(ui, |ui| {
+            crate::widgets::unsupported_edits_notice(ui, "edit", &unsupported_edits);
+        });
     }
     let n = app.session.selection.ids.len();
     if n > 1 && matches!(app.ui.view, crate::state::ViewMode::PhotoGrid | crate::state::ViewMode::SquareGrid) {
@@ -450,6 +490,10 @@ fn profile_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings)
     let heading = |ui: &mut egui::Ui, s: &str| {
         ui.label(egui::RichText::new(crate::i18n::tr(s)).font(t.semibold(11.5)).color(t.text_dim));
     };
+    if let Some(look) = d.profile.imported_look() {
+        item(ui, "current", lightcraft_develop::IMPORTED_LOOK_ID, &look.name, &mut pick);
+        ui.separator();
+    }
     for (title, key, ids) in [("Favorites", "fav", app.session.profile_favorites.clone()), ("Recent", "recent", app.session.profile_recent.clone())] {
         let list: Vec<_> = ids.iter().filter_map(|id| app.session.profile_info(id).map(|(name, _)| (id.as_str(), name))).collect();
         if list.is_empty() {
@@ -485,7 +529,9 @@ fn profile_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings)
         register(ui.ctx(), format!("profileMenu:lutGroupMenu:{g}"), r.response.rect);
     }
     ui.separator();
-    if let Some((name, _)) = app.session.profile_info(cur) {
+    if cur != lightcraft_develop::IMPORTED_LOOK_ID
+        && let Some((name, _)) = app.session.profile_info(cur)
+    {
         let fav = app.session.profile_favorites.iter().any(|f| f == cur);
         let label = if fav {
             crate::i18n::tr_format!("Remove “{}” from Favorites", crate::i18n::profile_label(cur, name))
@@ -510,6 +556,7 @@ fn profile_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings)
     {
         let mut s = d.clone();
         s.profile.id = hovered_id.clone();
+        s.profile.imported = None;
         s.profile.amount = 100.0;
         app.hover_preview =
             Some(crate::HoverPreview { label: crate::i18n::tr_format!("Profile: {}", crate::i18n::profile_label(hovered_id, name)), settings: s });
@@ -1016,35 +1063,29 @@ fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, d: &Dev
         control(app, ui, d, "curve.refineSaturation", true);
         return;
     }
-    let pts_of = |d: &DevelopSettings| -> Vec<Point> {
-        let v = match ch.as_str() {
-            "red" => &d.curve.red,
-            "green" => &d.curve.green,
-            "blue" => &d.curve.blue,
-            _ => &d.curve.master,
-        };
-        // in the order the curve is drawn (points from a sidecar, a preset or an agent can come
-        // unsorted or not finite): the drag below keeps each point between its neighbours
-        let mut v: Vec<Point> = v.iter().copied().filter(|q| q.x.is_finite() && q.y.is_finite()).collect();
-        v.sort_by(|a, b| a.x.total_cmp(&b.x));
-        if v.len() < 2 { vec![Point::new(0.0, 0.0), Point::new(1.0, 1.0)] } else { v }
+    let model = match ch.as_str() {
+        "red" => &d.curve.red,
+        "green" => &d.curve.green,
+        "blue" => &d.curve.blue,
+        _ => &d.curve.master,
     };
-    let pts = pts_of(d);
-    let curve = lightcraft_color::spline::MonotoneCurve::new(&pts.iter().map(|q| (q.x, q.y)).collect::<Vec<_>>());
+    let pts = model.editable_points();
+    let curve = model.render_lut();
     let color = match ch.as_str() {
         "red" => hex("#dd3333"),
         "green" => hex("#33bb55"),
         "blue" => hex("#3377ee"),
         _ => Color32::from_gray(225),
     };
-    let line: Vec<Pos2> = (0..=96).map(|i| to_screen(i as f64 / 96.0, curve.eval(i as f64 / 96.0).clamp(0.0, 1.0))).collect();
+    let line: Vec<Pos2> = (0..=256).map(|i| to_screen(i as f64 / 256.0, curve.eval(i as f32 / 256.0).clamp(0.0, 1.0) as f64)).collect();
     p.add(egui::Shape::line(line, Stroke::new(2.0, color)));
     // interaction: drag a point (both axes, between its neighbours; ⌥ = fine), drag empty space to add and
     // drag a new point, click empty space to add, double-click a point to delete it
     let drag_id = egui::Id::new(("curve-drag", &ch));
     // the point being dragged (stored as `Option<usize>` so a stale value can be cleared)
     let mut dragging: Option<usize> = ui.data(|dd| dd.get_temp::<Option<usize>>(drag_id)).flatten();
-    let nearest = |q: Pos2| pts.iter().enumerate().map(|(i, p)| (i, to_screen(p.x, p.y).distance(q))).min_by(|a, b| a.1.total_cmp(&b.1));
+    let nearest =
+        |q: Pos2| pts.iter().enumerate().map(|(i, p)| (i, to_screen(p.x, p.y.clamp(0.0, 1.0)).distance(q))).min_by(|a, b| a.1.total_cmp(&b.1));
     let hovered = resp.hover_pos().and_then(nearest).filter(|(_, dist)| *dist < 10.0).map(|(i, _)| i);
     if dragging.is_some() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
@@ -1052,7 +1093,7 @@ fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, d: &Dev
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
     }
     for (i, q) in pts.iter().enumerate() {
-        let c = to_screen(q.x, q.y);
+        let c = to_screen(q.x, q.y.clamp(0.0, 1.0));
         if dragging == Some(i) || (dragging.is_none() && hovered == Some(i)) {
             p.circle_filled(c, 5.5, color);
             p.circle_stroke(c, 5.5, Stroke::new(1.0, t.canvas));
@@ -1070,17 +1111,17 @@ fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, d: &Dev
             t.text_dim,
         );
     }
-    let mut new_pts = None;
+    let mut command = None;
+    let mut select_result = false;
     if resp.double_clicked()
         && let Some(q) = resp.interact_pointer_pos()
         && let Some((i, dist)) = nearest(q)
         && dist < 10.0
         && i != 0
-        && i != pts.len() - 1
+        && i.checked_add(1) != Some(pts.len())
     {
-        let mut v = pts.clone();
-        v.remove(i);
-        new_pts = Some(v);
+        command = Some(json!({"channel":ch, "action":"remove", "index":i}));
+        select_result = true;
     } else if resp.drag_started()
         && let Some(q) = ui.input(|i| i.pointer.press_origin()).or(resp.interact_pointer_pos())
     {
@@ -1090,57 +1131,44 @@ fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, d: &Dev
             Some((i, dist)) if dist < 10.0 => dragging = Some(i),
             _ => {
                 let (x, y) = from_screen(q);
-                let mut v = pts.clone();
-                let i = v.iter().position(|p| p.x > x).unwrap_or(v.len());
-                v.insert(i, Point::new(x, y));
-                dragging = Some(i);
-                new_pts = Some(v);
+                command = Some(json!({"channel":ch, "action":"add", "x":x, "y":y}));
+                select_result = true;
             }
         }
     } else if resp.dragged()
         && let (Some(i), Some(q)) = (dragging, resp.interact_pointer_pos())
     {
-        let mut v = pts.clone();
         // ⌥-drag = fine adjustment, as in Lightroom: the point moves a tenth of the pointer's
         // motion (relative to where it is, so pressing ⌥ mid-drag doesn't make it jump)
         let fine = ui.input(|i| i.modifiers.alt);
-        let (mut x, y) = match v.get(i) {
+        let (x, y) = match pts.get(i) {
             Some(cur) if fine => {
                 let dd = ui.input(|i| i.pointer.delta());
                 ((cur.x + (dd.x / r.width()) as f64 * 0.1).clamp(0.0, 1.0), (cur.y - (dd.y / r.height()) as f64 * 0.1).clamp(0.0, 1.0))
             }
             _ => from_screen(q),
         };
-        if i < v.len() {
-            let lo = if i == 0 { 0.0 } else { v[i - 1].x + 0.01 };
-            let hi = if i + 1 >= v.len() { 1.0 } else { v[i + 1].x - 0.01 };
-            if i == 0 {
-                x = x.min(hi);
-            } else if i + 1 == v.len() {
-                x = x.max(lo);
-            } else if lo <= hi {
-                x = x.clamp(lo, hi);
-            } else {
-                // neighbours closer than the 0.02 spacing (two clicks side by side, or points
-                // from a file) leave no room: the point stays midway (`clamp` would panic: min above max)
-                x = (v[i - 1].x + v[i + 1].x) / 2.0;
+        if let Some(mut point) = dragged_curve_point(&pts, i, Point::new(x, y)) {
+            if (i == 0 || i.checked_add(1) == Some(pts.len()))
+                && let Some(endpoint) = pts.get(i)
+            {
+                point.x = endpoint.x;
             }
-            v[i] = Point::new(x, y);
-            new_pts = Some(v);
+            command = Some(json!({"channel":ch, "action":"move", "index":i, "x":point.x, "y":point.y}));
+            select_result = true;
         }
     } else if resp.clicked()
         && let Some(q) = resp.interact_pointer_pos()
         && nearest(q).is_none_or(|(_, dist)| dist >= 10.0)
     {
         let (x, y) = from_screen(q);
-        let mut v = pts.clone();
-        let i = v.iter().position(|p| p.x > x).unwrap_or(v.len());
-        v.insert(i, Point::new(x, y));
-        new_pts = Some(v);
+        command = Some(json!({"channel":ch, "action":"add", "x":x, "y":y}));
     }
-    if let Some(v) = new_pts {
-        let arr: Vec<[f64; 2]> = v.iter().map(|p| [p.x, p.y]).collect();
-        let _ = app.run("develop.curve", json!({"channel": ch, "points": arr}));
+    if let Some(params) = command {
+        let result = app.run("develop.curvePoint", params);
+        if select_result {
+            dragging = result.ok().and_then(|r| r.get("index").and_then(Value::as_u64)).and_then(|i| usize::try_from(i).ok());
+        }
     }
     if resp.drag_stopped() {
         dragging = None;
@@ -1879,5 +1907,50 @@ mod tests {
         assert_eq!(reset_tip(&rebound, false), "Reset all edits (Ctrl+Alt+R)");
         let unbound: crate::shortcuts::Keymap = [("develop.reset".to_string(), String::new())].into();
         assert_eq!(reset_tip(&unbound, false), "Reset all edits");
+    }
+}
+
+#[cfg(test)]
+mod curve_drag_tests {
+    use super::*;
+
+    #[test]
+    fn close_knots_allow_vertical_drag_and_do_not_cross_neighbours() {
+        let points = [Point::new(0.499, 0.25), Point::new(0.5, 0.5), Point::new(0.501, 0.75)];
+        let vertical = dragged_curve_point(&points, 1, Point::new(0.5, 0.8)).unwrap();
+        assert_eq!(vertical, Point::new(0.5, 0.8));
+        for x in [0.0, 0.5, 1.0] {
+            let moved = dragged_curve_point(&points, 1, Point::new(x, 0.8)).unwrap();
+            assert!(moved.x > points[0].x && moved.x < points[2].x);
+        }
+    }
+
+    #[test]
+    fn ordinary_curve_drag_margin_and_domain_are_preserved() {
+        let points = [Point::new(0.0, 0.0), Point::new(0.3, 0.3), Point::new(0.6, 0.6), Point::new(1.0, 1.0)];
+        assert_eq!(dragged_curve_point(&points, 1, Point::new(1.0, 0.5)).unwrap().x, 0.59);
+        assert_eq!(dragged_curve_point(&points, 0, Point::new(-1.0, -1.0)).unwrap(), Point::new(0.0, 0.0));
+        assert_eq!(dragged_curve_point(&points, 3, Point::new(2.0, 2.0)).unwrap(), Point::new(1.0, 1.0));
+        let close = [Point::new(0.0, 0.0), Point::new(0.001, 1.0)];
+        assert!(dragged_curve_point(&close, 0, Point::new(1.0, 0.5)).unwrap().x < close[1].x);
+        assert!(dragged_curve_point(&close, 1, Point::new(0.0, 0.5)).unwrap().x > close[0].x);
+    }
+
+    #[test]
+    fn malformed_curve_drag_inputs_are_ignored_without_panicking() {
+        let points = [Point::new(0.0, 0.0), Point::new(0.5, 0.5), Point::new(1.0, 1.0)];
+        assert!(dragged_curve_point(&points, usize::MAX, Point::new(0.5, 0.5)).is_none());
+        assert!(dragged_curve_point(&[], 0, Point::new(0.5, 0.5)).is_none());
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(dragged_curve_point(&points, 1, Point::new(bad, 0.5)).is_none());
+            assert!(dragged_curve_point(&points, 1, Point::new(0.5, bad)).is_none());
+            let mut malformed = points;
+            malformed[0].x = bad;
+            assert!(dragged_curve_point(&malformed, 1, Point::new(0.5, 0.5)).is_none());
+        }
+        let duplicate = [Point::new(0.5, 0.0), Point::new(0.5, 1.0)];
+        assert!(dragged_curve_point(&duplicate, 1, Point::new(0.6, 0.5)).is_none());
+        let reversed = [Point::new(0.8, 0.0), Point::new(0.5, 1.0)];
+        assert!(dragged_curve_point(&reversed, 1, Point::new(0.6, 0.5)).is_none());
     }
 }

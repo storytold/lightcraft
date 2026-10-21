@@ -2,7 +2,7 @@
 //!
 //! Sources: TIFF 6.0 (the raw image is a standard CFA SubIFD), Laurent Clévy's NEF structure notes (prose: IFD
 //! layout, SubIFDs, maker note header) and the ExifTool Nikon tag-name documentation (`0x000c` WB_RBLevels,
-//! `0x003d` BlackLevel, `0x0096` NEFLinearizationTable). The Huffman-compressed data (compression 34713) is decoded
+//! `0x003d` BlackLevel, `0x0045` CropArea, `0x0096` NEFLinearizationTable). The Huffman-compressed data (compression 34713) is decoded
 //! by [`super::nefc`], which documents its clean-room sources; "lossy after split" files are decoded when their strip follows the
 //! rule documented there; files it can't decode are reported as [`RawError::Unsupported`] and their embedded previews still work. So are High Efficiency NEFs
 //! (HE / HE★, Z 8, Z 9, Z 6III, Z f): they keep compression 34713 but carry a wavelet codestream that starts with
@@ -47,14 +47,15 @@ fn nrw_black(mn: Option<&makernote::MakerNote>, bits: u32) -> Option<f32> {
 
 /// Nikon CropArea is `[left, top, width, height]` in sensor pixels (maker-note tag documentation).
 /// Keep the active area/CFA origin unchanged: the default crop is applied after demosaicing.
-fn default_crop(mn: Option<&makernote::MakerNote>, w: usize, h: usize) -> Rect {
-    let fallback = Rect::new(0, 0, w, h);
-    let Some(values) = mn.and_then(|m| m.ifd.u64s(CROP_AREA)) else { return fallback };
-    let [x, y, width, height] = values.as_slice() else { return fallback };
+/// Validate against the stored sensor, before guessing which trailing columns might be masked:
+/// a valid declared crop can include a naturally dark edge that the guess would remove.
+fn default_crop(mn: Option<&makernote::MakerNote>, w: usize, h: usize) -> Option<Rect> {
+    let values = mn.and_then(|m| m.ifd.u64s(CROP_AREA))?;
+    let [x, y, width, height] = values.as_slice() else { return None };
     if *width == 0 || *height == 0 || x.checked_add(*width).is_none_or(|v| v > w as u64) || y.checked_add(*height).is_none_or(|v| v > h as u64) {
-        return fallback;
+        return None;
     }
-    Rect::new(*x as usize, *y as usize, *width as usize, *height as usize)
+    Some(Rect::new(*x as usize, *y as usize, *width as usize, *height as usize))
 }
 
 /// A body that records no CropArea, measured on its own files: the image area inside the sensor data (where the
@@ -185,6 +186,34 @@ pub(crate) fn pixel_aspect_of(raw: &Ifd) -> f32 {
     }
 }
 
+/// Measured full-image D5000 framing when the file supplies no crop rectangle.
+/// Three independent NEF / full-sensor DNG pairs rendered by Lightroom agreed on
+/// this origin. It is not a centred crop: keep the odd column offset out of the
+/// CFA/black-level phase and apply it only after demosaicing, like CropArea.
+fn measured_d5000_crop(ifd0: &Ifd, raw: &Ifd, mn: Option<&makernote::MakerNote>, cfa: &Cfa) -> Option<Rect> {
+    let mn = mn?;
+    if ifd0.string(t::MAKE).as_deref() != Some("NIKON CORPORATION")
+        || ifd0.string(t::MODEL).as_deref() != Some("NIKON D5000")
+        || raw.u32(t::IMAGE_WIDTH) != Some(4352)
+        || raw.u32(t::IMAGE_LENGTH) != Some(2868)
+        || raw.u64s(t::BITS_PER_SAMPLE).as_deref() != Some(&[12])
+        || raw.u16(t::COMPRESSION) != Some(t::compression::NIKON)
+        || raw.u16(t::SAMPLES_PER_PIXEL).unwrap_or(1) != 1
+        || raw.u32(t::NEW_SUBFILE_TYPE).unwrap_or(0) != 0
+        || cfa.width != 2
+        || cfa.height != 2
+        || cfa.pattern != [1, 2, 0, 1]
+        || [t::DEFAULT_CROP_ORIGIN, t::DEFAULT_CROP_SIZE, t::ACTIVE_AREA].iter().any(|&tag| raw.contains(tag))
+        || mn.ifd.contains(CROP_AREA)
+        || mn.ifd.contains(0x0016) // ImageBoundary; do not override even a malformed declaration.
+        // CropHiSpeed (ExifTool Nikon tag documentation): only the observed full-image mode.
+        || mn.ifd.u64s(0x001b).as_deref() != Some(&[0, 4352, 2868, 4352, 2868, 0, 0])
+    {
+        return None;
+    }
+    Some(Rect::new(11, 10, 4288, 2848))
+}
+
 fn raw_ifd(tiff: &Tiff) -> Option<&Ifd> {
     tiff.all_ifds()
         .into_iter()
@@ -266,7 +295,6 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     };
     let model = ifd0.string(t::MODEL).unwrap_or_default();
     let body = measured_body(&model, w, h, bits);
-    let active_w = trailing_masked_columns(samples, w, bits);
     // the white level is measured from the whole image (or known for a measured body); the probe (no samples in its
     // result) takes the nominal one
     let white = match (body.and_then(|b| b.white), mode) {
@@ -274,9 +302,17 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         (None, Mode::Full) => white_from_data(samples, bits),
         (None, Mode::Header) => ((1u32 << bits.clamp(1, 16)) - 1) as f32,
     };
-    let crop = match body {
-        Some(&MeasuredBody { crop: (x, y, cw, ch), .. }) if x + cw <= active_w && y + ch <= h => Rect::new(x, y, cw, ch),
-        _ => default_crop(mn.as_ref(), active_w, h),
+    let (active_area, crop) = match default_crop(mn.as_ref(), w, h).or_else(|| measured_d5000_crop(ifd0, raw, mn.as_ref(), &cfa)) {
+        Some(crop) => (Rect::new(0, 0, w, h), crop),
+        None => {
+            let active_w = trailing_masked_columns(samples, w, bits);
+            let active = Rect::new(0, 0, active_w, h);
+            let crop = match body {
+                Some(&MeasuredBody { crop: (x, y, cw, ch), .. }) if x + cw <= active_w && y + ch <= h => Rect::new(x, y, cw, ch),
+                _ => active,
+            };
+            (active, crop)
+        }
     };
     let pixel_aspect = pixel_aspect_of(raw);
     let mut metadata = lightcraft_meta::from_tiff(&tiff);
@@ -295,7 +331,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         bits,
         black,
         white: vec![white],
-        active_area: Rect::new(0, 0, active_w, h),
+        active_area,
         crop,
         orientation: Orientation::from_exif(ifd0.u16(t::ORIENTATION).unwrap_or(1)),
         color: ColorData::default(),
@@ -303,10 +339,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         linearized: false,
         pixel_aspect,
         // Nikon's in-file distortion correction, about the optical centre (which follows the sensor shift)
-        opcodes: OpcodeLists {
-            list3: super::nef_lens::distortion(&model, raw, Rect::new(0, 0, active_w, h), crop).into_iter().collect(),
-            ..Default::default()
-        },
+        opcodes: OpcodeLists { list3: super::nef_lens::distortion(&model, raw, active_area, crop).into_iter().collect(), ..Default::default() },
         metadata,
         lens_metadata: Default::default(),
     };
@@ -497,7 +530,7 @@ mod tests {
             if let Some(v) = note {
                 let mut mn = IfdBuilder::new();
                 mn.set(0x001e, Value::Short(vec![v]));
-                let mut bytes = b"Nikon   ".to_vec();
+                let mut bytes = b"Nikon\x00\x02\x10\x00\x00".to_vec();
                 bytes.extend(TiffWriter::new(ByteOrder::Little, false).write(&[mn]).unwrap());
                 exif.set(t::MAKER_NOTE, Value::Undefined(bytes));
             }
@@ -707,6 +740,47 @@ mod tests {
     }
 
     #[test]
+    fn measured_d5000_crop_requires_the_verified_sensor_mode_and_no_declared_crop() {
+        let mut note = IfdBuilder::new();
+        note.set(0x001b, Value::Short(vec![0, 4352, 2868, 4352, 2868, 0, 0]));
+        // Metadata-only fixture: no 12 MP allocation or fabricated compressed image needed.
+        let bytes = nef_with_note(t::compression::NIKON, 12, vec![vec![0]], 4352, 2868, 2868, Some(note));
+        let parsed = Tiff::parse(&bytes).unwrap();
+        let mut root = parsed.ifds[0].clone();
+        root.entries.iter_mut().find(|e| e.tag == t::MODEL).unwrap().value = Value::Ascii("NIKON D5000".into());
+        let raw = raw_ifd(&parsed).unwrap();
+        let entry = parsed.exif().unwrap().get(t::MAKER_NOTE).unwrap();
+        let mn = makernote::parse_makernote(&bytes, entry.offset, entry.count() as u64, parsed.order, "NIKON CORPORATION").unwrap();
+        let cfa = Cfa::bayer_static("GBRG");
+        assert_eq!(measured_d5000_crop(&root, raw, Some(&mn), &cfa), Some(Rect::new(11, 10, 4288, 2848)));
+        assert_eq!(measured_d5000_crop(&root, raw, None, &cfa), None);
+        assert_eq!(measured_d5000_crop(&root, raw, Some(&mn), &Cfa::bayer_static("RGGB")), None);
+        for (tag, value) in [(t::MAKE, "OTHER"), (t::MODEL, "NIKON D3500")] {
+            let mut other = root.clone();
+            other.entries.iter_mut().find(|e| e.tag == tag).unwrap().value = Value::Ascii(value.into());
+            assert_eq!(measured_d5000_crop(&other, raw, Some(&mn), &cfa), None);
+        }
+        for (tag, value) in [
+            (t::IMAGE_WIDTH, Value::Long(vec![4288])),
+            (t::IMAGE_LENGTH, Value::Long(vec![2848])),
+            (t::BITS_PER_SAMPLE, Value::Short(vec![14])),
+            (t::COMPRESSION, Value::Short(vec![1])),
+            (t::NEW_SUBFILE_TYPE, Value::Long(vec![1])),
+        ] {
+            let mut other = raw.clone();
+            other.entries.iter_mut().find(|e| e.tag == tag).unwrap().value = value;
+            assert_eq!(measured_d5000_crop(&root, &other, Some(&mn), &cfa), None);
+        }
+        for (tag, value) in [(0x001b, vec![1, 4352, 2868, 4352, 2868, 0, 0]), (CROP_AREA, vec![0]), (0x0016, vec![0])] {
+            let mut other = mn.clone();
+            // A supplied crop/boundary, even malformed, must keep the old path.
+            other.ifd.entries[0].tag = tag;
+            other.ifd.entries[0].value = Value::Short(value);
+            assert_eq!(measured_d5000_crop(&root, raw, Some(&other), &cfa), None);
+        }
+    }
+
+    #[test]
     fn black_level_tag_is_in_14_bit_units() {
         let (w, h) = (16usize, 4usize);
         let words: Vec<u8> = (0..w * h).flat_map(|i| (100 + i as u16).to_be_bytes()).collect();
@@ -718,6 +792,138 @@ mod tests {
         let black = |bits| crate::decode(&nef_with_note(1, bits, vec![words.clone()], w as u32, h as u32, h as u32, Some(note()))).unwrap().black;
         assert_eq!(black(12).values, vec![100.0, 101.0, 102.0, 103.0]);
         assert_eq!(black(14).values, vec![400.0, 404.0, 408.0, 412.0]);
+    }
+
+    #[test]
+    fn declared_crop_preserves_sensor_and_cfa_phase_for_full_and_binned_development() {
+        let (w, h) = (32usize, 24usize);
+        let cfa = Cfa::bayer_static("BGGR");
+        let black = [100u16, 101, 102, 103];
+        let levels = [800u16, 400, 200];
+        let samples: Vec<u16> = (0..w * h)
+            .map(|i| {
+                let (x, y) = (i % w, i / w);
+                black[(y % 2) * 2 + x % 2] + levels[cfa.color_at(x, y) as usize]
+            })
+            .collect();
+        let words: Vec<u8> = samples.iter().flat_map(|v| v.to_be_bytes()).collect();
+        // Arbitrary even and odd offsets: the crop must not shift the Bayer or per-position black phase.
+        for crop in [Rect::new(2, 4, 18, 12), Rect::new(3, 5, 20, 14)] {
+            let mut note = IfdBuilder::new();
+            note.set(CROP_AREA, Value::Short(vec![crop.x as u16, crop.y as u16, crop.width as u16, crop.height as u16]));
+            note.set(BLACK_LEVEL, Value::Short(black.map(|v| v * 4).to_vec()));
+            let r = crate::decode(&nef_with_note(1, 12, vec![words.clone()], w as u32, h as u32, h as u32, Some(note))).unwrap();
+            assert_eq!((r.width, r.height), (w, h));
+            assert_eq!(r.data, RawData::U16(samples.clone()));
+            assert_eq!(r.active_area, Rect::new(0, 0, w, h));
+            assert_eq!(r.crop, crop);
+            assert_eq!(r.cfa.as_ref().unwrap(), &cfa);
+            assert_eq!(r.black.values, black.map(f32::from));
+            assert_eq!((r.metadata.width, r.metadata.height), (Some(crop.width as u32), Some(crop.height as u32)));
+            assert_eq!(r.info().developed_size(), (crop.width, crop.height));
+            let full = r.develop(crate::Method::Bilinear).unwrap();
+            let binned = r.develop_binned(2, 0.99).unwrap().unwrap();
+            assert_eq!((full.width, full.height), (crop.width, crop.height));
+            assert_eq!((binned.width, binned.height), (crop.width / 2, crop.height / 2));
+            let expected = levels.map(|v| f32::from(v) / (r.white_at(0) - r.black.mean()));
+            for px in full.data.iter().chain(&binned.data) {
+                for (value, expected) in px.iter().zip(expected) {
+                    assert!((*value - expected).abs() < 1e-6, "{px:?} != {expected:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn declared_crop_overrides_trailing_dark_column_guess() {
+        let (w, h) = (160usize, 20usize);
+        let samples: Vec<u16> = (0..w * h).map(|i| if i % w < w - 8 { 500 } else { 0 }).collect();
+        let words: Vec<u8> = samples.iter().flat_map(|v| v.to_be_bytes()).collect();
+        let legacy = crate::decode(&nef(1, 12, vec![words.clone()], w as u32, h as u32, h as u32)).unwrap();
+        assert_eq!(legacy.active_area, Rect::new(0, 0, w - 8, h));
+        for value in [
+            Value::Short(vec![2, 2, 158, 16]),
+            Value::Long(vec![2, 2, 158, 16]),
+            Value::SShort(vec![2, 2, 158, 16]),
+            Value::Undefined(vec![2, 2, 158, 16]),
+        ] {
+            let mut note = IfdBuilder::new();
+            note.set(CROP_AREA, value);
+            let r = crate::decode(&nef_with_note(1, 12, vec![words.clone()], w as u32, h as u32, h as u32, Some(note))).unwrap();
+            assert_eq!(r.active_area, Rect::new(0, 0, w, h));
+            assert_eq!(r.crop, Rect::new(2, 2, 158, 16));
+            assert_eq!((r.metadata.width, r.metadata.height), (Some(158), Some(16)));
+            assert_eq!(r.data, legacy.data);
+            assert_eq!(r.cfa, legacy.cfa);
+        }
+    }
+
+    #[test]
+    fn declared_crop_selects_the_exact_sensor_region() {
+        let (w, h) = (40usize, 30usize);
+        let cfa = Cfa::bayer_static("BGGR");
+        let samples: Vec<u16> = (0..w * h)
+            .map(|i| {
+                let (x, y) = (i % w, i / w);
+                let rgb = [400 + 10 * x + 4 * y, 700 + 2 * x + 5 * y, 900 + 3 * x + 6 * y];
+                rgb[cfa.color_at(x, y) as usize] as u16
+            })
+            .collect();
+        let words: Vec<u8> = samples.iter().flat_map(|v| v.to_be_bytes()).collect();
+        let baseline = crate::decode(&nef(1, 12, vec![words.clone()], w as u32, h as u32, h as u32)).unwrap();
+        let crop = Rect::new(5, 3, 28, 22);
+        let mut note = IfdBuilder::new();
+        note.set(CROP_AREA, Value::Short(vec![5, 3, 28, 22]));
+        let r = crate::decode(&nef_with_note(1, 12, vec![words], w as u32, h as u32, h as u32, Some(note))).unwrap();
+        let sensor_rgb = baseline.develop(crate::Method::Bilinear).unwrap();
+        let cropped_rgb = r.develop(crate::Method::Bilinear).unwrap();
+        for y in 0..crop.height {
+            for x in 0..crop.width {
+                assert_eq!(cropped_rgb.get(x, y), sensor_rgb.get(crop.x + x, crop.y + y));
+            }
+        }
+        let binned = r.develop_binned(2, 0.99).unwrap().unwrap();
+        for by in 0..binned.height {
+            for bx in 0..binned.width {
+                let (mut sum, mut count) = ([0f32; 3], [0u32; 3]);
+                for dy in 0..2 {
+                    for dx in 0..2 {
+                        let (x, y) = (crop.x + 2 * bx + dx, crop.y + 2 * by + dy);
+                        let channel = cfa.color_at(x, y) as usize;
+                        sum[channel] += f32::from(samples[y * w + x]) / r.white_at(0);
+                        count[channel] += 1;
+                    }
+                }
+                for (channel, value) in binned.get(bx, by).iter().enumerate() {
+                    assert!((*value - sum[channel] / count[channel] as f32).abs() < 1e-6);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn malformed_crop_keeps_trailing_dark_column_fallback() {
+        let (w, h) = (160usize, 20usize);
+        let words: Vec<u8> = (0..w * h).flat_map(|i| if i % w < w - 8 { 500u16.to_be_bytes() } else { 0u16.to_be_bytes() }).collect();
+        let baseline = crate::decode(&nef(1, 12, vec![words.clone()], w as u32, h as u32, h as u32)).unwrap();
+        for value in [
+            Value::Short(vec![2, 2, 154]),
+            Value::Short(vec![2, 2, 154, 16, 0]),
+            Value::Short(vec![2, 2, 0, 16]),
+            Value::Short(vec![2, 2, 154, 0]),
+            Value::Short(vec![161, 2, 1, 16]),
+            Value::Short(vec![2, 21, 154, 1]),
+            Value::Short(vec![2, 2, 159, 16]),
+            Value::Short(vec![2, 2, 154, 19]),
+            Value::Long8(vec![u64::MAX, 2, 154, 16]),
+            Value::SShort(vec![-1, 2, 154, 16]),
+            Value::Float(vec![2.0, 2.0, 154.0, 16.0]),
+        ] {
+            let mut note = IfdBuilder::new();
+            note.set(CROP_AREA, value);
+            let r = crate::decode(&nef_with_note(1, 12, vec![words.clone()], w as u32, h as u32, h as u32, Some(note))).unwrap();
+            assert_eq!(r, baseline);
+        }
     }
 
     #[test]

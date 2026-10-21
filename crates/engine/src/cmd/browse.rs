@@ -58,6 +58,7 @@ fn browse(s: &mut Session, p: &Value) -> Result<Value> {
         "new": report.imported.len(),
         "failed": report.failed.len(),
         "forgotten": forgotten,
+        "unsupportedEdits": report.unsupported_edits,
     }))
 }
 

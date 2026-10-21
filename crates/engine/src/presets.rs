@@ -4,7 +4,7 @@
 
 use std::path::Path;
 
-use lightcraft_develop::Preset;
+use lightcraft_develop::{DevelopSettings, Preset};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -14,6 +14,8 @@ use crate::Session;
 pub const LCPRESET_EXT: &str = "lcpreset";
 /// The `format` tag of a `.lcpreset` file.
 pub const LCPRESET_FORMAT: &str = "lightcraft.preset";
+/// Function curves need a distinct tag: older readers ignored the wrapper's version number.
+pub const LCPRESET_FUNCTION_FORMAT: &str = "lightcraft.preset.v2";
 
 /// A `.lcpreset` file: one or more presets with their groups.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -106,8 +108,34 @@ pub fn slug(s: &str) -> String {
 
 /// Serialise presets as a `.lcpreset` file (favourite/built-in flags are not exported).
 pub fn to_lcpreset(presets: &[Preset]) -> String {
+    let (format, version) =
+        if presets.iter().any(|p| has_curve_object(&p.settings) || p.settings.get("version").and_then(Value::as_u64).is_some_and(|v| v > 1)) {
+            (LCPRESET_FUNCTION_FORMAT, 2)
+        } else {
+            (LCPRESET_FORMAT, 1)
+        };
     let presets = presets.iter().map(|p| Preset { favorite: false, builtin: false, ..p.clone() }).collect();
-    serde_json::to_string_pretty(&PresetFile { format: LCPRESET_FORMAT.into(), version: 1, presets }).unwrap_or_default()
+    serde_json::to_string_pretty(&PresetFile { format: format.into(), version, presets }).unwrap_or_default()
+}
+
+fn has_curve_object(settings: &Value) -> bool {
+    settings
+        .get("curve")
+        .is_some_and(|curve| ["master", "red", "green", "blue"].iter().any(|channel| curve.get(*channel).is_some_and(Value::is_object)))
+}
+
+// Check the original JSON in addition to the retained partial Value. Value would discard
+// duplicate settings keys, including a newer schema version hidden by a later supported one.
+#[derive(Deserialize)]
+struct CheckedPresetSettings {
+    #[serde(rename = "settings")]
+    _settings: DevelopSettings,
+}
+
+#[derive(Deserialize)]
+struct CheckedPresetFileSettings {
+    #[serde(rename = "presets")]
+    _presets: Vec<CheckedPresetSettings>,
 }
 
 /// Read a preset file by name: `.lcpreset` (a [`PresetFile`], a bare preset object or an array of
@@ -123,20 +151,36 @@ pub fn parse_preset_file(name: &str, bytes: &[u8]) -> Result<Vec<Preset>, String
     let v: Value = serde_json::from_str(text).map_err(|e| format!("not a preset file: {e}"))?;
     let list = match &v {
         Value::Object(o) if o.contains_key("presets") => {
-            let f: PresetFile = serde_json::from_value(v.clone()).map_err(|e| e.to_string())?;
-            if f.format != LCPRESET_FORMAT {
-                return Err(format!("unknown preset format `{}`", f.format));
+            let f: PresetFile = serde_json::from_str(text).map_err(|e| e.to_string())?;
+            match (f.format.as_str(), f.version) {
+                (LCPRESET_FORMAT, 1) | (LCPRESET_FUNCTION_FORMAT, 2) => {}
+                (LCPRESET_FORMAT | LCPRESET_FUNCTION_FORMAT, _) => {
+                    return Err(format!("unsupported preset version {} for `{}`", f.version, f.format));
+                }
+                _ => return Err(format!("unknown preset format `{}`", f.format)),
             }
+            if f.format == LCPRESET_FORMAT && f.presets.iter().any(|p| has_curve_object(&p.settings)) {
+                return Err("function point curves require lightcraft.preset.v2 version 2".into());
+            }
+            serde_json::from_str::<CheckedPresetFileSettings>(text).map_err(|e| format!("invalid preset settings: {e}"))?;
             f.presets
         }
-        Value::Array(_) => serde_json::from_value(v).map_err(|e| e.to_string())?,
-        _ => vec![serde_json::from_value(v).map_err(|e| e.to_string())?],
+        Value::Array(_) => {
+            serde_json::from_str::<Vec<CheckedPresetSettings>>(text).map_err(|e| format!("invalid preset settings: {e}"))?;
+            serde_json::from_str(text).map_err(|e| e.to_string())?
+        }
+        _ => {
+            serde_json::from_str::<CheckedPresetSettings>(text).map_err(|e| format!("invalid preset settings: {e}"))?;
+            vec![serde_json::from_str(text).map_err(|e| e.to_string())?]
+        }
     };
     let mut out = Vec::new();
     for mut p in list {
         if !p.settings.is_object() {
             return Err(format!("preset `{}` has no settings object", p.name));
         }
+        lightcraft_develop::try_apply_partial(&DevelopSettings::default(), &p.settings, 1.0)
+            .map_err(|e| format!("preset `{}` has invalid settings: {e}", p.name))?;
         p.builtin = false;
         p.favorite = false;
         if p.name.trim().is_empty() {
@@ -171,7 +215,7 @@ pub fn expand_preset_paths(paths: &[String]) -> Vec<String> {
 }
 
 impl Session {
-    /// Add imported presets. Identical presets (same name, group and settings) already present are
+    /// Add imported presets. Identical presets (same name, group, settings and diagnostics) already present are
     /// skipped; id clashes get a fresh id. Returns the ids added.
     pub fn add_presets(&mut self, presets: Vec<Preset>) -> Vec<String> {
         use std::collections::{HashMap, HashSet};
@@ -183,8 +227,11 @@ impl Session {
         }
         let mut added = Vec::new();
         for mut p in presets {
+            p.unsupported_edits = lightcraft_develop::unsupported_edits::bounded_names(p.unsupported_edits.iter().map(String::as_str));
             let key = (p.name.clone(), p.group.clone());
-            let same = by_name.get(&key).is_some_and(|ix| ix.iter().any(|&i| self.presets.get(i).is_some_and(|q| q.settings == p.settings)));
+            let same = by_name.get(&key).is_some_and(|ix| {
+                ix.iter().any(|&i| self.presets.get(i).is_some_and(|q| q.settings == p.settings && q.unsupported_edits == p.unsupported_edits))
+            });
             if same {
                 continue;
             }
@@ -209,7 +256,7 @@ impl Session {
 }
 
 fn p(group: &str, id: &str, name: &str, settings: serde_json::Value) -> Preset {
-    Preset { id: format!("lc.{id}"), name: name.into(), group: group.into(), settings, favorite: false, builtin: true }
+    Preset { id: format!("lc.{id}"), name: name.into(), group: group.into(), settings, unsupported_edits: Vec::new(), favorite: false, builtin: true }
 }
 
 pub fn builtin() -> Vec<Preset> {
@@ -518,16 +565,24 @@ pub fn profile(id: &str) -> Option<&'static ProfileInfo> {
 pub const RECENT_PROFILES: usize = 5;
 
 impl Session {
-    /// A profile by id, looking up built-in profiles first and imported LUT profiles second.
+    /// A profile by id, including the active photo's embedded profile definition.
     pub fn profile_info(&self, id: &str) -> Option<(&str, &str)> {
         if let Some(p) = profile(id) {
             return Some((p.name, p.group));
+        }
+        if id == lightcraft_develop::IMPORTED_LOOK_ID {
+            let p = self.catalog.photo(self.active()?)?;
+            return p.develop.profile.imported_look().map(|look| (look.name.as_str(), "Imported"));
         }
         self.lut_profiles.iter().find(|p| p.id == id).map(|p| (p.name.as_str(), p.group.as_str()))
     }
 
     /// Remember `id` as the most recently applied profile.
     pub fn note_profile_used(&mut self, id: &str) {
+        // This id identifies a definition on one photo, not an asset in the shared library.
+        if id == lightcraft_develop::IMPORTED_LOOK_ID {
+            return;
+        }
         self.profile_recent.retain(|p| p != id);
         self.profile_recent.insert(0, id.to_string());
         self.profile_recent.truncate(RECENT_PROFILES);
@@ -548,6 +603,9 @@ impl Session {
             .into_iter()
             .map(|g| json!({"name": g, "profiles": PROFILES.iter().filter(|p| p.group == g).map(item).collect::<Vec<_>>()}))
             .collect();
+        if let Some((name, group)) = self.profile_info(lightcraft_develop::IMPORTED_LOOK_ID) {
+            groups.insert(0, json!({"name": group, "profiles": [{"id": lightcraft_develop::IMPORTED_LOOK_ID, "name": name, "group": group, "favorite": false, "photoSpecific": true}]}));
+        }
         // imported LUT profiles, by their groups
         let mut lut_groups: Vec<&str> = self.lut_profiles.iter().map(|p| p.group.as_str()).collect();
         lut_groups.sort_unstable();
@@ -572,6 +630,37 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn imported_preset_identity_includes_bounded_diagnostics() {
+        let mut s = Session::new();
+        let mut preset = p("Own", "warnings", "Same look", json!({"light":{"exposure":0.5}}));
+        preset.unsupported_edits = vec!["Look".into(), "FilterList".into(), "Look".into()];
+        assert_eq!(s.add_presets(vec![preset.clone()]).len(), 1);
+        assert!(s.add_presets(vec![preset.clone()]).is_empty());
+        let saved = s.presets.iter().find(|p| p.name == "Same look").unwrap();
+        assert_eq!(saved.unsupported_edits, ["FilterList", "Look"]);
+        preset.unsupported_edits.clear();
+        assert_eq!(s.add_presets(vec![preset.clone()]).len(), 1, "same pixels with different source limitations is a distinct preset");
+        preset.name = "Bounded".into();
+        preset.unsupported_edits = (0..300).map(|i| format!("Field{i}")).collect();
+        preset.unsupported_edits.push("Bad\nName".into());
+        s.add_presets(vec![preset]);
+        let saved = s.presets.iter().find(|p| p.name == "Bounded").unwrap();
+        assert_eq!(saved.unsupported_edits.len(), lightcraft_develop::unsupported_edits::MAX_NAMES);
+        assert!(saved.unsupported_edits.iter().all(|n| lightcraft_develop::unsupported_edits::name_valid(n)));
+        assert!(saved.unsupported_edits.iter().any(|n| n == lightcraft_develop::unsupported_edits::INVALID_DIAGNOSTICS));
+    }
+
+    #[test]
+    fn native_preset_file_and_import_report_preserve_warning_names() {
+        let mut preset = p("Own", "warnings", "Warnings", json!({"light":{"exposure":0.5}}));
+        preset.unsupported_edits = vec!["FilterList".into(), "Look".into()];
+        let file = to_lcpreset(std::slice::from_ref(&preset));
+        let parsed = crate::preset_import::read_presets("own.lcpreset", file.as_bytes(), None).unwrap();
+        assert_eq!(parsed[0].preset.unsupported_edits, preset.unsupported_edits);
+        assert_eq!(parsed[0].unmapped, preset.unsupported_edits);
+    }
 
     #[test]
     fn builtin_presets_parse_and_apply() {
@@ -611,6 +700,31 @@ mod tests {
         assert_eq!(same, *before, "only the profile changed");
         let looked = s.render_now(id, 96, 96).unwrap().image;
         assert_ne!(plain.as_bytes(), looked.as_bytes());
+
+        let imported = lightcraft_develop::try_apply_partial(
+            &after,
+            &json!({"profile": {
+                "id": lightcraft_develop::IMPORTED_LOOK_ID, "amount": 120,
+                "imported": {"name": "Own curve", "contrast": 8, "master": [{"x":0,"y":0.1},{"x":1,"y":1}]}
+            }}),
+            1.0,
+        )
+        .unwrap();
+        s.set_develop(id, imported.clone(), "Import profile").unwrap();
+        assert_eq!(s.profile_info(lightcraft_develop::IMPORTED_LOOK_ID), Some(("Own curve", "Imported")));
+        assert!(s.execute("profiles.list", &json!({})).unwrap().as_array().unwrap().iter().any(|p| p["name"] == "Own curve"));
+        s.execute("develop.profile", &json!({"id": lightcraft_develop::IMPORTED_LOOK_ID, "amount": 50})).unwrap();
+        let scaled = s.develop_of(id).unwrap();
+        assert_eq!(scaled.profile.amount, 50.0);
+        assert_eq!(scaled.profile.imported, imported.profile.imported);
+        assert_eq!(scaled.light, imported.light);
+        assert_eq!(scaled.curve, imported.curve);
+        s.execute("develop.profile", &json!({"id": "lc.color"})).unwrap();
+        let replaced = s.develop_of(id).unwrap();
+        assert!(replaced.profile.imported.is_none());
+        let delta = crate::json_delta(&scaled.to_json(), &replaced.to_json()).unwrap();
+        let synced = lightcraft_develop::try_apply_partial(&scaled, &delta, 1.0).unwrap();
+        assert_eq!(synced, *replaced, "sync must remove the old profile payload too");
     }
 
     #[test]
@@ -625,6 +739,148 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    fn function_curve() -> Value {
+        json!({"kind":"function","version":1,"base":{"pieces":[{"end":1.0,"hermite":[0.1,0.9,0.8,0.8]}]},"adjustments":[{"x":0.0,"y":0.0},{"x":0.4,"y":0.03},{"x":1.0,"y":0.0}]})
+    }
+
+    #[test]
+    fn sparse_presets_keep_the_legacy_format_and_bare_input_shapes() {
+        let preset =
+            p("Own", "legacy", "Sparse", json!({"version":1,"light":{"exposure":0.7},"curve":{"red":[{"x":0.0,"y":0.1},{"x":1.0,"y":1.0}]}}));
+        let file = to_lcpreset(std::slice::from_ref(&preset));
+        let wrapper: Value = serde_json::from_str(&file).unwrap();
+        assert_eq!((wrapper["format"].as_str(), wrapper["version"].as_u64()), (Some(LCPRESET_FORMAT), Some(1)));
+        for input in [file, serde_json::to_string(&preset).unwrap(), serde_json::to_string(&vec![preset.clone()]).unwrap()] {
+            let parsed = parse_preset_file("own.lcpreset", input.as_bytes()).unwrap();
+            assert_eq!(parsed.len(), 1);
+            assert_eq!(parsed[0].settings, preset.settings, "partial settings must stay partial");
+            assert!(!parsed[0].builtin);
+        }
+    }
+
+    #[test]
+    fn function_presets_use_a_new_tag_and_roundtrip_without_resampling() {
+        let mut preset =
+            p("Own", "function", "Continuous", json!({"version":lightcraft_develop::SCHEMA_VERSION,"curve":{"master":function_curve()}}));
+        preset.unsupported_edits = vec!["FilterList".into()];
+        preset.favorite = true;
+        let file = to_lcpreset(std::slice::from_ref(&preset));
+        let wrapper: Value = serde_json::from_str(&file).unwrap();
+        assert_eq!((wrapper["format"].as_str(), wrapper["version"].as_u64()), (Some(LCPRESET_FUNCTION_FORMAT), Some(2)));
+        assert_ne!(wrapper["format"], LCPRESET_FORMAT, "old readers check the tag, not the version");
+        for input in [file, serde_json::to_string(&preset).unwrap(), serde_json::to_string(&vec![preset.clone()]).unwrap()] {
+            let parsed = parse_preset_file("own.lcpreset", input.as_bytes()).unwrap();
+            assert_eq!(parsed[0].settings, preset.settings);
+            assert_eq!(parsed[0].unsupported_edits, preset.unsupported_edits);
+            assert!(!parsed[0].builtin && !parsed[0].favorite);
+        }
+        let legacy = json!({"format":LCPRESET_FORMAT,"version":1,"presets":[preset]});
+        assert!(parse_preset_file("own.lcpreset", legacy.to_string().as_bytes()).is_err());
+    }
+
+    #[test]
+    fn native_preset_validation_keeps_partial_process_hdr_and_legacy_markers() {
+        for version in [0, 1, 2] {
+            let settings = json!({"version":version,"process":77,"hdr":{"enabled":true,"max_ev":4.0},"profile":{"camera_local_tone":true},"light":{"exposure":0.3}});
+            let preset = p("Own", "partial", "Partial", settings.clone());
+            let saved = to_lcpreset(std::slice::from_ref(&preset));
+            let wrapper: Value = serde_json::from_str(&saved).unwrap();
+            assert_eq!(wrapper["version"], if version > 1 { 2 } else { 1 });
+            for input in [saved, serde_json::to_string(&preset).unwrap(), serde_json::to_string(&[preset]).unwrap()] {
+                let parsed = parse_preset_file("own.lcpreset", input.as_bytes()).unwrap();
+                assert_eq!(parsed[0].settings, settings, "validation must not materialize omitted groups or drop upstream fields");
+                let applied = parsed[0].try_apply(&DevelopSettings::default(), 1.0).unwrap();
+                assert_eq!(applied.process, lightcraft_develop::ProcessVersion(77), "explicit hand-written process remains allowed");
+                assert!(applied.hdr.enabled && applied.profile.camera_local_tone);
+                assert_eq!(applied.hdr.max_ev, 4.0);
+            }
+        }
+    }
+
+    #[test]
+    fn original_preset_json_rejects_duplicate_settings_and_nested_function_versions() {
+        let curve = r#"{"kind":"function","version":999,"version":1,"base":{"pieces":[{"end":1.0,"hermite":[0.0,1.0,1.0,1.0]}]},"adjustments":[]}"#;
+        let nested = format!(r#"{{"id":"p","name":"P","group":"Own","settings":{{"version":2,"curve":{{"master":{curve}}}}}}}"#);
+        let duplicate = r#"{"id":"p","name":"P","group":"Own","settings":{"version":999},"settings":{}}"#;
+        for preset in [nested.as_str(), duplicate] {
+            for input in
+                [preset.to_string(), format!("[{preset}]"), format!(r#"{{"format":"lightcraft.preset.v2","version":2,"presets":[{preset}]}}"#)]
+            {
+                assert!(parse_preset_file("own.lcpreset", input.as_bytes()).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn unsupported_wrapper_versions_and_partial_settings_are_refused() {
+        let preset = p("Own", "valid", "Valid", json!({"light":{"exposure":0.7}}));
+        for (format, version) in
+            [(LCPRESET_FORMAT, 0), (LCPRESET_FORMAT, 2), (LCPRESET_FORMAT, 999), (LCPRESET_FUNCTION_FORMAT, 1), (LCPRESET_FUNCTION_FORMAT, 3)]
+        {
+            let file = json!({"format":format,"version":version,"presets":[preset]});
+            assert!(parse_preset_file("own.lcpreset", file.to_string().as_bytes()).is_err(), "{file}");
+        }
+        let mut future_curve = function_curve();
+        future_curve["version"] = json!(2);
+        let mut malformed_curve = function_curve();
+        malformed_curve["base"]["pieces"][0]["end"] = json!(0.5);
+        for settings in [
+            json!({"version":lightcraft_develop::SCHEMA_VERSION + 1}),
+            json!({"version":lightcraft_develop::SCHEMA_VERSION + 1,"light":{"exposure":0.7}}),
+            json!({"light":false}),
+            json!({"curve":{"master":future_curve}}),
+            json!({"curve":{"blue":malformed_curve}}),
+            json!({"curve":{"green":{"kind":"future","version":1}}}),
+            json!([]),
+        ] {
+            let invalid = p("", "invalid", "Invalid", settings);
+            for file in [
+                serde_json::to_value(&invalid).unwrap(),
+                json!([invalid]),
+                json!({"format":LCPRESET_FUNCTION_FORMAT,"version":2,"presets":[invalid]}),
+            ] {
+                assert!(parse_preset_file("own.lcpreset", file.to_string().as_bytes()).is_err(), "{file}");
+            }
+        }
+        let missing_group = json!({"id":"invalid","name":"Invalid","settings":{"version":lightcraft_develop::SCHEMA_VERSION+1}});
+        assert!(parse_preset_file("own.lcpreset", missing_group.to_string().as_bytes()).is_err());
+    }
+
+    #[test]
+    fn duplicate_native_versions_cannot_hide_unsupported_preset_data() {
+        let preset = r#"{"id":"own","name":"Own","group":"Own","settings":{"version":999,"version":1}}"#;
+        for text in [
+            preset.to_string(),
+            format!("[{preset}]"),
+            format!(r#"{{"format":"lightcraft.preset","version":1,"presets":[{preset}]}}"#),
+            r#"{"format":"lightcraft.preset","version":999,"version":1,"presets":[]}"#.into(),
+        ] {
+            assert!(parse_preset_file("own.lcpreset", text.as_bytes()).is_err(), "{text}");
+        }
+    }
+
+    #[test]
+    fn one_invalid_preset_rejects_its_file_before_import_mutates_the_library() {
+        let d = dir("unsupported-function");
+        let valid = p("Own", "valid", "Valid", json!({"light":{"exposure":0.7}}));
+        let invalid = p("Own", "invalid", "Invalid", json!({"version":lightcraft_develop::SCHEMA_VERSION+1}));
+        let file = d.join("future.lcpreset");
+        let bytes = json!({"format":LCPRESET_FUNCTION_FORMAT,"version":2,"presets":[valid,invalid]}).to_string();
+        std::fs::write(&file, &bytes).unwrap();
+        let modified = std::fs::metadata(&file).unwrap().modified().unwrap();
+        let mut s = Session::with_demo();
+        let before = s.presets.clone();
+        let catalog = s.catalog.to_snapshot();
+        let result = s.execute("preset.import", &json!({"paths":[file]})).unwrap();
+        assert_eq!(result["failed"].as_array().unwrap().len(), 1, "{result}");
+        assert!(result["imported"].as_array().unwrap().is_empty());
+        assert_eq!(s.presets.as_slice(), before.as_slice());
+        assert_eq!(s.catalog.to_snapshot(), catalog);
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), bytes);
+        assert_eq!(std::fs::metadata(&file).unwrap().modified().unwrap(), modified);
+        let _ = std::fs::remove_dir_all(d);
     }
 
     #[test]

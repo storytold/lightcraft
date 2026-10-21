@@ -98,6 +98,94 @@ fn v6_preview_only_photo_loads_unstamped_and_is_upgraded() {
 }
 
 #[test]
+fn v2_library_upgrades_before_recording_unsupported_edits() {
+    let (base, log, full) = legacy_parts();
+    let m = MemStore::new();
+    m.set(SNAPSHOT, format!("{{\"format\":\"lightcraft-catalog\",\"version\":2,\"seq\":2,\"catalog\":{}}}\n", base.to_snapshot()).into_bytes());
+    m.set(LOG, log.into_bytes());
+    let (mut journal, mut loaded, report) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!(loaded.to_snapshot(), full.to_snapshot());
+    assert_eq!(report.upgraded_from, Some(2));
+    assert_eq!(snapshot_version(&m), u64::from(VERSION));
+    let id = loaded.photos().next().unwrap().id;
+    let op = Op::SetUnsupportedEdits { id, fields: vec!["FilterList".into()] };
+    loaded.apply(op.clone()).unwrap();
+    journal.append(&[op]).unwrap();
+    drop(journal);
+    let (_, reopened, report) = Journal::open(Box::new(m)).unwrap();
+    assert_eq!(reopened.to_snapshot(), loaded.to_snapshot());
+    assert_eq!((report.replayed, report.upgraded_from), (1, None));
+}
+
+fn function_settings() -> serde_json::Value {
+    serde_json::json!({"curve":{"master":{"kind":"function","version":1,"base":{"pieces":[{"end":1.0,"hermite":[0.1,0.9,0.8,0.8]}]},"adjustments":[{"x":0.0,"y":0.0},{"x":0.4,"y":0.03},{"x":1.0,"y":0.0}]}}})
+}
+
+#[test]
+fn v3_library_upgrades_before_recording_function_curves_and_reopens_exactly() {
+    use std::sync::Arc;
+    let mut base = Catalog::new();
+    let op = photo(&mut base);
+    base.apply(op).unwrap();
+    let id = base.photos().next().unwrap().id;
+    let legacy =
+        lightcraft_develop::DevelopSettings::from_json(&serde_json::json!({"version":1,"curve":{"red":[{"x":0.0,"y":0.1},{"x":1.0,"y":0.9}]}}))
+            .unwrap();
+    base.apply(Op::SetDevelop { id, settings: Arc::new(legacy), label: "Sparse".into(), edited: None }).unwrap();
+    let m = MemStore::new();
+    m.set(SNAPSHOT, format!("{{\"format\":\"lightcraft-catalog\",\"version\":3,\"seq\":2,\"catalog\":{}}}\n", base.to_snapshot()).into_bytes());
+    m.set(LOG, Vec::new());
+    let (mut journal, mut loaded, report) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!(report.upgraded_from, Some(3));
+    assert_eq!(snapshot_version(&m), u64::from(VERSION));
+    assert_eq!(loaded.to_snapshot(), base.to_snapshot(), "legacy sparse edits survive the upgrade");
+    let mut value = function_settings();
+    value["profile"] = serde_json::json!({"id":"lc.imported","imported":{"look_table":"E96CB8AF6484F8402BB0E6ECFC8AD0FC"}});
+    let settings = Arc::new(lightcraft_develop::DevelopSettings::from_json(&value).unwrap());
+    assert_eq!(settings.required_schema_version(), lightcraft_develop::LOOK_TABLE_SCHEMA_VERSION);
+    let op = Op::SetDevelop { id, settings: settings.clone(), label: "Continuous".into(), edited: None };
+    loaded.apply(op.clone()).unwrap();
+    journal.append(&[op]).unwrap();
+    drop(journal);
+    let (_, reopened, report) = Journal::open(Box::new(m)).unwrap();
+    assert_eq!((report.replayed, report.upgraded_from), (1, None));
+    assert_eq!(reopened.photo(id).unwrap().develop, settings);
+    assert_eq!(reopened.to_snapshot(), loaded.to_snapshot());
+}
+
+#[test]
+fn future_function_versions_in_snapshot_and_crc_valid_log_are_refused_untouched() {
+    use std::sync::Arc;
+    let mut catalog = Catalog::new();
+    let op = photo(&mut catalog);
+    catalog.apply(op).unwrap();
+    let id = catalog.photos().next().unwrap().id;
+    let settings = Arc::new(lightcraft_develop::DevelopSettings::from_json(&function_settings()).unwrap());
+    let op = Op::SetDevelop { id, settings, label: "Continuous".into(), edited: None };
+    let mut future_op = serde_json::to_value(&op).unwrap();
+    future_op["settings"]["curve"]["master"]["version"] = serde_json::json!(2);
+    let body = future_op.to_string();
+    let m = MemStore::new();
+    m.set(
+        SNAPSHOT,
+        format!("{{\"format\":\"lightcraft-catalog\",\"version\":{VERSION},\"seq\":1,\"catalog\":{}}}\n", catalog.to_snapshot()).into_bytes(),
+    );
+    m.set(LOG, format!("{{\"seq\":2,\"crc\":{},\"op\":{body}}}\n", crc32fast::hash(body.as_bytes())).into_bytes());
+    assert_refused_untouched(&m);
+
+    catalog.apply(op).unwrap();
+    // Restrict this replacement to the function's exact serialized discriminator/version pair.
+    let snapshot = catalog.to_snapshot().replace("\"kind\":\"function\",\"version\":1", "\"kind\":\"function\",\"version\":2");
+    assert_ne!(snapshot, catalog.to_snapshot());
+    let m = MemStore::new();
+    m.set(SNAPSHOT, format!("{{\"format\":\"lightcraft-catalog\",\"version\":{VERSION},\"seq\":2,\"catalog\":{snapshot}}}\n").into_bytes());
+    m.set(LOG, Vec::new());
+    let before = m.files.lock().unwrap().clone();
+    assert!(Journal::open(Box::new(m.clone())).is_err());
+    assert_eq!(*m.files.lock().unwrap(), before);
+}
+
+#[test]
 fn versionless_log_only_library_is_upgraded() {
     let mut c = Catalog::new();
     let op = photo(&mut c);
@@ -151,6 +239,43 @@ fn newer_snapshot_is_refused_untouched() {
     assert!(e.contains(&format!("v{}", VERSION + 1)), "{e}");
 }
 
+#[test]
+fn future_develop_schema_in_snapshots_and_valid_log_records_is_refused_untouched() {
+    use lightcraft_develop::DevelopSettings;
+    use std::sync::Arc;
+    let future = Arc::new(DevelopSettings { version: lightcraft_develop::SCHEMA_VERSION + 1, ..Default::default() });
+    for field in ["develop", "import", "version", "history"] {
+        let mut c = Catalog::new();
+        let mut p = Photo::new(c.alloc_photo_id(), Source::File { path: "/own.png".into() }, "own.png", "PNG", 2, 2, "today");
+        match field {
+            "develop" => p.develop = future.clone(),
+            "import" => p.import_look = Some(future.clone()),
+            "version" => p.versions.push(Version { name: "Saved".into(), created: "today".into(), settings: future.clone(), auto: false }),
+            _ => p.history.push(HistoryStep { label: "Saved".into(), settings: future.clone() }),
+        }
+        c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        let m = MemStore::new();
+        m.set(
+            SNAPSHOT,
+            format!("{{\"format\":\"lightcraft-catalog\",\"version\":{VERSION},\"seq\":1,\"catalog\":{}}}\n", c.to_snapshot()).into_bytes(),
+        );
+        m.set(LOG, Vec::new());
+        let before = m.files.lock().unwrap().clone();
+        assert!(Journal::open(Box::new(m.clone())).is_err(), "future settings in {field} were accepted");
+        assert_eq!(*m.files.lock().unwrap(), before, "{field} modified the stored catalog");
+    }
+    let (base, log, _) = legacy_parts();
+    let id = base.photos().next().unwrap().id;
+    let future_op = Op::SetDevelop { id, settings: future, label: "Future edit".into(), edited: None };
+    let m = MemStore::new();
+    m.set(
+        SNAPSHOT,
+        format!("{{\"format\":\"lightcraft-catalog\",\"version\":{VERSION},\"seq\":2,\"catalog\":{}}}\n", base.to_snapshot()).into_bytes(),
+    );
+    m.set(LOG, format!("{log}{}\n", encode_record(4, &future_op)).into_bytes());
+    assert_refused_untouched(&m);
+}
+
 /// A log record with a valid CRC whose op this version doesn't know: refused, not taken for a
 /// torn tail (truncated) or damage (renamed) — wherever it is in the log.
 #[test]
@@ -200,12 +325,20 @@ fn bad_crc_is_still_a_torn_tail() {
 fn op_variants_are_versioned() {
     fn since(op: &Op) -> u32 {
         match op {
+            Op::SetDevelop { settings, .. } if settings.wb.scale == lightcraft_develop::WbScale::Kelvin => 12,
+            Op::SetDevelop { settings, .. } if settings.profile.imported.as_ref().is_some_and(|look| look.look_table.is_some()) => 11,
+            Op::SetDevelop { settings, .. } if settings.profile.imported.as_ref().is_some_and(|look| look.convert_to_grayscale) => 10,
+            Op::SetDevelop { settings, .. } if settings.profile.imported.is_some() => 9,
+            Op::SetDevelop { settings, .. }
+                if [&settings.curve.master, &settings.curve.red, &settings.curve.green, &settings.curve.blue].iter().any(|c| c.is_function()) =>
+            {
+                8
+            }
             Op::AddPhoto { .. }
             | Op::RemovePhoto { .. }
             | Op::SetRating { .. }
             | Op::SetFlag { .. }
             | Op::SetLabel { .. }
-            | Op::SetDevelop { .. }
             | Op::SetMeta { .. }
             | Op::SetDeleted { .. }
             | Op::SetLocal { .. }
@@ -235,11 +368,44 @@ fn op_variants_are_versioned() {
             Op::SetKeyword { .. } => 5,
             Op::SetFolderRecord { .. } => 6,
             Op::SetAsShotWb { .. } => 7,
-            Op::SetHistoryCursor { .. } => 8,
+            Op::SetHistoryCursor { .. } => 13,
+            Op::SetUnsupportedEdits { .. } => 7,
+            Op::SetDevelop { .. } => 1,
         }
     }
-    /// v9: `Photo.preview_checked` and `Op::SetContent.preview_checked`.
-    const NEWEST_FIELDS: u32 = 9;
-    let newest = since(&Op::SetHistoryCursor { id: PhotoId(1), cursor: None });
-    assert_eq!(newest.max(NEWEST_FIELDS), VERSION, "the newest op's or fields' version must be the current format version");
+    let mut kelvin = lightcraft_develop::DevelopSettings::default();
+    kelvin.wb.scale = lightcraft_develop::WbScale::Kelvin;
+    assert_eq!(since(&Op::SetDevelop { id: PhotoId(1), settings: Arc::new(kelvin), label: "Kelvin".into(), edited: None }), 12);
+    let newest_op = since(&Op::SetHistoryCursor { id: PhotoId(1), cursor: None });
+    assert_eq!(newest_op, 13);
+    // Combined writer: upstream preview_checked plus the fork settings payloads.
+    const NEWEST_FIELDS: u32 = 14;
+    assert_eq!(newest_op.max(NEWEST_FIELDS), VERSION);
+    assert_eq!(since(&Op::SetUnsupportedEdits { id: PhotoId(1), fields: Vec::new() }), 7);
+    let function = since(&Op::SetDevelop {
+        id: PhotoId(1),
+        settings: Arc::new(lightcraft_develop::DevelopSettings::from_json(&function_settings()).unwrap()),
+        label: "function".into(),
+        edited: None,
+    });
+    assert_eq!(function, 8);
+    for (convert_to_grayscale, table, version) in [(false, None, 9), (true, None, 10), (true, Some("E96CB8AF6484F8402BB0E6ECFC8AD0FC"), 11)] {
+        let required = since(&Op::SetDevelop {
+            id: PhotoId(1),
+            settings: Arc::new(
+                lightcraft_develop::DevelopSettings::from_json(&serde_json::json!({
+                    "profile": {"id": "lc.imported", "imported": {
+                        "name": "Photo look", "contrast": 8.0, "convert_to_grayscale": convert_to_grayscale, "look_table": table
+                    }}
+                }))
+                .unwrap(),
+            ),
+            label: "imported profile".into(),
+            edited: None,
+        });
+        assert_eq!(required, version, "the newest op payload's version must be the current format version");
+    }
 }
+
+#[path = "tests_format_diagnostics.rs"]
+mod diagnostics_lineage;

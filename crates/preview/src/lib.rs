@@ -190,6 +190,14 @@ impl PreviewCache {
         Some(tx)
     }
 
+    /// Invalidate in-flight jobs and memory entries while retaining content-keyed disk entries.
+    pub fn invalidate_memory(&self) {
+        let mut generation = self.generation.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(g) = generation.as_mut() else { return };
+        *g = g.wrapping_add(1) % u64::MAX;
+        self.mem.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    }
+
     /// Drop everything (memory and disk). Does nothing once [`Self::retire`]d.
     pub fn clear(&self) {
         let mut generation = self.generation.write().unwrap_or_else(std::sync::PoisonError::into_inner);

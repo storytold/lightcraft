@@ -1240,7 +1240,12 @@ pub fn context_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                     Ok(r) if r.get("background").is_some() => {}
                     Ok(r) => {
                         let n = r["files"].as_array().map_or(0, Vec::len);
-                        app.toast(ui.ctx(), crate::i18n::tr_format!("Exported {n} photo{}", if n == 1 { "" } else { "s" }, n = n));
+                        let mut message = crate::i18n::tr_format!("Exported {n} photo{}", if n == 1 { "" } else { "s" }, n = n);
+                        if let Some(warning) = r["files"].as_array().and_then(|files| crate::widgets::export_unsupported_summary(files)) {
+                            message += " · ";
+                            message += &warning;
+                        }
+                        app.toast(ui.ctx(), message);
                     }
                     Err(e) => app.toast(ui.ctx(), e),
                 }

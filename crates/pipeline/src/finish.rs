@@ -2,8 +2,8 @@
 
 use lightcraft_color::luminance_2020;
 use lightcraft_color::spline::{Lut1, MonotoneCurve};
-use lightcraft_color::transfer::linear_to_srgb;
-use lightcraft_develop::{DevelopSettings, LocalAdjustments, Process, ToneCurve, VignetteStyle};
+use lightcraft_color::transfer::{linear_to_srgb, srgb_to_linear};
+use lightcraft_develop::{DevelopSettings, LocalAdjustments, POINT_CURVE_LUT_SIZE, PointCurve, Process, ToneCurve, VignetteStyle};
 use lightcraft_geom::Point;
 use lightcraft_raster::Rgba8;
 
@@ -21,14 +21,14 @@ fn smooth(e0: f32, e1: f32, x: f32) -> f32 {
 }
 
 /// Parametric region curve (encoded domain) composed with the master point curve.
-fn curve_luts(c: &ToneCurve) -> Option<[Lut1; 3]> {
+fn curve_luts(c: &ToneCurve, fades: [Option<(f64, f64)>; 4]) -> Option<[Lut1; 3]> {
     let parametric = c.highlights != 0.0 || c.lights != 0.0 || c.darks != 0.0 || c.shadows != 0.0;
-    let master = !ToneCurve::point_curve_is_identity(&c.master);
-    let chans = [&c.red, &c.green, &c.blue].map(|p| !ToneCurve::point_curve_is_identity(p));
+    let master = !c.master.is_identity() || fades[0].is_some();
+    let chans = std::array::from_fn::<_, 3, _>(|i| ![&c.red, &c.green, &c.blue][i].is_identity() || fades[i + 1].is_some());
     if !parametric && !master && !chans.iter().any(|b| *b) {
         return None;
     }
-    const N: usize = 1024;
+    const N: usize = POINT_CURVE_LUT_SIZE;
     let (s1, s2, s3) = ((c.split_shadows / 100.0) as f32, (c.split_mid / 100.0) as f32, (c.split_highlights / 100.0) as f32);
     let regions = [(0.0, s1, c.shadows), (s1, s2, c.darks), (s2, s3, c.lights), (s3, 1.0, c.highlights)];
     let mut base = Lut1::from_fn(N, |x| {
@@ -48,12 +48,75 @@ fn curve_luts(c: &ToneCurve) -> Option<[Lut1; 3]> {
     for i in 1..N {
         base.v[i] = base.v[i].max(base.v[i - 1]);
     }
-    let to_pts = |p: &[Point]| p.iter().map(|q| (q.x, q.y)).collect::<Vec<_>>();
     if master {
-        base = MonotoneCurve::new(&to_pts(&c.master)).to_lut(N).compose(&base);
+        base = point_lut(&c.master, fades[0]).compose(&base);
     }
     let per = [&c.red, &c.green, &c.blue];
-    Some(std::array::from_fn(|i| if chans[i] { MonotoneCurve::new(&to_pts(per[i])).to_lut(N).compose(&base) } else { base.clone() }))
+    Some(std::array::from_fn(|i| if chans[i] { point_lut(per[i], fades[i + 1]).compose(&base) } else { base.clone() }))
+}
+
+/// Refine between the master/parametric and individual-channel curves.
+/// Absent for master-only, channel-only, legacy, HDR and full-saturation renders.
+pub struct SplitCurveLuts {
+    pub master: Lut1,
+    /// Identity channels are skipped instead of adding an interpolation round trip.
+    pub channels: [Option<Lut1>; 3],
+}
+
+fn split_curve_luts(c: &ToneCurve, fades: [Option<(f64, f64)>; 4]) -> Option<SplitCurveLuts> {
+    let per = [&c.red, &c.green, &c.blue];
+    let channels = std::array::from_fn(|i| (!per[i].is_identity() || fades[i + 1].is_some()).then(|| point_lut(per[i], fades[i + 1])));
+    if channels.iter().all(Option::is_none) {
+        return None;
+    }
+    let master_only = ToneCurve { red: PointCurve::default(), green: PointCurve::default(), blue: PointCurve::default(), ..c.clone() };
+    // Use the unchanged builder, including parametric composition and the profile's master fade.
+    let master = curve_luts(&master_only, [fades[0], None, None, None])?.into_iter().next()?;
+    Some(SplitCurveLuts { master, channels })
+}
+
+/// An imported profile is an independent encoded-domain function after the global curves.
+/// Amount mixes the composed master/channel function with identity, without changing saved
+/// curves or involving the global curve panel's bypass and Refine Saturation controls.
+fn profile_curve_luts(s: &DevelopSettings) -> Option<[Lut1; 3]> {
+    let look = s.profile.imported_look()?;
+    // Serialized profiles are checked on load. Public in-process structs must not introduce
+    // nonfinite samples or overflow when Amount extrapolates to 200%.
+    if look.validate().is_err() {
+        return None;
+    }
+    let k = (s.profile.amount / 100.0).clamp(0.0, 2.0);
+    let per = [&look.red, &look.green, &look.blue];
+    if !k.is_finite() || k == 0.0 || (look.master.is_identity() && per.iter().all(|c| c.is_identity())) {
+        return None;
+    }
+    let master = look.master.render_lut();
+    Some(std::array::from_fn(|i| {
+        let mut lut = if per[i].is_identity() { master.clone() } else { per[i].render_lut().compose(&master) };
+        if k != 1.0 {
+            for (j, v) in lut.v.iter_mut().enumerate() {
+                let x = j as f64 / (POINT_CURVE_LUT_SIZE - 1) as f64;
+                *v = (x + k * (f64::from(*v) - x)) as f32;
+            }
+        }
+        lut
+    }))
+}
+
+/// Resolve profile output levels without fitting a blended function back through sparse handles.
+fn point_lut(curve: &PointCurve, fade: Option<(f64, f64)>) -> Lut1 {
+    let Some((black, white)) = fade else { return curve.render_lut() };
+    if let Some(points) = curve.sparse_points() {
+        // Preserve the existing sparse-curve profile result bit-for-bit.
+        let points = if points.len() < 2 { vec![Point::new(0.0, 0.0), Point::new(1.0, 1.0)] } else { points.to_vec() };
+        let points: Vec<_> = points.iter().map(|p| (p.x, black + p.y.clamp(0.0, 1.0) * (white - black))).collect();
+        return MonotoneCurve::new(&points).to_lut(POINT_CURVE_LUT_SIZE);
+    }
+    let mut lut = curve.render_lut();
+    for value in &mut lut.v {
+        *value = (black + f64::from(*value).clamp(0.0, 1.0) * (white - black)) as f32;
+    }
+    lut
 }
 
 /// Vignette (post-crop) parameters.
@@ -147,9 +210,59 @@ pub fn mask_terms(j: &LocalAdjustments) -> [f32; MASK_TERMS] {
     ]
 }
 
+/// Fixed curve primaries for Process V2. The transfer function is sRGB, independently of
+/// ProPhoto's export transfer function. Absent for V1 and when both curve stages are identity.
+#[derive(Clone, Copy, Debug)]
+pub struct CurveSpace {
+    pub to_curve: [[f32; 3]; 3],
+    pub from_curve: [[f32; 3]; 3],
+}
+
+/// Numerical guard for V2 curve transfer decoding only: ±1e15 encoded decodes below 1e36,
+/// leaving f32 matrix headroom. It is independent of SDR/HDR peak; output mapping owns clipping.
+pub const CURVE_ENCODED_LIMIT: f32 = 1e15;
+
+/// Runtime HSV profile, applied in linear ProPhoto before camera tone and B&W.
+/// Its value-axis transfer is part of the table, not an RGB encoding of this stage.
+struct ImportedTable {
+    table: std::sync::Arc<lightcraft_raw::profile::big_table::DecodedLookTable>,
+    scaled: Option<lightcraft_raw::profile::HsvTable>,
+    space: CurveSpace,
+}
+
+impl ImportedTable {
+    fn new(resource: crate::ResolvedProfileTable) -> Self {
+        let crate::ResolvedProfileTable { table, amount } = resource;
+        // The shared eligibility gate checked every scaled entry before rendering. Keep the
+        // original resource immutable; only non-unit amounts allocate a bounded transient grid.
+        let scaled = (amount != 1.0).then(|| {
+            let mut grid = table.hsv().clone();
+            for entry in &mut grid.data {
+                *entry = crate::table_entry_at_amount(*entry, amount);
+            }
+            grid
+        });
+        Self {
+            table,
+            scaled,
+            space: CurveSpace {
+                to_curve: lightcraft_color::REC2020.to_space(&lightcraft_color::PROPHOTO).to_f32(),
+                from_curve: lightcraft_color::PROPHOTO.to_space(&lightcraft_color::REC2020).to_f32(),
+            },
+        }
+    }
+
+    fn apply(&self, rgb: [f32; 3]) -> [f32; 3] {
+        let prophoto = mul3(&self.space.to_curve, rgb);
+        mul3(&self.space.from_curve, self.scaled.as_ref().unwrap_or_else(|| self.table.hsv()).apply(prophoto))
+    }
+}
+
 /// Everything the per-pixel stage computes once per render: the CPU loop below and the GPU kernel
 /// (`lightcraft-gpu`) both read their parameters from here, so the two cannot drift apart.
 pub struct FinishParams {
+    /// CPU-only explicit table; public GPU entry declines active references.
+    imported_table: Option<ImportedTable>,
     /// A LUT profile and its amount (0..2), applied to the display-encoded colour.
     pub lut: Option<(std::sync::Arc<crate::lut::Lut3d>, f32)>,
     pub tone: ToneMap,
@@ -159,6 +272,13 @@ pub struct FinishParams {
     pub shadow_tint: f32,
     /// Tone curves (parametric ∘ point, per channel) on encoded values, 1024 entries each.
     pub curves: Option<[Lut1; 3]>,
+    /// SDR mixed curves: master/parametric, refinement, then individual channels.
+    pub split_curves: Option<SplitCurveLuts>,
+    /// Imported profile master/channel curves and Amount, after global curves/refinement and
+    /// before grain. Same sRGB encoding domain as the global curves, independent of their bypass.
+    pub profile_curves: Option<[Lut1; 3]>,
+    /// V2 curves run in these fixed primaries before proof/output mapping.
+    pub curve_space: Option<CurveSpace>,
     /// Refine Saturation as 0..1 (1 = the curves' own saturation).
     pub refine_sat: f32,
     pub vig: Option<Vig>,
@@ -224,15 +344,39 @@ impl FinishParams {
         });
         let calibration = s.section_enabled("calibration");
         let peak = s.hdr.peak();
+        let fades = crate::profiles::curve_fades(s);
+        let curves = curve_luts(&s.curve, fades);
+        let master_or_parametric = !s.curve.master.is_identity()
+            || fades[0].is_some()
+            || s.curve.highlights != 0.0
+            || s.curve.lights != 0.0
+            || s.curve.darks != 0.0
+            || s.curve.shadows != 0.0;
+        // In SDR, channel-only curves do not trigger saturation refinement. Keep the
+        // measured master-only path, legacy V1, and unmeasured HDR ordering intact.
+        let current_sdr = matches!(s.process.process(), Process::V2 | Process::V3) && !s.hdr.enabled;
+        let refine_sat = if current_sdr && !master_or_parametric { 1.0 } else { (s.curve.refine_saturation / 100.0).clamp(0.0, 1.0) as f32 };
+        // At 100 keep the composed LUT exactly: separate interpolation can round differently.
+        let split_curves = if current_sdr && master_or_parametric && refine_sat < 1.0 { split_curve_luts(&s.curve, fades) } else { None };
+        let profile_curves = profile_curve_luts(s);
+        let curve_space =
+            (matches!(s.process.process(), Process::V2 | Process::V3) && (curves.is_some() || profile_curves.is_some())).then(|| CurveSpace {
+                to_curve: lightcraft_color::REC2020.to_space(&lightcraft_color::PROPHOTO).to_f32(),
+                from_curve: lightcraft_color::PROPHOTO.to_space(&lightcraft_color::REC2020).to_f32(),
+            });
         FinishParams {
+            imported_table: None,
             peak,
             calib: if calibration { crate::colorops::calibration_matrix(&s.calibration) } else { None },
             shadow_tint: if calibration { (s.calibration.shadows_tint / 100.0) as f32 } else { 0.0 },
             tone: base_tone(s, info, peak),
             lut: crate::lut::get(&s.profile.id).map(|l| (l, (s.profile.amount / 100.0).clamp(0.0, 2.0) as f32)),
             ops: ColorOps::new(s),
-            curves: curve_luts(&s.curve),
-            refine_sat: (s.curve.refine_saturation / 100.0).clamp(0.0, 1.0) as f32,
+            curves,
+            split_curves,
+            profile_curves,
+            curve_space,
+            refine_sat,
             vig: if effects { vignette(s) } else { None },
             to_out: space.from_working(),
             out_luma: space.luma(),
@@ -280,8 +424,8 @@ impl FinishParams {
 pub fn base_tone(s: &DevelopSettings, info: &SourceInfo, peak: f32) -> ToneMap {
     let l = &s.light;
     match s.process.process() {
-        // V2 changes the Highlights/Shadows base (`local::tone_base`), not the tone map
-        Process::V1 | Process::V2 => match info.camera_tone.as_ref().filter(|_| info.raw) {
+        // All processes share the base tone map; V3 changes the spatial base.
+        Process::V1 | Process::V2 | Process::V3 => match info.camera_tone.as_ref().filter(|_| info.raw) {
             Some(curve) => ToneMap::camera_hdr(curve, l.contrast, l.whites, l.blacks, peak),
             None if info.raw => ToneMap::hdr(l.contrast, l.whites, l.blacks, peak),
             None => ToneMap::display_hdr(l.contrast, l.whites, l.blacks, peak),
@@ -289,6 +433,7 @@ pub fn base_tone(s: &DevelopSettings, info: &SourceInfo, peak: f32) -> ToneMap {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn finish(
     p: &Prepared,
     s: &DevelopSettings,
@@ -297,9 +442,11 @@ pub(crate) fn finish(
     space: OutputSpace,
     display: Option<&crate::DisplaySpace>,
     proof: Option<crate::Proof>,
+    imported_table: Option<crate::ResolvedProfileTable>,
 ) -> Rgba8 {
     let (w, h) = (p.img.width, p.img.height);
     let mut fp = FinishParams::new(s, frame, info, w, h, p.px_per_long, p.air, space);
+    fp.imported_table = imported_table.map(ImportedTable::new);
     fp.proof = proof.map(|pr| pr.params(space));
     if let Some(d) = display {
         fp.for_display(d, proof);
@@ -325,10 +472,12 @@ pub(crate) fn finish_deep(
     space: OutputSpace,
     depth: OutputDepth,
     proof: Option<crate::Proof>,
+    imported_table: Option<crate::ResolvedProfileTable>,
 ) -> DeepImage {
     use lightcraft_color::transfer::srgb_to_linear;
     let (w, h) = (p.img.width, p.img.height);
     let mut fp = FinishParams::new(s, frame, info, w, h, p.px_per_long, p.air, space);
+    fp.imported_table = imported_table.map(ImportedTable::new);
     fp.proof = proof.map(|pr| pr.params(space));
     let trc = fp.out_trc;
     let samples = match depth {
@@ -501,7 +650,7 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                 delta += cl * 0.85 * det * (0.35 + 0.65 * mid);
             }
             let tx = tex + l_tex;
-            let sp = l_sharp * 0.6 + sharpen;
+            let sp = l_sharp * 0.6;
             if (tx != 0.0 || sp != 0.0)
                 && let Some(b) = &p.texture_blur
             {
@@ -512,6 +661,13 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                     let m = if sharpen_mask > 0.0 { smooth(sharpen_mask * 0.25, sharpen_mask * 0.25 + 0.15, det.abs()) } else { 1.0 };
                     delta += sp * 1.3 * det.clamp(-0.8, 0.8) * m;
                 }
+            }
+            if sharpen != 0.0
+                && let Some(b) = &p.sharpen_blur
+            {
+                let det = l_pre - b.data[i];
+                let m = if sharpen_mask > 0.0 { smooth(sharpen_mask * 0.25, sharpen_mask * 0.25 + 0.15, det.abs()) } else { 1.0 };
+                delta += sharpen * 1.3 * det.clamp(-0.8, 0.8) * m;
             }
             // local Noise: smooth (or, negative, boost) small-amplitude detail, keep edges
             if l_noise != 0.0
@@ -528,6 +684,11 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
             // --- calibration (scene linear, before the tone map)
             if fp.calib.is_some() || fp.shadow_tint != 0.0 {
                 c = crate::colorops::calibrate(c, fp.calib.as_ref(), fp.shadow_tint);
+            }
+
+            // --- explicit profile table (scene linear, before camera tone and B&W)
+            if let Some(table) = &fp.imported_table {
+                c = table.apply(c);
             }
 
             // --- tone map on luminance, highlight desaturation
@@ -581,6 +742,12 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                 }
             }
 
+            // V2 only: curves see fixed primaries before proof/output gamut mapping. Identity
+            // curves skip even this matrix round trip, preserving the no-curve path exactly.
+            if let Some(space) = fp.curve_space {
+                d = working_curves(d, fp, space, srgb, exact);
+            }
+
             // --- gamut map to the output space (desaturate towards luminance until in range);
             // soft proofing maps into the proof space first and shows that in the output space
             let mut warn = None;
@@ -625,16 +792,26 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
             } else {
                 r.map(|v| encode_srgb(srgb, v))
             };
-            if let Some(l) = curves {
-                let e0 = e;
-                e = if hdr {
-                    // above SDR white the curves continue with slope 1 from their end point
-                    std::array::from_fn(|k| if e[k] > 1.0 { l[k].eval(1.0) + (e[k] - 1.0) } else { l[k].eval(e[k]) })
-                } else {
-                    [l[0].eval(e[0]), l[1].eval(e[1]), l[2].eval(e[2])]
-                };
-                if fp.refine_sat < 1.0 {
-                    e = refine_saturation(e0, e, fp.refine_sat);
+            // V1 retains its original target-primary arithmetic and ordering.
+            if fp.curve_space.is_none() {
+                if let Some(l) = curves {
+                    let e0 = e;
+                    e = if hdr {
+                        // above SDR white the curves continue with slope 1 from their end point
+                        std::array::from_fn(|k| if e[k] > 1.0 { l[k].eval(1.0) + (e[k] - 1.0) } else { l[k].eval(e[k]) })
+                    } else {
+                        [l[0].eval(e[0]), l[1].eval(e[1]), l[2].eval(e[2])]
+                    };
+                    if fp.refine_sat < 1.0 {
+                        e = refine_saturation(e0, e, fp.refine_sat);
+                    }
+                }
+                if let Some(l) = &fp.profile_curves {
+                    e = if hdr {
+                        std::array::from_fn(|k| if e[k] > 1.0 { l[k].eval(1.0) + (e[k] - 1.0) } else { l[k].eval(e[k]) })
+                    } else {
+                        [l[0].eval(e[0]), l[1].eval(e[1]), l[2].eval(e[2])]
+                    };
                 }
             }
             if let Some((amt, cell, rough, seed)) = *grain {
@@ -667,6 +844,46 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
         }
     });
     out
+}
+
+/// Apply V2 global curves, their saturation refinement, then imported-profile curves in
+/// fixed ProPhoto D50 primaries. Signed and above-peak outputs survive until output gamut mapping;
+/// only extreme finite encoded values are bounded to avoid overflow in decoding/matrix arithmetic.
+/// HDR retains the slope-one extension above encoded SDR white through both LUT stages.
+fn working_curves(d: [f32; 3], fp: &FinishParams, space: CurveSpace, srgb: &[f32; SRGB_LUT_N + 1], exact: bool) -> [f32; 3] {
+    let hdr = fp.peak > 1.0;
+    let mut e = mul3(&space.to_curve, d).map(|v| {
+        if hdr && v > 1.0 {
+            linear_to_srgb(v)
+        } else if exact {
+            linear_to_srgb(v.clamp(0.0, 1.0))
+        } else {
+            encode_srgb(srgb, v)
+        }
+    });
+    let bound = |v: f32| v.clamp(-CURVE_ENCODED_LIMIT, CURVE_ENCODED_LIMIT);
+    let apply =
+        |l: &[Lut1; 3], e: [f32; 3]| std::array::from_fn(|k| bound(if hdr && e[k] > 1.0 { l[k].eval(1.0) + (e[k] - 1.0) } else { l[k].eval(e[k]) }));
+    if let Some(split) = &fp.split_curves {
+        let before = e;
+        e = e.map(|v| bound(split.master.eval(v)));
+        e = refine_saturation(before, e, fp.refine_sat);
+        for (value, channel) in e.iter_mut().zip(&split.channels) {
+            if let Some(channel) = channel {
+                *value = bound(channel.eval(*value));
+            }
+        }
+    } else if let Some(l) = &fp.curves {
+        let before = e;
+        e = apply(l, e);
+        if fp.refine_sat < 1.0 {
+            e = refine_saturation(before, e, fp.refine_sat);
+        }
+    }
+    if let Some(l) = &fp.profile_curves {
+        e = apply(l, e);
+    }
+    mul3(&space.from_curve, e.map(|v| srgb_to_linear(bound(v))))
 }
 
 /// A colour needing more desaturation than this (scale < `GAMUT_WARN`) to fit is out of gamut for
@@ -800,5 +1017,130 @@ mod tests {
         assert!(worst < 2e-5, "{worst}");
         assert_eq!(encode_srgb(lut, -1.0), 0.0);
         assert!((encode_srgb(lut, 2.0) - 1.0).abs() < 1e-6);
+    }
+    #[test]
+    fn interior_diagonal_curve_clamps_ends_continuously() {
+        use lightcraft_geom::Point;
+        let mut c = ToneCurve { master: vec![Point::new(0.25, 0.25), Point::new(0.75, 0.75)].into(), ..Default::default() };
+        let original = curve_luts(&c, [None; 4]).unwrap();
+        for lut in &original {
+            assert!((lut.eval(0.0) - 0.25).abs() < 1e-6);
+            assert!((lut.eval(0.5) - 0.5).abs() < 1e-6);
+            assert!((lut.eval(1.0) - 0.75).abs() < 1e-6);
+        }
+        c.master = c.master.sparse_points().unwrap().iter().map(|p| Point::new(p.x, p.y + 1e-6)).collect::<Vec<_>>().into();
+        let moved = curve_luts(&c, [None; 4]).unwrap();
+        for (a, b) in original.iter().zip(moved.iter()) {
+            for x in [0.0, 0.1, 0.25, 0.5, 0.75, 0.9, 1.0] {
+                assert!((a.eval(x) - b.eval(x)).abs() < 2e-6);
+            }
+        }
+    }
+    #[test]
+    fn camera_white_endpoint_does_not_cap_the_upstream_hdr_process() {
+        let curve = crate::tone::CameraTone::new(std::array::from_fn(|i| {
+            let v = 2f32.powf(-12.0 + 12.0 * i as f32 / 31.0);
+            [v, v]
+        }))
+        .unwrap();
+        let info = SourceInfo { raw: true, camera_tone: Some(curve), ..Default::default() };
+        for process in [lightcraft_develop::ProcessVersion::V1, lightcraft_develop::ProcessVersion::V2, lightcraft_develop::ProcessVersion::V3] {
+            let s = DevelopSettings { process, ..Default::default() };
+            let sdr = base_tone(&s, &info, 1.0);
+            let expected_sdr = ToneMap::camera(&curve, 0.0, 0.0, 0.0);
+            assert_eq!(sdr.lut(), expected_sdr.lut(), "{process:?}: SDR camera curve changed");
+            assert_eq!(sdr.saturation_anchor(), expected_sdr.saturation_anchor());
+            assert!(sdr.saturation_anchor().is_some());
+            assert_eq!(sdr.apply(1.0), 1.0);
+            assert_eq!(sdr.apply(16.0), 1.0);
+            let hdr = base_tone(&s, &info, 8.0);
+            assert!(hdr.saturation_anchor().is_none());
+            for y in [0.02, 0.18, 0.4] {
+                assert_eq!(hdr.apply(y), sdr.apply(y), "{process:?}: HDR camera midtone changed at {y}");
+            }
+            let mut previous = hdr.apply(0.99);
+            assert!(previous > 1.0, "{process:?}: HDR must lift highlights before the SDR white endpoint");
+            for y in [0.999, 1.0, 1.001, 1.01, 2.0, 16.0, 32.0] {
+                let output = hdr.apply(y);
+                assert!(output >= previous, "{process:?}: HDR is not monotone at {y}: {output} < {previous}");
+                assert!(output <= 8.0, "{process:?}: HDR exceeded its peak at {y}");
+                previous = output;
+            }
+            assert_eq!(hdr.apply(32.0), 8.0, "{process:?}: HDR must reach its peak beyond the SDR white endpoint");
+        }
+    }
+    #[test]
+    fn blended_functions_render_continuously_and_profile_fades_keep_sparse_compatibility() {
+        let a = PointCurve::from(vec![Point::new(0.0, 0.0), Point::new(0.3, 0.15), Point::new(1.0, 1.0)]);
+        let b = PointCurve::from(vec![Point::new(0.0, 0.1), Point::new(0.6, 0.85), Point::new(1.0, 0.95)]);
+        for amount in [0.25, 0.5, 0.75, 1.5, 2.0] {
+            let blended = a.blend(&b, amount).unwrap();
+            let c = ToneCurve { master: blended.clone(), ..Default::default() };
+            let lut = curve_luts(&c, [None; 4]).unwrap();
+            for i in 0..POINT_CURVE_LUT_SIZE {
+                let x = i as f64 / (POINT_CURVE_LUT_SIZE - 1) as f64;
+                let want = a.eval(x).unwrap() + amount * (b.eval(x).unwrap() - a.eval(x).unwrap());
+                assert!((f64::from(lut[0].eval(x as f32)) - want).abs() < 1e-6, "amount{amount},x{x}");
+            }
+            let faded = point_lut(&blended, Some((0.08, 0.96)));
+            for (actual, source) in faded.v.iter().zip(blended.render_lut().v) {
+                assert!((f64::from(*actual) - (0.08 + f64::from(source).clamp(0.0, 1.0) * 0.88)).abs() < 1e-7);
+            }
+        }
+        let faded = point_lut(&a, Some((0.08, 0.96)));
+        let legacy = MonotoneCurve::new(&[(0.0, 0.08), (0.3, 0.08 + 0.15 * (0.96 - 0.08)), (1.0, 0.96)]).to_lut(POINT_CURVE_LUT_SIZE);
+        assert_eq!(faded.v, legacy.v, "legacy sparse profile pixels are unchanged");
+        for endpoint in [0.0, 1.0] {
+            let curve = a.blend(&b, endpoint).unwrap();
+            assert_eq!(curve.render_lut().v, if endpoint == 0.0 { a.render_lut().v } else { b.render_lut().v });
+        }
+        let mut s = DevelopSettings::default();
+        s.profile.id = lightcraft_develop::IMPORTED_LOOK_ID.into();
+        s.profile.imported = Some(lightcraft_develop::ImportedLook { master: a.clone(), red: b.clone(), ..Default::default() });
+        s.set_section_enabled("light", false);
+        s.set_section_enabled("curve", false);
+        s.curve.refine_saturation = 0.0;
+        for amount in [0.0, 50.0, 100.0, 200.0] {
+            s.profile.amount = amount;
+            let lut = profile_curve_luts(&s);
+            if amount == 0.0 {
+                assert!(lut.is_none());
+                continue;
+            }
+            let lut = lut.unwrap();
+            let master = a.render_lut();
+            let red = b.render_lut();
+            for i in 0..POINT_CURVE_LUT_SIZE {
+                let x = i as f32 / (POINT_CURVE_LUT_SIZE - 1) as f32;
+                let k = amount as f32 / 100.0;
+                assert!((lut[0].eval(x) - (x + k * (red.eval(master.v[i]) - x))).abs() < 1e-6);
+                assert!((lut[1].eval(x) - (x + k * (master.v[i] - x))).abs() < 1e-6);
+                assert_eq!(lut[1].v[i], lut[2].v[i]);
+            }
+        }
+        s.process = lightcraft_develop::ProcessVersion::V1;
+        // Verify the V1 finish ordering after a nonidentity global curve and saturation
+        // refinement, not merely the construction of the independent profile tables.
+        s.set_section_enabled("light", true);
+        s.set_section_enabled("curve", true);
+        s.curve.master = b;
+        let src = lightcraft_raster::Rgb32f::filled(16, 8, [0.1, 0.2, 0.05]);
+        let mut req = crate::RenderRequest::fit(16, 8);
+        req.depth = OutputDepth::F32Linear;
+        let rendered = |settings: &DevelopSettings| {
+            let deep = crate::render(&src, &SourceInfo::default(), settings, &req).deep.unwrap();
+            let DeepSamples::F32(samples) = deep.samples else { panic!("expected float samples") };
+            samples
+        };
+        s.profile.amount = 0.0;
+        let before = rendered(&s);
+        s.profile.amount = 100.0;
+        let after = rendered(&s);
+        let luts = profile_curve_luts(&s).unwrap();
+        assert_ne!(before, after);
+        for (i, (&before, after)) in before.iter().zip(after).enumerate() {
+            let want = lightcraft_color::transfer::srgb_to_linear(luts[i % 3].eval(linear_to_srgb(before)).clamp(0.0, 1.0));
+            assert!((after - want).abs() < 1e-6, "profile must follow global curves and refinement: {after} != {want}");
+        }
     }
 }

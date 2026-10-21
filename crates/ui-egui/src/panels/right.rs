@@ -633,6 +633,11 @@ fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             }
             ui.add_space(6.0);
         }
+        let unsupported_edits = app.session.unsupported_edits(id);
+        if !unsupported_edits.is_empty() {
+            crate::widgets::unsupported_edits_notice(ui, "info", &unsupported_edits);
+            ui.add_space(6.0);
+        }
         if let Some(name) = &p.copy_name {
             let of = p
                 .copy_of

@@ -1,6 +1,6 @@
 //! JPEG XL tiles and strips (DNG 1.7 compression 52546), decoded with `jxl-oxide` (pure Rust).
 //!
-//! Per the DNG 1.7 specification a JPEG XL chunk holds N-bit unsigned integers (8 ≤ N ≤ 16) or 16-bit
+//! Per the DNG 1.7 specification a JPEG XL chunk holds N-bit unsigned integers (8 ≤ N ≤ 16) or 16-/32-bit
 //! floats, in 1 or 3 planes, as either a bare codestream or an ISO-BMFF container; jxl-oxide reads both.
 //!
 //! jxl-oxide renders every channel as `f32`: integer samples come out as `value / (2^bits − 1)` with
@@ -141,7 +141,7 @@ fn open(src: &[u8], cw: usize, ch: usize, vw: usize, vh: usize, cpp: usize, bits
     if !matches!(cpp, 1 | 3) {
         return Err(RawError::Unsupported(format!("JPEG XL with {cpp} samples per pixel")));
     }
-    if float && bits != 16 || !float && !(8..=16).contains(&bits) {
+    if float && !matches!(bits, 16 | 32) || !float && !(8..=16).contains(&bits) {
         return Err(RawError::Unsupported(format!("JPEG XL with {bits}-bit {} samples", if float { "float" } else { "integer" })));
     }
     // The decoder's memory is bounded by the tile itself: a codestream that needs more (extra
@@ -200,6 +200,9 @@ pub(crate) fn decode(src: &[u8], cw: usize, ch: usize, vw: usize, vh: usize, cpp
     let render = img.render_frame(0).map_err(corrupt)?;
     let fb = render.image_all_channels();
     let (jw, jh, fc) = (fb.width(), fb.height(), fb.channels());
+    if fb.buf().iter().any(|sample| !sample.is_finite()) {
+        return Err(corrupt("non-finite sample"));
+    }
     if jw == 0 || jh == 0 || jw > cw || jh > ch || fc < cpp {
         return Err(corrupt(format!("rendered {jw}×{jh}×{fc}, expected {cw}×{ch}×{cpp}")));
     }
@@ -225,6 +228,9 @@ pub(crate) fn decode(src: &[u8], cw: usize, ch: usize, vw: usize, vh: usize, cpp
                 restore(s, d);
             }
         }
+        if out.iter().any(|sample| !sample.is_finite()) {
+            return Err(corrupt("non-finite camera sample"));
+        }
         ChunkPx::F32(out)
     } else {
         let mut out = vec![0u16; n];
@@ -232,7 +238,10 @@ pub(crate) fn decode(src: &[u8], cw: usize, ch: usize, vw: usize, vh: usize, cpp
         for (dst, src) in out.chunks_exact_mut(cw * cpp).zip(rows) {
             for (d, s) in dst.chunks_exact_mut(cpp).zip(src.chunks_exact(fc)) {
                 restore(s, &mut px[..cpp]);
-                // `as` saturates (NaN → 0): lossy overshoot clips to the integer range
+                if px.iter().any(|sample| !sample.is_finite()) {
+                    return Err(corrupt("non-finite camera sample"));
+                }
+                // `as` saturates: finite lossy overshoot clips to the integer range.
                 d.iter_mut().zip(&px).for_each(|(d, s)| *d = (s * max).round() as u16);
             }
         }

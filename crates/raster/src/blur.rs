@@ -33,7 +33,7 @@ pub fn box_sigma(sigma: f32) -> f32 {
     if sigma.is_nan() || sigma <= 0.3 {
         return 0.0;
     }
-    box_radii(sigma).iter().map(|&r| (((2 * r + 1) * (2 * r + 1) - 1) as f32) / 12.0).sum::<f32>().sqrt()
+    box_radii(sigma).iter().map(|&r| (((2 * r as u64 + 1) * (2 * r as u64 + 1) - 1) as f32) / 12.0).sum::<f32>().sqrt()
 }
 
 /// One horizontal box pass over `row` (clamped edges), using `tmp` as scratch.
@@ -197,6 +197,9 @@ mod tests {
 
     #[test]
     fn box_sigma_is_the_blur_made() {
+        for sigma in [65536.0, f32::MAX, f32::INFINITY] {
+            assert!(box_sigma(sigma).is_finite(), "large radii must not overflow on 32-bit targets");
+        }
         assert_eq!(box_sigma(0.3), 0.0);
         assert_eq!(box_sigma(0.5), 0.0, "no box wider than 1 px");
         assert!((box_sigma(1.0) - (2.0f32 / 3.0).sqrt()).abs() < 1e-6);

@@ -1,6 +1,6 @@
 # Target-app parity: LightCraft vs Adobe Lightroom
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (RAW: 83% of Adobe's models decode, 38% verified after the camera-coverage sweep #1327) · **Target:** Adobe Lightroom Classic 15.5 (August 2026) and Lightroom 9.6 (desktop)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (upstream fidelity integration and merged checklist recount; readiness unchanged) · **Target:** Adobe Lightroom Classic 15.5 (August 2026) and Lightroom 9.6 (desktop)
 
 The authoritative assessment of how close LightCraft is to Lightroom. The row-by-row checklist is
 [parity-checklist.md](parity-checklist.md); the ranked work list is [gaps.md](gaps.md); deep areas
@@ -12,7 +12,7 @@ have their own documents: [raw-parity.md](raw-parity.md), [file-format-parity.md
 
 | Number | Value | Kind |
 |---|---:|---|
-| **Feature breadth**, checklist | **81.6%** of 532 in-scope rows (P0 98.0%, P1 95.2%, P2 50.0%) | **measured**: recount of [parity-checklist.md](parity-checklist.md) rows (✅ 1, 🟡 ½, 🚫 left out), the same rule `cargo xtask parity` uses |
+| **Feature breadth**, checklist | **82.6%** of 539 in-scope rows (P0 96.8%, P1 94.1%, P2 55.7%) | **measured**: recount of [parity-checklist.md](parity-checklist.md) rows (✅ 1, 🟡 ½, 🚫 left out), the same rule `cargo xtask parity` uses |
 | **Feature breadth**, weighted by use | **~77%** | estimated: feature-area table below |
 | **Ready for real work** (full target) | **~61%** (range 56–66%) | estimated: weighted sum over the dimensions with written weights, see [below](#ready-for-real-work-mainstream-practitioner-and-essentials-user) |
 | **Mainstream practitioner** | **~51%** (range 46–56%) | estimated: weekly areas of a working photographer, depth 74.0% × 0.804 × colour 0.85 |
@@ -32,11 +32,15 @@ have their own documents: [raw-parity.md](raw-parity.md), [file-format-parity.md
   `.lproj` localizations; `CameraProfiles` (1,500 Adobe Standard and 395 Camera Matching model
   names); `LensProfiles` (3,635 files, 56 makers); `ModelZoo` (37 AI model names). The app was not
   launched.
-- **LightCraft side:** origin/main at `b70ae174` (2026-10-10): code counts (226 engine commands, 143
+- **Initial LightCraft survey:** origin/main at `b70ae174` (2026-10-10): code counts (226 engine commands, 143
   UI commands, 122 + 10 develop controls, 2,561 tests, ≈ 202,000 Rust lines in 24 crates + 3 apps),
   the checklist rows, raw corpus manifests, locale catalogs, CI workflows, docs.
-- **Behaviour and output** were not compared against a running Lightroom in this pass; the
-  measured ΔE figures in [raw-parity.md](raw-parity.md) come from earlier work.
+- **Behaviour and output:** the initial survey did not compare a running Lightroom. This revision
+  includes separate local native 16-bit Lightroom chart/photo measurements, described
+  [below](#local-rendering-evidence-2026-10-10). The ΔE figures in [raw-parity.md](raw-parity.md)
+  still refer to that document's earlier camera-colour work.
+- **Current checklist recount:** 574 total rows: 410 done, 70 partial, 59 missing and 35 out of
+  scope. The 539 in-scope rows yield 82.6%; estimated readiness and hours are unchanged.
 
 **Presence is not parity.** ✅ rows are set by whoever lands a feature and have not been checked
 systematically against Lightroom's behaviour; bugs keep turning up in ✅ areas (CR2 colour-filter
@@ -46,7 +50,7 @@ phase #85, duplicate Local entries #22, black GPU exports on an Intel iGPU #78).
 
 | Dimension | Breadth | Ready for real work | Remaining | Doc |
 |---|---:|---:|---:|---|
-| Features (weighted areas below) | ~77% (checklist 81.1%, measured) | ~61% | 600–1,100 h | [Features](#features) |
+| Features (weighted areas below) | ~77% (checklist 82.6%, measured) | ~61% | 600–1,100 h | [Features](#features) |
 | ↳ RAW cameras, colour and lens profiles (part of features) | 83% of Adobe's 1,446 models decode (38% verified), measured | ~56% | 255–480 h | [raw-parity.md](raw-parity.md) |
 | UI/UX fidelity | ~85% | ~70% | 32–54 h | [ui-parity.md](ui-parity.md) |
 | File formats (non-raw: images, sidecars, presets, catalogs) | ~85% | ~70% | 30–55 h | [file-format-parity.md](file-format-parity.md) |
@@ -68,18 +72,249 @@ from the checklist sections and the deep-dive documents.
 |---|---:|---:|---:|---:|---|
 | Import and library (import, folders, albums, smart albums, keywords, metadata, search, faces) | 15% | 90% | 80% | 25–45 h | checklist A–E 83–92%; robust journal; 85k-photo libraries |
 | RAW decoding and camera coverage | 15% | 81% | 77% | 120–220 h | [raw-parity.md](raw-parity.md), measured model by model: 85% of photographers' cameras decode (use-weighted), × 0.9 for per-body bugs; CR3 variants, compressed ORF, HE NEF |
-| Colour, camera profiles, render fidelity | 10% | 65% | 35% | 80–150 h | 5 bundled profiles vs Adobe's 1,500; per-file fits median ΔE ~5 vs the camera JPEG, ~10% far off; no fidelity suite ([raw-parity.md](raw-parity.md#colour)) |
-| Global develop adjustments (light, colour, curves, grading, effects, detail) | 15% | 93% | 70% | 30–60 h | checklist F 91.7%; character tuned by eye |
+| Colour, camera profiles, render fidelity | 10% | 65% | 35% | 80–150 h | 5 bundled profiles vs Adobe's 1,500; per-file fits median ΔE ~5 vs the camera JPEG, ~10% far off; limited local Lightroom measurements, mixed saved-photo results ([evidence](#local-rendering-evidence-2026-10-10)) |
+| Global develop adjustments (light, colour, curves, grading, effects, detail) | 15% | 93% | 70% | 30–60 h | checklist F 84.4%; V2 curve-space correction measured; Refine Saturation approximate, sharpening Detail / NR Contrast no-ops and other measured detail gaps |
 | Optics, lens profiles, crop and geometry | 6% | 80% | 50% | 40–80 h | no lens database; crop / Upright complete |
 | Masking | 8% | 67% | 45% | 60–110 h | checklist K 67.4%; AI masks heuristic or SAM 3 without mirror |
 | Remove, heal, Enhance (denoise, Raw Details, Super Resolution, Lens Blur) | 7% | 45% | 30% | 70–130 h | checklist I 75%, P 0% |
-| Presets, profiles, versions, history, sync | 5% | 95% | 85% | 8–15 h | |
+| Presets, profiles, versions, history, sync | 5% | 95% | 85% | 8–15 h | numeric and continuous point-curve Amount, separate imported-profile curves / parameters; explicit runtime type-0 HSV tables have limited measured support; other tables and general Lightroom-matched Amount remain gaps |
 | Export | 6% | 89% | 75% | 15–30 h | checklist S 88.9% |
 | Merge and HDR | 3% | 85% | 60% | 20–35 h | merge 88% (HDR merge 🟡: AI Denoise on merged DNGs, JPEG response, memory; gap 29), HDR 70% (no HDR display) |
 | Views, compare, zoom, culling | 5% | 90% | 70% | 15–30 h | zoom detail P0 gap |
 | Classic output modules (Map, Book, Slideshow, Print, Web, publish, tethering) | 4% | 15% | 10% | 90–150 h | Classic extras 48% counts many small keys; the modules themselves are mostly ⬜ |
 | Video | 1% | 0% | 0% | 25–45 h | catalogued only |
 | **Weighted** | 100% | **~77%** | **~61%** (61.5%) | **600–1,100 h** | |
+
+### Local rendering evidence (2026-10-10)
+
+The local suite now compares authored charts and selected saved edits against Lightroom's native
+16-bit TIFF exports through their ICC profiles. Inputs, sidecars and saved settings are guarded;
+experiments use private copies and scratch catalogs. References and measurement reports remain
+local in `plan/`. This is limited evidence, not a representative camera or saved-edit benchmark.
+
+Imported B&W is rendered. A saved Look's monochrome conversion travels with profile-only copy/paste,
+presets and sync independently of global Treatment, including Amount zero. Plain Color profile selection
+removes that conversion; existing native global B&W is preserved without guessing its origin. Saved Look
+master / RGB curves and Contrast, Highlights, Shadows and Clarity are retained separately from global sliders. Preset Amount can blend continuous curve
+functions without flattening the saved curve model; malformed or unsupported native settings are
+refused rather than replaced by stale CRS settings. These preservation and control fixes do not
+establish Lightroom appearance parity for every preset or Amount.
+
+V2 applies global and imported-profile curves in fixed ProPhoto primaries with sRGB encoding,
+independent of export primaries; V1 retains the legacy rendering and saved-version behavior
+([process-versions.md](process-versions.md)). On one authored affine colour chart, global-only and
+profile-only curves each improve mean ΔE00 across declared interiors from **0.15036 to 0.03421**;
+neutral output is unchanged. CPU/GPU checks and exact legacy-output gates pass. The measurement
+supports this curve-domain correction for in-gamut SDR colours, Refine Saturation 100 and profile
+Amount 1; it does not validate gamut / proof ordering, arbitrary curves, other Amount values or HDR.
+
+The Nikon D5000's verified full-image 12-bit GBRG NEF mode now uses the measured
+4288×2848 default crop at sensor origin (11,10), preserving the complete sensor/CFA
+until after demosaicing. One calibration photograph and two photographs from separate
+withheld folders agreed against native Lightroom NEF / full-sensor DNG renders. Valid
+declared crops still take precedence; other modes and malformed declarations keep their
+previous behavior. This fixes framing, not colour or tone parity. As a decoder correction
+it affects both rendering processes; saved adjustments are not rewritten. Render caches
+and camera-look proxies are versioned, while offline proxies retain their old pixels until
+the original becomes available. Existing catalog dimensions refresh through photo reload. A saved B&W holdout
+now matches Lightroom's native dimensions. Its stride-16 mean ΔE00 changes slightly
+worse, 4.32055 → 4.35502, while p95 improves 11.22721 → 11.08583; five of nine
+native regions worsen. The camera-preview fit also changes with the corrected
+coordinates. This result supports the framing correction, not a tone improvement.
+
+The camera tone-fit port from [#699](https://github.com/storytold/lightcraft/pull/699)
+admits scene ranges down to 1.2×, with a separate original-frame bright-area check
+for fits below the previous 1.5× minimum. Local valid-shadow training remains intact.
+All 44 camera-preview tests pass, including low-contrast and highlight safeguards.
+All six complete native render outputs, ICCs and saved settings remain identical; their
+accepted tone ranges are 34.49–175.71×, so they do not exercise the new acceptance
+band or establish an improvement against Lightroom. The Lightroom error metrics
+use stride-16 grids for the five D3500 cases; the D5000 comparison also covers nine
+native 512×512 regions.
+
+Five saved-photo comparisons remain mixed: three B&W results are unchanged within rounding, while
+the SDR colour case shifts **7.54237 → 7.57388** mean ΔE00 and the HDR-origin case
+**22.56467 → 22.70120**. These use a fixed stride-16 grid of native renders; the HDR-origin edit has
+unsupported extended curves and is not a validation of HDR rendering. Source colour / tone,
+unresolved profile-table definitions, general Amount behavior and imported HDR settings remain unresolved.
+Refine Saturation is approximate. Sharpening Detail and luminance-NR Contrast are stored but unused
+in rendering: controlled Lightroom exports show both matter. Conventional NR strength and
+sharpening frequency, contrast, Amount and Radius responses also have measured gaps. The readiness
+percentages and hour estimates above remain unchanged pending broader coverage.
+
+#### Runtime profile-table evidence (2026-10-11)
+
+An explicitly loaded type-0 HSV table now produces a measured effect through the actual CPU renderer,
+instead of silently leaving the saved reference inactive. The resource is resolved only from a
+user-supplied XMP file; no profile payload or path is bundled or written into the catalog. See
+[commands and support limits](control-protocol.md#explicit-runtime-profile-tables).
+
+Seven own-chart states were rendered at native 768×400 RGB16 and compared through their ICC profiles.
+Across the 24 fixed interiors, mean ΔE00 changes from **0.880907 → 0.046312** for the color/table case,
+**0.714675 → 0.035600** with a global affine curve, **0.385510 → 0.313531** with nested B&W, and
+**1.102498 → 0.400350** with an authored camera-tone curve. Neutral controls are byte-identical;
+43 resource/settings/lifecycle checks pass. Controlled source-composition measurements support the
+pre-tone/pre-B&W position for this chart. They do not identify ordering with arbitrary Exposure,
+Calibration, spatial adjustments, profile combinations or HDR; the remaining tone/B&W error is real.
+Six B&W chart cells worsen and pooled p95 rises slightly despite the lower pooled mean.
+
+One saved Nikon D3500 B&W photo at its unchanged Amount 120 gives a mixed result: stride-16 native-grid mean
+ΔE00 improves **4.771952 → 4.405292**, p95 **16.358665 → 14.790359**; the fixed center 512×512 region
+worsens, mean **2.660664 → 2.734120**, p95 **11.499795 → 12.131304**. Original/settings/provenance
+checks pass. Independent reviews reproduce the chart and photo metrics; a separate direct-reference
+chart at 120% (table Amount 1.2) also passes its unchanged comparison bound. These results do not
+establish broad photographic parity.
+Readiness estimates and partial fidelity status are unchanged.
+
+### D3500 integration evidence (2026-10-11)
+
+Two neutral D3500 photos were compared at native 6000×4000 RGB16 before and after the upstream
+near-black camera-look and RAW saturation changes, using identical Process 2 settings and no external
+profile resources. DSC0805 is pixel-identical. On DSC0626, pooled mean ΔE00 across nine fixed interiors
+changes **5.394012 → 5.393483**, while the worst retained error changes **99.052244 → 39.946724**.
+The previously worst pixel was falsely white; its own error drops **99.052244 → 3.503372**.
+The separate whole-image grid mean slightly worsens. This is evidence for removing a rare rendering
+defect, not a broad colour improvement; combined measurements do not separate the two source changes.
+
+A separate fixed-gradient case tests local Sharpness 100 with global Sharpness 0. Lightroom's
+Masking 100 export has a much smaller local sharpening response than the requested Masking 0 case.
+The exported metadata explicitly retains 100 and omits zero; other public settings and local geometry
+match. Repeating both exports in reverse order gives exact native-pixel and ICC matches.
+Removing LightCraft's local Masking interaction raises paired D50 luminance-response RMS error
+**0.006027 → 0.009065** on the fixed grid and **0.005610 → 0.008145** in the center, worsening eight
+of nine fixed regions. The interaction is restored on CPU and GPU. Its formula and sharpening kernel
+still differ substantially from Lightroom; neither Detail bypass nor other local controls are proven
+equivalent by this comparison. Partial statuses and readiness estimates remain unchanged.
+
+The second integration onto `76b53778` retains the fork's Process 2 as default. Four matched native
+CNR0/25 captures preserve all imported settings and diagnostics. DSC0805 is full-frame pixel-identical
+at both amounts. DSC0626 differs slightly: maximum direct old/new ΔE00 among the retained grid and
+interiors is **0.003841** at CNR0 and **0.003134** at CNR25; no material fidelity gain is claimed.
+
+Explicit Process 3 adds the upstream median-prefiltered tone base while retaining V2 curves. On
+DSC0805 with Shadows +43, grid CNR0 mean error improves **8.19710 → 8.17058**, but two of nine
+interiors worsen; native export increases from **3.68 to 5.11 s** in this observation. DSC0626, with
+no active spatial tone adjustment, is pixel-identical between V2 and V3. This is mixed, limited
+evidence: V3 stays opt-in, and source/profile colour and conventional NR remain visibly unmatched.
+
+#### Channel-only Refine Saturation (2026-10-11)
+
+V2/V3 SDR now leaves individual-channel curves alone when the master curve, parametric controls
+and master-curve fade from a built-in profile are inactive. Three authored native 768×400 RGB16 chart pairs cover red
+and green affine curves and a nonlinear blue curve, with identity master/other channels. Lightroom's
+pixels and ICC are identical between explicit Refine 0 and requested 100 in each pair. The 100
+exports omit that scalar and `CompatibleVersion`; this observed serialization form is recorded
+explicitly, rather than described as independent numeric-100 readback.
+
+Against the fully verified explicit-0 Lightroom exports, mean ΔE00 changes as follows:
+
+| Individual curve | All 24 fixed interiors | Whole frame |
+|---|---:|---:|
+| Red affine | 0.597319 → 0.038811 | 0.487147 → 0.040341 |
+| Green affine | 0.769967 → 0.045187 | 0.626976 → 0.047154 |
+| Blue nonlinear | 2.876546 → 0.106233 | 2.328633 → 0.112383 |
+
+In each chart, twenty coloured interiors improve and four gray interiors remain unchanged.
+Each renderer's embedded ICC is used; the remaining difference exceeds native-code sensitivity
+bounds, so this is not pixel parity.
+Candidate Refine 100 preserves the prior native output. Separate native master-affine Refine 0/50
+controls preserve every RGB16 sample and ICC byte. V1 and HDR retain their prior refinement path.
+The existing curve-order test also covers V2/V3 channel-only behavior and the enabled-HDR/zero-headroom
+exclusion; a headless app check displays the imported chart with its exact settings.
+
+##### One D3500 photographic witness
+
+One already-seen D3500 training photograph also uses the fixed red-affine curve, identity master
+and Refine 0, with Adobe Standard/no Look and otherwise neutral settings. The comparison uses
+native 6000×4000 RGB16 exports, each renderer's embedded ICC converted to D50 XYZ, two fixed
+375×250 sample grids at native phases (0,0) and (8,8), nine disjoint 640×640 regions and a 512×512
+center. The grids and center overlap the regions; these are descriptive scopes, not independent
+photographs. No registration, resampling, fitting or heldout inspection was performed.
+
+| Fixed scope | Direct mean ΔE00 | Paired XYZ-vector RMS | Paired Lab-chroma-vector RMS |
+|---|---:|---:|---:|
+| Grid, phase (0,0) | 11.146628 → 4.939543 | 0.012269 → 0.004558 | 16.786869 → 3.623544 |
+| Grid, phase (8,8) | 11.129753 → 4.946593 | 0.012246 → 0.004563 | 16.756721 → 3.623444 |
+| Nine regions pooled | 10.787501 → 4.881046 | 0.012180 → 0.004987 | 16.712557 → 3.684541 |
+| Center | 10.378872 → 5.718512 | 0.012545 → 0.004780 | 15.146018 → 3.790288 |
+
+All thirteen scopes improve direct ΔE00 mean, RMS, p95 and maximum. Direct absolute-Y mean and
+RMS worsen in all thirteen, as does direct absolute-L* p95. Direct XYZ errors are mixed and some
+Lab/chroma maxima worsen. For example, grid-phase-(0,0) direct XYZ-vector RMS increases
+0.039884 → 0.040850 despite the lower ΔE00. Every worsening is retained in the private report.
+Paired-response means and RMS improve in every scope; some paired XYZ and Y p95/maxima worsen.
+
+The paired quantity is `(edited LC − neutral LC303c) − (edited LR − neutral LR)`, computed
+separately in XYZ and Lab; ΔE00 is never applied to Lab difference vectors. Both comparisons use
+the same retained baseline-binary neutral LC anchor. No fresh candidate-neutral capture was made,
+so this comparison does not independently establish candidate neutral invariance. Direct errors
+still include source-colour/profile mismatch: the neutral phase-(0,0) grid mean ΔE00 is 5.224440.
+This single training photograph is not heldout validation or general photographic parity.
+
+The correction revises the still-unreleased fork V2/V3 contract; existing development channel-only
+edits below Refine 100 can change without rewriting their settings. V1 remains frozen, and
+render-cache version 63 invalidates prior rendered previews. See the explicit
+[pre-release exception](process-versions.md#the-rule).
+
+These channel-only witnesses do not establish arbitrary-curve, mixed master/channel or B&W parity.
+The master refinement formula remains approximate. Source colour, conventional noise reduction
+and sharpening still have measured gaps. Partial statuses and readiness estimates are unchanged.
+
+#### Mixed master/channel ordering correction (2026-10-11)
+
+The CPU/GPU correction applies master/parametric curves and their unchanged
+Refine Saturation formula before individual-channel curves in V2/V3 SDR. Imported-profile curves
+remain after both stages. The Refine100 composed-LUT path, master-only, channel-only, V1 and HDR
+paths remain unchanged. All eight native master0/50 and red/green/blue channel0/100 controls,
+plus mixed100, preserve every RGB16 sample and ICC byte. This is a placement correction, not a
+replacement for the still-approximate master refinement formula.
+
+An authored affine-master/nonlinear-blue chart gives pooled 24-interior mean ΔE00
+**2.646066 → 0.383281**, and whole-frame **2.145175 → 0.334947**. Twenty coloured cells improve and four gray cells remain unchanged. All fixed direct ΔE00 summaries
+and XYZ RMS avoid regressions; absolute-Y error worsens in two high-amplitude isoluminant-RG
+cells. The mixed result preserves measured master-only R/G within the original code/evaluator
+bounds. Empirical forward blue compatibility is conditional and leaves 3,456 interior Refine0
+pixels unsupported. The separate analytic-affine control failed and remains inadmitted; neither
+compatibility nor candidate improvement identifies a unique Lightroom internal order.
+
+One additional already-seen D3500 training photograph (train02), fixed before candidate scores,
+uses the same master/blue curves and explicit Refine0 with otherwise neutral controls. Native
+6000×4000 exports retain both phase0/8 grids, all nine disjoint 640×640 regions, pooled regions and the
+overlapping 512×512 center, with each renderer's own ICC. No new fit or heldout inspection occurs.
+
+| Fixed scope | Direct mean ΔE00, baseline5b → candidate |
+|---|---:|
+| Grid, phase (0,0) | 9.948771 → 1.363362 |
+| Grid, phase (8,8) | 9.949168 → 1.365652 |
+| Nine regions pooled | 10.454207 → 1.326509 |
+
+All 13 scopes improve mean ΔE00 and paired XYZ-vector RMS. Regressions remain: direct ΔE00 maximum
+worsens on grid phase (8,8) (**23.999857 → 27.423555**) and region 7 (**31.459205 → 34.716989**);
+some direct XYZ/Lab/chroma maxima and lightness tails worsen. Several paired Y summaries worsen,
+including mean/RMS in regions 0,2,3,5,6; some paired lightness summaries and Lab/chroma maxima also
+worsen. Every direct/paired mean, RMS, p95 and maximum flag is retained, without selected-pixel
+filtering or tolerance changes.
+
+Both final5b baseline and candidate paired responses use the older 303c neutral LC anchor:
+`(edited LC − neutral LC303c) − (edited LR − neutral LR)`, separately in XYZ and Lab. Neither has
+a fresh neutral measurement here; paired improvement does not independently prove either
+binary's neutral invariance. Direct errors still include source-colour/profile residuals.
+This training photograph is not heldout or general photographic validation.
+
+There are 153 accepted native Lightroom exports. Mixed0 and100 both explicitly serialize the
+numeric Refine value; mixed100 omits only CompatibleVersion, accepted through a narrow recorded
+amendment. This differs from the earlier channel-only requested100 cases that omit both fields.
+Private records are `refine-mixed-order/native-candidate-score-01`,
+`refine-mixed-order/candidate-controls-native-equivalence-01.json` and
+`refine-mixed-photo/native-comparison-01` under the local 2026-10-11 fidelity audit.
+
+Independent reviews and all eight integration CI gates passed, including existing CPU/GPU curve
+equivalence on an available GPU. Final CLI `1a39853139c6` reproduces every candidate RGB16 pixel
+and ICC byte for mixed0, mixed100 and the D3500 photograph. The same unreleased V2/V3 fork
+exception applies; cache64 invalidates prior rendered previews and V1 stays frozen. Refine99.99999
+and100 are native-identical on this fixed chart. Sequential versus composed LUT sampling below100
+remains an approximation, without general continuity proof. No generic curve/B&W/camera parity,
+partial-status change or readiness increase is claimed.
 
 ## AI
 
@@ -240,8 +475,8 @@ variants, compressed ORF, HE NEF as previews) degrade but don't block a workflow
 **To beta:** ~14 points of readiness, **~340–600 h**: the `B` gaps in [gaps.md](gaps.md)
 (~230–430 h), plus burning down the ~92 open core-path user issues (40–80 h) and stability work
 around them. Beta needs: CR3, ORF and
-HE NEF decoding from sensor data; measured colour for the popular models and a fidelity suite with
-scores; Subject / Sky / People masks; a lens profile database for the
+HE NEF decoding from sensor data; measured colour for the popular models and broader saved-edit
+coverage in the fidelity suite; Subject / Sky / People masks; a lens profile database for the
 popular lenses; tests in CI on macOS, Windows and Linux.
 
 ## How hours are calibrated
@@ -277,6 +512,8 @@ most of its list; what remains is the data-heavy part (colour, lenses, models) i
 | Date | Checklist (all / P0 / P1 / P2) | Ready for real work | Remaining to full parity | Source |
 |---|---|---|---|---|
 | 2026-10-12 | 81.1% (unchanged) | ~61% full · ~51% mainstream · ~65% essentials | unchanged | 22 more CR3 bodies verified (raw-parity.md) |
+| 2026-10-11 (second integration) | 80.8% / 96.5% / 94.3% / 50.0% (531 rows) | ~61% full · ~49% mainstream · ~64% essentials (unchanged) | unchanged | upstream integration recount; native D3500 fidelity remains partial |
+| 2026-10-10 (saved edits) | 80.3% / 96.5% / 94.2% / 47.2% (519 rows) | ~61% full · ~49% mainstream · ~64% essentials (unchanged) | unchanged | checklist recount with saved-edit / measured-rendering gaps retained; bounded local evidence above |
 | 2026-10-10 (RAW) | 81.1% (unchanged) | ~61% full · ~49% mainstream · ~64% essentials | unchanged | RAW measured model by model against Adobe's list; RAW decode and colour as explicit rows |
 | 2026-10-10 (final) | 81.1% (unchanged) | ~59% full (weighted sum) · ~51% mainstream · ~63% essentials | full 1,000–1,800 h · mainstream 450–840 h · essentials 160–300 h | method aligned with the standard |
 | 2026-10-10 (later) | 81.1% (unchanged) | ~46% full · ~51% mainstream · ~63% essentials | 1,000–1,800 h | full × discounts (superseded) |
@@ -300,18 +537,53 @@ P2 items 12–25 h; look tuning, performance, packaging, hardening 25–45 h.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | minor | Rebased fidelity branch onto 0da998f2; preview NR scaling and mask/crop/import fixes retained; checklist recount 82.6% of 539; no aggregate fidelity or readiness gain claimed |
 | 2026-10-14 | minor | Localization ~52% → ~55% (mean of the 12 key languages): de, es, fr, ja and uk catalogs filled |
 | 2026-10-12 | minor | UI/UX remaining 34–58 h → 32–54 h (canvas tools by keyboard); headline numbers unchanged |
 | 2026-10-14 | minor | Merge and HDR: merge 100% → 88% (LR-MERGE-HDR ✅ → 🟡 after testing on real 67 MP brackets; gap 29); area percentages unchanged |
 | 2026-10-14 | minor | Gap 4 (full-resolution zoom) closed: removed from the interaction-fidelity notes, the alpha-gate partial rows and the beta needs; headline numbers and the ×0.95 interaction factor unchanged |
+| 2026-10-13 | minor | Rebased onto b3d392b4; four full-native D3500 states unchanged against the accepted renderer; catalog13/camera-look9/render65 and preset/sidecar integration preserved; checklist 80.8% of 533; no fidelity or readiness gain |
 | 2026-10-12 | minor | UI/UX remaining 40–70 h → 34–58 h (accessibility audit landed, ui-parity.md); percentages unchanged |
 | 2026-10-14 | minor | Camera-coverage sweep (#1327): 30 models verified on 40 CC0 files (`coverage_sweep_corpus.rs`, `coverage-sweep.tsv`; `docs/raw/coverage.py` 515 → 545 verified rows); the counts above are not re-measured here. Sensor verification does not establish colour parity (#1277); headline numbers unchanged |
 | 2026-10-12 | minor | 22 more CR3 bodies verified on one CC0 file each (raw-parity.md): use-weighted share whose camera decodes 85% → 92%, RAW decoding 77% → 83%; full 60.7% → 61.2% (~61%), mainstream depth 72.1% → 74.0% (~49% → ~51%), essentials depth 77.5% → 78.0% (~64% → ~65%) |
 | 2026-10-12 | minor | 117 Nikon and Fujifilm bodies verified (raw-parity.md): use-weighted share whose camera decodes 85% → 86%, RAW decoding 77% (unchanged); mainstream depth 72.1% → 72.4%, essentials depth 77.5% → 77.6%; headline numbers unchanged |
+| 2026-10-11 | minor | Integrated measured mixed master/channel ordering correction: chart/train02 gains, exact native controls and final build, CI/GPU pass, retained Y/tail regressions and shared303c neutral; no readiness increase |
+| 2026-10-11 | minor | Corrected channel-only Refine Saturation scope for unreleased V2/V3 SDR; three native charts and one training-photo comparison with retained regressions/neutral-anchor limits; cache 63, legacy/HDR preservation and no readiness increase |
+| 2026-10-11 | minor | Recount after upstream76b53778 integration: checklist 80.8% of 531; V3 tone remains opt-in; readiness and hour estimates unchanged |
 | 2026-10-11 | minor | EOS R5 Mark II CR3 verified (raw-parity.md): use-weighted share whose camera decodes 84% → 85%, RAW decoding 76% → 77%; full 60.6% → 60.7%, mainstream depth 71.8% → 72.1%, essentials depth 77.4% → 77.5%; the rounded numbers (~61%, ~49%, ~64%) are unchanged |
+| 2026-10-11 | minor | Retained measured D3500 rare-pixel source fix; restored local Masking interaction after repeatable Lightroom counterevidence; no readiness increase |
+| 2026-10-11 | minor | Added explicit runtime HSV-table scope, native chart improvements and mixed saved Amount 120 evidence; no readiness or status increase |
+| 2026-10-10 | minor | Added bounded native 16-bit chart/photo evidence, V2 fixed-domain curves and V1 preservation, remaining profile / Refine / detail gaps; checklist 80.3% of 519 and F 84.4%; readiness and hour estimates unchanged |
 | 2026-10-10 | minor | RAW measured model by model (raw-parity.md): RAW decoding (76%) and colour (35%) are explicit rows of the full sum (59% → 61%); mainstream uses the use-weighted 84% plus a ×0.85 colour discount (51% → 49%); essentials uses 84% × colour 0.75 (63% → 64%); beta ~14 points |
 | 2026-10-10 | minor | Full number restored to an additive weighted sum over the dimensions (~59%; method aligned with the standard, no new evidence); hours to ~95% for each of the three audiences; beta distance ~16 points |
 | 2026-10-10 | minor | Added mainstream practitioner (~51%) and essentials user (~63%) numbers; full ready re-derived from written weights × discounts (55% → 46%); user-issue evidence; beta hours 340–600 |
 | 2026-10-10 | minor | Stage re-checked against the core-workflow alpha gate: passes, stays alpha |
 | 2026-10-10 | major | Created per the progress-docs standard: full re-measure (checklist recount, installed Lightroom 9.6 bundle listing, code counts, catalogs, CI), feature areas with weights, dimensions, AI, stage, calibration; merged ROADMAP's *Where we stand* and *Parity estimate* |
 | 2026-10-14 | minor | RAW: 82% of Adobe's models decode, 36% verified (integration batch 36) |
+
+### D3500 upstream integration evidence — 2026-10-13
+
+Rebased onto `b3d392b4`. Four native 6000×4000 RGB16 comparisons against the accepted
+CLI `1a39853139c6` retain exactly the same complete pixel hashes and ICC bytes:
+DSC0805 CNR0 (Exposure +2.06, Shadows +43), DSC0626 CNR0 with its saved nested profile
+curve, and train02 neutral/+1 EV. Complete settings, unsupported-resource diagnostics,
+original RAWs and sidecars were checked unchanged. DSC0626's four wider dark-tone fits
+did not meet the independent 1% improvement threshold, preserving the previous fit.
+
+Fixed stride-16 grid mean ΔE00 remains 8.197097, 5.816628, 1.887430 and 2.521846
+respectively. Center and all nine interior regions are also unchanged; these are existing
+training scenes with unresolved profile/WB approximations. There is no new measured
+fidelity improvement or overall parity claim. Catalog13 preserves upstream history
+cursors with the fork's saved edits; camera-look9/render65 clear older caches.
+
+The upstream all-masks diagnostic view now draws the union once; its previous sequential
+WhiteOnBlack drawing erased earlier mask regions. The existing regression covers both visible
+regions and hiding one. This is an overlay fix, with no change to exported adjustments.
+
+Six new background Lightroom exports qualify authored compressed-CFA chart observations.
+The primary chart repeats exactly under a fresh filename, yet its neutral interiors differ from
+the mixed chart by up to 1.539 L* with identical local sensor samples and recorded settings.
+A Bayer-histogram-preserving column permutation and a separate small black patch each preserve
+all 48 mixed-chart interiors exactly. Substituting only the output-cropped sensor rim also
+preserves all 48 primary-chart interiors. No static camera model, internal normalization mechanism
+or photographic fidelity gain is established; the four source-color heldouts remain sealed.

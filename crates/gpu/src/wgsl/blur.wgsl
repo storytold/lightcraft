@@ -2,6 +2,35 @@
 // Gaussian (`lightcraft_raster::blur::gaussian`).
 // P: w, h, nc, r, ch (box_v only). Bindings: src, dst.
 
+// Small-radius global sharpening Gaussian. P: w,h,r,unused,centre-first weights.
+// CPU supplies at most ten normalized weights; clamped edges match the CPU convolution.
+fn detail_pass(g: vec3<u32>, horizontal: bool) {
+    let w = pu(0u);
+    let h = pu(1u);
+    if (g.x >= w || g.y >= h) { return; }
+    let i = g.y * w + g.x;
+    var sum = pf(4u) * src[i];
+    for (var r = 1u; r <= min(pu(2u), 9u); r++) {
+        var a = g.xy;
+        var b = g.xy;
+        if (horizontal) {
+            a.x = u32(max(i32(g.x) - i32(r), 0));
+            b.x = min(g.x + r, w - 1u);
+        } else {
+            a.y = u32(max(i32(g.y) - i32(r), 0));
+            b.y = min(g.y + r, h - 1u);
+        }
+        sum += pf(4u + r) * (src[a.y * w + a.x] + src[b.y * w + b.x]);
+    }
+    dst[i] = sum;
+}
+
+@compute @workgroup_size(16, 16)
+fn detail_h(@builtin(global_invocation_id) g: vec3<u32>) { detail_pass(g, true); }
+
+@compute @workgroup_size(16, 16)
+fn detail_v(@builtin(global_invocation_id) g: vec3<u32>) { detail_pass(g, false); }
+
 // Pixel `i` (all nc ≤ 3 channels at once: one contiguous read per pixel).
 fn ld(i: u32, nc: u32) -> vec3<f32> {
     let j = i * nc;

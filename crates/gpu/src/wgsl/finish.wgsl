@@ -1,17 +1,26 @@
 // The per-pixel stage: a straight port of `lightcraft_pipeline::finish` (keep in step with it).
 // Bindings: img (rgb, pre-exposure), log_l, base, clar, tex, dark, masks (NMASK planes, then the
 // blurred chromaticity when HAS_CHROMA), aux
-// (tone LUT | chroma curve | sRGB LUT | curve LUTs | mask terms), out (packed RGBA8).
+// (tone LUT | chroma curve | sRGB LUT | global/profile curve LUTs | optional split curve LUTs | mask terms), out (packed RGBA8).
 
 fn tone_apply(y: f32) -> f32 {
     if (y <= 0.0) {
         return 0.0;
+    }
+    let anchor_input = pf(F_TONE_SATURATION);
+    let anchor_position = pf(F_TONE_SATURATION + 1u);
+    let anchor_output = pf(F_TONE_SATURATION + 2u);
+    if (anchor_input > 0.0 && y >= anchor_input) {
+        return anchor_output;
     }
     let ev = log2(y / GREY);
     let f = clamp((ev - TONE_MIN_EV) / (TONE_MAX_EV - TONE_MIN_EV), 0.0, 1.0) * f32(TONE_N - 1u);
     let i = min(u32(f), TONE_N - 2u);
     let t = f - f32(i);
     let v = aux[i] + (aux[i + 1u] - aux[i]) * t;
+    if (anchor_input > 0.0 && ev >= TONE_MIN_EV && anchor_position > f32(i) && anchor_position <= f32(i + 1u) && f <= anchor_position) {
+        return aux[i] + (anchor_output - aux[i]) * (t / (anchor_position - f32(i)));
+    }
     if (ev < TONE_MIN_EV) {
         return v * (y / (GREY * TONE_MIN_GAIN));
     }
@@ -41,6 +50,23 @@ fn encode_srgb(v: f32) -> f32 {
 
 fn curve(ch: u32, x: f32) -> f32 {
     let o = pu(F_CURVE_OFF) + ch * CURVE_N;
+    let f = clamp(x, 0.0, 1.0) * f32(CURVE_N - 1u);
+    let i = min(u32(f), CURVE_N - 2u);
+    let t = f - f32(i);
+    return aux[o + i] + (aux[o + i + 1u] - aux[o + i]) * t;
+}
+
+fn profile_curve(ch: u32, x: f32) -> f32 {
+    let o = pu(F_PROFILE_CURVE_OFF) + ch * CURVE_N;
+    let f = clamp(x, 0.0, 1.0) * f32(CURVE_N - 1u);
+    let i = min(u32(f), CURVE_N - 2u);
+    let t = f - f32(i);
+    return aux[o + i] + (aux[o + i + 1u] - aux[o + i]) * t;
+}
+
+// Slot 0 is master/parametric; slots 1..3 are the individual channels.
+fn split_curve(slot: u32, x: f32) -> f32 {
+    let o = pu(F_SPLIT_CURVE_OFF) + slot * CURVE_N;
     let f = clamp(x, 0.0, 1.0) * f32(CURVE_N - 1u);
     let i = min(u32(f), CURVE_N - 2u);
     let t = f - f32(i);
@@ -378,7 +404,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         delta += cl * 0.85 * det * (0.35 + 0.65 * mid);
     }
     let tx = pf(F_TEX) + lt[8];
-    let sp = lt[13] * 0.6 + pf(F_SHARPEN);
+    let sp = lt[13] * 0.6;
     if ((tx != 0.0 || sp != 0.0) && pu(F_HAS_TEX) != 0u) {
         let det = l_pre - tex[i];
         let tame = 1.0 - 0.6 * sstep(0.4, 1.6, abs(det));
@@ -391,6 +417,15 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
             delta += sp * 1.3 * clamp(det, -0.8, 0.8) * mk;
         }
+    }
+    if (pf(F_SHARPEN) != 0.0 && pu(F_HAS_SHARPEN) != 0u) {
+        let det = l_pre - tex[pu(F_SHARPEN_OFFSET) + i];
+        let sm = pf(F_SHARPEN_MASK);
+        var mk = 1.0;
+        if (sm > 0.0) {
+            mk = sstep(sm * 0.25, sm * 0.25 + 0.15, abs(det));
+        }
+        delta += pf(F_SHARPEN) * 1.3 * clamp(det, -0.8, 0.8) * mk;
     }
     // local Noise: smooth (or, negative, boost) small-amplitude detail, keep edges
     if (l_noise != 0.0 && pu(F_HAS_TEX) != 0u) {
@@ -467,6 +502,55 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 
+    // V2 curves use fixed ProPhoto primaries before output mapping. The GPU renders SDR;
+    // HDR and proofing use the CPU path. No active LUT means no additional matrix/TRC work.
+    if (pu(F_CURVE_WORKING) != 0u) {
+        let cm = array<vec3<f32>, 3>(
+            vec3<f32>(pf(F_CURVE_IN_M), pf(F_CURVE_IN_M + 1u), pf(F_CURVE_IN_M + 2u)),
+            vec3<f32>(pf(F_CURVE_IN_M + 3u), pf(F_CURVE_IN_M + 4u), pf(F_CURVE_IN_M + 5u)),
+            vec3<f32>(pf(F_CURVE_IN_M + 6u), pf(F_CURVE_IN_M + 7u), pf(F_CURVE_IN_M + 8u)),
+        );
+        let back = array<vec3<f32>, 3>(
+            vec3<f32>(pf(F_CURVE_OUT_M), pf(F_CURVE_OUT_M + 1u), pf(F_CURVE_OUT_M + 2u)),
+            vec3<f32>(pf(F_CURVE_OUT_M + 3u), pf(F_CURVE_OUT_M + 4u), pf(F_CURVE_OUT_M + 5u)),
+            vec3<f32>(pf(F_CURVE_OUT_M + 6u), pf(F_CURVE_OUT_M + 7u), pf(F_CURVE_OUT_M + 8u)),
+        );
+        let limit = vec3<f32>(pf(F_CURVE_LIMIT));
+        let c = mul3(cm, d);
+        var ce = vec3<f32>(encode_srgb(c.x), encode_srgb(c.y), encode_srgb(c.z));
+        if (pu(F_SPLIT_CURVES) != 0u) {
+            let before = ce;
+            ce = clamp(vec3<f32>(split_curve(0u, ce.x), split_curve(0u, ce.y), split_curve(0u, ce.z)), -limit, limit);
+            ce = refine_saturation(before, ce, pf(F_REFINE_SAT));
+            let channel_mask = pu(F_SPLIT_CHANNEL_MASK);
+            for (var k = 0u; k < 3u; k++) {
+                if ((channel_mask & (1u << k)) != 0u) {
+                    ce[k] = clamp(split_curve(k + 1u, ce[k]), -pf(F_CURVE_LIMIT), pf(F_CURVE_LIMIT));
+                }
+            }
+        } else if (pu(F_CURVES) != 0u) {
+            let before = ce;
+            ce = clamp(vec3<f32>(curve(0u, ce.x), curve(1u, ce.y), curve(2u, ce.z)), -limit, limit);
+            if (pf(F_REFINE_SAT) < 1.0) {
+                ce = refine_saturation(before, ce, pf(F_REFINE_SAT));
+            }
+        }
+        if (pu(F_PROFILE_CURVES) != 0u) {
+            ce = clamp(vec3<f32>(profile_curve(0u, ce.x), profile_curve(1u, ce.y), profile_curve(2u, ce.z)), -limit, limit);
+        }
+        // Numerical overflow guard only; retain negative and above-white curve outputs.
+        ce = clamp(ce, -limit, limit);
+        var linear: vec3<f32>;
+        for (var k = 0u; k < 3u; k++) {
+            if (ce[k] <= 0.04045) {
+                linear[k] = ce[k] / 12.92;
+            } else {
+                linear[k] = pow((ce[k] + 0.055) / 1.055, 2.4);
+            }
+        }
+        d = mul3(back, linear);
+    }
+
     // --- gamut map to the output space (desaturate towards luminance until in range)
     let om = array<vec3<f32>, 3>(
         vec3<f32>(pf(F_OUT_M), pf(F_OUT_M + 1u), pf(F_OUT_M + 2u)),
@@ -490,12 +574,18 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // --- encode, curves, grain
     var e = vec3<f32>(encode_srgb(r.x), encode_srgb(r.y), encode_srgb(r.z));
-    if (pu(F_CURVES) != 0u) {
-        let e0 = e;
-        e = vec3<f32>(curve(0u, e.x), curve(1u, e.y), curve(2u, e.z));
-        let rs = pf(F_REFINE_SAT);
-        if (rs < 1.0) {
-            e = refine_saturation(e0, e, rs);
+    // Frozen V1 target-primary curve path.
+    if (pu(F_CURVE_WORKING) == 0u) {
+        if (pu(F_CURVES) != 0u) {
+            let e0 = e;
+            e = vec3<f32>(curve(0u, e.x), curve(1u, e.y), curve(2u, e.z));
+            let rs = pf(F_REFINE_SAT);
+            if (rs < 1.0) {
+                e = refine_saturation(e0, e, rs);
+            }
+        }
+        if (pu(F_PROFILE_CURVES) != 0u) {
+            e = vec3<f32>(profile_curve(0u, e.x), profile_curve(1u, e.y), profile_curve(2u, e.z));
         }
     }
     if (pu(F_GRAIN) != 0u) {

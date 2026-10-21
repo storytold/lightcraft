@@ -167,9 +167,10 @@ fn radial_feather(m: &XmpValue, container: &str) -> f64 {
 fn component(m: &XmpValue, container: &str, aspect: f64) -> Result<Value, String> {
     let what = text(m, "crs:What").unwrap_or("");
     let op = match num(m, "crs:MaskBlendMode").unwrap_or(0.0) as i64 {
+        0 => "add",
         1 => "subtract",
         2 => "intersect",
-        _ => "add",
+        other => return Err(format!("blend mode {other}")),
     };
     let invert = flag(m, "crs:MaskInverted").unwrap_or(false);
     // positions are fractions of the image's width / height; our radii are in long-edge units
@@ -260,6 +261,7 @@ pub fn masks(values: &Values, aspect: f64) -> (Vec<Value>, Vec<String>) {
             if flag(c, "crs:CorrectionActive") == Some(false) {
                 continue;
             }
+            skipped.extend(unmapped_local(c));
             let comps = c.field("crs:CorrectionMasks").map(XmpValue::items).unwrap_or_default();
             let mut parts = Vec::new();
             for m in comps {
@@ -271,7 +273,6 @@ pub fn masks(values: &Values, aspect: f64) -> (Vec<Value>, Vec<String>) {
             if parts.is_empty() {
                 continue;
             }
-            skipped.extend(unmapped_local(c));
             // brush dabs of one correction are one brush component
             let mut merged: Vec<Value> = Vec::new();
             for p in parts {
@@ -450,6 +451,29 @@ mod tests {
     use super::*;
     use lightcraft_develop::{DevelopSettings, MaskOp, MaskShape};
 
+    #[test]
+    fn unsupported_local_sliders_and_blend_modes_are_reported() {
+        let correction = XmpValue::Struct(
+            [
+                ("crs:LocalExposure2012".into(), XmpValue::Text("0.25".into())),
+                ("crs:LocalUnsupportedAdjustment".into(), XmpValue::Text("0.5".into())),
+                ("crs:LocalZeroAdjustment".into(), XmpValue::Text("0".into())),
+                (
+                    "crs:CorrectionMasks".into(),
+                    XmpValue::Array(vec![XmpValue::Struct(
+                        [("crs:What".into(), XmpValue::Text("Mask/Gradient".into())), ("crs:MaskBlendMode".into(), XmpValue::Text("7".into()))]
+                            .into(),
+                    )]),
+                ),
+            ]
+            .into(),
+        );
+        let values = Values::from([("crs:MaskGroupBasedCorrections".into(), XmpValue::Array(vec![correction]))]);
+        let (masks, skipped) = masks(&values, 1.5);
+        assert!(masks.is_empty());
+        assert_eq!(skipped, vec!["LocalUnsupportedAdjustment", "blend mode 7"]);
+    }
+
     /// A packet in the shape local corrections take (values written for this test).
     const PACKET: &str = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
 <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:Exposure2012="0.2">
@@ -564,8 +588,15 @@ mod tests {
     fn presets_add_masks_once() {
         let (s, _) = settings();
         let partial = json!({"masks": serde_json::to_value(&s.masks).unwrap(), "light": {"exposure": 0.5}});
-        let p =
-            lightcraft_develop::Preset { id: "t".into(), name: "t".into(), group: "g".into(), settings: partial, favorite: false, builtin: false };
+        let p = lightcraft_develop::Preset {
+            id: "t".into(),
+            name: "t".into(),
+            group: "g".into(),
+            settings: partial,
+            unsupported_edits: Vec::new(),
+            favorite: false,
+            builtin: false,
+        };
         let mut mine = DevelopSettings::default();
         mine.masks.push(lightcraft_develop::Mask { id: 7, name: "Mine".into(), ..Default::default() });
         let once = p.apply(&mine, 1.0);

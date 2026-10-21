@@ -30,6 +30,7 @@ fn nothing_renders_on_the_gpu_once_the_process_is_ending() {
     // a worker that renders until the GPU refuses, as the preview workers do while the app quits
     let (rendered, refused) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicBool::new(false)));
     let worker = {
+        let req = req.clone();
         let (src, info, s) = (src.clone(), info.clone(), s.clone());
         let (rendered, refused) = (rendered.clone(), refused.clone());
         std::thread::spawn(move || {

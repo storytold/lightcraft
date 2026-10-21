@@ -1,17 +1,21 @@
 //! The LightCraft develop pipeline (CPU reference implementation).
 //!
 //! Input: a scene-referred, linear Rec.2020 source image (already EXIF-oriented) at any resolution
-//! (full size or a proxy), plus [`DevelopSettings`]. Output: a display-encoded sRGB image at the
-//! requested size, and its histogram.
+//! (full size or a proxy), plus [`DevelopSettings`]. Output: an image encoded for the requested
+//! display/output space, its histogram, and optional deep samples.
 //!
-//! Stage order (see `docs/pipeline.md`):
+//! Stage order (process compatibility: `docs/process-versions.md`):
 //! 1. geometry — user orientation, lens corrections (distortion, CA, vignetting), perspective, crop +
 //!    straighten, flips; one resample at output resolution; then defringe
 //! 2. scene-linear — white balance, exposure, dehaze, local tone (highlights/shadows), texture,
 //!    clarity, local adjustments (masks)
 //! 3. tone map — contrast / whites / blacks filmic curve on luminance, highlight desaturation
 //! 4. colour — vibrance, saturation, colour mixer, colour grading, B&W (OkLCh)
-//! 5. display — gamut map to the output space (sRGB unless [`RenderRequest::space`] says otherwise), encode, tone curves (parametric + point), vignette, grain
+//! 5. post-crop vignette, then V2 global curves (parametric + point), Refine Saturation and imported
+//!    profile curves in fixed ProPhoto D50 primaries with sRGB encoding
+//! 6. proof/output gamut mapping, then sRGB encoding in output primaries; V1 applies its global
+//!    curves, Refine Saturation and imported-profile curves here
+//! 7. grain and external 3D LUT, then the requested output transfer encoding
 //!
 //! Spatial parameters are specified relative to the image's long edge, so a 400 px preview and a
 //! 60 MP export look alike.
@@ -47,7 +51,7 @@ pub mod visualize;
 pub use output::{DeepImage, DeepSamples, DisplaySpace, OutputDepth, OutputSpace, OutputTrc, Proof, ProofLut, proof_profile, register_proof_profile};
 pub use visualize::{MaskView, Overlay};
 
-use lightcraft_develop::{DevelopSettings, Treatment};
+use lightcraft_develop::DevelopSettings;
 use std::any::Any;
 use std::borrow::Cow;
 use std::sync::{Arc, Mutex};
@@ -70,6 +74,8 @@ pub struct CameraColor {
 /// Facts about the source the settings are interpreted against.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SourceInfo {
+    /// Long edge before decoder downsampling, after the source's default crop. Zero when unknown.
+    pub native_long: usize,
     /// Lens corrections embedded in the file (DNG opcodes), relative to the EXIF-oriented source.
     pub lens: Option<lightcraft_develop::EmbeddedLens>,
     /// Raw sources use absolute Kelvin white balance; rendered sources use a relative scale around
@@ -92,16 +98,12 @@ pub struct SourceInfo {
     /// The raw's own local tone mapping (DNG `ProfileGainTableMap`), rendered only when the
     /// photo's Profile option asks for it ([`local_tone`]).
     pub local_tone: Option<Arc<local_tone::LocalTone>>,
-    /// Long edge (px) of the original photo, when the source handed to the renderer is a smaller
-    /// copy of it (the app's thumbnail and preview levels); `None`: the source is the original.
-    /// Noise reduction sizes its radii in the original's pixels ([`Plan::detail_scale`]), so a
-    /// preview looks like the full-size render scaled down (issue #960).
-    pub native_long: Option<usize>,
 }
 
 impl Default for SourceInfo {
     fn default() -> Self {
         Self {
+            native_long: 0,
             raw: false,
             as_shot_temp: 6500.0,
             as_shot_tint: 0.0,
@@ -112,7 +114,6 @@ impl Default for SourceInfo {
             camera_tone: None,
             mattes: None,
             local_tone: None,
-            native_long: None,
         }
     }
 }
@@ -125,7 +126,7 @@ pub enum Quality {
     Full,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct RenderRequest {
     /// Output must fit in `max_w × max_h` (aspect preserved).
     pub max_w: usize,
@@ -147,6 +148,8 @@ pub struct RenderRequest {
     /// Previews for a monitor with a display profile: render 8-bit into its primaries instead of
     /// `space` (see [`DisplaySpace`]; ignored by deep renders).
     pub display: Option<DisplaySpace>,
+    /// Explicit session resource; never part of saved settings or decoded source pixels.
+    pub imported_table: Option<Arc<lightcraft_raw::profile::big_table::DecodedLookTable>>,
 }
 
 /// A window of the (virtual) full output, in its pixels: what a zoomed view needs, rendered
@@ -184,6 +187,7 @@ impl RenderRequest {
             proof: None,
             window: None,
             display: None,
+            imported_table: None,
         }
     }
 }
@@ -194,6 +198,68 @@ pub struct Rendered {
     pub histogram: Histogram,
     /// The high-bit-depth result when [`RenderRequest::depth`] asks for one.
     pub deep: Option<DeepImage>,
+    /// Bounded names-only diagnostics, including unresolved runtime profile references.
+    pub unsupported_edits: Vec<String>,
+}
+
+/// A reference whose profile is enabled and whose table Amount is nonzero.
+/// Profile-induced B&W is independent of this table bypass.
+pub fn active_look_table(s: &DevelopSettings) -> Option<&lightcraft_develop::LookTableRef> {
+    if !s.section_enabled("profile") || s.profile.amount == 0.0 {
+        return None;
+    }
+    s.profile.imported_look()?.look_table.as_ref()
+}
+
+pub(crate) struct ResolvedProfileTable {
+    table: Arc<lightcraft_raw::profile::big_table::DecodedLookTable>,
+    amount: f64,
+}
+
+/// Identity-relative entry scaling. The original samples are used directly at Amount100.
+fn table_entry_at_amount(entry: [f32; 3], amount: f64) -> [f32; 3] {
+    [(f64::from(entry[0]) * amount) as f32, (1.0 + amount * (f64::from(entry[1]) - 1.0)) as f32, (1.0 + amount * (f64::from(entry[2]) - 1.0)) as f32]
+}
+
+/// One eligibility decision for rendering and diagnostics, made before effective/SDR settings.
+fn profile_table_for(s: &DevelopSettings, req: &RenderRequest) -> Result<Option<ResolvedProfileTable>, &'static str> {
+    let Some(reference) = active_look_table(s) else { return Ok(None) };
+    if !matches!(s.process.process(), lightcraft_develop::Process::V2 | lightcraft_develop::Process::V3) {
+        return Err("requires Process 2 or 3");
+    }
+    if s.hdr.enabled || req.depth == OutputDepth::F32Hdr {
+        return Err("HDR unsupported");
+    }
+    let amount = s.profile.amount / 100.0;
+    if !amount.is_finite() || !(0.0..=2.0).contains(&amount) {
+        return Err("Amount unsupported");
+    }
+    let table = req.imported_table.as_ref().ok_or("missing resource - use profile.loadTable")?;
+    if table.fingerprint().to_string() != reference.as_str() {
+        return Err("loaded fingerprint mismatch");
+    }
+    let [minimum, maximum] = table.amount_range();
+    if amount < minimum || amount > maximum {
+        return Err("declared Amount range excludes requested amount");
+    }
+    if amount != 1.0
+        && table.hsv().data.iter().any(|&entry| {
+            let scaled = table_entry_at_amount(entry, amount);
+            scaled.iter().any(|v| !v.is_finite()) || scaled[1] < 0.0 || scaled[2] < 0.0
+        })
+    {
+        return Err("Amount produces invalid HSV scales");
+    }
+    Ok(Some(ResolvedProfileTable { table: table.clone(), amount }))
+}
+
+/// Resolve support on every request, including when an engine cache supplies its pixels.
+/// This also makes a direct pipeline caller's missing resource explicit.
+pub fn profile_table_diagnostics(s: &DevelopSettings, req: &RenderRequest) -> Vec<String> {
+    match (active_look_table(s), profile_table_for(s, req)) {
+        (Some(reference), Err(reason)) => vec![format!("LookTable {reference_id} ({reason})", reference_id = reference.as_str())],
+        _ => Vec::new(),
+    }
 }
 
 /// Everything the per-pixel stage needs, precomputed at output resolution.
@@ -208,6 +274,7 @@ pub(crate) struct Prepared {
     pub base: Arc<Plane>,
     pub clarity_blur: Option<Arc<Plane>>,
     pub texture_blur: Option<Arc<Plane>>,
+    pub sharpen_blur: Option<Arc<Plane>>,
     pub dark: Option<Arc<Plane>>,
     /// Blurred chromaticity (`rgb / Y`) for local Moiré / Noise.
     pub chroma_blur: Option<Arc<Rgb32f>>,
@@ -306,7 +373,7 @@ impl StageCache {
             }
             let pl = &e.planes;
             let planes = pl.log_l.iter().chain(pl.base.iter().map(|x| &x.1)).chain(pl.clarity.iter().map(|x| &x.1));
-            for p in planes.chain(pl.texture.iter().map(|x| &x.1)).chain(pl.dark.iter().map(|x| &x.1)) {
+            for p in planes.chain(pl.texture.iter().map(|x| &x.1)).chain(pl.sharpen.iter().map(|x| &x.1)).chain(pl.dark.iter().map(|x| &x.1)) {
                 add(Arc::as_ptr(p) as usize, size(p));
             }
         }
@@ -369,6 +436,8 @@ pub struct Plan<'a> {
     /// Output pixels per pixel of the original photo ([`SourceInfo::native_long`], else the source
     /// buffer), at most 1: the scale of noise reduction, whose radii are in the original's pixels.
     pub detail_scale: f32,
+    /// Original source long edge, for detail controls expressed in native pixels.
+    pub native_long: usize,
     /// Key of the resampled source (together with the source buffer's identity).
     pub geo: u64,
     /// Key of the white-balanced, retouched, denoised image (and of the planes computed from it).
@@ -397,6 +466,7 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         Cow::Borrowed(b) => upright::resolve(src, info, b),
         Cow::Owned(o) => Cow::Owned(upright::resolve(src, info, &o).into_owned()),
     };
+    bypass_sections(&mut settings);
     visualize::adjust_settings(req.overlay, &mut settings);
     // a window must not choose a spot's source from the pixels it happens to hold: fix them
     // from a fixed-size render of the whole frame first
@@ -433,7 +503,7 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
     };
     let src_long = src.width.max(src.height);
     // (an original reported smaller than the source is the source)
-    let native_long = info.native_long.unwrap_or(0).max(src_long).max(1);
+    let native_long = info.native_long.max(src_long).max(1);
     let detail_scale = local::detail_scale(px_per_long, native_long);
     let geo = hash_of((format!("{frame:?}"), w, h));
     let (wb_t, wb_tint) = local::effective_wb(info, s);
@@ -442,6 +512,8 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
     let pre_nr_key = hash_of((
         geo,
         [wb_t, wb_tint, info.as_shot_temp, info.as_shot_tint].map(f64::to_bits),
+        // Legacy whites compose exactly; their displayed Kelvin pair is a rounded inverse.
+        s.wb.scale == lightcraft_develop::WbScale::Kelvin,
         format!("{:?}", s.spots),
         format!("{eyes:?}"),
         // defringe runs in this stage
@@ -449,13 +521,82 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         // and the local tone mapping
         local_tone::enabled(info, s),
         src_long,
+        native_long,
+        px_per_long.to_bits(),
     ));
     let lin_key = hash_of((
         pre_nr_key,
         [d.nr_luminance, d.nr_detail, d.nr_color, d.nr_color_detail, d.nr_color_smoothness].map(f64::to_bits),
         detail_scale.to_bits(),
     ));
-    Plan { settings, frame, w, h, px_per_long, src_long, detail_scale, geo, lin_key, pre_nr_key, eyes, fixed_air, keep, mattes: info.mattes.clone() }
+    Plan {
+        settings,
+        frame,
+        w,
+        h,
+        px_per_long,
+        src_long,
+        native_long,
+        detail_scale,
+        geo,
+        lin_key,
+        pre_nr_key,
+        eyes,
+        fixed_air,
+        keep,
+        mattes: info.mattes.clone(),
+    }
+}
+
+/// Panel bypass affects both CPU/GPU stage planning and cache keys, without changing saved
+/// edits. Apply after profile deltas, as the existing Effects/Calibration bypasses do. Treatment
+/// and profile selection live above the Color panel and remain active when Color is bypassed.
+fn bypass_sections(settings: &mut Cow<'_, DevelopSettings>) {
+    let light = !settings.section_enabled("light");
+    let color = !settings.section_enabled("color");
+    let curve = light || !settings.section_enabled("curve");
+    let mixer = color || !settings.section_enabled("mixer");
+    let bw_mix = color || !settings.section_enabled("bwMix");
+    let grading = color || !settings.section_enabled("grading");
+    let point_color = color || !settings.section_enabled("pointColor");
+    let detail = !settings.section_enabled("detail");
+    let grain = !settings.section_enabled("grain");
+    let vignette = !settings.section_enabled("vignette");
+    if !(light || color || curve || mixer || bw_mix || grading || point_color || detail || grain || vignette) {
+        return;
+    }
+    let s = settings.to_mut();
+    if light {
+        s.light = Default::default();
+    }
+    if curve {
+        s.curve = Default::default();
+    }
+    if color {
+        s.wb = Default::default();
+        s.color = Default::default();
+    }
+    if mixer {
+        s.mixer = Default::default();
+    }
+    if bw_mix {
+        s.bw_mix = Default::default();
+    }
+    if grading {
+        s.grading = Default::default();
+    }
+    if point_color {
+        s.point_colors.clear();
+    }
+    if detail {
+        s.detail = Default::default();
+    }
+    if grain {
+        s.grain = Default::default();
+    }
+    if vignette {
+        s.vignette = Default::default();
+    }
 }
 
 /// Whether the scene-linear stage needs work only the CPU does (defringe, spot removal).
@@ -512,7 +653,7 @@ pub fn hdr_histogram(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, req: 
         proof: None,
         window: None,
         display: None,
-        ..*req
+        ..req.clone()
     };
     let deep = render(src, info, s, &hreq).deep?;
     let DeepSamples::F32(v) = &deep.samples else { return None };
@@ -536,6 +677,8 @@ enum Src<'a> {
 }
 
 fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, cache: Option<&StageCache>) -> Rendered {
+    let unsupported_edits = profile_table_diagnostics(s, req);
+    let imported_table = profile_table_for(s, req).ok().flatten();
     // sections switched off with their eye render as if at their defaults (issue #316)
     let effective = s.effective();
     let edit: &DevelopSettings = &effective;
@@ -588,7 +731,7 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
         Some(p) if req.quality == Quality::Draft && p.pre_nr == plan.pre_nr_key => p.for_other_nr(),
         _ => local::Planes { key: lin_key, pre_nr: plan.pre_nr_key, ..Default::default() },
     };
-    let mut prep = local::prepare(lin.clone(), s, frame, px_per_long, req.quality, &mut planes, plan.mattes.as_deref());
+    let mut prep = local::prepare(lin.clone(), s, frame, px_per_long, plan.native_long, req.quality, &mut planes, plan.mattes.as_deref());
     if let Some(a) = plan.fixed_air {
         prep.air = a;
     }
@@ -597,13 +740,13 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
         c.put(CacheEntry { src: a.clone(), geo, sampled, lin: Some((lin_key, lin)), planes });
     }
     if req.depth != OutputDepth::U8 {
-        let deep = finish::finish_deep(&prep, s, frame, info, req.space, req.depth, req.proof);
+        let deep = finish::finish_deep(&prep, s, frame, info, req.space, req.depth, req.proof, imported_table);
         let image = deep.to_rgba8();
         let histogram = Histogram::of_srgb8(&image);
         lap("finish (deep)", &mut t);
-        return Rendered { image, histogram, deep: Some(deep) };
+        return Rendered { image, histogram, deep: Some(deep), unsupported_edits };
     }
-    let image = finish::finish(&prep, s, frame, info, req.space, req.display.as_ref(), req.proof);
+    let image = finish::finish(&prep, s, frame, info, req.space, req.display.as_ref(), req.proof, imported_table);
     lap("finish", &mut t);
     let cut = |i: &Rgba8| match plan.keep {
         Some(k) => i.crop(k.x, k.y, k.w, k.h),
@@ -621,13 +764,13 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
     let mut image = if plan.keep.is_some() { cut(&image) } else { image };
     if req.overlay == Overlay::HdrRange && edit.hdr.enabled {
         // the HDR rendition of the same request says how far above SDR white each pixel goes
-        let hreq = RenderRequest { depth: OutputDepth::F32Hdr, overlay: Overlay::None, proof: None, ..*req };
+        let hreq = RenderRequest { depth: OutputDepth::F32Hdr, overlay: Overlay::None, proof: None, ..req.clone() };
         if let Some(hdr) = render(src_img, info, edit, &hreq).deep {
             visualize::hdr_range(&mut image, &hdr, req.space.luma());
         }
         lap("visualize hdr", &mut t);
     }
-    Rendered { image, histogram, deep: None }
+    Rendered { image, histogram, deep: None, unsupported_edits }
 }
 
 /// The colour a colour-range mask would sample at normalized image point `p` (OkLab of the
@@ -700,7 +843,7 @@ pub fn before_settings(s: &DevelopSettings) -> DevelopSettings {
 }
 
 pub(crate) fn is_bw(s: &DevelopSettings) -> bool {
-    s.treatment == Treatment::Bw || s.profile.id == "lc.mono" || s.profile.id.starts_with("lc.bw.")
+    s.is_bw()
 }
 
 /// `LIGHTCRAFT_PROFILE` is set: print per-stage timings to stderr.
@@ -733,7 +876,13 @@ mod tests_hdr;
 #[cfg(test)]
 mod tests_local;
 #[cfg(test)]
+mod tests_nr;
+#[cfg(test)]
 mod tests_nr_scale;
+#[cfg(test)]
+mod tests_sections;
+#[cfg(test)]
+mod tests_sharpen;
 #[cfg(test)]
 mod tests_tone;
 #[cfg(test)]

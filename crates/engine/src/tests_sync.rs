@@ -233,15 +233,22 @@ fn synchronizing_everything_is_one_undo_step() {
     let dir = Scratch::new("sync-all");
     let mut s = library(&dir);
     let before = holdings(&s);
+    s.execute("library.xmpPreferences", &json!({"autoWrite": true})).unwrap();
     write_png(&dir.path("trip/c.png"), 3);
     std::fs::remove_file(dir.path("trip/day1/b.png")).unwrap();
     write_sidecar(&dir.path("trip/a.png"), 5, Duration::ZERO);
+    let packet = Path::new(&dir.path("trip/a.png")).with_extension("xmp");
+    let bytes = std::fs::read(&packet).unwrap();
+    let modified = std::fs::metadata(&packet).unwrap().modified().unwrap();
     let r =
         s.execute("folder.synchronize", &json!({"path": dir.path("trip"), "importNew": true, "removeMissing": true, "readMetadata": true})).unwrap();
     assert_eq!((r["imported"].as_u64(), r["removed"].as_u64(), r["read"].as_u64()), (Some(1), Some(1), Some(1)), "{r}");
     let library: Vec<String> = s.catalog.photos().filter(|p| p.in_library()).map(|p| p.file_name.clone()).collect();
     assert_eq!(library.len(), 2, "b went to Recently Deleted: {library:?}");
     assert_eq!(s.catalog.photos().find(|p| p.file_name == "a.png").unwrap().rating, 5, "the sidecar was read");
+    assert_eq!(std::fs::read(&packet).unwrap(), bytes, "reading preserves the source packet");
+    assert_eq!(std::fs::metadata(&packet).unwrap().modified().unwrap(), modified);
+    assert!(!s.skip_auto_write);
     let undo = s.execute("edit.undo", &json!({})).unwrap();
     assert_eq!(undo["undone"], "Synchronize Folder");
     assert_eq!(holdings(&s), before, "one undo step puts everything back");

@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use super::{CommandSpec, always, bad, cmd, has_active};
 use crate::{LibrarySource, Session};
 
-pub fn photo_summary(p: &Photo) -> Value {
+pub fn photo_summary(s: &Session, p: &Photo) -> Value {
     json!({
         "id": p.id.0,
         "fileName": p.file_name,
@@ -28,6 +28,7 @@ pub fn photo_summary(p: &Photo) -> Value {
         "copyName": p.copy_name,
         // an undecodable raw variant, shown and edited from its embedded JPEG: why
         "previewOnly": p.preview_only,
+        "unsupportedEdits": s.unsupported_edits(p.id),
     })
 }
 
@@ -87,7 +88,7 @@ pub fn specs() -> Vec<CommandSpec> {
             };
             let off = pagination_usize(p.get("offset").and_then(Value::as_u64).unwrap_or(0));
             let lim = pagination_usize(p.get("limit").and_then(Value::as_u64).unwrap_or(200));
-            let items: Vec<Value> = ids.iter().skip(off).take(lim).filter_map(|id| s.catalog.photo(*id)).map(|p| photo_summary(p)).collect();
+            let items: Vec<Value> = ids.iter().skip(off).take(lim).filter_map(|id| s.catalog.photo(*id)).map(|p| photo_summary(s, p)).collect();
             Ok(json!({"total": ids.len(), "photos": items}))
         }),
         cmd!(query "catalog.stats", "Catalog Statistics", [], None, "{}", always, |s, _| {
@@ -155,6 +156,7 @@ pub fn specs() -> Vec<CommandSpec> {
             let id = photo_arg(s, p, "photo.inspect")?;
             let ph = s.catalog.photo(id).ok_or_else(|| bad("photo.inspect", "no such photo"))?;
             let mut v = serde_json::to_value(ph.as_ref()).unwrap_or_default();
+            v["unsupported_edits"] = json!(s.unsupported_edits(id));
             v["albums"] = json!(s.catalog.albums_of(id).iter().map(|a| a.0).collect::<Vec<_>>());
             v["history"] = json!(ph.history.iter().map(|h| h.label.clone()).collect::<Vec<_>>());
             if let Some(st) = s.catalog.stack_of(id) {
@@ -203,7 +205,7 @@ pub fn specs() -> Vec<CommandSpec> {
             ))
         }),
         cmd!(query "presets.list", "List Presets", [], None, "{}", always, |s, _| {
-            Ok(Value::Array(s.presets.iter().map(|p| json!({"id": p.id, "name": p.name, "group": p.group, "favorite": p.favorite, "builtin": p.builtin})).collect()))
+            Ok(Value::Array(s.presets.iter().map(|p| json!({"id": p.id, "name": p.name, "group": p.group, "favorite": p.favorite, "builtin": p.builtin, "unsupportedEdits": p.unsupported_edits})).collect()))
         }),
         cmd!(query "profiles.list", "List Profiles", [], None, "{} — every profile (built-in, then imported LUTs marked `imported`) with its group and favourite flag", always, |s, _| {
             let favorite = |id: &str| s.profile_favorites.iter().any(|f| f == id);
@@ -211,7 +213,8 @@ pub fn specs() -> Vec<CommandSpec> {
             // imported LUT profiles too (#618), marked as in `profiles.menu`
             let imported =
                 s.lut_profiles.iter().map(|p| json!({"id": p.id, "name": p.name, "group": p.group, "favorite": favorite(&p.id), "imported": true}));
-            Ok(Value::Array(builtin.chain(imported).collect()))
+            let saved = s.profile_info(lightcraft_develop::IMPORTED_LOOK_ID).map(|(name, group)| json!({"id": lightcraft_develop::IMPORTED_LOOK_ID, "name": name, "group": group, "favorite": false, "photoSpecific": true}));
+            Ok(Value::Array(builtin.chain(imported).chain(saved).collect()))
         }),
         cmd!(query "profiles.menu", "Profile Menu", [], None, "{} — favourites, recent (newest first) and groups", always, |s, _| Ok(s.profile_menu())),
         cmd!(query "history.list", "List History", [], None, "{id?} — returns {history: labels oldest first, cursor: index of the step the settings are at (later steps can be returned to), versions}", has_active, |s, p| {

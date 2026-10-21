@@ -134,6 +134,33 @@ painting on the current mask. `{"new": true}` creates a separate brush mask; `{"
 paint mode with the overlay visible. Brush Erase (or Alt while painting) removes strokes' coverage
 within that brush component; it is distinct from subtracting the component from the whole mask.
 
+### Explicit runtime profile tables
+
+A saved CRS Look can retain a checked `profile.imported.look_table` fingerprint. Load its matching
+**type-0 HSV table (format version 1 or 2)** from an explicitly supplied local XMP file with `profile.loadTable`; unload it
+with `profile.unloadTable`. These engine commands also work through CLI `run` and MCP. Substitute
+the saved 32-hex-digit fingerprint and the path to your own file in these requests:
+
+```json
+{"method":"engine.execute","params":{"command":"profile.loadTable","params":{"fingerprint":"0123456789ABCDEF0123456789ABCDEF","path":"/path/to/own-profile.xmp"}}}
+{"method":"engine.execute","params":{"command":"profile.unloadTable","params":{"fingerprint":"0123456789ABCDEF0123456789ABCDEF"}}}
+```
+
+Loading checks the exact CRS namespace/property, canonical MD5, type/version, dimensions and bounded
+payload before replacing a resource. Failure leaves the previous resource intact. Up to 32 tables
+may be held in a session. Loading does not select a profile, edit a photo, install a profile or scan
+folders. The local path and decoded table stay in memory; only the fingerprint travels with saved
+settings, profile-only copy/paste, presets and sync. Load the resource again after restarting.
+
+Rendering currently supports Process 2 or 3, SDR and finite Amount 0–200 within the table's declared range.
+Amount 0 bypasses the table; profile-induced B&W remains independent. Amount 100 uses the original
+entries; other supported amounts scale hue shifts from zero and saturation/value scales from one.
+Negative or nonfinite extrapolated scales are rejected. The stage uses linear ProPhoto before
+camera tone and B&W, on the CPU for both preview and export. Missing, mismatched or unsupported
+resources retain their reference and appear in existing Edit/Info, `photo.inspect`, `catalog.query`
+and export diagnostics, including cached renders. Other table types and HDR remain unsupported.
+Measured scope and remaining errors are recorded in [rendering evidence](target-app-parity.md#runtime-profile-table-evidence-2026-10-11).
+
 ### When the library can't be saved
 
 With a persistent library, every command that changes something is written to the catalog journal (fsynced) before
@@ -299,3 +326,14 @@ A center `move` can include `before` (panel ID or null to append) for tab order.
 The equivalent `{"action": ...}` form accepts a serialized shared docking action;
 this is also the form emitted by the renderer. Protected-canvas and app-specific panel
 rules apply equally to both forms.
+
+## Curve point edits
+
+`develop.curve` replaces a channel with a complete sparse `points: [[x,y], ...]` array. To keep an existing
+continuous curve produced by preset Amount, use `develop.curvePoint` with `channel` (`master`, `red`, `green`,
+`blue`) and `action` (`add`, `move`, `remove`). Add/move take finite `x` and `y` in `0..=1`; move/remove also take an integer
+`index` into the visible handles. The response contains `{channel, index, curve}`; use its index when continuing
+a drag. Function curves expose endpoint handles plus explicitly added corrections, not thousands of cubic samples.
+Wrap a drag in `develop.beginInteraction` and `develop.endInteraction` for one undo step; `develop.cancelInteraction`
+restores the starting model. Invalid indices, duplicate inputs, unsupported blends and oversized models fail
+without replacing the saved curve. Endpoint handles move vertically and cannot be removed.

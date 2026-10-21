@@ -12,9 +12,12 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod cct;
+pub mod curve_function;
 pub mod perceptual;
 pub mod spline;
 pub mod transfer;
+
+pub use curve_function::{CubicPiece, CurveError, CurveFunction, MAX_CURVE_LUT_ENTRIES, MAX_CURVE_PIECES};
 
 use serde::{Deserialize, Serialize};
 

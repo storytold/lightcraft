@@ -2,7 +2,7 @@
 
 LightCraft selects objects with **SAM 3** (Segment Anything with Concepts, Meta 2025), run in
 pure Rust by `crates/segment` on [candle](https://github.com/huggingface/candle): on the GPU
-through Metal on macOS, on the CPU elsewhere (for now).
+through Metal when available on macOS, with a CPU fallback for headless sessions; on the CPU elsewhere (for now).
 
 **The model is optional.** It is not part of LightCraft, and nothing requires it: without it,
 Object and Describe offer to download it, every other feature (and every existing mask, see

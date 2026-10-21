@@ -124,6 +124,86 @@ pub fn preview_only_notice(ui: &mut Ui, key: &str, reason: &str) -> bool {
     reload
 }
 
+/// Bounded even for a malformed older catalog: inspect at most `limit + 1` characters.
+fn diagnostic_name_for_display(field: &str, limit: usize) -> String {
+    let mut chars = field.chars();
+    let mut name: String = chars.by_ref().take(limit).filter(|c| !c.is_control()).collect();
+    if chars.next().is_some() {
+        name.push('…');
+    }
+    name
+}
+
+/// A bounded names-only summary. Packet values and profile/filter payloads never appear.
+pub fn unsupported_edit_summary(fields: &[String]) -> String {
+    let priority = |field: &str| {
+        if field == "FilterList" {
+            0
+        } else if field.starts_with("Enhance") {
+            1
+        } else if field == "Look" {
+            2
+        } else if field == "CameraProfile" {
+            3
+        } else {
+            4
+        }
+    };
+    let mut ordered: Vec<&String> = fields.iter().take(256).collect();
+    ordered.sort_by_key(|field| priority(field));
+    let shown = ordered.into_iter().take(3).map(|field| diagnostic_name_for_display(field, 48)).collect::<Vec<_>>().join(", ");
+    if fields.len() > 3 { crate::i18n::tr_format!("{names}; {count} more", names = shown, count = fields.len() - 3) } else { shown }
+}
+
+fn unsupported_edit_tooltip(fields: &[String]) -> String {
+    let mut text = fields.iter().take(32).map(|field| diagnostic_name_for_display(field, 128)).collect::<Vec<_>>().join("\n");
+    if fields.len() > 32 {
+        text.push_str("\n…");
+    }
+    text
+}
+
+/// Count successful exports whose source had unsupported saved settings. Applies to rendered
+/// outputs and byte-copy Original exports alike: this is a source-edit limitation, not a failure.
+pub fn export_unsupported_summary(files: &[serde_json::Value]) -> Option<String> {
+    let count = files
+        .iter()
+        .filter(|file| {
+            file.get("path").is_some() && file.get("unsupportedEdits").and_then(serde_json::Value::as_array).is_some_and(|fields| !fields.is_empty())
+        })
+        .count();
+    if count == 0 {
+        return None;
+    }
+    let photos = if count == 1 { crate::i18n::tr("Photo") } else { crate::i18n::tr("Photos") };
+    Some(format!("{}: {count} {photos}", crate::i18n::tr("Some saved settings are not supported")))
+}
+
+/// Persistent per-photo notice in Edit/Info, independent of transient import toasts or modals.
+pub fn unsupported_edits_notice(ui: &mut Ui, key: &str, fields: &[String]) {
+    if fields.is_empty() {
+        return;
+    }
+    let t = Tokens::get(ui.ctx());
+    let summary = unsupported_edit_summary(fields);
+    let title = crate::i18n::tr("Some saved settings are not supported");
+    let response = egui::Frame::NONE
+        .fill(t.canvas)
+        .stroke(Stroke::new(1.0, t.caution.gamma_multiply(0.45)))
+        .corner_radius(6.0)
+        .inner_margin(egui::Margin { left: 10, right: 10, top: 8, bottom: 9 })
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.label(egui::RichText::new(title).font(t.semibold(12.5)).color(t.caution));
+            ui.label(egui::RichText::new(crate::i18n::tr("Rendering may differ from the saved edit.")).size(11.5).color(t.text_label));
+            ui.label(egui::RichText::new(summary).size(11.5).color(t.text_label));
+        })
+        .response;
+    let response = response.on_hover_text(unsupported_edit_tooltip(fields));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, title));
+    register(ui.ctx(), format!("notice:unsupportedEdits:{key}"), response.rect);
+}
+
 // ------------------------------------------------------------------ colour helpers
 
 pub fn hex(s: &str) -> Color32 {
@@ -1018,4 +1098,50 @@ fn focused_slider_key() -> egui::Id {
 pub fn slider_has_focus(ctx: &egui::Context) -> bool {
     let focused = ctx.memory(|m| m.focused());
     focused.is_some() && focused == ctx.data(|d| d.get_temp::<egui::Id>(focused_slider_key()))
+}
+
+#[cfg(test)]
+mod unsupported_edit_tests {
+    use super::unsupported_edit_summary;
+
+    #[test]
+    fn summary_is_bounded_and_names_only() {
+        let fields = vec!["CameraProfile".to_string(), "FilterList".to_string(), "界".repeat(100), "FutureEdit".to_string()];
+        let summary = unsupported_edit_summary(&fields);
+        assert!(summary.contains("CameraProfile") && summary.contains("FilterList"));
+        assert!(!summary.contains("FutureEdit"));
+        assert!(summary.chars().count() < 120);
+        assert_eq!(unsupported_edit_summary(&["Future\nEdit".into()]), "FutureEdit");
+        let priority = vec!["Unknown".into(), "CameraProfile".into(), "Look".into(), "EnhanceDenoise".into(), "FilterList".into()];
+        let summary = unsupported_edit_summary(&priority);
+        assert!(summary.starts_with("FilterList, EnhanceDenoise, Look"));
+        assert!(!summary.contains("Unknown") && !summary.contains("CameraProfile"));
+    }
+}
+
+#[cfg(test)]
+mod diagnostic_display_bounds_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn long_catalog_diagnostics_have_bounded_display_and_tooltip() {
+        let fields = vec!["界".repeat(1_000); 1_000];
+        assert!(unsupported_edit_summary(&fields).chars().count() < 200);
+        assert!(unsupported_edit_tooltip(&fields).chars().count() <= 32 * 130 + 2);
+        assert!(!unsupported_edit_tooltip(&["Control\nName".into()]).contains('\n'));
+    }
+
+    #[test]
+    fn export_warning_counts_only_successful_affected_photos() {
+        let files = vec![
+            json!({"path": "original.nef", "unsupportedEdits": ["FilterList"]}),
+            json!({"path": "render.png", "unsupportedEdits": []}),
+            json!({"skipped": "existing.png", "unsupportedEdits": ["Look"]}),
+            json!({"error": "decode error", "unsupportedEdits": ["Look"]}),
+        ];
+        let summary = export_unsupported_summary(&files).unwrap();
+        assert!(summary.contains("1") && !summary.contains("failed") && !summary.contains("render"), "{summary}");
+        assert!(export_unsupported_summary(&files[1..]).is_none());
+    }
 }

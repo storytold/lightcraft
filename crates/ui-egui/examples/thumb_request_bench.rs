@@ -198,7 +198,7 @@ fn real() {
         p.embedded_lens = probe.embedded_lens;
         p.content_hash = probe.content_hash;
         p.preview_only = probe.preview_only;
-        lightcraft_engine::import::apply_import_defaults(&session, &mut p);
+        lightcraft_engine::import::apply_import_defaults(&session, &mut p).unwrap();
         session.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
     }
     let mut h = Headless::new(LightcraftApp::new(session, Services { png: None, ..Default::default() }), [1400.0, 900.0], 1.0);
