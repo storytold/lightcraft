@@ -1737,22 +1737,22 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
                         } else {
                             String::new()
                         };
-                        app.toast(
-                            ctx,
-                            crate::i18n::tr_format!(
-                                "Found {n} missing photo{}; {left} still missing{unsure}",
-                                if n == 1 { "" } else { "s" },
-                                left = left,
-                                n = n,
-                                unsure = unsure
-                            ),
+                        let said = crate::i18n::tr_format!(
+                            "Found {n} missing photo{}; {left} still missing{unsure}",
+                            if n == 1 { "" } else { "s" },
+                            left = left,
+                            n = n,
+                            unsure = unsure
                         );
+                        app.toast(ctx, said.clone());
                         app.ui.last_find_missing = Some(v.clone());
                         app.ui.last_find_missing_result = Some(Ok(v));
+                        lightcraft_engine::activity::Outcome { summary: said, ..Default::default() }
                     }
                     Err(e) => {
                         app.toast(ctx, e.clone());
-                        app.ui.last_find_missing_result = Some(Err(e));
+                        app.ui.last_find_missing_result = Some(Err(e.clone()));
+                        lightcraft_engine::activity::Outcome::failed(e)
                     }
                 }
             };

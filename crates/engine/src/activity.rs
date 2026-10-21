@@ -104,6 +104,18 @@ pub struct Outcome {
     pub path: Option<String>,
 }
 
+impl Outcome {
+    /// An end that says nothing more than how it went (the frontend words it from the task's name).
+    pub fn ended(ending: Ending) -> Self {
+        Outcome { ending, ..Default::default() }
+    }
+
+    /// The job could not do its work, and this is why.
+    pub fn failed(why: impl Into<String>) -> Self {
+        Outcome { ending: Ending::Failed, detail: why.into(), ..Default::default() }
+    }
+}
+
 /// A task that ended, as the frontends see it (`activity.finished`), until it is dismissed.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -421,7 +433,16 @@ impl TaskGuard {
     /// not end well. Returns whether that row was kept. A frontend still says at once how the job went (a toast):
     /// the row is what stays, not the announcement.
     pub fn finish(mut self, outcome: Outcome) -> bool {
-        self.reported = true;
+        self.report(outcome)
+    }
+
+    /// Say how the job ended, as [`TaskGuard::finish`] does, but keep its running row until the guard is dropped: for a
+    /// job that marks itself finished in between, so that whoever sees the row go finds it finished, and whoever finds
+    /// it finished finds the row. Only the first report counts.
+    pub fn report(&mut self, outcome: Outcome) -> bool {
+        if std::mem::replace(&mut self.reported, true) {
+            return false;
+        }
         self.leave(outcome)
     }
 

@@ -149,6 +149,9 @@ fn reverse(s: &mut Session, p: &Value) -> Result<Value> {
     for (n, (id, at)) in todo.iter().enumerate() {
         if let Some(t) = &task {
             if t.cancel_flag().is_some_and(|f| f.load(std::sync::atomic::Ordering::Relaxed)) {
+                if let Some(t) = task {
+                    t.finish(crate::activity::Outcome::ended(crate::activity::Ending::Stopped));
+                }
                 return Err(bad(C, "cancelled"));
             }
             t.progress(n as u64, todo.len() as u64);
@@ -172,11 +175,15 @@ fn reverse(s: &mut Session, p: &Value) -> Result<Value> {
         }
         found.push(entry);
     }
-    drop(task);
     let changed = ops.len();
-    if !bool_or(p, "dryRun", false) && changed > 0 {
-        s.commit("Reverse Geocode", Op::Batch { ops })?;
+    let committed = if !bool_or(p, "dryRun", false) && changed > 0 { s.commit("Reverse Geocode", Op::Batch { ops }) } else { Ok(()) };
+    if let Some(t) = task {
+        t.finish(match &committed {
+            Ok(_) => crate::activity::Outcome::default(),
+            Err(e) => crate::activity::Outcome::failed(e.to_string()),
+        });
     }
+    committed?;
     Ok(json!({"looked": todo.len(), "found": found.len(), "changed": changed, "photos": found, "attribution": GEONAMES_ATTRIBUTION}))
 }
 
@@ -261,9 +268,9 @@ mod download {
         let thread_dir = dir.clone();
         let thread_shared = shared.clone();
         let spawned = std::thread::Builder::new().name("place-names-download".into()).spawn(move || {
-            // the activity row goes when the thread ends, however it ends
-            let _task = task;
+            // the activity row says how it ended when the thread ends, however it ends
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(&base, &thread_dir, &cancel, &handle)));
+            let panicked = outcome.is_err();
             let outcome = match outcome {
                 Ok(Ok(n)) => DownloadOutcome::Done(n),
                 _ if cancel.load(std::sync::atomic::Ordering::Relaxed) => DownloadOutcome::Cancelled,
@@ -273,6 +280,12 @@ mod download {
             if let DownloadOutcome::Failed(e) = &outcome {
                 log::warn!("{e}");
             }
+            task.finish(match &outcome {
+                _ if panicked => crate::activity::Outcome::ended(crate::activity::Ending::Died),
+                DownloadOutcome::Done(_) => crate::activity::Outcome::default(),
+                DownloadOutcome::Cancelled => crate::activity::Outcome::ended(crate::activity::Ending::Stopped),
+                DownloadOutcome::Failed(why) => crate::activity::Outcome::failed(why.clone()),
+            });
             let mut sh = thread_shared.lock().unwrap_or_else(PoisonError::into_inner);
             sh.running = false;
             sh.last = Some(outcome.clone());

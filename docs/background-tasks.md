@@ -50,13 +50,19 @@ guard.detail(&file_name);
 - **Quiet periodic work** shows no row: the auto-import folder listing runs every few seconds through
   `tasks::spawn(.., None, ..)`.
 - **Say how it ended:** `guard.finish(Outcome { ending, summary, detail, failures, failed, path })` in place of
-  letting the guard drop; exports and imports do so far. `ending` is `Done`, `Problems` (not for every file),
+  letting the guard drop. These jobs do: exports (contact sheet and Print to PDF from the app included), imports,
+  folder scans, Synchronize Folder, Build / Smart Previews, Photo Merge, Lightroom catalog inspect / import, model and
+  place-name downloads, Fill Location from GPS, moving photos, Find Missing Photos and Reload from Disk. These do not yet: slideshow
+  export, the engine's `print.exportPdf`, reading focus points, thumbnail-cache tidying, the face GPU check, Apple
+  Photos imports, and the face scan and AI Denoise (queues whose row goes when they empty). `ending` is `Done`, `Problems` (not for every file),
   `Failed`, `Stopped`, or `Died` when the job finds its worker gone; `summary` is the sentence the row shows (UI code
   passes it translated); `failures` are the files with their reasons (`failed` when the job only counts them); `path`
-  is one of the files it made. The row stays in `activity.finished` until `activity.dismiss` lets go of it, for this
+  is one of the files it made. `Outcome::ended(ending)` and `Outcome::failed(why)` cover the plain cases. The row
+  stays in `activity.finished` until `activity.dismiss` lets go of it, for this
   session: always for a task that did not end well, and for one that ended well only if it ran 10 s or more. Keep the
   toast that says how it went: the row is the record, not the announcement. A guard that is only dropped leaves
-  nothing, as before, unless a panic dropped it: then the row says the task stopped unexpectedly.
+  nothing, as before, unless a panic dropped it: then the row says the task stopped unexpectedly. A scan that
+  another replaced, or whose dialog was closed, leaves nothing either: only the row's ✕ makes it a stopped task.
 
 ## Examples in the code
 

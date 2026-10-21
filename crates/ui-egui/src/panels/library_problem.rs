@@ -357,6 +357,7 @@ fn start_checks(app: &mut LightcraftApp, paths: Vec<String>) {
                 app.recent_checks.known.insert(path, Answer { why, at: web_time::Instant::now() });
                 apply_answers(app);
                 ctx.request_repaint();
+                lightcraft_engine::activity::Outcome::default()
             }
         });
         match started {

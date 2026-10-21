@@ -1159,6 +1159,33 @@ fn activity_cancel_stops_a_preview_build() {
     let p = s.execute("library.previewProgress", &json!({})).unwrap();
     assert_eq!(p["cancelled"], true, "{p}");
     assert!(p["done"].as_u64() < p["total"].as_u64(), "stopped part-way: {p}");
+    let row = s.activity.finished().into_iter().next().expect("a stopped build leaves a row");
+    assert_eq!((row.kind, row.ending), ("previews", crate::activity::Ending::Stopped));
+}
+
+/// A preview build that ran to its end leaves a row saying so (when it ran long enough to be worth one).
+#[test]
+fn a_finished_preview_build_leaves_a_row_saying_it_was_done() {
+    let mut s = demo();
+    s.activity.keep_after(0);
+    let ids: Vec<u64> = s.catalog.photos().take(2).map(|p| p.id.0).collect();
+    s.execute("library.buildPreviews", &json!({"ids": ids, "edge": 256, "wait": true})).unwrap();
+    let row = s.activity.finished().into_iter().next().expect("a row for the build");
+    assert_eq!((row.kind, row.label.as_str(), row.ending, row.failed), ("previews", "Building previews", crate::activity::Ending::Done, 0));
+}
+
+/// A photo whose preview can't be made (its file is gone) leaves the build's row marked, with how many failed.
+#[test]
+fn a_preview_build_that_could_not_render_a_photo_says_how_many() {
+    use lightcraft_catalog::{Op, Photo, Source};
+    let mut s = Session::new();
+    let id = s.catalog.alloc_photo_id();
+    let gone = std::env::temp_dir().join(format!("lc-no-such-photo-{}.jpg", std::process::id()));
+    let p = Photo::new(id, Source::File { path: gone.to_string_lossy().to_string() }, "gone.jpg", "JPEG", 600, 400, "2026-01-01T10:00:00");
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    s.execute("library.buildPreviews", &json!({"ids": [id.0], "edge": 256, "wait": true})).unwrap();
+    let row = s.activity.finished().into_iter().next().expect("a build that did not go well always leaves a row");
+    assert_eq!((row.ending, row.failed), (crate::activity::Ending::Problems, 1));
 }
 
 /// Colour range: a click samples the colour under it, so the mask selects that colour (white

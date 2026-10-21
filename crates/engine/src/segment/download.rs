@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 
 use lightcraft_segment::fetch::{self, Options, Progress};
 
-use crate::activity::{Activity, Cancel, Unit};
+use crate::activity::{Activity, Cancel, Ending, Outcome, Unit};
 
 /// What the session sees of a download.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
@@ -141,15 +141,17 @@ impl Downloader {
             let r =
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| fetch::download(files, &mirrors, &dir, &opts, &s.cancel, &mut on_progress)));
             let cancelled = matches!(r, Ok(Err(fetch::DownloadError::Cancelled)));
-            let error = match r {
+            let (error, outcome) = match r {
                 Ok(Ok(())) => {
                     s.finished.store(true, Ordering::SeqCst);
                     log::info!("SAM 3 model downloaded to {}", dir.display());
-                    None
+                    (None, Outcome::default())
                 }
-                Ok(Err(e)) => Some(e.to_string()),
-                Err(_) => Some("the download failed unexpectedly".to_string()),
+                Ok(Err(e)) if s.cancel.load(Ordering::SeqCst) => (Some(e.to_string()), Outcome::ended(Ending::Stopped)),
+                Ok(Err(e)) => (Some(e.to_string()), Outcome::failed(e.to_string())),
+                Err(_) => (Some("the download failed unexpectedly".to_string()), Outcome::ended(Ending::Died)),
             };
+            task.finish(outcome);
             if let Some(e) = &error {
                 log::warn!("SAM 3 download: {e}");
             }

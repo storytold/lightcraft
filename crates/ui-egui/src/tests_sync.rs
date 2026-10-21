@@ -339,6 +339,21 @@ fn a_synchronize_shows_a_row_and_its_cross_stops_it() {
     let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
     assert!(toast.contains("Stopped"), "{toast:?}");
     assert!(h.app.session.activity.list().is_empty(), "the row goes with the run");
+    let row = h.app.session.activity.finished().into_iter().next().expect("a stopped run leaves a row");
+    assert_eq!((row.label.as_str(), row.ending), ("Synchronizing folder", lightcraft_engine::activity::Ending::Stopped));
+    assert!(row.summary.contains("trip: Stopped"), "it names the folder and says how it ended: {:?}", row.summary);
+}
+
+#[test]
+fn a_synchronize_that_ran_to_its_end_leaves_a_row_saying_what_it_did() {
+    let dir = Scratch::new("donerow");
+    let mut h = changed_folder(&dir);
+    h.app.session.activity.keep_after(0);
+    open_and_scan(&mut h, &dir.path("trip"));
+    synchronize(&mut h);
+    let row = h.app.session.activity.finished().into_iter().next().expect("a row for the run");
+    assert_eq!((row.label.as_str(), row.ending), ("Synchronizing folder", lightcraft_engine::activity::Ending::Done));
+    assert!(row.summary.ends_with("trip: Imported 1"), "it names the folder and says what it did: {:?}", row.summary);
 }
 
 #[test]
@@ -363,6 +378,8 @@ fn the_folders_scan_shows_a_row_and_its_cross_closes_the_dialog() {
     h.step();
     assert!(h.app.sync.is_none(), "✕ stops the scan");
     assert!(h.app.ui.dialog.is_none(), "and closes its dialog: there is nothing to show");
+    let row = h.app.session.activity.finished().into_iter().next().expect("a stopped scan leaves a row");
+    assert_eq!((row.label.as_str(), row.ending), ("Looking for changes", lightcraft_engine::activity::Ending::Stopped));
     gate.store(true, std::sync::atomic::Ordering::Relaxed);
     assert!(h.app.session.activity.list().is_empty());
     h.settle(SETTLE);
