@@ -1132,6 +1132,25 @@ fn import_can_replace_a_duplicate_from_recently_deleted() {
     let _ = std::fs::remove_dir_all(&src);
 }
 
+/// A trashed photo imported again as a new one owns its stem sidecar: its own old record is not a
+/// rival for `a.xmp` (issue #1905's ranking), so the fresh photo reads it.
+#[test]
+fn a_fresh_reimport_reads_its_own_stem_sidecar() {
+    let (mut s, src, id) = trashed_photo("trash-fresh-sidecar");
+    std::fs::write(
+        src.join("a.xmp"),
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="3"/></rdf:RDF></x:xmpmeta>"#,
+    )
+    .unwrap();
+    let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()], "onDeleted": "fresh"})).unwrap();
+    assert_eq!(ids(&r, "imported"), 1, "{r}");
+    let new = r["imported"][0].as_u64().unwrap();
+    assert_ne!(new, id);
+    assert_eq!(s.catalog.photo(lightcraft_catalog::PhotoId(new)).unwrap().rating, 3, "the fresh photo reads a.xmp: {r}");
+    let _ = std::fs::remove_dir_all(&src);
+}
+
 #[test]
 fn unknown_on_deleted_is_an_error() {
     let mut s = Session::new().with_fs();
@@ -1790,5 +1809,96 @@ fn presets_apply_the_imported_profile_they_name() {
     s.execute("profile.deleteImported", &json!({"id": lut})).unwrap();
     s.execute("develop.profile", &json!({"id": "lc.vivid", "amount": 100})).unwrap();
     assert_eq!(apply(&mut s, "Portra Soft").profile.id, "lc.vivid");
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// A raw container LightCraft shows by its embedded JPEG: a TIFF whose IFD0 points at one.
+fn write_raw(path: &Path) {
+    use lightcraft_codecs::{ChromaSubsampling, EncodeImage, EncodeMeta, Samples, encode_jpeg};
+    let px: Vec<u8> = (0..48 * 32).flat_map(|i| [(i % 251) as u8, 91, 201]).collect();
+    let j = encode_jpeg(&EncodeImage::new(48, 32, 3, Samples::U8(&px)), 90, ChromaSubsampling::S444, &EncodeMeta::default()).unwrap();
+    let off = 8 + 2 + 24 + 4;
+    let mut f = b"II*\0\x08\0\0\0\x02\0".to_vec();
+    for (tag, v) in [(513u16, off as u32), (514, j.len() as u32)] {
+        f.extend_from_slice(&tag.to_le_bytes());
+        f.extend_from_slice(&[4, 0, 1, 0, 0, 0]);
+        f.extend_from_slice(&v.to_le_bytes());
+    }
+    f.extend_from_slice(&[0, 0, 0, 0]);
+    f.extend_from_slice(&j);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, f).unwrap();
+}
+
+/// An edited TIFF of a raw: the same name, a TIFF (not a raw) to LightCraft.
+fn write_tiff(path: &Path, seed: u8) {
+    use lightcraft_codecs::{EncodeImage, EncodeMeta, Samples, TiffCompression, encode_tiff};
+    let (w, h) = (48usize, 32usize);
+    let px: Vec<u8> = (0..w * h).flat_map(|i| [(i % w * 5) as u8, (i / w * 7) as u8, seed]).collect();
+    let bytes = encode_tiff(&EncodeImage::new(w as u32, h as u32, 3, Samples::U8(&px)), TiffCompression::Deflate, &EncodeMeta::default()).unwrap();
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, bytes).unwrap();
+}
+
+/// Issue #1905 (the import side of #1523): the stem sidecar `IMG_1.xmp` belongs to the raw first,
+/// so a TIFF or JPEG arriving beside a raw of the same name reads its own `IMG_1.TIF.xmp`, never
+/// the raw's packet, with or without the raw. Before, the arriving file took the raw's rating,
+/// label, metadata and develop settings.
+#[test]
+fn a_file_arriving_beside_its_raws_stem_reads_its_own_sidecar() {
+    let sidecar = |rating: u8| {
+        format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="{rating}"/></rdf:RDF></x:xmpmeta>"#
+        )
+    };
+    let read = |s: &Session, name: &str| -> u8 { s.catalog.photos().find(|p| p.file_name == name).map(|p| p.rating).unwrap_or_default() };
+
+    // the raw and the edited TIFF of it, same name, in one import
+    let src = temp_dir("stem-pair");
+    write_raw(&src.join("IMG_1.NEF"));
+    write_tiff(&src.join("IMG_1.TIF"), 7);
+    std::fs::write(src.join("IMG_1.xmp"), sidecar(5)).unwrap();
+    std::fs::write(src.join("IMG_1.TIF.xmp"), sidecar(2)).unwrap();
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    assert_eq!((ids(&r, "imported"), ids(&r, "failed")), (2, 0), "{r}");
+    assert_eq!(r["sidecars"], 2, "{r}");
+    assert_eq!(read(&s, "IMG_1.NEF"), 5, "the raw reads the stem sidecar, which is its own");
+    assert_eq!(read(&s, "IMG_1.TIF"), 2, "the TIFF reads its own sidecar, never the raw's");
+    let _ = std::fs::remove_dir_all(&src);
+
+    // the TIFF with no sidecar of its own: nothing of the raw's packet comes across
+    let src = temp_dir("stem-none");
+    write_raw(&src.join("IMG_2.NEF"));
+    write_tiff(&src.join("IMG_2.TIF"), 8);
+    std::fs::write(src.join("IMG_2.xmp"), sidecar(4)).unwrap();
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    assert_eq!((ids(&r, "imported"), ids(&r, "failed")), (2, 0), "{r}");
+    assert_eq!(r["sidecars"], 1, "{r}");
+    assert_eq!(read(&s, "IMG_2.NEF"), 4);
+    assert_eq!(read(&s, "IMG_2.TIF"), 0, "the raw's packet is not the TIFF's");
+    let _ = std::fs::remove_dir_all(&src);
+
+    // the raw already in the library, the edited TIFF arriving later
+    use lightcraft_catalog::{MediaKind, Op, Photo, Source};
+    let src = temp_dir("stem-after");
+    write_raw(&src.join("IMG_3.NEF"));
+    write_tiff(&src.join("IMG_3.TIF"), 9);
+    std::fs::write(src.join("IMG_3.xmp"), sidecar(3)).unwrap();
+    let mut s = Session::new().with_fs();
+    let raw = {
+        let id = s.catalog.alloc_photo_id();
+        let path = src.join("IMG_3.NEF").to_string_lossy().into_owned();
+        let mut p = Photo::new(id, Source::File { path }, "IMG_3.NEF", "NEF", 48, 32, "2026-01-14T05:58:48");
+        p.kind = MediaKind::Raw;
+        p
+    };
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(raw) }).unwrap();
+    let r = s.execute("library.import", &json!({"paths": [src.join("IMG_3.TIF").to_string_lossy()]})).unwrap();
+    assert_eq!((ids(&r, "imported"), ids(&r, "failed")), (1, 0), "{r}");
+    assert_eq!(r["sidecars"], 0, "{r}");
+    assert_eq!(read(&s, "IMG_3.TIF"), 0, "the catalogued raw owns IMG_3.xmp");
     let _ = std::fs::remove_dir_all(&src);
 }

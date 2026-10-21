@@ -17,6 +17,12 @@ impl Session {
     /// `app.export` params with a named `preset` expanded: the preset's params, overridden by the
     /// call's own (`preset` itself removed). Unknown preset names are an error.
     pub fn export_params(&self, p: &Value) -> std::result::Result<Value, String> {
+        self.export_params_or(p, crate::export::ExportFormat::default())
+    }
+
+    /// [`Session::export_params`] for a caller that writes `fallback` to a `path` naming no format
+    /// (see [`crate::export::ExportOptions::export_format`]).
+    pub fn export_params_or(&self, p: &Value, fallback: crate::export::ExportFormat) -> std::result::Result<Value, String> {
         let Some(name) = p.get("preset").and_then(Value::as_str) else { return Ok(p.clone()) };
         let (preset, _) = self
             .all_export_presets()
@@ -24,11 +30,16 @@ impl Session {
             .find(|(x, _)| x.name.eq_ignore_ascii_case(name.trim()))
             .ok_or_else(|| format!("unknown export preset `{name}` (see export.presets)"))?;
         // a preset saved by another version may hold keys this one doesn't know: not the caller's typo
-        let mut out = crate::export::ExportOptions::known_keys_only(&preset.params);
+        let mut out = crate::export::ExportOptions::known_keys(&preset.params);
         if let (Some(o), Some(own)) = (out.as_object_mut(), p.as_object()) {
             for (k, v) in own.iter().filter(|(k, _)| *k != "preset") {
                 o.insert(k.clone(), v.clone());
             }
+        }
+        // the preset's depth is judged against the format written, known only now (`path`); a
+        // depth the call passes itself is the caller's, and validated as such
+        if !p.get("bitDepth").is_some_and(|d| !d.is_null()) {
+            crate::export::ExportOptions::drop_unfit_depth(&mut out, fallback);
         }
         Ok(out)
     }
@@ -50,13 +61,25 @@ fn save(s: &mut Session, p: &Value) -> Result<Value> {
     let mut params = match p.get("params") {
         Some(v @ Value::Object(_)) => v.clone(),
         Some(_) => return Err(bad(ID, "`params` must be an object of app.export params")),
-        None => s.last_export.clone().ok_or_else(|| bad(ID, "no `params` and no previous export to save"))?,
+        // a stored setting, not the caller's typo: a depth it holds that its `format` lacks was
+        // written before #1952 and is dropped, as Export with Previous does; without `format`
+        // it is judged when the preset exports
+        None => {
+            let last = s.last_export.as_ref().ok_or_else(|| bad(ID, "no `params` and no previous export to save"))?;
+            let mut last = crate::export::ExportOptions::known_keys(last);
+            if last.get("format").is_some_and(Value::is_string) {
+                crate::export::ExportOptions::drop_unfit_depth(&mut last, Default::default());
+            }
+            last
+        }
     };
     if let Some(o) = params.as_object_mut() {
         o.retain(|k, _| !NOT_SETTINGS.contains(&k.as_str()));
     }
-    // a preset that app.export would refuse is refused here, where the typo is on screen
-    crate::export::ExportOptions::validate(ID, &params)?;
+    // a preset that app.export would refuse is refused here, where the typo is on screen; without
+    // `format`, its `bitDepth` is judged when it exports, against the format written then
+    let format = params.get("format").and_then(Value::as_str).map(|_| crate::export::ExportOptions::export_format(&params, Default::default()));
+    crate::export::ExportOptions::validate_as(ID, &params, format)?;
     let preset = ExportPreset { name: name.to_string(), params };
     match s.export_presets.iter_mut().find(|x| x.name.eq_ignore_ascii_case(name)) {
         Some(x) => *x = preset,

@@ -109,16 +109,50 @@ const GIVE_UP_FACTOR: f64 = 2.0;
 /// The full-size drafts (after the first) a drag times before it may give up on full size.
 const GIVE_UP_AFTER: usize = 3;
 
-/// The most (photo, control) pairs [`DragScale`] remembers as too slow for full-size drafts.
-const SLOW_DRAGS_KEPT: usize = 256;
+/// The most (photo, control) pairs [`DragScale`] keeps a verdict on; past it, the one remembered
+/// longest ago is forgotten.
+const VERDICTS_KEPT: usize = 256;
+
+/// A host frame time (ms) longer than this is not a texture upload but a window that was hidden,
+/// occluded or stalled: it counts as unknown, like a frame time from no host at all.
+const FRAME_MS_KNOWN: f64 = 1000.0;
+
+/// A drag counts against its (photo, control) pair only when its full-size drafts took longer than
+/// this (ms): a quarter over the budget, so a drag that only just misses it keeps full size.
+const VERDICT_MS: f64 = DRAFT_BUDGET_MS * 1.25;
+
+/// How long (s) a pair found slow drafts small before a drag of it tries full size again: the
+/// machine may only have been busy. Each retry that is slow too doubles the wait, up to
+/// [`RETRY_MAX_S`]. A retry costs at most a few slow drafts before the drag gives up on full size.
+const RETRY_AFTER_S: f64 = 30.0;
+
+/// The longest wait (s) before a slow pair tries full size again.
+const RETRY_MAX_S: f64 = 240.0;
+
+/// What [`DragScale`] remembers about the drags of one control on one photo.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Verdict {
+    /// One drag was over budget at full size: maybe a busy moment, so the next stays full size.
+    Suspect,
+    /// Two drags in a row were: drafts are small until `until` (the host's clock, s), then a drag
+    /// tries full size again; `wait` is how long this verdict holds (s).
+    Slow { until: f64, wait: f64 },
+}
 
 /// The size of a slider drag's whole-frame draft, chosen when the drag starts and kept until it
 /// ends (a change in the middle would make the resolution jump), unless its full-size drafts are
-/// far over budget. A drag renders at full size when the GPU draws the view and no earlier drag of
-/// the same control on this photo went over budget at that size; otherwise at [`CPU_DRAFT_SCALE`]
-/// (issue #330). Whether the GPU drew a render is not enough on its own: some views (a LUT
-/// profile, refined masks, a photo past a GPU limit) fall back to the CPU per render, and a large
-/// draft costs a texture upload too, which only the time a draft took to show tells.
+/// far over budget. A drag renders at full size when the GPU draws the view and the same control
+/// on this photo isn't known to be too slow at that size; otherwise at [`CPU_DRAFT_SCALE`] (issue
+/// #330). Whether the GPU drew a render is not enough on its own: some views (a LUT profile,
+/// refined masks, a photo past a GPU limit) fall back to the CPU per render, and a large draft
+/// costs a texture upload too, which only the time a draft took to show tells.
+///
+/// A drag's time is wall-clock time, what the user waits for. So that a moment the machine was busy
+/// (another app, a backup) can't make a slider draft small for the rest of the session, a pair is
+/// slow only after two drags in a row over [`VERDICT_MS`], and only for a while: after
+/// [`RETRY_AFTER_S`] a drag tries full size again, a fast one forgets the verdict and a slow one
+/// doubles the wait. A verdict is for its photo only: the same control on another photo (another
+/// size, other edits) is timed afresh.
 #[derive(Clone, Debug, Default)]
 pub struct DragScale {
     /// The drag running now: (photo, control) and its scale.
@@ -130,26 +164,28 @@ pub struct DragScale {
     /// The render time (ms) of a draft that reached the screen this frame: the time of the frame
     /// that uploads it is only known on the next one.
     pending: Option<f64>,
-    /// Drags whose full-size drafts went over budget.
-    slow: std::collections::HashSet<(lightcraft_catalog::PhotoId, String)>,
+    /// Pairs whose full-size drafts went over budget, the one remembered longest ago first.
+    verdicts: std::collections::VecDeque<((lightcraft_catalog::PhotoId, String), Verdict)>,
 }
 
 impl DragScale {
     /// The draft scale for this frame, or `None` without a drag. `drag` is the photo and control
     /// being dragged; `gpu` whether the GPU draws this view; `shown` the key of the whole-frame
-    /// render on screen (a render from before the drag is not one of its drafts).
-    pub fn scale(&mut self, drag: Option<(lightcraft_catalog::PhotoId, &str)>, gpu: bool, shown: Option<u64>) -> Option<f32> {
+    /// render on screen (a render from before the drag is not one of its drafts); `now` the host's
+    /// clock (s; egui's `input.time`).
+    pub fn scale(&mut self, drag: Option<(lightcraft_catalog::PhotoId, &str)>, gpu: bool, shown: Option<u64>, now: f64) -> Option<f32> {
         let Some((photo, control)) = drag else {
-            self.finish();
+            self.finish(now);
             return None;
         };
         match &self.current {
             Some(((p, c), s)) if *p == photo && c == control => return Some(*s),
-            Some(_) => self.finish(),
+            Some(_) => self.finish(now),
             None => {}
         }
         let key = (photo, control.to_string());
-        let s = if gpu && !self.slow.contains(&key) { 1.0 } else { CPU_DRAFT_SCALE };
+        let small = matches!(self.verdict(&key), Some(Verdict::Slow { until, .. }) if now < until);
+        let s = if gpu && !small { 1.0 } else { CPU_DRAFT_SCALE };
         self.current = Some((key, s));
         self.seen = shown;
         Some(s)
@@ -167,7 +203,7 @@ impl DragScale {
             return;
         }
         if let Some(render) = self.pending.take() {
-            let frame = last_frame_ms.filter(|ms| ms.is_finite() && *ms >= 0.0).unwrap_or(0.0);
+            let frame = last_frame_ms.filter(|ms| ms.is_finite() && (0.0..=FRAME_MS_KNOWN).contains(ms)).unwrap_or(0.0);
             if self.samples.len() < 1024 {
                 self.samples.push(render + frame);
             }
@@ -188,21 +224,58 @@ impl DragScale {
         }
     }
 
-    /// Remember drags of `control` on `photo` as too slow for full-size drafts (tests).
+    /// Remember drags of `control` on `photo` as too slow for full-size drafts, for good (tests).
     #[cfg(test)]
     pub fn remember_slow(&mut self, photo: lightcraft_catalog::PhotoId, control: &str) {
-        self.slow.insert((photo, control.to_string()));
+        self.set_verdict((photo, control.to_string()), Some(Verdict::Slow { until: f64::INFINITY, wait: RETRY_MAX_S }));
     }
 
-    /// The drag ended: remember it if its full-size drafts were over budget.
-    fn finish(&mut self) {
-        if let Some((key, _)) = self.current.take()
-            && median_after_first(&self.samples).is_some_and(|m| m > DRAFT_BUDGET_MS)
-        {
-            if self.slow.len() >= SLOW_DRAGS_KEPT {
-                self.slow.clear();
+    fn verdict(&self, key: &(lightcraft_catalog::PhotoId, String)) -> Option<Verdict> {
+        self.verdicts.iter().find(|(k, _)| k == key).map(|(_, v)| *v)
+    }
+
+    /// Set or (`None`) forget a pair's verdict. A new pair forgets the one remembered longest ago
+    /// when the list is full (not all of them: each forgotten pair costs one more slow drag).
+    fn set_verdict(&mut self, key: (lightcraft_catalog::PhotoId, String), verdict: Option<Verdict>) {
+        let at = self.verdicts.iter().position(|(k, _)| *k == key);
+        match (at, verdict) {
+            (Some(i), Some(v)) => {
+                if let Some(entry) = self.verdicts.get_mut(i) {
+                    entry.1 = v;
+                }
             }
-            self.slow.insert(key);
+            (Some(i), None) => {
+                self.verdicts.remove(i);
+            }
+            (None, Some(v)) => {
+                while self.verdicts.len() >= VERDICTS_KEPT {
+                    self.verdicts.pop_front();
+                }
+                self.verdicts.push_back((key, v));
+            }
+            (None, None) => {}
+        }
+    }
+
+    /// The drag ended. A drag timed at full size updates its pair's verdict: over [`VERDICT_MS`]
+    /// a first time makes it suspect, a second slow for [`RETRY_AFTER_S`], and a slow retry
+    /// doubles the wait; within it, the verdict is forgotten. A drag never timed at full size (it
+    /// drafted small, or was too short) changes nothing.
+    fn finish(&mut self, now: f64) {
+        if let Some((key, _)) = self.current.take()
+            && let Some(median) = median_after_first(&self.samples)
+        {
+            let verdict = if median > VERDICT_MS {
+                let wait = match self.verdict(&key) {
+                    None => None,
+                    Some(Verdict::Suspect) => Some(RETRY_AFTER_S),
+                    Some(Verdict::Slow { wait, .. }) => Some((wait * 2.0).min(RETRY_MAX_S)),
+                };
+                Some(wait.map_or(Verdict::Suspect, |wait| Verdict::Slow { until: now + wait, wait }))
+            } else {
+                None
+            };
+            self.set_verdict(key, verdict);
         }
         self.samples.clear();
         self.seen = None;
@@ -440,10 +513,10 @@ mod tests {
     fn a_drag_shrinks_the_draft_only_on_the_cpu() {
         use lightcraft_catalog::PhotoId;
         let mut gpu = DragScale::default();
-        assert_eq!(gpu.scale(None, true, None), None, "no drag, no draft");
-        assert_eq!(gpu.scale(Some((PhotoId(1), "Exposure")), true, None), Some(1.0));
+        assert_eq!(gpu.scale(None, true, None, 0.0), None, "no drag, no draft");
+        assert_eq!(gpu.scale(Some((PhotoId(1), "Exposure")), true, None, 0.0), Some(1.0));
         let mut cpu = DragScale::default();
-        assert_eq!(cpu.scale(Some((PhotoId(1), "Exposure")), false, None), Some(CPU_DRAFT_SCALE));
+        assert_eq!(cpu.scale(Some((PhotoId(1), "Exposure")), false, None, 0.0), Some(CPU_DRAFT_SCALE));
     }
 
     // Given a drag that started before the GPU was ready, it keeps its size until it ends: the
@@ -453,33 +526,120 @@ mod tests {
         use lightcraft_catalog::PhotoId;
         let mut d = DragScale::default();
         let drag = Some((PhotoId(1), "Exposure"));
-        assert_eq!(d.scale(drag, false, None), Some(CPU_DRAFT_SCALE));
-        assert_eq!(d.scale(drag, true, None), Some(CPU_DRAFT_SCALE), "the GPU came up mid-drag");
-        assert_eq!(d.scale(None, true, None), None);
-        assert_eq!(d.scale(drag, true, None), Some(1.0), "the next drag gets full size");
+        assert_eq!(d.scale(drag, false, None, 0.0), Some(CPU_DRAFT_SCALE));
+        assert_eq!(d.scale(drag, true, None, 0.0), Some(CPU_DRAFT_SCALE), "the GPU came up mid-drag");
+        assert_eq!(d.scale(None, true, None, 0.0), None);
+        assert_eq!(d.scale(drag, true, None, 0.0), Some(1.0), "the next drag gets full size");
         // and the other way: the GPU lost mid-drag keeps the drag at full size until it ends
-        assert_eq!(d.scale(drag, false, None), Some(1.0));
+        assert_eq!(d.scale(drag, false, None, 0.0), Some(1.0));
     }
 
-    // Given full-size drafts over the slider budget (a LUT profile or refined mask the CPU renders,
-    // a photo past a GPU limit, a slow GPU), the next drag of that control on that photo drafts
-    // small; other controls and photos keep full size
+    /// One whole drag of `drag` at full size whose drafts all take `ms` to show, ending at `now`.
+    fn timed_drag(d: &mut DragScale, drag: Option<(lightcraft_catalog::PhotoId, &str)>, ms: f64, now: f64) -> Option<f32> {
+        let scale = d.scale(drag, true, None, now);
+        for key in 1..=6 {
+            d.observe(key, ms, None);
+        }
+        d.scale(None, true, None, now);
+        scale
+    }
+
+    // Given full-size drafts over the slider budget twice in a row (a LUT profile or refined mask
+    // the CPU renders, a photo past a GPU limit, a slow GPU), the next drag of that control on
+    // that photo drafts small; once could be a busy moment. Other controls and photos keep full size
     #[test]
-    fn a_drag_over_budget_drafts_small_the_next_time() {
+    fn a_drag_over_budget_twice_drafts_small_the_next_time() {
         use lightcraft_catalog::PhotoId;
         let mut d = DragScale::default();
         let exposure = Some((PhotoId(1), "Exposure"));
-        assert_eq!(d.scale(exposure, true, Some(7)), Some(1.0));
+        assert_eq!(d.scale(exposure, true, Some(7), 0.0), Some(1.0));
         d.observe(7, 400.0, None); // the render from before the drag: not a draft of it
-        for (key, ms) in [(8, 300.0), (9, 20.0), (10, 25.0), (11, 9.0)] {
+        for (key, ms) in [(8, 300.0), (9, 30.0), (10, 25.0), (11, 9.0)] {
             d.observe(key, ms, None);
             d.observe(key, ms, None); // a render is timed once, however many frames show it
         }
-        assert_eq!(d.scale(exposure, true, None), Some(1.0), "over budget, but not far enough to give up mid-drag");
-        assert_eq!(d.scale(None, true, None), None);
-        assert_eq!(d.scale(exposure, true, None), Some(CPU_DRAFT_SCALE));
-        assert_eq!(d.scale(Some((PhotoId(1), "Contrast")), true, None), Some(1.0));
-        assert_eq!(d.scale(Some((PhotoId(2), "Exposure")), true, None), Some(1.0));
+        assert_eq!(d.scale(exposure, true, None, 0.0), Some(1.0), "over budget, but not far enough to give up mid-drag");
+        assert_eq!(d.scale(None, true, None, 0.0), None);
+        assert_eq!(timed_drag(&mut d, exposure, 25.0, 1.0), Some(1.0), "one slow drag: maybe the machine was busy");
+        assert_eq!(d.scale(exposure, true, None, 2.0), Some(CPU_DRAFT_SCALE));
+        d.scale(None, true, None, 2.0);
+        assert_eq!(d.scale(Some((PhotoId(1), "Contrast")), true, None, 2.0), Some(1.0));
+        assert_eq!(d.scale(Some((PhotoId(2), "Exposure")), true, None, 2.0), Some(1.0));
+    }
+
+    // Given a pair found slow, it drafts small only for a while: then a drag tries full size
+    // again; a slow retry doubles the wait (up to its cap), a fast one forgets the verdict
+    #[test]
+    fn a_slow_verdict_expires_and_is_retried() {
+        use lightcraft_catalog::PhotoId;
+        let mut d = DragScale::default();
+        let drag = Some((PhotoId(1), "Exposure"));
+        timed_drag(&mut d, drag, 25.0, 0.0);
+        timed_drag(&mut d, drag, 25.0, 0.0);
+        assert_eq!(timed_drag(&mut d, drag, 25.0, RETRY_AFTER_S - 1.0), Some(CPU_DRAFT_SCALE), "slow until the wait is over");
+        assert_eq!(timed_drag(&mut d, drag, 25.0, RETRY_AFTER_S), Some(1.0), "then a drag tries full size: still slow");
+        let mut at = RETRY_AFTER_S;
+        let mut wait = RETRY_AFTER_S * 2.0;
+        for _ in 0..6 {
+            assert_eq!(timed_drag(&mut d, drag, 25.0, at + wait - 1.0), Some(CPU_DRAFT_SCALE), "the wait doubled to {wait} s");
+            assert_eq!(timed_drag(&mut d, drag, 25.0, at + wait), Some(1.0), "a retry after {wait} s, slow again");
+            at += wait;
+            wait = (wait * 2.0).min(RETRY_MAX_S);
+        }
+        assert_eq!(wait, RETRY_MAX_S, "the wait stops growing");
+        assert_eq!(timed_drag(&mut d, drag, 8.0, at + wait), Some(1.0), "a retry, fast this time");
+        assert_eq!(timed_drag(&mut d, drag, 25.0, at + wait + 1.0), Some(1.0), "forgotten: one slow drag is a suspicion again");
+        assert_eq!(timed_drag(&mut d, drag, 25.0, at + wait + 2.0), Some(1.0), "suspect: still full size");
+        assert_eq!(d.scale(drag, true, None, at + wait + 3.0), Some(CPU_DRAFT_SCALE), "slow from the start again: wait 30 s");
+    }
+
+    // Given a drag only just over budget, it doesn't count against the pair (it would flip between
+    // the two sizes); one clearly over does
+    #[test]
+    fn only_a_drag_clearly_over_budget_counts() {
+        use lightcraft_catalog::PhotoId;
+        let mut d = DragScale::default();
+        let drag = Some((PhotoId(1), "Exposure"));
+        for t in 0..4 {
+            timed_drag(&mut d, drag, 18.0, f64::from(t));
+        }
+        assert_eq!(d.scale(drag, true, None, 4.0), Some(1.0), "18 ms drafts: just over the 16 ms budget");
+        d.scale(None, true, None, 4.0);
+        timed_drag(&mut d, drag, VERDICT_MS + 5.0, 5.0);
+        timed_drag(&mut d, drag, VERDICT_MS + 5.0, 6.0);
+        assert_eq!(d.scale(drag, true, None, 7.0), Some(CPU_DRAFT_SCALE));
+    }
+
+    // Given one slow drag while the machine was busy, then fast ones, the slider keeps full size
+    #[test]
+    fn a_busy_moment_doesnt_make_a_slider_draft_small() {
+        use lightcraft_catalog::PhotoId;
+        let mut d = DragScale::default();
+        let drag = Some((PhotoId(1), "Exposure"));
+        timed_drag(&mut d, drag, 40.0, 0.0);
+        for t in 1..=3 {
+            assert_eq!(timed_drag(&mut d, drag, 8.0, f64::from(t)), Some(1.0));
+        }
+        timed_drag(&mut d, drag, 40.0, 4.0);
+        assert_eq!(d.scale(drag, true, None, 5.0), Some(1.0), "the fast drags forgot the first slow one");
+    }
+
+    // Given a hostile host clock (NaN, infinite, going backwards), a drag never panics; a clock it
+    // can't read tries full size
+    #[test]
+    fn a_hostile_clock_never_panics() {
+        use lightcraft_catalog::PhotoId;
+        let mut d = DragScale::default();
+        let drag = Some((PhotoId(1), "Exposure"));
+        timed_drag(&mut d, drag, 25.0, 100.0);
+        timed_drag(&mut d, drag, 25.0, 100.0);
+        assert_eq!(d.scale(drag, true, None, 50.0), Some(CPU_DRAFT_SCALE), "the clock went backwards: still slow");
+        d.scale(None, true, None, 50.0);
+        assert_eq!(d.scale(drag, true, None, f64::NAN), Some(1.0));
+        d.scale(None, true, None, f64::NAN);
+        for now in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN, -1.0] {
+            timed_drag(&mut d, drag, 25.0, now);
+        }
     }
 
     // Given full-size drafts within budget (the first one, rebuilding the stage caches, may be
@@ -489,18 +649,18 @@ mod tests {
         use lightcraft_catalog::PhotoId;
         let mut d = DragScale::default();
         let drag = Some((PhotoId(1), "Exposure"));
-        d.scale(drag, true, None);
+        d.scale(drag, true, None, 0.0);
         for (key, ms) in [(1, 120.0), (2, 4.0), (3, 6.0), (4, 30.0), (5, 5.0)] {
             d.observe(key, ms, None);
         }
-        d.scale(None, true, None);
-        assert_eq!(d.scale(drag, true, None), Some(1.0));
+        d.scale(None, true, None, 0.0);
+        assert_eq!(d.scale(drag, true, None, 0.0), Some(1.0));
         // hostile times are ignored, never a panic
         for (key, ms) in [(6, f64::NAN), (7, f64::INFINITY), (8, -1.0)] {
             d.observe(key, ms, None);
         }
-        d.scale(None, true, None);
-        assert_eq!(d.scale(drag, true, None), Some(1.0));
+        d.scale(None, true, None, 0.0);
+        assert_eq!(d.scale(drag, true, None, 0.0), Some(1.0));
     }
 
     // Given renders within budget whose frames (the texture upload) take it over, the drag counts
@@ -510,50 +670,89 @@ mod tests {
         use lightcraft_catalog::PhotoId;
         let mut d = DragScale::default();
         let drag = Some((PhotoId(1), "Exposure"));
-        d.scale(drag, true, None);
-        for key in 1..=5 {
-            d.observe(key, 8.0, Some(12.0)); // the previous frame, which uploaded the last draft
+        for _ in 0..2 {
+            d.scale(drag, true, None, 0.0);
+            for key in 1..=5 {
+                d.observe(key, 8.0, Some(14.0)); // the previous frame, which uploaded the last draft
+            }
+            d.observe(5, 8.0, Some(14.0));
+            d.scale(None, true, None, 0.0);
         }
-        d.observe(5, 8.0, Some(12.0));
-        d.scale(None, true, None);
-        assert_eq!(d.scale(drag, true, None), Some(CPU_DRAFT_SCALE), "8 ms renders + 12 ms frames: over 16 ms");
+        assert_eq!(d.scale(drag, true, None, 0.0), Some(CPU_DRAFT_SCALE), "8 ms renders + 14 ms frames: over budget");
         // the same renders without the host's frame times (headless) stay within budget
         let mut headless = DragScale::default();
-        headless.scale(drag, true, None);
-        for key in 1..=6 {
-            headless.observe(key, 8.0, None);
+        headless.scale(drag, true, None, 0.0);
+        for _ in 0..2 {
+            timed_drag(&mut headless, drag, 8.0, 0.0);
         }
-        headless.scale(None, true, None);
-        assert_eq!(headless.scale(drag, true, None), Some(1.0));
+        assert_eq!(headless.scale(drag, true, None, 0.0), Some(1.0));
         // a hostile frame time counts as nothing, never a panic
         let mut hostile = DragScale::default();
-        hostile.scale(drag, true, None);
+        hostile.scale(drag, true, None, 0.0);
         for (key, frame) in [(1, f64::NAN), (2, f64::INFINITY), (3, -1.0), (4, f64::NAN)] {
             hostile.observe(key, 8.0, Some(frame));
         }
-        hostile.scale(None, true, None);
-        assert_eq!(hostile.scale(drag, true, None), Some(1.0));
+        hostile.scale(None, true, None, 0.0);
+        assert_eq!(hostile.scale(drag, true, None, 0.0), Some(1.0));
+    }
+
+    // Given more slow drags than are remembered, only the one remembered longest ago is forgotten:
+    // clearing them all would bring back a slow full-size drag for every pair
+    #[test]
+    fn a_full_slow_set_forgets_only_the_oldest_drag() {
+        use lightcraft_catalog::PhotoId;
+        let mut d = DragScale::default();
+        for photo in 0..=VERDICTS_KEPT as u64 {
+            d.remember_slow(PhotoId(photo), "Exposure");
+        }
+        assert_eq!(d.scale(Some((PhotoId(0), "Exposure")), true, None, 0.0), Some(1.0), "the oldest is forgotten");
+        d.scale(None, true, None, 0.0);
+        for photo in [1, VERDICTS_KEPT as u64] {
+            assert_eq!(d.scale(Some((PhotoId(photo), "Exposure")), true, None, 0.0), Some(CPU_DRAFT_SCALE), "photo {photo}");
+            d.scale(None, true, None, 0.0);
+        }
+        d.remember_slow(PhotoId(1), "Exposure"); // already remembered: nothing is forgotten
+        assert_eq!(d.scale(Some((PhotoId(2), "Exposure")), true, None, 0.0), Some(CPU_DRAFT_SCALE));
+    }
+
+    // Given draft frames that took seconds (the window hidden or occluded mid-drag), they count as
+    // unknown: fast renders don't mark the drag slow because the window wasn't drawing. Two such
+    // drags, since one slow drag only makes the pair suspect
+    #[test]
+    fn a_hidden_windows_frame_times_dont_mark_a_drag_slow() {
+        use lightcraft_catalog::PhotoId;
+        let mut d = DragScale::default();
+        let drag = Some((PhotoId(1), "Exposure"));
+        for t in 0..2u32 {
+            assert_eq!(d.scale(drag, true, None, f64::from(t)), Some(1.0), "drag {}", t + 1);
+            for key in 1..=6 {
+                d.observe(u64::from(t) * 10 + key, 6.0, Some(4000.0));
+            }
+            d.scale(None, true, None, f64::from(t));
+        }
+        assert_eq!(d.scale(drag, true, None, 2.0), Some(1.0), "after two hidden-window drags: still full size");
     }
 
     // Given full-size drafts far over budget (a refined mask the CPU renders at 190 ms a step),
-    // the drag drops to the small draft after a few of them instead of at its end, and the next
-    // drag starts small
+    // the drag drops to the small draft after a few of them instead of at its end; after a second
+    // such drag, the next starts small
     #[test]
     fn a_drag_far_over_budget_drafts_small_before_it_ends() {
         use lightcraft_catalog::PhotoId;
         let mut d = DragScale::default();
         let drag = Some((PhotoId(1), "Exposure"));
-        assert_eq!(d.scale(drag, true, None), Some(1.0));
+        assert_eq!(d.scale(drag, true, None, 0.0), Some(1.0));
         let mut scales = Vec::new();
         for key in 1..=8 {
             d.observe(key, 190.0, None);
-            scales.push(d.scale(drag, true, None));
+            scales.push(d.scale(drag, true, None, 0.0));
         }
         // drafts 1–4 are timed one frame late; the median of 2–4 decides on the fifth frame
         assert_eq!(scales[..4], [Some(1.0); 4], "{scales:?}");
         assert_eq!(scales[4..], [Some(CPU_DRAFT_SCALE); 4], "{scales:?}");
-        d.scale(None, true, None);
-        assert_eq!(d.scale(drag, true, None), Some(CPU_DRAFT_SCALE));
+        d.scale(None, true, None, 0.0);
+        assert_eq!(timed_drag(&mut d, drag, 190.0, 1.0), Some(1.0), "one such drag: maybe a busy moment");
+        assert_eq!(d.scale(drag, true, None, 2.0), Some(CPU_DRAFT_SCALE));
     }
 
     // Given a full-size drag zoomed in (a window covers the view), the hidden whole-frame draft is

@@ -98,6 +98,43 @@ fn dng_export_rejects_non_raw_photos() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Review of #1966: a preset without `format` keeps its `bitDepth` until the format written is
+/// known. With `path: a.png` it writes the 16-bit PNG it asks for; a format without that depth
+/// gets its own, as stored settings do, while a depth the call itself passes is still refused.
+#[test]
+fn a_preset_depth_is_judged_against_the_format_written() {
+    use crate::export::ExportPreset;
+    let mut s = Session::with_demo();
+    let id = s.active().unwrap();
+    s.export_presets.push(ExportPreset { name: "Deep".into(), params: json!({"bitDepth": 16, "longEdge": 64}) });
+    let p = s.export_params(&json!({"preset": "deep", "path": "/out/a.png"})).unwrap();
+    let o = ExportOptions::from_params(&p).unwrap();
+    assert_eq!((o.format, o.bit_depth), (ExportFormat::Png, Some(16)));
+    assert_eq!(export_photo(&mut s, id, &o, 1).unwrap().bytes[24], 16, "a 16-bit PNG");
+    let p = s.export_params(&json!({"preset": "deep", "path": "/out/a.jpg"})).unwrap();
+    assert_eq!(ExportOptions::from_params(&p).unwrap().bit_depth, None);
+    let p = s.export_params(&json!({"preset": "deep", "path": "/out/a.jpg", "bitDepth": 16})).unwrap();
+    assert!(ExportOptions::from_params(&p).unwrap_err().to_string().contains("`bitDepth` must be 8 for jpeg"));
+    // such a preset can be saved: its depth is judged when it exports; with a format, at once
+    s.execute("export.savePreset", &json!({"name": "Deep 2", "params": {"bitDepth": 16}})).unwrap();
+    assert!(s.execute("export.savePreset", &json!({"name": "Deep 3", "params": {"format": "jpeg", "bitDepth": 16}})).is_err());
+}
+
+/// Review of #1966: savePreset without `params` saves the previous export, a stored setting. A
+/// depth written before #1952 at the format's own depth is dropped, as Export with Previous does,
+/// instead of refusing the save; without `format`, the depth waits for the format written.
+#[test]
+fn a_preset_saved_from_the_previous_export_drops_its_unfit_depth() {
+    let mut s = Session::with_demo();
+    s.last_export = Some(json!({"format": "jpeg", "bitDepth": 16, "quality": 80, "dir": "/out"}));
+    s.execute("export.savePreset", &json!({"name": "Old"})).unwrap();
+    assert_eq!(s.export_presets[0].params, json!({"format": "jpeg", "quality": 80}));
+    s.last_export = Some(json!({"bitDepth": 16, "dir": "/out"}));
+    s.execute("export.savePreset", &json!({"name": "Deep"})).unwrap();
+    let p = s.export_params(&json!({"preset": "Deep", "path": "/out/a.png"})).unwrap();
+    assert_eq!(ExportOptions::from_params(&p).unwrap().bit_depth, Some(16));
+}
+
 #[test]
 fn presets_conflicts_and_subfolders() {
     use crate::export::{Destination, export_batch};
@@ -991,7 +1028,8 @@ fn same_folder_as_original_exports_next_to_each_photo() {
     let exists = |p: &str| std::path::Path::new(p).exists();
     let files = crate::export::export_batch(&mut s, &ids, &o, &to, &mut crate::export::write_file, &exists).unwrap();
     let written: Vec<&str> = files.iter().map(|f| f["path"].as_str().unwrap()).collect();
-    let mut want = vec![a.join("Exports/IMG_1.jpg").to_string_lossy().to_string(), b.join("Exports/IMG_1.jpg").to_string_lossy().to_string()];
+    // `export` joins the subfolder and name with `/` (`join_path`), on Windows too.
+    let mut want = vec![format!("{}/Exports/IMG_1.jpg", a.to_string_lossy()), format!("{}/Exports/IMG_1.jpg", b.to_string_lossy())];
     let mut got: Vec<String> = written.iter().map(|p| p.to_string()).collect();
     want.sort();
     got.sort();

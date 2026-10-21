@@ -7,6 +7,13 @@
 //! the (possibly inconsistent) model and leaves the worker ready for the next job. The busy
 //! counters are decremented by drop guards, so they can't stay stuck. The model is unloaded
 //! after [`IDLE_UNLOAD`] without requests (it holds several GB).
+//!
+//! Where the model can run on the GPU (Metal on macOS), a job that fails there (a panic or an
+//! error from candle, e.g. a kernel the GPU's compiler can't build, issue #1974) frees the
+//! model and runs once more on the CPU. When that works, the model stays on the CPU for the rest
+//! of the session and the job's outcome says so; when it fails too, the GPU wasn't the cause and
+//! the next job uses it again. `LIGHTCRAFT_GPU=0` or `LIGHTCRAFT_GPU_BACKEND=off` keep the model on
+//! the CPU from the start.
 
 use std::collections::VecDeque;
 use std::panic::AssertUnwindSafe;
@@ -29,6 +36,7 @@ use crate::media::RenderJob;
 pub const IDLE_UNLOAD: Duration = Duration::from_secs(10 * 60);
 
 /// What to compute.
+#[derive(Clone)]
 pub enum Kind {
     /// Load the model and encode the photo (so the first click is fast).
     Prepare,
@@ -42,6 +50,12 @@ pub enum Kind {
     /// Panics (tests of the worker's recovery).
     #[cfg(test)]
     Panic,
+    /// Fails like the model on a GPU that can't run it (a panic or a candle error), and
+    /// succeeds on the CPU (tests of the CPU fallback).
+    #[cfg(test)]
+    FailOnGpu {
+        panic: bool,
+    },
 }
 
 /// One request.
@@ -65,6 +79,70 @@ pub struct Outcome {
     pub result: Result<Option<SegMask>, String>,
     /// A newer request for the same selection came in; this one was skipped.
     pub superseded: bool,
+    /// Something the user should know besides the result ([`GPU_FAILED`]).
+    pub notice: Option<String>,
+}
+
+/// The notice of the job after which the model runs on the CPU.
+pub const GPU_FAILED: &str =
+    "The GPU couldn't run the AI mask model, so it runs on the CPU until LightCraft restarts (slower). Details are in the log.";
+
+/// Where the model is loaded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Placement {
+    /// On the GPU when there is one (Metal on macOS); a job that fails there is retried on the CPU.
+    Gpu,
+    /// On the CPU: this build has no GPU path, the environment switches the GPU off, or the model
+    /// failed on it.
+    Cpu,
+}
+
+impl Placement {
+    fn initial() -> Self {
+        if !lightcraft_segment::GPU_BUILD {
+            return Placement::Cpu;
+        }
+        if let Some(why) = lightcraft_gpu::env_off_reason() {
+            log::info!("SAM 3 runs on the CPU ({why})");
+            return Placement::Cpu;
+        }
+        Placement::Gpu
+    }
+}
+
+/// Why a job failed.
+#[derive(Debug)]
+enum Failure {
+    /// The model failed (a candle error, or a panic): on the GPU, the CPU may run it.
+    Model(String),
+    /// Anything else (no model files, the photo, a remote worker): another device won't help.
+    Other(String),
+}
+
+impl Failure {
+    fn message(self) -> String {
+        match self {
+            Failure::Model(m) | Failure::Other(m) => m,
+        }
+    }
+}
+
+impl From<String> for Failure {
+    fn from(m: String) -> Self {
+        Failure::Other(m)
+    }
+}
+
+impl From<&str> for Failure {
+    fn from(m: &str) -> Self {
+        Failure::Other(m.into())
+    }
+}
+
+impl From<lightcraft_segment::Error> for Failure {
+    fn from(e: lightcraft_segment::Error) -> Self {
+        if matches!(e, lightcraft_segment::Error::Candle(_)) { Failure::Model(e.to_string()) } else { Failure::Other(e.to_string()) }
+    }
 }
 
 /// Counters the session reads without locking.
@@ -159,7 +237,7 @@ impl Worker {
         // (re)start the thread
         let (tx, rx) = mpsc::channel();
         let shared = self.shared.clone();
-        match std::thread::Builder::new().name("sam3".into()).spawn(move || run(&rx, &shared, IDLE_UNLOAD)) {
+        match std::thread::Builder::new().name("sam3".into()).spawn(move || run(&rx, &shared, IDLE_UNLOAD, Placement::initial())) {
             Ok(t) => {
                 self.thread = Some(t);
                 self.tx = Some(tx.clone());
@@ -191,7 +269,7 @@ fn supersedes(later: &Job, job: &Job) -> bool {
     }
 }
 
-fn run(rx: &mpsc::Receiver<Job>, shared: &Shared, idle: Duration) {
+fn run(rx: &mpsc::Receiver<Job>, shared: &Shared, idle: Duration, mut placement: Placement) {
     let mut state = State::default();
     let mut queue: VecDeque<Job> = VecDeque::new();
     loop {
@@ -219,41 +297,78 @@ fn run(rx: &mpsc::Receiver<Job>, shared: &Shared, idle: Duration) {
         let done = Done(if is_detail { &shared.detail } else { &shared.pending });
         if queue.iter().any(|later| supersedes(later, &job)) {
             drop(done);
-            let _ = job.reply.send(Outcome { tag: job.tag, result: Ok(None), superseded: true });
+            let _ = job.reply.send(Outcome { tag: job.tag, result: Ok(None), superseded: true, notice: None });
             continue;
         }
-        let result = match std::panic::catch_unwind(AssertUnwindSafe(|| run_job(&mut state, shared, &mut job))) {
-            Ok(r) => r,
-            Err(p) => {
-                let why = p.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| p.downcast_ref::<String>().cloned()).unwrap_or_default();
-                log::error!("SAM 3 panicked: {why}");
-                // don't trust what the model kept: load it again next time
-                state = State::default();
-                Err("the AI model failed unexpectedly (it will be reloaded on the next try)".to_string())
-            }
+        // what a retry on the CPU needs (running the job takes them)
+        let retry = (placement == Placement::Gpu && remote::configured().is_none()).then(|| (job.kind.clone(), job.render.clone()));
+        let mut result = attempt(&mut state, shared, &mut job, placement);
+        let mut notice = None;
+        let gpu_failed = match &result {
+            Err(Failure::Model(why)) => Some(why.clone()),
+            _ => None,
         };
+        if let (Some(why), Some((kind, render))) = (gpu_failed, retry) {
+            // the GPU may be the cause (e.g. a kernel its compiler can't build, issue #1974): free
+            // the model there and try once on the CPU
+            log::warn!("SAM 3 failed on the GPU ({why}); trying the CPU");
+            state = State::default();
+            (job.kind, job.render) = (kind, render);
+            match attempt(&mut state, shared, &mut job, Placement::Cpu) {
+                Ok(r) => {
+                    log::warn!("SAM 3 runs on the CPU from now on: it failed on the GPU and works on the CPU");
+                    placement = Placement::Cpu;
+                    notice = Some(GPU_FAILED.to_string());
+                    result = Ok(r);
+                }
+                Err(e) => {
+                    // the CPU fails too, so the GPU isn't the cause: the next job uses it again
+                    log::warn!("SAM 3 failed on the CPU too: {}", e.message());
+                    state = State::default();
+                }
+            }
+        }
+        let result = result.map_err(Failure::message);
         if result.is_err() && !is_detail {
             state.cache = None;
         }
         shared.loaded.store(state.model.is_some() || state.remote.is_some(), Ordering::SeqCst);
         drop(done);
-        let _ = job.reply.send(Outcome { tag: job.tag, result, superseded: false });
+        let _ = job.reply.send(Outcome { tag: job.tag, result, superseded: false, notice });
     }
 }
 
-/// The model for `dir`, loading it when needed.
-fn model<'a>(state: &'a mut State, shared: &Shared, dir: &std::path::Path) -> Result<&'a mut Sam3, String> {
+/// Run `job` with the model on `placement`. A panic is a [`Failure::Model`] and drops what the
+/// model kept.
+fn attempt(state: &mut State, shared: &Shared, job: &mut Job, placement: Placement) -> Result<Option<SegMask>, Failure> {
+    match std::panic::catch_unwind(AssertUnwindSafe(|| run_job(state, shared, job, placement))) {
+        Ok(r) => r,
+        Err(p) => {
+            let why = p.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| p.downcast_ref::<String>().cloned()).unwrap_or_default();
+            log::error!("SAM 3 panicked: {why}");
+            // don't trust what the model kept: load it again next time
+            *state = State::default();
+            Err(Failure::Model("the AI model failed unexpectedly (it will be reloaded on the next try)".into()))
+        }
+    }
+}
+
+/// The model for `dir`, loading it on `placement` when needed.
+fn model<'a>(state: &'a mut State, shared: &Shared, dir: &std::path::Path, placement: Placement) -> Result<&'a mut Sam3, Failure> {
     if state.model.as_ref().is_none_or(|(d, _)| d != dir) {
         state.model = None;
         state.cache = None;
         let _busy = Flag::raise(&shared.encoding);
         let t = web_time::Instant::now();
-        let m = Sam3::load(dir).map_err(|e| e.to_string())?;
-        log::info!("SAM 3 loaded in {:?}", t.elapsed());
+        let m = match placement {
+            Placement::Gpu => Sam3::load(dir)?,
+            Placement::Cpu => Sam3::load_cpu(dir)?,
+        };
+        log::info!("SAM 3 loaded in {:?} ({})", t.elapsed(), if m.device().is_cpu() { "CPU" } else { "GPU" });
         state.model = Some((dir.to_path_buf(), m));
         shared.loaded.store(true, Ordering::SeqCst);
     }
-    state.model.as_mut().map(|(_, m)| m).ok_or_else(|| "the model did not load".to_string())
+    state.model.as_mut().map(|(_, m)| m).ok_or_else(|| "the model did not load".into())
 }
 
 /// Render the model input.
@@ -275,16 +390,16 @@ fn render(job: &mut Job) -> Result<Input, String> {
 }
 
 /// The model and the encoded photo `job.key` (rendering and encoding it when needed).
-fn encoded<'a>(state: &'a mut State, shared: &Shared, job: &mut Job) -> Result<(&'a mut Sam3, &'a mut Encoded), String> {
-    model(state, shared, &job.dir)?;
+fn encoded<'a>(state: &'a mut State, shared: &Shared, job: &mut Job, placement: Placement) -> Result<(&'a mut Sam3, &'a mut Encoded), Failure> {
+    model(state, shared, &job.dir, placement)?;
     if state.cache.as_ref().is_none_or(|(k, _)| *k != job.key) {
         state.cache = None;
         let input = render(job)?;
         let _busy = Flag::raise(&shared.encoding);
         let m = state.model.as_mut().map(|(_, m)| m).ok_or("the model did not load")?;
         let t = web_time::Instant::now();
-        let mut enc = m.encode(&input.rgb, input.w, input.h).map_err(|e| e.to_string())?;
-        m.prepare_clicks(&mut enc).map_err(|e| e.to_string())?;
+        let mut enc = m.encode(&input.rgb, input.w, input.h)?;
+        m.prepare_clicks(&mut enc)?;
         log::info!("SAM 3 encoded {}×{} in {:?}", input.w, input.h, t.elapsed());
         state.cache = Some((job.key, enc));
     }
@@ -328,7 +443,7 @@ fn remote_job(state: &mut State, shared: &Shared, job: &mut Job, endpoint: &str)
             }
         }
         #[cfg(test)]
-        Kind::Panic => return Err("test panic request".into()),
+        Kind::Panic | Kind::FailOnGpu { .. } => return Err("test panic request".into()),
     };
     let input = if region.is_some() || client.key != Some(job.key) { render(job)? } else { Input { rgb: Vec::new(), w: 0, h: 0 } };
     let request = Request { width: input.w, height: input.h, temporary: region.is_some(), operation };
@@ -342,37 +457,44 @@ fn remote_job(state: &mut State, shared: &Shared, job: &mut Job, endpoint: &str)
     }))
 }
 
-fn run_job(state: &mut State, shared: &Shared, job: &mut Job) -> Result<Option<SegMask>, String> {
+fn run_job(state: &mut State, shared: &Shared, job: &mut Job, placement: Placement) -> Result<Option<SegMask>, Failure> {
     if let Some(endpoint) = remote::configured() {
         let result = remote_job(state, shared, job, &endpoint);
         if result.is_err() {
             state.remote = None;
         }
-        return result.map_err(|e| format!("Remote SAM 3 failed: {e}. Check the worker and SSH tunnel, then retry."));
+        return result.map_err(|e| Failure::Other(format!("Remote SAM 3 failed: {e}. Check the worker and SSH tunnel, then retry.")));
     }
     let side = lightcraft_segment::MASK_SIDE;
     match std::mem::replace(&mut job.kind, Kind::Prepare) {
         Kind::Prepare => {
-            encoded(state, shared, job)?;
+            encoded(state, shared, job, placement)?;
             Ok(None)
         }
         Kind::Clicks(clicks) => {
-            let (m, enc) = encoded(state, shared, job)?;
-            let p = m.segment_clicks(enc, &clicks).map_err(|e| e.to_string())?;
+            let (m, enc) = encoded(state, shared, job, placement)?;
+            let p = m.segment_clicks(enc, &clicks)?;
             Ok(Some(SegMask::from_logits(side, &p.logits)))
         }
         Kind::Text(text) => {
-            let (m, enc) = encoded(state, shared, job)?;
+            let (m, enc) = encoded(state, shared, job, placement)?;
             Ok(text_logits(m, enc, &text)?.map(|l| SegMask::from_logits(side, &l)))
         }
         #[cfg(test)]
         #[allow(clippy::panic)]
         Kind::Panic => panic!("a test panic"),
+        #[cfg(test)]
+        #[allow(clippy::panic)]
+        Kind::FailOnGpu { panic } => match placement {
+            Placement::Gpu if panic => panic!("a test panic on the GPU"),
+            Placement::Gpu => Err(Failure::Model("a test error on the GPU".into())),
+            Placement::Cpu => Ok(None),
+        },
         Kind::Detail { prompt, region } => {
             let input = render(job)?;
-            let m = model(state, shared, &job.dir)?;
+            let m = model(state, shared, &job.dir, placement)?;
             let t = web_time::Instant::now();
-            let mut enc = m.encode(&input.rgb, input.w, input.h).map_err(|e| e.to_string())?;
+            let mut enc = m.encode(&input.rgb, input.w, input.h)?;
             let (rw, rh) = (region[2] - region[0], region[3] - region[1]);
             if !(rw > 0.0 && rh > 0.0) {
                 return Ok(None);
@@ -388,7 +510,7 @@ fn run_job(state: &mut State, shared: &Shared, job: &mut Job) -> Result<Option<S
                     if !inside.iter().any(|c| c.positive) {
                         return Ok(None);
                     }
-                    Some(m.segment_clicks(&mut enc, &inside).map_err(|e| e.to_string())?.logits)
+                    Some(m.segment_clicks(&mut enc, &inside)?.logits)
                 }
                 Prompt::Text(text) => text_logits(m, &mut enc, &text)?,
             };
@@ -438,13 +560,79 @@ mod tests {
         jtx.send(job(Tag::Wait, &tx)).unwrap();
         shared.pending.store(2, Ordering::SeqCst);
         drop(jtx);
-        run(&jrx, &shared, Duration::from_secs(60));
+        run(&jrx, &shared, Duration::from_secs(60), Placement::Cpu);
         let first = rx.recv().unwrap();
         assert!(first.result.unwrap_err().contains("failed unexpectedly"));
         let second = rx.recv().unwrap();
         assert!(second.result.is_err(), "the next job still runs");
         assert_eq!(shared.pending.load(Ordering::SeqCst), 0, "counters reset");
         assert!(!shared.encoding.load(Ordering::SeqCst));
+    }
+
+    /// Run `kinds` in turn on a worker that starts on `placement`; their outcomes.
+    fn run_kinds(placement: Placement, kinds: Vec<Kind>) -> Vec<Outcome> {
+        let (tx, rx) = mpsc::channel();
+        let (jtx, jrx) = mpsc::channel();
+        let shared = Shared::default();
+        shared.pending.store(kinds.len(), Ordering::SeqCst);
+        for kind in kinds {
+            let mut j = job(Tag::Wait, &tx);
+            j.kind = kind;
+            jtx.send(j).unwrap();
+        }
+        drop(jtx);
+        run(&jrx, &shared, Duration::from_secs(60), placement);
+        assert_eq!(shared.pending.load(Ordering::SeqCst), 0, "counters reset");
+        assert!(!shared.encoding.load(Ordering::SeqCst));
+        rx.try_iter().collect()
+    }
+
+    #[test]
+    fn a_job_that_panics_on_the_gpu_runs_on_the_cpu_and_so_do_the_next_ones() {
+        // issue #1974: candle panics compiling a Metal kernel the GPU's compiler can't build
+        let out = run_kinds(Placement::Gpu, vec![Kind::FailOnGpu { panic: true }, Kind::FailOnGpu { panic: true }]);
+        assert_eq!(out.len(), 2);
+        assert!(matches!(out[0].result, Ok(None)), "retried on the CPU: {:?}", out[0].result.as_ref().err());
+        assert_eq!(out[0].notice.as_deref(), Some(GPU_FAILED));
+        assert!(matches!(out[1].result, Ok(None)), "the next job starts on the CPU");
+        assert_eq!(out[1].notice, None, "said once");
+    }
+
+    #[test]
+    fn a_model_error_on_the_gpu_is_retried_on_the_cpu_too() {
+        let out = run_kinds(Placement::Gpu, vec![Kind::FailOnGpu { panic: false }]);
+        assert!(matches!(out[0].result, Ok(None)));
+        assert_eq!(out[0].notice.as_deref(), Some(GPU_FAILED));
+    }
+
+    #[test]
+    fn a_job_that_fails_on_the_cpu_too_keeps_the_gpu() {
+        let out = run_kinds(Placement::Gpu, vec![Kind::Panic, Kind::FailOnGpu { panic: true }]);
+        assert!(out[0].result.as_ref().unwrap_err().contains("failed unexpectedly"));
+        assert_eq!(out[0].notice, None);
+        // not the GPU's fault: the next job tries the GPU first again
+        assert!(matches!(out[1].result, Ok(None)));
+        assert_eq!(out[1].notice.as_deref(), Some(GPU_FAILED));
+    }
+
+    #[test]
+    fn a_worker_on_the_cpu_never_tries_the_gpu() {
+        // no GPU in this build, or LIGHTCRAFT_GPU=0 / LIGHTCRAFT_GPU_BACKEND=off
+        let out = run_kinds(Placement::Cpu, vec![Kind::FailOnGpu { panic: true }]);
+        assert!(matches!(out[0].result, Ok(None)));
+        assert_eq!(out[0].notice, None);
+        if !lightcraft_segment::GPU_BUILD {
+            assert_eq!(Placement::initial(), Placement::Cpu);
+        }
+    }
+
+    #[test]
+    fn missing_model_files_are_not_retried_on_the_cpu() {
+        let out = run_kinds(Placement::Gpu, vec![Kind::Prepare]);
+        assert!(out[0].result.as_ref().unwrap_err().contains("not found"));
+        assert_eq!(out[0].notice, None);
+        let missing = lightcraft_segment::Error::Missing(PathBuf::from("models"));
+        assert!(matches!(Failure::from(missing), Failure::Other(_)));
     }
 
     #[test]
@@ -464,7 +652,7 @@ mod tests {
         drop(jtx);
         let shared = Shared::default();
         shared.pending.store(3, Ordering::SeqCst);
-        run(&jrx, &shared, Duration::from_secs(60));
+        run(&jrx, &shared, Duration::from_secs(60), Placement::Cpu);
         let out: Vec<Outcome> = rx.try_iter().collect();
         assert_eq!(out.len(), 3);
         assert!(out[0].superseded && out[1].superseded && !out[2].superseded);

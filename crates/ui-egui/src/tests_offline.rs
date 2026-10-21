@@ -155,6 +155,11 @@ fn offline_originals_never_block_a_frame() {
     h.app.session.execute("library.source", &json!({"kind": "missing"})).unwrap();
     assert_eq!(h.app.session.source, LibrarySource::Missing);
     frames_while_asleep(&mut h, &nas, 20, "Missing Photos");
+    // the probe runs on the background worker: give it time to start on a loaded machine
+    let asked = std::time::Instant::now();
+    while calls.n.load(Ordering::SeqCst) == 0 && asked.elapsed() < std::time::Duration::from_secs(5) {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
     assert!(calls.n.load(Ordering::SeqCst) > 0, "the probe was asked");
     assert_eq!(h.app.session.visible().len(), 0, "unknown files count as there");
 

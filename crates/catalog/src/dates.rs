@@ -234,6 +234,15 @@ mod tests {
     }
 
     #[test]
+    fn impossible_times_are_rejected_not_rolled_over() {
+        for bad in ["2026-04-01T10:75:00", "2026-04-01 10:00:75", "2026-04-01T10:60", "2026-04-01T24:00:00", "2026-04-01T10:59:60"] {
+            assert_eq!(normalize_iso(bad), None, "{bad}");
+            assert_eq!(shift_iso(bad, 5), None, "{bad}");
+        }
+        assert_eq!(normalize_iso("2026-04-01T23:59:59").as_deref(), Some("2026-04-01T23:59:59"));
+    }
+
+    #[test]
     fn runs_by_day_month_year_keep_stacks_together() {
         let mut c = Catalog::new();
         let times = ["2026-09-30T18:00:00", "2026-09-30T09:00:00", "2026-09-29T23:59:00", "2026-08-01T10:00:00", "2025-12-31T10:00:00", ""];

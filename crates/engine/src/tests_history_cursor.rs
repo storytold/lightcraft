@@ -115,3 +115,95 @@ fn negative_indices_are_refused() {
     assert!(s.execute("version.rename", &json!({"index": -1, "name": "B"})).is_err());
     assert_eq!(s.catalog.photo(id).unwrap().versions[0].name, "A", "version 0 was not renamed");
 }
+
+#[test]
+fn fractional_version_delete_preserves_the_version() {
+    let mut s = Session::with_demo();
+    s.execute("version.create", &json!({"name": "A"})).unwrap();
+    let before = s.catalog.to_snapshot();
+    let result = s.execute("version.delete", &json!({"index": 0.9}));
+    assert!(result.is_err(), "index 0.9 must be refused; got {result:?}; catalog unchanged: {}", s.catalog.to_snapshot() == before);
+    assert_eq!(s.catalog.to_snapshot(), before, "the version must remain unchanged");
+}
+
+/// Invalid command indices must leave objects, settings, History and undo unchanged.
+#[test]
+fn invalid_command_indices_leave_the_catalog_and_history_unchanged() {
+    let (mut s, _) = three_edits();
+    for name in ["A", "B"] {
+        s.execute("version.create", &json!({"name": name})).unwrap();
+    }
+    s.execute("pointColor.pick", &json!({"x": 0.5, "y": 0.08})).unwrap();
+    for x in [0.3, 0.6] {
+        s.execute("redeye.add", &json!({"center": [x, 0.4], "rx": 0.03, "ry": 0.02, "pet": true})).unwrap();
+    }
+    let before = s.catalog.to_snapshot();
+    let history = s.execute("history.list", &json!({})).unwrap();
+    let undo_len = s.undo.len();
+    // The integer beyond u64 is parsed as a float by serde_json; it must not saturate to usize::MAX.
+    let oversized: serde_json::Value = serde_json::from_str("18446744073709551616").unwrap();
+    for command in [
+        "version.delete",
+        "version.rename",
+        "version.update",
+        "version.restore",
+        "pointColor.delete",
+        "redeye.delete",
+        "redeye.catchlight",
+        "history.restore",
+    ] {
+        for index in [json!(0.5), json!(1.9), json!(-1), json!(-0.5), json!("0"), json!(null), json!(u64::MAX), oversized.clone()] {
+            let result = s.execute(command, &json!({"index": index, "name": "Changed"}));
+            assert!(result.is_err(), "{command} accepted {index}: {result:?}");
+            assert_eq!(s.catalog.to_snapshot(), before, "{command} changed the catalog for {index}");
+            assert_eq!(s.execute("history.list", &json!({})).unwrap(), history, "{command} moved the History cursor for {index}");
+            assert_eq!(s.undo.len(), undo_len, "{command} added an undo step for {index}");
+        }
+        assert!(s.execute(command, &json!({"name": "Changed"})).is_err(), "{command} accepted a missing index");
+        assert_eq!(s.catalog.to_snapshot(), before);
+    }
+}
+
+/// Whole floating-point JSON numbers remain valid for existing control and MCP callers.
+#[test]
+fn whole_command_indices_accept_integer_and_float_numbers() {
+    let (mut s, n) = three_edits();
+    let id = s.active().unwrap();
+    s.execute("history.restore", &json!({"index": (n - 3) as f64})).unwrap();
+    assert_eq!((exposure(&s), list(&mut s)), (1.0, (n, Some(n - 3))));
+    s.execute("history.restore", &json!({"index": n - 1})).unwrap();
+    assert_eq!(exposure(&s), 3.0);
+    for name in ["A", "B", "C"] {
+        s.execute("version.create", &json!({"name": name})).unwrap();
+    }
+    s.execute("version.rename", &json!({"index": 2.0, "name": "Third"})).unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap().versions[2].name, "Third");
+    s.execute("develop.set", &json!({"control": "light.exposure", "value": -2.0})).unwrap();
+    s.execute("version.update", &json!({"index": 1.0})).unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap().versions[1].settings.light.exposure, -2.0);
+    s.execute("version.restore", &json!({"index": 0.0})).unwrap();
+    assert_eq!(exposure(&s), 3.0);
+    s.execute("version.delete", &json!({"index": 1})).unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap().versions.iter().map(|v| v.name.as_str()).collect::<Vec<_>>(), ["A", "Third"]);
+    s.execute("version.delete", &json!({"index": 1.0})).unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap().versions.len(), 1);
+    s.execute("pointColor.pick", &json!({"x": 0.5, "y": 0.08})).unwrap();
+    s.execute("pointColor.delete", &json!({"index": 0.0})).unwrap();
+    assert!(s.develop_of(id).unwrap().point_colors.is_empty());
+    s.execute("redeye.add", &json!({"center": [0.3, 0.4], "rx": 0.03, "ry": 0.02, "pet": true})).unwrap();
+    s.execute("redeye.catchlight", &json!({"index": 0.0})).unwrap();
+    assert!(s.develop_of(id).unwrap().red_eye[0].catchlight.is_some());
+    s.execute("redeye.delete", &json!({"index": 0.0})).unwrap();
+    assert!(s.develop_of(id).unwrap().red_eye.is_empty());
+}
+
+#[test]
+fn fractional_history_restore_preserves_the_cursor() {
+    let (mut s, _) = three_edits();
+    let before = s.execute("history.list", &json!({})).unwrap();
+    let result = s.execute("history.restore", &json!({"index": 1.9}));
+    let after = s.execute("history.list", &json!({})).unwrap();
+    assert!(result.is_err(), "index 1.9 must be refused; got {result:?}; History unchanged: {}", before == after);
+    assert_eq!(after, before);
+    assert_eq!(exposure(&s), 3.0);
+}

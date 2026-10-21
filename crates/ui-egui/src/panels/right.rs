@@ -771,7 +771,11 @@ fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 }
             });
             if text_button(ui, "fillLocation", crate::i18n::tr("Fill Location"), false)
-                .on_hover_text(crate::i18n::tr("Fill empty City, State and Country from GPS (offline GeoNames place names)"))
+                .on_hover_text(format!(
+                    "{}\n{}",
+                    crate::i18n::tr("Fill empty City, State and Country from GPS (offline GeoNames place names)"),
+                    crate::i18n::tr("The place names list towns of 15,000 people or more: in a smaller one, City gets the nearest larger town.")
+                ))
                 .clicked()
                 && let Err(e) = app.run("metadata.reverseGeocode", json!({}))
             {

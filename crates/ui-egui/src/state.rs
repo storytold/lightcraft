@@ -729,7 +729,8 @@ pub struct UiState {
     /// Darkness of the area outside the crop, as a percentage of opaque black (0 = off).
     #[serde(default = "default_crop_mask_opacity", deserialize_with = "deserialize_crop_mask_opacity")]
     pub crop_mask_opacity: u8,
-    /// Last explicitly chosen aspect, retained across photos and app launches.
+    /// Last explicitly chosen aspect, retained across photos and app launches; `None` (nothing
+    /// chosen yet) crops locked to the photo's own shape, as Lightroom starts (#991).
     pub crop_default_aspect: Option<serde_json::Value>,
     pub show_filenames: bool,
     /// What the square grid's caption shows: `filename`, `exposure` (shutter · aperture · ISO ·

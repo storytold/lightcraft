@@ -453,6 +453,7 @@ pub fn write_exif(meta: &Metadata) -> Vec<u8> {
         (t::F_NUMBER, r(meta.f_number)),
         (t::FOCAL_LENGTH, r(meta.focal_length)),
         (t::ISO_SPEED, meta.iso.map(|i| Value::Short(vec![i.min(65_535) as u16]))),
+        (t::ISO_SPEED_RATINGS_EXT, meta.iso.filter(|&i| i > 65_534).map(|i| Value::Long(vec![i]))),
         (t::LENS_MAKE, ascii(&meta.lens_make)),
         (t::LENS_MODEL, ascii(&meta.lens_model)),
         (t::EXPOSURE_BIAS, meta.exposure_bias.map(|v| Value::SRational(vec![srational(v)]))),
@@ -517,5 +518,13 @@ mod write_tests {
         assert_eq!(back.lens_model, m.lens_model);
         let g = back.gps.unwrap();
         assert!((g.latitude - 43.7904).abs() < 1e-5 && (g.longitude + 110.6818).abs() < 1e-5, "{g:?}");
+    }
+
+    #[test]
+    fn iso_above_65534_round_trips() {
+        for iso in [65_534, 65_535, 102_400, 409_600] {
+            let back = read_exif(&write_exif(&Metadata { iso: Some(iso), ..Default::default() }));
+            assert_eq!(back.iso, Some(iso));
+        }
     }
 }

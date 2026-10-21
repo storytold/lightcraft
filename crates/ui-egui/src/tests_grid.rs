@@ -172,3 +172,48 @@ fn an_unedited_raws_thumbnail_skips_the_sensor_decode() {
     assert!(!skips_the_real_render(false, true));
     assert!(!skips_the_real_render(false, false));
 }
+
+/// Press and release the primary button at `at`, one frame apart from the next click (as a real
+/// double-click comes in: one click per frame).
+fn click_at(h: &mut Headless, at: egui::Pos2) {
+    h.events.push(egui::Event::PointerMoved(at));
+    h.events.push(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+    h.step();
+    h.events.push(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+    h.step();
+}
+
+/// Double-clicking a stack badge expands or collapses the stack, as in Lightroom (issue #2233): its
+/// second click used to undo the first, and the stack stayed as it was. A single click still toggles it.
+#[test]
+fn double_clicking_a_stack_badge_toggles_the_stack_once() {
+    let mut h = grid(ViewMode::PhotoGrid);
+    let top = PhotoId(2001);
+    let sid = StackId(21);
+    let collapsed = |h: &Headless| h.app.session.catalog.stack(sid).unwrap().collapsed;
+    select(&mut h, top);
+    let r = h.request("engine.execute", json!({"command": "stack.toggle", "params": {"ids": [top.0]}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert!(collapsed(&h));
+    for want in [false, true] {
+        let badge = widget(&h, &format!("stack:{}", top.0)).expect("stack badge drawn").center();
+        click_at(&mut h, badge);
+        // the first click re-lays the grid; the second must still land on this badge, or the test
+        // would pass without the fix (a missed second click toggles nothing)
+        let moved = widget(&h, &format!("stack:{}", top.0)).expect("stack badge drawn");
+        assert!(moved.contains(badge), "the badge moved from under the pointer: {moved:?}");
+        click_at(&mut h, badge);
+        h.settle(SETTLE);
+        assert_eq!(collapsed(&h), want, "a double-click toggles the stack once");
+        assert_eq!(h.app.ui.view, ViewMode::PhotoGrid, "a double-click on the badge doesn't open the photo");
+        // the next double-click is apart from this one
+        for _ in 0..60 {
+            h.step();
+        }
+    }
+    let badge = widget(&h, &format!("stack:{}", top.0)).unwrap().center();
+    click_at(&mut h, badge);
+    h.settle(SETTLE);
+    assert!(!collapsed(&h), "a single click toggles it");
+}

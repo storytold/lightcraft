@@ -816,8 +816,17 @@ impl ExportOptions {
     /// newer version may have written and this one doesn't know dropped, also inside `watermark`.
     /// [`ExportOptions::validate`] is strict about what a caller types; settings saved on disk are
     /// not the caller's typo, and refusing them would make a preset or Export with Previous fail
-    /// for good after an update.
+    /// for good after an update. A `bitDepth` the stored format doesn't have (written at the
+    /// format's own depth before issue #1952) is dropped too.
     pub fn known_keys_only(p: &serde_json::Value) -> serde_json::Value {
+        let mut p = Self::known_keys(p);
+        Self::drop_unfit_depth(&mut p, ExportFormat::default());
+        p
+    }
+
+    /// [`ExportOptions::known_keys_only`] keeping `bitDepth`, for a preset whose format may only be
+    /// known once the call's own params (`path`) are merged in.
+    pub(crate) fn known_keys(p: &serde_json::Value) -> serde_json::Value {
         let mut p = p.clone();
         if let Some(o) = p.as_object_mut() {
             o.retain(|k, _| OPTION_PARAMS.contains(&k.as_str()) || TARGET_PARAMS.contains(&k.as_str()));
@@ -828,13 +837,44 @@ impl ExportOptions {
         p
     }
 
+    /// Drop a stored `bitDepth` the format `p` exports ([`ExportOptions::export_format`] with
+    /// `fallback`) doesn't have: it was written at the format's own depth before issue #1952.
+    pub(crate) fn drop_unfit_depth(p: &mut serde_json::Value, fallback: ExportFormat) {
+        let format = Self::export_format(p, fallback);
+        if let Some(o) = p.as_object_mut()
+            && let Some(depth) = o.get("bitDepth").and_then(whole)
+            && !Self::bit_depths(format).iter().any(|d| i64::from(d.0) == depth)
+        {
+            o.remove("bitDepth");
+        }
+    }
+
     /// Strict [`ExportOptions::from_json`] for a command that is about to export (issue #181): an
     /// unknown parameter or a value that cannot be read as what it is for is an error, never a
     /// silent default. `app.export` targets (`id`, `ids`, `path`, `dir`, `preset`, `background`)
     /// are accepted and left to the caller.
     pub fn from_params(p: &serde_json::Value) -> crate::Result<Self> {
-        Self::validate("app.export", p)?;
-        Ok(Self::from_json(p))
+        Self::from_params_or(p, ExportFormat::default())
+    }
+
+    /// [`ExportOptions::from_params`] for a caller that writes `fallback` to a `path` naming no
+    /// format; the format returned is [`ExportOptions::export_format`], the one written.
+    pub fn from_params_or(p: &serde_json::Value, fallback: ExportFormat) -> crate::Result<Self> {
+        let format = Self::export_format(p, fallback);
+        Self::validate_as("app.export", p, Some(format))?;
+        Ok(Self { format, ..Self::from_json(p) })
+    }
+
+    /// The format `app.export` writes: `format` (`null`: the default), else the one the extension of
+    /// `path` names, else `fallback` for a path that names none (the desktop app writes JPEG there,
+    /// the headless backend PNG), else the default.
+    pub fn export_format(p: &serde_json::Value, fallback: ExportFormat) -> ExportFormat {
+        use serde_json::Value;
+        match (p.get("format"), p.get("path").and_then(Value::as_str)) {
+            (Some(f), _) => f.as_str().and_then(ExportFormat::parse).unwrap_or_default(),
+            (None, Some(path)) => std::path::Path::new(path).extension().and_then(|e| e.to_str()).and_then(ExportFormat::parse).unwrap_or(fallback),
+            (None, None) => ExportFormat::default(),
+        }
     }
 
     /// Check `app.export` params for `cmd` (the command named in the error): every key must be an
@@ -842,6 +882,12 @@ impl ExportOptions {
     /// kind of thing its key takes, and a `watermark` object must hold only [`WATERMARK_PARAMS`]
     /// with its sizes in range (issue #183). `null` means "not given", as a dropped key does.
     pub fn validate(cmd: &str, p: &serde_json::Value) -> crate::Result<()> {
+        Self::validate_as(cmd, p, Some(Self::export_format(p, ExportFormat::default())))
+    }
+
+    /// [`ExportOptions::validate`] with `bitDepth` checked against `format`, the one exported
+    /// (`None`: not known yet, as for a preset without `format`).
+    pub(crate) fn validate_as(cmd: &str, p: &serde_json::Value, format: Option<ExportFormat>) -> crate::Result<()> {
         use serde_json::Value;
         let bad = |msg: String| crate::cmd::bad(cmd, msg);
         let Some(obj) = p.as_object() else { return Err(bad("params must be an object".into())) };
@@ -947,6 +993,18 @@ impl ExportOptions {
                     }
                 }
                 _ => return Err(bad(unknown_key("parameter", k, &known))),
+            }
+        }
+        // issue #1952: a depth the format doesn't have would be written at the format's own depth
+        if let (Some(format), Some(depth)) = (format, obj.get("bitDepth").and_then(whole)) {
+            let mut depths: Vec<u8> = Self::bit_depths(format).iter().map(|d| d.0).collect();
+            if !depths.iter().any(|d| i64::from(*d) == depth) {
+                depths.sort_unstable();
+                let mut list: Vec<String> = depths.iter().map(u8::to_string).collect();
+                let last = list.pop().unwrap_or_default();
+                let list = if list.is_empty() { last } else { format!("{} or {last}", list.join(", ")) };
+                let name = serde_json::to_value(format).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
+                return Err(bad(format!("`bitDepth` must be {list} for {name}")));
             }
         }
         Ok(())
@@ -2021,6 +2079,9 @@ fn run_batch_with(
         ahead: lanes,
     };
     std::thread::scope(|sc| {
+        // stops the lanes however this thread leaves the scope: a panic in `progress` or the placer
+        // would otherwise leave them waiting and the scope's join would never return
+        let _stop = StopOnDrop(&queue);
         for k in 1..lanes {
             let q = &queue;
             // a lane that can't start leaves its photos to the others (and to this thread)
@@ -2038,11 +2099,18 @@ fn run_batch_with(
             }
             Ok::<_, String>(())
         };
-        let r = placed();
-        queue.stop();
-        r
+        placed()
     })?;
     Ok(std::mem::take(&mut placer.out))
+}
+
+/// Stops a [`Queue`] when dropped, also while unwinding from a panic.
+struct StopOnDrop<'a>(&'a Queue);
+
+impl Drop for StopOnDrop<'_> {
+    fn drop(&mut self) {
+        self.0.stop();
+    }
 }
 
 /// Run one photo's export holding its working memory from [`crate::memory::export_gate`]; a panic
@@ -3212,6 +3280,7 @@ mod tests {
             resize: Some(Resize::default()),
             limit_kb: Some(500),
             watermark: Some(Watermark { text: "©".into(), ..Default::default() }),
+            format: ExportFormat::Png,
             bit_depth: Some(16),
             ..Default::default()
         };
@@ -3246,6 +3315,51 @@ mod tests {
         assert_eq!(ExportOptions::from_params(&ExportOptions::default().to_json()).unwrap(), ExportOptions::default());
         // null is "not given", as a dropped key is
         ExportOptions::from_params(&json!({"quality": 92, "longEdge": null, "watermark": null})).unwrap();
+    }
+
+    /// Issue #1952: a `bitDepth` the format doesn't have is refused (the Export dialog never offers
+    /// it), not written at the format's own depth; the error names the depths the format takes.
+    #[test]
+    fn bit_depth_must_suit_the_format() {
+        use serde_json::json;
+        let err = |p: serde_json::Value| ExportOptions::from_params(&p).err().map(|e| e.to_string()).unwrap_or_default();
+        assert!(err(json!({"format": "jpeg", "bitDepth": 16})).contains("`bitDepth` must be 8 for jpeg"));
+        assert!(err(json!({"format": "png", "bitDepth": 10})).contains("`bitDepth` must be 8 or 16 for png"));
+        assert!(err(json!({"format": "tiff", "bitDepth": 10})).contains("`bitDepth` must be 8, 16 or 32 for tiff"));
+        // no `format`: the one `path` names, else the default (JPEG)
+        assert!(err(json!({"path": "/out/a.png", "bitDepth": 32})).contains("for png"));
+        assert!(err(json!({"bitDepth": 16})).contains("for jpeg"));
+        assert!(ExportOptions::from_params(&json!({"path": "/out/a.tif", "bitDepth": 32})).is_ok());
+        // a path naming no format, or a `null` format, exports the default too
+        assert!(err(json!({"path": "/out/output", "bitDepth": 10})).contains("for jpeg"));
+        assert!(err(json!({"path": "/out/output.xyz", "bitDepth": 10})).contains("for jpeg"));
+        assert!(err(json!({"format": null, "path": "/out/a.png", "bitDepth": 16})).contains("for jpeg"));
+        // or the caller's own format for such a path, which is the one returned
+        let png = |p: serde_json::Value| ExportOptions::from_params_or(&p, ExportFormat::Png);
+        assert!(png(json!({"path": "/out/output", "bitDepth": 10})).unwrap_err().to_string().contains("for png"));
+        assert_eq!(png(json!({"path": "/out/output.xyz", "bitDepth": 16})).unwrap().format, ExportFormat::Png);
+        assert_eq!(png(json!({"path": "/out/a.tif", "bitDepth": 32})).unwrap().format, ExportFormat::Tiff);
+        // stored settings (a preset, Export with Previous) lose such a depth instead of failing
+        let stored = ExportOptions::known_keys_only(&json!({"format": "jpeg", "bitDepth": 16}));
+        assert_eq!(stored.get("bitDepth"), None);
+        assert_eq!(ExportOptions::known_keys_only(&json!({"format": "tiff", "bitDepth": 32}))["bitDepth"], 32);
+        for f in [
+            ExportFormat::Jpeg,
+            ExportFormat::Png,
+            ExportFormat::Tiff,
+            ExportFormat::Psd,
+            ExportFormat::Webp,
+            ExportFormat::Avif,
+            ExportFormat::Jxl,
+            ExportFormat::Original,
+            ExportFormat::Dng,
+            ExportFormat::RenderedDng,
+        ] {
+            for &(b, _) in ExportOptions::bit_depths(f) {
+                let o = ExportOptions { format: f, bit_depth: Some(b), ..Default::default() };
+                assert_eq!(ExportOptions::from_params(&o.to_json()).ok(), Some(o), "{f:?} {b}");
+            }
+        }
     }
 
     /// Issue #956: `destinationMode` picks a specific folder (the default) or each photo's own
@@ -3472,6 +3586,32 @@ mod tests {
         let (f, w, sn) = lanes_batch(&mut s, &ids, &o, 3, true, 2);
         assert_eq!(shape(&f.unwrap()), shape(&files[..2]));
         assert_eq!((w.len(), sn.len()), (2, 3), "photos past the cancel are never written");
+    }
+
+    // A panic in `progress` while lanes run must end the batch (the lanes stop waiting), not hang it
+    #[test]
+    fn a_panic_in_progress_does_not_hang_the_lanes() {
+        let mut s = crate::Session::with_demo();
+        let ids: Vec<_> = s.visible().iter().copied().take(5).collect();
+        let o = ExportOptions::from_json(&json!({"format": "png", "width": 40}));
+        let items = prepare_batch(&mut s, &ids, &o).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let to = Destination { dir: "out".into(), exact: None };
+            let mut write = |_: &str, _: &[u8]| Ok(());
+            let mut calls = 0;
+            let mut progress = |_: usize, _: &str| {
+                calls += 1;
+                assert!(calls < 2, "progress panics on its second call");
+                true
+            };
+            let r = crate::guard::catch("test batch", || {
+                run_batch_with(items, &mut Placer::new(&o, &to, &mut write, &|_| false, true), &mut progress, 2)
+            });
+            tx.send(r.and_then(|r| r)).ok();
+        });
+        let r = rx.recv_timeout(std::time::Duration::from_secs(60));
+        assert!(matches!(r, Ok(Err(_))), "the batch returns an error instead of hanging: {r:?}");
     }
 
     // A photo that fails is reported in its place while the others are exported; with

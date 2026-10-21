@@ -539,6 +539,55 @@ fn crop_drag_activates_the_remembered_ratio_and_undo_restores_the_photo() {
     assert_eq!(develop(&h), before);
 }
 
+/// Issue #991: with no aspect ever chosen, a crop starts locked to the photo's own shape (Lightroom's
+/// default), so a handle drag keeps the proportions; after the Lock is switched off once, the next
+/// photo's crop starts free again.
+#[test]
+fn a_fresh_crop_starts_locked_to_original_until_the_lock_is_switched_off() {
+    let mut h = detail("panel.crop");
+    h.app.ui.crop_default_aspect = None;
+    h.settle(SETTLE);
+    let before = develop(&h);
+    assert!(before.crop.aspect.is_none());
+    let p = h.app.session.catalog.photo(h.app.session.active().unwrap()).unwrap().clone();
+    let own = (p.width * 100, p.height * 100);
+    assert_eq!(h.app.crop_tool_aspect(), Some(own), "the Lock shows engaged on an untouched photo");
+    let drag = json!({"events": [
+        {"kind": "down", "x": 0.995, "y": 0.995},
+        {"kind": "drag", "x": 0.85, "y": 0.85},
+        {"kind": "drag", "x": 0.75, "y": 0.75},
+        {"kind": "up", "x": 0.75, "y": 0.75}
+    ]});
+    let r = h.request("ui.pointer", drag.clone(), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert_eq!(develop(&h).crop.aspect, Some(own), "the drag kept the photo's proportions");
+    assert_eq!(h.app.ui.crop_default_aspect, None, "nothing was chosen explicitly");
+    exec(&mut h, "edit.undo", json!({}));
+    assert_eq!(develop(&h), before);
+    // Lock off once: remembered as free, and from then on the same drag crops without a ratio
+    let mut h = detail("panel.crop");
+    h.app.ui.crop_default_aspect = None;
+    h.settle(SETTLE);
+    h.app.run("crop.aspect", json!({"aspect": "toggle"})).unwrap();
+    h.settle(SETTLE);
+    assert_eq!(h.app.ui.crop_default_aspect, Some(json!("free")));
+    assert_eq!(h.app.crop_tool_aspect(), None);
+    let before = develop(&h);
+    // a rotating drag outside the box (any crop drag starts cropping); the release on its own
+    for events in [
+        json!([{"kind": "down", "x": -0.05, "y": 0.2}, {"kind": "drag", "x": -0.05, "y": 0.25}, {"kind": "drag", "x": -0.05, "y": 0.3}]),
+        json!([{"kind": "up", "x": -0.05, "y": 0.3}]),
+    ] {
+        let r = h.request("ui.pointer", json!({ "events": events }), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(SETTLE);
+    }
+    assert_ne!(develop(&h).crop, before.crop, "the drag cropped");
+    assert_eq!(develop(&h).crop.aspect, None, "and left the ratio free");
+    let _ = drag;
+}
+
 /// A remembered ratio the crop command refuses (a hand-edited settings file) is forgotten, and the
 /// drag still crops: it must not block every crop of an untouched photo.
 #[test]

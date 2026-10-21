@@ -58,6 +58,7 @@ for i, text in enumerate(["moon", "sky", "bird"]):
     out[f"det{i}_presence"] = o.presence_logits.contiguous()
     out[f"det{i}_boxes"] = o.pred_boxes.contiguous()
     out[f"det{i}_masks"] = o.pred_masks.contiguous()
+    out[f"det{i}_semantic"] = o.semantic_seg.contiguous()
     sc = (o.pred_logits.sigmoid() * o.presence_logits.sigmoid())[0]
     print(text, "presence", o.presence_logits.sigmoid().item(), "top", sc.topk(3).values.tolist(), file=sys.stderr)
 for i, f in enumerate(det.vision_encoder(px).fpn_hidden_states):

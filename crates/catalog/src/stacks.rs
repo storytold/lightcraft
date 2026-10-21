@@ -296,6 +296,9 @@ pub fn iso_seconds(s: &str) -> Option<i64> {
     }
     let (hh, mm, ss) =
         if s.len() >= 16 { (num(11, 13)?, num(14, 16)?, if s.get(16..17) == Some(":") { num(17, 19).unwrap_or(0) } else { 0 }) } else { (0, 0, 0) };
+    if hh >= 24 || mm >= 60 || ss >= 60 {
+        return None;
+    }
     // days from civil (proleptic Gregorian)
     let y2 = if m <= 2 { y - 1 } else { y };
     let era = y2.div_euclid(400);

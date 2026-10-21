@@ -272,6 +272,7 @@
   "{n} originals opened in the other editor": "{n}個の元ファイルを別のエディタで開きました",
   "· {in_source} identical copies": "・同一のコピー {in_source} 件",
   "{count} more warnings.": "ほかに{count}件の警告があります。",
+  "{skipped} catalog images were not imported because their records in the catalog are incomplete.": "カタログ内のレコードが不完全なため、{skipped}件の画像を読み込めませんでした。",
   "{photos} catalog records processed; {collections} collections.": "カタログの{photos}件のレコードを処理しました。コレクションは{collections}件です。",
   "{missing} originals are missing. Their catalog records are available; use Find Missing Photos to relink them.": "{missing}件のオリジナルが見つかりません。カタログのレコードは利用できます。「見つからない写真を検索」で再リンクしてください。",
   "Applied {name}": "{name} を適用しました",

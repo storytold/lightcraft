@@ -61,16 +61,13 @@ impl Headless {
     /// With `path` and no `format`, the format follows the path's extension.
     fn export(&mut self, p: &Value) -> Result<Value, String> {
         use lightcraft_engine::export::{Destination, ExportFormat, ExportOptions, Resize, prepare_batch, run_batch};
-        let p = &self.session.export_params(p)?;
-        let mut opts = ExportOptions::from_params(p).map_err(|e| e.to_string())?;
+        let p = &self.session.export_params_or(p, ExportFormat::Png)?;
+        // PNG for a `path` that names no format; `bitDepth` is checked against the format written
+        let mut opts = ExportOptions::from_params_or(p, ExportFormat::Png).map_err(|e| e.to_string())?;
         if !ExportOptions::has_size_param(p) {
             opts.resize = Some(Resize::long_edge(3000));
         }
         let exact = p.get("path").and_then(Value::as_str);
-        if let (Some(path), None) = (exact, p.get("format")) {
-            let ext = Path::new(path).extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_default();
-            opts.format = ExportFormat::parse(&ext).unwrap_or(ExportFormat::Png);
-        }
         let ids: Vec<_> = match p.get("ids").and_then(Value::as_array) {
             Some(a) => a.iter().filter_map(|v| serde_json::from_value(v.clone()).ok()).collect(),
             // like the desktop app: the selection (in grid order), else the given / active photo

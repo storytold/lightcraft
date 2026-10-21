@@ -28,6 +28,11 @@ settings are imported. Missing originals remain catalogued for relinking, count 
 separately from failures reading files that are present. Known-missing originals are not probed
 again. Previously browsed Local records join All Photos even when their originals are offline;
 their promotion is counted once and undone together with the catalog import.
+An image whose file, folder or root folder record is gone from the catalog, or whose original path
+is empty (Lightroom leaves these behind and ignores them), is skipped together with its virtual
+copies instead of failing the whole import. The result lists them as data (`skipped`: each
+image id with its reason, `missingFile`, `missingFolder`, `missingRoot`, `incompletePath` or
+`masterSkipped`), also in `library.inspectLightroom`, and the desktop result window says how many in the UI language.
 Virtual copies count as added records too; reimport reports zero additions when all
 records already exist. Existing LightCraft
 edits are preserved by default; `updateExisting=true` explicitly replaces them. Persistent import
@@ -44,11 +49,16 @@ retained. Oldest managed archives are retired; legacy `.json` archives remain un
 `Interop/lightroom-index.json` records imported identities. Source catalogs and originals are
 never overwritten.
 
-Each native `.lrcat` database and WAL file is independently limited to 1 GiB
-(1,073,741,824 bytes). This bounds the current whole-file reader; referenced photo sizes and
-photo counts are not part of that limit. XMP packets are capped at 16 MiB and each table at one million rows.
-The in-tree, read-only Rust SQLite B-tree reader follows SQLite’s public file-format
-specification; it introduces no dependency or C runtime. Table payloads are capped at 256 MiB.
+Native import reads referenced database pages on demand (at most 64 KiB per page), rather than
+loading the whole `.lrcat`. Database files are capped at 16 GiB and 16,777,216 pages; the WAL
+remains capped at 1 GiB. Tables still have a 256 MiB encoded-payload budget and one million rows,
+individual records are capped at 64 MiB, and XMP packets at 16 MiB. These limits can still reject
+large catalogs with dense tables; file size alone no longer determines the memory allocation.
+The open file and source path are checked again after all tables are read. Close Lightroom before
+importing: metadata checks detect ordinary concurrent changes, but are not SQLite snapshot isolation.
+
+The in-tree, read-only Rust SQLite B-tree reader follows SQLite's public file-format
+specification; it introduces no dependency or C runtime.
 Optional history, keyword and collection tables that exceed limits are skipped with warnings;
 required photo tables still report errors. Unrelated unsupported schemas are ignored. A needed
 WITHOUT ROWID or virtual table produces an explicit error, handled as a warning when optional.
@@ -106,3 +116,7 @@ an absolute path is not looked at: the import lists it as missing with a warning
 photo and its virtual copies out of the library. To import originals on a share, open the catalog
 from that share. A path that is not a path on this computer (a Windows drive path read on macOS or
 Linux) is not looked at either and stays catalogued as missing.
+
+## Historical local validation
+
+Validated in a local Linux environment after upstream reconciliation: 47 catalog-focused tests, nine pipeline spot tests, the exact sparse-catalog regression, and all eight `cargo xtask ci` stages passed. The full gate recorded 3,166 passing test executions, zero failures, and 28 ignored tests. An original synthetic sparse catalog with a required image-table page beyond 1 GiB also passed headless application import and selection; its expected missing-original placeholder retained its five-star rating. This snapshot check does not establish native-window coverage or dense-catalog performance.

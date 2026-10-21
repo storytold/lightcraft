@@ -278,6 +278,7 @@
   "Updated {name}": "Updated {name}",
   "new, inside {parent}": "new, inside {parent}",
   "{count} more warnings.": "{count} more warnings.",
+  "{skipped} catalog images were not imported because their records in the catalog are incomplete.": "კატალოგის {skipped} სურათი არ დაიმპორტდა, რადგან მათი ჩანაწერები კატალოგში არასრულია.",
   "{missing} originals are missing. Their catalog records are available; use Find Missing Photos to relink them.": "{missing} originals are missing. Their catalog records are available; use Find Missing Photos to relink them.",
   "{n} JPEG files": "{n} JPEG files",
   "{n} pages": "{n} pages",

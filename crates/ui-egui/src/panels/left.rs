@@ -793,6 +793,8 @@ fn missing_count(app: &mut LightcraftApp, ui: &mut egui::Ui) -> usize {
 struct LocalNow {
     places: LocalPlaces,
     current: Option<String>,
+    /// The places removed from Local, as (name, path), in the order they were hidden.
+    hidden: Vec<(String, String)>,
 }
 
 /// Folders on this computer to browse without adding (Lightroom's Local): Pictures, Desktop,
@@ -817,11 +819,14 @@ fn local_now(app: &mut LightcraftApp, ui: &egui::Ui) -> Option<LocalNow> {
     }
     let browsing = app.session.browse.clone().filter(|_| app.session.source == LibrarySource::Folder);
     let current = browsing.as_ref().map(|b| b.path.clone());
+    // a hidden built-in place keeps its name (Home, not the user's folder name)
+    let name_of = |path: &str| builtin.iter().find(|(_, p)| same_folder(p, path)).map_or_else(|| folder_label(path), |(n, _)| n.clone());
+    let hidden = app.ui.hidden_locations.iter().map(|h| (name_of(h), h.clone())).collect();
     let places = local_places(builtin, &app.ui.local_roots, current.as_deref(), app.ui.local_browse_root.as_deref(), &app.ui.hidden_locations);
     if current.is_some() {
         app.ui.local_browse_root = places.browse_root.clone();
     }
-    Some(LocalNow { places, current })
+    Some(LocalNow { places, current, hidden })
 }
 
 /// Local's rows: each place as a folder tree, Browse Folder…, and the way back for hidden places.
@@ -846,15 +851,40 @@ fn local_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, now: &LocalNow) {
             }
         }
     }
-    let hidden = app.ui.hidden_locations.len();
+    // the way back for hidden places: one comes back from the row itself; several are listed, so
+    // each comes back on its own, or all at once (issue #2114: the row used to bring every one back)
+    let hidden = now.hidden.len();
     if hidden > 0 {
         let label = crate::i18n::tr_format!("Show {hidden} hidden location{}", if hidden == 1 { "" } else { "s" }, hidden = hidden);
-        if row(app, ui, "local:restoreHidden", Icon::Folder, &label, None, false, 0.0)
-            .on_hover_text(crate::i18n::tr("Put the locations you removed from Local back (no files change)"))
-            .clicked()
-        {
-            let _ = app.run("local.restoreHidden", json!({}));
+        let resp = row(app, ui, "local:restoreHidden", Icon::Folder, &label, None, false, 0.0)
+            .on_hover_text(crate::i18n::tr("Put the locations you removed from Local back (no files change)"));
+        if let [(_, only)] = now.hidden.as_slice() {
+            if resp.clicked() {
+                let _ = app.run("local.restoreHidden", json!({"path": only}));
+            }
+        } else {
+            egui::Popup::menu(&resp).show(|ui| hidden_menu(app, ui, &now.hidden));
         }
+    }
+}
+
+/// The list behind "Show N hidden locations": each place by name (its path on hover), then
+/// Restore All.
+fn hidden_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, hidden: &[(String, String)]) {
+    for (name, path) in hidden {
+        let r = ui.button(name).on_hover_text(path);
+        register(ui.ctx(), format!("local:restoreHidden:{path}"), r.rect);
+        if r.clicked() {
+            let _ = app.run("local.restoreHidden", json!({"path": path}));
+            ui.close();
+        }
+    }
+    ui.separator();
+    let r = ui.button(crate::i18n::tr("Restore All"));
+    register(ui.ctx(), "local:restoreHidden:all", r.rect);
+    if r.clicked() {
+        let _ = app.run("local.restoreHidden", json!({}));
+        ui.close();
     }
 }
 

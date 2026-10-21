@@ -268,6 +268,7 @@
   "{n} originals opened in the other editor": "Відкрито оригіналів в іншому редакторі: {n}",
   "· {in_source} identical copies": "· ідентичних копій: {in_source}",
   "{count} more warnings.": "Інших попереджень: {count}.",
+  "{skipped} catalog images were not imported because their records in the catalog are incomplete.": "Не імпортовано зображення каталогу: {skipped}. Їхні записи в каталозі неповні.",
   "{photos} catalog records processed; {collections} collections.": "Оброблено записів каталогу: {photos}; колекцій: {collections}.",
   "{missing} originals are missing. Their catalog records are available; use Find Missing Photos to relink them.": "Не знайдено оригінали: {missing}. Їхні записи каталогу доступні; скористайтеся пошуком відсутніх фотографій, щоб відновити посилання.",
   "Applied {name}": "Застосовано: {name}",

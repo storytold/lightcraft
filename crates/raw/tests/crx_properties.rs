@@ -250,6 +250,7 @@ fn encode_qp_map(values: &[i32], width: usize, height: usize) -> Vec<u8> {
 
 // --- exact algebraic inverse of the crate's 5/3 synthesis (the forward transform under test) ---
 
+#[derive(Clone)]
 struct Band {
     width: usize,
     height: usize,
@@ -343,6 +344,17 @@ fn band_shapes(plane_width: usize, plane_height: usize, before: bool, after: boo
     let (lw2, hw2, lh2, hh2) = levels[1];
     let (lw3, hw3, lh3, hh3) = levels[2];
     [(lw3, lh3), (hw3, lh3), (lw3, hh3), (hw3, hh3), (hw2, lh2), (lw2, hh2), (hw2, hh2), (hw1, lh1), (lw1, hh1), (hw1, hh1)]
+}
+
+/// The band as the camera codes it (crx.rs `coded_band_width`): with a tile on the right, bands 5 and 8
+/// are coded at an odd width, so an even band gains a column that synthesis ignores (zero here).
+fn coded_band(band: &Band, index: usize, after: bool) -> Band {
+    if !(after && matches!(index, 5 | 8) && band.width.is_multiple_of(2)) {
+        return band.clone();
+    }
+    let width = band.width + 1;
+    let data = band.data.chunks_exact(band.width).flat_map(|row| row.iter().copied().chain([0])).collect();
+    Band { width, height: band.height, data }
 }
 
 fn encode_band(band: &Band, lowpass: bool) -> Vec<u8> {
@@ -568,7 +580,7 @@ fn encode_tile_planes(
             *plane_bytes = vec![encode_band(&band, true)];
         } else {
             let bands = forward_bands(values, plane_w, plane_h, before, after, halo);
-            *plane_bytes = bands.iter().enumerate().map(|(i, band)| encode_band(band, i == 0)).collect();
+            *plane_bytes = bands.iter().enumerate().map(|(i, band)| encode_band(&coded_band(band, i, after), i == 0)).collect();
         }
     }
     encoded

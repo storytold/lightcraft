@@ -2,7 +2,8 @@
 
 LightCraft selects objects with **SAM 3** (Segment Anything with Concepts, Meta 2025), run in
 pure Rust by `crates/segment` on [candle](https://github.com/huggingface/candle): on the GPU
-through Metal on macOS, on the CPU elsewhere (for now).
+through Metal on macOS, on the CPU elsewhere (for now). If the Mac's GPU can't run it, it runs on
+the CPU (see the worker below).
 
 **The model is optional.** It is not part of LightCraft, and nothing requires it: without it,
 Object and Describe offer to download it, every other feature (and every existing mask, see
@@ -16,7 +17,10 @@ In the Masking panel (M):
   to leave it out. Clicks show as green (include) and red (leave out) dots.
 - **Describe**: type what to select — `sky`, `trees`, `the red car` — and press Return. Every
   instance the model finds (score above 0.5) joins the mask; if nothing matches, nothing is
-  created and you are told so.
+  created and you are told so. Around what it found, the mask follows the model's semantic mask
+  for the phrase, which is sure inside and runs on where two instances touch (the instances'
+  own masks alone left a sky or a net about 70–90 % selected and a thin line between two people
+  side by side).
 - Several things at once: `car, road` (comma-separated) selects each and merges them.
 - **+ / −** under the selected mask (and the Add / Subtract / Intersect menus) combine
   selections: Describe `car`, click the mask, + ▸ Describe… `road`; − ▸ Describe… `people` takes
@@ -214,7 +218,7 @@ wait and return the result (when built with the `sam` feature; the default CLI h
   `NOTICE` — the ported files say so and that they were modified): the 32-layer ViT backbone
   with 2-D RoPE and windowed attention, the feature pyramids, the SAM 2-style prompt encoder and
   two-way mask decoder for clicks, and the CLIP text encoder, DETR encoder/decoder (box
-  relative-position bias, presence token) and pixel decoder for text. The CLIP tokenizer is a
+  relative-position bias, presence token), pixel decoder and semantic head for text. The CLIP tokenizer is a
   small BPE in `tokenizer.rs`. The downloader (original code) is the `lightcraft-fetch` crate, shared by any model that is downloaded; `fetch/` here says what SAM 3 needs.
 - candle is pinned at 0.9.2: later releases make `candle-core` depend on `tokenizers` with the
   Oniguruma C library, and the product is pure Rust. Weights are read with positional reads (no
@@ -225,6 +229,13 @@ wait and return the result (when built with the `sam` feature; the default CLI h
   encoded photo; the session sends it jobs and receives results over channels, never holding a
   lock the model holds. Each job runs under `catch_unwind`: a panic inside candle becomes an
   error and the model is reloaded on the next request; busy counters are reset by drop guards.
+- GPU fallback (issue #1974): a job that fails on the GPU (a panic or a candle error, e.g. an
+  AMD GPU in an Intel Mac whose Metal compiler crashes on a matmul kernel) frees the model and runs
+  once more on the CPU. If that works, the model stays on the CPU until LightCraft restarts and
+  the user is told once ("The GPU couldn't run the AI mask model…"); if the CPU fails too, the
+  error is reported and the next job tries the GPU again. Missing or damaged model files and
+  remote-worker errors are not retried. `LIGHTCRAFT_GPU=0` or `LIGHTCRAFT_GPU_BACKEND=off` keep
+  the model on the CPU from the start.
 - Hostile documents: a selection keeps at most 4 detail patches (when read and when rendered),
   each at most 1024² logits; more than 64 clicks are never sent to the model.
 - Accuracy: `crates/segment/tests/reference.rs` compares every stage against the Python
