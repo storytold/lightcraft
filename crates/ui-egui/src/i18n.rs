@@ -784,7 +784,6 @@ mod tests {
             ("app.language.italian", Locale::It),
             ("app.language.georgian", Locale::Ka),
             ("app.language.lao", Locale::Lo),
-            
         ];
         // One command per language, and every command reachable from the menu table.
         assert_eq!(commands.len(), Locale::ALL.len());
