@@ -92,6 +92,9 @@ impl CameraTone {
     }
 }
 
+/// Display luminance above which [`ToneMap::sdr_rolloff`] compresses an HDR edit's highlights.
+pub const ROLLOFF_KNEE: f32 = 0.5;
+
 /// Scene EV over grey where [`ToneMap::hdr`] starts lifting highlights above the SDR curve.
 const HDR_FROM_EV: f32 = 1.5;
 
@@ -216,6 +219,30 @@ impl ToneMap {
             })
             .collect();
         ToneMap { lut, chroma: NO_CHROMA }
+    }
+
+    /// Fits an HDR tone map reaching `peak` into SDR (own design). Display values up to
+    /// the knee `k` ([`ROLLOFF_KNEE`]) stay as they are; above it the shoulder works in stops over
+    /// the knee, `v = log2(o/k)`, which run from 0 to `V = log2(peak/k)` and are fitted into
+    /// `W = log2(1/k)`: `v' = W·a·x / (1 + (a − 1)·x)` with `x = v/V` and `a = V/W`, `o' = k·2^v'`.
+    /// That maps `[k, peak]` onto `[k, 1]`, is monotone, and has slope 1 at the knee (continuous with
+    /// the curve below, in linear as in log terms), so highlights an SDR curve would clip keep their
+    /// gradation and each stop of HDR highlight takes a share of the SDR range. `peak ≤ 1` (or
+    /// non-finite) leaves the table unchanged.
+    pub fn sdr_rolloff(mut self, peak: f32) -> ToneMap {
+        if !peak.is_finite() || peak <= 1.0 {
+            return self;
+        }
+        let k = ROLLOFF_KNEE;
+        let (big_v, w) = ((peak / k).log2(), (1.0 / k).log2());
+        let a = big_v / w;
+        for o in &mut self.lut {
+            if *o > k {
+                let x = ((*o / k).log2() / big_v).clamp(0.0, 1.0);
+                *o = (k * (w * a * x / (1.0 + (a - 1.0) * x)).exp2()).min(1.0);
+            }
+        }
+        self
     }
 
     /// The table (`LUT_N` entries, see [`ToneMap::apply`]).

@@ -1134,6 +1134,12 @@ pub struct Hdr {
     pub sdr_shadows: f64,
     pub sdr_whites: f64,
     pub sdr_clarity: f64,
+    /// Set only on an SDR rendition ([`DevelopSettings::sdr_rendition`]): the HDR edit's peak
+    /// ([`Hdr::peak`]), whose highlights the SDR tone map rolls off into SDR white instead of
+    /// clipping them (see `lightcraft_pipeline::tone::ToneMap::sdr_rolloff`). 1 (the default) = none.
+    /// Never saved or read: settings files, presets and agents can't set it.
+    #[serde(skip, default = "Hdr::no_rolloff")]
+    pub rolloff_peak: f32,
 }
 
 impl Default for Hdr {
@@ -1147,6 +1153,7 @@ impl Default for Hdr {
             sdr_shadows: 0.0,
             sdr_whites: 0.0,
             sdr_clarity: 0.0,
+            rolloff_peak: 1.0,
         }
     }
 }
@@ -1158,6 +1165,20 @@ impl Hdr {
     /// Whether these are the default HDR settings (HDR off, nothing changed).
     pub fn is_default(&self) -> bool {
         *self == Hdr::default()
+    }
+
+    fn no_rolloff() -> f32 {
+        1.0
+    }
+
+    /// The HDR peak an SDR rendition rolls its highlights off from: 1 (none) unless this is the
+    /// rendition of an HDR edit. Damaged values (non-finite, below 1) mean none; capped at the
+    /// largest HDR peak.
+    pub fn rolloff_peak(&self) -> f32 {
+        if self.enabled || !self.rolloff_peak.is_finite() {
+            return 1.0;
+        }
+        self.rolloff_peak.clamp(1.0, (Hdr::MAX_EV_LIMIT as f32).exp2())
     }
 
     /// Peak linear value of an HDR render relative to SDR white (1.0 when HDR is off). A non-finite headroom
@@ -1173,13 +1194,15 @@ impl Hdr {
 
 impl DevelopSettings {
     /// The settings an SDR render uses: unchanged when HDR is off; otherwise HDR off and the
-    /// SDR rendition offsets applied to exposure, contrast, highlights, shadows, whites, clarity.
+    /// SDR rendition offsets applied to exposure, contrast, highlights, shadows, whites, clarity,
+    /// and [`Hdr::rolloff_peak`] set so the tone map compresses the HDR highlights into SDR.
     pub fn sdr_rendition(&self) -> std::borrow::Cow<'_, DevelopSettings> {
         if !self.hdr.enabled {
             return std::borrow::Cow::Borrowed(self);
         }
         let h = self.hdr;
         let mut s = self.clone();
+        s.hdr.rolloff_peak = h.peak();
         s.hdr.enabled = false;
         let add = |v: f64, d: f64| (v + d).clamp(-100.0, 100.0);
         s.light.exposure = (s.light.exposure + h.sdr_brightness / 100.0).clamp(-5.0, 5.0);

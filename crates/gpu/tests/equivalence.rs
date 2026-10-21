@@ -142,6 +142,12 @@ fn banded_full_size_render_matches() {
 fn cases() -> Vec<(&'static str, Edit)> {
     vec![
         ("default", |_| {}),
+        // the SDR rendition of an HDR edit rolls its highlights off instead of clipping
+        ("hdr edit sdr rendition", |s| {
+            s.hdr.enabled = true;
+            s.light.exposure = 1.5;
+            s.hdr.sdr_whites = 20.0;
+        }),
         ("typical", typical),
         ("exposure/contrast/whites", |s| {
             s.light.exposure = -0.7;

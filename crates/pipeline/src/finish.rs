@@ -278,6 +278,16 @@ impl FinishParams {
 /// every arm is the SDR tone map. An HDR render keeps the camera's look through the midtones and
 /// lifts its highlights past white ([`ToneMap::camera_hdr`]), so it matches the SDR render below them.
 pub fn base_tone(s: &DevelopSettings, info: &SourceInfo, peak: f32) -> ToneMap {
+    // the SDR rendition of an HDR edit: the HDR curve, its highlights rolled off into SDR white;
+    // SDR edits never get here (their rolloff peak is 1)
+    let rolloff = s.hdr.rolloff_peak();
+    if peak <= 1.0 && rolloff > 1.0 {
+        return base_tone_at(s, info, rolloff).sdr_rolloff(rolloff);
+    }
+    base_tone_at(s, info, peak)
+}
+
+fn base_tone_at(s: &DevelopSettings, info: &SourceInfo, peak: f32) -> ToneMap {
     let l = &s.light;
     match s.process.process() {
         // V2 changes the Highlights/Shadows base (`local::tone_base`), not the tone map

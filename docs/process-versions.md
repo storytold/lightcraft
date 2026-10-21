@@ -22,6 +22,11 @@ stronger Light sliders, issue #196) without changing a single photo someone has 
 - Changes to how a file is decoded or which camera colour it gets change the source, not how settings
   are interpreted; the process doesn't reach that stage today.
 
+**HDR edits' SDR rendition** rolls highlights off into SDR white instead of clipping them; it
+landed in place rather than as a process: the rendition used to clip the highlights the HDR edit
+keeps (thumbnails and SDR exports lost them), which is output broken where it should be correct.
+It changes nothing for SDR edits (HDR off), on any process.
+
 ## Adding a process
 
 1. Add a variant to `Process` (`V2`), append it to `Process::ALL` (oldest first), give it its number in

@@ -104,10 +104,11 @@ fn f32hdr_without_hdr_is_the_sdr_float_render() {
 fn sdr_renders_of_an_hdr_edit_use_the_sdr_rendition() {
     let src = sunset();
     let req = RenderRequest::fit(240, 240);
-    // neutral offsets: identical to the edit with HDR off
+    // neutral offsets: the edit with HDR off, its highlights rolled off
     let plain = render(&src, &raw(), &DevelopSettings::default(), &req);
     let on = render(&src, &raw(), &hdr_on(3.0), &req);
-    assert_eq!(plain.image.data, on.image.data);
+    let rendition = render(&src, &raw(), &hdr_on(3.0).sdr_rendition(), &req);
+    assert_eq!(rendition.image.data, on.image.data);
     // offsets apply to every SDR render
     let mut s = hdr_on(3.0);
     s.hdr.sdr_brightness = 50.0;
@@ -169,4 +170,43 @@ fn hdr_histogram_shows_the_range_above_sdr_white_on_a_fixed_scale() {
     assert_eq!(crate::hdr_histogram(&src, &raw(), &s, &req).unwrap().hdr.unwrap().stops, bins.stops);
     // the SDR rendition's own histogram has nothing above white
     assert!(render(&src, &raw(), &hdr_on(3.0), &req).histogram.hdr.is_none());
+}
+
+/// An HDR edit's SDR rendition compresses the highlights an SDR edit would clip, so a bright
+/// ramp keeps distinct values above the old clip point; the same edit with HDR off renders as before.
+#[test]
+fn sdr_rendition_rolls_highlights_off_instead_of_clipping() {
+    // a horizontal ramp from mid-grey to 6 stops over grey
+    let (w, h) = (256, 4);
+    let mut src = Rgb32f::new(w, h);
+    for y in 0..h {
+        for x in 0..w {
+            let v = 0.18 * 2f32.powf(6.0 * x as f32 / (w - 1) as f32);
+            src.data[y * w + x] = [v, v, v];
+        }
+    }
+    let req = RenderRequest::fit(w, w);
+    let mut sdr = DevelopSettings::default();
+    sdr.light.exposure = 1.5;
+    let mut hdr = sdr.clone();
+    hdr.hdr.enabled = true;
+    let row = |s: &DevelopSettings| -> Vec<u8> {
+        let out = render(&src, &raw(), s, &req).image;
+        out.data[..out.width].iter().map(|p| p[1]).collect()
+    };
+    let (old, new) = (row(&sdr), row(&hdr));
+    let first_clip = old.iter().position(|v| *v == 255).expect("the SDR edit clips this ramp");
+    let distinct = |r: &[u8]| {
+        let mut v = r[first_clip..].to_vec();
+        v.dedup();
+        v.len()
+    };
+    assert_eq!(distinct(&old), 1, "SDR edit: flat white past its clip point");
+    assert!(distinct(&new) > 10, "HDR edit's SDR rendition keeps gradation: {:?}", &new[first_clip..]);
+    assert!(new.windows(2).all(|p| p[1] >= p[0]), "monotone");
+    // SDR edits are untouched: no rolloff without HDR, whatever a damaged field says
+    let mut damaged = sdr.clone();
+    damaged.hdr.rolloff_peak = f32::NAN;
+    assert_eq!(row(&damaged), old);
+    assert_eq!(sdr.sdr_rendition().hdr.rolloff_peak(), 1.0);
 }
