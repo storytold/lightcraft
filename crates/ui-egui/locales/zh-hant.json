@@ -47,6 +47,7 @@
   "Import photos with File → Import Photos…, or drop them here": "使用「檔案 → 匯入照片…」，或將照片拖放至此",
   "This row covers more than one disk: drop on a folder inside it": "此列涵蓋多個磁碟：請拖放到其中的資料夾",
   "Local photos aren't in the library yet: Add to My Photos first, then move them": "本機照片尚未在照片庫中：請先「加入我的照片」，再移動",
+  "Demo photos have no file on disk, so they can't be moved": "示範照片在磁碟上沒有檔案，因此無法移動",
   "Add to Selected Photos": "加入選取的照片",
   "Add to Target Album": "加入目標相簿",
   "Add to this mask": "加入此遮色片",

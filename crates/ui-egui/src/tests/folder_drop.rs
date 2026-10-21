@@ -271,9 +271,9 @@ fn the_label_counts_only_the_photos_a_drop_moves() {
 }
 
 #[test]
-fn a_photo_without_a_file_is_not_already_in_the_folder() {
+fn a_photo_without_a_file_is_refused_not_moved_or_already_there() {
     let text = hint_over_home("demo", 0, true, |h| vec![id_of(h, "demo.jpg")]);
-    assert_eq!(text.as_deref(), Some("Move 1 photo to “home”"));
+    assert_eq!(text.as_deref(), Some("Can't be moved here"));
 }
 
 #[test]

@@ -45,6 +45,7 @@
   "Import photos with File → Import Photos…, or drop them here": "Importar fotos con Archivo → Importar fotos… o soltarlas aquí",
   "This row covers more than one disk: drop on a folder inside it": "Esta fila abarca más de un disco: suéltalas en una carpeta dentro de ella",
   "Local photos aren't in the library yet: Add to My Photos first, then move them": "Las fotos locales aún no están en la biblioteca: primero Añadir a Mis fotos y luego muévelas",
+  "Demo photos have no file on disk, so they can't be moved": "Las fotos de demostración no tienen archivo en el disco, así que no se pueden mover",
   "Add to Selected Photos": "Añadir a las fotos seleccionadas",
   "Add to Target Album": "Añadir al álbum de destino",
   "Add to this mask": "Añadir a esta máscara",

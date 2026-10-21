@@ -46,6 +46,7 @@
   "Import photos with File → Import Photos…, or drop them here": "「ファイル → 写真を読み込む…」から読み込むか、ここに写真をドロップしてください",
   "This row covers more than one disk: drop on a folder inside it": "この行は複数のディスクにまたがっています。中のフォルダにドロップしてください",
   "Local photos aren't in the library yet: Add to My Photos first, then move them": "ローカルの写真はまだライブラリにありません。先に「マイフォトに追加」してから移動してください",
+  "Demo photos have no file on disk, so they can't be moved": "デモの写真にはディスク上のファイルがないため、移動できません",
   "Add to Selected Photos": "選択した写真に追加",
   "Add to Target Album": "追加先アルバムに追加",
   "Add to this mask": "このマスクに追加",

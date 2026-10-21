@@ -2356,5 +2356,6 @@
   "Add keywords in the Keyword List": "Dodawaj słowa kluczowe na Liście słów kluczowych",
   "Give photos a keyword in the Keyword List (Window → Keywords, K): drop them on it there": "Aby nadać zdjęciom słowo kluczowe, użyj Listy słów kluczowych (Okno → Słowa kluczowe, K): upuść je tam na to słowo",
   "Already on these photos": "Już mają je te zdjęcia",
-  "Can't go inside itself": "Nie może trafić do siebie samego"
+  "Can't go inside itself": "Nie może trafić do siebie samego",
+  "Demo photos have no file on disk, so they can't be moved": "Zdjęcia demonstracyjne nie mają pliku na dysku, więc nie można ich przenieść"
 }

@@ -3700,5 +3700,6 @@
   "Add keywords in the Keyword List": "საკვანძო სიტყვები დაამატეთ საკვანძო სიტყვების სიაში",
   "Give photos a keyword in the Keyword List (Window → Keywords, K): drop them on it there": "ფოტოებისთვის საკვანძო სიტყვის მისაცემად გამოიყენეთ საკვანძო სიტყვების სია (ფანჯარა → საკვანძო სიტყვები, K): ჩააგდეთ იქ სასურველ სიტყვაზე",
   "Already on these photos": "ამ ფოტოებს უკვე აქვთ",
-  "Can't go inside itself": "საკუთარ თავში ვერ მოხვდება"
+  "Can't go inside itself": "საკუთარ თავში ვერ მოხვდება",
+  "Demo photos have no file on disk, so they can't be moved": "სადემონსტრაციო ფოტოებს დისკზე ფაილი არ აქვთ, ამიტომ მათი გადატანა შეუძლებელია"
 }

@@ -376,17 +376,12 @@ fn is_in_folder(p: &lightcraft_catalog::Photo, folder: &str) -> bool {
 /// there stay, and virtual copies of one file move it once.
 fn files_moved(photos: &[&std::sync::Arc<lightcraft_catalog::Photo>], folder: &str) -> usize {
     let mut paths = std::collections::HashSet::new();
-    let mut other = 0;
     for p in photos.iter().filter(|p| !is_in_folder(p, folder)) {
-        match &p.source {
-            lightcraft_catalog::Source::File { path } => {
-                paths.insert(path.as_str());
-            }
-            // no file to move: counted as it was, the move refuses it with its own reason
-            _ => other += 1,
+        if let lightcraft_catalog::Source::File { path } = &p.source {
+            paths.insert(path.as_str());
         }
     }
-    paths.len() + other
+    paths.len()
 }
 
 /// A Folders row while photos are dragged from the grid: a release moves their files there on
@@ -408,6 +403,9 @@ fn folder_drop_target(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::R
         Some(crate::i18n::tr("This row covers more than one disk: drop on a folder inside it"))
     } else if photos.iter().any(|p| p.local) {
         Some(crate::i18n::tr("Local photos aren't in the library yet: Add to My Photos first, then move them"))
+    } else if photos.iter().any(|p| !matches!(p.source, lightcraft_catalog::Source::File { .. })) {
+        // `photo.moveToFolder` refuses a photo with no file
+        Some(crate::i18n::tr("Demo photos have no file on disk, so they can't be moved"))
     } else {
         None
     };

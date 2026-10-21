@@ -398,6 +398,7 @@
   "Can't be moved here": "Сюди перемістити не можна",
   "This row covers more than one disk: drop on a folder inside it": "Цей рядок охоплює кілька дисків: перетягніть на теку всередині нього",
   "Local photos aren't in the library yet: Add to My Photos first, then move them": "Локальних фото ще немає в бібліотеці: спершу «Додати до моїх фото», потім переміщуйте",
+  "Demo photos have no file on disk, so they can't be moved": "Демонстраційні фото не мають файлу на диску, тому їх не можна перемістити",
   "Add to Selected Photos": "Додати до вибраних фото",
   "Add to Target Album": "Додати до цільового альбому",
   "Add to this mask": "Додати до цієї маски",
