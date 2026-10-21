@@ -407,9 +407,23 @@ pub fn specs() -> Vec<CommandSpec> {
             "Filter",
             [],
             None,
-            "partial Filter: {text?, rating?, ratingOp?: atLeast|exactly|atMost, flag?: pick|reject|none|null, label?, kind?, merged?: hdr|panorama|hdrPanorama|any, edited?, date?, libraryFolder?: a path from library.folders, keyword?, person?, camera?}",
+            "partial Filter: {text?, rating?, ratingOp?: atLeast|exactly|atMost, flag?: pick|reject|none|null, label?, kind?, merged?: hdr|panorama|hdrPanorama|any, edited?, date?, libraryFolder?: a path from library.folders, keyword?, person?, camera?, contents?: text | null, wait?: bool (true)} → {count, contents?} — `contents` (the search bar's Contents mode) and `contents:` / `shows:` words in `text` (`contents:\"red car\" rating:>=3`) search photos by what they show, with the content index (Settings ▸ Search): the photos that match, ANDed with the rest of the filter, sorted by Relevance until another sort is chosen; `contents` in the answer says how it went (state ready | preparing | problem, matches, bestMatches, hint). `wait: false` answers at once while the search model loads (the app); otherwise it waits for the ranking",
             always,
             |s, p| {
+                let mut p = p.clone();
+                let wait = p.get("wait").and_then(Value::as_bool).unwrap_or(true);
+                // (applied once the rest of the filter is accepted)
+                let mut contents: Option<Option<String>> = None;
+                if let Some(o) = p.as_object_mut() {
+                    o.remove("wait");
+                    match o.remove("contents") {
+                        None => {}
+                        Some(Value::Null) => contents = Some(None),
+                        Some(Value::String(t)) => contents = Some(crate::content_query::clean_query(&t)),
+                        Some(_) => return Err(bad("library.filter", "`contents` must be a text or null")),
+                    }
+                }
+                let p = &p;
                 let mut v = serde_json::to_value(&s.filter).unwrap_or_default();
                 lightcraft_develop::presets::deep_merge(&mut v, p);
                 let f: Filter = serde_json::from_value(v).map_err(|e| bad("library.filter", e.to_string()))?;
@@ -429,8 +443,28 @@ pub fn specs() -> Vec<CommandSpec> {
                 if let Some(problems) = f.rule_set.as_ref().filter(|_| sets_rules).map(|rs| rs.check(&s.catalog)).filter(|p| !p.is_empty()) {
                     return Err(bad("library.filter", problems.iter().map(ToString::to_string).collect::<Vec<_>>().join("; ")));
                 }
+                let asks_by_words = p.get("text").is_some() && lightcraft_catalog::query::split_contents(&f.text).0.is_some();
                 s.filter = f;
-                Ok(json!({"count": s.visible().len()}))
+                if asks_by_words {
+                    s.content_query.similar = None;
+                }
+                // (only a call that asks something new waits for its answer: clearing another filter never does)
+                let asks = asks_by_words || contents.as_ref().is_some_and(Option::is_some);
+                if let Some(c) = contents {
+                    // a new question by text replaces Find Similar Contents
+                    if c.is_some() {
+                        s.content_query.similar = None;
+                    }
+                    s.content_query.contents = c;
+                }
+                if wait && asks {
+                    s.content_wait(std::time::Duration::from_secs(120));
+                }
+                let count = s.visible().len();
+                Ok(match s.content_view() {
+                    Some(c) => json!({"count": count, "contents": c.to_json()}),
+                    None => json!({"count": count}),
+                })
             }
         ),
         cmd!(
@@ -512,8 +546,9 @@ pub fn specs() -> Vec<CommandSpec> {
                 Ok(json!({"path": path, "label": label}))
             }
         ),
-        cmd!("library.clearFilter", "Clear Filters", ["View"], None, "{}", always, |s, _| {
+        cmd!("library.clearFilter", "Clear Filters", ["View"], None, "{} — also ends a search by contents", always, |s, _| {
             s.filter = Default::default();
+            s.clear_content_query();
             Ok(json!({"count": s.visible().len()}))
         }),
         cmd!(
@@ -521,7 +556,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Sort",
             ["View", "Sort"],
             None,
-            "{key?: captureDate|importDate|editDate|fileName|rating|fileSize|random, ascending?: bool, group?: auto|none|day|month|year, seed?: u64 (the shuffle `random` gives)}",
+            "{key?: captureDate|importDate|editDate|fileName|rating|fileSize|random|relevance (a search by contents: best match first), ascending?: bool, group?: auto|none|day|month|year, seed?: u64 (the shuffle `random` gives)}",
             always,
             |s, p| {
                 let key: SortKey = match p.get("key") {

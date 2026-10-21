@@ -113,6 +113,14 @@ pub fn default_face_models_dir() -> Option<PathBuf> {
     std::env::var_os("LIGHTCRAFT_FACE_MODELS").filter(|v| !v.is_empty()).map(PathBuf::from).or_else(|| config_dir().map(|d| d.join("models")))
 }
 
+/// Where content (search) models are kept: `$LIGHTCRAFT_CONTENT_MODELS` if set, else `<config>/models/content`.
+pub fn default_content_models_dir() -> Option<PathBuf> {
+    std::env::var_os("LIGHTCRAFT_CONTENT_MODELS")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| config_dir().map(|d| d.join("models").join("content")))
+}
+
 /// Where opt-in denoise models are kept: `$LIGHTCRAFT_DENOISE_MODELS` if set, else `<config>/denoise-models`.
 pub fn default_denoise_models_dir() -> Option<PathBuf> {
     std::env::var_os("LIGHTCRAFT_DENOISE_MODELS")
@@ -143,6 +151,12 @@ impl Session {
     /// Keep face models in the shared default folder ([`default_face_models_dir`]).
     pub fn with_default_face_models(mut self) -> Self {
         self.face_models_dir = default_face_models_dir();
+        self
+    }
+
+    /// Keep content (search) models in the shared default folder ([`default_content_models_dir`]).
+    pub fn with_default_content_models(mut self) -> Self {
+        self.content_models_dir = default_content_models_dir();
         self
     }
 
