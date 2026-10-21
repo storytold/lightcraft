@@ -296,5 +296,6 @@
   "Renames {n} face{} across the library. The files are not changed.": "在整个图库中重命名 {n} 张面孔。不会改动文件。{:.0}",
   "“{to}” is already a person. Combining them makes one person; Undo separates them again.": "“{to}”已经是另一个人。合并后成为一个人；撤销会再把他们分开。",
   "{what} merge added at {mp}: its full size, {full}, needs more memory than this computer has": "已添加 {what} 合并（{mp}）：完整尺寸（{full}）所需的内存超出了这台电脑的内存",
-  "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "已添加 {what} 合并（{mp}），这是全景图的最大尺寸（完整尺寸：{full}）"
+  "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "已添加 {what} 合并（{mp}），这是全景图的最大尺寸（完整尺寸：{full}）",
+  "The graphics driver stopped responding, so LightCraft can't draw its window any more, and saving the library failed: {e}\n\nUnsaved changes: {n}. If you quit now, they are lost. Free some disk space or reconnect the library's drive, then try again.": "图形驱动程序已停止响应，LightCraft 无法再绘制窗口，并且图库保存失败：{e}\n\n未保存的更改：{n} 项。如果现在退出，这些更改将会丢失。请释放磁盘空间或重新连接图库所在的驱动器，然后重试。"
 }

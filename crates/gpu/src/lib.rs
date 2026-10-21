@@ -275,6 +275,69 @@ fn env_disabled() -> bool {
 #[cfg(not(target_arch = "wasm32"))]
 static GPU: std::sync::OnceLock<Result<ctx::Gpu, String>> = std::sync::OnceLock::new();
 
+/// The window's device, lent by [`share_window_device`]: the render device is created on it.
+#[cfg(not(target_arch = "wasm32"))]
+static WINDOW: Mutex<Option<(wgpu::Device, wgpu::Queue, wgpu::AdapterInfo)>> = Mutex::new(None);
+
+/// Render on the window's wgpu device instead of a device of LightCraft's own (issue #1228), so
+/// that renders reach the screen as textures on it ([`try_render_texture`]) with no copy back to
+/// the CPU. Call it once the window is up, before anything renders, then [`warm_up`]. Does nothing
+/// once the render device exists; a device that can't run the kernels (a software adapter, too few
+/// storage buffers) leaves renders on a device of their own, with read-back pixels as before.
+/// The window's device must have been requested with the adapter's limits
+/// ([`window_device_limits`]).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn share_window_device(device: wgpu::Device, queue: wgpu::Queue, info: wgpu::AdapterInfo) {
+    if GPU.get().is_none() {
+        *WINDOW.lock().unwrap_or_else(|e| e.into_inner()) = Some((device, queue, info));
+    }
+}
+
+/// The limits to request the window's device with so renders can share it
+/// ([`share_window_device`]): [`window_limits`] for this adapter.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn window_device_limits(adapter: &wgpu::Adapter) -> wgpu::Limits {
+    window_limits(adapter.get_info().backend, adapter.limits())
+}
+
+/// The window device's limits on an adapter of `backend` that supports `adapter`: the adapter's
+/// own, as the render device asks for. A GL adapter keeps egui's WebGL2 limits with its 8192 px
+/// texture side for 4k+ displays (the kernels never run there). Never above `adapter`: a device
+/// asked for more than the adapter has isn't created, and the window doesn't open.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn window_limits(backend: wgpu::Backend, adapter: wgpu::Limits) -> wgpu::Limits {
+    if backend == wgpu::Backend::Gl {
+        let side = adapter.max_texture_dimension_2d.min(8192);
+        return wgpu::Limits { max_texture_dimension_2d: side, ..wgpu::Limits::downlevel_webgl2_defaults() };
+    }
+    adapter
+}
+
+/// Set when the device lent by [`share_window_device`] was lost (driver reset, GPU hang).
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+static WINDOW_LOST: AtomicBool = AtomicBool::new(false);
+
+/// Whether the window's device, lent to renders ([`share_window_device`]), was lost: renders
+/// have gone back to the CPU, but the window can't draw on it again either. The app then offers
+/// a restart (with a device of its own for renders: `LIGHTCRAFT_GPU_TEXTURES=0`). A device lost
+/// while renders had their own leaves the window alone, and this stays false.
+pub fn window_device_lost() -> bool {
+    WINDOW_LOST.load(Ordering::Relaxed)
+}
+
+/// Whether renders run on the window's device, so [`try_render_texture`] can hand them over
+/// without a readback. Never creates the device.
+pub fn shares_window_device() -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        existing_device().is_some_and(|g| g.shared)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        false
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn device() -> Option<&'static ctx::Gpu> {
     // turned off (preference, environment): don't even load the driver (issue #136)
@@ -288,6 +351,21 @@ pub(crate) fn device() -> Option<&'static ctx::Gpu> {
     let _work = exit::enter()?;
     GPU.get_or_init(|| {
         let Some(backends) = backend::compute_backends() else { return Err("disabled by LIGHTCRAFT_GPU_BACKEND=off".into()) };
+        // the window's device, when its backend is one renders may use
+        let window = WINDOW.lock().unwrap_or_else(|e| e.into_inner()).take().filter(|(_, _, info)| backends.contains(info.backend.into()));
+        if let Some((device, queue, info)) = window {
+            let backend: wgpu::Backends = info.backend.into();
+            let name = info.name.clone();
+            let r = backend::with_init_marker(backend, move || {
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || ctx::Gpu::shared(device, queue, info)))
+                    .unwrap_or_else(|_| Err("kernel build panicked".into()))
+            });
+            match r {
+                Ok(g) => return Ok(g),
+                // e.g. a software window adapter: a device of our own may still be better
+                Err(why) => log::info!("gpu: not rendering on the window's device ({name}): {why}"),
+            }
+        }
         let r = backend::with_init_marker(backends, || {
             std::panic::catch_unwind(|| ctx::Gpu::new(backends)).unwrap_or_else(|_| Err("device creation panicked".into()))
         });
@@ -470,82 +548,186 @@ pub fn try_render(
 ) -> Result<Rendered, Fallback> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        // sections switched off with their eye render as if at their defaults (issue #316)
-        let effective = s.effective();
-        let s: &DevelopSettings = &effective;
-        if !enabled() || !handles(req.depth, req.proof.is_some(), req.overlay) {
-            return Err(Fallback::NotTried);
-        }
-        let s = &*lightcraft_pipeline::settings_for(s, req);
-        // in flight until this returns; not tried once the process is ending (issue #620)
-        let _work = exit::enter().ok_or(Fallback::NotTried)?;
-        let gpu = device().ok_or(Fallback::NotTried)?;
-        let ext = stages.map(|c| c.extension::<GpuStages>());
-        let fault = take_fault();
-        // A simulated failure stops GPU use on this thread only (see `BROKEN_HERE`).
-        let stop = |reason: &str| if fault.is_some() { mark_broken_here(reason) } else { mark_broken(reason) };
-        let _ = ctx::take_failure(); // nothing left over from an earlier render on this thread
-        let (r, scoped) = {
-            let _scope = ctx::RenderScope::new(gpu);
-            let errors = ctx::ErrorScopes::push(gpu);
-            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| render::render(gpu, src, info, s, req, ext.as_deref(), fault)));
-            (r, errors.pop())
-        };
-        // An error the device raised explains the readback failures that follow it; a buffer
-        // over the limit explains the errors its placeholder raises.
-        let failure = match (ctx::take_failure(), scoped) {
-            (Some(f), _) if f.kind == ctx::FailKind::Limit => Some(f),
-            (f, scoped) => scoped.or(f),
-        };
-        let reason = match (r, failure) {
-            (Err(_), _) => {
-                log::error!("gpu: render failed; using the CPU pipeline from now on");
-                stop("a GPU render panicked");
-                "a GPU render panicked; the GPU is not used again".to_string()
-            }
-            (Ok(r), Some(f)) => {
-                // the view's cached device stages may hold results of the failed passes
-                if let Some(e) = &ext {
-                    e.clear();
-                }
-                let what = match &r {
-                    Some(r) => format!("{}×{}", r.image.width, r.image.height),
-                    None => "GPU render".into(),
-                };
-                let reason = match f.kind {
-                    ctx::FailKind::Fatal => {
-                        stop(&f.reason);
-                        format!("{what}: {}; the GPU is not used again", f.reason)
-                    }
-                    ctx::FailKind::OutOfMemory => {
-                        gpu.trim(0);
-                        format!("{what}: {}", f.reason)
-                    }
-                    ctx::FailKind::Limit | ctx::FailKind::Blank => format!("{what}: {}", f.reason),
-                };
-                log::warn!("gpu: rendering on the CPU instead: {reason}");
-                if render::profiling() {
-                    eprintln!("  gpu fallback to the CPU: {reason}");
-                }
-                reason
-            }
-            // a device error on another thread or a lost device during the render
-            (Ok(Some(_)), None) if BROKEN.load(Ordering::Relaxed) => {
-                format!("device failure during the render: {}", unavailable_reason().unwrap_or_default())
-            }
-            (Ok(Some(r)), None) => return Ok(r),
-            // every path of `render::render` that gives up records a failure first; should one
-            // not, the CPU renders it rather than nothing
-            (Ok(None), None) => "GPU render: no image came back".to_string(),
-        };
-        record_fallback(reason.clone());
-        Err(Fallback::Failed(reason))
+        attempt(
+            s,
+            req,
+            stages,
+            |r: &Rendered| (r.image.width, r.image.height),
+            |gpu, s, ext, fault| render::render(gpu, src, info, s, req, ext, fault),
+        )
     }
     #[cfg(target_arch = "wasm32")]
     {
         let _ = (src, info, s, req, stages);
         Err(Fallback::NotTried)
     }
+}
+
+/// A render on the window's device, ready to draw ([`try_render_texture`]): `width × height`
+/// sRGB-encoded RGBA8 pixels in an `Rgba8Unorm` texture, egui's own texture format.
+pub struct GpuTexture {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub texture: wgpu::Texture,
+    pub width: usize,
+    pub height: usize,
+}
+
+/// Whether [`try_render_texture`] takes requests of this kind: what [`handles`] takes, without an
+/// overlay (overlays are drawn on read-back pixels), and only while renders share the window's
+/// device ([`shares_window_device`]).
+pub fn texture_handles(req: &RenderRequest) -> bool {
+    handles(req.depth, req.proof.is_some(), req.overlay) && req.overlay == lightcraft_pipeline::Overlay::None && shares_window_device()
+}
+
+/// [`try_render`] into a texture on the window's device, with no copy of the image back to the
+/// CPU (issue #1228): for views that only draw it, such as the loupe's zoom window. There is no
+/// histogram. [`Fallback::NotTried`] when [`texture_handles`] says no; the caller then renders
+/// with [`try_render`] (or on the CPU). `curves`: a display profile's per-channel correction
+/// ([`lightcraft_codecs`' `DisplayProfile::correction_curves`]), applied on the way into the texture.
+pub fn try_render_texture(
+    src: &Arc<Rgb32f>,
+    info: &SourceInfo,
+    s: &DevelopSettings,
+    req: &RenderRequest,
+    stages: Option<&StageCache>,
+    curves: Option<&[[u8; 256]; 3]>,
+) -> Result<GpuTexture, Fallback> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        if !texture_handles(req) {
+            return Err(Fallback::NotTried);
+        }
+        attempt(
+            s,
+            req,
+            stages,
+            |t: &GpuTexture| (t.width, t.height),
+            |gpu, s, ext, fault| {
+                if gpu.shared { render::render_texture(gpu, src, info, s, req, ext, fault, curves) } else { None }
+            },
+        )
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (src, info, s, req, stages, curves);
+        Err(Fallback::NotTried)
+    }
+}
+
+/// The pixels of a render handed over as a texture ([`try_render_texture`]), read back from the
+/// device: for what can't draw it there (a headless screenshot). `None` once the device is gone.
+pub fn read_texture(t: &GpuTexture) -> Option<lightcraft_raster::Rgba8> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _work = exit::enter()?;
+        let gpu = existing_device()?;
+        gpu.read_texture(&t.texture).map_err(|e| log::warn!("gpu: reading a render texture back: {e}")).ok()
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = t;
+        None
+    }
+}
+
+/// `LIGHTCRAFT_GPU_LOSE_AFTER=<n>`: after `n` GPU renders the device is destroyed, as a driver
+/// reset or GPU hang loses it — to see the app recover (renders back on the CPU; with a device
+/// shared with the window, the restart it offers). A testing switch, like `LIGHTCRAFT_GPU_LIMITS`.
+#[cfg(not(target_arch = "wasm32"))]
+fn lose_device_when_asked(gpu: &ctx::Gpu) {
+    static AFTER: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
+    static DONE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let Some(n) = *AFTER.get_or_init(|| std::env::var("LIGHTCRAFT_GPU_LOSE_AFTER").ok().and_then(|v| v.trim().parse().ok())) else { return };
+    if DONE.fetch_add(1, Ordering::Relaxed) + 1 == n {
+        log::warn!("gpu: LIGHTCRAFT_GPU_LOSE_AFTER={n}: destroying the device");
+        gpu.device.destroy();
+        let _ = gpu.device.poll(wgpu::PollType::Poll);
+    }
+}
+
+/// Run `go` on the GPU with the render's settings, error scopes and failure accounting: its
+/// result, or why the CPU must render instead. `size` names a result in a failure's reason.
+#[cfg(not(target_arch = "wasm32"))]
+fn attempt<T>(
+    s: &DevelopSettings,
+    req: &RenderRequest,
+    stages: Option<&StageCache>,
+    size: impl Fn(&T) -> (usize, usize),
+    go: impl FnOnce(&ctx::Gpu, &DevelopSettings, Option<&GpuStages>, Option<Fault>) -> Option<T>,
+) -> Result<T, Fallback> {
+    // sections switched off with their eye render as if at their defaults (issue #316)
+    let effective = s.effective();
+    let s: &DevelopSettings = &effective;
+    if !enabled() || !handles(req.depth, req.proof.is_some(), req.overlay) {
+        return Err(Fallback::NotTried);
+    }
+    let s = &*lightcraft_pipeline::settings_for(s, req);
+    // in flight until this returns; not tried once the process is ending (issue #620)
+    let _work = exit::enter().ok_or(Fallback::NotTried)?;
+    let gpu = device().ok_or(Fallback::NotTried)?;
+    let ext = stages.map(|c| c.extension::<GpuStages>());
+    let fault = take_fault();
+    // A simulated failure stops GPU use on this thread only (see `BROKEN_HERE`).
+    let stop = |reason: &str| if fault.is_some() { mark_broken_here(reason) } else { mark_broken(reason) };
+    let _ = ctx::take_failure(); // nothing left over from an earlier render on this thread
+    let (r, scoped) = {
+        let _scope = ctx::RenderScope::new(gpu);
+        let errors = ctx::ErrorScopes::push(gpu);
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| go(gpu, s, ext.as_deref(), fault)));
+        (r, errors.pop())
+    };
+    // An error the device raised explains the readback failures that follow it; a buffer
+    // over the limit explains the errors its placeholder raises.
+    let failure = match (ctx::take_failure(), scoped) {
+        (Some(f), _) if f.kind == ctx::FailKind::Limit => Some(f),
+        (f, scoped) => scoped.or(f),
+    };
+    let reason = match (r, failure) {
+        (Err(_), _) => {
+            log::error!("gpu: render failed; using the CPU pipeline from now on");
+            stop("a GPU render panicked");
+            "a GPU render panicked; the GPU is not used again".to_string()
+        }
+        (Ok(r), Some(f)) => {
+            // the view's cached device stages may hold results of the failed passes
+            if let Some(e) = &ext {
+                e.clear();
+            }
+            let what = match r.as_ref().map(&size) {
+                Some((w, h)) => format!("{w}×{h}"),
+                None => "GPU render".into(),
+            };
+            let reason = match f.kind {
+                ctx::FailKind::Fatal => {
+                    stop(&f.reason);
+                    format!("{what}: {}; the GPU is not used again", f.reason)
+                }
+                ctx::FailKind::OutOfMemory => {
+                    gpu.trim(0);
+                    format!("{what}: {}", f.reason)
+                }
+                ctx::FailKind::Limit | ctx::FailKind::Blank => format!("{what}: {}", f.reason),
+            };
+            log::warn!("gpu: rendering on the CPU instead: {reason}");
+            if render::profiling() {
+                eprintln!("  gpu fallback to the CPU: {reason}");
+            }
+            reason
+        }
+        // a device error on another thread or a lost device during the render
+        (Ok(Some(_)), None) if BROKEN.load(Ordering::Relaxed) => {
+            format!("device failure during the render: {}", unavailable_reason().unwrap_or_default())
+        }
+        (Ok(Some(r)), None) => {
+            lose_device_when_asked(gpu);
+            return Ok(r);
+        }
+        // every path of `render::render` that gives up records a failure first; should one
+        // not, the CPU renders it rather than nothing
+        (Ok(None), None) => "GPU render: no image came back".to_string(),
+    };
+    record_fallback(reason.clone());
+    Err(Fallback::Failed(reason))
 }
 
 #[cfg(test)]
@@ -561,5 +743,20 @@ mod tests {
         assert!(!super::handles(OutputDepth::U16, false, Overlay::None));
         assert!(!super::handles(OutputDepth::U8, true, Overlay::None));
         assert!(!super::handles(OutputDepth::U8, false, Overlay::HdrRange));
+    }
+
+    // The window device never asks for more than the adapter has: an adapter with a 4096 px
+    // texture side (older or mobile GPUs, software adapters) would refuse 8192, and the window
+    // wouldn't open; a larger side is the adapter's own
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn the_window_device_never_asks_above_the_adapter() {
+        let adapter = |side| wgpu::Limits { max_texture_dimension_2d: side, ..wgpu::Limits::downlevel_defaults() };
+        for backend in [wgpu::Backend::Metal, wgpu::Backend::Vulkan, wgpu::Backend::Dx12, wgpu::Backend::Gl] {
+            assert_eq!(super::window_limits(backend, adapter(4096)).max_texture_dimension_2d, 4096, "{backend:?}");
+        }
+        assert_eq!(super::window_limits(wgpu::Backend::Metal, adapter(16384)).max_texture_dimension_2d, 16384);
+        assert_eq!(super::window_limits(wgpu::Backend::Gl, adapter(16384)).max_texture_dimension_2d, 8192);
+        assert_eq!(super::window_limits(wgpu::Backend::Vulkan, adapter(4096)), adapter(4096));
     }
 }

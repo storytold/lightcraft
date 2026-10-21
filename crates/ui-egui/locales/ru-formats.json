@@ -296,5 +296,6 @@
   "Already in “{}”": "Уже в «{}»",
   "Move {n} photo{} to “{}”": "Переместить в «{1}» фото: {n}{0:.0}",
   "Move {n} photo{} to “{}”?": "Переместить в «{1}» фото: {n}{0:.0}?",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "В «{1}» перемещено фото: {n}{0:.0}. Правка → Отменить вернёт их."
+  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "В «{1}» перемещено фото: {n}{0:.0}. Правка → Отменить вернёт их.",
+  "The graphics driver stopped responding, so LightCraft can't draw its window any more, and saving the library failed: {e}\n\nUnsaved changes: {n}. If you quit now, they are lost. Free some disk space or reconnect the library's drive, then try again.": "Графический драйвер перестал отвечать, поэтому LightCraft больше не может отрисовывать окно, а библиотеку не удалось сохранить: {e}\n\nНесохранённых изменений: {n}. Если выйти сейчас, они будут потеряны. Освободите место на диске или снова подключите диск с библиотекой и повторите попытку."
 }

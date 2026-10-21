@@ -296,5 +296,6 @@
   "Already in “{}”": "Already in “{}”",
   "Move {n} photo{} to “{}”": "Move {n} photo{} to “{}”",
   "Move {n} photo{} to “{}”?": "Move {n} photo{} to “{}”?",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Moved {n} photo{} to “{}”. Edit → Undo moves them back."
+  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Moved {n} photo{} to “{}”. Edit → Undo moves them back.",
+  "The graphics driver stopped responding, so LightCraft can't draw its window any more, and saving the library failed: {e}\n\nUnsaved changes: {n}. If you quit now, they are lost. Free some disk space or reconnect the library's drive, then try again.": "გრაფიკულმა დრაივერმა შეწყვიტა პასუხი, ამიტომ LightCraft-ს აღარ შეუძლია თავისი ფანჯრის დახატვა, ხოლო ბიბლიოთეკის შენახვა ვერ მოხერხდა: {e}\n\nშეუნახავი ცვლილებები: {n}. თუ ახლა გახვალთ, ისინი დაიკარგება. გაათავისუფლეთ ადგილი დისკზე ან ხელახლა მიაერთეთ ბიბლიოთეკის დისკი და სცადეთ ხელახლა."
 }

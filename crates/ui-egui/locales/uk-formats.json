@@ -296,5 +296,6 @@
   "Already in “{}”": "Уже в «{}»",
   "Move {n} photo{} to “{}”": "Перемістити до «{1}» фото: {n}{0:.0}",
   "Move {n} photo{} to “{}”?": "Перемістити до «{1}» фото: {n}{0:.0}?",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "До «{1}» переміщено фото: {n}{0:.0}. Редагування → Скасувати поверне їх."
+  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "До «{1}» переміщено фото: {n}{0:.0}. Редагування → Скасувати поверне їх.",
+  "The graphics driver stopped responding, so LightCraft can't draw its window any more, and saving the library failed: {e}\n\nUnsaved changes: {n}. If you quit now, they are lost. Free some disk space or reconnect the library's drive, then try again.": "Графічний драйвер перестав відповідати, тому LightCraft більше не може малювати своє вікно, а бібліотеку не вдалося зберегти: {e}\n\nНезбережених змін: {n}. Якщо вийти зараз, їх буде втрачено. Звільніть місце на диску або знову під’єднайте диск із бібліотекою й спробуйте ще раз."
 }

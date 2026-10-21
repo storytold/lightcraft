@@ -296,5 +296,6 @@
   "Already in “{}”": "Již v „{}“",
   "Move {n} photo{} to “{}”": "Přesunout do „{1}“ fotografie: {n}{0:.0}",
   "Move {n} photo{} to “{}”?": "Přesunout do „{1}“ fotografie: {n}{0:.0}?",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Do „{1}“ přesunuto fotografií: {n}{0:.0}. Úpravy → Zpět je vrátí."
+  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Do „{1}“ přesunuto fotografií: {n}{0:.0}. Úpravy → Zpět je vrátí.",
+  "The graphics driver stopped responding, so LightCraft can't draw its window any more, and saving the library failed: {e}\n\nUnsaved changes: {n}. If you quit now, they are lost. Free some disk space or reconnect the library's drive, then try again.": "Grafický ovladač přestal odpovídat, takže LightCraft už nemůže vykreslovat své okno, a knihovnu se nepodařilo uložit: {e}\n\nNeuložené změny: {n}. Pokud nyní aplikaci ukončíte, budou ztraceny. Uvolněte místo na disku nebo znovu připojte disk s knihovnou a zkuste to znovu."
 }

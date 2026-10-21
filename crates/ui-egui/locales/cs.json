@@ -2392,5 +2392,8 @@
   "End Slideshow": "Ukončit prezentaci",
   "Save Current Settings as New Effect Preset…": "Uložit aktuální nastavení jako nové přednastavení efektu…",
   "Manage Effect Presets…": "Spravovat přednastavení efektů…",
-  "Export Effect Presets…": "Exportovat přednastavení efektů…"
+  "Export Effect Presets…": "Exportovat přednastavení efektů…",
+  "LightCraft lost its graphics device": "LightCraft ztratil grafické zařízení",
+  "The graphics driver stopped responding, so LightCraft can't draw its window any more. Your library and edits are saved.\n\nRestart LightCraft to continue.": "Grafický ovladač přestal odpovídat, takže LightCraft už nemůže vykreslovat své okno. Vaše knihovna a úpravy jsou uloženy.\n\nPro pokračování LightCraft restartujte.",
+  "Restart": "Restartovat"
 }

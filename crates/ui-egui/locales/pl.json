@@ -2267,5 +2267,8 @@
   "SDR Shadows": "Cienie SDR",
   "SDR Whites": "Biele SDR",
   "SDR Clarity": "Przejrzystość SDR",
-  "Face Models on the GPU": "Modele twarzy przetwarzane na GPU"
+  "Face Models on the GPU": "Modele twarzy przetwarzane na GPU",
+  "LightCraft lost its graphics device": "LightCraft utracił urządzenie graficzne",
+  "The graphics driver stopped responding, so LightCraft can't draw its window any more. Your library and edits are saved.\n\nRestart LightCraft to continue.": "Sterownik grafiki przestał odpowiadać, więc LightCraft nie może już rysować swojego okna. Twoja biblioteka i zmiany są zapisane.\n\nUruchom ponownie LightCraft, aby kontynuować.",
+  "Restart": "Uruchom ponownie"
 }

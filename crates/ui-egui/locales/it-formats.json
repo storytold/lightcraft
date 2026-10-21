@@ -296,5 +296,6 @@
   "Already in “{}”": "Già in “{}”",
   "Move {n} photo{} to “{}”": "Sposta foto in “{1}” ({n}){0:.0}",
   "Move {n} photo{} to “{}”?": "Spostare le foto in “{1}” ({n})?{0:.0}",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Foto spostate in “{1}”: {n}{0:.0}. Modifica → Annulla le riporta indietro."
+  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Foto spostate in “{1}”: {n}{0:.0}. Modifica → Annulla le riporta indietro.",
+  "The graphics driver stopped responding, so LightCraft can't draw its window any more, and saving the library failed: {e}\n\nUnsaved changes: {n}. If you quit now, they are lost. Free some disk space or reconnect the library's drive, then try again.": "Il driver grafico ha smesso di rispondere, quindi LightCraft non può più disegnare la sua finestra, e il salvataggio della libreria non è riuscito: {e}\n\nModifiche non salvate: {n}. Se esci ora, andranno perse. Libera spazio su disco o ricollega l'unità della libreria, poi riprova."
 }

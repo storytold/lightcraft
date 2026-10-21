@@ -296,5 +296,6 @@
   "Renames {n} face{} across the library. The files are not changed.": "ライブラリ全体で{n}件の顔の名前を変更します。ファイルは変更されません。{:.0}",
   "“{to}” is already a person. Combining them makes one person; Undo separates them again.": "「{to}」はすでに別の人物です。まとめると1人になり、元に戻すと再び分かれます。",
   "{what} merge added at {mp}: its full size, {full}, needs more memory than this computer has": "{what}合成を{mp}で追加しました：フルサイズ（{full}）にはこのコンピューターのメモリが足りません",
-  "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "{what}合成を{mp}で追加しました。パノラマの最大サイズです（フルサイズ：{full}）"
+  "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "{what}合成を{mp}で追加しました。パノラマの最大サイズです（フルサイズ：{full}）",
+  "The graphics driver stopped responding, so LightCraft can't draw its window any more, and saving the library failed: {e}\n\nUnsaved changes: {n}. If you quit now, they are lost. Free some disk space or reconnect the library's drive, then try again.": "グラフィックスドライバーが応答しなくなったため、LightCraft はウインドウを描画できなくなりました。また、ライブラリを保存できませんでした: {e}\n\n保存されていない変更: {n} 件。今終了すると失われます。ディスクの空き容量を増やすか、ライブラリのドライブを接続し直してから、もう一度お試しください。"
 }
