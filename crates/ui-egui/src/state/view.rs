@@ -35,11 +35,22 @@ pub enum RightPanel {
     Info,
     /// The profile browser (part of Edit).
     Profiles,
+    /// Convert Negative (Photo ▸ Convert Negative).
+    Negative,
 }
 
 impl RightPanel {
     pub fn is_edit_tool(self) -> bool {
-        matches!(self, RightPanel::Edit | RightPanel::Profiles | RightPanel::Crop | RightPanel::Remove | RightPanel::Masking | RightPanel::RedEye)
+        matches!(
+            self,
+            RightPanel::Edit
+                | RightPanel::Profiles
+                | RightPanel::Crop
+                | RightPanel::Remove
+                | RightPanel::Masking
+                | RightPanel::RedEye
+                | RightPanel::Negative
+        )
     }
 }
 

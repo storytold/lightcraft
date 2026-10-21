@@ -967,6 +967,23 @@ fn ui_commands_7(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
             panel(app, ctx, RightPanel::RedEye, "Red Eye");
             Ok(Value::Null)
         }
+        "panel.negative" => {
+            panel(app, ctx, RightPanel::Negative, "Convert Negative");
+            Ok(Value::Null)
+        }
+        "photo.convertNegative" => {
+            let Some(id) = app.session.active() else { return Some(Err("no photo selected".into())) };
+            let on = app.session.develop_of(id).is_some_and(|d| d.negative.enabled);
+            if !on && let Err(e) = app.run("develop.negative", json!({})) {
+                return Some(Err(e));
+            }
+            app.ui.right = RightPanel::Negative;
+            app.ui.view = ViewMode::Detail;
+            if !app.ui.tool.starts_with("neg") {
+                app.ui.tool.clear();
+            }
+            Ok(json!({"converted": true}))
+        }
         "panel.info" => {
             panel(app, ctx, RightPanel::Info, "Info");
             Ok(Value::Null)
@@ -1100,6 +1117,11 @@ fn ui_commands_8(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
                     app.ui.right = RightPanel::Edit;
                     app.ui.view = ViewMode::Detail;
                     app.ui.tool = "wbPicker".into();
+                }
+                "negBase" | "negGray" => {
+                    app.ui.right = RightPanel::Negative;
+                    app.ui.view = ViewMode::Detail;
+                    app.ui.tool = tool.into();
                 }
                 other => return Some(Err(format!("unknown tool `{other}`"))),
             }
