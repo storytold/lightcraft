@@ -1564,6 +1564,7 @@ impl Session {
             stages: None,
             view_cache: None,
             display: None,
+            hdr_display: false,
             slide: None,
             preview_cut: None,
         };

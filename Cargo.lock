@@ -1342,8 +1342,7 @@ dependencies = [
 [[package]]
 name = "ecolor"
 version = "0.36.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0656a7530b9e2841ee7a5f983965bdd9840c32f4012f759cfd44b912cced6b34"
+source = "git+https://github.com/JordyUSA/egui?rev=f130de7d8317a873d601af9c7d25a2f2e430644d#f130de7d8317a873d601af9c7d25a2f2e430644d"
 dependencies = [
  "bytemuck",
  "emath",
@@ -1376,8 +1375,7 @@ dependencies = [
 [[package]]
 name = "eframe"
 version = "0.36.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "55ad41fac6e3149abb4866e93df37dbd33baa95db525c3368c944584e95a5dc2"
+source = "git+https://github.com/JordyUSA/egui?rev=f130de7d8317a873d601af9c7d25a2f2e430644d#f130de7d8317a873d601af9c7d25a2f2e430644d"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -1412,8 +1410,7 @@ dependencies = [
 [[package]]
 name = "egui"
 version = "0.36.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dc938cc27cd911415e1e4d151bc56ff9df063d8db081374e87aeb805ea74b2ba"
+source = "git+https://github.com/JordyUSA/egui?rev=f130de7d8317a873d601af9c7d25a2f2e430644d#f130de7d8317a873d601af9c7d25a2f2e430644d"
 dependencies = [
  "accesskit",
  "ahash",
@@ -1432,8 +1429,7 @@ dependencies = [
 [[package]]
 name = "egui-wgpu"
 version = "0.36.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5cef1f6d1bba40b09a4d0d62cb822b81030922cfbf65c5373398c3a3caafc5bd"
+source = "git+https://github.com/JordyUSA/egui?rev=f130de7d8317a873d601af9c7d25a2f2e430644d#f130de7d8317a873d601af9c7d25a2f2e430644d"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -1452,8 +1448,7 @@ dependencies = [
 [[package]]
 name = "egui-winit"
 version = "0.36.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "98466000559d66ba4db786a30448b01483946add4188e7f10f522a27b4fb89cc"
+source = "git+https://github.com/JordyUSA/egui?rev=f130de7d8317a873d601af9c7d25a2f2e430644d#f130de7d8317a873d601af9c7d25a2f2e430644d"
 dependencies = [
  "accesskit_winit",
  "arboard",
@@ -1473,8 +1468,7 @@ dependencies = [
 [[package]]
 name = "egui_glow"
 version = "0.36.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "606ed4167daf341e5753d703285c4c1d562324b2c07aa8f405cd7d066fe58f3b"
+source = "git+https://github.com/JordyUSA/egui?rev=f130de7d8317a873d601af9c7d25a2f2e430644d#f130de7d8317a873d601af9c7d25a2f2e430644d"
 dependencies = [
  "bytemuck",
  "egui",
@@ -1487,8 +1481,7 @@ dependencies = [
 [[package]]
 name = "egui_kittest"
 version = "0.36.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5eb3f3effb2726fee23449293e67acbf6cc6ce35525b1722bd5743bb348114d5"
+source = "git+https://github.com/JordyUSA/egui?rev=f130de7d8317a873d601af9c7d25a2f2e430644d#f130de7d8317a873d601af9c7d25a2f2e430644d"
 dependencies = [
  "dify",
  "eframe",
@@ -1535,8 +1528,7 @@ dependencies = [
 [[package]]
 name = "emath"
 version = "0.36.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "52c8d4141cf0f60fb2f7aefaf352d3ffa5171ef0ab09731c64391801e95e48f1"
+source = "git+https://github.com/JordyUSA/egui?rev=f130de7d8317a873d601af9c7d25a2f2e430644d#f130de7d8317a873d601af9c7d25a2f2e430644d"
 dependencies = [
  "bytemuck",
 ]
@@ -1583,8 +1575,7 @@ dependencies = [
 [[package]]
 name = "epaint"
 version = "0.36.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a0ec0308dc23130fc1a7d4623a8534c2ed069c6dc84e258ee4f3de99615aa1a3"
+source = "git+https://github.com/JordyUSA/egui?rev=f130de7d8317a873d601af9c7d25a2f2e430644d#f130de7d8317a873d601af9c7d25a2f2e430644d"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -1608,8 +1599,7 @@ dependencies = [
 [[package]]
 name = "epaint_default_fonts"
 version = "0.36.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "773fa9c96dd0dbef887e39d0ed6177f141cce4d68e6041df77570aa3702dfa13"
+source = "git+https://github.com/JordyUSA/egui?rev=f130de7d8317a873d601af9c7d25a2f2e430644d#f130de7d8317a873d601af9c7d25a2f2e430644d"
 
 [[package]]
 name = "equator"
@@ -3084,6 +3074,7 @@ dependencies = [
  "egui",
  "lightcraft-codecs",
  "lightcraft-engine",
+ "lightcraft-hdr-display",
  "lightcraft-raster",
  "lightcraft-sysmem",
  "lightcraft-testkit",
@@ -3321,6 +3312,16 @@ dependencies = [
  "log",
  "pollster 1.0.1",
  "wgpu",
+]
+
+[[package]]
+name = "lightcraft-hdr-display"
+version = "0.9.1"
+dependencies = [
+ "egui",
+ "egui-wgpu",
+ "lightcraft-ui-egui",
+ "naga",
 ]
 
 [[package]]

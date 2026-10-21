@@ -35,6 +35,7 @@ lightcraft-preview = { path = "crates/preview" }
 lightcraft-merge = { path = "crates/merge" }
 lightcraft-engine = { path = "crates/engine" }
 lightcraft-ui-egui = { path = "crates/ui-egui" }
+lightcraft-hdr-display = { path = "crates/hdr-display" }
 lightcraft-mcp = { path = "crates/mcp" }
 lightcraft-fetch = { path = "crates/fetch" }
 lightcraft-heif = { path = "crates/heif" }
@@ -87,11 +88,13 @@ candle-core = { version = "=0.9.2", default-features = false }
 candle-nn = { version = "=0.9.2", default-features = false }
 wgpu = { version = "30", default-features = false, features = ["std", "parking_lot", "metal", "vulkan", "dx12", "wgsl"] }
 pollster = "1"
+naga = { version = "30", default-features = false, features = ["wgsl-in"] } # dev-only: validates WGSL shaders in tests (pure Rust, from wgpu)
 
 # ui
 egui = "0.36"
 egui_extras = { version = "0.36", default-features = false }
 eframe = { version = "0.36", default-features = false }
+egui-wgpu = { version = "0.36", default-features = false }
 egui_kittest = "0.36"
 rfd = "0.17"
 muda = { version = "0.21", default-features = false } # native menu bar (macOS: objc2/AppKit, pure Rust; no GTK)
@@ -165,3 +168,20 @@ jpeg-decoder = { opt-level = 3 }
 jpeg-encoder = { opt-level = 3 }
 png = { opt-level = 3 }
 miniz_oxide = { opt-level = 3 }
+
+# HDR display (crates/hdr-display, LR-VIEW-HDR-DISPLAY) needs egui-wgpu's `SurfaceConfig::prefer_hdr`
+# (emilk/egui#8703). Until a release has it, every egui crate comes from egui 0.36.2 plus that one
+# commit (all pinned to one commit of the branch egui-wgpu-hdr-surface-0.36.2, so the crates stay
+# one egui and the lockfile cannot drift). PENDING a maintainer decision:
+# this git patch, or wait for the egui release.
+[patch.crates-io]
+ecolor = { git = "https://github.com/JordyUSA/egui", rev = "f130de7d8317a873d601af9c7d25a2f2e430644d" }
+eframe = { git = "https://github.com/JordyUSA/egui", rev = "f130de7d8317a873d601af9c7d25a2f2e430644d" }
+egui = { git = "https://github.com/JordyUSA/egui", rev = "f130de7d8317a873d601af9c7d25a2f2e430644d" }
+egui-wgpu = { git = "https://github.com/JordyUSA/egui", rev = "f130de7d8317a873d601af9c7d25a2f2e430644d" }
+egui-winit = { git = "https://github.com/JordyUSA/egui", rev = "f130de7d8317a873d601af9c7d25a2f2e430644d" }
+egui_glow = { git = "https://github.com/JordyUSA/egui", rev = "f130de7d8317a873d601af9c7d25a2f2e430644d" }
+egui_kittest = { git = "https://github.com/JordyUSA/egui", rev = "f130de7d8317a873d601af9c7d25a2f2e430644d" }
+emath = { git = "https://github.com/JordyUSA/egui", rev = "f130de7d8317a873d601af9c7d25a2f2e430644d" }
+epaint = { git = "https://github.com/JordyUSA/egui", rev = "f130de7d8317a873d601af9c7d25a2f2e430644d" }
+epaint_default_fonts = { git = "https://github.com/JordyUSA/egui", rev = "f130de7d8317a873d601af9c7d25a2f2e430644d" }

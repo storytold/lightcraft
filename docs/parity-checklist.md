@@ -28,7 +28,7 @@ cited here still exists. Formerly docs/parity.md.
 |---|---:|---:|---:|---:|---:|---:|
 | A. Import (IMP) | 12 | 3 | 1 | 1 | 4/6 (67%) | 5/5 (100%) |
 | B. Library management (LIB) | 22 | 2 | 1 | 2 | 9/9 (100%) | 9/9 (100%) |
-| C. Views & navigation (VIEW) | 16 | 1 | 1 | 0 | 9/9 (100%) | 4/4 (100%) |
+| C. Views & navigation (VIEW) | 16 | 2 | 0 | 0 | 9/9 (100%) | 4/4 (100%) |
 | D. Search & filter (FILT) | 11 | 1 | 1 | 0 | 4/4 (100%) | 4/4 (100%) |
 | E. Metadata (META) | 5 | 1 | 0 | 0 | 2/2 (100%) | 2/2 (100%) |
 | F. Edit panel — global adjustments (EDIT) | 44 | 2 | 3 | 1 | 28/28 (100%) | 13/14 (93%) |
@@ -53,9 +53,9 @@ cited here still exists. Formerly docs/parity.md.
 | Y. Menus | 84 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 78 | 4 | 2 | 1 | 49/52 (94%) | 24/26 (92%) |
 | Lightroom Classic extras | 40 | 23 | 23 | 8 | — | 24/26 (92%) |
-| **Total** | 419 | 61 | 59 | 35 | 194/201 (97%) | 148/161 (92%) |
+| **Total** | 419 | 62 | 58 | 35 | 194/201 (97%) | 148/161 (92%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.4%** of 539 in-scope rows — P0 98.3% of 201 · P1 95.0% of 161 · P2 55.7% of 176.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.5%** of 539 in-scope rows — P0 98.3% of 201 · P1 95.0% of 161 · P2 56.0% of 176.
 <!-- /parity:summary -->
 
 ## Top gaps and shortcut notes
@@ -142,7 +142,7 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 | LR-VIEW-SECONDWINDOW | Second display window [Classic] | P2 | ✅ | `cmd:view.secondWindow`, `crates/ui-egui/src/panels/second.rs` | Window ▸ Second Window (⌘F11): the active photo fitted in its own native window with its own render (a floating panel where there are no native windows); loupe view only (no grid / compare / survey there) |
 | LR-VIEW-CLIPPING | Clipping indicators | P0 | ✅ | `cmd:view.clipping` | |
 | LR-VIEW-HISTOGRAM | Histogram | P0 | ✅ | `cmd:view.histogram`, `crates/ui-egui/src/panels/edit.rs`, `crates/pipeline/src/lib.rs` (`hdr_histogram`) | HDR edits: SDR on the left half, the HDR range (0 to 5 stops above SDR white, a fixed scale) on the right with the headroom limit marked; colour bar (white, or Visualize HDR range's colours when that is on) and SDR / HDR labels; no drag-to-adjust on the histogram; it follows slider drags live (a small render beside the drafts, `Slot::HdrHistogram`) and never drops to the SDR layout mid-drag |
-| LR-VIEW-HDR-DISPLAY | HDR display output | P2 | ⬜ | |, `apps/lightcraft/src/hdr_display.rs` (`choose`, `preferred_hdr_format`) | SDR/HDR decision (platform, surface format, OS headroom, `LIGHTCRAFT_HDR_DISPLAY=0`) is unit-tested and logged at start; always SDR today because eframe configures an 8-bit surface; no OS headroom query yet;  |
+| LR-VIEW-HDR-DISPLAY | HDR display output | P2 | 🟡 | `crates/hdr-display/src/lib.rs`, `crates/ui-egui/src/hdr_view.rs`, `crates/engine/src/media.rs` (`with_hdr_display`), `apps/lightcraft/src/hdr_display.rs` (`choose`, `preferred_hdr_format`), [hdr-display.md](hdr-display.md) | on a window whose surface offers scRGB (egui-wgpu `prefer_hdr`, emilk/egui#8703, used through a git patch until released) an HDR edit's loupe shows its HDR rendition; confirmed on Linux (KDE Plasma Wayland, Intel Xe, Mesa 26), also following the system HDR switch live; macOS (EDR, headroom) and Windows untested; whole-frame loupe only (no zoomed windows, compare or second window); CPU HDR render; the SDR/HDR decision (platform, surface format, `LIGHTCRAFT_HDR_DISPLAY=0`) is unit-tested and logged at start, no OS headroom query yet; Settings ▸ Performance toggle (restart), `LIGHTCRAFT_HDR_DISPLAY=0/1`, `ui.inspect` → `hdrDisplay` |
 
 ## D. Search & filter (FILT)
 

@@ -17,6 +17,7 @@ pub mod date_picker;
 pub mod docking;
 pub mod export_task;
 mod focus_scan;
+pub mod hdr_view;
 pub mod headless;
 pub mod i18n;
 pub mod icons;
@@ -348,6 +349,9 @@ pub struct LightcraftApp {
     pub perf: Perf,
     /// macOS: the host draws the traffic lights over our top bar.
     pub integrated_titlebar: bool,
+    /// Set by the host when the window is HDR (and HDR display is on): HDR edits' loupe renders
+    /// carry their HDR rendition and are painted through it ([`hdr_view`]).
+    pub hdr_presenter: Option<Box<dyn hdr_view::HdrPresenter>>,
     /// The host installed a native menu bar (no in-window menus then).
     pub native_menu: bool,
     /// Shortcuts the native menu bar currently handles (`Cmd+Z`, `G`…): the egui shortcut handler
@@ -372,6 +376,9 @@ pub struct LightcraftApp {
     screenshot_token: u64,
     /// Offscreen context for headless screenshots of the windowed app.
     shadow: Option<headless::HeadlessView>,
+    /// Drawing into `shadow`: the CPU rasterizer drops paint callbacks, so the loupe paints its
+    /// SDR rendition even on an HDR window.
+    pub(crate) offscreen: bool,
     /// Synthetic input events (from the control channel) injected one step per frame.
     pub synthetic: Vec<egui::Event>,
     /// The text the UI last put on the clipboard (`ui.inspect` → `copied`).
@@ -492,11 +499,13 @@ impl LightcraftApp {
             perf: Perf::default(),
             caches: Caches::default(),
             integrated_titlebar: false,
+            hdr_presenter: None,
             native_menu: false,
             native_shortcuts: Default::default(),
             recording_shortcut: None,
             text_focus: false,
             headless_host: false,
+            offscreen: false,
             notices: vec![],
             quit_prompt: None,
             quit_confirmed: false,
@@ -1000,7 +1009,9 @@ impl LightcraftApp {
         // same scroll offsets, open sections, style… as the window
         let memory = main.memory(|m| m.clone());
         view.ctx.memory_mut(|m| *m = memory);
+        self.offscreen = true;
         view.run(headless::HeadlessView::raw_input(size, ppp, time, vec![]), |ui| self.ui(ui));
+        self.offscreen = false;
         let img = capture.then(|| {
             let mut tex = self.renderer.cpu_textures();
             if let (Some((t, ..)), Some(px)) = (&self.merge.preview, &self.merge.preview_pixels) {
@@ -1258,6 +1269,8 @@ impl LightcraftApp {
             let _ = self.session.execute("app.memoryBudget", &serde_json::json!({"mb": mb}));
         }
         self.memory_applied = Some(mb);
+        // an HDR window (scRGB) is colour-managed by the system: no monitor profile on top
+        self.renderer.set_scrgb_window(self.hdr_presenter.is_some());
         // the monitor profile (Settings ▸ Display): previews follow it from the next frame
         if self.display_applied.as_ref() != Some(&self.ui.settings.display_profile) {
             let path = self.ui.settings.display_profile.clone();

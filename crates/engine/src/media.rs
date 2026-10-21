@@ -21,7 +21,7 @@ use std::sync::{Arc, Weak};
 
 use lightcraft_catalog::{MediaKind, Op, Photo, PhotoId, Source};
 use lightcraft_develop::DevelopSettings;
-use lightcraft_pipeline::{Quality, RenderRequest, Rendered, SourceInfo, StageCache};
+use lightcraft_pipeline::{OutputDepth, Quality, RenderRequest, Rendered, SourceInfo, StageCache};
 use lightcraft_preview::{Hash128, Hasher128, Lru, PreviewCache};
 use lightcraft_raster::{Histogram, Rgb32f, Rgba8};
 use serde::{Deserialize, Serialize};
@@ -756,6 +756,9 @@ pub struct RenderJob {
     pub view_cache: Option<(Arc<PreviewCache>, Hash128)>,
     /// Render for this monitor profile ([`Self::with_display`]).
     pub display: Option<Arc<crate::display::Display>>,
+    /// HDR display ([`RenderJob::with_hdr_display`]): also render the HDR rendition into
+    /// [`Rendered::deep`].
+    pub hdr_display: bool,
     /// Compose the render into a slideshow slide ([`Self::with_slide`]).
     pub slide: Option<Arc<crate::slide::SlideCompose>>,
     /// A face tile that can be cut from the raw's embedded preview, tried before `source`
@@ -803,6 +806,27 @@ impl RenderJob {
         // a diagnostic view (visualized range / spots) must never become the photo's cached preview
         if overlay != lightcraft_pipeline::Overlay::None {
             self.view_cache = None;
+        }
+        self
+    }
+
+    /// For an HDR display: an HDR edit's job also renders its HDR rendition
+    /// ([`OutputDepth::F32Hdr`] in sRGB primaries: display-linear, SDR white = 1) into
+    /// [`Rendered::deep`], next to the usual 8-bit SDR rendition. Gets its own result key and never
+    /// comes from the rendered-thumbnail cache (which has no HDR). Left alone for SDR edits,
+    /// overlays, proofs, windows and high-bit-depth requests (those draw the 8-bit image); a
+    /// [draft](Self::draft) renders no HDR rendition (a drag shows SDR until it ends).
+    pub fn with_hdr_display(mut self, on: bool) -> Self {
+        let wanted = on
+            && self.settings.hdr.enabled
+            && self.request.overlay == lightcraft_pipeline::Overlay::None
+            && self.request.proof.is_none()
+            && self.request.window.is_none()
+            && self.request.depth == OutputDepth::U8;
+        if wanted && !self.hdr_display {
+            self.hdr_display = true;
+            self.key ^= 0x5851_f42d_4c95_7f2d;
+            self.cache = None;
         }
         self
     }
@@ -969,6 +993,21 @@ impl RenderJob {
                 // the GPU when there is one.
                 let gpu = self.cache.is_none();
                 let (mut rendered, gpu_fallback) = develop_reporting(src, &info, &self.settings, &self.request, self.stages.as_deref(), gpu);
+                // HDR display: the HDR rendition too, for the window to show (CPU; the 8-bit SDR
+                // rendition stays the image overlays, previews and the histogram use). Not for a
+                // drag's drafts: on the CPU it would make each one 3–5× slower than the GPU's SDR
+                // draft, so a drag shows the SDR rendition and the full render brings HDR back
+                if self.hdr_display && self.request.quality != Quality::Draft {
+                    let hreq = RenderRequest {
+                        depth: OutputDepth::F32Hdr,
+                        space: lightcraft_pipeline::OutputSpace::Srgb,
+                        overlay: lightcraft_pipeline::Overlay::None,
+                        proof: None,
+                        display: None,
+                        ..self.request
+                    };
+                    rendered.deep = develop(src, &info, &self.settings, &hreq, self.stages.as_deref(), false).deep;
+                }
                 // for a display profile: the image goes to the display's values, the histogram
                 // and the cached view preview stay sRGB
                 let mut srgb = None;
@@ -1264,6 +1303,7 @@ impl crate::Session {
             stages: None,
             view_cache: None,
             display: None,
+            hdr_display: false,
             slide: None,
             preview_cut: None,
         })
@@ -1317,6 +1357,7 @@ impl crate::Session {
             stages: None,
             view_cache: None,
             display: None,
+            hdr_display: false,
             slide: None,
             preview_cut: None,
         })
@@ -1371,6 +1412,7 @@ impl crate::Session {
             stages: None,
             view_cache: None,
             display: None,
+            hdr_display: false,
             slide: None,
             preview_cut,
         })

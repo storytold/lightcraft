@@ -429,6 +429,23 @@ fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     // among the backends …), and the GPU state is process-wide, so it may change between frames;
     // a hint that wrapped would move every control below it under the pointer.
     ui.add(egui::Label::new(RichText::new(crate::i18n::tr(&status)).size(11.0).color(t.text_dim)).truncate()).on_hover_text(&status);
+    check(ui, "settings.hdrDisplay", &mut app.ui.settings.hdr_display, "Show HDR photos in HDR on HDR displays");
+    let hdr_status = match (app.hdr_presenter.is_some(), app.ui.settings.hdr_display) {
+        (true, true) => crate::i18n::tr("HDR display active: HDR edits show their highlights brighter than SDR white."),
+        (true, false) => crate::i18n::tr("Turns off after a restart."),
+        (false, true) => crate::i18n::tr("This window isn't HDR (no HDR display or system support, or turned on since the start: restart)."),
+        (false, false) => crate::i18n::tr("Applies after a restart."),
+    };
+    hint(ui, t, hdr_status);
+    if !crate::state::HDR_DISPLAY_DEFAULT {
+        hint(
+            ui,
+            t,
+            crate::i18n::tr(
+                "Off by default on Linux: HDR display needs a native Wayland window, which can't take files dragged in from the file manager.",
+            ),
+        );
+    }
     row(ui, t, crate::i18n::tr("Preview size"), |ui| {
         let opts: Vec<(u32, String)> =
             PREVIEW_LIMITS.iter().map(|e| (*e, if *e == 0 { crate::i18n::tr("Automatic").to_string() } else { format!("{e} px") })).collect();
@@ -622,6 +639,10 @@ fn display_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     });
     if let Some(e) = &app.display_error {
         ui.label(RichText::new(e).size(11.0).color(t.reject));
+    }
+    if app.renderer.scrgb_window() {
+        let note = crate::i18n::tr("This window is HDR: the system manages its colour, so no monitor profile is applied.");
+        ui.label(RichText::new(note).size(11.0).color(t.text_dim));
     }
     if let Some(d) = &current {
         let info = d.describe();

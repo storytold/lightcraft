@@ -1,0 +1,21 @@
+[package]
+name = "lightcraft-hdr-display"
+version.workspace = true
+edition.workspace = true
+rust-version = "1.95"
+license.workspace = true
+description = "LightCraft HDR display (L5): paints HDR loupe renders into an scRGB window through egui-wgpu; no unsafe of its own"
+
+[lints]
+workspace = true
+
+[dependencies]
+lightcraft-ui-egui = { workspace = true }
+egui = { workspace = true }
+
+# desktop only (the web build draws with glow): an empty crate on wasm32
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+egui-wgpu = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+naga = { workspace = true }

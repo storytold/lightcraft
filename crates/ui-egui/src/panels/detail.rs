@@ -546,7 +546,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         native_long,
         texture_side,
         draft,
-        windows: overlay_supports_window(overlay),
+        // (an HDR edit on an HDR display: whole-frame HDR renders, not 8-bit windows)
+        windows: overlay_supports_window(overlay) && !(app.hdr_presenter.is_some() && d.hdr.enabled),
     };
     let mut plan = crate::region::plan(&app.ui.settings, sizes);
     if plan.window_edge.is_some_and(|edge| app.window_refused == Some((id, look, edge))) {
@@ -572,6 +573,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         let job = if interacting { job.draft() } else { job };
         let job = job.with_overlay(overlay).with_proof(app.ui.soft_proof.then_some(app.ui.proof));
         let job = job.with_hidden_grading(app.ui.grading_hidden_for(id));
+        let job = job.with_hdr_display(app.hdr_presenter.is_some());
         app.renderer.request(Slot::Main, job, 100);
         // a drag's draft that renders in a few ms (GPU) is drawn in this frame, not the next (zoomed
         // in, what changes on screen is the window's draft)
@@ -693,7 +695,14 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             return "none";
         };
         let image_rect = fit_texture_rect(r, tex.size);
-        p.with_clip_rect(clip).image(tex.tex.id(), image_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+        match (&app.hdr_presenter, &tex.hdr) {
+            // HDR display: an HDR edit's HDR rendition (a headless screenshot draws on the CPU,
+            // which has no HDR callbacks: the SDR rendition)
+            (Some(hp), Some(px)) if !app.offscreen => hp.paint(&p.with_clip_rect(clip), image_rect, px),
+            _ => {
+                p.with_clip_rect(clip).image(tex.tex.id(), image_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+            }
+        }
         what
     };
     // soft proofing: a paper-white surround and the proof's name, as Lightroom shows it
