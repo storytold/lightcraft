@@ -233,6 +233,9 @@ pub struct LightcraftApp {
     pub(crate) missing_count_test_delay: Option<std::time::Duration>,
     /// Offscreen context for headless screenshots of the windowed app.
     shadow: Option<headless::HeadlessView>,
+    /// The frame being laid out is the offscreen one of a headless screenshot: it has no pointer of
+    /// its own, so it must not end a drag the window's pointer is still holding.
+    drawing_offscreen: bool,
     /// Synthetic input events (from the control channel) injected one step per frame.
     pub synthetic: Vec<egui::Event>,
     /// A gesture was canceled after its synthetic pointer press reached egui. The next

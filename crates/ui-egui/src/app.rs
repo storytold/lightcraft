@@ -69,6 +69,7 @@ impl LightcraftApp {
             #[cfg(test)]
             missing_count_test_delay: None,
             shadow: None,
+            drawing_offscreen: false,
             synthetic: vec![],
             pointer_cleanup: false,
             drop_hover: vec![],
@@ -672,7 +673,7 @@ impl LightcraftApp {
     /// button in no layout (full screen and the slideshow don't run the panels that end it).
     /// The frame a button is released in is left to the drop targets.
     fn end_drags(&mut self, ctx: &egui::Context) {
-        if !self.ui.drag_active() {
+        if self.drawing_offscreen || !self.ui.drag_active() {
             return;
         }
         let (esc, down, released) = ctx.input(|i| (i.key_pressed(egui::Key::Escape), i.pointer.any_down(), i.pointer.any_released()));

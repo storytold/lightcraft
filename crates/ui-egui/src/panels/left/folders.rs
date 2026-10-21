@@ -364,6 +364,31 @@ fn folder_row(app: &mut LightcraftApp, ui: &mut egui::Ui, n: &FolderNode, id: &s
 /// can be reached.
 const SPRING_OPEN_SECONDS: f64 = 0.7;
 
+/// Whether the photo's file is directly in the folder `folder`.
+fn is_in_folder(p: &lightcraft_catalog::Photo, folder: &str) -> bool {
+    match &p.source {
+        lightcraft_catalog::Source::File { path } => std::path::Path::new(path).parent().is_some_and(|d| same_folder(&d.to_string_lossy(), folder)),
+        _ => false,
+    }
+}
+
+/// How many files a drop of `photos` on `folder` moves (`photo.moveToFolder`): the photos already
+/// there stay, and virtual copies of one file move it once.
+fn files_moved(photos: &[&std::sync::Arc<lightcraft_catalog::Photo>], folder: &str) -> usize {
+    let mut paths = std::collections::HashSet::new();
+    let mut other = 0;
+    for p in photos.iter().filter(|p| !is_in_folder(p, folder)) {
+        match &p.source {
+            lightcraft_catalog::Source::File { path } => {
+                paths.insert(path.as_str());
+            }
+            // no file to move: counted as it was, the move refuses it with its own reason
+            _ => other += 1,
+        }
+    }
+    paths.len() + other
+}
+
 /// A Folders row while photos are dragged from the grid: a release moves their files there on
 /// disk (`photo.moveToFolder`, one undo step). The row lights up and the dragged label says where
 /// they will go, as the same gesture onto an album only adds them to it. Held over a closed row,
@@ -386,19 +411,9 @@ fn folder_drop_target(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::R
     } else {
         None
     };
-    let here = |p: &lightcraft_catalog::Photo| match &p.source {
-        lightcraft_catalog::Source::File { path } => std::path::Path::new(path).parent().is_some_and(|d| same_folder(&d.to_string_lossy(), &n.path)),
-        _ => false,
-    };
-    let all_here = !photos.is_empty() && photos.iter().all(|p| here(p));
-    let count = photos.len();
+    let count = files_moved(&photos, &n.path);
+    let all_here = !photos.is_empty() && photos.iter().all(|p| is_in_folder(p, &n.path));
     let released = ui.input(|i| i.pointer.primary_released());
-    let hint = match (&refused, all_here) {
-        (Some(_), _) => crate::i18n::tr("Can't be moved here").to_string(),
-        (None, true) => crate::i18n::tr_format!("Already in “{}”", name),
-        (None, false) => crate::i18n::tr_format!("Move {n} photo{} to “{}”", if count == 1 { "" } else { "s" }, name, n = count),
-    };
-    crate::panels::grid::drag_hint(ui.ctx(), hint);
     if let Some(why) = refused {
         crate::panels::grid::refuse_drop(app, ui.ctx(), crate::i18n::tr("Can't be moved here").to_string(), why, released);
         return;

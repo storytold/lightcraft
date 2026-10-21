@@ -144,6 +144,18 @@ fn esc_gives_up_a_photo_drag_and_does_nothing_else() {
     assert_eq!(toast(&h), "");
 }
 
+/// A headless screenshot draws the UI in an offscreen context that has no pointer: it must not
+/// give up the drag the window is holding.
+#[test]
+fn a_headless_screenshot_during_a_drag_leaves_the_drag() {
+    let mut h = app();
+    let (outside, _) = photos_around(&mut h, GARDEN);
+    drag_photos(&mut h, &outside, &format!("source:album:{GARDEN}"));
+    let main = h.view.ctx.clone();
+    h.app.headless_screenshot(&main, false);
+    assert_eq!(h.app.ui.dragging_photos.as_deref(), Some(&outside[..]), "the window's drag goes on");
+}
+
 /// Esc and the button's release in one frame: the drag is given up, and Esc's own command (Back)
 /// doesn't also run.
 #[test]
