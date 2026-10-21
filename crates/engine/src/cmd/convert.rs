@@ -159,7 +159,7 @@ fn edit_external(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let mut copies = Vec::new();
     for id in ids {
-        copies.push(edit_copy(s, p, id, &opts)?);
+        copies.push(edit_copy(s, p, id, &opts, C)?);
     }
     let new: Vec<lightcraft_catalog::PhotoId> = copies.iter().filter_map(|c| c["id"].as_u64()).map(lightcraft_catalog::PhotoId).collect();
     s.selection = crate::Selection { active: new.first().copied(), ids: new };
@@ -172,14 +172,13 @@ const MAX_EDIT_COPIES: usize = 50;
 
 /// One photo's edit copy for [`edit_external`]: rendered with `opts` next to its original (a demo
 /// photo into `dir`), added to the library and stacked on top of the original, expanded.
-fn edit_copy(s: &mut Session, p: &Value, id: lightcraft_catalog::PhotoId, opts: &crate::export::ExportOptions) -> Result<Value> {
-    const C: &str = "photo.editExternal";
-    let ph = s.catalog.photo(id).cloned().ok_or_else(|| bad(C, format!("no photo {}", id.0)))?;
+fn edit_copy(s: &mut Session, p: &Value, id: lightcraft_catalog::PhotoId, opts: &crate::export::ExportOptions, cmd: &'static str) -> Result<Value> {
+    let ph = s.catalog.photo(id).cloned().ok_or_else(|| bad(cmd, format!("no photo {}", id.0)))?;
     let dir = match &ph.source {
         Source::File { path } => Path::new(path).parent().map(|d| d.to_string_lossy().to_string()).unwrap_or_default(),
         Source::Demo { .. } => match super::str_param(p, "dir") {
             Some(d) => d.to_string(),
-            None => return Err(bad(C, "a generated demo photo has no folder: give `dir`")),
+            None => return Err(bad(cmd, "a generated demo photo has no folder: give `dir`")),
         },
     };
     let mut written = Vec::new();
@@ -190,11 +189,11 @@ fn edit_copy(s: &mut Session, p: &Value, id: lightcraft_catalog::PhotoId, opts: 
         Ok(())
     };
     let to = crate::export::Destination { dir, exact: None };
-    crate::export::export_batch(s, &[id], opts, &to, &mut write, &|path| Path::new(path).exists()).map_err(|e| bad(C, e))?;
+    crate::export::export_batch(s, &[id], opts, &to, &mut write, &|path| Path::new(path).exists()).map_err(|e| bad(cmd, e))?;
     let ext = format!(".{}", opts.format.extension());
-    let out = written.into_iter().find(|w| w.ends_with(&ext)).ok_or_else(|| bad(C, "nothing was written"))?;
+    let out = written.into_iter().find(|w| w.ends_with(&ext)).ok_or_else(|| bad(cmd, "nothing was written"))?;
     let r = s.execute("library.import", &json!({"paths": [out]}))?;
-    let new = r["imported"].get(0).and_then(Value::as_u64).ok_or_else(|| bad(C, "the edit copy could not be added"))?;
+    let new = r["imported"].get(0).and_then(Value::as_u64).ok_or_else(|| bad(cmd, "the edit copy could not be added"))?;
     // stack: the edit on top of the original, expanded so both show
     let _ = s.execute("stack.group", &json!({"ids": [new, id.0], "top": new, "collapsed": false}));
     Ok(json!({"path": out, "id": new, "original": id.0}))
@@ -385,6 +384,24 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"ids": made.iter().map(|i| i.0).collect::<Vec<_>>()}))
 }
 
+/// Render to DNG (Lightroom Classic 15.5): see [`crate::render_dng`]. Here all in one go; more
+/// than one photo shows in the activity stack and can be cancelled between photos (the copies made
+/// until then stay). The desktop app runs the renders on a worker instead.
+fn render_to_dng(s: &mut Session, p: &Value) -> Result<Value> {
+    let job = crate::render_dng::prepare(s, p)?;
+    let n = job.len();
+    let task = (n > 1).then(|| s.activity.start("renderDng", "Rendering to DNG", crate::activity::Cancel::Yes));
+    let (done, cancelled) = job.run(&mut |path, bytes| crate::export::write_file_durable(path, bytes), &mut |i| {
+        let Some(t) = &task else { return true };
+        t.progress(i as u64, n as u64);
+        !t.is_cancelled()
+    });
+    // the row stays up while the copies are imported and stacked
+    let result = crate::render_dng::finish(s, done, cancelled);
+    drop(task);
+    result
+}
+
 pub fn edit_specs() -> Vec<CommandSpec> {
     vec![
         cmd!(
@@ -414,6 +431,19 @@ pub fn edit_specs() -> Vec<CommandSpec> {
             has_active,
             edit_external
         ),
+        CommandSpec {
+            // named photos are validated by `prepare`, so they need no selection (the menu item still does)
+            explicit_targets: true,
+            ..cmd!(
+                "photo.renderToDng",
+                "Render to DNG",
+                ["Photo"],
+                None,
+                "{ids?, colorSpace?: proPhoto (default) | rec2020 | adobeRgb | displayP3 | srgb, dir?} — render each selected photo (or `ids`, at most 500) with its edits as a linear 16-bit float DNG `<name>-Rendered.dng` next to it (a demo photo into `dir`), add each stacked on its original and select them; a batch shows in the activity stack and can be cancelled between photos → {copies: [{path, id, original}], failed: [{id, error}], cancelled}",
+                has_selection,
+                render_to_dng
+            )
+        },
     ]
 }
 
@@ -563,5 +593,82 @@ mod tests {
         s.execute("edit.undo", &json!({})).unwrap();
         let undone = s.catalog.photo(id).unwrap();
         assert!(undone.embedded_lens.is_none() && !undone.develop.optics.lens_profile, "one undo step");
+    }
+
+    fn scratch(tag: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("lc-render-dng-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn render_to_dng_adds_stacked_linear_dngs() {
+        let dir = scratch("stack");
+        let mut s = Session::with_demo();
+        let ids: Vec<_> = s.visible().iter().copied().take(2).collect();
+        let r = s.execute("photo.renderToDng", &json!({"ids": [ids[0].0, ids[1].0], "dir": dir.to_string_lossy()})).unwrap();
+        assert_eq!(r["cancelled"], false);
+        let copies = r["copies"].as_array().unwrap();
+        assert_eq!(copies.len(), 2, "{r}");
+        for (c, orig) in copies.iter().zip(&ids) {
+            let path = c["path"].as_str().unwrap();
+            assert!(path.ends_with("-Rendered.dng"), "{path}");
+            let raw = lightcraft_raw::decode(&std::fs::read(path).unwrap()).unwrap();
+            assert_eq!((raw.cpp, raw.cfa.is_none()), (3, true));
+            let new = PhotoId(c["id"].as_u64().unwrap());
+            assert_eq!(c["original"].as_u64(), Some(orig.0));
+            let st = s.catalog.stack_of(new).unwrap();
+            assert_eq!((st.photos.first(), st.photos.contains(orig)), (Some(&new), true), "stacked on top of its original");
+        }
+        assert_eq!(s.selection.ids.len(), 2, "the new DNGs are selected");
+        assert!(s.activity.list().is_empty(), "the activity row ends with the command");
+        // a second run never overwrites
+        let again = s.execute("photo.renderToDng", &json!({"ids": [ids[0].0], "dir": dir.to_string_lossy()})).unwrap();
+        assert_ne!(again["copies"][0]["path"], copies[0]["path"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn render_to_dng_takes_named_photos_without_a_selection() {
+        let dir = scratch("explicit");
+        let mut s = Session::with_demo();
+        let id = s.visible()[0];
+        s.execute("library.select", &json!({"ids": []})).unwrap();
+        assert!(s.selection.ids.is_empty());
+        let r = s.execute("photo.renderToDng", &json!({"ids": [id.0], "dir": dir.to_string_lossy()})).unwrap();
+        assert_eq!(r["copies"].as_array().map(Vec::len), Some(1), "{r}");
+        // with nothing named and nothing selected it is still disabled
+        s.execute("library.select", &json!({"ids": []})).unwrap();
+        assert!(s.execute("photo.renderToDng", &json!({"dir": dir.to_string_lossy()})).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn render_to_dng_rejects_bad_params_and_cancels_between_photos() {
+        let mut s = Session::with_demo();
+        let id = s.visible()[0];
+        assert!(s.execute("photo.renderToDng", &json!({"ids": [id.0]})).is_err(), "a demo photo needs `dir`");
+        assert!(s.execute("photo.renderToDng", &json!({"ids": [id.0], "dir": "/x", "colorSpace": "cmyk"})).is_err());
+        let dir = scratch("cancel");
+        let ids: Vec<u64> = s.visible().iter().take(6).map(|i| i.0).collect();
+        let activity = s.activity.clone();
+        let stop = std::thread::spawn(move || {
+            let t0 = std::time::Instant::now();
+            while t0.elapsed().as_secs() < 30 {
+                if let Some(t) = activity.list().into_iter().find(|t| t.kind == "renderDng" && t.cancellable) {
+                    activity.cancel(t.id).unwrap();
+                    return true;
+                }
+                std::thread::yield_now();
+            }
+            false
+        });
+        let r = s.execute("photo.renderToDng", &json!({"ids": ids, "dir": dir.to_string_lossy()})).unwrap();
+        assert!(stop.join().unwrap(), "the batch showed a cancellable activity row");
+        assert_eq!(r["cancelled"], true, "{r}");
+        assert!(r["copies"].as_array().unwrap().len() < 6);
+        assert!(s.activity.list().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

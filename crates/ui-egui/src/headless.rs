@@ -2338,6 +2338,43 @@ mod tests {
         let _ = std::fs::remove_dir_all(&out);
     }
 
+    /// Photo ▸ Render to DNG renders on a worker: the request answers at once, the window keeps
+    /// drawing frames with the activity row up, and the DNGs arrive stacked on their originals.
+    #[test]
+    fn render_to_dng_keeps_the_window_drawing() {
+        let mut h = demo([1000.0, 700.0]);
+        let t = Duration::from_secs(30);
+        let out = std::env::temp_dir().join(format!("lc-render-dng-ui-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&out);
+        std::fs::create_dir_all(&out).unwrap();
+        h.app.services.write_shared = Some(Arc::new(|p: &str, bytes: &[u8]| lightcraft_engine::export::write_file(p, bytes)));
+        let ids: Vec<u64> = h.app.session.visible_cloned().iter().take(4).map(|p| p.0).collect();
+        let started = Instant::now();
+        let r = h.request("engine.execute", json!({"command": "photo.renderToDng", "params": {"ids": ids, "dir": out.to_string_lossy()}}), t);
+        assert_eq!((r["ok"].as_bool(), r["result"]["background"].as_bool()), (Some(true), Some(true)), "{r}");
+        assert!(h.app.render_dng.is_some(), "the renders run on a worker");
+        let row = h.app.session.activity.list().into_iter().find(|r| r.kind == "renderDng").expect("its activity row");
+        assert!(row.cancellable);
+        let mut frames = 0;
+        while h.app.render_dng.is_some() && started.elapsed() < Duration::from_secs(120) {
+            h.step();
+            frames += 1;
+        }
+        assert!(h.app.render_dng.is_none(), "the batch finished");
+        assert!(frames > 1, "frames were drawn while the DNGs rendered ({frames})");
+        let last = h.app.last_render_dng.clone().expect("the batch reports");
+        let copies = last["copies"].as_array().unwrap();
+        assert_eq!(copies.len(), 4, "{last}");
+        for c in copies {
+            let new = lightcraft_catalog::PhotoId(c["id"].as_u64().unwrap());
+            let orig = lightcraft_catalog::PhotoId(c["original"].as_u64().unwrap());
+            let st = h.app.session.catalog.stack_of(new).expect("stacked");
+            assert!(st.photos.first() == Some(&new) && st.photos.contains(&orig));
+        }
+        assert!(h.app.session.activity.list().iter().all(|r| r.kind != "renderDng"));
+        let _ = std::fs::remove_dir_all(&out);
+    }
+
     /// Issue #236 review: control requests run on the UI thread, which must not wait minutes for
     /// Photos. `export.addToPhotos` and `app.export {addToPhotos}` without `background` answer at
     /// once with the running job; the app announces the outcome when Photos is done.

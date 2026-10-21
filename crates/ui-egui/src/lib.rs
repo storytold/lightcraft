@@ -34,6 +34,7 @@ pub mod print_view;
 pub mod recheck;
 pub mod region;
 pub mod render;
+pub mod render_dng_task;
 pub mod shortcuts;
 pub mod sidebar;
 pub mod slideshow_export;
@@ -447,6 +448,9 @@ pub struct LightcraftApp {
     pub shown_library: Option<u64>,
     /// A background export in progress.
     pub export: Option<export_task::ExportTask>,
+    /// A background Photo ▸ Render to DNG in progress, and the last one's result.
+    pub render_dng: Option<render_dng_task::RenderDngTask>,
+    pub last_render_dng: Option<serde_json::Value>,
     /// Background file-system work of other commands (Find Missing Photos, auto import…).
     pub tasks: tasks::Tasks,
     /// The files of the last finished background export (`ui.inspect` → `export.last`).
@@ -542,6 +546,8 @@ impl LightcraftApp {
             lightroom_result: None,
             shown_library: None,
             export: None,
+            render_dng: None,
+            last_render_dng: None,
             tasks: Default::default(),
             last_export_result: None,
             slideshow_export_reported: true,
@@ -1436,6 +1442,8 @@ impl LightcraftApp {
         self.hover_preview = None;
         self.ai_mask_detail(&ctx);
         self.place_names_outcome(&ctx);
+        // also in full-screen preview, so a finished render isn't left waiting
+        render_dng_task::poll(self, &ctx);
         if self.ui.fullscreen {
             // full-screen preview: the photo alone on black
             egui::CentralPanel::default()

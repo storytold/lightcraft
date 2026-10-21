@@ -69,6 +69,7 @@ pub mod print_pdf;
 pub mod profile_refs;
 pub mod proof;
 pub mod rename;
+pub mod render_dng;
 pub mod segment;
 pub mod sidecar;
 pub mod slide;
