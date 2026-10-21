@@ -354,8 +354,8 @@ fn hash_of(parts: impl std::hash::Hash) -> u64 {
     BuildHasherDefault::<DefaultHasher>::default().hash_one(parts)
 }
 
-/// What a render resolves to before any pixel work: the effective settings (profile and Upright
-/// applied), the geometric frame, the output size and the stage-cache keys. Shared by the CPU
+/// What a render resolves to before any pixel work: the effective settings (profile, section toggles
+/// and Upright applied), the geometric frame, the output size and the stage-cache keys. Shared by the CPU
 /// renderer and the GPU renderer (`lightcraft-gpu`), so both key their caches identically.
 pub struct Plan<'a> {
     pub settings: Cow<'a, DevelopSettings>,
@@ -391,12 +391,31 @@ pub struct Plan<'a> {
 /// Long edge of the small render a windowed render estimates the whole frame's airlight from.
 const AIRLIGHT_PROXY_EDGE: usize = 384;
 
+/// Preserve an owned input when a resolver borrows that exact unchanged value.
+/// A different borrowed value is copied; an owned resolver result is moved through.
+fn resolve_settings<'a>(
+    settings: Cow<'a, DevelopSettings>,
+    resolve: impl for<'s> FnOnce(&'s DevelopSettings) -> Cow<'s, DevelopSettings>,
+) -> Cow<'a, DevelopSettings> {
+    match settings {
+        Cow::Borrowed(s) => resolve(s),
+        Cow::Owned(s) => {
+            let replacement = match resolve(&s) {
+                Cow::Borrowed(b) if std::ptr::eq(b, &s) => None,
+                resolved => Some(resolved.into_owned()),
+            };
+            Cow::Owned(replacement.unwrap_or(s))
+        }
+    }
+}
+
 /// Resolve `s` against `src` for `req` (see [`Plan`]).
 pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &RenderRequest) -> Plan<'a> {
-    let mut settings: Cow<'a, DevelopSettings> = match profiles::effective(s) {
-        Cow::Borrowed(b) => upright::resolve(src, info, b),
-        Cow::Owned(o) => Cow::Owned(upright::resolve(src, info, &o).into_owned()),
-    };
+    // Bypass user edits before the independent SDR rendition offsets and profile look.
+    // Resolve this once in the plan shared by both renderers, preserving the HDR offset order.
+    let settings = resolve_settings(s.effective(), |s| settings_for(s, req));
+    let settings = resolve_settings(settings, profiles::effective);
+    let mut settings = resolve_settings(settings, |s| upright::resolve(src, info, s));
     visualize::adjust_settings(req.overlay, &mut settings);
     // a window must not choose a spot's source from the pixels it happens to hold: fix them
     // from a fixed-size render of the whole frame first
@@ -417,7 +436,9 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
     let (frame, w, h) = match req.window {
         Some(win) => {
             let win = win.clamped(full_w, full_h);
-            if s.section_enabled("effects") && (s.effects.dehaze != 0.0 || s.masks.iter().any(|m| m.adjust.dehaze != 0.0)) {
+            // Global Effects are already bypassed in effective settings; masks remain independent.
+            // Match the masks that masks::evaluate actually renders.
+            if s.effects.dehaze != 0.0 || s.masks.iter().any(|m| m.visible && !m.components.is_empty() && m.adjust.dehaze != 0.0) {
                 let k = (AIRLIGHT_PROXY_EDGE as f64 / full_w.max(full_h) as f64).min(1.0);
                 let (pw, ph) = (((full_w as f64 * k).round() as usize).max(1), ((full_h as f64 * k).round() as usize).max(1));
                 fixed_air = Some(local::frame_airlight(src, info, s, &frame, pw, ph));
@@ -536,11 +557,8 @@ enum Src<'a> {
 }
 
 fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, cache: Option<&StageCache>) -> Rendered {
-    // sections switched off with their eye render as if at their defaults (issue #316)
-    let effective = s.effective();
-    let edit: &DevelopSettings = &effective;
-    let rendition = settings_for(edit, req);
-    let s: &DevelopSettings = &rendition;
+    // Keep the original HDR edit for the range overlay; the plan resolves the rendition.
+    let edit = s;
     // `Instant::now()` panics on wasm32-unknown-unknown: only read the clock when profiling.
     let lap = |what: &str, t: &mut Option<std::time::Instant>| {
         if let Some(t) = t {
@@ -738,3 +756,6 @@ mod tests_nr_scale;
 mod tests_tone;
 #[cfg(test)]
 mod tests_window;
+
+#[cfg(test)]
+mod tests_sections;

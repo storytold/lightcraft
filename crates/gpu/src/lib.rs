@@ -460,13 +460,9 @@ pub fn try_render(
 ) -> Result<Rendered, Fallback> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        // sections switched off with their eye render as if at their defaults (issue #316)
-        let effective = s.effective();
-        let s: &DevelopSettings = &effective;
         if !enabled() || !handles(req.depth, req.proof.is_some(), req.overlay) {
             return Err(Fallback::NotTried);
         }
-        let s = &*lightcraft_pipeline::settings_for(s, req);
         // in flight until this returns; not tried once the process is ending (issue #620)
         let _work = exit::enter().ok_or(Fallback::NotTried)?;
         let gpu = device().ok_or(Fallback::NotTried)?;
