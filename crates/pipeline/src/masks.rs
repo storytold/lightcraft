@@ -550,7 +550,7 @@ pub fn push_dabs(dabs: &mut Vec<Point>, prev: Option<Point>, q: Point, r: f64) -
         let n = (dist / dab_spacing(r)).ceil();
         // a hostile or degenerate segment (huge) gets no in-between dabs rather than a huge
         // allocation: 1 M dabs is far more than any on-screen stroke needs
-        let n = if n.is_finite() { n.clamp(0.0, 1_000_000.0) as usize } else { 0 };
+        let n = if n.is_finite() && n <= 1_000_000.0 { n.max(0.0) as usize } else { 0 };
         for k in 1..n {
             dabs.push(prev.lerp(q, k as f64 / n as f64));
         }
@@ -690,6 +690,23 @@ fn rasterize_brush(strokes: &[BrushStroke], frame: &Frame, w: usize, h: usize, i
 mod tests {
     use super::*;
     use lightcraft_develop::{DevelopSettings, MaskComponent};
+
+    #[test]
+    fn oversized_brush_segments_skip_intermediate_dabs() {
+        let mut dabs = vec![Point::new(10.0, 10.0)];
+        let far = Point::new(10_000_000.0, 10.0);
+        assert!(push_dabs(&mut dabs, Some(Point::new(10.0, 10.0)), far, 2.0));
+        assert_eq!(dabs.len(), 2, "an extreme segment must not allocate a million intermediate dabs");
+        assert_eq!(dabs.last(), Some(&far));
+
+        // Ordinary feathered-brush paths still get overlapping dabs and their endpoint.
+        let mut regular = vec![Point::new(10.0, 10.0)];
+        let end = Point::new(30.0, 10.0);
+        assert!(push_dabs(&mut regular, Some(Point::new(10.0, 10.0)), end, 4.0));
+        assert_eq!(regular.len(), 21);
+        assert_eq!(regular.last(), Some(&end));
+        assert!(regular.windows(2).all(|pair| pair[0].dist(pair[1]) <= dab_spacing(4.0)));
+    }
 
     fn frame(w: usize, h: usize) -> Frame {
         Frame::new(w, h, &DevelopSettings::default(), true)
