@@ -1552,7 +1552,6 @@
   "Photo Merge": "Fotosammanfogning",
   "photo waiting": "foto väntar",
   "Photo ▸ Edit in External Editor (⇧⌘E) renders a 16-bit TIFF copy, stacks it with the original and opens it here (an app name on macOS, a program path elsewhere).": "Foto → Redigera i externt program (⇧⌘E) renderar en 16-bitars TIFF-kopia, staplar den med originalet och öppnar den här (ett appnamn på macOS, en programsökväg på andra system).",
-  "Photo ▸ Edit In ▸ Edit in PhotoCraft (⇧⌘E, or right-click a photo) renders a copy with your edits, stacks it with the original and opens it in PhotoCraft. Save there and the copy updates here. As PSD, PhotoCraft saves straight back to it. Leave the location empty unless you use a portable copy.": "Foto → Redigera i → Redigera i PhotoCraft (⇧⌘E, eller högerklicka på ett foto) renderar en kopia med dina ändringar, staplar den med originalet och öppnar den i PhotoCraft. Spara där så uppdateras kopian här. Som PSD sparar PhotoCraft direkt tillbaka till den. Lämna platsen tom om du inte använder en portabel kopia.",
   "PhotoCraft": "PhotoCraft",
   "Photos": "Foton",
   "Photos are shown through your monitor's ICC profile, so colours are right on wide-gamut and calibrated displays, and the Detail view uses the display's whole gamut. The histogram, the preview caches and exports are not affected.": "Foton visas genom bildskärmens ICC-profil, så att färgerna blir rätt på kalibrerade skärmar och skärmar med brett färgomfång, och vyn Detalj använder skärmens hela färgomfång. Histogrammet, förhandsgranskningscacharna och exporter påverkas inte.",
@@ -2459,5 +2458,9 @@
   "The Tags button lists placeholders for the template, such as {date} or {seq}. Each file is renamed on disk along with its XMP sidecar; a name that is taken gets -1, -2…": "Knappen Taggar visar platshållare för mallen, till exempel {date} eller {seq}. Varje fil byter namn på disken tillsammans med sin XMP-sidofil; ett namn som redan finns får -1, -2…",
   "Top bar": "Övre fältet",
   "Tool strip": "Verktygsfält",
-  "Bottom bar": "Nedre fältet"
+  "Bottom bar": "Nedre fältet",
+  "Model installation failed": "Modellinstallationen misslyckades",
+  "starting…": "startar…",
+  "Edit In": "Redigera i",
+  "Photo > Edit In > Edit in PhotoCraft (⇧⌘E, or right-click a photo) renders a copy with your edits, stacks it with the original and opens it in PhotoCraft. Save there and the copy updates here. As PSD, PhotoCraft saves straight back to it. Leave the location empty unless you use a portable copy.": "Foto > Redigera i > Redigera i PhotoCraft (⇧⌘E, eller högerklicka på ett foto) renderar en kopia med dina ändringar, staplar den med originalet och öppnar den i PhotoCraft. Spara där så uppdateras kopian här. Som PSD sparar PhotoCraft direkt tillbaka till den. Lämna platsen tom om du inte använder en portabel kopia."
 }

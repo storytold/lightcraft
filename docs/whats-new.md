@@ -394,6 +394,21 @@
   are redrawn; the camera's own embedded preview, shown for an unedited raw until its render is ready, is unchanged.
 
 
+### Settings text can be read in every theme
+
+- What Settings says can be read in every theme. Its explanations, the text a box shows while it is empty, "In Use"
+  on a theme's card and the lines that warn or refuse now stand at least 4.5:1 against what they are on (the
+  explanations were 4.2:1 in Charcoal and 4.3:1 in Silver, "In Use" 2.9:1 in Charcoal); the borders of text boxes,
+  checkboxes, radio buttons and buttons stand 3:1, where they were 1.6 to 1.7:1. The AI Denoise page's own lines,
+  the GPU line under Rendering and the star that marks a favourite theme are read the same way. The colours of the rest of
+  LightCraft are as they were.
+- The hint under External Editing drew two empty boxes where its menu path had arrows; it reads "Photo > Edit In >
+  Edit in PhotoCraft" now.
+- Photo ▸ Edit In, Edit in PhotoCraft and Edit in Other Editor have names in all seventeen languages, the ones the
+  hint under External Editing gives.
+- Sentences and names in Settings that some languages had no word for (External Editing and its hints, the
+  Monitor tab, the model installation messages) are in every language now. "(library default)" and "starting…" are
+  translated too.
 ### Tab leaves the name field in New Album, New Smart Album and the name prompts
 - In New Album, New Smart Album, Save Metadata Preset and the other dialogs with one name field, the field has the
   keyboard focus when the dialog opens, and Tab now moves on to the check box, Cancel and OK (Shift+Tab goes back).

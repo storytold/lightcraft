@@ -299,7 +299,7 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     });
     // what is wrong with the user's own catalog (catalog.json in the models folder), if anything
     for e in list["catalog"]["errors"].as_array().into_iter().flatten().filter_map(Value::as_str).take(3) {
-        ui.add(egui::Label::new(RichText::new(format!("catalog.json: {e}")).font(t.font(11.5)).color(t.caution)).wrap());
+        ui.add(egui::Label::new(RichText::new(format!("catalog.json: {e}")).font(t.font(11.5)).color(t.legible(t.caution, t.chrome, 4.5))).wrap());
     }
     if let Some(d) = all.iter().find(|m| m["role"] == "detector") {
         ui.add_space(4.0);
