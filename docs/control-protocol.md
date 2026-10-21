@@ -1,13 +1,41 @@
 # Control protocol
 
 `lightcraft --control 7980` (or `LIGHTCRAFT_CONTROL_PORT=7980`) starts a JSON-lines server on
-`127.0.0.1:7980` (loopback only). One request per line, one reply per line, in order:
+`127.0.0.1:7980` (loopback only). One request per line, one reply per line, in order. The first request
+on every connection authenticates (see [Authentication](#authentication)):
 
 ```text
+→ {"id": 0, "method": "auth", "params": {"token": "<64 hex digits>"}}
+← {"id": 0, "ok": true, "result": {"authenticated": true}}
 → {"id": 1, "method": "engine.execute", "params": {"command": "photo.rate", "params": {"rating": 4}}}
 ← {"id": 1, "ok": true, "result": null}
 ← {"id": 2, "ok": false, "error": "unknown command `nope`"}
 ```
+
+## Authentication
+
+Loopback keeps other machines out, but not other programs on this one, or a web page that gets the
+browser to send a line to the port. So the first request on each connection must be `auth` with the
+run's token; until then nothing else runs. A connection that opens with any other request, a missing
+or wrong token, or a line that isn't a request gets one error reply (`authentication required` /
+`wrong control token`; it never contains the token) and is closed.
+
+- **The token:** 64 hex digits (32 random bytes). The app makes a fresh one each run, or uses
+  `--control-token HEX` / `LIGHTCRAFT_CONTROL_TOKEN=HEX` when given (handy for scripts that start the
+  app themselves).
+- **Where clients find it:** the app writes it to `control-token-<port>` in its settings folder
+  (`%APPDATA%\LightCraft` on Windows, `~/Library/Application Support/LightCraft` on macOS,
+  `~/.config/lightcraft` elsewhere, `LightCraftData` beside the program in portable mode, or
+  `LIGHTCRAFT_CONFIG_DIR`); on Unix only you can read it. A page in
+  a browser can't read files, and the HTTP request line it must send first is refused anyway.
+  Without a settings folder (`LIGHTCRAFT_CONFIG_DIR` set empty) a fresh token is printed on stderr.
+- **Clients:** `lightcraft-cli run --connect` and `lightcraft-cli mcp --connect` send
+  `LIGHTCRAFT_CONTROL_TOKEN` if set, else the token in that file for the port they connect to, and
+  report a refused token as such. [`docs/showcase/run.py`](showcase/run.py) does the same.
+  Implementation: `crates/engine/src/control_auth.rs`; PhotoCraft's control port uses the same
+  `auth` request.
+
+Anyone who can read your settings folder can drive the app, so only enable the port when you need it.
 
 Requests are answered on the UI thread between frames (timeout 60 s). A request is given up
 if the app has not started it and draws no frame for 5 s. The reply is then `{"ok": false, "error": "the app drew no frame for 5 s, …"}`,
@@ -24,7 +52,7 @@ optional; blank lines are skipped). Anything else — text that isn't JSON, a JS
 it on that connection runs. This keeps an HTTP request (for example a web page's cross-origin `fetch` to
 `127.0.0.1:<port>`) from smuggling a command in its body: its request line is rejected first. Junk never reaches the
 UI thread, and at most 16 connections are served at once (further ones get an error line and are closed). Clients
-that hit an error reply should reconnect. The port has no authentication, so only enable it when you need it. The MCP server's connect
+that hit an error reply should reconnect (and authenticate again). The MCP server's connect
 mode ([mcp.md](mcp.md)) is a thin layer over this channel. Implementation:
 `crates/ui-egui/src/control.rs` (methods) and `apps/lightcraft/src/control_server.rs` (transport).
 
