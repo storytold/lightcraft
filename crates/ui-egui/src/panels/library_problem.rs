@@ -75,10 +75,18 @@ fn open(app: &mut LightcraftApp, path: Option<String>) {
     }
 }
 
-/// Clear the problem once a library is open (e.g. through Settings → Open Library…).
+/// Clear the problem once a library is open (e.g. through Settings → Open Library…, or Choose
+/// Another Library… whose folder dialog answered after `open` returned), importing the files that
+/// waited for it.
 pub fn logic(app: &mut LightcraftApp) {
     if app.library_problem.is_some() && app.session.library.is_some() {
-        app.library_problem = None;
+        let files = app.library_problem.take().map(|p| p.pending_import).unwrap_or_default();
+        // in the background, like files dropped on the window (issue #374)
+        if !files.is_empty()
+            && let Err(e) = crate::import::start_paths(app, files)
+        {
+            log::warn!("import: {e}");
+        }
     }
 }
 

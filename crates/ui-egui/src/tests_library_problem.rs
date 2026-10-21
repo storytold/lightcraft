@@ -101,3 +101,51 @@ fn unopenable_library_asks_instead_of_running_a_demo() {
     drop(h);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Choose Another Library… on the desktop, whose folder dialog answers later (`pick::poll`): the
+/// files waiting for a library (launch arguments, photos opened from Finder) go into the chosen
+/// one, not away with the window.
+#[test]
+fn files_waiting_for_a_library_go_into_one_chosen_in_a_background_dialog() {
+    let dir = std::env::temp_dir().join(format!("lc-ui-libproblem-choose-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let img = lightcraft_raster::Rgba8 { width: 8, height: 8, data: vec![[90, 3, 9, 255]; 64] };
+    let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+    let photo = dir.join("a.png");
+    std::fs::write(&photo, png).unwrap();
+    // the library location is a file: the launch can't open it
+    let broken = dir.join("broken");
+    std::fs::write(&broken, b"not a library").unwrap();
+    let mut session = lightcraft_engine::Session::new().with_fs();
+    let err = session.open_library(&broken, false).unwrap_err().to_string();
+    let asked: std::sync::Arc<std::sync::Mutex<Vec<std::sync::mpsc::Sender<Vec<String>>>>> = Default::default();
+    let a = asked.clone();
+    let mut app = LightcraftApp::new(
+        session,
+        Services {
+            pick_folder: Some(Box::new(|| None)),
+            picker: Some(Box::new(move |_| {
+                let (tx, rx) = std::sync::mpsc::channel();
+                a.lock().unwrap().push(tx);
+                Ok(rx)
+            })),
+            ..Default::default()
+        },
+    );
+    app.library_problem =
+        Some(LibraryProblem { pending_import: vec![photo.to_string_lossy().to_string()], ..LibraryProblem::new(broken.to_string_lossy(), err) });
+    let mut h = Headless::new(app, [1300.0, 900.0], 1.0);
+    h.settle(T);
+    assert_eq!(h.request("ui.clickWidget", json!({"id": "button:libraryChoose"}), T)["ok"], true);
+    h.step_until(T, |_| !asked.lock().unwrap().is_empty());
+    let chosen = dir.join("chosen");
+    let answer = asked.lock().unwrap().pop().expect("a folder dialog");
+    answer.send(vec![chosen.to_string_lossy().to_string()]).unwrap();
+    h.step_until(T, |h| h.app.session.library.is_some() && h.app.import.is_none() && h.app.session.catalog.len() == 1);
+    assert_eq!(h.app.session.library.as_ref().map(|l| l.dir.clone()), Some(chosen));
+    assert!(h.app.library_problem.is_none());
+    assert_eq!(h.app.session.catalog.len(), 1, "the waiting photo is in the chosen library");
+    drop(h);
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -1,0 +1,26 @@
+[package]
+name = "lightcraft-opendocs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "LightCraft opendocs (L0): files macOS hands the app from Finder, the Dock or another app's Open With. Allowed `unsafe` (adds one Objective-C method), like sysmem."
+
+# Opts out of the workspace lints only to keep `unsafe_code = "deny"` overridable for the macOS
+# module below, as in crates/sysmem; every other crate root has `#![forbid(unsafe_code)]`. See
+# AGENTS.md and craftrules standards/never-crash.md ("isolated helper library crate").
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+
+[dependencies]
+log = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# All already built for winit and muda: no new crate, only features.
+block2 = "0.6"
+objc2 = { workspace = true }
+objc2-app-kit = { workspace = true }
+objc2-foundation = { workspace = true, features = ["block2", "NSEnumerator", "NSNotification", "NSOperation", "NSString", "NSURL"] }

@@ -74,6 +74,7 @@ impl eframe::App for App {
         self.1.tick(&mut self.0, ctx);
     }
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
+        deliver_opened(&mut self.0, raw, lightcraft_opendocs::take());
         self.0.raw_input_hook(raw);
     }
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
@@ -814,6 +815,35 @@ fn launch_imports_in(args: &[String], cwd: Option<&std::path::Path>, home: Optio
     (files, notices)
 }
 
+/// A file the system asked LightCraft to open (`lightcraft_opendocs`), handed to the UI as a file
+/// dropped on the window (as egui-winit hands over a real drop).
+#[derive(Debug)]
+struct OpenedFile(std::path::PathBuf);
+
+impl egui::DroppedFile for OpenedFile {
+    fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+    fn bytes(&self) -> Result<Vec<u8>, String> {
+        std::fs::read(&self.0).map_err(|e| e.to_string())
+    }
+}
+
+fn opened_as_dropped(paths: Vec<String>) -> impl Iterator<Item = egui::DroppedFileHandle> {
+    paths.into_iter().map(|p| std::sync::Arc::new(OpenedFile(p.into())) as egui::DroppedFileHandle)
+}
+
+/// Photos opened from Finder or another app while LightCraft runs (macOS, issue #506): handled
+/// like files dropped on the window. While the window asking about a library that didn't open is
+/// up, they wait with the launch files for the user's choice: imported now, they would go into the
+/// temporary session, whose catalog the library the user then opens replaces.
+fn deliver_opened(app: &mut LightcraftApp, raw: &mut egui::RawInput, opened: Vec<String>) {
+    match app.library_problem.as_mut() {
+        Some(p) if !p.dismissed => p.pending_import.extend(opened),
+        _ => raw.dropped_files.extend(opened_as_dropped(opened)),
+    }
+}
+
 /// Where the log files live: `logs` in the settings folder, next to `ui.json` (see `logging`).
 /// None with `LIGHTCRAFT_NO_PREFS` (tests, scripts), so those runs don't rotate away the user's logs.
 fn log_dir() -> Option<std::path::PathBuf> {
@@ -953,6 +983,9 @@ fn main() -> eframe::Result {
             b.with_x11();
         }));
     }
+    // macOS hands photos opened from Finder or another app to the running app, not as arguments
+    // (issue #506); before the event loop exists, so the ones it was launched with arrive too
+    lightcraft_opendocs::install();
     let started = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         eframe::run_native(
             "LightCraft",
@@ -961,6 +994,12 @@ fn main() -> eframe::Result {
                 // the window's renderer is up (eframe calls this after creating it)
                 win_files_app.started(window_renderer);
                 came_up_app.store(true, std::sync::atomic::Ordering::Relaxed);
+                // photos the app was opened with from Finder or another app (macOS) are here by now:
+                // imported like the ones named as arguments; any that come later, like dropped files
+                let (opened, opened_notices) = launch_imports(&lightcraft_opendocs::take());
+                let files = [files, opened].concat();
+                let ctx = cc.egui_ctx.clone();
+                lightcraft_opendocs::set_waker(move || ctx.request_repaint());
                 let (mut session, problem) = open_session(in_memory, library_dir, seed_demo && files.is_empty());
                 // AI masks: the SAM 3 checkpoint (facebook/sam3) in <config>/models/sam3, or LIGHTCRAFT_SAM3_DIR
                 // (never required: without it, AI masks offer to download it; see docs/ai-masks.md)
@@ -976,6 +1015,7 @@ fn main() -> eframe::Result {
                 app.integrated_titlebar = cfg!(target_os = "macos");
                 app.notices.extend(prefs_warning);
                 app.notices.extend(launch_notices);
+                app.notices.extend(opened_notices);
                 app.notices.extend(window_notice);
                 app.gpu_notice = true;
                 // an empty library opens where Import is offered (a grid, with the sidebar); before
@@ -1057,7 +1097,7 @@ fn main() -> eframe::Result {
     let started = started.unwrap_or_else(|_| Err(eframe::Error::AppCreation("the window's renderer panicked while starting".into())));
     if let Err(e) = &started {
         // the renderer never came up: start again, which tries the next one in the chain
-        if window_gpu::relaunch_after_failure(&win_files) {
+        if window_gpu::relaunch_after_failure(&win_files, lightcraft_opendocs::take()) {
             log::error!("LightCraft could not open its window with {}: {e}; trying the next renderer", window_renderer.name());
             return Ok(());
         }
@@ -1550,6 +1590,78 @@ mod tests {
         assert!(out.status.success(), "{stdout}");
         assert!(stdout.contains("calling on_exit"), "the child didn't run the test: {stdout}");
         assert_eq!(stdout.contains("on_exit returned"), !cfg!(target_os = "macos"), "{stdout}");
+    }
+
+    /// Issue #506 (review): a photo opened from Finder while the window asking about the library
+    /// is up waits with the launch files, and is imported into the library the user then opens,
+    /// never into the temporary session behind the window (whose catalog that library replaces).
+    #[test]
+    fn photos_opened_while_the_library_is_unresolved_wait_for_it() {
+        use lightcraft_ui_egui::headless::{Headless, HeadlessView};
+        const T: std::time::Duration = std::time::Duration::from_secs(20);
+        let d = dir("opened-unresolved");
+        let img = lightcraft_raster::Rgba8 { width: 8, height: 8, data: vec![[90, 3, 9, 255]; 64] };
+        let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+        let photo = d.join("a.png");
+        std::fs::write(&photo, png).unwrap();
+        // the library location is a file: the launch can't open it
+        let lib = d.join("lib");
+        std::fs::write(&lib, b"not a library").unwrap();
+        let (session, problem) = open_session(false, Some(lib.clone()), false);
+        let mut app = LightcraftApp::new(session, Services::default());
+        app.library_problem = problem;
+        assert!(app.library_problem.is_some());
+        let mut h = Headless::new(app, [1300.0, 900.0], 1.0);
+        h.step();
+
+        // one frame as the window's host runs it, with the photo the system handed over
+        let mut raw = HeadlessView::raw_input(h.size, h.pixels_per_point, h.time(), Vec::new());
+        deliver_opened(&mut h.app, &mut raw, vec![photo.to_string_lossy().to_string()]);
+        h.app.raw_input_hook(&mut raw);
+        let app = &mut h.app;
+        h.view.run(raw, |ui| {
+            app.logic(ui.ctx());
+            app.ui(ui);
+        });
+        h.step();
+        h.step();
+        assert!(h.app.import.is_none() && h.app.session.catalog.is_empty(), "nothing imported while the window is up");
+        assert_eq!(h.app.library_problem.as_ref().unwrap().pending_import, [photo.to_string_lossy().to_string()]);
+
+        // the location is fixed; Try Again opens the library there, and the photo goes into it
+        std::fs::remove_file(&lib).unwrap();
+        assert_eq!(h.request("ui.clickWidget", serde_json::json!({"id": "button:libraryRetry"}), T)["ok"], true);
+        h.step_until(T, |h| h.app.import.is_none() && h.app.session.catalog.len() == 1);
+        assert!(h.app.library_problem.is_none());
+        assert_eq!(h.app.session.library.as_ref().map(|l| l.dir.clone()), Some(lib.clone()));
+        assert_eq!(h.app.session.catalog.len(), 1, "the opened photo is in the library");
+        drop(h);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Once the user has chosen Continue Without Saving, a photo opened from Finder is handled like a
+    /// drop (it joins the temporary session the banner warns about) instead of waiting.
+    #[test]
+    fn photos_opened_in_a_temporary_session_are_dropped_files() {
+        use lightcraft_ui_egui::headless::{Headless, HeadlessView};
+        const T: std::time::Duration = std::time::Duration::from_secs(20);
+        let d = dir("opened-temporary");
+        let lib = d.join("lib");
+        std::fs::write(&lib, b"not a library").unwrap();
+        let (session, problem) = open_session(false, Some(lib.clone()), false);
+        let mut app = LightcraftApp::new(session, Services::default());
+        app.library_problem = problem;
+        let mut h = Headless::new(app, [1300.0, 900.0], 1.0);
+        h.settle(T);
+        assert_eq!(h.request("ui.clickWidget", serde_json::json!({"id": "button:libraryTemporary"}), T)["ok"], true);
+        h.step_until(T, |h| h.app.library_problem.as_ref().is_some_and(|p| p.dismissed));
+        assert!(h.app.library_problem.as_ref().unwrap().dismissed);
+        let mut raw = HeadlessView::raw_input(h.size, h.pixels_per_point, h.time(), Vec::new());
+        deliver_opened(&mut h.app, &mut raw, vec![d.join("a.png").to_string_lossy().to_string()]);
+        assert!(h.app.library_problem.as_ref().unwrap().pending_import.is_empty(), "not waiting");
+        assert_eq!(raw.dropped_files.len(), 1, "handed over as a dropped file");
+        drop(h);
+        let _ = std::fs::remove_dir_all(&d);
     }
 }
 
