@@ -47,10 +47,65 @@ pub fn reparent(k: &str, from: &str, to: &str) -> String {
 /// names of `dc:subject` that aren't levels of those paths (Lightroom Classic writes each keyword's
 /// name, its parents' and synonyms flat besides its path). Each once, cleaned.
 pub fn from_file(flat: &[String], hierarchical: &[String]) -> Vec<String> {
-    let mut out: Vec<String> = hierarchical.iter().map(|k| clean(k)).collect();
-    out.extend(flat.iter().map(|k| clean(k)).filter(|k| !hierarchical.iter().any(|h| h.split(SEP).any(|level| same(level.trim(), k)))));
+    from_sidecar(flat, hierarchical, &[])
+}
+
+/// [`from_file`] for a sidecar that records the paths LightCraft wrote there as the photo's own
+/// (`own`, its `lc:keywordPaths`). Each of those paths LightCraft wrote with its name in
+/// `dc:subject`; one whose name `dc:subject` no longer has was removed there by an application
+/// that edits only `dc:subject`, so it's left out, and the names of its parents beside it aren't
+/// read as keywords of their own. A sidecar that lost its `lr:hierarchicalSubject` but kept the
+/// record has its recorded paths read the same way, rather than their names as plain keywords.
+/// Every other path (Lightroom Classic's, another application's) is read as [`from_file`] reads
+/// it. Names are matched with [`same_name`].
+pub fn from_sidecar(flat: &[String], hierarchical: &[String], own: &[String]) -> Vec<String> {
+    let flat: Vec<String> = flat.iter().map(|k| clean(k)).filter(|k| !k.is_empty()).collect();
+    let flat_keys: Vec<NameKey> = flat.iter().map(|k| NameKey::of(k)).collect();
+    let own: Vec<NameKey> = own.iter().map(|k| NameKey::of(&clean(k))).filter(|k| !k.key.is_empty()).collect();
+    // no `lr:hierarchicalSubject`: the record's paths stand in for it
+    let paths: Vec<String> = if hierarchical.is_empty() {
+        own.iter().map(|k| k.text.clone()).collect()
+    } else {
+        hierarchical.iter().map(|k| clean(k)).filter(|k| !k.is_empty()).collect()
+    };
+    let removed = |path: &str| {
+        let name = NameKey::of(path.rsplit(SEP).next().unwrap_or_default());
+        let key = NameKey::of(path);
+        own.iter().any(|o| o.matches(&key)) && !flat_keys.iter().any(|k| k.matches(&name))
+    };
+    let levels: Vec<NameKey> = paths.iter().flat_map(|h| h.split(SEP)).map(NameKey::of).collect();
+    let mut out: Vec<String> = paths.iter().filter(|k| !removed(k)).cloned().collect();
+    out.extend(flat.iter().zip(&flat_keys).filter(|(_, key)| !levels.iter().any(|l| l.matches(key))).map(|(k, _)| k.clone()));
     dedupe(&mut out);
     out
+}
+
+/// The same name as two files may spell it: whatever its Unicode normalization (`é` as one
+/// character or as `e` and a combining accent, compared in NFC), and whatever its case, as [`same`]
+/// compares it. Used where names from a file are matched with paths and their levels: another
+/// application may rewrite either in another normalization. Case is compared in lower case only,
+/// so different words that only upper-case alike (`Masse` and `Maße`, `kir` and `kır`) stay two
+/// names; `Straße` and `STRASSE` are two names too.
+pub fn same_name(a: &str, b: &str) -> bool {
+    same(a, b) || NameKey::of(a).matches(&NameKey::of(b))
+}
+
+/// A name with its key for [`same_name`].
+struct NameKey {
+    text: String,
+    key: String,
+}
+
+impl NameKey {
+    fn of(s: &str) -> NameKey {
+        use unicode_normalization::UnicodeNormalization;
+        let nfc: String = s.trim().nfc().collect();
+        NameKey { text: s.trim().to_string(), key: nfc.to_lowercase() }
+    }
+
+    fn matches(&self, other: &NameKey) -> bool {
+        self.key == other.key
+    }
 }
 
 /// The deepest a keyword list file may nest keywords: a file is input, so its nesting is bounded.
@@ -159,6 +214,59 @@ pub fn closest<'a>(k: &str, from: &'a [String]) -> Option<&'a String> {
 fn dedupe(v: &mut Vec<String>) {
     let mut seen = std::collections::HashSet::new();
     v.retain(|k| !k.is_empty() && seen.insert(k.to_lowercase()));
+}
+
+/// What a photo's XMP sidecar carries for these keywords: every keyword's name and the names of
+/// the keywords containing it, flat (`dc:subject`, so never a `|`), and its full path
+/// (`lr:hierarchicalSubject`). Unlike [`Catalog::export_keywords`] nothing is left out and no
+/// synonym is added: the sidecar is the photo's own metadata, and reads back as these keywords
+/// ([`from_file`]).
+pub fn sidecar_keywords(keywords: &[String]) -> ExportKeywords {
+    let all = KeywordInfo { export_synonyms: false, ..KeywordInfo::default() };
+    split_for_file(keywords, |_| &all)
+}
+
+/// Keywords split into names and paths as a file carries them, by each keyword's tag options
+/// (`info`, by path): see [`Catalog::export_keywords`].
+fn split_for_file<'a>(keywords: &[String], info: impl Fn(&str) -> &'a KeywordInfo) -> ExportKeywords {
+    let mut out = ExportKeywords::default();
+    // each name and path once, however its spellings differ in case or Unicode normalization: a
+    // file reads them as one ([`same_name`])
+    let push = |v: &mut Vec<String>, s: &str| {
+        if !s.is_empty() && !v.iter().any(|x| same_name(x, s)) {
+            v.push(s.to_string());
+        }
+    };
+    for k in keywords {
+        let path = clean(k);
+        let me = info(&path);
+        if path.is_empty() || !me.include_on_export {
+            continue;
+        }
+        let levels: Vec<&str> = path.split(SEP).collect();
+        let mut names = |at: usize, i: &KeywordInfo| {
+            if let Some(name) = levels.get(at) {
+                push(&mut out.flat, name);
+            }
+            if i.export_synonyms {
+                for s in &i.synonyms {
+                    push(&mut out.flat, s.trim());
+                }
+            }
+        };
+        names(levels.len().saturating_sub(1), me);
+        if me.export_containing {
+            for at in (0..levels.len().saturating_sub(1)).rev() {
+                let parent = levels.get(..=at).map(|l| l.join("|")).unwrap_or_default();
+                let pi = info(&parent);
+                if pi.include_on_export {
+                    names(at, pi);
+                }
+            }
+        }
+        push(&mut out.hierarchical, &path);
+    }
+    out
 }
 
 /// What the keyword list knows about a keyword besides the photos that carry it: Lightroom
@@ -418,43 +526,7 @@ impl Catalog {
     /// whatever its case.
     pub fn export_keywords(&self, keywords: &[String]) -> ExportKeywords {
         let defaults = KeywordInfo::default();
-        let info = |path: &str| self.keyword_info(path).unwrap_or(&defaults);
-        let mut out = ExportKeywords::default();
-        let push = |v: &mut Vec<String>, s: &str| {
-            if !s.is_empty() && !v.iter().any(|x| same(x, s)) {
-                v.push(s.to_string());
-            }
-        };
-        for k in keywords {
-            let path = clean(k);
-            let me = info(&path);
-            if path.is_empty() || !me.include_on_export {
-                continue;
-            }
-            let levels: Vec<&str> = path.split(SEP).collect();
-            let mut names = |at: usize, i: &KeywordInfo| {
-                if let Some(name) = levels.get(at) {
-                    push(&mut out.flat, name);
-                }
-                if i.export_synonyms {
-                    for s in &i.synonyms {
-                        push(&mut out.flat, s.trim());
-                    }
-                }
-            };
-            names(levels.len().saturating_sub(1), me);
-            if me.export_containing {
-                for at in (0..levels.len().saturating_sub(1)).rev() {
-                    let parent = levels.get(..=at).map(|l| l.join("|")).unwrap_or_default();
-                    let pi = info(&parent);
-                    if pi.include_on_export {
-                        names(at, pi);
-                    }
-                }
-            }
-            push(&mut out.hierarchical, &path);
-        }
-        out
+        split_for_file(keywords, |path| self.keyword_info(path).unwrap_or(&defaults))
     }
 
     /// The keyword list as a file (Lightroom Classic's format, [`parse_keyword_list`]): every
@@ -1102,6 +1174,45 @@ mod tests {
         let (flat, paths) = exported(&c, &["travel|Italy|Rome", "Travel|Spain", "beach"]);
         assert_eq!(flat, ["Rome", "Italy", "travel", "Spain", "beach"]);
         assert_eq!(paths, ["travel|Italy|Rome", "Travel|Spain", "beach"]);
+    }
+
+    /// A sidecar carries every keyword (export options aside) as its name, its parents' names and its
+    /// path, and no synonyms: what it holds reads back as the same keywords.
+    #[test]
+    fn a_sidecar_carries_every_keyword_as_names_and_its_path() {
+        let keywords: Vec<String> = ["Animals|Birds|Heron", "animals|Birds|Owl", "sunset", "Birds"].iter().map(|k| k.to_string()).collect();
+        let s = sidecar_keywords(&keywords);
+        assert_eq!(s.flat, ["Heron", "Birds", "Animals", "Owl", "sunset"]);
+        assert_eq!(s.hierarchical, ["Animals|Birds|Heron", "animals|Birds|Owl", "sunset", "Birds"]);
+        assert!(s.flat.iter().all(|k| !k.contains(SEP)));
+        assert_eq!(from_file(&s.flat, &s.hierarchical), keywords);
+    }
+
+    /// A path LightCraft recorded as its own whose name an app removed from `dc:subject` is left
+    /// out, its parents' names with it; a path it didn't record (Lightroom Classic's) is read as
+    /// before, and so is a recorded one whose name is still there, whatever its case.
+    #[test]
+    fn a_sidecar_path_whose_name_was_removed_from_dc_subject_is_left_out() {
+        let v = |s: &[&str]| s.iter().map(|k| k.to_string()).collect::<Vec<String>>();
+        let paths = v(&["Animals|Birds|Heron", "sunset", "beach"]);
+        let own = v(&["Animals | Birds | Heron", "sunset", "beach"]);
+        // `Heron` and `sunset` removed from dc:subject
+        assert_eq!(from_sidecar(&v(&["Birds", "Animals", "BEACH"]), &paths, &own), ["beach"]);
+        // no record: every path is read, as from_file reads it
+        assert_eq!(from_sidecar(&v(&["Birds", "Animals", "beach"]), &paths, &[]), paths);
+        assert_eq!(from_sidecar(&v(&["Birds", "Animals", "beach"]), &paths, &[]), from_file(&v(&["Birds", "Animals", "beach"]), &paths));
+        // a path the record doesn't name is kept without its name in dc:subject
+        assert_eq!(from_sidecar(&v(&["beach"]), &paths, &v(&["beach"])), paths);
+        // every name removed: no keywords
+        assert!(from_sidecar(&[], &paths, &own).is_empty());
+        // another spelling of the name (NFC for NFD, another case) is the name: kept, under its parents
+        let cafe = v(&["Places|Cafe\u{301}", "Places|Straße"]);
+        assert_eq!(from_sidecar(&v(&["Caf\u{e9}", "STRAßE", "places"]), &cafe, &cafe), cafe);
+        assert!(same_name("Cafe\u{301}", "CAF\u{c9}") && same_name(" Straße", "STRAßE") && !same_name("Heron", "Herons"));
+        // words that only upper-case alike are two names
+        assert!(!same_name("Straße", "STRASSE") && !same_name("Maße", "Masse") && !same_name("kır", "kir"));
+        // no lr:hierarchicalSubject but a record: its paths are read, those whose name is gone left out
+        assert_eq!(from_sidecar(&v(&["Heron", "Birds", "Animals", "beach"]), &[], &own), ["Animals|Birds|Heron", "beach"]);
     }
 
     /// A keyword not included on export is left out, path and all; a parent left out (a keyword that

@@ -22,7 +22,7 @@ What we write (standard namespaces, so other tools can read the metadata):
 | Title / caption / copyright / creator | `dc:title` / `dc:description` / `dc:rights` / `dc:creator` |
 | Copyright status | `xmpRights:Marked` (`True` copyrighted, `False` public domain, absent = unknown) |
 | Rights usage terms / copyright info URL | `xmpRights:UsageTerms` / `xmpRights:WebStatement` |
-| Keywords | `dc:subject` |
+| Keywords | `dc:subject` (names: each keyword's and its parents', never a `\|`), `lr:hierarchicalSubject` (full paths, `Animals\|Birds\|Heron`) |
 | Capture time, GPS | `exif:DateTimeOriginal`, `photoshop:DateCreated`, `exif:GPSLatitude`/`GPSLongitude` |
 | Pick / reject flag | `lc:flag` (`pick`, `reject`, `none`) |
 | Location | `lc:location` |
@@ -54,18 +54,68 @@ the only copy of those edits outside that application's catalog. Saving never dr
   from what the sidecar said.
 - The **capture time** (`exif:DateTimeOriginal`, `photoshop:DateCreated`) and **GPS** (`exif:GPSLatitude`,
   `exif:GPSLongitude`) are replaced only when LightCraft has a value; otherwise the file's stay.
-- **Everything else is kept byte for byte**: other namespaces (`crs:`, `xmpMM:`, `lr:hierarchicalSubject`, unknown
-  ones), `xmp:CreatorTool`, comments, the packet wrapper and padding. LightCraft's properties go into one
+- **Keywords** are written as Lightroom Classic writes them: `dc:subject` gets each keyword's name and the names of the
+  keywords containing it (each once, whatever its case), never a `|` — Lightroom Classic 15.3+ on macOS Tahoe hangs
+  importing a sidecar with a `|` in `dc:subject`. `lr:hierarchicalSubject` gets every full path, followed by the paths
+  the sidecar already lists that the photo doesn't have, so another application's paths survive a save; the merged
+  list replaces the old one, and saving again changes nothing. A keyword removed in LightCraft stays removed: each save
+  records the paths it wrote as the photo's own in `lc:keywordPaths` (a JSON list), and the next save drops those of
+  them the photo no longer has. A path LightCraft never wrote is never removed.
+  Paths are compared normalized, as keywords are read from a file (spaces around each `|` level ignored, case ignored), so
+  `Animals | Birds | Heron` and `Animals|Birds|Heron` are one keyword: a save writes it once, and its record matches it.
+  A plain name the sidecar has only in `dc:subject` while it lists paths (a synonym Lightroom Classic writes there with
+  Export Synonyms on) is read as a keyword and saved back as a name only: no path is added for it, so Lightroom
+  Classic's list stays as it wrote it. Such names are recorded in `lc:keywordNames` (a JSON list), so one removed and
+  put back (undo) stays a name too. A name that is a level of a path (a parent's, such as `Birds` beside
+  `Animals|Birds|Heron`) is never taken for one: a keyword added, renamed or moved to the top level under that name gets
+  its own path.
+- **Reading keywords back** (import, Read Metadata from File) takes the paths of `lr:hierarchicalSubject`, then the
+  names of `dc:subject` that aren't levels of those paths. A path the sidecar records in `lc:keywordPaths` whose own
+  name is no longer in `dc:subject` was removed by an application that edits only `dc:subject` (exiftool
+  `-XMP-dc:Subject-=…`, many asset managers): it isn't read, and the names of its parents beside it aren't read as
+  keywords of their own. Paths without a record (Lightroom Classic's, another application's) are read as they are. A
+  sidecar that kept the record but lost `lr:hierarchicalSubject` has the recorded paths read in its place, by the same
+  rule. Names and paths are matched whatever their Unicode normalization (`é` as one character or as `e` and an
+  accent) and their case as the keyword list compares it (lower case), so another application's respelling isn't a
+  removal. A name or path spelled twice in the photo's keywords in two normalizations is written once.
+- **Exported originals and converted DNGs** (export as Original, Convert to DNG) carry the photo's own keywords,
+  written as above but without reading the photo's sidecar: a copy has none of the sidecar's records, so it can't
+  tell a Lightroom Classic synonym from a keyword of its own. A synonym the photo was read with is a keyword in
+  LightCraft, so a copy lists it as a top-level path in `lr:hierarchicalSubject` (Lightroom Classic would read it as a
+  keyword of its own there), and carries no `lc:keywordNames`. Every keyword, top-level ones included, has its path
+  there, as in Lightroom Classic's own files: some readers (Immich) take `lr:hierarchicalSubject` alone when it lists
+  any path.
+- **Everything else is kept byte for byte**: other namespaces (`crs:`, `xmpMM:`, unknown ones), `xmp:CreatorTool`, comments, the packet wrapper and padding. LightCraft's properties go into one
   `rdf:Description` of their own; owned properties written by another application (in attribute or element form) are
   removed from its description, which otherwise stays as it was.
 - A sidecar that can't be read as XMP (not well-formed, not UTF-8, no `rdf:RDF`) is first copied to
   `<name>.xmp.bak-<date><time>` (`-1`, `-2`… if taken — a backup is never overwritten), then replaced. A sidecar that
   can't be read at all (permissions) is left alone and the save fails.
 
-Limits: LightCraft writes keywords to `dc:subject` only, so another application's `lr:hierarchicalSubject` is kept as
-it was and may still list keywords removed in LightCraft. LightCraft doesn't write `crs:`: the other application's
-develop settings stay as that application left them, next to LightCraft's own (`lc:settings`, which LightCraft reads
-first).
+Limits: a save removes a path from `lr:hierarchicalSubject` only when an earlier save recorded it in
+`lc:keywordPaths`, that is, when the photo still had the keyword at a save. A sidecar without that record (Lightroom
+Classic's, another application's, or one LightCraft saved before it was recorded) keeps every path it lists. So a
+keyword the photo was read with and that is removed in LightCraft before any save stays in that sidecar's
+`lr:hierarchicalSubject` through every later save, auto-write included, and comes back on Read Metadata from File, on a
+re-import and in Lightroom Classic. Reading it back and removing it again doesn't help (the record still lacks it); to
+remove it, save once while the photo has it, then remove it and save. If another application writes the same path
+LightCraft last wrote and the keyword is then removed in LightCraft, the path is removed. LightCraft doesn't write
+`crs:`: the other application's develop settings stay as that application left them, next to LightCraft's own
+(`lc:settings`, which LightCraft reads first).
+
+Further keyword limits:
+
+- Case is compared in lower case only, so words that differ only in upper case are kept apart (`Masse` and `Maße`,
+  `kir` and `kır`). The price: an application that rewrites `Straße` as `STRASSE` in `dc:subject` changes the name.
+  If LightCraft recorded the path, `Places|Straße` reads as removed and `STRASSE` as a keyword of its own.
+- `lc:keywordNames` never shrinks. A name once kept flat (a Lightroom Classic synonym, or a keyword another
+  application added to `dc:subject` only) stays a name only in later saves, even if the keyword is removed and added
+  again in LightCraft. It gets a path only once it is a level of a path. LightCraft still reads the name back as a
+  keyword, but an application that reads only `lr:hierarchicalSubject` doesn't see it.
+- Unverified: what Lightroom Classic writes for a keyword with Include on Export off. If it lists the path in
+  `lr:hierarchicalSubject`, leaves the name out of `dc:subject`, and keeps LightCraft's `lc:keywordPaths` when it
+  rewrites the sidecar, LightCraft reads that keyword as removed by another application. This is still to be checked
+  against Lightroom Classic on a copy of a catalog.
 
 ## Shared names
 

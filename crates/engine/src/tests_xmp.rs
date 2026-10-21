@@ -545,6 +545,108 @@ fn rereading_a_sidecar_clears_regions_only_when_it_states_them() {
     let _ = std::fs::remove_dir_all(&src);
 }
 
+/// A sidecar as Lightroom Classic writes a hierarchical keyword: names flat in `dc:subject`, the
+/// path in `lr:hierarchicalSubject`.
+const LR_KEYWORDS: &str = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:dc="http://purl.org/dc/elements/1.1/"
+    xmlns:lr="http://ns.adobe.com/lightroom/1.0/">
+   <dc:subject><rdf:Bag><rdf:li>Heron</rdf:li><rdf:li>Birds</rdf:li><rdf:li>Animals</rdf:li><rdf:li>sunset</rdf:li></rdf:Bag></dc:subject>
+   <lr:hierarchicalSubject><rdf:Bag><rdf:li>Animals|Birds|Heron</rdf:li><rdf:li>sunset</rdf:li></rdf:Bag></lr:hierarchicalSubject>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>"#;
+
+/// Keywords are saved as Lightroom Classic writes them: names in `dc:subject` (never a `|`, which
+/// hangs Lightroom Classic's import), full paths in `lr:hierarchicalSubject`, merged with the paths
+/// the sidecar already lists so another app's survive, while a keyword removed here stays removed;
+/// saving again changes nothing.
+#[test]
+fn hierarchical_keywords_are_saved_as_names_and_merged_paths() {
+    let src = temp_dir("hier-keywords");
+    write_png(&src.join("heron.png"), 5);
+    std::fs::write(src.join("heron.xmp"), LR_KEYWORDS).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    assert_eq!(s.catalog.photo(id).unwrap().meta.keywords, ["Animals|Birds|Heron", "sunset"]);
+    let side = || std::fs::read_to_string(src.join("heron.xmp")).unwrap();
+    let save = |s: &mut Session| {
+        s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    };
+    let fields = |x: &str| {
+        let m = lightcraft_meta::parse_xmp(x).unwrap().metadata;
+        assert!(m.keywords.iter().all(|k| !k.contains('|')), "a `|` in dc:subject: {:?}", m.keywords);
+        (m.keywords, m.hierarchical_keywords)
+    };
+    // a plain save: the paths read from the sidecar don't go into dc:subject
+    save(&mut s);
+    assert_eq!(fields(&side()), (strings(&["Heron", "Birds", "Animals", "sunset"]), strings(&["Animals|Birds|Heron", "sunset"])));
+    // keywords added here: each name once, whatever its case
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "addKeywords": ["Projects|2024|heron", "sidecar-test"]})).unwrap();
+    save(&mut s);
+    assert_eq!(
+        fields(&side()),
+        (
+            strings(&["Heron", "Birds", "Animals", "sunset", "2024", "Projects", "sidecar-test"]),
+            strings(&["Animals|Birds|Heron", "sunset", "Projects|2024|heron", "sidecar-test"])
+        )
+    );
+    // another app adds a path to the sidecar: a save keeps it, and keeps it out of dc:subject
+    let added = side().replacen(
+        "<rdf:li>sidecar-test</rdf:li>\n    </rdf:Bag>\n   </lr:hierarchicalSubject>",
+        "<rdf:li>sidecar-test</rdf:li>\n     <rdf:li>People|Sam</rdf:li>\n    </rdf:Bag>\n   </lr:hierarchicalSubject>",
+        1,
+    );
+    assert!(added.contains("People|Sam"));
+    std::fs::write(src.join("heron.xmp"), &added).unwrap();
+    save(&mut s);
+    let (flat, paths) = fields(&side());
+    assert!(!flat.iter().any(|k| k == "Sam" || k == "People"), "{flat:?}");
+    assert_eq!(paths, strings(&["Animals|Birds|Heron", "sunset", "Projects|2024|heron", "sidecar-test", "People|Sam"]));
+    // saving again is stable
+    let once = side();
+    save(&mut s);
+    assert_eq!(side(), once);
+    // read back, the other app's path is a keyword like the others; saving twice changes nothing
+    s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap().meta.keywords, ["Animals|Birds|Heron", "sunset", "Projects|2024|heron", "sidecar-test", "People|Sam"]);
+    save(&mut s);
+    let (flat, paths) = fields(&side());
+    assert_eq!(flat, strings(&["Heron", "Birds", "Animals", "sunset", "2024", "Projects", "sidecar-test", "Sam", "People"]));
+    assert_eq!(paths, strings(&["Animals|Birds|Heron", "sunset", "Projects|2024|heron", "sidecar-test", "People|Sam"]));
+    let once = side();
+    save(&mut s);
+    assert_eq!(side(), once);
+    // keywords removed here (one the photo came with, one added here, the other app's once read)
+    // stay removed: from both fields, after a save and a read
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "removeKeywords": ["sunset", "Projects|2024|heron", "People|Sam"]})).unwrap();
+    save(&mut s);
+    assert_eq!(fields(&side()), (strings(&["Heron", "Birds", "Animals", "sidecar-test"]), strings(&["Animals|Birds|Heron", "sidecar-test"])));
+    s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap().meta.keywords, ["Animals|Birds|Heron", "sidecar-test"]);
+    // another app's path added after that is still kept, and only it, save after save
+    let added = side().replacen(
+        "<rdf:li>sidecar-test</rdf:li>\n    </rdf:Bag>\n   </lr:hierarchicalSubject>",
+        "<rdf:li>sidecar-test</rdf:li>\n     <rdf:li>Events|Picnic</rdf:li>\n    </rdf:Bag>\n   </lr:hierarchicalSubject>",
+        1,
+    );
+    assert!(added.contains("Events|Picnic"));
+    std::fs::write(src.join("heron.xmp"), &added).unwrap();
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "removeKeywords": ["sidecar-test"]})).unwrap();
+    save(&mut s);
+    assert_eq!(fields(&side()), (strings(&["Heron", "Birds", "Animals"]), strings(&["Animals|Birds|Heron", "Events|Picnic"])));
+    let once = side();
+    save(&mut s);
+    assert_eq!(side(), once);
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+fn strings(v: &[&str]) -> Vec<String> {
+    v.iter().map(|s| s.to_string()).collect()
+}
+
 fn synthetic_dng(xmp: &str) -> Vec<u8> {
     synthetic_dng_with(Some(xmp), lightcraft_meta::Metadata::default())
 }
@@ -1327,4 +1429,668 @@ fn a_failed_auto_write_waits_and_is_written_on_retry() {
     assert_eq!(s.unsaved_sidecars(), 0);
     std::fs::set_permissions(&src, std::fs::Permissions::from_mode(0o755)).unwrap();
     let _ = std::fs::remove_dir_all(&src);
+}
+
+const REVIEW_KEYWORDS: &str = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:lr="http://ns.adobe.com/lightroom/1.0/">
+   <dc:subject><rdf:Bag><rdf:li>Heron</rdf:li><rdf:li>Birds</rdf:li><rdf:li>Animals</rdf:li><rdf:li>sunset</rdf:li></rdf:Bag></dc:subject>
+   <lr:hierarchicalSubject><rdf:Bag><rdf:li>Animals|Birds|Heron</rdf:li><rdf:li>sunset</rdf:li></rdf:Bag></lr:hierarchicalSubject>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>"#;
+
+#[test]
+fn spaced_keyword_paths_stay_deleted() {
+    let src = temp_dir("review-spaced-owned");
+    write_png(&src.join("heron.png"), 5);
+    let initial = REVIEW_KEYWORDS.replace("Animals|Birds|Heron", "Animals | Birds | Heron");
+    std::fs::write(src.join("heron.xmp"), initial).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    assert_eq!(s.catalog.photo(id).unwrap().meta.keywords, ["Animals|Birds|Heron", "sunset"]);
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "removeKeywords": ["Animals|Birds|Heron"]})).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    let after = s.catalog.photo(id).unwrap().meta.keywords.clone();
+    let _ = std::fs::remove_dir_all(&src);
+    assert_eq!(after, ["sunset"], "an already-owned keyword must not return after deletion");
+}
+
+/// A save writes each path once, in its normalized form, and records the normalized path as the photo's own;
+/// the flat names are written once each.
+#[test]
+fn spaced_keyword_paths_are_written_once_normalized() {
+    let src = temp_dir("keyword-spaced-once");
+    write_png(&src.join("heron.png"), 7);
+    std::fs::write(src.join("heron.xmp"), REVIEW_KEYWORDS.replace("Animals|Birds|Heron", "Animals | Birds | Heron")).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    let saved = lightcraft_meta::parse_xmp(&std::fs::read_to_string(src.join("heron.xmp")).unwrap()).unwrap();
+    let _ = std::fs::remove_dir_all(&src);
+    assert_eq!(saved.metadata.hierarchical_keywords, ["Animals|Birds|Heron", "sunset"], "one normalized path each");
+    let mut flat = saved.metadata.keywords.clone();
+    flat.sort();
+    assert_eq!(flat, ["Animals", "Birds", "Heron", "sunset"], "each flat name once");
+    let record = saved.properties.get("lc:keywordPaths").and_then(|v| v.first()).expect("the record of the photo's own paths");
+    assert_eq!(record, r#"["Animals|Birds|Heron","sunset"]"#);
+}
+
+/// An `lc:keywordPaths` record an older build wrote with spaces still marks its path as the photo's own, so removing
+/// the keyword here keeps it out of the sidecar.
+#[test]
+fn spaced_keyword_record_still_marks_the_path_as_owned() {
+    let src = temp_dir("keyword-spaced-record");
+    write_png(&src.join("heron.png"), 8);
+    let old = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:lr="http://ns.adobe.com/lightroom/1.0/" xmlns:lc="http://ns.lightcraft.app/lc/1.0/">
+   <dc:subject><rdf:Bag><rdf:li>Heron</rdf:li><rdf:li>Birds</rdf:li><rdf:li>Animals</rdf:li><rdf:li>sunset</rdf:li></rdf:Bag></dc:subject>
+   <lr:hierarchicalSubject><rdf:Bag><rdf:li>Animals|Birds|Heron</rdf:li><rdf:li>sunset</rdf:li></rdf:Bag></lr:hierarchicalSubject>
+   <lc:keywordPaths>["Animals | Birds | Heron","sunset"]</lc:keywordPaths>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>"#;
+    std::fs::write(src.join("heron.xmp"), old).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "removeKeywords": ["Animals|Birds|Heron"]})).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    let saved = lightcraft_meta::parse_xmp(&std::fs::read_to_string(src.join("heron.xmp")).unwrap()).unwrap();
+    s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    let after = s.catalog.photo(id).unwrap().meta.keywords.clone();
+    let _ = std::fs::remove_dir_all(&src);
+    assert_eq!(saved.metadata.hierarchical_keywords, ["sunset"], "the owned path is removed from the sidecar");
+    assert_eq!(after, ["sunset"], "and does not return on read");
+}
+
+/// The sidecar `xml` without `<rdf:li>{li}</rdf:li>` in `dc:subject`, as an application that edits only `dc:subject`
+/// (exiftool `-XMP-dc:Subject-=…`) removes a keyword.
+fn drop_from_dc_subject(xml: &str, li: &str) -> String {
+    let start = xml.find("<dc:subject>").expect("dc:subject");
+    let end = xml[start..].find("</dc:subject>").unwrap() + start;
+    let block = xml[start..end].replace(&format!("<rdf:li>{li}</rdf:li>"), "");
+    format!("{}{}{}", &xml[..start], block, &xml[end..])
+}
+
+/// A keyword another application removes from `dc:subject` only stays removed on Read Metadata from File: the path
+/// LightCraft wrote for it in `lr:hierarchicalSubject` doesn't bring it back.
+#[test]
+fn a_keyword_another_app_removes_from_dc_subject_is_read_as_removed() {
+    let src = temp_dir("dc-only-removal");
+    write_png(&src.join("a.png"), 11);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "addKeywords": ["sunset", "beach"]})).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    let side = src.join("a.xmp");
+    let edited = drop_from_dc_subject(&std::fs::read_to_string(&side).unwrap(), "sunset");
+    std::fs::write(&side, &edited).unwrap();
+    let m = lightcraft_meta::parse_xmp(&edited).unwrap().metadata;
+    assert_eq!(m.keywords, ["beach"], "the other app's dc:subject");
+    s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    let after = s.catalog.photo(id).unwrap().meta.keywords.clone();
+    let _ = std::fs::remove_dir_all(&src);
+    assert_eq!(after, ["beach"], "a keyword another app removed from dc:subject comes back from lr:hierarchicalSubject");
+}
+
+/// A synonym Lightroom Classic writes flat in `dc:subject` (no path of `lr:hierarchicalSubject` names it) is kept flat:
+/// a save leaves Lightroom Classic's paths as they were.
+#[test]
+fn a_lightroom_synonym_is_not_saved_as_a_path() {
+    let src = temp_dir("lr-synonym");
+    write_png(&src.join("heron.png"), 16);
+    let x = LR_KEYWORDS.replace("<rdf:li>Heron</rdf:li>", "<rdf:li>Heron</rdf:li><rdf:li>Ardea</rdf:li>");
+    std::fs::write(src.join("heron.xmp"), x).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    let imported = s.catalog.photo(id).unwrap().meta.keywords.clone();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    let side = || std::fs::read_to_string(src.join("heron.xmp")).unwrap();
+    let saved = lightcraft_meta::parse_xmp(&side()).unwrap().metadata;
+    let once = side();
+    s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    let read = s.catalog.photo(id).unwrap().meta.keywords.clone();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    let again = side();
+    let _ = std::fs::remove_dir_all(&src);
+    assert_eq!(saved.hierarchical_keywords, ["Animals|Birds|Heron", "sunset"], "imported as {imported:?}");
+    // the synonym stays a name in dc:subject, reads back as it was imported, and saving again changes nothing
+    assert!(saved.keywords.iter().any(|k| k == "Ardea"), "{:?}", saved.keywords);
+    assert_eq!(read, imported);
+    assert_eq!(again, once);
+}
+
+fn photo_keywords(s: &Session, id: PhotoId) -> Vec<String> {
+    s.catalog.photo(id).unwrap().meta.keywords.clone()
+}
+fn sidecar_xmp(p: &Path) -> lightcraft_meta::XmpData {
+    lightcraft_meta::parse_xmp(&std::fs::read_to_string(p).unwrap()).unwrap()
+}
+fn drop_xml_block(xml: &str, tag: &str) -> String {
+    let start = xml.find(&format!("<{tag}>")).expect("tag");
+    let close = format!("</{tag}>");
+    let end = xml[start..].find(&close).unwrap() + start + close.len();
+    format!("{}{}", &xml[..start], &xml[end..])
+}
+fn replace_in_dc_subject(xml: &str, from: &str, to: &str) -> String {
+    let start = xml.find("<dc:subject>").expect("dc:subject");
+    let end = xml[start..].find("</dc:subject>").unwrap() + start;
+    let block = xml[start..end].replace(&format!("<rdf:li>{from}</rdf:li>"), &format!("<rdf:li>{to}</rdf:li>"));
+    format!("{}{}{}", &xml[..start], block, &xml[end..])
+}
+
+/// F1 recheck, hierarchical: a dc-only app removes the leaf of a LightCraft path; parents are not promoted.
+#[test]
+fn f1_hierarchical_leaf_removed_dc_only() {
+    let src = temp_dir("kw2-f1h");
+    write_png(&src.join("a.png"), 21);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "addKeywords": ["Animals|Birds|Heron", "beach"]})).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    let side = src.join("a.xmp");
+    std::fs::write(&side, drop_from_dc_subject(&std::fs::read_to_string(&side).unwrap(), "Heron")).unwrap();
+    s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    let after = photo_keywords(&s, id);
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    let saved = sidecar_xmp(&side).metadata;
+    let _ = std::fs::remove_dir_all(&src);
+    assert_eq!(after, ["beach"]);
+    assert_eq!(saved.hierarchical_keywords, ["beach"], "the next save cleans lr:hierarchicalSubject");
+}
+
+/// A genuinely new flat keyword added in LightCraft on a Lightroom Classic sidecar gets a path and reads back.
+#[test]
+fn new_flat_keyword_on_lr_sidecar_gets_a_path() {
+    let src = temp_dir("kw2-newflat");
+    write_png(&src.join("heron.png"), 22);
+    std::fs::write(src.join("heron.xmp"), LR_KEYWORDS).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "addKeywords": ["dog"]})).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    let saved = sidecar_xmp(&src.join("heron.xmp"));
+    s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    let after = photo_keywords(&s, id);
+    let _ = std::fs::remove_dir_all(&src);
+    assert!(saved.metadata.hierarchical_keywords.iter().any(|k| k == "dog"), "{:?}", saved.metadata.hierarchical_keywords);
+    assert!(saved.properties.get("lc:keywordPaths").unwrap()[0].contains("dog"));
+    assert_eq!(after, ["Animals|Birds|Heron", "sunset", "dog"]);
+}
+
+/// A new top-level keyword whose name is already a level of a saved path: LightCraft-only sidecar.
+#[test]
+fn added_keyword_named_like_a_level_reads_back() {
+    let src = temp_dir("kw2-level");
+    write_png(&src.join("a.png"), 23);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "addKeywords": ["Animals|Birds"]})).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "addKeywords": ["Birds"]})).unwrap();
+    let before = photo_keywords(&s, id);
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    let saved = sidecar_xmp(&src.join("a.xmp")).metadata;
+    s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    let after = photo_keywords(&s, id);
+    let _ = std::fs::remove_dir_all(&src);
+    assert_eq!(after, before, "saved hS {:?} dc {:?}", saved.hierarchical_keywords, saved.keywords);
+}
+
+/// Same, through keyword.rename on a Lightroom Classic sidecar that LightCraft has saved once.
+#[test]
+fn rename_to_a_parent_name_reads_back() {
+    let src = temp_dir("kw2-rename");
+    write_png(&src.join("heron.png"), 24);
+    std::fs::write(src.join("heron.xmp"), LR_KEYWORDS).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    s.execute("keyword.rename", &json!({"from": "sunset", "to": "Birds"})).unwrap();
+    let before = photo_keywords(&s, id);
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    let saved = sidecar_xmp(&src.join("heron.xmp")).metadata;
+    s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    let after = photo_keywords(&s, id);
+    let _ = std::fs::remove_dir_all(&src);
+    assert_eq!(after, before, "saved hS {:?} dc {:?}", saved.hierarchical_keywords, saved.keywords);
+}
+
+/// keyword.move to the top level: the moved keyword's name is already in dc:subject, so it gets no path.
+#[test]
+fn move_to_top_level_gets_a_path() {
+    let src = temp_dir("kw2-move");
+    write_png(&src.join("heron.png"), 25);
+    std::fs::write(src.join("heron.xmp"), LR_KEYWORDS).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    s.execute("keyword.move", &json!({"keyword": "Animals|Birds|Heron", "parent": null})).unwrap();
+    let before = photo_keywords(&s, id);
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    let saved = sidecar_xmp(&src.join("heron.xmp"));
+    s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    let after = photo_keywords(&s, id);
+    let _ = std::fs::remove_dir_all(&src);
+    eprintln!(
+        "before {before:?} after {after:?} hS {:?} dc {:?} rec {:?}",
+        saved.metadata.hierarchical_keywords,
+        saved.metadata.keywords,
+        saved.properties.get("lc:keywordPaths")
+    );
+    let (mut a, mut b) = (after.clone(), before.clone());
+    a.sort();
+    b.sort();
+    assert_eq!(a, b);
+    assert!(
+        saved.metadata.hierarchical_keywords.iter().any(|k| k == "Heron"),
+        "the top-level keyword has no path: {:?}",
+        saved.metadata.hierarchical_keywords
+    );
+}
+
+/// F2 via remove + undo: the synonym leaves dc:subject for one save, then undo brings it back as a new path.
+#[test]
+fn synonym_remove_undo_is_not_promoted() {
+    let src = temp_dir("kw2-syn-undo");
+    write_png(&src.join("heron.png"), 26);
+    let x = LR_KEYWORDS.replace("<rdf:li>Heron</rdf:li>", "<rdf:li>Heron</rdf:li><rdf:li>Ardea</rdf:li>");
+    std::fs::write(src.join("heron.xmp"), x).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    let first = std::fs::read_to_string(src.join("heron.xmp")).unwrap();
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "removeKeywords": ["Ardea"]})).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    s.execute("edit.undo", &json!({})).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    let last = std::fs::read_to_string(src.join("heron.xmp")).unwrap();
+    let saved = lightcraft_meta::parse_xmp(&last).unwrap().metadata;
+    let _ = std::fs::remove_dir_all(&src);
+    assert_eq!(saved.hierarchical_keywords, ["Animals|Birds|Heron", "sunset"], "kw {:?}", saved.keywords);
+    assert_eq!(last, first, "undo then save gives the file the first save wrote");
+}
+
+/// Same leaf under two parents, one removed in LightCraft: the other stays and reads back.
+#[test]
+fn same_leaf_two_parents_one_removed() {
+    let src = temp_dir("kw2-twoparents");
+    write_png(&src.join("a.png"), 27);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "addKeywords": ["Animals|Birds|Heron", "Places|Heron"]})).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "removeKeywords": ["Places|Heron"]})).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    let saved = sidecar_xmp(&src.join("a.xmp")).metadata;
+    s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    let after = photo_keywords(&s, id);
+    // and the other way: the dc-only app removes the shared name, both go
+    let side = src.join("a.xmp");
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "addKeywords": ["Places|Heron"]})).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    std::fs::write(&side, drop_from_dc_subject(&std::fs::read_to_string(&side).unwrap(), "Heron")).unwrap();
+    s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    let gone = photo_keywords(&s, id);
+    let _ = std::fs::remove_dir_all(&src);
+    assert_eq!(saved.hierarchical_keywords, ["Animals|Birds|Heron"]);
+    assert_eq!(after, ["Animals|Birds|Heron"]);
+    assert!(gone.is_empty(), "{gone:?}");
+}
+
+/// Case and outer whitespace differences between dc:subject and the path leaf (`  SUNSET ` for `sunset`) don't count as
+/// a removal. `STRASSE` is another name than `Straße` (lower case tells them apart, as everywhere in the keyword list):
+/// `Places|Straße` reads as removed and `STRASSE` as a keyword of its own (a documented limit).
+#[test]
+fn case_whitespace_leaf_is_not_removed() {
+    let src = temp_dir("kw2-case");
+    write_png(&src.join("a.png"), 28);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "addKeywords": ["Places|Straße", "sunset"]})).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    let side = src.join("a.xmp");
+    let x = std::fs::read_to_string(&side).unwrap();
+    let x = replace_in_dc_subject(&replace_in_dc_subject(&x, "sunset", "  SUNSET "), "Straße", "STRASSE");
+    std::fs::write(&side, x).unwrap();
+    s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    let after = photo_keywords(&s, id);
+    let _ = std::fs::remove_dir_all(&src);
+    assert_eq!(after, ["sunset", "STRASSE"]);
+}
+
+/// Unicode normalization: the dc:subject name rewritten in NFC by another app while the path leaf is NFD.
+#[test]
+fn nfc_nfd_leaf_is_not_removed() {
+    let src = temp_dir("kw2-nfc");
+    write_png(&src.join("a.png"), 29);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    let nfd = "Cafe\u{301}";
+    let nfc = "Caf\u{e9}";
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "addKeywords": [format!("Places|{nfd}")]})).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    let side = src.join("a.xmp");
+    std::fs::write(&side, replace_in_dc_subject(&std::fs::read_to_string(&side).unwrap(), nfd, nfc)).unwrap();
+    s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    let after = photo_keywords(&s, id);
+    let _ = std::fs::remove_dir_all(&src);
+    assert_eq!(after.len(), 1, "{after:?}");
+    assert!(after[0].starts_with("Places|"), "the hierarchy is lost: {after:?}");
+}
+
+/// A sidecar with lc:keywordPaths but no lr:hierarchicalSubject (another app dropped it).
+#[test]
+fn record_without_hierarchical_subject() {
+    let src = temp_dir("kw2-nohs");
+    write_png(&src.join("a.png"), 30);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "addKeywords": ["Animals|Birds|Heron"]})).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    let side = src.join("a.xmp");
+    let x = std::fs::read_to_string(&side).unwrap();
+    let x = drop_xml_block(&x, "lr:hierarchicalSubject");
+    std::fs::write(&side, &x).unwrap();
+    let d = lightcraft_meta::parse_xmp(&x).unwrap();
+    assert!(d.metadata.hierarchical_keywords.is_empty());
+    assert!(d.properties.contains_key("lc:keywordPaths"));
+    s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    let after = photo_keywords(&s, id);
+    let _ = std::fs::remove_dir_all(&src);
+    assert_eq!(after, ["Animals|Birds|Heron"]);
+}
+
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+}
+/// A sidecar as another app (or a hand edit) leaves it: dc:subject, lr:hierarchicalSubject, lc: properties.
+fn hand_sidecar(dc: &[&str], hs: &[&str], lc: &[(&str, &str)]) -> String {
+    let bag = |v: &[&str]| v.iter().map(|k| format!("<rdf:li>{}</rdf:li>", xml_escape(k))).collect::<String>();
+    let mut x = String::from(
+        "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n  <rdf:Description rdf:about=\"\"\n    xmlns:dc=\"http://purl.org/dc/elements/1.1/\"\n    xmlns:lr=\"http://ns.adobe.com/lightroom/1.0/\"\n    xmlns:lc=\"http://ns.lightcraft.app/lc/1.0/\">\n",
+    );
+    if !dc.is_empty() {
+        x.push_str(&format!("   <dc:subject><rdf:Bag>{}</rdf:Bag></dc:subject>\n", bag(dc)));
+    }
+    if !hs.is_empty() {
+        x.push_str(&format!("   <lr:hierarchicalSubject><rdf:Bag>{}</rdf:Bag></lr:hierarchicalSubject>\n", bag(hs)));
+    }
+    for (k, v) in lc {
+        x.push_str(&format!("   <lc:{k}>{}</lc:{k}>\n", xml_escape(v)));
+    }
+    x.push_str("  </rdf:Description>\n </rdf:RDF>\n</x:xmpmeta>");
+    x
+}
+fn session_with(dir: &Path, name: &str, seed: u8, xmp: Option<&str>) -> (Session, PhotoId) {
+    write_png(&dir.join(format!("{name}.png")), seed);
+    if let Some(x) = xmp {
+        std::fs::write(dir.join(format!("{name}.xmp")), x).unwrap();
+    }
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [dir.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    (s, id)
+}
+fn add_to_dc_subject(xml: &str, li: &str) -> String {
+    xml.replacen("</rdf:Bag></dc:subject>", &format!("<rdf:li>{li}</rdf:li></rdf:Bag></dc:subject>"), 1).replacen(
+        "</rdf:Bag>\n   </dc:subject>",
+        &format!("<rdf:li>{li}</rdf:li></rdf:Bag>\n   </dc:subject>"),
+        1,
+    )
+}
+
+/// `Masse` (mass) and `Maße` (dimensions) are two keywords, though they upper-case alike: another app removing
+/// `Masse` from dc:subject removes it, `Maße` doesn't keep it.
+#[test]
+fn a_removal_is_read_beside_a_name_that_upper_cases_alike() {
+    let src = temp_dir("kw3-eszett");
+    let (mut s, id) = session_with(&src, "a", 41, None);
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "addKeywords": ["Physik|Masse", "Maße"]})).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    let side = src.join("a.xmp");
+    let x = drop_from_dc_subject(&std::fs::read_to_string(&side).unwrap(), "Masse");
+    std::fs::write(&side, &x).unwrap();
+    let m = lightcraft_meta::parse_xmp(&x).unwrap().metadata;
+    s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    let after = photo_keywords(&s, id);
+    let _ = std::fs::remove_dir_all(&src);
+    assert_eq!(after, ["Maße"], "dc after edit {:?} hS {:?}", m.keywords, m.hierarchical_keywords);
+}
+
+/// Turkish dotless ı: `kır` (countryside) and `kir` (dirt) upper-case alike and are two keywords.
+#[test]
+fn a_removal_is_read_beside_a_dotless_i_name() {
+    let src = temp_dir("kw3-dotless");
+    let (mut s, id) = session_with(&src, "a", 42, None);
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "addKeywords": ["Yer|kır", "kir"]})).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    let side = src.join("a.xmp");
+    let x = drop_from_dc_subject(&std::fs::read_to_string(&side).unwrap(), "kir");
+    std::fs::write(&side, &x).unwrap();
+    s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    let after = photo_keywords(&s, id);
+    let _ = std::fs::remove_dir_all(&src);
+    assert_eq!(after, ["Yer|kır"]);
+}
+
+/// A plain Lightroom Classic sidecar (no lc: record): a flat name that only upper-cases like a level (`Maße` beside
+/// `Physik|Masse`) is a keyword of its own on import.
+#[test]
+fn a_flat_name_that_upper_cases_like_a_level_is_kept() {
+    let src = temp_dir("kw3-lr-fold");
+    let x = hand_sidecar(&["Masse", "Physik", "Dimensions", "Maße"], &["Physik|Masse", "Dimensions"], &[]);
+    let (s, id) = session_with(&src, "a", 43, Some(&x));
+    let after = photo_keywords(&s, id);
+    let _ = std::fs::remove_dir_all(&src);
+    assert_eq!(after, ["Physik|Masse", "Dimensions", "Maße"]);
+}
+
+/// Same through the record: another app adds `Maße` to dc:subject of a LightCraft sidecar that has `Physik|Masse`;
+/// the read keeps the added keyword.
+#[test]
+fn a_dc_only_added_name_that_upper_cases_like_a_level_is_kept() {
+    let src = temp_dir("kw3-add-fold");
+    let (mut s, id) = session_with(&src, "a", 44, None);
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "addKeywords": ["Physik|Masse"]})).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    let side = src.join("a.xmp");
+    let x = add_to_dc_subject(&std::fs::read_to_string(&side).unwrap(), "Maße");
+    std::fs::write(&side, &x).unwrap();
+    assert!(lightcraft_meta::parse_xmp(&x).unwrap().metadata.keywords.iter().any(|k| k == "Maße"));
+    s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    let after = photo_keywords(&s, id);
+    let _ = std::fs::remove_dir_all(&src);
+    assert_eq!(after, ["Physik|Masse", "Maße"]);
+}
+
+/// Another app rewrites lr:hierarchicalSubject in NFC but leaves the lc:keywordPaths record in NFD: a keyword
+/// removed here still matches its record, so it stays removed.
+#[test]
+fn a_removed_keyword_stays_removed_when_its_path_is_rewritten_in_nfc() {
+    let src = temp_dir("kw3-nfc-path");
+    let (mut s, id) = session_with(&src, "a", 49, None);
+    let (nfd, nfc) = ("Places|Cafe\u{301}", "Places|Caf\u{e9}");
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "addKeywords": [nfd, "sunset"]})).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    let side = src.join("a.xmp");
+    let x = std::fs::read_to_string(&side).unwrap();
+    let start = x.find("<lr:hierarchicalSubject>").unwrap();
+    let end = x[start..].find("</lr:hierarchicalSubject>").unwrap() + start;
+    let x = format!("{}{}{}", &x[..start], x[start..end].replace(nfd, nfc), &x[end..]);
+    std::fs::write(&side, &x).unwrap();
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "removeKeywords": [nfd]})).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    let d = sidecar_xmp(&side);
+    s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    let after = photo_keywords(&s, id);
+    let _ = std::fs::remove_dir_all(&src);
+    assert_eq!(after, ["sunset"], "hS {:?}", d.metadata.hierarchical_keywords);
+}
+
+/// Same with the whole file NFC-normalized (lc: too).
+#[test]
+fn nfc_whole_file_removed_keyword_stays_removed() {
+    let src = temp_dir("kw3-nfc-all");
+    let (mut s, id) = session_with(&src, "a", 50, None);
+    let nfd = "Places|Cafe\u{301}";
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "addKeywords": [nfd, "sunset"]})).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    let side = src.join("a.xmp");
+    let x = std::fs::read_to_string(&side).unwrap().replace("Cafe\u{301}", "Caf\u{e9}");
+    std::fs::write(&side, &x).unwrap();
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "removeKeywords": [nfd]})).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    let after = photo_keywords(&s, id);
+    let _ = std::fs::remove_dir_all(&src);
+    assert_eq!(after, ["sunset"]);
+}
+
+/// Malformed lc:keywordPaths / lc:keywordNames values (not JSON, wrong types, empty paths, huge or deeply nested)
+/// never crash and never cost the photo its keywords.
+#[test]
+fn malformed_lc_values_never_crash() {
+    let huge: String = format!("[{}]", (0..20000).map(|i| format!("\"A{i}|B|C{i}\"")).collect::<Vec<_>>().join(","));
+    let deep = "[".repeat(200_000);
+    let long_name = format!("[\"{}\"]", "x|".repeat(50_000));
+    let values: Vec<&str> = vec![
+        "",
+        " ",
+        "[]",
+        "[\"\"]",
+        "[\"|\"]",
+        "[\"|||\"]",
+        "[\" | \"]",
+        "{",
+        "[1,2]",
+        "null",
+        "\"str\"",
+        "[\"a||b\"]",
+        "[\"Animals||Birds|Heron\"]",
+        "[\"\\u0000\"]",
+        "[\"\\ud800\"]",
+        &huge,
+        &deep,
+        &long_name,
+    ];
+    for (n, v) in values.iter().enumerate() {
+        for key in ["keywordPaths", "keywordNames"] {
+            let src = temp_dir(&format!("kw3-bad-{n}-{key}"));
+            let x = hand_sidecar(&["Heron", "Birds", "Animals", "sunset", "|", " "], &["Animals|Birds|Heron", "sunset", "||", ""], &[(key, v)]);
+            let (mut s, id) = session_with(&src, "a", 60, Some(&x));
+            s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+            s.execute("photo.setMeta", &json!({"ids": [id.0], "addKeywords": ["dog"]})).unwrap();
+            s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+            s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+            let after = photo_keywords(&s, id);
+            let _ = std::fs::remove_dir_all(&src);
+            assert!(after.iter().any(|k| k == "Animals|Birds|Heron") && after.iter().any(|k| k == "dog"), "value {n} {key}: {after:?}");
+        }
+    }
+}
+
+/// Two spellings of one keyword that differ only in Unicode normalization (NFD and NFC `Café`) are written once.
+#[test]
+fn nfc_and_nfd_spellings_of_a_keyword_are_written_once() {
+    let src = temp_dir("nfc-duplicate");
+    let (mut s, id) = session_with(&src, "a", 71, None);
+    let (nfd, nfc) = ("Places|Cafe\u{301}", "Places|Caf\u{e9}");
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "keywords": [nfd, nfc]})).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    let saved = sidecar_xmp(&src.join("a.xmp")).metadata;
+    let _ = std::fs::remove_dir_all(&src);
+    assert_eq!(saved.hierarchical_keywords.len(), 1, "duplicate paths: {:?}", saved.hierarchical_keywords);
+    assert_eq!(saved.keywords.len(), 2, "duplicate flat leaf: {:?}", saved.keywords);
+}
+
+/// The XMP an export as Original writes beside the copy of photo `id`.
+fn exported_original_xmp(s: &mut Session, id: PhotoId) -> lightcraft_meta::XmpData {
+    let options = crate::export::ExportOptions::from_json(&json!({"format": "original"}));
+    let exported = crate::export::export_photo(s, id, &options, 1).unwrap();
+    lightcraft_meta::parse_xmp(std::str::from_utf8(&exported.sidecars[0].1).unwrap()).unwrap()
+}
+
+/// A keyword removed in LightCraft (never saved since import from a Lightroom Classic sidecar) isn't in the exported
+/// original: the copy is built from the photo alone.
+#[test]
+fn a_keyword_removed_here_stays_out_of_an_exported_original() {
+    let src = temp_dir("export-removed-export");
+    std::fs::write(src.join("heron.dng"), synthetic_dng("")).unwrap();
+    std::fs::write(src.join("heron.xmp"), LR_KEYWORDS).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.join("heron.dng").to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "removeKeywords": ["sunset"]})).unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap().meta.keywords, ["Animals|Birds|Heron"]);
+    let d = exported_original_xmp(&mut s, id);
+    let _ = std::fs::remove_dir_all(&src);
+    let m = d.metadata;
+    assert!(!m.hierarchical_keywords.iter().any(|k| k == "sunset"), "removed keyword leaked into export: {:?}", m.hierarchical_keywords);
+    assert!(!m.keywords.iter().any(|k| k == "sunset"), "removed keyword leaked into export dc:subject: {:?}", m.keywords);
+}
+
+/// The same through Convert to DNG.
+#[test]
+fn a_keyword_removed_here_stays_out_of_a_converted_dng() {
+    let src = temp_dir("export-removed-convert");
+    std::fs::write(src.join("heron.nef"), synthetic_dng("")).unwrap();
+    std::fs::write(src.join("heron.xmp"), LR_KEYWORDS).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.join("heron.nef").to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "removeKeywords": ["sunset"]})).unwrap();
+    let result = s.execute("photo.convertToDng", &json!({"ids": [id.0]})).unwrap();
+    let out = result["converted"][0]["path"].as_str().unwrap().to_string();
+    let embedded = lightcraft_meta::embedded(&std::fs::read(&out).unwrap()).xmp.unwrap();
+    let m = lightcraft_meta::parse_xmp(&embedded).unwrap().metadata;
+    // and what the library reads from the new DNG
+    let kw = s.catalog.photo(id).unwrap().meta.keywords.clone();
+    let _ = std::fs::remove_dir_all(&src);
+    assert!(
+        !m.hierarchical_keywords.iter().any(|k| k == "sunset"),
+        "removed keyword in converted DNG: {:?}; library now {kw:?}",
+        m.hierarchical_keywords
+    );
+}
+
+/// A synonym removed in LightCraft after a save recorded it in lc:keywordNames: its text doesn't travel in the exported
+/// original.
+#[test]
+fn a_synonym_removed_here_stays_out_of_an_exported_original() {
+    let src = temp_dir("export-removed-synonym");
+    let xmp = LR_KEYWORDS.replace("<rdf:li>Heron</rdf:li>", "<rdf:li>Heron</rdf:li><rdf:li>Ardea</rdf:li>");
+    std::fs::write(src.join("heron.dng"), synthetic_dng("")).unwrap();
+    std::fs::write(src.join("heron.xmp"), xmp).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.join("heron.dng").to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "removeKeywords": ["Ardea"]})).unwrap();
+    let options = crate::export::ExportOptions::from_json(&json!({"format": "original"}));
+    let exported = crate::export::export_photo(&mut s, id, &options, 1).unwrap();
+    let text = String::from_utf8(exported.sidecars[0].1.clone()).unwrap();
+    let kw = s.catalog.photo(id).unwrap().meta.keywords.clone();
+    let _ = std::fs::remove_dir_all(&src);
+    assert!(!kw.iter().any(|k| k == "Ardea"), "{kw:?}");
+    assert!(!text.contains("Ardea"), "removed synonym text in exported packet:\n{text}");
 }

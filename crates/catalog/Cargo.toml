@@ -18,6 +18,7 @@ thiserror = { workspace = true }
 crc32fast = { workspace = true }
 log = { workspace = true }
 web-time = { workspace = true }
+unicode-normalization = { workspace = true }
 
 [dev-dependencies]
 lightcraft-geom = { workspace = true }

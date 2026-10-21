@@ -49,6 +49,7 @@ sha2 = "0.10"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 log = "0.4"
+unicode-normalization = "0.1"
 rayon = "1"
 proptest = "1"
 bytemuck = { version = "1", features = ["derive"] }
