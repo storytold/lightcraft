@@ -3,7 +3,10 @@
 //! node with no name, a slider without its value and range, or a canvas tool no key can reach.
 use egui::accesskit::Role;
 use egui::vec2;
-use egui_kittest::{Harness, kittest::NodeT};
+use egui_kittest::{
+    Harness,
+    kittest::{NodeT, Queryable},
+};
 use lightcraft_ui_egui::{
     LightcraftApp, Services,
     state::{RightPanel, ViewMode},
@@ -329,4 +332,31 @@ fn import_button_describes_its_shortcut_as_this_platform_writes_it() {
     let sc = lightcraft_ui_egui::shortcuts::shortcut_of(&h.state().ui.settings.keymap, "file.addPhotos").expect("Import Photos… has a shortcut");
     let help = lightcraft_ui_egui::menubar::shortcut_text(sc, mac);
     assert!(button_described(&h, "Import Photos…", &help), "a button named \"Import Photos…\" describing {help:?}");
+}
+
+/// Settings' filter reads every tab by drawing it in a context of its own. That reading leaves the
+/// window's tree as it was: one Settings window, no interactive node left unnamed by it, and what was found
+/// listed as the window's own widgets.
+#[test]
+fn the_settings_filter_reads_the_tabs_without_touching_the_tree() {
+    let mut h = harness(ViewMode::PhotoGrid, RightPanel::None);
+    // (the External Editor tab's text has a "▸" the fonts lack: drawn as a box here, as in the app,
+    // not a panic as the kittest harness has it by default)
+    h.ctx.set_missing_glyph_policy(egui::MissingGlyphPolicy::Tofu);
+    h.state_mut().run("app.settings", serde_json::json!({"tab": "general"})).unwrap();
+    h.run_steps(8);
+    let windows =
+        |h: &Harness<'_, LightcraftApp>| h.root().children_recursive().map(|n| n.accesskit_node()).filter(|n| n.role() == Role::Window).count();
+    let before = windows(&h);
+    // (what Settings leaves unnamed of its own is not this test's: the filter adds none to it)
+    let unnamed = |h: &Harness<'_, LightcraftApp>| audit(h, "settings").len();
+    let unnamed_before = unnamed(&h);
+    let filter = h.get_by_label("Filter settings");
+    filter.click();
+    h.run_steps(2);
+    h.get_by_label("Filter settings").type_text("cache");
+    h.run_steps(8);
+    assert!(h.state().widgets.iter().any(|(id, _)| id.starts_with("settingsFound:")), "the filter lists what it found");
+    assert_eq!(windows(&h), before, "reading the tabs adds no window to the tree");
+    assert!(unnamed(&h) <= unnamed_before, "the filter and what it found are named: {} unnamed, {unnamed_before} before", unnamed(&h));
 }

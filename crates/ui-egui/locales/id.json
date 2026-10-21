@@ -2370,5 +2370,8 @@
   "Set up name suggestions…": "Siapkan saran nama…",
   "Top bar": "Bilah atas",
   "Tool strip": "Bilah alat",
-  "Bottom bar": "Bilah bawah"
+  "Bottom bar": "Bilah bawah",
+  "Filter settings": "Filter pengaturan",
+  "No setting matches what is typed.": "Tidak ada pengaturan yang cocok dengan yang diketik.",
+  "Try one word, or part of one: the names of tabs and sections, labels and explanations are all looked through.": "Coba satu kata atau sebagiannya: yang dicari adalah nama tab dan bagian, label, serta penjelasan."
 }
