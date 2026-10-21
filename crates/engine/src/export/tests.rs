@@ -1523,3 +1523,37 @@ fn export_weights_follow_the_source_and_output_sizes() {
     assert_eq!(render_weight(0, 0, SourceLevel::Full, 0), 0);
     assert!(render_weight(usize::MAX, 1, SourceLevel::Full, usize::MAX) > 0, "no overflow");
 }
+
+/// The gain map's linear SDR (a table of the 256 levels) is each sample decoded on its own.
+#[test]
+fn the_linear_sdr_table_is_exact() {
+    let img = test_image();
+    for space in [OutputSpace::Srgb, OutputSpace::AdobeRgb, OutputSpace::ProPhoto, OutputSpace::Rec2020] {
+        let trc = space.trc();
+        let lin = linear_of_8bit(&img, trc);
+        assert_eq!(lin.len(), img.data.len());
+        for (p, l) in img.data.iter().zip(&lin) {
+            for c in 0..3 {
+                assert_eq!(l[c].to_bits(), trc.decode(p[c] as f32 / 255.0).to_bits(), "{space:?}");
+            }
+        }
+    }
+}
+
+/// A batch's lanes come from the setting, the environment's `LIGHTCRAFT_EXPORT_LANES` aside,
+/// never more than the batch has photos.
+#[test]
+fn export_lanes_follow_the_setting() {
+    if std::env::var_os("LIGHTCRAFT_EXPORT_LANES").is_some() {
+        return;
+    }
+    set_export_lanes(Some(3));
+    assert_eq!(export_lanes_override(), Some(3));
+    assert_eq!(export_parallelism(10), 3);
+    assert_eq!(export_parallelism(2), 2);
+    set_export_lanes(Some(10_000));
+    assert_eq!(export_parallelism(1000), MAX_EXPORT_LANES);
+    set_export_lanes(None);
+    assert_eq!(export_lanes_override(), None);
+    assert!(export_parallelism(1000) >= 1);
+}
