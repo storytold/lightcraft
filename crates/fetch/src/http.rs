@@ -1,13 +1,15 @@
-//! A small HTTP/1.1 GET client for model downloads, in pure Rust: `std::net` sockets and, for
+//! A small HTTP/1.1 client for model downloads and plain-JSON APIs (e.g. a photo server's
+//! `x-api-key` endpoints), in pure Rust: `std::net` sockets and, for
 //! `https://`, rustls with the RustCrypto provider (`rustls-rustcrypto`; no `ring` or
 //! `aws-lc-rs`, so nothing is compiled from C or assembly) and the Mozilla root certificates
 //! (`webpki-roots`).
 //!
-//! Only what a large-file download needs: one request per connection (`Connection: close`),
-//! `Range` requests for resuming, redirects (followed by the caller), `Content-Length`,
-//! chunked and read-to-close bodies. Every read waits at most `stall` for data and checks the
+//! Only what such clients need: one request per connection (`Connection: close`), `Range`
+//! requests for resuming, a fixed-length request body announced with `Content-Length`
+//! (`POST`/`PUT`), redirects (followed by the caller), `Content-Length`, chunked and
+//! read-to-close bodies. Every read waits at most `stall` for data and checks the
 //! cancel flag at least twice a second, so a dead server or a cancelled download never hangs
-//! the downloading thread. No proxies (see docs/ai-masks.md).
+//! the calling thread. No proxies (see docs/ai-masks.md).
 
 use std::io::{ErrorKind, Read, Write};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
@@ -503,10 +505,20 @@ impl Response {
     }
 }
 
-/// Send `GET url` with extra `headers` and read the status line and headers.
-pub fn get(url: &Url, headers: &[(&str, String)], limits: &Limits) -> Result<Response, HttpError> {
+/// Send one request with extra `headers` and an optional fixed-length `body`, then read the status
+/// line and headers. `method` must be a plain token, and a body is announced with
+/// `Content-Length`, so what the caller caps is what a server gets.
+pub fn request(method: &str, url: &Url, headers: &[(&str, String)], body: Option<&[u8]>, limits: &Limits) -> Result<Response, HttpError> {
+    if method.is_empty()
+        || !method.bytes().all(|b| {
+            b.is_ascii_alphanumeric()
+                || matches!(b, b'!' | b'#' | b'$' | b'%' | b'&' | b'\'' | b'*' | b'+' | b'-' | b'.' | b'^' | b'_' | b'`' | b'|' | b'~')
+        })
+    {
+        return Err(HttpError::BadUrl(format!("unusable method `{method}`")));
+    }
     let mut req = format!(
-        "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: LightCraft/{}\r\nAccept: */*\r\nAccept-Encoding: identity\r\nConnection: close\r\n",
+        "{method} {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: LightCraft/{}\r\nAccept: */*\r\nAccept-Encoding: identity\r\nConnection: close\r\n",
         url.path,
         url.host_header(),
         env!("CARGO_PKG_VERSION")
@@ -517,9 +529,16 @@ pub fn get(url: &Url, headers: &[(&str, String)], limits: &Limits) -> Result<Res
         }
         req.push_str(&format!("{k}: {v}\r\n"));
     }
+    if let Some(b) = body {
+        let len = u64::try_from(b.len()).map_err(|_| HttpError::BadUrl("request body is too large to send".into()))?;
+        req.push_str(&format!("Content-Length: {len}\r\n"));
+    }
     req.push_str("\r\n");
     let mut stream = Stream::connect(url, limits)?;
     stream.write_all(req.as_bytes(), limits)?;
+    if let Some(b) = body {
+        stream.write_all(b, limits)?;
+    }
     let mut conn = Conn { stream, buf: Vec::new(), pos: 0 };
     let status_line = conn.line(MAX_HEAD, limits)?;
     let mut parts = status_line.split_whitespace();
@@ -554,6 +573,31 @@ pub fn get(url: &Url, headers: &[(&str, String)], limits: &Limits) -> Result<Res
         BodyMode::Close
     };
     Ok(Response { status, headers, conn, body })
+}
+
+/// `GET` with extra headers and no request body.
+pub fn get(url: &Url, headers: &[(&str, String)], limits: &Limits) -> Result<Response, HttpError> {
+    request("GET", url, headers, None, limits)
+}
+
+/// Read a whole body that is expected to be small (JSON), refusing it if it exceeds `max` bytes —
+/// from the announced length when there is one, and from the bytes actually read otherwise.
+pub fn read_all(resp: &mut Response, max: u64, limits: &Limits) -> Result<Vec<u8>, HttpError> {
+    if resp.content_length().is_some_and(|n| n > max) {
+        return Err(HttpError::Protocol("the response is larger than the limit".into()));
+    }
+    let mut out: Vec<u8> = Vec::new();
+    let mut buf = [0u8; 32 * 1024];
+    loop {
+        let n = resp.read(&mut buf, limits)?;
+        if n == 0 {
+            return Ok(out);
+        }
+        if out.len().saturating_add(n) as u64 > max {
+            return Err(HttpError::Protocol("the response is larger than the limit".into()));
+        }
+        out.extend_from_slice(buf.get(..n).unwrap_or_default());
+    }
 }
 
 #[cfg(test)]

@@ -2002,6 +2002,7 @@
   "not added to Apple Photos (cancelled)": "Appleの写真には追加されませんでした（キャンセル）",
   "The first time, macOS asks whether LightCraft may control Photos.": "初回は、LightCraftに写真の操作を許可するかmacOSが確認します。",
   "Adding to Apple Photos": "Appleの写真に追加中",
+  "Importing from Immich": "Immich から読み込み中",
   "\"saved in memory but not written to disk\", the top bar shows a warning, and LightCraft keeps retrying until the": "「メモリーには保存されたがディスクに書き込まれていない」と報告し、上部バーに警告を表示して、LightCraft は",
   "#106): a DNG is checked against the raw data, written to a temp file, synced and read back before it gets its": "#106）：DNG は raw データと照合し、一時ファイルに書き込み、同期して読み戻してから",
   "(`gpuReason`, `gpuFallback`), Help ▸ System Info and Settings ▸ Performance say why the GPU isn't": "（`gpuReason`、`gpuFallback`）、ヘルプ → システム情報、設定 → パフォーマンスに GPU が使われない",

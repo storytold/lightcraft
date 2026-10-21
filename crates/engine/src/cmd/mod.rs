@@ -21,6 +21,7 @@ mod face_recognize;
 pub mod filters;
 mod focus;
 pub mod geocode;
+pub(crate) mod immich;
 pub mod keywords;
 pub mod library;
 pub mod lut_profiles;
@@ -178,6 +179,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(face_recognize::specs());
         v.extend(focus::specs());
         v.extend(activity::specs());
+        v.extend(immich::specs());
         v
     })
 }

@@ -42,6 +42,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("denoise-core", Class::Layer(1)),
     ("denoise", Class::Layer(1)),
     ("heif", Class::Layer(0)),
+    ("immich", Class::Layer(0)),
     ("raw", Class::Layer(1)),
     ("codecs", Class::Layer(1)),
     ("meta", Class::Layer(1)),
@@ -71,11 +72,13 @@ pub const TABLE: &[(&str, Class)] = &[
 ];
 
 /// Explicit orderings *within* a layer (earlier may be used by later).
-/// L0: `raster` builds on `color` and `geom`; `color` uses `geom` for matrices.
+/// L0: `raster` builds on `color` and `geom`; `color` uses `geom` for matrices;
+/// `immich` talks over `fetch`'s HTTP/TLS client.
 /// L1: `raw` and `codecs` read metadata through `meta`; `develop` uses `meta` for XMP.
 pub const INTRA_LAYER_ORDER: &[&[&str]] = &[
     &["geom", "color", "raster"],
     &["tiff", "raster"],
+    &["fetch", "immich"],
     &["denoise-core", "denoise"],
     &["meta", "raw"],
     &["meta", "codecs"],

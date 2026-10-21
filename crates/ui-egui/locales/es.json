@@ -2180,6 +2180,7 @@
   "not added to Apple Photos (cancelled)": "no se añadieron a Fotos de Apple (cancelado)",
   "The first time, macOS asks whether LightCraft may control Photos.": "La primera vez, macOS pregunta si LightCraft puede controlar Fotos.",
   "Adding to Apple Photos": "Añadiendo a Fotos de Apple",
+  "Importing from Immich": "Importando desde Immich",
   "\"saved in memory but not written to disk\", the top bar shows a warning, and LightCraft keeps retrying until the": "«guardado en memoria pero no escrito en el disco», la barra superior muestra un aviso y LightCraft lo sigue intentando hasta que el",
   "#106): a DNG is checked against the raw data, written to a temp file, synced and read back before it gets its": "#106): un DNG se comprueba con los datos raw, se escribe en un archivo temporal, se sincroniza y se vuelve a leer antes de recibir su",
   "(`gpuReason`, `gpuFallback`), Help ▸ System Info and Settings ▸ Performance say why the GPU isn't": "(`gpuReason`, `gpuFallback`), Ayuda → Información del sistema y Ajustes → Rendimiento indican por qué no se usa la GPU",

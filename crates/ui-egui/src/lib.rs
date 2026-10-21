@@ -20,6 +20,8 @@ mod focus_scan;
 pub mod headless;
 pub mod i18n;
 pub mod icons;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod immich;
 pub mod import;
 pub mod lightroom_import;
 pub mod links;
@@ -98,6 +100,8 @@ mod tests_folder_drop;
 mod tests_grading;
 #[cfg(test)]
 mod tests_grid;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests_immich;
 #[cfg(test)]
 mod tests_info_dialogs;
 #[cfg(test)]
@@ -440,6 +444,9 @@ pub struct LightcraftApp {
     pub sync_owns_changes: bool,
     /// A Synchronize Folder at work in the background.
     pub sync_run: Option<sync::SyncRun>,
+    /// The Immich import dialog's workers (native only; the dialog state travels with `ui.dialog`).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub immich_task: Option<immich::ImmichTask>,
     /// A Lightroom catalog inspect/import in progress.
     pub lightroom: Option<lightroom_import::LightroomTask>,
     /// Last terminal Lightroom result, exposed by the command's status/wait response.
@@ -540,6 +547,8 @@ impl LightcraftApp {
             sync: None,
             sync_owns_changes: false,
             sync_run: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            immich_task: None,
             lightroom: None,
             lightroom_last: None,
             lightroom_result: None,
@@ -1119,6 +1128,8 @@ impl LightcraftApp {
         sync::poll(self, ctx);
         sync::poll_run(self, ctx);
         import::tick(self, ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        immich::tick(self, ctx);
         lightroom_import::tick(self, ctx);
         recheck::tick(self);
         tasks::poll(self, ctx);

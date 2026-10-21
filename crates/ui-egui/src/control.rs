@@ -137,6 +137,7 @@ pub fn inspect(app: &LightcraftApp, ctx: &egui::Context) -> Value {
         "scan": app.scan.as_ref().map(crate::import::ScanTask::status),
         "export": {"running": app.export.as_ref().map(crate::export_task::ExportTask::status), "last": app.last_export_result},
         "import": app.import.as_ref().map(crate::import::ImportTask::status),
+        "immich": immich_status(app),
         "tasks": app.tasks.labels(),
         // every long-running task in flight, as the activity stack shows them (`activity.list`)
         "activity": app.session.activity.list(),
@@ -153,6 +154,18 @@ pub fn memory(app: &LightcraftApp) -> Value {
         o.extend(r);
     }
     v
+}
+
+/// The Immich dialog's workers (`ui.inspect` → `immich`); the browser build talks to no server.
+#[cfg(not(target_arch = "wasm32"))]
+fn immich_status(app: &LightcraftApp) -> Option<Value> {
+    let importing = app.session.immich_import.as_ref().is_some_and(|j| j.finished.is_none());
+    app.immich_task.as_ref().map(|t| t.status(importing))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn immich_status(_app: &LightcraftApp) -> Option<Value> {
+    None
 }
 
 fn modifiers(p: &Value) -> egui::Modifiers {
@@ -384,17 +397,27 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
         "ui.dialog.confirm" => match app.ui.dialog.take() {
             Some(d) => {
                 let r = crate::panels::dialogs::confirm_dialog(app, &d);
-                // the import review and the rule editor stay open on an error, as with their buttons
-                if (r.is_err()
-                    && matches!(
-                        d,
-                        crate::state::Dialog::Import { .. }
-                            | crate::state::Dialog::SamModel { .. }
-                            | crate::state::Dialog::SmartRules { .. }
-                            | crate::state::Dialog::SaveEffect { .. }
-                    ))
-                    || (r.is_ok() && crate::panels::dialogs::keeps_open(app, &d))
-                {
+                // the import review, the rule editor and the Immich import stay open on an
+                // error, as with their buttons
+                let keep = r.is_ok() && crate::panels::dialogs::keeps_open(app, &d);
+                #[cfg(not(target_arch = "wasm32"))]
+                let err_keep = matches!(
+                    d,
+                    crate::state::Dialog::Import { .. }
+                        | crate::state::Dialog::SamModel { .. }
+                        | crate::state::Dialog::SmartRules { .. }
+                        | crate::state::Dialog::SaveEffect { .. }
+                        | crate::state::Dialog::Immich { .. }
+                );
+                #[cfg(target_arch = "wasm32")]
+                let err_keep = matches!(
+                    d,
+                    crate::state::Dialog::Import { .. }
+                        | crate::state::Dialog::SamModel { .. }
+                        | crate::state::Dialog::SmartRules { .. }
+                        | crate::state::Dialog::SaveEffect { .. }
+                );
+                if (r.is_err() && err_keep) || keep {
                     app.ui.dialog = Some(d);
                 }
                 wrap(r)
@@ -402,6 +425,11 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
             None => err("no dialog open"),
         },
         "ui.dialog.cancel" => {
+            // closing the Immich dialog stops a running import first
+            #[cfg(not(target_arch = "wasm32"))]
+            if matches!(app.ui.dialog, Some(crate::state::Dialog::Immich { .. })) {
+                crate::immich::close(app);
+            }
             app.ui.dialog = None;
             ok(Value::Null)
         }

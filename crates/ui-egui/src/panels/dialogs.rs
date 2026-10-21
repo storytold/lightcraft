@@ -228,6 +228,8 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
         Dialog::Rename { .. } => "Rename Photos",
         Dialog::Import { .. } => "Import Photos",
         Dialog::LightroomResult { .. } => "Lightroom Catalog Import",
+        #[cfg(not(target_arch = "wasm32"))]
+        Dialog::Immich { .. } => "Import from Immich",
         Dialog::LabelNames { .. } => "Edit Color Label Names",
         Dialog::CaptureTime { .. } => "Edit Capture Time",
         Dialog::RenameKeyword { .. } => "Rename Keyword",
@@ -309,6 +311,8 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
         .min_width(widest)
         .default_width(match dlg {
             Dialog::Import { .. } => crate::import::DIALOG_SIZE[0],
+            #[cfg(not(target_arch = "wasm32"))]
+            Dialog::Immich { .. } => 780.0,
             Dialog::SmartRules { .. } => 680.0,
             Dialog::AllMetadata { .. } => 620.0,
             Dialog::Print => 1100.0,
@@ -1083,6 +1087,8 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                 }
                 Dialog::Merge { opts } => crate::merge::body(app, ui, opts),
                 Dialog::Import { opts } => crate::import::body(app, ui, opts),
+                #[cfg(not(target_arch = "wasm32"))]
+                Dialog::Immich { opts } => crate::immich::body(app, ui, opts),
                 Dialog::Settings { tab } => crate::panels::settings::body(app, ui, tab),
                 Dialog::SamModel { error, .. } => sam_model_body(app, ui, error.as_deref()),
                 Dialog::KeywordTag {
@@ -1333,10 +1339,15 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                 let (sam_installed, sam_running, sam_failed) = (sam.installed(), sam.download_status().running, sam.download_status().error.is_some());
                 // no download location in this build: nothing to offer but the manual install
                 let sam_nowhere = sam_by_hand(sam);
+                // the Immich dialog's left button closes it once its import has run its course
+                #[cfg(not(target_arch = "wasm32"))]
+                let immich_done = app.immich_task.as_ref().is_some_and(|t| t.import_done);
                 let cancel = match &dlg {
                     Dialog::SamModel { .. } if sam_running || sam_installed || sam_nowhere => "Close",
                     Dialog::SamModel { .. } => "Not Now",
                     Dialog::LightroomResult { .. } => "Close",
+                    #[cfg(not(target_arch = "wasm32"))]
+                    Dialog::Immich { .. } if immich_done => "Close",
                     _ => "Cancel",
                 };
                 let add_label;
@@ -1352,6 +1363,9 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     Dialog::SlideshowExport { .. } => "Export…",
                     Dialog::Print => "Print to PDF…",
                     Dialog::Merge { .. } => "Merge",
+                    // the Immich dialog carries its own Import button (its grid selection is its input)
+                    #[cfg(not(target_arch = "wasm32"))]
+                    Dialog::Immich { .. } => "",
                     Dialog::DenoiseModel { info, .. } if info["download"].is_string() => "Accept & Download",
                     Dialog::DenoiseModel { .. } => "Install",
                     Dialog::FaceModel { info, .. } if !informational && info["download"].is_string() => "Download",
@@ -1474,6 +1488,9 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
             {
                 app.toast(ctx, e)
             }
+            // the Immich dialog stays open too — the reason goes to its own error line as well
+            #[cfg(not(target_arch = "wasm32"))]
+            Err(e) if matches!(dlg, Dialog::Immich { .. }) => app.toast(ctx, e),
             // the SAM 3 dialog stays open to show the download (or why it can't start)
             Err(e) if matches!(dlg, Dialog::SamModel { .. }) => {
                 if let Dialog::SamModel { error, .. } = &mut dlg {
@@ -1504,6 +1521,11 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
             }
             _ => close = true,
         }
+    }
+    // closing the Immich dialog stops a running import first (completed batches stay imported)
+    #[cfg(not(target_arch = "wasm32"))]
+    if close && matches!(dlg, Dialog::Immich { .. }) {
+        crate::immich::close(app);
     }
     // a dialog opened from inside this one (a button in Settings that shows a licence) takes its place
     if app.ui.dialog.as_ref().is_some_and(|now| *now != at_start) {
@@ -1587,9 +1609,12 @@ pub fn fmt_gap(v: f64) -> String {
 }
 
 /// Whether a dialog stays open after its action succeeded (the SAM 3 dialog while the model
-/// downloads).
+/// downloads; the Immich dialog, which becomes a progress window).
 pub fn keeps_open(app: &LightcraftApp, dlg: &Dialog) -> bool {
-    matches!(dlg, Dialog::SamModel { .. }) && !app.session.segmenter.installed()
+    let keep = matches!(dlg, Dialog::SamModel { .. }) && !app.session.segmenter.installed();
+    #[cfg(not(target_arch = "wasm32"))]
+    let keep = keep || matches!(dlg, Dialog::Immich { .. });
+    keep
 }
 
 /// No SAM 3 model, no download running and nowhere to download it from: installing it by hand is
@@ -1913,6 +1938,9 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
         }
         Dialog::Merge { opts } => crate::merge::start_final(app, opts),
         Dialog::Import { opts } => crate::import::start(app, opts),
+        // OK on the Immich dialog starts the import (the dialog stays open showing progress)
+        #[cfg(not(target_arch = "wasm32"))]
+        Dialog::Immich { opts } => crate::immich::start_import(app, opts),
         Dialog::ConfirmDelete { .. } => app.run("photo.delete", json!({})),
         Dialog::MovePhotos { ids, folder, dont_ask, library, .. } => {
             // another library opened meanwhile (from the menu bar, an agent): these numbers are
@@ -2152,7 +2180,7 @@ fn slideshow_export_body(app: &mut LightcraftApp, ui: &mut egui::Ui, settings: &
     );
 }
 
-fn field<R>(ui: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+pub(crate) fn field<R>(ui: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
     let t = Tokens::get(ui.ctx());
     ui.horizontal(|ui| {
         ui.allocate_ui_with_layout(egui::vec2(LABEL_W, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {

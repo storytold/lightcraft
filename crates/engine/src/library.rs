@@ -513,6 +513,8 @@ impl Session {
         self.recent_keywords = prefs.recent_keywords;
         self.import_defaults = prefs.import;
         self.cache_mb = prefs.cache_mb;
+        // the Immich servers (with their API keys) are per-user settings, not library preferences
+        self.immich_servers = crate::cmd::immich::load(self);
         self.slideshow = prefs.slideshow.sanitized();
         self.slide_layout = prefs.slide_layout.sanitized();
         self.slide_overlays = prefs.slide_overlays.sanitized();
@@ -794,7 +796,91 @@ impl Session {
                 "prefs: prefs.json couldn't be read when the library opened, so it isn't overwritten; reopen the library to save preferences".into(),
             ));
         }
-        lib.files.write_atomic("prefs.json", &v).map_err(|e| EngineError::Other(format!("prefs: {e}")))
+        lib.files.write_atomic("prefs.json", &v).map_err(|e| EngineError::Other(format!("prefs: {e}")))?;
+        Ok(())
+    }
+
+    /// Save the Immich servers (with their API keys) to the per-user settings file. Unlike
+    /// [`save_prefs`], this is not tied to a library — the settings are per user, and there is no
+    /// library to save into.
+    pub fn save_immich(&self) -> Result<()> {
+        crate::cmd::immich::save(self)
+    }
+
+    /// Take in what the background Immich import's workers brought back: the engine's worker
+    /// downloads, and — once the downloads are in — a second worker readies them (probing,
+    /// hashing, copying), the same split the app's own importer uses, so no frame waits on a
+    /// disk. When the batch comes back, this session joins it through the same `library.import`
+    /// the synchronous path uses (one undo step) — into the library the run started in, never
+    /// one opened after it. Cheap when nothing has moved; call it every frame while the dialog
+    /// is open.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn poll_immich_import(&mut self) {
+        let Some(mut job) = self.immich_import.take() else { return };
+        if let Some(paths) = job.poll() {
+            if job.library() != self.library_generation() {
+                // photo ids belong to one library: the run cannot join one opened after it
+                let _ = std::fs::remove_dir_all(job.staging());
+                job.finish(serde_json::json!({
+                    "failed": job.failed.clone(),
+                    "error": "the library was switched while the import ran; the downloads were dropped"
+                }));
+            } else if paths.is_empty() {
+                let _ = std::fs::remove_dir(job.staging());
+                job.finish(serde_json::json!({ "failed": job.failed.clone(), "error": "nothing could be downloaded" }));
+            } else {
+                job.start_commit(self, paths);
+            }
+        }
+        if let Some(msg) = job.take_commit() {
+            self.finish_immich_commit(&mut job, msg);
+        }
+        self.immich_import = Some(job);
+    }
+
+    /// Commit what the commit worker readied — the catalog half of the import, the same steps
+    /// `library.import` takes after its own prepare: the album joins, the whole import is one
+    /// undo step, and the first imported photo becomes the selection.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn finish_immich_commit(&mut self, job: &mut crate::cmd::immich::ImmichImportJob, msg: crate::cmd::immich::CommitMsg) {
+        let batch = match msg {
+            crate::cmd::immich::CommitMsg::Prepared { batch, cache } => {
+                // probes the worker read that this import didn't use stay for a later one
+                self.import_probes.extend(cache);
+                batch
+            }
+            crate::cmd::immich::CommitMsg::Failed(e) => {
+                job.finish(serde_json::json!({ "failed": job.failed.clone(), "error": e }));
+                return;
+            }
+        };
+        let (opts, now, album, album_name) = job.commit_parts();
+        let undo0 = self.undo.len();
+        let report = self.execute_fn("library.import", |s| {
+            let report = crate::import::commit_prepared(s, &opts, &now, batch)?;
+            let report = crate::cmd::library::import_batch_done(s, report, album, album_name.as_deref())?;
+            crate::cmd::library::import_finished(s, undo0, report)
+        });
+        let finished = match report {
+            Ok(report) => {
+                if job.mode() == "copy" {
+                    // the bytes are in the library now; the staged copies have no further use
+                    let _ = std::fs::remove_dir_all(job.staging());
+                }
+                serde_json::json!({ "report": report, "failed": job.failed.clone() })
+            }
+            Err(e) => serde_json::json!({ "failed": job.failed.clone(), "error": e.to_string() }),
+        };
+        job.finish(finished);
+    }
+
+    /// Stop a running background Immich import (the dialog's Cancel): in-flight transfers stop at
+    /// the next chunk, no new file is started, and the finished downloads still join the library.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn cancel_immich_import(&mut self) {
+        if let Some(job) = self.immich_import.as_mut() {
+            job.cancel();
+        }
     }
 
     /// Warnings about the open library not handed out yet: its settings files, and a lock that

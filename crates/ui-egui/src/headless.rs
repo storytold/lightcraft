@@ -4320,7 +4320,12 @@ mod tests {
         assert!(!h.app.ui.settings.film_names);
         h.request("ui.clickWidget", json!({"id": "button:settingsGridBadges-1"}), t);
         assert_eq!(h.app.ui.settings.grid_badges, crate::state::GridBadges::Always);
-        h.request("ui.scroll", json!({"dy": 700.0}), t);
+        // Back to the top of the tab, deterministically: a large wheel delta clamps the scroll
+        // offset to 0 no matter how tall the appearance cards are (the -700 wheel above animates,
+        // so undoing it by an equal and opposite delta can leave a residual offset on fonts whose
+        // metrics differ — FreeBSD's, for one — which would clip the rows at the top of the
+        // next tab).
+        h.request("ui.scroll", json!({"dy": 100000.0}), t);
         for _ in 0..4 {
             h.step();
         }

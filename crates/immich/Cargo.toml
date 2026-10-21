@@ -1,0 +1,18 @@
+[package]
+name = "lightcraft-immich"
+description = "Client for a self-hosted Immich photo server: browse, import and publish against any server the user names, in pure Rust (L0)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# Native only, like lightcraft-fetch: the web build talks to no photo server.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+log = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+# The pure-Rust HTTP/TLS client: rustls with the RustCrypto provider and the webpki root set,
+# shared with the model downloads (one copy of the whole stack).
+lightcraft-fetch = { workspace = true }
+
+[lints]
+workspace = true
