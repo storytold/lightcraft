@@ -204,6 +204,8 @@ pub const ALIASES: &[(&str, &str, &str)] = &[
     ("F6", "view.filmstrip", "{}"),
     ("F7", "view.leftPanel", "{}"),
     ("Shift+M", "version.create", "{}"),
+    // Lightroom Classic: Shift+P / X / U flag and advance in Library and Develop alike
+    ("Shift+P", "photo.flag", r#"{"flag": "pick", "advance": true}"#),
     // grid thumbnail size: Classic's key is `=`; `+` (keypad, or Shift+= reported as Plus) agrees
     ("Plus", "view.thumbSizeUp", "{}"),
     ("Shift+Plus", "view.thumbSizeUp", "{}"),
@@ -485,9 +487,6 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
             cull(app, &f, json!({}), false);
         } else if let Some(l) = f.strip_prefix("label:") {
             cull(app, "photo.label", json!({"label": l}), false);
-        } else if f == "panel.presets" && library_grid(app) {
-            // Classic's Shift+P picks and advances in Library; keep the Presets binding elsewhere.
-            cull(app, "photo.flag", json!({"flag": "pick"}), true);
         } else if f == "view.softProof" && matches!(app.ui.view, crate::state::ViewMode::PhotoGrid | crate::state::ViewMode::SquareGrid) {
             // S in a grid: expand / collapse the stack (Lightroom's Library binding)
             let _ = app.run("stack.toggle", json!({}));
@@ -840,18 +839,39 @@ mod tests {
         assert_eq!(h.app.session.active(), Some(PhotoId(4)), "last photo stays selected");
     }
 
+    /// Lightroom Classic (issue #1707): Shift+P / X / U flag and advance in the grids and in
+    /// Detail (Develop and its filmstrip) alike, in the grid order; the last photo stays put.
     #[test]
-    fn shift_pick_preserves_presets_outside_the_library_grids() {
+    fn shift_flag_keys_advance_in_every_view() {
+        use crate::state::ViewMode;
+        use lightcraft_catalog::{Flag, PhotoId};
+        for view in [ViewMode::PhotoGrid, ViewMode::SquareGrid, ViewMode::Detail] {
+            let mut h = library();
+            h.app.ui.view = view;
+            for (k, flag, next) in [("P", Flag::Pick, 2), ("X", Flag::Reject, 3), ("U", Flag::None, 4), ("P", Flag::Pick, 4)] {
+                let before = h.app.session.active().unwrap();
+                let other = if flag == Flag::Reject { "pick" } else { "reject" };
+                h.app.session.execute("photo.flag", &json!({"flag": other})).unwrap();
+                key(&mut h, k, true);
+                assert_eq!(h.app.session.catalog.photo(before).unwrap().flag, flag, "{view:?} Shift+{k}");
+                assert_eq!(h.app.session.active(), Some(PhotoId(next)), "{view:?} Shift+{k}");
+            }
+            assert!(!h.app.ui.presets, "{view:?}: Shift+P must not open Presets");
+            assert_eq!(h.app.ui.view, view);
+        }
+    }
+
+    /// Presets lost its default Shift+P; giving the key back to it in the keymap wins over the alias.
+    #[test]
+    fn shift_p_assigned_to_presets_opens_presets() {
         let mut h = library();
-        h.app.ui.view = crate::state::ViewMode::SquareGrid;
-        key(&mut h, "P", true);
-        assert_eq!(h.app.session.active(), Some(lightcraft_catalog::PhotoId(2)));
-        assert!(!h.app.ui.presets, "grid Shift+P must not open Presets");
-        assert_eq!(h.app.ui.view, crate::state::ViewMode::SquareGrid);
         h.app.ui.view = crate::state::ViewMode::Detail;
+        assert_eq!(shortcut_of(&h.app.ui.settings.keymap, "panel.presets"), None);
+        assign(&mut h.app.ui.settings.keymap, "panel.presets", Some("Shift+P")).unwrap();
         key(&mut h, "P", true);
         assert!(h.app.ui.presets);
-        assert_eq!(h.app.session.active(), Some(lightcraft_catalog::PhotoId(2)));
+        assert_eq!(h.app.session.active(), Some(lightcraft_catalog::PhotoId(1)));
+        assert_eq!(h.app.session.catalog.photo(lightcraft_catalog::PhotoId(1)).unwrap().flag, lightcraft_catalog::Flag::None);
     }
 
     #[test]
