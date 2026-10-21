@@ -566,6 +566,20 @@ impl AppSettings {
     }
 }
 
+/// The zooms Zoom In / Zoom Out step through (percent), in the loupe and the second window; the
+/// last is the most either zooms.
+pub const ZOOM_STEPS: [f32; 6] = [25.0, 50.0, 100.0, 200.0, 400.0, 800.0];
+
+/// The zoom menu's entries (label, zoom), in the loupe's bottom bar and the second window's bar.
+pub const ZOOM_MENU: [(&str, Zoom); 6] = [
+    ("Fit", Zoom::Fit),
+    ("Fill", Zoom::Fill),
+    ("50%", Zoom::Percent(50.0)),
+    ("100%", Zoom::Percent(100.0)),
+    ("200%", Zoom::Percent(200.0)),
+    ("400%", Zoom::Percent(400.0)),
+];
+
 /// Click-zoom ratios offered (percent): 1:1, 2:1, 3:1, 4:1, 8:1.
 pub const CLICK_ZOOMS: [u32; 5] = [100, 200, 300, 400, 800];
 
@@ -856,6 +870,14 @@ pub struct UiState {
     pub lights_out: LightsOut,
     /// Window ▸ Second Window.
     pub second_window: bool,
+    /// The second window's own zoom and pan (normalized image centre), set by its zoom bar, the
+    /// wheel, a pinch, a drag or `view.secondZoom`; the loupe's are [`Self::zoom`] / [`Self::pan`].
+    pub second_zoom: Zoom,
+    pub second_pan: (f32, f32),
+    /// Animate the second window's photo toward its zoom (a click-zoom or Toggle Zoom), as
+    /// [`Self::zoom_anim`] does the loupe's.
+    #[serde(skip)]
+    pub second_zoom_anim: bool,
     /// The keyword painter: clicking a photo in the grid toggles this keyword on it.
     #[serde(skip)]
     pub keyword_painter: Option<String>,
@@ -1365,6 +1387,9 @@ impl Default for UiState {
             lights_out: LightsOut::On,
             slideshow: None,
             second_window: false,
+            second_zoom: Zoom::Fit,
+            second_pan: (0.5, 0.5),
+            second_zoom_anim: false,
             keyword_painter: None,
             keywording_view: KeywordingView::default(),
             keyword_chips_all: None,

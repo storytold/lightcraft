@@ -1,5 +1,17 @@
 # What's new in LightCraft
 
+## 2026-10-17
+
+### Zoom in the second window
+- The second window (Window ▸ Second Window) has its own zoom now, separate from the main window's. A bar along its
+  top picks Fit, Fill or 50–400 % (the main view's zoom menu), steps with − and + up to 800 %, or slides from Fit to
+  800 %. Over the photo it works as the main view does: the mouse wheel or a pinch zooms around the pointer, a click
+  zooms to the bottom bar's Click n:1 ratio at the point you clicked (and fits again when zoomed in), animated, and
+  dragging pans. With the second window focused, the main view's zoom shortcuts work on it (Ctrl/⌘ + = and −,
+  Ctrl/⌘ + 0, Ctrl/⌘ + Alt + 0, Z, or whatever you have bound them to), and Z zooms in on the camera's focus point
+  when View ▸ Zoom to Focus Point is on. Zoomed in, it renders the part on screen at full resolution, as the main view
+  does, so you can check focus on a second display while the main window shows the grid.
+
 ## 2026-10-14
 
 ### Model downloads time out on a name that doesn't resolve

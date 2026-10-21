@@ -425,6 +425,18 @@ pub struct LightcraftApp {
     pub(crate) compare_tiles: std::collections::HashMap<(u8, u64), region::RegionView>,
     /// Until when (s) a pinch or scroll in Compare / Reference holds the windows there are.
     pub(crate) compare_hold_until: f64,
+    /// The window render the second window asked for last, and its window renders by job key
+    /// (which texture shows what), as [`Self::compare_windows`] / `compare_tiles` are for Compare.
+    pub second_region: Option<region::RegionView>,
+    pub(crate) second_tiles: std::collections::HashMap<u64, region::RegionView>,
+    /// Until when (s) a pinch or scroll in the second window holds the window there is.
+    pub(crate) second_hold_until: f64,
+    /// Whether the second window, as a native window, has the keyboard: the menu bar's zoom items
+    /// (and on macOS their ⌘ shortcuts, which the menu bar takes before any window) then zoom it.
+    pub(crate) second_focused: bool,
+    /// What Fit and Fill came to in the second window when it was last drawn (percent), for
+    /// `view.secondZoom`'s steps.
+    pub(crate) second_scale: Option<(f32, f32)>,
     /// Photo Merge dialog previews and background merges.
     pub merge: merge::MergeState,
     /// An import in progress (the import review dialog's batches).
@@ -481,6 +493,7 @@ pub struct LightcraftApp {
 }
 
 impl LightcraftApp {
+    /// The app around `session`, with the platform `services` it was given.
     pub fn new(mut session: Session, services: Services) -> Self {
         // AI mask requests run on the model's worker; frames apply their results (never wait)
         session.segmenter.background = true;
@@ -531,6 +544,11 @@ impl LightcraftApp {
             compare_windows: [None; 2],
             compare_tiles: Default::default(),
             compare_hold_until: f64::NEG_INFINITY,
+            second_region: None,
+            second_tiles: Default::default(),
+            second_hold_until: f64::NEG_INFINITY,
+            second_focused: false,
+            second_scale: None,
             merge: merge::MergeState::default(),
             import: None,
             scan: None,

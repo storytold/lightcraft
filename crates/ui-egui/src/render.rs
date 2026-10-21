@@ -55,6 +55,9 @@ pub enum Slot {
     Import(u32),
     /// The second window's view of the active photo.
     Second,
+    /// The second window zoomed past what `Second` holds: the window of the frame that is on
+    /// screen, drawn over it (see [`crate::region`] and `panels::second`).
+    SecondRegion,
     /// A slideshow slide (the one up, the one fading out, the next ones prepared in advance; see
     /// [`crate::panels::slideshow`]): a photo's, or a title screen.
     Slide(lightcraft_engine::slideshow::Item),
@@ -132,7 +135,7 @@ pub(crate) fn stage_trim_order(sizes: &[(Slot, usize)], budget: usize) -> Vec<Sl
     let idle_rank = |s: Slot| match s {
         Slot::Hover => 0,
         Slot::Compare(_) | Slot::CompareRegion(_) => 2,
-        Slot::Second => 3,
+        Slot::Second | Slot::SecondRegion => 3,
         _ => 5,
     };
     let view_rank = |s: Slot| match s {
@@ -374,6 +377,7 @@ impl Renderer {
                 | Slot::Compare(_)
                 | Slot::CompareRegion(_)
                 | Slot::Second
+                | Slot::SecondRegion
                 | Slot::Slide(_)
         )
     }

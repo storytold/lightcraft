@@ -159,10 +159,15 @@ fn bounded_pan(area: Rect, size: egui::Vec2, pan: (f32, f32)) -> (f32, f32) {
     (bound(area.width(), size.x, pan.0), bound(area.height(), size.y, pan.1))
 }
 
+/// Pan the loupe's photo, drawn in `img` inside `area`, by a drag of `delta`.
 pub(crate) fn pan_image(app: &mut LightcraftApp, area: Rect, img: Rect, delta: egui::Vec2) {
+    let _ = app.run("view.navigate", json!({"pan": panned(area, img, delta)}));
+}
+
+/// The pan (normalized image centre) of a view drawn in `img` inside `area`, dragged by `delta`.
+pub(crate) fn panned(area: Rect, img: Rect, delta: egui::Vec2) -> (f32, f32) {
     let centre = area.center() - img.min - delta;
-    let pan = bounded_pan(area, img.size(), (centre.x / img.width().max(1.0), centre.y / img.height().max(1.0)));
-    let _ = app.run("view.navigate", json!({"pan": pan}));
+    bounded_pan(area, img.size(), (centre.x / img.width().max(1.0), centre.y / img.height().max(1.0)))
 }
 
 /// Net vertical notches (up is positive) of unmodified line/page-unit wheel events: a real mouse wheel, not a trackpad.
@@ -182,14 +187,31 @@ fn wheel_notches(events: &[egui::Event]) -> f32 {
 
 /// Native pinch (also modifier-wheel zoom) and two-finger scroll, scoped to this image view.
 pub(crate) fn navigate_gesture(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, area: Rect, img: Rect, native: [usize; 2]) -> bool {
+    let Some((zoom, pan)) = gesture_view(ui, resp, area, img, native, app.ui.zoom, egui::Id::new("loupe-wheel-zoom")) else { return false };
+    let _ = app.run("view.navigate", json!({"zoom": zoom, "pan": pan}));
+    true
+}
+
+/// The zoom and pan a pinch, a modifier-wheel or notched-wheel zoom, or a two-finger scroll over
+/// `resp` gives a view drawn in `img` inside `area` at `zoom` (`None`: no such gesture this frame).
+/// The image point under the pointer stays under it. `wheel` keys the view's wheel-zoom state.
+pub(crate) fn gesture_view(
+    ui: &mut egui::Ui,
+    resp: &egui::Response,
+    area: Rect,
+    img: Rect,
+    native: [usize; 2],
+    zoom: Zoom,
+    wheel: egui::Id,
+) -> Option<(Zoom, (f32, f32))> {
     if !resp.hovered() {
-        return false;
+        return None;
     }
     let (mut factor, mut delta, anchor) =
         ui.input(|i| (i.zoom_delta(), i.translation_delta(), i.multi_touch().map(|t| t.center_pos).or(i.pointer.hover_pos())));
     // A notched mouse wheel (line/page units, no modifier) zooms around the pointer, through egui's smoothed wheel
     // delta like Ctrl+wheel (so it glides instead of jumping); trackpads report points and still pan.
-    let wheel_id = egui::Id::new("loupe-wheel-zoom");
+    let wheel_id = wheel;
     if ui.input(|i| wheel_notches(&i.events)) != 0.0 {
         ui.data_mut(|d| d.insert_temp(wheel_id, true));
     }
@@ -204,14 +226,14 @@ pub(crate) fn navigate_gesture(app: &mut LightcraftApp, ui: &mut egui::Ui, resp:
         }
     }
     if !factor.is_finite() || factor <= 0.0 || !delta.is_finite() || (factor == 1.0 && delta == egui::Vec2::ZERO) {
-        return false;
+        return None;
     }
-    let Some(anchor) = anchor.filter(|p| area.contains(*p)) else { return false };
+    let anchor = anchor.filter(|p| area.contains(*p))?;
     let ppp = ui.ctx().pixels_per_point();
     let aspect = img.width() / img.height().max(1.0);
     let fit = fit_rect(area, aspect, Zoom::Fit, native, ppp, (0.5, 0.5));
     let fit_pct = fit.width() * ppp * 100.0 / native[0].max(1) as f32;
-    let mut zoom = app.ui.zoom;
+    let mut zoom = zoom;
     let size = if factor != 1.0 {
         // Start at the displayed scale (including Fit/Fill and an interrupted click animation).
         let pct = (img.width() * ppp * 100.0 / native[0].max(1) as f32 * factor).clamp(fit_pct.min(800.0), 800.0);
@@ -224,10 +246,9 @@ pub(crate) fn navigate_gesture(app: &mut LightcraftApp, ui: &mut egui::Ui, resp:
     let point = (anchor - img.min) / img.size();
     let offset = area.center() - anchor - delta;
     let pan = bounded_pan(area, size, (point.x + offset.x / size.x.max(1.0), point.y + offset.y / size.y.max(1.0)));
-    let _ = app.run("view.navigate", json!({"zoom": zoom, "pan": pan}));
     ui.input_mut(|i| i.smooth_scroll_delta = egui::Vec2::ZERO);
     ui.ctx().request_repaint();
-    true
+    Some((zoom, pan))
 }
 
 /// The largest texture the GPU behind `ctx` takes (egui reports it; 2048 until it does, the
@@ -305,10 +326,10 @@ pub(crate) fn draw_focus_point(p: &egui::Painter, img: Rect, photo: &lightcraft_
     register(p.ctx(), key, b);
 }
 
-/// Ease the loupe rect toward `target` while a click-zoom animation runs; otherwise follow it exactly.
-fn animated_rect(ctx: &egui::Context, anim: &mut bool, target: Rect) -> Rect {
+/// Ease a view's photo rect toward `target` while a click-zoom animation runs; otherwise follow it
+/// exactly. `id` keys the view's animation (the loupe's, the second window's).
+pub(crate) fn animated_rect(ctx: &egui::Context, anim: &mut bool, target: Rect, id: egui::Id) -> Rect {
     let t = if *anim { 0.22 } else { 0.0 };
-    let id = egui::Id::new("loupe_anim");
     let v = |k: &str, x: f32| ctx.animate_value_with_time(id.with(k), x, t);
     let (c, s) = (target.center(), target.size());
     let r = Rect::from_center_size(pos2(v("cx", c.x), v("cy", c.y)), vec2(v("w", s.x), v("h", s.y)));
@@ -433,6 +454,8 @@ fn draw_window(p: &egui::Painter, app: &LightcraftApp, c: &WindowCtx, v: &Window
     p.image(tex.tex.id(), dst, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
 }
 
+/// The Detail view (the loupe): the active photo at the loupe's zoom, with the editing tools'
+/// overlays and gestures.
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let full = ui.max_rect();
@@ -505,7 +528,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let resp = ui.interact(canvas, egui::Id::new("loupe"), Sense::click_and_drag());
     crate::widgets::announce(&resp, crate::i18n::tr("Photo"));
     let mut target_rect = fit_rect(main_area, display_aspect, app.ui.zoom, native, ppp, app.ui.pan);
-    let mut img_rect = animated_rect(ui.ctx(), &mut app.ui.zoom_anim, target_rect);
+    let mut img_rect = animated_rect(ui.ctx(), &mut app.ui.zoom_anim, target_rect, egui::Id::new("loupe_anim"));
     let in_pane = |pane: Rect, image: Rect| image.translate(pane.center() - main_area.center());
     let mut navigating = false;
     for &view_area in &areas {

@@ -267,7 +267,8 @@ pub fn parse(s: &str) -> Option<(Modifiers, Key)> {
     key.map(|k| (m, k))
 }
 
-fn matches(i: &egui::InputState, m: Modifiers, k: Key) -> bool {
+/// Whether the key `m` + `k` was pressed this frame (as the keymap matches keys).
+pub(crate) fn matches(i: &egui::InputState, m: Modifiers, k: Key) -> bool {
     // the windowing layer turns ⌘C / ⌘X / ⌘V (with any other modifiers held) and the keyboard's
     // Copy / Cut / Paste keys into these on Windows and Linux (macOS's menu bar takes them first);
     // without ⌘/Ctrl held they came from a key that is the plain command (Windows' ⇧Insert pastes)

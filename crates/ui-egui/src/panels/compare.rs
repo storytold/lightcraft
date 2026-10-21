@@ -441,7 +441,9 @@ fn draw_window(p: &egui::Painter, app: &LightcraftApp, pane: u8, id: PhotoId, lo
 /// The Detail view's photo keeps its original even over the memory budget (a zoomed 64 MP raw);
 /// other views free the Detail view's windows (while one is shown the GPU copy of its original stays).
 pub fn prepare(app: &mut LightcraftApp) {
-    let shown = if app.ui.view == ViewMode::Detail { app.session.active() } else { None };
+    // (the second window zoomed in cuts windows from the active photo's original too)
+    let second_zoomed = app.ui.second_window && app.ui.second_zoom != Zoom::Fit;
+    let shown = if app.ui.view == ViewMode::Detail || second_zoomed { app.session.active() } else { None };
     app.session.media.set_on_screen(shown);
     if app.ui.view != ViewMode::Detail {
         app.region_view = None;

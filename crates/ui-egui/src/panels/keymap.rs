@@ -79,6 +79,8 @@ fn menu_text(sc: &str, mac: bool) -> String {
     crate::menubar::shortcut_text(sc, mac)
 }
 
+/// One command's row: its name (with a hover note where its key does more), its shortcut button,
+/// remove and restore, and its id.
 fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, b: &Bindable, sc: Option<&str>, mac: bool) {
     let changed = app.ui.settings.keymap.contains_key(b.id);
     let mut name = RichText::new(crate::i18n::tr(b.label)).color(t.text);
@@ -89,6 +91,10 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, b: &Bindable, sc:
     let hover = match b.id {
         "panel.presets" => format!("{} — {}", b.id, crate::i18n::tr("In Photo Grid and Square Grid: Flag as Pick and advance")),
         "view.softProof" => format!("{} — {}", b.id, crate::i18n::tr("In Photo Grid and Square Grid: expand or collapse the stack")),
+        // the loupe's zoom keys also zoom the second window (Window ▸ Second Window) while it has the keyboard
+        "view.zoomIn" | "view.zoomOut" | "view.zoomFit" | "view.zoom100" | "view.zoomToggle" => {
+            format!("{} — {}", b.id, crate::i18n::tr("Also works in the second window when it is in front"))
+        }
         _ => b.id.to_string(),
     };
     ui.label(name).on_hover_text(hover);

@@ -108,6 +108,29 @@ fn toggle_zoom_centres_on_the_focus_point() {
 }
 
 #[test]
+fn second_window_toggle_zoom_centres_on_the_focus_point_as_the_loupe() {
+    let (mut h, _) = detail_with_focus(Some(focus(0.70, 0.20, 0.74, 0.26)));
+    run(&mut h, "view.secondWindow", json!({"show": true}));
+    let near = |v: &serde_json::Value, x: f64, y: f64| {
+        let (a, b) = (v["pan"][0].as_f64().unwrap_or(f64::NAN), v["pan"][1].as_f64().unwrap_or(f64::NAN));
+        (a - x).abs() < 1e-3 && (b - y).abs() < 1e-3
+    };
+    // Toggle Zoom from the keyboard (its keys are the second window's own in a native window)
+    let to = crate::panels::second::toggle(&h.app, None);
+    assert!(near(&to, 0.72, 0.23), "{to}");
+    // a click zooms where it is, focus point or not
+    let to = crate::panels::second::toggle(&h.app, Some((0.3, 0.6)));
+    assert!(near(&to, 0.3, 0.6), "{to}");
+    // zoomed in, it fits; with Zoom to Focus Point off, it keeps the window's pan
+    run(&mut h, "view.secondZoom", json!({"zoom": {"percent": 100.0}, "pan": [0.4, 0.6]}));
+    assert_eq!(crate::panels::second::toggle(&h.app, None)["zoom"], json!("fit"));
+    run(&mut h, "view.secondZoom", json!({"zoom": "fit"}));
+    assert_eq!(run(&mut h, "view.zoomToFocus", json!({}))["on"], false);
+    let to = crate::panels::second::toggle(&h.app, None);
+    assert!(near(&to, 0.4, 0.6), "{to}");
+}
+
+#[test]
 fn without_a_focus_point_zoom_and_info_are_unchanged() {
     let (mut h, _) = detail_with_focus(None);
     run(&mut h, "view.focusPoint", json!({"on": true}));

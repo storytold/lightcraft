@@ -114,6 +114,19 @@ scrolling pans in both axes and respects the operating system's scrolling direct
 These gestures work in Detail (including editing tools and full-screen preview), Compare and Reference
 views, and only apply over their image areas. Panning stops at the image edges.
 
+The second window (Window ▸ Second Window, `view.secondWindow {show?}`) has its own zoom and pan,
+separate from the loupe's: `view.secondZoom` takes the same `{zoom?, pan?}` as `view.navigate`, plus
+`step?: "in" | "out"` for the next or previous of 25 / 50 / 100 / 200 / 400 / 800 % (out past the
+smallest, or to Fit's scale or below, is Fit), and replies `{zoom, pan}`. Its bar has a zoom menu
+(`dropdown:secondZoom`), − / + (`icon:secondZoomOut`, `icon:secondZoomIn`) and a slider from Fit to
+800 % (`slider:secondZoom`); over the photo (`second:image`) it behaves as the loupe: the wheel and
+pinch zoom, a click toggles Fit and the click-zoom ratio (`view.clickZoom`) at the point clicked, a
+click when zoomed in fits and a drag pans. In a native window the loupe's zoom shortcuts, as the keymap
+binds them (`view.zoomIn`, `view.zoomOut`, `view.zoomFit`, `view.zoom100`, `view.zoomToggle`), act on
+it, and so do those View menu items while it has the keyboard (on macOS the menu bar takes their ⌘
+shortcuts before any window and routes them to it). As in the loupe, a click-zoom and Toggle Zoom
+animate, and Toggle Zoom centres on the camera's focus point when `view.zoomToFocus` is on.
+
 The camera's focus point ([focus-points.md](focus-points.md)) is `meta.focus` in `photo.inspect`: `{rect: {x0, y0,
 x1, y1}, mode?, area?, tracking?}`, normalized to the upright photo (absent when the file records none).
 `view.focusPoint {on?}` shows it over the photo (no params toggles; replies `{on}`), and `view.zoomToFocus {on?}`

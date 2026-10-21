@@ -182,6 +182,9 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("slideshow.previous", "Previous Slide", None, ""),
     ("slideshow.end", "End Slideshow", None, ""),
     ("view.secondWindow", "Second Window", Some("Cmd+F11"), "Window"),
+    // {zoom?: "fit"|"fill"|{percent}, pan?: [x, y], step?: "in"|"out"}: the second window's own
+    // zoom (its zoom bar, wheel, pinch and drag go through this)
+    ("view.secondZoom", "Second Window Zoom", None, ""),
     ("tool.keywordPainter", "Keyword Painter", None, ""),
     ("view.gridInfo", "Grid Info", None, ""),
     // {mode?: auto | light | dark}: Appearance Mode (cycles Auto, Light, Dark when omitted; the
@@ -844,7 +847,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             Ok(json!({"ratio": app.ui.click_zoom / 100}))
         }
         "view.zoomIn" | "view.zoomOut" => {
-            let steps = [25.0, 50.0, 100.0, 200.0, 400.0, 800.0];
+            let steps = crate::state::ZOOM_STEPS;
             let cur = match app.ui.zoom {
                 Zoom::Percent(p) => p,
                 _ => 25.0,
@@ -869,26 +872,30 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         "view.navigate" => {
             // {zoom?: "fit"|"fill"|{percent: number}, pan?: [x, y]} (normalized image centre).
             // Validate the complete request before changing either part of the viewport.
-            let zoom = match p.get("zoom") {
-                Some(v) => match serde_json::from_value::<Zoom>(v.clone()) {
-                    Ok(Zoom::Percent(p)) if !p.is_finite() || p <= 0.0 || p > 800.0 => {
-                        return Some(Err("view.navigate: zoom percent must be greater than 0 and at most 800".into()));
-                    }
-                    Ok(z) => z,
-                    Err(e) => return Some(Err(format!("view.navigate: {e}"))),
-                },
-                None => app.ui.zoom,
-            };
-            let pan = match p.get("pan") {
-                Some(v) => match serde_json::from_value::<(f32, f32)>(v.clone()) {
-                    Ok((x, y)) if x.is_finite() && y.is_finite() && (0.0..=1.0).contains(&x) && (0.0..=1.0).contains(&y) => (x, y),
-                    _ => return Some(Err("view.navigate: pan must be [x, y] with finite coordinates from 0 to 1".into())),
-                },
-                None => app.ui.pan,
+            let (zoom, pan) = match view_params(p, "view.navigate", app.ui.zoom, app.ui.pan) {
+                Ok(v) => v,
+                Err(e) => return Some(Err(e)),
             };
             app.ui.zoom = zoom;
             app.ui.pan = pan;
             app.ui.zoom_anim = false;
+            Ok(json!({"zoom": zoom, "pan": pan}))
+        }
+        "view.secondZoom" => {
+            // as view.navigate, for the second window; step: "in" | "out" goes to the next zoom
+            // of its bar's list (out of the smallest: Fit)
+            let (mut zoom, pan) = match view_params(p, "view.secondZoom", app.ui.second_zoom, app.ui.second_pan) {
+                Ok(v) => v,
+                Err(e) => return Some(Err(e)),
+            };
+            match p.get("step").map(Value::as_str) {
+                None => {}
+                Some(Some(dir @ ("in" | "out"))) => zoom = crate::panels::second::step(app, zoom, dir == "in"),
+                Some(_) => return Some(Err("view.secondZoom: step must be \"in\" or \"out\"".into())),
+            }
+            app.ui.second_zoom = zoom;
+            app.ui.second_pan = pan;
+            app.ui.second_zoom_anim = false;
             Ok(json!({"zoom": zoom, "pan": pan}))
         }
         "view.clipping" => {
@@ -2431,4 +2438,27 @@ fn open_originals(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
         return Err(format!("Couldn't open the editor: {e}"));
     }
     Ok(json!({"opened": opened, "skipped": skipped, "app": editor, "failed": failed}))
+}
+
+/// The zoom and pan of a `view.navigate`-style request `p` (each part kept from `zoom` / `pan` when
+/// absent), validated whole before anything changes. `cmd` names the command in errors.
+fn view_params(p: &Value, cmd: &str, zoom: Zoom, pan: (f32, f32)) -> Result<(Zoom, (f32, f32)), String> {
+    let zoom = match p.get("zoom") {
+        Some(v) => match serde_json::from_value::<Zoom>(v.clone()) {
+            Ok(Zoom::Percent(p)) if !p.is_finite() || p <= 0.0 || p > 800.0 => {
+                return Err(format!("{cmd}: zoom percent must be greater than 0 and at most 800"));
+            }
+            Ok(z) => z,
+            Err(e) => return Err(format!("{cmd}: {e}")),
+        },
+        None => zoom,
+    };
+    let pan = match p.get("pan") {
+        Some(v) => match serde_json::from_value::<(f32, f32)>(v.clone()) {
+            Ok((x, y)) if x.is_finite() && y.is_finite() && (0.0..=1.0).contains(&x) && (0.0..=1.0).contains(&y) => (x, y),
+            _ => return Err(format!("{cmd}: pan must be [x, y] with finite coordinates from 0 to 1")),
+        },
+        None => pan,
+    };
+    Ok((zoom, pan))
 }

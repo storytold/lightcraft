@@ -1257,6 +1257,154 @@ fn second_window_shows_the_active_photo() {
     h.settle(SETTLE);
 }
 
+#[test]
+fn second_window_zooms_on_its_own() {
+    use crate::render::Slot;
+    use crate::state::Zoom;
+    let mut h = detail("panel.edit");
+    exec(&mut h, "view.photoGrid", json!({}));
+    exec(&mut h, "view.secondWindow", json!({"show": true}));
+    h.settle(SETTLE);
+    let widgets = h.request("ui.widgets", json!({}), T).to_string();
+    for w in ["dropdown:secondZoom", "slider:secondZoom", "icon:secondZoomIn", "icon:secondZoomOut", "second:image"] {
+        assert!(widgets.contains(&format!("\"{w}\"")), "{w} is on screen");
+    }
+    assert_eq!(h.app.ui.second_zoom, Zoom::Fit);
+    let (fit, _) = h.app.second_scale.expect("the window measured Fit");
+    assert!(fit > 0.0 && fit < 100.0, "a demo photo fits below 100 %: {fit}");
+    assert!(!h.app.renderer.textures.contains_key(&Slot::SecondRegion), "fit: no window render");
+
+    // 100 %: its own zoom (the loupe's stays), and the part on screen is rendered at that scale
+    let r = exec(&mut h, "view.secondZoom", json!({"zoom": {"percent": 100.0}, "pan": [0.25, 0.75]}));
+    assert_eq!(r["zoom"], json!({"percent": 100.0}), "{r}");
+    assert_eq!((h.app.ui.second_zoom, h.app.ui.second_pan), (Zoom::Percent(100.0), (0.25, 0.75)));
+    assert_eq!((h.app.ui.zoom, h.app.ui.pan), (Zoom::Fit, (0.5, 0.5)), "the loupe's zoom is untouched");
+    h.settle(SETTLE);
+    let window = h.app.renderer.textures.get(&Slot::SecondRegion).expect("a window render at 100 %");
+    assert_eq!(Some(window.photo), h.app.session.active());
+    let tile = h.app.second_region.expect("the window asked for");
+    assert!(tile.window.w < tile.full.0 || tile.window.h < tile.full.1, "only part of the frame: {tile:?}");
+
+    // − / + step through the list; out of the smallest step past Fit is Fit
+    let r = h.request("ui.clickWidget", json!({"id": "icon:secondZoomIn"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    assert_eq!(h.app.ui.second_zoom, Zoom::Percent(200.0));
+    exec(&mut h, "view.secondZoom", json!({"step": "out"}));
+    assert_eq!(h.app.ui.second_zoom, Zoom::Percent(100.0));
+    for _ in 0..4 {
+        exec(&mut h, "view.secondZoom", json!({"step": "out"}));
+    }
+    assert_eq!(h.app.ui.second_zoom, Zoom::Fit);
+    exec(&mut h, "view.secondZoom", json!({"step": "in"}));
+    assert!(matches!(h.app.ui.second_zoom, Zoom::Percent(p) if p > fit), "in from Fit: the next step past it");
+
+    // bad requests change nothing
+    for bad in [json!({"zoom": {"percent": 900.0}}), json!({"pan": [2.0, 0.5]}), json!({"step": "sideways"})] {
+        let before = (h.app.ui.second_zoom, h.app.ui.second_pan);
+        let r = h.request("engine.execute", json!({"command": "view.secondZoom", "params": bad}), T);
+        assert_eq!(r["ok"], false, "{bad}: {r}");
+        assert_eq!((h.app.ui.second_zoom, h.app.ui.second_pan), before, "{bad}");
+    }
+
+    // the slider: its right end is 800 %, its left end Fit
+    let widget = |h: &mut Headless, method: &str, params: serde_json::Value| {
+        let r = h.request(method, params, T);
+        assert_eq!(r["ok"], true, "{method}: {r}");
+        for _ in 0..3 {
+            h.step();
+        }
+    };
+    widget(&mut h, "ui.clickWidget", json!({"id": "slider:secondZoom", "fx": 1.0}));
+    assert_eq!(h.app.ui.second_zoom, Zoom::Percent(800.0));
+    widget(&mut h, "ui.clickWidget", json!({"id": "slider:secondZoom", "fx": 0.0}));
+    assert_eq!(h.app.ui.second_zoom, Zoom::Fit);
+
+    // over the photo, as in the loupe: a click goes to the click-zoom ratio at the point clicked, a
+    // drag pans, and a click when zoomed in fits (each after a pause: clicks in quick succession
+    // count as double-clicks)
+    let pause = |h: &mut Headless| {
+        for _ in 0..60 {
+            h.step();
+        }
+    };
+    pause(&mut h);
+    let r = h.request("ui.clickWidget", json!({"id": "second:image", "fx": 0.3, "fy": 0.5}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(h.app.ui.second_zoom, Zoom::Percent(100.0), "the click-zoom ratio is 1:1 by default");
+    // animated as in the loupe, with one window render (of where the zoom ends) for the whole of it
+    assert!(h.app.ui.second_zoom_anim, "the click-zoom animates");
+    let mut keys = std::collections::HashSet::new();
+    for _ in 0..60 {
+        h.step();
+        keys.extend(h.app.renderer.wanted(Slot::SecondRegion));
+        if !h.app.ui.second_zoom_anim {
+            break;
+        }
+    }
+    assert!(!h.app.ui.second_zoom_anim, "the animation ends");
+    assert!(keys.len() <= 1, "one window render for the whole animation: {keys:?}");
+    let before = h.app.ui.second_pan;
+    assert!(before.0 < 0.5, "centred near the point clicked: {before:?}");
+    widget(&mut h, "ui.dragWidget", json!({"id": "view:secondWindow", "dx": -150.0, "dy": 0.0}));
+    assert!(h.app.ui.second_pan.0 > before.0, "dragging left shows more of the right: {before:?} -> {:?}", h.app.ui.second_pan);
+    pause(&mut h);
+    widget(&mut h, "ui.clickWidget", json!({"id": "view:secondWindow"}));
+    assert_eq!(h.app.ui.second_zoom, Zoom::Fit);
+    // the bottom bar's Click n:1 ratio applies here too
+    exec(&mut h, "view.clickZoom", json!({"ratio": 2}));
+    pause(&mut h);
+    widget(&mut h, "ui.clickWidget", json!({"id": "second:image"}));
+    assert_eq!(h.app.ui.second_zoom, Zoom::Percent(200.0));
+    pause(&mut h);
+    widget(&mut h, "ui.clickWidget", json!({"id": "view:secondWindow"}));
+    assert_eq!(h.app.ui.second_zoom, Zoom::Fit);
+    assert_eq!(h.app.ui.zoom, Zoom::Fit, "the loupe's zoom is still untouched");
+
+    // closing it lets the window render go
+    exec(&mut h, "view.secondWindow", json!({"show": false}));
+    h.step();
+    assert!(!h.app.renderer.textures.contains_key(&Slot::SecondRegion) && h.app.second_region.is_none());
+    h.settle(SETTLE);
+}
+
+#[test]
+fn menu_zoom_items_zoom_the_second_window_while_it_has_the_keyboard() {
+    use crate::state::Zoom;
+    let mut h = detail("panel.edit");
+    exec(&mut h, "view.secondWindow", json!({"show": true}));
+    h.settle(SETTLE);
+    // the menu bar's zoom items (on macOS their ⌘ shortcuts too: the menu bar takes those before
+    // any window) go through `run_item`; headless, the second window is embedded and never has the
+    // keyboard itself, so this says it has
+    h.app.second_focused = true;
+    let run = |h: &mut Headless, id: &str| {
+        let r = crate::menubar::run_item(&mut h.app, id, json!({}));
+        assert!(r.is_ok(), "{id}: {r:?}");
+    };
+    run(&mut h, "view.zoomIn");
+    assert!(matches!(h.app.ui.second_zoom, Zoom::Percent(_)), "the second window zoomed in: {:?}", h.app.ui.second_zoom);
+    run(&mut h, "view.zoomFit");
+    assert_eq!(h.app.ui.second_zoom, Zoom::Fit);
+    run(&mut h, "view.zoom100");
+    assert_eq!(h.app.ui.second_zoom, Zoom::Percent(100.0));
+    run(&mut h, "view.zoomOut");
+    assert_ne!(h.app.ui.second_zoom, Zoom::Percent(100.0), "zoomed out");
+    run(&mut h, "view.zoomToggle");
+    assert_eq!(h.app.ui.second_zoom, Zoom::Fit, "Toggle Zoom from a zoom fits");
+    assert_eq!(h.app.ui.zoom, Zoom::Fit, "the loupe's zoom is untouched");
+    // the main window has the keyboard: the items zoom the loupe, as before
+    h.app.second_focused = false;
+    run(&mut h, "view.zoom100");
+    assert_eq!(h.app.ui.zoom, Zoom::Percent(100.0));
+    assert_eq!(h.app.ui.second_zoom, Zoom::Fit, "the second window's zoom is untouched");
+    // an embedded second window never has the keyboard
+    h.app.second_focused = true;
+    h.step();
+    assert!(!h.app.second_focused);
+    h.settle(SETTLE);
+}
+
 /// Frame time of the photo grid on a 100k-photo library (ignored:
 /// `cargo test --release -p lightcraft-ui-egui -- --ignored grid_frame_100k --nocapture`).
 #[test]

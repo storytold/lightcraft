@@ -837,8 +837,17 @@ pub fn menu_bar(app: &LightcraftApp) -> Vec<(String, Vec<MenuNode>)> {
 }
 
 /// Run a menu item. Rating, flag and label items behave like their keys (the active photo only in
-/// Compare/Survey; Auto Advance moves on).
+/// Compare/Survey; Auto Advance moves on); the zoom items zoom the second window while it has the
+/// keyboard.
 pub fn run_item(app: &mut LightcraftApp, id: &str, params: Value) -> Result<Value, String> {
+    // the zoom items (and on macOS their ⌘ shortcuts, which the menu bar takes before any window)
+    // zoom the second window while it has the keyboard
+    if app.second_focused
+        && app.ui.second_window
+        && let Some(r) = crate::panels::second::run_zoom(app, id)
+    {
+        return r;
+    }
     let mut params = if params.is_null() { json!({}) } else { params };
     let culling_cmd = matches!(
         id,
