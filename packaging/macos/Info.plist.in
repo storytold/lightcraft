@@ -49,6 +49,41 @@
   <key>NSHumanReadableCopyright</key>
   <string>Copyright © the LightCraft authors. MIT OR Apache-2.0.</string>
 
+  <!-- Photos Finder may open with LightCraft (Open With, drops on the Dock icon, `open -a`): they
+       import into the library, as files dropped on the window do. Alternate: LightCraft never
+       becomes the default app for images. The files arrive through the open-documents Apple
+       event (apps/lightcraft/src/apple_events.rs); without these claims Launch Services reports
+       that LightCraft cannot open files in that format. The list mirrors
+       lightcraft_engine::import::EXTENSIONS; every camera raw format conforms to
+       public.camera-raw-image. -->
+  <key>CFBundleDocumentTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>Image</string>
+      <key>CFBundleTypeRole</key>
+      <string>Editor</string>
+      <key>LSHandlerRank</key>
+      <string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array>
+        <string>public.jpeg</string>
+        <string>public.png</string>
+        <string>public.tiff</string>
+        <string>org.webmproject.webp</string>
+        <string>com.compuserve.gif</string>
+        <string>com.microsoft.bmp</string>
+        <string>public.jpeg-xl</string>
+        <string>com.adobe.photoshop-image</string>
+        <string>public.heic</string>
+        <string>public.heif</string>
+        <string>public.avif</string>
+        <string>com.adobe.raw-image</string>
+        <string>public.camera-raw-image</string>
+      </array>
+    </dict>
+  </array>
+
   <!-- Lightcraft's own format. -->
   <key>UTExportedTypeDeclarations</key>
   <array>

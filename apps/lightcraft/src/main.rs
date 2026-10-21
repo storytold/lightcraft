@@ -24,6 +24,7 @@
 
 mod alloc_release;
 mod appearance;
+mod apple_events;
 #[cfg(target_os = "linux")]
 mod colord;
 mod control_server;
@@ -714,6 +715,8 @@ fn services(cc: &eframe::CreationContext<'_>, log_file: Option<&std::path::Path>
         backup_library: None,
         restore_library: None,
         system_theme: appearance::service(),
+        // connected once the window exists (`apple_events::Source::connect`)
+        os_events: None,
     }
 }
 
@@ -953,6 +956,9 @@ fn main() -> eframe::Result {
             b.with_x11();
         }));
     }
+    // Finder, the Dock and Open With deliver files as Apple events, not arguments: catch the one
+    // that launched us as well as later ones. The guard lives until the event loop returns.
+    let (_apple_events, os_events) = apple_events::install();
     let started = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         eframe::run_native(
             "LightCraft",
@@ -969,6 +975,7 @@ fn main() -> eframe::Result {
                 // HDR display: SDR unless the surface, platform and display all allow HDR
                 hdr_display::report(cc.wgpu_render_state.as_ref().map(|r| r.target_format));
                 let mut app = LightcraftApp::new(session, services(cc, app_log_file.as_deref()));
+                app.services.os_events = os_events.connect(&cc.egui_ctx);
                 if let Some(ui) = prefs {
                     app.ui = ui;
                 }
