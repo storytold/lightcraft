@@ -363,6 +363,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         }
         ui.add_space(8.0);
     });
+    // the lens database changed since this photo was looked up: look again (its correction and preview follow),
+    // also while the Optics section is folded
+    if d.optics.lens_profile && app.session.lens_profiles_stale(id) {
+        let _ = app.session.refresh_lens_profiles(&[id]);
+    }
     section(app, ui, &d, "optics", "Optics", |app, ui, d| {
         let has_lens = app.session.catalog.photo(id).is_some_and(|p| p.embedded_lens.is_some());
         egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 4, bottom: 4 }).show(ui, |ui| {
@@ -375,9 +380,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 let _ = app.run("develop.merge", json!({"settings": {"optics": {"lens_profile": lp}}, "label": "Lens Corrections"}));
             }
             if lp && !has_lens {
-                ui.label(
-                    egui::RichText::new(crate::i18n::tr("No lens data embedded in this file.")).size(11.0).color(Tokens::get(ui.ctx()).text_dim),
-                );
+                lens_note(app, ui, id);
             }
         });
         if d.optics.lens_profile {
@@ -1796,6 +1799,35 @@ fn quick_develop(app: &mut LightcraftApp, ui: &mut egui::Ui, n: usize) {
             }
         });
     });
+}
+
+/// Why Enable Lens Corrections has nothing to apply to photo `id` (its file carries no correction): no lens database
+/// (a link that opens Settings ▸ Lens profiles), no lens named in its metadata, or none of the database's profiles
+/// fits its lens.
+fn lens_note(app: &mut LightcraftApp, ui: &mut egui::Ui, id: lightcraft_catalog::PhotoId) {
+    use crate::i18n::tr;
+    use lightcraft_engine::lens_profiles::Match;
+    let t = Tokens::get(ui.ctx());
+    let Some(state) = app.session.catalog.photo(id).and_then(|p| app.session.lens_match(p)) else { return };
+    let text = match state {
+        Match::NoDatabase => {
+            let link = egui::RichText::new(tr("No lens database — set one up or download it…")).size(11.0).color(t.accent).underline();
+            let r = ui.add(egui::Label::new(link).sense(egui::Sense::click()));
+            crate::widgets::register(ui.ctx(), "link:lensDbSetup", r.rect);
+            if r.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                let _ = app.run("app.settings", serde_json::json!({"section": "lensProfiles"}));
+            }
+            return;
+        }
+        Match::NotRaw => tr("Lens profiles apply to raw photos only.").to_string(),
+        Match::NoLensName => tr("No lens named in this photo's metadata.").to_string(),
+        Match::NotFound(lens) => tr("No profile for {lens} in the lens database.").replace("{lens}", &lens),
+        // found: the photo picks it up when it is looked up again
+        Match::NoFocal(lens) => tr("No focal length for {lens}: the photo has none and none was given.").replace("{lens}", &lens),
+        Match::Found(_) | Match::Chosen(_) => return,
+    };
+    let r = ui.label(egui::RichText::new(text).size(11.0).color(t.text_dim));
+    crate::widgets::register(ui.ctx(), "label:lensNote", r.rect);
 }
 
 /// The preview-only notice's Reload from Disk: re-read the photo's file (a raw a newer version can

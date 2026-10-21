@@ -45,6 +45,7 @@ pub mod fonts;
 pub mod guard;
 pub mod import;
 mod import_move;
+pub mod lens_download;
 pub mod lens_profiles;
 pub mod library;
 mod lightroom_archive;
@@ -251,6 +252,12 @@ pub struct Session {
     pub face_downloads: face_download::Downloads,
     /// Reverse geocoding: the parsed place names and their download (`metadata.*PlaceNames`).
     pub place_names: cmd::geocode::PlaceNames,
+    /// Settings ▸ Lens profiles: the lens database folder and its download ([`lens_download`]).
+    pub lens_db: lens_download::LensSettings,
+    /// The lens database generation ([`lens_profiles::generation`]) each photo's lens data was last looked up with.
+    pub(crate) lens_seen: std::collections::HashMap<PhotoId, u64>,
+    /// Whether each photo looked up this session carries its file's own lens correction (not a database profile).
+    pub(crate) lens_from_file: std::collections::HashMap<PhotoId, bool>,
     /// The user's own list of models to download (`catalog.json` in the models folder), as last read.
     pub(crate) face_catalog: lightcraft_faces::catalog::Catalog,
     /// The loaded recognition model and the face embeddings made with it.
@@ -439,6 +446,9 @@ impl Session {
             face_models_dir: None,
             face_downloads: Default::default(),
             place_names: Default::default(),
+            lens_db: Default::default(),
+            lens_seen: Default::default(),
+            lens_from_file: Default::default(),
             face_catalog: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             faces: Default::default(),
@@ -720,6 +730,14 @@ impl Session {
             retry_inverse: Vec::new(),
             retry_sidecars: Vec::new(),
         });
+    }
+
+    /// Apply and journal (so it is saved) without an undo step: a change the app made by itself, not the user.
+    pub(crate) fn apply_unrecorded(&mut self, op: Op) -> Result<()> {
+        let fwd = op.clone();
+        self.catalog.apply(op)?;
+        self.pending_log.push(fwd);
+        Ok(())
     }
 
     /// Apply without recording undo (interactive previews).
@@ -1280,6 +1298,8 @@ mod tests_import;
 mod tests_import_move;
 #[cfg(test)]
 mod tests_keyword_list;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests_lens_db;
 #[cfg(test)]
 mod tests_libops;
 #[cfg(test)]

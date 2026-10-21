@@ -167,9 +167,11 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
         }
         let scale = WbScaleOf::new(raw.format, &raw.color, raw.wb_multipliers, &raw.metadata);
         let as_shot_wb = Some(scale.as_shot(lightcraft_raw::color::as_shot_white_xy_of(&raw)));
-        let embedded_lens = crate::lens_profiles::for_raw(&raw, || m.clone());
+        let resolved = crate::lens_profiles::resolve_raw(&raw, || m.clone(), None);
+        let lens_from_file = matches!(resolved, Some((_, crate::lens_profiles::Applied::Embedded)));
         return Ok(ProbeInfo {
-            embedded_lens,
+            embedded_lens: resolved.map(|(l, _)| l),
+            lens_from_file,
             width: w,
             height: h,
             format: ext_upper(name),
@@ -213,6 +215,7 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
         as_shot_wb: None,
         content_hash,
         embedded_lens: None,
+        lens_from_file: false,
         xmp: None,
         preview_only: None,
     })

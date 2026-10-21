@@ -152,6 +152,107 @@ impl Session {
         self
     }
 
+    /// Keep the lens database setting in the shared settings folder ([`config_dir`]) and use the folder saved there.
+    pub fn with_default_lens_profiles(mut self) -> Self {
+        self.lens_db = crate::lens_download::LensSettings::load(config_dir());
+        self
+    }
+
+    /// Whether photo `id`'s lens data predates the lens database in use (it changed since the photo was looked up).
+    pub fn lens_profiles_stale(&self, id: lightcraft_catalog::PhotoId) -> bool {
+        let g = crate::lens_profiles::generation();
+        g != 0 && self.lens_seen.get(&id) != Some(&g)
+    }
+
+    /// Look the lenses of raw photos `ids` up again in the lens database in use (after it changed), so their lens
+    /// corrections and previews follow. → the photos whose lens data changed.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn refresh_lens_profiles(&mut self, ids: &[lightcraft_catalog::PhotoId]) -> crate::Result<Vec<lightcraft_catalog::PhotoId>> {
+        let g = crate::lens_profiles::generation();
+        let files: Vec<(lightcraft_catalog::PhotoId, String)> = ids
+            .iter()
+            .filter_map(|id| {
+                self.lens_seen.insert(*id, g);
+                let p = self.catalog.photo(*id)?;
+                match &p.source {
+                    lightcraft_catalog::Source::File { path } if p.develops_raw() => Some((*id, path.clone())),
+                    _ => None,
+                }
+            })
+            .collect();
+        if files.is_empty() {
+            return Ok(Vec::new());
+        }
+        let probed = crate::import::probe_paths(self, &files.iter().map(|(_, p)| p.clone()).collect::<Vec<_>>());
+        let mut ops = Vec::new();
+        let mut changed = Vec::new();
+        for ((id, _), info) in files.into_iter().zip(probed) {
+            let (Ok(info), Some(ph)) = (info, self.catalog.photo(id)) else { continue };
+            self.lens_from_file.insert(id, info.lens_from_file);
+            let mine = crate::cmd::convert::lens_ops(id, ph, &info);
+            if !mine.is_empty() {
+                ops.extend(mine);
+                changed.push(id);
+            }
+        }
+        for id in &changed {
+            self.media.forget(*id);
+        }
+        if !ops.is_empty() {
+            // found by the app, not done by the user: saved, but no undo step
+            self.apply_unrecorded(lightcraft_catalog::Op::Batch { ops })?;
+        }
+        Ok(changed)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub fn refresh_lens_profiles(&mut self, ids: &[lightcraft_catalog::PhotoId]) -> crate::Result<Vec<lightcraft_catalog::PhotoId>> {
+        let g = crate::lens_profiles::generation();
+        for id in ids {
+            self.lens_seen.insert(*id, g);
+        }
+        Ok(Vec::new())
+    }
+
+    /// What the lens database says about `p`'s lens, for Develop ▸ Optics; `None` when the photo carries a lens
+    /// correction already (its own, or one found earlier).
+    pub fn lens_match(&self, p: &lightcraft_catalog::Photo) -> Option<crate::lens_profiles::Match> {
+        self.lens_match_with(p, None)
+    }
+
+    /// [`Session::lens_match`] for a lens given by the caller (a lens picker's choice) instead of the one the
+    /// metadata names, in the order corrections apply ([`crate::lens_profiles::resolve_raw`]): `None` when the
+    /// file carries its own correction, else [`crate::lens_profiles::Match::Chosen`] (or `NotFound`) for the given
+    /// lens, else the match by name. A correction found earlier by name gives way to a given lens.
+    pub fn lens_match_with(
+        &self,
+        p: &lightcraft_catalog::Photo,
+        given: Option<&crate::lens_profiles::GivenLens>,
+    ) -> Option<crate::lens_profiles::Match> {
+        use crate::lens_profiles::Match;
+        if !p.develops_raw() {
+            return if p.embedded_lens.is_some() { None } else { Some(Match::NotRaw) };
+        }
+        if p.embedded_lens.is_some() {
+            // the file's own, as this session recorded when it looked the photo up; unrecorded, the file's unless
+            // the database matches its lens name (only then could the correction have come from there)
+            let from_file = self
+                .lens_from_file
+                .get(&p.id)
+                .copied()
+                .unwrap_or_else(|| !matches!(crate::lens_profiles::match_lens(None, &p.meta.lens), Match::Found(_)));
+            if from_file {
+                return None;
+            }
+        }
+        let m = crate::lens_profiles::match_lens_with(None, &p.meta.lens, given);
+        let has_focal = given.and_then(|g| g.focal).or(p.meta.focal_mm.map(f64::from)).is_some_and(|f| f.is_finite() && f > 0.0);
+        match m {
+            Match::Chosen(name) if !has_focal => Some(Match::NoFocal(name)),
+            m => Some(m),
+        }
+    }
+
     /// Point AI denoise at `dir` (or at no folder), dropping what was learned about the old one.
     pub fn set_denoise_models_dir(&mut self, dir: Option<PathBuf>) {
         self.denoise.models_dir = dir;

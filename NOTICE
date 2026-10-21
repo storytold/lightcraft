@@ -40,6 +40,13 @@ the facebook/sam3 checkpoint only when they choose to (in the app, or by hand), 
 License (https://github.com/facebookresearch/sam3/blob/main/LICENSE), a separate, non-OSI
 licence. See docs/ai-masks.md.
 
+The lens profile database of the lensfun project (https://github.com/lensfun/lensfun, data/db,
+Copyright the lensfun contributors) is not part of LightCraft and is never distributed with it.
+A user downloads it only when they choose to (Settings ▸ Import ▸ Lens profiles ▸ Download, which
+keeps just the data/db XML files of the project's source archive), under the Creative Commons
+Attribution-ShareAlike 3.0 licence (https://creativecommons.org/licenses/by-sa/3.0/); the
+section names it. No lensfun code is used.
+
 AI denoise weights are not part of LightCraft and are never distributed with it.
 The default build offers user-supplied models only. The optional rawnind-model
 feature offers a separately downloaded RawNIND UtNet2 Bayer checkpoint under

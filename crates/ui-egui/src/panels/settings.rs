@@ -19,6 +19,9 @@ use crate::state::{GridBadges, PREVIEW_LIMITS, StartupView};
 use crate::theme::Tokens;
 use crate::widgets::register;
 
+/// Sections `app.settings {section}` can open, with their tab.
+pub const SECTIONS: &[(&str, &str)] = &[("lensProfiles", "import")];
+
 /// (id, label) of the tabs, in order.
 pub const TABS: &[(&str, &str)] = &[
     ("general", "General"),
@@ -409,6 +412,112 @@ fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     if app.session.library.is_none() {
         hint(ui, t, crate::i18n::tr("In-memory session: these settings last until LightCraft quits."));
     }
+    lens_profiles(app, ui, t);
+}
+
+// ------------------------------------------------------------------------------ Lens profiles
+
+/// Settings ▸ Import ▸ Lens profiles: the lens database lens corrections fall back to (an app setting, not a
+/// library one), a folder chooser, and downloading lensfun's database on request (`lens.db.*`).
+fn lens_profiles(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+    use crate::i18n::tr;
+    let r = ui.scope(|ui| heading(ui, t, tr("Lens profiles"))).response;
+    register(ui.ctx(), "section:lensProfiles", r.rect);
+    if app.ui.settings_section.as_deref() == Some("lensProfiles") {
+        r.scroll_to_me(Some(egui::Align::TOP));
+        app.ui.settings_section = None;
+    }
+    hint(ui, t, tr("Lens corrections use these profiles for raw photos whose files carry no correction of their own."));
+    let st = app.session.lens_db.status();
+    let lenses = st["lenses"].as_u64().unwrap_or(0);
+    let dir = st["dir"].as_str().map(str::to_string);
+    row(ui, t, tr("Database"), |ui| {
+        let text = match &dir {
+            Some(d) if lenses > 0 => d.clone(),
+            Some(d) => format!("{d} ({})", tr("no lens profiles found")),
+            None => tr("None").to_string(),
+        };
+        // a long path is shortened (in full on hover), so it never widens the dialog
+        let label = egui::Label::new(RichText::new(&text).color(if lenses > 0 { t.text } else { t.text_dim })).truncate();
+        let l = ui.allocate_ui(egui::vec2(380.0, 20.0), |ui| ui.add(label)).inner.on_hover_text(&text);
+        register(ui.ctx(), "label:lensDbStatus", l.rect);
+    });
+    if lenses > 0 {
+        let summary = tr("{lenses} lenses, {cameras} cameras")
+            .replace("{lenses}", &lenses.to_string())
+            .replace("{cameras}", &st["cameras"].as_u64().unwrap_or(0).to_string());
+        let updated = st["updated"].as_str().map(|d| tr("updated {date}").replace("{date}", d));
+        row(ui, t, "", |ui| ui.label(RichText::new(updated.map_or(summary.clone(), |u| format!("{summary} · {u}"))).color(t.text_label)));
+    }
+    if st["origin"] == "env" {
+        hint(ui, t, &tr("Set by {var}, which overrides the folder chosen here.").replace("{var}", st["env"].as_str().unwrap_or_default()));
+    }
+    let running = st["download"]["state"] == "running";
+    let configured = st["configured"].is_string();
+    row(ui, t, "", |ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        if crate::widgets::text_button(ui, "lensDbFolder", "Choose Folder…", false).clicked()
+            && let Err(e) = app.run("app.lensDbFolder", json!({}))
+        {
+            app.toast(ui.ctx(), e);
+        }
+        if st["canDownload"] == true {
+            let label = if st["downloaded"] == true { "Update" } else { "Download" };
+            let b = ui.add_enabled_ui(!running, |ui| crate::widgets::text_button(ui, "lensDbDownload", label, false)).inner;
+            if b.clicked()
+                && let Err(e) = app.run("lens.db.download", json!({}))
+            {
+                app.toast(ui.ctx(), e);
+            }
+        }
+        if running && crate::widgets::text_button(ui, "lensDbCancel", "Cancel", false).clicked() {
+            let _ = app.run("lens.db.downloadCancel", json!({}));
+        }
+        if configured
+            && !running
+            && crate::widgets::text_button(ui, "lensDbRemove", "Remove", false).clicked()
+            && let Err(e) = app.run("lens.db.remove", json!({}))
+        {
+            app.toast(ui.ctx(), e);
+        }
+    });
+    match st["download"]["state"].as_str() {
+        Some("running") => {
+            // progress and Cancel are in the activity stack; this only repaints so the buttons update when it ends
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+        }
+        Some("failed") => {
+            let e = st["download"]["error"].as_str().unwrap_or_default().to_string();
+            row(ui, t, "", |ui| ui.label(RichText::new(e).color(t.caution)));
+        }
+        _ => {}
+    }
+    hint(
+        ui,
+        t,
+        tr(
+            "Download fetches the lensfun project's database (lensfun.github.io, CC-BY-SA 3.0) into the settings folder. It is not part of LightCraft.",
+        ),
+    );
+}
+
+/// Choose the lens database folder (`{dir}`, else a folder dialog), then use it (`lens.db.setDir`).
+pub fn lens_db_folder(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
+    let dir = match p.get("dir").and_then(Value::as_str).map(str::trim).filter(|d| !d.is_empty()) {
+        Some(d) => d.to_string(),
+        None => {
+            let req = crate::pick::PickRequest::folder(crate::i18n::tr("Choose Lens Database Folder"));
+            match crate::pick::ask(app, "app.lensDbFolder", p, "dir", req, |s| s.pick_folder.as_mut().and_then(|f| f()).map(|x| vec![x])) {
+                crate::pick::Picked::Now(v) => match v.into_iter().next() {
+                    Some(d) => d,
+                    None => return Ok(Value::Null),
+                },
+                crate::pick::Picked::Later => return Ok(Value::Null),
+                crate::pick::Picked::Unavailable => return Err("no folder dialog here: pass {dir}".into()),
+            }
+        }
+    };
+    app.run("lens.db.setDir", json!({"dir": dir}))
 }
 
 // --------------------------------------------------------------------------------- Performance

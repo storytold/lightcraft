@@ -22,6 +22,7 @@ pub mod filters;
 mod focus;
 pub mod geocode;
 pub mod keywords;
+mod lens_db;
 pub mod library;
 pub mod lut_profiles;
 pub mod manage;
@@ -151,6 +152,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(manage::specs());
         v.extend(previews::specs());
         v.extend(lut_profiles::specs());
+        v.extend(lens_db::specs());
         v.extend(mask_effects::specs());
         v.extend(cull::specs());
         v.extend(convert::specs());

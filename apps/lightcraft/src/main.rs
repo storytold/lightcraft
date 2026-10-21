@@ -725,6 +725,7 @@ fn open_session(in_memory: bool, dir: Option<std::path::PathBuf>, seed_demo: boo
     s.slide_templates_dir = lightcraft_engine::config::config_dir().map(|d| d.join(lightcraft_engine::slide_template::DIR_NAME));
     // Control requests are answered on the UI thread: Add to Apple Photos must not wait there
     s.apple_photos_background = true;
+    s.lens_db = lightcraft_engine::lens_download::LensSettings::load(lightcraft_engine::config::config_dir());
     (s, problem)
 }
 
