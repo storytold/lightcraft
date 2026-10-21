@@ -8,6 +8,16 @@
 
 ## 2026-10-18
 
+### Messages stay out of the way, and the bell keeps them
+- An import whose Lightroom XMP settings couldn't all be applied says so in one line ("Lightroom settings not
+  applied: 48") instead of covering the photos with every file and setting. **Show Details** lists the photos by
+  setting, each folder once, with Copy to Clipboard. No message is taller than four lines now, and one stays while the
+  pointer rests on it.
+- The list under the bell keeps the recent messages below the running tasks, so a message that faded can still be
+  read; a dot on the bell says new ones came.
+- With the menus in the window (Windows, Linux, the browser), the search field moves right when it would squeeze out
+  a menu title.
+
 ### Fill Location from GPS: no more neighbouring town in City
 - The offline place names list towns of 15,000 people or more, so a photo taken in a smaller one got the nearest larger
   town in City, sometimes another municipality (issue #2242). The Fill Location tooltip and the command help now say so,
@@ -233,6 +243,13 @@
 
 ## 2026-10-13
 
+### Background tasks under the bell
+- Running tasks (imports, exports, preview builds…) no longer float over the top-left corner, where they covered the
+  top of the left panel for as long as a job ran. The bell in the top bar shows them: a ring for how far along they
+  are, and beside it, in a wide window, the task's name and percentage, or how many run (a narrower window keeps the
+  percentage or the count, and the bell's tooltip says the rest). Click the bell (or Window ▸ Tasks) for the list,
+  with ✕ to stop a task; it shows every task, the newest first, and scrolls. Esc or a click elsewhere closes it.
+- The bell used to open History. History is in the Window menu and on the tool strip, as before.
 ### Edits keep up in a large library
 - A small edit (a keyword, a rating, a flag, a slider) no longer has the grid's list worked out again from every
   photo: only the photos the edit touched are asked about again and put at their place in the order. In a library of

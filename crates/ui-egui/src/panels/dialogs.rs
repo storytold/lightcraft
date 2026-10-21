@@ -228,6 +228,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
         Dialog::Rename { .. } => "Rename Photos",
         Dialog::Import { .. } => "Import Photos",
         Dialog::LightroomResult { .. } => "Lightroom Catalog Import",
+        Dialog::Report { report } => report.title.as_str(),
         Dialog::LabelNames { .. } => "Edit Color Label Names",
         Dialog::CaptureTime { .. } => "Edit Capture Time",
         Dialog::RenameKeyword { .. } => "Rename Keyword",
@@ -311,6 +312,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
             Dialog::Import { .. } => crate::import::DIALOG_SIZE[0],
             Dialog::SmartRules { .. } => 680.0,
             Dialog::AllMetadata { .. } => 620.0,
+            Dialog::Report { .. } => 560.0,
             Dialog::Print => 1100.0,
             Dialog::FaceModel { .. } => 460.0,
             Dialog::LightroomCatalog { .. } => 440.0,
@@ -381,6 +383,32 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     }
                     for detail in details.iter() {
                         ui.add(egui::Label::new(detail).wrap().selectable(true));
+                    }
+                }
+                Dialog::Report { report } => {
+                    ui.add(egui::Label::new(egui::RichText::new(report.summary.as_str()).color(t.text_label)).wrap());
+                    for (i, g) in report.groups.iter().enumerate() {
+                        ui.add_space(4.0);
+                        let heading = format!("{} ({})", g.heading, g.items.len());
+                        egui::CollapsingHeader::new(egui::RichText::new(heading).font(t.semibold(13.0)).color(t.text))
+                            .id_salt(("report-group", i))
+                            .default_open(report.groups.len() <= 3)
+                            .show(ui, |ui| {
+                                // each folder once, its files' names after it in a wrapped run: a column of full
+                                // paths would be mostly the same folder, and fifty rows tall
+                                for (folder, names) in crate::notifications::by_folder(&g.items) {
+                                    if !folder.is_empty() {
+                                        ui.add(egui::Label::new(egui::RichText::new(folder).font(t.font(11.5)).color(t.text_dim)).wrap().selectable(true));
+                                    }
+                                    ui.add(egui::Label::new(egui::RichText::new(names.join(", ")).color(t.text_label)).wrap().selectable(true));
+                                }
+                            });
+                    }
+                    ui.add_space(4.0);
+                    let r = ui.button(crate::i18n::tr("Copy to Clipboard"));
+                    crate::widgets::register(ui.ctx(), "button:reportCopy", r.rect);
+                    if r.clicked() {
+                        ui.ctx().copy_text(report.text());
                     }
                 }
                 Dialog::SystemInfo { rows } => {
@@ -1869,7 +1897,7 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
         Dialog::AutoStack { gap } => app.run("stack.auto", json!({"gap": gap})),
         Dialog::DenoiseModel { info, accepted } => crate::panels::denoise::install(app, info, *accepted),
         Dialog::FaceModel { path, info, accepted } => crate::panels::faces::install(app, path, info, *accepted),
-        Dialog::AllMetadata { .. } | Dialog::SystemInfo { .. } | Dialog::WhatsNew => Ok(serde_json::Value::Null),
+        Dialog::AllMetadata { .. } | Dialog::SystemInfo { .. } | Dialog::WhatsNew | Dialog::Report { .. } => Ok(serde_json::Value::Null),
         Dialog::Cull { reject_below, pick_best } => {
             let mut p = json!({"pickBest": pick_best});
             if *reject_below > 0.0 {
@@ -2312,6 +2340,7 @@ fn only_shows(dlg: &Dialog) -> bool {
             | Dialog::Shortcuts
             | Dialog::Settings { .. }
             | Dialog::SystemInfo { .. }
+            | Dialog::Report { .. }
             | Dialog::AllMetadata { .. }
             | Dialog::WhatsNew
             | Dialog::ManageEffects { .. }

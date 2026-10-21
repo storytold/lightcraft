@@ -860,6 +860,37 @@ mod tests {
         }
     }
 
+    /// The bell's notification list and the import-warnings report are translated in every language: the
+    /// report's headings replaced the per-photo warning sentences, which every catalog translated.
+    #[test]
+    fn catalogs_contain_notifications_and_import_report() {
+        let keys = [
+            "Notifications",
+            "Nothing yet",
+            "Show Details",
+            "New notifications",
+            "Just now",
+            "Import Warnings",
+            "Lightroom settings not applied",
+            "Photos added",
+            "Photos with Lightroom settings LightCraft didn't apply",
+            "Their other edits were imported.",
+            "Not imported",
+            "Profile not applied, colors may differ from Lightroom",
+            "Saved Lightroom geometry ignored: Upright is Off",
+            "Guided Upright geometry is not supported",
+            "Upright Auto will be recalculated",
+            "Upright Level will be recalculated",
+            "Upright Vertical will be recalculated",
+            "Upright Full will be recalculated",
+            "Saved Upright geometry is not supported",
+        ];
+        for language in Locale::ALL.iter().filter(|language| **language != Locale::En) {
+            let missing: Vec<&str> = keys.into_iter().filter(|key| !language.catalog().contains_key(*key)).collect();
+            assert!(missing.is_empty(), "{language:?} lacks {missing:?}");
+        }
+    }
+
     /// Smart-album choice values read as words in every language (English "Public Domain", German
     /// "Gemeinfrei"), never as rule ids like `publicDomain`; an id the field doesn't know shows as
     /// written. Unlike other labels these must be translated: an untranslated one would be English

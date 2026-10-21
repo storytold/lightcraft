@@ -228,6 +228,7 @@
   "+{n} more": "+{n} więcej",
   "1 task is still running: {names}. Quitting stops it.": "Wciąż trwa 1 zadanie: {names}. Zamknięcie programu je zatrzyma.",
   "{n} tasks are still running: {names}. Quitting stops them.": "Wciąż trwają {n} zadania: {names}. Zamknięcie programu je zatrzyma.",
+  "{n} tasks": "Zadania: {n}",
   "{what} merge cancelled": "Scalanie anulowane: {what}",
   "Import warnings ({n}):\n{warnings}": "Ostrzeżenia importu ({n}):\n{warnings}",
   "Lightroom geometry for {path} was not preserved; Guided Upright saved transform is unsupported.": "Geometria z Lightrooma dla {path} nie została zachowana; zapisane przekształcenie Guided Upright nie jest obsługiwane.",

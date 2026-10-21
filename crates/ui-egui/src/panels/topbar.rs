@@ -46,6 +46,18 @@ fn window_handle(app: &LightcraftApp, ui: &mut egui::Ui, content: Rect, margin_l
     }
 }
 
+/// Where the search field (`sw` wide) is centred with in-window menus that end at `menus_right`, in a bar whose
+/// right edge is `right`: on the bar's centre `cx`, unless that puts it over the menus. Then it moves right, into the
+/// room the icons on the right leave (their leftmost, the bell, starts 18 + 6 × 40 + 14 points from the edge; the
+/// filter icon right of the field takes 36 and a gap of 8), so the menus keep their titles. Never left of `cx`.
+pub(crate) fn search_centre(cx: f32, sw: f32, menus_right: f32, right: f32) -> f32 {
+    if cx - sw / 2.0 >= menus_right {
+        return cx;
+    }
+    let icons_left = right - 18.0 - 6.0 * 40.0 - 14.0;
+    (menus_right + sw / 2.0).min(icons_left - 36.0 - 8.0 - sw / 2.0).max(cx)
+}
+
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     // room for the traffic lights; in full screen they are gone, and the sidebar button sits as far
@@ -63,13 +75,15 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             // room for the filter icon and the seven icons on the right
             // (the field is centred, so each icon on the right takes its width from both sides)
             let mut sw = 640.0f32.min(full.width() - 620.0).max(190.0);
+            let mut cx = full.center().x;
             if !app.native_menu {
                 // leave room for the in-window menus left of the (centred) search field
                 let menus_right = full.left() + 140.0 + crate::menubar::bar_width(ui) + 24.0;
-                sw = sw.min(2.0 * (full.center().x - menus_right)).max(190.0);
+                sw = sw.min(2.0 * (cx - menus_right)).max(190.0);
+                cx = search_centre(cx, sw, menus_right, full.right());
             }
-            let search_left = full.center().x - sw / 2.0;
-            let sr = Rect::from_center_size(pos2(full.center().x, full.center().y), vec2(sw, 28.0));
+            let search_left = cx - sw / 2.0;
+            let sr = Rect::from_center_size(pos2(cx, full.center().y), vec2(sw, 28.0));
             if app.integrated_titlebar {
                 window_handle(app, ui, full, left as f32, 12.0, sr);
             }
@@ -185,7 +199,6 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 ("help", Icon::Help, "Keyboard shortcuts", "app.shortcuts"),
                 ("share", Icon::Share, "Export", "dialog.export"),
                 ("import", Icon::Plus, import_tip.as_str(), "file.addPhotos"),
-                ("bell", Icon::Bell, "Activity", "panel.activity"),
             ] {
                 let r = Rect::from_center_size(pos2(x, full.center().y), vec2(28.0, 28.0));
                 let resp = ui.interact(r, egui::Id::new(("top", id)), Sense::click()).on_hover_text(crate::i18n::tr(tip));
@@ -250,6 +263,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     }
                 }
             });
+            // the bell, leftmost of the icons: what runs in the background, with the room up to the filter icon
+            // for naming it
+            x -= 40.0;
+            let bell = Rect::from_center_size(pos2(x, full.center().y), vec2(28.0, 28.0));
+            crate::panels::activity::bell(app, ui, &t, bell, fr.right() + 12.0);
             let _ = Align2::CENTER_CENTER;
         });
 }
@@ -261,5 +279,22 @@ pub fn appearance_icon(mode: crate::state::AppearanceMode) -> (Icon, &'static st
         AppearanceMode::Auto => (Icon::Monitor, "Sync with System"),
         AppearanceMode::Light => (Icon::Sun, "Light Mode"),
         AppearanceMode::Dark => (Icon::Moon, "Dark Mode"),
+    }
+}
+
+#[cfg(test)]
+mod search_tests {
+    use super::search_centre;
+
+    #[test]
+    fn the_search_field_moves_right_only_when_the_menus_need_it() {
+        // room on both sides: centred
+        assert_eq!(search_centre(800.0, 400.0, 500.0, 1600.0), 800.0);
+        // over the menus: right just far enough to clear them, short of the icons
+        let cx = search_centre(500.0, 190.0, 480.0, 1000.0);
+        assert_eq!(cx, 480.0 + 95.0);
+        assert!(cx + 95.0 + 36.0 + 8.0 <= 1000.0 - 18.0 - 240.0 - 14.0);
+        // no room either way: never left of the centre
+        assert_eq!(search_centre(400.0, 190.0, 700.0, 800.0), 400.0);
     }
 }
