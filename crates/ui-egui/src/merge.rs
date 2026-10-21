@@ -344,7 +344,7 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
 /// smaller than its photos' resolution says why (issue #1455).
 fn added_message(what: &str, info: &Value) -> String {
     let size = |k: &str| info[k].as_f64().map(|mp| format!("{mp:.0} MP"));
-    match (info["limit"].as_str(), size("megapixels"), size("nativeMegapixels")) {
+    let message = match (info["limit"].as_str(), size("megapixels"), size("nativeMegapixels")) {
         (Some("memory"), Some(mp), Some(full)) => crate::i18n::tr_format!(
             "{what} merge added at {mp}: its full size, {full}, needs more memory than this computer has",
             what = what,
@@ -358,7 +358,29 @@ fn added_message(what: &str, info: &Value) -> String {
             full = full
         ),
         _ => crate::i18n::tr_format!("{what} merge added", what = what),
-    }
+    };
+    if info["omitted"].as_array().is_some_and(|v| !v.is_empty()) { format!("{message}\n{}", inclusion_summary(info)) } else { message }
+}
+
+fn inclusion_summary(info: &Value) -> String {
+    let used = info["used"].as_array().map_or(0, Vec::len);
+    let omitted = info["omitted"].as_array().map_or(0, Vec::len);
+    crate::i18n::tr_format!("{used} of {total} photos included", used = used, total = used.saturating_add(omitted))
+}
+
+/// Names come from this result's source paths, not the current selection or an older preview.
+fn omitted_photos(ui: &mut egui::Ui, info: &Value) {
+    let Some(omitted) = info["omitted"].as_array().filter(|v| !v.is_empty()) else { return };
+    let t = crate::theme::Tokens::get(ui.ctx());
+    ui.label(egui::RichText::new(inclusion_summary(info)).strong().color(t.caution));
+    ui.label(crate::i18n::tr("LightCraft could not align these photos with the included set. Review the preview before merging."));
+    egui::ScrollArea::vertical().id_salt("merge-omitted").max_height(76.0).show(ui, |ui| {
+        for photo in omitted {
+            let Some(path) = photo["path"].as_str() else { continue };
+            let name = std::path::Path::new(path).file_name().and_then(|s| s.to_str()).unwrap_or(path);
+            ui.add(egui::Label::new(name).wrap()).on_hover_text(path);
+        }
+    });
 }
 
 fn last_failed_matches(app: &LightcraftApp, opts: &MergeDialog) -> bool {
@@ -371,6 +393,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut MergeDialog) 
     ui.horizontal_top(|ui| {
         // preview
         ui.vertical(|ui| {
+            ui.set_width(520.0);
             let box_size = egui::vec2(520.0, 360.0);
             let (rect, _) = ui.allocate_exact_size(box_size, egui::Sense::hover());
             ui.painter().rect_filled(rect, 4.0, t.canvas);
@@ -393,7 +416,9 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut MergeDialog) 
             if let Some(e) = &app.merge.error {
                 ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, e, t.font(13.0), t.text);
             }
-            let info = app.merge.preview.as_ref().map(|p| p.3.clone());
+            // A previous preview may stay visible while the options change. Only describe
+            // inclusions once this preview is current and its replacement has finished.
+            let info = app.merge.preview.as_ref().filter(|p| p.2 == *opts && app.merge.preview_task.is_none()).map(|p| p.3.clone());
             if let Some(info) = info {
                 let txt = if opts.is_pano() {
                     crate::i18n::tr_format!(
@@ -409,6 +434,9 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut MergeDialog) 
                     crate::i18n::tr_format!("{} photos · exposures {} EV", ev.len(), ev.join(" / "))
                 };
                 ui.label(egui::RichText::new(txt).color(t.text_dim));
+                if opts.is_pano() {
+                    omitted_photos(ui, &info);
+                }
             }
         });
         ui.add_space(12.0);
@@ -496,6 +524,16 @@ fn num(ui: &mut egui::Ui, spec: &lightcraft_develop::ControlSpec, v: &mut f64) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn completed_panorama_reports_its_actual_inclusion_count() {
+        let info = json!({"used": [71, 9], "omitted": [{"id": 401, "path": "waterfall-3.png", "reason": "notRegistered"}]});
+        assert_eq!(added_message("Panorama", &info), "Panorama merge added\n2 of 3 photos included");
+        // All exposures are individual photos in the HDR panorama result.
+        let hdr = json!({"used": [71, 9, 401, 3], "omitted": [{"id": 6}, {"id": 12}]});
+        assert_eq!(added_message("HDR panorama", &hdr), "HDR panorama merge added\n4 of 6 photos included");
+        assert_eq!(added_message("Panorama", &json!({"used": [1, 2], "omitted": []})), "Panorama merge added");
+    }
 
     /// Issue #1455: a panorama held to the computer's memory, or to the largest size, says so.
     #[test]

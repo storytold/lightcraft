@@ -1,6 +1,6 @@
 # Gaps: where LightCraft falls short of Lightroom
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-15 · **Change:** minor (gap 15: Print Page Options — page numbers, page info, crop marks)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-21 · **Change:** minor (gap 30: panorama verification in moving scenes)
 
 Every known shortfall, one entry each, ranked by user impact (how many Lightroom users hit it, and
 how hard it blocks them), then by effort. **Agents pick work from the top** (the first entry nobody is
@@ -42,6 +42,7 @@ Hours are Opus 5.5 agent wall-clock hours (see [target-app-parity.md](target-app
 | 25 | **File writes**: AVIF import; Render to DNG as a catalog command (lossy DNG and the Render to DNG export format landed) (PSD export landed with Edit in PhotoCraft, #953) | file-format-parity.md | interchange edge cases | 19–34 | [file-format-parity](file-format-parity.md) |
 | 26 | **Performance at scale**: 85k-photo library opens in 1.7–4.7 s; 100k grid test pending; colour NR at half resolution; at 100k photos stack and album lookups are indexed (an "In a Stack" or "Album" smart album counts in ~14 ms, was 0.6–2.7 s) | ROADMAP log, gpu-pipeline.md | large-catalog users | 15–30 | [target-app-parity](target-app-parity.md#by-dimension) |
 | 27 | **Windows / Linux runtime coverage**: Windows installer UI unverified on Windows (#79); GPU path proven on Apple and on one AMD GPU on Linux (Radeon 8060S, Vulkan); NVIDIA, Intel and DX12 unverified; the Linux riscv64 tarball (new in 0.6.0, #844) is cross-compiled and never run beyond a QEMU smoke test | ROADMAP, issues, `release.yml` | non-Mac users find bugs first | 13–27 | [hardware-parity](hardware-parity.md) |
+| 30 | **Panorama verification in moving scenes** (LR-MERGE-PANO, LR-MERGE-HDRPANO): genuine overlaps can fail the inlier-fraction gate; omitted source photos are now reported | #1765; original procedural known-homography and parallax tests in `crates/merge/tests/pair_verification.rs`; waterfall originals unavailable | panoramas may omit part of the scene | not estimated without real fixtures | [merge](merge.md#panorama-inclusion-diagnostics) |
 | 29 | **HDR merge leftovers** (LR-MERGE-HDR): AI Denoise doesn't run on merged (linear) DNGs; JPEG brackets are treated as linear (no camera response curve); every frame is held as 32-bit float, ~0.86 GB per 67 MP frame (half-float frames would halve it) | tested on Sony A7R VI brackets 2026-10-14 ([merge.md](merge.md)); Lightroom's Denoise supports HDR DNGs | HDR shooters who denoise their merges, merge JPEGs, or merge 7+ frames of high-resolution raws on 16 GB machines | 10–20 (+ denoise linear-RGB contract, gap 11) | [merge](merge.md) |
 | 28 | **Small Classic shortcuts and keys**: rating `[` `]`, flag cycling, filter-bar keys, F1 help, panel keys (Tab, F5, F8; F6 and F7 toggle the filmstrip and the left panel) | [ui-parity](ui-parity.md#shortcuts) | Classic muscle memory | 4–8 | [ui-parity](ui-parity.md) |
 
@@ -55,7 +56,7 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 - **File format:** 2, 6, 7, 10, 13, 20, 25 (raw ones in [raw-parity.md](raw-parity.md))
 - **Hardware:** 14, 17, 22, 27
 - **Localization:** 21
-- **Quality / fidelity:** 1, 3
+- **Quality / fidelity:** 1, 3, 30
 - **Stability and platforms:** 9, 26, 27
 
 ## Closed recently (kept for calibration)
@@ -77,6 +78,7 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-21 | minor | Gap 30 records unresolved panorama verification (#1765); included counts and omitted filenames are now reported |
 | 2026-10-18 | patch | Gap 1: six X-Trans CMOS 4 Fujifilm bodies (X-T30 …) take the X-T3's spectral matrices instead of the neutral matrix |
 | 2026-10-15 | minor | Gap 15 shrinks: the Page panel's Page Options (Page Numbers, Page Info, Crop Marks) print on Single Image and Contact Sheet pages; identity plate, watermark, photo info, Cut Guides, direct printing and JPEG output remain |
 | 2026-10-14 | minor | Gap 26: at 100k photos stack and album lookups are indexed, so an "In a Stack" or "Album" smart album counts in ~14 ms (was 0.6–2.7 s); open time unchanged |

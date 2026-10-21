@@ -1,4 +1,5 @@
 {
+  "{used} of {total} photos included": "ჩართულია {used} ფოტო {total}-დან",
   " ({unsure} with several look-alike files: use Locate)": " ({unsure} რამდენიმე მსგავსი ფაილით: გამოიყენეთ „მოძებნა“)",
   " ({} in Recently Deleted)": " ({} ახლახან წაშლილებში)",
   " · {:.0}% clipped": " · {:.0}% მოკვეთილია",

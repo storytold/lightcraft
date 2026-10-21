@@ -19,3 +19,4 @@ lightcraft-scenes = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 rayon = { workspace = true }
+log = { workspace = true }

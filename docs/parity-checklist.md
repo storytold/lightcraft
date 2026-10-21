@@ -1,6 +1,6 @@
 # Lightroom parity checklist
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-20 · **Change:** minor (LR-VIEW-ZOOM: only a full-size drag within 20 ms clears a slow-drag verdict) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-21 · **Change:** minor (panorama omissions reported; moving-scene registration remains partial) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 The measured, row-by-row checklist: one row per Lightroom feature, menu item and shortcut, what we
 have and what is missing. It answers *does the feature exist?* (feature breadth). Whether it is good
@@ -40,7 +40,7 @@ cited here still exists. Formerly docs/parity.md.
 | L. Presets (PRE) | 6 | 0 | 1 | 1 | 2/2 (100%) | 2/2 (100%) |
 | M. Versions & history (VER) | 5 | 0 | 0 | 0 | 1/1 (100%) | 3/3 (100%) |
 | N. Copy / paste / sync (SYNC) | 5 | 0 | 0 | 0 | 3/3 (100%) | 1/1 (100%) |
-| O. Merge (MERGE) | 3 | 1 | 0 | 0 | — | — |
+| O. Merge (MERGE) | 1 | 3 | 0 | 0 | — | — |
 | P. Enhance (ENH) | 0 | 0 | 2 | 0 | — | — |
 | Q. HDR (HDR) | 2 | 3 | 0 | 0 | — | — |
 | R. Video (VID) | 0 | 0 | 5 | 1 | — | 0/2 (0%) |
@@ -53,9 +53,9 @@ cited here still exists. Formerly docs/parity.md.
 | Y. Menus | 84 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 78 | 4 | 2 | 1 | 49/52 (94%) | 24/26 (92%) |
 | Lightroom Classic extras | 40 | 23 | 23 | 8 | — | 24/26 (92%) |
-| **Total** | 419 | 61 | 59 | 35 | 194/201 (97%) | 148/161 (92%) |
+| **Total** | 417 | 63 | 59 | 35 | 194/201 (97%) | 148/161 (92%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.4%** of 539 in-scope rows — P0 98.3% of 201 · P1 95.0% of 161 · P2 55.7% of 176.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.2%** of 539 in-scope rows — P0 98.3% of 201 · P1 95.0% of 161 · P2 55.1% of 176.
 <!-- /parity:summary -->
 
 ## Top gaps and shortcut notes
@@ -353,8 +353,8 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 | Id | Feature | Tier | Status | Evidence | Missing / notes |
 |---|---|---|---|---|---|
 | LR-MERGE-HDR | HDR merge | P2 | 🟡 | `cmd:merge.hdr`, `cmd:dialog.mergeHdr`, `crates/merge/src/frame.rs` (`Frame::lens`), `crates/merge/src/hdr.rs` | auto align, deghost None–High + overlay, auto settings, float DNG, Create Stack; the DNG keeps the reference frame's embedded lens corrections (tested by `hdr_merge_keeps_the_reference_frames_lens_corrections`); raws without colour matrices of their own (CR2, NEF, ARW…) keep the colour they open with, written as DNG tags (`starting_colour_tags`; the look's chroma curve has no tag; panoramas too), issue #965; the DNG's `AsShotNeutral` is the median of the inputs' vendor white-balance multipliers, issue #1144. Tested on real Sony A7R VI brackets (67 MP, 2026-10-14): frames agree with the merged radiance within ~1 % in all channels, exposure steps match EXIF within 0.03 EV. A clipped highlight of the reference that moved in other frames (a star at 200 mm) stays instead of becoming a black hole, and deghost (≤ 2048 px maps) catches a brighter frame's ghost in a dark sky (`a_clipped_star_of_the_reference_is_not_erased_by_frames_where_it_moved`, `deghost_removes_a_bright_frames_ghost_in_a_dark_sky`). 🟡 because: AI Denoise doesn't run on merged DNGs (Bayer only; Lightroom's does), JPEG brackets are treated as linear (no camera response curve), and every frame is held as 32-bit float (~0.86 GB per 67 MP frame, so 7 frames need ~7 GB); gap 29 |
-| LR-MERGE-PANO | Panorama | P2 | ✅ | `cmd:merge.panorama`, `cmd:dialog.mergePanorama` | spherical/cylindrical/perspective + auto, boundary warp, auto crop, fill edges (diffusion), DNG whose `AsShotNeutral` is the median of its frames' as-shot white balance (vendor multipliers for CR2, NEF, ARW…), issue #1144; no lens model / 360° wrap |
-| LR-MERGE-HDRPANO | HDR panorama | P2 | ✅ | `cmd:merge.hdrPanorama`, `cmd:dialog.mergeHdrPanorama` | brackets grouped by EXIF |
+| LR-MERGE-PANO | Panorama | P2 | 🟡 | `cmd:merge.panorama`, `cmd:dialog.mergePanorama` | spherical/cylindrical/perspective + auto, boundary warp, auto crop, fill edges (diffusion), DNG whose `AsShotNeutral` is the median of its frames' as-shot white balance (vendor multipliers for CR2, NEF, ARW…), issue #1144; no lens model / 360° wrap; omitted source IDs and filenames reported; genuine moving-scene overlaps can still be rejected (#1765, gap 30) |
+| LR-MERGE-HDRPANO | HDR panorama | P2 | 🟡 | `cmd:merge.hdrPanorama`, `cmd:dialog.mergeHdrPanorama` | brackets grouped by EXIF; included/omitted IDs expand each bracket to all source photos; shares the unresolved panorama verification limit (#1765, gap 30) |
 | LR-MERGE-HEADLESS | Merge with last settings | P2 | ✅ | `cmd:merge.hdrLast`, `cmd:merge.panoramaLast`, `cmd:merge.hdrPanoramaLast`, `cmd:merge.hdrBatch`, `crates/catalog/src/stacks.rs` (`bracket_sets`) | no dialog; the options of the last merge of that kind (defaults the first time), kept in the library's prefs.json so they survive a restart; the HDR / Panorama / HDR Panorama dialogs open with them too (`merge_dialog_remembers_the_last_settings_per_kind`). HDR for Each Bracket Set merges a batch like Lightroom's merge of stacks: one HDR per stack among the photos, then per bracket (photos taken less than a second apart, after the shutter time, at exposures ≥ ½ EV apart; bursts at one exposure are skipped), one after the other in the activity stack (cancelling one stops the rest; a failed set doesn't); CLI `merge hdr-batch FILES…` |
 
 ## P. Enhance (ENH)
@@ -797,6 +797,7 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-21 | minor | LR-MERGE-PANO and LR-MERGE-HDRPANO marked partial: omissions are reported, but moving-scene verification remains unresolved (#1765) |
 | 2026-10-20 | patch | LR-VIEW-ZOOM: the 20 ms rule clears a slow-drag verdict only on a drag timed at full size; a drag that drafts small leaves it unchanged, as the code does; status unchanged |
 | 2026-10-19 | patch | LR-VIEW-ZOOM: the slow slider-drag verdict is described as per photo and control, as the code keys it; status unchanged |
 | 2026-10-15 | minor | LR-VIEW-ZOOM: a slow slider-drag verdict needs two drags over 20 ms and expires after 30 s (doubling to 240 s); hidden-window frame times are ignored; the slow set forgets its oldest entry, not all (issue #330); status unchanged |
