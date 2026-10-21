@@ -660,14 +660,15 @@ impl Session {
             match &p.source {
                 Source::File { path } => {
                     let (decoder_width, decoder_height) = if p.source_width > 0 && p.source_height > 0 {
-                        (p.source_width, p.source_height)
-                    } else if p.kind == lightcraft_catalog::MediaKind::Raw && p.preview_only.is_none() {
-                        return Err(EngineError::Other(format!(
-                            "Photo Merge cannot safely estimate uncropped source dimensions for older raw {}; reimport the original to refresh its catalog metadata",
-                            p.file_name
-                        )));
+                        (p.source_width.max(p.width), p.source_height.max(p.height))
+                    } else if p.kind == lightcraft_catalog::MediaKind::Raw {
+                        // Older catalogs and Lightroom imports lack uncropped raw dimensions. Use
+                        // a square at least as large as the recorded frame so those libraries can
+                        // still plan merges without probing or reading source files first.
+                        let edge = p.width.max(p.height);
+                        (p.source_width.max(edge), p.source_height.max(edge))
                     } else {
-                        (p.width, p.height)
+                        (p.source_width.max(p.width), p.source_height.max(p.height))
                     };
                     dimensions.add(p.width, p.height, decoder_width, decoder_height, preview_edge).map_err(EngineError::Other)?;
                     sources.push((*id, path.clone()));

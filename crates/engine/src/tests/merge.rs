@@ -40,7 +40,7 @@ fn hdr_merge_rejects_over_budget_dimensions_before_reading_sources() {
 }
 
 #[test]
-fn older_raw_without_source_dimensions_fails_before_probe_or_read() {
+fn legacy_raw_catalog_without_source_dimensions_still_plans_a_merge() {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     let mut s = Session::new();
@@ -61,7 +61,20 @@ fn older_raw_without_source_dimensions_fails_before_probe_or_read() {
         photo.source_width = 0;
         photo.source_height = 0;
         s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(photo) }).unwrap();
-        ids.push(id.0);
+        ids.push(id);
+    }
+
+    // Omit the fields as a catalog written before source dimensions were added to Photo.
+    let mut legacy: serde_json::Value = serde_json::from_str(&s.catalog.to_snapshot()).unwrap();
+    for photo in legacy["photos"].as_object_mut().unwrap().values_mut() {
+        let fields = photo.as_object_mut().unwrap();
+        fields.remove("source_width");
+        fields.remove("source_height");
+    }
+    s.catalog = lightcraft_catalog::Catalog::from_snapshot(&legacy.to_string()).unwrap();
+    for id in &ids {
+        let photo = s.catalog.photo(*id).unwrap();
+        assert_eq!((photo.source_width, photo.source_height), (0, 0));
     }
 
     let probes = std::sync::Arc::new(AtomicUsize::new(0));
@@ -77,10 +90,10 @@ fn older_raw_without_source_dimensions_fails_before_probe_or_read() {
         Err("source reader should not be called".into())
     }));
 
-    let error = s.execute("merge.hdr", &json!({"ids": ids})).unwrap_err().to_string();
-    assert!(error.contains("reimport the original"), "{error}");
-    assert_eq!(probes.load(Ordering::Relaxed), 0, "Photo Merge probed a source before deciding it could not estimate its memory");
-    assert_eq!(reads.load(Ordering::Relaxed), 0, "Photo Merge read source bytes before estimating its memory");
+    let job = s.plan_merge(crate::merge::MergeKind::Hdr { hdr: Default::default() }, crate::merge::MergeFinish::default(), &ids, false).unwrap();
+    assert_eq!(job.sources.len(), 2);
+    assert_eq!(probes.load(Ordering::Relaxed), 0, "legacy dimension fallback must not probe files");
+    assert_eq!(reads.load(Ordering::Relaxed), 0, "planning must not read source bytes");
 }
 
 #[test]
