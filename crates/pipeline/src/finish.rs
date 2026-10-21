@@ -5,7 +5,7 @@ use lightcraft_color::spline::{Lut1, MonotoneCurve};
 use lightcraft_color::transfer::linear_to_srgb;
 use lightcraft_develop::{DevelopSettings, LocalAdjustments, Process, ToneCurve, VignetteStyle};
 use lightcraft_geom::Point;
-use lightcraft_raster::Rgba8;
+use lightcraft_raster::{Plane, Rgba8};
 
 use crate::colorops::ColorOps;
 use crate::geometry::Frame;
@@ -20,15 +20,94 @@ fn smooth(e0: f32, e1: f32, x: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
-/// Parametric region curve (encoded domain) composed with the master point curve.
-fn curve_luts(c: &ToneCurve) -> Option<[Lut1; 3]> {
+/// The base tone curve of a raw (encoded 0..1, `(in, out)`; the Color profile's look): an S that
+/// deepens blacks and shadows and brightens highlights while holding the mid-tones. Matched
+/// black-box, by tone quantiles, to Lightroom exports (Adobe Color) of three raws at the same
+/// settings: at each level the median of the three photos' curves (a dark, underexposed scene
+/// wanted darker mid-tones than the other two; the median follows the two that agree). No number
+/// comes from Adobe's software.
+const COLOR_CURVE: [(f64, f64); 14] = [
+    (0.0, 0.0),
+    (4.0 / 255.0, 1.0 / 255.0),
+    (8.0 / 255.0, 4.7 / 255.0),
+    (16.0 / 255.0, 10.3 / 255.0),
+    (24.0 / 255.0, 17.7 / 255.0),
+    (32.0 / 255.0, 25.3 / 255.0),
+    (48.0 / 255.0, 40.6 / 255.0),
+    (64.0 / 255.0, 58.8 / 255.0),
+    (96.0 / 255.0, 94.3 / 255.0),
+    (128.0 / 255.0, 129.3 / 255.0),
+    (160.0 / 255.0, 163.0 / 255.0),
+    (192.0 / 255.0, 185.7 / 255.0),
+    (224.0 / 255.0, 222.3 / 255.0),
+    (1.0, 1.0),
+];
+
+/// The base colour of a raw (linear Rec.2020, row-major; the Color profile's look), applied before
+/// the tone map: a 3×3 that keeps every colour's luminance (its rows weighted by Rec.2020's
+/// luminance sum to those weights) and neutral neutral (white balance decides what is neutral; each
+/// row sums to 1), and moves chromaticity the way a Lightroom export (Adobe Color) of the same raw
+/// renders it, fitted black-box by weighted least squares on the aligned exports of three raws
+/// (each photo weighted equally, the two shot at a custom white balance with their own
+/// white-balance difference fitted out). It turns the warm, slightly green grey a camera-JPEG look
+/// gives near-neutral subjects towards the magenta-leaning grey of that rendering. No number comes
+/// from Adobe's software.
+const COLOR_MATRIX: [[f64; 3]; 3] = [[0.96239, 0.19774, -0.16013], [-0.00966, 0.95648, 0.05318], [0.27707, -0.37840, 1.10133]];
+
+/// Whether `s`'s process sharpens at the original photo's pixels ([`sharpen_taps`], from V3); before
+/// V3 sharpening reads the texture band, a fixed fraction of the frame.
+pub fn sharpens_at_original_pixels(s: &DevelopSettings) -> bool {
+    match s.process.process() {
+        Process::V1 | Process::V2 => false,
+        Process::V3 => true,
+    }
+}
+
+/// Whether `s`'s process gives a raw the base look ([`COLOR_CURVE`], [`COLOR_MATRIX`],
+/// [`crate::look_table`]): from V3.
+pub fn has_base_look(s: &DevelopSettings) -> bool {
+    match s.process.process() {
+        Process::V1 | Process::V2 => false,
+        Process::V3 => true,
+    }
+}
+
+/// Entries of the tone-curve tables.
+const CURVE_N: usize = 1024;
+
+/// The base look of a raw ([`COLOR_CURVE`] as a table): the Color profile's tone, and the base the
+/// other profiles' looks are deltas on (`profiles::effective`), as a base profile is in Lightroom.
+/// Raws only: a JPEG or TIFF keeps the rendering it has. Under HDR the curves continue with slope 1
+/// above SDR white (see `finish_with`).
+fn color_look(s: &DevelopSettings, info: &SourceInfo) -> Option<Lut1> {
+    if !info.raw || !has_base_look(s) {
+        return None;
+    }
+    let curve = MonotoneCurve::new(&COLOR_CURVE);
+    Some(Lut1::from_fn(CURVE_N, |x| (curve.eval(f64::from(x)) as f32).clamp(0.0, 1.0)))
+}
+
+/// The base look's colour ([`COLOR_MATRIX`]) under the user's calibration matrix `user`: raws only,
+/// as [`color_look`].
+fn color_calibration(s: &DevelopSettings, info: &SourceInfo, user: Option<[[f32; 3]; 3]>) -> Option<[[f32; 3]; 3]> {
+    if !info.raw || !has_base_look(s) {
+        return user;
+    }
+    let u = user.map_or([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], |m| m.map(|row| row.map(f64::from)));
+    // the user's calibration after the look: u · look
+    Some(std::array::from_fn(|r| std::array::from_fn(|c| (0..3).map(|j| u[r][j] * COLOR_MATRIX[j][c]).sum::<f64>() as f32)))
+}
+
+/// Parametric region curve (encoded domain) composed with the master point curve, over the
+/// profile's `look` curve when it has one (the look is underneath the user's curves).
+fn curve_luts(c: &ToneCurve, look: Option<&Lut1>) -> Option<[Lut1; 3]> {
     let parametric = c.highlights != 0.0 || c.lights != 0.0 || c.darks != 0.0 || c.shadows != 0.0;
     let master = !ToneCurve::point_curve_is_identity(&c.master);
     let chans = [&c.red, &c.green, &c.blue].map(|p| !ToneCurve::point_curve_is_identity(p));
     if !parametric && !master && !chans.iter().any(|b| *b) {
-        return None;
+        return look.map(|l| std::array::from_fn(|_| l.clone()));
     }
-    const N: usize = 1024;
+    const N: usize = CURVE_N;
     let (s1, s2, s3) = ((c.split_shadows / 100.0) as f32, (c.split_mid / 100.0) as f32, (c.split_highlights / 100.0) as f32);
     let regions = [(0.0, s1, c.shadows), (s1, s2, c.darks), (s2, s3, c.lights), (s3, 1.0, c.highlights)];
     let mut base = Lut1::from_fn(N, |x| {
@@ -47,6 +126,9 @@ fn curve_luts(c: &ToneCurve) -> Option<[Lut1; 3]> {
     // keep monotone
     for i in 1..N {
         base.v[i] = base.v[i].max(base.v[i - 1]);
+    }
+    if let Some(l) = look {
+        base = base.compose(l);
     }
     let to_pts = |p: &[Point]| p.iter().map(|q| (q.x, q.y)).collect::<Vec<_>>();
     if master {
@@ -176,6 +258,11 @@ pub struct FinishParams {
     pub dehaze: f32,
     pub sharpen: f32,
     pub sharpen_mask: f32,
+    /// Sharpening's blur ([`sharpen_taps`]): weights of the pixel and of those 1 and 2 px away
+    /// (per axis), for a Radius in the original photo's pixels at this render's scale.
+    pub sharpen_taps: [f32; 3],
+    /// Sharpening at the original's pixels ([`sharpens_at_original_pixels`]); else the texture band.
+    pub sharpen_fine: bool,
     /// Airlight after and before exposure, exposure gain and EV (see [`crate::Prepared`]).
     pub air: f32,
     pub air_pre: f32,
@@ -195,6 +282,54 @@ pub struct FinishParams {
     /// Peak linear output relative to SDR white: 1 for SDR renders; `2^max_ev` for an HDR render
     /// ([`OutputDepth::F32Hdr`] with HDR on), which keeps values above 1 instead of clipping them.
     pub peak: f32,
+    /// The base look's hue table ([`crate::look_table`]) applies: a raw.
+    pub look: bool,
+}
+
+/// Output pixels per pixel of the original photo (at most 1): what a radius given in the
+/// original's pixels (Sharpening's) spans in this render.
+fn original_scale(info: &SourceInfo, frame: &Frame, px_per_long: f64) -> f32 {
+    let src_long = frame.ow.max(frame.oh).round().max(1.0) as usize;
+    crate::local::detail_scale(px_per_long, info.native_long.unwrap_or(0).max(src_long))
+}
+
+/// Strength of Sharpening's detail (log2 luminance per unit Amount/150), and the Gaussian width per
+/// unit of Radius (original pixels). Calibrated against a Lightroom export of the same raw at the
+/// same settings (Amount 40, Radius 1.0): image-wide detail at the finest three octaves within 10 %.
+pub const SHARPEN_GAIN: f32 = 6.0;
+pub const SHARPEN_RADIUS_SCALE: f32 = 1.5;
+
+/// `plane` at (`x`, `y`) blurred by the separable five-tap `taps` ([`sharpen_taps`]), edges clamped.
+fn blur5(plane: &Plane, x: usize, y: usize, taps: &[f32; 3]) -> f32 {
+    let (x, y) = (x as isize, y as isize);
+    let mut sum = 0.0;
+    for dy in -2isize..=2 {
+        let wy = taps.get(dy.unsigned_abs()).copied().unwrap_or(0.0);
+        if wy == 0.0 {
+            continue;
+        }
+        let row = (-2isize..=2).map(|dx| taps.get(dx.unsigned_abs()).copied().unwrap_or(0.0) * plane.get_clamped(x + dx, y + dy)).sum::<f32>();
+        sum += wy * row;
+    }
+    sum
+}
+
+/// Separable blur weights `[centre, ±1 px, ±2 px]` (summing to 1 over the five taps) for an
+/// unsharp mask of radius `sigma` output pixels. Sharpening works at the original photo's pixels:
+/// a view smaller than the photo gets the blur that sharpening at full size and scaling down
+/// leaves, a fraction of a pixel, so it sharpens the finest detail the view shows (a Gaussian of
+/// the same width would sample to no blur at all). Radii past ~1.5 px are cut at 2 px.
+pub fn sharpen_taps(sigma: f32) -> [f32; 3] {
+    let sigma = if sigma.is_finite() { sigma.clamp(0.05, 4.0) } else { 0.05 };
+    if sigma < 0.7 {
+        // [c, 1 − 2c, c] with a Gaussian's response at a third of the sampling rate (it meets the
+        // sampled Gaussian below at about 0.7 px)
+        let c = ((1.0 - (-2.0 * std::f32::consts::PI.powi(2) * sigma * sigma / 9.0).exp()) / 3.0).min(0.25);
+        return [1.0 - 2.0 * c, c, 0.0];
+    }
+    let g = |k: f32| (-k * k / (2.0 * sigma * sigma)).exp();
+    let sum = g(0.0) + 2.0 * g(1.0) + 2.0 * g(2.0);
+    [g(0.0) / sum, g(1.0) / sum, g(2.0) / sum]
 }
 
 impl FinishParams {
@@ -226,12 +361,13 @@ impl FinishParams {
         let peak = s.hdr.peak();
         FinishParams {
             peak,
-            calib: if calibration { crate::colorops::calibration_matrix(&s.calibration) } else { None },
+            look: info.raw && has_base_look(s),
+            calib: color_calibration(s, info, if calibration { crate::colorops::calibration_matrix(&s.calibration) } else { None }),
             shadow_tint: if calibration { (s.calibration.shadows_tint / 100.0) as f32 } else { 0.0 },
             tone: base_tone(s, info, peak),
             lut: crate::lut::get(&s.profile.id).map(|l| (l, (s.profile.amount / 100.0).clamp(0.0, 2.0) as f32)),
             ops: ColorOps::new(s),
-            curves: curve_luts(&s.curve),
+            curves: curve_luts(&s.curve, color_look(s, info).as_ref()),
             refine_sat: (s.curve.refine_saturation / 100.0).clamp(0.0, 1.0) as f32,
             vig: if effects { vignette(s) } else { None },
             to_out: space.from_working(),
@@ -245,6 +381,8 @@ impl FinishParams {
             dehaze,
             sharpen: (s.detail.sharpen_amount / 150.0) as f32,
             sharpen_mask: (s.detail.sharpen_masking / 100.0) as f32,
+            sharpen_fine: sharpens_at_original_pixels(s),
+            sharpen_taps: sharpen_taps(s.detail.sharpen_radius as f32 * SHARPEN_RADIUS_SCALE * original_scale(info, frame, px_per_long)),
             air: air_pre * gain,
             air_pre,
             gain,
@@ -280,8 +418,9 @@ impl FinishParams {
 pub fn base_tone(s: &DevelopSettings, info: &SourceInfo, peak: f32) -> ToneMap {
     let l = &s.light;
     match s.process.process() {
-        // V2 changes the Highlights/Shadows base (`local::tone_base`), not the tone map
-        Process::V1 | Process::V2 => match info.camera_tone.as_ref().filter(|_| info.raw) {
+        // V2 changes the Highlights/Shadows base (`local::tone_base`) and V3 sharpening and the base
+        // look (later in this stage: `sharpens_at_original_pixels`, `has_base_look`), not the tone map
+        Process::V1 | Process::V2 | Process::V3 => match info.camera_tone.as_ref().filter(|_| info.raw) {
             Some(curve) => ToneMap::camera_hdr(curve, l.contrast, l.whites, l.blacks, peak),
             None if info.raw => ToneMap::hdr(l.contrast, l.whites, l.blacks, peak),
             None => ToneMap::display_hdr(l.contrast, l.whites, l.blacks, peak),
@@ -501,17 +640,26 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                 delta += cl * 0.85 * det * (0.35 + 0.65 * mid);
             }
             let tx = tex + l_tex;
-            let sp = l_sharp * 0.6 + sharpen;
-            if (tx != 0.0 || sp != 0.0)
+            if tx != 0.0
                 && let Some(b) = &p.texture_blur
             {
                 let det = l_pre - b.data[i];
                 let tame = 1.0 - 0.6 * smooth(0.4, 1.6, det.abs());
                 delta += tx * 1.1 * det.clamp(-1.0, 1.0) * tame;
-                if sp != 0.0 {
-                    let m = if sharpen_mask > 0.0 { smooth(sharpen_mask * 0.25, sharpen_mask * 0.25 + 0.15, det.abs()) } else { 1.0 };
-                    delta += sp * 1.3 * det.clamp(-0.8, 0.8) * m;
-                }
+            }
+            // sharpening: from V3 an unsharp mask at the original's pixels (`sharpen_taps`), before
+            // it the texture band
+            let sp = l_sharp * 0.6 + sharpen;
+            let det = if sp == 0.0 {
+                None
+            } else if fp.sharpen_fine {
+                Some((l_pre - blur5(&p.log_l, x, y, &fp.sharpen_taps), SHARPEN_GAIN))
+            } else {
+                p.texture_blur.as_ref().map(|b| (l_pre - b.data[i], 1.3))
+            };
+            if let Some((det, gain)) = det {
+                let m = if sharpen_mask > 0.0 { smooth(sharpen_mask * 0.25, sharpen_mask * 0.25 + 0.15, det.abs()) } else { 1.0 };
+                delta += sp * gain * det.clamp(-0.8, 0.8) * m;
             }
             // local Noise: smooth (or, negative, boost) small-amplitude detail, keep edges
             if l_noise != 0.0
@@ -579,6 +727,11 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                         d = d.map(|c| c + (1.0 - c) * v.amount * t * 0.85);
                     }
                 }
+            }
+
+            // --- the base look's hue table (display-referred, before the output conversion)
+            if fp.look {
+                d = crate::look_table::apply(d);
             }
 
             // --- gamut map to the output space (desaturate towards luminance until in range);
@@ -772,6 +925,43 @@ fn enc(v: f32) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn v3_sharpens_every_photo_and_gives_only_raws_a_base_look() {
+        use lightcraft_develop::ProcessVersion;
+        let params = |v: u32, raw: bool| {
+            let s = DevelopSettings { process: ProcessVersion(v), ..DevelopSettings::default() };
+            let info = SourceInfo { raw, ..SourceInfo::default() };
+            let frame = Frame::new(300, 200, &s, true);
+            FinishParams::new(&s, &frame, &info, 300, 200, 300.0, 1.0, OutputSpace::Srgb)
+        };
+        for v in [1, 2] {
+            // an edit made before V3 renders as it did: no base look, sharpening on the texture band
+            let p = params(v, true);
+            assert!(!p.look && p.curves.is_none() && p.calib.is_none() && !p.sharpen_fine, "V{v}");
+        }
+        let p = params(3, true);
+        assert!(p.look && p.curves.is_some() && p.calib.is_some() && p.sharpen_fine, "V3 raw");
+        // a rendered file keeps its own look, whatever the process
+        let p = params(3, false);
+        assert!(!p.look && p.curves.is_none() && p.calib.is_none() && p.sharpen_fine, "V3 JPEG");
+    }
+
+    #[test]
+    fn sharpening_blur_is_normalised_and_grows_with_its_radius() {
+        let total = |t: [f32; 3]| t[0] + 2.0 * t[1] + 2.0 * t[2];
+        let mut last = 0.0;
+        for sigma in [0.1f32, 0.3, 0.55, 0.69, 0.71, 1.0, 1.5, 3.0] {
+            let t = sharpen_taps(sigma);
+            assert!((total(t) - 1.0).abs() < 1e-5, "{sigma}: {t:?}");
+            assert!(t.iter().all(|w| (0.0..=1.0).contains(w)), "{sigma}: {t:?}");
+            // the share off the centre pixel (how much it blurs) never shrinks as the radius grows
+            assert!(1.0 - t[0] >= last - 1e-3, "{sigma}: {t:?}");
+            last = 1.0 - t[0];
+        }
+        // nonsense radii fall back to a near-identity blur instead of NaN weights
+        assert!(sharpen_taps(f32::NAN)[0] > 0.9);
+    }
 
     #[test]
     fn refine_saturation_restores_the_pre_curve_saturation() {

@@ -252,6 +252,68 @@ fn out_encode(v: f32) -> f32 {
     return 1.099 * pow(l, 0.45) - 0.099;
 }
 
+// `lightcraft_pipeline::look_table::apply`: linear Rec.2020 through the base look's hue table
+// (OkLCh; 24 hues × 5 chromas × 6 lightnesses, trilinear, hue wrapping), stored in `aux` at LOOK_OFF.
+fn look_node(i: u32) -> vec3<f32> {
+    let o = pu(F_LOOK_OFF) + 3u * i;
+    return vec3<f32>(aux[o], aux[o + 1u], aux[o + 2u]);
+}
+
+fn look_apply(rgb: vec3<f32>) -> vec3<f32> {
+    let lab = oklab(max(rgb, vec3<f32>(0.0)));
+    let l = lab.x;
+    let c = length(lab.yz);
+    // (`look_table::NEUTRAL_CHROMA`)
+    if (!(l > 0.0) || !(c > 5e-4)) {
+        return rgb;
+    }
+    let h = atan2(lab.z, lab.y);
+    let hf = fract(h / 6.283185307) * 24.0;
+    let h0 = u32(floor(hf)) % 24u;
+    let th = hf - floor(hf);
+    let cf = clamp(c / 0.05, 0.0, 4.0 - 1e-4);
+    let c0 = u32(floor(cf));
+    let tc = cf - floor(cf);
+    let lf = clamp(l / 0.2, 0.0, 5.0 - 1e-4);
+    let l0 = u32(floor(lf));
+    let tl = lf - floor(lf);
+    var v = vec3<f32>(0.0);
+    for (var dh = 0u; dh < 2u; dh++) {
+        let wh = select(1.0 - th, th, dh == 1u);
+        for (var dc = 0u; dc < 2u; dc++) {
+            let wc = select(1.0 - tc, tc, dc == 1u);
+            for (var dl = 0u; dl < 2u; dl++) {
+                let wl = select(1.0 - tl, tl, dl == 1u);
+                let i = (((h0 + dh) % 24u) * 5u + (c0 + dc)) * 6u + (l0 + dl);
+                v += wh * wc * wl * look_node(i);
+            }
+        }
+    }
+    let h2 = h + v.x;
+    let c2 = c * exp(v.y);
+    return oklab_inv(vec3<f32>(l * exp(v.z), c2 * cos(h2), c2 * sin(h2)));
+}
+
+// `lightcraft_pipeline::finish::blur5`: log_l at (x, y) through the separable five-tap
+// SHARPEN_TAPS (centre, ±1, ±2), edges clamped; rows summed first, as the CPU does.
+fn sharpen_blur(x: u32, y: u32, w: u32, h: u32) -> f32 {
+    var sum = 0.0;
+    for (var dy = -2; dy <= 2; dy++) {
+        let wy = pf(F_SHARPEN_TAPS + u32(abs(dy)));
+        if (wy == 0.0) {
+            continue;
+        }
+        let yy = u32(clamp(i32(y) + dy, 0, i32(h) - 1));
+        var row = 0.0;
+        for (var dx = -2; dx <= 2; dx++) {
+            let xx = u32(clamp(i32(x) + dx, 0, i32(w) - 1));
+            row += pf(F_SHARPEN_TAPS + u32(abs(dx))) * log_l[yy * w + xx];
+        }
+        sum += wy * row;
+    }
+    return sum;
+}
+
 @compute @workgroup_size(16, 16)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let w = pu(F_W);
@@ -378,19 +440,30 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         delta += cl * 0.85 * det * (0.35 + 0.65 * mid);
     }
     let tx = pf(F_TEX) + lt[8];
-    let sp = lt[13] * 0.6 + pf(F_SHARPEN);
-    if ((tx != 0.0 || sp != 0.0) && pu(F_HAS_TEX) != 0u) {
+    if (tx != 0.0 && pu(F_HAS_TEX) != 0u) {
         let det = l_pre - tex[i];
         let tame = 1.0 - 0.6 * sstep(0.4, 1.6, abs(det));
         delta += tx * 1.1 * clamp(det, -1.0, 1.0) * tame;
-        if (sp != 0.0) {
-            let sm = pf(F_SHARPEN_MASK);
-            var mk = 1.0;
-            if (sm > 0.0) {
-                mk = sstep(sm * 0.25, sm * 0.25 + 0.15, abs(det));
-            }
-            delta += sp * 1.3 * clamp(det, -0.8, 0.8) * mk;
+    }
+    // sharpening: from V3 an unsharp mask at the original's pixels (SHARPEN_TAPS), before it the
+    // texture band
+    let sp = lt[13] * 0.6 + pf(F_SHARPEN);
+    let fine = pu(F_SHARPEN_FINE) != 0u;
+    if (sp != 0.0 && (fine || pu(F_HAS_TEX) != 0u)) {
+        var det = 0.0;
+        var gain = 1.3;
+        if (fine) {
+            det = l_pre - sharpen_blur(x, y, w, h);
+            gain = pf(F_SHARPEN_GAIN);
+        } else {
+            det = l_pre - tex[i];
         }
+        let sm = pf(F_SHARPEN_MASK);
+        var mk = 1.0;
+        if (sm > 0.0) {
+            mk = sstep(sm * 0.25, sm * 0.25 + 0.15, abs(det));
+        }
+        delta += sp * gain * clamp(det, -0.8, 0.8) * mk;
     }
     // local Noise: smooth (or, negative, boost) small-amplitude detail, keep edges
     if (l_noise != 0.0 && pu(F_HAS_TEX) != 0u) {
@@ -465,6 +538,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 d = d + (1.0 - d) * amount * t * 0.85;
             }
         }
+    }
+
+    // --- the base look's hue table (display-referred, before the output conversion)
+    if (pu(F_LOOK) != 0u) {
+        d = look_apply(d);
     }
 
     // --- gamut map to the output space (desaturate towards luminance until in range)

@@ -262,6 +262,9 @@ fn exposure_after_spatial_filters_equals_exposing_the_source() {
     let src = scene();
     let info = SourceInfo { raw: true, ..Default::default() };
     let mut s = typical_edits();
+    // (sharpening is shift-equivariant too, being on log luminance, but as an unsharp mask it
+    // magnifies the level or two that clipped highlights already differ by: not what this checks)
+    s.detail.sharpen_amount = 0.0;
     s.light.exposure = 1.3;
     let a = render(&src, &info, &s, &RenderRequest::fit(200, 200)).image;
     let g = 2f32.powf(1.3);
@@ -270,6 +273,26 @@ fn exposure_after_spatial_filters_equals_exposing_the_source() {
     let b = render(&scaled, &info, &s, &RenderRequest::fit(200, 200)).image;
     let d = max_diff(&a, &b);
     assert!(d <= 2, "max difference {d}");
+}
+
+/// Sharpening (on log luminance) commutes with exposure where nothing clips: what the test above
+/// leaves out.
+#[test]
+fn sharpening_is_unchanged_by_exposure_where_nothing_clips() {
+    let src = scene().map(|c| c.map(|v| v * 0.25));
+    let info = SourceInfo { raw: true, ..Default::default() };
+    let mut s = DevelopSettings::default();
+    s.detail.sharpen_amount = 80.0;
+    s.light.exposure = 1.0;
+    let a = render(&src, &info, &s, &RenderRequest::fit(200, 200)).image;
+    s.light.exposure = 0.0;
+    let b = render(&src.map(|c| c.map(|v| v * 2.0)), &info, &s, &RenderRequest::fit(200, 200)).image;
+    let d = max_diff(&a, &b);
+    assert!(d <= 2, "max difference {d}");
+    // and it did sharpen
+    s.detail.sharpen_amount = 0.0;
+    let plain = render(&src.map(|c| c.map(|v| v * 2.0)), &info, &s, &RenderRequest::fit(200, 200)).image;
+    assert!(max_diff(&b, &plain) > 4, "sharpening changed nothing");
 }
 
 #[test]

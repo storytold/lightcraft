@@ -32,6 +32,7 @@ pub mod finish;
 pub mod geometry;
 pub mod local;
 pub mod local_tone;
+pub mod look_table;
 pub mod lut;
 pub mod masks;
 pub mod optics;

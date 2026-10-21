@@ -273,7 +273,7 @@ pub fn base_detail_radius(px_per_long: f64) -> usize {
 pub fn tone_base_detail(s: &DevelopSettings, px_per_long: f64) -> usize {
     match s.process.process() {
         Process::V1 => 0,
-        Process::V2 => base_detail_radius(px_per_long),
+        Process::V2 | Process::V3 => base_detail_radius(px_per_long),
     }
 }
 
@@ -501,11 +501,12 @@ pub fn plane_sigmas(s: &DevelopSettings, px_per_long: f64, q: Quality) -> PlaneS
         if q == Quality::Draft { sigma.min(24.0) } else { sigma }
     });
     let clarity = (s.effects.clarity != 0.0 || local_any(|a| a.clarity)).then(|| (0.012 * ppl).max(1.0));
-    // local Noise and Defringe read the fine detail band too
+    // local Noise and Defringe read the fine detail band too, and sharpening before V3 (from V3
+    // it reads its own few pixels of `log_l`: `finish::sharpen_taps`)
+    let sharpen_band = !crate::finish::sharpens_at_original_pixels(s) && (s.detail.sharpen_amount != 0.0 || local_any(|a| a.sharpness));
     let texture = (s.effects.texture != 0.0
-        || s.detail.sharpen_amount != 0.0
+        || sharpen_band
         || local_any(|a| a.texture)
-        || local_any(|a| a.sharpness)
         || local_any(|a| a.noise)
         || s.masks.iter().any(|m| m.adjust.defringe > 0.0))
     .then(|| (0.0018 * ppl).max(0.6));

@@ -17,6 +17,8 @@ const FIELDS: &[(&str, usize)] = &[
     ("SRGB_OFF", 1),
     ("CURVE_OFF", 1),
     ("CURVES", 1),
+    ("LOOK", 1),
+    ("LOOK_OFF", 1),
     ("GAIN", 1),
     ("EV", 1),
     ("AIR", 1),
@@ -28,6 +30,9 @@ const FIELDS: &[(&str, usize)] = &[
     ("DEHAZE", 1),
     ("SHARPEN", 1),
     ("SHARPEN_MASK", 1),
+    ("SHARPEN_GAIN", 1),
+    ("SHARPEN_FINE", 1),
+    ("SHARPEN_TAPS", 3),
     ("HAS_CLAR", 1),
     ("HAS_TEX", 1),
     ("HAS_DARK", 1),
@@ -152,6 +157,10 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
             aux.extend_from_slice(&l.v);
         }
     }
+    let look_off = aux.len();
+    if fp.look {
+        aux.extend(lightcraft_pipeline::look_table::TABLE.iter().flatten());
+    }
     let mask_off = aux.len();
     for m in masks {
         aux.extend_from_slice(m);
@@ -165,6 +174,8 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     p.u("SRGB_OFF", srgb_off as u32);
     p.u("CURVE_OFF", curve_off as u32);
     p.b("CURVES", fp.curves.is_some());
+    p.b("LOOK", fp.look);
+    p.u("LOOK_OFF", look_off as u32);
     p.f("REFINE_SAT", fp.refine_sat);
     p.f("GAIN", fp.gain);
     p.f("EV", fp.ev);
@@ -177,6 +188,9 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     p.f("DEHAZE", fp.dehaze);
     p.f("SHARPEN", fp.sharpen);
     p.f("SHARPEN_MASK", fp.sharpen_mask);
+    p.f("SHARPEN_GAIN", lightcraft_pipeline::finish::SHARPEN_GAIN);
+    p.b("SHARPEN_FINE", fp.sharpen_fine);
+    p.fs("SHARPEN_TAPS", &fp.sharpen_taps);
     p.b("HAS_CLAR", present.clarity);
     p.b("HAS_TEX", present.texture);
     p.b("HAS_DARK", present.dark);

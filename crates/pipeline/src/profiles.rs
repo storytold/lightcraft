@@ -6,6 +6,9 @@
 //! vectors to the user's wheels) and point-curve fades (black/white output levels composed after
 //! the user's point curves). The CPU pipeline and the GPU path both render [`effective`]
 //! settings, so a profile needs no kernel of its own. No look adds grain.
+//!
+//! Under every profile a raw has a base look, the Color profile's own: a tone curve and a colour
+//! matrix (`finish::COLOR_CURVE`, `finish::COLOR_MATRIX`). The looks here are deltas on it.
 
 use std::borrow::Cow;
 
