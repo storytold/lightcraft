@@ -1,13 +1,15 @@
 //! Headless tests of the editable keymap (Help ▸ Keyboard Shortcuts): a changed shortcut fires
 //! its command and not the old one's, the editor records a key press without running it, Esc
 //! cancels recording without closing the dialog, and the keymap survives a save/load of `ui.json`.
+//! It also covers the F1 and H keys: F1 opens the shortcuts dialog (not the docs page), and H
+//! toggles the mask pins while the Masking panel is open (it opens Remove everywhere else).
 
 use std::time::Duration;
 
 use serde_json::json;
 
 use crate::headless::Headless;
-use crate::state::{Dialog, ViewMode};
+use crate::state::{Dialog, RightPanel, ViewMode};
 use crate::{LightcraftApp, Services};
 
 const T: Duration = Duration::from_secs(20);
@@ -452,4 +454,108 @@ fn cmd_o_does_not_fire_while_a_dialog_is_open() {
     h.app.ui.dialog = None;
     press(&mut h, "O", &["cmd"]);
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+/// A host `open_url` that records the pages it is asked to open.
+fn record_opened_urls(h: &mut Headless) -> std::sync::Arc<std::sync::Mutex<Vec<String>>> {
+    let opened = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let sink = opened.clone();
+    h.app.services.open_url = Some(Box::new(move |url: &str| {
+        sink.lock().unwrap().push(url.to_string());
+        Ok(())
+    }));
+    opened
+}
+
+/// Open the right-hand panel `command` and check it is the active one.
+fn open_panel(h: &mut Headless, command: &str, panel: RightPanel) {
+    // the panel commands toggle: don't switch off a panel that is already open
+    if h.app.ui.right != panel {
+        h.app.run(command, json!({})).unwrap();
+    }
+    h.step();
+    h.step();
+    assert_eq!(h.app.ui.right, panel, "{command}");
+}
+
+/// F1 is the shortcuts dialog's secondary key; no command declares it as its own shortcut.
+#[test]
+fn f1_belongs_to_the_shortcuts_dialog_alone() {
+    use crate::shortcuts::{ALIASES, bindable, parse};
+    let f1 = parse("F1");
+    assert!(f1.is_some());
+    let owners: Vec<&str> = ALIASES.iter().filter(|(sc, _, _)| parse(sc) == f1).map(|(_, id, _)| *id).collect();
+    assert_eq!(owners, ["app.shortcuts"], "F1 aliases");
+    let declared: Vec<&str> = bindable().iter().filter(|b| b.default.and_then(parse) == f1).map(|b| b.id).collect();
+    assert!(declared.is_empty(), "no command declares F1 itself: {declared:?}");
+}
+
+#[test]
+fn f1_opens_the_shortcuts_dialog() {
+    let mut h = demo();
+    assert!(h.app.ui.dialog.is_none());
+    key(&mut h, "F1", false);
+    assert!(matches!(h.app.ui.dialog, Some(Dialog::Shortcuts)), "F1 opens Keyboard Shortcuts: {:?}", h.app.ui.dialog);
+    // the dialog owns the keys while it is open: a second F1 neither closes it nor stacks another
+    key(&mut h, "F1", false);
+    assert!(matches!(h.app.ui.dialog, Some(Dialog::Shortcuts)), "{:?}", h.app.ui.dialog);
+}
+
+/// F1 used to open the docs page. That command now runs only from Help ▸ LightCraft Help.
+#[test]
+fn f1_does_not_open_the_docs_page_but_the_help_menu_item_does() {
+    let mut h = demo();
+    let opened = record_opened_urls(&mut h);
+    key(&mut h, "F1", false);
+    assert!(opened.lock().unwrap().is_empty(), "F1 must not open the docs page: {:?}", opened.lock().unwrap());
+    // Help has no shortcut of its own, in the keymap or the menus
+    assert_eq!(crate::shortcuts::shortcut_of(&h.app.ui.settings.keymap, "app.help"), None);
+    let entries = crate::menus::menu_entries(&h.app);
+    let help = entries.iter().find(|e| e.id == "app.help").expect("LightCraft Help is in the Help menu");
+    assert_eq!(help.menu, ["Help"]);
+    assert_eq!(help.shortcut, None);
+    // F1 is not offered as a menu accelerator by any entry either
+    assert!(entries.iter().all(|e| e.shortcut.as_deref() != Some("F1")), "an entry still advertises F1");
+    // the menu entry still opens the page
+    crate::menubar::run_item(&mut h.app, "app.help", serde_json::Value::Null).unwrap();
+    assert_eq!(opened.lock().unwrap().as_slice(), [crate::links::HELP]);
+}
+
+#[test]
+fn h_toggles_the_mask_pins_while_masking() {
+    let mut h = demo();
+    open_panel(&mut h, "panel.masking", RightPanel::Masking);
+    assert!(h.app.ui.mask_pins, "pins are shown by default");
+    key(&mut h, "H", false);
+    assert!(!h.app.ui.mask_pins, "H hides the pins");
+    key(&mut h, "H", false);
+    assert!(h.app.ui.mask_pins, "H shows them again");
+    // the same toggle as View ▸ Show Mask Pins
+    h.app.run("view.maskPins", json!({"show": false})).unwrap();
+    key(&mut h, "H", false);
+    assert!(h.app.ui.mask_pins);
+}
+
+#[test]
+fn h_while_masking_does_not_open_remove() {
+    let mut h = demo();
+    open_panel(&mut h, "panel.masking", RightPanel::Masking);
+    for _ in 0..2 {
+        key(&mut h, "H", false);
+        assert_eq!(h.app.ui.right, RightPanel::Masking, "H stays in Masking");
+        assert_ne!(h.app.ui.tool, "remove");
+    }
+}
+
+#[test]
+fn h_opens_remove_when_another_panel_is_active() {
+    for (command, panel) in [("panel.edit", RightPanel::Edit), ("panel.crop", RightPanel::Crop), ("panel.redeye", RightPanel::RedEye)] {
+        let mut h = demo();
+        open_panel(&mut h, command, panel);
+        let pins = h.app.ui.mask_pins;
+        key(&mut h, "H", false);
+        assert_eq!(h.app.ui.right, RightPanel::Remove, "H from {panel:?}");
+        assert_eq!(h.app.ui.tool, "remove");
+        assert_eq!(h.app.ui.mask_pins, pins, "H outside Masking leaves the pins alone");
+    }
 }

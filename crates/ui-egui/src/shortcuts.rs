@@ -195,6 +195,7 @@ pub fn format(m: Modifiers, k: Key) -> Option<String> {
 /// They complement the primary shortcut declared on the command (Lightroom-desktop keys that our
 /// primary keymap assigns elsewhere, see docs/ui-parity.md → Shortcuts). Shown in Help → Keyboard Shortcuts.
 pub const ALIASES: &[(&str, &str, &str)] = &[
+    ("F1", "app.shortcuts", "{}"),
     ("Cmd+D", "library.selectNone", "{}"),
     ("Shift+E", "dialog.export", "{}"),
     ("Cmd+E", "app.exportPrevious", "{}"),
@@ -536,6 +537,11 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
                 _ => app.toast(ctx, crate::i18n::tr("Unflagged")),
             }
         } else {
+            // H toggles mask pins while the Masking panel is active (elsewhere it opens Remove)
+            if f == "panel.remove" && app.ui.right == crate::state::RightPanel::Masking {
+                let _ = app.run("view.maskPins", json!({}));
+                continue;
+            }
             // in the full-screen preview (no panels) I cycles the info overlay instead
             if f == "panel.info" && app.ui.fullscreen {
                 let _ = app.run("view.infoOverlay", json!({}));
