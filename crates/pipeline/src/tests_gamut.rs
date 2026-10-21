@@ -5,7 +5,7 @@
 use lightcraft_develop::{DevelopSettings, Process};
 use lightcraft_raster::{Rgb32f, Rgba8};
 
-use crate::finish::{GamutMap, gamut_map_keep_to, gamut_map_to};
+use crate::finish::{GamutMap, KEEP_DESATURATE_POWER, gamut_keep_saturation, gamut_map_keep_to, gamut_map_to};
 use crate::{OutputSpace, RenderRequest, SourceInfo, render};
 
 const SRGB_Y: [f32; 3] = [0.2126, 0.7152, 0.0722];
@@ -19,15 +19,25 @@ const HALO: [f32; 3] = [1.125, 0.275, 0.027];
 
 #[test]
 fn an_orange_past_white_keeps_its_blue_and_its_luminance() {
-    let (q, t) = gamut_map_keep_to(HALO, SRGB_Y, 1.0);
-    assert!((q[0] - 1.0).abs() < 1e-6, "{q:?}");
-    assert!((q[2] - HALO[2]).abs() < 1e-6, "the lowest channel keeps its value: {q:?}");
-    assert!((lum(q) - lum(HALO)).abs() < 1e-5, "luminance {} -> {}", lum(HALO), lum(q));
-    assert!(q[1] > HALO[1] && q[1] < 1.0, "green carries the clipped luminance: {q:?}");
-    assert!(t < 0.995, "flagged for the gamut warnings: {t}");
+    // before the share towards white, the lowest channel keeps its value and green carries the
+    // clipped luminance
+    let (keep, _, clipped) = gamut_keep_saturation(HALO, SRGB_Y, 1.0);
+    assert!(clipped);
+    assert!((keep[0] - 1.0).abs() < 1e-6 && (keep[2] - HALO[2]).abs() < 1e-6, "{keep:?}");
+    assert!((lum(keep) - lum(HALO)).abs() < 1e-5 && keep[1] > HALO[1] && keep[1] < 1.0, "{keep:?}");
     // the old map keeps the hue by lifting blue almost four-fold (the pale halo)
     let (old, _) = gamut_map_to(HALO, SRGB_Y, 1.0);
     assert!(old[2] > 3.5 * HALO[2], "{old:?}");
+    // the map takes a share Y^6 of the old map's colour: 0.7 % at this halo's luminance (0.44)
+    let (q, t) = gamut_map_keep_to(HALO, SRGB_Y, 1.0);
+    let f = lum(HALO).powi(KEEP_DESATURATE_POWER);
+    assert!((0.006..0.008).contains(&f), "{f}");
+    for k in 0..3 {
+        assert!((q[k] - (keep[k] + f * (old[k] - keep[k]))).abs() < 1e-6, "{q:?}");
+    }
+    assert!((q[0] - 1.0).abs() < 1e-6 && q[2] > HALO[2] && q[2] < HALO[2] + 0.02 * (old[2] - HALO[2]), "{q:?}");
+    assert!((lum(q) - lum(HALO)).abs() < 1e-5, "luminance {} -> {}", lum(HALO), lum(q));
+    assert!(t < 0.995, "flagged for the gamut warnings: {t}");
 }
 
 #[test]
@@ -42,7 +52,10 @@ fn in_gamut_colours_are_untouched_and_neutrals_end_at_white() {
     // HDR: into 0..peak
     let c = [5.0, 1.2, 0.2];
     let (q, _) = gamut_map_keep_to(c, SRGB_Y, 4.0);
-    assert!(q.iter().all(|v| (0.0..=4.0 + 1e-6).contains(v)) && (q[2] - 0.2).abs() < 1e-6, "{q:?}");
+    let f = (lum(c) / 4.0).powi(KEEP_DESATURATE_POWER);
+    let (old, _) = gamut_map_to(c, SRGB_Y, 4.0);
+    assert!(q.iter().all(|v| (0.0..=4.0 + 1e-6).contains(v)), "{q:?}");
+    assert!((q[2] - (0.2 + f * (old[2] - 0.2))).abs() < 1e-5, "the share is relative to peak: {q:?}");
     assert!((lum(q) - lum(c)).abs() < 1e-4, "{q:?}");
     // below zero: the least desaturation that brings it to 0, as before
     let c = [0.6, 0.3, -0.05];
@@ -102,11 +115,13 @@ fn v3_renders_a_bright_orange_orange_and_v2_pale() {
     assert!(shot(Process::V1) == v2, "V1 and V2 share the desaturating map");
     let (o2, o3) = (at(&v2, 10), at(&v3, 10));
     assert_eq!((o3[0], o2[0]), (255, 255));
-    assert!(o3[2] < 20 && o2[2] > 60, "blue: V3 {o3:?}, V2 {o2:?}");
+
+    assert!(o3[2] < 30 && o2[2] > 60, "blue: V3 {o3:?}, V2 {o2:?}");
     assert!(o3[1].abs_diff(o2[1]) < 12, "green (luminance) about the same: V3 {o3:?}, V2 {o2:?}");
-    // past white in Rec. 2020 too, the orange stays saturated
+    // past white in Rec. 2020 too, the orange stays saturated (near white it takes a share of V2's colour)
     let (b2, b3) = (at(&v2, 32), at(&v3, 32));
-    assert!(b3[0] == 255 && b3[1] > b3[2] && b3[2] < 90 && b2[2] > b3[2] + 100, "V3 {b3:?}, V2 {b2:?}");
+
+    assert!(b3[0] == 255 && b3[1] > b3[2] && b3[2] < 110 && b2[2] > b3[2] + 100, "V3 {b3:?}, V2 {b2:?}");
     // the clipped neutral is white on both
     assert_eq!((at(&v3, 60), at(&v2, 60)), ([255; 4], [255; 4]));
 }

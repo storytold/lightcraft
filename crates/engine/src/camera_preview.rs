@@ -2228,7 +2228,9 @@ mod tests {
         let fit = fit_pairs(&sensor, &reference).unwrap();
         // relative to the matrix, which already carries the average colourfulness
         let chroma = fit.tone.chroma();
-        assert!(chroma[6] < 0.5 * chroma[1], "highlights bleach relative to shadows: {chroma:?}");
+        // about half (0.51): the fit predicts through the V3 output map, which takes a share of the
+        // bleaching right below white itself (`gamut_map_keep_to`), so the curve needs a little less
+        assert!(chroma[6] < 0.55 * chroma[1], "highlights bleach relative to shadows: {chroma:?}");
         // and the rendered highlights land on the camera's, far closer than without the curve
         let with = ToneMap::camera(&fit.tone, 0.0, 0.0, 0.0);
         let without = ToneMap::camera(&fit.tone.with_chroma([1.0; lightcraft_pipeline::tone::CHROMA_N]).unwrap(), 0.0, 0.0, 0.0);

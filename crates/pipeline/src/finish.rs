@@ -579,7 +579,8 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                         let t = ((mx - peak) / (mx - o).max(1e-6)).clamp(0.0, 1.0);
                         d.map(|v| v + (o - v) * t)
                     }
-                    GamutMap::KeepSaturation => gamut_map_keep_to(d, LUMA_2020, peak).0,
+                    // the share towards white is taken once, by the output map below
+                    GamutMap::KeepSaturation => gamut_keep_saturation(d, LUMA_2020, peak).0,
                 };
             }
 
@@ -766,8 +767,43 @@ const LUMA_2020: [f32; 3] = [0.2627, 0.6780, 0.0593];
 /// lifting its blue, which bleaches a sunset's saturated halo towards white. A neutral (or any
 /// colour) at or past `peak` luminance still ends at white, and the map is continuous: at the
 /// gamut boundary it is the identity.
+///
+/// Camera JPEGs do not keep the lowest channel quite that low: as a clipped colour nears white,
+/// they let a growing share of it go towards white. So a colour past `peak` takes a share
+/// `(Y / peak)^6` ([`KEEP_DESATURATE_POWER`]) of [`gamut_map_to`]'s desaturated colour: 1.6 % at
+/// half luminance, 26 % at 80 %, all of it at white. Both colours are in range and have the same
+/// luminance, so the blend is too. The finish stage takes the share once, at the output map; its
+/// map past white after the tone map is [`gamut_keep_saturation`] alone (taking it there too
+/// doubles it). Measured on full renders against the embedded camera JPEGs of the CC0 CR3 files
+/// in `corpus/raw` (16 files; 8 × 8 blocks the share changes): the lowest channel's 8-bit RMSE
+/// goes from 15.4 (bias −3.6) to 14.1 (−2.9), all channels from 12.8 to 12.2. Power 5 scores the
+/// same there (14.0) but overshoots an EOS R10 sunset halo (bias +6.7; 6 gives +2.5, RMSE 22.1 →
+/// 20.9, where [`gamut_map_to`] alone bleaches it).
 #[inline]
 pub fn gamut_map_keep_to(r: [f32; 3], luma: [f32; 3], peak: f32) -> ([f32; 3], f32) {
+    let (q, t, clipped) = gamut_keep_saturation(r, luma, peak);
+    if !clipped {
+        return (q, t);
+    }
+    let (d, _) = gamut_map_to(r, luma, peak);
+    let y = ((luma[0] * d[0] + luma[1] * d[1] + luma[2] * d[2]) / peak).clamp(0.0, 1.0);
+    let f = y.powi(KEEP_DESATURATE_POWER);
+    if f.is_nan() || f <= 0.0 {
+        return (q, t);
+    }
+    let q: [f32; 3] = std::array::from_fn(|k| q[k] + (d[k] - q[k]) * f);
+    let (lo, hi) = (r[0].min(r[1]).min(r[2]), r[0].max(r[1]).max(r[2]));
+    let chroma = q[0].max(q[1]).max(q[2]) - q[0].min(q[1]).min(q[2]);
+    (q, t.min(chroma / (hi - lo).max(1e-9)))
+}
+
+/// The power of luminance that sets the share of [`gamut_map_to`] in [`gamut_map_keep_to`].
+pub const KEEP_DESATURATE_POWER: i32 = 6;
+
+/// [`gamut_map_keep_to`] without the share that goes towards white: the lowest channel keeps its
+/// value. The flag says whether a channel was past `peak` (only then is the share taken).
+#[inline]
+pub(crate) fn gamut_keep_saturation(r: [f32; 3], luma: [f32; 3], peak: f32) -> ([f32; 3], f32, bool) {
     let lum = |q: [f32; 3]| luma[0] * q[0] + luma[1] * q[1] + luma[2] * q[2];
     let yy = lum(r).clamp(0.0, peak);
     let mut t = 1.0f32;
@@ -779,7 +815,7 @@ pub fn gamut_map_keep_to(r: [f32; 3], luma: [f32; 3], peak: f32) -> ([f32; 3], f
     let r = if t < 1.0 { r.map(|c| yy + (c - yy) * t) } else { r };
     let (lo, hi) = (r[0].min(r[1]).min(r[2]), r[0].max(r[1]).max(r[2]));
     if hi <= peak || hi.is_nan() {
-        return (r, t);
+        return (r, t, false);
     }
     let mut q = r.map(|c| c.min(peak));
     // share of the clipped luminance each channel takes: 1 for the highest, 0 for the lowest
@@ -797,7 +833,7 @@ pub fn gamut_map_keep_to(r: [f32; 3], luma: [f32; 3], peak: f32) -> ([f32; 3], f
         q = q.map(|c| c + (peak - c) * u);
     }
     let chroma = q[0].max(q[1]).max(q[2]) - q[0].min(q[1]).min(q[2]);
-    (q, t.min(chroma / (hi - lo).max(1e-9)))
+    (q, t.min(chroma / (hi - lo).max(1e-9)), true)
 }
 
 /// Local Defringe weight of a scene-linear colour `c` whose log luminance differs by `det` from

@@ -9,6 +9,9 @@ use lightcraft_pipeline::finish::{FinishParams, MASK_TERMS, srgb_lut};
 pub const CURVE_N: u32 = 1024;
 
 /// Field name and number of 32-bit words.
+// `finish.wgsl`'s `gamut_keep` takes the share of `gamut_desat` as `y2 * y2 * y`.
+const _: () = assert!(lightcraft_pipeline::finish::KEEP_DESATURATE_POWER == 6, "update gamut_keep in finish.wgsl");
+
 const FIELDS: &[(&str, usize)] = &[
     ("W", 1),
     ("H", 1),
