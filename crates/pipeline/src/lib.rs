@@ -227,7 +227,7 @@ fn profile_table_for(s: &DevelopSettings, req: &RenderRequest) -> Result<Option<
     if !matches!(s.process.process(), lightcraft_develop::Process::V2 | lightcraft_develop::Process::V3) {
         return Err("requires Process 2 or 3");
     }
-    if s.hdr.enabled || req.depth == OutputDepth::F32Hdr {
+    if s.hdr.enabled {
         return Err("HDR unsupported");
     }
     let amount = s.profile.amount / 100.0;

@@ -59,8 +59,8 @@ fn read(s: &mut Session, p: &Value) -> Result<Value> {
         s.skip_auto_write = true;
     }
     for item in &mut read {
-        if let Some(photo) = item.get("id").and_then(Value::as_u64).and_then(|id| s.catalog.photo(PhotoId(id))) {
-            item["unsupportedEdits"] = json!(photo.unsupported_edits);
+        if let Some(id) = item.get("id").and_then(Value::as_u64).map(PhotoId).filter(|id| s.catalog.photo(*id).is_some()) {
+            item["unsupportedEdits"] = json!(s.unsupported_edits(id));
         }
     }
     let mut result = json!({"read": read, "failed": failed});

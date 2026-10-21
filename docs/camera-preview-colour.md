@@ -1,5 +1,9 @@
 # Sony ARW, Nikon NEF, Panasonic RW2, Fujifilm RAF, Canon CR3/CR2, Pentax PEF, Samsung SRW, Olympus ORF and Epson ERF starting look
 
+Current cache versions are **camera look 10** (`LOOK_VERSION`) and **render cache 66**
+(`RENDER_CACHE_VERSION`). Earlier version numbers below record the changes that introduced them;
+they are historical, not the versions this build writes.
+
 ARW, NEF, RW2, RAF, CR3, CR2, PEF, SRW, ORF and ERF decoding supply sensor data and camera white-balance multipliers, but currently no measured camera colour matrix. Treating camera RGB as linear sRGB produces a dark, muted default rendering. The loader now estimates a file-local starting look from that file's embedded camera JPEG, only when a usable camera matrix is absent. All output pixels still come from the RAW sensor data; there is no JPEG replacement or uniform saturation boost.
 
 ## Colour and tone are separate

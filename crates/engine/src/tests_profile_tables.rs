@@ -197,6 +197,15 @@ fn explicit_file_is_read_only_and_errors_do_not_echo_payloads() {
     assert!(applied.iter().zip(&wanted).all(|(a, b)| a.abs_diff(*b) <= 2), "table precedes nonlinear raw tone");
     let neutral = pixels(lightcraft_pipeline::render_cached(&src, &info, &bypass, &req, &cache));
     assert!(applied.iter().zip(&neutral).any(|(a, b)| a.abs_diff(*b) > 500), "fixture must exercise the table");
+    let float_req = lightcraft_pipeline::RenderRequest { depth: lightcraft_pipeline::OutputDepth::F32Linear, ..req.clone() };
+    let hdr_req = lightcraft_pipeline::RenderRequest { depth: lightcraft_pipeline::OutputDepth::F32Hdr, ..req.clone() };
+    let float = lightcraft_pipeline::render(&src, &info, &s, &float_req);
+    let hdr = lightcraft_pipeline::render(&src, &info, &s, &hdr_req);
+    let bypass_float = lightcraft_pipeline::render(&src, &info, &bypass, &float_req);
+    assert!(float.unsupported_edits.is_empty());
+    assert!(hdr.unsupported_edits.is_empty(), "an SDR float render supports the loaded table");
+    assert_eq!(hdr.deep, float.deep, "F32Hdr with HDR disabled is the SDR float render");
+    assert_ne!(float.deep, bypass_float.deep, "the float fixture must exercise the table");
     let mut missing_req = req.clone();
     missing_req.imported_table = None;
     assert_eq!(neutral, pixels(lightcraft_pipeline::render(&src, &info, &bypass, &missing_req)), "Amount zero skips all new arithmetic");

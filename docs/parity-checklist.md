@@ -1,6 +1,6 @@
 # Lightroom parity checklist
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (LRC-PRINT-PAGE: Print Page Options) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-21 · **Change:** patch (process-version description; statuses and counts unchanged) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 The measured, row-by-row checklist: one row per Lightroom feature, menu item and shortcut, what we
 have and what is missing. It answers *does the feature exist?* (feature breadth). Whether it is good
@@ -736,7 +736,7 @@ From `08-lightroom-classic-extras.md` (Classic-only features) and part 2 of `06-
 | LRC-DEV-CALIB | Calibration panel | P1 | ✅ | `ctl:calibration.*` | |
 | LRC-DEV-TAT | Targeted adjustment tools | P1 | ✅ | `cmd:develop.targeted` (`target`: curve / hue / sat / lum) | |
 | LRC-DEV-DEFAULTS | Per-camera raw defaults | P1 | ✅ | `cmd:library.preferences` (`camera`, `import.perCamera`), `crates/ui-egui/src/panels/settings.rs` | Settings → Import: raw default and per-camera presets |
-| LRC-DEV-PROCESS | Process versions, Update to Current Process | P1 | ✅ | `cmd:develop.updateProcess`, `cmd:develop.reset`, `cmd:develop.get`, `crates/develop/src/settings.rs`, `crates/pipeline/src/finish.rs`, `docs/process-versions.md` | each photo records the rendering process its settings are interpreted by: settings saved before this existed load as V1, new photos and Reset get the latest, virtual copies inherit, copy / paste / sync / presets keep each photo's own; Photo ▸ Update to Current Process (one undo step, enabled while a selected photo is on an older process); a number from a newer LightCraft is kept and renders with the newest known process. Only V1 exists so far: this is what lets a retuned default tone (#146) or stronger Light sliders (#196) ship without changing existing edits |
+| LRC-DEV-PROCESS | Process versions, Update to Current Process | P1 | ✅ | `cmd:develop.updateProcess`, `cmd:develop.reset`, `cmd:develop.get`, `crates/develop/src/settings.rs`, `crates/pipeline/src/finish.rs`, `docs/process-versions.md` | each photo records the rendering process its settings are interpreted by: settings saved before this existed load as V1; V2 is the default for new photos, Reset and Update to Current Process; V3 is explicit opt-in. Virtual copies inherit, copy / paste / sync / presets keep each photo's own process. Photo ▸ Update to Current Process is one undo step, enabled for photos older than the V2 default; it never downgrades V3. A number from a newer LightCraft is kept and renders with the newest known process (V3). The upstream/fork V2 lineage ambiguity and appearance limits are documented in `docs/process-versions.md` |
 | LRC-DEV-VIEWOPTIONS | Develop view options | P2 | ⬜ | | |
 | LRC-DEV-LOUPEOVERLAY | Loupe overlay: layout image | P2 | 🟡 | `cmd:view.chooseLayoutImage`, `cmd:view.layoutImage`, `cmd:view.layoutImageOpacity`, `cmd:view.layoutImageMatte`, `crates/ui-egui/src/panels/layout_overlay.rs` | View ▸ Loupe Overlay: a PNG with transparency (a cover layout, a banner's safe areas) fitted and centred over the loupe photo, following zoom and pan; opacity and matte (the photo darkened outside the graphic's box) in steps; ⌥⌘O shows / hides it; read off the UI thread; saved with the UI state. Not yet: the Grid and Guides overlays, moving and resizing the layout with ⌘ held, free opacity / matte sliders |
 | LRC-DEV-VIDEO | Video frame capture | P2 | ⬜ | | |
@@ -805,6 +805,7 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-21 | patch | LRC-DEV-PROCESS: describe V1, the V2 default and explicit opt-in V3; statuses and feature counts unchanged. |
 | 2026-10-14 | patch | LR-EXP-TYPE: opaque 8-bit PNG/TIFF/WebP use RGB; transparent exports retain alpha (#1670). Statuses and feature counts unchanged. |
 | 2026-10-15 | minor | LRC-PRINT-PAGE: Page Options (Page Numbers, Page Info, Crop Marks) on Single Image and Contact Sheet pages, in the Print dialog, `print.set` and templates; still 🟡 (no identity plate, watermark, photo info or Cut Guides) |
 | 2026-10-15 | minor | LR-IMP-FORMATS: Hasselblad 3FR and FFF show their uncompressed RGB preview (no JPEG in these files) in the grid and loupe until developed, and as the stand-in when a file fails to decode; status unchanged (🟡) |

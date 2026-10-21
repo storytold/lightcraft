@@ -273,8 +273,9 @@ fn scale_patch(base: &Value, patch: &Value, t: f64) -> Value {
     }
 }
 
-/// Apply a partial settings object with an amount (1.0 = 100 %). Out-of-range values are clamped
+/// Apply a partial settings object with an amount (1.0 = 100 %). Out-of-range slider values are clamped
 /// through the control specs, as every merge does ([`DevelopSettings::merged`]).
+/// Saved curve endpoints remain exact at 0% and 100%; unsupported curve blends leave settings unchanged.
 pub fn apply_partial(s: &DevelopSettings, partial: &Value, amount: f64) -> DevelopSettings {
     try_apply_partial(s, partial, amount).unwrap_or_else(|_| s.clone())
 }

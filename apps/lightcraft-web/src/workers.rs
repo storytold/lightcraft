@@ -433,17 +433,16 @@ impl Workers {
 impl RenderOffload for Workers {
     fn try_start(&mut self, slot: Slot, job: RenderJob) -> Option<RenderJob> {
         // Explicit resources are session-owned and never serialized into worker messages.
-        // Inline rendering also retains unresolved-reference diagnostics.
-        if lightcraft_engine::pipeline::active_look_table(&job.settings).is_some() {
-            return Some(job);
-        }
+        // Run these jobs inline, including cached thumbnails, to retain resource diagnostics.
+        let inline_profile = lightcraft_engine::pipeline::active_look_table(&job.settings).is_some();
         let mut g = self.0.borrow_mut();
         let g = &mut *g;
         if let Some((cache, _)) = job.cache.as_ref().or(job.view_cache.as_ref()) {
             g.observe_cache(cache, job.cache_generation);
         }
         // rendered thumbnail in memory: no worker needed
-        if let Some((cache, key)) = &job.cache
+        if !inline_profile
+            && let Some((cache, key)) = &job.cache
             && let Some(img) = cache.get_at(job.cache_generation, *key)
         {
             let image = Arc::unwrap_or_clone(img);
@@ -463,8 +462,8 @@ impl RenderOffload for Workers {
             g.done.push((slot, r, 0.0));
             return None;
         }
-        if g.workers.iter().all(|w| w.dead) {
-            // no workers: render here, one job per frame (as without workers)
+        if inline_profile || g.workers.iter().all(|w| w.dead) {
+            // Session-owned resources or no workers: render here, at most one job per frame.
             if g.inline_this_frame {
                 return Some(job);
             }

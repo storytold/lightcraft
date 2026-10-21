@@ -1560,6 +1560,26 @@ fn unsupported_saved_edits_persist_report_clear_and_undo() {
     s.execute("edit.undo", &json!({})).unwrap();
     assert_eq!(serde_json::to_value(&s.catalog.photo(id).unwrap().unsupported_edits).unwrap(), fields);
     assert!(!std::fs::read_to_string(&sidecar).unwrap().contains("FutureEditZero"), "read/undo does not rewrite the input sidecar");
+    // Resource availability is reported now, but never saved as an import limitation.
+    s.execute(
+        "develop.merge",
+        &json!({"settings":{"process":2,"profile":{"id":"lc.imported","imported":{"look_table":"E96CB8AF6484F8402BB0E6ECFC8AD0FC"}}}}),
+    )
+    .unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({})).unwrap();
+    let before_read = std::fs::read(&sidecar).unwrap();
+    let result = s.execute("photo.readMetadataFromFile", &json!({})).unwrap();
+    assert_eq!(
+        result["read"][0]["unsupportedEdits"],
+        json!([
+            "CameraProfile",
+            "FilterList",
+            "FutureEditZero",
+            "LookTable E96CB8AF6484F8402BB0E6ECFC8AD0FC (missing resource - use profile.loadTable)"
+        ])
+    );
+    assert_eq!(serde_json::to_value(&s.catalog.photo(id).unwrap().unsupported_edits).unwrap(), fields);
+    assert_eq!(std::fs::read(&sidecar).unwrap(), before_read, "reading never rewrites the sidecar");
     s.close_library().unwrap();
     let _ = std::fs::remove_dir_all(src);
     let _ = std::fs::remove_dir_all(lib);
