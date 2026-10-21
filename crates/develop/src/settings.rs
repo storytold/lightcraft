@@ -84,17 +84,22 @@ pub enum Process {
     /// Highlights and Shadows keep the local contrast of the tones they move: their edge-aware base
     /// is taken of a fine median of log luminance (issue #632).
     V2,
+    /// Whites and Blacks are display-referred curves that reach into the midtones (the camera-look
+    /// path used to apply them at JPEG strength); Highlights and Shadows act on a wider, retuned
+    /// range of tones (issue #523).
+    V3,
 }
 
 impl Process {
     /// Every process, oldest first.
-    pub const ALL: [Process; 2] = [Process::V1, Process::V2];
-    pub const LATEST: Process = Process::V2;
+    pub const ALL: [Process; 3] = [Process::V1, Process::V2, Process::V3];
+    pub const LATEST: Process = Process::V3;
 
     pub const fn version(self) -> ProcessVersion {
         match self {
             Process::V1 => ProcessVersion(1),
             Process::V2 => ProcessVersion(2),
+            Process::V3 => ProcessVersion(3),
         }
     }
 }

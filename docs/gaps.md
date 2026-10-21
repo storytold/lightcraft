@@ -1,6 +1,6 @@
 # Gaps: where LightCraft falls short of Lightroom
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-15 · **Change:** minor (gap 15: Print Page Options — page numbers, page info, crop marks)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-19 · **Change:** minor (gap 3: process V3 Highlights, Shadows, Whites and Blacks)
 
 Every known shortfall, one entry each, ranked by user impact (how many Lightroom users hit it, and
 how hard it blocks them), then by effort. **Agents pick work from the top** (the first entry nobody is
@@ -17,7 +17,7 @@ Hours are Opus 5.5 agent wall-clock hours (see [target-app-parity.md](target-app
 |---:|---|---|---|---:|---|
 | 1 B | **Camera colour is estimated, not measured** (LR-PROF-CAMERACOLOR). Raws start from a per-file fit to the camera JPEG, 5 bundled profiles or 52 spectral matrices (plus same-sensor bodies, e.g. the X-T30 through the X-T3); others use a neutral matrix (a black-and-white camera JPEG gives its tone curve only, #577; dark JPEG tones also guide the toe, #1307) | ΔE vs camera JPEG 2.9–10 after fitting (raw-parity.md); 0 chart-calibrated models vs 1,500 Adobe Standard profiles | every raw shooter sees colour that is close but not Lightroom's; some get neutral-matrix colour | 50–90 | [raw-parity](raw-parity.md#colour) |
 | 2 B | **CR3 variants no public file uses** (LR-IMP-FORMATS): `crx.rs` refuses vertical-tile C-RAW, partial-subband and other plane coding, multi-tile 0x200 and adaptive low-frequency gains, and those files fall back to the preview. All 110 CC0 CR3s on raw.pixls.us (31 folders) decode from sensor data, so none of these variants has a public sample; 26 CR3 bodies are verified (M50 / R100 / R8 exact, R5 Mark II pinned, 22 more pinned on one CC0 file each and checked against the camera JPEG, [cr3.md](cr3.md#further-bodies-one-cc0-file-each)). HEIF stills are `.HIF` files, not CR3; no CR3 sRAW / mRAW sample exists | measured: Canon's share whose camera fully works 73% → 94% (raw-parity.md); 18 of 22 popular Canon bodies write CR3, all 18 now verified | +0.3 points of photographers; the variants surface only as user files that open as a preview | 10–25 | [raw-parity](raw-parity.md#remaining-work-ranked-by-photographers-unlocked-per-hour) |
-| 3 B | **Render fidelity unmeasured** (LR-BEHAV-RENDER-FIDELITY): tone, highlights, texture / clarity / dehaze, NR and sharpening are tuned by eye | no side-by-side suite; a retune needs a new process version (only V1 exists) | edits imported from Lightroom look different; the look "isn't Lightroom's" | 30–60 | [raw-parity](raw-parity.md), [process-versions](process-versions.md) |
+| 3 B | **Render fidelity unmeasured** (LR-BEHAV-RENDER-FIDELITY): tone, texture / clarity / dehaze, NR and sharpening are tuned by eye; Highlights, Shadows, Whites and Blacks follow measured response bands from process V3 (#523), Contrast and Exposure do not | no side-by-side suite; a retune needs a new process version (`docs/process-versions.md`) | edits imported from Lightroom look different; the look "isn't Lightroom's" | 30–60 | [raw-parity](raw-parity.md), [process-versions](process-versions.md) |
 | 4 | ~~Original-pixel detail at 100%~~ (LR-VIEW-ZOOM): closed 2026-10-12, see Closed recently | checklist row ✅ | — | 0 | [ui-parity](ui-parity.md) |
 | 5 B | **AI masks: Subject, Sky, People, Background, Landscape** are heuristics; Object / Describe run SAM 3 but its download has no mirror configured | `crates/segment`; ai-masks.md; MASK rows 67% | masking is how most Lightroom users edit today | 40–70 + model decision | [target-app-parity](target-app-parity.md#ai) |
 | 6 B | **Compressed ORF** (every Olympus / OM body since ~2008) | measured: 66 of 78 Olympus / OM models preview-only; `orf.rs` refuses; OM bucket 3% of photographers, 3% of them fully work | +2.6 points; best gain per hour of any raw gap (~0.2) | 8–15 | [raw-parity](raw-parity.md#compressed-orf-a-clean-room-starting-point) (the two Olympus patents that describe the method) |
@@ -77,6 +77,7 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-19 | minor | Gap 3 shrinks: process V3 reshapes Highlights, Shadows, Whites and Blacks after Lightroom's measured per-band response (#523); scene-adaptive Highlights / positive Whites, Contrast and Exposure remain |
 | 2026-10-18 | patch | Gap 1: six X-Trans CMOS 4 Fujifilm bodies (X-T30 …) take the X-T3's spectral matrices instead of the neutral matrix |
 | 2026-10-15 | minor | Gap 15 shrinks: the Page panel's Page Options (Page Numbers, Page Info, Crop Marks) print on Single Image and Contact Sheet pages; identity plate, watermark, photo info, Cut Guides, direct printing and JPEG output remain |
 | 2026-10-14 | minor | Gap 26: at 100k photos stack and album lookups are indexed, so an "In a Stack" or "Album" smart album counts in ~14 ms (was 0.6–2.7 s); open time unchanged |
