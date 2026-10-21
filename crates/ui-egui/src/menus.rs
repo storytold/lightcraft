@@ -100,6 +100,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     // Library grids only (Photo Grid, Square Grid, People): the bottom-bar slider's step by key
     ("view.thumbSizeUp", "Increase Grid Thumbnail Size", Some("="), "View"),
     ("view.thumbSizeDown", "Decrease Grid Thumbnail Size", Some("-"), "View"),
+    ("view.importThumbSize", "Import Thumbnail Size", None, ""),
     ("view.clipping", "Show Clipping", Some("J"), "View"),
     ("view.visualizeHdr", "Visualize HDR", None, "View"),
     // in grids S expands/collapses stacks (the engine command it shadows)
@@ -869,6 +870,18 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             let step = if id == "view.thumbSizeUp" { crate::state::THUMB_SIZE_STEP } else { -crate::state::THUMB_SIZE_STEP };
             app.ui.thumb_size = (app.ui.thumb_size + step).clamp(crate::state::THUMB_SIZE_MIN, crate::state::THUMB_SIZE_MAX);
             Ok(json!({"size": app.ui.thumb_size}))
+        }
+        "view.importThumbSize" => {
+            // {size?: points}; without a size, read the current preference.
+            let size = match p.get("size") {
+                None => app.ui.import_thumb_size,
+                Some(value) => match value.as_f64().map(|n| n as f32).filter(|n| n.is_finite()) {
+                    Some(size) => size,
+                    None => return Some(Err("view.importThumbSize: size must be a finite number".into())),
+                },
+            };
+            app.ui.import_thumb_size = crate::import::thumb_size(size);
+            Ok(json!({"size": app.ui.import_thumb_size}))
         }
         "view.navigate" => {
             // {zoom?: "fit"|"fill"|{percent: number}, pan?: [x, y]} (normalized image centre).

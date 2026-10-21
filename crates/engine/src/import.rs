@@ -1555,8 +1555,9 @@ impl Session {
             p.preview_only = info.preview_only.clone();
         }
         p.develop = std::sync::Arc::new(p.import_defaults());
-        let edge = edge.clamp(64, crate::media::SourceLevel::Thumb.max_edge());
-        let level = crate::media::SourceLevel::Thumb;
+        // Large import tiles on high-density displays need more than a 512-pixel source.
+        let edge = edge.clamp(64, 1024);
+        let level = crate::media::SourceLevel::for_size(edge);
         let source = self.media.origin_ref(&p.source, level.max_edge());
         let key = lightcraft_preview::Hasher128::new().str(&c.path).u64(c.file_size).u64(edge as u64).finish().0 as u64;
         let small = crate::media::RenderJob {

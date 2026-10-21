@@ -662,6 +662,8 @@ pub struct UiState {
     pub zoom_anim: bool,
     pub before_after: BeforeAfter,
     pub thumb_size: f32,
+    /// Import review thumbnail size in points, independent of the library grid.
+    pub import_thumb_size: f32,
     /// Open Edit sections by id.
     pub open_sections: Vec<String>,
     /// Open flyouts (curve, mixer, grading…).
@@ -1262,6 +1264,7 @@ pub struct SyncCounts {
 }
 
 impl Default for UiState {
+    /// Initialize the library and import review sizes as independent app preferences.
     fn default() -> Self {
         UiState {
             window: None,
@@ -1284,6 +1287,7 @@ impl Default for UiState {
             zoom_anim: false,
             before_after: BeforeAfter::Off,
             thumb_size: 220.0,
+            import_thumb_size: crate::import::THUMB_SIZE_DEFAULT,
             open_sections: vec!["light".into()],
             open_flyouts: vec![],
             single_panel: false,
@@ -1468,6 +1472,7 @@ impl UiState {
     /// Clamp values restored from disk.
     pub fn sanitized(mut self) -> Self {
         self.thumb_size = self.thumb_size.clamp(THUMB_SIZE_MIN, THUMB_SIZE_MAX);
+        self.import_thumb_size = crate::import::thumb_size(self.import_thumb_size);
         self.left_width = LEFT_WIDTH.clamp(self.left_width);
         self.right_width = RIGHT_WIDTH.clamp(self.right_width);
         self.brush_size = self.brush_size.clamp(0.002, 0.5);

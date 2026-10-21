@@ -2338,5 +2338,7 @@
   "Checking the GPU…": "Перевірка ГП…",
   "CPU": "ЦП",
   "A face model uses the GPU only when a check shows it gives the same results faster.": "Модель облич використовує ГП, лише якщо перевірка показала, що він дає ті самі результати швидше.",
-  "Checking the GPU for faces": "Перевірка ГП для облич"
+  "Checking the GPU for faces": "Перевірка ГП для облич",
+  "Thumbnail size": "Розмір мініатюр",
+  "Import Thumbnail Size": "Розмір мініатюр імпорту"
 }

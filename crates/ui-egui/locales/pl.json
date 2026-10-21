@@ -2267,5 +2267,7 @@
   "SDR Shadows": "Cienie SDR",
   "SDR Whites": "Biele SDR",
   "SDR Clarity": "Przejrzystość SDR",
-  "Face Models on the GPU": "Modele twarzy przetwarzane na GPU"
+  "Face Models on the GPU": "Modele twarzy przetwarzane na GPU",
+  "Thumbnail size": "Rozmiar miniatur",
+  "Import Thumbnail Size": "Rozmiar miniatur importu"
 }

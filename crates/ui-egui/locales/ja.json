@@ -2340,5 +2340,7 @@
   "Checking the GPU…": "GPU を確認中…",
   "CPU": "CPU",
   "A face model uses the GPU only when a check shows it gives the same results faster.": "顔モデルが GPU を使うのは、同じ結果をより速く出せると確認できた場合だけです。",
-  "Checking the GPU for faces": "顔用の GPU を確認中"
+  "Checking the GPU for faces": "顔用の GPU を確認中",
+  "Thumbnail size": "サムネイルのサイズ",
+  "Import Thumbnail Size": "読み込みサムネイルのサイズ"
 }

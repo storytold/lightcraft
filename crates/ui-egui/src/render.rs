@@ -954,12 +954,20 @@ impl Renderer {
 
     /// Drop the import review thumbnails (a new review, or the dialog closed).
     pub fn forget_imports(&mut self) {
-        self.pool.reprioritize(|s, p| if matches!(s, Slot::Import(_)) { None } else { Some(p) });
-        self.queue.retain(|q| !matches!(q.slot, Slot::Import(_)));
-        self.pending.retain(|s, _| !matches!(s, Slot::Import(_)));
-        self.request_ids.retain(|s, _| !matches!(s, Slot::Import(_)));
-        self.textures.retain(|s, _| !matches!(s, Slot::Import(_)));
-        self.quick_tried.retain(|s, _| !matches!(s, Slot::Import(_)));
+        self.retain_imports(&Default::default());
+    }
+
+    /// Keep only the import tiles near the viewport, including queued work. Large thumbnails
+    /// must not accumulate for every candidate while scrolling through a whole card.
+    pub fn retain_imports(&mut self, keep: &std::collections::HashSet<u32>) {
+        let retained = |s: &Slot| !matches!(s, Slot::Import(i) if !keep.contains(i));
+        self.pool.reprioritize(|s, p| retained(s).then_some(p));
+        self.queue.retain(|q| retained(&q.slot));
+        self.pending.retain(|s, _| retained(s));
+        self.request_ids.retain(|s, _| retained(s));
+        self.textures.retain(|s, _| retained(s));
+        self.quick_tried.retain(|s, _| retained(s));
+        self.failed.retain(|s, _| retained(s));
     }
 
     /// Drop thumbnails that aren't in `keep` (bounded memory for huge libraries), and queued

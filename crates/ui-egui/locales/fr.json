@@ -2338,5 +2338,7 @@
   "Checking the GPU…": "Vérification du GPU…",
   "CPU": "Processeur",
   "A face model uses the GPU only when a check shows it gives the same results faster.": "Un modèle de visages n’utilise le GPU que si une vérification montre qu’il donne les mêmes résultats plus vite.",
-  "Checking the GPU for faces": "Vérification du GPU pour les visages"
+  "Checking the GPU for faces": "Vérification du GPU pour les visages",
+  "Thumbnail size": "Taille des vignettes",
+  "Import Thumbnail Size": "Taille des vignettes d’importation"
 }

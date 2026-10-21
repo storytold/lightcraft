@@ -2341,5 +2341,7 @@
   "Checking the GPU…": "GPU wird geprüft …",
   "CPU": "CPU",
   "A face model uses the GPU only when a check shows it gives the same results faster.": "Ein Gesichtsmodell nutzt die GPU nur, wenn eine Prüfung zeigt, dass sie dieselben Ergebnisse schneller liefert.",
-  "Checking the GPU for faces": "GPU für Gesichter wird geprüft"
+  "Checking the GPU for faces": "GPU für Gesichter wird geprüft",
+  "Thumbnail size": "Vorschaubildgröße",
+  "Import Thumbnail Size": "Vorschaubildgröße beim Import"
 }
