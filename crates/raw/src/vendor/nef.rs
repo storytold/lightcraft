@@ -17,6 +17,16 @@ use lightcraft_tiff::tags::{self as t, photometric};
 use lightcraft_tiff::{ByteOrder, Ifd, Tiff, makernote};
 
 const WB_RB_LEVELS: u16 = 0x000c;
+/// ColorBalance (named in the ExifTool Nikon tag-name documentation, which gives the channel order per version but
+/// not where the levels sit): a 4-character version, then, in the versions that aren't enciphered, the as-shot
+/// levels as four `u16` in the maker note's byte order: `0102` (D2H) RGGB from byte 10, `0103` (D70, D70s) RGBG
+/// from byte 20. The two offsets were first taken from ExifTool's source (its ColorBalance0102/0103 tables in
+/// `Nikon.pm`), not from its documentation; no code was taken from it. They were then checked on the CC0
+/// raw.pixls.us files 5227 (D2H), 2060 (D70) and 1117 (D70s): they are the only places in each block where four
+/// `u16` hold two greens of 256 in the order's green slots and two gains between 1 and 4 (563 256 256 373, 555 256
+/// 388 256, 589 256 366 256), and the gains they give are within 2 to 8 % of what the neutral areas of each camera
+/// JPEG imply. The D50's `0205` is enciphered.
+const COLOR_BALANCE: u16 = 0x0097;
 const BLACK_LEVEL: u16 = 0x003d;
 const LINEARIZATION_TABLE: u16 = 0x0096;
 const CROP_AREA: u16 = 0x0045;
@@ -43,6 +53,22 @@ fn nrw_black(mn: Option<&makernote::MakerNote>, bits: u32) -> Option<f32> {
     let (b, order) = nrw_data(mn)?;
     let v = order.u32(b.get(NRW_BLACK_AT..NRW_BLACK_AT + 4)?.try_into().ok()?);
     (u64::from(v) < (1u64 << bits.min(16)) / 4).then_some(v as f32)
+}
+
+/// As-shot multipliers from the plain ColorBalance layouts ([`COLOR_BALANCE`]), for the bodies that write no
+/// `0x000c` (D2H, D70, D70s); G is the mean of the two green levels.
+fn color_balance_wb(mn: Option<&makernote::MakerNote>) -> Option<[f32; 3]> {
+    let m = mn?;
+    let b = m.ifd.bytes(COLOR_BALANCE)?;
+    let (at, [r, g1, bl, g2]) = match b.get(..4)? {
+        b"0102" => (10, [0, 1, 3, 2]),
+        b"0103" => (20, [0, 1, 2, 3]),
+        _ => return None,
+    };
+    let level = |i: usize| Some(f32::from(m.order.u16(b.get(at + 2 * i..at + 2 * i + 2)?.try_into().ok()?)));
+    let g = (level(g1)? + level(g2)?) / 2.0;
+    let (r, bl) = (level(r)? / g, level(bl)? / g);
+    (g > 0.0 && [r, bl].iter().all(|v| *v > 0.1 && *v < 10.0)).then_some([r, 1.0, bl])
 }
 
 /// Nikon CropArea is `[left, top, width, height]` in sensor pixels (maker-note tag documentation).
@@ -259,7 +285,8 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         .as_ref()
         .and_then(|m| m.ifd.f64s(WB_RB_LEVELS))
         .filter(|v| v.len() >= 2 && v[0] > 0.1 && v[1] > 0.1 && v[0] < 10.0 && v[1] < 10.0)
-        .map(|v| [v[0] as f32, 1.0, v[1] as f32]);
+        .map(|v| [v[0] as f32, 1.0, v[1] as f32])
+        .or_else(|| color_balance_wb(mn.as_ref()));
     let cfa = match (raw.u64s(t::CFA_REPEAT_PATTERN_DIM).as_deref(), raw.bytes(t::CFA_PATTERN_EP)) {
         (Some([2, 2]), Some(p)) if p.len() == 4 && p.iter().all(|&c| c <= 2) => Cfa { width: 2, height: 2, pattern: p.to_vec() },
         _ => Cfa::bayer_static("RGGB"),
@@ -794,6 +821,69 @@ mod tests {
         let mut both = nrw_note(200);
         both.set(BLACK_LEVEL, Value::Short(vec![400, 404, 408, 412]));
         assert_eq!(decode(Some(both)).black.values, vec![100.0, 101.0, 102.0, 103.0]);
+    }
+
+    /// Issue #1273: the D2H (ColorBalance `0102`, RGGB from byte 10) and the D70 / D70s (`0103`, RGBG from byte 20)
+    /// write no `0x000c`; their as-shot levels come from the ColorBalance block, in the maker note's byte order.
+    #[test]
+    fn as_shot_white_balance_from_the_color_balance_block() {
+        let (w, h) = (16usize, 4usize);
+        let words: Vec<u8> = (0..w * h).flat_map(|i| (100 + i as u16).to_be_bytes()).collect();
+        let block = |order: ByteOrder, version: &[u8; 4], at: usize, levels: [u16; 4]| {
+            let mut b = version.to_vec();
+            b.resize(at, 0);
+            for v in levels {
+                b.extend_from_slice(&match order {
+                    ByteOrder::Little => v.to_le_bytes(),
+                    ByteOrder::Big => v.to_be_bytes(),
+                });
+            }
+            b.resize(140, 0);
+            b
+        };
+        let wb = |order: ByteOrder, cb: Option<Vec<u8>>, rb: Option<[u32; 4]>| {
+            let mut mn = IfdBuilder::new();
+            if let Some(cb) = cb {
+                mn.set(COLOR_BALANCE, Value::Undefined(cb));
+            }
+            if let Some([rn, rd, bn, bd]) = rb {
+                mn.set(WB_RB_LEVELS, Value::Rational(vec![(rn, rd), (bn, bd), (1, 1), (1, 1)]));
+            }
+            crate::decode(&nef_in(order, 1, 14, vec![words.clone()], w as u32, h as u32, h as u32, Some(mn))).unwrap().wb_multipliers
+        };
+        let d2h = [563, 256, 256, 373];
+        let d70 = [555, 256, 388, 256];
+        for order in [ByteOrder::Big, ByteOrder::Little] {
+            assert_eq!(wb(order, Some(block(order, b"0102", 10, d2h)), None), Some([563.0 / 256.0, 1.0, 373.0 / 256.0]));
+            assert_eq!(wb(order, Some(block(order, b"0103", 20, d70)), None), Some([555.0 / 256.0, 1.0, 388.0 / 256.0]));
+        }
+        // greens that differ are averaged
+        assert_eq!(wb(ByteOrder::Big, Some(block(ByteOrder::Big, b"0102", 10, [520, 250, 270, 390])), None), Some([2.0, 1.0, 1.5]));
+        // the D50's `0205` (and later) blocks are enciphered: not read as plain levels
+        assert_eq!(wb(ByteOrder::Big, Some(block(ByteOrder::Big, b"0205", 10, d2h)), None), None);
+        // implausible or truncated levels are no white balance
+        assert_eq!(wb(ByteOrder::Big, Some(block(ByteOrder::Big, b"0103", 20, [555, 0, 388, 0])), None), None);
+        assert_eq!(wb(ByteOrder::Big, Some(block(ByteOrder::Big, b"0102", 10, [5000, 256, 256, 373])), None), None);
+        assert_eq!(wb(ByteOrder::Big, Some(b"0102\0\0\0\0\0\0\x02\x33".to_vec()), None), None);
+        // WB_RBLevels wins when present
+        assert_eq!(wb(ByteOrder::Big, Some(block(ByteOrder::Big, b"0102", 10, d2h)), Some([3, 2, 5, 4])), Some([1.5, 1.0, 1.25]));
+    }
+
+    /// The header probe (the import path) reports the same as-shot white balance as the full decode.
+    #[test]
+    fn color_balance_white_balance_survives_the_header_probe() {
+        let (w, h) = (16usize, 4usize);
+        let words: Vec<u8> = (0..w * h).flat_map(|i| (100 + i as u16).to_be_bytes()).collect();
+        let mut block = b"0103".to_vec();
+        block.resize(20, 0);
+        block.extend([555u16, 256, 388, 256].iter().flat_map(|v| v.to_be_bytes()));
+        block.resize(140, 0);
+        let mut mn = IfdBuilder::new();
+        mn.set(COLOR_BALANCE, Value::Undefined(block));
+        let bytes = nef_with_note(1, 14, vec![words], w as u32, h as u32, h as u32, Some(mn));
+        let full = crate::decode(&bytes).unwrap();
+        assert_eq!(full.wb_multipliers, Some([555.0 / 256.0, 1.0, 388.0 / 256.0]));
+        assert_eq!(crate::probe_info(&bytes).unwrap().wb_multipliers, full.wb_multipliers);
     }
 
     #[test]

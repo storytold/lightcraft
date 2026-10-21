@@ -7,6 +7,10 @@
   and Cancel stops a download that is still looking the name up (issue #1532). The lookup used to block with no time
   limit, and each of a server's addresses then got the whole connect timeout of its own.
 
+### Older raw cameras
+- Nikon D2H, D70 and D70s raws open with the camera's white balance (White Balance ▸ As Shot); it used to start
+  from a neutral default. The D50 isn't covered yet.
+
 ### Lightroom radial masks on the right side
 - Radial masks brought over from Lightroom Classic (catalog import, XMP sidecars, edits inside DNGs and presets) now
   apply their effect inside the circle, as Lightroom does, instead of outside it (issue #1815). A mask inverted in
