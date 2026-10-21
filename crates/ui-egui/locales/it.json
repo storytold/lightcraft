@@ -1713,6 +1713,7 @@
   "Use": "Usa",
   "Waiting to start…": "In attesa di partire…",
   "Works on raw files from cameras with a standard (Bayer) sensor. Other files keep their normal noise reduction.": "Funziona sui file raw delle fotocamere con sensore standard (Bayer). Gli altri file mantengono la loro normale riduzione del disturbo.",
+  "Works on raw files from cameras with standard (Bayer) or Fujifilm X-Trans sensors. Other files keep their normal noise reduction.": "Funziona sui file raw delle fotocamere con sensore standard (Bayer) o Fujifilm X-Trans. Gli altri file mantengono la loro normale riduzione del disturbo.",
   "cached picture": "immagine in cache",
   "cached pictures": "immagini in cache",
   "commercial use allowed": "uso commerciale consentito",

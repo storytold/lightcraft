@@ -23,11 +23,12 @@ use std::time::{Duration, SystemTime};
 
 use lightcraft_catalog::{Photo, PhotoId, Source};
 use lightcraft_denoise::bayer::Layout;
-use lightcraft_denoise::manifest::DenoiserManifest;
-use lightcraft_denoise::run::{Control, Params, TileRunner, denoise_bayer};
+use lightcraft_denoise::manifest::{DenoiserManifest, Domain, LinearSpace};
+use lightcraft_denoise::run::{Control, Params, TileRunner, denoise_bayer, denoise_linear_rgb};
 use lightcraft_denoise::{Error as RunError, product};
 use lightcraft_develop::DevelopSettings;
 use lightcraft_preview::Hasher128;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -354,7 +355,11 @@ fn card_tile_ms(runner: &dyn TileRunner, input: &[f32]) -> f64 {
 /// Set the card up for the model at `path`: kernels built, the check tile run on both and compared, both timed.
 #[cfg(feature = "denoise")]
 fn make_gpu(cpu: &lightcraft_denoise::runtime::CpuRunner, path: &Path, tile: usize) -> Result<GpuSide, String> {
-    let input = Arc::new(lightcraft_denoise::runtime::check_tile(tile));
+    let input = if cpu.net().in_channels == 3 {
+        Arc::new(lightcraft_denoise::runtime::check_tile_linear_rgb(tile))
+    } else {
+        Arc::new(lightcraft_denoise::runtime::check_tile(tile))
+    };
     let (on_card, net) = (input.clone(), cpu.net().clone());
     let card = move || -> Result<_, String> {
         let runner = lightcraft_gpu::nn::runner(&net, tile)?;
@@ -881,6 +886,16 @@ fn layout_of(cfa: &lightcraft_raw::Cfa) -> Option<Layout> {
     Layout::from_cell([cfa.color_at(0, 0), cfa.color_at(1, 0), cfa.color_at(0, 1), cfa.color_at(1, 1)])
 }
 
+struct LinearRec2020Transform {
+    inv_matrix: lightcraft_color::Mat3,
+    wb: [f32; 3],
+}
+
+enum DenoiseInput {
+    Bayer { mosaic: lightcraft_raw::Normalized, layout: Layout },
+    LinearRgb { camera_rgb: lightcraft_raster::Rgb32f, color_transform: Option<LinearRec2020Transform> },
+}
+
 /// Make the product of `spec` unless it is there: decode the photo, run the model over its mosaic, write the result.
 /// `Ok(true)` when it was made now, `Ok(false)` when it already existed.
 pub(crate) fn make_product(spec: &JobSpec, progress: Option<&Progress>) -> Result<bool, MakeError> {
@@ -898,7 +913,7 @@ pub(crate) fn make_product(spec: &JobSpec, progress: Option<&Progress>) -> Resul
         None => std::fs::read(&spec.path).map_err(|e| MakeError::Failed(format!("{}: {e}", spec.path)))?,
     };
     // the decode and the normalised mosaic wait their turn at the process-wide memory gate, as every decode does
-    let (mosaic, layout) = {
+    let input = {
         let _held = crate::memory::work_gate().acquire(bytes.len().saturating_mul(4));
         if lightcraft_raw::probe(&bytes).is_none() {
             return Err(MakeError::Unsupported("not a raw file".into()));
@@ -909,16 +924,63 @@ pub(crate) fn make_product(spec: &JobSpec, progress: Option<&Progress>) -> Resul
             Err(e) => return Err(MakeError::Failed(e.to_string())),
         };
         drop(bytes);
-        if raw.cpp != 1 || !raw.cfa.as_ref().is_some_and(lightcraft_raw::Cfa::is_bayer) {
-            return Err(MakeError::Unsupported(
-                "only Bayer raw files can be denoised (this one has another sensor layout or is already demosaiced)".into(),
-            ));
+        match spec.manifest.domain {
+            Domain::BayerToRgb => {
+                if raw.cpp != 1 || !raw.cfa.as_ref().is_some_and(lightcraft_raw::Cfa::is_bayer) {
+                    return Err(MakeError::Unsupported(
+                        "only Bayer raw files can be denoised with a Bayer model (this one has another sensor layout or is already demosaiced)"
+                            .into(),
+                    ));
+                }
+                let n = raw.normalized().map_err(|e| MakeError::Failed(e.to_string()))?;
+                drop(raw);
+                let layout = n
+                    .cfa
+                    .as_ref()
+                    .and_then(layout_of)
+                    .ok_or_else(|| MakeError::Unsupported("the colour filter layout is not a Bayer pattern".into()))?;
+                DenoiseInput::Bayer { mosaic: n, layout }
+            }
+            Domain::LinearRgb => {
+                if raw.cpp != 1 && raw.cpp != 3 {
+                    return Err(MakeError::Unsupported("only raw files with 1 or 3 samples per pixel can be denoised".into()));
+                }
+                let color_transform_info = match spec.manifest.space {
+                    LinearSpace::CameraRgb => None,
+                    LinearSpace::LinRec2020 => {
+                        let as_shot_xy = lightcraft_raw::color::as_shot_white_xy(&raw);
+                        let (matrix, wb) = lightcraft_raw::color::camera_to_rec2020(&raw, as_shot_xy);
+                        if wb.iter().any(|&w| !w.is_finite() || w <= 0.0) {
+                            return Err(MakeError::Failed("invalid camera white balance multipliers".into()));
+                        }
+                        let inv_matrix = matrix.inverse().ok_or_else(|| MakeError::Failed("camera color matrix is not invertible".into()))?;
+                        Some((matrix, inv_matrix, wb))
+                    }
+                };
+                let n = raw.normalized().map_err(|e| MakeError::Failed(e.to_string()))?;
+                drop(raw);
+                drop(_held);
+                let pixels = (n.width as usize).saturating_mul(n.height as usize);
+                let _demosaic_permit = crate::memory::work_gate().acquire(pixels.saturating_mul(16).saturating_add(16 * 1024 * 1024));
+                let mut camera_rgb = lightcraft_raw::demosaic(&n, lightcraft_raw::Method::Ahd);
+                drop(n);
+                let color_transform = match color_transform_info {
+                    None => None,
+                    Some((matrix, inv_matrix, wb)) => {
+                        let m = matrix.to_f32();
+                        camera_rgb.data.par_iter_mut().for_each(|px| {
+                            let balanced = [px[0] * wb[0], px[1] * wb[1], px[2] * wb[2]];
+                            let r = m[0][0] * balanced[0] + m[0][1] * balanced[1] + m[0][2] * balanced[2];
+                            let g = m[1][0] * balanced[0] + m[1][1] * balanced[1] + m[1][2] * balanced[2];
+                            let b = m[2][0] * balanced[0] + m[2][1] * balanced[1] + m[2][2] * balanced[2];
+                            *px = [r, g, b];
+                        });
+                        Some(LinearRec2020Transform { inv_matrix, wb })
+                    }
+                };
+                DenoiseInput::LinearRgb { camera_rgb, color_transform }
+            }
         }
-        let n = raw.normalized().map_err(|e| MakeError::Failed(e.to_string()))?;
-        drop(raw);
-        let layout =
-            n.cfa.as_ref().and_then(layout_of).ok_or_else(|| MakeError::Unsupported("the colour filter layout is not a Bayer pattern".into()))?;
-        (n, layout)
     };
     if cancelled() {
         return Err(MakeError::Cancelled);
@@ -930,7 +992,11 @@ pub(crate) fn make_product(spec: &JobSpec, progress: Option<&Progress>) -> Resul
         model.bytes_per_tile().saturating_add(128usize.saturating_mul(spec.manifest.tile as usize).saturating_mul(spec.manifest.tile as usize));
     let (_, budget) = crate::memory::work_gate().usage();
     let parallel = spec.parallel.clamp(1, 4).min((budget / scratch.max(1)).max(1));
-    let _held = crate::memory::work_gate().acquire(mosaic.data.len().saturating_mul(20).saturating_add(scratch.saturating_mul(parallel)));
+    let (pixel_count, byte_multiplier) = match &input {
+        DenoiseInput::Bayer { mosaic, .. } => (mosaic.data.len(), 20),
+        DenoiseInput::LinearRgb { camera_rgb, .. } => (camera_rgb.data.len(), 24),
+    };
+    let _held = crate::memory::work_gate().acquire(pixel_count.saturating_mul(byte_multiplier).saturating_add(scratch.saturating_mul(parallel)));
     let (runner, parallel) = model.runner(spec.run_on, parallel);
     let params = Params {
         tile: spec.manifest.tile as usize,
@@ -953,8 +1019,27 @@ pub(crate) fn make_product(spec: &JobSpec, progress: Option<&Progress>) -> Resul
         .thread_name(|i| format!("denoise-{i}"))
         .build()
         .map_err(|e| MakeError::Failed(format!("could not start the worker threads: {e}")))?;
-    let rgb = pool.install(|| denoise_bayer(&mosaic.data, mosaic.width, mosaic.height, layout, runner, &params, &ctl))?;
-    drop(mosaic);
+    let (mut rgb, color_transform) = match input {
+        DenoiseInput::Bayer { mosaic, layout } => {
+            (pool.install(|| denoise_bayer(&mosaic.data, mosaic.width, mosaic.height, layout, runner, &params, &ctl))?, None)
+        }
+        DenoiseInput::LinearRgb { camera_rgb, color_transform } => {
+            (pool.install(|| denoise_linear_rgb(&camera_rgb, runner, &params, &ctl))?, color_transform)
+        }
+    };
+    if let Some(transform) = color_transform {
+        let inv_m = transform.inv_matrix.to_f32();
+        let wb = transform.wb;
+        rgb.data.par_iter_mut().for_each(|px| {
+            let r = inv_m[0][0] * px[0] + inv_m[0][1] * px[1] + inv_m[0][2] * px[2];
+            let g = inv_m[1][0] * px[0] + inv_m[1][1] * px[1] + inv_m[1][2] * px[2];
+            let b = inv_m[2][0] * px[0] + inv_m[2][1] * px[1] + inv_m[2][2] * px[2];
+            let cr = (r / wb[0]).max(0.0);
+            let cg = (g / wb[1]).max(0.0);
+            let cb = (b / wb[2]).max(0.0);
+            *px = [if cr.is_finite() { cr } else { 0.0 }, if cg.is_finite() { cg } else { 0.0 }, if cb.is_finite() { cb } else { 0.0 }];
+        });
+    }
     if cancelled() {
         return Err(MakeError::Cancelled);
     }
@@ -1645,7 +1730,7 @@ impl Session {
 #[cfg(all(test, feature = "denoise"))]
 mod gpu_tests {
     use super::*;
-    use lightcraft_denoise::manifest::{Domain, Gain};
+    use lightcraft_denoise::manifest::{Domain, Gain, LinearSpace};
 
     /// A folder of the test's own: the card's set-up leaves its marker beside the model.
     fn folder(name: &str) -> PathBuf {
@@ -1669,6 +1754,7 @@ mod gpu_tests {
             size_bytes: None,
             provenance: String::new(),
             domain: Domain::BayerToRgb,
+            space: LinearSpace::CameraRgb,
             tile: tile as u32,
             overlap: 16,
             gain: Gain::MatchMean { nominal: 1.0, max_deviation: 0.05 },
@@ -1732,6 +1818,7 @@ mod gpu_tests {
             size_bytes: None,
             provenance: String::new(),
             domain: Domain::BayerToRgb,
+            space: LinearSpace::CameraRgb,
             tile: tile as u32,
             overlap: 16,
             gain: Gain::MatchMean { nominal: 1.0, max_deviation: 0.05 },

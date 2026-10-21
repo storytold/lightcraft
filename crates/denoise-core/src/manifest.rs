@@ -21,6 +21,27 @@ pub enum Domain {
     /// `[R, G1, G2, B]` of its 2 × 2 cells, forced to RGGB; gives camera RGB at the mosaic's resolution, so
     /// the picture is denoised and demosaiced in one step and must not be demosaiced again.
     BayerToRgb,
+    /// Demosaiced linear camera RGB packed as three planes `[R, G, B]` (NCHW); gives linear camera RGB at the
+    /// same resolution. Sensor-agnostic (works for X-Trans, Bayer, Foveon, linear DNG, HDR merges).
+    LinearRgb,
+}
+
+/// The color space expected by a [`Domain::LinearRgb`] model.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LinearSpace {
+    /// Demosaiced linear Camera RGB in the camera's native sensor gamut (not white balanced, no camera matrix).
+    #[default]
+    CameraRgb,
+    /// Demosaiced linear Rec. 2020 with the camera's as-shot white balance and color matrix applied.
+    /// Inverted back to linear Camera RGB after denoising to preserve downstream non-destructive pipeline controls.
+    LinRec2020,
+}
+
+impl LinearSpace {
+    pub const fn is_default(&self) -> bool {
+        matches!(self, Self::CameraRgb)
+    }
 }
 
 /// How the model's output scale is brought back to the input's.
@@ -57,6 +78,9 @@ pub struct DenoiserManifest {
     #[serde(default)]
     pub provenance: String,
     pub domain: Domain,
+    /// The color space expected for linear RGB models.
+    #[serde(default, skip_serializing_if = "LinearSpace::is_default")]
+    pub space: LinearSpace,
     /// Side of the square the model runs on, in packed cells (the file's fixed input size).
     pub tile: u32,
     /// Cells neighbouring tiles share; the picture is blended across them.
@@ -127,9 +151,17 @@ pub fn validate(m: &DenoiserManifest) -> Result<(), ManifestError> {
     if !m.overlap.is_multiple_of(2) || m.overlap < 16 || m.overlap.saturating_mul(2) >= m.tile {
         return bad("overlap", "must be even, at least 16 and less than half the tile");
     }
+    if m.domain != Domain::LinearRgb && m.space != LinearSpace::CameraRgb {
+        return bad("space", "only linearRgb models can specify a color space other than cameraRgb");
+    }
     if let Gain::MatchMean { nominal, max_deviation } = m.gain {
-        if !(nominal.is_finite() && (1e-6..=1e12).contains(&nominal)) {
-            return bad("gain.nominal", "must be between 0.000001 and 1000000000000");
+        let valid_nominal = if m.domain == Domain::LinearRgb {
+            nominal.is_finite() && (1e-6..=1e12).contains(&nominal.abs())
+        } else {
+            nominal.is_finite() && (1e-6..=1e12).contains(&nominal)
+        };
+        if !valid_nominal {
+            return bad("gain.nominal", "must be between 0.000001 and 1000000000000 (negative values only allowed for linearRgb)");
         }
         if !(max_deviation.is_finite() && (0.0..=0.5).contains(&max_deviation)) {
             return bad("gain.maxDeviation", "must be between 0 and 0.5");
@@ -164,6 +196,7 @@ mod tests {
             size_bytes: Some(31_000_000),
             provenance: "trained on real raw noise pairs".into(),
             domain: Domain::BayerToRgb,
+            space: LinearSpace::CameraRgb,
             tile: 512,
             overlap: 64,
             gain: Gain::MatchMean { nominal: 1.0e6, max_deviation: 0.05 },
@@ -174,6 +207,19 @@ mod tests {
     fn a_good_manifest_round_trips() {
         let m = sample();
         let json = serde_json::to_vec(&m).unwrap();
+        assert_eq!(parse(&json).unwrap(), m);
+    }
+
+    /// A manifest specifying Domain::LinearRgb and LinearSpace::LinRec2020 serializes and round-trips cleanly.
+    #[test]
+    fn linear_rgb_manifest_round_trips() {
+        let mut m = sample();
+        m.id = "linear-denoiser".into();
+        m.domain = Domain::LinearRgb;
+        m.space = LinearSpace::LinRec2020;
+        let json = serde_json::to_vec(&m).unwrap();
+        assert!(String::from_utf8_lossy(&json).contains("\"domain\":\"linearRgb\""));
+        assert!(String::from_utf8_lossy(&json).contains("\"space\":\"linRec2020\""));
         assert_eq!(parse(&json).unwrap(), m);
     }
 
@@ -190,6 +236,7 @@ mod tests {
             ("tile", Box::new(|m| m.tile = 4096)),
             ("overlap", Box::new(|m| m.overlap = 300)),
             ("overlap", Box::new(|m| m.overlap = 63)),
+            ("space", Box::new(|m| m.space = LinearSpace::LinRec2020)),
             ("gain.maxDeviation", Box::new(|m| m.gain = Gain::MatchMean { nominal: 1.0, max_deviation: f32::NAN })),
             ("gain.maxDeviation", Box::new(|m| m.gain = Gain::MatchMean { nominal: 1.0, max_deviation: 2.0 })),
             ("gain.nominal", Box::new(|m| m.gain = Gain::MatchMean { nominal: 0.0, max_deviation: 0.1 })),

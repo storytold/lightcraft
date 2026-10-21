@@ -39,9 +39,9 @@ background installation worker. `denoise.models.downloads` and `denoise.pump` re
 Command clients can request the same asynchronous path with `background: true`.
 The synchronous command remains available for scripts that require the result immediately.
 
-The current contract is `bayerToRgb`: normalized, black-subtracted, non-white-balanced
-RGGB planes `[1, 4, tile, tile]` produce camera RGB `[1, 3, 2*tile, 2*tile]`.
-RawNIND uses a 512-cell tile, 64-cell overlap and a mean-matched nominal gain of 1e6.
+The supported model contracts are `bayerToRgb` and `linearRgb`:
+- `bayerToRgb`: normalized, black-subtracted, non-white-balanced RGGB planes `[1, 4, tile, tile]` produce camera RGB `[1, 3, 2*tile, 2*tile]`. RawNIND uses a 512-cell tile, 64-cell overlap and a mean-matched nominal gain of 1e6.
+- `linearRgb`: demosaiced linear camera RGB planes `[1, 3, tile, tile]` produce denoised camera RGB `[1, 3, tile, tile]`. Supports Fujifilm X-Trans (aperiodic $6 \times 6$ sensor mosaic, directional demosaicing) as well as Bayer and monochrome/linear RAW files. Models can specify optional `space`: `"cameraRgb"` (default, native sensor camera RGB) or `"linRec2020"` (standardized Linear Rec. 2020; mapped from as-shot balanced Camera RGB before inference and inverted back after denoising).
 See `DenoiserManifest` for the validated JSON schema.
 
 ## Photos, previews and exports
@@ -177,7 +177,4 @@ Native apps enable inference through their `denoise` feature. A build without it
 the web build report inference unavailable. Manifest/cache primitives still compile
 for WASM. Settings and models remain opt-in; nothing is downloaded on launch.
 
-This implementation supports **Bayer RAW only**. X-Trans, Foveon, demosaiced DNG and
-non-RAW images remain unsupported by this model contract. No measured quality parity
-with Lightroom is claimed. Apple/Metal and wider hardware verification, model policy,
-a linear-RGB contract and a side-by-side fidelity suite remain future work.
+This implementation supports **Bayer and Fujifilm X-Trans RAW** (X-Trans supported via models implementing the `linearRgb` domain contract). Foveon and non-RAW images remain unsupported by this model contract. No measured quality parity with Lightroom is claimed. Apple/Metal and wider hardware verification, model policy and a side-by-side fidelity suite remain future work.

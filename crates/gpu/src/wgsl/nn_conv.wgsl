@@ -14,6 +14,7 @@
 //      (2y + dy, 2x + dx) of an output twice the size.
 //   2  the last 1x1 convolution followed by depth-to-space (CRD): columns 4c + 2dy + dx land in plane c at
 //      (2y + dy, 2x + dx) of a planar (CHW) output twice the size.
+//   3  the last 1x1 convolution for 3-channel planar (CHW) output at input size (1x).
 
 struct P {
     h: u32,
@@ -149,7 +150,7 @@ fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_index) t
             dst[o + 1u] = v.y;
             dst[o + 2u] = v.z;
             dst[o + 3u] = v.w;
-        } else {
+        } else if (p.mode == 2u) {
             let c = n / 4u;
             let y = m / p.w;
             let x = m % p.w;
@@ -160,6 +161,13 @@ fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_index) t
             dst[o + 1u] = v.y;
             dst[o + ow] = v.z;
             dst[o + ow + 1u] = v.w;
+        } else {
+            if (n == 0u) {
+                let plane = hw;
+                dst[m] = v.x;
+                dst[plane + m] = v.y;
+                dst[2u * plane + m] = v.z;
+            }
         }
     }
 }

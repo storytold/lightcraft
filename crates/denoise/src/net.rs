@@ -187,11 +187,18 @@ impl Net {
         self.shapes.iter().map(|s| s.level.max(0) as u32).max().unwrap_or(0)
     }
 
-    /// Can the network run on a `tile × tile` input and give `[out_channels, 2·tile, 2·tile]`? (Pooling must divide
-    /// the tile, and the output must be one level above the input.)
+    /// Can the network run on a `tile × tile` input?
+    /// For Bayer-to-RGB (`in_channels == 4`), the output must be one level above the input (`level == -1`, giving `2·tile × 2·tile`).
+    /// For Linear-RGB (`in_channels == 3`), the output is at the input's level (`level == 0`, giving `tile × tile`).
+    /// Pooling must divide the tile.
     pub fn fits_tile(&self, tile: usize) -> bool {
         let Some(multiple) = 1usize.checked_shl(self.depth()) else { return false };
-        tile > 0 && tile.is_multiple_of(multiple) && self.shapes.last().is_some_and(|s| s.level == -1)
+        let wanted_level = match self.in_channels {
+            4 => -1,
+            3 => 0,
+            _ => return false,
+        };
+        tile > 0 && tile.is_multiple_of(multiple) && self.shapes.last().is_some_and(|s| s.level == wanted_level)
     }
 
     /// Multiply-adds for one tile, for estimating time.

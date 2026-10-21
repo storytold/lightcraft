@@ -710,7 +710,7 @@ fn snapshot_leaves_desktop_gpu_preferences_untouched() {
 #[cfg(feature = "denoise")]
 #[test]
 fn denoise_serve_runs_tiles_for_another_computer() {
-    use lightcraft_denoise::manifest::{DenoiserManifest, Domain, Gain};
+    use lightcraft_denoise::manifest::{DenoiserManifest, Domain, Gain, LinearSpace};
     use lightcraft_denoise::remote::Remote;
     use lightcraft_denoise::run::TileRunner;
     let models = tmp("denoise-models");
@@ -727,6 +727,7 @@ fn denoise_serve_runs_tiles_for_another_computer() {
         size_bytes: None,
         provenance: "made for a test".into(),
         domain: Domain::BayerToRgb,
+        space: LinearSpace::CameraRgb,
         tile: 64,
         overlap: 16,
         gain: Gain::None,

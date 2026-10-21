@@ -203,6 +203,7 @@ struct Layout {
     /// Bytes of each activation buffer.
     slots: Vec<u64>,
     in_floats: usize,
+    gpu_in_floats: usize,
     out_floats: usize,
 }
 
@@ -247,18 +248,26 @@ fn plan(net: &Net, tile: usize, max_binding: u64) -> Result<(Layout, Vec<Layer>)
         if level >= 0 { tile >> level } else { tile << (-level) }
     };
     let chan = |t: usize| net.shape(t).map_or(0, |s| s.channels);
-    if !net.in_channels.is_multiple_of(4) {
-        return unsupported("the input channel count is not a multiple of 4");
+    if !(net.in_channels.is_multiple_of(4) || net.in_channels == 3) {
+        return unsupported("the input channel count is not 3 or a multiple of 4");
     }
     let ops = net.ops();
-    // the network must end in a 1 × 1 convolution and a depth-to-space (they run as one kernel)
     let n_ops = ops.len();
-    let ends_right = matches!(
+    let ends_bayer = matches!(
         (n_ops.checked_sub(2).and_then(|i| ops.get(i)), ops.last()),
         (Some(Op::Conv(c)), Some(Op::DepthToSpace2 { src })) if c.k == 1 && c.src2.is_none() && *src == n_ops - 1 && c.cout == 12 && c.leaky.is_none()
     );
-    if !ends_right {
-        return unsupported("the network does not end in a 1 × 1 convolution to 12 channels and depth-to-space");
+    let ends_linear_rgb = matches!(
+        ops.last(),
+        Some(Op::Conv(c)) if c.k == 1 && c.src2.is_none() && c.cout == 3 && c.leaky.is_none()
+    );
+    if !ends_bayer && !ends_linear_rgb {
+        return unsupported(
+            "the network does not end in a 1 × 1 convolution to 12 channels and depth-to-space, or a 1 × 1 convolution to 3 channels",
+        );
+    }
+    if ends_linear_rgb && net.in_channels != 3 {
+        return unsupported("linear rgb networks must have 3 input channels");
     }
     // the last layer that reads each tensor
     let mut last_use = vec![0usize; n_ops + 1];
@@ -309,23 +318,35 @@ fn plan(net: &Net, tile: usize, max_binding: u64) -> Result<(Layout, Vec<Layer>)
         let out_t = i + 1;
         match op {
             Op::Conv(c) => {
-                if !c.cin.is_multiple_of(4) || !c.cout.is_multiple_of(4) {
+                let c0_raw = chan(c.src);
+                let c1_raw = c.src2.map_or(0, chan);
+                let c0 = if c.src == 0 && net.in_channels == 3 { 4 } else { c0_raw };
+                let c1 = c.src2.map_or(0, |t| if t == 0 && net.in_channels == 3 { 4 } else { chan(t) });
+                let cin_padded = c0 + c1;
+                let last = if ends_bayer { i + 2 == n_ops } else { i + 1 == n_ops };
+                let cout_padded = if last && ends_linear_rgb { round_up(c.cout, 4) } else { c.cout };
+                if !cin_padded.is_multiple_of(4) || !cout_padded.is_multiple_of(4) {
                     return unsupported("a convolution whose channel counts are not multiples of 4");
                 }
                 let s = side(c.src);
-                let last = i + 2 == n_ops;
-                let (n, mode) = (c.cout, if last { 2u32 } else { 0u32 });
-                let (bm, bn, bk) = blocks(n, c.cin);
+                let (n, mode) = (cout_padded, if last { if ends_bayer { 2u32 } else { 3u32 } } else { 0u32 });
+                let (bm, bn, bk) = blocks(n, cin_padded);
                 let npad = round_up(n, bn as usize);
-                // arranged weights: row (tap · cin + ci), column co
+                // arranged weights: row (tap · cin_padded + ci), column co
                 let taps = c.k * c.k;
-                let mut weight = vec![0f32; taps * c.cin * npad];
+                let mut weight = vec![0f32; taps * cin_padded * npad];
                 for co in 0..c.cout {
-                    for ci in 0..c.cin {
-                        for ky in 0..c.k {
-                            for kx in 0..c.k {
-                                let v = c.weight.get(((co * c.cin + ci) * c.k + ky) * c.k + kx).copied().unwrap_or(0.0);
-                                if let Some(w) = weight.get_mut(((ky * c.k + kx) * c.cin + ci) * npad + co) {
+                    for ky in 0..c.k {
+                        for kx in 0..c.k {
+                            for ci0 in 0..c0_raw {
+                                let v = c.weight.get(((co * c.cin + ci0) * c.k + ky) * c.k + kx).copied().unwrap_or(0.0);
+                                if let Some(w) = weight.get_mut(((ky * c.k + kx) * cin_padded + ci0) * npad + co) {
+                                    *w = v;
+                                }
+                            }
+                            for ci1 in 0..c1_raw {
+                                let v = c.weight.get(((co * c.cin + (c0_raw + ci1)) * c.k + ky) * c.k + kx).copied().unwrap_or(0.0);
+                                if let Some(w) = weight.get_mut(((ky * c.k + kx) * cin_padded + (c0 + ci1)) * npad + co) {
                                     *w = v;
                                 }
                             }
@@ -340,8 +361,8 @@ fn plan(net: &Net, tile: usize, max_binding: u64) -> Result<(Layout, Vec<Layer>)
                 let params = ConvParams {
                     h: s as u32,
                     w: s as u32,
-                    c0: chan(c.src) as u32,
-                    c1: c.src2.map_or(0, chan) as u32,
+                    c0: c0 as u32,
+                    c1: c1 as u32,
                     n: n as u32,
                     npad: npad as u32,
                     k: c.k as u32,
@@ -476,7 +497,9 @@ fn plan(net: &Net, tile: usize, max_binding: u64) -> Result<(Layout, Vec<Layer>)
     if layers.iter().any(|l| (l.weight.len() as u64).saturating_mul(4) > max_binding) {
         return unsupported("a weight buffer is larger than this GPU allows");
     }
-    Ok((Layout { steps, slots, in_floats: net.in_channels * tile * tile, out_floats: 3 * (2 * tile) * (2 * tile) }, layers))
+    let out_floats = if ends_bayer { 3 * (2 * tile) * (2 * tile) } else { 3 * tile * tile };
+    let gpu_in_floats = round_up(net.in_channels, 4) * tile * tile;
+    Ok((Layout { steps, slots, in_floats: net.in_channels * tile * tile, gpu_in_floats, out_floats }, layers))
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -598,7 +621,7 @@ impl Shared {
     fn workspace(&self) -> Workspace {
         let d = self.dev;
         let slots: Vec<wgpu::Buffer> = self.layout.slots.iter().map(|&b| storage(d, "activations", b, wgpu::BufferUsages::empty())).collect();
-        let input = storage(d, "input", (self.layout.in_floats * 4) as u64, wgpu::BufferUsages::COPY_DST);
+        let input = storage(d, "input", (self.layout.gpu_in_floats * 4) as u64, wgpu::BufferUsages::COPY_DST);
         let output = storage(d, "output", (self.layout.out_floats * 4) as u64, wgpu::BufferUsages::COPY_SRC);
         let staging = d.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("readback"),
@@ -699,7 +722,7 @@ pub fn runner(net: &Net, tile: usize) -> Result<NetRunner, String> {
         })
         .collect();
     let dummy = storage(d, "dummy", 16, wgpu::BufferUsages::empty());
-    let bytes: u64 = layout.slots.iter().sum::<u64>() + ((layout.in_floats + layout.out_floats) * 8) as u64;
+    let bytes: u64 = layout.slots.iter().sum::<u64>() + ((layout.gpu_in_floats + layout.out_floats) * 8) as u64;
     let shared = Shared { dev: d, layout, pipes, weights, uniforms, dummy };
     let first = shared.workspace();
     let [oom, validation, internal] = scope;
@@ -772,11 +795,12 @@ impl NetRunner {
     fn execute(&self, w: &Workspace, input: &[f32]) -> Result<Vec<f32>, Error> {
         let d = self.shared.dev;
         let (t, c) = (self.tile, self.in_channels);
+        let gpu_c = round_up(c, 4);
         // planar → channels innermost
-        let mut nhwc = vec![0f32; input.len()];
+        let mut nhwc = vec![0f32; t * t * gpu_c];
         for (ch, plane) in input.chunks_exact(t * t).enumerate() {
             for (i, v) in plane.iter().enumerate() {
-                if let Some(o) = nhwc.get_mut(i * c + ch) {
+                if let Some(o) = nhwc.get_mut(i * gpu_c + ch) {
                     *o = *v;
                 }
             }
@@ -890,6 +914,15 @@ mod tests {
         n
     }
 
+    /// Generates and loads a synthetic linear RGB U-Net ONNX model for GPU testing.
+    fn linear_rgb_net(tile: u64, ch: u64, depth: usize, seed: u64) -> Net {
+        let path = std::env::temp_dir().join(format!("lc-nn-lin-{}-{tile}-{ch}-{depth}-{seed}.onnx", std::process::id()));
+        std::fs::write(&path, synthetic::unet_linear_rgb_onnx(tile, ch, depth, seed)).unwrap();
+        let n = onnx::read(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        n
+    }
+
     fn picture(len: usize, seed: u64) -> Vec<f32> {
         let mut s = seed | 1;
         (0..len)
@@ -939,6 +972,40 @@ mod tests {
         }
     }
 
+    /// Verifies that GPU NetRunner outputs for linear RGB models match pure-Rust CPU runner.
+    #[test]
+    fn linear_rgb_gpu_matches_pure_rust_cpu() {
+        for (tile, ch, depth, seed) in [(4u64, 4u64, 1usize, 1u64), (16, 8, 2, 2), (32, 8, 2, 3), (64, 16, 3, 5)] {
+            let n = linear_rgb_net(tile, ch, depth, seed);
+            let Some(g) = gpu(&n, tile as usize) else { return };
+            let x = picture(3 * (tile * tile) as usize, seed);
+            let got = g.run(&x).unwrap();
+            let cpu = lightcraft_denoise::cpu::NetRunner::new(&n, tile as usize).unwrap().run(&x).unwrap();
+            let e = worst(&got, &cpu);
+            eprintln!("{}: linear RGB tile {tile}, {ch} channels, depth {depth}: off by {e:e} of CPU output", g.adapter());
+            assert!(e < 1e-3, "linear RGB tile {tile}, {ch} channels, depth {depth}: GPU differs from CPU ({e:e})");
+        }
+    }
+
+    /// Tests two-source convolution joining 3-channel input tensor with intermediate activation tensors on GPU vs CPU.
+    #[test]
+    fn linear_rgb_gpu_two_source_conv_matches_cpu() {
+        use lightcraft_denoise::net::Conv;
+        let tile = 8usize;
+        let c1 = Conv { src: 0, src2: None, cin: 3, cout: 4, k: 3, weight: picture(3 * 4 * 9, 101), bias: picture(4, 102), leaky: Some(0.2) };
+        let c2 = Conv { src: 0, src2: Some(1), cin: 7, cout: 4, k: 3, weight: picture(7 * 4 * 9, 103), bias: picture(4, 104), leaky: Some(0.2) };
+        let c3 = Conv { src: 2, src2: Some(0), cin: 7, cout: 4, k: 3, weight: picture(7 * 4 * 9, 105), bias: picture(4, 106), leaky: Some(0.2) };
+        let c4 = Conv { src: 3, src2: None, cin: 4, cout: 3, k: 1, weight: picture(4 * 3, 107), bias: picture(3, 108), leaky: None };
+        let n = Net::new(3, vec![Op::Conv(c1), Op::Conv(c2), Op::Conv(c3), Op::Conv(c4)]).unwrap();
+        let Some(g) = gpu(&n, tile) else { return };
+        let x = picture(3 * tile * tile, 42);
+        let got = g.run(&x).unwrap();
+        let cpu = lightcraft_denoise::cpu::NetRunner::new(&n, tile).unwrap().run(&x).unwrap();
+        let e = worst(&got, &cpu);
+        eprintln!("{}: linear RGB two-source conv tile {tile}: off by {e:e} of CPU output", g.adapter());
+        assert!(e < 1e-3, "linear RGB two-source conv GPU differs from CPU ({e:e})");
+    }
+
     // Issue #479: several pixels loaded by different invocations shared a vec4,
     // so lane writes raced on Metal. Exercise a partial block repeatedly with new
     // inputs; stale shared-memory values must never leak into the next dispatch.
@@ -978,7 +1045,7 @@ mod tests {
     #[test]
     #[ignore = "needs the real model: see the doc comment"]
     fn real_model_on_the_gpu_matches_cpu() {
-        use lightcraft_denoise::manifest::{DenoiserManifest, Domain, Gain};
+        use lightcraft_denoise::manifest::{DenoiserManifest, Domain, Gain, LinearSpace};
         use lightcraft_denoise::runtime::CpuRunner;
         use std::time::Instant;
         let Some(model) = std::env::var_os("LC_DENOISE_MODEL") else { return };
@@ -988,25 +1055,29 @@ mod tests {
         let g = runner(&net, tile).unwrap();
         println!("{}: set up in {:.2} s, {:.0} MB per tile in flight", g.adapter(), started.elapsed().as_secs_f64(), g.bytes_per_tile() as f64 / 1e6);
         println!("kernels: {}", g.build_report());
+        let is_linear = net.in_channels == 3;
+        let (domain, space) = if is_linear { (Domain::LinearRgb, LinearSpace::LinRec2020) } else { (Domain::BayerToRgb, LinearSpace::CameraRgb) };
         let manifest = DenoiserManifest {
-            id: "rawnind-bayer".into(),
-            name: "RawNIND Bayer".into(),
+            id: if is_linear { "rawnind-linear".into() } else { "rawnind-bayer".into() },
+            name: if is_linear { "RawNIND Linear".into() } else { "RawNIND Bayer".into() },
             version: "1".into(),
             licence: Default::default(),
             source: None,
             sha256: None,
             size_bytes: None,
             provenance: String::new(),
-            domain: Domain::BayerToRgb,
+            domain,
+            space,
             tile: 512,
             overlap: 64,
-            gain: Gain::MatchMean { nominal: 1.0e6, max_deviation: 0.05 },
+            gain: Gain::MatchMean { nominal: if is_linear { -3.184e9 } else { 1.0e6 }, max_deviation: 0.05 },
         };
         let cpu = CpuRunner::load(std::path::Path::new(&model), &manifest).unwrap();
         // a gradient with noise, in the model's input range
-        let noise = picture(4 * tile * tile, 42);
+        let in_floats = net.in_channels * tile * tile;
+        let noise = picture(in_floats, 42);
         let input: Vec<f32> =
-            (0..4 * tile * tile).map(|i| (0.2 + 0.3 * ((i % tile) as f32 / tile as f32) + 0.1 * (noise[i] - 0.5)).clamp(0.0, 1.0)).collect();
+            (0..in_floats).map(|i| (0.2 + 0.3 * ((i % tile) as f32 / tile as f32) + 0.1 * (noise[i] - 0.5)).clamp(0.0, 1.0)).collect();
         let t = Instant::now();
         let want = cpu.run(&input).unwrap();
         println!("CPU: {:.0} ms for one tile (one call runs on one core)", t.elapsed().as_secs_f64() * 1000.0);

@@ -2,7 +2,7 @@
 use std::path::{Path, PathBuf};
 
 use lightcraft_catalog::{MediaKind, Op, Photo, PhotoId, Source};
-use lightcraft_denoise::manifest::{DenoiserManifest, Domain, Gain};
+use lightcraft_denoise::manifest::{DenoiserManifest, Domain, Gain, LinearSpace};
 use lightcraft_engine::Session;
 use serde_json::json;
 
@@ -45,6 +45,7 @@ fn denoise_file(dir: &Path) -> PathBuf {
         size_bytes: Some(bytes.len() as u64),
         provenance: "Synthetic tests".into(),
         domain: Domain::BayerToRgb,
+        space: LinearSpace::CameraRgb,
         tile: 64,
         overlap: 16,
         gain: Gain::None,

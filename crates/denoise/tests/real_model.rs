@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use lightcraft_denoise::bayer::Layout;
-use lightcraft_denoise::manifest::{DenoiserManifest, Domain, Gain};
+use lightcraft_denoise::manifest::{DenoiserManifest, Domain, Gain, LinearSpace};
 use lightcraft_denoise::run::{Control, Params, denoise_bayer};
 use lightcraft_denoise::runtime::CpuRunner;
 
@@ -195,6 +195,7 @@ fn the_real_model_denoises_real_mosaics() {
         size_bytes: None,
         provenance: String::new(),
         domain: Domain::BayerToRgb,
+        space: LinearSpace::CameraRgb,
         tile: 512,
         overlap: 64,
         gain: Gain::MatchMean { nominal: 1.0e6, max_deviation: 0.05 },
