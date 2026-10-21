@@ -129,6 +129,8 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "view.compare",
             "view.survey",
             "view.people",
+            "view.map",
+            "@Map",
             "---",
             "view.leftPanel",
             "@Sidebar Sections",
@@ -215,6 +217,7 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "dialog.rename",
             "dialog.captureTime",
             "photo.tagFromTracklog",
+            "photo.removeGps",
             "---",
             "album.removePhotos",
             "photo.delete",
@@ -332,6 +335,11 @@ pub fn checked(app: &LightcraftApp, id: &str) -> Option<bool> {
         "view.compare" => Some(u.view == ViewMode::Compare),
         "view.survey" => Some(u.view == ViewMode::Survey),
         "view.people" => Some(u.view == ViewMode::People),
+        "view.map" => Some(u.view == ViewMode::Map),
+        "map.lockMarkers" => Some(u.map_lock_markers),
+        "map.showPins" => Some(u.map_show_pins),
+        "map.filterBar" => Some(u.map_filter_bar),
+        "map.showLocations" => Some(!app.map.loc.list_folded),
         "view.reference" => Some(u.view == ViewMode::Reference),
         "view.leftPanel" => Some(u.left_panel),
         "view.faceBoxes" => Some(u.face_boxes),
@@ -391,11 +399,61 @@ fn live_label(app: &LightcraftApp, id: &str, label: &str) -> String {
     }
 }
 
+/// View ▸ Map: the Map view's commands (Lightroom Classic has a Map module with its own menus;
+/// LightCraft has one menu bar for every view, so they gather here, enabled in the Map view). Each
+/// item runs its command, as its key does.
+fn map_menu(app: &LightcraftApp) -> Vec<MenuNode> {
+    let keymap = &app.ui.settings.keymap;
+    let in_map = app.ui.view == ViewMode::Map;
+    let entry = |id: &str, label: &str, params: Value, enabled: bool| {
+        // ⌘0 fits the map (Zoom to Fit's key, which the Map view turns into Fit to Photos)
+        let sc = if id == "map.fit" { crate::shortcuts::shortcut_of(keymap, "view.zoomFit") } else { crate::shortcuts::shortcut_of(keymap, id) };
+        let checked = if params.is_null() { checked(app, id) } else { None };
+        item(id, params, label, sc, enabled && crate::menus::ui_enabled(app, id), checked)
+    };
+    let filter = crate::panels::map::LocationFilter::ALL
+        .into_iter()
+        .map(|m| item("map.locationFilter", json!({"mode": m.id()}), m.label(), None, in_map, Some(app.map.location == m)))
+        .collect();
+    let track = app.session.map.track.is_some();
+    vec![
+        entry("map.fit", "Fit to Photos", Value::Null, in_map),
+        entry("map.zoomIn", "Zoom In", Value::Null, in_map),
+        entry("map.zoomOut", "Zoom Out", Value::Null, in_map),
+        MenuNode::Separator,
+        entry("map.showPins", "Show Pins", Value::Null, in_map),
+        entry("map.lockMarkers", "Lock Markers", Value::Null, in_map),
+        entry("map.filterBar", "Show Location Filter Bar", Value::Null, in_map),
+        MenuNode::Submenu { label: "Location Filter".into(), children: filter },
+        MenuNode::Separator,
+        MenuNode::Submenu {
+            label: "Saved Locations".into(),
+            children: vec![
+                entry("map.location.new", "New Location…", Value::Null, in_map),
+                entry("map.showLocations", "Show List", Value::Null, in_map),
+            ],
+        },
+        MenuNode::Submenu {
+            label: "Tracklog".into(),
+            children: vec![
+                entry("map.loadTrackLog", "Load Tracklog…", Value::Null, true),
+                entry("map.trackLog.autoTag", "Auto-Tag Selected Photos", Value::Null, in_map),
+                entry("map.trackLog.setOffset", "Set Time Zone Offset…", Value::Null, true),
+                entry("map.trackLog.fit", "Fit Map to Tracklog", Value::Null, in_map),
+                item("map.trackLog", json!({"clear": true}), "Clear Tracklog", None, track, None),
+            ],
+        },
+        MenuNode::Separator,
+        entry("map.settings", "Map Tiles…", Value::Null, true),
+    ]
+}
+
 /// The parameterized submenus.
 pub(crate) fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>> {
     let active = app.session.active().and_then(|id| app.session.catalog.photo(id).cloned());
     let has = active.is_some();
     Some(match name {
+        "Map" => map_menu(app),
         "Previews" => {
             let running = app.session.preview_build.as_ref().is_some_and(|b| !b.finished.load(std::sync::atomic::Ordering::Relaxed));
             let scope = if app.session.selection.ids.len() > 1 { "Selected" } else { "Visible" };

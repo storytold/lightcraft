@@ -295,5 +295,19 @@
   "Already in “{}”": "Ya está en “{}”",
   "Move {n} photo{} to “{}”": "Mover {n} foto{0} a “{1}”",
   "Move {n} photo{} to “{}”?": "¿Mover {n} foto{0} a “{1}”?",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "{n} foto{0} movida{0} a “{1}”. Editar → Deshacer las devuelve."
+  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "{n} foto{0} movida{0} a “{1}”. Editar → Deshacer las devuelve.",
+  "Delete the saved location “{name}”?": "¿Eliminar la ubicación guardada «{name}»?",
+  "In the private location “{name}”: its map is hidden.": "En la ubicación privada «{name}»: su mapa está oculto.",
+  "within {d} of {lat}, {lon}": "a menos de {d} de {lat}, {lon}",
+  "All Tracks ({n})": "Todas las rutas ({n})",
+  "Track {n}": "Ruta {n}",
+  "camera time, UTC{o}": "hora de la cámara, UTC{o}",
+  "Set Time Zone Offset… (UTC{o})": "Establecer desfase horario… (UTC{o})",
+  "Auto-Tag {n} Selected Photos": "Geoetiquetar {n} fotos seleccionadas",
+  "{m} of them fall within the track's time range": "{m} de ellas caen dentro del intervalo de la ruta",
+  "{n} more tracks": "{n} rutas más",
+  "Deleted {n} map tiles": "{n} teselas del mapa eliminadas",
+  "{size} MB in {n} tiles (limit {cap} MB)": "{size} MB en {n} teselas (límite {cap} MB)",
+  "Map tiles from {id}": "Teselas del mapa de {id}",
+  "In use: {url} (up to zoom {zoom})": "En uso: {url} (hasta el zoom {zoom})"
 }

@@ -72,6 +72,27 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.compare", "Compare", Some("Shift+C"), "View"),
     ("view.survey", "Survey", Some("N"), "View"),
     ("view.people", "People", None, "View"),
+    ("view.map", "Map", None, "View"),
+    ("map.fit", "Fit Map to Photos", None, ""),
+    ("map.setView", "Set Map View", None, ""),
+    // the map's keys fire in the Map view only (`shortcuts::MAP_ONLY`); View ▸ Map lists them
+    ("map.zoomIn", "Zoom In on Map", Some("="), ""),
+    ("map.zoomOut", "Zoom Out on Map", Some("-"), ""),
+    ("map.state", "Map State", None, ""),
+    ("map.lockMarkers", "Lock Markers", Some("Cmd+K"), ""),
+    ("map.showPins", "Show Pins", Some("H"), ""),
+    ("map.filterBar", "Show Location Filter Bar", Some("\\"), ""),
+    ("map.showLocations", "Show Saved Locations List", Some("O"), ""),
+    ("map.location.new", "New Location…", None, ""),
+    ("map.settings", "Map Tiles…", None, ""),
+    ("map.locationFilter", "Location Filter", None, ""),
+    ("map.location.show", "Show Saved Location", None, ""),
+    ("map.location.select", "Select Saved Location", None, ""),
+    ("map.location.selectPhotos", "Select Photos in Saved Location", None, ""),
+    ("map.loadTrackLog", "Load Tracklog…", None, ""),
+    ("map.trackLog.autoTag", "Auto-Tag Selected Photos from Map Tracklog", None, ""),
+    ("map.trackLog.setOffset", "Set Tracklog Time Zone Offset…", None, ""),
+    ("map.trackLog.fit", "Fit Map to Tracklog", None, ""),
     ("view.person", "Show Person", None, ""),
     ("view.faceBoxes", "Face Boxes", None, "View"),
     ("view.focusPoint", "Show Focus Point", Some("Alt+F"), "View"),
@@ -427,6 +448,9 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
     // the app's own context: a toast's time comes from its clock (a fresh context's clock is at 0,
     // and a toast set by it was long over by the app's clock: it never showed)
     let ctx = app.tasks.repaint.clone().unwrap_or_default();
+    if let Some(r) = crate::panels::map::command(app, id, p) {
+        return Some(r);
+    }
     let r: Result<Value, String> = match id {
         "view.photoGrid" => {
             app.ui.view = ViewMode::PhotoGrid;
@@ -1699,19 +1723,8 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             }
             let r = app.run("photo.autoTagTracklog", params);
             if let Ok(v) = &r {
-                let n = v["tagged"].as_u64().unwrap_or(0);
-                let sk = &v["skipped"];
-                let mut msg = crate::i18n::tr_format!("Tagged {n} photo{} from the tracklog", if n == 1 { "" } else { "s" }, n = n);
-                let outside = sk["outside"].as_u64().unwrap_or(0);
-                if outside > 0 {
-                    msg += &crate::i18n::tr_format!("; {outside} outside its time range", outside = outside);
-                }
-                let kept = sk["hasGps"].as_u64().unwrap_or(0);
-                if kept > 0 {
-                    msg += &crate::i18n::tr_format!("; {kept} already had a location", kept = kept);
-                }
                 let ctx = app.tasks.repaint.clone().unwrap_or_default();
-                app.toast(&ctx, msg);
+                app.toast(&ctx, crate::panels::map::tracks::tagged_message(v));
             }
             r
         }
@@ -2140,6 +2153,9 @@ pub fn ui_enabled(app: &LightcraftApp, id: &str) -> bool {
             app.session.active().is_some()
         }
         "photo.tagFromTracklog" => app.session.active().is_some() && app.services.pick_tracklog.is_some(),
+        "map.loadTrackLog" => app.services.pick_tracklog.is_some() || app.services.picker.is_some(),
+        "map.trackLog.autoTag" => app.session.map.track.is_some() && !app.session.targets(&json!({})).unwrap_or_default().is_empty(),
+        "map.trackLog.setOffset" | "map.trackLog.fit" => app.session.map.track.is_some(),
         "photo.editInPhotoCraft" | "photo.editInExternal" => app.session.active().is_some() && app.services.open_with.is_some(),
         "app.exportPrevious" => app.session.active().is_some() && app.session.last_export.is_some(),
         "dialog.pasteSettings" => app.session.active().is_some() && app.session.clipboard.is_some(),

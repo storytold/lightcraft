@@ -266,13 +266,19 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
             ok(Value::Null)
         }
         "ui.pointer" => {
-            // events in normalized image coordinates of the displayed photo frame
-            let Some(img) = app.image_rect else { return err("no image on screen (switch to Detail view)") };
+            // events in normalized image coordinates of the displayed photo frame, or in screen
+            // points with `screen: true` (a drag held across requests, e.g. over the map)
+            let screen = p.get("screen").and_then(Value::as_bool).unwrap_or(false);
+            let img = match app.image_rect {
+                _ if screen => egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1.0, 1.0)),
+                Some(r) => r,
+                None => return err("no image on screen (switch to Detail view, or pass screen: true for screen points)"),
+            };
             let Some(events) = p.get("events").and_then(Value::as_array) else { return err("missing `events`") };
             let m = modifiers(p);
             for e in events {
-                let x = e.get("x").and_then(Value::as_f64).unwrap_or(0.5) as f32;
-                let y = e.get("y").and_then(Value::as_f64).unwrap_or(0.5) as f32;
+                let x = e.get("x").and_then(Value::as_f64).filter(|v| v.is_finite()).unwrap_or(0.5) as f32;
+                let y = e.get("y").and_then(Value::as_f64).filter(|v| v.is_finite()).unwrap_or(0.5) as f32;
                 let pos = egui::pos2(img.left() + x * img.width(), img.top() + y * img.height());
                 match e.get("kind").and_then(Value::as_str).unwrap_or("move") {
                     "down" => {

@@ -1,5 +1,5 @@
 //! Where LightCraft keeps per-user data on this machine: the config folder (app settings, camera
-//! profiles, face and denoise models).
+//! profiles, face and denoise models) and the cache folder (map tiles).
 //!
 //! [`config_dir`] picks it, in order:
 //! 1. `$LIGHTCRAFT_CONFIG_DIR`, when set (tests, agents, custom setups).
@@ -62,6 +62,32 @@ fn config_dir_with(platform: Platform, env: impl Fn(&str) -> Option<OsString>, p
             env("XDG_CONFIG_HOME").map(PathBuf::from).or_else(|| env("HOME").map(|h| PathBuf::from(h).join(".config"))).map(|c| c.join("lightcraft"))
         }
     }
+}
+
+/// LightCraft's per-user cache folder, for data that can be fetched or rebuilt again (map tiles):
+/// `~/Library/Caches/LightCraft` on macOS, `%LOCALAPPDATA%\LightCraft\Cache` on Windows,
+/// `$XDG_CACHE_HOME/lightcraft` (else `~/.cache/lightcraft`) elsewhere. In portable mode it is
+/// `<exe dir>/LightCraftData/Cache`, so tiles stay on the portable medium too.
+pub fn cache_dir() -> Option<PathBuf> {
+    if let Some(dir) = portable_dir() {
+        Some(dir.join("Cache"))
+    } else if cfg!(target_os = "macos") {
+        std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Caches/LightCraft"))
+    } else if cfg!(windows) {
+        std::env::var_os("LOCALAPPDATA").map(|a| PathBuf::from(a).join("LightCraft").join("Cache"))
+    } else {
+        std::env::var_os("XDG_CACHE_HOME")
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
+            .map(|c| c.join("lightcraft"))
+    }
+}
+
+/// Where map tiles are cached: `$LIGHTCRAFT_MAP_CACHE` if set, else `<cache>/map-tiles` (one
+/// folder per tile source inside; see docs/map.md).
+pub fn default_map_cache_dir() -> Option<PathBuf> {
+    std::env::var_os("LIGHTCRAFT_MAP_CACHE").filter(|v| !v.is_empty()).map(PathBuf::from).or_else(|| cache_dir().map(|d| d.join("map-tiles")))
 }
 
 /// This process's portable data folder, if a marker sits beside its executable and the folder can be
@@ -143,6 +169,13 @@ impl Session {
     /// Keep face models in the shared default folder ([`default_face_models_dir`]).
     pub fn with_default_face_models(mut self) -> Self {
         self.face_models_dir = default_face_models_dir();
+        self
+    }
+
+    /// Cache map tiles in the shared default folder ([`default_map_cache_dir`]).
+    pub fn with_default_map_cache(mut self) -> Self {
+        self.map.cache_root = default_map_cache_dir();
+        self.map.reset_service();
         self
     }
 

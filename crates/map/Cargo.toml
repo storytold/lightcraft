@@ -1,0 +1,25 @@
+[package]
+name = "lightcraft-map"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "LightCraft map core: Web Mercator tile maths, tile sources, the on-disk tile cache and the viewport-only fetch queue (L2)"
+
+[lints]
+workspace = true
+
+[dependencies]
+lightcraft-geom = { workspace = true }
+lightcraft-codecs = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+log = { workspace = true }
+web-time = { workspace = true }
+
+# tiles are fetched natively only (the web build shows no network tiles yet)
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+lightcraft-fetch = { workspace = true }
+
+[dev-dependencies]
+png = { workspace = true }

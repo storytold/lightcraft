@@ -295,5 +295,19 @@
   "Already in “{}”": "Already in “{}”",
   "Move {n} photo{} to “{}”": "Move {n} photo{} to “{}”",
   "Move {n} photo{} to “{}”?": "Move {n} photo{} to “{}”?",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Moved {n} photo{} to “{}”. Edit → Undo moves them back."
+  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Moved {n} photo{} to “{}”. Edit → Undo moves them back.",
+  "All Tracks ({n})": "ყველა მარშრუტი ({n})",
+  "Auto-Tag {n} Selected Photos": "მდებარეობის მინიჭება მონიშნული ფოტოებისთვის: {n}",
+  "Delete the saved location “{name}”?": "წაიშალოს შენახული მდებარეობა „{name}“?",
+  "Deleted {n} map tiles": "წაიშალა რუკის ფილა: {n}",
+  "In the private location “{name}”: its map is hidden.": "პირად მდებარეობაში „{name}“: მისი რუკა დამალულია.",
+  "In use: {url} (up to zoom {zoom})": "გამოიყენება: {url} (მასშტაბამდე {zoom})",
+  "Map tiles from {id}": "რუკის ფილები: {id}",
+  "Set Time Zone Offset… (UTC{o})": "სასაათო სარტყლის წანაცვლების დაყენება… (UTC{o})",
+  "Track {n}": "მარშრუტი {n}",
+  "camera time, UTC{o}": "კამერის დრო, UTC{o}",
+  "within {d} of {lat}, {lon}": "{lat}, {lon}-დან {d}-ის ფარგლებში",
+  "{m} of them fall within the track's time range": "მათგან {m} მარშრუტის დროის შუალედში ხვდება",
+  "{n} more tracks": "კიდევ {n} მარშრუტი",
+  "{size} MB in {n} tiles (limit {cap} MB)": "{size} MB, ფილა: {n} (ზღვარი {cap} MB)"
 }
