@@ -1003,7 +1003,14 @@ pub fn specs() -> Vec<CommandSpec> {
                     ops.push(Op::SetMeta { id, meta: Box::new(m) });
                 }
                 let n = ops.len();
+                let gps_targets: Vec<PhotoId> = if gps.is_some() {
+                    ops.iter().filter_map(|o| if let Op::SetMeta { id, .. } = o { Some(*id) } else { None }).collect()
+                } else {
+                    vec![]
+                };
                 s.commit("Edit Info", Op::Batch { ops })?;
+                // the position typed in is LightCraft's: its sidecar follows it, cleared too
+                s.gps_edited.extend(gps_targets);
                 // keywords just added become the Recent Keywords set
                 let added: Vec<String> = strs("addKeywords").unwrap_or_default().into_iter().chain(strs("keywords").unwrap_or_default()).collect();
                 if n > 0 && !added.is_empty() {

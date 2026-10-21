@@ -2718,5 +2718,19 @@
   "≥  at least": "≥  არანაკლებ",
   "⌘-drag to straighten, ⇧G Guided Upright, a grid while transforming.": "⌘-გადათრევა გასასწორებლად, ⇧G მართვადი Upright, ბადე გარდაქმნისას.",
   "日本語": "日本語",
-  "繁體中文（台灣）": "繁體中文（台灣）"
+  "繁體中文（台灣）": "繁體中文（台灣）",
+  "Fit to Photos": "ფოტოებში ჩატევა",
+  "Map": "რუკა",
+  "Map tiles are off (Settings / map.tileSource)": "რუკის ფილები გამორთულია (პარამეტრები / map.tileSource)",
+  "No photos with a location": "მდებარეობიანი ფოტოები არ არის",
+  "photo without GPS": "ფოტო GPS-ის გარეშე",
+  "photos without GPS": "ფოტო GPS-ის გარეშე",
+  "Map tiles are off": "რუკის ფილები გამორთულია",
+  "Open in Browser": "ბრაუზერში გახსნა",
+  "Show in the Map view": "რუკის ხედში ჩვენება",
+  "Lock Markers": "მარკერების ჩაკეტვა",
+  "Pins can't be dragged to move photos": "ქინძისთავების გადათრევით ფოტოების გადაადგილება შეუძლებელია",
+  "Remove GPS Coordinates": "GPS კოორდინატების წაშლა",
+  "Remove GPS Coordinates of These Photos": "ამ ფოტოების GPS კოორდინატების წაშლა",
+  "Set GPS Coordinates": "GPS კოორდინატების დაყენება"
 }
