@@ -860,6 +860,18 @@ mod tests {
         }
     }
 
+    /// The built-in export presets' names show translated in the Export dialog (`builtin_label`), so
+    /// every catalog carries them. A translation may keep the English text, so this checks that an
+    /// entry exists: the catalog comparison only reports gaps, and a gap would show English silently.
+    #[test]
+    fn export_preset_names_are_translated_in_every_catalog() {
+        for language in Locale::ALL.iter().filter(|language| **language != Locale::En) {
+            for key in ["Instagram Feed", "Instagram Story / Reel", "Web / Portfolio", "Full Resolution Master"] {
+                assert!(language.catalog().contains_key(key), "{language:?} has no translation for {key:?}");
+            }
+        }
+    }
+
     /// Smart-album choice values read as words in every language (English "Public Domain", German
     /// "Gemeinfrei"), never as rule ids like `publicDomain`; an id the field doesn't know shows as
     /// written. Unlike other labels these must be translated: an untranslated one would be English

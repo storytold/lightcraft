@@ -181,6 +181,58 @@ fn presets_conflicts_and_subfolders() {
     assert_eq!(written, ["out/Sub/LC01347.png"]);
 }
 
+/// Each of the four named delivery-target built-ins: listed as built-in, expanded to the settings the
+/// issue asks for, valid as `app.export` params, round-tripped through a user preset, and rendered at
+/// its size. A long edge is all a preset sets, so none of them crops the photo.
+#[test]
+fn named_builtin_presets_expand_round_trip_and_apply() {
+    use crate::export::output_size;
+    let mut s = Session::with_demo();
+    // the issue's four named built-ins are listed, marked builtin
+    let builtin: Vec<String> = s
+        .execute("export.presets", &json!({}))
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|p| p["builtin"].as_bool().unwrap())
+        .map(|p| p["name"].as_str().unwrap().to_string())
+        .collect();
+    // 0 = no resize: the photo's own (cropped) full size
+    let issue = [
+        ("Instagram Feed", json!({"format": "jpeg", "quality": 85, "longEdge": 1080, "colorSpace": "srgb", "sharpen": "screen"})),
+        ("Instagram Story / Reel", json!({"format": "jpeg", "quality": 85, "longEdge": 1920, "colorSpace": "srgb", "sharpen": "screen"})),
+        ("Web / Portfolio", json!({"format": "jpeg", "quality": 85, "longEdge": 2048, "colorSpace": "srgb", "metadata": "copyright"})),
+        ("Full Resolution Master", json!({"format": "jpeg", "quality": 95, "longEdge": 0, "colorSpace": "displayP3"})),
+    ];
+    for (name, settings) in &issue {
+        assert!(builtin.contains(&name.to_string()), "{name}: {builtin:?}");
+        // expanding one yields exactly the issue's settings, and they validate as app.export params
+        let params = s.export_params(&json!({"preset": name})).unwrap();
+        assert_eq!(&params, settings, "{name}");
+        ExportOptions::validate("app.export", &params).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        // round trip: save as a user preset → expand again → identical ExportOptions
+        let mine = format!("My {name}");
+        s.execute("export.savePreset", &json!({"name": mine, "params": params})).unwrap();
+        let again = s.export_params(&json!({"preset": mine})).unwrap();
+        assert_eq!(ExportOptions::from_json(&params), ExportOptions::from_json(&again), "{name}");
+    }
+    // built-in names (the new ones too) are reserved
+    assert!(s.execute("export.savePreset", &json!({"name": "web / portfolio", "params": {}})).is_err());
+    // applying each one really renders at its size, and the photo keeps its own shape
+    let id = s.active().unwrap();
+    let photo = s.catalog.photo(id).unwrap().clone();
+    for (name, settings) in &issue {
+        let o = ExportOptions::from_json(settings);
+        let e = export_photo(&mut s, id, &o, 1).unwrap();
+        assert_eq!((e.width, e.height), output_size(&photo, &o), "{name}");
+        match settings["longEdge"].as_u64().unwrap_or(0) {
+            0 => assert!(o.resize.is_none(), "{name}: full size means no resize"),
+            edge => assert_eq!(e.width.max(e.height) as u64, edge, "{name}: {}×{}", e.width, e.height),
+        }
+    }
+}
+
 #[test]
 fn prepared_exports_run_on_another_thread() {
     fn send<T: Send>(_: &T) {}
