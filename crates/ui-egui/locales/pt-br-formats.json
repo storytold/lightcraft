@@ -295,5 +295,15 @@
   "Renames {n} face{} across the library. The files are not changed.": "Renomeia {n} rosto{} na biblioteca. Os arquivos não são alterados.",
   "“{to}” is already a person. Combining them makes one person; Undo separates them again.": "“{to}” já é uma pessoa. Combiná-las deixa uma só; Desfazer as separa de novo.",
   "{what} merge added at {mp}: its full size, {full}, needs more memory than this computer has": "{what} mesclagem adicionada em {mp}: o tamanho completo, {full}, precisa de mais memória do que este computador tem",
-  "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "{what} mesclagem adicionada em {mp}, o maior tamanho possível para um panorama (tamanho completo: {full})"
+  "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "{what} mesclagem adicionada em {mp}, o maior tamanho possível para um panorama (tamanho completo: {full})",
+  "Delete the saved location “{name}”?": "Excluir o local salvo “{name}”?",
+  "In the private location “{name}”: its map is hidden.": "No local privado “{name}”: o mapa está oculto.",
+  "within {d} of {lat}, {lon}": "a até {d} de {lat}, {lon}",
+  "All Tracks ({n})": "Todas as trilhas ({n})",
+  "Track {n}": "Trilha {n}",
+  "camera time, UTC{o}": "hora da câmera, UTC{o}",
+  "Set Time Zone Offset… (UTC{o})": "Definir deslocamento de fuso… (UTC{o})",
+  "Auto-Tag {n} Selected Photos": "Geomarcar {n} fotos selecionadas",
+  "{m} of them fall within the track's time range": "{m} delas estão no intervalo de tempo da trilha",
+  "{n} more tracks": "mais {n} trilhas"
 }

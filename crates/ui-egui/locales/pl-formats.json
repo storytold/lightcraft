@@ -295,5 +295,15 @@
   "Already in “{}”": "Już w „{}”",
   "Move {n} photo{} to “{}”": "Przenieś do „{1}” — zdjęcia: {n}{0:.0}",
   "Move {n} photo{} to “{}”?": "Przenieść do „{1}” — zdjęcia: {n}{0:.0}?",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Przeniesiono do „{1}” — zdjęcia: {n}{0:.0}. Edytuj → Cofnij przywróci je."
+  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Przeniesiono do „{1}” — zdjęcia: {n}{0:.0}. Edytuj → Cofnij przywróci je.",
+  "Delete the saved location “{name}”?": "Usunąć zapisaną lokalizację „{name}”?",
+  "In the private location “{name}”: its map is hidden.": "W prywatnej lokalizacji „{name}”: jej mapa jest ukryta.",
+  "within {d} of {lat}, {lon}": "w promieniu {d} od {lat}, {lon}",
+  "All Tracks ({n})": "Wszystkie ślady ({n})",
+  "Track {n}": "Ślad {n}",
+  "camera time, UTC{o}": "czas aparatu, UTC{o}",
+  "Set Time Zone Offset… (UTC{o})": "Ustaw przesunięcie strefy czasowej… (UTC{o})",
+  "Auto-Tag {n} Selected Photos": "Automatycznie oznacz zaznaczone zdjęcia: {n}",
+  "{m} of them fall within the track's time range": "{m} z nich mieści się w zakresie czasu śladu",
+  "{n} more tracks": "Więcej śladów: {n}"
 }

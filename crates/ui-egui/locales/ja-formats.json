@@ -295,5 +295,15 @@
   "Renames {n} face{} across the library. The files are not changed.": "ライブラリ全体で{n}件の顔の名前を変更します。ファイルは変更されません。{:.0}",
   "“{to}” is already a person. Combining them makes one person; Undo separates them again.": "「{to}」はすでに別の人物です。まとめると1人になり、元に戻すと再び分かれます。",
   "{what} merge added at {mp}: its full size, {full}, needs more memory than this computer has": "{what}合成を{mp}で追加しました：フルサイズ（{full}）にはこのコンピューターのメモリが足りません",
-  "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "{what}合成を{mp}で追加しました。パノラマの最大サイズです（フルサイズ：{full}）"
+  "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "{what}合成を{mp}で追加しました。パノラマの最大サイズです（フルサイズ：{full}）",
+  "Delete the saved location “{name}”?": "保存した場所「{name}」を削除しますか？",
+  "In the private location “{name}”: its map is hidden.": "非公開の場所「{name}」内：地図は非表示です。",
+  "within {d} of {lat}, {lon}": "{lat}, {lon} から {d} 以内",
+  "All Tracks ({n})": "すべてのトラック ({n})",
+  "Track {n}": "トラック {n}",
+  "camera time, UTC{o}": "カメラの時刻、UTC{o}",
+  "Set Time Zone Offset… (UTC{o})": "時差を設定… (UTC{o})",
+  "Auto-Tag {n} Selected Photos": "選択した {n} 枚の写真に自動で位置を付ける",
+  "{m} of them fall within the track's time range": "うち {m} 枚がトラックの時間範囲内です",
+  "{n} more tracks": "他 {n} 件のトラック"
 }

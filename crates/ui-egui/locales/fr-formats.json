@@ -295,5 +295,15 @@
   "Already in “{}”": "Déjà dans « {} »",
   "Move {n} photo{} to “{}”": "Déplacer {n} photo{} vers « {} »",
   "Move {n} photo{} to “{}”?": "Déplacer {n} photo{} vers « {} » ?",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "{n} photo{} déplacée(s) vers « {} ». Modifier → Annuler les remet en place."
+  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "{n} photo{} déplacée(s) vers « {} ». Modifier → Annuler les remet en place.",
+  "Delete the saved location “{name}”?": "Supprimer le lieu enregistré « {name} » ?",
+  "In the private location “{name}”: its map is hidden.": "Dans le lieu privé « {name} » : sa carte est masquée.",
+  "within {d} of {lat}, {lon}": "à moins de {d} de {lat}, {lon}",
+  "All Tracks ({n})": "Tous les tracés ({n})",
+  "Track {n}": "Tracé {n}",
+  "camera time, UTC{o}": "heure de l'appareil, UTC{o}",
+  "Set Time Zone Offset… (UTC{o})": "Définir le décalage horaire… (UTC{o})",
+  "Auto-Tag {n} Selected Photos": "Géolocaliser les {n} photos sélectionnées",
+  "{m} of them fall within the track's time range": "{m} d'entre elles tombent dans la plage horaire du tracé",
+  "{n} more tracks": "{n} autres tracés"
 }

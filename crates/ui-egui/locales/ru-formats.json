@@ -295,5 +295,15 @@
   "Already in “{}”": "Уже в «{}»",
   "Move {n} photo{} to “{}”": "Переместить в «{1}» фото: {n}{0:.0}",
   "Move {n} photo{} to “{}”?": "Переместить в «{1}» фото: {n}{0:.0}?",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "В «{1}» перемещено фото: {n}{0:.0}. Правка → Отменить вернёт их."
+  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "В «{1}» перемещено фото: {n}{0:.0}. Правка → Отменить вернёт их.",
+  "Delete the saved location “{name}”?": "Удалить сохранённое место «{name}»?",
+  "In the private location “{name}”: its map is hidden.": "В частном месте «{name}»: карта скрыта.",
+  "within {d} of {lat}, {lon}": "в пределах {d} от {lat}, {lon}",
+  "All Tracks ({n})": "Все треки ({n})",
+  "Track {n}": "Трек {n}",
+  "camera time, UTC{o}": "время камеры, UTC{o}",
+  "Set Time Zone Offset… (UTC{o})": "Задать смещение часового пояса… (UTC{o})",
+  "Auto-Tag {n} Selected Photos": "Привязать выбранные фото ({n})",
+  "{m} of them fall within the track's time range": "{m} из них попадают во время трека",
+  "{n} more tracks": "ещё треков: {n}"
 }

@@ -295,5 +295,15 @@
   "Already in “{}”": "Již v „{}“",
   "Move {n} photo{} to “{}”": "Přesunout do „{1}“ fotografie: {n}{0:.0}",
   "Move {n} photo{} to “{}”?": "Přesunout do „{1}“ fotografie: {n}{0:.0}?",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Do „{1}“ přesunuto fotografií: {n}{0:.0}. Úpravy → Zpět je vrátí."
+  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Do „{1}“ přesunuto fotografií: {n}{0:.0}. Úpravy → Zpět je vrátí.",
+  "Delete the saved location “{name}”?": "Odstranit uložené místo „{name}“?",
+  "In the private location “{name}”: its map is hidden.": "V soukromém místě „{name}“: jeho mapa je skrytá.",
+  "within {d} of {lat}, {lon}": "do {d} od {lat}, {lon}",
+  "All Tracks ({n})": "Všechny trasy ({n})",
+  "Track {n}": "Trasa {n}",
+  "camera time, UTC{o}": "čas fotoaparátu, UTC{o}",
+  "Set Time Zone Offset… (UTC{o})": "Nastavit posun časového pásma… (UTC{o})",
+  "Auto-Tag {n} Selected Photos": "Doplnit polohu vybraných fotografií: {n}",
+  "{m} of them fall within the track's time range": "{m} z nich spadá do časového rozsahu trasy",
+  "{n} more tracks": "Další trasy: {n}"
 }

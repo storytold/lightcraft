@@ -120,6 +120,16 @@ mod tests_library_problem;
 #[cfg(test)]
 mod tests_lights_out;
 #[cfg(test)]
+mod tests_map;
+#[cfg(test)]
+mod tests_map_filter;
+#[cfg(test)]
+mod tests_map_geotag;
+#[cfg(test)]
+mod tests_map_locations;
+#[cfg(test)]
+mod tests_map_tracks;
+#[cfg(test)]
 mod tests_mask_effects;
 #[cfg(test)]
 mod tests_masking;
@@ -478,6 +488,8 @@ pub struct LightcraftApp {
     pub library_problem: Option<panels::library_problem::LibraryProblem>,
     /// The activity stack shows every task, not just the first few ("+N more" was clicked).
     pub activity_expanded: bool,
+    /// The Map view's centre and zoom, tile textures and photo pins (for the session).
+    pub map: panels::map::MapView,
 }
 
 impl LightcraftApp {
@@ -556,6 +568,7 @@ impl LightcraftApp {
             screen_profile_read: None,
             library_problem: None,
             activity_expanded: false,
+            map: Default::default(),
             model_setup: Default::default(),
         }
     }
@@ -603,6 +616,8 @@ impl LightcraftApp {
             return result.map_err(CommandError::from);
         }
         if let Some(r) = menus::run_ui_command(self, id, &params) {
+            // a view switch ends (or starts) the Map view's location filter at once
+            panels::map::sync_location_filter(self);
             if r.is_ok() {
                 docking::reveal_command(self, id)?;
             }
@@ -1383,6 +1398,7 @@ impl LightcraftApp {
 
     /// Frame timings once layout is done (`t0`: when layout started).
     fn end_frame(&mut self, ctx: &egui::Context, t0: f64) {
+        panels::map::end_pass(self, ctx);
         ctx.output(|o| {
             for c in &o.commands {
                 if let egui::OutputCommand::CopyText(text) = c {
@@ -1428,6 +1444,8 @@ impl LightcraftApp {
         }
         panels::dialogs::prepare(self, ui);
         let t0 = now_ms();
+        // the Map view's location filter holds only while the Map view is shown
+        panels::map::sync_location_filter(self);
         if std::mem::take(&mut self.ui.quit) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
