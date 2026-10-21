@@ -8,6 +8,7 @@ use lightcraft_catalog::{Catalog, PhotoId};
 use serde_json::json;
 
 use crate::LightcraftApp;
+use crate::icons::{Icon, paint};
 use crate::state::Dialog;
 use crate::theme::Tokens;
 use crate::widgets::register;
@@ -21,7 +22,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     crate::widgets::divider(ui);
     // the title, where a dragged keyword goes back to the top level
-    let (title, _) = ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::hover());
+    let (title, title_resp) = ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::click());
     register(ui.ctx(), "keywordList:topLevel", title);
     let dragging = app.ui.dragging_keyword.clone();
     let (pointer, released) = ui.input(|i| (i.pointer.latest_pos(), i.pointer.any_released()));
@@ -29,13 +30,17 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     if dragging.is_some() && over_title {
         ui.painter().rect_stroke(title.shrink2(vec2(16.0, 6.0)), 4.0, Stroke::new(1.5, t.accent), StrokeKind::Inside);
     }
+    // (it folds the list shut; while a keyword is dragged it says where the drop goes)
     let heading = if dragging.is_some() { crate::i18n::tr("Drop here for the top level") } else { crate::i18n::tr("Keyword List") };
-    ui.painter().text(pos2(title.left() + 24.0, title.center().y + 2.0), Align2::LEFT_CENTER, heading, t.semibold(15.0), t.text);
+    let open = super::right::fold_title(app, ui, "keywordList", title, &title_resp, heading);
     if released
         && over_title
         && let Some(k) = dragging.clone()
     {
         drop_keyword(app, ui.ctx(), &k, None);
+    }
+    if !open {
+        return;
     }
     let fid = egui::Id::new("keyword-list-filter");
     let mut filter: String = ui.data(|d| d.get_temp(fid)).unwrap_or_default();
@@ -72,7 +77,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             ui.label(egui::RichText::new(crate::i18n::tr(none)).color(t.text_dim));
         });
     }
-    let selection = app.session.targets(&serde_json::Value::Null);
+    let selection = app.session.selected();
     let ticks = app.caches.keyword_ticks(&app.session.catalog, &selection);
     for r in &rows {
         row(app, ui, r, &selection, &ticks, filter.trim().is_empty());
@@ -161,6 +166,7 @@ fn drop_keyword(app: &mut LightcraftApp, ctx: &egui::Context, keyword: &str, par
 fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId], ticks: &Ticks, can_fold: bool) {
     let t = Tokens::get(ui.ctx());
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::click_and_drag());
+    crate::widgets::announce(&resp, r.path.clone());
     register(ui.ctx(), format!("keywordRow:{}", r.path), rect);
     if resp.drag_started() {
         app.ui.dragging_keyword = Some(r.path.clone());
@@ -178,17 +184,13 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId
     // the triangle
     if r.has_children {
         let c = pos2(x + 6.0, cy);
-        let tri = Rect::from_center_size(c, vec2(14.0, 14.0));
+        let tri = Rect::from_center_size(c, vec2(16.0, 16.0));
         let tr = ui.interact(tri, egui::Id::new(("keyword-list-tri", r.path.to_lowercase())), Sense::click());
+        crate::widgets::announce(&tr, crate::i18n::tr(if r.open { "Collapse" } else { "Expand" }));
         register(ui.ctx(), format!("keywordRowToggle:{}", r.path), tri);
-        let pts = if r.open {
-            vec![c + vec2(-4.0, -2.0), c + vec2(4.0, -2.0), c + vec2(0.0, 3.0)]
-        } else {
-            vec![c + vec2(-2.0, -4.0), c + vec2(3.0, 0.0), c + vec2(-2.0, 4.0)]
-        };
         // while a filter opens the levels the triangle does nothing: it doesn't light up either
         let lit = tr.hovered() && can_fold;
-        ui.painter().add(egui::Shape::convex_polygon(pts, if lit { t.text } else { t.text_dim }, Stroke::NONE));
+        paint(ui.painter(), tri, if r.open { Icon::ChevronDown } else { Icon::ChevronRight }, if lit { t.text } else { t.text_dim });
         if tr.clicked() && can_fold {
             let key = r.path.to_lowercase();
             if r.open {
@@ -205,6 +207,7 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId
     // (it senses drags too, so a press there that moves doesn't pick the keyword up)
     let sense = if on { Sense::click_and_drag() } else { Sense::hover() };
     let tb = ui.interact(boxr.expand(3.0), egui::Id::new(("keyword-list-tick", r.path.to_lowercase())), sense);
+    crate::widgets::announce(&tb, format!("{} {}", crate::i18n::tr("Keyword"), r.path));
     register(ui.ctx(), format!("keywordCheck:{}", r.path), boxr);
     let edge = if on { t.text_label } else { t.text_dim.gamma_multiply(0.5) };
     match state {
@@ -241,9 +244,10 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId
     ui.painter().galley(count_rect.min, count, t.text_dim);
     let arrow = Rect::from_center_size(pos2(count_rect.left() - 12.0, cy), vec2(16.0, 16.0));
     let ar = ui.interact(arrow, egui::Id::new(("keyword-list-show", r.path.to_lowercase())), Sense::click());
+    crate::widgets::announce(&ar, crate::i18n::tr("Show photos"));
     register(ui.ctx(), format!("keywordShow:{}", r.path), arrow);
     if resp.hovered() || ar.hovered() {
-        ui.painter().text(arrow.center(), Align2::CENTER_CENTER, "→", t.font(13.0), if ar.hovered() { t.text } else { t.text_dim });
+        paint(ui.painter(), arrow, Icon::ChevronRight, if ar.hovered() { t.text } else { t.text_dim });
     }
     if ar.on_hover_text(crate::i18n::tr("Show Photos with Keyword")).clicked() {
         super::left::browse_all_photos(app, true);
@@ -617,13 +621,13 @@ mod tests {
             "Export Keywords…",
         ];
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("locales");
-        for code in ["de", "es", "fr", "pt-br", "ru", "uk", "ja", "zh-hans", "zh-hant"] {
+        for code in ["de", "es", "fr", "pt-br", "ru", "uk", "it", "ka", "ja", "zh-hans", "zh-hant", "pl", "cs"] {
             let text = std::fs::read_to_string(dir.join(format!("{code}.json"))).unwrap();
             let catalog: std::collections::HashMap<String, String> = serde_json::from_str(&text).unwrap();
             for label in labels {
                 assert!(catalog.contains_key(label), "{code}: “{label}”");
             }
         }
-        assert_eq!(Locale::ALL.len(), 10, "a language added: list its file above");
+        assert_eq!(Locale::ALL.len(), 14, "a language added: list its file above");
     }
 }

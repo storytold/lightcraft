@@ -179,7 +179,7 @@ fn hostile_ids_unsupported_models_and_odd_folders_are_handled() {
 /// Settings > Faces downloads; nothing is committed). Without it those tests say so and pass.
 fn demo_with_yunet() -> Option<Session> {
     let Some(file) = std::env::var_os("LC_YUNET_MODEL") else {
-        eprintln!("LC_YUNET_MODEL is not set: skipping");
+        lightcraft_testkit::skip!(Model, "LC_YUNET_MODEL is not set");
         return None;
     };
     let dir = temp("yunet");
@@ -205,10 +205,24 @@ fn detect_without_the_model_says_where_to_get_it() {
     let d = temp("nodetector");
     let mut s = Session::with_demo();
     // no folder for models at all, then a folder that has none yet
-    assert!(s.execute("faces.detect", &json!({})).is_err());
+    let e = s.execute("faces.detect", &json!({})).unwrap_err();
+    assert_ne!(e.kind(), crate::ErrorKind::ModelMissing(crate::AiModel::FaceDetector), "nothing to download into: {e}");
     s.face_models_dir = Some(d.join("models"));
-    let e = s.execute("faces.detect", &json!({})).unwrap_err().to_string();
-    assert!(e.contains("Settings > Faces"), "{e}");
+    let e = s.execute("faces.detect", &json!({})).unwrap_err();
+    // the app offers the download on the kind (#1046), the person reads the message
+    assert_eq!(e.kind(), crate::ErrorKind::ModelMissing(crate::AiModel::FaceDetector), "{e}");
+    assert!(
+        e.to_string().starts_with("invalid parameters for `faces.detect`: ") && e.to_string().contains("Settings > Faces"),
+        "the `error` text clients see is unchanged: {e}"
+    );
+    // a detector that is there but unusable also points to Settings > Faces, and is not a missing one
+    let home = d.join("models").join(lightcraft_faces::known::YUNET_ID);
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(home.join("model.onnx"), b"not a model").unwrap();
+    std::fs::write(home.join("face-model.json"), b"{}").unwrap();
+    let e = s.execute("faces.detect", &json!({})).unwrap_err();
+    assert!(e.to_string().contains("Settings > Faces"), "{e}");
+    assert_eq!(e.kind(), crate::ErrorKind::BadParams, "{e}");
     let _ = std::fs::remove_dir_all(&d);
 }
 
@@ -612,4 +626,18 @@ fn recognition_cannot_be_turned_on_without_a_chosen_model() {
     assert_eq!((l["enabled"].clone(), l["embedder"].clone()), (json!(false), Value::Null), "{l}");
     assert!(s.execute("faces.enable", &json!({"enabled": true})).is_err());
     let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
+fn the_cpu_only_switch_is_kept_and_bad_values_are_refused() {
+    let d = temp("cpu-only");
+    let mut s = session(&d);
+    assert_eq!(s.execute("faces.gpu", &json!({})).unwrap()["cpuOnly"], false);
+    assert_eq!(s.execute("faces.gpu", &json!({"cpuOnly": true})).unwrap()["cpuOnly"], true);
+    // kept with the models, so a new session starts on the CPU too
+    let mut again = session(&d);
+    assert_eq!(again.execute("faces.models.list", &json!({})).unwrap()["gpu"]["cpuOnly"], true);
+    assert!(again.execute("faces.gpu", &json!({"cpuOnly": "yes"})).is_err());
+    assert_eq!(again.execute("faces.gpu", &json!({"cpuOnly": false})).unwrap()["cpuOnly"], false);
+    let _ = std::fs::remove_dir_all(d);
 }

@@ -245,6 +245,19 @@ pub fn expand(template: &str, p: &Photo, seq: usize) -> String {
 /// The template's tokens replaced for `p` (no extension added, nothing sanitized). A bare `{seq}`
 /// is zero-padded to `seq_width` digits.
 pub fn expand_tokens(template: &str, p: &Photo, seq: usize, seq_width: usize) -> String {
+    expand_tokens_with(template, p, seq, seq_width, &|_, _, _| None)
+}
+
+/// [`expand_tokens`] with more tokens: `extra(name, arg, tag)` (the name lower-cased, the text
+/// after `:`, the whole tag without braces) answers a token first; `None` leaves it to the rename
+/// tokens (and an unknown one stays as typed). Slideshow text overlays add their tokens this way.
+pub fn expand_tokens_with(
+    template: &str,
+    p: &Photo,
+    seq: usize,
+    seq_width: usize,
+    extra: &dyn Fn(&str, Option<&str>, &str) -> Option<String>,
+) -> String {
     let (stem, ext) = split_ext(&p.file_name);
     let mut out = String::new();
     let mut rest = template;
@@ -257,31 +270,35 @@ pub fn expand_tokens(template: &str, p: &Photo, seq: usize, seq_width: usize) ->
         };
         let tok = &rest[i + 1..i + j];
         let (name, arg) = tok.split_once(':').map(|(a, b)| (a, Some(b))).unwrap_or((tok, None));
-        let v = match name.trim().to_ascii_lowercase().as_str() {
-            "name" | "filename" => stem.to_string(),
-            "num" => {
-                let digits = stem.chars().rev().take_while(char::is_ascii_digit).count();
-                stem[stem.len() - digits..].to_string()
-            }
-            "seq" | "n" => {
-                let w: usize = arg.and_then(|a| a.parse().ok()).unwrap_or(seq_width).min(9);
-                format!("{seq:0w$}")
-            }
-            "date" => format_date(p.date(), arg.unwrap_or("%Y%m%d")),
-            "folder" => match &p.source {
-                Source::File { path } => {
-                    Path::new(path).parent().and_then(Path::file_name).map(|f| f.to_string_lossy().to_string()).unwrap_or_default()
+        let lower = name.trim().to_ascii_lowercase();
+        let v = match extra(&lower, arg, tok) {
+            Some(v) => v,
+            None => match lower.as_str() {
+                "name" | "filename" => stem.to_string(),
+                "num" => {
+                    let digits = stem.chars().rev().take_while(char::is_ascii_digit).count();
+                    stem[stem.len() - digits..].to_string()
                 }
-                Source::Demo { .. } => String::new(),
+                "seq" | "n" => {
+                    let w: usize = arg.and_then(|a| a.parse().ok()).unwrap_or(seq_width).min(9);
+                    format!("{seq:0w$}")
+                }
+                "date" => format_date(p.date(), arg.unwrap_or("%Y%m%d")),
+                "folder" => match &p.source {
+                    Source::File { path } => {
+                        Path::new(path).parent().and_then(Path::file_name).map(|f| f.to_string_lossy().to_string()).unwrap_or_default()
+                    }
+                    Source::Demo { .. } => String::new(),
+                },
+                "camera" => p.meta.camera.clone(),
+                "lens" => p.meta.lens.clone(),
+                "iso" => p.meta.iso.map(|v| v.to_string()).unwrap_or_default(),
+                "rating" => p.rating.to_string(),
+                "title" => p.meta.title.clone(),
+                "creator" => p.meta.creator.clone(),
+                "ext" => ext.to_string(),
+                _ => format!("{{{tok}}}"),
             },
-            "camera" => p.meta.camera.clone(),
-            "lens" => p.meta.lens.clone(),
-            "iso" => p.meta.iso.map(|v| v.to_string()).unwrap_or_default(),
-            "rating" => p.rating.to_string(),
-            "title" => p.meta.title.clone(),
-            "creator" => p.meta.creator.clone(),
-            "ext" => ext.to_string(),
-            _ => format!("{{{tok}}}"),
         };
         out.push_str(&v);
         rest = &rest[i + j + 1..];
@@ -319,6 +336,17 @@ pub(crate) trait MoveFs {
     /// Another photo file beside the stem-named sidecar `sidecar` that shares its stem (e.g.
     /// `IMG_1.JPG` for `IMG_1.xmp`), which still uses that sidecar.
     fn stem_sibling(&self, sidecar: &Path) -> Option<String>;
+    /// The folder lists an entry spelled exactly like `p` (letter case included). On a
+    /// case-insensitive volume `a.XMP` "exists" when only `a.xmp` is there; this tells the two
+    /// apart. When the folder can't be listed: `true`, so nothing is skipped.
+    fn listed(&self, p: &Path) -> bool {
+        let (Some(dir), Some(name)) = (p.parent(), p.file_name()) else { return true };
+        let dir = if dir.as_os_str().is_empty() { Path::new(".") } else { dir };
+        match std::fs::read_dir(dir) {
+            Ok(entries) => entries.flatten().any(|e| e.file_name() == name),
+            Err(_) => true,
+        }
+    }
     /// Content observed in a packet, independent of its pathname or inode. Model volumes
     /// override this; disk implementations stream a bounded buffer without retaining the XML.
     fn packet_version(&self, path: &Path) -> std::io::Result<PacketVersion> {
@@ -366,15 +394,23 @@ impl MoveFs for RealFs {
         }
         #[cfg(not(unix))]
         {
-            // no stable file id in std here: `b` is `a` under another spelling when they look
-            // alike and the folder has no entry spelled exactly like `b` (on a case-sensitive
-            // folder holding both `IMG.JPG` and `img.jpg`, both entries are listed)
-            let (Some(dir), Some(name)) = (b.parent(), b.file_name()) else { return false };
-            if a.parent() != Some(dir) || ma.len() != mb.len() || ma.modified().ok() != mb.modified().ok() {
+            // no stable file id in std here: `a` and `b` are one file under two spellings when
+            // they look alike and the folder doesn't list both (on a case-sensitive folder
+            // holding both `IMG.JPG` and `img.jpg`, both entries are listed). Either may be the
+            // listed one: the answer must not depend on the argument order.
+            let (Some(dir), Some(name_a), Some(name_b)) = (b.parent(), a.file_name(), b.file_name()) else { return false };
+            let respelled = name_a.to_string_lossy().to_lowercase() == name_b.to_string_lossy().to_lowercase();
+            if !respelled || a.parent() != Some(dir) || ma.len() != mb.len() || ma.modified().ok() != mb.modified().ok() {
                 return false;
             }
             let Ok(entries) = std::fs::read_dir(dir) else { return false };
-            !entries.flatten().any(|e| e.file_name() == name)
+            let (mut listed_a, mut listed_b) = (false, false);
+            for e in entries.flatten() {
+                let name = e.file_name();
+                listed_a |= name == name_a;
+                listed_b |= name == name_b;
+            }
+            !(listed_a && listed_b)
         }
     }
 
@@ -397,12 +433,31 @@ impl MoveFs for RealFs {
     }
 
     fn copy_no_replace(&self, a: &Path, b: &Path) -> std::io::Result<()> {
-        use std::io::Write;
-        let bytes = std::fs::read(a)?;
-        let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(b)?;
-        f.write_all(&bytes).and_then(|_| f.sync_all()).inspect_err(|_| {
-            let _ = std::fs::remove_file(b);
-        })
+        if self.exists(b) {
+            return Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, format!("{} already exists", b.display())));
+        }
+        // Streamed (a large raw or video is never read into memory whole), into a hidden name
+        // beside `b` that only takes `b`'s name once complete: a share that drops mid-copy, so
+        // the partial file can't be removed either, leaves no truncated file under the photo's
+        // name for a retry to take for the photo.
+        let name = b.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        // a free name: one left by a copy the share cut off (it couldn't be removed then) doesn't
+        // block the next
+        let partial = (0..1000u32)
+            .map(|k| b.with_file_name(format!(".{name}.lc-partial-{}-{k}", std::process::id())))
+            .find(|p| !self.exists(p))
+            .ok_or_else(|| std::io::Error::other(format!("no free temporary name beside {}", b.display())))?;
+        let copied = (|| {
+            let mut from = std::fs::File::open(a)?;
+            let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(&partial)?;
+            std::io::copy(&mut from, &mut f)?;
+            f.sync_all()
+        })();
+        let placed = copied.and_then(|()| self.rename_no_replace(&partial, b));
+        if placed.is_err() {
+            let _ = std::fs::remove_file(&partial);
+        }
+        placed
     }
 
     fn remove_file(&self, p: &Path) -> std::io::Result<()> {
@@ -699,15 +754,14 @@ pub(crate) fn move_file_with(fs: &dyn MoveFs, from: &str, to: &str) -> std::resu
     if fs.exists(t) && !is_respelling(fs, f, t) {
         return Err(fail(format!("{to} already exists")));
     }
-    let mut packets: Vec<RetainedPacket> = sidecars(from)
-        .into_iter()
-        .map(|(p, _, _)| p)
-        .filter(|p| fs.is_file(p))
-        .map(|path| RetainedPacket { version: fs.packet_version(&path).ok(), path })
-        .collect();
+    // An upper-case `.XMP` spelling that only answers through a case-insensitive volume is the
+    // lower-case sidecar: track and move it under its own name, so `a.xmp` doesn't become `b.XMP`.
+    let present = |(sc, _, upper): &(PathBuf, SidecarNaming, bool)| fs.is_file(sc) && (!*upper || fs.listed(sc));
+    let mut packets: Vec<RetainedPacket> =
+        sidecars(from).into_iter().filter(present).map(|(path, _, _)| RetainedPacket { version: fs.packet_version(&path).ok(), path }).collect();
     move_one(fs, f, t).map_err(|e| fail(format!("rename {from}: {e}")))?;
     let mut done: Vec<SidecarMove> = Vec::new();
-    let mut remaining = sidecars(from).into_iter().filter(|(sc, _, _)| fs.is_file(sc)).map(|(sc, naming, upper)| {
+    let mut remaining = sidecars(from).into_iter().filter(present).map(|(sc, naming, upper)| {
         let mut dst = crate::sidecar::sidecar_path(to, naming);
         if upper {
             dst = dst.with_extension("XMP");
@@ -862,7 +916,8 @@ fn plan_rename_core(
 ) -> Vec<RenamePlan> {
     let mut taken: HashSet<String> = HashSet::new(); // lower-case target paths/names claimed in this batch
     let mut out = Vec::new();
-    for (seq, p) in (start..).zip(photos) {
+    for (i, p) in photos.iter().enumerate() {
+        let seq = start.saturating_add(i);
         let want = expand(template, p, seq);
         let (stem, ext) = split_ext(&want);
         let (stem, ext) = (stem.to_string(), ext.to_string());
@@ -1124,6 +1179,24 @@ pub(crate) mod tests {
     use super::*;
     use std::cell::RefCell;
 
+    /// Windows has no file id in std: two spellings of one file are the same file whichever is
+    /// asked about first (a save after a partial rename saw `Trip.XMP` as a collision with the
+    /// known `Trip.xmp`), and only the spelling on disk is listed.
+    #[cfg(windows)]
+    #[test]
+    fn same_file_spellings_are_symmetric_on_windows() {
+        let dir = std::env::temp_dir().join(format!("lc-same-file-spelling-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (real, alias, other) = (dir.join("Trip.xmp"), dir.join("Trip.XMP"), dir.join("other.xmp"));
+        std::fs::write(&real, b"packet").unwrap();
+        std::fs::write(&other, b"packet").unwrap();
+        assert!(RealFs.same_file(&real, &alias) && RealFs.same_file(&alias, &real));
+        assert!(!RealFs.same_file(&real, &other) && !RealFs.same_file(&other, &alias));
+        assert!(RealFs.listed(&real) && !RealFs.listed(&alias));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     /// The cross-volume move's check compares files chunk by chunk: equal files across several
     /// chunks, a difference in the last chunk, different lengths, a missing file.
     #[test]
@@ -1171,7 +1244,10 @@ pub(crate) mod tests {
         }
         fn idx(&self, p: &Path) -> Option<usize> {
             let p = Self::norm(p);
-            self.files.borrow().iter().position(|(f, _)| if self.ci { folded_path(f) == folded_path(&p) } else { *f == p })
+            self.files.borrow().iter().position(|(f, _)| {
+                let f = f.replace('\\', "/");
+                if self.ci { folded_path(&f) == folded_path(&p) } else { f == p }
+            })
         }
         /// The listing: (exact path, contents), sorted.
         pub fn listing(&self) -> Vec<(String, String)> {
@@ -1196,7 +1272,7 @@ pub(crate) mod tests {
             self.idx(a).is_some() && self.idx(a) == self.idx(b)
         }
         fn rename_no_replace(&self, a: &Path, b: &Path) -> std::io::Result<()> {
-            if self.fail.borrow().iter().any(|f| Self::norm(a).contains(f.as_str())) {
+            if self.fail.borrow().iter().any(|f| Self::norm(a).contains(&f.replace('\\', "/"))) {
                 return Err(std::io::Error::other("injected failure"));
             }
             if self.exists(b) {
@@ -1207,7 +1283,7 @@ pub(crate) mod tests {
             Ok(())
         }
         fn copy_no_replace(&self, a: &Path, b: &Path) -> std::io::Result<()> {
-            if self.fail.borrow().iter().any(|f| Self::norm(a).contains(f.as_str())) {
+            if self.fail.borrow().iter().any(|f| Self::norm(a).contains(&f.replace('\\', "/"))) {
                 return Err(std::io::Error::other("injected failure"));
             }
             if self.exists(b) {
@@ -1222,6 +1298,10 @@ pub(crate) mod tests {
             let i = self.idx(p).ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "no such file"))?;
             self.files.borrow_mut().remove(i);
             Ok(())
+        }
+        fn listed(&self, p: &Path) -> bool {
+            let p = Self::norm(p);
+            self.files.borrow().iter().any(|(f, _)| f.replace('\\', "/") == p)
         }
         fn stem_sibling(&self, sidecar: &Path) -> Option<String> {
             let stem = Self::norm(&sidecar.with_extension(""));
@@ -1293,7 +1373,7 @@ pub(crate) mod tests {
                     } else {
                         serde_json::json!({"path": from, "into": root.join("Archive")})
                     };
-                    let to = if command == "folder.rename" { root.join("Holiday") } else { root.join("Archive/Trip") };
+                    let to = if command == "folder.rename" { root.join("Holiday") } else { root.join("Archive").join("Trip") };
                     let before = s.catalog.to_snapshot();
                     let history = (s.undo.len(), s.redo.len());
                     assert!(s.execute(command, &params).is_err());
@@ -1419,6 +1499,34 @@ pub(crate) mod tests {
         // case-insensitive, another file under another name: still a collision
         let fs = FakeFs::new(true, &[("/p/A.JPG", "a"), ("/p/b.JPG", "b")]);
         assert!(move_file_with(&fs, "/p/A.JPG", "/p/B.JPG").is_err());
+    }
+
+    /// On a case-insensitive volume (Windows, macOS) `a.XMP` answers for `a.xmp`: a renamed
+    /// photo's sidecars keep the spelling they have on disk, and a failure on the real spelling
+    /// is the one reported and queued.
+    #[test]
+    fn case_insensitive_renames_keep_each_sidecars_spelling() {
+        let fs = FakeFs::new(true, &[("/p/a.jpg", "A"), ("/p/a.xmp", "stem"), ("/p/a.jpg.XMP", "full"), ("/p/b.jpg", "B"), ("/p/b.Xmp", "mixed")]);
+        move_file_with(&fs, "/p/a.jpg", "/p/c.jpg").unwrap();
+        move_file_with(&fs, "/p/b.jpg", "/p/d.jpg").unwrap();
+        assert_eq!(
+            fs.listing(),
+            vec![
+                ("/p/c.jpg".into(), "A".into()),
+                ("/p/c.jpg.XMP".into(), "full".into()),
+                ("/p/c.xmp".into(), "stem".into()),
+                ("/p/d.jpg".into(), "B".into()),
+                ("/p/d.xmp".into(), "mixed".into())
+            ]
+        );
+        // the move of the sidecar's real spelling is the one attempted (and here fails): the photo
+        // goes back and nothing changed
+        let before = fs.listing();
+        *fs.fail.borrow_mut() = vec!["/p/c.xmp".into()];
+        let e = move_file_with(&fs, "/p/c.jpg", "/p/a.jpg").unwrap_err();
+        assert!(e.message.replace('\\', "/").contains("rename /p/c.xmp: injected failure"), "{e}");
+        assert!(!e.moved && e.pending_sidecars.is_empty());
+        assert_eq!(fs.listing(), before);
     }
 
     /// Issue #105: a rollback that fails is reported, and the library follows the files that kept

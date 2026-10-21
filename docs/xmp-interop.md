@@ -10,7 +10,7 @@ other tools), and let LightCraft pick up edits made elsewhere.
 |---|---|
 | Name | `<stem>.xmp` by default (`IMG_0001.CR3` → `IMG_0001.xmp`); `<file>.xmp` (`IMG_0001.CR3.xmp`) with `naming: "full"`. Reading accepts either (preferred first) and `.XMP`. With stem naming, files sharing a stem don't share a sidecar: see *Shared names* below. |
 | Write | `photo.saveMetadataToFile {ids?}` (Photo ▸ Save Metadata to File, ⌘S), or automatically after every change with `library.xmpPreferences {autoWrite: true}` (File ▸ Automatically Write Changes into XMP). Slider drags are written once, when the drag ends; undo/redo rewrite the sidecar. An existing sidecar is **merged into, never replaced** (see *Saving into an existing sidecar*). Written atomically (temp file, fsync, rename). The result lists `written`, `merged` and `backups`. |
-| Read | On import (`library.import`, the report counts `sidecars`), and `photo.readMetadataFromFile {ids?}` (one undo step). For raw/DNG files without a sidecar, the XMP embedded in the file is used. |
+| Read | On import (`library.import`, the report counts `sidecars`), and `photo.readMetadataFromFile {ids?}` (one undo step). For raw/DNG files without a sidecar, the XMP embedded in the file is used. `photo.readMetadataFromFile` never writes the sidecar, even with auto-write on: writing back what it has just read would add `lc:settings`, which later reads prefer over another app's `crs:` edits (issue #934). |
 | Preferences | `library.xmpPreferences {autoWrite?, naming?: stem\|full}`, stored in the library's `prefs.json`. |
 
 What we write (standard namespaces, so other tools can read the metadata):
@@ -114,7 +114,7 @@ application's renderer and is ignored: the photo keeps LightCraft's own process,
 | `Contrast2012`, `Highlights2012`, `Shadows2012`, `Whites2012`, `Blacks2012` | `light.contrast` … `light.blacks` | −100..100, 1:1 |
 | `HDREditMode` | `hdr.enabled` | `1` / `True` = HDR editing on, `0` / `False` off |
 | `WhiteBalance` | `wb.mode` | `As Shot`, `Auto`, `Daylight`, `Cloudy`, `Shade`, `Tungsten`, `Fluorescent`, `Flash`; other names → custom |
-| `Temperature`, `Tint` | `wb.temp`, `wb.tint` (+ `wb.scale: kelvin`) | Kelvin / tint as written for raws with colour matrices — in the file (DNG) or measured for the camera (`lightcraft_raw::spectral`: ILCE-7M3, D850, EOS 5D Mark III…, issue #730) — and for presets; the mapped settings say `"scale": "kelvin"` so the value stays Kelvin wherever it lands. Raws LightCraft develops relative to their as-shot look (ARW, NEF, RW2, RAF, CR3, CR2, PEF, SRW of other cameras: 6500 K / 0 means as shot) take the same mired shift from the packet's `AsShotTemperature` / `AsShotTint` instead; without that reference a custom Kelvin stays As Shot and is reported (`Temperature, Tint (custom white balance without AsShotTemperature: kept As Shot)`), because read on the relative scale it would be a large colour cast (issue #510). Note that LightCraft's Kelvin for a camera comes from its measured matrices, Lightroom's from Adobe's: the two scales differ (about 7–10 % on the ILCE-7M3), so the number is carried over, not the exact look |
+| `Temperature`, `Tint` | `wb.temp`, `wb.tint` (+ `wb.scale: kelvin`) | Kelvin / tint as written for raws with colour matrices — in the file (DNG) or measured for the camera (`lightcraft_raw::spectral`: ILCE-7M3, D850, EOS 5D Mark III…, issue #730) or read from its white-balance presets (`lightcraft_raw::kelvin_presets`: ILCA-99M2, ILCA-77M2…) — and for presets; the mapped settings say `"scale": "kelvin"` so the value stays Kelvin wherever it lands. Raws LightCraft develops relative to their as-shot look (ARW, NEF, RW2, RAF, CR3, CR2, PEF, SRW of other cameras: 6500 K / 0 means as shot) take the same mired shift from the packet's `AsShotTemperature` / `AsShotTint` instead; without that reference a custom Kelvin stays As Shot and is reported (`Temperature, Tint (custom white balance without AsShotTemperature: kept As Shot)`), because read on the relative scale it would be a large colour cast (issue #510). Note that LightCraft's Kelvin for a camera comes from its measured matrices, Lightroom's from Adobe's: the two scales differ (about 7–10 % on the ILCE-7M3), so the number is carried over, not the exact look |
 | `IncrementalTemperature`, `IncrementalTint` | `wb.temp`, `wb.tint` | rendered files: −100..100 on our relative scale (mired shift around 6500 K, same as the Temp slider); a rendered file with only `Temperature` shifts from `AsShotTemperature` like the raws above when it is present |
 | `Vibrance`, `Saturation` | `color.vibrance`, `color.saturation` | 1:1 |
 | `Texture`, `Clarity2012`, `Dehaze` | `effects.texture`, `effects.clarity`, `effects.dehaze` | 1:1 |
@@ -147,7 +147,18 @@ Values pass through our control specs, so anything outside our slider ranges get
 
 `crs:CameraProfile` is kept as the selected name in the photo's import warning and the active profile is left as it is: the name carries no rendering data and never selects an Adobe profile. Import reports such a profile as not applied (colours may differ from Lightroom), except Lightroom's default profiles (`Adobe Standard`, `Adobe Color`), which every sidecar names and which LightCraft's own starting look stands in for.
 
-**Not mapped:** camera profiles and looks (`CameraProfile`, `Look`; we have our own profile set), red eye, lens blur,
+**Profiles named by presets (`Look`, issue #1001).** A preset keeps the profile it names (`crs:Look`: `Name`, `Group`,
+`UUID`, `Amount`; in `.lrtemplate` files the `Look` table) as `profile.look` in its settings. When the user has imported
+a profile of that name (`profile.import`; the name compared ignoring case and repeated spaces, the group breaking
+ties), applying the preset selects it at the look's amount (`Amount` 1 = 100 %). Lightroom's basic profiles map to our
+own (`Adobe Color` → Color, `Adobe Neutral`, `Adobe Vivid`, `Adobe Landscape`, `Adobe Portrait`, `Adobe Monochrome`
+→ Monochrome). Any other `Adobe …` / `Camera …` profile and the numbered creative ones (`Artistic 01`, `B&W 05`,
+`Modern 10`, `Vintage 02`) can't be used here, and a third-party profile not imported yet leaves the photo's profile as it
+is; import reports either per preset (`Profile “Name” (Lightroom's own)` / `(not imported yet)` in `unmapped`).
+References are resolved again whenever profiles are imported or deleted, so a pack's profiles and presets can come in
+either order. The look's embedded `Parameters` are not read.
+
+**Not mapped:** camera profiles (`CameraProfile`; we have our own profile set), red eye, lens blur,
 process-version 2010 field names, and AI features. Local adjustments and spot removal are read as described below.
 
 ## Spot removal
@@ -181,16 +192,49 @@ mask: `CorrectionName` → name, `CorrectionAmount` → Amount, inactive correct
 | `LocalExposure2012` | `adjust.exposure` | stored as a fraction, ×4 EV |
 | `LocalContrast2012`, `LocalHighlights2012`, `LocalShadows2012`, `LocalWhites2012`, `LocalBlacks2012`, `LocalClarity2012`, `LocalTexture`, `LocalDehaze`, `LocalTemperature`, `LocalTint`, `LocalSaturation`, `LocalHue`, `LocalSharpness`, `LocalLuminanceNoise`, `LocalMoire`, `LocalDefringe`, `LocalToningSaturation` | the matching `adjust.*` | stored −1..1, ×100 |
 | `LocalToningHue` | `adjust.color_hue` | degrees |
+| other `Local*` sliders (`LocalGrain`…) | — | no counterpart in our masks: reported as `Mask: LocalGrain` when set (`LocalCurveRefineSaturation` 100 is neutral) |
 | `Mask/Gradient` (`FullX/Y`, `ZeroX/Y`) | linear gradient | full effect at the Full point |
-| `Mask/CircularGradient` (`Top/Left/Bottom/Right`, `Angle`, `Feather`, `Flipped`) | radial gradient | box fractions → long-edge radii (presets assume 3:2; sidecars use the photo's shape); `Flipped` → invert |
+| `Mask/CircularGradient` (`Top/Left/Bottom/Right`, `Angle`, `Feather`, `Flipped`) | radial gradient | box fractions → long-edge radii (presets assume 3:2; sidecars use the photo's shape). `Flipped="true"` means effect inside: in `MaskGroupBasedCorrections` with `Version` 2 (what Lightroom writes for an ordinary radial) and in the legacy `CircularGradientBasedCorrections` Radial Filter, whose default (no `Flipped`) is outside. A `MaskGroupBasedCorrections` radial without `Version` is inside whatever `Flipped` says, and its `Feather` is halved (Lightroom rescales it that way when it upgrades one). Inverting is `MaskInverted` |
 | `Mask/Paint` (`Dabs` "d x y", `Radius`, `Flow`, `CenterWeight`, `MaskValue`) | brush | one brush component per correction; `MaskValue` ≤ 0 erases |
 | `Mask/Image` `MaskSubType` 1 / 2 | Subject / Sky | other AI selections are reported, not guessed |
-| `Mask/RangeMask` `Type` 2 / 3 (`LumRange`, `DepthRange`) | luminance / depth range | lightness converted to our range scale; colour ranges are reported |
+| `Mask/RangeMask` `Type` 2 / 3 (`LumRange`, `DepthRange`) | luminance / depth range | lightness converted to our range scale; a range at full strength at white (third `LumRange` value 1) stays open above our scene white; colour ranges are reported |
 | `MaskBlendMode` 0 / 1 / 2, `MaskInverted` | add / subtract / intersect, invert | |
 
 Applying a preset adds its masks to the photo's own (masks the photo already has are not added twice), and the Amount
 slider scales them. A sidecar's masks replace the photo's, because a sidecar holds the whole edit. Components we can't
 carry over are listed in `preset.import`'s `unmapped` as `Mask: <kind>`.
+
+## Local adjustment presets (mask effects)
+
+`mask.importEffects {path | paths, group?, dryRun?}` (and `preset.import`, File ▸ Import Profiles & Presets…, drag & drop)
+reads these into the Masking panel's Effect menu (`crates/engine/src/cmd/mask_effect_files.rs`):
+
+| File | How it is read |
+|---|---|
+| Lightroom Classic `.lrtemplate` (`%APPDATA%\Adobe\Lightroom\Local Adjustment Presets`, `~/Library/Application Support/Adobe/Lightroom/Local Adjustment Presets`) | a Lua table with `type = "LocalizedAdjustmentPreset"`; `title` (else `internalName`, else the file name) → name; `value` holds the `Local*` field names in lower camel case: `exposure2012` → `LocalExposure2012`, mapped as in the table above (`exposure`, `contrast`, `clarity` are the older process version's; the 2012 fields win); `luminanceNoise` → Noise, `toningHue` / `toningSaturation` → Color |
+| Camera Raw local-correction `.xmp` (`CameraRaw/LocalCorrections`) | top-level `crs:Local*` properties (or, in a file with `crs:PresetType="Local"` without them, its first correction's); `crs:Name` → name, `crs:Group` → group. Develop presets (no `crs:Local*`) stay develop presets |
+| `.lceffect` | ours: `{"format": "lightcraft.maskEffects", "version": 2, "effects": [{name, adjust, group?, favorite?, fields?, with_amount?, brush?, extra?}]}` (a bare array or one effect also reads); `mask.exportEffects {path, names?, group?}` writes it |
+| `.zip` | the presets above inside it; its folders give groups |
+
+Groups: a file's folder (relative to the imported folder; names that only say "local adjustment presets" don't count)
+names its group, unless the file names one. Lightroom users mark sections of the flat preset menu with **divider
+presets**: presets that set nothing, named like `10 ----- DETAIL ENHANCERS ----- 10` (a run of three or more `-`, `=`,
+`_`, `*`, `#`, `~`, `—`, `.`). These become groups instead of effects: a preset whose name starts with a number goes to
+the divider with the largest number not above it (`12 Sky` under `10 ----- DETAIL ENHANCERS ----- 10` → *Detail
+Enhancers*); presets without a number keep their folder's group. An earlier import's divider effects are removed.
+Same-named effects are replaced (a star is kept).
+
+Settings with no local slider here are listed per preset in `unmapped` (and the toast) and **kept** with the effect in
+`extra` (an `.lceffect` export carries them), but not applied: `grain` (Grain; LightCraft has no local grain),
+`pointColors` (Point Color: `SrcHue/Sat/Lum`, `HueShift`, `SatScale`, `LumScale`, `RangeAmount`, `Hue/Sat/LumRange`
+`{LowerNone, LowerFull, UpperFull, UpperNone}`; there is global Point Color only), `toningLuminance`. Zero values aren't
+listed (`refineSaturation = 0` in most files). Lightroom keeps brush size, feather, flow and density per brush, not in
+presets, so there is nothing to import for them; an effect saved here can carry them (`brush`).
+
+Applying (`mask.applyEffect {name, id? | ids? | all?, photos?: "selected"}`) sets the sliders the effect carries —
+all of them for an imported preset (unnamed ones to 0, as Lightroom does), or only the ones chosen when it was saved
+(`mask.saveEffect {fields: "changed" | [..]}`) — and Amount only if it carries it. The effect is remembered for the
+mask's kind: the next brush / linear / radial / … mask starts with it (`mask.toolEffect`).
 
 ## Preset files
 
@@ -198,7 +242,7 @@ carry over are listed in `preset.import`'s `unmapped` as `Mask: <kind>`.
 |---|---|
 | Ours: `.lcpreset` | JSON `{"format": "lightcraft.preset", "version": 1, "presets": [{id, name, group, settings}]}`, where `settings` is a partial develop-settings object (only the groups the preset includes). A file can hold one preset or many, and every preset keeps its group. Import also accepts a bare preset object or an array of them. |
 | Export | `preset.export {path, ids?, group?}`: all user presets by default, or the given ids or one group. In the app: File ▸ Export Presets…, Presets panel ▸ ⋯ ▸ Export User Presets…, or right-click a group ▸ Export Group…. |
-| Import | `preset.import {paths, group?, dryRun?}`: files or folders (recursive): `.lcpreset`, `.xmp`, classic `.lrtemplate` (a Lua table: `value.settings` holds the same field names as `crs:`), photos that carry their edits in XMP ("DNG presets" from mobile apps; their crop, geometry and custom white balance are left out) and `.zip` bundles of any of these. Presets in a folder (or a folder inside a zip) go to a group named after it, unless the file names its own group. The result lists, per preset, the settings that couldn't be carried over (`unmapped`, e.g. `CameraProfile`, `Look`, local masks), and the app's toast names them; fields that only describe the preset or the photo (`Cluster`, `SortName`, `Description`, `SupportsAmount2`, `RequiresRGBTables`, `CropConstrainToWarp`, `OverrideLookVignette`, `AsShotTemperature` / `AsShotTint`, empty `PointColors` slots) aren't listed. Older (process version 2010) fields — `Exposure`, `Contrast`, `FillLight`, `HighlightRecovery`, `Shadows`, `Brightness`, `Clarity`, `ToneCurve` — are approximated with today's sliders when a preset has no 2012-era fields. Dropping preset files on the window imports them too. In the app: File ▸ Import Presets…, or Presets panel ▸ ⋯ ▸ Import Presets…. A preset that's already there (same name, group and settings) is skipped. If an id clashes, the import gets a fresh `user.*` id, and built-in presets are never replaced. |
+| Import | `preset.import {paths, group?, dryRun?}`: files or folders (recursive): `.lcpreset`, `.xmp`, classic `.lrtemplate` (a Lua table: `value.settings` holds the same field names as `crs:`), photos that carry their edits in XMP ("DNG presets" from mobile apps; their crop, geometry and custom white balance are left out) and `.zip` bundles of any of these. Local adjustment (brush) presets — Lightroom Classic's `.lrtemplate` with `type = "LocalizedAdjustmentPreset"`, Camera Raw's local-correction `.xmp`, our `.lceffect`, also inside zips — become mask effects (`mask.effects`) instead (see *Local adjustment presets* below); the result lists them under `effects`, and divider presets under `effectDividers`. Presets in a folder (or a folder inside a zip) go to a group named after it, unless the file names its own group. The result lists, per preset, the settings that couldn't be carried over (`unmapped`, e.g. `CameraProfile`, a profile named by `Look` that isn't imported, local masks), and the app's toast names them; fields that only describe the preset or the photo (`Cluster`, `SortName`, `Description`, `SupportsAmount2`, `RequiresRGBTables`, `CropConstrainToWarp`, `OverrideLookVignette`, `AsShotTemperature` / `AsShotTint`, empty `PointColors` slots) aren't listed. Older (process version 2010) fields — `Exposure`, `Contrast`, `FillLight`, `HighlightRecovery`, `Shadows`, `Brightness`, `Clarity`, `ToneCurve` — are approximated with today's sliders when a preset has no 2012-era fields. Dropping preset files on the window imports them too. In the app: File ▸ Import Presets…, or Presets panel ▸ ⋯ ▸ Import Presets…. A preset that's already there (same name, group and settings) is skipped. If an id clashes, the import gets a fresh `user.*` id, and built-in presets are never replaced. |
 | XMP presets | Read with the `crs:` table above, with `crs:Name` as the name (falling back to the file name) and `crs:Group` as the group (falling back to "Imported Presets"). Only the fields the preset sets are included, so applying it leaves everything else alone and the Amount slider scales it like any other preset. We only read XMP presets; we don't write them. |
 
 LightCraft ships no third-party presets. Its built-in presets are its own values (`crates/engine/src/presets.rs`).

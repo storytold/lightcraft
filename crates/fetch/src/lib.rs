@@ -314,6 +314,15 @@ fn sha256_file(path: &Path) -> Result<String, String> {
     Ok(h.finalize().iter().map(|b| format!("{b:02x}")).collect())
 }
 
+/// A new, empty partial download at `part`, created exclusively after removing whatever was there (a link itself,
+/// never its target).
+fn new_part(part: &Path) -> std::io::Result<File> {
+    if std::fs::symlink_metadata(part).is_ok() {
+        std::fs::remove_file(part)?;
+    }
+    OpenOptions::new().write(true).create_new(true).open(part)
+}
+
 fn part_path(dir: &Path, name: &str) -> PathBuf {
     dir.join(format!("{name}.part"))
 }
@@ -324,9 +333,10 @@ fn fetch_file(f: &FileSpec<'_>, url: &str, dir: &Path, opts: &Options, cancel: &
     let part = part_path(dir, f.name);
     let limit = f.size.unwrap_or(f.max);
     let disk = |e: std::io::Error| Fail::Disk(format!("{}: {e}", part.display()));
-    // resume only a pinned file (an unpinned one can't be checked after resuming)
-    let mut have = match std::fs::metadata(&part) {
-        Ok(m) if f.size.is_some() && m.len() <= limit => m.len(),
+    // resume only a pinned file (an unpinned one can't be checked after resuming), and only a plain file: anything
+    // else at that name (a link, which `metadata` would follow) is removed, never written through (issue #1502)
+    let mut have = match std::fs::symlink_metadata(&part) {
+        Ok(m) if m.is_file() && f.size.is_some() && m.len() <= limit => m.len(),
         Ok(_) => {
             std::fs::remove_file(&part).map_err(disk)?;
             0
@@ -368,13 +378,17 @@ fn fetch_file(f: &FileSpec<'_>, url: &str, dir: &Path, opts: &Options, cancel: &
                     return Err(Fail::NextMirror(format!("the server's file has the wrong size ({:?} bytes)", resp.content_length())));
                 }
                 have = 0;
-                File::create(&part).map_err(disk)?
+                new_part(&part).map_err(disk)?
             }
             206 if have > 0 => {
                 let range = resp.header("content-range").unwrap_or_default();
                 let (start, total) = parse_content_range(range).ok_or_else(|| Fail::NextMirror(format!("bad Content-Range `{range}`")))?;
                 if start != have || total.is_some_and(|t| Some(t) != f.size) {
                     return Err(Fail::NextMirror(format!("the server resumed at the wrong place ({range})")));
+                }
+                // (still the plain file checked above: a link put there meanwhile is not appended to)
+                if !std::fs::symlink_metadata(&part).is_ok_and(|m| m.is_file()) {
+                    return Err(Fail::Retry("the partial download changed; starting over".into()));
                 }
                 OpenOptions::new().append(true).open(&part).map_err(disk)?
             }

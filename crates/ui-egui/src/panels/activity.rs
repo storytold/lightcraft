@@ -130,6 +130,7 @@ fn row(ui: &mut egui::Ui, t: &Tokens, task: &TaskInfo, width: f32) -> bool {
             });
             if cross {
                 let (rect, resp) = ui.allocate_exact_size(vec2(CROSS, CROSS), Sense::click());
+                crate::widgets::announce(&resp, crate::i18n::tr("Cancel"));
                 paint(ui.painter(), rect.shrink(2.0), Icon::Close, if resp.hovered() { t.text } else { t.icon });
                 register(ui.ctx(), format!("activity:cancel:{}", task.id), rect);
                 clicked = resp.on_hover_text(tr("Cancel")).clicked();

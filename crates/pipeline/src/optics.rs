@@ -407,8 +407,9 @@ pub(crate) fn fingerprint(img: &Rgb32f) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325 ^ ((img.width as u64) << 32 | img.height as u64);
     let n = img.data.len();
     for i in 0..512usize {
-        let p = img.data[(i.wrapping_mul(2_654_435_761) ^ i) % n.max(1)];
-        for c in p {
+        // (an empty image has no pixels to sample: its dimensions are the fingerprint)
+        let Some(p) = img.data.get((i.wrapping_mul(2_654_435_761) ^ i) % n.max(1)) else { break };
+        for c in *p {
             h ^= c.to_bits() as u64;
             h = h.wrapping_mul(0x0100_0000_01b3);
         }
@@ -578,9 +579,13 @@ pub fn defringe(img: &mut Rgb32f, s: &DevelopSettings, scale: f64) {
         return;
     }
     let (w, h) = (img.width, img.height);
-    let max_amt = o.defringe_purple_amount.max(o.defringe_green_amount);
-    // fringe width in source px grows with the amount (1..7 px), in output px at least one
-    let radius = ((1.0 + max_amt * 0.3) * scale).round().max(1.0) as usize;
+    // as far as the sliders go (0–20): an amount from a damaged catalog or sidecar made the
+    // radius overflow
+    let max_amt = o.defringe_purple_amount.max(o.defringe_green_amount).min(20.0);
+    // fringe width in source px grows with the amount (1..7 px), in output px at least one (and
+    // never wider than the picture)
+    let radius = ((1.0 + max_amt * 0.3) * scale).round();
+    let radius = if radius.is_finite() { radius.clamp(1.0, w.max(h).max(1) as f64) as usize } else { 1 };
     // perceptual lightness and its local range (dilated contrast)
     let lab: Vec<[f32; 3]> = img.data.iter().map(|p| oklab_from_2020([p[0].max(0.0), p[1].max(0.0), p[2].max(0.0)])).collect();
     let l = Plane { width: w, height: h, data: lab.iter().map(|p| p[0]).collect() };
@@ -647,6 +652,13 @@ fn min_filter(p: &Plane, r: usize, max: bool) -> Plane {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // An empty image (no pixel to sample) has a fingerprint, its dimensions' (indexing its first pixel panicked)
+    #[test]
+    fn an_empty_image_has_a_fingerprint() {
+        assert_eq!(fingerprint(&Rgb32f::new(0, 0)), fingerprint(&Rgb32f::new(0, 0)));
+        assert_ne!(fingerprint(&Rgb32f::new(0, 3)), fingerprint(&Rgb32f::new(3, 0)));
+    }
 
     /// splitmix64: deterministic pseudo-random numbers for the warp tests.
     struct Rng(u64);
@@ -1094,5 +1106,32 @@ mod tests {
         };
         assert!(chroma(img.get(20, 10)) < chroma(purple) * 0.3);
         assert!((chroma(flat2.get(20, 10)) - chroma(purple)).abs() < 1e-4);
+    }
+
+    /// Found by fuzzing catalog snapshots: a defringe amount far past the sliders' 20 (from a
+    /// damaged catalog or sidecar) made the filter's radius overflow (`x + r`), which panics.
+    /// It acts as the sliders' end.
+    #[test]
+    fn defringe_amounts_past_the_sliders_act_as_their_end() {
+        let purple = [0.25f32, 0.05, 0.45];
+        let scene = Rgb32f::from_fn(40, 20, |x, _| {
+            if x < 20 {
+                [0.9; 3]
+            } else if x == 20 {
+                purple
+            } else {
+                [0.02; 3]
+            }
+        });
+        let at = |amount: f64, scale: f64| {
+            let mut s = DevelopSettings::default();
+            s.optics.defringe_purple_amount = amount;
+            s.optics.defringe_green_amount = amount / 2.0;
+            let mut img = scene.clone();
+            defringe(&mut img, &s, scale);
+            img
+        };
+        assert_eq!(at(1e300, 1.0).data, at(20.0, 1.0).data);
+        assert_eq!(at(f64::MAX, 1e300).data.len(), 800, "a huge scale too");
     }
 }

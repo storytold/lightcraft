@@ -59,8 +59,10 @@ fn synthetic(w: usize, h: usize, cfa: Option<Cfa>, cpp: usize) -> RawImage {
         color,
         wb_multipliers: None,
         linearized: false,
+        pixel_aspect: 1.0,
         opcodes: OpcodeLists::default(),
         metadata,
+        lens_metadata: Default::default(),
     }
 }
 
@@ -88,6 +90,45 @@ fn assert_same(a: &RawImage, b: &RawImage) {
     assert!(b.color.baseline_sharpness.is_some_and(|v| (v - 1.5).abs() < 1e-6), "{:?}", b.color.baseline_sharpness);
     assert_eq!(b.metadata.make.as_deref(), Some("Synth"));
     assert_eq!(b.metadata.rating, Some(3));
+}
+
+#[test]
+fn writer_camera_identity_tags_roundtrip() {
+    let cases = [
+        (Some("Canon"), Some("Canon EOS R6"), "Canon EOS R6"),
+        (Some("CANON"), Some("cAnOn EOS R6"), "cAnOn EOS R6"),
+        (Some("Canon"), Some("Canon"), "Canon"),
+        (Some("Canon"), Some("Canon-EOS R6"), "Canon-EOS R6"),
+        (Some("Canon"), Some("Canon_EOS R6"), "Canon Canon_EOS R6"),
+        (Some("Canon"), Some("Canonic R6"), "Canon Canonic R6"),
+        (Some("Canon"), Some("Canon2 R6"), "Canon Canon2 R6"),
+        (Some("Canon"), Some("Canoné R6"), "Canon Canoné R6"),
+        (Some("Canon"), Some("EOS R6"), "Canon EOS R6"),
+        (Some("Eastman Kodak"), Some("eAsTmAn kOdAk DCS Pro"), "eAsTmAn kOdAk DCS Pro"),
+        (Some("Eastman Kodak"), Some("Eastman Kodakish DCS Pro"), "Eastman Kodak Eastman Kodakish DCS Pro"),
+        (Some("Eastman Kodak"), Some("Eastman DCS Pro"), "Eastman Kodak Eastman DCS Pro"),
+        (Some(""), Some("EOS R6"), "EOS R6"),
+        (Some("Canon"), Some(""), "Canon"),
+        (Some(""), Some(""), "LightCraft"),
+        (None, Some("EOS R6"), "EOS R6"),
+        (Some("Canon"), None, "Canon"),
+        (None, None, "LightCraft"),
+    ];
+    for (make, model, unique) in cases {
+        let mut raw = synthetic(16, 16, Some(Cfa::bayer("RGGB").unwrap()), 1);
+        raw.metadata.make = make.map(str::to_owned);
+        raw.metadata.model = model.map(str::to_owned);
+        for order in [ByteOrder::Little, ByteOrder::Big] {
+            let bytes = write_dng(&raw, &DngWriteOptions { compression: DngCompression::Uncompressed, order, xmp: None }).unwrap();
+            let tiff = lightcraft_tiff::Tiff::parse(&bytes).unwrap();
+            let ifd = &tiff.ifds[0];
+            assert_eq!(ifd.value(t::UNIQUE_CAMERA_MODEL), Some(&Value::Ascii(unique.into())), "{make:?} / {model:?}, {order:?}");
+            for (tag, original) in [(t::MAKE, make), (t::MODEL, model)] {
+                let expected = original.filter(|s| !s.is_empty()).map(|s| Value::Ascii(s.into()));
+                assert_eq!(ifd.value(tag), expected.as_ref(), "tag {tag}, {make:?} / {model:?}, {order:?}");
+            }
+        }
+    }
 }
 
 #[test]
@@ -376,6 +417,43 @@ fn floating_point_dngs() {
     let bytes: Vec<u8> = vals.iter().flat_map(|&v| f32_to_f16(v).to_be_bytes()).collect();
     raw.set_image(ImageData::Strips { rows_per_strip: h as u32, strips: vec![bytes] });
     assert_eq!(decode(&dng(raw, ByteOrder::Big)).unwrap().data, RawData::F32(vals));
+}
+
+#[test]
+fn non_finite_float_samples_decode_and_develop() {
+    // regression: NaN samples in a float CFA DNG panicked AHD and PPG (`f32::clamp` with NaN bounds)
+    let (w, h) = (24, 20);
+    let mut raw = synthetic(w, h, Some(Cfa::bayer("RGGB").unwrap()), 1);
+    let mut vals: Vec<f32> = (0..w * h).map(|i| ((i * 37) % 200) as f32 / 256.0).collect();
+    for (i, v) in vals.iter_mut().enumerate() {
+        let (x, y) = (i % w, i / w);
+        if (8..14).contains(&x) && (6..12).contains(&y) {
+            *v = f32::NAN;
+        } else if i % 11 == 0 {
+            *v = if i % 2 == 0 { f32::INFINITY } else { f32::NEG_INFINITY };
+        }
+    }
+    raw.data = RawData::F32(vals.clone());
+    raw.black = BlackLevel::uniform(0.0);
+    raw.white = vec![0.75];
+    for compression in [DngCompression::Uncompressed, DngCompression::Deflate { tile: 16, half: false }] {
+        let bytes = write_dng(&raw, &DngWriteOptions { compression, ..Default::default() }).unwrap();
+        let img = decode(&bytes).unwrap();
+        // NaN and −∞ read as black, +∞ as the white level; finite samples are kept bit-exactly
+        let RawData::F32(got) = &img.data else { panic!("float data expected") };
+        for (a, b) in vals.iter().zip(got) {
+            let want = match *a {
+                f32::INFINITY => 0.75,
+                v if v.is_finite() => v,
+                _ => 0.0,
+            };
+            assert_eq!(want.to_bits(), b.to_bits(), "{a} read as {b}");
+        }
+        for m in [Method::Bilinear, Method::Ppg, Method::Ahd] {
+            let rgb = img.develop(m).unwrap();
+            assert!(rgb.data.iter().all(|p| p.iter().all(|v| v.is_finite())), "{m:?}");
+        }
+    }
 }
 
 #[test]
@@ -988,4 +1066,68 @@ fn baseline_sharpness_is_read_when_plausible() {
     });
     assert_eq!(decode(&bytes).unwrap().color.baseline_sharpness, None);
     assert_eq!(decode(&profile_dng(ByteOrder::Big, |_| {})).unwrap().color.baseline_sharpness, None);
+}
+
+/// The DNG CFAPattern is anchored at the top-left of the ActiveArea: a DNG whose area starts on an odd row or
+/// column still demosaics with the pattern the tag states (#1086), and the writer states it back the same way.
+#[test]
+fn cfa_pattern_is_relative_to_the_active_area() {
+    let (w, h) = (20, 12);
+    for (top, left, sensor_name) in [(0u32, 0u32, "GRBG"), (1, 0, "BGGR"), (0, 1, "RGGB"), (1, 1, "GBRG"), (3, 5, "GBRG"), (2, 4, "GRBG")] {
+        let mut raw = base_ifd(w, h, 16, 1, true);
+        raw.set_image(ImageData::Strips { rows_per_strip: h as u32, strips: vec![u16_bytes(&pattern(w, h, 1, 16), ByteOrder::Little)] });
+        raw.set(t::WHITE_LEVEL, Value::Short(vec![65535]));
+        raw.set(t::ACTIVE_AREA, Value::Long(vec![top, left, h as u32 - 1, w as u32 - 1]));
+        let img = decode(&dng(raw, ByteOrder::Little)).unwrap();
+        assert_eq!(img.cfa.as_ref().unwrap().name(), sensor_name, "sensor anchor for area at ({left}, {top})");
+        assert_eq!(img.normalized().unwrap().cfa.unwrap().name(), "GRBG", "tag pattern for area at ({left}, {top})");
+        let back =
+            decode(&write_dng(&img, &DngWriteOptions { compression: DngCompression::Uncompressed, order: ByteOrder::Little, xmp: None }).unwrap())
+                .unwrap();
+        assert_eq!(back.cfa.as_ref().unwrap().name(), sensor_name);
+        assert_eq!(back.normalized().unwrap().cfa.unwrap().name(), "GRBG");
+    }
+}
+
+/// Two samples a pixel are neither one colour nor RGB. A DNG with them decoded, and developing it read a third sample
+/// past each pixel, a panic in release builds too (issue #1511). Such data is refused with a reason, and the demosaic
+/// itself no longer reads past a pixel; one, three and four samples develop as before.
+#[test]
+fn two_samples_per_pixel_are_refused_not_a_panic() {
+    let (w, h) = (8, 6);
+    let file = |cpp: usize| {
+        let mut raw = base_ifd(w, h, 16, cpp, false);
+        raw.set_image(ImageData::Strips { rows_per_strip: h as u32, strips: vec![u16_bytes(&pattern(w, h, cpp, 16), ByteOrder::Little)] });
+        dng(raw, ByteOrder::Little)
+    };
+    let err = decode(&file(2)).unwrap_err();
+    assert!(matches!(err, lightcraft_raw::RawError::Unsupported(ref m) if m.contains("2 samples")), "{err}");
+    for cpp in [1, 3, 4] {
+        decode(&file(cpp)).unwrap().develop(Method::Bilinear).unwrap();
+    }
+    // a raw image built with two samples is refused when it develops
+    let raw = synthetic(16, 12, None, 2);
+    let err = raw.develop(Method::Ahd).unwrap_err();
+    assert!(matches!(err, lightcraft_raw::RawError::Unsupported(_)), "{err}");
+    // the demosaic of such data repeats the last sample instead of reading past the pixel
+    let n = lightcraft_raw::Normalized { width: 2, height: 1, cpp: 2, data: vec![0.1, 0.2, 0.3, 0.4], cfa: None };
+    assert_eq!(lightcraft_raw::demosaic(&n, Method::Ahd).data, vec![[0.1, 0.2, 0.2], [0.3, 0.4, 0.4]]);
+}
+
+/// DNGs LightCraft wrote before the writer anchored the pattern at the ActiveArea carry a bare "LightCraft" Software
+/// tag and a sensor-origin pattern; they keep that reading, while the current writer marks its files differently.
+#[test]
+fn legacy_lightcraft_dng_keeps_the_sensor_anchored_pattern() {
+    let (w, h) = (20, 12);
+    let build = |software: &str| {
+        let mut raw = base_ifd(w, h, 16, 1, true);
+        raw.set_image(ImageData::Strips { rows_per_strip: h as u32, strips: vec![u16_bytes(&pattern(w, h, 1, 16), ByteOrder::Little)] });
+        raw.set(t::WHITE_LEVEL, Value::Short(vec![65535]));
+        raw.set(t::ACTIVE_AREA, Value::Long(vec![1, 0, h as u32 - 1, w as u32 - 1]));
+        raw.set(t::SOFTWARE, Value::Ascii(software.into()));
+        decode(&dng(raw, ByteOrder::Little)).unwrap()
+    };
+    assert_eq!(build("LightCraft").cfa.unwrap().name(), "GRBG");
+    assert_eq!(build("Adobe Photoshop Lightroom").cfa.unwrap().name(), "BGGR");
+    assert_ne!(lightcraft_raw::dngwrite::SOFTWARE, "LightCraft");
 }

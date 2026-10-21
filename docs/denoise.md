@@ -77,7 +77,7 @@ pool. A scalar implementation checks the optimized operators on synthetic networ
 Tract is not a workspace dependency or a product feature.
 CPU inference and the GPU model module are feature-gated; ordinary engine/web builds
 do not compile the faer/GEMM backend. The engine depends on the inference crate only through `denoise = ["dep:lightcraft-denoise", …]`;
-lightweight `lightcraft-denoise-core` metadata and cache formats remain available without inference. Pictures are capped at 100 megapixels; at most
+lightweight `lightcraft-denoise-core` metadata and cache formats remain available without inference. Pictures are capped at 110 megapixels; at most
 four tile calls run together, chosen within the process-wide working-memory budget.
 One idle CPU workspace is retained, and cache costs reserve room for the blended picture.
 

@@ -8,17 +8,25 @@ colour-manage LightCraft's window (wgpu leaves its Metal layer without a colour 
 unmatched), so on a P3 screen previews used to look more saturated than the exported files in Preview or Photos (issue
 #787). The profile is read again about once a second, so moving the window to another screen is followed.
 
+**Linux uses the profile the desktop assigns in colord** (GNOME / KDE Settings ▸ Color, or a calibrator such as
+DisplayCAL) while none is chosen. A background thread asks colord (`org.freedesktop.ColorManager` on the system bus)
+every 3 s, so the UI never waits on D-Bus, and a profile change in the desktop's settings shows within that. eframe
+doesn't say which monitor the window is on, so with several displays the profile is used only when all of them that
+have one share it; otherwise, and without colord, previews stay sRGB (choose a profile by hand then). A compositor
+that colour-manages windows itself with the same profile (KWin with an ICC profile set in Display Configuration)
+would correct twice; KWin keeps that profile in its own settings, not colord, so this only happens when both are set.
+
 ## Using it
 
 Settings ▸ Display ▸ **Choose Profile…** picks an `.icc` / `.icm` file (the dialog opens where the system keeps
 them: `~/.local/share/icc` on Linux, ColorSync's folders on macOS, `…\spool\drivers\color` on Windows). **Use sRGB**
-(on macOS **Use Screen Profile**) goes back to no profile. The choice is an app setting (`ui.json`, `displayProfile`)
+(on macOS and Linux **Use Screen Profile**) goes back to no profile. The choice is an app setting (`ui.json`, `displayProfile`)
 and applies at once; a file that can't be used is reported there and previews stay sRGB.
 
 Agents and scripts: `app.displayProfile {"path": "/path/to/monitor.icc"}` (`""` or `null`: none; no `path`: report
 only) returns `{path, description, kind: "matrix" | "lut", primaries: {red, green, blue: [x, y]}}`; the screen's
-profile (macOS, none chosen) reports `path: null, screen: true`. Hosts supply it as `Services::screen_profile`
-(`apps/lightcraft/src/screen_profile.rs`); headless sessions have none and stay sRGB.
+profile (macOS or Linux, none chosen) reports `path: null, screen: true`. Hosts supply it as `Services::screen_profile`
+(`apps/lightcraft/src/screen_profile.rs`, `apps/lightcraft/src/colord.rs`); headless sessions have none and stay sRGB.
 
 ## How it works
 
@@ -47,5 +55,5 @@ LUT-based profile's correction about 65 ms. Drafts during slider drags skip the 
 
 ## Not yet
 
-- Picking up the profile the operating system assigns on Linux and Windows (X11 `_ICC_PROFILE`, colord, WCS) and
-  following the window across monitors there (macOS does both, above).
+- Picking up the profile Windows assigns (WCS: needs FFI, so an isolated `unsafe` helper crate) and X11's
+  `_ICC_PROFILE`; following the window across monitors on Linux and Windows (macOS does both, above).

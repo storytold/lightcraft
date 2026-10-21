@@ -126,34 +126,40 @@ fn the_library_is_free_once_dropped_even_if_a_child_holds_a_copy() {
 
 /// Issue #680, as it happens in practice: one thread spawns cheap children while another acquires,
 /// drops and re-acquires the lock on its own directory. Every acquire must succeed (before the fix
-/// a few per cent were refused with `InUse(None)`). Bounded: about two seconds of cycles, pass or fail.
+/// a few per cent were refused with `InUse(None)`). Bounded: about two seconds of cycles, and on a
+/// slow or loaded machine (the FreeBSD CI VM, where a spawn can take longer than that) until a few
+/// children have been spawned during them, at most a minute.
 #[cfg(unix)]
 #[test]
 fn dropping_the_lock_frees_the_library_while_another_thread_spawns_processes() {
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::time::{Duration, Instant};
+
+    /// Children spawned while the lock cycles, at least, before the test may stop.
+    const CHILDREN: usize = 5;
 
     let dir = temp_dir("spawn");
     let stop = Arc::new(AtomicBool::new(false));
+    let count = Arc::new(AtomicUsize::new(0));
     let spawner = {
-        let stop = Arc::clone(&stop);
+        let (stop, count) = (Arc::clone(&stop), Arc::clone(&count));
         std::thread::spawn(move || {
-            let mut spawned = 0usize;
             while !stop.load(Ordering::Relaxed) {
-                if let Ok(mut c) =
-                    std::process::Command::new("/bin/true").stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn()
+                if let Ok(mut c) = std::process::Command::new("true").stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn()
                 {
                     let _ = c.wait();
-                    spawned += 1;
+                    count.fetch_add(1, Ordering::Relaxed);
                 }
             }
-            spawned
+            count.load(Ordering::Relaxed)
         })
     };
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    let t0 = Instant::now();
+    let enough = |cycles: usize| (cycles >= 200_000 || t0.elapsed() >= Duration::from_secs(2)) && count.load(Ordering::Relaxed) >= CHILDREN;
     let mut cycles = 0usize;
     let mut refused = Vec::new();
-    while cycles < 200_000 && std::time::Instant::now() < deadline {
+    while !enough(cycles) && t0.elapsed() < Duration::from_secs(60) {
         match LibraryLock::acquire(&dir, "LightCraft") {
             Ok(l) => assert!(l.held()), // dropped here: the next cycle must get it back
             Err(e) => refused.push(format!("cycle {cycles}: {e:?}")),

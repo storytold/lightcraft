@@ -186,11 +186,7 @@ pub(super) fn check(n: &Node, g: &Graph) -> Result<()> {
                 floats(n, g, 2)?;
             }
         }
-        "Dropout" => {
-            if !(0.0..1.0).contains(&float(n, "ratio", 0.5)) {
-                return shape_err("Dropout ratio is invalid");
-            }
-        }
+        "Dropout" if !(0.0..1.0).contains(&float(n, "ratio", 0.5)) => return shape_err("Dropout ratio is invalid"),
         "MaxPool" => {
             pair(n, "kernel_shape", 1)?;
             pair(n, "strides", 1)?;
@@ -261,7 +257,12 @@ fn image(s: &[usize]) -> Result<(usize, usize, usize)> {
     }
 }
 pub(super) fn infer(g: &Graph, input: &[usize]) -> Result<Vec<Vec<usize>>> {
+    Ok(infer_all(g, input)?.1)
+}
+/// Each node's output shape, and the graph's outputs' shapes.
+pub(super) fn infer_all(g: &Graph, input: &[usize]) -> Result<(Vec<Vec<usize>>, Vec<Vec<usize>>)> {
     elements(input)?;
+    let mut per_node = Vec::with_capacity(g.nodes.len());
     let mut shapes: HashMap<&str, Vec<usize>> = g.weights.iter().map(|(n, w)| (n.as_str(), w.dims.clone())).collect();
     shapes.insert(g.inputs.first().ok_or_else(|| NetError::Shape("no input".into()))?.0.as_str(), input.to_vec());
     let mut live = elements(input)?;
@@ -484,6 +485,7 @@ pub(super) fn infer(g: &Graph, input: &[usize]) -> Result<Vec<Vec<usize>>> {
             .checked_add(out_count)
             .filter(|&n| n <= 128 * 1024 * 1024)
             .ok_or_else(|| NetError::Shape("live tensors exceed the 512 MiB working limit".into()))?;
+        per_node.push(out.clone());
         shapes.insert(n.outputs.first().ok_or_else(|| NetError::Shape("no output".into()))?, out);
         let mut removed = std::collections::HashSet::new();
         for name in &n.inputs {
@@ -492,5 +494,7 @@ pub(super) fn infer(g: &Graph, input: &[usize]) -> Result<Vec<Vec<usize>>> {
             }
         }
     }
-    g.outputs.iter().map(|s| shapes.get(s.as_str()).cloned().ok_or_else(|| NetError::Shape("missing output".into()))).collect()
+    let outputs =
+        g.outputs.iter().map(|s| shapes.get(s.as_str()).cloned().ok_or_else(|| NetError::Shape("missing output".into()))).collect::<Result<_>>()?;
+    Ok((per_node, outputs))
 }

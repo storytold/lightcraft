@@ -13,9 +13,9 @@
 //! tracks (keeping the raw track's coding headers and quantization maps, and the timed-metadata
 //! track where Canon puts the as-shot white balance), a RAF's CFA strip (keeping its compression
 //! header) and a Panasonic RW2's raw data. Formats whose header probe reads samples (NEF: masked
-//! columns; ORF: bit depth and CFA phase; PEF: dark borders) and anything else get
-//! [`HeaderPlan::Whole`], as does a structure that is incomplete, inconsistent or keeps metadata
-//! inside its sample data: the plan never guesses.
+//! columns; ORF: bit depth and CFA phase; PEF: dark borders; ARW6, for its header plan only: the
+//! start of every tile) and anything else get [`HeaderPlan::Whole`], as does a structure that is
+//! incomplete, inconsistent or keeps metadata inside its sample data: the plan never guesses.
 
 use std::collections::HashSet;
 
@@ -71,6 +71,21 @@ impl Ranges {
         }
         if !placed {
             out.push((start, end));
+        }
+        self.0 = out;
+    }
+
+    /// Add every `[start, end)` of `spans` in one sort and merge (empty ones add nothing).
+    pub fn extend(&mut self, spans: impl IntoIterator<Item = (u64, u64)>) {
+        let mut all: Vec<(u64, u64)> = std::mem::take(&mut self.0);
+        all.extend(spans.into_iter().filter(|&(a, b)| a < b));
+        all.sort_unstable();
+        let mut out: Vec<(u64, u64)> = Vec::with_capacity(all.len());
+        for (a, b) in all {
+            match out.last_mut() {
+                Some(last) if a <= last.1 => last.1 = last.1.max(b),
+                _ => out.push((a, b)),
+            }
         }
         self.0 = out;
     }
@@ -227,15 +242,18 @@ fn tiff_plan(bytes: &[u8], loaded: &Ranges, preview: bool) -> HeaderPlan {
         return plan;
     }
     // (the Make is usually in the first kilobytes: a NEF, PEF or ORF is known before the rest is read)
-    if matches!(crate::probe(bytes), Some(RawFormat::Nef | RawFormat::Nrw | RawFormat::Orf | RawFormat::Pef)) {
+    if matches!(crate::probe(bytes), Some(RawFormat::Nef | RawFormat::Nrw | RawFormat::Orf | RawFormat::Pef | RawFormat::Erf | RawFormat::Mef)) {
         return HeaderPlan::Whole("its header probe reads samples");
     }
     let Ok(tiff) = Tiff::parse(bytes) else { return HeaderPlan::Whole("TIFF structure") };
     let mut holes = Ranges::new();
+    let mut spans = Vec::new();
     for ifd in tiff.all_ifds() {
         let chunks: Vec<(u64, u64)> = match ifd.image() {
             // a preview's strips are read when the preview is wanted: only the raw image is skipped
             Ok(info) if preview && !matches!(info.photometric, t::photometric::CFA | t::photometric::LINEAR_RAW) => continue,
+            // (Sony Compressed RAW 2: the header probe decodes the start of every tile; a preview reads none)
+            Ok(info) if !preview && info.compression == 32766 => return HeaderPlan::Whole("an ARW6 header probe reads its tiles"),
             Ok(info) => info.chunks(len).iter().map(|c| (c.offset, c.len)).collect(),
             // a raw IFD without the tags a TIFF image needs (an older CR2's) still lists its strips
             Err(_) => match (ifd.u64s(t::STRIP_OFFSETS), ifd.u64s(t::STRIP_BYTE_COUNTS)) {
@@ -247,11 +265,12 @@ fn tiff_plan(bytes: &[u8], loaded: &Ranges, preview: bool) -> HeaderPlan {
         if total < BULK {
             continue;
         }
-        for (i, &(offset, size)) in chunks.iter().enumerate() {
+        spans.extend(chunks.iter().enumerate().map(|(i, &(offset, size))| {
             let start = if i == 0 { offset.saturating_add(HEAD) } else { offset };
-            holes.insert(start, offset.saturating_add(size).min(len));
-        }
+            (start, offset.saturating_add(size).min(len))
+        }));
     }
+    holes.extend(spans);
     // A Panasonic RW2 keeps its raw data from `RawDataOffset` to the end, outside any TIFF image.
     if holes.is_empty()
         && bytes.starts_with(b"IIU\0")
@@ -260,7 +279,9 @@ fn tiff_plan(bytes: &[u8], loaded: &Ranges, preview: bool) -> HeaderPlan {
         holes.insert(off.saturating_add(HEAD), len);
     }
     finish(len, loaded, &holes, &meta, || match crate::probe(bytes) {
-        Some(RawFormat::Nef | RawFormat::Nrw | RawFormat::Orf | RawFormat::Pef) => HeaderPlan::Whole("its header probe reads samples"),
+        Some(RawFormat::Nef | RawFormat::Nrw | RawFormat::Orf | RawFormat::Pef | RawFormat::Erf | RawFormat::Mef) => {
+            HeaderPlan::Whole("its header probe reads samples")
+        }
         Some(f) if f.is_supported() => HeaderPlan::Ready,
         _ => HeaderPlan::Whole("not a supported raw"),
     })
@@ -549,5 +570,54 @@ mod tests {
         raf[100..104].copy_from_slice(&1000u32.to_be_bytes());
         raf[104..108].copy_from_slice(&1000u32.to_be_bytes());
         assert_eq!(run(&raf, 160, 0).0, HeaderPlan::Whole("RAF raw container"));
+    }
+
+    /// An ARW6 header probe reads every tile's headers and the first lines of its data, which lie in the strip a
+    /// plan would skip: here the second tile, past a first one of bulk size.
+    #[test]
+    fn arw6_is_described_from_the_whole_file() {
+        use crate::vendor::arw6_testenc::{Qis, arw6_file, one_tile_quantised};
+        let (tile, _) = one_tile_quantised(64, 48, 0, Qis::REAL);
+        let mut first = tile.clone();
+        first.resize(BULK as usize, 0);
+        let file = arw6_file(&[(0, 0, 64, 48, first), (64, 0, 64, 48, tile)], 128, 48);
+        assert!(crate::probe_info(&file).is_ok());
+        assert_eq!(run(&file, 16, 0).0, HeaderPlan::Whole("an ARW6 header probe reads its tiles"));
+    }
+
+    /// A TIFF with a million one-byte strips listed in descending order and all byte counts 0: the plan is
+    /// built in one sort and merge, not one pass over all strips (or all holes) per strip.
+    #[test]
+    fn many_strips_without_byte_counts_plan_fast() {
+        let n = 1_000_000u32;
+        let (offsets_at, counts_at) = (8 + 2 + 5 * 12 + 4, 8 + 2 + 5 * 12 + 4 + 4 * n);
+        let data = counts_at + 4 * n;
+        let mut tiff = b"II*\0\x08\0\0\0".to_vec();
+        tiff.extend_from_slice(&5u16.to_le_bytes());
+        let entry = |tiff: &mut Vec<u8>, tag: u16, typ: u16, count: u32, value: u32| {
+            tiff.extend_from_slice(&tag.to_le_bytes());
+            tiff.extend_from_slice(&typ.to_le_bytes());
+            tiff.extend_from_slice(&count.to_le_bytes());
+            tiff.extend_from_slice(&value.to_le_bytes());
+        };
+        entry(&mut tiff, 256, 4, 1, 1);
+        entry(&mut tiff, 257, 4, 1, n);
+        entry(&mut tiff, 273, 4, n, offsets_at);
+        entry(&mut tiff, 278, 4, 1, 1);
+        entry(&mut tiff, 279, 4, n, counts_at);
+        tiff.extend_from_slice(&0u32.to_le_bytes());
+        for i in (0..n).rev() {
+            tiff.extend_from_slice(&(data + i).to_le_bytes());
+        }
+        tiff.resize(data as usize + n as usize, 0);
+        let len = tiff.len() as u64;
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut loaded = Ranges::new();
+            loaded.insert(0, len);
+            let _ = tx.send(header_plan(&tiff, &loaded));
+        });
+        let plan = rx.recv_timeout(std::time::Duration::from_secs(20)).expect("header_plan took longer than 20 s");
+        assert!(!matches!(plan, HeaderPlan::Need(_)), "{plan:?}");
     }
 }

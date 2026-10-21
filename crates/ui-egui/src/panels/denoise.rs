@@ -35,6 +35,8 @@ pub struct Ui {
     /// Models the user pressed Download for that have not been installed yet.
     dl_watch: Vec<String>,
     list: Option<(u64, f64, Value)>,
+    /// Why the last file picked with Install from file… was refused, shown under the button.
+    rejected: Option<String>,
 }
 
 /// Called every frame: keeps the engine's denoise work going and asks for a redraw when a photo's picture appears (the
@@ -247,9 +249,17 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     register(ui.ctx(), "denoise:installFile", r.rect);
     if r.clicked()
         && let Some(path) = app.services.pick_denoise_model.as_mut().and_then(|f| f().into_iter().next())
-        && let Ok(info) = app.run("denoise.models.inspect", json!({"path": path}))
     {
-        app.ui.dialog = Some(crate::state::Dialog::DenoiseModel { info, accepted: false });
+        match app.session.execute("denoise.models.inspect", &json!({"path": path})) {
+            Ok(info) => {
+                app.caches.denoise.rejected = None;
+                app.ui.dialog = Some(crate::state::Dialog::DenoiseModel { info, accepted: false });
+            }
+            Err(e) => app.caches.denoise.rejected = Some(plain(&e)),
+        }
+    }
+    if let Some(why) = &app.caches.denoise.rejected {
+        hint(ui, t, why);
     }
     if all.is_empty() {
         hint(ui, t, "Install your own ONNX model with denoise-model.json beside it. This build offers no model downloads.");
@@ -361,7 +371,7 @@ fn work_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, list: &V
         ui.label(RichText::new(crate::i18n::tr("Limit")).color(t.text_label));
         let current = list["cacheGb"].as_u64().unwrap_or(20) as u32;
         let mut choice = current;
-        egui::ComboBox::from_id_salt("denoise-cache-limit").selected_text(tr_format!("{size} GB", size = current)).show_ui(ui, |ui| {
+        crate::widgets::combo_box("denoise-cache-limit").selected_text(tr_format!("{size} GB", size = current)).show_ui(ui, |ui| {
             for gb in CACHE_LIMITS {
                 ui.selectable_value(&mut choice, gb, tr_format!("{size} GB", size = gb));
             }
@@ -550,6 +560,14 @@ pub fn install(app: &mut LightcraftApp, info: &Value, accepted: bool) -> Result<
     r
 }
 
+/// What an engine error says, without the command it came from (the install job's errors read the same way).
+fn plain(e: &lightcraft_engine::EngineError) -> String {
+    match e {
+        lightcraft_engine::EngineError::BadParams { msg, .. } => msg.clone(),
+        other => other.to_string(),
+    }
+}
+
 /// "1 photo" / "3 photos": the count with the right noun.
 fn count(n: u64, one: &str, many: &str) -> String {
     tr_format!("{n} {noun}", n = n, noun = tr(if n == 1 { one } else { many }))
@@ -588,9 +606,7 @@ pub(super) fn mb(bytes: Option<u64>) -> String {
 
 pub(super) fn sentence(s: &str) -> String {
     let s = s.trim();
-    let mut c = s.chars();
-    let mut out: String = c.next().map(|f| f.to_uppercase().collect()).unwrap_or_default();
-    out.push_str(c.as_str());
+    let mut out = crate::i18n::upper_first(s);
     if !out.is_empty() && !out.ends_with(['.', '!', '?']) {
         out.push('.');
     }

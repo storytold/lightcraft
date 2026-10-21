@@ -34,6 +34,8 @@ pub mod gaintable;
 pub mod highlight;
 #[cfg(feature = "jxl")]
 mod jxl;
+pub mod kelvin_presets;
+pub mod lens_metadata;
 pub mod ljpeg;
 pub(crate) mod llvc;
 pub mod opcodes;
@@ -46,16 +48,18 @@ pub mod spectral;
 mod tiffraw;
 mod unpack;
 mod vendor;
+mod wb_estimate;
 
 pub use demosaic::{Method, demosaic};
-pub use dngwrite::{DngCompression, DngWriteOptions, write_dng};
+pub use dngwrite::{DngCompression, DngWriteOptions, write_dng, write_rendered_dng};
+pub use lens_metadata::LensMetadata;
 pub use lightcraft_color::Mat3;
 pub use lightcraft_geom::Orientation;
 pub use lightcraft_meta::Metadata;
 pub use lightcraft_raster::Rgb32f;
 pub use opcodes::{Opcode, OpcodeLists};
 pub use preview::{
-    PREVIEW_PREFIX, PreviewColorSpace, PreviewRange, bounded_preview, embedded_preview, embedded_preview_color_space,
+    PREVIEW_PREFIX, PreviewColorSpace, PreviewRange, bounded_preview, embedded_preview, embedded_preview_color_space, embedded_preview_covering,
     embedded_preview_dynamic_range_optimized, embedded_preview_from_range,
 };
 pub use semantic::{SemanticMask, semantic_masks};
@@ -106,10 +110,14 @@ pub enum RawFormat {
     X3f,
     /// A TIFF-based raw that has no DNG version tag but describes itself the way DNG does (a
     /// full-resolution CFA image with black/white levels, a default crop and `AsShotNeutral`):
-    /// Hasselblad 3FR and FFF. Read by the DNG reader.
+    /// Hasselblad 3FR and FFF. Read by `vendor::hasselblad` (the DNG reader plus what Hasselblad adds).
     CfaTiff,
     /// Kodak DCS520C TIFF: a two-component lossless JPEG CFA sub-IFD with a response curve (`vendor::kodak`).
     KodakDcs,
+    /// Epson ERF: a CFA sub-IFD of 12-bit samples in 16-byte blocks (`vendor::erf`).
+    Erf,
+    /// Mamiya MEF: an uncompressed 12-bit packed CFA sub-IFD (`vendor::mef`).
+    Mef,
     /// Another TIFF-based raw (3FR, IIQ, ERF, KDC, DCR, MOS, …).
     OtherTiff,
 }
@@ -131,6 +139,8 @@ impl RawFormat {
                 | RawFormat::CfaTiff
                 | RawFormat::Srw
                 | RawFormat::KodakDcs
+                | RawFormat::Erf
+                | RawFormat::Mef
         )
     }
 }
@@ -189,7 +199,10 @@ pub fn probe(bytes: &[u8]) -> Option<RawFormat> {
     if make.starts_with("NIKON") && has_cfa {
         return Some(if t.all_ifds().len() > 1 { RawFormat::Nef } else { RawFormat::Nrw });
     }
-    if make.starts_with("SONY") && sony_raw {
+    // Hasselblad's Sony-built bodies (the Lunar is a NEX-7 inside) write a Sony ARW under their own Make. Sony's
+    // raw coding gives them away: compression 32767 or the raw IFD's tone-curve tag 0x7010, which no 3FR / FFF has
+    let sony_coded = || t.all_ifds().iter().any(|i| i.u16(lightcraft_tiff::tags::COMPRESSION) == Some(32767) || i.contains(0x7010));
+    if (make.starts_with("SONY") && sony_raw) || (make.starts_with("HASSELBLAD") && sony_coded()) {
         return Some(RawFormat::Arw);
     }
     if (make.starts_with("PENTAX") || make.starts_with("RICOH")) && pentax_raw {
@@ -202,16 +215,33 @@ pub fn probe(bytes: &[u8]) -> Option<RawFormat> {
     if make.starts_with("SAMSUNG") && samsung_raw {
         return Some(RawFormat::Srw);
     }
+    if vendor::erf::raw_ifd(&t, bytes.len()).is_some() {
+        return Some(RawFormat::Erf);
+    }
+    if vendor::mef::raw_ifd(&t, bytes.len()).is_some() {
+        return Some(RawFormat::Mef);
+    }
     if vendor::kodak::raw_ifd(&t, bytes).is_some() {
         return Some(RawFormat::KodakDcs);
     }
     if dng::is_plain_cfa_tiff(&t, bytes) {
         return Some(RawFormat::CfaTiff);
     }
-    if has_cfa || thumbnail_shell(&t, bytes.len()).is_some() || is_preview_container(ifd0) {
+    if has_cfa || thumbnail_shell(&t, bytes.len()).is_some() || is_preview_container(ifd0) || is_leaf_mosaic(ifd0) {
         return Some(RawFormat::OtherTiff);
     }
     None
+}
+
+/// Leaf's private data block in IFD0, tag `0x8606` (`LeafData` in the ExifTool EXIF tag-name documentation, which
+/// says the Leaf tags "are found in .MOS images from Leaf digital camera backs").
+const LEAF_DATA: u16 = 0x8606;
+
+/// An uncompressed Leaf MOS: IFD0 is the 16-bit mosaic itself (compression 1, BlackIsZero, one sample per pixel),
+/// with no Make tag and no CFA photometric, so only Leaf's data block marks it as a raw (issue #1275). A rendered
+/// RGB image that kept the block stays an ordinary image.
+fn is_leaf_mosaic(ifd0: &lightcraft_tiff::Ifd) -> bool {
+    ifd0.contains(LEAF_DATA) && ifd0.u16(lightcraft_tiff::tags::SAMPLES_PER_PIXEL).unwrap_or(1) == 1
 }
 
 /// Whether the Exif maker note starts with the signature of the Pentax layouts (`AOC\0` or `PENTAX \0`).
@@ -367,9 +397,11 @@ fn decode_with(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         RawFormat::Rw2 => vendor::rw2::decode(bytes, mode),
         RawFormat::Pef => vendor::pef::decode(bytes, mode),
         RawFormat::Orf => vendor::orf::decode(bytes, mode),
-        RawFormat::CfaTiff => dng::decode_as(bytes, mode, RawFormat::CfaTiff).map(lift_clipped),
+        RawFormat::CfaTiff => vendor::hasselblad::decode(bytes, mode).map(lift_clipped),
         RawFormat::Srw => vendor::srw::decode(bytes, mode),
         RawFormat::KodakDcs => vendor::kodak::decode(bytes, mode),
+        RawFormat::Erf => vendor::erf::decode(bytes, mode),
+        RawFormat::Mef => vendor::mef::decode(bytes, mode),
         RawFormat::OtherTiff => Err(RawError::Unsupported(other_tiff_reason(bytes))),
         other => Err(RawError::Unsupported(format!("{other:?} files are not decoded yet"))),
     }
@@ -400,13 +432,30 @@ pub struct RawInfo {
     pub wb_multipliers: Option<[f32; 3]>,
     pub opcodes: OpcodeLists,
     pub metadata: Metadata,
+    /// Lens-correction tables the file records, decoded but not necessarily applied (see [`crate::lens_metadata`]).
+    #[serde(default)]
+    pub lens_metadata: LensMetadata,
+    /// See [`RawImage::pixel_aspect`].
+    #[serde(default = "square_pixels")]
+    pub pixel_aspect: f32,
+}
+
+fn square_pixels() -> f32 {
+    1.0
+}
+
+/// Rows of a picture `height` rows tall once its pixels (taller than wide by `aspect`) are made square.
+pub fn stretched_height(height: usize, aspect: f32) -> usize {
+    if (aspect - 1.0).abs() < 0.01 { height } else { ((height as f32 * aspect).round() as usize).max(1) }
 }
 
 impl RawInfo {
-    /// Size of the developed image before orientation: the default crop, else the active area.
+    /// Size of the developed image before orientation: the default crop, else the active area, with the rows
+    /// stretched for non-square pixels.
     pub fn developed_size(&self) -> (usize, usize) {
         let c = self.crop.clipped(self.active_area.width, self.active_area.height);
-        if c.width > 1 && c.height > 1 { (c.width, c.height) } else { (self.active_area.width, self.active_area.height) }
+        let (w, h) = if c.width > 1 && c.height > 1 { (c.width, c.height) } else { (self.active_area.width, self.active_area.height) };
+        (w, stretched_height(h, self.pixel_aspect))
     }
 }
 
@@ -598,6 +647,10 @@ pub struct ColorData {
     /// "Camera local tone mapping" option asks for it (`lightcraft_pipeline::local_tone`).
     #[serde(default)]
     pub profile: profile::ProfileLook,
+    /// The camera's white-balance presets at stated temperatures (Sony ARW), which give a raw without colour
+    /// matrices a Kelvin scale ([`kelvin_presets`]). Not a DNG tag: nothing else reads it.
+    #[serde(default)]
+    pub kelvin_presets: Option<kelvin_presets::KelvinPresets>,
 }
 
 /// A decoded raw image.
@@ -627,8 +680,16 @@ pub struct RawImage {
     pub wb_multipliers: Option<[f32; 3]>,
     /// Whether a `LinearizationTable` was applied to `data`.
     pub linearized: bool,
+    /// Height of a sensor pixel over its width (1.0 for square pixels). The D1X and D1H write 2.0: their frame is
+    /// 4028 x 1324 and the picture is 3:2 only once the rows are doubled. [`Self::develop`] stretches the rows by
+    /// this factor.
+    pub pixel_aspect: f32,
     pub opcodes: OpcodeLists,
     pub metadata: Metadata,
+    /// Lens-correction tables the file records, decoded but not necessarily applied (see [`crate::lens_metadata`]); only
+    /// validated components are in `opcodes`.
+    #[serde(default)]
+    pub lens_metadata: LensMetadata,
 }
 
 /// Black-subtracted, white-normalised data covering the active area.
@@ -660,6 +721,8 @@ impl RawImage {
             wb_multipliers: self.wb_multipliers,
             opcodes: self.opcodes.clone(),
             metadata: self.metadata.clone(),
+            lens_metadata: self.lens_metadata.clone(),
+            pixel_aspect: self.pixel_aspect,
         }
     }
 
@@ -679,6 +742,8 @@ impl RawImage {
             wb_multipliers: self.wb_multipliers,
             opcodes: self.opcodes,
             metadata: self.metadata,
+            lens_metadata: self.lens_metadata,
+            pixel_aspect: self.pixel_aspect,
         }
     }
 
@@ -696,6 +761,10 @@ impl RawImage {
         if self.width == 0 || self.height == 0 || !(1..=4).contains(&self.cpp) {
             return Err(RawError::Corrupt("bad dimensions".into()));
         }
+        // two samples a pixel are neither one colour nor RGB: nothing downstream can develop them (issue #1511)
+        if self.cpp == 2 {
+            return Err(RawError::Unsupported("2 samples per pixel".into()));
+        }
         if samples && self.data.len() != self.width * self.height * self.cpp {
             return Err(RawError::Corrupt("data length mismatch".into()));
         }
@@ -705,7 +774,10 @@ impl RawImage {
             return Err(RawError::Unsupported(format!("CFA pattern {}", c.name())));
         }
         let a = self.active_area;
-        if a.width == 0 || a.height == 0 || a.x + a.width > self.width || a.y + a.height > self.height {
+        // checked: a crop origin from a maker note can be `u64::MAX`, and `x + width` would wrap
+        // back inside the image here and again in `normalized`'s index arithmetic.
+        let fits = |x: usize, len: usize, limit: usize| x.checked_add(len).is_some_and(|end| end <= limit);
+        if a.width == 0 || a.height == 0 || !fits(a.x, a.width, self.width) || !fits(a.y, a.height, self.height) {
             return Err(RawError::Corrupt("active area outside image".into()));
         }
         Ok(())
@@ -749,7 +821,10 @@ impl RawImage {
                 for s in 0..cpp {
                     let v = src(base + x * cpp + s);
                     let b = self.black.at(x, y, s, cpp);
-                    row[x * cpp + s] = (v - b) * scale[s];
+                    // a NaN or infinite sample (a float DNG's, or a black level a file got wrong)
+                    // reads as black, so the demosaic and every stage after it see numbers
+                    let n = (v - b) * scale[s];
+                    row[x * cpp + s] = if n.is_finite() { n } else { 0.0 };
                 }
             }
         });
@@ -772,10 +847,13 @@ impl RawImage {
     pub fn finish_demosaiced(&self, mut rgb: Rgb32f) -> Rgb32f {
         opcodes::apply_list3(&self.opcodes.list3, &mut rgb);
         let c = self.develop_crop(rgb.width, rgb.height);
-        if c.x == 0 && c.y == 0 && c.width == rgb.width && c.height == rgb.height {
+        let rgb =
+            if c.x == 0 && c.y == 0 && c.width == rgb.width && c.height == rgb.height { rgb } else { rgb.into_crop(c.x, c.y, c.width, c.height) };
+        let h = stretched_height(rgb.height, self.pixel_aspect);
+        if h == rgb.height {
             return rgb;
         }
-        rgb.into_crop(c.x, c.y, c.width, c.height)
+        lightcraft_raster::resample::resize(&rgb, rgb.width, h, lightcraft_raster::resample::Filter::Mitchell)
     }
 
     /// The part of a `width × height` demosaiced picture (the active area) that [`Self::develop`] keeps: the default
@@ -834,8 +912,10 @@ mod tests {
             color: ColorData::default(),
             wb_multipliers: None,
             linearized: false,
+            pixel_aspect: 1.0,
             opcodes: OpcodeLists::default(),
             metadata: Metadata::default(),
+            lens_metadata: Default::default(),
         };
         let direct = raw.develop(Method::Bilinear).unwrap();
         let by_hand = raw.finish_demosaiced(demosaic(&raw.normalized().unwrap(), Method::Bilinear));
@@ -850,6 +930,50 @@ mod tests {
         // a crop that pokes out is clipped to the picture
         whole.crop = Rect::new(6, 4, 10, 10);
         assert_eq!(whole.develop_crop(8, 6), Rect::new(6, 4, 2, 2));
+
+        // tall pixels (D1X: 2.0) are stretched to square ones: the rows double, `developed_size` says so
+        let mut tall = raw.clone();
+        tall.pixel_aspect = 2.0;
+        let d = tall.develop(Method::Bilinear).unwrap();
+        assert_eq!((d.width, d.height), (5, 8));
+        assert_eq!(tall.info().developed_size(), (5, 8));
+        assert_eq!(raw.info().developed_size(), (5, 4));
+        assert!(!tall.can_bin(2));
+        assert_eq!(stretched_height(1324, 2.0), 2648);
+        assert_eq!(stretched_height(1324, 1.0), 1324);
+    }
+
+    /// A maker-note crop (`PEF` AOC / `ORF` ImageProcessing) with an origin of `u64::MAX` used to
+    /// pass the bounds check (`x + width` wraps to 0) and then index out of bounds in
+    /// `normalized`. It must be a `Corrupt` error at validate time instead.
+    #[test]
+    fn an_active_area_that_wraps_past_the_image_is_corrupt() {
+        let (w, h) = (12usize, 10usize);
+        let mut raw = RawImage {
+            format: RawFormat::Dng,
+            width: w,
+            height: h,
+            cpp: 1,
+            data: RawData::U16(vec![100; w * h]),
+            cfa: Cfa::bayer("RGGB"),
+            bits: 12,
+            black: BlackLevel::uniform(64.0),
+            white: vec![1023.0],
+            active_area: Rect::new(usize::MAX, 0, 1, 1),
+            crop: Rect::default(),
+            orientation: Orientation::Normal,
+            color: ColorData::default(),
+            wb_multipliers: None,
+            linearized: false,
+            opcodes: OpcodeLists::default(),
+            metadata: Metadata::default(),
+            lens_metadata: Default::default(),
+            pixel_aspect: 1.0,
+        };
+        assert!(raw.validate().is_err(), "`x + width` wrapped: the area is outside the image");
+        assert!(raw.normalized().is_err());
+        raw.active_area = Rect::new(0, 0, w + 1, h);
+        assert!(raw.validate().is_err(), "one past the last column is outside too");
     }
 
     #[test]
@@ -1064,6 +1188,66 @@ mod tests {
         let mut ifd = rgb_ifd(16, 12);
         ifd.set(t::COMPRESSION, Value::Short(vec![99]));
         assert_eq!(probe(&write(&[ifd])), Some(RawFormat::OtherTiff));
+    }
+
+    /// Issue #1275: an uncompressed Leaf MOS (Aptus 22) is a full-size 16-bit grey IFD0 with no Make tag; only Leaf's
+    /// data block (`0x8606`) says it is a raw. It must not import as a greyscale image of its mosaic. The same IFD
+    /// without the block, or an RGB image carrying it, stays an ordinary image.
+    #[test]
+    fn uncompressed_leaf_mos_is_a_raw() {
+        let mosaic = |leaf_data: bool| {
+            let mut ifd = IfdBuilder::new();
+            ifd.set(t::NEW_SUBFILE_TYPE, Value::Long(vec![0]));
+            ifd.set(t::IMAGE_WIDTH, Value::Long(vec![16]));
+            ifd.set(t::IMAGE_LENGTH, Value::Long(vec![12]));
+            ifd.set(t::BITS_PER_SAMPLE, Value::Short(vec![16]));
+            ifd.set(t::SAMPLES_PER_PIXEL, Value::Short(vec![1]));
+            ifd.set(t::PHOTOMETRIC, Value::Short(vec![t::photometric::BLACK_IS_ZERO]));
+            ifd.set(t::COMPRESSION, Value::Short(vec![1]));
+            ifd.set_image(ImageData::Tiles { tile_width: 16, tile_height: 12, tiles: vec![vec![0x40; 16 * 12 * 2]] });
+            if leaf_data {
+                ifd.set(LEAF_DATA, Value::Undefined(b"PKTS\0\0\0\x01".to_vec()));
+            }
+            ifd
+        };
+        let bytes = TiffWriter::new(lightcraft_tiff::ByteOrder::Big, false).write(&[mosaic(true)]).unwrap();
+        assert_eq!(probe(&bytes), Some(RawFormat::OtherTiff));
+        assert!(matches!(decode(&bytes), Err(RawError::Unsupported(_))));
+        assert!(matches!(probe_info(&bytes), Err(RawError::Unsupported(_))));
+        assert_eq!(probe(&write(&[mosaic(false)])), None, "a 16-bit grey TIFF");
+        let mut rgb = rgb_ifd(16, 12);
+        rgb.set(LEAF_DATA, Value::Undefined(b"PKTS\0\0\0\x01".to_vec()));
+        assert_eq!(probe(&write(&[rgb])), None, "a rendered RGB image that kept the block");
+    }
+
+    /// Issue #1275: a Hasselblad Lunar is a Sony NEX-7 ARW under Make HASSELBLAD. Sony's raw coding (compression 32767
+    /// or the tone-curve tag `0x7010`) sends it to the ARW reader; a Hasselblad file without it does not go there.
+    #[test]
+    fn hasselblad_make_with_sony_raw_coding_is_arw() {
+        let file = |make: &str, compression: u16, tone_curve: bool| {
+            let mut raw = IfdBuilder::new();
+            raw.set(t::IMAGE_WIDTH, Value::Long(vec![64]));
+            raw.set(t::IMAGE_LENGTH, Value::Long(vec![2]));
+            raw.set(t::BITS_PER_SAMPLE, Value::Short(vec![12]));
+            raw.set(t::COMPRESSION, Value::Short(vec![compression]));
+            raw.set(t::PHOTOMETRIC, Value::Short(vec![t::photometric::CFA]));
+            if tone_curve {
+                raw.set(0x7010, Value::Short(vec![8000, 10400, 12900, 14100]));
+            }
+            raw.set_image(ImageData::Strips { rows_per_strip: 2, strips: vec![vec![0; 128]] });
+            let mut ifd0 = rgb_ifd(4, 3);
+            ifd0.set(t::MAKE, Value::Ascii(make.into()));
+            ifd0.set(t::MODEL, Value::Ascii("Lunar".into()));
+            ifd0.add_sub_ifd(raw);
+            write(&[ifd0])
+        };
+        assert_eq!(probe(&file("HASSELBLAD", 32767, false)), Some(RawFormat::Arw));
+        assert_eq!(probe(&file("Hasselblad", 1, true)), Some(RawFormat::Arw));
+        let lunar = decode(&file("HASSELBLAD", 32767, true)).unwrap();
+        assert_eq!((lunar.format, lunar.width, lunar.height, lunar.bits), (RawFormat::Arw, 64, 2, 14));
+        // a Hasselblad CFA image in another coding is not an ARW
+        assert_ne!(probe(&file("HASSELBLAD", 1, false)), Some(RawFormat::Arw));
+        assert_ne!(probe(&file("HASSELBLAD", 7, false)), Some(RawFormat::Arw));
     }
 
     // --- TIFF raws that describe their raw IFD the way DNG does but carry no DNG version tag ---

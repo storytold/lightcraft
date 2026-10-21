@@ -27,13 +27,26 @@ fn new_users_keep_the_dark_look_and_old_settings_load_unchanged() {
     assert_eq!((s.appearance_mode, s.dark_theme, s.light_theme), (AppearanceMode::Dark, DarkTheme::Charcoal, LightTheme::Silver));
     assert_eq!(s.theme(Some(egui::Theme::Light)), ThemeKind::Charcoal, "Auto is opt-in");
     // a ui.json saved before appearance modes existed
-    let old: UiState = serde_json::from_str(r#"{"settings": {"gridBadges": "always", "confirmDelete": true}}"#).unwrap();
+    let old: UiState = serde_json::from_str(r#"{"settings": {"gridBadges": "always", "startupView": "detail"}}"#).unwrap();
     assert_eq!(old.settings.appearance_mode, AppearanceMode::Dark);
     assert_eq!(old.settings.dark_theme, DarkTheme::Charcoal);
     assert_eq!(old.settings.light_theme, LightTheme::Silver);
-    assert!(old.settings.confirm_delete);
+    assert_eq!(old.settings.startup_view, crate::state::StartupView::Detail);
     // and the Charcoal tokens are the ones LightCraft always had
     assert_eq!(crate::theme::Tokens::for_kind(ThemeKind::Charcoal).chrome, crate::theme::Tokens::default().chrome);
+}
+
+/// Delete asks first by default (#1239). Earlier versions saved `"confirmDelete": false` for
+/// everyone who never opened Settings, so that key is not read any more: those installs ask too.
+/// A choice made from now on survives a restart.
+#[test]
+fn delete_asks_first_by_default_also_for_settings_saved_by_earlier_versions() {
+    let old: UiState = serde_json::from_str(r#"{"settings": {"confirmDelete": false}}"#).unwrap();
+    assert!(old.settings.confirm_delete, "the old default does not turn the question off");
+    let mut ui = UiState::default();
+    ui.settings.confirm_delete = false;
+    let back: UiState = serde_json::from_str(&serde_json::to_string(&ui).unwrap()).unwrap();
+    assert!(!back.settings.confirm_delete, "a choice made now is kept");
 }
 
 #[test]

@@ -1,7 +1,7 @@
 # Lens profiles from a lens database
 
 Raws that carry no lens correction of their own (DNG `OpcodeList3`, or a camera correction a raw reader converts,
-see [sony-lens-corrections.md](sony-lens-corrections.md)) can be corrected from a **lens database in the lensfun
+see [sony-lens-corrections.md](sony-lens-corrections.md) and [nikon-lens-corrections.md](nikon-lens-corrections.md)) can be corrected from a **lens database in the lensfun
 XML format** that you supply. The app does not ship any lens database: lensfun's data is licensed CC-BY-SA 3.0 and
 stays a separate download. Adobe LCP profiles are never used.
 

@@ -55,14 +55,63 @@ fn accept_loop(listener: TcpListener, tx: Sender<ControlRequest>, ctx: egui::Con
     }
 }
 
+/// How long a request waits for its reply.
+const REPLY_TIMEOUT: Duration = Duration::from_secs(60);
+/// A request the app has not picked up while it drew no frame for this long is given up: the
+/// window is not being redrawn (on Wayland, a window on a hidden workspace or minimized gets no
+/// frame callbacks, so the app's loop is paused: issue #718).
+const NO_FRAMES_AFTER: Duration = Duration::from_secs(5);
+
+/// The reply for a request given up because the app drew no frames.
+pub const HIDDEN_WINDOW_ERROR: &str = "the app drew no frame for 5 s, so the request was not run: its window is probably not visible \
+(on Wayland a window on a hidden workspace or minimized is not redrawn, which pauses the app). Bring the window on screen and send it again";
+
 fn serve(stream: TcpStream, tx: &Sender<ControlRequest>, ctx: &egui::Context) {
     let Ok(read) = stream.try_clone() else { return };
     serve_lines(read, stream, |method, params| {
         let (req, rrx) = ControlRequest::new(method, params);
+        let state = Arc::clone(&req.state);
         tx.send(req).ok()?;
         ctx.request_repaint();
-        Some(rrx.recv_timeout(Duration::from_secs(60)).unwrap_or_else(|_| json!({"ok": false, "error": "timeout"})))
+        Some(await_reply(&rrx, &state, || ctx.cumulative_pass_nr(), || ctx.request_repaint(), NO_FRAMES_AFTER, REPLY_TIMEOUT))
     });
+}
+
+/// Wait for a request's reply. While the app has not picked the request up and `frames` (its
+/// frame counter) stands still for `no_frames`, the request is abandoned (it will not run late)
+/// and the reply says why; a request the app is running gets the whole `timeout`.
+fn await_reply(
+    rrx: &Receiver<Value>,
+    state: &std::sync::atomic::AtomicU8,
+    frames: impl Fn() -> u64,
+    wake: impl Fn(),
+    no_frames: Duration,
+    timeout: Duration,
+) -> Value {
+    let start = std::time::Instant::now();
+    let slice = (no_frames / 10).max(Duration::from_millis(1));
+    let (mut last, mut since) = (frames(), std::time::Instant::now());
+    loop {
+        match rrx.recv_timeout(slice) {
+            Ok(v) => return v,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return json!({"ok": false, "error": "the app dropped the request"}),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+        }
+        let now = frames();
+        if now != last {
+            (last, since) = (now, std::time::Instant::now());
+        }
+        let taken = state.load(Ordering::SeqCst) == lightcraft_ui_egui::control::TAKEN;
+        if !taken && since.elapsed() >= no_frames && ControlRequest::abandon(state) {
+            return json!({"ok": false, "error": HIDDEN_WINDOW_ERROR});
+        }
+        if start.elapsed() >= timeout {
+            // not run yet: make sure it never is; already running: it may still finish
+            ControlRequest::abandon(state);
+            return json!({"ok": false, "error": "timeout"});
+        }
+        wake();
+    }
 }
 
 /// One parsed line.
@@ -159,6 +208,51 @@ fn serve_lines<R: Read, W: Write>(read: R, mut out: W, mut handle: impl FnMut(St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Issue #718: an app that draws no frames (a hidden Wayland window) gets the request given
+    /// up with a reason, quickly, and the app then skips it instead of running it late.
+    #[test]
+    fn a_request_to_an_app_drawing_no_frames_is_given_up_with_a_reason() {
+        let (req, rrx) = ControlRequest::new("ui.inspect", json!({}));
+        let t0 = std::time::Instant::now();
+        let r = await_reply(&rrx, &req.state, || 7, || {}, Duration::from_millis(50), Duration::from_secs(10));
+        assert!(t0.elapsed() < Duration::from_secs(2));
+        assert_eq!(r["ok"], false);
+        assert!(r["error"].as_str().unwrap().contains("not visible"), "{r}");
+        assert!(!req.take(), "the app does not run it once it shows up");
+    }
+
+    /// A request the app is running is not given up because frames stopped (a long command
+    /// blocks the frame loop), and its reply arrives.
+    #[test]
+    fn a_request_being_run_waits_for_its_reply() {
+        let (req, rrx) = ControlRequest::new("export.run", json!({}));
+        assert!(req.take());
+        let reply = req.reply.clone();
+        let worker = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(200));
+            let _ = reply.send(json!({"ok": true, "result": 1}));
+        });
+        let r = await_reply(&rrx, &req.state, || 7, || {}, Duration::from_millis(20), Duration::from_secs(10));
+        assert_eq!(r["ok"], true, "{r}");
+        worker.join().unwrap();
+    }
+
+    /// Frames still coming: the request just waits, then is answered.
+    #[test]
+    fn a_drawing_app_is_waited_for() {
+        let (req, rrx) = ControlRequest::new("ui.inspect", json!({}));
+        let n = std::sync::atomic::AtomicU64::new(0);
+        let reply = req.reply.clone();
+        let state = Arc::clone(&req.state);
+        let worker = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(150));
+            let _ = reply.send(json!({"ok": true, "result": 2}));
+        });
+        let r = await_reply(&rrx, &state, || n.fetch_add(1, Ordering::SeqCst), || {}, Duration::from_millis(30), Duration::from_secs(10));
+        assert_eq!(r["ok"], true, "{r}");
+        worker.join().unwrap();
+    }
 
     fn run(input: &[u8]) -> (Vec<Value>, Vec<String>) {
         let mut out = Vec::new();

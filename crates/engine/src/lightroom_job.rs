@@ -24,6 +24,12 @@ fn error(message: impl Into<String>) -> crate::EngineError {
     crate::EngineError::BadParams { cmd: COMMAND.into(), msg: message.into() }
 }
 
+/// The import was cancelled ([`crate::ErrorKind::Cancelled`]: not a failure). The message is the
+/// one it always had, so control-channel and MCP clients see the same `error` text.
+fn cancelled() -> crate::EngineError {
+    crate::EngineError::Cancelled(error("Lightroom import cancelled").to_string())
+}
+
 fn stage_archive(archive_dir: Option<&Path>, data: &mut CatalogImport) -> crate::Result<Option<PathBuf>> {
     let archive_path = archive_dir.map(|dir| crate::lightroom_archive::store_best_effort(dir, data).map_err(error)).transpose()?.flatten();
     if archive_dir.is_some() && archive_path.is_none() {
@@ -129,6 +135,65 @@ pub struct LightroomCompletion {
 /// Alias used by hosts that call the result a commit.
 pub type LightroomCommit = LightroomCompletion;
 
+/// The step of preparing a Lightroom import that is under way ([`LightroomProgress::step`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LightroomStep {
+    /// Reading the catalog's tables.
+    Catalog,
+    /// Reading the photos the catalog names (headers, content hash): nearly all of the time.
+    ReadPhotos,
+    /// Readying the photos that were read for the catalog.
+    AddPhotos,
+}
+
+/// Progress of [`LightroomJob::prepare`] step by step, shared with the thread that runs it.
+#[derive(Clone, Default)]
+pub struct LightroomProgress {
+    /// Catalog tables to read and read so far ([`lightroom_catalog::read_with_progress`]).
+    pub catalog_total: Arc<AtomicUsize>,
+    pub catalog_done: Arc<AtomicUsize>,
+    read_total: Arc<AtomicUsize>,
+    read_done: Arc<AtomicUsize>,
+    add_total: Arc<AtomicUsize>,
+    add_done: Arc<AtomicUsize>,
+    /// The catalog is read: the photos are next.
+    photos: Arc<AtomicBool>,
+}
+
+impl LightroomProgress {
+    /// Reading the photos is nearly all of an import's time; the catalog and readying the photos
+    /// take the rest of [`LightroomProgress::fraction`].
+    const CATALOG_SHARE: f32 = 0.05;
+    const READ_SHARE: f32 = 0.85;
+
+    /// The step under way, with how much of it is done and its total (0 while not yet known).
+    pub fn step(&self) -> (LightroomStep, usize, usize) {
+        let load = |n: &AtomicUsize| n.load(Ordering::Relaxed);
+        if !self.photos.load(Ordering::Relaxed) {
+            return (LightroomStep::Catalog, load(&self.catalog_done), load(&self.catalog_total));
+        }
+        let (read_done, read_total) = (load(&self.read_done), load(&self.read_total));
+        let (add_done, add_total) = (load(&self.add_done), load(&self.add_total));
+        // nothing to read (every photo is already in the library) goes straight to adding
+        if read_done < read_total || (read_total == 0 && add_done == 0) {
+            (LightroomStep::ReadPhotos, read_done, read_total)
+        } else {
+            (LightroomStep::AddPhotos, add_done, add_total)
+        }
+    }
+
+    /// The whole preparation, 0..=1.
+    pub fn fraction(&self) -> f32 {
+        let (step, done, total) = self.step();
+        let part = if total == 0 { 0.0 } else { (done as f32 / total as f32).clamp(0.0, 1.0) };
+        match step {
+            LightroomStep::Catalog => Self::CATALOG_SHARE * part,
+            LightroomStep::ReadPhotos => Self::CATALOG_SHARE + Self::READ_SHARE * part,
+            LightroomStep::AddPhotos => Self::CATALOG_SHARE + Self::READ_SHARE + (1.0 - Self::CATALOG_SHARE - Self::READ_SHARE) * part,
+        }
+    }
+}
+
 /// A Lightroom import detached from the owner thread.
 pub struct LightroomJob {
     path: PathBuf,
@@ -136,6 +201,7 @@ pub struct LightroomJob {
     import: ImportJob,
     token: LightroomLibraryToken,
     archive_dir: Option<PathBuf>,
+    progress: LightroomProgress,
 }
 
 impl LightroomJob {
@@ -145,31 +211,23 @@ impl LightroomJob {
         let opts = ImportOptions { mode: ImportMode::Add, on_deleted: crate::import::OnDeleted::Skip, ..ImportOptions::default() };
         let import = ImportJob::new(s, opts)?;
         let archive_dir = s.library.as_ref().filter(|library| library.on_disk).map(|library| library.dir.join("Interop"));
-        Ok(Self { path, update_existing, import, token: LightroomLibraryToken::capture(s), archive_dir })
+        let progress = LightroomProgress {
+            read_total: Arc::clone(&import.read_total),
+            read_done: Arc::clone(&import.read_done),
+            add_total: Arc::clone(&import.total),
+            add_done: Arc::clone(&import.done),
+            ..LightroomProgress::default()
+        };
+        Ok(Self { path, update_existing, import, token: LightroomLibraryToken::capture(s), archive_dir, progress })
     }
 
-    pub fn total(&self) -> usize {
-        self.import.total.load(Ordering::Relaxed)
-    }
-
-    pub fn done(&self) -> usize {
-        self.import.done.load(Ordering::Relaxed)
-    }
-
-    pub fn progress(&self) -> (usize, usize) {
-        (self.done(), self.total())
+    /// The job's progress, to watch from another thread while [`LightroomJob::prepare`] runs.
+    pub fn progress(&self) -> LightroomProgress {
+        self.progress.clone()
     }
 
     pub fn token(&self) -> &LightroomLibraryToken {
         &self.token
-    }
-
-    pub fn total_atomic(&self) -> std::sync::Arc<AtomicUsize> {
-        std::sync::Arc::clone(&self.import.total)
-    }
-
-    pub fn done_atomic(&self) -> std::sync::Arc<AtomicUsize> {
-        std::sync::Arc::clone(&self.import.done)
     }
 
     /// Finish an owner commit's deferred archive-index write on a worker.
@@ -180,33 +238,26 @@ impl LightroomJob {
     /// Read/probe/stage all source data off the owner thread.
     pub fn prepare(&mut self, cancel: &AtomicBool) -> crate::Result<PreparedLightroom> {
         if cancel.load(Ordering::Relaxed) {
-            return Err(error("Lightroom import cancelled"));
+            return Err(cancelled());
         }
-        self.import.total.store(1, Ordering::Relaxed);
-        self.import.done.store(0, Ordering::Relaxed);
-        let mut data = lightroom_catalog::read_with_progress(&self.path, cancel, &self.import.total, &self.import.done).map_err(error)?;
+        // (reading stops with a message when `cancel` is set: the flag says it was cancelled)
+        let mut data = lightroom_catalog::read_with_progress(&self.path, cancel, &self.progress.catalog_total, &self.progress.catalog_done)
+            .map_err(|e| if cancel.load(Ordering::Relaxed) { cancelled() } else { error(e) })?;
         lightroom_catalog::validate_for_job(&data).map_err(error)?;
         if cancel.load(Ordering::Relaxed) {
-            return Err(error("Lightroom import cancelled"));
+            return Err(cancelled());
         }
-        self.import.done.fetch_add(1, Ordering::Relaxed);
-        let paths: Vec<String> = data
-            .photos
-            .iter()
-            .filter(|photo| lightroom_catalog::number_for_job(&photo.image, "masterImage") == 0)
-            .map(|photo| photo.path.clone())
-            .collect();
-        let missing_sources = data
-            .photos
-            .iter()
-            .filter(|photo| lightroom_catalog::number_for_job(&photo.image, "masterImage") == 0)
-            .filter(|photo| !Path::new(&photo.path).is_file())
-            .map(|photo| normalize(&photo.path))
-            .collect();
-        let normal = self.import.prepare(&paths, cancel);
+        let (paths, missing_sources) = original_paths(&data, cancel)?;
+        // Catalog entries name files, never folders. Missing originals already have enough
+        // catalog metadata for placeholders; probing them again only adds failed I/O and errors.
+        // Complete the catalog step before the separate read/add photo progress starts.
+        self.progress.catalog_done.fetch_add(1, Ordering::Relaxed);
+        self.progress.photos.store(true, Ordering::Relaxed);
+        self.import.total.fetch_add(paths.len(), Ordering::Relaxed);
+        let normal = self.import.prepare_files(paths, cancel);
         if cancel.load(Ordering::Relaxed) {
             normal.rollback();
-            return Err(error("Lightroom import cancelled"));
+            return Err(cancelled());
         }
         let archive_path = stage_archive(self.archive_dir.as_deref(), &mut data)?;
         let index_path = self.archive_dir.as_ref().map(|dir| dir.join("lightroom-index.json"));
@@ -229,7 +280,7 @@ impl LightroomJob {
 pub fn commit_prepared(s: &mut crate::Session, mut prepared: PreparedLightroom) -> crate::Result<LightroomCompletion> {
     if prepared.cancelled {
         prepared.normal.rollback();
-        return Err(error("Lightroom import cancelled"));
+        return Err(cancelled());
     }
     if !prepared.token.matches(s) {
         prepared.normal.rollback();
@@ -261,6 +312,30 @@ pub fn commit_prepared(s: &mut crate::Session, mut prepared: PreparedLightroom) 
     let path = prepared.token.library_dir().map(|dir| dir.join("Interop/lightroom-index.json"));
     let bytes = if path.is_some() { Some(serde_json::to_vec(&applied.index).map_err(|e| error(e.to_string()))?) } else { None };
     Ok(LightroomCompletion { report: applied.report, finalization: LightroomArchiveFinalization { path, bytes } })
+}
+
+fn original_paths(data: &CatalogImport, cancel: &AtomicBool) -> crate::Result<(Vec<String>, HashSet<String>)> {
+    let mut paths = Vec::new();
+    let mut missing = HashSet::new();
+    let mut seen = HashSet::new();
+    for photo in &data.photos {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(cancelled());
+        }
+        if lightroom_catalog::number_for_job(&photo.image, "masterImage") != 0 {
+            continue;
+        }
+        let key = normalize(&photo.path);
+        if !seen.insert(key.clone()) {
+            continue;
+        }
+        if photo.original_is_file() {
+            paths.push(photo.path.clone());
+        } else {
+            missing.insert(key);
+        }
+    }
+    Ok((paths, missing))
 }
 
 fn normalize(path: &str) -> String {
@@ -318,6 +393,7 @@ mod tests {
                     keywords: Vec::new(),
                     history: Vec::new(),
                     snapshots: Vec::new(),
+                    original: lightroom_catalog::Original::Local,
                 }],
                 collections: Vec::new(),
                 members: Vec::new(),
@@ -335,14 +411,71 @@ mod tests {
         }
     }
 
+    /// One count for the whole import read "14 of 24554" while the photos were read, then twice
+    /// the number of photos: each step has its own count, and the whole only moves forward.
+    #[test]
+    fn progress_names_each_step_with_its_own_count() {
+        let p = LightroomProgress::default();
+        let set = |n: &AtomicUsize, v: usize| n.store(v, Ordering::Relaxed);
+        assert_eq!(p.step(), (LightroomStep::Catalog, 0, 0));
+        assert_eq!(p.fraction(), 0.0);
+        set(&p.catalog_total, 14);
+        set(&p.catalog_done, 7);
+        assert_eq!(p.step(), (LightroomStep::Catalog, 7, 14));
+        let mut last = p.fraction();
+        assert!(last > 0.0);
+        let mut forward = |p: &LightroomProgress| {
+            let f = p.fraction();
+            assert!(f >= last && f <= 1.0, "{f} after {last}");
+            last = f;
+        };
+        set(&p.catalog_done, 14);
+        p.photos.store(true, Ordering::Relaxed);
+        assert_eq!(p.step(), (LightroomStep::ReadPhotos, 0, 0), "the photos are not counted yet");
+        forward(&p);
+        set(&p.add_total, 100);
+        set(&p.read_total, 100);
+        set(&p.read_done, 40);
+        assert_eq!(p.step(), (LightroomStep::ReadPhotos, 40, 100));
+        forward(&p);
+        set(&p.read_done, 100);
+        set(&p.add_done, 25);
+        assert_eq!(p.step(), (LightroomStep::AddPhotos, 25, 100));
+        forward(&p);
+        set(&p.add_done, 100);
+        forward(&p);
+        assert!(p.fraction() > 0.999);
+        // every photo already in the library: nothing to read
+        let known = LightroomProgress::default();
+        known.photos.store(true, Ordering::Relaxed);
+        set(&known.add_total, 5);
+        set(&known.add_done, 5);
+        assert_eq!(known.step(), (LightroomStep::AddPhotos, 5, 5));
+    }
+
     #[test]
     fn cancellation_before_commit_leaves_owner_catalog_unchanged() {
         let mut session = crate::Session::new();
         let before = session.catalog.to_snapshot();
         let prepared = cancelled_prepared(&session);
-        assert!(commit_prepared(&mut session, prepared).is_err());
+        let Err(e) = commit_prepared(&mut session, prepared) else { panic!("a cancelled import commits nothing") };
+        assert_eq!(e.kind(), crate::ErrorKind::Cancelled, "{e}");
         assert_eq!(session.catalog.to_snapshot(), before);
         assert!(session.undo.is_empty());
+    }
+
+    /// Cancelling while the catalog is read is [`crate::ErrorKind::Cancelled`] whatever the message
+    /// says, and a failure that is not a cancellation is not one, even when its text says "cancelled".
+    #[test]
+    fn a_cancelled_read_is_cancelled_by_kind() {
+        let mut session = crate::Session::new();
+        let mut job = LightroomJob::new(&mut session, PathBuf::from("/nonexistent/cancelled.lrcat"), false).unwrap();
+        let Err(e) = job.prepare(&AtomicBool::new(true)) else { panic!("cancelled before it started") };
+        assert_eq!(e.kind(), crate::ErrorKind::Cancelled, "{e}");
+        // the `error` text clients see is unchanged
+        assert_eq!(e.to_string(), "invalid parameters for `library.importLightroom`: Lightroom import cancelled");
+        let Err(e) = job.prepare(&AtomicBool::new(false)) else { panic!("no such catalog") };
+        assert_ne!(e.kind(), crate::ErrorKind::Cancelled, "{e}");
     }
 
     #[test]
@@ -399,6 +532,7 @@ mod tests {
                         serde_json::json!(format!("history-{source_id}-{}", "x".repeat(8 * 1024))),
                     )])],
                     snapshots: Vec::new(),
+                    original: lightroom_catalog::Original::Local,
                 }
             })
             .collect();

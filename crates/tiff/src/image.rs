@@ -127,6 +127,13 @@ impl ImageInfo {
         let (cw, ch) = self.chunk_size();
         let n = self.offsets.len().min(per_plane.saturating_mul(planes));
         let mut out = Vec::with_capacity(n);
+        // the distinct offsets in order, for chunks without a byte count (sorted once, not scanned per chunk)
+        let mut sorted: Vec<u64> = Vec::new();
+        if (0..n).any(|i| self.byte_counts.get(i).is_none_or(|&l| l == 0)) {
+            sorted = self.offsets.clone();
+            sorted.sort_unstable();
+            sorted.dedup();
+        }
         for i in 0..n {
             let plane = i / per_plane.max(1);
             let j = i % per_plane.max(1);
@@ -142,7 +149,7 @@ impl ImageInfo {
                 Some(&l) if l > 0 => l,
                 _ => {
                     // infer: up to the next larger offset, else end of data
-                    let next = self.offsets.iter().copied().filter(|&o| o > offset).min().unwrap_or(data_len);
+                    let next = sorted.get(sorted.partition_point(|&o| o <= offset)).copied().unwrap_or(data_len);
                     next.saturating_sub(offset)
                 }
             };
@@ -161,4 +168,49 @@ pub fn chunk_bytes<'a>(data: &'a [u8], c: &Chunk) -> Option<&'a [u8]> {
     }
     let end = (c.offset.saturating_add(c.len)).min(data.len() as u64) as usize;
     Some(&data[start..end])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn strips(offsets: Vec<u64>, byte_counts: Vec<u64>) -> ImageInfo {
+        ImageInfo {
+            width: 1,
+            height: offsets.len() as u32,
+            bits_per_sample: vec![8],
+            samples_per_pixel: 1,
+            compression: 1,
+            photometric: 1,
+            planar: 1,
+            predictor: 1,
+            sample_format: 1,
+            new_subfile_type: 0,
+            layout: Layout::Strips { rows_per_strip: 1 },
+            offsets,
+            byte_counts,
+        }
+    }
+
+    #[test]
+    fn missing_byte_counts_run_to_the_next_larger_offset() {
+        let info = strips(vec![50, 10, 30, 10, 70], vec![0, 0, 5]);
+        let lens: Vec<u64> = info.chunks(100).iter().map(|c| c.len).collect();
+        assert_eq!(lens, vec![20, 20, 5, 20, 30]);
+    }
+
+    /// A million strips without byte counts (offsets in descending order) are measured in one sort, not one
+    /// scan of all offsets per strip.
+    #[test]
+    fn many_strips_without_byte_counts_are_fast() {
+        let n = 1_000_000u64;
+        let info = strips((0..n).rev().map(|i| 1000 + i * 2).collect(), Vec::new());
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let chunks = info.chunks(1000 + n * 2);
+            let _ = tx.send(chunks.iter().map(|c| c.len).collect::<Vec<u64>>());
+        });
+        let lens = rx.recv_timeout(std::time::Duration::from_secs(20)).expect("chunks() took longer than 20 s");
+        assert!(lens.iter().all(|&l| l == 2));
+    }
 }

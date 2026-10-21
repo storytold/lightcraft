@@ -5,7 +5,8 @@
 //!
 //! Everything here treats model files and manifests as hostile input: sizes are capped, numbers must be
 //! finite and sane, and a malformed file is an error, never a panic. Detection and recognition run
-//! on the same checked, single-thread pure-Rust CPU interpreter.
+//! on the same checked, single-thread pure-Rust CPU interpreter; an [`net::Accelerator`] (the GPU, in `lightcraft-gpu`) can
+//! take its convolutions once it agrees with it.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 

@@ -16,11 +16,11 @@ const SAME: f32 = 0.93;
 
 fn secs(iso: &str) -> Option<i64> {
     let d = lightcraft_meta::DateTime::parse_iso(iso)?;
-    Some(((d.year as i64 * 372 + d.month as i64 * 31 + d.day as i64) * 24 + d.hour as i64) * 3600 + d.minute as i64 * 60 + d.second as i64)
+    Some(d.unix_seconds())
 }
 
 fn analyze(s: &mut Session, p: &Value) -> Result<Value> {
-    let ids: Vec<PhotoId> = if p.get("ids").is_some() || s.selection.ids.len() > 1 { s.targets(p) } else { s.visible_cloned() };
+    let ids: Vec<PhotoId> = if p.get("ids").is_some() || s.selection.ids.len() > 1 { s.targets(p)? } else { s.visible_cloned() };
     let reject_below = p.get("rejectBelow").and_then(Value::as_f64).map(|v| v as f32);
     let pick_best = p.get("pickBest").and_then(Value::as_bool).unwrap_or(false);
     // measure (thumbnail-level sources: fast, and enough for focus at 512 px)

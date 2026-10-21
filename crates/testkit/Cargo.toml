@@ -1,0 +1,12 @@
+[package]
+name = "lightcraft-testkit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "LightCraft test tooling (dev-dependency only): a test that can't run here records why, so `cargo xtask ci` reports it"
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]

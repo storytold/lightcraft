@@ -305,7 +305,7 @@ pub fn prepare_upload(s: &mut Session, p: &Value) -> Result<UploadJob, String> {
     let opts = UploadOptions::from_json(p)?;
     let client = s.flickr_client()?;
     let token = s.flickr_token().cloned().ok_or("sign in to Flickr first (Settings → Accounts)")?;
-    let ids: Vec<PhotoId> = s.targets(p);
+    let ids: Vec<PhotoId> = s.targets(p).map_err(|e| e.to_string())?;
     if ids.is_empty() {
         return Err("no photos selected".into());
     }

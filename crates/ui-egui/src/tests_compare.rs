@@ -82,3 +82,130 @@ fn filmstrip_click_replaces_the_active_side_in_compare() {
     let r = h.request("engine.execute", json!({"command": "compare.set", "params": {"id": others[0], "side": "left"}}), T);
     assert_eq!(r["ok"], false, "unknown side is an error: {r}");
 }
+
+/// A ⌘/Ctrl-click or Shift-click on the filmstrip in Compare changes the selection as it does in
+/// the grid (#187): the photo is toggled, or the range from the active photo is added. The two
+/// photos shown stay selected and the active one stays active, so a rating key still acts on a
+/// photo that is on screen (#744).
+#[test]
+fn modified_filmstrip_clicks_in_compare_change_the_selection_not_the_pair() {
+    let mut h = demo();
+    let vis: Vec<u64> = h.app.session.visible_cloned().iter().map(|p| p.0).collect();
+    h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [vis[0], vis[1]], "active": vis[0]}}), T);
+    let r = h.request("engine.execute", json!({"command": "view.compare"}), T);
+    let (sel, cand) = (r["result"]["select"].as_u64().unwrap(), r["result"]["candidate"].as_u64().unwrap());
+    h.settle(SETTLE);
+    let click_film = |h: &mut Headless, id: u64, cmd: bool, shift: bool| {
+        let r = h.request("ui.clickWidget", json!({"id": format!("film:{id}"), "cmd": cmd, "shift": shift}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(SETTLE);
+    };
+    let selected = |h: &Headless| -> Vec<u64> {
+        let s = &h.app.session.selection;
+        vis.iter().copied().filter(|v| s.contains(lightcraft_catalog::PhotoId(*v))).collect()
+    };
+    let active = |h: &Headless| h.app.session.selection.active.map(|p| p.0);
+    let rating = |h: &Headless, id: u64| h.app.session.catalog.photo(lightcraft_catalog::PhotoId(id)).map(|p| p.rating);
+    let others: Vec<u64> = vis.iter().copied().filter(|v| *v != sel && *v != cand).collect();
+    assert!(others.len() >= 4, "the demo library has {} photos", vis.len());
+    let before = active(&h);
+    // ⌘-click: a third photo joins the selection; the pair and the active photo stay
+    click_film(&mut h, others[0], true, false);
+    assert_eq!(selected(&h), {
+        let mut v = vec![sel, cand, others[0]];
+        v.sort_by_key(|id| vis.iter().position(|v| v == id));
+        v
+    });
+    assert_eq!(h.app.ui.compare, Some((sel, cand)), "the pair is untouched");
+    assert_eq!(active(&h), before, "the active photo is untouched");
+    // ⌘-click again: it leaves
+    click_film(&mut h, others[0], true, false);
+    assert_eq!(selected(&h), {
+        let mut v = vec![sel, cand];
+        v.sort_by_key(|id| vis.iter().position(|v| v == id));
+        v
+    });
+    assert_eq!(h.app.ui.compare, Some((sel, cand)));
+    assert_eq!(active(&h), before);
+    // Shift-click: everything from the active photo to the clicked one is selected
+    let far = others[3];
+    click_film(&mut h, far, false, true);
+    let (a, b) = (vis.iter().position(|v| Some(*v) == before).unwrap(), vis.iter().position(|v| *v == far).unwrap());
+    let now = selected(&h);
+    for id in &vis[a.min(b)..=a.max(b)] {
+        assert!(now.contains(id), "{id} is in the range {before:?}..{far}: {now:?}");
+    }
+    assert!(now.contains(&sel) && now.contains(&cand), "the pair stays selected: {now:?}");
+    assert_eq!(h.app.ui.compare, Some((sel, cand)));
+    assert_eq!(active(&h), before, "Shift-click does not move the active photo in Compare");
+    // ⌘-click on a photo that is on screen: it cannot leave the selection while it is compared
+    click_film(&mut h, sel, true, false);
+    assert!(selected(&h).contains(&sel), "the select stays selected");
+    assert_eq!(h.app.ui.compare, Some((sel, cand)));
+    assert_eq!(active(&h), before);
+    // ⌘-click on the active photo: `toggle` would hand "active" to another photo; it stays put
+    click_film(&mut h, before.unwrap(), true, false);
+    assert!(selected(&h).contains(&before.unwrap()), "the active photo stays selected");
+    assert_eq!(h.app.ui.compare, Some((sel, cand)));
+    assert_eq!(active(&h), before);
+    // a rating key acts on the active photo, which is on screen; a merely selected photo is left alone
+    let was = rating(&h, far);
+    h.request("ui.key", json!({"key": "3"}), T);
+    h.settle(SETTLE);
+    assert_eq!(rating(&h, before.unwrap()), Some(3));
+    assert_eq!(rating(&h, far), was, "the hidden photo was rated");
+    // a plain click still replaces the active side
+    click_film(&mut h, others[1], false, false);
+    assert_ne!(h.app.ui.compare, Some((sel, cand)));
+    assert!(h.app.ui.compare.is_some_and(|(s, c)| s == others[1] || c == others[1]));
+}
+
+/// Compare is where sharpness is judged: while a pane's render of an edit is on its way, that pane
+/// says "Rendering…" once it has lasted a moment, and stops when the render lands.
+#[test]
+fn a_compare_pane_says_rendering_while_its_edit_renders() {
+    use std::{cell::Cell, rc::Rc};
+    let pill = |h: &Headless| h.app.widgets.iter().any(|(w, _)| w.starts_with("compare:rendering:"));
+    let mut h = demo();
+    let vis: Vec<u64> = h.app.session.visible_cloned().iter().map(|p| p.0).collect();
+    h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [vis[0], vis[1]], "active": vis[0]}}), T);
+    let r = h.request("engine.execute", json!({"command": "view.compare"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert!(!pill(&h), "finished renders");
+    let open = Rc::new(Cell::new(false));
+    h.app.renderer.set_offload(Box::new(crate::headless::RenderGate::new(open.clone())));
+    h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "light.exposure", "value": 0.5}}), T);
+    for _ in 0..12 {
+        h.step();
+    }
+    assert!(!pill(&h), "not at once");
+    for _ in 0..30 {
+        h.step();
+    }
+    assert!(pill(&h), "the edited pane's render is on its way");
+    open.set(true);
+    assert!(h.step_until(SETTLE, |h| !pill(h)), "gone once the render lands");
+}
+
+/// A pane whose render fails behind its thumbnail says so, as the loupe does, instead of showing
+/// the thumbnail as if it were the photo.
+#[test]
+fn a_compare_pane_says_when_its_render_failed() {
+    use crate::render::Slot;
+    use std::{cell::Cell, rc::Rc};
+    let failed = |h: &Headless| h.app.widgets.iter().any(|(w, _)| w.starts_with("compare:renderFailed:"));
+    let mut h = demo();
+    let vis: Vec<u64> = h.app.session.visible_cloned().iter().map(|p| p.0).collect();
+    h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [vis[0], vis[1]], "active": vis[0]}}), T);
+    h.request("engine.execute", json!({"command": "view.compare"}), T);
+    h.settle(SETTLE);
+    assert!(!failed(&h));
+    let open = Rc::new(Cell::new(true));
+    h.app.renderer.set_offload(Box::new(crate::headless::RenderGate::failing(open, |s| matches!(s, Slot::Compare(_)))));
+    // another photo in the second pane: its render fails, its thumbnail stays up
+    let r = h.request("engine.execute", json!({"command": "compare.set", "params": {"id": vis[2], "side": "candidate"}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(h.step_until(SETTLE, failed), "the failure is said");
+    assert!(!h.app.widgets.iter().any(|(w, _)| w.starts_with("compare:rendering:")));
+}

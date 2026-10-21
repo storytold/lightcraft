@@ -141,6 +141,29 @@ fn virtual_copies_are_independent_and_persist() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Issue #1493: soft-delete must drop the copy from the stack so `1/2` does not linger, and
+/// deleting `2/3` renumbers the rest to `1/2` `2/2`. Undo restores the stack.
+#[test]
+fn deleting_a_virtual_copy_drops_it_from_the_stack() {
+    let mut s = Session::with_demo();
+    let src = s.visible_cloned()[0];
+    s.execute("library.select", &json!({"ids": [src.0]})).unwrap();
+    let c1 = lightcraft_catalog::PhotoId(s.execute("photo.virtualCopy", &json!({})).unwrap()["ids"][0].as_u64().unwrap());
+    let c2 = lightcraft_catalog::PhotoId(s.execute("photo.virtualCopy", &json!({"ids": [src.0]})).unwrap()["ids"][0].as_u64().unwrap());
+    assert_eq!(s.catalog.stack_of(src).unwrap().photos, vec![src, c2, c1]);
+    s.execute("photo.delete", &json!({"ids": [c2.0]})).unwrap();
+    let left = s.catalog.stack_of(src).expect("two members remain stacked");
+    assert_eq!(left.photos, vec![src, c1]);
+    assert_eq!((left.position(src), left.position(c1), left.photos.len()), (Some(0), Some(1), 2), "1/2 and 2/2");
+    assert!(s.catalog.photo(c2).unwrap().deleted);
+    s.execute("photo.delete", &json!({"ids": [c1.0]})).unwrap();
+    assert!(s.catalog.stack_of(src).is_none(), "the original is unstacked once it is the only member");
+    assert!(s.catalog.photo(c1).unwrap().deleted);
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(!s.catalog.photo(c1).unwrap().deleted);
+    assert_eq!(s.catalog.stack_of(src).unwrap().photos, vec![src, c1]);
+}
+
 #[test]
 fn stacks_group_collapse_and_replay() {
     let dir = temp_dir("stacks");
@@ -312,4 +335,24 @@ fn deleting_an_album_folder_preserves_photos_and_restores_its_subtree() {
     assert_eq!(reopened.catalog.to_snapshot(), deleted, "journal replay preserves the deletion");
     drop(reopened);
     let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A huge `start` is a validation error, not an arithmetic overflow in the numbering.
+#[test]
+fn rename_huge_start_is_a_bad_param() {
+    let mut s = Session::with_demo();
+    let ids: Vec<u64> = s.catalog.photos().take(3).map(|p| p.id.0).collect();
+    let names_before: Vec<String> = s.catalog.photos().map(|p| p.file_name.clone()).collect();
+    for cmd in ["photo.renamePreview", "photo.rename"] {
+        let e = s.execute(cmd, &json!({"template": "{seq}", "start": u64::MAX, "ids": ids})).unwrap_err();
+        assert!(e.to_string().contains("start out of range"), "{cmd}: {e}");
+    }
+    let names_after: Vec<String> = s.catalog.photos().map(|p| p.file_name.clone()).collect();
+    assert_eq!(names_before, names_after, "a rejected rename changes nothing");
+    // the last start whose whole sequence fits is accepted, one more is not
+    let fits = usize::MAX as u64 - 2;
+    let r = s.execute("photo.renamePreview", &json!({"template": "{seq}", "start": fits, "ids": ids}));
+    assert!(r.is_ok(), "{r:?}");
+    let r = s.execute("photo.renamePreview", &json!({"template": "{seq}", "start": fits + 1, "ids": ids}));
+    assert!(r.is_err(), "{r:?}");
 }

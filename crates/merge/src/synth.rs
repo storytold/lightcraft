@@ -48,7 +48,7 @@ pub fn bracket_dngs(w: usize, h: usize, evs: &[f64]) -> Result<Vec<Vec<u8>>> {
                 iso: Some(100),
                 ..Default::default()
             };
-            write_linear_dng(&img, &srgb_color(), Orientation::Normal, &meta, 0.0, DngSamples::U16)
+            write_linear_dng(&img, &srgb_color(), Orientation::Normal, &meta, 0.0, DngSamples::U16, &[])
         })
         .collect()
 }

@@ -8,6 +8,7 @@
 #   $DIST/lightcraft-<version>-linux-<arch>.tar.gz    plain FHS-style tree (bin/, share/)
 #
 # Usage: packaging/linux/package.sh [--skip-build] [--formats "appimage deb rpm tar"]
+# Fonts: use CRAFT_FONTS_DIR or ../craft-fonts; download the pinned checkout if absent.
 #
 # Needs: cargo; nfpm for deb/rpm (https://nfpm.goreleaser.com); appimagetool for the AppImage
 # (downloaded into $CARGO_TARGET_DIR if missing). Build on an old distro (CI: Ubuntu 22.04,
@@ -45,6 +46,9 @@ BASENAME="lightcraft-$VERSION-linux-$ARCH"
 echo "==> LightCraft $VERSION for Linux $ARCH ($FORMATS)"
 
 if [ "$SKIP_BUILD" = 0 ]; then
+  # shellcheck source=../fonts.sh
+  . "$ROOT/packaging/fonts.sh"
+  prepare_fonts
   (cd "$ROOT" && cargo build --release --locked -p lightcraft -p lightcraft-cli --features lightcraft/heif,lightcraft-cli/heif \
     ${CROSS_TARGET:+--target "$CROSS_TARGET"})
 fi

@@ -18,7 +18,7 @@
 </p>
 
 <p align="center">
-  <b>照片图库与 raw 显影；Adobe Lightroom 的开源净室实现，用纯 Rust 重建。</b><br>
+  <b>照片图库与 raw 显影；开源、非破坏性的照片图库与 raw 显影工具，用纯 Rust 构建。</b><br>
   在 macOS、Windows 和 Linux 上原生运行，也可通过 WebAssembly 在浏览器中使用，并能由 AI 智能体经 MCP 端到端驱动。
 </p>
 
@@ -299,12 +299,12 @@ lightcraft --control 7980 ~/Pictures/trip
 
 LightCraft 很年轻，而且进展很快。**我们如实所处的位置**（细节见[路线图](ROADMAP.md#where-we-stand)）：
 
-- **按功能数量算，我们达到了 Lightroom 的约 79%**（核心功能 98%），逐行记录在
+- **按功能数量算，我们达到了约 79%**（核心功能 98%），逐行记录在
   [docs/parity.md](docs/parity.md)。
-- **作为日常替代 Lightroom 的工具，我们更接近 60–70%。** 在单台机器上处理 JPEG/DNG 以及大多数尼康／索尼／
+- **作为日常使用的工具，我们更接近 60–70%。** 在单台机器上处理 JPEG/DNG 以及大多数尼康／索尼／
   较老佳能的 raw 都很出色。
 - **最大的缺口：**
-  - **相机色彩校准：** 索尼、尼康、松下、富士和佳能 CR3 的 raw 会从各自的相机 JPEG 得到受保护的估计值，内置 ILCE-7CR、ILCE-7M4、X-H2S 和 X-T4 配置文件；实测校准仍然缺失，其他 raw 或被拒绝的拟合会保留中性矩阵；
+  - **相机色彩校准：** 索尼、尼康、松下、富士和佳能 CR3 的 raw 会从各自的相机 JPEG 得到受保护的估计值，内置 ILCA-99M2、ILCE-7CR、ILCE-7M4、X-H2S、X-T4、尼康 Z 6II、Z 8 和 D5300 配置文件；实测校准仍然缺失，其他 raw 或被拒绝的拟合会保留中性矩阵；
   - **压缩的奥林巴斯 raw 和不受支持的 CR3 变体：** 这些在有内嵌 JPEG 预览时使用预览。富士无损／有损压缩 RAF 现在能解码传感器数据；[验证与已有图库重新加载说明](docs/raf-compression.md)；
   - **AI 蒙版与降噪：** 主体和天空选择目前是经典启发式算法；
   - **屏幕上的 HDR 显示、视频，以及经典版式中的打印／画册／地图模块。**
@@ -358,6 +358,30 @@ CI 默认使用行表调试信息，并按启动时可用内存每 1.5 GB 开一
 完整调试信息链接器会在任何测试运行之前就耗尽内存。GPU 覆盖范围不变。显式设置
 `CARGO_PROFILE_DEV_DEBUG`、`CARGO_BUILD_JOBS` 和 `RUST_TEST_THREADS` 会覆盖这些默认值。
 日常开发命令保持它们各自的设置。
+
+**内存受限机器上的 release 构建：** [#1196](https://github.com/storytold/lightcraft/issues/1196)
+报告在 16 GB 的 Arch/AUR 机器上，同时构建桌面应用和 CLI，并启用完整调试信息、thin LTO
+和单个代码生成单元时，链接过程被 OOM 终止。上述 CI 默认设置不适用于普通的
+`cargo build --release`。建议先使用一个构建任务；内存充足时可以尝试两个：
+
+```sh
+CARGO_BUILD_JOBS=1 cargo build --release -p lightcraft -p lightcraft-cli
+# 或者：CARGO_BUILD_JOBS=2 cargo build --release -p lightcraft -p lightcraft-cli
+```
+
+如果打包环境启用了完整调试信息或占用较多内存的 LTO 设置，可以使用仅对本条命令生效的
+覆盖设置，降低源码构建的内存需求：
+
+```sh
+CARGO_BUILD_JOBS=1 CARGO_PROFILE_RELEASE_DEBUG=0 CARGO_PROFILE_RELEASE_LTO=false CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 cargo build --release -p lightcraft -p lightcraft-cli
+```
+
+这些 POSIX shell 赋值只影响本条命令，不修改全局 Cargo 配置或仓库的 release profile。
+关闭 LTO 可能改变性能和二进制大小；关闭调试信息会减少可用的调试细节。这是构建建议，
+并不保证任何机器都有足够内存。下游打包者应串行构建大型二进制文件，并避免在低内存
+构建机器上同时使用完整调试信息、LTO 和单个代码生成单元。PKGBUILD 自己导出的 profile
+设置可以覆盖继承的环境变量；应在本地调整打包配方或联系维护者，而不要假定给
+`makepkg` 添加环境变量前缀就能优先生效。
 
 **中文和日文文字**需要共享字体仓库，这是一个可选的构建输入（所有正式发布版都会包含它）：
 
@@ -429,9 +453,9 @@ egui 前端是一个可替换的 crate；它下面没有任何东西知道 UI �
 
 人和智能体遵循同样的规则，所以请先读 [AGENTS.md](AGENTS.md)。简短版本：
 
-- **净室。** 绝不阅读 Adobe 的二进制文件或 GPL 的 raw／照片代码（darktable、RawTherapee、LibRaw、rawspeed、dcraw……）；
+- **净室。** 绝不阅读专有软件的二进制文件或 GPL 的 raw／照片代码（darktable、RawTherapee、LibRaw、rawspeed、dcraw……）；
   只依据公开规范和黑盒观察来工作。
-- **绝不使用 Adobe 资源：** 不使用 Adobe 产品的图标、截图、预设、配置文件、LUT 或字体。仓库中的每一个
+- **绝不使用专有资源：** 不使用商业产品的图标、截图、预设、配置文件、LUT 或字体。仓库中的每一个
   图像、图标和字体都是原创、公有领域、知识共享、OFL 或宽松许可的，并在同一提交中
   于 [assets/ATTRIBUTION.md](assets/ATTRIBUTION.md) 添加条目。新字体提交到
   [storytold/craft-fonts](https://github.com/storytold/craft-fonts)，而不是这里。
@@ -554,8 +578,6 @@ Inter（SIL OFL 1.1）。用 [craft-fonts](https://github.com/storytold/craft-fo
 ArtCraft 团队的商标，不在本许可范围内。它们只能在未修改的情况下，作为
 本仓库和 LightCraft 的一部分，按 [`docs/brand/LICENSE-brand.txt`](docs/brand/LICENSE-brand.txt) 使用。
 分支和修改版本必须移除它们。
-
-<sub>Adobe、Photoshop、Illustrator、Premiere Pro、Lightroom、Acrobat、After Effects 和 InDesign 是 Adobe Inc. 在美国和／或其他国家的商标或注册商标。LightCraft 是一个独立的开源项目，与 Adobe Inc. 无隶属关系，也未获其赞助或认可；这些名称仅用于说明它所兼容的工作流。</sub>
 
 <p align="center">
   <a href="https://getartcraft.com/"><img alt="ArtCraft" src="docs/brand/artcraft-mark.svg" width="28"></a><br>

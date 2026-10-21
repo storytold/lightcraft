@@ -729,7 +729,7 @@ fn the_header_of_a_long_section_stays_in_sight() {
 }
 
 /// Scroll the sidebar (the pointer over it) by `dy`.
-fn scroll_sidebar(h: &mut Headless, dy: f32) {
+pub(crate) fn scroll_sidebar(h: &mut Headless, dy: f32) {
     h.request("ui.move", json!({"x": 120.0, "y": 400.0}), T);
     let r = h.request("ui.scroll", json!({"dy": dy}), T);
     assert_eq!(r["ok"], true, "{r}");
@@ -889,6 +889,10 @@ fn the_keywords_header_creates_a_keyword() {
     h.step();
     h.step();
     assert!(has(&h, "source:keyword:zebra crossing"), "the new keyword is listed");
+    // the sidebar scrolls to it: it is listed last, below what the panel shows
+    h.settle(SETTLE);
+    let (row, panel) = (widget(&h, "source:keyword:zebra crossing"), widget(&h, "panel:left_panel"));
+    assert!(panel.contains_rect(row), "the new keyword is in sight: {row:?} in {panel:?}");
 }
 
 /// A folded section's row count sits to the left of its header button; a section without a button
@@ -1487,6 +1491,10 @@ fn folders_app(paths: &[&str]) -> Headless {
 }
 
 fn folders_app_sized(paths: &[&str], size: [f32; 2]) -> Headless {
+    folders_app_with_services(paths, size, Services { png: None, ..Default::default() })
+}
+
+fn folders_app_with_services(paths: &[&str], size: [f32; 2], services: Services) -> Headless {
     use lightcraft_catalog::{Op, Photo, Source};
     let mut session = lightcraft_engine::Session::new();
     for path in paths {
@@ -1494,7 +1502,7 @@ fn folders_app_sized(paths: &[&str], size: [f32; 2]) -> Headless {
         let p = Photo::new(id, Source::File { path: (*path).into() }, "x.jpg", "JPEG", 60, 40, "2026-01-01T10:00:00");
         session.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
     }
-    let app = LightcraftApp::new(session, Services { png: None, ..Default::default() });
+    let app = LightcraftApp::new(session, services);
     let mut h = Headless::new(app, size, 1.0);
     let r = h.request("ui.set", json!({"view": "photoGrid", "leftPanel": true}), T);
     assert_eq!(r["ok"], true, "{r}");
@@ -1697,6 +1705,59 @@ fn right_click_opens_a_folders_menu_from_the_triangle_too() {
     h.step();
     right_click(&mut h, "source:libfolder:/");
     assert!(!popup_open(&h), "the startup disk offers nothing");
+}
+
+/// Issue #1194: a folder's menu chooses the folder's new location, then the bulk finder relinks
+/// only the missing photos from that folder and the folders inside it.
+#[test]
+fn a_folder_menu_locates_its_missing_tree_only() {
+    struct Cleanup(std::path::PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    let base = std::env::temp_dir().join(format!("lc-ui-locate-folder-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let _cleanup = Cleanup(base.clone());
+    let new_trip = base.join("new/trip");
+    std::fs::create_dir_all(new_trip.join("day2")).unwrap();
+    for path in [new_trip.join("a.jpg"), new_trip.join("day2/b.jpg"), new_trip.join("c.jpg")] {
+        std::fs::write(path, b"photo").unwrap();
+    }
+
+    // (the missing tree is not on disk: a plain root, so the Folders section lists it the same on every platform)
+    let old = "/lc-locate-old".to_string();
+    let old_trip = format!("{old}/trip");
+    let paths = [format!("{old_trip}/a.jpg"), format!("{old_trip}/day2/b.jpg"), format!("{old}/other/c.jpg")];
+    let picked = new_trip.to_string_lossy().to_string();
+    let services = Services { pick_folder: Some(Box::new(move || Some(picked.clone()))), png: None, ..Default::default() };
+    let refs: Vec<&str> = paths.iter().map(String::as_str).collect();
+    let mut h = folders_app_with_services(&refs, [1400.0, 900.0], services);
+
+    click(&mut h, &format!("libraryFolderToggle:{old}"));
+    right_click(&mut h, &format!("source:libfolder:{old_trip}"));
+    assert!(has(&h, "folderLocateMissing"), "the folder menu offers the action");
+    click(&mut h, "folderLocateMissing");
+    assert!(h.step_until(T, |h| h.app.ui.last_find_missing.is_some()), "the background search finished");
+    let result = h.app.ui.last_find_missing.as_ref().unwrap();
+    assert_eq!(result["found"].as_array().map(Vec::len), Some(2), "{result}");
+    assert_eq!(result["missing"], 0, "{result}");
+
+    let sources: Vec<String> = h
+        .app
+        .session
+        .catalog
+        .photos()
+        .filter_map(|photo| match &photo.source {
+            lightcraft_catalog::Source::File { path } => Some(path.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(sources.contains(&new_trip.join("a.jpg").to_string_lossy().to_string()), "{sources:?}");
+    assert!(sources.contains(&new_trip.join("day2").join("b.jpg").to_string_lossy().to_string()), "{sources:?}");
+    assert!(sources.contains(&format!("{old}/other/c.jpg")), "another missing folder stays untouched: {sources:?}");
 }
 
 /// Right-click a folder ▸ Set Color Label ▸ a colour: the folder's row shows the label's dot (a
@@ -2129,7 +2190,7 @@ fn right_click_add_to_album_offers_a_new_album_when_there_is_none() {
     h.step();
     h.step();
     match &mut h.app.ui.dialog {
-        Some(crate::state::Dialog::NewAlbum { name, folder: false, parent: None }) => *name = "Trip".into(),
+        Some(crate::state::Dialog::NewAlbum { name, folder: false, parent: None, .. }) => *name = "Trip".into(),
         other => panic!("New Album dialog expected, got {other:?}"),
     }
     h.step();
@@ -2140,4 +2201,211 @@ fn right_click_add_to_album_offers_a_new_album_when_there_is_none() {
     let trip = h.app.session.catalog.albums().find(|a| a.name == "Trip").expect("the album was created");
     assert!(trip.photos.contains(&photo), "the right-clicked photo is in it: {:?}", trip.photos);
     assert!(h.app.ui.dialog.is_none(), "{:?}", h.app.ui.dialog);
+}
+
+/// An album's context menu ▸ Import ▸ Import from Folder… (and Import Photos…, Import from Device)
+/// opens the import review with that album chosen; a folder row doesn't offer it, and an `album`
+/// the review can't offer (a folder, or an album deleted while the scan ran) leaves its album empty.
+#[test]
+fn an_album_menu_imports_into_that_album() {
+    let dir = std::env::temp_dir().join(format!("lc-ui-album-import-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    for i in 0..2u8 {
+        let (w, h) = (40usize, 30usize);
+        let data: Vec<[u8; 4]> = (0..w * h).map(|k| [(k % w * 6) as u8, i * 90, (k / w * 8) as u8, 255]).collect();
+        let img = lightcraft_raster::Rgba8 { width: w, height: h, data };
+        let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+        std::fs::write(dir.join(format!("card{i}.png")), png).unwrap();
+    }
+    let picked = dir.to_string_lossy().to_string();
+    let services = Services { png: None, pick_folder: Some(Box::new(move || Some(picked.clone()))), ..Default::default() };
+    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo().with_fs(), services);
+    let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
+    let r = h.request("ui.set", json!({"view": "photoGrid", "leftPanel": true}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    // the demo's top-level album and album folder, both shown in the sidebar
+    let id_of = |name: &str| h.app.session.catalog.albums().find(|a| a.name == name).map(|a| a.id.0).expect(name);
+    let (album, folder) = (id_of("Garden"), id_of("Travel 2026"));
+    let right_click = |h: &mut Headless, id: &str| {
+        let row = widget(h, id);
+        let r = h.request("ui.click", json!({"x": row.center().x, "y": row.center().y, "button": "right"}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.step();
+        h.step();
+    };
+    let review_album = |h: &mut Headless| {
+        h.step_until(SETTLE, |h| matches!(h.app.ui.dialog, Some(crate::state::Dialog::Import { .. })));
+        let Some(crate::state::Dialog::Import { opts }) = &h.app.ui.dialog else { panic!("no import review: {:?}", h.app.ui.dialog) };
+        let chosen = opts.album;
+        h.app.ui.dialog = None;
+        chosen
+    };
+
+    // a folder row has no Import
+    right_click(&mut h, &format!("source:folder:{folder}"));
+    assert!(!has(&h, "button:albumImport"), "folders hold no photos");
+    let r = h.request("ui.key", json!({"key": "Escape"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+
+    // an album's menu: Import ▸ Import from Folder… → the (stubbed) folder dialog → the review, album chosen
+    right_click(&mut h, &format!("source:album:{album}"));
+    let r = h.request("ui.hoverWidget", json!({"id": "button:albumImport"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+    for way in ["button:albumImportPhotos", "button:albumImportFolder", "button:albumImportDevice"] {
+        assert!(has(&h, way), "{way} is offered");
+    }
+    let r = h.request("ui.clickWidget", json!({"id": "button:albumImportFolder"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(review_album(&mut h), Some(album));
+
+    // Import Photos… passes the album the same way
+    let r = h.request("engine.execute", json!({"command": "file.addPhotos", "params": {"paths": [dir.to_string_lossy()], "album": album}}), T);
+    assert_eq!(r["result"]["scanning"], true, "{r}");
+    assert_eq!(review_album(&mut h), Some(album));
+
+    // an album the review can't offer (here a folder) is not chosen
+    let r = h.request("engine.execute", json!({"command": "file.addPhotos", "params": {"paths": [dir.to_string_lossy()], "album": folder}}), T);
+    assert_eq!(r["result"]["scanning"], true, "{r}");
+    assert_eq!(review_album(&mut h), None);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Delete asks before photos go to Recently Deleted, by default and from every way in: the key, the
+/// Photo menu and a photo's right-click menu (#1239). With the setting off, it deletes at once.
+#[test]
+fn deleting_a_photo_asks_first_from_the_key_the_menu_and_the_right_click_menu() {
+    use crate::state::Dialog;
+    let mut h = demo([1400.0, 900.0], json!({"view": "photoGrid"}));
+    assert!(h.app.ui.settings.confirm_delete, "on by default");
+    let photo = h.app.session.visible_cloned()[0];
+    exec(&mut h, "library.select", json!({"ids": [photo.0]}));
+    let deleted = |h: &Headless| h.app.session.catalog.photo(photo).unwrap().deleted;
+
+    // ⌫ and Photo ▸ Delete Photo ask; Cancel keeps the photo
+    h.request("ui.key", json!({"key": "delete"}), T);
+    assert_eq!(h.app.ui.dialog, Some(Dialog::ConfirmDelete { count: 1 }), "the key asks");
+    h.request("ui.dialog.cancel", json!({}), T);
+    assert!(!deleted(&h));
+    // (what a click on the menu bar's item runs; `ui.menu.invoke` is the agents' engine.execute)
+    crate::menubar::run_item(&mut h.app, "photo.delete", json!({})).unwrap();
+    assert_eq!(h.app.ui.dialog, Some(Dialog::ConfirmDelete { count: 1 }), "the menu asks");
+    h.request("ui.dialog.cancel", json!({}), T);
+    assert!(!deleted(&h));
+
+    // the right-click menu's Delete Photo asks too; OK deletes
+    let thumb = format!("thumb:{}", photo.0);
+    right_click(&mut h, &thumb);
+    click(&mut h, "button:contextDeletePhoto");
+    assert_eq!(h.app.ui.dialog, Some(Dialog::ConfirmDelete { count: 1 }), "the right-click menu asks");
+    assert!(!deleted(&h), "nothing deleted before the answer");
+    let r = h.request("ui.dialog.confirm", json!({}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(deleted(&h));
+
+    // turned off, the right-click menu deletes at once
+    exec(&mut h, "edit.undo", json!({}));
+    assert!(!deleted(&h));
+    h.app.ui.settings.confirm_delete = false;
+    right_click(&mut h, &thumb);
+    click(&mut h, "button:contextDeletePhoto");
+    assert_eq!(h.app.ui.dialog, None);
+    assert!(deleted(&h));
+}
+
+/// New Album's "Include selected photos" (as in Lightroom): on by default; unticked, the new album
+/// starts empty; with nothing selected the option isn't shown, and a folder never has it.
+#[test]
+fn new_album_can_leave_the_selected_photos_out() {
+    let mut h = demo([1400.0, 900.0], json!({"view": "photoGrid", "leftPanel": true}));
+    let has = |h: &Headless, id: &str| h.app.widgets.iter().any(|(w, _)| w == id);
+    let photo = lightcraft_catalog::PhotoId(h.app.session.visible_cloned()[1].0);
+    h.app.session.execute("library.select", &json!({"ids": [photo.0]})).unwrap();
+    let create = |h: &mut Headless, command: &str, name: &str| {
+        h.app.run(command, json!({"name": name})).unwrap();
+        h.step();
+        h.step();
+    };
+    let confirm = |h: &mut Headless| {
+        let r = h.request("ui.clickWidget", json!({"id": "button:dialogOk"}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.step();
+        h.step();
+        assert!(h.app.ui.dialog.is_none(), "{:?}", h.app.ui.dialog);
+    };
+    let photos = |h: &Headless, name: &str| h.app.session.catalog.albums().find(|a| a.name == name).expect("the album was created").photos.clone();
+
+    // ticked by default: the selection goes in, as before
+    create(&mut h, "dialog.newAlbum", "With");
+    assert!(has(&h, "check:albumIncludeSelected"), "the option is offered with a selection");
+    confirm(&mut h);
+    assert_eq!(photos(&h, "With"), vec![photo]);
+
+    // unticked: an empty album
+    create(&mut h, "dialog.newAlbum", "Without");
+    let r = h.request("ui.clickWidget", json!({"id": "check:albumIncludeSelected"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    confirm(&mut h);
+    assert!(photos(&h, "Without").is_empty(), "nothing was added");
+
+    // a folder never offers it
+    create(&mut h, "dialog.newFolder", "Folder");
+    assert!(!has(&h, "check:albumIncludeSelected"), "folders hold no photos");
+    confirm(&mut h);
+
+    // nothing selected: no option, an empty album
+    h.app.session.selection = lightcraft_engine::Selection { ids: vec![], active: None };
+    create(&mut h, "dialog.newAlbum", "Nothing");
+    assert!(!has(&h, "check:albumIncludeSelected"), "no selection, no option");
+    confirm(&mut h);
+    assert!(photos(&h, "Nothing").is_empty());
+}
+
+/// Histogram corner controls stay usable even before a histogram is available, and each
+/// click invokes the same clipping-warning command as the J shortcut exactly once.
+#[test]
+fn histogram_corners_toggle_clipping_warnings() {
+    let mut h = demo([1400.0, 1000.0], json!({"view": "detail", "right": "edit"}));
+    for texture in h.app.renderer.textures.values_mut() {
+        texture.histogram = None;
+    }
+    h.step();
+    h.app.ui.show_clipping = false;
+    let histogram = h.app.widgets.iter().find(|(id, _)| id == "histogram").unwrap().1;
+    for id in ["histogram:shadows", "histogram:highlights"] {
+        let rect = h.app.widgets.iter().find(|(widget, _)| widget == id).unwrap().1;
+        assert!(histogram.shrink(8.0).contains_rect(rect), "{id} keeps clear space to the histogram edges: {rect:?} in {histogram:?}");
+    }
+    for (id, enabled) in [("histogram:shadows", true), ("histogram:highlights", false), ("histogram", true)] {
+        let r = h.request("ui.clickWidget", json!({"id": id}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.step();
+        assert_eq!(h.app.ui.show_clipping, enabled, "{id} must toggle exactly once");
+    }
+    let r = h.request("ui.key", json!({"key": "J"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    assert!(!h.app.ui.show_clipping);
+}
+
+#[test]
+fn the_histogram_clipping_buttons_stay_clear_of_the_hovered_scroll_bar() {
+    // every section open: the Edit panel scrolls, so its scroll bar runs past the histogram
+    let h = demo(
+        [1400.0, 700.0],
+        json!({"view": "detail", "right": "edit", "histogram": true, "openSections": ["light", "color", "effects", "detail", "optics"]}),
+    );
+    let hist = widget(&h, "histogram");
+    let (low, high) = (widget(&h, "histogram:shadows"), widget(&h, "histogram:highlights"));
+    // a hovered floating scroll bar grows to its full width at the panel's right edge, over the content
+    let scroll = h.view.ctx.global_style().spacing.scroll;
+    let bar_left = hist.right() - scroll.bar_outer_margin - scroll.bar_width;
+    assert!(high.right() <= bar_left, "the highlight clipping button {high:?} is under the scroll bar (from x = {bar_left})");
+    // and the shadow one keeps the same inset from its edge
+    assert!(((low.left() - hist.left()) - (hist.right() - high.right())).abs() < 0.5, "{low:?} {high:?} in {hist:?}");
 }

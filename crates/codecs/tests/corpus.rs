@@ -31,7 +31,7 @@ fn files(dir: &Path) -> Vec<PathBuf> {
 fn corpus_images_decode() {
     let dir = corpus_root().join("images");
     if !dir.is_dir() {
-        eprintln!("skip: {} absent", dir.display());
+        lightcraft_testkit::skip!(Corpus, "{} absent", dir.display());
         return;
     }
     let (mut ok, mut unsupported) = (0, 0);
@@ -57,7 +57,7 @@ fn corpus_images_decode() {
 fn corpus_pngsuite() {
     let dir = corpus_root().join("pngsuite");
     if !dir.is_dir() {
-        eprintln!("skip: {} absent", dir.display());
+        lightcraft_testkit::skip!(Corpus, "{} absent", dir.display());
         return;
     }
     let mut n = 0;
@@ -83,7 +83,7 @@ fn corpus_pngsuite() {
 fn corpus_raw_is_routed() {
     let dir = corpus_root().join("raw");
     if !dir.is_dir() {
-        eprintln!("skip: {} absent", dir.display());
+        lightcraft_testkit::skip!(Corpus, "{} absent", dir.display());
         return;
     }
     for p in files(&dir) {
@@ -103,7 +103,7 @@ fn system_icc_profiles() {
     use lightcraft_codecs::icc::{IccColorModel, IccKind, parse};
     let dir = Path::new("/System/Library/ColorSync/Profiles");
     if !dir.is_dir() {
-        eprintln!("skip: no system ICC profiles");
+        lightcraft_testkit::skip!(System, "no system ICC profiles");
         return;
     }
     let expect = [

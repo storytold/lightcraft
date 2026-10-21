@@ -8,7 +8,10 @@
 //!    adaptive luminance / chrominance tolerances (ε_L, ε_C from the paper) — the homogeneity.
 //! 4. Sum homogeneity over a 3×3 window and pick the more homogeneous candidate (average on ties).
 //!
-//! Work is done in overlapping tiles (bounded memory, rayon-parallel).
+//! Work is done in overlapping tiles (bounded memory, rayon-parallel), one band of tiles at a time written
+//! straight into the output. Each step runs only where the tile's output depends on it: the choice reads the
+//! homogeneity 1 pixel around the tile, which reads Lab 2 pixels around, the candidates read the greens 3
+//! pixels around, and those read the mosaic 5 pixels around, inside the `MARGIN`.
 
 use super::Mosaic;
 use crate::Rgb32f;
@@ -19,20 +22,26 @@ const MARGIN: usize = 6;
 
 pub(crate) fn ahd(m: &Mosaic) -> Rgb32f {
     let (w, h) = (m.w, m.h);
-    let tiles: Vec<(usize, usize)> = (0..h.div_ceil(TILE)).flat_map(|ty| (0..w.div_ceil(TILE)).map(move |tx| (tx * TILE, ty * TILE))).collect();
-    let results: Vec<(usize, usize, usize, usize, Vec<[f32; 3]>)> = tiles
-        .par_iter()
-        .map(|&(x0, y0)| {
-            let (tw, th) = (TILE.min(w - x0), TILE.min(h - y0));
-            (x0, y0, tw, th, tile(m, x0, y0, tw, th))
-        })
-        .collect();
     let mut out = Rgb32f::new(w, h);
-    for (x0, y0, tw, th, px) in results {
-        for y in 0..th {
-            out.data[(y0 + y) * w + x0..(y0 + y) * w + x0 + tw].copy_from_slice(&px[y * tw..(y + 1) * tw]);
-        }
+    if w == 0 || h == 0 {
+        return out;
     }
+    // one row of tiles per task, its tiles in parallel too, written straight into the picture
+    out.data.par_chunks_mut((w * TILE).max(1)).enumerate().for_each(|(ty, band)| {
+        let (y0, th) = (ty * TILE, band.len() / w.max(1));
+        let tiles: Vec<(usize, usize, Vec<[f32; 3]>)> = (0..w.div_ceil(TILE))
+            .into_par_iter()
+            .map(|tx| {
+                let (x0, tw) = (tx * TILE, TILE.min(w - tx * TILE));
+                (x0, tw, tile(m, x0, y0, tw, th))
+            })
+            .collect();
+        for (x0, tw, px) in tiles {
+            for (row, src) in band.chunks_exact_mut(w).zip(px.chunks_exact(tw)) {
+                row[x0..x0 + tw].copy_from_slice(src);
+            }
+        }
+    });
     out
 }
 
@@ -56,110 +65,100 @@ fn tile(m: &Mosaic, x0: usize, y0: usize, tw: usize, th: usize) -> Vec<[f32; 3]>
     let (ox, oy) = (x0 as isize - MARGIN as isize, y0 as isize - MARGIN as isize);
     let mut mos = vec![0f32; n];
     let mut col = vec![0u8; n];
-    for y in 0..bh {
-        for x in 0..bw {
-            mos[y * bw + x] = m.get(ox + x as isize, oy + y as isize);
-            col[y * bw + x] = m.color(ox + x as isize, oy + y as isize);
+    for (y, (mrow, crow)) in mos.chunks_exact_mut(bw).zip(col.chunks_exact_mut(bw)).enumerate() {
+        let ry = super::reflect(oy + y as isize, m.h);
+        if ox >= 0 && ox as usize + bw <= m.w {
+            // inside the image: the row as it is, and its colours repeating with the pattern
+            let x0 = ry * m.w + ox as usize;
+            mrow.copy_from_slice(&m.data[x0..x0 + bw]);
+            let period: Vec<u8> = (0..m.cfa.width).map(|k| m.cfa.color_at(ox as usize + k, ry)).collect();
+            for (c, &p) in crow.iter_mut().zip(period.iter().cycle()) {
+                *c = p;
+            }
+        } else {
+            for x in 0..bw {
+                mrow[x] = m.get(ox + x as isize, oy + y as isize);
+                crow[x] = m.color(ox + x as isize, oy + y as isize);
+            }
         }
     }
-    let cl = |x: isize, y: isize| -> usize { y.clamp(0, bh as isize - 1) as usize * bw + x.clamp(0, bw as isize - 1) as usize };
+    // flat indices of the pixels `d` or more from the buffer's edge, row by row
+    let inner = |d: usize| (d..bh - d).flat_map(move |y| y * bw + d..y * bw + bw - d);
     // 1. directional greens
     let mut gh = vec![0f32; n];
     let mut gv = vec![0f32; n];
-    for y in 0..bh as isize {
-        for x in 0..bw as isize {
-            let i = cl(x, y);
-            let c = mos[i];
-            if col[i] == 1 {
-                gh[i] = c;
-                gv[i] = c;
-                continue;
-            }
-            let (l, r) = (mos[cl(x - 1, y)], mos[cl(x + 1, y)]);
-            let est = (l + r) * 0.5 + (2.0 * c - mos[cl(x - 2, y)] - mos[cl(x + 2, y)]) * 0.25;
-            gh[i] = est.clamp(l.min(r), l.max(r));
-            let (u, d) = (mos[cl(x, y - 1)], mos[cl(x, y + 1)]);
-            let est = (u + d) * 0.5 + (2.0 * c - mos[cl(x, y - 2)] - mos[cl(x, y + 2)]) * 0.25;
-            gv[i] = est.clamp(u.min(d), u.max(d));
+    for i in inner(MARGIN - 3) {
+        let c = mos[i];
+        if col[i] == 1 {
+            gh[i] = c;
+            gv[i] = c;
+            continue;
         }
+        let (l, r) = (mos[i - 1], mos[i + 1]);
+        let est = (l + r) * 0.5 + (2.0 * c - mos[i - 2] - mos[i + 2]) * 0.25;
+        gh[i] = super::clamp_between(est, l, r);
+        let (u, d) = (mos[i - bw], mos[i + bw]);
+        let est = (u + d) * 0.5 + (2.0 * c - mos[i - 2 * bw] - mos[i + 2 * bw]) * 0.25;
+        gv[i] = super::clamp_between(est, u, d);
     }
-    // 2. full candidates
-    let complete = |g: &[f32]| -> Vec<[f32; 3]> {
+    // 2. full candidates, and 3. their Lab
+    // (`p` with channel `c` set to `v`, in registers: writing channels through an index and reading the pixel
+    // back for its Lab stalled on store forwarding)
+    let set = |p: [f32; 3], c: u8, v: f32| [if c == 0 { v } else { p[0] }, if c == 1 { v } else { p[1] }, if c >= 2 { v } else { p[2] }];
+    let complete = |g: &[f32]| -> (Vec<[f32; 3]>, Vec<[f32; 3]>) {
         let mut rgb = vec![[0f32; 3]; n];
-        for y in 0..bh as isize {
-            for x in 0..bw as isize {
-                let i = cl(x, y);
-                let own = col[i] as usize;
-                let gvv = g[i];
-                let d = |dx: isize, dy: isize| {
-                    let j = cl(x + dx, y + dy);
-                    mos[j] - g[j]
-                };
-                let p = &mut rgb[i];
-                p[1] = gvv;
-                if own == 1 {
-                    let ch = col[cl(x + 1, y)] as usize;
-                    let cv = col[cl(x, y + 1)] as usize;
-                    p[ch] = gvv + (d(-1, 0) + d(1, 0)) * 0.5;
-                    p[cv] = gvv + (d(0, -1) + d(0, 1)) * 0.5;
-                } else {
-                    p[own] = mos[i];
-                    p[2 - own] = gvv + (d(-1, -1) + d(1, -1) + d(-1, 1) + d(1, 1)) * 0.25;
-                }
-            }
+        let mut lab_of = vec![[0f32; 3]; n];
+        for i in inner(MARGIN - 2) {
+            let own = col[i];
+            let gvv = g[i];
+            let d = |j: usize| mos[j] - g[j];
+            let p = if own == 1 {
+                let p = set([0.0, gvv, 0.0], col[i + 1], gvv + (d(i - 1) + d(i + 1)) * 0.5);
+                set(p, col[i + bw], gvv + (d(i - bw) + d(i + bw)) * 0.5)
+            } else {
+                let p = set([0.0, gvv, 0.0], own, mos[i]);
+                set(p, 2 - own, gvv + (d(i - bw - 1) + d(i - bw + 1) + d(i + bw - 1) + d(i + bw + 1)) * 0.25)
+            };
+            rgb[i] = p;
+            lab_of[i] = lab(p);
         }
-        rgb
+        (rgb, lab_of)
     };
-    let rh = complete(&gh);
-    let rv = complete(&gv);
-    // 3. Lab + homogeneity
-    let lh: Vec<[f32; 3]> = rh.iter().map(|&p| lab(p)).collect();
-    let lv: Vec<[f32; 3]> = rv.iter().map(|&p| lab(p)).collect();
+    let (rh, lh) = complete(&gh);
+    let (rv, lv) = complete(&gv);
+    // homogeneity
     let dl = |a: &[f32; 3], b: &[f32; 3]| (a[0] - b[0]).abs();
     let dc = |a: &[f32; 3], b: &[f32; 3]| (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2);
     let mut hh = vec![0u8; n];
     let mut hv = vec![0u8; n];
-    for y in 1..bh as isize - 1 {
-        for x in 1..bw as isize - 1 {
-            let i = cl(x, y);
-            let (l, r, u, d) = (cl(x - 1, y), cl(x + 1, y), cl(x, y - 1), cl(x, y + 1));
-            let eps_l = dl(&lh[i], &lh[l]).max(dl(&lh[i], &lh[r])).min(dl(&lv[i], &lv[u]).max(dl(&lv[i], &lv[d])));
-            let eps_c = dc(&lh[i], &lh[l]).max(dc(&lh[i], &lh[r])).min(dc(&lv[i], &lv[u]).max(dc(&lv[i], &lv[d])));
-            let mut ch = 0;
-            let mut cv = 0;
-            for j in [l, r, u, d] {
-                if dl(&lh[i], &lh[j]) <= eps_l && dc(&lh[i], &lh[j]) <= eps_c {
-                    ch += 1;
-                }
-                if dl(&lv[i], &lv[j]) <= eps_l && dc(&lv[i], &lv[j]) <= eps_c {
-                    cv += 1;
-                }
-            }
-            hh[i] = ch;
-            hv[i] = cv;
-        }
+    for i in inner(MARGIN - 1) {
+        // left, right, up, down
+        let (l, r, u, d) = (i - 1, i + 1, i - bw, i + bw);
+        let (a, b) = (lh[i], lv[i]);
+        let dlh = [dl(&a, &lh[l]), dl(&a, &lh[r]), dl(&a, &lh[u]), dl(&a, &lh[d])];
+        let dch = [dc(&a, &lh[l]), dc(&a, &lh[r]), dc(&a, &lh[u]), dc(&a, &lh[d])];
+        let dlv = [dl(&b, &lv[l]), dl(&b, &lv[r]), dl(&b, &lv[u]), dl(&b, &lv[d])];
+        let dcv = [dc(&b, &lv[l]), dc(&b, &lv[r]), dc(&b, &lv[u]), dc(&b, &lv[d])];
+        let eps_l = dlh[0].max(dlh[1]).min(dlv[2].max(dlv[3]));
+        let eps_c = dch[0].max(dch[1]).min(dcv[2].max(dcv[3]));
+        hh[i] = (0..4).map(|k| u8::from(dlh[k] <= eps_l && dch[k] <= eps_c)).sum();
+        hv[i] = (0..4).map(|k| u8::from(dlv[k] <= eps_l && dcv[k] <= eps_c)).sum();
     }
     // 4. choose
     let mut out = Vec::with_capacity(tw * th);
-    for y in MARGIN..MARGIN + th {
-        for x in MARGIN..MARGIN + tw {
-            let (mut sh, mut sv) = (0u32, 0u32);
-            for dy in -1isize..=1 {
-                for dx in -1isize..=1 {
-                    let j = cl(x as isize + dx, y as isize + dy);
-                    sh += hh[j] as u32;
-                    sv += hv[j] as u32;
-                }
-            }
-            let i = y * bw + x;
-            out.push(if sh > sv {
-                rh[i]
-            } else if sv > sh {
-                rv[i]
-            } else {
-                [(rh[i][0] + rv[i][0]) * 0.5, (rh[i][1] + rv[i][1]) * 0.5, (rh[i][2] + rv[i][2]) * 0.5]
-            });
+    for i in inner(MARGIN) {
+        let (mut sh, mut sv) = (0u32, 0u32);
+        for j in [i - bw - 1, i - bw, i - bw + 1, i - 1, i, i + 1, i + bw - 1, i + bw, i + bw + 1] {
+            sh += hh[j] as u32;
+            sv += hv[j] as u32;
         }
+        out.push(if sh > sv {
+            rh[i]
+        } else if sv > sh {
+            rv[i]
+        } else {
+            [(rh[i][0] + rv[i][0]) * 0.5, (rh[i][1] + rv[i][1]) * 0.5, (rh[i][2] + rv[i][2]) * 0.5]
+        });
     }
     out
 }

@@ -100,7 +100,8 @@ pub struct Shot {
     pub aperture: Option<f64>,
     /// Focus distance, metres.
     pub distance: Option<f64>,
-    /// Crop factor of the camera (from [`LensDb::find_camera`]); the profile's own when unknown.
+    /// Crop factor of the recorded frame: the camera's (from [`LensDb::find_camera`]), or larger when the camera
+    /// recorded a crop of its sensor; the profile's own when unknown.
     pub crop_factor: Option<f64>,
     /// Image size in pixels (the frame the correction is expressed for; the optical centre is its centre).
     pub width: f64,

@@ -25,8 +25,12 @@ const MAX_FILE: u64 = 4 << 20;
 /// Profiles built into LightCraft (`assets/camera-profiles/`, see `assets/ATTRIBUTION.md`):
 /// `(model, JSON)`.
 pub const BUNDLED: &[(&str, &str)] = &[
+    ("ILCA-99M2", include_str!("../../../assets/camera-profiles/ILCA-99M2.json")),
     ("ILCE-7CR", include_str!("../../../assets/camera-profiles/ILCE-7CR.json")),
     ("ILCE-7M4", include_str!("../../../assets/camera-profiles/ILCE-7M4.json")),
+    ("NIKON D5300", include_str!("../../../assets/camera-profiles/NIKON_D5300.json")),
+    ("NIKON Z 6_2", include_str!("../../../assets/camera-profiles/NIKON_Z_6_2.json")),
+    ("NIKON Z 8", include_str!("../../../assets/camera-profiles/NIKON_Z_8.json")),
     ("X-H2S", include_str!("../../../assets/camera-profiles/X-H2S.json")),
     ("X-T4", include_str!("../../../assets/camera-profiles/X-T4.json")),
 ];
@@ -194,10 +198,12 @@ impl Pool {
     /// NEF or RAF without colour matrices, no usable camera JPEG, too little colour).
     pub fn add(&mut self, bytes: &[u8]) -> Result<Option<String>, String> {
         let mut raw = lightcraft_raw::decode(bytes).map_err(|e| e.to_string())?;
-        // colour only: geometric lens corrections would stop the sensor proxy from binning
+        // colour only: geometric lens corrections would stop the sensor proxy from binning (the pairs still follow
+        // the warp the camera applied to its JPEG)
+        let lens = crate::camera_preview::lens_geometry(&raw.opcodes.list3);
         raw.opcodes.list3.retain(|op| !op.is_lens_correction());
         let Some(model) = raw.metadata.model.as_deref().map(str::trim).filter(|m| !m.is_empty()) else { return Ok(None) };
-        let Some(pairs) = crate::camera_preview::profile_pairs(&raw, bytes) else { return Ok(None) };
+        let Some(pairs) = crate::camera_preview::profile_pairs(&raw, bytes, lens.as_ref()) else { return Ok(None) };
         let step = pairs.len().div_ceil(PAIRS_PER_FILE).max(1);
         let entry = self.models.entry(model.to_owned()).or_default();
         entry.0 += 1;

@@ -2,6 +2,13 @@ use serde_json::{Value, json};
 
 use crate::{Backend, Headless, PROTOCOL_VERSION, Server, call_tool, command_tool_name};
 
+/// An undated file takes its own date (#1216): give the fixture the date its folder template expects (noon UTC,
+/// the same day in every time zone the tests run in).
+fn file_dated_2026_01_14(path: &std::path::Path) {
+    let noon = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_768_392_000);
+    std::fs::File::options().write(true).open(path).unwrap().set_modified(noon).unwrap();
+}
+
 fn server() -> Server {
     Server::new(Box::new(Headless::demo()))
 }
@@ -82,6 +89,7 @@ fn import_tool_copies_with_a_folder_template() {
     let img = lightcraft_raster::Rgba8 { width: 8, height: 8, data: vec![[20, 3, 9, 255]; 64] };
     let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
     std::fs::write(src.join("a.png"), png).unwrap();
+    file_dated_2026_01_14(&src.join("a.png"));
     let mut b = Headless::demo();
     b.session.clock = Box::new(|| "2026-01-14T05:58:48".to_string());
     let args =
@@ -255,6 +263,7 @@ fn import_tool_moves_with_a_folder_template() {
     let img = lightcraft_raster::Rgba8 { width: 8, height: 8, data: vec![[21, 3, 9, 255]; 64] };
     let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
     std::fs::write(src.join("sample.png"), png).unwrap();
+    file_dated_2026_01_14(&src.join("sample.png"));
     let mut b = Headless::demo();
     b.session.clock = Box::new(|| "2026-01-14T05:58:48".to_string());
     let args = json!({"paths": [src.to_string_lossy()], "mode": "move", "destination": dest.to_string_lossy(),

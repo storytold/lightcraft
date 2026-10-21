@@ -93,9 +93,12 @@ fn export_dialog_is_unchanged_in_a_tall_window() {
     let h = export_dialog([1600.0, 1000.0]);
     assert_fits(&h, "Export at 1600×1000");
     let dialog = rect(&h, "dialog:window");
-    // (846 tall as before #781: the whole dialog, nothing scrolled away; 615 wide since the
-    // format row gained JPEG XL, #780)
-    assert!((dialog.height() - 846.0).abs() <= 1.0, "{dialog:?}");
+    // (846 tall as before #781: the whole dialog, nothing scrolled away, plus the Export to row
+    // since #956; 615 wide since the format row gained JPEG XL, #780. On macOS the dialog has one
+    // more row, "Add to Apple Photos" (#236), so it is 30 taller there. 8 more since its footer's
+    // buttons are the button component's medium size, 30 points, as the welcome's and every dialog's)
+    let height = if cfg!(target_os = "macos") { 916.0 } else { 886.0 };
+    assert!((dialog.height() - height).abs() <= 1.0, "{dialog:?}");
     assert!((dialog.width() - 615.2).abs() <= 1.0, "{dialog:?}");
 }
 
@@ -131,4 +134,27 @@ fn a_dialog_list_shrinks_to_fit_a_short_window() {
     assert!(shrink > 0.0, "the list gave up room");
     let dialog = rect(&h, "dialog:window");
     assert!(dialog.height() <= 320.0, "{dialog:?}");
+}
+
+/// Settings ▸ Performance: the GPU status line above the controls stays one line whatever it says
+/// (without a driver it is a long wgpu message, e.g. on the FreeBSD CI), so the controls below it
+/// don't move when the process-wide GPU state changes between two frames (a click aimed at
+/// "Memory for caches" then landed on the gap above it).
+#[test]
+fn gpu_status_never_moves_the_performance_controls() {
+    let mut h = demo([1300.0, 820.0]);
+    let r = h.request("ui.key", json!({"key": ",", "cmd": true}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    let r = h.request("ui.clickWidget", json!({"id": "button:settingsTab-performance"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    let mut seen = vec![];
+    for gpu in [true, false, true] {
+        // the setting is applied process-wide at the next frame (`app.gpu`), as other tests do
+        h.app.ui.settings.gpu = gpu;
+        h.step();
+        h.step();
+        seen.push((gpu, rect(&h, "button:settingsMemory-2"), lightcraft_engine::gpu::unavailable_reason()));
+    }
+    let first = seen[0].1;
+    assert!(seen.iter().all(|(_, r, _)| *r == first), "the memory buttons moved: {seen:?}");
 }

@@ -173,7 +173,8 @@ fn curve(props: &Props, k: &str) -> Option<Value> {
     let mut pts = Vec::new();
     for it in items {
         let (x, y) = it.split_once(',')?;
-        let (x, y) = (x.trim().parse::<f64>().ok()?, y.trim().parse::<f64>().ok()?);
+        // (`parse` reads "NaN" and "inf" too: a curve with such a point is not a curve)
+        let (x, y) = (x.trim().parse::<f64>().ok().filter(|v| v.is_finite())?, y.trim().parse::<f64>().ok().filter(|v| v.is_finite())?);
         pts.push(json!({"x": (x / 255.0).clamp(0.0, 1.0), "y": (y / 255.0).clamp(0.0, 1.0)}));
     }
     if pts.len() < 2 {
@@ -615,6 +616,19 @@ mod tests {
         );
         let c = s.crop.geometry;
         assert_eq!((c.rect.x0, c.rect.y0, c.rect.x1, c.rect.y1, c.angle), (0.05, 0.1, 0.8, 0.9, 1.5));
+    }
+
+    /// A sidecar curve with a `NaN` or `inf` point (Rust's `parse` reads both) is not a curve:
+    /// it is left out, rather than stored with a point the curve editor can't place.
+    #[test]
+    fn curves_with_non_finite_points_are_left_out() {
+        for bad in ["NaN, 0", "64, inf", "-inf, 3"] {
+            let x = SIDECAR.replace("<rdf:li>64, 52</rdf:li>", &format!("<rdf:li>{bad}</rdf:li>"));
+            let partial = to_partial(&props(&x), Target::RawAbsolute);
+            let s = apply_partial(&DevelopSettings::for_raw(5000.0, 0.0), &partial, 1.0);
+            assert!(s.curve.master.is_empty(), "{bad}: {:?}", s.curve.master);
+            assert!(s.curve.master.iter().all(|p| p.x.is_finite() && p.y.is_finite()));
+        }
     }
 
     #[test]

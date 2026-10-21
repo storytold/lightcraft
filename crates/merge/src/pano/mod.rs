@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 
 pub use project::Projection;
 
-use crate::frame::{Frame, FrameColor};
+use crate::frame::{Frame, FrameColor, consensus_multipliers};
 use crate::linalg;
 use crate::{MergeError, Progress, Result, check};
 use blend::{Blender, Buf, push_pull};
@@ -39,15 +39,22 @@ pub struct PanoOptions {
     pub boundary_warp: f64,
     pub auto_crop: bool,
     pub fill_edges: bool,
-    /// Output size limit (megapixels); the panorama is scaled down to fit.
+    /// Output size limit (megapixels); the panorama is scaled down to fit. At most
+    /// [`MAX_MEGAPIXELS`] (the default: the photos' own resolution).
     pub max_megapixels: f64,
 }
 
 impl Default for PanoOptions {
     fn default() -> Self {
-        PanoOptions { projection: Projection::Auto, boundary_warp: 0.0, auto_crop: false, fill_edges: false, max_megapixels: 40.0 }
+        PanoOptions { projection: Projection::Auto, boundary_warp: 0.0, auto_crop: false, fill_edges: false, max_megapixels: MAX_MEGAPIXELS }
     }
 }
+
+/// The largest panorama, in megapixels (Lightroom's limit too); a bigger one is scaled down.
+pub const MAX_MEGAPIXELS: f64 = 512.0;
+
+/// The longest edge of a panorama, in pixels (Lightroom's limit too); a longer one is scaled down.
+pub const MAX_EDGE: f64 = 65_000.0;
 
 /// The stitched panorama.
 #[derive(Clone, Debug)]
@@ -71,6 +78,8 @@ pub struct PanoResult {
     pub rms: f64,
     /// Horizontal and vertical field of view (degrees).
     pub fov: (f64, f64),
+    /// The panorama's size at the photos' own resolution (megapixels), before any limit.
+    pub native_megapixels: f64,
     /// Output focal length and the surface coordinates of the canvas's top-left corner: canvas
     /// pixel (x, y) (before boundary warp) shows surface point (x + 0.5 + origin.0, y + 0.5 + origin.1).
     pub focal: f64,
@@ -210,7 +219,7 @@ pub fn register(frames: &[Frame], progress: &Progress) -> Result<(Vec<Option<Cam
 }
 
 /// Stitch `frames` (oriented, linear) into a panorama.
-pub fn stitch(frames: Vec<Frame>, opts: &PanoOptions, progress: &Progress) -> Result<PanoResult> {
+pub fn stitch(mut frames: Vec<Frame>, opts: &PanoOptions, progress: &Progress) -> Result<PanoResult> {
     let n = frames.len();
     if n < 2 {
         return Err(MergeError::TooFew(n, 2));
@@ -231,9 +240,9 @@ pub fn stitch(frames: Vec<Frame>, opts: &PanoOptions, progress: &Progress) -> Re
     if projection == Projection::Perspective && (bx1 - bx0) * (by1 - by0) > 12.0 * area {
         return Err(MergeError::NoOverlap(format!("the field of view ({:.0}°) is too wide for a perspective projection", fov.0)));
     }
-    // output scale: native resolution, limited to max_megapixels
-    let max_px = (opts.max_megapixels.max(0.1) * 1e6).min(400e6);
-    let s = (max_px / ((bx1 - bx0) * (by1 - by0))).sqrt().min(1.0);
+    // output scale: native resolution, limited to max_megapixels and the longest edge
+    let max_px = if opts.max_megapixels.is_nan() { MAX_MEGAPIXELS } else { opts.max_megapixels.clamp(0.1, MAX_MEGAPIXELS) } * 1e6;
+    let s = (max_px / ((bx1 - bx0) * (by1 - by0))).sqrt().min(MAX_EDGE / (bx1 - bx0).max(by1 - by0)).min(1.0);
     let f_out = fmed * s;
     let (ox, oy) = (bx0 * s, by0 * s);
     let (cw, ch) = (((bx1 - bx0) * s).ceil() as usize + 1, ((by1 - by0) * s).ceil() as usize + 1);
@@ -298,6 +307,11 @@ pub fn stitch(frames: Vec<Frame>, opts: &PanoOptions, progress: &Progress) -> Re
         .collect();
     check(progress, 0.6, "Exposure compensation")?;
     compensate_gains(&tiles, &mut gains, &frames);
+    // the tiles hold every pixel the blend needs: the frames' own go now, before the blend
+    // takes its memory (12 bytes a pixel of every photo: 3 GB for five 51 MP frames)
+    for f in &mut frames {
+        f.image = Rgb32f::new(0, 0);
+    }
 
     // seams: label = max feather weight
     let mut best = vec![0f32; pw * ph];
@@ -362,6 +376,11 @@ pub fn stitch(frames: Vec<Frame>, opts: &PanoOptions, progress: &Progress) -> Re
         image = finish::fill_edges(&image, &alpha);
     }
     let r = &frames[used[0]];
+    // the panorama's white balance is the median of the frames that are in it, not whichever frame came first
+    let mut color = r.color.clone();
+    if let Some(multipliers) = consensus_multipliers(used.iter().filter_map(|&i| frames.get(i))) {
+        color.set_as_shot_multipliers(multipliers);
+    }
     Ok(PanoResult {
         image,
         alpha,
@@ -373,9 +392,10 @@ pub fn stitch(frames: Vec<Frame>, opts: &PanoOptions, progress: &Progress) -> Re
         rms_before,
         rms,
         fov,
+        native_megapixels: (bx1 - bx0) * (by1 - by0) / 1e6,
         focal: f_out,
         origin: (ox, oy),
-        color: r.color.clone(),
+        color,
         metadata: r.metadata.clone(),
         raw: r.raw,
         baseline_exposure: r.baseline_exposure,

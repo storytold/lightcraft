@@ -35,7 +35,7 @@ pub const MODEL_BYTES: u64 = 3_439_938_512;
 /// The model's licence (not LightCraft's): shown before downloading.
 pub const LICENSE_NAME: &str = "SAM License (Meta)";
 pub const LICENSE_URL: &str = "https://github.com/facebookresearch/sam3/blob/main/LICENSE";
-/// How errors about a missing model start (the UI offers the download on it).
+/// How errors about a missing model start (frontends decide on [`crate::ErrorKind::ModelMissing`], not on this text).
 pub const NOT_INSTALLED: &str = "The SAM 3 model is not installed";
 /// Longest a waiting command (CLI, MCP) waits for the model (loading on a CPU can take minutes).
 #[cfg_attr(not(feature = "sam"), allow(dead_code))]
@@ -111,6 +111,8 @@ pub struct DownloadStatus {
     pub total: u64,
     pub file: String,
     pub error: Option<String>,
+    /// The last download was cancelled (it resumes next time): decide on this, not on `error`'s text.
+    pub cancelled: bool,
     pub finished: bool,
 }
 
@@ -215,7 +217,15 @@ impl Segmenter {
         #[cfg(feature = "sam")]
         {
             let s = self.download.status();
-            DownloadStatus { running: s.running, done: s.done, total: s.total, file: s.file, error: s.error, finished: s.finished }
+            DownloadStatus {
+                running: s.running,
+                done: s.done,
+                total: s.total,
+                file: s.file,
+                error: s.error,
+                cancelled: s.cancelled,
+                finished: s.finished,
+            }
         }
         #[cfg(not(feature = "sam"))]
         DownloadStatus::default()
@@ -234,27 +244,36 @@ impl Segmenter {
 
     /// The model folder, if the model is there; otherwise an error that says what to do.
     pub fn model_dir(&self) -> Result<PathBuf, String> {
+        self.require_model().map_err(|e| e.to_string())
+    }
+
+    /// [`Segmenter::model_dir`] for commands: a model that is not installed (or still downloading) is
+    /// [`crate::EngineError::ModelMissing`], so a frontend offers the download without reading the message.
+    pub fn require_model(&self) -> crate::Result<PathBuf> {
+        let other = |why: &str| crate::EngineError::Other(why.into());
         if !Self::AVAILABLE {
-            return Err("AI masks are not available in this build".into());
+            return Err(other("AI masks are not available in this build"));
         }
         #[cfg(feature = "sam")]
         if lightcraft_segment::remote::configured().is_some() {
             return Ok(PathBuf::new());
         }
-        let dir = self.dir.clone().ok_or("no folder is set for the SAM 3 model")?;
+        let dir = self.dir.clone().ok_or_else(|| other("no folder is set for the SAM 3 model"))?;
         if self.installed() {
             return Ok(dir);
         }
         let d = self.download_status();
-        if d.running {
+        let msg = if d.running {
             let pct = d.done.saturating_mul(100).checked_div(d.total).unwrap_or(0);
-            return Err(format!("{NOT_INSTALLED} yet: it is downloading ({pct} %)."));
-        }
-        Err(format!(
-            "{NOT_INSTALLED}. Download it (about {:.1} GB, {LICENSE_NAME}) when LightCraft offers it, with `segment.model.download {{\"acknowledged\": true}}`, or put model.safetensors, vocab.json and merges.txt in {}.",
-            MODEL_BYTES as f64 / 1e9,
-            dir.display()
-        ))
+            format!("{NOT_INSTALLED} yet: it is downloading ({pct} %).")
+        } else {
+            format!(
+                "{NOT_INSTALLED}. Download it (about {:.1} GB, {LICENSE_NAME}) when LightCraft offers it, with `segment.model.download {{\"acknowledged\": true}}`, or put model.safetensors, vocab.json and merges.txt in {}.",
+                MODEL_BYTES as f64 / 1e9,
+                dir.display()
+            )
+        };
+        Err(crate::EngineError::ModelMissing { model: crate::AiModel::Sam3, msg })
     }
 
     /// Start downloading the model (on a background thread; see `segment.model.download`).

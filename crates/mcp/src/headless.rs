@@ -10,13 +10,6 @@ use serde_json::{Value, json};
 
 use crate::backend::{Backend, ProgressHook};
 
-/// File extensions recognised as photos when expanding folders.
-pub const PHOTO_EXTENSIONS: &[&str] = &[
-    "jpg", "jpeg", "png", "tif", "tiff", "webp", "dng", "cr2", "cr3", "nef", "arw", "raf", "orf", "rw2", "rwl", "raw", "pef", "srw", "psd", "jxl",
-    "gif", "bmp", "avif", // containers LightCraft cannot decode but imports as preview only (their embedded JPEG)
-    "iiq", "crw", "mrw", "x3f", "kdc", "mos", "erf", "3fr", "fff",
-];
-
 /// Headless backend: a [`Session`] with filesystem hooks.
 pub struct Headless {
     pub session: Session,
@@ -37,7 +30,7 @@ impl Drop for Headless {
 impl Default for Headless {
     fn default() -> Self {
         let session = Session::new().with_fs().with_default_denoise_models().with_system_clock().with_default_face_models().with_default_flickr();
-        Self::new(session.with_default_sam3_model())
+        Self::new(session.with_default_sam3_model().with_default_slide_templates())
     }
 }
 
@@ -49,7 +42,7 @@ impl Headless {
     /// A headless session with the procedurally generated demo library.
     pub fn demo() -> Self {
         let session = Session::with_demo().with_fs().with_default_denoise_models().with_system_clock().with_default_face_models();
-        Self::new(session.with_default_sam3_model())
+        Self::new(session.with_default_sam3_model().with_default_slide_templates())
     }
 
     fn photo_or_active(&self, p: &Value) -> Result<PhotoId, String> {
@@ -142,7 +135,7 @@ impl Backend for Headless {
             "engine.commands" => {
                 let mut v: Vec<Value> = self.session.commands().into_iter().map(|c| serde_json::to_value(c).unwrap_or_default()).collect();
                 v.push(json!({"id": "app.export", "label": "Export Now", "menu": [], "shortcut": null,
-                    "params": "{path?: output file (.jpg/.png/.tif/.webp/.avif/.jxl/.psd/.dng) | dir?, ids?, preset?, format?: jpeg|png|tiff|webp|avif|jxl|psd|dng|original, longEdge?|shortEdge?|width?|height?|megapixels?|percent? (default longEdge 3000; longEdge 0 = full size), dontEnlarge?, ppi?, quality?: 1..100, jxlLossless?, jxlEffort?: fast|normal, jxlProgressive?, limitKb?, colorSpace?: srgb|displayP3|adobeRgb|proPhoto|rec2020, bitDepth?: 8|10|16|32, hdr? (HDR output for HDR edits: gain map JPEG, PQ AVIF / PNG / JPEG XL, float TIFF), sharpen?: none|screen|matte|glossy, sharpenAmount?: low|standard|high, metadata?: all|allExceptCamera|copyright|none, removeLocation?, naming?, startNumber?, subfolder?, conflict?: unique|overwrite|skip, tiffCompression?: none|lzw|zip, dngCompression?: lossless|deflate|uncompressed, addToPhotos?: bool (macOS: then add the files written to Apple Photos; outcome in `applePhotos`), photosAlbum?: top-level album name (made when missing), watermark?: text | {text?, vertical? (upright columns, right to left), size? (text height, 0.005..0.5 of the short edge; default 0.035), opacity? (0..1; 0.7), anchor?: topLeft|top|topRight|left|center|right|bottomLeft|bottom|bottomRight, insetX? (margin from the left/right edge, 0..0.4 of the short edge; 0.025), insetY? (from the top/bottom edge; 0.025), inset? (sets both), rotation?: 0|90|180|270 (degrees clockwise; 0), color? [r,g,b] sRGB, shadow?, image? (graphic drawn instead of the text), imageWidth? (0.01..1 of the photo's width; 0.2)}} — an unknown parameter, an out-of-range watermark size or a value of the wrong kind is an error, not a default",
+                    "params": "{path?: output file (.jpg/.png/.tif/.webp/.avif/.jxl/.psd/.dng) | dir?, ids?, preset?, format?: jpeg|png|tiff|webp|avif|jxl|psd|dng|original, longEdge?|shortEdge?|width?|height?|megapixels?|percent? (default longEdge 3000; longEdge 0 = full size), dontEnlarge?, ppi?, quality?: 1..100, jxlLossless?, jxlEffort?: fast|normal, jxlProgressive?, limitKb?, colorSpace?: srgb|displayP3|adobeRgb|proPhoto|rec2020, bitDepth?: 8|10|16|32, hdr? (HDR output for HDR edits: gain map JPEG, PQ AVIF / PNG / JPEG XL, float TIFF), sharpen?: none|screen|matte|glossy, sharpenAmount?: low|standard|high, metadata?: all|allExceptCamera|copyright|none, removeLocation?, naming?, startNumber?, destinationMode?: specificFolder|sameAsOriginal (sameAsOriginal = each photo into its original's folder; `dir` unused), subfolder?, conflict?: unique|overwrite|skip, tiffCompression?: none|lzw|zip, dngCompression?: lossless|deflate|uncompressed, addToPhotos?: bool (macOS: then add the files written to Apple Photos; outcome in `applePhotos`), photosAlbum?: top-level album name (made when missing), watermark?: text | {text?, vertical? (upright columns, right to left), size? (text height, 0.005..0.5 of the short edge; default 0.035), opacity? (0..1; 0.7), anchor?: topLeft|top|topRight|left|center|right|bottomLeft|bottom|bottomRight, insetX? (margin from the left/right edge, 0..0.4 of the short edge; 0.025), insetY? (from the top/bottom edge; 0.025), inset? (sets both), rotation?: 0|90|180|270 (degrees clockwise; 0), color? [r,g,b] sRGB, shadow?, image? (graphic drawn instead of the text), imageWidth? (0.01..1 of the photo's width; 0.2)}} — an unknown parameter, an out-of-range watermark size or a value of the wrong kind is an error, not a default",
                     "enabled": self.session.active().is_some()}));
                 Ok(Value::Array(v))
             }
@@ -175,15 +168,16 @@ impl Backend for Headless {
 }
 
 /// Expand folders (recursively, sorted; bounded, see `lightcraft_engine::walk`) into photo files
-/// and make paths absolute.
+/// and make paths absolute. Folders take the extensions `library.import` takes
+/// (`lightcraft_engine::import::EXTENSIONS`), so the two can't drift apart (issue #1080).
 pub fn expand_paths(paths: &[String]) -> Vec<String> {
     let absolute = |p: &Path| std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf()).to_string_lossy().to_string();
-    let photo = |p: &Path| p.extension().is_some_and(|e| PHOTO_EXTENSIONS.contains(&e.to_string_lossy().to_lowercase().as_str()));
     let mut out = Vec::new();
     for p in paths {
         let path = Path::new(p);
         if path.is_dir() {
-            let w = lightcraft_engine::walk::files_in(path, None, lightcraft_engine::walk::Limits::default(), photo);
+            let w =
+                lightcraft_engine::walk::files_in(path, None, lightcraft_engine::walk::Limits::default(), lightcraft_engine::import::is_supported);
             out.extend(w.files.iter().map(|f| absolute(f)));
         } else {
             // Explicit files are kept even with unknown extensions (the probe decides).
@@ -224,6 +218,27 @@ mod tests {
         let mut h = Headless::new(session);
         let r = h.call("engine.execute", json!({"command": "segment.model.status", "params": {}})).unwrap();
         assert_eq!(r["dir"], json!(dir.display().to_string()), "{r}");
+    }
+
+    /// `--import <folder>` picks up every extension `library.import` takes, HEIC included (issue #1080).
+    #[test]
+    fn expand_paths_takes_the_engine_extensions() {
+        let dir = std::env::temp_dir().join(format!("lc-mcp-expand-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for e in lightcraft_engine::import::EXTENSIONS {
+            std::fs::write(dir.join(format!("a.{e}")), b"x").unwrap();
+        }
+        std::fs::write(dir.join("B.HEIC"), b"x").unwrap();
+        std::fs::write(dir.join("notes.txt"), b"x").unwrap();
+        let found = expand_paths(&[dir.to_string_lossy().to_string()]);
+        let _ = std::fs::remove_dir_all(&dir);
+        let ext = |f: &String| Path::new(f).extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_default();
+        let mut got: Vec<String> = found.iter().map(ext).collect();
+        got.sort();
+        let mut want: Vec<String> = lightcraft_engine::import::EXTENSIONS.iter().map(|e| e.to_string()).chain(["HEIC".to_string()]).collect();
+        want.sort();
+        assert_eq!(got, want);
     }
 
     /// A headless session stamps imports and edits with the system clock, not the engine's fixed test clock.

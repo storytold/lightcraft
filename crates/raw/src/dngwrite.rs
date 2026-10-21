@@ -23,7 +23,76 @@ pub enum DngCompression {
         tile: u32,
         half: bool,
     },
+    /// Lossy DNG (DNG 1.4 compression 34892): the raw data demosaiced to linear camera RGB (with `OpcodeList3`
+    /// and the default crop applied), scaled down to at most `long_edge` pixels on the long side when given,
+    /// then stored as 8-bit baseline JPEG tiles of `tile × tile` pixels at JPEG `quality` (1–100). The 8-bit
+    /// codes follow a 1/2.2 power curve that a `LinearizationTable` maps back to linear 16-bit values, so
+    /// shadows keep their precision. The colour tags (matrices, white balance, profile look) are kept.
+    LossyJpeg {
+        tile: u32,
+        quality: u8,
+        long_edge: Option<u32>,
+    },
 }
+
+/// Gamma of the 8-bit codes in a lossy DNG (own choice: perceptually close to even steps, like sRGB).
+const LOSSY_GAMMA: f64 = 2.2;
+
+/// The 256-entry `LinearizationTable` of a lossy DNG: code → linear 16-bit value.
+fn lossy_linearization() -> Vec<u16> {
+    (0..256u32).map(|i| ((i as f64 / 255.0).powf(LOSSY_GAMMA) * 65535.0).round() as u16).collect()
+}
+
+/// The image a lossy DNG stores: `raw` developed to linear camera RGB (white = 1), scaled to fit
+/// `long_edge`, as 8-bit codes (in `u16` samples) on the [`LOSSY_GAMMA`] curve, with the levels,
+/// geometry and opcode lists that this data needs (black 0, white 65535 after linearization).
+fn lossy_source(raw: &RawImage, long_edge: Option<u32>) -> Result<RawImage> {
+    let mut rgb = raw.develop(crate::Method::Ahd)?;
+    if let Some(edge) = long_edge.map(|e| e.max(1) as usize) {
+        let long = rgb.width.max(rgb.height);
+        if long > edge {
+            let s = edge as f64 / long as f64;
+            let w = ((rgb.width as f64 * s).round() as usize).max(1);
+            let h = ((rgb.height as f64 * s).round() as usize).max(1);
+            rgb = lightcraft_raster::resample::resize(&rgb, w, h, lightcraft_raster::resample::Filter::Lanczos3);
+        }
+    }
+    let (w, h) = (rgb.width, rgb.height);
+    if w == 0 || h == 0 {
+        return Err(RawError::Corrupt("empty image".into()));
+    }
+    let inv = 1.0 / LOSSY_GAMMA as f32;
+    let data: Vec<u16> = rgb
+        .data
+        .par_iter()
+        .flat_map_iter(|px| px.map(|v| if v.is_finite() { (v.clamp(0.0, 1.0).powf(inv) * 255.0).round() as u16 } else { 0 }))
+        .collect();
+    let full = crate::Rect::new(0, 0, w, h);
+    Ok(RawImage {
+        width: w,
+        height: h,
+        cpp: 3,
+        data: RawData::U16(data),
+        cfa: None,
+        bits: 8,
+        black: crate::BlackLevel::default(),
+        white: vec![65535.0],
+        active_area: full,
+        crop: full,
+        // list 1 and 2 work on the undemosaiced data and list 3 is applied by `develop`
+        opcodes: crate::OpcodeLists::default(),
+        linearized: true,
+        ..raw.clone()
+    })
+}
+
+/// Software tag of the DNGs this writer makes. A bare "LightCraft" marks older files, whose CFAPattern is anchored at
+/// the sensor origin instead of the ActiveArea (the reader keeps their original reading).
+pub const SOFTWARE: &str = "LightCraft DNG 2";
+
+/// zlib level of Deflate tiles. On a 67 MP focus-stack merge (half floats) level 6 took 7× as long as level 1
+/// (3.9 s vs 0.55 s on 4 cores) to save 3 % of the file (266 vs 275 MB); 5–12 % on raw and rendered DNGs.
+const DEFLATE_LEVEL: u8 = 1;
 
 /// IEEE 754 binary32 → binary16 (round to nearest even; overflow → ±inf, NaN kept).
 pub fn f32_to_f16(v: f32) -> u16 {
@@ -98,6 +167,14 @@ fn rat_vec(v: &[f64]) -> Value {
 /// Serialise `raw` as a DNG.
 pub fn write_dng(raw: &RawImage, opts: &DngWriteOptions) -> Result<Vec<u8>> {
     raw.validate()?;
+    let lossy;
+    let raw = match opts.compression {
+        DngCompression::LossyJpeg { long_edge, .. } => {
+            lossy = lossy_source(raw, long_edge)?;
+            &lossy
+        }
+        _ => raw,
+    };
     let (w, h, cpp) = (raw.width, raw.height, raw.cpp);
     let mut ifd = IfdBuilder::new();
     ifd.set(t::NEW_SUBFILE_TYPE, Value::Long(vec![0]));
@@ -108,24 +185,35 @@ pub fn write_dng(raw: &RawImage, opts: &DngWriteOptions) -> Result<Vec<u8>> {
     ifd.set(t::PHOTOMETRIC, Value::Short(vec![if raw.cfa.is_some() { photometric::CFA } else { photometric::LINEAR_RAW }]));
     ifd.set(t::DNG_VERSION, Value::Byte(vec![1, 4, 0, 0]));
     ifd.set(t::DNG_BACKWARD_VERSION, Value::Byte(vec![1, 3, 0, 0]));
-    let make = raw.metadata.make.clone().unwrap_or_default();
-    let model = raw.metadata.model.clone().unwrap_or_default();
+    let make = raw.metadata.make.as_deref().unwrap_or_default();
+    let model = raw.metadata.model.as_deref().unwrap_or_default();
     if !make.is_empty() {
-        ifd.set(t::MAKE, Value::Ascii(make.clone()));
+        ifd.set(t::MAKE, Value::Ascii(make.to_owned()));
     }
     if !model.is_empty() {
-        ifd.set(t::MODEL, Value::Ascii(model.clone()));
+        ifd.set(t::MODEL, Value::Ascii(model.to_owned()));
     }
-    let unique = format!("{make} {model}").trim().to_string();
+    let model_includes_make = !make.is_empty()
+        && model.get(..make.len()).is_some_and(|prefix| prefix.eq_ignore_ascii_case(make))
+        && model.get(make.len()..).is_some_and(|suffix| suffix.chars().next().is_none_or(|c| !c.is_alphanumeric() && c != '_'));
+    let unique = if model_includes_make || make.is_empty() {
+        model.to_owned()
+    } else if model.is_empty() {
+        make.to_owned()
+    } else {
+        format!("{make} {model}")
+    };
     ifd.set(t::UNIQUE_CAMERA_MODEL, Value::Ascii(if unique.is_empty() { "LightCraft".into() } else { unique }));
     ifd.set(t::ORIENTATION, Value::Short(vec![raw.orientation.to_exif()]));
-    ifd.set(t::SOFTWARE, Value::Ascii("LightCraft".into()));
+    ifd.set(t::SOFTWARE, Value::Ascii(SOFTWARE.into()));
     let xmp = opts.xmp.clone().unwrap_or_else(|| lightcraft_meta::write_xmp(&raw.metadata, None));
     ifd.set(t::XMP, Value::Byte(xmp.into_bytes()));
 
     if let Some(cfa) = &raw.cfa {
         ifd.set(t::CFA_REPEAT_PATTERN_DIM, Value::Short(vec![cfa.height as u16, cfa.width as u16]));
-        ifd.set(t::CFA_PATTERN_EP, Value::Byte(cfa.pattern.clone()));
+        // the tag is anchored at the ActiveArea's top-left, `raw.cfa` at the sensor origin
+        let a = raw.active_area;
+        ifd.set(t::CFA_PATTERN_EP, Value::Byte(cfa.shifted(a.x, a.y).pattern));
         ifd.set(t::CFA_PLANE_COLOR, Value::Byte(vec![0, 1, 2]));
         ifd.set(t::CFA_LAYOUT, Value::Short(vec![1]));
     }
@@ -259,7 +347,7 @@ pub fn write_dng(raw: &RawImage, opts: &DngWriteOptions) -> Result<Vec<u8>> {
                         }
                         buf.extend_from_slice(&float_predict(&row, tile * cpp, bp, cpp));
                     }
-                    miniz_oxide::deflate::compress_to_vec_zlib(&buf, 6)
+                    miniz_oxide::deflate::compress_to_vec_zlib(&buf, DEFLATE_LEVEL)
                 })
                 .collect();
             ifd.set_image(ImageData::Tiles { tile_width: tile as u32, tile_height: tile as u32, tiles });
@@ -275,6 +363,37 @@ pub fn write_dng(raw: &RawImage, opts: &DngWriteOptions) -> Result<Vec<u8>> {
                 bytes.extend_from_slice(&tmp);
             }
             ifd.set_image(ImageData::Strips { rows_per_strip: h as u32, strips: vec![bytes] });
+        }
+        (RawData::U16(v), DngCompression::LossyJpeg { tile, quality, .. }) => {
+            // `lossy_source` made 3-sample 8-bit codes
+            let tile = (tile.clamp(16, 4096) & !15) as usize;
+            ifd.set(t::BITS_PER_SAMPLE, Value::Short(vec![8; cpp]));
+            ifd.set(t::COMPRESSION, Value::Short(vec![compression::LOSSY_JPEG]));
+            ifd.set(t::LINEARIZATION_TABLE, Value::Short(lossy_linearization()));
+            let quality = quality.clamp(1, 100);
+            let (ta, td) = (w.div_ceil(tile), h.div_ceil(tile));
+            let tiles: Vec<Vec<u8>> = (0..ta * td)
+                .into_par_iter()
+                .map(|i| {
+                    let (tx, ty) = (i % ta * tile, i / ta * tile);
+                    let mut buf = Vec::with_capacity(tile * tile * 3);
+                    for y in 0..tile {
+                        let sy = (ty + y).min(h - 1);
+                        for x in 0..tile {
+                            let sx = (tx + x).min(w - 1);
+                            for s in 0..3 {
+                                buf.push(v.get((sy * w + sx) * cpp + s.min(cpp - 1)).map_or(0, |&c| c.min(255) as u8));
+                            }
+                        }
+                    }
+                    let mut out = Vec::new();
+                    jpeg_encoder::Encoder::new(&mut out, quality)
+                        .encode(&buf, tile as u16, tile as u16, jpeg_encoder::ColorType::Rgb)
+                        .map(|()| out)
+                        .map_err(|e| RawError::Corrupt(format!("lossy JPEG tile: {e}")))
+                })
+                .collect::<Result<_>>()?;
+            ifd.set_image(ImageData::Tiles { tile_width: tile as u32, tile_height: tile as u32, tiles });
         }
         (RawData::U16(v), _) => {
             let maxv = v.iter().copied().max().unwrap_or(0);
@@ -322,11 +441,13 @@ pub fn write_dng(raw: &RawImage, opts: &DngWriteOptions) -> Result<Vec<u8>> {
                                 }
                                 row.iter().for_each(|&x| opts.order.put_u16(&mut buf, x));
                             }
-                            miniz_oxide::deflate::compress_to_vec_zlib(&buf, 6)
+                            miniz_oxide::deflate::compress_to_vec_zlib(&buf, DEFLATE_LEVEL)
                         })
                         .collect();
                     ifd.set_image(ImageData::Tiles { tile_width: tile as u32, tile_height: tile as u32, tiles });
                 }
+                // handled above (the data is converted first)
+                DngCompression::LossyJpeg { .. } => return Err(RawError::Unsupported("lossy DNG of this data".into())),
                 DngCompression::Lj92 { tile } => {
                     let tile = (tile.max(2) & !1) as usize;
                     if tile > 65534 {
@@ -361,4 +482,67 @@ pub fn write_dng(raw: &RawImage, opts: &DngWriteOptions) -> Result<Vec<u8>> {
         }
     }
     Ok(TiffWriter::new(opts.order, false).write(&[ifd])?)
+}
+
+/// Exif `LightSource` code of a white point the rendered DNG writer knows (D65 = 21, D50 = 23).
+fn illuminant_of(white: lightcraft_color::Xy) -> u16 {
+    if (white.x - lightcraft_color::D50.x).abs() < 1e-3 && (white.y - lightcraft_color::D50.y).abs() < 1e-3 { 23 } else { 21 }
+}
+
+/// Render to DNG: a linear DNG (`LinearRaw`, 16-bit float Deflate tiles) of an already rendered,
+/// oriented image. `rgb` is `width × height` interleaved linear RGB in `space` (white = 1; values
+/// above 1 are kept up to the half-float maximum, negative and non-finite ones become 0). The colour tags describe `space`
+/// exactly — `ColorMatrix1` = XYZ → space, `ForwardMatrix1` = space → XYZ D50, a neutral
+/// `AsShotNeutral` — and an identity `ProfileToneCurve` keeps raw converters from adding their
+/// default tone curve on top of the baked-in edit.
+pub fn write_rendered_dng(
+    width: usize,
+    height: usize,
+    rgb: &[f32],
+    space: &lightcraft_color::RgbSpace,
+    metadata: &lightcraft_meta::Metadata,
+    xmp: Option<String>,
+) -> Result<Vec<u8>> {
+    let n = width.checked_mul(height).and_then(|p| p.checked_mul(3)).ok_or(RawError::Limit("image too large"))?;
+    if width == 0 || height == 0 || width > u32::MAX as usize || height > u32::MAX as usize {
+        return Err(RawError::Corrupt(format!("cannot write a {width}×{height} DNG")));
+    }
+    let src = rgb.get(..n).ok_or_else(|| RawError::Corrupt(format!("{} samples for a {width}×{height} RGB image", rgb.len())))?;
+    let data: Vec<f32> = src.iter().map(|&v| if v.is_finite() { v.clamp(0.0, 65504.0) } else { 0.0 }).collect();
+    let full = crate::Rect::new(0, 0, width, height);
+    let forward = lightcraft_color::bradford(space.white, lightcraft_color::D50).mul(&space.to_xyz());
+    let color = crate::ColorData {
+        illuminant: [illuminant_of(space.white), 0],
+        color_matrix: [Some(space.from_xyz()), None],
+        forward_matrix: [Some(forward), None],
+        as_shot_neutral: Some([1.0; 3]),
+        profile: crate::profile::ProfileLook {
+            tone_curve: Some(crate::profile::ToneCurve { points: vec![[0.0, 0.0], [1.0, 1.0]] }),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let raw = RawImage {
+        format: crate::RawFormat::Dng,
+        width,
+        height,
+        cpp: 3,
+        data: RawData::F32(data),
+        cfa: None,
+        bits: 16,
+        black: crate::BlackLevel::uniform(0.0),
+        white: vec![1.0],
+        active_area: full,
+        crop: full,
+        orientation: lightcraft_geom::Orientation::Normal,
+        color,
+        wb_multipliers: None,
+        linearized: false,
+        pixel_aspect: 1.0,
+        opcodes: crate::OpcodeLists::default(),
+        metadata: metadata.clone(),
+        lens_metadata: Default::default(),
+    };
+    let order = ByteOrder::Little;
+    write_dng(&raw, &DngWriteOptions { compression: DngCompression::Deflate { tile: 256, half: true }, order, xmp })
 }

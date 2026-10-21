@@ -18,8 +18,25 @@ use crate::geometry::Frame;
 
 #[inline]
 fn smooth(e0: f32, e1: f32, x: f32) -> f32 {
+    // Zero feather is a hard edge, including when the pixel lies exactly on the radius.
+    // Dividing 0 by 0 here would give that pixel a NaN alpha, even at zero opacity.
+    if e0 >= e1 {
+        return if x < e1 { 0.0 } else { 1.0 };
+    }
     let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
+}
+
+/// Most a spot's size counts for, in long edges: a size read from a sidecar isn't held to the slider's range, and one
+/// far past the picture (or infinite) made the radius, the blur it heals with and the patch it reads from unbounded
+/// (issue #1519). Two long edges cover the whole frame from anywhere in it.
+const MAX_SPOT_SIZE: f64 = 2.0;
+
+/// A spot's radius in output pixels, `ppl` output pixels to the long edge: at least a pixel (a size that is not a
+/// number too), at most [`MAX_SPOT_SIZE`] long edges.
+fn radius_px(size: f64, ppl: f64) -> f64 {
+    let size = if size.is_nan() { 0.0 } else { size.min(MAX_SPOT_SIZE) };
+    (size * ppl).max(1.0)
 }
 
 /// Mean colour of `img` in a disc/annulus.
@@ -99,7 +116,7 @@ pub fn pick_source(
     let img = frame.sample(src, w, h);
     let (to_out, to_norm) = (frame.norm_to_out(w, h), frame.out_to_norm(w, h));
     let t = to_out.apply(*spot.points.first()?);
-    let r = (spot.size * frame.px_per_long(w)).max(1.0) as f32;
+    let r = radius_px(spot.size, frame.px_per_long(w)) as f32;
     let avoid = avoid.map(|o| {
         let (a, b) = (to_out.apply(Point::new(0.0, 0.0)), to_out.apply(o));
         ((b.x - a.x) as f32, (b.y - a.y) as f32)
@@ -165,7 +182,7 @@ pub fn window_for_reads_checked(
     let boxes: Vec<([f64; 4], [f64; 4])> = spots
         .iter()
         .filter_map(|spot| {
-            let r = (spot.size * ppl).max(1.0);
+            let r = radius_px(spot.size, ppl);
             let pts: Vec<_> = spot.points.iter().map(|p| to_out.apply(*p)).collect();
             let first = pts.first()?;
             let (mut x0, mut y0, mut x1, mut y1) = (first.x, first.y, first.x, first.y);
@@ -247,8 +264,9 @@ fn fill_box(src: &mut [[f32; 3]], tgt: &[[f32; 3]], alpha: &[f32], bw: usize, bh
     let flat: Vec<f32> = tgt.iter().flatten().copied().collect();
     let out = lightcraft_inpaint::complete(bw, bh, 3, &flat, &hole, &lightcraft_inpaint::CompleteParams::default())
         .unwrap_or_else(|| lightcraft_inpaint::membrane_fill(bw, bh, 3, &flat, &hole));
-    for (d, v) in src.iter_mut().zip(out.chunks_exact(3)) {
-        *d = [v[0], v[1], v[2]];
+    let (pixels, _) = out.as_chunks::<3>();
+    for (d, v) in src.iter_mut().zip(pixels) {
+        *d = *v;
     }
 }
 
@@ -260,7 +278,7 @@ pub fn apply(img: &mut Rgb32f, spots: &[Spot], frame: &Frame, ppl: f64) {
     let (w, h) = (img.width, img.height);
     let to_out = frame.norm_to_out(w, h);
     for spot in spots {
-        let r = (spot.size * ppl).max(1.0) as f32;
+        let r = radius_px(spot.size, ppl) as f32;
         let pts: Vec<(f32, f32)> = spot
             .points
             .iter()
@@ -367,6 +385,51 @@ pub fn apply(img: &mut Rgb32f, spots: &[Spot], frame: &Frame, ppl: f64) {
 mod tests {
     use super::*;
     use lightcraft_develop::DevelopSettings;
+
+    #[test]
+    fn hard_edge_spots_at_zero_opacity_leave_every_pixel_unchanged() {
+        for mode in [SpotMode::Clone, SpotMode::Heal, SpotMode::Remove, SpotMode::Fill] {
+            for (cx, cy) in [(32.5, 24.5), (0.5, 0.5)] {
+                let original = Rgb32f::from_fn(64, 48, |x, y| [0.2 + x as f32 / 128.0, 0.3 + y as f32 / 128.0, 0.4]);
+                let mut img = original.clone();
+                let frame = Frame::new(64, 48, &DevelopSettings::default(), true);
+                let spot = Spot {
+                    mode,
+                    points: vec![Point::new(cx / 64.0, cy / 48.0)],
+                    size: 5.0 / 64.0,
+                    feather: 0.0,
+                    opacity: 0.0,
+                    source_offset: Some(Point::new(8.0 / 64.0, 0.0)),
+                };
+                apply(&mut img, &[spot], &frame, frame.px_per_long(64));
+                for (i, (actual, expected)) in img.data.iter().zip(&original.data).enumerate() {
+                    assert_eq!(actual, expected, "zero-opacity {mode:?} at ({cx}, {cy}), pixel {i}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn hard_edge_clone_copies_inside_and_preserves_pixels_on_the_radius() {
+        for (w, h, cx, cy, radius) in [(64, 48, 32.5, 24.5, 5.0), (128, 96, 64.5, 48.5, 10.0)] {
+            let original = Rgb32f::from_fn(w, h, |x, y| [0.2 + x as f32 / w as f32, y as f32 / h as f32, 0.4]);
+            let mut img = original.clone();
+            let frame = Frame::new(w, h, &DevelopSettings::default(), true);
+            let spot = Spot {
+                mode: SpotMode::Clone,
+                points: vec![Point::new(cx / w as f64, cy / h as f64)],
+                size: radius / w as f64,
+                feather: 0.0,
+                opacity: 100.0,
+                source_offset: Some(Point::new(0.125, 0.0)),
+            };
+            apply(&mut img, &[spot], &frame, frame.px_per_long(w));
+            let (x, y) = (cx as usize, cy as usize);
+            assert_eq!(img.get(x, y), original.get(x + w / 8, y), "inside copies the source at {w}px");
+            assert_eq!(img.get(x + radius as usize, y), original.get(x + radius as usize, y), "radius stays unchanged at {w}px");
+            assert!(img.data.iter().flatten().all(|v| v.is_finite()));
+        }
+    }
 
     #[test]
     fn remove_erases_a_dot() {

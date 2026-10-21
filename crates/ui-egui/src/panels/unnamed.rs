@@ -148,7 +148,7 @@ pub fn naming_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         if b.clicked() {
             submit = Some(chosen);
         }
-        let c = ui.button("Clear");
+        let c = ui.button(crate::i18n::tr("Clear"));
         register(ui.ctx(), "unnamed:clear", c.rect);
         clear = c.clicked() || field.cancelled();
     });
@@ -203,7 +203,7 @@ pub fn section_header(app: &mut LightcraftApp, ui: &mut egui::Ui, list: &Unnamed
     p.text(pos2(at.x, at.y + 24.0), Align2::LEFT_CENTER, sub, t.font(12.0), t.text_dim);
     if !list.ready && list.faces.is_empty() {
         let r = Rect::from_min_size(pos2(at.x, at.y + 38.0), vec2(120.0, 22.0));
-        let b = ui.put(r, egui::Button::new("Open Settings"));
+        let b = ui.put(r, egui::Button::new(crate::i18n::tr("Open Settings")));
         register(ui.ctx(), "unnamed:openSettings", b.rect);
         if b.clicked() {
             let _ = app.run("app.settings", json!({"tab": "faces"}));
@@ -211,7 +211,7 @@ pub fn section_header(app: &mut LightcraftApp, ui: &mut egui::Ui, list: &Unnamed
     } else if !list.faces.is_empty() {
         let r = Rect::from_min_size(pos2(right - 130.0, at.y + 12.0), vec2(130.0, 22.0));
         let all = app.ui.unnamed_selected.len() == list.faces.len();
-        let b = ui.put(r, egui::Button::new(if all { "Select none" } else { "Select all" }));
+        let b = ui.put(r, egui::Button::new(crate::i18n::tr(if all { "Select none" } else { "Select all" })));
         register(ui.ctx(), "unnamed:selectAll", b.rect);
         if b.clicked() {
             app.ui.unnamed_selected.clear();
@@ -229,6 +229,7 @@ pub fn tile(app: &mut LightcraftApp, ui: &mut egui::Ui, list: &Unnamed, i: usize
     let key = (f.photo, f.index);
     let selected = app.ui.unnamed_selected.contains(&key);
     let resp = ui.interact(r, egui::Id::new(("unnamed-face", f.photo, f.index)), Sense::click());
+    crate::widgets::announce_selected(&resp, crate::i18n::tr("Unnamed face"), selected);
     register(ui.ctx(), format!("unnamed-face:{}:{}", f.photo, f.index), r);
     // a suggested name along the bottom: a click accepts it for this face (added after the tile, so it wins there)
     let strip = Rect::from_min_max(pos2(r.left(), r.bottom() - 20.0), r.right_bottom());
@@ -266,7 +267,13 @@ pub fn tile(app: &mut LightcraftApp, ui: &mut egui::Ui, list: &Unnamed, i: usize
         name(app, &[key], who);
         return;
     }
-    if resp.clicked() {
+    // a double click opens the photo, as in the grid; its second click must not undo the first one's selection
+    if resp.double_clicked() {
+        let _ = app.run("library.select", json!({"ids": [f.photo], "active": f.photo}));
+        let _ = app.run("view.detail", json!({}));
+        // Escape comes back to the faces
+        app.ui.person_from = Some((None, f.photo));
+    } else if resp.clicked() {
         let shift = ui.input(|i| i.modifiers.shift);
         click(app, list, i, shift);
     }

@@ -1,7 +1,8 @@
 //! Corpus test over `corpus/raw/**` (git-ignored CC0 samples from raw.pixls.us, fetched with
 //! `cargo xtask corpus --download`; `LIGHTCRAFT_CORPUS` overrides the corpus root). Skips cleanly when absent.
 //!
-//! Every file must be recognised, carry an embedded JPEG preview (optional for DNG, older Panasonic RAW and HEVC-preview CR3), and either decode to a valid image or report
+//! Every file must be recognised, carry an embedded JPEG preview (optional for DNG, generic CFA TIFF,
+//! older Panasonic RAW and HEVC-preview CR3), and either decode to a valid image or report
 //! `Unsupported` for one of the variants we know we don't decode yet. Prints decode times
 //! (`cargo test -p lightcraft-raw --release --test corpus -- --nocapture`).
 
@@ -25,7 +26,7 @@ const KNOWN_UNSUPPORTED: &[&str] = &[
 fn corpus_raw_decodes() {
     let dir = corpus_root().join("raw");
     let Ok(rd) = std::fs::read_dir(&dir) else {
-        eprintln!("skip: {} absent", dir.display());
+        lightcraft_testkit::skip!(Corpus, "{} absent", dir.display());
         return;
     };
     let mut paths: Vec<PathBuf> = rd.flatten().map(|e| e.path()).filter(|p| p.is_file()).collect();
@@ -41,8 +42,8 @@ fn corpus_raw_decodes() {
         let t0 = Instant::now();
         let preview = embedded_preview(&bytes);
         let tp = t0.elapsed().as_secs_f64() * 1e3;
-        // DNG previews are optional (and some carry only an uncompressed RGB thumbnail); vendor raws embed a JPEG,
-        // except the Panasonic `.RAW` files of 2005–2007 and Canon's explicit HEVC preview tracks.
+        // DNG and generic CFA TIFF previews can be absent or uncompressed RGB; other vendor raws embed a JPEG,
+        // except the Panasonic `.RAW` files of 2005–2007, Canon's explicit HEVC preview tracks and Mamiya MEF.
         if let Some(p) = &preview {
             let jpeg = p.starts_with(&[0xff, 0xd8]) && p.ends_with(&[0xff, 0xd9]);
             let jxl = p.starts_with(&[0xff, 0x0a]) || p.starts_with(b"\0\0\0\x0cJXL ");
@@ -51,7 +52,11 @@ fn corpus_raw_decodes() {
             let hevc_preview = fmt == RawFormat::Cr3
                 && lightcraft_meta::cr3::parse_cr3(&bytes)
                     .is_some_and(|c| c.tracks.iter().any(|t| t.kind == lightcraft_meta::cr3::Cr3TrackKind::Other(*b"HEVC") && t.data.is_some()));
-            assert!(fmt == RawFormat::Dng || name.starts_with("raw-panasonic-") || hevc_preview, "{name}: no embedded preview");
+            // the Mamiya ZD's previews are uncompressed RGB sub-IFDs, not JPEGs
+            assert!(
+                matches!(fmt, RawFormat::Dng | RawFormat::CfaTiff | RawFormat::Mef) || name.starts_with("raw-panasonic-") || hevc_preview,
+                "{name}: no embedded preview"
+            );
         }
         let preview_kb = preview.as_ref().map_or(0, |p| p.len() / 1024);
         let t1 = Instant::now();
@@ -159,7 +164,7 @@ fn corpus_cr2_cfa_patterns() {
     let mut seen = 0;
     for (name, want) in cases {
         let Ok(bytes) = std::fs::read(dir.join(name)) else {
-            eprintln!("skip: {name} absent");
+            lightcraft_testkit::skip!(Corpus, "{name} absent");
             continue;
         };
         let img = decode(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
@@ -189,7 +194,7 @@ fn corpus_cr2_as_shot_white_balance() {
         "cr2-canon-80d.cr2",
     ] {
         let Ok(bytes) = std::fs::read(dir.join(name)) else {
-            eprintln!("skip: {name} absent");
+            lightcraft_testkit::skip!(Corpus, "{name} absent");
             continue;
         };
         let wb = decode(&bytes).unwrap_or_else(|e| panic!("{name}: {e}")).wb_multipliers.unwrap_or_else(|| panic!("{name}: no as-shot WB"));
@@ -206,7 +211,7 @@ fn corpus_nef_compressed_matches_uncompressed() {
     let dir = corpus_root().join("raw");
     let (Ok(a), Ok(b)) = (std::fs::read(dir.join("nef-nikon-d5100-lossless.nef")), std::fs::read(dir.join("nef-nikon-d5100-uncompressed.nef")))
     else {
-        eprintln!("skip: D5100 NEF pair absent");
+        lightcraft_testkit::skip!(Corpus, "D5100 NEF pair absent");
         return;
     };
     let (a, b) = (decode(&a).unwrap(), decode(&b).unwrap());
@@ -231,7 +236,7 @@ fn corpus_nef_compressed_matches_uncompressed() {
 fn corpus_nef_high_efficiency_is_named() {
     let dir = corpus_root().join("raw");
     let (Ok(he), Ok(lossless)) = (std::fs::read(dir.join("nef-nikon-zf-he.nef")), std::fs::read(dir.join("nef-nikon-zf-lossless.nef"))) else {
-        eprintln!("skip: Z f samples absent");
+        lightcraft_testkit::skip!(Corpus, "Z f samples absent");
         return;
     };
     for result in [decode(&he).map(|_| ()), probe_info(&he).map(|_| ())] {
@@ -248,7 +253,7 @@ fn corpus_nef_12_bit_black_level_matches_14_bit() {
     let dir = corpus_root().join("raw");
     let (Ok(a), Ok(b)) = (std::fs::read(dir.join("nef-nikon-d7500-lossless12.nef")), std::fs::read(dir.join("nef-nikon-d7500-lossless14.nef")))
     else {
-        eprintln!("skip: D7500 NEF pair absent");
+        lightcraft_testkit::skip!(Corpus, "D7500 NEF pair absent");
         return;
     };
     let (a, b) = (decode(&a).unwrap(), decode(&b).unwrap());
@@ -278,7 +283,7 @@ fn corpus_nef_12_bit_black_level_matches_14_bit() {
 fn corpus_dngs_carry_profile_looks() {
     let dir = corpus_root().join("raw");
     let Ok(rd) = std::fs::read_dir(&dir) else {
-        eprintln!("skip: {} absent", dir.display());
+        lightcraft_testkit::skip!(Corpus, "{} absent", dir.display());
         return;
     };
     let mut seen = 0;
@@ -327,7 +332,7 @@ fn corpus_dngs_carry_profile_looks() {
 fn corpus_proraw_sky_matte() {
     let path = corpus_root().join("raw/dng-apple-iphone12pro-proraw.dng");
     let Ok(bytes) = std::fs::read(&path) else {
-        eprintln!("skip: {} absent", path.display());
+        lightcraft_testkit::skip!(Corpus, "{} absent", path.display());
         return;
     };
     let t0 = Instant::now();
@@ -365,7 +370,7 @@ fn corpus_sony_pre2017_colour_metadata() {
     let mut seen = 0;
     for (name, black, [r, b], (cw, ch)) in cases {
         let Ok(bytes) = std::fs::read(dir.join(name)) else {
-            eprintln!("skip: {name} absent");
+            lightcraft_testkit::skip!(Corpus, "{name} absent");
             continue;
         };
         let img = decode(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
@@ -397,7 +402,7 @@ fn corpus_sony_a7cr_codings() {
         let bytes = match std::fs::read(dir.join(name)) {
             Ok(bytes) => bytes,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                eprintln!("skip: {name} absent");
+                lightcraft_testkit::skip!(Corpus, "{name} absent");
                 continue;
             }
             Err(e) => panic!("{name}: {e}"),
@@ -464,7 +469,7 @@ fn corpus_sony_a7cm2_codings() {
         let bytes = match std::fs::read(dir.join(name)) {
             Ok(bytes) => bytes,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                eprintln!("skip: {name} absent");
+                lightcraft_testkit::skip!(Corpus, "{name} absent");
                 continue;
             }
             Err(e) => panic!("{name}: {e}"),
@@ -509,7 +514,7 @@ fn corpus_sony_black_levels_sit_at_the_data_floor() {
         let bytes = match std::fs::read(dir.join(name)) {
             Ok(bytes) => bytes,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                eprintln!("skip: {name} absent");
+                lightcraft_testkit::skip!(Corpus, "{name} absent");
                 continue;
             }
             Err(e) => panic!("{name}: {e}"),
@@ -567,7 +572,7 @@ fn corpus_sony_sr2_white_balance() {
     let mut seen = 0;
     for (name, [r, b]) in cases {
         let Ok(bytes) = std::fs::read(dir.join(name)) else {
-            eprintln!("skip: {name} absent");
+            lightcraft_testkit::skip!(Corpus, "{name} absent");
             continue;
         };
         let img = decode(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
@@ -585,7 +590,7 @@ fn corpus_sony_sr2_white_balance() {
 fn corpus_sony_a900_packed12() {
     let name = "arw-sony-a900-packed12.arw";
     let Ok(bytes) = std::fs::read(corpus_root().join("raw").join(name)) else {
-        eprintln!("skip: {name} absent");
+        lightcraft_testkit::skip!(Corpus, "{name} absent");
         return;
     };
     let img = decode(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
@@ -607,7 +612,7 @@ fn corpus_sony_16x9_crops() {
         let bytes = match std::fs::read(dir.join(name)) {
             Ok(bytes) => bytes,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                eprintln!("skip: {name} absent");
+                lightcraft_testkit::skip!(Corpus, "{name} absent");
                 continue;
             }
             Err(e) => panic!("{name}: {e}"),
@@ -624,6 +629,87 @@ fn corpus_sony_16x9_crops() {
         seen += 1;
     }
     eprintln!("Sony 16:9 crops checked on {seen} files");
+}
+
+/// Sony ILCE-7RM6: the distortion table in the raw IFD (`0x7037`) becomes a one-plane `WarpRectilinear` in
+/// `OpcodeList3` (`vendor::arw_lens_rm6`; the lateral CA table is read but its planes are off by default, and their
+/// numbers for these files are checked in `arw_lens_rm6`'s unit tests). Expected: the conversion recipe measured on 54
+/// ILCE-7RM6 photos, evaluated in f64 for each file's tables, decoded active area (the padded lossless tiles) and
+/// default crop. All four files carry distortion correction off in camera; the table is applied anyway.
+#[test]
+fn corpus_sony_lens_tables_become_opcodes() {
+    let dir = corpus_root().join("raw");
+    // (file, active area, default crop x, y, width, height, opcode centre, G-plane k0..k3)
+    let cases = [
+        // not pinned in `cargo xtask corpus` (at most two pins per PR; the ARW 6.0 decoder pins the two Compressed files
+        // below): checked only where the file is present (RawDB `ILCE-7RM6_FF_land_RAW.ARW`, CC0)
+        (
+            "arw-sony-ilce7rm6-ff-land-lossless.arw",
+            (10240, 7168),
+            (12, 8, 9984, 6656),
+            [0.488670768629749, 0.4653969582810102],
+            [0.9717033132764651, 0.023249297636569695, 0.008638979168841135, 0.003091041831374855],
+        ),
+        // pinned in `cargo xtask corpus` (RawDB `ILCE-7RM6_APSC_land_RAW.ARW`, CC0)
+        (
+            "arw-sony-ilce7rm6-apsc-land-lossless.arw",
+            (6656, 4608),
+            (16, 10, 6528, 4352),
+            [0.49278737791134486, 0.4743868026915563],
+            [1.016366854640611, -0.0688824189782517, 0.03615745253291194, -0.009438825010476538],
+        ),
+        // pinned by the ARW 6.0 decoder (RawDB `ILCE-7RM6_FF_land_RAW-C.ARW`, CC0): the same scene as the full-frame
+        // lossless file, its table one step off at knot 12 (268, not 267), on the decoder's unpadded geometry
+        (
+            "arw6-sony-ilce7rm6-ff-land-c.arw",
+            (10016, 6672),
+            (12, 8, 9984, 6656),
+            [0.49960059910134796, 0.5],
+            [0.9714600903266707, 0.02234210164294959, 0.001142578769532717, 0.005292120046651031],
+        ),
+        // pinned by the ARW 6.0 decoder (RawDB `ILCE-7RM6_APSC_land_RAW-C-HD.ARW`, CC0)
+        (
+            "arw6-sony-ilce7rm6-apsc-land-hq.arw",
+            (6592, 4372),
+            (16, 10, 6528, 4352),
+            [0.4975724472765893, 0.5],
+            [1.01627551, -0.0618606692, 0.02768349621, -0.005595798468],
+        ),
+    ];
+    let mut seen = 0;
+    for (name, (aw, ah), crop, center, k) in cases {
+        let bytes = match std::fs::read(dir.join(name)) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                eprintln!("skip: {name} absent");
+                continue;
+            }
+            Err(e) => panic!("{name}: {e}"),
+        };
+        let img = decode(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let (a, c) = (img.active_area, img.crop);
+        eprintln!("{name}: active area {a:?}, crop {c:?}");
+        assert_eq!((a.x, a.y, a.width, a.height), (0, 0, aw, ah), "{name}: active area");
+        assert_eq!((c.x, c.y, c.width, c.height), crop, "{name}: default crop");
+        assert_eq!(probe_info(&bytes).unwrap().opcodes, img.opcodes, "{name}: the headers-only probe reads the same correction");
+        let warps: Vec<_> = img
+            .opcodes
+            .list3
+            .iter()
+            .filter_map(|op| match op {
+                lightcraft_raw::Opcode::WarpRectilinear { planes, center } => Some((planes, center)),
+                _ => None,
+            })
+            .collect();
+        let [(planes, got)] = warps.as_slice() else { panic!("{name}: {:?}", img.opcodes.list3) };
+        assert_eq!(planes.len(), 1, "{name}: one plane (G; lateral CA off by default)");
+        assert!((got[0] - center[0]).abs() < 1e-6 && (got[1] - center[1]).abs() < 1e-6, "{name}: centre {got:?}, want {center:?}");
+        for (i, want) in k.iter().enumerate() {
+            assert!((planes[0][i] - want).abs() < 1e-6, "{name}: k{i} {}, want {want}", planes[0][i]);
+        }
+        seen += 1;
+    }
+    eprintln!("Sony lens tables checked on {seen} files");
 }
 
 /// The embedded JPEG as linear RGB, reduced to `gw × gh` cells.
@@ -727,7 +813,7 @@ fn corpus_panasonic_encodings() {
     let mut seen = 0;
     for (name, bits, black, (cw, ch), cfa) in cases {
         let Ok(bytes) = std::fs::read(dir.join(name)) else {
-            eprintln!("skip: {name} absent");
+            lightcraft_testkit::skip!(Corpus, "{name} absent");
             continue;
         };
         let img = decode(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
@@ -777,7 +863,7 @@ fn corpus_orf_cfa_patterns() {
     let mut seen = 0;
     for (name, cfa) in cases {
         let Ok(bytes) = std::fs::read(dir.join(name)) else {
-            eprintln!("skip: {name} absent");
+            lightcraft_testkit::skip!(Corpus, "{name} absent");
             continue;
         };
         let img = decode(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
@@ -812,7 +898,7 @@ fn corpus_samsung_srw() {
     let mut seen = 0;
     for (name, bits, active, crop, cfa, whole) in cases {
         let Ok(bytes) = std::fs::read(dir.join(name)) else {
-            eprintln!("skip: {name} absent");
+            lightcraft_testkit::skip!(Corpus, "{name} absent");
             continue;
         };
         let img = decode(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
@@ -941,7 +1027,7 @@ fn corpus_sony_arw6_samples() {
 fn corpus_raws_keep_their_container_and_are_not_thumbnail_shells() {
     let dir = corpus_root().join("raw");
     let Ok(rd) = std::fs::read_dir(&dir) else {
-        eprintln!("skip: {} absent", dir.display());
+        lightcraft_testkit::skip!(Corpus, "{} absent", dir.display());
         return;
     };
     let mut checked = 0;
@@ -1004,7 +1090,7 @@ fn sony_embedded_distortion_is_limited_to_validated_models() {
     ] {
         let path = root.join(name);
         if !path.exists() {
-            eprintln!("skip: {} absent", path.display());
+            lightcraft_testkit::skip!(Corpus, "{} absent", path.display());
             continue;
         }
         let bytes = std::fs::read(&path).unwrap();
@@ -1018,6 +1104,264 @@ fn sony_embedded_distortion_is_limited_to_validated_models() {
     eprintln!("Sony distortion model boundary: {checked} corpus files checked");
 }
 
+/// Nikon's in-file distortion correction (docs/nikon-lens-corrections.md) reaches only the validated bodies: the
+/// Z f sample (a Tamron 35-150 at 150 mm) gets one warp, the DSLR and Coolpix samples none, and the header probe
+/// describes every file as its full decode does.
+#[test]
+fn nikon_in_file_distortion_is_limited_to_validated_bodies() {
+    let root = corpus_root().join("raw");
+    let mut checked = 0;
+    for (name, model, expected) in [
+        ("nef-nikon-zf-lossless.nef", "NIKON Z f", 1),
+        ("nef-nikon-d5100-lossless.nef", "NIKON D5100", 0),
+        ("nef-nikon-d5100-uncompressed.nef", "NIKON D5100", 0),
+        ("nef-nikon-d7000-lossy12.nef", "NIKON D7000", 0),
+        ("nef-nikon-d7500-lossless12.nef", "NIKON D7500", 0),
+        ("nef-nikon-d7500-lossless14.nef", "NIKON D7500", 0),
+        ("nrw-nikon-b700-uncompressed.nrw", "COOLPIX B700", 0),
+    ] {
+        let path = root.join(name);
+        if !path.exists() {
+            eprintln!("skip: {} absent", path.display());
+            continue;
+        }
+        let bytes = std::fs::read(&path).unwrap();
+        let full = decode(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(probe_info(&bytes).unwrap(), full.info(), "{name}");
+        assert_eq!(full.metadata.model.as_deref(), Some(model), "{name}");
+        assert_eq!(full.opcodes.list3.len(), expected, "{name}");
+        if let Some(lightcraft_raw::Opcode::WarpRectilinear { planes, .. }) = full.opcodes.list3.first() {
+            // the stored zoom (0.0557) frames the corrected picture as the camera does
+            assert!((planes[0][0] - 1.0 / 1.055719).abs() < 1e-4, "{name}: {planes:?}");
+        }
+        checked += 1;
+    }
+    eprintln!("Nikon distortion boundary: {checked} corpus files checked");
+}
+
+/// The Sony samples of the corpus manifest (`RAW_SAMPLES` in `xtask/src/main.rs`) with their pinned SHA-256.
+const SONY_SAMPLES: &[(&str, &str)] = &[
+    ("arw-sony-a7rm4a-compressed.arw", "690c774f1d7bc1db3fa8c2489762743d8e7586e50b6f65d0b6a61cb467972c67"),
+    ("arw-sony-a9m2-compressed.arw", "161c2a9da2b5f1e50be6117a0b4da0ce249660b5d7de13568d301c4034716b97"),
+    ("arw-sony-a7m3-compressed.arw", "250784580ea527442c09004417bb0eead484f2bf3ee8f9121a776ac65bb50d0f"),
+    ("arw-sony-a7m3-uncompressed.arw", "ece80551abf64949dbe826985a80f1d9b265401ee4ea6b989e1829549616fdcd"),
+    ("arw-sony-a7m4-14bit.arw", "639a6d4db881f1359e3ea7e1137b314e59417d24e6d4d862b7202111a2c823b2"),
+    ("arw-sony-a7m4-lossless-l.arw", "851b43c2116c4139104a5036f83ac3b6a148789b2142214dd7192c13972b25b6"),
+    ("arw-sony-a7m4-lossless-m.arw", "d453005714327addd75bcb99c1c6223173dc92f2a59542d82e6761ef0e0e7571"),
+    ("arw-sony-a7m4-lossless-s.arw", "cbbd0930c7d8706dff84c68a2004454266e6fd0d8354f5f76a106b5d776e0223"),
+    ("arw-sony-a7cr-lossless-l.arw", "3e1642f3a1ae7c9f93228c5f09f27e362608e6a4ca1b3e5d8dd9eb8fae576997"),
+    ("arw-sony-a7cr-lossless-m.arw", "5bcba4acc52a5b902074581b4a2f5fb3c79ec56bd0fdc1746b9e2c0f9d3e9c88"),
+    ("arw-sony-a7cr-compressed.arw", "f5096e8fbccf0842c8a57763cabd2836608f019eb7fd54f7b22260c2f5bc4da5"),
+    ("arw-sony-a7cm2-lossless-l.arw", "342d893bd71fd050c273df181e3039d3f12d88947b0662de5de5325c84cc449b"),
+    ("arw-sony-a7cm2-compressed-m.arw", "002c86d38a16b08a2438780728b4fda8efcc745fa6c26231dad6af67b383b11e"),
+    ("arw-sony-a7rm4-14bit-compressed.arw", "e6dafe42643f69ab9d1fd00414b7a1f5104df354bb589201600ac934b29b5e4a"),
+    ("arw-sony-rx100m3.arw", "cb81392e3a8810231ce341fb45de3e4d1b9e2f87bc47f3c314d084041ccfd138"),
+    ("arw-sony-rx100.arw", "579a485b5126a25cbd55cbd5dadfa7d09cf021c99cc7d4869f9e56e3f759390b"),
+    ("arw-sony-a7rm2-12bit-uncompressed.arw", "71e0888396ef52c7e6a990b4e72ebb4d8413a1fc1c35bada449870539cef6e39"),
+    ("arw-sony-a500.arw", "1407fb596a391df67c15b90026a1a76702a2e7386dbdff2f0815b903ea49cead"),
+    ("arw-sony-a700.arw", "3159e28892bf0771d01525cd4b6190f9c15bbb19fa2fab6d2515ced0594e8f40"),
+    ("arw-sony-a33.arw", "1a59856394f10d4fadb40f5ab9c6d1c89f473f4dbcdefd216fbbbbf1ad8d21f9"),
+    ("arw-sony-a3500-5600k.arw", "04c4fe04425c3e6fff7c8af0f811923c35e750300373357bd54342150c5505d8"),
+    ("arw-sony-a7s-shade.arw", "7cc338a0abc8fdad32d61006f1f8f412297b93e040c7efba572eb2bd8f8e8be2"),
+    ("arw-sony-a7sm2-16x9.arw", "46044fb6a9c805f2b4915cd4970316b4d04b0566bcf5287afaad3ef648d7a3db"),
+    ("arw-sony-a580-16x9.arw", "5b0924d39151239dce19e92e08318f4f62a5a8ac276bd7180ec8463d2cfee709"),
+    ("arw-sony-a900-packed12.arw", "ac7c1532df77c321e8010aa1be60c1b9f245b1ac0db6f38fe617a73aae81af50"),
+];
+
+/// SHA-256 of [`SONY_SAMPLES`] as `name  sha256` lines sorted by name: anchors the pins independently of the
+/// manifest, so editing both together (as a drift or a mistake) still fails `sony_pins_match_the_corpus_manifest`.
+/// All 25 pins were checked against the downloaded files when it was set.
+const SONY_PINS_SHA256: &str = "4cfc349194278146356b463c59ede500331c6ca5fc50aec4e92d7cd847b17b68";
+
+/// A Sony corpus file's bytes, checked against its pinned SHA-256 before anything decodes them; `None` (with a
+/// note) when the file is absent, unless `LIGHTCRAFT_CORPUS_REQUIRED=1` asks for every pinned file. A file that
+/// differs from its pin fails the test.
+fn pinned_sony(root: &Path, name: &str) -> Option<Vec<u8>> {
+    use sha2::{Digest, Sha256};
+    let expected = SONY_SAMPLES.iter().find(|(n, _)| *n == name).unwrap_or_else(|| panic!("{name}: no pinned SHA-256")).1;
+    let bytes = match std::fs::read(root.join(name)) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            assert!(std::env::var_os("LIGHTCRAFT_CORPUS_REQUIRED").is_none_or(|v| v != "1"), "{name}: absent, and LIGHTCRAFT_CORPUS_REQUIRED=1");
+            eprintln!("skip: {name} absent");
+            return None;
+        }
+        Err(e) => panic!("{name}: {e}"),
+    };
+    let actual: String = Sha256::digest(&bytes).iter().map(|b| format!("{b:02x}")).collect();
+    assert_eq!(actual, expected, "{name}: corpus file differs from its pinned SHA-256");
+    Some(bytes)
+}
+
+#[test]
+fn sony_pins_match_the_corpus_manifest() {
+    use sha2::{Digest, Sha256};
+    let mut lines: Vec<String> = SONY_SAMPLES.iter().map(|(name, sha)| format!("{name}  {sha}\n")).collect();
+    lines.sort();
+    let digest: String = Sha256::digest(lines.concat()).iter().map(|b| format!("{b:02x}")).collect();
+    assert_eq!(digest, SONY_PINS_SHA256, "the pinned Sony SHA-256 table changed: check every changed pin against its file, then update the anchor");
+    let manifest = include_str!("../../../xtask/src/main.rs");
+    for (name, sha) in SONY_SAMPLES {
+        let entry = manifest.find(&format!("\"{name}\"")).unwrap_or_else(|| panic!("{name} is not in the manifest"));
+        assert!(manifest[entry..].split_once("),").is_some_and(|(e, _)| e.contains(sha)), "{name}: pinned SHA-256 differs from the manifest");
+    }
+}
+
+#[test]
+#[should_panic(expected = "differs from its pinned SHA-256")]
+fn a_sony_fixture_that_differs_from_its_pin_fails() {
+    struct Gone(PathBuf);
+    impl Drop for Gone {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let dir = Gone(std::env::temp_dir().join(format!("lightcraft-sony-pin-{}", std::process::id())));
+    std::fs::create_dir_all(&dir.0).unwrap();
+    std::fs::write(dir.0.join("arw-sony-a7cr-compressed.arw"), b"not the pinned file").unwrap();
+    pinned_sony(&dir.0, "arw-sony-a7cr-compressed.arw");
+}
+
+/// Sony's lens-correction records (`lightcraft_raw::lens_metadata`, `crates/raw/src/vendor/arw_lens.rs`) on the public
+/// samples: shading, CA and distortion decoded from the raw IFD with their settings, equal to their `SR2SubIFD` copies,
+/// the same from header and full decode, and nothing applied beyond the validated ILCE-7RM4A distortion. Expected
+/// tables and settings: what ExifTool, run as a black-box tool, prints for these files. Every file is checked against
+/// its pinned SHA-256 before it is decoded; absent files are skipped.
+#[test]
+fn sony_lens_records_of_the_public_samples() {
+    use lightcraft_raw::Rect;
+    use lightcraft_raw::lens_metadata::{SonyCopy, SonyLensStatus, SonySettingMeaning as M, SonySource};
+    let root = corpus_root().join("raw");
+    // ILCE-7CR (Sigma 24-70mm F2.8 DG DN Art at 49.5 mm): one scene in three codings, identical tables
+    let a7cr_shading = [0, 64, 128, 224, 320, 480, 672, 896, 1184, 1472, 1824, 2240, 2816, 3552, 4512, 7328];
+    let a7cr_ca = [
+        [-256, -256, -256, -256, -256, -256, -256, -256, -256, -256, -256, -256, -256, -256, -256, -128],
+        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, -128, -128, -256, -256],
+    ];
+    let a7cr_distortion = [4, 1, 1, 3, 7, 13, 22, 35, 51, 72, 98, 132, 173, 223, 279, 348];
+    // ILCE-7RM4A (FE 24-105mm F4 G OSS at 24 mm)
+    let a7rm4a_shading = [0, 32, 112, 256, 448, 688, 976, 1296, 1712, 2336, 3120, 4080, 5104, 6112, 7024, 7904];
+    let a7rm4a_ca = [
+        [1408, 1280, 1152, 1024, 1024, 1024, 1024, 1024, 896, 896, 896, 768, 768, 640, 512, 384],
+        [512, 512, 384, 384, 384, 384, 384, 512, 512, 512, 512, 640, 640, 640, 768, 640],
+    ];
+    let a7rm4a_distortion = [14, 0, -29, -65, -113, -171, -239, -311, -392, -471, -555, -634, -713, -782, -843, -891];
+    let a7cr_crop = Rect::new(32, 20, 9504, 6336);
+    // (file, settings, tables, distortion status, storage, compression, linear YCbCr, Sony crop, default crop)
+    let cases = [
+        (
+            "arw-sony-a7cr-compressed.arw",
+            [272, 1, 0],
+            (a7cr_shading, a7cr_ca, a7cr_distortion),
+            SonyLensStatus::NotValidatedModel,
+            (9600, 6376),
+            32767,
+            false,
+            a7cr_crop,
+            a7cr_crop,
+        ),
+        (
+            "arw-sony-a7cr-lossless-l.arw",
+            [272, 1, 0],
+            (a7cr_shading, a7cr_ca, a7cr_distortion),
+            SonyLensStatus::NotValidatedModel,
+            (9728, 6656),
+            7,
+            false,
+            a7cr_crop,
+            a7cr_crop,
+        ),
+        (
+            "arw-sony-a7cr-lossless-m.arw",
+            [272, 1, 0],
+            (a7cr_shading, a7cr_ca, a7cr_distortion),
+            SonyLensStatus::NotValidatedModel,
+            (6656, 4608),
+            7,
+            true,
+            Rect::new(20, 12, 6240, 4160),
+            Rect::new(20, 12, 6240, 4160),
+        ),
+        (
+            "arw-sony-a7rm4a-compressed.arw",
+            [257, 1, 17],
+            (a7rm4a_shading, a7rm4a_ca, a7rm4a_distortion),
+            SonyLensStatus::Applied,
+            (9600, 6376),
+            32767,
+            false,
+            Rect::new(0, 20, 9504, 6336),
+            Rect::new(32, 20, 9504, 6336),
+        ),
+    ];
+    let mut checked = 0;
+    for (name, settings, (shading, ca, distortion), status, (w, h), compression, linear, sony_crop, default_crop) in cases {
+        let Some(bytes) = pinned_sony(&root, name) else { continue };
+        let full = decode(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(probe_info(&bytes).unwrap(), full.info(), "{name}");
+        let s = full.lens_metadata.sony.as_ref().unwrap_or_else(|| panic!("{name}: no Sony lens record"));
+        assert!(s.sr2_read, "{name}");
+        let got = [s.shading.setting.value, s.chromatic_aberration.setting.value, s.distortion.setting.value].map(|v| v.map(|v| v.value));
+        assert_eq!(got, settings.map(Some), "{name}: settings");
+        let meanings = [s.shading.setting.value, s.chromatic_aberration.setting.value, s.distortion.setting.value].map(|v| v.map(|v| v.meaning));
+        let forced = if settings[2] == 17 { M::ForcedAuto } else { M::Off };
+        assert_eq!(meanings, [Some(M::Auto), Some(M::Auto), Some(forced)], "{name}: setting meanings");
+        assert_eq!(
+            (s.shading.table.value, s.chromatic_aberration.table.value, s.distortion.table.value),
+            (Some(shading), Some(ca), Some(distortion)),
+            "{name}"
+        );
+        for (source, raw, sr2, agree) in [
+            (s.shading.table.source, s.shading.table.raw_ifd, s.shading.table.sr2, s.shading.table.copies_agree),
+            (
+                s.chromatic_aberration.table.source,
+                s.chromatic_aberration.table.raw_ifd,
+                s.chromatic_aberration.table.sr2,
+                s.chromatic_aberration.table.copies_agree,
+            ),
+            (s.distortion.table.source, s.distortion.table.raw_ifd, s.distortion.table.sr2, s.distortion.table.copies_agree),
+            (s.shading.setting.source, s.shading.setting.raw_ifd, s.shading.setting.sr2, s.shading.setting.copies_agree),
+            (
+                s.chromatic_aberration.setting.source,
+                s.chromatic_aberration.setting.raw_ifd,
+                s.chromatic_aberration.setting.sr2,
+                s.chromatic_aberration.setting.copies_agree,
+            ),
+            (s.distortion.setting.source, s.distortion.setting.raw_ifd, s.distortion.setting.sr2, s.distortion.setting.copies_agree),
+        ] {
+            assert_eq!((source, raw, sr2, agree), (Some(SonySource::RawIfd), SonyCopy::Valid, SonyCopy::Valid, Some(true)), "{name}: provenance");
+        }
+        assert_eq!(
+            (s.shading.status, s.chromatic_aberration.status, s.distortion.status),
+            (SonyLensStatus::NotValidatedComponent, SonyLensStatus::NotValidatedComponent, status),
+            "{name}"
+        );
+        assert_eq!(full.opcodes.list3.len(), usize::from(status == SonyLensStatus::Applied), "{name}: only applied components are opcodes");
+        let g = &s.geometry;
+        assert_eq!((g.storage_width, g.storage_height, g.compression, g.linear_ycbcr), (w, h, compression, linear), "{name}");
+        assert_eq!(
+            (g.sony_crop, g.default_crop, g.image_crop, g.reference),
+            (Some(sony_crop), Some(default_crop), sony_crop, default_crop),
+            "{name}"
+        );
+        assert!(g.native_3_2, "{name}");
+        eprintln!("{name}: shading, CA and distortion decoded; distortion {status:?}");
+        checked += 1;
+    }
+    // every Sony corpus file: only the ILCE-7RM4A's distortion is ever applied, and an applied status is an opcode
+    for (name, _) in SONY_SAMPLES {
+        let Some(bytes) = pinned_sony(&root, name) else { continue };
+        let info = probe_info(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let Some(s) = &info.lens_metadata.sony else { continue };
+        let applied = s.distortion.status == SonyLensStatus::Applied;
+        assert_eq!(applied, info.metadata.model.as_deref() == Some("ILCE-7RM4A"), "{name}");
+        assert_eq!(info.opcodes.list3.len(), usize::from(applied), "{name}");
+        assert!(![s.shading.status, s.chromatic_aberration.status].contains(&SonyLensStatus::Applied), "{name}");
+        checked += 1;
+    }
+    eprintln!("Sony lens records: {checked} checks on corpus files");
+}
+
 /// Kodak DCS520C (`crates/raw/src/vendor/kodak.rs`): the two-component lossless JPEG strip decodes through the
 /// file's response curve to a 1736 x 1160 GRBG mosaic with 12-bit white, per-position black levels and the
 /// white balance of the vendor IFD. Looks for the corpus copy, then the raw.pixls.us folder; skips without either.
@@ -1026,7 +1370,7 @@ fn corpus_kodak_dcs520c() {
     let name = "2573_Kodak - DCS520C - 12bit (3_2).TIF";
     let candidates = [corpus_root().join("raw").join("kodak-dcs520c.tif"), Path::new("P:/raw-pixls/Kodak/DCS520C").join(name)];
     let Some(bytes) = candidates.iter().find_map(|p| std::fs::read(p).ok()) else {
-        eprintln!("skip: DCS520C sample absent");
+        lightcraft_testkit::skip!(Corpus, "DCS520C sample absent");
         return;
     };
     assert_eq!(probe(&bytes), Some(RawFormat::KodakDcs));
@@ -1132,4 +1476,59 @@ fn fuji_embedded_lens_tables_follow_the_validated_models() {
         checked += 1;
     }
     eprintln!("Fuji lens tables: {checked} RAFs, {warped} warps, {vignetted} vignette gains");
+}
+
+/// Epson ERF (`crates/raw/src/vendor/erf.rs`): the 16-byte block strip decodes to a smooth 3040 x 2024 RGGB
+/// mosaic with the maker note's black levels, the 3008 x 2000 crop and a white balance measured from the
+/// preview's neutral pixels. Skips files that are absent.
+#[test]
+fn corpus_epson_erf() {
+    let root = corpus_root().join("raw");
+    let mut checked = 0;
+    for name in ["erf-epson-rd1.erf", "erf-epson-rd1s.erf", "erf-epson-rd1x.erf"] {
+        let Ok(bytes) = std::fs::read(root.join(name)) else {
+            eprintln!("skip: {name} absent");
+            continue;
+        };
+        assert_eq!(probe(&bytes), Some(RawFormat::Erf), "{name}");
+        let img = decode(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!((img.width, img.height, img.bits), (3040, 2024, 12), "{name}");
+        assert_eq!((img.crop.x, img.crop.y, img.crop.width, img.crop.height), (20, 12, 3008, 2000), "{name}");
+        assert_eq!(img.cfa.as_ref().map(|c| c.name()).as_deref(), Some("RGGB"), "{name}");
+        assert!(img.black.values.len() == 4 && img.black.values.iter().all(|b| (55.0..=70.0).contains(b)), "{name}: {:?}", img.black.values);
+        let wb = img.wb_multipliers.unwrap_or_else(|| panic!("{name}: no white balance"));
+        eprintln!("{name}: wb {wb:?}");
+        if name == "erf-epson-rd1s.erf" {
+            assert!((wb[0] - 2.68).abs() < 0.1 && (wb[2] - 1.31).abs() < 0.1, "{name}: {wb:?}");
+        }
+        // same-colour neighbours differ little: the bit order is right
+        let lightcraft_raw::RawData::U16(d) = &img.data else { panic!("float data") };
+        let step: f64 = d.chunks(3040).take(400).flat_map(|r| r.windows(3).map(|w| f64::from(w[0].abs_diff(w[2])))).sum::<f64>() / (400.0 * 3038.0);
+        assert!(step < 40.0, "{name}: rough {step}");
+        assert!(embedded_preview(&bytes).is_some(), "{name}: no preview");
+        checked += 1;
+    }
+    eprintln!("ERF: {checked} corpus files checked");
+}
+
+/// Mamiya MEF (`crates/raw/src/vendor/mef.rs`): the uncompressed 12-bit strip decodes to a smooth 4016 x 5344 RGGB
+/// mosaic, the crop is the preview's window and the white balance comes from the RGB preview. Skips when absent.
+#[test]
+fn corpus_mamiya_mef() {
+    let Ok(bytes) = std::fs::read(corpus_root().join("raw").join("mef-mamiya-zd.mef")) else {
+        eprintln!("skip: mef-mamiya-zd.mef absent");
+        return;
+    };
+    assert_eq!(probe(&bytes), Some(RawFormat::Mef));
+    let img = decode(&bytes).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!((img.width, img.height, img.bits), (4016, 5344, 12));
+    assert_eq!((img.crop.x, img.crop.y, img.crop.width, img.crop.height), (24, 12, 3968, 5312));
+    assert_eq!(img.cfa.as_ref().map(|c| c.name()).as_deref(), Some("RGGB"));
+    assert_eq!(img.orientation, lightcraft_geom::Orientation::from_exif(6));
+    let wb = img.wb_multipliers.expect("white balance");
+    eprintln!("MEF wb {wb:?}");
+    assert!(wb.iter().all(|g| (0.5..=4.0).contains(g)), "{wb:?}");
+    let lightcraft_raw::RawData::U16(d) = &img.data else { panic!("float data") };
+    let step: f64 = d.chunks(4016).take(400).flat_map(|r| r.windows(3).map(|w| f64::from(w[0].abs_diff(w[2])))).sum::<f64>() / (400.0 * 4014.0);
+    assert!(step < 40.0, "rough {step}");
 }

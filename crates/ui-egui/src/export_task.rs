@@ -132,13 +132,66 @@ pub fn start_contact_sheet(app: &mut LightcraftApp, params: &Value) -> Result<Va
     Ok(json!({"background": true, "total": total}))
 }
 
+/// Print the session's current print (`print.get`) to a PDF in the background, with the same
+/// activity row and cancellation as the other exports.
+pub fn start_print(app: &mut LightcraftApp, params: &Value) -> Result<Value, String> {
+    use lightcraft_engine::print::{compose, output};
+    if app.export.is_some() {
+        return Err("an export is already running".into());
+    }
+    let path = params.get("path").and_then(Value::as_str).filter(|s| !s.trim().is_empty()).ok_or("missing path")?.to_string();
+    app.session.check_write_target(&path)?;
+    let guard = app.session.original_guard();
+    let settings = app.session.print.clone();
+    let ids = app.session.targets(params).map_err(|e| e.to_string())?;
+    let prepared = compose::prepare(&mut app.session, &settings, &ids)?;
+    let total = prepared.len();
+    let title = std::path::Path::new(&path).file_stem().and_then(|n| n.to_str()).unwrap_or("Print").to_string();
+    let write = app.services.write_shared.clone();
+    let progress = Arc::new(Mutex::new((0, String::new())));
+    let cancel = Arc::new(AtomicBool::new(false));
+    let (p, c) = (progress.clone(), cancel.clone());
+    let (tx, rx) = channel();
+    let photos = ids.len();
+    let work = move || {
+        let result = prepared
+            .run(&mut |done, name| {
+                if let Ok(mut g) = p.lock() {
+                    *g = (done, name.to_string());
+                }
+                !c.load(Ordering::Relaxed)
+            })
+            .and_then(|pages| {
+                if c.load(Ordering::Relaxed) {
+                    return Err("Print cancelled".into());
+                }
+                let bytes = output::write(&pages, &settings.job, &title)?;
+                guard.check(std::path::Path::new(&path))?;
+                match write {
+                    Some(write) => write(&path, &bytes)?,
+                    None => lightcraft_engine::export::write_file(&path, &bytes)?,
+                }
+                Ok(vec![json!({"path": path, "pages": pages.len(), "photos": photos, "bytes": bytes.len(), "print": true})])
+            });
+        let _ = tx.send(result.map(|files| (files, None, c.load(Ordering::Relaxed))));
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    std::thread::Builder::new().name("print".into()).spawn(work).map_err(|e| e.to_string())?;
+    #[cfg(target_arch = "wasm32")]
+    work();
+    let row = app.session.activity.start("export", "Printing to PDF", Cancel::Flag(cancel.clone()));
+    row.progress(0, total as u64);
+    app.export = Some(ExportTask { total, progress, cancel, rx, guard: row });
+    Ok(json!({"background": true, "total": total}))
+}
+
 /// The toast's account of [`AfterExport::run`]'s Apple Photos outcome.
 pub fn apple_photos_note(outcome: &Value) -> String {
     if let Some(e) = outcome.get("error").and_then(Value::as_str) {
         return crate::i18n::tr_format!("not added to Apple Photos: {e}", e = e);
     }
     if let Some(why) = outcome.get("skipped").and_then(Value::as_str) {
-        if why.contains("cancelled") {
+        if outcome.get("cancelled").and_then(Value::as_bool) == Some(true) {
             return crate::i18n::tr("not added to Apple Photos (cancelled)").to_string();
         }
         return crate::i18n::tr_format!("not added to Apple Photos: {e}", e = why);
@@ -199,6 +252,9 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
                         crate::i18n::tr_format!("Exported {ok} of {total} photo{}", if total == 1 { "" } else { "s" }, ok = ok, total = total);
                     if let Some(sheet) = sheet {
                         m = format!("Exported contact sheet: {} photos, {} pages", sheet["photos"], sheet["pages"]);
+                    }
+                    if let Some(pdf) = files.first().filter(|f| f["print"] == true) {
+                        m = format!("Printed to PDF: {} photos, {} pages", pdf["photos"], pdf["pages"]);
                     }
                     if skipped > 0 {
                         m += &crate::i18n::tr_format!(" · {skipped} skipped (file exists)", skipped = skipped);
@@ -263,25 +319,41 @@ mod contact_sheet_tests {
             })),
             ..Default::default()
         };
-        let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+        // Exercise the menu/picker/background PDF workflow with a small procedural original.
+        // A full-size demo makes this test's deadline depend on unrelated concurrent renders.
+        let demo = lightcraft_engine::Session::with_demo();
+        let id = demo.active().unwrap();
+        let mut photo = (**demo.catalog.photo(id).unwrap()).clone();
+        photo.width = 96;
+        photo.height = 64;
+        let mut session = lightcraft_engine::Session::new();
+        session.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        session.execute("library.select", &json!({"ids": [id.0], "active": id.0})).unwrap();
+        let mut app = LightcraftApp::new(session, services);
         app.run("dialog.contactSheet", json!({})).unwrap();
         let Some(Dialog::ContactSheet { options }) = app.ui.dialog.as_mut() else { panic!("no contact sheet settings") };
         options.paper = "letter".into();
         options.landscape = true;
-        let mut h = crate::headless::Headless::new(app, [1000.0, 800.0], 1.0);
-        let dialog = h.app.ui.dialog.take().unwrap();
-        crate::panels::dialogs::confirm_dialog(&mut h.app, &dialog).unwrap();
-        assert_eq!(h.app.pending_picks.len(), 1);
-        let deadline = Instant::now() + Duration::from_secs(20);
+        let dialog = app.ui.dialog.take().unwrap();
+        crate::panels::dialogs::confirm_dialog(&mut app, &dialog).unwrap();
+        assert_eq!(app.pending_picks.len(), 1);
+        let ctx = egui::Context::default();
+        crate::pick::poll(&mut app, &ctx);
+        assert!(app.pending_picks.is_empty());
+        assert!(app.export.is_some(), "picker did not start export: {:?}", app.ui.toast);
+        // a hang guard, not a speed check: the render queues behind other tests' demo scenes (generated one at a
+        // time process-wide), which on a loaded machine takes minutes
+        let deadline = Instant::now() + Duration::from_secs(300);
         loop {
-            // The activity stack lays out text, which egui only allows inside a frame.
-            h.step();
-            if h.app.last_export_result.is_some() {
+            // Poll the real worker without starting unrelated gallery renders each frame.
+            poll(&mut app, &ctx);
+            if app.export.is_none() {
                 break;
             }
             assert!(Instant::now() < deadline, "export did not finish");
             std::thread::sleep(Duration::from_millis(10));
         }
+        let result = app.last_export_result.as_ref().unwrap_or_else(|| panic!("export failed: {:?}", app.ui.toast));
         let req = asked.lock().unwrap();
         assert_eq!(req[0].kind, PickKind::Save);
         assert_eq!(req[0].filter.as_ref().unwrap().1, &["pdf"]);
@@ -289,7 +361,7 @@ mod contact_sheet_tests {
         let b = bytes.lock().unwrap();
         assert!(b.starts_with(b"%PDF-1.4"));
         assert!(String::from_utf8_lossy(&b).contains("/MediaBox [0 0 792.00 612.00]"));
-        assert_eq!(h.app.last_export_result.as_ref().unwrap()["files"][0]["photos"], 1);
+        assert_eq!(result["files"][0]["photos"], 1);
     }
 
     #[test]
@@ -342,7 +414,14 @@ mod tests {
             &json!({"error": "LightCraft isn't allowed to control Photos. Allow it in System Settings › Privacy & Security › Automation"}),
         );
         assert!(denied.starts_with("not added to Apple Photos: ") && denied.contains("Automation"), "{denied}");
-        assert_eq!(apple_photos_note(&json!({"skipped": "the export was cancelled"})), "not added to Apple Photos (cancelled)");
+        assert_eq!(apple_photos_note(&json!({"skipped": "the export was cancelled", "cancelled": true})), "not added to Apple Photos (cancelled)");
         assert_eq!(apple_photos_note(&json!({"skipped": "the export wrote no files"})), "not added to Apple Photos: the export wrote no files");
+        // decided on the `cancelled` flag, not the words (#1046): reworded it is still a cancel, and a
+        // reason that only mentions the word is shown as it is
+        assert_eq!(apple_photos_note(&json!({"skipped": "Export abgebrochen", "cancelled": true})), "not added to Apple Photos (cancelled)");
+        assert_eq!(
+            apple_photos_note(&json!({"skipped": "an earlier, cancelled request is still running"})),
+            "not added to Apple Photos: an earlier, cancelled request is still running"
+        );
     }
 }

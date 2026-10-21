@@ -8,10 +8,36 @@ use crate::theme::Tokens;
 use crate::widgets::register;
 use crate::{LightcraftApp, QuitPrompt};
 
-/// Collect the library's settings-file warnings (each is shown once).
+/// Collect the library's settings-file warnings (each is shown once), and the no-GPU notice once the GPU device has
+/// been tried.
 pub fn logic(app: &mut LightcraftApp) {
     let new = app.session.take_library_warnings();
     app.notices.extend(new);
+    use lightcraft_engine::gpu;
+    if app.gpu_notice && app.gpu_applied == Some(true) && gpu::ready() {
+        app.gpu_notice = false;
+        if !gpu::available() {
+            app.notices.extend(gpu_notice(gpu::unavailable_reason().as_deref(), app.ui.settings.gpu));
+        }
+    }
+}
+
+/// What to tell the user when GPU rendering is on (`enabled`) but the GPU could not be used for `reason`: only when no
+/// graphics adapter was found at all ("no GPU adapter among …", e.g. no Vulkan loader on Linux), which makes every
+/// render much slower without saying so. Nothing when it was turned off (preference, `LIGHTCRAFT_GPU`), a software
+/// adapter was skipped, or it failed later; Settings ▸ Performance and Help ▸ System Info show those.
+pub fn gpu_notice(reason: Option<&str>, enabled: bool) -> Option<String> {
+    if !enabled || !reason?.starts_with("no GPU adapter") {
+        return None;
+    }
+    let mut text =
+        crate::i18n::tr("No graphics processor found: LightCraft renders on the CPU, which is much slower. Details in Help → System Info.")
+            .to_string();
+    if cfg!(target_os = "linux") {
+        text.push(' ');
+        text.push_str(crate::i18n::tr("On NixOS, start it from `nix develop`."));
+    }
+    Some(text)
 }
 
 /// The window may close now (`true`), or the quit prompt is shown (`false`). Running tasks that
@@ -141,5 +167,29 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
         if window(ctx, "settings-notice", "Settings file problem", &text, &buttons).is_some() {
             app.notices.remove(0);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::gpu_notice;
+
+    #[test]
+    fn the_gpu_notice_is_only_for_a_missing_adapter() {
+        let none = "no GPU adapter among Backends(VULKAN | GL) (No suitable graphics adapter found)";
+        let text = gpu_notice(Some(none), true).expect("no adapter: say so");
+        assert!(text.starts_with("No graphics processor found") && text.contains("System Info"), "{text}");
+        assert_eq!(text.contains("nix develop"), cfg!(target_os = "linux"), "{text}");
+        assert_eq!(gpu_notice(Some(none), false), None, "the preference is off");
+        for reason in [
+            "disabled by LIGHTCRAFT_GPU=0",
+            "disabled by LIGHTCRAFT_GPU_BACKEND=off",
+            "disabled by the GPU rendering preference (app.gpu)",
+            "software adapter (llvmpipe (LLVM 19.1.7, 256 bits)) skipped: the CPU pipeline is faster",
+            "stopped after a GPU failure: device lost",
+        ] {
+            assert_eq!(gpu_notice(Some(reason), true), None, "{reason}");
+        }
+        assert_eq!(gpu_notice(None, true), None, "the GPU is in use");
     }
 }

@@ -245,3 +245,26 @@ fn unrelated_photos_do_not_stitch() {
     let frames: Vec<Frame> = a.iter().take(2).map(|s| Frame::from_linear_rec2020(s.render(400, 300), None)).collect();
     assert!(stitch(frames, &PanoOptions::default(), &no_progress).is_err());
 }
+
+/// Issue #1455: a panorama came out at 40 MP whatever its photos' resolution. It now keeps their
+/// own resolution unless a size is asked for (up to Lightroom's 512 MP); a size scales it down,
+/// and a NaN one (from an agent) is no size at all, not a 0.1 MP thumbnail.
+#[test]
+fn panoramas_keep_the_photos_resolution_unless_asked() {
+    assert_eq!(PanoOptions::default().max_megapixels, lightcraft_merge::pano::MAX_MEGAPIXELS);
+    let shots = [
+        Shot { yaw: -22.0, pitch: 0.5, roll: 0.3, gain: 1.0 },
+        Shot { yaw: 0.0, pitch: -0.4, roll: 0.0, gain: 1.0 },
+        Shot { yaw: 21.0, pitch: 0.8, roll: -0.4, gain: 1.0 },
+    ];
+    let opts = |max_megapixels: f64| PanoOptions { projection: Projection::Perspective, max_megapixels, ..Default::default() };
+    let mp = |r: &lightcraft_merge::pano::PanoResult| (r.image.width * r.image.height) as f64 / 1e6;
+    let full = run(&shots, 800.0, &PanoOptions { projection: Projection::Perspective, ..Default::default() }).0;
+    assert!((mp(&full) / full.native_megapixels - 1.0).abs() < 0.02, "{} MP for {} MP", mp(&full), full.native_megapixels);
+    let quarter = run(&shots, 800.0, &opts(full.native_megapixels / 4.0)).0;
+    assert!((quarter.native_megapixels / full.native_megapixels - 1.0).abs() < 1e-6);
+    let k = mp(&quarter) / (full.native_megapixels / 4.0);
+    assert!(k > 0.9 && k <= 1.02, "a quarter of the size asked: {} MP", mp(&quarter));
+    let nan = run(&shots, 800.0, &opts(f64::NAN)).0;
+    assert_eq!((nan.image.width, nan.image.height), (full.image.width, full.image.height));
+}

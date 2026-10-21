@@ -99,7 +99,44 @@ impl ControlSpec {
         let s = format!("{:.*}", self.decimals as usize, v);
         if v > 0.0 && self.min < 0.0 { format!("+{s}") } else { s }
     }
+    /// Where `v` sits on the slider track, from 0 (left end) to 1 (right end). Linear, except for the Kelvin
+    /// temperature, which follows Lightroom's scale: 2000–7000 K fill the left half evenly (100 K per 1 %), and
+    /// the right half grows logarithmically up to 50000 K, so everyday temperatures aren't crowded into the
+    /// left sixth of the track. The relative temperature of rendered files (−100…+100, already in mireds) stays
+    /// linear.
+    pub fn position(&self, v: f64) -> f64 {
+        let v = self.clamp(v);
+        let p = match self.kelvin_scale() {
+            Some((centre, right)) if v > centre => 0.5 + 0.5 * (1.0 + (v - centre) / KELVIN_KNEE).ln() / right,
+            Some((centre, _)) => 0.5 * (v - self.min) / (centre - self.min),
+            None => (v - self.min) / (self.max - self.min).max(1e-9),
+        };
+        if p.is_finite() { p.clamp(0.0, 1.0) } else { 0.0 }
+    }
+    /// The value at track position `p` (0…1): the inverse of [`ControlSpec::position`], not yet on the steps.
+    pub fn value_at(&self, p: f64) -> f64 {
+        let p = if p.is_finite() { p.clamp(0.0, 1.0) } else { 0.0 };
+        let v = match self.kelvin_scale() {
+            Some(_) if p >= 1.0 => self.max,
+            Some((centre, right)) if p > 0.5 => centre + KELVIN_KNEE * (((2.0 * p - 1.0) * right).exp() - 1.0),
+            Some((centre, _)) => self.min + 2.0 * p * (centre - self.min),
+            None => self.min + p * (self.max - self.min),
+        };
+        self.clamp(v)
+    }
+    /// The Kelvin temperature's track centre and `ln` of its right half's span (see [`ControlSpec::position`]);
+    /// `None` for every other control, or a range the centre isn't inside.
+    fn kelvin_scale(&self) -> Option<(f64, f64)> {
+        let centre = KELVIN_CENTRE;
+        (self.id == "wb.temp" && self.min < centre && centre < self.max).then(|| (centre, (1.0 + (self.max - centre) / KELVIN_KNEE).ln()))
+    }
 }
+
+/// The Kelvin temperature at the middle of its track, as in Lightroom.
+const KELVIN_CENTRE: f64 = 7000.0;
+/// Where the right half of the Kelvin track turns logarithmic: 1000 K gives it close to the left half's slope
+/// just past the centre (76 K against 100 K per 1 % of the track), so the thumb moves evenly across it.
+const KELVIN_KNEE: f64 = 1000.0;
 
 macro_rules! controls {
     ($( $id:literal => $($field:ident).+ , $label:literal, $section:ident, $min:expr, $max:expr, $def:expr, $step:expr, $dec:expr, $track:expr; )*) => {
@@ -507,5 +544,47 @@ mod tests {
         assert_eq!(e.format(0.5), "+0.50");
         assert_eq!(e.format(-1.0), "-1.00");
         assert_eq!(find("wb.temp").unwrap().format(5500.0), "5500");
+    }
+
+    /// The Kelvin temperature's track follows Lightroom's (positions measured in Lightroom Classic against
+    /// the linear Tint slider; the model is within 2 % of them); every other control stays linear.
+    #[test]
+    fn the_kelvin_track_is_lightrooms_and_others_stay_linear() {
+        let temp = find("wb.temp").unwrap();
+        for (k, lightroom, model) in [
+            (2000.0, 0.0, 0.0),
+            (3650.0, 0.167, 0.165),
+            (5400.0, 0.333, 0.34),
+            (7000.0, 0.5, 0.5),
+            (15000.0, 0.79, 0.79),
+            (20000.0, 0.853, 0.849),
+            (30000.0, 0.90, 0.92),
+            (50000.0, 1.0, 1.0),
+        ] {
+            let p = temp.position(k);
+            assert!((p - model).abs() < 0.001, "{k} K at {p}, the model says {model}");
+            assert!((p - lightroom).abs() <= 0.021, "{k} K at {p}, Lightroom at {lightroom}");
+        }
+        // every 50 K step survives value → position → value, and the track never runs backwards
+        let mut last = -1.0;
+        for k in (2000..=50000).step_by(50).map(f64::from) {
+            let p = temp.position(k);
+            assert!(p > last, "{k} K");
+            last = p;
+            let back = (temp.value_at(p) / temp.step).round() * temp.step;
+            assert_eq!(back, k, "{k} K → {p} → {back}");
+        }
+        assert_eq!((temp.value_at(-1.0), temp.value_at(2.0), temp.value_at(f64::NAN)), (2000.0, 50000.0, 2000.0));
+        assert_eq!((temp.position(1.0), temp.position(1e9), temp.position(f64::NAN)), (0.0, 1.0, temp.position(temp.default)));
+        let exposure = find("light.exposure").unwrap();
+        for (v, p) in [(-5.0, 0.0), (-2.5, 0.25), (0.0, 0.5), (1.0, 0.6), (5.0, 1.0)] {
+            assert!((exposure.position(v) - p).abs() < 1e-12 && (exposure.value_at(p) - v).abs() < 1e-12, "{v}");
+        }
+        // the relative temperature of rendered files (its own spec, centred on 0) isn't a Kelvin scale
+        let relative = ControlSpec { id: "wb.tempRel", min: -100.0, max: 100.0, default: 0.0, step: 1.0, ..*temp };
+        assert_eq!((relative.position(-50.0), relative.value_at(0.75)), (0.25, 50.0));
+        // a Kelvin range that doesn't contain the centre falls back to linear rather than dividing by zero
+        let narrow = ControlSpec { min: 7000.0, max: 9000.0, ..*temp };
+        assert_eq!((narrow.position(8000.0), narrow.value_at(0.5)), (0.5, 8000.0));
     }
 }

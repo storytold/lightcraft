@@ -96,7 +96,9 @@ struct Pending {
 /// Parse a GPX document.
 pub fn parse_gpx(s: &str) -> Result<Tracklog, GpxError> {
     let mut reader = quick_xml::Reader::from_str(s);
-    reader.config_mut().check_end_names = false;
+    // Mismatched end tags must be rejected; otherwise the path stack can
+    // attribute a point's time or segment to the wrong enclosing element.
+    reader.config_mut().check_end_names = true;
     let mut path: Vec<Vec<u8>> = Vec::new();
     let mut seen_gpx = false;
     let mut log = Tracklog::default();
@@ -112,11 +114,7 @@ pub fn parse_gpx(s: &str) -> Result<Tracklog, GpxError> {
                 match name.as_slice() {
                     b"gpx" if path.is_empty() => seen_gpx = true,
                     b"trk" if parent == Some(b"gpx") => log.tracks += 1,
-                    b"trkseg" if parent == Some(b"trk") => {
-                        if log.points.last().is_some_and(|p| p.segment == segment) {
-                            segment += 1;
-                        }
-                    }
+                    b"trkseg" if parent == Some(b"trk") && log.points.last().is_some_and(|p| p.segment == segment) => segment += 1,
                     b"trkpt" if parent == Some(b"trkseg") => {
                         let mut p = Pending::default();
                         for a in e.attributes().with_checks(false).flatten() {
@@ -168,6 +166,9 @@ pub fn parse_gpx(s: &str) -> Result<Tracklog, GpxError> {
     }
     if !seen_gpx {
         return Err(GpxError::NotGpx);
+    }
+    if !path.is_empty() {
+        return Err(GpxError::Xml("unclosed GPX elements".into()));
     }
     // stable: points logged at the same second keep their file order
     log.points.sort_by(|a, b| a.time.total_cmp(&b.time));
@@ -362,6 +363,12 @@ mod tests {
     fn rejects_non_gpx_and_bad_input() {
         assert_eq!(parse_gpx("<kml><Document/></kml>"), Err(GpxError::NotGpx));
         assert!(parse_gpx("").is_err());
+        // A partial logger write must not be mistaken for a complete track,
+        // even if it contains a valid timed point.
+        let point = r#"<gpx><trk><trkseg><trkpt lat="45" lon="7"><time>2026-01-01T00:00:00Z</time></trkpt></trkseg></trk>"#;
+        assert!(matches!(parse_gpx(point), Err(GpxError::Xml(_))));
+        let wrong_close = r#"<gpx><trk><trkseg><trkpt lat="45" lon="7"><time>2026-01-01T00:00:00Z</time></trkpt></trk></trkseg></gpx>"#;
+        assert!(matches!(parse_gpx(wrong_close), Err(GpxError::Xml(_))));
         assert!(
             parse_gpx("<gpx><trk><trkseg><trkpt lat=\"x\" lon=\"1\"><time>2026-01-01T00:00:00Z</time></trkpt></trkseg></trk></gpx>")
                 .unwrap()

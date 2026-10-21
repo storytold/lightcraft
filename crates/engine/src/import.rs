@@ -39,7 +39,7 @@ pub const EXTENSIONS: &[&str] = &[
     // Decoded when built with the codecs' `heif` feature; otherwise the import reports them as
     // failed with the reason ("HEIC/HEIF support isn't included in this build").
     "heic", "heif", "avif", // no AV1 decoder yet: reported as failed, like a HEIC without the feature
-    "iiq", "crw", "mrw", "x3f", "kdc", "mos", "erf", "3fr", "fff",
+    "iiq", "crw", "mrw", "x3f", "kdc", "mos", "erf", "3fr", "fff", "mef",
 ];
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -310,6 +310,8 @@ pub struct ImportDefaults {
     pub auto_folder: Option<String>,
     pub auto_copy: bool,
     pub auto_album: Option<String>,
+    /// Open the import review when a camera or memory card is connected.
+    pub show_on_card: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -380,6 +382,17 @@ pub fn expand(paths: &[String], skip: Option<&Path>) -> Vec<String> {
 
 /// [`expand`] with the walk bounded by `limits` → (files, whether a walk stopped at a bound).
 pub fn expand_within(paths: &[String], skip: Option<&Path>, limits: crate::walk::Limits) -> (Vec<String>, bool) {
+    expand_noting(paths, skip, limits, None)
+}
+
+/// [`expand_within`], handing the listing of every folder that is walked to `note`
+/// ([`crate::walk::files_in_noting`]).
+pub(crate) fn expand_noting(
+    paths: &[String],
+    skip: Option<&Path>,
+    limits: crate::walk::Limits,
+    mut note: Option<crate::walk::NoteFolder>,
+) -> (Vec<String>, bool) {
     let mut out = Vec::new();
     let mut truncated = false;
     for p in paths {
@@ -388,7 +401,10 @@ pub fn expand_within(paths: &[String], skip: Option<&Path>, limits: crate::walk:
             continue;
         }
         if p.is_dir() {
-            let w = crate::walk::files_in(p, skip, limits, is_supported);
+            let w = match note.as_mut() {
+                Some(note) => crate::walk::files_in_noting(p, skip, limits, is_supported, &mut **note),
+                None => crate::walk::files_in(p, skip, limits, is_supported),
+            };
             if w.truncated {
                 log::warn!(
                     "import: stopped looking in {} after {} entries (limits: {} entries, {} folder levels)",
@@ -466,10 +482,24 @@ pub fn launch_path(arg: &str, cwd: Option<&Path>, home: Option<&Path>, dcim: imp
 
 /// Probe files (headers + content hash) as an import would.
 pub(crate) fn probe_paths(s: &Session, paths: &[String]) -> Vec<Result<ProbeInfo, String>> {
-    probe_all(s.media.file_probe.as_ref(), paths, &ScanProgress::default())
+    let progress = ScanProgress::default();
+    probe_all(s.media.file_probe.as_ref(), paths, &progress.done, &progress.cancel)
 }
 
-fn probe_all(probe: Option<&crate::media::FileProbe>, paths: &[String], progress: &ScanProgress) -> Vec<Result<ProbeInfo, String>> {
+/// Probe files with `probe` (a clone of the session's file probe), off the session: on a worker thread.
+pub(crate) fn probe_with(probe: &crate::media::FileProbe, paths: &[String]) -> Vec<Result<ProbeInfo, String>> {
+    let progress = ScanProgress::default();
+    probe_all(Some(probe), paths, &progress.done, &progress.cancel)
+}
+
+/// Probe `paths` (several at once), counting each in `done`. Stops before the next file once
+/// `cancel` is set: the files not reached come back as errors.
+fn probe_all(
+    probe: Option<&crate::media::FileProbe>,
+    paths: &[String],
+    done: &std::sync::atomic::AtomicUsize,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Vec<Result<ProbeInfo, String>> {
     use std::sync::atomic::Ordering::Relaxed;
     let Some(probe) = probe.cloned() else {
         return paths
@@ -497,11 +527,11 @@ fn probe_all(probe: Option<&crate::media::FileProbe>, paths: &[String], progress
                             if i >= paths.len() {
                                 break;
                             }
-                            if progress.cancel.load(Relaxed) {
+                            if cancel.load(Relaxed) {
                                 break;
                             }
                             let r = probe(&paths[i]);
-                            progress.done.fetch_add(1, Relaxed);
+                            done.fetch_add(1, Relaxed);
                             out.lock().unwrap_or_else(|e| e.into_inner())[i] = Some(r);
                         }
                     });
@@ -513,11 +543,11 @@ fn probe_all(probe: Option<&crate::media::FileProbe>, paths: &[String], progress
     paths
         .iter()
         .map(|p| {
-            if progress.cancel.load(Relaxed) {
+            if cancel.load(Relaxed) {
                 return Err("cancelled".into());
             }
             let r = probe(p);
-            progress.done.fetch_add(1, Relaxed);
+            done.fetch_add(1, Relaxed);
             r
         })
         .collect()
@@ -540,10 +570,60 @@ fn copy_into(dir: &Path, src: &str, name: Option<&str>, probe_hash: Option<&str>
 pub struct ScanInput {
     probe: Option<crate::media::FileProbe>,
     skip: Option<PathBuf>,
-    /// path → (photo, its summary) for files already in the library.
-    by_path: HashMap<PathBuf, (PhotoId, ImportCandidate)>,
-    by_hash: HashMap<String, PhotoId>,
+    /// The library as it is now (photos are shared with the session, not copied): looked up for
+    /// the files the scan finds ([`library_files`]) and the contents it probes
+    /// ([`library_hashes`]), on the scan's thread.
+    library: std::sync::Arc<lightcraft_catalog::Catalog>,
     cache: HashMap<String, ProbeInfo>,
+}
+
+/// The library's photos of `files`: path → (photo, its summary as a candidate that is there
+/// already). One pass over the library, and a record only for a file that was found: a folder of
+/// a hundred files in a library of millions costs a hundred records.
+fn library_files(library: &lightcraft_catalog::Catalog, files: &[String]) -> HashMap<PathBuf, (PhotoId, ImportCandidate)> {
+    let found: std::collections::HashSet<&Path> = files.iter().map(Path::new).collect();
+    let mut by_path = HashMap::new();
+    if found.is_empty() {
+        return by_path;
+    }
+    for p in library.photos() {
+        if let Source::File { path } = &p.source
+            && found.contains(Path::new(path))
+        {
+            let c = ImportCandidate {
+                path: path.clone(),
+                format: p.format.clone(),
+                kind: p.kind,
+                width: p.width,
+                height: p.height,
+                file_size: p.file_size,
+                captured: p.captured.clone(),
+                duplicate: Some("path".into()),
+                existing: Some(p.id.0),
+                ..Default::default()
+            };
+            by_path.insert(PathBuf::from(path), (p.id, c));
+        }
+    }
+    by_path
+}
+
+/// Which photo of the library has each of the contents `hashes` (the later one where several
+/// have it). One pass over the library, and an entry only for a content that was asked about.
+fn library_hashes<'a>(library: &lightcraft_catalog::Catalog, hashes: impl Iterator<Item = &'a str>) -> HashMap<String, PhotoId> {
+    let wanted: std::collections::HashSet<&str> = hashes.collect();
+    let mut by_hash = HashMap::new();
+    if wanted.is_empty() {
+        return by_hash;
+    }
+    for p in library.photos() {
+        if let Some(h) = &p.content_hash
+            && wanted.contains(h.as_str())
+        {
+            by_hash.insert(h.clone(), p.id);
+        }
+    }
+    by_hash
 }
 
 /// Progress and cancellation of a running [`scan_with`].
@@ -565,30 +645,21 @@ pub struct ScanOutput {
 impl ScanInput {
     pub fn new(s: &mut Session, paths: &[String]) -> (Self, Vec<String>) {
         let skip = s.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.clone());
-        let mut by_path = HashMap::new();
-        let mut by_hash = HashMap::new();
-        for p in s.catalog.photos() {
-            if let Source::File { path } = &p.source {
-                let c = ImportCandidate {
-                    path: path.clone(),
-                    format: p.format.clone(),
-                    kind: p.kind,
-                    width: p.width,
-                    height: p.height,
-                    file_size: p.file_size,
-                    captured: p.captured.clone(),
-                    duplicate: Some("path".into()),
-                    existing: Some(p.id.0),
-                    ..Default::default()
-                };
-                by_path.insert(PathBuf::from(path), (p.id, c));
-            }
-            if let Some(h) = &p.content_hash {
-                by_hash.insert(h.clone(), p.id);
-            }
-        }
-        let input = ScanInput { probe: s.media.file_probe.clone(), skip, by_path, by_hash, cache: std::mem::take(&mut s.import_probes) };
+        // (no table of the library here: this is the session's thread, and the library may hold
+        // millions of photos. The scan looks up what it finds)
+        let library = std::sync::Arc::new(s.catalog.clone());
+        let input = ScanInput { probe: s.media.file_probe.clone(), skip, library, cache: std::mem::take(&mut s.import_probes) };
         (input, paths.to_vec())
+    }
+
+    /// The folder a scan never enters (the library's own).
+    pub(crate) fn skip(&self) -> Option<&Path> {
+        self.skip.as_deref()
+    }
+
+    /// The library as the scan sees it (shared, for [`crate::sync`], which looks at the same one).
+    pub(crate) fn library(&self) -> std::sync::Arc<lightcraft_catalog::Catalog> {
+        std::sync::Arc::clone(&self.library)
     }
 }
 
@@ -604,10 +675,16 @@ pub fn scan(s: &mut Session, paths: &[String]) -> Vec<ImportCandidate> {
 
 /// [`scan`] without the session, so it can run on a worker thread. Stops early (returning what it
 /// has) when `progress.cancel` is set.
-pub fn scan_with(mut input: ScanInput, paths: &[String], progress: &ScanProgress) -> ScanOutput {
-    use std::sync::atomic::Ordering::Relaxed;
+pub fn scan_with(input: ScanInput, paths: &[String], progress: &ScanProgress) -> ScanOutput {
     let files = expand(paths, input.skip.as_deref());
-    let todo: Vec<String> = files.iter().filter(|f| !input.by_path.contains_key(Path::new(f))).cloned().collect();
+    scan_files(input, files, progress)
+}
+
+/// [`scan_with`] for files that were found already (`paths` expanded, [`expand`]).
+pub(crate) fn scan_files(mut input: ScanInput, files: Vec<String>, progress: &ScanProgress) -> ScanOutput {
+    use std::sync::atomic::Ordering::Relaxed;
+    let by_path = library_files(&input.library, &files);
+    let todo: Vec<String> = files.iter().filter(|f| !by_path.contains_key(Path::new(f))).cloned().collect();
     progress.total.store(todo.len(), Relaxed);
     // probes from a preceding `scan` are reused when the file is unchanged (same size)
     let cached: Vec<Option<ProbeInfo>> = todo
@@ -620,16 +697,19 @@ pub fn scan_with(mut input: ScanInput, paths: &[String], progress: &ScanProgress
         .collect();
     let missing: Vec<String> = todo.iter().zip(&cached).filter(|(_, c)| c.is_none()).map(|(f, _)| f.clone()).collect();
     progress.done.store(todo.len() - missing.len(), Relaxed);
-    let mut fresh = probe_all(input.probe.as_ref(), &missing, progress).into_iter();
+    let mut fresh = probe_all(input.probe.as_ref(), &missing, &progress.done, &progress.cancel).into_iter();
     let probed: Vec<Result<ProbeInfo, String>> =
         cached.into_iter().map(|c| c.map(Ok).unwrap_or_else(|| fresh.next().unwrap_or_else(|| Err("not probed".into())))).collect();
     crate::memory::release();
     let mut probes: HashMap<String, Result<ProbeInfo, String>> = todo.into_iter().zip(probed).collect();
-    let mut seen_hash: HashMap<String, Option<u64>> = input.by_hash.into_iter().map(|(h, id)| (h, Some(id.0))).collect();
+    // (who in the library has a content that was probed: asked once the probes are in)
+    let probed_hashes = probes.values().filter_map(|r| r.as_ref().ok()).filter_map(|info| info.content_hash.as_deref());
+    let mut seen_hash: HashMap<String, Option<u64>> =
+        library_hashes(&input.library, probed_hashes).into_iter().map(|(h, id)| (h, Some(id.0))).collect();
     let mut out = Vec::with_capacity(files.len());
     let mut kept = HashMap::new();
     for f in files {
-        if let Some((_, c)) = input.by_path.get(Path::new(&f)) {
+        if let Some((_, c)) = by_path.get(Path::new(&f)) {
             let mut c = c.clone();
             c.name = Path::new(&f).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| f.clone());
             out.push(c);
@@ -641,6 +721,8 @@ pub fn scan_with(mut input: ScanInput, paths: &[String], progress: &ScanProgress
             Some(Ok(info)) => {
                 (c.format, c.kind, c.width, c.height, c.file_size, c.captured) =
                     (info.format.clone(), info.kind, info.width, info.height, info.file_size, info.captured.clone());
+                // as the import will date it (a sidecar's date, when there is one, still wins there)
+                c.captured = c.captured.or_else(|| info.file_modified.clone());
                 c.preview_only = info.preview_only.clone();
                 if let Some(h) = &info.content_hash {
                     match seen_hash.get(h) {
@@ -691,6 +773,12 @@ pub struct ImportJob {
     mode: ImportMode,
     lib_dir: Option<PathBuf>,
     copy_root: Option<PathBuf>,
+    /// The library as it was when the import was set up, until it is looked up
+    /// ([`ImportJob::look_up_library`], with the first files): setting an import up is the
+    /// session's thread, and a table of a library of millions of photos takes seconds. With it,
+    /// whether a photo in Recently Deleted is passed over (an import that replaces such photos,
+    /// as the options said when the import was set up).
+    library: Option<(lightcraft_catalog::Catalog, bool)>,
     /// path → (photo, a Local browse record?)
     by_path: HashMap<String, (PhotoId, bool)>,
     /// content hash → the photo that has it (`None`: a file earlier in this import)
@@ -705,6 +793,10 @@ pub struct ImportJob {
     /// Files found so far (folders expanded) and handled so far, for progress.
     pub total: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     pub done: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    /// Of those, the files that have to be read first (not probed by a preceding scan) and the
+    /// ones read so far: the step before they are handled.
+    pub read_total: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    pub read_done: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
 /// The outcome of [`ImportJob::prepare`] for one batch, in file order.
@@ -828,28 +920,16 @@ impl ImportJob {
         if matches!(mode, ImportMode::Copy | ImportMode::Move) && copy_root.is_none() {
             return Err(crate::EngineError::Other("copying or moving needs a destination folder or an open library".into()));
         }
-        let mut by_path = HashMap::new();
-        let mut by_hash = HashMap::new();
-        for p in s.catalog.photos() {
-            // a trashed photo is replaced by a fresh import, so it doesn't count as a duplicate
-            if p.deleted && opts.on_deleted == OnDeleted::Fresh {
-                continue;
-            }
-            if let Source::File { path } = &p.source {
-                by_path.insert(path.clone(), (p.id, p.local));
-            }
-            if let Some(h) = &p.content_hash {
-                by_hash.insert(h.clone(), Some(p.id));
-            }
-        }
+        let fresh = opts.on_deleted == OnDeleted::Fresh;
         Ok(ImportJob {
             seq: opts.rename_start.max(1),
             opts,
             mode,
             lib_dir,
             copy_root,
-            by_path,
-            by_hash,
+            library: Some((s.catalog.clone(), fresh)),
+            by_path: HashMap::new(),
+            by_hash: HashMap::new(),
             probe: s.media.file_probe.clone(),
             file_bytes: s.media.file_bytes.clone(),
             cache: std::mem::take(&mut s.import_probes),
@@ -857,6 +937,8 @@ impl ImportJob {
             now: (s.clock)(),
             total: Default::default(),
             done: Default::default(),
+            read_total: Default::default(),
+            read_done: Default::default(),
         })
     }
 
@@ -882,9 +964,28 @@ impl ImportJob {
         &self.now
     }
 
+    /// What the library held when the import was set up, by path and by content: made once, with
+    /// the first files (on the thread that prepares them), from the library as it was then.
+    fn look_up_library(&mut self) {
+        let Some((library, fresh)) = self.library.take() else { return };
+        for p in library.photos() {
+            // a trashed photo is replaced by a fresh import, so it doesn't count as a duplicate
+            if p.deleted && fresh {
+                continue;
+            }
+            if let Source::File { path } = &p.source {
+                self.by_path.insert(path.clone(), (p.id, p.local));
+            }
+            if let Some(h) = &p.content_hash {
+                self.by_hash.insert(h.clone(), Some(p.id));
+            }
+        }
+    }
+
     /// [`ImportJob::prepare`] for files [`ImportJob::expand`] returned.
     pub fn prepare_files(&mut self, files: Vec<String>, cancel: &std::sync::atomic::AtomicBool) -> Prepared {
         use std::sync::atomic::Ordering::Relaxed;
+        self.look_up_library();
         let opts = self.opts.clone();
         let mode = self.mode;
         let mut out = Prepared { scanned: files.len(), items: Vec::new() };
@@ -917,8 +1018,10 @@ impl ImportJob {
             })
             .collect();
         let missing: Vec<String> = todo.iter().zip(&cached).filter(|(_, c)| c.is_none()).map(|(f, _)| f.clone()).collect();
-        let progress = ScanProgress::default();
-        let mut fresh = probe_all(self.probe.as_ref(), &missing, &progress).into_iter();
+        // Reading the files is the slow part of adding them where they are: it is counted on its
+        // own, and `cancel` stops it too (a large library takes long enough to want both).
+        self.read_total.fetch_add(missing.len(), Relaxed);
+        let mut fresh = probe_all(self.probe.as_ref(), &missing, &self.read_done, cancel).into_iter();
         let probed: Vec<Result<ProbeInfo, String>> =
             cached.into_iter().map(|c| c.map(Ok).unwrap_or_else(|| fresh.next().unwrap_or_else(|| Err("not probed".into())))).collect();
         crate::memory::release();
@@ -973,6 +1076,10 @@ impl ImportJob {
             });
             if info.captured.is_none() {
                 info.captured = sidecar.as_ref().and_then(|sc| sc.captured.clone());
+            }
+            // no date in the file or its sidecar: the file's own date, as Lightroom does
+            if info.captured.is_none() {
+                info.captured = info.file_modified.clone();
             }
             let stored = match (mode, &self.copy_root) {
                 (ImportMode::Copy | ImportMode::Move, Some(root))
@@ -1311,7 +1418,7 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                 p.as_shot_wb = info.as_shot_wb;
                 p.content_hash = info.content_hash;
                 p.embedded_lens = info.embedded_lens;
-                p.preview_only = info.preview_only.clone();
+                p.set_preview_only(info.preview_only.clone());
                 apply_import_defaults(s, &mut p);
                 if let Some(sc) = &sidecar {
                     crate::sidecar::merge_into(&mut p, sc, &now);
@@ -1457,6 +1564,8 @@ impl Session {
             stages: None,
             view_cache: None,
             display: None,
+            slide: None,
+            preview_cut: None,
         };
         let embedded = match (&self.media.preview_loader, c.kind) {
             (Some(l), MediaKind::Raw) => Some((c.path.clone(), l.clone(), edge)),
@@ -1471,6 +1580,10 @@ impl Session {
         self
     }
 }
+
+#[cfg(test)]
+#[path = "import/tests_known.rs"]
+mod tests_known;
 
 #[cfg(test)]
 mod prepared_tests {
@@ -1497,5 +1610,52 @@ mod prepared_tests {
         prepared.revalidate_add(&s);
         assert!(matches!(prepared.items.first(), Some(PreparedItem::Duplicate { reason: "path", .. })));
         assert!(matches!(prepared.items.get(1), Some(PreparedItem::Ready(_))));
+    }
+
+    fn unread_paths(n: usize) -> Vec<String> {
+        (0..n).map(|i| std::env::temp_dir().join(format!("lightcraft-probe-progress-{i}.jpg")).to_string_lossy().into()).collect()
+    }
+
+    /// Reading the files of a large import (a Lightroom catalog's originals) reported nothing:
+    /// the progress stood still at "14 of 24554" for as long as it took.
+    #[test]
+    fn prepare_counts_the_files_it_reads() {
+        use std::sync::atomic::Ordering::Relaxed;
+        let mut s = Session::new();
+        let seen = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (seen_in_probe, done_in_probe) = (seen.clone(), std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)));
+        let mut job = ImportJob::new(&mut s, ImportOptions { mode: ImportMode::Add, ..ImportOptions::default() }).unwrap();
+        let (done, last) = (job.read_done.clone(), done_in_probe.clone());
+        job.probe = Some(std::sync::Arc::new(move |_: &str| {
+            seen_in_probe.fetch_add(1, Relaxed);
+            last.fetch_max(done.load(Relaxed), Relaxed);
+            Ok(ProbeInfo { format: "JPEG".into(), ..ProbeInfo::default() })
+        }));
+        let prepared = job.prepare(&unread_paths(40), &std::sync::atomic::AtomicBool::new(false));
+        assert_eq!(prepared.items.len(), 40);
+        assert_eq!(seen.load(Relaxed), 40);
+        assert!(done_in_probe.load(Relaxed) > 0, "progress moves while files are read");
+        assert_eq!((job.read_done.load(Relaxed), job.read_total.load(Relaxed)), (40, 40), "every file read is counted");
+        assert_eq!((job.done.load(Relaxed), job.total.load(Relaxed)), (40, 40), "handling them is counted on its own");
+    }
+
+    /// Cancel had no effect until every file had been read.
+    #[test]
+    fn cancel_stops_reading_files() {
+        use std::sync::atomic::Ordering::Relaxed;
+        let mut s = Session::new();
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let seen = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut job = ImportJob::new(&mut s, ImportOptions { mode: ImportMode::Add, ..ImportOptions::default() }).unwrap();
+        let (seen_in_probe, cancel_in_probe) = (seen.clone(), cancel.clone());
+        job.probe = Some(std::sync::Arc::new(move |_: &str| {
+            seen_in_probe.fetch_add(1, Relaxed);
+            cancel_in_probe.store(true, Relaxed);
+            Ok(ProbeInfo { format: "JPEG".into(), ..ProbeInfo::default() })
+        }));
+        let prepared = job.prepare(&unread_paths(400), &cancel);
+        // at most the files the (up to 8) readers had already started
+        assert!(seen.load(Relaxed) <= 8, "read {} files after cancel", seen.load(Relaxed));
+        assert!(prepared.items.is_empty());
     }
 }

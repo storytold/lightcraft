@@ -31,11 +31,21 @@ fn file_history_step(s: &mut Session, fs: &dyn crate::rename::MoveFs, redo: bool
     })
 }
 
+/// The model volume spells paths with `/`; the code under test joins them with the host's separator.
+fn slash(path: &str) -> String {
+    path.replace('\\', "/")
+}
+
+fn file_source(s: &Session, id: u64) -> String {
+    let Source::File { path } = &s.catalog.photo(PhotoId(id)).unwrap().source else { panic!("synthetic file fixture") };
+    slash(path)
+}
+
 fn assert_file_catalog_and_journal(s: &Session, fs: &crate::rename::tests::FakeFs, store: &lightcraft_catalog::MemStore) {
     let files = fs.listing();
     for photo in s.catalog.photos() {
         let Source::File { path } = &photo.source else { panic!("synthetic file fixture") };
-        assert!(files.iter().any(|(file, _)| file == path), "photo {} points to missing {path}: {files:?}", photo.id.0);
+        assert!(files.iter().any(|(file, _)| *file == slash(path)), "photo {} points to missing {path}: {files:?}", photo.id.0);
         assert_eq!(std::path::Path::new(path).file_name().unwrap().to_string_lossy(), photo.file_name.as_str());
     }
     let replayed = memory_library(store);
@@ -102,7 +112,8 @@ fn merged_renames_coalesce_physical_moves_and_keep_retry_inverses_and_journal() 
     let renamed = fs.listing();
     s.merge_undo(2, "Rename Twice");
     assert_eq!(s.undo.len(), 1);
-    assert_eq!(s.file_moves(&s.undo.last().unwrap().op), vec![("/p/final.jpg".into(), "/p/a.jpg".into())]);
+    let moves: Vec<_> = s.file_moves(&s.undo.last().unwrap().op).iter().map(|(from, to)| (slash(from), slash(to))).collect();
+    assert_eq!(moves, vec![("/p/final.jpg".to_string(), "/p/a.jpg".to_string())]);
     // First exercise the ordinary merged step, before any corrective paths exist.
     for redo in [false, true] {
         file_history_step(&mut s, &fs, redo).unwrap();
@@ -274,7 +285,7 @@ fn history_retries_both_sidecar_styles_after_following_a_photo_with_failed_rollb
             file_history_step(&mut s, &fs, redo).unwrap();
             let mut after = before
                 .iter()
-                .map(|(path, bytes)| (path.replace(from.trim_end_matches(".jpg"), to.trim_end_matches(".jpg")), bytes.clone()))
+                .map(|(path, bytes)| (path.replace(slash(&from).trim_end_matches(".jpg"), slash(&to).trim_end_matches(".jpg")), bytes.clone()))
                 .collect::<Vec<_>>();
             after.sort();
             assert_eq!(fs.listing(), after);
@@ -343,7 +354,7 @@ fn initial_partial_rename_keeps_sidecar_repairs_for_noop_retry_and_history() {
     let plans = s.plan_rename_with(&fs, &[PhotoId(1)], "Trip", 1);
     *fs.fail.borrow_mut() = vec!["/p/a.xmp".into(), "/p/Trip.jpg".into()];
     assert!(s.execute_fn("photo.rename", |s| Ok(json!({"renamed": s.apply_rename_with(&fs, &plans)?}))).is_err());
-    assert_eq!(s.catalog.photo(PhotoId(1)).unwrap().source, Source::File { path: "/p/Trip.jpg".into() });
+    assert_eq!(file_source(&s, 1), "/p/Trip.jpg");
     assert_eq!(s.undo.len(), 1);
     assert_eq!(s.undo.last().unwrap().retry_sidecars.len(), 2);
     assert_file_catalog_and_journal(&s, &fs, &store);
@@ -513,10 +524,11 @@ fn merged_rename_failure_keeps_rolled_back_photo_identity() {
     );
     s.merge_undo(3, "Rename Three Times");
     assert_eq!((s.undo.len(), s.redo.len()), (1, 0));
-    assert_eq!(s.file_moves(&s.undo.last().unwrap().op), vec![("/p/d.jpg".into(), "/p/b.jpg".into()), ("/p/c.jpg".into(), "/p/a.jpg".into())]);
+    let moves: Vec<_> = s.file_moves(&s.undo.last().unwrap().op).iter().map(|(from, to)| (slash(from), slash(to))).collect();
+    assert_eq!(moves, vec![("/p/d.jpg".to_string(), "/p/b.jpg".to_string()), ("/p/c.jpg".to_string(), "/p/a.jpg".to_string())]);
     // The second photo move sticks; the preceding d -> b move must roll back to d.
     *fs.fail.borrow_mut() = vec!["/p/c.xmp".into(), "/p/a.jpg".into()];
-    let error = file_history_step(&mut s, &fs, false).unwrap_err().to_string();
+    let error = slash(&file_history_step(&mut s, &fs, false).unwrap_err().to_string());
     assert!(error.contains("rename /p/c.xmp: injected failure"), "{error}");
     assert!(error.contains("/p/c.jpg could not be moved back"), "{error}");
     let files = fs.listing();
@@ -529,9 +541,8 @@ fn merged_rename_failure_keeps_rolled_back_photo_identity() {
         ]
     );
     assert_eq!((s.undo.len(), s.redo.len()), (1, 0));
-    assert_eq!(s.catalog.photo(PhotoId(1)).unwrap().source, Source::File { path: "/p/a.jpg".into() });
-    let photo2 = s.catalog.photo(PhotoId(2)).unwrap();
-    assert_eq!(photo2.source, Source::File { path: "/p/d.jpg".into() }, "photo 2 rolled back physically and must still identify d.jpg");
-    let Source::File { path } = &photo2.source else { panic!("file fixture") };
-    assert_eq!(files.iter().find(|(file, _)| file == path).map(|(_, bytes)| bytes.as_str()), Some("Photo 2"));
+    assert_eq!(file_source(&s, 1), "/p/a.jpg");
+    let path = file_source(&s, 2);
+    assert_eq!(path, "/p/d.jpg", "photo 2 rolled back physically and must still identify d.jpg");
+    assert_eq!(files.iter().find(|(file, _)| *file == path).map(|(_, bytes)| bytes.as_str()), Some("Photo 2"));
 }

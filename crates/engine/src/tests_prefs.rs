@@ -108,7 +108,7 @@ fn preferences_persist_with_the_library() {
         s.execute("library.xmpPreferences", &json!({"autoWrite": true})).unwrap();
         s.execute(
             "library.preferences",
-            &json!({"import": {"rawPreset": "user.rawlook", "perCamera": true}, "camera": {"camera": "Canon EOS R5", "preset": "user.canonlook"}, "cacheMb": 512}),
+            &json!({"import": {"rawPreset": "user.rawlook", "perCamera": true, "showOnCard": true}, "camera": {"camera": "Canon EOS R5", "preset": "user.canonlook"}, "cacheMb": 512}),
         )
         .unwrap();
         s.close_library().unwrap();
@@ -118,6 +118,7 @@ fn preferences_persist_with_the_library() {
     assert!(s.xmp.auto_write);
     assert_eq!(s.import_defaults.raw_preset.as_deref(), Some("user.rawlook"));
     assert!(s.import_defaults.per_camera);
+    assert!(s.import_defaults.show_on_card);
     assert_eq!(s.import_defaults.cameras.len(), 1);
     assert_eq!(s.import_defaults.preset_for(true, "Canon EOS R5"), Some("user.canonlook"));
     assert_eq!(s.cache_mb, 512);
@@ -138,6 +139,25 @@ fn preferences_persist_with_the_library() {
     s.open_library(&lib, false).unwrap();
     assert_eq!(s.last_export, Some(json!({"format": "png"})));
     assert_eq!(s.import_defaults, Default::default());
+    let _ = std::fs::remove_dir_all(&lib);
+}
+
+#[test]
+fn last_merge_settings_persist_with_the_library() {
+    let lib = temp_dir("merge");
+    let opts = json!({"align": false, "deghost": "high"});
+    {
+        let mut s = Session::new().with_fs();
+        s.open_library(&lib, false).unwrap();
+        s.last_merge.insert("merge.hdr".into(), opts.clone());
+        s.save_prefs().unwrap();
+        s.close_library().unwrap();
+    }
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    assert_eq!(s.last_merge.get("merge.hdr"), Some(&opts));
+    assert!(!s.last_merge.contains_key("merge.panorama"));
+    drop(s);
     let _ = std::fs::remove_dir_all(&lib);
 }
 
@@ -266,6 +286,60 @@ fn curve_presets_save_apply_export_import_and_persist() {
 }
 
 #[test]
+fn mask_effects_import_apply_save_export_and_persist() {
+    let lib = temp_dir("effects");
+    let src = lib.join("Local Adjustment Presets");
+    std::fs::create_dir_all(&src).unwrap();
+    // a Lightroom local adjustment preset (synthetic values) and a develop template beside it
+    std::fs::write(
+        src.join("Brighten.lrtemplate"),
+        "s = {\n\ttitle = \"Brighten\",\n\ttype = \"LocalizedAdjustmentPreset\",\n\tvalue = {\n\t\texposure2012 = 0.25,\n\t\tshadows2012 = 0.2,\n\t\tgrain = 0.3,\n\t},\n\tversion = 0,\n}",
+    )
+    .unwrap();
+    std::fs::write(src.join("Look.lrtemplate"), "s = { title = \"Look\", type = \"Develop\", value = { settings = { Exposure2012 = 0.5 } } }")
+        .unwrap();
+    {
+        let mut s = Session::new().with_fs();
+        s.open_library(&lib, true).unwrap();
+        // the general preset import routes the local one to the effects
+        let r = s.execute("preset.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+        assert_eq!(r["imported"].as_array().unwrap().len(), 1, "the develop template stays a develop preset");
+        assert_eq!(r["effects"][0]["name"], "Brighten");
+        assert_eq!(r["effects"][0]["unmapped"], json!(["Grain"]));
+        assert_eq!(s.mask_effects.len(), 1);
+        // apply to a mask: every slider set, Amount kept
+        s.execute("mask.add", &json!({"kind": "radial"})).unwrap();
+        s.execute("mask.adjust", &json!({"values": {"clarity": 30, "amount": 70}})).unwrap();
+        assert!(s.execute("mask.applyEffect", &json!({"name": "nope"})).is_err());
+        s.execute("mask.applyEffect", &json!({"name": "brighten"})).unwrap();
+        let d = s.develop_of(s.active().unwrap()).unwrap();
+        let a = d.masks.last().unwrap().adjust;
+        assert_eq!((a.exposure, a.shadows, a.clarity, a.amount), (1.0, 20.0, 0.0, 70.0));
+        assert_eq!(s.execute("mask.effects", &json!({})).unwrap()["current"], "Brighten");
+        // save the mask's sliders under a new name, export, delete, re-import
+        s.execute("mask.adjust", &json!({"values": {"dehaze": 15}})).unwrap();
+        s.execute("mask.saveEffect", &json!({"name": "Brighten + Dehaze"})).unwrap();
+        let r = s.execute("mask.exportEffects", &json!({"path": lib.join("out").join("mine").to_string_lossy()})).unwrap();
+        assert_eq!(r["count"], 2);
+        let path = r["path"].as_str().unwrap().to_string();
+        assert!(path.ends_with(".lceffect"));
+        s.execute("mask.deleteEffect", &json!({"name": "brighten + dehaze"})).unwrap();
+        assert!(s.execute("mask.deleteEffect", &json!({"name": "brighten + dehaze"})).is_err());
+        let r = s.execute("mask.importEffects", &json!({"path": path})).unwrap();
+        assert_eq!(r["imported"].as_array().unwrap().len(), 2);
+        assert_eq!(s.mask_effects.len(), 2, "same-named effects are replaced");
+        s.close_library().unwrap();
+    }
+    // saved with the library preferences
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    let names: Vec<String> = s.mask_effects.iter().map(|e| e.name.clone()).collect();
+    assert_eq!(names, ["Brighten", "Brighten + Dehaze"]);
+    assert_eq!(s.mask_effects[1].adjust.dehaze, 15.0);
+    let _ = std::fs::remove_dir_all(&lib);
+}
+
+#[test]
 fn resizing_the_disk_cache_keeps_the_cache_and_its_thumbnails() {
     let lib = temp_dir("resize");
     let mut s = Session::new().with_fs();
@@ -314,6 +388,46 @@ fn reopening_a_library_retires_the_old_cache_so_its_jobs_cannot_write_after_a_cl
     assert!(fresh.get(key).is_none(), "stale thumbnail written through the replaced cache");
     assert!(fresh.get(kept).is_none(), "stale put through the replaced cache");
     assert!(s.media.rendered.get(key).is_none());
+    drop(s);
+    let _ = std::fs::remove_dir_all(&lib);
+}
+
+#[test]
+fn slideshow_playback_settings_persist_with_the_library() {
+    let lib = temp_dir("slideshow");
+    {
+        let mut s = Session::new().with_fs();
+        s.open_library(&lib, false).unwrap();
+        let r = s.execute("slideshow.playback", &json!({})).unwrap();
+        assert_eq!(r["slideDuration"], 4.0, "defaults: {r}");
+        let r = s
+            .execute(
+                "slideshow.playback",
+                &json!({"slideDuration": 6, "fadeDuration": 2.5, "fadeColor": "#000000", "randomOrder": true, "repeat": false}),
+            )
+            .unwrap();
+        assert_eq!(r["fadeColor"], "#000000");
+        // a hostile value changes nothing
+        assert!(s.execute("slideshow.playback", &json!({"slideDuration": "soon", "repeat": true})).is_err());
+        assert!(!s.slideshow.repeat);
+        drop(s);
+    }
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    let r = s.execute("slideshow.playback", &json!({})).unwrap();
+    assert_eq!(
+        r,
+        json!({"slideDuration": 6.0, "fadeDuration": 2.5, "fadeColor": "#000000", "randomOrder": true, "repeat": false, "preparePreviews": true})
+    );
+    drop(s);
+    // out-of-range values written by hand are clamped when the library opens
+    std::fs::write(lib.join("prefs.json"), r#"{"slideshow": {"slideDuration": 1e9, "fadeDuration": -3}}"#).unwrap();
+    let s = {
+        let mut s = Session::new().with_fs();
+        s.open_library(&lib, false).unwrap();
+        s
+    };
+    assert_eq!((s.slideshow.slide_duration, s.slideshow.fade_duration), (120.0, 0.0));
     drop(s);
     let _ = std::fs::remove_dir_all(&lib);
 }

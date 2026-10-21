@@ -10,12 +10,13 @@ use crate::widgets::{icon_button, register};
 
 /// The bar doubles as the window's title bar: dragging its empty space moves the window and a
 /// double-click zooms or restores it. Registered before the bar's widgets so they win the click.
-fn window_handle(app: &LightcraftApp, ui: &mut egui::Ui, content: Rect, margin_left: f32, margin_right: f32) {
+fn window_handle(app: &LightcraftApp, ui: &mut egui::Ui, content: Rect, margin_left: f32, margin_right: f32, search_rect: Rect) {
     use crate::titlebar::{Gesture, WindowState, command_for};
     let bar = Rect::from_min_max(pos2(content.left() - margin_left, content.top()), pos2(content.right() + margin_right, content.bottom()));
     register(ui.ctx(), "region:titlebar", bar);
     let handle = egui::Id::new("titlebar-handle");
     let resp = ui.interact(bar, handle, Sense::click_and_drag());
+    crate::widgets::announce(&resp, crate::i18n::tr("Title bar"));
     // a press that began on a button or the search field is theirs: dragging off it must not move the window
     // (while pressing, egui hovers every widget under the pointer; once the drag starts, only the dragged one)
     let ctx = ui.ctx().clone();
@@ -27,9 +28,12 @@ fn window_handle(app: &LightcraftApp, ui: &mut egui::Ui, content: Rect, margin_l
         ctx.data_mut(|d| d.insert_temp(memo, on_widget));
     }
     let on_widget = ctx.data(|d| d.get_temp::<bool>(memo)).unwrap_or(false);
-    let gesture = if resp.double_clicked_by(egui::PointerButton::Primary) {
+    // The search field is drawn after this handle. Its hit-test response may not exist
+    // yet when the press is recorded; the press origin still identifies text selection.
+    let on_search = ui.input(|i| i.pointer.press_origin().is_some_and(|p| search_rect.contains(p)));
+    let gesture = if resp.double_clicked_by(egui::PointerButton::Primary) && !on_search {
         Some(Gesture::DoubleClicked)
-    } else if resp.drag_started_by(egui::PointerButton::Primary) && !on_widget {
+    } else if resp.drag_started_by(egui::PointerButton::Primary) && !on_widget && !on_search {
         Some(Gesture::DragStarted)
     } else {
         None
@@ -44,33 +48,43 @@ fn window_handle(app: &LightcraftApp, ui: &mut egui::Ui, content: Rect, margin_l
 
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
-    let left = if app.integrated_titlebar { 78 } else { 10 };
+    // room for the traffic lights; in full screen they are gone, and the sidebar button sits as far
+    // from the left edge as the Discord button from the right (12 margin + 4)
+    let left = match (app.integrated_titlebar, app.window_is_fullscreen) {
+        (true, false) => 78,
+        (true, true) => 16,
+        (false, _) => 10,
+    };
     egui::Panel::top("top_bar")
         .exact_size(t.top_bar_h)
         .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin { left, right: 12, top: 0, bottom: 0 }))
         .show(ui, |ui| {
             let full = ui.max_rect();
-            if app.integrated_titlebar {
-                window_handle(app, ui, full, left as f32, 12.0);
-            }
-            // room for the filter icon and the six icons on the right
-            let mut sw = 640.0f32.min(full.width() - 540.0).max(200.0);
+            // room for the filter icon and the seven icons on the right
+            // (the field is centred, so each icon on the right takes its width from both sides)
+            let mut sw = 640.0f32.min(full.width() - 620.0).max(190.0);
             if !app.native_menu {
                 // leave room for the in-window menus left of the (centred) search field
                 let menus_right = full.left() + 140.0 + crate::menubar::bar_width(ui) + 24.0;
-                sw = sw.min(2.0 * (full.center().x - menus_right)).max(200.0);
+                sw = sw.min(2.0 * (full.center().x - menus_right)).max(190.0);
             }
             let search_left = full.center().x - sw / 2.0;
+            let sr = Rect::from_center_size(pos2(full.center().x, full.center().y), vec2(sw, 28.0));
+            if app.integrated_titlebar {
+                window_handle(app, ui, full, left as f32, 12.0, sr);
+            }
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
-                if icon_button(ui, "sidebar", Icon::Sidebar, vec2(30.0, 30.0), app.ui.left_panel, true, "Show/hide My Photos panel").clicked() {
+                if icon_button(ui, "sidebar", Icon::Sidebar, vec2(30.0, 30.0), app.ui.left_panel, true, crate::i18n::tr("Show/hide My Photos panel"))
+                    .clicked()
+                {
                     let _ = app.run("view.leftPanel", json!({}));
                 }
                 ui.add_space(8.0);
-                if icon_button(ui, "back", Icon::Back, vec2(30.0, 30.0), false, true, "Back").clicked() {
+                if icon_button(ui, "back", Icon::Back, vec2(30.0, 30.0), false, true, crate::i18n::tr("Back")).clicked() {
                     let _ = app.run("view.back", json!({}));
                 }
-                icon_button(ui, "forward", Icon::Forward, vec2(30.0, 30.0), false, false, "Forward");
+                icon_button(ui, "forward", Icon::Forward, vec2(30.0, 30.0), false, false, crate::i18n::tr("Forward"));
                 if !app.native_menu {
                     // no native menu bar (web, Windows, Linux): menus in the top bar
                     ui.add_space(10.0);
@@ -79,7 +93,6 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 }
             });
             // search field (centred on the window)
-            let sr = Rect::from_center_size(pos2(full.center().x, full.center().y), vec2(sw, 28.0));
             let id = crate::text_field::id("field:search");
             if std::mem::take(&mut app.ui.focus_search) {
                 ui.memory_mut(|m| m.request_focus(id));
@@ -103,6 +116,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 child.painter().galley(pos2(x0 + 24.0, sr.center().y - g.size().y / 2.0), g, t.text_dim);
             }
             let resp = crate::text_field::TextField::singleline("field:search", &mut app.ui.search)
+                .label(crate::i18n::tr("Search Photos"))
                 .frame(false)
                 .width(sr.width() - 20.0)
                 .font(t.font(13.5))
@@ -116,6 +130,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             // filter icon right of the search field
             let fr = Rect::from_center_size(pos2(sr.right() + 22.0, sr.center().y), vec2(28.0, 28.0));
             let fresp = ui.interact(fr, egui::Id::new("filter-btn"), Sense::click());
+            crate::widgets::announce(&fresp, crate::i18n::tr("Filters"));
             register(ui.ctx(), "icon:filter", fr);
             let filtering = app.session.filter != Default::default() || app.ui.filter_bar;
             paint(
@@ -140,7 +155,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             let fresp = fresp.on_hover_text(if active > 0 {
                 crate::i18n::tr_format!("Filter bar — {active} active filter{}", if active == 1 { "" } else { "s" }, active = active)
             } else {
-                "Filter bar".into()
+                crate::i18n::tr("Filter bar").into()
             });
             if fresp.clicked() {
                 let _ = app.run("view.filterBar", json!({}));
@@ -158,15 +173,23 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 )
             });
             let cloud_tip = unsaved.as_deref().unwrap_or("Local library — no cloud account needed");
+            // Import Photos… beside Export, always one click away, with the key it is bound to now
+            let mac = ui.ctx().os() == egui::os::OperatingSystem::Mac;
+            let import_tip = match crate::shortcuts::shortcut_of(&app.ui.settings.keymap, "file.addPhotos") {
+                Some(sc) => format!("{} ({})", crate::i18n::tr("Import Photos…"), crate::menubar::shortcut_text(sc, mac)),
+                None => crate::i18n::tr("Import Photos…").to_string(),
+            };
             for (id, icon, tip, cmd) in [
                 ("discord", Icon::Chat, "Join the ArtCraft community on Discord", "app.discord"),
                 ("cloud", Icon::Cloud, cloud_tip, ""),
                 ("help", Icon::Help, "Keyboard shortcuts", "app.shortcuts"),
                 ("share", Icon::Share, "Export and share", ""),
+                ("import", Icon::Plus, import_tip.as_str(), "file.addPhotos"),
                 ("bell", Icon::Bell, "Activity", "panel.activity"),
             ] {
                 let r = Rect::from_center_size(pos2(x, full.center().y), vec2(28.0, 28.0));
-                let resp = ui.interact(r, egui::Id::new(("top", id)), Sense::click()).on_hover_text(tip);
+                let resp = ui.interact(r, egui::Id::new(("top", id)), Sense::click()).on_hover_text(crate::i18n::tr(tip));
+                crate::widgets::announce(&resp, crate::i18n::tr(tip));
                 register(ui.ctx(), format!("icon:{id}"), r);
                 let warn = id == "cloud" && unsaved.is_some();
                 let colour = if warn {
@@ -183,8 +206,12 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     ui.painter().text(c, Align2::CENTER_CENTER, "!", t.semibold(9.5), t.canvas);
                     register(ui.ctx(), "indicator:unsaved", r);
                 }
-                if resp.clicked() && !cmd.is_empty() {
-                    let _ = app.run(cmd, json!({}));
+                // a refusal says why (Import while a Lightroom catalog is coming in)
+                if resp.clicked()
+                    && !cmd.is_empty()
+                    && let Err(e) = app.run(cmd, json!({}))
+                {
+                    app.toast_error(ui.ctx(), e);
                 }
                 if id == "share" {
                     egui::Popup::menu(&resp).show(|ui| share_menu(app, ui));
@@ -195,7 +222,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             let (icon, mode) = appearance_icon(app.ui.settings.appearance_mode);
             let r = Rect::from_center_size(pos2(x, full.center().y), vec2(28.0, 28.0));
             let tip = format!("{}: {}", crate::i18n::tr("Appearance Mode"), crate::i18n::tr(mode));
-            let resp = ui.interact(r, egui::Id::new(("top", "appearance")), Sense::click()).on_hover_text(tip);
+            let resp = ui.interact(r, egui::Id::new(("top", "appearance")), Sense::click()).on_hover_text(tip.clone());
+            crate::widgets::announce(&resp, tip.clone());
             register(ui.ctx(), "icon:appearance", r);
             paint(ui.painter(), r.shrink(5.0), icon, if resp.hovered() { t.text } else { t.icon });
             if resp.clicked() {

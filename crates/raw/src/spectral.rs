@@ -4,7 +4,8 @@
 //! `tools/spectral_camera_table.py` from rawtoaces-data (Academy Software Foundation, Apache-2.0): per model, DNG
 //! `ColorMatrix1/2` and `ForwardMatrix1/2` for Standard Illuminant A and D65, fitted to the camera's measured spectral
 //! sensitivities. [`Camera::fill`] writes them into a file's [`ColorData`], and [`crate::color`]'s DNG model does the
-//! rest. Other names of a covered camera (Rebel T3i for EOS 600D) come from rawtoaces-data's alias list. No number
+//! rest. Other names of a covered camera (Rebel T3i for EOS 600D) come from rawtoaces-data's alias list, and other
+//! bodies built on a covered camera's sensor from [`SAME_SENSOR`]. No number
 //! comes from Adobe or from a GPL raw decoder. Which colour a raw starts from is the engine's choice
 //! (`docs/camera-preview-colour.md`).
 use crate::ColorData;
@@ -40,6 +41,19 @@ impl Camera {
     }
 }
 
+/// `(make, model as sold, table model)`: bodies sharing a table camera's sensor that rawtoaces-data's alias list
+/// doesn't name, kept here because the table is generated. Fujifilm's 26.1 MP X-Trans CMOS 4 bodies use the X-T3's
+/// sensor (X-T30 issue: a black-and-white Acros camera JPEG gives no colour to fit, and without matrices the photo
+/// opened in the muted neutral fallback).
+const SAME_SENSOR: &[(&str, &str, &str)] = &[
+    ("Fujifilm", "X-T30", "X-T3"),
+    ("Fujifilm", "X-T30 II", "X-T3"),
+    ("Fujifilm", "X-Pro3", "X-T3"),
+    ("Fujifilm", "X100V", "X-T3"),
+    ("Fujifilm", "X-S10", "X-T3"),
+    ("Fujifilm", "X-E4", "X-T3"),
+];
+
 /// Model names compared without case, the brand, a leading `EOS` or a trailing `DIGITAL`
 /// (Exif "Canon EOS 400D DIGITAL" is the table's "EOS 400D").
 fn key(brand: &str, model: &str) -> String {
@@ -70,7 +84,7 @@ pub fn find(make: Option<&str>, model: &str) -> Option<&'static Camera> {
         let wanted = key(&row_brand, model);
         make.as_ref().is_none_or(|m| *m == row_brand) && !wanted.is_empty() && key(&row_brand, row_model) == wanted
     };
-    match table::ALIASES.iter().find(|(m, alias, _)| same(m, alias)) {
+    match table::ALIASES.iter().chain(SAME_SENSOR).find(|(m, alias, _)| same(m, alias)) {
         Some((m, _, target)) => table::CAMERAS.iter().find(|c| brand(c.make) == brand(m) && c.model == *target),
         None => table::CAMERAS.iter().find(|c| same(c.make, c.model)),
     }
@@ -142,10 +156,14 @@ mod tests {
             ("Canon", "Canon EOS REBEL T3i", "EOS 600D"),
             ("Canon", "Canon EOS Kiss X5", "EOS 600D"),
             ("Canon", "Canon EOS R5 Mark II", "EOS R5m2"),
+            ("Canon", "Canon EOS R6 Mark II", "EOS R6m2"),
             ("NIKON CORPORATION", "NIKON D800", "D800E"),
             ("NIKON CORPORATION", "NIKON Z 6_2", "Z f"),
             ("SONY", "ILCE-7RM4A", "ILCE-7RM4"),
             ("FUJIFILM", "GFX100S", "GFX 100"),
+            ("FUJIFILM", "X-T30", "X-T3"),
+            ("FUJIFILM", "X-T30 II", "X-T3"),
+            ("FUJIFILM", "X100V", "X-T3"),
         ] {
             assert_eq!(find(Some(make), model).map(|c| c.model), Some(row), "{make} {model}");
         }
@@ -171,7 +189,7 @@ mod tests {
             assert_eq!(find_camera(&joined), Some(c), "{joined}");
             assert_eq!(find_camera(&joined), find(Some(c.make), c.model), "{joined}");
         }
-        for (make, alias, _) in table::ALIASES {
+        for (make, alias, _) in table::ALIASES.iter().chain(SAME_SENSOR) {
             let joined = format!("{make} {alias}");
             assert_eq!(find_camera(&joined), find(Some(make), alias), "{joined}");
             assert!(find_camera(&joined).is_some(), "{joined}");

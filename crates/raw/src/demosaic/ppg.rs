@@ -42,7 +42,7 @@ pub(crate) fn green_plane(m: &Mosaic) -> Vec<f32> {
                 _ => (ge, gw, ce),
             };
             let est = (near * 3.0 + far + c - cfar) * 0.25;
-            *o = est.clamp(near.min(far), near.max(far));
+            *o = super::clamp_between(est, near, far);
         }
     });
     g

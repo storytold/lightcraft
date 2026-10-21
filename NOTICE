@@ -51,9 +51,10 @@ no darktable, RawSpeed, LibRaw or other GPL decoder/runtime code is included.
 
 Builds made with craft-fonts (the optional CRAFT_FONTS_DIR build input; all official releases)
 also embed the fonts listed in https://github.com/storytold/craft-fonts/blob/main/ATTRIBUTION.md
-(the Japanese fonts BIZ UDPGothic, BIZ UDMincho and Shippori Mincho; the web build embeds only BIZ
-UDPGothic Regular), under the SIL Open Font License 1.1. Release packages include each font's
-licence as OFL-<family>.txt.
+(BIZ UDPGothic, BIZ UDMincho, Shippori Mincho, Noto Sans CJK SC, Noto Sans Arabic and Noto Sans
+Thai), under the SIL Open Font License 1.1. The web build embeds BIZ UDPGothic Regular and Noto
+Sans Thai Regular, and loads Noto Sans CJK SC separately. Release packages include each font's
+licence as OFL-<family>.txt; Windows installers include their texts in FONT-LICENCES.txt.
 
 Place names for reverse geocoding (Photo > Fill Location from GPS) are not part of LightCraft and
 are never distributed with it. On the user's request (Photo > Download Place Names) the app

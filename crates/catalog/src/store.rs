@@ -73,6 +73,16 @@ impl FsStore {
     }
 }
 
+/// A new staging file at `tmp`: whatever is already there (a leftover from a crashed save, or a link) is removed first
+/// (a link itself, never what it points to), then the file is created exclusively, so a write never follows a link
+/// planted at that name into another file (issue #1502).
+fn create_staging(tmp: &std::path::Path) -> io::Result<std::fs::File> {
+    if std::fs::symlink_metadata(tmp).is_ok() {
+        std::fs::remove_file(tmp)?;
+    }
+    std::fs::OpenOptions::new().write(true).create_new(true).open(tmp)
+}
+
 impl Store for FsStore {
     fn read(&mut self, name: &str) -> io::Result<Option<Vec<u8>>> {
         match std::fs::read(self.path(name)) {
@@ -89,7 +99,7 @@ impl Store for FsStore {
         }
         let tmp = self.path(&format!("{name}.tmp"));
         {
-            let mut f = std::fs::File::create(&tmp)?;
+            let mut f = create_staging(&tmp)?;
             f.write_all(data)?;
             f.sync_all()?;
         }
@@ -105,7 +115,7 @@ impl Store for FsStore {
         }
         let tmp = self.path(&format!("{name}.tmp"));
         let written = (|| {
-            let mut w = Counter { inner: io::BufWriter::with_capacity(1 << 20, std::fs::File::create(&tmp)?), n: 0 };
+            let mut w = Counter { inner: io::BufWriter::with_capacity(1 << 20, create_staging(&tmp)?), n: 0 };
             fill(&mut w)?;
             w.flush()?;
             let f = w.inner.into_inner().map_err(|e| e.into_error())?;
@@ -229,5 +239,31 @@ impl Store for MemStore {
     }
     fn background_writer(&self) -> Option<Box<dyn Store>> {
         self.background.then(|| Box::new(self.clone()) as Box<dyn Store>)
+    }
+}
+
+#[cfg(test)]
+mod tests_staging {
+    use super::*;
+
+    /// A link planted at a staging name (`<name>.tmp`) is removed, never followed: the file it points to keeps its
+    /// bytes and the save still lands (issue #1502).
+    #[cfg(unix)]
+    #[test]
+    fn a_link_at_the_staging_name_is_never_written_through() {
+        let dir = std::env::temp_dir().join(format!("lc-staging-link-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut store = FsStore::open(&dir).unwrap();
+        let victim = dir.join("victim.txt");
+        std::fs::write(&victim, b"keep").unwrap();
+        std::os::unix::fs::symlink(&victim, dir.join("catalog.snap.tmp")).unwrap();
+        store.write_atomic("catalog.snap", b"{}").unwrap();
+        assert_eq!(std::fs::read(&victim).unwrap(), b"keep");
+        assert_eq!(std::fs::read(dir.join("catalog.snap")).unwrap(), b"{}");
+        std::os::unix::fs::symlink(&victim, dir.join("catalog.log.tmp")).unwrap();
+        store.write_atomic_with("catalog.log", &mut |w| w.write_all(b"[1]")).unwrap();
+        assert_eq!(std::fs::read(&victim).unwrap(), b"keep");
+        assert_eq!(std::fs::read(dir.join("catalog.log")).unwrap(), b"[1]");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

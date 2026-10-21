@@ -81,11 +81,11 @@ fn quick_develop_reset_and_batch_paths_fit_too() {
     let got = try_cmd(&mut s, "develop.set", json!({"control": "crop.angle", "value": 12.0, "ids": [id.0]}));
     assert!(close(got, want), "develop.set ids {got:?} vs {want:?}");
 
-    // back to 0°: the crop that fitted at 12° fits at 0° too and is kept
+    // back to 0°: the crop shrunk to fit at 12° grows back to the full photo (issue #1388)
     s.execute("develop.set", &json!({"control": "crop.angle", "value": 12.0})).unwrap();
     s.execute("develop.resetControl", &json!({"control": "crop.angle"})).unwrap();
     let g = geometry(&s);
-    assert_eq!((g.rect, g.angle), (want.rect, 0.0));
+    assert_eq!((g.rect, g.angle), (Rect::UNIT, 0.0));
     assert!(g.is_within_image(w, h));
 }
 
@@ -105,4 +105,49 @@ fn a_straighten_slider_drag_fits_live_and_is_one_undo_step() {
     assert_eq!(geometry(&s).angle, 15.0);
     s.execute("edit.undo", &json!({})).unwrap();
     assert!(close(geometry(&s), start));
+}
+
+#[test]
+fn turning_a_crop_dragged_in_from_a_corner_keeps_that_crop() {
+    // issue #1794: lock the aspect, drag a corner in, then rotate: the crop went back to the photo's
+    // size, because the dragged crop still touches two edges and stops fitting at once
+    let mut s = Session::with_demo();
+    let (w, h) = dims(&s);
+    s.execute("crop.aspect", &json!({"aspect": "original"})).unwrap();
+    s.execute("crop.drag", &json!({"handle": "bottomRight", "from": [1.0, 1.0], "to": [0.6, 0.6]})).unwrap();
+    let made = geometry(&s).rect_px(w, h);
+    assert!(made.width() < 0.7 * w, "the drag cropped: {made:?}");
+    s.execute("develop.beginInteraction", &json!({"label": "Crop"})).unwrap();
+    for angle in [0.25, 1.0, 2.5, 5.0, -3.0] {
+        s.execute("crop.straighten", &json!({"angle": angle})).unwrap();
+        let g = geometry(&s);
+        let r = g.rect_px(w, h);
+        assert!(g.is_within_image(w, h), "{angle}°: inside the photo");
+        assert!(r.width() <= made.width() + 1e-6, "{angle}°: no larger than the crop made, got {r:?} from {made:?}");
+        assert!((r.aspect() - made.aspect()).abs() < 1e-6, "{angle}°: the locked aspect holds");
+    }
+    s.execute("develop.endInteraction", &json!({})).unwrap();
+    // the first small turn only trims it
+    s.execute("edit.undo", &json!({})).unwrap();
+    s.execute("crop.straighten", &json!({"angle": 0.25})).unwrap();
+    let r = geometry(&s).rect_px(w, h);
+    assert!(r.width() > 0.97 * made.width(), "0.25° keeps nearly all of it: {r:?} from {made:?}");
+}
+
+#[test]
+fn a_crop_shrunk_by_straightening_grows_back_towards_0() {
+    // issue #1388: slide the Straighten slider out and back, in one drag or in several
+    let mut s = Session::with_demo();
+    let (w, h) = dims(&s);
+    s.execute("develop.beginInteraction", &json!({"label": "Straighten"})).unwrap();
+    for angle in [5.0, 12.0, 20.0, 8.0, -20.0, -3.0, 0.0] {
+        s.execute("crop.straighten", &json!({"angle": angle})).unwrap();
+        let g = geometry(&s);
+        assert!(close(g, lightcraft_geom::crop_fit_angle(w, h, angle, None)), "the largest crop at {angle}°, got {g:?}");
+    }
+    s.execute("develop.endInteraction", &json!({})).unwrap();
+    s.execute("crop.straighten", &json!({"angle": 20.0})).unwrap();
+    s.execute("crop.straighten", &json!({"angle": 0.0})).unwrap();
+    let g = geometry(&s);
+    assert!(close(g, CropGeometry::default()), "two separate drags: back to the full photo at 0°, got {g:?}");
 }

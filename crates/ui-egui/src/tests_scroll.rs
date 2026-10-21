@@ -208,3 +208,64 @@ fn filmstrip_shows_every_selected_photo() {
     assert_eq!(r["ok"], true, "{r}");
     assert_eq!(fill(&mut h, second), active);
 }
+
+/// One notch of a mouse wheel (a line).
+fn notch(h: &mut Headless, dy: f32) {
+    h.events.push(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Line,
+        delta: egui::vec2(0.0, dy),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::NONE,
+    });
+    h.step();
+}
+
+/// A mouse wheel notch scrolls the grid a third of its height, as in Lightroom (two rows of six), not the
+/// `theme::WHEEL_LINE_POINTS` a side panel scrolls: at big thumbnails that was a quarter of a row. Exactly
+/// a third, not whole rows, so the photos don't land where the last ones were, and at once, without a
+/// glide that blurs them. A trackpad still scrolls the points it reports.
+#[test]
+fn a_wheel_notch_scrolls_a_third_of_the_grid() {
+    let mut h = demo("photoGrid");
+    let view = widget(&h, "grid:scroll");
+    h.request("ui.move", json!({"x": view.center().x, "y": view.center().y}), T);
+    let y0 = grid_y(&h);
+    notch(&mut h, -1.0);
+    // at once, no glide: the frame after the notch draws it there
+    h.step();
+    h.step();
+    let moved = grid_y(&h) - y0;
+    assert!((moved - view.height() * crate::theme::WHEEL_STRIP_SHARE).abs() < 1.0, "a notch scrolled {moved} of {} points", view.height());
+    idle(&mut h, 120);
+    assert!((grid_y(&h) - y0 - moved).abs() < 0.5, "and no further: {} after the glide", grid_y(&h) - y0);
+    let y1 = grid_y(&h);
+    for _ in 0..2 {
+        notch(&mut h, -1.0);
+    }
+    idle(&mut h, 120);
+    let moved = grid_y(&h) - y1;
+    assert!((moved - 2.0 * view.height() * crate::theme::WHEEL_STRIP_SHARE).abs() < 1.0, "two notches scrolled {moved} of {} points", view.height());
+    // back up
+    let y2 = grid_y(&h);
+    notch(&mut h, 1.0);
+    idle(&mut h, 120);
+    assert!((y2 - grid_y(&h) - view.height() * crate::theme::WHEEL_STRIP_SHARE).abs() < 1.0, "a notch up scrolled back a third");
+    // a trackpad (points) scrolls what it reports
+    let y3 = grid_y(&h);
+    h.request("ui.scroll", json!({"dy": -60.0}), T);
+    idle(&mut h, 120);
+    assert!((grid_y(&h) - y3 - 60.0).abs() < 1.0, "a 60-point trackpad scroll moved {}", grid_y(&h) - y3);
+}
+
+/// The same in the filmstrip: a notch scrolls it sideways by a third of its width (about five photos).
+#[test]
+fn a_wheel_notch_scrolls_a_third_of_the_filmstrip() {
+    let mut h = demo("detail");
+    let strip = widget(&h, "filmstrip");
+    h.request("ui.move", json!({"x": strip.center().x, "y": strip.center().y}), T);
+    let x0 = film_x(&h);
+    notch(&mut h, -1.0);
+    idle(&mut h, 120);
+    let moved = film_x(&h) - x0;
+    assert!((moved - strip.width() * crate::theme::WHEEL_STRIP_SHARE).abs() < 1.0, "a notch scrolled {moved} of {} points", strip.width());
+}

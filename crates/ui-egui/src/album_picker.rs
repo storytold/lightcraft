@@ -11,7 +11,7 @@
 //! `albumPicker:<id>` (the button), `albumPickerSearch:<id>`, `albumPickerFolder:<folder>:<id>`
 //! and `albumPickerItem:<album>:<id>`.
 
-use egui::{Response, RichText, Ui, vec2};
+use egui::{Rect, Response, RichText, Ui, vec2};
 
 use crate::icons::Icon;
 use crate::widgets::register;
@@ -146,14 +146,14 @@ pub fn search(entries: &[AlbumEntry], query: &str) -> Vec<usize> {
     first.into_iter().chain(rest).collect()
 }
 
-/// A small filled triangle centred on `c`: pointing down (`down`), else right.
-fn triangle(p: &egui::Painter, c: egui::Pos2, down: bool, color: egui::Color32) {
-    let pts = if down {
-        vec![c + vec2(-4.0, -2.0), c + vec2(4.0, -2.0), c + vec2(0.0, 3.0)]
-    } else {
-        vec![c + vec2(-2.0, -4.0), c + vec2(3.0, 0.0), c + vec2(-2.0, 4.0)]
-    };
-    p.add(egui::Shape::convex_polygon(pts, color, egui::Stroke::NONE));
+/// A disclosure chevron centred on `c`: pointing down (`down`), else right.
+fn disclosure(p: &egui::Painter, c: egui::Pos2, down: bool, color: egui::Color32) {
+    crate::icons::paint(
+        p,
+        Rect::from_center_size(c, vec2(16.0, 16.0)),
+        if down { crate::icons::Icon::ChevronDown } else { crate::icons::Icon::ChevronRight },
+        color,
+    );
 }
 
 /// What the open popup remembers between frames.
@@ -195,7 +195,7 @@ impl<'a> AlbumPicker<'a> {
         // the name, and a drop-down arrow painted at the right (the UI font has no arrow glyph)
         let mut button = ui.add_sized(vec2(width, ui.spacing().interact_size.y), egui::Button::new(text).truncate().right_text(" "));
         let arrow_color = crate::theme::Tokens::get(ui.ctx()).icon;
-        triangle(ui.painter(), egui::pos2(button.rect.right() - 10.0, button.rect.center().y), true, arrow_color);
+        disclosure(ui.painter(), egui::pos2(button.rect.right() - 10.0, button.rect.center().y), true, arrow_color);
         register(ui.ctx(), format!("albumPicker:{id}"), button.rect);
         let key = egui::Id::new(("albumPicker", id.as_str()));
         if button.clicked() {
@@ -255,7 +255,7 @@ impl<'a> AlbumPicker<'a> {
                                 ui.painter().rect_filled(rect, 3.0, t.hover);
                             }
                             let x = rect.left() + indent;
-                            triangle(ui.painter(), egui::pos2(x + 7.0, rect.center().y), open, if r.hovered() { t.text } else { t.text_dim });
+                            disclosure(ui.painter(), egui::pos2(x + 7.0, rect.center().y), open, if r.hovered() { t.text } else { t.text_dim });
                             let icon = egui::Rect::from_center_size(egui::pos2(x + 23.0, rect.center().y), vec2(14.0, 14.0));
                             crate::icons::paint(ui.painter(), icon, Icon::Folder, t.icon);
                             ui.painter().text(
