@@ -169,6 +169,7 @@ fn services(originals: Originals, backend: Option<Backend>, files: Files, frozen
     let restore_backend = backend.clone();
     Services {
         picker: None,
+        dialog_errors: None,
         pick_display_profile: None,
         screen_profile: None,
         backup_library: Some(Box::new(move |session: &mut Session| {

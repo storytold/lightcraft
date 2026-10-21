@@ -224,7 +224,7 @@ fn print_to_pdf_picks_a_file_and_runs_in_the_background() {
         picker: Some(Box::new(move |req| {
             requests.lock().unwrap().push(req);
             let (tx, rx) = std::sync::mpsc::channel();
-            tx.send(vec!["Print.pdf".into()]).unwrap();
+            tx.send(Ok(vec!["Print.pdf".into()])).unwrap();
             Ok(rx)
         })),
         write_shared: Some(Arc::new(move |path, data| {

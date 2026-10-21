@@ -86,7 +86,7 @@ mod tests {
             picker: Some(Box::new(move |req| {
                 requests.lock().unwrap().push(req);
                 let (tx, rx) = std::sync::mpsc::channel();
-                tx.send(vec![answer.clone()]).unwrap();
+                tx.send(Ok(vec![answer.clone()])).unwrap();
                 Ok(rx)
             })),
             ..Default::default()
