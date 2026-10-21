@@ -108,6 +108,8 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.navigate", "Set Image Zoom and Pan", None, ""),
     ("view.zoomIn", "Zoom In", Some("Cmd+="), "View"),
     ("view.zoomOut", "Zoom Out", Some("Cmd+-"), "View"),
+    // the loupe below 100 % shows the full-resolution render scaled down (slow on big photos)
+    ("view.highQualityPreview", "High Quality Preview", None, "View"),
     // Library grids only (Photo Grid, Square Grid, People): the bottom-bar slider's step by key
     ("view.thumbSizeUp", "Increase Grid Thumbnail Size", Some("="), "View"),
     ("view.thumbSizeDown", "Decrease Grid Thumbnail Size", Some("-"), "View"),
@@ -564,6 +566,12 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             // {on?}; no params toggles. The camera's focus point (Sony, from the file) over the photo.
             app.ui.settings.focus_point = p.get("on").and_then(Value::as_bool).unwrap_or(!app.ui.settings.focus_point);
             Ok(json!({"on": app.ui.settings.focus_point}))
+        }
+        "view.highQualityPreview" => {
+            // {on?}; no params toggles. Below 100 % the loupe shows the full-resolution render
+            // scaled down (`Session::high_quality`) instead of a render made at display size.
+            app.ui.high_quality_preview = p.get("on").and_then(Value::as_bool).unwrap_or(!app.ui.high_quality_preview);
+            Ok(json!({"on": app.ui.high_quality_preview}))
         }
         "view.zoomToFocus" => {
             // {on?}; no params toggles. Toggle Zoom (Z) centres on the focus point when there is one.

@@ -1794,7 +1794,7 @@ fn too_big_for_memory(out: (usize, usize), native_px: usize, weight: usize, ram:
 /// `level` into `out_px` output pixels: the decoded source (linear RGB f32, 12 B/px) plus the
 /// pipeline's planes and the encoded output (~36 B per output pixel). Measured: a 24 MP export
 /// peaks at ~1.2 GB, one at 2048 px from the 2560 px preview at ~150 MB.
-fn render_weight(full_px: usize, long: usize, level: crate::media::SourceLevel, out_px: usize) -> usize {
+pub(crate) fn render_weight(full_px: usize, long: usize, level: crate::media::SourceLevel, out_px: usize) -> usize {
     let edge = level.max_edge().min(long.max(1));
     let scale = edge as f64 / long.max(1) as f64;
     let src_px = (full_px as f64 * scale * scale).min(usize::MAX as f64 / 64.0) as usize;

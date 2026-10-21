@@ -125,6 +125,9 @@ pub fn inspect(app: &LightcraftApp, ctx: &egui::Context) -> Value {
             // …and the same for the Before side of a Before/After view
             "regionBefore": app.region_before_view.map(|r| json!({"full": [r.full.0, r.full.1], "window": [r.window.x, r.window.y, r.window.w, r.window.h], "pending": app.renderer.is_pending(crate::render::Slot::RegionBefore)})),
         })),
+        // what High Quality Preview did with the loupe's last jobs: applied (the native frame's
+        // size), native (100 % or more), skipped or refused, and why
+        "highQualityPreview": {"on": app.ui.high_quality_preview, "jobs": app.hq_report},
         "hoverPreview": app.hover_preview.as_ref().map(|h| h.label.clone()),
         "status": app.ui.status,
         "copied": app.copied,
