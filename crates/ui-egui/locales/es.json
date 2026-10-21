@@ -2340,5 +2340,6 @@
   "Checking the GPU…": "Comprobando la GPU…",
   "CPU": "CPU",
   "A face model uses the GPU only when a check shows it gives the same results faster.": "Un modelo de caras usa la GPU solo cuando una comprobación muestra que da los mismos resultados más rápido.",
-  "Checking the GPU for faces": "Comprobando la GPU para las caras"
+  "Checking the GPU for faces": "Comprobando la GPU para las caras",
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Evitar el parpadeo de G-SYNC/FreeSync (se aplica al reiniciar)"
 }

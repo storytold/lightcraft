@@ -2262,6 +2262,7 @@
   "This build cannot run recognition models: they can be added and chosen, not used.": "Questa versione non può eseguire modelli di riconoscimento: si possono aggiungere e scegliere, non usare.",
   "This build has nowhere to keep face models, so the model list is not available. (The desktop app has.)": "Questa versione non ha dove tenere i modelli dei volti, quindi l'elenco dei modelli non è disponibile. (L'app desktop ce l'ha.)",
   "Unnamed Faces": "Volti senza nome",
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Evita lo sfarfallio G-SYNC/FreeSync (dal prossimo avvio)",
   "smart album value|No": "No",
   "smart album value|Yes": "Sì",
   "Add Print Cell": "Aggiungi cella di stampa",

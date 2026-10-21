@@ -2240,6 +2240,7 @@
   "Select none": "Zrušit celý výběr",
   "Select all": "Vybrat vše",
   "Visualize HDR": "Zobrazit rozsah HDR",
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Zabránit blikání G-SYNC/FreeSync (platí po dalším spuštění)",
   "Add a Face Recognition Model": "Přidat model rozpoznávání obličejů",
   "Choose Monitor Profile": "Vybrat profil monitoru",
   "Display profile not used": "Profil displeje nebyl použit",

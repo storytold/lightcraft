@@ -58,6 +58,11 @@ fn app_icon() -> egui::IconData {
 struct App(LightcraftApp, PrefsWriter, #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>);
 
 impl eframe::App for App {
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        // The transparency-capable DirectComposition window is a presentation workaround;
+        // translucent UI layers (disabled panels, modal dimming) must not reveal the desktop.
+        egui::Color32::from_rgb(12, 12, 12).to_normalized_gamma_f32()
+    }
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         #[cfg(target_os = "macos")]
         if let Some(m) = self.2.as_mut()
@@ -916,8 +921,11 @@ fn main() -> eframe::Result {
     lightcraft_engine::gpu::set_enabled(gpu_on);
     // the window's renderer: probed (Windows) and with a fallback chain, so a driver that can't
     // build egui's pipeline never kills the start-up
+    let compose_window =
+        prefs.as_ref().map_or_else(|| lightcraft_ui_egui::state::AppSettings::default().compose_window, |ui| ui.settings.compose_window)
+            && std::env::var_os("WGPU_BACKEND").is_none();
     let win_files = std::sync::Arc::new(window_files(in_memory));
-    let window_gpu::Chosen { renderer, wgpu_options, which: window_renderer, notice: window_notice } = window_gpu::choose(&win_files);
+    let window_gpu::Chosen { renderer, wgpu_options, which: window_renderer, notice: window_notice } = window_gpu::choose(&win_files, compose_window);
     win_files.arm(window_renderer);
     let win_files_app = win_files.clone();
     // the window came up: a failure after this is LightCraft stopping, not a start that failed
@@ -930,6 +938,7 @@ fn main() -> eframe::Result {
         viewport: as_remembered(egui::ViewportBuilder::default().with_title("LightCraft"), opens_as)
             .with_min_inner_size(lightcraft_ui_egui::window_place::MIN_SIZE)
             .with_drag_and_drop(true)
+            .with_transparent(window_gpu::composes_window(compose_window, window_renderer))
             .with_fullsize_content_view(true)
             .with_titlebar_shown(false)
             .with_title_shown(false)
@@ -1115,6 +1124,21 @@ fn startup_failed(error: &str, log_file: Option<&std::path::Path>) {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn desktop_clear_color_stays_opaque_with_a_modal_open() {
+        let mut app = App(
+            LightcraftApp::new(Session::new(), Services::default()),
+            PrefsWriter::default(),
+            #[cfg(target_os = "macos")]
+            None,
+        );
+        app.0.run("app.settings", serde_json::json!({})).unwrap();
+        assert!(app.0.ui.dialog.is_some());
+        for visuals in [egui::Visuals::dark(), egui::Visuals::light()] {
+            assert_eq!(eframe::App::clear_color(&app, &visuals)[3], 1.0);
+        }
+    }
 
     fn dir(tag: &str) -> std::path::PathBuf {
         let d = std::env::temp_dir().join(format!("lc-app-prefs-{tag}-{}", std::process::id()));

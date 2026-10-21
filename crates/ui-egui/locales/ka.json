@@ -2718,5 +2718,6 @@
   "≥  at least": "≥  არანაკლებ",
   "⌘-drag to straighten, ⇧G Guided Upright, a grid while transforming.": "⌘-გადათრევა გასასწორებლად, ⇧G მართვადი Upright, ბადე გარდაქმნისას.",
   "日本語": "日本語",
-  "繁體中文（台灣）": "繁體中文（台灣）"
+  "繁體中文（台灣）": "繁體中文（台灣）",
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "G-SYNC/FreeSync-ის ციმციმის თავიდან აცილება (ამოქმედდება შემდეგი გაშვებისას)"
 }

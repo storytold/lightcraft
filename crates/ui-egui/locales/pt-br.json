@@ -2186,5 +2186,6 @@
   "Color Overlay on B&W": "Sobreposição de cor em P&B",
   "Image on Black": "Imagem sobre preto",
   "Image on White": "Imagem sobre branco",
-  "White on Black": "Branco sobre preto"
+  "White on Black": "Branco sobre preto",
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Evitar cintilação de G-SYNC/FreeSync (no próximo início)"
 }

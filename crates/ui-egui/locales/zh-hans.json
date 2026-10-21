@@ -2180,6 +2180,7 @@
   "CPU": "CPU",
   "A face model uses the GPU only when a check shows it gives the same results faster.": "只有检查表明 GPU 能更快给出相同结果时，人脸模型才会使用 GPU。",
   "Checking the GPU for faces": "正在检查用于人脸的 GPU",
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "防止 G-SYNC/FreeSync 闪烁（下次启动时生效）",
   "Include selected photos": "包含所选照片",
   "Suggests who is in a photo from the faces you have named. Everything stays on your computer.": "根据你已命名的人脸，推测照片中的人物。所有数据仅保存在本机。",
   "This build cannot run recognition models: they can be added and chosen, not used.": "此版本无法运行识别模型：可以添加和选择，但无法使用。",
