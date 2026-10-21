@@ -17,7 +17,7 @@ use lightcraft_catalog::{Op, PhotoId, Source};
 use serde_json::{Value, json};
 
 use super::{CommandSpec, always, bad, bool_or, cmd, str_param};
-use crate::import::{ImportMode, ImportOptions, import_with, is_supported};
+use crate::import::{ImportMode, ImportOptions, import_with};
 use crate::{Browse, LibrarySource, Result, Session};
 
 fn browse(s: &mut Session, p: &Value) -> Result<Value> {
@@ -32,15 +32,7 @@ fn browse(s: &mut Session, p: &Value) -> Result<Value> {
     let files: Vec<String> = if subfolders {
         crate::import::expand(std::slice::from_ref(&dir_s), None)
     } else {
-        let mut v: Vec<String> = std::fs::read_dir(&dir)
-            .map_err(|e| bad(C, format!("{path}: {e}")))?
-            .flatten()
-            .map(|e| e.path())
-            .filter(|f| f.is_file() && is_supported(f) && !f.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.')))
-            .map(|f| f.to_string_lossy().to_string())
-            .collect();
-        v.sort();
-        v
+        crate::import::list_folder(&dir).map_err(|e| bad(C, format!("{path}: {e}")))?
     };
     // looking at a folder never brings its deleted photos back (importing the files does)
     let opts = ImportOptions { mode: ImportMode::Add, local: true, on_deleted: crate::import::OnDeleted::Skip, ..Default::default() };

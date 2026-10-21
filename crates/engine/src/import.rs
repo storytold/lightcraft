@@ -373,6 +373,18 @@ pub fn is_supported(path: &Path) -> bool {
     path.extension().is_some_and(|e| EXTENSIONS.contains(&e.to_string_lossy().to_lowercase().as_str()))
 }
 
+/// The photos directly in `dir` (no subfolders, no hidden files) as browsing it lists them, sorted.
+pub fn list_folder(dir: &Path) -> std::io::Result<Vec<String>> {
+    let mut v: Vec<String> = std::fs::read_dir(dir)?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|f| f.is_file() && is_supported(f) && !f.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.')))
+        .map(|f| f.to_string_lossy().to_string())
+        .collect();
+    v.sort();
+    Ok(v)
+}
+
 /// Expand files and folders (recursively) into supported files. `skip` (e.g. the library folder)
 /// is never descended into. Each folder's walk is bounded ([`crate::walk::Limits::default`]); a
 /// walk that stops at a bound is logged.
@@ -957,6 +969,20 @@ impl ImportJob {
         let files = expand(paths, self.lib_dir.as_deref());
         self.total.fetch_add(files.len(), std::sync::atomic::Ordering::Relaxed);
         files
+    }
+
+    /// The files of a browsed folder `dir` (Local): with its subfolders, or only its own photos
+    /// ([`list_folder`]). Not counted in [`ImportJob::total`]: a browse reads only the ones
+    /// [`ImportJob::split_known`] finds new.
+    pub fn expand_folder(&self, dir: &str, subfolders: bool) -> Vec<String> {
+        if subfolders { expand(&[dir.to_string()], None) } else { list_folder(Path::new(dir)).unwrap_or_default() }
+    }
+
+    /// `files` split into those the library already has (by path) and the rest, each in order: a
+    /// browse shows the first at once and reads the others.
+    pub fn split_known(&mut self, files: Vec<String>) -> (Vec<String>, Vec<String>) {
+        self.look_up_library();
+        files.into_iter().partition(|f| self.by_path.contains_key(f.as_str()))
     }
 
     /// When the import started ([`Session::clock`]), for [`commit_prepared`].
