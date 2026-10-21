@@ -392,7 +392,7 @@ mod tests {
                 // only a text rule (nothing to look for yet) and Album (no album picked yet) wait for
                 // input; every other default is a rule that means something
                 let problems = rs.check(&cat);
-                let waits = matches!(kind, Kind::Text | Kind::Keywords) || *field == "album";
+                let waits = matches!(kind, Kind::Text | Kind::Keywords | Kind::Contents) || *field == "album";
                 assert!(problems.is_empty() || waits && !matches!(*op, "isEmpty" | "isNotEmpty"), "{field} {op}: {problems:?}");
                 let _ = rs.matches(&p, &cat);
                 let v = default_value(field, op);
@@ -402,7 +402,7 @@ mod tests {
                     Kind::Number => v.is_number(),
                     Kind::Bool => v.is_boolean(),
                     Kind::Album => v.is_null(),
-                    Kind::Text | Kind::Keywords | Kind::Date => v.is_string(),
+                    Kind::Text | Kind::Keywords | Kind::Date | Kind::Contents => v.is_string(),
                 };
                 match *op {
                     "isEmpty" | "isNotEmpty" => assert!(v.is_null(), "{field} {op}: {v}"),

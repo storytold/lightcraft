@@ -13,6 +13,8 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 log = { workspace = true }
+# the CLIP tokenizer (shared with the CLIP content model)
+lightcraft-vision = { workspace = true }
 
 # the model runs natively only (the web build has no AI masks)
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

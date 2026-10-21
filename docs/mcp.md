@@ -203,7 +203,13 @@ In headless mode these return a tool error explaining how to start the app.
 Everything is a command in LightCraft, so `tools/list` also contains one tool per entry of the
 command registry (engine commands, plus the app's UI commands such as `view.detail` when
 connected): the id with `.` replaced by `_` and a `cmd_` prefix — `photo.rate` → `cmd_photo_rate`,
-`develop.set` → `cmd_develop_set`, `edit.undo` → `cmd_edit_undo`. Arguments are the command's
+`develop.set` → `cmd_develop_set`, `edit.undo` → `cmd_edit_undo`, `content.models.list` →
+`cmd_content_models_list` (content search models, docs/content-search.md; `cmd_content_search {text}` finds photos by
+what they show once `cmd_content_enable {on: true}` and `cmd_content_pump {wait: true}` have indexed the library;
+`cmd_library_filter {contents: "a red car"}` shows them in the view, ranked, with the other filters;
+`cmd_content_tags {ids}` gives photos' auto-tags, `cmd_content_tagCounts` the library's, `cmd_content_acceptTags
+{ids, tags}` makes them keywords; `cmd_content_models_select {id}` switches between SigLIP 2 and CLIP models, each
+with its own index). Arguments are the command's
 JSON params (documented in each tool's description and by `list_commands`). Pass `--compact` to
 leave these per-command tools out when a client struggles with a large tool list; `run_command`
 still reaches every command.
