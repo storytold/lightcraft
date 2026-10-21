@@ -523,6 +523,7 @@ mod tests {
             collections: Vec::new(),
             members: Vec::new(),
             collection_content: Vec::new(),
+            stacks: Vec::new(),
             warnings: Vec::new(),
         }
     }
@@ -546,6 +547,7 @@ mod tests {
             collections: vec![BTreeMap::from([("name".into(), serde_json::json!("Keepers"))])],
             members: vec![BTreeMap::from([("image".into(), serde_json::json!(7))])],
             collection_content: vec![BTreeMap::from([("rule".into(), serde_json::json!("rating > 3"))])],
+            stacks: Vec::new(),
             warnings: vec!["one warning".into()],
         }
     }

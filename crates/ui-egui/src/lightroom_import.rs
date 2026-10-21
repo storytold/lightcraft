@@ -677,6 +677,7 @@ mod tests {
             collections: Vec::new(),
             members: Vec::new(),
             collection_content: Vec::new(),
+            stacks: Vec::new(),
             warnings: vec!["warning".into()],
         });
         assert_eq!(report["photos"], 0);
