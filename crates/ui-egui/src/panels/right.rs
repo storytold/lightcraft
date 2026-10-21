@@ -436,7 +436,7 @@ fn remove(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                         if n == 0 {
                             crate::i18n::tr("No dust spots found").to_string()
                         } else {
-                            crate::i18n::tr_format!("Healed {n} dust spot{}", if n == 1 { "" } else { "s" }, n = n)
+                            crate::i18n::tr_format!("Healed {n} dust spot{}", crate::i18n::english_ending(if n == 1 { "" } else { "s" }), n = n)
                         },
                     );
                 }

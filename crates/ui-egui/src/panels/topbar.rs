@@ -153,7 +153,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 ui.painter().text(c, Align2::CENTER_CENTER, active.to_string(), t.semibold(9.5), t.canvas);
             }
             let fresp = fresp.on_hover_text(if active > 0 {
-                crate::i18n::tr_format!("Filter bar — {active} active filter{}", if active == 1 { "" } else { "s" }, active = active)
+                crate::i18n::tr_format!("Filter bar — {active} active filter{}", crate::i18n::english_ending(if active == 1 { "" } else { "s" }), active = active)
             } else {
                 crate::i18n::tr("Filter bar").into()
             });
@@ -165,9 +165,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             // saving is failing: the cloud icon turns into a warning until a save succeeds
             let unsaved = app.session.unsaved().map(|(n, e)| {
                 crate::i18n::tr_format!(
-                    "{n} change{} saved in memory but not written to disk: {e}\nLightCraft retries automatically; quitting now would lose {}.",
-                    if n == 1 { "" } else { "s" },
-                    if n == 1 { "it" } else { "them" },
+                    "{n} change{} saved in memory but not written to disk: {e}\nLightCraft retries automatically; quitting now would lose {}.", crate::i18n::english_ending(if n == 1 { "" } else { "s" }), crate::i18n::english_ending(if n == 1 { "it" } else { "them" }),
                     e = e,
                     n = n
                 )

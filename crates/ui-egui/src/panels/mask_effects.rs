@@ -492,7 +492,7 @@ pub fn manage_body(
             .width(ui.available_width() - 120.0)
             .show(ui);
         let n = app.session.mask_effects.len();
-        ui.label(egui::RichText::new(crate::i18n::tr_format!("{n} preset{}", if n == 1 { "" } else { "s" }, n = n)).color(t.text_dim));
+        ui.label(egui::RichText::new(crate::i18n::tr_format!("{n} preset{}", crate::i18n::english_ending(if n == 1 { "" } else { "s" }), n = n)).color(t.text_dim));
     });
     let q = search.trim().to_lowercase();
     let effects = app.session.mask_effects.clone();
@@ -596,7 +596,7 @@ pub fn manage_body(
     let mask = app.session.active_mask.filter(|_| app.session.active().is_some());
     if *confirm_delete && n > 0 {
         ui.label(
-            egui::RichText::new(crate::i18n::tr_format!("Delete {n} effect preset{}? This can't be undone.", if n == 1 { "" } else { "s" }, n = n))
+            egui::RichText::new(crate::i18n::tr_format!("Delete {n} effect preset{}? This can't be undone.", crate::i18n::english_ending(if n == 1 { "" } else { "s" }), n = n))
                 .color(t.text),
         );
         ui.horizontal(|ui| {
@@ -686,12 +686,12 @@ pub fn manage_body(
 pub fn import_toast(v: &Value) -> String {
     let rows: Vec<&Value> = v["effects"].as_array().or_else(|| v["imported"].as_array()).into_iter().flatten().collect();
     let n = rows.len();
-    let mut msg = crate::i18n::tr_format!("Imported {e} mask effect{} (Masking ▸ Effect)", if n == 1 { "" } else { "s" }, e = n);
+    let mut msg = crate::i18n::tr_format!("Imported {e} mask effect{} (Masking ▸ Effect)", crate::i18n::english_ending(if n == 1 { "" } else { "s" }), e = n);
     let mut groups: Vec<&str> = rows.iter().filter_map(|r| r["group"].as_str()).filter(|g| !g.is_empty()).collect();
     groups.sort_unstable();
     groups.dedup();
     if !groups.is_empty() {
-        msg += &crate::i18n::tr_format!(" in {g} group{}", if groups.len() == 1 { "" } else { "s" }, g = groups.len());
+        msg += &crate::i18n::tr_format!(" in {g} group{}", crate::i18n::english_ending(if groups.len() == 1 { "" } else { "s" }), g = groups.len());
     }
     let mut skipped: Vec<&str> = rows.iter().flat_map(|r| r["unmapped"].as_array().into_iter().flatten()).filter_map(Value::as_str).collect();
     skipped.sort_unstable();

@@ -70,6 +70,7 @@ fn craft_fonts(dir: &Path, required: bool) -> Result<String, String> {
     let mut has_japanese_ui = false;
     let mut has_chinese_ui = false;
     let mut has_thai_ui = false;
+    let mut has_korean_ui = false;
     for line in text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')) {
         let f: Vec<&str> = line.split(" | ").map(str::trim).collect();
         let [family, style, file, scripts, ..] = f.as_slice() else {
@@ -78,7 +79,8 @@ fn craft_fonts(dir: &Path, required: bool) -> Result<String, String> {
         has_japanese_ui |= (*family, *style) == ("BIZ UDPGothic", "Regular");
         has_chinese_ui |= (*family, *style) == ("Noto Sans CJK SC", "Regular") && scripts.split(',').any(|script| script.trim() == "Hans");
         has_thai_ui |= (*family, *style) == ("Noto Sans Thai", "Regular") && scripts.split(',').any(|script| script.trim() == "Thai");
-        if wasm && !matches!((*family, *style), ("BIZ UDPGothic" | "Noto Sans Thai", "Regular")) {
+        has_korean_ui |= (*family, *style) == ("Nanum Gothic", "Regular") && scripts.split(',').any(|script| script.trim() == "Kore");
+        if wasm && !matches!((*family, *style), ("BIZ UDPGothic" | "Noto Sans Thai" | "Nanum Gothic", "Regular")) {
             continue;
         }
         let path = dir.join(file).canonicalize().map_err(|e| format!("{file}: {e}"))?;
@@ -90,6 +92,9 @@ fn craft_fonts(dir: &Path, required: bool) -> Result<String, String> {
             scripts.join(", "),
             path.display().to_string(),
         );
+    }
+    if required && !has_korean_ui {
+        return Err("required Korean UI face Nanum Gothic Regular (Kore) is missing from fonts/manifest.txt".into());
     }
     if required && !has_thai_ui {
         return Err("required Thai UI face Noto Sans Thai Regular (Thai) is missing from fonts/manifest.txt".into());

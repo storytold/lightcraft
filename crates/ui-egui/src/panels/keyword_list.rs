@@ -309,8 +309,7 @@ fn drop_target(app: &mut LightcraftApp, ui: &mut egui::Ui, rect: Rect, path: &st
                 Ok(_) => app.toast(
                     ui.ctx(),
                     crate::i18n::tr_format!(
-                        "Added “{keyword}” to {n} photo{}",
-                        if n == 1 { "" } else { "s" },
+                        "Added “{keyword}” to {n} photo{}", crate::i18n::english_ending(if n == 1 { "" } else { "s" }),
                         keyword = path.replace('|', " › "),
                         n = n
                     ),

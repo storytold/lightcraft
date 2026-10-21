@@ -26,7 +26,7 @@ jobs:
     with:
       app-name: lightcraft
       app-title: LightCraft
-      craft-fonts-ref: 3d9ab3a132ed0eff457e424226a435a901da30d3
+      craft-fonts-ref: 4fcc4b2672a2a6765052c2f59fa3021485d32269
       version: ${{ inputs.version }}
     secrets:
       APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}

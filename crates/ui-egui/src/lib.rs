@@ -747,9 +747,9 @@ impl LightcraftApp {
                 let plural = if done == 1 { "" } else { "s" };
                 let mut msg = match (b.error(), b.what) {
                     (Some(e), what) => format!("{}: {e}", if what.is_empty() { "previews" } else { what }),
-                    (None, "") => crate::i18n::tr_format!("Previews ready for {done} photo{plural}", done = done, plural = plural),
+                    (None, "") => crate::i18n::tr_format!("Previews ready for {done} photo{plural}", done = done, plural = crate::i18n::english_ending(plural)),
                     (None, what) => {
-                        crate::i18n::tr_format!("Done ({what}): {done} photo{plural}", done = done, plural = plural, what = crate::i18n::tr(what))
+                        crate::i18n::tr_format!("Done ({what}): {done} photo{plural}", done = done, plural = crate::i18n::english_ending(plural), what = crate::i18n::tr(what))
                     }
                 };
                 if failed > 0 {
@@ -773,8 +773,7 @@ impl LightcraftApp {
                 let t = ctx.input(|i| i.time);
                 self.ui.toast = Some((
                     crate::i18n::tr_format!(
-                        "{n} change{} saved in memory but not written to disk: {e} — LightCraft will retry",
-                        if n == 1 { "" } else { "s" },
+                        "{n} change{} saved in memory but not written to disk: {e} — LightCraft will retry", crate::i18n::english_ending(if n == 1 { "" } else { "s" }),
                         n = n,
                         e = e
                     ),

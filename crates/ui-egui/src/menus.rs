@@ -18,6 +18,7 @@ pub const LANGUAGE_COMMANDS: &[UiCommand] = &[
     ("app.language.simplifiedChinese", crate::i18n::Locale::ZhHans.name(), None, "Edit>Language"),
     ("app.language.traditionalChinese", crate::i18n::Locale::ZhHant.name(), None, "Edit>Language"),
     ("app.language.japanese", crate::i18n::Locale::Ja.name(), None, "Edit>Language"),
+    ("app.language.korean", crate::i18n::Locale::Ko.name(), None, "Edit>Language"),
     ("app.language.portuguese", crate::i18n::Locale::PtBr.name(), None, "Edit>Language"),
     ("app.language.french", crate::i18n::Locale::Fr.name(), None, "Edit>Language"),
     ("app.language.spanish", crate::i18n::Locale::Es.name(), None, "Edit>Language"),
@@ -44,6 +45,7 @@ pub fn language_from_command(id: &str) -> Option<crate::i18n::Locale> {
         "app.language.simplifiedChinese" => Some(crate::i18n::Locale::ZhHans),
         "app.language.traditionalChinese" => Some(crate::i18n::Locale::ZhHant),
         "app.language.japanese" => Some(crate::i18n::Locale::Ja),
+        "app.language.korean" => Some(crate::i18n::Locale::Ko),
         "app.language.portuguese" => Some(crate::i18n::Locale::PtBr),
         "app.language.french" => Some(crate::i18n::Locale::Fr),
         "app.language.spanish" => Some(crate::i18n::Locale::Es),
@@ -1448,7 +1450,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         }
         "app.whatsNew" => {
             app.ui.dialog = Some(Dialog::WhatsNew);
-            Ok(json!({"text": crate::panels::dialogs::WHATS_NEW}))
+            Ok(json!({"text": crate::panels::dialogs::whats_new()}))
         }
         "app.systemInfo" => {
             let info = app.session.execute("library.info", &json!({})).unwrap_or_default();
@@ -1632,8 +1634,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
                         app.toast(
                             ctx,
                             crate::i18n::tr_format!(
-                                "Found {n} missing photo{}; {left} still missing{unsure}",
-                                if n == 1 { "" } else { "s" },
+                                "Found {n} missing photo{}; {left} still missing{unsure}", crate::i18n::english_ending(if n == 1 { "" } else { "s" }),
                                 left = left,
                                 n = n,
                                 unsure = unsure
@@ -1701,7 +1702,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             if let Ok(v) = &r {
                 let n = v["tagged"].as_u64().unwrap_or(0);
                 let sk = &v["skipped"];
-                let mut msg = crate::i18n::tr_format!("Tagged {n} photo{} from the tracklog", if n == 1 { "" } else { "s" }, n = n);
+                let mut msg = crate::i18n::tr_format!("Tagged {n} photo{} from the tracklog", crate::i18n::english_ending(if n == 1 { "" } else { "s" }), n = n);
                 let outside = sk["outside"].as_u64().unwrap_or(0);
                 if outside > 0 {
                     msg += &crate::i18n::tr_format!("; {outside} outside its time range", outside = outside);
@@ -1808,8 +1809,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
                         let profiles = v["imported"].as_array().map_or(0, Vec::len);
                         if profiles > 0 {
                             parts.push(crate::i18n::tr_format!(
-                                "Imported {profiles} profile{} (Profile browser ▸ their groups)",
-                                if profiles == 1 { "" } else { "s" },
+                                "Imported {profiles} profile{} (Profile browser ▸ their groups)", crate::i18n::english_ending(if profiles == 1 { "" } else { "s" }),
                                 profiles = profiles
                             ));
                         }
@@ -1845,11 +1845,9 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
                     // a zip of LUTs (or only local presets): the other half already says what happened
                     (0, 0) if profile_news => None,
                     (0, 0) => Some("No new presets".to_string()),
-                    (n, 0) => Some(crate::i18n::tr_format!("Imported {n} preset{}", if n == 1 { "" } else { "s" }, n = n)),
+                    (n, 0) => Some(crate::i18n::tr_format!("Imported {n} preset{}", crate::i18n::english_ending(if n == 1 { "" } else { "s" }), n = n)),
                     (n, f) => Some(crate::i18n::tr_format!(
-                        "Imported {n} preset{}, {f} file{} not readable",
-                        if n == 1 { "" } else { "s" },
-                        if f == 1 { "" } else { "s" },
+                        "Imported {n} preset{}, {f} file{} not readable", crate::i18n::english_ending(if n == 1 { "" } else { "s" }), crate::i18n::english_ending(if f == 1 { "" } else { "s" }),
                         f = f,
                         n = n
                     )),
@@ -1918,7 +1916,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             match &r {
                 Ok(v) => {
                     let (added, updated) = (v["added"].as_u64().unwrap_or(0), v["updated"].as_u64().unwrap_or(0));
-                    let mut msg = crate::i18n::tr_format!("Added {n} keyword{}", if added == 1 { "" } else { "s" }, n = added);
+                    let mut msg = crate::i18n::tr_format!("Added {n} keyword{}", crate::i18n::english_ending(if added == 1 { "" } else { "s" }), n = added);
                     if updated > 0 {
                         msg.push_str(&crate::i18n::tr_format!("; {n} gained synonyms", n = updated));
                     }
@@ -1950,7 +1948,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             }
             if let Ok(v) = &r {
                 let n = v["keywords"].as_u64().unwrap_or(0);
-                let mut msg = crate::i18n::tr_format!("Exported {n} keyword{}", if n == 1 { "" } else { "s" }, n = n);
+                let mut msg = crate::i18n::tr_format!("Exported {n} keyword{}", crate::i18n::english_ending(if n == 1 { "" } else { "s" }), n = n);
                 // Capture One's importer refuses ; , < > in a list: say which to rename first
                 let refuses: Vec<&str> = v["captureOneRefuses"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
                 if !refuses.is_empty() {
@@ -2010,7 +2008,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             }
             let r = app.session.execute("mask.exportEffects", &params).map_err(|e| e.to_string());
             match &r {
-                Ok(v) => app.toast(&ctx, crate::i18n::tr_format!("Exported {} effect preset{}", v["count"], if v["count"] == 1 { "" } else { "s" })),
+                Ok(v) => app.toast(&ctx, crate::i18n::tr_format!("Exported {} effect preset{}", v["count"], crate::i18n::english_ending(if v["count"] == 1 { "" } else { "s" }))),
                 Err(e) => app.toast_error(&ctx, e.clone()),
             }
             return Some(r);
@@ -2039,7 +2037,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             }
             let r = app.session.execute("preset.export", &params).map_err(|e| e.to_string());
             if let Ok(v) = &r {
-                app.toast(&ctx, crate::i18n::tr_format!("Exported {} preset{}", v["count"], if v["count"] == 1 { "" } else { "s" }));
+                app.toast(&ctx, crate::i18n::tr_format!("Exported {} preset{}", v["count"], crate::i18n::english_ending(if v["count"] == 1 { "" } else { "s" })));
             }
             return Some(r);
         }
@@ -2066,9 +2064,9 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             if let Ok(v) = &r {
                 let n = v["imported"].as_array().map_or(0, Vec::len);
                 let failed = v["failed"].as_array().map_or(0, Vec::len);
-                let mut msg = crate::i18n::tr_format!("Imported {n} point curve preset{}", if n == 1 { "" } else { "s" }, n = n);
+                let mut msg = crate::i18n::tr_format!("Imported {n} point curve preset{}", crate::i18n::english_ending(if n == 1 { "" } else { "s" }), n = n);
                 if failed > 0 {
-                    msg += &crate::i18n::tr_format!(", {failed} file{} not readable", if failed == 1 { "" } else { "s" }, failed = failed);
+                    msg += &crate::i18n::tr_format!(", {failed} file{} not readable", crate::i18n::english_ending(if failed == 1 { "" } else { "s" }), failed = failed);
                 }
                 app.toast(&ctx, msg);
             }
@@ -2100,7 +2098,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             }
             let r = app.session.execute("curve.exportPresets", &params).map_err(|e| e.to_string());
             if let Ok(v) = &r {
-                app.toast(&ctx, crate::i18n::tr_format!("Exported {} point curve preset{}", v["count"], if v["count"] == 1 { "" } else { "s" }));
+                app.toast(&ctx, crate::i18n::tr_format!("Exported {} point curve preset{}", v["count"], crate::i18n::english_ending(if v["count"] == 1 { "" } else { "s" })));
             }
             return Some(r);
         }
@@ -2235,7 +2233,7 @@ pub fn delete_in_album(app: &mut LightcraftApp, ctx: &egui::Context) -> bool {
         Ok(r) => {
             let n = r["removed"].as_u64().unwrap_or(0);
             let name = r["album"].as_str().unwrap_or_default().to_string();
-            let what = crate::i18n::tr_format!("{n} photo{}", if n == 1 { "" } else { "s" }, n = n);
+            let what = crate::i18n::tr_format!("{n} photo{}", crate::i18n::english_ending(if n == 1 { "" } else { "s" }), n = n);
             app.toast(ctx, crate::i18n::tr_format!("Removed {what} from {name}", what = what, name = name));
         }
         Err(e) => app.toast(ctx, e),

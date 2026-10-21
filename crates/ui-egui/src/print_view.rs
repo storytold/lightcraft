@@ -186,7 +186,7 @@ fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, 
     let l = &st.layout;
     let unit = st.guides.units;
     ui.spacing_mut().item_spacing.y = 5.0;
-    ui.label(egui::RichText::new(crate::i18n::tr_format!("{n} photo{}", if photos == 1 { "" } else { "s" }, n = photos)).color(t.text_dim));
+    ui.label(egui::RichText::new(crate::i18n::tr_format!("{n} photo{}", crate::i18n::english_ending(if photos == 1 { "" } else { "s" }), n = photos)).color(t.text_dim));
 
     heading(ui, t, "Templates");
     ui.horizontal(|ui| {

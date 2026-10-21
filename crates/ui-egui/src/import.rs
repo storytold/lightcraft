@@ -857,18 +857,18 @@ fn finish(app: &mut LightcraftApp, ctx: &egui::Context, task: ImportTask) {
     let steps = app.session.undo.len().saturating_sub(task.undo0);
     let plural = |n: usize| if n == 1 { "" } else { "s" };
     let label = if task.imported == 0 && task.restored > 0 {
-        crate::i18n::tr_format!("Restore {} Photo{}", task.restored, plural(task.restored))
+        crate::i18n::tr_format!("Restore {} Photo{}", task.restored, crate::i18n::english_ending(plural(task.restored)))
     } else if task.restored > 0 {
-        crate::i18n::tr_format!("Add {} Photo{}, restore {}", task.imported, plural(task.imported), task.restored)
+        crate::i18n::tr_format!("Add {} Photo{}, restore {}", task.imported, crate::i18n::english_ending(plural(task.imported)), task.restored)
     } else {
-        crate::i18n::tr_format!("Add {} Photo{}", task.imported, if task.imported == 1 { "" } else { "s" })
+        crate::i18n::tr_format!("Add {} Photo{}", task.imported, crate::i18n::english_ending(if task.imported == 1 { "" } else { "s" }))
     };
     app.session.merge_undo(steps, &label);
     if task.auto {
         if !task.warnings.is_empty() {
             app.toast_for(ctx, xmp_warnings_text(&task.warnings), 8.0);
         } else if task.imported > 0 {
-            app.toast(ctx, crate::i18n::tr_format!("Auto Import: added {} photo{}", task.imported, if task.imported == 1 { "" } else { "s" }));
+            app.toast(ctx, crate::i18n::tr_format!("Auto Import: added {} photo{}", task.imported, crate::i18n::english_ending(if task.imported == 1 { "" } else { "s" })));
         }
         return;
     }
@@ -876,7 +876,7 @@ fn finish(app: &mut LightcraftApp, ctx: &egui::Context, task: ImportTask) {
         if !task.warnings.is_empty() {
             app.toast_for(ctx, xmp_warnings_text(&task.warnings), 8.0);
         } else if task.failed > 0 {
-            app.toast(ctx, crate::i18n::tr_format!("{} photo{} not readable", task.failed, if task.failed == 1 { "" } else { "s" }));
+            app.toast(ctx, crate::i18n::tr_format!("{} photo{} not readable", task.failed, crate::i18n::english_ending(if task.failed == 1 { "" } else { "s" })));
         }
         return;
     }
@@ -901,11 +901,11 @@ fn finish(app: &mut LightcraftApp, ctx: &egui::Context, task: ImportTask) {
         return;
     }
     let mut msg = if task.cancelled {
-        crate::i18n::tr_format!("Import cancelled · {} photo{} added", task.imported, plural(task.imported))
+        crate::i18n::tr_format!("Import cancelled · {} photo{} added", task.imported, crate::i18n::english_ending(plural(task.imported)))
     } else if task.imported == 0 && task.restored > 0 {
-        crate::i18n::tr_format!("Restored {} photo{} from Recently Deleted", task.restored, plural(task.restored))
+        crate::i18n::tr_format!("Restored {} photo{} from Recently Deleted", task.restored, crate::i18n::english_ending(plural(task.restored)))
     } else {
-        crate::i18n::tr_format!("Imported {} photo{}", task.imported, plural(task.imported))
+        crate::i18n::tr_format!("Imported {} photo{}", task.imported, crate::i18n::english_ending(plural(task.imported)))
     };
     if task.restored > 0 && (task.imported > 0 || task.cancelled) {
         msg.push_str(&crate::i18n::tr_format!(" · {} restored from Recently Deleted", task.restored));
@@ -913,11 +913,11 @@ fn finish(app: &mut LightcraftApp, ctx: &egui::Context, task: ImportTask) {
     if task.params["mode"] == "move" {
         msg.push_str(&crate::i18n::tr_format!(" · {} moved", task.moved));
         if task.kept > 0 {
-            msg.push_str(&crate::i18n::tr_format!(" · {} original{} left at the source", task.kept, plural(task.kept)));
+            msg.push_str(&crate::i18n::tr_format!(" · {} original{} left at the source", task.kept, crate::i18n::english_ending(plural(task.kept))));
         }
     }
     if task.duplicates > 0 {
-        msg.push_str(&crate::i18n::tr_format!(" · {} duplicate{} skipped", task.duplicates, if task.duplicates == 1 { "" } else { "s" }));
+        msg.push_str(&crate::i18n::tr_format!(" · {} duplicate{} skipped", task.duplicates, crate::i18n::english_ending(if task.duplicates == 1 { "" } else { "s" })));
         let deleted = deleted_of(app, &task.existing).len();
         if deleted > 0 {
             msg.push_str(&crate::i18n::tr_format!(" ({} in Recently Deleted)", deleted));
@@ -960,13 +960,11 @@ fn show_existing(app: &mut LightcraftApp, ctx: &egui::Context, existing: &[u64])
     let n = ids.len();
     let plural = if n == 1 { "" } else { "s" };
     let msg = if kind == "all" {
-        crate::i18n::tr_format!("Already in the library: {} photo{} selected in All Photos", n, plural)
+        crate::i18n::tr_format!("Already in the library: {} photo{} selected in All Photos", n, crate::i18n::english_ending(plural))
     } else {
         crate::i18n::tr_format!(
             "Already in the library, in Recently Deleted: {} photo{} selected · right-click ▸ Restore, or Delete Permanently to import afresh",
-            n,
-            plural
-        )
+            n, crate::i18n::english_ending(plural))
     };
     app.toast_for(ctx, msg, 6.0);
     true
@@ -1064,7 +1062,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
                 inspect_sources(&s.split('\n').map(str::to_string).collect::<Vec<_>>())
             })
             .map(|summary| summary.display())
-            .unwrap_or_else(|| crate::i18n::tr_format!("{} item{}", d.sources.len(), if d.sources.len() == 1 { "" } else { "s" }));
+            .unwrap_or_else(|| crate::i18n::tr_format!("{} item{}", d.sources.len(), crate::i18n::english_ending(if d.sources.len() == 1 { "" } else { "s" })));
             let r = ui.label(egui::RichText::new(summary).color(t.text_label)).on_hover_text(joined);
             register(ui.ctx(), "label:importSource", r.rect);
         });
@@ -1418,10 +1416,7 @@ pub(crate) fn unknown_tags_warning(ui: &mut egui::Ui, template: &str) {
         let s = if unknown.len() == 1 { "" } else { "s" };
         let text = crate::i18n::tr_format!(
             "Unknown tag{s} {} stay{} as typed (see Tags)",
-            unknown.join(" "),
-            if unknown.len() == 1 { "s" } else { "" },
-            s = s
-        );
+            unknown.join(" "), crate::i18n::english_ending(if unknown.len() == 1 { "s" } else { "" }), s = crate::i18n::english_ending(s));
         ui.label(egui::RichText::new(text).color(Tokens::get(ui.ctx()).caution));
     }
 }
@@ -1546,7 +1541,7 @@ impl SourceSummary {
             Self::Many { files, folders } => match (files, folders) {
                 (_, 0) => crate::i18n::tr_format!("{} files", files),
                 (0, f) => crate::i18n::tr_format!("{f} folders (and their subfolders)", f = f),
-                (_, f) => crate::i18n::tr_format!("{} files and {f} folder{}", files, if *f == 1 { "" } else { "s" }, f = f),
+                (_, f) => crate::i18n::tr_format!("{} files and {f} folder{}", files, crate::i18n::english_ending(if *f == 1 { "" } else { "s" }), f = f),
             },
         }
     }

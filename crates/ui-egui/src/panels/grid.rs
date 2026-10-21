@@ -521,7 +521,7 @@ fn group_header(app: &mut LightcraftApp, ui: &mut egui::Ui, run: &DateRun, ids: 
     p.text(
         pos2(x + gw + 10.0, r.center().y),
         Align2::LEFT_CENTER,
-        crate::i18n::tr_format!("· {n} photo{}", if n == 1 { "" } else { "s" }, n = n),
+        crate::i18n::tr_format!("· {n} photo{}", crate::i18n::english_ending(if n == 1 { "" } else { "s" }), n = n),
         t.font(12.5),
         t.text_dim,
     );
@@ -612,7 +612,7 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
     // screen readers: the file, then rating / flag / label
     let mut spoken = photo.file_name.clone();
     if photo.rating > 0 {
-        spoken.push_str(&crate::i18n::tr_format!(", {} star{}", photo.rating, if photo.rating == 1 { "" } else { "s" }));
+        spoken.push_str(&crate::i18n::tr_format!(", {} star{}", photo.rating, crate::i18n::english_ending(if photo.rating == 1 { "" } else { "s" })));
     }
     match photo.flag {
         lightcraft_catalog::Flag::Pick => spoken.push_str(crate::i18n::tr(", picked")),
@@ -832,7 +832,7 @@ fn folder_header(app: &mut LightcraftApp, ui: &mut egui::Ui, b: &lightcraft_engi
                     let local: Vec<u64> = ids.iter().filter(|id| app.session.catalog.photo(**id).is_some_and(|p| p.local)).map(|id| id.0).collect();
                     let n = local.len();
                     match app.run("photo.addToLibrary", json!({"ids": local})) {
-                        Ok(_) => app.toast(ui.ctx(), crate::i18n::tr_format!("Added {n} photo{} to My Photos", if n == 1 { "" } else { "s" }, n = n)),
+                        Ok(_) => app.toast(ui.ctx(), crate::i18n::tr_format!("Added {n} photo{} to My Photos", crate::i18n::english_ending(if n == 1 { "" } else { "s" }), n = n)),
                         Err(e) => app.toast(ui.ctx(), e),
                     }
                 }
@@ -929,7 +929,7 @@ pub fn drag_feedback(app: &mut LightcraftApp, ctx: &egui::Context) {
     // a drop target under the pointer says where they would go (only this frame's)
     let frame = ctx.cumulative_frame_nr();
     let hint = ctx.data(|d| d.get_temp::<(u64, String)>(egui::Id::new("drag-photos-hint"))).filter(|(f, _)| *f == frame).map(|(_, text)| text);
-    let text = hint.unwrap_or_else(|| crate::i18n::tr_format!("{n} photo{}", if n == 1 { "" } else { "s" }, n = n));
+    let text = hint.unwrap_or_else(|| crate::i18n::tr_format!("{n} photo{}", crate::i18n::english_ending(if n == 1 { "" } else { "s" }), n = n));
     egui::Area::new(egui::Id::new("drag-photos")).order(egui::Order::Tooltip).interactable(false).fixed_pos(pos + vec2(14.0, 10.0)).show(ctx, |ui| {
         egui::Frame::NONE.fill(t.accent).corner_radius(10.0).inner_margin(egui::Margin::symmetric(9, 3)).show(ui, |ui| {
             let label = ui.add(egui::Label::new(egui::RichText::new(text).color(Color32::WHITE).font(t.semibold(12.0))).extend());
@@ -958,8 +958,7 @@ pub fn toast_skipped(app: &mut LightcraftApp, ctx: &egui::Context, r: &serde_jso
         app.toast(
             ctx,
             crate::i18n::tr_format!(
-                "{n} Local photo{} skipped: albums hold library photos (Add to My Photos first)",
-                if n == 1 { "" } else { "s" },
+                "{n} Local photo{} skipped: albums hold library photos (Add to My Photos first)", crate::i18n::english_ending(if n == 1 { "" } else { "s" }),
                 n = n
             ),
         );
@@ -1075,7 +1074,7 @@ pub fn context_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 app.ui.view = crate::state::ViewMode::PhotoGrid;
                 app.toast(
                     ui.ctx(),
-                    crate::i18n::tr_format!("{n} similar photo{} · View ▸ Clear Filters to see all", if n == 1 { "" } else { "s" }, n = n),
+                    crate::i18n::tr_format!("{n} similar photo{} · View ▸ Clear Filters to see all", crate::i18n::english_ending(if n == 1 { "" } else { "s" }), n = n),
                 );
             }
             Err(e) => app.toast(ui.ctx(), e),
@@ -1240,7 +1239,7 @@ pub fn context_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                     Ok(r) if r.get("background").is_some() => {}
                     Ok(r) => {
                         let n = r["files"].as_array().map_or(0, Vec::len);
-                        app.toast(ui.ctx(), crate::i18n::tr_format!("Exported {n} photo{}", if n == 1 { "" } else { "s" }, n = n));
+                        app.toast(ui.ctx(), crate::i18n::tr_format!("Exported {n} photo{}", crate::i18n::english_ending(if n == 1 { "" } else { "s" }), n = n));
                     }
                     Err(e) => app.toast(ui.ctx(), e),
                 }

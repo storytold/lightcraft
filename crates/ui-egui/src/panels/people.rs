@@ -181,7 +181,7 @@ fn card(app: &mut LightcraftApp, ui: &mut egui::Ui, person: &Person, r: Rect, ed
     // a long name must not run past the card
     let name = fit(p, &person.name, t.semibold(13.0), edge);
     p.text(pos2(r.left() + 2.0, face.bottom() + 14.0), Align2::LEFT_CENTER, name, t.semibold(13.0), t.text);
-    let photos = crate::i18n::tr_format!("{n} photo{}", if person.count == 1 { "" } else { "s" }, n = person.count);
+    let photos = crate::i18n::tr_format!("{n} photo{}", crate::i18n::english_ending(if person.count == 1 { "" } else { "s" }), n = person.count);
     p.text(pos2(r.left() + 2.0, face.bottom() + 32.0), Align2::LEFT_CENTER, photos, t.font(12.0), t.text_dim);
     let resp = resp.on_hover_text(crate::i18n::tr_format!("{} — show their photos", person.name));
     let full = person.name.clone();

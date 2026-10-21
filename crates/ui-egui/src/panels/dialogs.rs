@@ -171,6 +171,19 @@ pub const ABOUT_TABS: &[(&str, &str)] = &[("about", "About"), ("contributors", "
 /// Help ▸ What's New (docs/whats-new.md).
 pub const WHATS_NEW: &str = include_str!("../../../../docs/whats-new.md");
 
+const WHATS_NEW_KO: &str = include_str!("../../../../docs/whats-new.ko.md");
+
+/// Korean release notes are a complete document; other languages keep the existing source.
+pub fn whats_new() -> &'static str {
+    if crate::i18n::language() == crate::i18n::Locale::Ko { WHATS_NEW_KO } else { WHATS_NEW }
+}
+
+/// Already translated document text must not pass through the English-key catalog.
+fn whats_new_line(line: &str) -> &str {
+    if crate::i18n::language() == crate::i18n::Locale::Ko { line } else { crate::i18n::tr(line) }
+}
+
+
 /// The import review and Settings keep window ids of their own, so the size each is given
 /// doesn't carry over to the other dialogs.
 fn window_id(dialog: &Dialog) -> egui::Id {
@@ -350,19 +363,19 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                 }
                 Dialog::WhatsNew => {
                     egui::ScrollArea::vertical().max_height(list_height(ui, 460.0)).auto_shrink([false, true]).show(ui, |ui| {
-                        for line in WHATS_NEW.lines() {
+                        for line in whats_new().lines() {
                             let l = line.trim_end();
                             if let Some(h) = l.strip_prefix("### ") {
                                 ui.add_space(6.0);
-                                ui.label(egui::RichText::new(crate::i18n::tr(h)).font(t.semibold(12.5)).color(t.text));
+                                ui.label(egui::RichText::new(whats_new_line(h)).font(t.semibold(12.5)).color(t.text));
                             } else if let Some(h) = l.strip_prefix("## ") {
                                 ui.add_space(8.0);
-                                ui.label(egui::RichText::new(crate::i18n::tr(h)).font(t.semibold(14.0)).color(t.text));
+                                ui.label(egui::RichText::new(whats_new_line(h)).font(t.semibold(14.0)).color(t.text));
                             } else if l.starts_with("# ") || l.is_empty() {
                             } else if let Some(b) = l.strip_prefix("- ") {
-                                ui.label(egui::RichText::new(format!("•  {}", crate::i18n::tr(b).replace('`', ""))).color(t.text_label));
+                                ui.label(egui::RichText::new(format!("•  {}", whats_new_line(b).replace('`', ""))).color(t.text_label));
                             } else {
-                                ui.label(egui::RichText::new(crate::i18n::tr(l.trim()).replace('`', "")).color(t.text_label));
+                                ui.label(egui::RichText::new(whats_new_line(l.trim()).replace('`', "")).color(t.text_label));
                             }
                         }
                     });
@@ -457,7 +470,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     ui.add_space(4.0);
                     if view.problems.is_empty() {
                         ui.label(
-                            egui::RichText::new(crate::i18n::tr_format!("{n} photo{} match · updates automatically as photos change", if n == 1 { "" } else { "s" }, n = n))
+                            egui::RichText::new(crate::i18n::tr_format!("{n} photo{} match · updates automatically as photos change", crate::i18n::english_ending(if n == 1 { "" } else { "s" }), n = n))
                                 .color(t.text_dim),
                         );
                     } else {
@@ -478,7 +491,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     });
                     ui.label(egui::RichText::new(crate::i18n::tr_format!("Matches: {}", crate::i18n::filter_label(&rules, &app.session.catalog))).color(t.text_label));
                     ui.label(
-                        egui::RichText::new(crate::i18n::tr_format!("{n} photo{} now · updates automatically as photos change", if n == 1 { "" } else { "s" }, n = n))
+                        egui::RichText::new(crate::i18n::tr_format!("{n} photo{} now · updates automatically as photos change", crate::i18n::english_ending(if n == 1 { "" } else { "s" }), n = n))
                             .color(t.text_dim),
                     );
                 }
@@ -568,7 +581,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                 }
                 Dialog::Rename { template, start } => {
                     let n = app.session.selected().len();
-                    ui.label(egui::RichText::new(crate::i18n::tr_format!("{n} photo{}", if n == 1 { "" } else { "s" }, n = n)).color(t.text_dim));
+                    ui.label(egui::RichText::new(crate::i18n::tr_format!("{n} photo{}", crate::i18n::english_ending(if n == 1 { "" } else { "s" }), n = n)).color(t.text_dim));
                     let template_id = egui::Id::new("rename-template");
                     let tags_open = field(ui, "Template", |ui| {
                         ui.spacing_mut().item_spacing.x = 4.0;
@@ -632,8 +645,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     } else {
                         ui.label(
                             egui::RichText::new(crate::i18n::tr_format!(
-                                "Renames {n} face{} across the library. The files are not changed.",
-                                if plan.faces == 1 { "" } else { "s" },
+                                "Renames {n} face{} across the library. The files are not changed.", crate::i18n::english_ending(if plan.faces == 1 { "" } else { "s" }),
                                 n = plan.faces
                             ))
                             .color(t.text_dim),
@@ -656,8 +668,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                         confirm = true;
                     }
                     ui.label(
-                        egui::RichText::new(crate::i18n::tr_format!("Renames “{from}” on {n} photo{} (keywords below it too). Use | for levels, e.g. Travel|Italy. An existing name merges the two.",
-                            if n == 1 { "" } else { "s" }, from = from, n = n))
+                        egui::RichText::new(crate::i18n::tr_format!("Renames “{from}” on {n} photo{} (keywords below it too). Use | for levels, e.g. Travel|Italy. An existing name merges the two.", crate::i18n::english_ending(if n == 1 { "" } else { "s" }), from = from, n = n))
                         .color(t.text_dim),
                     );
                 }
@@ -712,7 +723,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                 Dialog::PasteSettings { groups } => {
                     let n = app.session.selected().len();
                     ui.label(
-                        egui::RichText::new(crate::i18n::tr_format!("Paste into {n} photo{} — only settings that were copied are pasted", if n == 1 { "" } else { "s" }, n = n))
+                        egui::RichText::new(crate::i18n::tr_format!("Paste into {n} photo{} — only settings that were copied are pasted", crate::i18n::english_ending(if n == 1 { "" } else { "s" }), n = n))
                             .color(t.text_dim),
                     );
                     group_checklist(ui, "pasteGroup", groups);
@@ -739,7 +750,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                 Dialog::Export { opts, full_size, resize, preset_name, limit_kb, dir } => {
                     use lightcraft_engine::export::{ExportFormat as F, MetadataPolicy as M, SharpenAmount as A, SharpenFor as S};
                     let n = app.session.selection.ids.len().max(1);
-                    ui.label(egui::RichText::new(crate::i18n::tr_format!("{n} photo{}", if n == 1 { "" } else { "s" }, n = n)).color(t.text_dim));
+                    ui.label(egui::RichText::new(crate::i18n::tr_format!("{n} photo{}", crate::i18n::english_ending(if n == 1 { "" } else { "s" }), n = n)).color(t.text_dim));
                     // Preset: load a built-in or saved set of options into the dialog
                     field(ui, "Preset", |ui| {
                         let mut chosen = None;
@@ -1201,8 +1212,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                             crate::i18n::tr("No photo has it; the keywords below it go too.").to_string()
                         } else {
                             crate::i18n::tr_format!(
-                                "It is taken off {count} photo{}, with the keywords below it. Undo brings it back.",
-                                if *count == 1 { "" } else { "s" },
+                                "It is taken off {count} photo{}, with the keywords below it. Undo brings it back.", crate::i18n::english_ending(if *count == 1 { "" } else { "s" }),
                                 count = count
                             )
                         })
@@ -1232,7 +1242,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                 }
                 Dialog::MovePhotos { ids, name, dont_ask, .. } => {
                     let n = ids.len();
-                    ui.label(crate::i18n::tr_format!("Move {n} photo{} to “{}”?", if n == 1 { "" } else { "s" }, name, n = n));
+                    ui.label(crate::i18n::tr_format!("Move {n} photo{} to “{}”?", crate::i18n::english_ending(if n == 1 { "" } else { "s" }), name, n = n));
                     ui.label(egui::RichText::new(crate::i18n::tr("Their files and XMP sidecars move on disk. Edit → Undo moves them back.")).color(t.text_dim));
                     ui.add_space(4.0);
                     let c = ui.checkbox(dont_ask, crate::i18n::tr("Don't ask again"));
@@ -1252,8 +1262,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                 }
                 Dialog::RemoveFolder { name, count, path, disk } => {
                     ui.label(crate::i18n::tr_format!(
-                        "Remove “{name}” and its {count} photo{} from the library?",
-                        if *count == 1 { "" } else { "s" },
+                        "Remove “{name}” and its {count} photo{} from the library?", crate::i18n::english_ending(if *count == 1 { "" } else { "s" }),
                         name = name,
                         count = count
                     ));
@@ -1344,7 +1353,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     Dialog::Import { opts } => {
                         let n = opts.selected_paths().len();
                         let verb = if opts.copy && opts.move_files { "Move" } else { "Import" };
-                        add_label = crate::i18n::tr_format!("{verb} {n} Photo{}", if n == 1 { "" } else { "s" }, verb = crate::i18n::tr(verb), n = n);
+                        add_label = crate::i18n::tr_format!("{verb} {n} Photo{}", crate::i18n::english_ending(if n == 1 { "" } else { "s" }), verb = crate::i18n::tr(verb), n = n);
                         add_label.as_str()
                     }
                     Dialog::LightroomResult { first: Some(_), .. } => "Show in Library",
