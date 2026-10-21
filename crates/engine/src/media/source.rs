@@ -75,7 +75,7 @@ impl SourceLevel {
 /// The crop is bounded as the render bounds it (issue #2555), so one reaching far past the photo
 /// doesn't pick a source too small for the frame it renders. Its rect is in the photo as shown
 /// (turned by its orientation), so it is measured with the turned size.
-pub(super) fn source_edge_needed(p: &Photo, settings: &DevelopSettings, apply_crop: bool, out_long: usize) -> usize {
+pub(crate) fn source_edge_needed(p: &Photo, settings: &DevelopSettings, apply_crop: bool, out_long: usize) -> usize {
     let (w, h) = (f64::from(p.width.max(1)), f64::from(p.height.max(1)));
     let (ow, oh) = if settings.orientation.swaps_axes() { (h, w) } else { (w, h) };
     let r = settings.crop.geometry.bounded(ow, oh).rect;

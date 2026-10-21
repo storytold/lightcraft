@@ -116,6 +116,7 @@ impl crate::Session {
             slide: None,
             preview_cut: None,
             display_fit: None,
+            hq: None,
         })
     }
 
@@ -206,6 +207,7 @@ impl crate::Session {
             slide: None,
             preview_cut: None,
             display_fit: None,
+            hq: None,
         })
     }
 
@@ -262,6 +264,7 @@ impl crate::Session {
             slide: None,
             preview_cut,
             display_fit: None,
+            hq: None,
         })
     }
 

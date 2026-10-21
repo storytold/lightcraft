@@ -350,6 +350,12 @@ fn ui_commands_2(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
             app.ui.settings.focus_point = p.get("on").and_then(Value::as_bool).unwrap_or(!app.ui.settings.focus_point);
             Ok(json!({"on": app.ui.settings.focus_point}))
         }
+        "view.highQualityPreview" => {
+            // {on?}; no params toggles. Below 100 % the loupe shows the full-resolution render
+            // scaled down (`Session::high_quality`) instead of a render made at display size.
+            app.ui.high_quality_preview = p.get("on").and_then(Value::as_bool).unwrap_or(!app.ui.high_quality_preview);
+            Ok(json!({"on": app.ui.high_quality_preview}))
+        }
         "view.zoomToFocus" => {
             // {on?}; no params toggles. Toggle Zoom (Z) centres on the focus point when there is one.
             app.ui.settings.zoom_to_focus = p.get("on").and_then(Value::as_bool).unwrap_or(!app.ui.settings.zoom_to_focus);

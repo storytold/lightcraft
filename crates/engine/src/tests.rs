@@ -28,6 +28,7 @@ mod folders;
 mod forget_local;
 mod history_cursor;
 mod hold_view;
+mod hq_preview;
 mod ids_params;
 mod import;
 mod import_move;

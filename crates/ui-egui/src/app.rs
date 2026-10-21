@@ -104,6 +104,7 @@ impl LightcraftApp {
             size_hold: Default::default(),
             drag_scale: Default::default(),
             window_refused: None,
+            hq_report: Default::default(),
             region_tiles: Default::default(),
             compare_windows: [None; 2],
             compare_tiles: Default::default(),
