@@ -116,6 +116,21 @@ fn a_disabled_row_ignores_clicks_and_an_enabled_one_answers() {
 }
 
 #[test]
+fn rows_of_one_command_with_different_params_are_chosen_one_at_a_time() {
+    // (Rating, Sort and Select by rows share the command's widget name: it names them for
+    // automation and must not make them one egui widget)
+    let rows = |ui: &mut egui::Ui| {
+        vec![
+            MenuItem::new("Set 1 Star").widget("menuitem:photo.rate").show(ui),
+            MenuItem::new("Set 2 Stars").widget("menuitem:photo.rate").show(ui),
+            MenuItem::new("Set 3 Stars").widget("menuitem:photo.rate").show(ui),
+        ]
+    };
+    let second = run(Some(1), Vec::new(), rows);
+    assert_eq!(second.clicked, vec![false, true, false], "only the pressed row answers");
+}
+
+#[test]
 fn space_and_return_choose_the_focused_row() {
     for k in [Key::Enter, Key::Space] {
         let ev = |pressed| Event::Key { key: k, physical_key: Some(k), pressed, repeat: false, modifiers: Modifiers::NONE };

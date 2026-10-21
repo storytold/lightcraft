@@ -181,13 +181,13 @@ impl<'a> MenuItem<'a> {
         }
         // the layout stretches it to the menu's width
         let (rect, _) = ui.allocate_at_least(vec2(width, ROW_H), Sense::hover());
-        let id = match &self.widget {
-            Some(w) => ui.id().with(("lc-menu-item", w.as_str())),
-            None => {
-                let id = ui.auto_id_with(("lc-menu-item", self.label));
-                ui.skip_ahead_auto_ids(1);
-                id
-            }
+        // (the widget name is for automation only: rows of one command with different params,
+        // like the Rating or Sort rows, share it, so the interaction id comes from the position)
+        let id = {
+            let key = self.widget.as_deref().unwrap_or(self.label);
+            let id = ui.auto_id_with(("lc-menu-item", key));
+            ui.skip_ahead_auto_ids(1);
+            id
         };
         let enabled = self.enabled && ui.is_enabled();
         let clickable = enabled && !self.inert;
