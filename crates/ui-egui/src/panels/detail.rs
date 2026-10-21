@@ -145,6 +145,18 @@ pub(crate) fn fit_texture_rect(area: Rect, size: [usize; 2]) -> Rect {
     Rect::from_center_size(area.center(), vec2(w * scale, h * scale))
 }
 
+/// `rect` (where a `size` texture is drawn) on whole physical pixels at the texture's own size,
+/// when that is within about a pixel of it: drawn a fraction of a pixel off or smaller, the GPU's
+/// bilinear filter blurs every pixel. Other sizes (zoomed, stand-ins) are returned unchanged.
+pub(crate) fn pixel_exact(rect: Rect, size: [usize; 2], ppp: f32) -> Rect {
+    let (w, h) = (size[0] as f32, size[1] as f32);
+    if !ppp.is_finite() || ppp <= 0.0 || (rect.width() * ppp - w).abs() > 1.5 || (rect.height() * ppp - h).abs() > 1.5 {
+        return rect;
+    }
+    let min = ((rect.center().to_vec2() * ppp - vec2(w, h) / 2.0).round() / ppp).to_pos2();
+    Rect::from_min_size(min, vec2(w, h) / ppp)
+}
+
 /// Keep the viewport inside the photo; axes smaller than the viewport stay centred.
 fn bounded_pan(area: Rect, size: egui::Vec2, pan: (f32, f32)) -> (f32, f32) {
     let bound = |visible: f32, image: f32, centre: f32| {
@@ -422,6 +434,11 @@ fn request_window(app: &mut LightcraftApp, c: &WindowCtx, v: &WindowView) -> Opt
 
 /// Draw `v`'s window texture over the whole-frame render, if it is the one asked for (or, in a
 /// drag, an earlier draft of it).
+/// The [`crate::magnify`] cache of the loupe's Before or After window.
+pub(crate) fn magnify_slot(before: bool) -> &'static str {
+    if before { "loupe-before" } else { "loupe-after" }
+}
+
 fn draw_window(p: &egui::Painter, app: &LightcraftApp, c: &WindowCtx, v: &WindowView, wanted: &crate::region::RegionView) {
     let Some(tex) = app.renderer.textures.get(&v.slot).filter(|t| t.photo == c.id) else { return };
     let Some(tile) = app.region_tiles.get(&(v.before, tex.key)).filter(|t| t.is_current(c.id, wanted.full, wanted.settings, c.interacting)) else {
@@ -430,7 +447,12 @@ fn draw_window(p: &egui::Painter, app: &LightcraftApp, c: &WindowCtx, v: &Window
     let (fw, fh) = (tile.full.0 as f32, tile.full.1 as f32);
     let at = v.img.min + vec2(tile.window.x as f32 / fw * v.img.width(), tile.window.y as f32 / fh * v.img.height());
     let dst = Rect::from_min_size(at, vec2(tile.window.w as f32 / fw * v.img.width(), tile.window.h as f32 / fh * v.img.height()));
-    p.image(tex.tex.id(), dst, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+    // (a window at about its own size lands on whole pixels, texel for texel; one drawn larger,
+    // past 100 %, is magnified sharply rather than by the GPU's bilinear filter)
+    let dst = pixel_exact(dst, tex.size, c.ppp);
+    // (not while a click zoom animates: the copy would be redone every frame)
+    let pixels = tex.pixels.as_deref().filter(|_| !app.ui.zoom_anim);
+    crate::magnify::draw(p.ctx(), p, magnify_slot(v.before), tex.tex.id(), tex.key, tex.size, pixels, dst, p.clip_rect(), c.ppp);
 }
 
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
@@ -551,6 +573,13 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let mut plan = crate::region::plan(&app.ui.settings, sizes);
     if plan.window_edge.is_some_and(|edge| app.window_refused == Some((id, look, edge))) {
         plan = crate::region::plan(&app.ui.settings, crate::region::ViewSizes { windows: false, ..sizes });
+    }
+    // A whole-frame render a step larger than it is drawn would be shrunk by the GPU's bilinear
+    // filter, a few pixels in a thousand, which blurs every pixel: render it at the size drawn
+    // (`draw` below maps it texel for texel). Before the size hold, which keeps it during a pinch.
+    let exact = drawn_long.round();
+    if plan.window_edge.is_none() && exact.is_finite() && exact >= 8.0 && (exact as usize) < plan.main_edge {
+        plan.main_edge = exact as usize;
     }
     // time the full-size drafts where they are what shows: under a window the whole-frame draft
     // is small anyway, and the frame's time is the window's upload
@@ -692,7 +721,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         } else {
             return "none";
         };
-        let image_rect = fit_texture_rect(r, tex.size);
+        let image_rect = pixel_exact(fit_texture_rect(r, tex.size), tex.size, ppp);
         p.with_clip_rect(clip).image(tex.tex.id(), image_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         what
     };

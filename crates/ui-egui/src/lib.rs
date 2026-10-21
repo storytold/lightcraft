@@ -23,6 +23,7 @@ pub mod icons;
 pub mod import;
 pub mod lightroom_import;
 pub mod links;
+pub mod magnify;
 pub mod menu_level;
 pub mod menubar;
 pub mod menus;

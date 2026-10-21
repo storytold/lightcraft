@@ -5,15 +5,55 @@
 //! Normalized coordinates (masks, spots, crop) refer to the *transformed* image: the oriented source after
 //! lens correction and perspective, at the source's size. Everything is sampled in one resample.
 
-use lightcraft_develop::{DevelopSettings, EmbeddedLens};
+use lightcraft_develop::{DevelopSettings, EmbeddedLens, Process};
 use lightcraft_geom::{Affine, CropGeometry, Homography, Orientation, Point, Rect};
-use lightcraft_raster::resample::{Filter, resize};
+use lightcraft_raster::resample::{Filter, resize, resize_window};
 use lightcraft_raster::{Rgb32f, par_rows};
 
 use crate::optics::{Warp, reorient_lens};
 
 /// Linear value of areas outside the source after a warp (a light neutral, like an empty canvas).
 pub const BLANK: [f32; 3] = [0.55, 0.55, 0.55];
+
+/// How [`Frame::sample`] resamples: the sharp resample of process V3 ([`Resampling::View`]), or the
+/// softer original one, which earlier processes render with and image analysis (Upright) was tuned
+/// on ([`Resampling::Original`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Resampling {
+    /// Any downscale is prefiltered with Catmull-Rom, then sampled bicubic; an unrotated, unwarped
+    /// view is one resample from the source, and 1:1 copies the photo's pixels: a fit-to-screen view
+    /// keeps the detail it can show (the GPU render does the same).
+    View,
+    /// Downscales past 1.25× prefiltered with Mitchell, then sampled bilinear.
+    Original,
+}
+
+impl Resampling {
+    /// The resample a render on process `p` uses.
+    pub fn of(p: Process) -> Resampling {
+        match p {
+            Process::V1 | Process::V2 => Resampling::Original,
+            Process::V3 => Resampling::View,
+        }
+    }
+
+    /// Downscales past this factor are prefiltered: bilinear or bicubic sampling alone softens
+    /// (and aliases) a reduction.
+    fn prefilter_from(self) -> f64 {
+        match self {
+            Resampling::View => 1.01,
+            Resampling::Original => 1.25,
+        }
+    }
+
+    /// The filter of the prefilter downscale.
+    pub fn prefilter(self) -> Filter {
+        match self {
+            Resampling::View => Filter::CatmullRom,
+            Resampling::Original => Filter::Mitchell,
+        }
+    }
+}
 
 /// The geometric frame of a render.
 #[derive(Clone, Debug, PartialEq)]
@@ -33,6 +73,8 @@ pub struct Frame {
     pub warp: Option<Warp>,
     /// Set when this frame draws only a window of a larger output (see [`Frame::window`]).
     pub view: Option<ViewWindow>,
+    /// How the source is resampled to the output (by the settings' process).
+    pub resampling: Resampling,
 }
 
 /// Where a windowed [`Frame`]'s pixels sit in the full output: its offset and the full output's
@@ -76,6 +118,7 @@ impl Frame {
             flip_v: s.crop.flip_v,
             warp: (!warp.is_identity()).then_some(warp),
             view: None,
+            resampling: Resampling::of(s.process.process()),
         };
         if apply_crop && s.geometry.constrain_crop {
             f.constrain_to_image();
@@ -230,30 +273,49 @@ impl Frame {
 
     /// How [`Frame::sample`] resamples a (EXIF-oriented) source of `src_w × src_h` into `w × h`.
     pub fn sample_plan(&self, src_w: usize, src_h: usize, w: usize, h: usize) -> SamplePlan {
+        self.sample_plan_with(src_w, src_h, w, h, self.resampling)
+    }
+
+    fn sample_plan_with(&self, src_w: usize, src_h: usize, w: usize, h: usize, how: Resampling) -> SamplePlan {
         let (ow, oh) = if self.orient.swaps_axes() { (src_h, src_w) } else { (src_w, src_h) };
         let crop_px = self.crop.rect_px(self.ow, self.oh);
         let k = crop_px.width() / w as f64;
-        let prefilter = (k > 1.25).then(|| (((ow as f64 / k).round() as usize).max(1), ((oh as f64 / k).round() as usize).max(1)));
+        let prefilter = (k > how.prefilter_from()).then(|| (((ow as f64 / k).round() as usize).max(1), ((oh as f64 / k).round() as usize).max(1)));
         let (bw, bh) = prefilter.unwrap_or((ow, oh));
         let (sx, sy) = (bw as f64 / ow as f64, bh as f64 / oh as f64);
+        let to_oriented = self.out_to_oriented(w, h);
+        if how == Resampling::View
+            && self.warp.is_none()
+            && !(self.crop.is_identity() && !self.flip_h && !self.flip_v && (ow, oh) == (w, h))
+            && let Some((x, y)) = axis_aligned_span(to_oriented, w, h)
+        {
+            // a crop and its scale in one resample from the source: an intermediate image to
+            // sample from again would soften the view a second time
+            return SamplePlan { ow, oh, prefilter: None, sx: 1.0, sy: 1.0, mode: SampleMode::Window { x, y } };
+        }
         let mode = if self.warp.is_some() {
-            SampleMode::Warp(self.out_to_oriented(w, h))
+            SampleMode::Warp(to_oriented)
         } else if self.crop.is_identity() && !self.flip_h && !self.flip_v && bw == w && bh == h {
             SampleMode::Copy
         } else {
-            SampleMode::Affine(Affine::scale(sx, sy) * self.out_to_oriented(w, h))
+            SampleMode::Affine(Affine::scale(sx, sy) * to_oriented)
         };
         SamplePlan { ow, oh, prefilter, sx, sy, mode }
     }
 
     /// Sample the source into a `w × h` output buffer: orientation, crop, rotation, flips — one
-    /// bilinear resample from a pre-filtered (area-downscaled) copy, so minification never aliases.
+    /// bicubic resample from a pre-filtered (downscaled) copy, so minification never aliases.
     pub fn sample(&self, src: &Rgb32f, w: usize, h: usize) -> Rgb32f {
+        self.sample_with(src, w, h, self.resampling)
+    }
+
+    /// [`Frame::sample`] with the given [`Resampling`] instead of the frame's own.
+    pub fn sample_with(&self, src: &Rgb32f, w: usize, h: usize, how: Resampling) -> Rgb32f {
         let oriented = if self.orient == Orientation::Normal { None } else { Some(src.oriented(self.orient)) };
         let o = oriented.as_ref().unwrap_or(src);
-        let plan = self.sample_plan(src.width, src.height, w, h);
+        let plan = self.sample_plan_with(src.width, src.height, w, h, how);
         let base = match plan.prefilter {
-            Some((nw, nh)) => std::borrow::Cow::Owned(resize(o, nw, nh, Filter::Mitchell)),
+            Some((nw, nh)) => std::borrow::Cow::Owned(resize(o, nw, nh, how.prefilter())),
             None => std::borrow::Cow::Borrowed(o),
         };
         let affine = |xf: Affine| {
@@ -261,12 +323,14 @@ impl Frame {
             par_rows(&mut out.data, w, |y, row| {
                 for (x, px) in row.iter_mut().enumerate() {
                     let p = xf.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
-                    *px = base.sample_bilinear(p.x as f32, p.y as f32);
+                    let (x, y) = (p.x as f32, p.y as f32);
+                    *px = if how == Resampling::View { base.sample_bicubic(x, y) } else { base.sample_bilinear(x, y) };
                 }
             });
             out
         };
         match (plan.mode, self.warp.as_ref()) {
+            (SampleMode::Window { x, y }, _) => resize_window(o, x, y, w, h, how.prefilter()),
             (SampleMode::Copy, _) => base.into_owned(),
             (SampleMode::Warp(o2t), Some(warp)) => sample_warped(&base, plan.sx, plan.sy, warp, o2t, w, h),
             // `sample_plan` plans a warp only when there is one; without it the same mapping is affine
@@ -292,7 +356,7 @@ pub struct SamplePlan {
     /// Oriented source size.
     pub ow: usize,
     pub oh: usize,
-    /// Size of the Mitchell prefilter (area downscale before the bilinear resample), if any.
+    /// Size of the prefilter downscale ([`Resampling::prefilter`]) before the resample, if any.
     pub prefilter: Option<(usize, usize)>,
     /// Oriented-source px → prefiltered px.
     pub sx: f64,
@@ -306,8 +370,32 @@ pub enum SampleMode {
     Copy,
     /// Bilinear through this affine (output px → prefiltered px).
     Affine(Affine),
+    /// The oriented source's span `x` × `y` (px) scaled to the output in one separable resample
+    /// (`resize_window`): an unrotated, unflipped, unwarped view.
+    Window { x: (f64, f64), y: (f64, f64) },
     /// Through the warp; the affine maps output px → transformed px.
     Warp(Affine),
+}
+
+/// The source span (`x`, `y`, px) that `to_oriented` maps a `w × h` output onto, when it only
+/// scales and moves (no rotation, no flip): `None` otherwise.
+fn axis_aligned_span(to_oriented: Affine, w: usize, h: usize) -> Option<((f64, f64), (f64, f64))> {
+    let [a, b, c, d, e, f] = to_oriented.0;
+    let tiny = 1e-9 * (a.abs() + d.abs());
+    if b.abs() > tiny || c.abs() > tiny || a <= 0.0 || d <= 0.0 || ![a, d, e, f].iter().all(|v| v.is_finite()) {
+        return None;
+    }
+    // At the photo's own scale (an export at full size, a 100 % view) the span starts on a whole
+    // pixel, so the pixels are copied: a crop edge at 1099.37 px otherwise interpolates every pixel
+    // a third of a pixel over, which softens the finest detail and the grain. The shift is under
+    // half a pixel, and so is the whole span's: a scale that close to 1 is a crop rounded to whole
+    // pixels, while a near-native size (5990 px of a 6000 px crop) is still scaled.
+    let one = |s: f64, n: usize| ((s - 1.0) * n as f64).abs() < 0.5;
+    if one(a, w) && one(d, h) {
+        let (e, f) = (e.round(), f.round());
+        return Some(((e, e + w as f64), (f, f + h as f64)));
+    }
+    Some(((e, e + a * w as f64), (f, f + d * h as f64)))
 }
 
 /// The perspective homography of the settings (Upright, then the manual Transform sliders), lens-corrected →
@@ -431,5 +519,38 @@ mod tests {
         // the whole image, mirrored: output top-left is the image's bottom-right
         let p = f.out_to_norm(400, 200).apply(Point::new(0.0, 0.0));
         assert!((p.x - 1.0).abs() < 1e-9 && (p.y - 1.0).abs() < 1e-9, "{p:?}");
+    }
+
+    /// The sharp resample is process V3's: a photo edited on V1 or V2 renders as it did.
+    #[test]
+    fn the_sharp_resample_is_v3_only() {
+        use lightcraft_develop::ProcessVersion;
+        let plan = |v: u32| {
+            let s = DevelopSettings { process: ProcessVersion(v), ..DevelopSettings::default() };
+            let f = Frame::new(6000, 4000, &s, true);
+            (f.resampling, f.sample_plan(6000, 4000, 1271, 847))
+        };
+        for v in [1, 2] {
+            let (how, p) = plan(v);
+            assert_eq!(how, Resampling::Original, "V{v}");
+            // the Mitchell prefilter, then (uncropped) its pixels
+            assert!(p.prefilter == Some((1271, 847)) && matches!(p.mode, SampleMode::Copy), "V{v}: {p:?}");
+        }
+        let (how, p) = plan(3);
+        assert_eq!(how, Resampling::View);
+        assert!(p.prefilter.is_none() && matches!(p.mode, SampleMode::Window { .. }), "V3: {p:?}");
+    }
+
+    /// At 1:1 a crop edge between pixels snaps to a whole pixel; a size within a few pixels of the
+    /// crop's is still scaled, not cut off at the far edge.
+    #[test]
+    fn only_the_photos_own_scale_copies_its_pixels() {
+        let span = |a: f64, d: f64, e: f64, w: usize, h: usize| axis_aligned_span(Affine([a, 0.0, 0.0, d, e, 0.0]), w, h).unwrap();
+        // a 2000 px crop starting at 1099.37 px (its width rounded to whole pixels)
+        let ((x0, x1), (y0, y1)) = span(1.0 + 0.3 / 2000.0, 1.0, 1099.37, 2000, 1000);
+        assert_eq!((x0, x1, y0, y1), (1099.0, 3099.0, 0.0, 1000.0));
+        // a 6000 × 4000 crop at 5990 × 3993
+        let ((x0, x1), (y0, y1)) = span(6000.0 / 5990.0, 4000.0 / 3993.0, 0.0, 5990, 3993);
+        assert!(x0 == 0.0 && (x1 - 6000.0).abs() < 1e-6 && y0 == 0.0 && (y1 - 4000.0).abs() < 1e-6, "{x1} {y1}");
     }
 }

@@ -244,6 +244,28 @@ impl Rgb32f {
         })
     }
 
+    /// [`Rgb32f::sample_bilinear`] with a Catmull-Rom 4 × 4 kernel: as cheap to place and keeps the
+    /// detail a resample at about 1:1 has (bilinear between two pixels halves the finest of it).
+    /// It can overshoot a little at hard edges, as any sharp resampler does (never below zero).
+    pub fn sample_bicubic(&self, x: f32, y: f32) -> [f32; 3] {
+        let fx = x.clamp(-1.0, self.width as f32 + 1.0) - 0.5;
+        let fy = y.clamp(-1.0, self.height as f32 + 1.0) - 0.5;
+        let (x0, y0) = (fx.floor(), fy.floor());
+        let (wx, wy) = (catmull_rom(fx - x0), catmull_rom(fy - y0));
+        let (x0, y0) = (x0 as isize, y0 as isize);
+        // (row sums first, then the rows: the order the GPU kernel adds in)
+        let mut out = [0.0f32; 3];
+        for (dy, wyj) in (-1..3).zip(wy) {
+            let [a, b, c, d] = [-1, 0, 1, 2].map(|dx| self.get_clamped(x0 + dx, y0 + dy));
+            let [w0, w1, w2, w3] = wx;
+            for ((((o, a), b), c), d) in out.iter_mut().zip(a).zip(b).zip(c).zip(d) {
+                *o += (a * w0 + b * w1 + c * w2 + d * w3) * wyj;
+            }
+        }
+        // light is never negative: the kernel's lobes can dip below zero beside a bright edge
+        out.map(|v| v.max(0.0))
+    }
+
     pub fn luminance(&self) -> Plane {
         self.map(lightcraft_color::luminance_2020)
     }
@@ -271,6 +293,12 @@ impl Rgba8 {
         use lightcraft_color::transfer::decode_srgb8;
         self.map(|p| [decode_srgb8(p[0]), decode_srgb8(p[1]), decode_srgb8(p[2])])
     }
+}
+
+/// Catmull-Rom weights of the four pixels around a sample `t` (0..1) past the second of them.
+fn catmull_rom(t: f32) -> [f32; 4] {
+    let (t2, t3) = (t * t, t * t * t);
+    [(-t3 + 2.0 * t2 - t) * 0.5, (3.0 * t3 - 5.0 * t2 + 2.0) * 0.5, (-3.0 * t3 + 4.0 * t2 + t) * 0.5, (t3 - t2) * 0.5]
 }
 
 #[cfg(test)]

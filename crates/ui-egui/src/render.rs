@@ -852,7 +852,8 @@ impl Renderer {
             }
             let img = &rendered.image;
             let color = color.unwrap_or_else(|| Arc::new(color_image(img)));
-            let pixels = self.keep_pixels.then(|| color.clone());
+            // (the zoomed window's pixels feed its magnified copy past 100 %: `magnify`)
+            let pixels = (self.keep_pixels || matches!(slot, Slot::Region | Slot::RegionBefore)).then(|| color.clone());
             let name = format!("{slot:?}");
             match self.textures.get_mut(&slot) {
                 Some(t) => {

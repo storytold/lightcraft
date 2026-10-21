@@ -580,7 +580,11 @@ fn cube_luts_become_profiles() {
         mean(&warm, 2)
     );
     s.execute("develop.profile", &json!({"id": id, "amount": 0})).unwrap();
-    assert_eq!(s.render_now(photo, 48, 32).unwrap().image.data, base.data, "Amount 0 = the photo as it was");
+    // (within the renderers' bound: a LUT profile renders on the CPU and the plain photo on the
+    // GPU, which may differ by up to 3 LSB, docs/gpu-pipeline.md; 1 on the GPUs measured)
+    let zero = s.render_now(photo, 48, 32).unwrap().image;
+    let off = zero.data.iter().zip(&base.data).flat_map(|(a, b)| a.iter().zip(b).map(|(x, y)| x.abs_diff(*y))).max().unwrap_or(0);
+    assert!(off <= 3, "Amount 0 = the photo as it was (off by {off})");
     assert_eq!(s.profile_info(&id), Some(("Warm Test", "Film Looks")));
     s.execute("profile.favorite", &json!({"id": id})).unwrap();
     assert!(s.profile_favorites.contains(&id));

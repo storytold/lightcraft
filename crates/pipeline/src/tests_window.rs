@@ -129,7 +129,8 @@ fn spatial_adjustments_agree_inside_the_halo() {
     {
         let mut s = DevelopSettings::default();
         controls::set(&mut s, id, v);
-        check(id, &s, MID, 6, 0.8);
+        // (7: the bicubic resample keeps edge contrast, a level more at the strongest clarity edge)
+        check(id, &s, MID, 7, 0.8);
     }
 }
 

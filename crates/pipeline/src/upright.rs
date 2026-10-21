@@ -552,7 +552,8 @@ pub fn analyze_source(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings) -> A
     }
     let frame = crate::frame_for(src, info, &base, false);
     let (w, h) = frame.fit(ANALYSIS_LONG, ANALYSIS_LONG);
-    let img = frame.sample(src, w, h);
+    // (the resample the line detection was tuned on: a sharper one turns fabric folds into verticals)
+    let img = frame.sample_with(src, w, h, crate::geometry::Resampling::Original);
     // perceptual lightness, normalized to the image's bright end
     let lum = img.luminance();
     let mut v: Vec<f32> = lum.data.iter().copied().filter(|x| x.is_finite()).collect();

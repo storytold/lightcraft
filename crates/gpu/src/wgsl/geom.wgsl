@@ -28,6 +28,32 @@ fn bilinear(w: u32, h: u32, x: f32, y: f32) -> vec3<f32> {
     return top + (bot - top) * ty;
 }
 
+// Catmull-Rom weights of the four pixels around a sample t (0..1) past the second of them.
+fn catmull_rom(t: f32) -> vec4<f32> {
+    let t2 = t * t;
+    let t3 = t2 * t;
+    return vec4<f32>(-t3 + 2.0 * t2 - t, 3.0 * t3 - 5.0 * t2 + 2.0, -3.0 * t3 + 4.0 * t2 + t, t3 - t2) * 0.5;
+}
+
+// `Image::sample_bicubic`: Catmull-Rom over the 4 × 4 pixels around (x, y).
+fn bicubic(w: u32, h: u32, x: f32, y: f32) -> vec3<f32> {
+    let fx = x - 0.5;
+    let fy = y - 0.5;
+    let x0 = floor(fx);
+    let y0 = floor(fy);
+    let wx = catmull_rom(fx - x0);
+    let wy = catmull_rom(fy - y0);
+    let ix = i32(x0);
+    let iy = i32(y0);
+    var out = vec3<f32>(0.0);
+    for (var j = 0; j < 4; j++) {
+        let row = src_px(w, h, ix - 1, iy + j - 1) * wx.x + src_px(w, h, ix, iy + j - 1) * wx.y
+            + src_px(w, h, ix + 1, iy + j - 1) * wx.z + src_px(w, h, ix + 2, iy + j - 1) * wx.w;
+        out += row * wy[j];
+    }
+    return max(out, vec3<f32>(0.0));
+}
+
 fn put(i: u32, v: vec3<f32>) {
     dst[3u * i] = v.x;
     dst[3u * i + 1u] = v.y;
@@ -53,7 +79,8 @@ fn orient(@builtin(global_invocation_id) g: vec3<u32>) {
     put(g.y * ow + g.x, vec3<f32>(src[j], src[j + 1u], src[j + 2u]));
 }
 
-// Bilinear resample through an affine (output px → base px). P: bw, bh, w, h, affine[6].
+// Resample through an affine (output px → base px), bicubic or bilinear (`Resampling`).
+// P: bw, bh, w, h, affine[6], bicubic.
 @compute @workgroup_size(16, 16)
 fn sample_affine(@builtin(global_invocation_id) g: vec3<u32>) {
     let w = pu(2u);
@@ -65,7 +92,11 @@ fn sample_affine(@builtin(global_invocation_id) g: vec3<u32>) {
     let py = f32(g.y) + 0.5;
     let x = pf(4u) * px + pf(6u) * py + pf(8u);
     let y = pf(5u) * px + pf(7u) * py + pf(9u);
-    put(g.y * w + g.x, bilinear(pu(0u), pu(1u), x, y));
+    if pu(10u) == 1u {
+        put(g.y * w + g.x, bicubic(pu(0u), pu(1u), x, y));
+    } else {
+        put(g.y * w + g.x, bilinear(pu(0u), pu(1u), x, y));
+    }
 }
 
 // --- the lens / perspective warp (`lightcraft_pipeline::optics::Warp`), in oriented-source px.

@@ -265,11 +265,19 @@ pub(crate) fn gaussian(cx: &mut Cx<'_>, src: &Buf, w: usize, h: usize, nc: usize
 
 /// Resample taps of `lightcraft_raster::resample::resize`, packed for the `resize_*` kernels.
 fn taps(src: usize, dst: usize, filter: Filter) -> Vec<u32> {
-    let w = lightcraft_raster::resample::weights(src, dst, filter);
+    pack_taps(dst, &lightcraft_raster::resample::weights(src, dst, filter))
+}
+
+/// Taps of `lightcraft_raster::resample::resize_window` (the span `start .. end`), packed.
+fn window_taps(src: usize, (start, end): (f64, f64), dst: usize, filter: Filter) -> Vec<u32> {
+    pack_taps(dst, &lightcraft_raster::resample::window_weights(src, start, end - start, dst, filter))
+}
+
+fn pack_taps(dst: usize, w: &[(usize, Vec<f32>)]) -> Vec<u32> {
     let mut t = Vec::with_capacity(dst * 3);
     let mut weights = Vec::new();
     let base = dst * 3;
-    for (lo, ws) in &w {
+    for (lo, ws) in w {
         t.extend_from_slice(&[*lo as u32, ws.len() as u32, (base + weights.len()) as u32]);
         weights.extend(ws.iter().map(|v| v.to_bits()));
     }
@@ -283,10 +291,15 @@ pub(crate) fn resize(cx: &mut Cx<'_>, src: &Buf, (sw, sh): (usize, usize), (dw, 
     if (sw, sh) == (dw, dh) {
         return cx.copy(src);
     }
-    let tx = cx.gpu.upload(&taps(sw, dw, filter));
+    resize_taps(cx, src, (sw, sh), (dw, dh), nc, &taps(sw, dw, filter), &taps(sh, dh, filter))
+}
+
+/// `resize` through the given packed taps (`taps`, `window_taps`).
+fn resize_taps(cx: &mut Cx<'_>, src: &Buf, (sw, sh): (usize, usize), (dw, dh): (usize, usize), nc: usize, x: &[u32], y: &[u32]) -> Buf {
+    let tx = cx.gpu.upload(x);
     let tmp = cx.gpu.buffer(dw * sh * nc);
     cx.run("resize_h", &[sw as u32, sh as u32, dw as u32, nc as u32], &[Some(src), Some(&tx), Some(&tmp)], groups2(dw, sh, [16, 16]));
-    let ty = cx.gpu.upload(&taps(sh, dh, filter));
+    let ty = cx.gpu.upload(y);
     let out = cx.gpu.buffer(dw * dh * nc);
     cx.run("resize_v", &[dw as u32, sh as u32, dh as u32, nc as u32], &[Some(&tmp), Some(&ty), Some(&out)], groups2(dw, dh, [16, 16]));
     out
@@ -532,17 +545,23 @@ fn sample(cx: &mut Cx<'_>, src: &Arc<Rgb32f>, src_buf: Arc<Buf>, plan: &Plan<'_>
         Arc::new(out)
     };
     let (base, (bw, bh)) = match sp.prefilter {
-        Some(d) => (Arc::new(resize(cx, &oriented, (sp.ow, sp.oh), d, 3, Filter::Mitchell)), d),
+        Some(d) => (Arc::new(resize(cx, &oriented, (sp.ow, sp.oh), d, 3, fr.resampling.prefilter())), d),
         None => (oriented, (sp.ow, sp.oh)),
     };
     let mut affine = |xf: &lightcraft_geom::Affine| {
         let out = cx.gpu.buffer(w * h * 3);
         let mut p = vec![bw as u32, bh as u32, w as u32, h as u32];
         p.extend(affine_bits(xf));
+        p.push(u32::from(fr.resampling == lightcraft_pipeline::geometry::Resampling::View));
         cx.run("sample_affine", &p, &[Some(&base), Some(&out), None], groups2(w, h, [16, 16]));
         Arc::new(out)
     };
     match (&sp.mode, fr.warp.as_ref()) {
+        (SampleMode::Window { x, y }, _) => {
+            let f = fr.resampling.prefilter();
+            let (tx, ty) = (window_taps(sp.ow, *x, w, f), window_taps(sp.oh, *y, h, f));
+            Arc::new(resize_taps(cx, &base, (sp.ow, sp.oh), (w, h), 3, &tx, &ty))
+        }
         (SampleMode::Copy, _) => base,
         (SampleMode::Affine(xf), _) => affine(xf),
         // `sample_plan` plans a warp only when there is one; without it the same mapping is affine
