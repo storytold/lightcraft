@@ -12,6 +12,11 @@ Third-party material
 This product bundles third-party material under its own licenses, listed below. The per-file
 list (author, source, license) is in assets/ATTRIBUTION.md.
 
+vendor/egui-wgpu is egui-wgpu 0.36.2 (https://github.com/emilk/egui), Copyright (c) 2018-2021
+Emil Ernerfeldt and the egui contributors, licensed under the MIT License or the Apache License,
+Version 2.0 (vendor/egui-wgpu/LICENSE-MIT, vendor/egui-wgpu/LICENSE-APACHE), with local changes
+for HDR display output described in vendor/README.md.
+
 Inter (assets/fonts/Inter-*.ttf) — SIL Open Font License 1.1. See assets/fonts/OFL-Inter.txt.
 Showcase photographs by Ansel Adams, Dorothea Lange and NASA (docs/images/) — public domain. See assets/ATTRIBUTION.md.
 

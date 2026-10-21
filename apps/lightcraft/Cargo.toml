@@ -29,12 +29,21 @@ serde_json = { workspace = true }
 # probing the window's renderer before it opens (`window_gpu`)
 pollster = { workspace = true }
 log = { workspace = true }
+# the loupe's HDR texture (`hdr_display`): f32 → f16 texels, uploaded as bytes
+half = { workspace = true }
+# HDR metadata on the window's swapchain (Vulkan; no-op elsewhere)
+lightcraft-hdrmeta = { workspace = true }
+bytemuck = { workspace = true }
 
 [build-dependencies]
 # Icon + VERSIONINFO for lightcraft.exe; build.rs only uses it when targeting Windows.
 winresource = "0.1"
 
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+# HDR display output: the outputs' headroom from the Wayland colour-management protocol
+# (`wayland_hdr`)
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
 winit = { version = "0.30", default-features = false, features = ["x11"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

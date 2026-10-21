@@ -1,6 +1,6 @@
 # Gaps: where LightCraft falls short of Lightroom
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-15 · **Change:** minor (gap 15: Print Page Options — page numbers, page info, crop marks)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-20 · **Change:** minor (gap 14: HDR display output on HDR displays)
 
 Every known shortfall, one entry each, ranked by user impact (how many Lightroom users hit it, and
 how hard it blocks them), then by effort. **Agents pick work from the top** (the first entry nobody is
@@ -28,7 +28,7 @@ Hours are Opus 5.5 agent wall-clock hours (see [target-app-parity.md](target-app
 | 11 | **Enhance: Raw Details, Super Resolution; AI denoise without shippable weights or X-Trans** | ENH rows 0%; denoise Bayer only, RawNIND weights GPL and opt-in | Fujifilm users get no AI denoise; nobody gets it out of the box | 30–60 + model decision | [raw-parity](raw-parity.md#demosaic-levels-crops-and-lens-metadata) |
 | 12 | **Content-aware / generative remove, detect distractions, reflections removal** | REM rows 75%; patch synthesis missing | cleanup work goes back to Photoshop | 25–45 (+ generative model) | [target-app-parity](target-app-parity.md#ai) |
 | 13 | **Lightroom catalog migration is one-way and approximate**: unsupported Adobe profiles / AI settings archived, history kept as data; offline record counts and destination are now shown in a lasting import result | lightroom-catalog-import.md | switching users lose some looks | 8–12 | [file-format-parity](file-format-parity.md) |
-| 14 | **HDR display** (EDR / Windows HDR); the headroom limit and SDR rendition from `crs` XMP (the HDR switch, `HDREditMode`, is read). HLG AVIF export done; the display's SDR/HDR decision is tested, blocked on eframe's 8-bit surface | HDR rows 70%; LR-VIEW-HDR-DISPLAY ⬜ | HDR editing works blind on HDR monitors | 12–25 | [hardware-parity](hardware-parity.md) |
+| 14 | **HDR display** (EDR / Windows HDR); the headroom limit and SDR rendition from `crs` XMP (the HDR switch, `HDREditMode`, is read). HLG AVIF export done; HDR display output landed, confirmed by eye on Windows, Wayland and macOS EDR (extended-linear float surface through a vendored egui-wgpu patch, UI at paper white, loupe up to the display's headroom); left: zoomed tiles, Before/After and the second window in HDR, an HDR preview toggle | HDR rows 70%; LR-VIEW-HDR-DISPLAY 🟡 | zoomed-in HDR edits still show SDR | 12–25 | [hardware-parity](hardware-parity.md) |
 | 15 | **Print module**: identity plate / watermark / photo info overlays, Cut Guides for the packages, Custom Package Auto Layout, printer-driver Page Setup and direct printing, JPEG file output (the Print dialog writes a colour-managed PDF) | LRC-PRINT rows | Classic users who print | 15–25 | [target-app-parity](target-app-parity.md#features) |
 | 16 | **Map view, Book, Slideshow module, publish services** | LRC-MAP / BOOK / SS rows ⬜ | Classic users; publish services matter for Flickr / SmugMug workflows | 60–100 | [target-app-parity](target-app-parity.md#features) |
 | 17 | **Tethered capture** | ⬜ | studio photographers | 25–45 + cameras | [hardware-parity](hardware-parity.md) |
@@ -77,6 +77,7 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-20 | minor | Gap 14: HDR display output — HDR edits show above SDR white on HDR displays (Windows scRGB, Wayland colour management, macOS EDR), UI at paper white; zoomed tiles still SDR |
 | 2026-10-18 | patch | Gap 1: six X-Trans CMOS 4 Fujifilm bodies (X-T30 …) take the X-T3's spectral matrices instead of the neutral matrix |
 | 2026-10-15 | minor | Gap 15 shrinks: the Page panel's Page Options (Page Numbers, Page Info, Crop Marks) print on Single Image and Contact Sheet pages; identity plate, watermark, photo info, Cut Guides, direct printing and JPEG output remain |
 | 2026-10-14 | minor | Gap 26: at 100k photos stack and album lookups are indexed, so an "In a Stack" or "Album" smart album counts in ~14 ms (was 0.6–2.7 s); open time unchanged |

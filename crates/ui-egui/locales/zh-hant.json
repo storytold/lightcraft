@@ -2003,6 +2003,7 @@
   "No graphics processor found: LightCraft renders on the CPU, which is much slower. Details in Help → System Info.": "找不到圖形處理器：LightCraft 改用 CPU 算繪，速度會慢很多。詳情請見「說明 → 系統資訊」。",
   "On NixOS, start it from `nix develop`.": "在 NixOS 上，請從 `nix develop` 啟動。",
   "Files with the same content as another file in this import: only the first is imported.": "與本次匯入中另一個檔案內容相同的檔案：只匯入第一個。",
+  "This display isn't showing HDR (it is SDR, or HDR is off in the system settings), so the window shows the SDR rendition. HDR exports keep the full range.": "此顯示器未顯示 HDR（它是 SDR 顯示器，或系統設定中已關閉 HDR），因此視窗顯示 SDR 版本。HDR 匯出保留完整範圍。",
   "Lightroom Catalog Import": "Lightroom 目錄匯入",
   "These photos are only in memory. Open a library on disk and import the catalog again to save them.": "這些相片僅保存在記憶體中。請開啟磁碟上的照片庫並再次匯入目錄以儲存相片。",
   "Show in Library": "在照片庫中顯示",

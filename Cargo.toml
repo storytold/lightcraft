@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
 members = ["crates/*", "apps/*", "xtask"]
+# vendored third-party crates patched for the app (see vendor/README.md); not workspace members
+exclude = ["vendor"]
 
 [workspace.package]
 version = "0.10.0"
@@ -18,6 +20,7 @@ lightcraft-denoise = { path = "crates/denoise", default-features = false }
 lightcraft-geom = { path = "crates/geom" }
 lightcraft-faces = { path = "crates/faces" }
 lightcraft-sysmem = { path = "crates/sysmem" }
+lightcraft-hdrmeta = { path = "crates/hdrmeta" }
 lightcraft-color = { path = "crates/color" }
 lightcraft-raster = { path = "crates/raster" }
 lightcraft-tiff = { path = "crates/tiff" }
@@ -52,6 +55,7 @@ log = "0.4"
 rayon = "1"
 proptest = "1"
 bytemuck = { version = "1", features = ["derive"] }
+half = { version = "2", default-features = false } # f32 → f16 for the HDR loupe texture
 crc32fast = "1"
 siphasher = "1"
 libc = "0.2" # dev-only: process CPU time in benches
@@ -165,3 +169,8 @@ jpeg-decoder = { opt-level = 3 }
 jpeg-encoder = { opt-level = 3 }
 png = { opt-level = 3 }
 miniz_oxide = { opt-level = 3 }
+
+[patch.crates-io]
+# egui-wgpu 0.36.2 + HDR display output (an Rgba16Float / extended-linear surface, the display's
+# HDR facts, egui's output scaled to SDR white): see vendor/README.md
+egui-wgpu = { path = "vendor/egui-wgpu" }

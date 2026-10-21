@@ -4053,6 +4053,192 @@ mod tests {
         assert_eq!(h.app.ui.dialog, Some(crate::state::Dialog::About), "switching tabs keeps the dialog open");
     }
 
+    /// HDR display output: with an HDR display, an HDR edit's loupe is drawn from its
+    /// linear float render (values above SDR white reach the window's HDR texture); an SDR
+    /// display, or an SDR edit, keeps the 8-bit loupe and uploads nothing.
+    #[test]
+    fn an_hdr_display_shows_hdr_edits_from_their_float_render() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        struct Fake(Option<f32>, Rc<RefCell<Vec<f32>>>);
+        impl crate::HdrOutput for Fake {
+            fn headroom(&mut self) -> Option<f32> {
+                self.0
+            }
+            fn upload(&mut self, width: usize, height: usize, rgb: &[f32]) -> Result<egui::TextureId, String> {
+                assert_eq!(rgb.len(), width * height * 3);
+                self.1.borrow_mut().push(rgb.iter().copied().fold(0.0, f32::max));
+                Ok(egui::TextureId::User(7))
+            }
+        }
+        let t = Duration::from_secs(10);
+        for (headroom, hdr_edit) in [(Some(4.0), true), (None, true), (Some(4.0), false)] {
+            let uploads = Rc::new(RefCell::new(Vec::new()));
+            let services = crate::Services { png: None, hdr_output: Some(Box::new(Fake(headroom, uploads.clone()))), ..Default::default() };
+            let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+            app.ui.view = crate::state::ViewMode::PhotoGrid;
+            let mut h = Headless::new(app, [1000.0, 700.0], 1.0);
+            h.request("ui.set", json!({"view": "detail"}), t);
+            if hdr_edit {
+                h.request("engine.execute", json!({"command": "develop.hdr", "params": {"enabled": true}}), t);
+                h.request("engine.execute", json!({"command": "develop.set", "params": {"values": {"light.exposure": 2.0}}}), t);
+            }
+            let hdr_shown = |h: &Headless| h.app.loupe_shown.is_some_and(|(_, s)| s == "hdr");
+            if headroom.is_some() && hdr_edit {
+                assert!(h.step_until(SETTLE, hdr_shown), "the loupe shows the HDR texture");
+                assert!(uploads.borrow().iter().any(|m| *m > 1.0), "highlights above SDR white: {:?}", uploads.borrow());
+                assert!(!h.app.hdr_display_sdr, "no 'SDR window' note on the HDR button");
+            } else {
+                h.settle(SETTLE);
+                assert!(!hdr_shown(&h) && uploads.borrow().is_empty(), "{headroom:?} {hdr_edit}: 8-bit loupe");
+                assert_eq!(h.app.hdr_display_sdr, headroom.is_none());
+            }
+        }
+    }
+
+    /// HDR display output touches the loupe only: the navigator / filmstrip thumbnail and the
+    /// loupe's 8-bit render of an HDR edit are the same pixels with and without an HDR display
+    /// (8-bit SDR rendition, drawn at SDR white), so nothing but the loupe's HDR image can go
+    /// above SDR white.
+    #[test]
+    fn an_hdr_display_leaves_thumbnails_and_8_bit_renders_as_on_sdr() {
+        use crate::render::Slot;
+        struct Fake;
+        impl crate::HdrOutput for Fake {
+            fn headroom(&mut self) -> Option<f32> {
+                Some(4.0)
+            }
+            fn upload(&mut self, _: usize, _: usize, _: &[f32]) -> Result<egui::TextureId, String> {
+                Ok(egui::TextureId::User(7))
+            }
+        }
+        let t = Duration::from_secs(10);
+        let mut seen = Vec::new();
+        for hdr in [true, false] {
+            let hdr_output: Option<Box<dyn crate::HdrOutput>> = if hdr { Some(Box::new(Fake)) } else { None };
+            let services = crate::Services { png: None, hdr_output, ..Default::default() };
+            let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+            app.ui.view = crate::state::ViewMode::PhotoGrid;
+            app.renderer.keep_pixels = true;
+            let mut h = Headless::new(app, [1000.0, 700.0], 1.0);
+            h.request("ui.set", json!({"view": "detail"}), t);
+            h.request("engine.execute", json!({"command": "develop.hdr", "params": {"enabled": true}}), t);
+            h.request("engine.execute", json!({"command": "develop.set", "params": {"values": {"light.exposure": 1.5}}}), t);
+            let id = h.app.session.active().unwrap();
+            let ready = |h: &Headless| {
+                h.app.renderer.textures.get(&Slot::Thumb(id)).is_some_and(|t| t.pixels.is_some())
+                    && h.app.renderer.textures.get(&Slot::Main).is_some_and(|t| t.pixels.is_some() && t.photo == id)
+                    && !h.app.renderer.is_pending(Slot::Main)
+            };
+            assert!(h.step_until(SETTLE, ready));
+            h.settle(SETTLE);
+            let px = |s: Slot| h.app.renderer.textures[&s].pixels.as_ref().unwrap().pixels.clone();
+            seen.push((px(Slot::Thumb(id)), px(Slot::Main)));
+        }
+        assert!(seen[0].0 == seen[1].0, "thumbnail differs with an HDR display");
+        assert!(seen[0].1 == seen[1].1, "the loupe's 8-bit render differs with an HDR display");
+    }
+
+    /// The HDR loupe texture is clipped to the headroom's half-stop bucket: never below what the
+    /// display shows, steady while the headroom wanders inside one bucket, and a new bucket
+    /// gives the HDR render another key (so it is re-rendered and re-uploaded).
+    #[test]
+    fn the_hdr_clip_headroom_buckets_by_half_stops() {
+        use crate::clip_headroom as clip;
+        for h in [1.01f32, 1.3, 2.0, 2.5, 4.0, 12.9] {
+            assert!(clip(h) >= h && clip(h) < h * 1.42, "{h} -> {}", clip(h));
+        }
+        assert_eq!(clip(2.0), 2.0);
+        assert_eq!(clip(4.0), 4.0);
+        assert_eq!(clip(2.1), clip(2.8));
+        assert_ne!(clip(2.0), clip(2.9));
+        assert_eq!(clip(f32::NAN), 1.0);
+        assert_eq!(clip(0.5), 1.0);
+        let job = |a, b| {
+            let mut p = LightcraftApp::new(lightcraft_engine::Session::with_demo(), crate::Services::default());
+            let id = p.session.active().unwrap();
+            let j = p.session.render_job(id, 64, 64, false, true).unwrap();
+            let _ = b;
+            crate::panels::detail::hdr_view_job(j, a).key
+        };
+        assert_ne!(job(2.0, 0), job(4.0, 0), "more headroom: another render");
+        assert_eq!(job(2.0, 0), job(2.0, 1));
+    }
+
+    /// With a compositor-managed (extended linear sRGB) surface the screen's profile is not applied
+    /// by the app as well: previews stay sRGB and the profile is never even read.
+    #[test]
+    fn a_compositor_managed_surface_skips_the_screen_profile() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+        struct Managed;
+        impl crate::HdrOutput for Managed {
+            fn headroom(&mut self) -> Option<f32> {
+                None
+            }
+            fn compositor_manages_colour(&self) -> bool {
+                true
+            }
+            fn upload(&mut self, _: usize, _: usize, _: &[f32]) -> Result<egui::TextureId, String> {
+                Err("unused".into())
+            }
+        }
+        let reads = Rc::new(Cell::new(0));
+        let r = reads.clone();
+        let services = crate::Services {
+            hdr_output: Some(Box::new(Managed)),
+            screen_profile: Some(Box::new(move || {
+                r.set(r.get() + 1);
+                Some(vec![1, 2, 3])
+            })),
+            ..Default::default()
+        };
+        let app = LightcraftApp::new(lightcraft_engine::Session::new(), services);
+        let mut h = Headless::new(app, [480.0, 320.0], 1.0);
+        h.settle(Duration::from_secs(3));
+        assert_eq!(reads.get(), 0, "the screen profile is left to the compositor");
+        assert!(h.app.screen_profile.is_none());
+    }
+
+    /// The CPU screenshot (headless fallback) has no access to the window's HDR texture: the loupe
+    /// draws its 8-bit render there, the same picture as without an HDR display (no white box).
+    #[test]
+    fn the_cpu_screenshot_of_an_hdr_edit_shows_the_8_bit_render() {
+        struct Fake;
+        impl crate::HdrOutput for Fake {
+            fn headroom(&mut self) -> Option<f32> {
+                Some(4.0)
+            }
+            fn upload(&mut self, _: usize, _: usize, _: &[f32]) -> Result<egui::TextureId, String> {
+                Ok(egui::TextureId::User(7))
+            }
+        }
+        let t = Duration::from_secs(10);
+        let mut shots = Vec::new();
+        for hdr in [true, false] {
+            let hdr_output: Option<Box<dyn crate::HdrOutput>> = if hdr { Some(Box::new(Fake)) } else { None };
+            let services = crate::Services { png: None, hdr_output, ..Default::default() };
+            let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+            app.ui.view = crate::state::ViewMode::PhotoGrid;
+            app.renderer.keep_pixels = true;
+            let mut h = Headless::new(app, [1000.0, 700.0], 1.0);
+            h.request("ui.set", json!({"view": "detail"}), t);
+            h.request("engine.execute", json!({"command": "develop.hdr", "params": {"enabled": true}}), t);
+            h.request("engine.execute", json!({"command": "develop.set", "params": {"values": {"light.exposure": 0.5}}}), t);
+            if hdr {
+                assert!(h.step_until(SETTLE, |h| h.app.loupe_shown.is_some_and(|(_, s)| s == "hdr")));
+            }
+            h.settle(SETTLE);
+            let main = h.view.ctx.clone();
+            let shot = h.app.headless_screenshot(&main, true).unwrap();
+            assert!(!h.app.drawing_shadow);
+            shots.push(shot);
+        }
+        assert_eq!(shots[0].size, shots[1].size);
+        let differing = shots[0].pixels.iter().zip(&shots[1].pixels).filter(|(a, b)| a != b).count();
+        assert!(differing < shots[0].pixels.len() / 200, "{differing} pixels differ: the loupe is not white");
+    }
+
     /// Settings ▸ Display / `app.displayProfile`: previews are shown through the monitor profile
     /// (the loupe rendered for the display, thumbnails converted from sRGB, the histogram still
     /// sRGB); a file that can't be used is an error, or, as the setting, reported with previews

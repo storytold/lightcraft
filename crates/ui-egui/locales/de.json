@@ -2203,6 +2203,7 @@
   "No graphics processor found: LightCraft renders on the CPU, which is much slower. Details in Help → System Info.": "Kein Grafikprozessor gefunden: LightCraft rendert auf der CPU, was viel langsamer ist. Details unter Hilfe → Systeminformationen.",
   "On NixOS, start it from `nix develop`.": "Unter NixOS starten Sie es aus `nix develop`.",
   "Files with the same content as another file in this import: only the first is imported.": "Dateien mit demselben Inhalt wie eine andere Datei dieses Imports: Nur die erste wird importiert.",
+  "This display isn't showing HDR (it is SDR, or HDR is off in the system settings), so the window shows the SDR rendition. HDR exports keep the full range.": "Dieser Bildschirm zeigt kein HDR (er ist SDR, oder HDR ist in den Systemeinstellungen aus), daher zeigt das Fenster die SDR-Darstellung. HDR-Exporte behalten den vollen Umfang.",
   "Lightroom Catalog Import": "Lightroom-Katalogimport",
   "Destination library": "Zielbibliothek",
   "Show in Library": "In Bibliothek anzeigen",

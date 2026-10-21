@@ -1432,8 +1432,6 @@ dependencies = [
 [[package]]
 name = "egui-wgpu"
 version = "0.36.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5cef1f6d1bba40b09a4d0d62cb822b81030922cfbf65c5373398c3a3caafc5bd"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -3080,10 +3078,13 @@ dependencies = [
 name = "lightcraft"
 version = "0.10.0"
 dependencies = [
+ "bytemuck",
  "eframe",
  "egui",
+ "half",
  "lightcraft-codecs",
  "lightcraft-engine",
+ "lightcraft-hdrmeta",
  "lightcraft-raster",
  "lightcraft-sysmem",
  "lightcraft-testkit",
@@ -3096,6 +3097,8 @@ dependencies = [
  "pollster 1.0.1",
  "rfd",
  "serde_json",
+ "wayland-client",
+ "wayland-protocols",
  "winit",
  "winresource",
  "zbus",
@@ -3321,6 +3324,15 @@ dependencies = [
  "log",
  "pollster 1.0.1",
  "wgpu",
+]
+
+[[package]]
+name = "lightcraft-hdrmeta"
+version = "0.9.1"
+dependencies = [
+ "ash",
+ "wgpu",
+ "wgpu-hal",
 ]
 
 [[package]]

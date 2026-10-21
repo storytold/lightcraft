@@ -2202,6 +2202,7 @@
   "No graphics processor found: LightCraft renders on the CPU, which is much slower. Details in Help → System Info.": "グラフィックプロセッサが見つかりません。LightCraftはCPUで描画するため、かなり遅くなります。詳細は「ヘルプ → システム情報」を参照してください。",
   "On NixOS, start it from `nix develop`.": "NixOSでは `nix develop` から起動してください。",
   "Files with the same content as another file in this import: only the first is imported.": "この読み込み内の別のファイルと内容が同じファイルです。最初のファイルだけが読み込まれます。",
+  "This display isn't showing HDR (it is SDR, or HDR is off in the system settings), so the window shows the SDR rendition. HDR exports keep the full range.": "このディスプレイは HDR を表示していません（SDR ディスプレイか、システム設定で HDR がオフです）。そのため、ウィンドウには SDR 版が表示されます。HDR 書き出しは全範囲を保持します。",
   "Lightroom Catalog Import": "Lightroomカタログの読み込み",
   "These photos are only in memory. Open a library on disk and import the catalog again to save them.": "これらの写真はメモリ内にのみあります。ディスク上のライブラリを開き、カタログを再度読み込んで保存してください。",
   "Show in Library": "ライブラリに表示",

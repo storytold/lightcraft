@@ -64,6 +64,20 @@ pub enum Slot {
     /// A slider drag's live HDR histogram: a small full-quality render of an HDR edit, beside the
     /// drafts (which have no HDR histogram), with no texture ([`Renderer::live_hdr_histogram`]).
     HdrHistogram,
+    /// The loupe's HDR render (linear float, highlights above SDR white) of an HDR edit, for an
+    /// HDR display ([`crate::HdrOutput`]): its result waits in [`Renderer::hdr_view_result`] for
+    /// the upload.
+    HdrView,
+}
+
+/// The loupe's HDR texture ([`Slot::HdrView`]), drawn in place of [`Slot::Main`]'s 8-bit one.
+#[derive(Clone, Copy, Debug)]
+pub struct HdrView {
+    pub photo: PhotoId,
+    /// The [`Slot::HdrView`] job key it was rendered for.
+    pub key: u64,
+    pub tex: egui::TextureId,
+    pub size: [usize; 2],
 }
 
 pub struct Tex {
@@ -206,6 +220,12 @@ pub struct Renderer {
     pub textures: HashMap<Slot, Tex>,
     /// The last [`Slot::HdrHistogram`] result: (photo, job key, histogram).
     pub live_hdr_histogram: Option<(PhotoId, u64, Histogram)>,
+    /// The last [`Slot::HdrView`] render, not yet uploaded: (photo, job key, linear float image).
+    pub hdr_view_result: Option<(PhotoId, u64, lightcraft_pipeline::DeepImage)>,
+    /// The loupe's uploaded HDR texture.
+    pub hdr_view: Option<HdrView>,
+    /// The key of an HDR render whose upload failed (not asked for again).
+    pub hdr_view_tried: Option<u64>,
     pub last_main_ms: f64,
     /// Jobs finished since start (for inspect/perf).
     pub completed: u64,
@@ -285,6 +305,9 @@ impl Renderer {
             pending: HashMap::new(),
             textures: HashMap::new(),
             live_hdr_histogram: None,
+            hdr_view_result: None,
+            hdr_view: None,
+            hdr_view_tried: None,
             last_main_ms: 0.0,
             completed: 0,
             keep_pixels: false,
@@ -829,6 +852,13 @@ impl Renderer {
                 }
             };
             if matches!(slot, Slot::Prefetch(_)) {
+                continue;
+            }
+            if slot == Slot::HdrView {
+                if let Some(deep) = rendered.deep {
+                    self.hdr_view_result = Some((r.photo, r.key, deep));
+                    changed = true;
+                }
                 continue;
             }
             if slot == Slot::HdrHistogram {
