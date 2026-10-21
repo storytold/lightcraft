@@ -295,5 +295,8 @@
   "Already in “{}”": "Ya está en “{}”",
   "Move {n} photo{} to “{}”": "Mover {n} foto{0} a “{1}”",
   "Move {n} photo{} to “{}”?": "¿Mover {n} foto{0} a “{1}”?",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "{n} foto{0} movida{0} a “{1}”. Editar → Deshacer las devuelve."
+  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "{n} foto{0} movida{0} a “{1}”. Editar → Deshacer las devuelve.",
+  "Delete the saved location “{name}”?": "¿Eliminar la ubicación guardada «{name}»?",
+  "In the private location “{name}”: its map is hidden.": "En la ubicación privada «{name}»: su mapa está oculto.",
+  "within {d} of {lat}, {lon}": "a menos de {d} de {lat}, {lon}"
 }

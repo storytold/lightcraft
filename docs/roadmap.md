@@ -76,7 +76,7 @@ calibration: M0–M13 took ≈ 25 active hours against an estimate of ≈ 110–
 | M12 | AI & smart features | subject/sky/background/people/object masks, semantic search, faces/People (permissively licensed models, pure-Rust inference) | 20–40 | 🚧 (faces: detection, recognition, People view ✅; Object / Describe masks via SAM 3 🟡; Subject / Sky / People masks, semantic search ⬜) |
 | M13 | Merge | HDR merge (deghost), panorama (projections, boundary warp, fill edges), HDR panorama | 10–15 | ✅ |
 | M14 | Video | import/playback/trim via FilmCraft crates, global edits + presets on video, video export | 6–10 | ⬜ |
-| M15 | Classic modules | Map, Book, Slideshow, Print, Web; smart collections, stacks, virtual copies, publish services, tethering | 25–40 | 🚧 (smart albums, stacks, virtual copies, compare/survey ✅; contact-sheet PDF 🟡; Map/Book/Slideshow/Print/Web ⬜) |
+| M15 | Classic modules | Map, Book, Slideshow, Print, Web; smart collections, stacks, virtual copies, publish services, tethering | 25–40 | 🚧 (smart albums, stacks, virtual copies, compare/survey ✅; contact-sheet PDF 🟡; Map view 🟡; Book/Slideshow/Print/Web ⬜) |
 | M16 | 1.0 polish | preferences, shortcut editor, accessibility, localization, packaging (dmg/msi/AppImage/web), hardening | 10–20 | 🚧 (settings, keyboard shortcuts sheet, packaging basics ✅; English/Chinese (Simplified, Traditional)/Japanese/Brazilian Portuguese/Spanish/German/Russian/Ukrainian/Georgian localisation 🟡; accessibility and further locales ⬜) |
 
 ## Risks that coding hours alone don't retire
