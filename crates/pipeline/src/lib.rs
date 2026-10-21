@@ -298,6 +298,12 @@ impl StageCache {
         t
     }
 
+    /// Drop another renderer's state ([`Self::extension`]) and keep this cache's own stages: e.g.
+    /// the GPU's device buffers once only the CPU renders from this cache.
+    pub fn clear_extension(&self) {
+        *self.ext.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+
     /// The per-view state of type `T` if there is one (unlike [`Self::extension`], never creates it).
     pub fn peek_extension<T: Any + Send + Sync>(&self) -> Option<Arc<T>> {
         self.ext.lock().unwrap_or_else(|e| e.into_inner()).as_ref().and_then(|e| e.clone().downcast::<T>().ok())

@@ -572,6 +572,38 @@ fn hdr_jpeg_export_writes_a_gain_map_and_sdr_edits_stay_plain() {
     assert!(!gainmap::is_gain_map_jpeg(&export_photo(&mut s, id, &o, 1).unwrap().bytes));
 }
 
+/// A gain map's HDR rendition starts from the SDR render's decoded original and stages (as
+/// `PreparedExport::run` hands them over) and comes out exactly as rendered on its own, noise
+/// reduction and clarity included.
+#[test]
+fn the_hdr_rendition_from_the_sdr_renders_stages_is_the_same() {
+    use crate::export::{OutputDepth, OutputSpace};
+    let mut s = Session::with_demo();
+    let id = sunset(&mut s);
+    s.execute("develop.hdr", &json!({"enabled": true, "maxEv": 3})).unwrap();
+    s.execute("develop.set", &json!({"control": "detail.nrLuminance", "value": 30})).unwrap();
+    s.execute("develop.set", &json!({"control": "effects.clarity", "value": 20})).unwrap();
+    let (w, h, space) = (400, 400, OutputSpace::DisplayP3);
+    let fresh = s.export_job(id, w, h, space, OutputDepth::F32Hdr).unwrap().run().rendered.unwrap().deep.unwrap();
+    let stages = std::sync::Arc::new(lightcraft_pipeline::StageCache::default());
+    let mut sdr = s.export_job(id, w, h, space, OutputDepth::U8).unwrap();
+    sdr.stages = Some(stages.clone());
+    let mut r = sdr.run();
+    assert!(r.rendered.is_ok());
+    let mut hdr = s.export_job(id, w, h, space, OutputDepth::F32Hdr).unwrap();
+    if let Some(src) = r.loaded.take() {
+        hdr.source = crate::media::SourceRef::Loaded(Box::new(src));
+    }
+    stages.clear_extension();
+    hdr.stages = Some(stages);
+    let shared = hdr.run().rendered.unwrap().deep.unwrap();
+    assert_eq!((shared.width, shared.height), (fresh.width, fresh.height));
+    let (crate::export::DeepSamples::F32(a), crate::export::DeepSamples::F32(b)) = (&shared.samples, &fresh.samples) else {
+        panic!("float samples expected")
+    };
+    assert!(a.iter().zip(b).all(|(x, y)| x.to_bits() == y.to_bits()), "the shared render differs");
+}
+
 #[test]
 fn hdr_float_tiff_keeps_highlights_above_white() {
     let mut s = Session::with_demo();

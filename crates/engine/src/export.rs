@@ -24,7 +24,9 @@ mod watermark;
 
 #[cfg(test)]
 use batch::run_batch_with;
-pub use batch::{export_parallelism, run_batch};
+pub use batch::{MAX_EXPORT_LANES, export_lanes_override, export_parallelism, run_batch, set_export_lanes};
+#[cfg(test)]
+use encoding::linear_of_8bit;
 pub use encoding::{
     encode_deep, encode_gain_map_jpeg, encode_image, encode_rendered, encode_with_metadata, export_metadata, named_space, output_sharpen,
     output_sharpen_deep, removes_location, srgb8_in,
@@ -49,6 +51,24 @@ use prepare::{render_weight, too_big_for_memory};
 use watermark::watermark_coverage;
 pub(crate) use watermark::watermark_logo;
 pub use watermark::{Anchor, Watermark, draw_watermark, draw_watermark_deep, draw_watermark_in, draw_watermark_preview, read_graphic};
+
+/// Under `LIGHTCRAFT_PROFILE`: print how long the step since the last lap took (`t` restarts),
+/// with the thread and the time since the first lap (photos side by side overlap or queue).
+fn lap(what: &str, t: &mut Option<std::time::Instant>) {
+    static EPOCH: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    if let Some(t) = t {
+        let now = std::time::Instant::now();
+        let at = now.duration_since(*EPOCH.get_or_init(|| *t)).as_secs_f64();
+        let thread = std::thread::current();
+        eprintln!("  export {what}: {:.1} ms [{} at {at:.1} s]", t.elapsed().as_secs_f64() * 1e3, thread.name().unwrap_or("main"));
+        *t = now;
+    }
+}
+
+/// A clock for [`lap`] when profiling (never read otherwise: `Instant::now` panics on wasm32).
+fn lap_clock() -> Option<std::time::Instant> {
+    lightcraft_pipeline::profiling().then(std::time::Instant::now)
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]

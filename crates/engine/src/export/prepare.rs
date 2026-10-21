@@ -2,7 +2,7 @@ use super::batch::run_batch;
 use super::encoding::{encode_gain_map_jpeg, encode_rendered, export_metadata, removes_location};
 use super::options::ExportFormat;
 use super::params::apple_photos_unsupported;
-use super::{ExportOptions, Metadata, OutputDepth};
+use super::{ExportOptions, Metadata, OutputDepth, lap, lap_clock};
 
 /// One exported file.
 pub struct Exported {
@@ -129,6 +129,9 @@ fn prepare_guarded(
             return Err(format!("{label}: {why}"));
         }
         let hdr_job = if gain_map { Some(session.export_job(id, w, h, o.effective_space(), OutputDepth::F32Hdr)?) } else { None };
+        // a gain map also holds the HDR rendition (float), the SDR one in linear light and the
+        // stages the two renders share
+        let weight = if gain_map { weight.saturating_add(w.saturating_mul(h).saturating_mul(GAIN_MAP_BYTES_PER_PX)) } else { weight };
         (Work::Render(Box::new(RenderWork { job, hdr_job, meta, opts: o.clone() })), weight)
     } else {
         let lightcraft_catalog::Source::File { path } = &p.source else {
@@ -187,6 +190,10 @@ pub(super) fn too_big_for_memory(out: (usize, usize), native_px: usize, weight: 
     ))
 }
 
+/// Working memory a gain map JPEG adds per output pixel ([`encode_gain_map_jpeg`]): the float HDR
+/// rendition (12 B), the SDR one in linear light (12 B) and the stages its two renders share.
+const GAIN_MAP_BYTES_PER_PX: usize = 48;
+
 /// Working memory of rendering a photo of `full_px` pixels (long edge `long`) from source level
 /// `level` into `out_px` output pixels: the decoded source (linear RGB f32, 12 B/px) plus the
 /// pipeline's planes and the encoded output (~36 B per output pixel). Measured: a 24 MP export
@@ -203,17 +210,41 @@ impl PreparedExport {
         let file_name = self.file_name;
         match self.work {
             Work::Render(w) => {
-                let RenderWork { job, hdr_job, meta, opts } = *w;
-                let result = job.run();
+                let RenderWork { mut job, hdr_job, meta, opts } = *w;
+                let mut t = lap_clock();
+                // A gain map's HDR rendition is the same photo rendered a second time: it starts
+                // from the SDR render's decoded original and (when that rendered on the CPU) its
+                // white-balanced, denoised, retouched image and spatial planes, instead of
+                // decoding and redoing them (half of such an export's work).
+                let stages = hdr_job.as_ref().map(|_| std::sync::Arc::new(lightcraft_pipeline::StageCache::default()));
+                if let Some(st) = &stages {
+                    job.stages = Some(st.clone());
+                }
+                let mut result = job.run();
+                lap("render", &mut t);
+                let loaded = result.loaded.take();
                 let r = result.rendered?;
                 let gpu_fallback = result.gpu_fallback;
                 let bytes = match hdr_job {
-                    Some(hj) => {
+                    Some(mut hj) => {
+                        if let Some(src) = loaded {
+                            hj.source = crate::media::SourceRef::Loaded(Box::new(src));
+                        }
+                        if let Some(st) = stages {
+                            // (the GPU's device copies are no use to the CPU's HDR render)
+                            st.clear_extension();
+                            hj.stages = Some(st);
+                        }
                         let hr = hj.run().rendered?;
+                        lap("HDR render", &mut t);
                         let hdr = hr.deep.ok_or("the HDR render has no float samples")?;
                         encode_gain_map_jpeg(&r.image, &hdr, &opts, meta.as_ref())?
                     }
-                    None => encode_rendered(&r, &opts, meta.as_ref())?,
+                    None => {
+                        let b = encode_rendered(&r, &opts, meta.as_ref())?;
+                        lap("encode", &mut t);
+                        b
+                    }
                 };
                 Ok(Exported { file_name, bytes, width: r.image.width, height: r.image.height, sidecars: Vec::new(), gpu_fallback })
             }

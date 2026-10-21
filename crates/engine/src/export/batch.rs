@@ -35,8 +35,29 @@ pub fn export_parallelism(n: usize) -> usize {
     if cfg!(target_arch = "wasm32") {
         return 1;
     }
-    let cores = std::thread::available_parallelism().map_or(1, |c| c.get());
-    (cores / 2).clamp(1, 12).min(n.max(1))
+    let lanes = export_lanes_override().unwrap_or_else(|| {
+        let cores = std::thread::available_parallelism().map_or(1, |c| c.get());
+        (cores / 2).clamp(1, 12)
+    });
+    lanes.clamp(1, MAX_EXPORT_LANES).min(n.max(1))
+}
+
+/// The most photos an export renders side by side, whatever is asked.
+pub const MAX_EXPORT_LANES: usize = 64;
+
+/// Export lanes chosen in the install settings (`0`: automatic).
+static LANES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Render `lanes` photos side by side in exports from now on (`None`: the automatic number). The
+/// environment's `LIGHTCRAFT_EXPORT_LANES` still wins (for measurements).
+pub fn set_export_lanes(lanes: Option<usize>) {
+    LANES.store(lanes.unwrap_or(0).min(MAX_EXPORT_LANES), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The lanes asked for: `LIGHTCRAFT_EXPORT_LANES`, else [`set_export_lanes`]'s; `None`: automatic.
+pub fn export_lanes_override() -> Option<usize> {
+    let env = std::env::var("LIGHTCRAFT_EXPORT_LANES").ok().and_then(|v| v.trim().parse::<usize>().ok()).filter(|n| *n > 0);
+    env.or(Some(LANES.load(std::sync::atomic::Ordering::Relaxed)).filter(|n| *n > 0))
 }
 
 /// [`run_batch`] with `lanes` photos in flight (the calling thread is one of them).
