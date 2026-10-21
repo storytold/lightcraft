@@ -2414,7 +2414,8 @@ fn photo_folder(app: &LightcraftApp, id: Option<lightcraft_catalog::PhotoId>) ->
 /// look in, the folder alone decides, and the command still checks.
 pub fn show_in_folders_enabled(app: &LightcraftApp, id: Option<lightcraft_catalog::PhotoId>) -> bool {
     let Some(dir) = photo_folder(app, id) else { return false };
-    app.caches.folder_tree_if_fresh(&app.session.catalog).is_none_or(|tree| crate::panels::left::folder_row_of(&tree, &dir).is_some())
+    let library = app.session.library_generation();
+    app.caches.folder_tree_if_fresh(&app.session.catalog, library).is_none_or(|tree| crate::panels::left::folder_row_of(&tree, &dir).is_some())
 }
 
 /// Photo ▸ Show in Folders (Lightroom's Go to Folder in Library): show the folder of photo `id`
@@ -2423,7 +2424,7 @@ pub fn show_in_folders_enabled(app: &LightcraftApp, id: Option<lightcraft_catalo
 /// section and the folders above it open, and it scrolls there (`reveal_folder`).
 fn show_in_folders(app: &mut LightcraftApp, id: Option<lightcraft_catalog::PhotoId>) -> Result<Value, String> {
     let dir = photo_folder(app, id).ok_or("this photo is not in a folder of the library")?;
-    let tree = app.caches.folder_tree(&app.session.catalog);
+    let tree = app.caches.folder_tree(&app.session.catalog, app.session.library_generation());
     // the row's own spelling (forward slashes): what its click hands `library.source`, and its id
     let path = crate::panels::left::folder_row_of(&tree, &dir).map(|n| n.path.clone()).ok_or("this photo's folder is not in Folders")?;
     app.run("library.source", json!({"kind": "libraryFolder", "path": path}))?;
