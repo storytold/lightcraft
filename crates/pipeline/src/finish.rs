@@ -195,6 +195,39 @@ pub struct FinishParams {
     /// Peak linear output relative to SDR white: 1 for SDR renders; `2^max_ev` for an HDR render
     /// ([`OutputDepth::F32Hdr`] with HDR on), which keeps values above 1 instead of clipping them.
     pub peak: f32,
+    /// How colours past the gamut are brought in ([`GamutMap`], by rendering process).
+    pub gamut: GamutMap,
+}
+
+/// How the finish stage brings a colour past the output range back in: once on display-linear
+/// Rec. 2020 after the tone map (values above `peak`) and once into the output space.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GamutMap {
+    /// [`gamut_map_to`]: desaturate towards luminance (V1, V2). Pale on bright saturated colours:
+    /// an orange whose red passes white gets its blue lifted until it is in range.
+    Desaturate,
+    /// [`gamut_map_keep_to`]: keep luminance and saturation, let the hue lean towards the nearest
+    /// secondary (V3).
+    KeepSaturation,
+}
+
+impl GamutMap {
+    pub fn of(s: &DevelopSettings) -> GamutMap {
+        match s.process.process() {
+            Process::V1 | Process::V2 => GamutMap::Desaturate,
+            Process::V3 => GamutMap::KeepSaturation,
+        }
+    }
+
+    /// Bring linear `r` into `0..peak` (luminance weights `luma`); the colour and its chroma scale
+    /// (1 = untouched; the gamut warnings flag a colour scaled by less than 0.995).
+    #[inline]
+    pub fn apply(self, r: [f32; 3], luma: [f32; 3], peak: f32) -> ([f32; 3], f32) {
+        match self {
+            GamutMap::Desaturate => gamut_map_to(r, luma, peak),
+            GamutMap::KeepSaturation => gamut_map_keep_to(r, luma, peak),
+        }
+    }
 }
 
 impl FinishParams {
@@ -226,6 +259,7 @@ impl FinishParams {
         let peak = s.hdr.peak();
         FinishParams {
             peak,
+            gamut: GamutMap::of(s),
             calib: if calibration { crate::colorops::calibration_matrix(&s.calibration) } else { None },
             shadow_tint: if calibration { (s.calibration.shadows_tint / 100.0) as f32 } else { 0.0 },
             tone: base_tone(s, info, peak),
@@ -281,7 +315,7 @@ pub fn base_tone(s: &DevelopSettings, info: &SourceInfo, peak: f32) -> ToneMap {
     let l = &s.light;
     match s.process.process() {
         // V2 changes the Highlights/Shadows base (`local::tone_base`), not the tone map
-        Process::V1 | Process::V2 => match info.camera_tone.as_ref().filter(|_| info.raw) {
+        Process::V1 | Process::V2 | Process::V3 => match info.camera_tone.as_ref().filter(|_| info.raw) {
             Some(curve) => ToneMap::camera_hdr(curve, l.contrast, l.whites, l.blacks, peak),
             None if info.raw => ToneMap::hdr(l.contrast, l.whites, l.blacks, peak),
             None => ToneMap::display_hdr(l.contrast, l.whites, l.blacks, peak),
@@ -540,8 +574,14 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
             }
             let mx = d[0].max(d[1]).max(d[2]);
             if mx > peak {
-                let t = ((mx - peak) / (mx - o).max(1e-6)).clamp(0.0, 1.0);
-                d = d.map(|v| v + (o - v) * t);
+                d = match fp.gamut {
+                    GamutMap::Desaturate => {
+                        let t = ((mx - peak) / (mx - o).max(1e-6)).clamp(0.0, 1.0);
+                        d.map(|v| v + (o - v) * t)
+                    }
+                    // the share towards white is taken once, by the output map below
+                    GamutMap::KeepSaturation => gamut_keep_saturation(d, LUMA_2020, peak).0,
+                };
             }
 
             // --- colour
@@ -594,7 +634,7 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                 }
                 Some(pp) => {
                     let q0 = mul3(&pp.to_proof, d);
-                    let (q, t) = gamut_map_to(q0, pp.luma, peak);
+                    let (q, t) = fp.gamut.apply(q0, pp.luma, peak);
                     if pp.dest_warning && out_of_gamut(q0, t) {
                         warn = Some(crate::output::PROOF_DEST_WARNING);
                     }
@@ -602,7 +642,7 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                 }
                 None => mul3(to_out, d),
             };
-            let (mapped, t) = gamut_map_to(r, *out_luma, peak);
+            let (mapped, t) = fp.gamut.apply(r, *out_luma, peak);
             if fp.proof.as_ref().is_some_and(|pp| pp.display_warning) && warn.is_none() && out_of_gamut(r, t) {
                 warn = Some(crate::output::PROOF_DISPLAY_WARNING);
             }
@@ -710,6 +750,90 @@ pub fn gamut_map_to(r: [f32; 3], luma: [f32; 3], peak: f32) -> ([f32; 3], f32) {
         }
     }
     if t < 1.0 { (r.map(|c| yy + (c - yy) * t), t) } else { (r, 1.0) }
+}
+
+/// Rec. 2020 luminance weights (`luminance_2020`).
+const LUMA_2020: [f32; 3] = [0.2627, 0.6780, 0.0593];
+
+/// Bring linear `r` into `0..peak` keeping its luminance (weights `luma`) and its saturation;
+/// returns the mapped colour and its chroma scale (1 = already in gamut), as [`gamut_map_to`].
+///
+/// A channel below 0 is desaturated towards luminance as in [`gamut_map_to`] (the least change
+/// that brings it to 0). Channels above `peak` are clipped there, and the luminance that takes
+/// away goes first to the other channels in proportion to how far each is from the lowest (the
+/// middle one carries it, the lowest keeps its value), then, once those reach `peak` too,
+/// evenly towards white. So an orange whose red passes white turns a little yellower, as a
+/// camera's per-channel rendering does, instead of paler: [`gamut_map_to`] keeps its hue by
+/// lifting its blue, which bleaches a sunset's saturated halo towards white. A neutral (or any
+/// colour) at or past `peak` luminance still ends at white, and the map is continuous: at the
+/// gamut boundary it is the identity.
+///
+/// Camera JPEGs do not keep the lowest channel quite that low: as a clipped colour nears white,
+/// they let a growing share of it go towards white. So a colour past `peak` takes a share
+/// `(Y / peak)^6` ([`KEEP_DESATURATE_POWER`]) of [`gamut_map_to`]'s desaturated colour: 1.6 % at
+/// half luminance, 26 % at 80 %, all of it at white. Both colours are in range and have the same
+/// luminance, so the blend is too. The finish stage takes the share once, at the output map; its
+/// map past white after the tone map is [`gamut_keep_saturation`] alone (taking it there too
+/// doubles it). Measured on full renders against the embedded camera JPEGs of the CC0 CR3 files
+/// in `corpus/raw` (16 files; 8 × 8 blocks the share changes): the lowest channel's 8-bit RMSE
+/// goes from 15.4 (bias −3.6) to 14.1 (−2.9), all channels from 12.8 to 12.2. Power 5 scores the
+/// same there (14.0) but overshoots an EOS R10 sunset halo (bias +6.7; 6 gives +2.5, RMSE 22.1 →
+/// 20.9, where [`gamut_map_to`] alone bleaches it).
+#[inline]
+pub fn gamut_map_keep_to(r: [f32; 3], luma: [f32; 3], peak: f32) -> ([f32; 3], f32) {
+    let (q, t, clipped) = gamut_keep_saturation(r, luma, peak);
+    if !clipped {
+        return (q, t);
+    }
+    let (d, _) = gamut_map_to(r, luma, peak);
+    let y = ((luma[0] * d[0] + luma[1] * d[1] + luma[2] * d[2]) / peak).clamp(0.0, 1.0);
+    let f = y.powi(KEEP_DESATURATE_POWER);
+    if f.is_nan() || f <= 0.0 {
+        return (q, t);
+    }
+    let q: [f32; 3] = std::array::from_fn(|k| q[k] + (d[k] - q[k]) * f);
+    let (lo, hi) = (r[0].min(r[1]).min(r[2]), r[0].max(r[1]).max(r[2]));
+    let chroma = q[0].max(q[1]).max(q[2]) - q[0].min(q[1]).min(q[2]);
+    (q, t.min(chroma / (hi - lo).max(1e-9)))
+}
+
+/// The power of luminance that sets the share of [`gamut_map_to`] in [`gamut_map_keep_to`].
+pub const KEEP_DESATURATE_POWER: i32 = 6;
+
+/// [`gamut_map_keep_to`] without the share that goes towards white: the lowest channel keeps its
+/// value. The flag says whether a channel was past `peak` (only then is the share taken).
+#[inline]
+pub(crate) fn gamut_keep_saturation(r: [f32; 3], luma: [f32; 3], peak: f32) -> ([f32; 3], f32, bool) {
+    let lum = |q: [f32; 3]| luma[0] * q[0] + luma[1] * q[1] + luma[2] * q[2];
+    let yy = lum(r).clamp(0.0, peak);
+    let mut t = 1.0f32;
+    for c in r {
+        if c < 0.0 {
+            t = t.min(yy / (yy - c).max(1e-9));
+        }
+    }
+    let r = if t < 1.0 { r.map(|c| yy + (c - yy) * t) } else { r };
+    let (lo, hi) = (r[0].min(r[1]).min(r[2]), r[0].max(r[1]).max(r[2]));
+    if hi <= peak || hi.is_nan() {
+        return (r, t, false);
+    }
+    let mut q = r.map(|c| c.min(peak));
+    // share of the clipped luminance each channel takes: 1 for the highest, 0 for the lowest
+    let w = r.map(|c| if hi - lo > 1e-9 { (c - lo) / (hi - lo) } else { 1.0 });
+    let room: f32 = (0..3).map(|k| luma[k] * w[k] * (peak - q[k])).sum();
+    let need = yy - lum(q);
+    if room > 1e-9 && need > 0.0 {
+        let s = (need / room).min(1.0);
+        q = std::array::from_fn(|k| q[k] + s * w[k] * (peak - q[k]));
+    }
+    let need = yy - lum(q);
+    let room: f32 = (0..3).map(|k| luma[k] * (peak - q[k])).sum();
+    if room > 1e-9 && need > 0.0 {
+        let u = (need / room).clamp(0.0, 1.0);
+        q = q.map(|c| c + (peak - c) * u);
+    }
+    let chroma = q[0].max(q[1]).max(q[2]) - q[0].min(q[1]).min(q[2]);
+    (q, t.min(chroma / (hi - lo).max(1e-9)), true)
 }
 
 /// Local Defringe weight of a scene-linear colour `c` whose log luminance differs by `det` from

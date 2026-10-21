@@ -1,5 +1,17 @@
 # What's new in LightCraft
 
+## 2026-10-15
+
+### Sunsets stay orange
+- Bright, saturated colours no longer fade towards white. Where a colour is too bright or too saturated for the
+  screen or the export (the halo around a setting sun, a lit-up orange sail, a neon sign), LightCraft used to wash
+  it out until it fitted, so a sunset's orange glow came out salmon to white. Now it keeps its strength, turns a
+  touch yellower near the brightest part and pales only as it nears white, as the camera's own JPEG does; only a
+  highlight that is truly white goes white. New photos and Reset get this (rendering process 3); photos you've already edited keep their look until
+  you choose Photo ▸ Update to Current Process. See [process versions](process-versions.md).
+- The starting colour fitted to a raw's camera JPEG no longer dulls bright colours either: photos are re-rendered
+  with it the next time they are shown.
+
 ## 2026-10-14
 
 ### Model downloads time out on a name that doesn't resolve
