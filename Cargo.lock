@@ -3510,6 +3510,7 @@ dependencies = [
  "craft-ui",
  "egui",
  "egui_kittest",
+ "kurbo",
  "lightcraft-catalog",
  "lightcraft-codecs",
  "lightcraft-color",

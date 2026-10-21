@@ -16,7 +16,7 @@ const VIEW_MODES: &[(&str, Icon, ViewMode, &str)] = &[
     ("detail", Icon::Single, ViewMode::Detail, "Detail (D)"),
     ("compare", Icon::Compare, ViewMode::Compare, "Compare (Shift+C)"),
     ("survey", Icon::Survey, ViewMode::Survey, "Survey (N)"),
-    ("people", Icon::Subject, ViewMode::People, "People"),
+    ("people", Icon::People, ViewMode::People, "People"),
 ];
 
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
@@ -114,15 +114,13 @@ fn centre(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, from: f32, to:
     let flag = active.as_ref().map(|p| p.flag).unwrap_or_default();
     for (id, icon, f) in [("unflag", Icon::Circle, Flag::None), ("pick", Icon::FlagPick, Flag::Pick), ("reject", Icon::FlagReject, Flag::Reject)] {
         let (r, resp) = pill_ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
-        crate::widgets::announce_selected(
-            &resp,
-            crate::i18n::tr(match f {
-                Flag::None => "Unflagged",
-                Flag::Pick => "Pick",
-                Flag::Reject => "Reject",
-            }),
-            flag == f,
-        );
+        let name = crate::i18n::tr(match f {
+            Flag::None => "Unflagged",
+            Flag::Pick => "Pick",
+            Flag::Reject => "Reject",
+        });
+        crate::widgets::announce_selected(&resp, name, flag == f);
+        let resp = resp.on_hover_text(name);
         register(pill_ui.ctx(), format!("flag:{id}"), r);
         let on = flag == f && f != Flag::None;
         let c = if on {
@@ -132,7 +130,7 @@ fn centre(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, from: f32, to:
         } else {
             t.icon
         };
-        paint(pill_ui.painter(), r.shrink(3.0), icon, c);
+        paint(pill_ui.painter(), r.shrink(3.0), if on { icon.chosen() } else { icon }, c);
         if resp.clicked() {
             let mut params = json!({"flag": match f { Flag::Pick => "pick", Flag::Reject => "reject", Flag::None => "none" }});
             crate::panels::compare::target_active(app, &mut params);
@@ -157,6 +155,7 @@ fn centre(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, from: f32, to:
     let gear_r = Rect::from_min_size(pos2(copy_r.right() + 4.0, pill.top()), vec2(30.0, 30.0));
     let gresp = ui.interact(gear_r, egui::Id::new("copy-gear"), Sense::click());
     crate::widgets::announce(&gresp, crate::i18n::tr("Copy Settings…"));
+    let gresp = gresp.on_hover_text(crate::i18n::tr("Copy Settings…"));
     register(ui.ctx(), "icon:copyGear", gear_r);
     ui.painter().rect_filled(gear_r, 15.0, if gresp.hovered() { t.hover } else { t.canvas });
     paint(ui.painter(), gear_r.shrink(7.0), Icon::Gear, t.icon);

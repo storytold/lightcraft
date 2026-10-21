@@ -13,6 +13,7 @@ This product bundles third-party material under its own licenses, listed below. 
 list (author, source, license) is in assets/ATTRIBUTION.md.
 
 Inter (assets/fonts/Inter-*.ttf) — SIL Open Font License 1.1. See assets/fonts/OFL-Inter.txt.
+Tabler Icons (assets/icons/tabler/), Copyright (c) 2020-2026 Paweł Kuna — MIT License. See assets/icons/tabler/LICENSE.txt.
 Showcase photographs by Ansel Adams, Dorothea Lange and NASA (docs/images/) — public domain. See assets/ATTRIBUTION.md.
 
 crates/raw/src/spectral_table.rs (lightcraft-raw) holds camera colour matrices derived from the
