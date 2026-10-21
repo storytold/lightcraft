@@ -3224,6 +3224,7 @@ version = "0.10.0"
 dependencies = [
  "ab_glyph",
  "craft-docpath",
+ "half",
  "harfrust",
  "jxl-oxide",
  "libc",
@@ -3251,6 +3252,7 @@ dependencies = [
  "lightcraft-slideshow",
  "lightcraft-testkit",
  "lightcraft-tiff",
+ "lightcraft-vision",
  "log",
  "miniz_oxide 0.8.9",
  "rayon",
@@ -3318,8 +3320,10 @@ dependencies = [
  "lightcraft-raw",
  "lightcraft-scenes",
  "lightcraft-testkit",
+ "lightcraft-vision",
  "log",
  "pollster 1.0.1",
+ "serde_json",
  "wgpu",
 ]
 
@@ -3471,6 +3475,7 @@ dependencies = [
  "candle-nn",
  "lightcraft-fetch",
  "lightcraft-testkit",
+ "lightcraft-vision",
  "log",
  "serde",
  "serde_json",
@@ -3523,13 +3528,31 @@ dependencies = [
  "lightcraft-pipeline",
  "lightcraft-preview",
  "lightcraft-raster",
+ "lightcraft-scenes",
  "lightcraft-slideshow",
  "lightcraft-testkit",
+ "lightcraft-vision",
  "log",
  "serde",
  "serde_json",
  "toml",
  "web-time",
+]
+
+[[package]]
+name = "lightcraft-vision"
+version = "0.9.1"
+dependencies = [
+ "candle-core",
+ "candle-nn",
+ "lightcraft-raster",
+ "lightcraft-scenes",
+ "log",
+ "png",
+ "rayon",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

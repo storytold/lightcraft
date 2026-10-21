@@ -133,6 +133,10 @@ walks the drive.
   command (runtime preference; `ui.inspect` → `perf.gpu` shows the adapter), a buffer larger than
   the device's storage-buffer limit, or a render the device did not complete correctly (see
   [Limits, failures and the CPU fallback](#limits-failures-and-the-cpu-fallback)).
+- Two compute users have devices of their own (`crates/gpu/src/compute.rs`), with the same switches, the crash
+  sentinel and a CPU fallback: AI Denoise's network (`nn.rs`, `docs/denoise.md`) and the content models' transformers
+  (`transformer.rs`: SigLIP 2 and CLIP image and text towers for search by content, `docs/content-search.md` → *On the
+  graphics card*). The content scan's own renders (photos without a usable embedded preview) stay on the CPU.
 - wasm32: the crate compiles to the CPU fallback (WebGPU needs asynchronous device creation and a
   device shared with the canvas — open item below).
 

@@ -194,6 +194,10 @@ pub fn filter_chips(f: &Filter, cat: &Catalog) -> Vec<FilterChip> {
             add(format!("{name}: {x}"), json!({key: Null}));
         }
     }
+    if let Some(t) = &f.content_tag {
+        // the tag's own name ("bird", not "animal|bird")
+        add(format!("Contents: {}", t.rsplit('|').next().unwrap_or(t)), json!({"contentTag": Null}));
+    }
     if let Some(d) = &f.date {
         add(format!("Date: {}", date_label(d)), json!({"date": Null}));
     }
