@@ -7,6 +7,7 @@
 //!   presets.json   view.json        (user presets + favourites; last source/sort/selection)
 //!   prefs.json     (library preferences: XMP sidecars, import defaults, cache size, last export)
 //!   thumbs/        (rendered thumbnail cache, safe to delete)
+//!   metadata-search-cache.jsonl     (derived embedded search values, safe to delete)
 //!   Originals/     (photos imported with "copy into library")
 //! ```
 //!
@@ -493,6 +494,7 @@ impl Session {
         // preferences
         let prefs = settings.read::<PrefsFile>(files.as_mut(), "prefs.json").unwrap_or_default();
         self.xmp = prefs.xmp;
+        self.metadata_cache = crate::metadata_cache::MetadataCache::load(files.as_mut(), &mut self.catalog);
         self.last_export = prefs.last_export;
         self.last_merge = prefs.last_merge;
         self.export_presets = prefs.export_presets;
@@ -640,6 +642,9 @@ impl Session {
         {
             log::error!("library: compaction: {e}");
             lib.last_error = Some(format!("compaction: {e}"));
+        }
+        if let Err(e) = self.metadata_cache.save(lib.files.as_mut(), &self.catalog) {
+            log::warn!("metadata search cache not saved (catalog edits are saved): {e}");
         }
         let due = self.library.as_ref().is_some_and(|l| l.presets_saved.differs(self) && !l.blocked.contains(&"presets.json"));
         if !due {

@@ -56,6 +56,7 @@ pub mod logging;
 pub mod media;
 pub mod memory;
 pub mod merge;
+mod metadata_cache;
 mod model_download;
 pub mod open_path;
 pub mod originals;
@@ -283,6 +284,7 @@ pub struct Session {
     /// Ops applied since the last `drain_log` (for persistence).
     pending_log: Vec<Op>,
     pub media: media::MediaCache,
+    metadata_cache: metadata_cache::MetadataCache,
     /// Current time provider (ISO 8601); injectable for tests and wasm.
     pub clock: Box<dyn Fn() -> String + Send>,
     depth: u32,
@@ -456,6 +458,7 @@ impl Session {
             journal: Vec::new(),
             pending_log: Vec::new(),
             media: media::MediaCache::default(),
+            metadata_cache: Default::default(),
             clock: Box::new(|| "2026-09-30T12:00:00".to_string()),
             depth: 0,
             active_mask: None,
@@ -628,6 +631,7 @@ impl Session {
         }
         let inv = self.catalog.apply(op)?;
         for id in invalidated {
+            self.remember_metadata_search(id);
             self.media.forget(id);
         }
         #[cfg(not(target_arch = "wasm32"))]
@@ -665,7 +669,7 @@ impl Session {
     /// an undo step, and it leaves the redo stack alone.
     pub(crate) fn apply_system(&mut self, op: Op) -> Result<()> {
         let fwd = op.clone();
-        self.catalog.apply(op)?;
+        self.apply_catalog(op)?;
         self.pending_log.push(fwd);
         Ok(())
     }
@@ -1290,6 +1294,8 @@ mod tests_lightroom_folder;
 mod tests_mask_effects;
 #[cfg(test)]
 mod tests_merge;
+#[cfg(test)]
+mod tests_metadata_search;
 #[cfg(test)]
 mod tests_move_to_share;
 #[cfg(test)]

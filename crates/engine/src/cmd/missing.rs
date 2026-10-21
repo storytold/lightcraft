@@ -71,16 +71,21 @@ fn relink(s: &mut Session, p: &Value) -> Result<Value> {
     // the file may differ from the one imported (another export, a raw that decodes now or not):
     // its size, dimensions and preview-only state follow it
     let mut ops = vec![relink_op(id, &abs)];
+    let mut indexed = None;
     if s.media.file_probe.is_some()
         && let (Some(Ok(info)), Some(ph)) = (crate::import::probe_paths(s, std::slice::from_ref(&abs)).pop(), s.catalog.photo(id))
     {
-        ops.extend(crate::cmd::convert::content_op(id, ph, info));
+        ops.extend(crate::cmd::convert::content_op(id, ph, info.clone()));
+        indexed = Some(info);
     }
     let op = match <[Op; 1]>::try_from(ops) {
         Ok([op]) => op,
         Err(ops) => Op::Batch { ops },
     };
     s.commit("Relink Photo", op)?;
+    if let Some(info) = indexed {
+        s.index_metadata_search(id, &info, s.sidecar_naming(id));
+    }
     s.media.forget(id);
     Ok(json!({"id": id.0, "path": abs}))
 }

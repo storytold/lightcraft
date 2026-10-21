@@ -223,6 +223,9 @@ pub struct HistoryStep {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Photo {
+    /// Rebuildable search data, loaded from the library cache; never part of catalog snapshots or ops.
+    #[serde(skip)]
+    pub metadata_search: Option<Arc<lightcraft_meta::SearchMetadata>>,
     pub id: PhotoId,
     pub source: Source,
     pub file_name: String,
@@ -362,6 +365,7 @@ impl Photo {
 
     pub fn new(id: PhotoId, source: Source, file_name: &str, format: &str, width: u32, height: u32, imported: &str) -> Photo {
         Photo {
+            metadata_search: None,
             id,
             source,
             file_name: file_name.to_string(),

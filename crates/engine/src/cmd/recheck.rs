@@ -84,19 +84,37 @@ impl Rechecked {
 pub fn apply(s: &mut Session, results: Vec<(Stale, std::result::Result<ProbeInfo, String>)>) -> Result<Rechecked> {
     let mut ops = Vec::new();
     let mut out = Rechecked::default();
+    let mut indexed = Vec::new();
+    let copies = crate::cmd::convert::copies_by_original(&s.catalog);
     for (item, info) in results {
         let Ok(info) = info else { continue };
         if !s.catalog.photo(item.id).is_some_and(|p| item.current(p)) {
             continue;
         }
         let first = out.updated.len();
-        crate::cmd::convert::reload_ops(&s.catalog, item.id, &info, &mut ops, &mut out.updated);
+        crate::cmd::convert::reload_ops(
+            &s.catalog,
+            item.id,
+            copies.get(&item.id).map(Vec::as_slice).unwrap_or(&[]),
+            &info,
+            &mut ops,
+            &mut out.updated,
+        );
         if info.preview_only.is_none() {
             out.cleared.extend_from_slice(&out.updated[first..]);
         }
+        indexed.push((item.id, info));
     }
     if !ops.is_empty() {
         s.apply_system(Op::Batch { ops })?;
+    }
+    let indexed: Vec<_> = indexed
+        .iter()
+        .flat_map(|(id, info)| std::iter::once(*id).chain(copies.get(id).into_iter().flatten().copied()).map(move |id| (id, info)))
+        .collect();
+    let namings = s.sidecar_namings(&indexed.iter().map(|(id, _)| *id).collect::<Vec<_>>());
+    for ((id, info), naming) in indexed.into_iter().zip(namings) {
+        s.index_metadata_search(id, info, naming);
     }
     for id in &out.updated {
         s.media.forget(*id);

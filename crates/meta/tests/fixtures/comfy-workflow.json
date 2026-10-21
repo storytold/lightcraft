@@ -1,0 +1,17 @@
+{
+  "version":0.4,
+  "nodes":[
+    {"id":3,"type":"KSampler","inputs":[{"name":"positive","link":20},{"name":"negative","link":21}],"widgets_values":[123456,"randomize",28,6.5,"euler_ancestral","normal",1]},
+    {"id":4,"type":"CheckpointLoaderSimple","widgets_values":["flux-dev.safetensors"]},
+    {"id":6,"type":"CLIPTextEncode","widgets_values":["Cyberpunk neon city, café at night"]},
+    {"id":7,"type":"CLIPTextEncode","widgets_values":["blurry, watermark"]},
+    {"id":10,"type":"LoraLoader","widgets_values":["detail.safetensors",0.7,0.8]},
+    {"id":11,"type":"LoraLoaderModelOnly","widgets_values":["cinema.safetensors",0.4]},
+    {"id":12,"type":"VAELoader","widgets_values":["ae.safetensors"]},
+    {"id":13,"type":"CustomAtmosphere","title":"Storm control","properties":{"Node name for S&R":"Atmosphere v2"},"widgets_values":["magenta","stormy",0.42]},
+    {"id":14,"type":"CustomNamedWidgets","widgets_values":{"lora_name":"custom-detail.safetensors","strength_model":0.6,"prompt":"a distant moon"}}
+  ],
+  "links":[[20,6,0,3,1,"CONDITIONING"],[21,7,0,3,2,"CONDITIONING"]],
+  "extra":{"description":"Night photography experiment"},
+  "groups":[{"title":"Lighting"}]
+}

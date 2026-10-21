@@ -31,6 +31,33 @@ pub fn photo_summary(p: &Photo) -> Value {
     })
 }
 
+/// Current catalog values, which can differ from embedded file metadata until explicitly written.
+fn catalog_metadata(photo: &Photo) -> Vec<Value> {
+    let m = &photo.meta;
+    let mut rows: Vec<_> = [
+        ("Title", &m.title),
+        ("Caption", &m.caption),
+        ("Alt Text", &m.alt_text),
+        ("Extended Description", &m.extended_description),
+        ("Creator", &m.creator),
+        ("Copyright", &m.copyright),
+        ("Rights Usage Terms", &m.usage_terms),
+        ("Copyright Info URL", &m.copyright_url),
+        ("Location", &m.location),
+        ("City", &m.city),
+        ("State / Province", &m.state),
+        ("Country", &m.country),
+    ]
+    .into_iter()
+    .filter(|(_, value)| !value.is_empty())
+    .map(|(name, value)| json!({"name":name,"value":value}))
+    .collect();
+    if !m.keywords.is_empty() {
+        rows.push(json!({"name":"Keywords","value":m.keywords.join("; ")}));
+    }
+    rows
+}
+
 /// How deep [`album_json`] lists folders inside folders: a catalog that loops (an album inside
 /// itself, which [`lightcraft_catalog::Catalog::repair`] puts right on load) lists no further
 /// instead of overflowing the stack.
@@ -124,11 +151,12 @@ pub fn specs() -> Vec<CommandSpec> {
                 "clipboard": s.clipboard.is_some(),
             }))
         }),
-        cmd!(query "photo.allMetadata", "All Metadata", [], None, "{id?} → {exif: [{group, tag, name, value}], xmp: [{name, value}]} — every EXIF / TIFF / GPS tag of the file and its XMP properties", always, |s, p| {
+        cmd!(query "photo.allMetadata", "All Metadata", [], None, "{id?} → {catalog, exif, xmp, pngText, generation} — EXIF / TIFF / GPS, XMP, embedded PNG text and readable ComfyUI generation fields", always, |s, p| {
             let id = photo_arg(s, p, "photo.allMetadata")?;
             let ph = s.catalog.photo(id).ok_or_else(|| super::bad("photo.allMetadata", "no such photo"))?.clone();
+            let catalog=catalog_metadata(&ph);
             let lightcraft_catalog::Source::File { path } = &ph.source else {
-                return Ok(json!({"exif": [], "xmp": [], "note": "a generated demo photo has no file"}));
+                return Ok(json!({"catalog":catalog,"exif": [], "xmp": [], "note": "a generated demo photo has no file"}));
             };
             let bytes = match &s.media.file_bytes {
                 Some(r) => r(path),
@@ -145,7 +173,20 @@ pub fn specs() -> Vec<CommandSpec> {
                 .and_then(|x| lightcraft_meta::parse_xmp(&x).ok())
                 .map(|d| d.properties.into_iter().filter(|(k, _)| !k.starts_with("lc:")).map(|(k, v)| json!({"name": k, "value": v.join("; ")})).collect())
                 .unwrap_or_default();
-            Ok(json!({"exif": exif, "xmp": xmp}))
+            let png = lightcraft_meta::png_text_fields(&bytes);
+            let generation: Vec<_> = lightcraft_meta::comfy_display_fields(&png, None).into_iter().map(|(name,values)| json!({"name":name,"value":values.join("; ")})).collect();
+            // The full graphs are decoded only for this explicit viewer, never persisted or laid out unbounded.
+            let mut remaining = 64 * 1024usize;
+            let png_text:Vec<_> = png.into_iter().take(32).map(|field| {
+                let limit=remaining.min(16*1024);
+                let end=field.value.char_indices().map(|(i,_)|i).chain(std::iter::once(field.value.len())).take_while(|i|*i<=limit).last().unwrap_or(0);
+                let mut value=field.value.get(..end).unwrap_or_default().to_string();
+                remaining=remaining.saturating_sub(value.len());
+                let truncated=value.len()<field.value.len();
+                if truncated {value.push_str(" … [display truncated]");}
+                json!({"name":field.name,"value":value,"truncated":truncated})
+            }).collect();
+            Ok(json!({"catalog":catalog,"exif": exif, "xmp": xmp, "pngText":png_text,"generation":generation}))
         }),
         cmd!(query "albums.list", "List Albums", [], None, "{}", always, |s, _| {
             let all: Vec<Album> = s.catalog.albums().cloned().collect();

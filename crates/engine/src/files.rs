@@ -135,8 +135,9 @@ fn ext_upper(name: &str) -> String {
 /// compressed data that is all there: such a file imports and shows as unreadable when rendered).
 pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
     let content_hash = Some(lightcraft_preview::hash_bytes(bytes).to_string());
-    let m = lightcraft_meta::extract(bytes);
+    let (m, search) = lightcraft_meta::extract_with_search(bytes);
     let (meta, captured) = meta_of(&m);
+    let metadata_search = Some(Arc::new(search));
     if lightcraft_raw::probe(bytes).is_some() {
         let raw = match lightcraft_raw::probe_info(bytes).map_err(|e| preview_reason(bytes, e)) {
             Ok(r) => r,
@@ -151,6 +152,7 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
                     file_size: bytes.len() as u64,
                     captured,
                     meta,
+                    metadata_search,
                     as_shot_wb: None,
                     content_hash,
                     xmp: lightcraft_meta::embedded(bytes).xmp,
@@ -178,6 +180,7 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
             captured,
             file_modified: None,
             meta,
+            metadata_search,
             as_shot_wb,
             content_hash,
             xmp: lightcraft_meta::embedded(bytes).xmp,
@@ -210,6 +213,7 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
         captured,
         file_modified: None,
         meta,
+        metadata_search,
         as_shot_wb: None,
         content_hash,
         embedded_lens: None,

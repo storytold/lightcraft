@@ -1,0 +1,11 @@
+{
+  "3": {"class_type":"KSampler","inputs":{"seed":18446744073709551614,"steps":30,"cfg":7.5,"sampler_name":"euler","scheduler":"karras","denoise":0.85,"model":["11",0],"positive":["6",0],"negative":["7",0],"latent_image":["5",0]}},
+  "4": {"class_type":"CheckpointLoaderSimple","inputs":{"ckpt_name":"Flux/flux-dev.safetensors"}},
+  "5": {"class_type":"EmptyLatentImage","inputs":{"width":1024,"height":768,"batch_size":1}},
+  "6": {"class_type":"CLIPTextEncode","inputs":{"text":"Cyberpunk neon city, café at night","clip":["4",1]}},
+  "7": {"class_type":"CLIPTextEncode","inputs":{"text":"blurry, watermark","clip":["4",1]}},
+  "10": {"class_type":"LoraLoader","inputs":{"model":["4",0],"lora_name":"detail.safetensors","strength_model":0.7,"strength_clip":0.8}},
+  "11": {"class_type":"LoraLoader","inputs":{"model":["10",0],"lora_name":"cinema.safetensors","strength_model":0.4,"strength_clip":0.5}},
+  "12": {"class_type":"VAELoader","inputs":{"vae_name":"ae.safetensors"}},
+  "13": {"class_type":"MyCustomNode","_meta":{"title":"Custom atmospheric control"},"inputs":{"weather":"stormy","configuration":{"palette":"magenta","enabled":true},"noise_seed":"123456"}}
+}

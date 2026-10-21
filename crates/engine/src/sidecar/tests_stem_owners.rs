@@ -85,7 +85,7 @@ fn owners_among_some_photos_name_them_as_the_whole_library_does() {
         }
     }
     // an id that is not in the library is passed over
-    assert_eq!(StemOwners::among(&c, &[PhotoId(9_999)]).0.len(), 0);
+    assert_eq!(StemOwners::among(&c, &[PhotoId(9_999)]).stems.len(), 0);
 }
 
 /// Given a library of many folders, when the owners are worked out for the photos of one, then
@@ -106,11 +106,20 @@ fn owners_among_some_photos_hold_nothing_of_the_rest() {
             if folder == 0 {
                 first.push(id);
             }
+            let copy = c.alloc_photo_id();
+            let mut p = c.photo(id).unwrap().as_ref().clone();
+            p.id = copy;
+            p.copy_of = Some(id);
+            c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
         }
     }
-    assert_eq!(StemOwners::of(&c).0.len(), 200, "one shared stem a folder");
+    assert_eq!(StemOwners::of(&c).stems.len(), 200, "one shared stem a folder");
     let some = StemOwners::among(&c, &first);
-    assert_eq!(some.0.len(), 1, "the one shared stem of the folder asked about");
+    assert_eq!(some.stems.len(), 1, "the one shared stem of the folder asked about");
+    assert_eq!(some.copies.len(), 3, "only copies sharing the requested stems are retained");
+    for id in &first {
+        assert_eq!(some.copies[id].len(), 1);
+    }
     assert_eq!(namings(&some, &c, &first), [SidecarNaming::Stem, SidecarNaming::Full, SidecarNaming::Stem]);
 }
 

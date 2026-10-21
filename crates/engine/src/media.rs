@@ -1647,6 +1647,7 @@ impl crate::Session {
 /// What an import learns from a file header (set by the app from `lightcraft-codecs`/`-raw`).
 #[derive(Clone, Debug, Default)]
 pub struct ProbeInfo {
+    pub metadata_search: Option<Arc<lightcraft_meta::SearchMetadata>>,
     pub width: u32,
     pub height: u32,
     pub format: String,

@@ -55,6 +55,11 @@ fn read(s: &mut Session, p: &Value) -> Result<Value> {
         // next edits would be ignored (issue #934). The next edit, or Save Metadata, writes them.
         s.skip_auto_write = true;
     }
+    let ids: Vec<_> = read.iter().filter_map(|item| item.get("id").and_then(Value::as_u64).map(lightcraft_catalog::PhotoId)).collect();
+    let namings = s.sidecar_namings(&ids);
+    for (id, naming) in ids.into_iter().zip(namings) {
+        s.refresh_sidecar_search(id, naming);
+    }
     let mut result = json!({"read": read, "failed": failed});
     if !warnings.is_empty() {
         result["warnings"] = serde_json::to_value(warnings).unwrap_or_default();

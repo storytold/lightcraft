@@ -48,3 +48,33 @@ fn information_dialogs_end_with_one_close() {
         assert!(h.app.ui.dialog.is_none(), "{id}: Esc closes the dialog");
     }
 }
+
+#[test]
+fn all_metadata_displays_and_copies_png_generator_fields() {
+    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1300.0, 900.0], 1.0);
+    h.settle(SETTLE);
+    h.app.ui.dialog = Some(crate::state::Dialog::AllMetadata {
+        title: "Qwen_image.png".into(),
+        search: String::new(),
+        rows: json!({"catalog":[{"name":"City","value":"Paris"}],"exif":[],"xmp":[],"generation":[{"name":"positive","value":"Church in the Forest"}],"pngText":[{"name":"workflow","value":"{\"nodes\":[]}"},{"name":"parameters","value":"Steps: 30, Model: Qwen"}]}),
+    });
+    h.settle(SETTLE);
+    let text = h.painted_text();
+    for value in [
+        "Catalog · saved values",
+        "Paris",
+        "ComfyUI generation",
+        "PNG text / generator metadata",
+        "Church in the Forest",
+        "parameters",
+        "Steps: 30, Model: Qwen",
+    ] {
+        assert!(text.iter().any(|s| s == value), "{value}: {text:?}");
+    }
+    assert!(!text.iter().any(|s| s == "No metadata found"));
+    let r = h.request("ui.clickWidget", json!({"id":"button:copyMetadata"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    assert!(h.view.clipboard.contains("Qwen"), "copied: {:?}; clipboard: {:?}", h.app.copied, h.view.clipboard);
+}

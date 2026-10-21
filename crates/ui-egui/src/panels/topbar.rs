@@ -122,7 +122,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 .font(t.font(13.5))
                 .text_color(t.text)
                 .show(&mut child)
-                .response;
+                .response
+                .on_hover_text(crate::i18n::tr("Search names, keywords and ComfyUI metadata.\nUse quotes for phrases: prompt:\"neon city\"\nComfyUI: comfy:true model:flux lora:detail sampler:euler\nParameters: seed:123456 steps:>20 cfg:>5\nFor older or changed PNGs: select them, then\nPhoto → Reload from Disk."));
             if resp.changed() {
                 let q = app.ui.search.clone();
                 let _ = app.run("library.filter", json!({"text": q}));

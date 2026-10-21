@@ -530,7 +530,11 @@ pub(crate) fn op_photos(op: &Op, out: &mut Vec<PhotoId>) {
 
 /// Which photo owns each stem sidecar that several catalogued files map to (see
 /// [`Session::sidecar_naming`]).
-pub(crate) struct StemOwners(HashMap<String, PhotoId>);
+#[derive(Default)]
+pub(crate) struct StemOwners {
+    stems: HashMap<String, PhotoId>,
+    copies: HashMap<PhotoId, Vec<PhotoId>>,
+}
 
 impl StemOwners {
     /// The owners of every shared stem in the library, each file's key made the long way: what
@@ -548,7 +552,7 @@ impl StemOwners {
                 (e.0, e.1) = (rank, p.id);
             }
         }
-        StemOwners(best.into_iter().filter(|(_, v)| v.2 > 1).map(|(k, v)| (k, v.1)).collect())
+        StemOwners { stems: best.into_iter().filter(|(_, v)| v.2 > 1).map(|(k, v)| (k, v.1)).collect(), ..Default::default() }
     }
 
     /// The owners of the stems photos `ids` map to: all that naming those photos needs. The
@@ -558,7 +562,7 @@ impl StemOwners {
         let wanted: std::collections::HashSet<String> =
             ids.iter().filter_map(|id| cat.photo(*id)).filter_map(|p| file_path(p)).map(stem_key).collect();
         if wanted.is_empty() {
-            return StemOwners(HashMap::new());
+            return StemOwners::default();
         }
         Self::where_wanted(cat, &wanted)
     }
@@ -567,11 +571,17 @@ impl StemOwners {
     fn where_wanted(cat: &lightcraft_catalog::Catalog, wanted: &std::collections::HashSet<String>) -> StemOwners {
         // per stem: (raw first, then file name, then id) of the best candidate; and how many
         let mut best: HashMap<String, ((bool, String, u64), PhotoId, usize)> = HashMap::new();
+        let mut copies: HashMap<PhotoId, Vec<PhotoId>> = HashMap::new();
         let mut key = String::new();
-        for p in cat.photos().filter(|p| p.copy_of.is_none()) {
+        for p in cat.photos() {
             let Some(path) = file_path(p) else { continue };
             stem_key_into(&mut key, path);
             if !wanted.contains(key.as_str()) {
+                continue;
+            }
+            // Gather copies once per batch, rather than scanning the library after each save.
+            if let Some(original) = p.copy_of {
+                copies.entry(original).or_default().push(p.id);
                 continue;
             }
             let rank = (p.kind != MediaKind::Raw, path.to_lowercase(), p.id.0);
@@ -581,13 +591,13 @@ impl StemOwners {
                 (e.0, e.1) = (rank, p.id);
             }
         }
-        StemOwners(best.into_iter().filter(|(_, v)| v.2 > 1).map(|(k, v)| (k, v.1)).collect())
+        StemOwners { stems: best.into_iter().filter(|(_, v)| v.2 > 1).map(|(k, v)| (k, v.1)).collect(), copies }
     }
 
     /// `naming` for photo `p`, except that a stem sidecar another file owns becomes Full.
     fn naming(&self, p: &Photo, naming: SidecarNaming) -> SidecarNaming {
         match (naming, file_path(p)) {
-            (SidecarNaming::Stem, Some(path)) if self.0.get(&stem_key(path)).is_some_and(|owner| *owner != p.id) => SidecarNaming::Full,
+            (SidecarNaming::Stem, Some(path)) if self.stems.get(&stem_key(path)).is_some_and(|owner| *owner != p.id) => SidecarNaming::Full,
             _ => naming,
         }
     }
@@ -667,6 +677,10 @@ impl Session {
         let (data, merged, backup) = sidecar_contents(&path, sidecar_packet(p, &self.catalog), &(self.clock)()).map_err(err)?;
         write_atomic(&path, data.as_bytes()).map_err(err)?;
         self.note_sidecar_write(&path, data.as_bytes());
+        self.refresh_sidecar_search(id, naming);
+        for copy in owners.copies.get(&id).into_iter().flatten() {
+            self.refresh_sidecar_search(*copy, naming);
+        }
         Ok(SidecarSaved { path, merged, backup })
     }
 

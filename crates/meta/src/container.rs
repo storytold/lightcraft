@@ -15,6 +15,7 @@ use lightcraft_tiff::{Tiff, tags};
 /// Metadata blocks found in a file.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Embedded {
+    pub comfy: Option<crate::ComfyMetadata>,
     /// TIFF-structured Exif block (without the `Exif\0\0` prefix).
     pub exif: Option<Vec<u8>>,
     /// XMP packet (the main one; extended XMP is appended by [`Embedded::xmp_extended`]).
@@ -56,6 +57,7 @@ pub fn embedded(bytes: &[u8]) -> Embedded {
                 lightcraft_tiff::Value::Byte(b) | lightcraft_tiff::Value::Undefined(b) => b.clone(),
                 other => lightcraft_tiff::writer::encode(t.order, other),
             }),
+            comfy: None,
         }
     } else {
         Embedded::default()
@@ -147,30 +149,42 @@ fn photoshop_iptc(mut b: &[u8]) -> Option<Vec<u8>> {
 /// PNG chunks: `eXIf`, uncompressed `iTXt` XMP.
 pub fn png_chunks(b: &[u8]) -> Embedded {
     let mut out = Embedded::default();
+    if !b.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return out;
+    }
+    let mut comfy = crate::comfy::PngIndex::default();
+    let mut text = crate::png_text::Decoder::default();
+    let mut dimensions = None;
     let mut i = 8usize;
     while i + 12 <= b.len() {
         let len = u32::from_be_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]) as usize;
         let typ = &b[i + 4..i + 8];
         let Some(data) = b.get(i + 8..(i + 8).saturating_add(len)) else { break };
+        let Some(end) = (i + 12).checked_add(len) else { break };
+        let Some(crc) = b.get(end - 4..end) else { break };
         match typ {
+            b"IHDR" if data.len() == 13 => {
+                dimensions = data
+                    .get(..4)
+                    .zip(data.get(4..8))
+                    .and_then(|(w, h)| Some((u32::from_be_bytes(w.try_into().ok()?), u32::from_be_bytes(h.try_into().ok()?))));
+            }
             b"eXIf" => out.exif = Some(crate::strip_exif_header(data).to_vec()),
-            b"iTXt" if data.starts_with(b"XML:com.adobe.xmp\0") => {
-                // keyword\0 compression-flag compression-method language\0 translated\0 text
-                let rest = &data[18..];
-                if rest.len() >= 2 && rest[0] == 0 {
-                    let rest = &rest[2..];
-                    let mut parts = rest.splitn(3, |&c| c == 0);
-                    let (_, _, text) = (parts.next(), parts.next(), parts.next());
-                    if let Some(t) = text {
-                        out.xmp = Some(String::from_utf8_lossy(t).into_owned());
+            b"tEXt" | b"zTXt" | b"iTXt" => {
+                if let Some(field) = text.chunk(typ, data, crc) {
+                    if field.name == "XML:com.adobe.xmp" {
+                        out.xmp = Some(field.value);
+                    } else {
+                        comfy.field(&field);
                     }
                 }
             }
             b"IEND" => break,
             _ => {}
         }
-        i += 12 + len;
+        i = end;
     }
+    out.comfy = comfy.finish(dimensions);
     out
 }
 
@@ -270,7 +284,10 @@ mod tests {
             p.extend_from_slice(&(data.len() as u32).to_be_bytes());
             p.extend_from_slice(typ);
             p.extend_from_slice(data);
-            p.extend_from_slice(&[0; 4]);
+            let mut crc = crc32fast::Hasher::new();
+            crc.update(typ);
+            crc.update(data);
+            p.extend_from_slice(&crc.finalize().to_be_bytes());
         };
         chunk(b"eXIf", &exif);
         let mut itxt = b"XML:com.adobe.xmp\0\0\0\0\0".to_vec();
@@ -280,6 +297,10 @@ mod tests {
         let m = crate::extract(&p);
         assert_eq!(m.iso, Some(400));
         assert_eq!(m.label.as_deref(), Some("Red"));
+        let mut corrupt = p.clone();
+        let at = corrupt.windows(3).position(|b| b == b"Red").unwrap();
+        corrupt[at] = b'B';
+        assert!(png_chunks(&corrupt).xmp.is_none(), "invalid text CRCs are rejected");
 
         let mut w = b"RIFF\0\0\0\0WEBP".to_vec();
         let mut body = |id: &[u8], data: &[u8]| {

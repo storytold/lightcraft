@@ -563,6 +563,21 @@ impl Catalog {
 
     // ---- writes
 
+    /// Attach derived search data without adding a journal op or an undo step.
+    pub fn set_metadata_search(&mut self, id: PhotoId, metadata: Option<Arc<lightcraft_meta::SearchMetadata>>) -> Result<()> {
+        if self.photo(id).is_some_and(|p| p.metadata_search == metadata) {
+            return Ok(());
+        }
+        if self.changes.seen != self.revision {
+            self.changes = Changes { floor: self.revision, seen: self.revision, ..Default::default() };
+        }
+        self.changes.now = Aspects::META;
+        self.photo_mut(id)?.metadata_search = metadata;
+        self.revision = self.revision.wrapping_add(1);
+        self.changes.seen = self.revision;
+        Ok(())
+    }
+
     fn photo_mut(&mut self, id: PhotoId) -> Result<&mut Photo> {
         self.touch(id);
         self.photos.get_mut(&id).map(Arc::make_mut).ok_or(CatalogError::NoPhoto(id))
@@ -880,12 +895,18 @@ impl Catalog {
             }
             Op::Relink { id, file_name, source, format } => {
                 let p = self.photo_mut(id)?;
+                if p.source != source {
+                    p.metadata_search = None;
+                }
                 let old_name = std::mem::replace(&mut p.file_name, file_name);
                 let old_format = format.map(|f| std::mem::replace(&mut p.format, f));
                 Op::Relink { id, file_name: old_name, source: std::mem::replace(&mut p.source, source), format: old_format }
             }
             Op::SetContent { id, width, height, file_size, content_hash, preview_only, preview_checked } => {
                 let p = self.photo_mut(id)?;
+                if p.content_hash != content_hash {
+                    p.metadata_search = None;
+                }
                 Op::SetContent {
                     id,
                     width: std::mem::replace(&mut p.width, width),

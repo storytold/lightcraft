@@ -12,6 +12,7 @@ proptest! {
             data[..h.len()].copy_from_slice(h);
         }
         let _ = extract(&data);
+        assert!(lightcraft_meta::search_metadata(&data).valid());
         let _ = read_exif(&data);
         let _ = parse_iptc(&data);
     }
@@ -19,6 +20,25 @@ proptest! {
     #[test]
     fn random_text_xmp_never_panics(s in ".{0,400}") {
         let _ = parse_xmp(&s);
+    }
+
+    #[test]
+    fn random_comfy_text_chunks_never_panic(data in proptest::collection::vec(any::<u8>(), 0..1000), kind in 0usize..3) {
+        let typ = [b"tEXt", b"zTXt", b"iTXt"][kind];
+        let mut payload = b"prompt\0".to_vec();
+        payload.extend_from_slice(&data);
+        let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+        png.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+        png.extend_from_slice(typ);
+        png.extend_from_slice(&payload);
+        let mut crc = crc32fast::Hasher::new();
+        crc.update(typ);
+        crc.update(&payload);
+        png.extend_from_slice(&crc.finalize().to_be_bytes());
+        let _ = extract(&png);
+        assert!(lightcraft_meta::search_metadata(&png).valid());
+        let fields=lightcraft_meta::png_text_fields(&png);
+        let _=lightcraft_meta::comfy_display_fields(&fields,None);
     }
 
     /// Merging into arbitrary (also damaged) packets never panics, and a merge that succeeds

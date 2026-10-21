@@ -811,7 +811,7 @@ fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         }
         ui.add_space(10.0);
         if text_button(ui, "allMetadata", crate::i18n::tr("All Metadata…"), false)
-            .on_hover_text(crate::i18n::tr("Every EXIF, GPS and XMP field in the file"))
+            .on_hover_text(crate::i18n::tr("EXIF, GPS, XMP and embedded PNG generator metadata"))
             .clicked()
         {
             let _ = app.run("dialog.allMetadata", json!({}));

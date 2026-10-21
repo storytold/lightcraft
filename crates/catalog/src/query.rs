@@ -20,7 +20,9 @@ pub enum RatingOp {
 #[serde(default, rename_all = "camelCase")]
 pub struct Filter {
     /// Free-text search: every token must match filename, title, caption, keywords, camera, lens,
-    /// location or format. Tokens like `rating:3`, `flag:pick`, `iso:>800`, `camera:x2` are fielded.
+    /// location, format or indexed embedded metadata. Fielded tokens include `meta:cat`,
+    /// `meta:software=forge`, `rating:3`, `iso:>800`,
+    /// `comfy:true`, `prompt:"neon city"`, `model:flux`, `lora:detail`, `seed:123` and `steps:>20`.
     pub text: String,
     pub rating: u8,
     pub rating_op: RatingOp,
@@ -139,11 +141,38 @@ fn shuffle_rank(seed: u64, id: PhotoId) -> u64 {
 pub(crate) struct Prepared {
     root: Option<String>,
     only: Option<std::collections::HashSet<PhotoId>>,
+    tokens: Vec<String>,
+}
+
+/// Quotes group a phrase, including after a field colon. Lower-case once per query pass.
+fn search_tokens(text: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut token = String::new();
+    let mut quoted = false;
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '"' && (quoted || token.is_empty() || token.ends_with(':')) {
+            quoted = !quoted;
+        } else if c == '\\' && quoted && chars.peek().is_some_and(|c| matches!(c, '"' | '\\')) {
+            if let Some(c) = chars.next() {
+                token.push(c);
+            }
+        } else if c.is_whitespace() && !quoted {
+            if !token.is_empty() {
+                tokens.push(std::mem::take(&mut token).to_lowercase());
+            }
+        } else {
+            token.push(c);
+        }
+    }
+    if !token.is_empty() {
+        tokens.push(token.to_lowercase());
+    }
+    tokens
 }
 
 fn token_matches(p: &Photo, tok: &str) -> bool {
-    let t = tok.to_lowercase();
-    if let Some((field, val)) = t.split_once(':') {
+    if let Some((field, val)) = tok.split_once(':') {
         let num = |s: &str| -> Option<(char, f64)> {
             let (op, rest) = match s.chars().next()? {
                 c @ ('>' | '<' | '=') => (c, &s[1..]),
@@ -165,6 +194,30 @@ fn token_matches(p: &Photo, tok: &str) -> bool {
             None => false,
         };
         return match field {
+            "meta" | "metadata" => metadata_matches(p, val) || p.metadata_search.as_ref().is_some_and(|m| m.matches(val)),
+            "comfy" => match val {
+                "true" | "yes" => p.metadata_search.as_ref().is_some_and(|m| m.comfy),
+                "false" | "no" => !p.metadata_search.as_ref().is_some_and(|m| m.comfy),
+                _ => false,
+            },
+            "prompt" | "positive" | "negative" => p.metadata_search.as_ref().is_some_and(|m| {
+                let fields = if field == "prompt" { &["prompt", "positive", "negative"][..] } else { &[field][..] };
+                fields.iter().any(|f| m.values(f).any(|v| v.contains(val)))
+            }),
+            "model" | "lora" | "sampler" | "scheduler" | "vae" | "node" => {
+                p.metadata_search.as_ref().is_some_and(|m| m.values(field).any(|v| v.contains(val)))
+            }
+            // Seeds are integers: f64 equality would conflate neighbouring seeds above 2^53.
+            "seed" => val
+                .strip_prefix('=')
+                .unwrap_or(val)
+                .parse::<u64>()
+                .ok()
+                .is_some_and(|seed| p.metadata_search.as_ref().is_some_and(|m| m.values("seed").any(|v| v.parse::<u64>().ok() == Some(seed)))),
+            "steps" | "cfg" | "denoise" | "width" | "height" => p
+                .metadata_search
+                .as_ref()
+                .is_some_and(|m| m.values(field).filter_map(|v| v.parse::<f64>().ok()).any(|v| v.is_finite() && cmp(v, val))),
             "rating" | "stars" => cmp(p.rating as f64, val),
             "flag" => Flag::parse(val) == Some(p.flag),
             "label" | "color" => p.label.is_some_and(|l| format!("{l:?}").eq_ignore_ascii_case(val)),
@@ -181,17 +234,59 @@ fn token_matches(p: &Photo, tok: &str) -> bool {
             "copy" | "virtual" => (val == "true" || val == "yes") == p.copy_of.is_some(),
             "name" | "file" => p.file_name.to_lowercase().contains(val),
             // Not a known field: the colon is part of a plain word ("10:30", "Re:").
-            _ => text_matches(p, &t),
+            _ => text_matches(p, tok),
         };
     }
-    text_matches(p, &t)
+    text_matches(p, tok)
 }
 
 /// Whether the lower-cased word `t` is in the file name, title, caption, camera, lens, location,
 /// format or a keyword of `p`.
 fn text_matches(p: &Photo, t: &str) -> bool {
-    let hay = [&p.file_name, &p.meta.title, &p.meta.caption, &p.meta.camera, &p.meta.lens, &p.meta.location, &p.format];
-    hay.iter().any(|h| h.to_lowercase().contains(t)) || p.meta.keywords.iter().any(|k| k.to_lowercase().contains(t))
+    let hay = [
+        &p.file_name,
+        &p.meta.title,
+        &p.meta.caption,
+        &p.meta.camera,
+        &p.meta.lens,
+        &p.meta.location,
+        &p.format,
+        &p.meta.city,
+        &p.meta.state,
+        &p.meta.country,
+        &p.meta.creator,
+        &p.meta.copyright,
+        &p.meta.usage_terms,
+        &p.meta.copyright_url,
+        &p.meta.alt_text,
+        &p.meta.extended_description,
+        &p.meta.shutter,
+    ];
+    hay.iter().any(|h| h.to_lowercase().contains(t))
+        || p.meta.keywords.iter().any(|k| k.to_lowercase().contains(t))
+        || p.metadata_search.as_ref().is_some_and(|m| m.contains(t))
+}
+
+fn metadata_matches(p: &Photo, query: &str) -> bool {
+    let (key, value) = query.split_once('=').unwrap_or(("", query));
+    let fields = [
+        ("title", &p.meta.title),
+        ("caption", &p.meta.caption),
+        ("camera", &p.meta.camera),
+        ("lens", &p.meta.lens),
+        ("location", &p.meta.location),
+        ("city", &p.meta.city),
+        ("state", &p.meta.state),
+        ("country", &p.meta.country),
+        ("creator", &p.meta.creator),
+        ("copyright", &p.meta.copyright),
+        ("usage terms", &p.meta.usage_terms),
+        ("copyright url", &p.meta.copyright_url),
+        ("alt text", &p.meta.alt_text),
+        ("extended description", &p.meta.extended_description),
+    ];
+    fields.iter().any(|(name, text)| name.contains(key) && text.to_lowercase().contains(value))
+        || "keywords".contains(key) && p.meta.keywords.iter().any(|k| k.to_lowercase().contains(value))
 }
 
 /// Whether `p` has a named face region called `name` (case-insensitive).
@@ -282,13 +377,17 @@ impl Filter {
 
     /// [`Filter::prepare`] for testing one photo (the `only` ids are looked through, not hashed).
     pub(crate) fn prepare_one(&self) -> Prepared {
-        Prepared { root: self.library_root(), only: None }
+        Prepared { root: self.library_root(), only: None, tokens: search_tokens(&self.text) }
     }
 
     /// What [`Filter::matches_in`] needs worked out once for a pass over many photos rather than
     /// once per photo: the library folder's identity and the `only` ids as a set.
     pub(crate) fn prepare(&self) -> Prepared {
-        Prepared { root: self.library_root(), only: (!self.only.is_empty()).then(|| self.only.iter().copied().collect()) }
+        Prepared {
+            root: self.library_root(),
+            only: (!self.only.is_empty()).then(|| self.only.iter().copied().collect()),
+            tokens: search_tokens(&self.text),
+        }
     }
 
     /// [`Filter::library_folder`] as a folder identity ([`folder_key`]); `None` without a choice.
@@ -409,7 +508,7 @@ impl Filter {
         {
             return false;
         }
-        self.text.split_whitespace().all(|tok| token_matches(p, tok))
+        prepared.tokens.iter().all(|tok| token_matches(p, tok))
     }
 }
 

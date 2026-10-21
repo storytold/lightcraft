@@ -223,6 +223,17 @@ fn enumerated(group: &str, tag: u16, v: i64) -> Option<&'static str> {
 fn value_text(group: &str, tag: u16, v: &Value) -> String {
     let single = |x: i64| enumerated(group, tag, x).map(str::to_string).unwrap_or_else(|| x.to_string());
     match v {
+        Value::Undefined(b) | Value::Byte(b) if tag == 0x9286 && b.starts_with(b"ASCII\0\0\0") => {
+            String::from_utf8_lossy(b.get(8..b.len().min(8200)).unwrap_or_default()).trim_end_matches('\0').to_string()
+        }
+        Value::Undefined(b) | Value::Byte(b) if tag == 0x9286 && b.starts_with(b"UNICODE\0") => {
+            let text = b.get(8..b.len().min(8200)).unwrap_or_default();
+            let little = text.starts_with(&[0xff, 0xfe]);
+            let text = if little || text.starts_with(&[0xfe, 0xff]) { text.get(2..).unwrap_or_default() } else { text };
+            let words: Vec<_> =
+                text.as_chunks::<2>().0.iter().map(|b| if little { u16::from_le_bytes(*b) } else { u16::from_be_bytes(*b) }).collect();
+            String::from_utf16_lossy(&words).trim_end_matches('\0').to_string()
+        }
         Value::Ascii(s) => s.trim().to_string(),
         Value::Short(a) if a.len() == 1 => single(a[0] as i64),
         Value::Long(a) if a.len() == 1 => single(a[0] as i64),

@@ -3253,6 +3253,7 @@ dependencies = [
  "lightcraft-tiff",
  "log",
  "miniz_oxide 0.8.9",
+ "png",
  "rayon",
  "serde",
  "serde_json",
@@ -3378,8 +3379,10 @@ dependencies = [
 name = "lightcraft-meta"
 version = "0.10.0"
 dependencies = [
+ "crc32fast",
  "lightcraft-geom",
  "lightcraft-tiff",
+ "miniz_oxide 0.8.9",
  "proptest",
  "quick-xml 0.38.4",
  "serde",

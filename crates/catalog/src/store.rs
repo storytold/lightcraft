@@ -13,6 +13,14 @@ use std::sync::{Arc, Mutex};
 pub trait Store: Send {
     /// The whole file, or `None` if it doesn't exist.
     fn read(&mut self, name: &str) -> io::Result<Option<Vec<u8>>>;
+    /// Bounded read for disposable caches. Hosts should override this to bound the allocation too.
+    fn read_limited(&mut self, name: &str, limit: usize) -> io::Result<Option<Vec<u8>>> {
+        let data = self.read(name)?;
+        if data.as_ref().is_some_and(|b| b.len() > limit) {
+            return Err(io::Error::other("file exceeds cache limit"));
+        }
+        Ok(data)
+    }
     /// Replace a file atomically: after a crash either the old or the new content is visible,
     /// never a mix (native: write temp + fsync + rename + fsync directory).
     fn write_atomic(&mut self, name: &str, data: &[u8]) -> io::Result<()>;
@@ -84,6 +92,20 @@ fn create_staging(tmp: &std::path::Path) -> io::Result<std::fs::File> {
 }
 
 impl Store for FsStore {
+    fn read_limited(&mut self, name: &str, limit: usize) -> io::Result<Option<Vec<u8>>> {
+        use std::io::Read;
+        let file = match std::fs::File::open(self.path(name)) {
+            Ok(f) => f,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e),
+        };
+        let mut bytes = Vec::new();
+        file.take(limit.saturating_add(1) as u64).read_to_end(&mut bytes)?;
+        if bytes.len() > limit {
+            return Err(io::Error::other("file exceeds cache limit"));
+        }
+        Ok(Some(bytes))
+    }
     fn read(&mut self, name: &str) -> io::Result<Option<Vec<u8>>> {
         match std::fs::read(self.path(name)) {
             Ok(b) => Ok(Some(b)),
@@ -244,7 +266,21 @@ impl Store for MemStore {
 
 #[cfg(test)]
 mod tests_staging {
+    #[cfg(unix)]
     use super::*;
+
+    #[test]
+    fn cache_reads_are_bounded_before_allocating_the_whole_file() {
+        use super::{FsStore, Store};
+        let dir = std::env::temp_dir().join(format!("lc-bounded-cache-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut store = FsStore::open(&dir).unwrap();
+        store.write_atomic("cache", b"12345").unwrap();
+        assert_eq!(store.read_limited("cache", 5).unwrap().unwrap(), b"12345");
+        assert!(store.read_limited("cache", 4).is_err());
+        assert_eq!(store.read_limited("missing", 4).unwrap(), None);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     /// A link planted at a staging name (`<name>.tmp`) is removed, never followed: the file it points to keeps its
     /// bytes and the save still lands (issue #1502).

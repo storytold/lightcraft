@@ -281,19 +281,31 @@ pub(crate) fn as_shot_wb_op(id: lightcraft_catalog::PhotoId, ph: &lightcraft_cat
     (ph.develops_raw() && !ph.relative_wb() && ph.as_shot_wb != Some(read)).then_some(Op::SetAsShotWb { id, wb: Some(read) })
 }
 
-/// The ops that bring photo `id` and its virtual copies up to date with what their file is now
-/// (`info`, a fresh probe), appended to `ops`; the photos they change are appended to `changed`.
-/// Reload and the preview-only recheck (`library.recheckPreviewOnly`) share it.
+/// Group copies once per refresh batch, so reindexing N originals does not scan N photos N times.
+pub(crate) fn copies_by_original(
+    cat: &lightcraft_catalog::Catalog,
+) -> std::collections::HashMap<lightcraft_catalog::PhotoId, Vec<lightcraft_catalog::PhotoId>> {
+    let mut copies = std::collections::HashMap::<_, Vec<_>>::new();
+    for p in cat.photos() {
+        if let Some(original) = p.copy_of {
+            copies.entry(original).or_default().push(p.id);
+        }
+    }
+    copies
+}
+
+/// Bring an original and `copies` up to date from a fresh probe. Reload and preview-only recheck share this.
 pub(crate) fn reload_ops(
     cat: &lightcraft_catalog::Catalog,
     id: lightcraft_catalog::PhotoId,
+    copies: &[lightcraft_catalog::PhotoId],
     info: &crate::media::ProbeInfo,
     ops: &mut Vec<Op>,
     changed: &mut Vec<lightcraft_catalog::PhotoId>,
 ) {
     let Some(ph) = cat.photo(id) else { return };
     // camera fields the catalog lacks (e.g. a raw imported before its format was read) are filled in;
-    // nothing already set is overwritten
+    // user fields already set are kept; read-only generation metadata follows the source
     let meta_ops = fill_missing_meta(id, ph, info);
     let mut mine: Vec<Op> =
         content_op(id, ph, info.clone()).into_iter().chain(meta_ops).chain(lens_ops(id, ph, info)).chain(as_shot_wb_op(id, ph, info)).collect();
@@ -302,9 +314,13 @@ pub(crate) fn reload_ops(
         changed.push(id);
     }
     // virtual copies share the file
-    for c in cat.photos().filter(|c| c.copy_of == Some(id)) {
-        let theirs: Vec<Op> =
-            content_op(c.id, c, info.clone()).into_iter().chain(lens_ops(c.id, c, info)).chain(as_shot_wb_op(c.id, c, info)).collect();
+    for c in copies.iter().filter_map(|id| cat.photo(*id)) {
+        let theirs: Vec<Op> = content_op(c.id, c, info.clone())
+            .into_iter()
+            .chain(fill_missing_meta(c.id, c, info))
+            .chain(lens_ops(c.id, c, info))
+            .chain(as_shot_wb_op(c.id, c, info))
+            .collect();
         if !theirs.is_empty() {
             ops.extend(theirs);
             changed.push(c.id);
@@ -312,31 +328,53 @@ pub(crate) fn reload_ops(
     }
 }
 
-/// Re-read photos whose files changed on disk (an external editor saved them): new size,
-/// dimensions and content hash, cached sources dropped. → {reloaded: [ids]}
+/// Reindex metadata synchronously, using the existing import probes and one Undo step.
 fn reload(s: &mut Session, p: &Value) -> Result<Value> {
-    let ids = s.targets(p)?;
-    let paths: Vec<(lightcraft_catalog::PhotoId, String)> = ids
-        .iter()
-        .filter_map(|id| match s.catalog.photo(*id).map(|ph| ph.source.clone()) {
-            Some(Source::File { path }) => Some((*id, path)),
+    let mut seen = std::collections::HashSet::new();
+    let paths: Vec<_> = s
+        .targets(p)?
+        .into_iter()
+        .map(|id| s.catalog.photo(id).and_then(|p| p.copy_of).unwrap_or(id))
+        .filter(|id| seen.insert(*id))
+        .filter_map(|id| match &s.catalog.photo(id)?.source {
+            Source::File { path } => Some((id, path.clone())),
             _ => None,
         })
         .collect();
-    let probed = crate::import::probe_paths(s, &paths.iter().map(|(_, p)| p.clone()).collect::<Vec<_>>());
+    let probed = crate::import::probe_paths(s, &paths.iter().map(|(_, path)| path.clone()).collect::<Vec<_>>());
+    let copies = copies_by_original(&s.catalog);
     let mut ops = Vec::new();
     let mut reloaded = Vec::new();
-    for ((id, _), info) in paths.into_iter().zip(probed) {
-        let Ok(info) = info else { continue };
-        reload_ops(&s.catalog, id, &info, &mut ops, &mut reloaded);
+    let mut failed = Vec::new();
+    let mut indexed = Vec::new();
+    for ((id, path), info) in paths.into_iter().zip(probed) {
+        match info {
+            Ok(info) => {
+                reload_ops(&s.catalog, id, copies.get(&id).map(Vec::as_slice).unwrap_or(&[]), &info, &mut ops, &mut reloaded);
+                indexed.push((id, info));
+            }
+            Err(error) => failed.push(json!({"id":id.0,"path":path,"error":error})),
+        }
     }
     for id in &reloaded {
         s.media.forget(*id);
     }
     if !ops.is_empty() {
         s.commit("Reload Changed Files", Op::Batch { ops })?;
+        s.skip_auto_write = true;
     }
-    Ok(json!({"reloaded": reloaded.iter().map(|i| i.0).collect::<Vec<_>>()}))
+    let mut included: std::collections::HashSet<_> = reloaded.iter().copied().collect();
+    let indexed: Vec<_> = indexed
+        .iter()
+        .flat_map(|(id, info)| std::iter::once(*id).chain(copies.get(id).into_iter().flatten().copied()).map(move |id| (id, info)))
+        .collect();
+    let namings = s.sidecar_namings(&indexed.iter().map(|(id, _)| *id).collect::<Vec<_>>());
+    for ((id, info), naming) in indexed.into_iter().zip(namings) {
+        if s.index_metadata_search(id, info, naming) && included.insert(id) {
+            reloaded.push(id);
+        }
+    }
+    Ok(json!({"reloaded":reloaded.iter().map(|id|id.0).collect::<Vec<_>>(),"failed":failed}))
 }
 
 /// Duplicate: copy the file next to itself (`<name>-copy`, never overwriting) and add it with the
@@ -401,7 +439,7 @@ pub fn edit_specs() -> Vec<CommandSpec> {
             "Reload from Disk",
             ["Photo"],
             None,
-            "{ids?} — re-read photos whose files changed on disk (e.g. saved by an external editor), or raws shown from their embedded preview that can be decoded now; camera fields the catalog lacks are filled in, and so is the lens data the file carries (an untouched photo then gets its lens correction turned on as import would; an edited one keeps its settings) → {reloaded}",
+            "{ids?} — re-read photos whose files changed on disk, or reindex existing ComfyUI PNG metadata; camera fields the catalog lacks are filled in, and so is the lens data the file carries (an untouched photo then gets its lens correction turned on as import would; an edited one keeps its settings). Derived search metadata is replaced, including when removed from the source. Never writes image files or sidecars → {reloaded, failed: [{id, path, error}]}",
             has_selection,
             reload
         ),
