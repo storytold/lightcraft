@@ -27,6 +27,7 @@ pub mod export_task;
 mod find_similar;
 mod focus_scan;
 mod frame_rate;
+pub mod hashing;
 pub mod headless;
 pub mod i18n;
 pub mod icons;
