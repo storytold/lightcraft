@@ -40,6 +40,7 @@ mod grid;
 mod grid_drag;
 mod guided_guides;
 mod histogram_drag;
+mod hq_preview;
 mod import_recipe;
 mod import_scan_note;
 mod import_thumbnails;

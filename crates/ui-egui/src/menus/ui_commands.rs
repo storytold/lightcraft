@@ -96,6 +96,8 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.navigate", "Set Image Zoom and Pan", None, ""),
     ("view.zoomIn", "Zoom In", Some("Cmd+="), "View"),
     ("view.zoomOut", "Zoom Out", Some("Cmd+-"), "View"),
+    // the loupe below 100 % shows the full-resolution render scaled down (slow on big photos)
+    ("view.highQualityPreview", "High Quality Preview", None, "View"),
     // Library grids only (Photo Grid, Square Grid, People): the bottom-bar slider's step by key
     ("view.thumbSizeUp", "Increase Grid Thumbnail Size", Some("="), "View"),
     ("view.importThumbSize", "Import Thumbnail Size", None, ""),

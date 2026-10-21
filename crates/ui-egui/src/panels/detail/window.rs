@@ -68,9 +68,13 @@ pub(super) fn request_window(app: &mut LightcraftApp, c: &WindowCtx, v: &WindowV
         to_px * (v.visible.bottom() - v.target.top()),
     );
     let win = crate::region::window_for(fw, fh, visible, crate::region::max_span(c.texture_side))?;
-    // a window waits for the original another window job is decoding (see `defer_window`)
-    let original_held = app.session.media.has_source(c.id, lightcraft_engine::SourceLevel::for_size(fw.max(fh)));
-    let window_pending = app.renderer.is_pending(Slot::Region) || app.renderer.is_pending(Slot::RegionBefore);
+    // a window waits for the original another window job is decoding (see `defer_window`); a
+    // High Quality whole frame decodes it too
+    let hq = app.ui.high_quality_preview && !c.interacting;
+    let original_held = app.session.media.has_source(c.id, lightcraft_engine::SourceLevel::for_size(fw.max(fh)))
+        || (hq && app.session.media.has_source(c.id, lightcraft_engine::SourceLevel::Full));
+    let window_pending =
+        app.renderer.is_pending(Slot::Region) || app.renderer.is_pending(Slot::RegionBefore) || (hq && app.renderer.is_pending(Slot::Main));
     if crate::region::defer_window(window_pending, original_held) {
         return if v.before { app.region_before_view } else { app.region_view }.filter(|w| w.photo == c.id);
     }
@@ -84,6 +88,19 @@ pub(super) fn request_window(app: &mut LightcraftApp, c: &WindowCtx, v: &WindowV
     let Some(job) = job else {
         app.window_refused = Some((c.id, c.look, frame_edge));
         return None;
+    };
+    // High Quality Preview: below 100 % the window is cut from the native frame (not while dragging)
+    let job = if hq {
+        let (job, state) = app.session.high_quality(job);
+        let refused = matches!(state, lightcraft_engine::hq_preview::HqState::Refused { .. });
+        app.hq_report.insert(if v.before { "windowBefore" } else { "window" }, state);
+        if refused {
+            app.window_refused = Some((c.id, c.look, frame_edge));
+            return None;
+        }
+        job
+    } else {
+        job
     };
     // a drag renders drafts of the window, as it does of the whole frame. The Before tile stays
     // plain; the After tile carries the same mask overlay as the whole-frame render.

@@ -10,6 +10,14 @@
   (and Reset) get it, photos you already edited keep their grain until you choose Photo ▸ Update to Current Process.
   See [film grain](grain.md).
 
+### High Quality Preview
+- View ▸ High Quality Preview makes the zoomed-out loupe show the full-resolution render scaled down, which is what a
+  full-size export writes. Turn it on when a photo with very fine, high-contrast detail (stars, line art, fractals)
+  under a strong curve or a big exposure looks different zoomed in than at Fit. It is slower on big photos, so it is
+  off by default; slider drags stay fast and the sharp version follows when you let go. HDR output, and photos too big to
+  render whole in the computer's memory (in the browser: over 24 MP), keep the normal preview, which can still differ
+  from the export.
+
 ### Colour noise reduction (process V6)
 - Colour noise reduction removes colour noise at the raw default 25, where it used to leave most of it, and keeps
   colour edges at high values instead of bleeding them into fringes (issue #815). It filters the colour differences

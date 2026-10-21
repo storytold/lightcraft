@@ -806,6 +806,10 @@ struct LoupeAsk {
 /// thumbnail shows meanwhile, and a render queued for a photo already left is dropped. Otherwise
 /// the loupe's own render is requested. Whether the photo is still settling.
 fn request_main_or_settle(app: &mut LightcraftApp, ui: &egui::Ui, a: &LoupeAsk, size: [usize; 2], whole_draft: bool, now: f64) -> bool {
+    // High Quality Preview off: nothing to report for `ui.inspect`
+    if !app.ui.high_quality_preview {
+        app.hq_report.clear();
+    }
     let settling = !a.interacting && app.loupe_timing.settling(a.id, now);
     if !settling {
         request_main(app, ui, a, size, whole_draft);
@@ -939,6 +943,9 @@ fn request_main(app: &mut LightcraftApp, ui: &egui::Ui, a: &LoupeAsk, [rw, rh]: 
         // the worker, so the window draws it texel for texel instead of shrinking it with 2-tap
         // sampling (the render is up to a 64 px step larger, or the preview level)
         let job = if interacting { job } else { job.with_display_fit(fit_px[0], fit_px[1]) };
+        // High Quality Preview: the full-resolution render averaged in linear light straight to that
+        // drawn size (no Lanczos pass); a drag's drafts stay fast
+        let job = if app.ui.high_quality_preview && !interacting { hq_job(app, "main", job) } else { job };
         let job = job.with_overlay(overlay).with_proof(app.ui.soft_proof.then_some(app.ui.proof));
         let job = job.with_hidden_grading(app.ui.grading_hidden_for(id));
         app.renderer.request(Slot::Main, job, 100);
@@ -992,8 +999,19 @@ fn request_before(app: &mut LightcraftApp, a: &LoupeAsk, [sw, sh]: [usize; 2]) {
     if let Some(job) = app.session.render_job(a.id, sw.max(8), sh.max(8), true, a.with_crop) {
         // (the same display fit as the After view, so both panes are the same texture size)
         let job = if a.interacting { job } else { job.with_display_fit(a.fit_px[0], a.fit_px[1]) };
+        // (High Quality in a drag too, as the Before side has no drafts; at rest its downscale goes
+        // straight to the display fit)
+        let job = if app.ui.high_quality_preview { hq_job(app, "before", job) } else { job };
         app.renderer.request(Slot::Before, job, 90);
     }
+}
+
+/// `job` as a High Quality Preview job ([`lightcraft_engine::Session::high_quality`]), recording
+/// what was done as `kind` for `ui.inspect`.
+fn hq_job(app: &mut LightcraftApp, kind: &'static str, job: lightcraft_engine::RenderJob) -> lightcraft_engine::RenderJob {
+    let (job, state) = app.session.high_quality(job);
+    app.hq_report.insert(kind, state);
+    job
 }
 
 /// What a view slot shows: its own render of this photo, else the stand-ins (no blank frame
