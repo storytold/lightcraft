@@ -72,6 +72,7 @@
   "Rated {}": "評分：{}",
   "Reading Lightroom catalog… {done} of {total}": "正在讀取 Lightroom 目錄… {done} / {total}",
   "Reading photos… {done} of {total}": "正在讀取照片… {done}／{total}",
+  "Waiting for {name} · {secs} s": "正在等待 {name} · {secs} 秒",
   "Reading photos… {} of {}": "正在讀取照片… {}／{}",
   "Redo {}": "重做 {}",
   "Remove “{}” from Favorites": "將「{}」從喜好項目移除",

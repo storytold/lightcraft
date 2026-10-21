@@ -598,6 +598,52 @@ fn stalled_row(h: &mut Headless) -> TaskInfo {
     h.app.session.activity.list().remove(0)
 }
 
+#[test]
+fn the_row_words_what_a_task_waits_for() {
+    let mut t = TaskInfo {
+        id: 1,
+        kind: "import",
+        label: "Importing".into(),
+        done: 3,
+        total: 25,
+        unit: Unit::Count,
+        detail: "IMG_0001.jpg".into(),
+        cancellable: true,
+        cancelling: false,
+        age_ms: 600,
+        stalled: Some(lightcraft_engine::activity::Stalled { what: "IMG_0457.jpg".into(), secs: 14 }),
+    };
+    assert_eq!(crate::panels::activity::detail_line(&t), "Waiting for IMG_0457.jpg · 14 s");
+    assert!(crate::panels::activity::offers_skip(&t), "a task that waits for a file offers Skip");
+    t.cancelling = true;
+    assert_eq!(crate::panels::activity::detail_line(&t), "Stopping…", "✕ comes first");
+    assert!(!crate::panels::activity::offers_skip(&t), "no Skip once ✕ was clicked");
+    (t.cancelling, t.stalled) = (false, None);
+    assert_eq!(crate::panels::activity::detail_line(&t), "3 of 25 · IMG_0001.jpg");
+    assert!(!crate::panels::activity::offers_skip(&t), "no Skip while nothing is waited for");
+}
+
+/// Given an import with a file whose read does not answer,
+/// When the row shows that file and Skip is clicked,
+/// Then that file counts as not readable and the other four are added.
+#[test]
+fn skip_on_a_stalled_import_row_fails_that_file_and_goes_on() {
+    let (mut h, dir, gate) = hanging_import("skip");
+    crate::import::start_paths(&mut h.app, vec![dir.to_string_lossy().to_string()]).unwrap();
+    let row = stalled_row(&mut h);
+    assert_eq!(row.kind, "import");
+    assert_eq!(row.stalled.as_ref().map(|s| s.what.as_str()), Some("IMG_hang.jpg"));
+    assert!(h.step_until(T, |h| has(h, &format!("activity:skip:{}", row.id))), "the row offers Skip");
+    assert!(has(&h, &format!("activity:cancel:{}", row.id)), "next to ✕");
+    click(&mut h, &format!("activity:skip:{}", row.id));
+    assert!(h.step_until(Duration::from_secs(30), |h| h.app.import.is_none()), "the import goes on");
+    gate.open();
+    assert_eq!(h.app.session.catalog.len(), 4, "the other files are added");
+    assert!(h.app.ui.toast.as_ref().is_some_and(|t| t.0.contains("Imported 4 photos") && t.0.contains("1 not readable")), "{:?}", h.app.ui.toast);
+    assert!(h.app.session.activity.list().is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Given an import whose read does not answer,
 /// When ✕ is pressed,
 /// Then the import ends within a second or two, "Stopping…" does not last.
@@ -666,7 +712,7 @@ fn an_import_ends_with_an_error_at_the_fourth_skipped_read() {
 }
 
 /// Given the import review's scan of a folder with a file that never answers,
-/// When its row names the file and Skip is asked for (`activity.skip`),
+/// When its row names the file and Skip is clicked,
 /// Then the review opens and lists that file as unreadable, with the skip as its reason.
 #[test]
 fn skip_on_the_review_scans_row_lists_the_file_as_unreadable() {
@@ -675,8 +721,8 @@ fn skip_on_the_review_scans_row_lists_the_file_as_unreadable() {
     let row = stalled_row(&mut h);
     assert_eq!(row.kind, "scan", "{row:?}");
     assert_eq!(row.stalled.as_ref().map(|s| s.what.as_str()), Some("IMG_hang.jpg"));
-    let r = h.request("engine.execute", json!({"command": "activity.skip", "params": {"id": row.id}}), T);
-    assert_eq!(r["ok"], true, "{r}");
+    assert!(h.step_until(T, |h| has(h, &format!("activity:skip:{}", row.id))), "the row offers Skip");
+    click(&mut h, &format!("activity:skip:{}", row.id));
     assert!(h.step_until(Duration::from_secs(30), |h| h.app.scan.is_none()), "the scan goes on");
     gate.open();
     let Some(crate::state::Dialog::Import { opts }) = &h.app.ui.dialog else { panic!("no review: {:?}", h.app.ui.dialog.is_some()) };

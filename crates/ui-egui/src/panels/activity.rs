@@ -1,7 +1,9 @@
 //! The activity stack (issue #345): every long-running task in one place, floating in the top-left corner under the
 //! top bar while something runs — a row each with its name, a progress bar, what it is working on, and ✕ for the ones
 //! that can be cancelled. The tasks come from the engine's registry ([`lightcraft_engine::activity`]); ✕ runs
-//! `activity.cancel` like any other frontend would.
+//! `activity.cancel` like any other frontend would. A task that waits on something that does not answer (an import's
+//! file on a drive that stopped responding) says what and for how long, in the caution colour, and offers Skip
+//! (`activity.skip`) next to ✕.
 
 use egui::{Align, Layout, Margin, RichText, Sense, Stroke, pos2, vec2};
 use lightcraft_engine::activity::{TaskInfo, Unit};
@@ -40,10 +42,14 @@ fn megabytes(bytes: u64) -> String {
     if mb < 10.0 { format!("{mb:.1}") } else { format!("{:.0}", mb.floor()) }
 }
 
-/// The row's second line: "Stopping…" once cancelled, else the count and what is being worked on.
-fn detail_line(t: &TaskInfo) -> String {
+/// The row's second line: "Stopping…" once cancelled, else what the task waits on without an answer ("Waiting for
+/// IMG_0457.jpg · 14 s"), else the count and what is being worked on.
+pub(crate) fn detail_line(t: &TaskInfo) -> String {
     if t.cancelling {
         return tr("Stopping…").to_string();
+    }
+    if let Some(stalled) = &t.stalled {
+        return tr_format!("Waiting for {name} · {secs} s", name = stalled.what, secs = stalled.secs);
     }
     let count = count_text(t);
     match (count.is_empty(), t.detail.is_empty()) {
@@ -71,6 +77,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
     let hidden = tasks.len().saturating_sub(shown);
     let max_height = (ctx.content_rect().height() - t.top_bar_h - 60.0).max(80.0);
     let mut cancel = None;
+    let mut skip = None;
     let mut toggle = false;
     let frame = egui::Frame::NONE.fill(t.chrome).stroke(Stroke::new(1.0, t.field_border)).corner_radius(6).inner_margin(Margin::same(MARGIN));
     egui::Area::new(egui::Id::unique("activity-stack")).order(egui::Order::Middle).fixed_pos(pos2(8.0, t.top_bar_h + 8.0)).show(ctx, |ui| {
@@ -87,8 +94,12 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     if i > 0 {
                         ui.add_space(6.0);
                     }
-                    if row(ui, &t, task, inner) {
+                    let (clicked_cancel, clicked_skip) = row(ui, &t, task, inner);
+                    if clicked_cancel {
                         cancel = Some(task.id);
+                    }
+                    if clicked_skip {
+                        skip = Some(task.id);
                     }
                 }
             });
@@ -101,6 +112,9 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
             }
         });
     });
+    if let Some(id) = skip {
+        self::skip(app, id);
+    }
     if let Some(id) = cancel {
         self::cancel(app, id);
     }
@@ -115,8 +129,8 @@ pub(crate) fn cancel(app: &mut LightcraftApp, id: u64) {
     let _ = app.session.execute("activity.cancel", &json!({"id": id}));
 }
 
-/// Carry what a job's reads are doing onto its task each frame: the file that has stopped answering is published
-/// (`TaskInfo::stalled`, in `activity.list`), and a Skip asked for (`activity.skip`) reaches the reads.
+/// Carry what a job's reads are doing onto its row, each frame: the file that has stopped answering is named there
+/// (and the row offers Skip), and a Skip asked for on the row (`activity.skip`) reaches the reads.
 pub(crate) fn follow_reads(guard: &lightcraft_engine::activity::TaskGuard, reads: &lightcraft_engine::import::ReadWatch) {
     if guard.take_skip() {
         reads.skip();
@@ -127,35 +141,68 @@ pub(crate) fn follow_reads(guard: &lightcraft_engine::activity::TaskGuard, reads
     }
 }
 
-/// One task: name and ✕, the bar, the detail line. True when ✕ was clicked.
-fn row(ui: &mut egui::Ui, t: &Tokens, task: &TaskInfo, width: f32) -> bool {
-    let mut clicked = false;
+/// Skip on task `id`'s row: give up the file it waits for. The task may have just got its answer: nothing to tell the
+/// user then, so the command goes to the engine directly, as ✕ does.
+pub(crate) fn skip(app: &mut LightcraftApp, id: u64) {
+    let _ = app.session.execute("activity.skip", &json!({"id": id}));
+}
+
+/// Whether the row shows the file the task waits for with Skip: not once ✕ was clicked ("Stopping…" comes first).
+pub(crate) fn offers_skip(task: &TaskInfo) -> bool {
+    task.stalled.is_some() && !task.cancelling
+}
+
+/// One task: name, Skip and ✕, the bar, the detail line. True for each of ✕ and Skip that was clicked.
+fn row(ui: &mut egui::Ui, t: &Tokens, task: &TaskInfo, width: f32) -> (bool, bool) {
+    let (mut cancel, mut skip) = (false, false);
     let r = ui.vertical(|ui| {
         ui.set_width(width);
         ui.horizontal(|ui| {
             let cross = task.cancellable && !task.cancelling;
-            let label_w = if cross { width - CROSS - 6.0 } else { width };
+            let can_skip = offers_skip(task);
+            let skip_text = tr("Skip");
+            let skip_w = if can_skip { ui.painter().layout_no_wrap(skip_text.to_string(), t.font(11.5), t.accent).size().x } else { 0.0 };
+            let mut label_w = width;
+            if cross {
+                label_w -= CROSS + 6.0;
+            }
+            if can_skip {
+                label_w -= skip_w + 8.0;
+            }
             ui.allocate_ui_with_layout(vec2(label_w, 18.0), Layout::left_to_right(Align::Center), |ui| {
                 // the whole width, so the cross lands at the right edge however short the name
                 ui.set_width(label_w);
                 ui.add(egui::Label::new(RichText::new(tr(&task.label)).font(t.font(12.5)).color(t.text)).truncate());
             });
+            if can_skip {
+                // ids tied to the task, not to the layout's running counter: Skip comes and goes before ✕ in this row, and a
+                // counted id would hand ✕'s keyboard focus to Skip when a stall starts
+                let (rect, _) = ui.allocate_exact_size(vec2(skip_w, 18.0), Sense::hover());
+                let resp = ui.interact(rect, egui::Id::unique(("activity-skip", task.id)), Sense::click());
+                crate::widgets::announce(&resp, tr("Skip"));
+                let colour = if resp.hovered() { t.text } else { t.accent };
+                ui.painter().text(rect.left_center(), egui::Align2::LEFT_CENTER, tr("Skip"), t.font(11.5), colour);
+                register(ui, format!("activity:skip:{}", task.id), rect);
+                skip = resp.on_hover_text(tr("Give up on this file and go on")).clicked();
+            }
             if cross {
-                let (rect, resp) = ui.allocate_exact_size(vec2(CROSS, CROSS), Sense::click());
+                let (rect, _) = ui.allocate_exact_size(vec2(CROSS, CROSS), Sense::hover());
+                let resp = ui.interact(rect, egui::Id::unique(("activity-cancel", task.id)), Sense::click());
                 crate::widgets::announce(&resp, crate::i18n::tr("Cancel"));
                 paint(ui.painter(), rect.shrink(2.0), Icon::Close, if resp.hovered() { t.text } else { t.icon });
                 register(ui, format!("activity:cancel:{}", task.id), rect);
-                clicked = resp.on_hover_text(tr("Cancel")).clicked();
+                cancel = resp.on_hover_text(tr("Cancel")).clicked();
             }
         });
         bar(ui, task, width);
         let line = detail_line(task);
         if !line.is_empty() {
-            ui.add(egui::Label::new(RichText::new(line).font(t.font(11.0)).color(t.text_dim)).truncate());
+            let colour = if offers_skip(task) { t.caution } else { t.text_dim };
+            ui.add(egui::Label::new(RichText::new(line).font(t.font(11.0)).color(colour)).truncate());
         }
     });
     register(ui, format!("activity:row:{}", task.id), r.response.rect);
-    clicked
+    (cancel, skip)
 }
 
 /// The progress bar, named after its task for screen readers; while the amount of work isn't

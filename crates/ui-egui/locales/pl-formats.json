@@ -94,6 +94,7 @@
   "Rated {}": "Ocena: {}",
   "Reading Lightroom catalog… {done} of {total}": "Odczytywanie katalogu Lightroom… {done} z {total}",
   "Reading photos… {done} of {total}": "Odczytywanie zdjęć… {done} z {total}",
+  "Waiting for {name} · {secs} s": "Oczekiwanie na {name} · {secs} s",
   "Reading photos… {} of {}": "Odczytywanie zdjęć… {} z {}",
   "Redo {}": "Ponów {}",
   "Remove “{name}” and its {count} photo{} from the library?": "Usunąć „{name}” i jego zdjęcia ({count}){:.0} z biblioteki?",

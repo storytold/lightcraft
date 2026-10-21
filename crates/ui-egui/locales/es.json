@@ -2365,5 +2365,9 @@
   "Import dropped files without review": "Importar los archivos soltados sin revisión",
   "An import is running": "Hay una importación en curso",
   "An import is running. Drop photos when it has finished": "Hay una importación en curso. Suelta las fotos cuando termine",
-  "Finish Lightroom catalog import before adding photos": "Termina la importación del catálogo de Lightroom antes de añadir fotos"
+  "Finish Lightroom catalog import before adding photos": "Termina la importación del catálogo de Lightroom antes de añadir fotos",
+  "Skip a file that stops answering during an import or scan": "Omitir un archivo que deja de responder durante una importación o un análisis",
+  "When a file on a network drive stops answering while an import, the Add Photos review, a Local folder or Synchronize Folder reads it, the task's row in the activity stack says \"Waiting for IMG_0457.jpg\" with the seconds it has gone without progress, and offers Skip next to ✕. A big file that is slow but still being read is not reported.": "Cuando un archivo de una unidad de red deja de responder mientras lo lee una importación, la revisión de Añadir fotos, una carpeta de Local o Sincronizar carpeta, la fila de la tarea en la pila de actividad indica «Esperando a IMG_0457.jpg» con los segundos sin avance y ofrece Omitir junto a ×. Un archivo grande que se lee despacio pero sin parar no se señala.",
+  "Skip gives up that one file: an import lists it as not readable (\"skipped: no answer after 14 s\"), the review and Synchronize Folder list it as unreadable, and the work goes on with the next files. When several files wait, Skip takes the one that is named, then the next is named.": "Omitir abandona ese único archivo: una importación lo registra como ilegible («omitido: sin respuesta tras 14 s»), la revisión y Sincronizar carpeta lo listan como ilegible, y el trabajo sigue con los siguientes archivos. Si varios archivos esperan, Omitir toma el que aparece nombrado y después se nombra el siguiente.",
+  "Give up on this file and go on": "Abandonar este archivo y continuar"
 }

@@ -57,6 +57,7 @@
   "Rated {}": "已评级 {0}",
   "Reading Lightroom catalog… {done} of {total}": "正在读取 Lightroom 目录… {done} / {total}",
   "Reading photos… {done} of {total}": "正在读取照片… {total} 张中的 {done} 张",
+  "Waiting for {name} · {secs} s": "正在等待 {name} · {secs} 秒",
   "Redo {}": "重做：{0}",
   "Remove “{}” from Favorites": "从收藏夹中移除“{0}”",
   "Removed from {}": "已从 {} 移除",

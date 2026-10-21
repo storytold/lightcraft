@@ -3447,5 +3447,9 @@
   "Import dropped files without review": "Abgelegte Dateien ohne Prüfung importieren",
   "An import is running": "Ein Import läuft",
   "An import is running. Drop photos when it has finished": "Ein Import läuft. Lege die Fotos ab, wenn er fertig ist",
-  "Finish Lightroom catalog import before adding photos": "Schließe den Import des Lightroom-Katalogs ab, bevor du Fotos hinzufügst"
+  "Finish Lightroom catalog import before adding photos": "Schließe den Import des Lightroom-Katalogs ab, bevor du Fotos hinzufügst",
+  "Skip a file that stops answering during an import or scan": "Eine Datei überspringen, die bei Import oder Suche nicht mehr antwortet",
+  "When a file on a network drive stops answering while an import, the Add Photos review, a Local folder or Synchronize Folder reads it, the task's row in the activity stack says \"Waiting for IMG_0457.jpg\" with the seconds it has gone without progress, and offers Skip next to ✕. A big file that is slow but still being read is not reported.": "Antwortet eine Datei auf einem Netzlaufwerk nicht mehr, während ein Import, die Prüfung von „Fotos hinzufügen“, ein lokaler Ordner oder „Ordner synchronisieren“ sie liest, steht in der Zeile der Aufgabe in der Aktivitätsliste „Warten auf IMG_0457.jpg“ mit den Sekunden ohne Fortschritt, und neben × erscheint „Überspringen“. Eine große Datei, die langsam, aber weiter gelesen wird, wird nicht gemeldet.",
+  "Skip gives up that one file: an import lists it as not readable (\"skipped: no answer after 14 s\"), the review and Synchronize Folder list it as unreadable, and the work goes on with the next files. When several files wait, Skip takes the one that is named, then the next is named.": "„Überspringen“ gibt genau diese Datei auf: Ein Import führt sie als nicht lesbar auf („übersprungen: keine Antwort nach 14 s“), die Prüfung und „Ordner synchronisieren“ ebenso, und die Arbeit geht mit den nächsten Dateien weiter. Warten mehrere Dateien, nimmt „Überspringen“ die genannte, danach wird die nächste genannt.",
+  "Give up on this file and go on": "Diese Datei aufgeben und weitermachen"
 }
