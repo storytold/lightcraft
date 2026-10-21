@@ -130,6 +130,7 @@
   "Lightroom import complete: {imported} photos added": "Lightroom の読み込みが完了しました：{imported} 枚の写真を追加",
   "Lightroom import complete: {imported} photos added, {failed} failed": "Lightroom の読み込みが完了しました：{imported} 枚を追加、{failed} 枚が失敗",
   "Lightroom import complete: {imported} photos added; index warning: {warning}": "Lightroom の読み込みが完了しました：{imported} 枚を追加。インデックスの警告：{warning}",
+  "Lightroom edits were not imported for {count} photos: the catalog's develop settings could not be read": "{count} 枚の写真の Lightroom の編集は読み込まれませんでした: カタログの現像設定を読み取れません",
   "Lightroom import failed: {e}{warning}": "Lightroom の読み込みに失敗しました：{e}{warning}",
   "Lightroom inspection failed: {e}{warning}": "Lightroom の確認に失敗しました：{e}{warning}",
   "Label Set: {name}": "ラベルセット：{name}",

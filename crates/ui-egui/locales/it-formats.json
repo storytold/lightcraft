@@ -79,6 +79,7 @@
   "Lightroom catalog inspected: {photos} photos, {collections} collections, {missing} missing": "Catalogo di Lightroom esaminato: foto {photos}, raccolte {collections}, mancanti {missing}",
   "Lightroom import complete: {imported} photos added": "Importazione da Lightroom completata: foto aggiunte {imported}",
   "Lightroom import complete: {imported} photos added, {failed} failed": "Importazione da Lightroom completata: foto aggiunte {imported}, con errori {failed}",
+  "Lightroom edits were not imported for {count} photos: the catalog's develop settings could not be read": "Le modifiche di Lightroom non sono state importate per {count} foto: impossibile leggere le impostazioni di sviluppo del catalogo",
   "Lightroom import complete: {imported} photos added; index warning: {warning}": "Importazione da Lightroom completata: foto aggiunte {imported}; avviso sull'indice: {warning}",
   "Lightroom import failed: {e}{warning}": "Importazione da Lightroom non riuscita: {e}{warning}",
   "Lightroom inspection failed: {e}{warning}": "Analisi di Lightroom non riuscita: {e}{warning}",

@@ -82,6 +82,7 @@
   "Lightroom import complete: {imported} photos added": "Importation Lightroom terminée : {imported} photos ajoutées",
   "Lightroom import complete: {imported} photos added, {failed} failed": "Importation Lightroom terminée : {imported} photos ajoutées, {failed} échec(s)",
   "Lightroom import complete: {imported} photos added; index warning: {warning}": "Importation Lightroom terminée : {imported} photos ajoutées ; avertissement d’index : {warning}",
+  "Lightroom edits were not imported for {count} photos: the catalog's develop settings could not be read": "Les retouches Lightroom de {count} photos n'ont pas été importées : impossible de lire les paramètres de développement du catalogue",
   "Lightroom import failed: {e}{warning}": "Échec de l’importation Lightroom : {e}{warning}",
   "Lightroom inspection failed: {e}{warning}": "Échec de l’analyse Lightroom : {e}{warning}",
   "MIT OR Apache-2.0. Fonts: {} (OFL). Icons: original.": "MIT ou Apache-2.0. Polices : {} (OFL). Icônes : originales.",

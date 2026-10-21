@@ -186,6 +186,16 @@
   merges used to open at about 7000 K / +115 where the photos show 4000–5300 K / +8. HDRs merged before this keep
   their old white balance; merge them again.
 
+### Large Lightroom catalogs keep their edits
+- Importing a large Lightroom Classic catalog no longer drops every photo's edits when its develop settings
+  table is over 256 MiB (issue #1234); it used to finish with only a warning, and with history over the same
+  size it skipped the recovery archive's history. Tables are now read row by row, keeping only what the import
+  uses, so table size no longer matters.
+- If a catalog's develop settings can't be read at all (a damaged catalog), the import says so up front: the
+  summary leads with "Lightroom edits were not imported for N photos", and agents get `editsNotImported`.
+  Repair the catalog in Lightroom Classic (File > Optimize Catalog) and import it again with `updateExisting=true`
+  to bring the edits in.
+
 ## 2026-10-13
 
 ### Edits keep up in a large library

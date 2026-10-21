@@ -6,15 +6,91 @@
 //! than a SQL engine. It never writes its input and has no SQLite runtime
 //! dependency.
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
+use std::fs::{File, Metadata};
+use std::io::{Read, Seek, SeekFrom};
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+
+const MAX_DATABASE_BYTES: u64 = 16 << 30;
+
+/// A bounded, read-only page source. Only referenced pages are loaded, never the whole file.
+pub struct FileSource {
+    file: Mutex<File>,
+    path: PathBuf,
+    before: Metadata,
+    header: Vec<u8>,
+}
+
+impl FileSource {
+    pub fn open(path: &Path) -> Result<Self, String> {
+        if !std::fs::metadata(path).map_err(|e| e.to_string())?.is_file() {
+            return Err("SQLite catalog must be a regular file".into());
+        }
+        let mut file = File::open(path).map_err(|e| e.to_string())?;
+        let before = file.metadata().map_err(|e| e.to_string())?;
+        if !before.is_file() {
+            return Err("SQLite catalog must be a regular file".into());
+        }
+        if before.len() > MAX_DATABASE_BYTES {
+            return Err("catalog exceeds 16 GiB import limit".into());
+        }
+        let mut header = vec![0; 100];
+        file.read_exact(&mut header).map_err(|e| format!("cannot read SQLite header: {e}"))?;
+        let source = Self { file: Mutex::new(file), path: path.into(), before, header };
+        source.ensure_unchanged()?;
+        Ok(source)
+    }
+
+    pub fn header(&self) -> &[u8] {
+        &self.header
+    }
+
+    pub fn ensure_unchanged(&self) -> Result<(), String> {
+        let file = self.file.lock().map_err(|_| "SQLite page source lock poisoned")?;
+        let handle = file.metadata().map_err(|e| e.to_string())?;
+        let path = std::fs::metadata(&self.path).map_err(|_| "catalog changed during reading; close Lightroom and retry")?;
+        if !same_metadata(&self.before, &handle) || !same_metadata(&self.before, &path) {
+            return Err("catalog changed during reading; close Lightroom and retry".into());
+        }
+        Ok(())
+    }
+
+    fn page(&self, page_id: u32, size: usize) -> Result<Vec<u8>, String> {
+        let start = u64::from(page_id).checked_sub(1).and_then(|n| n.checked_mul(size as u64)).ok_or("page offset overflow")?;
+        if start.checked_add(size as u64).is_none_or(|end| end > self.before.len()) {
+            return Err(format!("page {page_id} is truncated"));
+        }
+        let mut out = vec![0; size];
+        let mut file = self.file.lock().map_err(|_| "SQLite page source lock poisoned")?;
+        file.seek(SeekFrom::Start(start)).and_then(|_| file.read_exact(&mut out)).map_err(|e| format!("cannot read SQLite page {page_id}: {e}"))?;
+        Ok(out)
+    }
+}
+
+fn same_metadata(a: &Metadata, b: &Metadata) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if a.dev() != b.dev() || a.ino() != b.ino() {
+            return false;
+        }
+    }
+    a.len() == b.len() && a.modified().ok() == b.modified().ok() && a.created().ok() == b.created().ok()
+}
 
 const MAX_PAGE_ID: u32 = 16_777_216;
 const MAX_COLUMNS: usize = 16_384;
+#[cfg(test)]
 const MAX_ROWS: usize = 1_000_000;
 const MAX_CELLS: usize = 4_000_000;
 const MAX_PAYLOAD: usize = 64 * 1024 * 1024;
-const MAX_TABLE_PAYLOAD: usize = 256 * 1024 * 1024;
 const MAX_OVERFLOW_PAGES: usize = 1_048_576;
+/// Smallest footprint of one table-leaf row: its 2-byte cell pointer plus a cell of at least a
+/// payload-length varint, a rowid varint and a one-byte record header. A walk that yields more rows
+/// than the visible database bytes allow is reading shared or overlapping cells.
+const MIN_ROW_BYTES: u64 = 5;
 const MAX_BTREE_DEPTH: usize = 64;
 
 /// Values supported by SQLite table records.
@@ -27,7 +103,7 @@ pub enum Value {
     Blob(Vec<u8>),
 }
 
-/// A row returned by [`Database::read_table`].
+/// A row handed out by [`Database::for_each_row`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct Record {
     pub values: Vec<Value>,
@@ -44,6 +120,7 @@ pub struct LiveTable {
 /// Read-only SQLite database image, with a committed WAL overlay if supplied.
 pub struct Database {
     main: Vec<u8>,
+    file: Option<FileSource>,
     overlay: HashMap<u32, Vec<u8>>,
     page_size: usize,
     reserved: usize,
@@ -60,10 +137,34 @@ enum TextEncoding {
     Utf16Be,
 }
 
+/// Why [`Database::for_each_row`] stopped early.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RowError<E> {
+    /// The table could not be read: a malformed, hostile or truncated B-tree.
+    Table(String),
+    /// The visitor returned an error; the walk stopped there.
+    Visitor(E),
+}
+
+impl<E> From<String> for RowError<E> {
+    fn from(why: String) -> Self {
+        Self::Table(why)
+    }
+}
+
+impl<E> From<&str> for RowError<E> {
+    fn from(why: &str) -> Self {
+        Self::Table(why.to_string())
+    }
+}
+
+/// Bounds of one table walk. Nothing here is retained per row: memory is what the visitor keeps.
 struct WalkState {
     seen: HashSet<u32>,
-    out: Vec<Record>,
-    payload_total: usize,
+    rows: u64,
+    payload_total: u64,
+    max_rows: u64,
+    max_payload: u64,
 }
 
 struct WalOverlay {
@@ -84,17 +185,34 @@ impl Database {
     /// The WAL argument must include its 32-byte header and only complete
     /// frames through a commit. Frames are overlaid by page number, with the
     /// final commit's database-size field defining the visible page count.
+    #[cfg(test)]
     pub fn open_with_wal(main: Vec<u8>, committed_wal: &[u8]) -> Result<Self, String> {
+        Self::open(main, None, committed_wal)
+    }
+
+    pub fn open_file_with_wal(source: FileSource, committed_wal: &[u8]) -> Result<Self, String> {
+        Self::open(source.header().to_vec(), Some(source), committed_wal)
+    }
+
+    pub fn ensure_unchanged(&self) -> Result<(), String> {
+        if let Some(file) = &self.file {
+            file.ensure_unchanged()?;
+        }
+        Ok(())
+    }
+
+    fn open(main: Vec<u8>, file: Option<FileSource>, committed_wal: &[u8]) -> Result<Self, String> {
         let main_header = main.get(..100).ok_or("truncated SQLite header")?;
         if main_header.get(..16) != Some(b"SQLite format 3\0") {
             return Err("invalid SQLite header signature".into());
         }
         let page_size = sqlite_page_size(be_u16(main_header, 16)?)?;
         validate_header_fields(main_header, page_size)?;
-        if main.len() < page_size || !main.len().is_multiple_of(page_size) {
+        let main_len = file.as_ref().map_or(main.len() as u64, |source| source.before.len());
+        if main_len < page_size as u64 || !main_len.is_multiple_of(page_size as u64) {
             return Err("SQLite image is not a whole number of pages".into());
         }
-        let main_pages = u32::try_from(main.len() / page_size).map_err(|_| "SQLite image is too large")?;
+        let main_pages = u32::try_from(main_len / page_size as u64).map_err(|_| "SQLite image is too large")?;
         if main_pages == 0 || main_pages > MAX_PAGE_ID {
             return Err("invalid SQLite image page count".into());
         }
@@ -140,7 +258,7 @@ impl Database {
             _ => return Err("unsupported SQLite text encoding".into()),
         };
 
-        let mut db = Self { main, overlay, page_size, reserved, encoding, page_count, tables: Vec::new(), rowid_aliases: HashMap::new() };
+        let mut db = Self { main, file, overlay, page_size, reserved, encoding, page_count, tables: Vec::new(), rowid_aliases: HashMap::new() };
         let schema = db.parse_schema()?;
         db.tables = schema.tables;
         db.rowid_aliases = schema.aliases;
@@ -152,8 +270,14 @@ impl Database {
         Ok(self.tables.clone())
     }
 
-    /// Read a table B-tree, decoding up to `ncols` values per record.
-    pub fn read_table(&self, rootpage: u32, ncols: usize) -> Result<Vec<Record>, String> {
+    /// Walk a table B-tree in key order and hand each row, decoded up to `ncols` values, to
+    /// `visit`. Rows are not collected: the caller keeps what it needs, so a table's size does not
+    /// decide how much memory a read takes. Structural limits still apply: depth, cycles and shared
+    /// pages, cell pointers, per-record payload, overflow chains, and two whole-walk sanity bounds
+    /// that a well-formed table cannot exceed (its rows' payload fits in the visible database bytes,
+    /// and each row needs at least [`MIN_ROW_BYTES`] of them), which stop shared or overlapping cells
+    /// from turning a small file into an endless walk.
+    pub fn for_each_row<E>(&self, rootpage: u32, ncols: usize, visit: &mut dyn FnMut(Record) -> Result<(), E>) -> Result<(), RowError<E>> {
         if !(1..=MAX_PAGE_ID).contains(&rootpage) || rootpage > self.page_count {
             return Err("table root page is outside database".into());
         }
@@ -161,25 +285,58 @@ impl Database {
             return Err("table has too many columns".into());
         }
         let alias = self.rowid_aliases.get(&rootpage).copied();
-        let mut state = WalkState { seen: HashSet::new(), out: Vec::new(), payload_total: 0 };
-        self.visit_table(rootpage, ncols, alias, 0, &mut state)?;
-        Ok(state.out)
+        let mut state = self.walk_state()?;
+        self.visit_table(rootpage, ncols, alias, 0, &mut state, visit)
     }
 
-    fn page(&self, page_id: u32) -> Result<&[u8], String> {
+    /// Read a whole table into memory (tests only; the importer streams with [`Self::for_each_row`]).
+    #[cfg(test)]
+    pub fn read_table(&self, rootpage: u32, ncols: usize) -> Result<Vec<Record>, String> {
+        let mut out = Vec::new();
+        let result = self.for_each_row(rootpage, ncols, &mut |record| {
+            if out.len() >= MAX_ROWS {
+                return Err("SQLite table contains more than one million records".to_string());
+            }
+            out.push(record);
+            Ok(())
+        });
+        match result {
+            Ok(()) => Ok(out),
+            Err(RowError::Table(why) | RowError::Visitor(why)) => Err(why),
+        }
+    }
+
+    fn walk_state(&self) -> Result<WalkState, String> {
+        let usable = self.page_size.checked_sub(self.reserved).ok_or("invalid usable page size")?;
+        let bytes = u64::from(self.page_count).checked_mul(usable as u64).ok_or("SQLite database size overflow")?;
+        Ok(WalkState { seen: HashSet::new(), rows: 0, payload_total: 0, max_rows: bytes / MIN_ROW_BYTES, max_payload: bytes })
+    }
+
+    fn page(&self, page_id: u32) -> Result<Cow<'_, [u8]>, String> {
         if page_id == 0 || page_id > self.page_count {
             return Err(format!("page {page_id} is outside database"));
         }
         if let Some(page) = self.overlay.get(&page_id) {
-            return Ok(page);
+            return Ok(Cow::Borrowed(page));
+        }
+        if let Some(file) = &self.file {
+            return file.page(page_id, self.page_size).map(Cow::Owned);
         }
         let id = usize::try_from(page_id).map_err(|_| "page number does not fit host")?;
         let start = id.checked_sub(1).and_then(|n| n.checked_mul(self.page_size)).ok_or("page offset overflow")?;
         let end = start.checked_add(self.page_size).ok_or("page offset overflow")?;
-        self.main.get(start..end).ok_or_else(|| format!("page {page_id} is truncated"))
+        self.main.get(start..end).map(Cow::Borrowed).ok_or_else(|| format!("page {page_id} is truncated"))
     }
 
-    fn visit_table(&self, page_id: u32, ncols: usize, alias: Option<usize>, depth: usize, state: &mut WalkState) -> Result<(), String> {
+    fn visit_table<E>(
+        &self,
+        page_id: u32,
+        ncols: usize,
+        alias: Option<usize>,
+        depth: usize,
+        state: &mut WalkState,
+        visit: &mut dyn FnMut(Record) -> Result<(), E>,
+    ) -> Result<(), RowError<E>> {
         if depth > MAX_BTREE_DEPTH {
             return Err("SQLite B-tree is too deep".into());
         }
@@ -192,7 +349,7 @@ impl Database {
         let content = page.get(..usable).ok_or("truncated usable SQLite page")?;
         let kind = *content.get(base).ok_or("truncated B-tree header")?;
         let cells = usize::from(be_u16_at(content, base + 3)?);
-        if cells > MAX_CELLS || state.out.len().saturating_add(cells) > MAX_ROWS.saturating_add(MAX_CELLS) {
+        if cells > MAX_CELLS {
             return Err("SQLite B-tree contains too many cells".into());
         }
         match kind {
@@ -215,11 +372,15 @@ impl Database {
                         return Err("SQLite record payload is too large".into());
                     }
                     let rowid = i64::from_be_bytes(read_varint(content, &mut at)?.to_be_bytes());
-                    state.payload_total = state.payload_total.checked_add(payload_len).ok_or("SQLite table payload total overflow")?;
-                    if state.payload_total > MAX_TABLE_PAYLOAD {
-                        return Err("SQLite table payload exceeds bounded import size".into());
+                    state.payload_total = state.payload_total.checked_add(payload_len as u64).ok_or("SQLite table payload total overflow")?;
+                    if state.payload_total > state.max_payload {
+                        return Err("SQLite table payload exceeds the database size (shared or overlapping cells)".into());
                     }
-                    let payload = self.payload(page, at, payload_len)?;
+                    state.rows = state.rows.saturating_add(1);
+                    if state.rows > state.max_rows {
+                        return Err("SQLite table has more rows than the database can hold (shared or overlapping cells)".into());
+                    }
+                    let payload = self.payload(&page, at, payload_len)?;
                     let mut values = decode_record(&payload, ncols, self.encoding)?;
                     if let Some(index) = alias {
                         if index >= values.len() {
@@ -229,10 +390,7 @@ impl Database {
                             *value = Value::Integer(rowid);
                         }
                     }
-                    if state.out.len() >= MAX_ROWS {
-                        return Err("SQLite table contains more than one million records".into());
-                    }
-                    state.out.push(Record { values });
+                    visit(Record { values }).map_err(RowError::Visitor)?;
                 }
                 Ok(())
             }
@@ -255,16 +413,16 @@ impl Database {
                     }
                     let mut key_at = cell.checked_add(4).ok_or("interior cell overflow")?;
                     let _ = read_varint(content, &mut key_at)?;
-                    self.visit_table(child, ncols, alias, depth + 1, state)?;
+                    self.visit_table(child, ncols, alias, depth + 1, state, visit)?;
                 }
                 let right = be_u32_at(content, base + 8)?;
                 if right == 0 {
                     return Err("interior B-tree has null right child".into());
                 }
-                self.visit_table(right, ncols, alias, depth + 1, state)
+                self.visit_table(right, ncols, alias, depth + 1, state, visit)
             }
             0x02 | 0x0a => Err("SQLite index B-trees are unsupported".into()),
-            other => Err(format!("unsupported SQLite B-tree page type 0x{other:02x}")),
+            other => Err(format!("unsupported SQLite B-tree page type 0x{other:02x}").into()),
         }
     }
 
@@ -325,18 +483,18 @@ impl Database {
             out.extend_from_slice(overflow.get(4..end).ok_or("truncated SQLite overflow page")?);
             remaining -= take;
             if remaining > 0 {
-                next = be_u32_at(overflow, 0)?;
+                next = be_u32_at(&overflow, 0)?;
             }
         }
         Ok(out)
     }
 
     fn parse_schema(&self) -> Result<SchemaInfo, String> {
-        let mut tables = Vec::new();
+        let mut tables: Vec<LiveTable> = Vec::new();
+        let mut roots = HashSet::new();
         let mut aliases = HashMap::new();
-        let mut state = WalkState { seen: HashSet::new(), out: Vec::new(), payload_total: 0 };
-        self.visit_table(1, 5, None, 0, &mut state)?;
-        for record in state.out {
+        let mut state = self.walk_state()?;
+        let mut visit = |record: Record| -> Result<(), String> {
             if record.values.len() < 5 {
                 return Err("sqlite_schema row has too few columns".into());
             }
@@ -348,31 +506,27 @@ impl Database {
                 Some(Value::Text(s)) => s.clone(),
                 _ => return Err("sqlite_schema row has invalid name".into()),
             };
-            if kind.eq_ignore_ascii_case("virtual") {
-                continue;
-            }
             if !kind.eq_ignore_ascii_case("table") {
-                continue;
+                return Ok(());
             }
             let rootpage = match record.values.get(3) {
                 Some(Value::Integer(n)) if *n > 0 => u32::try_from(*n).map_err(|_| "sqlite_schema root page is invalid")?,
-                _ => continue,
+                _ => return Ok(()),
             };
-            let sql = match record.values.get(4) {
-                Some(Value::Text(s)) => s,
-                _ => continue,
-            };
-            let Ok((column_names, alias)) = parse_create_table(sql) else { continue };
-            if column_names.len() > MAX_COLUMNS {
-                continue;
-            }
-            if tables.iter().any(|table: &LiveTable| table.rootpage == rootpage) {
-                continue;
+            let Some(Value::Text(sql)) = record.values.get(4) else { return Ok(()) };
+            let Ok((column_names, alias)) = parse_create_table(sql) else { return Ok(()) };
+            if column_names.len() > MAX_COLUMNS || !roots.insert(rootpage) {
+                return Ok(());
             }
             if let Some(index) = alias {
                 aliases.insert(rootpage, index);
             }
             tables.push(LiveTable { name, rootpage, column_names: Some(column_names) });
+            Ok(())
+        };
+        match self.visit_table(1, 5, None, 0, &mut state, &mut visit) {
+            Ok(()) => {}
+            Err(RowError::Table(why) | RowError::Visitor(why)) => return Err(why),
         }
         Ok(SchemaInfo { tables, aliases })
     }
@@ -873,6 +1027,72 @@ fn be_u32_at(bytes: &[u8], at: usize) -> Result<u32, String> {
 mod tests {
     use super::*;
 
+    struct Scratch(PathBuf);
+    impl Scratch {
+        fn new(bytes: &[u8]) -> Self {
+            static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!("lightcraft-page-source-{}-{n}.lrcat", std::process::id()));
+            std::fs::write(&path, bytes).unwrap();
+            Self(path)
+        }
+    }
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    fn file_backed(mut db: Database) -> (Scratch, Database) {
+        let scratch = Scratch::new(&db.main);
+        db.file = Some(FileSource::open(&scratch.0).unwrap());
+        db.main.truncate(100);
+        (scratch, db)
+    }
+
+    #[test]
+    fn file_source_bounds_and_mutation_detection() {
+        let scratch = Scratch::new(&[0; 512]);
+        let source = FileSource::open(&scratch.0).unwrap();
+        assert_eq!(source.page(1, 512).unwrap().len(), 512);
+        assert!(source.page(2, 512).unwrap_err().contains("truncated"));
+        File::options().write(true).open(&scratch.0).unwrap().set_len(100).unwrap();
+        assert!(source.page(1, 512).is_err());
+        assert!(source.ensure_unchanged().unwrap_err().contains("changed during reading"));
+        drop(source);
+        // Unix set_len creates a hole. Do not reserve a 16 GiB normal file on Windows.
+        #[cfg(unix)]
+        {
+            File::options().write(true).open(&scratch.0).unwrap().set_len(MAX_DATABASE_BYTES + 1).unwrap();
+            assert_eq!(FileSource::open(&scratch.0).err().unwrap(), "catalog exceeds 16 GiB import limit");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn file_source_detects_same_sized_path_replacement() {
+        let original = Scratch::new(&[0; 512]);
+        let replacement = Scratch::new(&[0; 512]);
+        let source = FileSource::open(&original.0).unwrap();
+        std::fs::rename(&replacement.0, &original.0).unwrap();
+        assert!(source.ensure_unchanged().unwrap_err().contains("changed during reading"));
+    }
+
+    #[test]
+    fn file_source_detects_same_length_content_changes() {
+        let scratch = Scratch::new(&[0; 512]);
+        let source = FileSource::open(&scratch.0).unwrap();
+        std::fs::write(&scratch.0, [1; 512]).unwrap();
+        // Make the timestamp change deterministic even on filesystems with coarse timestamps.
+        File::options()
+            .write(true)
+            .open(&scratch.0)
+            .unwrap()
+            .set_modified(source.before.modified().unwrap() + std::time::Duration::from_secs(2))
+            .unwrap();
+        assert!(source.ensure_unchanged().unwrap_err().contains("changed during reading"));
+    }
+
     fn varint(mut value: u64) -> Vec<u8> {
         let mut out = vec![u8::try_from(value & 0x7f).unwrap_or(0)];
         value >>= 7;
@@ -1026,6 +1246,40 @@ mod tests {
         assert!(tables.iter().any(|table| table.name == "t"));
         let rows = db.read_table(2, 2).unwrap();
         assert_eq!(rows.first().and_then(|row| row.values.first()), Some(&Value::Integer(1)));
+        let scratch = Scratch::new(&db.main);
+        let file_db = Database::open_file_with_wal(FileSource::open(&scratch.0).unwrap(), &[]).unwrap();
+        assert_eq!(file_db.live_tables().unwrap(), tables);
+        assert_eq!(file_db.read_table(2, 2).unwrap(), rows);
+        assert_eq!(file_db.main.len(), 100);
+        file_db.ensure_unchanged().unwrap();
+        // The same committed WAL page overrides the lazily read main page.
+        let mut wal = vec![0; 32 + 24 + 512];
+        wal[..4].copy_from_slice(&0x377f0682u32.to_be_bytes());
+        wal[4..8].copy_from_slice(&3_007_000u32.to_be_bytes());
+        wal[8..12].copy_from_slice(&512u32.to_be_bytes());
+        wal[32..36].copy_from_slice(&2u32.to_be_bytes());
+        wal[36..40].copy_from_slice(&2u32.to_be_bytes());
+        leaf(&mut wal[56..], 0, 2, &[3, 0, 15, b'y']);
+        let memory_wal = Database::open_with_wal(db.main.clone(), &wal).unwrap();
+        let file_wal = Database::open_file_with_wal(FileSource::open(&scratch.0).unwrap(), &wal).unwrap();
+        assert_eq!(memory_wal.read_table(2, 2).unwrap(), file_wal.read_table(2, 2).unwrap());
+        assert_eq!(file_wal.read_table(2, 2).unwrap()[0].values[0], Value::Integer(2));
+        let mut malformed = db.main.clone();
+        malformed.push(0);
+        let partial = Scratch::new(&malformed);
+        assert_eq!(
+            Database::open_file_with_wal(FileSource::open(&partial.0).unwrap(), &[]).err().unwrap(),
+            "SQLite image is not a whole number of pages"
+        );
+        let mut malformed = db.main.clone();
+        malformed[24..28].copy_from_slice(&1u32.to_be_bytes());
+        malformed[92..96].copy_from_slice(&1u32.to_be_bytes());
+        malformed[28..32].copy_from_slice(&3u32.to_be_bytes());
+        let oversized = Scratch::new(&malformed);
+        assert_eq!(
+            Database::open_file_with_wal(FileSource::open(&oversized.0).unwrap(), &[]).err().unwrap(),
+            "SQLite header page count exceeds image"
+        );
     }
 
     #[test]
@@ -1042,6 +1296,7 @@ mod tests {
         leaf(&mut main[1024..1536], 0, 1, &[2, 0]);
         leaf(&mut main[1536..], 0, 2, &[2, 0]);
         let db = Database {
+            file: None,
             main,
             overlay: HashMap::new(),
             page_size: 512,
@@ -1073,6 +1328,7 @@ mod tests {
         let mut aliases = HashMap::new();
         aliases.insert(1, 0);
         let db = Database {
+            file: None,
             main,
             overlay: HashMap::new(),
             page_size: 512,
@@ -1093,6 +1349,7 @@ mod tests {
         main[103..105].copy_from_slice(&1u16.to_be_bytes());
         main[108..110].copy_from_slice(&490u16.to_be_bytes());
         let db = Database {
+            file: None,
             main,
             overlay: HashMap::new(),
             page_size: 512,
@@ -1102,6 +1359,8 @@ mod tests {
             tables: Vec::new(),
             rowid_aliases: HashMap::new(),
         };
+        assert!(db.read_table(1, 1).is_err());
+        let (_scratch, db) = file_backed(db);
         assert!(db.read_table(1, 1).is_err());
     }
 
@@ -1115,6 +1374,7 @@ mod tests {
 
         let mut main = vec![0u8; 2 * 512];
         let db = Database {
+            file: None,
             main: std::mem::take(&mut main),
             overlay: HashMap::new(),
             page_size: 512,
@@ -1141,6 +1401,85 @@ mod tests {
         assert_eq!(bytes.len(), 600);
         assert_eq!(&bytes[..92], &[b'x'; 92]);
         assert_eq!(&bytes[92..], &[b'y'; 508]);
+        let (_scratch, mut db) = file_backed(db);
+        db.overlay.clear();
+        let bytes = db.payload(&cell_page, 0, 600).unwrap();
+        assert_eq!(&bytes[92..], &[b'y'; 508]);
+    }
+
+    fn bare_db(main: Vec<u8>, page_count: u32) -> Database {
+        Database {
+            file: None,
+            main,
+            overlay: HashMap::new(),
+            page_size: 512,
+            reserved: 0,
+            encoding: TextEncoding::Utf8,
+            page_count,
+            tables: Vec::new(),
+            rowid_aliases: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn rows_stream_to_the_visitor_in_key_order_and_its_error_stops_the_walk() {
+        let mut main = vec![0u8; 512];
+        let rows: Vec<(u64, Vec<u8>)> = (1..=5).map(|n| (n, vec![2, 1, u8::try_from(n).unwrap()])).collect();
+        let refs: Vec<(u64, &[u8])> = rows.iter().map(|(id, r)| (*id, r.as_slice())).collect();
+        leaf_rows(&mut main, 0, &refs);
+        let db = bare_db([vec![0u8; 512], main].concat(), 2);
+        let mut seen = Vec::new();
+        db.for_each_row(2, 1, &mut |r: Record| -> Result<(), String> {
+            seen.push(r.values[0].clone());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(seen, (1..=5).map(Value::Integer).collect::<Vec<_>>());
+        let mut calls = 0;
+        let stopped = db.for_each_row(2, 1, &mut |_| {
+            calls += 1;
+            if calls == 2 { Err("enough") } else { Ok(()) }
+        });
+        assert_eq!(stopped, Err(RowError::Visitor("enough")));
+        assert_eq!(calls, 2);
+        assert!(matches!(db.for_each_row::<()>(3, 1, &mut |_| Ok(())), Err(RowError::Table(_))));
+    }
+
+    /// Cell pointers that all name one cell would let a one-page file yield rows (and payload)
+    /// without end; the walk stops at what the database's bytes can really hold.
+    #[test]
+    fn shared_cells_cannot_outgrow_the_database() {
+        // 250 pointers to one 3-byte cell: at most 204 real rows fit in a 1,024-byte database
+        let mut page = vec![0u8; 512];
+        page[0] = 0x0d;
+        page[3..5].copy_from_slice(&250u16.to_be_bytes());
+        page[508..511].copy_from_slice(&[1, 1, 1]);
+        for i in 0..250 {
+            page[8 + 2 * i..10 + 2 * i].copy_from_slice(&508u16.to_be_bytes());
+        }
+        let db = bare_db([vec![0u8; 512], page].concat(), 2);
+        let err = db.for_each_row::<()>(2, 1, &mut |_| Ok(())).unwrap_err();
+        assert!(matches!(&err, RowError::Table(why) if why.contains("more rows than the database")), "{err:?}");
+        // two pointers to one 600-byte overflowing cell: 1,200 payload bytes in a 1,536-byte file is
+        // still possible, three (1,800) are not
+        let mut leaf = vec![0u8; 512];
+        leaf[0] = 0x0d;
+        leaf[3..5].copy_from_slice(&3u16.to_be_bytes());
+        let cell = 400usize;
+        let mut head = varint(600);
+        head.extend(varint(1));
+        leaf[cell..cell + head.len()].copy_from_slice(&head);
+        let at = cell + head.len();
+        // record: a 3-byte header (its length, then serial 12 + 2 × 597 = 1206) and a 597-byte blob
+        leaf[at..at + 3].copy_from_slice(&[3, 0x89, 0x36]);
+        for i in 0..3 {
+            leaf[8 + 2 * i..10 + 2 * i].copy_from_slice(&u16::try_from(cell).unwrap().to_be_bytes());
+        }
+        // a 600-byte payload keeps 92 bytes in the cell, then the first overflow page number
+        leaf[at + 92..at + 96].copy_from_slice(&3u32.to_be_bytes());
+        let db = bare_db([vec![0u8; 512], leaf, vec![0u8; 512]].concat(), 3);
+        let err = db.for_each_row::<()>(2, 1, &mut |_| Ok(())).unwrap_err();
+        assert!(matches!(&err, RowError::Table(why) if why.contains("payload exceeds the database size")), "{err:?}");
     }
 
     #[test]
@@ -1164,6 +1503,7 @@ mod tests {
         let mut page = vec![0u8; 512];
         page[16..18].copy_from_slice(&512u16.to_be_bytes());
         let db = Database {
+            file: None,
             main: vec![0; 512],
             overlay: HashMap::new(),
             page_size: 512,
