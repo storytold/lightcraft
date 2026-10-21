@@ -171,6 +171,95 @@ pub const ABOUT_TABS: &[(&str, &str)] = &[("about", "About"), ("contributors", "
 /// Help ▸ What's New (docs/whats-new.md).
 pub const WHATS_NEW: &str = include_str!("../../../../docs/whats-new.md");
 
+/// The tour's window title and the labels of its next and last-page buttons: translated in every
+/// catalog, with the pages' text (the test that pins it reads these).
+pub(crate) const WELCOME_TITLE: &str = "Welcome";
+pub(crate) const WELCOME_NEXT: &str = "Next";
+pub(crate) const WELCOME_START: &str = "Get Started";
+
+/// The first-run tour's pages: (title, what it does, where to find it). Every menu path names a
+/// real command (`file.addPhotos`, `view.photoGrid`, `view.detail`, `dialog.cull`, `dialog.export`,
+/// `dialog.print`); `›` paints (the menu triangle `▸` does not).
+pub(crate) const WELCOME_PAGES: [(&str, &str, &str); 6] = [
+    (
+        "Welcome to LightCraft",
+        "A fast, non-destructive photo library and raw developer: your originals stay untouched, and every edit can be revisited or reset.",
+        "Bring photos in with File › Import Photos… (Cmd+Shift+I).",
+    ),
+    (
+        "Find and organize",
+        "The Photo Grid lays the library out as justified rows: rate, flag and colour-label, filter, and gather photos into albums.",
+        "View › Photo Grid.",
+    ),
+    (
+        "Develop a photo",
+        "Open a photo to develop it: exposure, colour, detail and masks, all non-destructive. Y compares before and after.",
+        "View › Detail (D).",
+    ),
+    (
+        "Cull a shoot",
+        "Assisted Culling scores focus and exposure, finds bursts, and flags blurry shots as rejects, so the keepers surface fast.",
+        "Photo › Assisted Culling…",
+    ),
+    (
+        "Share your work",
+        "Export renders JPEG, PNG, TIFF, WebP and more, sized as you like; Print lays a photo out on a page as PDF.",
+        "File › Export… · File › Print… (Cmd+P).",
+    ),
+    (
+        "Put agents to work",
+        "Everything in LightCraft is a command, so AI agents can drive the running app over MCP: culling, editing, exporting on your word.",
+        "lightcraft-cli mcp --connect attaches one to this app.",
+    ),
+];
+
+/// The first-run tour: one page at a time, Back / Skip / Next under it. `close` is set when the
+/// tour is finished (Next on the last page) or skipped.
+fn welcome_body(ui: &mut egui::Ui, t: &Tokens, page: &mut usize, close: &mut bool) {
+    let last = WELCOME_PAGES.len() - 1;
+    *page = (*page).min(last);
+    let (title, text, opening) = WELCOME_PAGES[*page];
+    ui.add_space(2.0);
+    ui.label(egui::RichText::new(crate::i18n::tr(title)).font(t.semibold(16.0)).color(t.text));
+    ui.label(egui::RichText::new(crate::i18n::tr(text)).color(t.text_label));
+    ui.add_space(2.0);
+    ui.label(egui::RichText::new(crate::i18n::tr(opening)).color(t.text_dim));
+    ui.add_space(8.0);
+    // progress dots, centred: the active page's is the accent
+    let spacing = 12.0;
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 8.0), egui::Sense::hover());
+    let x0 = rect.center().x - spacing * (last as f32) / 2.0;
+    for i in 0..WELCOME_PAGES.len() {
+        let c = egui::pos2(x0 + i as f32 * spacing, rect.center().y);
+        ui.painter().circle_filled(c, if i == *page { 2.5 } else { 1.5 }, if i == *page { t.accent } else { t.text_dim });
+    }
+    ui.add_space(8.0);
+    use crate::button::{Button, Kind};
+    let back = Button::new(crate::i18n::tr("Back")).widget("button:welcomeBack").enabled(*page > 0).min_width(72.0);
+    let skip = Button::new(crate::i18n::tr("Skip")).kind(Kind::Ghost).widget("button:welcomeSkip").min_width(72.0);
+    let next_label = if *page == last { crate::i18n::tr(WELCOME_START) } else { crate::i18n::tr(WELCOME_NEXT) };
+    let next = Button::new(next_label).kind(Kind::Primary).widget("button:welcomeNext").min_width(84.0);
+    let gap = ui.spacing().item_spacing.x;
+    let row_w = ui.available_width().max(ui.min_rect().width()).max(1.0);
+    let (skip_w, next_w) = (skip.desired_size(ui).x, next.desired_size(ui).x);
+    ui.allocate_ui_with_layout(egui::vec2(row_w, next.desired_size(ui).y), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        if back.show(ui).clicked() {
+            *page -= 1;
+        }
+        ui.add_space((ui.available_width() - skip_w - next_w - 2.0 * gap).max(0.0));
+        if skip.show(ui).clicked() {
+            *close = true;
+        }
+        if next.show(ui).clicked() {
+            if *page == last {
+                *close = true;
+            } else {
+                *page += 1;
+            }
+        }
+    });
+}
+
 /// The import review and Settings keep window ids of their own, so the size each is given
 /// doesn't carry over to the other dialogs.
 fn window_id(dialog: &Dialog) -> egui::Id {
@@ -245,6 +334,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
         Dialog::FaceModel { info, .. } if info["download"].is_string() => "Download Face Model",
         Dialog::FaceModel { .. } => "Add Face Model",
         Dialog::WhatsNew => "What's New",
+        Dialog::Welcome { .. } => WELCOME_TITLE,
         Dialog::Cull { .. } => "Assisted Culling",
         Dialog::SmartRules { id: None, .. } => "New Smart Album",
         Dialog::SmartRules { .. } => "Edit Smart Album",
@@ -314,6 +404,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
             Dialog::Print => 1100.0,
             Dialog::FaceModel { .. } => 460.0,
             Dialog::LightroomCatalog { .. } => 440.0,
+            Dialog::Welcome { .. } => 460.0,
             Dialog::ManageEffects { .. } => 560.0,
             _ => 380.0,
         })
@@ -367,6 +458,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                         }
                     });
                 }
+                Dialog::Welcome { page } => welcome_body(ui, &t, page, &mut close),
                 Dialog::DenoiseModel { info, accepted } => crate::panels::denoise::model_dialog(app, ui, &t, info, accepted),
                 Dialog::FaceModel { info, accepted, .. } => crate::panels::faces::model_dialog(app, ui, &t, info, accepted),
                 Dialog::LightroomResult { summary, library, details, .. } => {
@@ -1371,6 +1463,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     Dialog::SamModel { .. } if sam_installed || sam_running || sam_nowhere => "",
                     Dialog::SamModel { error, .. } if error.is_some() || sam_failed => "Try Again",
                     Dialog::SamModel { .. } => "Download",
+                    Dialog::Welcome { .. } => "",
                     Dialog::RenamePerson { from, to, .. } if person_rename_plan(&app.session.catalog, from, to).needs_merge => "Merge",
                     _ if informational => "Close",
                     _ => "OK",
@@ -1869,7 +1962,7 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
         Dialog::AutoStack { gap } => app.run("stack.auto", json!({"gap": gap})),
         Dialog::DenoiseModel { info, accepted } => crate::panels::denoise::install(app, info, *accepted),
         Dialog::FaceModel { path, info, accepted } => crate::panels::faces::install(app, path, info, *accepted),
-        Dialog::AllMetadata { .. } | Dialog::SystemInfo { .. } | Dialog::WhatsNew => Ok(serde_json::Value::Null),
+        Dialog::AllMetadata { .. } | Dialog::SystemInfo { .. } | Dialog::WhatsNew | Dialog::Welcome { .. } => Ok(serde_json::Value::Null),
         Dialog::Cull { reject_below, pick_best } => {
             let mut p = json!({"pickBest": pick_best});
             if *reject_below > 0.0 {
@@ -2314,6 +2407,7 @@ fn only_shows(dlg: &Dialog) -> bool {
             | Dialog::SystemInfo { .. }
             | Dialog::AllMetadata { .. }
             | Dialog::WhatsNew
+            | Dialog::Welcome { .. }
             | Dialog::ManageEffects { .. }
     )
 }

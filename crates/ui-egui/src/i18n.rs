@@ -591,6 +591,23 @@ mod tests {
         }
     }
 
+    /// The tour's text (its pages, and its window and button labels) is in every catalog: a language
+    /// missing one of these keys would show that line in English on the first launch.
+    #[test]
+    fn the_welcome_tour_is_translated_in_every_catalog() {
+        use crate::panels::dialogs::{WELCOME_NEXT, WELCOME_PAGES, WELCOME_START, WELCOME_TITLE};
+        let keys: Vec<&str> = WELCOME_PAGES
+            .iter()
+            .flat_map(|(title, text, opening)| [*title, *text, *opening])
+            .chain([WELCOME_TITLE, WELCOME_NEXT, WELCOME_START])
+            .collect();
+        for language in Locale::ALL.iter().copied().filter(|language| *language != Locale::En) {
+            let catalog = language.catalog();
+            let missing: Vec<&str> = keys.iter().copied().filter(|key| !catalog.contains_key(*key)).collect();
+            assert!(missing.is_empty(), "{}: no translation for {missing:?}", language.code());
+        }
+    }
+
     /// Locale tags are matched leniently, so a system locale reaches a shipped language.
     /// The message box for a desktop start that failed (issue #260) names the error and the log
     /// file, in the UI language.

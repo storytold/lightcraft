@@ -38,6 +38,7 @@ pub mod shortcuts;
 pub mod sidebar;
 pub mod slideshow_export;
 pub mod softpaint;
+pub mod startup;
 pub mod state;
 pub mod sync;
 pub mod tasks;
@@ -175,6 +176,8 @@ mod tests_unsaved;
 mod tests_view_cost;
 #[cfg(test)]
 mod tests_wb_selector;
+#[cfg(test)]
+mod tests_welcome;
 #[cfg(test)]
 mod tests_zoom;
 #[cfg(test)]
@@ -1076,6 +1079,15 @@ impl LightcraftApp {
             self.session.media.availability.run_in_background(std::sync::Arc::new(move || repaint.request_repaint()));
             self.styled = true;
             self.font_language = self.ui.language;
+            // First run ever, or a fresh version: the tour, or What's New. Never headless —
+            // snapshots and scripted runs hold session-local state and must not gain a modal.
+            if self.ui.dialog.is_none()
+                && let Some(dialog) = startup::open_at_startup(self.ui.seen_version.as_deref(), self.headless_host)
+            {
+                self.ui.dialog = Some(dialog);
+                // record-on-show: a crash mid-dialog does not reopen it on every launch
+                self.ui.record_startup_dialog_seen();
+            }
         } else if self.font_language != self.ui.language {
             // Shared Han characters take the active language's forms (Japanese faces for 日本語,
             // the Simplified Chinese face for 简体中文): rebuild the fallback order.
