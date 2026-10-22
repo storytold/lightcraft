@@ -22,6 +22,8 @@
 //! - Given a reason that starts with a file's name or a path, then its spelling is kept; only a
 //!   reason that starts with a word gets a capital.
 //! - Given a dialog open, when a key behind it is refused, then nothing is said.
+//! - Given a command that made a toast of its own (a partial import report) and is then refused,
+//!   then the toast keeps what the command said and adds the reason after it.
 //!
 //! Real widgets, driven headlessly:
 //! - Given a photo whose original is missing, when Edit ▸ Auto is clicked, then the toast is the
@@ -419,4 +421,37 @@ fn a_brush_size_key_on_a_vanished_spot_is_refused() {
     assert!(r.is_err(), "{r:?}");
     h.app.session.active_spot = None;
     assert!(h.app.run("brush.larger", json!({})).is_ok(), "with no spot it only sizes the brush");
+}
+
+/// File ▸ Import Profiles & Presets… with a `.cube` and a local-adjustment preset, when the
+/// library's preferences can't be saved: the import's own toast (what happened to the profiles)
+/// and the refusal's reason are both shown, not only the reason.
+#[test]
+fn a_refusal_keeps_the_toast_the_command_made() {
+    let dir = std::env::temp_dir().join(format!("lc-refusal-toast-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let lib = dir.join("library");
+    // a prefs.json that can't be read blocks saving the preferences for the session
+    std::fs::create_dir_all(lib.join("prefs.json")).unwrap();
+    let mut session = lightcraft_engine::Session::new().with_fs();
+    session.open_library(&lib, true).unwrap();
+    let mut app = LightcraftApp::new(session, Services { png: None, ..Default::default() });
+    let cube = dir.join("Warm.cube");
+    let mut text = String::from("TITLE \"Warm\"\nLUT_3D_SIZE 2\n");
+    for b in 0..2 {
+        for g in 0..2 {
+            for r in 0..2 {
+                text += &format!("{r} {g} {b}\n");
+            }
+        }
+    }
+    std::fs::write(&cube, text).unwrap();
+    let effect = dir.join("Soft.lceffect");
+    std::fs::write(&effect, json!({"effects": [{"name": "Soft"}]}).to_string()).unwrap();
+    let paths = [cube.to_string_lossy().to_string(), effect.to_string_lossy().to_string()];
+    app.ui.toast = None;
+    assert_eq!(app.act("file.importPresets", json!({"paths": paths})), None, "the preset half is refused");
+    let said = toast(&app).expect("a toast").to_string();
+    assert!(said.contains("Import failed") && said.contains("prefs"), "what the import said is kept: {said}");
+    assert!(said.contains("prefs.json couldn't be read"), "and why it was refused: {said}");
 }

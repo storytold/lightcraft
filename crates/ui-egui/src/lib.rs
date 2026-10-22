@@ -730,12 +730,20 @@ impl LightcraftApp {
     /// `let _ = app.session.execute(…)`, which goes round this), out of the interface: a widget
     /// says which of `act`, [`Self::quiet`] and [`Self::run`] it means.
     pub fn act(&mut self, id: &str, params: Value) -> Option<Value> {
+        let before = self.ui.toast.clone();
         match self.run_told(id, params) {
             Ok(v) => Some(v),
             Err(refusal) => {
                 // Native menu clicks can arrive before logic() updates last_time after an idle gap.
                 let now = self.tasks.repaint.as_ref().map(|ctx| ctx.input(|i| i.time)).unwrap_or(self.last_time);
-                self.ui.toast = Some((refusal.why, now + REFUSAL_SECONDS, None));
+                // A toast the command made itself (a partial import report) says what did happen:
+                // keep it ahead of the reason rather than replacing it.
+                let said = match self.ui.toast.take() {
+                    Some((made, ..)) if Some(&made) != before.as_ref().map(|t| &t.0) && made.contains(&refusal.why) => made,
+                    Some((made, ..)) if Some(&made) != before.as_ref().map(|t| &t.0) => format!("{made} · {}", refusal.why),
+                    _ => refusal.why,
+                };
+                self.ui.toast = Some((said, now + REFUSAL_SECONDS, None));
                 None
             }
         }
