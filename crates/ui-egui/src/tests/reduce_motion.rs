@@ -251,6 +251,18 @@ fn without_a_system_setting_there_is_nothing_to_hand_back() {
 }
 
 #[test]
+fn follow_true_is_refused_where_there_is_no_system_setting_and_changes_nothing() {
+    let mut h = detail();
+    run(&mut h, "view.reduceMotion", json!({"on": true}));
+    let r = h.request("engine.execute", json!({"command": "view.reduceMotion", "params": {"follow": true}}), T);
+    assert_eq!(r["ok"], false, "{r}");
+    assert!(r.to_string().contains("no Reduce Motion setting to follow"), "{r}");
+    assert_eq!(h.app.ui.settings.reduce_motion, Some(true), "the choice made stays");
+    assert!(h.app.reduce_motion());
+    // (and with a system setting to read, the same command is accepted: the_system_setting_is_followed_until_the_user_chooses)
+}
+
+#[test]
 fn the_sync_spinner_is_a_still_dot_when_reduced() {
     let ctx = egui::Context::default();
     let shapes = |reduced: bool| {
