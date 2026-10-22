@@ -450,8 +450,28 @@ fn a_refusal_keeps_the_toast_the_command_made() {
     std::fs::write(&effect, json!({"effects": [{"name": "Soft"}]}).to_string()).unwrap();
     let paths = [cube.to_string_lossy().to_string(), effect.to_string_lossy().to_string()];
     app.ui.toast = None;
+    app.last_time = 1.0; // the refusal's toast ends later than the command's own (its clock reads 0)
     assert_eq!(app.act("file.importPresets", json!({"paths": paths})), None, "the preset half is refused");
     let said = toast(&app).expect("a toast").to_string();
-    assert!(said.contains("Import failed") && said.contains("prefs"), "what the import said is kept: {said}");
-    assert!(said.contains("prefs.json couldn't be read"), "and why it was refused: {said}");
+    assert!(said.starts_with("Import failed: ") && said.contains("prefs.json couldn't be read"), "what the import said is kept: {said}");
+    assert_eq!(said.matches("couldn't be read").count(), 1, "the reason is not said twice: {said}");
+    // the same refusal again while its toast is still up: the command's new toast is kept too
+    assert_eq!(app.act("file.importPresets", json!({"paths": paths})), None);
+    let again = toast(&app).expect("a toast");
+    assert!(again.starts_with("Import failed: "), "{again}");
+}
+
+fn refusal(error: &str, why: &str) -> crate::Refusal {
+    crate::Refusal { error: error.into(), why: why.into(), kind: lightcraft_engine::ErrorKind::Other }
+}
+
+/// The command's toast comes first, the reason after it; a toast that is the raw error, or
+/// already says the reason (in either capitalisation), becomes the reason once.
+#[test]
+fn a_refused_commands_own_toast_and_the_reason_are_joined_once() {
+    let r = refusal("command `x.y` is not available right now: no photo selected", "No photo selected");
+    assert_eq!(crate::refusal_toast(None, &r), "No photo selected");
+    assert_eq!(crate::refusal_toast(Some("Imported 2 profiles".into()), &r), "Imported 2 profiles · No photo selected");
+    assert_eq!(crate::refusal_toast(Some(r.error.clone()), &r), "No photo selected");
+    assert_eq!(crate::refusal_toast(Some("Failed: no photo selected".into()), &r), "Failed: no photo selected");
 }

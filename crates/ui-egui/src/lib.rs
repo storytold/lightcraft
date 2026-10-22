@@ -251,6 +251,15 @@ impl Refusal {
     }
 }
 
+/// What a refused command says to the person: the reason, behind the toast the command made
+/// itself (a partial import report) when there is one. A toast that is the raw error, or holds
+/// the reason already, is not repeated.
+fn refusal_toast(made: Option<String>, refusal: &Refusal) -> String {
+    let Some(made) = made else { return refusal.why.clone() };
+    let made = if refusal.error.is_empty() { made } else { made.replace(&refusal.error, &refusal.why) };
+    if made.to_lowercase().contains(&refusal.why.to_lowercase()) { made } else { format!("{made} · {}", refusal.why) }
+}
+
 /// A sentence starts with a capital, whatever the command wrote. Only when it starts with a word:
 /// a file name or a path ("img_0012.jpg is a virtual copy", "photos/a.jpg: …") is someone's
 /// spelling and stays as it is, and so does a letter whose capital is not one letter (ß).
@@ -738,11 +747,8 @@ impl LightcraftApp {
                 let now = self.tasks.repaint.as_ref().map(|ctx| ctx.input(|i| i.time)).unwrap_or(self.last_time);
                 // A toast the command made itself (a partial import report) says what did happen:
                 // keep it ahead of the reason rather than replacing it.
-                let said = match self.ui.toast.take() {
-                    Some((made, ..)) if Some(&made) != before.as_ref().map(|t| &t.0) && made.contains(&refusal.why) => made,
-                    Some((made, ..)) if Some(&made) != before.as_ref().map(|t| &t.0) => format!("{made} · {}", refusal.why),
-                    _ => refusal.why,
-                };
+                let made = self.ui.toast.take().filter(|t| Some(t) != before.as_ref()).map(|t| t.0);
+                let said = refusal_toast(made, &refusal);
                 self.ui.toast = Some((said, now + REFUSAL_SECONDS, None));
                 None
             }
