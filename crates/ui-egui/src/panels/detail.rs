@@ -2651,10 +2651,19 @@ fn brush_wheel(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response
     let id = egui::Id::new("brush-wheel");
     let now = ui.input(|i| i.time);
     // the spot under the pointer now (last frame's outlines, this frame's pointer: it may have moved with the wheel)
+    // with each spot's radius as it is now: the wheel may have just resized it
     let hovered = ui
         .data(|d| d.get_temp::<SpotBodies>(egui::Id::new(SPOT_BODIES)))
         .filter(|_| right == RightPanel::Remove)
-        .and_then(|b| spot_under(&b.bodies, b.active, resp.hover_pos()?))
+        .and_then(|mut b| {
+            let spots = app.session.active().and_then(|p| app.session.develop_of(p)).map(|d| d.spots.clone()).unwrap_or_default();
+            for (spot, _, _, r) in &mut b.bodies {
+                if let Some(s) = spots.get(*spot) {
+                    *r = grab_radius(s, b.long);
+                }
+            }
+            spot_under(&b.bodies, b.active, resp.hover_pos()?)
+        })
         .map(|(index, ..)| index);
     let in_use = brush_in_use(app, right) && resp.hovered();
     // one wheel gesture on a spot is one undo step: it ends after a pause, off that spot, or when the tool goes
@@ -2812,11 +2821,18 @@ fn brush_drag(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response,
 // ------------------------------------------------------------------------ remove
 
 /// What of each Remove spot can be grabbed, as last drawn: `(spot, is source, screen points of
-/// its stroke, radius)`, and the selected spot. `brush_wheel` finds the spot under the pointer in it.
+/// its stroke, radius)`, the selected spot and the photo's long edge on screen (for [`grab_radius`]).
+/// `brush_wheel` finds the spot under the pointer in it.
 #[derive(Clone, Debug, Default)]
 struct SpotBodies {
     bodies: Vec<(usize, bool, Vec<Pos2>, f32)>,
     active: Option<usize>,
+    long: f64,
+}
+
+/// How far from its stroke a spot is drawn (its outline) and can be grabbed, on a photo whose long edge is `long` on screen.
+fn grab_radius(s: &lightcraft_develop::Spot, long: f64) -> f32 {
+    feather_band(s.mode == SpotMode::Fill, (s.size * long) as f32, s.feather as f32).1 + OUTLINE_GAP
 }
 const SPOT_BODIES: &str = "remove-spot-bodies";
 
@@ -2857,7 +2873,7 @@ fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respo
     let clip = p.clip_rect();
     for (i, s) in d.spots.iter().enumerate() {
         let band = feather_band(s.mode == SpotMode::Fill, (s.size * long) as f32, s.feather as f32);
-        let r = band.1 + OUTLINE_GAP;
+        let r = grab_radius(s, long);
         let sel = Some(i) == active;
         if !mode.shows(sel, live) {
             continue;
@@ -2896,7 +2912,7 @@ fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respo
     let hit = |q: Pos2| spot_under(&bodies, active, q);
     let hover = resp.hover_pos().and_then(hit);
     // the mouse wheel resizes the spot under the pointer instead of the brush (`brush_wheel`, next frame)
-    ui.data_mut(|m| m.insert_temp(egui::Id::new(SPOT_BODIES), SpotBodies { bodies: bodies.clone(), active }));
+    ui.data_mut(|m| m.insert_temp(egui::Id::new(SPOT_BODIES), SpotBodies { bodies: bodies.clone(), active, long }));
     if let Some(h) = resp.hover_pos() {
         if hover.is_some() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);

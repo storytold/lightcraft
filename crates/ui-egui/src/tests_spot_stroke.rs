@@ -231,3 +231,30 @@ fn the_wheel_sizes_the_spot_the_pointer_has_just_moved_onto() {
     assert_eq!(s[0].size, 0.04, "the spot the pointer left keeps its size");
     assert!((s[1].size / 0.04 - 1.1).abs() < 0.01, "the spot under the pointer grows, got {}", s[1].size);
 }
+
+#[test]
+fn a_spot_the_wheel_has_grown_is_grabbed_out_to_its_new_edge() {
+    let mut h = remove_tool();
+    let r = h.request(
+        "engine.execute",
+        json!({"command": "spot.add", "params": {"mode": "heal", "points": [[0.5, 0.5]], "size": 0.02, "feather": 0.0, "source": [0.0, 0.2]}}),
+        T,
+    );
+    assert_eq!(r["ok"], true, "{r}");
+    pointer(&mut h, "move", 0.5, 0.5);
+    // grow it to twice its size, then, in the next frame, move to where only the grown spot reaches and turn on
+    for _ in 0..8 {
+        wheel(&mut h, 1.0, egui::Modifiers::NONE);
+    }
+    let grown = spots(&h)[0].size;
+    assert!(grown > 0.04, "{grown}");
+    let img = h.app.image_rect.expect("photo drawn");
+    let long = img.width().max(img.height());
+    // between the outline drawn before the last notch and the grown one (3 pt outside the radius, no feather)
+    let between = (grown / 1.1 + grown) as f32 / 2.0 * long + 3.0;
+    let to = egui::pos2(img.center().x + between, img.center().y);
+    h.events.push(egui::Event::PointerMoved(to));
+    wheel(&mut h, 1.0, egui::Modifiers::NONE);
+    assert!((spots(&h)[0].size / grown - 1.1).abs() < 0.01, "the grown spot is still under the pointer: {}", spots(&h)[0].size);
+    assert_eq!(h.app.session.active_spot, Some(0), "and stays selected (the brush isn't resized instead)");
+}
