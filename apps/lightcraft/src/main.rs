@@ -1187,12 +1187,15 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
     }
 
+    /// The real desktop preference writer and loader retain both docking and a
+    /// non-default crop-mask opacity, beyond the direct UiState serde tests.
     #[test]
     fn docking_survives_native_settings_file_reload() {
         use lightcraft_ui_egui::docking::Panel;
         let d = dir("docking-reload");
         let path = d.join("ui.json");
         let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services::default());
+        app.ui.crop_mask_opacity = 80;
         app.run("ui.dock", serde_json::json!({"operation":"float", "panel":"tools", "rect":[70,80,310,500]})).unwrap();
         app.run("ui.dock", serde_json::json!({"operation":"close", "panel":"tools"})).unwrap();
         let mut writer = PrefsWriter { path: Some(path.clone()), ..Default::default() };
@@ -1202,6 +1205,7 @@ mod tests {
         assert!(!keep);
         let mut restored_app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services::default());
         restored_app.ui = restored.unwrap();
+        assert_eq!(restored_app.ui.crop_mask_opacity, 80);
         restored_app.run("ui.dock", serde_json::json!({"operation":"open", "panel":"tools"})).unwrap();
         assert_eq!(
             restored_app.ui.docking.as_ref().unwrap().layout.floating.iter().find(|g| g.panels.contains(&Panel::Tools)).unwrap().rect,
