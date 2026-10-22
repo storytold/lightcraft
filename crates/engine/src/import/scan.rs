@@ -319,7 +319,8 @@ pub fn scan_with(mut input: ScanInput, paths: &[String], progress: &ScanProgress
         paths,
         input.skip.as_deref(),
         crate::walk::Limits::default(),
-        // (the walk goes on: only a scan that is cancelled ends it early)
+        // (always `true`: nothing here stops the walk. `progress.cancel` is read only once it is over, in
+        // `scan_files`, which stops the probing and returns what it has)
         Some(&mut |dir, names, complete, modified| {
             listed.note(dir, names, complete, modified);
             true
