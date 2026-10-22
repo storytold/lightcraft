@@ -2337,5 +2337,8 @@
   "Restore Library from Backup": "Palauta kirjasto varmuuskopiosta",
   "Restoring the library": "Kirjastoa palautetaan",
   "Restore Status": "Palautuksen tila",
-  "Restored the library": "Kirjasto palautettu"
+  "Restored the library": "Kirjasto palautettu",
+  "In the library folder": "Kirjastokansiossa",
+  "Choose a Folder for Backups": "Valitse kansio varmuuskopioille",
+  "A backup holds the catalog, not the photos. Keep it on another drive than the library, so that it outlives that drive.": "Varmuuskopio sisältää katalogin, ei valokuvia. Säilytä sitä eri asemalla kuin kirjastoa, jotta se säilyy, vaikka kyseinen asema menisi rikki."
 }

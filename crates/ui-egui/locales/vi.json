@@ -2245,5 +2245,8 @@
   "Restore Library from Backup": "Khôi phục thư viện từ bản sao lưu",
   "Restoring the library": "Đang khôi phục thư viện",
   "Restore Status": "Trạng thái khôi phục",
-  "Restored the library": "Đã khôi phục thư viện"
+  "Restored the library": "Đã khôi phục thư viện",
+  "In the library folder": "Trong thư mục thư viện",
+  "Choose a Folder for Backups": "Chọn thư mục cho bản sao lưu",
+  "A backup holds the catalog, not the photos. Keep it on another drive than the library, so that it outlives that drive.": "Bản sao lưu chứa danh mục, không chứa ảnh. Hãy lưu nó trên ổ đĩa khác với thư viện để nó vẫn còn khi ổ đĩa đó hỏng."
 }

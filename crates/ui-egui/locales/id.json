@@ -2349,5 +2349,8 @@
   "Restore Library from Backup": "Pulihkan pustaka dari cadangan",
   "Restoring the library": "Memulihkan pustaka",
   "Restore Status": "Status pemulihan",
-  "Restored the library": "Pustaka dipulihkan"
+  "Restored the library": "Pustaka dipulihkan",
+  "In the library folder": "Di folder pustaka",
+  "Choose a Folder for Backups": "Pilih folder untuk cadangan",
+  "A backup holds the catalog, not the photos. Keep it on another drive than the library, so that it outlives that drive.": "Cadangan berisi katalog, bukan foto. Simpan di drive yang berbeda dari pustaka, agar tetap ada meskipun drive tersebut rusak."
 }

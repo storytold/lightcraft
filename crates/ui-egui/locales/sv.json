@@ -2439,5 +2439,8 @@
   "Restore Library from Backup": "Återställ bibliotek från säkerhetskopia",
   "Restoring the library": "Återställer biblioteket",
   "Restore Status": "Återställningsstatus",
-  "Restored the library": "Biblioteket återställdes"
+  "Restored the library": "Biblioteket återställdes",
+  "In the library folder": "I biblioteksmappen",
+  "Choose a Folder for Backups": "Välj en mapp för säkerhetskopior",
+  "A backup holds the catalog, not the photos. Keep it on another drive than the library, so that it outlives that drive.": "En säkerhetskopia innehåller katalogen, inte fotona. Förvara den på en annan enhet än biblioteket, så att den finns kvar om den enheten går sönder."
 }
