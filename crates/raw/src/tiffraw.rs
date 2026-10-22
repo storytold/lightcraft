@@ -240,7 +240,19 @@ fn decode_chunk(data: &[u8], info: &ImageInfo, c: &Chunk, order: ByteOrder, pack
         comp::JPEG => {
             // Blackmagic's lossy CinemaDNG DCT-codes (SOF0/SOF1, 12-bit) its tiles under this compression code too
             let limit = n.saturating_mul(2).max(1 << 16);
-            let f = if dctjpeg::is_dct(src) { dctjpeg::decode(src, limit)? } else { ljpeg::decode(src, limit)? };
+            let f = if dctjpeg::is_dct(src) {
+                let f = dctjpeg::decode(src, limit)?;
+                // the DCT frame must have the tile's shape before its samples are copied into the tile
+                if f.components != cpp || f.width != cw || f.height < vh || f.height > ch {
+                    return Err(RawError::Corrupt(format!(
+                        "DCT JPEG tile is {}x{}x{}, expected {cw}x{vh}..{ch}x{cpp}",
+                        f.width, f.height, f.components
+                    )));
+                }
+                f
+            } else {
+                ljpeg::decode(src, limit)?
+            };
             if f.data.len() < n {
                 // Some writers encode edge tiles smaller than nominal: accept a frame that covers the rows inside the image.
                 if f.data.is_empty() || f.data.len() % (cw * cpp) != 0 || f.data.len() / (cw * cpp) < vh {
