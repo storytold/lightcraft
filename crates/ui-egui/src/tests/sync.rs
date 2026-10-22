@@ -311,6 +311,26 @@ fn a_folder_whose_only_news_is_a_copy_offers_the_box_and_starts_nothing_while_it
     assert_eq!(in_library(&h), vec!["a again.png", "a.png", "b.png"]);
 }
 
+/// With "Import new photos" unticked, the copies the box under it would bring in are not imported
+/// either: a copies-only folder with that box unticked and Import new photos off starts no job.
+#[test]
+fn a_copies_only_folder_with_import_new_off_starts_nothing_even_with_the_box_unticked() {
+    let dir = Scratch::new("copies-no-new");
+    let mut h = imported_folder(&dir, || {});
+    std::fs::copy(dir.path("trip/a.png"), dir.path("trip/a again.png")).unwrap();
+    open_and_scan(&mut h, &dir.path("trip"));
+    h.step();
+    match &mut h.app.ui.dialog {
+        Some(Dialog::SynchronizeFolder { import_new, import_duplicates, .. }) => (*import_new, *import_duplicates) = (false, true),
+        other => panic!("{other:?}"),
+    }
+    let r = h.request("ui.dialog.confirm", json!({}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(r["result"]["upToDate"], true, "{r}");
+    assert!(h.app.sync_run.is_none() && h.app.session.activity.list().is_empty(), "no job that does nothing");
+    assert_eq!(in_library(&h), vec!["a.png", "b.png"]);
+}
+
 #[test]
 fn an_agents_scan_is_kept_between_frames() {
     let dir = Scratch::new("agent");

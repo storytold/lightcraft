@@ -265,7 +265,7 @@ pub fn confirm(app: &mut LightcraftApp, dlg: &Dialog) -> Result<Value, String> {
     // (before the busy checks: nothing is imported or written, so a running import or
     // synchronize can't clash with it, and the dialog closes either way. Like every result the
     // dialog shows, it is the scan's: a file added since is found by the next Synchronize)
-    if counts.nothing_to_do(*import_duplicates) {
+    if counts.nothing_to_do(*import_new, *import_duplicates) {
         remember_import_duplicates(app, *import_duplicates);
         return Ok(json!({"upToDate": true}));
     }
