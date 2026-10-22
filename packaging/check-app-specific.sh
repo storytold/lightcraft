@@ -73,17 +73,22 @@ cat >"$fb/shim/uname" <<'SHEOF'
 case "$1" in -m) echo amd64 ;; -s) echo FreeBSD ;; *) exec /usr/bin/uname "$@" ;; esac
 SHEOF
 chmod 755 "$fb/shim/uname"
-python3 - "$fb/target/aarch64-unknown-freebsd/release" <<'PYEOF'
+# Just an ELF header: 64-bit, little-endian, FreeBSD ABI, aarch64, of the given ELF type
+# (1 relocatable, 2 executable), written to each path given. A shared library can't be faked
+# this way: with no dynamic section, file(1) calls an executable-mode one a PIE.
+freebsd_elf() {
+  python3 - "$@" <<'PYEOF'
 import os, struct, sys
-for name in ("lightcraft", "lightcraft-cli"):
-    # Just an ELF header: 64-bit, little-endian, FreeBSD ABI, executable, aarch64.
-    header = b"\x7fELF" + bytes([2, 1, 1, 9]) + bytes(8)
-    header += struct.pack("<HHIQQQIHHHHHH", 2, 183, 1, 0, 0, 0, 0, 64, 0, 0, 0, 0, 0)
-    path = os.path.join(sys.argv[1], name)
+header = b"\x7fELF" + bytes([2, 1, 1, 9]) + bytes(8)
+header += struct.pack("<HHIQQQIHHHHHH", int(sys.argv[1]), 183, 1, 0, 0, 0, 0, 64, 0, 0, 0, 0, 0)
+for path in sys.argv[2:]:
     with open(path, "wb") as out:
         out.write(header)
     os.chmod(path, 0o755)
 PYEOF
+}
+rel="$fb/target/aarch64-unknown-freebsd/release"
+freebsd_elf 2 "$rel/lightcraft" "$rel/lightcraft-cli"
 freebsd_package() {
   PATH="$fb/shim:$PATH" CARGO_TARGET_DIR="$fb/target" DIST="$fb/dist" bash packaging/freebsd/package.sh --skip-build
 }
@@ -96,7 +101,11 @@ grep -q 'skipping --version' <<<"$log" \
 if CARGO_BUILD_TARGET=aarch64-unknown-linux-gnu freebsd_package >/dev/null 2>&1; then
   echo "::error::FreeBSD package.sh packaged a Linux target"; exit 1
 fi
-printf '#!/bin/sh\n' >"$fb/target/aarch64-unknown-freebsd/release/lightcraft-cli"
+freebsd_elf 1 "$rel/lightcraft-cli"
+if CARGO_BUILD_TARGET=aarch64-unknown-freebsd freebsd_package >/dev/null 2>&1; then
+  echo "::error::FreeBSD package.sh packaged an ELF object file as an aarch64 executable"; exit 1
+fi
+printf '#!/bin/sh\n' >"$rel/lightcraft-cli"
 if CARGO_BUILD_TARGET=aarch64-unknown-freebsd freebsd_package >/dev/null 2>&1; then
   echo "::error::FreeBSD package.sh packaged a cross build whose binary is not a FreeBSD aarch64 executable"; exit 1
 fi
