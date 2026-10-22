@@ -573,8 +573,8 @@ const HUE_GAIN_RANGE: (f64, f64) = (0.5, 1.8);
 const HUE_TURN_LIMIT: f64 = 0.3;
 
 /// What `look` displays of a scene pair, as normalised chroma, with the target's, and where the pair's scene luminance
-/// lies between the nodes of `nodes`: `(node, position, displayed, target)`.
-fn chroma_samples(pairs: &[([f64; 3], [f64; 3])], look: &CameraLook, nodes: &ChromaBands) -> Vec<(usize, f64, [f64; 2], [f64; 2])> {
+/// lies between the nodes of `nodes`, and the tone map's chroma scale there: `(node, position, displayed, target, scale)`.
+fn chroma_samples(pairs: &[([f64; 3], [f64; 3])], look: &CameraLook, nodes: &ChromaBands) -> Vec<(usize, f64, [f64; 2], [f64; 2], f64)> {
     let tone = ToneMap::camera(&look.tone, 0.0, 0.0, 0.0);
     let correction = look.hue_sat.as_ref().and_then(HueSat::new);
     let mut out = Vec::with_capacity(pairs.len());
@@ -588,7 +588,8 @@ fn chroma_samples(pairs: &[([f64; 3], [f64; 3])], look: &CameraLook, nodes: &Chr
             continue;
         }
         let (j, t) = nodes.locate(scene as f32);
-        out.push((j, f64::from(t), np, nt));
+        let o = tone.apply(scene as f32);
+        out.push((j, f64::from(t), np, nt, f64::from(tone.chroma_scale(o))));
     }
     out
 }
@@ -599,7 +600,7 @@ fn fit_hue_chroma(pairs: &[([f64; 3], [f64; 3])], look: &CameraLook) -> Option<C
     let base = look.bands.clone().map_or_else(|| band_luminance(&ToneMap::camera(&look.tone, 0.0, 0.0, 0.0)).map(ChromaBands::identity), Some)?;
     // per node: Σ|n_p|², Σ n_p·n_t, Σ n_p×n_t
     let mut sums = [[0.0f64; 3]; HUE_NODES];
-    for (_, _, np, nt) in chroma_samples(pairs, look, &base) {
+    for (_, _, np, nt, _) in chroma_samples(pairs, look, &base) {
         let energy = np[0] * np[0] + np[1] * np[1];
         if energy < HUE_MIN_CHROMA * HUE_MIN_CHROMA {
             continue;
@@ -635,12 +636,16 @@ fn fit_hue_chroma(pairs: &[([f64; 3], [f64; 3])], look: &CameraLook) -> Option<C
 fn fit_chroma_offsets(pairs: &[([f64; 3], [f64; 3])], look: &CameraLook) -> Option<ChromaBands> {
     let base = look.bands.clone().map_or_else(|| band_luminance(&ToneMap::camera(&look.tone, 0.0, 0.0, 0.0)).map(ChromaBands::identity), Some)?;
     let mut sums = [[0.0f64; 3]; BAND_NODES];
-    for (j, t, np, nt) in chroma_samples(pairs, look, &base) {
+    for (j, t, np, nt, k) in chroma_samples(pairs, look, &base) {
+        // the offset is added in scene space, before the tone map whose chroma scale multiplies it
+        if !(k.is_finite() && k > 0.05) {
+            continue;
+        }
         for (node, w) in [(j, 1.0 - t), (j + 1, t)] {
             let s = sums.get_mut(node)?;
             s[0] += w;
-            s[1] += w * (nt[0] - np[0]);
-            s[2] += w * (nt[1] - np[1]);
+            s[1] += w * (nt[0] - np[0]) / k;
+            s[2] += w * (nt[1] - np[1]) / k;
         }
     }
     let mut offsets = [[0.0f32; 2]; BAND_NODES];
