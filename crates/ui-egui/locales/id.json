@@ -2352,5 +2352,20 @@
   "Restored the library": "Pustaka dipulihkan",
   "In the library folder": "Di folder pustaka",
   "Choose a Folder for Backups": "Pilih folder untuk cadangan",
-  "A backup holds the catalog, not the photos. Keep it on another drive than the library, so that it outlives that drive.": "Cadangan berisi katalog, bukan foto. Simpan di drive yang berbeda dari pustaka, agar tetap ada meskipun drive tersebut rusak."
+  "A backup holds the catalog, not the photos. Keep it on another drive than the library, so that it outlives that drive.": "Cadangan berisi katalog, bukan foto. Simpan di drive yang berbeda dari pustaka, agar tetap ada meskipun drive tersebut rusak.",
+  "While open": "Saat terbuka",
+  "When quitting": "Saat keluar",
+  "Last backup": "Cadangan terakhir",
+  "Not yet": "Belum",
+  "Once a day": "Sekali sehari",
+  "Once a week": "Sekali seminggu",
+  "Once a month": "Sekali sebulan",
+  "Ask": "Tanya",
+  "Back Up": "Cadangkan",
+  "Quit Without Waiting": "Keluar tanpa menunggu",
+  "Back up before quitting?": "Cadangkan sebelum keluar?",
+  "Back up the library before LightCraft quits?": "Cadangkan pustaka sebelum LightCraft ditutup?",
+  "Backing up before quitting": "Mencadangkan sebelum keluar",
+  "Backing up the library. LightCraft quits when the backup is made.": "Mencadangkan pustaka. LightCraft akan keluar setelah pencadangan selesai.",
+  "Quit without a backup?": "Keluar tanpa cadangan?"
 }

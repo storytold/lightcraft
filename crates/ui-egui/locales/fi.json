@@ -2340,5 +2340,20 @@
   "Restored the library": "Kirjasto palautettu",
   "In the library folder": "Kirjastokansiossa",
   "Choose a Folder for Backups": "Valitse kansio varmuuskopioille",
-  "A backup holds the catalog, not the photos. Keep it on another drive than the library, so that it outlives that drive.": "Varmuuskopio sisältää katalogin, ei valokuvia. Säilytä sitä eri asemalla kuin kirjastoa, jotta se säilyy, vaikka kyseinen asema menisi rikki."
+  "A backup holds the catalog, not the photos. Keep it on another drive than the library, so that it outlives that drive.": "Varmuuskopio sisältää katalogin, ei valokuvia. Säilytä sitä eri asemalla kuin kirjastoa, jotta se säilyy, vaikka kyseinen asema menisi rikki.",
+  "While open": "Kun kirjasto on auki",
+  "When quitting": "Suljettaessa",
+  "Last backup": "Viimeisin varmuuskopio",
+  "Not yet": "Ei vielä",
+  "Once a day": "Kerran päivässä",
+  "Once a week": "Kerran viikossa",
+  "Once a month": "Kerran kuukaudessa",
+  "Ask": "Kysy",
+  "Back Up": "Varmuuskopioi",
+  "Quit Without Waiting": "Lopeta odottamatta",
+  "Back up before quitting?": "Varmuuskopioidaanko ennen lopettamista?",
+  "Back up the library before LightCraft quits?": "Varmuuskopioidaanko kirjasto ennen kuin LightCraft sulkeutuu?",
+  "Backing up before quitting": "Varmuuskopioidaan ennen lopettamista",
+  "Backing up the library. LightCraft quits when the backup is made.": "Kirjastoa varmuuskopioidaan. LightCraft sulkeutuu, kun varmuuskopio on valmis.",
+  "Quit without a backup?": "Lopetetaanko ilman varmuuskopiota?"
 }

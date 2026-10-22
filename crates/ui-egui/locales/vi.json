@@ -2248,5 +2248,20 @@
   "Restored the library": "Đã khôi phục thư viện",
   "In the library folder": "Trong thư mục thư viện",
   "Choose a Folder for Backups": "Chọn thư mục cho bản sao lưu",
-  "A backup holds the catalog, not the photos. Keep it on another drive than the library, so that it outlives that drive.": "Bản sao lưu chứa danh mục, không chứa ảnh. Hãy lưu nó trên ổ đĩa khác với thư viện để nó vẫn còn khi ổ đĩa đó hỏng."
+  "A backup holds the catalog, not the photos. Keep it on another drive than the library, so that it outlives that drive.": "Bản sao lưu chứa danh mục, không chứa ảnh. Hãy lưu nó trên ổ đĩa khác với thư viện để nó vẫn còn khi ổ đĩa đó hỏng.",
+  "While open": "Khi đang mở",
+  "When quitting": "Khi thoát",
+  "Last backup": "Bản sao lưu gần nhất",
+  "Not yet": "Chưa có",
+  "Once a day": "Mỗi ngày một lần",
+  "Once a week": "Mỗi tuần một lần",
+  "Once a month": "Mỗi tháng một lần",
+  "Ask": "Hỏi",
+  "Back Up": "Sao lưu",
+  "Quit Without Waiting": "Thoát mà không chờ",
+  "Back up before quitting?": "Sao lưu trước khi thoát?",
+  "Back up the library before LightCraft quits?": "Sao lưu thư viện trước khi LightCraft thoát?",
+  "Backing up before quitting": "Đang sao lưu trước khi thoát",
+  "Backing up the library. LightCraft quits when the backup is made.": "Đang sao lưu thư viện. LightCraft sẽ thoát khi bản sao lưu hoàn tất.",
+  "Quit without a backup?": "Thoát mà không sao lưu?"
 }

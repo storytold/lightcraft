@@ -2442,5 +2442,20 @@
   "Restored the library": "Biblioteket återställdes",
   "In the library folder": "I biblioteksmappen",
   "Choose a Folder for Backups": "Välj en mapp för säkerhetskopior",
-  "A backup holds the catalog, not the photos. Keep it on another drive than the library, so that it outlives that drive.": "En säkerhetskopia innehåller katalogen, inte fotona. Förvara den på en annan enhet än biblioteket, så att den finns kvar om den enheten går sönder."
+  "A backup holds the catalog, not the photos. Keep it on another drive than the library, so that it outlives that drive.": "En säkerhetskopia innehåller katalogen, inte fotona. Förvara den på en annan enhet än biblioteket, så att den finns kvar om den enheten går sönder.",
+  "While open": "Medan det är öppet",
+  "When quitting": "Vid avslut",
+  "Last backup": "Senaste säkerhetskopia",
+  "Not yet": "Inte än",
+  "Once a day": "En gång om dagen",
+  "Once a week": "En gång i veckan",
+  "Once a month": "En gång i månaden",
+  "Ask": "Fråga",
+  "Back Up": "Säkerhetskopiera",
+  "Quit Without Waiting": "Avsluta utan att vänta",
+  "Back up before quitting?": "Säkerhetskopiera före avslut?",
+  "Back up the library before LightCraft quits?": "Säkerhetskopiera biblioteket innan LightCraft avslutas?",
+  "Backing up before quitting": "Säkerhetskopierar före avslut",
+  "Backing up the library. LightCraft quits when the backup is made.": "Biblioteket säkerhetskopieras. LightCraft avslutas när säkerhetskopian är klar.",
+  "Quit without a backup?": "Avsluta utan säkerhetskopia?"
 }
