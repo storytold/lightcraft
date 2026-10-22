@@ -2240,5 +2240,8 @@
   "Backing up the library": "Đang sao lưu thư viện",
   "Backup Status": "Trạng thái sao lưu",
   "Check Backup": "Kiểm tra bản sao lưu",
-  "Backup Preferences": "Tùy chọn sao lưu"
+  "Backup Preferences": "Tùy chọn sao lưu",
+  "Backups": "Bản sao lưu",
+  "Restore Library from Backup": "Khôi phục thư viện từ bản sao lưu",
+  "Restoring the library": "Đang khôi phục thư viện"
 }

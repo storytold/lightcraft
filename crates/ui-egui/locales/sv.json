@@ -2434,5 +2434,8 @@
   "Backing up the library": "Säkerhetskopierar biblioteket",
   "Backup Status": "Säkerhetskopians status",
   "Check Backup": "Kontrollera säkerhetskopian",
-  "Backup Preferences": "Inställningar för säkerhetskopiering"
+  "Backup Preferences": "Inställningar för säkerhetskopiering",
+  "Backups": "Säkerhetskopior",
+  "Restore Library from Backup": "Återställ bibliotek från säkerhetskopia",
+  "Restoring the library": "Återställer biblioteket"
 }

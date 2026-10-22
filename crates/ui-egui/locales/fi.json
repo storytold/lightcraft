@@ -2332,5 +2332,8 @@
   "Backing up the library": "Kirjastoa varmuuskopioidaan",
   "Backup Status": "Varmuuskopion tila",
   "Check Backup": "Tarkista varmuuskopio",
-  "Backup Preferences": "Varmuuskopioinnin asetukset"
+  "Backup Preferences": "Varmuuskopioinnin asetukset",
+  "Backups": "Varmuuskopiot",
+  "Restore Library from Backup": "Palauta kirjasto varmuuskopiosta",
+  "Restoring the library": "Kirjastoa palautetaan"
 }
