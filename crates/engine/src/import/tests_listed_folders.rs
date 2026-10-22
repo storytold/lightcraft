@@ -209,7 +209,8 @@ fn an_import_after_a_review_trusts_the_folders_the_review_listed() {
 }
 
 /// A path the listing calls a file is not asked about (here the disk holds a folder by that
-/// name, which only a look at the disk would find); one it does not list still is.
+/// name, which only a look at the disk would find) while its folder is as it was listed; one it
+/// does not list still is.
 #[test]
 fn a_file_the_listing_does_not_know_is_still_checked() {
     let root = scratch("known");
@@ -217,8 +218,10 @@ fn a_file_the_listing_does_not_know_is_still_checked() {
         std::fs::create_dir_all(root.join(name)).unwrap();
         std::fs::write(root.join(name).join("inner.jpg"), b"x").unwrap();
     }
+    settle(&root);
     let mut job = job(SidecarNaming::Stem);
-    job.listed.note(&root, vec![("known.jpg".into(), crate::walk::EntryKind::File)], true, None);
+    // (the folder is as listed: its time is the one the listing holds)
+    job.listed.note(&root, vec![("known.jpg".into(), crate::walk::EntryKind::File)], true, modified(&root));
     let (known, unknown) = (root.join("known.jpg"), root.join("unknown.jpg"));
     let files = job.expand(&[known.to_string_lossy().to_string(), unknown.to_string_lossy().to_string()]);
     assert_eq!(files, [known.to_string_lossy().to_string(), unknown.join("inner.jpg").to_string_lossy().to_string()]);
@@ -314,5 +317,39 @@ fn a_sidecar_written_in_the_tick_of_the_listing_is_read() {
     let mut job = job(SidecarNaming::Stem).with_listed(walked);
     let found = ratings(job.prepare_files(files, &AtomicBool::new(false)));
     assert_eq!(found.iter().filter(|(_, r)| *r == Some(5)).count(), 1, "{found:?}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Given a review whose listing was kept, when a listed file is replaced by a folder holding a
+/// photo afterwards, then the import's expansion walks that folder: a name in a folder that
+/// changed since it was listed is not trusted to still be a file.
+#[test]
+fn a_listed_file_replaced_by_a_folder_is_expanded() {
+    let root = scratch("replaced");
+    for n in 0..3 {
+        std::fs::write(root.join(format!("a{n}.jpg")), b"x").unwrap();
+    }
+    settle(&root);
+    let mut walked = ListedFolders::default();
+    let (files, _) = expand_knowing(
+        &[root.to_string_lossy().to_string()],
+        None,
+        crate::walk::Limits::default(),
+        Some(&mut |dir, names, complete, modified| {
+            walked.note(dir, names, complete, modified);
+            true
+        }),
+        true,
+        &|_| false,
+    );
+    assert_eq!(files.len(), 3);
+    std::fs::remove_file(root.join("a1.jpg")).unwrap();
+    std::fs::create_dir(root.join("a1.jpg")).unwrap();
+    std::fs::write(root.join("a1.jpg").join("inside.jpg"), b"x").unwrap();
+    let mut job = job(SidecarNaming::Stem).with_listed(walked);
+    // (the paths handed to the import are the files the review listed)
+    let found = job.expand(&files);
+    assert!(found.iter().any(|f| f.ends_with("inside.jpg")), "{found:?}");
+    assert_eq!(found.len(), 3, "{found:?}");
     let _ = std::fs::remove_dir_all(&root);
 }

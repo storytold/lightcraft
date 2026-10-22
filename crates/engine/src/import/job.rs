@@ -231,6 +231,8 @@ impl ImportJob {
         // (a file the review listed is a file: no round trip to a share to ask)
         let mut listed = std::mem::take(&mut self.listed);
         let mut walked = ListedFolders::default();
+        // (the folders' times are looked at now, not as an earlier batch found them)
+        listed.new_batch();
         let (files, _) = expand_knowing(
             paths,
             self.lib_dir.as_deref(),

@@ -108,10 +108,13 @@ impl ListedFolders {
     }
 
     /// Whether a listing says `path` is a file, as it was found: the disk need not be asked.
+    /// Only while its folder is as it was listed (a file may have been replaced by a folder since;
+    /// a folder with no usable time is never trusted).
     pub(crate) fn is_known_file(&self, path: &Path) -> bool {
         let (Some(dir), Some(name)) = (path.parent(), path.file_name().and_then(|n| n.to_str())) else { return false };
         // (the path ends in that name: no `/.` or separator after it, which the disk would resolve)
-        path.to_str().is_some_and(|p| p.ends_with(name)) && self.folders.get(dir).is_some_and(|f| f.files.contains(name))
+        path.to_str().is_some_and(|p| p.ends_with(name))
+            && self.folders.get(dir).is_some_and(|f| f.files.contains(name) && self.unchanged(dir, f.modified))
     }
 
     /// Whether the listing of `original`'s folder shows that none of its sidecar names is there.
