@@ -650,10 +650,25 @@ impl Session {
     /// Plan a merge of `ids` (catalog order of the given ids is kept). A photo named more than once is merged once
     /// (issue #1947): it adds nothing to the merge, and each copy would be decoded and held in memory.
     pub fn plan_merge(&self, kind: MergeKind, finish: MergeFinish, ids: &[PhotoId], preview: bool) -> Result<MergeJob> {
+        let available = merge_memory_bytes(crate::memory::total_ram(), crate::memory::budget());
+        self.plan_merge_with_budget(kind, finish, ids, preview, available)
+    }
+
+    pub(crate) fn plan_merge_with_budget(
+        &self,
+        kind: MergeKind,
+        finish: MergeFinish,
+        ids: &[PhotoId],
+        preview: bool,
+        available: usize,
+    ) -> Result<MergeJob> {
         let mut sources = Vec::new();
         let preview_edge = preview.then_some(PREVIEW_EDGE);
         let mut dimensions = MergeDimensions::default();
-        let available = merge_memory_bytes(crate::memory::total_ram(), crate::memory::budget());
+        let read: ByteReader = match &self.media.file_bytes {
+            Some(r) => r.clone(),
+            None => Arc::new(|path: &str| std::fs::read(path).map_err(|e| format!("{path}: {e}"))),
+        };
         let mut seen = std::collections::HashSet::new();
         for id in ids.iter().filter(|id| seen.insert(**id)) {
             let p = self.catalog.photo(*id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(*id))?;
@@ -662,11 +677,18 @@ impl Session {
                     let (decoder_width, decoder_height) = if p.source_width > 0 && p.source_height > 0 {
                         (p.source_width.max(p.width), p.source_height.max(p.height))
                     } else if p.kind == lightcraft_catalog::MediaKind::Raw {
-                        // Older catalogs and Lightroom imports lack uncropped raw dimensions. Use
-                        // a square at least as large as the recorded frame so those libraries can
-                        // still plan merges without probing or reading source files first.
-                        let edge = p.width.max(p.height);
-                        (p.source_width.max(edge), p.source_height.max(edge))
+                        // A legacy frame may be a tiny default crop, so it cannot bound the
+                        // sensor allocation. Probe headers sequentially, releasing each file's
+                        // bytes before reading the next; never decode pixels during planning.
+                        let bytes = read(path).map_err(EngineError::Other)?;
+                        let info = crate::files::probe_bytes(path, &bytes).map_err(EngineError::Other)?;
+                        if info.source_width == 0 || info.source_height == 0 {
+                            return Err(EngineError::Other(format!(
+                                "cannot safely estimate uncropped source dimensions for {}; the original RAW format must be supported before Photo Merge",
+                                p.file_name
+                            )));
+                        }
+                        (info.source_width.max(p.width), info.source_height.max(p.height))
                     } else {
                         (p.source_width.max(p.width), p.source_height.max(p.height))
                     };
@@ -681,10 +703,6 @@ impl Session {
         }
         let estimated = dimensions.working_bytes(&kind, preview, available).map_err(EngineError::Other)?;
         check_merge_memory_budget(estimated, available).map_err(EngineError::Other)?;
-        let read: ByteReader = match &self.media.file_bytes {
-            Some(r) => r.clone(),
-            None => Arc::new(|path: &str| std::fs::read(path).map_err(|e| format!("{path}: {e}"))),
-        };
         Ok(MergeJob { kind, finish, sources, preview: preview_edge, read })
     }
 

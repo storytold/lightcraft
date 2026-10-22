@@ -39,13 +39,19 @@ fn hdr_merge_rejects_over_budget_dimensions_before_reading_sources() {
     assert_eq!(reads.load(Ordering::Relaxed), 0, "Photo Merge read source bytes before rejecting its memory estimate");
 }
 
-#[test]
-fn legacy_raw_catalog_without_source_dimensions_still_plans_a_merge() {
-    use std::sync::atomic::{AtomicUsize, Ordering};
+/// A pre-source-dimensions snapshot stores only the tiny default crop of this DNG.
+fn legacy_cropped_raw_catalog() -> (Session, Vec<lightcraft_catalog::PhotoId>, Vec<u8>) {
+    let source = lightcraft_merge::synth::bracket_dngs(512, 384, &[0.0]).unwrap().remove(0);
+    let mut raw = lightcraft_raw::decode(&source).unwrap();
+    raw.crop = lightcraft_raw::Rect::new(0, 0, 16, 12);
+    let bytes = lightcraft_raw::write_dng(&raw, &Default::default()).unwrap();
+    let probe = crate::files::probe_bytes("cropped.dng", &bytes).unwrap();
+    assert_eq!((probe.width, probe.height), (16, 12));
+    assert_eq!((probe.source_width, probe.source_height), (512, 384));
 
     let mut s = Session::new();
     let mut ids = Vec::new();
-    for i in 0..2 {
+    for i in 0..4 {
         let id = s.catalog.alloc_photo_id();
         let path = format!("legacy-raw-{i}.dng");
         let mut photo = lightcraft_catalog::Photo::new(
@@ -53,18 +59,14 @@ fn legacy_raw_catalog_without_source_dimensions_still_plans_a_merge() {
             lightcraft_catalog::Source::File { path: path.clone() },
             &path,
             "DNG",
-            100,
-            100,
+            probe.width,
+            probe.height,
             "2026-10-18T00:00:00Z",
         );
         photo.kind = lightcraft_catalog::MediaKind::Raw;
-        photo.source_width = 0;
-        photo.source_height = 0;
         s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(photo) }).unwrap();
         ids.push(id);
     }
-
-    // Omit the fields as a catalog written before source dimensions were added to Photo.
     let mut legacy: serde_json::Value = serde_json::from_str(&s.catalog.to_snapshot()).unwrap();
     for photo in legacy["photos"].as_object_mut().unwrap().values_mut() {
         let fields = photo.as_object_mut().unwrap();
@@ -76,24 +78,60 @@ fn legacy_raw_catalog_without_source_dimensions_still_plans_a_merge() {
         let photo = s.catalog.photo(*id).unwrap();
         assert_eq!((photo.source_width, photo.source_height), (0, 0));
     }
+    (s, ids, bytes)
+}
 
-    let probes = std::sync::Arc::new(AtomicUsize::new(0));
-    let probe_count = probes.clone();
-    s.media.file_probe = Some(std::sync::Arc::new(move |_| {
-        probe_count.fetch_add(1, Ordering::Relaxed);
-        Ok(crate::media::ProbeInfo { source_width: 100, source_height: 100, ..Default::default() })
-    }));
-    let reads = std::sync::Arc::new(AtomicUsize::new(0));
-    let read_count = reads.clone();
-    s.media.file_bytes = Some(std::sync::Arc::new(move |_| {
-        read_count.fetch_add(1, Ordering::Relaxed);
-        Err("source reader should not be called".into())
-    }));
+#[test]
+fn legacy_cropped_raw_catalog_probes_uncropped_dimensions_before_planning() {
+    use crate::merge::{MergeFinish, MergeKind, estimate_merge_working_bytes_with_source_dimensions};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
 
-    let job = s.plan_merge(crate::merge::MergeKind::Hdr { hdr: Default::default() }, crate::merge::MergeFinish::default(), &ids, false).unwrap();
-    assert_eq!(job.sources.len(), 2);
-    assert_eq!(probes.load(Ordering::Relaxed), 0, "legacy dimension fallback must not probe files");
-    assert_eq!(reads.load(Ordering::Relaxed), 0, "planning must not read source bytes");
+    let (mut s, ids, bytes) = legacy_cropped_raw_catalog();
+    let reads = Arc::new(AtomicUsize::new(0));
+    let count = reads.clone();
+    s.media.file_bytes = Some(Arc::new(move |_| {
+        count.fetch_add(1, Ordering::Relaxed);
+        Ok(bytes.clone())
+    }));
+    // Planning must not use a decoder or a cached/provided probe that could be stale.
+    s.media.file_probe = Some(Arc::new(|_| panic!("planning must probe original bytes")));
+    s.media.file_loader = Some(Arc::new(|_, _| panic!("planning must not decode pixels")));
+    for kind in [
+        MergeKind::Hdr { hdr: Default::default() },
+        MergeKind::Panorama { pano: Default::default() },
+        MergeKind::HdrPanorama { hdr: Default::default(), pano: Default::default(), bracket: 2 },
+    ] {
+        for preview in [false, true] {
+            let edge = preview.then_some(1024);
+            let expected = estimate_merge_working_bytes_with_source_dimensions(&kind, &[((16, 12), (512, 384)); 4], edge, usize::MAX).unwrap();
+            let underestimated = estimate_merge_working_bytes_with_source_dimensions(&kind, &[((16, 12), (16, 16)); 4], edge, expected - 1).unwrap();
+            assert!(underestimated < expected - 1, "fixture must distinguish cropped and sensor bounds");
+            let error = s
+                .plan_merge_with_budget(kind.clone(), MergeFinish::default(), &ids, preview, expected - 1)
+                .err()
+                .expect("sensor memory must exceed budget");
+            assert!(error.to_string().contains("memory budget"), "{error}");
+            let job = s.plan_merge_with_budget(kind.clone(), MergeFinish::default(), &ids, preview, usize::MAX).unwrap();
+            assert_eq!(job.sources.len(), 4);
+        }
+    }
+    assert_eq!(reads.load(Ordering::Relaxed), 48, "each plan probes the four originals sequentially");
+}
+
+#[test]
+fn legacy_cropped_raw_catalog_fails_safely_when_original_cannot_be_probed() {
+    use crate::merge::{MergeFinish, MergeKind};
+    use std::sync::Arc;
+
+    let (mut s, ids, _) = legacy_cropped_raw_catalog();
+    s.media.file_bytes = Some(Arc::new(|_| Err("original unavailable".into())));
+    let error = s.plan_merge(MergeKind::Hdr { hdr: Default::default() }, MergeFinish::default(), &ids, true).err().unwrap();
+    assert!(error.to_string().contains("original unavailable"), "{error}");
+    s.media.file_bytes = Some(Arc::new(|_| Ok(b"invalid RAW headers".to_vec())));
+    assert!(s.plan_merge(MergeKind::Hdr { hdr: Default::default() }, MergeFinish::default(), &ids, false).is_err());
 }
 
 #[test]

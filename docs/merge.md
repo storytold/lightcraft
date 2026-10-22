@@ -89,8 +89,9 @@ scale in `BaselineExposure`; raw sources keep their DNG colour tags (camera RGB)
   (75% of RAM less the app cache budget; 8 GiB RAM is assumed when unknown, clamped to the target's addressable range).
   The estimate keeps cropped frame dimensions separate from uncropped raw decoder dimensions, so a small DNG default
   crop does not hide the full sensor allocation. Probed imports retain both dimensions in the catalog; an older raw
-  record without them (including Lightroom catalog imports) uses a square based on its longest recorded frame
-  dimension, so planning remains possible without probing or reading source files. HDR,
+  record without them (including Lightroom catalog imports) is probed from the original's headers before planning.
+  Files are read one at a time without decoding pixels; if uncropped dimensions cannot be obtained, planning fails
+  with an error rather than estimating from a potentially cropped frame. HDR,
   panoramas and HDR panoramas include their operation-specific working memory; panorama estimates allow the projected
   canvas to exceed source area (perspective bounds use the stitcher's 12× input-area limit), and previews account for
   1024 px frames, concurrent decoder work and the retained preview cache (including the four-photo preview loader in

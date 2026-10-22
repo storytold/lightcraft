@@ -128,6 +128,8 @@ fn reload_of_a_selection_runs_in_the_background() {
             id,
             width: p.width,
             height: p.height,
+            source_width: None,
+            source_height: None,
             file_size: p.file_size,
             content_hash: p.content_hash.clone(),
             preview_only: Some("Cr3 files are not decoded yet".into()),
