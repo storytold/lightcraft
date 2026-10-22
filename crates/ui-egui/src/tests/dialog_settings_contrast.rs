@@ -182,20 +182,34 @@ fn a_text_box_in_use_is_outlined_so_it_stands_out_in_every_theme() {
         let mut h = demo(kind);
         let t = Tokens::for_kind(kind);
         show(&mut h, "general");
-        // Given the text box has the keyboard (a click in it), and the pointer has gone away
+        // Given the text box as it is without the keyboard, then with it (a click in it), the pointer away
+        let unfocused = h.paint();
         let r = h.request("ui.clickWidget", json!({"id": "field:externalEditor"}), T);
         assert_eq!(r["ok"], true, "{r}");
         h.request("ui.move", json!({"x": 3.0, "y": 3.0}), T);
         for _ in 0..4 {
             h.step();
         }
-        // Then its top edge stands 3:1 against the window
-        let image = h.paint();
+        // Then what the keyboard focus adds to the edge stands 3:1 against the window: the border
+        // a text box has without it (also 3:1) must not be what passes
+        let focused = h.paint();
         let field = rect(&h, "field:externalEditor");
         let edge =
             egui::Rect::from_min_max(egui::pos2(field.center().x - 20.0, field.top() - 1.0), egui::pos2(field.center().x + 20.0, field.top() + 2.0));
-        assert!(strongest(&image, edge, t.chrome) >= 3.0, "{kind:?}: a text box in use is outlined {:.2}:1", strongest(&image, edge, t.chrome));
+        let outline = added_by_focus(&unfocused, &focused, edge);
+        assert!(!outline.is_empty(), "{kind:?}: the text box in use looks the same as when it is not");
+        let best = outline.iter().map(|c| contrast(*c, t.chrome)).fold(1.0, f32::max);
+        assert!(best >= 3.0, "{kind:?}: a text box in use is outlined {best:.2}:1");
     }
+}
+
+/// The colours of the pixels of `rect` that differ between `before` and `after`.
+fn added_by_focus(before: &egui::ColorImage, after: &egui::ColorImage, rect: egui::Rect) -> Vec<Color32> {
+    let [w, h] = after.size;
+    assert_eq!(before.size, after.size);
+    let (x0, x1) = (rect.left().floor().max(0.0) as usize, (rect.right().ceil().max(0.0) as usize).min(w));
+    let (y0, y1) = (rect.top().floor().max(0.0) as usize, (rect.bottom().ceil().max(0.0) as usize).min(h));
+    (y0..y1).flat_map(|y| (x0..x1).map(move |x| y * w + x)).filter(|i| before.pixels[*i] != after.pixels[*i]).map(|i| after.pixels[i]).collect()
 }
 
 #[test]
@@ -211,7 +225,8 @@ fn no_text_in_settings_uses_a_character_the_font_lacks() {
 }
 
 /// What Settings says that no language had a word for: every catalog has each of these now (these
-/// 20, and the three menu items the hint names, which the last test below checks).
+/// 20, and the menu items the hint names, with Edit in Other Editor, which
+/// `the_menu_path_a_hint_gives_is_the_one_the_menus_show` checks).
 const ONCE_UNTRANSLATED: [&str; 20] = [
     "Choose Profile…",
     "Edit in Other Editor (⌥⌘E) opens the copy in this application (an app name on macOS, a program path elsewhere).",
@@ -272,6 +287,9 @@ fn the_menu_path_a_hint_gives_is_the_one_the_menus_show() {
             assert!(name != item, "{}: the menu item {item:?} has no translation", language.code());
             assert!(said.contains(name), "{}: the hint does not name {name:?}: {said:?}", language.code());
         }
+        // (Edit in Other Editor is a third item of the same menus; the hint does not name it)
+        let item = "Edit in Other Editor";
+        assert!(language.tr(item) != item, "{}: the menu item {item:?} has no translation", language.code());
     }
 }
 
