@@ -306,8 +306,10 @@ pub fn forced_window_renderer(app: Option<&str>, wgpu: Option<&str>) -> Option<W
 
 /// The order in which the window's renderers are tried on `os`: the forced one (environment)
 /// first, then the one remembered from the last good start, then the platform chain — on Windows
-/// DX12, Vulkan, GL, then glow. DX12 stays first: with Vulkan loaded, a broken Vulkan driver can
-/// crash the process uncatchably (issue #136), so Vulkan is touched only after DX12 failed.
+/// DX12, GL, then glow. On Windows Vulkan is used only when the environment asks for it: with
+/// Vulkan loaded, a broken Vulkan driver can crash the process uncatchably (issue #136), so it is
+/// never in the automatic chain, and the renderer remembered from the last run cannot put it
+/// first either.
 /// `failed` (the renderer the last start died in) goes last, as a last resort only. Backends not
 /// in `compiled`, and glow without `glow`, are left out; the list is never empty.
 pub fn window_renderer_order(
@@ -319,7 +321,8 @@ pub fn window_renderer_order(
     glow: bool,
 ) -> Vec<WindowRenderer> {
     let platform = match os {
-        "windows" => vec![Backends::DX12, Backends::VULKAN, Backends::GL],
+        // no Vulkan on Windows: its driver can crash the process uncatchably (issue #136)
+        "windows" => vec![Backends::DX12, Backends::GL],
         "macos" | "ios" => vec![Backends::METAL],
         _ => vec![Backends::VULKAN, Backends::GL],
     };
@@ -329,7 +332,15 @@ pub fn window_renderer_order(
         WindowRenderer::Wgpu(b) => !b.is_empty() && compiled.contains(*b),
     };
     let not_failed = |r: &WindowRenderer| Some(*r) != failed;
-    let candidates = forced.into_iter().chain(remembered.filter(not_failed)).chain(chain.filter(not_failed)).chain(failed);
+    // On Windows the Vulkan driver is loaded only when the environment asks for it (the forced
+    // renderer): a broken one crashes the process uncatchably (issue #136). So neither the
+    // renderer remembered from the last run nor the one the last start died in can bring it back.
+    let no_vulkan = |r: &WindowRenderer| os != "windows" || !matches!(r, WindowRenderer::Wgpu(b) if b.contains(Backends::VULKAN));
+    let candidates = forced
+        .into_iter()
+        .chain(remembered.filter(|r| not_failed(r) && no_vulkan(r)))
+        .chain(chain.filter(not_failed))
+        .chain(failed.filter(no_vulkan));
     let mut out: Vec<WindowRenderer> = Vec::new();
     for r in candidates {
         if usable(&r) && !out.contains(&r) {
@@ -457,27 +468,51 @@ mod tests {
     }
 
     /// The window's renderer fallback: forced, remembered, the platform chain, the failed one last.
+    /// On Windows Vulkan is not in the chain (issue #136) — see
+    /// `windows_never_uses_vulkan_unless_it_is_asked_for`.
     #[test]
     fn window_renderer_fallback_order() {
         use WindowRenderer::{Glow, Wgpu};
         let all = Backends::DX12 | Backends::VULKAN | Backends::GL | Backends::METAL;
         let (dx, vk, gl) = (Wgpu(Backends::DX12), Wgpu(Backends::VULKAN), Wgpu(Backends::GL));
-        assert_eq!(window_renderer_order(None, None, None, "windows", all, true), [dx, vk, gl, Glow]);
-        assert_eq!(window_renderer_order(None, None, None, "windows", all, false), [dx, vk, gl]);
+        assert_eq!(window_renderer_order(None, None, None, "windows", all, true), [dx, gl, Glow]);
+        assert_eq!(window_renderer_order(None, None, None, "windows", all, false), [dx, gl]);
         // a build without GL
-        assert_eq!(window_renderer_order(None, None, None, "windows", Backends::DX12 | Backends::VULKAN, true), [dx, vk, Glow]);
+        assert_eq!(window_renderer_order(None, None, None, "windows", Backends::DX12 | Backends::VULKAN, true), [dx, Glow]);
         // remembered from the last good start goes first
-        assert_eq!(window_renderer_order(None, Some(vk), None, "windows", all, true), [vk, dx, gl, Glow]);
+        assert_eq!(window_renderer_order(None, Some(gl), None, "windows", all, true), [gl, dx, Glow]);
         // the environment wins over the remembered one
-        assert_eq!(window_renderer_order(Some(gl), Some(vk), None, "windows", all, true), [gl, vk, dx, Glow]);
+        assert_eq!(window_renderer_order(Some(gl), Some(dx), None, "windows", all, true), [gl, dx, Glow]);
         assert_eq!(window_renderer_order(Some(Glow), None, None, "windows", all, true)[0], Glow);
         // the last start died in DX12: tried last only (also when it was remembered)
-        assert_eq!(window_renderer_order(None, Some(dx), Some(dx), "windows", all, true), [vk, gl, Glow, dx]);
+        assert_eq!(window_renderer_order(None, Some(dx), Some(dx), "windows", all, true), [gl, Glow, dx]);
         // a forced backend that is not in the build is skipped
         assert_eq!(window_renderer_order(Some(Wgpu(Backends::METAL)), None, None, "windows", Backends::DX12, false), [dx]);
         // never empty
         assert!(!window_renderer_order(None, None, None, "windows", Backends::empty(), false).is_empty());
         assert_eq!(window_renderer_order(None, None, None, "macos", all, true), [Wgpu(Backends::METAL), Glow]);
+        // Vulkan is asked for on Windows: it is used
+        assert_eq!(window_renderer_order(Some(vk), None, None, "windows", all, true), [vk, dx, gl, Glow]);
+    }
+
+    /// Issue #136: on Windows the Vulkan driver is never loaded unless it is asked for — a
+    /// broken one crashes the process uncatchably. The renderer remembered from the last run
+    /// must not put Vulkan before DX12 either.
+    #[test]
+    fn windows_never_uses_vulkan_unless_it_is_asked_for() {
+        let all = Backends::DX12 | Backends::VULKAN | Backends::GL | Backends::METAL;
+        let dx = WindowRenderer::Wgpu(Backends::DX12);
+        let vk = WindowRenderer::Wgpu(Backends::VULKAN);
+        // the automatic chain: DX12 first, no Vulkan in it
+        let automatic = window_renderer_order(None, None, None, "windows", all, true);
+        assert!(!automatic.contains(&vk), "the automatic Windows chain must not contain Vulkan: {automatic:?}");
+        assert_eq!(automatic.first(), Some(&dx));
+        // the renderer remembered from the last run does not put Vulkan first either
+        let remembered = window_renderer_order(None, Some(vk), None, "windows", all, true);
+        assert!(!remembered.contains(&vk), "a remembered Vulkan must not be tried: {remembered:?}");
+        assert_eq!(remembered.first(), Some(&dx));
+        // asked for explicitly (the environment), Vulkan is used
+        assert_eq!(window_renderer_order(Some(vk), None, None, "windows", all, true).first(), Some(&vk));
     }
 
     #[test]
