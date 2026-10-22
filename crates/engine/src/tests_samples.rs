@@ -36,7 +36,7 @@ fn sample_photos_come_into_an_empty_library_as_one_undo_step() {
     // Given a new, empty library
     let mut s = Session::new();
     assert_eq!(s.catalog.len(), 0);
-    assert!(s.catalog.never_held_photos() && !s.has_samples());
+    assert!(!s.has_samples());
     // When the person asks for the sample photos
     let r = s.execute("library.addSamples", &json!({})).unwrap();
     // Then the demo photos and their albums are in, and one is selected to look at
@@ -50,7 +50,7 @@ fn sample_photos_come_into_an_empty_library_as_one_undo_step() {
     s.execute("edit.undo", &json!({})).unwrap();
     assert_eq!(s.catalog.len(), 0);
     assert_eq!(s.catalog.albums().count(), 0);
-    assert!(!s.has_samples() && !s.catalog.never_held_photos());
+    assert!(!s.has_samples());
 }
 
 #[test]
@@ -111,7 +111,7 @@ fn removing_the_samples_while_one_of_their_albums_is_shown_goes_back_to_all_phot
 
 #[test]
 fn the_catalog_counts_its_sample_photos_as_they_come_and_go() {
-    // the count the banner and the Help menu ask for each frame, without scanning the library
+    // the count the Help menu asks for each frame, without scanning the library
     let mut s = Session::with_demo();
     let n = samples(&s);
     assert_eq!(s.catalog.sample_photos(), n);
@@ -126,23 +126,21 @@ fn the_catalog_counts_its_sample_photos_as_they_come_and_go() {
     // and a catalog read back from its snapshot counts them again
     let back = lightcraft_catalog::Catalog::from_snapshot(&s.catalog.to_snapshot()).unwrap();
     assert_eq!(back.sample_photos(), n);
-    assert_eq!(back.sample_photos_in_library(), n);
 }
 
 #[test]
-fn samples_in_recently_deleted_are_counted_but_not_as_in_the_library() {
+fn samples_in_recently_deleted_are_still_counted() {
     let mut s = Session::with_demo();
     let n = samples(&s);
     let ids: Vec<_> = s.catalog.photos().map(|p| p.id).collect();
     s.selection.ids = ids.clone();
     s.execute("photo.delete", &json!({"ids": ids.iter().map(|i| i.0).collect::<Vec<_>>()})).unwrap();
     assert_eq!(s.catalog.sample_photos(), n, "still in the library's catalog, to remove or restore");
-    assert_eq!(s.catalog.sample_photos_in_library(), 0);
     let back = lightcraft_catalog::Catalog::from_snapshot(&s.catalog.to_snapshot()).unwrap();
-    assert_eq!(back.sample_photos_in_library(), 0);
-    // restored, they are back in the library
+    assert_eq!(back.sample_photos(), n);
+    // restored, they are as before
     s.execute("edit.undo", &json!({})).unwrap();
-    assert_eq!(s.catalog.sample_photos_in_library(), n);
+    assert_eq!(s.catalog.sample_photos(), n);
 }
 
 #[test]
@@ -209,26 +207,32 @@ fn a_name_with_a_trailing_newline_is_trimmed_not_refused() {
     assert!(album(&s, "Try these").is_some());
 }
 
+/// Two photos of the person's own, imported and both selected.
+fn two_own_selected(tag: &str, mut s: Session) -> (Session, Vec<lightcraft_catalog::PhotoId>) {
+    let dir = temp_dir(tag);
+    png(&dir.join("a.png"));
+    let img = lightcraft_raster::Rgba8::from_fn(16, 12, |x, y| [(x * 5) as u8, (y * 3) as u8, 90, 255]);
+    let b =
+        crate::export::encode_image(&img, &crate::export::ExportOptions { format: crate::export::ExportFormat::Png, ..Default::default() }).unwrap();
+    std::fs::write(dir.join("b.png"), b).unwrap();
+    s.execute("library.import", &json!({"paths": [dir.join("a.png").to_string_lossy(), dir.join("b.png").to_string_lossy()]})).unwrap();
+    let own: Vec<_> = s.catalog.photos().filter(|p| matches!(p.source, Source::File { .. })).map(|p| p.id).collect();
+    assert_eq!(own.len(), 2);
+    s.selection.ids = own.clone();
+    s.selection.active = own.first().copied();
+    (s, own)
+}
+
 #[test]
 fn removing_the_samples_keeps_the_persons_selection() {
-    let dir = temp_dir("keep-selection");
-    png(&dir.join("a.png"));
-    let mut s = Session::with_demo().with_fs();
-    s.execute("library.import", &json!({"paths": [dir.join("a.png").to_string_lossy()]})).unwrap();
-    let own = s.catalog.photos().find(|p| matches!(p.source, Source::File { .. })).map(|p| p.id).unwrap();
-    s.selection = crate::Selection::single(own);
+    let (mut s, own) = two_own_selected("keep-selection", Session::with_demo().with_fs());
     s.execute("library.removeSamples", &json!({})).unwrap();
-    assert_eq!(s.selection.ids, vec![own], "the photo that was selected still is");
+    assert_eq!(s.selection.ids, own, "the photos that were selected still are");
 }
 
 #[test]
 fn adding_the_samples_keeps_a_selection_the_person_made() {
-    let dir = temp_dir("keep-selection-add");
-    png(&dir.join("a.png"));
-    let mut s = Session::new().with_fs();
-    s.execute("library.import", &json!({"paths": [dir.join("a.png").to_string_lossy()]})).unwrap();
-    let own = s.catalog.photos().next().map(|p| p.id).unwrap();
-    s.selection = crate::Selection::single(own);
+    let (mut s, own) = two_own_selected("keep-selection-add", Session::new().with_fs());
     s.execute("library.addSamples", &json!({})).unwrap();
-    assert_eq!(s.selection.ids, vec![own]);
+    assert_eq!(s.selection.ids, own);
 }
