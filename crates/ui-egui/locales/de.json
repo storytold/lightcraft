@@ -2207,7 +2207,7 @@
   "Ratings and labels": "Bewertungen und Markierungen",
   "Titles and captions": "Titel und Beschreibungen",
   "Develop settings": "Entwicklungseinstellungen",
-  "What imports take from the photos themselves and the sidecars beside them. What is not read stays in the files, and LightCraft does not write it back into their sidecars either.": "Was Importe aus den Fotos selbst und den Filialdateien daneben übernehmen. Was nicht gelesen wird, bleibt in den Dateien, und LightCraft schreibt es auch nicht in deren Filialdateien zurück.",
+  "What imports take from the photos themselves and the sidecars beside them. What is not read stays in the files, and LightCraft does not write it back into their sidecars either.": "Was Importe aus den Fotos selbst und den Begleitdateien daneben übernehmen. Was nicht gelesen wird, bleibt in den Dateien, und LightCraft schreibt es auch nicht in deren Begleitdateien zurück.",
   "Lightroom Catalog Import": "Lightroom-Katalogimport",
   "Destination library": "Zielbibliothek",
   "Show in Library": "In Bibliothek anzeigen",

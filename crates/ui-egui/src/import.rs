@@ -1619,6 +1619,8 @@ pub fn example_destination(app: &LightcraftApp, d: &ImportDialog) -> Option<Stri
     // the probe's metadata, so {camera}, {title}… preview as they will import
     if let Some(info) = app.session.import_probes.get(&c.path) {
         q.meta = info.meta.clone();
+        // what is not read names no file or folder either, as in the import itself
+        d.read.of_the_file(&mut q.meta);
     }
     let name = if d.rename.trim().is_empty() { c.name.clone() } else { lightcraft_engine::rename::expand(d.rename.trim(), &q, 1) };
     let root = if d.destination.trim().is_empty() {
@@ -1702,6 +1704,25 @@ mod tests {
         assert_eq!(grid_height(700.0, -50.0, 142.0), 700.0);
         assert_eq!(grid_height(700.0, f32::NAN, 142.0), 700.0);
         assert_eq!(grid_height(f32::INFINITY, 300.0, 142.0), DIALOG_SIZE[1] - DEFAULT_BELOW_GRID);
+    }
+
+    /// The example line previews names "as they will import": a kind the import does not read names nothing.
+    #[test]
+    fn the_example_leaves_out_what_the_import_does_not_read() {
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), crate::Services::default());
+        let mut info = lightcraft_engine::media::ProbeInfo::default();
+        info.meta.title = "Harbour".into();
+        app.session.import_probes.insert("img0.jpg".into(), info);
+        let mut d = ImportDialog::new(vec![ImportCandidate { path: "img0.jpg".into(), name: "img0.jpg".into(), ..Default::default() }]);
+        d.destination = "Photos".into();
+        d.rename = "{title}".into();
+        let sep = std::path::MAIN_SEPARATOR;
+        // (between "Photos" and the file name come the dated folders)
+        let name_of = |d: &ImportDialog| example_destination(&app, d).unwrap_or_default().rsplit(sep).next().unwrap_or_default().to_string();
+        assert_eq!(name_of(&d), "Harbour.jpg", "read: the title names the file");
+        d.read.descriptions = false;
+        assert_eq!(name_of(&d), "img0.jpg", "not read: the original name stays");
+        assert!(example_destination(&app, &d).is_some_and(|e| e.starts_with(&format!("Photos{sep}"))));
     }
 
     /// Six candidates, all checked; candidate 3 is a duplicate (unchecked, not importable).

@@ -175,7 +175,7 @@ impl ReadFromPhotos {
     }
 
     /// What a file said about the photo, less the kinds that are not read.
-    pub(crate) fn of_the_file(&self, m: &mut lightcraft_catalog::Meta) {
+    pub fn of_the_file(&self, m: &mut lightcraft_catalog::Meta) {
         if !self.keywords {
             m.keywords.clear();
             m.regions.clear();
