@@ -87,13 +87,38 @@ fn serve(stream: TcpStream, tx: &Sender<ControlRequest>, ctx: &egui::Context, id
         log::warn!("control connection closed: could not set idle read timeout: {e}");
         return;
     }
-    serve_lines(&stream, &stream, |method, params| {
+    serve_stream(stream, |method, params| {
         let (req, rrx) = ControlRequest::new(method, params);
         let state = Arc::clone(&req.state);
         tx.send(req).ok()?;
         ctx.request_repaint();
         Some(await_reply(&rrx, &state, || ctx.cumulative_pass_nr(), || ctx.request_repaint(), NO_FRAMES_AFTER, REPLY_TIMEOUT))
     });
+}
+
+/// [`serve_lines`] on a socket, then close it so the peer reads every reply.
+fn serve_stream(stream: TcpStream, handle: impl FnMut(String, Value) -> Option<Value>) {
+    serve_lines(&stream, &stream, handle);
+    close_gracefully(&stream);
+}
+
+/// Close a connection the server is done with without destroying its last reply. A socket closed
+/// while the peer's later lines are unread, or arrive after it, answers them with a reset, and a
+/// reset can discard the replies the peer has not read yet (on Windows it does): the client sees
+/// "connection reset" instead of why. Send FIN, then read and drop what is left (bounded in bytes
+/// and time) before closing. From #1970 (LochLogic).
+fn close_gracefully(stream: &TcpStream) {
+    let _ = stream.shutdown(std::net::Shutdown::Write);
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
+    let mut sink = [0u8; 8192];
+    let mut left = MAX_LINE;
+    let mut reader = stream;
+    while left > 0 {
+        match reader.read(&mut sink) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => left = left.saturating_sub(n),
+        }
+    }
 }
 
 /// Wait for a request's reply. While the app has not picked the request up and `frames` (its
@@ -486,12 +511,17 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let server = std::thread::spawn(move || {
             let (s, _) = listener.accept().unwrap();
-            let read = s.try_clone().unwrap();
-            serve_lines(read, s, |_, _| Some(json!({"ok": true})));
+            serve_stream(s, |_, _| Some(json!({"ok": true})));
         });
         let mut c = TcpStream::connect(addr).unwrap();
         c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
-        c.write_all(b"{\"id\":7,\"method\":\"x\"}\nhello\n{\"method\":\"y\"}\n").unwrap();
+        c.write_all(b"{\"id\":7,\"method\":\"x\"}\nhello\n").unwrap();
+        // A client that keeps sending after the junk: its next line reaches the server after the
+        // rejection. A socket closed by then answers that line with a reset, and on Windows the reset
+        // discarded the replies the client had not read yet (os error 10054).
+        std::thread::sleep(Duration::from_millis(100));
+        c.write_all(b"{\"method\":\"y\"}\n").unwrap();
+        std::thread::sleep(Duration::from_millis(100));
         let mut text = String::new();
         c.read_to_string(&mut text).unwrap(); // returns at EOF: the server closed the connection
         server.join().unwrap();
