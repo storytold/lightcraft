@@ -104,8 +104,9 @@ pub fn overall(tasks: &[TaskInfo]) -> Option<f32> {
     Some((known.iter().sum::<f32>() / known.len() as f32).clamp(0.0, 1.0))
 }
 
-/// The list's popup. Its open state is egui's, like a menu's: Esc and a click elsewhere close it, and opening a menu
-/// closes it too.
+/// The list's popup. Its open state is egui's, like a menu's: Esc and a click elsewhere close it, and so does opening
+/// an in-window menu. A native menu (the macOS menu bar) does not: AppKit tracks it outside the window, egui sees no
+/// event, and `muda` has no "will open" hook, so the list stays until one of the above or a dialog closes it.
 pub fn popup_id() -> egui::Id {
     egui::Id::new("activity-list")
 }
