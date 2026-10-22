@@ -1498,6 +1498,17 @@ const RAW_SAMPLES: &[(&str, &str, &str)] = &[
         "https://raw.pixls.us/getfile.php/1835/nice/Nikon%20-%20D850%20-%2012bit%2012bit%20compressed%20%28Lossless%29%20%283:2%29.NEF",
         "31b7fe298a5c91694c6ca8b3284a0a016e572a02c3964b502d4732e8e9283da8",
     ),
+    // uncompressed 12-bit: TIFF compression 34713 with maker note NEFCompression 6 (issue #2173)
+    (
+        "nef-nikon-d850-uncompressed12.nef",
+        "https://raw.pixls.us/data/Nikon/D850/Nikon-D850-12bit-uncompressed.NEF",
+        "fb438957983d72567a740bcb93365feb1bbcd75db629eb9626f31fa548a24484",
+    ),
+    (
+        "nef-nikon-d850-uncompressed14.nef",
+        "https://raw.pixls.us/data/Nikon/D850/Nikon-D850-14bit-uncompressed.NEF",
+        "ce1fb927aca4f0ac3a1fa5caded0d7859560988e500f71177287310fd1a3d845",
+    ),
     (
         "raf-fujifilm-x-e2s.raf",
         "https://raw.pixls.us/getfile.php/745/nice/Fujifilm%20-%20X-E2S%20-%2014bit%2014bit%20uncompressed%20%283:2%29.RAF",

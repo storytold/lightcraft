@@ -222,6 +222,34 @@ mod tests {
     }
 
     #[test]
+    fn base_curve_defaults_to_camera_and_roundtrips() {
+        // default: Camera, omitted from the JSON so existing settings keep their bytes and hash
+        assert_eq!(DevelopSettings::default().base_curve, BaseCurve::Camera);
+        assert!(DevelopSettings::default().to_json().get("base_curve").is_none());
+        let old = json!({"light": {"exposure": 0.5}});
+        let s = DevelopSettings::from_json(&old).unwrap();
+        assert_eq!(s.base_curve, BaseCurve::Camera, "settings without the field read as Camera");
+        // each value roundtrips under its wire name (the default is omitted from the JSON)
+        for c in BaseCurve::ALL {
+            let s = DevelopSettings { base_curve: c, ..Default::default() };
+            let v = s.to_json();
+            if c.is_default() {
+                assert!(v.get("base_curve").is_none(), "{} is omitted", c.wire());
+            } else {
+                assert_eq!(v["base_curve"], json!(c.wire()), "{}", c.wire());
+            }
+            assert_eq!(DevelopSettings::from_json(&v).unwrap(), s);
+            if !c.is_default() {
+                assert_ne!(s.hash64(), DevelopSettings::default().hash64(), "{} changes the hash", c.wire());
+            }
+            assert_eq!(BaseCurve::parse(c.wire()), Some(c));
+        }
+        // an unknown value from a newer build is an error, not a panic
+        assert!(DevelopSettings::from_json(&json!({"base_curve": "filmic"})).is_err());
+        assert_eq!(BaseCurve::parse("filmic"), None);
+    }
+
+    #[test]
     fn a_partial_white_balance_without_a_scale_is_legacy() {
         let mut base = DevelopSettings::default();
         base.wb.scale = WbScale::Kelvin;

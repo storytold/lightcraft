@@ -446,6 +446,11 @@ fn mask_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, id: u32, name: &str, vi
         let _ = app.run("mask.delete", json!({"id": id}));
         ui.close();
     }
+    // One undo step brings every mask back (#2466).
+    if ui.button(menu_label("Delete All Masks")).clicked() {
+        let _ = app.run("mask.deleteAll", json!({}));
+        ui.close();
+    }
 }
 
 /// Overlay colours offered as swatches (the colour of the selected one is used for the tint).
@@ -657,6 +662,29 @@ fn range_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, comp: usize, shape
             let samples = samples.clone();
             apply_slider_out(app, &spec, out, |app, v| {
                 app.run("mask.update", json!({"component": comp, "shape": MaskShape::ColorRange { samples: samples.clone(), refine: v }}))
+            });
+        }
+        MaskShape::Radial { feather, .. } => {
+            // Feather: full effect inside the inner ellipse, fading to nothing at the outline
+            let spec = ControlSpec {
+                id: "maskFeather",
+                label: "Feather",
+                section: Section::Light,
+                min: 0.0,
+                max: 100.0,
+                default: 50.0,
+                step: 1.0,
+                decimals: 0,
+                track: Track::Plain,
+            };
+            let out = slider(ui, &spec, *feather, true, None);
+            let base = shape.clone();
+            apply_slider_out(app, &spec, out, |app, v| {
+                let mut s = base.clone();
+                if let MaskShape::Radial { feather, .. } = &mut s {
+                    *feather = v.clamp(0.0, 100.0);
+                }
+                app.run("mask.update", json!({"component": comp, "shape": s}))
             });
         }
         _ => {}
@@ -903,6 +931,7 @@ mod tests {
         crate::i18n::set_language(crate::i18n::Locale::Fr);
         for (english, translated) in [
             ("Duplicate Mask", "Dupliquer le masque"),
+            ("Delete All Masks", "Supprimer tous les masques"),
             ("Invert Mask", "Inverser le masque"),
             ("Hide Mask", "Masquer le masque"),
             ("Move Up", "Monter"),

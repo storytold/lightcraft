@@ -1652,6 +1652,54 @@ fn the_chosen_folder_is_always_in_view() {
     assert!(!has(&h, "source:libfolder:/pics/trip/day1"));
 }
 
+/// Show in Folders (a photo's right-click menu): the photo's folder becomes the source, the
+/// Folders section is shown and the folders above it open, however folded they were (#2437).
+#[test]
+fn show_in_folders_reveals_the_active_photos_folder() {
+    let mut h = folders_app(&["/pics/trip/a.jpg", "/pics/home/c.jpg"]);
+    // folded away to begin with: the disk row shut and the Folders section itself shut
+    click(&mut h, "libraryFolderToggle:/pics");
+    click(&mut h, "sidebarSection:folders");
+    assert!(!has(&h, "source:libfolder:/pics/trip"), "folded");
+    let photo = h
+        .app
+        .session
+        .visible_cloned()
+        .into_iter()
+        .find(|id| {
+            matches!(
+                &h.app.session.catalog.photo(*id).map(|p| p.source.clone()),
+                Some(lightcraft_catalog::Source::File { path }) if path.starts_with("/pics/trip")
+            )
+        })
+        .unwrap();
+    assert!(matches!(
+        &h.app.session.catalog.photo(photo).unwrap().source,
+        lightcraft_catalog::Source::File { path } if path.starts_with("/pics/trip")
+    ));
+    exec(&mut h, "library.select", json!({"ids": [photo.0]}));
+    right_click(&mut h, &format!("thumb:{}", photo.0));
+    assert!(has(&h, "button:contextShowInFolders"), "the right-click menu offers Show in Folders");
+    click(&mut h, "button:contextShowInFolders");
+    assert_eq!(h.app.session.source, lightcraft_engine::LibrarySource::LibraryFolder);
+    assert_eq!(h.app.session.library_folder.as_deref(), Some("/pics/trip"));
+    assert!(has(&h, "source:libfolder:/pics/trip"), "the section is shown and the folders above it opened");
+    assert_eq!(h.app.ui.reveal_folder, None, "the reveal is consumed");
+}
+
+/// A photo with no folder in the Folders panel (a demo scene) is refused with a message, and
+/// nothing changes.
+#[test]
+fn show_in_folders_refuses_a_photo_without_a_library_folder() {
+    let mut h = demo([1400.0, 900.0], json!({"view": "photoGrid", "leftPanel": true}));
+    let photo = h.app.session.visible_cloned()[0];
+    exec(&mut h, "library.select", json!({"ids": [photo.0]}));
+    let e = h.app.run("library.showInFolders", json!({})).unwrap_err();
+    assert!(e.contains("no file"), "{e}");
+    assert_eq!(h.app.session.source, lightcraft_engine::LibrarySource::All);
+    assert_eq!(h.app.ui.reveal_folder, None);
+}
+
 #[test]
 fn a_renamed_folder_keeps_its_place_in_the_tree() {
     /// Removes the folder however the test ends.

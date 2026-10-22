@@ -75,7 +75,9 @@ fn picker(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, current: &str, a
                 if ui
                     .selectable_label(
                         *sel,
-                        if matches!(id, "camera" | "lens" | "keyword") && patch.get(id).is_some_and(|value| !value.is_null()) {
+                        if matches!(id, "camera" | "lens" | "keyword")
+                            && patch.get(id).is_some_and(|value| value.as_str().is_some_and(|s| !s.is_empty()))
+                        {
                             label.as_str()
                         } else {
                             crate::i18n::tr(label)
@@ -262,8 +264,15 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         ("keyword", "keyword", "Keyword", f.keyword.clone(), keywords),
     ] {
         let mut items = vec![(format!("Any {}", all_label.to_lowercase()), json!({key: Value::Null}), current.is_none())];
+        // "No keyword": photos without any keyword (#2461); the empty string is the sentinel — a
+        // stored keyword is never empty. The picker menu translates labels whose value is null or
+        // empty, so the item reads in the UI language like "Any keyword" does.
+        if key == "keyword" {
+            items.push(("No keyword".to_string(), json!({key: ""}), current.as_deref() == Some("")));
+        }
         items.extend(values.into_iter().map(|v| (v.clone(), json!({key: v.clone()}), current.as_deref() == Some(v.as_str()))));
         let shown = current.clone().unwrap_or_else(|| all_label.to_string());
+        let shown = if shown.is_empty() { crate::i18n::tr("No keyword").to_string() } else { shown };
         let shown = if shown.chars().count() > 22 { format!("{}…", shown.chars().take(21).collect::<String>()) } else { shown };
         picker(app, ui, id, &shown, current.is_some(), items);
     }

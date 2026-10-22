@@ -643,7 +643,9 @@ fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         }
         ui.add_space(8.0);
         if let Some(r) = ui.horizontal(|ui| crate::widgets::stars(ui, "info", p.rating, 20.0)).inner {
-            let _ = app.run("photo.rate", json!({"rating": r}));
+            let mut params = json!({"rating": r});
+            crate::panels::compare::target_active(app, &mut params);
+            let _ = app.run("photo.rate", params);
         }
         ui.add_space(6.0);
         // colour label: one swatch per label (hover shows its name); clicking the current one clears it
@@ -660,7 +662,9 @@ fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 }
                 let resp = resp.on_hover_text(crate::i18n::color_label(&app.session.catalog, l));
                 if resp.clicked() {
-                    let _ = app.run("photo.label", json!({"label": if on { "none".to_string() } else { key }}));
+                    let mut params = json!({"label": if on { "none".to_string() } else { key }});
+                    crate::panels::compare::target_active(app, &mut params);
+                    let _ = app.run("photo.label", params);
                 }
             }
             if let Some(l) = p.label {

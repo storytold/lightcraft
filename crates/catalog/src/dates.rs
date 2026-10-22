@@ -40,20 +40,95 @@ pub fn weekday(iso: &str) -> Option<&'static str> {
     Some(WEEKDAYS[date.weekday().num_days_from_monday() as usize])
 }
 
-/// Shift an ISO time by `secs`, keeping anything after the seconds (fractions, zone) as it was.
-/// A date without a time gets one. `None` if it doesn't parse, or if the result leaves years
-/// 0000–9999 (an ISO date here has four year digits, so it couldn't be read back); `secs` may be
-/// anything, it never overflows.
+/// Shift an ISO time by `secs`, keeping the fraction and zone it had. A date without a time gets
+/// one. The input must have the shape this writes — a date alone, or a date and time (`T` or a
+/// space between them) with hours and minutes, optional seconds (digits, with an optional
+/// fraction) and an optional zone (`Z`, `+02:00`, `-0500`, `+02`) — and nothing after: a time
+/// that is cut short or has unreadable seconds would come back wrong or not read back at all, so
+/// it is refused rather than half-changed ([`iso_seconds`] stays lenient for reading and
+/// sorting; see [`readable_iso`]). `None` if it doesn't parse, or if the result would leave the
+/// years 0000–9999 (an ISO date here has four year digits, so it couldn't be read back); `secs`
+/// may be anything, it never overflows.
 pub fn shift_iso(iso: &str, secs: i64) -> Option<String> {
     let t = iso_seconds(iso)?.checked_add(secs)?;
     let (first, last) = (iso_seconds("0000-01-01T00:00:00")?, iso_seconds("9999-12-31T23:59:59")?);
     if !(first..=last).contains(&t) {
         return None;
     }
-    let iso = iso.trim();
-    // the seconds are optional (`10:00+02:00`): without them the tail starts right after the minutes
-    let tail = iso.get(if iso.get(16..17) == Some(":") { 19 } else { 16 }..).unwrap_or("");
+    let tail = strict_tail(iso.trim())?;
     Some(format!("{}{tail}", civil(t)))
+}
+
+/// Whether [`shift_iso`] can shift `s` (so Edit Capture Time can): the strict shape it reads, and
+/// a date that reads without rolling over (`2026-02-30` doesn't). Reading and sorting keep the
+/// lenient [`iso_seconds`]; only the write path is strict.
+pub fn readable_iso(s: &str) -> bool {
+    let s = s.trim();
+    strict_tail(s).is_some() && normalize_iso(s).is_some()
+}
+
+/// The fraction and zone that follow the seconds of the strict shape [`shift_iso`] reads (empty
+/// when there are neither), or `None` for anything else: a time cut short, seconds that aren't
+/// digits, a fraction after the minutes (`10:00.5` would come back as half a second), or anything
+/// after the zone. Byte-wise, so a multi-byte character never splits mid-character.
+fn strict_tail(s: &str) -> Option<&str> {
+    let b = s.as_bytes();
+    let dig = |r: std::ops::Range<usize>| b.get(r).is_some_and(|x| x.iter().all(u8::is_ascii_digit));
+    if b.len() == 10 {
+        return Some(""); // a date alone
+    }
+    // date, `T` or a space, hours, minutes
+    if !matches!(b.get(10), Some(b'T' | b' ')) || !dig(11..13) || !dig(14..16) {
+        return None;
+    }
+    // the seconds are optional (`10:00+02:00`); when present they are digits
+    let (mut i, seconds) = if b.get(16) == Some(&b':') { (19, true) } else { (16, false) };
+    if seconds && !dig(17..19) {
+        return None;
+    }
+    // an optional fraction, only after the seconds
+    if b.get(i) == Some(&b'.') {
+        if !seconds || !dig(i + 1..i + 2) {
+            return None;
+        }
+        i += 2;
+        while b.get(i).is_some_and(u8::is_ascii_digit) {
+            i += 1;
+        }
+    }
+    // an optional zone: `Z`, `±HH`, `±HHMM` or `±HH:MM`
+    match b.get(i) {
+        None => {}
+        Some(b'Z') => i += 1,
+        Some(b'+' | b'-') => {
+            if !dig(i + 1..i + 3) {
+                return None;
+            }
+            i += 3;
+            match b.get(i) {
+                None => {}
+                Some(c) if c.is_ascii_digit() => {
+                    if !dig(i..i + 2) {
+                        return None;
+                    }
+                    i += 2;
+                }
+                Some(b':') => {
+                    if !dig(i + 1..i + 3) {
+                        return None;
+                    }
+                    i += 3;
+                }
+                _ => return None,
+            }
+        }
+        _ => return None,
+    }
+    if i != b.len() {
+        return None; // nothing after the zone
+    }
+    // everything validated above is ASCII, so the seconds' end is a char boundary
+    s.get(if seconds { 19 } else { 16 }..)
 }
 
 /// Normalize user input to `YYYY-MM-DDTHH:MM:SS` (accepts a space instead of `T`, missing
@@ -240,6 +315,68 @@ mod tests {
         assert_eq!(shift_iso("2026-01-01T10:00", 3600).as_deref(), Some("2026-01-01T11:00:00"));
         assert_eq!(shift_iso("2026-01-01T10:00:00.5-05:00", 3600).as_deref(), Some("2026-01-01T11:00:00.5-05:00"));
         assert_eq!(iso_seconds("2026-01-01T10:00+02:00"), iso_seconds("2026-01-01T10:00"));
+    }
+
+    #[test]
+    fn shift_refuses_times_it_could_not_write_back() {
+        // a cut-short time reads as midnight and would lose its hour; unreadable seconds become
+        // zero; a tail after the time would come back inside an unreadable string
+        for bad in [
+            "2026-01-01T10:0",
+            "2026-01-01T10",
+            "2026-01-01T",
+            "2026-01-01T10:00:xx",
+            "2026-01-01T10:00:00+",
+            "2026-01-01T10:00:00+2",
+            "2026-01-01T10:00:00.",
+            "2026-01-01T10:00:00 and more",
+            "2026-01-01T10:00.5", // half a minute would come back as half a second
+            "2026-01-01X10:00",   // not `T` or a space between the date and the time
+            "2026-01-01T10:00:00Zx",
+        ] {
+            assert_eq!(shift_iso(bad, 3600), None, "{bad}");
+        }
+        // multi-byte characters at the field positions never split a character
+        for bad in ["2026-01-01Té0:00", "2026-01-01T10:é0:00", "2026-01-01T10:0é:00", "2026-01-01T10:00:0é+02:00", "2026-01-01T10:00:00+é2:00"] {
+            assert_eq!(shift_iso(bad, 3600), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn shift_accepts_the_shapes_it_writes_and_they_read_back() {
+        for (iso, secs) in [
+            ("2026-01-01", 3600),
+            ("2026-01-01T10:00", 3600),
+            ("2026-01-01T10:00:00", 3600),
+            ("2026-01-01T10:00:00.5", 3600),
+            ("2026-01-01T10:00:00Z", 60),
+            ("2026-01-01T10:00:00+02:00", 3600),
+            ("2026-01-01T10:00:00-0500", 3600),
+            ("2026-01-01T10:00:00+02", 3600),
+            ("2026-01-01 10:00:00", 3600),
+            ("2026-01-01T10:00+02:00", 3600),
+        ] {
+            let Some(out) = shift_iso(iso, secs) else { panic!("{iso} refused") };
+            assert_eq!(shift_iso(&out, 0).as_deref(), Some(out.as_str()), "{iso} → {out}");
+        }
+        assert_eq!(shift_iso("2026-01-01", 3600).as_deref(), Some("2026-01-01T01:00:00"));
+        assert_eq!(shift_iso("2026-01-01T10:00:00-0500", 3600).as_deref(), Some("2026-01-01T11:00:00-0500"));
+        assert_eq!(shift_iso("2026-01-01T10:00:00+02", 3600).as_deref(), Some("2026-01-01T11:00:00+02"));
+    }
+
+    #[test]
+    fn readable_iso_matches_what_shift_reads() {
+        assert!(readable_iso("2026-01-01T10:00:00"));
+        assert!(readable_iso("2026-01-01"));
+        assert!(readable_iso("2026-01-01T10:00:00.5+02:00"));
+        assert!(readable_iso(" 2026-01-01T10:00:00 "));
+        assert!(!readable_iso("2026-01-01T10:0"));
+        assert!(!readable_iso("2026-01-01T10:00:00 and more"));
+        // a date that reads only by rolling over isn't a real one
+        assert!(!readable_iso("2026-02-30"));
+        assert!(!readable_iso("2026x03x01T12:00:00"));
+        assert!(!readable_iso("banana"));
+        assert!(!readable_iso(""));
     }
 
     #[test]

@@ -1,5 +1,6 @@
-// Geometry (`lightcraft_pipeline::geometry::Frame::sample`): orientation, and the single bilinear
-// resample through the crop/straighten/flip affine or the full lens + perspective warp.
+// Geometry (`lightcraft_pipeline::geometry::Frame::sample_quality`): orientation, and the single
+// resample through the crop/straighten/flip affine or the full lens + perspective warp — bilinear
+// for interactive drafts, Mitchell bicubic at full quality (P's last word picks).
 // Bindings: src (rgb), dst (rgb).
 
 fn src_px(w: u32, h: u32, x: i32, y: i32) -> vec3<f32> {
@@ -28,6 +29,45 @@ fn bilinear(w: u32, h: u32, x: f32, y: f32) -> vec3<f32> {
     return top + (bot - top) * ty;
 }
 
+// Mitchell-Netravali (B = C = 1/3), the kernel of `raster::resample::Filter::Mitchell`.
+fn mitchell(ax: f32) -> f32 {
+    if (ax < 1.0) {
+        return ((7.0 * ax - 12.0) * ax * ax + 16.0 / 3.0) / 6.0;
+    }
+    if (ax < 2.0) {
+        return -7.0 / 18.0 * ax * ax * ax + 2.0 * ax * ax - 10.0 / 3.0 * ax + 16.0 / 9.0;
+    }
+    return 0.0;
+}
+
+// `Rgb32f::sample_bicubic`: Mitchell-Netravali (B = C = 1/3), 4 × 4 taps, clamped edges.
+fn bicubic(w: u32, h: u32, x: f32, y: f32) -> vec3<f32> {
+    let fx = x - 0.5;
+    let fy = y - 0.5;
+    let x0 = floor(fx);
+    let y0 = floor(fy);
+    let tx = fx - x0;
+    let ty = fy - y0;
+    var wx: array<f32, 4>;
+    var wy: array<f32, 4>;
+    for (var k = 0u; k < 4u; k++) {
+        wx[k] = mitchell(abs(tx + 1.0 - f32(k)));
+        wy[k] = mitchell(abs(ty + 1.0 - f32(k)));
+    }
+    // the four weights of a dimension sum to 1; normalize anyway against f32 drift
+    let sx = wx[0] + wx[1] + wx[2] + wx[3];
+    let sy = wy[0] + wy[1] + wy[2] + wy[3];
+    let nx = select(1.0 / sx, 0.25, abs(sx) < 1e-8);
+    let ny = select(1.0 / sy, 0.25, abs(sy) < 1e-8);
+    var acc = vec3<f32>(0.0);
+    for (var j = 0i; j < 4; j++) {
+        for (var i = 0i; i < 4; i++) {
+            acc = acc + src_px(w, h, i32(x0) + i - 1, i32(y0) + j - 1) * (wx[i] * nx) * (wy[j] * ny);
+        }
+    }
+    return acc;
+}
+
 fn put(i: u32, v: vec3<f32>) {
     dst[3u * i] = v.x;
     dst[3u * i + 1u] = v.y;
@@ -53,7 +93,9 @@ fn orient(@builtin(global_invocation_id) g: vec3<u32>) {
     put(g.y * ow + g.x, vec3<f32>(src[j], src[j + 1u], src[j + 2u]));
 }
 
-// Bilinear resample through an affine (output px → base px). P: bw, bh, w, h, affine[6].
+// Resample through an affine (output px → base px): bilinear for drafts, Mitchell bicubic at
+// full quality; a pixel-aligned 1:1 view (P[11]) picks the mapped pixel exactly, matching the
+// full-size render's `Copy`. P: bw, bh, w, h, affine[6], bicubic?, nearest?.
 @compute @workgroup_size(16, 16)
 fn sample_affine(@builtin(global_invocation_id) g: vec3<u32>) {
     let w = pu(2u);
@@ -65,7 +107,13 @@ fn sample_affine(@builtin(global_invocation_id) g: vec3<u32>) {
     let py = f32(g.y) + 0.5;
     let x = pf(4u) * px + pf(6u) * py + pf(8u);
     let y = pf(5u) * px + pf(7u) * py + pf(9u);
-    put(g.y * w + g.x, bilinear(pu(0u), pu(1u), x, y));
+    let bw = pu(0u);
+    let bh = pu(1u);
+    if (pu(11u) != 0u) {
+        put(g.y * w + g.x, src_px(bw, bh, i32(floor(x)), i32(floor(y))));
+        return;
+    }
+    put(g.y * w + g.x, select(bilinear(bw, bh, x, y), bicubic(bw, bh, x, y), pu(10u) != 0u));
 }
 
 // --- the lens / perspective warp (`lightcraft_pipeline::optics::Warp`), in oriented-source px.
@@ -73,8 +121,8 @@ fn sample_affine(@builtin(global_invocation_id) g: vec3<u32>) {
 // 10 sx, 11 sy, 12 W, 13 H, 14 persp?, 15..24 persp_inv, 24 k1, 25..28 ca, 28 lens_dist,
 // 29 warp?, 30..48 warp planes (3 × 6), 48 warp centre x, 49 y, 50 warp radius, 51 vig_stops,
 // 52 vig_power, 53 lens_vig, 54 vignette?, 55..60 vignette k, 60 vignette centre x, 61 y,
-// 62 vignette radius, 63 per-channel?, 64 gain?
-const WP_N: u32 = 65u;
+// 62 vignette radius, 63 per-channel?, 64 gain?, 65 bicubic?
+const WP_N: u32 = 66u;
 
 fn centre() -> vec2<f32> {
     return vec2<f32>(pf(12u) / 2.0, pf(13u) / 2.0);
@@ -161,6 +209,10 @@ fn warp_gain(s: vec2<f32>) -> f32 {
     return g;
 }
 
+fn warp_sample(bw: u32, bh: u32, x: f32, y: f32) -> vec3<f32> {
+    return select(bilinear(bw, bh, x, y), bicubic(bw, bh, x, y), pu(65u) != 0u);
+}
+
 @compute @workgroup_size(16, 16)
 fn sample_warp(@builtin(global_invocation_id) g: vec3<u32>) {
     let w = pu(2u);
@@ -183,12 +235,12 @@ fn sample_warp(@builtin(global_invocation_id) g: vec3<u32>) {
         put(g.y * w + g.x, vec3<f32>(BLANK_R, BLANK_G, BLANK_B));
         return;
     }
-    var v = bilinear(bw, bh, s.x * sx, s.y * sy);
+    var v = warp_sample(bw, bh, s.x * sx, s.y * sy);
     if (pu(63u) != 0u) {
         let qr = corrected_to_source(c, 0u);
-        v.x = bilinear(bw, bh, qr.x * sx, qr.y * sy).x;
+        v.x = warp_sample(bw, bh, qr.x * sx, qr.y * sy).x;
         let qb = corrected_to_source(c, 2u);
-        v.z = bilinear(bw, bh, qb.x * sx, qb.y * sy).z;
+        v.z = warp_sample(bw, bh, qb.x * sx, qb.y * sy).z;
     }
     if (pu(64u) != 0u) {
         v = v * warp_gain(s);

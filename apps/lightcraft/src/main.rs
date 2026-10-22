@@ -110,6 +110,12 @@ impl eframe::App for App {
 /// a second; anything slower gives way to quitting.
 const EXIT_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 
+/// How long the app is still starting up, for fitting the window to its screen (#2472): a window
+/// that opened as large as its screen (the usual size on a small one, or a size remembered from a
+/// larger one, which the system clamps to the screen) is zoomed / maximized instead, asked only
+/// while the app starts — after this, a window as large as its screen is the user's own doing.
+const FIT_TO_SCREEN_SECONDS: f64 = 2.0;
+
 /// The window's renderer (egui-wgpu): eframe's defaults, with LightCraft's backend choice — DX12
 /// alone on Windows unless `LIGHTCRAFT_GPU_BACKEND` / `WGPU_BACKEND` say otherwise (issue #136:
 /// with Vulkan in the set, wgpu loads the Vulkan driver even when it then picks DX12) — and DX12
@@ -359,6 +365,9 @@ struct PrefsWriter {
     /// When the window was first looked at: its watch goes by the clock from then on, not by
     /// the interface's time, which stands still while the window is hidden.
     window_since: Option<std::time::Instant>,
+    /// The window was fitted to its screen (zoomed / maximized) at the start, or the start is
+    /// over: asked only while the app is starting up (#2472).
+    window_fitted: bool,
 }
 
 impl PrefsWriter {
@@ -406,6 +415,20 @@ impl PrefsWriter {
         // (asked for before the input is read: the context is not asked from inside its own lock)
         let zoom = ctx.zoom_factor();
         let (now, seen) = ctx.input(|i| (i.time, lightcraft_ui_egui::window_place::Seen::of(i.viewport(), i.content_rect(), zoom)));
+        // A window that opened as large as its screen — the usual size on a small one, or a size
+        // remembered from a larger one, which the system clamps to the screen — does not fit it:
+        // its bottom is under the taskbar (the Dock), and a dialog fitted to the window can put
+        // its buttons out of reach (#2472). It is zoomed / maximized instead, which the window
+        // system fits to the screen's work area; asked once, while the app is starting up.
+        if !self.window_fitted {
+            let starting = self.window_since.is_none_or(|since| since.elapsed().as_secs_f64() <= FIT_TO_SCREEN_SECONDS);
+            if !starting {
+                self.window_fitted = true;
+            } else if seen.too_large_for_screen() {
+                self.window_fitted = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
+            }
+        }
         // how the window is, to open like that next time (written with the settings below). What
         // the settings hold is checked first: a script may have set it (`ui.set`)
         let remembered = app.ui.window.and_then(lightcraft_ui_egui::window_place::WindowPlace::checked);
@@ -1521,6 +1544,60 @@ mod tests {
         assert_eq!(app.ui.window, Some(WindowPlace { size: [1300.0, 800.0], zoomed: false }));
         let asked = pass(&mut |ctx| writer.tick(&mut app, ctx));
         assert!(asked.is_none_or(|wait| wait > std::time::Duration::from_secs(3600)), "at rest and remembered: {asked:?}");
+    }
+
+    /// #2472: a window that opened as large as its screen — the usual size on a small one, which
+    /// the system clamps to the screen — is zoomed / maximized while the app is starting up, so
+    /// that the system fits it to the screen's work area instead of its bottom under the taskbar.
+    /// Asked once, and not once the start is over; a window that fits is left as it is.
+    #[test]
+    fn a_window_as_large_as_its_screen_is_fitted_at_the_start() {
+        use egui::ViewportId;
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services::default());
+        let ctx = egui::Context::default();
+        let pass = |look: &mut dyn FnMut(&egui::Context)| {
+            let mut raw =
+                egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1366.0, 768.0))), ..Default::default() };
+            if let Some(info) = raw.viewports.get_mut(&ViewportId::ROOT) {
+                info.monitor_size = Some(egui::vec2(1366.0, 768.0));
+            }
+            let mut out = ctx.run_ui(raw, |ui| look(ui.ctx()));
+            out.textures_delta.clear();
+            out.viewport_output.get(&ViewportId::ROOT).map(|v| v.commands.clone()).unwrap_or_default()
+        };
+        // (egui's own first frames ask for another: let them pass)
+        for _ in 0..3 {
+            pass(&mut |_| {});
+        }
+        // clamped to the screen: fitted, once
+        let mut writer = PrefsWriter::default();
+        let commands = pass(&mut |ctx| writer.tick(&mut app, ctx));
+        assert_eq!(commands, vec![egui::ViewportCommand::Maximized(true)]);
+        assert!(writer.window_fitted);
+        assert!(pass(&mut |ctx| writer.tick(&mut app, ctx)).is_empty(), "once");
+
+        // a window that fits its screen is left as it is, and the start ends by itself
+        let mut writer = PrefsWriter::default();
+        let mut raw_fit =
+            egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1300.0, 700.0))), ..Default::default() };
+        if let Some(info) = raw_fit.viewports.get_mut(&ViewportId::ROOT) {
+            info.monitor_size = Some(egui::vec2(1366.0, 768.0));
+        }
+        let pass_fit = |look: &mut dyn FnMut(&egui::Context)| {
+            let mut out = ctx.run_ui(raw_fit.clone(), |ui| look(ui.ctx()));
+            out.textures_delta.clear();
+            out.viewport_output.get(&ViewportId::ROOT).map(|v| v.commands.clone()).unwrap_or_default()
+        };
+        let commands = pass_fit(&mut |ctx| writer.tick(&mut app, ctx));
+        assert!(commands.is_empty(), "{commands:?}");
+        writer.window_since = writer.window_since.and_then(|since| since.checked_sub(std::time::Duration::from_secs(3)));
+        assert!(pass_fit(&mut |ctx| writer.tick(&mut app, ctx)).is_empty(), "the start is over");
+
+        // a window as large as its screen after the start is the user's own doing
+        let mut writer = PrefsWriter { window_since: Some(std::time::Instant::now() - std::time::Duration::from_secs(3)), ..PrefsWriter::default() };
+        let commands = pass(&mut |ctx| writer.tick(&mut app, ctx));
+        assert!(commands.is_empty(), "{commands:?}");
+        assert!(writer.window_fitted);
     }
 
     /// #1331: on macOS the process ends inside `on_exit`, before eframe would tear the window down.

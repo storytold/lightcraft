@@ -61,6 +61,7 @@
   "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "已將 {n} 張照片移到「{1}」{0:.0}。編輯 → 復原 可移回。",
   "Named ({named_n})": "已命名（{named_n}）",
   "Paste into {n} photo{} — only settings that were copied are pasted": "貼上至 {n} 張照片{:.0} — 只貼上已複製的設定",
+  "Photos whose capture time can't be read were left as they were: {n}": "無法讀取拍攝時間的照片保持不變：{n} 張",
   "Preset: {name}": "預設集：{name}",
   "Preview only — editing the camera's embedded JPEG ({})": "僅供預覽 — 正在編輯相機內嵌的 JPEG（{}）",
   "Preview only — {}": "僅供預覽 — {}",

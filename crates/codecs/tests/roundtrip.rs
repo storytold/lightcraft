@@ -421,6 +421,113 @@ fn tiff_samples_narrower_than_a_byte() {
     assert!(decode(&packed_tiff(10, 2, 1, 1, &rows[..3]), DecodeOptions::default()).is_err());
 }
 
+/// A little-endian, uncompressed planar (PlanarConfiguration 2) RGB TIFF with one strip per band,
+/// the layout of the file in #2462 (GIMP writes it too): `planes` holds each band's samples in
+/// turn, `bits` wide, `samples` bands (3 = RGB, 4 = RGBA).
+fn planar_tiff(width: u16, height: u16, bits: u16, samples: u16, planes: &[Vec<u8>]) -> Vec<u8> {
+    assert_eq!(planes.len(), samples as usize, "one plane per sample");
+    let plane_len = width as u32 * height as u32 * (bits as u32 / 8);
+    let entries: u16 = 10;
+    let mut off: u32 = 8 + 2 + 12 * u32::from(entries) + 4;
+    let bits_at = off;
+    off += 2 * u32::from(samples);
+    let offsets_at = off;
+    off += 4 * u32::from(samples);
+    let counts_at = off;
+    off += 4 * u32::from(samples);
+    let data_at = off;
+
+    let mut b = b"II*\0".to_vec();
+    b.extend(8u32.to_le_bytes());
+    b.extend(entries.to_le_bytes());
+    let e = |b: &mut Vec<u8>, tag: u16, ty: u16, count: u32, v: u32| {
+        b.extend(tag.to_le_bytes());
+        b.extend(ty.to_le_bytes());
+        b.extend(count.to_le_bytes());
+        b.extend(v.to_le_bytes());
+    };
+    e(&mut b, 256, 3, 1, u32::from(width)); // ImageWidth
+    e(&mut b, 257, 3, 1, u32::from(height)); // ImageLength
+    e(&mut b, 258, 3, u32::from(samples), bits_at); // BitsPerSample (array)
+    e(&mut b, 259, 3, 1, 1); // Compression: none
+    e(&mut b, 262, 3, 1, 2); // PhotometricInterpretation: RGB
+    e(&mut b, 273, 4, u32::from(samples), offsets_at); // StripOffsets (array)
+    e(&mut b, 277, 3, 1, u32::from(samples)); // SamplesPerPixel
+    e(&mut b, 278, 4, 1, u32::from(height)); // RowsPerStrip: one strip per plane
+    e(&mut b, 279, 4, u32::from(samples), counts_at); // StripByteCounts (array)
+    e(&mut b, 284, 3, 1, 2); // PlanarConfiguration: planar
+    b.extend(0u32.to_le_bytes());
+    assert_eq!(b.len() as u32, bits_at);
+    for _ in 0..samples {
+        b.extend(bits.to_le_bytes());
+    }
+    assert_eq!(b.len() as u32, offsets_at);
+    for i in 0..samples {
+        b.extend((data_at + u32::from(i) * plane_len).to_le_bytes());
+    }
+    assert_eq!(b.len() as u32, counts_at);
+    for _ in 0..samples {
+        b.extend(plane_len.to_le_bytes());
+    }
+    assert_eq!(b.len() as u32, data_at);
+    for p in planes {
+        assert_eq!(p.len() as u32, plane_len);
+        b.extend_from_slice(p);
+    }
+    b
+}
+
+/// Planar (PlanarConfiguration 2) TIFFs store each colour band in its own strips; they used to
+/// decode only the first band and fail with "sample buffer too short" (#2462).
+#[test]
+fn tiff_planar_decodes_every_plane() {
+    // 16-bit RGB, 3 × 2: three bands of distinct samples, interleaved on decode.
+    let (w, h) = (3u16, 2u16);
+    let n = (w * h) as usize;
+    let band16 = |base: u16| (0..n).map(|i| base + 7 * i as u16).collect::<Vec<u16>>();
+    let le = |v: &[u16]| v.iter().flat_map(|&x| x.to_le_bytes()).collect::<Vec<u8>>();
+    let (r, g, b) = (band16(1000), band16(20000), band16(40000));
+    let bytes = planar_tiff(w, h, 16, 3, &[le(&r), le(&g), le(&b)]);
+    assert_eq!(sniff(&bytes), Some(Format::Tiff));
+    let d = decode(&bytes, DecodeOptions::default()).unwrap();
+    assert_eq!((d.image.width, d.image.height, d.bit_depth), (3, 2, 16));
+    assert!(!d.grayscale);
+    for i in 0..n {
+        let px = d.image.get(i % 3, i / 3);
+        for (c, band) in [&r, &g, &b].iter().enumerate() {
+            let want = srgb_to_linear(band[i] as f32 / 65535.0);
+            assert!((px[c] - want).abs() < 1e-6, "16-bit plane {c}, sample {i}: {} vs {want}", px[c]);
+        }
+    }
+
+    // 8-bit RGB, 4 × 2.
+    let (w, h) = (4u16, 2u16);
+    let n = (w * h) as usize;
+    let band8 = |base: u8| (0..n).map(|i| (u16::from(base) + 37 * i as u16) as u8).collect::<Vec<u8>>();
+    let (r, g, b) = (band8(10), band8(90), band8(170));
+    let d = decode(&planar_tiff(w, h, 8, 3, &[r.clone(), g.clone(), b.clone()]), DecodeOptions::default()).unwrap();
+    assert_eq!((d.image.width, d.image.height, d.bit_depth), (4, 2, 8));
+    for i in 0..n {
+        let px = d.image.get(i % 4, i / 4);
+        for (c, band) in [&r, &g, &b].iter().enumerate() {
+            let want = srgb_to_linear(band[i] as f32 / 255.0);
+            assert!((px[c] - want).abs() < 1e-6, "8-bit plane {c}, sample {i}: {} vs {want}", px[c]);
+        }
+    }
+
+    // 8-bit RGBA: the fourth band is alpha.
+    let a = (0..n).map(|i| if i % 2 == 0 { 255 } else { 128 }).collect::<Vec<u8>>();
+    let d = decode(&planar_tiff(w, h, 8, 4, &[r.clone(), g.clone(), b.clone(), a.clone()]), DecodeOptions::default()).unwrap();
+    assert!(d.has_alpha);
+    let alpha = d.alpha.as_ref().unwrap();
+    for i in 0..n {
+        assert!((alpha.data[i] - a[i] as f32 / 255.0).abs() < 1e-6, "alpha sample {i}");
+        let px = d.image.get(i % 4, i / 4);
+        let want = srgb_to_linear(r[i] as f32 / 255.0);
+        assert!((px[0] - want).abs() < 1e-6, "RGBA plane 0, sample {i}: {} vs {want}", px[0]);
+    }
+}
+
 #[test]
 fn webp_lossless_exact() {
     let img = gradient(31, 19);

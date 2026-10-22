@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use lightcraft_develop::DevelopSettings;
 use lightcraft_geom::Orientation;
 use lightcraft_pipeline::finish::{FinishParams, MASK_TERMS, mask_terms};
-use lightcraft_pipeline::geometry::SampleMode;
+use lightcraft_pipeline::geometry::{SampleMode, pixel_translation};
 use lightcraft_pipeline::local::plane_at;
 use lightcraft_pipeline::{Plan, RenderRequest, Rendered, SourceInfo, local};
 use lightcraft_raster::resample::Filter;
@@ -410,6 +410,7 @@ fn warp_params(
     o2t: &lightcraft_geom::Affine,
     sx: f64,
     sy: f64,
+    bicubic: bool,
 ) -> Vec<u32> {
     let f = |v: f64| (v as f32).to_bits();
     let mut p = vec![base.0 as u32, base.1 as u32, out.0 as u32, out.1 as u32];
@@ -434,7 +435,8 @@ fn warp_params(
     p.extend([f(v.center.x), f(v.center.y), f(v.radius)]);
     p.push(wp.per_channel() as u32);
     p.push(wp.has_gain() as u32);
-    debug_assert_eq!(p.len(), 65);
+    p.push(bicubic as u32);
+    debug_assert_eq!(p.len(), 66);
     p
 }
 
@@ -535,10 +537,14 @@ fn sample(cx: &mut Cx<'_>, src: &Arc<Rgb32f>, src_buf: Arc<Buf>, plan: &Plan<'_>
         Some(d) => (Arc::new(resize(cx, &oriented, (sp.ow, sp.oh), d, 3, Filter::Mitchell)), d),
         None => (oriented, (sp.ow, sp.oh)),
     };
+    let bicubic = plan.bicubic;
     let mut affine = |xf: &lightcraft_geom::Affine| {
         let out = cx.gpu.buffer(w * h * 3);
         let mut p = vec![bw as u32, bh as u32, w as u32, h as u32];
         p.extend(affine_bits(xf));
+        p.push(bicubic as u32);
+        // a pixel-aligned 1:1 view picks the mapped pixel exactly, like the CPU sampler
+        p.push(pixel_translation(xf) as u32);
         cx.run("sample_affine", &p, &[Some(&base), Some(&out), None], groups2(w, h, [16, 16]));
         Arc::new(out)
     };
@@ -549,7 +555,7 @@ fn sample(cx: &mut Cx<'_>, src: &Arc<Rgb32f>, src_buf: Arc<Buf>, plan: &Plan<'_>
         (SampleMode::Warp(o2t), None) => affine(&(lightcraft_geom::Affine::scale(sp.sx, sp.sy) * *o2t)),
         (SampleMode::Warp(o2t), Some(wp)) => {
             let out = cx.gpu.buffer(w * h * 3);
-            let p = warp_params(wp, (bw, bh), (w, h), o2t, sp.sx, sp.sy);
+            let p = warp_params(wp, (bw, bh), (w, h), o2t, sp.sx, sp.sy, bicubic);
             // f32 rounding can cross a source edge. Keep the reference f64
             // framing decision in a bit mask; color sampling stays on the GPU.
             let coverage = cx.gpu.upload(&coverage_mask(wp, o2t, w, h));
@@ -633,7 +639,7 @@ pub fn render(
             sample(&mut cx, src, src_buf, &plan)
         }
         None => {
-            let img = plan.frame.sample(src, w, h);
+            let img = plan.frame.sample_quality(src, w, h, plan.bicubic);
             let b = Arc::new(gpu.upload(rgb_words(&img)));
             host.sampled = Some(img);
             b

@@ -1303,6 +1303,53 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// The People view's sort dropdown orders the named people by photo count (most first, the
+    /// default) or by name A–Z (#2496).
+    #[test]
+    fn people_panel_sorts_by_count_or_by_name() {
+        use crate::state::{PeopleSort, ViewMode};
+        use lightcraft_catalog::Op;
+        let mut h = demo([1400.0, 900.0]);
+        let t = Duration::from_secs(10);
+        let ids: Vec<_> = h.app.session.catalog.photos().map(|p| p.id).take(3).collect();
+        let face = |x: f64, name: &str| lightcraft_meta::Region {
+            rect: lightcraft_geom::Rect { x0: x, y0: 0.2, x1: x + 0.25, y1: 0.6 },
+            kind: lightcraft_meta::RegionKind::Face,
+            name: Some(name.to_string()),
+            description: None,
+        };
+        // Bravo on three photos, Charlie on two, alpha on one: count order and name order differ
+        for (id, regions) in [
+            (ids[0], vec![face(0.1, "Bravo"), face(0.4, "Charlie"), face(0.7, "alpha")]),
+            (ids[1], vec![face(0.1, "Bravo"), face(0.4, "Charlie")]),
+            (ids[2], vec![face(0.1, "Bravo")]),
+        ] {
+            let mut meta = h.app.session.catalog.photo(id).unwrap().meta.clone();
+            meta.regions = regions;
+            h.app.session.commit("setup", Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
+        }
+        let order = |h: &Headless| h.app.widgets.iter().filter(|(w, _)| w.starts_with("person:")).map(|(w, _)| w.clone()).collect::<Vec<_>>();
+        let pick = |h: &mut Headless, item: &str| {
+            let r = h.request("ui.clickWidget", json!({"id": "dropdown:peopleSort"}), t);
+            assert_eq!(r["ok"], true, "open the sort menu: {r}");
+            h.settle(SETTLE);
+            let r = h.request("ui.clickWidget", json!({"id": item}), t);
+            assert_eq!(r["ok"], true, "{item}: {r}");
+            h.settle(SETTLE);
+        };
+        h.request("engine.execute", json!({"command": "view.people"}), t);
+        h.settle(SETTLE);
+        h.step();
+        assert_eq!(h.app.ui.view, ViewMode::People);
+        assert_eq!(h.app.ui.people_sort, PeopleSort::Count);
+        assert_eq!(order(&h), ["person:Bravo", "person:Charlie", "person:alpha"], "most photos first by default");
+        pick(&mut h, "peopleSortMenu:name");
+        assert_eq!(h.app.ui.people_sort, PeopleSort::Name);
+        assert_eq!(order(&h), ["person:alpha", "person:Bravo", "person:Charlie"], "A–Z by name");
+        pick(&mut h, "peopleSortMenu:count");
+        assert_eq!(order(&h), ["person:Bravo", "person:Charlie", "person:alpha"], "back to most photos first");
+    }
+
     /// A click on a person's card opens their page, which shows only cropped faces (one per face, not per photo); a click
     /// on one opens its photo; Back, the People button and Escape return to everyone.
     #[test]
@@ -1893,6 +1940,156 @@ mod tests {
         assert!(deep.is_some_and(|n| n > 500), "scrolled rows: {later:?}");
     }
 
+    /// Issue #2467: the ⋯ menu's Expand All Groups / Collapse All Groups open or close every group
+    /// at once (with dozens of imported groups open, finding one meant a long scroll or closing
+    /// the others one by one); a header click still toggles just its own group.
+    #[test]
+    fn preset_menu_expands_and_collapses_all_groups() {
+        let mut h = demo([1400.0, 900.0]);
+        let t = Duration::from_secs(10);
+        h.request("ui.set", json!({"view": "detail"}), t);
+        h.request("engine.execute", json!({"command": "panel.presets"}), t);
+        h.settle(SETTLE);
+        let rows = |h: &Headless| h.app.widgets.iter().filter(|(w, _)| w.starts_with("preset:")).count();
+        let groups = |h: &Headless| h.app.widgets.iter().filter(|(w, _)| w.starts_with("presetGroup:")).count();
+        let (groups_before, rows_before) = (groups(&h), rows(&h));
+        assert!(groups_before > 1, "{groups_before} groups in the demo");
+        assert!(rows_before > 0, "groups start open");
+        let menu = |h: &mut Headless, item: &str| {
+            let r = h.request("ui.clickWidget", json!({"id": "icon:presetMore"}), t);
+            assert_eq!(r["ok"], true, "open the ⋯ menu: {r}");
+            h.step();
+            h.step();
+            let r = h.request("ui.clickWidget", json!({"id": item}), t);
+            assert_eq!(r["ok"], true, "{item}: {r}");
+            h.step();
+        };
+        // Collapse All Groups: every group shuts, only headers remain
+        menu(&mut h, "presetMenu:collapseAll");
+        h.step();
+        assert_eq!(rows(&h), 0, "collapsed: no preset rows, only headers");
+        assert_eq!(groups(&h), groups_before);
+        // a header click still opens just its own group
+        h.request("ui.clickWidget", json!({"id": "presetGroup:Color"}), t);
+        h.step();
+        let one = rows(&h);
+        assert!(one > 0, "the clicked group opened");
+        // Expand All Groups: everything back
+        menu(&mut h, "presetMenu:expandAll");
+        h.step();
+        assert_eq!(rows(&h), rows_before, "every group is open again");
+        assert_eq!(groups(&h), groups_before);
+    }
+
+    /// The applied-preset highlight follows the photo (#2392): applying to one photo highlights
+    /// it, another photo shows none, and returning to the first restores the highlight; undo
+    /// clears it until the edits are back.
+    #[test]
+    fn preset_highlight_follows_the_photo() {
+        let mut h = demo([1400.0, 900.0]);
+        let t = Duration::from_secs(10);
+        h.request("ui.set", json!({"view": "detail"}), t);
+        h.request("engine.execute", json!({"command": "panel.presets"}), t);
+        h.settle(SETTLE);
+        let a = h.app.session.active().unwrap();
+        let b = h.app.session.visible().iter().copied().find(|id| *id != a).unwrap();
+        let shown = |h: &Headless, id: lightcraft_catalog::PhotoId| crate::panels::presets::highlight_for_test(&h.view.ctx, &h.app.session, id);
+        let r = h.request("ui.clickWidget", json!({"id": "preset:lc.bw-high-contrast"}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(SETTLE);
+        assert_eq!(shown(&h, a).as_deref(), Some("lc.bw-high-contrast"), "the applied preset is highlighted");
+        // another photo shows none, and the first keeps its memory
+        h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [b.0]}}), t);
+        h.settle(SETTLE);
+        assert_eq!(shown(&h, b), None, "a photo that never received one shows none");
+        assert_eq!(shown(&h, a).as_deref(), Some("lc.bw-high-contrast"), "the memory outlives the selection change");
+        // returning restores the highlight
+        h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [a.0]}}), t);
+        h.settle(SETTLE);
+        assert_eq!(shown(&h, a).as_deref(), Some("lc.bw-high-contrast"));
+        // undo clears it; redo brings it back
+        h.request("engine.execute", json!({"command": "edit.undo"}), t);
+        h.settle(SETTLE);
+        assert_eq!(shown(&h, a), None, "the edits are gone");
+        h.request("engine.execute", json!({"command": "edit.redo"}), t);
+        h.settle(SETTLE);
+        assert_eq!(shown(&h, a).as_deref(), Some("lc.bw-high-contrast"), "the edits are back");
+    }
+
+    /// Show Clipping (J, #2396) paints the clipped pixels themselves over the photo — highlights
+    /// red, shadows blue — instead of the old non-spatial frame around it.
+    #[test]
+    fn show_clipping_paints_clipped_pixels() {
+        let mut h = demo([1400.0, 900.0]);
+        let t = Duration::from_secs(10);
+        h.request("ui.set", json!({"view": "detail"}), t);
+        h.app.renderer.keep_pixels = true;
+        h.settle(SETTLE);
+        let clipped = |h: &Headless| {
+            let tex = h.app.renderer.textures.get(&crate::render::Slot::Main).expect("loupe render");
+            let px = tex.pixels.as_ref().expect("pixels kept");
+            let [hi, lo] = lightcraft_pipeline::visualize::CLIP_COLORS;
+            (
+                px.pixels.iter().filter(|c| c.r() == hi[0] && c.g() == hi[1] && c.b() == hi[2]).count(),
+                px.pixels.iter().filter(|c| c.r() == lo[0] && c.g() == lo[1] && c.b() == lo[2]).count(),
+            )
+        };
+        // +4 EV: much of the photo clips white
+        h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "light.exposure", "value": 4.0}}), t);
+        h.settle(SETTLE);
+        assert_eq!(clipped(&h), (0, 0), "no overlay before Show Clipping is on");
+        let r = h.request("engine.execute", json!({"command": "view.clipping"}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        assert!(h.app.ui.show_clipping);
+        h.settle(SETTLE);
+        let (hi, _lo) = clipped(&h);
+        assert!(hi > 0, "clipped highlights are painted red");
+        // -8 EV: the shadows clip instead, the highlights mostly don't
+        h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "light.exposure", "value": -8.0}}), t);
+        h.settle(SETTLE);
+        let (hi2, lo2) = clipped(&h);
+        assert!(lo2 > 0, "clipped shadows are painted blue");
+        assert!(hi2 < hi, "fewer clipped highlights at -8 EV");
+        // off again: no overlay
+        h.request("engine.execute", json!({"command": "view.clipping"}), t);
+        h.settle(SETTLE);
+        assert_eq!(clipped(&h), (0, 0), "no overlay when Show Clipping is off");
+    }
+
+    /// Show Sensor Clipping (Shift+K, #2396) is a separate inspection mode, mutually exclusive
+    /// with Show Clipping. The demo library has no raws, so nothing is painted — the overlay's
+    /// painting itself is covered by the pipeline tests.
+    #[test]
+    fn sensor_clipping_toggles_and_excludes_display_clipping() {
+        let mut h = demo([1400.0, 900.0]);
+        let t = Duration::from_secs(10);
+        h.request("ui.set", json!({"view": "detail"}), t);
+        h.app.renderer.keep_pixels = true;
+        h.settle(SETTLE);
+        let r = h.request("engine.execute", json!({"command": "view.sensorClipping"}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        assert!(h.app.ui.show_sensor_clipping);
+        assert!(!h.app.ui.show_clipping, "sensor clipping turns display clipping off");
+        h.settle(SETTLE);
+        // a non-raw has no sensor clip data: the render must not change or crash
+        let tex = h.app.renderer.textures.get(&crate::render::Slot::Main).expect("loupe render");
+        let px = tex.pixels.as_ref().expect("pixels kept");
+        let painted = px
+            .pixels
+            .iter()
+            .any(|c| lightcraft_pipeline::visualize::SENSOR_CLIP_COLORS.iter().any(|k| c.r() == k[0] && c.g() == k[1] && c.b() == k[2]));
+        assert!(!painted, "no sensor clip marks without sensor clip data");
+        // and the other way round
+        h.request("engine.execute", json!({"command": "view.clipping"}), t);
+        h.settle(SETTLE);
+        assert!(h.app.ui.show_clipping);
+        assert!(!h.app.ui.show_sensor_clipping, "display clipping turns sensor clipping off");
+        h.request("engine.execute", json!({"command": "view.sensorClipping"}), t);
+        h.settle(SETTLE);
+        assert!(h.app.ui.show_sensor_clipping);
+        assert!(!h.app.ui.show_clipping);
+    }
+
     /// The filter bar drives `library.filter` and saves the view as a smart album.
     #[test]
     fn filter_bar_filters_and_saves_a_smart_album() {
@@ -1917,6 +2114,28 @@ mod tests {
         assert_eq!(h.app.session.catalog.album_count(smart), n);
         h.request("ui.clickWidget", json!({"id": "button:filterClear"}), t);
         assert_eq!(h.app.session.filter, Default::default());
+        assert_eq!(h.app.session.visible_cloned().len(), all);
+        h.settle(SETTLE);
+    }
+
+    /// The keyword filter's "No keyword" (an empty `keyword`) shows only the photos without any (#2461).
+    #[test]
+    fn keyword_filter_no_keyword_shows_untagged_photos() {
+        let mut h = demo([1400.0, 800.0]);
+        let t = Duration::from_secs(10);
+        h.settle(SETTLE);
+        let all = h.app.session.visible_cloned().len();
+        // every demo photo is tagged: take the keywords off the active one
+        let id = h.app.session.active().unwrap();
+        let r = h.request("engine.execute", json!({"command": "photo.setMeta", "params": {"ids": [id], "keywords": []}}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        let r = h.request("engine.execute", json!({"command": "library.filter", "params": {"keyword": ""}}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        assert_eq!(h.app.session.filter.keyword.as_deref(), Some(""));
+        let vis = h.app.session.visible_cloned();
+        assert_eq!(vis.len(), 1, "only the untagged photo");
+        assert_eq!(vis[0], id);
+        h.request("engine.execute", json!({"command": "library.clearFilter"}), t);
         assert_eq!(h.app.session.visible_cloned().len(), all);
         h.settle(SETTLE);
     }
@@ -3534,6 +3753,50 @@ mod tests {
         h.request("ui.clickWidget", json!({"id": "label:green"}), t);
         assert_eq!(h.app.session.catalog.photo(id).unwrap().label, None, "clicking the current label clears it");
         h.settle(SETTLE);
+    }
+
+    /// Culling (#2398): the Info panel's label swatches act on the active photo only (not the whole
+    /// selection), and the bottom bar's label swatches set the active photo's label the way its
+    /// stars and flags do.
+    #[test]
+    fn culling_label_swatches() {
+        let mut h = demo([1200.0, 900.0]);
+        let t = Duration::from_secs(10);
+        let label = |h: &Headless, id: u64| h.app.session.catalog.photo(lightcraft_catalog::PhotoId(id)).unwrap().label;
+        let vis: Vec<u64> = h.app.session.visible_cloned().iter().map(|p| p.0).collect();
+        h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [vis[0], vis[1]]}}), t);
+        h.request("engine.execute", json!({"command": "view.compare"}), t);
+        h.request("ui.set", json!({"right": "info"}), t);
+        h.settle(SETTLE);
+        // the Info panel shows the candidate (the active photo); its swatch labels that one only
+        let r = h.request("ui.clickWidget", json!({"id": "label:green"}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        assert_eq!(label(&h, vis[1]), Some(lightcraft_catalog::ColorLabel::Green), "the candidate gets the label");
+        assert_eq!(label(&h, vis[0]), None, "the select keeps no label");
+        // the bottom bar's swatches, next to the stars and flags that already worked
+        let r = h.request("ui.clickWidget", json!({"id": "label:bottom:red"}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        assert_eq!(label(&h, vis[1]), Some(lightcraft_catalog::ColorLabel::Red));
+        assert_eq!(label(&h, vis[0]), None);
+        // clicking the current colour clears it
+        h.request("ui.clickWidget", json!({"id": "label:bottom:red"}), t);
+        assert_eq!(label(&h, vis[1]), None);
+        h.settle(SETTLE);
+        // back in the grid, the bottom bar labels the selection as before, and a cell's badge
+        // circle opens the label menu for that one photo
+        h.request("ui.set", json!({"view": "photoGrid"}), t);
+        h.request("ui.clickWidget", json!({"id": "label:bottom:green"}), t);
+        h.settle(SETTLE);
+        assert_eq!(label(&h, vis[0]), Some(lightcraft_catalog::ColorLabel::Green), "in the grid the bottom bar labels the selection");
+        assert_eq!(label(&h, vis[1]), Some(lightcraft_catalog::ColorLabel::Green));
+        let r = h.request("ui.clickWidget", json!({"id": format!("badge:label:{}", vis[0])}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(SETTLE);
+        assert!(egui::Popup::is_any_open(&h.view.ctx), "the badge circle opens the label menu");
+        h.request("ui.clickWidget", json!({"id": "badgeLabel:none"}), t);
+        h.settle(SETTLE);
+        assert_eq!(label(&h, vis[0]), None, "the badge menu clears that photo's label");
+        assert_eq!(label(&h, vis[1]), Some(lightcraft_catalog::ColorLabel::Green), "the other photo keeps its label");
     }
 
     /// File → Import Photos… opens the import review: candidates with thumbnails, the duplicate is

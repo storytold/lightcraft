@@ -1,7 +1,7 @@
 //! Develop commands. All operate on the active photo unless `ids` are given (sync).
 
 use lightcraft_catalog::{Op, PhotoId, Version};
-use lightcraft_develop::{DevelopSettings, Preset, ProcessVersion, Section, SettingsGroup, Treatment, Upright, WbMode, controls};
+use lightcraft_develop::{BaseCurve, DevelopSettings, Preset, ProcessVersion, Section, SettingsGroup, Treatment, Upright, WbMode, controls};
 use lightcraft_geom::{CropGeometry, CropHandle, Point, Rect, crop_fit_angle, drag_crop};
 use serde_json::{Value, json};
 
@@ -480,6 +480,16 @@ pub fn specs() -> Vec<CommandSpec> {
                 Ok(())
             })
         }),
+        cmd!("develop.baseCurve", "Base Curve", [], None, "{curve: camera|linear-response|linear} (raws only)", has_active, |s, p| {
+            let wire = str_param(p, "curve").unwrap_or("");
+            let curve = BaseCurve::parse(wire)
+                .ok_or_else(|| bad("develop.baseCurve", format!("unknown curve `{wire}` (camera, linear-response or linear)")))?;
+            edit(s, "develop.baseCurve", "Base Curve", |d| {
+                d.base_curve = curve;
+                Ok(())
+            })?;
+            Ok(json!({"baseCurve": curve.wire()}))
+        }),
         cmd!("develop.profile", "Set Profile", [], None, "{id: profile id (see profiles.list), amount?: 0..200}", has_active, |s, p| {
             let id = str_param(p, "id").ok_or_else(|| bad("develop.profile", "missing id"))?.to_string();
             if !crate::presets::PROFILES.iter().any(|x| x.id == id) && !s.lut_profiles.iter().any(|x| x.id == id) {
@@ -760,6 +770,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 edit(s, "geometry.upright", "Upright", |d| {
                     d.geometry.upright = mode;
                     d.geometry.upright_transform = transform;
+                    d.geometry.upright_amount = d.geometry.amount;
                     Ok(())
                 })?;
                 Ok(json!({"mode": mode, "transform": transform}))

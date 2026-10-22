@@ -275,6 +275,7 @@ controls! {
     "optics.defringeGreenHueHi" => optics.defringe_green_hue_hi, "Green Hue High", Optics, 10, 100, 60, 1, 0, Gradient { from: "#c0d030", to: "#30c0b0" };
     "optics.caRed" => optics.ca_red, "Red/Cyan Fringe", Optics, -100, 100, 0, 1, 0, Gradient { from: "#30c0c0", to: "#e04040" };
     "optics.caBlue" => optics.ca_blue, "Blue/Yellow Fringe", Optics, -100, 100, 0, 1, 0, Gradient { from: "#d0c030", to: "#4060e0" };
+    "geometry.amount" => geometry.amount, "Amount", Geometry, 10, 120, 100, 1, 0, Plain;
     "geometry.vertical" => geometry.vertical, "Vertical", Geometry, -100, 100, 0, 1, 0, Centered;
     "geometry.horizontal" => geometry.horizontal, "Horizontal", Geometry, -100, 100, 0, 1, 0, Centered;
     "geometry.rotate" => geometry.rotate, "Rotate", Geometry, -10, 10, 0, 0.1, 1, Centered;

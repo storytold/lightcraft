@@ -183,10 +183,10 @@ pub fn specs() -> Vec<CommandSpec> {
             "Edit Capture Time",
             [],
             None,
-            "{ids?, time?: `2026-09-30T14:05:00` (the active photo gets it, the others shift by the same amount), each?: bool (every photo gets `time`), shift?: seconds, hours?: time-zone shift in hours} → {changed, captured: [..]}",
+            "{ids?, time?: `2026-09-30T14:05:00` (the active photo gets it, the others shift by the same amount), each?: bool (every photo gets `time`), shift?: seconds, hours?: time-zone shift in hours} → {changed, captured: [..], unreadable: photos whose time can't be read, left as they were}",
             has_selection,
             |s, p| {
-                use lightcraft_catalog::dates::{iso_seconds, normalize_iso, shift_iso};
+                use lightcraft_catalog::dates::{iso_seconds, normalize_iso, readable_iso, shift_iso};
                 let c = "photo.setCaptureTime";
                 let targets: Vec<_> = s.targets(p)?.into_iter().filter(|id| s.catalog.photo(*id).is_some()).collect();
                 if targets.is_empty() {
@@ -204,21 +204,31 @@ pub fn specs() -> Vec<CommandSpec> {
                 let mut each: Option<String> = None;
                 if let Some(t) = str_param(p, "time") {
                     let t = normalize_iso(t).ok_or_else(|| bad(c, format!("`{t}` is not a date (YYYY-MM-DDTHH:MM:SS)")))?;
-                    if bool_or(p, "each", false) {
+                    // one photo gets the typed time as it is (repairing a time that doesn't read);
+                    // several move by the active photo's change, which needs its own time to read
+                    if bool_or(p, "each", false) || targets.len() == 1 {
                         each = Some(t);
                     } else {
                         let anchor = s.active().filter(|a| targets.contains(a)).unwrap_or(targets[0]);
                         let anchor_date = base(s, anchor);
+                        if !readable_iso(&anchor_date) {
+                            let name = s.catalog.photo(anchor).map(|p| p.file_name.as_str()).unwrap_or("");
+                            return Err(bad(
+                                c,
+                                format!(
+                                    "{name}'s capture time can't be read, so the other photos can't move by its change; select it alone to set its time"
+                                ),
+                            ));
+                        }
                         // An impossible calendar date cannot anchor changes to the other photos.
-                        let from = normalize_iso(anchor_date.trim().get(..10).unwrap_or(""))
-                            .and_then(|_| iso_seconds(&anchor_date))
-                            .ok_or_else(|| bad(c, "the photo's date doesn't parse"))?;
+                        let from = iso_seconds(&anchor_date).ok_or_else(|| bad(c, "the photo's date doesn't parse"))?;
                         delta += iso_seconds(&t).unwrap_or(from) - from;
                     }
                 }
                 let mut ops = Vec::new();
                 let mut out = Vec::new();
                 let mut out_of_range = 0usize;
+                let mut unreadable = 0usize;
                 for id in &targets {
                     let from = match &each {
                         Some(t) => t.clone(),
@@ -226,9 +236,11 @@ pub fn specs() -> Vec<CommandSpec> {
                     };
                     let Some(new) = shift_iso(&from, delta) else {
                         // a date that reads but would leave years 0000–9999 is refused below; one
-                        // that doesn't read is skipped, as before
-                        if iso_seconds(&from).is_some() {
+                        // that doesn't read is left as it is and counted, so the dialog can say so
+                        if readable_iso(&from) {
                             out_of_range += 1;
+                        } else {
+                            unreadable += 1;
                         }
                         continue;
                     };
@@ -244,7 +256,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 if n > 0 {
                     s.commit("Edit Capture Time", Op::Batch { ops })?;
                 }
-                Ok(json!({"changed": n, "captured": out}))
+                Ok(json!({"changed": n, "captured": out, "unreadable": unreadable}))
             }
         ),
         cmd!(

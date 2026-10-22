@@ -47,6 +47,7 @@
   "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "{n}枚を「{1}」に移動しました。編集 → 取り消す で元に戻せます。{0:.0}",
   "Named ({named_n})": "名前付き（{named_n}）",
   "Paste into {n} photo{} — only settings that were copied are pasted": "{n}枚に貼り付け{:.0}（コピーされた設定だけを適用）",
+  "Photos whose capture time can't be read were left as they were: {n}": "撮影日時を読み取れない写真はそのまま残しました：{n}枚",
   "Preset: {name}": "プリセット：{name}",
   "Preview only — editing the camera's embedded JPEG ({})": "プレビューのみ：カメラ内蔵のJPEGを編集中（{}）",
   "Preview only — {}": "プレビューのみ：{}",

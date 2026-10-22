@@ -269,7 +269,9 @@ fn exposure_after_spatial_filters_equals_exposing_the_source() {
     s.light.exposure = 0.0;
     let b = render(&scaled, &info, &s, &RenderRequest::fit(200, 200)).image;
     let d = max_diff(&a, &b);
-    assert!(d <= 2, "max difference {d}");
+    // the kernel is linear, so only float rounding differs — a little more with the 16-tap
+    // bicubic full-quality resample than bilinear's 4 taps
+    assert!(d <= 3, "max difference {d}");
 }
 
 #[test]

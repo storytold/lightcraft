@@ -52,6 +52,12 @@ pub fn valid_hash(h: &str) -> bool {
     !h.is_empty() && h.len() <= 128 && h.chars().all(|c| c.is_ascii_alphanumeric())
 }
 
+/// The page title for library folder `dir`: `<library>[ •] — LightCraft`, the `•` while changes
+/// could not be saved (issue #2397), as the sibling apps name their open document.
+pub fn document_title(dir: &str, unsaved: bool) -> String {
+    format!("{dir}{} — LightCraft", if unsaved { " •" } else { "" })
+}
+
 /// Why a backup can't start yet, given [`lightcraft_engine::Session::unsaved`]: changes applied in
 /// the app but not yet written to browser storage (a save failed). The zip copies the stored
 /// library files, so it would report success while missing them; `None` when everything is saved.
@@ -272,6 +278,13 @@ pub fn restored_dir_name(now_ms: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_page_title_names_the_library_and_marks_unsaved_changes() {
+        assert_eq!(document_title("library", false), "library — LightCraft");
+        assert_eq!(document_title("library", true), "library • — LightCraft");
+        assert_eq!(document_title("restored-backup", false), "restored-backup — LightCraft");
+    }
 
     fn build(files: &[(&str, &[u8])]) -> Vec<u8> {
         let mut w = ZipWriter::default();

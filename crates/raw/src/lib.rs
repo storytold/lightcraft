@@ -458,6 +458,66 @@ pub fn stretched_height(height: usize, aspect: f32) -> usize {
     if (aspect - 1.0).abs() < 0.01 { height } else { ((height as f32 * aspect).round() as usize).max(1) }
 }
 
+/// Which colour's photosites sit at or above `clip` (1.0 = white) in a normalised mosaic: bit 0 =
+/// R, 1 = G, 2 = B, one byte per pixel of the active area. A CFA photosite is one colour, so its
+/// byte has one bit; a linear-RGB pixel (cpp ≥ 3) sets every clipped channel's bit.
+fn mosaic_clip_flags(n: &Normalized, clip: f32) -> Vec<u8> {
+    use rayon::prelude::*;
+    let (w, cpp) = (n.width, n.cpp);
+    let mut flags = vec![0u8; w * n.height];
+    flags.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
+        let base = y * w * cpp;
+        for (x, f) in row.iter_mut().enumerate() {
+            let mut bits = 0u8;
+            if cpp == 1 {
+                // one photosite, one colour (the CFA is anchored at this buffer's (0, 0))
+                if n.data.get(base + x).is_some_and(|&v| v >= clip) {
+                    bits = 1 << n.cfa.as_ref().map_or(1, |c| c.color_at(x, y)).min(2);
+                }
+            } else {
+                for s in 0..cpp.min(3) {
+                    if n.data.get(base + x * cpp + s).is_some_and(|&v| v >= clip) {
+                        bits |= 1 << s;
+                    }
+                }
+            }
+            *f = bits;
+        }
+    });
+    flags
+}
+
+/// The flags of `rect` of a `w`-wide flag bitmap (the default crop [`RawImage::develop`] keeps).
+fn crop_flags(flags: Vec<u8>, w: usize, rect: crate::Rect) -> Vec<u8> {
+    if rect.x == 0 && rect.y == 0 && rect.width == w && rect.height * w == flags.len() {
+        return flags;
+    }
+    let mut out = vec![0u8; rect.width * rect.height];
+    for y in 0..rect.height {
+        let src = (y + rect.y) * w + rect.x;
+        if let (Some(row), Some(out_row)) = (flags.get(src..src + rect.width), out.get_mut(y * rect.width..(y + 1) * rect.width)) {
+            out_row.copy_from_slice(row);
+        }
+    }
+    out
+}
+
+/// Stretch a `w × h` flag bitmap's rows to `new_h` (a D1X-style pixel aspect), nearest-row: flags
+/// are per-photosite facts, not values to blend.
+fn stretch_flags_rows(flags: Vec<u8>, w: usize, h: usize, new_h: usize) -> Vec<u8> {
+    if new_h == h || h == 0 || w == 0 {
+        return flags;
+    }
+    let mut out = vec![0u8; w * new_h];
+    for (y, row) in out.chunks_mut(w).enumerate() {
+        let sy = (((y as f64 + 0.5) * h as f64 / new_h as f64) as usize).min(h - 1);
+        if let Some(src) = flags.get(sy * w..sy * w + w) {
+            row.copy_from_slice(src);
+        }
+    }
+    out
+}
+
 impl RawInfo {
     /// Size of the developed image before orientation: the default crop, else the active area, with the rows
     /// stretched for non-square pixels.
@@ -713,6 +773,11 @@ pub struct Normalized {
     pub cfa: Option<Cfa>,
 }
 
+/// The normalised value at which a photosite counts as sensor-clipped
+/// ([`RawImage::develop_with_flags`], the binned clip mask): just under white, so a photosite the
+/// demosaiced image would render at 255 counts too.
+pub const CLIP_FLAG_LEVEL: f32 = 0.99;
+
 impl RawImage {
     /// The description without the samples (what [`probe_info`] returns for the same file).
     pub fn info(&self) -> RawInfo {
@@ -857,6 +922,22 @@ impl RawImage {
         Ok(self.finish_demosaiced(rgb))
     }
 
+    /// [`Self::develop`] plus, per pixel of the result, which colour's photosites sit at the
+    /// sensor's clip level ([`CLIP_FLAG_LEVEL`]; bit 0 = R, 1 = G, 2 = B): the sensor clipping
+    /// overlay's data. The flags come from the same normalised mosaic the demosaic reads, so they
+    /// cost one extra pass over it, not a second decode.
+    pub fn develop_with_flags(&self, method: Method) -> Result<(Rgb32f, Vec<u8>)> {
+        let n = self.normalized()?;
+        let flags = mosaic_clip_flags(&n, CLIP_FLAG_LEVEL);
+        let rgb = demosaic(&n, method);
+        drop(n);
+        // the same crop and pixel-aspect stretch `finish_demosaiced` gives the picture
+        let c = self.develop_crop(rgb.width, rgb.height);
+        let flags = crop_flags(flags, rgb.width, c);
+        let flags = stretch_flags_rows(flags, c.width, c.height, stretched_height(c.height, self.pixel_aspect));
+        Ok((self.finish_demosaiced(rgb), flags))
+    }
+
     /// The last steps of [`Self::develop`] for camera RGB made some other way (a denoiser that demosaics too) from
     /// [`Self::normalized`]'s mosaic: apply `OpcodeList3`, then the default crop.
     pub fn finish_demosaiced(&self, mut rgb: Rgb32f) -> Rgb32f {
@@ -956,6 +1037,61 @@ mod tests {
         assert!(!tall.can_bin(2));
         assert_eq!(stretched_height(1324, 2.0), 2648);
         assert_eq!(stretched_height(1324, 1.0), 1324);
+    }
+
+    #[test]
+    fn develop_with_flags_marks_clipped_photosites_per_colour() {
+        let (w, h) = (8usize, 6usize);
+        // RGGB: even rows R G, odd rows G B; black 64, white 1023 (12 bits)
+        let mut data: Vec<u16> = (0..w * h).map(|i| (100 + (i * 37) % 900) as u16).collect();
+        // clip one photosite of each colour: R at (0, 0), G at (1, 0), B at (1, 1)
+        for (x, y) in [(0usize, 0usize), (1, 0), (1, 1)] {
+            data[y * w + x] = 1023;
+        }
+        let raw = RawImage {
+            format: RawFormat::Dng,
+            width: w,
+            height: h,
+            cpp: 1,
+            data: RawData::U16(data),
+            cfa: Cfa::bayer("RGGB"),
+            bits: 12,
+            black: BlackLevel::uniform(64.0),
+            white: vec![1023.0],
+            active_area: Rect::new(0, 0, 8, 6),
+            crop: Rect::default(),
+            orientation: Orientation::Normal,
+            color: ColorData::default(),
+            wb_multipliers: None,
+            linearized: false,
+            pixel_aspect: 1.0,
+            opcodes: OpcodeLists::default(),
+            metadata: Metadata::default(),
+            lens_metadata: Default::default(),
+        };
+        let (rgb, flags) = raw.develop_with_flags(Method::Bilinear).unwrap();
+        assert_eq!((rgb.width, rgb.height), (w, h));
+        assert_eq!(flags.len(), w * h);
+        assert_eq!(flags[0], 0b001, "the clipped R photosite");
+        assert_eq!(flags[1], 0b010, "the clipped G photosite");
+        assert_eq!(flags[w + 1], 0b100, "the clipped B photosite");
+        assert_eq!(flags[2], 0, "an unclipped photosite has no flag");
+        // the flags follow the default crop (relative to the active area)
+        let mut cropped = raw.clone();
+        cropped.crop = Rect::new(1, 1, 4, 3);
+        let (rgb, flags) = cropped.develop_with_flags(Method::Bilinear).unwrap();
+        assert_eq!((rgb.width, rgb.height), (4, 3));
+        assert_eq!(flags.len(), 4 * 3);
+        assert_eq!(flags[0], 0b100, "the B photosite at (1, 1) of the picture");
+        assert_eq!(flags[1], 0, "the G photosite at (2, 1) is not clipped");
+        // a non-square pixel aspect stretches the flags' rows with the picture's
+        let mut tall = raw.clone();
+        tall.pixel_aspect = 2.0;
+        let (rgb, flags) = tall.develop_with_flags(Method::Bilinear).unwrap();
+        assert_eq!((rgb.width, rgb.height), (w, 2 * h));
+        assert_eq!(flags.len(), w * 2 * h);
+        assert_eq!(flags[0], 0b001, "the clipped R photosite, stretched");
+        assert_eq!(flags[w], 0b001, "the stretched row repeats the source row");
     }
 
     /// A maker-note crop (`PEF` AOC / `ORF` ImageProcessing) with an origin of `u64::MAX` used to

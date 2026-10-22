@@ -19,7 +19,9 @@ impl Filter {
             Filter::Lanczos3 => 3.0,
         }
     }
-    fn eval(self, x: f32) -> f32 {
+    /// Kernel weight at distance `x` from the sample centre (also the tap weight of
+    /// [`Rgb32f::sample_bicubic`](crate::Rgb32f::sample_bicubic)).
+    pub(crate) fn eval(self, x: f32) -> f32 {
         let x = x.abs();
         match self {
             Filter::Box => {

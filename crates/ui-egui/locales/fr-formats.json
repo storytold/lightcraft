@@ -91,6 +91,7 @@
   "Named ({named_n})": "Nommés ({named_n})",
   "Painting “{k}”: click photos to add or remove it · Esc stops": "Application de « {k} » : cliquez sur les photos pour l’ajouter ou le retirer · Échap pour arrêter",
   "Paste into {n} photo{} — only settings that were copied are pasted": "Coller dans {n} photo{} — seuls les réglages copiés seront collés",
+  "Photos whose capture time can't be read were left as they were: {n}": "Les photos dont l'heure de capture n'a pas pu être lue ont été laissées telles quelles : {n}",
   "Preset: {name}": "Préréglage : {name}",
   "Preview only — editing the camera's embedded JPEG ({})": "Aperçu uniquement — modification du JPEG intégré de l’appareil photo ({})",
   "Preview only — {}": "Aperçu uniquement — {}",

@@ -517,19 +517,11 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     let active = app.session.active().and_then(|id| app.session.catalog.photo(id)).map(|p| (p.file_name.clone(), p.date().to_string()));
                     if let Some((name, cur)) = active {
                         let delta = match mode.as_str() {
-                            "set" => lightcraft_catalog::dates::normalize_iso(time)
-                                .and_then(|t| Some(lightcraft_catalog::dates::iso_seconds(&t)? - lightcraft_catalog::dates::iso_seconds(&cur)?)),
+                            "set" => None,
                             "shift" => params["shift"].as_i64(),
                             _ => Some((*zone as f64 * 3600.0).round() as i64),
                         };
-                        let after = delta.and_then(|d| lightcraft_catalog::dates::shift_iso(&cur, d));
-                        ui.label(
-                            egui::RichText::new(match after {
-                                Some(a) => format!("{name}: {} → {}", cur.replace('T', " "), a.replace('T', " ")),
-                                None => "Enter a date as YYYY-MM-DD HH:MM:SS".into(),
-                            })
-                            .color(t.text_label),
-                        );
+                        ui.label(egui::RichText::new(capture_time_preview(mode, n, time, delta, &name, &cur)).color(t.text_label));
                     }
                     if n > 1 {
                         ui.label(egui::RichText::new(crate::i18n::tr_format!("All {n} selected photos move by the same amount.", n = n)).color(t.text_dim));
@@ -1470,6 +1462,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                         | Dialog::KeywordSet { .. }
                         | Dialog::SynchronizeFolder { .. }
                         | Dialog::SaveEffect { .. }
+                        | Dialog::CaptureTime { .. }
                 ) =>
             {
                 app.toast(ctx, e)
@@ -1491,6 +1484,17 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     let text = crate::panels::left::moved_text(r["moved"].as_u64().unwrap_or(0), name);
                     app.toast(ctx, text);
                 }
+                close = true;
+            }
+            // photos whose capture time can't be read stay as they are; the rest moved
+            Ok(r) if matches!(dlg, Dialog::CaptureTime { .. }) && r.get("unreadable").and_then(serde_json::Value::as_u64).is_some_and(|n| n > 0) => {
+                app.toast(
+                    ctx,
+                    crate::i18n::tr_format!(
+                        "Photos whose capture time can't be read were left as they were: {n}",
+                        n = r["unreadable"].as_u64().unwrap_or(0)
+                    ),
+                );
                 close = true;
             }
             Err(e) if matches!(dlg, Dialog::MovePhotos { .. }) => {
@@ -1723,6 +1727,33 @@ pub(crate) fn album_entries(cat: &lightcraft_catalog::Catalog, editing: Option<u
         Some(e) if cat.album_reaches(a.id, e) => Some(crate::i18n::tr("It tests this album, so testing it back would loop").to_string()),
         _ => None,
     })
+}
+
+/// The Edit Capture Time dialog's preview line: `name: before → after`, or why there is nothing
+/// to show — the typed time isn't a date, the photo's own capture time can't be read (so it can't
+/// move by an amount read from it), or the shift would leave the years 0000–9999. `delta` is the
+/// shift or time-zone amount in seconds (`None` in Set mode, which works from `time`); with one
+/// photo selected, Set mode shows the typed time it will get as it is.
+pub(crate) fn capture_time_preview(mode: &str, selected: usize, time: &str, delta: Option<i64>, name: &str, cur: &str) -> String {
+    let readable = lightcraft_catalog::dates::readable_iso(cur);
+    let typed = lightcraft_catalog::dates::normalize_iso(time);
+    let after = match mode {
+        // one photo gets the typed time as it is; several move by the active photo's change
+        "set" if selected == 1 => typed.clone(),
+        "set" => typed
+            .as_deref()
+            .and_then(|t| Some(lightcraft_catalog::dates::iso_seconds(t)? - lightcraft_catalog::dates::iso_seconds(cur)?))
+            .and_then(|d| lightcraft_catalog::dates::shift_iso(cur, d)),
+        _ => delta.and_then(|d| lightcraft_catalog::dates::shift_iso(cur, d)),
+    };
+    match after {
+        Some(a) => format!("{name}: {} → {}", cur.replace('T', " "), a.replace('T', " ")),
+        // the field is empty or not a date: ask for one
+        None if mode == "set" && typed.is_none() => "Enter a date as YYYY-MM-DD HH:MM:SS".into(),
+        // the photo's own time is the problem, not what was typed
+        None if !readable => format!("{name}: the capture time can't be read"),
+        None => "The shift would go outside the years 0000–9999".into(),
+    }
 }
 
 pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_json::Value, String> {

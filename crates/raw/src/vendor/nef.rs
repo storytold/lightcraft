@@ -6,7 +6,9 @@
 //! by [`super::nefc`], which documents its clean-room sources; "lossy after split" files are decoded when their strip follows the
 //! rule documented there; files it can't decode are reported as [`RawError::Unsupported`] and their embedded previews still work. So are High Efficiency NEFs
 //! (HE / HE★, Z 8, Z 9, Z 6III, Z f): they keep compression 34713 but carry a wavelet codestream that starts with
-//! the JPEG XS markers SOC + CAP (ISO/IEC 21122-1, `FF10 FF50`) and have no `0x0096` table (issue #193).
+//! the JPEG XS markers SOC + CAP (ISO/IEC 21122-1, `FF10 FF50`) and have no `0x0096` table (issue #193). Exception: when
+//! maker note NEFCompression (`0x0093`) says the 34713-labelled strips are plain data (2 uncompressed, 6 uncompressed
+//! reduced to 12 bit — the D850's uncompressed 12-bit mode, issue #2173), they decode through the uncompressed reader.
 
 use super::{nefc, white_from_data};
 use crate::tiffraw::{Packing, check_image, read_image};
@@ -19,6 +21,10 @@ use lightcraft_tiff::{ByteOrder, Ifd, Tiff, makernote};
 const WB_RB_LEVELS: u16 = 0x000c;
 const BLACK_LEVEL: u16 = 0x003d;
 const LINEARIZATION_TABLE: u16 = 0x0096;
+/// Maker note `0x0093` NEFCompression (ExifTool's value table): 1 lossy type 1, 2 uncompressed, 3 lossless,
+/// 4 lossy type 2, 5 striped packed 12, 6 uncompressed reduced to 12, 7 unpacked 12 padded to 16, 8 small,
+/// 9 packed 12, 10 packed 14, 13/14 High Efficiency.
+const NEF_COMPRESSION: u16 = 0x0093;
 const CROP_AREA: u16 = 0x0045;
 /// JPEG XS start of codestream (SOC, `FF10`) followed by its mandatory capabilities marker (CAP, `FF50`).
 const JPEG_XS_START: [u8; 4] = [0xff, 0x10, 0xff, 0x50];
@@ -175,6 +181,14 @@ fn measured_body(model: &str, w: usize, h: usize, bits: u32) -> Option<&'static 
     MEASURED_BODIES.iter().find(|b| b.model == model.trim() && b.size == (w, h) && b.bits == bits)
 }
 
+/// NEFCompression values whose strips are *not* Huffman streams: 2 uncompressed (the D100 labels the TIFF
+/// compression 34713 anyway) and 6 "uncompressed (reduced to 12 bit)", the D850's uncompressed 12-bit mode
+/// (issue #2173). The other uncompressed packings (5, 7, 9, 10) need readers of their own; 1/3/4 are the
+/// Huffman modes and 13/14 High Efficiency. Without the tag the strips are assumed compressed.
+fn uncompressed_strips(mn: Option<&makernote::MakerNote>) -> bool {
+    matches!(mn.and_then(|m| m.ifd.u16(NEF_COMPRESSION)), Some(2 | 6))
+}
+
 /// Pixel height over width from the raw IFD's resolution tags: the D1X and D1H write 600 x 300 per inch for a
 /// 4028 x 1324 frame, rows twice as tall as the columns are wide. Only ratios from 1.5 to 4 count (a frame
 /// squashed 3:1 or 2:1), the rest is rounding or a stray tag.
@@ -235,7 +249,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         Mode::Full => h,
         Mode::Header => h.min(MASK_ROWS),
     };
-    let data = if info.compression == t::compression::NIKON {
+    let data = if info.compression == t::compression::NIKON && !uncompressed_strips(mn.as_ref()) {
         compressed(bytes, &info, mn.as_ref(), rows)?
     } else {
         uncompressed(bytes, &info, tiff.order, mn.as_ref(), rows)?
@@ -321,6 +335,8 @@ fn uncompressed(bytes: &[u8], info: &ImageInfo, order: ByteOrder, mn: Option<&ma
     let (w, h) = (info.width as usize, info.height as usize);
     let bits = info.bits() as u32;
     let row_samples = w * info.samples_per_pixel as usize;
+    // NEFCompression 2/6 strips hold plain data even though the TIFF compression label is 34713 (issue #2173)
+    let info = if info.compression == t::compression::NIKON { ImageInfo { compression: t::compression::NONE, ..info.clone() } } else { info.clone() };
     let chunks = info.chunks(bytes.len() as u64);
     let rows_in_first = chunks.first().map(|c| c.height as usize).unwrap_or(h).max(1);
     let bytes_per_row = chunks.first().map(|c| c.len as usize / rows_in_first).unwrap_or(0);
@@ -334,10 +350,10 @@ fn uncompressed(bytes: &[u8], info: &ImageInfo, order: ByteOrder, mn: Option<&ma
         Packing::Msb
     };
     if rows >= h {
-        return read_image(bytes, info, order, packing);
+        return read_image(bytes, &info, order, packing);
     }
     // the whole image's limits apply either way; then only the strips holding the first `rows` rows are unpacked
-    check_image(bytes, info)?;
+    check_image(bytes, &info)?;
     let top = ImageInfo { height: rows as u32, ..info.clone() };
     read_image(bytes, &top, order, packing)
 }
@@ -801,6 +817,34 @@ mod tests {
         let bytes = nef(34713, 14, vec![vec![0; 64]], 8, 8, 8);
         let Err(RawError::Unsupported(why)) = crate::decode(&bytes) else { panic!("expected unsupported") };
         assert!(why.contains("linearization table"), "{why}");
+    }
+
+    /// Issue #2173: the D850's uncompressed 12-bit mode labels the TIFF compression 34713 and names its packing
+    /// in maker note `0x0093` (6, "uncompressed (reduced to 12 bit)") instead of carrying a `0x0096` Huffman
+    /// table: the strips are plain packed 12-bit data and decode through the uncompressed reader. So do the
+    /// plain uncompressed strips of NEFCompression 2 (the D100 labels the compression 34713 too).
+    #[test]
+    fn uncompressed_strips_named_by_nef_compression_decode() {
+        let (w, h) = (16usize, 6usize);
+        let px: Vec<u16> = (0..w * h).map(|i| (i * 131 % 4096) as u16).collect();
+        let mut packed = Vec::new();
+        for pair in px.chunks(2) {
+            let v = ((pair[0] as u32) << 12) | pair[1] as u32;
+            packed.extend_from_slice(&[(v >> 16) as u8, (v >> 8) as u8, v as u8]);
+        }
+        let note = |v: u16| {
+            let mut mn = IfdBuilder::new();
+            mn.set(NEF_COMPRESSION, Value::Short(vec![v]));
+            mn
+        };
+        let bytes = nef_with_note(34713, 12, vec![packed], w as u32, h as u32, h as u32, Some(note(6)));
+        assert_eq!(crate::decode(&bytes).unwrap().data, RawData::U16(px.clone()));
+        let words: Vec<u8> = px.iter().flat_map(|v| v.to_be_bytes()).collect();
+        let bytes = nef_with_note(34713, 12, vec![words], w as u32, h as u32, h as u32, Some(note(2)));
+        assert_eq!(crate::decode(&bytes).unwrap().data, RawData::U16(px));
+        // a Huffman mode without its table is still unsupported, not misread as uncompressed
+        let bytes = nef_with_note(34713, 12, vec![vec![0; 64]], 8, 8, 8, Some(note(3)));
+        assert!(matches!(crate::decode(&bytes), Err(RawError::Unsupported(w)) if w.contains("linearization table")));
     }
 
     /// Issue #193: a High Efficiency NEF (Z f, Z 8: compression 34713, no `0x0096` table, a JPEG XS codestream) is

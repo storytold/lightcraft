@@ -19,7 +19,9 @@ use crate::{HoverPreview, LightcraftApp};
 /// Long edge of preset thumbnails (px).
 const THUMB_EDGE: usize = 128;
 
-/// The preset amount slider may replace only the undo step it created.
+/// The preset amount slider may replace only the undo step it created. One entry per photo
+/// (#2392): switching photos must not forget which preset a photo received, so returning to
+/// it restores the highlight (and the slider) while a photo that never received one shows none.
 #[derive(Clone)]
 struct AppliedPreset {
     id: String,
@@ -27,11 +29,14 @@ struct AppliedPreset {
     selected: Vec<lightcraft_catalog::PhotoId>,
     active: Option<lightcraft_catalog::PhotoId>,
     commits: u64,
+    /// Hash of the photo's develop settings right after the apply: the highlight follows the
+    /// photo while its edits are unchanged, and clears on an undo, a redo or any new edit.
+    hash: u64,
 }
 
 impl AppliedPreset {
-    fn new(session: &lightcraft_engine::Session, id: String, amount: f64) -> Self {
-        Self { id, amount, selected: session.selection.ids.clone(), active: session.active(), commits: session.commits() }
+    fn new(session: &lightcraft_engine::Session, id: String, amount: f64, hash: u64) -> Self {
+        Self { id, amount, selected: session.selection.ids.clone(), active: session.active(), commits: session.commits(), hash }
     }
 
     fn is_current(&self, session: &lightcraft_engine::Session) -> bool {
@@ -45,6 +50,42 @@ impl AppliedPreset {
                 .last()
                 .is_some_and(|entry| session.presets.iter().any(|preset| preset.id == self.id && entry.label == format!("Preset: {}", preset.name)))
     }
+}
+
+/// Presets applied this session, by photo.
+type AppliedPresets = BTreeMap<lightcraft_catalog::PhotoId, AppliedPreset>;
+
+fn applied_id() -> egui::Id {
+    egui::Id::new("preset-applied")
+}
+
+/// Remember the preset just applied to every photo that received it (the whole selection).
+fn record(ui: &egui::Ui, session: &lightcraft_engine::Session, id: &str, amount: f64) {
+    let mut applied: AppliedPresets = ui.data(|d| d.get_temp(applied_id())).unwrap_or_default();
+    for photo in session.selection.ids.iter() {
+        if let Some(d) = session.develop_of(*photo) {
+            applied.insert(*photo, AppliedPreset::new(session, id.to_string(), amount, d.hash64()));
+        }
+    }
+    ui.data_mut(|d| d.insert_temp(applied_id(), applied));
+}
+
+/// The preset the panel highlights for `photo`: the one recorded for it, while its edits are
+/// unchanged since the apply (during an interaction the settings hold drafts, so the last
+/// state keeps showing).
+fn highlight_for<'a>(
+    session: &lightcraft_engine::Session,
+    applied: &'a AppliedPresets,
+    photo: lightcraft_catalog::PhotoId,
+) -> Option<&'a AppliedPreset> {
+    applied.get(&photo).filter(|h| session.interaction.is_some() || session.develop_of(photo).is_some_and(|d| d.hash64() == h.hash))
+}
+
+/// The preset id the panel would highlight for `photo` (test hook).
+#[cfg(test)]
+pub(crate) fn highlight_for_test(ctx: &egui::Context, session: &lightcraft_engine::Session, photo: lightcraft_catalog::PhotoId) -> Option<String> {
+    let applied: AppliedPresets = ctx.data(|d| d.get_temp(applied_id())).unwrap_or_default();
+    highlight_for(session, &applied, photo).map(|h| h.id.clone())
 }
 
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
@@ -76,6 +117,25 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             let r = ui.checkbox(&mut app.ui.preset_thumbs, crate::i18n::tr("Show Thumbnails"));
             register(ui.ctx(), "presetMenu:thumbnails", r.rect);
             ui.separator();
+            // every group at once (#2467): with dozens of imported groups open, finding one meant a
+            // long scroll or closing the others one by one
+            let groups = grouped(ui.ctx(), &app.session.presets);
+            let any = !groups.is_empty();
+            let expand = ui.add_enabled(any, egui::Button::new(crate::i18n::tr("Expand All Groups")));
+            register(ui.ctx(), "presetMenu:expandAll", expand.rect);
+            if expand.clicked() {
+                for grp in groups.iter() {
+                    ui.data_mut(|d| d.insert_temp(egui::Id::new(("preset-group", &grp.name)), true));
+                }
+            }
+            let collapse = ui.add_enabled(any, egui::Button::new(crate::i18n::tr("Collapse All Groups")));
+            register(ui.ctx(), "presetMenu:collapseAll", collapse.rect);
+            if collapse.clicked() {
+                for grp in groups.iter() {
+                    ui.data_mut(|d| d.insert_temp(egui::Id::new(("preset-group", &grp.name)), false));
+                }
+            }
+            ui.separator();
             if ui.button(crate::i18n::tr("Import Presets…")).clicked() {
                 let _ = app.run("file.importPresets", json!({}));
             }
@@ -86,9 +146,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         });
         divider(ui);
         // amount slider (applies to the last applied preset)
-        let amt_id = egui::Id::new("preset-amount");
-        let last: Option<AppliedPreset> = ui.data(|d| d.get_temp(amt_id));
-        if let Some(last) = last.clone().filter(|last| last.is_current(&app.session)) {
+        let applied: AppliedPresets = ui.data(|d| d.get_temp(applied_id())).unwrap_or_default();
+        let last = app.session.active().and_then(|id| applied.get(&id).cloned()).filter(|last| last.is_current(&app.session));
+        if let Some(last) = last {
             let spec = ControlSpec {
                 id: "presetAmount",
                 label: "Amount",
@@ -106,18 +166,24 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             {
                 // Only replace the most recent preset; never undo intervening edits.
                 if app.run("preset.apply", json!({"id": &last.id, "amount": v})).is_ok() {
-                    ui.data_mut(|d| d.insert_temp(amt_id, AppliedPreset::new(&app.session, last.id, v)));
+                    record(ui, &app.session, &last.id, v);
                 } else {
                     let _ = app.run("edit.redo", json!({}));
-                    ui.data_mut(|d| d.remove::<AppliedPreset>(amt_id));
+                    if let Some(id) = app.session.active() {
+                        ui.data_mut(|d| {
+                            let mut map: AppliedPresets = d.get_temp(applied_id()).unwrap_or_default();
+                            map.remove(&id);
+                            d.insert_temp(applied_id(), map);
+                        });
+                    }
                 }
             }
             divider(ui);
-        } else {
-            ui.data_mut(|d| d.remove::<AppliedPreset>(amt_id));
         }
         let active = app.session.active();
         let current = active.and_then(|id| app.session.develop_of(id)).map(|d| (*d).clone());
+        // the preset this photo received, while its edits are unchanged (#2392)
+        let highlight = active.and_then(|id| highlight_for(&app.session, &applied, id));
         let thumbs = app.ui.preset_thumbs && active.is_some();
         let row_h = if thumbs { 54.0 } else { 26.0 };
         let groups = grouped(ui.ctx(), &app.session.presets);
@@ -167,7 +233,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), row_h), Sense::click());
                     crate::widgets::announce(&resp, name.clone());
                     register(ui.ctx(), format!("preset:{pid}"), r);
-                    let is_last = last.as_ref().is_some_and(|l| l.id == pid);
+                    let is_last = highlight.as_ref().is_some_and(|h| h.id == pid);
                     if is_last {
                         ui.painter().rect_filled(r, 0.0, t.tool_active);
                     } else if resp.hovered() {
@@ -200,7 +266,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                         }
                     }
                     if resp.clicked() && app.run("preset.apply", json!({"id": pid, "amount": 100})).is_ok() {
-                        ui.data_mut(|d| d.insert_temp(amt_id, AppliedPreset::new(&app.session, pid.clone(), 100.0)));
+                        record(ui, &app.session, &pid, 100.0);
                         ui.data_mut(|d| d.remove::<(lightcraft_catalog::PhotoId, Preset, String)>(egui::Id::new("last-preset-hover")));
                         app.toast(ui.ctx(), crate::i18n::tr_format!("Preset: {name}", name = name));
                     }
@@ -390,12 +456,16 @@ pub fn cover_uv(r: Rect, size: [usize; 2]) -> Rect {
 mod tests {
     use super::*;
 
+    fn applied_hash(session: &lightcraft_engine::Session) -> u64 {
+        session.develop_of(session.active().expect("a photo")).expect("settings").hash64()
+    }
+
     #[test]
     fn amount_slider_does_not_undo_a_later_edit() {
         let mut session = lightcraft_engine::Session::with_demo();
         let pid = "lc.golden-hour";
         session.execute("preset.apply", &json!({"id": pid})).unwrap();
-        let state = AppliedPreset::new(&session, pid.into(), 100.0);
+        let state = AppliedPreset::new(&session, pid.into(), 100.0, applied_hash(&session));
         assert!(state.is_current(&session));
 
         session.execute("develop.set", &json!({"values": {"light.exposure": 0.75}})).unwrap();
@@ -407,10 +477,33 @@ mod tests {
         let mut session = lightcraft_engine::Session::with_demo();
         let pid = "lc.golden-hour";
         session.execute("preset.apply", &json!({"id": pid})).unwrap();
-        let state = AppliedPreset::new(&session, pid.into(), 100.0);
+        let state = AppliedPreset::new(&session, pid.into(), 100.0, applied_hash(&session));
         let active = session.active();
         let other = session.visible().iter().copied().find(|id| Some(*id) != active).unwrap();
         session.execute("library.select", &json!({"ids": [other.0]})).unwrap();
         assert!(!state.is_current(&session), "the preset belongs to the earlier selection");
+    }
+
+    /// The highlight follows the photo (#2392): a selection change keeps the memory, a photo
+    /// that never received the preset shows none, and an edit (undone or not) clears it until
+    /// the photo's edits are the preset's again.
+    #[test]
+    fn highlight_follows_the_photo_not_the_selection() {
+        let mut session = lightcraft_engine::Session::with_demo();
+        let pid = "lc.golden-hour";
+        session.execute("preset.apply", &json!({"id": pid})).unwrap();
+        let active = session.active().expect("a photo");
+        let mut applied: AppliedPresets = BTreeMap::new();
+        applied.insert(active, AppliedPreset::new(&session, pid.into(), 100.0, applied_hash(&session)));
+        let other = session.visible().iter().copied().find(|id| *id != active).unwrap();
+        assert!(highlight_for(&session, &applied, other).is_none(), "a photo that never received one shows none");
+        session.execute("library.select", &json!({"ids": [other.0]})).unwrap();
+        assert!(highlight_for(&session, &applied, active).is_some(), "the memory outlives the selection change");
+        session.execute("library.select", &json!({"ids": [active.0]})).unwrap();
+        assert!(highlight_for(&session, &applied, active).is_some());
+        session.execute("develop.set", &json!({"values": {"light.exposure": 0.75}})).unwrap();
+        assert!(highlight_for(&session, &applied, active).is_none(), "the edits changed");
+        session.execute("edit.undo", &json!({})).unwrap();
+        assert!(highlight_for(&session, &applied, active).is_some(), "undo restored the preset's edits");
     }
 }

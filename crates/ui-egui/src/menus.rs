@@ -101,6 +101,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.thumbSizeUp", "Increase Grid Thumbnail Size", Some("="), "View"),
     ("view.thumbSizeDown", "Decrease Grid Thumbnail Size", Some("-"), "View"),
     ("view.clipping", "Show Clipping", Some("J"), "View"),
+    ("view.sensorClipping", "Show Sensor Clipping", Some("Shift+K"), "View"),
     ("view.visualizeHdr", "Visualize HDR", None, "View"),
     // in grids S expands/collapses stacks (the engine command it shadows)
     ("view.softProof", "Soft Proofing", Some("S"), "View"),
@@ -257,6 +258,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("app.resetShortcuts", "Reset All Keyboard Shortcuts", None, ""),
     ("app.export", "Export Now", None, ""),
     ("app.showInFinder", "Show in Finder", Some("Cmd+R"), "Photo"),
+    ("library.showInFolders", "Show in Folders", None, ""),
     ("app.openSamModelFolder", "Show in File Manager", None, ""),
     ("dialog.rename", "Rename Photos…", Some("F2"), "Photo"),
     ("dialog.labelNames", "Edit Color Label Names…", None, ""),
@@ -897,6 +899,16 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         }
         "view.clipping" => {
             app.ui.show_clipping = !app.ui.show_clipping;
+            if app.ui.show_clipping {
+                app.ui.show_sensor_clipping = false;
+            }
+            Ok(Value::Null)
+        }
+        "view.sensorClipping" => {
+            app.ui.show_sensor_clipping = !app.ui.show_sensor_clipping;
+            if app.ui.show_sensor_clipping {
+                app.ui.show_clipping = false;
+            }
             Ok(Value::Null)
         }
         "view.visualizeHdr" => {
@@ -1319,7 +1331,16 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             Ok(Value::Null)
         }
         "dialog.captureTime" => {
-            let time = app.session.active().and_then(|id| app.session.catalog.photo(id)).map(|p| p.date().replace('T', " ")).unwrap_or_default();
+            // an unreadable capture time would prefill Set mode with a misread (`2026-01-01T10:0`
+            // reads as midnight), so the field starts empty instead
+            let time = app
+                .session
+                .active()
+                .and_then(|id| app.session.catalog.photo(id))
+                .map(|p| p.date().to_string())
+                .filter(|t| lightcraft_catalog::dates::readable_iso(t))
+                .unwrap_or_default()
+                .replace('T', " ");
             let mode = p.get("mode").and_then(Value::as_str).unwrap_or("set").to_string();
             app.ui.dialog =
                 Some(Dialog::CaptureTime { mode, time: time.get(..19).unwrap_or(&time).to_string(), days: 0, hours: 0, minutes: 0, zone: 0.0 });
@@ -2111,6 +2132,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         }
         "app.export" => crate::control::export_active(app, p),
         "app.showInFinder" => show_in_finder(app),
+        "library.showInFolders" => show_in_folders(app, p),
         "app.openLogFolder" => open_log_folder(app),
         "app.discord" | "app.website" | "app.github" | "app.artcraft" | "app.help" | "app.feedback" => {
             let url = crate::links::url_of(id).unwrap_or(crate::links::WEBSITE);
@@ -2165,6 +2187,11 @@ pub fn ui_enabled(app: &LightcraftApp, id: &str) -> bool {
                     .and_then(|id| app.session.catalog.photo(id))
                     .is_some_and(|p| matches!(p.source, lightcraft_engine::catalog::Source::File { .. }))
         }
+        "library.showInFolders" => app
+            .session
+            .active()
+            .and_then(|id| app.session.catalog.photo(id))
+            .is_some_and(|p| !p.local && matches!(p.source, lightcraft_engine::catalog::Source::File { .. })),
         "app.openSamModelFolder" => app.session.segmenter.dir.is_some() && app.services.open_with.is_some(),
         "file.exportPresets" => app.session.presets.iter().any(|p| !p.builtin),
         "file.exportMaskEffects" => !app.session.mask_effects.is_empty(),
@@ -2292,6 +2319,29 @@ fn show_in_finder(app: &mut LightcraftApp) -> Result<Value, String> {
     let reveal = app.services.reveal.as_mut().ok_or("not available here")?;
     reveal(&path)?;
     Ok(json!({"path": path}))
+}
+
+/// Show in Folders (a photo's right-click menu): make the photo's folder the library source, open
+/// the folders above it and scroll the Folders panel to it (#2437), as Lightroom's Go to Folder in
+/// Library does. `id` picks the photo, else the active one. Local photos (browsed, not imported)
+/// and demo scenes have no folder in the Folders panel and are refused.
+fn show_in_folders(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
+    let id = match p.get("id").and_then(Value::as_u64) {
+        Some(n) => lightcraft_catalog::PhotoId(n),
+        None => app.session.active().ok_or("no photo selected")?,
+    };
+    let photo = app.session.catalog.photo(id).ok_or("no photo selected")?;
+    if photo.local {
+        return Err("Local photos aren't in the library: add their folder to the library first".into());
+    }
+    let path = match &photo.source {
+        lightcraft_engine::catalog::Source::File { path } => path.clone(),
+        _ => return Err("this photo has no file (demo scene)".into()),
+    };
+    let folder = std::path::Path::new(&path).parent().ok_or("this photo has no folder")?.to_string_lossy().into_owned();
+    app.run("library.source", json!({"kind": "libraryFolder", "path": folder}))?;
+    app.ui.reveal_folder = Some(folder.clone());
+    Ok(json!({"folder": folder}))
 }
 
 /// Photo ▸ Edit In: render a copy of each selected photo with its edits (stacked on its original)

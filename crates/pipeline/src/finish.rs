@@ -3,7 +3,7 @@
 use lightcraft_color::luminance_2020;
 use lightcraft_color::spline::{Lut1, MonotoneCurve};
 use lightcraft_color::transfer::linear_to_srgb;
-use lightcraft_develop::{DevelopSettings, LocalAdjustments, Process, ToneCurve, VignetteStyle};
+use lightcraft_develop::{BaseCurve, DevelopSettings, LocalAdjustments, Process, ToneCurve, VignetteStyle};
 use lightcraft_geom::Point;
 use lightcraft_raster::Rgba8;
 
@@ -277,8 +277,20 @@ impl FinishParams {
 /// `peak` is the HDR render's peak relative to SDR white ([`lightcraft_develop::Hdr::peak`]); at 1.0 (SDR)
 /// every arm is the SDR tone map. An HDR render keeps the camera's look through the midtones and
 /// lifts its highlights past white ([`ToneMap::camera_hdr`]), so it matches the SDR render below them.
+/// A raw's base curve choice (issue #2396 §2) replaces the whole map when it isn't the default
+/// [`BaseCurve::Camera`]; display-referred sources always render as Camera (their values are
+/// already display-encoded, there is no headroom to keep).
 pub fn base_tone(s: &DevelopSettings, info: &SourceInfo, peak: f32) -> ToneMap {
     let l = &s.light;
+    if info.raw {
+        match s.base_curve {
+            BaseCurve::LinearResponse => {
+                return ToneMap::linear_response(l.contrast, l.whites, l.blacks, peak);
+            }
+            BaseCurve::Linear => return ToneMap::linear(l.contrast, l.whites, l.blacks, peak),
+            BaseCurve::Camera => {}
+        }
+    }
     match s.process.process() {
         // V2 changes the Highlights/Shadows base (`local::tone_base`), not the tone map
         Process::V1 | Process::V2 => match info.camera_tone.as_ref().filter(|_| info.raw) {

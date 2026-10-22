@@ -322,8 +322,13 @@ fn rotation_between(a: [f64; 3], b: [f64; 3]) -> Mat3 {
     if s < 1e-12 {
         return [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
     }
-    let k = [axis[0] / s, axis[1] / s, axis[2] / s];
-    let kx = [[0.0, -k[2], k[1]], [k[2], 0.0, -k[0]], [-k[1], k[0], 0.0]];
+    axis_angle_rotation([axis[0] / s, axis[1] / s, axis[2] / s], s.atan2(c))
+}
+
+/// Rodrigues' formula: the rotation about unit `axis` by `angle` (radians).
+fn axis_angle_rotation(axis: [f64; 3], angle: f64) -> Mat3 {
+    let kx = [[0.0, -axis[2], axis[1]], [axis[2], 0.0, -axis[0]], [-axis[1], axis[0], 0.0]];
+    let (s, c) = angle.sin_cos();
     let mut r = [[0.0; 3]; 3];
     for i in 0..3 {
         for j in 0..3 {
@@ -332,6 +337,25 @@ fn rotation_between(a: [f64; 3], b: [f64; 3]) -> Mat3 {
         }
     }
     r
+}
+
+/// The rotation `r` with its angle scaled by `k` about the same axis — a partial Upright correction
+/// (`k` 0 = none, 1 = the full correction, > 1 over-corrects). Near-identity rotations stay identity;
+/// a half-turn (axis ill-conditioned) is left alone.
+fn scale_rotation(r: &Mat3, k: f64) -> Mat3 {
+    if (k - 1.0).abs() < 1e-9 {
+        return *r;
+    }
+    let theta = rotation_angle(r);
+    if theta < 1e-9 {
+        return [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+    }
+    let s = theta.sin();
+    if s.abs() < 1e-9 {
+        return *r;
+    }
+    let axis = [(r[2][1] - r[1][2]) / (2.0 * s), (r[0][2] - r[2][0]) / (2.0 * s), (r[1][0] - r[0][1]) / (2.0 * s)];
+    axis_angle_rotation(axis, theta * k)
 }
 
 fn rotation_angle(r: &Mat3) -> f64 {
@@ -455,8 +479,9 @@ pub fn analyze(segs: &[Segment]) -> Analysis {
 }
 
 /// The Upright correction for `mode` from an analysis (lens-corrected → transformed, centred coordinates).
-pub fn solve(mode: Upright, a: &Analysis) -> Homography {
-    let level = || level_angle(&a.vertical, &a.horizontal).map(rot_z_h).unwrap_or(Homography::IDENTITY);
+/// `amount` (0–1+) scales the correction: 1 is the full solve, less leaves convergence, more over-corrects.
+pub fn solve(mode: Upright, a: &Analysis, amount: f64) -> Homography {
+    let level = || level_angle(&a.vertical, &a.horizontal).map(|d| rot_z_h(d * amount)).unwrap_or(Homography::IDENTITY);
     let vertical = || a.vertical_vp.map(|v| solve_vertical(v, DEFAULT_FOCAL));
     let full = || {
         let (v, h) = (a.vertical_vp?, a.horizontal_vp?);
@@ -466,10 +491,10 @@ pub fn solve(mode: Upright, a: &Analysis) -> Homography {
     match mode {
         Upright::Off | Upright::Guided => Homography::IDENTITY,
         Upright::Level => level(),
-        Upright::Vertical => vertical().map(|r| recentre(&rotation_homography(&r, DEFAULT_FOCAL))).unwrap_or_else(level),
+        Upright::Vertical => vertical().map(|r| recentre(&rotation_homography(&scale_rotation(&r, amount), DEFAULT_FOCAL))).unwrap_or_else(level),
         Upright::Full => match full() {
-            Some((r, f)) => recentre(&rotation_homography(&r, f)),
-            None => vertical().map(|r| recentre(&rotation_homography(&r, DEFAULT_FOCAL))).unwrap_or_else(level),
+            Some((r, f)) => recentre(&rotation_homography(&scale_rotation(&r, amount), f)),
+            None => vertical().map(|r| recentre(&rotation_homography(&scale_rotation(&r, amount), DEFAULT_FOCAL))).unwrap_or_else(level),
         },
         Upright::Auto => {
             // A vertical family that implies a camera roll must be confirmed by the horizontals (a real roll tilts
@@ -480,17 +505,19 @@ pub fn solve(mode: Upright, a: &Analysis) -> Homography {
                 let confirmed = roll.abs() <= 3.0 || level_angle(&[], &a.horizontal).is_some_and(|h| (h - roll).abs() <= 3.0);
                 if !confirmed {
                     let weaker = Analysis { vertical_vp: None, horizontal_vp: None, ..a.clone() };
-                    return solve(Upright::Auto, &weaker);
+                    return solve(Upright::Auto, &weaker, amount);
                 }
             }
             // balanced: full correction only when it is moderate, else vertical, else level
             if let Some((r, f)) = full().filter(|(r, _)| rotation_angle(r) < 20f64.to_radians()) {
-                return recentre(&rotation_homography(&r, f));
+                return recentre(&rotation_homography(&scale_rotation(&r, amount), f));
             }
             match vertical().filter(|r| rotation_angle(r) < 25f64.to_radians()) {
-                Some(r) => recentre(&rotation_homography(&r, DEFAULT_FOCAL)),
+                Some(r) => recentre(&rotation_homography(&scale_rotation(&r, amount), DEFAULT_FOCAL)),
                 // conservative: only small horizon fixes; bigger tilts are usually intentional or scene lines
-                None => level_angle(&a.vertical, &a.horizontal).filter(|d| d.abs() <= 5.0).map(rot_z_h).unwrap_or(Homography::IDENTITY),
+                None => {
+                    level_angle(&a.vertical, &a.horizontal).filter(|d| d.abs() <= 5.0).map(|d| rot_z_h(d * amount)).unwrap_or(Homography::IDENTITY)
+                }
             }
         }
     }
@@ -498,7 +525,8 @@ pub fn solve(mode: Upright, a: &Analysis) -> Homography {
 
 /// Guided Upright from user guides (centred coordinates of the lens-corrected image). Guides closer to vertical
 /// define the vertical vanishing point, the others the horizontal one; one guide of a kind only levels.
-pub fn solve_guided(guides: &[Segment]) -> Homography {
+/// `amount` (0–1+) scales the correction: 1 is the full solve, less leaves convergence, more over-corrects.
+pub fn solve_guided(guides: &[Segment], amount: f64) -> Homography {
     let guides: Vec<Segment> = guides.iter().copied().filter(|g| g.len() > 1e-6).take(4).collect();
     let vert: Vec<Segment> = guides.iter().copied().filter(|g| g.tilt_from_vertical() <= 45.0).collect();
     let horiz: Vec<Segment> = guides.iter().copied().filter(|g| g.tilt_from_vertical() > 45.0).collect();
@@ -513,21 +541,21 @@ pub fn solve_guided(guides: &[Segment]) -> Homography {
     match (v, h) {
         (Some(v), Some(h)) => {
             let f = focal_from_vps(v, h).unwrap_or(DEFAULT_FOCAL);
-            recentre(&rotation_homography(&solve_full(v, h, f), f))
+            recentre(&rotation_homography(&scale_rotation(&solve_full(v, h, f), amount), f))
         }
-        (Some(v), None) => recentre(&rotation_homography(&solve_vertical(v, DEFAULT_FOCAL), DEFAULT_FOCAL)),
+        (Some(v), None) => recentre(&rotation_homography(&scale_rotation(&solve_vertical(v, DEFAULT_FOCAL), amount), DEFAULT_FOCAL)),
         (None, Some(_)) => {
             // two horizontal guides: make them parallel and horizontal (rotate the problem by 90°)
             let swap = |p: Point| Point::new(p.y, -p.x);
             let hs: Vec<Segment> = horiz.iter().map(|s| Segment { a: swap(s.a), b: swap(s.b) }).collect();
             let refs: Vec<&Segment> = hs.iter().collect();
             let r = solve_vertical(refine_vp(&refs), DEFAULT_FOCAL);
-            let inner = rotation_homography(&r, DEFAULT_FOCAL);
+            let inner = rotation_homography(&scale_rotation(&r, amount), DEFAULT_FOCAL);
             let to = Homography([0.0, 1.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 1.0]); // (x, y) → (y, −x)
             let back = to.inverse().unwrap_or(Homography::IDENTITY);
             recentre(&back.mul(&inner).mul(&to))
         }
-        (None, None) => level_angle(&vert, &horiz).map(rot_z_h).unwrap_or(Homography::IDENTITY),
+        (None, None) => level_angle(&vert, &horiz).map(|d| rot_z_h(d * amount)).unwrap_or(Homography::IDENTITY),
     }
 }
 
@@ -576,22 +604,28 @@ pub fn level_degrees(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings) -> Op
     level_angle(&a.vertical, &a.horizontal)
 }
 
-/// The automatic Upright correction for `mode` on `src` (identity for Off and Guided).
+/// The automatic Upright correction for `mode` on `src` (identity for Off and Guided), scaled by
+/// `s.geometry.amount`.
 pub fn auto_transform(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, mode: Upright) -> Homography {
     if matches!(mode, Upright::Off | Upright::Guided) {
         return Homography::IDENTITY;
     }
-    solve(mode, &analyze_source(src, info, s))
+    solve(mode, &analyze_source(src, info, s), s.geometry.amount / 100.0)
 }
 
-/// Fill in a missing automatic Upright transform (settings from XMP/CLI that name a mode but carry no analysis).
+/// Fill in a missing automatic Upright transform, or re-solve one solved with a different `amount`
+/// (settings from XMP/CLI that name a mode but carry no analysis, or a preset pasted across photos).
 pub fn resolve<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings) -> Cow<'a, DevelopSettings> {
     let g = &s.geometry;
-    if matches!(g.upright, Upright::Off | Upright::Guided) || g.upright_transform.is_some() || !s.section_enabled("geometry") {
+    if matches!(g.upright, Upright::Off | Upright::Guided)
+        || (g.upright_transform.is_some() && (g.upright_amount - g.amount).abs() < 1e-9)
+        || !s.section_enabled("geometry")
+    {
         return Cow::Borrowed(s);
     }
     let mut e = s.clone();
     e.geometry.upright_transform = Some(auto_transform(src, info, s, g.upright));
+    e.geometry.upright_amount = e.geometry.amount;
     Cow::Owned(e)
 }
 
@@ -604,8 +638,48 @@ pub fn homography(g: &Geometry, ow: f64, oh: f64) -> Homography {
             let l = ow.max(oh) / 2.0;
             let c = |p: Point| Point::new((p.x * ow - ow / 2.0) / l, (p.y * oh - oh / 2.0) / l);
             let segs: Vec<Segment> = g.guides.iter().map(|(a, b)| Segment { a: c(*a), b: c(*b) }).collect();
-            solve_guided(&segs)
+            solve_guided(&segs, g.amount / 100.0)
         }
         _ => g.upright_transform.unwrap_or(Homography::IDENTITY),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scale_rotation_scales_the_angle_about_the_same_axis() {
+        let r = axis_angle_rotation([0.0, 0.0, 1.0], 30f64.to_radians());
+        assert!((rotation_angle(&scale_rotation(&r, 1.0)) - 30f64.to_radians()).abs() < 1e-9);
+        assert!((rotation_angle(&scale_rotation(&r, 0.5)) - 15f64.to_radians()).abs() < 1e-9);
+        assert!(rotation_angle(&scale_rotation(&r, 0.0)) < 1e-12);
+        // over-correction doubles; a non-axis-aligned rotation keeps its axis
+        let tilted = axis_angle_rotation([0.3, -0.4, 0.85].map(|x| x / (0.3f64 * 0.3 + 0.16 + 0.7225).sqrt()), 24f64.to_radians());
+        let half = scale_rotation(&tilted, 2.0);
+        assert!((rotation_angle(&half) - 48f64.to_radians()).abs() < 1e-9);
+        let axis_of = |m: &Mat3| {
+            let s = rotation_angle(m).sin();
+            [(m[2][1] - m[1][2]) / (2.0 * s), (m[0][2] - m[2][0]) / (2.0 * s), (m[1][0] - m[0][1]) / (2.0 * s)]
+        };
+        let a0 = axis_of(&tilted);
+        let a1 = axis_of(&half);
+        let dot: f64 = a0.iter().zip(a1).map(|(x, y)| x * y).sum();
+        assert!((dot - 1.0).abs() < 1e-9, "axis preserved: {a0:?} vs {a1:?}");
+    }
+
+    #[test]
+    fn solve_amount_scales_monotonically_from_identity() {
+        // a camera pitched up: the vertical vanishing point sits below the frame
+        let a = Analysis { vertical_vp: Some([0.0, -2.2, 1.0]), ..Analysis::default() };
+        let p = Point::new(0.5, -0.66);
+        let x = |k: f64| solve(Upright::Vertical, &a, k).apply(p).x;
+        let (x0, xh, x1) = (x(0.0), x(0.5), x(1.0));
+        assert!((x0 - p.x).abs() < 1e-9, "amount 0 is the identity");
+        assert!(x1 > x0 + 0.05, "full correction expands the top: {x0} → {x1}");
+        assert!(xh > x0 && xh < x1, "half correction sits between: {x0} < {xh} < {x1}");
+        // amount 1 reproduces the unscaled solve (the pre-amount behaviour)
+        let unscaled = recentre(&rotation_homography(&solve_vertical([0.0, -2.2, 1.0], DEFAULT_FOCAL), DEFAULT_FOCAL));
+        assert_eq!(solve(Upright::Vertical, &a, 1.0).0, unscaled.0);
     }
 }

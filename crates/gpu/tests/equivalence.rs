@@ -791,12 +791,12 @@ fn windows_match() {
     let info = SourceInfo { raw: true, ..Default::default() };
     let win = PixelWindow { x: 1200, y: 800, w: 640, h: 480 };
     let req = RenderRequest { window: Some(win), ..RenderRequest::fit(3000, 2000) };
-    let mut cases = cases();
-    cases.push(("vignette at the corner", |s| {
+    let mut edits = cases();
+    edits.push(("vignette at the corner", |s| {
         s.vignette.amount = -80.0;
         s.vignette.midpoint = 10.0;
     }));
-    cases.push(("spot reading from outside", |s| {
+    edits.push(("spot reading from outside", |s| {
         s.spots.push(Spot {
             points: vec![Point::new(0.45, 0.45)],
             size: 0.03,
@@ -806,7 +806,7 @@ fn windows_match() {
             ..Default::default()
         });
     }));
-    for (name, edit) in cases {
+    for (name, edit) in edits {
         let mut s = DevelopSettings::default();
         edit(&mut s);
         let name = format!("window: {name}");
@@ -818,6 +818,13 @@ fn windows_match() {
     s.vignette.midpoint = 10.0;
     let corner = RenderRequest { window: Some(PixelWindow { x: 2360, y: 1520, w: 640, h: 480 }), ..RenderRequest::fit(3000, 2000) };
     check("window: vignette corner", &src, &info, &s, &corner);
+    // a 1:1 window of a pixel-aligned crop picks the exact pixels on both sides (LR-VIEW-ZOOM)
+    let one_to_one = RenderRequest { window: Some(PixelWindow { x: 100, y: 60, w: 320, h: 240 }), ..RenderRequest::fit(960, 640) };
+    for (name, edit) in cases() {
+        let mut s = DevelopSettings::default();
+        edit(&mut s);
+        check(&format!("1:1 window: {name}"), &src, &info, &s, &one_to_one);
+    }
 }
 
 /// Issue #323: a window of a 24 MP photo is cut from a source of 288 MB on the device. Keeping that

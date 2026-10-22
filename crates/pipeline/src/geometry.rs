@@ -249,6 +249,14 @@ impl Frame {
     /// Sample the source into a `w × h` output buffer: orientation, crop, rotation, flips — one
     /// bilinear resample from a pre-filtered (area-downscaled) copy, so minification never aliases.
     pub fn sample(&self, src: &Rgb32f, w: usize, h: usize) -> Rgb32f {
+        self.sample_quality(src, w, h, false)
+    }
+
+    /// [`Frame::sample`] with a choice of resample kernel: full-quality renders (exports, the
+    /// loupe at rest) use Mitchell bicubic, which keeps fine detail that a bilinear's half-pixel
+    /// average softens; interactive drafts stay bilinear. Minification still prefilters with
+    /// Mitchell either way, and analysis paths keep plain [`Frame::sample`].
+    pub fn sample_quality(&self, src: &Rgb32f, w: usize, h: usize, bicubic: bool) -> Rgb32f {
         let oriented = if self.orient == Orientation::Normal { None } else { Some(src.oriented(self.orient)) };
         let o = oriented.as_ref().unwrap_or(src);
         let plan = self.sample_plan(src.width, src.height, w, h);
@@ -258,17 +266,28 @@ impl Frame {
         };
         let affine = |xf: Affine| {
             let mut out = Rgb32f::new(w, h);
+            // A 1:1 view of a pixel-aligned crop (a zoomed window) maps every output pixel centre
+            // onto a source pixel centre: pick that pixel. A kernel at the half-pixel offsets
+            // would soften the view away from what a full-size render (a `Copy`) writes
+            // (LR-VIEW-ZOOM).
+            let nearest = pixel_translation(&xf);
             par_rows(&mut out.data, w, |y, row| {
                 for (x, px) in row.iter_mut().enumerate() {
                     let p = xf.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
-                    *px = base.sample_bilinear(p.x as f32, p.y as f32);
+                    *px = if nearest {
+                        base.get_clamped(p.x.floor() as isize, p.y.floor() as isize)
+                    } else if bicubic {
+                        base.sample_bicubic(p.x as f32, p.y as f32)
+                    } else {
+                        base.sample_bilinear(p.x as f32, p.y as f32)
+                    };
                 }
             });
             out
         };
         match (plan.mode, self.warp.as_ref()) {
             (SampleMode::Copy, _) => base.into_owned(),
-            (SampleMode::Warp(o2t), Some(warp)) => sample_warped(&base, plan.sx, plan.sy, warp, o2t, w, h),
+            (SampleMode::Warp(o2t), Some(warp)) => sample_warped(&base, plan.sx, plan.sy, warp, o2t, w, h, bicubic),
             // `sample_plan` plans a warp only when there is one; without it the same mapping is affine
             (SampleMode::Warp(o2t), None) => affine(Affine::scale(plan.sx, plan.sy) * o2t),
             (SampleMode::Affine(xf), _) => affine(xf),
@@ -284,6 +303,25 @@ impl Frame {
             Point::new(q.x / self.ow, q.y / self.oh)
         })
     }
+}
+
+/// Whether `xf` maps output pixel centres one-to-one onto source pixel centres: unit scale,
+/// axis-aligned, landing on whole pixels. Then the sample is an exact copy of a shifted, possibly
+/// flipped, rectangle of the source — the nearest pixel at the mapped centre — and any kernel
+/// would only blur it. `false` when anything rotates, scales or lands between pixels. The GPU
+/// sampler uses the same predicate to switch to the exact pick.
+pub fn pixel_translation(xf: &Affine) -> bool {
+    let [a, b, c, d, _, _] = xf.0;
+    if b.abs() > 1e-6 || c.abs() > 1e-6 {
+        return false;
+    }
+    // centre i + 0.5 → s·(i + 0.5) + t; the pixel there is n = s·i + (s/2 + t − 1/2), which is
+    // whole exactly when s = ±1 and the offset is whole.
+    let axis = |s: f64, t: f64| {
+        let o = 0.5 * (s - 1.0) + t;
+        (s.abs() - 1.0).abs() <= 1e-6 && (o - o.round()).abs() <= 1e-6
+    };
+    axis(a, xf.0[4]) && axis(d, xf.0[5])
 }
 
 /// How a render resamples its source (see [`Frame::sample_plan`]).
@@ -321,9 +359,12 @@ pub fn perspective(s: &DevelopSettings, ow: f64, oh: f64) -> Homography {
 
 /// One resample through the warp: `o2t` maps output px → transformed px, the warp maps those to source px
 /// (scaled by `sx, sy` into `base`).
-fn sample_warped(base: &Rgb32f, sx: f64, sy: f64, wp: &Warp, o2t: Affine, w: usize, h: usize) -> Rgb32f {
+fn sample_warped(base: &Rgb32f, sx: f64, sy: f64, wp: &Warp, o2t: Affine, w: usize, h: usize, bicubic: bool) -> Rgb32f {
     let per_channel = wp.per_channel();
     let gain = wp.has_gain();
+    let smp = |x: f32, y: f32| {
+        if bicubic { base.sample_bicubic(x, y) } else { base.sample_bilinear(x, y) }
+    };
     let mut out = Rgb32f::new(w, h);
     par_rows(&mut out.data, w, |y, row| {
         for (x, px) in row.iter_mut().enumerate() {
@@ -331,11 +372,11 @@ fn sample_warped(base: &Rgb32f, sx: f64, sy: f64, wp: &Warp, o2t: Affine, w: usi
                 *px = BLANK;
                 continue;
             };
-            let mut v = base.sample_bilinear((g.x * sx) as f32, (g.y * sy) as f32);
+            let mut v = smp((g.x * sx) as f32, (g.y * sy) as f32);
             if per_channel {
                 for ch in [0usize, 2] {
                     let q = wp.corrected_to_source(c, ch);
-                    v[ch] = base.sample_bilinear((q.x * sx) as f32, (q.y * sy) as f32)[ch];
+                    v[ch] = smp((q.x * sx) as f32, (q.y * sy) as f32)[ch];
                 }
             }
             if gain {

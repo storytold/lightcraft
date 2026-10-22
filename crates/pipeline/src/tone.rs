@@ -177,6 +177,60 @@ impl ToneMap {
         ToneMap::display_hdr(contrast, whites, blacks, 1.0)
     }
 
+    /// The Linear Response base curve (issue #2396 §2): scene-linear values map to display-linear
+    /// unchanged — no camera S-curve, no Reinhard shoulder — except for a gentle roll-off close to
+    /// the clip (slope 1 where it starts at 85 % of the range, asymptote `peak`), so highlights
+    /// aren't hard-clipped. All tonal shaping is left to the user's own curve, which can now reach
+    /// all the highlight headroom the file recorded.
+    pub fn linear_response(contrast: f64, whites: f64, blacks: f64, peak: f32) -> ToneMap {
+        Self::linear_map(contrast, whites, blacks, peak, true)
+    }
+
+    /// The Linear base curve (issue #2396 §2): identity, which may clip — for reproduction, copy
+    /// work and profiling.
+    pub fn linear(contrast: f64, whites: f64, blacks: f64, peak: f32) -> ToneMap {
+        Self::linear_map(contrast, whites, blacks, peak, false)
+    }
+
+    /// The shared body of [`ToneMap::linear_response`] and [`ToneMap::linear`]: Contrast scales
+    /// log-exposure about grey as in [`ToneMap::hdr`], Whites moves the white point as a gain
+    /// (scene luminance `wl` maps to display 1.0; at neutral `wl` = 1, so the map is the identity),
+    /// Blacks uses the Reinhard shoulder's toe, and the top either rolls off or clips.
+    fn linear_map(contrast: f64, whites: f64, blacks: f64, peak: f32, roll_off: bool) -> ToneMap {
+        let peak = if peak.is_finite() { peak.max(1.0) } else { 1.0 };
+        let c = (contrast / 100.0) as f32;
+        let slope = if c >= 0.0 { 1.0 + 0.55 * c } else { 1.0 + 0.4 * c };
+        let wl = 2f32.powf(-1.6 * (whites as f32 / 100.0));
+        let b = (blacks / 100.0) as f32;
+        let lut = (0..LUT_N)
+            .map(|i| {
+                let ev = LUT_MIN_EV + (LUT_MAX_EV - LUT_MIN_EV) * i as f32 / (LUT_N - 1) as f32;
+                let y = GREY * 2f32.powf(ev * slope);
+                let mut o = y / wl;
+                // Toe: blacks < 0 crushes, > 0 lifts (as in the Reinhard shoulder).
+                if b < 0.0 {
+                    let k = -b * 0.035;
+                    let e = 0.004;
+                    let soft = |v: f32| ((v - k) + ((v - k) * (v - k) + e * e).sqrt()) * 0.5;
+                    o = (soft(o) - soft(0.0)) / (soft(1.0) - soft(0.0));
+                } else if b > 0.0 {
+                    let k = b * 0.03;
+                    o = k + (1.0 - k) * o;
+                }
+                if roll_off {
+                    let s = 0.85 * peak;
+                    if o > s {
+                        o = s + (peak - s) * (1.0 - (-(o - s) / (peak - s)).exp());
+                    }
+                } else {
+                    o = o.min(peak);
+                }
+                o.clamp(0.0, peak)
+            })
+            .collect();
+        ToneMap { lut, chroma: NO_CHROMA }
+    }
+
     /// [`ToneMap::display`] for an HDR render reaching `peak`: values above SDR white (an HDR
     /// source, e.g. a decoded gain-map image) pass through and roll off softly towards `peak`
     /// instead of clipping at 1; SDR sources (≤ 1) render as with [`ToneMap::display`].
@@ -446,5 +500,65 @@ mod tests {
         assert!(ToneMap::new(0.0, 60.0, 0.0).apply(0.8) > base.apply(0.8));
         assert!(ToneMap::new(0.0, 0.0, -60.0).apply(0.01) < base.apply(0.01));
         assert!(ToneMap::new(0.0, 0.0, 60.0).apply(0.01) > base.apply(0.01));
+    }
+
+    #[test]
+    fn linear_response_is_identity_below_the_roll_off_and_reaches_peak() {
+        let t = ToneMap::linear_response(0.0, 0.0, 0.0, 1.0);
+        for i in 1..=84 {
+            let y = i as f32 / 100.0;
+            assert!((t.apply(y) - y).abs() < 1e-4, "{y} -> {}", t.apply(y));
+        }
+        // no contrast curve: brighter upper mids and highlights than the default Reinhard shoulder
+        let hdr = ToneMap::new(0.0, 0.0, 0.0);
+        assert!(t.apply(0.6) > hdr.apply(0.6), "{} vs {}", t.apply(0.6), hdr.apply(0.6));
+        assert!(t.apply(0.85) > hdr.apply(0.85) + 0.05, "{} vs {}", t.apply(0.85), hdr.apply(0.85));
+        // monotone, bounded, and the roll-off approaches the peak without a hard knee
+        let mut prev = -1.0;
+        for i in 0..2400 {
+            let y = 1e-5 * 1.01f32.powi(i);
+            let o = t.apply(y);
+            assert!((0.0..=1.0).contains(&o), "at {y}: {o}");
+            assert!(o >= prev - 1e-6, "at {y}: {o} < {prev}");
+            prev = o;
+        }
+        assert!(t.apply(0.99) < 0.99 && t.apply(0.99) > 0.9, "roll-off starts before the clip");
+        assert!(t.apply(4.0) > 0.995, "approaches the peak: {}", t.apply(4.0));
+    }
+
+    #[test]
+    fn linear_is_identity_and_clips_unless_whites_raise_the_point() {
+        let t = ToneMap::linear(0.0, 0.0, 0.0, 1.0);
+        for i in 1..=99 {
+            let y = i as f32 / 100.0;
+            assert!((t.apply(y) - y).abs() < 1e-4, "{y} -> {}", t.apply(y));
+        }
+        assert_eq!(t.apply(2.0), 1.0, "identity clips");
+        // Whites −100 raises the white point 1.6 stops: scene 2.0 no longer clips
+        let raised = ToneMap::linear(0.0, -100.0, 0.0, 1.0);
+        assert!(raised.apply(2.0) < 1.0, "{}", raised.apply(2.0));
+        assert!((raised.apply(2f32.powf(1.6)) - 1.0).abs() < 1e-3, "wl maps to 1.0");
+        // and the HDR peak lifts the ceiling
+        let hdr_peak = ToneMap::linear(0.0, 0.0, 0.0, 4.0);
+        assert!((hdr_peak.apply(2.0) - 2.0).abs() < 1e-3 && hdr_peak.apply(8.0) <= 4.0);
+    }
+
+    #[test]
+    fn linear_maps_stay_monotone_and_bounded_at_slider_extremes() {
+        for roll_off in [true, false] {
+            for (c, w, b) in [(0.0, 0.0, 0.0), (100.0, 100.0, -100.0), (-100.0, -100.0, 100.0), (50.0, -30.0, -40.0)] {
+                let t = if roll_off { ToneMap::linear_response(c, w, b, 1.0) } else { ToneMap::linear(c, w, b, 1.0) };
+                let mut prev = -1.0;
+                for i in 0..2000 {
+                    let y = 1e-5 * 1.012f32.powi(i);
+                    let o = t.apply(y);
+                    assert!((0.0..=1.0).contains(&o), "{c} {w} {b} at {y}: {o}");
+                    assert!(o >= prev - 1e-6, "{c} {w} {b} at {y}: {o} < {prev}");
+                    prev = o;
+                }
+            }
+        }
+        // a broken peak falls back to SDR
+        assert_eq!(ToneMap::linear(0.0, 0.0, 0.0, f32::NAN).lut(), ToneMap::linear(0.0, 0.0, 0.0, 1.0).lut());
     }
 }

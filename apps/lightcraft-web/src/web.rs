@@ -15,7 +15,7 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 
 use crate::backend::Backend;
-use crate::backup::{ACTIVE_LIBRARY, DEFAULT_LIBRARY_DIR, valid_library_dir};
+use crate::backup::{ACTIVE_LIBRARY, DEFAULT_LIBRARY_DIR, document_title, valid_library_dir};
 use crate::bench::Bench;
 use crate::files::{Files, FlushOp, LIBRARY_FILES};
 use crate::safety::{self, notice};
@@ -404,6 +404,8 @@ struct WebApp {
     first_frame_logged: bool,
     last_save: f64,
     ui_written: Vec<u8>,
+    /// The page title last applied (skipped when it hasn't changed).
+    title: String,
 }
 
 impl WebApp {
@@ -503,6 +505,7 @@ impl WebApp {
             first_frame_logged: false,
             last_save: 0.0,
             ui_written,
+            title: String::new(),
         }
     }
 
@@ -596,6 +599,19 @@ impl WebApp {
             wasm_bindgen_futures::spawn_local(flush(files, b.clone(), dir, flushing, failed_at));
         }
     }
+
+    /// Name the open library in the page title, with a marker while changes could not be saved, so
+    /// an embedding host can tell which document is open and whether it is safe (issue #2397).
+    /// eframe's web backend drops `ViewportCommand::Title`, so the title is set directly.
+    fn show_title(&mut self) {
+        let title = document_title(&self.lib_dir, self.app.session.unsaved().is_some());
+        if title != self.title {
+            self.title = title.clone();
+            if let Some(doc) = window().and_then(|w| w.document()) {
+                doc.set_title(&title);
+            }
+        }
+    }
 }
 
 type Reply = (js_sys::Function, js_sys::Function);
@@ -664,6 +680,7 @@ impl eframe::App for WebApp {
             w.set_budget(self.app.session.cache_bytes());
         }
         self.app.logic(ctx);
+        self.show_title();
         self.save();
         if let Some(b) = self.bench.as_mut()
             && let Some(report) = b.step(&mut self.app)

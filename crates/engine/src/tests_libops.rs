@@ -589,3 +589,63 @@ fn capture_time_invalid_calendar_anchor_keeps_other_targets_and_redo() {
         assert_eq!(s.pending_log, log);
     }
 }
+
+#[test]
+fn capture_time_unreadable_photo_is_left_and_counted() {
+    // one photo reads, one has a tail after the time: the first moves, the second is left as it
+    // was and counted, in one undo step (issue #2505)
+    let mut s = capture_time_raw_metadata_session(Some("2026-01-01T10:00:00 and more"));
+    let peer = lightcraft_catalog::PhotoId(2);
+    let mut p = lightcraft_catalog::Photo::new(peer, lightcraft_catalog::Source::Demo { scene: 0 }, "peer.jpg", "JPEG", 4, 3, "2026-10-09T00:00:00");
+    p.captured = Some("2026-03-01T12:00:00.25+02:00".into());
+    s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    s.selection.ids = vec![lightcraft_catalog::PhotoId(1), peer];
+    s.selection.active = Some(lightcraft_catalog::PhotoId(1));
+    let r = s.execute("photo.setCaptureTime", &json!({"shift": 3600})).unwrap();
+    assert_eq!(r["changed"], 1, "{r}");
+    assert_eq!(r["unreadable"], 1, "{r}");
+    assert_eq!(captured(&s, 1).as_deref(), Some("2026-01-01T10:00:00 and more"), "the unreadable one is untouched");
+    assert_eq!(captured(&s, 2).as_deref(), Some("2026-03-01T13:00:00.25+02:00"));
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(captured(&s, 2).as_deref(), Some("2026-03-01T12:00:00.25+02:00"), "one undo step");
+}
+
+#[test]
+fn capture_time_malformed_tail_is_not_out_of_range() {
+    // a time that doesn't read is not "outside the years 0000–9999": that error is only for
+    // times that read but would shift out of it
+    let mut s = capture_time_raw_metadata_session(Some("2026-01-01T10:00:00 and more"));
+    let r = s.execute("photo.setCaptureTime", &json!({"shift": 3600})).unwrap();
+    assert_eq!(r["unreadable"], 1, "{r}");
+    let mut s = capture_time_raw_metadata_session(Some("9999-12-31T23:00:00"));
+    let e = s.execute("photo.setCaptureTime", &json!({"shift": 7200})).unwrap_err().to_string();
+    assert!(e.contains("9999"), "{e}");
+}
+
+#[test]
+fn capture_time_unreadable_anchor_refused_alone_repaired_each_sets_all() {
+    // several photos, the active one's time can't be read: refuse, nothing changes
+    let mut s = capture_time_raw_metadata_session(Some("2026-01-01T10:0"));
+    let peer = lightcraft_catalog::PhotoId(2);
+    let mut p = lightcraft_catalog::Photo::new(peer, lightcraft_catalog::Source::Demo { scene: 0 }, "peer.jpg", "JPEG", 4, 3, "2026-10-09T00:00:00");
+    p.captured = Some("2026-03-01T12:00:00".into());
+    s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    s.selection.ids = vec![lightcraft_catalog::PhotoId(1), peer];
+    s.selection.active = Some(lightcraft_catalog::PhotoId(1));
+    let e = s.execute("photo.setCaptureTime", &json!({"time": "2026-03-03T12:00:00"})).unwrap_err().to_string();
+    assert!(e.contains("can't be read"), "{e}");
+    assert_eq!(captured(&s, 2).as_deref(), Some("2026-03-01T12:00:00"));
+    // alone, the same photo gets the typed time as it is (repair)
+    s.selection = crate::Selection::single(lightcraft_catalog::PhotoId(1));
+    let r = s.execute("photo.setCaptureTime", &json!({"time": "2026-03-03T12:00:00"})).unwrap();
+    assert_eq!(r["changed"], 1, "{r}");
+    assert_eq!(captured(&s, 1).as_deref(), Some("2026-03-03T12:00:00"));
+    // `each` sets every photo, unreadable included
+    s.selection.ids = vec![lightcraft_catalog::PhotoId(1), peer];
+    s.selection.active = Some(lightcraft_catalog::PhotoId(1));
+    let r = s.execute("photo.setCaptureTime", &json!({"time": "2026-03-04T08:00:00", "each": true})).unwrap();
+    assert_eq!(r["changed"], 2, "{r}");
+    assert_eq!(r["unreadable"], 0, "{r}");
+    assert_eq!(captured(&s, 1).as_deref(), Some("2026-03-04T08:00:00"));
+    assert_eq!(captured(&s, 2).as_deref(), Some("2026-03-04T08:00:00"));
+}

@@ -32,9 +32,12 @@ Rating, flag and label changes apply to every selected photo, and you can undo t
 
 Choose **View** > **Compare** to see two photos side by side with synced zoom and pan, or **View** > **Survey** to see the selected photos tiled. The keys above then apply to the active photo only.
 
+The bottom bar shows the active photo's stars, flags and colour labels next to each other: click a coloured dot to set or clear that label on the active photo. The **Info** panel's swatches do the same. In these views, rating, flag and label actions apply to the active photo only, so you can cull a shoot one photo at a time without touching the rest of the selection.
+
 ## Good to know
 
 - **Rejected** only marks a photo for culling. It does not delete the original or remove it from the library.
 - The sidebar has **Picks** for the photos you flagged. The search box understands fields, for example `rating:>3 flag:pick`.
+- In the grid, the colour dot on a labelled photo opens its label menu: set another colour or clear it.
 - Choose **Help** > **Keyboard Shortcuts** to see every shortcut.
 - Typing in a text field keeps the keys for typing.

@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** minor (`cargo xtask ci` reports the machine and skipped tests; `testkit`) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-17 · **Change:** minor (`copilot-setup-steps.yml` prewarms the Copilot cloud-agent environment) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 How LightCraft is built today. The longer design document (`plan/architecture.md`) is local-only
 (`plan/` is gitignored); this page is the committed, current summary. Sizes are Rust lines counted
@@ -73,9 +73,14 @@ time, skips) and `target/ci/summary.md` (Markdown for a PR; `--summary-md` print
 no host name, user name or absolute path, and nothing is uploaded. `--hardware` adds a step that runs
 the `lightcraft-gpu` tests once per backend with a hardware adapter (`LIGHTCRAFT_GPU_BACKEND`).
 
+`copilot-setup-steps.yml` prewarms the Copilot cloud-agent environment: Rust toolchain with the
+wasm32 target, the Linux GUI/audio dev libraries, the pinned craft-fonts checkout (`CRAFT_FONTS_DIR`)
+and a warm cargo target directory, so agent sessions start incremental.
+
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-17 | minor | `copilot-setup-steps.yml` prewarms the Copilot cloud-agent environment (toolchain, Linux dev libraries, craft-fonts, warm target dir) |
 | 2026-10-11 | minor | Quality gates: the CI machine probe, visible skips (`testkit`) and `target/ci/report.json` |
 | 2026-10-10 | major | Created from the code (crate sizes, layers, data model, rendering, control, gates) |

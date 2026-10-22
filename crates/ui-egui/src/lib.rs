@@ -1646,7 +1646,7 @@ pub struct Caches {
     /// The Keyword List's tick boxes, by library revision and selection.
     keyword_ticks: Option<(u64, u64, std::sync::Arc<panels::keyword_list::Ticks>)>,
     folder_tree: Option<(u64, std::sync::Arc<Vec<lightcraft_catalog::FolderNode>>)>,
-    people: Option<(u64, lightcraft_catalog::Filter, std::sync::Arc<Vec<lightcraft_catalog::Person>>)>,
+    people: Option<(u64, (lightcraft_catalog::Filter, crate::state::PeopleSort), std::sync::Arc<Vec<lightcraft_catalog::Person>>)>,
     suggestions: Option<(u64, std::sync::Arc<Vec<String>>)>,
     /// What the Add keyword box offers for the text typed in it, by library revision, the
     /// selection's keywords and that text.
@@ -1849,17 +1849,22 @@ impl Caches {
         }
     }
     /// The people named on faces among the photos the filter lets through (its own `person` aside),
-    /// with photo counts.
+    /// with photo counts, in the People view's order (`sort`).
     pub fn people(
         &mut self,
         cat: &lightcraft_catalog::Catalog,
         filter: &lightcraft_catalog::Filter,
+        sort: crate::state::PeopleSort,
     ) -> std::sync::Arc<Vec<lightcraft_catalog::Person>> {
-        let key = lightcraft_catalog::Filter { person: None, ..filter.clone() };
+        let key = (lightcraft_catalog::Filter { person: None, ..filter.clone() }, sort);
         match &self.people {
             Some((r, f, t)) if *r == cat.revision && *f == key => t.clone(),
             _ => {
-                let t = std::sync::Arc::new(cat.people_in(&key));
+                let mut v = cat.people_in(&key.0);
+                if sort == crate::state::PeopleSort::Name {
+                    v.sort_by_key(|p| p.name.to_lowercase());
+                }
+                let t = std::sync::Arc::new(v);
                 self.people = Some((cat.revision, key, t.clone()));
                 t
             }

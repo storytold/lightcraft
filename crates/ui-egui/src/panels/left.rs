@@ -670,6 +670,15 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 // …and the sidebar scrolls to it
                 ui.data_mut(|d| d.insert_temp(egui::Id::new(SCROLL_TO_ROW), format!("keyword:{path}").to_lowercase()));
             }
+            // a folder asked for (Show in Folders): the section shows, the folders above it open
+            // and the sidebar scrolls to it
+            if let Some(path) = app.ui.reveal_folder.take() {
+                app.ui.sidebar.reveal(SidebarSection::Folders);
+                open_folders_above(ui, &app.caches.folder_tree(&app.session.catalog), &path);
+                ui.data_mut(|d| {
+                    d.insert_temp(egui::Id::new(SCROLL_TO_ROW), format!("libfolder:{}", lightcraft_catalog::query::folder_key(&path)).to_lowercase())
+                });
+            }
             // Local keeps track of the folder being browsed whether or not it is drawn
             let local = local_now(app, ui);
             let shown: Vec<SidebarSection> = app.ui.sidebar.shown().collect();
@@ -1749,17 +1758,20 @@ fn reveal_chosen(app: &LightcraftApp, ui: &egui::Ui, tree: &[FolderNode]) {
         return;
     }
     ui.data_mut(|d| d.insert_temp(seen, now));
-    let Some(chosen) = chosen else { return };
-    fn open_above(ui: &egui::Ui, nodes: &[FolderNode], chosen: &str) {
-        for n in nodes {
-            if lightcraft_catalog::query::folder_within(chosen, &n.path) && !same_folder(chosen, &n.path) {
-                let key = lightcraft_catalog::query::folder_key(&n.path);
-                ui.data_mut(|d| d.insert_temp(egui::Id::new(("libfolder-open", key)), true));
-                open_above(ui, &n.children, chosen);
-            }
+    if let Some(chosen) = chosen {
+        open_folders_above(ui, tree, &chosen);
+    }
+}
+
+/// Open every folder row above `chosen` (not `chosen` itself), so it is on screen.
+fn open_folders_above(ui: &egui::Ui, nodes: &[FolderNode], chosen: &str) {
+    for n in nodes {
+        if lightcraft_catalog::query::folder_within(chosen, &n.path) && !same_folder(chosen, &n.path) {
+            let key = lightcraft_catalog::query::folder_key(&n.path);
+            ui.data_mut(|d| d.insert_temp(egui::Id::new(("libfolder-open", key)), true));
+            open_folders_above(ui, &n.children, chosen);
         }
     }
-    open_above(ui, tree, &chosen);
 }
 
 fn folder_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, nodes: &[FolderNode], indent: f32) {

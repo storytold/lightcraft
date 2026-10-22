@@ -45,18 +45,22 @@ pub fn paths(kind: CropOverlay, orient: u8, w: f32, h: f32) -> Vec<Vec<(f32, f32
     }
 }
 
-/// The golden spiral: squares carved off a `w × h` rectangle (left, top, right, bottom, …), a
-/// quarter circle in each, joined into one curve; plus the square boundaries.
+/// The golden spiral: a quarter circle in each square of the golden-rectangle construction,
+/// joined into one curve; plus the square boundaries. The construction runs in a fixed φ:1
+/// reference rectangle that is then stretched onto the crop, so the guide stays complete at
+/// every aspect ratio (issue #2393) — exact for golden-ratio crops, affinely distorted
+/// (still a usable composition guide) for the others.
 fn spiral(w: f32, h: f32) -> Vec<Vec<(f32, f32)>> {
-    // work landscape; transpose back for portrait crops
+    const PHI: f32 = 1.618_034;
+    // build landscape in the reference rectangle; transpose back for portrait crops
     let portrait = h > w;
-    let (rw, rh) = if portrait { (h, w) } else { (w, h) };
+    let (rw, rh) = (PHI, 1.0);
     let (mut x, mut y, mut cw, mut ch) = (0.0f32, 0.0f32, rw, rh);
     let mut curve = Vec::new();
     let mut squares = Vec::new();
     for k in 0..10 {
         let s = cw.min(ch);
-        if s < rw.min(rh) * 0.01 {
+        if s < 0.01 {
             break;
         }
         // square corner origin, arc centre, start angle (degrees, y down)
@@ -130,13 +134,35 @@ mod tests {
 
     #[test]
     fn spiral_is_one_continuous_curve() {
-        for (w, h) in [(1.618, 1.0), (1.0, 1.618), (3.0, 2.0)] {
+        for (w, h) in [(1.618, 1.0), (1.0, 1.618), (3.0, 2.0), (1.0, 1.0), (16.0, 9.0)] {
             let p = paths(CropOverlay::Spiral, 0, w, h);
             let curve = p.last().unwrap();
             for pair in curve.windows(2) {
                 let d = ((pair[1].0 - pair[0].0) * w).hypot((pair[1].1 - pair[0].1) * h);
                 assert!(d < 0.2 * w.max(h), "jump {d} in {w}×{h}");
             }
+        }
+    }
+
+    #[test]
+    fn spiral_stays_complete_at_every_aspect_ratio() {
+        // #2393: the construction used to carve squares off the crop itself, so a square crop
+        // left room for a single quarter circle and other ratios truncated the curve early.
+        // The guide is now built in a fixed φ:1 reference rectangle and stretched onto the
+        // crop: the construction runs to depth and the curve spans the crop everywhere.
+        for (w, h) in [(1.0, 1.0), (3.0, 2.0), (16.0, 9.0), (2.0, 3.0), (9.0, 16.0), (1.618, 1.0)] {
+            let p = paths(CropOverlay::Spiral, 0, w, h);
+            // at least eight construction squares plus the curve
+            assert!(p.len() >= 9, "{w}×{h}: only {} polylines", p.len());
+            let curve = p.last().unwrap();
+            let (mut u0, mut u1, mut v0, mut v1) = (f32::MAX, f32::MIN, f32::MAX, f32::MIN);
+            for &(u, v) in curve {
+                u0 = u0.min(u);
+                u1 = u1.max(u);
+                v0 = v0.min(v);
+                v1 = v1.max(v);
+            }
+            assert!(u0 < 0.01 && u1 > 0.99 && v0 < 0.01 && v1 > 0.99, "{w}×{h} spans {u0}..{u1} × {v0}..{v1}");
         }
     }
 }

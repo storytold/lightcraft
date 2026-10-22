@@ -63,7 +63,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let now = ui.input(|i| i.time);
     let thumb = app.ui.thumb_size;
-    let people = app.caches.people(&app.session.catalog, &app.session.filter);
+    let people = app.caches.people(&app.session.catalog, &app.session.filter, app.ui.people_sort);
     let (head, _) = ui.allocate_exact_size(vec2(ui.available_width(), HEADER_H), Sense::hover());
     let title =
         ui.painter().text(pos2(head.left() + PAD, head.center().y), Align2::LEFT_CENTER, crate::i18n::tr("Named People"), t.semibold(15.0), t.text);
@@ -79,7 +79,25 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             let _ = app.run("view.person", json!({"name": last}));
         }
     }
-    ui.painter().text(pos2(head.right() - PAD, head.center().y), Align2::RIGHT_CENTER, people.len().to_string(), t.font(13.0), t.text_dim);
+    let count_g = ui.painter().layout_no_wrap(people.len().to_string(), t.font(13.0), t.text_dim);
+    let count_w = count_g.size().x;
+    ui.painter().galley(pos2(head.right() - PAD - count_w, head.center().y - count_g.size().y / 2.0), count_g, t.text_dim);
+    // the order of the cards: most photos first, or A–Z (#2496)
+    let sort_w = 150.0;
+    let sort_r = Rect::from_min_size(pos2(head.right() - PAD - count_w - 12.0 - sort_w, head.center().y - 12.0), vec2(sort_w, 24.0));
+    let mut sort_ui = ui.new_child(egui::UiBuilder::new().max_rect(sort_r));
+    let sort_label = format!("{}: {}", crate::i18n::tr("Sort"), crate::i18n::tr(app.ui.people_sort.label()));
+    let dr = crate::widgets::dropdown_within(&mut sort_ui, "peopleSort", &sort_label, t.font(13.0), t.text_dim, sort_w)
+        .on_hover_text(crate::i18n::tr("Sort people by photo count or name"));
+    egui::Popup::menu(&dr).show(|ui| {
+        for sort in [crate::state::PeopleSort::Count, crate::state::PeopleSort::Name] {
+            let r = ui.selectable_label(app.ui.people_sort == sort, crate::i18n::tr(sort.label()));
+            register(ui.ctx(), format!("peopleSortMenu:{}", sort.id()), r.rect);
+            if r.clicked() {
+                app.ui.people_sort = sort;
+            }
+        }
+    });
     // until face recognition is set up: what it takes, and a button that does the next step
     super::faces::setup_banner(app, ui);
     // the filters narrowing the list (a date, a keyword…), removable here

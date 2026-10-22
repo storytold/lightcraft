@@ -244,6 +244,8 @@ impl Store for MemStore {
 
 #[cfg(all(test, unix))]
 mod tests_staging {
+    // its only test is unix-only; on other platforms the import would be unused
+    #[cfg(unix)]
     use super::*;
 
     /// A link planted at a staging name (`<name>.tmp`) is removed, never followed: the file it points to keeps its

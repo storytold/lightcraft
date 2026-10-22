@@ -114,6 +114,19 @@ pub struct Seen {
 }
 
 impl Seen {
+    /// Whether this window does not fit the screen it is on: it is at least as large as the
+    /// screen in both directions, as one the system has clamped to the screen is (the app opens
+    /// at the size it was left at, or at the usual size, and the system keeps it within the
+    /// screen), and as one dragged out beyond it is. Its bottom and right edges are off the
+    /// screen or under what the system keeps there (the taskbar, the Dock), and a dialog fitted
+    /// to the window can put its buttons out of reach (#2472). The app zooms / maximizes such a
+    /// window instead, which the window system fits to the screen's work area — the screen less
+    /// its own bars. Not a zoomed or full-screen window: the system has fitted those already;
+    /// not a minimized one: nothing of it is seen.
+    pub fn too_large_for_screen(&self) -> bool {
+        !self.zoomed && !self.full_screen && !self.minimized && self.size.is_some_and(|size| self.screen.is_some_and(|screen| covers(size, screen)))
+    }
+
     /// From what egui holds of the window: its `info`, the rectangle it draws in (`content`: the
     /// one size every platform reports, Wayland too) and the interface's own scale (`zoom`), by
     /// which egui's points differ from the system's.
@@ -330,6 +343,30 @@ mod tests {
 
     fn place(size: [f32; 2], zoomed: bool) -> WindowPlace {
         WindowPlace { size, zoomed }
+    }
+
+    /// Given a window seen on a screen, when it is asked whether it is too large for that
+    /// screen, then a window the system clamped to the screen (the usual size on a small one),
+    /// one larger still, and one at the screen's width and height less a hair are; a window
+    /// that fits, one that only spans the screen's width, and one the system has fitted itself
+    /// (zoomed, full screen, minimized) are not.
+    #[test]
+    fn a_window_as_large_as_its_screen_is_too_large_for_it() {
+        // clamped to the screen, or opened larger: no room left in either direction
+        assert!(window(SCREEN).too_large_for_screen());
+        assert!(window([3000.0, 1800.0]).too_large_for_screen());
+        assert!(window([SCREEN[0] - 1.0, SCREEN[1] - 1.0]).too_large_for_screen(), "a hair off is still the screen's size");
+        // a window of its own
+        assert!(!window([1300.0, 800.0]).too_large_for_screen());
+        // across the screen but not down it: a snapped window, and it fits
+        assert!(!window([SCREEN[0], 800.0]).too_large_for_screen());
+        // the system has fitted these itself
+        assert!(!Seen { zoomed: true, ..window(SCREEN) }.too_large_for_screen());
+        assert!(!Seen { full_screen: true, ..window(SCREEN) }.too_large_for_screen());
+        assert!(!Seen { minimized: true, ..window(SCREEN) }.too_large_for_screen());
+        // no screen known (a headless render, the first frame): nothing to be too large for
+        assert!(!Seen { size: Some(SCREEN), ..Default::default() }.too_large_for_screen());
+        assert!(!Seen { screen: Some(SCREEN), ..Default::default() }.too_large_for_screen());
     }
 
     /// Given a window that is resized and comes to rest, when it is watched, then its new size

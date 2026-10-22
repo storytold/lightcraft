@@ -1,0 +1,85 @@
+# Prewarms the GitHub Copilot cloud-agent environment (copilot-setup-steps): the Copilot
+# environment is snapshotted after this job, so every agent session starts with the Rust
+# toolchain, the Linux GUI/audio dev libraries, the craft-fonts checkout (CRAFT_FONTS_DIR)
+# and a warm cargo target directory instead of paying the cold build each time.
+#
+# Agents: the fonts checkout lives at <workspace>/craft-fonts (gitignored). If a fresh shell
+# lacks the variable, set it before building:
+#   export CRAFT_FONTS_DIR="$PWD/craft-fonts"
+# Without it everything still builds, but Chinese and Japanese text render as empty boxes
+# (crates/engine/build.rs embeds the fonts at compile time).
+#
+# The CC0 raw corpus is intentionally not downloaded here (large; `cargo xtask corpus
+# --download` when a task needs it — corpus tests skip cleanly without it).
+name: "Copilot Setup Steps"
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/copilot-setup-steps.yml
+  pull_request:
+    paths:
+      - .github/workflows/copilot-setup-steps.yml
+
+concurrency:
+  group: copilot-setup-steps-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # The job MUST be called `copilot-setup-steps` or Copilot will not pick it up.
+  copilot-setup-steps:
+    runs-on: ubuntu-latest
+    timeout-minutes: 59
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Same pinned craft-fonts ref as freebsd.yml and release.yml; cloned into the workspace,
+      # where .gitignore already excludes /craft-fonts.
+      - name: Check out craft-fonts
+        uses: storytold/craft-common-actions/actions/checkout-craft-fonts@main
+        with:
+          ref: 3d9ab3a132ed0eff457e424226a435a901da30d3
+
+      # The set install-linux-deps installs for the Linux release builds (minus packaging tools).
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev \
+            libgl1-mesa-dev libasound2-dev pkg-config
+
+      # wasm32-unknown-unknown: `cargo xtask ci` checks the wasm-safe crates for that target.
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+          components: clippy, rustfmt
+          targets: wasm32-unknown-unknown
+
+      # Speeds up re-runs of this workflow; agent sessions get the warm target dir via the
+      # environment snapshot.
+      - name: Cache cargo build state
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      # $GITHUB_ENV only reaches later steps of this job, so also export the variable from the
+      # shell rc files the agent's shells may read. Best effort; the comment at the top is the
+      # authoritative fallback.
+      - name: Point CRAFT_FONTS_DIR at the fonts checkout
+        run: |
+          echo "CRAFT_FONTS_DIR=$GITHUB_WORKSPACE/craft-fonts" >> "$GITHUB_ENV"
+          for rc in "$HOME/.bashrc" "$HOME/.profile"; do
+            printf '\nexport CRAFT_FONTS_DIR="%s/craft-fonts"\n' "$GITHUB_WORKSPACE" >> "$rc"
+          done
+
+      # Same recipe as the FreeBSD CI job: dev profile without debug info keeps the ~200k-line
+      # workspace (wgpu, candle, egui, rav1e…) within runner disk and makes the agent's first
+      # `cargo xtask ci` / test run incremental. --all-targets also compiles tests and benches.
+      - name: Prebuild the workspace
+        env:
+          CARGO_TERM_COLOR: always
+          CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+        run: CARGO_PROFILE_DEV_DEBUG=0 cargo build --workspace --all-targets --locked

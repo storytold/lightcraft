@@ -69,6 +69,9 @@ pub struct Tokens {
     /// Cautionary notices (e.g. a raw shown from its embedded preview): a muted amber.
     pub caution: Color32,
     pub mask_overlay: Color32,
+    /// Border around the active photo's thumbnail (grid, filmstrip, compare): the theme's
+    /// strongest ink, so it shows on light backgrounds too (#2382).
+    pub selection: Color32,
     // metrics (points)
     pub top_bar_h: f32,
     pub bottom_bar_h: f32,
@@ -148,6 +151,7 @@ impl Default for Tokens {
             reject: Color32::from_rgb(0xe0, 0x4a, 0x4a),
             caution: Color32::from_rgb(0xe3, 0xa8, 0x3c),
             mask_overlay: Color32::from_rgba_unmultiplied(0xe0, 0x20, 0x30, 110),
+            selection: Color32::WHITE,
             top_bar_h: 42.0,
             bottom_bar_h: 48.0,
             panel_w: 270.0,
@@ -211,6 +215,7 @@ impl Tokens {
                 pick: rgb(0x2a2a2a),
                 reject: rgb(0xc83434),
                 caution: rgb(0xb0761a),
+                selection: rgb(0x1c1c1c),
                 ..base
             },
             ThemeKind::Paper => Tokens {
@@ -241,6 +246,7 @@ impl Tokens {
                 pick: rgb(0x2a2a2a),
                 reject: rgb(0xc83434),
                 caution: rgb(0xb0761a),
+                selection: rgb(0x161616),
                 ..base
             },
         }

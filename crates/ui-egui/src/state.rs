@@ -78,6 +78,34 @@ impl BeforeAfter {
     }
 }
 
+/// How the People view orders the named people (#2496).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PeopleSort {
+    /// Most photos first, then by name (as Lightroom does).
+    #[default]
+    Count,
+    /// Alphabetical by name.
+    Name,
+}
+
+impl PeopleSort {
+    /// The id used in widget names (`peopleSortMenu:{id}`).
+    pub fn id(self) -> &'static str {
+        match self {
+            PeopleSort::Count => "count",
+            PeopleSort::Name => "name",
+        }
+    }
+    /// The choice named in the header's sort dropdown.
+    pub fn label(self) -> &'static str {
+        match self {
+            PeopleSort::Count => "Photo count",
+            PeopleSort::Name => "Name (A–Z)",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum CropOverlay {
@@ -650,6 +678,8 @@ pub struct UiState {
     pub presets: bool,
     /// Presets column: show a live thumbnail of the photo with each preset.
     pub preset_thumbs: bool,
+    /// People view: order the named people by photo count (most first) or by name (A–Z).
+    pub people_sort: PeopleSort,
     pub filmstrip: bool,
     pub zoom: Zoom,
     /// Pan offset of the loupe when zoomed (image-normalized centre).
@@ -669,6 +699,9 @@ pub struct UiState {
     /// Solo Mode (`view.soloSections`): opening one Edit section closes the others.
     pub single_panel: bool,
     pub show_clipping: bool,
+    /// Show Sensor Clipping (Shift+K, raws only): photosites at the sensor's clip level, per
+    /// colour channel, before any adjustment. Mutually exclusive with [`Self::show_clipping`].
+    pub show_sensor_clipping: bool,
     pub histogram: bool,
     /// Soft proofing (S in the loupe): render as `proof` would hold the photo.
     pub soft_proof: bool,
@@ -797,6 +830,10 @@ pub struct UiState {
     /// A keyword just made from the sidebar: Keywords opens down to it, once.
     #[serde(skip)]
     pub reveal_keyword: Option<String>,
+    /// A folder asked for (Show in Folders): the Folders section shows, the folders above it open
+    /// and the sidebar scrolls to it, once.
+    #[serde(skip)]
+    pub reveal_folder: Option<String>,
     /// An album or folder row being dragged in the sidebar (dropped on a folder to move it there).
     #[serde(skip)]
     pub dragging_album: Option<u64>,
@@ -1277,6 +1314,7 @@ impl Default for UiState {
             right: RightPanel::Edit,
             presets: false,
             preset_thumbs: false,
+            people_sort: PeopleSort::Count,
             filmstrip: true,
             zoom: Zoom::Fit,
             pan: (0.5, 0.5),
@@ -1288,6 +1326,7 @@ impl Default for UiState {
             open_flyouts: vec![],
             single_panel: false,
             show_clipping: false,
+            show_sensor_clipping: false,
             histogram: true,
             soft_proof: false,
             proof: lightcraft_engine::pipeline::Proof { dest_warning: false, ..Default::default() },
@@ -1338,6 +1377,7 @@ impl Default for UiState {
             dragging_photos: None,
             reveal_album: None,
             reveal_keyword: None,
+            reveal_folder: None,
             dragging_album: None,
             dragging_section: None,
             curve_channel: "parametric".into(),

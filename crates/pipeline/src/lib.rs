@@ -92,11 +92,88 @@ pub struct SourceInfo {
     /// The raw's own local tone mapping (DNG `ProfileGainTableMap`), rendered only when the
     /// photo's Profile option asks for it ([`local_tone`]).
     pub local_tone: Option<Arc<local_tone::LocalTone>>,
+    /// Which photosites of a raw sit at the sensor's clip level, per colour channel, before any
+    /// adjustment ([`SensorClip`]): the sensor clipping overlay's data.
+    pub sensor_clip: Option<Arc<SensorClip>>,
     /// Long edge (px) of the original photo, when the source handed to the renderer is a smaller
     /// copy of it (the app's thumbnail and preview levels); `None`: the source is the original.
     /// Noise reduction sizes its radii in the original's pixels ([`Plan::detail_scale`]), so a
     /// preview looks like the full-size render scaled down (issue #960).
     pub native_long: Option<usize>,
+}
+
+/// Which photosites of a raw sit at the sensor's clip level, per colour channel (bit 0 = R, 1 = G,
+/// 2 = B), before any adjustment — what can still be recovered and what is gone. One byte per
+/// pixel, at the resolution of (and in the same orientation as) the source buffer a render starts
+/// from, so it aligns with it ([`Overlay::SensorClipping`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct SensorClip {
+    pub width: usize,
+    pub height: usize,
+    pub data: Vec<u8>,
+}
+
+impl SensorClip {
+    /// The flags of the pixel at integer source coordinates (0 outside).
+    pub fn at(&self, x: usize, y: usize) -> u8 {
+        if x >= self.width || y >= self.height { 0 } else { self.data[y * self.width + x] }
+    }
+
+    /// The flags of an EXIF-oriented copy (stored → displayed), matching [`Rgb32f::oriented`].
+    pub fn into_oriented(self, o: lightcraft_geom::Orientation) -> Self {
+        if o == lightcraft_geom::Orientation::Normal {
+            return self;
+        }
+        let (flip, turns) = o.to_parts();
+        let (w, h) = (self.width, self.height);
+        let (ow, oh) = if turns % 2 == 1 { (h, w) } else { (w, h) };
+        let mut data = vec![0u8; ow * oh];
+        for (y, row) in data.chunks_mut(ow).enumerate() {
+            for (x, f) in row.iter_mut().enumerate() {
+                // undo the turns, then the flip
+                let (mut sx, sy) = match turns {
+                    1 => (y, h - 1 - x),
+                    2 => (w - 1 - x, h - 1 - y),
+                    3 => (w - 1 - y, x),
+                    _ => (x, y),
+                };
+                if flip {
+                    sx = w - 1 - sx;
+                }
+                *f = self.data.get(sy * w + sx).copied().unwrap_or(0);
+            }
+        }
+        Self { width: ow, height: oh, data }
+    }
+
+    /// Shrink the flags to fit `max_w × max_h` (never grows), each output pixel ORing its
+    /// footprint — the same target size [`lightcraft_raster::resample::fit`] picks for the picture.
+    /// A block with any clipped photosite of a colour counts as clipped in it.
+    pub fn fit_or(&self, max_w: usize, max_h: usize) -> Self {
+        let (w, h) = (self.width, self.height);
+        let s = (max_w as f64 / w as f64).min(max_h as f64 / h as f64).min(1.0);
+        let (tw, th) = (((w as f64 * s).round() as usize).max(1), ((h as f64 * s).round() as usize).max(1));
+        if tw == w && th == h {
+            return self.clone();
+        }
+        let mut data = vec![0u8; tw * th];
+        for (y, row) in data.chunks_mut(tw).enumerate() {
+            let y0 = y * h / th;
+            let y1 = ((y + 1) * h / th).max(y0 + 1);
+            for (x, f) in row.iter_mut().enumerate() {
+                let x0 = x * w / tw;
+                let x1 = ((x + 1) * w / tw).max(x0 + 1);
+                let mut bits = 0u8;
+                for sy in y0..y1 {
+                    for sx in x0..x1 {
+                        bits |= self.data.get(sy * w + sx).copied().unwrap_or(0);
+                    }
+                }
+                *f = bits;
+            }
+        }
+        Self { width: tw, height: th, data }
+    }
 }
 
 impl Default for SourceInfo {
@@ -112,6 +189,7 @@ impl Default for SourceInfo {
             camera_tone: None,
             mattes: None,
             local_tone: None,
+            sensor_clip: None,
             native_long: None,
         }
     }
@@ -369,6 +447,10 @@ pub struct Plan<'a> {
     /// Output pixels per pixel of the original photo ([`SourceInfo::native_long`], else the source
     /// buffer), at most 1: the scale of noise reduction, whose radii are in the original's pixels.
     pub detail_scale: f32,
+    /// Whether the geometric resample uses Mitchell bicubic ([`Quality::Full`]: exports, the
+    /// loupe at rest) instead of bilinear (drafts). Part of [`Self::geo`], so a cached draft
+    /// sample is never served to a full render.
+    pub bicubic: bool,
     /// Key of the resampled source (together with the source buffer's identity).
     pub geo: u64,
     /// Key of the white-balanced, retouched, denoised image (and of the planes computed from it).
@@ -386,6 +468,9 @@ pub struct Plan<'a> {
     pub keep: Option<PixelWindow>,
     /// The source's segmentation mattes ([`SourceInfo::mattes`]).
     pub mattes: Option<Arc<masks::Mattes>>,
+    /// The source's sensor clip flags ([`SourceInfo::sensor_clip`]), for the sensor clipping
+    /// overlay (both renderers draw overlays from the [`Plan`]).
+    pub sensor_clip: Option<Arc<SensorClip>>,
 }
 
 /// Long edge of the small render a windowed render estimates the whole frame's airlight from.
@@ -435,7 +520,8 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
     // (an original reported smaller than the source is the source)
     let native_long = info.native_long.unwrap_or(0).max(src_long).max(1);
     let detail_scale = local::detail_scale(px_per_long, native_long);
-    let geo = hash_of((format!("{frame:?}"), w, h));
+    let bicubic = req.quality == Quality::Full;
+    let geo = hash_of((format!("{frame:?}"), w, h, bicubic));
     let (wb_t, wb_tint) = local::effective_wb(info, s);
     let eyes = redeye::resolve(src, &s.red_eye, s.orientation, &frame, w, h, px_per_long);
     let d = &s.detail;
@@ -455,7 +541,24 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         [d.nr_luminance, d.nr_detail, d.nr_color, d.nr_color_detail, d.nr_color_smoothness].map(f64::to_bits),
         detail_scale.to_bits(),
     ));
-    Plan { settings, frame, w, h, px_per_long, src_long, detail_scale, geo, lin_key, pre_nr_key, eyes, fixed_air, keep, mattes: info.mattes.clone() }
+    Plan {
+        settings,
+        frame,
+        w,
+        h,
+        px_per_long,
+        src_long,
+        detail_scale,
+        bicubic,
+        geo,
+        lin_key,
+        pre_nr_key,
+        eyes,
+        fixed_air,
+        keep,
+        mattes: info.mattes.clone(),
+        sensor_clip: info.sensor_clip.clone(),
+    }
 }
 
 /// Whether the scene-linear stage needs work only the CPU does (defringe, spot removal).
@@ -564,7 +667,7 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
     let cached = shared.and_then(|(a, c)| c.get(a, geo));
     let sampled = match &cached {
         Some(e) => e.sampled.clone(),
-        None => Arc::new(frame.sample(src_img, w, h)),
+        None => Arc::new(frame.sample_quality(src_img, w, h, plan.bicubic)),
     };
     lap("sample", &mut t);
 

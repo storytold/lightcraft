@@ -64,6 +64,7 @@
   "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "{n} foto{0} movida{0} para “{1}”. Editar → Desfazer as traz de volta.",
   "Named ({named_n})": "Nomeadas ({named_n})",
   "Paste into {n} photo{} — only settings that were copied are pasted": "Colar em {n} foto{} — somente os ajustes copiados são colados",
+  "Photos whose capture time can't be read were left as they were: {n}": "As fotos cuja data de captura não pôde ser lida foram deixadas como estavam: {n}",
   "Preset: {name}": "Predefinição: {name}",
   "Preview only — editing the camera's embedded JPEG ({})": "Somente pré-visualização — editando o JPEG incorporado da câmera ({})",
   "Preview only — {}": "Somente pré-visualização — {}",

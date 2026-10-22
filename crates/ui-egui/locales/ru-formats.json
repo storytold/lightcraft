@@ -96,6 +96,7 @@
   "Named ({named_n})": "Именованные ({named_n})",
   "Painting “{k}”: click photos to add or remove it · Esc stops": "Назначение «{k}»: щёлкайте по фото, чтобы добавить или снять его · Esc — завершить",
   "Paste into {n} photo{} — only settings that were copied are pasted": "Вставка в фото: {n}{:.0} — вставляются только скопированные настройки",
+  "Photos whose capture time can't be read were left as they were: {n}": "Фотографии, время съёмки которых не удалось прочитать, оставлены без изменений: {n}",
   "Preset: {name}": "Пресет: {name}",
   "Preview only — editing the camera's embedded JPEG ({})": "Только просмотр — правка встроенного в камеру JPEG ({})",
   "Preview only — {}": "Только просмотр — {}",

@@ -243,3 +243,28 @@ fn the_base_plane_is_cached_per_process() {
     assert_ne!(local::base_key(&s1, sg, 0), local::base_key(&s2, sg, 0), "the process is part of the key");
     assert_ne!(local::base_key(&s2, sg, 0), local::base_key(&s2, sg, sig.base_detail));
 }
+
+#[test]
+fn base_curve_changes_raw_highlights_and_is_ignored_for_display_sources() {
+    let raw = SourceInfo { raw: true, ..Default::default() };
+    let raw_shot = |s: &DevelopSettings| render(&scene(), &raw, s, &RenderRequest::fit(W, H)).image;
+    let mut linear = on(Process::V2);
+    linear.base_curve = lightcraft_develop::BaseCurve::LinearResponse;
+    let mut plain = on(Process::V2);
+    plain.base_curve = lightcraft_develop::BaseCurve::Linear;
+    let camera = raw_shot(&on(Process::V2));
+    // no contrast curve: the bright half renders brighter than the camera/Reinhard default
+    let mean = |img: &Rgba8| stats(img, 40, 200).0;
+    assert!(mean(&raw_shot(&linear)) > mean(&camera) + 5.0, "linear response sky {} vs camera {}", mean(&raw_shot(&linear)), mean(&camera));
+    assert!(mean(&raw_shot(&plain)) > mean(&camera) + 5.0);
+    // Linear with Whites +20 clips the sky where the default keeps headroom
+    let clipped = |img: &Rgba8| img.data.iter().filter(|p| p[0] == 255 && p[1] == 255 && p[2] == 255).count();
+    let mut push = with("light.whites", 20.0);
+    push.base_curve = lightcraft_develop::BaseCurve::Linear;
+    assert!(clipped(&raw_shot(&push)) > 0, "linear clips");
+    assert_eq!(clipped(&raw_shot(&with("light.whites", 20.0))), 0, "the default keeps headroom");
+    // display-referred sources always render as Camera, whatever the setting says
+    let mut display = on(Process::V2);
+    display.base_curve = lightcraft_develop::BaseCurve::LinearResponse;
+    assert_eq!(shot(&display), shot(&on(Process::V2)));
+}

@@ -825,6 +825,18 @@ mod tests {
         assert_eq!(c.query(&f, &Default::default()).len(), 3);
     }
 
+    /// The filter's empty keyword means "no keyword": only the photos without any (#2461).
+    #[test]
+    fn empty_keyword_filter_finds_photos_without_keywords() {
+        let (c, _) = lib(&[&["travel|Italy|Rome", "beach"], &["Travel|italy"], &[]]);
+        let f = Filter { keyword: Some(String::new()), ..Default::default() };
+        assert_eq!(c.query(&f, &Default::default()).len(), 1, "only the untagged photo");
+        assert!(f.describe().contains("no keyword"), "{}", f.describe());
+        // a named keyword is unchanged, and "no keyword" is not "any"
+        let f = Filter { keyword: Some("travel".into()), ..Default::default() };
+        assert_eq!(c.query(&f, &Default::default()).len(), 2);
+    }
+
     /// A keyword written twice on a photo, or in two spellings, counts the photo once; the next
     /// photo with it counts again.
     #[test]

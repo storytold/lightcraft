@@ -248,6 +248,51 @@ impl Rgb32f {
         self.map(lightcraft_color::luminance_2020)
     }
 
+    /// Mitchell-Netravali (B = C = 1/3) bicubic sample at continuous pixel coordinates — the
+    /// higher-order resample full-quality renders use (the kernel is
+    /// [`crate::resample::Filter::Mitchell`]). Bilinear at a half-pixel offset averages its four
+    /// neighbours into one value, so a rotated or perspective-corrected render softens fine
+    /// detail; the cubic's wider support keeps it, with Mitchell's modest, bounded ringing. It
+    /// reproduces constants and linear ramps exactly. Edges clamp like [`Self::sample_bilinear`].
+    pub fn sample_bicubic(&self, x: f32, y: f32) -> [f32; 3] {
+        // the same coordinate guard as `sample_bilinear`: a coordinate held a pixel outside reads
+        // the edge, and an infinite one (a crop of no size's inverse mapping) must not become a
+        // huge index
+        let fx = x.clamp(-1.0, self.width as f32 + 1.0) - 0.5;
+        let fy = y.clamp(-1.0, self.height as f32 + 1.0) - 0.5;
+        let (x0, y0) = (fx.floor() as isize, fy.floor() as isize);
+        let (tx, ty) = (fx - x0 as f32, fy - y0 as f32);
+        let m = |x: f32| crate::resample::Filter::Mitchell.eval(x);
+        let mut wx = [0.0f32; 4];
+        let mut wy = [0.0f32; 4];
+        for k in 0..4 {
+            let d = k as f32 - 1.0;
+            wx[k] = m((tx - d).abs());
+            wy[k] = m((ty - d).abs());
+        }
+        // the four Mitchell weights of a dimension sum to 1; normalize anyway against f32 drift
+        // (and a degenerate sum, so a weight can never turn into a NaN pixel)
+        for w in [&mut wx, &mut wy] {
+            let s = w.iter().sum::<f32>();
+            if s.abs() > 1e-8 {
+                w.iter_mut().for_each(|v| *v /= s);
+            } else {
+                w.iter_mut().for_each(|v| *v = 0.25);
+            }
+        }
+        let mut acc = [0.0f32; 3];
+        for j in 0..4isize {
+            for i in 0..4isize {
+                let v = self.get_clamped(x0 + i - 1, y0 + j - 1);
+                let w = wx[i as usize] * wy[j as usize];
+                for (a, c) in acc.iter_mut().zip(v) {
+                    *a += c * w;
+                }
+            }
+        }
+        acc
+    }
+
     /// Encode to 8-bit sRGB from linear sRGB values (no gamut conversion).
     pub fn to_srgb8(&self) -> Rgba8 {
         use lightcraft_color::transfer::encode_srgb8;
@@ -346,6 +391,58 @@ mod tests {
         assert_eq!(img.sample_bilinear(1.5, 2.5), [1.0, 2.0, 1.0]);
         let m = img.sample_bilinear(1.0, 1.5);
         assert!((m[0] - 0.5).abs() < 1e-6);
+    }
+
+    /// Mitchell reproduces constants everywhere (clamping included) and linear ramps exactly
+    /// where its whole 4-tap support is inside the image (its weights sum to 1 and its first
+    /// moment vanishes); infinite coordinates read the corner like bilinear's.
+    #[test]
+    fn bicubic_reproduces_constants_ramps_and_clamps_edges() {
+        let img = Rgb32f::from_fn(8, 6, |x, y| [3.0, (x + 2 * y) as f32, 1.0]);
+        for (x, y) in [(0.0f32, 0.0), (4.5, 2.5), (1.25, 3.75), (7.99, 5.99), (0.01, 5.5)] {
+            let s = img.sample_bicubic(x, y);
+            assert!((s[0] - 3.0).abs() < 1e-4, "constant at ({x}, {y}): {}", s[0]);
+            assert!((s[2] - 1.0).abs() < 1e-4, "constant at ({x}, {y}): {}", s[2]);
+        }
+        for (x, y) in [(2.0f32, 2.0), (4.5, 2.5), (3.25, 3.75), (5.5, 2.0)] {
+            let s = img.sample_bicubic(x, y);
+            let want = x - 0.5 + 2.0 * (y - 0.5);
+            assert!((s[1] - want).abs() < 1e-3, "ramp at ({x}, {y}): {} vs {want}", s[1]);
+        }
+        let inf = img.sample_bicubic(f32::INFINITY, f32::NEG_INFINITY);
+        assert!(inf.iter().zip([3.0, 7.0, 1.0]).all(|(a, b)| (a - b).abs() < 1e-4), "{inf:?}");
+        assert!((img.sample_bicubic(f32::MAX, 0.0)[0] - 3.0).abs() < 1e-4);
+    }
+
+    /// The issue's complaint: bilinear at a half-pixel offset averages its neighbours into one
+    /// value, so a rotated render's fine detail fades; the Mitchell cubic keeps more of it (here
+    /// ~21 % more amplitude on a period-3 wave at bilinear's worst shift).
+    #[test]
+    fn bicubic_keeps_fine_detail_where_bilinear_flattens_it() {
+        let img = Rgb32f::from_fn(32, 4, |x, _| [0.5 + 0.5 * (std::f32::consts::TAU * x as f32 / 3.0).sin(), 0.0, 0.0]);
+        let (mut lo_b, mut hi_b, mut lo_c, mut hi_c) = (f32::MAX, f32::MIN, f32::MAX, f32::MIN);
+        for x in 3u32..29 {
+            // x + 1.0 puts the sample half a pixel from a tap centre, bilinear's worst case
+            let b = img.sample_bilinear(x as f32 + 1.0, 1.5)[0];
+            let c = img.sample_bicubic(x as f32 + 1.0, 1.5)[0];
+            lo_b = lo_b.min(b);
+            hi_b = hi_b.max(b);
+            lo_c = lo_c.min(c);
+            hi_c = hi_c.max(c);
+        }
+        assert!(hi_b - lo_b < 0.46, "bilinear kept more than expected: {lo_b}..{hi_b}");
+        assert!(hi_c - lo_c > hi_b - lo_b + 0.05, "bicubic lost the detail too: {lo_c}..{hi_c}");
+    }
+
+    /// Mitchell's step response stays inside the input range — the higher-order kernel buys
+    /// detail without the visible ringing halos of a sharper cubic.
+    #[test]
+    fn bicubic_does_not_overshoot_a_step_edge() {
+        let img = Rgb32f::from_fn(32, 4, |x, _| [if x < 16 { 0.0 } else { 1.0 }, 0.0, 0.0]);
+        for x in 10u32..22 {
+            let c = img.sample_bicubic(x as f32 + 0.5, 1.5)[0];
+            assert!((0.0..=1.0).contains(&c), "overshoot at {x}: {c}");
+        }
     }
 
     #[test]

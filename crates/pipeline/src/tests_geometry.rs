@@ -1,9 +1,11 @@
 //! Geometry / optics tests on synthetic images with known distortions.
 
 use lightcraft_develop::{DevelopSettings, EmbeddedLens, EmbeddedVignette, EmbeddedWarp};
+use lightcraft_geom::Homography;
 use lightcraft_geom::Point;
 use lightcraft_raster::resample::{Filter, resize};
 use lightcraft_raster::{Rgb32f, Rgba8};
+use std::borrow::Cow;
 
 use crate::{RenderRequest, SourceInfo, render};
 
@@ -405,7 +407,7 @@ fn guided_upright_from_two_vertical_guides() {
         assert!(spread(&t) < 1.2, "guided: line near {x0} at {t:?}");
     }
     // a single guide only levels (rotation): it becomes vertical
-    let one = solve_guided(&[Segment { a: Point::new(0.1, -0.5), b: Point::new(0.12, 0.5) }]);
+    let one = solve_guided(&[Segment { a: Point::new(0.1, -0.5), b: Point::new(0.12, 0.5) }], 1.0);
     let p = one.apply(Point::new(0.1, -0.5));
     let q = one.apply(Point::new(0.12, 0.5));
     assert!((p.x - q.x).abs() < 1e-9, "single vertical guide becomes vertical: {p:?} {q:?}");
@@ -432,6 +434,30 @@ fn upright_analysis_is_resolution_independent() {
     assert_eq!(lazy.data, stored.data);
 }
 
+/// The stored transform carries the `amount` it was solved with; a mismatch (a preset pasted onto a photo
+/// with a different amount, or settings from XMP) makes `resolve` re-solve it and restamp.
+#[test]
+fn upright_resolve_resolves_on_amount_mismatch_and_stamps() {
+    let src = Rgb32f::from_fn(64, 64, |_, _| [0.5, 0.5, 0.5]);
+    let info = SourceInfo::default();
+    let mut s = DevelopSettings::default();
+    s.geometry.upright = Upright::Vertical;
+    s.geometry.amount = 50.0;
+    s.geometry.upright_transform = Some(Homography([1.0, 0.0, 0.2, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]));
+    s.geometry.upright_amount = 100.0;
+    let r = crate::upright::resolve(&src, &info, &s);
+    assert!(matches!(r, Cow::Owned(_)), "stale stamp re-solves");
+    assert_eq!(r.geometry.upright_amount, 50.0, "resolved settings carry the new stamp");
+    assert_ne!(r.geometry.upright_transform, s.geometry.upright_transform);
+    let again = crate::upright::resolve(&src, &info, &r);
+    assert!(matches!(again, Cow::Borrowed(_)), "a matching stamp is kept");
+    // amount 100 with no stamp (old sidecars) also matches the default stamp
+    let mut old = DevelopSettings::default();
+    old.geometry.upright = Upright::Vertical;
+    old.geometry.upright_transform = Some(Homography::IDENTITY);
+    assert!(matches!(crate::upright::resolve(&src, &info, &old), Cow::Borrowed(_)));
+}
+
 /// Regression: Upright Auto must not invent perspective in natural scenes (conical trees, ridgelines, a level
 /// water line) — the demo library has no buildings, so Auto should stay close to identity everywhere.
 #[test]
@@ -452,6 +478,81 @@ fn upright_auto_leaves_natural_scenes_nearly_alone() {
     }
 }
 
+/// Full quality resamples geometrically with Mitchell bicubic, drafts with bilinear — and the two
+/// must not share a stage-cache entry (`Plan::geo` carries the flag).
+#[test]
+fn full_quality_plans_bicubic_and_keys_it_into_the_geo_hash() {
+    let src = lightcraft_scenes::demo_library()[0].render_fit(400);
+    let info = SourceInfo::default();
+    let mut s = DevelopSettings::default();
+    s.geometry.rotate = 5.0;
+    let full = crate::plan(&src, &info, &s, &RenderRequest::fit(200, 200));
+    let draft = crate::plan(&src, &info, &s, &RenderRequest { quality: crate::Quality::Draft, ..RenderRequest::fit(200, 200) });
+    assert!(full.bicubic, "full quality plans bicubic");
+    assert!(!draft.bicubic, "a draft plans bilinear");
+    assert_ne!(full.geo, draft.geo, "the kernel is part of the resample's cache key");
+    // with no geometry the sample is a copy, but the plan still records the request's quality
+    let plain_s = DevelopSettings::default();
+    let plain = crate::plan(&src, &info, &plain_s, &RenderRequest::fit(200, 200));
+    assert!(plain.bicubic);
+}
+
+/// A cached draft render must never serve its bilinear sample to a later full render of the same
+/// view (and the reverse): the sampled stage is keyed with the kernel.
+#[test]
+fn stage_cache_keeps_draft_and_full_samples_apart() {
+    use crate::{Quality, StageCache, render_cached};
+    use std::sync::Arc;
+    let src = Arc::new(lightcraft_scenes::demo_library()[0].render_fit(400));
+    let info = SourceInfo::default();
+    let mut s = DevelopSettings::default();
+    s.geometry.rotate = 5.0;
+    let cache = StageCache::default();
+    let req = RenderRequest::fit(200, 200);
+    let draft = RenderRequest { quality: Quality::Draft, ..req };
+    let full_uncached = render(&src, &info, &s, &req).image;
+    let draft_uncached = render(&src, &info, &s, &draft).image;
+    assert_ne!(full_uncached, draft_uncached, "the kernels really differ on a rotated render");
+    // draft first, then full: the full render must resample, not reuse the draft's entry
+    let a = render_cached(&src, &info, &s, &draft, &cache).image;
+    assert_eq!(a, draft_uncached);
+    let b = render_cached(&src, &info, &s, &req, &cache).image;
+    assert_eq!(b, full_uncached, "a cached full render after a draft matches an uncached one");
+    // and back: the draft still gets its own sample
+    let c = render_cached(&src, &info, &s, &draft, &cache).image;
+    assert_eq!(c, draft_uncached);
+}
+
+/// A 1:1 window of a pixel-aligned crop shows the exact source pixels — what a full-size export
+/// writes (LR-VIEW-ZOOM). A kernel at the half-pixel offsets would soften them (regression: the
+/// bicubic sampler blurred zoomed windows by up to 2 levels).
+#[test]
+fn a_one_to_one_window_of_a_pixel_aligned_crop_is_the_exact_pixels() {
+    // Sharp two-level stripes: any kernel average would move them.
+    let (w, h) = (64, 48);
+    let src = Rgb32f::from_fn(w, h, |x, y| {
+        let v = if (x / 3 + y / 2) % 2 == 0 { 0.9 } else { 0.1 };
+        [v, v * 0.5, 1.0 - v]
+    });
+    let win = crate::PixelWindow { x: 8, y: 5, w: 40, h: 24 };
+    let s = DevelopSettings::default();
+    let mut frame = crate::geometry::Frame::new(w, h, &s, false);
+    let out = frame.window(w, h, win).sample_quality(&src, win.w, win.h, true);
+    for y in 0..win.h {
+        for x in 0..win.w {
+            assert_eq!(out.data[y * win.w + x], src.data[(win.y + y) * w + (win.x + x)], "pixel ({x}, {y})");
+        }
+    }
+    // the same through a horizontal flip: the window is the reversed copy
+    frame.flip_h = true;
+    let out = frame.window(w, h, win).sample_quality(&src, win.w, win.h, true);
+    for y in 0..win.h {
+        for x in 0..win.w {
+            assert_eq!(out.data[y * win.w + x], src.data[(win.y + y) * w + (w - 1 - (win.x + x))], "flipped pixel ({x}, {y})");
+        }
+    }
+}
+
 /// Diagnostics: `SCENE="Lake" cargo test -p lightcraft-pipeline debug_upright_scene -- --ignored --nocapture`.
 #[test]
 #[ignore]
@@ -465,7 +566,7 @@ fn debug_upright_scene() {
         eprintln!("  v {:.3},{:.3} -> {:.3},{:.3} len {:.3}", s.a.x, s.a.y, s.b.x, s.b.y, s.len());
     }
     for m in [Upright::Level, Upright::Vertical, Upright::Full, Upright::Auto] {
-        eprintln!("{m:?}: {:?}", crate::upright::solve(m, &a).0);
+        eprintln!("{m:?}: {:?}", crate::upright::solve(m, &a, 1.0).0);
     }
 }
 

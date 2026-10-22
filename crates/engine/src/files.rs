@@ -234,7 +234,7 @@ fn preview_reason(bytes: &[u8], e: lightcraft_raw::RawError) -> Result<String, S
 }
 
 /// Sensor clip level (normalised) for highlight reconstruction.
-const HIGHLIGHT_CLIP: f32 = 0.99;
+const HIGHLIGHT_CLIP: f32 = lightcraft_raw::CLIP_FLAG_LEVEL;
 
 /// How a raw's camera RGB becomes the linear Rec.2020 the pipeline takes.
 pub(crate) struct CameraColourModel<'a> {
@@ -446,11 +446,12 @@ fn load_bytes_now(
             None => None,
         };
         let factor = if binned.is_some() { bin.unwrap_or(1) } else { 1 };
-        let (img, clip_mask) = match binned {
-            Some((img, mask)) => (img, Some(mask)),
+        let (img, clip_mask, sensor_flags) = match binned {
+            Some((img, mask)) => (img, Some(mask.clone()), Some(mask)),
             None => {
                 let method = if max_edge <= 600 { lightcraft_raw::Method::Bilinear } else { lightcraft_raw::Method::Ahd };
-                (raw.develop(method).map_err(|e| e.to_string())?, None)
+                let (img, flags) = raw.develop_with_flags(method).map_err(|e| e.to_string())?;
+                (img, None, Some(flags))
             }
         };
         // the same development from the denoised mosaic, when the photo has been denoised
@@ -486,7 +487,16 @@ fn load_bytes_now(
             stages.push(("orient", t0.elapsed()));
             (img, stages)
         };
+        let (pre_w, pre_h) = (img.width, img.height);
         let (img, stages) = finish(img);
+        // the sensor clip flags follow the picture's fit and orientation, so they align with `src`
+        let sensor_clip = sensor_flags.map(|flags| {
+            let mut clip = lightcraft_pipeline::SensorClip { width: pre_w, height: pre_h, data: flags };
+            if clip.width.max(clip.height) > max_edge {
+                clip = clip.fit_or(max_edge, max_edge);
+            }
+            Arc::new(clip.into_oriented(raw.orientation))
+        });
         if lightcraft_pipeline::profiling() {
             let mut prev = std::time::Duration::ZERO;
             let parts: Vec<String> = stages
@@ -526,6 +536,7 @@ fn load_bytes_now(
                 camera_tone,
                 mattes,
                 local_tone,
+                sensor_clip,
                 // (the catalog knows the original's size: `media::source_info`)
                 native_long: None,
             },

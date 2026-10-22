@@ -82,24 +82,31 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 /// and 10-point padding at both ends.
 const PILL_W: f32 = 208.0;
 
+/// What the five colour-label swatches add to the pill: a 6-point gap, five 22-point swatches,
+/// four 3-point gaps.
+const LABELS_W: f32 = 128.0;
+
 /// The rating/flag pill and copy/paste settings, between `from` and `to` (the side groups): the
-/// copy buttons go first when there is no room (they are in the Edit menu too), then the pill.
+/// copy buttons go first when there is no room (they are in the Edit menu too), then the label
+/// swatches, then the pill alone.
 fn centre(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, from: f32, to: f32) {
     let t = Tokens::get(ui.ctx());
     let has_clip = app.session.clipboard.is_some();
     let label = crate::i18n::tr(if has_clip { "Paste Edit Settings" } else { "Copy Edit Settings" });
     let copy_width = (ui.painter().layout_no_wrap(label.to_string(), t.font(13.0), t.text_label).size().x + 24.0).max(136.0);
-    let centre_width = PILL_W + 10.0 + copy_width + 4.0 + 30.0;
+    let centre_width = PILL_W + LABELS_W + 10.0 + copy_width + 4.0 + 30.0;
     let room = to - from;
     if room < PILL_W {
         return;
     }
+    let with_labels = room >= PILL_W + LABELS_W;
     let with_copy = room >= centre_width;
-    let w = if with_copy { centre_width } else { PILL_W };
+    let pill_w = if with_labels { PILL_W + LABELS_W } else { PILL_W };
+    let w = if with_copy { centre_width } else { pill_w };
     // where it sits with room to spare (slightly left of centre), kept between the side groups
-    let left = (full.center().x - 60.0 - PILL_W / 2.0).clamp(from, to - w);
+    let left = (full.center().x - 60.0 - pill_w / 2.0).clamp(from, to - w);
     let active = app.session.active().and_then(|id| app.session.catalog.photo(id).cloned());
-    let pill = Rect::from_min_size(pos2(left, full.center().y - 15.0), vec2(PILL_W, 30.0));
+    let pill = Rect::from_min_size(pos2(left, full.center().y - 15.0), vec2(pill_w, 30.0));
     ui.painter().rect_filled(pill, 15.0, t.canvas);
     let mut pill_ui =
         ui.new_child(egui::UiBuilder::new().max_rect(pill.shrink2(vec2(10.0, 4.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
@@ -139,6 +146,27 @@ fn centre(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, from: f32, to:
             let mut params = json!({"flag": match f { Flag::Pick => "pick", Flag::Reject => "reject", Flag::None => "none" }});
             crate::panels::compare::target_active(app, &mut params);
             let _ = app.run("photo.flag", params);
+        }
+    }
+    // colour labels: one swatch per label, as in the Info panel; clicking the current one clears it
+    if with_labels {
+        pill_ui.add_space(6.0);
+        let labelled = active.as_ref().and_then(|p| p.label);
+        for l in lightcraft_catalog::ColorLabel::ALL {
+            let key = format!("{l:?}").to_lowercase();
+            let (r, resp) = pill_ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
+            crate::widgets::announce(&resp, crate::i18n::color_label(&app.session.catalog, l));
+            register(pill_ui.ctx(), format!("label:bottom:{key}"), r);
+            let on = labelled == Some(l);
+            pill_ui.painter().circle_filled(r.center(), if on || resp.hovered() { 8.0 } else { 6.5 }, crate::panels::grid::label_color(l));
+            if on {
+                pill_ui.painter().circle_stroke(r.center(), 10.0, egui::Stroke::new(1.5, t.text));
+            }
+            if resp.clicked() {
+                let mut params = json!({"label": if on { "none".to_string() } else { key }});
+                crate::panels::compare::target_active(app, &mut params);
+                let _ = app.run("photo.label", params);
+            }
         }
     }
     // copy / paste settings

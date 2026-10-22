@@ -44,6 +44,8 @@ pub struct Filter {
     /// of it, unlike [`Filter::folder`].
     pub library_folder: Option<String>,
     /// A keyword; hierarchical keywords match their children too (`travel` finds `travel|italy`).
+    /// The empty string is "no keyword": photos without any keyword (#2461) — a stored keyword is
+    /// never empty.
     pub keyword: Option<String>,
     /// A person: photos with a named face region of this name (case-insensitive), as read from XMP.
     pub person: Option<String>,
@@ -246,7 +248,11 @@ impl Filter {
             ("imported", &self.imported),
         ] {
             if let Some(x) = val {
-                v.push(format!("{name} {x}"));
+                if name == "keyword" && x.is_empty() {
+                    v.push("no keyword".into());
+                } else {
+                    v.push(format!("{name} {x}"));
+                }
             }
         }
         match (&self.date_from, &self.date_to) {
@@ -395,7 +401,7 @@ impl Filter {
             return false;
         }
         if let Some(k) = &self.keyword
-            && !p.meta.keywords.iter().any(|x| crate::keywords::is_under(x, k))
+            && !(if k.is_empty() { p.meta.keywords.is_empty() } else { p.meta.keywords.iter().any(|x| crate::keywords::is_under(x, k)) })
         {
             return false;
         }

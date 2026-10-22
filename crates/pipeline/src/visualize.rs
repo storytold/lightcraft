@@ -16,10 +16,12 @@ use lightcraft_color::perceptual::{lab_to_lch, oklab_from_2020};
 use lightcraft_color::transfer::srgb_to_linear;
 use lightcraft_color::{REC2020, SRGB};
 use lightcraft_develop::DevelopSettings;
+use lightcraft_geom::{Orientation, Point};
 use lightcraft_raster::{Plane, Rgba8};
 
 use crate::colorops::PointK;
-use crate::{Plan, for_rows};
+use crate::geometry::{self, SampleMode};
+use crate::{Plan, SensorClip, for_rows};
 
 /// A diagnostic view of a render.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -39,10 +41,25 @@ pub enum Overlay {
     /// Visualize HDR (photos edited in HDR): the SDR image dimmed to grey, with every pixel the HDR
     /// rendition puts above SDR white painted by how far above it is ([`HDR_BANDS`]).
     HdrRange,
+    /// Show Clipping (J): display-clipped pixels painted over the photo — any channel at 255 red,
+    /// any at 0 blue ([`CLIP_COLORS`]; highlights win where a pixel clips both ways).
+    Clipping,
+    /// Show Sensor Clipping (Shift+J, raws only): photosites at the sensor's clip level, per
+    /// colour channel, before any adjustment ([`SENSOR_CLIP_COLORS`]) — what can still be
+    /// recovered and what is gone, however the edits move the display values.
+    SensorClipping,
 }
 
 /// [`Overlay::HdrRange`] colours (sRGB) for 0–1, 1–2, 2–3 and ≥ 3 stops above SDR white.
 pub const HDR_BANDS: [[u8; 3]; 4] = [[255, 214, 92], [255, 150, 40], [235, 64, 52], [214, 60, 210]];
+
+/// [`Overlay::Clipping`] colours (sRGB): highlight clip, shadow clip (the histogram warning's).
+pub const CLIP_COLORS: [[u8; 3]; 2] = [[255, 60, 60], [60, 120, 255]];
+
+/// [`Overlay::SensorClipping`] colours (sRGB), per clipped colour channel (the CFA colours, like
+/// darktable's raw overexposed warning); white when several channels of a pixel clipped (linear-raw
+/// photosites carry all three).
+pub const SENSOR_CLIP_COLORS: [[u8; 3]; 4] = [[255, 60, 60], [60, 220, 60], [60, 120, 255], [255, 255, 255]];
 
 /// How [`Overlay::Mask`] draws the mask.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -125,6 +142,8 @@ impl Overlay {
             Overlay::Mask { id, view, color, opacity } => (3, pack_mask(id, view, color, opacity) as f64),
             Overlay::AllMasks { view, color, opacity } => (5, pack_mask(0, view, color, opacity) as f64),
             Overlay::HdrRange => (4, 0.0),
+            Overlay::Clipping => (6, 0.0),
+            Overlay::SensorClipping => (7, 0.0),
         }
     }
 
@@ -135,6 +154,8 @@ impl Overlay {
             2 => Overlay::Spots(v.clamp(0.0, 100.0) as u8),
             3 if v.is_finite() && v >= 0.0 => unpack_mask(v as u64),
             4 => Overlay::HdrRange,
+            6 => Overlay::Clipping,
+            7 => Overlay::SensorClipping,
             5 if v.is_finite() && v >= 0.0 => {
                 let rgb = (v as u64 >> 20) & 0xff_ffff;
                 Overlay::AllMasks {
@@ -156,6 +177,8 @@ impl Overlay {
             Overlay::Mask { id, view, color, opacity } => 3 << 60 | pack_mask(id, view, color, opacity),
             Overlay::AllMasks { view, color, opacity } => 5 << 60 | pack_mask(0, view, color, opacity),
             Overlay::HdrRange => 0x4000,
+            Overlay::Clipping => 0x5000,
+            Overlay::SensorClipping => 0x6000,
         }
     }
 
@@ -212,7 +235,109 @@ pub fn apply(img: &mut Rgba8, o: Overlay, plan: &Plan<'_>, mask: Option<&Plane>,
                 mask_view(img, u, view, color, opacity);
             }
         }
+        Overlay::Clipping => clipping(img),
+        Overlay::SensorClipping => sensor_clipping(img, plan),
     }
+}
+
+/// Paint display-clipped pixels ([`Overlay::Clipping`]): any channel at 255 red, any at 0 blue
+/// (highlights win where a pixel clips both ways), the rest untouched.
+fn clipping(img: &mut Rgba8) {
+    let [hi, lo] = CLIP_COLORS;
+    for px in &mut img.data {
+        let [r, g, b, _] = *px;
+        if r == 255 || g == 255 || b == 255 {
+            *px = [hi[0], hi[1], hi[2], 255];
+        } else if r == 0 || g == 0 || b == 0 {
+            *px = [lo[0], lo[1], lo[2], 255];
+        }
+    }
+}
+
+/// Paint sensor-clipped photosites ([`Overlay::SensorClipping`]): the raw's photosites at the
+/// clip level, per colour channel, before any adjustment — sampled through the same frame
+/// transform the picture went through, so the marks sit on the pixels that show them.
+fn sensor_clipping(img: &mut Rgba8, plan: &Plan<'_>) {
+    let Some(clip) = plan.sensor_clip.as_deref() else { return };
+    let flags = sample_flags(clip, &plan.frame, img.width, img.height);
+    for (px, f) in img.data.iter_mut().zip(&flags) {
+        if *f != 0 {
+            let c = sensor_clip_color(*f);
+            *px = [c[0], c[1], c[2], 255];
+        }
+    }
+}
+
+/// The colour of a pixel with these clip flags (see [`SENSOR_CLIP_COLORS`]).
+fn sensor_clip_color(f: u8) -> [u8; 3] {
+    match f {
+        0b001 => SENSOR_CLIP_COLORS[0],
+        0b010 => SENSOR_CLIP_COLORS[1],
+        0b100 => SENSOR_CLIP_COLORS[2],
+        _ => SENSOR_CLIP_COLORS[3],
+    }
+}
+
+/// Sample the sensor clip flags through the same transform [`geometry::Frame::sample`] resamples
+/// the picture with — user orientation, Mitchell prefilter (OR instead of average: a flag is a
+/// fact about a photosite, not a value to blend), then affine or warp, nearest.
+fn sample_flags(clip: &SensorClip, frame: &geometry::Frame, w: usize, h: usize) -> Vec<u8> {
+    let owned;
+    let oriented: &SensorClip = if frame.orient == Orientation::Normal {
+        clip
+    } else {
+        owned = clip.clone().into_oriented(frame.orient);
+        &owned
+    };
+    let plan = frame.sample_plan(oriented.width, oriented.height, w, h);
+    let shrunk;
+    let base: &SensorClip = match plan.prefilter {
+        Some((nw, nh)) => {
+            shrunk = oriented.fit_or(nw, nh);
+            &shrunk
+        }
+        None => oriented,
+    };
+    let mut out = vec![0u8; w * h];
+    match &plan.mode {
+        SampleMode::Copy => {
+            if base.width == w && base.height == h {
+                out.copy_from_slice(&base.data);
+            }
+        }
+        SampleMode::Affine(xf) => {
+            for (y, row) in out.chunks_mut(w).enumerate() {
+                for (x, f) in row.iter_mut().enumerate() {
+                    let p = xf.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
+                    *f = nearest_flag(base, p.x, p.y);
+                }
+            }
+        }
+        // `sample_plan` plans a warp only when there is one; without it the same mapping is affine
+        SampleMode::Warp(o2t) => {
+            if let Some(wp) = frame.warp.as_ref() {
+                for (y, row) in out.chunks_mut(w).enumerate() {
+                    for (x, f) in row.iter_mut().enumerate() {
+                        let Some((_, g)) = wp.frame(o2t, x, y) else { continue };
+                        *f = nearest_flag(base, g.x * plan.sx, g.y * plan.sy);
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The flags of the pixel a continuous prefiltered-space coordinate falls in (0 outside).
+fn nearest_flag(base: &SensorClip, x: f64, y: f64) -> u8 {
+    if !x.is_finite() || !y.is_finite() {
+        return 0;
+    }
+    let (bx, by) = (x.floor() as isize, y.floor() as isize);
+    if bx < 0 || by < 0 {
+        return 0;
+    }
+    base.at(bx as usize, by as usize)
 }
 
 /// Draw mask alpha `a` over `img` as `view`.
@@ -314,7 +439,7 @@ pub fn hdr_range(img: &mut Rgba8, hdr: &crate::DeepImage, luma: [f32; 3]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{RenderRequest, SourceInfo, render};
+    use crate::{RenderRequest, SourceInfo, plan, render};
     use lightcraft_develop::PointColor;
     use lightcraft_raster::Rgb32f;
 
@@ -445,5 +570,159 @@ mod tests {
         let (k, v) = o.to_parts();
         assert_eq!(Overlay::from_parts(k, v), o);
         assert_ne!(o.key(), Overlay::Mask { id: 1, view: MaskView::WhiteOnBlack, color: [255, 0, 0], opacity: 100 }.key());
+    }
+
+    #[test]
+    fn clipping_overlay_paints_clipped_pixels() {
+        // left half white, right half black: at +6 EV the white clips high, the black clips low
+        let src = Rgb32f::from_fn(80, 40, |x, _| if x < 40 { [1.0; 3] } else { [0.0; 3] });
+        let info = SourceInfo::default();
+        let mut s = DevelopSettings::default();
+        s.light.exposure = 6.0;
+        let req = RenderRequest { overlay: Overlay::Clipping, ..RenderRequest::fit(80, 40) };
+        let img = render(&src, &info, &s, &req).image;
+        let [hi, lo] = CLIP_COLORS;
+        assert_eq!(img.data[20 * 80 + 10], [hi[0], hi[1], hi[2], 255], "clipped highlight painted red");
+        assert_eq!(img.data[20 * 80 + 70], [lo[0], lo[1], lo[2], 255], "clipped shadow painted blue");
+        let reds = img.data.iter().filter(|p| p[0] == hi[0] && p[1] == hi[1] && p[2] == hi[2]).count();
+        let blues = img.data.iter().filter(|p| p[0] == lo[0] && p[1] == lo[1] && p[2] == lo[2]).count();
+        assert!(reds > 30 * 40, "{reds} red pixels in the white half");
+        assert!(blues > 30 * 40, "{blues} blue pixels in the black half");
+        // without the overlay the same render is untouched
+        let plain = render(&src, &info, &s, &RenderRequest::fit(80, 40)).image;
+        assert_eq!(plain.data[20 * 80 + 10], [255, 255, 255, 255]);
+        assert_eq!(plain.data[20 * 80 + 70], [0, 0, 0, 255]);
+        // the painter alone: any channel at 255 red (highlights win over shadows), any at 0 blue,
+        // everything else untouched
+        let mut img = Rgba8 {
+            width: 4,
+            height: 2,
+            data: vec![
+                [255, 255, 255, 255],
+                [0, 255, 0, 255],
+                [0, 0, 0, 255],
+                [128, 128, 128, 255],
+                [255, 0, 0, 255],
+                [1, 1, 1, 255],
+                [0, 0, 255, 255],
+                [255, 128, 0, 255],
+            ],
+        };
+        let p = plan(&src, &info, &s, &req);
+        apply(&mut img, Overlay::Clipping, &p, None, None);
+        assert_eq!(img.data[0], [hi[0], hi[1], hi[2], 255]);
+        assert_eq!(img.data[1], [hi[0], hi[1], hi[2], 255], "green at 255 is a highlight clip");
+        assert_eq!(img.data[2], [lo[0], lo[1], lo[2], 255]);
+        assert_eq!(img.data[3], [128, 128, 128, 255], "mid grey untouched");
+        assert_eq!(img.data[4], [hi[0], hi[1], hi[2], 255], "red at 255 is a highlight clip");
+        assert_eq!(img.data[5], [1, 1, 1, 255], "near black is not a clip");
+        assert_eq!(img.data[6], [hi[0], hi[1], hi[2], 255], "blue at 255 wins over red at 0");
+        assert_eq!(img.data[7], [hi[0], hi[1], hi[2], 255]);
+        // parts round trip (web worker requests) and a distinct cache key
+        assert_eq!(Overlay::Clipping.to_parts(), (6, 0.0));
+        assert_eq!(Overlay::from_parts(6, 0.0), Overlay::Clipping);
+        assert_eq!(Overlay::from_parts(6, 7.0), Overlay::Clipping);
+        assert_eq!(Overlay::Clipping.key(), 0x5000);
+        assert_ne!(Overlay::Clipping.key(), Overlay::HdrRange.key());
+    }
+
+    #[test]
+    fn sensor_clip_overlay_paints_clipped_photosites_per_colour() {
+        // grey photo; the flags say which photosites sat at the sensor's clip level
+        let src = Rgb32f::from_fn(80, 40, |_, _| [0.1; 3]);
+        let clip = SensorClip {
+            width: 80,
+            height: 40,
+            data: {
+                let mut d = vec![0u8; 80 * 40];
+                d[20 * 80 + 10] = 0b001; // red clipped
+                d[20 * 80 + 70] = 0b010; // green clipped
+                d[10 * 80 + 40] = 0b011; // red and green: white
+                d
+            },
+        };
+        let info = SourceInfo { sensor_clip: Some(std::sync::Arc::new(clip)), ..SourceInfo::default() };
+        let s = DevelopSettings::default();
+        let plain = render(&src, &info, &s, &RenderRequest::fit(80, 40)).image;
+        let req = RenderRequest { overlay: Overlay::SensorClipping, ..RenderRequest::fit(80, 40) };
+        let img = render(&src, &info, &s, &req).image;
+        let [r, g, _, w] = SENSOR_CLIP_COLORS;
+        assert_eq!(img.data[20 * 80 + 10], [r[0], r[1], r[2], 255], "clipped red photosite painted red");
+        assert_eq!(img.data[20 * 80 + 70], [g[0], g[1], g[2], 255], "clipped green photosite painted green");
+        assert_eq!(img.data[10 * 80 + 40], [w[0], w[1], w[2], 255], "several channels clipped: white");
+        assert_eq!(img.data[30 * 80 + 40], plain.data[30 * 80 + 40], "unclipped pixel untouched");
+        // a source without sensor clip data (not a raw) paints nothing
+        let bare = render(&src, &SourceInfo::default(), &s, &req).image;
+        assert_eq!(bare, plain);
+        // parts round trip (web worker requests) and a distinct cache key
+        assert_eq!(Overlay::SensorClipping.to_parts(), (7, 0.0));
+        assert_eq!(Overlay::from_parts(7, 0.0), Overlay::SensorClipping);
+        assert_eq!(Overlay::SensorClipping.key(), 0x6000);
+        assert_ne!(Overlay::SensorClipping.key(), Overlay::Clipping.key());
+    }
+
+    #[test]
+    fn sensor_clip_flags_follow_the_picture_orientation_and_fit() {
+        let src = Rgb32f::from_fn(80, 40, |_, _| [0.1; 3]);
+        let clip = SensorClip {
+            width: 80,
+            height: 40,
+            data: {
+                let mut d = vec![0u8; 80 * 40];
+                d[20 * 80 + 10] = 0b001;
+                d
+            },
+        };
+        let info = SourceInfo { sensor_clip: Some(std::sync::Arc::new(clip)), ..SourceInfo::default() };
+        // Rotate Right: the output is 40×80 and the photosite at source (10, 20) shows at (19, 10)
+        let mut s = DevelopSettings { orientation: lightcraft_geom::Orientation::Rotate90, ..DevelopSettings::default() };
+        let req = RenderRequest { overlay: Overlay::SensorClipping, ..RenderRequest::fit(40, 80) };
+        let img = render(&src, &info, &s, &req).image;
+        let img_plain = render(&src, &info, &s, &RenderRequest::fit(40, 80)).image;
+        assert_eq!((img.width, img.height), (40, 80));
+        let [r, ..] = SENSOR_CLIP_COLORS;
+        assert_eq!(img.data[10 * 40 + 19], [r[0], r[1], r[2], 255], "the mark turned with the photo");
+        assert_eq!(img.data[20 * 40 + 10], img_plain.data[20 * 40 + 10], "the unturned spot is clean");
+        // half size: the OR footprint of the downscaled pixel keeps the mark
+        s.orientation = lightcraft_geom::Orientation::Normal;
+        let small = render(&src, &info, &s, &RenderRequest { overlay: Overlay::SensorClipping, ..RenderRequest::fit(40, 20) }).image;
+        assert_eq!((small.width, small.height), (40, 20));
+        assert_eq!(small.data[10 * 40 + 5], [r[0], r[1], r[2], 255], "a block with a clipped photosite counts as clipped");
+    }
+
+    #[test]
+    fn sensor_clip_orientation_and_fit_helpers_match_the_picture() {
+        use lightcraft_geom::Orientation;
+        // 3×2, one marked photosite per corner colour
+        let clip = SensorClip { width: 3, height: 2, data: vec![0b001, 0b010, 0b000, 0b000, 0b000, 0b100] };
+        // at() is 0 outside
+        assert_eq!(clip.at(3, 0), 0);
+        assert_eq!(clip.at(0, 2), 0);
+        assert_eq!(clip.at(1, 1), 0b000);
+        // Rotate90: dst(x, y) = src(y, h−1−x); the mark at src (0, 0) shows at dst (1, 0)
+        let rot = clip.clone().into_oriented(Orientation::Rotate90);
+        assert_eq!((rot.width, rot.height), (2, 3));
+        assert_eq!(rot.at(1, 0), 0b001);
+        assert_eq!(rot.at(0, 0), 0b000);
+        // Rotate180: dst(x, y) = src(w−1−x, h−1−y); the mark at src (0, 0) shows at dst (2, 1)
+        let rot = clip.clone().into_oriented(Orientation::Rotate180);
+        assert_eq!((rot.width, rot.height), (3, 2));
+        assert_eq!(rot.at(2, 1), 0b001);
+        // Rotate270: dst(x, y) = src(h−1−y, x); the mark at src (0, 0) shows at dst (0, 2)
+        let rot = clip.clone().into_oriented(Orientation::Rotate270);
+        assert_eq!((rot.width, rot.height), (2, 3));
+        assert_eq!(rot.at(0, 2), 0b001);
+        // FlipH: dst(x, y) = src(w−1−x); the mark at src (0, 0) shows at dst (2, 0)
+        let flip = clip.clone().into_oriented(Orientation::FlipH);
+        assert_eq!((flip.width, flip.height), (3, 2));
+        assert_eq!(flip.at(2, 0), 0b001);
+        // fit_or ORs the footprint and picks the same target size as resample::fit
+        let fit = clip.fit_or(2, 2);
+        assert_eq!((fit.width, fit.height), (2, 1));
+        assert_eq!(fit.at(0, 0), 0b001, "left block keeps the red mark");
+        assert_eq!(fit.at(1, 0), 0b110, "right block ORs the green and blue marks");
+        // fitting to its own size is a no-op
+        let same = clip.clone().fit_or(3, 2);
+        assert_eq!(same, clip);
     }
 }

@@ -1,5 +1,14 @@
 # What's new in LightCraft
 
+## 2026-10-21
+
+### Edit Capture Time no longer writes garbage or skips photos silently
+- A capture time that doesn't read as a date (a damaged sidecar, a half-written value) is no longer
+  shifted into nonsense: the photo is left as it was and counted, and the dialog says how many were
+  left. Set mode refuses a partly-readable time when several photos are selected, and offers the
+  typed time as a repair when the unreadable photo is alone. Errors keep the dialog open, from the
+  OK button and the control channel alike (issue #2505).
+
 ## 2026-10-19
 
 ### Hidden Local locations come back one at a time

@@ -111,6 +111,7 @@
   "On {have} of {of} selected photos": "{of} მონიშნული ფოტოდან {have}-ზე",
   "Painting “{k}”: click photos to add or remove it · Esc stops": "„{k}“-ის მინიჭება: დაწკაპეთ ფოტოებზე მის დასამატებლად ან მოსახსნელად · Esc ასრულებს",
   "Paste into {n} photo{} — only settings that were copied are pasted": "ჩასმა ფოტოებში: {n}{:.0} — ჩაისმება მხოლოდ კოპირებული პარამეტრები",
+  "Photos whose capture time can't be read were left as they were: {n}": "ფოტოები, რომელთა გადაღების დროის წაკითხვა ვერ მოხერხდა, უცვლელად დარჩა: {n}",
   "Preset: {name}": "პრესეტი: {name}",
   "Preview only — editing the camera's embedded JPEG ({})": "მხოლოდ წინასწარი ხედი — რედაქტირდება კამერის ჩაშენებული JPEG ({})",
   "Preview only — {}": "მხოლოდ წინასწარი ხედი — {}",

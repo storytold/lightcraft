@@ -4,7 +4,7 @@
 use egui::epaint::{Mesh, Vertex};
 use egui::{Align2, Color32, Pos2, Rect, RichText, Sense, Stroke, pos2, vec2};
 use lightcraft_catalog::PhotoId;
-use lightcraft_develop::{ControlSpec, DevelopSettings, Section, Track, WbMode, controls};
+use lightcraft_develop::{BaseCurve, ControlSpec, DevelopSettings, Section, Track, WbMode, controls};
 use lightcraft_geom::Point;
 use lightcraft_raster::Histogram;
 use serde_json::{Value, json};
@@ -202,6 +202,22 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             if r.on_hover_text(crate::i18n::tr("Apply the local tone mapping stored in the raw (Apple ProRAW), as the camera renders it")).changed() {
                 let _ = app.run("develop.merge", json!({"settings": {"profile": {"camera_local_tone": on}}, "label": "Camera Local Tone Mapping"}));
             }
+        });
+    }
+    // the raw's base curve (issue #2396 §2): display-referred sources have no headroom to keep
+    if app.session.source_info(id).raw {
+        egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 0, bottom: 10 }).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(crate::i18n::tr("Base Curve")).font(t.font(13.0)).color(t.text_dim));
+                let r = crate::widgets::dropdown(ui, "baseCurve", crate::i18n::tr(d.base_curve.label()), t.font(14.0), t.text_label);
+                egui::Popup::menu(&r).show(|ui| {
+                    for c in BaseCurve::ALL {
+                        if ui.selectable_label(d.base_curve == c, c.label()).clicked() {
+                            let _ = app.run("develop.baseCurve", json!({"curve": c.wire()}));
+                        }
+                    }
+                });
+            });
         });
     }
     divider(ui);

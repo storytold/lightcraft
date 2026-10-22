@@ -111,6 +111,7 @@
   "On {have} of {of} selected photos": "Na {have} z {of} vybraných fotografií",
   "Painting “{k}”: click photos to add or remove it · Esc stops": "Nanášení „{k}“: kliknutím na fotografie přidáte nebo odeberete slovo · Esc ukončí režim",
   "Paste into {n} photo{} — only settings that were copied are pasted": "Vložit do fotografií: {n}{:.0} — vloží se pouze zkopírovaná nastavení",
+  "Photos whose capture time can't be read were left as they were: {n}": "Fotografie, jejichž čas pořízení se nepodařilo přečíst, zůstaly beze změny: {n}",
   "Preset: {name}": "Přednastavení: {name}",
   "Preview only — editing the camera's embedded JPEG ({})": "Pouze náhled — úpravy vloženého JPEG z fotoaparátu ({})",
   "Preview only — {}": "Pouze náhled — {}",

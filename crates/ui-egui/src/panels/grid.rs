@@ -641,7 +641,7 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
         let fit = super::detail::fit_texture_rect(img_rect, [tw, th]);
         p.image(tex.tex.id(), fit, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         if active {
-            p.rect_stroke(fit.expand(if square { 2.0 } else { 0.0 }), 0.0, Stroke::new(2.0, Color32::WHITE), StrokeKind::Outside);
+            p.rect_stroke(fit.expand(if square { 2.0 } else { 0.0 }), 0.0, Stroke::new(2.0, t.selection), StrokeKind::Outside);
         } else if selected {
             p.rect_stroke(fit, 0.0, Stroke::new(2.0, Color32::from_gray(170)), StrokeKind::Outside);
         }
@@ -650,7 +650,7 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
         p.rect_filled(ph, 0.0, Color32::from_gray(38));
         // not drawn yet (or unreadable): the selection is still visible
         if active {
-            p.rect_stroke(ph, 0.0, Stroke::new(2.0, Color32::WHITE), StrokeKind::Outside);
+            p.rect_stroke(ph, 0.0, Stroke::new(2.0, t.selection), StrokeKind::Outside);
         } else if selected {
             p.rect_stroke(ph, 0.0, Stroke::new(2.0, Color32::from_gray(170)), StrokeKind::Outside);
         }
@@ -682,10 +682,12 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
         };
         p.text(pos2(r.left() + 8.0, r.top() + 12.0), Align2::LEFT_CENTER, name, t.font(10.5), t.text_dim);
         let fmt = photo.format.clone();
-        let g = p.layout_no_wrap(fmt, t.semibold(9.0), t.text_label);
+        // the chip is dark in every theme, so its text is always white (black in light mode was
+        // unreadable, #2474)
+        let g = p.layout_no_wrap(fmt, t.semibold(9.0), Color32::WHITE);
         let br = Rect::from_min_size(pos2(r.right() - g.size().x - 14.0, r.top() + 5.0), g.size() + vec2(8.0, 3.0));
         p.rect_filled(br, 2.0, Color32::from_gray(26));
-        p.galley(br.min + vec2(4.0, 1.5), g, t.text_label);
+        p.galley(br.min + vec2(4.0, 1.5), g, Color32::WHITE);
     }
     let show_badges = match app.ui.settings.grid_badges {
         crate::state::GridBadges::Auto => resp.hovered() || selected || photo.rating > 0 || photo.flag != Flag::None || photo.label.is_some(),
@@ -719,7 +721,19 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
             right -= 20.0;
         }
         if let Some(l) = photo.label {
-            p.circle(pos2(right - 12.0, bar.center().y), 5.0, label_color(l), Stroke::new(1.0, Color32::from_black_alpha(120)));
+            let c = pos2(right - 12.0, bar.center().y);
+            p.circle(c, 5.0, label_color(l), Stroke::new(1.0, Color32::from_black_alpha(120)));
+            // the circle opens the label menu (#2398): pressing it used to do nothing
+            let hit = Rect::from_center_size(c, vec2(16.0, 16.0));
+            let lresp = ui.interact(hit, egui::Id::new(("badge-label", id.0)), Sense::click());
+            crate::widgets::announce(&lresp, crate::i18n::color_label(&app.session.catalog, l));
+            register(ui.ctx(), format!("badge:label:{}", id.0), hit);
+            egui::Popup::menu(&lresp).show(|ui| {
+                if let Some(choice) = label_items(app, ui, Some(l), "badgeLabel") {
+                    let _ = app.run("photo.label", json!({"ids": [id.0], "label": label_param(choice)}));
+                    ui.close();
+                }
+            });
         }
     }
     if let Some(name) = &photo.copy_name {
@@ -1233,6 +1247,13 @@ pub fn context_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     }
     if ui.add_enabled(crate::menus::ui_enabled(app, "app.showInFinder"), egui::Button::new(crate::i18n::tr(crate::menus::reveal_label()))).clicked() {
         let _ = app.run("app.showInFinder", json!({}));
+    }
+    let show_folders = ui.add_enabled(crate::menus::ui_enabled(app, "library.showInFolders"), egui::Button::new(crate::i18n::tr("Show in Folders")));
+    register(ui.ctx(), "button:contextShowInFolders", show_folders.rect);
+    if show_folders.clicked()
+        && let Err(e) = app.run("library.showInFolders", json!({}))
+    {
+        app.toast(ui.ctx(), e);
     }
     if ui.button(crate::i18n::tr("Export…")).clicked() {
         let _ = app.run("dialog.export", json!({}));

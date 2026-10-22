@@ -265,6 +265,37 @@ fn radial_body_drag_keeps_resize_and_rotation_handles() {
 }
 
 #[test]
+fn radial_feather_slider_updates_the_mask_and_its_falloff() {
+    let mut h = detail("panel.masking");
+    exec(&mut h, "mask.add", json!({"kind": "radial"}));
+    let feather = |h: &Headless| match &develop(h).masks[0].components[0].shape {
+        MaskShape::Radial { feather, .. } => *feather,
+        other => panic!("radial, got {other:?}"),
+    };
+    assert_eq!(feather(&h), 50.0, "the default feather");
+    // just inside the outline (r ≈ 0.91 of the radius): a half feather has mostly faded there
+    let ring = |h: &Headless| mask_coverage(h, 0, 70, 50);
+    let faded = ring(&h);
+    assert!(faded < 0.35, "a 50% feather fades the outer ring, got {faded}");
+
+    // the left end of the Feather slider: a hard edge, the same ring fully selected
+    let r = h.request("ui.clickWidget", json!({"id": "slider:maskFeather", "fx": 0.0}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(feather(&h), 0.0);
+    assert!(ring(&h) > 0.99, "no feather: the ring is fully selected");
+    exec(&mut h, "edit.undo", json!({}));
+    assert_eq!(feather(&h), 50.0, "the slider edit undoes");
+    exec(&mut h, "edit.redo", json!({}));
+
+    // the right end: the widest feather, the ring almost gone
+    let r = h.request("ui.clickWidget", json!({"id": "slider:maskFeather", "fx": 1.0}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(feather(&h), 100.0);
+    assert!(ring(&h) < 0.1, "a full feather fades the ring to nearly nothing");
+    h.settle(SETTLE);
+}
+
+#[test]
 fn mask_overlay_keys_and_pins() {
     use lightcraft_pipeline::{MaskView, Overlay};
     let mut h = detail("panel.masking");
@@ -1746,4 +1777,36 @@ fn effect_dropdown_applies_saves_and_shows_the_matching_effect() {
     let a = develop(&h).masks.last().expect("a mask").adjust;
     assert_eq!((a.exposure, a.shadows, a.clarity, a.amount), (0.7, 25.0, 0.0, 50.0));
     assert_eq!(exec(&mut h, "mask.effects", json!({}))["current"], "Lift");
+}
+
+/// The mask row's right-click menu offers "Delete All Masks" (#2466): the engine command existed
+/// but nothing in the UI called it, so clearing several masks meant deleting each in turn.
+#[test]
+fn the_mask_menu_offers_delete_all_masks() {
+    let mut h = detail("panel.masking");
+    exec(&mut h, "mask.add", json!({"kind": "sky"}));
+    exec(&mut h, "mask.add", json!({"kind": "radial"}));
+    h.step();
+    h.step();
+    // right-click the first mask's row to open its context menu
+    let r = h.request("ui.clickWidget", json!({"id": "maskName:1", "button": "right"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+    assert!(h.painted_text().iter().any(|t| t == "Delete All Masks"), "the menu offers Delete All Masks: {:?}", h.painted_text());
+    // click the menu item, found among the painted shapes
+    let pos = h.view.painted_shapes().iter().find_map(|s| match s {
+        egui::epaint::Shape::Text(t) if t.galley.job.text == "Delete All Masks" => Some(t.pos),
+        _ => None,
+    });
+    let Some(pos) = pos else { panic!("the menu item is not painted") };
+    let r = h.request("ui.click", json!({"x": pos.x + 10.0, "y": pos.y + 8.0}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    assert!(develop(&h).masks.is_empty(), "every mask is gone");
+    assert_eq!(h.app.session.active_mask, None);
+    // one undo step brings both masks back
+    exec(&mut h, "edit.undo", json!({}));
+    assert_eq!(develop(&h).masks.len(), 2);
+    h.settle(SETTLE);
 }

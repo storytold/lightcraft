@@ -275,6 +275,34 @@ fn corpus_nef_12_bit_black_level_matches_14_bit() {
     }
 }
 
+/// Issue #2173: the D850's "uncompressed" 12-bit NEF labels its strips TIFF compression 34713 but stores plain
+/// packed 12-bit data, named by maker note NEFCompression 6. It must decode like the lossless file of the same
+/// scene; the 14-bit uncompressed file (compression 1) decoded before and pins the geometry.
+#[test]
+fn corpus_nef_d850_uncompressed12_decodes() {
+    let dir = corpus_root().join("raw");
+    let Ok(uncomp) = std::fs::read(dir.join("nef-nikon-d850-uncompressed12.nef")) else {
+        lightcraft_testkit::skip!(Corpus, "D850 uncompressed 12-bit NEF absent");
+        return;
+    };
+    let a = decode(&uncomp).unwrap();
+    assert_eq!(a.bits, 12);
+    assert!((a.black.values[0] - 100.0).abs() < 1.0, "{:?}", a.black);
+    if let Ok(b14) = std::fs::read(dir.join("nef-nikon-d850-uncompressed14.nef")) {
+        let b = decode(&b14).unwrap();
+        assert_eq!(b.bits, 14);
+        assert_eq!((a.width, a.height), (b.width, b.height), "12- and 14-bit geometry");
+    }
+    // same scene as the pinned lossless 12-bit file
+    if let Ok(lossless) = std::fs::read(dir.join("nef-nikon-d850.nef")) {
+        let b = decode(&lossless).unwrap();
+        assert_eq!((a.width, a.height, a.bits), (b.width, b.height, b.bits));
+        let r = correlation(&block_means(&a), &block_means(&b));
+        eprintln!("D850 uncompressed 12-bit vs lossless: block correlation {r:.4}");
+        assert!(r > 0.98, "correlation {r}");
+    }
+}
+
 /// Issue #138: DNGs converted by Adobe software carry their camera profile's hue/saturation map and
 /// look table; we read them (and render with them). Apple ProRAW carries a tone curve and a gain
 /// table map (its local tone mapping, read and kept but not rendered, as in Lightroom Classic).
