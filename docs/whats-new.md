@@ -636,7 +636,7 @@
 ### The same marks on every thumbnail
 - The filmstrip's thumbnails now carry what the grid's do: a virtual copy has its "Copy N" tag, so a copy and its
   master tell apart; the stack badge can be clicked to expand or collapse the stack, with the same tooltip (now
-  translated); the colour label is a dot, and a grey placeholder stands in until the picture is drawn.
+  translated); the colour label is a dot, and the grid's photo-shaped placeholder stands in until the picture is drawn.
 - A thumbnail that can't be drawn shows a warning icon instead of a bare "!". Hover it to read why, and where to go:
   right-click ▸ Locate Missing File… when the original is gone, Reload from Disk otherwise.
 - In the Photo Grid a colour label is no longer a tinted band over the bottom of the picture; it is the dot in the

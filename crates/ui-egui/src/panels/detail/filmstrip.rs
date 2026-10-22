@@ -202,26 +202,3 @@ pub(crate) fn film_spoken(file_name: &str, failed: bool) -> String {
         (false, true) => format!("{file_name}, {}", crate::i18n::tr("This photo can't be opened")),
     }
 }
-
-/// Rating, flag and edited badges along a filmstrip thumbnail's bottom edge (Settings → Interface).
-fn film_badges(p: &egui::Painter, t: &Tokens, fr: Rect, ph: &lightcraft_catalog::Photo) {
-    use crate::icons::{Icon, paint};
-    use lightcraft_catalog::Flag;
-    let edited = ph.is_edited();
-    if ph.rating == 0 && ph.flag == Flag::None && !edited {
-        return;
-    }
-    let bar = Rect::from_min_max(pos2(fr.left(), fr.bottom() - 15.0), fr.right_bottom());
-    p.rect_filled(bar, 0.0, Color32::from_black_alpha(130));
-    let y = bar.center().y;
-    let mut x = bar.left() + 3.0;
-    x += crate::rating::paint_rating(p, pos2(x, y), ph.rating, crate::rating::RatingSize::Small, t.star) + 2.0;
-    match ph.flag {
-        Flag::Pick => paint(p, Rect::from_min_size(pos2(x, y - 5.0), vec2(10.0, 10.0)), Icon::FlagPickFilled, t.pick),
-        Flag::Reject => paint(p, Rect::from_min_size(pos2(x, y - 5.0), vec2(10.0, 10.0)), Icon::FlagReject, t.reject),
-        Flag::None => {}
-    }
-    if edited {
-        paint(p, Rect::from_min_size(pos2(bar.right() - 13.0, y - 5.0), vec2(10.0, 10.0)), Icon::Sliders, t.text_label);
-    }
-}

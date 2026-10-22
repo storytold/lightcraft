@@ -99,7 +99,8 @@ fn the_stack_badge_tooltip_is_translated_in_the_grid_and_the_filmstrip() {
 }
 
 fn placeholder_in(h: &Headless, cell: Rect) -> bool {
-    h.view.painted_shapes().iter().any(|s| matches!(s, Shape::Rect(r) if r.fill == Color32::from_gray(38) && cell.expand(1.0).contains_rect(r.rect)))
+    let skeleton = crate::theme::Tokens::get(&h.view.ctx).skeleton;
+    h.view.painted_shapes().iter().any(|s| matches!(s, Shape::Rect(r) if r.fill == skeleton && cell.expand(1.0).contains_rect(r.rect)))
 }
 
 #[test]

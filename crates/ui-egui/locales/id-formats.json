@@ -206,7 +206,6 @@
   "{n} similar photo{} · View ▸ Clear Filters to see all": "{n} foto serupa{:.0} · Tampilan → Hapus filter untuk melihat semua",
   "Moved; {} photo(s) relinked": "Dipindahkan; {} foto ditautkan ulang",
   "{} label (click more labels to show any of them)": "Label {} (klik label lain untuk ikut menampilkan foto berlabel tersebut)",
-  ", {} star{}": ", {} bintang{:.0}",
   ", {} label": ", label {}",
   "Downloads from {host}. Once it has arrived and checked out, LightCraft installs it, {after}.": "Diunduh dari {host}. Setelah selesai diunduh dan lolos pemeriksaan, LightCraft akan menginstalnya, {after}.",
   "{:.1} MB": "{:.1} MB",
@@ -320,5 +319,6 @@
   "{name} is installed and in use: face recognition is on": "{name} sudah terinstal dan digunakan: pengenalan wajah aktif",
   "Creates {stacks} stack{} from {photos} of {scope}": "Membuat {stacks} tumpukan dari {photos} foto ({scope}){:.0}",
   "{n} selected photo{} · {pages} page{}": "{n} foto dipilih · {pages} halaman{:.0}{:.0}",
-  "{n} photo{} in view · {slides} slide{} · {time}": "{n} foto di tampilan · {slides} slide · {time}{:.0}{:.0}"
+  "{n} photo{} in view · {slides} slide{} · {time}": "{n} foto di tampilan · {slides} slide · {time}{:.0}{:.0}",
+  ", rating {} of 5": ", rating: {} dari 5"
 }

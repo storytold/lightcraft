@@ -464,7 +464,8 @@ fn failure_mark(app: &LightcraftApp, ui: &mut egui::Ui, th: &Thumb, t: &Tokens, 
     let id = th.photo.id;
     let side = (th.rect.width().min(th.rect.height()) * 0.4).clamp(12.0, 22.0);
     let icon = Rect::from_center_size(th.rect.center(), vec2(side, side));
-    paint(&clipped(ui, th), icon, Icon::Warning, t.caution);
+    // (the text colour: it stands 3:1 on every theme's placeholder, which the amber does not on the light ones)
+    paint(&clipped(ui, th), icon, Icon::Warning, t.text);
     let target = icon.expand(4.0).intersect(th.rect);
     register(ui, th.surface.widget(Mark::Failed, id), target);
     let offline = matches!(&th.photo.source, lightcraft_catalog::Source::File { path } if app.session.media.availability.is_offline(path));
