@@ -1,6 +1,7 @@
 //! UI state (serde: saved as preferences, readable/settable through the control channel).
 
-use serde::{Deserialize, Serialize};
+use serde::de::IgnoredAny;
+use serde::{Deserialize, Deserializer, Serialize};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -89,6 +90,32 @@ pub enum CropOverlay {
     Triangle,
     Spiral,
     None,
+}
+
+/// Crop-mask dimming strengths offered from the crop photo's context menu, in percent.
+pub(crate) const CROP_MASK_OPACITY_LEVELS: [u8; 6] = [0, 20, 50, 60, 80, 100];
+pub(crate) const DEFAULT_CROP_MASK_OPACITY: u8 = 60;
+
+/// Keep older settings and invalid saved values near the historical crop-mask darkness.
+fn default_crop_mask_opacity() -> u8 {
+    DEFAULT_CROP_MASK_OPACITY
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum CropMaskOpacityValue {
+    Integer(u8),
+    Other(IgnoredAny),
+}
+
+/// Fall back for an unsupported or wrong-type opacity without rejecting otherwise valid UI settings.
+fn deserialize_crop_mask_opacity<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u8, D::Error> {
+    let value = CropMaskOpacityValue::deserialize(deserializer)?;
+    let opacity = match value {
+        CropMaskOpacityValue::Integer(opacity) if CROP_MASK_OPACITY_LEVELS.contains(&opacity) => opacity,
+        CropMaskOpacityValue::Integer(_) | CropMaskOpacityValue::Other(_) => DEFAULT_CROP_MASK_OPACITY,
+    };
+    Ok(opacity)
 }
 
 /// Tool Overlay: when the retouching tools' pins (Remove / Heal / Clone spots, mask pins) show on
@@ -699,6 +726,9 @@ pub struct UiState {
     /// Mirroring of the triangle / spiral crop guides (0..4).
     pub crop_overlay_orient: u8,
     pub crop_overlay: CropOverlay,
+    /// Darkness of the area outside the crop, as a percentage of opaque black (0 = off).
+    #[serde(default = "default_crop_mask_opacity", deserialize_with = "deserialize_crop_mask_opacity")]
+    pub crop_mask_opacity: u8,
     /// Last explicitly chosen aspect, retained across photos and app launches; `None` (nothing
     /// chosen yet) crops locked to the photo's own shape, as Lightroom starts (#991).
     pub crop_default_aspect: Option<serde_json::Value>,
@@ -1262,6 +1292,7 @@ pub struct SyncCounts {
 }
 
 impl Default for UiState {
+    /// Start with usable panel and tool preferences, including the historical crop-mask darkness.
     fn default() -> Self {
         UiState {
             window: None,
@@ -1304,6 +1335,7 @@ impl Default for UiState {
             crop_overlay: CropOverlay::Thirds,
             crop_default_aspect: None,
             crop_overlay_orient: 0,
+            crop_mask_opacity: DEFAULT_CROP_MASK_OPACITY,
             show_filenames: true,
             grid_info: "filename".into(),
             show_counts: true,
@@ -1471,6 +1503,9 @@ impl UiState {
         self.left_width = LEFT_WIDTH.clamp(self.left_width);
         self.right_width = RIGHT_WIDTH.clamp(self.right_width);
         self.brush_size = self.brush_size.clamp(0.002, 0.5);
+        if !CROP_MASK_OPACITY_LEVELS.contains(&self.crop_mask_opacity) {
+            self.crop_mask_opacity = DEFAULT_CROP_MASK_OPACITY;
+        }
         self.sidebar.adopt_collapsed(&std::mem::take(&mut self.collapsed_sidebar));
         self.dialog = None;
         self.fullscreen = false;

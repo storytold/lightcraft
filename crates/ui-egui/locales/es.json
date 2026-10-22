@@ -342,6 +342,8 @@
   "Crisp Landscape": "Paisaje nítido",
   "Crisp Vista": "Vista nítida",
   "Crop": "Recortar",
+  "Crop Mask": "Máscara de recorte",
+  "Crop Mask Opacity": "Opacidad de la máscara de recorte",
   "Crop & Rotate": "Recortar y rotar",
   "Crop & Rotate (C)": "Recortar y rotar (C)",
   "Crop Aspect": "Aspecto del recorte",

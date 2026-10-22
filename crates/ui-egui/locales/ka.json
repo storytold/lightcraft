@@ -498,6 +498,8 @@
   "Crisp Landscape": "მკვეთრი პეიზაჟი",
   "Crisp Vista": "მკვეთრი ხედი",
   "Crop": "ჩამოჭრა",
+  "Crop Mask": "ჩამოჭრის ნიღაბი",
+  "Crop Mask Opacity": "ჩამოჭრის ნიღბის გაუმჭვირვალობა",
   "Crop & Rotate": "ჩამოჭრა და შემობრუნება",
   "Crop & Rotate (C)": "ჩამოჭრა და შემობრუნება (C)",
   "Crop (issue #295): a Lock toggle keeps the aspect ratio on every handle, Custom takes your own ratio (Apply), and": "ჩამოჭრა (ხარვეზი #295): ჩაკეტვის გადამრთველი თანაფარდობას ყველა სახელურზე ინარჩუნებს, მორგებული თქვენს თანაფარდობას იღებს (გამოყენება), და",

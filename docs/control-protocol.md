@@ -118,6 +118,8 @@ The camera's focus point ([focus-points.md](focus-points.md)) is `meta.focus` in
 x1, y1}, mode?, area?, tracking?}`, normalized to the upright photo (absent when the file records none).
 `view.focusPoint {on?}` shows it over the photo (no params toggles; replies `{on}`), and `view.zoomToFocus {on?}`
 (on by default) makes `view.zoomToggle` zoom in centred on it, replying `{focus: [x, y]}` (the `pan` it set).
+While cropping, right-click the photo and use Crop Mask to choose Off, 20%, 50%, 60%, 80% or 100% outside-crop dimming.
+`view.cropMaskOpacity {opacity: 0|20|50|60|80|100}` sets the same app preference; 60% is the default, preserving the existing crop overlay's appearance.
 `photo.readFocusPoints {ids?, wait?}` reads the point for photos imported before it was read, from a few KB of each
 file, on a background job (activity kind `focus`); `wait: true` returns the run's counts when done. The app calls
 `focus.pump {pace}` every frame to drive it.
