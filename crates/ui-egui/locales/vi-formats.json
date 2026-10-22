@@ -322,5 +322,10 @@
   "View › Detail View ({keys}).": "Xem › Chế độ xem chi tiết ({keys}).",
   "File › Export… · File › Print… ({keys}).": "Tệp › Xuất… · Tệp › In… ({keys}).",
   "{n} folder{} could not be read": "Thư mục không đọc được: {n}{:.0}",
-  "{n} file{} skipped (not a supported photo type)": "Đã bỏ qua tệp (không phải loại ảnh được hỗ trợ): {n}{:.0}"
+  "{n} file{} skipped (not a supported photo type)": "Đã bỏ qua tệp (không phải loại ảnh được hỗ trợ): {n}{:.0}",
+  "· {n} copies of library photos": "· {n} bản sao của ảnh trong thư viện",
+  "· {n} repeated in this import": "· {n} lặp lại trong lần nhập này",
+  "Same content as {path} in the library": "Cùng nội dung với {path} trong thư viện",
+  "Same file as {path} earlier in this import": "Cùng tệp với {path} trước đó trong lần nhập này",
+  " · {n} imported although another photo has the same content": " · {n} đã nhập dù ảnh khác có cùng nội dung"
 }
