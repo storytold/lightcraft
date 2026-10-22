@@ -134,6 +134,8 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
     if let Some(task) = app.sync.take() {
         task.guard.finish(if changes.offline {
             Outcome::failed(crate::i18n::tr("This folder isn't there: it was moved or renamed, or its disk isn't connected."))
+        } else if !changes.unreadable.is_empty() {
+            Outcome { ending: Ending::Problems, failed: changes.unreadable.len(), ..Default::default() }
         } else {
             Outcome::default()
         });

@@ -357,6 +357,20 @@ fn a_synchronize_that_ran_to_its_end_leaves_a_row_saying_what_it_did() {
 }
 
 #[test]
+fn a_scan_that_found_unreadable_files_leaves_a_row_that_needs_looking_at() {
+    let dir = Scratch::new("unreadablerow");
+    let mut h = changed_folder(&dir);
+    h.app.session.activity.keep_after(0);
+    // the new file can't be read: the scan still completes, with it listed as unreadable
+    h.app.session.media.file_probe = Some(std::sync::Arc::new(|_: &str| Err("cannot read".to_string())));
+    open_and_scan(&mut h, &dir.path("trip"));
+    assert!(counts(&h).unreadable > 0, "the scan found an unreadable file: {:?}", h.app.ui.dialog);
+    let row = h.app.session.activity.finished().into_iter().next().expect("a row for the scan");
+    assert_eq!((row.label.as_str(), row.ending), ("Looking for changes", lightcraft_engine::activity::Ending::Problems));
+    assert_eq!(row.failed, counts(&h).unreadable, "it counts the files it could not read");
+}
+
+#[test]
 fn the_folders_scan_shows_a_row_and_its_cross_closes_the_dialog() {
     let dir = Scratch::new("scanrow");
     let mut h = changed_folder(&dir);
