@@ -171,8 +171,10 @@ pub fn specs() -> Vec<CommandSpec> {
                         format!("{n} albums, folders, keywords or dates in one filter: at most {MAX_SOURCES} of each"),
                     ));
                 }
-                // (the source's albums are what is shown: albums in the filter would be ignored)
-                let sets_albums = p.get("albums").and_then(Value::as_array).is_some_and(|a| !a.is_empty());
+                // (the source's albums are what is shown: albums in the filter would be ignored,
+                // the single `album` too; null clears it and is fine)
+                let sets_albums =
+                    p.get("albums").and_then(Value::as_array).is_some_and(|a| !a.is_empty()) || p.get("album").is_some_and(|a| !a.is_null());
                 if sets_albums && matches!(s.source, LibrarySource::Album(_)) {
                     return Err(bad("library.filter", "albums are already shown (library.source): show another source first"));
                 }

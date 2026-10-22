@@ -325,6 +325,11 @@ fn albums_in_the_filter_show_as_a_chip_and_are_refused_beside_an_album_source() 
     let e = s.execute("library.filter", &json!({"albums": [b]})).unwrap_err().to_string();
     assert!(e.contains("already shown"), "{e}");
     assert!(s.filter.albums.is_empty());
+    // the single `album` is ignored the same way; null still clears it
+    let e = s.execute("library.filter", &json!({"album": b})).unwrap_err().to_string();
+    assert!(e.contains("already shown"), "{e}");
+    assert_eq!(s.filter.album, None);
+    s.execute("library.filter", &json!({"album": null})).unwrap();
     // albums left in the filter go when an album becomes the source, and other filters still work
     s.execute("library.source", &json!({"kind": "all"})).unwrap();
     s.execute("library.filter", &json!({"albums": [b]})).unwrap();
