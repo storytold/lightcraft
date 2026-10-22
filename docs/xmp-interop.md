@@ -61,11 +61,28 @@ packets between scans are not supported by manual JPEG rereading.
 
 Packet completeness is stricter than the shared best-effort JPEG extractor; it is not strict whole-JPEG
 validation. A complete early XMP packet can be returned without examining the remaining file. Import and
-`photo.allMetadata` retain their existing extraction paths. Command regressions in
+`photo.allMetadata` use the shared extension-aware embedded extractor described below. Command regressions in
 `crates/engine/src/tests/xmp.rs` cover metadata/undo and sidecar precedence, an over-nested XMP packet and a
 truncated APP1 without an XMP signature. Separate reader cases in `sidecar::jpeg_header_tests` use small
 counted readers and injected limits for span/step boundaries, complete versus truncated APP1, early stopping,
 short reads and I/O errors.
+
+## Embedded JPEG Extended XMP (2026-11-04)
+
+Import, `photo.allMetadata`'s embedded fallback and Original export with **Remove location info** use the shared
+embedded-XMP composition path. The standard APP1 packet must contain a namespace-qualified
+`xmpNote:HasExtendedXMP` property with a 32-character hexadecimal GUID. Only APP1 extension chunks with that GUID
+are assembled. Chunks may arrive in any order, but their GUIDs and declared full lengths must agree, offsets must
+cover the packet exactly without gaps or overlap, and every APP1 payload must be complete. Assembly is bounded to
+16 MiB and 4,096 chunks.
+
+The standard and extension RDF properties and structured values are composed before LightCraft projects metadata,
+so fields split between packets (for example, latitude and longitude) remain usable. When assembly or parsing fails,
+ordinary metadata reads keep the parsed standard-packet fields and omit extension data. Original export uses the
+fallible `try_extract` path: with **Remove location info**, it refuses a GPS-bearing file, malformed embedded XMP, or
+a referenced extension it cannot inspect. The ordinary `extract` path remains best-effort. Sidecars still take
+precedence for `photo.allMetadata`.
+
 
 ## Saving into an existing sidecar
 
