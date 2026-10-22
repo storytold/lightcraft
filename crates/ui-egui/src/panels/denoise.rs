@@ -176,7 +176,7 @@ pub fn detail_status(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, am
     let state = app.session.denoise_photo_state(id);
     let pad = egui::Margin { left: 24, right: 22, top: 0, bottom: 6 };
     let note = |ui: &mut egui::Ui, text: &str, color: egui::Color32| {
-        ui.add(egui::Label::new(RichText::new(crate::i18n::tr(text)).size(11.0).color(color)).wrap());
+        ui.add(egui::Label::new(RichText::new(crate::i18n::tr(text)).font(t.caption()).color(color)).wrap());
     };
     match state {
         PhotoState::NotApplicable | PhotoState::Ready => {}
