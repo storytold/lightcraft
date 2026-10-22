@@ -2397,5 +2397,14 @@
   "Top bar": "Bilah atas",
   "Tool strip": "Bilah alat",
   "Bottom bar": "Bilah bawah",
-  "Stopped at the scan limit: there may be more photos": "Berhenti pada batas pemindaian: mungkin masih ada foto"
+  "Stopped at the scan limit: there may be more photos": "Berhenti pada batas pemindaian: mungkin masih ada foto",
+  "A smart album's rules choose its photos: change them with Edit Smart Album…": "Aturan album pintar menentukan fotonya: ubah dengan Edit album pintar…",
+  "Add keywords in the Keyword List": "Tambahkan kata kunci di Daftar kata kunci",
+  "Already on these photos": "Sudah ada pada foto ini",
+  "An album folder holds albums, not photos: drop on an album inside it": "Folder album berisi album, bukan foto: jatuhkan ke album di dalamnya",
+  "Can't add to a smart album": "Tidak dapat menambahkan ke album pintar",
+  "Can't add to an album folder": "Tidak dapat menambahkan ke folder album",
+  "Can't go inside itself": "Tidak dapat dimasukkan ke dalam dirinya sendiri",
+  "Demo photos have no file on disk, so they can't be moved": "Foto demo tidak memiliki file di disk, sehingga tidak dapat dipindahkan",
+  "Give photos a keyword in the Keyword List (Window → Keywords, K): drop them on it there": "Beri foto kata kunci di Daftar kata kunci (Jendela → Kata kunci, K): jatuhkan ke kata kunci di sana"
 }
