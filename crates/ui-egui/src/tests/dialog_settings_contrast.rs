@@ -177,6 +177,28 @@ fn the_lines_that_say_where_a_control_is_stand_out_in_every_theme() {
 }
 
 #[test]
+fn a_text_box_in_use_is_outlined_so_it_stands_out_in_every_theme() {
+    for kind in ThemeKind::ALL {
+        let mut h = demo(kind);
+        let t = Tokens::for_kind(kind);
+        show(&mut h, "general");
+        // Given the text box has the keyboard (a click in it), and the pointer has gone away
+        let r = h.request("ui.clickWidget", json!({"id": "field:externalEditor"}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.request("ui.move", json!({"x": 3.0, "y": 3.0}), T);
+        for _ in 0..4 {
+            h.step();
+        }
+        // Then its top edge stands 3:1 against the window
+        let image = h.paint();
+        let field = rect(&h, "field:externalEditor");
+        let edge =
+            egui::Rect::from_min_max(egui::pos2(field.center().x - 20.0, field.top() - 1.0), egui::pos2(field.center().x + 20.0, field.top() + 2.0));
+        assert!(strongest(&image, edge, t.chrome) >= 3.0, "{kind:?}: a text box in use is outlined {:.2}:1", strongest(&image, edge, t.chrome));
+    }
+}
+
+#[test]
 fn no_text_in_settings_uses_a_character_the_font_lacks() {
     let mut h = demo(ThemeKind::Charcoal);
     for (tab, _) in TABS {
