@@ -154,6 +154,50 @@ what changed, and opening a library reads its segments on several threads.
 - **Stores without segments.** The browser build keeps the photos in `catalog.snap` itself (its storage holds a fixed
   set of files). Either layout is read wherever it is found; a desktop library folder is not a browser library.
 
+## Backups
+
+File ▸ Back Up Library (`library.backup`) makes a folder named after the time (UTC) that holds `catalog.snap`, the
+segments it lists, `catalog.log` and the presets, view and preferences files: the catalog, not the photos or the
+caches (`crates/catalog/src/backup.rs`). It goes to `Backups` in the library folder, to the folder set for the library
+(`library.backupPreferences`), or to the one given with the command. The app makes it in the background and says in a
+toast where it went or why there is none; the command itself returns when the backup is made (`background: true` for
+the other).
+
+- **A backup takes every file the library has.** The library's own files beside the catalog are one list
+  (`SettingsFile` in `crates/engine/src/library.rs`), which is what a backup takes along and what the browser build
+  reads at start-up. The library's file store refuses to write a file that is not on it, so a new one can't be added
+  without being backed up. Not in a backup: the files an upgrade kept (`catalog.snap.v…`), a damaged log set aside,
+  previews and caches.
+- **A backup is a library.** Opening its folder shows the catalog as it was. To go back to it, copy the folder and
+  open the copy, or copy its files over the library's. Opening the backup itself turns it into a library in use: it is
+  changed from then on, no longer passes `library.checkBackup`, and (it holds the library's preferences) sends its own
+  backups to the same folder as the original's.
+- **Each backup shares with the one before it the files that didn't change.** A segment is never changed once
+  written, so one of the same name, size and CRC in the previous backup is the same file, and is hard-linked instead
+  of copied. Every backup still stands on its own: removing an older one, or the library, takes nothing from it.
+  Where hard links aren't possible (another volume than the last backup's), files are copied. A file is shared only
+  once it was read and still has its CRC, so damage in an older backup is not handed on: that file is copied afresh
+  from the library.
+- **Made while the library is in use.** The files are read as they are on disk: `catalog.snap`, the segments it
+  lists, the log, then `catalog.snap` again. If it changed meanwhile (a compaction), the backup starts over, keeping
+  what it has. Every segment is checked against the size and CRC the snapshot states; a library with a damaged or
+  missing segment is not backed up, and the error names the file.
+- **Nothing half-made counts.** A backup is written as `<name>.partial` and renamed when whole; one that fails or is
+  stopped (its row in the activity stack) removes it. One cut short by the program ending stays as `<name>.partial`,
+  is never taken for a backup, and is removed by a later backup to the same folder once it is an hour old.
+- **A backup says what it holds.** Its marker, `backup.json`, lists every file with its size and CRC-32.
+  `library.checkBackup` reads a backup against that list and names the first file that was edited, damaged, removed or
+  added since (not what Finder or Explorer write into a folder somebody looked at: `.DS_Store`, `Thumbs.db`,
+  `desktop.ini`, `._…`).
+
+A backup on the same disk as the library guards against a damaged catalog or a mistake, not against losing the disk:
+set the library's backup folder to another drive for that.
+
+One million photos (414 MB of catalog, 123 segments of up to 8,192 photos, as measured before segments were cut
+to 4,096 photos and about 2 MB, so a backup now copies less after the same edits; Apple M1 Max): the first backup took 1.0 s; one after 1000
+edits in one place copied 3.4 MB and shared 122 files, in about 0.15 s (most of it reading the files it shares);
+checking a backup took 64 ms. Three backups together took 398 MB on disk, where the library takes 395 MB.
+
 ## Measurements: only the changed segments are written (format 11)
 
 `cargo run --release -p lightcraft-catalog --example persist_bench -- <scratch dir> 300000`, one run of each on an

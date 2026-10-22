@@ -22,6 +22,14 @@
 - Segment files that a crash left beside a library are removed the next time it is opened, and a library folder that has
   segment files but no `catalog.snap` (a folder copied in part, or a `catalog.snap` that was removed) is no longer
   opened as a new, empty library: LightCraft says that the snapshot is missing and changes nothing.
+- File ▸ Back Up Library backs up the catalog (not the photos) to a folder named after the time (UTC) in the folder the
+  library's backups go to (Backups in the library folder unless another is set with `library.backupPreferences`), while you go on working, and says where it went when it is done. A backup opens as a library of
+  its own. Each one shares with the one before it the files that didn't change (hard links, where the folder can hold them: on
+  another volume than the last backup's, or a file system without links, they are copied), so a backup of a large
+  library after a day's work copies a few megabytes where it can share, and removing an older backup takes nothing from a newer one. Agents:
+  `library.backup` (`dir`; returns when the backup is made, or at once with `background`), `library.backupStatus`,
+  `library.backupPreferences` (the folder a library's backups go to), `library.checkBackup` (reads a backup against
+  the list of files it was made with, and names one that was edited or damaged since).
 - Libraries are upgraded when first opened (catalog format 11) and can't be opened by earlier versions afterwards.
   The photos of a library in a folder on disk are split into segments only once the segments written read back the
   same. A library from before format 10 whose upgrade can't be written (a full disk, a folder that can't be written
