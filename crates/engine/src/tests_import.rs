@@ -1255,6 +1255,55 @@ fn missing_photos_skip_local_browse_records() {
     assert_eq!(s.visible_cloned().len(), 4, "the view lists what the count counts");
 }
 
+/// `library.missing` asks the session's existence check (the one the availability cache and
+/// the tests replace), and a sweep on another thread answers what the command does: the same
+/// files in the same order, progress on the way, and a stop that leaves the rest unchecked.
+#[test]
+fn missing_sweep_answers_what_the_command_does_and_can_stop() {
+    use lightcraft_catalog::{Op, Photo, PhotoId, Source};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let mut s = Session::new();
+    let mut ops = Vec::new();
+    for i in 0..200u64 {
+        let path = format!("/share/IMG_{i:04}.jpg");
+        let p = Photo::new(PhotoId(i + 1), Source::File { path }, &format!("IMG_{i:04}.jpg"), "JPEG", 60, 40, "2026-01-01T00:00:00");
+        ops.push(Op::AddPhoto { photo: Box::new(p) });
+    }
+    s.commit("Add", Op::Batch { ops }).unwrap();
+    // the first hundred files are gone
+    s.media.availability.set_probe(std::sync::Arc::new(|f| !f.contains("_00")));
+    let asked = s.execute("library.missing", &json!({})).unwrap();
+    assert_eq!(asked.as_array().map(Vec::len), Some(100), "the command used the session's check: {asked}");
+
+    let files = crate::cmd::missing::checked(&s.catalog);
+    assert_eq!(files.len(), 200);
+    let reports = AtomicUsize::new(0);
+    let probe = s.media.availability.probe();
+    let swept = crate::cmd::missing::sweep(
+        files.clone(),
+        |f| probe(f),
+        || false,
+        |_| {
+            reports.fetch_add(1, Ordering::Relaxed);
+        },
+    );
+    assert_eq!(crate::cmd::missing::missing_json(swept.unwrap()), asked);
+    assert!(reports.load(Ordering::Relaxed) >= 2, "progress is reported on the way");
+
+    // stopped after 10 files: nothing is answered, and the rest is not looked at
+    let looked = AtomicUsize::new(0);
+    let stopped = crate::cmd::missing::sweep(
+        files,
+        |_| {
+            looked.fetch_add(1, Ordering::Relaxed);
+            true
+        },
+        || looked.load(Ordering::Relaxed) >= 10,
+        |_| {},
+    );
+    assert_eq!((stopped, looked.load(Ordering::Relaxed)), (None, 10));
+}
+
 /// `library.browse` follows `library.source`'s rule for the active photo (issue #1447): a library
 /// photo the folder doesn't show gives way to the folder's first photo; one it shows stays.
 #[test]

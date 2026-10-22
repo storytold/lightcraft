@@ -41,7 +41,47 @@ pub fn missing(s: &Session) -> Vec<(PhotoId, String)> {
     if cfg!(target_arch = "wasm32") {
         return Vec::new();
     }
-    missing_with(&s.catalog, |f| Path::new(f).exists())
+    let exists = s.media.availability.probe();
+    missing_with(&s.catalog, |f| exists(f))
+}
+
+/// Every in-scope photo with its file ([`checked_path`]), without touching the disk: what a
+/// sweep ([`sweep`]) goes through, so a caller can take the list on its own thread and check
+/// the files on another.
+pub fn checked(cat: &Catalog) -> Vec<(PhotoId, String)> {
+    cat.photos().filter_map(|p| checked_path(p).map(|f| (p.id, f.to_string()))).collect()
+}
+
+/// How many files [`sweep`] checks between two reports of its progress.
+const PROGRESS_EVERY: usize = 64;
+
+/// The files among `files` that `exists` doesn't find, in order: [`missing`] for a caller that
+/// checks on a thread of its own. `stop` is asked before every check (`None`: it said yes, and
+/// the rest was not looked at); `progress` is told how many files are done every few dozen.
+pub fn sweep(
+    files: Vec<(PhotoId, String)>,
+    exists: impl Fn(&str) -> bool,
+    stop: impl Fn() -> bool,
+    progress: impl Fn(usize),
+) -> Option<Vec<(PhotoId, String)>> {
+    let mut gone = Vec::new();
+    for (done, (id, file)) in files.into_iter().enumerate() {
+        if stop() {
+            return None;
+        }
+        if done % PROGRESS_EVERY == 0 {
+            progress(done);
+        }
+        if !exists(&file) {
+            gone.push((id, file));
+        }
+    }
+    Some(gone)
+}
+
+/// `library.missing`'s answer: `[{id, path}]`.
+pub fn missing_json(gone: Vec<(PhotoId, String)>) -> Value {
+    Value::Array(gone.into_iter().map(|(id, path)| json!({"id": id.0, "path": path})).collect())
 }
 
 /// Whether photo `id` is in scope and its file is gone (the Missing Photos view checks only
@@ -418,8 +458,8 @@ fn find_missing(s: &mut Session, p: &Value) -> Result<Value> {
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        cmd!(query "library.missing", "Missing Photos", [], None, "{} → [{id, path}] — photos whose original file isn't where the library expects it", always, |s, _| {
-            Ok(Value::Array(missing(s).into_iter().map(|(id, path)| json!({"id": id.0, "path": path})).collect()))
+        cmd!(query "library.missing", "Missing Photos", [], None, "{} → [{id, path}] — photos whose original file isn't where the library expects it (every file is looked at: on a network share that takes minutes, so the desktop app, asked over its control channel, checks on a worker thread, with a row in the activity stack that can stop it, and answers when it is done)", always, |s, _| {
+            Ok(missing_json(missing(s)))
         }),
         cmd!(
             "photo.relink",

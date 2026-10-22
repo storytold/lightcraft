@@ -1,0 +1,173 @@
+//! `library.missing` from the control channel (an agent, `mcp --connect`) looks at every photo's
+//! file, which on a share with hundreds of thousands of photos took minutes on the UI thread and
+//! froze the window: the files are checked on a worker thread under a row of the activity stack.
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::mpsc::Receiver;
+use std::time::{Duration, Instant};
+
+use lightcraft_catalog::{Op, Photo, PhotoId, Source};
+use serde_json::{Value, json};
+
+use crate::headless::Headless;
+use crate::{LightcraftApp, Services};
+
+const T: Duration = Duration::from_secs(60);
+const PHOTOS: u64 = 40;
+
+/// Photos `IMG_0000` … on a share; the first ten are gone. The existence check waits for `open`
+/// (a share that answers slowly), at most `guard`, and counts its calls, and those made on the UI thread.
+struct Share {
+    open: Arc<AtomicBool>,
+    on_ui: Arc<AtomicUsize>,
+    calls: Arc<AtomicUsize>,
+}
+
+fn app_on_a_slow_share(guard: Duration) -> (Headless, Share) {
+    let mut app = LightcraftApp::new(lightcraft_engine::Session::new(), Services { png: None, ..Default::default() });
+    for i in 0..PHOTOS {
+        let path = format!("/share/IMG_{i:04}.jpg");
+        let p = Photo::new(PhotoId(i + 1), Source::File { path }, &format!("IMG_{i:04}.jpg"), "JPEG", 60, 40, "2026-01-01T00:00:00");
+        app.session.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    }
+    let share = Share { open: Arc::new(AtomicBool::new(false)), on_ui: Arc::new(AtomicUsize::new(0)), calls: Arc::new(AtomicUsize::new(0)) };
+    let (ui, open, on_ui, calls) = (std::thread::current().id(), share.open.clone(), share.on_ui.clone(), share.calls.clone());
+    let deadline = Instant::now() + guard;
+    app.session.media.availability.set_probe(Arc::new(move |f| {
+        calls.fetch_add(1, Ordering::SeqCst);
+        if std::thread::current().id() == ui {
+            on_ui.fetch_add(1, Ordering::SeqCst);
+        }
+        // (a hang guard: the check goes on after it, so a regression fails the test instead of hanging it)
+        while !open.load(Ordering::SeqCst) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        !f.contains("_000")
+    }));
+    (Headless::new(app, [1200.0, 800.0], 1.0), share)
+}
+
+fn ask(h: &mut Headless) -> Receiver<Value> {
+    h.send("engine.execute", json!({"command": "library.missing"})).unwrap()
+}
+
+/// Frames until `rx` has an answer.
+fn answer(h: &mut Headless, rx: &Receiver<Value>) -> Value {
+    let t0 = Instant::now();
+    loop {
+        h.step();
+        if let Ok(v) = rx.try_recv() {
+            return v;
+        }
+        assert!(t0.elapsed() < T, "never answered");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+fn missing_rows(h: &Headless) -> Vec<lightcraft_engine::activity::TaskInfo> {
+    h.app.session.activity.list().into_iter().filter(|r| r.kind == "missing").collect()
+}
+
+#[test]
+fn library_missing_is_checked_off_the_ui_thread_and_answered_when_done() {
+    let (mut h, share) = app_on_a_slow_share(Duration::from_secs(3));
+    let t0 = Instant::now();
+    let rx = ask(&mut h);
+    for _ in 0..3 {
+        h.step();
+    }
+    // the share is still answering nothing: the window took its frames all the same
+    assert!(t0.elapsed() < Duration::from_secs(2), "the frames waited for the files: {:?}", t0.elapsed());
+    assert!(rx.try_recv().is_err(), "no answer before the files are checked");
+    let rows = missing_rows(&h);
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert!(rows[0].cancellable, "the row can stop the check");
+    assert_eq!(rows[0].label, crate::missing_sweep::LABEL);
+
+    share.open.store(true, Ordering::SeqCst);
+    let reply = answer(&mut h, &rx);
+    assert_eq!(share.on_ui.load(Ordering::SeqCst), 0, "a file was looked at on the UI thread");
+    assert_eq!(reply["ok"], true, "{reply}");
+    let ids: Vec<u64> = reply["result"].as_array().unwrap().iter().map(|r| r["id"].as_u64().unwrap()).collect();
+    assert_eq!(ids, (1..=10).collect::<Vec<_>>(), "the same [{{id, path}}] the command gives");
+    assert_eq!(reply["result"][0]["path"], "/share/IMG_0000.jpg");
+    assert!(h.step_until(T, |h| h.app.tasks.is_empty()));
+    assert!(missing_rows(&h).is_empty(), "the row goes with the check");
+}
+
+/// A request that comes while a check runs gets that check's answer: the share isn't walked twice.
+#[test]
+fn a_second_request_joins_the_check_that_is_running() {
+    let (mut h, share) = app_on_a_slow_share(Duration::from_secs(3));
+    let (first, second) = (ask(&mut h), ask(&mut h));
+    for _ in 0..3 {
+        h.step();
+    }
+    assert_eq!(missing_rows(&h).len(), 1, "one check for both");
+    share.open.store(true, Ordering::SeqCst);
+    let (a, b) = (answer(&mut h, &first), answer(&mut h, &second));
+    assert_eq!(a["ok"], true, "{a}");
+    assert_eq!(a, b);
+    assert_eq!(share.on_ui.load(Ordering::SeqCst), 0);
+}
+
+/// ✕ on the row (or `activity.cancel`) stops the check; the request is told so.
+#[test]
+fn stopping_the_check_answers_the_request_with_an_error() {
+    let (mut h, share) = app_on_a_slow_share(Duration::from_secs(3));
+    let rx = ask(&mut h);
+    for _ in 0..3 {
+        h.step();
+    }
+    let id = missing_rows(&h)[0].id;
+    let r = h.request("engine.execute", json!({"command": "activity.cancel", "params": {"id": id}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    share.open.store(true, Ordering::SeqCst);
+    let reply = answer(&mut h, &rx);
+    assert_eq!(reply["ok"], false, "{reply}");
+    assert!(reply["error"].as_str().is_some_and(|e| e.contains("stopped")), "{reply}");
+    assert!(h.step_until(T, |h| h.app.tasks.is_empty()));
+    assert!(missing_rows(&h).is_empty());
+}
+
+/// The control server gives a request 60 s, a check on a big share takes longer: the caller asks
+/// again after its timeout and is given the answer the check ended with, not another walk.
+#[test]
+fn an_answer_nobody_waited_for_is_given_to_the_next_request() {
+    let (mut h, share) = app_on_a_slow_share(Duration::from_secs(3));
+    let gave_up = ask(&mut h);
+    for _ in 0..3 {
+        h.step();
+    }
+    drop(gave_up);
+    share.open.store(true, Ordering::SeqCst);
+    assert!(h.step_until(T, |h| h.app.tasks.is_empty()), "the check ends without a caller");
+    assert_eq!(share.calls.load(Ordering::SeqCst), PHOTOS as usize);
+
+    let again = ask(&mut h);
+    let reply = answer(&mut h, &again);
+    assert_eq!(reply["ok"], true, "{reply}");
+    assert_eq!(reply["result"].as_array().map(Vec::len), Some(10), "{reply}");
+    assert_eq!(share.calls.load(Ordering::SeqCst), PHOTOS as usize, "no second walk of the share");
+    // given once: the next request checks again
+    let third = ask(&mut h);
+    assert_eq!(answer(&mut h, &third)["ok"], true);
+    assert_eq!(share.calls.load(Ordering::SeqCst), 2 * PHOTOS as usize);
+}
+
+/// A check that panics is a failure told to the caller, not a request left waiting for its timeout.
+#[test]
+fn a_check_that_panics_is_answered_with_an_error() {
+    let (mut h, _share) = app_on_a_slow_share(Duration::from_secs(3));
+    h.app.session.media.availability.set_probe(Arc::new(|_| panic!("a file system that panics")));
+    let rx = ask(&mut h);
+    let reply = answer(&mut h, &rx);
+    assert_eq!(reply["ok"], false, "{reply}");
+    assert!(reply["error"].as_str().is_some_and(|e| e.contains("failed unexpectedly")), "{reply}");
+    assert!(h.step_until(T, |h| h.app.tasks.is_empty()));
+    // and the next request is checked afresh
+    h.app.session.media.availability.set_probe(Arc::new(|_| true));
+    let rx = ask(&mut h);
+    assert_eq!(answer(&mut h, &rx)["result"], json!([]));
+}
