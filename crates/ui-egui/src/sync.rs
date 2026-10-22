@@ -135,7 +135,7 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
         task.guard.finish(if changes.offline {
             Outcome::failed(crate::i18n::tr("This folder isn't there: it was moved or renamed, or its disk isn't connected."))
         } else if !changes.unreadable.is_empty() {
-            Outcome { ending: Ending::Problems, failed: changes.unreadable.len(), ..Default::default() }
+            unreadable_outcome(&changes)
         } else {
             Outcome::default()
         });
@@ -154,6 +154,20 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
     if let Some(Dialog::SynchronizeFolder { counts, .. }) = &mut app.ui.dialog {
         *counts = Some(c);
     }
+}
+
+/// The scan's end when files in the folder could not be read: the row names each one by where it is below the
+/// scanned folder, with why.
+fn unreadable_outcome(changes: &FolderChanges) -> Outcome {
+    let roots = [changes.path.clone()];
+    let failures = changes
+        .unreadable
+        .iter()
+        .map(|c| Failure { name: crate::import::failure_name(&c.path, &roots), reason: c.error.clone().unwrap_or_default() })
+        .take(lightcraft_engine::activity::MAX_FAILURES)
+        .collect();
+    let failed = changes.unreadable.len();
+    Outcome { ending: Ending::Problems, detail: crate::import::not_readable_text(failed), failed, failures, ..Default::default() }
 }
 
 /// How far the scan is: the folders and files listed while it lists the folder, else the files

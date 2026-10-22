@@ -1096,7 +1096,7 @@ fn ending_of(task: &ImportTask) -> lightcraft_engine::activity::Ending {
 }
 
 /// The unreadable files, as the second line of an import's row (nothing when all could be read).
-fn not_readable_text(failed: usize) -> String {
+pub(crate) fn not_readable_text(failed: usize) -> String {
     if failed == 0 { String::new() } else { crate::i18n::tr_format!("{} photo{} not readable", failed, if failed == 1 { "" } else { "s" }) }
 }
 
@@ -1114,7 +1114,7 @@ fn with_warnings(mut detail: String, task: &ImportTask) -> String {
 
 /// How a failed file is named in the import's row: by where it is below the folder it was found in (two subfolders
 /// can hold the same name), else by its own name.
-fn failure_name(path: &str, roots: &[String]) -> String {
+pub(crate) fn failure_name(path: &str, roots: &[String]) -> String {
     let p = std::path::Path::new(path);
     roots
         .iter()

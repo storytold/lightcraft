@@ -368,6 +368,10 @@ fn a_scan_that_found_unreadable_files_leaves_a_row_that_needs_looking_at() {
     let row = h.app.session.activity.finished().into_iter().next().expect("a row for the scan");
     assert_eq!((row.label.as_str(), row.ending), ("Looking for changes", lightcraft_engine::activity::Ending::Problems));
     assert_eq!(row.failed, counts(&h).unreadable, "it counts the files it could not read");
+    assert_eq!(row.failures.len(), row.failed, "and names each: {:?}", row.failures);
+    assert_eq!(row.failures[0].name, "c.png", "by where it is below the scanned folder: {:?}", row.failures);
+    assert_eq!(row.failures[0].reason, "cannot read");
+    assert!(row.detail.contains("not readable"), "{:?}", row.detail);
 }
 
 #[test]
