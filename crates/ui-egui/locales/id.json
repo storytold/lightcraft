@@ -2347,5 +2347,7 @@
   "Backup Preferences": "Preferensi pencadangan",
   "Backups": "Cadangan",
   "Restore Library from Backup": "Pulihkan pustaka dari cadangan",
-  "Restoring the library": "Memulihkan pustaka"
+  "Restoring the library": "Memulihkan pustaka",
+  "Restore Status": "Status pemulihan",
+  "Restored the library": "Pustaka dipulihkan"
 }

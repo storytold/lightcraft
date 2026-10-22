@@ -30,13 +30,15 @@
   `library.backup` (`dir`; returns when the backup is made, or at once with `background`), `library.backupStatus`,
   `library.backupPreferences` (the folder a library's backups go to), `library.checkBackup` (reads a backup against
   the list of files it was made with, and names one that was edited or damaged since).
-- A backup can be put back: `library.restore` makes the open library what the backup holds and goes on in it, and
+- A backup can be put back: File ▸ Restore Library from Backup… (`library.restore`) makes the open library what the backup holds and goes on in it, and
   keeps what the library was, with every change up to that moment, in Replaced in the library folder. With `to` it
   restores into another folder instead, to look at a backup without giving up the library. A backup that was edited
   or damaged, or that a newer LightCraft made, is refused with the library untouched; a restore interrupted after
   `restore.json` is written is finished when the library is next opened; an interruption before that leaves the
   library unchanged. A backup folder itself no longer opens as a library, so that it stays what it was.
-  `library.backups` lists a folder's backups. No menu item yet: agents, the command line and the control channel.
+  `library.backups` lists a folder's backups. In the app the backup is copied while you go on working (the
+  activity stack shows it and can stop it) and moved into place when the library is at rest; a toast says where what
+  the library held went. Agents: `background`, `library.restoreStatus`.
 - Libraries are upgraded when first opened (catalog format 11) and can't be opened by earlier versions afterwards.
   The photos of a library in a folder on disk are split into segments only once the segments written read back the
   same. A library from before format 10 whose upgrade can't be written (a full disk, a folder that can't be written

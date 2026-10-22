@@ -307,5 +307,7 @@
   "Where should the Lightroom catalog “{catalog}” go?": "Ke mana katalog Lightroom “{catalog}” diimpor?",
   "Merge into the open library “{library}” ({count} photo{})": "Gabungkan ke pustaka yang terbuka “{library}” ({count} foto{:.0})",
   "Backed up the library to {}": "Pustaka dicadangkan ke {}",
-  "The library was not backed up: {}": "Pustaka tidak dicadangkan: {}"
+  "The library was not backed up: {}": "Pustaka tidak dicadangkan: {}",
+  "Restored the library. What it held before is in {}": "Pustaka dipulihkan. Isinya sebelumnya ada di {}",
+  "The library was not restored: {}": "Pustaka tidak dipulihkan: {}"
 }

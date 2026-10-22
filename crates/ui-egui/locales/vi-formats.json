@@ -307,5 +307,7 @@
   "Where should the Lightroom catalog “{catalog}” go?": "Nhập danh mục Lightroom «{catalog}» vào đâu?",
   "Merge into the open library “{library}” ({count} photo{})": "Gộp vào thư viện đang mở «{library}» ({count} ảnh{:.0})",
   "Backed up the library to {}": "Đã sao lưu thư viện vào {}",
-  "The library was not backed up: {}": "Thư viện chưa được sao lưu: {}"
+  "The library was not backed up: {}": "Thư viện chưa được sao lưu: {}",
+  "Restored the library. What it held before is in {}": "Đã khôi phục thư viện. Nội dung trước đó nằm trong {}",
+  "The library was not restored: {}": "Thư viện chưa được khôi phục: {}"
 }

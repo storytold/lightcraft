@@ -307,5 +307,7 @@
   "Where should the Lightroom catalog “{catalog}” go?": "Vart ska Lightroom-katalogen ”{catalog}” importeras?",
   "Merge into the open library “{library}” ({count} photo{})": "Slå samman med det öppna biblioteket ”{library}” ({count} foto{:.0})",
   "Backed up the library to {}": "Biblioteket säkerhetskopierades till {}",
-  "The library was not backed up: {}": "Biblioteket säkerhetskopierades inte: {}"
+  "The library was not backed up: {}": "Biblioteket säkerhetskopierades inte: {}",
+  "Restored the library. What it held before is in {}": "Biblioteket återställdes. Det som fanns i det tidigare finns i {}",
+  "The library was not restored: {}": "Biblioteket återställdes inte: {}"
 }

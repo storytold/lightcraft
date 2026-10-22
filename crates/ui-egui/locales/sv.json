@@ -2437,5 +2437,7 @@
   "Backup Preferences": "Inställningar för säkerhetskopiering",
   "Backups": "Säkerhetskopior",
   "Restore Library from Backup": "Återställ bibliotek från säkerhetskopia",
-  "Restoring the library": "Återställer biblioteket"
+  "Restoring the library": "Återställer biblioteket",
+  "Restore Status": "Återställningsstatus",
+  "Restored the library": "Biblioteket återställdes"
 }

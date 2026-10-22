@@ -2335,5 +2335,7 @@
   "Backup Preferences": "Varmuuskopioinnin asetukset",
   "Backups": "Varmuuskopiot",
   "Restore Library from Backup": "Palauta kirjasto varmuuskopiosta",
-  "Restoring the library": "Kirjastoa palautetaan"
+  "Restoring the library": "Kirjastoa palautetaan",
+  "Restore Status": "Palautuksen tila",
+  "Restored the library": "Kirjasto palautettu"
 }
