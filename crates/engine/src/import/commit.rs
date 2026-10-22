@@ -1,8 +1,12 @@
 use super::defaults::apply_import_defaults;
 use super::files::copy_into;
+#[cfg(not(target_arch = "wasm32"))]
+use super::files::shown;
 use super::job::{Prepared, PreparedItem, ReadyFile};
+#[cfg(not(target_arch = "wasm32"))]
+use super::reads;
 use super::types::{Duplicate, ImportOptions, ImportReport, Kept, Moved, OnDeleted};
-use super::{HashMap, Op, Path, PathBuf, Photo, PhotoId, ProbeInfo, Session, Source};
+use super::{HashMap, Op, Path, PathBuf, Photo, PhotoId, ProbeInfo, ReadWatch, Session, Source, progressed};
 
 /// A batch's items in file order while its transfers are pending ([`ImportJob::run_plan`]).
 #[derive(Default)]
@@ -77,63 +81,75 @@ pub fn batch_size() -> usize {
 }
 
 /// Run `transfers` (several at once where threads exist); their outcomes in order, `None` for one
-/// not started because `cancel` was set. `done` counts each one finished.
+/// not started because `cancel` was set, or cut off by it. `done` counts each one finished. A transfer that stops
+/// answering is reported by `watch` and given up when it is asked to, like a read ([`ReadWatch`]): its item is
+/// `Failed` then, and whatever it writes later is taken back.
 pub(super) fn run_transfers(
     transfers: Vec<Transfer>,
-    file_bytes: Option<&crate::merge::ByteReader>,
+    file_bytes: Option<crate::merge::ByteReader>,
     cancel: &std::sync::atomic::AtomicBool,
     done: &std::sync::atomic::AtomicUsize,
+    watch: &ReadWatch,
 ) -> Vec<Option<PreparedItem>> {
     use std::sync::atomic::Ordering::Relaxed;
-    let one = |t: Transfer| {
-        if cancel.load(Relaxed) {
-            return None;
-        }
-        let path = t.path.clone();
-        // last-resort guard: a panic is this file's failure, not the import's
-        let item = crate::guard::catch("import", || run_transfer(t, file_bytes)).unwrap_or_else(|e| PreparedItem::Failed(path, e));
-        done.fetch_add(1, Relaxed);
-        Some(item)
-    };
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let n = workers(transfers.len());
-        if n > 1 {
-            let mut results: Vec<Option<PreparedItem>> = std::iter::repeat_with(|| None).take(transfers.len()).collect();
-            let queue = std::sync::Mutex::new(transfers.into_iter().enumerate());
-            let out = std::sync::Mutex::new(&mut results);
-            // (the tests' injected faults hold for the workers too)
-            #[cfg(test)]
+        use std::sync::Arc;
+        let paths: Vec<String> = transfers.iter().map(|t| t.path.clone()).collect();
+        let pool = reads::Pool { watch, cancel, name: "lc-import-copy", threads: workers(transfers.len()) };
+        let work: Arc<dyn Fn(Transfer) -> PreparedItem + Send + Sync> = Arc::new(move |t| run_transfer(t, file_bytes.as_ref()));
+        // (the tests' injected faults hold for the workers too)
+        #[cfg(test)]
+        let init: Arc<dyn Fn() + Send + Sync> = {
             let fault = crate::import_move::injected_fault();
-            let work = &|| {
-                #[cfg(test)]
-                crate::import_move::inject(fault);
-                loop {
-                    let next = queue.lock().unwrap_or_else(std::sync::PoisonError::into_inner).next();
-                    let Some((i, t)) = next else { break };
-                    let r = one(t);
-                    if let Some(slot) = out.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get_mut(i) {
-                        *slot = r;
-                    }
-                }
-            };
-            std::thread::scope(|sc| {
-                let handles: Vec<_> =
-                    (0..n).filter_map(|i| std::thread::Builder::new().name(format!("lc-import-copy-{i}")).spawn_scoped(sc, work).ok()).collect();
-                if handles.is_empty() {
-                    // no thread to be had: copy here, one after another
-                    work();
-                }
-                for h in handles {
-                    if h.join().is_err() {
-                        log::error!("import: a copy worker stopped unexpectedly");
-                    }
-                }
-            });
-            return results;
-        }
+            Arc::new(move || crate::import_move::inject(fault))
+        };
+        #[cfg(not(test))]
+        let init: Arc<dyn Fn() + Send + Sync> = Arc::new(|| {});
+        let outcomes = pool.run(transfers, &|i| paths.get(i).map(|p| shown(p)).unwrap_or_default(), work, Arc::new(discard), init, &|_| {
+            done.fetch_add(1, Relaxed);
+        });
+        outcomes
+            .into_iter()
+            .zip(paths)
+            .map(|(o, path)| match o {
+                reads::Outcome::Done(item) => Some(item),
+                reads::Outcome::Failed(why) => Some(PreparedItem::Failed(path, why)),
+                reads::Outcome::Unreached => None,
+            })
+            .collect()
     }
-    transfers.into_iter().map(one).collect()
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = watch;
+        transfers
+            .into_iter()
+            .map(|t| {
+                if cancel.load(Relaxed) {
+                    return None;
+                }
+                let path = t.path.clone();
+                // last-resort guard: a panic is this file's failure, not the import's
+                let item = crate::guard::catch("import", || run_transfer(t, file_bytes.as_ref())).unwrap_or_else(|e| PreparedItem::Failed(path, e));
+                done.fetch_add(1, Relaxed);
+                Some(item)
+            })
+            .collect()
+    }
+}
+
+/// What a transfer made after it was given up is not wanted: a placed file is taken back (its source was never
+/// touched), a copy removed.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn discard(item: PreparedItem) {
+    let PreparedItem::Ready(ready) = item else { return };
+    match &ready.placed {
+        Some(placed) => crate::import_move::rollback(placed),
+        None if ready.stored != ready.path => {
+            let _ = std::fs::remove_file(&ready.stored);
+        }
+        None => {}
+    }
 }
 
 /// Copy or move one planned file (and Copy as DNG); its item.
@@ -158,7 +174,10 @@ fn run_transfer(t: Transfer, file_bytes: Option<&crate::merge::ByteReader>) -> P
         // decoding the raw twice and encoding it takes several times the file's size in memory
         let weight = usize::try_from(info.file_size).unwrap_or(usize::MAX).saturating_mul(6);
         let _permit = crate::memory::work_gate().acquire(weight);
-        match crate::cmd::convert::write_dng_with(file_bytes, &stored, String::new()) {
+        progressed();
+        let made = crate::cmd::convert::write_dng_with(file_bytes, &stored, String::new());
+        progressed();
+        match made {
             Ok(dng) => {
                 let _ = std::fs::remove_file(&stored);
                 stored = dng;

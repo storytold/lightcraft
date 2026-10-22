@@ -50,6 +50,7 @@ pub(crate) use files::{expand_noting, probe_all, probe_paths, probe_with};
 use job::PreparedItem;
 pub use job::{ImportJob, Prepared, import, import_with};
 pub use reads::{MAX_SKIPPED, MAX_STUCK_READERS, ReadWatch, STALL_AFTER, StalledRead, StuckReaders};
+pub(crate) use reads::{abandon_flag, progressed};
 pub(crate) use scan::scan_files;
 pub use scan::{ScanInput, ScanOutput, ScanProgress, scan, scan_with};
 #[cfg(test)]

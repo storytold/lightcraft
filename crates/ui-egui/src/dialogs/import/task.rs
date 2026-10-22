@@ -36,6 +36,8 @@ pub struct ImportTask {
     pub(super) browse: bool,
     /// Cancel was pressed: no further files are started; batches already readied are added.
     pub cancelled: bool,
+    /// The import ended early with an error of its own (the drive stopped answering), not because of ✕.
+    stopped: Option<String>,
     /// Auto Import (the watched folder): the selection stays as it is, a short toast when done.
     auto: bool,
     /// Auto Import: the selection to keep.
@@ -82,6 +84,8 @@ struct ImportRun {
     cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
     total: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     done: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    /// Which file the reads wait for, and Skip for it (shown on the import's row in the activity stack).
+    reads: std::sync::Arc<lightcraft_engine::import::ReadWatch>,
     opts: lightcraft_engine::import::ImportOptions,
     now: String,
     album: Option<u64>,
@@ -110,10 +114,10 @@ impl ImportRun {
         ctx: &egui::Context,
     ) -> Result<Self, String> {
         let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let (total, done) = (job.total.clone(), job.done.clone());
+        let (total, done, reads) = (job.total.clone(), job.done.clone(), job.reads.clone());
         let (opts, now) = (job.opts.clone(), job.now().to_string());
         let runner = Self::spawn(job, queue, cancel.clone(), ctx)?;
-        Ok(ImportRun { runner, cancel, total, done, opts, now, album, album_name })
+        Ok(ImportRun { runner, cancel, total, done, reads, opts, now, album, album_name })
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -135,12 +139,16 @@ impl ImportRun {
                     Ok(p) => p,
                     Err(_) => break, // logged; the files readied so far are added
                 };
+                let stopped = prepared.stopped().is_some();
                 if let Err(unsent) = tx.send(prepared) {
                     // the import was dropped: nothing will add these, so take back what a Move placed
                     unsent.0.rollback();
                     break;
                 }
                 ctx.request_repaint();
+                if stopped {
+                    break;
+                }
             }
             ctx.request_repaint();
         };
@@ -321,6 +329,10 @@ pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
         if guard.is_cancelled() {
             task.cancelled = true;
         }
+        // a file that has stopped answering is named on the row, which then offers Skip (`activity.skip`)
+        if let Some(run) = &task.run {
+            crate::panels::activity::follow_reads(guard, &run.reads);
+        }
     }
     if !finished {
         app.import = Some(task);
@@ -331,6 +343,9 @@ pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
 
 /// Add one readied batch to the catalog (an undo step merged into the import's at the end).
 fn commit_batch(app: &mut LightcraftApp, task: &mut ImportTask, prepared: lightcraft_engine::import::Prepared) {
+    if let Some(why) = prepared.stopped() {
+        task.stopped = Some(why.to_string());
+    }
     let Some(run) = task.run.as_ref() else { return };
     let n = prepared.len();
     let (opts, now, album, album_name) = (&run.opts, run.now.as_str(), run.album, run.album_name.clone());
@@ -457,23 +472,53 @@ fn finish(app: &mut LightcraftApp, ctx: &egui::Context, task: ImportTask) {
         && task.failed == 0
         && task.warnings.is_empty()
         && !task.cancelled
+        && task.stopped.is_none()
         && show_existing(app, ctx, &task.existing)
     {
         return;
     }
-    let mut msg = import_summary(app, &task);
-    if task.warnings.is_empty() {
-        app.toast(ctx, msg);
-    } else {
+    let msg = import_summary(app, &task);
+    summary_toast(app, ctx, &task, msg);
+}
+
+/// The import's summary as a toast: an import that stopped on an error says so (and is an error toast), the XMP
+/// warnings follow and keep the toast longer.
+fn summary_toast(app: &mut LightcraftApp, ctx: &egui::Context, task: &ImportTask, mut msg: String) {
+    if let Some(why) = &task.stopped {
+        msg.push_str("\n\n");
+        msg.push_str(&crate::i18n::tr_format!("Import failed: {e}", e = why));
+    }
+    if !task.warnings.is_empty() {
         msg.push_str("\n\n");
         msg.push_str(&xmp_warnings_text(&task.warnings));
+    }
+    if task.stopped.is_some() {
+        app.toast_error(ctx, msg);
+    } else if task.warnings.is_empty() {
+        app.toast(ctx, msg);
+    } else {
         app.toast_for(ctx, msg, 8.0);
     }
 }
 
+/// What the toast of an import that stopped on an error says: the error, then the XMP warnings its photos gave before
+/// it stopped. `None` for an import that did not stop.
+fn stopped_text(task: &ImportTask) -> Option<String> {
+    let why = task.stopped.as_ref()?;
+    let mut msg = crate::i18n::tr_format!("Import failed: {e}", e = why);
+    if !task.warnings.is_empty() {
+        msg.push_str("\n\n");
+        msg.push_str(&xmp_warnings_text(&task.warnings));
+    }
+    Some(msg)
+}
+
 /// The end of an automatic import or of one that only browses: a toast only when there is something to warn about.
 fn quiet_finish(app: &mut LightcraftApp, ctx: &egui::Context, task: &ImportTask) {
-    if !task.warnings.is_empty() {
+    if let Some(msg) = stopped_text(task) {
+        // the drive stopped answering (the other kinds of import have a summary to add it to)
+        app.toast_error(ctx, msg);
+    } else if !task.warnings.is_empty() {
         app.toast_for(ctx, xmp_warnings_text(&task.warnings), 8.0);
     } else if task.auto && task.imported > 0 {
         app.toast(ctx, crate::i18n::tr_format!("Auto Import: added {} photo{}", task.imported, crate::i18n::plural_s(task.imported)));
@@ -548,4 +593,28 @@ fn show_existing(app: &mut LightcraftApp, ctx: &egui::Context, existing: &[u64])
     };
     app.toast_for(ctx, msg, 6.0);
     true
+}
+
+/// Given an auto import that stopped because the drive stopped answering, after photos with XMP warnings,
+/// When the toast of its end is made,
+/// Then it names the error and the warnings, and an import that did not stop has no such toast.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn warning() -> ImportWarning {
+        ImportWarning { path: "a.jpg".into(), code: ImportWarningCode::UnmappedXmp, profile: None, mode: None, fields: vec!["crs:Foo".into()] }
+    }
+
+    #[test]
+    fn a_stopped_quiet_import_keeps_its_xmp_warnings_in_the_toast() {
+        let mut task = ImportTask::new(vec!["/share".into()], json!({}), 0, false);
+        assert_eq!(stopped_text(&task), None, "an import that did not stop");
+        task.stopped = Some("the drive is not answering".into());
+        assert_eq!(stopped_text(&task).as_deref(), Some("Import failed: the drive is not answering"));
+        task.warnings.push(warning());
+        let text = stopped_text(&task).unwrap();
+        assert!(text.starts_with("Import failed: the drive is not answering\n\n"), "{text}");
+        assert!(text.ends_with(&xmp_warnings_text(&task.warnings)), "{text}");
+    }
 }

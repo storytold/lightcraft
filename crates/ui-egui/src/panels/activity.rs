@@ -115,6 +115,18 @@ pub(crate) fn cancel(app: &mut LightcraftApp, id: u64) {
     let _ = app.session.execute("activity.cancel", &json!({"id": id}));
 }
 
+/// Carry what a job's reads are doing onto its task each frame: the file that has stopped answering is published
+/// (`TaskInfo::stalled`, in `activity.list`), and a Skip asked for (`activity.skip`) reaches the reads.
+pub(crate) fn follow_reads(guard: &lightcraft_engine::activity::TaskGuard, reads: &lightcraft_engine::import::ReadWatch) {
+    if guard.take_skip() {
+        reads.skip();
+    }
+    match reads.stalled() {
+        Some(stalled) => guard.waiting_on(&stalled.what, stalled.waited),
+        None => guard.clear_waiting(),
+    }
+}
+
 /// One task: name and ✕, the bar, the detail line. True when ✕ was clicked.
 fn row(ui: &mut egui::Ui, t: &Tokens, task: &TaskInfo, width: f32) -> bool {
     let mut clicked = false;

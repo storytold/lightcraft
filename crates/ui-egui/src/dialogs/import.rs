@@ -84,6 +84,10 @@ pub struct ImportDialog {
     /// decisions and album ids belong to that catalog, so the review is not shown or confirmed in another.
     #[serde(skip)]
     pub library: Option<u64>,
+    /// Why the scan ended early (the drive stopped answering): told to the person when the review opens, which can
+    /// be after the scan's end if another dialog is open then.
+    #[serde(skip)]
+    pub stopped: Option<String>,
 }
 
 /// A candidate's file type, as the review groups them: its format, or its extension when the

@@ -85,6 +85,7 @@
   "After 7 days": "7 päivän kuluttua",
   "After 90 days": "90 päivän kuluttua",
   "After a year": "Vuoden kuluttua",
+  "After four skipped files the import or scan stops with an error that the drive is not answering. Agents use `activity.skip {id}`; `activity.list` shows `stalled` for the task.": "Neljän ohitetun tiedoston jälkeen tuonti tai skannaus päättyy virheeseen, jonka mukaan asema ei vastaa. Agentit käyttävät komentoa `activity.skip {id}`; `activity.list` näyttää tehtävälle tilan `stalled`.",
   "After installation, AI Denoise will turn on for the requesting photo.": "Asennuksen jälkeen tekoälykohinanpoisto otetaan käyttöön sitä pyytävälle kuvalle.",
   "Album": "Albumi",
   "Albums": "Albumit",
@@ -1871,6 +1872,7 @@
   "Size (% of short edge)": "Koko (% lyhyestä sivusta)",
   "Size limit": "Kokorajoitus",
   "Skip": "Ohita",
+  "Skip Stalled File": "Ohita jumittanut tiedosto",
   "Skipped: files already in the library elsewhere": "Ohitettu: tiedostot, jotka ovat jo kirjastossa muualla",
   "Skipped: files that can't be read": "Ohitettu: tiedostot, joita ei voi lukea",
   "Sky": "Taivas",
@@ -2160,6 +2162,7 @@
   "What's New": "Mitä uutta",
   "When pins show on the photo (Shift+H cycles)": "Milloin nastat näkyvät kuvassa (Shift+H vaihtaa)",
   "When rated or hovered": "Luokiteltaessa tai osoitettaessa",
+  "While 32 or more given-up reads are still blocked on a drive that stopped answering, a new import or scan ends at once with an error saying so, even from another drive: try again later, or restart LightCraft.": "Niin kauan kuin 32 tai useampi hylätty luku odottaa yhä asemaa, joka lakkasi vastaamasta, uusi tuonti tai skannaus päättyy heti siitä kertovaan virheeseen, myös toiselta asemalta: yritä myöhemmin uudelleen tai käynnistä LightCraft uudelleen.",
   "White Balance": "Valkotasapaino",
   "White Balance Selector": "Valkotasapainon valitsin",
   "White Balance Selector (W)": "Valkotasapainon valitsin (W)",
@@ -2327,5 +2330,7 @@
   "Drop to open the face model": "Pudota avataksesi kasvomallin",
   "Dropped Files": "Pudotetut tiedostot",
   "Finish Lightroom catalog import before adding photos": "Viimeistele Lightroom-luettelon tuonti ennen kuvien lisäämistä",
-  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta"
+  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta",
+  "✕ ends an import or scan at once when a file stops answering": "× päättää tuonnin tai skannauksen heti, vaikka tiedosto lakkaisi vastaamasta",
+  "✕ now ends an import within about a second while files are being read or copied, however long a read has been waiting; a copy that was under way is taken back. While folders are being listed, ✕ still waits for the listing.": "× päättää nyt tuonnin noin sekunnissa, kun tiedostoja luetaan tai kopioidaan, riippumatta siitä, kuinka kauan lukeminen on odottanut; käynnissä ollut kopio perutaan. Kun kansioita luetteloidaan, × odottaa edelleen luettelointia."
 }

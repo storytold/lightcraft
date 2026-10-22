@@ -1,9 +1,5 @@
 //! The file reads of an import (or a scan) that can stop answering (LR-BEHAV-BG-TASKS).
 //!
-//! **Not used yet:** this is the tested core. The import, the scans and Synchronize Folder move onto it in the
-//! changes that follow (✕ ending them at once, then the activity row naming the stalled file and offering Skip), so
-//! nothing outside this module's tests calls [`Pool::run`] today.
-//!
 //! A network drive that drops its connection leaves a read blocked inside the operating system, and a blocked read
 //! cannot be interrupted. An import that waited for every read (as a scope of threads does: it cannot end before each
 //! thread has) hung with it, and the only way out was to quit. Here the reads run on detached threads that pull their
@@ -33,9 +29,7 @@
 //! Several pools can run at once under one [`ReadWatch`] (Synchronize Folder probes the new files while it checks
 //! the library's photos): the watch names the longest stall of all, and Skip acts on the pool that has it.
 
-// (no caller outside the tests yet, see above: the tests use all of it, so only the non-test build allows it. On wasm32
-// the pool is not built at all, which the follow-up keeps allowing)
-#![cfg_attr(not(test), allow(dead_code))]
+#![cfg_attr(target_arch = "wasm32", allow(dead_code))]
 
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -73,7 +67,7 @@ impl StuckReaders {
         StuckReaders { alive: AtomicUsize::new(0), cap }
     }
 
-    /// The process-wide count: the session will start with it, once the readers are wired in.
+    /// The process-wide count: a session starts with it ([`crate::Session::stuck_readers`]).
     pub fn global() -> std::sync::Arc<StuckReaders> {
         static GLOBAL: std::sync::OnceLock<std::sync::Arc<StuckReaders>> = std::sync::OnceLock::new();
         GLOBAL.get_or_init(|| std::sync::Arc::new(StuckReaders::new(MAX_STUCK_READERS))).clone()
@@ -134,7 +128,7 @@ fn millis(d: Duration) -> u64 {
 }
 
 impl ReadWatch {
-    /// A watch whose runs count their abandoned readers in `stuck` (the session's, once the readers are wired in).
+    /// A watch whose runs count their abandoned readers in `stuck` ([`crate::Session::stuck_readers`]).
     pub fn with_stuck(after: Duration, stuck: std::sync::Arc<StuckReaders>) -> Self {
         ReadWatch { stuck, ..ReadWatch::new(after) }
     }
@@ -214,6 +208,12 @@ impl ReadWatch {
     /// Why the run cannot go on, once it cannot: too many reads were skipped, or a reader could not be started.
     pub fn ended(&self) -> Option<String> {
         lock(&self.ended).clone()
+    }
+
+    /// The count this watch's runs abandon their readers into (tests only).
+    #[cfg(test)]
+    pub(crate) fn stuck_readers(&self) -> &StuckReaders {
+        &self.stuck
     }
 
     fn blocked_elsewhere(&self) -> String {

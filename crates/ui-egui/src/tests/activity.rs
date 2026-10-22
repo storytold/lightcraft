@@ -110,6 +110,7 @@ fn count_text_by_unit() {
         cancellable: true,
         cancelling: false,
         age_ms: 600,
+        stalled: None,
     };
     assert_eq!(count_text(&t), "3 of 25");
     (t.done, t.total, t.unit) = (12 * 1_048_576, 340 * 1_048_576, Unit::Bytes);
@@ -533,4 +534,222 @@ fn immediate_library_commands_and_auto_sync_show_completion() {
     h.app.ui.toast = None;
     assert!(h.app.run("library.compact", json!({})).is_err());
     assert!(h.app.ui.toast.is_none());
+}
+
+/// A read that does not answer until `open`.
+#[derive(Clone, Default)]
+pub(crate) struct Gate(std::sync::Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>);
+
+impl Gate {
+    pub(crate) fn wait(&self) {
+        let (open, bell) = &*self.0;
+        let mut open = open.lock().unwrap();
+        while !*open {
+            open = bell.wait(open).unwrap();
+        }
+    }
+
+    pub(crate) fn open(&self) {
+        *self.0.0.lock().unwrap() = true;
+        self.0.1.notify_all();
+    }
+}
+
+/// A folder of four stand-in JPEGs and one (`IMG_hang.jpg`) whose read never answers, and an app that calls a read
+/// stalled after 500 ms (a network drive that dropped its connection).
+fn hanging_import(tag: &str) -> (Headless, std::path::PathBuf, Gate) {
+    hanging(tag, &["IMG_hang.jpg"])
+}
+
+/// [`hanging_import`] with the files that never answer named.
+fn hanging(tag: &str, hangs: &[&str]) -> (Headless, std::path::PathBuf, Gate) {
+    let dir = std::env::temp_dir().join(format!("lc-activity-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    for name in ["IMG_000.jpg", "IMG_001.jpg", "IMG_002.jpg", "IMG_003.jpg"].iter().chain(hangs) {
+        std::fs::write(dir.join(name), format!("not really a jpeg {name}")).unwrap();
+    }
+    let gate = Gate::default();
+    let mut s = lightcraft_engine::Session::new();
+    s.import_stall_after = Duration::from_millis(500);
+    // (its own count of blocked readers: tests share the process)
+    s.stuck_readers = std::sync::Arc::new(lightcraft_engine::import::StuckReaders::new(lightcraft_engine::import::MAX_STUCK_READERS));
+    let in_probe = gate.clone();
+    s.media.file_probe = Some(std::sync::Arc::new(move |p: &str| {
+        if p.contains("IMG_hang") {
+            in_probe.wait();
+        }
+        Ok(lightcraft_engine::media::ProbeInfo {
+            width: 60,
+            height: 40,
+            format: "JPEG".into(),
+            content_hash: Some(p.to_string()),
+            ..Default::default()
+        })
+    }));
+    let mut h = Headless::new(LightcraftApp::new(s, Services { png: None, ..Default::default() }), [1200.0, 800.0], 1.0);
+    h.settle(T);
+    (h, dir, gate)
+}
+
+/// The import's row once it says it waits for a file.
+fn stalled_row(h: &mut Headless) -> TaskInfo {
+    assert!(h.step_until(Duration::from_secs(30), |h| h.app.session.activity.list().first().is_some_and(|t| t.stalled.is_some())), "no stall");
+    h.app.session.activity.list().remove(0)
+}
+
+/// Given an import whose read does not answer,
+/// When ✕ is pressed,
+/// Then the import ends within a second or two, "Stopping…" does not last.
+#[test]
+fn cancel_ends_an_import_whose_read_hangs() {
+    let (mut h, dir, gate) = hanging_import("cancel-hang");
+    crate::import::start_paths(&mut h.app, vec![dir.to_string_lossy().to_string()]).unwrap();
+    let row = stalled_row(&mut h);
+    h.app.session.activity.cancel(row.id).unwrap();
+    let pressed = std::time::Instant::now();
+    assert!(h.step_until(Duration::from_secs(10), |h| h.app.import.is_none()), "still stopping");
+    assert!(pressed.elapsed() < Duration::from_millis(2500), "took {:?}", pressed.elapsed());
+    gate.open();
+    assert!(h.app.ui.toast.as_ref().is_some_and(|t| t.0.starts_with("Import cancelled")), "{:?}", h.app.ui.toast);
+    assert!(h.app.session.activity.list().is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `activity.skip` through the control channel: an unknown id is an error, and for the stalled import it skips the
+/// file.
+#[test]
+fn activity_skip_command_skips_the_stalled_file() {
+    let (mut h, dir, gate) = hanging_import("skip-command");
+    assert_eq!(h.request("engine.execute", json!({"command": "activity.skip", "params": {"id": 999}}), T)["ok"], false);
+    crate::import::start_paths(&mut h.app, vec![dir.to_string_lossy().to_string()]).unwrap();
+    let row = stalled_row(&mut h);
+    let listed = h.request("engine.execute", json!({"command": "activity.list", "params": {}}), T);
+    assert_eq!(listed["result"]["tasks"][0]["stalled"]["what"], "IMG_hang.jpg", "{listed}");
+    let r = h.request("engine.execute", json!({"command": "activity.skip", "params": {"id": row.id}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(h.step_until(Duration::from_secs(30), |h| h.app.import.is_none()));
+    gate.open();
+    assert_eq!(h.app.session.catalog.len(), 4);
+    assert!(h.app.ui.toast.as_ref().is_some_and(|t| t.0.contains("1 not readable")), "{:?}", h.app.ui.toast);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The text of the toast on screen, if any.
+fn toast_text(h: &Headless) -> String {
+    h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default()
+}
+
+/// Given four files of an import that never answer and four that do,
+/// When each hung file is skipped as the row names it,
+/// Then at the fourth the import ends by itself with an error that the drive is not answering, the files readied
+/// before it stay, and its row goes.
+#[test]
+fn an_import_ends_with_an_error_at_the_fourth_skipped_read() {
+    let (mut h, dir, gate) = hanging("cap", &["IMG_hang0.jpg", "IMG_hang1.jpg", "IMG_hang2.jpg", "IMG_hang3.jpg"]);
+    crate::import::start_paths(&mut h.app, vec![dir.to_string_lossy().to_string()]).unwrap();
+    let ended = h.step_until(Duration::from_secs(60), |h| {
+        if let Some(row) = h.app.session.activity.list().first()
+            && row.stalled.is_some()
+        {
+            let _ = h.app.session.activity.skip(row.id);
+        }
+        h.app.import.is_none()
+    });
+    gate.open();
+    assert!(ended, "the import never ended");
+    let toast = toast_text(&h);
+    assert!(toast.contains("Import failed:") && toast.contains("not answering") && toast.contains("IMG_hang"), "{toast}");
+    assert!(h.app.session.activity.list().is_empty(), "the row goes");
+    assert!(h.app.session.catalog.len() <= 4, "no more than the files that answered");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Given the import review's scan of a folder with a file that never answers,
+/// When its row names the file and Skip is asked for (`activity.skip`),
+/// Then the review opens and lists that file as unreadable, with the skip as its reason.
+#[test]
+fn skip_on_the_review_scans_row_lists_the_file_as_unreadable() {
+    let (mut h, dir, gate) = hanging_import("scan-skip");
+    crate::import::open(&mut h.app, vec![dir.to_string_lossy().to_string()]).unwrap();
+    let row = stalled_row(&mut h);
+    assert_eq!(row.kind, "scan", "{row:?}");
+    assert_eq!(row.stalled.as_ref().map(|s| s.what.as_str()), Some("IMG_hang.jpg"));
+    let r = h.request("engine.execute", json!({"command": "activity.skip", "params": {"id": row.id}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(h.step_until(Duration::from_secs(30), |h| h.app.scan.is_none()), "the scan goes on");
+    gate.open();
+    let Some(crate::state::Dialog::Import { opts }) = &h.app.ui.dialog else { panic!("no review: {:?}", h.app.ui.dialog.is_some()) };
+    let hung = opts.candidates.iter().find(|c| c.name == "IMG_hang.jpg").expect("the file is listed");
+    assert!(hung.error.as_deref().is_some_and(|e| e.starts_with("skipped: no answer after ")), "{hung:?}");
+    assert_eq!(opts.candidates.iter().filter(|c| c.error.is_none()).count(), 4, "the others were read");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The same for the Local view's reading of a folder (the browse): the row names the file and offers Skip.
+#[test]
+fn skip_on_the_browse_scans_row_goes_on_with_the_other_files() {
+    let (mut h, dir, gate) = hanging_import("browse-skip");
+    crate::import::browse(&mut h.app, &dir.to_string_lossy(), None).unwrap();
+    let row = stalled_row(&mut h);
+    assert_eq!(row.kind, "scan", "{row:?}");
+    let r = h.request("engine.execute", json!({"command": "activity.skip", "params": {"id": row.id}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(h.step_until(Duration::from_secs(30), |h| h.app.scan.is_none() && h.app.import.is_none()));
+    gate.open();
+    assert!(h.app.session.catalog.len() >= 4, "the files that answered are in Local: {}", h.app.session.catalog.len());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Given the Local view's reading of a folder whose files stop answering one after another,
+/// When the fourth is skipped,
+/// Then an error toast says the folder was read only as far as the drive answered.
+#[test]
+fn a_browse_that_stops_at_the_cap_says_so() {
+    let (mut h, dir, gate) = hanging("browse-cap", &["IMG_hang0.jpg", "IMG_hang1.jpg", "IMG_hang2.jpg", "IMG_hang3.jpg"]);
+    crate::import::browse(&mut h.app, &dir.to_string_lossy(), None).unwrap();
+    let ended = h.step_until(Duration::from_secs(60), |h| {
+        if let Some(row) = h.app.session.activity.list().first()
+            && row.stalled.is_some()
+        {
+            let _ = h.app.session.activity.skip(row.id);
+        }
+        h.app.scan.is_none() && h.app.ui.toast.is_some()
+    });
+    gate.open();
+    assert!(ended, "no toast: {:?}", toast_text(&h));
+    let toast = toast_text(&h);
+    assert!(toast.starts_with("Stopped:") && toast.contains("not answering"), "{toast}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Given the import review's scan of a folder whose files stop answering one after another, and another dialog open
+/// when the scan ends (so the review waits, and a toast made then would be gone by the time it opens),
+/// When that dialog is closed and the review opens,
+/// Then an error toast says the folder was read only as far as the drive answered.
+#[test]
+fn a_review_that_waits_for_a_dialog_says_the_scan_stopped_when_it_opens() {
+    let (mut h, dir, gate) = hanging("review-cap", &["IMG_hang0.jpg", "IMG_hang1.jpg", "IMG_hang2.jpg", "IMG_hang3.jpg"]);
+    crate::import::open(&mut h.app, vec![dir.to_string_lossy().to_string()]).unwrap();
+    h.app.ui.dialog = Some(crate::state::Dialog::WhatsNew);
+    let ended = h.step_until(Duration::from_secs(60), |h| {
+        if let Some(row) = h.app.session.activity.list().first()
+            && row.stalled.is_some()
+        {
+            let _ = h.app.session.activity.skip(row.id);
+        }
+        h.app.scan.is_none()
+    });
+    gate.open();
+    assert!(ended, "the scan never ended");
+    // (a toast made at the scan's end, if there was one, is over by now)
+    h.app.ui.toast = None;
+    h.step();
+    assert!(h.app.review_pending.is_some(), "the review waits for the open dialog");
+    h.app.ui.dialog = None;
+    h.step();
+    assert!(matches!(h.app.ui.dialog, Some(crate::state::Dialog::Import { .. })), "the review opened");
+    let toast = toast_text(&h);
+    assert!(toast.starts_with("Stopped:") && toast.contains("not answering"), "{toast}");
+    let _ = std::fs::remove_dir_all(&dir);
 }
