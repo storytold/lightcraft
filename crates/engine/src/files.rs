@@ -51,6 +51,7 @@ pub(crate) struct CameraColourModel<'a> {
     pub tables: Option<&'a lightcraft_raw::profile::ProfileTables>,
     /// A fitted camera look's hue/saturation table.
     pub hue_sat: Option<&'a crate::camera_preview::HueSat<'a>>,
+    pub bands: Option<&'a crate::camera_preview::ChromaBands>,
 }
 
 impl CameraColourModel<'_> {
@@ -69,7 +70,7 @@ impl CameraColourModel<'_> {
     /// White balance, matrix, tables and baseline exposure, in place.
     pub fn apply(&self, img: &mut Rgb32f) {
         let (wb, m, gain) = (self.wb, self.matrix.to_f32(), self.gain);
-        if let (None, Some(hue_sat)) = (self.tables, self.hue_sat) {
+        if let (None, Some(hue_sat), None) = (self.tables, self.hue_sat, self.bands) {
             // a fitted camera look: `pixel`, `LANES` pixels at a time so the table step vectorises (same bits)
             const LANES: usize = 16;
             lightcraft_raster::par_rows(&mut img.data, img.width, |_, row| {
@@ -105,7 +106,8 @@ impl CameraColourModel<'_> {
             Some(tables) => tables.apply(rgb, gain),
             None => rgb.map(|v| v * gain),
         };
-        self.hue_sat.map_or(rgb, |h| h.apply(rgb)).map(|v| v.max(0.0))
+        let rgb = self.hue_sat.map_or(rgb, |h| h.apply(rgb));
+        self.bands.map_or(rgb, |b| b.apply(rgb)).map(|v| v.max(0.0))
     }
 }
 
