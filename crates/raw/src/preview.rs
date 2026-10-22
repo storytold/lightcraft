@@ -713,7 +713,9 @@ mod tests {
                 f.extend_from_slice(part);
                 f.extend_from_slice(&[0u8; 7]);
             }
-            assert!(crate::probe(&f).is_some_and(|p| !p.is_supported()), "{head:?}");
+            // CRW now decodes; its embedded JPEG is still found by the same scan.
+            let crw = head.starts_with(b"II");
+            assert!(crate::probe(&f).is_some_and(|p| p.is_supported() == crw), "{head:?}");
             assert_eq!(embedded_preview(&f).as_deref(), Some(&big[..]), "{head:?}");
             for n in (0..f.len()).step_by(11) {
                 let _ = embedded_preview(&f[..n]);
