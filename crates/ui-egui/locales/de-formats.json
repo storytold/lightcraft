@@ -307,6 +307,6 @@
   "Where should the Lightroom catalog “{catalog}” go?": "Wohin soll der Lightroom-Katalog „{catalog}“?",
   "Merge into the open library “{library}” ({count} photo{})": "Mit der geöffneten Bibliothek „{library}“ zusammenführen ({count} Foto{})",
   "Changes found: {n}": "Gefundene Änderungen: {n}",
-  "“{name}” is still being scanned: wait for it, or stop it with ✕ on its row": "„{name}“ wird noch durchsucht: Warten Sie darauf oder beenden Sie die Suche mit × in ihrer Zeile",
-  "Look at the changes found in “{name}” first, or dismiss them": "Sehen Sie sich zuerst die in „{name}“ gefundenen Änderungen an oder verwerfen Sie sie"
+  "“{name}” is still being scanned: wait for it, or stop it with ✕ on its row": "„{name}“ wird noch durchsucht: Warte darauf oder beende die Suche mit × in ihrer Zeile",
+  "Look at the changes found in “{name}” first, or dismiss them": "Sieh dir zuerst die in „{name}“ gefundenen Änderungen an oder verwirf sie"
 }
