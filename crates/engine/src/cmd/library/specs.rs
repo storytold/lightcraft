@@ -957,7 +957,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Edit Smart Album",
             [],
             None,
-            "{id, rules?: partial Filter merged onto the current rules (null clears a field), replace?: bool, fromView?: bool (use the current view), name?: also rename it (blank keeps the name) — one undo step, both or neither}",
+            "{id, rules?: partial Filter merged onto the current rules (null clears a single-value field; [] clears keywords/dates/libraryFolders/albums), replace?: bool, fromView?: bool (use the current view), name?: also rename it (blank keeps the name) — one undo step, both or neither}",
             always,
             |s, p| {
                 let id = album_param(p, "id", "album.setRules")?;
