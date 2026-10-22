@@ -56,7 +56,7 @@ that is promising but is not recorded as review, so the column says `no (communi
 | 9 | Japanese | `ja` | 2,383 / 2,398 (99%; 2026-10-12) | as zh-hans; vertical export watermarks | Jpan via craft-fonts (BIZ UDPGothic / UDMincho); IME through winit | no (community edits) | partial | 2–4 h (native review, lower-layer errors) |
 | 10 | German | `de` | 2,338 / 2,398 (97%; 2026-10-12, the rest are words spelled the same) | as zh-hans; What's New translated line by line | Latin | no (community edits) | partial | 2–4 h (native review, lower-layer errors) |
 | 11 | Korean | `ko` | 0 (0%) | none | **no Korean (Hangul) face**: needs a non-Adobe OFL face in craft-fonts (Noto CJK is allowed only for Chinese) | no | none | 14–22 h |
-| 12 | Vietnamese | `vi` | 2,672 / 2,700 (99%; 2,402 plain + 298 formats; What's New left in English) | as zh-hans | Latin with stacked diacritics (Inter covers all precomposed glyphs) | no (community edits) | partial (lower-layer errors English) | 2–4 h |
+| 12 | Vietnamese | `vi` | 2,671 / 2,700 (99%; 2,402 plain + 298 formats; 29 values equal English keys; What's New left in English) | as zh-hans | Latin with stacked diacritics (Inter covers all precomposed glyphs) | no (community edits) | partial (lower-layer errors English) | 2–4 h |
 
 ## Other languages LightCraft ships (4)
 

@@ -37,7 +37,7 @@ meaning fits a photo library and raw development app.
   `Rec. 2020`, `PQ`, `HLG`, `SDR`, `HDR`, `ISO`, `EV`, `Upright`, `Guided Upright`) remain in
   English.
 
-The plain catalog translates 2,402 interface strings (every non-What's-New catalog message, command
-label, Develop control, Settings tab, Smart Album rule field/operator/choice/issue, date-picker
-heading and rename token/note), and `vi-formats.json` translates all 298 runtime format templates.
-What's New release-note prose and lower-layer technical error strings fall back to English.
+The catalogs contain 2,402 plain entries and 298 runtime format templates. Under the parity metric,
+2,671 of these 2,700 messages have values that differ from their English keys; 29 entries retain
+their English values, including product names and technical terms. What's New release-note prose and
+lower-layer technical error strings fall back to English.
