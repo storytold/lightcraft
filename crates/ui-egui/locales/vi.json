@@ -2235,5 +2235,11 @@
   "Drop to open the face model": "Thả để mở mô hình khuôn mặt",
   "Dropped Files": "Tệp đã thả",
   "Finish Lightroom catalog import before adding photos": "Hoàn tất nhập danh mục Lightroom trước khi thêm ảnh",
-  "Import dropped files without review": "Nhập các tệp đã thả mà không xem lại"
+  "Import dropped files without review": "Nhập các tệp đã thả mà không xem lại",
+  "Don't import files already in the library": "Không nhập các tệp đã có trong thư viện",
+  "Synchronize Folder can bring in files already in the library elsewhere": "Đồng bộ thư mục có thể đưa vào các tệp đã có trong thư viện ở nơi khác",
+  "Synchronize Folder has a \"Don't import files already in the library\" box under Import new photos, ticked as before; unticked, files whose content a photo of another folder already has come in as photos of their own, and the library remembers the choice for next time.": "Đồng bộ thư mục có ô \"Không nhập các tệp đã có trong thư viện\" dưới Nhập ảnh mới, được chọn như trước; khi bỏ chọn, các tệp có nội dung mà một ảnh ở thư mục khác đã có sẽ được thêm vào thành ảnh riêng, và thư viện nhớ lựa chọn cho lần sau.",
+  "A copy of a photo in Recently Deleted stays out either way.": "Bản sao của ảnh trong Đã xóa gần đây vẫn không được đưa vào dù chọn thế nào.",
+  "For scripts and agents: `folder.scanChanges` now returns `duplicates` as a list of those files, each with the photo it matches (`existing`), where it used to return a count; `library.importPreview` still returns a number under `duplicates`, and `folder.synchronize` takes `importDuplicates`.": "Dành cho tập lệnh và tác nhân: `folder.scanChanges` giờ trả về `duplicates` dưới dạng danh sách các tệp đó, mỗi tệp kèm ảnh mà nó khớp (`existing`), trước đây là một con số; `library.importPreview` vẫn trả về một số trong `duplicates`, và `folder.synchronize` nhận `importDuplicates`.",
+  "A file with the same content as a photo of the library, under another name or in another folder. Untick to bring such files in as photos of their own. Remembered for the next Synchronize.": "Tệp có nội dung giống một ảnh trong thư viện, dưới tên khác hoặc ở thư mục khác. Bỏ chọn để đưa các tệp như vậy vào thành ảnh riêng. Được nhớ cho lần đồng bộ tiếp theo."
 }
