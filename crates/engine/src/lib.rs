@@ -1426,7 +1426,8 @@ impl Session {
 
     /// Keep "the other albums and folders shown" true to the source: none without an album or a
     /// folder source, never the source's own, and no album that is gone. When the source's own
-    /// album is gone and others are shown, the last of them takes its place.
+    /// album is gone and others are shown, the last of them takes its place; when none is left,
+    /// the view goes back to All Photos (not an empty grid).
     fn reconcile_sources(&mut self) {
         if self.source != LibrarySource::LibraryFolder && !self.also_library_folders.is_empty() {
             self.also_library_folders.clear();
@@ -1437,15 +1438,12 @@ impl Session {
             }
             return;
         };
-        if self.also_albums.is_empty() {
-            return;
-        }
         let cat = &self.catalog;
-        self.also_albums.retain(|x| *x != a && cat.album(*x).is_some());
-        if self.catalog.album(a).is_none()
-            && let Some(next) = self.also_albums.pop()
-        {
-            self.source = LibrarySource::Album(next);
+        if !self.also_albums.is_empty() {
+            self.also_albums.retain(|x| *x != a && cat.album(*x).is_some());
+        }
+        if cat.album(a).is_none() {
+            self.source = self.also_albums.pop().map_or(LibrarySource::All, LibrarySource::Album);
         }
     }
 

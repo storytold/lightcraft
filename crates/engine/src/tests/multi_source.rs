@@ -131,6 +131,23 @@ fn a_deleted_album_leaves_the_others_shown() {
 }
 
 #[test]
+fn a_saved_view_of_albums_that_are_all_gone_shows_all_photos_not_an_empty_grid() {
+    let mut s = Session::new();
+    let (ids, _, _) = two_albums(&mut s);
+    // what a restored view.json can hold when every album it names was deleted meanwhile
+    s.source = LibrarySource::Album(AlbumId(9998));
+    s.also_albums = vec![AlbumId(9999)];
+    assert_eq!(shown(&mut s).len(), ids.len());
+    assert_eq!(s.source, LibrarySource::All);
+    assert!(s.source_albums().is_empty());
+    // and the same for one album that is gone with none beside it
+    s.source = LibrarySource::Album(AlbumId(9999));
+    s.also_albums.clear();
+    assert_eq!(shown(&mut s).len(), ids.len());
+    assert_eq!(s.source, LibrarySource::All);
+}
+
+#[test]
 fn an_album_that_is_not_there_is_refused_and_the_view_stays() {
     let mut s = Session::new();
     let (ids, a, _) = two_albums(&mut s);
