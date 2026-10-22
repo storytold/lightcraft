@@ -401,7 +401,7 @@ pub struct NrLum {
     pub k: f32,
 }
 
-/// Colour noise reduction: chromaticity blurred by `sigma` px, mixed in by `t`.
+/// Colour noise reduction: colour blurred by `sigma` px (luminance-weighted, so means hold), mixed in by `t`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct NrColor {
     pub sigma: f32,
@@ -457,7 +457,7 @@ pub fn nr_params(s: &DevelopSettings, scale: f32) -> (Option<NrLum>, Option<NrCo
 }
 
 /// Noise reduction at output resolution: luminance via an edge-aware self-guided filter on
-/// log-luminance, colour by blurring chromaticity (rgb / Y) and re-applying the original luminance.
+/// log-luminance, colour by a luminance-weighted blur (blur(rgb) / blur(Y)) re-applied at the original luminance.
 /// `scale`: output pixels per pixel of the original ([`nr_params`]).
 pub fn denoise(img: &mut Rgb32f, s: &DevelopSettings, scale: f32) {
     let (lum, col) = nr_params(s, scale);
@@ -485,18 +485,20 @@ pub fn apply_nr(img: &mut Rgb32f, lum: Option<NrLum>, col: Option<NrColor>) {
     }
     if let Some(nr) = col {
         let _t = crate::profiling().then(std::time::Instant::now);
-        let chroma = img.map(|c| {
-            let y = luminance_2020(c).max(1e-6);
-            [c[0] / y, c[1] / y, c[2] / y]
+        // Blur the colour weighted by luminance: blur(rgb) / blur(Y) is the chromaticity of the
+        // neighbourhood's mean light, so the mean colour of a noisy or dark patch is kept (blurring
+        // the per-pixel ratio rgb / Y is not mean-preserving where Y is small or noisy).
+        let planes = img.map(|c| {
+            let c = c.map(|v| v.max(0.0));
+            [c[0], c[1], c[2], luminance_2020(c)]
         });
-        let b = gaussian(&chroma, nr.sigma);
+        let b = gaussian(&planes, nr.sigma);
         for_rows(&mut img.data, w, |y, row| {
             for (x, p) in row.iter_mut().enumerate() {
                 let i = y * w + x;
-                let yl = luminance_2020(*p);
-                let c0 = chroma.data[i];
-                let cb = b.data[i];
-                *p = [0, 1, 2].map(|k| ((c0[k] + (cb[k] - c0[k]) * nr.t) * yl).max(0.0));
+                let c0 = p.map(|v| v.max(0.0));
+                let k = luminance_2020(c0) / b.data[i][3].max(1e-6);
+                *p = [0, 1, 2].map(|c| c0[c] + (b.data[i][c] * k - c0[c]) * nr.t);
             }
         });
         if let Some(t) = _t {
@@ -990,5 +992,33 @@ mod nr_tests {
         let (v1, m1) = var(&img);
         assert!(v1 < v0 * 0.5, "{v0} -> {v1}");
         assert!((m1 - m0).abs() < 0.01);
+    }
+
+    /// Dark, noisy colour (issue #840): colour NR cuts the colour noise but keeps each channel's
+    /// mean and every pixel's luminance, where a blur of the per-pixel ratio rgb / Y would not.
+    #[test]
+    fn colour_nr_keeps_means_in_noisy_shadows() {
+        let noise = |x: usize, y: usize, k: usize| (((x * 7919 + y * 104729 + k * 15485863) % 101) as f32 / 101.0 - 0.5) * 0.03;
+        let mut img = Rgb32f::from_fn(96, 96, |x, y| [0.012 + noise(x, y, 1), 0.012 + noise(x, y, 2), 0.006 + noise(x, y, 3)].map(|v| v.max(0.0)));
+        let before = img.clone();
+        let mean = |im: &Rgb32f, c: usize| im.data.iter().map(|p| p[c]).sum::<f32>() / im.len() as f32;
+        let chroma_sd = |im: &Rgb32f| {
+            let r: Vec<f32> = im.data.iter().map(|p| (p[0] + 1e-3) / (p[1] + 1e-3)).collect();
+            let m = r.iter().sum::<f32>() / r.len() as f32;
+            (r.iter().map(|v| (v - m).powi(2)).sum::<f32>() / r.len() as f32).sqrt()
+        };
+        let mut s = DevelopSettings::default();
+        s.detail.nr_luminance = 0.0;
+        s.detail.nr_color = 75.0;
+        denoise(&mut img, &s, 1.0);
+        for c in 0..3 {
+            let (a, b) = (mean(&before, c), mean(&img, c));
+            assert!((b / a - 1.0).abs() < 0.02, "channel {c} mean {a} -> {b}");
+        }
+        assert!(chroma_sd(&img) < chroma_sd(&before) * 0.8, "{} -> {}", chroma_sd(&before), chroma_sd(&img));
+        for (p, q) in before.data.iter().zip(&img.data) {
+            let (y0, y1) = (luminance_2020(*p), luminance_2020(*q));
+            assert!((y1 - y0).abs() <= 1e-5 + 1e-3 * y0, "luminance {y0} -> {y1}");
+        }
     }
 }
