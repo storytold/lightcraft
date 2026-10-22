@@ -39,7 +39,7 @@ use lightcraft_raw::{
 /// a tone-only fallback for near-black scenes with too few colour pairs (#1587); DNG tone fitting uses a
 /// lens-corrected proxy when the file carries lens opcodes; validated A7CR distortion, including the lens data
 /// stored with each smart preview.
-pub const LOOK_VERSION: u32 = 12;
+pub const LOOK_VERSION: u32 = 13;
 
 #[derive(Clone, Debug)]
 pub(crate) struct CameraLook {
@@ -339,28 +339,74 @@ fn fit_look(sensor: &Rgb32f, reference: &Rgb32f, clipped: &[bool], colour: Optio
 ///
 /// The search on all pixels decides, as before, whether the photo gets a look and which attempt
 /// of [`search_ordered`] gives it; only that attempt is refitted without the clipped pixels, and
-/// when the refit misses the acceptance gates the look on all pixels is kept. So no photo loses
-/// its look and none switches attempt (a refit that just clears the gate on all pixels must not
-/// replace a look fitted away from edges). A photo that had no look gets one when the search
-/// without the clipped pixels finds it, and otherwise the [`fit_partial`] look when that is clearly
-/// closer to the camera JPEG than the neutral fallback.
+/// when the refit misses the acceptance gates the look on all pixels is kept. An accepted profile
+/// is compared with an accepted per-photo fit on the same final cohort and attempt. A photo that
+/// had no look gets one when the search without the clipped pixels finds it, and otherwise the
+/// [`fit_partial`] look when that is clearly closer to the camera JPEG than the neutral fallback.
 fn fit_look_with(sensor: &Rgb32f, reference: &Rgb32f, clipped: &[bool], colour: Option<(Mat3, Option<HsvTable>)>, dro: bool) -> Option<CameraLook> {
     let unclipped = without_clipped(sensor, clipped);
     // from the proxies as they are: the retries' filters (clipped pixels, edges) don't remove them
     let bright = HighlightCheck { pairs: highlights(sensor, reference), dro, grey: false };
-    let Some((look, attempt)) = search_ordered(sensor, reference, colour.clone(), TONE_FITS, &bright) else {
-        return unclipped
-            .as_ref()
-            .and_then(|u| search_ordered(u, reference, colour, TONE_FITS, &bright))
-            .map(|(look, _)| look)
-            .or_else(|| fit_partial(unclipped.as_ref().unwrap_or(sensor), reference, &bright));
+    let (look, attempt, fitting_sensor) = if let Some((look, attempt)) = search_ordered(sensor, reference, colour.clone(), TONE_FITS, &bright) {
+        match unclipped.as_ref().and_then(|u| fit_attempt(u, reference, &colour, attempt, &bright).map(|look| (look, u))) {
+            Some((look, u)) => (look, attempt, u),
+            None => {
+                if unclipped.is_some() && lightcraft_pipeline::profiling() {
+                    eprintln!("[profile] camera look: no fit without the clipped pixels on the accepted attempt, keeping the fit on all pixels");
+                }
+                (look, attempt, sensor)
+            }
+        }
+    } else {
+        let u = unclipped.as_ref().unwrap_or(sensor);
+        let Some((look, attempt)) = unclipped.as_ref().and_then(|u| search_ordered(u, reference, colour, TONE_FITS, &bright)) else {
+            return fit_partial(u, reference, &bright);
+        };
+        (look, attempt, u)
     };
-    let Some(unclipped) = unclipped else { return Some(look) };
-    let refit = fit_attempt(&unclipped, reference, &colour, attempt, &bright);
-    if refit.is_none() && lightcraft_pipeline::profiling() {
-        eprintln!("[profile] camera look: no fit without the clipped pixels on the accepted attempt, keeping the fit on all pixels");
+    Some(prefer_photo_colour(fitting_sensor, reference, look, attempt, &bright))
+}
+
+fn prefer_photo_colour(sensor: &Rgb32f, reference: &Rgb32f, profiled: CameraLook, attempt: Attempt, bright: &HighlightCheck) -> CameraLook {
+    if !attempt.profile {
+        return profiled;
     }
-    Some(refit.unwrap_or(look))
+    let own_attempt = Attempt { profile: false, ..attempt };
+    let Some(own) = fit_attempt(sensor, reference, &None, own_attempt, bright) else { return profiled };
+    let Some((pairs, _)) = collect_pairs(sensor, reference, 0.005, attempt.away_from_edges.then_some(EDGE_CONTRAST), attempt.dark) else {
+        return profiled;
+    };
+    let (Some(profile_error), Some(own_error)) = (selection_error(&profiled, &pairs), selection_error(&own, &pairs)) else { return profiled };
+    if lightcraft_pipeline::profiling() {
+        eprintln!(
+            "[profile] camera colour selection gamma RMS {:.5} profile, {:.5} per-photo: {}",
+            profile_error.sqrt(),
+            own_error.sqrt(),
+            if own_error < profile_error { "per-photo" } else { "profile" }
+        );
+    }
+    if own_error < profile_error { own } else { profiled }
+}
+
+// Preserve the existing colour-pair scoring split; chroma fitting has its own broader pair list.
+fn selection_error(look: &CameraLook, pairs: &[Pair]) -> Option<f64> {
+    let hue = look.hue_sat.as_ref().and_then(HueSat::new);
+    let tone = ToneMap::camera(&look.tone, 0.0, 0.0, 0.0);
+    let mut error = 0.0;
+    let mut channels = 0;
+    for (input, target) in pairs.iter().step_by(3) {
+        let p = look.matrix.apply(*input);
+        let p = hue.as_ref().map_or(p, |h| h.apply(p.map(|v| v as f32)).map(f64::from));
+        if !p.iter().chain(target).all(|v| v.is_finite()) {
+            return None;
+        }
+        let p = displayed(p, &tone);
+        for (p, target) in p.iter().zip(target) {
+            error += (p.max(0.0).powf(1.0 / 2.2) - target.max(0.0).powf(1.0 / 2.2)).powi(2);
+            channels += 1;
+        }
+    }
+    (channels > 0 && error.is_finite()).then(|| error / channels as f64)
 }
 
 /// `sensor` with its clipped pixels set to NaN (left out of every training pair), or `None` when
@@ -2534,6 +2580,9 @@ mod tests {
         assert!(fit_pairs(&sensor, &reference).is_none(), "not enough colour to learn a matrix");
         let look = fit_pairs_with(&sensor, &reference, Some((matrix, None))).unwrap();
         assert_eq!(look.matrix, matrix);
+        let guarded =
+            fit_look(&sensor, &reference, &vec![false; sensor.data.len()], Some((matrix, None))).expect("the profile still fits a dull scene");
+        assert_eq!(guarded.matrix, matrix);
         reference.map_in_place(|p| [luminance_2020(p); 3]);
         assert!(fit_pairs_with(&sensor, &reference, Some((matrix, None))).is_none(), "monochrome JPEGs remain rejected");
     }
@@ -2560,6 +2609,77 @@ mod tests {
         let look = fit_pairs_with(&sensor, &reference, Some((wrong, None))).unwrap();
         assert_eq!(look.matrix, per_photo.matrix, "a rejected camera profile must not suppress the per-photo fit");
         assert_eq!(look.tone, per_photo.tone);
+    }
+
+    #[test]
+    fn accepted_profile_does_not_replace_a_better_photo_fit() {
+        let (sensor, reference) = noisy_look(0.0);
+        let known = Mat3([[1.8, -0.4, -0.1], [-0.2, 1.5, -0.1], [-0.05, -0.3, 1.7]]);
+        let biased = Mat3::diag(1.12, 1.0, 0.9).mul(&known);
+        let colour = Some((biased, None));
+        let bright = HighlightCheck { pairs: highlights(&sensor, &reference), dro: false, grey: false };
+        let (profiled, attempt) =
+            search_ordered(&sensor, &reference, colour.clone(), TONE_FITS, &bright).expect("biased profile passes existing gates");
+        assert!(attempt.profile);
+        let pairs = collect_pairs(&sensor, &reference, 0.005, None, false).expect("common scoring pairs").0;
+        assert_eq!(pairs, collect_pairs(&sensor, &reference, 0.05, None, false).expect("own colour pairs").0);
+        let own = fit_attempt(&sensor, &reference, &None, Attempt { profile: false, ..attempt }, &bright).expect("own fit passes the same gates");
+        assert!(selection_error(&own, &pairs).expect("finite own error") < selection_error(&profiled, &pairs).expect("finite profile error"));
+        for clipped_count in [0, sensor.data.len() / 4, sensor.data.len() - 100] {
+            let mut clipped = vec![false; sensor.data.len()];
+            clipped[..clipped_count].fill(true);
+            let masked = without_clipped(&sensor, &clipped);
+            let refit = masked.as_ref().and_then(|u| fit_attempt(u, &reference, &colour, attempt, &bright));
+            assert_eq!(refit.is_some(), clipped_count == sensor.data.len() / 4);
+            let cohort = if refit.is_some() { masked.as_ref().expect("masked cohort") } else { &sensor };
+            let expected =
+                fit_attempt(cohort, &reference, &None, Attempt { profile: false, ..attempt }, &bright).expect("accepted own fit on selected cohort");
+            let selected = fit_look(&sensor, &reference, &clipped, colour.clone()).expect("selected look");
+            assert_eq!(
+                (selected.matrix, selected.hue_sat, selected.tone),
+                (expected.matrix, expected.hue_sat, expected.tone),
+                "clipped count {clipped_count}"
+            );
+        }
+    }
+
+    #[test]
+    fn unclipped_search_compares_an_accepted_profile_with_own_colour() {
+        let (mut sensor, mut reference) = noisy_look(0.0);
+        let known = Mat3([[1.8, -0.4, -0.1], [-0.2, 1.5, -0.1], [-0.05, -0.3, 1.7]]);
+        let colour = Some((Mat3::diag(1.12, 1.0, 0.9).mul(&known), None));
+        let mut clipped = vec![false; sensor.data.len()];
+        let contaminated = sensor.data.len() * 3 / 4;
+        for (i, ((clip, src), dst)) in clipped.iter_mut().zip(&mut sensor.data).zip(&mut reference.data).take(contaminated).enumerate() {
+            *clip = true;
+            *src = [0.12; 3];
+            *dst = if i % 2 == 0 { [0.8, 0.1, 0.1] } else { [0.05, 0.4, 0.8] };
+        }
+        let bright = HighlightCheck { pairs: highlights(&sensor, &reference), dro: false, grey: false };
+        assert!(search_ordered(&sensor, &reference, colour.clone(), TONE_FITS, &bright).is_none(), "all-pixel search must fail");
+        let unclip = without_clipped(&sensor, &clipped).expect("unclipped cohort");
+        let (profiled, attempt) = search_ordered(&unclip, &reference, colour.clone(), TONE_FITS, &bright).expect("unclipped profile passes");
+        assert!(attempt.profile);
+        let own = fit_attempt(&unclip, &reference, &None, Attempt { profile: false, ..attempt }, &bright).expect("own unclipped fit");
+        let pairs = collect_pairs(&unclip, &reference, 0.005, None, false).expect("common pairs").0;
+        assert!(selection_error(&own, &pairs).expect("finite own error") < selection_error(&profiled, &pairs).expect("finite profile error"));
+        let selected = fit_look(&sensor, &reference, &clipped, colour).expect("selected unclipped look");
+        assert_eq!((selected.matrix, selected.hue_sat, selected.tone), (own.matrix, own.hue_sat, own.tone));
+    }
+
+    #[test]
+    fn a_better_profile_is_kept_when_the_photo_fit_also_passes() {
+        let (sensor, reference) = noisy_look(0.0);
+        let known = Mat3([[1.8, -0.4, -0.1], [-0.2, 1.5, -0.1], [-0.05, -0.3, 1.7]]);
+        let colour = Some((known, None));
+        let bright = HighlightCheck { pairs: highlights(&sensor, &reference), dro: false, grey: false };
+        let (profiled, attempt) = search_ordered(&sensor, &reference, colour.clone(), TONE_FITS, &bright).expect("known profile passes");
+        assert!(attempt.profile);
+        let own = fit_attempt(&sensor, &reference, &None, Attempt { profile: false, ..attempt }, &bright).expect("own fit also passes");
+        let pairs = collect_pairs(&sensor, &reference, 0.005, None, false).expect("common pairs").0;
+        assert!(selection_error(&profiled, &pairs).expect("finite profile error") < selection_error(&own, &pairs).expect("finite own error"));
+        let selected = fit_look(&sensor, &reference, &vec![false; sensor.data.len()], colour).expect("selected look");
+        assert_eq!((selected.matrix, selected.hue_sat, selected.tone), (profiled.matrix, profiled.hue_sat, profiled.tone));
     }
 
     #[test]
