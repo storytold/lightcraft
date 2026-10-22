@@ -1486,3 +1486,33 @@ fn huge_export_size_is_an_error() {
     assert!(s.render_now(id, huge, huge).is_err());
     assert!(s.render_now(id, 10, 70_000).is_err());
 }
+
+/// A user export preset whose name collides with a built-in one (in any case) is shadowed by it:
+/// the built-ins are looked up first, so the user's preset can never be selected or exported, and
+/// the save path refuses to recreate it under a free name. Loading the preferences renames it to a
+/// name of its own instead, keeping its settings.
+#[test]
+fn a_user_preset_naming_a_built_in_is_renamed_when_the_library_opens() {
+    let lib = temp_dir("export-preset-rename");
+    {
+        let mut s = Session::new().with_fs();
+        s.open_library(&lib, false).unwrap();
+        s.close_library().unwrap();
+    }
+    std::fs::write(lib.join("prefs.json"), r#"{"exportPresets": [{"name": "web / portfolio", "params": {"format": "png", "width": 64}}]}"#).unwrap();
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+
+    let builtins: Vec<String> = crate::export::builtin_presets().into_iter().map(|p| p.name).collect();
+    assert_eq!(s.export_presets.len(), 1, "the user's preset is kept");
+    let name = s.export_presets[0].name.clone();
+    assert!(!builtins.iter().any(|b| b.eq_ignore_ascii_case(&name)), "{name} still shadows a built-in");
+    assert_eq!(s.export_presets[0].params, json!({"format": "png", "width": 64}), "its settings are kept");
+    // it is reachable under its own name: the export takes the user's settings
+    let p = s.export_params(&json!({"preset": name})).unwrap();
+    assert_eq!((p["format"].as_str(), p["width"].as_u64()), (Some("png"), Some(64)), "{p}");
+    // and the built-in of that name is still the built-in
+    let b = s.export_params(&json!({"preset": "Web / Portfolio"})).unwrap();
+    assert_eq!((b["format"].as_str(), b["longEdge"].as_u64()), (Some("jpeg"), Some(2048)), "{b}");
+    let _ = std::fs::remove_dir_all(&lib);
+}
