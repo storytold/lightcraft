@@ -150,3 +150,26 @@ fn a_toast_already_over_is_not_shown_and_evicts_nothing() {
     ui.push_toast(5.0, "edge", 5.0, None);
     assert_eq!(texts(&ui), vec!["two", "three", "edge"]);
 }
+
+/// Given a topic toast showing, when a plain toast with the same text is pushed and the topic then says something
+/// new, then only the new message shows: the merged toast kept its topic.
+#[test]
+fn a_plain_toast_repeating_a_topic_toast_keeps_its_topic() {
+    let mut ui = UiState::default();
+    ui.push_toast_on(0.0, "save", "2 changes saved in memory but not written to disk", 6.0, None);
+    ui.push_toast(1.0, "2 changes saved in memory but not written to disk", 7.0, None);
+    assert_eq!(texts(&ui), vec!["2 changes saved in memory but not written to disk"]);
+    ui.push_toast_on(2.0, "save", "Library saved", 8.0, None);
+    assert_eq!(texts(&ui), vec!["Library saved"]);
+}
+
+/// Given the same text under two different topics, then both stay: they say different things.
+#[test]
+fn the_same_text_on_two_topics_stays_two_toasts() {
+    let mut ui = UiState::default();
+    ui.push_toast_on(0.0, "flag", "Done", 6.0, None);
+    ui.push_toast_on(0.0, "save", "Done", 6.0, None);
+    assert_eq!(texts(&ui), vec!["Done", "Done"]);
+    ui.push_toast_on(1.0, "save", "Saved", 7.0, None);
+    assert_eq!(texts(&ui), vec!["Done", "Saved"]);
+}

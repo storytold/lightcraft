@@ -1594,8 +1594,9 @@ impl UiState {
     /// `now` is the app time of the push: toasts whose time is already over go first, so a gone one never costs a
     /// showing one its place (notices arrive before the frame that expires them).
     /// Show `text` until `until` (app time, s), in `label`'s colours if given, below the toasts already showing: one
-    /// no longer hides another. The same message again (same text and label) is not shown twice: it moves to the newest
-    /// place and stays until the later of its times. Past [`MAX_TOASTS`] the oldest goes.
+    /// no longer hides another. The same message again (same text and label) is not shown twice, unless two topics
+    /// say it: it moves to the newest place, keeps the topic it had, and stays until the later of its times. Past
+    /// [`MAX_TOASTS`] the oldest goes.
     pub fn push_toast(&mut self, now: f64, text: impl Into<String>, until: f64, label: Option<lightcraft_catalog::ColorLabel>) {
         self.expire_toasts(now);
         if until < now {
@@ -1624,9 +1625,15 @@ impl UiState {
     }
 
     fn push(&mut self, text: String, until: f64, label: Option<lightcraft_catalog::ColorLabel>, topic: Option<&'static str>) {
-        let until = match self.toasts.iter().position(|t| t.0 == text && t.2 == label) {
-            Some(at) => self.toasts.remove(at).1.max(until),
-            None => until,
+        // (a message about a topic and one about none are the same message: the merged one keeps the topic, so a
+        // later message on it still replaces it; two different topics stay two messages)
+        let same = |t: &Toast| t.0 == text && t.2 == label && (t.3 == topic || t.3.is_none() || topic.is_none());
+        let (until, topic) = match self.toasts.iter().position(same) {
+            Some(at) => {
+                let old = self.toasts.remove(at);
+                (old.1.max(until), topic.or(old.3))
+            }
+            None => (until, topic),
         };
         self.toasts.push((text, until, label, topic));
         if self.toasts.len() > MAX_TOASTS {
