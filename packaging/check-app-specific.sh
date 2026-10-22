@@ -98,8 +98,11 @@ ls "$fb/dist"/lightcraft-*-freebsd-aarch64.tar.gz >/dev/null \
   || { echo "$log"; echo "::error::FreeBSD package.sh did not name the cross build's archive freebsd-aarch64"; exit 1; }
 grep -q 'skipping --version' <<<"$log" \
   || { echo "$log"; echo "::error::FreeBSD package.sh ran an aarch64 binary on an x86_64 host"; exit 1; }
-if CARGO_BUILD_TARGET=aarch64-unknown-linux-gnu freebsd_package >/dev/null 2>&1; then
-  echo "::error::FreeBSD package.sh packaged a Linux target"; exit 1
+# Refused as a target (exit 2 and the message), not just failing later on missing binaries.
+status=0
+log="$(CARGO_BUILD_TARGET=aarch64-unknown-linux-gnu freebsd_package 2>&1)" || status=$?
+if [ "$status" != 2 ] || ! grep -qF 'is not a supported FreeBSD target' <<<"$log"; then
+  echo "$log"; echo "::error::FreeBSD package.sh did not refuse a Linux target (exit $status)"; exit 1
 fi
 freebsd_elf 1 "$rel/lightcraft-cli"
 if CARGO_BUILD_TARGET=aarch64-unknown-freebsd freebsd_package >/dev/null 2>&1; then
