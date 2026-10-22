@@ -200,7 +200,13 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
     match req.method.as_str() {
         "engine.execute" | "ui.menu.invoke" | "command" => {
             let Some(id) = s("command").or(s("id")) else { return err("missing `command`") };
-            let params = p.get("params").cloned().filter(|v| !v.is_null()).unwrap_or(json!({}));
+            let mut params = p.get("params").cloned().filter(|v| !v.is_null()).unwrap_or(json!({}));
+            // A scripted `develop.auto` gets the command's own default, the values inline, unless it
+            // asks for `background`. The app's background default (`run_typed`) is for the menu, the
+            // shortcut and the Edit panel; `ui.menu.invoke` stands in for the menu, so it keeps it.
+            if req.method != "ui.menu.invoke" && id == "develop.auto" && params.get("background").is_none() {
+                params["background"] = json!(false);
+            }
             let r = app.run(id, params);
             ctx.request_repaint();
             wrap(r)

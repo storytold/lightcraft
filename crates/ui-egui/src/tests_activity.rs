@@ -532,6 +532,45 @@ fn auto_settings_on_a_selection_run_in_the_background() {
     assert!(h.app.session.activity.list().iter().all(|t| t.kind != "autoSettings"));
 }
 
+/// A scripted `develop.auto` over the control channel (`engine.execute`) sets the values inline and returns them,
+/// as the command documents, unless it asks for `background`; the menu's stand-in `ui.menu.invoke` keeps the app's
+/// background default, like the menu, the shortcut and the Edit panel.
+#[test]
+fn scripted_auto_settings_run_inline_unless_asked_for_background() {
+    let mut h = demo();
+    let ids: Vec<u64> = h.app.session.visible_cloned().iter().take(2).map(|p| p.0).collect();
+    h.app.session.execute("library.select", &json!({"ids": ids, "active": ids[0]})).unwrap();
+    let ctx = h.view.ctx.clone();
+    let call = |h: &mut Headless, method: &str, p: serde_json::Value| {
+        let (req, _) = crate::control::ControlRequest::new(method, p);
+        match crate::control::handle(&mut h.app, &ctx, &req) {
+            crate::control::Outcome::Done(reply) => reply,
+            _ => panic!("expected a reply"),
+        }
+    };
+    let finish = |h: &mut Headless| {
+        let t0 = std::time::Instant::now();
+        while h.app.session.auto_settings.is_some() {
+            assert!(t0.elapsed() < T, "the run never ended");
+            h.step();
+        }
+    };
+    let undo = h.app.session.undo.len();
+    let r = call(&mut h, "engine.execute", json!({"command": "develop.auto", "params": {"ids": ids}}));
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(r["result"].get("background").is_none() && r["result"].get("exposure").is_some(), "the values, inline: {r}");
+    assert!(h.app.session.auto_settings.is_none(), "no background run");
+    assert_eq!(h.app.session.undo.len(), undo + 1, "set before the reply, one undo step");
+    // asked for, a script gets the background run too
+    let r = call(&mut h, "engine.execute", json!({"command": "develop.auto", "params": {"ids": ids, "background": true}}));
+    assert_eq!(r["result"]["background"], true, "{r}");
+    finish(&mut h);
+    // the menu's stand-in keeps the app's default
+    let r = call(&mut h, "ui.menu.invoke", json!({"command": "develop.auto"}));
+    assert_eq!(r["result"]["background"], true, "{r}");
+    finish(&mut h);
+}
+
 /// The Edit panel's Auto button says "applied" only when it applied something: refused while a background run is
 /// going, it says why instead, for long enough to read.
 #[test]
