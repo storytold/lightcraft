@@ -48,7 +48,7 @@ fn listing_text(folders: usize, files: usize) -> String {
 pub fn open(app: &mut LightcraftApp, path: &str, name: &str, disk: bool) -> Result<(), String> {
     cancel(app);
     let input = SyncInput::new(&mut app.session, path, disk).map_err(|e| e.to_string())?;
-    let progress = Arc::new(SyncProgress::default());
+    let progress = Arc::new(SyncProgress::new(app.session.import_stall_after, app.session.stuck_readers.clone()));
     let (tx, rx) = std::sync::mpsc::channel();
     let p = progress.clone();
     let job = move || {
@@ -113,6 +113,7 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
     let (done, total, detail) = scan_row(&task.progress, &task.name);
     task.guard.progress(done, total);
     task.guard.detail(&detail);
+    crate::panels::activity::follow_reads(&task.guard, &task.progress.files.reads);
     ctx.request_repaint_after(std::time::Duration::from_millis(100));
     let changes = match task.rx.try_recv() {
         Ok(c) => c,
@@ -125,6 +126,11 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
         }
     };
     app.sync = None;
+    if let Some(why) = &changes.stopped {
+        // what the dialog lists is what was reached before the drive stopped answering (a run made from it only
+        // imports the new files: the dialog says so and takes the other choices off)
+        app.toast_error(ctx, format!("{}: {why}", crate::i18n::tr("Stopped")));
+    }
     let c = SyncCounts {
         offline: changes.offline,
         new: changes.new.len(),
@@ -133,10 +139,15 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
         missing: changes.missing.len(),
         metadata: changes.metadata.len(),
         moved: changes.moved.len(),
+        unchecked: changes.unchecked,
+        stopped: changes.stopped.is_some(),
     };
     app.session.folder_changes = Some(changes);
     app.sync_owns_changes = true;
-    if let Some(Dialog::SynchronizeFolder { counts, .. }) = &mut app.ui.dialog {
+    if let Some(Dialog::SynchronizeFolder { counts, relink_moved, remove_missing, read_metadata, .. }) = &mut app.ui.dialog {
+        if c.stopped {
+            (*relink_moved, *remove_missing, *read_metadata) = (false, false, false);
+        }
         *counts = Some(c);
     }
 }
@@ -183,7 +194,7 @@ pub fn body(app: &LightcraftApp, ui: &mut egui::Ui, dlg: &mut Dialog) {
         return;
     }
     let choice = |ui: &mut egui::Ui, on: &mut bool, n: usize, text: String, widget: &str| {
-        let r = ui.add_enabled(n > 0, egui::Checkbox::new(on, text));
+        let r = ui.add_enabled(n > 0 && !(c.stopped && widget != "syncImportNew"), egui::Checkbox::new(on, text));
         crate::widgets::register(ui, widget, r.rect);
     };
     let count = |text: &str, n: usize| format!("{} ({n})", crate::i18n::tr(text));
@@ -196,22 +207,30 @@ pub fn body(app: &LightcraftApp, ui: &mut egui::Ui, dlg: &mut Dialog) {
             dim(ui, &count("Skipped: files that can't be read", c.unreadable));
         }
     };
-    if c.up_to_date() {
-        // nothing to choose: the answer takes the choices' place, and the one button closes
-        // (`only_shows`)
-        ui.label(crate::i18n::tr("The library is up to date with this folder."));
+    if c.nothing_to_choose() && !c.stopped {
+        // nothing to choose: the answer takes the choices' place, and the one button closes (`only_shows`). With photos
+        // that could not be checked it doesn't say "up to date": it lists them (with the files it could not read)
+        if c.up_to_date() {
+            ui.label(crate::i18n::tr("The library is up to date with this folder."));
+        }
         skipped(ui);
         return;
     }
+    // (a scan that stopped keeps the rows, all switched off when no new photo was found: what it reached is shown, the
+    // button only closes)
     choice(ui, import_new, c.new, count("Import new photos", c.new), "syncImportNew");
     choice(ui, relink_moved, c.moved, count("Relink photos whose file was renamed or moved", c.moved), "syncRelinkMoved");
     choice(ui, remove_missing, c.missing, count("Remove missing photos from the library", c.missing), "syncRemoveMissing");
     choice(ui, read_metadata, c.metadata, count("Read metadata updates from XMP sidecars", c.metadata), "syncReadMetadata");
     ui.add_space(6.0);
-    if c.missing > 0 {
+    if c.stopped {
+        dim(ui, crate::i18n::tr("The scan stopped when the drive stopped answering: only new photos can be imported from it."));
+    }
+    // (what a stopped scan switched off needs no note)
+    if c.missing > 0 && !c.stopped {
         dim(ui, crate::i18n::tr("Missing photos move to Recently Deleted and can be restored; no file on disk is touched."));
     }
-    if c.metadata > 0 {
+    if c.metadata > 0 && !c.stopped {
         dim(ui, crate::i18n::tr("Reading a sidecar replaces the photo's rating, labels, metadata and edits with what it says."));
     }
     skipped(ui);
@@ -219,8 +238,9 @@ pub fn body(app: &LightcraftApp, ui: &mut egui::Ui, dlg: &mut Dialog) {
 
 /// Synchronize with the dialog's choices: the scan the dialog showed is handed to a worker
 /// thread at once ([`SyncRun`]); nothing is read from disk on the UI thread. A scan that went
-/// stale (the folder's photos changed meanwhile) is refused and made again, keeping the choices.
-/// A folder that is up to date has nothing to hand over: confirming it only closes the dialog.
+/// stale (the folder's photos changed meanwhile) is refused and made again, keeping the choices the person made
+/// (after a stopped scan only Import new: the other three were switched off for them).
+/// A folder with nothing to choose has nothing to hand over: confirming it only closes the dialog.
 pub fn confirm(app: &mut LightcraftApp, dlg: &Dialog) -> Result<Value, String> {
     let Dialog::SynchronizeFolder { path, name, disk, counts: Some(counts), import_new, relink_moved, remove_missing, read_metadata, .. } = dlg
     else {
@@ -229,8 +249,8 @@ pub fn confirm(app: &mut LightcraftApp, dlg: &Dialog) -> Result<Value, String> {
     // (before the busy checks: nothing is imported or written, so a running import or
     // synchronize can't clash with it, and the dialog closes either way. Like every result the
     // dialog shows, it is the scan's: a file added since is found by the next Synchronize)
-    if counts.up_to_date() {
-        return Ok(json!({"upToDate": true}));
+    if counts.nothing_to_choose() {
+        return Ok(json!({"upToDate": counts.up_to_date()}));
     }
     if app.sync_run.is_some() {
         return Err(crate::i18n::tr("A folder is already being synchronized").to_string());
@@ -253,12 +273,16 @@ pub fn confirm(app: &mut LightcraftApp, dlg: &Dialog) -> Result<Value, String> {
                 && let Some(Dialog::SynchronizeFolder { import_new: i, relink_moved: l, remove_missing: m, read_metadata: x, .. }) =
                     &mut app.ui.dialog
             {
-                (*i, *l, *m, *x) = (*import_new, *relink_moved, *remove_missing, *read_metadata);
+                *i = *import_new;
+                // (a stopped scan forced the other three off, the person did not: the new dialog keeps their defaults)
+                if !counts.stopped {
+                    (*l, *m, *x) = (*relink_moved, *remove_missing, *read_metadata);
+                }
             }
             return Err(e);
         }
     };
-    let progress = Arc::new(SyncProgress::default());
+    let progress = Arc::new(SyncProgress::new(app.session.import_stall_after, app.session.stuck_readers.clone()));
     let crashed = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let (tx, rx) = std::sync::mpsc::channel();
     let (p, c) = (progress.clone(), crashed.clone());
@@ -347,6 +371,7 @@ pub fn poll_run(app: &mut LightcraftApp, ctx: &egui::Context) {
     }
     let (done, total) = run.counts();
     run.guard.progress(done as u64, total as u64);
+    crate::panels::activity::follow_reads(&run.guard, &run.progress.files.reads);
     let mut steps = Vec::new();
     let finished = loop {
         match run.rx.try_recv() {
@@ -404,8 +429,13 @@ pub fn poll_run(app: &mut LightcraftApp, ctx: &egui::Context) {
     if let Some(e) = not_saved.first() {
         parts.push(format!("{}: {e}", crate::i18n::tr("Not saved")));
     }
+    if let Some(why) = &r.stopped {
+        parts.insert(0, format!("{}: {why}", crate::i18n::tr("Stopped")));
+    }
     let text = if parts.is_empty() { crate::i18n::tr("The library is up to date with this folder.").to_string() } else { parts.join(" · ") };
-    if not_saved.is_empty() && !crashed {
+    if r.stopped.is_some() {
+        app.toast_error(ctx, format!("{name}: {text}"));
+    } else if not_saved.is_empty() && !crashed {
         app.toast(ctx, format!("{name}: {text}"));
     } else {
         app.toast_for(ctx, format!("{name}: {text}"), 12.0);

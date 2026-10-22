@@ -24,7 +24,7 @@
 //!   they wait on; once that many are blocked, a run is not started (and a Skip starts no replacement reader) and the
 //!   run ends with an error saying so, so repeated cancel and restart cannot pile up blocked threads. The count is
 //!   looked at when a run starts and after each Skip; ✕ can still abandon the readers of the runs under way (at most
-//!   [`crate::import::workers`] per pool, and Synchronize Folder runs two) on top, so the bound is the cap plus that.
+//!   [`crate::import::commit::workers`] per pool, and Synchronize Folder runs two) on top, so the bound is the cap plus that.
 //!
 //! Several pools can run at once under one [`ReadWatch`] (Synchronize Folder probes the new files while it checks
 //! the library's photos): the watch names the longest stall of all, and Skip acts on the pool that has it.

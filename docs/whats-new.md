@@ -4,6 +4,7 @@
 
 ### ✕ ends an import or scan at once when a file stops answering
 - ✕ now ends an import within about a second while files are being read or copied, however long a read has been waiting; a copy that was under way is taken back. While folders are being listed, ✕ still waits for the listing.
+- Synchronize Folder reads the same way: ✕ ends its scan and the import of its run at once, and when the drive stops answering the scan says so, lists only what it reached and offers only Import new photos.
 - After four skipped files the import or scan stops with an error that the drive is not answering. Agents use `activity.skip {id}`; `activity.list` shows `stalled` for the task.
 - While 32 or more given-up reads are still blocked on a drive that stopped answering, a new import or scan ends at once with an error saying so, even from another drive: try again later, or restart LightCraft.
 

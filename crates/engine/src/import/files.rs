@@ -201,6 +201,40 @@ fn probe_watched(
     read_files(probe, jobs, |_, _| false, None, done, cancel, watch).into_iter().map(|r| r.info).collect()
 }
 
+/// What became of one job of [`pooled`].
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) enum Pooled<R> {
+    Done(R),
+    /// It was skipped, or its worker panicked: why.
+    Failed(String),
+    /// Never started, or cut off: by ✕, or because the run ended.
+    Unreached,
+}
+
+/// Run `work` on each of `jobs` on the pool's threads (see [`reads`]), `label(i)` naming job `i` when it stalls;
+/// `on_done` counts each job settled.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn pooled<J: Send + 'static, R: Send + 'static>(
+    watch: &ReadWatch,
+    cancel: &std::sync::atomic::AtomicBool,
+    name: &'static str,
+    jobs: Vec<J>,
+    label: &dyn Fn(usize) -> String,
+    work: impl Fn(J) -> R + Send + Sync + 'static,
+    on_done: &dyn Fn(),
+) -> Vec<Pooled<R>> {
+    let pool = reads::Pool { watch, cancel, name, threads: workers(jobs.len()) };
+    let outcomes = pool.run(jobs, label, std::sync::Arc::new(work), std::sync::Arc::new(|_| {}), std::sync::Arc::new(|| {}), &|_| on_done());
+    outcomes
+        .into_iter()
+        .map(|o| match o {
+            reads::Outcome::Done(r) => Pooled::Done(r),
+            reads::Outcome::Failed(why) => Pooled::Failed(why),
+            reads::Outcome::Unreached => Pooled::Unreached,
+        })
+        .collect()
+}
+
 /// A file to read: its path, and what an earlier scan probed of it (used while `still_valid` says it holds).
 pub(super) struct ReadJob {
     pub(super) path: String,

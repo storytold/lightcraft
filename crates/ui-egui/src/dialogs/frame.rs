@@ -198,7 +198,7 @@ pub fn confirm_style(dlg: &Dialog) -> ConfirmStyle {
 }
 
 /// A dialog that only shows something: one Close, nothing to confirm or cancel. (Synchronize
-/// Folder is one when its folder turned out up to date.)
+/// Folder is one when its scan left nothing to choose.)
 pub(super) fn only_shows(dlg: &Dialog) -> bool {
     matches!(
         dlg,
@@ -210,5 +210,5 @@ pub(super) fn only_shows(dlg: &Dialog) -> bool {
             | Dialog::WhatsNew
             | Dialog::ManageEffects { .. }
             | Dialog::ViewOptions
-    ) || matches!(dlg, Dialog::SynchronizeFolder { counts: Some(c), .. } if c.up_to_date())
+    ) || matches!(dlg, Dialog::SynchronizeFolder { counts: Some(c), .. } if c.nothing_to_choose())
 }

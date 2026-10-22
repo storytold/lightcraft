@@ -57,13 +57,14 @@ guard.detail(&file_name);
   progress* (a chunk read or written; code that works long without touching the disk calls `import::progressed()`), a
   skip gives up only the read `stalled` names, and an abandoned read keeps its memory permit
   (`memory::work_gate`) until the drive answers, so later large jobs can wait for it. The fourth skipped read of a scan
-  or import ends it with an error (and so does a run that starts while 32 or more abandoned reads, of any drive, are still blocked in the system: `StuckReaders` (`Session::stuck_readers`, the process-wide count by default) counts them across cancel and restart and is looked at when a run starts and after each Skip, so repeated ✕ and rescans cannot pile up blocked threads; ✕ can still add the readers of the runs under way. The error says so rather than naming the drive being read, and goes when the system lets the reads go or LightCraft restarts): an import says so in its toast (`Prepared::stopped`), a scan in an error toast (`ScanOutput::stopped`). A wait for memory at
+  or import ends it with an error (and so does a run that starts while 32 or more abandoned reads, of any drive, are still blocked in the system: `StuckReaders` (`Session::stuck_readers`, the process-wide count by default) counts them across cancel and restart and is looked at when a run starts and after each Skip, so repeated ✕ and rescans cannot pile up blocked threads; ✕ can still add the readers of the runs under way. The error says so rather than naming the drive being read, and goes when the system lets the reads go or LightCraft restarts): an import says so in its toast (`Prepared::stopped`), a scan in an error toast (`ScanOutput::stopped`,
+  `FolderChanges::stopped`), and a Synchronize run stops there and reports it (`SyncReport::stopped`). A run made from a scan that stopped imports the new files the scan listed, then stops: no relink, remove or sidecar step (what the scan lists is only what it reached), and the dialog disables those choices. A wait for memory at
   the gate counts as progress (the gate reports once a second) only while a holder that was not given up is working: a
   wait blocked only by abandoned reads, which keep their memory (`WorkGate::abandoned_bytes`), is named and can be
-  skipped too. `ScanProgress::reads` / `ImportJob::reads`
+  skipped too. `ScanProgress::reads` / `SyncProgress::files.reads` / `ImportJob::reads`
   are the `ReadWatch` a frontend mirrors onto the task each frame (`panels::activity::follow_reads`). Not covered:
-  listing folders (the walk), a few path checks before a copy, and Synchronize Folder's folder checks, which still run
-  on scoped threads (its scan reads on the pool too, but does not yet say that the drive stopped answering).
+  listing folders (the walk), a few path checks before a copy, and Synchronize Folder's sidecar reads and file checks
+  after the scan.
 - **Quiet periodic work** shows no row: the auto-import folder listing runs every few seconds through
   `tasks::spawn(.., None, ..)`.
 

@@ -2359,5 +2359,7 @@
   "Import dropped files without review": "Імпортувати перетягнуті файли без перегляду",
   "An import is running": "Імпорт уже виконується",
   "An import is running. Drop photos when it has finished": "Імпорт уже виконується. Перетягніть фото, коли він завершиться",
-  "Finish Lightroom catalog import before adding photos": "Завершіть імпорт каталогу Lightroom, перш ніж додавати фото"
+  "Finish Lightroom catalog import before adding photos": "Завершіть імпорт каталогу Lightroom, перш ніж додавати фото",
+  "Synchronize Folder reads the same way: ✕ ends its scan and the import of its run at once, and when the drive stops answering the scan says so, lists only what it reached and offers only Import new photos.": "Синхронізувати теку читає так само: × одразу завершує її сканування та імпорт під час її виконання, а коли диск перестає відповідати, сканування повідомляє про це, перелічує лише те, до чого дійшло, і пропонує лише Імпортувати нові фото.",
+  "The scan stopped when the drive stopped answering: only new photos can be imported from it.": "Сканування зупинено, бо диск перестав відповідати: з нього можна імпортувати лише нові фото."
 }
