@@ -243,7 +243,9 @@ pub fn body(app: &LightcraftApp, ui: &mut egui::Ui, dlg: &mut Dialog) {
 /// Synchronize with the dialog's choices: the scan the dialog showed is handed to a worker
 /// thread at once ([`SyncRun`]); nothing is read from disk on the UI thread. A scan that went
 /// stale (the folder's photos changed meanwhile) is refused and made again, keeping the choices.
-/// A folder that is up to date has nothing to hand over: confirming it only closes the dialog.
+/// A folder where nothing would be brought in, relinked, removed or read with these choices has
+/// nothing to hand over: confirming it only closes the dialog (keeping the choice about files
+/// already in the library).
 pub fn confirm(app: &mut LightcraftApp, dlg: &Dialog) -> Result<Value, String> {
     let Dialog::SynchronizeFolder {
         path,
@@ -263,7 +265,8 @@ pub fn confirm(app: &mut LightcraftApp, dlg: &Dialog) -> Result<Value, String> {
     // (before the busy checks: nothing is imported or written, so a running import or
     // synchronize can't clash with it, and the dialog closes either way. Like every result the
     // dialog shows, it is the scan's: a file added since is found by the next Synchronize)
-    if counts.up_to_date() {
+    if counts.nothing_to_do(*import_duplicates) {
+        remember_import_duplicates(app, *import_duplicates);
         return Ok(json!({"upToDate": true}));
     }
     if app.sync_run.is_some() {
@@ -273,12 +276,7 @@ pub fn confirm(app: &mut LightcraftApp, dlg: &Dialog) -> Result<Value, String> {
     if app.import.is_some() {
         return Err(crate::i18n::tr("Wait for the import to finish").to_string());
     }
-    // the library remembers the choice for the next Synchronize (and the next time this dialog opens)
-    if *import_duplicates != app.session.import_defaults.import_duplicates
-        && let Err(e) = app.run("library.preferences", json!({"import": {"importDuplicates": *import_duplicates}}))
-    {
-        log::warn!("synchronize: the choice about files already in the library was not saved: {e}");
-    }
+    remember_import_duplicates(app, *import_duplicates);
     let choice = SyncChoice {
         import_new: *import_new,
         import_duplicates: *import_duplicates,
@@ -329,6 +327,16 @@ pub fn confirm(app: &mut LightcraftApp, dlg: &Dialog) -> Result<Value, String> {
     guard.detail(name);
     app.sync_run = Some(SyncRun { name: name.clone(), progress, crashed, rx, commit: Some(commit), stopping: false, not_saved: Vec::new(), guard });
     Ok(json!({"started": true}))
+}
+
+/// The library remembers the choice about files already in it for the next Synchronize (and the
+/// next time this dialog opens).
+fn remember_import_duplicates(app: &mut LightcraftApp, import_duplicates: bool) {
+    if import_duplicates != app.session.import_defaults.import_duplicates
+        && let Err(e) = app.run("library.preferences", json!({"import": {"importDuplicates": import_duplicates}}))
+    {
+        log::warn!("synchronize: the choice about files already in the library was not saved: {e}");
+    }
 }
 
 /// A synchronize at work: the file-system half on a worker thread, its steps committed here

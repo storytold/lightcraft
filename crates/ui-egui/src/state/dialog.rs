@@ -383,4 +383,10 @@ impl SyncCounts {
     pub fn up_to_date(&self) -> bool {
         !self.offline && self.new + self.copies + self.moved + self.missing + self.metadata == 0
     }
+    /// Whether Synchronize, with the box under Import new photos as `import_duplicates` says,
+    /// would bring in, relink, remove or read nothing: [`SyncCounts::up_to_date`], but files the
+    /// library has elsewhere count only when that box brings them in.
+    pub fn nothing_to_do(&self, import_duplicates: bool) -> bool {
+        !self.offline && self.new + if import_duplicates { self.copies } else { 0 } + self.moved + self.missing + self.metadata == 0
+    }
 }
