@@ -25,15 +25,16 @@ struct Folder {
     /// ASCII names (the names a file system treats alike in other cases are the ones we can fold
     /// ourselves): for any other the disk decides, as before.
     xmp: Option<HashSet<String>>,
-    /// The folder's modification time when it was listed: a file added or removed since changes
-    /// it, and the `.xmp` names are then not trusted (a listing taken by a review can be hours old).
+    /// The folder's modification time when it was listed: a file added, removed or replaced since
+    /// changes it, and the `.xmp` and file names are then not trusted (a listing taken by a review
+    /// can be hours old).
     modified: Option<SystemTime>,
 }
 
 /// The folders listed so far (see the module docs). The review's scan hands its listing to the
 /// import that review starts ([`crate::import::ImportJob::with_listed`]), and nowhere else.
-/// The `.xmp` names of a folder are trusted only while its modification time is what it was
-/// when it was listed (looked at once per folder per batch: [`ListedFolders::new_batch`]); a
+/// The `.xmp` names and the file names of a folder are trusted only while its modification time
+/// is what it was when it was listed (looked at once per folder per batch: [`ListedFolders::new_batch`]); a
 /// volume whose folders keep no usable time (it can't be read) is probed as before.
 #[derive(Debug, Default)]
 pub struct ListedFolders {
@@ -91,13 +92,15 @@ impl ListedFolders {
 
     /// Whether `dir` is as it was listed.
     fn unchanged(&self, dir: &Path, listed: Option<SystemTime>) -> bool {
+        // (no time to compare with: not trusted, and the disk is not asked)
+        let Some(listed) = listed else { return false };
         let mut checked = self.checked.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(known) = checked.get(dir) {
             return *known;
         }
         self.looked.fetch_add(1, Ordering::Relaxed);
         let now = std::fs::metadata(dir).and_then(|m| m.modified()).ok();
-        let same = now.is_some() && now == listed;
+        let same = now == Some(listed);
         checked.insert(dir.to_path_buf(), same);
         same
     }

@@ -353,3 +353,16 @@ fn a_listed_file_replaced_by_a_folder_is_expanded() {
     assert_eq!(found.len(), 3, "{found:?}");
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// A folder noted with no time (too recent to vouch for, or the volume keeps none) is not
+/// trusted, and finding that out costs no look at the disk.
+#[test]
+fn a_folder_without_a_listed_time_costs_no_look() {
+    let root = scratch("no-time");
+    std::fs::write(root.join("a.jpg"), b"x").unwrap();
+    let mut l = ListedFolders::default();
+    l.note(&root, vec![("a.jpg".into(), crate::walk::EntryKind::File)], true, None);
+    assert!(!l.is_known_file(&root.join("a.jpg")));
+    assert_eq!(l.looked.load(Relaxed), 0);
+    let _ = std::fs::remove_dir_all(&root);
+}
