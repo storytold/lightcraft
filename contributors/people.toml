@@ -67,3 +67,7 @@ sync_github_name = true
 
 [people.ronibalthazar]
 sync_github_name = true
+
+[people.samuelili]
+real_name = "Samuel Li"
+sync_github_name = true
