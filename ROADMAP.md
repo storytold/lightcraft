@@ -94,7 +94,7 @@ while lower-layer errors stay English. Detail: [localization-parity.md](docs/loc
 | Japanese | ja | 87% | partial |
 | German | de | 91% | partial |
 | Korean | ko | 0% | none (no Hangul face) |
-| Vietnamese | vi | 0% | none |
+| Vietnamese | vi | 99% | partial |
 
 Also shipped: Traditional Chinese (87%), Russian (74%), Ukrainian (99%), Italian (92%), Georgian (100%).
 
@@ -183,6 +183,7 @@ Ranked toward beta; detail in [docs/roadmap.md](docs/roadmap.md), gaps in [docs/
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-22 | minor | Vietnamese (`vi`) interface language added (2,402 UI strings and 298 format templates) |
 | 2026-10-12 | minor | Italian interface (`it`, #1192): 2,201 of 2,398 messages, locale, menu command and tests; headline numbers unchanged |
 | 2026-10-13 | minor | Sony ILCA-99M2 camera colour profile in the log; numbers unchanged |
 | 2026-10-14 | minor | Localization ~52% → ~55% (mean of the 12 key languages): de, es, fr, ja and uk catalogs filled |

@@ -1,12 +1,12 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** trivial (Italian: every interface string translated, native-speaker corrections; previously minor: de, es, fr, ja, uk catalogs filled; re-measured; Italian and Georgian interface catalogs added) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-22 · **Change:** minor (Vietnamese (`vi`) interface catalog added: 2,402 UI strings and 298 format templates; previously Italian interface strings translated) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 How far each interface language is from `full`. How to add or maintain a language is in
 [localization.md](localization.md); per-language notes are in `localization-<code>.md`
 ([zh-hans](localization-zh-hans.md), [zh-hant](localization-zh-hant.md), [ja](localization-ja.md),
 [pt-br](localization-pt-br.md), [es](localization-es.md), [de](localization-de.md),
-[ru](localization-ru.md), [ka](localization-ka.md)).
+[ru](localization-ru.md), [cs](localization-cs.md), [ka](localization-ka.md), [vi](localization-vi.md)).
 
 ## The target
 
@@ -56,7 +56,7 @@ that is promising but is not recorded as review, so the column says `no (communi
 | 9 | Japanese | `ja` | 2,383 / 2,398 (99%; 2026-10-12) | as zh-hans; vertical export watermarks | Jpan via craft-fonts (BIZ UDPGothic / UDMincho); IME through winit | no (community edits) | partial | 2–4 h (native review, lower-layer errors) |
 | 10 | German | `de` | 2,338 / 2,398 (97%; 2026-10-12, the rest are words spelled the same) | as zh-hans; What's New translated line by line | Latin | no (community edits) | partial | 2–4 h (native review, lower-layer errors) |
 | 11 | Korean | `ko` | 0 (0%) | none | **no Korean (Hangul) face**: needs a non-Adobe OFL face in craft-fonts (Noto CJK is allowed only for Chinese) | no | none | 14–22 h |
-| 12 | Vietnamese | `vi` | 0 (0%) | none | Latin with stacked diacritics (Inter covers it; check combining marks) | no | none (target: not shipped) | 10–16 h |
+| 12 | Vietnamese | `vi` | 2,672 / 2,700 (99%; 2,402 plain + 298 formats; What's New left in English) | as zh-hans | Latin with stacked diacritics (Inter covers all precomposed glyphs) | no (community edits) | partial (lower-layer errors English) | 2–4 h |
 
 ## Other languages LightCraft ships (4)
 
@@ -93,6 +93,7 @@ Target languages LightCraft lacks: Korean, Dutch, Polish, Swedish, Norwegian Bok
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-22 | minor | Vietnamese (`vi`) interface catalog: 2,402 UI strings and 298 format templates (What's New left in English) |
 | 2026-10-15 | trivial | Italian (`it`): 339 interface messages and 60 format strings that were missing or still in English translated (2,628 of 3,278; only What's New left in English); native-speaker corrections: Exposure → *Esposizione*, Sharpening → *Nitidezza*, Preset → *Preset*, blurry → *sfocate* |
 | 2026-10-12 | minor | Italian interface catalog (`it`): 2,201 of 2,398 messages, What's New left in English |
 | 2026-10-11 | minor | Shared work: the interface decides on error kinds, not English error text (#1046) |
