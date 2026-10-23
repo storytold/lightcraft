@@ -1,0 +1,574 @@
+//! Light LRI (Light L16): a chain of `LELR` blocks, each a protocol-buffers message and the packed sensor data of
+//! some of the camera's 16 modules.
+//!
+//! Sources: the protocol-buffers wire format (Google's public encoding documentation: varints, the four wire types
+//! used here, length-delimited sub-messages) and our own black-box analysis of the one CC0 LRI sample on
+//! raw.pixls.us (Light L16); every field number and value below was found on it.
+//!
+//! - Block: `LELR`, the block's length (u64, header included), the message's offset from the block start (u64) and
+//!   length (u32), the message kind (u8: 0 = capture and calibration, 1 = the camera's view settings), zero padding
+//!   to 32 bytes. Blocks follow each other to the end of the file; the sample has nine.
+//! - Kind 0, field 12 (repeated): one module's capture. 2 = module id (0..=4 the 28 mm A1..A5, 5..=9 the 70 mm
+//!   B1..B5, 10..=15 the 150 mm C1..C6), 4 = lens (focus) position, 8 = exposure time in ns, 13 = the red site of the
+//!   2x2 Bayer cell {1: column, 2: row}: the site whose mean is lowest under the overcast daylight of the sample and
+//!   the one that renders its sky neutral (-1 on the monochrome module A2, whose four sites read the same),
+//!   9 = the surface {2: {1: width, 2: height}, 3: format, 4: row stride in bytes, 5: data offset from the block
+//!   start}. The sample stores five 4160 x 3120 modules a block, 16 MiB apart, all upright (the 70 mm modules' mirrors
+//!   don't flip what is stored). Format 7 packs 10-bit samples least significant bits first: read that way,
+//!   same-colour neighbours differ by 4.6 on average, against 330 read most significant bits first and 350 as MIPI
+//!   RAW10.
+//! - Kind 0, field 3: the capture time {1: year .. 6: second}, local; field 8: the model (`L16`).
+//! - Kind 0, field 13 (repeated): a module's factory calibration, {1: module id} and one of these (the sample spreads
+//!   them over three blocks, one record per module in each)
+//!   - 2 (repeated): colour under one illuminant {1: illuminant, 2: white-balanced camera RGB → XYZ D50 (its rows sum
+//!     to D50's white), 3: XYZ → camera RGB, 4: R/G and 5: B/G of the illuminant's white in camera RGB (3 maps that
+//!     white to them), 6: 24 chart patches}. Matrix 3 and fields 4/5 put illuminant 0's white at xy (0.448, 0.409)
+//!     (standard A), 2's at (0.314, 0.322) (D65) and 6's at (0.379, 0.374) (TL84); A and D65 are used. Each matrix
+//!     is fields 1..=9 (f32), row-major.
+//!   - 4: vignetting {2 (repeated): {1: lens position, 2: {1: 17 columns, 2: 13 rows, 3: the gains, f32 row-major}}}:
+//!     1.0 at the centre, up to 3.4 in a 28 mm module's corners, the inverse of the sample's sky falloff. The 70 mm
+//!     modules have one grid per lens position; the nearest to the capture's is used. The grid's outer points sit on
+//!     the image's edges (it is symmetric about the centre point), so it is a DNG `GainMap` over the frame.
+//! - Kind 0, field 16: the sensor {2: {1: black level, 2: white level}}: 42 and 1023 on the sample, whose darkest
+//!   samples sit at 34..43.
+//! - Kind 1, field 15: the as-shot white-balance gains {1: R, 2: Gr, 3: Gb, 4: B} (2.02, 1, 1, 1.48 on the sample:
+//!   the D65 white of module A1 is R/G 0.49, B/G 0.70).
+//!
+//! One module is developed: the lowest-numbered colour module (A1 on the sample, a 28 mm view). Fusing the modules
+//! into one picture, the per-site 4x4 crosstalk matrices of the vignetting record (field 13.4.1) and the geometric
+//! calibration (field 13.3) are not read.
+use crate::opcodes::{Area, Opcode};
+use crate::{BlackLevel, Cfa, ColorData, Mat3, Mode, OpcodeLists, RawData, RawError, RawFormat, RawImage, Rect, Result};
+use lightcraft_geom::Orientation;
+
+const MAGIC: &[u8; 4] = b"LELR";
+const HEADER: usize = 32;
+/// More blocks than any capture writes (the sample has nine).
+const MAX_BLOCKS: usize = 4096;
+/// Surface format of 10-bit samples packed least significant bits first.
+const FORMAT_PACKED10: u64 = 7;
+/// Calibration illuminants as the file numbers them, and their Exif `LightSource` codes.
+const ILLUMINANT_A: u64 = 0;
+const ILLUMINANT_D65: u64 = 2;
+const EXIF_STANDARD_A: u16 = 17;
+const EXIF_D65: u16 = 21;
+/// Sensor levels of the sample, for a file without the sensor record.
+const DEFAULT_BLACK: f32 = 42.0;
+const DEFAULT_WHITE: f32 = 1023.0;
+/// Vignetting grid size (17 x 13 on the sample); larger grids are refused.
+const MAX_GRID_POINTS: usize = 4096;
+
+/// Whether `bytes` starts like an LRI file.
+pub(crate) fn is_lri(bytes: &[u8]) -> bool {
+    bytes.starts_with(MAGIC)
+}
+
+/// A protocol-buffers field value (wire types 0, 1, 2 and 5; groups are not used by LRI and are refused).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Val<'a> {
+    Varint(u64),
+    Fixed64(u64),
+    Bytes(&'a [u8]),
+    Fixed32(u32),
+}
+
+/// A parsed message: its fields in file order.
+#[derive(Debug, Default)]
+struct Msg<'a>(Vec<(u64, Val<'a>)>);
+
+fn varint(b: &[u8], pos: &mut usize) -> Result<u64> {
+    let mut v = 0u64;
+    for shift in (0..64).step_by(7) {
+        let c = *b.get(*pos).ok_or_else(|| corrupt("truncated varint"))?;
+        *pos += 1;
+        v |= u64::from(c & 0x7f) << shift;
+        if c < 0x80 {
+            return Ok(v);
+        }
+    }
+    Err(corrupt("varint longer than 10 bytes"))
+}
+
+fn corrupt(what: &str) -> RawError {
+    RawError::Corrupt(format!("LRI: {what}"))
+}
+
+impl<'a> Msg<'a> {
+    fn parse(b: &'a [u8]) -> Result<Msg<'a>> {
+        let mut fields = Vec::new();
+        let mut pos = 0;
+        while pos < b.len() {
+            let key = varint(b, &mut pos)?;
+            let (num, wire) = (key >> 3, key & 7);
+            let take = |pos: &mut usize, n: usize| -> Result<&'a [u8]> {
+                let end = pos.checked_add(n).ok_or_else(|| corrupt("field length"))?;
+                let s = b.get(*pos..end).ok_or_else(|| corrupt("field past the end of its message"))?;
+                *pos = end;
+                Ok(s)
+            };
+            let val = match wire {
+                0 => Val::Varint(varint(b, &mut pos)?),
+                1 => Val::Fixed64(u64::from_le_bytes(take(&mut pos, 8)?.try_into().map_err(|_| corrupt("fixed64"))?)),
+                2 => {
+                    let n = usize::try_from(varint(b, &mut pos)?).map_err(|_| corrupt("field length"))?;
+                    Val::Bytes(take(&mut pos, n)?)
+                }
+                5 => Val::Fixed32(u32::from_le_bytes(take(&mut pos, 4)?.try_into().map_err(|_| corrupt("fixed32"))?)),
+                w => return Err(corrupt(&format!("wire type {w}"))),
+            };
+            fields.push((num, val));
+        }
+        Ok(Msg(fields))
+    }
+
+    fn all(&self, num: u64) -> impl Iterator<Item = Val<'a>> + '_ {
+        self.0.iter().filter(move |(n, _)| *n == num).map(|(_, v)| *v)
+    }
+
+    fn varint(&self, num: u64) -> Option<u64> {
+        self.all(num).find_map(|v| if let Val::Varint(x) = v { Some(x) } else { None })
+    }
+
+    /// A varint field read as a signed (two's complement) number: -1 is written as 2^64 - 1.
+    fn int(&self, num: u64) -> Option<i64> {
+        self.varint(num).map(|v| v as i64)
+    }
+
+    fn f32(&self, num: u64) -> Option<f32> {
+        self.all(num).find_map(|v| if let Val::Fixed32(x) = v { Some(f32::from_bits(x)) } else { None }).filter(|v| v.is_finite())
+    }
+
+    fn bytes(&self, num: u64) -> Option<&'a [u8]> {
+        self.all(num).find_map(|v| if let Val::Bytes(b) = v { Some(b) } else { None })
+    }
+
+    /// Every sub-message `num` that parses.
+    fn subs(&self, num: u64) -> impl Iterator<Item = Msg<'a>> + '_ {
+        self.all(num).filter_map(|v| if let Val::Bytes(b) = v { Msg::parse(b).ok() } else { None })
+    }
+
+    fn sub(&self, num: u64) -> Option<Msg<'a>> {
+        self.subs(num).next()
+    }
+}
+
+/// One `LELR` block: its bytes (header included), message and message kind.
+struct Block<'a> {
+    bytes: &'a [u8],
+    msg: Msg<'a>,
+    kind: u8,
+}
+
+fn u64_at(b: &[u8], at: usize) -> Option<u64> {
+    Some(u64::from_le_bytes(b.get(at..at.checked_add(8)?)?.try_into().ok()?))
+}
+
+fn blocks(bytes: &[u8]) -> Result<Vec<Block<'_>>> {
+    let mut out = Vec::new();
+    let mut at = 0usize;
+    while at < bytes.len() {
+        if out.len() >= MAX_BLOCKS {
+            return Err(RawError::Limit("LRI block count"));
+        }
+        let rest = bytes.get(at..).unwrap_or_default();
+        if !rest.starts_with(MAGIC) || rest.len() < HEADER {
+            return Err(corrupt(&format!("no block header at byte {at}")));
+        }
+        let len = u64_at(rest, 4).and_then(|v| usize::try_from(v).ok()).filter(|&l| (HEADER..=rest.len()).contains(&l));
+        let len = len.ok_or_else(|| corrupt(&format!("block at byte {at} runs past the end of the file")))?;
+        let block = rest.get(..len).unwrap_or_default();
+        let msg_at = u64_at(block, 12).and_then(|v| usize::try_from(v).ok()).ok_or_else(|| corrupt("message offset"))?;
+        let msg_len = block.get(20..24).and_then(|b| b.try_into().ok()).map(u32::from_le_bytes).ok_or_else(|| corrupt("message length"))?;
+        let msg = msg_at
+            .checked_add(msg_len as usize)
+            .and_then(|end| block.get(msg_at..end))
+            .ok_or_else(|| corrupt(&format!("message of the block at byte {at} outside the block")))?;
+        let kind = block.get(24).copied().unwrap_or_default();
+        out.push(Block { bytes: block, msg: Msg::parse(msg)?, kind });
+        at += len;
+    }
+    Ok(out)
+}
+
+/// One module's capture, with its samples' place in the file.
+struct Module<'a> {
+    id: u64,
+    width: usize,
+    height: usize,
+    stride: usize,
+    /// From the first sample on (rows `stride` bytes apart).
+    data: &'a [u8],
+    /// The red site of the 2x2 cell (column, row); `None` on a monochrome module.
+    red: Option<(usize, usize)>,
+    exposure_ns: Option<u64>,
+    lens_position: u64,
+}
+
+fn module<'a>(block: &'a [u8], m: &Msg<'a>) -> Option<Module<'a>> {
+    let surface = m.sub(9)?;
+    let size = surface.sub(2)?;
+    let (width, height) = (usize::try_from(size.varint(1)?).ok()?, usize::try_from(size.varint(2)?).ok()?);
+    let stride = usize::try_from(surface.varint(4)?).ok()?;
+    let offset = usize::try_from(surface.varint(5)?).ok()?;
+    let row_bytes = width.checked_mul(10)?.div_ceil(8);
+    // even dimensions: whole 2x2 cells
+    if surface.varint(3)? != FORMAT_PACKED10 || width == 0 || height == 0 || width % 2 != 0 || height % 2 != 0 || stride < row_bytes {
+        return None;
+    }
+    let end = stride.checked_mul(height - 1)?.checked_add(row_bytes)?.checked_add(offset)?;
+    let data = block.get(offset..end)?;
+    let red = m.sub(13).and_then(|b| match (b.int(1)?, b.int(2)?) {
+        (x @ 0..=1, y @ 0..=1) => Some((x as usize, y as usize)),
+        _ => None,
+    });
+    Some(Module { id: m.varint(2)?, width, height, stride, data, red, exposure_ns: m.varint(8), lens_position: m.varint(4).unwrap_or(0) })
+}
+
+/// A Bayer cell with red at (`x`, `y`): blue on the opposite corner, green on the other two.
+fn bayer(x: usize, y: usize) -> Cfa {
+    let mut pattern = vec![1u8; 4];
+    pattern[y * 2 + x] = 0;
+    pattern[(1 - y) * 2 + (1 - x)] = 2;
+    Cfa { width: 2, height: 2, pattern }
+}
+
+fn mat3(m: &Msg) -> Option<Mat3> {
+    let mut v = [0f64; 9];
+    for (i, x) in v.iter_mut().enumerate() {
+        *x = f64::from(m.f32(i as u64 + 1)?);
+    }
+    Some(Mat3([[v[0], v[1], v[2]], [v[3], v[4], v[5]], [v[6], v[7], v[8]]]))
+}
+
+/// The module's colour matrices (XYZ → camera) and forward matrices under standard A and D65, from its calibration
+/// records.
+fn colour(calibration: &[Msg]) -> ColorData {
+    let mut color = ColorData::default();
+    for c in calibration.iter().flat_map(|cal| cal.subs(2)) {
+        let slot = match c.varint(1) {
+            Some(ILLUMINANT_A) => 0,
+            Some(ILLUMINANT_D65) => 1,
+            _ => continue,
+        };
+        let (Some(forward), Some(matrix)) = (c.sub(2).as_ref().and_then(mat3), c.sub(3).as_ref().and_then(mat3)) else { continue };
+        color.illuminant[slot] = [EXIF_STANDARD_A, EXIF_D65][slot];
+        color.color_matrix[slot] = Some(matrix);
+        color.forward_matrix[slot] = Some(forward);
+    }
+    // one illuminant alone sits in the first slot, as a single-illuminant DNG has it
+    if color.color_matrix[0].is_none() {
+        color.illuminant = [color.illuminant[1], 0];
+        color.color_matrix = [color.color_matrix[1], None];
+        color.forward_matrix = [color.forward_matrix[1], None];
+    }
+    color
+}
+
+/// The module's vignetting gains, from its calibration records, as an `OpcodeList2` gain map over the
+/// `width x height` frame (the grid nearest `lens_position`).
+fn vignetting(calibration: &[Msg], lens_position: u64, width: usize, height: usize) -> Option<Opcode> {
+    let grids: Vec<(u64, Msg)> = calibration
+        .iter()
+        .filter_map(|c| c.sub(4))
+        .flat_map(|v| v.subs(2).filter_map(|g| Some((g.varint(1).unwrap_or(0), g.sub(2)?))).collect::<Vec<_>>())
+        .collect();
+    let (_, grid) = grids.iter().min_by_key(|(at, _)| at.abs_diff(lens_position))?;
+    let (cols, rows) = (usize::try_from(grid.varint(1)?).ok()?, usize::try_from(grid.varint(2)?).ok()?);
+    let n = cols.checked_mul(rows).filter(|&n| (4..=MAX_GRID_POINTS).contains(&n) && cols >= 2 && rows >= 2)?;
+    let raw = grid.bytes(3)?;
+    if raw.len() != n.checked_mul(4)? {
+        return None;
+    }
+    let gains: Vec<f32> = raw.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect();
+    // a gain map that darkens, or a NaN, is not a vignetting correction
+    if gains.iter().any(|g| !(g.is_finite() && (0.5..=16.0).contains(g))) {
+        return None;
+    }
+    let area = Area { top: 0, left: 0, bottom: height as u32, right: width as u32, plane: 0, planes: 1, row_pitch: 1, col_pitch: 1 };
+    let spacing = [1.0 / (rows - 1) as f64, 1.0 / (cols - 1) as f64];
+    Some(Opcode::GainMap { area, points_v: rows as u32, points_h: cols as u32, spacing, origin: [0.0, 0.0], map_planes: 1, gains })
+}
+
+/// Camera RGB of the as-shot white from the view settings' gains.
+fn as_shot_neutral(blocks: &[Block]) -> Option<[f64; 3]> {
+    let g = blocks.iter().filter(|b| b.kind == 1).find_map(|b| b.msg.sub(15))?;
+    let (r, gr, gb, b) = (g.f32(1)?, g.f32(2)?, g.f32(3)?, g.f32(4)?);
+    let green = f64::from(gr + gb) / 2.0;
+    let n = [green / f64::from(r), 1.0, green / f64::from(b)];
+    n.iter().all(|v| v.is_finite() && *v > 0.0).then_some(n)
+}
+
+fn capture_time(m: &Msg) -> Option<lightcraft_meta::DateTime> {
+    let t = m.sub(3)?;
+    let part = |n| t.varint(n).and_then(|v| u8::try_from(v).ok());
+    Some(lightcraft_meta::DateTime {
+        year: u16::try_from(t.varint(1)?).ok()?,
+        month: part(2)?,
+        day: part(3)?,
+        hour: part(4)?,
+        minute: part(5)?,
+        second: part(6)?,
+        millis: 0,
+        offset_minutes: None,
+    })
+}
+
+pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
+    let blocks = blocks(bytes)?;
+    let headers: Vec<&Block> = blocks.iter().filter(|b| b.kind == 0).collect();
+    let modules: Vec<Module> = headers.iter().flat_map(|b| b.msg.subs(12).filter_map(|m| module(b.bytes, &m)).collect::<Vec<_>>()).collect();
+    let m = modules
+        .iter()
+        .filter(|m| m.red.is_some())
+        .min_by_key(|m| m.id)
+        .ok_or_else(|| RawError::Unsupported("LRI without a colour module of 10-bit packed samples".into()))?;
+    let (w, h) = (m.width, m.height);
+    let n = w.checked_mul(h).filter(|n| *n <= crate::MAX_SAMPLES).ok_or(RawError::Limit("image too large"))?;
+    let (rx, ry) = m.red.unwrap_or_default();
+    let calibration: Vec<Msg> = headers.iter().flat_map(|b| b.msg.subs(13)).filter(|c| c.varint(1) == Some(m.id)).collect();
+    let sensor = headers.iter().find_map(|b| b.msg.sub(16)).and_then(|s| s.sub(2));
+    let black = sensor.as_ref().and_then(|s| s.f32(1)).filter(|v| (0.0..1023.0).contains(v)).unwrap_or(DEFAULT_BLACK);
+    let white = sensor.as_ref().and_then(|s| s.f32(2)).filter(|v| *v > black && *v <= 1023.0).unwrap_or(DEFAULT_WHITE);
+    let mut color = colour(&calibration);
+    color.as_shot_neutral = as_shot_neutral(&blocks);
+    let mut opcodes = OpcodeLists::default();
+    opcodes.list2.extend(vignetting(&calibration, m.lens_position, w, h));
+    let data = if mode == Mode::Full {
+        let mut d = vec![0u16; n];
+        use rayon::prelude::*;
+        d.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
+            let src = m.data.get(y * m.stride..).unwrap_or_default();
+            crate::unpack::unpack_lsb(src, 10, row);
+        });
+        RawData::U16(d)
+    } else {
+        RawData::U16(Vec::new())
+    };
+    let metadata = lightcraft_meta::Metadata {
+        make: Some("Light".into()),
+        model: headers.iter().find_map(|b| b.msg.bytes(8)).map(|s| String::from_utf8_lossy(s).trim().to_string()).filter(|s| !s.is_empty()),
+        capture_time: headers.iter().find_map(|b| capture_time(&b.msg)),
+        exposure_time: m.exposure_ns.filter(|&ns| ns > 0).map(|ns| ns as f64 * 1e-9),
+        // the modules' 35 mm equivalent focal lengths (the camera's specification: 28, 70 and 150 mm)
+        focal_length_35mm: match m.id {
+            0..=4 => Some(28.0),
+            5..=9 => Some(70.0),
+            10..=15 => Some(150.0),
+            _ => None,
+        },
+        width: Some(w as u32),
+        height: Some(h as u32),
+        ..Default::default()
+    };
+    let img = RawImage {
+        format: RawFormat::Lri,
+        width: w,
+        height: h,
+        cpp: 1,
+        data,
+        cfa: Some(bayer(rx, ry)),
+        bits: 10,
+        black: BlackLevel::uniform(black),
+        white: vec![white],
+        active_area: Rect::new(0, 0, w, h),
+        crop: Rect::new(0, 0, w, h),
+        orientation: Orientation::Normal,
+        color,
+        wb_multipliers: None,
+        linearized: false,
+        opcodes,
+        metadata,
+        lens_metadata: Default::default(),
+        pixel_aspect: 1.0,
+    };
+    img.validate_for(mode)?;
+    Ok(img)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn key(num: u64, wire: u64, out: &mut Vec<u8>) {
+        put_varint((num << 3) | wire, out);
+    }
+
+    fn put_varint(mut v: u64, out: &mut Vec<u8>) {
+        while v >= 0x80 {
+            out.push((v as u8) | 0x80);
+            v >>= 7;
+        }
+        out.push(v as u8);
+    }
+
+    fn var(num: u64, v: u64) -> Vec<u8> {
+        let mut o = Vec::new();
+        key(num, 0, &mut o);
+        put_varint(v, &mut o);
+        o
+    }
+
+    fn f32f(num: u64, v: f32) -> Vec<u8> {
+        let mut o = Vec::new();
+        key(num, 5, &mut o);
+        o.extend(v.to_le_bytes());
+        o
+    }
+
+    fn bytes(num: u64, b: &[u8]) -> Vec<u8> {
+        let mut o = Vec::new();
+        key(num, 2, &mut o);
+        put_varint(b.len() as u64, &mut o);
+        o.extend(b);
+        o
+    }
+
+    fn matrix(num: u64, m: [f32; 9]) -> Vec<u8> {
+        bytes(num, &m.iter().enumerate().flat_map(|(i, v)| f32f(i as u64 + 1, *v)).collect::<Vec<_>>())
+    }
+
+    fn block(msg: &[u8], data: &[u8], kind: u8) -> Vec<u8> {
+        let msg_at = HEADER + data.len();
+        let len = msg_at + msg.len();
+        let mut b = Vec::new();
+        b.extend(MAGIC);
+        b.extend((len as u64).to_le_bytes());
+        b.extend((msg_at as u64).to_le_bytes());
+        b.extend((msg.len() as u32).to_le_bytes());
+        b.push(kind);
+        b.resize(HEADER, 0);
+        b.extend(data);
+        b.extend(msg);
+        b
+    }
+
+    fn pack10(px: &[u16]) -> Vec<u8> {
+        let (mut acc, mut n, mut out) = (0u64, 0u32, Vec::new());
+        for &p in px {
+            acc |= u64::from(p) << n;
+            n += 10;
+            while n >= 8 {
+                out.push(acc as u8);
+                acc >>= 8;
+                n -= 8;
+            }
+        }
+        if n > 0 {
+            out.push(acc as u8);
+        }
+        out
+    }
+
+    /// A module capture message (field 12) with its surface at `offset`.
+    fn module_msg(id: u64, w: u64, h: u64, offset: u64, red: (i64, i64)) -> Vec<u8> {
+        let size = [var(1, w), var(2, h)].concat();
+        let surface = [bytes(2, &size), var(3, FORMAT_PACKED10), var(4, w * 10 / 8), var(5, offset)].concat();
+        let bayer = [var(1, red.0 as u64), var(2, red.1 as u64)].concat();
+        bytes(12, &[var(2, id), var(8, 2_000_000), bytes(9, &surface), bytes(13, &bayer)].concat())
+    }
+
+    /// A two-module file (a monochrome A2 and a colour B1 with red at (1, 0)), calibration, sensor record and the
+    /// view settings' white balance.
+    fn sample(w: usize, h: usize) -> (Vec<u8>, Vec<u16>) {
+        let px: Vec<u16> = (0..w * h).map(|i| 42 + (i * 37 % 900) as u16).collect();
+        let mono: Vec<u16> = vec![500; w * h];
+        let (a, b) = (pack10(&mono), pack10(&px));
+        let data = [a.clone(), b].concat();
+        let time = [var(1, 2017), var(2, 9), var(3, 28), var(4, 6), var(5, 24), var(6, 20)].concat();
+        let capture = [
+            bytes(3, &time),
+            module_msg(1, w as u64, h as u64, HEADER as u64, (-1, -1)),
+            module_msg(5, w as u64, h as u64, (HEADER + a.len()) as u64, (1, 0)),
+        ]
+        .concat();
+        let colour_a = [
+            var(1, ILLUMINANT_A),
+            matrix(2, [0.52, 0.33, 0.12, 0.05, 1.11, -0.16, -0.39, -0.9, 2.12]),
+            matrix(3, [0.97, -0.39, 0.02, -0.2, 0.98, 0.26, 0.06, 0.13, 0.44]),
+        ]
+        .concat();
+        let colour_d65 = [
+            var(1, ILLUMINANT_D65),
+            matrix(2, [0.81, 0.25, -0.09, 0.28, 1.13, -0.4, -0.07, -0.39, 1.29]),
+            matrix(3, [0.76, -0.18, -0.04, -0.32, 1.1, 0.25, -0.01, 0.22, 0.48]),
+        ]
+        .concat();
+        let gains: Vec<u8> = [2.0f32, 1.5, 2.0, 1.5, 1.0, 1.5, 2.0, 1.5, 2.0].iter().flat_map(|g| g.to_le_bytes()).collect();
+        let grid = [var(1, 3), var(2, 3), bytes(3, &gains)].concat();
+        let vignetting = bytes(4, &bytes(2, &[var(1, 0), bytes(2, &grid)].concat()));
+        // a record for another module, then this one's in two records, as the sample spreads them
+        let other = bytes(13, &[var(1, 1), bytes(2, &colour_a)].concat());
+        let cal = [other, bytes(13, &[var(1, 5), vignetting].concat()), bytes(13, &[var(1, 5), bytes(2, &colour_a), bytes(2, &colour_d65)].concat())]
+            .concat();
+        let sensor = bytes(16, &[var(1, 2), bytes(2, &[f32f(1, 42.0), f32f(2, 1023.0)].concat())].concat());
+        let header = [bytes(8, b"L16"), cal, sensor].concat();
+        let wb = bytes(15, &[f32f(1, 2.0), f32f(2, 1.0), f32f(3, 1.0), f32f(4, 1.5)].concat());
+        let file = [block(&capture, &data, 0), block(&header, &[], 0), block(&wb, &[], 1)].concat();
+        (file, px)
+    }
+
+    #[test]
+    fn decodes_the_colour_module() {
+        let (f, px) = sample(16, 6);
+        assert_eq!(crate::probe(&f), Some(RawFormat::Lri));
+        let r = crate::decode(&f).unwrap();
+        assert_eq!((r.width, r.height, r.bits), (16, 6, 10));
+        assert_eq!(r.data, RawData::U16(px.clone()), "the colour module, not the monochrome one");
+        assert_eq!(r.cfa.as_ref().map(|c| c.name()).as_deref(), Some("GRBG"));
+        assert_eq!((r.black.mean(), r.white_at(0)), (42.0, 1023.0));
+        assert_eq!(r.color.illuminant, [EXIF_STANDARD_A, EXIF_D65]);
+        assert!(r.color.color_matrix.iter().chain(&r.color.forward_matrix).all(Option::is_some));
+        assert_eq!(r.color.as_shot_neutral, Some([0.5, 1.0, 1.0 / 1.5]));
+        assert!(matches!(&r.opcodes.list2[..], [Opcode::GainMap { points_v: 3, points_h: 3, map_planes: 1, .. }]));
+        assert_eq!(r.metadata.model.as_deref(), Some("L16"));
+        assert_eq!(r.metadata.focal_length_35mm, Some(70.0));
+        assert_eq!(r.metadata.exposure_time, Some(0.002));
+        assert_eq!(r.metadata.capture_time.map(|t| (t.year, t.month, t.second)), Some((2017, 9, 20)));
+        assert_eq!(crate::probe_info(&f).unwrap(), r.info());
+        // the gain map doubles the corners and leaves the centre
+        let n = r.normalized().unwrap();
+        let plain = |i: usize| f32::from(px[i] - 42) / (1023.0 - 42.0);
+        assert!((n.data[0] - 2.0 * plain(0)).abs() < 1e-5);
+        let centre = 3 * 16 + 8;
+        assert!(n.data[centre] < 1.1 * plain(centre) && n.data[centre] >= plain(centre));
+    }
+
+    #[test]
+    fn red_site_sets_the_pattern() {
+        assert_eq!(bayer(0, 0).name(), "RGGB");
+        assert_eq!(bayer(1, 0).name(), "GRBG");
+        assert_eq!(bayer(0, 1).name(), "GBRG");
+        assert_eq!(bayer(1, 1).name(), "BGGR");
+    }
+
+    #[test]
+    fn monochrome_only_is_unsupported() {
+        let w = 8;
+        let data = pack10(&[100; 8 * 2]);
+        let f = block(&module_msg(1, w, 2, HEADER as u64, (-1, -1)), &data, 0);
+        assert!(matches!(crate::decode(&f), Err(RawError::Unsupported(_))));
+    }
+
+    #[test]
+    fn malformed_files_never_panic() {
+        let (f, _) = sample(8, 4);
+        for n in 0..f.len() {
+            let _ = crate::decode(&f[..n]);
+            let _ = crate::probe_info(&f[..n]);
+        }
+        for i in 0..f.len() {
+            for v in [0u8, 0x7f, 0x80, 0xff] {
+                let mut g = f.clone();
+                g[i] = v;
+                let _ = crate::decode(&g);
+                let _ = crate::probe_info(&g);
+            }
+        }
+        // a block length of zero, and one far past the file
+        let mut g = f.clone();
+        g[4..12].copy_from_slice(&0u64.to_le_bytes());
+        assert!(crate::decode(&g).is_err());
+        g[4..12].copy_from_slice(&u64::MAX.to_le_bytes());
+        assert!(crate::decode(&g).is_err());
+    }
+}

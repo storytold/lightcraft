@@ -1,6 +1,6 @@
 # RAW parity: cameras, formats, demosaic, colour and lens profiles
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-26 · **Change:** minor (Canon CRW decoder shared via craft-libs `craft-crw`; Canon EOS D60: chart-measured colour matrices, white balance in Kelvin; Canon CRW merged with MRW: 557 verified; CRW variant rows split by verification status; Sony ILCE-6700 in-file distortion; Minolta MRW decoded, 6 bodies verified; lossy JPEG XL DNG tiles with a non-linear declared transfer curve decode; Canon ColorData Kelvin; X-Trans CMOS 4 bodies take the X-T3's spectral matrices; AHD no longer turns flat noise into a maze pattern) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6 (Camera Raw 18.7)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-26 · **Change:** minor (Light LRI (L16) decodes one camera module, beyond Lightroom; Canon CRW decoder shared via craft-libs `craft-crw`; Canon EOS D60: chart-measured colour matrices, white balance in Kelvin; Canon CRW merged with MRW: 557 verified; CRW variant rows split by verification status; Sony ILCE-6700 in-file distortion; Minolta MRW decoded, 6 bodies verified; lossy JPEG XL DNG tiles with a non-linear declared transfer curve decode; Canon ColorData Kelvin; X-Trans CMOS 4 bodies take the X-T3's spectral matrices; AHD no longer turns flat noise into a maze pattern) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6 (Camera Raw 18.7)
 
 Raw processing is the deepest single dimension of Lightroom parity: a photographer whose camera
 does not decode, or decodes with the wrong colour, cannot switch. This document measures it model by
@@ -175,6 +175,7 @@ checked (the per-model CC0 sweeps of October 2026); compressed ORF (OM / Olympus
 | MRW | 12-bit packed, MSB first, or 12-bit in big-endian 16-bit words; RGGB and GBRG | ✅ | 4 CC0 corpus files (DiMAGE 7Hi, A1, A200, Dynax 7D) plus DiMAGE 7 and A2 checked against their previews; `vendor/mrw.rs` |
 | IIQ, MOS, KDC, X3F | all | ⬜ | preview; an uncompressed MOS, whose IFD0 is the mosaic itself with no Make tag, is recognised by Leaf's data block `0x8606` (#1275) |
 | MEF | uncompressed 12-bit (Mamiya ZD) | ✅ | 1 CC0 corpus file; crop and WB from its uncompressed RGB preview (no JPEG, no WB tag); `vendor/mef.rs` |
+| LRI | Light L16, packed 10-bit modules | 🟡 | not in Adobe's list (beyond Lightroom; counts unchanged); 1 CC0 corpus file; the lowest-numbered colour module (A1, 28 mm) with the file's own black / white levels, A and D65 colour and forward matrices, as-shot white balance and vignetting grid (`OpcodeList2` gain map); the modules are not fused into one picture, crosstalk and geometric calibration unread, no embedded preview; `vendor/lri.rs` |
 | DCR, MFW, DXO, GPR, TIFF raws | all | ⬜ | not imported |
 
 ### Compressed ORF: a clean-room starting point
@@ -336,6 +337,7 @@ Beyond decoding:
 | 2026-10-15 | minor | Canon CRW merged with batches 36–39 and re-measured with `coverage.py`: 551 verified, 660 unverified, 197 preview, 38 unsupported; Canon 98% (94% on verified bodies); use-weighted 94% and 86% |
 | 2026-10-25 | minor | Canon EOS D60: dual-illuminant matrices fitted to our own ColorChecker Classic shots (tungsten, sun; `crates/raw/src/chart_table.rs`), the first chart-calibrated model: its CRWs edit white balance in Kelvin; counts unchanged |
 | 2026-10-18 | minor | Minolta MRW decoded (`vendor/mrw.rs`): DiMAGE 7, 7Hi, A1, A2, A200 and Dynax / Maxxum 7D verified; 551 verified, 656 unverified, 201 preview (re-measured with `coverage.py`) |
+| 2026-10-21 | minor | Light LRI (L16) decodes one camera module with its in-file colour and vignetting calibration (`vendor/lri.rs`, 1 CC0 file); not an Adobe-listed model, counts unchanged |
 | 2026-10-23 | minor | AHD blends its horizontal and vertical candidates where their homogeneity is close, so flat noise no longer becomes a maze pattern; Bayer demosaic row notes the pre-white-balance demosaic (#1328); scores unchanged |
 | 2026-10-30 | patch | RAF camera look fitted on the vignetting-corrected sensor (`LOOK_VERSION` 13): renders were up to 0.3 EV too bright in midtones and 0.6 EV in shadows; X-S10 mean ΔE00 vs the camera JPEG 2.71 → 2.55 on 60 photos |
 | 2026-10-26 | minor | Canon CRW decoding moved to the shared craft-libs crate `craft-crw` (local path dependency until that branch merges); `vendor/crw.rs` is now the adapter onto `RawImage`, and the clean-room derivation record lives in craft-libs `crates/crw/clean-room/`; counts unchanged |
