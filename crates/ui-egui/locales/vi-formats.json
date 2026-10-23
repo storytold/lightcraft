@@ -297,5 +297,14 @@
   "“{to}” is already a person. Combining them makes one person; Undo separates them again.": "“{to}” is already a person. Combining them makes one person; Undo separates them again.",
   "•  {assumption}": "•  {assumption}",
   "… and {more} more": "… và {more} nữa",
-  "…and {more} more": "…and {more} more"
+  "…and {more} more": "…and {more} more",
+  "Backed up the library to {}": "Đã sao lưu thư viện vào {}",
+  "The library was not backed up: {}": "Thư viện chưa được sao lưu: {}",
+  "Restored the library. What it held before is in {}": "Đã khôi phục thư viện. Nội dung trước đó nằm trong {}",
+  "The library was not restored: {}": "Thư viện chưa được khôi phục: {}",
+  "Older backups removed: {}": "Đã xóa các bản sao lưu cũ: {}",
+  "Older backups that could not be removed: {}": "Các bản sao lưu cũ không thể xóa: {}",
+  "Folders of what restores replaced, removed: {}": "Đã xóa các thư mục chứa những gì lần khôi phục đã thay thế: {}",
+  "Folders of what restores replaced that could not be removed: {}": "Các thư mục chứa những gì lần khôi phục đã thay thế không thể xóa: {}",
+  "Not available right now: {}": "Hiện không khả dụng: {}"
 }
