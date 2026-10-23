@@ -496,6 +496,43 @@ fn move_photos_here(app: &mut LightcraftApp, ctx: &egui::Context, ids: Option<&[
     }
 }
 
+/// What moving the folder `name` into the folder `into` says: where it went, how many library
+/// photos went with it (only when some did), and that Undo puts it back.
+pub(crate) fn folder_moved_text(name: &str, into: &str, photos: u64) -> String {
+    if photos == 0 {
+        crate::i18n::tr_format!("Moved “{name}” into “{into}”. Edit → Undo moves it back.", name = name, into = into)
+    } else {
+        crate::i18n::tr_format!("Moved “{name}” into “{into}”. Photos: {n}. Edit → Undo moves it back.", name = name, into = into, n = photos)
+    }
+}
+
+/// The last name of a path, or the whole path when it has none (a disk's root).
+fn last_name(path: &str) -> String {
+    std::path::Path::new(path.trim_end_matches(['/', '\\'])).file_name().map_or_else(|| path.to_string(), |n| n.to_string_lossy().to_string())
+}
+
+/// What a finished `folder.move` (its result `r`: the folder's new `path` and the photos that went
+/// along) says, whether its destination was asked for at once or later
+/// ([`crate::pick::answered_message`]).
+pub(crate) fn folder_moved_message(r: &serde_json::Value) -> Option<String> {
+    let to = r["path"].as_str()?;
+    let into = std::path::Path::new(to).parent().map_or_else(String::new, |p| p.to_string_lossy().to_string());
+    Some(folder_moved_text(&last_name(to), &last_name(&into), r["relinked"].as_u64().unwrap_or(0)))
+}
+
+/// Move Folder To…, from the Folders tree and from Local: move the folder `path` into `into`
+/// on disk (photos follow, one undo step) and say in a toast where it went.
+pub(crate) fn move_folder_to(app: &mut LightcraftApp, ctx: &egui::Context, path: &str, into: &str) {
+    match app.run("folder.move", json!({"path": path, "into": into})) {
+        Ok(r) => {
+            if let Some(text) = folder_moved_message(&r) {
+                app.toast(ctx, text);
+            }
+        }
+        Err(e) => app.toast(ctx, e),
+    }
+}
+
 /// The context menu of a Folders row: a folder's own, a disk's (remove it), none for the
 /// startup disk.
 fn row_menu(app: &mut LightcraftApp, resp: &egui::Response, n: &FolderNode) {
@@ -601,11 +638,7 @@ fn move_folder_item(app: &mut LightcraftApp, ui: &mut egui::Ui, path: &str) {
     if let crate::pick::Picked::Now(v) = picked
         && let Some(into) = v.into_iter().next()
     {
-        let said = app.run("folder.move", json!({"path": path, "into": into})).map(|r| crate::pick::answered_message("folder.move", &r));
-        match said {
-            Ok(Some(text)) | Err(text) => app.toast(ui.ctx(), text),
-            Ok(None) => {}
-        }
+        move_folder_to(app, ui.ctx(), path, &into);
     }
     ui.close();
 }
