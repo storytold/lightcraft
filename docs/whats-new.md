@@ -86,8 +86,8 @@
 - You can now drag a photo from the filmstrip onto the sidebar, as you can from the grid: onto an
   album, a folder or a keyword. Dragging a selected photo takes the whole selection; dragging one that isn't selected
   takes just that photo and selects it. In the Compare view, a photo that isn't selected is dragged alone and the
-  selection, the active photo and the two photos on screen stay as they were. A click on a filmstrip photo still only
-  selects it.
+  selection, the active photo and the two photos on screen stay as they were. Clicking a filmstrip photo works as
+  before: outside Compare it selects the photo, and in Compare a plain click puts the photo into the active side.
 
 ## 2026-10-22
 
