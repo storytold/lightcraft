@@ -297,5 +297,13 @@
   "{what} merge added at {mp}: its full size, {full}, needs more memory than this computer has": "Hasil penggabungan {what} ditambahkan dengan resolusi {mp}: resolusi penuhnya ({full}) memerlukan memori melebihi kapasitas komputer ini",
   "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "Hasil penggabungan {what} ditambahkan dengan resolusi {mp}, resolusi maksimum untuk panorama (resolusi penuhnya {full})",
   "{skipped} catalog images were not imported because their records in the catalog are incomplete.": "{skipped} catalog images were not imported because their records in the catalog are incomplete.",
-  "Listing folders — folders: {folders}, files: {files}": "Listing folders — folders: {folders}, files: {files}"
+  "Listing folders — folders: {folders}, files: {files}": "Listing folders — folders: {folders}, files: {files}",
+  "Backed up the library to {}": "Pustaka dicadangkan ke {}",
+  "The library was not backed up: {}": "Pustaka tidak dicadangkan: {}",
+  "Restored the library. What it held before is in {}": "Pustaka dipulihkan. Isinya sebelumnya ada di {}",
+  "The library was not restored: {}": "Pustaka tidak dipulihkan: {}",
+  "Older backups removed: {}": "Cadangan lama dihapus: {}",
+  "Older backups that could not be removed: {}": "Cadangan lama yang tidak dapat dihapus: {}",
+  "Folders of what restores replaced, removed: {}": "Folder berisi hasil yang digantikan pemulihan, dihapus: {}",
+  "Folders of what restores replaced that could not be removed: {}": "Folder berisi hasil yang digantikan pemulihan yang tidak dapat dihapus: {}"
 }
