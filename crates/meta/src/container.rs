@@ -70,6 +70,8 @@ pub fn embedded(bytes: &[u8]) -> Embedded {
                 other => lightcraft_tiff::writer::encode(t.order, other),
             }),
         }
+    } else if let Some(xmp) = crate::video::extract_video_xmp(bytes) {
+        Embedded { xmp: Some(xmp), ..Default::default() }
     } else {
         Embedded::default()
     }

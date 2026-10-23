@@ -20,6 +20,10 @@ pub enum Format {
     Bmp,
     /// Photoshop PSD / PSB (merged composite).
     Psd,
+    /// MP4 video container.
+    Mp4,
+    /// QuickTime video container (.mov).
+    Mov,
     /// TIFF-structured camera raw (DNG, CR2, NEF, ARW, PEF, ORF, RW2, SRW, 3FR, IIQ, ERF, …):
     /// route to `lightcraft-raw`.
     RawTiffLike,
@@ -41,6 +45,8 @@ impl Format {
             Format::Gif => "gif",
             Format::Bmp => "bmp",
             Format::Psd => "psd",
+            Format::Mp4 => "mp4",
+            Format::Mov => "mov",
             Format::RawTiffLike => "dng",
             Format::RawOther => "raw",
         }
@@ -58,6 +64,8 @@ impl Format {
             Format::Gif => "image/gif",
             Format::Bmp => "image/bmp",
             Format::Psd => "image/vnd.adobe.photoshop",
+            Format::Mp4 => "video/mp4",
+            Format::Mov => "video/quicktime",
             Format::RawTiffLike | Format::RawOther => "image/x-raw",
         }
     }
@@ -77,6 +85,7 @@ impl Format {
             Format::Heif => Some(crate::heif::NOT_IN_BUILD),
             Format::Avif => Some("no pure-Rust, permissively licensed AV1 decoder yet"),
             Format::RawTiffLike | Format::RawOther => Some("camera raw: decode with lightcraft-raw"),
+            Format::Mp4 | Format::Mov => Some("video container: playback in a later update"),
             _ => None,
         }
     }
@@ -84,6 +93,11 @@ impl Format {
     /// Camera raw formats (decode with `lightcraft-raw`).
     pub fn is_raw(self) -> bool {
         matches!(self, Format::RawTiffLike | Format::RawOther)
+    }
+
+    /// Whether this is a video container format.
+    pub fn is_video(self) -> bool {
+        matches!(self, Format::Mp4 | Format::Mov)
     }
 }
 
@@ -116,6 +130,9 @@ pub fn sniff(b: &[u8]) -> Option<Format> {
     }
     if b.len() >= 14 && &b[0..2] == b"II" && &b[6..14] == b"HEAPCCDR" {
         return Some(Format::RawOther);
+    }
+    if b.len() >= 8 && (&b[4..8] == b"moov" || &b[4..8] == b"wide") {
+        return Some(Format::Mov);
     }
     if b.len() >= 12 && &b[4..8] == b"ftyp" {
         return sniff_bmff(b);
@@ -161,7 +178,17 @@ fn sniff_bmff(b: &[u8]) -> Option<Format> {
     if [&b"heic"[..], b"heix", b"hevc", b"hevx", b"heim", b"heis", b"hevm", b"hevs", b"mif1", b"msf1"].iter().any(|x| has(x)) {
         return Some(Format::Heif);
     }
-    None
+    if has(b"qt  ") {
+        return Some(Format::Mov);
+    }
+    if [&b"isom"[..], b"iso2", b"iso4", b"iso5", b"iso6", b"mp41", b"mp42", b"dash", b"avc1", b"M4V ", b"M4A ", b"mp71", b"XAVC", b"xavc"]
+        .iter()
+        .any(|x| has(x))
+    {
+        return Some(Format::Mp4);
+    }
+    // Any other BMFF container with an ftyp box is a video container
+    Some(Format::Mp4)
 }
 
 /// Heuristic camera-raw detection for classic TIFF: DNGVersion, the CR2 signature, CFA/LinearRaw
@@ -230,6 +257,10 @@ mod tests {
         assert_eq!(sniff(b"\0\0\0\x1cftypavif\0\0\0\0avifmif1miaf"), Some(Format::Avif));
         assert_eq!(sniff(b"\0\0\0\x18ftypheic\0\0\0\0mif1heic"), Some(Format::Heif));
         assert_eq!(sniff(b"\0\0\0\x18ftypcrx \0\0\0\x01crx isom"), Some(Format::RawOther));
+        assert_eq!(sniff(b"\0\0\0\x18ftypmp42\0\0\0\0mp41isom"), Some(Format::Mp4));
+        assert_eq!(sniff(b"\0\0\0\x14ftypqt  \0\0\0\0"), Some(Format::Mov));
+        assert_eq!(sniff(b"\0\0\0\x08moov\0\0\0\0"), Some(Format::Mov));
+        assert_eq!(sniff(b"\0\0\0\x08wide\0\0\0\0"), Some(Format::Mov));
         assert_eq!(sniff(&[0xFF, 0x0A, 0xFA, 0x7F]), Some(Format::Jxl));
         assert_eq!(sniff(b"8BPS\0\x01\0\0\0\0\0\0"), Some(Format::Psd));
         assert_eq!(sniff(b"FUJIFILMCCD-RAW 0201"), Some(Format::RawOther));
