@@ -178,6 +178,10 @@ pub struct Header {
     pub height: u32,
     /// EXIF/TIFF orientation 1..=8, 1 when absent ([`Decoded::orientation`]).
     pub orientation: u16,
+    /// A JPEG cut short (an interrupted download or copy: its markers don't reach an end-of-image
+    /// marker) that has data to show: a decode shows what is there. Always `false` for other
+    /// formats, whose cut files are refused.
+    pub truncated: bool,
 }
 
 /// Read the stored dimensions and orientation of any format [`decode`] supports, agreeing with
@@ -187,10 +191,10 @@ pub struct Header {
 ///
 /// The header readers also refuse what a decode would refuse before reaching the pixels (an
 /// unsupported layout, compression or frame type) and files whose image data is cut short
-/// (truncated: the data runs past the end of the file, or a JPEG's markers don't reach its
-/// end-of-image marker). Damage *inside* compressed data that is all present is only found by a
-/// decode. Malformed input yields an error, never a panic (as for [`decode`], a panic inside a
-/// third-party parser is caught on unwinding targets).
+/// (truncated: the data runs past the end of the file). A JPEG cut short that has data to show
+/// is the exception: it is read, with [`Header::truncated`] set. Damage *inside* compressed data
+/// that is all present is only found by a decode. Malformed input yields an error, never a panic
+/// (as for [`decode`], a panic inside a third-party parser is caught on unwinding targets).
 pub fn read_header(bytes: &[u8]) -> Result<Header> {
     let format = sniff(bytes).ok_or(Error::UnknownFormat)?;
     std::panic::catch_unwind(|| read_header_unguarded(bytes, format))
@@ -200,8 +204,13 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
 /// [`read_header`] without the panic guard (for fuzzing our own code paths).
 #[doc(hidden)]
 pub fn read_header_unguarded(bytes: &[u8], format: Format) -> Result<Header> {
+    let mut truncated = false;
     let (width, height, orientation) = match format {
-        Format::Jpeg => jpeg::header(bytes)?,
+        Format::Jpeg => {
+            let (width, height, orientation, cut) = jpeg::header(bytes)?;
+            truncated = cut;
+            (width, height, orientation)
+        }
         Format::Png => png_codec::header(bytes)?,
         Format::Tiff => tiff_codec::header(bytes)?,
         Format::WebP => webp::header(bytes)?,
@@ -213,7 +222,7 @@ pub fn read_header_unguarded(bytes: &[u8], format: Format) -> Result<Header> {
             (d.source_width, d.source_height, d.orientation)
         }
     };
-    Ok(Header { format, width, height, orientation })
+    Ok(Header { format, width, height, orientation, truncated })
 }
 
 /// Decode a JPEG preview with its enclosing container's colour space as a fallback.

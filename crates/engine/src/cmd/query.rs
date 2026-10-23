@@ -30,6 +30,8 @@ pub fn photo_summary(p: &Photo) -> Value {
         "copyName": p.copy_name,
         // an undecodable raw variant, shown and edited from its embedded JPEG: why
         "previewOnly": p.preview_only,
+        // a JPEG cut short, shown from the data present
+        "truncated": p.truncated,
     })
 }
 

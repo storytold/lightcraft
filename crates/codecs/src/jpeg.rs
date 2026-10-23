@@ -126,11 +126,135 @@ pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Decoded> {
 
 const MAX_APP1: u32 = 128;
 
-/// Stored dimensions and EXIF orientation from the markers, without decoding the scan data. The
-/// file is refused, as a decode would refuse it, when it has no frame header, an unsupported frame
-/// type or component count, or when its markers don't run to an end-of-image marker after the
-/// image data (a truncated file). Damage *inside* the entropy-coded data can't be seen this way.
-pub(crate) fn header(bytes: &[u8]) -> Result<(u32, u32, u16)> {
+/// Where a JPEG's markers lead, followed through every segment and scan (see [`walk`]).
+#[derive(Default, Debug)]
+struct Walk {
+    /// The first end-of-image marker was reached (the primary image's, ahead of any MPF images
+    /// appended to the file).
+    eoi: bool,
+    /// A segment length that can't be right: not a file cut short but a damaged one.
+    malformed: bool,
+    /// Where the data worth keeping ends: the start of the segment that runs past the end of the
+    /// file, else the end of the file.
+    end: usize,
+    /// Scan headers that are there in full.
+    scans: usize,
+    /// The last scan's entropy-coded data holds a byte at least.
+    last_scan_has_data: bool,
+    /// Components that complete scans give their first DC coefficients (a progressive image shows
+    /// nothing before it has some).
+    dc_components: usize,
+}
+
+/// A scan being read: where its entropy-coded data starts, and how many components it gives their
+/// first DC coefficients.
+#[derive(Clone, Copy)]
+struct OpenScan {
+    data: usize,
+    dc_components: usize,
+}
+
+impl Walk {
+    /// The scan ends at `at` (a marker follows it, or the file ends).
+    fn close(&mut self, scan: &mut Option<OpenScan>, at: usize) {
+        if let Some(s) = scan.take() {
+            self.last_scan_has_data = at > s.data;
+            self.dc_components += s.dc_components;
+        }
+    }
+}
+
+/// Follow the markers after SOI through every segment and scan. Segments are skipped by their
+/// length; in scan data `FF 00` (stuffing), `FF FF` (fill) and RSTn are not markers that end it.
+fn walk(b: &[u8]) -> Walk {
+    let mut w = Walk::default();
+    let mut p = 2usize;
+    let mut scan: Option<OpenScan> = None;
+    loop {
+        // entropy-coded data (or garbage between segments, as `parse_markers` tolerates it)
+        let marker = b.get(p..).and_then(find_ff).and_then(|skip| {
+            p = p.saturating_add(skip);
+            b.get(p.saturating_add(1)).copied()
+        });
+        let Some(marker) = marker else {
+            // the file ends in the data (or inside a marker); zero bytes at its end are space a
+            // download reserved and never filled, not picture data
+            w.end = b.len();
+            if let Some(s) = scan {
+                w.end = b.get(s.data..).and_then(|d| d.iter().rposition(|&x| x != 0)).map_or(s.data.min(b.len()), |i| s.data + i + 1);
+                w.last_scan_has_data = w.end > s.data;
+            }
+            return w;
+        };
+        p = match marker {
+            0xD9 => {
+                w.close(&mut scan, p);
+                w.eoi = true;
+                w.end = p;
+                return w;
+            }
+            0xFF => p.saturating_add(1),
+            0x00 | 0x01 | 0xD0..=0xD8 => p.saturating_add(2),
+            _ => {
+                // a segment follows: the scan before it, if any, is whole
+                w.close(&mut scan, p);
+                let Some(len) = b.get(p.saturating_add(2)..p.saturating_add(4)).map(|l| u16::from_be_bytes([l[0], l[1]]) as usize) else {
+                    w.end = p;
+                    return w;
+                };
+                if len < 2 {
+                    w.malformed = true;
+                    w.end = p;
+                    return w;
+                }
+                let next = p.saturating_add(2).saturating_add(len);
+                if next > b.len() {
+                    w.end = p;
+                    return w;
+                }
+                // a scan header: Ns, then (id, tables) per component, then Ss, Se, Ah|Al
+                if marker == 0xDA && len >= 6 && len >= 6 + 2 * b[p + 4] as usize {
+                    let ns = b[p + 4] as usize;
+                    let (ss, ahl) = (b[p + 5 + 2 * ns], b[p + 7 + 2 * ns]);
+                    w.scans += 1;
+                    scan = Some(OpenScan { data: next, dc_components: if ss == 0 && ahl >> 4 == 0 { ns } else { 0 } });
+                }
+                next
+            }
+        };
+    }
+}
+
+/// Whether a file that [`walk`] found cut short has data to show. Only what the decoder that
+/// reads such files (zune-jpeg, see [`decode_with_fallback`]) fills in: 8-bit grey or colour, an
+/// interleaved sequential scan with data in it (the rows that are there show, the rest is flat
+/// grey), or a progressive image with the first DC scan of a component, complete (it shows from
+/// the scans that are there: of a single component, grey).
+fn cut_short_is_readable(m: &Markers, w: &Walk) -> bool {
+    if w.malformed || !zune_reads(m) {
+        return false;
+    }
+    match m.sof {
+        0xC0 | 0xC1 => w.scans >= 1 && w.last_scan_has_data,
+        0xC2 => w.dc_components >= 1,
+        _ => false,
+    }
+}
+
+/// The frames zune-jpeg decodes (the fast path of [`decode_with_fallback`]): not CMYK/YCCK,
+/// 12-bit, lossless, or non-interleaved sequential scans (which zune-jpeg 0.5 mis-decodes with
+/// subsampling).
+fn zune_reads(m: &Markers) -> bool {
+    let non_interleaved = matches!(m.sof, 0xC0 | 0xC1) && m.first_scan_components < m.components;
+    m.components != 4 && m.precision <= 8 && !non_interleaved && m.sof != 0xC3
+}
+
+/// Stored dimensions and EXIF orientation from the markers, without decoding the scan data, and
+/// whether the file is cut short (its markers don't run to an end-of-image marker). The file is
+/// refused, as a decode would refuse it, when it has no frame header, an unsupported frame type or
+/// component count, and when it is cut short with nothing to show (see [`cut_short_is_readable`]).
+/// Damage *inside* the entropy-coded data can't be seen this way.
+pub(crate) fn header(bytes: &[u8]) -> Result<(u32, u32, u16, bool)> {
     let m = parse_markers(bytes).ok_or_else(|| Error::Malformed(F, "missing SOI".into()))?;
     if m.components == 0 {
         return Err(Error::Malformed(F, "no frame header".into()));
@@ -142,39 +266,32 @@ pub(crate) fn header(bytes: &[u8]) -> Result<(u32, u32, u16)> {
     if !matches!(m.components, 1 | 3 | 4) {
         return Err(Error::Malformed(F, format!("{} colour components", m.components)));
     }
-    if m.first_scan_components == 0 || !reaches_eoi(bytes) {
+    let w = walk(bytes);
+    // (a file that ends in an end-of-image marker the walk didn't reach has a damaged segment
+    // length inside its data: damaged, not cut short, and decoded as it always was)
+    let damaged = bytes.ends_with(&[0xFF, 0xD9]);
+    if m.first_scan_components == 0 || (!w.eoi && (damaged || !cut_short_is_readable(&m, &w))) {
         return Err(Error::Malformed(F, "truncated: the image data doesn't end with an end-of-image marker".into()));
     }
     let orientation = m.exif.as_deref().map(exif::summarize).unwrap_or_default().orientation.unwrap_or(1);
-    Ok((m.width, m.height, orientation))
+    Ok((m.width, m.height, orientation, !w.eoi))
 }
 
-/// Whether the markers after SOI, followed through every segment and scan, reach an EOI marker
-/// (the first one: the primary image's, ahead of any MPF images appended to the file). Segments
-/// are skipped by their length; in scan data `FF 00` (stuffing), `FF FF` (fill) and RSTn are not
-/// markers that end it.
-fn reaches_eoi(b: &[u8]) -> bool {
-    let mut p = 2usize;
-    loop {
-        // entropy-coded data (or garbage between segments, as `parse_markers` tolerates it)
-        let Some(skip) = b.get(p..).and_then(find_ff) else { return false };
-        p = p.saturating_add(skip);
-        let Some(&marker) = b.get(p.saturating_add(1)) else { return false };
-        p = match marker {
-            0xD9 => return true,
-            0xFF => p.saturating_add(1),
-            0x00 | 0x01 | 0xD0..=0xD8 => p.saturating_add(2),
-            _ => {
-                let Some(len) = b.get(p.saturating_add(2)..p.saturating_add(4)).map(|l| u16::from_be_bytes([l[0], l[1]]) as usize) else {
-                    return false;
-                };
-                if len < 2 {
-                    return false;
-                }
-                p.saturating_add(2).saturating_add(len)
-            }
-        };
+/// What a decode reads of a file cut short that has data to show ([`cut_short_is_readable`]): its
+/// data up to the cut, closed with an end-of-image marker when it is progressive (decoders show
+/// the coefficients they have). A sequential image is read as it is: zune-jpeg fills the rows
+/// past the end with grey, where an end-of-image marker would leave it decoding garbage.
+fn cut_short<'a>(bytes: &'a [u8], m: &Markers) -> Option<std::borrow::Cow<'a, [u8]>> {
+    // (a complete file nearly always ends with its marker: no need to walk it)
+    if bytes.ends_with(&[0xFF, 0xD9]) {
+        return None;
     }
+    let w = walk(bytes);
+    if w.eoi || !cut_short_is_readable(m, &w) {
+        return None;
+    }
+    let kept = &bytes[..w.end];
+    Some(if m.sof == 0xC2 { [kept, &[0xFF, 0xD9][..]].concat().into() } else { kept.into() })
 }
 
 pub(crate) fn decode_with_fallback(bytes: &[u8], opts: &DecodeOptions, fallback: Option<crate::NamedSpace>) -> Result<Decoded> {
@@ -189,12 +306,24 @@ pub(crate) fn decode_with_fallback(bytes: &[u8], opts: &DecodeOptions, fallback:
         return Err(Error::Malformed(F, "too many APP1 markers".into()));
     }
     let scale_to = opts.max_size.filter(|&(mw, mh)| mw > 0 && mh > 0 && (m.width >= mw.saturating_mul(2) || m.height >= mh.saturating_mul(2)));
-    // zune-jpeg handles the common cases fastest; jpeg-decoder covers DCT scaling, CMYK/YCCK,
-    // 12-bit, non-interleaved sequential scans (which zune-jpeg 0.5 mis-decodes with subsampling)
-    // and every lossless (SOF3) file, which zune-jpeg refuses outright.
-    let lossless = m.sof == 0xC3;
-    let non_interleaved = matches!(m.sof, 0xC0 | 0xC1) && m.first_scan_components < m.components;
-    let raw = if m.components == 4 || scale_to.is_some() || m.precision > 8 || non_interleaved || lossless {
+    // zune-jpeg handles the common cases fastest; jpeg-decoder covers DCT scaling and the rest
+    // ([`zune_reads`]).
+    // A file cut short with data to show is read by zune-jpeg alone, at full size (`finish`
+    // scales it): jpeg-decoder refuses it, or fills the missing part with garbage.
+    let raw = if let Some(kept) = cut_short(bytes, &m) {
+        // (with restart intervals, zune-jpeg can run out of data between two restart markers
+        // without filling the rest in: closed with an end-of-image marker it does)
+        let raw = decode_zune(&kept, &m, opts)
+            .or_else(|e| if m.sof == 0xC2 { Err(e) } else { decode_zune(&[&kept[..], &[0xFF, 0xD9][..]].concat(), &m, opts) })?;
+        // (a thumbnail of a photo is not built from a full-size float image)
+        match scale_to {
+            Some((mw, mh)) => {
+                let factor = (raw.width / mw as usize).min(raw.height / mh as usize);
+                box_reduce(raw, factor)
+            }
+            None => raw,
+        }
+    } else if scale_to.is_some() || !zune_reads(&m) {
         decode_jpeg_decoder(bytes, &m, scale_to, opts)?
     } else {
         decode_zune(bytes, &m, opts)?
@@ -230,6 +359,37 @@ fn decode_zune(bytes: &[u8], m: &Markers, budget: &DecodeOptions) -> Result<Raw>
         return Err(Error::Malformed(F, "short output".into()));
     }
     Ok(Raw { width: w, height: h, model, alpha: false, premultiplied: false, buf: Buf::U8(px), bit_depth: 8 })
+}
+
+/// An 8-bit image shrunk by the whole factor `f` (each output sample the mean of the block of
+/// `f × f` it covers; blocks at the right and bottom edge are smaller). `f` < 2 leaves it as it is.
+fn box_reduce(raw: Raw, f: usize) -> Raw {
+    let Buf::U8(px) = &raw.buf else { return raw };
+    if f < 2 || raw.width == 0 || raw.height == 0 {
+        return raw;
+    }
+    let (w, h, ch) = (raw.width, raw.height, raw.model.channels());
+    let (nw, nh) = (w.div_ceil(f), h.div_ceil(f));
+    let mut out = vec![0u8; nw * nh * ch];
+    for y in 0..nh {
+        for x in 0..nw {
+            let mut sum = [0u64; 4];
+            let mut n = 0u64;
+            for yy in y * f..((y + 1) * f).min(h) {
+                for xx in x * f..((x + 1) * f).min(w) {
+                    let i = (yy * w + xx) * ch;
+                    for (c, s) in sum.iter_mut().take(ch).enumerate() {
+                        *s += u64::from(px[i + c]);
+                    }
+                    n += 1;
+                }
+            }
+            for (c, s) in sum.iter().take(ch).enumerate() {
+                out[(y * nw + x) * ch + c] = ((s + n / 2) / n) as u8;
+            }
+        }
+    }
+    Raw { width: nw, height: nh, buf: Buf::U8(out), ..raw }
 }
 
 fn decode_jpeg_decoder(bytes: &[u8], m: &Markers, scale_to: Option<(u32, u32)>, budget: &DecodeOptions) -> Result<Raw> {
@@ -411,6 +571,31 @@ pub(crate) fn decode_codes8(bytes: &[u8]) -> Result<(usize, usize, usize, Vec<u8
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn box_reduce_takes_block_means_and_smaller_edge_blocks() {
+        let raw = |w: usize, h: usize, px: Vec<u8>| Raw {
+            width: w,
+            height: h,
+            model: Model::Gray,
+            alpha: false,
+            premultiplied: false,
+            buf: Buf::U8(px),
+            bit_depth: 8,
+        };
+        let px = |r: &Raw| match &r.buf {
+            Buf::U8(v) => v.clone(),
+            Buf::U16(_) | Buf::F32(_) => Vec::new(),
+        };
+        // 3 × 3 by 2: one full block (mean of 0, 10, 20, 30 = 15) and edge blocks of 2 and 1 samples
+        let r = box_reduce(raw(3, 3, vec![0, 10, 100, 20, 30, 200, 50, 70, 90]), 2);
+        assert_eq!((r.width, r.height, px(&r)), (2, 2, vec![15, 150, 60, 90]));
+        // a factor below 2 leaves it as it is; a huge one on a big image doesn't overflow
+        let same = box_reduce(raw(2, 1, vec![1, 2]), 1);
+        assert_eq!((same.width, same.height, px(&same)), (2, 1, vec![1, 2]));
+        let big = box_reduce(raw(5000, 5000, vec![255; 25_000_000]), 5000);
+        assert_eq!((big.width, big.height, px(&big)), (1, 1, vec![255]));
+    }
 
     #[test]
     fn container_fallback_matches_tagged_jpeg_before_resizing_and_keeps_own_metadata() {

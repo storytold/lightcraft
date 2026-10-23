@@ -97,6 +97,45 @@ fn v6_preview_only_photo_loads_unstamped_and_is_upgraded() {
     assert_eq!(snapshot_version(&m), u64::from(VERSION));
 }
 
+/// `Photo.truncated` and `Op::SetContent.truncated` are optional and written only when set, so
+/// the format version stays (a library without such photos is byte-for-byte what it was; one with
+/// them still opens in builds that don't know the field, which read the photo without it).
+#[test]
+fn truncated_mark_is_optional_and_needs_no_new_version() {
+    let mut c = Catalog::new();
+    let (a, b) = (c.alloc_photo_id(), c.alloc_photo_id());
+    for id in [a, b] {
+        let p = Photo::new(id, Source::File { path: format!("/p/{}.jpg", id.0) }, "a.jpg", "JPEG", 160, 120, "2026-01-01");
+        c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    }
+    let plain = c.to_snapshot();
+    assert!(!plain.contains("truncated"), "a whole file leaves no trace");
+    let set = |truncated| Op::SetContent {
+        id: a,
+        width: 160,
+        height: 120,
+        file_size: 9,
+        content_hash: None,
+        preview_only: None,
+        preview_checked: String::new(),
+        truncated,
+    };
+    let inv = c.apply(set(true)).unwrap();
+    assert!(c.photo(a).unwrap().truncated && !c.photo(b).unwrap().truncated);
+    // through the snapshot, and through a journal record (the undo of Reload)
+    let m = MemStore::new();
+    m.set(SNAPSHOT, format!("{{\"format\":\"lightcraft-catalog\",\"version\":{VERSION},\"seq\":1,\"catalog\":{}}}\n", c.to_snapshot()).into_bytes());
+    let (_, loaded, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert!(loaded.photo(a).unwrap().truncated && !loaded.photo(b).unwrap().truncated);
+    assert_eq!(r.upgraded_from, None, "no upgrade: the version is the same");
+    // records written before the field existed read as `false`
+    let old: Op = serde_json::from_str(&serde_json::to_string(&set(false)).unwrap()).unwrap();
+    assert!(!serde_json::to_string(&old).unwrap().contains("truncated"));
+    c.apply(inv).unwrap();
+    assert!(!c.photo(a).unwrap().truncated);
+    assert_eq!(c.to_snapshot(), plain);
+}
+
 #[test]
 fn versionless_log_only_library_is_upgraded() {
     let mut c = Catalog::new();

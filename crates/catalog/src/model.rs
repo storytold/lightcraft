@@ -304,6 +304,12 @@ pub struct Photo {
     /// builds may decode the file, older ones may decode less.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub preview_checked: String,
+    /// A JPEG that was cut short (an interrupted download or copy: no end-of-image marker) and is
+    /// shown from the data present. Set when the file is probed (import, Reload, Relink); never written
+    /// for a whole file, so a catalog without such photos is unchanged, and builds that don't
+    /// know the field read the photo without it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub truncated: bool,
     /// A Local record: the fingerprint of its state when the browse catalogued it, to tell
     /// whether the user changed anything since (see [`crate::local`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -393,6 +399,7 @@ impl Photo {
             analysis: None,
             preview_only: None,
             preview_checked: String::new(),
+            truncated: false,
             local_baseline: None,
         }
     }
