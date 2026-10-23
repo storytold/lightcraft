@@ -386,7 +386,7 @@ fn filter_flag_and_flags_together_chip() {
     // nothing passes both: the chip names both constraints
     s.execute("library.filter", &json!({"flag": "pick", "flags": ["reject", "none"]})).unwrap();
     assert_eq!(s.visible_cloned().len(), 0);
-    assert_eq!(chip(&s), "Flag: pick and reject or none");
+    assert_eq!(chip(&s), "Flag: pick and (reject or none)");
 }
 
 /// Quick Collection / target album: B toggles the selection in it (created on first use);
