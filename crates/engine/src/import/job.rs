@@ -18,7 +18,11 @@ pub fn import_with(s: &mut Session, paths: &[String], opts: &ImportOptions) -> c
     let prepared = job.prepare(paths, &std::sync::atomic::AtomicBool::new(false));
     // probes a scan left for files not imported now stay for a later import
     s.import_probes.extend(std::mem::take(&mut job.cache));
-    commit_prepared(s, &job.opts, &job.now, prepared)
+    let report = commit_prepared(s, &job.opts, &job.now, prepared)?;
+    if !s.hash_in_background {
+        s.hash_queued_now();
+    }
+    Ok(report)
 }
 
 /// Everything the file-system half of an import needs, detached from the session so it can run
@@ -185,6 +189,8 @@ impl ImportJob {
             return Err(crate::EngineError::Other("copying or moving needs a destination folder or an open library".into()));
         }
         let fresh = opts.on_deleted == OnDeleted::Fresh;
+        // browsing reads only what describes a file (a network share holds thousands of raws)
+        let probe = if opts.local { s.media.file_probe_light.clone().or_else(|| s.media.file_probe.clone()) } else { s.media.file_probe.clone() };
         Ok(ImportJob {
             seq: Some(opts.rename_start.max(1)),
             opts,
@@ -194,7 +200,7 @@ impl ImportJob {
             library: Some((s.catalog.clone(), fresh)),
             by_path: HashMap::new(),
             by_hash: HashMap::new(),
-            probe: s.media.file_probe.clone(),
+            probe,
             file_bytes: s.media.file_bytes.clone(),
             cache: std::mem::take(&mut s.import_probes),
             naming: s.xmp.naming,

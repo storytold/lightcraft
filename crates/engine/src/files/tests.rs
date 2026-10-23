@@ -1920,3 +1920,68 @@ fn v5_extends_a_dng_tone_curve_past_white_in_stops() {
     let (white, beyond) = (at(Process::V5, 0.0), at(Process::V5, 1.0));
     assert!(beyond < 254.0 && beyond - white >= 3.0, "{white} then {beyond} a stop past the sensor's white");
 }
+
+/// The modification time [`fs::light_probe`] and [`fs_hooks`]' probe record for `path`.
+fn file_modified(path: &str) -> Option<String> {
+    std::fs::metadata(path).ok().as_ref().and_then(fs::modified_iso)
+}
+
+/// Browsing (Local) describes a raw from the parts of it its headers are in, exactly as reading it
+/// whole does, but without the content hash (which needs every byte). Over the corpus
+/// (`cargo xtask corpus --download`); skips without it.
+#[test]
+fn corpus_light_probe_describes_raws_as_the_full_probe_does() {
+    let root = std::env::var_os("LIGHTCRAFT_CORPUS")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus"))
+        .join("raw");
+    let mut paths: Vec<_> = std::fs::read_dir(&root).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.is_file()).collect();
+    if paths.is_empty() {
+        lightcraft_testkit::skip!(Corpus, "{} absent", root.display());
+        return;
+    }
+    paths.sort();
+    let (mut partial, mut whole) = (0, 0);
+    for p in paths {
+        let path = p.to_string_lossy().to_string();
+        let Ok(bytes) = std::fs::read(&p) else { continue };
+        let mut full = probe_bytes(&path, &bytes);
+        let light = fs::light_probe(&path);
+        match (&mut full, &light) {
+            (Ok(full), Ok(light)) => {
+                full.file_modified = file_modified(&path);
+                if light.content_hash.is_none() {
+                    partial += 1;
+                    full.content_hash = None;
+                } else {
+                    whole += 1;
+                }
+                assert_eq!(format!("{light:?}"), format!("{full:?}"), "{path}");
+            }
+            (Err(a), Err(b)) => assert_eq!(a, b, "{path}"),
+            _ => panic!("{path}: {full:?} vs {light:?}"),
+        }
+    }
+    assert!(partial > 0, "no raw was described in part ({whole} read whole)");
+    eprintln!("light probe: {partial} raws described in part, {whole} read whole");
+}
+
+/// A file the light probe can't describe in part (not a raw, or too small) is read whole, as
+/// the import's probe reads it: same description, content hash included.
+#[test]
+fn light_probe_reads_other_files_whole() {
+    let dir = std::env::temp_dir().join(format!("lc-light-probe-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let img = lightcraft_raster::Rgba8::from_fn(40, 30, |x, y| [(x * 6) as u8, (y * 8) as u8, 90, 255]);
+    let jpeg = encode_jpeg(&EncodeImage::rgba8(&img), 90, ChromaSubsampling::S420, &EncodeMeta::default()).unwrap();
+    let path = dir.join("a.jpg");
+    std::fs::write(&path, &jpeg).unwrap();
+    let path = path.to_string_lossy().to_string();
+    let light = fs::light_probe(&path).unwrap();
+    let mut full = probe_bytes(&path, &jpeg).unwrap();
+    full.file_modified = file_modified(&path);
+    assert!(light.content_hash.is_some());
+    assert_eq!(format!("{light:?}"), format!("{full:?}"));
+    assert!(fs::light_probe(&dir.join("missing.dng").to_string_lossy()).is_err());
+    let _ = std::fs::remove_dir_all(&dir);
+}
