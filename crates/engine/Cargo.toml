@@ -64,3 +64,5 @@ jxl-oxide = { workspace = true }
 lightcraft-heif = { workspace = true, features = ["testdata"] }
 libc = { workspace = true }
 lightcraft-tiff = { workspace = true }
+# The CRC of a hand-made log record (the restore tests).
+crc32fast = { workspace = true }

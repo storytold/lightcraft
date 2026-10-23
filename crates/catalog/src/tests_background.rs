@@ -72,6 +72,16 @@ impl Store for Gated {
     fn describe(&self) -> String {
         "gated".into()
     }
+    // (a folder's layout: the photos in segments)
+    fn remove(&mut self, name: &str) -> std::io::Result<()> {
+        self.files.remove(name)
+    }
+    fn list(&mut self) -> std::io::Result<Vec<String>> {
+        self.files.list()
+    }
+    fn segmented(&self) -> bool {
+        true
+    }
     fn background_writer(&self) -> Option<Box<dyn Store>> {
         Some(Box::new(self.clone()))
     }
@@ -168,7 +178,7 @@ fn background_snapshot_keeps_edits_made_while_it_runs() {
 fn failed_background_snapshot_loses_nothing_and_retries_later() {
     let g = Gated::new();
     let (mut j, mut live, _) = Journal::open(Box::new(g.clone())).unwrap();
-    j.policy = SnapshotPolicy { max_records: 10, max_bytes: u64::MAX };
+    j.policy = SnapshotPolicy { max_records: 10, max_bytes: u64::MAX, snapshot_share: 0, ..Default::default() };
     for k in 0..12 {
         edit(&mut j, &mut live, k);
     }
