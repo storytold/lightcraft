@@ -548,13 +548,15 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
                 let _ = app.run("view.infoOverlay", json!({}));
                 continue;
             }
-            // Delete acts on what's being edited: the active mask in the Masking panel; never the
+            // Delete acts on what's selected: a component or whole mask in Masking; never the
             // photo while retouching (spots are removed from their own panel).
             if f == "photo.delete" {
                 use crate::state::RightPanel as R;
                 match app.ui.right {
                     R::Masking => {
-                        if app.session.active_mask.is_some() {
+                        if let Some((mask, component)) = crate::panels::masking::selected_component(app) {
+                            let _ = app.run("mask.component", json!({"id": mask, "component": component, "action": "delete"}));
+                        } else if app.session.active_mask.is_some() {
                             let _ = app.run("mask.delete", json!({}));
                         }
                         continue;

@@ -2216,12 +2216,18 @@ fn radial_body_contains(shape: &MaskShape, at: Point, map: &CanvasMap) -> bool {
 /// colour range, at normalized frame coordinates (crop, rotation and zoom aware);
 /// ⇧-click adds a sample (up to 5).
 fn color_range_pick(app: &mut LightcraftApp, ui: &egui::Ui, resp: &egui::Response, map: &CanvasMap) {
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+    }
+    // Click samples the selected colour-range component; Shift-click adds up to five samples.
     if resp.clicked()
         && let Some(q) = resp.interact_pointer_pos()
     {
         let n = map.norm(q);
         let add = ui.input(|i| i.modifiers.shift);
-        if let Err(e) = app.run("mask.sampleColor", json!({"x": n.x, "y": n.y, "add": add})) {
+        if let Err(e) =
+            app.run("mask.sampleColor", json!({"x": n.x, "y": n.y, "add": add, "component": super::masking::tool_component(app, "colorRange")}))
+        {
             app.toast(ui.ctx(), e);
         }
     }
@@ -2326,12 +2332,7 @@ fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
             }
         }
     }
-    // Colour Range "Pick": the Masking panel owns the loupe's clicks (general_interaction
-    // never runs while it is open), so the eyedropper is handled here too.
     if app.ui.tool == "colorRange" {
-        if resp.hovered() {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
-        }
         color_range_pick(app, ui, resp, map);
         return;
     }
@@ -2345,7 +2346,10 @@ fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
         {
             let n = map.norm(q);
             let exclude = ui.input(|i| i.modifiers.alt);
-            match app.run_typed("mask.objectPoint", json!({"x": n.x, "y": n.y, "exclude": exclude})) {
+            match app.run_typed(
+                "mask.objectPoint",
+                json!({"x": n.x, "y": n.y, "exclude": exclude, "component": super::masking::tool_component(app, "object")}),
+            ) {
                 Ok(_) => {
                     if let Some(mid) = app.session.active_mask {
                         app.ui.detail_due = Some((ui.input(|i| i.time) + 1.0, mid));
@@ -2394,7 +2398,7 @@ fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
                 r,
                 hard: r * (1.0 - (app.ui.brush_feather / 100.0).clamp(0.0, 1.0)),
                 flow: (app.ui.brush_flow / 100.0).clamp(0.0, 1.0),
-                density: 1.0,
+                density: (app.ui.brush_density / 100.0).clamp(0.0, 1.0),
                 color: app.ui.mask_overlay_color,
                 opacity: opacity.clamp(0.0, 1.0),
             };
@@ -2415,7 +2419,8 @@ fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
             let _ = app.run(
                 "mask.brushStroke",
                 json!({"points": pts, "size": app.ui.brush_size, "feather": app.ui.brush_feather, "flow": app.ui.brush_flow,
-                       "erase": erase, "autoMask": app.ui.brush_auto_mask, "pressure": pressure, "connect": connect}),
+                       "erase": erase, "autoMask": app.ui.brush_auto_mask, "density": app.ui.brush_density, "pressure": pressure, "connect": connect,
+                       "component": super::masking::tool_component(app, "brush")}),
             );
         }
         return;
@@ -2432,10 +2437,9 @@ fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
     };
     if resp.clicked()
         && let Some(q) = resp.interact_pointer_pos()
-        && let Some((mid, ..)) = hit(q)
-        && Some(mid) != active
+        && let Some((mid, comp, ..)) = hit(q)
     {
-        let _ = app.run("mask.select", json!({"id": mid}));
+        let _ = app.run("mask.selectComponent", json!({"id": mid, "component": comp}));
     }
     if resp.drag_started()
         && let Some(q) = ui.input(|i| i.pointer.press_origin()).or(resp.interact_pointer_pos())
@@ -2448,15 +2452,16 @@ fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
             if let Some(ci) = m.components.iter().position(|c| radial_body_contains(&c.shape, at, map)) {
                 return Some((m.id, ci, 0));
             }
-            // anywhere on the photo drags the selected linear gradient
-            matches!(m.components.first()?.shape, MaskShape::Linear { .. }).then_some((m.id, 0, 0))
+            // Anywhere on the photo drags the selected linear component; legacy selection
+            // without an explicit component retains the first-gradient fallback.
+            let ci = super::masking::tool_component(app, "linear")
+                .or_else(|| m.components.iter().position(|c| matches!(c.shape, MaskShape::Linear { .. })))?;
+            Some((m.id, ci, 0))
         });
         if let Some((mask, comp, handle)) = grip
             && let Some(original_shape) = d.masks.iter().find(|m| m.id == mask).and_then(|m| m.components.get(comp)).map(|c| c.shape.clone())
         {
-            if Some(mask) != active {
-                let _ = app.run("mask.select", json!({"id": mask}));
-            }
+            let _ = app.run("mask.selectComponent", json!({"id": mask, "component": comp}));
             let _ = app.run("develop.beginInteraction", json!({"label": "Edit Mask"}));
             app.gesture = Some(Gesture::MaskHandle { mask, comp, handle, original_shape });
         }

@@ -624,7 +624,21 @@ impl LightcraftApp {
         } else {
             params
         };
+        let mask_history_before = if matches!(id, "edit.undo" | "edit.redo") && self.ui.mask_component.is_some() {
+            self.session.active().and_then(|photo| self.session.develop_of(photo))
+        } else {
+            None
+        };
         let r = self.session.execute(id, &params).map_err(CommandError::from);
+        match &r {
+            Ok(result) => panels::masking::selection_changed(self, id, &params, result, mask_history_before.as_deref()),
+            Err(error) if error.kind == lightcraft_engine::ErrorKind::NotSaved => {
+                // The edit and history already changed in memory. Keep the save error for the
+                // caller, while making row selection follow the document the user sees.
+                panels::masking::selection_changed(self, id, &params, &Value::Null, mask_history_before.as_deref());
+            }
+            Err(_) => {}
+        }
         if r.is_ok() && matches!(id, "crop.aspect" | "crop.rotateAspect") {
             self.ui.crop_default_aspect = if id == "crop.aspect" && params.get("aspect").and_then(Value::as_str) == Some("original") {
                 Some(serde_json::json!("original"))
@@ -835,6 +849,9 @@ impl LightcraftApp {
     /// (`ui.detail_due`); watch the model download. Never waits for the model.
     fn ai_mask_detail(&mut self, ctx: &egui::Context) {
         let polled = self.session.segment_poll();
+        if let Some((photo, mask, component)) = polled.created {
+            panels::masking::selection_completed(self, photo, mask, component);
+        }
         let now = ctx.input(|i| i.time);
         if polled.changed {
             ctx.request_repaint();
@@ -1477,6 +1494,7 @@ impl LightcraftApp {
         // filled: the gaps the dock leaves between its panes show chrome, not the dark clear colour
         let chrome = theme::Tokens::get(&ctx).chrome;
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(chrome)).show(ui, |ui| docking::show(self, ui));
+        panels::masking::floating(self, &ctx);
         self.lights_out(&ctx);
         panels::second::show(self, &ctx);
         panels::notices::show(self, &ctx);

@@ -33,6 +33,9 @@ pub enum Overlay {
     /// The evaluated alpha of mask `id` (a [`lightcraft_develop::Mask`] id), drawn as `view` in
     /// `color` at `opacity` (0..100; the colour views only).
     Mask { id: u16, view: MaskView, color: [u8; 3], opacity: u8 },
+    /// A mask-list thumbnail: the composite coverage as white on black. Supports the full mask
+    /// ID range; an empty/missing mask stays black instead of revealing the source photo.
+    MaskThumbnail(u32),
     /// The evaluated alpha of every visible mask that has components, drawn as one `view` in
     /// `color` at `opacity` (0..100; the colour views only) — every mask's region at once.
     AllMasks { view: MaskView, color: [u8; 3], opacity: u8 },
@@ -125,6 +128,7 @@ impl Overlay {
             Overlay::Mask { id, view, color, opacity } => (3, pack_mask(id, view, color, opacity) as f64),
             Overlay::AllMasks { view, color, opacity } => (5, pack_mask(0, view, color, opacity) as f64),
             Overlay::HdrRange => (4, 0.0),
+            Overlay::MaskThumbnail(id) => (6, f64::from(id)),
         }
     }
 
@@ -135,6 +139,7 @@ impl Overlay {
             2 => Overlay::Spots(v.clamp(0.0, 100.0) as u8),
             3 if v.is_finite() && v >= 0.0 => unpack_mask(v as u64),
             4 => Overlay::HdrRange,
+            6 if v.is_finite() && v >= 0.0 && v <= f64::from(u32::MAX) && v.fract() == 0.0 => Overlay::MaskThumbnail(v as u32),
             5 if v.is_finite() && v >= 0.0 => {
                 let rgb = (v as u64 >> 20) & 0xff_ffff;
                 Overlay::AllMasks {
@@ -156,6 +161,7 @@ impl Overlay {
             Overlay::Mask { id, view, color, opacity } => 3 << 60 | pack_mask(id, view, color, opacity),
             Overlay::AllMasks { view, color, opacity } => 5 << 60 | pack_mask(0, view, color, opacity),
             Overlay::HdrRange => 0x4000,
+            Overlay::MaskThumbnail(id) => 6 << 60 | u64::from(id),
         }
     }
 
@@ -163,6 +169,7 @@ impl Overlay {
     pub fn mask(self, s: &DevelopSettings) -> Option<&lightcraft_develop::Mask> {
         match self {
             Overlay::Mask { id, .. } => s.masks.iter().find(|m| m.id == id as u32 && !m.components.is_empty()),
+            Overlay::MaskThumbnail(id) => s.masks.iter().find(|m| m.id == id && !m.components.is_empty()),
             _ => None,
         }
     }
@@ -196,6 +203,13 @@ pub fn apply(img: &mut Rgba8, o: Overlay, plan: &Plan<'_>, mask: Option<&Plane>,
         Overlay::Mask { view, color, opacity, .. } => {
             if let Some(a) = mask.filter(|a| (a.width, a.height) == (img.width, img.height)) {
                 mask_view(img, a, view, color, opacity);
+            }
+        }
+        Overlay::MaskThumbnail(_) => {
+            if let Some(a) = mask.filter(|a| (a.width, a.height) == (img.width, img.height)) {
+                mask_view(img, a, MaskView::WhiteOnBlack, [0; 3], 100);
+            } else {
+                img.data.fill([0, 0, 0, 255]);
             }
         }
         Overlay::AllMasks { view, color, opacity } => {
@@ -366,6 +380,31 @@ mod tests {
         // without the overlay the edit shows
         let e = render(&src, &info, &s, &RenderRequest::fit(32, 16)).image.data[8 * 32 + 4];
         assert!(e[1].abs_diff(px[1]) > 10, "{e:?} vs {px:?}");
+    }
+
+    #[test]
+    fn mask_thumbnail_wire_ids_and_empty_coverage() {
+        for id in [0, 7, 65536, u32::MAX] {
+            let o = Overlay::MaskThumbnail(id);
+            let (kind, value) = o.to_parts();
+            assert_eq!(Overlay::from_parts(kind, value), o);
+            assert_ne!(o.key(), Overlay::None.key());
+            assert_ne!(o.key(), Overlay::AllMasks { view: MaskView::Color, color: [0; 3], opacity: 0 }.key());
+            assert_ne!(o.key(), Overlay::MaskThumbnail(id.wrapping_add(1)).key());
+        }
+        for bad in [f64::NAN, f64::INFINITY, -1.0, 1.5, f64::from(u32::MAX) + 1.0] {
+            assert_eq!(Overlay::from_parts(6, bad), Overlay::None);
+        }
+        let src = Rgb32f::from_fn(20, 10, |_, _| [0.2, 0.3, 0.4]);
+        let mut settings = DevelopSettings::default();
+        let req = RenderRequest { overlay: Overlay::MaskThumbnail(7), ..RenderRequest::fit(20, 10) };
+        for empty in [false, true] {
+            if empty {
+                settings.masks.push(lightcraft_develop::Mask { id: 7, ..Default::default() });
+            }
+            let image = render(&src, &SourceInfo::default(), &settings, &req).image;
+            assert!(image.data.iter().all(|p| *p == [0, 0, 0, 255]), "missing/empty coverage must not show the photo");
+        }
     }
 
     #[test]

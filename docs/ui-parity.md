@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-21 · **Change:** minor (context menus: a right-click elsewhere on the same widget moves its open menu instead of flashing it, issue #1877; Reference Escape, catalog-local pins and deleted-photo handling verified on Windows; KEYC-RATING: `\` shows / hides the Filter Bar in the grids; earlier: zoom row soft proofing sharp at 1:1, canvas tools by keyboard, focus-order test, ~50 unnamed hand-drawn widgets named) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-22 · **Change:** patch (mask selection review fixes) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 How LightCraft's interaction compares with Lightroom's: views, panels, tools and handles, modifier
 keys, shortcuts, zoom, context menus and feel. Rows for individual menu items and shortcuts live in
@@ -25,7 +25,7 @@ assessment and the notes that don't fit a row. Visual reference for agents: `pla
 | Layout and views | Lightroom: grid / detail / edit; Classic: Library, Develop, Map, Book, Slideshow, Print, Web modules, filmstrip, panels | Lightroom-style single window: Photo Grid, Square Grid, Detail, Compare, Survey (≤ 48), Before / After, People, quick slideshow, second window, filmstrip | 75% | no Classic module switcher (by design) or output modules; dark theme only |
 | Develop panels and sliders | Light, Color, Effects, Detail, Optics, Geometry, Lens Blur, Calibration | every global slider; scrub, double-click reset, Alt-drag previews where implemented | 80% | Lens Blur, Calibration panel depth; slider feel (acceleration, fine Shift-drag) unmeasured |
 | Crop, Upright, transform handles | handles, aspect lock, angle, overlays (O / ⇧O), guided Upright | ✅ all of them; overlay cycle on ⇧O | 85% | crop opacity of cut-out area (15.5) |
-| Masking tools | brush (A / B, flow, density, auto mask, pressure), linear / radial, range masks, AI masks, pins | brush, linear, radial, colour / luminance range, add / subtract / intersect / invert, masks panel, pins | 60% | brush live preview (#517 / #518), no pen pressure, no depth range, AI masks, Feather / Edge controls (15.5) |
+| Masking tools | brush (A / B, flow, density, auto mask, pressure), linear / radial, range masks, AI masks, pins | brush, linear, radial, colour / luminance range, add / subtract / intersect / invert, masks panel, pins | 60% | no A/B brushes, macOS/Linux pen pressure, depth range, AI-mask quality and further gesture parity |
 | Remove / heal | content-aware remove, heal, clone, visualize spots | heal, clone, auto source, visualize spots, red / pet eye | 65% | content-aware (patch synthesis) remove, generative remove, detect distractions |
 | Zoom and navigation | Fit / Fill / 1:1 / 2:1 … 11:1, Navigator, spacebar pan | Fit to 800%, pinch zoom, pan, Navigator-like | 60% | diagnostic overlays (Visualize Spots, Point Color range, HDR range) render the whole frame instead of a zoom window; everything else, mask overlays and soft proofing included, is sharp at 1:1–8:1 |
 | Library culling and metadata | ratings, flags, labels with keys, painter, keywording, metadata panel, filter bar | ratings / flags / labels and advance, keyword list and sets, keywording box, metadata fields, smart albums, filter bar | 85% | painter tool, quick collection, some Classic keys |
@@ -39,6 +39,56 @@ assessment and the notes that don't fit a row. Visual reference for agents: `pla
 Remaining: **32–54 h** (zoom detail 8–15 h, brush and masking feel 8–12 h, accessibility 2–4
 h, Classic keymap layer 4–8 h, context-menu audit 4–8 h, text-field and IME polish 4–8 h). Output
 modules and AI tools are counted with their features in [target-app-parity.md](target-app-parity.md).
+
+## Masking workspace (#450)
+
+The mask/component list is embedded above the right-side settings by default. Its panel icon
+floats it beside those settings; drag the title to move it, resize its corner, and use the panel
+icon or **Dock to panel** to embed it again. Placement and overlay preferences are saved. With no
+masks, creation choices remain directly visible in the right panel; subsequent creation uses +.
+
+Selecting a component highlights its row and shows its tool controls on the right. Backspace/Delete
+removes only that component; selecting the parent mask row makes deletion remove the whole mask.
+Deleting the last component removes its empty mask, and each deletion can be undone. Undo/redo of
+component insertion or deletion keeps the same surviving component selected, even when an earlier
+row was changed or history was used in another panel; other panels keep their own tool active.
+Selection also follows edits applied in memory when disk saving fails, while the save error remains visible.
+Describe keeps the current selection while queued and selects its new row when creation completes;
+an Object placeholder is selected immediately even while segmentation is pending. B selects the
+current brush or the active mask’s last brush so the highlighted row,
+settings, canvas strokes and Delete agree. Without a brush, controls appear immediately and the
+first stroke creates and selects one, preserving deferred creation and one-step undo. Component
+menus also offer Move Up/Down, disabled at the list boundaries. Moving changes the actual
+composition order while preserving the component’s contents and selection, including undo/redo. Brush strokes,
+Object clicks and colour sampling target that component; brush Size, Feather, Flow, Density,
+Add/Erase and Auto Mask apply to subsequent strokes. Add/Subtract occupy equal halves of the
+selected mask’s action row, with larger hit areas and spacing above. Component settings lead
+into the local adjustment sliders under a small **Mask Adjustments** heading, without a
+duplicate mask-name/invert row. Add, Subtract and Intersect with offer the same ten types as
+new-mask creation, with localized labels. Both mask and component right-click/ellipsis menus
+offer Intersect with and Subtract; choosing a type targets the menu’s mask, including an
+unselected mask, and selects its new component. Opening the menu preserves selection and edits.
+An intersection brush keeps only painted overlap;
+Erase removes paint from that brush component. Color Range samples the selected component
+when clicking the photo in the Masking panel; Shift-click adds a sample. Subtract and Intersect
+indicators use separate rounded-square badges before the component name, with descriptive hover text.
+Renaming a mask or component replaces only its name with an input. Mask thumbnails and
+visibility/menu buttons, component icons and operation badges, and row heights stay in place.
+The list footer contains the overlay checkbox and colour/options popups (custom colour, opacity,
+visualization mode and pins). Mode choices and the custom colour picker are child menus, so
+opening or using them preserves the settings popup; Escape or an outside click dismisses it.
+These display/layout preferences do not add photo undo steps.
+
+Mask rows show the actual composite coverage as white on black, with grey feathered edges,
+fitted to the edited photo’s aspect ratio. Background renders share the canvas mask pipeline
+(add/subtract/intersect, inversion, range and AI masks), use a separate thumbnail cache, and
+refresh after edits and undo/redo. Hidden masks retain their range preview, independent of
+overlay colour/opacity. Component rows keep their original type icons. Six-dot grips to the right
+of each ellipsis reorder masks or components within their mask, with an insertion line and edge
+scrolling. A drop is one undo step and preserves selection/tool targeting; Escape, outside drops
+and stale drags do not reorder. Upstream live preview, pen pressure, Shift-click connections,
+local effect presets and Show All Overlays remain available in both layouts. A/B brushes and
+broader gesture parity remain open.
 
 ## Shortcuts
 
@@ -148,6 +198,8 @@ establish OS keyboard delivery or cross-platform acceptance.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-22 | patch | PR #955 review: defer Describe row selection until creation, preserve pending Object selection, follow hidden-panel history and edits applied despite a save error, and find non-first linear gradients for canvas dragging; retain upstream context-menu and overlay fixes. Readiness counts unchanged. |
+| 2026-10-21 | patch | PR #955 review: preserve surviving component selection through history and synchronize Brush activation; integrate upstream masking features. |
 | 2026-10-15 | patch | Context menus: a right-click elsewhere on the same widget while its menu is open moves the menu to the pointer; before it flashed at the new spot and closed (issue #1877); every site uses `widgets::context_menu`; 70% unchanged |
 | 2026-10-15 | patch | KEYC-RATING: `\` shows / hides the Filter Bar in Photo Grid and Square Grid (Show Original in Detail); ⌘L is the filter-bar key left |
 | 2026-10-14 | patch | Shortcuts: Visualize HDR loses its default ⇧H, which cycles the Tool Overlay (issue #224); both PRs had claimed it |
@@ -160,4 +212,8 @@ establish OS keyboard delivery or cross-platform acceptance.
 | 2026-10-12 | minor | Accessibility: an AccessKit tree audit test over every view, Develop tool and 13 dialogs; unnamed fields, slider ranges and the Auto Stack slider fixed; 30% → 55%; UI remaining 40–70 h → 34–58 h |
 | 2026-10-21 | minor | Reference Escape exits to Detail; catalog-local pins and missing/deleted reference handling verified with regressions and native Windows smoke |
 | 2026-10-11 | minor | Zoom row: Compare and Reference get zoom windows; what remains of LR-VIEW-ZOOM is overlays and soft proofing |
+| 2026-10-11 | minor | #450: parent mask menus expose Intersect with/Subtract and target the clicked mask |
+| 2026-10-11 | minor | #450: mask/component drag handles, insertion feedback, edge scrolling and one-step undo |
+| 2026-10-11 | minor | #450: fix overlay mode/custom-colour submenus closing the settings popup; verify both launchers and layouts |
+| 2026-10-11 | minor | #450: embedded/floating list, selected-component settings, overlay footer and remaining masking gaps |
 | 2026-10-10 | major | Created: measured command and shortcut counts, assessment by area, estimates; moved the shortcut conflicts section here from the checklist |
