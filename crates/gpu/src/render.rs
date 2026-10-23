@@ -466,7 +466,11 @@ fn shared_source(src: &Arc<Rgb32f>, upload: impl FnOnce() -> Buf) -> Arc<Buf> {
     *g = None;
     SOURCE_UPLOADS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let buf = Arc::new(upload());
-    *g = Some((Arc::downgrade(src), buf.clone()));
+    // an upload that failed (out of memory, over the limit) holds a placeholder: this render
+    // fails, and no other render may be handed it as the photo
+    if !crate::ctx::failed() {
+        *g = Some((Arc::downgrade(src), buf.clone()));
+    }
     buf
 }
 
@@ -604,6 +608,8 @@ pub fn render(
         Some(crate::Fault::Limit(bytes)) => Some(crate::ctx::LimitOverride::new(bytes)),
         _ => None,
     };
+    let _oom = (fault == Some(crate::Fault::OutOfMemory)).then(crate::ctx::SimulatedOom::new);
+    let _upload_oom = (fault == Some(crate::Fault::UploadOutOfMemory)).then(crate::ctx::SimulatedUploadOom::new);
     if !gpu.fits(n * 3) {
         fail(
             FailKind::Limit,

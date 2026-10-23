@@ -84,6 +84,14 @@ fn failed_gpu_renders_fall_back_with_a_reason() {
     assert!(lightcraft_gpu::available(), "{:?}", lightcraft_gpu::unavailable_reason());
     ok("after the limit faults");
 
+    // out of device memory (upstream #1764): caught as each buffer is created, so no invalid buffer
+    // reaches the shared pool; the render is retried with the device to itself and comes back
+    // from the GPU, which stays in use
+    lightcraft_gpu::inject_fault(Fault::OutOfMemory);
+    ok("out of memory, then retried alone");
+    assert!(lightcraft_gpu::available(), "running out of memory is no device failure: {:?}", lightcraft_gpu::unavailable_reason());
+    ok("after running out of memory");
+
     // a device (validation) error: captured by the render's error scope; the GPU is not used again
     // on this thread — other threads keep it (a simulated failure, not a real one)
     lightcraft_gpu::inject_fault(Fault::Validation);
@@ -120,4 +128,45 @@ fn failed_gpu_renders_fall_back_with_a_reason() {
     // a request the GPU never renders is not a fallback
     let deep = RenderRequest { depth: lightcraft_pipeline::OutputDepth::U16, ..RenderRequest::fit(256, 256) };
     assert_eq!(lightcraft_gpu::try_render(&src, &info, &s, &deep, None).err(), Some(Fallback::NotTried));
+}
+
+/// A staging allocation may fail after a valid destination exists. The failed upload must not
+/// become the shared original: grain makes an unwritten original nonblack and opaque, so image
+/// validity checks cannot detect that poisoned cache on the exclusive retry or another view.
+#[test]
+fn upload_staging_oom_does_not_cache_an_unwritten_shared_source() {
+    if !lightcraft_gpu::available() {
+        eprintln!("skipped: no GPU adapter ({:?})", lightcraft_gpu::unavailable_reason());
+        return;
+    }
+    let (w, h) = (3072, 2732);
+    let src = Arc::new(lightcraft_raster::Rgb32f::from_fn(w, h, |x, y| [0.15 + (x % 127) as f32 / 400.0, 0.35 + (y % 97) as f32 / 400.0, 0.7]));
+    assert!(src.data.len() * 12 > 96 << 20, "exercise the shared-source path");
+    let info = SourceInfo { raw: true, ..Default::default() };
+    let mut s = DevelopSettings::default();
+    s.grain.amount = 40.0;
+    let req = RenderRequest { window: Some(lightcraft_pipeline::PixelWindow { x: 700, y: 900, w: 96, h: 64 }), ..RenderRequest::fit(w, h) };
+    let cpu = render(&src, &info, &s, &req).image;
+    let first_view = lightcraft_pipeline::StageCache::default();
+    let uploads = lightcraft_gpu::source_uploads();
+    lightcraft_gpu::inject_fault(Fault::UploadOutOfMemory);
+    let retried = lightcraft_gpu::try_render(&src, &info, &s, &req, Some(&first_view))
+        .unwrap_or_else(|why| panic!("upload staging OOM must retry successfully: {why:?}"));
+    assert_eq!(lightcraft_gpu::source_uploads(), uploads + 2, "the failed upload must be redone before publication");
+    let d = mean_abs_diff(&cpu, &retried.image);
+    assert!(d < 0.5, "retried shared source differs from CPU by {d:.3} LSB");
+    assert_eq!(lightcraft_gpu::shared_source_bytes(), src.data.len() * 12);
+    assert!(lightcraft_gpu::available(), "upload OOM must leave the GPU usable");
+
+    // A separate view must read the successfully uploaded original without uploading again.
+    let second_view = lightcraft_pipeline::StageCache::default();
+    let reused = lightcraft_gpu::try_render(&src, &info, &s, &req, Some(&second_view))
+        .unwrap_or_else(|why| panic!("shared original must remain usable: {why:?}"));
+    assert_eq!(lightcraft_gpu::source_uploads(), uploads + 2);
+    let d = mean_abs_diff(&cpu, &reused.image);
+    assert!(d < 0.5, "cached shared source differs from CPU by {d:.3} LSB");
+    assert_eq!(retried.image.data, reused.image.data, "both views must render identical source pixels");
+    first_view.clear();
+    second_view.clear();
+    lightcraft_gpu::trim_pool(0);
 }
