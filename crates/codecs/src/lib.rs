@@ -225,6 +225,16 @@ pub fn read_header_unguarded(bytes: &[u8], format: Format) -> Result<Header> {
     Ok(Header { format, width, height, orientation, truncated })
 }
 
+/// The stored size of a JPEG read from its first bytes (the markers up to its frame header), or
+/// `None` when they don't reach one, or declare a size a decode refuses (nothing, or more pixels
+/// than [`DecodeOptions::default`] allows). For callers that must know what a decode will hold
+/// before they read the whole file.
+pub fn jpeg_frame_size(prefix: &[u8]) -> Option<(u32, u32)> {
+    let m = std::panic::catch_unwind(|| jpeg::parse_markers(prefix)).ok()??;
+    let fits = m.width > 0 && m.height > 0 && u64::from(m.width) * u64::from(m.height) <= DecodeOptions::default().max_pixels;
+    (m.components > 0 && fits).then_some((m.width, m.height))
+}
+
 /// Decode a JPEG preview with its enclosing container's colour space as a fallback.
 /// A JPEG carrying ICC or EXIF metadata keeps its own interpretation. The fallback is applied
 /// before transfer decoding and linear-light resizing, never to already-resampled pixels.

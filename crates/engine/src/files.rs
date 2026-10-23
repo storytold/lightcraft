@@ -1117,37 +1117,74 @@ pub fn fs_reduced_loader() -> ReducedLoader {
     Arc::new(|path: &str, max_edge: usize| fs_load(path, max_edge, |bytes| load_vec_reduced(bytes, max_edge)))
 }
 
-/// What a decode of a JPEG cut short holds that its file length doesn't say: the decoder reads
-/// the whole frame (3 bytes a pixel; with the float image of a full-size load, 15), where the
-/// file may be a small prefix of a large photo. 0 for any other file.
-fn cut_jpeg_weight(bytes: &[u8], max_edge: usize) -> usize {
-    if !bytes.starts_with(&[0xFF, 0xD8]) || bytes.ends_with(&[0xFF, 0xD9]) {
+/// How much of the start of a JPEG is read first to find its frame size (markers up to the frame
+/// header: EXIF, ICC and the like come first); doubled until it is found or the file is all read.
+const FRAME_PROBE: usize = 1 << 20;
+
+/// What a decode of a JPEG cut short holds beyond its file: the decoder reads the whole frame
+/// (3 bytes a pixel; with the float image of a full-size load, 15), where the file may be a small
+/// prefix of a large photo. 0 for a file that ends in an end-of-image marker (a whole file; one
+/// with data after it, such as a motion photo's video, is charged its frame too: more than it
+/// holds, never less) or isn't a JPEG. Reads two bytes at the end of the file and its start, up to
+/// the frame header. The caller's permit for the file's length covers what is read here: the
+/// probe never exceeds the file.
+fn cut_jpeg_frame_weight(path: &str, len: usize, max_edge: usize) -> usize {
+    use std::io::{Read, Seek, SeekFrom};
+    let Ok(mut file) = std::fs::File::open(path) else { return 0 };
+    let mut tail = [0u8; 2];
+    let mut soi = [0u8; 2];
+    // the first two bytes settle a non-JPEG (most files) before anything larger is read
+    if len < 4
+        || file.read_exact(&mut soi).is_err()
+        || soi != [0xFF, 0xD8]
+        || file.seek(SeekFrom::End(-2)).and_then(|_| file.read_exact(&mut tail)).is_err()
+        || tail == [0xFF, 0xD9]
+    {
         return 0;
     }
-    match lightcraft_codecs::read_header(bytes) {
-        Ok(h) if h.truncated => {
-            let per_pixel = if max_edge <= crate::media::SourceLevel::Thumb.max_edge() { 3 } else { 15 };
-            (h.width as usize).saturating_mul(h.height as usize).saturating_mul(per_pixel)
+    let per_pixel = if max_edge <= crate::media::SourceLevel::Thumb.max_edge() { 3 } else { 15 };
+    let mut probe = len.min(FRAME_PROBE);
+    loop {
+        let mut head = vec![0u8; probe];
+        if file.seek(SeekFrom::Start(0)).and_then(|_| file.read_exact(&mut head)).is_err() || !head.starts_with(&[0xFF, 0xD8]) {
+            return 0;
         }
-        _ => 0,
+        if let Some((w, h)) = lightcraft_codecs::jpeg_frame_size(&head) {
+            return (w as usize).saturating_mul(h as usize).saturating_mul(per_pixel);
+        }
+        if probe >= len {
+            return 0;
+        }
+        probe = probe.saturating_mul(2).min(len);
     }
 }
 
 /// Read `path` and `load` it, waiting on [`crate::memory::work_gate`] as [`fs_hooks`] explains.
 fn fs_load<T>(path: &str, max_edge: usize, load: impl FnOnce(Vec<u8>) -> Result<T, String>) -> Result<T, String> {
+    load_gated(crate::memory::work_gate(), crate::memory::is_background(), path, max_edge, load)
+}
+
+/// [`fs_load`] on `gate`. Everything held is counted, and nothing waits while holding a permit:
+/// the permit for the file's length covers the few bytes read to see whether a JPEG is cut short
+/// (they are freed before the next wait); a cut one then waits once for its file plus its whole
+/// frame, before the file is read.
+fn load_gated<T>(
+    gate: &crate::memory::WorkGate,
+    background: bool,
+    path: &str,
+    max_edge: usize,
+    load: impl FnOnce(Vec<u8>) -> Result<T, String>,
+) -> Result<T, String> {
     let len = std::fs::metadata(path).map(|m| usize::try_from(m.len()).unwrap_or(usize::MAX)).unwrap_or(0);
     let weight = len.saturating_mul(if max_edge <= crate::media::SourceLevel::Thumb.max_edge() { 3 } else { 6 });
-    let gate = crate::memory::work_gate();
-    let acquire = |bytes: usize| if crate::memory::is_background() { gate.acquire(bytes) } else { gate.acquire_urgent(bytes) };
+    let acquire = |bytes: usize| if background { gate.acquire(bytes) } else { gate.acquire_urgent(bytes) };
     let mut permit = acquire(weight);
-    let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
-    // a prefix of a big photo decodes to the whole frame: wait for room for that (the first
-    // permit is given back first, so two loads can't each hold one and wait for the other)
-    let frame = cut_jpeg_weight(&bytes, max_edge);
-    if frame > weight {
+    let frame = cut_jpeg_frame_weight(path, len, max_edge);
+    if len.saturating_add(frame) > weight {
         drop(permit);
-        permit = acquire(frame);
+        permit = acquire(weight.max(len.saturating_add(frame)));
     }
+    let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
     let r = load(bytes);
     drop(permit);
     // the file, the samples and the intermediate images are gone: give their pages back
@@ -2729,16 +2766,52 @@ pub(crate) mod tests {
         assert!(quick_image_srgb(&[], &jpeg[..jpeg.len() * 3 / 4], true, 64).is_none());
     }
 
-    /// A JPEG cut short is weighed at its whole frame, not at the length of the prefix.
+    /// A JPEG cut short is charged to the work gate for its file and its whole frame together,
+    /// from before the file is read until the load is done (so the buffer is never uncounted); a
+    /// whole file or a non-JPEG is charged its length alone.
     #[test]
-    fn a_cut_jpeg_is_weighed_at_its_whole_frame() {
+    fn a_cut_jpeg_is_charged_for_its_file_and_its_whole_frame() {
+        let dir = std::env::temp_dir().join(format!("lc-cut-gate-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
         let rgb: Vec<u8> = (0..160 * 96 * 3).map(|i| (i * 7 % 251) as u8).collect();
         let jpeg = encode_jpeg(&EncodeImage::new(160, 96, 3, Samples::U8(&rgb)), 90, ChromaSubsampling::S420, &EncodeMeta::default()).unwrap();
+        let cut = &jpeg[..jpeg.len() / 2];
         let thumb = crate::media::SourceLevel::Thumb.max_edge();
-        assert_eq!(cut_jpeg_weight(&jpeg, thumb), 0, "a whole file is weighed by its length");
-        assert_eq!(cut_jpeg_weight(&jpeg[..jpeg.len() / 2], thumb), 160 * 96 * 3);
-        assert_eq!(cut_jpeg_weight(&jpeg[..jpeg.len() / 2], thumb + 1), 160 * 96 * 15);
-        assert_eq!(cut_jpeg_weight(b"not a jpeg", thumb), 0);
+        let charged = |name: &str, bytes: &[u8], max_edge: usize| {
+            let path = dir.join(name);
+            std::fs::write(&path, bytes).unwrap();
+            let gate = crate::memory::WorkGate::new(usize::MAX / 2);
+            let held = load_gated(&gate, false, &path.to_string_lossy(), max_edge, |b| {
+                assert_eq!(b.len(), bytes.len());
+                Ok(gate.usage().0)
+            })
+            .unwrap();
+            assert_eq!(gate.usage().0, 0, "{name}: given back");
+            held
+        };
+        assert_eq!(charged("cut.jpg", cut, thumb), cut.len() + 160 * 96 * 3);
+        assert_eq!(charged("cut-full.jpg", cut, thumb + 1), cut.len() + 160 * 96 * 15);
+        assert_eq!(charged("whole.jpg", &jpeg, thumb), jpeg.len() * 3);
+        assert_eq!(charged("other.bin", b"not a jpeg at all", thumb), 17 * 3);
+        // a frame header after more than the first probe's worth of APP segments (extended XMP,
+        // a big ICC profile) is still found
+        let mut padded = jpeg[..2].to_vec();
+        for _ in 0..20 {
+            padded.extend([0xFF, 0xED, 0xEA, 0x62]);
+            padded.extend(std::iter::repeat_n(0u8, 0xEA60));
+        }
+        padded.extend_from_slice(&jpeg[2..jpeg.len() / 2]);
+        assert!(padded.len() - jpeg.len() / 2 > FRAME_PROBE, "the frame header is past the first probe");
+        let padded_path = dir.join("padded-cut.jpg");
+        std::fs::write(&padded_path, &padded).unwrap();
+        assert_eq!(cut_jpeg_frame_weight(&padded_path.to_string_lossy(), padded.len(), thumb), 160 * 96 * 3);
+        // a damaged frame header that claims 65535 x 65535 pixels is not charged for them
+        let mut wild = cut.to_vec();
+        let sof = wild.windows(2).position(|w| w == [0xFF, 0xC0]).unwrap();
+        wild[sof + 5..sof + 9].copy_from_slice(&[0xFF, 0xFF, 0xFF, 0xFF]);
+        assert_eq!(charged("wild.jpg", &wild, thumb), wild.len() * 3);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A raw whose TIFF shell holds only a small RGB image (IFD0) next to a private block, as Exif
