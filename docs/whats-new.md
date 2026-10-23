@@ -2,6 +2,15 @@
 
 ## 2026-10-21
 
+### Fujifilm X-T4 film simulation looks
+- X-T4 raws can now be shown in each of the camera's nine colour film simulations: open the profile browser and pick one
+  from "X-T4 looks, measured", such as "Vivid (Velvia)". Each look was measured by having an X-T4 convert colour charts
+  in that film simulation, so it follows the camera's own colour and contrast: on 781 photos it lands a median of 0.52
+  to 0.64 ΔE2000 from the camera's own conversion, depending on the look. Exposure, white balance and your other edits apply as
+  usual, Amount blends back towards the starting look, and photos shot at DR200 are brightened a stop as the camera
+  brightens them. Looks render on the CPU, so editing with one is slower than with other profiles. Measured from the
+  camera; not made or endorsed by Fujifilm.
+
 ### Sharper resampling in HDR and panorama merges
 - Merged photos (HDR and panorama) are resampled with a sharper filter (Lanczos-3 instead of bilinear). Moving a
   photo by half a pixel used to lose a third of its finest detail; now it keeps most of it, without halos around

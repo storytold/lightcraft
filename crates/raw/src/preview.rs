@@ -65,6 +65,47 @@ pub fn embedded_preview_dynamic_range_optimized(bytes: &[u8]) -> Option<bool> {
     crate::vendor::arw::dynamic_range_optimizer(&mn)
 }
 
+/// The dynamic range (100, 200 or 400 %) a Fujifilm RAF was developed at, from the maker note of its embedded JPEG
+/// (`vendor::raf`): at DR200 and DR400 the camera exposed the sensor one or two stops darker and brightens its
+/// rendering back. `None` for other files, or when the note doesn't say.
+pub fn fujifilm_dynamic_range(bytes: &[u8]) -> Option<u32> {
+    let jpeg = crate::vendor::raf::header(bytes).ok()?.jpeg?;
+    let exif = jpeg_exif(jpeg)?;
+    let tiff = Tiff::parse(exif).ok()?;
+    let make = tiff.ifds.first()?.string(t::MAKE)?;
+    let e = tiff.exif()?.get(t::MAKER_NOTE)?;
+    let mn = makernote::parse_makernote(exif, e.offset, e.count() as u64, tiff.order, &make)?;
+    crate::vendor::raf::dynamic_range(&mn)
+}
+
+/// The Exif TIFF of a JPEG's first `Exif` APP1 segment, from the marker segments before the first scan.
+fn jpeg_exif(b: &[u8]) -> Option<&[u8]> {
+    if !b.starts_with(&[0xff, 0xd8]) {
+        return None;
+    }
+    let mut i = 2usize;
+    while i.checked_add(4)? <= b.len() {
+        if *b.get(i)? != 0xff {
+            return None;
+        }
+        let m = *b.get(i + 1)?;
+        if m == 0xff {
+            i += 1;
+            continue;
+        }
+        if m == 0xda || m == 0xd9 {
+            return None;
+        }
+        let len = u16::from_be_bytes([*b.get(i + 2)?, *b.get(i + 3)?]) as usize;
+        let payload = b.get(i + 4..i.checked_add(2)?.checked_add(len)?)?;
+        if m == 0xe1 && payload.starts_with(b"Exif\0\0") {
+            return payload.get(6..);
+        }
+        i = i.checked_add(2 + len)?;
+    }
+    None
+}
+
 /// The first frame (SOF) marker of a JPEG and its position, from the marker segments before the first scan.
 fn first_frame(b: &[u8]) -> Option<(u8, usize)> {
     if b.len() < 4 || !b.starts_with(&[0xff, 0xd8]) {

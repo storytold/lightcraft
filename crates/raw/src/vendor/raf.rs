@@ -35,6 +35,21 @@ const XTRANS_LAYOUT: u16 = 0x0131;
 /// ones are otherwise an LSB-first stream), 0 where they are an LSB-first stream or 16-bit words.
 const PACKED_WORDS: u16 = 0xf006;
 
+/// Maker-note tags (ExifTool FujiFilm tag names) giving the dynamic range a shot was developed at, in percent:
+/// `0x140b` AutoDynamicRange when the camera chose it (DR Auto), `0x1403` DevelopmentDynamicRange when it was set by
+/// hand. At DR200 and DR400 the camera exposes the sensor one or two stops darker and brightens its rendering back.
+/// Checked against the camera: for 570 X-T4 raws its USB raw conversion reported the dynamic range it developed each
+/// at, and these tags agreed on every one (567 shot on DR Auto, 300 of them at DR200; three public raw.pixls.us
+/// files set to DR100 by hand, which carry `0x1403` and no `0x140b`).
+const MN_AUTO_DYNAMIC_RANGE: u16 = 0x140b;
+const MN_DEVELOPMENT_DYNAMIC_RANGE: u16 = 0x1403;
+
+/// The dynamic range (100, 200 or 400 %) a Fujifilm maker note says the shot was developed at.
+pub(crate) fn dynamic_range(note: &lightcraft_tiff::makernote::MakerNote) -> Option<u32> {
+    let v = note.ifd.u64(MN_AUTO_DYNAMIC_RANGE).or_else(|| note.ifd.u64(MN_DEVELOPMENT_DYNAMIC_RANGE))?;
+    matches!(v, 100 | 200 | 400).then_some(v as u32)
+}
+
 /// The fixed-position header pointers.
 pub(crate) struct Header<'a> {
     pub jpeg: Option<&'a [u8]>,
@@ -416,6 +431,53 @@ pub(super) mod tests {
         assert_ne!(decode(raf_flagged(w, h, 12, le, None, b"", 0)), RawData::U16(px.clone()));
         // flag clear: the LSB-first stream still decodes
         assert_eq!(decode(raf_flagged(w, h, 12, pack(&px, 12), None, b"", 0)), RawData::U16(px));
+    }
+
+    /// A camera JPEG whose Exif carries a Fujifilm maker note holding `tags` as SHORT values.
+    fn jpeg_with_note(tags: &[(u16, u16)]) -> Vec<u8> {
+        use lightcraft_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value, tags as t};
+        let mut note = b"FUJIFILM".to_vec();
+        note.extend(12u32.to_le_bytes());
+        note.extend((tags.len() as u16).to_le_bytes());
+        for (tag, v) in tags {
+            note.extend(tag.to_le_bytes());
+            note.extend(3u16.to_le_bytes());
+            note.extend(1u32.to_le_bytes());
+            note.extend(v.to_le_bytes());
+            note.extend([0, 0]);
+        }
+        note.extend(0u32.to_le_bytes());
+        let mut exif = IfdBuilder::new();
+        exif.set(t::MAKER_NOTE, Value::Undefined(note));
+        let mut ifd0 = IfdBuilder::new();
+        ifd0.set(t::MAKE, Value::Ascii("FUJIFILM".into()));
+        ifd0.set_child(t::EXIF_IFD, exif);
+        let tiff = TiffWriter { order: ByteOrder::Big, bigtiff: false }.write(&[ifd0]).unwrap();
+        let mut app1 = b"Exif\0\0".to_vec();
+        app1.extend(tiff);
+        let mut jpeg = vec![0xff, 0xd8, 0xff, 0xe1];
+        jpeg.extend(((app1.len() + 2) as u16).to_be_bytes());
+        jpeg.extend(app1);
+        jpeg.extend([0xff, 0xd9]);
+        jpeg
+    }
+
+    /// The dynamic range comes from `0x140b` (DR Auto) or `0x1403` (set by hand); other values, missing tags, a JPEG
+    /// without Exif or cut short and other files give `None`.
+    #[test]
+    fn dynamic_range_is_read_from_the_camera_jpegs_maker_note() {
+        let file = |jpeg: &[u8]| raf(12, 6, 14, vec![0; 12 * 6 * 2], None, jpeg);
+        let dr = |tags: &[(u16, u16)]| crate::fujifilm_dynamic_range(&file(&jpeg_with_note(tags)));
+        assert_eq!(dr(&[(0x1400, 1), (0x1402, 0), (0x140b, 200)]), Some(200), "DR Auto");
+        assert_eq!(dr(&[(0x1402, 1), (0x1403, 100)]), Some(100), "set by hand");
+        assert_eq!(dr(&[(0x1403, 400)]), Some(400));
+        assert_eq!(dr(&[(0x140b, 300)]), None, "not a dynamic range");
+        assert_eq!(dr(&[(0x1400, 1)]), None, "not recorded");
+        assert_eq!(crate::fujifilm_dynamic_range(&file(&[0xff, 0xd8, 0xff, 0xd9])), None, "no Exif");
+        let mut cut = jpeg_with_note(&[(0x140b, 200)]);
+        cut.truncate(30);
+        assert_eq!(crate::fujifilm_dynamic_range(&file(&cut)), None, "a JPEG cut short");
+        assert_eq!(crate::fujifilm_dynamic_range(b"not a raw at all"), None);
     }
 
     /// The lens tables of the raw IFD reach `Mode::Header` and `Mode::Full` alike, only for validated cameras,

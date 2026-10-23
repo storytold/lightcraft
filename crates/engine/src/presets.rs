@@ -518,10 +518,14 @@ pub fn profile(id: &str) -> Option<&'static ProfileInfo> {
 pub const RECENT_PROFILES: usize = 5;
 
 impl Session {
-    /// A profile by id, looking up built-in profiles first and imported LUT profiles second.
+    /// A profile by id, looking up built-in profiles first, measured camera looks second and imported LUT profiles
+    /// third.
     pub fn profile_info(&self, id: &str) -> Option<(&str, &str)> {
         if let Some(p) = profile(id) {
             return Some((p.name, p.group));
+        }
+        if let Some(l) = crate::camera_looks::find(id) {
+            return Some((l.name.as_str(), l.group.as_str()));
         }
         self.lut_profiles.iter().find(|p| p.id == id).map(|p| (p.name.as_str(), p.group.as_str()))
     }
@@ -533,7 +537,9 @@ impl Session {
         self.profile_recent.truncate(RECENT_PROFILES);
     }
 
-    /// The profile menu: favourites, recent, then every group (`profiles.menu`).
+    /// The profile menu: favourites, recent, then every group (`profiles.menu`). Measured camera looks are in it,
+    /// in favourites, recent and their own group, only while the active photo can render them, as in the profile
+    /// browser.
     pub fn profile_menu(&self) -> Value {
         let item =
             |p: &ProfileInfo| json!({"id": p.id, "name": p.name, "group": p.group, "favorite": self.profile_favorites.iter().any(|f| f == p.id)});
@@ -543,11 +549,26 @@ impl Session {
                 .find(|p| p.id == id)
                 .map(|p| json!({"id": p.id, "name": p.name, "group": p.group, "favorite": self.profile_favorites.contains(&p.id), "imported": true}))
         };
-        let list = |ids: &[String]| ids.iter().filter_map(|id| profile(id).map(item).or_else(|| lut_item(id))).collect::<Vec<_>>();
+        // the measured camera looks the active photo renders (`camera_looks`); none without one
+        let here = self.active().and_then(|a| self.catalog.photo(a)).map(|p| crate::camera_looks::for_photo(p)).unwrap_or_default();
+        let look_item = |id: &str| {
+            here.iter().find(|l| l.id == id).map(|l| {
+                json!({"id": l.id, "name": l.name, "group": l.group, "favorite": self.profile_favorites.iter().any(|f| f == id), "camera": l.model})
+            })
+        };
+        let list =
+            |ids: &[String]| ids.iter().filter_map(|id| profile(id).map(item).or_else(|| look_item(id)).or_else(|| lut_item(id))).collect::<Vec<_>>();
         let mut groups: Vec<Value> = profile_groups()
             .into_iter()
             .map(|g| json!({"name": g, "profiles": PROFILES.iter().filter(|p| p.group == g).map(item).collect::<Vec<_>>()}))
             .collect();
+        // then the looks, by their groups, before imported profiles as in `profiles.list`
+        let mut look_groups: Vec<&str> = here.iter().map(|l| l.group.as_str()).collect();
+        look_groups.dedup();
+        for g in look_groups {
+            let profiles: Vec<Value> = here.iter().filter(|l| l.group == g).filter_map(|l| look_item(&l.id)).collect();
+            groups.push(json!({"name": g, "profiles": profiles}));
+        }
         // imported LUT profiles, by their groups
         let mut lut_groups: Vec<&str> = self.lut_profiles.iter().map(|p| p.group.as_str()).collect();
         lut_groups.sort_unstable();

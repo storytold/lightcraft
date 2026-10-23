@@ -43,12 +43,15 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         ui.add_space(6.0);
     }
     divider(ui);
+    let looks_here = app.session.catalog.photo(id).map(|p| lightcraft_engine::camera_looks::for_photo(p)).unwrap_or_default();
     // (title, cell tag, imported LUT folder, profiles)
     let mut sections: Vec<(&str, &str, bool, Vec<(String, String, String)>)> = Vec::new();
     let favs: Vec<(String, String, String)> = app
         .session
         .profile_favorites
         .iter()
+        // (a favourite measured look shows only for photos that can render it)
+        .filter(|f| !lightcraft_pipeline::looks::is_look_profile(f) || looks_here.iter().any(|l| &l.id == *f))
         .filter_map(|f| app.session.profile_info(f).map(|(name, group)| (f.clone(), name.to_string(), group.to_string())))
         .collect();
     if !favs.is_empty() {
@@ -61,6 +64,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             false,
             PROFILES.iter().filter(|p| p.group == g).map(|p| (p.id.to_string(), p.name.to_string(), p.group.to_string())).collect(),
         ));
+    }
+    // measured looks of the photo's camera: only a raw can render one
+    let looks = app.session.catalog.photo(id).map(|p| lightcraft_engine::camera_looks::for_photo(p)).unwrap_or_default();
+    if let Some(first) = looks.first() {
+        sections.push((first.group.as_str(), "", false, looks.iter().map(|l| (l.id.clone(), l.name.clone(), l.group.clone())).collect()));
     }
     // imported LUT profile groups
     let mut lut_groups: Vec<String> = app.session.lut_profiles.iter().map(|p| p.group.clone()).collect();
