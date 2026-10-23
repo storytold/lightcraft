@@ -172,28 +172,69 @@ fn a_check_that_panics_is_answered_with_an_error() {
     assert_eq!(answer(&mut h, &rx)["result"], json!([]));
 }
 
-/// Photos added while the files are being checked were not in that check: its answer is not given as
-/// the library's current one, and is not kept for a later request either.
+fn new_photo(id: u64, path: &str) -> Box<Photo> {
+    Box::new(Photo::new(PhotoId(id), Source::File { path: path.into() }, "x.jpg", "JPEG", 60, 40, "2026-01-01T00:00:00"))
+}
+
+/// Photos change while the files are being checked (auto-import adds some every few seconds, a share check
+/// takes minutes): the answer is the check's, kept to the photos that are still where it looked, so asking
+/// again never has to be the answer. A photo that was missing and has been removed, moved to Recently
+/// Deleted or relinked since is not reported; one added since was not checked and is not either.
 #[test]
-fn a_check_of_an_earlier_catalog_is_not_answered_as_current() {
+fn a_check_over_changing_photos_answers_what_still_holds() {
     let (mut h, share) = app_on_a_slow_share(Duration::from_secs(3));
     let rx = ask(&mut h);
     for _ in 0..3 {
         h.step();
     }
-    let p =
-        Photo::new(PhotoId(PHOTOS + 1), Source::File { path: "/share/IMG_9999.jpg".into() }, "IMG_9999.jpg", "JPEG", 60, 40, "2026-01-01T00:00:00");
-    h.app.session.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    let cat = &mut h.app.session.catalog;
+    cat.apply(Op::RemovePhoto { id: PhotoId(1) }).unwrap();
+    cat.apply(Op::SetDeleted { id: PhotoId(2), deleted: true }).unwrap();
+    let relinked =
+        Op::Relink { id: PhotoId(3), file_name: "y.jpg".into(), source: Source::File { path: "/share/IMG_9998.jpg".into() }, format: None };
+    cat.apply(relinked).unwrap();
+    cat.apply(Op::AddPhoto { photo: new_photo(PHOTOS + 1, "/share/IMG_0000x.jpg") }).unwrap();
     share.open.store(true, Ordering::SeqCst);
     let reply = answer(&mut h, &rx);
-    assert_eq!(reply["ok"], false, "{reply}");
-    assert!(reply["error"].as_str().is_some_and(|e| e.contains("changed")), "{reply}");
+    assert_eq!(reply["ok"], true, "{reply}");
+    let ids: Vec<u64> = reply["result"].as_array().unwrap().iter().map(|r| r["id"].as_u64().unwrap()).collect();
+    assert_eq!(ids, (4..=10).collect::<Vec<_>>(), "{reply}");
+}
+
+/// A stop is a stop, whatever the photos did meanwhile.
+#[test]
+fn a_stopped_check_says_stopped_even_if_the_photos_changed() {
+    let (mut h, share) = app_on_a_slow_share(Duration::from_secs(3));
+    let rx = ask(&mut h);
+    for _ in 0..3 {
+        h.step();
+    }
+    h.app.session.catalog.apply(Op::AddPhoto { photo: new_photo(PHOTOS + 1, "/share/IMG_9999.jpg") }).unwrap();
+    let id = missing_rows(&h)[0].id;
+    let r = h.request("engine.execute", json!({"command": "activity.cancel", "params": {"id": id}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    share.open.store(true, Ordering::SeqCst);
+    let reply = answer(&mut h, &rx);
+    assert!(reply["error"].as_str().is_some_and(|e| e.contains("stopped")), "{reply}");
+}
+
+/// A check nobody waited for, over photos that changed while it ran, is not kept: the next request
+/// checks afresh (and then sees the photo that came meanwhile).
+#[test]
+fn a_check_over_changed_photos_is_not_kept_for_a_later_request() {
+    let (mut h, share) = app_on_a_slow_share(Duration::from_secs(3));
+    drop(ask(&mut h));
+    for _ in 0..3 {
+        h.step();
+    }
+    h.app.session.catalog.apply(Op::AddPhoto { photo: new_photo(PHOTOS + 1, "/share/IMG_0000x.jpg") }).unwrap();
+    share.open.store(true, Ordering::SeqCst);
     assert!(h.step_until(T, |h| h.app.tasks.is_empty()));
     let calls = share.calls.load(Ordering::SeqCst);
     let again = ask(&mut h);
     let reply = answer(&mut h, &again);
-    assert_eq!(reply["ok"], true, "{reply}");
-    assert!(share.calls.load(Ordering::SeqCst) > calls, "checked afresh, not given the stale answer");
+    assert_eq!(reply["result"].as_array().map(Vec::len), Some(11), "{reply}");
+    assert!(share.calls.load(Ordering::SeqCst) > calls, "checked afresh");
 }
 
 /// An edit that leaves the photos' files alone (a rating) does not spoil the check.

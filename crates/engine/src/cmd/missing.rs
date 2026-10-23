@@ -52,16 +52,33 @@ pub fn checked(cat: &Catalog) -> Vec<(PhotoId, String)> {
     cat.photos().filter_map(|p| checked_path(p).map(|f| (p.id, f.to_string()))).collect()
 }
 
-/// What [`checked`] would list, as one number, without building the list: the photos in scope and
-/// the file each one points at, whatever their order. A caller that checked on its own thread
-/// compares it before and after to know the answer is still of the catalog it is given to.
-pub fn fingerprint(cat: &Catalog) -> u64 {
+fn fingerprint_of<'a>(entries: impl Iterator<Item = (PhotoId, &'a str)>) -> u64 {
     use std::hash::{DefaultHasher, Hash, Hasher};
-    cat.photos().filter_map(|p| checked_path(p).map(|f| (p.id, f))).fold(0u64, |sum, entry| {
+    entries.fold(0u64, |sum, entry| {
         let mut h = DefaultHasher::new();
         entry.hash(&mut h);
         sum.wrapping_add(h.finish())
     })
+}
+
+/// What [`checked`] lists, as one number (the photos in scope and the file each one points at,
+/// whatever their order), without building the list. A caller that took `checked` and checked its
+/// files on another thread compares it with [`fingerprint_of_checked`] to know whether the photos
+/// changed meanwhile.
+pub fn fingerprint(cat: &Catalog) -> u64 {
+    fingerprint_of(cat.photos().filter_map(|p| checked_path(p).map(|f| (p.id, f))))
+}
+
+/// [`fingerprint`] of the list [`checked`] gave.
+pub fn fingerprint_of_checked(files: &[(PhotoId, String)]) -> u64 {
+    fingerprint_of(files.iter().map(|(id, f)| (*id, f.as_str())))
+}
+
+/// What of `gone` (a sweep's answer, of the catalog as it was) still holds in `cat` as it is now: the
+/// photos still in scope that still point at the file that was not found. A photo removed, moved to
+/// Recently Deleted or relinked since is not reported as missing; one added since was not checked.
+pub fn still_missing(cat: &Catalog, gone: Vec<(PhotoId, String)>) -> Vec<(PhotoId, String)> {
+    gone.into_iter().filter(|(id, file)| cat.photo(*id).and_then(|p| checked_path(p)) == Some(file.as_str())).collect()
 }
 
 /// How many files [`sweep`] checks between two reports of its progress.

@@ -84,7 +84,7 @@ pub fn ask(app: &mut LightcraftApp, reply: Sender<Value>) -> Outcome {
         return Outcome::Later;
     }
     let files = missing::checked(&app.session.catalog);
-    let snapshot = missing::fingerprint(&app.session.catalog);
+    let snapshot = missing::fingerprint_of_checked(&files);
     let total = files.len() as u64;
     let exists = app.session.media.availability.probe();
     let cancel = Arc::new(AtomicBool::new(false));
@@ -101,13 +101,12 @@ pub fn ask(app: &mut LightcraftApp, reply: Sender<Value>) -> Outcome {
             _ if app.session.library_generation() != library => {
                 (control::failure("Missing Photos: another library was opened before the check ended"), false)
             }
-            // (photos added, removed or relinked while the files were checked: this is not the catalog's answer)
-            Ok(_) if missing::fingerprint(&app.session.catalog) != snapshot => {
-                (control::failure("Missing Photos: the photos changed while the files were checked, ask again"), false)
-            }
             Err(e) => (control::failure(e), false),
             Ok(None) => (control::failure("Missing Photos: the check was stopped"), false),
-            Ok(Some(gone)) => (control::success(missing::missing_json(gone)), true),
+            Ok(Some(gone)) if missing::fingerprint(&app.session.catalog) == snapshot => (control::success(missing::missing_json(gone)), true),
+            // (photos changed while the files were checked, as an import does: the answer is what of the
+            // check still holds, and is not kept, for the next request must see the photos as they are then)
+            Ok(Some(gone)) => (control::success(missing::missing_json(missing::still_missing(&app.session.catalog, gone))), false),
         };
         let received = app.missing.answer(library, &answer);
         if complete && !received {
