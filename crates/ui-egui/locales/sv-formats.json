@@ -297,5 +297,20 @@
   "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Moved {n} photo{} to “{}”. Edit → Undo moves them back.",
   "{n} selected photos · {pages} pages": "{n} selected photos · {pages} pages",
   "{skipped} catalog images were not imported because their records in the catalog are incomplete.": "{skipped} catalog images were not imported because their records in the catalog are incomplete.",
-  "Listing folders — folders: {folders}, files: {files}": "Listing folders — folders: {folders}, files: {files}"
+  "Listing folders — folders: {folders}, files: {files}": "Listing folders — folders: {folders}, files: {files}",
+  "Exported contact sheet: {photos} photos, {pages} pages": "Kontaktark exporterat (foton: {photos}, sidor: {pages})",
+  "Printed to PDF: {photos} photos, {pages} pages": "Utskrivet till PDF (foton: {photos}, sidor: {pages})",
+  "{} import warning{}": "Importvarningar: {}{:.0}",
+  "{n} tasks": "{n} uppgifter",
+  "{task}: done": "{task}: klart",
+  "{task}: done, with problems": "{task}: klart, med problem",
+  "{task}: failed": "{task}: misslyckades",
+  "{task}: stopped": "{task}: stoppad",
+  "{task}: stopped unexpectedly": "{task}: stoppades oväntat",
+  "Show failed ({n})": "Visa misslyckade ({n})",
+  "and {n} more": "och {n} till",
+  "{n} failed": "{n} misslyckades",
+  "took {n} s": "tog {n} s",
+  "took {n} min": "tog {n} min",
+  "took {h} h {m} min": "tog {h} h {m} min"
 }

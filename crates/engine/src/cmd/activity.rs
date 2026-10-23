@@ -1,4 +1,5 @@
-//! `activity.list` / `activity.cancel`: the background tasks in flight (see [`crate::activity`]).
+//! `activity.list` / `activity.cancel`: the background tasks in flight; `activity.finished` / `activity.dismiss`:
+//! the ones that ended and left a row (see [`crate::activity`]).
 
 use serde_json::{Value, json};
 
@@ -32,6 +33,32 @@ pub fn specs() -> Vec<CommandSpec> {
                 Ok(json!({"cancelled": 1}))
             }
         ),
+        cmd!(
+            query "activity.finished",
+            "Finished Background Tasks",
+            [],
+            None,
+            "{} → {finished: [{id, kind, label, ending: done|problems|failed|stopped|died, summary, detail, failures: [{name, reason}], failed, path, ranMs, ageMs}]} — the tasks that ended and left a row, newest first: those that ran 10 s or more, and every one that did not end well (problems = not for every file, stopped = cancelled, died = its worker crashed). `failed` counts the files that failed; `failures` holds the first 500 with their reasons (none for a job that only counts them); `path` is one of the files it made. `summary` and `detail` are as the app shows them, in its language, and `summary` is empty for a job that says nothing of itself. At most 50 clean endings and 200 rows in all are kept. They stay until dismissed, for this session",
+            always,
+            |s, _| Ok(json!({"finished": s.activity.finished()}))
+        ),
+        cmd!(
+            "activity.dismiss",
+            "Dismiss Finished Task",
+            [],
+            None,
+            "{id} | {all: true} → {dismissed: n} — let go of a finished task's row (or of all of them). An unknown id (it may have been dismissed already) is an error",
+            always,
+            |s, p| {
+                const C: &str = "activity.dismiss";
+                if p.get("all").and_then(Value::as_bool) == Some(true) {
+                    return Ok(json!({"dismissed": s.activity.dismiss_all()}));
+                }
+                let id = p.get("id").and_then(Value::as_u64).ok_or_else(|| bad(C, "id or all"))?;
+                s.activity.dismiss(id).map_err(|e| bad(C, e))?;
+                Ok(json!({"dismissed": 1}))
+            }
+        ),
     ]
 }
 
@@ -52,6 +79,30 @@ mod tests {
         let r = s.execute("activity.cancel", &json!({"id": g.id()})).unwrap();
         assert_eq!(r["cancelled"], 1);
         assert!(g.is_cancelled());
+    }
+
+    #[test]
+    fn finished_and_dismiss_through_execute() {
+        use crate::activity::{Ending, Failure, Outcome};
+        let mut s = Session::new();
+        let g = s.activity.start("export", "Exporting", Cancel::Yes);
+        let id = g.id();
+        g.finish(Outcome {
+            ending: Ending::Problems,
+            summary: "Exported 1 of 2 photos".into(),
+            failures: vec![Failure { name: "IMG_2.jpg".into(), reason: "The disk is full".into() }],
+            ..Default::default()
+        });
+        let r = s.execute("activity.finished", &json!({})).unwrap();
+        assert_eq!(r["finished"][0]["id"], id);
+        assert_eq!(r["finished"][0]["ending"], "problems");
+        assert_eq!(r["finished"][0]["failures"][0], json!({"name": "IMG_2.jpg", "reason": "The disk is full"}));
+        assert_eq!(r["finished"][0]["failed"], 1);
+        assert!(s.execute("activity.dismiss", &json!({})).is_err());
+        assert!(s.execute("activity.dismiss", &json!({"id": 999})).is_err());
+        assert_eq!(s.execute("activity.dismiss", &json!({"id": id})).unwrap()["dismissed"], 1);
+        assert_eq!(s.execute("activity.dismiss", &json!({"all": true})).unwrap()["dismissed"], 0);
+        assert_eq!(s.execute("activity.finished", &json!({})).unwrap()["finished"], json!([]));
     }
 
     #[test]

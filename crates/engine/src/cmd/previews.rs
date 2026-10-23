@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use serde_json::{Value, json};
 
 use super::{CommandSpec, always, bad, cmd, str_param};
-use crate::activity::{Cancel, TaskGuard};
+use crate::activity::{Cancel, Ending, Outcome, TaskGuard};
 use crate::media::{RenderJob, THUMB_SIZES};
 use crate::{Result, Session};
 
@@ -39,7 +39,7 @@ impl PreviewBuild {
             "total": self.total,
             "done": self.done.load(Ordering::Relaxed),
             "failed": self.failed.load(Ordering::Relaxed),
-            "running": !self.finished.load(Ordering::Relaxed),
+            "running": !self.finished.load(Ordering::Acquire),
             "cancelled": self.cancel.load(Ordering::Relaxed),
             "what": if self.what.is_empty() { "previews" } else { self.what },
             "repaired": self.repaired.load(Ordering::Relaxed),
@@ -49,6 +49,30 @@ impl PreviewBuild {
 
     pub fn error(&self) -> Option<String> {
         self.error.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
+    }
+
+    /// How the build ended, for its row: it failed as a whole, was stopped, or could not make some photos' previews.
+    fn outcome(&self) -> Outcome {
+        let failed = self.failed.load(Ordering::Relaxed);
+        if let Some(why) = self.error() {
+            return Outcome { failed, ..Outcome::failed(why) };
+        }
+        let ending = if self.cancel.load(Ordering::Relaxed) {
+            Ending::Stopped
+        } else if failed > 0 {
+            Ending::Problems
+        } else {
+            Ending::Done
+        };
+        Outcome { ending, failed, ..Default::default() }
+    }
+
+    /// The build is over: the row of how it went is kept, the build reads as finished, and only then does its running
+    /// row go (whoever waits for `finished` finds the row; whoever sees the running row go finds the build finished).
+    fn end(&self, mut task: TaskGuard) {
+        task.report(self.outcome());
+        self.finished.store(true, Ordering::Release);
+        drop(task);
     }
 }
 
@@ -105,7 +129,7 @@ fn lanes(n: usize, full: bool) -> usize {
     if full { l.min(2) } else { l }
 }
 
-fn run_all(jobs: Vec<Vec<RenderJob>>, state: &PreviewBuild, task: &TaskGuard, lanes: usize) {
+fn run_all(jobs: Vec<Vec<RenderJob>>, state: &PreviewBuild, task: TaskGuard, lanes: usize) {
     let total = jobs.len();
     let queue = std::sync::Mutex::new(jobs.into_iter());
     let work = || {
@@ -138,7 +162,7 @@ fn run_all(jobs: Vec<Vec<RenderJob>>, state: &PreviewBuild, task: &TaskGuard, la
         let _ = lanes;
         work();
     }
-    state.finished.store(true, Ordering::Relaxed);
+    state.end(task);
 }
 
 fn build(s: &mut Session, p: &Value) -> Result<Value> {
@@ -148,7 +172,7 @@ fn build(s: &mut Session, p: &Value) -> Result<Value> {
         "full" | "1:1" => None,
         other => return Err(bad(C, format!("unknown size `{other}` (standard|full)"))),
     };
-    if s.preview_build.as_ref().is_some_and(|b| !b.finished.load(Ordering::Relaxed)) {
+    if s.preview_build.as_ref().is_some_and(|b| !b.finished.load(Ordering::Acquire)) {
         return Err(bad(C, "a preview build is already running"));
     }
     // explicit ids, else the selection, else everything in view
@@ -160,7 +184,7 @@ fn build(s: &mut Session, p: &Value) -> Result<Value> {
     let lanes = lanes(jobs.len(), edge.is_none());
     let wait = p.get("wait").and_then(Value::as_bool).unwrap_or(false) || cfg!(target_arch = "wasm32");
     if wait {
-        run_all(jobs, &state, &task, lanes);
+        run_all(jobs, &state, task, lanes);
         return Ok(state.json());
     }
     #[cfg(not(target_arch = "wasm32"))]
@@ -169,7 +193,7 @@ fn build(s: &mut Session, p: &Value) -> Result<Value> {
         let st = state.clone();
         std::thread::Builder::new()
             .name("lc-build-previews".into())
-            .spawn(move || run_all(jobs, &st, &task, lanes))
+            .spawn(move || run_all(jobs, &st, task, lanes))
             .map_err(|e| bad(C, format!("could not start: {e}")))?;
     }
     Ok(state.json())
@@ -334,7 +358,7 @@ fn smart(s: &mut Session, p: &Value) -> Result<Value> {
     let dir = s.media.smart_dir.clone().ok_or_else(|| bad(C, "smart previews need a library on disk"))?;
     let discard = p.get("discard").and_then(Value::as_bool).unwrap_or(false);
     let background = p.get("background").and_then(Value::as_bool).unwrap_or(false);
-    if background && s.preview_build.as_ref().is_some_and(|b| !b.finished.load(Ordering::Relaxed)) {
+    if background && s.preview_build.as_ref().is_some_and(|b| !b.finished.load(Ordering::Acquire)) {
         return Err(bad(C, "a preview build is already running"));
     }
     let ids = if p.get("ids").is_some() || !s.selection.ids.is_empty() { s.targets(p)? } else { s.visible_cloned() };
@@ -362,7 +386,7 @@ fn smart(s: &mut Session, p: &Value) -> Result<Value> {
                     log::warn!("{C}: {e}");
                     *st.error.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(e);
                 }
-                st.finished.store(true, Ordering::Relaxed);
+                st.end(task);
             })
             .map_err(|e| bad(C, format!("could not start: {e}")))?;
         return Ok(state.json());

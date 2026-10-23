@@ -297,5 +297,20 @@
   "“{to}” is already a person. Combining them makes one person; Undo separates them again.": "“{to}” is already a person. Combining them makes one person; Undo separates them again.",
   "•  {assumption}": "•  {assumption}",
   "… and {more} more": "… và {more} nữa",
-  "…and {more} more": "…and {more} more"
+  "…and {more} more": "…and {more} more",
+  "Exported contact sheet: {photos} photos, {pages} pages": "Đã xuất tờ tiếp xúc (ảnh: {photos}, trang: {pages})",
+  "Printed to PDF: {photos} photos, {pages} pages": "Đã in ra PDF (ảnh: {photos}, trang: {pages})",
+  "{} import warning{}": "Cảnh báo khi nhập: {}{:.0}",
+  "{n} tasks": "{n} tác vụ",
+  "{task}: done": "{task}: xong",
+  "{task}: done, with problems": "{task}: xong, có sự cố",
+  "{task}: failed": "{task}: thất bại",
+  "{task}: stopped": "{task}: đã dừng",
+  "{task}: stopped unexpectedly": "{task}: dừng bất ngờ",
+  "Show failed ({n})": "Hiện mục thất bại ({n})",
+  "and {n} more": "và {n} mục khác",
+  "{n} failed": "{n} thất bại",
+  "took {n} s": "mất {n} giây",
+  "took {n} min": "mất {n} phút",
+  "took {h} h {m} min": "mất {h} giờ {m} phút"
 }
