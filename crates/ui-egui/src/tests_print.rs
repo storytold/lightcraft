@@ -407,3 +407,25 @@ fn page_options_checkboxes_set_the_page_and_hide_for_packages() {
     click(&mut h, "button:printStyle-2");
     assert!(!has(&h, "check:printPageNumbers") && !has(&h, "check:printCropMarks"));
 }
+
+#[test]
+fn an_edited_photos_colour_thumbnail_is_asked_for_again_while_the_old_one_is_shown() {
+    let mut h = demo(Services { png: None, ..Default::default() });
+    open_print(&mut h);
+    let id = h.app.session.catalog.photos().next().expect("a photo").id;
+    let shown = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(200.0, 150.0));
+    // the photo has a thumbnail, and asking again for an unchanged photo builds nothing
+    let _ = crate::print_view::colour_thumb(&mut h.app, id, shown);
+    assert!(h.settle(Duration::from_secs(10)));
+    assert!(h.app.renderer.thumb(id).is_some(), "the thumbnail exists");
+    let built = h.app.renderer.thumb_jobs_built;
+    assert!(crate::print_view::colour_thumb(&mut h.app, id, shown).is_some());
+    assert_eq!(h.app.renderer.thumb_jobs_built, built, "an unchanged photo is not re-requested");
+    // a committed edit (no frame runs, so the grid cannot be what refreshes it) changes the thumbnail's job
+    let mut s = (*h.app.session.develop_of(id).expect("settings")).clone();
+    s.light.exposure += 1.0;
+    h.app.session.set_develop(id, s, "Test").expect("edit");
+    let tex = crate::print_view::colour_thumb(&mut h.app, id, shown);
+    assert!(tex.is_some(), "the old thumbnail is still drawn meanwhile");
+    assert!(h.app.renderer.thumb_jobs_built > built, "the edited photo's thumbnail was requested again");
+}

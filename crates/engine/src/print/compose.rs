@@ -553,6 +553,8 @@ pub struct Prepared {
     marks: Marks,
     /// Print sharpening, applied to each photo once it's rendered at its print size.
     color: crate::print_color::PrintColorSettings,
+    /// Turn each composed page gray ([`super::gray_rgb16_in_place`]).
+    grayscale: bool,
 }
 
 impl Prepared {
@@ -601,7 +603,11 @@ impl Prepared {
                 placed.push(draw_cell(&mut page, photo, item.cell, &self.style).map_err(|e| format!("{}: {e}", item.name))?);
             }
             self.marks.draw(&mut page, &placed, index + 1);
-            out.push(PageRaster { width: w as u32, height: h as u32, ppi: self.ppi, rgb: page.rgb });
+            let mut rgb = page.rgb;
+            if self.grayscale {
+                super::gray_rgb16_in_place(&mut rgb);
+            }
+            out.push(PageRaster { width: w as u32, height: h as u32, ppi: self.ppi, rgb });
         }
         if !progress(done, "") {
             return Err("Print cancelled".into());
@@ -661,6 +667,7 @@ pub fn prepare(session: &mut Session, settings: &PrintSettings, photos: &[PhotoI
         style,
         marks: Marks::of(&settings, ppi, pw, ph),
         color: settings.job.color.clone(),
+        grayscale: settings.job.grayscale,
     })
 }
 
@@ -949,6 +956,24 @@ mod tests {
         // Cancelling gives no pages.
         let work = prepare(&mut s, &set, &ids).unwrap();
         assert!(work.run(&mut |i, _| i < 1).is_err());
+    }
+
+    #[test]
+    fn a_grayscale_job_composes_gray_pages_and_a_colour_one_does_not() {
+        let mut s = Session::with_demo();
+        let ids = first_ids(&s, 1);
+        let mut set = settings(Style::ContactSheet);
+        set.layout.grid = GridSpec { columns: 1, rows: 1, spacing_x: 0.0, spacing_y: 0.0, keep_square: false };
+        set.page.background = [200, 30, 30];
+        let colour = prepare(&mut s, &set, &ids).unwrap().run(&mut |_, _| true).unwrap();
+        assert!(colour[0].rgb.as_chunks::<3>().0.iter().any(|p| p[0] != p[1] || p[1] != p[2]), "the page has colour");
+        set.job.grayscale = true;
+        let gray = prepare(&mut s, &set, &ids).unwrap().run(&mut |_, _| true).unwrap();
+        assert!(gray[0].rgb.as_chunks::<3>().0.iter().all(|p| p[0] == p[1] && p[1] == p[2]), "every pixel is gray");
+        // and the exported 8-bit sRGB (what goes to a printer that lists no PDF) is gray too
+        let srgb = crate::print::output::page_to_srgb8(&gray[0]).unwrap();
+        assert!(srgb.data.iter().all(|p| p[0].abs_diff(p[1]) <= 1 && p[1].abs_diff(p[2]) <= 1));
+        assert!(crate::print::output::write(&gray, &set.job, "t").unwrap().starts_with(b"%PDF-"));
     }
 
     #[test]

@@ -10,7 +10,13 @@ rust-version = "1.90"
 repository = "https://github.com/storytold/lightcraft"
 
 [workspace.dependencies]
-craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "5c874d51eeb3de70e735c8ce87a59a7dedd47675", features = ["serde"] }
+# Shared frontend components. The network-printer destination (`craft_ui::printing::network`) is storytold/craft-libs#112 until
+# it merges; then pin an immutable revision again (the previous pin was 5c874d51eeb3de70e735c8ce87a59a7dedd47675).
+craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "refs/pull/112/head", features = ["serde"] }
+# Shared print backends and registry (the system spooler, WS-Print, IPP, tracked jobs): storytold/craft-libs#116 until it merges.
+# The `wsd`/`ipp` features are chosen by lightcraft-print's `network-print` feature, so a build without it has the spooler only.
+craft-print = { git = "https://github.com/storytold/craft-libs", rev = "refs/pull/116/head", default-features = false }
+# Shared document-path handling.
 craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "82a24b006eefa036b43c09a67fb9a3fbd17ffe63" }
 # internal
 lightcraft-denoise-core = { path = "crates/denoise-core" }
@@ -34,6 +40,7 @@ lightcraft-catalog = { path = "crates/catalog" }
 lightcraft-preview = { path = "crates/preview" }
 lightcraft-merge = { path = "crates/merge" }
 lightcraft-engine = { path = "crates/engine" }
+lightcraft-print = { path = "crates/print" }
 lightcraft-ui-egui = { path = "crates/ui-egui" }
 lightcraft-mcp = { path = "crates/mcp" }
 lightcraft-fetch = { path = "crates/fetch" }
