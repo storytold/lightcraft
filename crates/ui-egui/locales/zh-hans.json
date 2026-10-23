@@ -409,6 +409,7 @@
   "Detail (D)": "细节 (D)",
   "Details": "详细信息",
   "Diagonal": "对角线",
+  "Dimensions": "尺寸",
   "Discard Preview Cache": "丢弃预览缓存",
   "Display P3": "Display P3",
   "Display name": "显示名称",
@@ -1372,6 +1373,7 @@
   "Show in Explorer": "在文件资源管理器中显示",
   "Show in File Manager": "在文件管理器中显示",
   "Show in Finder": "在 Finder 中显示",
+  "Show in Folders": "在文件夹中显示",
   "Show on Map": "在地图上显示",
   "Show overlay (O)": "显示叠加 (O)",
   "Show ratings, flags and edit badges": "显示星级、旗标和编辑标记",
@@ -1575,7 +1577,7 @@
   "Width": "宽度",
   "Width (% of photo)": "宽度（照片百分比）",
   "Width (px)": "宽度 (px)",
-  "Width × Height": "宽度 × 高度",
+  "Width & Height": "宽度 & 高度",
   "Will be replaced": "将替换",
   "Will be restored": "将恢复",
   "Window": "窗口",
@@ -2179,5 +2181,10 @@
   "Checking the GPU…": "正在检查 GPU…",
   "CPU": "CPU",
   "A face model uses the GPU only when a check shows it gives the same results faster.": "只有检查表明 GPU 能更快给出相同结果时，人脸模型才会使用 GPU。",
-  "Checking the GPU for faces": "正在检查用于人脸的 GPU"
+  "Checking the GPU for faces": "正在检查用于人脸的 GPU",
+  "Include selected photos": "包含所选照片",
+  "Suggests who is in a photo from the faces you have named. Everything stays on your computer.": "根据你已命名的人脸，推测照片中的人物。所有数据仅保存在本机。",
+  "This build cannot run recognition models: they can be added and chosen, not used.": "此版本无法运行识别模型：可以添加和选择，但无法使用。",
+  "Detect Faces (Photo menu) needs it: a small one-time download.": "“检测人脸”（照片菜单）依赖它：一次性小文件下载。",
+  "This build has nowhere to keep face models, so the model list is not available. (The desktop app has.)": "此版本无法存放人脸模型，因此模型列表不可用。（桌面版可以存放。）"
 }

@@ -209,3 +209,112 @@ fn a_compare_pane_says_when_its_render_failed() {
     assert!(h.step_until(SETTLE, failed), "the failure is said");
     assert!(!h.app.widgets.iter().any(|(w, _)| w.starts_with("compare:rendering:")));
 }
+
+#[test]
+fn reference_escape_leaves_overlays_then_the_view_without_changing_edits() {
+    use crate::state::{LightsOut, ViewMode};
+    let mut h = demo();
+    let reference = h.app.session.visible_cloned()[0];
+    h.app.run("library.select", json!({"ids": [reference.0]})).unwrap();
+    h.app.run("view.reference", json!({})).unwrap();
+    let active = h.app.session.active().unwrap();
+    h.app.run("develop.set", json!({"control": "light.exposure", "value": 0.7})).unwrap();
+    h.app.ui.lights_out = LightsOut::Dim;
+    h.request("ui.key", json!({"key": "Escape"}), T);
+    assert_eq!((h.app.ui.view, h.app.ui.lights_out), (ViewMode::Reference, LightsOut::On));
+    h.request("ui.key", json!({"key": "Escape"}), T);
+    assert_eq!(h.app.ui.view, ViewMode::Detail);
+    assert_eq!(h.app.ui.reference, Some(reference.0), "leaving the view keeps the pinned photo");
+    assert_eq!(h.app.session.active(), Some(active));
+    assert_eq!(h.app.session.develop_of(active).unwrap().light.exposure, 0.7);
+    h.request("ui.key", json!({"key": "Escape"}), T);
+    assert_eq!(h.app.ui.view, ViewMode::PhotoGrid);
+}
+
+#[test]
+fn invalid_or_deleted_reference_is_refused_without_replacing_the_pin() {
+    let mut h = demo();
+    let ids = h.app.session.visible_cloned();
+    h.app.run("library.select", json!({"ids": [ids[0].0]})).unwrap();
+    h.app.run("photo.setReference", json!({})).unwrap();
+    h.app.run("photo.delete", json!({"ids": [ids[1].0]})).unwrap();
+    for id in [u64::MAX, ids[1].0] {
+        let r = h.app.run("photo.setReference", json!({"id": id}));
+        assert!(r.is_err(), "unavailable photo {id} must not be pinned");
+        assert_eq!(h.app.ui.reference, Some(ids[0].0));
+    }
+    let deleted = h.app.run("photo.setReference", json!({"id": ids[1].0})).unwrap_err();
+    assert!(deleted.contains("Recently Deleted"), "the caller learns to restore it: {deleted}");
+    // a malformed id is refused, not taken for "the active photo"
+    h.app.run("library.select", json!({"ids": [ids[2].0]})).unwrap();
+    for id in [json!(ids[2].0.to_string()), json!(-1), json!(1.5), json!([ids[2].0])] {
+        assert!(h.app.run("photo.setReference", json!({"id": id})).is_err(), "{id}");
+        assert_eq!(h.app.ui.reference, Some(ids[0].0));
+    }
+    h.app.run("photo.setReference", json!({"id": null})).unwrap();
+    assert_eq!(h.app.ui.reference, Some(ids[2].0), "a null id means the active photo");
+    h.app.run("photo.setReference", json!({"id": ids[0].0})).unwrap();
+    h.app.run("library.select", json!({"ids": []})).unwrap();
+    assert!(h.app.run("photo.setReference", json!({})).is_err());
+    assert_eq!(h.app.ui.reference, Some(ids[0].0));
+}
+
+#[test]
+fn deleting_the_pinned_reference_stops_drawing_it_and_reentry_uses_a_live_photo() {
+    let mut h = demo();
+    let reference = h.app.session.visible_cloned()[0];
+    h.app.run("library.select", json!({"ids": [reference.0]})).unwrap();
+    h.app.run("view.reference", json!({})).unwrap();
+    h.settle(SETTLE);
+    let texture = h.app.renderer.textures.get(&crate::render::Slot::Compare(0)).unwrap().tex.id();
+    let drawn = |h: &Headless| h.view.painted_shapes().iter().any(|s| matches!(s, egui::epaint::Shape::Mesh(mesh) if mesh.texture_id == texture));
+    assert!(drawn(&h), "the live reference is shown before deletion");
+    let active = h.app.session.active().unwrap();
+    h.app.run("photo.delete", json!({"ids": [reference.0]})).unwrap();
+    h.settle(SETTLE);
+    assert!(!drawn(&h), "Recently Deleted photos must not remain on the reference canvas");
+    assert!(!h.app.renderer.textures.contains_key(&crate::render::Slot::Compare(0)), "the deleted reference's pane is released");
+    assert!(!h.app.renderer.textures.contains_key(&crate::render::Slot::Compare(1)), "and the active photo's pane beside it");
+    assert!(h.app.compare_windows[0].is_none());
+    let r = h.app.run("view.reference", json!({})).unwrap();
+    assert_eq!(r["reference"], active.0);
+    assert_eq!(h.app.ui.reference, Some(active.0));
+    h.app.run("photo.restore", json!({"ids": [reference.0]})).unwrap();
+    h.app.run("photo.setReference", json!({"id": reference.0})).unwrap();
+    h.settle(SETTLE);
+    assert!(h.app.renderer.textures.get(&crate::render::Slot::Compare(0)).is_some_and(|t| t.photo == reference));
+}
+
+/// Clicking a colour label (or stars) in the Info panel while culling labels the active photo
+/// only, as the label keys and the bottom bar's stars and flags do, and the label shows under that
+/// photo in Compare (#2398: "Can't assign color to photo when culling").
+#[test]
+fn info_panel_label_in_compare_labels_the_active_photo_and_shows_it() {
+    use lightcraft_catalog::{ColorLabel, PhotoId};
+    let mut h = demo();
+    let vis: Vec<u64> = h.app.session.visible_cloned().iter().map(|p| p.0).collect();
+    for id in &vis[..2] {
+        h.request("engine.execute", json!({"command": "photo.label", "params": {"label": "none", "ids": [id]}}), T);
+        h.request("engine.execute", json!({"command": "photo.rate", "params": {"rating": 0, "ids": [id]}}), T);
+    }
+    h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [vis[0], vis[1]], "active": vis[0]}}), T);
+    let r = h.request("engine.execute", json!({"command": "view.compare"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    let (sel, cand) = (r["result"]["select"].as_u64().unwrap(), r["result"]["candidate"].as_u64().unwrap());
+    h.app.ui.right = crate::state::RightPanel::Info;
+    h.settle(SETTLE);
+    let photo = |h: &Headless, id: u64| h.app.session.catalog.photo(PhotoId(id)).cloned().expect("photo");
+    let widgets = |h: &mut Headless| h.request("ui.widgets", json!({}), T)["result"].to_string();
+    assert!(!widgets(&mut h).contains(&format!("cull:{cand}:label")), "no label yet");
+    let r = h.request("ui.clickWidget", json!({"id": "label:red"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert_eq!(photo(&h, cand).label, Some(ColorLabel::Red), "the active photo (the candidate) is labelled");
+    assert_eq!(photo(&h, sel).label, None, "the select is not labelled with it");
+    assert!(widgets(&mut h).contains(&format!("cull:{cand}:label")), "the label shows under the candidate");
+    let r = h.request("ui.clickWidget", json!({"id": "star:info:3"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert_eq!(photo(&h, cand).rating, 3);
+    assert_eq!(photo(&h, sel).rating, 0, "the select is not rated with it");
+}

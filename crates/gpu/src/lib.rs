@@ -75,12 +75,8 @@ fn record_fallback(reason: String) {
 /// E.g. "disabled by LIGHTCRAFT_GPU=0", "software adapter (llvmpipe …) skipped", "device lost …".
 /// Never blocks.
 pub fn unavailable_reason() -> Option<String> {
-    if env_disabled() {
-        #[cfg(not(target_arch = "wasm32"))]
-        if backend::env_off() {
-            return Some("disabled by LIGHTCRAFT_GPU_BACKEND=off".into());
-        }
-        return Some("disabled by LIGHTCRAFT_GPU=0".into());
+    if let Some(why) = env_off_reason() {
+        return Some(why.into());
     }
     if !ENABLED.load(Ordering::Relaxed) {
         return Some("disabled by the GPU rendering preference (app.gpu)".into());
@@ -245,10 +241,24 @@ pub fn wait_idle(timeout: std::time::Duration) -> bool {
 /// environment switches and the rendering preference, but not a render-device failure (the devices are separate).
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn switched_off() -> Option<String> {
-    if env_disabled() {
-        return Some(if backend::env_off() { "disabled by LIGHTCRAFT_GPU_BACKEND=off" } else { "disabled by LIGHTCRAFT_GPU=0" }.into());
+    if let Some(why) = env_off_reason() {
+        return Some(why.into());
     }
     (!ENABLED.load(Ordering::Relaxed)).then(|| "disabled by the GPU rendering preference (app.gpu)".into())
+}
+
+/// Why the environment switches the GPU off for the whole process (`LIGHTCRAFT_GPU=0` or
+/// `LIGHTCRAFT_GPU_BACKEND=off`), or `None`. Code with a GPU path of its own (the SAM 3 model on
+/// Metal) follows it too.
+pub fn env_off_reason() -> Option<&'static str> {
+    if !env_disabled() {
+        return None;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    if backend::env_off() {
+        return Some("disabled by LIGHTCRAFT_GPU_BACKEND=off");
+    }
+    Some("disabled by LIGHTCRAFT_GPU=0")
 }
 
 /// `LIGHTCRAFT_GPU=0` (or `LIGHTCRAFT_GPU_BACKEND=off`): no GPU for the whole process.

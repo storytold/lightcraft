@@ -62,7 +62,7 @@ impl SettingsHashes {
 }
 
 /// Bump when the pipeline's output changes, to invalidate cached thumbnails.
-pub const RENDER_CACHE_VERSION: u64 = 64;
+pub const RENDER_CACHE_VERSION: u64 = 69;
 
 /// Thumbnails render at one of these long edges (so window/cell size changes reuse the cache).
 pub const THUMB_SIZES: [usize; 4] = [128, 256, 384, 512];
@@ -132,6 +132,11 @@ fn source_edge_needed(p: &Photo, settings: &DevelopSettings, apply_crop: bool, o
 /// Decodes a file into a linear Rec.2020 image no larger than `max_edge` (set by the app).
 pub type FileLoader = Arc<dyn Fn(&str, usize) -> Result<(Rgb32f, SourceInfo), String> + Send + Sync>;
 
+/// [`FileLoader`] for a thumbnail: a raw file that keeps smaller copies of its raw image (Lightroom's merged DNGs)
+/// develops the smallest that covers `max_edge` (set by the app); the flag says it did. Never used for an export,
+/// which must render the full image.
+pub type ReducedLoader = Arc<dyn Fn(&str, usize) -> Result<(Rgb32f, SourceInfo, bool), String> + Send + Sync>;
+
 /// A raw file's embedded (camera-rendered) preview as display sRGB, oriented, no larger than
 /// `max_edge` (set by the app). `None`: no usable preview.
 pub type PreviewLoader = Arc<dyn Fn(&str, usize) -> Option<Rgba8> + Send + Sync>;
@@ -183,11 +188,17 @@ pub struct DecodedSource {
     pub camera_tone: Option<lightcraft_pipeline::tone::CameraTone>,
     /// The same picture developed from the AI-denoised mosaic, when the photo has one cached.
     pub denoised: Option<Arc<Twin>>,
+    /// These pixels came from the photo's smart preview (an offline original), not from its file.
+    /// A refresh must never rebuild a proxy from itself: that would stamp its older look as current.
+    pub from_proxy: bool,
+    /// Developed from a smaller copy of the raw image that the file keeps ([`ReducedLoader`]), not from the image
+    /// itself: good for a thumbnail, never for an export.
+    pub reduced: bool,
 }
 
 impl DecodedSource {
     pub fn new(image: Arc<Rgb32f>, info: Option<SourceInfo>) -> Self {
-        DecodedSource { image, info, camera_tone: None, denoised: None }
+        DecodedSource { image, info, camera_tone: None, denoised: None, from_proxy: false, reduced: false }
     }
 
     /// The picture to develop for a Denoise `amount` (0 to 1, see [`DevelopSettings::denoise_amount`]): the plain one,
@@ -258,6 +269,8 @@ pub enum SourceRef {
         fallback: Option<std::path::PathBuf>,
         /// The photo has a cached denoised picture: load it with the plain one (see [`PairLoader`]).
         denoise: Option<(DenoiseSpec, PairLoader)>,
+        /// A thumbnail's loader, used instead of `loader` (see [`ReducedLoader`]); `None` for every other job.
+        reduced: Option<ReducedLoader>,
     },
     /// A smart preview standing in for a missing original.
     Smart {
@@ -277,14 +290,19 @@ impl SourceRef {
                 if from.image.width.max(from.image.height) <= *max_edge {
                     return Ok((**from).clone());
                 }
-                let image = lightcraft_raster::resample::fit(&from.image, *max_edge, *max_edge, lightcraft_raster::resample::Filter::Box);
+                // Lanczos, not a box average: a box at 2-3:1 halves the contrast of detail near
+                // the output's resolution limit and aliases what is finer
+                let image = lightcraft_raster::resample::fit(&from.image, *max_edge, *max_edge, lightcraft_raster::resample::Filter::Lanczos3);
                 return Ok(DecodedSource { image: Arc::new(image), denoised: None, ..(**from).clone() });
             }
             SourceRef::Demo { scene, max_edge } => crate::demo::scene_pixels(scene, *max_edge)?,
-            SourceRef::File { path, max_edge, loader, fallback, denoise } => {
-                let plain = || match loader {
-                    Some(l) => l(path, *max_edge).map(|(image, info)| DecodedSource::new(Arc::new(image), Some(info))),
-                    None => Err(format!("no decoder available for {path}")),
+            SourceRef::File { path, max_edge, loader, fallback, denoise, reduced } => {
+                let plain = || match (reduced, loader) {
+                    (Some(l), _) => {
+                        l(path, *max_edge).map(|(image, info, reduced)| DecodedSource { reduced, ..DecodedSource::new(Arc::new(image), Some(info)) })
+                    }
+                    (None, Some(l)) => l(path, *max_edge).map(|(image, info)| DecodedSource::new(Arc::new(image), Some(info))),
+                    (None, None) => Err(format!("no decoder available for {path}")),
                 };
                 // the denoised picture comes with the plain one from a single decode; when it cannot be read the
                 // pair loader gives the plain picture alone (the cached file is never a reason to fail a render)
@@ -306,6 +324,8 @@ impl SourceRef {
                                     info: Some(info),
                                     camera_tone: None,
                                     denoised: twin.map(|t| Arc::new(Twin::new(Arc::new(t)))),
+                                    from_proxy: false,
+                                    reduced: false,
                                 })
                             })
                         } else {
@@ -351,6 +371,8 @@ pub struct MediaCache {
     /// share of [`crate::memory::budget`]); the least recently used entry of any of them goes first.
     budget: usize,
     pub file_loader: Option<FileLoader>,
+    /// What grid thumbnails load files with (see [`ReducedLoader`]); `None`: [`Self::file_loader`].
+    pub reduced_loader: Option<ReducedLoader>,
     pub file_probe: Option<FileProbe>,
     pub preview_loader: Option<PreviewLoader>,
     /// Reads a photo file's bytes (Photo Merge); `None` = the local file system.
@@ -426,6 +448,7 @@ impl Default for MediaCache {
             preview_capacity: 0,
             budget,
             file_loader: None,
+            reduced_loader: None,
             file_probe: None,
             preview_loader: None,
             file_bytes: None,
@@ -718,11 +741,11 @@ impl MediaCache {
                 }
                 match self.scenes.iter().find(|s| s.id == *scene) {
                     Some(s) => SourceRef::Demo { scene: Box::new(s.clone()), max_edge },
-                    None => SourceRef::File { path: format!("demo:{scene}"), max_edge, loader: None, fallback: None, denoise: None },
+                    None => SourceRef::File { path: format!("demo:{scene}"), max_edge, loader: None, fallback: None, denoise: None, reduced: None },
                 }
             }
             Source::File { path } => {
-                SourceRef::File { path: path.clone(), max_edge, loader: self.file_loader.clone(), fallback: None, denoise: None }
+                SourceRef::File { path: path.clone(), max_edge, loader: self.file_loader.clone(), fallback: None, denoise: None, reduced: None }
             }
         }
     }
@@ -761,6 +784,24 @@ pub struct RenderJob {
     /// A face tile that can be cut from the raw's embedded preview, tried before `source`
     /// ([`crate::Session::face_job`]; `None` for every other job).
     pub preview_cut: Option<crate::face_tiles::PreviewCut>,
+    /// Shrink a full-quality result to fit this size (physical pixels) with a Lanczos filter once
+    /// it is rendered. The loupe renders a little larger than it is drawn (its edge is rounded up
+    /// to a 64 px step) and the window would otherwise shrink the texture with 2-tap bilinear sampling, which blurs fine detail at
+    /// small ratios and aliases it at large ones. The caches keep the full render.
+    pub display_fit: Option<(usize, usize)>,
+}
+
+/// `img` shrunk to fit `max_w × max_h` with a Lanczos filter (see [`RenderJob::display_fit`]).
+pub fn fit_for_display(img: &Rgba8, max_w: usize, max_h: usize) -> Rgba8 {
+    use lightcraft_raster::resample::{Filter, fit};
+    let f = lightcraft_raster::Image {
+        width: img.width,
+        height: img.height,
+        data: img.data.iter().map(|p| [f32::from(p[0]), f32::from(p[1]), f32::from(p[2]), f32::from(p[3])]).collect(),
+    };
+    let small = fit(&f, max_w.max(1), max_h.max(1), Filter::Lanczos3);
+    let c = |v: f32| v.round().clamp(0.0, 255.0) as u8;
+    Rgba8 { width: small.width, height: small.height, data: small.data.iter().map(|p| [c(p[0]), c(p[1]), c(p[2]), c(p[3])]).collect() }
 }
 
 pub struct RenderResult {
@@ -784,6 +825,14 @@ pub struct RenderResult {
 
 impl RenderJob {
     /// Render at draft quality (interactive drags). Gets its own result key.
+    /// Shrink the full-quality result to fit `w × h` pixels with a Lanczos filter (see
+    /// [`Self::display_fit`]). Gets its own result key, so a change of drawn size renders again.
+    pub fn with_display_fit(mut self, w: usize, h: usize) -> Self {
+        self.display_fit = Some((w, h));
+        self.key ^= ((w as u64) << 32 | h as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+        self
+    }
+
     pub fn draft(mut self) -> Self {
         if self.request.quality != Quality::Draft {
             self.request.quality = Quality::Draft;
@@ -994,6 +1043,15 @@ impl RenderJob {
                 {
                     cache.put_deferred_at(self.cache_generation, *key, Arc::new(srgb.unwrap_or_else(|| rendered.image.clone())));
                 }
+                // the display fit, after the caches have the full render
+                if let Some((fw, fh)) = self.display_fit
+                    && self.request.quality == Quality::Full
+                {
+                    let (w, h) = (rendered.image.width, rendered.image.height);
+                    if w > fw.max(1) || h > fh.max(1) {
+                        rendered.image = fit_for_display(&rendered.image, fw, fh);
+                    }
+                }
                 RenderResult {
                     request_id: self.request_id,
                     source_key: self.source_key,
@@ -1201,7 +1259,12 @@ impl crate::Session {
     /// (≥ `long_edge`) and the result comes from / goes to the thumbnail cache (memory + disk).
     pub fn thumb_job(&mut self, id: PhotoId, long_edge: usize) -> Option<RenderJob> {
         let b = thumb_bucket(long_edge);
-        self.build_job(id, b, b, false, true, Some(b))
+        let mut job = self.build_job(id, b, b, false, true, Some(b))?;
+        // (a thumbnail may develop a smaller copy of the raw image that the file keeps)
+        if let SourceRef::File { reduced, .. } = &mut job.source {
+            reduced.clone_from(&self.media.reduced_loader);
+        }
+        Some(job)
     }
 
     fn build_job(
@@ -1266,6 +1329,7 @@ impl crate::Session {
             display: None,
             slide: None,
             preview_cut: None,
+            display_fit: None,
         })
     }
 
@@ -1319,6 +1383,7 @@ impl crate::Session {
             display: None,
             slide: None,
             preview_cut: None,
+            display_fit: None,
         })
     }
 
@@ -1373,6 +1438,7 @@ impl crate::Session {
             display: None,
             slide: None,
             preview_cut,
+            display_fit: None,
         })
     }
 
@@ -1610,6 +1676,17 @@ impl crate::Session {
         depth: lightcraft_pipeline::OutputDepth,
     ) -> Result<RenderJob, String> {
         let mut job = self.render_job(id, max_w, max_h, false, true).ok_or("no such photo")?;
+        // An export renders the full image: never a thumbnail's source developed from a smaller copy of the raw
+        // image that the file keeps (Lightroom's merged DNGs)
+        let reduced = match &job.source {
+            SourceRef::Loaded(s) => s.reduced,
+            SourceRef::Fit { from, .. } => from.reduced,
+            _ => false,
+        };
+        if reduced {
+            let p = self.catalog.photo(id).ok_or("no such photo")?.clone();
+            job.source = self.media.source_ref_uncached(&p, job.level);
+        }
         // An export is made from the denoised picture its Denoise amount asks for, made when the job runs if the
         // background queue has not got to it. (A source kept in memory may lack the picture, so the job reads the file.)
         if let Some(wanted) = self.denoise_for_export(id, &job.settings)? {
@@ -1798,6 +1875,28 @@ mod thumbnail_hash_tests {
 mod tests {
     use super::*;
 
+    /// A loupe job with a display fit returns its image shrunk to the drawn size, aspect kept;
+    /// a draft, and a render no larger than the drawn size, are left as rendered.
+    #[test]
+    fn a_display_fit_shrinks_the_loupe_render_to_the_drawn_size() {
+        let mut s = crate::Session::with_demo();
+        let id = s.active().unwrap();
+        let plain = s.loupe_job(id, 1024, 1024, true).unwrap().run().rendered.unwrap().image;
+        let long = plain.width.max(plain.height);
+        assert!(long >= 600, "the demo renders at least 600 px at 1024: {long}");
+        let fitted = s.loupe_job(id, 1024, 1024, true).unwrap().with_display_fit(400, 400).run().rendered.unwrap().image;
+        assert_eq!(fitted.width.max(fitted.height), 400, "{}x{}", fitted.width, fitted.height);
+        let aspect = |i: &Rgba8| i.width as f32 / i.height as f32;
+        assert!((aspect(&fitted) - aspect(&plain)).abs() < 0.02, "aspect kept");
+        let draft = s.loupe_job(id, 1024, 1024, true).unwrap().draft().with_display_fit(400, 400).run().rendered.unwrap().image;
+        assert_eq!(draft.width.max(draft.height), long, "a draft is not shrunk");
+        let same = s.loupe_job(id, 1024, 1024, true).unwrap().with_display_fit(plain.width, plain.height).run().rendered.unwrap().image;
+        assert_eq!((same.width, same.height), (plain.width, plain.height), "no larger than drawn: left as rendered");
+        let a = s.loupe_job(id, 1024, 1024, true).unwrap();
+        let b = s.loupe_job(id, 1024, 1024, true).unwrap().with_display_fit(400, 400);
+        assert_ne!(a.key, b.key, "the fit is part of the result key");
+    }
+
     #[test]
     fn renders_know_the_original_size_whichever_level_they_come_from() {
         // issue #960: noise reduction works in the original's pixels, so a grid cell drawn from the
@@ -1866,6 +1965,7 @@ mod tests {
             })),
             fallback: None,
             denoise: None,
+            reduced: None,
         };
         job.info = SourceInfo::default(); // Header facts cannot override decoder facts.
         job.settings = Arc::new(DevelopSettings::default());
@@ -1921,6 +2021,7 @@ mod tests {
             loader: Some(Arc::new(move |_, _| Ok((loaded_pixels.clone(), loaded_info.clone())))),
             fallback: None,
             denoise: None,
+            reduced: None,
         };
         let undo_before = s.undo.len();
         let request = job.request;

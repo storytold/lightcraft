@@ -130,6 +130,28 @@ fn without_the_integrated_title_bar_the_bar_is_not_a_window_handle() {
     assert!(bar.is_none());
 }
 
+// Scenario: the search field is centred on the window, whatever room the traffic lights take (#2365)
+#[test]
+fn the_search_field_stays_centred_on_the_window() {
+    let mut h = integrated();
+    let window_centre = 1200.0 / 2.0;
+    let windowed = widget(&h, "field:search");
+    assert_eq!(windowed.center().x, window_centre, "windowed, the field is centred on the window");
+    // the filter icon rides with the field, so it moves whenever the field does
+    let filter = widget(&h, "icon:filter").center().x;
+    h.request("ui.key", json!({"key": "f", "cmd": true, "shift": true}), T);
+    play(&mut h);
+    assert!(h.app.window_is_fullscreen);
+    let full_screen = widget(&h, "field:search");
+    assert_eq!(full_screen.center().x, window_centre, "full screen leaves it centred");
+    assert_eq!(full_screen.width(), windowed.width(), "and the same width");
+    assert_eq!(widget(&h, "icon:filter").center().x, filter);
+    h.request("ui.key", json!({"key": "f", "cmd": true, "shift": true}), T);
+    play(&mut h);
+    assert!(!h.app.window_is_fullscreen);
+    assert_eq!(widget(&h, "field:search").center().x, window_centre, "and so does leaving it");
+}
+
 // Scenario: in full screen the traffic lights are gone, so the bar's buttons move into their space
 #[test]
 fn full_screen_moves_the_left_buttons_into_the_traffic_lights_space() {

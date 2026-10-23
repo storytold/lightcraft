@@ -181,9 +181,16 @@ impl Drop for Downloads {
         for job in self.jobs.values() {
             job.cancel.store(true, Ordering::Relaxed);
         }
-        let started = std::time::Instant::now();
-        while self.running() && started.elapsed() < Duration::from_secs(1) {
-            std::thread::sleep(Duration::from_millis(10));
+        // Give a running download a moment to notice. Not on the web: there are no download
+        // threads, and `Instant::now` / `thread::sleep` panic on wasm32 ("time not implemented"),
+        // which killed the page when a `Session` was replaced after its library failed to open
+        // (issue #1507).
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let started = std::time::Instant::now();
+            while self.running() && started.elapsed() < Duration::from_secs(1) {
+                std::thread::sleep(Duration::from_millis(10));
+            }
         }
     }
 }
@@ -315,6 +322,18 @@ mod tests {
             assert!(t.elapsed() < Duration::from_secs(10), "{what}");
             std::thread::sleep(Duration::from_millis(10));
         }
+    }
+
+    /// Dropping a `Downloads` with nothing running (every session has one) returns at once: the
+    /// wait for running threads is the only part that takes time, and the web has no threads.
+    #[test]
+    fn dropping_idle_downloads_returns_at_once() {
+        let t = std::time::Instant::now();
+        drop(Downloads::default());
+        let mut d = Downloads::default();
+        d.set_outcome("m", State::Failed("x".into()));
+        drop(d);
+        assert!(t.elapsed() < Duration::from_millis(500), "{:?}", t.elapsed());
     }
 
     #[test]

@@ -66,6 +66,8 @@ def classify(maker, camera, ext_field):
             return "unverified", "ARW", "ARW decoder (uncompressed, cRAW, packed 12-bit, lossless, downsized YCbCr)"
         if e == "SR2":
             return "unverified", "SR2", "SR2 decoder"
+        if e == "SRF":
+            return "unsupported", "SRF", "SRF is discovered; sensor decoding unsupported, usable preview not verified on a real file"
         if e == "RAF":
             if RAF_OLD.search(camera):
                 return "preview", "RAF", "pre-X FinePix RAF without a raw IFD"
@@ -87,7 +89,9 @@ def classify(maker, camera, ext_field):
         return "unverified", "MEF", "MEF decoder (uncompressed 12-bit)"
     if e == "ERF":
         return "unverified", "ERF", "ERF decoder (12-bit 16-byte blocks)"
-    if e in ("CRW", "3FR", "FFF", "IIQ", "MOS", "KDC", "MRW", "X3F", "RAW", "ORI"):
+    if e == "MRW":
+        return "unverified", "MRW", "MRW decoder (12-bit packed, 16-bit words)"
+    if e in ("CRW", "3FR", "FFF", "IIQ", "MOS", "KDC", "X3F", "RAW", "ORI"):
         return "preview", e, f"{e} is opened from its embedded JPEG only"
     return "unsupported", e, f"{e or 'unknown'} is not imported"
 

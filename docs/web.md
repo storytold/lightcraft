@@ -111,7 +111,9 @@ are the same in every version, so serve them with `Cache-Control: no-cache` (not
     grant it, a notice says the library may be evicted under storage pressure.
   - **File ▸ Back Up Library…** downloads a zip of the library files and every stored original
     (`originals/<hash>/<file name>`, so an unzipped backup is browsable; entries are stored, not
-    compressed; at most 4 GB). **File ▸ Restore Library from Backup…** reads such a zip into a
+    compressed; at most 4 GB). While a save is failing it refuses to start and says how many
+    changes are unsaved and why: the zip copies the stored library files, so it would miss them
+    (issue #1508). **File ▸ Restore Library from Backup…** reads such a zip into a
     new library folder (`library-restored-<time>/`; originals already stored are skipped, every
     entry's checksum is verified, and each restored original must match its content hash) and
     only then switches to it (`active-library` names the folder in use) and reloads: the previous
@@ -121,6 +123,11 @@ are the same in every version, so serve them with `Cache-Control: no-cache` (not
     writes, so commands report `saved in memory but not written`, the top bar shows the unsaved
     warning (as on the desktop, see `docs/control-protocol.md`), and saving is retried every
     2 s until it works (`web.stats` → `saveError`).
+  - A failed read at start-up is not taken for a missing file: only `NotFoundError` means absent.
+    When a stored library file (or the `active-library` pointer) exists but can't be read, the
+    library isn't opened and nothing is saved, so the stored copy stays as it was; the window says
+    which file failed (issue #1507). A thumbnail index that can't be read keeps the stored
+    thumbnails instead of deleting them as unindexed.
   - A picked or dropped photo whose bytes can't be stored is not added (it would be gone after
     a reload); a notice says why.
   - One tab at a time: the page holds a Web Lock (`navigator.locks`, `lightcraft-library`); a

@@ -99,9 +99,10 @@ pub(crate) fn check_size(format: Format, w: u64, h: u64, opts: &DecodeOptions) -
 }
 
 pub(crate) fn finish(format: Format, raw: Raw, meta: Meta, source_dims: (u32, u32), opts: &DecodeOptions) -> Result<Decoded> {
-    let n = raw.width * raw.height;
     let ch = raw.model.channels() + raw.alpha as usize;
-    if n == 0 || raw.buf.len() < n * ch {
+    let buf_len =
+        crate::checked_sample_buf_len(raw.width, raw.height, ch).ok_or_else(|| Error::Malformed(format, "sample buffer too short".into()))?;
+    if (raw.buf.len() as u64) < buf_len {
         return Err(Error::Malformed(format, "sample buffer too short".into()));
     }
     let float = matches!(raw.buf, Buf::F32(_));
@@ -141,7 +142,9 @@ pub(crate) fn finish(format: Format, raw: Raw, meta: Meta, source_dims: (u32, u3
     let (image, alpha) = match opts.max_size {
         Some((mw, mh)) if (image.width as u32 > mw || image.height as u32 > mh) && mw > 0 && mh > 0 => {
             let factor = (image.width as f64 / mw as f64).max(image.height as f64 / mh as f64);
-            let f = if factor >= 2.0 { Filter::Box } else { Filter::Mitchell };
+            // (Lanczos at 2:1 and more as well: a box average there halves the contrast of
+            // detail near the output's resolution limit and aliases what is finer)
+            let f = if factor >= 2.0 { Filter::Lanczos3 } else { Filter::Mitchell };
             let img = fit(&image, mw as usize, mh as usize, f);
             let alpha = alpha.map(|a| fit(&a, mw as usize, mh as usize, f));
             (img, alpha)

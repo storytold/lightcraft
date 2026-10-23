@@ -75,6 +75,7 @@ pub(crate) struct Input {
 }
 
 /// What a detail pass re-runs.
+#[derive(Clone)]
 #[cfg_attr(not(feature = "sam"), allow(dead_code))]
 pub(crate) enum Prompt {
     Clicks(Vec<Click>),
@@ -440,7 +441,11 @@ impl Session {
         let job = self.segment_job(id, kind, Tag::Wait, tx, region)?;
         self.segmenter.worker.submit(job)?;
         match rx.recv_timeout(WAIT) {
-            Ok(o) => o.result,
+            Ok(o) => {
+                // (shown by the next poll in an app; logged anyway)
+                self.segmenter.messages.extend(o.notice);
+                o.result
+            }
             Err(_) => Err("the AI model took too long; try again".into()),
         }
     }
@@ -579,7 +584,7 @@ impl Session {
                 self.segment_queue(id, kind, tag, Some(region))?;
             } else {
                 let patch = self.segment_wait(id, kind, Some(region))?;
-                let outcome = worker::Outcome { tag, result: Ok(patch), superseded: false };
+                let outcome = worker::Outcome { tag, result: Ok(patch), superseded: false, notice: None };
                 let mut polled = Polled::default();
                 self.apply_outcome(outcome, &mut polled);
             }
@@ -618,6 +623,7 @@ impl Session {
         if o.superseded {
             return;
         }
+        polled.messages.extend(o.notice);
         match o.tag {
             Tag::Wait => {}
             Tag::Prepare => {
@@ -710,6 +716,18 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "sam")]
+    #[test]
+    fn a_worker_notice_reaches_the_user_with_the_result() {
+        // the job after which the model runs on the CPU (the GPU failed) says so
+        let mut s = Session::with_demo();
+        let notice = Some(worker::GPU_FAILED.to_string());
+        s.segmenter.results.0.send(worker::Outcome { tag: Tag::Prepare, result: Ok(None), superseded: false, notice }).unwrap();
+        let polled = s.segment_poll();
+        assert_eq!(polled.messages, vec![worker::GPU_FAILED.to_string()]);
+        assert!(s.segment_poll().messages.is_empty(), "once");
+    }
 
     fn seg_box(side: usize, x0: usize, y0: usize, x1: usize, y1: usize) -> SegMask {
         let l: Vec<f32> =

@@ -100,6 +100,7 @@ fn progress_flush_failure_does_not_wait_for_input_eof() {
 }
 
 fn run_shutdown_case(mode: &str) {
+    let _serial = crate::serial_sockets_and_children();
     let mut child = Command::new(std::env::current_exe().unwrap())
         .args(["--exact", "server::progress::shutdown_tests::output_failure_child", "--ignored", "--nocapture"])
         .env("LIGHTCRAFT_MCP_SHUTDOWN_CASE", mode)

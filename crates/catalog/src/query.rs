@@ -141,9 +141,40 @@ pub(crate) struct Prepared {
     only: Option<std::collections::HashSet<PhotoId>>,
 }
 
+/// The tokens of a search text: split at whitespace, except inside double quotes, so
+/// `person:"Jane Doe"` is one token (issue #1449). An unclosed quote runs to the end of the text; a
+/// backslash is an ordinary character. One pass over the text, nothing allocated.
+fn search_tokens(text: &str) -> impl Iterator<Item = &str> {
+    let mut rest = text;
+    std::iter::from_fn(move || {
+        rest = rest.trim_start();
+        if rest.is_empty() {
+            return None;
+        }
+        let mut quoted = false;
+        let end = rest
+            .char_indices()
+            .find(|&(_, c)| {
+                quoted ^= c == '"';
+                !quoted && c.is_whitespace()
+            })
+            .map_or(rest.len(), |(i, _)| i);
+        let (tok, tail) = rest.split_at(end);
+        rest = tail;
+        Some(tok)
+    })
+}
+
+/// `s` without the double quotes around it (a missing closing quote is allowed).
+fn unquote(s: &str) -> &str {
+    s.strip_prefix('"').map_or(s, |inner| inner.strip_suffix('"').unwrap_or(inner))
+}
+
 fn token_matches(p: &Photo, tok: &str) -> bool {
     let t = tok.to_lowercase();
-    if let Some((field, val)) = t.split_once(':') {
+    // a token that starts with a quote is a phrase, even with a colon in it
+    if let Some((field, quoted)) = t.split_once(':').filter(|_| !t.starts_with('"')) {
+        let val = unquote(quoted);
         let num = |s: &str| -> Option<(char, f64)> {
             let (op, rest) = match s.chars().next()? {
                 c @ ('>' | '<' | '=') => (c, &s[1..]),
@@ -180,18 +211,22 @@ fn token_matches(p: &Photo, tok: &str) -> bool {
             "date" => p.captured.as_deref().is_some_and(|c| c.starts_with(val)),
             "copy" | "virtual" => (val == "true" || val == "yes") == p.copy_of.is_some(),
             "name" | "file" => p.file_name.to_lowercase().contains(val),
-            // Not a known field: the colon is part of a plain word ("10:30", "Re:").
+            // Not a known field: the colon is part of a plain word ("10:30", "Re:"), its value unquoted
+            // (`re:"a b"` is the text `re:a b`).
+            _ if val.len() != quoted.len() => text_matches(p, &format!("{field}:{val}")),
             _ => text_matches(p, &t),
         };
     }
-    text_matches(p, &t)
+    text_matches(p, unquote(&t))
 }
 
 /// Whether the lower-cased word `t` is in the file name, title, caption, camera, lens, location,
-/// format or a keyword of `p`.
+/// format, a keyword or the name of a person (a named face) of `p`.
 fn text_matches(p: &Photo, t: &str) -> bool {
     let hay = [&p.file_name, &p.meta.title, &p.meta.caption, &p.meta.camera, &p.meta.lens, &p.meta.location, &p.format];
-    hay.iter().any(|h| h.to_lowercase().contains(t)) || p.meta.keywords.iter().any(|k| k.to_lowercase().contains(t))
+    hay.iter().any(|h| h.to_lowercase().contains(t))
+        || p.meta.keywords.iter().any(|k| k.to_lowercase().contains(t))
+        || p.people().iter().any(|n| n.to_lowercase().contains(t))
 }
 
 /// Whether `p` has a named face region called `name` (case-insensitive).
@@ -409,7 +444,7 @@ impl Filter {
         {
             return false;
         }
-        self.text.split_whitespace().all(|tok| token_matches(p, tok))
+        search_tokens(&self.text).all(|tok| token_matches(p, tok))
     }
 }
 

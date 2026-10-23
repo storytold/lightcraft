@@ -643,7 +643,9 @@ fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         }
         ui.add_space(8.0);
         if let Some(r) = ui.horizontal(|ui| crate::widgets::stars(ui, "info", p.rating, 20.0)).inner {
-            let _ = app.run("photo.rate", json!({"rating": r}));
+            let mut params = json!({"rating": r});
+            crate::panels::compare::target_active(app, &mut params);
+            let _ = app.run("photo.rate", params);
         }
         ui.add_space(6.0);
         // colour label: one swatch per label (hover shows its name); clicking the current one clears it
@@ -660,7 +662,10 @@ fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 }
                 let resp = resp.on_hover_text(crate::i18n::color_label(&app.session.catalog, l));
                 if resp.clicked() {
-                    let _ = app.run("photo.label", json!({"label": if on { "none".to_string() } else { key }}));
+                    // in Compare / Survey only the active photo, as the rating keys and the bottom pill do
+                    let mut params = json!({"label": if on { "none".to_string() } else { key }});
+                    crate::panels::compare::target_active(app, &mut params);
+                    let _ = app.run("photo.label", params);
                 }
             }
             if let Some(l) = p.label {
@@ -771,7 +776,11 @@ fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 }
             });
             if text_button(ui, "fillLocation", crate::i18n::tr("Fill Location"), false)
-                .on_hover_text(crate::i18n::tr("Fill empty City, State and Country from GPS (offline GeoNames place names)"))
+                .on_hover_text(format!(
+                    "{}\n{}",
+                    crate::i18n::tr("Fill empty City, State and Country from GPS (offline GeoNames place names)"),
+                    crate::i18n::tr("The place names list towns of 15,000 people or more: in a smaller one, City gets the nearest larger town.")
+                ))
                 .clicked()
                 && let Err(e) = app.run("metadata.reverseGeocode", json!({}))
             {
@@ -1319,25 +1328,29 @@ fn versions(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             } else if resp.clicked() && !current {
                 let _ = app.run("version.restore", json!({"index": i}));
             }
-            resp.on_hover_text(crate::i18n::tr(if current { "The photo has these settings" } else { "Click to restore · double-click to rename" }))
-                .context_menu(|ui| {
-                    if ui.button(crate::i18n::tr("Restore")).clicked() {
-                        let _ = app.run("version.restore", json!({"index": i}));
-                    }
-                    if ui.button(crate::i18n::tr("Update with Current Settings")).clicked() {
-                        let _ = app.run("version.update", json!({"index": i}));
-                    }
-                    if ui.button(crate::i18n::tr("Rename…")).clicked() {
-                        crate::panels::dialogs::prompt(app, "Rename Version", "Version name", &v.name, "version.rename", json!({"index": i}), "name");
-                    }
-                    if ui.button(crate::i18n::tr("Set as Before")).clicked() {
-                        let _ = app.run("beforeAfter.setBefore", json!({"source": "version", "name": v.name}));
-                    }
-                    ui.separator();
-                    if ui.button(crate::i18n::tr("Delete")).clicked() {
-                        let _ = app.run("version.delete", json!({"index": i}));
-                    }
-                });
+            let resp = resp.on_hover_text(crate::i18n::tr(if current {
+                "The photo has these settings"
+            } else {
+                "Click to restore · double-click to rename"
+            }));
+            crate::widgets::context_menu(&resp, |ui| {
+                if ui.button(crate::i18n::tr("Restore")).clicked() {
+                    let _ = app.run("version.restore", json!({"index": i}));
+                }
+                if ui.button(crate::i18n::tr("Update with Current Settings")).clicked() {
+                    let _ = app.run("version.update", json!({"index": i}));
+                }
+                if ui.button(crate::i18n::tr("Rename…")).clicked() {
+                    crate::panels::dialogs::prompt(app, "Rename Version", "Version name", &v.name, "version.rename", json!({"index": i}), "name");
+                }
+                if ui.button(crate::i18n::tr("Set as Before")).clicked() {
+                    let _ = app.run("beforeAfter.setBefore", json!({"source": "version", "name": v.name}));
+                }
+                ui.separator();
+                if ui.button(crate::i18n::tr("Delete")).clicked() {
+                    let _ = app.run("version.delete", json!({"index": i}));
+                }
+            });
         }
     });
 }
@@ -1409,7 +1422,7 @@ fn activity(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             if resp.clicked() {
                 let _ = app.run("history.restore", json!({"index": i}));
             }
-            resp.context_menu(|ui| {
+            crate::widgets::context_menu(&resp, |ui| {
                 if ui.button(crate::i18n::tr("Copy History Step Settings to Before")).clicked() {
                     let _ = app.run("beforeAfter.setBefore", json!({"source": "history", "index": i}));
                 }

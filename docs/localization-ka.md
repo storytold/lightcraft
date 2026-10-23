@@ -23,8 +23,10 @@ interface never uses Mtavruli (a test checks the whole catalog). Commands are ve
 are count-neutral, noun first (`იმპორტირებულია ფოტო: 3`); English plural endings are dropped with
 `{:.0}`. Dates read `კვირა, 20.09.2026` (`{weekday}, {day:02}.{month:02}.{year}`), months `09.2026`.
 
-Inter has no Georgian letters and craft-fonts has no Georgian face yet, so Georgian text shows boxes
-until a Georgian face is available to the UI.
+Inter has no Georgian letters, so the UI draws Georgian with craft-fonts' Noto Sans Georgian (`Geor`),
+like the Thai and Arabic faces: desktop release builds embed it, and a web build made with
+`CRAFT_FONTS_DIR` keeps it in the WASM (`crates/engine/build.rs`). The release web build doesn't use
+craft-fonts yet, and a build without `CRAFT_FONTS_DIR` has no Georgian face and shows boxes.
 
 ## Terminology
 

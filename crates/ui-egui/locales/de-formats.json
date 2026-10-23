@@ -268,6 +268,7 @@
   "{n} originals opened in the other editor": "{n} Originale im anderen Editor geöffnet",
   "· {in_source} identical copies": "· {in_source} identische Kopien",
   "{count} more warnings.": "{count} weitere Warnungen.",
+  "{skipped} catalog images were not imported because their records in the catalog are incomplete.": "{skipped} Katalogbilder wurden nicht importiert, weil ihre Einträge im Katalog unvollständig sind.",
   "{photos} catalog records processed; {collections} collections.": "{photos} Katalogeinträge verarbeitet; {collections} Sammlungen.",
   "{missing} originals are missing. Their catalog records are available; use Find Missing Photos to relink them.": "{missing} Originale fehlen. Ihre Katalogeinträge sind verfügbar; verwende „Fehlende Fotos suchen“, um sie neu zu verknüpfen.",
   "Applied {name}": "{name} angewendet",
@@ -295,5 +296,6 @@
   "Already in “{}”": "Bereits in „{}“",
   "Move {n} photo{} to “{}”": "{n} Foto{0} nach „{1}“ verschieben",
   "Move {n} photo{} to “{}”?": "{n} Foto{0} nach „{1}“ verschieben?",
+  "Listing folders — folders: {folders}, files: {files}": "Ordner werden aufgelistet – Ordner: {folders}, Dateien: {files}",
   "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "{n} Foto{0} nach „{1}“ verschoben. Bearbeiten → Rückgängig holt sie zurück."
 }

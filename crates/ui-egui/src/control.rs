@@ -438,7 +438,13 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
             Outcome::Screenshot { path: s("path").map(str::to_string), headless: p.get("headless").and_then(Value::as_bool).unwrap_or(false) }
         }
         "ui.render" => {
-            let id = p.get("id").and_then(Value::as_u64).map(lightcraft_catalog::PhotoId).or(app.session.active());
+            let id = match p.get("id").filter(|v| !v.is_null()) {
+                Some(v) => match v.as_u64() {
+                    Some(n) => Some(lightcraft_catalog::PhotoId(n)),
+                    None => return err("`id` must be a photo id (a whole number)"),
+                },
+                None => app.session.active(),
+            };
             let Some(id) = id else { return err("no photo") };
             if let Some(Err(e)) = s("path").map(|path| app.session.check_write_target(path)) {
                 return err(e);
@@ -484,13 +490,16 @@ pub fn default_export_dir() -> String {
 pub fn export_active(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
     use lightcraft_engine::export::{Destination, ExportOptions, export_batch};
     let p = &app.session.export_params(p)?;
-    let mut opts = ExportOptions::from_params(p).map_err(|e| e.to_string())?;
-    if let (Some(path), None) = (p.get("path").and_then(Value::as_str), p.get("format")) {
-        let ext = path.rsplit_once('.').map_or("", |(_, e)| e);
-        opts.format = lightcraft_engine::export::ExportFormat::parse(ext).unwrap_or(opts.format);
-    }
-    let ids: Vec<_> = match p.get("ids").and_then(Value::as_array) {
-        Some(a) => a.iter().filter_map(|v| serde_json::from_value(v.clone()).ok()).collect(),
+    // the format follows `path` (JPEG when it names none), and `bitDepth` is checked against it
+    let opts = ExportOptions::from_params(p).map_err(|e| e.to_string())?;
+    let ids: Vec<_> = match p.get("ids").filter(|v| !v.is_null()) {
+        // `ids` that aren't photo ids are an error, not "export the selection"
+        Some(v) => v
+            .as_array()
+            .ok_or("app.export: `ids` must be a list of photo ids")?
+            .iter()
+            .map(|v| v.as_u64().map(lightcraft_catalog::PhotoId).ok_or("app.export: `ids` must be photo ids (whole numbers)"))
+            .collect::<Result<_, _>>()?,
         None if !app.session.selection.ids.is_empty() => {
             // Batch order (and `{seq}`) follows the grid order.
             let sel: std::collections::HashSet<_> = app.session.selection.ids.iter().copied().collect();

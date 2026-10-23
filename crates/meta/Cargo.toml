@@ -13,6 +13,7 @@ lightcraft-tiff = { workspace = true }
 lightcraft-geom = { workspace = true }
 serde = { workspace = true }
 quick-xml = { workspace = true }
+chrono = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }

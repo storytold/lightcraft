@@ -62,7 +62,7 @@ fn album_json(a: &Album, all: &[Album], cat: &lightcraft_catalog::Catalog, depth
 
 /// The photo a query is about: `id` when given (which must be in the library), else the active one.
 fn photo_arg(s: &Session, p: &Value, c: &str) -> crate::Result<PhotoId> {
-    match p.get("id").and_then(Value::as_u64).map(PhotoId) {
+    match super::photo_id(p, c)? {
         Some(id) if s.catalog.photo(id).is_some() => Ok(id),
         Some(id) => Err(bad(c, format!("no such photo {}", id.0))),
         None => s.active().ok_or_else(|| bad(c, "no photo")),
@@ -139,8 +139,11 @@ pub fn specs() -> Vec<CommandSpec> {
                 .into_iter()
                 .map(|r| json!({"group": r.group, "tag": r.tag, "name": r.name, "value": r.value}))
                 .collect();
-            // XMP: the sidecar if there is one, else the file's own packet
-            let packet = crate::sidecar::read_packet(path, ph.kind, s.sidecar_naming(ph.id)).map(|(x, _)| x).or_else(|| lightcraft_meta::embedded(&bytes).xmp);
+            // Keep sidecar precedence; reuse the loaded bytes for embedded XMP.
+            let packet = match crate::sidecar::find_sidecar(path, s.sidecar_naming(ph.id)) {
+                Some(sc) => std::fs::read_to_string(sc).ok(),
+                None => lightcraft_meta::embedded(&bytes).xmp,
+            };
             let xmp: Vec<Value> = packet
                 .and_then(|x| lightcraft_meta::parse_xmp(&x).ok())
                 .map(|d| d.properties.into_iter().filter(|(k, _)| !k.starts_with("lc:")).map(|(k, v)| json!({"name": k, "value": v.join("; ")})).collect())

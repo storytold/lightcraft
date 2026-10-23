@@ -1389,6 +1389,26 @@ const RAW_SAMPLES: &[(&str, &str, &str)] = &[
         "4f6db6492da83f7f2a5012591e370557249d1ed44d4c948784016605b799327c",
     ),
     (
+        "mrw-minolta-dimage7hi-words16.mrw",
+        "https://raw.pixls.us/data/Minolta/DiMAGE%207Hi/RAW_MINOLTA_DIMAGE_7HI.MRW",
+        "2919a05757197a5424e02970c016893bca5aa29363a67b62b1a4b36326a10f6a",
+    ),
+    (
+        "mrw-minolta-dimage-a1.mrw",
+        "https://raw.pixls.us/data/Minolta/DiMAGE%20A1/RAW_MINOLTA_A1.MRW",
+        "bde1e2cd788e49c9bef20dfdd41be948fb02c2ee198c6b0959a67a3f79fd41c9",
+    ),
+    (
+        "mrw-minolta-dimage-a200-gbrg.mrw",
+        "https://raw.pixls.us/data/Minolta/DiMAGE%20A200/RAW_MINOLTA_DIMAGE_A200.MRW",
+        "2a95f6af2168e536dfb6d02b47e3b6119b35b497eebf179d7c20a6e496c26641",
+    ),
+    (
+        "mrw-minolta-dynax7d.mrw",
+        "https://raw.pixls.us/data/Minolta/Dynax%207D/PICT3410.MRW",
+        "713819e33e5302ec864d576d57223cfc8dcf46e8d45e0ae744d1fec40290a89f",
+    ),
+    (
         "nef-nikon-d700.nef",
         "https://raw.pixls.us/getfile.php/2249/nice/Nikon%20-%20D700%20-%2014bit%2014bit%20compressed%20%28Lossless%29%20%283:2%29.NEF",
         "00c3314f2ccf92aff17644943e6149e8793b517c24bb2c38a15ec41f3af109cb",

@@ -186,6 +186,10 @@ pub struct Interaction {
     pub label: String,
     pub photo: PhotoId,
     pub original: Arc<DevelopSettings>,
+    /// Whether an edit during the interaction changed the crop itself. If none did, the crop the
+    /// photo shows was fitted by Constrain Crop, and the final commit starts again from the original
+    /// crop, so Auto Sync carries the edit and not the active photo's fitted crop.
+    pub crop_edited: bool,
 }
 
 /// The most photos an edit may touch for the view to follow it photo by photo; a larger edit is worked out whole.
@@ -240,6 +244,8 @@ pub struct Session {
     /// Set by a command whose change must not rewrite the photo's XMP sidecar even with auto-write on
     /// (a catalog-only edit of data the sidecar writer does not emit); consumed when the command ends.
     pub(crate) skip_auto_write: bool,
+    /// The order of Reload from Disk runs, so an older one finishing late is dropped ([`cmd::reload`]).
+    pub(crate) reload_tickets: cmd::reload::Tickets,
     /// Photos whose automatic XMP sidecar write failed (their folder offline, read-only or full), written again by
     /// [`Session::retry_unsaved_sidecars`] once their file is reachable.
     pub(crate) unsaved_sidecars: std::collections::BTreeSet<PhotoId>,
@@ -434,6 +440,7 @@ impl Session {
             pending_sidecar_repairs: Vec::new(),
             interaction: None,
             skip_auto_write: false,
+            reload_tickets: Default::default(),
             unsaved_sidecars: Default::default(),
             denoise: Default::default(),
             face_models_dir: None,
@@ -881,22 +888,58 @@ impl Session {
     /// undo step; otherwise it is committed with a history entry.
     pub fn set_develop(&mut self, id: PhotoId, settings: DevelopSettings, label: &str) -> Result<()> {
         let now = (self.clock)();
-        let settings = Arc::new(settings);
-        if let Some(i) = &self.interaction
+        // Auto Sync carries the edit as asked; each photo then fits its own crop (review of #1990)
+        let requested = settings;
+        let settings = Arc::new(self.fit_constrained_crop(id, requested.clone()));
+        let crop_edited = self.develop_of(id).is_some_and(|d| d.crop.geometry != requested.crop.geometry);
+        if let Some(i) = &mut self.interaction
             && i.photo == id
         {
+            i.crop_edited |= crop_edited;
             return self.apply_silent(Op::SetDevelop { id, settings, label: label.into(), edited: Some(now) });
         }
         let mut ops = vec![self.develop_op(id, (*settings).clone(), label).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?];
-        ops.extend(self.auto_sync_ops(id, &settings, label));
+        ops.extend(self.auto_sync_ops(id, &requested, label));
         let op = if ops.len() == 1 { ops.remove(0) } else { Op::Batch { ops } };
         self.commit(label, op)
     }
 
-    /// With Auto Sync on, the ops that carry an edit of the active photo `id` (to `new`) over to the
-    /// other selected photos: only the settings that changed; never spot removal or red eye (they
-    /// belong to one photo's pixels), nor the rendering process (Sync doesn't carry it either), nor
-    /// history / snapshot restores.
+    /// "Constrain Crop" keeps the stored crop inside the warped photo, as Lightroom does (issue
+    /// #1927): turning it on, or an edit that changes the warp (Geometry, Upright, lens corrections,
+    /// their sections' eyes) while it is on, shrinks the crop about its centre until no blank corner
+    /// is left, so the Crop tool shows what the render keeps. An edit of the crop itself is left as
+    /// drawn (the render still constrains it).
+    fn fit_constrained_crop(&self, id: PhotoId, mut d: DevelopSettings) -> DevelopSettings {
+        if !d.geometry.constrain_crop {
+            return d;
+        }
+        let Some(photo) = self.catalog.photo(id) else { return d };
+        let before = &photo.develop;
+        let turned_on = !before.geometry.constrain_crop;
+        let warp_changed = before.geometry != d.geometry
+            || before.optics != d.optics
+            || before.orientation != d.orientation
+            || ["geometry", "optics"].iter().any(|s| before.section_enabled(s) != d.section_enabled(s));
+        let crop_edited = before.crop.geometry != d.crop.geometry;
+        if !(turned_on || (warp_changed && !crop_edited)) {
+            return d;
+        }
+        let frame = lightcraft_pipeline::geometry::Frame::with_lens(
+            photo.width.max(1) as usize,
+            photo.height.max(1) as usize,
+            &d,
+            true,
+            photo.embedded_lens.as_ref(),
+        );
+        d.crop.geometry.rect = frame.crop.rect;
+        d
+    }
+
+    /// With Auto Sync on, the ops that carry an edit of the active photo `id` (to `new`, as asked,
+    /// before its crop is fitted) over to the other selected photos: only the settings that changed;
+    /// never spot removal or red eye (they belong to one photo's pixels), nor the rendering process
+    /// (Sync doesn't carry it either), nor history / snapshot restores. Constrain Crop then fits each
+    /// photo's own crop: the active photo's fitted crop is never copied over another's.
     fn auto_sync_ops(&self, id: PhotoId, new: &DevelopSettings, label: &str) -> Vec<Op> {
         if !self.auto_sync
             || self.active() != Some(id)
@@ -907,7 +950,16 @@ impl Session {
             return Vec::new();
         }
         let Some(old) = self.develop_of(id) else { return Vec::new() };
-        let Some(mut delta) = json_delta(&old.to_json(), &new.to_json()) else { return Vec::new() };
+        let mut old_json = old.to_json();
+        let mut new_json = new.to_json();
+        // False is omitted from stored profile JSON. Keep it explicit for this comparison so
+        // switching camera local tone mapping off is a change without copying untouched values.
+        old_json["profile"]["camera_local_tone"] = Value::Bool(old.profile.camera_local_tone);
+        new_json["profile"]["camera_local_tone"] = Value::Bool(new.profile.camera_local_tone);
+        // Compare actual HDR leaves even when persisted defaults omit the whole HDR object.
+        old_json["hdr"] = serde_json::json!(old.hdr);
+        new_json["hdr"] = serde_json::json!(new.hdr);
+        let Some(mut delta) = json_delta(&old_json, &new_json) else { return Vec::new() };
         if let Some(o) = delta.as_object_mut() {
             for k in ["spots", "red_eye", "version", "process"] {
                 o.remove(k);
@@ -922,7 +974,7 @@ impl Session {
             .filter(|x| **x != id)
             .filter_map(|x| self.develop_of(*x).map(|d| (*x, d)))
             .filter_map(|(x, d)| {
-                let synced = lightcraft_develop::apply_partial(&d, &delta, 1.0);
+                let synced = self.fit_constrained_crop(x, lightcraft_develop::apply_partial(&d, &delta, 1.0));
                 (synced != *d).then(|| self.develop_op(x, synced, label)).flatten()
             })
             .collect()
@@ -944,7 +996,7 @@ impl Session {
         }
         let id = self.active().ok_or_else(|| EngineError::Other("no active photo".into()))?;
         let original = self.develop_of(id).unwrap_or_default();
-        self.interaction = Some(Interaction { label: label.into(), photo: id, original });
+        self.interaction = Some(Interaction { label: label.into(), photo: id, original, crop_edited: false });
         Ok(())
     }
 
@@ -955,9 +1007,15 @@ impl Session {
         if *cur == *i.original {
             return Ok(());
         }
-        // Restore the original silently, then commit the final value as one step.
+        // Restore the original silently, then commit the final value as one step. A crop nobody
+        // edited goes back to the original's: Constrain Crop fits it again for the final warp, and
+        // Auto Sync carries the edit, not the active photo's fitted crop (review of #1990).
         self.apply_silent(Op::SetDevelop { id: i.photo, settings: i.original.clone(), label: i.label.clone(), edited: None })?;
-        self.set_develop(i.photo, (*cur).clone(), &i.label)
+        let mut last = (*cur).clone();
+        if !i.crop_edited {
+            last.crop.geometry = i.original.crop.geometry;
+        }
+        self.set_develop(i.photo, last, &i.label)
     }
 
     pub fn cancel_interaction(&mut self) -> Result<()> {
@@ -1249,7 +1307,11 @@ mod tests_albums_local;
 #[cfg(test)]
 mod tests_color;
 #[cfg(test)]
+mod tests_constrain_crop;
+#[cfg(test)]
 mod tests_crop_angle;
+#[cfg(test)]
+mod tests_crop_aspect;
 #[cfg(test)]
 mod tests_denoise;
 #[cfg(test)]
@@ -1274,6 +1336,8 @@ mod tests_forget_local;
 mod tests_history_cursor;
 #[cfg(test)]
 mod tests_hold_view;
+#[cfg(test)]
+mod tests_ids_params;
 #[cfg(test)]
 mod tests_import;
 #[cfg(test)]

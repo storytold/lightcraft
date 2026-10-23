@@ -457,8 +457,12 @@ fn parse_one_region(item: &XmpValue, px_dims: Option<(f64, f64)>) -> Option<Regi
 
 fn fmt_gps_coord(v: f64, pos: char, neg: char) -> String {
     let a = v.abs();
-    let d = a.trunc();
-    let m = (a - d) * 60.0;
+    let mut d = a.trunc();
+    let mut m = ((a - d) * 60.0 * 1e6).round() / 1e6;
+    if m >= 60.0 {
+        d += 1.0;
+        m = 0.0;
+    }
     format!("{},{:.6}{}", d as i64, m, if v < 0.0 { neg } else { pos })
 }
 
@@ -866,6 +870,8 @@ mod tests {
         assert_eq!(parse_gps_coord(""), None);
         assert_eq!(parse_gps_coord("é"), None);
         assert_eq!(fmt_gps_coord(-45.51, 'N', 'S'), "45,30.600000S");
+        assert_eq!(fmt_gps_coord(10.9999999999, 'N', 'S'), "11,0.000000N");
+        assert_eq!(fmt_gps_coord(-0.9999999999, 'E', 'W'), "1,0.000000W");
     }
 
     /// Like the EXIF and GPX readers, XMP drops a position outside latitude ±90° / longitude ±180°.

@@ -226,3 +226,27 @@ fn panorama_size_is_held_to_memory() {
     assert_eq!(mp(fit_in_memory(&asked, photos, gb(16))), 20.0, "a size asked for is kept when it fits");
     assert_eq!(fit_in_memory(&full, 1e6, None), fit_in_memory(&full, 1e6, gb(8)), "memory unknown: taken as 8 GB");
 }
+
+/// A photo named twice is merged once (issue #1947): `[a, a, a]` is one photo, too few to merge, and `[a, b, a, b]`
+/// merges two frames rather than holding four in memory.
+#[test]
+fn a_photo_named_twice_is_merged_once() {
+    let dir = temp_dir("dup-ids");
+    let mut paths = Vec::new();
+    for (i, b) in lightcraft_merge::synth::bracket_dngs(96, 64, &[-1.0, 1.0]).unwrap().into_iter().enumerate() {
+        let p = dir.join(format!("IMG_{i}.dng"));
+        std::fs::write(&p, b).unwrap();
+        paths.push(p.to_string_lossy().to_string());
+    }
+    let mut s = Session::new().with_fs();
+    let ids = import(&mut s, paths);
+    let (a, b) = (ids[0], ids[1]);
+    for cmd in ["merge.hdr", "merge.panorama"] {
+        let e = s.execute(cmd, &json!({"ids": [a, a, a], "preview": true})).unwrap_err();
+        assert!(e.to_string().contains("at least 2"), "{cmd}: {e}");
+    }
+    let (kind, finish) = crate::merge::parse("merge.hdr", &json!({})).unwrap();
+    let job = s.plan_merge(kind, finish, &[a, b, a, b, a].map(lightcraft_catalog::PhotoId), true).unwrap();
+    assert_eq!(job.sources.iter().map(|(p, _)| p.0).collect::<Vec<_>>(), vec![a, b]);
+    let _ = std::fs::remove_dir_all(&dir);
+}

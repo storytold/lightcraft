@@ -552,17 +552,17 @@ Kodak	EasyShare Z1015 IS	KDC	2008	preview	KDC is opened from its embedded JPEG o
 Kodak	EasyShare Z980	KDC	2008	preview	KDC is opened from its embedded JPEG only
 Kodak	EasyShare Z981	RAW	2010	preview	RAW is opened from its embedded JPEG only
 Kodak	EasyShare Z990	RAW	2010	preview	RAW is opened from its embedded JPEG only
-Konica Minolta	Alpha-5 Digital (China)	MRW	2005	preview	MRW is opened from its embedded JPEG only
-Konica Minolta	Alpha Sweet Digital (Japan)	MRW	2005	preview	MRW is opened from its embedded JPEG only
-Konica Minolta	DiMAGE 5	MRW	2003	preview	MRW is opened from its embedded JPEG only
-Konica Minolta	DiMAGE 7	MRW	2003	preview	MRW is opened from its embedded JPEG only
-Konica Minolta	DiMAGE 7i	MRW	2003	preview	MRW is opened from its embedded JPEG only
-Konica Minolta	DiMAGE 7Hi	MRW	2003	preview	MRW is opened from its embedded JPEG only
-Konica Minolta	DiMAGE A1	MRW	2003	preview	MRW is opened from its embedded JPEG only
-Konica Minolta	DiMAGE A2	MRW	2003	preview	MRW is opened from its embedded JPEG only
-Konica Minolta	DiMAGE A200	MRW	2003	preview	MRW is opened from its embedded JPEG only
-Konica Minolta	Maxxum 5D Dynax 5D	MRW	2005	preview	MRW is opened from its embedded JPEG only
-Konica Minolta	Maxxum 7D Dynax 7D	MRW	2003	preview	MRW is opened from its embedded JPEG only
+Konica Minolta	Alpha-5 Digital (China)	MRW	2005	unverified	MRW decoder (12-bit packed, 16-bit words)
+Konica Minolta	Alpha Sweet Digital (Japan)	MRW	2005	unverified	MRW decoder (12-bit packed, 16-bit words)
+Konica Minolta	DiMAGE 5	MRW	2003	unverified	MRW decoder (12-bit packed, 16-bit words)
+Konica Minolta	DiMAGE 7	MRW	2003	verified	raw.pixls.us check: CC0 sample decoded and its WB / CFA matched to the embedded preview (vendor/mrw.rs)
+Konica Minolta	DiMAGE 7i	MRW	2003	unverified	MRW decoder (12-bit packed, 16-bit words)
+Konica Minolta	DiMAGE 7Hi	MRW	2003	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES)
+Konica Minolta	DiMAGE A1	MRW	2003	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES)
+Konica Minolta	DiMAGE A2	MRW	2003	verified	raw.pixls.us check: CC0 sample decoded and its WB / CFA matched to the embedded preview (vendor/mrw.rs)
+Konica Minolta	DiMAGE A200	MRW	2003	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES)
+Konica Minolta	Maxxum 5D Dynax 5D	MRW	2005	unverified	MRW decoder (12-bit packed, 16-bit words)
+Konica Minolta	Maxxum 7D Dynax 7D	MRW	2003	verified	corpus: crates/raw/tests/corpus.rs (xtask RAW_SAMPLES)
 Leaf	AFi II 6	MOS	2008	preview	MOS is opened from its embedded JPEG only
 Leaf	AFi II 7	MOS	2008	preview	MOS is opened from its embedded JPEG only
 Leaf	Aptus 17	MOS	2007	preview	MOS is opened from its embedded JPEG only
@@ -1306,10 +1306,10 @@ Sony	A6400 (ILCE-6400)	ARW	2018	verified	issue #535: raw.pixls.us bulk check of 
 Sony	A6500 (ILCE-6500)	ARW	2015	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
 Sony	A6600 (ILCE-6600)	ARW	2019	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
 Sony	A6700 (ILCE-6700)	ARW	2022	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
-Sony	DSC-F828	SRF	2003	unsupported	issue #702 (SRF refused); SRF not in the import list
+Sony	DSC-F828	SRF	2003	preview	2026-10-12 release CLI: raw.pixls.us DSC06227.SRF imports as preview-only through recursive and direct import (docs/raw-parity.md)
 Sony	DSC-HX95	ARW	2018	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
 Sony	DSC-HX99	ARW	2018	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
-Sony	DSC-V3	SRF	2005	unsupported	SRF not in the import list
+Sony	DSC-V3	SRF	2005	unsupported	SRF is discovered; sensor decoding unsupported, usable preview not verified on a real file
 Sony	DSC-RX100M7A	ARW	2024	verified	corpus: crates/raw/tests/sony_leica_corpus.rs (pinned sensor hash, camera-JPEG check)
 Sony	FX3 (ILME-FX3)	ARW	2020	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)
 Sony	FX30 (ILME-FX30)	ARW	2022	verified	issue #535: raw.pixls.us bulk check of all 100 Sony bodies (decodes; BL/WL/crop/WB vs ExifTool)

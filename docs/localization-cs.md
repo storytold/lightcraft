@@ -27,11 +27,13 @@ revizí rozsahu a terminologie. Rodilý mluvčí ani profesionální překladate
   plurálové pravidlo se nepřidává.
 - Písmo Inter dodávané s aplikací obsahuje české znaky i uvozovky „…“. Další font není potřeba.
 
-Katalog obsahuje 2 056 běžných položek a 246 formátových šablon. Každý běžný klíč existuje
-v jiném katalogu nebo je používán kódem. Oproti německému katalogu má 108 dalších klíčů,
+Katalog obsahuje 2 394 běžných položek a 297 formátových šablon. Každý běžný klíč existuje
+v jiném katalogu nebo je používán kódem. Oproti německému katalogu má 215 dalších klíčů,
 všechny s doloženým použitím: popisky příkazů, menu, ovládacích prvků a nastavení,
-texty HDR/exportu a obličejů a kontextové hodnoty Ano/Ne. Z toho 41 klíčů již existuje
-v dalších katalozích a 67 doplňuje současné překladové lookupy.
+texty HDR/exportu a obličejů a kontextové hodnoty Ano/Ne. Z toho 66 klíčů již existuje
+v dalších katalozích a 149 doplňuje současné překladové lookupy. Doplnění z 18. 10. 2026
+přidalo texty novějších funkcí (prezentace, tisk, přednastavení efektů masek, zaostřovací
+body) a prošlo stejnou kontrolou.
 
 Řádkové fragmenty poznámek k vydáním byly odstraněny, včetně 163 fragmentů převzatých
 ze sdílených katalogů; text poznámek v dialogu Co je nového používá anglický fallback.

@@ -8,12 +8,13 @@
 //! demosaic already registers the colour planes, so the stored shift over-corrects (see the document).
 //!
 //! Layout (`n` knots): `[scale, knot × n, value × n]`. `scale × n` is the half diagonal of the recorded image in
-//! pixels. Knots are positions along the radius, the last one being the farthest
-//! corner; they are evenly spaced in `r` (`0, 0.1 … 1`) or in `r²` (`√(k/8)`, last `√(9/8)`) depending on the body.
+//! pixels. Knots are radii in half diagonals, evenly spaced in `r` (`0, 0.1 … 1`) or in `r²` (`√(k/8)`) depending
+//! on the body; the corner is at 1. The nine-knot tables run one knot past it, to `√(9/8)` (on the X-T4 the ninth
+//! repeats the eighth's value).
 //!
 //! - distortion: percent, the bracket `1 + D/100` multiplies the radius; the camera's JPEG samples the raw at
-//!   `source = z · r · (1 + D(ρ(source))/100)`, `ρ = knot_last · radius / half diagonal`, with the zoom `z` that
-//!   keeps the output rectangle inside the source (`1 / max` of the bracket over the frame's border radii).
+//!   `source = z · r · (1 + D(source)/100)`, radii in half diagonals, with the zoom `z` that keeps the output
+//!   rectangle inside the source (`1 / max` of the bracket over the frame's border radii).
 //! - vignetting: relative illumination in percent at the source radius; the correction is the gain `100 / V`.
 
 use crate::{Opcode, Rect};
@@ -35,6 +36,8 @@ const SCALE_TOLERANCE: f64 = 0.005;
 
 /// Camera models whose tables were checked against the camera's own JPEG (distortion within 0.01 of the best free
 /// radial fit's correlation on at least one lens, see docs/fuji-lens-corrections.md). Other bodies stay uncorrected.
+/// The nine-knot bodies other than the X-T4 were checked with their tables read at `knot_last · r`; the plain radius
+/// they are now read at was measured on the X-T4 only ("Knot radius" in that doc).
 const VALIDATED: &[&str] = &[
     "FinePix F770EXR",
     "FinePix HS30EXR",
@@ -143,9 +146,6 @@ impl Table {
             Some(i) => y[i - 1] + (y[i] - y[i - 1]) * (x - k[i - 1]) / (k[i] - k[i - 1]),
         }
     }
-    fn last(&self) -> f64 {
-        self.knots[self.knots.len() - 1]
-    }
 }
 
 /// Source radius of the output radius `r` (both in half diagonals) with the distortion zoom.
@@ -155,8 +155,9 @@ struct Geometry<'a> {
 }
 
 impl Geometry<'_> {
+    /// The radius bracket `1 + D/100` at source radius `source` (half diagonals, the table's own unit); 1 without a table.
     fn bracket(&self, source: f64) -> f64 {
-        self.table.map_or(1.0, |t| 1.0 + t.at(source * t.last(), Some(0.0)) / 100.0)
+        self.table.map_or(1.0, |t| 1.0 + t.at(source, Some(0.0)) / 100.0)
     }
     fn source(&self, r: f64) -> f64 {
         let mut s = self.zoom * r;
@@ -283,7 +284,7 @@ fn vignette(ifd: &Ifd, w: usize, h: usize) -> Option<Opcode> {
     if t.values.iter().any(|v| !(10.0..=130.0).contains(v)) {
         return None;
     }
-    let gain = |r: f64| 100.0 / t.at(r * t.last(), Some(100.0));
+    let gain = |r: f64| 100.0 / t.at(r, Some(100.0));
     if (0..=SAMPLES).all(|j| (gain(j as f64 / SAMPLES as f64) - 1.0).abs() < 1e-4) {
         return None;
     }
@@ -347,25 +348,30 @@ mod tests {
         r * (k[0] + r * r * (k[1] + r * r * (k[2] + r * r * k[3])))
     }
 
+    /// The X-T4's arrays become a one-plane warp with the frame-filling zoom and a vignette gain read at the plain radius.
     #[test]
     fn x_t4_tables_become_a_warp_and_a_vignette_gain() {
         let ops = corrections("X-T4", &xt4(), XT4_AREA);
         let [Opcode::WarpRectilinear { planes, center }, Opcode::FixVignetteRadial { k, center: vc }] = ops.as_slice() else { panic!("{ops:?}") };
         assert_eq!((*center, *vc), ([0.5, 0.5], [0.5, 0.5]));
         assert_eq!(planes.len(), 1, "no colour planes: lateral CA is not applied");
-        // barrel distortion: zoomed to fill the frame (measured against the camera JPEG: 1.030..1.033), the
-        // corner samples inside the raw (-6.4 % bracket)
+        // barrel distortion: zoomed to fill the frame, the corner samples inside the raw (-6.4 % bracket; the measured
+        // free fit below gives 0.9635 there)
         let green = &planes[0];
         assert!((1.02..1.04).contains(&green[0]), "{}", green[0]);
         let corner = evaluate(green, 1.0);
-        assert!((corner - 0.9668).abs() < 0.002, "{corner}");
+        assert!((corner - 0.9641).abs() < 0.002, "{corner}");
         // vignette: 67.457 % at the corner, 100 % on the axis
         let gain = |r: f64| 1.0 + (0..5).map(|i| k[i] * r.powi(2 * i as i32 + 2)).sum::<f64>();
         assert!((gain(1.0) - 100.0 / 67.45703125).abs() < 0.01, "{}", gain(1.0));
         assert!((gain(0.0) - 1.0).abs() < 1e-12);
-        assert!((gain(0.5) - 100.0 / (96.87792969 + (94.90234375 - 96.87792969) * (0.5 * 1.06056338 - 0.5) / (0.6126760563 - 0.5))).abs() < 0.01);
+        // read at the plain radius: r = 0.5 is the second knot, r = 0.85 lies between the fifth and sixth
+        assert!((gain(0.5) - 100.0 / 96.87792969).abs() < 0.01, "{}", gain(0.5));
+        let v = 84.73291016 + (78.43701172 - 84.73291016) * (0.85 - 0.7908450704) / (0.8661971831 - 0.7908450704);
+        assert!((gain(0.85) - 100.0 / v).abs() < 0.01, "{}", gain(0.85));
     }
 
+    /// The warp follows a free radial fit of the camera's own JPEG of pixls 3913 to within 0.0012 half diagonals.
     #[test]
     fn matches_the_measured_x_t4_geometry() {
         // Free radial fit (data/testing/raf-lens/tools/fit_model.py) of the camera JPEG against LightCraft's uncorrected
@@ -378,7 +384,7 @@ mod tests {
             let r = i as f64 / 20.0;
             let r2 = r * r;
             let reference = measured[0] * r * (1.0 + measured[1] * r2 + measured[2] * r2 * r2 + measured[3] * r2 * r2 * r2);
-            assert!((evaluate(&planes[0], r) - reference).abs() < 0.004, "{r}: {} vs {reference}", evaluate(&planes[0], r));
+            assert!((evaluate(&planes[0], r) - reference).abs() < 0.0012, "{r}: {} vs {reference}", evaluate(&planes[0], r));
         }
     }
 

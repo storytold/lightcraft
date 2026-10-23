@@ -162,6 +162,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             Flag::Reject if on => t.reject,
             _ => Color32::TRANSPARENT,
         };
+        let icon = if on && flag == Flag::Pick { Icon::FlagPickFilled } else { icon };
         let resp = toggle(ui, id, on, tip, |p, r, c| paint(p, r, icon, if color == Color32::TRANSPARENT { c } else { color }));
         if resp.clicked() {
             filter(app, json!({"flag": if on { Value::Null } else { json!(id) }}));
@@ -291,7 +292,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             if r.clicked() {
                 let _ = app.run("filter.applyPreset", json!({"name": n}));
             }
-            r.context_menu(|ui| {
+            crate::widgets::context_menu(&r, |ui| {
                 if ui.button(crate::i18n::tr("Delete Preset")).clicked() {
                     let _ = app.run("filter.deletePreset", json!({"name": n}));
                 }

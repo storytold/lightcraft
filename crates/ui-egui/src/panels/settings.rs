@@ -106,7 +106,7 @@ pub(super) fn choices<V: PartialEq + Copy>(ui: &mut egui::Ui, id: &str, options:
 
 fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     row(ui, t, crate::i18n::tr("Language"), |ui| {
-        let languages: Vec<_> = crate::i18n::Locale::ALL.iter().map(|language| (*language, language.name())).collect();
+        let languages: Vec<_> = crate::i18n::Locale::for_picker().into_iter().map(|language| (language, language.name())).collect();
         // Thirteen language names do not fit one line in a narrow window: wrap them.
         ui.horizontal_wrapped(|ui| {
             choices(ui, "settingsLanguage", &languages, &mut app.ui.language);
@@ -685,8 +685,49 @@ fn interface_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     check(ui, "settings.navigator", &mut app.ui.navigator, "Show the Navigator while zoomed in");
     row(ui, t, crate::i18n::tr("Info overlay"), |ui| {
         use crate::state::InfoOverlay as I;
-        choices(ui, "settingsInfo", &[(I::Off, "Off"), (I::Basic, "File & date"), (I::Exposure, "Exposure")], &mut app.ui.info_overlay);
+        choices(ui, "settingsInfo", &[(I::Off, "Off"), (I::Basic, "Info 1"), (I::Exposure, "Info 2")], &mut app.ui.info_overlay);
     });
+    hint(ui, t, crate::i18n::tr("View → View Options chooses the lines Info 1 and Info 2 show."));
+}
+
+/// View ▸ View Options (⌘J), Lightroom Classic's Loupe View tab: whether the info overlay shows and
+/// which, and the three lines each of Info 1 and Info 2 shows (`view.viewOptions`). Changes apply
+/// as they are made.
+pub(super) fn view_options(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+    use crate::state::{InfoOverlay as I, LoupeInfo, LoupeInfoField as F};
+    heading(ui, t, crate::i18n::tr("Loupe View"));
+    let mut show = app.ui.info_overlay != I::Off;
+    if check(ui, "viewOptions.showInfo", &mut show, "Show Info Overlay") {
+        app.ui.info_overlay = if show { I::Basic } else { I::Off };
+    }
+    ui.add_enabled_ui(show, |ui| {
+        ui.horizontal(|ui| {
+            choices(ui, "viewOptionsInfo", &[(I::Basic, "Info 1"), (I::Exposure, "Info 2")], &mut app.ui.info_overlay);
+        });
+    });
+    for (n, title, defaults) in [(1, "Loupe Info 1", LoupeInfo::INFO1), (2, "Loupe Info 2", LoupeInfo::INFO2)] {
+        heading(ui, t, crate::i18n::tr(title));
+        let lines = if n == 1 { &mut app.ui.settings.loupe_info.info1 } else { &mut app.ui.settings.loupe_info.info2 };
+        for (i, line) in lines.iter_mut().enumerate() {
+            let id = format!("viewOptionsInfo{n}Line{}", i + 1);
+            let r = crate::widgets::combo_box(&id).width(220.0).selected_text(crate::i18n::tr(line.label())).show_ui(ui, |ui| {
+                for f in F::ALL {
+                    let key = serde_json::to_value(f).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
+                    let r = ui.selectable_label(line == f, crate::i18n::tr(f.label()));
+                    register(ui.ctx(), format!("button:{id}-{key}"), r.rect);
+                    if r.clicked() {
+                        *line = *f;
+                    }
+                }
+            });
+            register(ui.ctx(), format!("combo:{id}"), r.response.rect);
+        }
+        let r = ui.add_enabled(*lines != defaults, egui::Button::new(crate::i18n::tr("Use Defaults")));
+        register(ui.ctx(), format!("button:viewOptionsDefaults{n}"), r.rect);
+        if r.clicked() {
+            *lines = defaults;
+        }
+    }
 }
 
 // ----------------------------------------------------------------------------------- Slideshow
@@ -1133,13 +1174,19 @@ fn switch_library(app: &mut LightcraftApp, path: &str) -> Result<Value, String> 
         app.ui.dialog = None;
     }
     app.renderer.forget_all();
-    app.ui.compare = None;
     if let Err(err) = opened {
         let Some(prev) = previous_dir else { return Err(err) };
         return match app.session.open_library(&prev, false) {
             Ok(_) => Err(err),
             Err(e) => Err(format!("{err}; reopening the previous library {} failed too: {e}", prev.display())),
         };
+    }
+    // Photo IDs are local to a catalog: pins cannot follow them into another library (a refused
+    // or failed switch reopens the same catalog, so its pins stay).
+    app.ui.reference = None;
+    app.ui.compare = None;
+    if app.ui.view == crate::state::ViewMode::Reference {
+        app.ui.view = crate::state::ViewMode::PhotoGrid;
     }
     app.ui.settings.library_path = path.clone();
     if let Some(prev) = previous.filter(|p| p != &path && !app.ui.settings.recent_libraries.contains(p)) {
@@ -1315,7 +1362,8 @@ mod tests {
     use serde_json::json;
 
     fn app_with_import() -> LightcraftApp {
-        let mut app = LightcraftApp::new(lightcraft_engine::Session::new(), crate::Services::default());
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), crate::Services::default());
+        app.run("photo.setReference", json!({})).unwrap();
         app.import = Some(crate::import::ImportTask::new(vec!["a.jpg".into()], json!({"mode": "add"}), 0, false));
         app
     }
@@ -1323,17 +1371,21 @@ mod tests {
     #[test]
     fn open_library_is_refused_while_an_import_runs() {
         let mut app = app_with_import();
+        let pin = app.ui.reference;
         let err = open_library(&mut app, &json!({"path": "other"})).unwrap_err();
         assert!(err.contains("import to finish"), "{err}");
         assert!(app.import.is_some());
+        assert_eq!(app.ui.reference, pin, "a refused Open Library keeps the reference pin");
     }
 
     #[test]
     fn new_library_is_refused_while_an_import_runs() {
         let mut app = app_with_import();
+        let pin = app.ui.reference;
         let err = new_library(&mut app, &json!({"path": "other"})).unwrap_err();
         assert!(err.contains("import to finish"), "{err}");
         assert!(app.import.is_some());
+        assert_eq!(app.ui.reference, pin, "a refused New Library keeps the reference pin");
     }
 
     /// The menu items that switch libraries are greyed out meanwhile, like during a Lightroom import.
@@ -1353,11 +1405,18 @@ mod tests {
     fn open_library_is_refused_while_an_import_scan_runs() {
         let dir = std::env::temp_dir().join(format!("lc-ui-switchscan-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
-        let mut app = LightcraftApp::new(lightcraft_engine::Session::new(), crate::Services::default());
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), crate::Services::default());
+        app.run("photo.setReference", json!({})).unwrap();
+        let pin = app.ui.reference;
         crate::import::open(&mut app, vec![dir.to_string_lossy().into_owned()]).unwrap();
         assert!(app.scan.is_some());
         let err = open_library(&mut app, &json!({"path": "other"})).unwrap_err();
         assert!(err.contains("import to finish"), "{err}");
+        assert_eq!(app.ui.reference, pin, "a refused Open Library during a scan keeps the reference pin");
+        let err = new_library(&mut app, &json!({"path": "other"})).unwrap_err();
+        assert!(err.contains("import to finish"), "{err}");
+        assert_eq!(app.ui.reference, pin, "a refused New Library during a scan keeps the reference pin");
+        assert!(app.scan.is_some());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -145,7 +145,7 @@ fn template_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, tpl: &Te
     if resp.clicked() {
         apply(app, &ctx, &tpl.id, &name);
     }
-    resp.context_menu(|ui| menu(app, ui, tpl, &name));
+    crate::widgets::context_menu(&resp, |ui| menu(app, ui, tpl, &name));
 }
 
 /// A menu entry registered as `button:{id}`.

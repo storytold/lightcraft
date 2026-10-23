@@ -732,12 +732,13 @@ fn render(args: &[String]) -> Result<(), String> {
     for (k, v) in opts {
         p[k] = v;
     }
-    let mut o = ExportOptions::from_params(&p).map_err(|e| e.to_string())?;
     if p.get("format").is_none() {
         let ext = Path::new(&output).extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_default();
-        o.format = ExportFormat::parse(&ext)
-            .ok_or_else(|| format!("{output}: unknown extension (use .jpg .png .tif .webp .avif .dng or --opt format=…)"))?;
+        ExportFormat::parse(&ext).ok_or_else(|| format!("{output}: unknown extension (use .jpg .png .tif .webp .avif .dng or --opt format=…)"))?;
+        // given before validating, so `bitDepth` is checked against the format written (issue #1952)
+        p["format"] = json!(ext);
     }
+    let o = ExportOptions::from_params(&p).map_err(|e| e.to_string())?;
     // Add to Apple Photos: refused before anything is written when it can't be done
     let after = s.after_export(&o)?;
     let e = export_photo(&mut s, lightcraft_engine::catalog::PhotoId(id), &o, 1)?;

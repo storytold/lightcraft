@@ -21,6 +21,9 @@ fn secs(iso: &str) -> Option<i64> {
 
 fn analyze(s: &mut Session, p: &Value) -> Result<Value> {
     let ids: Vec<PhotoId> = if p.get("ids").is_some() || s.selection.ids.len() > 1 { s.targets(p)? } else { s.visible_cloned() };
+    // a photo listed twice is one photo, not a burst of two look-alikes (first occurrence kept)
+    let mut seen = std::collections::HashSet::new();
+    let ids: Vec<PhotoId> = ids.into_iter().filter(|id| seen.insert(*id)).collect();
     let reject_below = p.get("rejectBelow").and_then(Value::as_f64).map(|v| v as f32);
     let pick_best = p.get("pickBest").and_then(Value::as_bool).unwrap_or(false);
     // measure (thumbnail-level sources: fast, and enough for focus at 512 px)
@@ -87,7 +90,7 @@ fn analyze(s: &mut Session, p: &Value) -> Result<Value> {
 /// content), most similar first; the view is filtered to them.
 fn find_similar(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "library.findSimilar";
-    let id = p.get("id").and_then(Value::as_u64).map(PhotoId).or(s.active()).ok_or_else(|| super::bad(C, "no photo"))?;
+    let id = super::photo_id(p, C)?.or(s.active()).ok_or_else(|| super::bad(C, "no photo"))?;
     let min = p.get("similarity").and_then(Value::as_f64).unwrap_or(0.8) as f32;
     let all: Vec<PhotoId> = s.catalog.photos().filter(|q| q.in_library()).map(|q| q.id).collect();
     let sig = |s: &mut Session, id: PhotoId| -> Option<[f32; 64]> {

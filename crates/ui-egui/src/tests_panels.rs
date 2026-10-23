@@ -1652,6 +1652,103 @@ fn the_chosen_folder_is_always_in_view() {
     assert!(!has(&h, "source:libfolder:/pics/trip/day1"));
 }
 
+/// Make the photo imported from `path` the active one.
+fn activate(h: &mut Headless, path: &str) {
+    let id = h.app.session.catalog.photos().find(|p| matches!(&p.source, lightcraft_catalog::Source::File { path: f } if f == path)).unwrap().id;
+    h.app.run("library.select", json!({"ids": [id.0], "active": id.0})).unwrap();
+    h.step();
+}
+
+/// Photo ▸ Show in Folders (Lightroom's Go to Folder in Library) shows the active photo's folder
+/// as a click on its Folders row does: the sidebar, the section and the folders above the row open,
+/// also when the folder was already shown and a row above it was folded by hand.
+#[test]
+fn show_in_folders_chooses_the_photos_folder_and_opens_the_rows_above_it() {
+    use crate::sidebar::SidebarSection;
+    let mut h = folders_app(&["/pics/trip/day1/a.jpg", "/pics/trip/b.jpg", "/pics/home/c.jpg"]);
+    activate(&mut h, "/pics/trip/day1/a.jpg");
+    assert!(crate::menus::ui_enabled(&h.app, "app.showInFolders"));
+    click(&mut h, "sidebarSection:folders");
+    h.app.run("view.leftPanel", json!({})).unwrap();
+    h.step();
+    assert!(!h.app.ui.left_panel && !has(&h, "sidebarTitle"), "the sidebar is hidden");
+    let r = h.request("ui.menu.invoke", json!({"id": "app.showInFolders"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+    assert_eq!(h.app.session.source, lightcraft_engine::LibrarySource::LibraryFolder);
+    assert_eq!(h.app.session.library_folder.as_deref(), Some("/pics/trip/day1"));
+    assert_eq!(h.app.session.visible().len(), 1, "the folder's photos fill the grid");
+    assert_eq!(h.app.session.active(), h.app.session.visible().first().copied(), "the photo stays the active one");
+    assert!(h.app.ui.left_panel && !h.app.ui.sidebar.is_collapsed(SidebarSection::Folders), "the sidebar and Folders opened");
+    assert!(has(&h, "source:libfolder:/pics/trip/day1") && has(&h, "highlight:libfolder:/pics/trip/day1"), "its row is shown chosen");
+    // folded by hand, then asked again: the rows above open again
+    click(&mut h, "libraryFolderToggle:/pics/trip");
+    assert!(!has(&h, "source:libfolder:/pics/trip/day1"));
+    h.app.run("app.showInFolders", json!({})).unwrap();
+    h.step();
+    h.step();
+    assert!(has(&h, "source:libfolder:/pics/trip/day1"), "opened again");
+}
+
+/// A folder far down the list is scrolled into view.
+#[test]
+fn show_in_folders_scrolls_the_folder_into_view() {
+    let paths: Vec<String> = (0..60).map(|i| format!("/pics/f{i:02}/a.jpg")).collect();
+    let refs: Vec<&str> = paths.iter().map(String::as_str).collect();
+    let mut h = folders_app_sized(&refs, [1400.0, 500.0]);
+    activate(&mut h, "/pics/f59/a.jpg");
+    h.app.run("app.showInFolders", json!({})).unwrap();
+    h.settle(SETTLE);
+    let row = widget(&h, "source:libfolder:/pics/f59");
+    assert!(row.top() >= widget(&h, "sidebarTitle").bottom() && row.bottom() <= 500.0, "in view: {row:?}");
+}
+
+/// Without an active photo in a library folder there is nothing to show: no photo, a demo scene.
+#[test]
+fn show_in_folders_needs_a_photo_in_a_library_folder() {
+    let mut h = folders_app(&["/pics/trip/a.jpg"]);
+    h.app.run("library.select", json!({"ids": []})).unwrap();
+    assert_eq!(h.app.session.active(), None);
+    assert!(!crate::menus::ui_enabled(&h.app, "app.showInFolders"));
+    let entry = crate::menus::menu_entries(&h.app).into_iter().find(|e| e.id == "app.showInFolders").unwrap();
+    assert!(!entry.enabled && entry.menu == ["Photo"], "listed in Photo, disabled");
+    assert!(h.app.run("app.showInFolders", json!({})).is_err());
+    assert_eq!(h.app.session.source, lightcraft_engine::LibrarySource::All, "nothing changed");
+    let mut demo = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let scene = demo.session.visible().first().copied().unwrap();
+    demo.run("library.select", json!({"ids": [scene.0]})).unwrap();
+    assert!(!crate::menus::ui_enabled(&demo, "app.showInFolders"), "a demo scene has no folder");
+}
+
+/// The grid's menu reveals the photo right-clicked, not the active one a multi-selection keeps.
+#[test]
+fn show_in_folders_reveals_the_photo_asked_for_and_follows_to_its_folder() {
+    let mut h = folders_app(&["/pics/trip/a.jpg", "/pics/home/c.jpg"]);
+    let id_of = |h: &Headless, path: &str| {
+        h.app.session.catalog.photos().find(|p| matches!(&p.source, lightcraft_catalog::Source::File { path: f } if f == path)).unwrap().id
+    };
+    let (a, c) = (id_of(&h, "/pics/trip/a.jpg"), id_of(&h, "/pics/home/c.jpg"));
+    h.app.run("library.select", json!({"ids": [a.0, c.0], "active": a.0})).unwrap();
+    h.step();
+    let r = h.app.run("app.showInFolders", json!({"id": c.0})).unwrap();
+    assert_eq!(r["path"], "/pics/home");
+    assert_eq!(h.app.session.library_folder.as_deref(), Some("/pics/home"));
+    assert_eq!(h.app.session.active(), Some(c), "the view of that folder shows the photo asked for");
+    assert!(crate::menus::show_in_folders_enabled(&h.app, Some(c)));
+}
+
+/// A folder deeper than the tree goes has no row: the entry is disabled rather than failing.
+#[test]
+fn show_in_folders_is_disabled_for_a_folder_below_the_trees_depth() {
+    let deep = format!("/pics{}/a.jpg", "/d".repeat(lightcraft_catalog::folders::MAX_DEPTH + 4));
+    let mut h = folders_app(&[deep.as_str()]);
+    activate(&mut h, &deep);
+    assert!(!h.app.caches.folder_tree(&h.app.session.catalog).is_empty());
+    assert!(!crate::menus::ui_enabled(&h.app, "app.showInFolders"));
+    assert!(h.app.run("app.showInFolders", json!({})).is_err());
+}
+
 #[test]
 fn a_renamed_folder_keeps_its_place_in_the_tree() {
     /// Removes the folder however the test ends.
@@ -1795,21 +1892,57 @@ fn removing_a_disk_from_the_library_asks_first() {
     assert_eq!(h.app.session.visible().len(), 1, "everything on that disk left the library");
 }
 
-/// However deep the folders go, each level is indented one step more than its parent, and the
-/// sidebar scrolls sideways to reach them instead of squeezing the nesting.
+/// A library with a photo in every folder down `deep` and two folders below it, in a window
+/// `size` big, with every level but the last opened. (Every level holds a photo, so it has a row
+/// of its own and starts closed, whether or not the sidebar passes over folders that only lead on.)
+fn deep_folders_app(deep: &str, size: [f32; 2]) -> Headless {
+    let mut paths = vec![format!("{deep}/x/1.jpg"), format!("{deep}/y/2.jpg")];
+    let mut levels = Vec::new();
+    let mut level = String::new();
+    for name in deep.split('/').filter(|n| !n.is_empty()) {
+        level.push('/');
+        level.push_str(name);
+        paths.push(format!("{level}/0.jpg"));
+        levels.push(level.clone());
+    }
+    let paths: Vec<&str> = paths.iter().map(String::as_str).collect();
+    let mut h = folders_app_sized(&paths, size);
+    // each level is opened once its row is drawn (a slow machine may need more than a frame)
+    for level in &levels[..levels.len() - 1] {
+        let toggle = format!("libraryFolderToggle:{level}");
+        assert!(h.step_until(T, |h| has(h, &toggle)), "{toggle} is drawn");
+        click(&mut h, &toggle);
+    }
+    let last = format!("libraryFolderToggle:{}", levels[levels.len() - 1]);
+    assert!(h.step_until(T, |h| has(h, &last)), "{last} is drawn");
+    h.settle(SETTLE);
+    h
+}
+
+/// The x of each folder's chevron down the chain `path` (`/a/b/c` → `/a`, `/a/b`, `/a/b/c`).
+fn chevron_xs(h: &Headless, path: &str) -> Vec<f32> {
+    let mut xs: Vec<f32> = Vec::new();
+    let mut at = String::new();
+    for name in path.split('/').filter(|n| !n.is_empty()) {
+        at.push('/');
+        at.push_str(name);
+        xs.push(widget(h, &format!("libraryFolderToggle:{at}")).center().x);
+    }
+    xs
+}
+
+/// However deep the folders go, each level is indented one step more than its parent. The step
+/// narrows to make room, never below the narrowest, and past that the sidebar scrolls sideways
+/// instead of squeezing the nesting further.
 #[test]
 fn a_deep_chain_keeps_its_nesting_and_the_sidebar_scrolls_sideways() {
-    let deep = "/a/b/c/d/e/f/g/h/i/j/k/l/m";
+    let deep = "/a/b/c/d/e/f/g/h/i/j/k/l/m/n/o/p/q/r/s/t/u/v/w/x/y/z";
     // (tall enough for the whole chain: Recently Deleted is above it now)
-    let mut h = folders_app_sized(&[&format!("{deep}/x/1.jpg"), &format!("{deep}/y/2.jpg")], [1400.0, 1000.0]);
-    let mut xs: Vec<f32> = Vec::new();
-    let mut path = String::new();
-    for name in deep.split('/').filter(|n| !n.is_empty()) {
-        path.push('/');
-        path.push_str(name);
-        xs.push(widget(&h, &format!("libraryFolderToggle:{path}")).center().x);
-    }
-    assert!(xs.len() == 13 && xs.windows(2).all(|w| (w[1] - w[0] - 16.0).abs() < 0.5), "every level steps right by one indent: {xs:?}");
+    let mut h = deep_folders_app(deep, [1400.0, 1700.0]);
+    let xs = chevron_xs(&h, deep);
+    let step = crate::panels::left::MIN_INDENT_STEP;
+    assert_eq!(crate::panels::left::indent_step(&h.view.ctx), step, "26 levels do not fit the default panel even at the narrowest step");
+    assert!(xs.len() == 26 && xs.windows(2).all(|w| (w[1] - w[0] - step).abs() < 0.5), "every level steps right by one indent: {xs:?}");
     let panel = widget(&h, "panel:left_panel");
     assert!(crate::panels::left::content_width(&h.view.ctx) > panel.width(), "the content is wider than the panel: the bar appears");
     assert!(widget(&h, "source:all").width() > panel.width(), "the rows are as wide as the widest one, so there is something to scroll to");
@@ -1819,9 +1952,52 @@ fn a_deep_chain_keeps_its_nesting_and_the_sidebar_scrolls_sideways() {
     }
     // what a row needs is known before it is drawn off screen, so the plus stays reachable
     assert!(widget(&h, "icon:albumNew").right() <= panel.right(), "Create Album stays inside the visible panel");
-    // a click in the middle of a deep row chooses it; only the little triangle folds it
-    click(&mut h, "source:libfolder:/a/b/c/d/e/f/g/h/i/j/k/l");
-    assert_eq!(h.app.session.library_folder.as_deref(), Some("/a/b/c/d/e/f/g/h/i/j/k/l"), "the row's middle is the row, not its triangle");
+    // a click in the middle of a deep row chooses it; only the little chevron folds it
+    let chosen = "/a/b/c/d/e/f/g/h/i/j/k/l";
+    click(&mut h, &format!("source:libfolder:{chosen}"));
+    assert_eq!(h.app.session.library_folder.as_deref(), Some(chosen), "the row's middle is the row, not its chevron");
+}
+
+/// A library below a deep path (issue #2298): in the default panel the levels step right by
+/// less than a full step, so the deepest folder's name has room and nothing scrolls sideways;
+/// a wide panel goes back to full steps, and a shallow tree never narrows.
+#[test]
+fn a_deep_library_path_narrows_the_indent_instead_of_cutting_the_names() {
+    let deep = "/Users/someone/Library/CloudStorage/Nextcloud-cloud.example.com/RAW/Club/2026-09-24 Team/RAW";
+    let mut h = deep_folders_app(deep, [1400.0, 1200.0]);
+    let full = crate::panels::left::INDENT_STEP;
+    let narrow = crate::panels::left::indent_step(&h.view.ctx);
+    assert!(narrow < full && narrow >= crate::panels::left::MIN_INDENT_STEP, "the step narrows in the default panel: {narrow}");
+    let xs = chevron_xs(&h, deep);
+    assert!(xs.windows(2).all(|w| (w[1] - w[0] - narrow).abs() < 0.5), "every level still steps right by the same amount: {xs:?}");
+    let panel = widget(&h, "panel:left_panel");
+    assert!(crate::panels::left::content_width(&h.view.ctx) <= panel.width(), "nothing scrolls sideways");
+    let id = format!("libfolder:{deep}");
+    let (label, count) = (widget(&h, &format!("label:{id}")), widget(&h, &format!("count:{id}")));
+    assert!(label.width() > 20.0 && label.right() + 4.0 <= count.left(), "the deepest name shows, left of its count: {label:?} {count:?}");
+    // a wide panel has room for full steps again
+    let r = h.request("ui.set", json!({"leftWidth": 480.0}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert_eq!(crate::panels::left::indent_step(&h.view.ctx), full, "a wide panel indents by the full step");
+    let xs = chevron_xs(&h, deep);
+    assert!(xs.windows(2).all(|w| (w[1] - w[0] - full).abs() < 0.5), "{xs:?}");
+    // a shallow tree keeps the full step in the default panel
+    let h = folders_app(&["/pics/trip/a.jpg", "/pics/home/b.jpg"]);
+    assert_eq!(crate::panels::left::indent_step(&h.view.ctx), full, "a shallow tree is drawn as before");
+}
+
+/// The step is chosen in whole bands from the panel's width and the deepest row.
+#[test]
+fn the_indent_step_narrows_in_bands() {
+    use crate::panels::left::step_for;
+    // (room for the steps: the panel less the row's margins, a name's 80 pt and a count's 40)
+    assert_eq!(step_for(268.0, 0.0), 16.0, "top-level rows only");
+    assert_eq!(step_for(268.0, 5.0 * 16.0), 16.0, "five levels fit at full steps");
+    assert_eq!(step_for(268.0, 7.0 * 16.0), 12.0, "seven levels at 12 pt");
+    assert_eq!(step_for(268.0, 9.0 * 16.0), 8.0, "nine levels at 8 pt");
+    assert_eq!(step_for(268.0, 30.0 * 16.0), 8.0, "never below 8 pt: the sidebar scrolls instead");
+    assert_eq!(step_for(480.0, 9.0 * 16.0), 16.0, "a wide panel keeps full steps");
 }
 
 /// A sidebar that fits needs no sideways scrolling.

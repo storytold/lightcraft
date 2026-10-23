@@ -83,13 +83,13 @@ BASE="https://huggingface.co/$REPO/resolve/main"
 fetch() {
     set -- "$1" "$2" "${3:-}"
     if [ -n "$TOKEN" ]; then auth="Authorization: Bearer $TOKEN"; else auth="X-No-Auth: 1"; fi
-    code=$(curl -fsSL ${3:+-C -} -H "$auth" -w '%{http_code}' -o "$2" "$BASE/$1") || true
+    code=$(curl --proto '=https' -fsSL ${3:+-C -} -H "$auth" -w '%{http_code}' -o "$2" "$BASE/$1") || true
     case "$code" in
         200|206) return 0 ;;
         416)
             echo "the partial download of $1 doesn't match the server's; starting over" >&2
             rm -f "$2"
-            code=$(curl -fsSL -H "$auth" -w '%{http_code}' -o "$2" "$BASE/$1") || true
+            code=$(curl --proto '=https' -fsSL -H "$auth" -w '%{http_code}' -o "$2" "$BASE/$1") || true
             [ "$code" = 200 ] && return 0
             echo "download of $REPO/$1 failed ($code)" >&2; return 1 ;;
         401|403) echo "access denied to $REPO/$1 (has your request for facebook/sam3 been approved?)" >&2; return 1 ;;

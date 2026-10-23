@@ -199,6 +199,75 @@ impl InfoOverlay {
     }
 }
 
+/// One line of the loupe's info overlay, chosen in View ▸ View Options (Lightroom Classic's Loupe
+/// Info 1 / Loupe Info 2). A line with nothing to show for a photo is left out.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LoupeInfoField {
+    #[default]
+    None,
+    FileName,
+    /// The capture date and time (the import date when the photo has none).
+    CaptureDate,
+    /// Width × height in pixels.
+    Dimensions,
+    /// Shutter speed, aperture, ISO and focal length.
+    Exposure,
+    Camera,
+    Lens,
+    /// Camera and lens on one line.
+    CameraAndLens,
+}
+
+impl LoupeInfoField {
+    /// Every field, in the order View Options lists them.
+    pub const ALL: &'static [LoupeInfoField] = &[
+        LoupeInfoField::None,
+        LoupeInfoField::FileName,
+        LoupeInfoField::CaptureDate,
+        LoupeInfoField::Dimensions,
+        LoupeInfoField::Exposure,
+        LoupeInfoField::Camera,
+        LoupeInfoField::Lens,
+        LoupeInfoField::CameraAndLens,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            LoupeInfoField::None => "None",
+            LoupeInfoField::FileName => "File Name",
+            LoupeInfoField::CaptureDate => "Capture Date",
+            LoupeInfoField::Dimensions => "Dimensions",
+            LoupeInfoField::Exposure => "Exposure",
+            LoupeInfoField::Camera => "Camera",
+            LoupeInfoField::Lens => "Lens",
+            LoupeInfoField::CameraAndLens => "Camera & Lens",
+        }
+    }
+}
+
+/// The three lines each mode of the info overlay shows: Info 1 ([`InfoOverlay::Basic`]) and
+/// Info 2 ([`InfoOverlay::Exposure`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct LoupeInfo {
+    pub info1: [LoupeInfoField; 3],
+    pub info2: [LoupeInfoField; 3],
+}
+
+impl LoupeInfo {
+    /// Info 1's lines before they are changed (and after Use Defaults).
+    pub const INFO1: [LoupeInfoField; 3] = [LoupeInfoField::FileName, LoupeInfoField::CaptureDate, LoupeInfoField::Dimensions];
+    /// Info 2's lines before they are changed (and after Use Defaults).
+    pub const INFO2: [LoupeInfoField; 3] = [LoupeInfoField::FileName, LoupeInfoField::Exposure, LoupeInfoField::CameraAndLens];
+}
+
+impl Default for LoupeInfo {
+    fn default() -> Self {
+        LoupeInfo { info1: LoupeInfo::INFO1, info2: LoupeInfo::INFO2 }
+    }
+}
+
 /// View ▸ Loupe Overlay ▸ Layout Image (Lightroom Classic's loupe overlay): a graphic with
 /// transparency, such as a magazine cover's masthead and cover lines, drawn over the photo in the
 /// loupe (`panels::layout_overlay`). Saved with the UI state, so the layout stays chosen across
@@ -391,6 +460,9 @@ pub struct AppSettings {
     /// View ▸ Zoom to Focus Point: Toggle Zoom (Z) centres the zoomed view on the camera's focus point
     /// when the photo has one (`view.zoomToFocus`).
     pub zoom_to_focus: bool,
+    /// View ▸ View Options: the lines the loupe's info overlay shows in Info 1 and Info 2.
+    #[serde(deserialize_with = "lenient")]
+    pub loupe_info: LoupeInfo,
 }
 
 impl Default for AppSettings {
@@ -420,6 +492,7 @@ impl Default for AppSettings {
             keyword_chips: KeywordChips::default(),
             focus_point: false,
             zoom_to_focus: true,
+            loupe_info: LoupeInfo::default(),
         }
     }
 }
@@ -642,6 +715,9 @@ pub struct UiState {
     pub view: ViewMode,
     pub left_panel: bool,
     pub right: RightPanel,
+    /// The right panel F8 (`view.rightPanel`) hid, which the next F8 shows again.
+    #[serde(skip)]
+    pub right_hidden: RightPanel,
     /// Widths of the left sidebar and of the right panel in points (dragging their inner edge
     /// resizes them; within [`LEFT_WIDTH`] / [`RIGHT_WIDTH`]).
     pub left_width: f32,
@@ -699,7 +775,8 @@ pub struct UiState {
     /// Mirroring of the triangle / spiral crop guides (0..4).
     pub crop_overlay_orient: u8,
     pub crop_overlay: CropOverlay,
-    /// Last explicitly chosen aspect, retained across photos and app launches.
+    /// Last explicitly chosen aspect, retained across photos and app launches; `None` (nothing
+    /// chosen yet) crops locked to the photo's own shape, as Lightroom starts (#991).
     pub crop_default_aspect: Option<serde_json::Value>,
     pub show_filenames: bool,
     /// What the square grid's caption shows: `filename`, `exposure` (shutter · aperture · ISO ·
@@ -796,6 +873,10 @@ pub struct UiState {
     /// A keyword just made from the sidebar: Keywords opens down to it, once.
     #[serde(skip)]
     pub reveal_keyword: Option<String>,
+    /// A folder Photo ▸ Show in Folders went to (its Folders row's path): the sidebar's Folders
+    /// section opens down to it and scrolls to it, once.
+    #[serde(skip)]
+    pub reveal_folder: Option<String>,
     /// An album or folder row being dragged in the sidebar (dropped on a folder to move it there).
     #[serde(skip)]
     pub dragging_album: Option<u64>,
@@ -814,6 +895,10 @@ pub struct UiState {
     pub grading_hidden: Option<(lightcraft_catalog::PhotoId, [bool; 3])>,
     /// Active on-canvas tool: "", "brush", "linear", "radial", "wbPicker", "straighten", "remove".
     pub tool: String,
+    /// Guided Upright: the selected guide (photo id + index) while the tool is open. A Delete /
+    /// Backspace on it removes that guide alone; a click away or leaving the tool clears it.
+    #[serde(skip)]
+    pub selected_guide: Option<(u64, usize)>,
     pub brush_size: f32,
     pub brush_feather: f32,
     pub brush_flow: f32,
@@ -1238,6 +1323,9 @@ pub enum Dialog {
     },
     About,
     Shortcuts,
+    /// View ▸ View Options (⌘J): the info overlay and the lines of Info 1 and Info 2. Changes apply
+    /// as they are made.
+    ViewOptions,
 }
 
 fn yes() -> bool {
@@ -1260,6 +1348,14 @@ pub struct SyncCounts {
     pub moved: usize,
 }
 
+impl SyncCounts {
+    /// The folder is there and the scan found nothing to bring in, relink, remove or read: the
+    /// dialog only says so (files it skipped are not changes).
+    pub fn up_to_date(&self) -> bool {
+        !self.offline && self.new + self.moved + self.missing + self.metadata == 0
+    }
+}
+
 impl Default for UiState {
     fn default() -> Self {
         UiState {
@@ -1274,6 +1370,7 @@ impl Default for UiState {
             left_width: LEFT_WIDTH.default,
             right_width: RIGHT_WIDTH.default,
             right: RightPanel::Edit,
+            right_hidden: RightPanel::None,
             presets: false,
             preset_thumbs: false,
             filmstrip: true,
@@ -1337,6 +1434,7 @@ impl Default for UiState {
             dragging_photos: None,
             reveal_album: None,
             reveal_keyword: None,
+            reveal_folder: None,
             dragging_album: None,
             dragging_section: None,
             curve_channel: "parametric".into(),
@@ -1344,6 +1442,7 @@ impl Default for UiState {
             grading_mode: "3way".into(),
             grading_hidden: None,
             tool: String::new(),
+            selected_guide: None,
             brush_size: 0.04,
             brush_feather: 50.0,
             brush_flow: 60.0,
@@ -1507,4 +1606,29 @@ fn deserialize_favorite_themes<'de, D: serde::Deserializer<'de>>(d: D) -> Result
         }
     }
     Ok(values)
+}
+
+#[cfg(test)]
+mod loupe_info_tests {
+    use super::*;
+
+    /// The lines chosen in View Options are saved with the app's settings; a settings file from
+    /// before they existed, or with a line this build doesn't know, gets the default lines and
+    /// keeps the rest of its settings.
+    #[test]
+    fn view_options_lines_are_saved_with_the_settings() {
+        let mut settings = AppSettings::default();
+        settings.loupe_info.info2 = [LoupeInfoField::Lens, LoupeInfoField::None, LoupeInfoField::FileName];
+        let saved = serde_json::to_value(&settings).unwrap();
+        assert_eq!(saved["loupeInfo"]["info2"], serde_json::json!(["lens", "none", "fileName"]));
+        let read: AppSettings = serde_json::from_value(saved).unwrap();
+        assert_eq!(read.loupe_info, settings.loupe_info);
+
+        let old: AppSettings = serde_json::from_value(serde_json::json!({"filmNames": false})).unwrap();
+        assert_eq!(old.loupe_info, LoupeInfo::default());
+        let newer: AppSettings =
+            serde_json::from_value(serde_json::json!({"filmNames": false, "loupeInfo": {"info1": ["rating", "fileName", "none"]}})).unwrap();
+        assert_eq!(newer.loupe_info, LoupeInfo::default());
+        assert!(!newer.film_names, "the rest of the settings are still read");
+    }
 }

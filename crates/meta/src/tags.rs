@@ -145,7 +145,14 @@ fn rational(n: f64, d: f64) -> String {
         return "—".into();
     }
     let v = n / d;
-    if (v - v.round()).abs() < 1e-9 { format!("{}", v.round()) } else { format!("{:.4}", v).trim_end_matches('0').to_string() }
+    if (v - v.round()).abs() < 1e-9 {
+        let r = v.round();
+        if r == 0.0 { "0".to_string() } else { format!("{}", r) }
+    } else {
+        let s = format!("{:.4}", v);
+        let s = s.trim_end_matches('0').trim_end_matches('.');
+        if s == "-0" { "0".to_string() } else { s.to_string() }
+    }
 }
 
 fn list<T: ToString>(v: &[T]) -> String {
@@ -369,6 +376,16 @@ pub fn file_tag_rows(bytes: &[u8]) -> Vec<TagRow> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rational_has_no_trailing_dot() {
+        assert_eq!(rational(1.0, 100000.0), "0");
+        assert_eq!(rational(-1.0, 100000.0), "0");
+        assert_eq!(rational(-1.0, 1e10), "0");
+        assert_eq!(rational(1000001.0, 100000.0), "10");
+        assert_eq!(rational(1.0, 3.0), "0.3333");
+        assert_eq!(rational(5.0, 2.0), "2.5");
+    }
 
     #[test]
     fn rows_from_written_exif() {

@@ -32,7 +32,7 @@ Open them from the **Window** menu, or press the key shown next to each one:
 | Panel             | Key         |
 |-------------------|-------------|
 | **Crop & Rotate** | `C`         |
-| **Remove**        | `H`         |
+| [**Remove**](remove-distractions.md) | `H`         |
 | **Masking**       | `M`         |
 | **Presets**       | `Shift`+`P` |
 

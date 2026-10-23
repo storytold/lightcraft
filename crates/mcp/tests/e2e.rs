@@ -79,6 +79,33 @@ fn exposure_roundtrip(server: &mut Server) {
 }
 
 #[test]
+fn file_writers_advertise_destructive_effects() {
+    for with_commands in [false, true] {
+        let mut server = Server::new(Box::new(Headless::demo())).with_command_tools(with_commands);
+        let replies = session(&mut server, &[json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})]);
+        let tools = replies[0]["result"]["tools"].as_array().unwrap();
+        for name in ["export", "render_photo"] {
+            let tool = tools.iter().find(|t| t["name"] == name).unwrap();
+            assert_eq!(tool["annotations"]["readOnlyHint"], false, "{name}");
+            assert_eq!(tool["annotations"]["destructiveHint"], true, "{name} can replace a file");
+        }
+        let preview = tools.iter().find(|t| t["name"] == "render_preview").unwrap();
+        assert_eq!(preview["annotations"]["readOnlyHint"], true);
+        assert_eq!(preview["annotations"]["destructiveHint"], false);
+    }
+    let addr = fake_app();
+    let mut server = Server::new(Box::new(Remote::connect(&addr).unwrap()));
+    let replies = session(&mut server, &[json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})]);
+    let tools = replies[0]["result"]["tools"].as_array().unwrap();
+    let screenshot = tools.iter().find(|t| t["name"] == "screenshot").unwrap();
+    assert_eq!(screenshot["annotations"]["readOnlyHint"], false);
+    assert_eq!(screenshot["annotations"]["destructiveHint"], true);
+    let image_only = tools.iter().find(|t| t["name"] == "ui_screenshot").unwrap();
+    assert_eq!(image_only["annotations"]["readOnlyHint"], true);
+    assert_eq!(image_only["annotations"]["destructiveHint"], false);
+}
+
+#[test]
 fn headless_set_exposure_and_render() {
     exposure_roundtrip(&mut Server::new(Box::new(Headless::demo())));
 }

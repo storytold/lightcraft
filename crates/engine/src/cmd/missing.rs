@@ -58,7 +58,7 @@ pub(crate) fn relink_op(id: PhotoId, path: &str) -> Op {
 
 fn relink(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "photo.relink";
-    let id = p.get("id").and_then(Value::as_u64).map(PhotoId).or(s.active()).ok_or_else(|| bad(C, "no photo (give `id`)"))?;
+    let id = super::photo_id(p, C)?.or(s.active()).ok_or_else(|| bad(C, "no photo (give `id`)"))?;
     let path = str_param(p, "path").ok_or_else(|| bad(C, "missing `path`"))?;
     let abs = std::path::absolute(path).map_err(|e| bad(C, e.to_string()))?;
     if !abs.is_file() {

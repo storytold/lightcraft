@@ -137,7 +137,8 @@ fn perf_report() {
 
 #[test]
 fn unedited_rendered_source_is_passthrough() {
-    // An sRGB ramp decoded to linear Rec.2020 must render back to (almost) the same 8-bit values.
+    // An sRGB ramp decoded to linear Rec.2020 must render back to the same 8-bit values, white
+    // included (issue #1945: neutral 255, 254 and 253 came back one level darker).
     let src8 = lightcraft_raster::Rgba8::from_fn(256, 4, |x, y| [x as u8, (x as u8).wrapping_add(y as u8 * 40), 255 - x as u8, 255]);
     let m = lightcraft_color::SRGB.to_space(&lightcraft_color::REC2020);
     let src = src8.to_linear().map(|c| m.apply_f32(c));
@@ -148,7 +149,24 @@ fn unedited_rendered_source_is_passthrough() {
             worst = worst.max((a[c] as i32 - b[c] as i32).abs());
         }
     }
-    assert!(worst <= 3, "max error {worst}");
+    assert_eq!(worst, 0, "max error {worst}");
+}
+
+#[test]
+fn unedited_neutral_near_whites_are_passthrough() {
+    // Issue #1945: neutral 255, 254 and 253 rendered one level darker (the display tone map's
+    // shoulder ran at neutral settings), so a white background never exported as 255.
+    let vals = [255u8, 254, 253, 252, 250, 240, 200, 128, 0];
+    let src8 = lightcraft_raster::Rgba8::from_fn(vals.len(), 1, |x, _| {
+        let v = vals[x];
+        [v, v, v, 255]
+    });
+    let m = lightcraft_color::SRGB.to_space(&lightcraft_color::REC2020);
+    let src = src8.to_linear().map(|c| m.apply_f32(c));
+    let r = render(&src, &SourceInfo::default(), &DevelopSettings::default(), &RenderRequest::fit(vals.len(), 1)).image;
+    let got: Vec<[u8; 3]> = r.data.iter().map(|p| [p[0], p[1], p[2]]).collect();
+    let want: Vec<[u8; 3]> = vals.iter().map(|&v| [v, v, v]).collect();
+    assert_eq!(got, want);
 }
 
 fn typical_edits() -> DevelopSettings {

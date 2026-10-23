@@ -108,10 +108,10 @@ impl Client {
     }
 }
 
-pub fn text_logits(model: &mut Sam3, enc: &mut Encoded, text: &str) -> Result<Option<Vec<f32>>, String> {
+pub fn text_logits(model: &mut Sam3, enc: &mut Encoded, text: &str) -> crate::Result<Option<Vec<f32>>> {
     let mut merged: Option<Vec<f32>> = None;
     for phrase in text.split([',', ';']).map(str::trim).filter(|p| !p.is_empty()) {
-        if let Some(p) = model.segment_text(enc, phrase, 0.5).map_err(|e| e.to_string())? {
+        if let Some(p) = model.segment_text(enc, phrase, 0.5)? {
             if let Some(m) = &mut merged {
                 for (a, b) in m.iter_mut().zip(p.logits) {
                     *a = a.max(b);
@@ -130,7 +130,7 @@ fn predict(model: &mut Sam3, enc: &mut Encoded, operation: Operation) -> Result<
             model.prepare_clicks(enc).map_err(|e| e.to_string())?;
             Ok(None)
         }
-        Operation::Text(text) => text_logits(model, enc, &text),
+        Operation::Text(text) => text_logits(model, enc, &text).map_err(|e| e.to_string()),
         Operation::Clicks(points) => {
             let clicks: Vec<_> = points.into_iter().map(|p| Click { x: p[0], y: p[1], positive: p[2] == 1.0 }).collect();
             Ok(Some(model.segment_clicks(enc, &clicks).map_err(|e| e.to_string())?.logits))
