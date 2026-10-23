@@ -2346,5 +2346,15 @@
   "Use Defaults": "Usa predefiniti",
   "Dimensions": "Dimensioni",
   "Camera & Lens": "Fotocamera e obiettivo",
-  "View → View Options chooses the lines Info 1 and Info 2 show.": "Visualizza → Opzioni di visualizzazione sceglie le righe di Info 1 e Info 2."
+  "View → View Options chooses the lines Info 1 and Info 2 show.": "Visualizza → Opzioni di visualizzazione sceglie le righe di Info 1 e Info 2.",
+  "Back Up Library": "Esegui backup della libreria",
+  "Backing up the library": "Backup della libreria in corso",
+  "Backup Status": "Stato del backup",
+  "Check Backup": "Verifica backup",
+  "Backups": "Backup",
+  "Restore Library from Backup": "Ripristina la libreria da un backup",
+  "Restore Status": "Stato del ripristino",
+  "Restored the library": "Libreria ripristinata",
+  "Restoring the library": "Ripristino della libreria",
+  "Backup Preferences": "Preferenze di backup"
 }
