@@ -546,7 +546,7 @@ pub(crate) fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>>
                     "view.layoutImage",
                     Value::Null,
                     "Show Layout Image",
-                    crate::shortcuts::shortcut_of(&app.ui.settings.keymap, "view.layoutImage"),
+                    crate::shortcuts::shortcut_of(app.ui.settings.profile(), &app.ui.settings.keymap, "view.layoutImage"),
                     chosen,
                     Some(li.show && chosen),
                 ),
@@ -573,7 +573,7 @@ pub(crate) fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>>
                 .map(|m| item("view.toolOverlay", json!({"mode": m.name()}), m.label(), None, true, Some(app.ui.tool_overlay == m)))
                 .collect();
             v.push(MenuNode::Separator);
-            let shortcut = crate::shortcuts::shortcut_of(&app.ui.settings.keymap, "view.toolOverlay");
+            let shortcut = crate::shortcuts::shortcut_of(app.ui.settings.profile(), &app.ui.settings.keymap, "view.toolOverlay");
             v.push(item("view.toolOverlay", Value::Null, "Cycle Tool Overlay", shortcut, true, None));
             v
         }
@@ -741,7 +741,7 @@ fn node(app: &LightcraftApp, e: &MenuEntry) -> MenuNode {
     // Shift+P picks and advances in Library; don't advertise it on Presets in those views.
     let shortcut = if e.id == "panel.presets" && crate::shortcuts::library_grid(app) { None } else { e.shortcut.as_deref() };
     // in an album the Delete key removes from the album (issue #1805): the menu says so
-    let delete_key = crate::shortcuts::shortcut_of(&app.ui.settings.keymap, "photo.delete");
+    let delete_key = crate::shortcuts::shortcut_of(app.ui.settings.profile(), &app.ui.settings.keymap, "photo.delete");
     let shortcut = match e.id.as_str() {
         "album.removePhotos" => delete_key,
         "photo.delete" if matches!(app.session.source, lightcraft_engine::LibrarySource::Album(_)) => None,

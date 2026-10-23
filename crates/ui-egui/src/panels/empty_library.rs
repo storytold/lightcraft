@@ -36,14 +36,14 @@ pub fn open_on_empty_library(app: &mut LightcraftApp) {
 
 /// The line under the buttons: dropping works anywhere in the window, and the shortcut is the
 /// one Import Photos… is bound to now, written as menus write it.
-pub fn hint(keymap: &Keymap, mac: bool) -> String {
+pub fn hint(profile: crate::keymap_profiles::KeyProfile, keymap: &Keymap, mac: bool) -> String {
     // the browser build reads dropped files, not folders
     let drop = if cfg!(target_arch = "wasm32") {
         crate::i18n::tr("or drop photos into this window")
     } else {
         crate::i18n::tr("or drop photos and folders into this window")
     };
-    match crate::shortcuts::shortcut_of(keymap, "file.addPhotos") {
+    match crate::shortcuts::shortcut_of(profile, keymap, "file.addPhotos") {
         Some(sc) => format!("{drop} · {}", crate::menubar::shortcut_text(sc, mac)),
         None => drop.to_string(),
     }
@@ -59,7 +59,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, rect: Rect) {
     // the browser build can't read a Lightroom catalog from disk: only offer what works there
     let actions: &[EmptyAction] = if cfg!(target_arch = "wasm32") { &[IMPORT_PHOTOS] } else { &[IMPORT_PHOTOS, IMPORT_LIGHTROOM] };
     let mac = ui.ctx().os() == egui::os::OperatingSystem::Mac;
-    let hint = hint(&app.ui.settings.keymap, mac);
+    let hint = hint(app.ui.settings.profile(), &app.ui.settings.keymap, mac);
     let clicked = super::empty_state(
         ui,
         rect,

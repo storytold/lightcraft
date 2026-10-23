@@ -126,7 +126,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if text_button(ui, "reset", crate::i18n::tr("Reset"), false)
-                    .on_hover_text(reset_tip(&app.ui.settings.keymap, ui.ctx().os() == egui::os::OperatingSystem::Mac))
+                    .on_hover_text(reset_tip(app.ui.settings.profile(), &app.ui.settings.keymap, ui.ctx().os() == egui::os::OperatingSystem::Mac))
                     .clicked()
                 {
                     reset_clicked = true;
@@ -1831,9 +1831,9 @@ pub(crate) fn reload_preview_only(app: &mut LightcraftApp, ctx: &egui::Context, 
 }
 
 /// The Reset button's tooltip with the reset shortcut as this platform writes it (issue #1751).
-fn reset_tip(keymap: &crate::shortcuts::Keymap, mac: bool) -> String {
+fn reset_tip(profile: crate::keymap_profiles::KeyProfile, keymap: &crate::shortcuts::Keymap, mac: bool) -> String {
     let base = crate::i18n::tr("Reset all edits");
-    match crate::shortcuts::shortcut_of(keymap, "develop.reset") {
+    match crate::shortcuts::shortcut_of(profile, keymap, "develop.reset") {
         Some(sc) => format!("{base} ({})", crate::menubar::shortcut_text(sc, mac)),
         None => base.to_string(),
     }
@@ -1893,11 +1893,11 @@ mod tests {
     #[test]
     fn reset_tooltip_names_the_shortcut_of_this_platform() {
         let keymap = crate::shortcuts::Keymap::new();
-        assert_eq!(reset_tip(&keymap, false), "Reset all edits (Ctrl+Shift+R)");
-        assert_eq!(reset_tip(&keymap, true), "Reset all edits (⌘⇧R)");
+        assert_eq!(reset_tip(crate::keymap_profiles::KeyProfile::Lightroom, &keymap, false), "Reset all edits (Ctrl+Shift+R)");
+        assert_eq!(reset_tip(crate::keymap_profiles::KeyProfile::Lightroom, &keymap, true), "Reset all edits (⌘⇧R)");
         let rebound: crate::shortcuts::Keymap = [("develop.reset".to_string(), "Cmd+Alt+R".to_string())].into();
-        assert_eq!(reset_tip(&rebound, false), "Reset all edits (Ctrl+Alt+R)");
+        assert_eq!(reset_tip(crate::keymap_profiles::KeyProfile::Lightroom, &rebound, false), "Reset all edits (Ctrl+Alt+R)");
         let unbound: crate::shortcuts::Keymap = [("develop.reset".to_string(), String::new())].into();
-        assert_eq!(reset_tip(&unbound, false), "Reset all edits");
+        assert_eq!(reset_tip(crate::keymap_profiles::KeyProfile::Lightroom, &unbound, false), "Reset all edits");
     }
 }

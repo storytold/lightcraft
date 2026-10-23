@@ -72,7 +72,7 @@ fn the_editor_records_a_key_and_esc_cancels_without_closing() {
     assert_eq!(h.app.recording_shortcut.as_deref(), Some("view.compare"));
     key(&mut h, "J", true);
     assert_eq!(h.app.recording_shortcut, None);
-    assert_eq!(crate::shortcuts::shortcut_of(&h.app.ui.settings.keymap, "view.compare"), Some("Shift+J"));
+    assert_eq!(crate::shortcuts::shortcut_of(h.app.ui.settings.profile(), &h.app.ui.settings.keymap, "view.compare"), Some("Shift+J"));
     assert_eq!(h.app.ui.view, ViewMode::Detail);
     assert!(matches!(h.app.ui.dialog, Some(Dialog::Shortcuts)));
     // Esc while recording cancels; the dialog stays open and nothing changes
@@ -80,7 +80,7 @@ fn the_editor_records_a_key_and_esc_cancels_without_closing() {
     key(&mut h, "Escape", false);
     assert_eq!(h.app.recording_shortcut, None);
     assert!(matches!(h.app.ui.dialog, Some(Dialog::Shortcuts)));
-    assert_eq!(crate::shortcuts::shortcut_of(&h.app.ui.settings.keymap, "view.compare"), Some("Shift+J"));
+    assert_eq!(crate::shortcuts::shortcut_of(h.app.ui.settings.profile(), &h.app.ui.settings.keymap, "view.compare"), Some("Shift+J"));
     // the next Esc closes it; the new key works
     key(&mut h, "Escape", false);
     assert!(h.app.ui.dialog.is_none());
@@ -88,7 +88,7 @@ fn the_editor_records_a_key_and_esc_cancels_without_closing() {
     assert_eq!(h.app.ui.view, ViewMode::Compare);
     // Reset All restores the declared keys
     h.app.run("app.resetShortcuts", json!({})).unwrap();
-    assert_eq!(crate::shortcuts::shortcut_of(&h.app.ui.settings.keymap, "view.compare"), Some("Shift+C"));
+    assert_eq!(crate::shortcuts::shortcut_of(h.app.ui.settings.profile(), &h.app.ui.settings.keymap, "view.compare"), Some("Shift+C"));
 }
 
 #[test]
@@ -134,7 +134,7 @@ fn modifiers_wait_for_their_key_and_clipboard_keys_record() {
     h.step();
     h.step();
     assert_eq!(h.app.recording_shortcut, None);
-    assert_eq!(crate::shortcuts::shortcut_of(&h.app.ui.settings.keymap, "view.survey"), Some("Cmd+Shift+K"));
+    assert_eq!(crate::shortcuts::shortcut_of(h.app.ui.settings.profile(), &h.app.ui.settings.keymap, "view.survey"), Some("Cmd+Shift+K"));
     // ⌘⌥C: the windowing layer sends a Copy event with the modifiers held
     record(&mut h, "survey", "view.survey");
     let m = egui::Modifiers { alt: true, ..egui::Modifiers::COMMAND };
@@ -142,7 +142,7 @@ fn modifiers_wait_for_their_key_and_clipboard_keys_record() {
     h.app.synthetic.push(egui::Event::Copy);
     h.step();
     h.step();
-    assert_eq!(crate::shortcuts::shortcut_of(&h.app.ui.settings.keymap, "view.survey"), Some("Cmd+Alt+C"));
+    assert_eq!(crate::shortcuts::shortcut_of(h.app.ui.settings.profile(), &h.app.ui.settings.keymap, "view.survey"), Some("Cmd+Alt+C"));
     // a saved modifier-only shortcut (from the bug) means no shortcut
     assert_eq!(crate::shortcuts::parse("Cmd+SuperLeft"), None);
 }
@@ -193,7 +193,7 @@ fn opening_numeric_release_keeps_keys_in_the_editor() {
         assert!(h.app.recording_shortcut.is_none() && h.app.ui.name_edit.is_none());
         assert!(h.app.native_shortcuts.is_empty() && h.app.synthetic.is_empty() && h.events.is_empty());
         assert!(!h.view.ctx.egui_wants_keyboard_input());
-        assert_eq!(crate::shortcuts::shortcut_of(&h.app.ui.settings.keymap, "photo.increaseRating"), Some("Enter"));
+        assert_eq!(crate::shortcuts::shortcut_of(h.app.ui.settings.profile(), &h.app.ui.settings.keymap, "photo.increaseRating"), Some("Enter"));
         let active = h.app.session.active().unwrap();
         let selection = h.app.session.selection.ids.clone();
         let (view, right, tool) = (h.app.ui.view, h.app.ui.right, h.app.ui.tool.clone());
@@ -289,9 +289,9 @@ fn open_library_and_visualize_hdr_keys_are_declared() {
     use crate::shortcuts::{Keymap, parse, shortcut_of};
 
     let keymap = Keymap::new();
-    assert_eq!(shortcut_of(&keymap, "app.openLibrary"), Some("Cmd+O"));
+    assert_eq!(shortcut_of(crate::keymap_profiles::KeyProfile::Lightroom, &keymap, "app.openLibrary"), Some("Cmd+O"));
     assert!(parse("Cmd+O").is_some());
-    assert_eq!(shortcut_of(&keymap, "view.visualizeHdr"), None);
+    assert_eq!(shortcut_of(crate::keymap_profiles::KeyProfile::Lightroom, &keymap, "view.visualizeHdr"), None);
 }
 
 /// Opening a library uses the same folder picker as File > Open Library. Cancelling it
@@ -452,4 +452,121 @@ fn cmd_o_does_not_fire_while_a_dialog_is_open() {
     h.app.ui.dialog = None;
     press(&mut h, "O", &["cmd"]);
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+/// Adobe's module keys (the fixed aliases): 1 Library, 2 Develop, 5 Slideshow.
+#[test]
+fn ctrl_alt_module_keys_switch_modules() {
+    use crate::state::RightPanel;
+    let mut h = demo();
+    h.app.ui.right = RightPanel::None;
+    press(&mut h, "2", &["ctrl", "alt"]);
+    assert_eq!(h.app.ui.view, ViewMode::Detail);
+    assert_eq!(h.app.ui.right, RightPanel::Edit, "Ctrl+Alt+2 opens the Develop panel");
+    press(&mut h, "2", &["ctrl", "alt"]);
+    assert_eq!(h.app.ui.right, RightPanel::Edit, "pressing it again keeps the panel open");
+    press(&mut h, "1", &["ctrl", "alt"]);
+    assert_eq!(h.app.ui.view, ViewMode::PhotoGrid, "Ctrl+Alt+1 is the Library module");
+    press(&mut h, "5", &["ctrl", "alt"]);
+    assert!(h.app.ui.slideshow.is_some(), "Ctrl+Alt+5 starts the slideshow");
+    // macOS reads the same Adobe keys as ⌘⌥
+    h.app.ui.slideshow = None;
+    press(&mut h, "2", &["cmd", "alt"]);
+    assert_eq!(h.app.ui.view, ViewMode::Detail, "Cmd+Alt+2 is the Develop module");
+    assert_eq!(h.app.ui.right, RightPanel::Edit, "Cmd+Alt+2 opens the Develop panel");
+    press(&mut h, "1", &["cmd", "alt"]);
+    assert_eq!(h.app.ui.view, ViewMode::PhotoGrid, "Cmd+Alt+1 is the Library module");
+}
+
+/// A user-owned Cmd+Alt+5 owns the event on Windows/Linux too (Cmd is the physical Ctrl
+/// there, so the press sets both bits): the slideshow alias yields instead of firing beside it.
+#[test]
+fn a_user_cmd_alt_key_silences_the_module_alias() {
+    let mut h = demo();
+    h.app.run("app.setShortcut", json!({"id": "view.survey", "shortcut": "Cmd+Alt+5"})).unwrap();
+    // Windows' physical Ctrl: the platform reports it as ctrl and command both
+    press(&mut h, "5", &["ctrl", "cmd", "alt"]);
+    assert!(h.app.ui.slideshow.is_none(), "the alias yielded to the user's Cmd+Alt+5");
+    assert!(matches!(h.app.ui.view, ViewMode::Survey), "the press is the user's Survey");
+}
+
+/// The Classic profile shares keys between its tables: the open edit panel decides which side
+/// fires (docs/classic-keymap.md → "Keys the Classic profile shares by context").
+mod classic {
+    use super::*;
+    use crate::state::RightPanel;
+
+    fn classic_demo() -> Headless {
+        let mut h = demo();
+        h.app.run("app.setKeymapProfile", json!({"profile": "classic"})).unwrap();
+        // the demo docks the Edit panel; the profile's "no edit tool" side needs it closed
+        h.app.ui.right = RightPanel::None;
+        h
+    }
+
+    fn open_edit(h: &mut Headless) {
+        h.app.run("panel.edit", json!({})).unwrap();
+        h.step();
+        h.step();
+        assert_eq!(h.app.ui.right, RightPanel::Edit);
+        assert_eq!(h.app.ui.view, ViewMode::Detail);
+    }
+
+    /// O: the People view with no edit tool open, the mask overlay with one.
+    #[test]
+    fn o_is_people_or_mask_overlay_by_panel() {
+        let mut h = classic_demo();
+        let mask_before = h.app.ui.mask_overlay;
+        press(&mut h, "O", &[]);
+        assert_eq!(h.app.ui.view, ViewMode::People, "no edit tool open: O opens the People view");
+        assert_eq!(h.app.ui.mask_overlay, mask_before, "and does not touch the mask overlay");
+        open_edit(&mut h);
+        let before = h.app.ui.mask_overlay;
+        press(&mut h, "O", &[]);
+        assert_eq!(h.app.ui.mask_overlay, !before, "an edit tool open: O toggles the mask overlay");
+        assert_eq!(h.app.ui.view, ViewMode::Detail, "and never the People view");
+    }
+
+    /// ⌘N: New Album with no edit tool open, Create Version with one.
+    #[test]
+    fn cmd_n_is_new_album_or_create_version_by_panel() {
+        let mut h = classic_demo();
+        let active = h.app.session.active().expect("demo has an active photo");
+        let versions = h.app.session.catalog.photo(active).unwrap().versions.len();
+        press(&mut h, "N", &["cmd"]);
+        assert!(matches!(h.app.ui.dialog, Some(Dialog::NewAlbum { folder: false, .. })), "no edit tool open: ⌘N is New Album");
+        assert_eq!(h.app.session.catalog.photo(active).unwrap().versions.len(), versions, "and does not create a version");
+        h.app.ui.dialog = None;
+        open_edit(&mut h);
+        press(&mut h, "N", &["cmd"]);
+        assert!(!matches!(h.app.ui.dialog, Some(Dialog::NewAlbum { .. })), "an edit tool open: ⌘N is not New Album");
+        assert_eq!(h.app.session.catalog.photo(active).unwrap().versions.len(), versions + 1, "an edit tool open: ⌘N created a version");
+        h.app.ui.dialog = None;
+    }
+
+    /// ⌘⇧N: New Folder with no edit tool open, Create Preset with one.
+    #[test]
+    fn cmd_shift_n_is_new_folder_or_create_preset_by_panel() {
+        let mut h = classic_demo();
+        press(&mut h, "N", &["cmd", "shift"]);
+        assert!(matches!(h.app.ui.dialog, Some(Dialog::NewAlbum { folder: true, .. })), "no edit tool open: ⌘⇧N is New Folder");
+        h.app.ui.dialog = None;
+        open_edit(&mut h);
+        press(&mut h, "N", &["cmd", "shift"]);
+        assert!(matches!(h.app.ui.dialog, Some(Dialog::CreatePreset { .. })), "an edit tool open: ⌘⇧N is Create Preset");
+        h.app.ui.dialog = None;
+    }
+
+    /// A shared key that the user moved to another key keeps firing with the panel that used
+    /// to decide its partner open: F9 is People's own key now, the mask overlay stays on O.
+    #[test]
+    fn a_rebound_shared_key_still_fires_with_the_context_panel_open() {
+        let mut h = classic_demo();
+        crate::shortcuts::assign(h.app.ui.settings.profile(), &mut h.app.ui.settings.keymap, "view.people", Some("F9")).unwrap();
+        open_edit(&mut h);
+        let mask_before = h.app.ui.mask_overlay;
+        press(&mut h, "F9", &[]);
+        assert_eq!(h.app.ui.view, ViewMode::People, "F9 opens People even with an edit tool open");
+        assert_eq!(h.app.ui.mask_overlay, mask_before, "and never reaches the mask overlay");
+    }
 }

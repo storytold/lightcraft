@@ -79,6 +79,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("library.selectOnlyActive", "Select Only Active Photo", Some("Cmd+Shift+D"), "Edit"),
     ("tool.guidedUpright", "Guided Upright", Some("Shift+G"), "Window>Tools"),
     ("view.detail", "Detail", Some("D"), "View"),
+    ("view.develop", "Develop", None, ""),
     ("view.compare", "Compare", Some("Shift+C"), "View"),
     ("view.survey", "Survey", Some("N"), "View"),
     ("view.people", "People", None, "View"),
@@ -267,6 +268,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("app.shortcuts", "Keyboard Shortcuts", Some("Cmd+/"), "Help"),
     ("app.setShortcut", "Set Keyboard Shortcut", None, ""),
     ("app.resetShortcuts", "Reset All Keyboard Shortcuts", None, ""),
+    ("app.setKeymapProfile", "Set Keymap Profile", None, ""),
     ("app.export", "Export Now", None, ""),
     ("app.showInFinder", "Show in Finder", Some("Cmd+R"), "Photo"),
     ("app.showInFolders", "Show in Folders", None, "Photo"),
@@ -556,6 +558,14 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             Ok(Value::Null)
         }
         "view.detail" => {
+            app.ui.view = ViewMode::Detail;
+            Ok(Value::Null)
+        }
+        "view.develop" => {
+            // the Develop module: the Edit panel with the Detail view (Classic's D, Ctrl+Alt+2)
+            if app.ui.right != RightPanel::Edit {
+                panel(app, &ctx, RightPanel::Edit, "Edit");
+            }
             app.ui.view = ViewMode::Detail;
             Ok(Value::Null)
         }
@@ -1580,6 +1590,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             Ok(Value::Null)
         }
         "app.setShortcut" => crate::shortcuts::set_shortcut(app, p),
+        "app.setKeymapProfile" => crate::shortcuts::set_keymap_profile(app, p),
         "app.resetShortcuts" => {
             app.ui.settings.keymap.clear();
             Ok(Value::Null)
@@ -2281,7 +2292,7 @@ pub fn menu_entries(app: &LightcraftApp) -> Vec<MenuEntry> {
             id: id.to_string(),
             label: label.to_string(),
             menu: m.split('>').map(str::to_string).collect(),
-            shortcut: crate::shortcuts::binding(&app.ui.settings.keymap, id, *sc).map(str::to_string),
+            shortcut: crate::shortcuts::binding(app.ui.settings.profile(), &app.ui.settings.keymap, id, *sc).map(str::to_string),
             enabled: ui_enabled(app, id),
         })
         .collect();
@@ -2291,7 +2302,7 @@ pub fn menu_entries(app: &LightcraftApp) -> Vec<MenuEntry> {
                 id: c.id.into(),
                 label: c.label.into(),
                 menu: c.menu.iter().map(|s| s.to_string()).collect(),
-                shortcut: crate::shortcuts::shortcut_of(&app.ui.settings.keymap, c.id).map(str::to_string),
+                shortcut: crate::shortcuts::shortcut_of(app.ui.settings.profile(), &app.ui.settings.keymap, c.id).map(str::to_string),
                 enabled: c.enabled,
             });
         }

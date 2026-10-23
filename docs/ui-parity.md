@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-21 · **Change:** minor (context menus: a right-click elsewhere on the same widget moves its open menu instead of flashing it, issue #1877; Reference Escape, catalog-local pins and deleted-photo handling verified on Windows; KEYC-RATING: `\` shows / hides the Filter Bar in the grids; earlier: zoom row soft proofing sharp at 1:1, canvas tools by keyboard, focus-order test, ~50 unnamed hand-drawn widgets named) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-21 · **Change:** minor (context menus: a right-click elsewhere on the same widget moves its open menu instead of flashing it, issue #1877; Reference Escape, catalog-local pins and deleted-photo handling verified on Windows; KEYC-RATING: `\` shows / hides the Filter Bar in the grids; earlier: zoom row soft proofing sharp at 1:1, canvas tools by keyboard, focus-order test, ~50 unnamed hand-drawn widgets named; ) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 How LightCraft's interaction compares with Lightroom's: views, panels, tools and handles, modifier
 keys, shortcuts, zoom, context menus and feel. Rows for individual menu items and shortcuts live in
@@ -12,7 +12,8 @@ assessment and the notes that don't fit a row. Visual reference for agents: `pla
 
 - 226 engine commands (`crates/engine/src/cmd/`, 30 modules) and 143 UI commands (`UI_COMMANDS` in
   `crates/ui-egui/src/menus.rs`, 73 with a shortcut) plus 10 language commands; 23 secondary
-  shortcut bindings (`ALIASES`, `crates/ui-egui/src/shortcuts.rs`); a keymap editor.
+  shortcut bindings (`ALIASES`, `crates/ui-egui/src/shortcuts.rs`) plus 3 more under the Classic
+  profile; a keymap editor with two profiles (Lightroom, Classic — [classic-keymap](classic-keymap.md)).
 - 122 develop controls plus 10 indexed templates (`crates/develop/src/controls.rs`).
 - Checklist: menus 95.3% (86 in-scope rows), desktop shortcuts 94.4% (81 rows), Classic extras
   48.2% (82 rows), measured by recounting [parity-checklist.md](parity-checklist.md).
@@ -29,15 +30,16 @@ assessment and the notes that don't fit a row. Visual reference for agents: `pla
 | Remove / heal | content-aware remove, heal, clone, visualize spots | heal, clone, auto source, visualize spots, red / pet eye | 65% | content-aware (patch synthesis) remove, generative remove, detect distractions |
 | Zoom and navigation | Fit / Fill / 1:1 / 2:1 … 11:1, Navigator, spacebar pan | Fit to 800%, pinch zoom, pan, Navigator-like | 60% | diagnostic overlays (Visualize Spots, Point Color range, HDR range) render the whole frame instead of a zoom window; everything else, mask overlays and soft proofing included, is sharp at 1:1–8:1 |
 | Library culling and metadata | ratings, flags, labels with keys, painter, keywording, metadata panel, filter bar | ratings / flags / labels and advance, keyword list and sets, keywording box, metadata fields, smart albums, filter bar | 85% | painter tool, quick collection, some Classic keys |
-| Shortcuts | Lightroom desktop and Classic keymaps | Lightroom-desktop keymap with Classic additions, editable | 85% | deliberate differences below; no Classic keymap layer |
+| Shortcuts | Lightroom desktop and Classic keymaps | Lightroom-desktop keymap, plus the Classic profile with Adobe's Library / Develop tables (both editable) | 92% | deliberate differences below; module and right-panel-tab keys have nothing to switch to (no modules) |
 | Context menus | everywhere | 31 sites (grid, filmstrip, albums, folders, keywords, masks, presets, text fields…), all through `widgets::context_menu` (`crates/ui-egui/src/widgets.rs`): a right-click elsewhere while a menu is open closes it and opens the menu there, also on the same widget (issue #1877: that one flashed at the new spot and closed, as egui counts the opening click as a click while open) | 70% | unaudited against Lightroom's menus item by item |
 | Text fields | native editing behaviour | custom text field (LR-BEHAV-TEXTFIELD) | 70% | IME and selection edge cases |
 | Accessibility | VoiceOver / Narrator, keyboard navigation | AccessKit tree audited by a test in every view, Develop tool and the main dialogs: every control named, sliders with value, range and Increment / Decrement, dialogs titled, tool sliders reachable with Tab; crop handles, spots, gradient handles and mask pins by keyboard | 75% | brush strokes and red-eye ellipses need the pointer; not tried with a real screen reader ([audit](#accessibility-audit)) |
 | Feel and responsiveness | GPU-interactive sliders (15.3) | ≤ 16 ms slider budget on GPU; background renders | 75% | colour NR at half resolution, 100k-photo grid test |
 | **UI/UX overall** | | | **~70%** | estimated, weighted by use (develop and library 60%, tools 25%, rest 15%) |
 
-Remaining: **32–54 h** (zoom detail 8–15 h, brush and masking feel 8–12 h, accessibility 2–4
-h, Classic keymap layer 4–8 h, context-menu audit 4–8 h, text-field and IME polish 4–8 h). Output
+Remaining: **28–46 h** (zoom detail 8–15 h, brush and masking feel 8–12 h, accessibility 2–4
+h, context-menu audit 4–8 h, text-field and IME polish 4–8 h). The Classic keymap layer (4–8 h)
+landed 2026-10-16. Output
 modules and AI tools are counted with their features in [target-app-parity.md](target-app-parity.md).
 
 ## Shortcuts
@@ -51,7 +53,9 @@ Export dialog, Space Toggle zoom, ⇧M Create Version, ⇧X Reject + advance, �
 Before/After Split and the History panel; History lost the binding. `W` and `⇧⌘I` also fired the engine command
 under the UI command that wraps it (a no-op error); the UI command now wins.
 
-**Deliberate differences (our key → Lightroom desktop key)** — each is a conflict with another binding we have:
+**Deliberate differences (our key → Lightroom desktop key)** — each is a conflict with another binding we have;
+they are the *shipped* profile's: the [Classic profile](classic-keymap.md) gives most actions Adobe Classic's own
+key alongside them (Pick stays P, Tool Overlay H, Export ⌘⇧E, …):
 
 | Action | Ours | Lightroom desktop | Why |
 |---|---|---|---|
@@ -66,11 +70,20 @@ under the UI command that wraps it (a no-op error); the UI command now wins.
 | Create Version | ⌘⇧S (+ ⇧M) | ⇧M (Windows: Ctrl+⇧S) | — |
 | Select None | ⌘⇧A (+ ⌘D) | ⌘D | — |
 
-**Library culling (KEYC-RATING):** `0–5`, `6–9` and `P/X/U` reach egui on macOS even when displayed in the native menu (adapted from PR #261; issue #283). `Shift+0–9` applies and advances once; `Shift+P` picks and advances in Photo Grid / Square Grid and retains Presets elsewhere. See [library shortcuts](library-shortcuts.md) for the verified Classic mapping and regression coverage. F6, F7 and F8 show / hide the filmstrip, the left panel and the right panel (F8 brings back the panel it hid; `view.rightPanel`). `` ` `` cycles the flag (unflagged → pick → reject → unflagged) and ⌘↑ / ⌘↓ raise / lower it; the native menu leaves ⌘↑ / ⌘↓ to egui so Compare/Survey act on the active photo. `\` shows / hides the Filter Bar in Photo Grid / Square Grid and keeps Show Original in Detail. Remaining Classic gaps: ⌘L (Enable Filters).
+
+**Library culling (KEYC-RATING):** `0–5`, `6–9` and `P/X/U` reach egui on macOS even when displayed in the native menu (adapted from PR #261; issue #283). `Shift+0–9` applies and advances once; `Shift+P` picks and advances in Photo Grid / Square Grid and retains Presets elsewhere — under the [Classic profile](classic-keymap.md) it picks and advances in every view (Presets gets no key) and `\` toggles the filter bar in the grids. See [library shortcuts](library-shortcuts.md) for the verified Classic mapping and regression coverage. F6, F7 and F8 show / hide the filmstrip, the left panel and the right panel (F8 brings back the panel it hid; `view.rightPanel`). `` ` `` cycles the flag (unflagged → pick → reject → unflagged) and ⌘↑ / ⌘↓ raise / lower it; the native menu leaves ⌘↑ / ⌘↓ to egui so Compare/Survey act on the active photo. \` shows / hides the Filter Bar in Photo Grid / Square Grid and keeps Show Original in Detail. Remaining Classic gaps: ⌘L toggle filters (KEYC-RATING).
 
 **Grid thumbnail size (KEYC-COMPARE):** Classic's `=` and `-` increase and decrease the Grid thumbnail size (same keys on macOS and Windows; `+` also works for the larger size here, as Shift+`=` or the keypad). They step the bottom-bar slider by 30 pt inside its 90–480 pt range, in Photo Grid, Square Grid and People only; Detail, Compare, Survey and Reference ignore them, and ⌘= / ⌘− stay Zoom In / Out. See [library shortcuts](library-shortcuts.md).
 
 **Library navigation keys (KEYC-COMPARE):** in Photo Grid and Square Grid, `Home` / `End` make the first / last photo of the view the active, selected one, and `Shift+Left` / `Shift+Right` add the previous / next photo of the view to the selection (the added photo becomes active; the keys never remove a photo from the selection, and do nothing at either end of the view). They wait in the other views, in the full-screen preview, while a text field or a dialog has the keyboard, and when you gave the key to a command; they are listed under Fixed keys in Help → Keyboard Shortcuts. `Cmd+O` (`Ctrl+O` on Windows and Linux) runs File → Open Library… ; View → Visualize HDR has no default key (`Shift+H` cycles the Tool Overlay, issue #224; `Cmd+Shift+H` stays the Histogram). Covered by `crates/ui-egui/src/tests_keymap.rs`; the macOS native menu path for `Cmd+O` is not exercised by the headless tests.
+
+**Classic keymap profile (KEYC rows):** Help ▸ Keyboard Shortcuts → *Keymap Profile* picks between the shipped
+keymap and Lightroom Classic's defaults (`app.setKeymapProfile`, saved as `settings.keymapProfile` in `ui.json`;
+user rebindings sit above either profile). The Classic table is transcribed row by row from Adobe's public
+shortcut list with its source row per action, the keys two commands share follow the module (⌘N / ⌘⇧N / O / \,
+decided by the right panel, not the view), and ⇧P flags and advances everywhere. Full mapping, context rules and
+deliberate differences: [classic-keymap](classic-keymap.md); coverage: `crates/ui-egui/src/tests_keymap.rs`
+(`mod classic`) and the per-profile `no_conflicting_bindings`.
 
 **Still missing / broken:**
 - Tab / ⇧Tab (hide the side panels / all panels): Tab moves the keyboard focus here (accessibility), so it is
@@ -150,6 +163,8 @@ establish OS keyboard delivery or cross-platform acceptance.
 |---|---|---|
 | 2026-10-15 | patch | Context menus: a right-click elsewhere on the same widget while its menu is open moves the menu to the pointer; before it flashed at the new spot and closed (issue #1877); every site uses `widgets::context_menu`; 70% unchanged |
 | 2026-10-15 | patch | KEYC-RATING: `\` shows / hides the Filter Bar in Photo Grid and Square Grid (Show Original in Detail); ⌘L is the filter-bar key left |
+
+| 2026-10-16 | minor | Shortcuts: the Lightroom Classic keymap profile lands ([classic-keymap](classic-keymap.md)): Adobe's Library / Develop tables row by row, context-shared ⌘N / ⌘⇧N / O / \, ⇧P in every view; shortcuts row 85% → 92%, UI remaining 32–54 h → 28–46 h; F1 dropped from the missing list (app.help has it) |
 | 2026-10-14 | patch | Shortcuts: Visualize HDR loses its default ⇧H, which cycles the Tool Overlay (issue #224); both PRs had claimed it |
 | 2026-10-12 | minor | Accessibility: crop handles, spots, gradient handles and mask pins operable by keyboard with AccessKit names and values; Tab order test for the right panels; hand-drawn icons and rows named; 55% → 75%; UI remaining 34–58 h → 32–54 h |
 | 2026-10-13 | minor | Shortcuts: Tool Overlay modes for spot and mask pins on ⇧H (H stays Remove; issue #224), listed with the deliberate differences; dropped from the missing list |

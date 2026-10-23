@@ -201,7 +201,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 let all = app.ui.mask_overlay_all;
                 let all_mac = ui.ctx().os() == egui::os::OperatingSystem::Mac;
                 let all_base = crate::i18n::tr("Show all overlays");
-                let all_tip = match crate::shortcuts::shortcut_of(&app.ui.settings.keymap, "view.maskOverlayAll") {
+                let all_tip = match crate::shortcuts::shortcut_of(app.ui.settings.profile(), &app.ui.settings.keymap, "view.maskOverlayAll") {
                     Some(sc) => format!("{all_base} ({})", crate::menubar::shortcut_text(sc, all_mac)),
                     None => all_base.to_string(),
                 };

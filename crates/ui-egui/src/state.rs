@@ -440,6 +440,9 @@ pub struct AppSettings {
     pub grid_badges: GridBadges,
     /// Shortcuts the user changed (Help ▸ Keyboard Shortcuts): command id → shortcut, `""` = none.
     pub keymap: crate::shortcuts::Keymap,
+    /// Which set of default shortcuts commands use (`app.setKeymapProfile`; "lightroom" |
+    /// "classic"). The user's `keymap` sits above it. An unknown saved value is the default.
+    pub keymap_profile: String,
     /// Auto (follow the system), Dark or Light.
     pub appearance_mode: AppearanceMode,
     /// The theme of the dark appearance.
@@ -484,6 +487,7 @@ impl Default for AppSettings {
             film_badges: true,
             grid_badges: GridBadges::Auto,
             keymap: Default::default(),
+            keymap_profile: crate::keymap_profiles::LIGHTROOM.to_string(),
             appearance_mode: AppearanceMode::Dark,
             dark_theme: DarkTheme::Charcoal,
             light_theme: LightTheme::Silver,
@@ -494,6 +498,13 @@ impl Default for AppSettings {
             zoom_to_focus: true,
             loupe_info: LoupeInfo::default(),
         }
+    }
+}
+
+impl AppSettings {
+    /// The active keymap profile; an unknown saved `keymap_profile` is the default keymap.
+    pub fn profile(&self) -> crate::keymap_profiles::KeyProfile {
+        crate::keymap_profiles::KeyProfile::parse_id(&self.keymap_profile)
     }
 }
 

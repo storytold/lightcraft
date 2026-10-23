@@ -21,6 +21,7 @@ pub mod headless;
 pub mod i18n;
 pub mod icons;
 pub mod import;
+pub mod keymap_profiles;
 pub mod lightroom_import;
 pub mod links;
 pub mod menu_level;
@@ -104,6 +105,8 @@ mod tests_guided_guides;
 mod tests_info_dialogs;
 #[cfg(test)]
 mod tests_keymap;
+#[cfg(test)]
+mod tests_keymap_profile;
 #[cfg(test)]
 mod tests_keyword_files;
 #[cfg(test)]

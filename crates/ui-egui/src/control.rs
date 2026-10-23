@@ -84,13 +84,13 @@ pub fn all_commands(app: &LightcraftApp) -> Value {
         .map(|c| {
             let mut v = serde_json::to_value(&c).unwrap_or_default();
             if let Some(o) = v.as_object_mut() {
-                o.insert("shortcut".into(), json!(crate::shortcuts::shortcut_of(keymap, c.id)));
+                o.insert("shortcut".into(), json!(crate::shortcuts::shortcut_of(app.ui.settings.profile(), keymap, c.id)));
             }
             v
         })
         .collect();
     for (id, label, sc, menu) in crate::menus::ui_commands() {
-        let sc = crate::shortcuts::binding(keymap, id, *sc);
+        let sc = crate::shortcuts::binding(app.ui.settings.profile(), keymap, id, *sc);
         v.push(json!({"id": id, "label": label, "shortcut": sc, "menu": [menu], "enabled": crate::menus::ui_enabled(app, id), "ui": true}));
     }
     Value::Array(v)

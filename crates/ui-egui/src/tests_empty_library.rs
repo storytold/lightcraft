@@ -132,14 +132,23 @@ fn the_top_bar_imports_in_every_library() {
 #[test]
 fn the_hint_shows_the_shortcut_as_bound() {
     let mut keymap = crate::state::AppSettings::default().keymap;
-    assert_eq!(empty_library::hint(&keymap, true), "or drop photos and folders into this window · ⌘⇧I");
-    assert_eq!(empty_library::hint(&keymap, false), "or drop photos and folders into this window · Ctrl+Shift+I");
+    assert_eq!(
+        empty_library::hint(crate::keymap_profiles::KeyProfile::Lightroom, &keymap, true),
+        "or drop photos and folders into this window · ⌘⇧I"
+    );
+    assert_eq!(
+        empty_library::hint(crate::keymap_profiles::KeyProfile::Lightroom, &keymap, false),
+        "or drop photos and folders into this window · Ctrl+Shift+I"
+    );
     // a remapped shortcut is the one shown
-    crate::shortcuts::assign(&mut keymap, "file.addPhotos", Some("Cmd+Alt+I")).unwrap();
-    assert_eq!(empty_library::hint(&keymap, true), "or drop photos and folders into this window · ⌘⌥I");
+    crate::shortcuts::assign(crate::keymap_profiles::KeyProfile::Lightroom, &mut keymap, "file.addPhotos", Some("Cmd+Alt+I")).unwrap();
+    assert_eq!(
+        empty_library::hint(crate::keymap_profiles::KeyProfile::Lightroom, &keymap, true),
+        "or drop photos and folders into this window · ⌘⌥I"
+    );
     // and none at all leaves the key out
-    crate::shortcuts::assign(&mut keymap, "file.addPhotos", None).unwrap();
-    assert_eq!(empty_library::hint(&keymap, true), "or drop photos and folders into this window");
+    crate::shortcuts::assign(crate::keymap_profiles::KeyProfile::Lightroom, &mut keymap, "file.addPhotos", None).unwrap();
+    assert_eq!(empty_library::hint(crate::keymap_profiles::KeyProfile::Lightroom, &keymap, true), "or drop photos and folders into this window");
 }
 
 #[test]

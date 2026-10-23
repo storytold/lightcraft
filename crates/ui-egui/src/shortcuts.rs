@@ -8,6 +8,7 @@ use egui::{Key, Modifiers};
 use serde_json::{Value, json};
 
 use crate::LightcraftApp;
+use crate::keymap_profiles::{CLASSIC_ALIASES, KeyProfile, profile_default};
 
 /// The user's changes to the keymap: command id → shortcut (`""` = no shortcut). Saved with the
 /// app settings (`ui.json`); commands not listed keep their declared shortcut.
@@ -52,39 +53,46 @@ pub fn find_bindable(id: &str) -> Option<&'static Bindable> {
     bindable().iter().find(|b| b.id == id)
 }
 
-/// The shortcut `id` has now: the user's choice (`""` = none), else the declared one. An entry
-/// that doesn't parse (a hand-edited `ui.json`, a modifier-only key saved by an older build) is
-/// ignored.
-pub fn binding<'a>(keymap: &'a Keymap, id: &str, default: Option<&'a str>) -> Option<&'a str> {
+/// The shortcut `id` has now under `profile`: the user's choice (`""` = none), else the active
+/// profile's default, else the declared one. An entry that doesn't parse (a hand-edited
+/// `ui.json`, a modifier-only key saved by an older build) is ignored.
+pub fn binding<'a>(profile: KeyProfile, keymap: &'a Keymap, id: &str, default: Option<&'static str>) -> Option<&'a str> {
     match keymap.get(id) {
         Some(sc) if sc.is_empty() => None,
         Some(sc) if parse(sc).is_some() => Some(sc.as_str()),
-        _ => default,
+        _ => profile_default(profile, id, default),
     }
 }
 
-/// The effective shortcut of command `id` (`None` for unknown commands).
-pub fn shortcut_of<'a>(keymap: &'a Keymap, id: &str) -> Option<&'a str> {
-    find_bindable(id).and_then(|b| binding(keymap, id, b.default))
+/// The effective shortcut of command `id` under `profile` (`None` for unknown commands).
+pub fn shortcut_of<'a>(profile: KeyProfile, keymap: &'a Keymap, id: &str) -> Option<&'a str> {
+    find_bindable(id).and_then(|b| binding(profile, keymap, id, b.default))
 }
 
-/// Engine commands that intentionally share a key and are disambiguated by context in [`handle`].
-pub const CONTEXTUAL: &[(&str, &str)] = &[("photo.reject", "crop.rotateAspect")];
+/// Commands that intentionally share a key and are disambiguated by context in [`handle`]:
+/// the X pair by the Crop panel, the Classic pairs by whether an edit tool is open.
+pub const CONTEXTUAL: &[(&str, &str)] = &[
+    ("photo.reject", "crop.rotateAspect"),
+    ("view.people", "view.maskOverlay"),
+    ("dialog.newAlbum", "version.create"),
+    ("dialog.newFolder", "dialog.createPreset"),
+];
 
-/// Commands other than `id` whose shortcut is the key `sc` (contextual partners excepted).
-pub fn conflicts(keymap: &Keymap, id: &str, sc: &str) -> Vec<&'static str> {
+/// Commands other than `id` whose shortcut is the key `sc` under `profile` (contextual partners
+/// excepted).
+pub fn conflicts(profile: KeyProfile, keymap: &Keymap, id: &str, sc: &str) -> Vec<&'static str> {
     let Some(key) = parse(sc) else { return vec![] };
     bindable()
         .iter()
         .filter(|b| b.id != id && !CONTEXTUAL.iter().any(|(x, y)| (*x == id && *y == b.id) || (*y == id && *x == b.id)))
-        .filter(|b| binding(keymap, b.id, b.default).and_then(parse) == Some(key))
+        .filter(|b| binding(profile, keymap, b.id, b.default).and_then(parse) == Some(key))
         .map(|b| b.id)
         .collect()
 }
 
-/// Give `id` the shortcut `sc` (`None` = no shortcut), taking it away from commands that had the
-/// same key. Returns the commands that lost it.
-pub fn assign(keymap: &mut Keymap, id: &str, sc: Option<&str>) -> Result<Vec<&'static str>, String> {
+/// Give `id` the shortcut `sc` under `profile` (`None` = no shortcut), taking it away from
+/// commands that had the same key. Returns the commands that lost it.
+pub fn assign(profile: KeyProfile, keymap: &mut Keymap, id: &str, sc: Option<&str>) -> Result<Vec<&'static str>, String> {
     let b = find_bindable(id).ok_or_else(|| format!("unknown command: {id}"))?;
     let sc = match sc.map(str::trim).filter(|s| !s.is_empty()) {
         None => None,
@@ -98,17 +106,17 @@ pub fn assign(keymap: &mut Keymap, id: &str, sc: Option<&str>) -> Result<Vec<&'s
             Some(canonical)
         }
     };
-    let lost = sc.as_deref().map(|s| conflicts(keymap, id, s)).unwrap_or_default();
+    let lost = sc.as_deref().map(|s| conflicts(profile, keymap, id, s)).unwrap_or_default();
     for other in &lost {
-        set(keymap, other, None);
+        set(profile, keymap, other, None);
     }
-    set(keymap, b.id, sc.as_deref());
+    set(profile, keymap, b.id, sc.as_deref());
     Ok(lost)
 }
 
-/// Store `sc` for `id`, dropping the entry when it equals the declared shortcut.
-fn set(keymap: &mut Keymap, id: &str, sc: Option<&str>) {
-    let default = find_bindable(id).and_then(|b| b.default);
+/// Store `sc` for `id`, dropping the entry when it equals the active profile's shortcut.
+fn set(profile: KeyProfile, keymap: &mut Keymap, id: &str, sc: Option<&str>) {
+    let default = profile_default(profile, id, find_bindable(id).and_then(|b| b.default));
     let same = match (sc, default) {
         (None, None) => true,
         (Some(a), Some(b)) => parse(a) == parse(b),
@@ -121,27 +129,45 @@ fn set(keymap: &mut Keymap, id: &str, sc: Option<&str>) {
     }
 }
 
-/// Restore the declared shortcut of `id`, taking it away from a command the user gave it to.
-pub fn reset(keymap: &mut Keymap, id: &str) -> Result<Vec<&'static str>, String> {
+/// Restore the active profile's shortcut of `id`, taking it away from a command the user gave it to.
+pub fn reset(profile: KeyProfile, keymap: &mut Keymap, id: &str) -> Result<Vec<&'static str>, String> {
     let b = find_bindable(id).ok_or_else(|| format!("unknown command: {id}"))?;
-    assign(keymap, id, b.default)
+    assign(profile, keymap, id, profile_default(profile, id, b.default))
 }
 
 /// `app.setShortcut {id, shortcut?, reset?}`: `shortcut` null or `""` removes it.
 pub fn set_shortcut(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
     let id = p.get("id").and_then(Value::as_str).ok_or("missing id")?;
+    let profile = app.ui.settings.profile();
     let keymap = &mut app.ui.settings.keymap;
     let lost = if p.get("reset").and_then(Value::as_bool).unwrap_or(false) {
-        reset(keymap, id)?
+        reset(profile, keymap, id)?
     } else {
         match p.get("shortcut") {
             None => return Err("missing shortcut (null removes it)".into()),
-            Some(Value::Null) => assign(keymap, id, None)?,
-            Some(Value::String(s)) => assign(keymap, id, Some(s))?,
+            Some(Value::Null) => assign(profile, keymap, id, None)?,
+            Some(Value::String(s)) => assign(profile, keymap, id, Some(s))?,
             Some(_) => return Err("shortcut must be a string or null".into()),
         }
     };
-    Ok(json!({"id": id, "shortcut": shortcut_of(&app.ui.settings.keymap, id), "removedFrom": lost}))
+    Ok(json!({"id": id, "shortcut": shortcut_of(profile, &app.ui.settings.keymap, id), "removedFrom": lost}))
+}
+
+/// `app.setKeymapProfile {profile: "lightroom" | "classic"}`: switch which set of default
+/// shortcuts commands resolve to. The user's own rebindings stay on top of either profile.
+pub fn set_keymap_profile(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
+    let name = p.get("profile").and_then(Value::as_str).ok_or_else(|| "unknown keymap profile".to_string())?;
+    let profile = if name == crate::keymap_profiles::LIGHTROOM {
+        KeyProfile::Lightroom
+    } else if name == crate::keymap_profiles::CLASSIC {
+        KeyProfile::Classic
+    } else {
+        return Err("unknown keymap profile".into());
+    };
+    app.ui.settings.keymap_profile = profile.id().to_string();
+    // a key being recorded belongs to the rows of the profile that was open
+    app.recording_shortcut = None;
+    Ok(json!({"profile": profile.id()}))
 }
 
 /// ⌘ / ⇧ / ⌥ / ⌃ themselves: they modify a shortcut's key, they can't be it.
@@ -229,6 +255,14 @@ pub const ALIASES: &[(&str, &str, &str)] = &[
     ("Alt+7", "keyword.toggleFromSet", r#"{"index": 7}"#),
     ("Alt+8", "keyword.toggleFromSet", r#"{"index": 8}"#),
     ("Alt+9", "keyword.toggleFromSet", r#"{"index": 9}"#),
+    // modules as Adobe maps them: 1 Library, 2 Develop, 5 Slideshow (Ctrl on Windows/Linux,
+    // Cmd = ⌘ on macOS)
+    ("Ctrl+Alt+1", "view.photoGrid", "{}"),
+    ("Ctrl+Alt+2", "view.develop", "{}"),
+    ("Ctrl+Alt+5", "view.slideshow", "{}"),
+    ("Cmd+Alt+1", "view.photoGrid", "{}"),
+    ("Cmd+Alt+2", "view.develop", "{}"),
+    ("Cmd+Alt+5", "view.slideshow", "{}"),
 ];
 
 pub fn parse(s: &str) -> Option<(Modifiers, Key)> {
@@ -366,13 +400,25 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
     // shortcuts the native menu bar handles (it consumes those key presses itself)
     let native = |sc: &str| app.native_shortcuts.contains(sc);
     let mut aliased: Vec<(&str, serde_json::Value)> = Vec::new();
+    let profile = app.ui.settings.profile();
     let keymap = &app.ui.settings.keymap;
     let grid = library_grid(app);
     // The grid navigation keys act on the photos in view, so they wait while the full-screen preview
     // covers the grid: a key must not move the selection onto photos nobody can see.
     let grid_navigation = grid && !app.ui.fullscreen;
-    // keys the user gave to a command: the fixed bindings below (aliases, ratings) yield to them
-    let taken: Vec<(Modifiers, Key)> = keymap.values().filter_map(|s| parse(s)).collect();
+    // which side of Classic's shared keys fires (see the bindable loop below)
+    let edit_tool_open = app.ui.right.is_edit_tool();
+    // the user's own keys: they own Enter's grid fallback, exactly as before profiles existed
+    // (tool.done declares Enter too — a declared key never silenced the grid's open); an entry
+    // for a command the build doesn't know is not a binding and claims nothing
+    let user_keys: Vec<(Modifiers, Key)> = keymap.iter().filter(|(id, _)| find_bindable(id).is_some()).filter_map(|(_, s)| parse(s)).collect();
+    // keys a binding owns — the user's and the active profile's: the fixed bindings below
+    // (aliases, ratings) yield to them
+    let taken: Vec<(Modifiers, Key)> =
+        user_keys.iter().copied().chain(bindable().iter().filter_map(|b| binding(profile, keymap, b.id, b.default).and_then(parse))).collect();
+    // which key the brush sits on: the shipped profile keeps it on B, whose grid action (the
+    // Quick Collection) must stay on B when Classic moves the brush to K
+    let brush_on_b = binding(profile, keymap, "tool.brush", find_bindable("tool.brush").and_then(|b| b.default)) == Some("B");
     // an open popup (a menu, a date picker's calendar) closes on Esc itself: Esc's command (Back,
     // which also closes dialogs) waits until nothing is open
     let popup_open = egui::Popup::is_any_open(ctx);
@@ -384,27 +430,56 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
             && app.session.active().is_some()
             && !popup_open
             && !native("Enter")
-            && !taken.contains(&(Modifiers::NONE, Key::Enter))
+            && !user_keys.contains(&(Modifiers::NONE, Key::Enter))
             && matches(i, Modifiers::NONE, Key::Enter)
         {
             fire.push("view.detail".to_string());
         }
         for b in bindable() {
-            if let Some(sc) = binding(keymap, b.id, b.default)
+            // Classic shares a few keys between its Library and Develop tables: the open panel
+            // decides which side fires (docs/classic-keymap.md → "shares by context")
+            let yields = profile == KeyProfile::Classic
+                && match b.id {
+                    "view.people" | "dialog.newAlbum" | "dialog.newFolder" => edit_tool_open,
+                    "view.maskOverlay" | "dialog.createPreset" | "version.create" => !edit_tool_open,
+                    _ => false,
+                }
+                // and only while the two sides still share one key: a rebind that moved a side
+                // away silences nothing (F9 for People keeps firing with the Edit panel open)
+                && CONTEXTUAL.iter().any(|(x, y)| {
+                    let partner = if *x == b.id { *y } else if *y == b.id { *x } else { return false };
+                    find_bindable(partner).is_some_and(|pb| binding(profile, keymap, partner, pb.default) == binding(profile, keymap, b.id, b.default))
+                });
+            // a profile default yields to the user's own key: after a profile switch the
+            // displaced default must not fire beside the assignment that took its key. An
+            // entry that does not parse is not an override — the binding falls back to the
+            // profile default, which the displaced rule then still yields.
+            let overridden = keymap.get(b.id).is_some_and(|s| s.is_empty() || parse(s).is_some());
+            let displaced =
+                !overridden && binding(profile, keymap, b.id, b.default).and_then(parse).is_some_and(|mk| user_keys.contains(&mk));
+            if let Some(sc) = binding(profile, keymap, b.id, b.default)
                 && let Some((m, k)) = parse(sc)
                 && !native(sc)
                 && !(k == Key::Escape && popup_open)
                 && matches(i, m, k)
+                && !yields
+                && !displaced
                 && let Some(id) = grid_key_command(keymap, grid, app.ui.fullscreen, b.id, (m, k))
             {
                 fire.push(id.to_string());
             }
         }
-        for (sc, id, params) in ALIASES {
+        // secondary keys: the Classic profile adds its own; one a binding took goes quiet
+        let profile_aliases: &[(&str, &str, &str)] = if profile == KeyProfile::Classic { CLASSIC_ALIASES } else { &[] };
+        for (sc, id, params) in ALIASES.iter().chain(profile_aliases) {
             if let Some((m, k)) = parse(sc).filter(|_| !native(sc))
                 && !(k == Key::Escape && popup_open)
-                && !taken.contains(&(m, k))
+                // the event, not the tuple: on Windows/Linux Cmd is the physical Ctrl, so one
+                // press reads both module aliases — and a user's own key on either reading owns
+                // the event. One event fires an alias's command once.
+                && !taken.iter().any(|(tm, tk)| matches(i, *tm, *tk))
                 && matches(i, m, k)
+                && !aliased.iter().any(|(a, _)| *a == *id)
             {
                 aliased.push((id, serde_json::from_str(params).unwrap_or_default()));
             }
@@ -422,6 +497,11 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
             if matches(i, Modifiers::NONE, key) && !native(sc) && !taken.contains(&(Modifiers::NONE, key)) {
                 fire.push(format!("label:{label}"));
             }
+        }
+        // B: the Quick Collection in both grids — the album key itself, so Classic keeps it
+        // when the brush moves to K (the shipped profile's brush on B carries the same action)
+        if grid && matches(i, Modifiers::NONE, Key::B) && !native("B") && !taken.contains(&(Modifiers::NONE, Key::B)) {
+            fire.push("album.toggleTarget".to_string());
         }
         if grid_navigation {
             // Home / End: the first / last photo of the view
@@ -593,8 +673,12 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
                     continue;
                 }
             }
-            // B: the brush while editing; in the grids, add to the target album (Quick Collection)
-            if f == "tool.brush" && matches!(app.ui.view, crate::state::ViewMode::PhotoGrid | crate::state::ViewMode::SquareGrid) {
+            // B: the Quick Collection in the grids (both profiles' album key). The shipped
+            // profile's brush sits on B and its grid branch carries the same action; Classic
+            // moves the brush to K, and the fixed B above toggles the album alone.
+            if f == "album.toggleTarget"
+                || (f == "tool.brush" && brush_on_b && matches!(app.ui.view, crate::state::ViewMode::PhotoGrid | crate::state::ViewMode::SquareGrid))
+            {
                 if let Ok(r) = app.run("album.toggleTarget", json!({})) {
                     let n = app.session.selected().len();
                     let what = crate::i18n::tr_format!("{n} photo{}", if n == 1 { "" } else { "s" }, n = n);
@@ -763,13 +847,13 @@ mod tests {
         let mut h = library();
         let both = vec![PhotoId(1), PhotoId(2)];
         h.app.session.execute("library.select", &json!({"ids": [1, 2], "active": 2})).unwrap();
-        assert_eq!(super::shortcut_of(&h.app.ui.settings.keymap, "library.selectOnlyActive"), Some("Cmd+Shift+D"));
+        assert_eq!(super::shortcut_of(h.app.ui.settings.profile(), &h.app.ui.settings.keymap, "library.selectOnlyActive"), Some("Cmd+Shift+D"));
         // unbound: the default chord does nothing
-        super::assign(&mut h.app.ui.settings.keymap, "library.selectOnlyActive", None).unwrap();
+        super::assign(h.app.ui.settings.profile(), &mut h.app.ui.settings.keymap, "library.selectOnlyActive", None).unwrap();
         select_only_active_chord(&mut h);
         assert_eq!(h.app.session.selection.ids, both);
         // rebound: the new key narrows the selection and the old chord still does not
-        super::assign(&mut h.app.ui.settings.keymap, "library.selectOnlyActive", Some("F9")).unwrap();
+        super::assign(h.app.ui.settings.profile(), &mut h.app.ui.settings.keymap, "library.selectOnlyActive", Some("F9")).unwrap();
         select_only_active_chord(&mut h);
         assert_eq!(h.app.session.selection.ids, both);
         key(&mut h, "F9", false);
@@ -1054,33 +1138,33 @@ mod tests {
     #[test]
     fn assigning_a_key_moves_it_and_reset_restores_it() {
         let mut keymap = Keymap::new();
-        assert_eq!(shortcut_of(&keymap, "view.survey"), Some("N"));
+        assert_eq!(shortcut_of(crate::keymap_profiles::KeyProfile::Lightroom, &keymap, "view.survey"), Some("N"));
         // D belongs to Detail: Survey takes it, Detail loses it
-        let lost = assign(&mut keymap, "view.survey", Some("D")).unwrap();
+        let lost = assign(crate::keymap_profiles::KeyProfile::Lightroom, &mut keymap, "view.survey", Some("D")).unwrap();
         assert_eq!(lost, vec!["view.detail"]);
-        assert_eq!(shortcut_of(&keymap, "view.survey"), Some("D"));
-        assert_eq!(shortcut_of(&keymap, "view.detail"), None);
+        assert_eq!(shortcut_of(crate::keymap_profiles::KeyProfile::Lightroom, &keymap, "view.survey"), Some("D"));
+        assert_eq!(shortcut_of(crate::keymap_profiles::KeyProfile::Lightroom, &keymap, "view.detail"), None);
         // restoring Detail takes D back
-        let lost = reset(&mut keymap, "view.detail").unwrap();
+        let lost = reset(crate::keymap_profiles::KeyProfile::Lightroom, &mut keymap, "view.detail").unwrap();
         assert_eq!(lost, vec!["view.survey"]);
-        assert_eq!(shortcut_of(&keymap, "view.detail"), Some("D"));
-        reset(&mut keymap, "view.survey").unwrap();
+        assert_eq!(shortcut_of(crate::keymap_profiles::KeyProfile::Lightroom, &keymap, "view.detail"), Some("D"));
+        reset(crate::keymap_profiles::KeyProfile::Lightroom, &mut keymap, "view.survey").unwrap();
         assert!(keymap.is_empty(), "declared shortcuts aren't stored: {keymap:?}");
         // a command without a declared shortcut can get one, and lose it again
-        assign(&mut keymap, "view.photoGrid", Some("cmd+shift+1")).unwrap_err();
-        assign(&mut keymap, "view.photoGrid", Some("Cmd+Shift+1")).unwrap();
-        assert_eq!(shortcut_of(&keymap, "view.photoGrid"), Some("Cmd+Shift+1"));
-        assign(&mut keymap, "view.photoGrid", None).unwrap();
+        assign(crate::keymap_profiles::KeyProfile::Lightroom, &mut keymap, "view.photoGrid", Some("cmd+shift+1")).unwrap_err();
+        assign(crate::keymap_profiles::KeyProfile::Lightroom, &mut keymap, "view.photoGrid", Some("Cmd+Shift+1")).unwrap();
+        assert_eq!(shortcut_of(crate::keymap_profiles::KeyProfile::Lightroom, &keymap, "view.photoGrid"), Some("Cmd+Shift+1"));
+        assign(crate::keymap_profiles::KeyProfile::Lightroom, &mut keymap, "view.photoGrid", None).unwrap();
         assert!(keymap.is_empty());
     }
 
     #[test]
     fn bad_assignments_are_errors() {
         let mut keymap = Keymap::new();
-        assert!(assign(&mut keymap, "no.suchCommand", Some("K")).is_err());
-        assert!(assign(&mut keymap, "view.survey", Some("Cmd+Nonsense")).is_err());
-        assert!(assign(&mut keymap, "view.survey", Some("Cmd+Q")).is_err());
-        assert!(assign(&mut keymap, "view.survey", Some("Cmd+,")).is_err());
+        assert!(assign(crate::keymap_profiles::KeyProfile::Lightroom, &mut keymap, "no.suchCommand", Some("K")).is_err());
+        assert!(assign(crate::keymap_profiles::KeyProfile::Lightroom, &mut keymap, "view.survey", Some("Cmd+Nonsense")).is_err());
+        assert!(assign(crate::keymap_profiles::KeyProfile::Lightroom, &mut keymap, "view.survey", Some("Cmd+Q")).is_err());
+        assert!(assign(crate::keymap_profiles::KeyProfile::Lightroom, &mut keymap, "view.survey", Some("Cmd+,")).is_err());
         assert!(keymap.is_empty());
     }
 
@@ -1091,9 +1175,9 @@ mod tests {
         keymap.insert("view.survey".into(), "Hyper+☃".into());
         keymap.insert("no.suchCommand".into(), "K".into());
         keymap.insert("view.detail".into(), "Cmd+SuperLeft".into());
-        assert_eq!(shortcut_of(&keymap, "view.survey"), Some("N"));
-        assert_eq!(shortcut_of(&keymap, "view.detail"), Some("D"));
-        assert!(conflicts(&keymap, "view.compare", "N").contains(&"view.survey"));
+        assert_eq!(shortcut_of(crate::keymap_profiles::KeyProfile::Lightroom, &keymap, "view.survey"), Some("N"));
+        assert_eq!(shortcut_of(crate::keymap_profiles::KeyProfile::Lightroom, &keymap, "view.detail"), Some("D"));
+        assert!(conflicts(crate::keymap_profiles::KeyProfile::Lightroom, &keymap, "view.compare", "N").contains(&"view.survey"));
         assert_eq!(parse("Hyper+K"), None);
     }
 
@@ -1101,40 +1185,43 @@ mod tests {
     #[test]
     fn contextual_partners_are_not_conflicts() {
         let keymap = Keymap::new();
-        assert!(conflicts(&keymap, "photo.reject", "X").is_empty());
+        assert!(conflicts(crate::keymap_profiles::KeyProfile::Lightroom, &keymap, "photo.reject", "X").is_empty());
     }
 
-    /// No key fires two different actions (a UI command may shadow the engine command it wraps).
+    /// No key fires two different actions under either keymap profile (a UI command may shadow
+    /// the engine command it wraps): profile-resolved bindings never double-fire, and a
+    /// secondary key its own binding took goes quiet — as `handle` dispatches them.
     #[test]
     fn no_conflicting_bindings() {
-        let mut ui: Vec<((Modifiers, Key), String)> = Vec::new();
-        for (id, _, sc, _) in crate::menus::ui_commands() {
-            if let Some(k) = sc.and_then(parse) {
-                ui.push((k, id.to_string()));
+        use crate::keymap_profiles::{CLASSIC_ALIASES, KeyProfile};
+        for profile in KeyProfile::ALL {
+            let empty = Keymap::new();
+            let mut bound: Vec<((Modifiers, Key), &str)> = Vec::new();
+            for b in bindable() {
+                if let Some(k) = binding(profile, &empty, b.id, b.default).and_then(parse) {
+                    bound.push((k, b.id));
+                }
             }
-        }
-        for (sc, id, _) in ALIASES {
-            ui.push((parse(sc).unwrap(), format!("alias {id}")));
-        }
-        let mut engine: Vec<((Modifiers, Key), &str)> = Vec::new();
-        for c in lightcraft_engine::command_specs() {
-            if let Some(k) = c.shortcut.and_then(parse) {
-                engine.push((k, c.id));
+            for (i, (k, a)) in bound.iter().enumerate() {
+                for (k2, b) in &bound[i + 1..] {
+                    let contextual = CONTEXTUAL.iter().any(|(x, y)| (x == a && y == b) || (x == b && y == a));
+                    assert!(k != k2 || contextual, "[{profile:?}] {a} and {b} share a key");
+                }
             }
-        }
-        for (sc, id, _) in ALIASES {
-            let k = parse(sc).unwrap();
-            assert!(!engine.iter().any(|(k2, _)| *k2 == k), "alias {sc} ({id}) shadows an engine shortcut");
-        }
-        for (i, (k, a)) in ui.iter().enumerate() {
-            for (k2, b) in &ui[i + 1..] {
-                assert!(k != k2, "{a} and {b} share a key");
+            // the secondary keys: one the profile's own bindings took goes quiet (`handle` skips
+            // it), the rest must never double-fire
+            let taken: Vec<(Modifiers, Key)> = bound.iter().map(|(k, _)| *k).collect();
+            let extra: &[(&str, &str, &str)] = if profile == KeyProfile::Classic { CLASSIC_ALIASES } else { &[] };
+            let mut aliased: Vec<((Modifiers, Key), String)> = Vec::new();
+            for (sc, id, _) in ALIASES.iter().chain(extra) {
+                if let Some(k) = parse(sc).filter(|k| !taken.contains(k)) {
+                    aliased.push((k, format!("alias {id}")));
+                }
             }
-        }
-        for (i, (k, a)) in engine.iter().enumerate() {
-            for (k2, b) in &engine[i + 1..] {
-                let contextual = CONTEXTUAL.iter().any(|(x, y)| (x == a && y == b) || (x == b && y == a));
-                assert!(k != k2 || contextual, "{a} and {b} share a key");
+            for (i, (k, a)) in aliased.iter().enumerate() {
+                for (k2, b) in &aliased[i + 1..] {
+                    assert!(k != k2, "[{profile:?}] {a} and {b} share a key");
+                }
             }
         }
     }
@@ -1208,7 +1295,7 @@ mod tests {
                 h.app.recording_shortcut = Some("view.survey".into());
                 key(&mut h, "Enter", false);
                 assert_eq!(h.app.ui.view, view, "recording owns Enter");
-                assert_eq!(super::super::shortcut_of(&h.app.ui.settings.keymap, "view.survey"), Some("Enter"));
+                assert_eq!(super::super::shortcut_of(h.app.ui.settings.profile(), &h.app.ui.settings.keymap, "view.survey"), Some("Enter"));
             }
         }
 
