@@ -1,5 +1,13 @@
 # What's new in LightCraft
 
+## 2026-10-22
+
+### GPX track logs read escaped values correctly
+- Coordinates, elevations and times in a GPX track can contain XML character references such as
+  `&#53;`. LightCraft now decodes those characters before parsing values, reports malformed or
+  undeclared references as an error, and keeps CDATA literal. Auto-Tag places photos at the track
+  position represented by their capture time.
+
 ## 2026-10-21
 
 ### Sharper resampling in HDR and panorama merges
