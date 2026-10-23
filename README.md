@@ -536,7 +536,9 @@ Humans and agents follow the same rules, so read [AGENTS.md](AGENTS.md) first. T
   `unsafe`, checked indexing on anything derived from input, and a regression test with every crash fix. Details in
   [AGENTS.md](AGENTS.md#never-crash-outranks-feature-work).
 
-Questions, ideas or a bug you'd like to talk through first? Bring them to [Discord](https://discord.gg/artcraft).
+To take something on, claim its issue with a comment and open a pull request with `Fixes #123` in the description;
+[CONTRIBUTING.md](CONTRIBUTING.md) has the whole workflow. Questions, ideas or a bug you'd like to talk through
+first? Bring them to [Discord](https://discord.gg/artcraft).
 
 <br>
 

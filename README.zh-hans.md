@@ -466,7 +466,8 @@ egui 前端是一个可替换的 crate；它下面没有任何东西知道 UI �
   `unsafe`，对任何来自输入的数据都做受检索引，并且每个崩溃修复都带一个回归测试。细节见
   [AGENTS.md](AGENTS.md#never-crash-outranks-feature-work)。
 
-有问题、想法，或者想先讨论一个 bug？来 [Discord](https://discord.gg/artcraft)。
+想接手某项工作，先在对应 issue 下留言认领，再提交 pull request，并在描述中写上 `Fixes #123`；
+完整流程见 [CONTRIBUTING.md](CONTRIBUTING.md)。有问题、想法，或者想先讨论一个 bug？来 [Discord](https://discord.gg/artcraft)。
 
 <br>
 
