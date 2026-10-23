@@ -2342,5 +2342,12 @@
   "Checking the GPU…": "GPU を確認中…",
   "CPU": "CPU",
   "A face model uses the GPU only when a check shows it gives the same results faster.": "顔モデルが GPU を使うのは、同じ結果をより速く出せると確認できた場合だけです。",
-  "Checking the GPU for faces": "顔用の GPU を確認中"
+  "Checking the GPU for faces": "顔用の GPU を確認中",
+  "Select all": "すべて選択",
+  "Clear selection": "選択を解除",
+  "✓ Selected": "✓ 選択済み",
+  "Not selected": "未選択",
+  "Done selecting": "選択を終了",
+  "Select faces…": "顔を選択…",
+  "Click faces to select or deselect. Shift-click extends that action to a range. Double-click opens a photo.": "クリックで顔を選択または選択解除します。Shiftキーを押しながらクリックすると範囲に適用します。ダブルクリックで写真を開きます。"
 }

@@ -2186,5 +2186,12 @@
   "Suggests who is in a photo from the faces you have named. Everything stays on your computer.": "根据你已命名的人脸，推测照片中的人物。所有数据仅保存在本机。",
   "This build cannot run recognition models: they can be added and chosen, not used.": "此版本无法运行识别模型：可以添加和选择，但无法使用。",
   "Detect Faces (Photo menu) needs it: a small one-time download.": "“检测人脸”（照片菜单）依赖它：一次性小文件下载。",
-  "This build has nowhere to keep face models, so the model list is not available. (The desktop app has.)": "此版本无法存放人脸模型，因此模型列表不可用。（桌面版可以存放。）"
+  "This build has nowhere to keep face models, so the model list is not available. (The desktop app has.)": "此版本无法存放人脸模型，因此模型列表不可用。（桌面版可以存放。）",
+  "Select all": "全选",
+  "Clear selection": "清除选择",
+  "✓ Selected": "✓ 已选择",
+  "Not selected": "未选择",
+  "Done selecting": "完成选择",
+  "Select faces…": "选择人脸…",
+  "Click faces to select or deselect. Shift-click extends that action to a range. Double-click opens a photo.": "单击以选择或取消选择人脸。按住 Shift 单击可将操作扩展到一个范围。双击打开照片。"
 }

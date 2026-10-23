@@ -47,6 +47,142 @@ fn only(s: &Session) -> PhotoId {
     s.catalog.photos().next().unwrap().id
 }
 
+/// Face metadata history preserves original bytes, sidecars and every developed-state marker.
+#[test]
+fn face_history_never_writes_sidecars_or_marks_photos_edited() {
+    use lightcraft_meta::{Region, RegionKind};
+    let src = temp_dir("face-history");
+    for (file, seed) in [("a.png", 3), ("b.png", 9)] {
+        write_png(&src.join(file), seed);
+    }
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let mut ids: Vec<_> = s.catalog.photos().map(|p| p.id).collect();
+    ids.sort();
+    assert_eq!(ids.len(), 2, "the bulk fixture must contain distinct photo contents");
+    let rect = lightcraft_geom::Rect { x0: 0.1, y0: 0.1, x1: 0.4, y1: 0.4 };
+    for id in &ids {
+        let mut meta = s.catalog.photo(*id).unwrap().meta.clone();
+        meta.regions = vec![Region { rect, kind: RegionKind::Face, name: None, description: None }];
+        s.commit("setup", lightcraft_catalog::Op::SetMeta { id: *id, meta: Box::new(meta) }).unwrap();
+    }
+    s.execute("photo.saveMetadataToFile", &json!({"ids":[ids[0].0]})).unwrap();
+    let sidecar = src.join("a.xmp");
+    let bytes = std::fs::read(&sidecar).unwrap();
+    let originals: Vec<_> = ["a.png", "b.png"].iter().map(|n| std::fs::read(src.join(n)).unwrap()).collect();
+    s.execute("library.xmpPreferences", &json!({"autoWrite":true})).unwrap();
+    let faces: Vec<_> = ids.iter().map(|id| json!({"photo":id.0,"index":0})).collect();
+    for (command, params) in [
+        ("faces.nameFaces", json!({"faces":faces,"name":"Person"})),
+        ("faces.renamePerson", json!({"from":"Person","to":"Renamed"})),
+        ("faces.nameFaces", json!({"faces":faces,"name":null})),
+        ("faces.setName", json!({"id":ids[0].0,"index":0,"name":"One"})),
+        ("photo.setRegion", json!({"id":ids[0].0,"index":0,"rect":{"x0":0.2,"y0":0.2,"x1":0.5,"y1":0.5}})),
+        ("photo.removeRegion", json!({"id":ids[0].0,"index":0})),
+    ] {
+        s.execute(command, &params).unwrap();
+        for history in [None, Some("edit.undo"), Some("edit.redo")] {
+            if let Some(history) = history {
+                s.execute(history, &json!({})).unwrap();
+            }
+            assert_eq!(std::fs::read(&sidecar).unwrap(), bytes, "{command} {history:?}");
+            assert!(!src.join("b.xmp").exists(), "{command} {history:?}");
+            for (i, id) in ids.iter().enumerate() {
+                let p = s.catalog.photo(*id).unwrap();
+                assert!(!p.is_edited());
+                assert!(p.edited.is_none());
+                assert!(p.history.is_empty());
+                assert!(p.versions.is_empty());
+                assert_eq!(std::fs::read(src.join(if i == 0 { "a.png" } else { "b.png" })).unwrap(), originals[i]);
+            }
+        }
+    }
+    // Merging a catalog-only face step with a normal rating step must still allow XMP writes.
+    s.execute("photo.rate", &json!({"ids":[ids[0].0],"rating":5})).unwrap();
+    s.merge_undo(2, "mixed metadata");
+    assert!(!s.undo.last().unwrap().catalog_only);
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.catalog.photo(ids[0]).unwrap().rating, 0);
+    let packet = std::fs::read_to_string(&sidecar).unwrap();
+    assert!(packet.contains("<xmp:Rating>0</xmp:Rating>"));
+    s.execute("edit.redo", &json!({})).unwrap();
+    assert!(std::fs::read_to_string(&sidecar).unwrap().contains("<xmp:Rating>5</xmp:Rating>"));
+    // Direct history API calls must not leave a suppression flag for an unrelated next command.
+    s.execute("faces.setName", &json!({"id":ids[1].0,"index":0,"name":"Direct"})).unwrap();
+    s.undo_step().unwrap();
+    s.execute("photo.rate", &json!({"ids":[ids[1].0],"rating":3})).unwrap();
+    assert!(src.join("b.xmp").is_file());
+    let _ = std::fs::remove_dir_all(src);
+}
+
+/// A nested face edit/history step must not suppress an ordinary change in either order.
+#[test]
+fn mixed_face_commands_preserve_ordinary_sidecar_writes() {
+    use lightcraft_catalog::Op;
+    use lightcraft_meta::{Region, RegionKind};
+    for (case, action) in ["faces.setName", "edit.undo", "edit.redo"].into_iter().enumerate() {
+        for ordinary_first in [false, true] {
+            let src = temp_dir(&format!("mixed-face-{case}-{ordinary_first}"));
+            write_png(&src.join("face.png"), 7);
+            let mut s = Session::new().with_fs();
+            s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+            let id = only(&s);
+            let mut meta = s.catalog.photo(id).unwrap().meta.clone();
+            meta.regions = vec![Region {
+                rect: lightcraft_geom::Rect { x0: 0.1, y0: 0.1, x1: 0.4, y1: 0.4 },
+                kind: RegionKind::Face,
+                name: None,
+                description: None,
+            }];
+            s.commit("setup", Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
+            let faces = json!({"id": id.0, "index": 0, "name": "Person"});
+            if action != "faces.setName" {
+                s.execute("faces.setName", &faces).unwrap();
+            }
+            if action == "edit.redo" {
+                s.execute("edit.undo", &json!({})).unwrap();
+            }
+            s.execute("library.xmpPreferences", &json!({"autoWrite": true})).unwrap();
+            s.execute_fn("mixed face and rating", |s| {
+                // System metadata preserves the history stack needed by Undo/Redo; the face
+                // edit cases also cover ordinary undoable commits inside execute_fn.
+                let ordinary = |s: &mut Session| {
+                    let op = Op::SetRating { id, rating: 5 };
+                    if action == "faces.setName" { s.commit("rating", op) } else { s.apply_system(op) }
+                };
+                if ordinary_first {
+                    ordinary(s)?;
+                }
+                let empty = json!({});
+                s.execute(action, if action == "faces.setName" { &faces } else { &empty })?;
+                if !ordinary_first {
+                    ordinary(s)?;
+                }
+                Ok(json!({}))
+            })
+            .unwrap();
+            let sidecar = src.join("face.xmp");
+            let packet = std::fs::read(&sidecar).unwrap();
+            assert!(String::from_utf8_lossy(&packet).contains("<xmp:Rating>5</xmp:Rating>"), "{action}, first={ordinary_first}");
+            let named = s.catalog.photo(id).unwrap().meta.regions[0].name.is_some();
+            assert_eq!(named, action != "edit.undo");
+            // Several nested catalog-only records still suppress writes, and neither policy
+            // leaks into a later outer command.
+            s.execute_fn("only face changes", |s| {
+                for name in [None, Some("Person")] {
+                    s.execute("faces.setName", &json!({"id": id.0, "index": 0, "name": name}))?;
+                }
+                Ok(json!({}))
+            })
+            .unwrap();
+            assert_eq!(std::fs::read(&sidecar).unwrap(), packet);
+            s.execute("photo.rate", &json!({"ids": [id.0], "rating": 3})).unwrap();
+            assert!(std::fs::read_to_string(&sidecar).unwrap().contains("<xmp:Rating>3</xmp:Rating>"));
+            let _ = std::fs::remove_dir_all(src);
+        }
+    }
+}
+
 #[test]
 fn save_delete_library_reimport_restores_edits() {
     let src = temp_dir("roundtrip-src");

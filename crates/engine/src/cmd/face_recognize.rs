@@ -27,6 +27,22 @@ fn name_param(p: &Value, c: &str) -> Result<Option<String>> {
     Ok(name)
 }
 
+/// Refuse reviewed mutations if the catalog now refers to different photo content.
+/// Omitted tokens retain compatibility with existing command clients; review responses supply one.
+fn validate_review_content(photo: &lightcraft_catalog::Photo, face: &Value, command: &str) -> Result<()> {
+    if let Some(value) = face.get("contentHash") {
+        let expected = match value {
+            Value::Null => None,
+            Value::String(value) => Some(value.as_str()),
+            _ => return Err(bad(command, "invalid reviewed content hash")),
+        };
+        if expected != photo.content_hash.as_deref() {
+            return Err(bad(command, "photo content changed; reload the faces before applying this selection"));
+        }
+    }
+    Ok(())
+}
+
 /// Give a face region its name. Naming makes the face yours: a later "Detect Faces" run no longer replaces it.
 fn apply_name(region: &mut lightcraft_meta::Region, name: &Option<String>) {
     region.name = name.clone();
@@ -40,9 +56,19 @@ fn apply_name(region: &mut lightcraft_meta::Region, name: &Option<String>) {
 fn name_faces(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "faces.nameFaces";
     let name = name_param(p, C)?;
+    let expected_name = p
+        .get("expectedName")
+        .map(|v| {
+            let name = v.as_str().ok_or_else(|| bad(C, "`expectedName` must be text"))?;
+            if name.chars().count() > 200 || name.chars().any(char::is_control) {
+                return Err(bad(C, "invalid expected person name"));
+            }
+            Ok(name.trim().to_lowercase())
+        })
+        .transpose()?;
     let list = p.get("faces").and_then(Value::as_array).ok_or_else(|| bad(C, "missing `faces`"))?;
-    if list.len() > 5000 {
-        return Err(bad(C, "at most 5000 faces at a time"));
+    if list.len() > 100_000 {
+        return Err(bad(C, "at most 100000 faces at a time"));
     }
     let mut by_photo: std::collections::BTreeMap<u64, Vec<usize>> = std::collections::BTreeMap::new();
     for f in list {
@@ -51,7 +77,31 @@ fn name_faces(s: &mut Session, p: &Value) -> Result<Value> {
         else {
             return Err(bad(C, "each face needs a `photo` and an `index`"));
         };
+        if f.get("contentHash").is_some() {
+            let current = s
+                .catalog
+                .photo(lightcraft_catalog::PhotoId(photo))
+                .filter(|p| p.in_library())
+                .ok_or_else(|| bad(C, "photo is no longer in the library"))?;
+            validate_review_content(current, f, C)?;
+        }
+        if p["unnamedOnly"] == true {
+            let region = s.catalog.photo(lightcraft_catalog::PhotoId(photo)).filter(|p| p.in_library()).and_then(|p| p.meta.regions.get(index));
+            let expected: lightcraft_geom::Rect =
+                serde_json::from_value(f["rect"].clone()).map_err(|_| bad(C, "reviewed faces need their original rectangle"))?;
+            if !region.is_some_and(|r| r.kind == lightcraft_meta::RegionKind::Face && r.name.is_none() && r.rect == expected) {
+                return Err(bad(C, "a reviewed face changed; refresh the groups before naming"));
+            }
+        }
         by_photo.entry(photo).or_default().push(index);
+        if let Some(expected) = &expected_name {
+            let region = s.catalog.photo(lightcraft_catalog::PhotoId(photo)).filter(|p| p.in_library()).and_then(|p| p.meta.regions.get(index));
+            if !region.is_some_and(|r| {
+                r.kind == lightcraft_meta::RegionKind::Face && r.name.as_ref().is_some_and(|name| name.trim().to_lowercase() == *expected)
+            }) {
+                return Err(bad(C, "a selected face changed; select the faces again before removing their assignment"));
+            }
+        }
     }
     let (mut ops, mut named) = (Vec::new(), 0usize);
     for (photo, indexes) in by_photo {
@@ -73,8 +123,7 @@ fn name_faces(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(C, "none of those faces exist"));
     }
     let photos = ops.len();
-    s.commit(if name.is_some() { "Name Faces" } else { "Clear Face Names" }, Op::Batch { ops })?;
-    s.skip_auto_write = true;
+    s.commit_catalog_only(if name.is_some() { "Name Faces" } else { "Clear Face Names" }, Op::Batch { ops })?;
     Ok(json!({"named": named, "photos": photos, "name": name}))
 }
 
@@ -88,8 +137,7 @@ fn set_name(s: &mut Session, p: &Value) -> Result<Value> {
     let mut meta = s.catalog.photo(id).ok_or_else(|| bad(C, "no such photo"))?.meta.clone();
     let region = meta.regions.get_mut(index).ok_or_else(|| bad(C, "no such region"))?;
     apply_name(region, &name);
-    s.commit(if name.is_some() { "Name Face" } else { "Clear Face Name" }, Op::SetMeta { id, meta: Box::new(meta) })?;
-    s.skip_auto_write = true;
+    s.commit_catalog_only(if name.is_some() { "Name Face" } else { "Clear Face Name" }, Op::SetMeta { id, meta: Box::new(meta) })?;
     Ok(json!({"id": id.0, "index": index, "name": name}))
 }
 
@@ -171,8 +219,7 @@ fn rename_person(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(C, format!("{to} is already another person; pass merge: true to combine them")));
     }
     let photos = ops.len();
-    s.commit(if other { "Merge People" } else { "Rename Person" }, Op::Batch { ops })?;
-    s.skip_auto_write = true;
+    s.commit_catalog_only(if other { "Merge People" } else { "Rename Person" }, Op::Batch { ops })?;
     if s.filter.person.as_deref().is_some_and(|n| n.trim().to_lowercase() == from_key) {
         s.filter.person = Some(to.clone());
     }
@@ -778,8 +825,14 @@ mod imp {
         order
     }
 
-    /// Put the unnamed faces `all` in order of likeness (the ones already embedded; the rest follow in photo order) and
-    /// find a name for those the named faces recognise, for the first `limit` of them.
+    /// Advance or load library-wide groups using the selected model's suggestion threshold.
+    pub fn groups(s: &mut Session, p: &Value) -> Result<Value> {
+        let embedder = current_with(s, "faces.groupUnnamed", false)?;
+        let model_threshold = embedder.manifest().thresholds.match_cosine.unwrap_or(DEFAULT_THRESHOLD);
+        crate::face_groups::query(s, p, model_threshold)
+    }
+
+    /// Arrange indexed unnamed faces by likeness, adding current-person suggestions to the requested prefix.
     pub fn arrange_unnamed(s: &mut Session, all: &mut Vec<(u64, usize, Rect)>, limit: usize) -> super::Arranged {
         let none = super::Arranged { ordered: false, ready: false, suggestions: Default::default() };
         let Some(dir) = s.face_models_dir.clone() else { return none };
@@ -1098,13 +1151,22 @@ mod imp {
         super::Similar { items: Vec::new(), ready: false, pending: 0 }
     }
 
+    /// Report unavailable recognition on builds without the native model runtime.
+    pub fn groups(_: &mut Session, _: &Value) -> Result<Value> {
+        Err(bad("faces.groupUnnamed", "this build cannot run face recognition"))
+    }
+
     pub fn arrange_unnamed(_: &mut Session, _: &mut Vec<(u64, usize, lightcraft_geom::Rect)>, _: usize) -> super::Arranged {
         super::Arranged { ordered: false, ready: false, suggestions: Default::default() }
     }
 }
 
+/// Register face review queries and explicit catalog-only identity mutations.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
+        cmd!(query "faces.groupUnnamed", "Group Unnamed Faces", [], None,
+            "{restart?: bool, budgetMs?: 8, strict?: bool} → {complete, strict, processed, total, unindexed, groups: [{suggestion: name | null, faces: [{photo, index, rect, view}]}]} — group all indexed unnamed faces across the library using existing people and multi-example galleries for review; poll until complete. Completed groups are saved with the library. No names are applied. Restart to refresh and include newly scanned faces.",
+            super::always, imp::groups),
         cmd!(
             "faces.index",
             "Index Faces",
@@ -1155,7 +1217,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Name Faces",
             [],
             None,
-            "{faces: [{photo, index}], name} → {named, photos} — name (or, with a null or empty name, clear) many face regions as one undoable step; the sidecar is not touched",
+            "{faces: [{photo, index, rect?}], name, unnamedOnly?: false, expectedName?: string} → {named, photos} — name (or, with a null or empty name, clear) many face regions as one undoable step; expectedName refuses the entire batch if a face no longer belongs to that person; the sidecar is not touched",
             super::always,
             name_faces
         ),

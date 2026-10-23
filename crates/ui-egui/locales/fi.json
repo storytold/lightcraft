@@ -2311,5 +2311,11 @@
   "− harder border · + softer border": "− terävämpi reuna · + pehmeämpi reuna",
   "≤  at most": "≤  enintään",
   "≥  at least": "≥  vähintään",
-  "★ Favorites": "★ Suosikit"
+  "★ Favorites": "★ Suosikit",
+  "Clear selection": "Tyhjennä valinta",
+  "✓ Selected": "✓ Valittu",
+  "Not selected": "Ei valittu",
+  "Done selecting": "Lopeta valitseminen",
+  "Select faces…": "Valitse kasvot…",
+  "Click faces to select or deselect. Shift-click extends that action to a range. Double-click opens a photo.": "Valitse kasvot tai poista valinta napsauttamalla. Vaihto-napsautus laajentaa toiminnon alueelle. Kaksoisnapsautus avaa kuvan."
 }

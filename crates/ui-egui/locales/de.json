@@ -3422,5 +3422,11 @@
   "favourites across restarts (issue #328).": "über Neustarts hinweg Favoriten (Issue #328).",
   "Optional remote SAM 3: keep the native editor local and run Object, Describe, and detail": "Optionales entferntes SAM 3: Der native Editor bleibt lokal, und Objekt-, Beschreibungs- und Detail-",
   "inference on a Mac through SSH. Saved masks still render and export offline.": "Inferenz laufen über SSH auf einem Mac. Gespeicherte Masken werden weiterhin offline gerendert und exportiert.",
-  "See [remote Metal inference](ai-masks.md#remote-metal-inference).": "Siehe [remote Metal inference](ai-masks.md#remote-metal-inference)."
+  "See [remote Metal inference](ai-masks.md#remote-metal-inference).": "Siehe [remote Metal inference](ai-masks.md#remote-metal-inference).",
+  "Clear selection": "Auswahl aufheben",
+  "✓ Selected": "✓ Ausgewählt",
+  "Not selected": "Nicht ausgewählt",
+  "Done selecting": "Auswahl beenden",
+  "Select faces…": "Gesichter auswählen…",
+  "Click faces to select or deselect. Shift-click extends that action to a range. Double-click opens a photo.": "Gesichter durch Klicken auswählen oder abwählen. Umschalt-Klick erweitert die Aktion auf einen Bereich. Ein Doppelklick öffnet ein Foto."
 }

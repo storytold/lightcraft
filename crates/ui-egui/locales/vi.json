@@ -2220,5 +2220,11 @@
   "≥  at least": "≥  tối thiểu",
   "⌘-drag to straighten, ⇧G Guided Upright, a grid while transforming.": "⌘-kéo để chỉnh thẳng, ⇧G Chỉnh thẳng có hướng dẫn, lưới khi biến đổi.",
   "日本語": "日本語",
-  "繁體中文（台灣）": "繁體中文（台灣）"
+  "繁體中文（台灣）": "繁體中文（台灣）",
+  "Clear selection": "Bỏ chọn tất cả",
+  "✓ Selected": "✓ Đã chọn",
+  "Not selected": "Chưa chọn",
+  "Done selecting": "Chọn xong",
+  "Select faces…": "Chọn khuôn mặt…",
+  "Click faces to select or deselect. Shift-click extends that action to a range. Double-click opens a photo.": "Nhấp vào khuôn mặt để chọn hoặc bỏ chọn. Giữ Shift và nhấp để mở rộng thao tác cho một dải. Nhấp đúp để mở ảnh."
 }

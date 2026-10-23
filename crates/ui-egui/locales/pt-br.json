@@ -2188,5 +2188,12 @@
   "Color Overlay on B&W": "Sobreposição de cor em P&B",
   "Image on Black": "Imagem sobre preto",
   "Image on White": "Imagem sobre branco",
-  "White on Black": "Branco sobre preto"
+  "White on Black": "Branco sobre preto",
+  "Select all": "Selecionar tudo",
+  "Clear selection": "Limpar seleção",
+  "✓ Selected": "✓ Selecionado",
+  "Not selected": "Não selecionado",
+  "Done selecting": "Concluir seleção",
+  "Select faces…": "Selecionar rostos…",
+  "Click faces to select or deselect. Shift-click extends that action to a range. Double-click opens a photo.": "Clique para selecionar ou desmarcar rostos. Shift-clique estende a ação a um intervalo. Um clique duplo abre uma foto."
 }

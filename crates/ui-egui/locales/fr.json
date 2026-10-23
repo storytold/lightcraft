@@ -2340,5 +2340,12 @@
   "Checking the GPU…": "Vérification du GPU…",
   "CPU": "Processeur",
   "A face model uses the GPU only when a check shows it gives the same results faster.": "Un modèle de visages n’utilise le GPU que si une vérification montre qu’il donne les mêmes résultats plus vite.",
-  "Checking the GPU for faces": "Vérification du GPU pour les visages"
+  "Checking the GPU for faces": "Vérification du GPU pour les visages",
+  "Select all": "Tout sélectionner",
+  "Clear selection": "Effacer la sélection",
+  "✓ Selected": "✓ Sélectionné",
+  "Not selected": "Non sélectionné",
+  "Done selecting": "Terminer la sélection",
+  "Select faces…": "Sélectionner des visages…",
+  "Click faces to select or deselect. Shift-click extends that action to a range. Double-click opens a photo.": "Cliquez pour sélectionner ou désélectionner des visages. Maj-clic étend cette action à une plage. Un double-clic ouvre une photo."
 }

@@ -2325,5 +2325,11 @@
   "≤  at most": "≤  maksimal",
   "≥  at least": "≥  minimal",
   "日本語": "日本語",
-  "繁體中文（台灣）": "繁體中文（台灣）"
+  "繁體中文（台灣）": "繁體中文（台灣）",
+  "Clear selection": "Hapus pilihan",
+  "✓ Selected": "✓ Dipilih",
+  "Not selected": "Tidak dipilih",
+  "Done selecting": "Selesai memilih",
+  "Select faces…": "Pilih wajah…",
+  "Click faces to select or deselect. Shift-click extends that action to a range. Double-click opens a photo.": "Klik wajah untuk memilih atau membatalkan pilihan. Shift-klik memperluas tindakan ke suatu rentang. Klik dua kali membuka foto."
 }

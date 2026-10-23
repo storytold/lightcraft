@@ -2719,5 +2719,12 @@
   "≥  at least": "≥  არანაკლებ",
   "⌘-drag to straighten, ⇧G Guided Upright, a grid while transforming.": "⌘-გადათრევა გასასწორებლად, ⇧G მართვადი Upright, ბადე გარდაქმნისას.",
   "日本語": "日本語",
-  "繁體中文（台灣）": "繁體中文（台灣）"
+  "繁體中文（台灣）": "繁體中文（台灣）",
+  "Select all": "ყველას მონიშვნა",
+  "Clear selection": "მონიშვნის გასუფთავება",
+  "✓ Selected": "✓ მონიშნულია",
+  "Not selected": "არ არის მონიშნული",
+  "Done selecting": "მონიშვნის დასრულება",
+  "Select faces…": "სახეების მონიშვნა…",
+  "Click faces to select or deselect. Shift-click extends that action to a range. Double-click opens a photo.": "დააწკაპუნეთ სახის მოსანიშნად ან მონიშვნის გასაუქმებლად. Shift-დაწკაპუნება მოქმედებას დიაპაზონზე ავრცელებს. ორმაგი დაწკაპუნება ფოტოს ხსნის."
 }

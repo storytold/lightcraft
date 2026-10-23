@@ -2269,5 +2269,12 @@
   "SDR Shadows": "Cienie SDR",
   "SDR Whites": "Biele SDR",
   "SDR Clarity": "Przejrzystość SDR",
-  "Face Models on the GPU": "Modele twarzy przetwarzane na GPU"
+  "Face Models on the GPU": "Modele twarzy przetwarzane na GPU",
+  "Select all": "Zaznacz wszystko",
+  "Clear selection": "Wyczyść zaznaczenie",
+  "✓ Selected": "✓ Zaznaczono",
+  "Not selected": "Nie zaznaczono",
+  "Done selecting": "Zakończ zaznaczanie",
+  "Select faces…": "Zaznacz twarze…",
+  "Click faces to select or deselect. Shift-click extends that action to a range. Double-click opens a photo.": "Kliknij, aby zaznaczyć twarze lub usunąć zaznaczenie. Shift-kliknięcie rozszerza działanie na zakres. Dwukrotne kliknięcie otwiera zdjęcie."
 }

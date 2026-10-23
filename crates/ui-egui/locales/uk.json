@@ -2340,5 +2340,12 @@
   "Checking the GPU…": "Перевірка ГП…",
   "CPU": "ЦП",
   "A face model uses the GPU only when a check shows it gives the same results faster.": "Модель облич використовує ГП, лише якщо перевірка показала, що він дає ті самі результати швидше.",
-  "Checking the GPU for faces": "Перевірка ГП для облич"
+  "Checking the GPU for faces": "Перевірка ГП для облич",
+  "Select all": "Вибрати все",
+  "Clear selection": "Скасувати вибір",
+  "✓ Selected": "✓ Вибрано",
+  "Not selected": "Не вибрано",
+  "Done selecting": "Завершити вибір",
+  "Select faces…": "Вибрати обличчя…",
+  "Click faces to select or deselect. Shift-click extends that action to a range. Double-click opens a photo.": "Натисніть, щоб вибрати обличчя або скасувати вибір. Shift-клацання поширює дію на діапазон. Подвійне клацання відкриває фото."
 }

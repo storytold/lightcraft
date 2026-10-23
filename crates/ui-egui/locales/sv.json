@@ -2414,5 +2414,11 @@
   "⌘-drag to straighten, ⇧G Guided Upright, a grid while transforming.": "⌘-dra för att räta upp, ⇧G guidad upprätning, ett rutnät under transformering.",
   "★ Favorites": "★ Favoriter",
   "日本語": "日本語",
-  "繁體中文（台灣）": "繁體中文（台灣）"
+  "繁體中文（台灣）": "繁體中文（台灣）",
+  "Clear selection": "Rensa markering",
+  "✓ Selected": "✓ Markerat",
+  "Not selected": "Inte markerat",
+  "Done selecting": "Klar med markering",
+  "Select faces…": "Markera ansikten…",
+  "Click faces to select or deselect. Shift-click extends that action to a range. Double-click opens a photo.": "Klicka på ansikten för att markera eller avmarkera. Skift-klick utökar åtgärden till ett intervall. Dubbelklick öppnar ett foto."
 }

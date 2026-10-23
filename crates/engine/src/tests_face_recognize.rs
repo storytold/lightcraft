@@ -394,10 +394,183 @@ fn many_faces_are_named_in_one_undo_step() {
         json!({"faces": [{"photo": 987_654, "index": 0}], "name": "x"}),
         json!({"faces": [{"photo": a.0, "index": 0}], "name": 7}),
         json!({"faces": [{"photo": a.0, "index": 0}], "name": "bad\u{7}name"}),
-        json!({"faces": vec![json!({"photo": a.0, "index": 0}); 5001], "name": "x"}),
+        json!({"faces": vec![json!({"photo": a.0, "index": 0}); 100_001], "name": "x"}),
     ] {
         assert!(s.execute("faces.nameFaces", &bad).is_err(), "{bad}");
     }
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+/// Confirmed galleries must offer the same candidates as the existing More workflow.
+#[test]
+fn face_groups_offer_existing_people_the_same_candidates_as_more_suggestions() {
+    let d = temp("group-existing-gallery");
+    let (mut s, _) = setup(&d, 64);
+    s.execute("faces.index", &json!({"budgetMs": 0})).unwrap();
+    let (a, b) = two_photos(&s);
+    let c = s.catalog.photos().map(|p| p.id).find(|id| *id != a && *id != b).unwrap();
+    set_regions(&mut s, a, vec![region(0.1, Some("Ann")), region(0.5, Some("Ann"))]);
+    set_regions(&mut s, b, vec![region(0.1, None)]);
+    set_regions(&mut s, c, vec![region(0.1, None)]);
+    s.faces.index.insert(a.0, &region(0.1, None).rect, unit64(&[(0, 1.0)]));
+    s.faces.index.insert(a.0, &region(0.5, None).rect, unit64(&[(0, 0.5), (1, 0.8660254)]));
+    let at = |degrees: f32| unit64(&[(0, degrees.to_radians().cos()), (1, degrees.to_radians().sin())]);
+    // The first unnamed face starts an unrelated cluster; it must not steal a later More match.
+    s.faces.index.insert(b.0, &region(0.1, None).rect, at(140.0));
+    // Fails the first named example but passes Ann's two-example score at the original threshold.
+    s.faces.index.insert(c.0, &region(0.1, None).rect, at(95.0));
+    let original = s.execute("faces.person", &json!({"name": "Ann", "more": 1000})).unwrap();
+    assert_eq!(original["more"].as_array().unwrap().len(), 1);
+    let mut grouped = s.execute("faces.groupUnnamed", &json!({})).unwrap();
+    for _ in 0..100 {
+        if grouped["complete"] == true {
+            break;
+        }
+        grouped = s.execute("faces.groupUnnamed", &json!({})).unwrap();
+    }
+    let ann = grouped["groups"].as_array().unwrap().iter().find(|g| g["suggestion"] == "Ann").unwrap();
+    let offered: Vec<_> = ann["faces"].as_array().unwrap().iter().map(|f| (f["photo"].clone(), f["index"].clone())).collect();
+    let expected: Vec<_> = original["more"].as_array().unwrap().iter().map(|f| (f["photo"].clone(), f["index"].clone())).collect();
+    assert_eq!(offered, expected);
+    assert!(s.catalog.photo(c).unwrap().meta.regions[0].name.is_none(), "grouping only suggests");
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+/// A changed assignment rejects the entire correction before any face is cleared.
+#[test]
+fn removing_person_assignments_refuses_a_stale_batch_without_partial_changes() {
+    let mut s = Session::with_demo();
+    let (a, b) = two_photos(&s);
+    set_regions(&mut s, a, vec![region(0.1, Some("Person"))]);
+    set_regions(&mut s, b, vec![region(0.1, Some("Someone else"))]);
+    let faces = json!([{"photo": a.0, "index": 0}, {"photo": b.0, "index": 0}]);
+    let undo = s.undo.len();
+    assert!(s.execute("faces.nameFaces", &json!({"faces": faces, "name": null, "expectedName": "Person"})).is_err());
+    assert_eq!(s.undo.len(), undo);
+    assert_eq!(s.catalog.photo(a).unwrap().meta.regions[0].name.as_deref(), Some("Person"));
+    set_regions(&mut s, b, vec![region(0.1, Some("PERSON"))]);
+    let result = s.execute("faces.nameFaces", &json!({"faces": faces, "name": null, "expectedName": "person"})).unwrap();
+    assert_eq!(result["named"], 2);
+    assert!(s.catalog.photo(a).unwrap().meta.regions[0].name.is_none());
+    assert!(s.catalog.photo(b).unwrap().meta.regions[0].name.is_none());
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.catalog.photo(a).unwrap().meta.regions[0].name.as_deref(), Some("Person"));
+    assert_eq!(s.catalog.photo(b).unwrap().meta.regions[0].name.as_deref(), Some("PERSON"));
+}
+
+/// Saved membership persists across reopen and refresh replaces it only after successful completion.
+#[test]
+fn face_groups_survive_reopening_and_refresh_only_when_requested() {
+    let d = temp("saved-groups");
+    let (mut s, _) = setup(&d, 64);
+    let lib = d.join("library");
+    s.open_library(&lib, true).unwrap();
+    s.execute("faces.index", &json!({"budgetMs": 0})).unwrap();
+    let (a, b) = two_photos(&s);
+    let r = region(0.1, None);
+    set_regions(&mut s, a, vec![r.clone()]);
+    s.faces.index.insert(a.0, &r.rect, unit64(&[(0, 1.0)]));
+    let first = s.execute("faces.groupUnnamed", &json!({"strict": true})).unwrap();
+    assert_eq!(first["groups"][0]["faces"].as_array().unwrap().len(), 1);
+    let saved = std::fs::read(lib.join("unnamed-face-groups.json")).unwrap();
+    set_regions(&mut s, b, vec![r.clone()]);
+    s.close_library().unwrap();
+    drop(s);
+
+    let mut s = Session::new().with_fs();
+    s.face_models_dir = Some(d.join("models"));
+    s.open_library(&lib, false).unwrap();
+    s.execute("faces.index", &json!({"budgetMs": 0})).unwrap();
+    s.faces.index.insert(a.0, &r.rect, unit64(&[(0, 1.0)]));
+    s.faces.index.insert(b.0, &r.rect, unit64(&[(0, 1.0)]));
+    let loaded = s.execute("faces.groupUnnamed", &json!({})).unwrap();
+    assert_eq!(loaded["strict"], true);
+    assert_eq!(loaded["groups"], first["groups"]);
+    // A failed refresh leaves the previous durable snapshot intact.
+    {
+        let _fault = lightcraft_catalog::safe_file::fail_writes_after(0);
+        assert!(s.execute("faces.groupUnnamed", &json!({"restart": true})).is_err());
+    }
+    assert_eq!(std::fs::read(lib.join("unnamed-face-groups.json")).unwrap(), saved);
+    let refreshed = s.execute("faces.groupUnnamed", &json!({})).unwrap();
+    assert_eq!(refreshed["groups"][0]["faces"].as_array().unwrap().len(), 2);
+    set_regions(&mut s, a, vec![region(0.1, Some("Named"))]);
+    s.faces.groups = None;
+    let pruned = s.execute("faces.groupUnnamed", &json!({})).unwrap();
+    assert_eq!(pruned["groups"][0]["faces"].as_array().unwrap().len(), 1);
+    assert_eq!(pruned["groups"][0]["faces"][0]["photo"], b.0);
+    std::fs::write(lib.join("unnamed-face-groups.json"), b"broken").unwrap();
+    s.faces.groups = None;
+    assert!(s.execute("faces.groupUnnamed", &json!({})).unwrap_err().to_string().contains("Refresh groups"));
+    assert!(s.execute("faces.groupUnnamed", &json!({"restart": true})).is_ok());
+    s.close_library().unwrap();
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+/// Default galleries accept broader matches while strict mode preserves tighter groups.
+#[test]
+fn face_groups_default_to_larger_groups_and_can_be_tightened() {
+    let d = temp("group-threshold");
+    let (mut s, _) = setup(&d, 64);
+    s.execute("faces.index", &json!({"budgetMs": 0})).unwrap();
+    let (a, b) = two_photos(&s);
+    let r = region(0.1, None);
+    set_regions(&mut s, a, vec![r.clone()]);
+    set_regions(&mut s, b, vec![r.clone()]);
+    s.faces.index.insert(a.0, &r.rect, unit64(&[(0, 1.0)]));
+    s.faces.index.insert(b.0, &r.rect, unit64(&[(0, 0.5), (1, 0.8660254)]));
+    let wide = s.execute("faces.groupUnnamed", &json!({})).unwrap();
+    assert_eq!(wide["groups"].as_array().unwrap().len(), 1);
+    // A strictness change rebuilds even without an explicit restart.
+    let strict = s.execute("faces.groupUnnamed", &json!({"strict": true})).unwrap();
+    assert_eq!(strict["groups"].as_array().unwrap().len(), 2);
+    assert!(s.catalog.photo(a).unwrap().meta.regions[0].name.is_none());
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+/// Grouping and assignment must cover a library larger than the old list and naming limits.
+#[test]
+fn face_groups_cover_the_library_beyond_old_limits_and_name_atomically() {
+    let d = temp("group-library");
+    let (mut s, _) = setup(&d, 64);
+    s.execute("faces.index", &json!({"budgetMs": 0})).unwrap();
+    let (a, b) = two_photos(&s);
+    // More than both the old list limit and old naming limit. Distinct boxes share an identity.
+    let regions: Vec<_> = (0..5101).map(|i| region(i as f64 / 10000.0, None)).collect();
+    set_regions(&mut s, a, regions.clone());
+    set_regions(&mut s, b, vec![region(0.1, Some("Already named")), region(0.5, None)]);
+    for r in &regions {
+        s.faces.index.insert(a.0, &r.rect, unit64(&[(0, 1.0)]));
+    }
+    let mut r = s.execute("faces.groupUnnamed", &json!({"restart": true})).unwrap();
+    for _ in 0..1000 {
+        if r["complete"] == true {
+            break;
+        }
+        r = s.execute("faces.groupUnnamed", &json!({})).unwrap();
+    }
+    assert_eq!(r["complete"], true);
+    assert_eq!(r["total"], 5101);
+    assert_eq!(r["unindexed"], 1);
+    assert_eq!(r["groups"].as_array().unwrap().len(), 1);
+    let faces = r["groups"][0]["faces"].clone();
+    assert_eq!(faces.as_array().unwrap().len(), 5101);
+    let before = s.undo.len();
+    let named = s.execute("faces.nameFaces", &json!({"faces": faces, "name": "New person", "unnamedOnly": true})).unwrap();
+    assert_eq!(named["named"], 5101);
+    assert_eq!(s.undo.len(), before + 1);
+    assert!(s.execute("faces.groupUnnamed", &json!({})).unwrap()["groups"].as_array().unwrap().is_empty());
+    assert!(s.execute("faces.nameFaces", &json!({"faces": faces, "name": "Overwrite", "unnamedOnly": true})).is_err());
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(s.catalog.photo(a).unwrap().meta.regions.iter().all(|r| r.name.is_none()));
+    // A changed box invalidates the reviewed batch before any naming occurs.
+    let mut changed = regions;
+    changed[5100].rect.x0 += 0.01;
+    set_regions(&mut s, a, changed);
+    assert!(s.execute("faces.nameFaces", &json!({"faces": faces, "name": "Stale", "unnamedOnly": true})).is_err());
+    assert!(s.catalog.photo(a).unwrap().meta.regions.iter().all(|r| r.name.is_none()));
+    s.faces.library_changed();
+    assert!(s.faces.groups.is_none());
     let _ = std::fs::remove_dir_all(&d);
 }
 
@@ -617,4 +790,98 @@ fn rename_person_covers_more_than_the_person_query_and_rejects_bad_input() {
     assert_eq!(r["photos"], 1, "the browsed photo is not another person and is not renamed");
     assert_eq!(s.catalog.photo(a).unwrap().meta.regions[0].name.as_deref(), Some("Bea"));
     assert_eq!(s.catalog.photo(local).unwrap().meta.regions[0].name.as_deref(), Some("Ada"));
+}
+
+/// Saved suggestion anchors follow confirmed identities through rename, merge, undo and reopen.
+#[test]
+fn saved_group_suggestions_follow_renames_merges_and_history_after_reopening() {
+    let d = temp("rename-group-anchors");
+    let (mut s, _) = setup(&d, 64);
+    let lib = d.join("library");
+    s.open_library(&lib, true).unwrap();
+    s.execute("faces.index", &json!({"budgetMs": 0})).unwrap();
+    let (a, b) = two_photos(&s);
+    let r = region(0.1, None);
+    set_regions(&mut s, a, vec![region(0.1, Some("Ann")), region(0.5, Some("Bea"))]);
+    set_regions(&mut s, b, vec![r.clone()]);
+    for id in [a, b] {
+        s.faces.index.insert(id.0, &r.rect, unit64(&[(0, 1.0)]));
+    }
+    let first = s.execute("faces.groupUnnamed", &json!({})).unwrap();
+    assert_eq!(first["groups"][0]["suggestion"], "Ann");
+    s.close_library().unwrap();
+    drop(s);
+    let mut s = Session::new().with_fs();
+    s.face_models_dir = Some(d.join("models"));
+    s.open_library(&lib, false).unwrap();
+    s.execute("faces.index", &json!({"budgetMs": 0})).unwrap();
+    s.execute("faces.renamePerson", &json!({"from": "Ann", "to": "Ada"})).unwrap();
+    let renamed = s.execute("faces.groupUnnamed", &json!({})).unwrap();
+    assert_eq!(renamed["groups"][0]["suggestion"], "Ada");
+    assert_eq!(renamed["groups"][0]["faces"], first["groups"][0]["faces"]);
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.execute("faces.groupUnnamed", &json!({})).unwrap()["groups"][0]["suggestion"], "Ann");
+    s.execute("edit.redo", &json!({})).unwrap();
+    s.execute("faces.renamePerson", &json!({"from": "Ada", "to": "Bea", "merge": true})).unwrap();
+    assert_eq!(s.execute("faces.groupUnnamed", &json!({})).unwrap()["groups"][0]["suggestion"], "Bea");
+    s.execute("faces.setName", &json!({"id": a.0, "index": 0, "name": null})).unwrap();
+    assert!(s.execute("faces.groupUnnamed", &json!({})).unwrap()["groups"][0]["suggestion"].is_null());
+    // Old files without anchors still load, but cannot advertise a person who no longer exists.
+    let path = lib.join("unnamed-face-groups.json");
+    let mut saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    for group in saved["groups"].as_array_mut().unwrap() {
+        group.as_object_mut().unwrap().remove("anchor");
+    }
+    std::fs::write(&path, serde_json::to_vec(&saved).unwrap()).unwrap();
+    s.faces.groups = None;
+    assert!(s.execute("faces.groupUnnamed", &json!({})).unwrap()["groups"][0]["suggestion"].is_null());
+    s.close_library().unwrap();
+    let _ = std::fs::remove_dir_all(d);
+}
+
+/// Replacing pixels while preserving region indices and geometry must reject every reviewed mutation.
+#[test]
+fn reviewed_face_batches_reject_replaced_content_without_partial_writes() {
+    let d = temp("review-content");
+    let (mut s, _) = setup(&d, 64);
+    let (a, b) = two_photos(&s);
+    for id in [a, b] {
+        set_regions(&mut s, id, vec![region(0.1, None)]);
+    }
+    s.execute("faces.index", &json!({"budgetMs": 0})).unwrap();
+    for id in [a, b] {
+        s.faces.index.insert(id.0, &region(0.1, None).rect, unit64(&[(0, 1.0)]));
+    }
+    let grouped = s.execute("faces.groupUnnamed", &json!({})).unwrap();
+    let faces = grouped["groups"][0]["faces"].clone();
+    assert_eq!(faces.as_array().unwrap().len(), 2);
+    assert!(faces[0].get("contentHash").is_some());
+    // Change only the content identity; both region indices and boxes remain identical.
+    let photo = s.catalog.photo(b).unwrap();
+    let mut replacement = (**photo).clone();
+    replacement.content_hash = Some("replacement-content".into());
+    s.commit("replace pixels", lightcraft_catalog::Op::RemovePhoto { id: b }).unwrap();
+    s.commit("replacement", lightcraft_catalog::Op::AddPhoto { photo: Box::new(replacement) }).unwrap();
+    let before = s.undo.len();
+    for (command, params) in [("faces.nameFaces", json!({"faces": faces, "name": "Person", "unnamedOnly": true}))] {
+        let error = s.execute(command, &params).unwrap_err().to_string();
+        assert!(error.contains("content changed"), "{error}");
+        assert_eq!(s.undo.len(), before);
+        for id in [a, b] {
+            let region = &s.catalog.photo(id).unwrap().meta.regions[0];
+            assert!(region.name.is_none());
+            assert_eq!(region.kind, RegionKind::Face);
+        }
+    }
+    let current = json!([{"photo": a.0, "index": 0}, {"photo": b.0, "index": 0}]);
+    s.execute("faces.nameFaces", &json!({"faces": current, "name": "Person"})).unwrap();
+    let before = s.undo.len();
+    assert!(
+        s.execute("faces.nameFaces", &json!({"faces": faces, "name": null, "expectedName": "Person"}))
+            .unwrap_err()
+            .to_string()
+            .contains("content changed")
+    );
+    assert_eq!(s.undo.len(), before);
+    let _ = std::fs::remove_dir_all(d);
 }

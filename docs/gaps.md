@@ -1,6 +1,6 @@
 # Gaps: where LightCraft falls short of Lightroom
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-21 · **Change:** minor (gap 28: F8 shows / hides the right panel; import review album hierarchy, #2362; gap 20: Minolta MRW decodes; gap 10: 551 models verified; gap 15: Print Page Options — page numbers, page info, crop marks; gap 15: Print Page Options — page numbers, page info, crop marks; gap 28: `\` shows / hides the Filter Bar in the grids; gap 21: Indonesian interface shipped, every message but What's New; gap 27: the Windows x64 installer verified on Windows 11; the Settings → Apps uninstall confirmation remains)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-24 · **Change:** minor (LRC-LIB-PEOPLE: standalone face grouping and assignment review; no catalog migration)
 
 Every known shortfall, one entry each, ranked by user impact (how many Lightroom users hit it, and
 how hard it blocks them), then by effort. **Agents pick work from the top** (the first entry nobody is
@@ -57,6 +57,10 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 - **Localization:** 21
 - **Quality / fidelity:** 1, 3
 - **Stability and platforms:** 9, 26, 27
+
+## Face grouping coverage
+
+Unnamed faces can now be grouped across the library, reviewed and named in one undo step (`faces.groupUnnamed`, `view.unnamedGroups`; `docs/faces.md`). Grouping uses existing people and the original More gallery score, with varied examples for unnamed groups; multiple groups/faces can be assigned to existing names together, with Shift-click/drag exclusion; completed groups persist with the library until explicitly refreshed; assigned faces can be removed individually or in selected batches with undo; identity quality on live faces, per-person rejection and continuous regrouping during active scans remain open. The review currently supports up to 100,000 indexed unnamed faces. No readiness estimate changes.
 
 ## Closed recently (kept for calibration)
 
@@ -134,3 +138,6 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 | 2026-10-10 | minor | Gap 8: Sony ILCE-7RM6 in-file distortion added next to the ILCE-7RM4A's, its lateral CA parsed but off by default (docs/sony-ilce7rm6-lens-corrections.md); the gap stays open (no lens database), hours unchanged |
 | 2026-10-14 | minor | Gap 10 shrinks: 97 Canon CR2, Pentax and Ricoh models verified on one CC0 file each (334 models, ~50% on a verified body) |
 | 2026-10-14 | minor | Gap 10: 515 of 1,446 models verified (36%), ~84% of photographers on a verified body (integration batch 36) |
+| 2026-10-21 | minor | LRC-LIB-PEOPLE: saved unnamed grouping, bulk assignment/correction and content identity validation on reviewed batches; partial status and counts unchanged |
+| 2026-10-22 | patch | LRC-LIB-PEOPLE: mixed face edits/history and ordinary metadata commands retain XMP auto-write; wholly catalog-only commands stay suppressed. Double-click navigation preserves confirmed-face selections and anchors. Status and counts unchanged. |
+| 2026-10-24 | minor | LRC-LIB-PEOPLE: retain saved grouping, bulk assignment/removal, person selection and catalog-only face history; remove persistent ignored faces and the catalog-format migration. Status and counts unchanged. |

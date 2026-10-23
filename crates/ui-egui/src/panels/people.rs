@@ -56,7 +56,12 @@ pub(super) fn fit(painter: &egui::Painter, text: &str, font: egui::FontId, max_w
     (1..chars.len()).rev().map(|n| chars[..n].iter().collect::<String>() + "…").find(|s| width(s) <= max_w).unwrap_or_else(|| "…".to_string())
 }
 
+/// Show named people and unnamed crops, or dispatch the active face-review screen.
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    if app.ui.unnamed_groups.is_some() {
+        super::face_groups::show(app, ui);
+        return;
+    }
     if let Some(name) = app.ui.person_page.clone() {
         return super::person::show(app, ui, &name);
     }
@@ -82,6 +87,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     ui.painter().text(pos2(head.right() - PAD, head.center().y), Align2::RIGHT_CENTER, people.len().to_string(), t.font(13.0), t.text_dim);
     // until face recognition is set up: what it takes, and a button that does the next step
     super::faces::setup_banner(app, ui);
+    let group = ui.button("Auto group unnamed faces");
+    register(ui.ctx(), "unnamed:autoGroup", group.rect);
+    if group.clicked() {
+        let _ = app.run("view.unnamedGroups", json!({}));
+    }
     // the filters narrowing the list (a date, a keyword…), removable here
     let chips = lightcraft_engine::filter_chips(&app.session.filter, &app.session.catalog);
     super::chips::show(app, ui, &chips);

@@ -2394,5 +2394,11 @@
   "End Slideshow": "Ukončit prezentaci",
   "Save Current Settings as New Effect Preset…": "Uložit aktuální nastavení jako nové přednastavení efektu…",
   "Manage Effect Presets…": "Spravovat přednastavení efektů…",
-  "Export Effect Presets…": "Exportovat přednastavení efektů…"
+  "Export Effect Presets…": "Exportovat přednastavení efektů…",
+  "Clear selection": "Zrušit výběr",
+  "✓ Selected": "✓ Vybráno",
+  "Not selected": "Nevybráno",
+  "Done selecting": "Dokončit výběr",
+  "Select faces…": "Vybrat obličeje…",
+  "Click faces to select or deselect. Shift-click extends that action to a range. Double-click opens a photo.": "Kliknutím vyberete obličeje nebo zrušíte výběr. Shift-kliknutí rozšíří akci na rozsah. Dvojitým kliknutím otevřete fotografii."
 }

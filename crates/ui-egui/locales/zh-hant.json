@@ -2143,5 +2143,12 @@
   "Checking the GPU…": "正在檢查 GPU…",
   "CPU": "CPU",
   "A face model uses the GPU only when a check shows it gives the same results faster.": "只有在檢查顯示 GPU 能更快得出相同結果時，臉孔模型才會使用 GPU。",
-  "Checking the GPU for faces": "正在檢查用於臉孔的 GPU"
+  "Checking the GPU for faces": "正在檢查用於臉孔的 GPU",
+  "Select all": "全選",
+  "Clear selection": "清除選取",
+  "✓ Selected": "✓ 已選取",
+  "Not selected": "未選取",
+  "Done selecting": "完成選取",
+  "Select faces…": "選取臉孔…",
+  "Click faces to select or deselect. Shift-click extends that action to a range. Double-click opens a photo.": "按一下以選取或取消選取臉孔。按住 Shift 按一下可將操作延伸至一個範圍。按兩下開啟照片。"
 }
