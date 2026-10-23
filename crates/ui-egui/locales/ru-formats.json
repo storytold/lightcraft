@@ -305,5 +305,9 @@
   "Could not read {name}: {e}": "Не удалось прочитать {name}: {e}",
   "Added {n} photo{}": "Добавлено фото: {n}{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Куда импортировать каталог Lightroom «{catalog}»?",
-  "Merge into the open library “{library}” ({count} photo{})": "Объединить с открытой библиотекой «{library}» (фото: {count}){:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "Объединить с открытой библиотекой «{library}» (фото: {count}){:.0}",
+  "Move “{name}” into “{into}”": "Переместить «{name}» в «{into}»",
+  "Move “{name}” into “{into}”?": "Переместить «{name}» в «{into}»?",
+  "Photos in it and in the folders inside it: {count}": "Фото в ней и в папках внутри неё: {count}",
+  "“{name}” is no longer there: nothing was moved": "«{name}» больше нет: ничего не перемещено"
 }

@@ -935,6 +935,13 @@ pub struct UiState {
     /// An album or folder row being dragged in the sidebar (dropped on a folder to move it there).
     #[serde(skip)]
     pub dragging_album: Option<u64>,
+    /// A Folders row being dragged in the sidebar (its path; dropped on another row to move the
+    /// folder there on disk).
+    #[serde(skip)]
+    pub dragging_folder: Option<String>,
+    /// The library `dragging_folder` was picked up in (`Session::library_generation`).
+    #[serde(skip)]
+    pub dragging_folder_library: u64,
     /// A sidebar section being dragged by its header (dropped between sections to move it there).
     #[serde(skip)]
     pub dragging_section: Option<crate::sidebar::SidebarSection>,
@@ -1376,6 +1383,20 @@ pub enum Dialog {
         /// numbered per library, so in another one they name other photos.
         library: u64,
     },
+    /// Confirm moving a Folders row dropped on another row: the folder `path` goes into `into` on
+    /// disk (`folder.move`). `name` and `into_name` are as the question says them; `count` is
+    /// the library photos in the folder and the folders inside it.
+    MoveFolder {
+        path: String,
+        into: String,
+        name: String,
+        into_name: String,
+        count: usize,
+        dont_ask: bool,
+        /// The library the row was dragged in (`Session::library_generation`): the question's
+        /// folder and photo count belong to it.
+        library: u64,
+    },
     /// Confirm taking a folder's photos out of the library (`library.removeFolder`).
     RemoveFolder {
         path: String,
@@ -1519,6 +1540,8 @@ impl Default for UiState {
             reveal_keyword: None,
             reveal_folder: None,
             dragging_album: None,
+            dragging_folder: None,
+            dragging_folder_library: 0,
             dragging_section: None,
             curve_channel: "parametric".into(),
             mixer_mode: "hue".into(),

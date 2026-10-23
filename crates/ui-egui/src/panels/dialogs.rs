@@ -267,6 +267,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
         Dialog::Settings { .. } => "Settings",
         Dialog::ConfirmDelete { .. } => "Delete Photos",
         Dialog::MovePhotos { .. } => "Move Photos",
+        Dialog::MoveFolder { .. } => "Move Folder",
         Dialog::LightroomCatalog { .. } => "Lightroom Classic Catalog",
         Dialog::LightroomDestination { .. } => "Import Lightroom Catalog",
         Dialog::SaveEffect { .. } => "New Effect Preset",
@@ -1289,6 +1290,15 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     crate::widgets::register(ui.ctx(), "check:moveDontAsk", c.rect);
                     c.on_hover_text(crate::i18n::tr("Settings → Confirm before moving photos to another folder on disk turns it back on"));
                 }
+                Dialog::MoveFolder { name, into_name, count, dont_ask, .. } => {
+                    ui.label(crate::i18n::tr_format!("Move “{name}” into “{into}”?", name = name, into = into_name));
+                    ui.label(egui::RichText::new(crate::i18n::tr_format!("Photos in it and in the folders inside it: {count}", count = count)).color(t.text_dim));
+                    ui.label(egui::RichText::new(crate::i18n::tr("The folder, its files and XMP sidecars move on disk. Edit → Undo moves it back.")).color(t.text_dim));
+                    ui.add_space(4.0);
+                    let c = ui.checkbox(dont_ask, crate::i18n::tr("Don't ask again"));
+                    crate::widgets::register(ui.ctx(), "check:moveDontAsk", c.rect);
+                    c.on_hover_text(crate::i18n::tr("Settings → Confirm before moving photos to another folder on disk turns it back on"));
+                }
                 d @ Dialog::SynchronizeFolder { .. } => crate::sync::body(app, ui, d),
                 Dialog::LightroomCatalog { folder, catalog } => {
                     ui.label(crate::i18n::tr("This is a Lightroom catalog, not a LightCraft library. Import it into a LightCraft library instead?"));
@@ -1413,7 +1423,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     Dialog::FaceModel { .. } if !informational => "Install",
                     Dialog::ConfirmDelete { .. } | Dialog::DeleteKeyword { .. } | Dialog::DeleteEffects { .. } => "Delete",
                     Dialog::SaveEffect { .. } => "Create",
-                    Dialog::MovePhotos { .. } => "Move",
+                    Dialog::MovePhotos { .. } | Dialog::MoveFolder { .. } => "Move",
                     // (not "Merge": that is photo merging, HDR / panorama, in some languages)
                     Dialog::MoveKeyword { .. } => "Merge Keywords",
                     Dialog::KeywordSet { .. } => "Save",
@@ -1558,7 +1568,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                 }
                 close = true;
             }
-            Err(e) if matches!(dlg, Dialog::MovePhotos { .. }) => {
+            Err(e) if matches!(dlg, Dialog::MovePhotos { .. } | Dialog::MoveFolder { .. }) => {
                 app.toast(ctx, e);
                 close = true;
             }
@@ -1572,6 +1582,10 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
             Err(e) if matches!(dlg, Dialog::LightroomDestination { .. }) => {
                 close = !crate::lightroom_destination::keeps_open_on_error(app, &dlg);
                 app.toast(ctx, e);
+            }
+            Ok(r) if matches!(dlg, Dialog::MoveFolder { .. }) => {
+                crate::panels::left::toast_folder_moved(app, ctx, &r);
+                close = true;
             }
             Ok(_) if keeps_open(app, &dlg) => {
                 if let Dialog::SamModel { error, .. } = &mut dlg {
@@ -2083,6 +2097,19 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
         Dialog::Merge { opts } => crate::merge::start_final(app, opts),
         Dialog::Import { opts } => crate::import::start(app, opts),
         Dialog::ConfirmDelete { .. } => app.run("photo.delete", json!({})),
+        Dialog::MoveFolder { path, into, dont_ask, library, .. } => {
+            // another library opened meanwhile (from the menu bar, an agent): the folder's photos
+            // in this one aren't the ones the question counted
+            if *library != app.session.library_generation() {
+                return Err(crate::i18n::tr("Another library was opened since the folder was dropped: nothing was moved").to_string());
+            }
+            // only a move that happened turns the question off: the next one still asks after a refusal
+            let moved = crate::panels::left::run_folder_move(app, path, into)?;
+            if *dont_ask {
+                app.ui.settings.ask_before_move = false;
+            }
+            Ok(moved)
+        }
         Dialog::MovePhotos { ids, folder, dont_ask, library, .. } => {
             // another library opened meanwhile (from the menu bar, an agent): these numbers are
             // other photos there
