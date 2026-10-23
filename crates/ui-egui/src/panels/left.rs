@@ -1630,7 +1630,11 @@ fn drop_target(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response
                         n = skipped
                     ));
                 }
-                app.toast(ui.ctx(), msg);
+                if n > 0 {
+                    app.toast_undoable(ui.ctx(), msg);
+                } else {
+                    app.toast(ui.ctx(), msg);
+                }
             }
             Err(e) => app.toast(ui.ctx(), e),
         }
@@ -2019,6 +2023,7 @@ pub(crate) fn moved_text(n: u64, name: &str) -> String {
 /// [`move_photos`], saying how it went in a toast.
 fn move_photos_here(app: &mut LightcraftApp, ctx: &egui::Context, ids: Option<&[u64]>, path: &str, name: &str) {
     match move_photos(app, ids, path) {
+        Ok(n) if n > 0 => app.toast_undoable(ctx, moved_text(n, name)),
         Ok(n) => app.toast(ctx, moved_text(n, name)),
         Err(e) => app.toast(ctx, e),
     }

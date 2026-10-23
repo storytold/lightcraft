@@ -1553,8 +1553,13 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
             // a move says how it went, or why nothing moved
             Ok(r) if matches!(dlg, Dialog::MovePhotos { .. }) => {
                 if let Dialog::MovePhotos { name, .. } = &dlg {
-                    let text = crate::panels::left::moved_text(r["moved"].as_u64().unwrap_or(0), name);
-                    app.toast(ctx, text);
+                    let moved = r["moved"].as_u64().unwrap_or(0);
+                    let text = crate::panels::left::moved_text(moved, name);
+                    if moved > 0 {
+                        app.toast_undoable(ctx, text);
+                    } else {
+                        app.toast(ctx, text);
+                    }
                 }
                 close = true;
             }
