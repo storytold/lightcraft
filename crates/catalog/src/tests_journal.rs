@@ -286,33 +286,42 @@ fn fs_store_roundtrip() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// The streamed snapshot is byte-for-byte the format written before streaming (issue #37), so
-/// existing libraries load and older builds can read new snapshots; FsStore and MemStore agree.
+/// Where a store has no segments, the streamed snapshot is the one-file form written since
+/// streaming (issue #37) with the (empty) list of segments after it, so a one-file library of
+/// any format loads; where it has segments (a folder), such a file loads too and is rewritten
+/// with its photos in segments.
 #[test]
 fn streamed_snapshot_keeps_the_on_disk_format() {
-    let (m, _, full) = sample_catalog_with_log();
+    let (segmented, _, full) = sample_catalog_with_log();
+    let m = MemStore { single_file: true, files: segmented.files.clone(), ..Default::default() };
     let (mut j, c, _) = open(&m);
     assert_eq!(c.to_snapshot(), full.to_snapshot());
     j.snapshot(&c).unwrap();
-    let legacy = format!(
-        "{{\"format\":\"lightcraft-catalog\",\"version\":{},\"seq\":{},\"catalog\":{}}}\n",
-        crate::journal::VERSION,
-        j.seq(),
-        c.to_snapshot()
-    );
-    assert_eq!(String::from_utf8(m.get(SNAPSHOT).unwrap()).unwrap(), legacy);
-    assert_eq!(j.stats().last_snapshot.bytes, legacy.len() as u64);
+    let legacy = |version: u32| {
+        format!(
+            "{{\"format\":\"lightcraft-catalog\",\"version\":{version},\"seq\":{},\"defaults\":{},\"catalog\":{}}}\n",
+            j.seq(),
+            crate::stored::base().0,
+            c.to_snapshot()
+        )
+    };
+    let one_file = legacy(crate::journal::VERSION).replace("}\n", &format!(",\"segments\":[],\"photos\":{}}}\n", c.len()));
+    assert_eq!(String::from_utf8(m.get(SNAPSHOT).unwrap()).unwrap(), one_file);
+    assert_eq!(j.stats().last_snapshot.bytes, one_file.len() as u64);
 
     let dir = std::env::temp_dir().join(format!("lc-journal-stream-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    // an old-style snapshot (written by a build before streaming) loads, and is rewritten the same
-    std::fs::write(dir.join(SNAPSHOT), legacy.as_bytes()).unwrap();
-    let (mut fj, fc, r) = Journal::open(Box::new(FsStore::open(&dir).unwrap())).unwrap();
-    assert_eq!((fc.to_snapshot(), r.snapshot_seq), (c.to_snapshot(), j.seq()));
-    fj.snapshot(&fc).unwrap();
-    assert_eq!(std::fs::read(dir.join(SNAPSHOT)).unwrap(), legacy.as_bytes());
+    // an old-style snapshot (written by a build before segments) loads, and is rewritten in them
+    std::fs::write(dir.join(SNAPSHOT), legacy(7).as_bytes()).unwrap();
+    let (fj, fc, r) = Journal::open(Box::new(FsStore::open(&dir).unwrap())).unwrap();
+    assert_eq!((fc.to_snapshot(), r.snapshot_seq, r.upgraded_from), (c.to_snapshot(), j.seq(), Some(7)));
+    assert_eq!(fj.segments().len(), 1);
+    let name = fj.segments()[0].name.clone();
+    assert_eq!(std::fs::metadata(dir.join(&name)).unwrap().len(), fj.segments()[0].bytes);
     drop(fj);
+    let (_, again, r) = Journal::open(Box::new(FsStore::open(&dir).unwrap())).unwrap();
+    assert_eq!((again.to_snapshot(), r.upgraded_from), (c.to_snapshot(), None));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
