@@ -2785,3 +2785,226 @@ fn a_file_arriving_beside_its_raws_stem_reads_its_own_sidecar() {
     assert_eq!(read(&s, "IMG_3.TIF"), 0, "the catalogued raw owns IMG_3.xmp");
     let _ = std::fs::remove_dir_all(&src);
 }
+
+fn write_test_box(out: &mut Vec<u8>, fourcc: &[u8; 4], body: &[u8]) {
+    let size = (body.len() + 8) as u32;
+    out.extend_from_slice(&size.to_be_bytes());
+    out.extend_from_slice(fourcc);
+    out.extend_from_slice(body);
+}
+
+fn synthetic_mp4(timescale: u32, duration: u32, width: u32, height: u32, creation_time: u32) -> Vec<u8> {
+    let mut out = Vec::new();
+
+    let mut ftyp = Vec::new();
+    ftyp.extend_from_slice(b"mp42");
+    ftyp.extend_from_slice(&0u32.to_be_bytes());
+    ftyp.extend_from_slice(b"isommp42");
+    write_test_box(&mut out, b"ftyp", &ftyp);
+
+    let mut mvhd = Vec::new();
+    mvhd.push(0);
+    mvhd.extend_from_slice(&[0, 0, 0]);
+    mvhd.extend_from_slice(&creation_time.to_be_bytes());
+    mvhd.extend_from_slice(&0u32.to_be_bytes());
+    mvhd.extend_from_slice(&timescale.to_be_bytes());
+    mvhd.extend_from_slice(&duration.to_be_bytes());
+    mvhd.extend_from_slice(&0x00010000u32.to_be_bytes());
+    mvhd.extend_from_slice(&0x0100u16.to_be_bytes());
+    mvhd.extend_from_slice(&[0; 10]);
+    mvhd.extend_from_slice(&0x00010000u32.to_be_bytes());
+    mvhd.extend_from_slice(&0u32.to_be_bytes());
+    mvhd.extend_from_slice(&0u32.to_be_bytes());
+    mvhd.extend_from_slice(&0u32.to_be_bytes());
+    mvhd.extend_from_slice(&0x00010000u32.to_be_bytes());
+    mvhd.extend_from_slice(&0u32.to_be_bytes());
+    mvhd.extend_from_slice(&0u32.to_be_bytes());
+    mvhd.extend_from_slice(&0u32.to_be_bytes());
+    mvhd.extend_from_slice(&0x40000000u32.to_be_bytes());
+    mvhd.extend_from_slice(&[0; 24]);
+    mvhd.extend_from_slice(&2u32.to_be_bytes());
+
+    let mut tkhd = Vec::new();
+    tkhd.push(0);
+    tkhd.extend_from_slice(&[0, 0, 1]);
+    tkhd.extend_from_slice(&creation_time.to_be_bytes());
+    tkhd.extend_from_slice(&0u32.to_be_bytes());
+    tkhd.extend_from_slice(&1u32.to_be_bytes());
+    tkhd.extend_from_slice(&0u32.to_be_bytes());
+    tkhd.extend_from_slice(&duration.to_be_bytes());
+    tkhd.extend_from_slice(&[0; 8]);
+    tkhd.extend_from_slice(&0u16.to_be_bytes());
+    tkhd.extend_from_slice(&0u16.to_be_bytes());
+    tkhd.extend_from_slice(&0u16.to_be_bytes());
+    tkhd.extend_from_slice(&0u16.to_be_bytes());
+    tkhd.extend_from_slice(&0x00010000u32.to_be_bytes());
+    tkhd.extend_from_slice(&0u32.to_be_bytes());
+    tkhd.extend_from_slice(&0u32.to_be_bytes());
+    tkhd.extend_from_slice(&0u32.to_be_bytes());
+    tkhd.extend_from_slice(&0x00010000u32.to_be_bytes());
+    tkhd.extend_from_slice(&0u32.to_be_bytes());
+    tkhd.extend_from_slice(&0u32.to_be_bytes());
+    tkhd.extend_from_slice(&0u32.to_be_bytes());
+    tkhd.extend_from_slice(&0x40000000u32.to_be_bytes());
+    tkhd.extend_from_slice(&(width << 16).to_be_bytes());
+    tkhd.extend_from_slice(&(height << 16).to_be_bytes());
+
+    let mut mdia = Vec::new();
+    let mut hdlr = Vec::new();
+    hdlr.extend_from_slice(&[0, 0, 0, 0]);
+    hdlr.extend_from_slice(&0u32.to_be_bytes());
+    hdlr.extend_from_slice(b"vide");
+    hdlr.extend_from_slice(&[0; 12]);
+    hdlr.extend_from_slice(b"VideoHandler\0");
+    write_test_box(&mut mdia, b"hdlr", &hdlr);
+
+    let mut trak = Vec::new();
+    write_test_box(&mut trak, b"tkhd", &tkhd);
+    write_test_box(&mut trak, b"mdia", &mdia);
+
+    let mut moov = Vec::new();
+    write_test_box(&mut moov, b"mvhd", &mvhd);
+    write_test_box(&mut moov, b"trak", &trak);
+
+    write_test_box(&mut out, b"moov", &moov);
+    out
+}
+
+#[test]
+fn video_files_import_with_duration_and_kind() {
+    let src = temp_dir("video-import");
+    // 2026-05-04 10:00:00 UTC = 1_777_888_800 Unix seconds.
+    // In Mac 1904 epoch (+ 2_082_844_800): 3_860_733_600.
+    let mac_secs = 2_082_844_800u64 + 1_777_888_800u64;
+    let mp4_bytes = synthetic_mp4(1000, 84_500, 1920, 1080, mac_secs as u32);
+    let clip_path = src.join("clip.mp4");
+    std::fs::write(&clip_path, &mp4_bytes).unwrap();
+
+    let mut s = Session::new().with_fs();
+
+    // Verify scan candidates report duration and MediaKind::Video
+    let candidates = crate::import::scan(&mut s, &[clip_path.to_string_lossy().into_owned()]);
+    assert_eq!(candidates.len(), 1);
+    let c = &candidates[0];
+    assert_eq!(c.kind, lightcraft_catalog::MediaKind::Video);
+    assert_eq!(c.format, "MP4");
+    assert_eq!(c.width, 1920);
+    assert_eq!(c.height, 1080);
+    assert_eq!(c.duration, Some(84.5));
+    assert_eq!(c.captured.as_deref(), Some("2026-05-04T10:00:00"));
+
+    // Import into library
+    let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    assert_eq!((ids(&r, "imported"), ids(&r, "failed")), (1, 0), "{r}");
+    assert_eq!(s.catalog.len(), 1);
+
+    let photo = s.catalog.photos().next().unwrap();
+    assert_eq!(photo.kind, lightcraft_catalog::MediaKind::Video);
+    assert_eq!(photo.duration, Some(84.5));
+    assert_eq!(photo.format, "MP4");
+    assert_eq!(photo.width, 1920);
+    assert_eq!(photo.height, 1080);
+    assert_eq!(photo.captured.as_deref(), Some("2026-05-04T10:00:00"));
+
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+#[test]
+fn video_files_support_copy_and_date_organization() {
+    let src = temp_dir("video-copy-src");
+    let lib = temp_dir("video-copy-lib");
+
+    let mac_secs = 2_082_844_800u64 + 1_777_888_800u64; // 2026-05-04 10:00:00
+    let mp4_bytes = synthetic_mp4(1000, 15_000, 3840, 2160, mac_secs as u32);
+    let clip_path = src.join("clip.mp4");
+    std::fs::write(&clip_path, &mp4_bytes).unwrap();
+
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+
+    let r = s
+        .execute(
+            "library.import",
+            &json!({
+                "paths": [src.to_string_lossy()],
+                "mode": "copy",
+                "organize": "byDay",
+            }),
+        )
+        .unwrap();
+    assert_eq!((ids(&r, "imported"), ids(&r, "failed")), (1, 0), "{r}");
+
+    let photo = s.catalog.photos().next().unwrap();
+    assert_eq!(photo.kind, lightcraft_catalog::MediaKind::Video);
+    assert_eq!(photo.duration, Some(15.0));
+
+    // Originals should be filed under Originals/2026/2026-05-04/clip.mp4
+    let stored_path = match &photo.source {
+        lightcraft_catalog::Source::File { path } => path.clone(),
+        _ => panic!("expected File source"),
+    };
+    let normalized = stored_path.replace('\\', "/");
+    assert!(normalized.ends_with("/Originals/2026/2026-05-04/clip.mp4"), "expected date-based organization, got: {stored_path}");
+
+    let _ = std::fs::remove_dir_all(&src);
+    let _ = std::fs::remove_dir_all(&lib);
+}
+
+#[test]
+fn video_smart_collections_and_rule_matching() {
+    let src = temp_dir("video-rules");
+    let mac_secs = 2_082_844_800u64 + 1_777_888_800u64;
+    let clip1 = synthetic_mp4(1000, 120_000, 1920, 1080, mac_secs as u32); // 2 minutes
+    let clip2 = synthetic_mp4(1000, 10_000, 1920, 1080, mac_secs as u32); // 10 seconds
+
+    std::fs::write(src.join("long.mp4"), &clip1).unwrap();
+    std::fs::write(src.join("short.mp4"), &clip2).unwrap();
+    write_png(&src.join("photo.png"), 42);
+
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    assert_eq!(ids(&r, "imported"), 3, "{r}");
+
+    let photos: Vec<_> = s.catalog.photos().cloned().collect();
+    let long_clip = photos.iter().find(|p| p.file_name == "long.mp4").unwrap();
+    let short_clip = photos.iter().find(|p| p.file_name == "short.mp4").unwrap();
+    let photo = photos.iter().find(|p| p.file_name == "photo.png").unwrap();
+
+    use lightcraft_catalog::rules::Rule;
+
+    // Check kind rule
+    let video_rule = Rule::Field { field: "kind".into(), op: "is".into(), value: json!("video") };
+    assert!(video_rule.matches(long_clip, &s.catalog));
+    assert!(video_rule.matches(short_clip, &s.catalog));
+    assert!(!video_rule.matches(photo, &s.catalog));
+
+    // Check duration rule
+    let gt_minute = Rule::Field { field: "duration".into(), op: "gt".into(), value: json!(60) };
+    assert!(gt_minute.matches(long_clip, &s.catalog));
+    assert!(!gt_minute.matches(short_clip, &s.catalog));
+    assert!(!gt_minute.matches(photo, &s.catalog));
+
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+#[test]
+fn video_duplicate_detection_by_path_and_content() {
+    let src = temp_dir("video-dup");
+    let clip = synthetic_mp4(1000, 30_000, 1920, 1080, 0);
+    std::fs::write(src.join("clip.mp4"), &clip).unwrap();
+    std::fs::write(src.join("copy_of_clip.mp4"), &clip).unwrap();
+
+    let mut s = Session::new().with_fs();
+    // First import: imports clip.mp4, finds copy_of_clip.mp4 is a duplicate by content
+    let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    assert_eq!(ids(&r, "imported"), 1, "{r}");
+    assert_eq!(ids(&r, "duplicates"), 1, "{r}");
+    assert_eq!(r["duplicates"][0]["reason"], "content");
+
+    // Second import: both are duplicates by path or content
+    let r2 = s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    assert_eq!(ids(&r2, "imported"), 0, "{r2}");
+    assert_eq!(ids(&r2, "duplicates"), 2, "{r2}");
+
+    let _ = std::fs::remove_dir_all(&src);
+}

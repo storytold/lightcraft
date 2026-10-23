@@ -381,6 +381,8 @@ impl ImportJob {
                     // the templates see the photo as it will be catalogued (undated: the import time)
                     let own = Path::new(&path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
                     let mut q = Photo::new(PhotoId(0), Source::File { path: path.clone() }, &own, &info.format, 0, 0, &self.now);
+                    q.kind = info.kind;
+                    q.duration = info.duration;
                     q.captured = info.captured.clone();
                     q.meta = info.meta.clone();
                     let name = if let Some(template) = opts.rename.as_deref().filter(|t| !t.trim().is_empty()) {
@@ -472,12 +474,13 @@ impl Session {
     /// A thumbnail for an import candidate (not in the catalog): a raw's embedded preview, else a
     /// small render of the file. `slot` makes the job's photo id unique (`u64::MAX - slot`).
     pub fn candidate_thumb_job(&mut self, c: &ImportCandidate, edge: usize, slot: u64) -> Option<crate::media::QuickJob> {
-        if c.error.is_some() {
+        if c.error.is_some() || c.kind == MediaKind::Video {
             return None;
         }
         let id = PhotoId(u64::MAX - slot);
         let mut p = Photo::new(id, Source::File { path: c.path.clone() }, &c.name, &c.format, c.width.max(1), c.height.max(1), "");
         p.kind = c.kind;
+        p.duration = c.duration;
         if let Some(info) = self.import_probes.get(&c.path) {
             p.as_shot_wb = info.as_shot_wb;
             p.embedded_lens = info.embedded_lens;

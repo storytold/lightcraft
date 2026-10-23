@@ -440,7 +440,21 @@ fn candidate_cell(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDial
     crate::widgets::announce(&resp, c.name.clone());
     register(ui, format!("import:{i}"), img);
     let p = ui.painter();
-    p.rect_filled(img, 3.0, t.skeleton);
+    p.rect_filled(img, 3.0, if c.kind == lightcraft_catalog::MediaKind::Video { Color32::from_gray(30) } else { t.skeleton });
+    if c.kind == lightcraft_catalog::MediaKind::Video {
+        let side = 32.0;
+        crate::icons::paint(p, Rect::from_center_size(img.center(), vec2(side, side)), crate::icons::Icon::Video, t.text_dim);
+        if let Some(d) = c.duration {
+            let text = crate::widgets::format_duration(d);
+            if !text.is_empty() {
+                let g = p.layout_no_wrap(text, t.semibold(9.0), Color32::WHITE);
+                let w = g.size().x + 10.0;
+                let br = Rect::from_min_size(pos2(img.right() - w - 4.0, img.bottom() - 18.0), vec2(w, 14.0));
+                p.rect_filled(br, 3.0, Color32::from_black_alpha(175));
+                p.galley(br.min + vec2(5.0, 1.0), g, Color32::WHITE);
+            }
+        }
+    }
     // thumbnail (background job; the grid only asks for the cells in view)
     let slot = Slot::Import(slot_index);
     let edge = thumb_edge(img.width(), ui.ctx().pixels_per_point());

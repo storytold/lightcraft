@@ -171,9 +171,49 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
             content_hash,
             xmp: lightcraft_meta::embedded(bytes).xmp,
             preview_only: None,
+            duration: None,
         });
     }
-    let fmt = lightcraft_codecs::sniff(bytes).ok_or("unrecognized file format")?;
+    let fmt = lightcraft_codecs::sniff(bytes);
+    if fmt.as_ref().is_some_and(|f| f.is_video()) || (fmt.is_none() && lightcraft_meta::probe_video(bytes).is_some()) {
+        let v = lightcraft_meta::probe_video(bytes).unwrap_or_default();
+        let (mut w, mut h) = (v.width, v.height);
+        if let Some(o) = v.orientation
+            && o.swaps_axes()
+        {
+            std::mem::swap(&mut w, &mut h);
+        }
+        let (v_meta, v_captured) = meta_of(&v.metadata);
+        let captured = v.captured.or(v_captured).or(captured);
+        let mut meta = meta;
+        if !v_meta.camera.is_empty() {
+            meta.camera = v_meta.camera;
+        }
+        if meta.gps.is_none() {
+            meta.gps = v_meta.gps;
+        }
+        let format = match ext_upper(name).as_str() {
+            "MP4" | "MOV" | "M4V" => ext_upper(name),
+            _ => fmt.map(|f| format!("{f:?}").to_uppercase()).unwrap_or_else(|| "MP4".to_string()),
+        };
+        return Ok(ProbeInfo {
+            width: w,
+            height: h,
+            format,
+            kind: MediaKind::Video,
+            file_size: bytes.len() as u64,
+            captured,
+            file_modified: None,
+            meta,
+            as_shot_wb: None,
+            content_hash,
+            embedded_lens: None,
+            xmp: lightcraft_meta::embedded(bytes).xmp,
+            preview_only: None,
+            duration: v.duration,
+        });
+    }
+    let fmt = fmt.ok_or("unrecognized file format")?;
     if let Some(why) = fmt.not_decodable() {
         // e.g. "Heif files can't be opened: HEIC/HEIF support isn't included in this build of LightCraft"
         return Err(format!("{fmt:?} files can't be opened: {why}"));
@@ -204,6 +244,7 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
         embedded_lens: None,
         xmp: None,
         preview_only: None,
+        duration: None,
     })
 }
 
