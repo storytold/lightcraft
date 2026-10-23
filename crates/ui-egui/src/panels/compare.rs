@@ -228,6 +228,7 @@ fn photo_tile(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, slot: Slo
     let texture_side = super::detail::texture_side(ui.ctx());
     let want =
         (img.width().max(img.height()).min(img_area.width().max(img_area.height()) * 4.0) * ppp).min(2560.0_f32.min(texture_side as f32)) as usize;
+    let want = want.min(app.ui.settings.preview_edge_limit(native[0].max(native[1]))).max(8);
     let (rw, rh) = if aspect >= 1.0 { (want, (want as f32 / aspect) as usize) } else { ((want as f32 * aspect) as usize, want) };
     if let Some(job) = app.session.render_job(id, rw.max(8), rh.max(8), false, true) {
         app.renderer.request(slot, job, 60);
@@ -397,6 +398,10 @@ struct TileView {
 /// view), the window there is stays: a new one per frame would render the photo's own pixels each
 /// time. It is drawn magnified or with the old value until the gesture is quiet.
 fn request_window(app: &mut LightcraftApp, v: &TileView) -> Option<crate::region::RegionView> {
+    let fit = v.img.width() <= v.visible.width() * 1.05 && v.img.height() <= v.visible.height() * 1.05;
+    if fit && app.ui.settings.preview_is_limited() {
+        return None;
+    }
     let drawn_long = v.img.width().max(v.img.height()) * v.ppp;
     let frame_edge = app.ui.settings.window_frame_edge(drawn_long, v.native_long);
     if frame_edge as f32 <= v.whole_edge as f32 * crate::region::WINDOW_RATIO {

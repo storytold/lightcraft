@@ -2186,5 +2186,10 @@
   "Suggests who is in a photo from the faces you have named. Everything stays on your computer.": "根据你已命名的人脸，推测照片中的人物。所有数据仅保存在本机。",
   "This build cannot run recognition models: they can be added and chosen, not used.": "此版本无法运行识别模型：可以添加和选择，但无法使用。",
   "Detect Faces (Photo menu) needs it: a small one-time download.": "“检测人脸”（照片菜单）依赖它：一次性小文件下载。",
-  "This build has nowhere to keep face models, so the model list is not available. (The desktop app has.)": "此版本无法存放人脸模型，因此模型列表不可用。（桌面版可以存放。）"
+  "This build has nowhere to keep face models, so the model list is not available. (The desktop app has.)": "此版本无法存放人脸模型，因此模型列表不可用。（桌面版可以存放。）",
+  "Pixel limit": "像素上限",
+  "Percentage of the photo's long edge. The smaller limit wins; -1 means no pixel limit. 0% keeps a minimum preview. Smaller previews are faster.": "照片长边的百分比。以较小的上限为准；-1 表示无像素上限。0% 仍保留最小预览。较小的预览速度更快。",
+  "Limits apply to whole-frame previews. Zoomed detail stays sharp; exports and 1:1 preview builds keep their own sizes.": "上限适用于整幅图像预览。放大后的细节保持清晰；导出和 1:1 预览构建各自保留原有尺寸。",
+  "Enter a positive pixel limit, or -1 for no limit.": "请输入正数像素上限，或输入 -1 表示不限制。",
+  "No pixel limit": "无像素上限"
 }

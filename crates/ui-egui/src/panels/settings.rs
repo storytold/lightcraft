@@ -15,7 +15,7 @@ use egui::RichText;
 use serde_json::{Value, json};
 
 use crate::LightcraftApp;
-use crate::state::{GridBadges, PREVIEW_LIMITS, StartupView};
+use crate::state::{GridBadges, StartupView};
 use crate::theme::Tokens;
 use crate::widgets::register;
 
@@ -429,18 +429,21 @@ fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     // among the backends …), and the GPU state is process-wide, so it may change between frames;
     // a hint that wrapped would move every control below it under the pointer.
     ui.add(egui::Label::new(RichText::new(crate::i18n::tr(&status)).size(11.0).color(t.text_dim)).truncate()).on_hover_text(&status);
-    row(ui, t, crate::i18n::tr("Preview size"), |ui| {
-        let opts: Vec<(u32, String)> =
-            PREVIEW_LIMITS.iter().map(|e| (*e, if *e == 0 { crate::i18n::tr("Automatic").to_string() } else { format!("{e} px") })).collect();
-        let opts: Vec<(u32, &str)> = opts.iter().map(|(e, l)| (*e, l.as_str())).collect();
-        choices(ui, "settingsPreview", &opts, &mut app.ui.settings.preview_limit);
+    crate::preview_size::percent_slider(app, ui);
+    row(ui, t, crate::i18n::tr("Pixel limit"), |ui| {
+        crate::preview_size::pixel_field(app, ui);
     });
     hint(
         ui,
         t,
         crate::i18n::tr(
-            "Automatic renders the Detail view at the size it is shown, up to the photo's own pixels. Choose a size to cap it: smaller is faster.",
+            "Percentage of the photo's long edge. The smaller limit wins; -1 means no pixel limit. 0% keeps a minimum preview. Smaller previews are faster.",
         ),
+    );
+    hint(
+        ui,
+        t,
+        crate::i18n::tr("Limits apply to whole-frame previews. Zoomed detail stays sharp; exports and 1:1 preview builds keep their own sizes."),
     );
     row(ui, t, crate::i18n::tr("Memory for caches"), |ui| {
         let auto = crate::i18n::tr_format!("Automatic ({} MB)", lightcraft_engine::memory::default_budget() >> 20);

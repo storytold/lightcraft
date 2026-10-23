@@ -247,6 +247,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("file.importCurvePresets", "Import Point Curve Presets…", None, ""),
     ("file.exportCurvePresets", "Export Point Curve Presets…", None, ""),
     ("app.settings", "Settings…", Some("Cmd+,"), "Edit"),
+    ("app.previewSize", "Preview size", None, ""),
     ("app.newLibrary", "New Library…", None, "File"),
     ("app.openLibrary", "Open Library…", Some("Cmd+O"), "File"),
     ("app.recentLibraries", "Recent Libraries", None, ""),
@@ -445,6 +446,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
     // and a toast set by it was long over by the app's clock: it never showed)
     let ctx = app.tasks.repaint.clone().unwrap_or_default();
     let r: Result<Value, String> = match id {
+        "app.previewSize" => crate::preview_size::command(app, p),
         "view.photoGrid" => {
             app.ui.view = ViewMode::PhotoGrid;
             Ok(Value::Null)
@@ -1534,6 +1536,11 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             let info = app.session.execute("library.info", &json!({})).unwrap_or_default();
             let gpu = (lightcraft_engine::gpu::ready() && lightcraft_engine::gpu::available()).then(lightcraft_engine::gpu::adapter_name).flatten();
             let mb = |b: u64| format!("{:.0} MB", b as f64 / (1u64 << 20) as f64);
+            let preview_pixels = if app.ui.settings.preview_limit == 0 {
+                crate::i18n::tr("No pixel limit").to_string()
+            } else {
+                format!("{} px", app.ui.settings.preview_limit)
+            };
             let mut rows = vec![
                 ("Version".to_string(), env!("CARGO_PKG_VERSION").to_string()),
                 ("System".to_string(), format!("{} ({})", std::env::consts::OS, std::env::consts::ARCH)),
@@ -1547,13 +1554,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
                 ),
                 ("GPU rendering".to_string(), if app.ui.settings.gpu { "on".into() } else { "off".into() }),
                 ("Memory budget".to_string(), mb(lightcraft_engine::memory::default_budget() as u64)),
-                (
-                    "Preview size".to_string(),
-                    match app.ui.settings.preview_limit {
-                        0 => "automatic".to_string(),
-                        n => format!("{n} px"),
-                    },
-                ),
+                ("Preview size".to_string(), format!("{}% / {preview_pixels}", app.ui.settings.preview_percent)),
                 ("Photos".to_string(), info["photos"].to_string()),
                 ("Albums".to_string(), info["albums"].to_string()),
             ];

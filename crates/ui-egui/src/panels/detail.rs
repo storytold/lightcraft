@@ -595,8 +595,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let want = if interacting || plan.window_edge.is_some() {
         plan.main_edge
     } else {
-        // (a user's explicit Preview size below the preview level still caps it)
-        let limit = if app.ui.settings.preview_limit == 0 { usize::MAX } else { app.ui.settings.preview_limit as usize };
+        // Both user caps apply to the settled sharpness floor as well as the draft plan.
+        let limit = app.ui.settings.preview_edge_limit(native_long);
         let floor = lightcraft_engine::SourceLevel::Preview.max_edge().min(limit).min(native_long);
         plan.main_edge.max(floor).min(texture_side.max(crate::state::MIN_TEXTURE_SIDE))
     };

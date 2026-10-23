@@ -2,7 +2,7 @@
 //! loupe renders at the size it is drawn at (up to the photo's own pixels and a safety ceiling);
 //! "Preview size" in Settings only lowers that when the user asks for it.
 
-use crate::state::{AppSettings, LOUPE_EDGE_CEILING, PREVIEW_LIMITS, STANDARD_PREVIEW_EDGE};
+use crate::state::{AppSettings, LOUPE_EDGE_CEILING, STANDARD_PREVIEW_EDGE};
 
 /// A texture side no GPU we run on refuses (see the tests of small ones below).
 const BIG: usize = 16384;
@@ -15,7 +15,7 @@ fn with_limit(preview_limit: u32) -> AppSettings {
 #[test]
 fn default_is_automatic() {
     assert_eq!(AppSettings::default().preview_limit, 0);
-    assert_eq!(PREVIEW_LIMITS[0], 0, "Automatic is the first choice");
+    assert_eq!(AppSettings::default().preview_percent, 100, "default quality is unchanged");
 }
 
 // Given Automatic, when a 24 MP photo is shown at 1:1, then the render is the photo's own width
@@ -123,15 +123,15 @@ fn an_old_saved_preview_edge_does_not_pin_the_cap() {
     assert_eq!(s.preview_limit, 0);
 }
 
-// A saved limit is kept; an unknown one (hand-edited file) falls back to Automatic
+// Arbitrary positive pixel caps now round-trip alongside the old fixed choices.
 #[test]
-fn saved_limits_round_trip_and_unknown_ones_are_reset() {
+fn saved_limits_round_trip_including_custom_values() {
     let mut ui = crate::UiState::default();
     ui.settings.preview_limit = 3840;
     let back = serde_json::from_str::<crate::UiState>(&serde_json::to_string(&ui).unwrap()).unwrap().sanitized();
     assert_eq!(back.settings.preview_limit, 3840);
     ui.settings.preview_limit = 123;
-    assert_eq!(ui.sanitized().settings.preview_limit, 0);
+    assert_eq!(ui.sanitized().settings.preview_limit, 123);
 }
 
 // ---- Behaviour in the running UI -------------------------------------------------------------

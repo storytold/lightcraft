@@ -2414,5 +2414,10 @@
   "⌘-drag to straighten, ⇧G Guided Upright, a grid while transforming.": "⌘-dra för att räta upp, ⇧G guidad upprätning, ett rutnät under transformering.",
   "★ Favorites": "★ Favoriter",
   "日本語": "日本語",
-  "繁體中文（台灣）": "繁體中文（台灣）"
+  "繁體中文（台灣）": "繁體中文（台灣）",
+  "Pixel limit": "Pixelgräns",
+  "Percentage of the photo's long edge. The smaller limit wins; -1 means no pixel limit. 0% keeps a minimum preview. Smaller previews are faster.": "Procent av bildens långsida. Den lägre gränsen gäller; -1 betyder ingen pixelgräns. 0 % behåller en minsta förhandsvisning. Mindre förhandsvisningar är snabbare.",
+  "Limits apply to whole-frame previews. Zoomed detail stays sharp; exports and 1:1 preview builds keep their own sizes.": "Gränserna gäller förhandsvisningar av hela bilden. Inzoomade detaljer förblir skarpa; exporter och 1:1-förhandsvisningar behåller sina egna storlekar.",
+  "Enter a positive pixel limit, or -1 for no limit.": "Ange en positiv pixelgräns, eller -1 för ingen gräns.",
+  "No pixel limit": "Ingen pixelgräns"
 }

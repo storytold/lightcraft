@@ -307,13 +307,14 @@ pub fn plan(settings: &crate::state::AppSettings, v: ViewSizes) -> LoupePlan {
     }
     // a user who chose a size above the preview source level (3840, 5120) means it; otherwise the
     // original is not decoded for the whole-frame render
-    let source_cap = if settings.preview_limit == 0 { lightcraft_engine::SourceLevel::Preview.max_edge() } else { settings.preview_limit as usize };
+    let source_cap =
+        if settings.preview_is_limited() { settings.preview_edge_limit(v.native_long) } else { lightcraft_engine::SourceLevel::Preview.max_edge() };
     let edge_at = |scale: f32| settings.loupe_edge(drawn_long.min(canvas_long) * scale, v.native_long, v.texture_side).min(source_cap);
     let frame_edge = settings.window_frame_edge(drawn_long, v.native_long);
     // a user who capped the preview size has chosen speed over sharpness at fit
     let fit = drawn_long <= canvas_long * 1.05;
     // (against the undrafted whole-frame render: a drag must not switch the window off and on)
-    let window_edge = (frame_edge as f32 > edge_at(1.0) as f32 * WINDOW_RATIO && !(fit && settings.preview_limit != 0)).then_some(frame_edge);
+    let window_edge = (frame_edge as f32 > edge_at(1.0) as f32 * WINDOW_RATIO && !(fit && settings.preview_is_limited())).then_some(frame_edge);
     // with a window over it, the whole-frame draft is hidden (it feeds the histogram and stands in
     // where the window has no pixels yet): the small draft does, and the window keeps the frame time
     let scale = if window_edge.is_some() && v.draft.is_some() { scale.min(CPU_DRAFT_SCALE) } else { scale };

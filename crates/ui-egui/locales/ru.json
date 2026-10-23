@@ -2335,5 +2335,10 @@
   "Checking the GPU…": "Проверка ГП…",
   "CPU": "ЦП",
   "A face model uses the GPU only when a check shows it gives the same results faster.": "Модель лиц использует ГП, только если проверка показала, что он даёт те же результаты быстрее.",
-  "Checking the GPU for faces": "Проверка ГП для лиц"
+  "Checking the GPU for faces": "Проверка ГП для лиц",
+  "Pixel limit": "Предел в пикселях",
+  "Percentage of the photo's long edge. The smaller limit wins; -1 means no pixel limit. 0% keeps a minimum preview. Smaller previews are faster.": "Процент от длинной стороны фотографии. Применяется меньший предел; -1 означает отсутствие предела в пикселях. При 0% сохраняется минимальный предпросмотр. Меньшие предпросмотры работают быстрее.",
+  "Limits apply to whole-frame previews. Zoomed detail stays sharp; exports and 1:1 preview builds keep their own sizes.": "Пределы применяются к предпросмотру всего кадра. Увеличенные детали остаются чёткими; экспорт и создание предпросмотров 1:1 сохраняют собственные размеры.",
+  "Enter a positive pixel limit, or -1 for no limit.": "Введите положительный предел в пикселях или -1 для снятия ограничения.",
+  "No pixel limit": "Без предела в пикселях"
 }

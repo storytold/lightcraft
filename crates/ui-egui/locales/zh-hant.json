@@ -2143,5 +2143,10 @@
   "Checking the GPU…": "正在檢查 GPU…",
   "CPU": "CPU",
   "A face model uses the GPU only when a check shows it gives the same results faster.": "只有在檢查顯示 GPU 能更快得出相同結果時，臉孔模型才會使用 GPU。",
-  "Checking the GPU for faces": "正在檢查用於臉孔的 GPU"
+  "Checking the GPU for faces": "正在檢查用於臉孔的 GPU",
+  "Pixel limit": "像素上限",
+  "Percentage of the photo's long edge. The smaller limit wins; -1 means no pixel limit. 0% keeps a minimum preview. Smaller previews are faster.": "相片長邊的百分比。以較小的上限為準；-1 表示無像素上限。0% 仍保留最小預覽。較小的預覽速度更快。",
+  "Limits apply to whole-frame previews. Zoomed detail stays sharp; exports and 1:1 preview builds keep their own sizes.": "上限適用於整幅影像預覽。放大後的細節保持清晰；匯出與 1:1 預覽建立各自保留原有尺寸。",
+  "Enter a positive pixel limit, or -1 for no limit.": "請輸入正數像素上限，或輸入 -1 表示不限制。",
+  "No pixel limit": "無像素上限"
 }
