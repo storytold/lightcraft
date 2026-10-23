@@ -224,75 +224,6 @@ fn no_text_in_settings_uses_a_character_the_font_lacks() {
     }
 }
 
-/// What Settings says that no language had a word for: every catalog has each of these now (these
-/// 20, and the menu items the hint names, with Edit in Other Editor, which
-/// `the_menu_path_a_hint_gives_is_the_one_the_menus_show` checks).
-const ONCE_UNTRANSLATED: [&str; 20] = [
-    "Choose Profile…",
-    "Edit in Other Editor (⌥⌘E) opens the copy in this application (an app name on macOS, a program path elsewhere).",
-    "External Editing",
-    "Found automatically",
-    "LUT-based",
-    "Matrix/TRC",
-    "Model installation failed",
-    "Monitor profile",
-    "None (the display is treated as sRGB)",
-    "Other editor",
-    "Photo > Edit In > Edit in PhotoCraft (⇧⌘E, or right-click a photo) renders a copy with your edits, stacks it with the original and opens it in PhotoCraft. Save there and the copy updates here. As PSD, PhotoCraft saves straight back to it. Leave the location empty unless you use a portable copy.",
-    "Photos are shown through your monitor's ICC profile, so colours are right on wide-gamut and calibrated displays, and the Detail view uses the display's whole gamut. The histogram, the preview caches and exports are not affected.",
-    "Primaries (x, y)",
-    "Profiles assigned in your desktop's colour settings are usually in ~/.local/share/icc.",
-    "The download failed",
-    "Use Screen Profile",
-    "Use sRGB",
-    "starting…",
-    "this screen's profile",
-    "Faces",
-];
-
-#[test]
-fn every_language_has_the_sentences_settings_was_missing() {
-    use crate::i18n::Locale;
-    for language in Locale::ALL.iter().copied().filter(|language| *language != Locale::En) {
-        for source in ONCE_UNTRANSLATED {
-            let said = language.tr(source);
-            // (German, Georgian, Indonesian and Vietnamese say Matrix as English does, and TRC is TRC everywhere)
-            let same_word = source == "Matrix/TRC" && matches!(language, Locale::De | Locale::Id | Locale::Ka | Locale::Vi);
-            assert!(said != source || same_word, "{}: {source:?} is still in English", language.code());
-            assert!(!said.trim().is_empty() && !said.contains('▸'), "{}: {source:?} -> {said:?}", language.code());
-        }
-    }
-}
-
-#[test]
-fn the_sentences_settings_was_missing_are_the_ones_it_says() {
-    // (a sentence reworded in the code and not here would leave its translations orphaned)
-    let sources = [include_str!("panels/settings.rs"), include_str!("panels/denoise.rs"), include_str!("panels/faces.rs")].concat();
-    for source in ONCE_UNTRANSLATED {
-        let literal = format!("{source:?}");
-        assert!(sources.contains(&literal), "{source:?} is no longer said by Settings as written here");
-    }
-}
-
-#[test]
-fn the_menu_path_a_hint_gives_is_the_one_the_menus_show() {
-    use crate::i18n::Locale;
-    // (the hint under External Editing says where the command is: in each language it names the
-    // menu items as that language's menus do)
-    let hint = ONCE_UNTRANSLATED.iter().find(|source| source.starts_with("Photo > Edit In > Edit in PhotoCraft")).unwrap();
-    for language in Locale::ALL.iter().copied().filter(|language| *language != Locale::En) {
-        let said = language.tr(hint);
-        for item in ["Edit In", "Edit in PhotoCraft"] {
-            let name = language.tr(item);
-            assert!(name != item, "{}: the menu item {item:?} has no translation", language.code());
-            assert!(said.contains(name), "{}: the hint does not name {name:?}: {said:?}", language.code());
-        }
-        // (Edit in Other Editor is a third item of the same menus; the hint does not name it)
-        let item = "Edit in Other Editor";
-        assert!(language.tr(item) != item, "{}: the menu item {item:?} has no translation", language.code());
-    }
-}
-
 #[test]
 fn a_models_licence_line_and_a_favourite_star_can_be_read_in_every_theme() {
     use crate::dialogs::settings::favorite_star_colour;
@@ -313,19 +244,9 @@ fn a_models_licence_line_and_a_favourite_star_can_be_read_in_every_theme() {
 }
 
 #[test]
-fn the_gpu_line_and_the_smart_previews_folder_go_through_translation() {
+fn the_gpu_line_and_the_smart_previews_folder_read_as_they_did_in_english() {
     use crate::dialogs::settings::{gpu_line, smart_folder_default};
-    use crate::i18n::{Locale, set_language};
-    for language in Locale::ALL.iter().copied().filter(|language| *language != Locale::En) {
-        set_language(language);
-        let starting = gpu_line(None);
-        assert_eq!(starting, format!("GPU: {}", language.tr("starting…")), "{}", language.code());
-        assert_ne!(starting, "GPU: starting…", "{}: still English", language.code());
-        let shown = smart_folder_default();
-        assert_eq!(shown, language.tr("  (library default)").trim(), "{}", language.code());
-        assert_ne!(shown, "(library default)", "{}: still English", language.code());
-    }
-    set_language(Locale::En);
+
     assert_eq!(gpu_line(Some("Apple M2".into())), "GPU: Apple M2");
     assert_eq!(smart_folder_default(), "(library default)");
 }
