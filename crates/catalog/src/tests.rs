@@ -125,6 +125,31 @@ fn filter_search_sort() {
 
 /// A search word with a colon whose left part is not a known field ("10:30", "Re:") is plain
 /// text, not a fielded token that matches nothing.
+/// `flags` (#2588) matches any of its flags; a filter saved before it, with the single `flag`, reads
+/// and filters as it did, and a filter without `flags` is written without the key.
+#[test]
+fn filter_flags_any_of_and_the_old_single_flag() {
+    let mut c = Catalog::new();
+    let a = photo(&mut c, "a.jpg", "2026-01-01T10:00:00");
+    let b = photo(&mut c, "b.jpg", "2026-01-02T10:00:00");
+    let d = photo(&mut c, "d.jpg", "2026-01-03T10:00:00");
+    c.apply(Op::SetFlag { id: a, flag: Flag::Pick }).unwrap();
+    c.apply(Op::SetFlag { id: d, flag: Flag::Reject }).unwrap();
+    let f = Filter { flags: vec![Flag::Pick, Flag::None], ..Default::default() };
+    assert_eq!(c.query(&f, &Sort::default()), vec![b, a]);
+    let f = Filter { flags: vec![Flag::Reject, Flag::None], ..Default::default() };
+    assert_eq!(c.query(&f, &Sort::default()), vec![d, b]);
+    let saved: Filter = serde_json::from_value(serde_json::json!({"text": "", "rating": 0, "flag": "reject", "label": null})).unwrap();
+    assert!(saved.flags.is_empty());
+    assert_eq!(c.query(&saved, &Sort::default()), vec![d]);
+    let written = serde_json::to_value(&saved).unwrap();
+    assert_eq!(written.get("flag"), Some(&serde_json::json!("reject")));
+    assert!(written.get("flags").is_none(), "{written}");
+    let round: Filter =
+        serde_json::from_value(serde_json::to_value(Filter { flags: vec![Flag::Pick, Flag::None], ..Default::default() }).unwrap()).unwrap();
+    assert_eq!(round.flags, vec![Flag::Pick, Flag::None]);
+}
+
 #[test]
 fn free_text_with_a_colon_searches_the_text_fields() {
     let mut c = Catalog::new();

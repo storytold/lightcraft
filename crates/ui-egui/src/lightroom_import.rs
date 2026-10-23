@@ -629,6 +629,7 @@ mod tests {
         h.app.session.filter.text = "no-photo-has-this-name".into();
         h.app.session.filter.only = vec![lightcraft_catalog::PhotoId(u64::MAX)];
         h.app.session.filter.labels = vec![lightcraft_catalog::ColorLabel::Red];
+        h.app.session.filter.flags = vec![lightcraft_catalog::Flag::Reject];
         h.app.session.filter.rule_set = Some(lightcraft_catalog::RuleSet {
             mode: lightcraft_catalog::rules::Match::All,
             rules: vec![lightcraft_catalog::rules::Rule::Field { field: "rating".into(), op: "is".into(), value: json!(5) }],

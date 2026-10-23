@@ -1737,6 +1737,7 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
                 // The filter command merges a patch; these defaults are omitted by serde.
                 filter["only"] = json!([]);
                 filter["labels"] = json!([]);
+                filter["flags"] = json!([]);
                 filter["ruleSet"] = serde_json::Value::Null;
                 app.run("library.filter", filter)?;
                 app.run("library.select", json!({"ids": [first]}))?;

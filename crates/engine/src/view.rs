@@ -158,8 +158,11 @@ pub fn filter_chips(f: &Filter, cat: &Catalog) -> Vec<FilterChip> {
         };
         add(format!("Rating {op} {}★", f.rating), json!({"rating": 0}));
     }
-    if let Some(fl) = f.flag {
-        add(format!("Flag: {}", format!("{fl:?}").to_lowercase()), json!({"flag": Null}));
+    let mut flags = f.flags.clone();
+    flags.extend(f.flag.filter(|fl| !flags.contains(fl)));
+    if !flags.is_empty() {
+        let names: Vec<String> = flags.iter().map(|fl| format!("{fl:?}").to_lowercase()).collect();
+        add(format!("Flag: {}", names.join(" or ")), json!({"flag": Null, "flags": []}));
     }
     let mut labels = f.labels.clone();
     labels.extend(f.label.filter(|l| !labels.contains(l)));

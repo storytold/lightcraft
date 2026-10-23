@@ -1545,6 +1545,8 @@ mod tests {
         assert_eq!(filter_label(&filter, &app.session.catalog), "Farbmarkierung: Rot oder Blau");
         app.run("label.setNames", serde_json::json!({"names": {"red": "Color"}})).unwrap();
         assert_eq!(filter_label(&filter, &app.session.catalog), "Farbmarkierung: Color oder Blau");
+        let filter = lightcraft_catalog::Filter { flags: vec![lightcraft_catalog::Flag::Pick, lightcraft_catalog::Flag::None], ..Default::default() };
+        assert_eq!(filter_label(&filter, &app.session.catalog), "Markierung: ausgewählt oder keine");
         set_language(Locale::En);
     }
 

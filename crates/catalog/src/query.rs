@@ -32,6 +32,10 @@ pub struct Filter {
     /// Any of these labels (the filter bar's multi-select); empty = no constraint.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub labels: Vec<ColorLabel>,
+    /// Any of these flags (the filter bar's multi-select: Picked and Unflagged hide only the
+    /// rejects); empty = no constraint.
+    #[serde(skip_serializing_if = "Vec::is_empty", deserialize_with = "null_as_empty")]
+    pub flags: Vec<Flag>,
     pub kind: Option<MediaKind>,
     pub edited: Option<bool>,
     pub album: Option<AlbumId>,
@@ -66,6 +70,11 @@ pub struct Filter {
     /// Smart-album rules (all / any / none, nested groups; see [`crate::rules`]).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rule_set: Option<crate::RuleSet>,
+}
+
+/// A list that may be given as `null`, read as empty: agents clear `flags` the way they clear `flag`.
+fn null_as_empty<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(d: D) -> Result<Vec<T>, D::Error> {
+    Ok(Option::<Vec<T>>::deserialize(d)?.unwrap_or_default())
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -259,6 +268,9 @@ impl Filter {
         if let Some(f) = self.flag {
             v.push(format!("flag {}", format!("{f:?}").to_lowercase()));
         }
+        if !self.flags.is_empty() {
+            v.push(format!("flag {}", self.flags.iter().map(|f| format!("{f:?}").to_lowercase()).collect::<Vec<_>>().join(" or ")));
+        }
         if let Some(l) = self.label {
             v.push(format!("label {}", format!("{l:?}").to_lowercase()));
         }
@@ -372,6 +384,9 @@ impl Filter {
             return false;
         }
         if !self.labels.is_empty() && !p.label.is_some_and(|l| self.labels.contains(&l)) {
+            return false;
+        }
+        if !self.flags.is_empty() && !self.flags.contains(&p.flag) {
             return false;
         }
         if !self.only.is_empty() && !prepared.only.as_ref().map_or_else(|| self.only.contains(&p.id), |only| only.contains(&p.id)) {

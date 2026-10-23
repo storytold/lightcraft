@@ -46,6 +46,12 @@ pub(crate) fn display_label(chip: &FilterChip, filter: &lightcraft_catalog::Filt
         let names = labels.iter().map(|label| crate::i18n::color_label(catalog, *label)).collect::<Vec<_>>();
         return format!("{}: {}", tr("Label"), names.join(&format!(" {} ", tr("or"))));
     }
+    if chip.clear.get("flags").is_some() {
+        let mut flags = filter.flags.clone();
+        flags.extend(filter.flag.filter(|flag| !flags.contains(flag)));
+        let names = flags.iter().map(|flag| tr(&format!("{flag:?}").to_lowercase()).to_string()).collect::<Vec<_>>();
+        return format!("{}: {}", tr("Flag"), names.join(&format!(" {} ", tr("or"))));
+    }
     if chip.clear.get("dateFrom").is_some() || chip.clear.get("dateTo").is_some() {
         return match (&filter.date_from, &filter.date_to) {
             (Some(from), Some(to)) => format!("{} {} – {}", tr("Captured"), date_group_label(from, false), date_group_label(to, false)),
@@ -58,7 +64,7 @@ pub(crate) fn display_label(chip: &FilterChip, filter: &lightcraft_catalog::Filt
         return format!("{} {}", tr("Only"), crate::i18n::tr_format!("{n} photos", n = filter.only.len()));
     }
     if let Some((prefix, value)) = chip.label.split_once(": ") {
-        let value = if matches!(prefix, "Flag" | "Type") {
+        let value = if prefix == "Type" {
             tr(value).to_string()
         } else if prefix == "Date" {
             filter.date.as_ref().map_or_else(|| value.to_string(), |date| date_group_label(date, false))
