@@ -832,7 +832,10 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             let action = if id == "file.backupLibrary" { app.services.backup_library.as_mut() } else { app.services.restore_library.as_mut() };
             match action {
                 Some(f) => f(&mut app.session),
-                None => Err("not available here: on the desktop the library is a folder; back it up with your other files".into()),
+                None => {
+                    Err("not available here: on the desktop the library is a folder; File ▸ Back Up Library (`library.backup`) backs up its catalog"
+                        .into())
+                }
             }
         }
         "view.filmstrip" => {

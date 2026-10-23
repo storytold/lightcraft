@@ -203,6 +203,8 @@
   "{name} opened in the other editor": "{name} otevřeno v druhém editoru",
   "{n} originals opened in the other editor": "Originály otevřené v druhém editoru: {n}",
   "· {in_source} identical copies": "· shodné kopie: {in_source}",
+  "Backed up the library to {}": "Knihovna zálohována do {}",
+  "The library was not backed up: {}": "Knihovna nebyla zálohována: {}",
   "{n} photo{}": "fotografií: {n}{:.0}",
   "{n} photo{} match · updates automatically as photos change": "Odpovídající fotografie: {n}{:.0} · aktualizuje se automaticky při změnách fotografií",
   "{n} photo{} now · updates automatically as photos change": "Aktuální fotografie: {n}{:.0} · aktualizuje se automaticky při změnách fotografií",

@@ -2311,5 +2311,10 @@
   "− harder border · + softer border": "− terävämpi reuna · + pehmeämpi reuna",
   "≤  at most": "≤  enintään",
   "≥  at least": "≥  vähintään",
-  "★ Favorites": "★ Suosikit"
+  "★ Favorites": "★ Suosikit",
+  "Back Up Library": "Varmuuskopioi kirjasto",
+  "Backing up the library": "Kirjastoa varmuuskopioidaan",
+  "Backup Status": "Varmuuskopion tila",
+  "Check Backup": "Tarkista varmuuskopio",
+  "Backup Preferences": "Varmuuskopioinnin asetukset"
 }
