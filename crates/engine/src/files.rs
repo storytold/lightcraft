@@ -1117,14 +1117,39 @@ pub fn fs_reduced_loader() -> ReducedLoader {
     Arc::new(|path: &str, max_edge: usize| fs_load(path, max_edge, |bytes| load_vec_reduced(bytes, max_edge)))
 }
 
+/// What a decode of a JPEG cut short holds that its file length doesn't say: the decoder reads
+/// the whole frame (3 bytes a pixel; with the float image of a full-size load, 15), where the
+/// file may be a small prefix of a large photo. 0 for any other file.
+fn cut_jpeg_weight(bytes: &[u8], max_edge: usize) -> usize {
+    if !bytes.starts_with(&[0xFF, 0xD8]) || bytes.ends_with(&[0xFF, 0xD9]) {
+        return 0;
+    }
+    match lightcraft_codecs::read_header(bytes) {
+        Ok(h) if h.truncated => {
+            let per_pixel = if max_edge <= crate::media::SourceLevel::Thumb.max_edge() { 3 } else { 15 };
+            (h.width as usize).saturating_mul(h.height as usize).saturating_mul(per_pixel)
+        }
+        _ => 0,
+    }
+}
+
 /// Read `path` and `load` it, waiting on [`crate::memory::work_gate`] as [`fs_hooks`] explains.
 fn fs_load<T>(path: &str, max_edge: usize, load: impl FnOnce(Vec<u8>) -> Result<T, String>) -> Result<T, String> {
     let len = std::fs::metadata(path).map(|m| usize::try_from(m.len()).unwrap_or(usize::MAX)).unwrap_or(0);
     let weight = len.saturating_mul(if max_edge <= crate::media::SourceLevel::Thumb.max_edge() { 3 } else { 6 });
     let gate = crate::memory::work_gate();
-    let _permit = if crate::memory::is_background() { gate.acquire(weight) } else { gate.acquire_urgent(weight) };
+    let acquire = |bytes: usize| if crate::memory::is_background() { gate.acquire(bytes) } else { gate.acquire_urgent(bytes) };
+    let mut permit = acquire(weight);
     let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+    // a prefix of a big photo decodes to the whole frame: wait for room for that (the first
+    // permit is given back first, so two loads can't each hold one and wait for the other)
+    let frame = cut_jpeg_weight(&bytes, max_edge);
+    if frame > weight {
+        drop(permit);
+        permit = acquire(frame);
+    }
     let r = load(bytes);
+    drop(permit);
     // the file, the samples and the intermediate images are gone: give their pages back
     crate::memory::release();
     r
@@ -2702,6 +2727,18 @@ pub(crate) mod tests {
         assert!(quick_image_srgb(&[], &jpeg, false, 64).is_some());
         assert!(quick_image_srgb(&[], &jpeg[..jpeg.len() * 3 / 4], false, 64).is_none());
         assert!(quick_image_srgb(&[], &jpeg[..jpeg.len() * 3 / 4], true, 64).is_none());
+    }
+
+    /// A JPEG cut short is weighed at its whole frame, not at the length of the prefix.
+    #[test]
+    fn a_cut_jpeg_is_weighed_at_its_whole_frame() {
+        let rgb: Vec<u8> = (0..160 * 96 * 3).map(|i| (i * 7 % 251) as u8).collect();
+        let jpeg = encode_jpeg(&EncodeImage::new(160, 96, 3, Samples::U8(&rgb)), 90, ChromaSubsampling::S420, &EncodeMeta::default()).unwrap();
+        let thumb = crate::media::SourceLevel::Thumb.max_edge();
+        assert_eq!(cut_jpeg_weight(&jpeg, thumb), 0, "a whole file is weighed by its length");
+        assert_eq!(cut_jpeg_weight(&jpeg[..jpeg.len() / 2], thumb), 160 * 96 * 3);
+        assert_eq!(cut_jpeg_weight(&jpeg[..jpeg.len() / 2], thumb + 1), 160 * 96 * 15);
+        assert_eq!(cut_jpeg_weight(b"not a jpeg", thumb), 0);
     }
 
     /// A raw whose TIFF shell holds only a small RGB image (IFD0) next to a private block, as Exif
