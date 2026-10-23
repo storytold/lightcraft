@@ -15,6 +15,7 @@
 //! hash ([`Session::learn_content_hash`]): a result that no longer applies (Add to My Photos undone
 //! meanwhile) leaves the preview where the photo's current key finds it.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use lightcraft_catalog::{Op, Photo, PhotoId, Source};
@@ -67,18 +68,37 @@ fn hash_reader(mut r: impl std::io::Read) -> Option<String> {
     }
 }
 
+/// What tells a file's versions apart without reading it: its size and modification time (`None`
+/// where the file system keeps none).
+fn revision(path: &str) -> Option<(u64, Option<std::time::SystemTime>)> {
+    let m = std::fs::metadata(path).ok()?;
+    Some((m.len(), m.modified().ok()))
+}
+
 impl HashJob {
     /// Read and hash the file, and find a smart preview made under the old key (it moves to the new
-    /// one when the session records the hash). `None` when the file can't be read or isn't the one
-    /// queued any more (another size).
+    /// one when the session records the hash). `None` when the file can't be read, isn't the one
+    /// queued any more (another size), or changed while it was read (the hash would be of neither
+    /// version): the job is then tried again later.
     pub fn run(&self) -> Option<HashDone> {
+        self.run_reading(|path| std::fs::read(path).ok())
+    }
+
+    /// [`Self::run`] with the file read by `read` (tests change the file while it is read).
+    pub(crate) fn run_reading(&self, read: impl FnOnce(&str) -> Option<Vec<u8>>) -> Option<HashDone> {
         let Source::File { path } = &self.photo.source else { return None };
-        let len = std::fs::metadata(path).ok()?.len();
+        let before = revision(path)?;
+        let len = before.0;
         if len != self.photo.file_size {
             return None;
         }
         let _permit = crate::memory::work_gate().acquire(usize::try_from(len).unwrap_or(usize::MAX));
-        let hash = file_hash(path)?;
+        let bytes = read(path)?;
+        if revision(path)? != before {
+            return None;
+        }
+        let hash = lightcraft_preview::hash_bytes(&bytes).to_string();
+        drop(bytes);
         // Only looked up here, off the UI thread: the photo keeps its old key until the hash is recorded.
         let smart_move = self.smart_dir.as_ref().and_then(|dir| {
             let old = crate::smart::file_path(dir, &self.photo);
@@ -126,8 +146,9 @@ fn wants_hash(p: &Photo) -> bool {
 impl Session {
     /// Queue photos that joined the library without a content hash (see the module docs).
     pub fn queue_hash(&mut self, ids: impl IntoIterator<Item = PhotoId>) {
+        let mut queued: HashSet<PhotoId> = self.unhashed.iter().copied().collect();
         for id in ids {
-            if self.catalog.photo(id).is_some_and(|p| wants_hash(p)) && !self.unhashed.contains(&id) {
+            if self.catalog.photo(id).is_some_and(|p| wants_hash(p)) && queued.insert(id) {
                 self.unhashed.push(id);
             }
         }
@@ -159,12 +180,14 @@ impl Session {
     /// reads no whole files.
     pub(crate) fn hash_joined(&mut self, ids: impl IntoIterator<Item = PhotoId>) {
         let ids: Vec<PhotoId> = ids.into_iter().collect();
-        self.queue_hash(ids.iter().copied());
+        let joined: HashSet<PhotoId> = ids.iter().copied().collect();
+        self.queue_hash(ids);
         if self.hash_in_background {
             return;
         }
-        let mine: Vec<PhotoId> = self.unhashed.iter().copied().filter(|id| ids.contains(id)).collect();
-        self.unhashed.retain(|id| !mine.contains(id));
+        // (both keep the queue's order)
+        let (mine, rest) = std::mem::take(&mut self.unhashed).into_iter().partition(|id| joined.contains(id));
+        self.unhashed = rest;
         let jobs = self.hash_jobs(mine);
         self.run_hash_jobs(jobs);
     }
@@ -211,13 +234,15 @@ impl Session {
     /// as long as its photo still wants a hash. How many were recorded.
     fn run_hash_jobs(&mut self, jobs: Vec<HashJob>) -> usize {
         let mut recorded = 0;
+        let mut failed = Vec::new();
         for job in jobs {
             if job.run().is_some_and(|d| self.learn_content_hash(d)) {
                 recorded += 1;
             } else {
-                self.queue_hash([job.id]);
+                failed.push(job.id);
             }
         }
+        self.queue_hash(failed);
         recorded
     }
 }
