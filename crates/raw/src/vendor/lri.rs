@@ -285,7 +285,10 @@ fn vignetting(calibration: &[Msg], lens_position: u64, width: usize, height: usi
         return None;
     }
     let area = Area { top: 0, left: 0, bottom: height as u32, right: width as u32, plane: 0, planes: 1, row_pitch: 1, col_pitch: 1 };
-    let spacing = [1.0 / (rows - 1) as f64, 1.0 / (cols - 1) as f64];
+    // the gain-map reader places pixel `y` at `y / height`, so the last row and column sit at `(n - 1) / n`: spacing
+    // the grid over that span puts its outer points on the frame's edge pixels
+    let span = |n: usize| n.saturating_sub(1) as f64 / n.max(1) as f64;
+    let spacing = [span(height) / (rows - 1) as f64, span(width) / (cols - 1) as f64];
     Some(Opcode::GainMap { area, points_v: rows as u32, points_h: cols as u32, spacing, origin: [0.0, 0.0], map_planes: 1, gains })
 }
 
@@ -529,8 +532,14 @@ mod tests {
         let n = r.normalized().unwrap();
         let plain = |i: usize| f32::from(px[i] - 42) / (1023.0 - 42.0);
         assert!((n.data[0] - 2.0 * plain(0)).abs() < 1e-5);
-        let centre = 3 * 16 + 8;
-        assert!(n.data[centre] < 1.1 * plain(centre) && n.data[centre] >= plain(centre));
+        // the last row and column take the grid's edge gains, as the first do
+        for corner in [15, 5 * 16, 6 * 16 - 1] {
+            assert!((n.data[corner] - 2.0 * plain(corner)).abs() < 1e-5, "corner {corner}: {} vs {}", n.data[corner], plain(corner));
+        }
+        // the grid's centre point sits between the two middle pixels, which mirror each other and gain a little
+        let gain = |i: usize| n.data[i] / plain(i);
+        let (a, b) = (2 * 16 + 7, 3 * 16 + 8);
+        assert!((gain(a) - gain(b)).abs() < 1e-5 && (1.0..1.2).contains(&gain(a)), "{} {}", gain(a), gain(b));
     }
 
     #[test]
