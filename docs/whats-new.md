@@ -2,6 +2,50 @@
 
 ## 2026-10-21
 
+### Imports and Synchronize Folder wait for each other
+- An import confirmed (or photos dropped on the window) while a Synchronize Folder runs, or a Synchronize Folder
+  confirmed while an import runs, now waits in line and starts by itself when the other ends. Before, it was refused
+  ("Wait for the import to finish", "A folder is being synchronized").
+- A waiting import checks for duplicates against the library as it is when its turn comes, so nothing is added twice.
+- A waiting Synchronize Folder looks at its folder again when its turn comes. It removes or relinks only the photos
+  its dialog showed: one that went missing while it waited is left alone, and the message at the end says so.
+- An import or Synchronize Folder that did not go well has Retry in its row under the bell.
+
+### A second preview build waits for the first
+- File ▸ Previews stays available while a build runs. Build Previews or Build / Discard Smart Previews chosen
+  meanwhile now waits in line and starts by itself when the builds ahead of it end, with the photos that were chosen
+  when you asked. Before, the items were greyed out until the build ended.
+- Waiting builds are listed under the bell below the running one, with when each starts and ✕ to take it out of the
+  line. The line beside the bell counts them ("2 waiting").
+- A build that did not go well has Retry in its row: it runs again for the same photos.
+- Nothing waits across a quit or another library: the files may have changed meanwhile. Quitting says how many would
+  not run.
+- Agents queue a build with `queue: true`, see it in `activity.list` (`waiting`, `place`, `lane`), take it out with
+  `activity.cancel` and ask again for one that did not go well with `activity.retry`.
+
+### A finished task stays in the list under the bell
+- An export, import, Synchronize Folder, folder scan, Build Previews or Smart Previews, Photo Merge, Lightroom
+  catalog inspect or import, model or place-name download, Fill Location from GPS, move or Find Missing Photos that
+  ran for 10 seconds or more, was stopped, or did not go well stays in the list under the bell when it ends, until
+  you dismiss it: what it did, how long it took, and the files that failed with the reason for each (Show failed,
+  Copy all) and Show in Finder (Explorer, File Manager) for what an export made. The message that passes still
+  shows, as before; until now it was the only record. A preview build says how many photos it could not make.
+- One that did not go well puts a mark on the bell until you dismiss it, and comes first in the list, under "Needs
+  attention". A task whose worker crashed says that it stopped unexpectedly. Clear all lets go of every ended row.
+- With nothing else running, the top bar says for a few seconds how the task that just ended went.
+- Slideshow export, Print to PDF from an agent, reading focus points, thumbnail-cache tidying, the face GPU check,
+  Apple Photos imports, the face scan and AI Denoise do not leave a row yet.
+- Agents: `activity.finished` lists the ended rows, `activity.dismiss` lets go of one (or all), and `ui.inspect`
+  reports them as `activityFinished`.
+
+### Background tasks under the bell
+- Running tasks (imports, exports, preview builds…) no longer float over the top-left corner, where they covered the
+  top of the left panel for as long as a job ran. The bell in the top bar shows them: a ring for how far along they
+  are, and beside it, in a wide window, the task's name and percentage, or how many run (a narrower window keeps the
+  percentage or the count, and the bell's tooltip says the rest). Click the bell (or Window ▸ Tasks) for the list,
+  with ✕ to stop a task; it shows every task, the newest first, and scrolls. Esc or a click elsewhere closes it.
+- The bell used to open History. History is in the Window menu and on the tool strip, as before.
+
 ### Sharper resampling in HDR and panorama merges
 - Merged photos (HDR and panorama) are resampled with a sharper filter (Lanczos-3 instead of bilinear). Moving a
   photo by half a pixel used to lose a third of its finest detail; now it keeps most of it, without halos around

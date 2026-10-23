@@ -471,9 +471,14 @@ fn move_to_folder(s: &mut Session, p: &Value) -> Result<Value> {
         return Ok(json!({"moved": 0, "folder": folder}));
     }
     let plural = |k: usize| if k == 1 { "" } else { "s" };
-    let _task = s.activity.start("move", &format!("Moving {n} photo{}", plural(n)), crate::activity::Cancel::No);
+    let task = s.activity.start("move", &format!("Moving {n} photo{}", plural(n)), crate::activity::Cancel::No);
     let name = dir.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_else(|| folder.to_string());
-    s.apply_file_plans(&crate::rename::RealFs, &plans, &|k| format!("Move {k} Photo{} to “{name}”", plural(k)))?;
+    let moved = s.apply_file_plans(&crate::rename::RealFs, &plans, &|k| format!("Move {k} Photo{} to “{name}”", plural(k)));
+    task.finish(match &moved {
+        Ok(_) => crate::activity::Outcome::default(),
+        Err(e) => crate::activity::Outcome::failed(e.to_string()),
+    });
+    moved?;
     Ok(json!({"moved": n, "folder": folder}))
 }
 
