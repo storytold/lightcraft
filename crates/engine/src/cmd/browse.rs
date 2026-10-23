@@ -244,8 +244,13 @@ fn add_to_library(s: &mut Session, p: &Value) -> Result<Value> {
         return Ok(json!({"added": 0}));
     }
     let n = ids.len();
-    let ops = ids.into_iter().map(|id| Op::SetLocal { id, local: false }).collect();
+    let ops = ids.iter().map(|&id| Op::SetLocal { id, local: false }).collect();
     s.commit("Add to My Photos", Op::Batch { ops })?;
+    // browsing left their content hashes unset (see `crate::hashing`)
+    s.queue_hash(ids);
+    if !s.hash_in_background {
+        s.hash_queued_now();
+    }
     Ok(json!({"added": n}))
 }
 
