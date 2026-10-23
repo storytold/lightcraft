@@ -73,6 +73,20 @@ const FIELDS: &[(&str, usize)] = &[
     ("OUT_Y", 3),
     ("OUT_TRC", 1),
     ("OUT_GAMMA", 1),
+    // a LUT profile: its table in `aux` at LUT_OFF (size³ rgb, red fastest), amount and domain
+    ("LUT", 1),
+    ("LUT_OFF", 1),
+    ("LUT_N", 1),
+    ("LUT_AMT", 1),
+    ("LUT_MIN", 3),
+    ("LUT_MAX", 3),
+    // soft proofing: Rec.2020 → proof, the proof's luminance weights, proof → output, warnings
+    ("PROOF", 1),
+    ("PROOF_M", 9),
+    ("PROOF_Y", 3),
+    ("PROOF_OUT_M", 9),
+    ("PROOF_DEST_WARN", 1),
+    ("PROOF_DISP_WARN", 1),
     // first row of a band dispatch (the kernel runs over rows Y0.., see `render`)
     ("Y0", 1),
 ];
@@ -156,6 +170,10 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     for m in masks {
         aux.extend_from_slice(m);
     }
+    let lut_off = aux.len();
+    if let Some((l, _)) = &fp.lut {
+        aux.extend(l.data.iter().flatten());
+    }
 
     let mut p = Block::new();
     p.u("W", fp.w as u32);
@@ -233,6 +251,22 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     let (trc, gamma) = fp.out_trc.code();
     p.u("OUT_TRC", trc);
     p.f("OUT_GAMMA", gamma);
+    if let Some((l, amount)) = &fp.lut {
+        p.b("LUT", true);
+        p.u("LUT_OFF", lut_off as u32);
+        p.u("LUT_N", l.size as u32);
+        p.f("LUT_AMT", *amount);
+        p.fs("LUT_MIN", &l.domain_min);
+        p.fs("LUT_MAX", &l.domain_max);
+    }
+    if let Some(pp) = &fp.proof {
+        p.b("PROOF", true);
+        p.fs("PROOF_M", pp.to_proof.as_flattened());
+        p.fs("PROOF_Y", &pp.luma);
+        p.fs("PROOF_OUT_M", pp.proof_to_out.as_flattened());
+        p.b("PROOF_DEST_WARN", pp.dest_warning);
+        p.b("PROOF_DISP_WARN", pp.display_warning);
+    }
     if let Some((amt, cell, rough, seed)) = fp.grain {
         p.b("GRAIN", true);
         p.f("GRAIN_AMT", amt);

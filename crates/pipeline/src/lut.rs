@@ -1,7 +1,7 @@
 //! 3D LUT profiles: `.cube` files (the plain-text Cube LUT format: `LUT_3D_SIZE`, optional
 //! `DOMAIN_MIN` / `DOMAIN_MAX`, then size³ "r g b" lines with red changing fastest), applied to
 //! the display-encoded output colour and blended by the profile amount. Profiles are registered
-//! here by id (`lut:…`) and found by the finishing stage; LUT profiles render on the CPU.
+//! here by id (`lut:…`) and found by the finishing stage (CPU loop and GPU kernel alike).
 
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock, RwLock};
@@ -106,7 +106,7 @@ pub fn unregister(id: &str) {
     registry().write().unwrap_or_else(|e| e.into_inner()).remove(id);
 }
 
-/// Profile ids that render with a LUT (and so on the CPU).
+/// Profile ids that render with a LUT.
 pub fn is_lut_profile(id: &str) -> bool {
     id.starts_with("lut:")
 }

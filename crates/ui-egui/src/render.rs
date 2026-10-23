@@ -77,6 +77,33 @@ pub struct Tex {
     pub quick: Option<QuickSource>,
     /// CPU copy of the pixels (only with [`Renderer::keep_pixels`]; for headless screenshots).
     pub pixels: Option<std::sync::Arc<egui::ColorImage>>,
+    /// Showing a render that stayed on the GPU ([`ScreenTextures`]): drawn by this id instead of `tex`.
+    pub native: Option<egui::TextureId>,
+}
+
+impl Tex {
+    /// The texture to draw.
+    pub fn id(&self) -> egui::TextureId {
+        self.native.unwrap_or_else(|| egui::TextureHandle::id(&self.tex))
+    }
+}
+
+/// Draws renders that stayed on the GPU ([`lightcraft_engine::media::ScreenFrame`]): the window's
+/// renderer registers their textures. Installed by a host whose GPU renderer runs on the window's
+/// device (the desktop app); without one, every render comes back as pixels.
+pub trait ScreenTextures {
+    /// Show `frame` under `id` (one this returned before, updated in place) or a new id; `None`
+    /// when it can't be shown.
+    fn show(&mut self, frame: &lightcraft_engine::media::ScreenFrame, id: Option<egui::TextureId>) -> Option<egui::TextureId>;
+    /// Release `id` (and the texture it shows).
+    fn free(&mut self, id: egui::TextureId);
+    /// The pixels `frame` holds, read back from the GPU: only for a headless screenshot of a view
+    /// that shows it ([`Renderer::cpu_textures`]). `None` when they can't be read (the view is
+    /// then left out of the picture).
+    fn read(&self, frame: &lightcraft_engine::media::ScreenFrame) -> Option<egui::ColorImage> {
+        let _ = frame;
+        None
+    }
 }
 
 /// Runs render jobs outside this thread's job pool (the browser build: Web Workers, each with its
@@ -251,6 +278,14 @@ pub struct Renderer {
     /// Since when nothing has been pending, and whether the GPU pool was trimmed since.
     #[cfg(not(target_arch = "wasm32"))]
     idle: Option<(std::time::Instant, bool)>,
+    /// Draws GPU-resident renders; with it, interactive drafts of views stay on the GPU.
+    screen: Option<Box<dyn ScreenTextures>>,
+    /// The texture id each view slot shows GPU-resident renders under (one per slot, reused).
+    natives: HashMap<Slot, egui::TextureId>,
+    /// The GPU-resident render each of those shows, kept with [`Self::keep_pixels`]: a headless
+    /// screenshot reads it back ([`Self::cpu_textures`]) instead of finding no pixels (a white
+    /// photo, review of PR #1065).
+    native_frames: HashMap<Slot, lightcraft_engine::media::ScreenFrame>,
 }
 
 /// After this long without renders the GPU renderer's pool of recycled buffers is freed.
@@ -313,6 +348,9 @@ impl Renderer {
             display: None,
             #[cfg(not(target_arch = "wasm32"))]
             idle: None,
+            screen: None,
+            natives: HashMap::new(),
+            native_frames: HashMap::new(),
         }
     }
 }
@@ -410,7 +448,23 @@ impl Renderer {
     /// `job` as [`Self::request`] would run it for `slot` (its key included): views render for
     /// the display profile in use.
     pub fn job_for(&self, slot: Slot, job: RenderJob) -> RenderJob {
-        if Self::renders_for_display(slot) { job.with_display(self.display.clone()) } else { job }
+        if !Self::renders_for_display(slot) {
+            return job;
+        }
+        let job = job.with_display(self.display.clone());
+        // a drag's drafts are only drawn: they may stay on the GPU when the window can show them
+        if self.screen.is_some() && job.request.quality == lightcraft_pipeline::Quality::Draft { job.on_screen() } else { job }
+    }
+
+    /// Show GPU-resident renders through `screen` from now on (the desktop app, once its GPU
+    /// renderer runs on the window's device).
+    pub fn set_screen_textures(&mut self, screen: Box<dyn ScreenTextures>) {
+        self.screen = Some(screen);
+    }
+
+    /// Whether GPU-resident renders can be shown.
+    pub fn has_screen_textures(&self) -> bool {
+        self.screen.is_some()
     }
 
     /// The display profile in use (id).
@@ -456,6 +510,19 @@ impl Renderer {
     pub fn release(&mut self, slot: Slot) {
         self.textures.remove(&slot);
         self.stages.remove(&slot);
+        // and its GPU-resident texture, which can be window-sized (review of PR #1065)
+        self.free_native(slot);
+    }
+
+    /// Let go of `slot`'s GPU-resident texture: its registration with the window, and the frame
+    /// kept for headless screenshots.
+    fn free_native(&mut self, slot: Slot) {
+        self.native_frames.remove(&slot);
+        if let Some(id) = self.natives.remove(&slot)
+            && let Some(screen) = self.screen.as_mut()
+        {
+            screen.free(id);
+        }
     }
 
     /// Run jobs through `offload` from now on (instead of the job pool / inline).
@@ -617,6 +684,18 @@ impl Renderer {
         self.prefetched.clear();
         self.pending.clear();
         self.queue.clear();
+        self.free_natives();
+    }
+
+    /// Release every GPU-resident texture shown.
+    fn free_natives(&mut self) {
+        if let Some(screen) = self.screen.as_mut() {
+            for (_, id) in self.natives.drain() {
+                screen.free(id);
+            }
+        }
+        self.natives.clear();
+        self.native_frames.clear();
     }
 
     pub fn is_pending(&self, slot: Slot) -> bool {
@@ -867,6 +946,57 @@ impl Renderer {
             if self.pending.get(&slot).is_some_and(|p| p.0 == r.key) {
                 self.pending.remove(&slot);
             }
+            // a render that stayed on the GPU: drawn from its texture
+            if let (Some(frame), Ok(rendered)) = (r.frame.as_ref(), r.rendered.as_ref()) {
+                self.failed.remove(&slot);
+                let shown = self.screen.as_mut().and_then(|s| s.show(frame, self.natives.get(&slot).copied()));
+                let Some(id) = shown else {
+                    // can't be shown: from now on views come back as pixels
+                    log::warn!("render {slot:?}: a GPU-resident render can't be shown; rendering pixels");
+                    self.free_natives();
+                    self.screen = None;
+                    continue;
+                };
+                self.natives.insert(slot, id);
+                if self.keep_pixels {
+                    self.native_frames.insert(slot, frame.clone());
+                }
+                let (size, histogram) = ([frame.width, frame.height], rendered.histogram.clone());
+                match self.textures.get_mut(&slot) {
+                    Some(t) => {
+                        t.native = Some(id);
+                        t.pixels = None;
+                        t.key = r.key;
+                        t.photo = r.photo;
+                        t.size = size;
+                        t.histogram = Some(histogram);
+                        t.ms = ms;
+                        t.quick = None;
+                    }
+                    None => {
+                        // (`tex` is never drawn while `native` is set)
+                        let blank = egui::ColorImage::filled([1, 1], egui::Color32::BLACK);
+                        let tex = ctx.load_texture(format!("{slot:?}"), blank, egui::TextureOptions::LINEAR);
+                        let t = Tex {
+                            key: r.key,
+                            photo: r.photo,
+                            tex,
+                            size,
+                            histogram: Some(histogram),
+                            ms,
+                            quick: None,
+                            pixels: None,
+                            native: Some(id),
+                        };
+                        self.textures.insert(slot, t);
+                    }
+                }
+                if slot == Slot::Main {
+                    self.last_main_ms = ms;
+                }
+                changed = true;
+                continue;
+            }
             let rendered = match r.rendered {
                 Ok(x) => {
                     self.failed.remove(&slot);
@@ -909,9 +1039,12 @@ impl Renderer {
             let color = color.unwrap_or_else(|| Arc::new(color_image(img)));
             let pixels = self.keep_pixels.then(|| color.clone());
             let name = format!("{slot:?}");
+            // pixels again: the slot's GPU-resident texture is let go
+            self.free_native(slot);
             match self.textures.get_mut(&slot) {
                 Some(t) => {
                     t.tex.set(color, egui::TextureOptions::LINEAR);
+                    t.native = None;
                     t.pixels = pixels;
                     t.key = r.key;
                     t.photo = r.photo;
@@ -933,6 +1066,7 @@ impl Renderer {
                             ms,
                             quick: r.quick,
                             pixels,
+                            native: None,
                         },
                     );
                 }
@@ -1002,9 +1136,20 @@ impl Renderer {
         })
     }
 
-    /// CPU copies of the current textures by id (see [`Self::keep_pixels`]).
+    /// CPU copies of the current textures by id (see [`Self::keep_pixels`]); a view drawn straight
+    /// from the GPU is read back from it (only here: drawing it never does).
     pub fn cpu_textures(&self) -> HashMap<egui::TextureId, crate::softpaint::CpuTexture> {
-        self.textures.values().filter_map(|t| Some((t.tex.id(), crate::softpaint::CpuTexture::linear(t.pixels.clone()?)))).collect()
+        self.textures
+            .iter()
+            .filter_map(|(slot, t)| {
+                let pixels = match (&t.pixels, t.native, self.native_frames.get(slot), self.screen.as_ref()) {
+                    (Some(p), ..) => p.clone(),
+                    (None, Some(_), Some(frame), Some(screen)) => Arc::new(screen.read(frame)?),
+                    _ => return None,
+                };
+                Some((t.id(), crate::softpaint::CpuTexture::linear(pixels)))
+            })
+            .collect()
     }
 
     /// Drop the import review thumbnails (a new review, or the dialog closed).
@@ -1294,6 +1439,121 @@ mod thumbnail_tests {
     }
     fn request(app: &mut crate::LightcraftApp) {
         crate::panels::grid::request_thumb(app, PhotoId(1), 256, 10);
+    }
+
+    /// Draws GPU-resident renders under one fixed id, and reads them back from the test's device.
+    #[cfg(not(target_arch = "wasm32"))]
+    struct TestScreen(
+        lightcraft_engine::gpu::wgpu::Device,
+        lightcraft_engine::gpu::wgpu::Queue,
+        std::sync::Arc<std::sync::Mutex<Vec<egui::TextureId>>>,
+    );
+    #[cfg(not(target_arch = "wasm32"))]
+    impl ScreenTextures for TestScreen {
+        fn show(&mut self, _: &lightcraft_engine::media::ScreenFrame, _: Option<egui::TextureId>) -> Option<egui::TextureId> {
+            Some(egui::TextureId::User(7))
+        }
+        fn free(&mut self, id: egui::TextureId) {
+            self.2.lock().unwrap().push(id);
+        }
+        fn read(&self, frame: &lightcraft_engine::media::ScreenFrame) -> Option<egui::ColorImage> {
+            let img = lightcraft_engine::gpu::read_texture(&self.0, &self.1, &frame.texture, frame.width, frame.height).ok()?;
+            Some(color_image(&img))
+        }
+    }
+
+    /// A headless screenshot (driven by the control channel: `keep_pixels`) of a view drawn straight
+    /// from the GPU has its pixels. Before, a mid-drag `ui.screenshot {"headless": true}` showed the
+    /// photo as a white rectangle: the GPU-resident draft left no CPU copy (review of PR #1065).
+    /// The test fixture with a small GPU texture (5 × 3 known texels) and a [`TestScreen`] that
+    /// records the ids it frees; `None` without a GPU adapter.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[allow(clippy::type_complexity)]
+    fn gpu_drawn_fixture(
+        freed: std::sync::Arc<std::sync::Mutex<Vec<egui::TextureId>>>,
+    ) -> Option<(crate::LightcraftApp, std::rc::Rc<std::cell::RefCell<Work>>, egui::Context, lightcraft_engine::media::ScreenFrame)> {
+        use lightcraft_engine::gpu::wgpu;
+        let device = (|| {
+            let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+            desc.backends = lightcraft_engine::gpu::backend::window_backends();
+            desc.backend_options = lightcraft_engine::gpu::backend::backend_options();
+            let instance = wgpu::Instance::new(desc);
+            let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).ok()?;
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor { label: Some("test window"), ..Default::default() })).ok()
+        })();
+        let (device, queue) = device?;
+        let (w, h) = (5usize, 3usize);
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d { width: w as u32, height: h as u32, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let texels: Vec<u8> = (0..w * h).flat_map(|i| [i as u8 * 10, 100, 200, 255]).collect();
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo { texture: &texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            &texels,
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w as u32 * 4), rows_per_image: Some(h as u32) },
+            wgpu::Extent3d { width: w as u32, height: h as u32, depth_or_array_layers: 1 },
+        );
+        let (mut app, work, ctx) = fixture();
+        app.renderer.set_screen_textures(Box::new(TestScreen(device, queue, freed)));
+        Some((app, work, ctx, lightcraft_engine::media::ScreenFrame { texture, width: w, height: h }))
+    }
+
+    /// A headless screenshot (driven by the control channel: `keep_pixels`) of a view drawn straight
+    /// from the GPU has its pixels. Before, a mid-drag `ui.screenshot {"headless": true}` showed the
+    /// photo as a white rectangle: the GPU-resident draft left no CPU copy (review of PR #1065).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_headless_screenshot_reads_back_a_view_drawn_from_the_gpu() {
+        let Some((mut app, work, ctx, frame)) = gpu_drawn_fixture(Default::default()) else {
+            lightcraft_testkit::skip!(Gpu, "no GPU adapter");
+            return;
+        };
+        let (w, h) = (frame.width, frame.height);
+        assert!(app.renderer.keep_pixels);
+        let job = app.session.render_job(PhotoId(1), 64, 64, false, true).unwrap().draft();
+        app.renderer.request(Slot::Main, job, 100);
+        let (slot, job) = take_job(&work);
+        let mut result = job.run();
+        result.frame = Some(frame);
+        finish(&mut app, &work, &ctx, slot, result);
+        let t = app.renderer.textures.get(&Slot::Main).unwrap();
+        assert_eq!(t.id(), egui::TextureId::User(7), "the draft is drawn from the GPU");
+        assert!(t.pixels.is_none());
+        let cpu = app.renderer.cpu_textures();
+        let shot = cpu.get(&egui::TextureId::User(7)).expect("the headless screenshot has the view's pixels");
+        assert_eq!(shot.image.size, [w, h]);
+        assert_eq!(shot.image.pixels[4], egui::Color32::from_rgb(40, 100, 200));
+    }
+
+    /// Releasing a slot (a zoomed loupe leaving its window, a Compare region) lets go of its
+    /// GPU-resident texture too, which can be window-sized (review of PR #1065: it was kept until
+    /// the slot was drawn from the GPU again).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn releasing_a_slot_frees_its_gpu_texture() {
+        let freed = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let Some((mut app, work, ctx, frame)) = gpu_drawn_fixture(freed.clone()) else {
+            lightcraft_testkit::skip!(Gpu, "no GPU adapter");
+            return;
+        };
+        let job = app.session.render_job(PhotoId(1), 64, 64, false, true).unwrap().draft();
+        app.renderer.request(Slot::Main, job, 100);
+        let (slot, job) = take_job(&work);
+        let mut result = job.run();
+        result.frame = Some(frame);
+        finish(&mut app, &work, &ctx, slot, result);
+        assert_eq!(app.renderer.textures.get(&Slot::Main).map(|t| t.id()), Some(egui::TextureId::User(7)));
+        assert!(freed.lock().unwrap().is_empty());
+        app.renderer.release(Slot::Main);
+        assert_eq!(*freed.lock().unwrap(), vec![egui::TextureId::User(7)], "the window's texture is freed");
+        assert!(app.renderer.natives.is_empty() && app.renderer.native_frames.is_empty());
     }
 
     fn relink_destination() -> std::path::PathBuf {
@@ -1847,7 +2107,10 @@ mod stage_budget_tests {
         let ctx = egui::Context::default();
         let mut r = Renderer::default();
         let tex = ctx.load_texture("window", egui::ColorImage::new([1, 1], vec![egui::Color32::BLACK]), Default::default());
-        r.textures.insert(Slot::Region, Tex { key: 1, photo: PhotoId(1), tex, size: [1, 1], histogram: None, ms: 0.0, quick: None, pixels: None });
+        r.textures.insert(
+            Slot::Region,
+            Tex { key: 1, photo: PhotoId(1), tex, native: None, size: [1, 1], histogram: None, ms: 0.0, quick: None, pixels: None },
+        );
         let long_ago = std::time::Instant::now().checked_sub(IDLE_TRIM * 2).unwrap();
         r.idle = Some((long_ago, false));
         r.trim_when_idle(&ctx);
@@ -1978,6 +2241,7 @@ mod color_image_tests {
             loaded: None,
             quick: None,
             display: None,
+            frame: None,
         };
         let histogram = Histogram::of_srgb8(&image);
         let ok = Renderer::run_for(|| result(Ok(lightcraft_pipeline::Rendered { image: image.clone(), histogram, deep: None })), &None);
