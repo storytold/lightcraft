@@ -58,6 +58,18 @@ impl CameraTone {
         Some(Self { knots, chroma: NO_CHROMA })
     }
 
+    /// The default raw tone curve ([`ToneMap::new`] at neutral settings) as camera-curve knots, about 1/3 EV apart
+    /// from 8 EV below grey to just under display white: for a camera look that knows a photo's colour but not its tone.
+    pub fn default_raw() -> Option<Self> {
+        const FROM_EV: f32 = -8.0;
+        const TO_EV: f32 = 2.6;
+        let map = ToneMap::new(0.0, 0.0, 0.0);
+        Self::new(std::array::from_fn(|i| {
+            let x = GREY * 2f32.powf(FROM_EV + (TO_EV - FROM_EV) * i as f32 / 31.0);
+            [x, map.apply(x)]
+        }))
+    }
+
     /// The curve with chroma scales at display luminance 0, 1/7 … 1 (each finite, 0..=4).
     pub fn with_chroma(self, chroma: [f32; CHROMA_N]) -> Option<Self> {
         chroma.iter().all(|k| k.is_finite() && (0.0..=4.0).contains(k)).then_some(Self { chroma, ..self })
@@ -463,5 +475,15 @@ mod tests {
         assert!(ToneMap::new(0.0, 60.0, 0.0).apply(0.8) > base.apply(0.8));
         assert!(ToneMap::new(0.0, 0.0, -60.0).apply(0.01) < base.apply(0.01));
         assert!(ToneMap::new(0.0, 0.0, 60.0).apply(0.01) > base.apply(0.01));
+    }
+
+    #[test]
+    fn default_raw_camera_tone_follows_the_default_tone_curve() {
+        let (camera, default) = (CameraTone::default_raw().unwrap(), ToneMap::new(0.0, 0.0, 0.0));
+        for ev in [-8.0f32, -6.0, -4.0, -2.0, -1.0, 0.0, 1.0, 2.0, 2.5] {
+            let y = GREY * 2f32.powf(ev);
+            let (a, b) = (camera.apply(y), default.apply(y));
+            assert!((a - b).abs() <= 0.01 * b.max(0.01), "{ev} EV: {a} vs {b}");
+        }
     }
 }

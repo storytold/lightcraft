@@ -808,6 +808,7 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 | 2026-10-20 | patch | LR-VIEW-ZOOM: the 20 ms rule clears a slow-drag verdict only on a drag timed at full size; a drag that drafts small leaves it unchanged, as the code does; status unchanged |
 | 2026-10-19 | patch | LR-CROP-RECT: on a straightened photo a moved crop slides along the tilted edges, so a box that fills the photo's height reaches its sides (#2299); status unchanged |
 | 2026-10-19 | patch | LR-VIEW-ZOOM: the slow slider-drag verdict is described as per photo and control, as the code keys it; status unchanged |
+| 2026-10-18 | patch | Four revision rows (LR-PROF-CAMERACOLOR, LR-IMP-FORMATS) that had landed in the A. Import table moved here; no status changes |
 | 2026-10-18 | patch | LR-META-XMP: Lightroom's profile and version bookkeeping (`CompatibleVersion`, profile digests, lens profile identity, `CropConstrainToUnitSquare`, default-strength lens profile scales) is no longer reported as unimported XMP; status unchanged (✅) |
 | 2026-10-15 | minor | LR-VIEW-ZOOM: a slow slider-drag verdict needs two drags over 20 ms and expires after 30 s (doubling to 240 s); hidden-window frame times are ignored; the slow set forgets its oldest entry, not all (issue #330); status unchanged |
 | 2026-10-15 | minor | LR-BEHAV-BG-TASKS: Reload from Disk reads its files on a worker thread with a cancellable activity row instead of freezing the window on a selection of raws; its result is committed through the command wrapper (XMP sidecars auto-written as before) and an older reload finishing late no longer overwrites a newer one; status unchanged (✅) |
@@ -816,6 +817,9 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 | 2026-10-15 | minor | LRC-PRINT-PAGE: Page Options (Page Numbers, Page Info, Crop Marks) on Single Image and Contact Sheet pages, in the Print dialog, `print.set` and templates; still 🟡 (no identity plate, watermark, photo info or Cut Guides) |
 | 2026-10-15 | minor | LR-IMP-FORMATS: Hasselblad 3FR and FFF show their uncompressed RGB preview (no JPEG in these files) in the grid and loupe until developed, and as the stand-in when a file fails to decode; status unchanged (🟡) |
 | 2026-10-15 | minor | LR-IMP-FORMATS: a Hasselblad FFF develops with the camera's colour matrix from the original 3FR header it embeds (tag `0xC51B`) instead of the neutral matrix; status unchanged (🟡) |
+| 2026-10-16 | minor | LR-PROF-CAMERACOLOR: a photo no look fits keeps its camera profile's colour instead of the neutral fallback; status unchanged (🟡) |
+| 2026-10-16 | minor | LR-PROF-CAMERACOLOR: camera profiles carry a pooled tone curve that continues each photo's own past its JPEG's range; status unchanged (🟡) |
+| 2026-10-16 | patch | LR-PROF-CAMERACOLOR: raw decoding keeps negative channels (noise near black) instead of clipping each at zero, which turned pushed shadows magenta; status unchanged (🟡) |
 | 2026-10-12 | minor | LR-IMP-FORMATS: folder discovery includes SR2/SRF; MCP and CLI reuse the engine extension list. DSC-F828 remains preview-only; decoder support and row status unchanged |
 | 2026-10-15 | patch | KEYC-RATING: `\` shows / hides the Filter Bar in Photo Grid and Square Grid (Show Original in Detail); status unchanged (🟡) |
 | 2026-10-12 | minor | LR-EDIT-OPTICS-PROFILE: Sony ARW shading, CA and distortion tables decoded with settings and provenance (raw IFD, `SR2SubIFD` fallback); applied corrections unchanged (ILCE-7RM4A and ILCE-7RM6 distortion); status unchanged (🟡) |
