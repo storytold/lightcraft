@@ -17,6 +17,7 @@ static BUNDLED_CANON_EF: &str = include_str!("../../../assets/lens-profiles/cano
 /// The environment variable naming the lens database directory.
 pub const ENV: &str = "LIGHTCRAFT_LENSFUN_DIR";
 
+/// A lens calibration profile deserialized from a JSON profile table.
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct JsonProfile {
@@ -31,10 +32,12 @@ struct JsonProfile {
     tca: Vec<JsonTca>,
 }
 
+/// Default full-frame crop factor (1.0) when omitted from a JSON lens profile.
 fn default_crop() -> f64 {
     1.0
 }
 
+/// A PtLens radial distortion calibration entry at a specific focal length (mm).
 #[derive(serde::Deserialize)]
 struct JsonDistortion {
     focal: f64,
@@ -43,6 +46,7 @@ struct JsonDistortion {
     c: f64,
 }
 
+/// A linear transverse chromatic aberration calibration entry at a specific focal length (mm).
 #[derive(serde::Deserialize)]
 struct JsonTca {
     focal: f64,
@@ -50,6 +54,7 @@ struct JsonTca {
     vb: f64,
 }
 
+/// Converts a deserialized [`JsonProfile`] into a [`lightcraft_lensdb::Profile`].
 fn to_profile(jp: JsonProfile) -> lightcraft_lensdb::Profile {
     use lightcraft_lensdb::{Distortion, Tca};
     let mut distortion: Vec<(f64, Distortion)> = jp
@@ -82,6 +87,7 @@ fn to_profile(jp: JsonProfile) -> lightcraft_lensdb::Profile {
     }
 }
 
+/// Appends the bundled Canon EF/RF lens profiles and any user-configured JSON profile directories into `db`.
 fn load_bundled(db: &mut LensDb) {
     if let Ok(rf) = serde_json::from_str::<Vec<JsonProfile>>(BUNDLED_CANON_RF) {
         db.lenses.extend(rf.into_iter().map(to_profile));
@@ -97,6 +103,7 @@ fn load_bundled(db: &mut LensDb) {
     }
 }
 
+/// Loads all `.json` lens profile files from `dir` into `db`.
 fn load_json_dir(dir: &Path, db: &mut LensDb) {
     let Ok(entries) = std::fs::read_dir(dir) else { return };
     for entry in entries.flatten() {
@@ -165,7 +172,7 @@ pub fn resolve_photo_lens(
     let db_lens = db.and_then(|db| {
         let cam = db.find_camera("", camera);
         let profile = db.find_lens(None, lens_name, cam)?;
-        let focal = focal_mm.map(|f| f as f64).unwrap_or(50.0);
+        let focal = focal_mm.filter(|f| f.is_finite() && *f > 0.0).map(|f| f as f64)?;
         let shot = Shot {
             focal,
             aperture: aperture.map(|a| a as f64),
@@ -192,6 +199,8 @@ pub fn resolve_photo_lens(
     }
 }
 
+/// The database profile for a photo with metadata `m`, for its `w × h` (unoriented, default-cropped) image,
+/// re-expressed after `orientation`. `None` without a database, lens name, focal length or matching profile.
 pub fn lookup(db: &LensDb, m: &lightcraft_meta::Metadata, w: f64, h: f64, orientation: lightcraft_geom::Orientation) -> Option<EmbeddedLens> {
     let focal = m.focal_length.filter(|f| f.is_finite() && *f > 0.0)?;
     let camera = db.find_camera(m.make.as_deref().unwrap_or_default(), m.model.as_deref().unwrap_or_default());

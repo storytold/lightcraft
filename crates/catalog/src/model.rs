@@ -447,7 +447,7 @@ impl Photo {
         if self.develops_raw() && !relative {
             d.wb.scale = lightcraft_develop::WbScale::Kelvin;
         }
-        if self.embedded_lens.is_some() || !self.meta.lens.trim().is_empty() {
+        if self.embedded_lens.is_some() {
             d.optics.lens_profile = true;
         }
         d.process = self.develop.process;

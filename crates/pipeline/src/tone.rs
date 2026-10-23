@@ -47,6 +47,7 @@ impl<'de> serde::Deserialize<'de> for CameraTone {
 }
 
 impl CameraTone {
+    /// Constructs a [`CameraTone`] from 32 strictly increasing scene-luminance knots with non-decreasing display values in `0..1`.
     pub fn new(knots: [[f32; 2]; 32]) -> Option<Self> {
         let mut previous = [0.0, 0.0];
         for p in knots {
@@ -63,6 +64,7 @@ impl CameraTone {
         chroma.iter().all(|k| k.is_finite() && (0.0..=4.0).contains(k)).then_some(Self { chroma, ..self })
     }
 
+    /// The chroma scale nodes across display luminance `0..=1`.
     pub fn chroma(&self) -> &[f32; CHROMA_N] {
         &self.chroma
     }
@@ -72,9 +74,9 @@ impl CameraTone {
         &self.knots
     }
 
-    /// Tangents at each point (origin [0.0, 0.0] and 32 knots) according to the Fritsch-Carlson
+    /// Tangents at each point (origin `[0.0, 0.0]` and 32 knots) according to the Fritsch-Carlson
     /// monotone cubic Hermite algorithm. Preserves monotonicity with C^1 continuous smoothness,
-    /// eliminating Mach bands, kinks and flat plateaus.
+    /// eliminating Mach bands and kinks. Flat input segments remain flat.
     pub fn tangents(&self) -> [f32; 33] {
         let mut pts = [[0.0f32; 2]; 33];
         pts[0] = [0.0, 0.0];
@@ -143,6 +145,7 @@ impl CameraTone {
         1.0 - (1.0 - b[1]) * (-(y - b[0]) * slope / (1.0 - b[1]).max(0.01)).exp()
     }
 
+    /// Evaluates the camera tone curve at scene luminance `y`.
     pub fn apply(&self, y: f32) -> f32 {
         self.apply_smooth(y, &self.tangents())
     }
@@ -158,6 +161,7 @@ pub struct ToneMap {
 }
 
 impl ToneMap {
+    /// Builds an SDR [`ToneMap`] from a fitted [`CameraTone`] curve and slider adjustments.
     pub fn camera(curve: &CameraTone, contrast: f64, whites: f64, blacks: f64) -> ToneMap {
         ToneMap::camera_hdr(curve, contrast, whites, blacks, 1.0)
     }

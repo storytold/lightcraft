@@ -563,13 +563,13 @@ impl Catalog {
 
     // ---- writes
 
-    pub fn photo_mut(&mut self, id: PhotoId) -> Result<&mut Photo> {
+    /// Mutable borrow of photo `id`, recording a touch for the current operation when the photo exists.
+    fn photo_mut(&mut self, id: PhotoId) -> Result<&mut Photo> {
+        if !self.photos.contains_key(&id) {
+            return Err(CatalogError::NoPhoto(id));
+        }
         self.touch(id);
         self.photos.get_mut(&id).map(Arc::make_mut).ok_or(CatalogError::NoPhoto(id))
-    }
-
-    pub fn photos_mut(&mut self) -> impl Iterator<Item = &mut Photo> {
-        self.photos.values_mut().map(Arc::make_mut)
     }
 
     /// The op being applied changes photo `id` (or adds or removes it).

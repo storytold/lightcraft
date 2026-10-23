@@ -62,7 +62,7 @@ impl SettingsHashes {
 }
 
 /// Bump when the pipeline's output changes, to invalidate cached thumbnails.
-pub const RENDER_CACHE_VERSION: u64 = 69;
+pub const RENDER_CACHE_VERSION: u64 = 70;
 
 /// Thumbnails render at one of these long edges (so window/cell size changes reuse the cache).
 pub const THUMB_SIZES: [usize; 4] = [128, 256, 384, 512];
@@ -1228,6 +1228,7 @@ pub fn source_info(p: &Photo) -> SourceInfo {
     SourceInfo { native_long, ..header_info(p) }
 }
 
+/// Builds [`SourceInfo`] from the catalog photo header (white balance and resolved lens profile).
 fn header_info(p: &Photo) -> SourceInfo {
     // A raw shown from its embedded preview is a rendered (display-referred) JPEG: relative white
     // balance and the display tone curve, like any other rendered file.
@@ -1514,6 +1515,7 @@ impl crate::Session {
         self.region_job_of(id, full_w, full_h, window, apply_crop, true)
     }
 
+    /// Builds a windowed render job for `id` over `window` within a `full_w × full_h` frame.
     fn region_job_of(
         &mut self,
         id: PhotoId,

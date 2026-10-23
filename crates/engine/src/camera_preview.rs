@@ -268,9 +268,10 @@ fn declaring(xy: Xy, neutral: [f64; 3]) -> Option<Mat3> {
 /// 12 stops below white, the range the curve is read back over (`files::dng_tone_curve`).
 fn dng_tone_curve(tone: &CameraTone) -> Option<ToneCurve> {
     const N: usize = 256;
+    let tangents = tone.tangents();
     let samples = (0..=N).map(|i| {
         let x = 2f32.powf(-12.0 + 12.0 * i as f32 / N as f32);
-        [x, tone.apply(x).min(1.0)]
+        [x, tone.apply_smooth(x, &tangents).min(1.0)]
     });
     let flat: Vec<f64> = std::iter::once([0.0, 0.0]).chain(samples).flatten().map(f64::from).collect();
     ToneCurve::from_tag(&flat)
@@ -422,8 +423,9 @@ fn with_dro_off_tone(look: CameraLook) -> CameraLook {
 /// or `own` unchanged when it can't be.
 fn dro_off(own_tone: &CameraTone) -> CameraTone {
     let Some(dro_off) = sony_dro_off_tone() else { return *own_tone };
+    let dro_tangents = dro_off.tangents();
     let own = own_tone.knots();
-    let mut knots = own.map(|[x, y]| [x, y.min(dro_off.apply(x))]);
+    let mut knots = own.map(|[x, y]| [x, y.min(dro_off.apply_smooth(x, &dro_tangents))]);
     // Past its last knot a curve goes on as a shoulder whose rate comes from its last two knots
     // (`CameraTone::apply`): lowering the second-last knot more than the last steepens it, and the
     // extended highlights would end up above the fitted curve. Raise the second-last knot (never
@@ -443,9 +445,10 @@ fn dro_off(own_tone: &CameraTone) -> CameraTone {
 /// table covers ([`ToneMap::camera`]).
 fn at_most(a: &CameraTone, b: &CameraTone) -> bool {
     use lightcraft_pipeline::tone::{GREY, LUT_MAX_EV, LUT_MIN_EV, LUT_N};
+    let (ta, tb) = (a.tangents(), b.tangents());
     (0..LUT_N).all(|i| {
         let x = GREY * 2f32.powf(LUT_MIN_EV + (LUT_MAX_EV - LUT_MIN_EV) * i as f32 / (LUT_N - 1) as f32);
-        a.apply(x) <= b.apply(x) + 1e-5
+        a.apply_smooth(x, &ta) <= b.apply_smooth(x, &tb) + 1e-5
     })
 }
 
@@ -1115,7 +1118,10 @@ fn fit_tone_with_shadows(
     let training = eligible.iter().filter(|(_, _, held)| !held).map(|(x, y, _)| (*x, *y)).collect();
     let Some(candidate) = fit.fit(training) else { return original };
     let error = |tone: &CameraTone| -> f64 {
-        held.iter().map(|(x, y)| (f64::from(tone.apply(x[0] as f32)).powf(1.0 / 2.2) - y[0].powf(1.0 / 2.2)).powi(2)).sum()
+        let tangents = tone.tangents();
+        held.iter()
+            .map(|(x, y)| (f64::from(tone.apply_smooth(x[0] as f32, &tangents)).powf(1.0 / 2.2) - y[0].powf(1.0 / 2.2)).powi(2))
+            .sum()
     };
     // A wider histogram must also help independent dark pixels, not just redistribute the
     // knots. The usual held-out gates still check the completed look on the colour pairs.

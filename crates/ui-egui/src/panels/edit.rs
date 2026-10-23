@@ -74,6 +74,7 @@ fn rel_to_k(r: f64) -> f64 {
     1e6 / (1e6 / 6500.0 - r * 0.8)
 }
 
+/// Renders the right-hand Develop edit panel for photo `id`.
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let t = Tokens::get(ui.ctx());
     let d = app.session.develop_of(id).unwrap_or_default();
@@ -366,12 +367,21 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     });
     section(app, ui, &d, "optics", "Optics", |app, ui, d| {
         let photo_opt = app.session.catalog.photo(id);
-        let has_lens = photo_opt.is_some_and(|p| {
-            p.embedded_lens.is_some() || lightcraft_engine::lens_profiles::has_lens(&p.meta.lens)
+        let resolved_lens = photo_opt.and_then(|p| {
+            lightcraft_engine::lens_profiles::resolve_photo_lens(
+                p.embedded_lens,
+                &p.meta.lens,
+                &p.meta.camera,
+                p.meta.focal_mm,
+                p.meta.aperture,
+            )
         });
         let matched_name = photo_opt.and_then(|p| {
             lightcraft_engine::lens_profiles::matched_name(&p.meta.lens, &p.meta.camera)
         });
+        let has_lens = resolved_lens.is_some() || matched_name.is_some();
+        let has_warp = resolved_lens.as_ref().is_some_and(|l| l.warp.is_some());
+        let has_vignette = resolved_lens.as_ref().is_some_and(|l| l.vignette.is_some());
         egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 4, bottom: 4 }).show(ui, |ui| {
             let mut ca = d.optics.remove_ca;
             if ui.checkbox(&mut ca, crate::i18n::tr("Remove Chromatic Aberration")).changed() {
@@ -396,9 +406,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             }
         });
         if d.optics.lens_profile {
-            for c in ["optics.profileDistortion", "optics.profileVignetting"] {
-                control(app, ui, d, c, has_lens);
-            }
+            control(app, ui, d, "optics.profileDistortion", has_warp);
+            control(app, ui, d, "optics.profileVignetting", has_vignette);
         }
         sub_title(ui, crate::i18n::tr("Manual"));
         for c in ["optics.distortion", "optics.vignetting"] {
