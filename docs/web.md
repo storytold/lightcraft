@@ -159,6 +159,21 @@ are the same in every version, so serve them with `Cache-Control: no-cache` (not
 - **Automation.** `await lightcraft.command("library.info", "{}")` runs any engine or UI command
   by id on the next frame and resolves to the JSON result (`web.stats` reports storage, workers
   and the render queue). This is how the headless-Chrome checks drive the page.
+- **Embedding (`?host=parent`).** A same-origin page framing LightCraft in an `<iframe>` speaks
+  to it over `postMessage`, the protocol PdfCraft, GridCraft and DeckCraft share
+  (`apps/lightcraft-web/src/host.rs`, issue #2270). LightCraft posts `lightcraft:ready`
+  `{version}` once it listens (`lightcraft:failed` `{error}` if it couldn't start); the page sends
+  `lightcraft:open` `{name, bytes}` to add a photo (as one dropped on the window; `name` gives the
+  format) and `lightcraft:cmd` `{id, params}` to run a command, answered by `lightcraft:response`
+  `{ok, value}` (no request id, as in the sibling bridges: responses come back in the order the
+  commands were sent, one per `cmd` that had an id). Everything that would be downloaded (exports and the library backup; the
+  preset, keyword and curve file dialogs have no web implementation yet) reaches the page as
+  `lightcraft:save` `{name, bytes}` (a transferred `ArrayBuffer`) instead, and `lightcraft:dirty`
+  `{dirty}` says, whenever it changes, whether closing now would lose something (a write to
+  browser storage still queued or running, or changes storage refused), so the page can ask
+  before closing a window with edits. Only the parent window on the page's own origin is heard or
+  answered; a page with an opaque origin (`"null"`: a sandboxed iframe, a `data:` page) gets no
+  bridge. The library still lives in the iframe's browser storage.
 
 ## Not yet
 
