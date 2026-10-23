@@ -61,6 +61,8 @@ pub struct WireJob {
     /// Render only this window `[x, y, w, h]` of the output `max_w × max_h` describes (a zoomed view).
     #[serde(default)]
     pub window: Option<[usize; 4]>,
+    #[serde(default)]
+    pub curve_input: Option<lightcraft_engine::pipeline::curve_input::CurveInput>,
 }
 
 impl WireJob {
@@ -94,6 +96,7 @@ impl WireJob {
             stages: job.stages.is_some().then(|| view.to_string()),
             overlay: job.request.overlay.to_parts(),
             window: job.request.window.map(|w| [w.x, w.y, w.w, w.h]),
+            curve_input: job.curve_input,
         }
     }
 
@@ -193,6 +196,10 @@ impl WorkerCore {
             }
         };
         let info = src.info_or(job.info());
+        if let Some(input) = job.curve_input {
+            let stages = job.stages.as_ref().map(|view| self.stages.entry(view.clone()).or_default().clone());
+            return Ok(lightcraft_engine::pipeline::curve_input::render(&src.image, &info, &job.settings, &job.request(), stages.as_deref(), input));
+        }
         let mut rendered = match &job.stages {
             Some(view) => {
                 let st = self.stages.entry(view.clone()).or_default().clone();
@@ -371,6 +378,28 @@ mod tests {
     use super::*;
     use lightcraft_engine::Session;
 
+    #[test]
+    fn curve_input_survives_the_worker_boundary_and_is_not_replaced_by_hdr_output() {
+        use lightcraft_engine::pipeline::curve_input::CurveInput;
+        let mut s = Session::with_demo();
+        let id = s.active().unwrap();
+        s.execute("develop.curve", &serde_json::json!({"channel":"master", "points":[[0,0],[0.25,0.7],[1,1]]})).unwrap();
+        s.execute("develop.hdr", &serde_json::json!({"enabled":true})).unwrap();
+        let job = s.thumb_job(id, 128).unwrap().with_curve_input(CurveInput::Master);
+        let wire = WireJob::from_job(&job, false, "CurveHistogram");
+        let wire: WireJob = serde_json::from_str(&serde_json::to_string(&wire).unwrap()).unwrap();
+        assert_eq!(wire.curve_input, Some(CurveInput::Master));
+        assert!(wire.thumb.is_none());
+        let native = job.run().rendered.unwrap();
+        let remote = WorkerCore::default().render(&wire, None).unwrap();
+        assert_eq!(native.histogram, remote.histogram);
+        assert_eq!(native.image, remote.image);
+        assert!(remote.histogram.hdr.is_none(), "the backdrop's axes stay 0..1 for the preview rendition");
+        let mut old = serde_json::to_value(&wire).unwrap();
+        old.as_object_mut().unwrap().remove("curve_input");
+        assert!(serde_json::from_value::<WireJob>(old).unwrap().curve_input.is_none());
+    }
+
     // Issue #229: a failed worker attempt must not shift the positions of the workers after it
     #[test]
     fn a_failed_worker_attempt_leaves_no_gap_in_the_slots() {
@@ -485,6 +514,7 @@ mod tests {
             stages: Some("Main".into()),
             overlay: (0, 0.0),
             window: None,
+            curve_input: None,
         };
         let mut core = WorkerCore::default();
         assert_eq!(core.needs_original(&job).as_deref(), Some(hash.as_str()));

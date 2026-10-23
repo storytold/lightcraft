@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~14 points and ~340–600 h away
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-16 · **Change:** minor (Minolta MRW decoded, 6 bodies verified; RAW: 83% of Adobe's models decode, 38% verified after the camera-coverage sweep #1327; German catalog 91% → 97%: interface strings and What's New lines translated) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-22 · **Change:** minor (Tone Curve input histogram (#987); headline counts and readiness estimates unchanged) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 One-page summary of how close LightCraft is to Adobe Lightroom. Agents: read this, then pick work
 from [docs/gaps.md](docs/gaps.md). The full assessment, method and evidence are in
@@ -186,6 +186,7 @@ Ranked toward beta; detail in [docs/roadmap.md](docs/roadmap.md), gaps in [docs/
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-22 | minor | Tone Curve input histogram (#987); headline counts and readiness estimates unchanged. See [the stage contract](docs/tone-curve-input.md). |
 | 2026-10-19 | minor | Indonesian interface (`id`): every plain and formats message, plus 69 command labels, locale, menu command and tests; What's New left in English; Localization ~55% → ~64% (mean of the 12 key languages), 8 of 12 present |
 | 2026-10-12 | minor | Italian interface (`it`, #1192): 2,201 of 2,398 messages, locale, menu command and tests; headline numbers unchanged |
 | 2026-10-13 | minor | Sony ILCA-99M2 camera colour profile in the log; numbers unchanged |
