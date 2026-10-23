@@ -19,8 +19,8 @@ import and export formats. Ours come from `crates/codecs/src/sniff.rs`, `crates/
 | TIFF | ✅ 8/16/32-bit | ✅ 8/16-bit, LZW/ZIP | ✅ 1–64-bit integer, 16–64-bit float, bilevel, CCITT fax, WhiteIsZero | ✅ 8/16-bit, 32-bit float linear, none / LZW / ZIP | `crates/tiff`, `crates/codecs/src/tiff_codec.rs` |
 | PNG | ✅ | ✅ | ✅ | ✅ | |
 | PSD / PSB | ✅ (maximized-compatibility composite) | ✅ (Classic: PSD export, edit-in round trip) | ✅ merged composite | ⬜ (external-editor round trip writes 16-bit TIFF) | `crates/codecs/src/psd.rs` |
-| HEIC / HEIF | ✅ | ⬜ (Classic) / HDR only | ✅ in every release build (`crates/heif`, heic-rs) | ⬜ | `heif` feature on by packaging scripts |
-| AVIF | ✅ | ✅ (HDR) | ⬜ recognised, not decoded (no permissive pure-Rust AV1 decoder) | ✅ 8/10-bit, PQ HDR | |
+| HEIC / HEIF | ✅ | ⬜ (Classic) / HDR only | ✅ in every release build (`crates/heif`, heic-rs) | ⬜ | `heif` feature on by packaging scripts; EXIF and XMP read from the container in every build (`crates/meta/src/heif.rs`, #693) |
+| AVIF | ✅ | ✅ (HDR) | ⬜ recognised, not decoded (no permissive pure-Rust AV1 decoder) | ✅ 8/10-bit, PQ HDR | EXIF and XMP read from the container (`crates/meta/src/heif.rs`); exported EXIF reads back |
 | JPEG XL | ✅ | ✅ | ✅ (`jxl-oxide`) incl. DNG 1.7 JXL tiles | ✅ lossy / lossless, 8/16-bit, PQ HDR (`jixel`, native only; ⬜ web) | `crates/engine/src/tests_export.rs` |
 | WebP | not in its document types | ⬜ | ✅ | ✅ | beyond target |
 | GIF, BMP | ⬜ | ⬜ | ✅ | ⬜ | beyond target |
@@ -78,5 +78,6 @@ Remaining: **26–47 h** (AVIF decode 8–15 h if a permissive decoder is writte
 | 2026-10-10 | major | Created from the code and the installed Lightroom's document types |
 | 2026-10-10 | minor | JPEG XL export (#247): JXL write ✅ (native only), PQ JPEG XL HDR |
 | 2026-10-12 | minor | Render to DNG: "Rendered DNG" export format (linear 16-bit float DNG of the rendered photo) |
+| 2026-10-12 | minor | HEIC / HEIF and AVIF: EXIF and XMP read from the container, without the decoder (#693); statuses unchanged |
 | 2026-10-12 | minor | Lossy DNG export (JPEG tiles, `dngCompression: "lossy"`); PSD write had already landed (#953), so it leaves the remaining hours |
 | 2026-10-13 | patch | JPEG write (#1373): Huffman tables made for each image, 12–14 % smaller files at the same pixels; statuses unchanged |
