@@ -475,6 +475,9 @@ fn reference_detail(out: &mut Rgb32f, rf: &Frame, sat: &[f32]) {
 }
 
 /// Each value of `p` replaced by the largest within `r` pixels (a square), in place: a row pass then a column pass.
+/// Not `lightcraft_raster::morph::max_filter`: that one returns a new plane through a copy and two transposes, two
+/// more full-size planes (≈ 130 MB each at 33 MP) on top of the four the detail pass already holds, for a radius of only
+/// [`MOVED_MARGIN`].
 fn max_filter(p: &mut Plane, r: usize) {
     let (w, h) = (p.width, p.height);
     if w == 0 || h == 0 || r == 0 {
