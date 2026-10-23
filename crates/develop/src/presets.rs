@@ -126,7 +126,7 @@ impl SettingsGroup {
 
 /// The subset of `s` covering `groups`, as a partial JSON object.
 pub fn extract_groups(s: &DevelopSettings, groups: &[SettingsGroup]) -> Value {
-    let full = s.to_json();
+    let full = s.to_json_for_merge();
     let mut out = Map::new();
     for g in groups {
         for k in g.keys() {
@@ -186,7 +186,7 @@ fn scale_patch(base: &Value, patch: &Value, t: f64) -> Value {
 /// Apply a partial settings object with an amount (1.0 = 100 %). Out-of-range values are clamped
 /// through the control specs, as every merge does ([`DevelopSettings::merged`]).
 pub fn apply_partial(s: &DevelopSettings, partial: &Value, amount: f64) -> DevelopSettings {
-    let patch = if (amount - 1.0).abs() < 1e-9 { Cow::Borrowed(partial) } else { Cow::Owned(scale_patch(&s.to_json(), partial, amount)) };
+    let patch = if (amount - 1.0).abs() < 1e-9 { Cow::Borrowed(partial) } else { Cow::Owned(scale_patch(&s.to_json_for_merge(), partial, amount)) };
     // (a white balance without a scale keeps its old meaning: `DevelopSettings::merged`)
     s.merged(&patch).unwrap_or_else(|_| s.clone())
 }

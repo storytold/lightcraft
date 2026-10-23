@@ -32,6 +32,7 @@ mod dng;
 pub mod dngwrite;
 pub mod gaintable;
 pub mod highlight;
+mod hotpixel;
 #[cfg(feature = "jxl")]
 mod jxl;
 pub mod kelvin_builtin;

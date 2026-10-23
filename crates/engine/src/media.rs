@@ -129,13 +129,14 @@ fn source_edge_needed(p: &Photo, settings: &DevelopSettings, apply_crop: bool, o
     if needed.is_finite() { needed.min(usize::MAX as f64 / 2.0) as usize } else { out_long }
 }
 
-/// Decodes a file into a linear Rec.2020 image no larger than `max_edge` (set by the app).
-pub type FileLoader = Arc<dyn Fn(&str, usize) -> Result<(Rgb32f, SourceInfo), String> + Send + Sync>;
+/// Decodes a file into a linear Rec.2020 image no larger than `max_edge` (set by the app); the flag replaces a raw's
+/// single outlier photosites first ([`DevelopSettings`] `detail.nr_outliers`).
+pub type FileLoader = Arc<dyn Fn(&str, usize, bool) -> Result<(Rgb32f, SourceInfo), String> + Send + Sync>;
 
 /// [`FileLoader`] for a thumbnail: a raw file that keeps smaller copies of its raw image (Lightroom's merged DNGs)
-/// develops the smallest that covers `max_edge` (set by the app); the flag says it did. Never used for an export,
+/// develops the smallest that covers `max_edge` (set by the app); the argument is [`FileLoader`]'s outlier flag, the returned flag says it did. Never used for an export,
 /// which must render the full image.
-pub type ReducedLoader = Arc<dyn Fn(&str, usize) -> Result<(Rgb32f, SourceInfo, bool), String> + Send + Sync>;
+pub type ReducedLoader = Arc<dyn Fn(&str, usize, bool) -> Result<(Rgb32f, SourceInfo, bool), String> + Send + Sync>;
 
 /// A raw file's embedded (camera-rendered) preview as display sRGB, oriented, no larger than
 /// `max_edge` (set by the app). `None`: no usable preview.
@@ -157,8 +158,8 @@ pub struct DenoiseSpec {
 }
 
 /// Decodes a raw file once and develops it twice: as usual, and from the denoised picture in `spec` when that can be
-/// read (`None` when it cannot). Both are at most `max_edge` long and the same size.
-pub type PairLoader = Arc<dyn Fn(&str, usize, &DenoiseSpec) -> Result<(Rgb32f, Option<Rgb32f>, SourceInfo), String> + Send + Sync>;
+/// read (`None` when it cannot). Both are at most `max_edge` long and the same size. The flag is [`FileLoader`]'s.
+pub type PairLoader = Arc<dyn Fn(&str, usize, &DenoiseSpec, bool) -> Result<(Rgb32f, Option<Rgb32f>, SourceInfo), String> + Send + Sync>;
 
 /// A photo's denoised picture next to its plain one, and the last mix of the two that was asked for.
 pub struct Twin {
@@ -188,6 +189,8 @@ pub struct DecodedSource {
     pub camera_tone: Option<lightcraft_pipeline::tone::CameraTone>,
     /// The same picture developed from the AI-denoised mosaic, when the photo has one cached.
     pub denoised: Option<Arc<Twin>>,
+    /// Decoded with a raw's single outlier photosites replaced (`detail.nr_outliers`).
+    pub outliers: bool,
     /// These pixels came from the photo's smart preview (an offline original), not from its file.
     /// A refresh must never rebuild a proxy from itself: that would stamp its older look as current.
     pub from_proxy: bool,
@@ -198,7 +201,14 @@ pub struct DecodedSource {
 
 impl DecodedSource {
     pub fn new(image: Arc<Rgb32f>, info: Option<SourceInfo>) -> Self {
-        DecodedSource { image, info, camera_tone: None, denoised: None, from_proxy: false, reduced: false }
+        DecodedSource { image, info, camera_tone: None, denoised: None, outliers: false, from_proxy: false, reduced: false }
+    }
+
+    /// Whether this source can stand for one decoded with `outliers`: a raw decode must match it; anything without a
+    /// mosaic (a rendered file, a smart preview, a demo scene) has nothing the flag would change. A smart preview's
+    /// facts say `raw` for a raw photo, so it is told apart by `from_proxy`.
+    pub fn fits_outliers(&self, outliers: bool) -> bool {
+        self.outliers == outliers || self.from_proxy || !self.info.as_ref().is_some_and(|i| i.raw)
     }
 
     /// The picture to develop for a Denoise `amount` (0 to 1, see [`DevelopSettings::denoise_amount`]): the plain one,
@@ -269,6 +279,8 @@ pub enum SourceRef {
         fallback: Option<std::path::PathBuf>,
         /// The photo has a cached denoised picture: load it with the plain one (see [`PairLoader`]).
         denoise: Option<(DenoiseSpec, PairLoader)>,
+        /// Replace a raw's single outlier photosites before developing it (`detail.nr_outliers`).
+        outliers: bool,
         /// A thumbnail's loader, used instead of `loader` (see [`ReducedLoader`]); `None` for every other job.
         reduced: Option<ReducedLoader>,
     },
@@ -296,12 +308,15 @@ impl SourceRef {
                 return Ok(DecodedSource { image: Arc::new(image), denoised: None, ..(**from).clone() });
             }
             SourceRef::Demo { scene, max_edge } => crate::demo::scene_pixels(scene, *max_edge)?,
-            SourceRef::File { path, max_edge, loader, fallback, denoise, reduced } => {
+            SourceRef::File { path, max_edge, loader, fallback, denoise, outliers, reduced } => {
                 let plain = || match (reduced, loader) {
-                    (Some(l), _) => {
-                        l(path, *max_edge).map(|(image, info, reduced)| DecodedSource { reduced, ..DecodedSource::new(Arc::new(image), Some(info)) })
-                    }
-                    (None, Some(l)) => l(path, *max_edge).map(|(image, info)| DecodedSource::new(Arc::new(image), Some(info))),
+                    (Some(l), _) => l(path, *max_edge, *outliers).map(|(image, info, reduced)| DecodedSource {
+                        outliers: *outliers,
+                        reduced,
+                        ..DecodedSource::new(Arc::new(image), Some(info))
+                    }),
+                    (None, Some(l)) => l(path, *max_edge, *outliers)
+                        .map(|(image, info)| DecodedSource { outliers: *outliers, ..DecodedSource::new(Arc::new(image), Some(info)) }),
                     (None, None) => Err(format!("no decoder available for {path}")),
                 };
                 // the denoised picture comes with the plain one from a single decode; when it cannot be read the
@@ -315,7 +330,7 @@ impl SourceRef {
                             None => true,
                         };
                         if made {
-                            pair(path, *max_edge, spec).and_then(|(image, twin, info)| {
+                            pair(path, *max_edge, spec, *outliers).and_then(|(image, twin, info)| {
                                 if spec.make.is_some() && twin.is_none() {
                                     return Err("the cached AI Denoise picture could not be read; clear the denoise cache and retry".into());
                                 }
@@ -324,6 +339,7 @@ impl SourceRef {
                                     info: Some(info),
                                     camera_tone: None,
                                     denoised: twin.map(|t| Arc::new(Twin::new(Arc::new(t)))),
+                                    outliers: *outliers,
                                     from_proxy: false,
                                     reduced: false,
                                 })
@@ -692,7 +708,9 @@ impl MediaCache {
     }
 
     fn source_ref_plain(&mut self, p: &Photo, level: SourceLevel, cached: bool) -> SourceRef {
-        if cached && let Some(a) = self.get_source(p.id, level) {
+        let outliers = p.develop.removes_hot_pixels();
+        // a source decoded before the outlier box was switched is decoded again
+        if cached && let Some(a) = self.get_source(p.id, level).filter(|a| a.fits_outliers(outliers)) {
             return SourceRef::Loaded(Box::new(a));
         }
         // a thumbnail of a photo whose preview is decoded (the one in the loupe) is cut from it; not
@@ -700,7 +718,7 @@ impl MediaCache {
         if cached
             && level == SourceLevel::Thumb
             && self.denoise.spec(p.id).is_none()
-            && let Some(big) = self.get_source(p.id, SourceLevel::Preview)
+            && let Some(big) = self.get_source(p.id, SourceLevel::Preview).filter(|b| b.fits_outliers(outliers))
         {
             return SourceRef::Fit { from: Box::new(big), max_edge: level.max_edge() };
         }
@@ -723,16 +741,22 @@ impl MediaCache {
                 return SourceRef::Smart { path: sp };
             }
             let mut r = self.origin_ref(&p.source, max_edge);
-            if let SourceRef::File { fallback, .. } = &mut r {
+            if let SourceRef::File { fallback, outliers: o, .. } = &mut r {
                 *fallback = Some(sp);
+                *o = outliers;
             }
             return r;
         }
-        self.origin_ref(&p.source, max_edge)
+        let mut r = self.origin_ref(&p.source, max_edge);
+        if let SourceRef::File { outliers: o, .. } = &mut r {
+            *o = outliers;
+        }
+        r
     }
 
     /// How to load `origin` at most `max_edge` pixels long, ignoring decoded sources in memory (a
-    /// render worker in another wasm instance builds its sources from this).
+    /// render worker in another wasm instance builds its sources from this). Without the outlier filter: a photo's
+    /// own setting is [`Self::source_ref`]'s to add.
     pub fn origin_ref(&mut self, origin: &Source, max_edge: usize) -> SourceRef {
         match origin {
             Source::Demo { scene } => {
@@ -741,12 +765,26 @@ impl MediaCache {
                 }
                 match self.scenes.iter().find(|s| s.id == *scene) {
                     Some(s) => SourceRef::Demo { scene: Box::new(s.clone()), max_edge },
-                    None => SourceRef::File { path: format!("demo:{scene}"), max_edge, loader: None, fallback: None, denoise: None, reduced: None },
+                    None => SourceRef::File {
+                        path: format!("demo:{scene}"),
+                        max_edge,
+                        loader: None,
+                        fallback: None,
+                        denoise: None,
+                        outliers: false,
+                        reduced: None,
+                    },
                 }
             }
-            Source::File { path } => {
-                SourceRef::File { path: path.clone(), max_edge, loader: self.file_loader.clone(), fallback: None, denoise: None, reduced: None }
-            }
+            Source::File { path } => SourceRef::File {
+                path: path.clone(),
+                max_edge,
+                loader: self.file_loader.clone(),
+                fallback: None,
+                denoise: None,
+                outliers: false,
+                reduced: None,
+            },
         }
     }
 }
@@ -1823,10 +1861,86 @@ mod thumbnail_hash_tests {
         assert!(s.media.settings_hashes.entries.is_empty());
         assert!(s.media.settings_hashes.order.is_empty());
     }
+    /// A raw photo's smart preview has no mosaic left: it stands in with the box on or off, so an offline raw keeps
+    /// reusing the decoded proxy instead of reading the file again for every render.
+    #[test]
+    fn a_smart_preview_fits_either_hot_pixel_setting() {
+        let raw = SourceInfo { raw: true, ..Default::default() };
+        let decoded = DecodedSource::new(Arc::new(Rgb32f::new(8, 8)), Some(raw));
+        assert!(decoded.fits_outliers(false) && !decoded.fits_outliers(true), "a raw decode must match the box");
+        let proxy = DecodedSource { from_proxy: true, ..decoded };
+        assert!(proxy.fits_outliers(false) && proxy.fits_outliers(true));
+    }
+
+    /// The Remove Hot Pixels box decides how a raw is decoded (#1345): the loader is told, and a source decoded with
+    /// the other setting is not reused. A rendered file has no mosaic, so its source stays.
+    #[test]
+    fn hot_pixel_box_decodes_the_raw_again() {
+        let mut s = session();
+        let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = asked.clone();
+        let raw = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let is_raw = raw.clone();
+        s.media.file_loader = Some(Arc::new(move |_, _, outliers| {
+            log.lock().unwrap().push(outliers);
+            Ok((Rgb32f::new(8, 8), SourceInfo { raw: is_raw.load(std::sync::atomic::Ordering::Relaxed), ..Default::default() }))
+        }));
+        let set = |s: &mut crate::Session, on: bool| {
+            let mut d = (*s.catalog.photo(PhotoId(1)).unwrap().develop).clone();
+            d.detail.nr_outliers = on;
+            // a new edit each time, so a render cached for earlier settings is not simply shown again
+            d.light.exposure += 0.1;
+            s.catalog.apply(Op::SetDevelop { id: PhotoId(1), settings: Arc::new(d), label: "box".into(), edited: None }).unwrap();
+        };
+        let render = |s: &mut crate::Session| {
+            let r = s.thumb_job(PhotoId(1), 256).unwrap().run();
+            s.accept(&r);
+        };
+        render(&mut s);
+        render(&mut s);
+        assert_eq!(*asked.lock().unwrap(), [false], "decoded once, then cached");
+        set(&mut s, true);
+        render(&mut s);
+        render(&mut s);
+        assert_eq!(*asked.lock().unwrap(), [false, true], "switched on: decoded again with the filter, then cached");
+        set(&mut s, false);
+        render(&mut s);
+        assert_eq!(*asked.lock().unwrap(), [false, true, false]);
+        // not a raw: the box changes nothing, the cached source is kept
+        raw.store(false, std::sync::atomic::Ordering::Relaxed);
+        s.media.forget(PhotoId(1));
+        set(&mut s, false);
+        render(&mut s);
+        set(&mut s, true);
+        render(&mut s);
+        assert_eq!(*asked.lock().unwrap(), [false, true, false, false]);
+    }
+    /// With the Detail section's eye off, Remove Hot Pixels contributes nothing either: the raw is decoded without it.
+    #[test]
+    fn detail_eye_off_decodes_the_raw_without_hot_pixel_removal() {
+        let mut s = session();
+        let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = asked.clone();
+        s.media.file_loader = Some(Arc::new(move |_, _, outliers| {
+            log.lock().unwrap().push(outliers);
+            Ok((Rgb32f::new(8, 8), SourceInfo { raw: true, ..Default::default() }))
+        }));
+        for eye in [true, false] {
+            let mut d = (*s.catalog.photo(PhotoId(1)).unwrap().develop).clone();
+            d.detail.nr_outliers = true;
+            d.set_section_enabled("detail", eye);
+            d.light.exposure += 0.1;
+            s.catalog.apply(Op::SetDevelop { id: PhotoId(1), settings: Arc::new(d), label: "eye".into(), edited: None }).unwrap();
+            let r = s.thumb_job(PhotoId(1), 256).unwrap().run();
+            s.accept(&r);
+        }
+        assert_eq!(*asked.lock().unwrap(), [true, false]);
+    }
+
     #[test]
     fn source_from_before_content_reload_is_not_accepted() {
         let mut s = session();
-        s.media.file_loader = Some(Arc::new(|_, _| Ok((Rgb32f::new(8, 8), SourceInfo::default()))));
+        s.media.file_loader = Some(Arc::new(|_, _, _| Ok((Rgb32f::new(8, 8), SourceInfo::default()))));
         let old = s.thumb_job(PhotoId(1), 256).unwrap().run();
         assert!(old.loaded.is_some());
         s.catalog
@@ -1850,7 +1964,7 @@ mod thumbnail_hash_tests {
     #[test]
     fn a_render_that_panics_fails_instead_of_never_answering() {
         let mut s = session();
-        s.media.file_loader = Some(Arc::new(|_, _| panic!("decoder bug")));
+        s.media.file_loader = Some(Arc::new(|_, _, _| panic!("decoder bug")));
         let mut job = s.thumb_job(PhotoId(1), 256).unwrap();
         job.request_id = 42;
         let (key, level, source_key) = (job.key, job.level, job.source_key);
@@ -1958,13 +2072,14 @@ mod tests {
         job.source = SourceRef::File {
             path: "synthetic.arw".into(),
             max_edge: 64,
-            loader: Some(Arc::new(move |_, _| {
+            loader: Some(Arc::new(move |_, _, _| {
                 let mut image = Rgb32f::new(64, 64);
                 image.data.fill([0.1; 3]);
                 Ok((image, loaded_info.clone()))
             })),
             fallback: None,
             denoise: None,
+            outliers: false,
             reduced: None,
         };
         job.info = SourceInfo::default(); // Header facts cannot override decoder facts.
@@ -2018,9 +2133,10 @@ mod tests {
         job.source = SourceRef::File {
             path: "/photos/DSC00001.ARW".into(),
             max_edge: 64,
-            loader: Some(Arc::new(move |_, _| Ok((loaded_pixels.clone(), loaded_info.clone())))),
+            loader: Some(Arc::new(move |_, _, _| Ok((loaded_pixels.clone(), loaded_info.clone())))),
             fallback: None,
             denoise: None,
+            outliers: false,
             reduced: None,
         };
         let undo_before = s.undo.len();

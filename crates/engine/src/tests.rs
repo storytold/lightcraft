@@ -947,6 +947,25 @@ fn auto_sync_carries_only_the_changed_settings() {
 }
 
 #[test]
+fn auto_sync_carries_remove_hot_pixels_off() {
+    use lightcraft_catalog::PhotoId;
+    let mut s = demo();
+    let ids: Vec<PhotoId> = s.catalog.photos().take(2).map(|p| p.id).collect();
+    for id in &ids {
+        let mut d = (*s.develop_of(*id).unwrap()).clone();
+        d.detail.nr_outliers = true;
+        s.set_develop(*id, d, "Setup").unwrap();
+    }
+    s.execute("library.select", &json!({"ids": [ids[0].0, ids[1].0], "active": ids[0].0})).unwrap();
+    s.execute("develop.autoSync", &json!({"on": true})).unwrap();
+    // off is omitted from the stored JSON: switching it off is still a change Auto Sync carries
+    let mut d = (*s.develop_of(ids[0]).unwrap()).clone();
+    d.detail.nr_outliers = false;
+    s.set_develop(ids[0], d, "Remove Hot Pixels").unwrap();
+    assert!(!s.develop_of(ids[1]).unwrap().detail.nr_outliers);
+}
+
+#[test]
 fn auto_sync_camera_local_tone_off_preserves_other_settings() {
     use lightcraft_catalog::PhotoId;
     let mut s = demo();

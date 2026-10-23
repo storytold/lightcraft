@@ -27,6 +27,7 @@ impl DevelopSettings {
         s.wb.tint = as_shot_tint;
         s.detail.sharpen_amount = 40.0;
         s.detail.nr_color = 25.0;
+        s.detail.nr_outliers = true;
         s
     }
 
@@ -36,6 +37,18 @@ impl DevelopSettings {
 
     pub fn from_json(v: &Value) -> Result<DevelopSettings, serde_json::Error> {
         serde_json::from_value(v.clone())
+    }
+
+    /// [`Self::to_json`] with Remove Hot Pixels (`detail.nr_outliers`) stated even when off, for JSON that is copied,
+    /// merged, scaled or compared key by key (copy / paste, presets, Auto Sync). The stored JSON leaves it out when
+    /// off, so settings saved before it keep their hash; a merge needs the `false`, or copying Detail would not turn
+    /// the box off and a preset applied at an amount would not find its base value.
+    pub fn to_json_for_merge(&self) -> Value {
+        let mut v = self.to_json();
+        if let Some(detail) = v.get_mut("detail").and_then(Value::as_object_mut) {
+            detail.insert("nr_outliers".into(), Value::Bool(self.detail.nr_outliers));
+        }
+        v
     }
 
     /// Merge a partial JSON object into these settings (fields not mentioned are kept). A white balance that
@@ -131,6 +144,12 @@ impl DevelopSettings {
         std::borrow::Cow::Owned(d)
     }
 
+    /// Whether a raw is decoded with its single outlier photosites replaced: Remove Hot Pixels is on and the Detail
+    /// section's eye is too (an Edit-panel section that is off contributes nothing, as in [`Self::effective`]).
+    pub fn removes_hot_pixels(&self) -> bool {
+        self.detail.nr_outliers && self.section_enabled("detail")
+    }
+
     /// How much of the AI-denoised picture to mix in, 0 (none) to 1 (all of it): the Denoise amount, unless the Detail
     /// section is switched off or the value is not a number.
     pub fn denoise_amount(&self) -> f32 {
@@ -156,7 +175,11 @@ impl DevelopSettings {
                 self.curve = d;
             }
             Section::Color => self.wb.mode = WbMode::AsShot,
-            Section::Detail => self.enhance.denoise_on = None,
+            Section::Detail => {
+                self.enhance.denoise_on = None;
+                // not a slider: reset like them, to the general default (off)
+                self.detail.nr_outliers = false;
+            }
             _ => {}
         }
     }
@@ -174,6 +197,37 @@ mod tests_process;
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// Remove Hot Pixels (#1345) is on for a newly imported raw and off for everything else, and an edit saved
+    /// before the box existed reads as off, so it renders as it did.
+    #[test]
+    fn hot_pixel_box_is_on_for_new_raws_only() {
+        assert!(DevelopSettings::for_raw(5500.0, 10.0).detail.nr_outliers);
+        assert!(!DevelopSettings::default().detail.nr_outliers);
+        let mut saved = DevelopSettings::for_raw(5500.0, 10.0).to_json();
+        let detail = saved.get_mut("detail").and_then(|d| d.as_object_mut()).unwrap();
+        assert!(detail.remove("nr_outliers").is_some());
+        let read = DevelopSettings::from_json(&saved).unwrap();
+        assert!(!read.detail.nr_outliers);
+        assert_eq!(read.detail.nr_color, 25.0, "the rest of the saved edit is kept");
+        assert_ne!(read.hash64(), DevelopSettings::for_raw(5500.0, 10.0).hash64(), "cached renders are told apart");
+        // off is omitted: an edit saved before the box keeps its JSON, and so its hash and cached thumbnails
+        assert_eq!(read.to_json(), saved);
+        // copying Detail still carries the box when it is off
+        let copied = crate::extract_groups(&read, &[crate::SettingsGroup::Detail]);
+        assert_eq!(copied["detail"]["nr_outliers"], false);
+        let mut target = DevelopSettings::for_raw(5500.0, 10.0).to_json();
+        crate::presets::deep_merge(&mut target, &copied);
+        assert!(!DevelopSettings::from_json(&target).unwrap().detail.nr_outliers);
+        // the Detail eye switches it off for the decode too, and Reset Detail resets it like the sliders
+        let mut raw = DevelopSettings::for_raw(5500.0, 10.0);
+        assert!(raw.removes_hot_pixels());
+        raw.set_section_enabled("detail", false);
+        assert!(!raw.removes_hot_pixels());
+        raw.set_section_enabled("detail", true);
+        raw.reset_section(Section::Detail);
+        assert!(!raw.detail.nr_outliers && !raw.removes_hot_pixels());
+    }
 
     #[test]
     fn serde_roundtrip_default_and_edited() {

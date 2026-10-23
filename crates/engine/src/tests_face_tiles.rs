@@ -91,9 +91,9 @@ fn count_loads(s: &mut Session) -> Loads {
     let loads = Loads::default();
     let file = s.media.file_loader.clone().unwrap();
     let n = loads.files.clone();
-    s.media.file_loader = Some(Arc::new(move |p: &str, e: usize| {
+    s.media.file_loader = Some(Arc::new(move |p: &str, e: usize, o: bool| {
         n.fetch_add(1, Ordering::SeqCst);
-        file(p, e)
+        file(p, e, o)
     }));
     let preview = s.media.preview_loader.clone().unwrap();
     let n = loads.previews.clone();
