@@ -16,9 +16,7 @@ const MAX_DEPTH: usize = 8;
 /// Maximum number of boxes to inspect.
 const MAX_BOXES: usize = 1024;
 /// XMP UUID in ISO-BMFF `uuid` boxes: be7acfcb-97a9-42e8-9c71-999491e3afac (XMP Specification Part 3).
-const XMP_UUID: [u8; 16] = [
-    0xbe, 0x7a, 0xcf, 0xcb, 0x97, 0xa9, 0x42, 0xe8, 0x9c, 0x71, 0x99, 0x94, 0x91, 0xe3, 0xaf, 0xac,
-];
+const XMP_UUID: [u8; 16] = [0xbe, 0x7a, 0xcf, 0xcb, 0x97, 0xa9, 0x42, 0xe8, 0x9c, 0x71, 0x99, 0x94, 0x91, 0xe3, 0xaf, 0xac];
 /// Difference in seconds between the Apple/Mac epoch (1904-01-01 00:00:00 UTC) and the Unix epoch
 /// (1970-01-01 00:00:00 UTC): 66 years (including 17 leap days) = 24,107 days * 86,400 seconds.
 const MAC_EPOCH_OFFSET_SECONDS: u64 = 2_082_844_800;
@@ -191,11 +189,7 @@ fn parse_trak(body: &[u8], budget: &mut usize, depth: usize) -> Option<TrackInfo
         match &b.kind {
             b"tkhd" => {
                 let ver = *b.body.first()?;
-                let (matrix_off, w_off, h_off) = if ver == 0 {
-                    (40usize, 76usize, 80usize)
-                } else {
-                    (52usize, 88usize, 92usize)
-                };
+                let (matrix_off, w_off, h_off) = if ver == 0 { (40usize, 76usize, 80usize) } else { (52usize, 88usize, 92usize) };
                 if let Some(m) = b.body.get(matrix_off..matrix_off + 36) {
                     orientation = orientation_from_matrix(m);
                 }
@@ -311,14 +305,16 @@ fn parse_udta(body: &[u8], meta: &mut Metadata, xmp: &mut Option<String>, budget
 pub fn extract_video_xmp(bytes: &[u8]) -> Option<String> {
     let mut budget = MAX_BOXES;
     for b in read_boxes(bytes, &mut budget) {
-        if &b.kind == b"uuid" && b.uuid == Some(XMP_UUID)
+        if &b.kind == b"uuid"
+            && b.uuid == Some(XMP_UUID)
             && let Ok(s) = std::str::from_utf8(b.body)
         {
             return Some(s.to_string());
         }
         if &b.kind == b"moov" {
             for child in read_boxes(b.body, &mut budget) {
-                if &child.kind == b"uuid" && child.uuid == Some(XMP_UUID)
+                if &child.kind == b"uuid"
+                    && child.uuid == Some(XMP_UUID)
                     && let Ok(s) = std::str::from_utf8(child.body)
                 {
                     return Some(s.to_string());
@@ -352,7 +348,8 @@ pub fn probe_video(bytes: &[u8]) -> Option<VideoMeta> {
     let mut xmp = None;
 
     for b in read_boxes(bytes, &mut budget) {
-        if &b.kind == b"uuid" && b.uuid == Some(XMP_UUID)
+        if &b.kind == b"uuid"
+            && b.uuid == Some(XMP_UUID)
             && let Ok(s) = std::str::from_utf8(b.body)
         {
             xmp = Some(s.to_string());
