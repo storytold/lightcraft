@@ -6,6 +6,27 @@ its command returns; natively the log's own thread writes and fsyncs it right af
 write that fails is held and retried, and switching the library or quitting waits for it). Now and then the log is
 compacted into a new snapshot. This page covers what happens to a library's files when a newer version opens it.
 
+## What a missing value reads as
+
+A record may leave a develop setting out (the photo's, and those of its history steps, versions and import look); a
+missing field reads as its default. A default that changed in the code would then change every photo relying on it,
+so the library says what its missing values read as:
+
+- `catalog.snap` states them (`"defaults"`: the settings of a record with nothing stated, about 2.8 kB once per
+  library), and that covers the log beside it. Every setting is stated, also the few whose own JSON is left out at
+  their default (the white balance scale, the HDR section, the camera's local tone, Denoise on or off); only the
+  rendering process is not, since a record without one is on the first process in every build.
+- A build with the same defaults reads the records as they are, at no cost. A build that only has settings the
+  library never heard of does too (they take that build's default), and so does one that lacks settings the library
+  knows (it would not read them whatever it read them over).
+- A build whose defaults differ reads every record over the library's own, then rewrites the library with its own
+  before anything is added to it (`LoadReport::other_defaults`). If that can't be written, the library is refused (its
+  files still state the library's own defaults, so the next open reads it the same way).
+- Snapshots written before this state none; they are read over the defaults of the build that reads them, as before.
+
+What a missing value reads as in the current build is also pinned by a test (`crates/catalog/src/develop_defaults.json`),
+so a changed default is seen when it is made. A setting that is removed or renamed needs a loader of its own.
+
 ## Going back to an older version
 
 Opening a library saved in an older catalog format with a newer LightCraft rewrites it in that version's format, and

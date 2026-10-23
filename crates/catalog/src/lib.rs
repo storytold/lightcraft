@@ -31,6 +31,7 @@ pub mod rules;
 pub mod safe_file;
 pub mod stacks;
 pub mod store;
+mod stored;
 pub mod tally;
 
 use std::collections::BTreeMap;
@@ -101,6 +102,7 @@ pub enum Op {
     },
     SetDevelop {
         id: PhotoId,
+        #[serde(deserialize_with = "stored::read_settings")]
         settings: Arc<DevelopSettings>,
         label: String,
         edited: Option<String>,
@@ -1548,6 +1550,8 @@ mod tests_repair;
 mod tests_rule_order;
 #[cfg(test)]
 mod tests_scale;
+#[cfg(test)]
+mod tests_stored;
 #[cfg(test)]
 mod tests_tally;
 #[cfg(test)]
