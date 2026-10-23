@@ -56,7 +56,9 @@
   minutes. The files are now checked in the background: a "Missing Photos" row in the activity stack counts them and
   its ✕ stops the check, and the request is answered with the same list when the check ends. A second request meanwhile
   shares the running check. A caller that stops waiting (the control server gives a request 60 s) gets the answer of
-  that check when it asks again within ten minutes, instead of another walk of the share.
+  that check when it asks again within ten minutes, instead of another walk of the share. If photos are added, removed
+  or relinked while the files are being checked, that answer is not given as current: the request is told to ask
+  again.
 
 ### Choose where a Lightroom catalog goes
 - File ▸ Import Lightroom Catalog… now asks first: merge the catalog's photos, collections and edits into the

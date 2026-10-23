@@ -38,9 +38,33 @@ const KEEP: Duration = Duration::from_secs(10 * 60);
 #[derive(Default)]
 pub struct State {
     /// Each request with the library ([`lightcraft_engine::Session::library_generation`]) it asked about.
-    waiting: Vec<(u64, Sender<Value>)>,
-    /// A finished check's answer that no request received: its library and when it was kept.
-    kept: Option<(u64, Instant, Value)>,
+    pub(crate) waiting: Vec<(u64, Sender<Value>)>,
+    /// A finished check's answer that no request received.
+    kept: Option<Kept>,
+}
+
+/// An answer nobody received: its library, the photos it was of ([`missing::fingerprint`]), when it was kept.
+struct Kept {
+    library: u64,
+    snapshot: u64,
+    at: Instant,
+    answer: Value,
+}
+
+impl State {
+    /// Send `answer` to every request waiting on `library`; `true` if any caller was still there.
+    /// (a request whose caller gave up has no one to send to)
+    fn answer(&mut self, library: u64, answer: &Value) -> bool {
+        let (theirs, others): (Vec<_>, Vec<_>) = std::mem::take(&mut self.waiting).into_iter().partition(|(l, _)| *l == library);
+        self.waiting = others;
+        theirs.into_iter().fold(false, |received, (_, waiting)| waiting.send(answer.clone()).is_ok() || received)
+    }
+
+    /// A check for `library` could not start: fail its requests, and only those (another library's
+    /// check may be running for the others).
+    pub(crate) fn fail(&mut self, library: u64, error: &str) {
+        self.answer(library, &control::failure(error));
+    }
 }
 
 /// Answer `library.missing` from the control channel: give the answer kept from a check nobody
@@ -48,17 +72,19 @@ pub struct State {
 /// `reply` when the check ends.
 pub fn ask(app: &mut LightcraftApp, reply: Sender<Value>) -> Outcome {
     let library = app.session.library_generation();
-    if let Some((kept_for, at, answer)) = app.missing.kept.take()
-        && kept_for == library
-        && at.elapsed() < KEEP
+    if let Some(kept) = app.missing.kept.take()
+        && kept.library == library
+        && kept.at.elapsed() < KEEP
+        && kept.snapshot == missing::fingerprint(&app.session.catalog)
     {
-        return Outcome::Done(answer);
+        return Outcome::Done(kept.answer);
     }
     app.missing.waiting.push((library, reply));
     if app.tasks.is_running(LABEL) && app.missing.waiting.iter().filter(|(l, _)| *l == library).count() > 1 {
         return Outcome::Later;
     }
     let files = missing::checked(&app.session.catalog);
+    let snapshot = missing::fingerprint(&app.session.catalog);
     let total = files.len() as u64;
     let exists = app.session.media.availability.probe();
     let cancel = Arc::new(AtomicBool::new(false));
@@ -75,22 +101,21 @@ pub fn ask(app: &mut LightcraftApp, reply: Sender<Value>) -> Outcome {
             _ if app.session.library_generation() != library => {
                 (control::failure("Missing Photos: another library was opened before the check ended"), false)
             }
+            // (photos added, removed or relinked while the files were checked: this is not the catalog's answer)
+            Ok(_) if missing::fingerprint(&app.session.catalog) != snapshot => {
+                (control::failure("Missing Photos: the photos changed while the files were checked, ask again"), false)
+            }
             Err(e) => (control::failure(e), false),
             Ok(None) => (control::failure("Missing Photos: the check was stopped"), false),
             Ok(Some(gone)) => (control::success(missing::missing_json(gone)), true),
         };
-        let (theirs, others): (Vec<_>, Vec<_>) = std::mem::take(&mut app.missing.waiting).into_iter().partition(|(l, _)| *l == library);
-        app.missing.waiting = others;
-        // (a request whose caller gave up has no one to send to)
-        let received = theirs.into_iter().fold(false, |received, (_, waiting)| waiting.send(answer.clone()).is_ok() || received);
+        let received = app.missing.answer(library, &answer);
         if complete && !received {
-            app.missing.kept = Some((library, Instant::now(), answer));
+            app.missing.kept = Some(Kept { library, snapshot, at: Instant::now(), answer });
         }
     };
     if let Err(e) = crate::tasks::spawn_tracked(app, LABEL, KIND, cancel, work, done) {
-        for (_, waiting) in std::mem::take(&mut app.missing.waiting) {
-            let _ = waiting.send(control::failure(&e));
-        }
+        app.missing.fail(library, &e);
     }
     Outcome::Later
 }

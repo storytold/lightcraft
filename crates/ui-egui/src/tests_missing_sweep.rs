@@ -171,3 +171,74 @@ fn a_check_that_panics_is_answered_with_an_error() {
     let rx = ask(&mut h);
     assert_eq!(answer(&mut h, &rx)["result"], json!([]));
 }
+
+/// Photos added while the files are being checked were not in that check: its answer is not given as
+/// the library's current one, and is not kept for a later request either.
+#[test]
+fn a_check_of_an_earlier_catalog_is_not_answered_as_current() {
+    let (mut h, share) = app_on_a_slow_share(Duration::from_secs(3));
+    let rx = ask(&mut h);
+    for _ in 0..3 {
+        h.step();
+    }
+    let p =
+        Photo::new(PhotoId(PHOTOS + 1), Source::File { path: "/share/IMG_9999.jpg".into() }, "IMG_9999.jpg", "JPEG", 60, 40, "2026-01-01T00:00:00");
+    h.app.session.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    share.open.store(true, Ordering::SeqCst);
+    let reply = answer(&mut h, &rx);
+    assert_eq!(reply["ok"], false, "{reply}");
+    assert!(reply["error"].as_str().is_some_and(|e| e.contains("changed")), "{reply}");
+    assert!(h.step_until(T, |h| h.app.tasks.is_empty()));
+    let calls = share.calls.load(Ordering::SeqCst);
+    let again = ask(&mut h);
+    let reply = answer(&mut h, &again);
+    assert_eq!(reply["ok"], true, "{reply}");
+    assert!(share.calls.load(Ordering::SeqCst) > calls, "checked afresh, not given the stale answer");
+}
+
+/// An edit that leaves the photos' files alone (a rating) does not spoil the check.
+#[test]
+fn an_edit_that_leaves_the_files_alone_does_not_spoil_the_check() {
+    let (mut h, share) = app_on_a_slow_share(Duration::from_secs(3));
+    let rx = ask(&mut h);
+    for _ in 0..3 {
+        h.step();
+    }
+    h.app.session.catalog.apply(Op::SetRating { id: PhotoId(1), rating: 3 }).unwrap();
+    share.open.store(true, Ordering::SeqCst);
+    assert_eq!(answer(&mut h, &rx)["ok"], true);
+}
+
+/// A check that can't start for one library fails only the requests for that library.
+#[test]
+fn a_failed_start_fails_only_that_librarys_requests() {
+    let mut state = crate::missing_sweep::State::default();
+    let (a_tx, a_rx) = std::sync::mpsc::channel();
+    let (b_tx, b_rx) = std::sync::mpsc::channel();
+    state.waiting.push((1, a_tx));
+    state.waiting.push((2, b_tx));
+    state.fail(2, "Missing Photos: could not start");
+    assert!(b_rx.try_recv().is_ok_and(|v| v["ok"] == false));
+    assert!(a_rx.try_recv().is_err(), "the other library's request keeps waiting");
+    assert_eq!(state.waiting.len(), 1);
+}
+
+/// An answer kept for a request that never came is not given once the photos have changed.
+#[test]
+fn a_kept_answer_is_not_given_after_the_photos_changed() {
+    let (mut h, share) = app_on_a_slow_share(Duration::from_secs(3));
+    drop(ask(&mut h));
+    for _ in 0..3 {
+        h.step();
+    }
+    share.open.store(true, Ordering::SeqCst);
+    assert!(h.step_until(T, |h| h.app.tasks.is_empty()));
+    let p =
+        Photo::new(PhotoId(PHOTOS + 1), Source::File { path: "/share/IMG_0000x.jpg".into() }, "IMG_0000x.jpg", "JPEG", 60, 40, "2026-01-01T00:00:00");
+    h.app.session.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    let calls = share.calls.load(Ordering::SeqCst);
+    let again = ask(&mut h);
+    let reply = answer(&mut h, &again);
+    assert_eq!(reply["result"].as_array().map(Vec::len), Some(11), "{reply}");
+    assert!(share.calls.load(Ordering::SeqCst) > calls);
+}

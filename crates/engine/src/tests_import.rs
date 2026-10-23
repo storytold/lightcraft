@@ -1304,6 +1304,27 @@ fn missing_sweep_answers_what_the_command_does_and_can_stop() {
     assert_eq!((stopped, looked.load(Ordering::Relaxed)), (None, 10));
 }
 
+/// A stop that arrives while the last file is being checked is honoured: no answer.
+#[test]
+fn missing_sweep_honours_a_stop_during_the_last_check() {
+    use lightcraft_catalog::PhotoId;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let stop = AtomicBool::new(false);
+    let files = vec![(PhotoId(1), "/a".to_string()), (PhotoId(2), "/b".to_string())];
+    let swept = crate::cmd::missing::sweep(
+        files,
+        |f| {
+            if f == "/b" {
+                stop.store(true, Ordering::Relaxed);
+            }
+            false
+        },
+        || stop.load(Ordering::Relaxed),
+        |_| {},
+    );
+    assert_eq!(swept, None);
+}
+
 /// `library.browse` follows `library.source`'s rule for the active photo (issue #1447): a library
 /// photo the folder doesn't show gives way to the folder's first photo; one it shows stays.
 #[test]

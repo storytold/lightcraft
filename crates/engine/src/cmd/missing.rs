@@ -52,6 +52,18 @@ pub fn checked(cat: &Catalog) -> Vec<(PhotoId, String)> {
     cat.photos().filter_map(|p| checked_path(p).map(|f| (p.id, f.to_string()))).collect()
 }
 
+/// What [`checked`] would list, as one number, without building the list: the photos in scope and
+/// the file each one points at, whatever their order. A caller that checked on its own thread
+/// compares it before and after to know the answer is still of the catalog it is given to.
+pub fn fingerprint(cat: &Catalog) -> u64 {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+    cat.photos().filter_map(|p| checked_path(p).map(|f| (p.id, f))).fold(0u64, |sum, entry| {
+        let mut h = DefaultHasher::new();
+        entry.hash(&mut h);
+        sum.wrapping_add(h.finish())
+    })
+}
+
 /// How many files [`sweep`] checks between two reports of its progress.
 const PROGRESS_EVERY: usize = 64;
 
@@ -76,7 +88,8 @@ pub fn sweep(
             gone.push((id, file));
         }
     }
-    Some(gone)
+    // (a stop that came during the last check is honoured too)
+    (!stop()).then_some(gone)
 }
 
 /// `library.missing`'s answer: `[{id, path}]`.
