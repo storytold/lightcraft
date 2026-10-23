@@ -139,9 +139,12 @@ fn a_smart_preview_moves_only_when_the_hash_is_recorded() {
     assert!(s.catalog.photo(id).unwrap().content_hash.is_none());
     assert!(crate::cmd::previews::has_smart_preview(&s, id), "still found under the photo's key");
     assert!(crate::smart::is_valid(&old));
-    // added again, and this time the result is recorded: the preview follows the hash
-    s.execute("photo.addToLibrary", &json!({"ids": [id.0]})).unwrap();
+    // redone, and this time the result is recorded: the preview follows the hash
+    s.execute("edit.redo", &json!({})).unwrap();
+    assert!(!s.catalog.photo(id).unwrap().local);
+    assert!(s.hashes_queued(), "the redo queues the photo again");
     let jobs = s.take_hash_jobs();
+    assert_eq!(jobs.len(), 1);
     let done = jobs[0].run().unwrap();
     assert!(crate::smart::is_valid(&old), "not moved before the session records the hash");
     assert!(s.learn_content_hash(done));
@@ -151,4 +154,77 @@ fn a_smart_preview_moves_only_when_the_hash_is_recorded() {
     assert!(crate::smart::is_valid(&new));
     assert!(crate::cmd::previews::has_smart_preview(&s, id));
     let _ = std::fs::remove_dir_all(smart);
+}
+
+/// Without a background worker, a redo that brings the photo back works out its hash at once, as
+/// Add to My Photos does.
+#[test]
+fn redoing_add_to_my_photos_works_out_the_hash() {
+    let (mut s, id, file) = browsed_without_hash("redo");
+    s.hash_in_background = true;
+    s.execute("photo.addToLibrary", &json!({"ids": [id.0]})).unwrap();
+    drop(s.take_hash_jobs());
+    s.execute("edit.undo", &json!({})).unwrap();
+    s.hash_in_background = false;
+    s.execute("edit.redo", &json!({})).unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap().content_hash, crate::hashing::file_hash(&file));
+    assert!(!s.hashes_queued());
+}
+
+/// The app commits an import's batches itself (`commit_prepared`, not `import_with`): the photos it
+/// promotes get their hashes there too.
+#[test]
+fn an_app_import_batch_works_out_the_hashes_of_the_photos_it_promotes() {
+    let (mut s, id, file) = browsed_without_hash("app-import");
+    let opts = crate::import::ImportOptions { mode: crate::import::ImportMode::Add, ..Default::default() };
+    let mut job = crate::import::ImportJob::new(&mut s, opts).unwrap();
+    let prepared = job.prepare(std::slice::from_ref(&file), &std::sync::atomic::AtomicBool::new(false));
+    let (opts, now) = (job.opts.clone(), job.now().to_string());
+    s.execute_fn("library.import", |s| crate::import::commit_prepared(s, &opts, &now, prepared).map(|_| json!({}))).unwrap();
+    let p = s.catalog.photo(id).unwrap();
+    assert!(!p.local);
+    assert_eq!(p.content_hash, crate::hashing::file_hash(&file));
+    assert!(!s.hashes_queued());
+}
+
+/// A hash that can't be worked out (the file is gone for now) stays queued for the next try.
+#[test]
+fn a_hash_that_fails_stays_queued() {
+    let (mut s, id, file) = browsed_without_hash("fails");
+    let moved = format!("{file}.away");
+    std::fs::rename(&file, &moved).unwrap();
+    s.execute("photo.addToLibrary", &json!({"ids": [id.0]})).unwrap();
+    assert!(s.catalog.photo(id).unwrap().content_hash.is_none());
+    assert!(s.hashes_queued());
+    std::fs::rename(&moved, &file).unwrap();
+    assert_eq!(s.hash_queued_now(), 1);
+    assert_eq!(s.catalog.photo(id).unwrap().content_hash, crate::hashing::file_hash(&file));
+    assert!(!s.hashes_queued());
+}
+
+/// Browsing reads only headers: it doesn't work out hashes queued before it (whole files, maybe on
+/// a network share).
+#[test]
+fn browsing_leaves_hashes_queued_before_it() {
+    let (mut s, id, file) = browsed_without_hash("browse-queue");
+    s.hash_in_background = true;
+    s.execute("photo.addToLibrary", &json!({"ids": [id.0]})).unwrap();
+    s.hash_in_background = false;
+    let dir = Path::new(&file).parent().unwrap().to_string_lossy().to_string();
+    s.execute("library.browse", &json!({"path": dir})).unwrap();
+    assert!(s.hashes_queued());
+    assert!(s.catalog.photo(id).unwrap().content_hash.is_none());
+}
+
+/// A library that fails to open leaves the current one in place, with its queued hashes.
+#[test]
+fn a_library_that_fails_to_open_keeps_the_queue() {
+    let (mut s, id, _) = browsed_without_hash("open-fails");
+    s.hash_in_background = true;
+    s.execute("photo.addToLibrary", &json!({"ids": [id.0]})).unwrap();
+    let bad = temp_dir("open-fails-lib");
+    std::fs::write(bad.join(lightcraft_catalog::journal::SNAPSHOT), b"not a catalog").unwrap();
+    assert!(s.open_library(&bad, false).is_err());
+    assert!(s.hashes_queued());
+    let _ = std::fs::remove_dir_all(bad);
 }

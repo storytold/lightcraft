@@ -337,7 +337,7 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
     if !placed.is_empty() {
         finish_moves(s, placed, log0, &mut report);
     }
-    s.queue_hash(promoted);
+    s.hash_joined(promoted);
     Ok(report)
 }
 

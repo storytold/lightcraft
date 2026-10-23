@@ -18,11 +18,7 @@ pub fn import_with(s: &mut Session, paths: &[String], opts: &ImportOptions) -> c
     let prepared = job.prepare(paths, &std::sync::atomic::AtomicBool::new(false));
     // probes a scan left for files not imported now stay for a later import
     s.import_probes.extend(std::mem::take(&mut job.cache));
-    let report = commit_prepared(s, &job.opts, &job.now, prepared)?;
-    if !s.hash_in_background {
-        s.hash_queued_now();
-    }
-    Ok(report)
+    commit_prepared(s, &job.opts, &job.now, prepared)
 }
 
 /// Everything the file-system half of an import needs, detached from the session so it can run
