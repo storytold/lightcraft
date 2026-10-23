@@ -2031,7 +2031,11 @@ mod tests {
             assert_eq!(r["ok"], true, "{w}: {r}");
         }
         let f = h.app.session.filter.clone();
-        assert_eq!((f.rating, f.flag, f.label), (3, Some(lightcraft_catalog::Flag::Pick), None), "a second click clears the label");
+        assert_eq!(
+            (f.rating, f.flag, &f.flags[..], f.label),
+            (3, None, &[lightcraft_catalog::Flag::Pick][..], None),
+            "a second click clears the label"
+        );
         let n = h.app.session.visible_cloned().len();
         assert!(n > 0 && n < all);
         h.request("ui.clickWidget", json!({"id": "button:filterSave"}), t);
@@ -2043,6 +2047,42 @@ mod tests {
         h.request("ui.clickWidget", json!({"id": "button:filterClear"}), t);
         assert_eq!(h.app.session.filter, Default::default());
         assert_eq!(h.app.session.visible_cloned().len(), all);
+        h.settle(SETTLE);
+    }
+
+    /// The filter bar's flag buttons toggle on and off together, as Lightroom Classic's do (#2588):
+    /// Picked + Unflagged shows everything but the rejects, a second click turns one off, and a
+    /// filter saved with the old single flag shows its button lit and folds into the list.
+    #[test]
+    fn filter_bar_flags_combine() {
+        use lightcraft_catalog::Flag;
+        let mut h = demo([1400.0, 800.0]);
+        let t = Duration::from_secs(10);
+        let ids: Vec<u64> = h.app.session.catalog.photos().take(3).map(|p| p.id.0).collect();
+        for (id, f) in ids.iter().zip(["pick", "reject", "none"]) {
+            h.app.session.execute("photo.flag", &json!({"ids": [id], "flag": f})).unwrap();
+        }
+        let rejects = h.app.session.catalog.photos().filter(|p| p.in_library() && p.flag == Flag::Reject).count();
+        let all = h.app.session.visible_cloned().len();
+        h.request("engine.execute", json!({"command": "view.filterBar"}), t);
+        for w in ["filter:none", "filter:pick"] {
+            let r = h.request("ui.clickWidget", json!({"id": w}), t);
+            assert_eq!(r["ok"], true, "{w}: {r}");
+        }
+        assert_eq!(h.app.session.filter.flags, vec![Flag::Pick, Flag::None]);
+        assert_eq!(h.app.session.visible_cloned().len(), all - rejects);
+        h.request("ui.clickWidget", json!({"id": "filter:none"}), t);
+        assert_eq!(h.app.session.filter.flags, vec![Flag::Pick]);
+        // an old single-flag filter: Unflagged joins it instead of replacing it
+        h.app.session.execute("library.filter", &json!({"flag": "reject", "flags": []})).unwrap();
+        h.request("ui.clickWidget", json!({"id": "filter:none"}), t);
+        let f = h.app.session.filter.clone();
+        assert_eq!((f.flag, f.flags), (None, vec![Flag::Reject, Flag::None]));
+        // both set through the API: only Picked passes, so only Picked is lit and Unflagged joins it
+        h.app.session.execute("library.filter", &json!({"flag": "pick", "flags": ["pick", "none"]})).unwrap();
+        h.request("ui.clickWidget", json!({"id": "filter:none"}), t);
+        let f = h.app.session.filter.clone();
+        assert_eq!((f.flag, f.flags), (None, vec![Flag::Pick, Flag::None]));
         h.settle(SETTLE);
     }
 

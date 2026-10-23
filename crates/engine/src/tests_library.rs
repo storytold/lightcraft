@@ -334,6 +334,61 @@ fn filter_any_of_several_labels() {
     assert!(s.visible_cloned().len() > want);
 }
 
+/// The filter bar's flag multi-select (#2588): Picked and Unflagged together hide only the rejects,
+/// as Lightroom Classic's flag toggles do; one chip clears both, and the old single `flag` still filters.
+#[test]
+fn filter_any_of_several_flags() {
+    use lightcraft_catalog::Flag;
+    let mut s = crate::Session::with_demo();
+    let ids: Vec<u64> = s.catalog.photos().take(4).map(|p| p.id.0).collect();
+    for (id, f) in ids.iter().zip(["pick", "pick", "reject", "none"]) {
+        s.execute("photo.flag", &json!({"ids": [id], "flag": f})).unwrap();
+    }
+    let count = |s: &Session, want: &[Flag]| s.catalog.photos().filter(|p| p.in_library() && want.contains(&p.flag)).count();
+    let (picks, rejects, all) = (count(&s, &[Flag::Pick]), count(&s, &[Flag::Reject]), count(&s, &[Flag::Pick, Flag::Reject, Flag::None]));
+    assert!(picks >= 2 && rejects >= 1 && all > picks + rejects, "picks {picks}, rejects {rejects}, all {all}");
+    s.execute("library.filter", &json!({"flags": ["pick", "none"]})).unwrap();
+    let vis = s.visible_cloned();
+    assert_eq!(vis.len(), all - rejects);
+    assert!(vis.iter().all(|id| s.catalog.photo(*id).unwrap().flag != Flag::Reject));
+    assert!(s.filter.describe().contains("flag pick or none"), "{}", s.filter.describe());
+    let chips = crate::filter_chips(&s.filter, &s.catalog);
+    let chip = chips.iter().find(|c| c.label.starts_with("Flag")).expect("a flag chip");
+    assert_eq!(chip.label, "Flag: pick or none");
+    s.execute("library.filter", &chip.clear).unwrap();
+    assert_eq!(s.visible_cloned().len(), all);
+    // `null` clears the list, as it clears the single flag
+    s.execute("library.filter", &json!({"flags": ["reject"]})).unwrap();
+    assert_eq!(s.visible_cloned().len(), rejects);
+    s.execute("library.filter", &json!({"flags": null})).unwrap();
+    assert!(s.filter.flags.is_empty());
+    assert_eq!(s.visible_cloned().len(), all);
+    // the single flag of saved filters and agents filters as before
+    s.execute("library.filter", &json!({"flag": "pick"})).unwrap();
+    assert_eq!(s.visible_cloned().len(), picks);
+}
+
+/// `flag` and `flags` set together (only through `library.filter`) AND, and the chip says what
+/// they let through, not their union.
+#[test]
+fn filter_flag_and_flags_together_chip() {
+    use lightcraft_catalog::Flag;
+    let mut s = crate::Session::with_demo();
+    let ids: Vec<u64> = s.catalog.photos().take(3).map(|p| p.id.0).collect();
+    for (id, f) in ids.iter().zip(["pick", "reject", "none"]) {
+        s.execute("photo.flag", &json!({"ids": [id], "flag": f})).unwrap();
+    }
+    let picks = s.catalog.photos().filter(|p| p.in_library() && p.flag == Flag::Pick).count();
+    let chip = |s: &Session| crate::filter_chips(&s.filter, &s.catalog).into_iter().find(|c| c.label.starts_with("Flag")).expect("a flag chip").label;
+    s.execute("library.filter", &json!({"flag": "pick", "flags": ["pick", "none"]})).unwrap();
+    assert_eq!(s.visible_cloned().len(), picks);
+    assert_eq!(chip(&s), "Flag: pick");
+    // nothing passes both: the chip names both constraints
+    s.execute("library.filter", &json!({"flag": "pick", "flags": ["reject", "none"]})).unwrap();
+    assert_eq!(s.visible_cloned().len(), 0);
+    assert_eq!(chip(&s), "Flag: pick and (reject or none)");
+}
+
 /// Quick Collection / target album: B toggles the selection in it (created on first use);
 /// another album can be the target; clear empties it; all undoable.
 #[test]
