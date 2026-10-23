@@ -2315,5 +2315,12 @@
   "Set up name suggestions…": "Skonfiguruj propozycje imion…",
   "Top bar": "Górny pasek",
   "Tool strip": "Pasek narzędzi",
-  "Bottom bar": "Dolny pasek"
+  "Bottom bar": "Dolny pasek",
+  "Select all": "Zaznacz wszystko",
+  "Clear selection": "Wyczyść zaznaczenie",
+  "✓ Selected": "✓ Zaznaczono",
+  "Not selected": "Nie zaznaczono",
+  "Done selecting": "Zakończ zaznaczanie",
+  "Select faces…": "Zaznacz twarze…",
+  "Click faces to select or deselect. Shift-click extends that action to a range. Double-click opens a photo.": "Kliknij, aby zaznaczyć twarze lub usunąć zaznaczenie. Shift-kliknięcie rozszerza działanie na zakres. Dwukrotne kliknięcie otwiera zdjęcie."
 }

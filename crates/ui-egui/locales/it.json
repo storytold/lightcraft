@@ -2556,5 +2556,11 @@
   "Unit": "Unità",
   "Top bar": "Barra superiore",
   "Tool strip": "Barra degli strumenti",
-  "Bottom bar": "Barra inferiore"
+  "Bottom bar": "Barra inferiore",
+  "Clear selection": "Cancella selezione",
+  "✓ Selected": "✓ Selezionato",
+  "Not selected": "Non selezionato",
+  "Done selecting": "Termina selezione",
+  "Select faces…": "Seleziona volti…",
+  "Click faces to select or deselect. Shift-click extends that action to a range. Double-click opens a photo.": "Fai clic per selezionare o deselezionare i volti. Maiusc-clic estende l’azione a un intervallo. Un doppio clic apre una foto."
 }

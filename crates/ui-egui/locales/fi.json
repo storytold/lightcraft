@@ -2356,5 +2356,11 @@
   "Set up name suggestions…": "Määritä nimiehdotukset…",
   "Top bar": "Yläpalkki",
   "Tool strip": "Työkalupalkki",
-  "Bottom bar": "Alapalkki"
+  "Bottom bar": "Alapalkki",
+  "Clear selection": "Tyhjennä valinta",
+  "✓ Selected": "✓ Valittu",
+  "Not selected": "Ei valittu",
+  "Done selecting": "Lopeta valitseminen",
+  "Select faces…": "Valitse kasvot…",
+  "Click faces to select or deselect. Shift-click extends that action to a range. Double-click opens a photo.": "Valitse kasvot tai poista valinta napsauttamalla. Vaihto-napsautus laajentaa toiminnon alueelle. Kaksoisnapsautus avaa kuvan."
 }

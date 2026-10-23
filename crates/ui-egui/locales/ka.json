@@ -3659,5 +3659,11 @@
   "Top bar": "ზედა ზოლი",
   "Tool strip": "ხელსაწყოების ზოლი",
   "Bottom bar": "ქვედა ზოლი",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "G-SYNC/FreeSync-ის ციმციმის თავიდან აცილება (ამოქმედდება შემდეგი გაშვებისას)"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "G-SYNC/FreeSync-ის ციმციმის თავიდან აცილება (ამოქმედდება შემდეგი გაშვებისას)",
+  "Clear selection": "მონიშვნის გასუფთავება",
+  "✓ Selected": "✓ მონიშნულია",
+  "Not selected": "არ არის მონიშნული",
+  "Done selecting": "მონიშვნის დასრულება",
+  "Select faces…": "სახეების მონიშვნა…",
+  "Click faces to select or deselect. Shift-click extends that action to a range. Double-click opens a photo.": "დააწკაპუნეთ სახის მოსანიშნად ან მონიშვნის გასაუქმებლად. Shift-დაწკაპუნება მოქმედებას დიაპაზონზე ავრცელებს. ორმაგი დაწკაპუნება ფოტოს ხსნის."
 }

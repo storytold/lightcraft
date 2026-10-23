@@ -327,6 +327,23 @@ with an equal or higher similarity score. Its tooltip names the person and shows
 Hover a suggestion or focus it with the keyboard and press `A` for the same action. The batch is one undo step;
 suggestions below that score, previously confirmed faces and hidden suggestions stay as they were. Nothing is named
 without this explicit action.
+
+To correct an assignment, right-click a confirmed face and choose **Remove from [person]**.
+For several corrections, choose **Select faces to remove…**, click faces (Shift-click extends
+selection or exclusion over a range), then **Remove … faces from [person]**. Select all and Clear
+selection are available; Done selecting restores normal photo opening. Double-click opens a photo
+while selecting. Removal clears only the person's name, keeping photos and face boxes, and the
+whole batch is one undo step. Removed faces return to Unnamed faces and are hidden from More for
+this session. Refresh saved unnamed groups to include any faces outside their saved membership.
+The command uses `faces.nameFaces` with `name: null` and `expectedName` to reject stale selections
+before making any changes.
+
+Double-clicking a confirmed face opens its photo and preserves the prior selection and range anchor when returning to the person page.
+
+Face naming and face-box edits remain catalog-only through
+Undo and Redo, even when automatic XMP writing is enabled. They do not mark photos as developed
+or add develop-history entries. A command combining face changes or their Undo/Redo with ordinary metadata changes still writes the ordinary metadata when automatic XMP writing is enabled.
+
 **Show photos** puts their photos in the grid; **‹ People** or Escape goes back. "More" only holds faces the scan has
 already embedded, so it fills in as the scan goes; it shows faces scoring above four fifths of the model's suggestion bar,
 since you look at each one before anything is named.
@@ -386,3 +403,58 @@ sensor dust. Eyes, brows, nostrils and the mouth are cut out around the landmark
 the 1600 px analysis image get nothing, as do faces with more than 12 candidates (stubble, freckles and pores are
 texture, not blemishes); at most six per face. It needs no model beyond the detector and never changes anything
 without a spot you can see and delete (`crates/pipeline/src/blemish.rs`).
+
+
+## Automatically group unnamed faces
+
+In People, choose **Auto group unnamed faces**. Click several group cards to select them together,
+then click an existing person's **Quick assign** button to assign every selected face in one action.
+**Assign to existing person…** includes a searchable list of all names. You can also enter a new name
+and choose **Assign N faces**. Each assignment is one undo step and the named photos become searchable.
+
+Cards show several example faces and the existing name they resemble, where available. **Review**
+(or double-click) opens a group's faces. Click faces to include or exclude them; your selection is kept
+when you return to the overview or review another group. **Select all** applies to the current view;
+**Clear selection** clears selections across all groups.
+
+**Shift-click** repeats the last click's action across a range: click a selected face to exclude it,
+then Shift-click a later face to exclude the whole range. **Shift-drag** draws a box that excludes every
+face it touches. Ordinary dragging selects a box, or excludes it when starting on a selected face.
+The assignment bar always shows the total selection, including faces selected in other groups.
+
+Recognition must first be set up in Settings → Faces. The existing background scan searches the library;
+grouping uses all currently indexed unnamed faces, independent of the photo filter. **Refresh groups**
+rebuilds groups to include newly scanned photos. Completed groups are saved with the library and
+reopen without regrouping. Named, removed or changed faces are filtered out; new faces wait for
+Refresh groups. These remain suggestions, not confirmed identities; nothing is named automatically.
+Refreshing replaces the saved set atomically only after completion, preserving the previous set if
+interrupted or a save fails. Leaving the screen pauses grouping, which runs in short time slices.
+
+Default grouping now uses the same mean of the two closest examples and the same threshold as a named
+person's **More** suggestions. Existing people's confirmed faces seed galleries, so pose and age examples
+are all considered; unconfirmed suggestions never teach those identities. Unnamed groups grow using up
+to 64 varied examples instead of requiring every member to resemble the first face. **Fewer mistakes**
+uses a tighter threshold and ambiguity margin, and keeps unnamed groups close to their first face.
+Groups still require review and may contain mismatches. Grouping supports up to 100,000 indexed unnamed
+faces and reports an error above that limit instead of silently truncating.
+
+`faces.groupUnnamed {restart?: bool, budgetMs?: 8, strict?: bool}` loads saved groups or advances grouping; poll
+until `complete`. It reports `processed`, `total`, `unindexed`, and completed `groups`, each with `faces`
+and an optional existing-name `suggestion`. `restart: true` explicitly rebuilds; omitted `strict`
+preserves the saved mode. Model changes invalidate saved groups. `view.unnamedGroups` opens the review UI.
+`faces.nameFaces` accepts up to 100,000 faces. With `unnamedOnly: true`, each entry must include its
+original `rect`; current responses also include `contentHash`, which is validated before any mutation. The batch is refused if any reviewed region has changed or already been named.
+
+Saved suggestions follow a confirmed reference face through person renames, merges, and Undo/Redo,
+including after reopening the library. If that reference is removed or changed, the
+suggestion is cleared; the group's unnamed members remain available for review. Older saved groups
+without a reference still load, but obsolete person names are hidden; Refresh groups adds references.
+
+Restoring those faces uses the updated name, so an old person is not recreated. The rename dialog's
+face count and merge confirmation include these retained assignments.
+
+Escape or the toolbar Back action returns from a group review to All groups, preserving selection;
+from All groups it returns to People. The existing on-screen navigation buttons
+remain available.
+
+Reviewed face payloads carry `contentHash` (including null for catalog photos without a hash). `faces.nameFaces` validates a supplied token against the current catalog photo before committing any part of the batch. This catches replacement content even if the photo ID, region index and rectangle are unchanged; clients omitting the token keep the existing command behavior.

@@ -246,6 +246,7 @@ pub(crate) fn render_rgb(s: &mut Session, id: lightcraft_catalog::PhotoId, edge:
     Ok((rgb, image.width, image.height))
 }
 
+/// Detect selected photos and commit new face regions without automatic sidecar writes.
 fn detect(s: &mut Session, p: &Value) -> Result<Value> {
     let apply = p.get("apply").and_then(Value::as_bool).unwrap_or(true);
     let defaults = Options::default();
@@ -290,9 +291,7 @@ fn detect(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let applied = !ops.is_empty();
     if applied {
-        s.commit("Detect Faces", Op::Batch { ops })?;
-        // regions are not written to XMP, so a sidecar must not be rewritten for this
-        s.skip_auto_write = true;
+        s.commit_catalog_only("Detect Faces", Op::Batch { ops })?;
     }
     Ok(json!({"detector": LABEL, "applied": applied, "photos": results, "ms": started.elapsed().as_secs_f64() * 1000.0}))
 }

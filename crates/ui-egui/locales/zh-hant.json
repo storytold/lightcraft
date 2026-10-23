@@ -2389,5 +2389,12 @@
   "Top bar": "頂部列",
   "Tool strip": "工具列",
   "Bottom bar": "底部列",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "防止 G-SYNC/FreeSync 閃爍（下次啟動時生效）"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "防止 G-SYNC/FreeSync 閃爍（下次啟動時生效）",
+  "Select all": "全選",
+  "Clear selection": "清除選取",
+  "✓ Selected": "✓ 已選取",
+  "Not selected": "未選取",
+  "Done selecting": "完成選取",
+  "Select faces…": "選取臉孔…",
+  "Click faces to select or deselect. Shift-click extends that action to a range. Double-click opens a photo.": "按一下以選取或取消選取臉孔。按住 Shift 按一下可將操作延伸至一個範圍。按兩下開啟照片。"
 }
