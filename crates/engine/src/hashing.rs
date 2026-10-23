@@ -4,7 +4,7 @@
 //! leaves their content hash unset (see `files::light_probe`): it needs every byte, and a folder on
 //! a network share holds thousands of raws. A Local photo is found again by its path. Once one
 //! joins the library (Add to My Photos, or an import of its file), it is queued here
-//! ([`Session::queue_hash`]) and its hash is worked out: on a worker thread in the app
+//! ([`Session::queue_hash`]; an undo or redo that brings it back queues it again) and its hash is worked out: on a worker thread in the app
 //! ([`Session::take_hash_jobs`], [`HashJob::run`], [`Session::learn_content_hash`]), or at once
 //! where nothing runs in the background (CLI, MCP: [`Session::hash_queued_now`]). Duplicates of it
 //! are then recognised on import again.
@@ -104,6 +104,20 @@ fn move_smart_preview(old: &std::path::Path, new: &std::path::Path) {
     }
 }
 
+/// Photos `op` brings into the library (`SetLocal` to false, in batches too).
+pub(crate) fn joined_library(op: &Op) -> Vec<PhotoId> {
+    let mut ids = Vec::new();
+    let mut pending = vec![op];
+    while let Some(op) = pending.pop() {
+        match op {
+            Op::SetLocal { id, local: false } => ids.push(*id),
+            Op::Batch { ops } => pending.extend(ops),
+            _ => {}
+        }
+    }
+    ids
+}
+
 /// Whether photo `p` is a library photo whose hash is still to be worked out from its own file.
 fn wants_hash(p: &Photo) -> bool {
     !p.local && !p.deleted && p.copy_of.is_none() && p.content_hash.is_none() && matches!(p.source, Source::File { .. })
@@ -126,13 +140,33 @@ impl Session {
 
     /// The queued photos' jobs (the queue is emptied), for a worker thread.
     pub fn take_hash_jobs(&mut self) -> Vec<HashJob> {
-        let smart_dir = self.media.smart_dir.clone();
-        std::mem::take(&mut self.unhashed)
-            .into_iter()
+        let ids = std::mem::take(&mut self.unhashed);
+        self.hash_jobs(ids)
+    }
+
+    fn hash_jobs(&self, ids: Vec<PhotoId>) -> Vec<HashJob> {
+        let smart_dir = &self.media.smart_dir;
+        ids.into_iter()
             .filter_map(|id| {
                 self.catalog.photo(id).filter(|p| wants_hash(p)).map(|p| HashJob { id, photo: Photo::clone(p), smart_dir: smart_dir.clone() })
             })
             .collect()
+    }
+
+    /// Photos that just joined the library (Add to My Photos, an import, an undo or redo of
+    /// either): queued, and where nothing runs in the background, their hashes are worked out now.
+    /// Only theirs: hashes queued earlier wait for the next drain, so a browse that promotes nothing
+    /// reads no whole files.
+    pub(crate) fn hash_joined(&mut self, ids: impl IntoIterator<Item = PhotoId>) {
+        let ids: Vec<PhotoId> = ids.into_iter().collect();
+        self.queue_hash(ids.iter().copied());
+        if self.hash_in_background {
+            return;
+        }
+        let mine: Vec<PhotoId> = self.unhashed.iter().copied().filter(|id| ids.contains(id)).collect();
+        self.unhashed.retain(|id| !mine.contains(id));
+        let jobs = self.hash_jobs(mine);
+        self.run_hash_jobs(jobs);
     }
 
     /// Record a worked-out hash when the photo is still the one it was worked out for (same file, same
@@ -170,7 +204,21 @@ impl Session {
     /// Work out the queued hashes now (where nothing runs in the background). How many were recorded.
     pub fn hash_queued_now(&mut self) -> usize {
         let jobs = self.take_hash_jobs();
-        jobs.iter().filter_map(HashJob::run).map(|d| self.learn_content_hash(d)).filter(|&ok| ok).count()
+        self.run_hash_jobs(jobs)
+    }
+
+    /// Run `jobs` here; one that fails (the file can't be read now) stays queued for a later try,
+    /// as long as its photo still wants a hash. How many were recorded.
+    fn run_hash_jobs(&mut self, jobs: Vec<HashJob>) -> usize {
+        let mut recorded = 0;
+        for job in jobs {
+            if job.run().is_some_and(|d| self.learn_content_hash(d)) {
+                recorded += 1;
+            } else {
+                self.queue_hash([job.id]);
+            }
+        }
+        recorded
     }
 }
 
