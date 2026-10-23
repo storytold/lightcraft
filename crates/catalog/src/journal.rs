@@ -263,16 +263,26 @@ fn newer(what: String) -> CatalogError {
     CatalogError::Newer(format!("{what}; this version reads catalog format v{VERSION} and older"))
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Start markers that `resync` decoded on this thread (test builds only; see the cost test).
+    pub(crate) static RESYNC_CANDIDATES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// A line that doesn't decode but ends with a whole record: a fragment of a failed append followed
 /// by the record that retried it (the retry re-encodes the same ops with the same `seq`s). Returns
 /// the fragment's length and the record, if that record continues the log (`seq <= last + 1`).
 /// The record's CRC must match, so damage is never mistaken for it.
 fn resync(line: &[u8], last: u64) -> Option<(usize, (u64, Op))> {
     const START: &[u8] = b"{\"seq\":";
-    (1..line.len().saturating_sub(START.len() - 1)).filter(|&i| line[i..].starts_with(START)).find_map(|i| {
-        let rec = std::str::from_utf8(&line[i..]).ok().map(|l| l.trim_end_matches('\r')).and_then(decode_record)?;
-        (rec.0 <= last.saturating_add(1)).then_some((i, rec))
-    })
+    // Only the retry record can follow a torn fragment, so only the LAST occurrence of the start
+    // marker can match; searching every occurrence made a hostile line quadratic in its length.
+    // Requiring i > 0 keeps the invariant that a fragment precedes the record.
+    let i = line.windows(START.len()).rposition(|w| w == START).filter(|&i| i > 0)?;
+    #[cfg(test)]
+    RESYNC_CANDIDATES.with(|c| c.set(c.get() + 1));
+    let rec = std::str::from_utf8(&line[i..]).ok().map(|l| l.trim_end_matches('\r')).and_then(decode_record)?;
+    (rec.0 <= last.saturating_add(1)).then_some((i, rec))
 }
 
 /// Write `catalog.snap` for the state after op `seq`, streaming the JSON into the store (no

@@ -4,7 +4,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use crate::journal::LOG;
+use crate::journal::{LOG, RESYNC_CANDIDATES};
 use crate::*;
 
 /// A store whose next append writes only a prefix of its data, then fails.
@@ -220,4 +220,49 @@ fn fs_store_truncates_a_missing_file_quietly() {
     s.truncate(LOG, 0).unwrap();
     assert_eq!(std::fs::read(dir.join(LOG)).unwrap(), b"");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Issue #2124: `resync` must be linear in the line length, not quadratic. A line that is nothing
+/// but the start marker repeated 300k times must open fast, and a valid retry record placed after
+/// it must still be recovered.
+#[test]
+fn resync_is_not_quadratic_in_line_length() {
+    let probe = MemStore::new();
+
+    // Build a valid snapshot + an initial record so `j.seq()` is non-zero and the `seq <= last + 1`
+    // gate in resync can be exercised.
+    let (mut j, mut c, _) = Journal::open(Box::new(probe.clone())).unwrap();
+    let add = add_photo(&mut c);
+    let first = apply(&mut c, vec![add]);
+    j.append(&first).unwrap();
+
+    let log = probe.get(LOG).unwrap();
+    let base_len = log.len();
+
+    // A hostile 300k-repetition marker line (about 2.3 MB), then one valid retried record that
+    // continues the log (seq == j.seq() + 1, so resync's gate accepts it).
+    let marker = b"{\"seq\":";
+    let mut hostile = Vec::with_capacity(marker.len() * 300_000 + log.len() + 256);
+    hostile.extend_from_slice(&log[..base_len]);
+    for _ in 0..300_000 {
+        hostile.extend_from_slice(marker);
+    }
+
+    // Encode the retry record the same way the journal writes records, so decode_record accepts it.
+    let next_seq = j.seq() + 1;
+    let retry_op = Op::SetRating { id: c.photos().next().unwrap().id, rating: 5 };
+    let body = serde_json::to_string(&retry_op).unwrap();
+    let crc = crc32fast::hash(body.as_bytes());
+    let retry = format!("{{\"seq\":{next_seq},\"crc\":{crc},\"op\":{body}}}\n");
+    hostile.extend_from_slice(retry.as_bytes());
+
+    probe.set(LOG, hostile);
+
+    // Count the start markers resync decodes instead of timing it: a slow worker must not fail this.
+    RESYNC_CANDIDATES.with(|c| c.set(0));
+    let (j2, _c2, report) = Journal::open(Box::new(probe.clone())).unwrap();
+    let candidates = RESYNC_CANDIDATES.with(|c| c.get());
+    assert!(candidates <= 1, "resync decoded {candidates} start markers of a hostile 2 MB line; only the last one may be decoded");
+    assert_eq!(j2.seq(), next_seq, "resync should have recovered the retried record after the fragment");
+    assert_eq!(report.torn_fragments, 1, "resync should report exactly one torn fragment");
 }
