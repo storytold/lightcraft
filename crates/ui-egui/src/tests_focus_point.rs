@@ -184,6 +184,8 @@ fn the_frame_loop_reads_focus_points_for_photos_imported_earlier() {
     assert_eq!(spec.menu, vec!["Photo"]);
     let r = run(&mut h, "photo.readFocusPoints", json!({}));
     assert_eq!(r["queued"], 1, "{r}");
+    // its `queued` counts photos: it is not a task put in line, and isn't said to be one
+    assert!(!h.app.ui.toast.as_ref().is_some_and(|(text, ..)| text.starts_with("Queued")), "{:?}", h.app.ui.toast);
     assert!(h.step_until(SETTLE, |h| has_point(h, 9002)));
     let _ = std::fs::remove_dir_all(&dir);
 }
