@@ -84,17 +84,22 @@ fn vignette(s: &DevelopSettings) -> Option<Vig> {
     })
 }
 
-/// Hash constants of [`grain_noise`] (shared with the GPU kernel).
-pub const GRAIN_HASH: [u32; 4] = [0x8da6_b343, 0xd816_3841, 0xcb1a_b31f, 0x5bd1_e995];
+pub use crate::grain::GRAIN_HASH;
 
+/// Hash constants of [`value_grain_noise`], the grain of processes V1 and V2 (shared with the GPU
+/// kernel).
+pub const VALUE_GRAIN_HASH: [u32; 4] = [0x8da6_b343, 0xd816_3841, 0xcb1a_b31f, 0x5bd1_e995];
+
+/// Value noise of the V1/V2 grain. Frozen: photos on those processes render with it.
 #[inline]
-fn grain_noise(x: f32, y: f32, seed: u32) -> f32 {
+fn value_grain_noise(x: f32, y: f32, seed: u32) -> f32 {
     let (x0, y0) = (x.floor(), y.floor());
     let (fx, fy) = (x - x0, y - y0);
     let h = |i: i32, j: i32| {
-        let mut v = (i as u32).wrapping_mul(GRAIN_HASH[0]) ^ (j as u32).wrapping_mul(GRAIN_HASH[1]) ^ seed.wrapping_mul(GRAIN_HASH[2]);
+        let mut v =
+            (i as u32).wrapping_mul(VALUE_GRAIN_HASH[0]) ^ (j as u32).wrapping_mul(VALUE_GRAIN_HASH[1]) ^ seed.wrapping_mul(VALUE_GRAIN_HASH[2]);
         v ^= v >> 13;
-        v = v.wrapping_mul(GRAIN_HASH[3]);
+        v = v.wrapping_mul(VALUE_GRAIN_HASH[3]);
         v ^= v >> 15;
         (v & 0xffff) as f32 / 32768.0 - 1.0
     };
@@ -103,6 +108,48 @@ fn grain_noise(x: f32, y: f32, seed: u32) -> f32 {
     let a = h(i, j) + (h(i + 1, j) - h(i, j)) * u;
     let b = h(i, j + 1) + (h(i + 1, j + 1) - h(i, j + 1)) * u;
     a + (b - a) * v
+}
+
+/// The grain of processes V1 and V2: two octaves of value noise (frozen, see
+/// `docs/process-versions.md`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ValueGrain {
+    /// Amplitude (display-encoded).
+    pub amt: f32,
+    /// Noise cell size (output pixels).
+    pub cell: f32,
+    /// Roughness 0..1: weight of the finer octave.
+    pub rough: f32,
+    pub seed: u32,
+}
+
+impl ValueGrain {
+    fn new(g: &lightcraft_develop::Grain, px_per_long: f64) -> Option<ValueGrain> {
+        (g.amount > 0.0).then(|| {
+            let cell = (0.0006 + (g.size / 100.0) as f32 * 0.0024) * px_per_long as f32;
+            ValueGrain { amt: (g.amount / 100.0) as f32 * 0.13, cell: cell.max(0.6), rough: (g.roughness / 100.0) as f32, seed: g.seed }
+        })
+    }
+}
+
+/// A render's film grain. Which model it is follows the photo's process: changing it would change
+/// how existing photos look, so the particle model came with a new process.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum GrainModel {
+    /// V1 and V2: value noise.
+    Value(ValueGrain),
+    /// V3 and later: clumps of particles ([`crate::grain`]).
+    Particles(crate::grain::GrainParams),
+}
+
+impl GrainModel {
+    /// The grain `s` renders with at `px_per_long` output pixels per long edge (`None`: no grain).
+    pub fn new(s: &DevelopSettings, px_per_long: f64) -> Option<GrainModel> {
+        match s.process.process() {
+            Process::V1 | Process::V2 => ValueGrain::new(&s.grain, px_per_long).map(GrainModel::Value),
+            Process::V3 => crate::grain::GrainParams::new(&s.grain, px_per_long).map(GrainModel::Particles),
+        }
+    }
 }
 
 /// Number of per-mask terms in [`mask_terms`].
@@ -181,8 +228,8 @@ pub struct FinishParams {
     pub air_pre: f32,
     pub gain: f32,
     pub ev: f32,
-    /// Grain: amount, cell size (px), roughness, seed.
-    pub grain: Option<(f32, f32, f32, u32)>,
+    /// Film grain: the model of the photo's process ([`GrainModel`]).
+    pub grain: Option<GrainModel>,
     /// Output px → normalized oriented coordinates.
     pub out_to_norm: lightcraft_geom::Affine,
     pub ow: f64,
@@ -218,10 +265,7 @@ impl FinishParams {
         };
         let ev = s.light.exposure as f32;
         let gain = 2f32.powf(ev);
-        let grain = (s.grain.amount > 0.0 && effects).then(|| {
-            let cell = (0.0006 + (s.grain.size / 100.0) as f32 * 0.0024) * px_per_long as f32;
-            ((s.grain.amount / 100.0) as f32 * 0.13, cell.max(0.6), (s.grain.roughness / 100.0) as f32, s.grain.seed)
-        });
+        let grain = if effects { GrainModel::new(s, px_per_long) } else { None };
         let calibration = s.section_enabled("calibration");
         let peak = s.hdr.peak();
         FinishParams {
@@ -281,7 +325,7 @@ pub fn base_tone(s: &DevelopSettings, info: &SourceInfo, peak: f32) -> ToneMap {
     let l = &s.light;
     match s.process.process() {
         // V2 changes the Highlights/Shadows base (`local::tone_base`), not the tone map
-        Process::V1 | Process::V2 => match info.camera_tone.as_ref().filter(|_| info.raw) {
+        Process::V1 | Process::V2 | Process::V3 => match info.camera_tone.as_ref().filter(|_| info.raw) {
             Some(curve) => ToneMap::camera_hdr(curve, l.contrast, l.whites, l.blacks, peak),
             None if info.raw => ToneMap::hdr(l.contrast, l.whites, l.blacks, peak),
             None => ToneMap::display_hdr(l.contrast, l.whites, l.blacks, peak),
@@ -399,8 +443,13 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
     let peak = fp.peak;
     let hdr = peak > 1.0;
     let mut out = vec![T::default(); w * h];
-    for_rows(&mut out, w, |y, row| {
-        for (x, px) in row.iter_mut().enumerate() {
+    // bands of rows: grain splats each grain once per band (see `GrainParams::apply_band`)
+    const BAND: usize = 8;
+    for_rows(&mut out, w * BAND, |band, rows| {
+        // display-encoded colour and gamut-warning overlay per pixel, before grain and LUT
+        let mut enc: Vec<([f32; 3], Option<[f32; 3]>)> = Vec::with_capacity(rows.len());
+        for q in 0..rows.len() {
+            let (x, y) = (q % w, band * BAND + q / w);
             let i = y * w + x;
             let raw = p.img.data[i];
             let mut c = if gain == 1.0 { raw } else { raw.map(|v| v * gain) };
@@ -637,19 +686,37 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                     e = refine_saturation(e0, e, fp.refine_sat);
                 }
             }
-            if let Some((amt, cell, rough, seed)) = *grain {
+            if let Some(GrainModel::Value(g)) = *grain {
+                // V1/V2 (frozen): exactly the arithmetic those processes always had
                 let n = out_to_norm.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
                 let (gx, gy) = ((n.x * fp.ow) as f32 / long as f32, (n.y * fp.oh) as f32 / long as f32);
-                let sc = fp.px_per_long as f32 / cell;
-                let mut g = grain_noise(gx * sc, gy * sc, seed);
-                g = g * (1.0 - rough * 0.5) + grain_noise(gx * sc * 2.3, gy * sc * 2.3, seed ^ 0x55) * rough * 0.7;
+                let sc = fp.px_per_long as f32 / g.cell;
+                let mut v = value_grain_noise(gx * sc, gy * sc, g.seed);
+                v = v * (1.0 - g.rough * 0.5) + value_grain_noise(gx * sc * 2.3, gy * sc * 2.3, g.seed ^ 0x55) * g.rough * 0.7;
                 let mut lum = 0.2126 * e[0] + 0.7152 * e[1] + 0.0722 * e[2];
                 if hdr {
                     lum = lum.clamp(0.0, 1.0);
                 }
-                let k = amt * g * (0.35 + 2.6 * lum * (1.0 - lum));
+                let k = g.amt * v * (0.35 + 2.6 * lum * (1.0 - lum));
                 e = e.map(|v| v + k);
             }
+            enc.push((e, warn));
+        }
+        if let Some(GrainModel::Particles(gp)) = grain {
+            let (mut gx, mut gy) = (Vec::with_capacity(enc.len()), Vec::with_capacity(enc.len()));
+            for q in 0..enc.len() {
+                let (x, y) = (q % w, band * BAND + q / w);
+                let n = out_to_norm.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
+                gx.push((n.x * fp.ow / long) as f32);
+                gy.push((n.y * fp.oh / long) as f32);
+            }
+            let mut es: Vec<[f32; 3]> = enc.iter().map(|q| q.0).collect();
+            gp.apply_band(&gx, &gy, w, &mut es);
+            for (q, e) in enc.iter_mut().zip(es) {
+                q.0 = e;
+            }
+        }
+        for (px, (e, warn)) in rows.iter_mut().zip(enc) {
             let e = match &p_lut {
                 Some((l, k)) if hdr => {
                     // the LUT sees SDR values; the part above SDR white is carried over
