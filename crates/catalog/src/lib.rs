@@ -1543,6 +1543,8 @@ mod tests_lock;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests_log_thread;
 #[cfg(test)]
+mod tests_policy;
+#[cfg(test)]
 mod tests_repair;
 #[cfg(test)]
 mod tests_rule_order;
