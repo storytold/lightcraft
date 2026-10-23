@@ -1,0 +1,34 @@
+# Catalog persistence
+
+The catalog is two files in the library folder (`crates/catalog/src/journal.rs`): `catalog.snap`, a JSON snapshot of
+the whole catalog, and `catalog.log`, one JSON line per change made since. Every change is appended to the log and
+fsynced before its command returns; now and then the log is compacted into a new snapshot. This page covers what
+happens to a library's files when a newer version opens it.
+
+## Going back to an older version
+
+Opening a library with a newer LightCraft rewrites it in that version's format, and older versions then refuse it
+(safely: they say so and change nothing). So that this is not a one-way step, the upgrade first keeps the files the
+library was, byte for byte, beside it:
+
+- `catalog.snap.v<format>-<seq>` and `catalog.log.v<format>-<seq>`, where `<format>` is the format they are in and
+  `<seq>` the number of the last change the library held when it was upgraded (a library that had no log, or only a
+  log, has only the one file). `Journal::open` reports their names (`LoadReport::kept`) and logs them.
+- The kept files stay unless the library is known to be in its old format still: once the upgrade is written,
+  nothing that fails after it takes them away.
+- A library whose files can't be kept, or whose upgrade can't be written (a full disk, a folder that can't be written
+  to), is not upgraded: it opens as it is, with no copy left lying about, and the next open tries again. If what is on
+  disk after a failed write can't be read back to say whether the upgrade was written, the library is refused instead
+  (its way back stays). A library left like that is upgraded by its next snapshot, during the session or when it is
+  closed, and that snapshot keeps the files first too (and is not written when they can't be kept).
+- A library whose log was damaged is upgraded like any other. What it was is then its snapshot, kept under the name
+  above, and its log, kept as `catalog.log.damaged-<seq>`: the snapshot alone is the library without the changes
+  that log held. If the snapshot can't be kept, or the damaged log can't be replaced, the library is refused and left
+  as it was (changes made in it would be appended after the damage, where the next open would not read them).
+- Nothing removes the kept files. They are as large as the library was; LightCraft says so once when it has upgraded
+  a library (and `library.info` lists it under `settingsWarnings`). Delete them once the older version is no longer
+  wanted. The browser build keeps none (it always runs the newest version).
+
+**To go back**, with LightCraft closed: move `catalog.snap` and `catalog.log` away, then rename the kept pair to
+`catalog.snap` and `catalog.log`. The older version opens the library as it was when it was upgraded; changes made
+since, in the newer version, are in the files that were moved away and are not carried back.

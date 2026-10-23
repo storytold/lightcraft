@@ -364,6 +364,11 @@
   Denoise ▸ Run on chooses; Automatic times both). Photos
   denoised before are denoised again the next time they are needed. See [AI Denoise](denoise.md).
 
+### A library keeps a copy of itself before it is upgraded
+- Opening a library saved by an earlier version upgrades it, and earlier versions can't open it afterwards. The library
+  as it was is now kept beside it (`catalog.snap.v<format>-<seq>`, `catalog.log.v<format>-<seq>`), and LightCraft says
+  where once: to go back, see `docs/catalog-persistence.md`. A library that can't be kept is not upgraded.
+
 ### A right-click on a text field while you carry photos opens no menu
 - While you drag photos from the grid, a right-click on a text field, such as the search box, opens no Cut, Copy and
   Paste menu. Before, the menu opened over the field the photos were on. Right-clicking a field without a drag works
