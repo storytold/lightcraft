@@ -260,6 +260,6 @@ pub fn sections(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         hint(ui, t, "The export watermark, drawn on the photo and sized relative to it.");
     }
     for warning in app.session.slide_overlays.warnings() {
-        ui.label(RichText::new(warning).size(11.0).color(t.caution));
+        ui.label(RichText::new(warning).font(t.caption()).color(t.caution));
     }
 }

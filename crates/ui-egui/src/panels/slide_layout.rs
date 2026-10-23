@@ -179,7 +179,7 @@ pub fn preview(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     super::slide_titles::preview_choice(ui);
     if let Some(tpl) = &template {
         let name = if tpl.builtin { crate::i18n::tr(&tpl.name).to_string() } else { tpl.name.clone() };
-        ui.label(egui::RichText::new(crate::i18n::tr_format!("Template preview: {name}", name = name)).size(11.0).color(t.accent));
+        ui.label(egui::RichText::new(crate::i18n::tr_format!("Template preview: {name}", name = name)).font(t.caption()).color(t.accent));
         if !tpl.description.is_empty() {
             hint(ui, t, &tpl.description);
         }

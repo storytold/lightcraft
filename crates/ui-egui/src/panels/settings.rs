@@ -79,7 +79,7 @@ pub(super) fn row<R>(ui: &mut egui::Ui, t: &Tokens, label: &str, add: impl FnOnc
 }
 
 pub(super) fn hint(ui: &mut egui::Ui, t: &Tokens, text: &str) {
-    ui.label(RichText::new(crate::i18n::tr(text)).size(11.0).color(t.text_dim));
+    ui.label(RichText::new(crate::i18n::tr(text)).font(t.caption()).color(t.text_dim));
 }
 
 /// A checkbox addressable as `check:{id}`; true when toggled.
@@ -428,7 +428,7 @@ fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     // One line, the whole text on hover: the reason can be a long driver message (no adapter
     // among the backends …), and the GPU state is process-wide, so it may change between frames;
     // a hint that wrapped would move every control below it under the pointer.
-    ui.add(egui::Label::new(RichText::new(crate::i18n::tr(&status)).size(11.0).color(t.text_dim)).truncate()).on_hover_text(&status);
+    ui.add(egui::Label::new(RichText::new(crate::i18n::tr(&status)).font(t.caption()).color(t.text_dim)).truncate()).on_hover_text(&status);
     row(ui, t, crate::i18n::tr("Preview size"), |ui| {
         let opts: Vec<(u32, String)> =
             PREVIEW_LIMITS.iter().map(|e| (*e, if *e == 0 { crate::i18n::tr("Automatic").to_string() } else { format!("{e} px") })).collect();
@@ -621,13 +621,13 @@ fn display_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         }
     });
     if let Some(e) = &app.display_error {
-        ui.label(RichText::new(e).size(11.0).color(t.reject));
+        ui.label(RichText::new(e).font(t.caption()).color(t.reject));
     }
     if let Some(d) = &current {
         let info = d.describe();
         if !screen {
             row(ui, t, crate::i18n::tr("File"), |ui| {
-                ui.label(RichText::new(&d.path).size(11.0).color(t.text_dim));
+                ui.label(RichText::new(&d.path).font(t.caption()).color(t.text_dim));
             });
         }
         row(ui, t, crate::i18n::tr("Type"), |ui| {
@@ -641,7 +641,7 @@ fn display_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             let p = &info["primaries"];
             let xy = |(k, l): (&str, &str)| format!("{l} {:.3}, {:.3}", p[k][0].as_f64().unwrap_or(0.0), p[k][1].as_f64().unwrap_or(0.0));
             let text = [("red", "R"), ("green", "G"), ("blue", "B")].map(xy).join("   ");
-            ui.label(RichText::new(text).size(11.0).color(t.text_dim));
+            ui.label(RichText::new(text).font(t.caption()).color(t.text_dim));
         });
     }
     hint(
@@ -924,7 +924,7 @@ fn theme_card<V: PartialEq + Copy>(
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(crate::i18n::tr(title)).font(t.semibold(12.0)).color(t.text));
                     if active {
-                        ui.label(RichText::new(crate::i18n::tr("In Use")).size(11.0).color(t.accent));
+                        ui.label(RichText::new(crate::i18n::tr("In Use")).font(t.caption()).color(t.accent));
                     }
                 });
                 let shown = options.iter().find(|(v, _)| v == value).or(options.first()).map(|(_, k)| *k).unwrap_or_default();

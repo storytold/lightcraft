@@ -150,7 +150,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     if app.session.auto_sync && n > 1 {
         egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 0, bottom: 10 }).show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(crate::i18n::tr_format!("Auto Sync: edits apply to {n} photos", n = n)).color(t.accent).size(12.0));
+                ui.label(egui::RichText::new(crate::i18n::tr_format!("Auto Sync: edits apply to {n} photos", n = n)).color(t.accent).font(t.label()));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if text_button(ui, "autoSyncOff", crate::i18n::tr("Turn Off"), false).clicked() {
                         let _ = app.run("develop.autoSync", json!({"on": false}));
@@ -377,7 +377,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             }
             if lp && !has_lens {
                 ui.label(
-                    egui::RichText::new(crate::i18n::tr("No lens data embedded in this file.")).size(11.0).color(Tokens::get(ui.ctx()).text_dim),
+                    egui::RichText::new(crate::i18n::tr("No lens data embedded in this file."))
+                        .font(t.caption())
+                        .color(Tokens::get(ui.ctx()).text_dim),
                 );
             }
         });
@@ -1405,7 +1407,7 @@ fn point_color(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings) 
     });
     if n == 0 {
         egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 2, bottom: 8 }).show(ui, |ui| {
-            ui.label(egui::RichText::new(crate::i18n::tr("Pick a colour on the photo with the eyedropper.")).size(12.0).color(t.text_dim));
+            ui.label(egui::RichText::new(crate::i18n::tr("Pick a colour on the photo with the eyedropper.")).font(t.label()).color(t.text_dim));
         });
         return;
     }

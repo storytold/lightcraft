@@ -163,6 +163,6 @@ pub fn sections(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     );
     let warnings = s.warnings(&app.session.slide_overlays);
     for w in warnings {
-        ui.label(egui::RichText::new(w).size(11.0).color(t.caution));
+        ui.label(egui::RichText::new(w).font(t.caption()).color(t.caution));
     }
 }

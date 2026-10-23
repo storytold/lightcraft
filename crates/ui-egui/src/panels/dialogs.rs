@@ -1054,7 +1054,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                             });
                             ui.label(
                                 egui::RichText::new(crate::i18n::tr("The first time, macOS asks whether LightCraft may control Photos."))
-                                    .size(11.0)
+                                    .font(t.caption())
                                     .color(t.text_dim),
                             );
                         }
