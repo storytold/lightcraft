@@ -83,9 +83,11 @@
   refused with a note, since they belong to a library.
 
 ### Drag photos from the filmstrip
-- In the Detail view you can now drag a photo from the filmstrip onto the sidebar, as you can from the grid: onto an
+- You can now drag a photo from the filmstrip onto the sidebar, as you can from the grid: onto an
   album, a folder or a keyword. Dragging a selected photo takes the whole selection; dragging one that isn't selected
-  takes just that photo and selects it. A click on a filmstrip photo still only selects it.
+  takes just that photo and selects it. In the Compare view, a photo that isn't selected is dragged alone and the
+  selection, the active photo and the two photos on screen stay as they were. A click on a filmstrip photo still only
+  selects it.
 
 ## 2026-10-22
 

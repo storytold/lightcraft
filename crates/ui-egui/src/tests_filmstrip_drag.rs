@@ -160,12 +160,14 @@ fn a_filmstrip_drag_in_compare_keeps_the_active_photo_on_screen() {
     h.settle(Duration::from_secs(60));
     let (sel, cand) = h.app.ui.compare.expect("comparing");
     let before = selected(&h);
+    let active_before = h.app.session.selection.active.map(|p| p.0);
     let from = cell(&h, vis[4]);
     button(&mut h, from, true);
     glide(&mut h, from, from + egui::vec2(60.0, -200.0));
     assert_eq!(h.app.ui.dragging_photos, Some(vec![vis[4]]), "the photo is dragged");
     assert_eq!(selected(&h), before, "the selection stays");
     let active = h.app.session.selection.active.map(|p| p.0).expect("an active photo");
+    assert_eq!(Some(active), active_before, "the active photo is unchanged");
     assert!(active == sel || active == cand, "active {active} is on screen ({sel} | {cand})");
     assert_eq!(h.app.ui.compare, Some((sel, cand)), "the pair stays");
 }
