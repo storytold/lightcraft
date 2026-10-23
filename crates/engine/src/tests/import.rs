@@ -2988,6 +2988,28 @@ fn video_smart_collections_and_rule_matching() {
 }
 
 #[test]
+fn a_catalogued_video_asks_the_renderer_for_nothing() {
+    use lightcraft_catalog::{MediaKind, Op, Photo, PhotoId, Source};
+    let mut s = Session::new();
+    for (id, kind, name) in [(1u64, MediaKind::Video, "clip.mp4"), (2, MediaKind::Image, "photo.jpg")] {
+        let format = if kind == MediaKind::Video { "MP4" } else { "JPEG" };
+        let mut p =
+            Photo::new(PhotoId(id), Source::File { path: format!("/lightcraft-video-jobs/{name}") }, name, format, 1920, 1080, "2026-05-04T10:00:00");
+        p.kind = kind;
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    }
+    let video = PhotoId(1);
+    let still = PhotoId(2);
+    // There is no frame decoder yet: nothing to render, and a job would read the whole file to
+    // fail (the UI draws its own video placeholder and card).
+    assert!(s.thumb_job(video, 512).is_none(), "no thumbnail decode of a video");
+    assert!(s.render_job(video, 1600, 1600, false, true).is_none(), "no loupe render of a video");
+    assert!(s.loupe_job(video, 1600, 1600, true).is_none());
+    assert!(s.quick_view_job(video, 1600, true).is_none());
+    assert!(s.thumb_job(still, 512).is_some(), "a still still renders");
+}
+
+#[test]
 fn video_duplicate_detection_by_path_and_content() {
     let src = temp_dir("video-dup");
     let clip = synthetic_mp4(1000, 30_000, 1920, 1080, 0);

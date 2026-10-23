@@ -188,7 +188,7 @@ fn parse_trak(body: &[u8], budget: &mut usize, depth: usize) -> Option<TrackInfo
     for b in read_boxes(body, budget) {
         match &b.kind {
             b"tkhd" => {
-                let ver = *b.body.first()?;
+                let Some(&ver) = b.body.first() else { continue };
                 let (matrix_off, w_off, h_off) = if ver == 0 { (40usize, 76usize, 80usize) } else { (52usize, 88usize, 92usize) };
                 if let Some(m) = b.body.get(matrix_off..matrix_off + 36) {
                     orientation = orientation_from_matrix(m);
@@ -342,6 +342,8 @@ pub fn probe_video(bytes: &[u8]) -> Option<VideoMeta> {
 
     let mut budget = MAX_BOXES;
     let mut duration = None;
+    let mut timescale = None;
+    let mut fragment_duration = None;
     let mut captured = None;
     let mut primary_track: Option<TrackInfo> = None;
     let mut meta = Metadata::default();
@@ -358,8 +360,8 @@ pub fn probe_video(bytes: &[u8]) -> Option<VideoMeta> {
             for child in read_boxes(b.body, &mut budget) {
                 match &child.kind {
                     b"mvhd" => {
-                        let ver = *child.body.first()?;
-                        let (timescale, dur, creat) = if ver == 0 {
+                        let Some(&ver) = child.body.first() else { continue };
+                        let (ts, dur, creat) = if ver == 0 {
                             let creat = be32(child.body, 4).map(u64::from);
                             let ts = be32(child.body, 12);
                             let dur = be32(child.body, 16).map(u64::from);
@@ -371,11 +373,13 @@ pub fn probe_video(bytes: &[u8]) -> Option<VideoMeta> {
                             (ts, dur, creat)
                         };
 
-                        if let (Some(ts), Some(d)) = (timescale, dur)
+                        timescale = ts;
+                        if let (Some(ts), Some(d)) = (ts, dur)
                             && ts > 0
+                            && d > 0
                         {
                             let secs = d as f64 / ts as f64;
-                            if secs.is_finite() && secs >= 0.0 {
+                            if secs.is_finite() && secs > 0.0 {
                                 duration = Some(secs);
                             }
                         }
@@ -394,6 +398,19 @@ pub fn probe_video(bytes: &[u8]) -> Option<VideoMeta> {
                             primary_track = Some(t);
                         }
                     }
+                    // A fragmented movie (`empty_moov`: the file is a series of fragments) writes
+                    // 0 in `mvhd`; its whole duration is the fragment duration in `mvex` → `mehd`.
+                    b"mvex" => {
+                        for grand in read_boxes(child.body, &mut budget) {
+                            if &grand.kind == b"mehd" {
+                                let ver = grand.body.first().copied().unwrap_or(0);
+                                let d = if ver == 0 { be32(grand.body, 4).map(u64::from) } else { be64(grand.body, 4) };
+                                if let Some(d) = d.filter(|d| *d > 0) {
+                                    fragment_duration = Some(d);
+                                }
+                            }
+                        }
+                    }
                     b"udta" => {
                         parse_udta(child.body, &mut meta, &mut xmp, &mut budget, 0);
                     }
@@ -405,6 +422,17 @@ pub fn probe_video(bytes: &[u8]) -> Option<VideoMeta> {
                     _ => {}
                 }
             }
+        }
+    }
+
+    // `mvhd`'s duration in its timescale; a fragmented movie takes `mehd`'s instead.
+    if duration.is_none()
+        && let (Some(ts), Some(d)) = (timescale, fragment_duration)
+        && ts > 0
+    {
+        let secs = d as f64 / ts as f64;
+        if secs.is_finite() && secs > 0.0 {
+            duration = Some(secs);
         }
     }
 
@@ -446,6 +474,18 @@ mod tests {
 
     /// Build a minimal synthetic MP4 file with `ftyp`, `moov`, `mvhd`, and a video `trak` (`tkhd` + `mdia`/`hdlr`).
     fn synthetic_mp4(timescale: u32, duration: u32, width: u32, height: u32, creation_time: u32) -> Vec<u8> {
+        synthetic_mp4_with_fragment(timescale, duration, width, height, creation_time, None)
+    }
+
+    /// [`synthetic_mp4`], plus a `mvex/mehd` fragment duration for a fragmented movie (`None`: none).
+    fn synthetic_mp4_with_fragment(
+        timescale: u32,
+        duration: u32,
+        width: u32,
+        height: u32,
+        creation_time: u32,
+        fragment_duration: Option<u32>,
+    ) -> Vec<u8> {
         let mut out = Vec::new();
 
         // ftyp box (24 bytes)
@@ -526,6 +566,14 @@ mod tests {
         let mut moov = Vec::new();
         write_box(&mut moov, b"mvhd", &mvhd);
         write_box(&mut moov, b"trak", &trak);
+        if let Some(fragment_duration) = fragment_duration {
+            // mehd is a full box: version and flags, then the fragment duration (movie timescale)
+            let mut mehd = vec![0, 0, 0, 0];
+            mehd.extend_from_slice(&fragment_duration.to_be_bytes());
+            let mut mvex = Vec::new();
+            write_box(&mut mvex, b"mehd", &mehd);
+            write_box(&mut moov, b"mvex", &mvex);
+        }
 
         write_box(&mut out, b"moov", &moov);
         out
@@ -557,6 +605,24 @@ mod tests {
         assert_eq!(meta.captured, Some("2026-08-14T07:20:00".to_string()));
         assert_eq!(meta.metadata.width, Some(1920));
         assert_eq!(meta.metadata.height, Some(1080));
+    }
+
+    #[test]
+    fn fragmented_movie_takes_its_duration_from_mehd() {
+        // empty_moov leaves mvhd's duration 0; the fragment duration lives in mvex/mehd
+        let bytes = synthetic_mp4_with_fragment(1000, 0, 640, 360, 0, Some(3_000));
+        let meta = probe_video(&bytes).expect("valid video");
+        assert_eq!(meta.duration, Some(3.0));
+    }
+
+    /// A movie that states no positive duration has none to show: the UI prints no time rather
+    /// than "00:00" for a clip that plays.
+    #[test]
+    fn a_zero_or_missing_duration_is_unknown() {
+        let zero = synthetic_mp4(1000, 0, 640, 360, 0);
+        let meta = probe_video(&zero).expect("a video track makes a valid video");
+        assert_eq!(meta.duration, None);
+        assert_eq!(meta.width, 640);
     }
 
     #[test]

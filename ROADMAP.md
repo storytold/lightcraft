@@ -72,7 +72,7 @@ Hours are calibrated on this repo's PR history; see
 | Merge and HDR | 60% | 85% | 20–35 h |
 | Views, compare, zoom, culling | 70% | 90% | 15–30 h |
 | Classic output modules (Map, Book, Slideshow, Print, publish, tethering) | 10% | 15% | 90–150 h |
-| Video | 0% | 0% | 25–45 h |
+| Video | 10% | 10% | 20–40 h |
 
 Weights and evidence: [target-app-parity.md](docs/target-app-parity.md#features).
 
@@ -192,6 +192,7 @@ Ranked toward beta; detail in [docs/roadmap.md](docs/roadmap.md), gaps in [docs/
 |---|---|---|
 | 2026-10-24 | minor | Priority 7 (lens profile database) links its tracking issue #329; headline numbers unchanged |
 | 2026-10-24 | patch | Alpha rationale: tests run in CI on Linux x64 (#2667) and FreeBSD nightly, not on macOS or Windows; ranked item 8 now reads "Tests in CI on macOS and Windows, and the GPU tests in CI"; percentages and hours unchanged |
+| 2026-10-23 | minor | Video: MP4/MOV/M4V import and cataloguing (duration, dimensions, date, camera/GPS), grid badges and a loupe card; Video 0% → 10% breadth and readiness, 25–45 → 20–40 h |
 | 2026-10-22 | minor | Print: Japanese photo and postcard paper sizes (L判, 2L判, KG判, はがき, 往復はがき, 六切, 四切, 名刺) in the page setup, Print dialog and PDF output; headline numbers unchanged |
 | 2026-10-19 | minor | Indonesian interface (`id`): every plain and formats message, plus 69 command labels, locale, menu command and tests; What's New left in English; Localization ~55% → ~64% (mean of the 12 key languages), 8 of 12 present |
 | 2026-10-12 | minor | Italian interface (`it`, #1192): 2,201 of 2,398 messages, locale, menu command and tests; headline numbers unchanged |
