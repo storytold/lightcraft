@@ -335,6 +335,10 @@ impl LightsOut {
 /// Click-zoom ratios offered (percent): 1:1, 2:1, 3:1, 4:1, 8:1.
 pub const CLICK_ZOOMS: [u32; 5] = [100, 200, 300, 400, 800];
 
+/// Highest detail zoom (percent): zoom in, pinch and the wheel stop here. The window is rendered at 100 % and the
+/// GPU magnifies it, so a closer zoom costs nothing more.
+pub const MAX_ZOOM: f32 = 1600.0;
+
 /// Grid thumbnail size (points): the bottom-bar slider's range, and the `=` / `-` keys' step
 /// (`view.thumbSizeUp` / `view.thumbSizeDown`), about a thirteenth of the range.
 pub const THUMB_SIZE_MIN: f32 = 90.0;
