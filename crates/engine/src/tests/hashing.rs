@@ -228,3 +228,69 @@ fn a_library_that_fails_to_open_keeps_the_queue() {
     assert!(s.hashes_queued());
     let _ = std::fs::remove_dir_all(bad);
 }
+
+/// A file rewritten while its hash is worked out (same size, other bytes) gets no hash from that
+/// read: it would be of neither version, and the smart preview would move under a key that isn't
+/// the file's. Tried again, the hash is the file's as it is now.
+#[test]
+fn a_file_changed_while_it_is_hashed_gets_no_hash_from_that_read() {
+    let (mut s, id, file) = browsed_without_hash("rewritten");
+    s.hash_in_background = true;
+    s.execute("photo.addToLibrary", &json!({"ids": [id.0]})).unwrap();
+    let jobs = s.take_hash_jobs();
+    let done = jobs[0].run_reading(|path| {
+        let read = std::fs::read(path).ok();
+        let mut other = read.clone().unwrap();
+        *other.last_mut().unwrap() ^= 0xff;
+        let modified = std::fs::metadata(path).unwrap().modified().unwrap();
+        std::fs::write(path, &other).unwrap();
+        let f = std::fs::File::options().write(true).open(path).unwrap();
+        f.set_modified(modified + std::time::Duration::from_secs(2)).unwrap();
+        read
+    });
+    assert!(done.is_none(), "the read is of a file that changed meanwhile");
+    assert!(s.catalog.photo(id).unwrap().content_hash.is_none());
+    s.queue_hash([id]);
+    let done = s.take_hash_jobs()[0].run().unwrap();
+    assert!(s.learn_content_hash(done));
+    assert_eq!(s.catalog.photo(id).unwrap().content_hash, crate::hashing::file_hash(&file));
+}
+
+/// Each photo is queued once, in the order it first came; working out some photos' hashes at once
+/// leaves the others queued in their order.
+#[test]
+fn the_queue_keeps_its_order_and_each_photo_once() {
+    let dir = temp_dir("order");
+    for k in 0..3u8 {
+        let img = lightcraft_raster::Rgba8::from_fn(16, 12, |x, y| [(x * 9) as u8, (y * 11) as u8, 40 + k * 50, 255]);
+        let opts = crate::export::ExportOptions { format: crate::export::ExportFormat::Png, ..Default::default() };
+        std::fs::write(dir.join(format!("{k}.png")), crate::export::encode_image(&img, &opts).unwrap()).unwrap();
+    }
+    let mut s = Session::new().with_fs();
+    s.execute("library.browse", &json!({"path": dir.to_string_lossy()})).unwrap();
+    let mut ids: Vec<PhotoId> = s.catalog.photos().filter(|p| p.local).map(|p| p.id).collect();
+    ids.sort_by_key(|id| id.0);
+    assert_eq!(ids.len(), 3);
+    for &id in &ids {
+        let p = s.catalog.photo(id).unwrap().clone();
+        let content = Op::SetContent {
+            id,
+            width: p.width,
+            height: p.height,
+            file_size: p.file_size,
+            content_hash: None,
+            preview_only: None,
+            preview_checked: String::new(),
+        };
+        s.catalog.apply(Op::Batch { ops: vec![content, Op::SetLocal { id, local: false }] }).unwrap();
+    }
+    let [a, b, c] = [ids[0], ids[1], ids[2]];
+    s.queue_hash([c, a, c, b, a]);
+    assert_eq!(s.unhashed, [c, a, b]);
+    s.queue_hash([b, a]);
+    assert_eq!(s.unhashed, [c, a, b]);
+    s.hash_joined([a]);
+    assert_eq!(s.unhashed, [c, b]);
+    assert!(s.catalog.photo(a).unwrap().content_hash.is_some());
+    let _ = std::fs::remove_dir_all(dir);
+}
