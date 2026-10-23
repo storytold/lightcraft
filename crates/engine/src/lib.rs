@@ -56,6 +56,7 @@ pub mod logging;
 pub mod media;
 pub mod memory;
 pub mod merge;
+pub mod midi;
 mod model_download;
 pub mod open_path;
 pub mod originals;

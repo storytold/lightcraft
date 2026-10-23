@@ -24,6 +24,8 @@ pub fn apply_slider_out(
     mut set: impl FnMut(&mut LightcraftApp, f64) -> Result<Value, String>,
 ) {
     if out.drag_started && !out.reset {
+        // a MIDI turn still inside its idle window must not outlive the hand-over to the mouse
+        app.end_midi_interaction();
         let _ = app.run("develop.beginInteraction", json!({"label": spec.label}));
         app.ui.dragging_control = Some(spec.id.to_string());
     }

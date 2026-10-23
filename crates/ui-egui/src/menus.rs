@@ -71,6 +71,8 @@ pub fn language_from_command(id: &str) -> Option<crate::i18n::Locale> {
 pub const UI_COMMANDS: &[UiCommand] = &[
     ("ui.dock", "Arrange Panel", None, ""),
     ("ui.dock.reset", "Reset Panel Layout", None, "Window"),
+    // re-reads midi.toml, so a controller map can be edited without restarting
+    ("midi.reload", "Reload MIDI Map", None, ""),
     ("modelSetup.cancel", "Cancel Pending Photo Action", None, ""),
     ("view.photoGrid", "Photo Grid", None, "View"),
     ("view.squareGrid", "Square Grid", None, "View"),
@@ -292,6 +294,7 @@ fn panel(app: &mut LightcraftApp, ctx: &egui::Context, p: RightPanel, name: &str
     if p != RightPanel::Masking && app.ui.tool != "wbPicker" {
         app.ui.tool.clear();
     }
+    app.end_midi_interaction();
     let _ = app.session.end_interaction();
 }
 
@@ -433,6 +436,23 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
     if id == "photo.reload" {
         // the files are read in the background (a raw's decode takes a second or more)
         return crate::reload::command(app, p);
+    }
+    if id == "midi.reload" {
+        let ctx = app.tasks.repaint.clone().unwrap_or_default();
+        let result = match app.midi_reload.as_mut() {
+            Some(reload) => reload(),
+            None => Err("MIDI input is not available in this build".to_string()),
+        };
+        return Some(match result {
+            Ok(said) => {
+                app.toast(&ctx, said.clone());
+                Ok(json!(said))
+            }
+            Err(e) => {
+                app.toast_error(&ctx, e.clone());
+                Err(e)
+            }
+        });
     }
     if let Some(language) = language_from_command(id) {
         app.ui.language = language;
@@ -704,6 +724,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             if app.ui.fullscreen {
                 app.ui.zoom = Zoom::Fit;
                 app.ui.tool.clear();
+                app.end_midi_interaction();
                 let _ = app.session.end_interaction();
             }
             Ok(json!({"fullscreen": app.ui.fullscreen}))
@@ -1247,6 +1268,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             // Return commits a tool panel (crop, remove, red eye, masking): back to Edit
             use RightPanel::*;
             if app.ui.dialog.is_none() && matches!(app.ui.right, Crop | Remove | RedEye | Masking) {
+                app.end_midi_interaction();
                 let _ = app.session.end_interaction();
                 app.ui.tool.clear();
                 app.ui.right = Edit;

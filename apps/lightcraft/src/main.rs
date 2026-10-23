@@ -31,6 +31,7 @@ mod dialog_filter;
 mod editors;
 mod hdr_display;
 mod logging;
+mod midi;
 #[cfg(target_os = "macos")]
 mod native_menu;
 #[cfg(target_os = "macos")]
@@ -996,6 +997,9 @@ fn main() -> eframe::Result {
                     app.ui.settings.gpu = false;
                     app.notices.push(notice);
                 }
+                let (midi_actions, midi_reload, midi_problem) = midi::start(cc.egui_ctx.clone());
+                app.notices.extend(midi_problem);
+                app = app.with_midi(midi_actions, midi_reload);
                 if let Some(port) = control_port {
                     let rx = control_server::start(port, cc.egui_ctx.clone());
                     app = app.with_control(rx);

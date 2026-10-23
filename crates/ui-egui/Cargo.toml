@@ -38,4 +38,4 @@ lightcraft-merge = { workspace = true }
 
 [build-dependencies]
 serde_json = { workspace = true }
-toml = "1"
+toml = { workspace = true }
