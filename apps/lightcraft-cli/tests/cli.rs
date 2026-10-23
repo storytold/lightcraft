@@ -770,3 +770,124 @@ fn denoise_serve_runs_tiles_for_another_computer() {
     let _ = child.wait();
     let _ = std::fs::remove_dir_all(&models);
 }
+/// Issue #435: a merge reuses a matching Local result, promotes it without losing edits, and
+/// falls back to a fresh sibling when that catalogued result has gone missing.
+#[test]
+fn hdr_merge_promotes_local_result_and_recovers_from_stale_match() {
+    let root = tmp("hdr435-cli-e2e");
+    let _ = std::fs::remove_dir_all(&root);
+    let inputs = root.join("inputs");
+    std::fs::create_dir_all(&inputs).unwrap();
+    let generated = Command::new(BIN).args(["synth-merge", "hdr", "-o"]).arg(&inputs).output().unwrap();
+    assert!(generated.status.success(), "{}", String::from_utf8_lossy(&generated.stderr));
+    let mut sources: Vec<_> = std::fs::read_dir(&inputs).unwrap().map(|e| e.unwrap().path()).collect();
+    sources.sort();
+    assert_eq!(sources.len(), 3);
+    let source_bytes: Vec<_> = sources.iter().map(|p| std::fs::read(p).unwrap()).collect();
+    let merge = Command::new(BIN).args(["merge", "hdr", "--no-align", "--deghost", "none", "--no-auto-settings"]).args(&sources).output().unwrap();
+    assert!(merge.status.success(), "{}", String::from_utf8_lossy(&merge.stderr));
+    let standalone: Value = serde_json::from_slice(&merge.stdout).unwrap();
+    let candidate = std::path::PathBuf::from(standalone["path"].as_str().unwrap());
+    assert!(candidate.exists());
+    let candidate_bytes = std::fs::read(&candidate).unwrap();
+
+    let library = root.join("library");
+    let mut ids = Vec::new();
+    for path in sources.iter().chain(std::iter::once(&candidate)) {
+        let one = serde_json::to_string(&[path.to_string_lossy()]).unwrap();
+        let (ok, lines, err) = run_cli(&["--library", library.to_str().unwrap(), "library.import", &format!("paths={one}"), "local=true"], None);
+        assert!(ok, "{err}: {lines:?}");
+        let imported = lines[0]["result"]["imported"].as_array().unwrap();
+        assert_eq!(imported.len(), 1, "{lines:?}");
+        ids.push(imported[0].as_u64().unwrap());
+    }
+    let source_ids = serde_json::to_string(&ids[..3]).unwrap();
+    let local_id = ids[3];
+
+    let (ok, merged, err) = run_cli(
+        &[
+            "--library",
+            library.to_str().unwrap(),
+            "library.select",
+            &format!("ids=[{local_id}]"),
+            "develop.set",
+            "control=light.exposure",
+            "value=0.5",
+            "library.select",
+            &format!("ids={source_ids}"),
+            "merge.hdr",
+            "align=false",
+            "deghost=none",
+            "autoSettings=false",
+            "stack=false",
+        ],
+        None,
+    );
+    assert!(ok, "{err}: {merged:?}");
+    let promoted = &merged[3]["result"];
+    assert_eq!(promoted["id"], local_id);
+    assert_eq!(promoted["path"], candidate.to_string_lossy().as_ref());
+    assert_eq!(std::fs::read(&candidate).unwrap(), candidate_bytes, "reused output file changed");
+
+    // This fresh process sees the promoted, edited result as album eligible, then reuses it again.
+    let (ok, repeated, err) = run_cli(
+        &[
+            "--library",
+            library.to_str().unwrap(),
+            "album.create",
+            "name=Promotion",
+            "addSelected=true",
+            "library.select",
+            &format!("ids={source_ids}"),
+            "merge.hdr",
+            "align=false",
+            "deghost=none",
+            "autoSettings=false",
+            "stack=false",
+        ],
+        None,
+    );
+    assert!(ok, "{err}: {repeated:?}");
+    assert_eq!(repeated[0]["result"]["skipped"], 0, "Local result was not promoted: {repeated:?}");
+    assert_eq!(repeated[2]["result"]["id"], local_id);
+    assert_eq!(repeated[2]["result"]["path"], candidate.to_string_lossy().as_ref());
+    let (ok, readback, err) = run_cli(&["--library", library.to_str().unwrap(), "library.select", &format!("ids=[{local_id}]"), "develop.get"], None);
+    assert!(ok, "{err}: {readback:?}");
+    assert_eq!(readback[1]["result"]["light"]["exposure"], 0.5, "promotion or repeat merge discarded the Local edit");
+
+    std::fs::remove_file(&candidate).unwrap();
+    let (ok, recovered, err) = run_cli(
+        &[
+            "--library",
+            library.to_str().unwrap(),
+            "library.select",
+            &format!("ids={source_ids}"),
+            "merge.hdr",
+            "align=false",
+            "deghost=none",
+            "autoSettings=false",
+            "stack=false",
+        ],
+        None,
+    );
+    assert!(ok, "{err}: {recovered:?}");
+    let fresh = std::path::PathBuf::from(recovered[1]["result"]["path"].as_str().unwrap());
+    assert_ne!(fresh, candidate, "missing catalogued output was reused");
+    assert!(fresh.exists(), "fresh merge output missing");
+    assert_ne!(recovered[1]["result"]["id"], local_id, "stale row was restored instead of adding result");
+    for (path, before) in sources.iter().zip(source_bytes) {
+        assert_eq!(std::fs::read(path).unwrap(), before, "merge changed source file {}", path.display());
+    }
+    assert_eq!(
+        std::fs::read_dir(&inputs)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().is_some_and(|x| x.eq_ignore_ascii_case("dng")))
+            .count(),
+        4,
+        "merge left an extra output file"
+    );
+    let (ok, info, err) = run_cli(&["--library", library.to_str().unwrap(), "library.info"], None);
+    assert!(ok, "{err}");
+    assert_eq!(info[0]["result"]["photos"], 5, "unexpected orphan or lost catalog row");
+}

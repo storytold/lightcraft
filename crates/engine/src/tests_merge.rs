@@ -55,15 +55,43 @@ fn hdr_merge_command_creates_and_imports_a_dng() {
     assert_eq!(st.photos[1..].iter().map(|p| p.0).collect::<Vec<_>>(), ids);
     assert!(st.collapsed);
     assert_eq!(s.visible_cloned(), vec![id]);
-    // the second merge doesn't overwrite the first
-    let r2 = s.execute("merge.hdr", &json!({"ids": ids, "autoSettings": false})).unwrap();
-    assert!(r2["path"].as_str().unwrap().ends_with("IMG_0-HDR-2.dng"));
-    let id2 = lightcraft_catalog::PhotoId(r2["id"].as_u64().unwrap());
-    assert!(s.catalog.stack_of(id2).is_none(), "no stack without the option");
+    // A repeated deterministic merge reuses the existing content instead of publishing an
+    // unimported uniquely named orphan.
+    s.execute("develop.set", &json!({"control": "light.exposure", "value": 0.73})).unwrap();
+    let edited = s.develop_of(id).unwrap().as_ref().clone();
+    let stack_before = s.catalog.stack_of(id).unwrap().clone();
+    let undo_before = s.undo.len();
+    let r2 = s.execute("merge.hdr", &json!({"ids": ids, "autoSettings": true, "stack": true})).unwrap();
+    assert_eq!(r2["id"].as_u64(), Some(id.0));
+    assert_eq!(r2["path"].as_str(), Some(path));
+    assert!(!dir.join("IMG_0-HDR-2.dng").exists(), "duplicate merge left an orphan");
+    assert_eq!(s.catalog.photos().count(), 4);
+    assert_eq!(s.undo.len(), undo_before, "reusing merge content added an undo step");
+    assert_eq!(s.develop_of(id).unwrap().as_ref(), &edited, "reusing merge content changed edits");
+    assert_eq!(s.catalog.stack_of(id), Some(&stack_before), "reusing merge content changed stack");
+
+    // A matching Local result is reused & promoted into the library as one undoable catalog op.
+    s.commit("Mark Local", lightcraft_catalog::Op::SetLocal { id, local: true }).unwrap();
+    assert!(s.catalog.photo(id).unwrap().local);
+    let local_undo_before = s.undo.len();
+    let r3 = s.execute("merge.hdr", &json!({"ids": ids, "autoSettings": true, "stack": true})).unwrap();
+    assert_eq!(r3["id"].as_u64(), Some(id.0));
+    assert_eq!(r3["path"].as_str(), Some(path));
+    assert!(!s.catalog.photo(id).unwrap().local);
+    assert_eq!(s.catalog.photos().count(), 4, "repeat merge duplicated the Local result");
+    assert_eq!(s.undo.len(), local_undo_before + 1, "promotion should be undoable");
+    assert_eq!(s.develop_of(id).unwrap().as_ref(), &edited, "promoting merge result changed edits");
+    assert_eq!(s.catalog.stack_of(id), Some(&stack_before), "promoting merge result changed stack");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(s.catalog.photo(id).unwrap().local, "undo should restore Local status");
+    assert_eq!(s.develop_of(id).unwrap().as_ref(), &edited, "undoing promotion changed edits");
+    s.execute("edit.redo", &json!({})).unwrap();
+    assert!(!s.catalog.photo(id).unwrap().local, "redo should restore library status");
+    assert_eq!(s.develop_of(id).unwrap().as_ref(), &edited, "redoing promotion changed edits");
     // the type filter finds merge results (and only them)
     s.execute("library.filter", &json!({"merged": "hdr"})).unwrap();
     let found: std::collections::HashSet<_> = s.catalog.query(&s.filter, &Default::default()).into_iter().collect();
-    assert_eq!(found, [id, id2].into_iter().collect());
+    assert_eq!(found, [id].into_iter().collect());
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -141,6 +169,130 @@ fn a_merge_of_raws_without_colour_matrices_keeps_their_colour() {
     let got = merged.color.as_shot_neutral.expect("the sources' white balance");
     assert!(got.iter().zip(neutral).all(|(a, b)| (a - b).abs() < 1e-3), "{got:?}");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn hdr_merge_does_not_reuse_a_deleted_result_path_for_a_new_result() {
+    let dir = temp_dir("hdr-deleted-path");
+    let mut paths = Vec::new();
+    for (i, b) in lightcraft_merge::synth::bracket_dngs(240, 160, &[-2.0, 0.0, 2.0]).unwrap().into_iter().enumerate() {
+        let p = dir.join(format!("IMG_{i}.dng"));
+        std::fs::write(&p, b).unwrap();
+        paths.push(p.to_string_lossy().to_string());
+    }
+    let mut s = Session::new().with_fs();
+    let ids = import(&mut s, paths);
+    let first = s.execute("merge.hdr", &json!({"ids": ids, "autoSettings": false, "stack": false})).unwrap();
+    let deleted_id = lightcraft_catalog::PhotoId(first["id"].as_u64().unwrap());
+    let deleted_path = first["path"].as_str().unwrap().to_string();
+
+    s.execute("photo.delete", &json!({"ids": [deleted_id.0]})).unwrap();
+    std::fs::remove_file(&deleted_path).unwrap();
+
+    let fresh = s.execute("merge.hdr", &json!({"ids": ids, "autoSettings": false, "stack": true})).unwrap();
+    let fresh_id = lightcraft_catalog::PhotoId(fresh["id"].as_u64().unwrap());
+    let fresh_path = fresh["path"].as_str().unwrap();
+    assert_ne!(fresh_id, deleted_id);
+    assert_ne!(fresh_path, deleted_path);
+    assert!(s.catalog.photo(deleted_id).unwrap().deleted, "the deleted result must stay deleted");
+    assert_eq!(s.catalog.photo(fresh_id).unwrap().source, lightcraft_catalog::Source::File { path: fresh_path.to_string() });
+    assert!(std::path::Path::new(fresh_path).is_file(), "new result must own an existing file");
+    assert!(s.catalog.stack_of(fresh_id).is_some(), "requested stack should be created on the fresh result");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn hdr_merge_removes_output_when_import_probe_fails_without_cataloging_it() {
+    let dir = temp_dir("hdr-import-fails");
+    let mut paths = Vec::new();
+    for (i, b) in lightcraft_merge::synth::bracket_dngs(240, 160, &[-2.0, 0.0, 2.0]).unwrap().into_iter().enumerate() {
+        let p = dir.join(format!("IMG_{i}.dng"));
+        std::fs::write(&p, b).unwrap();
+        paths.push(p.to_string_lossy().to_string());
+    }
+    let mut s = Session::new().with_fs();
+    let ids = import(&mut s, paths);
+    let count_before = s.catalog.photos().count();
+    s.media.file_probe = Some(std::sync::Arc::new(|path: &str| Err(format!("synthetic probe failure: {path}"))));
+
+    let failed = s.execute("merge.hdr", &json!({"ids": ids, "autoSettings": false})).unwrap_err();
+    let output = dir.join("IMG_0-HDR.dng");
+    assert!(failed.to_string().contains("could not be imported"), "{failed}");
+    assert!(!output.exists(), "failed import left an unowned merge output");
+    assert_eq!(s.catalog.photos().count(), count_before, "failed import changed the catalog");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn hdr_merge_fresh_imports_when_matching_stored_hash_has_stale_source() {
+    for stale in ["missing", "changed", "moved", "trashed"] {
+        let dir = temp_dir(&format!("hdr-stale-{stale}"));
+        let mut paths = Vec::new();
+        for (i, b) in lightcraft_merge::synth::bracket_dngs(240, 160, &[-2.0, 0.0, 2.0]).unwrap().into_iter().enumerate() {
+            let p = dir.join(format!("IMG_{i}.dng"));
+            std::fs::write(&p, b).unwrap();
+            paths.push(p.to_string_lossy().to_string());
+        }
+        let mut s = Session::new().with_fs();
+        let ids = import(&mut s, paths.clone());
+        let first = s.execute("merge.hdr", &json!({"ids": ids, "autoSettings": false, "stack": false})).unwrap();
+        let old_id = lightcraft_catalog::PhotoId(first["id"].as_u64().unwrap());
+        let old_path = first["path"].as_str().unwrap().to_string();
+        let old_hash = s.catalog.photo(old_id).unwrap().content_hash.clone();
+        assert!(old_hash.is_some(), "{stale}: initial result should have a stored content hash");
+        s.execute("develop.set", &json!({"control": "light.exposure", "value": 0.73})).unwrap();
+        let edited = s.develop_of(old_id).unwrap().as_ref().clone();
+        let stack_before = s.catalog.stack_of(old_id).cloned();
+
+        let external_path = dir.join("IMG_0-HDR-moved.dng");
+        match stale {
+            "missing" => std::fs::remove_file(&old_path).unwrap(),
+            "changed" => std::fs::write(&old_path, std::fs::read(&paths[0]).unwrap()).unwrap(),
+            "moved" => std::fs::rename(&old_path, &external_path).unwrap(),
+            "trashed" => {
+                s.execute("photo.delete", &json!({"ids": [old_id.0]})).unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let protected_bytes = if stale == "changed" || stale == "trashed" {
+            Some(std::fs::read(&old_path).unwrap())
+        } else if stale == "moved" {
+            Some(std::fs::read(&external_path).unwrap())
+        } else {
+            None
+        };
+        let sentinel_probe = format!("probe-sentinel-{stale}");
+        s.import_probes.insert(sentinel_probe.clone(), Default::default());
+
+        let fresh = s.execute("merge.hdr", &json!({"ids": ids, "autoSettings": false, "stack": false})).unwrap();
+        let fresh_id = lightcraft_catalog::PhotoId(fresh["id"].as_u64().unwrap());
+        let fresh_path = fresh["path"].as_str().unwrap().to_string();
+        assert_ne!(fresh_id, old_id, "{stale}");
+        assert_eq!(fresh_path, dir.join("IMG_0-HDR-2.dng").to_string_lossy(), "{stale}");
+        assert!(std::path::Path::new(&fresh_path).is_file(), "{stale}");
+        let old = s.catalog.photo(old_id).unwrap();
+        assert_eq!(old.content_hash, old_hash, "{stale}: retained the stored hash");
+        assert_eq!(s.catalog.photo(fresh_id).unwrap().content_hash, old_hash, "{stale}: fresh bytes should match old stored hash");
+        assert_eq!(old.deleted, stale == "trashed", "{stale}: stale catalog row changed");
+        assert!(!s.catalog.photo(fresh_id).unwrap().local, "{stale}: generated result must be a library photo");
+        assert!(s.import_probes.contains_key(&sentinel_probe), "{stale}: unrelated import probe was lost");
+        assert_eq!(s.develop_of(old_id).unwrap().as_ref(), &edited, "{stale}: old edits changed");
+        assert_eq!(s.catalog.stack_of(old_id).cloned(), stack_before, "{stale}: old stack changed");
+        match (stale, protected_bytes) {
+            ("changed" | "trashed", Some(bytes)) => assert_eq!(std::fs::read(&old_path).unwrap(), bytes, "{stale}: old file changed"),
+            ("moved", Some(bytes)) => assert_eq!(std::fs::read(&external_path).unwrap(), bytes, "moved file changed"),
+            ("missing", None) => assert!(!std::path::Path::new(&old_path).exists()),
+            _ => unreachable!(),
+        }
+        let photo_count = s.catalog.photos().count();
+        let repeated = s.execute("merge.hdr", &json!({"ids": ids, "autoSettings": true, "stack": false})).unwrap();
+        assert_eq!(repeated["id"].as_u64(), Some(fresh_id.0), "{stale}: live fresh result should be reused");
+        assert_eq!(repeated["path"].as_str(), Some(fresh_path.as_str()), "{stale}");
+        assert_eq!(s.catalog.photos().count(), photo_count, "{stale}: repeat merge duplicated the fresh result");
+        assert_eq!(s.develop_of(old_id).unwrap().as_ref(), &edited, "{stale}: repeat changed old edits");
+        assert_eq!(s.catalog.stack_of(old_id).cloned(), stack_before, "{stale}: repeat changed old stack");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 #[test]
