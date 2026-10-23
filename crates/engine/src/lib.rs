@@ -353,6 +353,8 @@ pub struct Session {
     /// The last Synchronize Folder scan, which `folder.synchronize` acts on while it is current
     /// (see [`Session::take_folder_changes`]).
     pub folder_changes: Option<sync::FolderChanges>,
+    /// The last review stays available while a cancellable rescan borrows its probes.
+    pub(crate) import_probe_cache: Option<std::sync::Arc<std::collections::HashMap<String, media::ProbeInfo>>>,
     /// Background tasks in flight (imports, exports, preview builds…), for the activity stack and
     /// `activity.list` / `activity.cancel`.
     pub activity: activity::Activity,
@@ -413,6 +415,17 @@ impl Default for Session {
 impl Session {
     pub fn library_generation(&self) -> u64 {
         self.library_generation
+    }
+
+    /// A review probe, including the snapshot retained while a scan is pending or cancelled.
+    pub fn cached_import_probe(&self, path: &str) -> Option<&media::ProbeInfo> {
+        self.import_probes.get(path).or_else(|| self.import_probe_cache.as_ref().and_then(|cache| cache.get(path)))
+    }
+
+    /// Keep a completed scan's probes and release the preceding review's shared cache.
+    pub fn accept_import_scan(&mut self, probes: std::collections::HashMap<String, media::ProbeInfo>) {
+        self.import_probes = probes;
+        self.import_probe_cache = None;
     }
 
     pub fn new() -> Session {
@@ -492,6 +505,7 @@ impl Session {
             before: Default::default(),
             import_probes: Default::default(),
             folder_changes: None,
+            import_probe_cache: None,
             activity: Default::default(),
             preview_build: None,
             slideshow_export: None,

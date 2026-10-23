@@ -149,6 +149,7 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
                     format: ext_upper(name),
                     kind: MediaKind::Raw,
                     file_size: bytes.len() as u64,
+                    file_stamp: None,
                     captured,
                     meta,
                     as_shot_wb: None,
@@ -175,6 +176,7 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
             format: ext_upper(name),
             kind: MediaKind::Raw,
             file_size: bytes.len() as u64,
+            file_stamp: None,
             captured,
             file_modified: None,
             meta,
@@ -207,6 +209,7 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
         format,
         kind: MediaKind::Image,
         file_size: bytes.len() as u64,
+        file_stamp: None,
         captured,
         file_modified: None,
         meta,
@@ -1094,11 +1097,13 @@ pub fn fs_pair_loader() -> PairLoader {
 pub fn fs_hooks() -> (FileLoader, FileProbe) {
     let loader: FileLoader = Arc::new(|path: &str, max_edge: usize| fs_load(path, max_edge, |bytes| load_vec(bytes, max_edge)));
     let probe: FileProbe = Arc::new(|path: &str| {
-        let len = std::fs::metadata(path).map(|m| usize::try_from(m.len()).unwrap_or(usize::MAX)).unwrap_or(0);
+        let metadata = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?;
+        let len = usize::try_from(metadata.len()).unwrap_or(usize::MAX);
         let _permit = crate::memory::work_gate().acquire(len);
         let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
         let mut info = probe_bytes(path, &bytes)?;
         info.file_modified = file_modified(path);
+        info.file_stamp = Some(crate::media::FileStamp::from_metadata(&metadata));
         Ok(info)
     });
     (loader, probe)

@@ -733,9 +733,10 @@ fn a_cancelled_scan_does_not_check_the_cached_probes_against_the_disk() {
     assert!(found.iter().any(|c| c.name == "new.png" && c.error.is_none()), "{found:?}");
     assert!(!s.import_probes.is_empty(), "the scan kept the new file's probe");
     let (input, paths) = crate::import::ScanInput::new(&mut s, &[dir.path("trip")]);
+    let files = crate::import::expand(&paths, input.skip());
     let progress = crate::import::ScanProgress::default();
     progress.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
-    let out = crate::import::scan_with(input, &paths, &progress);
+    let out = crate::import::scan_files(input, files, &progress);
     let new = out.candidates.iter().find(|c| c.name == "new.png").expect("new.png is a candidate");
     assert!(new.error.is_some(), "the cached probe was used after ✕: {new:?}");
 }
