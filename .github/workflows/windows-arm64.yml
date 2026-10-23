@@ -14,6 +14,7 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - "crates/**"
+      - "apps/**"
   pull_request:
     branches: [main]
     paths:
@@ -22,6 +23,7 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - "crates/**"
+      - "apps/**"
   workflow_dispatch:
 
 concurrency:
