@@ -104,6 +104,29 @@
 
 ## 2026-10-16
 
+### Nikon D750, D780 and D90 colour profiles from one library
+- Raws from the Nikon D750, D780 and D90 now start from a built-in colour profile, made with
+  `lightcraft-cli calibrate` from about 300 photos per camera, with the camera's tone curve. Colours that one photo
+  shows only a little of, and shadows you push up, keep the camera's colour instead of whatever that photo's own fit
+  learned.
+
+### Pushed shadows of raws no longer turn magenta
+- Raw decoding no longer clips each colour channel at zero. Near black, sensor noise through the camera's colour
+  matrix has negative values, and clipping kept only the positive half of each channel's noise, so dark areas
+  pushed up came out purple or magenta (a lens-cap frame pushed 4 EV rendered magenta; it is now black). Shadows
+  pushed with Exposure or Shadows keep their real colour, most visibly with saturating camera profiles.
+
+### Dark raws keep their camera's colour and tone
+- A raw whose camera JPEG is too dark (or too colourless) to fit a look to no longer drops its camera profile's
+  colour for the dull neutral fallback: it keeps the profile's colour, with the JPEG's tone curve when one fits, else
+  the default tone curve. Photos of profiled cameras that were underexposed and pushed back up keep their colour: on
+  NIKON D780 frames 3.7 EV under with a local profile, from about 40% of the properly exposed frame's colourfulness
+  to about 95%.
+- `lightcraft-cli calibrate` now also learns the camera's tone curve from all the photos it reads, and a profile
+  made with it carries the curve. A photo of that camera follows its own JPEG's curve as far as that JPEG shows it
+  and the camera's curve beyond, so an underexposed shot pushed back up matches a properly exposed one in
+  brightness instead of coming out 4–7 L* darker. Profiles made before keep working; refit them to get the curve.
+
 ### Synchronize Folder shows that it is listing the folder
 - A folder with tens of thousands of photos, above all on a network share, can take minutes to list before
   Synchronize Folder checks a single photo. Its row in the activity stack used to sit at "0 of 64085" with an empty
