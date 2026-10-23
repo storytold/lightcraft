@@ -167,7 +167,7 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
 /// for itself). The same words whether the dialog answered at once or later.
 pub fn answered_message(command: &str, result: &Value) -> Option<String> {
     match command {
-        "folder.move" => Some(crate::i18n::tr_format!("Moved; {} photo(s) relinked", result["relinked"])),
+        "folder.move" => crate::panels::left::folder_moved_message(result),
         _ => None,
     }
 }
