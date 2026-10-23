@@ -297,5 +297,7 @@
   "“{to}” is already a person. Combining them makes one person; Undo separates them again.": "“{to}” is already a person. Combining them makes one person; Undo separates them again.",
   "•  {assumption}": "•  {assumption}",
   "… and {more} more": "… và {more} nữa",
-  "…and {more} more": "…and {more} more"
+  "…and {more} more": "…and {more} more",
+  "Backed up the library to {}": "Đã sao lưu thư viện vào {}",
+  "The library was not backed up: {}": "Thư viện chưa được sao lưu: {}"
 }

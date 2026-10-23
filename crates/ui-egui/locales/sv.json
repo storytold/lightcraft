@@ -2414,5 +2414,13 @@
   "⌘-drag to straighten, ⇧G Guided Upright, a grid while transforming.": "⌘-dra för att räta upp, ⇧G guidad upprätning, ett rutnät under transformering.",
   "★ Favorites": "★ Favoriter",
   "日本語": "日本語",
-  "繁體中文（台灣）": "繁體中文（台灣）"
+  "繁體中文（台灣）": "繁體中文（台灣）",
+  "Back Up Library": "Säkerhetskopiera bibliotek",
+  "Backing up the library": "Säkerhetskopierar biblioteket",
+  "Backup Status": "Säkerhetskopians status",
+  "Check Backup": "Kontrollera säkerhetskopian",
+  "Backup Preferences": "Inställningar för säkerhetskopiering",
+  "Backups": "Säkerhetskopior",
+  "Restore Library from Backup": "Återställ bibliotek från säkerhetskopia",
+  "Restoring the library": "Återställer biblioteket"
 }

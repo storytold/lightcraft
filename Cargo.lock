@@ -3236,6 +3236,7 @@ dependencies = [
  "ab_glyph",
  "chrono",
  "craft-docpath",
+ "crc32fast",
  "harfrust",
  "jxl-oxide",
  "libc",

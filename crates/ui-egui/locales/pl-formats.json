@@ -247,6 +247,8 @@
   "{n} originals opened in the other editor": "Oryginały otwarte w innym edytorze: {n}",
   "{n} photos opened for editing; each is stacked with its original": "Zdjęcia otwarte do edycji: {n}; każde połączono w stos z oryginałem",
   "· {in_source} identical copies": "· identyczne kopie: {in_source}",
+  "Backed up the library to {}": "Utworzono kopię zapasową biblioteki w {}",
+  "The library was not backed up: {}": "Nie utworzono kopii zapasowej biblioteki: {}",
   "· {trashed} in Recently Deleted": "· w Ostatnio usuniętych: {trashed}",
   " in {g} group{}": " w grupach: {g}{:.0}",
   " · kept, not applied: {}": " · zachowane, niezastosowane: {}",
