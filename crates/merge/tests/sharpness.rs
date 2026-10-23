@@ -164,6 +164,74 @@ fn moving_things_get_no_stepped_edges() {
     assert!(share < 0.01, "{:.1} % of the pixels where the leaf moved are outside what the frames saw", share * 100.0);
 }
 
+/// The same moving leaf in colour (a blue leaf over a yellow-green background): where it moved, the merge keeps a
+/// blend of the colours the frames saw and adds no colour fringe of its own. Every frame weighs a pixel's three
+/// channels alike and the detail pass scales them by one factor, so each merged channel ratio (R / G, B / G) lies
+/// between the frames' ratios there.
+#[test]
+fn moving_things_get_no_colour_fringes() {
+    const R: f64 = 60.0;
+    const BG: [f32; 3] = [0.9, 1.0, 0.45];
+    const LEAF: [f32; 3] = [0.12, 0.25, 0.4];
+    let leaf_x = |i: usize| 1000.0 + 12.0 * i as f64;
+    let seen = |i: usize, x: f64, y: f64| {
+        let d = ((x - leaf_x(i)).powi(2) + (y - 1200.0).powi(2)).sqrt() - R;
+        let m = (1.0 / (1.0 + (d / 0.35).exp())) as f32;
+        let s = scene(x, y);
+        [0, 1, 2].map(|c| s * (BG[c] * (1.0 - m) + LEAF[c] * m))
+    };
+    let ks = [0.25f32, 1.0, 4.0];
+    let frames: Vec<Frame> = (0..3)
+        .map(|i| {
+            let mut rng = Rng(i as u64 * 0x9e37_79b9 + 23);
+            let mut img = Rgb32f::from_fn(W, H, |x, y| seen(i, x as f64 + 0.5, y as f64 + 0.5).map(|v| v * ks[i]));
+            for p in img.data.iter_mut() {
+                *p = p.map(|s| {
+                    let s = s.max(0.0);
+                    ((s + (2e-5 * s + 2e-8).sqrt() * rng.gauss()).clamp(0.0, 1.0) * 16383.0).round() / 16383.0
+                });
+            }
+            let mut f = Frame::from_linear_rec2020(img, Some((ks[i] as f64).log2()));
+            f.raw = true;
+            f.clip = 1.0;
+            f
+        })
+        .collect();
+    let r = merge_hdr(frames, &HdrOptions { align: false, deghost: Deghost::None }, &no_progress).unwrap();
+    // in the band the leaf swept, below the brightest frame's clip: each merged ratio within the frames' (10 % for noise)
+    let (mut out, mut n) = (0usize, 0usize);
+    for y in 1120..1280 {
+        for x in 930..1100 {
+            let (fx, fy) = (x as f64 + 0.5, y as f64 + 0.5);
+            let v: Vec<[f32; 3]> = (0..3).map(|i| seen(i, fx, fy)).collect();
+            if v.iter().any(|p| p[1] * ks[2] > 0.75) {
+                continue;
+            }
+            let m = r.radiance.get(x, y);
+            let mut swept = false;
+            let mut fringe = false;
+            for c in [0, 2] {
+                let q: Vec<f32> = v.iter().map(|p| p[c] / p[1]).collect();
+                let (lo, hi) = (q.iter().copied().fold(f32::INFINITY, f32::min), q.iter().copied().fold(0.0, f32::max));
+                if hi - lo < 0.2 * hi {
+                    continue;
+                }
+                swept = true;
+                let qm = m[c] / m[1].max(1e-9);
+                fringe |= qm > hi * 1.1 || qm < lo * 0.9;
+            }
+            if swept {
+                n += 1;
+                out += usize::from(fringe);
+            }
+        }
+    }
+    let share = out as f64 / n.max(1) as f64;
+    eprintln!("moving colour leaf: {out} of {n} pixels outside the frames' colours ({:.1} %)", share * 100.0);
+    assert!(n > 500, "too few pixels where the leaf moved: {n}");
+    assert!(share < 0.01, "{:.1} % of the pixels where the leaf moved have a colour no frame saw", share * 100.0);
+}
+
 /// The reference's clipped highlights don't leak into their surroundings: next to the bright disc (clipped in the
 /// reference, its radiance from the darker frame) the merge stays as bright as the scene.
 #[test]
