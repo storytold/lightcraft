@@ -786,6 +786,13 @@ fn unwritten(data: &[[u8; 4]]) -> usize {
     data.chunks(4096).filter(|c| c.iter().fold(255u8, |a, p| a & p[3]) != 255).map(|c| c.iter().filter(|p| p[3] != 255).count()).sum()
 }
 
+/// `wb_k` parameters for one 3×3 (P[1] = present, P[2..] = rows).
+fn matrix_words(m: &[[f32; 3]; 3]) -> Vec<u32> {
+    let mut p = vec![1u32];
+    p.extend(m.iter().flatten().copied().map(f32::to_bits));
+    p
+}
+
 /// The white-balanced, retouched, denoised image.
 fn linear(cx: &mut Cx<'_>, sampled: &Buf, info: &SourceInfo, plan: &Plan<'_>, host: &mut Host) -> Buf {
     let (w, h) = (plan.w, plan.h);
@@ -800,11 +807,34 @@ fn linear(cx: &mut Cx<'_>, sampled: &Buf, info: &SourceInfo, plan: &Plan<'_>, ho
         lightcraft_pipeline::lin_cpu(&mut img, info, plan);
         cx.gpu.upload(rgb_words(&img))
     } else {
+        let space = lightcraft_pipeline::film::scanner_space(info).filter(|_| s.film.enabled);
+        let filmed = if s.film.enabled {
+            let camera = if let Some(space) = &space {
+                let cam = cx.gpu.buffer(n * 3);
+                map(cx, "wb_k", n, &matrix_words(&space.to_camera), [Some(sampled), None, None], &cam);
+                Some(cam)
+            } else {
+                None
+            };
+            let film_in = camera.as_ref().unwrap_or(sampled);
+            let out = cx.gpu.buffer(n * 3);
+            map(cx, "film_k", n, &lightcraft_pipeline::film::FilmKernel::from_film(&s.film).words(), [Some(film_in), None, None], &out);
+            if let Some(space) = &space {
+                let back = cx.gpu.buffer(n * 3);
+                map(cx, "wb_k", n, &matrix_words(&space.to_working), [Some(&out), None, None], &back);
+                Some(back)
+            } else {
+                Some(out)
+            }
+        } else {
+            None
+        };
+        let wb_in = filmed.as_ref().unwrap_or(sampled);
         let m = local::wb_matrix_for(info, s);
         let mut p = vec![m.is_some() as u32];
         p.extend(m.unwrap_or_default().iter().flatten().map(|v| v.to_bits()));
         let out = cx.gpu.buffer(n * 3);
-        map(cx, "wb_k", n, &p, [Some(sampled), None, None], &out);
+        map(cx, "wb_k", n, &p, [Some(wb_in), None, None], &out);
         if plan.eyes.is_empty() {
             out
         } else {

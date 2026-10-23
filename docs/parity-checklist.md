@@ -1,6 +1,6 @@
 # Lightroom parity checklist
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-21 · **Change:** minor (LR-MERGE-HDR / LR-MERGE-PANO: Lanczos-3 warps; LR-IMP-LOCAL: browsing from the sidebar records the folder; LR-VIEW-ZOOM: only a full-size drag within 20 ms clears a slow-drag verdict; LR-IMP-ADD-DIALOG: hierarchical import album destination reconciled with main, #2362; KEY-SLIDER-NUDGE: vertical wheel nudges need a click or drag in the row; leaving it disarms them; LR-EDIT-OPTICS-PROFILE: Fujifilm nine-knot lens tables read at the plain radius; LR-VIEW-ZOOM: only a full-size drag within 20 ms clears a slow-drag verdict; LRC-LIB-LIBFOLDERS, LR-BEHAV-BG-TASKS: Synchronize Folder's scan shows its folder listing and stops it on ✕; LRC-LIB-LIBFOLDERS: Synchronize Folder says a folder is up to date; LR-LIB-STACK: filmstrip stack badge click; LRC-LIB-REFVIEW / CATALOG-SWITCH: Escape preserves edits; catalog-local pins; deleted and malformed references refused; LRC-LIB-COMPARE: the Info panel labels the active photo while culling, #2398; KEYC-RATING: `\` shows / hides the Filter Bar in the grids; LR-VIEW-PHOTOGRID: the grid reads only the photos an import batch or an edit touched, not the whole list; earlier: LRC-PRINT-PAGE: Print Page Options; LR-META-XMP: fewer false unimported-XMP warnings) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-22 · **Change:** minor (summary recounted with current main and Negative Craft: 83.9% of 549; Negative Craft rows kept; LR-MERGE-HDR / LR-MERGE-PANO: Lanczos-3 warps; LR-IMP-LOCAL: browsing from the sidebar records the folder; LR-VIEW-ZOOM: only a full-size drag within 20 ms clears a slow-drag verdict; LR-IMP-ADD-DIALOG: hierarchical import album destination reconciled with main, #2362; KEY-SLIDER-NUDGE: vertical wheel nudges need a click or drag in the row; leaving it disarms them; LR-EDIT-OPTICS-PROFILE: Fujifilm nine-knot lens tables read at the plain radius; LRC-LIB-LIBFOLDERS, LR-BEHAV-BG-TASKS: Synchronize Folder's scan shows its folder listing and stops it on ✕; LRC-LIB-LIBFOLDERS: Synchronize Folder says a folder is up to date; LR-LIB-STACK: filmstrip stack badge click; LRC-LIB-REFVIEW / CATALOG-SWITCH: Escape preserves edits; catalog-local pins; deleted and malformed references refused; LRC-LIB-COMPARE: the Info panel labels the active photo while culling, #2398; KEYC-RATING: `\` shows / hides the Filter Bar in the grids; LR-VIEW-PHOTOGRID: the grid reads only the photos an import batch or an edit touched, not the whole list; earlier: LRC-PRINT-PAGE: Print Page Options; LR-META-XMP: fewer false unimported-XMP warnings) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 The measured, row-by-row checklist: one row per Lightroom feature, menu item and shortcut, what we
 have and what is missing. It answers *does the feature exist?* (feature breadth). Whether it is good
@@ -53,9 +53,10 @@ cited here still exists. Formerly docs/parity.md.
 | Y. Menus | 85 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 78 | 4 | 2 | 1 | 49/52 (94%) | 24/26 (92%) |
 | Lightroom Classic extras | 40 | 25 | 21 | 8 | — | 24/26 (92%) |
-| **Total** | 422 | 63 | 57 | 35 | 196/203 (97%) | 148/161 (92%) |
+| Negative Craft | 7 | 0 | 0 | 0 | — | — |
+| **Total** | 429 | 63 | 57 | 35 | 196/203 (97%) | 148/161 (92%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.7%** of 542 in-scope rows — P0 98.3% of 203 · P1 95.0% of 161 · P2 56.5% of 177.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.9%** of 549 in-scope rows — P0 98.3% of 203 · P1 95.0% of 161 · P2 58.2% of 184.
 <!-- /parity:summary -->
 
 ## Top gaps and shortcut notes
@@ -794,10 +795,23 @@ Mincho faces (BIZ UDMincho; on the web build, BIZ UDPGothic) when built with `CR
 Latin stays upright. Advanced Japanese composition remains open. Regression coverage:
 `export::tests::japanese_watermarks_support_vertical_columns`, `japanese_watermark_options_and_legacy_defaults`, `watermarks_work_without_craft_fonts`.
 
+## Negative Craft
+
+| Id | Feature | Tier | Status | Evidence | Notes |
+|---|---|---|---|---|---|
+| LR-FILM-CONVERT | Negative Craft convert | P2 | ✅ | `cmd:film.analyze`, `cmd:film.setEnabled`, `cmd:section.film`, `crates/pipeline/src/film.rs`, `docs/negative-craft.md` | scene-linear transmission before white balance, in camera RGB when the file has a colour matrix; mask prints black; density inverts through the film gamma with highlight headroom. Auto tone, Auto B&W mix, and white balance read that print. The Edit section stays hidden until Window ▸ Edit Sections ▸ Negative Craft; a converted photo still shows it |
+| LR-FILM-FRAME | Analysis frame | P2 | ✅ | `cmd:film.setFrame`, `cmd:film.analyze`, `cmd:film.cropToImage`, `ctl:film.inset` | quad fit to the rebate; a miss keeps the previous quad and reports `frameError`; Crop ▸ Auto crops to the picture, including inside sprocket holes, and does not reprint. Margin trims each edge of that frame before the picture is measured and leaves the mask on the blank film |
+| LR-FILM-PICK | Base and neutral picks | P2 | ✅ | `cmd:film.pickBase`, `cmd:film.pickShadow`, `cmd:film.pickHighlight`, `cmd:film.pickGray` | a pale or white-balanced rebate is a valid base; a clipped lamp is refused; a gray click sets the axis and does not refit it; two neutrals set per-channel contrast |
+| LR-FILM-ROLL | Roll analysis | P2 | ✅ | `cmd:film.analyzeRoll` | shared mask color and gray axis; each frame's exposure is placed again with that axis; drift warning past half a stop |
+| LR-FILM-CONTROLS | Paper and cast | P2 | ✅ | `ctl:film.exposure`, `ctl:film.grade`, `ctl:film.black`, `ctl:film.shoulder`, `ctl:film.presat`, `ctl:film.temp`, `ctl:film.tint`, `ctl:film.shadowTemp`, `ctl:film.midTemp`, `ctl:film.highTemp` | shadow, mid, and highlight balance reach about 0.40 density |
+| LR-FILM-STOCKS | Slides and black-and-white | P2 | ✅ | `cmd:film.setStock`, `cmd:film.setIntent`, `cmd:film.inspect` | color and black-and-white negatives and slides; Stock leaves a dominant color alone |
+| LR-FILM-COLOR | Scan and print balance | P2 | ✅ | `cmd:film.setScan`, `cmd:film.setPrint`, `crates/pipeline/src/film.rs` | gray axis removes a cast whose sign holds through the scale; Camera, Minilab, and Flat set the dye correction; Neutral, Portrait, Vivid, and Lab are the paper |
+
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-22 | minor | Summary recounted with current main and Negative Craft: 83.7% of 542 → 83.9% of 549 (P0 98.3% of 203, P1 95.0% of 161, P2 58.2% of 184) |
 | 2026-10-21 | patch | LR-IMP-ADD-DIALOG: reconcile #2362 with current main; deleted-album guard and hierarchical picker retained; counts unchanged |
 | 2026-10-20 | minor | LR-IMP-ADD-DIALOG: #2362 gives the import review the shared hierarchy/search album picker while retaining None/New album and existing destination IDs; status and feature counts unchanged |
 | 2026-10-21 | patch | KEY-SLIDER-NUDGE: vertical wheel nudges need a click or drag in the slider's row; leaving it (even between two frames) or Tab focus alone does not arm them (issue #1355); status unchanged |
@@ -805,6 +819,17 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 | 2026-10-20 | minor | LR-PRE-PANEL: the preset applied to a photo is marked again (with its Amount slider) on returning to the photo, until the photo is edited further (#2392); status unchanged (✅) |
 | 2026-10-20 | minor | LR-MASK-OVERLAY: creating, picking, duplicating or adding to a mask shows the overlay a mask slider hid (#1800); status unchanged (✅) |
 | 2026-10-20 | patch | LRC-LIB-COMPARE, LR-VIEW-SURVEY: in Compare and Survey the Info panel's stars and colour labels and the Set Color Label menu act on the active photo only (they labelled the whole selection), and the panes show the colour label (#2398); statuses unchanged |
+| 2026-10-20 | patch | LR-FILM-CONVERT: Auto tone and Auto B&W mix read the print, as white balance already does (status unchanged, ✅) |
+| 2026-10-20 | patch | LR-FILM-FRAME: Margin (`film.inset`) trims the analysis frame; white balance reads the print (status unchanged, ✅) |
+| 2026-10-17 | patch | LR-FILM-CONTROLS: cleanup, Skin / Foliage / Sky removed (status unchanged, ✅) |
+| 2026-10-17 | patch | LR-FILM-CONVERT: the Edit section stays hidden until Window ▸ Edit Sections ▸ Negative Craft (status unchanged, ✅) |
+| 2026-10-17 | patch | LR-FILM-PICK, LR-FILM-FRAME: a pale or white-balanced rebate is a valid film base; only a clipped lamp is refused (status unchanged, ✅) |
+| 2026-10-17 | patch | LR-FILM-CONVERT, LR-FILM-COLOR, LR-FILM-ROLL: film-gamma inversion with highlight headroom, Hanson dye inverse, robust gray axis, camera-space measurement on raw (status unchanged, ✅) |
+| 2026-10-17 | patch | LR-FILM-FRAME: **To the picture** crops the scan to the measured edge (`film.cropToImage`; status unchanged, ✅) |
+| 2026-10-17 | minor | LR-FILM-COLOR, LR-FILM-PICK, LR-FILM-ROLL, LR-FILM-CONTROLS: gray axis, gray dropper, stronger band balance, and skin / foliage / sky (status unchanged, ✅) |
+| 2026-10-16 | minor | LR-FILM-COLOR: printer balance, scan (camera / minilab / flat), and print (neutral / portrait / vivid / lab) (new, ✅) |
+| 2026-10-16 | patch | LR-FILM-CONTROLS: Negative Craft looks no longer replace exposure or contrast (status unchanged, ✅) |
+| 2026-10-16 | minor | LR-FILM-CONVERT, LR-FILM-FRAME, LR-FILM-PICK, LR-FILM-ROLL, LR-FILM-CONTROLS, LR-FILM-STOCKS: Negative Craft, a scene-linear film stage (new, ✅) |
 | 2026-10-20 | patch | LR-VIEW-ZOOM: the 20 ms rule clears a slow-drag verdict only on a drag timed at full size; a drag that drafts small leaves it unchanged, as the code does; status unchanged |
 | 2026-10-19 | patch | LR-CROP-RECT: on a straightened photo a moved crop slides along the tilted edges, so a box that fills the photo's height reaches its sides (#2299); status unchanged |
 | 2026-10-19 | patch | LR-VIEW-ZOOM: the slow slider-drag verdict is described as per photo and control, as the code keys it; status unchanged |

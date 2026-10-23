@@ -102,6 +102,25 @@
   another ratio (4 × 5, 2 × 3…) keeps it portrait, as in Lightroom, and a Custom ratio taller than wide gives a
   portrait crop.
 
+## 2026-10-17
+
+### Negative Craft
+- **Negative Craft**, above Light in the Edit panel, converts a colour negative or a black-and-white negative.
+  It stays hidden until **Window ▸ Edit Sections ▸ Negative Craft**. A photo that is already converted still shows it.
+  **Convert** finds the blank film around the picture and prints it through the film's own curve, with
+  highlight detail left for the tone curve. The scan needs that blank film in the frame, bright and not
+  clipped. A gray axis takes out a cast that runs through the whole frame, and **Gray** sets that axis
+  from one tone that should print gray. A raw scan is balanced in the camera's own colour, before the
+  working-space conversion. How to scan and convert is in `docs/user/guides/convert-a-negative.md`.
+- **Margin** trims each edge of the detected frame before the picture is measured. The blank film
+  outside the frame stays the border. Cropping the photo does not change that measurement.
+- White balance, Auto tone, Auto black-and-white mix, and the white-balance selector read the
+  converted print. A pick on the negative no longer solves temperature and tint for the orange mask.
+- The catalog format is now version 11 (`DevelopSettings.film`, and `Film.inset` when Margin is not
+  zero). A converted photo writes those settings into the library. Once this version has opened a
+  library, older builds refuse it instead of loading the photo and dropping the conversion. A photo
+  that was never converted still omits the field.
+
 ## 2026-10-16
 
 ### Synchronize Folder shows that it is listing the folder

@@ -139,6 +139,10 @@ pub struct DevelopSettings {
     pub enhance: Enhance,
     /// Camera calibration: shadows tint and primary hue/saturation (applied before tone mapping).
     pub calibration: Calibration,
+    /// Negative Craft: color-negative, black-and-white, and slide conversion. Omitted from JSON
+    /// while it is the default, so catalogs written before it existed keep their bytes and hashes.
+    #[serde(default, skip_serializing_if = "Film::is_default")]
+    pub film: Film,
     /// Section on/off toggles (the "eye" buttons on panel headers): section id → enabled.
     pub disabled_sections: Vec<String>,
 }
@@ -173,6 +177,7 @@ impl Default for DevelopSettings {
             lens_blur: LensBlur::default(),
             enhance: Enhance::default(),
             calibration: Calibration::default(),
+            film: Film::default(),
             disabled_sections: Vec::new(),
         }
     }
@@ -1189,5 +1194,369 @@ impl DevelopSettings {
         s.light.whites = add(s.light.whites, h.sdr_whites);
         s.effects.clarity = add(s.effects.clarity, h.sdr_clarity);
         std::borrow::Cow::Owned(s)
+    }
+}
+
+fn one_f64() -> f64 {
+    1.0
+}
+
+/// What the scan is a picture of. Negatives invert; slides only get a density correction.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FilmStock {
+    #[default]
+    ColorNeg,
+    BwNeg,
+    ColorPos,
+    BwPos,
+}
+
+impl FilmStock {
+    pub const ALL: [FilmStock; 4] = [FilmStock::ColorNeg, FilmStock::BwNeg, FilmStock::ColorPos, FilmStock::BwPos];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            FilmStock::ColorNeg => "Color Negative",
+            FilmStock::BwNeg => "B&W Negative",
+            FilmStock::ColorPos => "Color Slide",
+            FilmStock::BwPos => "B&W Slide",
+        }
+    }
+
+    pub fn negative(self) -> bool {
+        matches!(self, FilmStock::ColorNeg | FilmStock::BwNeg)
+    }
+
+    pub fn mono(self) -> bool {
+        matches!(self, FilmStock::BwNeg | FilmStock::BwPos)
+    }
+}
+
+/// How automatic color is chosen. Stock keeps a roll's color and leaves a sunset yellow.
+/// Scene looks for neutrals in this frame.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FilmIntent {
+    #[default]
+    Stock,
+    Scene,
+}
+
+impl FilmIntent {
+    pub const ALL: [FilmIntent; 2] = [FilmIntent::Stock, FilmIntent::Scene];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            FilmIntent::Stock => "Stock",
+            FilmIntent::Scene => "Scene",
+        }
+    }
+}
+
+/// How the file stores transmission. Linear is a raw or a linear TIFF. The gamma values
+/// linearize a flatbed scan before density is measured.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FilmCapture {
+    #[default]
+    Linear,
+    Gamma18,
+    Gamma22,
+}
+
+/// What recorded the negative. This chooses how much of the dyes' unwanted absorption is still
+/// in the file. A camera's wide filters see more of it than a minilab's. Flat keeps integral density.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FilmScan {
+    #[default]
+    Camera,
+    Minilab,
+    Flat,
+}
+
+impl FilmScan {
+    pub const ALL: [FilmScan; 3] = [FilmScan::Camera, FilmScan::Minilab, FilmScan::Flat];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            FilmScan::Camera => "Camera",
+            FilmScan::Minilab => "Minilab",
+            FilmScan::Flat => "Flat",
+        }
+    }
+
+    /// Residual side absorption `(cyan in green, magenta in blue, cyan in blue)`, removed with
+    /// Hanson's inverse. A typical wide-filter residual, not a measured stock. Zero leaves
+    /// integral density alone. An equal-density neutral moves; the gray axis puts it back.
+    pub fn dye(self) -> [f64; 3] {
+        match self {
+            FilmScan::Camera => [0.12, 0.22, 0.06],
+            FilmScan::Minilab => [0.05, 0.09, 0.02],
+            FilmScan::Flat => [0.0, 0.0, 0.0],
+        }
+    }
+}
+
+/// The paper the balanced negative is printed on. Neutral is an equal-channel gray.
+/// The others are our own print aims, not a manufacturer's profile.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FilmPrint {
+    #[default]
+    Neutral,
+    Portrait,
+    Vivid,
+    Lab,
+}
+
+impl FilmPrint {
+    pub const ALL: [FilmPrint; 4] = [FilmPrint::Neutral, FilmPrint::Portrait, FilmPrint::Vivid, FilmPrint::Lab];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            FilmPrint::Neutral => "Neutral",
+            FilmPrint::Portrait => "Portrait",
+            FilmPrint::Vivid => "Vivid",
+            FilmPrint::Lab => "Lab",
+        }
+    }
+
+    /// Linear gain on the balanced print, then a chroma scale around the mean.
+    pub fn aim(self) -> ([f64; 3], f64) {
+        match self {
+            FilmPrint::Neutral => ([1.0, 1.0, 1.0], 1.0),
+            FilmPrint::Portrait => ([1.06, 1.0, 0.93], 0.90),
+            FilmPrint::Vivid => ([1.0, 1.0, 1.0], 1.22),
+            FilmPrint::Lab => ([1.05, 0.99, 0.91], 1.0),
+        }
+    }
+}
+
+impl FilmCapture {
+    pub const ALL: [FilmCapture; 3] = [FilmCapture::Linear, FilmCapture::Gamma18, FilmCapture::Gamma22];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            FilmCapture::Linear => "Linear",
+            FilmCapture::Gamma18 => "Gamma 1.8",
+            FilmCapture::Gamma22 => "Gamma 2.2",
+        }
+    }
+
+    pub fn gamma(self) -> f64 {
+        match self {
+            FilmCapture::Linear => 1.0,
+            FilmCapture::Gamma18 => 1.8,
+            FilmCapture::Gamma22 => 2.2,
+        }
+    }
+}
+
+/// Four corners of the analysis frame, normalized to the oriented image, in order
+/// around the boundary (top-left, top-right, bottom-right, bottom-left when the frame is upright).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FilmFrame {
+    pub corners: [[f64; 2]; 4],
+}
+
+impl Default for FilmFrame {
+    fn default() -> Self {
+        Self { corners: [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]] }
+    }
+}
+
+impl FilmFrame {
+    pub fn is_full(&self) -> bool {
+        let d = FilmFrame::default();
+        self.corners.iter().zip(d.corners).all(|(a, b)| (a[0] - b[0]).abs() < 1e-6 && (a[1] - b[1]).abs() < 1e-6)
+    }
+}
+
+/// Negative Craft settings. Zero on temperature, tint, and the band balances means the mask
+/// has been removed and no cast has been added. Exposure and blacks place the print. Contrast
+/// (`grade`) changes the film gamma on a negative and is a power on a slide. A shoulder, when
+/// set, rolls off highlights. They can sit at identity.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Film {
+    pub enabled: bool,
+    pub stock: FilmStock,
+    pub intent: FilmIntent,
+    pub capture: FilmCapture,
+    /// Sensor or scanner that recorded the negative. Changes the dye correction, then Auto
+    /// rebalances so gray stays gray.
+    pub scan: FilmScan,
+    /// Paper the balanced negative is printed on. Applied after the gray axis, so a look's
+    /// temperature is a trim on top of this and not the thing that removes the mask.
+    pub print: FilmPrint,
+    pub frame: FilmFrame,
+    /// Percent trimmed from each edge of [`Self::frame`] before the picture is measured.
+    /// Zero measures the whole frame. The mask still comes from film outside that frame.
+    /// Omitted from a catalog while it is zero.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub inset: f64,
+    pub base_r: f64,
+    pub base_g: f64,
+    pub base_b: f64,
+    pub gamma_r: f64,
+    pub gamma_g: f64,
+    pub gamma_b: f64,
+    pub exposure: f64,
+    pub grade: f64,
+    pub black: f64,
+    pub shoulder: f64,
+    /// Low end of the print, in density above the mask. Zero keeps the film border black.
+    /// Kept as the shared black when [`Self::white_r`] is still zero.
+    pub d_lo: f64,
+    /// Density of the bright end. The curve uses the brightest channel of [`Self::white`].
+    pub d_hi: f64,
+    /// Intercept of the gray axis, `D_c = fog_c + axis_c * D_green`. Zero until Auto.
+    /// Never negative, so the mask stays black.
+    pub fog_r: f64,
+    pub fog_g: f64,
+    pub fog_b: f64,
+    /// Slope of the gray axis, `D_c = fog_c + axis_c * D_green`. One leaves the channel alone.
+    /// Missing keys in an older catalog mean one, not zero.
+    #[serde(default = "one_f64")]
+    pub axis_r: f64,
+    #[serde(default = "one_f64")]
+    pub axis_g: f64,
+    #[serde(default = "one_f64")]
+    pub axis_b: f64,
+    /// OkLab is not used here. These are CIE a* and b* of the printed midtone, written by Auto.
+    pub mid_a: f64,
+    pub mid_b: f64,
+    /// Per-channel density that prints white. All zero means "use `d_hi` for every channel".
+    /// Auto keeps these near `d_hi`, shifted by the bright end's channel offsets, so that end is neutral.
+    pub white_r: f64,
+    pub white_g: f64,
+    pub white_b: f64,
+    pub presat: f64,
+    pub temp: f64,
+    pub tint: f64,
+    pub shadow_temp: f64,
+    pub shadow_tint: f64,
+    pub mid_temp: f64,
+    pub mid_tint: f64,
+    pub high_temp: f64,
+    pub high_tint: f64,
+    /// Sampled transmission of a shadow neutral, kept so a later base change can be rebalanced.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shadow_pick: Option<[f64; 3]>,
+    /// Sampled transmission of a highlight neutral.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub highlight_pick: Option<[f64; 3]>,
+}
+
+impl Default for Film {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            stock: FilmStock::ColorNeg,
+            intent: FilmIntent::Stock,
+            capture: FilmCapture::Linear,
+            scan: FilmScan::Camera,
+            print: FilmPrint::Neutral,
+            frame: FilmFrame::default(),
+            inset: 0.0,
+            base_r: 1.0,
+            base_g: 1.0,
+            base_b: 1.0,
+            gamma_r: 1.0,
+            gamma_g: 1.0,
+            gamma_b: 1.0,
+            exposure: 0.0,
+            grade: 1.0,
+            black: 0.0,
+            shoulder: 0.0,
+            d_lo: 0.0,
+            d_hi: 1.0,
+            fog_r: 0.0,
+            fog_g: 0.0,
+            fog_b: 0.0,
+            axis_r: 1.0,
+            axis_g: 1.0,
+            axis_b: 1.0,
+            mid_a: 0.0,
+            mid_b: 0.0,
+            white_r: 0.0,
+            white_g: 0.0,
+            white_b: 0.0,
+            presat: 0.0,
+            temp: 0.0,
+            tint: 0.0,
+            shadow_temp: 0.0,
+            shadow_tint: 0.0,
+            mid_temp: 0.0,
+            mid_tint: 0.0,
+            high_temp: 0.0,
+            high_tint: 0.0,
+            shadow_pick: None,
+            highlight_pick: None,
+        }
+    }
+}
+
+impl Film {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    pub fn base(&self) -> [f64; 3] {
+        [self.base_r, self.base_g, self.base_b]
+    }
+
+    pub fn set_base(&mut self, b: [f64; 3]) {
+        self.base_r = b[0];
+        self.base_g = b[1];
+        self.base_b = b[2];
+    }
+
+    pub fn gamma(&self) -> [f64; 3] {
+        [self.gamma_r, self.gamma_g, self.gamma_b]
+    }
+
+    pub fn set_gamma(&mut self, g: [f64; 3]) {
+        self.gamma_r = g[0];
+        self.gamma_g = g[1];
+        self.gamma_b = g[2];
+    }
+
+    pub fn fog(&self) -> [f64; 3] {
+        [self.fog_r, self.fog_g, self.fog_b]
+    }
+
+    pub fn set_fog(&mut self, f: [f64; 3]) {
+        self.fog_r = f[0];
+        self.fog_g = f[1];
+        self.fog_b = f[2];
+    }
+
+    pub fn axis(&self) -> [f64; 3] {
+        [self.axis_r, self.axis_g, self.axis_b]
+    }
+
+    pub fn set_axis(&mut self, a: [f64; 3]) {
+        self.axis_r = a[0];
+        self.axis_g = a[1];
+        self.axis_b = a[2];
+    }
+
+    pub fn white(&self) -> [f64; 3] {
+        [self.white_r, self.white_g, self.white_b]
+    }
+
+    pub fn set_white(&mut self, w: [f64; 3]) {
+        self.white_r = w[0];
+        self.white_g = w[1];
+        self.white_b = w[2];
+    }
+
+    /// True when Auto has not yet set a per-channel white, so the print uses `d_lo` and `d_hi`.
+    pub fn shared_endpoints(&self) -> bool {
+        self.white_r == 0.0 && self.white_g == 0.0 && self.white_b == 0.0
     }
 }

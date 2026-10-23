@@ -326,7 +326,8 @@ pub const HOLD_SECS: f64 = 0.25;
 /// Holds the loupe's render sizes while a gesture runs (a continuous pinch changes the zoom every
 /// frame; re-planning each time would be a stream of renders of every size in between). The view
 /// keeps being drawn from the renders it has, magnified by the GPU, and is re-planned once the
-/// gesture has been quiet for [`HOLD_SECS`].
+/// gesture has been quiet for [`HOLD_SECS`]. The display fit is held with the plan: at rest the
+/// whole frame is the preview shrunk to the size on screen, and a pinch must not grow that fit.
 #[derive(Clone, Debug, Default)]
 pub struct SizeHold {
     photo: Option<lightcraft_catalog::PhotoId>,

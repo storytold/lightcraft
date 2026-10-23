@@ -1,6 +1,10 @@
 //! Issue #102: catalog format versions. Older formats load and are upgraded; a newer format is
 //! refused with a clear error and left untouched (never read in part, truncated or set aside).
 
+use std::sync::Arc;
+
+use lightcraft_develop::DevelopSettings;
+
 use crate::journal::{LOG, SNAPSHOT, VERSION, encode_record};
 use crate::*;
 
@@ -192,6 +196,84 @@ fn bad_crc_is_still_a_torn_tail() {
     assert!(r.torn_bytes > 0 && r.damaged.is_none(), "{r:?}");
 }
 
+/// Last catalog format that has no `DevelopSettings.film`. A build that stops here accepts the
+/// snapshot (`version > 9` is the refusal) and serde drops the unknown object.
+const BEFORE_FILM: u32 = 9;
+
+/// A converted photo: the default film object is omitted, so these values are what an older
+/// build would have to keep.
+fn converted_film() -> DevelopSettings {
+    let mut s = DevelopSettings::default();
+    s.film.enabled = true;
+    s.film.base_r = 0.5;
+    s.film.base_g = 0.25;
+    s.film.base_b = 0.75;
+    s.film.fog_r = 0.125;
+    s.film.exposure = 1.0;
+    s.film.grade = 2.0;
+    s.film.d_hi = 3.0;
+    s
+}
+
+/// Non-default film is in the snapshot and in a later develop op, and both load back. A v9
+/// reader would ignore the object (serde drops unknown fields) and the next snapshot would
+/// persist that loss; format v10 makes that reader refuse the library first.
+#[test]
+fn a_converted_photo_round_trips_and_a_v9_reader_refuses_it() {
+    let settings = converted_film();
+    assert!(!settings.film.is_default());
+    let mut json = settings.to_json();
+    assert!(json.get("film").is_some(), "omitting the default film object does not omit a conversion");
+    json.as_object_mut().unwrap().remove("film");
+    let dropped = DevelopSettings::from_json(&json).unwrap();
+    assert!(dropped.film.is_default(), "a develop schema without film loads the photo and loses the conversion");
+
+    let mut c = Catalog::new();
+    let id = c.alloc_photo_id();
+    let mut p = Photo::new(id, Source::File { path: "/p/scan.jpg".into() }, "scan.jpg", "JPEG", 4, 3, "2026-01-01");
+    p.develop = Arc::new(settings.clone());
+    let add = Op::AddPhoto { photo: Box::new(p) };
+    c.apply(add.clone()).unwrap();
+
+    let m = MemStore::new();
+    let (mut j, _, _) = Journal::open(Box::new(m.clone())).unwrap();
+    j.append(std::slice::from_ref(&add)).unwrap();
+    j.snapshot(&c).unwrap();
+    drop(j);
+
+    let written = snapshot_version(&m);
+    assert!(written > u64::from(BEFORE_FILM), "film settings need a catalog format newer than v{BEFORE_FILM}, wrote {written}");
+    assert_eq!(written, u64::from(VERSION));
+    let snap = String::from_utf8(m.get(SNAPSHOT).unwrap()).unwrap();
+    assert!(snap.contains("\"film\""), "the conversion is in the snapshot a v9 reader would open");
+
+    let (_, loaded, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!(r.upgraded_from, None);
+    assert_eq!(loaded.photo(id).unwrap().develop.film, settings.film);
+
+    let mut edited = settings.clone();
+    edited.film.exposure = 2.0;
+    edited.film.fog_g = 0.25;
+    let op = Op::SetDevelop { id, settings: Arc::new(edited.clone()), label: "Film".into(), edited: None };
+    let (mut j, _, _) = Journal::open(Box::new(m.clone())).unwrap();
+    j.append(std::slice::from_ref(&op)).unwrap();
+    drop(j);
+    let log = String::from_utf8(m.get(LOG).unwrap()).unwrap();
+    assert!(log.contains("\"film\""), "the develop op carries the conversion too");
+
+    let (_, loaded, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!(r.replayed, 1);
+    assert_eq!(loaded.photo(id).unwrap().develop.film, edited.film);
+
+    // A v9 build's `VERSION` is 9, so this snapshot (`version` > 9) takes the same refusal as
+    // any newer library: nothing is parsed far enough to drop `film`, and nothing is rewritten.
+    let refused = MemStore::new();
+    refused.set(SNAPSHOT, snap.replacen(&format!("\"version\":{VERSION}"), &format!("\"version\":{}", VERSION + 1), 1).into_bytes());
+    assert_refused_untouched(&refused);
+    let kept = String::from_utf8(refused.get(SNAPSHOT).unwrap()).unwrap();
+    assert!(kept.contains("\"film\""));
+}
+
 /// Guard for the version rule (see `journal` → *Format versions*): adding an [`Op`] variant breaks
 /// this match. When it does, bump `journal::VERSION`, add a row to the format table, and add the
 /// variant here under the new version. A version that only adds serialized fields raises
@@ -239,7 +321,9 @@ fn op_variants_are_versioned() {
         }
     }
     /// v9: `Photo.preview_checked` and `Op::SetContent.preview_checked`.
-    const NEWEST_FIELDS: u32 = 9;
+    /// v10: `DevelopSettings.film`.
+    /// v11: `Film.inset`.
+    const NEWEST_FIELDS: u32 = 11;
     let newest = since(&Op::SetHistoryCursor { id: PhotoId(1), cursor: None });
     assert_eq!(newest.max(NEWEST_FIELDS), VERSION, "the newest op's or fields' version must be the current format version");
 }

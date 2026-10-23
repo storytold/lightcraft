@@ -877,3 +877,84 @@ fn windows_of_a_big_photo_share_one_uploaded_source() {
     lightcraft_gpu::render(&src, &info, &s, &at(1000), Some(&after)).expect("gpu render");
     assert_eq!(lightcraft_gpu::source_uploads() - start, 2);
 }
+
+#[test]
+fn negative_craft_matches_the_cpu() {
+    if !gpu() {
+        return;
+    }
+    use lightcraft_develop::{FilmCapture, FilmStock};
+    let mut data = Vec::with_capacity(96 * 64);
+    for y in 0..64 {
+        for x in 0..96 {
+            let border = x < 8 || y < 8 || x >= 88 || y >= 56;
+            // One negative sample: `film_k` must zero it before presaturation, as the CPU kernel does.
+            let px = if border {
+                [0.85f32, 0.42, 0.15]
+            } else if x == 40 && y == 30 {
+                [0.20, 0.10, -0.05]
+            } else {
+                [0.35, 0.22, 0.12]
+            };
+            data.push(px);
+        }
+    }
+    let src = Arc::new(Rgb32f { width: 96, height: 64, data });
+    let req = RenderRequest::fit(96, 64);
+    let film = |stock, capture, extra: fn(&mut lightcraft_develop::Film)| {
+        let mut film = lightcraft_develop::Film {
+            enabled: true,
+            stock,
+            capture,
+            base_r: 0.85,
+            base_g: 0.42,
+            base_b: 0.15,
+            grade: 1.1,
+            exposure: 0.25,
+            ..Default::default()
+        };
+        extra(&mut film);
+        DevelopSettings { film, ..Default::default() }
+    };
+    let cases: &[(&str, DevelopSettings, SourceInfo)] = &[
+        ("negative craft", film(FilmStock::ColorNeg, FilmCapture::Linear, |_| {}), SourceInfo::default()),
+        ("negative craft mono", film(FilmStock::BwNeg, FilmCapture::Gamma22, |_| {}), SourceInfo::default()),
+        ("negative craft gamma 1.8", film(FilmStock::ColorNeg, FilmCapture::Gamma18, |_| {}), SourceInfo::default()),
+        ("negative craft slide", film(FilmStock::ColorPos, FilmCapture::Linear, |f| f.grade = 1.3), SourceInfo::default()),
+        (
+            "negative craft shoulder",
+            film(FilmStock::ColorNeg, FilmCapture::Linear, |f| {
+                f.shoulder = 0.8;
+                f.presat = 30.0;
+                f.fog_b = 0.04;
+                f.axis_b = 1.15;
+                f.white_r = 0.9;
+                f.white_g = 1.0;
+                f.white_b = 1.2;
+            }),
+            SourceInfo::default(),
+        ),
+        ("negative craft scanner", film(FilmStock::ColorNeg, FilmCapture::Linear, |_| {}), scanner_info()),
+    ];
+    for (name, settings, info) in cases {
+        check(name, &src, info, settings, &req);
+    }
+}
+
+/// A raw with a colour matrix, so Negative Craft round-trips through `wb_k` into camera RGB.
+fn scanner_info() -> SourceInfo {
+    use lightcraft_color::Mat3;
+    let tags = lightcraft_raw::ColorData {
+        illuminant: [17, 21],
+        color_matrix: [
+            Some(Mat3([[0.9, 0.2, -0.15], [-0.3, 1.25, 0.08], [0.02, -0.12, 0.85]])),
+            Some(Mat3([[0.7, 0.3, -0.1], [-0.35, 1.3, 0.1], [0.05, -0.2, 1.0]])),
+        ],
+        ..Default::default()
+    };
+    SourceInfo {
+        raw: true,
+        camera_color: Some(Arc::new(lightcraft_pipeline::CameraColor { tags, developed_for: lightcraft_color::cct::temp_tint_to_xy(5500.0, 0.0) })),
+        ..Default::default()
+    }
+}

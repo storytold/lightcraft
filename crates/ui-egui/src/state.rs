@@ -740,6 +740,9 @@ pub struct UiState {
     pub thumb_size: f32,
     /// Open Edit sections by id.
     pub open_sections: Vec<String>,
+    /// Negative Craft is in the Edit panel, above Light. Off until Window ▸ Edit Sections ▸
+    /// Negative Craft. A photo whose conversion is already on shows the section either way.
+    pub negative_craft: bool,
     /// Open flyouts (curve, mixer, grading…).
     pub open_flyouts: Vec<String>,
     /// Solo Mode (`view.soloSections`): opening one Edit section closes the others.
@@ -893,8 +896,15 @@ pub struct UiState {
     /// the photo that applies to: not an edit, and forgotten on moving to another photo or quitting.
     #[serde(skip)]
     pub grading_hidden: Option<(lightcraft_catalog::PhotoId, [bool; 3])>,
-    /// Active on-canvas tool: "", "brush", "linear", "radial", "wbPicker", "straighten", "remove".
+    /// Active on-canvas tool: "", "brush", "linear", "radial", "wbPicker", "straighten", "remove",
+    /// "filmBase", "filmShadow", "filmHighlight", "filmGray".
     pub tool: String,
+    /// Corner of the Negative Craft frame under a drag, 0..4.
+    #[serde(skip)]
+    pub film_corner: Option<u8>,
+    /// Density histogram for the open Negative Craft panel: photo id, settings hash, bins, rebate level, dominant fraction.
+    #[serde(skip)]
+    pub film_meter: Option<(u64, u64, Vec<f32>, f64, f64)>,
     /// Guided Upright: the selected guide (photo id + index) while the tool is open. A Delete /
     /// Backspace on it removes that guide alone; a click away or leaving the tool clears it.
     #[serde(skip)]
@@ -1381,6 +1391,7 @@ impl Default for UiState {
             before_after: BeforeAfter::Off,
             thumb_size: 220.0,
             open_sections: vec!["light".into()],
+            negative_craft: false,
             open_flyouts: vec![],
             single_panel: false,
             show_clipping: false,
@@ -1442,6 +1453,8 @@ impl Default for UiState {
             grading_mode: "3way".into(),
             grading_hidden: None,
             tool: String::new(),
+            film_corner: None,
+            film_meter: None,
             selected_guide: None,
             brush_size: 0.04,
             brush_feather: 50.0,

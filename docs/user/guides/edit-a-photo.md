@@ -25,6 +25,10 @@ Click **B&W** at the top of the **Edit** panel to turn the photo monochrome. Cli
 
 Click **HDR**, next to **B&W**, to edit the photo in HDR, with highlights brighter than SDR white for HDR exports. LightCraft cannot show HDR on an HDR screen yet, so you edit without seeing the extra brightness.
 
+## Negatives
+
+To turn a color negative or a black-and-white negative into a positive, see [Convert a negative](convert-a-negative.md).
+
 ## Other edit tools
 
 Open them from the **Window** menu, or press the key shown next to each one:

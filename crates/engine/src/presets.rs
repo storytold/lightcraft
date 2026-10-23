@@ -275,6 +275,40 @@ pub fn builtin() -> Vec<Preset> {
             "Selenium Tone",
             json!({"treatment": "bw", "light": {"contrast": 20.0}, "grading": {"shadows": {"hue": 285.0, "sat": 18.0, "lum": 0.0}, "highlights": {"hue": 40.0, "sat": 10.0, "lum": 0.0}}}),
         ),
+        // Looks never set exposure, grade, or the measured border. Those place the print;
+        // a look only changes color and how the paper rolls off.
+        p(
+            "Negative Craft",
+            "nc-neutral",
+            "Neutral",
+            json!({"film": {"black": 0.0, "shoulder": 0.0, "presat": 0.0, "temp": 0.0, "tint": 0.0, "shadow_temp": 0.0, "shadow_tint": 0.0, "mid_temp": 0.0, "mid_tint": 0.0, "high_temp": 0.0, "high_tint": 0.0}}),
+        ),
+        p(
+            "Negative Craft",
+            "nc-warm",
+            "Warm",
+            // Saturation is applied to the scan, before a negative inverts, so a positive presat
+            // cools the print. Positive tint removes green, which with warmth goes purple.
+            json!({"film": {"black": 0.0, "shoulder": 0.0, "presat": 0.0, "temp": 20.0, "tint": 0.0, "shadow_temp": 6.0, "shadow_tint": 0.0, "mid_temp": 0.0, "mid_tint": 0.0, "high_temp": 8.0, "high_tint": 0.0}}),
+        ),
+        p(
+            "Negative Craft",
+            "nc-cool",
+            "Cool",
+            json!({"film": {"black": 0.0, "shoulder": 0.0, "presat": 0.0, "temp": -16.0, "tint": -5.0, "shadow_temp": -4.0, "shadow_tint": 0.0, "mid_temp": 0.0, "mid_tint": 0.0, "high_temp": -8.0, "high_tint": -4.0}}),
+        ),
+        p(
+            "Negative Craft",
+            "nc-paper",
+            "Paper",
+            json!({"film": {"black": 0.025, "shoulder": 0.85, "presat": -6.0, "temp": 8.0, "tint": 2.0, "shadow_temp": 4.0, "shadow_tint": -8.0, "mid_temp": 0.0, "mid_tint": 0.0, "high_temp": 2.0, "high_tint": 0.0}}),
+        ),
+        p(
+            "Negative Craft",
+            "nc-cine",
+            "Cinematic",
+            json!({"film": {"black": 0.015, "shoulder": 0.65, "presat": -12.0, "temp": -2.0, "tint": 0.0, "shadow_temp": -8.0, "shadow_tint": 2.0, "mid_temp": 0.0, "mid_tint": 0.0, "high_temp": 8.0, "high_tint": -2.0}}),
+        ),
         p(
             "Landscape",
             "crisp-landscape",
@@ -580,6 +614,19 @@ mod tests {
         for pr in builtin() {
             assert!(ids.insert(pr.id.clone()));
             let out = pr.apply(&base, 1.0);
+            if pr.id == "lc.nc-neutral" {
+                // Neutral is the reset. On a default frame it is already there, so check that it
+                // clears a look that moved the print.
+                let mut warmed = base.clone();
+                warmed.film.temp = 20.0;
+                warmed.film.shoulder = 0.85;
+                warmed.film.black = 0.025;
+                let cleared = pr.apply(&warmed, 1.0);
+                assert_eq!(cleared.film.temp, 0.0);
+                assert_eq!(cleared.film.shoulder, 0.0);
+                assert_eq!(cleared.film.black, 0.0);
+                continue;
+            }
             assert_ne!(out, base, "{} had no effect", pr.id);
         }
     }

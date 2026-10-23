@@ -40,8 +40,9 @@ L5 depends on egui, eframe, winit or rfd, and that each crate only uses lower la
 1. **Decode** (`raw`, `codecs`): raw files to linear camera RGB (demosaic, black/white levels,
    opcodes, highlight handling) and a camera-to-XYZ colour model; standard images to linear light
    through their ICC profile.
-2. **Develop** (`pipeline`): white balance, profile, exposure and tone (local Laplacian
-   highlights/shadows), curves, HSL / colour mixer, point colour, colour grading, texture, clarity,
+2. **Develop** (`pipeline`): Negative Craft (a scan's transmission, in camera RGB when the file has a colour matrix, before white balance), white
+   balance, profile, exposure and tone (local Laplacian highlights/shadows), curves, HSL / colour
+   mixer, point colour, colour grading, texture, clarity,
    dehaze, detail (sharpening, NR, AI denoise result), optics (lens profile, CA, defringe,
    vignette), geometry (crop, Upright, transforms), masks with local adjustments, heal/clone, grain,
    effects. Stage caching and a source pyramid make slider drags cheap.

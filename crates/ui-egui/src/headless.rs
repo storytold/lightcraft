@@ -536,8 +536,7 @@ mod tests {
         // One click lands in Settings, with local installation available even without a download offer.
         let r = h.request("ui.clickWidget", json!({"id": "denoise:setup"}), t);
         assert_eq!(r["ok"], true, "{r}");
-        h.step();
-        h.step();
+        h.settle(SETTLE);
         assert_eq!(h.app.ui.dialog, Some(Dialog::Settings { tab: "denoise".into() }));
         h.settle(SETTLE);
         let listed = h.app.session.execute("denoise.models.list", &json!({})).unwrap();

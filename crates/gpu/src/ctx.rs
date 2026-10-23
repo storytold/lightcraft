@@ -57,6 +57,7 @@ const MODULES: &[Module] = &[
             "xguided_pre",
             "xguided_ab",
             "xguided_apply",
+            "film_k",
         ],
     },
     Module {

@@ -111,7 +111,7 @@ impl DevelopSettings {
     /// Calibration the pipeline switches off where it applies them. Borrowed when every section is on.
     pub fn effective(&self) -> std::borrow::Cow<'_, DevelopSettings> {
         let off = |section: &str| !self.section_enabled(section);
-        if !(off("light") || off("color") || off("detail")) {
+        if !(off("light") || off("color") || off("detail") || off("film")) {
             return std::borrow::Cow::Borrowed(self);
         }
         let mut d = self.clone();
@@ -127,6 +127,9 @@ impl DevelopSettings {
         }
         if off("detail") {
             d.reset_section(Section::Detail);
+        }
+        if off("film") {
+            d.reset_section(Section::Film);
         }
         std::borrow::Cow::Owned(d)
     }
@@ -157,6 +160,7 @@ impl DevelopSettings {
             }
             Section::Color => self.wb.mode = WbMode::AsShot,
             Section::Detail => self.enhance.denoise_on = None,
+            Section::Film => self.film = crate::Film::default(),
             _ => {}
         }
     }
@@ -255,6 +259,29 @@ mod tests {
     }
 
     #[test]
+    fn default_film_is_not_serialized_so_existing_hashes_stay() {
+        let s = DevelopSettings::default();
+        assert!(s.to_json().get("film").is_none(), "Negative Craft off must not change the settings JSON or hash64");
+        let mut on = s.clone();
+        on.film.enabled = true;
+        assert!(on.to_json().get("film").is_some());
+        assert_ne!(on.hash64(), s.hash64());
+        assert_eq!(DevelopSettings::from_json(&on.to_json()).unwrap(), on);
+    }
+
+    #[test]
+    fn a_missing_axis_in_an_old_catalog_is_one_not_zero() {
+        let s = DevelopSettings::from_json(&json!({"film": {"enabled": true, "fog_r": 0.12}})).unwrap();
+        assert!(s.film.enabled);
+        assert!((s.film.fog_r - 0.12).abs() < 1e-12);
+        assert_eq!(s.film.axis(), [1.0, 1.0, 1.0]);
+        assert!(s.to_json().get("film").is_some());
+        let bare = DevelopSettings::from_json(&json!({})).unwrap();
+        assert!(bare.film.is_default());
+        assert!(bare.to_json().get("film").is_none());
+    }
+
+    #[test]
     fn hdr_peak_is_finite_for_a_non_finite_headroom() {
         let mut h = Hdr { enabled: true, max_ev: f64::NAN, ..Hdr::default() };
         assert_eq!(h.peak(), (Hdr::DEFAULT_MAX_EV as f32).exp2());
@@ -289,6 +316,17 @@ mod tests {
             .merged(&json!({"light": {"exposure": 1e308}, "vignette": {"amount": -1e308}, "geometry": {"scale": 0}, "optics": {"distortion": 1e308}}))
             .unwrap();
         assert_eq!((m.light.exposure, m.vignette.amount, m.geometry.scale, m.optics.distortion), (5.0, -100.0, 50.0, 100.0));
+        // Analysis can store a base down to 1e-4 and a scene gamma down to 0.05 or up to 4.
+        // A later merge must not pull those back into a narrower slider range.
+        let measured = DevelopSettings::default()
+            .merged(&json!({"film": {"base_r": 1e-4, "base_g": 0.4, "base_b": 1.5, "gamma_r": 0.05, "gamma_g": 4.0, "gamma_b": 1.0}}))
+            .unwrap();
+        assert!((measured.film.base_r - 1e-4).abs() < 1e-12);
+        assert!((measured.film.gamma_r - 0.05).abs() < 1e-12);
+        assert!((measured.film.gamma_g - 4.0).abs() < 1e-12);
+        let clamped = DevelopSettings::default().merged(&json!({"film": {"base_r": 0.0, "gamma_r": 10.0}})).unwrap();
+        assert!((clamped.film.base_r - 1e-4).abs() < 1e-12);
+        assert!((clamped.film.gamma_r - 4.0).abs() < 1e-12);
         // point curves stay in 0..1, as an imported XMP curve does
         let m = base.merged(&json!({"curve": {"master": [{"x": -3, "y": 0}, {"x": 1, "y": 1e308}]}})).unwrap();
         assert_eq!(m.curve.master, vec![lightcraft_geom::Point::new(0.0, 0.0), lightcraft_geom::Point::new(1.0, 1.0)]);

@@ -7,7 +7,7 @@
 //! Stage order (see `docs/pipeline.md`):
 //! 1. geometry — user orientation, lens corrections (distortion, CA, vignetting), perspective, crop +
 //!    straighten, flips; one resample at output resolution; then defringe
-//! 2. scene-linear — white balance, exposure, dehaze, local tone (highlights/shadows), texture,
+//! 2. scene-linear — Negative Craft (when the film stage is on), white balance, exposure, dehaze, local tone (highlights/shadows), texture,
 //!    clarity, local adjustments (masks)
 //! 3. tone map — contrast / whites / blacks filmic curve on luminance, highlight desaturation
 //! 4. colour — vibrance, saturation, colour mixer, colour grading, B&W (OkLCh)
@@ -28,6 +28,7 @@ pub mod blemish;
 pub mod colorops;
 pub mod cull;
 pub mod dust;
+pub mod film;
 pub mod finish;
 pub mod geometry;
 pub mod local;
@@ -449,6 +450,7 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         // and the local tone mapping
         local_tone::enabled(info, s),
         src_long,
+        film::cache_key(&s.film),
     ));
     let lin_key = hash_of((
         pre_nr_key,
@@ -471,6 +473,11 @@ pub fn lin_cpu(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>) {
     let s = &*p.settings;
     // (before the white balance: the gain's input is the as-shot development, as in the file)
     local_tone::apply(img, info, p);
+    // Negative Craft runs on transmission, before white balance, so the as-shot white does not
+    // neutralize the mask. A raw with its own matrix is converted in camera RGB and returned to
+    // Rec.2020; white balance after that is the positive's. Auto and the white-balance selector
+    // use this same step, or they would balance the negative.
+    film::apply_before_white_balance(img, info, &s.film);
     local::white_balance(img, info, s);
     optics::defringe(img, s, p.px_per_long / optics::DEFRINGE_REF_LONG);
     spots::apply(img, &s.spots, &p.frame, p.px_per_long);

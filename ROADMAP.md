@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~14 points and ~340–600 h away
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-16 · **Change:** minor (Minolta MRW decoded, 6 bodies verified; RAW: 83% of Adobe's models decode, 38% verified after the camera-coverage sweep #1327; German catalog 91% → 97%: interface strings and What's New lines translated) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-22 · **Change:** minor (checklist breadth 83.9% of 549 rows, current main plus Negative Craft) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 One-page summary of how close LightCraft is to Adobe Lightroom. Agents: read this, then pick work
 from [docs/gaps.md](docs/gaps.md). The full assessment, method and evidence are in
@@ -12,7 +12,7 @@ from [docs/gaps.md](docs/gaps.md). The full assessment, method and evidence are 
 
 | | Value | Kind |
 |---|---:|---|
-| **Feature breadth** (checklist) | **81.6%** of 532 rows (P0 98.0%, P1 95.2%, P2 50.0%) | measured: [parity-checklist.md](docs/parity-checklist.md) recount |
+| **Feature breadth** (checklist) | **83.9%** of 549 rows (P0 98.3%, P1 95.0%, P2 58.2%) | measured: [parity-checklist.md](docs/parity-checklist.md) recount |
 | **Feature breadth** (weighted by use) | **~77%** | estimated |
 | **Ready for real work** (full target) | **~61%** (56–66%) | estimated: weighted sum over the dimensions |
 | **Mainstream practitioner** | **~51%** (46–56%) | estimated |
@@ -114,6 +114,9 @@ Ranked toward beta; detail in [docs/roadmap.md](docs/roadmap.md), gaps in [docs/
 
 ## Progress log
 
+- 2026-10-17: Negative Craft cleanup: Skin, Foliage, and Sky removed. Headline numbers unchanged.
+- 2026-10-17: Negative Craft converts a colour negative or a black-and-white negative through the film gamma with highlight headroom
+  (Convert, a gray axis, and Gray). A slide is already a positive and only has its contrast adjusted. Checklist breadth 83.4% of 539 → 83.6% of 546.
 - 2026-10-14: Camera-coverage sweep verifies 30 more models on 40 CC0 files, with file and sensor
   hashes pinned (`docs/raw/coverage.py`: 515 → 545 verified). Eleven candidates excluded after rechecking
   identity, provenance and camera-image agreement. Phone and drone DNG tone differences remain tracked in #1277.
@@ -186,7 +189,9 @@ Ranked toward beta; detail in [docs/roadmap.md](docs/roadmap.md), gaps in [docs/
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-22 | minor | Checklist recounted with current main and Negative Craft: feature breadth 83.6% of 546 → 83.9% of 549 (P0 98.3% of 203, P1 95.0% of 161, P2 58.2% of 184) |
 | 2026-10-19 | minor | Indonesian interface (`id`): every plain and formats message, plus 69 command labels, locale, menu command and tests; What's New left in English; Localization ~55% → ~64% (mean of the 12 key languages), 8 of 12 present |
+| 2026-10-18 | minor | Negative Craft: checklist breadth 81.6% of 532 → 83.6% of 546 (P0 98.3%, P1 95.0%, P2 57.4%). Slides are contrast only |
 | 2026-10-12 | minor | Italian interface (`it`, #1192): 2,201 of 2,398 messages, locale, menu command and tests; headline numbers unchanged |
 | 2026-10-13 | minor | Sony ILCA-99M2 camera colour profile in the log; numbers unchanged |
 | 2026-10-14 | minor | Localization ~52% → ~55% (mean of the 12 key languages): de, es, fr, ja and uk catalogs filled |

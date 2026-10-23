@@ -1,6 +1,6 @@
 # Target-app parity: LightCraft vs Adobe Lightroom
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-19 · **Change:** minor (Minolta MRW decoded, 6 bodies verified; RAW: 83% of Adobe's models decode, 38% verified after the camera-coverage sweep #1327; Platforms: the Windows x64 installer verified on Windows 11) · **Target:** Adobe Lightroom Classic 15.5 (August 2026) and Lightroom 9.6 (desktop)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-22 · **Change:** minor (checklist breadth 83.9% of 549 rows, current main plus Negative Craft) · **Target:** Adobe Lightroom Classic 15.5 (August 2026) and Lightroom 9.6 (desktop)
 
 The authoritative assessment of how close LightCraft is to Lightroom. The row-by-row checklist is
 [parity-checklist.md](parity-checklist.md); the ranked work list is [gaps.md](gaps.md); deep areas
@@ -12,7 +12,7 @@ have their own documents: [raw-parity.md](raw-parity.md), [file-format-parity.md
 
 | Number | Value | Kind |
 |---|---:|---|
-| **Feature breadth**, checklist | **81.6%** of 532 in-scope rows (P0 98.0%, P1 95.2%, P2 50.0%) | **measured**: recount of [parity-checklist.md](parity-checklist.md) rows (✅ 1, 🟡 ½, 🚫 left out), the same rule `cargo xtask parity` uses |
+| **Feature breadth**, checklist | **83.9%** of 549 in-scope rows (P0 98.3%, P1 95.0%, P2 58.2%) | **measured**: recount of [parity-checklist.md](parity-checklist.md) rows (✅ 1, 🟡 ½, 🚫 left out), the same rule `cargo xtask parity` uses |
 | **Feature breadth**, weighted by use | **~77%** | estimated: feature-area table below |
 | **Ready for real work** (full target) | **~61%** (range 56–66%) | estimated: weighted sum over the dimensions with written weights, see [below](#ready-for-real-work-mainstream-practitioner-and-essentials-user) |
 | **Mainstream practitioner** | **~51%** (range 46–56%) | estimated: weekly areas of a working photographer, depth 74.0% × 0.804 × colour 0.85 |
@@ -300,8 +300,10 @@ P2 items 12–25 h; look tuning, performance, packaging, hardening 25–45 h.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-22 | minor | Checklist recounted with current main and Negative Craft: feature breadth 83.6% of 546 → 83.9% of 549 (P0 98.3% of 203, P1 95.0% of 161, P2 58.2% of 184) |
 | 2026-10-19 | minor | Localization ~55% → ~64% (mean of the 12 key languages): Indonesian (`id`) catalog, every message but What's New; full target 61.2% → 61.5% (still ~61%) |
 | 2026-10-19 | patch | Platforms: the Windows installer is no longer listed as unverified (the 0.9.1 x64 MSI is tested on Windows 11; a confirmation after uninstalling from Settings → Apps, #892, remains); #790 noted as fixed in 0.9.1; percentages and hours unchanged |
+| 2026-10-18 | minor | Negative Craft checklist rows: feature breadth 81.6% of 532 → 83.6% of 546 (P0 98.3%, P1 95.0%, P2 57.4%) |
 | 2026-10-14 | minor | Localization ~52% → ~55% (mean of the 12 key languages): de, es, fr, ja and uk catalogs filled |
 | 2026-10-12 | minor | UI/UX remaining 34–58 h → 32–54 h (canvas tools by keyboard); headline numbers unchanged |
 | 2026-10-14 | minor | Merge and HDR: merge 100% → 88% (LR-MERGE-HDR ✅ → 🟡 after testing on real 67 MP brackets; gap 29); area percentages unchanged |

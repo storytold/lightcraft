@@ -86,6 +86,52 @@ fn option_click_opens_just_that_section() {
 }
 
 #[test]
+fn negative_craft_stays_hidden_until_the_edit_menu_enables_it() {
+    let mut h = edit_open();
+    let widgets = |h: &mut Headless| h.request("ui.widgets", json!({}), T).to_string();
+    h.step();
+    let w = widgets(&mut h);
+    assert!(!w.contains("\"section:film\""), "Negative Craft is off until the menu enables it: {w}");
+    assert!(w.contains("\"section:light\""));
+    assert_eq!(crate::menubar::checked(&h.app, "section.film"), Some(false));
+
+    exec(&mut h, "section.film", json!({}));
+    h.step();
+    h.step();
+    assert!(h.app.ui.negative_craft);
+    assert!(h.app.ui.section_open("film"));
+    assert_eq!(crate::menubar::checked(&h.app, "section.film"), Some(true));
+    assert!(widgets(&mut h).contains("\"section:film\""), "the section sits above Light once enabled");
+
+    exec(&mut h, "section.film", json!({"solo": true}));
+    assert!(h.app.ui.negative_craft, "a header click folds the section and leaves Negative Craft on");
+    assert!(h.app.ui.section_open("film"));
+
+    exec(&mut h, "section.film", json!({}));
+    h.step();
+    assert!(!h.app.ui.negative_craft, "the menu item unchecks Negative Craft");
+    assert!(!h.app.ui.section_open("film"));
+    assert_eq!(crate::menubar::checked(&h.app, "section.film"), Some(false));
+    assert!(!widgets(&mut h).contains("\"section:film\""), "unchecking the menu takes the section off an unconverted photo");
+
+    exec(&mut h, "section.film", json!({}));
+    h.step();
+    assert!(h.app.ui.negative_craft);
+
+    click(&mut h, json!({"id": "section:film", "button": "right"}));
+    click(&mut h, json!({"id": "sectionMenu:hideFilm"}));
+    h.step();
+    assert!(!h.app.ui.negative_craft);
+    assert!(!widgets(&mut h).contains("\"section:film\""), "Hide Negative Craft takes the section off photos that are not converted");
+
+    exec(&mut h, "develop.merge", json!({"settings": {"film": {"enabled": true}}, "label": "Negative Craft"}));
+    h.step();
+    h.step();
+    assert!(!h.app.ui.negative_craft, "a converted photo does not turn the panel on for every other photo");
+    assert!(widgets(&mut h).contains("\"section:film\""), "a photo that is already converted still shows Negative Craft");
+}
+
+#[test]
 fn bad_flags_and_unknown_sections_are_refused() {
     let mut h = edit_open();
     for (command, params) in

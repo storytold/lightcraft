@@ -18,6 +18,7 @@ mod export;
 pub(crate) mod face_detect;
 mod face_models;
 mod face_recognize;
+mod film;
 pub mod filters;
 mod focus;
 pub mod geocode;
@@ -144,6 +145,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(edit::specs());
         v.extend(library::specs());
         v.extend(develop::specs());
+        v.extend(film::specs());
         v.extend(color::specs());
         v.extend(curves::specs());
         v.extend(masks::specs());

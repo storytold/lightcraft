@@ -164,6 +164,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("section.effects", "Effects", Some("Cmd+3"), "Window>Edit Sections"),
     ("section.detail", "Detail", Some("Cmd+4"), "Window>Edit Sections"),
     ("section.optics", "Optics", Some("Cmd+5"), "Window>Edit Sections"),
+    ("section.film", "Negative Craft", None, "Window>Edit Sections"),
     ("section.calibration", "Calibration", None, ""),
     // {on?}; no params toggles. Opening one Edit section closes the others.
     ("view.soloSections", "Solo Mode", None, "Window>Edit Sections"),
@@ -1266,6 +1267,19 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             let sec = &s["section.".len()..];
             if app.ui.right != RightPanel::Edit {
                 app.ui.right = RightPanel::Edit;
+            }
+            // The menu (no `solo`) turns Negative Craft on and opens it, or off and closes it.
+            // A header click sends `solo` and only folds the section that is already on screen.
+            if sec == "film" && p.get("solo").is_none() {
+                app.ui.negative_craft = !app.ui.negative_craft;
+                if app.ui.negative_craft {
+                    if !app.ui.section_open(sec) {
+                        app.ui.toggle_section(sec);
+                    }
+                } else {
+                    app.ui.open_sections.retain(|s| s != sec);
+                }
+                return Ok(Value::Null);
             }
             if solo == Some(true) {
                 app.ui.solo_section(sec);

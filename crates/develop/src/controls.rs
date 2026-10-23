@@ -28,6 +28,7 @@ pub enum Section {
     Calibration,
     PointColor,
     RedEye,
+    Film,
 }
 
 impl Section {
@@ -49,6 +50,7 @@ impl Section {
             Section::Calibration => "Calibration",
             Section::PointColor => "Point Color",
             Section::RedEye => "Red Eye",
+            Section::Film => "Negative Craft",
         }
     }
 }
@@ -290,6 +292,26 @@ controls! {
     "calibration.blueHue" => calibration.blue_hue, "Blue Hue", Calibration, -100, 100, 0, 1, 0, Gradient { from: "#30a0d0", to: "#8040d0" };
     "calibration.blueSat" => calibration.blue_sat, "Blue Saturation", Calibration, -100, 100, 0, 1, 0, Gradient { from: "#7a7a7a", to: "#3a60e0" };
     "crop.angle" => crop.geometry.angle, "Straighten", Geometry, -45, 45, 0, 0.01, 2, Centered;
+    "film.baseR" => film.base_r, "Base Red", Film, 1e-4, 4, 1, 0.01, 4, Plain;
+    "film.baseG" => film.base_g, "Base Green", Film, 1e-4, 4, 1, 0.01, 4, Plain;
+    "film.baseB" => film.base_b, "Base Blue", Film, 1e-4, 4, 1, 0.01, 4, Plain;
+    "film.gammaR" => film.gamma_r, "Contrast Red", Film, 0.05, 4, 1, 0.01, 2, Plain;
+    "film.gammaG" => film.gamma_g, "Contrast Green", Film, 0.05, 4, 1, 0.01, 2, Plain;
+    "film.gammaB" => film.gamma_b, "Contrast Blue", Film, 0.05, 4, 1, 0.01, 2, Plain;
+    "film.exposure" => film.exposure, "Exposure", Film, -6, 6, 0, 0.01, 2, Centered;
+    "film.grade" => film.grade, "Contrast", Film, 0.2, 6, 1, 0.01, 2, Plain;
+    "film.black" => film.black, "Blacks", Film, -0.2, 0.5, 0, 0.001, 3, Centered;
+    "film.inset" => film.inset, "Margin", Film, 0, 40, 0, 1, 0, Plain;
+    "film.shoulder" => film.shoulder, "Shoulder", Film, 0, 2, 0, 0.01, 2, Plain;
+    "film.presat" => film.presat, "Saturation", Film, -100, 100, 0, 1, 0, Centered;
+    "film.temp" => film.temp, "Temp", Film, -100, 100, 0, 1, 0, Temp;
+    "film.tint" => film.tint, "Tint", Film, -100, 100, 0, 1, 0, Tint;
+    "film.shadowTemp" => film.shadow_temp, "Shadow Temp", Film, -100, 100, 0, 1, 0, Temp;
+    "film.shadowTint" => film.shadow_tint, "Shadow Tint", Film, -100, 100, 0, 1, 0, Tint;
+    "film.midTemp" => film.mid_temp, "Midtone Temp", Film, -100, 100, 0, 1, 0, Temp;
+    "film.midTint" => film.mid_tint, "Midtone Tint", Film, -100, 100, 0, 1, 0, Tint;
+    "film.highTemp" => film.high_temp, "Highlight Temp", Film, -100, 100, 0, 1, 0, Temp;
+    "film.highTint" => film.high_tint, "Highlight Tint", Film, -100, 100, 0, 1, 0, Tint;
 }
 
 /// Template specs of the indexed controls (`<family>.<field>`; addressed as `<family>.<i>.<field>`).

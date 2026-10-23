@@ -354,6 +354,7 @@ pub fn checked(app: &LightcraftApp, id: &str) -> Option<bool> {
         "view.autoAdvance" => Some(u.auto_advance),
         "view.filterBar" => Some(u.filter_bar),
         "view.soloSections" => Some(u.single_panel),
+        "section.film" => Some(u.negative_craft),
         "view.navigator" => Some(u.navigator),
         "view.layoutImage" => Some(u.layout_image.show && !u.layout_image.path.trim().is_empty()),
         "library.holdView" => Some(app.session.hold_view),

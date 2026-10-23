@@ -355,7 +355,8 @@ fn render_preview(
 }
 
 fn apply_auto(s: &mut DevelopSettings, src: &Rgb32f, info: &SourceInfo) {
-    let a = lightcraft_pipeline::auto::auto_tone(src, info, s);
+    let seen = lightcraft_pipeline::film::for_auto(src, info, &s.film);
+    let a = lightcraft_pipeline::auto::auto_tone(&seen, info, s);
     s.light.exposure = a.exposure;
     s.light.contrast = a.contrast;
     s.light.highlights = a.highlights;
