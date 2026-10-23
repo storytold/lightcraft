@@ -1,5 +1,14 @@
 # What's new in LightCraft
 
+## 2026-10-22
+
+### JPEG Extended XMP metadata reaches the library
+- Import and All Metadata now compose the standard JPEG XMP packet with its referenced Extended XMP packet, so
+  split GPS coordinates and descriptive fields are visible together. Extension chunks are checked for a matching
+  GUID and complete coverage. Original export with **Remove location info** now refuses a GPS-bearing file or a
+  referenced extension it cannot inspect. The separately bounded Read Metadata from File JPEG reader remains
+  standard-APP1-only.
+
 ## 2026-10-21
 
 ### Sharper resampling in HDR and panorama merges

@@ -35,7 +35,113 @@ pub use tags::{TagRow, file_tag_rows, tag_rows};
 pub use xmp::{CRS_NS, LC_NS, XmpData, XmpError, XmpValue, parse_xmp, write_xmp, write_xmp_lc};
 pub use xmp_merge::{MergeRules, merge_xmp};
 
+fn embedded_xmp_error(standard: Option<XmpData>, message: impl Into<String>) -> EmbeddedXmpError {
+    EmbeddedXmpError { standard: standard.map(Box::new), message: message.into() }
+}
+
+fn standard_without_extended_reference(data: &XmpData) -> XmpData {
+    let mut data = data.clone();
+    data.properties.remove("xmpNote:HasExtendedXMP");
+    data.values.remove("xmpNote:HasExtendedXMP");
+    data
+}
+
+fn compose_jpeg_xmp(embedded: &Embedded, packets: &container::JpegXmpPackets) -> Result<(Option<XmpData>, Option<String>), EmbeddedXmpError> {
+    let parsed_standard = embedded.xmp.as_deref().and_then(|packet| parse_xmp(packet).ok());
+    let standard = parsed_standard.as_ref().map(standard_without_extended_reference);
+    let Some(standard_data) = parsed_standard.as_ref() else {
+        if packets.saw_extension {
+            return Err(embedded_xmp_error(None, "Extended XMP is present but its standard packet cannot be parsed"));
+        }
+        return Ok((None, None));
+    };
+    let reference = xmp::extended_xmp_reference(standard_data).map_err(|error| embedded_xmp_error(standard.clone(), error))?;
+    let Some(guid) = reference else {
+        if packets.saw_extension {
+            return Err(embedded_xmp_error(standard, "Extended XMP chunks have no namespace-qualified standard-packet reference"));
+        }
+        return Ok((standard, None));
+    };
+    let extended = packets.assemble(&guid).map_err(|error| embedded_xmp_error(standard.clone(), error))?;
+    let standard_packet = embedded.xmp.as_deref().unwrap_or_default();
+    let composed = xmp::parse_xmp_pair(standard_packet, &extended)
+        .map_err(|error| embedded_xmp_error(standard.clone(), format!("referenced Extended XMP is invalid: {error}")))?;
+    Ok((Some(composed), Some(extended)))
+}
+
+/// The JPEG container's checked XMP composition result, paired with the other embedded blocks.
+pub(crate) fn jpeg_embedded(bytes: &[u8]) -> (Embedded, Result<Option<XmpData>, EmbeddedXmpError>) {
+    let (mut embedded, packets) = container::jpeg_segments_with_packets(bytes);
+    let parsed = compose_jpeg_xmp(&embedded, &packets);
+    let result = match parsed {
+        Ok((data, extension)) => {
+            embedded.xmp_extended = extension;
+            Ok(data)
+        }
+        Err(error) => Err(error),
+    };
+    (embedded, result)
+}
+
+fn compose_non_jpeg_xmp(embedded: &Embedded) -> Result<Option<XmpData>, EmbeddedXmpError> {
+    let parsed_standard = embedded.xmp.as_deref().and_then(|packet| parse_xmp(packet).ok());
+    let standard = parsed_standard.as_ref().map(standard_without_extended_reference);
+    let Some(standard_data) = parsed_standard.as_ref() else {
+        if embedded.xmp_extended.is_some() {
+            return Err(embedded_xmp_error(None, "Extended XMP is present but its standard packet cannot be parsed"));
+        }
+        return Ok(None);
+    };
+    let reference = xmp::extended_xmp_reference(standard_data).map_err(|error| embedded_xmp_error(standard.clone(), error))?;
+    match (reference, embedded.xmp_extended.as_deref()) {
+        (Some(_), Some(extended)) => xmp::parse_xmp_pair(embedded.xmp.as_deref().unwrap_or_default(), extended)
+            .map(Some)
+            .map_err(|error| embedded_xmp_error(standard, format!("referenced Extended XMP is invalid: {error}"))),
+        (Some(_), None) => Err(embedded_xmp_error(standard, "referenced Extended XMP is unavailable")),
+        (None, Some(_)) => Err(embedded_xmp_error(standard, "Extended XMP has no namespace-qualified standard-packet reference")),
+        (None, None) => Ok(standard),
+    }
+}
+
+fn embedded_with_xmp(bytes: &[u8]) -> (Embedded, Result<Option<XmpData>, EmbeddedXmpError>) {
+    if bytes.starts_with(&[0xff, 0xd8]) {
+        return jpeg_embedded(bytes);
+    }
+    let embedded = embedded(bytes);
+    let parsed = compose_non_jpeg_xmp(&embedded);
+    (embedded, parsed)
+}
+
+/// Parse XMP embedded in a file, composing a referenced JPEG Extended XMP packet before projecting metadata.
+/// On an invalid reference or extension, the error retains the parsed standard packet for best-effort reads.
+pub fn parse_embedded_xmp(bytes: &[u8]) -> Result<Option<XmpData>, EmbeddedXmpError> {
+    embedded_with_xmp(bytes).1
+}
+
 use serde::{Deserialize, Serialize};
+
+/// An embedded Extended XMP reference or packet could not be inspected completely.
+/// The standard packet remains available for best-effort reads.
+#[derive(Clone, Debug, PartialEq)]
+pub struct EmbeddedXmpError {
+    standard: Option<Box<XmpData>>,
+    message: String,
+}
+
+impl EmbeddedXmpError {
+    /// Best-effort standard-packet properties parsed before the extension error.
+    pub fn standard(&self) -> Option<&XmpData> {
+        self.standard.as_deref()
+    }
+}
+
+impl std::fmt::Display for EmbeddedXmpError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for EmbeddedXmpError {}
 
 /// GPS position (WGS 84). Latitude/longitude in signed decimal degrees (north / east positive).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -281,12 +387,16 @@ impl Metadata {
 /// Read everything we understand from a whole file (JPEG, PNG, WebP, TIFF-based incl. DNG/raw).
 /// Precedence: EXIF, then IPTC fills gaps, then XMP overrides user fields and fills the rest.
 pub fn extract(bytes: &[u8]) -> Metadata {
-    let e = embedded(bytes);
+    let (e, parsed_xmp) = embedded_with_xmp(bytes);
     let mut m = e.exif.as_deref().map(read_exif).unwrap_or_default();
     if let Some(i) = e.iptc.as_deref() {
         m.fill_missing(&parse_iptc(i));
     }
-    if let Some(x) = e.xmp.as_deref().and_then(|x| parse_xmp(x).ok()) {
+    let xmp = match parsed_xmp {
+        Ok(data) => data,
+        Err(error) => error.standard().cloned(),
+    };
+    if let Some(x) = xmp {
         m.overlay_user_fields(&x.metadata);
         m.fill_missing(&x.metadata);
     }
@@ -318,6 +428,49 @@ pub(crate) fn parse_number(s: &str) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const JPEG_XMP_SIG: &[u8] = b"http://ns.adobe.com/xap/1.0/\0";
+    const JPEG_XMP_EXT_SIG: &[u8] = b"http://ns.adobe.com/xmp/extension/\0";
+
+    fn jpeg_segment(marker: u8, payload: &[u8]) -> Vec<u8> {
+        let len = u16::try_from(payload.len() + 2).expect("test APP1 payload fits u16");
+        let mut segment = vec![0xff, marker];
+        segment.extend_from_slice(&len.to_be_bytes());
+        segment.extend_from_slice(payload);
+        segment
+    }
+
+    fn xmp_jpeg(standard: &str, guid: &str, extension: &str, chunks: &[(u32, &[u8])]) -> Vec<u8> {
+        let mut jpeg = vec![0xff, 0xd8];
+        let mut packet = JPEG_XMP_SIG.to_vec();
+        packet.extend_from_slice(standard.as_bytes());
+        jpeg.extend(jpeg_segment(0xe1, &packet));
+        for (offset, data) in chunks {
+            let mut payload = JPEG_XMP_EXT_SIG.to_vec();
+            payload.extend_from_slice(guid.as_bytes());
+            payload.extend_from_slice(&(extension.len() as u32).to_be_bytes());
+            payload.extend_from_slice(&offset.to_be_bytes());
+            payload.extend_from_slice(data);
+            jpeg.extend(jpeg_segment(0xe1, &payload));
+        }
+        jpeg
+    }
+
+    fn xmp_document(body: &str) -> String {
+        format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" {body}></rdf:Description></rdf:RDF></x:xmpmeta>"#
+        )
+    }
+
+    fn referenced_standard(guid: &str, extra: &str) -> String {
+        xmp_document(&format!(r#"xmlns:reference="http://ns.adobe.com/xmp/note/" reference:HasExtendedXMP="{guid}" {extra}"#))
+    }
+
+    fn split_chunks(packet: &str) -> [(u32, &[u8]); 2] {
+        let split = packet.len() / 2;
+        let (first, second) = packet.as_bytes().split_at(split);
+        [(split as u32, second), (0, first)]
+    }
 
     #[test]
     fn lens_names_from_a_spec_read_like_lightroom() {
@@ -370,5 +523,124 @@ mod tests {
         let m = Metadata { metering_mode: Some(5), exposure_program: Some(3), ..Default::default() };
         assert_eq!(m.metering_name(), Some("Pattern"));
         assert_eq!(m.exposure_program_name(), Some("Aperture-priority AE"));
+    }
+
+    #[test]
+    fn extended_xmp_gps_reaches_extractor() {
+        let guid = "A1234567890123456789012345678901";
+        let extension = xmp_document(r#"xmlns:exif="http://ns.adobe.com/exif/1.0/" exif:GPSLatitude="45,0N" exif:GPSLongitude="7,0E""#);
+        let standard = referenced_standard(guid, "");
+        let jpeg = xmp_jpeg(&standard, guid, &extension, &split_chunks(&extension));
+        let gps = extract(&jpeg).gps.expect("the extension GPS reaches extraction");
+        assert_eq!((gps.latitude, gps.longitude), (45.0, 7.0));
+    }
+
+    #[test]
+    fn extended_xmp_caption_reaches_extractor() {
+        let guid = "B1234567890123456789012345678901";
+        let caption = "multi-chunk caption ".repeat(160);
+        let extension = xmp_document(&format!(r#"xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:description>{caption}</dc:description>"#));
+        let standard = referenced_standard(guid, "");
+        let jpeg = xmp_jpeg(&standard, guid, &extension, &split_chunks(&extension));
+        assert_eq!(extract(&jpeg).caption.as_deref(), Some(caption.trim()));
+    }
+
+    #[test]
+    fn extended_xmp_split_gps_properties_are_combined() {
+        let guid = "C1234567890123456789012345678901";
+        let standard = xmp_document(&format!(
+            r#"xmlns:note="http://ns.adobe.com/xmp/note/" xmlns:exif="http://ns.adobe.com/exif/1.0/" note:HasExtendedXMP="{guid}" exif:GPSLatitude="45,0N""#
+        ));
+        let extension = xmp_document(r#"xmlns:exif="http://ns.adobe.com/exif/1.0/" exif:GPSLongitude="7,0E""#);
+        let jpeg = xmp_jpeg(&standard, guid, &extension, &split_chunks(&extension));
+        let gps = extract(&jpeg).gps.expect("GPS properties across packets compose");
+        assert_eq!((gps.latitude, gps.longitude), (45.0, 7.0));
+    }
+
+    #[test]
+    fn extended_xmp_structured_values_are_composed() {
+        let guid = "F1234567890123456789012345678901";
+        let standard = xmp_document(&format!(
+            r#"xmlns:note="http://ns.adobe.com/xmp/note/" xmlns:exif="http://ns.adobe.com/exif/1.0/" note:HasExtendedXMP="{guid}"><exif:Flash rdf:parseType="Resource"><exif:Fired>True</exif:Fired></exif:Flash>"#
+        ));
+        let extension =
+            xmp_document(r#"xmlns:exif="http://ns.adobe.com/exif/1.0/"><exif:Flash rdf:parseType="Resource"><exif:Mode>2</exif:Mode></exif:Flash>"#);
+        let jpeg = xmp_jpeg(&standard, guid, &extension, &split_chunks(&extension));
+        assert_eq!(extract(&jpeg).flash.map(|flash| flash.raw), Some(17));
+    }
+
+    #[test]
+    fn extended_xmp_rejects_mismatched_guid_and_bad_coverage() {
+        let guid = "D1234567890123456789012345678901";
+        let extension = xmp_document(r#"xmlns:dc="http://purl.org/dc/elements/1.1/" dc:title="Extension title""#);
+        let standard = referenced_standard(guid, r#"xmlns:dc="http://purl.org/dc/elements/1.1/" dc:title="Standard title""#);
+        let bytes = extension.as_bytes();
+        let middle = bytes.len() / 2;
+        let inconsistent_lengths = {
+            let mut jpeg = vec![0xff, 0xd8];
+            let mut standard_payload = JPEG_XMP_SIG.to_vec();
+            standard_payload.extend_from_slice(standard.as_bytes());
+            jpeg.extend(jpeg_segment(0xe1, &standard_payload));
+            for (offset, declared, part) in
+                [(0u32, bytes.len() as u32, &bytes[..middle]), (middle as u32, (bytes.len() + 1) as u32, &bytes[middle..])]
+            {
+                let mut payload = JPEG_XMP_EXT_SIG.to_vec();
+                payload.extend_from_slice(guid.as_bytes());
+                payload.extend_from_slice(&declared.to_be_bytes());
+                payload.extend_from_slice(&offset.to_be_bytes());
+                payload.extend_from_slice(part);
+                jpeg.extend(jpeg_segment(0xe1, &payload));
+            }
+            jpeg
+        };
+        let oversized_length = {
+            let mut jpeg = vec![0xff, 0xd8];
+            let mut standard_payload = JPEG_XMP_SIG.to_vec();
+            standard_payload.extend_from_slice(standard.as_bytes());
+            jpeg.extend(jpeg_segment(0xe1, &standard_payload));
+            let mut payload = JPEG_XMP_EXT_SIG.to_vec();
+            payload.extend_from_slice(guid.as_bytes());
+            payload.extend_from_slice(&(16u32 * 1024 * 1024 + 1).to_be_bytes());
+            payload.extend_from_slice(&0u32.to_be_bytes());
+            payload.extend_from_slice(bytes);
+            jpeg.extend(jpeg_segment(0xe1, &payload));
+            jpeg
+        };
+        let foreign_namespace_reference = {
+            let foreign_standard = xmp_document(&format!(
+                r#"xmlns:note="urn:example:foreign-note" note:HasExtendedXMP="{guid}" xmlns:dc="http://purl.org/dc/elements/1.1/" dc:title="Standard title""#
+            ));
+            xmp_jpeg(&foreign_standard, guid, &extension, &split_chunks(&extension))
+        };
+        let mut truncated_segment = xmp_jpeg(&standard, guid, &extension, &split_chunks(&extension));
+        truncated_segment.pop();
+
+        let cases = [
+            xmp_jpeg(&standard, "E1234567890123456789012345678901", &extension, &split_chunks(&extension)),
+            xmp_jpeg(&standard, guid, &extension, &[(0, &bytes[..middle]), ((middle + 1) as u32, &bytes[middle..])]),
+            xmp_jpeg(&standard, guid, &extension, &[(0, &bytes[..middle]), ((middle - 1) as u32, &bytes[middle..])]),
+            xmp_jpeg(&standard, guid, &extension, &[(0, bytes), (0, bytes)]),
+            xmp_jpeg(&standard, guid, &extension, &[(0, &bytes[..middle])]),
+            inconsistent_lengths,
+            oversized_length,
+            truncated_segment,
+            foreign_namespace_reference,
+        ];
+        for (index, jpeg) in cases.iter().enumerate() {
+            assert!(embedded(jpeg).xmp_extended.is_none(), "malformed extension case {index} was exposed");
+            assert_eq!(extract(jpeg).title.as_deref(), Some("Standard title"), "standard XMP remains readable");
+            let error = parse_embedded_xmp(jpeg).expect_err("invalid referenced extension is reported");
+            assert_eq!(error.standard().and_then(|xmp| xmp.metadata.title.as_deref()), Some("Standard title"));
+        }
+    }
+
+    #[test]
+    fn standard_only_jpeg_xmp_still_extracts() {
+        let standard = xmp_document(r#"xmlns:dc="http://purl.org/dc/elements/1.1/" dc:title="Standard-only title""#);
+        let mut jpeg = vec![0xff, 0xd8];
+        let mut packet = JPEG_XMP_SIG.to_vec();
+        packet.extend_from_slice(standard.as_bytes());
+        jpeg.extend(jpeg_segment(0xe1, &packet));
+        assert_eq!(extract(&jpeg).title.as_deref(), Some("Standard-only title"));
     }
 }

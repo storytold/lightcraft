@@ -8,11 +8,12 @@ Photo metadata: EXIF, XMP (read + write), IPTC-IIM, and the containers that carr
 |---|---|
 | `read_exif(&[u8]) -> Metadata` | TIFF-structured Exif block (whole TIFF/DNG/raw file, or JPEG APP1 payload with/without `Exif\0\0`). `try_read_exif` reports header errors. |
 | `from_tiff(&Tiff) -> Metadata` | Same, from an already parsed stream (used by `lightcraft-raw`). |
-| `embedded(&[u8]) -> Embedded` | Sniffs JPEG / PNG / WebP / TIFF and returns the Exif, XMP (+ extended XMP), ICC and IPTC blocks. `jpeg_segments`, `png_chunks`, `webp_chunks` are the per-container walkers. |
+| `embedded(&[u8]) -> Embedded` | Sniffs JPEG / PNG / WebP / TIFF and returns the Exif, XMP (including a validated, referenced JPEG Extended XMP packet), ICC and IPTC blocks. `jpeg_segments`, `png_chunks`, `webp_chunks` are the per-container walkers. |
 | `parse_xmp(&str) -> Result<XmpData>` | Metadata + the opaque `lc:settings` JSON + every property (`prefix:name`, structs flattened as `a:b/c:d`). |
+| `parse_embedded_xmp(&[u8]) -> Result<Option<XmpData>, EmbeddedXmpError>` | Parses embedded XMP and composes a referenced JPEG Extended XMP packet before projecting metadata. On an invalid extension, the error retains parsed standard-packet data for best-effort reads. |
 | `write_xmp(&Metadata, Option<&str>) -> String` | Complete `<?xpacket?>` packet; the second argument is LightCraft's full develop settings JSON. |
 | `parse_iptc(&[u8]) -> Metadata` | IIM record 2: title (2:5), keywords (2:25), by-line (2:80), copyright (2:116), caption (2:120), date/time created (2:55/2:60). |
-| `extract(&[u8]) -> Metadata` | Everything for a whole file. Precedence: EXIF → IPTC fills gaps → XMP overrides user fields (rating, label, title, caption, artist, copyright, keywords, GPS) and fills the rest. |
+| `extract(&[u8]) -> Metadata` | Everything for a whole file. Precedence: EXIF → IPTC fills gaps → XMP (including valid referenced JPEG Extended XMP) overrides user fields (rating, label, title, caption, artist, copyright, keywords, GPS) and fills the rest. |
 
 `Metadata` carries camera (make, model, serial, software), lens (make, model, serial, specification), capture
 (date-time with UTC offset and milliseconds, exposure time, f-number, ISO incl. extended ISO, focal length and
@@ -26,6 +27,19 @@ Written: `dc`, `xmp`, `photoshop`, `exif`, `exifEX`, `tiff`, `lr` (`hierarchical
 prefixes by namespace URI, handles attribute and element forms, `rdf:Seq`/`Bag`/`Alt` (x-default first),
 `rdf:parseType="Resource"` and nested-description structs, predefined and numeric entities. Nesting depth
 and node count are limited.
+
+## JPEG Extended XMP
+
+The embedded extractor follows only the extension selected by the standard packet's namespace-qualified
+`xmpNote:HasExtendedXMP` property. It matches the 32-character hexadecimal GUID, requires consistent declared
+lengths and complete, nonoverlapping chunk coverage, and accepts chunks in any order. Assembly is limited to 16 MiB
+and 4,096 chunks; truncated APP1 payloads, malformed headers, gaps, overlaps, duplicate offsets and invalid UTF-8
+are rejected. A failed extension leaves the standard packet available to best-effort extraction, while
+`parse_embedded_xmp` reports why the referenced packet could not be inspected.
+
+This applies to embedded extraction and `photo.allMetadata`. The separately bounded **Read Metadata from File**
+JPEG reader remains standard-APP1-only; it does not assemble Extended XMP or inspect packets between scans (details
+in [XMP interop](../../docs/xmp-interop.md)).
 
 ## Robustness
 

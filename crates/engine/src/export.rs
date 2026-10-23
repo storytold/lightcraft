@@ -1827,10 +1827,17 @@ impl PreparedExport {
                 };
                 let Some(dng) = dng else {
                     // the file is copied byte for byte: refuse rather than leak a location it embeds
-                    if remove_location && lightcraft_meta::extract(&bytes).gps.is_some() {
-                        return Err(format!(
-                            "{label}: can't remove the location from an original file that embeds GPS; export as JPEG, TIFF or DNG instead"
-                        ));
+                    if remove_location {
+                        if lightcraft_meta::extract(&bytes).gps.is_some() {
+                            return Err(format!(
+                                "{label}: can't remove the location from an original file that embeds GPS; export as JPEG, TIFF or DNG instead"
+                            ));
+                        }
+                        if let Err(error) = lightcraft_meta::parse_embedded_xmp(&bytes) {
+                            return Err(format!(
+                                "{label}: can't verify the location because embedded XMP could not be inspected ({error}); export as JPEG, TIFF or DNG instead"
+                            ));
+                        }
                     }
                     return Ok(Exported {
                         file_name,

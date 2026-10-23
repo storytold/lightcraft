@@ -140,13 +140,21 @@ pub fn specs() -> Vec<CommandSpec> {
                 .map(|r| json!({"group": r.group, "tag": r.tag, "name": r.name, "value": r.value}))
                 .collect();
             // Keep sidecar precedence; reuse the loaded bytes for embedded XMP.
-            let packet = match crate::sidecar::find_sidecar(path, s.sidecar_naming(ph.id)) {
-                Some(sc) => std::fs::read_to_string(sc).ok(),
-                None => lightcraft_meta::embedded(&bytes).xmp,
+            let parsed_xmp = match crate::sidecar::find_sidecar(path, s.sidecar_naming(ph.id)) {
+                Some(sc) => std::fs::read_to_string(sc).ok().and_then(|packet| lightcraft_meta::parse_xmp(&packet).ok()),
+                None => match lightcraft_meta::parse_embedded_xmp(&bytes) {
+                    Ok(data) => data,
+                    Err(error) => error.standard().cloned(),
+                },
             };
-            let xmp: Vec<Value> = packet
-                .and_then(|x| lightcraft_meta::parse_xmp(&x).ok())
-                .map(|d| d.properties.into_iter().filter(|(k, _)| !k.starts_with("lc:")).map(|(k, v)| json!({"name": k, "value": v.join("; ")})).collect())
+            let xmp: Vec<Value> = parsed_xmp
+                .map(|d| {
+                    d.properties
+                        .into_iter()
+                        .filter(|(k, _)| !k.starts_with("lc:"))
+                        .map(|(k, v)| json!({"name": k, "value": v.join("; ")}))
+                        .collect()
+                })
                 .unwrap_or_default();
             Ok(json!({"exif": exif, "xmp": xmp}))
         }),

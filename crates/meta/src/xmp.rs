@@ -20,6 +20,7 @@ pub const LC_NS: &str = "http://ns.lightcraft.app/lc/1.0/";
 const NAMESPACES: &[(&str, &str)] = &[
     ("x", "adobe:ns:meta/"),
     ("rdf", "http://www.w3.org/1999/02/22-rdf-syntax-ns#"),
+    ("xmpNote", "http://ns.adobe.com/xmp/note/"),
     ("dc", "http://purl.org/dc/elements/1.1/"),
     ("xmp", "http://ns.adobe.com/xap/1.0/"),
     ("xmpRights", "http://ns.adobe.com/xap/1.0/rights/"),
@@ -468,6 +469,52 @@ fn fmt_gps_coord(v: f64, pos: char, neg: char) -> String {
 
 /// Parse an XMP packet (with or without the `<?xpacket?>` wrapper / `x:xmpmeta` element).
 pub fn parse_xmp(s: &str) -> Result<XmpData, XmpError> {
+    let (props, values) = parse_xmp_properties(s)?;
+    Ok(project_xmp(props, values))
+}
+
+/// Parse two RDF packets into one XMP data model before projecting fields into `Metadata`.
+pub(crate) fn parse_xmp_pair(standard: &str, extended: &str) -> Result<XmpData, XmpError> {
+    let (mut properties, mut values) = parse_xmp_properties(extended)?;
+    let (standard_properties, standard_values) = parse_xmp_properties(standard)?;
+    for (key, value) in standard_properties {
+        properties.insert(key, value);
+    }
+    for (key, standard_value) in standard_values {
+        values.entry(key).and_modify(|extended_value| *extended_value = merge_xmp_value(&standard_value, extended_value)).or_insert(standard_value);
+    }
+    properties.remove("xmpNote:HasExtendedXMP");
+    values.remove("xmpNote:HasExtendedXMP");
+    Ok(project_xmp(properties, values))
+}
+
+/// The selector is meaningful only when the property resolves to Adobe's XMP Note namespace.
+pub(crate) fn extended_xmp_reference(data: &XmpData) -> Result<Option<String>, String> {
+    let Some(values) = data.properties.get("xmpNote:HasExtendedXMP") else { return Ok(None) };
+    let [value] = values.as_slice() else {
+        return Err("XMP HasExtendedXMP reference must occur exactly once".into());
+    };
+    let value = value.as_bytes();
+    if value.len() != 32 || !value.iter().all(u8::is_ascii_hexdigit) {
+        return Err("XMP HasExtendedXMP reference must be 32 hexadecimal characters".into());
+    }
+    Ok(Some(values[0].to_ascii_uppercase()))
+}
+
+fn merge_xmp_value(preferred: &XmpValue, fallback: &XmpValue) -> XmpValue {
+    match (preferred, fallback) {
+        (XmpValue::Struct(preferred), XmpValue::Struct(fallback)) => {
+            let mut merged = fallback.clone();
+            for (key, value) in preferred {
+                merged.entry(key.clone()).and_modify(|fallback| *fallback = merge_xmp_value(value, fallback)).or_insert_with(|| value.clone());
+            }
+            XmpValue::Struct(merged)
+        }
+        _ => preferred.clone(),
+    }
+}
+
+fn parse_xmp_properties(s: &str) -> Result<(BTreeMap<String, Vec<String>>, BTreeMap<String, XmpValue>), XmpError> {
     let s = s.trim_start_matches('\u{feff}');
     let tree = parse_tree(s)?;
     let mut descs = Vec::new();
@@ -480,6 +527,10 @@ pub fn parse_xmp(s: &str) -> Result<XmpData, XmpError> {
             values.extend(m);
         }
     }
+    Ok((props, values))
+}
+
+fn project_xmp(props: BTreeMap<String, Vec<String>>, values: BTreeMap<String, XmpValue>) -> XmpData {
     let first = |k: &str| props.get(k).and_then(|v| v.first()).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
     let num = |k: &str| first(k).and_then(|s| parse_number(&s));
     let mut m = Metadata {
@@ -556,7 +607,7 @@ pub fn parse_xmp(s: &str) -> Result<XmpData, XmpError> {
     }
     m.regions = values.get("mwg-rs:Regions").map(parse_regions).unwrap_or_default();
     let lc_settings = props.get("lc:settings").and_then(|v| v.first()).cloned();
-    Ok(XmpData { metadata: m, lc_settings, properties: props, values })
+    XmpData { metadata: m, lc_settings, properties: props, values }
 }
 
 fn frac(v: f64) -> String {
