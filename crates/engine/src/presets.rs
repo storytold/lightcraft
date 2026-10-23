@@ -523,7 +523,17 @@ impl Session {
         if let Some(p) = profile(id) {
             return Some((p.name, p.group));
         }
-        self.lut_profiles.iter().find(|p| p.id == id).map(|p| (p.name.as_str(), p.group.as_str()))
+        if let Some(p) = self.lut_profiles.iter().find(|p| p.id == id) {
+            return Some((p.name.as_str(), p.group.as_str()));
+        }
+        self.dcp_profiles.iter().find(|p| p.id == id).map(|p| (p.name.as_str(), crate::cmd::dcp_profiles::DCP_GROUP))
+    }
+
+    /// The imported profiles as (id, name, group): LUT profiles, then camera profiles (`.dcp`).
+    pub fn imported_profiles(&self) -> Vec<(String, String, String)> {
+        let luts = self.lut_profiles.iter().map(|p| (p.id.clone(), p.name.clone(), p.group.clone()));
+        let dcps = self.dcp_profiles.iter().map(|p| (p.id.clone(), p.name.clone(), crate::cmd::dcp_profiles::DCP_GROUP.to_string()));
+        luts.chain(dcps).collect()
     }
 
     /// Remember `id` as the most recently applied profile.
@@ -537,28 +547,30 @@ impl Session {
     pub fn profile_menu(&self) -> Value {
         let item =
             |p: &ProfileInfo| json!({"id": p.id, "name": p.name, "group": p.group, "favorite": self.profile_favorites.iter().any(|f| f == p.id)});
-        let lut_item = |id: &str| {
-            self.lut_profiles
-                .iter()
-                .find(|p| p.id == id)
-                .map(|p| json!({"id": p.id, "name": p.name, "group": p.group, "favorite": self.profile_favorites.contains(&p.id), "imported": true}))
+        let imported = self.imported_profiles();
+        let imported_item = |(id, name, group): &(String, String, String)| {
+            let mut v = json!({"id": id, "name": name, "group": group, "favorite": self.profile_favorites.contains(id), "imported": true});
+            if let Some(d) = self.dcp_profiles.iter().find(|d| &d.id == id) {
+                v["cameraModel"] = json!(d.camera_model);
+            }
+            v
         };
+        let lut_item = |id: &str| imported.iter().find(|p| p.0 == id).map(imported_item);
         let list = |ids: &[String]| ids.iter().filter_map(|id| profile(id).map(item).or_else(|| lut_item(id))).collect::<Vec<_>>();
         let mut groups: Vec<Value> = profile_groups()
             .into_iter()
             .map(|g| json!({"name": g, "profiles": PROFILES.iter().filter(|p| p.group == g).map(item).collect::<Vec<_>>()}))
             .collect();
-        // imported LUT profiles, by their groups
+        // imported LUT profiles by their groups, then camera profiles
         let mut lut_groups: Vec<&str> = self.lut_profiles.iter().map(|p| p.group.as_str()).collect();
         lut_groups.sort_unstable();
         lut_groups.dedup();
+        if !self.dcp_profiles.is_empty() {
+            lut_groups.push(crate::cmd::dcp_profiles::DCP_GROUP);
+        }
+        lut_groups.dedup();
         for g in lut_groups {
-            let profiles: Vec<Value> = self
-                .lut_profiles
-                .iter()
-                .filter(|p| p.group == g)
-                .map(|p| json!({"id": p.id, "name": p.name, "group": p.group, "favorite": self.profile_favorites.contains(&p.id), "imported": true}))
-                .collect();
+            let profiles: Vec<Value> = imported.iter().filter(|p| p.2 == g).map(imported_item).collect();
             groups.push(json!({"name": g, "profiles": profiles, "imported": true}));
         }
         json!({

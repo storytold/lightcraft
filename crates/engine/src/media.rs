@@ -24,6 +24,7 @@ use lightcraft_develop::DevelopSettings;
 use lightcraft_pipeline::{Quality, RenderRequest, Rendered, SourceInfo, StageCache};
 use lightcraft_preview::{Hash128, Hasher128, Lru, PreviewCache};
 use lightcraft_raster::{Histogram, Rgb32f, Rgba8};
+pub use lightcraft_raw::dcp::DcpProfile;
 use serde::{Deserialize, Serialize};
 
 const SETTINGS_HASH_ENTRIES: usize = 1024;
@@ -130,12 +131,14 @@ fn source_edge_needed(p: &Photo, settings: &DevelopSettings, apply_crop: bool, o
 }
 
 /// Decodes a file into a linear Rec.2020 image no larger than `max_edge` (set by the app).
-pub type FileLoader = Arc<dyn Fn(&str, usize) -> Result<(Rgb32f, SourceInfo), String> + Send + Sync>;
+/// The third argument is the photo's imported camera profile ([`crate::cmd::dcp_profiles`]): a raw file is developed
+/// with its colour model.
+pub type FileLoader = Arc<dyn Fn(&str, usize, Option<&DcpProfile>) -> Result<(Rgb32f, SourceInfo), String> + Send + Sync>;
 
 /// [`FileLoader`] for a thumbnail: a raw file that keeps smaller copies of its raw image (Lightroom's merged DNGs)
 /// develops the smallest that covers `max_edge` (set by the app); the flag says it did. Never used for an export,
 /// which must render the full image.
-pub type ReducedLoader = Arc<dyn Fn(&str, usize) -> Result<(Rgb32f, SourceInfo, bool), String> + Send + Sync>;
+pub type ReducedLoader = Arc<dyn Fn(&str, usize, Option<&DcpProfile>) -> Result<(Rgb32f, SourceInfo, bool), String> + Send + Sync>;
 
 /// A raw file's embedded (camera-rendered) preview as display sRGB, oriented, no larger than
 /// `max_edge` (set by the app). `None`: no usable preview.
@@ -158,7 +161,8 @@ pub struct DenoiseSpec {
 
 /// Decodes a raw file once and develops it twice: as usual, and from the denoised picture in `spec` when that can be
 /// read (`None` when it cannot). Both are at most `max_edge` long and the same size.
-pub type PairLoader = Arc<dyn Fn(&str, usize, &DenoiseSpec) -> Result<(Rgb32f, Option<Rgb32f>, SourceInfo), String> + Send + Sync>;
+pub type PairLoader =
+    Arc<dyn Fn(&str, usize, &DenoiseSpec, Option<&DcpProfile>) -> Result<(Rgb32f, Option<Rgb32f>, SourceInfo), String> + Send + Sync>;
 
 /// A photo's denoised picture next to its plain one, and the last mix of the two that was asked for.
 pub struct Twin {
@@ -188,6 +192,9 @@ pub struct DecodedSource {
     pub camera_tone: Option<lightcraft_pipeline::tone::CameraTone>,
     /// The same picture developed from the AI-denoised mosaic, when the photo has one cached.
     pub denoised: Option<Arc<Twin>>,
+    /// The imported camera profile (`dcp:…` id) the raw file was developed with, if any: a cached source made with
+    /// another one (or none) doesn't stand in for it.
+    pub camera_profile: Option<String>,
     /// These pixels came from the photo's smart preview (an offline original), not from its file.
     /// A refresh must never rebuild a proxy from itself: that would stamp its older look as current.
     pub from_proxy: bool,
@@ -198,7 +205,7 @@ pub struct DecodedSource {
 
 impl DecodedSource {
     pub fn new(image: Arc<Rgb32f>, info: Option<SourceInfo>) -> Self {
-        DecodedSource { image, info, camera_tone: None, denoised: None, from_proxy: false, reduced: false }
+        DecodedSource { image, info, camera_tone: None, denoised: None, camera_profile: None, from_proxy: false, reduced: false }
     }
 
     /// The picture to develop for a Denoise `amount` (0 to 1, see [`DevelopSettings::denoise_amount`]): the plain one,
@@ -269,6 +276,8 @@ pub enum SourceRef {
         fallback: Option<std::path::PathBuf>,
         /// The photo has a cached denoised picture: load it with the plain one (see [`PairLoader`]).
         denoise: Option<(DenoiseSpec, PairLoader)>,
+        /// The photo's imported camera profile (id and profile): its raw file is developed with it.
+        camera_profile: Option<(String, Arc<DcpProfile>)>,
         /// A thumbnail's loader, used instead of `loader` (see [`ReducedLoader`]); `None` for every other job.
         reduced: Option<ReducedLoader>,
     },
@@ -296,12 +305,17 @@ impl SourceRef {
                 return Ok(DecodedSource { image: Arc::new(image), denoised: None, ..(**from).clone() });
             }
             SourceRef::Demo { scene, max_edge } => crate::demo::scene_pixels(scene, *max_edge)?,
-            SourceRef::File { path, max_edge, loader, fallback, denoise, reduced } => {
+            SourceRef::File { path, max_edge, loader, fallback, denoise, camera_profile, reduced } => {
+                let dcp = camera_profile.as_ref().map(|(_, p)| p.as_ref());
+                let made_with = camera_profile.as_ref().map(|(id, _)| id.clone());
                 let plain = || match (reduced, loader) {
-                    (Some(l), _) => {
-                        l(path, *max_edge).map(|(image, info, reduced)| DecodedSource { reduced, ..DecodedSource::new(Arc::new(image), Some(info)) })
-                    }
-                    (None, Some(l)) => l(path, *max_edge).map(|(image, info)| DecodedSource::new(Arc::new(image), Some(info))),
+                    (Some(l), _) => l(path, *max_edge, dcp).map(|(image, info, reduced)| DecodedSource {
+                        reduced,
+                        camera_profile: made_with.clone(),
+                        ..DecodedSource::new(Arc::new(image), Some(info))
+                    }),
+                    (None, Some(l)) => l(path, *max_edge, dcp)
+                        .map(|(image, info)| DecodedSource { camera_profile: made_with.clone(), ..DecodedSource::new(Arc::new(image), Some(info)) }),
                     (None, None) => Err(format!("no decoder available for {path}")),
                 };
                 // the denoised picture comes with the plain one from a single decode; when it cannot be read the
@@ -315,7 +329,7 @@ impl SourceRef {
                             None => true,
                         };
                         if made {
-                            pair(path, *max_edge, spec).and_then(|(image, twin, info)| {
+                            pair(path, *max_edge, spec, dcp).and_then(|(image, twin, info)| {
                                 if spec.make.is_some() && twin.is_none() {
                                     return Err("the cached AI Denoise picture could not be read; clear the denoise cache and retry".into());
                                 }
@@ -324,6 +338,7 @@ impl SourceRef {
                                     info: Some(info),
                                     camera_tone: None,
                                     denoised: twin.map(|t| Arc::new(Twin::new(Arc::new(t)))),
+                                    camera_profile: made_with.clone(),
                                     from_proxy: false,
                                     reduced: false,
                                 })
@@ -387,6 +402,26 @@ pub struct MediaCache {
     pub rendered: Arc<PreviewCache>,
     /// Which photos have a cached denoised picture, and how to read it.
     pub denoise: DenoiseIndex,
+    /// Imported camera profiles by id ([`crate::cmd::dcp_profiles`]), handed to the decoder of photos using them.
+    pub camera_profiles: std::collections::HashMap<String, LoadedCameraProfile>,
+}
+
+/// An imported camera profile ready for the decoder, with a fingerprint of its file: decoded sources and cached renders
+/// made with it carry the fingerprint, so a profile deleted, or replaced by another under the same id, never has
+/// its old pictures stand in.
+#[derive(Clone, Debug)]
+pub struct LoadedCameraProfile {
+    pub profile: Arc<DcpProfile>,
+    /// Never 0 (0 is "no camera profile" in a render key).
+    pub fingerprint: u64,
+}
+
+impl LoadedCameraProfile {
+    /// Parse a `.dcp` file's bytes.
+    pub fn parse(bytes: &[u8]) -> Result<Self, lightcraft_raw::dcp::DcpError> {
+        let profile = lightcraft_raw::dcp::parse_dcp(bytes)?;
+        Ok(LoadedCameraProfile { profile: Arc::new(profile), fingerprint: Hasher128::new().update(bytes).finish().0 as u64 | 1 })
+    }
 }
 
 /// The photos that have a cached denoised picture for the denoise model in use. Only memory: nothing here touches the
@@ -457,6 +492,7 @@ impl Default for MediaCache {
             scenes: Vec::new(),
             rendered: Arc::new(PreviewCache::memory(rendered_budget(budget))),
             denoise: DenoiseIndex::default(),
+            camera_profiles: HashMap::new(),
         }
     }
 }
@@ -589,14 +625,16 @@ impl MediaCache {
     }
 
     /// The facts of photo `id`'s cached sources: the decoder's when one has them, else `header`
-    /// (with a smart preview's stored camera tone curve).
-    fn source_facts(&self, id: PhotoId, header: SourceInfo) -> SourceInfo {
+    /// (with a smart preview's stored camera tone curve). Only sources developed with `profile` (the photo's imported
+    /// camera profile tag, [`Self::camera_profile_of`], or none) count: one made with another profile has its facts.
+    fn source_facts(&self, id: PhotoId, header: SourceInfo, profile: Option<&str>) -> SourceInfo {
         let cached = || {
             self.thumbs
                 .peek(&id)
                 .into_iter()
                 .chain(self.previews.iter().filter(|e| e.0 == id).map(|e| &e.1))
                 .chain(self.full.iter().filter(|e| e.0 == id).map(|e| &e.1))
+                .filter(|s| s.camera_profile.as_deref() == profile)
         };
         match cached().find(|s| s.info.is_some()).or_else(|| cached().next()) {
             Some(s) => s.info_or(header),
@@ -608,7 +646,7 @@ impl MediaCache {
         self.insert_source(id, level, DecodedSource::new(img, None));
     }
 
-    fn insert_source(&mut self, id: PhotoId, level: SourceLevel, img: DecodedSource) {
+    pub(crate) fn insert_source(&mut self, id: PhotoId, level: SourceLevel, img: DecodedSource) {
         let tick = lightcraft_preview::next_tick();
         match level {
             SourceLevel::Thumb => {
@@ -683,24 +721,42 @@ impl MediaCache {
         self.source_ref_with(p, level, false)
     }
 
+    /// [`Self::source_ref`] without the photo's imported camera profile (keeping its denoised picture): a smart
+    /// preview keeps the file's own colour, and a cached source developed with the profile doesn't stand in for it.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn source_ref_without_profile(&mut self, p: &Photo, level: SourceLevel) -> SourceRef {
+        self.source_ref_for(p, level, true, None)
+    }
+
     fn source_ref_with(&mut self, p: &Photo, level: SourceLevel, cached: bool) -> SourceRef {
-        let mut r = self.source_ref_plain(p, level, cached);
+        let wanted = self.camera_profile_of(p);
+        self.source_ref_for(p, level, cached, wanted)
+    }
+
+    /// [`Self::source_ref_with`] developed with camera profile `wanted` (none: the file's own colour).
+    fn source_ref_for(&mut self, p: &Photo, level: SourceLevel, cached: bool, wanted: Option<(String, Arc<DcpProfile>)>) -> SourceRef {
+        let mut r = self.source_ref_plain(p, level, cached, wanted);
         if let (SourceRef::File { denoise, .. }, Some((spec, loader))) = (&mut r, self.denoise.get(p.id)) {
             *denoise = Some((spec.clone(), loader.clone()));
         }
         r
     }
 
-    fn source_ref_plain(&mut self, p: &Photo, level: SourceLevel, cached: bool) -> SourceRef {
-        if cached && let Some(a) = self.get_source(p.id, level) {
+    fn source_ref_plain(&mut self, p: &Photo, level: SourceLevel, cached: bool, wanted: Option<(String, Arc<DcpProfile>)>) -> SourceRef {
+        // (a source developed with another camera profile, or none, doesn't stand in)
+        if cached
+            && let Some(a) = self.get_source(p.id, level)
+            && a.camera_profile == wanted.as_ref().map(|(id, _)| id.clone())
+        {
             return SourceRef::Loaded(Box::new(a));
         }
         // a thumbnail of a photo whose preview is decoded (the one in the loupe) is cut from it; not
-        // with a denoised picture, which the thumbnail would lose
+        // with a denoised picture, which the thumbnail would lose, nor from one decoded with another camera profile
         if cached
             && level == SourceLevel::Thumb
             && self.denoise.spec(p.id).is_none()
             && let Some(big) = self.get_source(p.id, SourceLevel::Preview)
+            && big.camera_profile == wanted.as_ref().map(|(tag, _)| tag.clone())
         {
             return SourceRef::Fit { from: Box::new(big), max_edge: level.max_edge() };
         }
@@ -723,12 +779,36 @@ impl MediaCache {
                 return SourceRef::Smart { path: sp };
             }
             let mut r = self.origin_ref(&p.source, max_edge);
-            if let SourceRef::File { fallback, .. } = &mut r {
+            if let SourceRef::File { fallback, camera_profile, .. } = &mut r {
                 *fallback = Some(sp);
+                *camera_profile = wanted;
             }
             return r;
         }
-        self.origin_ref(&p.source, max_edge)
+        let mut r = self.origin_ref(&p.source, max_edge);
+        if let SourceRef::File { camera_profile, .. } = &mut r {
+            *camera_profile = wanted;
+        }
+        r
+    }
+
+    /// The imported camera profile photo `p` develops with, when its profile setting names one this library has: what a
+    /// source decoded with it is tagged with (its id and the file's fingerprint), and the profile.
+    pub fn camera_profile_of(&self, p: &Photo) -> Option<(String, Arc<DcpProfile>)> {
+        let id = &p.develop.profile.id;
+        if !crate::cmd::dcp_profiles::is_dcp_id(id) {
+            return None;
+        }
+        self.camera_profiles.get(id).map(|d| (format!("{id}#{:016x}", d.fingerprint), d.profile.clone()))
+    }
+
+    /// What a render with profile `profile_id` adds to its cache keys: the imported camera profile's fingerprint, 0
+    /// for any other profile and for a camera profile this library no longer has (it renders without it).
+    pub fn camera_profile_salt(&self, profile_id: &str) -> u64 {
+        if !crate::cmd::dcp_profiles::is_dcp_id(profile_id) {
+            return 0;
+        }
+        self.camera_profiles.get(profile_id).map_or(0, |d| d.fingerprint)
     }
 
     /// How to load `origin` at most `max_edge` pixels long, ignoring decoded sources in memory (a
@@ -741,12 +821,26 @@ impl MediaCache {
                 }
                 match self.scenes.iter().find(|s| s.id == *scene) {
                     Some(s) => SourceRef::Demo { scene: Box::new(s.clone()), max_edge },
-                    None => SourceRef::File { path: format!("demo:{scene}"), max_edge, loader: None, fallback: None, denoise: None, reduced: None },
+                    None => SourceRef::File {
+                        path: format!("demo:{scene}"),
+                        max_edge,
+                        loader: None,
+                        fallback: None,
+                        denoise: None,
+                        camera_profile: None,
+                        reduced: None,
+                    },
                 }
             }
-            Source::File { path } => {
-                SourceRef::File { path: path.clone(), max_edge, loader: self.file_loader.clone(), fallback: None, denoise: None, reduced: None }
-            }
+            Source::File { path } => SourceRef::File {
+                path: path.clone(),
+                max_edge,
+                loader: self.file_loader.clone(),
+                fallback: None,
+                denoise: None,
+                camera_profile: None,
+                reduced: None,
+            },
         }
     }
 }
@@ -1294,6 +1388,7 @@ impl crate::Session {
         // Temporary "before" settings must not replace the photo's cached develop hash.
         let settings_hash = if before { settings.hash64() } else { self.media.settings_hashes.get(id, &settings) };
         let salt = self.media.denoise_salt(id, &settings);
+        let profile_salt = self.media.camera_profile_salt(&settings.profile.id);
         let key = settings_hash
             ^ ((max_w as u64) << 40)
             ^ ((max_h as u64) << 20)
@@ -1301,13 +1396,18 @@ impl crate::Session {
             ^ (level as u64) << 60
             ^ id.0.wrapping_mul(0x9e37_79b9_7f4a_7c15)
             ^ content.rotate_left(17)
-            ^ salt;
+            ^ salt
+            ^ profile_salt.rotate_left(29);
         let cache = thumb_bucket.map(|b| {
             let mut k = Hasher128::new();
             k.str(&content_key).u64(settings_hash).u64(b as u64).u64(RENDER_CACHE_VERSION).u64(crate::camera_profiles::cache_key());
             // (only a render that uses a denoised picture has it in its key, so every other thumbnail stays valid)
             if salt != 0 {
                 k.u64(salt);
+            }
+            // (likewise an imported camera profile's file: deleted or replaced, the thumbnail renders afresh)
+            if profile_salt != 0 {
+                k.str("dcp").u64(profile_salt);
             }
             (self.media.rendered.clone(), k.finish())
         });
@@ -1337,21 +1437,33 @@ impl crate::Session {
     /// temporary preview while hovering a preset or profile; nothing is committed or cached).
     pub fn preview_job(&mut self, id: PhotoId, max_w: usize, max_h: usize, apply_crop: bool, settings: &DevelopSettings) -> Option<RenderJob> {
         let mut job = self.render_job(id, max_w, max_h, false, apply_crop)?;
+        // the source as these settings develop it: another camera profile (or none) decodes anew
+        let mut p = (**self.catalog.photo(id)?).clone();
+        if self.media.camera_profile_of(&p).map(|c| c.0) != {
+            p.develop = Arc::new(settings.clone());
+            self.media.camera_profile_of(&p).map(|c| c.0)
+        } {
+            job.source = self.media.source_ref(&p, job.level);
+        }
         job.settings = Arc::new(settings.clone());
         job.key = settings.hash64() ^ ((max_w as u64) << 40) ^ ((max_h as u64) << 20) ^ (apply_crop as u64) ^ (job.level as u64) << 60;
         Some(job)
     }
 
     /// Cache key of a variant thumbnail ([`Self::variant_job`]).
-    pub fn variant_key(p: &Photo, settings: &DevelopSettings, edge: usize) -> Hash128 {
-        Hasher128::new()
-            .str(&content_key(p))
+    /// `profile_salt`: [`MediaCache::camera_profile_salt`] of `settings`' profile.
+    pub fn variant_key(p: &Photo, settings: &DevelopSettings, edge: usize, profile_salt: u64) -> Hash128 {
+        let mut k = Hasher128::new();
+        k.str(&content_key(p))
             .str("variant")
             .u64(settings.hash64())
             .u64(edge as u64)
             .u64(RENDER_CACHE_VERSION)
-            .u64(crate::camera_profiles::cache_key())
-            .finish()
+            .u64(crate::camera_profiles::cache_key());
+        if profile_salt != 0 {
+            k.str("dcp").u64(profile_salt);
+        }
+        k.finish()
     }
 
     /// A thumbnail of `id` rendered with `settings` instead of its own (profile and preset
@@ -1360,11 +1472,13 @@ impl crate::Session {
     /// hash, so a variant renders once; `key` is derived from the same hash, so a frontend can
     /// keep one texture per variant.
     pub fn variant_job(&mut self, id: PhotoId, settings: &DevelopSettings, edge: usize) -> Option<RenderJob> {
-        let p = self.catalog.photo(id)?.clone();
+        let mut p = (**self.catalog.photo(id)?).clone();
         let edge = edge.clamp(16, SourceLevel::Thumb.max_edge());
         let level = SourceLevel::Thumb;
+        // decoded as these settings develop it (their camera profile, or none)
+        p.develop = Arc::new(settings.clone());
         let source = self.media.source_ref(&p, level);
-        let ck = Self::variant_key(&p, settings, edge);
+        let ck = Self::variant_key(&p, settings, edge, self.media.camera_profile_salt(&settings.profile.id));
         Some(RenderJob {
             request_id: 0,
             cache_generation: self.media.rendered.generation(),
@@ -1418,7 +1532,7 @@ impl crate::Session {
         let needed = (edge as f64 * w.max(h) / side).ceil().min(SourceLevel::Preview.max_edge() as f64);
         let level = SourceLevel::for_size(needed as usize);
         let source = self.media.source_ref(&p, level);
-        let ck = Self::variant_key(&p, &settings, edge);
+        let ck = Self::variant_key(&p, &settings, edge, self.media.camera_profile_salt(&settings.profile.id));
         let preview_cut = self.face_preview_cut(&p, rect, edge, needed as usize);
         Some(RenderJob {
             request_id: 0,
@@ -1459,15 +1573,19 @@ impl crate::Session {
     }
 
     /// Size-independent cache key of a photo's view render (loupe) for its current settings.
-    fn view_key(p: &Photo, apply_crop: bool) -> Hash128 {
-        Hasher128::new()
-            .str(&content_key(p))
+    /// `profile_salt`: [`MediaCache::camera_profile_salt`] of the photo's profile.
+    fn view_key(p: &Photo, apply_crop: bool, profile_salt: u64) -> Hash128 {
+        let mut k = Hasher128::new();
+        k.str(&content_key(p))
             .str("view")
             .u64(p.develop.hash64())
             .u64(apply_crop as u64)
             .u64(RENDER_CACHE_VERSION)
-            .u64(crate::camera_profiles::cache_key())
-            .finish()
+            .u64(crate::camera_profiles::cache_key());
+        if profile_salt != 0 {
+            k.str("dcp").u64(profile_salt);
+        }
+        k.finish()
     }
 
     /// The loupe's render job: like [`Self::render_job`], and a full-quality result is kept as the
@@ -1475,7 +1593,8 @@ impl crate::Session {
     pub fn loupe_job(&mut self, id: PhotoId, max_w: usize, max_h: usize, apply_crop: bool) -> Option<RenderJob> {
         let mut job = self.render_job(id, max_w, max_h, false, apply_crop)?;
         let p = self.catalog.photo(id)?;
-        job.view_cache = Some((self.media.rendered.clone(), Self::view_key(p, apply_crop)));
+        let profile_salt = self.media.camera_profile_salt(&p.develop.profile.id);
+        job.view_cache = Some((self.media.rendered.clone(), Self::view_key(p, apply_crop, profile_salt)));
         Some(job)
     }
 
@@ -1584,8 +1703,9 @@ impl crate::Session {
         let p = self.catalog.photo(id)?.clone();
         let small = self.thumb_job(id, THUMB_SIZES[THUMB_SIZES.len() - 1])?;
         // (the thumbnail job itself starts with the cached thumbnail, after the sharper embedded preview)
-        let cached = vec![(self.media.rendered.clone(), Self::view_key(&p, apply_crop))];
-        let h = Hasher128::new().str(&content_key(&p)).str("quick").u64(p.develop.hash64()).u64(apply_crop as u64).finish();
+        let profile_salt = self.media.camera_profile_salt(&p.develop.profile.id);
+        let cached = vec![(self.media.rendered.clone(), Self::view_key(&p, apply_crop, profile_salt))];
+        let h = Hasher128::new().str(&content_key(&p)).str("quick").u64(p.develop.hash64()).u64(apply_crop as u64).u64(profile_salt).finish();
         let key = h.0 as u64;
         let embedded = self.embedded_of(&p).map(|(path, l)| (path, l, max_edge.clamp(1, SourceLevel::Preview.max_edge())));
         Some(QuickJob { request_id: 0, photo: id, key, cached, embedded, small: apply_crop.then(|| Box::new(small)) })
@@ -1704,8 +1824,10 @@ impl crate::Session {
 
     /// Prefer decoder facts to header-only metadata for pixel-statistics commands.
     pub fn source_info(&self, id: PhotoId) -> SourceInfo {
-        let header = self.catalog.photo(id).map(|p| source_info(p)).unwrap_or_default();
-        self.media.source_facts(id, header)
+        let photo = self.catalog.photo(id);
+        let header = photo.map(|p| source_info(p)).unwrap_or_default();
+        let profile = photo.and_then(|p| self.media.camera_profile_of(p)).map(|(tag, _)| tag);
+        self.media.source_facts(id, header, profile.as_deref())
     }
 
     /// The source proxy for pixel-statistics commands (auto tone/WB), loading synchronously.
@@ -1826,7 +1948,7 @@ mod thumbnail_hash_tests {
     #[test]
     fn source_from_before_content_reload_is_not_accepted() {
         let mut s = session();
-        s.media.file_loader = Some(Arc::new(|_, _| Ok((Rgb32f::new(8, 8), SourceInfo::default()))));
+        s.media.file_loader = Some(Arc::new(|_, _, _| Ok((Rgb32f::new(8, 8), SourceInfo::default()))));
         let old = s.thumb_job(PhotoId(1), 256).unwrap().run();
         assert!(old.loaded.is_some());
         s.catalog
@@ -1850,7 +1972,7 @@ mod thumbnail_hash_tests {
     #[test]
     fn a_render_that_panics_fails_instead_of_never_answering() {
         let mut s = session();
-        s.media.file_loader = Some(Arc::new(|_, _| panic!("decoder bug")));
+        s.media.file_loader = Some(Arc::new(|_, _, _| panic!("decoder bug")));
         let mut job = s.thumb_job(PhotoId(1), 256).unwrap();
         job.request_id = 42;
         let (key, level, source_key) = (job.key, job.level, job.source_key);
@@ -1958,13 +2080,14 @@ mod tests {
         job.source = SourceRef::File {
             path: "synthetic.arw".into(),
             max_edge: 64,
-            loader: Some(Arc::new(move |_, _| {
+            loader: Some(Arc::new(move |_, _, _| {
                 let mut image = Rgb32f::new(64, 64);
                 image.data.fill([0.1; 3]);
                 Ok((image, loaded_info.clone()))
             })),
             fallback: None,
             denoise: None,
+            camera_profile: None,
             reduced: None,
         };
         job.info = SourceInfo::default(); // Header facts cannot override decoder facts.
@@ -2018,9 +2141,10 @@ mod tests {
         job.source = SourceRef::File {
             path: "/photos/DSC00001.ARW".into(),
             max_edge: 64,
-            loader: Some(Arc::new(move |_, _| Ok((loaded_pixels.clone(), loaded_info.clone())))),
+            loader: Some(Arc::new(move |_, _, _| Ok((loaded_pixels.clone(), loaded_info.clone())))),
             fallback: None,
             denoise: None,
+            camera_profile: None,
             reduced: None,
         };
         let undo_before = s.undo.len();
