@@ -243,3 +243,279 @@ fn op_variants_are_versioned() {
     let newest = since(&Op::SetHistoryCursor { id: PhotoId(1), cursor: None });
     assert_eq!(newest.max(NEWEST_FIELDS), VERSION, "the newest op's or fields' version must be the current format version");
 }
+
+// ---- an upgrade keeps what it replaces
+
+/// A store whose writes of some files fail.
+struct Refusing {
+    files: MemStore,
+    refuse: fn(&str) -> bool,
+}
+
+impl Store for Refusing {
+    fn read(&mut self, name: &str) -> std::io::Result<Option<Vec<u8>>> {
+        self.files.read(name)
+    }
+    fn write_atomic(&mut self, name: &str, data: &[u8]) -> std::io::Result<()> {
+        if (self.refuse)(name) {
+            return Err(std::io::Error::other("disk full"));
+        }
+        self.files.write_atomic(name, data)
+    }
+    fn append(&mut self, name: &str, data: &[u8]) -> std::io::Result<()> {
+        self.files.append(name, data)
+    }
+    fn truncate(&mut self, name: &str, len: u64) -> std::io::Result<()> {
+        self.files.truncate(name, len)
+    }
+    fn remove(&mut self, name: &str) -> std::io::Result<()> {
+        self.files.remove(name)
+    }
+    fn describe(&self) -> String {
+        "refusing".into()
+    }
+}
+
+/// The library `fixtures/v<N>-catalog.*` holds, written by the build of format `N`.
+fn fixture(version: u32) -> Option<(&'static str, &'static str)> {
+    match version {
+        6 => Some((include_str!("fixtures/v6-catalog.snap.json"), include_str!("fixtures/v6-catalog.log.jsonl"))),
+        _ => None,
+    }
+}
+
+/// A format 6 library (the fixture) in a store.
+fn v6_library() -> (MemStore, Vec<u8>, Vec<u8>) {
+    let (snap, log) = fixture(6).unwrap();
+    let m = MemStore::new();
+    m.set(SNAPSHOT, snap.as_bytes().to_vec());
+    m.set(LOG, log.as_bytes().to_vec());
+    (m, snap.as_bytes().to_vec(), log.as_bytes().to_vec())
+}
+
+/// Given a library in an older format, when it is opened (which rewrites it in this build's
+/// format, and older builds can't read that), then the files it was are kept beside it, byte for
+/// byte, under names that say their format and the change they end at; the report names them;
+/// and put back under their own names they are the library as it was.
+#[test]
+fn an_upgrade_keeps_the_files_it_replaces() {
+    let (m, snap, log) = v6_library();
+    let (_, upgraded, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!(r.upgraded_from, Some(6));
+    assert_eq!(r.kept, ["catalog.snap.v6-8", "catalog.log.v6-8"]);
+    assert_eq!((m.get("catalog.snap.v6-8"), m.get("catalog.log.v6-8")), (Some(snap.clone()), Some(log.clone())));
+    assert_eq!(snapshot_version(&m), u64::from(VERSION));
+
+    // the way back: the kept files under their own names
+    let back = MemStore::new();
+    back.set(SNAPSHOT, m.get("catalog.snap.v6-8").unwrap());
+    back.set(LOG, m.get("catalog.log.v6-8").unwrap());
+    assert_eq!(snapshot_version(&back), 6);
+    let (_, mut as_it_was, _) = Journal::open(Box::new(back)).unwrap();
+    as_it_was.revision = upgraded.revision;
+    assert_eq!(as_it_was, upgraded);
+}
+
+/// Given a library that is in this build's format already, or a new one, when it is opened,
+/// then nothing is kept: there is nothing an older build could have read.
+#[test]
+fn nothing_is_kept_without_an_upgrade() {
+    let m = MemStore::new();
+    let (_, _, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert!(r.created && r.kept.is_empty());
+    let (_, _, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert!(r.kept.is_empty() && r.upgraded_from.is_none());
+    assert_eq!(m.files.lock().unwrap().keys().collect::<Vec<_>>(), [SNAPSHOT]);
+}
+
+/// Given a library from before snapshots (only a log), when it is opened, then the log is kept
+/// (as format 0: there was no number yet) and no snapshot is made up for it.
+#[test]
+fn an_upgrade_of_a_log_only_library_keeps_the_log() {
+    let mut c = Catalog::new();
+    let op = photo(&mut c);
+    let log = format!("{}\n", encode_record(1, &op)).into_bytes();
+    let m = MemStore::new();
+    m.set(LOG, log.clone());
+    let (_, _, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!((r.upgraded_from, r.kept.as_slice()), (Some(0), ["catalog.log.v0-1".to_string()].as_slice()));
+    assert_eq!(m.get("catalog.log.v0-1"), Some(log));
+    assert_eq!(m.get("catalog.snap.v0-1"), None);
+}
+
+/// Given an older library whose files can't be kept (the disk is full), when it is opened, then
+/// it is not upgraded without its way back: it opens as it is, with its files as they were and
+/// nothing half kept, and is upgraded once there is room.
+#[test]
+fn a_library_that_cannot_be_kept_is_not_upgraded() {
+    let (m, snap, log) = v6_library();
+    let store = Refusing { files: m.clone(), refuse: |name| name.starts_with("catalog.log.v") };
+    let (_, c, r) = Journal::open(Box::new(store)).unwrap();
+    assert_eq!((c.photos().count(), r.upgraded_from, r.kept.len()), (3, None, 0));
+    assert_eq!((m.get(SNAPSHOT), m.get(LOG)), (Some(snap), Some(log)));
+    assert_eq!(m.files.lock().unwrap().keys().collect::<Vec<_>>(), [LOG, SNAPSHOT], "nothing half kept");
+
+    let (_, c, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!((c.photos().count(), r.upgraded_from, r.kept.len()), (3, Some(6), 2));
+}
+
+/// Given an older library whose upgrade can't be written, when it is opened, then it opens as it
+/// was, with no copy of it left lying about: there is nothing to go back from.
+#[test]
+fn a_failed_upgrade_leaves_no_copy() {
+    let (m, snap, log) = v6_library();
+    let store = Refusing { files: m.clone(), refuse: |name| name == SNAPSHOT };
+    let (_, c, r) = Journal::open(Box::new(store)).unwrap();
+    assert_eq!((c.photos().count(), r.upgraded_from, r.kept.len()), (3, None, 0));
+    assert_eq!((m.get(SNAPSHOT), m.get(LOG)), (Some(snap), Some(log)));
+    assert_eq!(m.files.lock().unwrap().keys().collect::<Vec<_>>(), [LOG, SNAPSHOT]);
+}
+
+/// Given an older library whose upgrade is written but whose log then can't be emptied, when it
+/// is opened, then it is upgraded all the same (the log's changes are in the snapshot, and are
+/// passed over when it is read), and the files it was are kept: its way back is not thrown away
+/// because something failed after the upgrade.
+#[test]
+fn an_upgrade_that_is_written_keeps_its_copies_whatever_fails_after() {
+    let (m, snap, log) = v6_library();
+    let store = Refusing { files: m.clone(), refuse: |name| name == LOG };
+    let (_, c, r) = Journal::open(Box::new(store)).unwrap();
+    assert_eq!((c.photos().count(), r.upgraded_from), (3, Some(6)));
+    assert_eq!(r.kept, ["catalog.snap.v6-8", "catalog.log.v6-8"]);
+    assert_eq!((m.get("catalog.snap.v6-8"), m.get("catalog.log.v6-8")), (Some(snap), Some(log.clone())));
+    assert_eq!(snapshot_version(&m), u64::from(VERSION));
+    // the log it could not empty is all in the snapshot
+    assert_eq!(m.get(LOG), Some(log));
+    let (_, mut again, r) = Journal::open(Box::new(m)).unwrap();
+    again.revision = c.revision;
+    assert_eq!((again, r.replayed, r.upgraded_from), (c, 0, None));
+}
+
+/// Given an older library whose log is damaged, when it is opened (which saves what could be
+/// read in this build's format), then that is an upgrade like any other: the snapshot it was is
+/// kept beside the damaged log.
+#[test]
+fn a_damaged_older_library_keeps_its_snapshot() {
+    let (m, snap, log) = v6_library();
+    // a record in the middle that is not what was written, with good ones after it
+    let mut lines: Vec<String> = String::from_utf8(log).unwrap().lines().map(str::to_string).collect();
+    lines[1] = lines[1].replacen("\"crc\":", "\"crc\":1", 1);
+    let damaged = format!("{}\n", lines.join("\n")).into_bytes();
+    m.set(LOG, damaged.clone());
+    let (_, _, r) = Journal::open(Box::new(m.clone())).unwrap();
+    let kept_log = r.damaged.clone().expect("damaged");
+    assert_eq!((r.upgraded_from, r.kept.as_slice()), (Some(6), ["catalog.snap.v6-4".to_string()].as_slice()), "{r:?}");
+    assert_eq!((m.get("catalog.snap.v6-4"), m.get(&kept_log)), (Some(snap), Some(damaged)));
+    assert_eq!(snapshot_version(&m), u64::from(VERSION));
+}
+
+/// Given an older library whose log is damaged, when the upgrade is written but the damaged log
+/// can't be replaced, then the library is refused (working in it would add changes after the
+/// damage, where the next open would not read them), with the snapshot it was kept; and it
+/// opens, repaired, once the log can be written.
+#[test]
+fn a_damaged_older_library_is_not_worked_in_with_its_damaged_log_in_place() {
+    let (m, snap, log) = v6_library();
+    let mut lines: Vec<String> = String::from_utf8(log).unwrap().lines().map(str::to_string).collect();
+    lines[1] = lines[1].replacen("\"crc\":", "\"crc\":1", 1);
+    m.set(LOG, format!("{}\n", lines.join("\n")).into_bytes());
+    let store = Refusing { files: m.clone(), refuse: |name| name == LOG };
+    let e = Journal::open(Box::new(store)).err().expect("refused");
+    assert!(matches!(&e, CatalogError::Io(why) if why.contains("damaged log")), "{e}");
+    assert_eq!(m.get("catalog.snap.v6-4"), Some(snap), "its way back stays");
+
+    let (_, c, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!(c.photos().count(), 3);
+    assert!(r.damaged.is_some() && m.get(LOG).unwrap().is_empty(), "{r:?}");
+}
+
+/// Given an older library whose upgrade fails in a way that leaves it unknown whether it was
+/// written (the snapshot can't be read afterwards), then the files it was are kept: the way
+/// back is given up only when the library is known to be as it was.
+#[test]
+fn an_upgrade_that_cannot_be_checked_keeps_its_copies() {
+    /// Fails the write of the snapshot, and every read of it after that.
+    struct Blind {
+        files: MemStore,
+        failed: bool,
+    }
+    impl Store for Blind {
+        fn read(&mut self, name: &str) -> std::io::Result<Option<Vec<u8>>> {
+            if self.failed && name == SNAPSHOT {
+                return Err(std::io::Error::other("unreadable"));
+            }
+            self.files.read(name)
+        }
+        fn write_atomic(&mut self, name: &str, data: &[u8]) -> std::io::Result<()> {
+            if name == SNAPSHOT {
+                self.failed = true;
+                return Err(std::io::Error::other("the share went away"));
+            }
+            self.files.write_atomic(name, data)
+        }
+        fn append(&mut self, name: &str, data: &[u8]) -> std::io::Result<()> {
+            self.files.append(name, data)
+        }
+        fn truncate(&mut self, name: &str, len: u64) -> std::io::Result<()> {
+            self.files.truncate(name, len)
+        }
+        fn remove(&mut self, name: &str) -> std::io::Result<()> {
+            self.files.remove(name)
+        }
+        fn describe(&self) -> String {
+            "blind".into()
+        }
+    }
+    let (m, snap, log) = v6_library();
+    let e = Journal::open(Box::new(Blind { files: m.clone(), failed: false })).err().expect("refused");
+    assert!(matches!(&e, CatalogError::Io(why) if why.contains("can't be told")), "{e}");
+    assert_eq!((m.get("catalog.snap.v6-8"), m.get("catalog.log.v6-8")), (Some(snap), Some(log)));
+}
+
+/// Given an older library that was not upgraded at open (its files can't be kept), when a later
+/// snapshot would upgrade it (a compaction, or closing), then that snapshot is not written: the
+/// library stays as it was, with nothing half kept, and is never upgraded without its way back.
+#[test]
+fn a_library_that_could_not_be_kept_is_not_upgraded_by_a_later_snapshot_either() {
+    let (m, snap, log) = v6_library();
+    let store = Refusing { files: m.clone(), refuse: |name| name.starts_with("catalog.log.v") };
+    let (mut j, c, r) = Journal::open(Box::new(store)).unwrap();
+    assert_eq!(r.upgraded_from, None);
+    assert!(j.snapshot(&c).is_err(), "closing");
+    assert!(j.snapshot_in_background(&c).is_err(), "a compaction");
+    assert_eq!((m.get(SNAPSHOT), m.get(LOG)), (Some(snap), Some(log)));
+    assert_eq!(m.files.lock().unwrap().keys().collect::<Vec<_>>(), [LOG, SNAPSHOT], "nothing half kept");
+}
+
+/// Given an older library whose upgrade could not be written at open (a full disk), when a later
+/// snapshot is written (the disk has room again), then the files it was are kept first, as the
+/// open would have kept them, and the library is upgraded.
+#[test]
+fn a_library_left_in_its_old_format_keeps_its_files_when_a_later_snapshot_upgrades_it() {
+    static FULL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+    let (m, snap, log) = v6_library();
+    let store = Refusing { files: m.clone(), refuse: |name| name == SNAPSHOT && FULL.load(std::sync::atomic::Ordering::SeqCst) };
+    let (mut j, c, r) = Journal::open(Box::new(store)).unwrap();
+    assert_eq!((r.upgraded_from, r.kept.len()), (None, 0));
+    assert!(j.snapshot(&c).is_err(), "still full");
+    assert_eq!(m.files.lock().unwrap().keys().collect::<Vec<_>>(), [LOG, "catalog.log.v6-8", SNAPSHOT, "catalog.snap.v6-8"], "kept, not upgraded");
+    FULL.store(false, std::sync::atomic::Ordering::SeqCst);
+    j.snapshot(&c).unwrap();
+    assert_eq!((m.get("catalog.snap.v6-8"), m.get("catalog.log.v6-8")), (Some(snap), Some(log)));
+    assert_eq!(snapshot_version(&m), u64::from(VERSION));
+}
+
+/// Given an older library whose log is damaged and whose snapshot can't be kept, when it is
+/// opened, then it is refused and left as it was (it is not repaired without its way back).
+#[test]
+fn a_damaged_older_library_whose_snapshot_cannot_be_kept_is_refused() {
+    let (m, snap, log) = v6_library();
+    let mut lines: Vec<String> = String::from_utf8(log).unwrap().lines().map(str::to_string).collect();
+    lines[1] = lines[1].replacen("\"crc\":", "\"crc\":1", 1);
+    let damaged = format!("{}\n", lines.join("\n")).into_bytes();
+    m.set(LOG, damaged.clone());
+    let store = Refusing { files: m.clone(), refuse: |name| name.starts_with("catalog.snap.v") };
+    let e = Journal::open(Box::new(store)).err().expect("refused");
+    assert!(matches!(&e, CatalogError::Io(why) if why.contains("can't be kept")), "{e}");
+    assert_eq!((m.get(SNAPSHOT), m.get(LOG)), (Some(snap), Some(damaged)));
+}
