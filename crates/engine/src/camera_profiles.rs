@@ -186,14 +186,38 @@ fn cache_key_for(directory: Option<&Path>) -> u64 {
     h.finish().0 as u64
 }
 
-/// Per camera model: the photos read and their pooled colour pairs.
+/// One colour pair: white-balanced camera RGB, and the camera JPEG's linear Rec.2020 colour.
+pub type Pair = ([f64; 3], [f64; 3]);
+
+/// The colour pairs of one photo, as pooled for a fit and as shared in a pairs file
+/// (`lightcraft-cli calibrate --pairs`, see [`crate::camera_pairs`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct PhotoPairs {
+    /// The camera model as the file reports it (Exif `Model`).
+    pub model: String,
+    /// Identifies the photo for de-duplication: a 128-bit hash of the raw file's bytes (32 hex digits). It is
+    /// not the file name, path or any metadata.
+    pub id: String,
+    /// Sony's Dynamic Range Optimizer was on for the photo (`None`: the file doesn't say).
+    pub dro: Option<bool>,
+    pub pairs: Vec<Pair>,
+}
+
+/// The photos read, and their colour pairs, pooled per camera model by [`Pool::fit`].
 #[derive(Default)]
 pub struct Pool {
-    models: HashMap<String, (usize, Vec<([f64; 3], [f64; 3])>)>,
+    photos: Vec<PhotoPairs>,
 }
 
 /// Most colour pairs kept per photo, so a few busy photos can't dominate a profile.
-const PAIRS_PER_FILE: usize = 4000;
+pub(crate) const PAIRS_PER_FILE: usize = 4000;
+
+/// Pairs are held at single precision, so pairs read back from a pairs file are bit-for-bit those
+/// sampled from the raw and the same profile comes out of either.
+fn single(pair: Pair) -> Pair {
+    let f = |v: [f64; 3]| v.map(|x| f64::from(x as f32));
+    (f(pair.0), f(pair.1))
+}
 
 impl Pool {
     /// Add one raw file's colour pairs. `Ok(None)` when the file can't contribute (not an ARW,
@@ -207,39 +231,78 @@ impl Pool {
         let Some(model) = raw.metadata.model.as_deref().map(str::trim).filter(|m| !m.is_empty()) else { return Ok(None) };
         let Some(pairs) = crate::camera_preview::profile_pairs(&raw, bytes, lens.as_ref()) else { return Ok(None) };
         let step = pairs.len().div_ceil(PAIRS_PER_FILE).max(1);
-        let entry = self.models.entry(model.to_owned()).or_default();
-        entry.0 += 1;
-        entry.1.extend(pairs.into_iter().step_by(step));
+        self.photos.push(PhotoPairs {
+            model: model.to_owned(),
+            id: lightcraft_preview::hash_bytes(bytes).to_string(),
+            dro: lightcraft_raw::embedded_preview_dynamic_range_optimized(bytes),
+            pairs: pairs.into_iter().step_by(step).map(single).collect(),
+        });
         Ok(Some(model.to_owned()))
+    }
+
+    /// Add photos read from a pairs file.
+    pub fn add_photos(&mut self, photos: Vec<PhotoPairs>) {
+        self.photos.extend(photos);
+    }
+
+    /// The pairs file ([`crate::camera_pairs`]) of every photo in the pool.
+    pub fn pairs_file(&self) -> Result<Vec<u8>, String> {
+        crate::camera_pairs::write(&self.photos())
+    }
+
+    /// Add the photos of a pairs file; returns how many it held.
+    pub fn add_pairs_file(&mut self, bytes: &[u8], origin: &str) -> Result<usize, String> {
+        let photos = crate::camera_pairs::read(bytes, origin)?;
+        let n = photos.len();
+        self.add_photos(photos);
+        Ok(n)
+    }
+
+    /// The photos in a fixed order (model, then id) with each id once, so the same photos give the same fit
+    /// however they arrived (raw files in any thread order, pairs files, both).
+    pub fn photos(&self) -> Vec<&PhotoPairs> {
+        let mut photos: Vec<&PhotoPairs> = self.photos.iter().collect();
+        photos.sort_by(|a, b| (&a.model, &a.id).cmp(&(&b.model, &b.id)));
+        photos.dedup_by(|a, b| a.model == b.model && a.id == b.id);
+        photos
     }
 
     /// Fit a profile per model with at least `min_files` photos.
     pub fn fit(&self, min_files: usize) -> Vec<Result<CameraProfile, String>> {
-        let mut models: Vec<_> = self.models.iter().collect();
-        models.sort_by(|a, b| a.0.cmp(b.0));
+        let photos = self.photos();
+        let mut models: Vec<(&str, usize, Vec<Pair>)> = Vec::new();
+        for photo in photos {
+            if models.last().is_none_or(|m| m.0 != photo.model) {
+                models.push((&photo.model, 0, Vec::new()));
+            }
+            let last = models.last_mut().expect("just pushed");
+            last.1 += 1;
+            last.2.extend_from_slice(&photo.pairs);
+        }
         models
             .into_iter()
-            .filter(|(_, (files, _))| *files >= min_files)
-            .map(|(model, (files, pairs))| {
-                let (matrix, hue_sat) = crate::camera_preview::fit_profile(pairs).ok_or_else(|| format!("{model}: no usable colour fit"))?;
-                Ok(CameraProfile::new(model, *files, pairs.len(), matrix, hue_sat))
+            .filter(|(_, files, _)| *files >= min_files)
+            .map(|(model, files, pairs)| {
+                let (matrix, hue_sat) = crate::camera_preview::fit_profile(&pairs).ok_or_else(|| format!("{model}: no usable colour fit"))?;
+                Ok(CameraProfile::new(model, files, pairs.len(), matrix, hue_sat))
             })
             .collect()
     }
 
     /// Add another pool's photos and pairs (pools filled on separate threads).
     pub fn merge(&mut self, other: Pool) {
-        for (model, (files, pairs)) in other.models {
-            let entry = self.models.entry(model).or_default();
-            entry.0 += files;
-            entry.1.extend(pairs);
-        }
+        self.photos.extend(other.photos);
     }
 
     /// Photos read per model.
     pub fn files(&self) -> Vec<(String, usize)> {
-        let mut v: Vec<_> = self.models.iter().map(|(m, (n, _))| (m.clone(), *n)).collect();
-        v.sort();
+        let mut v: Vec<(String, usize)> = Vec::new();
+        for photo in self.photos() {
+            match v.last_mut() {
+                Some(last) if last.0 == photo.model => last.1 += 1,
+                _ => v.push((photo.model.clone(), 1)),
+            }
+        }
         v
     }
 }
@@ -334,6 +397,57 @@ mod tests {
         assert_eq!(file_name(" DSC-RX100M3 "), "DSC-RX100M3.json");
         assert_eq!(file_name("../../etc/passwd"), "______etc_passwd.json");
         assert_eq!(file_name("Ω 1/2"), "__1_2.json");
+    }
+
+    /// Synthetic photos of one model: pairs from a fixed colour mapping with a little structure.
+    fn synthetic(model: &str, n: usize, seed: u32) -> Vec<PhotoPairs> {
+        let mut state = seed;
+        let mut next = move || {
+            state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+            f64::from(state >> 8) / f64::from(1u32 << 24)
+        };
+        (0..n)
+            .map(|k| PhotoPairs {
+                model: model.into(),
+                id: format!("{:032x}", u128::from(seed) * 1000 + k as u128 + 1),
+                dro: (k % 2 == 0).then_some(k % 4 == 0),
+                pairs: (0..300)
+                    .map(|_| {
+                        let c = [next() * 0.8 + 0.02, next() * 0.8 + 0.02, next() * 0.8 + 0.02];
+                        let y = [c[0] * 1.5 - c[1] * 0.3 - c[2] * 0.1, c[1] * 1.3 - c[0] * 0.1, c[2] * 1.4 - c[1] * 0.2 + 0.05 * c[0]]
+                            .map(|v| v.clamp(0.001, 1.0));
+                        single((c, y))
+                    })
+                    .collect(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn pairs_files_pool_to_the_same_profile_whatever_the_order_or_split() {
+        let photos = synthetic("ILCE-7M4", 8, 7);
+        let mut direct = Pool::default();
+        direct.add_photos(photos.clone());
+        let direct = direct.fit(5).remove(0).unwrap();
+        assert_eq!((direct.files, direct.samples), (8, 2400));
+        // two contributors' files, one of them listing a photo twice, pooled in the other order
+        let (first, second) = photos.split_at(3);
+        let write = |p: &[PhotoPairs]| crate::camera_pairs::write(&p.iter().collect::<Vec<_>>()).unwrap();
+        let (a, b) = (write(first), write(second));
+        let mut pooled = Pool::default();
+        assert_eq!(pooled.add_pairs_file(&b, "b").unwrap(), 5);
+        assert_eq!(pooled.add_pairs_file(&a, "a").unwrap(), 3);
+        assert_eq!(pooled.add_pairs_file(&a, "a again").unwrap(), 3);
+        assert_eq!(pooled.files(), vec![("ILCE-7M4".to_owned(), 8)]);
+        assert_eq!(pooled.fit(5).remove(0).unwrap(), direct);
+        // a pool re-exported as a pairs file holds each photo once
+        let again = pooled.pairs_file().unwrap();
+        let mut reread = Pool::default();
+        assert_eq!(reread.add_pairs_file(&again, "again").unwrap(), 8);
+        assert_eq!(reread.fit(5).remove(0).unwrap(), direct);
+        // too few photos of a model are left out
+        pooled.add_photos(synthetic("X-T4", 2, 9));
+        assert_eq!(pooled.fit(5).len(), 1);
     }
 
     #[test]
