@@ -17,6 +17,18 @@ callbacks, so the app's loop is paused. Keep the window on screen while you driv
 headless snapshots or `lightcraft-cli mcp` without `--connect`. A request that has already started
 (a long command blocks frames) still gets the full 60 s.
 
+Connections close after five minutes without incoming bytes while the server is waiting for
+input, including in the middle of an unfinished request line. This allows pauses between
+automation commands while releasing abandoned connection slots. An idle read timeout gets an
+`ok: false` error saying the connection is closing; incomplete input is never dispatched.
+This is a socket read inactivity limit, not a total connection lifetime: a peer that keeps
+sending bytes can keep it open. Waiting for an already-dispatched command's reply does not
+count as idle reading and retains the request timeout above.
+
+Reconnect before sending another request after an idle close. MCP connect mode detects closed
+connections before sending and reconnects; if a connection is lost after sending a request,
+its outcome remains unknown and the client must not blindly replay it.
+
 **Only requests are read.** Every line must be a JSON object with a string `method` (`id` and `params` are
 optional; blank lines are skipped). Anything else — text that isn't JSON, a JSON array or number, an object without
 `method`, invalid UTF-8, or a line longer than 4 MiB — gets one error reply
@@ -63,6 +75,7 @@ filmstrip is visible.
 |---|---|---|
 | `engine.execute` (alias `ui.menu.invoke`) | `{command, params?}` | Run any engine or UI command (see `engine.commands`) |
 | `engine.commands` | — | Engine + UI commands: id, label, menu, shortcut, params doc, enabled |
+| `engine.execute {command: "app.previewSize"}` | `{percent?: integer 0..100, pixelLimit?: -1 or positive integer}` | Query or atomically set whole-frame preview caps; the smaller cap wins, -1 removes the user pixel cap, 0% keeps an 8 px minimum. Values are saved with app preferences. Sharp zoom windows and exports are independent. `ui.inspect` → `loupe.previewPixels` reports the current whole-frame texture dimensions (or null). See [preview sizing](preview-sizing.md). Widgets: `slider:settingsPreviewPercent`, `field:settingsPreviewPixels` |
 | `ui.menu.list` | — | Menu entries (flat: id, label, menu path, shortcut, enabled) |
 | `ui.menu.tree` | — | The menu bar as shown (File … Help): items `{id, params?, label, shortcut?, enabled, checked?}`, separators, submenus — the model behind the native macOS menu bar and the in-window menus |
 | `ui.inspect` | — | UI state, window, `loupe` (`source`, `pending`, `failed` = why its render failed, else `null`, and `region: {full, window, pending}` when a zoomed view also renders the window on screen at no more than 100 % — `full` is the frame it is cut from, `window` its `[x, y, w, h]` — and `regionBefore` for the Before side of a Before/After view), canvas/image rects, `scroll: {grid, filmstrip}` (scroll offsets in points, `null` until drawn), active photo, selection, perf (`frameMs` = layout, `logicMs` = per-frame logic before it, `updateMs` = both, `maxUpdateMs`, `fps`, render queue …, `gpu` = adapter in use, `gpuReason` = why renders don't use the GPU, `gpuFallback` = latest render redone on the CPU and why — see `docs/gpu-pipeline.md`), status, memory (bytes per cache, see `library.memory`; plus stage caches — `budgetBytes`, `trimmed`, `sharedSourceBytes` (the one device copy of a big original) — and textures), `export: {running: {total, done, current} \| null, last}`, `notices` (warnings waiting to be shown, e.g. a damaged settings file; OK = `button:noticeOk`), `quitPrompt` (why quitting was stopped: tasks that would be cut short are running — `button:quitAnyway` cancels them and quits, `button:quitCancel` keeps working — or unsaved changes: `button:quitRetry` / `button:quitAnyway` / `button:quitCancel`), `import: {done, total, imported, cancelled} \| null` (an import runs on a worker thread), `tasks` (other background work: `Find Missing Photos`, `Auto Import`), `activity` (every long-running task in flight as the activity stack in the top-left corner shows it, same shape as `activity.list`; a row appears once its task is 0.5 s old, ids `activity:row:<id>`, ✕ = `activity:cancel:<id>`, `activity:more` expands past 3 rows), `fileDialogs` (commands waiting on a native file dialog, which runs off the UI thread; they run again with the answer when it closes), `copied` (the text the UI last put on the clipboard, `null` until something is copied) |
@@ -76,7 +89,7 @@ filmstrip is visible.
 | `ui.scroll` | `{dx, dy, cmd?, ctrl?, shift?, alt?}` | Wheel / two-finger scroll at the current pointer; pans over the image, modifier-scroll zooms |
 | `ui.zoom` | `{factor}` | Pinch zoom at the current pointer (positive scale multiplier; 1 = unchanged). Position it first with `ui.move` or `ui.hoverWidget` |
 | `ui.set` | partial UI state, e.g. `{"view": "detail"}` | Resulting UI state |
-| `ui.dialog.confirm` / `ui.dialog.cancel` | — | Close the open dialog |
+| `ui.dialog.confirm` / `ui.dialog.cancel` | — | Close the open dialog (confirm runs its action; Synchronize Folder on a folder that is up to date answers `{"upToDate": true}` and starts nothing) |
 | `ui.resize` | `{width, height}` | Resize the window |
 | `ui.zoomFactor` | `{factor}` | Set the interface scale (0.5–3; egui's zoom keys are off, Cmd+= / Cmd+- zoom the photo) |
 | `ui.screenshot` | `{path?, headless?}` | `{path, width, height}` once the frame (with finished renders) is captured. `headless: true` draws the UI on the CPU (no compositor needed); a windowed capture that gets no frame within 2 s falls back to headless automatically. While the loupe still waits for a render, `ui.widgets {filter: "loupe:rendering"}` lists its "Rendering…" pill; `loupe:renderFailed` is the pill saying a render failed behind a stand-in; Compare and Reference panes have their own (`compare:rendering:<pane>`, `compare:renderFailed:<pane>`) |
@@ -280,6 +293,22 @@ one pixel.
   renders are in flight. Each request runs frames until it is answered and its injected input
   (clicks, keys, drags) has played out. Widget ids for `ui.clickWidget` come from `ui.widgets`
   (e.g. `button:upright-auto`). A 1600×1000 demo snapshot takes ~1–2 s (debug build).
+
+## Import album picker
+
+In the Import Photos review, `albumPicker:import-album` opens the destination picker.
+`albumPickerFolder:<folder-id>:import-album` expands or folds a folder; it never chooses a destination.
+`albumPickerItem:<album-id>:import-album` selects a regular album. The picker follows sidebar order,
+opens the current choice's ancestors and shows its full path on the closed button. Smart albums
+are not import destinations. Type into `albumPickerSearch:import-album` to search folder/album paths;
+↑ / ↓ and Enter pick a search result, and Escape closes the picker while keeping the review open.
+If the chosen album is deleted while the review is open, the destination returns to None before
+confirmation instead of submitting the deleted ID.
+
+`importAlbum:none` clears the destination and any pending new album name. `importAlbum:new` keeps
+or initializes that name, edited through `field:importAlbumName`. Choosing an existing album clears
+the pending name. `ui.dialog.confirm` starts the same import into the selected album ID; engine
+`library.import` parameters `album` and `albumName` are unchanged.
 
 ## Panel docking
 

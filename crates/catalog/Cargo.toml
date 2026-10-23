@@ -17,6 +17,7 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 crc32fast = { workspace = true }
 log = { workspace = true }
+chrono = { workspace = true }
 web-time = { workspace = true }
 
 [dev-dependencies]

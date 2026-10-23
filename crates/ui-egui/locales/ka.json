@@ -1927,6 +1927,7 @@
   "Show in Explorer": "Explorer-ში ჩვენება",
   "Show in File Manager": "ფაილების მენეჯერში ჩვენება",
   "Show in Finder": "Finder-ში ჩვენება",
+  "Show in Folders": "საქაღალდეებში ჩვენება",
   "Show less": "ნაკლების ჩვენება",
   "Show on Map": "რუკაზე ჩვენება",
   "Show overlay (O)": "ზედდების ჩვენება (O)",
@@ -2718,5 +2719,9 @@
   "≥  at least": "≥  არანაკლებ",
   "⌘-drag to straighten, ⇧G Guided Upright, a grid while transforming.": "⌘-გადათრევა გასასწორებლად, ⇧G მართვადი Upright, ბადე გარდაქმნისას.",
   "日本語": "日本語",
-  "繁體中文（台灣）": "繁體中文（台灣）"
+  "繁體中文（台灣）": "繁體中文（台灣）",
+  "Pixel limit": "პიქსელების ზღვარი",
+  "Percentage of the photo's long edge. The smaller limit wins; -1 means no pixel limit. 0% keeps a minimum preview. Smaller previews are faster.": "ფოტოს გრძელი გვერდის პროცენტი. გამოიყენება უფრო მცირე ზღვარი; -1 ნიშნავს პიქსელების ზღვრის გარეშე. 0%-ზე რჩება მინიმალური წინასწარი ხედი. მცირე წინასწარი ხედები უფრო სწრაფია.",
+  "Limits apply to whole-frame previews. Zoomed detail stays sharp; exports and 1:1 preview builds keep their own sizes.": "ზღვრები ვრცელდება სრული კადრის წინასწარ ხედებზე. გადიდებული დეტალები მკვეთრი რჩება; ექსპორტი და 1:1 წინასწარი ხედების შექმნა საკუთარ ზომებს ინარჩუნებს.",
+  "Enter a positive pixel limit, or -1 for no limit.": "შეიყვანეთ პიქსელების დადებითი ზღვარი, ან -1 ზღვრის მოსახსნელად."
 }

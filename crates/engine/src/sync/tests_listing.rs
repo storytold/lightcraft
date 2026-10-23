@@ -146,8 +146,10 @@ fn a_check_from_the_listing_is_the_check_from_the_disk() {
             .collect();
     // (`dir.jpg` is gone, though a sidecar of its name is there)
     let mut l = Listing::default();
-    let walked =
-        crate::walk::files_in_noting(&dir, None, crate::walk::Limits::default(), |_| true, &mut |d, names, complete| l.note(d, names, complete));
+    let walked = crate::walk::files_in_noting(&dir, None, crate::walk::Limits::default(), |_| true, &mut |d, names, complete| {
+        l.note(d, names, complete);
+        true
+    });
     assert_eq!(walked.files.len(), 12);
     let nothing = Listing::default();
     for naming in [SidecarNaming::Stem, SidecarNaming::Full] {
@@ -167,7 +169,10 @@ fn a_check_from_the_listing_is_the_check_from_the_disk() {
         l.asked.load(std::sync::atomic::Ordering::Relaxed)
     };
     let mut with = Listing::default();
-    crate::walk::files_in_noting(&dir, None, crate::walk::Limits::default(), |_| true, &mut |d, names, complete| with.note(d, names, complete));
+    crate::walk::files_in_noting(&dir, None, crate::walk::Limits::default(), |_| true, &mut |d, names, complete| {
+        with.note(d, names, complete);
+        true
+    });
     let (with, without) = (asked(&with), asked(&Listing::default()));
     // (without: each photo's file, and the names of its sidecar up to the one that is there: 20 questions where
     // names are found in any case, 21 where they are not)
@@ -181,7 +186,10 @@ fn a_check_from_the_listing_is_the_check_from_the_disk() {
     // a folder of plain names only: the disk is asked nothing at all
     let sub = dir.join("sub");
     let mut only_plain = Listing::default();
-    crate::walk::files_in_noting(&sub, None, crate::walk::Limits::default(), |_| true, &mut |d, names, complete| only_plain.note(d, names, complete));
+    crate::walk::files_in_noting(&sub, None, crate::walk::Limits::default(), |_| true, &mut |d, names, complete| {
+        only_plain.note(d, names, complete);
+        true
+    });
     let mut c2 = Catalog::new();
     for (name, expected) in [("deep.jpg", Check::News), ("gone.jpg", Check::Missing), ("gone.jpg.xmp", Check::Missing)] {
         let p = photo(&mut c2, &sub.join(name));

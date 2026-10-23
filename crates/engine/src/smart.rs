@@ -3,15 +3,19 @@
 //! originals are offline (an unplugged drive). The proxy is the scene-linear source scaled into
 //! 0..1 by a stored factor, sRGB-encoded and saved as a JPEG after a one-line header. The header
 //! also keeps the decoder's file-local camera tone curve (Sony ARW camera look), which is applied
-//! at render time and is not baked into the pixels.
+//! at render time and is not baked into the pixels, and the file's other decoder facts (its colour
+//! model, gain table map and semantic mattes) ride in a tail after the JPEG, so offline edits
+//! interpret the stored pixels the same way the online source did.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use lightcraft_catalog::Photo;
 use lightcraft_color::transfer::linear_to_srgb;
+use lightcraft_pipeline::SourceInfo;
+use lightcraft_pipeline::masks::{MatteKind, Mattes};
 use lightcraft_pipeline::tone::CameraTone;
-use lightcraft_raster::{Rgb32f, Rgba8};
+use lightcraft_raster::{Image, Rgb32f, Rgba8};
 
 const MAGIC: &[u8] = b"LCSP1\n";
 
@@ -70,15 +74,73 @@ const JPEG_QUALITY: u8 = 97;
 /// tracks the camera-look fit that is baked into those pixels.
 const ENC_FIELD: &str = "enc";
 
-/// The value of [`ENC_FIELD`] this build writes. Bump it whenever [`encode`]'s mapping or JPEG
-/// settings change, so proxies an older build wrote are rebuilt: a missing field reads as 0, which
-/// makes every proxy from before this version stale. Version 2 is the first to record the field at
-/// all (a version 1 proxy is stored at JPEG quality 92, which this build raises to [`JPEG_QUALITY`]).
+/// The value of [`ENC_FIELD`] this build writes. Bump it whenever [`encode`]'s mapping, JPEG
+/// settings or stored facts change, so proxies an older build wrote are rebuilt: a missing field
+/// reads as 0, which makes every proxy from before this version stale. Version 2 is the first to
+/// record the field at all (a version 1 proxy is stored at JPEG quality 92, which this build
+/// raises to [`JPEG_QUALITY`]); version 3 is the first to store the decoder facts in the tail. A
+/// stale proxy whose original is offline is kept as it is (see [`is_stale`]).
 /// Crate-visible so the look-marker test pins the marker format to it instead of to a literal.
-pub(crate) const ENCODE_VERSION: u64 = 2;
+pub(crate) const ENCODE_VERSION: u64 = 3;
 
-/// Encode a source image (and the decoder's camera tone curve, if any) as a smart preview.
-pub fn encode(img: &Rgb32f, tone: Option<&CameraTone>) -> Result<Vec<u8>, String> {
+/// The decoder facts a render interprets its settings against, stored with the proxy's pixels so
+/// an offline original edits like it did online (the catalog's header facts cannot carry them).
+/// In the proxy's tail, not its header: a real file's gain table map runs far past any header
+/// budget (up to 12 336 gains).
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SmartFacts {
+    raw: bool,
+    as_shot_temp: f64,
+    as_shot_tint: f64,
+    relative_wb: bool,
+    legacy_relative_wb: bool,
+    lens: Option<lightcraft_develop::EmbeddedLens>,
+    camera_color: Option<lightcraft_pipeline::CameraColor>,
+    local_tone: Option<lightcraft_pipeline::local_tone::LocalTone>,
+    /// The semantic mattes whose bytes follow the facts, in this order.
+    #[serde(default)]
+    mattes: Vec<StoredMatte>,
+}
+
+/// One stored matte's shape; its `len` bytes of 0..255 alpha follow the facts.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct StoredMatte {
+    kind: u8,
+    w: usize,
+    h: usize,
+    len: usize,
+}
+
+/// The facts and mattes a proxy's tail holds: the length-prefixed JSON, then one byte plane per
+/// stored matte. `None` for an old proxy or a malformed tail; like a missing curve, the offline
+/// render then keeps its header facts.
+fn stored_facts(head: &serde_json::Value, bytes: &[u8]) -> Option<(SmartFacts, Mattes)> {
+    let tail = usize::try_from(head.get("tail")?.as_u64()?).ok()?;
+    if tail == 0 || tail > bytes.len() {
+        return None;
+    }
+    let t = bytes.get(bytes.len() - tail..)?;
+    let n = u32::from_le_bytes(t.get(..4)?.try_into().ok()?) as usize;
+    let facts: SmartFacts = serde_json::from_slice(t.get(4..4 + n)?).ok()?;
+    let mut mattes = Mattes::default();
+    let mut at = 4 + n;
+    for m in &facts.mattes {
+        let kind = MatteKind::from_code(m.kind)?;
+        if m.w == 0 || m.h == 0 || m.w.checked_mul(m.h)? != m.len {
+            return None;
+        }
+        mattes.push(kind, Image { width: m.w, height: m.h, data: t.get(at..at.checked_add(m.len)?)?.to_vec() });
+        at += m.len;
+    }
+    if at != t.len() {
+        return None;
+    }
+    Some((facts, mattes))
+}
+
+/// Encode a source image and its decoder facts (the camera tone curve and the [`SourceInfo`] the
+/// render interprets settings against, if given) as a smart preview.
+pub fn encode(img: &Rgb32f, info: Option<&SourceInfo>) -> Result<Vec<u8>, String> {
     // scale so all but the brightest 0.05 % fit into 0..1
     let mut lum: Vec<f32> = img.data.iter().map(|c| c[0].max(c[1]).max(c[2])).filter(|v| v.is_finite()).collect();
     let scale = if lum.is_empty() {
@@ -113,28 +175,80 @@ pub fn encode(img: &Rgb32f, tone: Option<&CameraTone>) -> Result<Vec<u8>, String
         LOOK_FIELD: crate::camera_preview::LOOK_VERSION,
         ENC_FIELD: ENCODE_VERSION,
     });
-    if let Some(t) = tone {
-        head["tone"] = serde_json::to_value(t).map_err(|e| e.to_string())?;
+    // The tail: the decoder facts (and the file's semantic mattes) after the JPEG, so the header
+    // stays small. `tail` records its byte count from the end of the file, so a header rewritten
+    // in place (an edited look version) keeps pointing at it.
+    let mut tail: Vec<u8> = Vec::new();
+    if let Some(i) = info {
+        if let Some(t) = &i.camera_tone {
+            head["tone"] = serde_json::to_value(t).map_err(|e| e.to_string())?;
+        }
+        let matte_list: Vec<StoredMatte> = i
+            .mattes
+            .as_deref()
+            .map(|m| m.iter().map(|(kind, a)| StoredMatte { kind: kind.code(), w: a.width, h: a.height, len: a.data.len() }).collect())
+            .unwrap_or_default();
+        let facts = SmartFacts {
+            raw: i.raw,
+            as_shot_temp: i.as_shot_temp,
+            as_shot_tint: i.as_shot_tint,
+            relative_wb: i.relative_wb,
+            legacy_relative_wb: i.legacy_relative_wb,
+            lens: i.lens,
+            camera_color: i.camera_color.as_deref().cloned(),
+            local_tone: i.local_tone.as_deref().cloned(),
+            mattes: matte_list,
+        };
+        let facts = serde_json::to_vec(&facts).map_err(|e| e.to_string())?;
+        let n = u32::try_from(facts.len()).map_err(|_| "smart preview facts too large")?;
+        tail.extend_from_slice(&n.to_le_bytes());
+        tail.extend_from_slice(&facts);
+        if let Some(m) = i.mattes.as_deref() {
+            for (_, a) in m.iter() {
+                tail.extend_from_slice(&a.data);
+            }
+        }
+        head["tail"] = serde_json::json!(tail.len());
     }
     out.extend_from_slice(head.to_string().as_bytes());
     out.push(b'\n');
     out.extend_from_slice(&jpg);
+    out.extend_from_slice(&tail);
     Ok(out)
 }
 
-/// Decode a smart preview back into a source image and its stored camera tone curve (an invalid
-/// curve is ignored, like a missing one).
-pub fn decode(bytes: &[u8]) -> Result<(Rgb32f, Option<CameraTone>), String> {
+/// Decode a smart preview back into a source image, its stored camera tone curve and the stored
+/// decoder facts (an invalid curve or tail is ignored, like a missing one).
+pub fn decode(bytes: &[u8]) -> Result<(Rgb32f, Option<CameraTone>, Option<SourceInfo>), String> {
     let rest = bytes.strip_prefix(MAGIC).ok_or("not a smart preview")?;
     let nl = rest.iter().position(|b| *b == b'\n').ok_or("bad smart preview")?;
     let head: serde_json::Value = serde_json::from_slice(&rest[..nl]).map_err(|e| e.to_string())?;
     let scale = head["scale"].as_f64().unwrap_or(1.0) as f32;
     let tone = head.get("tone").and_then(|t| serde_json::from_value::<CameraTone>(t.clone()).ok());
-    let d = lightcraft_codecs::decode(&rest[nl + 1..], Default::default()).map_err(|e| e.to_string())?;
+    let tail = head.get("tail").and_then(serde_json::Value::as_u64).and_then(|t| usize::try_from(t).ok()).unwrap_or(0);
+    let start = MAGIC.len() + nl + 1;
+    let end = bytes.len().saturating_sub(tail);
+    if end <= start {
+        return Err("bad smart preview".into());
+    }
+    let d = lightcraft_codecs::decode(bytes.get(start..end).ok_or("bad smart preview")?, Default::default()).map_err(|e| e.to_string())?;
     // the decoder undoes the sRGB encoding; the values are the source's own primaries
     let mut img = d.image;
     img.data.iter_mut().for_each(|c| *c = c.map(|v| v * scale));
-    Ok((img, tone))
+    let info = stored_facts(&head, bytes).map(|(f, mattes)| SourceInfo {
+        raw: f.raw,
+        as_shot_temp: f.as_shot_temp,
+        as_shot_tint: f.as_shot_tint,
+        relative_wb: f.relative_wb,
+        legacy_relative_wb: f.legacy_relative_wb,
+        lens: f.lens,
+        camera_color: f.camera_color.map(Arc::new),
+        camera_tone: tone,
+        mattes: (!mattes.is_empty()).then(|| Arc::new(mattes)),
+        local_tone: f.local_tone.map(Arc::new),
+        native_long: None,
+    });
+    Ok((img, tone, info))
 }
 
 /// Where a library keeps its smart previews.
@@ -276,15 +390,26 @@ pub fn is_valid(path: &Path) -> bool {
     }
     let Some(rest) = head.strip_prefix(MAGIC) else { return false };
     let Some(nl) = rest.iter().position(|b| *b == b'\n') else { return false };
-    let size_ok = rest
-        .get(..nl)
-        .and_then(|h| serde_json::from_slice::<serde_json::Value>(h).ok())
-        .is_some_and(|h| h["w"].as_u64().is_some_and(|w| w > 0) && h["h"].as_u64().is_some_and(|h| h > 0));
+    let json = rest.get(..nl).and_then(|h| serde_json::from_slice::<serde_json::Value>(h).ok());
+    let size_ok = json.as_ref().is_some_and(|h| h["w"].as_u64().is_some_and(|w| w > 0) && h["h"].as_u64().is_some_and(|h| h > 0));
     if !size_ok || rest.get(nl + 1..nl + 3) != Some(&[0xFF, 0xD8][..]) {
         return false;
     }
+    let tail = json.and_then(|h| h.get("tail").and_then(serde_json::Value::as_u64)).and_then(|t| usize::try_from(t).ok()).unwrap_or(0);
+    if tail == 0 {
+        // no tail: the file ends at the JPEG's end marker
+        let mut end = [0u8; 2];
+        return f.seek(SeekFrom::End(-2)).is_ok() && f.read_exact(&mut end).is_ok() && end == [0xFF, 0xD9];
+    }
+    // with a tail, the JPEG must end right before it and the tail must be there in full
+    let Ok(meta) = f.metadata() else { return false };
+    let Ok(file_len) = usize::try_from(meta.len()) else { return false };
+    let Some(jpeg_end) = file_len.checked_sub(tail) else { return false };
+    if jpeg_end <= MAGIC.len() + nl + 3 {
+        return false;
+    }
     let mut end = [0u8; 2];
-    f.seek(SeekFrom::End(-2)).is_ok() && f.read_exact(&mut end).is_ok() && end == [0xFF, 0xD9]
+    f.seek(SeekFrom::Start((jpeg_end - 2) as u64)).is_ok() && f.read_exact(&mut end).is_ok() && end == [0xFF, 0xD9]
 }
 
 /// The fit version a header records: a missing, negative, fractional or otherwise malformed value
@@ -299,12 +424,15 @@ fn header_encode_version(head: &serde_json::Value) -> u64 {
     head.get(ENC_FIELD).and_then(serde_json::Value::as_u64).unwrap_or(0)
 }
 
-/// Whether the complete proxy at `path` is out of date for this build: written by an older
-/// camera-look fit than this build's (so its stored curve, and the colour baked into its pixels, are
-/// out of date), or by an older encoding of its own pixels ([`ENCODE_VERSION`], i.e. a lower JPEG
-/// quality). A proxy from a newer build is left alone (rebuilding it here would only undo that
-/// build's work), as is one that can't be read: those are [`is_valid`]'s business.
-pub fn is_stale(path: &Path) -> bool {
+/// Whether the complete proxy at `path` is out of date for a photo and must be rebuilt: written by
+/// an older encoding of its own pixels ([`ENCODE_VERSION`], i.e. a lower JPEG quality) — this
+/// reaches every proxy — or, when the photo takes the per-file camera look (`look`,
+/// [`lightcraft_catalog::Photo::fitted_look`]), by an older camera-look fit than this build's (so
+/// its stored curve, and the colour baked into its pixels, are out of date; the fit only reaches
+/// those raws, so a JPEG's or DNG's proxy is never stale for it). A proxy from a newer build is
+/// left alone (rebuilding it here would only undo that build's work), as is one that can't be
+/// read: those are [`is_valid`]'s business.
+pub fn is_stale_for(path: &Path, look: bool) -> bool {
     use std::io::Read;
     if !is_valid(path) {
         return false;
@@ -316,9 +444,14 @@ pub fn is_stale(path: &Path) -> bool {
     }
     let Some(rest) = head.strip_prefix(MAGIC) else { return false };
     let Some(nl) = rest.iter().position(|b| *b == b'\n') else { return false };
-    rest.get(..nl)
-        .and_then(|h| serde_json::from_slice::<serde_json::Value>(h).ok())
-        .is_some_and(|h| header_look_version(&h) < u64::from(crate::camera_preview::LOOK_VERSION) || header_encode_version(&h) < ENCODE_VERSION)
+    rest.get(..nl).and_then(|h| serde_json::from_slice::<serde_json::Value>(h).ok()).is_some_and(|h| {
+        header_encode_version(&h) < ENCODE_VERSION || (look && header_look_version(&h) < u64::from(crate::camera_preview::LOOK_VERSION))
+    })
+}
+
+/// [`is_stale_for`] for a photo that takes the per-file camera look: both conditions apply.
+pub fn is_stale(path: &Path) -> bool {
+    is_stale_for(path, true)
 }
 
 /// The marker file in a smart previews folder: the camera-look fit version and encode version its
@@ -356,7 +489,14 @@ pub fn mark_look_checked(dir: &Path) -> Result<(), String> {
 /// Load the proxy at `path`.
 pub fn load(path: &Path) -> Result<crate::media::DecodedSource, String> {
     let b = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    decode(&b).map(|(image, camera_tone)| crate::media::DecodedSource { image: Arc::new(image), info: None, camera_tone, denoised: None })
+    decode(&b).map(|(image, camera_tone, info)| crate::media::DecodedSource {
+        image: Arc::new(image),
+        info,
+        camera_tone,
+        denoised: None,
+        from_proxy: true,
+        reduced: false,
+    })
 }
 
 #[cfg(test)]
@@ -453,7 +593,8 @@ mod tests {
         }))
         .unwrap();
         let img = lightcraft_scenes::demo_library()[0].render(64, 40);
-        let bytes = encode(&img, Some(&tone)).unwrap();
+        let info = lightcraft_pipeline::SourceInfo { raw: true, camera_tone: Some(tone), ..Default::default() };
+        let bytes = encode(&img, Some(&info)).unwrap();
         assert_eq!(decode(&bytes).unwrap().1, Some(tone));
         let dir = temp("tone");
         let path = dir.join("t.lcsp");
@@ -473,15 +614,50 @@ mod tests {
         let mut hostile = MAGIC.to_vec();
         hostile.extend_from_slice(head.to_string().as_bytes());
         hostile.extend_from_slice(&bytes[nl..]);
-        let (pixels, tone) = decode(&hostile).unwrap();
+        let (pixels, tone, _) = decode(&hostile).unwrap();
         assert_eq!((pixels.width, tone), (img.width, None));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
+    fn facts_and_mattes_travel_with_the_proxy() {
+        let img = lightcraft_scenes::demo_library()[0].render(32, 20);
+        let mut mattes = Mattes::default();
+        mattes.push(MatteKind::Sky, Image { width: 16, height: 10, data: vec![255; 160] });
+        let info = SourceInfo {
+            raw: true,
+            as_shot_temp: 4200.0,
+            as_shot_tint: -5.0,
+            legacy_relative_wb: true,
+            mattes: Some(std::sync::Arc::new(mattes)),
+            ..Default::default()
+        };
+        let bytes = encode(&img, Some(&info)).unwrap();
+        let (_, _, back) = decode(&bytes).unwrap();
+        let back = back.expect("the facts are read back");
+        assert_eq!((back.as_shot_temp, back.as_shot_tint, back.legacy_relative_wb), (4200.0, -5.0, true));
+        assert_eq!(back.mattes.expect("the mattes are read back").bytes(), 160);
+        // a proxy cut inside its tail is incomplete (rebuilt, not taken for a source of facts)
+        let dir = temp("facts");
+        let path = dir.join("f.lcsp");
+        std::fs::write(&path, &bytes[..bytes.len() - 8]).unwrap();
+        assert!(!is_valid(&path));
+        let _ = std::fs::remove_dir_all(&dir);
+        // an old proxy (no tail) has no facts, and neither has one with a malformed tail
+        assert!(decode(&encode(&img, None).unwrap()).unwrap().2.is_none());
+        let nl = MAGIC.len() + bytes[MAGIC.len()..].iter().position(|b| *b == b'\n').unwrap();
+        let mut head: serde_json::Value = serde_json::from_slice(&bytes[MAGIC.len()..nl]).unwrap();
+        head["tail"] = serde_json::json!(bytes.len());
+        let mut lying = MAGIC.to_vec();
+        lying.extend_from_slice(head.to_string().as_bytes());
+        lying.extend_from_slice(&bytes[nl..]);
+        assert!(decode(&lying).map(|(_, _, i)| i.is_none()).unwrap_or(true), "an over-large tail is not trusted");
+    }
+
+    #[test]
     fn roundtrip_keeps_the_picture() {
         let img = lightcraft_scenes::demo_library()[0].render(160, 100);
-        let (back, tone) = decode(&encode(&img, None).unwrap()).unwrap();
+        let (back, tone, _) = decode(&encode(&img, None).unwrap()).unwrap();
         assert_eq!((back.width, back.height), (img.width, img.height));
         assert!(tone.is_none());
         let mut err = 0.0f64;

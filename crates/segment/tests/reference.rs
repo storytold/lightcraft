@@ -93,5 +93,12 @@ fn matches_reference() {
         let want = vec(&r[&format!("det{i}_masks")].i((0, q)).unwrap());
         assert!(rel_err("best mask", &ours, &want) < 2e-2);
         assert!(mask_disagreement(&ours, &want) < 2e-3);
+        // the semantic mask (all instances as one; Subject's people take their share of it); reference
+        // files made before it was written lack it
+        if let Some(want) = r.get(&format!("det{i}_semantic")) {
+            let want = vec(want);
+            assert!(rel_err("semantic mask", &out.semantic, &want) < 2e-2);
+            assert!(mask_disagreement(&out.semantic, &want) < 2e-3);
+        }
     }
 }

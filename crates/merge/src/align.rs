@@ -13,13 +13,49 @@ use crate::ransac::{self, Model};
 /// Long edge of the images features are detected on.
 pub const WORK_EDGE: usize = 1200;
 
+/// The luminance merges align and weigh by (camera or linear RGB; not a colorimetric one).
+#[inline]
+pub(crate) fn luma(c: [f32; 3]) -> f32 {
+    0.25 * c[0] + 0.6 * c[1] + 0.15 * c[2]
+}
+
+/// The motion models a fit chooses among, simplest first: (model, name, fewest inliers).
+pub type Models = [(Model, &'static str, usize)];
+
+/// Of `models` fitted by RANSAC to `a` → `b` (`thresh` px; at least `share` of the points and each
+/// model's minimum as inliers; plausible for a `w × h` frame), the simplest that explains (almost) as
+/// many points as the one explaining the most: extra degrees of freedom fitted to clustered points
+/// extrapolate badly.
+pub(crate) fn choose_model(
+    models: &Models,
+    a: &[Point],
+    b: &[Point],
+    thresh: f64,
+    share: f64,
+    (w, h): (f64, f64),
+    seed: u64,
+) -> Option<(&'static str, ransac::Fit)> {
+    let mut fits: Vec<(&'static str, ransac::Fit)> = Vec::new();
+    for &(model, name, min) in models {
+        let need = ((a.len() as f64 * share).ceil() as usize).max(min);
+        if let Some(f) = ransac::ransac(model, a, b, thresh, need, seed)
+            && plausible(&f.h, w, h, 0.12)
+        {
+            fits.push((name, f));
+        }
+    }
+    let most = fits.iter().map(|(_, f)| f.inliers.len()).max()?;
+    // the fit with `most` inliers always qualifies
+    fits.into_iter().find(|(_, f)| f.inliers.len() as f64 >= most as f64 * 0.97)
+}
+
 /// A grey, perceptually encoded work image: `(luminance · gain)^(1/2.2)`, clamped to 0..1, and
 /// the scale from full-resolution pixels to work pixels.
 pub fn work_image(img: &Rgb32f, gain: f32, max_edge: usize) -> (Plane, f64) {
     let small = if img.width.max(img.height) > max_edge { fit(img, max_edge, max_edge, Filter::Box) } else { img.clone() };
     let scale = small.width as f64 / img.width as f64;
     let p = small.map(|c| {
-        let y = (0.25 * c[0] + 0.6 * c[1] + 0.15 * c[2]) * gain;
+        let y = luma(c) * gain;
         y.clamp(0.0, 1.0).powf(1.0 / 2.2)
     });
     (p, scale)
@@ -29,8 +65,7 @@ pub fn work_image(img: &Rgb32f, gain: f32, max_edge: usize) -> (Plane, f64) {
 /// without EXIF.
 pub fn median_luma(img: &Rgb32f, clip: f32) -> f32 {
     let step = (img.data.len() / 100_000).max(1);
-    let mut v: Vec<f32> =
-        img.data.iter().step_by(step).filter(|p| p[0].max(p[1]).max(p[2]) < clip * 0.98).map(|c| 0.25 * c[0] + 0.6 * c[1] + 0.15 * c[2]).collect();
+    let mut v: Vec<f32> = img.data.iter().step_by(step).filter(|p| p[0].max(p[1]).max(p[2]) < clip * 0.98).map(|c| luma(*c)).collect();
     if v.is_empty() {
         return clip;
     }
@@ -86,24 +121,13 @@ pub fn align_pair(ref_feat: &Features, feat: &Features, scale: f64, full_w: usiz
     let a: Vec<Point> = m.iter().map(|(i, _)| Point::new(ref_feat.points[*i].x as f64, ref_feat.points[*i].y as f64)).collect();
     let b: Vec<Point> = m.iter().map(|(_, j)| Point::new(feat.points[*j].x as f64, feat.points[*j].y as f64)).collect();
     let (ww, wh) = (full_w as f64 * scale, full_h as f64 * scale);
-    // Fit every model; keep the simplest one that explains (almost) as many matches as the most
-    // general one — extra degrees of freedom fitted to clustered points extrapolate badly.
-    let mut fits: Vec<(&'static str, ransac::Fit)> = Vec::new();
-    for (model, name, min) in [(Model::Translation, "translation", 5), (Model::Similarity, "similarity", 8), (Model::Homography, "homography", 16)] {
-        if let Some(f) = ransac::ransac(model, &a, &b, 1.5, min, seed)
-            && plausible(&f.h, ww, wh, 0.12)
-        {
-            fits.push((name, f));
-        }
-    }
-    let Some(most) = fits.iter().map(|(_, f)| f.inliers.len()).max() else { return Alignment::identity() };
-    // the fit with `most` inliers always qualifies
-    let Some((name, f)) = fits.into_iter().find(|(_, f)| f.inliers.len() as f64 >= most as f64 * 0.97) else { return Alignment::identity() };
+    let models = [(Model::Translation, "translation", 5), (Model::Similarity, "similarity", 8), (Model::Homography, "homography", 16)];
+    let Some((name, f)) = choose_model(&models, &a, &b, 1.5, 0.0, (ww, wh), seed) else { return Alignment::identity() };
     Alignment { h: scale_homography(&f.h, scale), model: name, inliers: f.inliers.len(), rms: f.rms / scale }
 }
 
-/// Resample `img` into the reference geometry: `out(p) = img(h(p))`. Returns the warped image and
-/// a validity mask (false where `h(p)` falls outside `img`).
+/// Resample `img` into the reference geometry: `out(p) = img(h(p))` (Lanczos-3). Returns the warped
+/// image and a validity mask (false where `h(p)` falls outside `img`).
 pub fn warp(img: &Rgb32f, h: &Homography) -> (Rgb32f, Vec<bool>) {
     let (w, ht) = (img.width, img.height);
     if *h == Homography::IDENTITY {
@@ -116,7 +140,7 @@ pub fn warp(img: &Rgb32f, h: &Homography) -> (Rgb32f, Vec<bool>) {
             let p = h.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
             let (sx, sy) = (p.x as f32, p.y as f32);
             if sx >= 0.0 && sy >= 0.0 && sx <= w as f32 && sy <= ht as f32 {
-                row[x] = img.sample_bilinear(sx, sy);
+                row[x] = img.sample_lanczos3(sx, sy);
                 vrow[x] = true;
             }
         }

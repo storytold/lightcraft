@@ -420,6 +420,7 @@
   "Detect Faces": "Detectar caras",
   "Detect Faces (Photo menu) needs it: a small one-time download.": "Detectar caras (menú Foto) lo necesita: una pequeña descarga única.",
   "Diagonal": "Diagonal",
+  "Dimensions": "Dimensiones",
   "Discard Preview Cache": "Descartar caché de vistas previas",
   "Display P3": "Display P3",
   "Display name": "Nombre visible",
@@ -1441,6 +1442,7 @@
   "Show in Explorer": "Mostrar en el Explorador",
   "Show in File Manager": "Mostrar en el gestor de archivos",
   "Show in Finder": "Mostrar en el Finder",
+  "Show in Folders": "Mostrar en Carpetas",
   "Show on Map": "Mostrar en el mapa",
   "Show overlay (O)": "Mostrar superposición (O)",
   "Show ratings, flags and edit badges": "Mostrar valoraciones, marcas e indicadores de edición",
@@ -1749,7 +1751,7 @@
   "Width": "Ancho",
   "Width (% of photo)": "Ancho (% de la foto)",
   "Width (px)": "Ancho (px)",
-  "Width × Height": "Ancho × alto",
+  "Width & Height": "Ancho & alto",
   "Will be replaced": "Se reemplazará",
   "Will be restored": "Se restaurará",
   "Window": "Ventana",
@@ -2340,5 +2342,9 @@
   "Checking the GPU…": "Comprobando la GPU…",
   "CPU": "CPU",
   "A face model uses the GPU only when a check shows it gives the same results faster.": "Un modelo de caras usa la GPU solo cuando una comprobación muestra que da los mismos resultados más rápido.",
-  "Checking the GPU for faces": "Comprobando la GPU para las caras"
+  "Checking the GPU for faces": "Comprobando la GPU para las caras",
+  "Pixel limit": "Límite de píxeles",
+  "Percentage of the photo's long edge. The smaller limit wins; -1 means no pixel limit. 0% keeps a minimum preview. Smaller previews are faster.": "Porcentaje del lado largo de la foto. Se aplica el límite menor; -1 significa sin límite de píxeles. El 0 % conserva una vista previa mínima. Las vistas previas más pequeñas son más rápidas.",
+  "Limits apply to whole-frame previews. Zoomed detail stays sharp; exports and 1:1 preview builds keep their own sizes.": "Los límites se aplican a las vistas previas de la imagen completa. Los detalles ampliados siguen nítidos; las exportaciones y las vistas previas 1:1 conservan sus propios tamaños.",
+  "Enter a positive pixel limit, or -1 for no limit.": "Introduce un límite de píxeles positivo o -1 para no limitarlo."
 }

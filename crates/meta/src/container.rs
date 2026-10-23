@@ -7,6 +7,7 @@
 //! - WebP (RIFF container spec): `EXIF`, `XMP `, `ICCP` chunks.
 //! - TIFF-based files (TIFF, DNG and most raws): the whole file is the Exif block; XMP (700), ICC (34675) and
 //!   IPTC (33723) from IFD0.
+//! - Minolta MRW (see [`crate::mrw`]): the `TTW` block is the Exif block.
 //! - Canon CR3 (ISO base media file, see [`crate::cr3`]): `CMT1`/`CMT2`/`CMT4` merged into one Exif block; the
 //!   XMP `uuid` box.
 
@@ -35,6 +36,14 @@ pub fn embedded(bytes: &[u8]) -> Embedded {
             (Some(o), Some(l)) if o > 0 => bytes.get(o..o.saturating_add(l).min(bytes.len())).map(jpeg_segments).unwrap_or_default(),
             _ => Embedded::default(),
         };
+    }
+    if let Some(m) = crate::mrw::parse(bytes) {
+        // Minolta MRW: the `TTW` block is a complete TIFF with the Exif data
+        return m
+            .block(b"TTW")
+            .filter(|t| Tiff::parse(t).is_ok())
+            .map(|t| Embedded { exif: Some(t.to_vec()), ..Default::default() })
+            .unwrap_or_default();
     }
     if let Some(c) = crate::cr3::parse_cr3(bytes) {
         return Embedded { exif: crate::cr3::merged_exif(&c), xmp: c.xmp.map(|b| String::from_utf8_lossy(b).into_owned()), ..Default::default() };

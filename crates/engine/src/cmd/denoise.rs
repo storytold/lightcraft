@@ -513,10 +513,6 @@ fn settings(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"auto": st.auto(), "cacheGb": st.cache_bytes() >> 30, "threads": st.threads, "runOn": st.run_on().name()}))
 }
 
-fn ids_param(p: &Value) -> Option<Vec<PhotoId>> {
-    p.get("ids").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_u64).map(PhotoId).collect())
-}
-
 fn status_json(s: &Session, photo: Option<PhotoId>) -> Value {
     let (files, bytes) = s.denoise_cache_usage();
     let st = &s.denoise.settings;
@@ -594,7 +590,7 @@ fn queue(s: &mut Session, p: &Value) -> Result<Value> {
     if s.denoise_products_dir().is_none() {
         return Err(bad(C, "denoise keeps its pictures in the library's folder: open a library on disk first"));
     }
-    let ids = match ids_param(p) {
+    let ids = match super::photo_ids(p, C)? {
         Some(ids) => ids,
         None => match str_param(p, "scope").unwrap_or("selected") {
             "selected" => s.selection.active.iter().chain(s.selection.ids.iter()).copied().collect(),
@@ -612,14 +608,14 @@ fn queue(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn cancel(s: &mut Session, p: &Value) -> Result<Value> {
-    let photo = p.get("id").and_then(Value::as_u64).map(PhotoId);
+    let photo = super::photo_id(p, "denoise.cancel")?;
     let n = s.denoise_cancel(photo, bool_or(p, "all", photo.is_none()));
     Ok(json!({"cancelled": n}))
 }
 
 fn status(s: &mut Session, p: &Value) -> Result<Value> {
     s.denoise_refresh_active(false);
-    Ok(status_json(s, p.get("id").and_then(Value::as_u64).map(PhotoId)))
+    Ok(status_json(s, super::photo_id(p, "denoise.status")?))
 }
 
 /// `denoise.pump {pace?}`: cheap to call every frame. Takes in what the background job has finished and keeps one going.

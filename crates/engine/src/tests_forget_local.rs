@@ -259,3 +259,58 @@ fn browsing_again_forgets_untouched_records_of_deleted_files() {
     assert_eq!(s.catalog.to_snapshot(), expect);
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// Opens `lib` with a probe that counts the originals it checks.
+fn open_counting(lib: &Path, clock: &Arc<Mutex<String>>) -> (Session, Arc<std::sync::atomic::AtomicUsize>) {
+    let checks = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut s = Session::new().with_fs();
+    let c = clock.clone();
+    s.clock = Box::new(move || c.lock().unwrap().clone());
+    let n = checks.clone();
+    s.media.availability.set_probe(Arc::new(move |p| {
+        n.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Path::new(p).exists()
+    }));
+    s.open_library(lib, false).unwrap();
+    (s, checks)
+}
+
+/// A library last shown on Missing Photos opens without checking its originals: that view holds
+/// no Local records, so forgetting them needn't work it out, and no photo is picked from it (each
+/// check can wait for a sleeping NAS; a big library on one froze the window for minutes).
+#[test]
+fn opening_on_missing_photos_checks_no_originals() {
+    let root = temp_dir("missing");
+    let (a, lib) = (root.join("a"), root.join("lib"));
+    for i in 0..5 {
+        png(&a.join(format!("m{i}.png")), i);
+    }
+    let clock = Arc::new(Mutex::new("2026-08-01T10:00:00".to_string()));
+    let mut s = open(&lib, &clock);
+    s.execute("library.import", &json!({"paths": [a.to_string_lossy()], "mode": "add"})).unwrap();
+    s.execute("library.source", &json!({"kind": "missing"})).unwrap();
+    // every original is there: the view is empty and nothing is selected
+    assert!(s.visible().is_empty());
+    assert!(s.selection.active.is_none());
+    s.close_library().unwrap();
+    drop(s);
+    let (s, checks) = open_counting(&lib, &clock);
+    assert_eq!(s.source, LibrarySource::Missing, "the view is restored");
+    assert_eq!(checks.load(std::sync::atomic::Ordering::SeqCst), 0, "opening an empty Missing view checked originals");
+    assert!(s.library.as_ref().unwrap().forgot_local.is_some(), "forgetting still ran");
+    drop(s);
+
+    // the originals go: the view lists them, one is active
+    std::fs::remove_dir_all(&a).unwrap();
+    let mut s = open(&lib, &clock);
+    s.execute("library.source", &json!({"kind": "all"})).unwrap();
+    s.execute("library.source", &json!({"kind": "missing"})).unwrap();
+    assert_eq!(s.visible().len(), 5, "all five are missing");
+    assert!(s.selection.active.is_some());
+    s.close_library().unwrap();
+    drop(s);
+    let (s, checks) = open_counting(&lib, &clock);
+    assert_eq!(s.source, LibrarySource::Missing);
+    assert_eq!(checks.load(std::sync::atomic::Ordering::SeqCst), 0, "opening a full Missing view checked originals");
+    let _ = std::fs::remove_dir_all(&root);
+}

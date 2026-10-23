@@ -22,6 +22,12 @@ fn err(e: JsValue) -> String {
     e.as_string().or_else(|| e.dyn_ref::<js_sys::Error>().map(|e| String::from(e.message()))).unwrap_or_else(|| format!("{e:?}"))
 }
 
+/// Did an OPFS call fail because the entry doesn't exist (`NotFoundError`)? Any other failure
+/// (security, type mismatch, an unreadable or evicted store) is an error, never "absent" (#1507).
+fn not_found(e: &JsValue) -> bool {
+    crate::files::is_not_found(Reflect::get(e, &"name".into()).ok().and_then(|n| n.as_string()).as_deref())
+}
+
 /// `navigator.storage` in a window or a worker.
 fn storage_manager() -> Option<web_sys::StorageManager> {
     let g = js_sys::global();
@@ -134,10 +140,7 @@ impl Backend {
             opts.set_create(create);
             match JsFuture::from(dir.get_directory_handle_with_options(p, &opts)).await {
                 Ok(d) => dir = d.unchecked_into(),
-                Err(e) if !create => {
-                    let _ = e;
-                    return Ok(None);
-                }
+                Err(e) if !create && not_found(&e) => return Ok(None),
                 Err(e) => return Err(err(e)),
             }
         }
@@ -150,7 +153,7 @@ impl Backend {
         opts.set_create(create);
         match JsFuture::from(dir.get_file_handle_with_options(&name, &opts)).await {
             Ok(h) => Ok(Some(h.unchecked_into())),
-            Err(_) if !create => Ok(None),
+            Err(e) if !create && not_found(&e) => Ok(None),
             Err(e) => Err(err(e)),
         }
     }
@@ -250,7 +253,7 @@ impl Backend {
                 let Some((dir, name)) = Self::parent(root, path, false).await? else { return Ok(()) };
                 match JsFuture::from(dir.remove_entry(&name)).await {
                     Ok(_) => Ok(()),
-                    Err(e) if Reflect::get(&e, &"name".into()).ok().and_then(|n| n.as_string()).as_deref() == Some("NotFoundError") => Ok(()),
+                    Err(e) if not_found(&e) => Ok(()),
                     Err(e) => Err(err(e)),
                 }
             }

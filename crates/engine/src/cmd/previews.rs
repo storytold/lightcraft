@@ -16,6 +16,34 @@ use crate::{Result, Session};
 /// The long edge of a standard-sized preview.
 pub const STANDARD_EDGE: usize = 2048;
 
+/// Cap a photo's long edge to 0–100%, with an 8 px usable minimum. Division before
+/// multiplication keeps even hostile `usize::MAX` dimensions from overflowing.
+pub fn percentage_edge(native: usize, percent: u32) -> usize {
+    let percent = percent.min(100) as usize;
+    (native / 100 * percent + native % 100 * percent / 100).max(8)
+}
+
+/// Standard previews share the displayed photo's cropped/rotated long edge with
+/// the loupe. A full 1:1 build deliberately ignores these optional preview caps.
+fn sized_jobs(s: &mut Session, id: lightcraft_catalog::PhotoId, edge: Option<usize>, percent: u32) -> Vec<RenderJob> {
+    let edge = edge.map(|e| {
+        let native = s.catalog.photo(id).map_or(8, |photo| {
+            let frame = lightcraft_pipeline::geometry::Frame::with_lens(
+                photo.width.max(1) as usize,
+                photo.height.max(1) as usize,
+                &photo.develop,
+                true,
+                photo.embedded_lens.as_ref(),
+            );
+            let (w, h) = frame.native_size();
+            let long = w.max(h);
+            if long.is_finite() { long.round().clamp(1.0, 1e9) as usize } else { 8 }
+        });
+        e.min(percentage_edge(native, percent))
+    });
+    jobs_for(s, id, edge)
+}
+
 /// A preview build in progress.
 #[derive(Debug, Default)]
 pub struct PreviewBuild {
@@ -143,8 +171,12 @@ fn run_all(jobs: Vec<Vec<RenderJob>>, state: &PreviewBuild, task: &TaskGuard, la
 
 fn build(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "library.buildPreviews";
+    let percent = match p.get("percent") {
+        None => 100,
+        Some(v) => v.as_u64().filter(|n| *n <= 100).ok_or_else(|| bad(C, "percent must be an integer from 0 to 100"))? as u32,
+    };
     let edge = match str_param(p, "size").unwrap_or("standard") {
-        "standard" => Some(p.get("edge").and_then(Value::as_u64).map_or(STANDARD_EDGE, |e| e.clamp(256, 8192) as usize)),
+        "standard" => Some(p.get("edge").and_then(Value::as_u64).map_or(STANDARD_EDGE, |e| e.clamp(8, 8192) as usize)),
         "full" | "1:1" => None,
         other => return Err(bad(C, format!("unknown size `{other}` (standard|full)"))),
     };
@@ -153,7 +185,7 @@ fn build(s: &mut Session, p: &Value) -> Result<Value> {
     }
     // explicit ids, else the selection, else everything in view
     let ids = if p.get("ids").is_some() || p.get("id").is_some() || !s.selection.ids.is_empty() { s.targets(p)? } else { s.visible_cloned() };
-    let jobs: Vec<Vec<RenderJob>> = ids.iter().map(|id| jobs_for(s, *id, edge)).filter(|j| !j.is_empty()).collect();
+    let jobs: Vec<Vec<RenderJob>> = ids.iter().map(|id| sized_jobs(s, *id, edge, percent)).filter(|j| !j.is_empty()).collect();
     let state = Arc::new(PreviewBuild { total: jobs.len(), ..Default::default() });
     s.preview_build = Some(state.clone());
     let task = task_for(s, &state);
@@ -176,11 +208,17 @@ fn build(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// One photo's smart preview to build or discard: (photo, its file in the smart previews folder,
-/// how to load the original at preview size, whether the photo takes the per-file camera look —
-/// `camera_preview::file_local_look`, [`lightcraft_catalog::Photo::fitted_look`]: only those
-/// proxies go stale when the fit changes).
+/// how to load the original at preview size, whether the photo can take a preview-fitted look:
+/// vendor raws and DNGs (whose tone can come from their preview); only those proxies go stale when
+/// the fit changes; an older encoding makes any proxy stale).
 #[cfg(not(target_arch = "wasm32"))]
 type SmartJob = (lightcraft_catalog::PhotoId, std::path::PathBuf, Option<crate::media::SourceRef>, bool);
+
+/// DNG tone fits also go stale, although DNGs keep their own matrix and Kelvin white-balance scale.
+#[cfg(not(target_arch = "wasm32"))]
+fn preview_fitted_look(photo: &lightcraft_catalog::Photo) -> bool {
+    photo.fitted_look() || (photo.develops_raw() && photo.format.eq_ignore_ascii_case("DNG"))
+}
 
 /// Held while one proxy is checked and (re)written, so Build Smart Previews and the opening look
 /// refresh ([`refresh_stale_smart_previews`]), on their own threads, never write the same file at once.
@@ -205,15 +243,18 @@ struct SmartCounts {
     failed: Vec<Value>,
 }
 
-/// `source` if it reads the photo's original, else `None`: a cached source decoded from a smart
-/// preview (it has no decoder facts), a proxy standing in for an offline original, and the proxy
-/// fallback of a file source are not the original.
+/// `source` if it reads the photo's original, else `None`. A source decoded from a smart preview
+/// (it now carries the proxy's stored facts), a proxy standing in for an offline original, and the
+/// proxy fallback of a file source are not the original: refreshing a stale proxy from one of them
+/// would stamp its older look as current.
 #[cfg(not(target_arch = "wasm32"))]
 fn original_only(source: crate::media::SourceRef) -> Option<crate::media::SourceRef> {
     use crate::media::SourceRef;
     match source {
-        SourceRef::File { path, max_edge, loader, denoise, .. } => Some(SourceRef::File { path, max_edge, loader, fallback: None, denoise }),
-        SourceRef::Loaded(d) if d.info.is_some() => Some(SourceRef::Loaded(d)),
+        SourceRef::File { path, max_edge, loader, denoise, .. } => {
+            Some(SourceRef::File { path, max_edge, loader, fallback: None, denoise, reduced: None })
+        }
+        SourceRef::Loaded(d) if d.info.is_some() && !d.from_proxy && !d.reduced => Some(SourceRef::Loaded(d)),
         _ => None,
     }
 }
@@ -252,10 +293,11 @@ fn smart_run(
             }
         } else {
             // a complete, current proxy is kept; a missing or damaged one (cut short by a crash or a
-            // full drive) is (re)built, and so is one written by an older camera-look fit (see
-            // `camera_preview::LOOK_VERSION`) when its original can be read
+            // full drive) is (re)built, and so is one written by an older encoding or camera-look
+            // fit (see `smart::ENCODE_VERSION` and `camera_preview::LOOK_VERSION`) when its
+            // original can be read
             let damaged = path.exists();
-            let stale = look && damaged && crate::smart::is_stale(&path);
+            let stale = damaged && crate::smart::is_stale_for(&path, look);
             if damaged && !stale && crate::smart::is_valid(&path) {
                 n.built += 1;
             } else {
@@ -268,7 +310,10 @@ fn smart_run(
                 let r = source
                     .ok_or_else(|| "nothing to build from".to_string())
                     .and_then(|s| s.load_source())
-                    .and_then(|src| crate::smart::encode(&src.image, src.info_or(Default::default()).camera_tone.as_ref()))
+                    .and_then(|src| {
+                        let info = src.info_or(Default::default());
+                        crate::smart::encode(&src.image, Some(&info))
+                    })
                     .and_then(|b| {
                         let parent = path.parent().ok_or_else(|| format!("{}: no parent folder", path.display()))?;
                         // Only create the leaf shard: do not recreate a missing external drive.
@@ -333,7 +378,7 @@ fn smart(s: &mut Session, p: &Value) -> Result<Value> {
         }
         let path = crate::smart::sharded_file_path(&dir, &ph);
         let source = (!discard).then(|| s.media.source_ref(&ph, crate::media::SourceLevel::Preview));
-        jobs.push((id, path, source, ph.fitted_look()));
+        jobs.push((id, path, source, preview_fitted_look(&ph)));
     }
     let custom = s.smart_previews_dir.is_some();
     if background {
@@ -360,14 +405,14 @@ fn smart(s: &mut Session, p: &Value) -> Result<Value> {
     )
 }
 
-/// Bring smart previews written by an older camera-look fit up to date, once per fit version: when
-/// the smart previews folder has not been checked at this `LOOK_VERSION` (its marker,
-/// [`crate::smart::look_checked`]), a worker thread (the UI never waits on the drives) looks at the
-/// proxies of the raws that take the per-file camera look, the only ones the fit reaches (JPEG,
-/// PNG… proxies are never rebuilt), and rebuilds the stale ones from their originals. One whose
-/// original can't be read (offline) is kept as it is, still marked stale in its header: Build
-/// Smart Previews rebuilds it once the original is back. Only existing proxies are touched: none
-/// is built, and a missing folder is never created. Returns the thread, if started.
+/// Bring smart previews up to date, once per fit-and-encoding version: when the smart previews
+/// folder has not been checked at this build's versions (its marker, [`crate::smart::look_checked`]),
+/// a worker thread (the UI never waits on the drives) looks at the proxies of the photos on disk
+/// and rebuilds the stale ones from their originals — one whose stored pixels are an older encoding
+/// (every photo), or, for a raw that takes the per-file camera look or a DNG, one written by an older fit.
+/// One whose original can't be read (offline) is kept as it is, still marked stale in its header:
+/// Build Smart Previews rebuilds it once the original is back. Only existing proxies are touched:
+/// none is built, and a missing folder is never created. Returns the thread, if started.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn refresh_stale_smart_previews(s: &mut Session) -> Option<std::thread::JoinHandle<()>> {
     let dir = s.media.smart_dir.clone()?;
@@ -375,9 +420,11 @@ pub(crate) fn refresh_stale_smart_previews(s: &mut Session) -> Option<std::threa
         return None;
     }
     let max_edge = crate::media::SourceLevel::Preview.max_edge();
-    let photos: Vec<_> = s.catalog.photos().filter(|p| matches!(p.source, lightcraft_catalog::Source::File { .. }) && p.fitted_look()).collect();
-    let jobs: Vec<SmartJob> =
-        photos.iter().map(|p| (p.id, crate::smart::sharded_file_path(&dir, p), Some(s.media.origin_ref(&p.source, max_edge)), true)).collect();
+    let photos: Vec<_> = s.catalog.photos().filter(|p| matches!(p.source, lightcraft_catalog::Source::File { .. })).collect();
+    let jobs: Vec<SmartJob> = photos
+        .iter()
+        .map(|p| (p.id, crate::smart::sharded_file_path(&dir, p), Some(s.media.origin_ref(&p.source, max_edge)), preview_fitted_look(p)))
+        .collect();
     std::thread::Builder::new()
         .name("lc-smart-look".into())
         .spawn(move || refresh_stale(&dir, jobs))
@@ -391,7 +438,7 @@ fn refresh_stale(dir: &std::path::Path, jobs: Vec<SmartJob>) {
     let stale: Vec<SmartJob> = jobs
         .into_iter()
         .map(|(id, path, source, look)| (id, crate::smart::existing_file_path(dir, path), source, look))
-        .filter(|(_, path, _, _)| crate::smart::is_stale(path))
+        .filter(|(_, path, _, look)| crate::smart::is_stale_for(path, *look))
         .collect();
     if !stale.is_empty() {
         // `custom`: the folder is there already, and must not be recreated if it went away since
@@ -515,7 +562,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Build Previews",
             [],
             None,
-            "{size?: standard (2048 px, or `edge`) | full (1:1), ids?, wait?: bool} — render the grid thumbnail and loupe view of the selected photos (else all in view) into the preview cache, in the background unless `wait` → {total, done, failed, running}",
+            "{size?: standard (2048 px, or `edge`: 8..8192) | full (1:1), percent?: integer 0..100 (default 100, standard only), ids?, wait?: bool} — render the grid thumbnail and loupe view of the selected photos (else all in view) into the preview cache; standard views use the smaller pixel/percentage cap (0% = 8 px minimum), full builds and grid thumbnails are independent; in the background unless `wait` → {total, done, failed, running}",
             always,
             build
         ),
@@ -539,6 +586,38 @@ mod tests {
     use crate::Session;
     use crate::media::SourceRef;
 
+    /// Standard jobs obey the percentage for each photo and keep the independent grid thumbnail.
+    #[test]
+    fn standard_preview_jobs_obey_each_photos_percentage_and_pixel_cap() {
+        let mut s = Session::with_demo();
+        let ids: Vec<_> = s.catalog.photos().take(3).map(|p| p.id).collect();
+        for id in ids {
+            let photo = s.catalog.photo(id).unwrap();
+            let native = photo.width.max(photo.height) as usize;
+            for (percent, edge) in [(37, 1700), (1, 8192), (0, 2560), (100, 113)] {
+                let jobs = super::sized_jobs(&mut s, id, Some(edge), percent);
+                let view = jobs.iter().find(|j| j.view_cache.is_some()).unwrap();
+                assert_eq!(view.request.max_w, edge.min(super::percentage_edge(native, percent)));
+                assert_eq!(view.request.max_h, view.request.max_w);
+                assert!(jobs.iter().any(|j| j.cache.is_some() && j.request.max_w >= 512));
+                let rendered = view.clone().run().rendered.unwrap().image;
+                assert!(rendered.width.max(rendered.height) <= edge.min(super::percentage_edge(native, percent)));
+            }
+            let jobs = super::sized_jobs(&mut s, id, None, 0);
+            assert_eq!(jobs.iter().find(|j| j.view_cache.is_some()).unwrap().request.max_w, native);
+        }
+    }
+
+    /// Invalid percentages fail before a worker or activity is created.
+    #[test]
+    fn preview_build_refuses_bad_percent_before_starting() {
+        let mut s = Session::with_demo();
+        for percent in [json!(-1), json!(101), json!(0.5), json!(null), json!("25")] {
+            assert!(s.execute("library.buildPreviews", &json!({"percent": percent})).is_err());
+            assert!(s.preview_build.is_none());
+        }
+    }
+
     // Given a photo's preview jobs, the grid thumbnail is made from the source the view decoded, not
     // by reading the file again (here: a thumbnail job pointing at a file that is not there)
     #[test]
@@ -548,7 +627,8 @@ mod tests {
         let mut jobs = jobs_for(&mut s, id, Some(512));
         assert_eq!(jobs.len(), 2, "view and thumbnail");
         assert!(jobs[0].view_cache.is_some(), "the view renders first");
-        jobs[1].source = SourceRef::File { path: "/nonexistent/photo.arw".into(), max_edge: 512, loader: None, fallback: None, denoise: None };
+        jobs[1].source =
+            SourceRef::File { path: "/nonexistent/photo.arw".into(), max_edge: 512, loader: None, fallback: None, denoise: None, reduced: None };
         assert!(run_photo(jobs), "the thumbnail rendered from the view's decoded source");
     }
 

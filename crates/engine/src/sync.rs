@@ -34,8 +34,8 @@
 //! - a sidecar is found as Read Metadata from File finds it, including the other naming
 //!   scheme's file (`IMG_1.xmp` for `IMG_1.JPG` beside `IMG_1.CR3`).
 //!
-//! The walk for new files stops at the import's limits on depth and entries (logged), and is
-//! not cancelled midway.
+//! The walk for new files stops at the import's limits on depth and entries (logged), or when the
+//! scan is cancelled.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -52,13 +52,19 @@ use crate::{EngineError, Result, Session};
 /// The largest XMP sidecar read when looking for metadata updates; a bigger one is skipped.
 const MAX_SIDECAR_BYTES: u64 = 16 * 1024 * 1024;
 
-/// How far a scan is: the folder's files probed ([`ScanProgress`], whose `cancel` stops the
-/// whole scan) and the library's photos checked.
+/// How far a scan is: the folders and files listed so far (the walk, which comes first and on a
+/// network share can take minutes), the folder's files probed ([`ScanProgress`], whose `cancel`
+/// stops the whole scan, walk included) and the library's photos checked.
 #[derive(Default)]
 pub struct SyncProgress {
     pub files: ScanProgress,
     pub checked: std::sync::atomic::AtomicUsize,
     pub to_check: std::sync::atomic::AtomicUsize,
+    /// Folders and files (photos or not) the walk has listed.
+    pub folders_listed: std::sync::atomic::AtomicUsize,
+    pub files_listed: std::sync::atomic::AtomicUsize,
+    /// The walk is over (or there was nothing to walk).
+    pub listed: std::sync::atomic::AtomicBool,
 }
 
 impl SyncProgress {
@@ -67,6 +73,15 @@ impl SyncProgress {
         use std::sync::atomic::Ordering::Relaxed;
         let done = self.files.done.load(Relaxed).saturating_add(self.checked.load(Relaxed));
         (done, self.files.total.load(Relaxed).saturating_add(self.to_check.load(Relaxed)))
+    }
+
+    /// While a scan lists the folder (before any file can be checked): the folders and files
+    /// listed so far. `None` once the listing is over.
+    pub fn listing(&self) -> Option<(usize, usize)> {
+        use std::sync::atomic::Ordering::{Acquire, Relaxed};
+        // (Acquire pairs with the Release store of `listed`: once the listing is seen to be
+        // over, so is what was stored before it, and the counts that follow are the final ones)
+        (!self.listed.load(Acquire)).then(|| (self.folders_listed.load(Relaxed), self.files_listed.load(Relaxed)))
     }
 }
 
@@ -196,6 +211,7 @@ pub fn scan_with(input: SyncInput, progress: &SyncProgress) -> FolderChanges {
     let SyncInput { folder, scan, ids, naming, labels } = input;
     let seen: Vec<Arc<Photo>> = ids.iter().filter_map(|id| labels.photo(*id)).map(Arc::clone).collect();
     if !cfg!(target_arch = "wasm32") && !Path::new(&folder).is_dir() {
+        progress.listed.store(true, std::sync::atomic::Ordering::Release);
         return FolderChanges { path: folder, seen, offline: true, ..Default::default() };
     }
     // (how each photo's sidecar is named: a pass over the library, made here and not while the
@@ -207,15 +223,30 @@ pub fn scan_with(input: SyncInput, progress: &SyncProgress) -> FolderChanges {
     // network share that is one request for a folder's names where it was several for each
     // photo. Then both halves wait on the disk at once: the new files are probed (on their own
     // threads) beside the checks of the photos, which ask the disk only what the listing can't say.
-    // (how many photos there are to check is known before the walk: the count shows while it runs)
+    // (how many photos there are to check is known before the walk; while the walk runs, the
+    // folders and files it listed tell how far it is)
     progress.to_check.store(photos.len(), std::sync::atomic::Ordering::Relaxed);
     let mut listing = Listing::default();
     let (files, _) = crate::import::expand_noting(
         std::slice::from_ref(&folder),
         scan.skip(),
         crate::walk::Limits::default(),
-        Some(&mut |dir, names, complete| listing.note(dir, names, complete)),
+        Some(&mut |dir, names, complete| {
+            use std::sync::atomic::Ordering::Relaxed;
+            progress.folders_listed.fetch_add(1, Relaxed);
+            let files = names.iter().filter(|(_, kind)| *kind == crate::walk::EntryKind::File).count();
+            progress.files_listed.fetch_add(files, Relaxed);
+            listing.note(dir, names, complete);
+            // ✕ stops the walk too (a cancelled scan's result is not used)
+            !progress.files.cancel.load(Relaxed)
+        }),
     );
+    progress.listed.store(true, std::sync::atomic::Ordering::Release);
+    // ✕ during the listing: its result is not used, so nothing more is asked of the disk (the files' cached probes
+    // would each be checked against the file, a round trip per file on a network share)
+    if progress.files.cancel.load(std::sync::atomic::Ordering::Relaxed) {
+        return FolderChanges { path: folder, seen, ..Default::default() };
+    }
     let listing = &listing;
     // (no threads on the web: one after the other there)
     #[cfg(target_arch = "wasm32")]

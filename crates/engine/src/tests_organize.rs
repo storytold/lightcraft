@@ -356,3 +356,27 @@ fn rename_huge_start_is_a_bad_param() {
     let r = s.execute("photo.renamePreview", &json!({"template": "{seq}", "start": fits + 1, "ids": ids}));
     assert!(r.is_err(), "{r:?}");
 }
+
+#[test]
+fn stack_toggle_by_ids_leaves_the_selection_alone() {
+    let mut s = Session::with_demo();
+    let vis = s.visible_cloned();
+    let (loose, top, member) = (vis[0], vis[1], vis[2]);
+    s.execute("library.select", &json!({"ids": [top.0, member.0], "active": top.0})).unwrap();
+    s.execute("stack.group", &json!({})).unwrap();
+    // a loose photo is selected: the stack is named by `ids` (a badge click), not selected
+    s.execute("library.select", &json!({"ids": [loose.0]})).unwrap();
+    let r = s.execute("stack.toggle", &json!({"ids": [member.0]})).unwrap();
+    assert_eq!(r["changed"], 1, "{r}");
+    assert!(!s.catalog.stack_of(top).unwrap().collapsed);
+    assert_eq!((s.selection.ids.clone(), s.selection.active), (vec![loose], Some(loose)), "the selection is untouched");
+    s.execute("stack.toggle", &json!({"ids": [top.0]})).unwrap();
+    assert!(s.catalog.stack_of(top).unwrap().collapsed);
+    // naming only loose photos is refused without a commit, as is an unknown id
+    let commits = s.commits();
+    assert!(s.execute("stack.toggle", &json!({"ids": [loose.0]})).is_err());
+    assert!(s.execute("stack.toggle", &json!({"ids": [999_999]})).is_err());
+    assert_eq!(s.commits(), commits);
+    // without `ids` the selection still decides (a loose photo selected: not available)
+    assert!(matches!(s.execute("stack.toggle", &json!({})), Err(crate::EngineError::Disabled(..))));
+}

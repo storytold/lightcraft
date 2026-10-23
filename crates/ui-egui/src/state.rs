@@ -199,6 +199,75 @@ impl InfoOverlay {
     }
 }
 
+/// One line of the loupe's info overlay, chosen in View ▸ View Options (Lightroom Classic's Loupe
+/// Info 1 / Loupe Info 2). A line with nothing to show for a photo is left out.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LoupeInfoField {
+    #[default]
+    None,
+    FileName,
+    /// The capture date and time (the import date when the photo has none).
+    CaptureDate,
+    /// Width × height in pixels.
+    Dimensions,
+    /// Shutter speed, aperture, ISO and focal length.
+    Exposure,
+    Camera,
+    Lens,
+    /// Camera and lens on one line.
+    CameraAndLens,
+}
+
+impl LoupeInfoField {
+    /// Every field, in the order View Options lists them.
+    pub const ALL: &'static [LoupeInfoField] = &[
+        LoupeInfoField::None,
+        LoupeInfoField::FileName,
+        LoupeInfoField::CaptureDate,
+        LoupeInfoField::Dimensions,
+        LoupeInfoField::Exposure,
+        LoupeInfoField::Camera,
+        LoupeInfoField::Lens,
+        LoupeInfoField::CameraAndLens,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            LoupeInfoField::None => "None",
+            LoupeInfoField::FileName => "File Name",
+            LoupeInfoField::CaptureDate => "Capture Date",
+            LoupeInfoField::Dimensions => "Dimensions",
+            LoupeInfoField::Exposure => "Exposure",
+            LoupeInfoField::Camera => "Camera",
+            LoupeInfoField::Lens => "Lens",
+            LoupeInfoField::CameraAndLens => "Camera & Lens",
+        }
+    }
+}
+
+/// The three lines each mode of the info overlay shows: Info 1 ([`InfoOverlay::Basic`]) and
+/// Info 2 ([`InfoOverlay::Exposure`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct LoupeInfo {
+    pub info1: [LoupeInfoField; 3],
+    pub info2: [LoupeInfoField; 3],
+}
+
+impl LoupeInfo {
+    /// Info 1's lines before they are changed (and after Use Defaults).
+    pub const INFO1: [LoupeInfoField; 3] = [LoupeInfoField::FileName, LoupeInfoField::CaptureDate, LoupeInfoField::Dimensions];
+    /// Info 2's lines before they are changed (and after Use Defaults).
+    pub const INFO2: [LoupeInfoField; 3] = [LoupeInfoField::FileName, LoupeInfoField::Exposure, LoupeInfoField::CameraAndLens];
+}
+
+impl Default for LoupeInfo {
+    fn default() -> Self {
+        LoupeInfo { info1: LoupeInfo::INFO1, info2: LoupeInfo::INFO2 }
+    }
+}
+
 /// View ▸ Loupe Overlay ▸ Layout Image (Lightroom Classic's loupe overlay): a graphic with
 /// transparency, such as a magazine cover's masthead and cover lines, drawn over the photo in the
 /// loupe (`panels::layout_overlay`). Saved with the UI state, so the layout stays chosen across
@@ -351,7 +420,12 @@ pub struct AppSettings {
     /// Largest long edge (pixels) the user lets the loupe render at; 0 = Automatic (the size it is
     /// drawn at, up to the photo's own pixels and [`LOUPE_EDGE_CEILING`]). Not the old
     /// `previewEdge` key: its 2560 px default was the soft-image bug (issue #323).
+    #[serde(deserialize_with = "preview_limit_from_disk")]
     pub preview_limit: u32,
+    /// Maximum whole-frame preview long edge as a percentage of the photo (0–100).
+    /// Absent in older preferences: 100 preserves Automatic and fixed-pixel limits.
+    #[serde(deserialize_with = "preview_percent_from_disk")]
+    pub preview_percent: u32,
     /// Edit in Other Editor: the application ("" = the system's default for the file type).
     pub external_editor: String,
     /// The file Edit in Other Editor hands over.
@@ -391,6 +465,9 @@ pub struct AppSettings {
     /// View ▸ Zoom to Focus Point: Toggle Zoom (Z) centres the zoomed view on the camera's focus point
     /// when the photo has one (`view.zoomToFocus`).
     pub zoom_to_focus: bool,
+    /// View ▸ View Options: the lines the loupe's info overlay shows in Info 1 and Info 2.
+    #[serde(deserialize_with = "lenient")]
+    pub loupe_info: LoupeInfo,
 }
 
 impl Default for AppSettings {
@@ -403,6 +480,7 @@ impl Default for AppSettings {
             ask_before_move: true,
             gpu: true,
             preview_limit: 0,
+            preview_percent: 100,
             external_editor: String::new(),
             external_file: EditFile::default(),
             photocraft_path: String::new(),
@@ -420,6 +498,7 @@ impl Default for AppSettings {
             keyword_chips: KeywordChips::default(),
             focus_point: false,
             zoom_to_focus: true,
+            loupe_info: LoupeInfo::default(),
         }
     }
 }
@@ -482,9 +561,6 @@ impl EditFile {
     }
 }
 
-/// Preview size limits offered in Settings → Performance (0 = Automatic).
-pub const PREVIEW_LIMITS: [u32; 5] = [0, 1600, 2560, 3840, 5120];
-
 /// The most the loupe ever renders in one go (memory and GPU texture size), whatever the setting.
 pub const LOUPE_EDGE_CEILING: u32 = 8192;
 
@@ -502,6 +578,19 @@ pub const LOUPE_EDGE_STEP: usize = 64;
 pub const STANDARD_PREVIEW_EDGE: u32 = 2560;
 
 impl AppSettings {
+    /// The user's whole-frame preview cap; zero percent still produces an 8 px preview.
+    /// A missing pixel cap does not remove image, allocation or texture safety bounds.
+    pub fn preview_edge_limit(&self, native_long_edge: usize) -> usize {
+        let percent = lightcraft_engine::cmd::previews::percentage_edge(native_long_edge, self.preview_percent);
+        let pixels = if self.preview_limit == 0 { LOUPE_EDGE_CEILING } else { self.preview_limit.clamp(8, LOUPE_EDGE_CEILING) };
+        percent.min(pixels as usize).min(native_long_edge.max(8))
+    }
+
+    /// Whether the user chose a whole-frame cap (sharp zoom windows remain independent).
+    pub fn preview_is_limited(&self) -> bool {
+        self.preview_limit != 0 || self.preview_percent < 100
+    }
+
     /// The theme to show: the light theme in Light mode, or in Auto when `system` is light; the
     /// dark theme otherwise (Auto with no answer from the system included).
     pub fn theme(&self, system: Option<egui::Theme>) -> crate::theme::ThemeKind {
@@ -531,7 +620,7 @@ impl AppSettings {
     /// or `texture_side`, the largest texture the GPU allows (egui_glow, i.e. the browser build,
     /// panics on a bigger one, and many WebGL devices allow only 2048 or 4096).
     pub fn loupe_edge(&self, wanted_px: f32, native_long_edge: usize, texture_side: usize) -> usize {
-        let limit = if self.preview_limit == 0 { LOUPE_EDGE_CEILING } else { self.preview_limit.clamp(512, LOUPE_EDGE_CEILING) } as usize;
+        let limit = self.preview_edge_limit(native_long_edge);
         let ceiling = limit.min(texture_side.max(MIN_TEXTURE_SIDE));
         let wanted = if wanted_px.is_nan() { 8.0 } else { wanted_px.clamp(8.0, ceiling as f32) } as usize;
         let stepped = wanted.div_ceil(LOUPE_EDGE_STEP) * LOUPE_EDGE_STEP;
@@ -562,7 +651,7 @@ impl AppSettings {
 
     /// The edge Build Standard-Sized Previews uses.
     pub fn standard_preview_edge(&self) -> u32 {
-        if self.preview_limit == 0 { STANDARD_PREVIEW_EDGE } else { self.preview_limit }
+        if self.preview_limit == 0 { STANDARD_PREVIEW_EDGE } else { self.preview_limit.clamp(8, LOUPE_EDGE_CEILING) }
     }
 }
 
@@ -642,6 +731,9 @@ pub struct UiState {
     pub view: ViewMode,
     pub left_panel: bool,
     pub right: RightPanel,
+    /// The right panel F8 (`view.rightPanel`) hid, which the next F8 shows again.
+    #[serde(skip)]
+    pub right_hidden: RightPanel,
     /// Widths of the left sidebar and of the right panel in points (dragging their inner edge
     /// resizes them; within [`LEFT_WIDTH`] / [`RIGHT_WIDTH`]).
     pub left_width: f32,
@@ -699,7 +791,8 @@ pub struct UiState {
     /// Mirroring of the triangle / spiral crop guides (0..4).
     pub crop_overlay_orient: u8,
     pub crop_overlay: CropOverlay,
-    /// Last explicitly chosen aspect, retained across photos and app launches.
+    /// Last explicitly chosen aspect, retained across photos and app launches; `None` (nothing
+    /// chosen yet) crops locked to the photo's own shape, as Lightroom starts (#991).
     pub crop_default_aspect: Option<serde_json::Value>,
     pub show_filenames: bool,
     /// What the square grid's caption shows: `filename`, `exposure` (shutter · aperture · ISO ·
@@ -796,6 +889,10 @@ pub struct UiState {
     /// A keyword just made from the sidebar: Keywords opens down to it, once.
     #[serde(skip)]
     pub reveal_keyword: Option<String>,
+    /// A folder Photo ▸ Show in Folders went to (its Folders row's path): the sidebar's Folders
+    /// section opens down to it and scrolls to it, once.
+    #[serde(skip)]
+    pub reveal_folder: Option<String>,
     /// An album or folder row being dragged in the sidebar (dropped on a folder to move it there).
     #[serde(skip)]
     pub dragging_album: Option<u64>,
@@ -814,6 +911,10 @@ pub struct UiState {
     pub grading_hidden: Option<(lightcraft_catalog::PhotoId, [bool; 3])>,
     /// Active on-canvas tool: "", "brush", "linear", "radial", "wbPicker", "straighten", "remove".
     pub tool: String,
+    /// Guided Upright: the selected guide (photo id + index) while the tool is open. A Delete /
+    /// Backspace on it removes that guide alone; a click away or leaving the tool clears it.
+    #[serde(skip)]
+    pub selected_guide: Option<(u64, usize)>,
     pub brush_size: f32,
     pub brush_feather: f32,
     pub brush_flow: f32,
@@ -1238,6 +1339,9 @@ pub enum Dialog {
     },
     About,
     Shortcuts,
+    /// View ▸ View Options (⌘J): the info overlay and the lines of Info 1 and Info 2. Changes apply
+    /// as they are made.
+    ViewOptions,
 }
 
 fn yes() -> bool {
@@ -1260,6 +1364,14 @@ pub struct SyncCounts {
     pub moved: usize,
 }
 
+impl SyncCounts {
+    /// The folder is there and the scan found nothing to bring in, relink, remove or read: the
+    /// dialog only says so (files it skipped are not changes).
+    pub fn up_to_date(&self) -> bool {
+        !self.offline && self.new + self.moved + self.missing + self.metadata == 0
+    }
+}
+
 impl Default for UiState {
     fn default() -> Self {
         UiState {
@@ -1274,6 +1386,7 @@ impl Default for UiState {
             left_width: LEFT_WIDTH.default,
             right_width: RIGHT_WIDTH.default,
             right: RightPanel::Edit,
+            right_hidden: RightPanel::None,
             presets: false,
             preset_thumbs: false,
             filmstrip: true,
@@ -1337,6 +1450,7 @@ impl Default for UiState {
             dragging_photos: None,
             reveal_album: None,
             reveal_keyword: None,
+            reveal_folder: None,
             dragging_album: None,
             dragging_section: None,
             curve_channel: "parametric".into(),
@@ -1344,6 +1458,7 @@ impl Default for UiState {
             grading_mode: "3way".into(),
             grading_hidden: None,
             tool: String::new(),
+            selected_guide: None,
             brush_size: 0.04,
             brush_feather: 50.0,
             brush_flow: 60.0,
@@ -1473,9 +1588,7 @@ impl UiState {
         self.sidebar.adopt_collapsed(&std::mem::take(&mut self.collapsed_sidebar));
         self.dialog = None;
         self.fullscreen = false;
-        if !crate::state::PREVIEW_LIMITS.contains(&self.settings.preview_limit) {
-            self.settings.preview_limit = AppSettings::default().preview_limit;
-        }
+        self.settings.preview_percent = self.settings.preview_percent.min(100);
         match self.settings.startup_view {
             StartupView::Last => {}
             StartupView::Grid => self.view = ViewMode::PhotoGrid,
@@ -1490,6 +1603,18 @@ impl UiState {
 fn lenient<'de, D: serde::Deserializer<'de>, T: Default + serde::de::DeserializeOwned>(d: D) -> Result<T, D::Error> {
     let value = serde_json::Value::deserialize(d)?;
     Ok(serde_json::from_value(value).unwrap_or_default())
+}
+
+/// A malformed app preference falls back independently, preserving the rest of ui.json.
+fn preview_limit_from_disk<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(v.as_u64().and_then(|n| u32::try_from(n).ok()).unwrap_or(0))
+}
+
+/// Invalid percentages use full quality, as an older file without this preference does.
+fn preview_percent_from_disk<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(v.as_u64().filter(|n| *n <= 100).map_or(100, |n| n as u32))
 }
 
 /// A list of ids read leniently: what isn't a list is none, and what isn't text in it is left out.
@@ -1507,4 +1632,29 @@ fn deserialize_favorite_themes<'de, D: serde::Deserializer<'de>>(d: D) -> Result
         }
     }
     Ok(values)
+}
+
+#[cfg(test)]
+mod loupe_info_tests {
+    use super::*;
+
+    /// The lines chosen in View Options are saved with the app's settings; a settings file from
+    /// before they existed, or with a line this build doesn't know, gets the default lines and
+    /// keeps the rest of its settings.
+    #[test]
+    fn view_options_lines_are_saved_with_the_settings() {
+        let mut settings = AppSettings::default();
+        settings.loupe_info.info2 = [LoupeInfoField::Lens, LoupeInfoField::None, LoupeInfoField::FileName];
+        let saved = serde_json::to_value(&settings).unwrap();
+        assert_eq!(saved["loupeInfo"]["info2"], serde_json::json!(["lens", "none", "fileName"]));
+        let read: AppSettings = serde_json::from_value(saved).unwrap();
+        assert_eq!(read.loupe_info, settings.loupe_info);
+
+        let old: AppSettings = serde_json::from_value(serde_json::json!({"filmNames": false})).unwrap();
+        assert_eq!(old.loupe_info, LoupeInfo::default());
+        let newer: AppSettings =
+            serde_json::from_value(serde_json::json!({"filmNames": false, "loupeInfo": {"info1": ["rating", "fileName", "none"]}})).unwrap();
+        assert_eq!(newer.loupe_info, LoupeInfo::default());
+        assert!(!newer.film_names, "the rest of the settings are still read");
+    }
 }

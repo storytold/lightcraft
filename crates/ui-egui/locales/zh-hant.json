@@ -409,6 +409,7 @@
   "Detail (D)": "詳細檢視（D）",
   "Details": "詳細資訊",
   "Diagonal": "對角線",
+  "Dimensions": "尺寸",
   "Discard Preview Cache": "捨棄預覽快取",
   "Display P3": "Display P3",
   "Display name": "顯示名稱",
@@ -1372,6 +1373,7 @@
   "Show in Explorer": "在檔案總管中顯示",
   "Show in File Manager": "在檔案管理員中顯示",
   "Show in Finder": "在 Finder 中顯示",
+  "Show in Folders": "在資料夾中顯示",
   "Show on Map": "在地圖上顯示",
   "Show overlay (O)": "顯示疊加（O）",
   "Show ratings, flags and edit badges": "顯示評分、旗標與編輯標記",
@@ -1575,7 +1577,7 @@
   "Width": "寬度",
   "Width (% of photo)": "寬度（照片百分比）",
   "Width (px)": "寬度（像素）",
-  "Width × Height": "寬度 × 高度",
+  "Width & Height": "寬度 & 高度",
   "Will be replaced": "將取代",
   "Will be restored": "將還原",
   "Window": "視窗",
@@ -2141,5 +2143,9 @@
   "Checking the GPU…": "正在檢查 GPU…",
   "CPU": "CPU",
   "A face model uses the GPU only when a check shows it gives the same results faster.": "只有在檢查顯示 GPU 能更快得出相同結果時，臉孔模型才會使用 GPU。",
-  "Checking the GPU for faces": "正在檢查用於臉孔的 GPU"
+  "Checking the GPU for faces": "正在檢查用於臉孔的 GPU",
+  "Pixel limit": "像素上限",
+  "Percentage of the photo's long edge. The smaller limit wins; -1 means no pixel limit. 0% keeps a minimum preview. Smaller previews are faster.": "相片長邊的百分比。以較小的上限為準；-1 表示無像素上限。0% 仍保留最小預覽。較小的預覽速度更快。",
+  "Limits apply to whole-frame previews. Zoomed detail stays sharp; exports and 1:1 preview builds keep their own sizes.": "上限適用於整幅影像預覽。放大後的細節保持清晰；匯出與 1:1 預覽建立各自保留原有尺寸。",
+  "Enter a positive pixel limit, or -1 for no limit.": "請輸入正數像素上限，或輸入 -1 表示不限制。"
 }

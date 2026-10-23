@@ -146,8 +146,11 @@ Each edit in a batch has its own undo step. Connect mode also lists `ui_inspect`
 Ports and connect mode are unchanged.
 
 Every listed tool has a title and all four MCP hints. Generated command tools are conservatively
-marked as edits. Helpers with optional output paths are marked as writers; `export` is not
-idempotent because the default conflict policy chooses a new filename on repeated calls.
+marked as edits. `export`, `render_photo` and `screenshot` have `readOnlyHint: false` and
+`destructiveHint: true`: their caller-supplied output paths can replace existing files, even
+when a path is optional. The image-only `render_preview` and `ui_screenshot` remain read-only
+and non-destructive. These annotations are client hints, not a file-access sandbox.
+`export` is not idempotent because the default conflict policy chooses a new filename on repeated calls.
 Unknown helper argument keys return JSON-RPC `-32602` naming the key and accepted arguments.
 Generated `cmd_*` tools and nested command params remain free-form: the registry has prose
 parameter docs, not machine-readable schemas. Existing command validation (including strict
@@ -176,7 +179,7 @@ per-request `_meta` receive `resultType: complete` and list/read cache hints; re
 | `apply_preset {preset, amount?, ids?}` | Apply a preset (ids from `cmd_presets_list`) |
 | `crop {id?, rect?, angle?, reset?}` | Normalized crop rect `[x0,y0,x1,y1]` and straighten angle; at least one of `rect`, `angle`, `reset: true`. The crop always ends inside the photo: an `angle` alone keeps the crop if it still fits, else shrinks it to the largest of its aspect that does |
 | `render_photo {id?, size?, format?, path?}` | Render with current settings → **image content** (PNG, or JPEG with `format: "jpeg"`), long edge `size` (default 1024) |
-| `export {path \| dir, id? \| ids?, format?, longEdge? \| shortEdge? \| width?/height? \| megapixels? \| percent?, dontEnlarge?, ppi?, quality?, colorSpace?, bitDepth?, …}` | Full-quality render to `.png` / `.jpg` / `.tif` / `.webp` / `.avif` / `.jxl` (`jxlLossless`, `jxlEffort`, `jxlProgressive`); `format: "original"` copies the file + an XMP sidecar with the edits, `format: "dng"` writes raw photos as DNG with the edits embedded. No size param = 3000 px long edge; `longEdge: 0` = full size (cropped, native resolution); `width` + `height` fit either orientation; `dontEnlarge` defaults to true |
+| `export {path \| dir, id? \| ids?, format?, longEdge? \| shortEdge? \| width?/height? \| megapixels? \| percent?, dontEnlarge?, ppi?, quality?, colorSpace?, bitDepth?, …}` | Full-quality render to `.png` / `.jpg` / `.tif` / `.webp` / `.avif` / `.jxl` (`jxlLossless`, `jxlEffort`, `jxlProgressive`); `format: "original"` copies the file + an XMP sidecar with the edits, `format: "dng"` writes raw photos as DNG with the edits embedded. No size param = 3000 px long edge; `longEdge: 0` = full size (cropped, native resolution); `width` + `height` fit either orientation (Lightroom's Dimensions); with `fit: "widthHeight"` they limit the width and the height as the photo stands (Width & Height); `dontEnlarge` defaults to true |
 
 `get_develop {id}` and `render_photo {id}` use that photo without changing the selection.
 `set_develop`, `crop` and `export` with a supplied photo `id` end the current edit interaction,

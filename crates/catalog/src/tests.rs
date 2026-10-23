@@ -836,6 +836,71 @@ fn cmp_name_ignores_case_without_allocating() {
     assert_eq!(cmp_name("a", "ab"), Less);
 }
 
+/// Search Photos finds named people in free text, and a quoted value keeps a name of several words
+/// together: `person:"Jane Doe"` (issue #1449). Malformed quotes narrow the result or change nothing.
+#[test]
+fn search_text_finds_people_and_quoted_values() {
+    use lightcraft_meta::{Rect, Region, RegionKind};
+    let region = |name: &str, kind: RegionKind| Region {
+        rect: Rect { x0: 0.4, y0: 0.4, x1: 0.6, y1: 0.6 },
+        kind,
+        name: Some(name.to_string()),
+        description: None,
+    };
+    let mut c = Catalog::new();
+    let mut add = |name: &str, regions: Vec<Region>, keywords: &[&str]| {
+        let id = c.alloc_photo_id();
+        let mut p = Photo::new(id, Source::Demo { scene: 1 }, name, "JPEG", 6000, 4000, "2026-09-30T10:00:00");
+        p.meta.regions = regions;
+        p.meta.keywords = keywords.iter().map(|k| k.to_string()).collect();
+        c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        id
+    };
+    let jane = add("a.jpg", vec![region("Jane Doe", RegionKind::Face), region("Rex", RegionKind::Pet)], &[]);
+    let both = add("b.jpg", vec![region("Jane Roe", RegionKind::Face), region("John Doe", RegionKind::Face)], &[]);
+    let zoe = add("c.jpg", vec![region("Zoë Ångström", RegionKind::Face)], &["New York"]);
+    let none = add("lunch 10:30 am.jpg", vec![], &["york minster"]);
+    let q = |text: &str| {
+        let mut ids = c.query(&Filter { text: text.into(), ..Default::default() }, &Sort::default());
+        ids.sort();
+        ids
+    };
+
+    // free text: a person's name, any case, any part of it; pets are not people
+    assert_eq!(q("jane"), vec![jane, both]);
+    assert_eq!(q("DOE"), vec![jane, both]);
+    assert_eq!(q("ångström"), vec![zoe]);
+    assert!(q("rex").is_empty(), "a pet is not a person");
+    // words are still ANDed: b.jpg has a Jane and a Doe, a quoted phrase asks for them together
+    assert_eq!(q("jane doe"), vec![jane, both]);
+    assert_eq!(q("\"jane doe\""), vec![jane]);
+
+    // fielded: the exact name, of several words when quoted
+    assert_eq!(q("person:\"Jane Doe\""), vec![jane]);
+    assert_eq!(q("who:\"jane roe\""), vec![both]);
+    assert_eq!(q("person:\"Zoë Ångström\""), vec![zoe]);
+    assert!(q("person:jane").is_empty(), "person: is the whole name, as before");
+    assert!(q("person:Jane Doe").is_empty(), "unquoted, the second word is its own token, as before");
+    assert_eq!(q("keyword:\"new york\""), vec![zoe], "other fields take quoted values too");
+    assert_eq!(q("person:\"Jane Doe\" a.jpg"), vec![jane], "tokens after a quoted one still count");
+
+    // malformed input never widens the match and never panics
+    assert_eq!(q("person:\"Jane Doe"), vec![jane], "an unclosed quote runs to the end");
+    assert!(q("person:\"Jane Doe a.jpg").is_empty(), "…and takes the rest of the text with it");
+    assert!(q("person:\"\"").is_empty());
+    assert!(q("person:").is_empty());
+    assert_eq!(q("\""), vec![jane, both, zoe, none], "a lone quote is an empty phrase, like an empty search");
+    assert_eq!(q("\"\" jane"), vec![jane, both]);
+    assert!(q("\"jane:doe\"").is_empty(), "a quoted phrase is free text even with a colon");
+    // an unknown field is plain text, its quoted value unquoted (#2099): `10:"30 am"` is the text `10:30 am`
+    assert_eq!(q("10:\"30 am\""), vec![none]);
+    assert!(q("10:\"30 pm\"").is_empty());
+    assert!(q("jane\\\"").is_empty(), "a backslash is an ordinary character");
+    let long = format!("person:\"{}", "é ".repeat(50_000));
+    assert!(q(&long).is_empty());
+    assert_eq!(q("   \t jane \u{3000} "), vec![jane, both], "any whitespace separates tokens");
+}
+
 /// What the catalog remembers of its latest ops: which photos each changed and what of them, as long as that can be
 /// said photo by photo.
 #[test]

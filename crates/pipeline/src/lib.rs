@@ -59,7 +59,7 @@ pub use tone::ToneMap;
 /// A raw source's own colour model, for white balance: like Lightroom, a white balance
 /// re-evaluates the camera's colour matrices at the chosen white (camera-space white balance, DNG
 /// spec ch. 6) instead of adapting the as-shot rendering ([`local::wb_matrix_for`]).
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct CameraColor {
     /// The file's colour tags (its profile look left out: it is applied at load).
     pub tags: lightcraft_raw::ColorData,

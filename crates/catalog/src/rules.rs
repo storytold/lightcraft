@@ -794,12 +794,90 @@ fn date_op(op: &str, have: Option<&str>, value: &Value) -> bool {
     }
 }
 
+/// One byte as the `filePath` rules compare it: `/` and `\` both separate, case doesn't matter.
+fn fold_path_byte(b: u8) -> u8 {
+    if b == b'\\' { b'/' } else { b.to_ascii_lowercase() }
+}
+
+/// Whether `a` and `b` are equal under [`fold_path_byte`].
+fn path_bytes_eq(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|(x, y)| fold_path_byte(*x) == fold_path_byte(*y))
+}
+
+/// `needle` inside `hay`, under [`fold_path_byte`]; allocates nothing.
+fn path_bytes_contains(hay: &[u8], needle: &[u8]) -> bool {
+    let Some((&first, rest)) = needle.split_first() else { return true };
+    // the spellings of the needle's first byte that fold to it: a plain two-way compare per byte
+    let (a, b) = match fold_path_byte(first) {
+        b'/' => (b'/', b'\\'),
+        c if c.is_ascii_lowercase() => (c, c.to_ascii_uppercase()),
+        c => (c, c),
+    };
+    let Some(starts) = hay.len().checked_sub(needle.len()).and_then(|last| hay.get(..=last)) else { return false };
+    let at = |i: usize, c: u8| (c == a || c == b) && hay.get(i + 1..i + needle.len()).is_some_and(|tail| path_bytes_eq(tail, rest));
+    // eight bytes at a time: does any of them spell the first byte (a zero byte after xor)?
+    const ONES: u64 = 0x0101_0101_0101_0101;
+    let has_zero = |v: u64| v.wrapping_sub(ONES) & !v & (ONES << 7) != 0;
+    let (chunks, tail) = starts.as_chunks::<8>();
+    let tail_from = starts.len() - tail.len();
+    for (k, chunk) in chunks.iter().enumerate() {
+        let w = u64::from_le_bytes(*chunk);
+        if (has_zero(w ^ (ONES * u64::from(a))) || has_zero(w ^ (ONES * u64::from(b)))) && chunk.iter().enumerate().any(|(j, &c)| at(k * 8 + j, c)) {
+            return true;
+        }
+    }
+    tail.iter().enumerate().any(|(j, &c)| at(tail_from + j, c))
+}
+
+/// A `filePath` rule. The common case (an ASCII path and an ASCII text) is compared in place, folding
+/// case and `\` as it goes, with nothing allocated per photo; any other text takes
+/// [`file_path_matches_slow`], so Unicode lower-casing (ß, İ, final sigma…) behaves as it always did.
+fn file_path_matches(op: &str, source: &Source, value: &Value) -> bool {
+    let path = match source {
+        Source::File { path } => path.as_str(),
+        Source::Demo { .. } => "",
+    };
+    let Value::String(want) = value else { return file_path_matches_slow(op, path, value) };
+    if !path.is_ascii() || !want.is_ascii() {
+        return file_path_matches_slow(op, path, value);
+    }
+    let (path, want) = (path.trim().as_bytes(), want.trim().as_bytes());
+    match op {
+        // the whole string, spaces included (not word by word like the other text fields)
+        "contains" => !want.is_empty() && path_bytes_contains(path, want),
+        "notContains" => want.is_empty() || !path_bytes_contains(path, want),
+        "is" => path_bytes_eq(path, want),
+        "isNot" => !path_bytes_eq(path, want),
+        "startsWith" => path.get(..want.len()).is_some_and(|head| path_bytes_eq(head, want)),
+        "endsWith" => path.len().checked_sub(want.len()).and_then(|from| path.get(from..)).is_some_and(|tail| path_bytes_eq(tail, want)),
+        "isEmpty" => path.is_empty(),
+        "isNotEmpty" => !path.is_empty(),
+        _ => false,
+    }
+}
+
+/// [`file_path_matches`] for any text: the path and the text are normalised into new strings.
+fn file_path_matches_slow(op: &str, path: &str, value: &Value) -> bool {
+    // `/` and `\` both separate, whatever platform the catalog came from; demo photos have no path
+    let path = path.replace('\\', "/");
+    let want = lower(value).replace('\\', "/");
+    match op {
+        // the whole string, spaces included (not word by word like the other text fields)
+        "contains" => !want.trim().is_empty() && path.to_lowercase().contains(want.trim()),
+        "notContains" => want.trim().is_empty() || !path.to_lowercase().contains(want.trim()),
+        _ => text_op(op, &path, &want),
+    }
+}
+
 impl Rule {
     pub fn matches(&self, p: &Photo, cat: &Catalog) -> bool {
         let (field, op, value) = match self {
             Rule::Group { group } => return group.matches(p, cat),
             Rule::Field { field, op, value } => (field.as_str(), op.as_str(), value),
         };
+        if field == "filePath" {
+            return file_path_matches(op, &p.source, value);
+        }
         let m = &p.meta;
         let want = lower(value);
         let text = |have: &str| text_op(op, have, &want);
@@ -854,20 +932,6 @@ impl Rule {
             "fileName" => text(&p.file_name),
             "extension" => text_op(op, p.extension(), want.trim_start_matches('.')),
             "duration" => num_op(op, p.duration.filter(|d| d.is_finite()), value),
-            "filePath" => {
-                // `/` and `\` both separate, whatever platform the catalog came from; demo photos have no path
-                let path = match &p.source {
-                    Source::File { path } => path.replace('\\', "/"),
-                    Source::Demo { .. } => String::new(),
-                };
-                let want = want.replace('\\', "/");
-                match op {
-                    // the whole string, spaces included (not word by word like the other text fields)
-                    "contains" => !want.trim().is_empty() && path.to_lowercase().contains(want.trim()),
-                    "notContains" => want.trim().is_empty() || !path.to_lowercase().contains(want.trim()),
-                    _ => text_op(op, &path, &want),
-                }
-            }
             "format" => text(&p.format),
             "title" => text(&m.title),
             "caption" => text(&m.caption),
@@ -1692,5 +1756,121 @@ mod tests {
         assert_eq!(field_group("nope"), None);
         assert_eq!(field_label("filePath"), Some("File Path"));
         assert_eq!(field_label("nope"), None);
+    }
+
+    /// The `filePath` rule exactly as it was before the in-place ASCII path: new strings per photo.
+    fn file_path_old(op: &str, source: &Source, value: &serde_json::Value) -> bool {
+        let want = lower(value);
+        let path = match source {
+            Source::File { path } => path.replace('\\', "/"),
+            Source::Demo { .. } => String::new(),
+        };
+        let want = want.replace('\\', "/");
+        match op {
+            "contains" => !want.trim().is_empty() && path.to_lowercase().contains(want.trim()),
+            "notContains" => want.trim().is_empty() || !path.to_lowercase().contains(want.trim()),
+            _ => text_op(op, &path, &want),
+        }
+    }
+
+    #[test]
+    fn file_path_rules_match_the_old_strings_for_any_path() {
+        let paths = [
+            "",
+            " ",
+            "  /a/b.jpg \t",
+            "/Volumes/share/photos/Trip/IMG_0001.jpg",
+            "/Volumes/share/PHOTOS/trip/img_0001.JPG",
+            r"D:\Photos\Lake Como\IMG_0001.JPG",
+            r"d:/photos/lake como/img_0001.jpg",
+            r"\\nas\share\x.jpg",
+            "/photos/Straße/a.jpg",
+            "/photos/STRASSE/a.jpg",
+            "/photos/İstanbul/a.jpg",
+            "/photos/i̇stanbul/a.jpg",
+            "/photos/ΟΔΟΣ/a.jpg",
+            "/photos/οδος/a.jpg",
+            "/photos/ΟΔΌΣ/a.jpg",
+            "/photos/日本/東京.jpg",
+            "/p/\u{0B}x\u{0B}",
+            "/p/\u{85}x\u{85}",
+            "a",
+        ];
+        let wants = [
+            "",
+            " ",
+            "a",
+            "A",
+            "/",
+            r"\",
+            r"\photos\",
+            "/photos/",
+            "photos",
+            "PHOTOS",
+            "Lake Como",
+            " lake como ",
+            "lake  como",
+            r"d:\photos\lake",
+            "IMG_0001.JPG",
+            ".jpg",
+            "straße",
+            "STRASSE",
+            "strasse",
+            "İstanbul",
+            "i̇stanbul",
+            "istanbul",
+            "ΟΔΟΣ",
+            "οδος",
+            "οδοσ",
+            "ΟΔΌΣ",
+            "東京",
+            "日本",
+            "x",
+            "\u{0B}x",
+            "/a/b.jpg",
+            "/a/b.jpg \t",
+            "\u{85}x",
+        ];
+        let ops = ["contains", "notContains", "is", "isNot", "startsWith", "endsWith", "isEmpty", "isNotEmpty", "bogus"];
+        let mut values: Vec<serde_json::Value> = wants.iter().map(|w| json!(w)).collect();
+        values.extend([json!(null), json!(5), json!(true), json!(["a", "b"])]);
+        let mut sources: Vec<Source> = paths.iter().map(|p| Source::File { path: (*p).into() }).collect();
+        sources.push(Source::Demo { scene: 0 });
+        for source in &sources {
+            for op in ops {
+                for value in &values {
+                    assert_eq!(file_path_matches(op, source, value), file_path_old(op, source, value), "{source:?} {op} {value}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn file_path_rule_through_a_rule_set_ignores_case_and_slash_direction() {
+        let mut p = photo(1);
+        p.source = Source::File { path: r"D:\Photos\Lake Como\IMG_0001.JPG".into() };
+        let r = rs(json!({"rules": [{"field": "filePath", "op": "contains", "value": "/LAKE como/"}]}));
+        assert!(r.matches(&p, &Catalog::default()));
+    }
+
+    /// Every piece of a long path, in both cases and both slash directions, wherever it starts
+    /// (the search skips eight bytes at a time, so starts and ends at every offset matter).
+    #[test]
+    fn file_path_contains_finds_every_piece_of_a_long_path() {
+        let path = r"D:\Photos\Lake Como\Wedding-Day_2026\IMG_0001 (copy).JPG";
+        let source = Source::File { path: path.into() };
+        let shout = |s: &str| s.to_uppercase();
+        let swap = |s: &str| s.replace('\\', "/");
+        for from in 0..path.len() {
+            for to in from + 1..=path.len() {
+                let piece = &path[from..to];
+                for want in [piece.to_string(), shout(piece), swap(piece), piece.replace('/', r"\"), format!("{piece}x"), format!("x{piece}")] {
+                    let value = json!(want);
+                    for op in ["contains", "notContains"] {
+                        assert_eq!(file_path_matches(op, &source, &value), file_path_old(op, &source, &value), "{op} {want:?}");
+                    }
+                }
+            }
+        }
     }
 }

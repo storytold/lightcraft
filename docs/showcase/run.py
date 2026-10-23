@@ -1,6 +1,21 @@
 #!/usr/bin/env python3
 """lcb.py FILE.jsonl — run control requests from a JSON-lines file ({"method":..., "params":...} or {"sleep": s})."""
 import json, socket, sys, time
+from pathlib import Path
+
+
+def _jsonl_path(arg):
+    """Resolve the CLI file argument; require an existing readable regular file."""
+    path = Path(arg).resolve()
+    if not path.is_file():
+        sys.exit(f"not a readable file: {arg}")
+    try:
+        with path.open("rb"):
+            pass
+    except OSError:
+        sys.exit(f"not a readable file: {arg}")
+    return path
+
 def call(method, params):
     s = socket.create_connection(("127.0.0.1", 7980), timeout=180)
     s.sendall((json.dumps({"id": 1, "method": method, "params": params}) + "\n").encode())
@@ -10,7 +25,7 @@ def call(method, params):
         if not c: break
         buf += c
     return json.loads(buf)
-for line in open(sys.argv[1]):
+for line in open(_jsonl_path(sys.argv[1])):
     line = line.strip()
     if not line or line.startswith("#"): continue
     r = json.loads(line)

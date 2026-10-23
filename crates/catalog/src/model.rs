@@ -329,7 +329,7 @@ pub struct Analysis {
 /// file's white balance is edited relative to its as-shot look or in Kelvin depends on the camera:
 /// [`relative_wb_camera`].
 pub fn relative_wb_format(format: &str) -> bool {
-    ["ARW", "NEF", "NRW", "RW2", "RWL", "RAW", "RAF", "CR3", "CR2", "PEF", "SRW", "ORF", "ERF"].iter().any(|f| format.eq_ignore_ascii_case(f))
+    ["ARW", "NEF", "NRW", "RW2", "RWL", "RAW", "RAF", "CR3", "CR2", "PEF", "SRW", "ORF", "ERF", "MRW"].iter().any(|f| format.eq_ignore_ascii_case(f))
 }
 
 /// Whether a raw of `format` shot on `camera` (Exif make and model, as [`Meta::camera`] keeps them) is developed
@@ -610,6 +610,7 @@ mod edited_tests {
             ("a.pef", "pef", true),
             ("a.orf", "ORF", true),
             ("a.erf", "ERF", true),
+            ("a.mrw", "MRW", true),
             ("a.dng", "DNG", false),
         ] {
             let mut p = Photo::new(PhotoId(1), Source::Demo { scene: 0 }, name, format, 10, 10, "2026-10-01T00:00:00");
@@ -653,6 +654,7 @@ mod edited_tests {
             ("SONY ILCE-1", "ARW", true),
             ("", "ARW", true),
             ("SONY ILCE-7M3", "DNG", false),
+            ("NIKON CORPORATION NIKON Z5_2", "NEF", false),
         ] {
             let mut p = Photo::new(PhotoId(1), Source::Demo { scene: 0 }, "a.raw", format, 10, 10, "2026-10-01T00:00:00");
             p.kind = MediaKind::Raw;

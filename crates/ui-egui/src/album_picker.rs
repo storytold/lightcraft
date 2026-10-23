@@ -172,13 +172,14 @@ pub struct AlbumPicker<'a> {
     value: &'a mut Option<u64>,
     entries: &'a [AlbumEntry],
     width: f32,
+    empty_text: Option<String>,
 }
 
 impl<'a> AlbumPicker<'a> {
     /// `id` must be unique among the pickers on screen (it names their widgets and keeps their
     /// state apart); `value` is the album picked (`None`: none yet); `entries` in tree order.
     pub fn new(id: impl Into<String>, value: &'a mut Option<u64>, entries: &'a [AlbumEntry]) -> Self {
-        AlbumPicker { id: id.into(), value, entries, width: 180.0 }
+        AlbumPicker { id: id.into(), value, entries, width: 180.0, empty_text: None }
     }
 
     /// The button's width (180 by default).
@@ -187,13 +188,27 @@ impl<'a> AlbumPicker<'a> {
         self
     }
 
+    /// Text for an empty choice (already localized by the caller); the default is "Choose an album…".
+    pub fn empty_text(mut self, text: impl Into<String>) -> Self {
+        self.empty_text = Some(text.into());
+        self
+    }
+
     /// The button and, while open, the popup. The response is `changed()` when an album was picked.
     pub fn show(self, ui: &mut Ui) -> Response {
-        let AlbumPicker { id, value, entries, width } = self;
+        self.show_with_choices(ui, |_| false)
+    }
+
+    /// Draw caller-owned choices before the search (e.g. None / New album in the import review).
+    /// Return true when an extra choice was picked to close the popup. The caller handles those
+    /// actions; `changed()` still reports only an album picked from the tree or search.
+    pub fn show_with_choices(self, ui: &mut Ui, choices: impl FnOnce(&mut Ui) -> bool) -> Response {
+        let AlbumPicker { id, value, entries, width, empty_text } = self;
         let chosen = value.filter(|v| entries.iter().any(|e| e.id == *v && !e.folder));
-        let text = chosen.map_or_else(|| crate::i18n::tr("Choose an album…").to_string(), |c| path_label(entries, c));
+        let text = chosen.map_or_else(|| empty_text.unwrap_or_else(|| crate::i18n::tr("Choose an album…").to_string()), |c| path_label(entries, c));
         // the name, and a drop-down arrow painted at the right (the UI font has no arrow glyph)
-        let mut button = ui.add_sized(vec2(width, ui.spacing().interact_size.y), egui::Button::new(text).truncate().right_text(" "));
+        let mut button =
+            ui.add_sized(vec2(width, ui.spacing().interact_size.y), egui::Button::new(text.as_str()).truncate().right_text(" ")).on_hover_text(text);
         let arrow_color = crate::theme::Tokens::get(ui.ctx()).icon;
         disclosure(ui.painter(), egui::pos2(button.rect.right() - 10.0, button.rect.center().y), true, arrow_color);
         register(ui.ctx(), format!("albumPicker:{id}"), button.rect);
@@ -206,8 +221,15 @@ impl<'a> AlbumPicker<'a> {
         let mut state: State = ui.data(|d| d.get_temp(key)).unwrap_or_default();
         let mut picked: Option<u64> = None;
         egui::Popup::from_toggle_button_response(&button).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
-            ui.set_min_width(width.max(260.0));
-            ui.set_max_width(width.max(260.0) + 120.0);
+            // A wide popup remembered before a window resize must still fit the current viewport.
+            let margin = egui::Frame::popup(ui.style()).total_margin().sum().x;
+            let max_width = (ui.ctx().content_rect().width() - margin).max(1.0);
+            ui.set_min_width(width.max(260.0).min(max_width));
+            ui.set_max_width((width.max(260.0) + 120.0).min(max_width));
+            if choices(ui) {
+                ui.close();
+                return;
+            }
             let search_box =
                 ui.add(egui::TextEdit::singleline(&mut state.query).hint_text(crate::i18n::tr("Search albums")).desired_width(f32::INFINITY));
             register(ui.ctx(), format!("albumPickerSearch:{id}"), search_box.rect);
@@ -227,7 +249,9 @@ impl<'a> AlbumPicker<'a> {
                     let (r, _) = ui.allocate_exact_size(vec2(14.0, 14.0), egui::Sense::hover());
                     let icon = if e.smart { Icon::SmartAlbum } else { Icon::Album };
                     crate::icons::paint(ui.painter(), r, icon, if e.blocked.is_some() { t.text_disabled } else { t.icon });
-                    let resp = ui.add_enabled(e.blocked.is_none(), egui::Button::selectable(Some(e.id) == chosen || highlighted, label));
+                    let resp = ui
+                        .add_enabled(e.blocked.is_none(), egui::Button::selectable(Some(e.id) == chosen || highlighted, label).truncate())
+                        .on_hover_text(label);
                     register(ui.ctx(), format!("albumPickerItem:{}:{id}", e.id), resp.rect);
                     let resp = match &e.blocked {
                         Some(why) => resp.on_disabled_hover_text(why.as_str()),
@@ -388,6 +412,23 @@ mod tests {
         assert_eq!(ids(&[]), vec![1, 4, 5], "folders closed: only the top level");
         assert_eq!(ids(&[1]), vec![1, 2, 3, 4, 5]);
         assert_eq!(ids(&[1, 5]), vec![1, 2, 3, 4, 5, 6]);
+    }
+
+    /// Cycles, dangling parents and excessively deep chains finish with bounded paths and depths.
+    #[test]
+    fn damaged_parent_chains_are_bounded() {
+        let mut entries = vec![e(1, "Loop A", Some(2), true, false), e(2, "Loop B", Some(1), true, false), e(3, "Photo", Some(1), false, false)];
+        set_depths(&mut entries);
+        assert!(ancestors(&entries, 3).len() <= 3);
+        assert_eq!(search(&entries, "photo"), vec![2]);
+        assert_eq!(visible_tree(&entries, &[1, 2]), vec![0, 1, 2]);
+        let mut deep: Vec<_> = (1..1000).map(|id| e(id, "Deep", Some(id + 1), true, false)).collect();
+        deep.push(e(1000, "End", None, true, false));
+        set_depths(&mut deep);
+        assert!(deep.iter().all(|entry| entry.depth <= 65));
+        assert!(ancestors(&deep, 1).len() <= 65);
+        assert!(path_label(&deep, 1).split(" / ").count() <= 66);
+        assert_eq!(path_label(&[e(1, "Orphan", Some(99), false, false)], 1), "Orphan");
     }
 
     /// Big libraries stay quick: 20,000 albums in nested folders are laid out and searched in well

@@ -391,6 +391,7 @@
   "Detail (D)": "詳細（D）",
   "Details": "詳細",
   "Diagonal": "対角線",
+  "Dimensions": "寸法",
   "Discard Preview Cache": "プレビューキャッシュを破棄",
   "Display P3": "Display P3",
   "Display name": "表示名",
@@ -1310,6 +1311,7 @@
   "Show in Explorer": "エクスプローラーで表示",
   "Show in File Manager": "ファイルマネージャーで表示",
   "Show in Finder": "Finderで表示",
+  "Show in Folders": "フォルダで表示",
   "Show on Map": "地図で表示",
   "Show overlay (O)": "重ね表示（O）",
   "Show ratings, flags and edit badges": "評価・フラグ・編集済みマークを表示",
@@ -1499,7 +1501,7 @@
   "Width": "幅",
   "Width (% of photo)": "幅（写真に対する%）",
   "Width (px)": "幅（px）",
-  "Width × Height": "幅 × 高さ",
+  "Width & Height": "幅 & 高さ",
   "Will be replaced": "置き換えられます",
   "Will be restored": "復元されます",
   "Window": "ウィンドウ",
@@ -2340,5 +2342,9 @@
   "Checking the GPU…": "GPU を確認中…",
   "CPU": "CPU",
   "A face model uses the GPU only when a check shows it gives the same results faster.": "顔モデルが GPU を使うのは、同じ結果をより速く出せると確認できた場合だけです。",
-  "Checking the GPU for faces": "顔用の GPU を確認中"
+  "Checking the GPU for faces": "顔用の GPU を確認中",
+  "Pixel limit": "ピクセル上限",
+  "Percentage of the photo's long edge. The smaller limit wins; -1 means no pixel limit. 0% keeps a minimum preview. Smaller previews are faster.": "写真の長辺に対する割合です。小さい方の上限を適用します。-1 はピクセル上限なしを意味します。0% でも最小サイズのプレビューを維持します。小さいプレビューほど高速です。",
+  "Limits apply to whole-frame previews. Zoomed detail stays sharp; exports and 1:1 preview builds keep their own sizes.": "上限は画像全体のプレビューに適用されます。拡大時の細部は鮮明に表示され、書き出しと1:1プレビューの作成にはそれぞれのサイズが使われます。",
+  "Enter a positive pixel limit, or -1 for no limit.": "正のピクセル上限を入力するか、上限なしの場合は -1 を入力してください。"
 }
