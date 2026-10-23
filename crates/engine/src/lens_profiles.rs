@@ -142,17 +142,30 @@ pub fn database() -> Option<&'static LensDb> {
     .as_ref()
 }
 
+/// Finds a lens profile by model name, requiring an exact match when `lens_model` is a bare specification string.
+fn find_by_name<'a>(
+    db: &'a LensDb,
+    lens_model: &str,
+    camera: Option<&lightcraft_lensdb::Camera>,
+) -> Option<&'a lightcraft_lensdb::Profile> {
+    if lightcraft_lensdb::is_spec_name(lens_model) {
+        db.find_lens_named(None, lens_model, camera)
+    } else {
+        db.find_lens(None, lens_model, camera)
+    }
+}
+
 /// Whether any profile in the database matches `lens_model`.
 pub fn has_lens(lens_model: &str) -> bool {
     let Some(db) = database() else { return false };
-    db.find_lens(None, lens_model, None).is_some()
+    find_by_name(db, lens_model, None).is_some()
 }
 
 /// The matched profile's canonical name if recognized.
 pub fn matched_name(lens_model: &str, camera: &str) -> Option<String> {
     let db = database()?;
     let cam = db.find_camera("", camera);
-    let profile = db.find_lens(None, lens_model, cam)?;
+    let profile = find_by_name(db, lens_model, cam)?;
     profile.models.first().cloned().or_else(|| Some(profile.maker.clone()))
 }
 
@@ -171,7 +184,7 @@ pub fn resolve_photo_lens(
     let db = database();
     let db_lens = db.and_then(|db| {
         let cam = db.find_camera("", camera);
-        let profile = db.find_lens(None, lens_name, cam)?;
+        let profile = find_by_name(db, lens_name, cam)?;
         let focal = focal_mm.filter(|f| f.is_finite() && *f > 0.0).map(|f| f as f64)?;
         let shot = Shot {
             focal,

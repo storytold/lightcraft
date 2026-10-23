@@ -366,8 +366,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         ui.add_space(8.0);
     });
     section(app, ui, &d, "optics", "Optics", |app, ui, d| {
-        let photo_opt = app.session.catalog.photo(id);
-        let resolved_lens = photo_opt.and_then(|p| {
+        let raw_photo_opt = app.session.catalog.photo(id).filter(|p| p.develops_raw());
+        let resolved_lens = raw_photo_opt.and_then(|p| {
             lightcraft_engine::lens_profiles::resolve_photo_lens(
                 p.embedded_lens,
                 &p.meta.lens,
@@ -376,7 +376,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 p.meta.aperture,
             )
         });
-        let matched_name = photo_opt.and_then(|p| {
+        let matched_name = raw_photo_opt.and_then(|p| {
             lightcraft_engine::lens_profiles::matched_name(&p.meta.lens, &p.meta.camera)
         });
         let has_lens = resolved_lens.is_some() || matched_name.is_some();
