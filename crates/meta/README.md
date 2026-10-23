@@ -19,6 +19,9 @@ Photo metadata: EXIF, XMP (read + write), IPTC-IIM, and the containers that carr
 35 mm equivalent, flash, exposure bias, program, metering, white balance), orientation, GPS, dimensions and the
 user fields (artist, copyright, title, caption, keywords, hierarchical keywords, rating −1…5, colour label).
 
+JPEG ICC data is exposed only when its APP2 chunks form a complete, consistent, uniquely numbered sequence;
+malformed or truncated ICC sequences leave unrelated readable metadata available and produce no profile.
+
 ## XMP namespaces
 
 Written: `dc`, `xmp`, `photoshop`, `exif`, `exifEX`, `tiff`, `lr` (`hierarchicalSubject`) and ours,

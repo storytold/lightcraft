@@ -1,5 +1,12 @@
 # What's new in LightCraft
 
+## 2026-10-23
+
+### JPEG ICC chunks are validated before colour conversion
+- JPEG ICC profiles are assembled only when every chunk is present exactly once, the sequence numbers and
+  declared totals agree, and every APP2 segment is complete. Reordered valid chunks still work. An invalid
+  sequence uses the existing unsupported-profile sRGB fallback, including when the JPEG is a raw preview.
+
 ## 2026-10-21
 
 ### Sharper resampling in HDR and panorama merges
