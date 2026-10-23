@@ -2220,5 +2220,12 @@
   "≥  at least": "≥  tối thiểu",
   "⌘-drag to straighten, ⇧G Guided Upright, a grid while transforming.": "⌘-kéo để chỉnh thẳng, ⇧G Chỉnh thẳng có hướng dẫn, lưới khi biến đổi.",
   "日本語": "日本語",
-  "繁體中文（台灣）": "繁體中文（台灣）"
+  "繁體中文（台灣）": "繁體中文（台灣）",
+  "Delete and Change Folder": "Xóa và đổi thư mục",
+  "Delete the smart previews in the folder used until now?": "Xóa các bản xem trước thông minh trong thư mục đã dùng đến nay?",
+  "Keep": "Giữ lại",
+  "On, every change to a photo's edits or metadata is written to an XMP file beside the photo, for other apps to read. Off, that happens when you choose Save Metadata to File in the Photo menu.": "Khi bật, mọi thay đổi đối với chỉnh sửa hoặc siêu dữ liệu của ảnh được ghi vào tệp XMP bên cạnh ảnh để các ứng dụng khác đọc. Khi tắt, việc đó xảy ra khi bạn chọn Lưu siêu dữ liệu vào tệp trong menu Ảnh.",
+  "Photos whose originals are not connected are shown and edited from their smart previews; new ones can only be made from originals that are connected.": "Ảnh có bản gốc chưa được kết nối được hiển thị và chỉnh sửa từ bản xem trước thông minh của chúng; bản mới chỉ có thể tạo từ bản gốc đã kết nối.",
+  "The model's file is deleted. To use it again you download or add it again.": "Tệp của mô hình sẽ bị xóa. Để dùng lại, bạn tải xuống hoặc thêm lại.",
+  "Thumbnails and previews are made again as you browse, which takes a while in a large library. Your photos and edits are not touched.": "Hình thu nhỏ và bản xem trước được tạo lại khi bạn duyệt, việc này mất một lúc với thư viện lớn. Ảnh và chỉnh sửa của bạn không bị ảnh hưởng."
 }
