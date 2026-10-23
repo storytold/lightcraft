@@ -137,6 +137,7 @@ fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             hint(ui, t, crate::i18n::tr("not available here"));
         }
     });
+    backups(app, ui, t);
     heading(ui, t, crate::i18n::tr("Startup"));
     row(ui, t, crate::i18n::tr("Open in"), |ui| {
         choices(
@@ -179,6 +180,49 @@ fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         crate::i18n::tr(
             "To hand this editor the original file itself instead (the raw, without a copy: DxO PhotoLab, for example), right-click a photo → Edit In → Open Original in Other Editor (RAW, no copy).",
         ),
+    );
+}
+
+/// Where the library's backups go (`library.backupPreferences`): shown, chosen with a folder
+/// dialog, and put back to Backups in the library folder. Only for a library that is a folder on
+/// disk: nothing else is backed up to a folder.
+fn backups(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+    const ID: &str = "library.backupPreferences";
+    // (read, not asked with the command: this is every frame, and a command is journaled)
+    let Some((folder, chosen)) = lightcraft_engine::cmd::backup::backup_folder(&app.session) else { return };
+    let folder = folder.display().to_string();
+    heading(ui, t, crate::i18n::tr("Backups"));
+    row(ui, t, crate::i18n::tr("Folder"), |ui| {
+        ui.add(egui::Label::new(RichText::new(folder.clone()).color(t.text)).truncate()).on_hover_text(folder.clone());
+    });
+    if !chosen {
+        row(ui, t, "", |ui| hint(ui, t, crate::i18n::tr("In the library folder")));
+    }
+    let mut result = None;
+    row(ui, t, "", |ui| {
+        let can = app.services.picker.is_some() || app.services.pick_folder.is_some();
+        let r = ui.add_enabled(can, egui::Button::new(crate::i18n::tr("Choose Folder…")));
+        register(ui.ctx(), "button:settingsBackupChoose", r.rect);
+        if r.clicked() {
+            result = Some(app.run(ID, json!({"choose": true})));
+        }
+        let r = ui.add_enabled(chosen, egui::Button::new(crate::i18n::tr("Use Library Folder")));
+        register(ui.ctx(), "button:settingsBackupReset", r.rect);
+        if r.clicked() {
+            result = Some(app.run(ID, json!({"dir": null})));
+        }
+        if !can {
+            hint(ui, t, crate::i18n::tr("not available here"));
+        }
+    });
+    // (a folder that was refused: why. One that was set shows in the row above.)
+    if let Some(Err(e)) = result {
+        app.toast(ui.ctx(), e);
+    }
+    hint(
+        ui,
+        t,
+        crate::i18n::tr("A backup holds the catalog, not the photos. Keep it on another drive than the library, so that it outlives that drive."),
     );
 }
 

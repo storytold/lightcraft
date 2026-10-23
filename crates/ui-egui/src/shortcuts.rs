@@ -465,8 +465,12 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
                 o.remove("advance");
             }
             cull(app, id, params, advance);
-        } else if let Err(e) = app.run(id, params)
-            && matches!(id, "app.export" | "app.exportPrevious")
+        } else if let Err(e) = app.run(id, {
+            // (a key is the app's, like a menu: a backup goes on in the background)
+            let mut params = params;
+            crate::menubar::menu_defaults(id, &mut params);
+            params
+        }) && matches!(id, "app.export" | "app.exportPrevious")
         {
             // an export that can't start (e.g. no folder) says why instead of doing nothing
             app.toast(ctx, e);
@@ -664,7 +668,9 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
                 continue;
             }
             // an export that can't start (e.g. no folder) says why instead of doing nothing
-            if let Err(e) = app.run(&f, json!({}))
+            let mut params = json!({});
+            crate::menubar::menu_defaults(&f, &mut params);
+            if let Err(e) = app.run(&f, params)
                 && matches!(f.as_str(), "app.export" | "app.exportPrevious")
             {
                 app.toast(ctx, e);
