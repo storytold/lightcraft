@@ -158,11 +158,12 @@ pub fn filter_chips(f: &Filter, cat: &Catalog) -> Vec<FilterChip> {
         };
         add(format!("Rating {op} {}★", f.rating), json!({"rating": 0}));
     }
-    let mut flags = f.flags.clone();
-    flags.extend(f.flag.filter(|fl| !flags.contains(fl)));
-    if !flags.is_empty() {
-        let names: Vec<String> = flags.iter().map(|fl| format!("{fl:?}").to_lowercase()).collect();
-        add(format!("Flag: {}", names.join(" or ")), json!({"flag": Null, "flags": []}));
+    if let Some(shown) = f.flags_shown() {
+        let name = |fl: &lightcraft_catalog::Flag| format!("{fl:?}").to_lowercase();
+        let or = |fls: &[lightcraft_catalog::Flag]| fls.iter().map(name).collect::<Vec<_>>().join(" or ");
+        // empty: `flag` and `flags` exclude each other, so name both constraints
+        let names = if shown.is_empty() { format!("{} and {}", f.flag.as_ref().map(name).unwrap_or_default(), or(&f.flags)) } else { or(&shown) };
+        add(format!("Flag: {names}"), json!({"flag": Null, "flags": []}));
     }
     let mut labels = f.labels.clone();
     labels.extend(f.label.filter(|l| !labels.contains(l)));

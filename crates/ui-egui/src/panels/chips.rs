@@ -47,10 +47,15 @@ pub(crate) fn display_label(chip: &FilterChip, filter: &lightcraft_catalog::Filt
         return format!("{}: {}", tr("Label"), names.join(&format!(" {} ", tr("or"))));
     }
     if chip.clear.get("flags").is_some() {
-        let mut flags = filter.flags.clone();
-        flags.extend(filter.flag.filter(|flag| !flags.contains(flag)));
-        let names = flags.iter().map(|flag| tr(&format!("{flag:?}").to_lowercase()).to_string()).collect::<Vec<_>>();
-        return format!("{}: {}", tr("Flag"), names.join(&format!(" {} ", tr("or"))));
+        let shown = filter.flags_shown().unwrap_or_default();
+        let name = |flag: &lightcraft_catalog::Flag| tr(&format!("{flag:?}").to_lowercase()).to_string();
+        let or = |flags: &[lightcraft_catalog::Flag]| flags.iter().map(name).collect::<Vec<_>>().join(&format!(" {} ", tr("or")));
+        let names = if shown.is_empty() {
+            format!("{} {} {}", filter.flag.as_ref().map(name).unwrap_or_default(), tr("and"), or(&filter.flags))
+        } else {
+            or(&shown)
+        };
+        return format!("{}: {names}", tr("Flag"));
     }
     if chip.clear.get("dateFrom").is_some() || chip.clear.get("dateTo").is_some() {
         return match (&filter.date_from, &filter.date_to) {

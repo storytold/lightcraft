@@ -151,12 +151,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 
     // flags: several can be on at once (any of them matches), as in Lightroom Classic
     caption(ui, "Flag");
-    let mut chosen: Vec<Flag> = f.flags.clone();
-    if let Some(fl) = f.flag
-        && !chosen.contains(&fl)
-    {
-        chosen.push(fl);
-    }
+    let chosen: Vec<Flag> = f.flags_shown().unwrap_or_default();
     for (id, icon, flag, tip) in [
         ("pick", Icon::FlagPick, Flag::Pick, "Picked"),
         ("reject", Icon::FlagReject, Flag::Reject, "Rejected"),

@@ -1547,6 +1547,8 @@ mod tests {
         assert_eq!(filter_label(&filter, &app.session.catalog), "Farbmarkierung: Color oder Blau");
         let filter = lightcraft_catalog::Filter { flags: vec![lightcraft_catalog::Flag::Pick, lightcraft_catalog::Flag::None], ..Default::default() };
         assert_eq!(filter_label(&filter, &app.session.catalog), "Markierung: ausgewählt oder keine");
+        let filter = lightcraft_catalog::Filter { flag: Some(lightcraft_catalog::Flag::Pick), ..filter };
+        assert_eq!(filter_label(&filter, &app.session.catalog), "Markierung: ausgewählt");
         set_language(Locale::En);
     }
 

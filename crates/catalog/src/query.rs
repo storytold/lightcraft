@@ -255,6 +255,17 @@ impl Filter {
         self.describe_in(Some(cat))
     }
 
+    /// The flags that `flag` and `flags` let through together (they AND), in the filter bar's
+    /// order; `None` when neither is set, empty when they exclude each other. The chip and the
+    /// filter bar's buttons show this, so they match what is filtered.
+    pub fn flags_shown(&self) -> Option<Vec<Flag>> {
+        if self.flag.is_none() && self.flags.is_empty() {
+            return None;
+        }
+        let passes = |f: &Flag| self.flag.is_none_or(|x| x == *f) && (self.flags.is_empty() || self.flags.contains(f));
+        Some([Flag::Pick, Flag::Reject, Flag::None].into_iter().filter(passes).collect())
+    }
+
     fn describe_in(&self, cat: Option<&crate::Catalog>) -> String {
         let mut v: Vec<String> = Vec::new();
         if self.rating > 0 {

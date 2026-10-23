@@ -368,6 +368,27 @@ fn filter_any_of_several_flags() {
     assert_eq!(s.visible_cloned().len(), picks);
 }
 
+/// `flag` and `flags` set together (only through `library.filter`) AND, and the chip says what
+/// they let through, not their union.
+#[test]
+fn filter_flag_and_flags_together_chip() {
+    use lightcraft_catalog::Flag;
+    let mut s = crate::Session::with_demo();
+    let ids: Vec<u64> = s.catalog.photos().take(3).map(|p| p.id.0).collect();
+    for (id, f) in ids.iter().zip(["pick", "reject", "none"]) {
+        s.execute("photo.flag", &json!({"ids": [id], "flag": f})).unwrap();
+    }
+    let picks = s.catalog.photos().filter(|p| p.in_library() && p.flag == Flag::Pick).count();
+    let chip = |s: &Session| crate::filter_chips(&s.filter, &s.catalog).into_iter().find(|c| c.label.starts_with("Flag")).expect("a flag chip").label;
+    s.execute("library.filter", &json!({"flag": "pick", "flags": ["pick", "none"]})).unwrap();
+    assert_eq!(s.visible_cloned().len(), picks);
+    assert_eq!(chip(&s), "Flag: pick");
+    // nothing passes both: the chip names both constraints
+    s.execute("library.filter", &json!({"flag": "pick", "flags": ["reject", "none"]})).unwrap();
+    assert_eq!(s.visible_cloned().len(), 0);
+    assert_eq!(chip(&s), "Flag: pick and reject or none");
+}
+
 /// Quick Collection / target album: B toggles the selection in it (created on first use);
 /// another album can be the target; clear empties it; all undoable.
 #[test]
