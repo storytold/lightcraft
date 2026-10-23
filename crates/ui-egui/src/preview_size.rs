@@ -71,9 +71,13 @@ pub fn percent_slider(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 pub fn pixel_field(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     const WIDGET: &str = "field:settingsPreviewPixels";
     let memo = egui::Id::new(WIDGET).with("value");
-    let current = pixel_limit(&app.ui.settings).to_string();
-    let mut text =
-        if crate::text_field::was_editing(ui.ctx(), WIDGET) { ui.data(|d| d.get_temp::<String>(memo)).unwrap_or(current) } else { current };
+    let limit = pixel_limit(&app.ui.settings);
+    let current = limit.to_string();
+    let mut text = if crate::text_field::was_editing(ui.ctx(), WIDGET) {
+        ui.data(|d| d.get_temp::<(i64, String)>(memo).filter(|(saved, _)| *saved == limit).map(|(_, text)| text)).unwrap_or(current)
+    } else {
+        current
+    };
     let response = crate::text_field::TextField::singleline(WIDGET, &mut text)
         .label(crate::i18n::tr("Pixel limit"))
         .width(100.0_f32.min(ui.available_width()))
@@ -87,5 +91,5 @@ pub fn pixel_field(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             app.toast(ui.ctx(), crate::i18n::tr("Enter a positive pixel limit, or -1 for no limit."));
         }
     }
-    ui.data_mut(|d| d.insert_temp(memo, text));
+    ui.data_mut(|d| d.insert_temp(memo, (pixel_limit(&app.ui.settings), text)));
 }

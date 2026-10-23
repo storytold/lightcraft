@@ -95,7 +95,7 @@ pub fn all_commands(app: &LightcraftApp) -> Value {
         if *id == "app.previewSize"
             && let Some(command) = v.last_mut().and_then(Value::as_object_mut)
         {
-            command.insert("params".into(), json!("{percent?: integer 0..100, pixelLimit?: -1 | positive integer} — query or set whole-frame preview caps; -1 removes the user pixel cap; native zoom detail and exports are independent"));
+            command.insert("params".into(), json!("{percent?: integer 0..100, pixelLimit?: -1 | integer 1..=4294967295} — query or set whole-frame preview caps; -1 removes the user pixel cap; native zoom detail and exports are independent"));
         }
     }
     Value::Array(v)

@@ -2192,5 +2192,6 @@
   "Pixel limit": "Limite de pixels",
   "Percentage of the photo's long edge. The smaller limit wins; -1 means no pixel limit. 0% keeps a minimum preview. Smaller previews are faster.": "Porcentagem do lado maior da foto. O menor limite é aplicado; -1 significa sem limite de pixels. 0% mantém uma prévia mínima. Prévias menores são mais rápidas.",
   "Limits apply to whole-frame previews. Zoomed detail stays sharp; exports and 1:1 preview builds keep their own sizes.": "Os limites se aplicam às prévias da imagem inteira. Os detalhes ampliados continuam nítidos; exportações e criação de prévias 1:1 mantêm seus próprios tamanhos.",
-  "Enter a positive pixel limit, or -1 for no limit.": "Digite um limite de pixels positivo ou -1 para não limitar."
+  "Enter a positive pixel limit, or -1 for no limit.": "Digite um limite de pixels positivo ou -1 para não limitar.",
+  "No pixel limit": "Sem limite de pixels"
 }

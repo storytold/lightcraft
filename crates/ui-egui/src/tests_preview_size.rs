@@ -130,6 +130,43 @@ fn preview_size_command_is_discoverable() {
     let command = commands.as_array().unwrap().iter().find(|c| c["id"] == "app.previewSize").unwrap();
     assert_eq!(command["enabled"], true);
     assert!(command["params"].as_str().unwrap().contains("pixelLimit"));
+    assert!(command["params"].as_str().unwrap().contains("4294967295"));
+}
+
+/// A connected update replaces an in-progress field's stale draft before Return or Tab can commit it.
+#[test]
+fn preview_size_external_updates_replace_an_active_pixel_edit() {
+    use std::time::Duration;
+    let mut h = crate::headless::Headless::new(LightcraftApp::new(lightcraft_engine::Session::new(), Services::default()), [1000.0, 760.0], 1.0);
+    let t = Duration::from_secs(20);
+    let mut ask = |method, params| {
+        let r = h.request(method, params, t);
+        assert_eq!(r["ok"], true, "{r}");
+        r["result"].clone()
+    };
+    ask("engine.execute", json!({"command":"app.settings","params":{"tab":"performance"}}));
+    for end in ["Enter", "Tab"] {
+        ask("engine.execute", json!({"command":"app.previewSize","params":{"pixelLimit":987}}));
+        ask("ui.clickWidget", json!({"id":"field:settingsPreviewPixels"}));
+        ask("ui.key", json!({"key":"a","cmd":true}));
+        ask("ui.text", json!({"text":"1700"}));
+        ask("engine.execute", json!({"command":"app.previewSize","params":{"pixelLimit":1777}}));
+        ask("ui.key", json!({"key":end}));
+        assert_eq!(ask("engine.execute", json!({"command":"app.previewSize"}))["pixelLimit"], 1777, "{end}");
+    }
+}
+
+/// System Info describes the unlimited sentinel in words and gives units only to positive limits.
+#[test]
+fn preview_size_system_info_distinguishes_unlimited_and_pixel_caps() {
+    crate::i18n::set_language(crate::i18n::Locale::En);
+    let mut app = LightcraftApp::new(lightcraft_engine::Session::new(), Services::default());
+    for (limit, expected) in [(-1, "37% / No pixel limit"), (1700, "37% / 1700 px")] {
+        app.run("app.previewSize", json!({"percent":37,"pixelLimit":limit})).unwrap();
+        let info = app.run("app.systemInfo", json!({"open":false})).unwrap();
+        let row = info.as_array().unwrap().iter().find(|r| r["label"] == "Preview size").unwrap();
+        assert_eq!(row["value"], expected);
+    }
 }
 
 /// Compare and Reference respect caps at fit, while retaining native detail after zooming in.
@@ -211,6 +248,7 @@ fn preview_size_localized_controls_fit_at_normal_and_high_scaling() {
     use std::time::Duration;
     const MESSAGES: &[&str] = &[
         "Pixel limit",
+        "No pixel limit",
         "Percentage of the photo's long edge. The smaller limit wins; -1 means no pixel limit. 0% keeps a minimum preview. Smaller previews are faster.",
         "Limits apply to whole-frame previews. Zoomed detail stays sharp; exports and 1:1 preview builds keep their own sizes.",
         "Enter a positive pixel limit, or -1 for no limit.",
