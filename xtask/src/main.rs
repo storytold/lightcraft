@@ -9,6 +9,7 @@ mod ci_report;
 mod ico;
 mod layers;
 mod parity;
+mod refusals;
 mod stats;
 mod version;
 mod web;
@@ -39,6 +40,7 @@ commands:
                   (stops at first failure); writes target/ci/report.json (machine, GPU adapters, data,
                   steps, skipped tests) and target/ci/summary.md; --hardware also runs the GPU tests on
                   every backend with a hardware adapter; --summary-md prints the Markdown summary
+  refusals        check that the interface drops no command's refusal (`let _ = app.run(…)`): act, quiet or deal with it
   corpus [--download]
                   show where test corpora live; --download fetches PngSuite and CC0 raw samples (raw.pixls.us) into corpus/ and checks their sha256
   stats [--exact] count tests and lines per crate (--exact: ask the test harness via `-- --list`)
@@ -56,6 +58,7 @@ fn main() -> ExitCode {
         Some("ico") => ico::run(&rest),
         Some("version") => version::run(&root(), &rest),
         Some("layers") => cmd_layers(),
+        Some("refusals") => refusals::run(&root()),
         Some("assets") => assets::run(&root()),
         Some("bench") => bench::run(&root(), &rest),
         Some("parity") => parity::run(&root(), rest.contains(&"--write")),
@@ -362,6 +365,7 @@ fn cmd_ci(args: &[&str]) -> Result<(), String> {
     }
     steps.push(("parity", Box::new(|| parity::run(&root, false))));
     steps.push(("layers", Box::new(cmd_layers)));
+    steps.push(("refusals", Box::new(|| refusals::run(&root))));
     steps.push(("assets", Box::new(|| assets::run(&root))));
     steps.push(("wasm", Box::new(cmd_wasm)));
 

@@ -395,6 +395,66 @@ impl Catalog {
         Ok(Op::Batch { ops })
     }
 
+    /// [`Self::delete_keyword_ops`] for several keywords at once: one batch, so one undo step.
+    pub fn delete_keywords_ops(&self, keywords: &[String]) -> Result<Op> {
+        let gone: Vec<String> = keywords.iter().map(|k| clean(k)).collect();
+        if gone.is_empty() || gone.iter().any(String::is_empty) {
+            return Err(CatalogError::Invalid("empty keyword".into()));
+        }
+        let goes = |k: &str| gone.iter().any(|g| is_under(k, g));
+        let mut ops = self.keyword_ops(|kws| kws.iter().filter(|x| !goes(x)).cloned().collect());
+        ops.extend(self.list_ops(|list| list.retain(|_, l| !goes(&l.path))));
+        Ok(Op::Batch { ops })
+    }
+
+    /// Move several keywords (each with the keywords below it) inside `parent`, or to the top
+    /// level (`None`), as one batch. Each keeps its name. Of a keyword and one below it only the
+    /// upper one moves (the lower goes with it). Nothing merges here: a name that is taken where
+    /// they go ([`CatalogError::KeywordExists`]), or two of them with one name, refuses the whole
+    /// move. Returns the batch and each move as `(from, to)`.
+    pub fn move_keywords_ops(&self, keywords: &[String], parent: Option<&str>) -> Result<(Op, Vec<(String, String)>)> {
+        let mut from: Vec<String> = Vec::new();
+        for k in keywords {
+            let path = self.keyword_path(k).ok_or_else(|| CatalogError::Invalid(format!("no keyword “{}”", clean(k))))?;
+            if !from.iter().any(|f| same(f, &path)) {
+                from.push(path);
+            }
+        }
+        if from.is_empty() {
+            return Err(CatalogError::Invalid("no keyword to move".into()));
+        }
+        // the upper ones only
+        let all = from.clone();
+        from.retain(|f| !all.iter().any(|o| !same(o, f) && is_under(f, o)));
+        let parent = parent.map(clean).filter(|p| !p.is_empty()).map(|p| self.keyword_path(&p).unwrap_or(p));
+        if let Some(p) = &parent
+            && from.iter().any(|f| is_under(p, f))
+        {
+            return Err(CatalogError::Invalid("can't move a keyword inside itself".into()));
+        }
+        let mut moves: Vec<(String, String)> = Vec::new();
+        for f in &from {
+            let leaf = f.rsplit(SEP).next().unwrap_or(f);
+            let to = parent.as_deref().map_or_else(|| leaf.to_string(), |p| format!("{p}{SEP}{leaf}"));
+            if moves.iter().any(|(_, t)| same(t, &to)) {
+                return Err(CatalogError::Invalid(format!("two of them are named “{leaf}”: move them one at a time")));
+            }
+            moves.push((f.clone(), to));
+        }
+        // one that is there already stays; the others must find their name free
+        moves.retain(|(f, t)| !same(f, t));
+        if let Some((_, taken)) = moves.iter().find(|(_, t)| self.has_keyword(t)) {
+            return Err(CatalogError::KeywordExists(taken.clone()));
+        }
+        let moved = |k: &str| moves.iter().find(|(f, _)| is_under(k, f)).map(|(f, t)| reparent(k, f, t));
+        let mut ops = self.keyword_ops(|kws| kws.iter().map(|k| moved(k).unwrap_or_else(|| k.clone())).collect());
+        // (the moves touch apart parts of the list: each one's listings are its own)
+        for (f, t) in &moves {
+            ops.extend(self.list_move_ops(std::slice::from_ref(f), t));
+        }
+        Ok((Op::Batch { ops }, moves))
+    }
+
     /// Merge several keywords (with their children) into `into`.
     pub fn merge_keywords_ops(&self, from: &[String], into: &str) -> Result<Op> {
         let into = clean(into);
