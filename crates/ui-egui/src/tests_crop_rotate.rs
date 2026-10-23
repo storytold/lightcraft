@@ -379,13 +379,19 @@ fn the_angle_field_writes_the_angle_like_the_readout() {
 }
 
 /// Issue #731: the dimming outside a rotated crop box stays outside it. The photo is shown
-/// unrotated under the box, so a pixel inside the box at -45° looks exactly as it does at 0°,
+/// unrotated under the box (the Photoshop style), so a pixel inside the box at -45°
+/// looks exactly as it does at 0°,
 /// where the box is the whole photo and nothing is dimmed; the photo's corner, outside the
 /// box, is darker. (The dimming was four quads joining photo and box corners, which crossed the
 /// box once rotated: dimmed wedges inside it, doubly dark ones outside, growing with the angle.)
 #[test]
 fn rotating_the_crop_dims_nothing_inside_the_box() {
     let mut h = crop_tool();
+    // the Photoshop style: the photo stays unrotated under the turned box (the Lightroom style
+    // turns the photo instead, so the comparison with the 0° paint below would not hold)
+    let r = h.request("ui.set", json!({"settings": {"cropInteractionStyle": "photoshop"}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
     let plain = h.paint();
     let r = h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "crop.angle", "value": -45.0}}), T);
     assert_eq!(r["ok"], true, "{r}");

@@ -346,6 +346,16 @@ fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             }
         }
     });
+    padded(ui, |ui| {
+        ui.label(crate::i18n::tr("Style"));
+        // Lightroom: the frame stays put and the image pans / rotates under it; Photoshop: the box
+        // moves over a still image
+        let items: [(&str, &str); 2] = [("Lightroom", "lightroom"), ("Photoshop", "photoshop")];
+        let active = if app.ui.settings.crop_lightroom() { Some(0) } else { Some(1) };
+        if let Some(i) = crate::widgets::segmented(ui, "cropStyle", &items, active, 4) {
+            app.ui.settings.crop_interaction_style = items[i].1.to_string();
+        }
+    });
     divider(ui);
     header(ui, "Geometry");
     padded(ui, |ui| {

@@ -810,6 +810,82 @@ fn crop_drag_rejects_unknown_handles_and_bad_points() {
 }
 
 #[test]
+fn crop_box_draws_from_the_press_corner() {
+    let mut s = demo();
+    s.execute("crop.set", &json!({"rect": [0.2, 0.2, 0.8, 0.8]})).unwrap();
+    s.execute("crop.box", &json!({"from": [0.1, 0.1], "to": [0.6, 0.7]})).unwrap();
+    let r = active_dev(&s).crop.geometry.rect;
+    assert!((r.x0 - 0.1).abs() < 1e-9 && (r.y0 - 0.1).abs() < 1e-9, "anchor moved: {r:?}");
+    assert!((r.x1 - 0.6).abs() < 1e-9 && (r.y1 - 0.7).abs() < 1e-9, "{r:?}");
+    // dragging up-left from its own corner draws the other way
+    s.execute("crop.box", &json!({"from": [0.6, 0.7], "to": [0.1, 0.1]})).unwrap();
+    let r = active_dev(&s).crop.geometry.rect;
+    assert!((r.x1 - 0.6).abs() < 1e-9 && (r.y1 - 0.7).abs() < 1e-9, "anchor moved: {r:?}");
+    assert!((r.x0 - 0.1).abs() < 1e-9 && (r.y0 - 0.1).abs() < 1e-9, "{r:?}");
+}
+
+#[test]
+fn crop_box_stops_at_the_image_edge_and_keeps_the_minimum() {
+    let mut s = demo();
+    let id = s.active().unwrap();
+    let p = s.catalog.photo(id).unwrap();
+    let (w, h) = if active_dev(&s).orientation.swaps_axes() { (p.height as f64, p.width as f64) } else { (p.width as f64, p.height as f64) };
+    s.execute("crop.box", &json!({"from": [0.9, 0.9], "to": [3.0, 3.0]})).unwrap();
+    let r = active_dev(&s).crop.geometry.rect;
+    assert!((r.x0 - 0.9).abs() < 1e-9, "anchor moved: {r:?}");
+    assert!(r.x1 <= 1.0 + 1e-9 && r.y1 <= 1.0 + 1e-9, "{r:?}");
+    assert!(r.width() * w >= 0.02 * w.min(h) - 1e-6 && r.height() * h >= 0.02 * w.min(h) - 1e-6, "{r:?}");
+    // a click makes the minimum frame, never an empty one
+    s.execute("crop.box", &json!({"from": [0.5, 0.5], "to": [0.5, 0.5]})).unwrap();
+    let r = active_dev(&s).crop.geometry.rect;
+    assert!((r.width() * w - 0.02 * w.min(h)).abs() < 1e-6 && (r.height() * h - 0.02 * w.min(h)).abs() < 1e-6, "{r:?}");
+}
+
+#[test]
+fn crop_box_honours_the_lock_and_shift() {
+    let mut s = demo();
+    let id = s.active().unwrap();
+    let p = s.catalog.photo(id).unwrap();
+    let (w, h) = if active_dev(&s).orientation.swaps_axes() { (p.height as f64, p.width as f64) } else { (p.width as f64, p.height as f64) };
+    s.execute("crop.aspect", &json!({"aspect": "16x9"})).unwrap();
+    // the lock reinterprets the tuple to follow the image's own orientation; the frame is the truth
+    let want = active_dev(&s).crop.geometry.rect_px(w, h).aspect();
+    s.execute("crop.box", &json!({"from": [0.1, 0.2], "to": [0.6, 0.5]})).unwrap();
+    let g = active_dev(&s).crop.geometry;
+    assert!((g.rect_px(w, h).aspect() - want).abs() < 1e-6, "{} vs {want}", g.rect_px(w, h).aspect());
+    assert!((g.rect.x0 - 0.1).abs() < 1e-9 && (g.rect.y0 - 0.2).abs() < 1e-9, "anchor moved: {:?}", g.rect);
+    // Shift holds the drawn shape for one gesture with the lock off
+    s.execute("crop.aspect", &json!({"aspect": "toggle"})).unwrap();
+    let want = active_dev(&s).crop.geometry.rect_px(w, h).aspect();
+    s.execute("crop.box", &json!({"from": [0.1, 0.1], "to": [0.4, 0.4], "keepRatio": true})).unwrap();
+    let g = active_dev(&s).crop.geometry;
+    assert!((g.rect_px(w, h).aspect() - want).abs() < 1e-6, "{} vs {want}", g.rect_px(w, h).aspect());
+    assert!(active_dev(&s).crop.aspect.is_none(), "the lock toggle is untouched");
+}
+
+#[test]
+fn crop_box_keeps_the_angle_and_stays_inside_when_turned() {
+    let mut s = demo();
+    s.execute("crop.straighten", &json!({"angle": 30.0})).unwrap();
+    s.execute("crop.box", &json!({"from": [0.3, 0.3], "to": [1.5, 1.5]})).unwrap();
+    let g = active_dev(&s).crop.geometry;
+    assert!((g.angle - 30.0).abs() < 1e-9, "{g:?}");
+    let id = s.active().unwrap();
+    let p = s.catalog.photo(id).unwrap();
+    let (w, h) = if active_dev(&s).orientation.swaps_axes() { (p.height as f64, p.width as f64) } else { (p.width as f64, p.height as f64) };
+    assert!(g.is_within_image(w, h), "{g:?}");
+    assert!((g.rect.x0 - 0.3).abs() < 1e-9 && (g.rect.y0 - 0.3).abs() < 1e-9, "anchor moved: {:?}", g.rect);
+}
+
+#[test]
+fn crop_box_rejects_bad_points() {
+    let mut s = demo();
+    assert!(s.execute("crop.box", &json!({"from": [0.5], "to": [0.6, 0.6]})).is_err());
+    assert!(s.execute("crop.box", &json!({"from": [0.5, 0.5]})).is_err());
+    assert!(s.execute("crop.box", &json!({"to": [0.6, 0.6]})).is_err());
+}
+
+#[test]
 fn crop_aspect_rejects_degenerate_custom_ratios() {
     let mut s = demo();
     let before = active_dev(&s).crop;

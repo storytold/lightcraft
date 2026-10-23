@@ -69,6 +69,8 @@ mod tests_compare;
 #[cfg(test)]
 mod tests_copy_paste_dialogs;
 #[cfg(test)]
+mod tests_crop_lr;
+#[cfg(test)]
 mod tests_crop_rotate;
 #[cfg(test)]
 mod tests_crop_tool;
