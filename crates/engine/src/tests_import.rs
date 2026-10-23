@@ -1907,6 +1907,49 @@ fn heic_imports_as_a_normal_photo_or_says_why_not() {
     let _ = std::fs::remove_dir_all(&src);
 }
 
+/// Issue #2284: a photo taken at 13:00 in UTC-5 must be catalogued as 13:00. HEICs carried no Exif
+/// (issue #1233), so every one of them fell back to the file's modification time, which the import
+/// writes as UTC: an iPhone photo landed five hours late and after 19:00 on the wrong day.
+#[test]
+fn a_heic_is_dated_by_its_exif_and_not_by_the_file() {
+    use lightcraft_heif::testdata::{Spec, build};
+    use lightcraft_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value, tags as t};
+    let src = temp_dir("heic-capture-time");
+    let photo = |x: u32, y: u32| [((x * 7 + y * 13) % 200 + 30) as u16, 110, 150];
+    let mut exif = IfdBuilder::new();
+    exif.set(t::DATE_TIME_ORIGINAL, Value::Ascii("2026:10:18 13:00:00".into()));
+    exif.set(t::OFFSET_TIME_ORIGINAL, Value::Ascii("-05:00".into()));
+    let mut ifd0 = IfdBuilder::new();
+    ifd0.set(t::MAKE, Value::Ascii("Apple".into()));
+    ifd0.set(t::MODEL, Value::Ascii("iPhone 15 Pro".into()));
+    // HEIF turns the picture in the container; its Exif Orientation only mirrors that, so reading
+    // the Exif must not turn it a second time.
+    ifd0.set(t::ORIENTATION, Value::Short(vec![6]));
+    ifd0.set_child(t::EXIF_IFD, exif);
+    let exif = TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap();
+    let bytes = build(&Spec { exif: Some(exif), ..Spec::new(96, 64, &photo) });
+    let path = src.join("IMG_0002.HEIC");
+    std::fs::write(&path, &bytes).unwrap();
+    // The probe reads the metadata in every build; only decoding the picture needs the feature.
+    let info = crate::files::probe_bytes("IMG_0002.HEIC", &bytes);
+    if lightcraft_codecs::Format::Heif.can_decode() {
+        let info = info.unwrap();
+        assert_eq!(info.captured.as_deref(), Some("2026-10-18T13:00:00-05:00"));
+        assert_eq!(info.meta.camera, "Apple iPhone 15 Pro");
+        let mut s = Session::new().with_fs();
+        let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+        assert_eq!((ids(&r, "imported"), ids(&r, "failed")), (1, 0), "{r}");
+        let p = s.catalog.photos().next().unwrap();
+        assert_eq!(p.captured.as_deref(), Some("2026-10-18T13:00:00-05:00"), "the time the camera wrote, not the file's");
+        assert_eq!((p.width, p.height), (96, 64), "upright: the container's own transforms, not the Exif tag as well");
+        assert_eq!(lightcraft_catalog::dates::display_time(p.date()), "October 18, 2026 at 1:00:00 PM");
+    } else {
+        assert!(info.is_err(), "without the feature a HEIC cannot be opened at all");
+        assert_eq!(lightcraft_meta::extract(&bytes).capture_time.map(|d| d.to_iso()).as_deref(), Some("2026-10-18T13:00:00-05:00"));
+    }
+    let _ = std::fs::remove_dir_all(&src);
+}
+
 /// Issue #705: Nikon (and most cameras) write `.JPG` and `.NEF`, and a user may rename to `.Jpg`.
 /// The folder scan, `library.browse` and the sidecar lookup match extensions in any letter
 /// case. (The file dialog's filters, the one place that was case-sensitive on Linux before
