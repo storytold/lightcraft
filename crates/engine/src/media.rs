@@ -1242,6 +1242,7 @@ fn header_info(p: &Photo) -> SourceInfo {
         let lens = crate::lens_profiles::resolve_photo_lens(
             p.embedded_lens,
             &p.meta.lens,
+            p.meta.lens_from_spec,
             &p.meta.camera,
             p.meta.focal_mm,
             p.meta.aperture,
@@ -1316,7 +1317,12 @@ impl crate::Session {
             ^ salt;
         let cache = thumb_bucket.map(|b| {
             let mut k = Hasher128::new();
-            k.str(&content_key).u64(settings_hash).u64(b as u64).u64(RENDER_CACHE_VERSION).u64(crate::camera_profiles::cache_key());
+            k.str(&content_key)
+                .u64(settings_hash)
+                .u64(b as u64)
+                .u64(RENDER_CACHE_VERSION)
+                .u64(crate::camera_profiles::cache_key())
+                .u64(crate::lens_profiles::cache_key());
             // (only a render that uses a denoised picture has it in its key, so every other thumbnail stays valid)
             if salt != 0 {
                 k.u64(salt);
@@ -1363,6 +1369,7 @@ impl crate::Session {
             .u64(edge as u64)
             .u64(RENDER_CACHE_VERSION)
             .u64(crate::camera_profiles::cache_key())
+            .u64(crate::lens_profiles::cache_key())
             .finish()
     }
 
@@ -1479,6 +1486,7 @@ impl crate::Session {
             .u64(apply_crop as u64)
             .u64(RENDER_CACHE_VERSION)
             .u64(crate::camera_profiles::cache_key())
+            .u64(crate::lens_profiles::cache_key())
             .finish()
     }
 
@@ -1533,13 +1541,19 @@ impl crate::Session {
         // what the window's spots and Auto Mask strokes read must fit in one render: else the
         // caller keeps the whole-frame render (a window alone would come out wrong)
         let p = self.catalog.photo(id)?;
-        let lens = crate::lens_profiles::resolve_photo_lens(
-            p.embedded_lens,
-            &p.meta.lens,
-            &p.meta.camera,
-            p.meta.focal_mm,
-            p.meta.aperture,
-        );
+        let lens = p
+            .develops_raw()
+            .then(|| {
+                crate::lens_profiles::resolve_photo_lens(
+                    p.embedded_lens,
+                    &p.meta.lens,
+                    p.meta.lens_from_spec,
+                    &p.meta.camera,
+                    p.meta.focal_mm,
+                    p.meta.aperture,
+                )
+            })
+            .flatten();
         let frame = lightcraft_pipeline::geometry::Frame::with_lens(
             p.width.max(1) as usize,
             p.height.max(1) as usize,

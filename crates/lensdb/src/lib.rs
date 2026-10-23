@@ -390,12 +390,6 @@ fn by_focal<T: Copy>(points: &[(f64, T)], focal: f64, eval: impl Fn(&T) -> f64) 
     Some(a + (b - a) * t)
 }
 
-/// Whether `name` contains only numeric focal/aperture tokens (`mm`, `f`, and numbers), such as a [`spec_name`].
-pub fn is_spec_name(name: &str) -> bool {
-    let t = tokens(name);
-    !t.is_empty() && t.iter().all(|w| is_number(w) || w == "mm" || w == "f")
-}
-
 /// A lens name built from a lens specification (min / max focal length, f-number at each), for files that name
 /// no lens model, only its specification (Nikon DSLRs' maker note): "24-70mm f/2.8", "18-55mm f/3.5-5.6",
 /// "85mm f/1.8". Such a name says nothing about the maker, so [`Profile::names_exactly`] must confirm a match.

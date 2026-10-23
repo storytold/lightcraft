@@ -169,6 +169,10 @@ pub fn parse_shutter_seconds(s: &str) -> Option<f64> {
 pub struct Meta {
     pub camera: String,
     pub lens: String,
+    /// Whether `lens` was formatted from a numeric lens specification (`Exif.Photo.LensSpecification`)
+    /// because the file carried no lens model name.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub lens_from_spec: bool,
     pub focal_mm: Option<f32>,
     pub aperture: Option<f32>,
     pub shutter: String,

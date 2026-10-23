@@ -371,13 +371,14 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             lightcraft_engine::lens_profiles::resolve_photo_lens(
                 p.embedded_lens,
                 &p.meta.lens,
+                p.meta.lens_from_spec,
                 &p.meta.camera,
                 p.meta.focal_mm,
                 p.meta.aperture,
             )
         });
         let matched_name = raw_photo_opt.and_then(|p| {
-            lightcraft_engine::lens_profiles::matched_name(&p.meta.lens, &p.meta.camera)
+            lightcraft_engine::lens_profiles::matched_name(&p.meta.lens, p.meta.lens_from_spec, &p.meta.camera)
         });
         let has_lens = resolved_lens.is_some() || matched_name.is_some();
         let has_warp = resolved_lens.as_ref().is_some_and(|l| l.warp.is_some());

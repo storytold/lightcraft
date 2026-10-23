@@ -16,10 +16,18 @@ use crate::media::{DenoiseSpec, FileLoader, FileProbe, PairLoader, PreviewLoader
 fn meta_of(m: &lightcraft_meta::Metadata) -> (Meta, Option<String>) {
     let shutter = m.exposure_time.map(|t| if t >= 1.0 { format!("{t:.0}") } else { format!("1/{:.0}", 1.0 / t) }).unwrap_or_default();
     let camera = [m.make.clone().unwrap_or_default(), m.model.clone().unwrap_or_default()].join(" ").trim().to_string();
+    // (a camera that writes no lens name, like Nikon's DSLRs, still says what range the lens covers)
+    let (lens, lens_from_spec) = match m.lens_model.clone() {
+        Some(model) => (model, false),
+        None => match m.lens_spec.and_then(lightcraft_meta::lens_spec_name) {
+            Some(spec) => (spec, true),
+            None => (String::new(), false),
+        },
+    };
     let meta = Meta {
         camera,
-        // (a camera that writes no lens name, like Nikon's DSLRs, still says what range the lens covers)
-        lens: m.lens_model.clone().or_else(|| m.lens_spec.and_then(lightcraft_meta::lens_spec_name)).unwrap_or_default(),
+        lens,
+        lens_from_spec,
         focal_mm: m.focal_length.map(|f| f as f32),
         aperture: m.f_number.map(|f| f as f32),
         shutter,

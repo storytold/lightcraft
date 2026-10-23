@@ -142,13 +142,55 @@ pub fn database() -> Option<&'static LensDb> {
     .as_ref()
 }
 
-/// Finds a lens profile by model name, requiring an exact match when `lens_model` is a bare specification string.
+/// Changes when the configured lens profile directories' contents change (per process): part of the
+/// render cache keys, so cached thumbnails or views rendered before a lens profile was added or edited
+/// are not reused after.
+pub fn cache_key() -> u64 {
+    static KEY: OnceLock<u64> = OnceLock::new();
+    *KEY.get_or_init(|| {
+        let mut h = lightcraft_preview::Hasher128::new();
+        h.str(BUNDLED_CANON_RF).str(BUNDLED_CANON_EF);
+        let mut dirs: Vec<(PathBuf, &str)> = Vec::new();
+        if let Ok(dir) = std::env::var("LIGHTCRAFT_LENS_PROFILES") {
+            dirs.push((PathBuf::from(dir), "json"));
+        }
+        if let Some(config_dir) = crate::config::config_dir() {
+            dirs.push((config_dir.join("lens-profiles"), "json"));
+        }
+        if let Some(dir) = std::env::var_os(ENV) {
+            dirs.push((PathBuf::from(dir), "xml"));
+        }
+        for (dir, ext) in dirs {
+            let mut files: Vec<(String, u64, std::time::Duration)> = std::fs::read_dir(&dir)
+                .ok()
+                .into_iter()
+                .flatten()
+                .flatten()
+                .filter(|e| e.path().extension().is_some_and(|x| x.eq_ignore_ascii_case(ext)))
+                .filter_map(|e| {
+                    let meta = e.metadata().ok()?;
+                    let modified = meta.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?;
+                    Some((e.file_name().to_string_lossy().into_owned(), meta.len(), modified))
+                })
+                .collect();
+            files.sort();
+            for (name, len, modified) in &files {
+                h.str(name).u64(*len).u64(modified.as_secs()).u64(u64::from(modified.subsec_nanos()));
+            }
+        }
+        h.finish().0 as u64
+    })
+}
+
+/// Finds a lens profile by model name, requiring an exact match when `lens_from_spec` indicates a
+/// specification-derived name rather than an EXIF lens model.
 fn find_by_name<'a>(
     db: &'a LensDb,
     lens_model: &str,
+    lens_from_spec: bool,
     camera: Option<&lightcraft_lensdb::Camera>,
 ) -> Option<&'a lightcraft_lensdb::Profile> {
-    if lightcraft_lensdb::is_spec_name(lens_model) {
+    if lens_from_spec {
         db.find_lens_named(None, lens_model, camera)
     } else {
         db.find_lens(None, lens_model, camera)
@@ -158,14 +200,14 @@ fn find_by_name<'a>(
 /// Whether any profile in the database matches `lens_model`.
 pub fn has_lens(lens_model: &str) -> bool {
     let Some(db) = database() else { return false };
-    find_by_name(db, lens_model, None).is_some()
+    find_by_name(db, lens_model, false, None).is_some()
 }
 
 /// The matched profile's canonical name if recognized.
-pub fn matched_name(lens_model: &str, camera: &str) -> Option<String> {
+pub fn matched_name(lens_model: &str, lens_from_spec: bool, camera: &str) -> Option<String> {
     let db = database()?;
     let cam = db.find_camera("", camera);
-    let profile = find_by_name(db, lens_model, cam)?;
+    let profile = find_by_name(db, lens_model, lens_from_spec, cam)?;
     profile.models.first().cloned().or_else(|| Some(profile.maker.clone()))
 }
 
@@ -174,6 +216,7 @@ pub fn matched_name(lens_model: &str, camera: &str) -> Option<String> {
 pub fn resolve_photo_lens(
     embedded: Option<lightcraft_develop::EmbeddedLens>,
     lens_name: &str,
+    lens_from_spec: bool,
     camera: &str,
     focal_mm: Option<f32>,
     aperture: Option<f32>,
@@ -184,7 +227,7 @@ pub fn resolve_photo_lens(
     let db = database();
     let db_lens = db.and_then(|db| {
         let cam = db.find_camera("", camera);
-        let profile = find_by_name(db, lens_name, cam)?;
+        let profile = find_by_name(db, lens_name, lens_from_spec, cam)?;
         let focal = focal_mm.filter(|f| f.is_finite() && *f > 0.0).map(|f| f as f64)?;
         let shot = Shot {
             focal,
@@ -301,8 +344,9 @@ mod tests {
     #[test]
     fn bundled_canon_profiles_are_loaded_and_findable() {
         assert!(has_lens("Canon RF 70-200mm F2.8L IS USM"));
-        let name = matched_name("RF 70-200mm F2.8L IS USM", "Canon EOS R5");
+        let name = matched_name("RF 70-200mm F2.8L IS USM", false, "Canon EOS R5");
         assert!(name.is_some(), "Canon RF 70-200mm profile must be matched: {name:?}");
+        assert!(matched_name("70-200mm f/2.8", true, "Canon EOS R5").is_none());
     }
 
     #[test]
