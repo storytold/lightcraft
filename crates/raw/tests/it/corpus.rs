@@ -1577,7 +1577,7 @@ fn corpus_mamiya_mef() {
 #[test]
 fn corpus_light_lri() {
     let Ok(bytes) = std::fs::read(corpus_root().join("raw").join("lri-light-l16.lri")) else {
-        eprintln!("skip: lri-light-l16.lri absent");
+        lightcraft_testkit::skip!(Corpus, "lri-light-l16.lri absent");
         return;
     };
     assert_eq!(probe(&bytes), Some(RawFormat::Lri));
