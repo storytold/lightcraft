@@ -40,15 +40,33 @@ const LABEL_W: f32 = 150.0;
 pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, tab: &mut String) {
     let t = Tokens::get(ui.ctx());
     ui.set_width((ui.ctx().content_rect().width() - 64.0).clamp(240.0, 560.0));
+    focus_style(ui, &t);
+    // Each line of tabs stands on a line of its own the width of the window, so the open tab's
+    // line always has the bar's under it: in a narrow window, or a language with long names, the
+    // tabs take two lines or more.
+    let mut lines: Vec<f32> = Vec::new();
+    // (the bar is one stop for Tab, at the open tab; the arrow keys go along it)
+    let mut bar = crate::widgets::Roving::new(ui, "settingsTabs", TABS.iter().position(|(id, _)| *id == tab.as_str()));
     ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing.x = 4.0;
+        ui.spacing_mut().item_spacing = egui::vec2(4.0, 5.0);
         for (id, label) in TABS {
-            if crate::widgets::text_button(ui, &format!("settingsTab-{id}"), label, tab == id).clicked() {
+            let r = crate::widgets::tab_button_in(ui, &mut bar, &format!("settingsTab-{id}"), label, tab == id);
+            let bottom = egui::emath::GuiRounding::round_to_pixels(r.rect.bottom(), ui.pixels_per_point());
+            if !lines.iter().any(|line| (line - bottom).abs() < 0.5) {
+                lines.push(bottom);
+            }
+            if r.clicked() {
                 *tab = id.to_string();
             }
         }
     });
-    ui.separator();
+    bar.end(ui);
+    let divider = Tokens::get(ui.ctx()).divider;
+    for bottom in lines {
+        let line = egui::Rect::from_min_max(egui::pos2(ui.min_rect().left(), bottom), egui::pos2(ui.min_rect().right(), bottom + 1.0));
+        ui.painter().rect_filled(line, egui::CornerRadius::ZERO, divider);
+    }
+    ui.add_space(1.0);
     ui.add_space(2.0);
     match tab.as_str() {
         "import" => import_tab(app, ui, &t),
@@ -60,6 +78,17 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, tab: &mut String) {
         "denoise" => super::denoise::settings_tab(app, ui, &t),
         _ => general_tab(app, ui, &t),
     }
+}
+
+/// One look for "the focus is here", whatever the control, for everything drawn in `ui` from here
+/// on: a line 2 pt wide in the text colour round it, as round a tab or a choice
+/// ([`crate::widgets::focus_ring`]). egui draws a button, checkbox, radio button or list that has
+/// the focus (or is being pressed) with its "active" outline, and a text box in use with the
+/// selection's.
+pub(super) fn focus_style(ui: &mut egui::Ui, t: &Tokens) {
+    let visuals = ui.visuals_mut();
+    visuals.widgets.active.bg_stroke = egui::Stroke::new(2.0, t.text);
+    visuals.selection.stroke = egui::Stroke::new(2.0, t.text);
 }
 
 pub(super) fn heading(ui: &mut egui::Ui, t: &Tokens, text: &str) {
@@ -86,6 +115,8 @@ pub(super) fn hint(ui: &mut egui::Ui, t: &Tokens, text: &str) {
 pub(super) fn check(ui: &mut egui::Ui, id: &str, value: &mut bool, label: &str) -> bool {
     let r = ui.checkbox(value, crate::i18n::tr(label));
     register(ui.ctx(), format!("check:{id}"), r.rect);
+    // (ringed round the whole of it while it has the focus, as a choice or a tab is)
+    crate::widgets::focus_ring(ui, &Tokens::get(ui.ctx()), &r, r.rect.expand2(egui::vec2(3.0, 1.0)));
     r.changed()
 }
 
@@ -93,12 +124,15 @@ pub(super) fn check(ui: &mut egui::Ui, id: &str, value: &mut bool, label: &str) 
 pub(super) fn choices<V: PartialEq + Copy>(ui: &mut egui::Ui, id: &str, options: &[(V, &str)], value: &mut V) -> bool {
     let mut changed = false;
     ui.spacing_mut().item_spacing.x = 4.0;
+    // (the row is one stop for Tab, at the choice that holds; the arrow keys go along it)
+    let mut group = crate::widgets::Roving::new(ui, id, options.iter().position(|(v, _)| *v == *value));
     for (i, (v, l)) in options.iter().enumerate() {
-        if crate::widgets::text_button(ui, &format!("{id}-{i}"), l, *value == *v).clicked() && *value != *v {
+        if crate::widgets::choice_button_in(ui, &mut group, &format!("{id}-{i}"), l, *value == *v).clicked() && *value != *v {
             *value = *v;
             changed = true;
         }
     }
+    group.end(ui);
     changed
 }
 
@@ -935,10 +969,14 @@ fn theme_card<V: PartialEq + Copy>(
                     ui.horizontal(|ui| {
                         let r = ui.radio_value(value, *v, crate::i18n::tr(kind.label()));
                         register(ui.ctx(), format!("radio:theme-{}", kind.id()), r.rect);
+                        // (ringed round the whole of it while it has the focus, as a checkbox is)
+                        crate::widgets::focus_ring(ui, t, &r, r.rect.expand2(egui::vec2(3.0, 1.0)));
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             let favorite = favorites.iter().any(|id| id == kind.id());
+                            // (always there, so that Tab reaches it; drawn while it is a
+                            // favourite, under the mouse or has the focus)
                             let r = ui
-                                .add_visible(favorite || hovered, egui::Button::new("").min_size(egui::vec2(24.0, 24.0)).frame(false))
+                                .add(egui::Button::new("").min_size(egui::vec2(24.0, 24.0)).frame(false))
                                 .on_hover_text(crate::i18n::tr(if favorite { "Remove from favorites" } else { "Add to favorites" }));
                             r.widget_info(|| {
                                 egui::WidgetInfo::labeled(
@@ -952,7 +990,8 @@ fn theme_card<V: PartialEq + Copy>(
                                 )
                             });
                             register(ui.ctx(), format!("button:themeFavorite-{}", kind.id()), r.rect);
-                            if favorite || hovered {
+                            crate::widgets::focus_ring(ui, t, &r, r.rect);
+                            if favorite || hovered || r.has_focus() {
                                 crate::icons::paint(
                                     ui.painter(),
                                     r.rect.shrink(4.0),
