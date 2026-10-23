@@ -88,12 +88,29 @@ fn start<T: Send + 'static>(
             c.request_repaint();
         }
     };
+    #[cfg(test)]
+    if FAIL_NEXT_SPAWN.with(|f| f.replace(false)) {
+        // as when the OS refuses a thread: the job (and whatever it owns) is dropped unrun
+        drop(job);
+        return Err(format!("{label}: could not start: simulated"));
+    }
     #[cfg(not(target_arch = "wasm32"))]
     std::thread::Builder::new().name(format!("lc-task-{label}")).spawn(job).map_err(|e| format!("{label}: could not start: {e}"))?;
     #[cfg(target_arch = "wasm32")]
     job();
     app.tasks.running.push(Task { label: label.to_string(), rx, _guard: guard });
     Ok(())
+}
+
+#[cfg(test)]
+thread_local! {
+    static FAIL_NEXT_SPAWN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Make this thread's next [`spawn`] fail as if no thread could be started (tests).
+#[cfg(test)]
+pub(crate) fn fail_next_spawn() {
+    FAIL_NEXT_SPAWN.with(|f| f.set(true));
 }
 
 /// Apply finished tasks (called every frame).

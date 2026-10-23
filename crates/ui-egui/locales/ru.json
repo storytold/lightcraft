@@ -2335,5 +2335,6 @@
   "Checking the GPU…": "Проверка ГП…",
   "CPU": "ЦП",
   "A face model uses the GPU only when a check shows it gives the same results faster.": "Модель лиц использует ГП, только если проверка показала, что он даёт те же результаты быстрее.",
-  "Checking the GPU for faces": "Проверка ГП для лиц"
+  "Checking the GPU for faces": "Проверка ГП для лиц",
+  "Checking added photos": "Проверка добавленных фото"
 }

@@ -17,6 +17,7 @@ pub mod date_picker;
 pub mod docking;
 pub mod export_task;
 mod focus_scan;
+pub mod hashing;
 pub mod headless;
 pub mod i18n;
 pub mod icons;
@@ -456,6 +457,8 @@ pub struct LightcraftApp {
     pub export: Option<export_task::ExportTask>,
     /// Background file-system work of other commands (Find Missing Photos, auto import…).
     pub tasks: tasks::Tasks,
+    /// Added photos whose file couldn't be hashed, tried again later (`hashing::tick`).
+    pub(crate) hash_retry: hashing::Retry,
     /// The files of the last finished background export (`ui.inspect` → `export.last`).
     pub last_export_result: Option<Value>,
     /// The last slideshow export's end has been told (a toast).
@@ -491,6 +494,7 @@ impl LightcraftApp {
     pub fn new(mut session: Session, services: Services) -> Self {
         // AI mask requests run on the model's worker; frames apply their results (never wait)
         session.segmenter.background = true;
+        session.hash_in_background = true;
         Self {
             session,
             ui: UiState::default(),
@@ -550,6 +554,7 @@ impl LightcraftApp {
             shown_library: None,
             export: None,
             tasks: Default::default(),
+            hash_retry: Default::default(),
             last_export_result: None,
             slideshow_export_reported: true,
             hover_preview: None,
@@ -1132,6 +1137,7 @@ impl LightcraftApp {
         import::tick(self, ctx);
         lightroom_import::tick(self, ctx);
         recheck::tick(self);
+        hashing::tick(self);
         tasks::poll(self, ctx);
         self.preview_build_status(ctx);
         self.save_status(ctx);

@@ -134,7 +134,11 @@ fn ext_upper(name: &str) -> String {
 /// ([`lightcraft_codecs::read_header`], which refuses truncated files but can't see damage inside
 /// compressed data that is all there: such a file imports and shows as unreadable when rendered).
 pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
-    let content_hash = Some(lightcraft_preview::hash_bytes(bytes).to_string());
+    describe(name, bytes, Some(lightcraft_preview::hash_bytes(bytes).to_string()))
+}
+
+/// [`probe_bytes`] with `content_hash` given (`None`: not worked out, as for a file read only in part).
+fn describe(name: &str, bytes: &[u8], content_hash: Option<String>) -> Result<ProbeInfo, String> {
     let m = lightcraft_meta::extract(bytes);
     let (meta, captured) = meta_of(&m);
     if lightcraft_raw::probe(bytes).is_some() {
@@ -1130,6 +1134,83 @@ fn file_modified(path: &str) -> Option<String> {
     Some(crate::import::civil(secs))
 }
 
+/// The first bytes of a raw read before asking what else describing it needs: most formats' headers
+/// are all in here, so one read usually does.
+const RAW_PREFIX: u64 = 512 * 1024;
+/// Rounds of reads [`read_raw_headers`] makes before giving up on reading a file in part.
+const RAW_ROUNDS: usize = 32;
+/// Tenths of a raw [`read_raw_headers`] may read before it gives up and the file is read whole:
+/// reading most of it in parts and then all of it again costs more than one whole read.
+const RAW_MAX_SHARE: u64 = 6;
+/// The largest raw [`read_raw_headers`] builds a buffer of the file's length for (as
+/// [`MAX_PREVIEW_PLAN_BYTES`]); a larger file is read whole.
+const RAW_MAX_BYTES: u64 = MAX_PREVIEW_PLAN_BYTES;
+
+/// The raw file at `path` (`len` bytes) read only where describing it looks
+/// ([`lightcraft_raw::sparse::header_plan`]): a buffer of the file's length holding those ranges, the
+/// rest zeros. `None` when it has to be read whole (not a raw laid out for this, a format whose
+/// header probe reads samples, a file smaller than the first read, or a read failing).
+fn read_raw_headers(path: &str, len: u64) -> Option<Vec<u8>> {
+    use lightcraft_raw::sparse::{HeaderPlan, Ranges, header_plan};
+    use std::io::{Read, Seek, SeekFrom};
+    if len <= RAW_PREFIX || len > RAW_MAX_BYTES {
+        return None;
+    }
+    let mut buf = vec![0u8; usize::try_from(len).ok()?];
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut read = |buf: &mut [u8], start: u64, end: u64| -> Option<()> {
+        let part = buf.get_mut(usize::try_from(start).ok()?..usize::try_from(end).ok()?)?;
+        file.seek(SeekFrom::Start(start)).ok()?;
+        file.read_exact(part).ok()
+    };
+    let mut loaded = Ranges::new();
+    read(&mut buf, 0, RAW_PREFIX)?;
+    loaded.insert(0, RAW_PREFIX);
+    let mut wanted = RAW_PREFIX;
+    for _ in 0..RAW_ROUNDS {
+        match header_plan(&buf, &loaded) {
+            HeaderPlan::Ready => return Some(buf),
+            HeaderPlan::Whole(_) => return None,
+            HeaderPlan::Need(more) => {
+                wanted = more.spans().iter().fold(wanted, |w, &(a, b)| w.saturating_add(b.saturating_sub(a)));
+                if wanted.saturating_mul(10) > len.saturating_mul(RAW_MAX_SHARE) {
+                    return None;
+                }
+                for &(a, b) in more.spans() {
+                    if loaded.overlaps(a, b) {
+                        return None; // asked again: don't loop
+                    }
+                    read(&mut buf, a, b)?;
+                    loaded.insert(a, b);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// The probe for browsing a folder (Local), where a folder on a network share can hold thousands of
+/// raws: a raw is described from the parts of it its headers are in (a few percent of a DNG or CR3)
+/// and gets no content hash, which needs every byte (a Local photo is found again by its path; the
+/// hash is worked out when it joins the library). Whatever can't be described that way — other
+/// formats, a raw whose sensor data can't be decoded (described from its embedded preview), any
+/// failure — is read whole, as [`fs_hooks`]' probe reads it.
+pub(crate) fn light_probe(path: &str) -> Result<ProbeInfo, String> {
+    let len = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    let _permit = crate::memory::work_gate().acquire(usize::try_from(len).unwrap_or(usize::MAX));
+    if let Some(buf) = read_raw_headers(path, len)
+        && let Ok(mut info) = describe(path, &buf, None)
+        && info.preview_only.is_none()
+    {
+        info.file_modified = file_modified(path);
+        return Ok(info);
+    }
+    let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+    let mut info = probe_bytes(path, &bytes)?;
+    info.file_modified = file_modified(path);
+    Ok(info)
+}
+
 impl crate::Session {
     /// Install the filesystem file hooks (desktop, CLI, MCP headless), and on macOS the Apple Photos
     /// runner ([`crate::apple_photos::osascript`]; installed, not run).
@@ -1138,6 +1219,7 @@ impl crate::Session {
         self.media.file_loader = Some(l);
         self.media.reduced_loader = Some(fs_reduced_loader());
         self.media.file_probe = Some(p);
+        self.media.file_probe_light = Some(std::sync::Arc::new(light_probe));
         self.media.preview_loader = Some(fs_preview_loader());
         self.media.denoise.loader = Some(fs_pair_loader());
         #[cfg(target_os = "macos")]
@@ -2914,6 +2996,66 @@ pub(crate) mod tests {
         }
         assert!(!s.catalog.photo(old).unwrap().is_edited(), "still as imported");
         drop(s);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Browsing (Local) describes a raw from the parts of it its headers are in, exactly as reading it
+    /// whole does, but without the content hash (which needs every byte). Over the corpus
+    /// (`cargo xtask corpus --download`); skips without it.
+    #[test]
+    fn corpus_light_probe_describes_raws_as_the_full_probe_does() {
+        let root = std::env::var_os("LIGHTCRAFT_CORPUS")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus"))
+            .join("raw");
+        let mut paths: Vec<_> = std::fs::read_dir(&root).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.is_file()).collect();
+        if paths.is_empty() {
+            lightcraft_testkit::skip!(Corpus, "{} absent", root.display());
+            return;
+        }
+        paths.sort();
+        let (mut partial, mut whole) = (0, 0);
+        for p in paths {
+            let path = p.to_string_lossy().to_string();
+            let Ok(bytes) = std::fs::read(&p) else { continue };
+            let mut full = probe_bytes(&path, &bytes);
+            let light = light_probe(&path);
+            match (&mut full, &light) {
+                (Ok(full), Ok(light)) => {
+                    full.file_modified = file_modified(&path);
+                    if light.content_hash.is_none() {
+                        partial += 1;
+                        full.content_hash = None;
+                    } else {
+                        whole += 1;
+                    }
+                    assert_eq!(format!("{light:?}"), format!("{full:?}"), "{path}");
+                }
+                (Err(a), Err(b)) => assert_eq!(a, b, "{path}"),
+                _ => panic!("{path}: {full:?} vs {light:?}"),
+            }
+        }
+        assert!(partial > 0, "no raw was described in part ({whole} read whole)");
+        eprintln!("light probe: {partial} raws described in part, {whole} read whole");
+    }
+
+    /// A file the light probe can't describe in part (not a raw, or too small) is read whole, as
+    /// the import's probe reads it: same description, content hash included.
+    #[test]
+    fn light_probe_reads_other_files_whole() {
+        let dir = std::env::temp_dir().join(format!("lc-light-probe-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let img = lightcraft_raster::Rgba8::from_fn(40, 30, |x, y| [(x * 6) as u8, (y * 8) as u8, 90, 255]);
+        let jpeg = encode_jpeg(&EncodeImage::rgba8(&img), 90, ChromaSubsampling::S420, &EncodeMeta::default()).unwrap();
+        let path = dir.join("a.jpg");
+        std::fs::write(&path, &jpeg).unwrap();
+        let path = path.to_string_lossy().to_string();
+        let light = light_probe(&path).unwrap();
+        let mut full = probe_bytes(&path, &jpeg).unwrap();
+        full.file_modified = file_modified(&path);
+        assert!(light.content_hash.is_some());
+        assert_eq!(format!("{light:?}"), format!("{full:?}"));
+        assert!(light_probe(&dir.join("missing.dng").to_string_lossy()).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

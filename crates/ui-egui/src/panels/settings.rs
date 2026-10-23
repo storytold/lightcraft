@@ -1098,13 +1098,20 @@ fn theme_preview(ui: &mut egui::Ui, kind: crate::theme::ThemeKind, width: f32) {
 // ------------------------------------------------------------------------------- Open Library…
 
 /// Switching libraries is refused while an import (or the folder scan before one) is running: its
-/// remaining batches would be committed into the new library (issue #1509).
+/// remaining batches would be committed into the new library (issue #1509). Also while added
+/// photos' content hashes are queued or being worked out.
 pub(crate) fn can_switch_library(app: &LightcraftApp) -> Result<(), String> {
     if crate::lightroom_import::is_running(app) {
         return Err("wait for Lightroom catalog import to finish before switching libraries".into());
     }
     if app.import.is_some() || app.scan.is_some() {
         return Err("wait for the import to finish before switching libraries".into());
+    }
+    // added photos' hashes (queued or being worked out) are only recorded into the library they
+    // were queued in, and the queue isn't rebuilt when it is opened again (photos whose file
+    // couldn't be read, waiting to be tried again, don't count: a file can stay offline for days)
+    if app.session.hashes_queued() || app.tasks.is_running(crate::hashing::LABEL) {
+        return Err("wait for checking added photos to finish before switching libraries".into());
     }
     Ok(())
 }
