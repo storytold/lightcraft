@@ -22,7 +22,8 @@ pub(crate) fn can_switch_library(app: &LightcraftApp) -> Result<(), String> {
         return Err("wait for the photos waiting to be imported before switching libraries".into());
     }
     // added photos' hashes (queued or being worked out) are only recorded into the library they
-    // were queued in, and the queue isn't rebuilt when it is opened again
+    // were queued in, and the queue isn't rebuilt when it is opened again (photos whose file
+    // couldn't be read, waiting to be tried again, don't count: a file can stay offline for days)
     if app.session.hashes_queued() || app.tasks.is_running(crate::hashing::LABEL) {
         return Err("wait for checking added photos to finish before switching libraries".into());
     }
