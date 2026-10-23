@@ -31,6 +31,7 @@ lightcraft-faces = { workspace = true }
 miniz_oxide = { workspace = true }
 lightcraft-merge = { workspace = true }
 lightcraft-geocode = { workspace = true }
+lightcraft-map = { workspace = true }
 lightcraft-slideshow = { workspace = true }
 rayon = { workspace = true }
 serde = { workspace = true }
