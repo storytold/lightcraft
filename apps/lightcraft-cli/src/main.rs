@@ -11,6 +11,8 @@
 //! lightcraft-cli commands [--json]
 //! lightcraft-cli controls [--json]
 //! lightcraft-cli calibrate [--max N] [--out DIR] FOLDERS/FILES…
+//! lightcraft-cli camdb extract [--contributor NAME] NATIVE.dng…
+//! lightcraft-cli camdb show MAKE MODEL
 //! ```
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
@@ -110,6 +112,11 @@ USAGE:
       model, written as <model>.json to DIR (default: the profiles folder LightCraft reads,
       <config>/camera-profiles, or $LIGHTCRAFT_CAMERA_PROFILES). Raws of a profiled model then
       take their colour from the profile and only their tone from their own JPEG.
+  lightcraft-cli camdb extract [--contributor NAME] NATIVE.dng…
+      Print camera database entries (TOML, for data/cameras/<maker>.toml in the camdb crate) from DNGs the
+      camera wrote itself. DNGs written by Adobe software or by LightCraft's own export are refused.
+  lightcraft-cli camdb show MAKE MODEL
+      Print the camera database entry a camera's raws use, with its provenance.
   lightcraft-cli --version | --help
 ";
 
@@ -167,6 +174,7 @@ fn main() -> ExitCode {
         Some("controls") => controls(&args[1..]),
         Some("denoise-serve") => denoise_serve(&args[1..]),
         Some("calibrate") => calibrate(&args[1..]),
+        Some("camdb") => camdb(&args[1..]),
         Some("--version" | "-V" | "version") => {
             println!("lightcraft-cli {}", env!("CARGO_PKG_VERSION"));
             Ok(())
@@ -206,6 +214,46 @@ fn raw_files(path: &Path, out: &mut Vec<std::path::PathBuf>, depth: usize) {
             continue;
         }
         raw_files(&entry.path(), out, depth + 1);
+    }
+}
+
+/// `camdb extract`: entries from camera-native DNGs; `camdb show`: the entry a camera resolves to.
+fn camdb(args: &[String]) -> Result<(), String> {
+    match args.first().map(String::as_str) {
+        Some("extract") => {
+            let mut contributor = None;
+            let mut files = Vec::new();
+            let mut i = 1;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--contributor" => contributor = Some(take_value(args, &mut i, "--contributor")?.to_string()),
+                    a if a.starts_with("--") => return Err(format!("unknown option `{a}`")),
+                    f => files.push(f.to_string()),
+                }
+                i += 1;
+            }
+            if files.is_empty() {
+                return Err("camdb extract needs camera-native DNG files".into());
+            }
+            let mut entries = Vec::new();
+            for f in &files {
+                let bytes = std::fs::read(f).map_err(|e| format!("{f}: {e}"))?;
+                let mut entry = lightcraft_camdb::extract::from_dng(&bytes).map_err(|e| format!("{f}: {e}"))?;
+                entry.provenance.contributor = contributor.clone();
+                entries.push(entry);
+            }
+            print!("{}", lightcraft_camdb::to_toml(&entries).map_err(|e| e.to_string())?);
+            Ok(())
+        }
+        Some("show") => {
+            let (Some(make), Some(model)) = (args.get(1), args.get(2)) else {
+                return Err("camdb show needs MAKE and MODEL".into());
+            };
+            let entry = lightcraft_camdb::find(Some(make), model).ok_or_else(|| format!("no camera database entry for {make} {model}"))?;
+            print!("{}", lightcraft_camdb::to_toml(&[entry]).map_err(|e| e.to_string())?);
+            Ok(())
+        }
+        _ => Err("camdb needs `extract` or `show`".into()),
     }
 }
 

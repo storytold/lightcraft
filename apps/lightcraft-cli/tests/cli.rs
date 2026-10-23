@@ -114,6 +114,22 @@ fn calibrate_reads_raf_inputs_and_reports_bad_files() {
     assert!(!out.join("X-T4.json").exists(), "bad input must not produce a profile");
 }
 
+#[test]
+fn camdb_shows_entries_and_refuses_converted_dngs() {
+    let result = Command::new(BIN).args(["camdb", "show", "Canon", "Canon EOS 600D"]).output().unwrap();
+    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    let out = String::from_utf8_lossy(&result.stdout);
+    assert!(out.contains("source = \"spectral-sensitivities\"") && out.contains("color_matrix_1"), "{out}");
+
+    let bad = tmp("not-a.dng");
+    std::fs::write(&bad, b"II*\0garbage").unwrap();
+    let result = Command::new(BIN).args(["camdb", "extract"]).arg(&bad).output().unwrap();
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("not-a.dng"));
+    assert!(result.stdout.is_empty(), "nothing is printed for a refused file");
+    assert!(!Command::new(BIN).args(["camdb", "show", "Nobody", "Nothing"]).output().unwrap().status.success());
+}
+
 fn mean(path: &std::path::Path) -> f64 {
     let d = lightcraft_codecs::decode(&std::fs::read(path).unwrap(), Default::default()).unwrap();
     let img = d.to_srgb8();

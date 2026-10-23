@@ -22,6 +22,7 @@ lightcraft-color = { path = "crates/color" }
 lightcraft-raster = { path = "crates/raster" }
 lightcraft-tiff = { path = "crates/tiff" }
 lightcraft-raw = { path = "crates/raw" }
+lightcraft-camdb = { path = "crates/camdb" }
 lightcraft-codecs = { path = "crates/codecs" }
 lightcraft-meta = { path = "crates/meta" }
 lightcraft-develop = { path = "crates/develop" }
@@ -48,6 +49,7 @@ thiserror = "2"
 sha2 = "0.10"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
+toml = "1"
 log = "0.4"
 # All date/time conversion goes through chrono (no hand-rolled calendar code beyond the 400-year range extension; AGENTS.md).
 chrono = { version = "0.4.45", default-features = false, features = ["std"] }

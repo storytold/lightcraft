@@ -204,10 +204,11 @@ vendor white-balance multipliers give through the same matrices. No number comes
 A raw starts from the first of these that is available (`camera_preview::starting_colour`):
 
 1. the file's own colour matrices (DNG);
-2. a camera profile for its model (bundled or local), with tone and chroma fitted to the file's JPEG;
-3. the file-local fit to its own JPEG described above;
-4. the model's spectral matrices, with LightCraft's default tone curve and no JPEG fit;
-5. the neutral fallback.
+2. measured matrices for its model in the camera database (below), with the app's default tone curve;
+3. a camera profile for its model (bundled or local), with tone and chroma fitted to the file's JPEG;
+4. the file-local fit to its own JPEG described above;
+5. the model's spectral matrices, with the app's default tone curve and no JPEG fit;
+6. the neutral fallback.
 
 When the file's JPEG is black and white, step 2 fits the tone curve alone with the profile's colour; without a profile, or when that fit fails, 4 and 5 take the tone curve fitted to it (see the black-and-white JPEG paragraph above). If every existing JPEG fit fails, a near-black frame may take the guarded tone-only fallback described above, after its spectral or neutral colour has been chosen.
 
@@ -220,6 +221,26 @@ still pools the uncorrected camera colour of covered models, so a profile can be
 
 No colour-difference measurement of the spectral matrices against the camera JPEG, or against the file-local fit,
 is recorded here yet. Whether they should come before the file-local fit for these models is open until one is.
+
+### The camera database
+
+`crates/camdb` (`lightcraft-camdb`) gathers per-model camera data with its provenance: two-illuminant colour matrices
+(and forward matrices when known), white-balance presets, black/white level overrides, and a `provenance` naming the
+source (`native-dng`, `chart`, `manufacturer-doc`, `maker-note`, `spectral-sensitivities`, `estimated`), its detail
+and contributor. Entries live in human-editable TOML, one file per maker in `crates/camdb/data/cameras/`, embedded at
+build time; the 52 spectral rows above are exposed through it with `spectral-sensitivities` provenance rather than
+copied. `camdb::find` prefers TOML entries by source rank, then the spectral table. The raw's matrices are written
+into its DNG colour data, so the input transform interpolates them by the inverse CCT of the white, as for a DNG.
+Measured entries (`native-dng`, `chart`, `manufacturer-doc`) come before the JPEG fit (step 2); spectral ones keep
+their place (step 5); level overrides apply in every case.
+
+Data rules: no Adobe DCP/LCP data, no matrices from Adobe-converted DNGs, no tables from GPL projects (dcraw's
+`adobe_coeff` and its descendants, darktable, RawTherapee). `lightcraft-cli camdb extract NATIVE.dng…` prints entries from DNGs
+a camera wrote itself and refuses DNGs whose `Software` tag names Adobe software (DNG Converter, Lightroom, Camera Raw,
+Photoshop), a third-party converter (darktable, RawTherapee, dnglab, LibRaw, dcraw, DxO, Capture One, Phase One), the
+app's own DNG export, or is missing; the GPL rule above concerns table sources, this one the converter's DNG. `lightcraft-cli camdb show MAKE MODEL` prints the entry a camera resolves
+to. A native DNG's matrices help that model's other raw format (a Pentax body's PEF files, say), whose files carry
+none. The database has no TOML entries yet.
 
 ## Smart previews and the look version
 
