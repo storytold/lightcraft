@@ -104,19 +104,39 @@ fn grid_cells_mark_videos_with_their_format_and_running_time() {
     }
 }
 
+/// The filter bar's Videos kind keeps the clips and drops the stills.
+#[test]
+fn the_videos_filter_keeps_only_clips() {
+    let mut h = video_app(ViewMode::PhotoGrid);
+    let r = h.request("engine.execute", json!({"command": "library.filter", "params": {"kind": "video"}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    let visible = h.app.session.visible().to_vec();
+    assert_eq!(visible.len(), 3, "the three clips, no still");
+    let ids: Vec<u64> = visible.iter().map(|p| p.0).collect();
+    for id in [1, 3, 4] {
+        assert!(ids.contains(&id), "clip {id} is in the Videos view");
+    }
+    for id in visible {
+        assert_eq!(h.app.session.catalog.photo(id).map(|p| p.kind), Some(MediaKind::Video));
+    }
+}
+
 /// Opening a clip in the loupe shows its card — name and running time, and what this build does
 /// with it — instead of "This photo can't be opened" and the failure pill.
 #[test]
 fn the_loupe_shows_a_video_card_instead_of_a_render_error() {
     let mut h = video_app(ViewMode::Detail);
     select(&mut h, PhotoId(1));
-    let r = h.request("ui.set", json!({"view": "detail", "right": "info", "filmstrip": false}), T);
+    let r = h.request("ui.set", json!({"view": "detail", "right": "info", "filmstrip": true}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
     assert!(has(&h, "canvas:videoCard"), "the card stands in for the frame");
     assert_eq!(h.app.loupe_shown.map(|l| l.1), Some("video"), "ui.inspect says what the loupe shows");
     assert!(!has(&h, "loupe:renderFailed"), "a catalogued video is not a broken photo");
     assert!(has(&h, "info:duration"), "Info lists the clip's running time");
+    assert_eq!(h.app.renderer.in_flight(), 0, "no render reads the clip's file to fail");
+    assert!(h.app.renderer.failure(crate::render::Slot::Main).is_none());
     shot(&mut h, "video-loupe.png");
 }
 

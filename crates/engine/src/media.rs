@@ -1277,6 +1277,13 @@ impl crate::Session {
         thumb_bucket: Option<usize>,
     ) -> Option<RenderJob> {
         let p = self.catalog.photo(id)?.clone();
+        // A catalogued video has no frame decoder yet (playback, trim and frame capture come in a
+        // later update): there is nothing to render, and asking would read a multi-gigabyte file
+        // to fail. The UI draws its own video placeholder and card instead (the grid's badges and
+        // the loupe's video card).
+        if p.kind == MediaKind::Video {
+            return None;
+        }
         let settings = if before { Arc::new(self.before_settings(&p)) } else { p.develop.clone() };
         let level = SourceLevel::for_size(if thumb_bucket.is_some() {
             max_w.max(max_h) // (grid thumbnails of tight crops stay cheap)
