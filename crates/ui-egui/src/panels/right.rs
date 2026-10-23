@@ -257,6 +257,12 @@ fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             if text_button(ui, "cropReset", crate::i18n::tr("Reset"), false).clicked() {
                 let _ = app.run("crop.reset", json!({}));
             }
+            // a raw's whole picture past its default crop (a merged panorama's crop)
+            if app.session.catalog.photo(id).is_some_and(|p| p.kind == lightcraft_catalog::MediaKind::Raw)
+                && text_button(ui, "cropFullFrame", crate::i18n::tr("Show Full Image"), d.crop.full_frame).clicked()
+            {
+                let _ = app.run("crop.fullFrame", json!({}));
+            }
         });
     });
     let ang = lightcraft_develop::controls::find("crop.angle").copied();

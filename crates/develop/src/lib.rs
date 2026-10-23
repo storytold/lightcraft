@@ -255,6 +255,22 @@ mod tests {
     }
 
     #[test]
+    fn default_full_frame_is_not_serialized_so_existing_hashes_stay() {
+        let s = DevelopSettings::default();
+        let json = s.to_json();
+        let crop = json.get("crop").expect("crop is always serialized");
+        assert!(crop.get("full_frame").is_none(), "Show Full Image off must not change the settings JSON or hash64");
+        let mut on = s.clone();
+        on.crop.full_frame = true;
+        assert_eq!(on.to_json()["crop"]["full_frame"], json!(true));
+        assert_ne!(on.hash64(), s.hash64());
+        assert_eq!(DevelopSettings::from_json(&on.to_json()).unwrap(), on);
+        let mut off = on.clone();
+        off.crop.full_frame = false;
+        assert_eq!(off.hash64(), s.hash64());
+    }
+
+    #[test]
     fn hdr_peak_is_finite_for_a_non_finite_headroom() {
         let mut h = Hdr { enabled: true, max_ev: f64::NAN, ..Hdr::default() };
         assert_eq!(h.peak(), (Hdr::DEFAULT_MAX_EV as f32).exp2());

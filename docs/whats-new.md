@@ -1,5 +1,15 @@
 # What's new in LightCraft
 
+## 2026-10-23
+
+### Merged photos open with free sliders and their own crop
+- Photo Merge with Auto Settings now writes the brightness Auto picks into the merged DNG itself, as a camera does,
+  instead of setting Exposure, Contrast, Highlights and the rest. The merged photo opens well exposed with every
+  slider at 0, so each one keeps its whole range.
+- A panorama's Auto Crop is now the DNG's own crop instead of a crop edit: the photo shows the cropped part and the
+  crop tool starts from it. *Show Full Image* in the crop tool shows the whole merged picture, edges included, for
+  when you want to crop it differently or fill the corners yourself.
+
 ## 2026-10-21
 
 ### Sharper resampling in HDR and panorama merges

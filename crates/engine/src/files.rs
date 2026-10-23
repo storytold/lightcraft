@@ -366,27 +366,31 @@ pub fn bin_factor(raw: &lightcraft_raw::RawImage, max_edge: usize) -> Option<usi
 /// instead of each one waking the pool from outside and waiting for it (which costs more than the
 /// loops themselves when the machine is busy).
 pub fn load_bytes(bytes: &[u8], max_edge: usize) -> Result<(Rgb32f, SourceInfo), String> {
-    rayon::scope(|_| load_bytes_now(std::borrow::Cow::Borrowed(bytes), max_edge, None, false).map(|(img, _, info, _)| (img, info)))
+    rayon::scope(|_| load_bytes_now(std::borrow::Cow::Borrowed(bytes), max_edge, None, false, false).map(|(img, _, info, _)| (img, info)))
 }
 
 /// [`load_bytes`] taking the file's bytes: a raw file's bytes are freed as soon as it is decoded
 /// (less memory held while it is developed).
 pub fn load_vec(bytes: Vec<u8>, max_edge: usize) -> Result<(Rgb32f, SourceInfo), String> {
-    rayon::scope(move |_| load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, None, false).map(|(img, _, info, _)| (img, info)))
+    rayon::scope(move |_| load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, None, false, false).map(|(img, _, info, _)| (img, info)))
 }
 
 /// [`load_vec`] for a thumbnail: a DNG that keeps reduced-resolution copies of its raw image (Lightroom's HDR and
 /// panorama merges) develops the smallest that covers `max_edge` instead of the whole image. The flag says whether
 /// it did: such a picture is not the full image, and an export never renders from it.
 pub fn load_vec_reduced(bytes: Vec<u8>, max_edge: usize) -> Result<(Rgb32f, SourceInfo, bool), String> {
-    rayon::scope(move |_| load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, None, true).map(|(img, _, info, reduced)| (img, info, reduced)))
+    rayon::scope(move |_| {
+        load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, None, true, false).map(|(img, _, info, reduced)| (img, info, reduced))
+    })
 }
 
 /// [`load_vec`] that also develops the photo's cached denoised picture (`spec`) from the same decode: the plain
 /// picture, the denoised one (`None` when it cannot be read or does not fit this raw: the plain one is then all
 /// there is) and the source facts. Both pictures are the same size.
 pub fn load_vec_pair(bytes: Vec<u8>, max_edge: usize, spec: &DenoiseSpec) -> Result<(Rgb32f, Option<Rgb32f>, SourceInfo), String> {
-    rayon::scope(move |_| load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, Some(spec), false).map(|(img, twin, info, _)| (img, twin, info)))
+    rayon::scope(move |_| {
+        load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, Some(spec), false, false).map(|(img, twin, info, _)| (img, twin, info))
+    })
 }
 
 /// The denoised camera RGB of `raw` from its cached product, as the plain development would have it: the default
@@ -411,16 +415,33 @@ fn denoised_camera_rgb(raw: &lightcraft_raw::RawImage, spec: &DenoiseSpec, facto
     }
 }
 
+/// The size (oriented, square pixels) of the picture [`load_vec_full`] decodes from raw file `bytes`: the whole active
+/// area, past the default crop.
+pub fn full_frame_size(bytes: &[u8]) -> Result<(u32, u32), String> {
+    let raw = lightcraft_raw::probe_info(bytes).map_err(|e| e.to_string())?;
+    let a = raw.active_area;
+    let w = u32::try_from(a.width.max(1)).map_err(|_| "picture too wide".to_string())?;
+    let h = u32::try_from(lightcraft_raw::stretched_height(a.height, raw.pixel_aspect).max(1)).map_err(|_| "picture too tall".to_string())?;
+    Ok(if raw.orientation.swaps_axes() { (h, w) } else { (w, h) })
+}
+
+/// [`load_vec`] of a raw's whole picture, past its default crop ("Show Full Image").
+pub fn load_vec_full(bytes: Vec<u8>, max_edge: usize) -> Result<(Rgb32f, SourceInfo), String> {
+    rayon::scope(move |_| load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, None, false, true).map(|(img, _, info, _)| (img, info)))
+}
+
 fn load_bytes_now(
     bytes: std::borrow::Cow<'_, [u8]>,
     max_edge: usize,
     denoise: Option<&DenoiseSpec>,
     allow_reduced: bool,
+    full_frame: bool,
 ) -> Result<(Rgb32f, Option<Rgb32f>, SourceInfo, bool), String> {
     if lightcraft_raw::probe(&bytes).is_some() {
         // a thumbnail (`allow_reduced`, never an export) of a DNG that keeps smaller copies of its raw image
-        // (Lightroom's merges) develops the smallest that covers it; a denoised photo's twin needs the full mosaic
-        let reduced = (allow_reduced && denoise.is_none() && max_edge < usize::MAX)
+        // (Lightroom's merges) develops the smallest that covers it; a denoised photo's twin needs the full mosaic,
+        // and the whole picture (`full_frame`) the full raw
+        let reduced = (allow_reduced && !full_frame && denoise.is_none() && max_edge < usize::MAX)
             .then(|| lightcraft_raw::decode_reduced(&bytes, max_edge).ok().flatten())
             .flatten();
         let used_reduced = reduced.is_some();
@@ -429,7 +450,13 @@ fn load_bytes_now(
             None => lightcraft_raw::decode(&bytes),
         };
         let mut raw = match decoded.map_err(|e| preview_reason(&bytes, e)) {
-            Ok(r) => r,
+            Ok(mut r) => {
+                // "Show Full Image": the whole active area instead of the default crop
+                if full_frame {
+                    r.crop = lightcraft_raw::Rect::new(0, 0, r.active_area.width, r.active_area.height);
+                }
+                r
+            }
             Err(Ok(why)) => {
                 // show the camera's embedded JPEG (rendered, not raw) until the variant is supported
                 return load_embedded_preview(&bytes, max_edge)
@@ -1084,6 +1111,21 @@ pub fn fs_pair_loader() -> PairLoader {
     })
 }
 
+/// The filesystem decoder of a raw's whole picture ("Show Full Image"), counted at the memory gate as
+/// [`fs_hooks`]' loader is.
+pub fn fs_full_frame_loader() -> FileLoader {
+    Arc::new(|path: &str, max_edge: usize| {
+        let len = std::fs::metadata(path).map(|m| usize::try_from(m.len()).unwrap_or(usize::MAX)).unwrap_or(0);
+        let weight = len * if max_edge <= crate::media::SourceLevel::Thumb.max_edge() { 3 } else { 6 };
+        let gate = crate::memory::work_gate();
+        let _permit = if crate::memory::is_background() { gate.acquire(weight) } else { gate.acquire_urgent(weight) };
+        let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+        let r = load_vec_full(bytes, max_edge);
+        crate::memory::release();
+        r
+    })
+}
+
 /// Filesystem-backed hooks (native). On the web the host installs bytes-based hooks instead.
 ///
 /// Their working memory is bounded by [`crate::memory::work_gate`]: background loads (grid
@@ -1137,6 +1179,7 @@ impl crate::Session {
         let (l, p) = fs_hooks();
         self.media.file_loader = Some(l);
         self.media.reduced_loader = Some(fs_reduced_loader());
+        self.media.full_frame_loader = Some(fs_full_frame_loader());
         self.media.file_probe = Some(p);
         self.media.preview_loader = Some(fs_preview_loader());
         self.media.denoise.loader = Some(fs_pair_loader());

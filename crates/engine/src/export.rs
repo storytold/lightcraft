@@ -1623,7 +1623,13 @@ pub struct Exported {
 
 /// Output size of photo `p` under `o` (its cropped full size when `o.resize` is `None`).
 pub fn output_size(p: &lightcraft_catalog::Photo, o: &ExportOptions) -> (usize, usize) {
-    let (w, h) = lightcraft_pipeline::native_output_size(p.width.max(1) as usize, p.height.max(1) as usize, &p.develop);
+    output_size_from(p, (p.width, p.height), o)
+}
+
+/// [`output_size`] of photo `p` developed from a picture of `canvas` (its [`crate::Session::canvas_size`]: larger than
+/// the catalog's size with "Show Full Image" on).
+pub fn output_size_from(p: &lightcraft_catalog::Photo, canvas: (u32, u32), o: &ExportOptions) -> (usize, usize) {
+    let (w, h) = lightcraft_pipeline::native_output_size(canvas.0.max(1) as usize, canvas.1.max(1) as usize, &p.develop);
     // whole pixels first: a crop's float noise (5999.999… for 6000) must not decide a half-pixel tie
     let (w, h) = (w.round().max(1.0), h.round().max(1.0));
     match &o.resize {
@@ -1707,6 +1713,8 @@ fn prepare_guarded(
     seq: usize,
     guard: std::sync::Arc<crate::originals::OriginalGuard>,
 ) -> Result<PreparedExport, String> {
+    // the picture it is developed from: past the raw's default crop with "Show Full Image" on
+    let canvas = session.canvas_size(id).ok_or("no such photo")?;
     let p = session.catalog.photo(id).ok_or("no such photo")?;
     let file_name = o.file_name_for(p, seq);
     let source_dir = original_folder(&p.source);
@@ -1718,10 +1726,11 @@ fn prepare_guarded(
     } else {
         o
     };
-    let (full_px, long) = ((p.width as usize).saturating_mul(p.height as usize), p.width.max(p.height) as usize);
+    let (cw, ch) = canvas;
+    let (full_px, long) = ((cw as usize).saturating_mul(ch as usize), cw.max(ch) as usize);
     let (work, weight) = if o.format.is_rendered() {
-        let (w, h) = output_size(p, o);
-        let (nw, nh) = lightcraft_pipeline::native_output_size(p.width.max(1) as usize, p.height.max(1) as usize, &p.develop);
+        let (w, h) = output_size_from(p, canvas, o);
+        let (nw, nh) = lightcraft_pipeline::native_output_size(cw.max(1) as usize, ch.max(1) as usize, &p.develop);
         let native_px = (nw.round().max(1.0) * nh.round().max(1.0)) as usize;
         let label = p.file_name.clone();
         let meta = export_metadata(p, &session.catalog, o);

@@ -54,8 +54,15 @@ view < 110°, cylindrical when the vertical field is < 90°, else spherical. Exp
 gain compensation from the overlaps. Seams: each pixel goes to the image with the highest
 centre-weighted feather weight; multi-band blending (Laplacian pyramids) in log space. Boundary
 Warp: a separable stretch of the smoothed valid-area edges to the canvas edges. Auto Crop: the
-largest rectangle of image data (set as the develop crop, so it stays adjustable). Fill Edges:
+largest rectangle of image data, written as the DNG's default crop (`DefaultCropOrigin` / `DefaultCropSize`):
+the photo shows that part with no crop edit, and *Show Full Image* in the crop tool (`crop.fullFrame`) shows the
+whole merged canvas. Fill Edges:
 push–pull diffusion. Output: 16-bit integer DNG (16-bit float for HDR panoramas).
+
+**Auto Settings** (`autoSettings`, on by default): the exposure Auto would choose, measured on a small copy of the
+result as the library opens it, goes into the DNG's `BaselineExposure`, as a camera's own brightness does. The
+merged photo opens well exposed with every slider at 0 and its whole range free (Contrast, Highlights, Shadows… are
+left to the user).
 
 **DNG output** (`output.rs`): LinearRaw, 3 samples, Deflate tiles; values scaled below 1.0 with the
 scale in `BaselineExposure`; raw sources keep their DNG colour tags (camera RGB), other sources get

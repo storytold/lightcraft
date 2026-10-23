@@ -416,6 +416,23 @@ fn an_export_makes_its_picture_when_the_queue_has_not_and_never_comes_out_withou
     let _ = std::fs::remove_dir_all(&x.dir);
 }
 
+/// The denoised picture is made for the default crop, so an export with Show Full Image on is refused rather than
+/// made from it scaled to the whole picture (PR #2030 review); without Denoise it exports.
+#[test]
+fn an_export_with_show_full_image_is_never_made_from_the_default_crops_denoised_picture() {
+    let mut x = setup("export-full", true);
+    let id = photo(&x.s);
+    let o = ExportOptions::from_json(&json!({"format": "png"}));
+    set_amount(&mut x.s, 100.0);
+    x.s.execute("crop.fullFrame", &json!({"on": true})).unwrap();
+    let e = export_photo(&mut x.s, id, &o, 1).err().unwrap();
+    assert!(e.contains("Show Full Image") && e.contains("ramp.dng"), "{e}");
+    assert_eq!(x.runs.load(Ordering::Relaxed), 0, "nothing was denoised for it");
+    set_amount(&mut x.s, 0.0);
+    assert!(export_photo(&mut x.s, id, &o, 1).is_ok());
+    let _ = std::fs::remove_dir_all(&x.dir);
+}
+
 #[test]
 fn a_model_that_fails_fails_the_export_and_is_not_retried_by_the_queue() {
     let mut x = setup("fails", true);

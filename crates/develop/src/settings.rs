@@ -813,6 +813,11 @@ impl Geometry {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Crop {
+    /// A raw with a default crop (a merged panorama's crop, a camera's in-camera aspect ratio): show the whole picture
+    /// the file holds instead ("Show Full Image"). The crop rectangle is relative to what is shown. Left out of the JSON
+    /// when off, so existing settings keep their `hash64` and their cached thumbnails and previews.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub full_frame: bool,
     pub geometry: CropGeometry,
     /// Locked aspect (w, h); None = free / original.
     pub aspect: Option<(u32, u32)>,
