@@ -24,21 +24,26 @@
   <script type="module">
     import init, { start, command } from "./lightcraft_web.js";
     (async () => {
-      // The Chinese font is a separate file: embedding it would exceed the host's WASM size limit.
-      // Font-free development builds can still run, with the same missing-glyph warning as before.
-      const chineseFont = fetch("./lightcraft_zh_hans.otf")
-        .then(async response => response.ok ? new Uint8Array(await response.arrayBuffer()) : new Uint8Array())
-        .catch(() => new Uint8Array());
+      // The craft-fonts faces are files beside the WASM (fonts/manifest.json lists them):
+      // embedded, they would take the module over the host's 25 MiB per-file limit. Font-free
+      // builds have no manifest (a host may answer with this page instead), and still run.
+      const fonts = fetch("./fonts/manifest.json")
+        .then(response => response.ok ? response.json() : [])
+        .then(list => Promise.all(list.map(font => fetch("./" + font.file)
+          .then(async response => response.ok ? new Uint8Array(await response.arrayBuffer()) : new Uint8Array())
+          .catch(() => new Uint8Array())))
+          .then(files => [JSON.stringify(list), files]))
+        .catch(() => ["[]", []]);
       // Compile once; the render workers (worker.js) instantiate the same compiled module.
-      const [module, font] = await Promise.all([
+      const [module, [fontManifest, fontFiles]] = await Promise.all([
         WebAssembly.compileStreaming(fetch("./lightcraft_web_bg.wasm")),
-        chineseFont,
+        fonts,
       ]);
       globalThis.lightcraftModule = module;
       await init({ module_or_path: module });
       // automation: `await lightcraft.command("library.info", "{}")` → JSON text
       globalThis.lightcraft = { command };
-      start(font);
+      start(fontManifest, fontFiles);
     })().catch((e) => {
       console.error(e);
       const el = document.getElementById("lightcraft_loading");

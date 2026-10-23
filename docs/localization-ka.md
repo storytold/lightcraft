@@ -24,9 +24,10 @@ are count-neutral, noun first (`იმპორტირებულია ფ�
 `{:.0}`. Dates read `კვირა, 20.09.2026` (`{weekday}, {day:02}.{month:02}.{year}`), months `09.2026`.
 
 Inter has no Georgian letters, so the UI draws Georgian with craft-fonts' Noto Sans Georgian (`Geor`),
-like the Thai and Arabic faces: desktop release builds embed it, and a web build made with
-`CRAFT_FONTS_DIR` keeps it in the WASM (`crates/engine/build.rs`). The release web build doesn't use
-craft-fonts yet, and a build without `CRAFT_FONTS_DIR` has no Georgian face and shows boxes.
+like the Thai and Arabic faces: desktop release builds embed it, and the web build (`cargo xtask web`
+with `CRAFT_FONTS_DIR`, as the release does) ships it beside the WASM in `fonts/` and loads it before
+start-up. A build without `CRAFT_FONTS_DIR`, or with a craft-fonts checkout older than `a71c20e3`
+(whose manifest has no Georgian face), has no Georgian face and shows boxes.
 
 ## Terminology
 

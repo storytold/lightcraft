@@ -2,10 +2,15 @@
 //!
 //! Built with `CRAFT_FONTS_DIR=<craft-fonts checkout>`, [`CRAFT_FONTS`] holds every font in its
 //! manifest (today: the Japanese and Simplified-Chinese UI and document fonts); otherwise it is
-//! empty and LightCraft uses only its own bundled fonts (Inter). Both the egui UI and the export
-//! watermark renderer read it from here. See craftrules `standards/fonts.md`.
+//! empty and LightCraft uses only its own bundled fonts (Inter). The web build embeds none: its
+//! page loads the faces from files beside the WASM and passes them to [`add_fonts`] before start-up.
+//! Both the egui UI and the export watermark renderer read [`craft_fonts`]. See craftrules
+//! `standards/fonts.md`.
+
+use std::sync::OnceLock;
 
 /// A font from the optional craft-fonts build input (empty unless built with `CRAFT_FONTS_DIR`).
+#[derive(Clone, Copy)]
 pub struct CraftFont {
     pub family: &'static str,
     pub style: &'static str,
@@ -15,6 +20,29 @@ pub struct CraftFont {
 }
 
 include!(concat!(env!("OUT_DIR"), "/craft_fonts.rs"));
+
+/// [`CRAFT_FONTS`] plus the faces given to [`add_fonts`].
+static ALL: OnceLock<Vec<CraftFont>> = OnceLock::new();
+
+/// The craft-fonts faces this instance has: the embedded [`CRAFT_FONTS`], plus the faces the web
+/// page loaded beside the WASM ([`add_fonts`]).
+pub fn craft_fonts() -> &'static [CraftFont] {
+    ALL.get().map_or(CRAFT_FONTS, Vec::as_slice)
+}
+
+/// Add faces loaded at run time (the web build's font files), before anything reads
+/// [`craft_fonts`]; only the first call counts. A face that does not parse is left out and
+/// returned, so a host that answers a missing file with an HTML page cannot break the UI.
+pub fn add_fonts(fonts: Vec<CraftFont>) -> Vec<CraftFont> {
+    let (good, bad) = parsable(fonts);
+    let _ = ALL.set(CRAFT_FONTS.iter().copied().chain(good).collect());
+    bad
+}
+
+/// `fonts` split into the faces that parse and those that do not.
+fn parsable(fonts: Vec<CraftFont>) -> (Vec<CraftFont>, Vec<CraftFont>) {
+    fonts.into_iter().partition(|f| ab_glyph::FontRef::try_from_slice(f.bytes).is_ok())
+}
 
 impl CraftFont {
     /// Whether the font is meant for `script` (ISO 15924, e.g. `"Jpan"`).
@@ -129,6 +157,16 @@ mod tests {
         // Every CJK face is still offered to every language.
         assert_eq!(cjk_fallback(FACES, "Hans", "Regular").len(), 3);
         assert_eq!(cjk_fallback(&[], "Hans", "Regular").len(), 0);
+    }
+
+    #[test]
+    fn added_faces_that_do_not_parse_are_refused() {
+        // e.g. a host answering a missing font file with its index page (status 200)
+        static INTER: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
+        let face = |family, bytes| CraftFont { family, style: "Regular", scripts: &["Geor"], bytes };
+        let (good, bad) = parsable(vec![face("Good Sans", INTER), face("Not A Font", b"<!doctype html>"), face("Empty", b"")]);
+        assert_eq!(good.iter().map(|f| f.family).collect::<Vec<_>>(), ["Good Sans"]);
+        assert_eq!(bad.iter().map(|f| f.family).collect::<Vec<_>>(), ["Not A Font", "Empty"]);
     }
 
     /// Faces for other scripts (#736: Thai folder names showed boxes) follow the CJK faces in the

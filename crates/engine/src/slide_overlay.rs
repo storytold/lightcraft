@@ -752,7 +752,7 @@ impl SlideOverlays {
             return Some(PlateContent::Image(img, w as usize, h as usize));
         }
         let text = p.text.trim();
-        crate::text::TextLayout::new(text, px as f32, false, crate::fonts::CRAFT_FONTS).map(PlateContent::Text)
+        crate::text::TextLayout::new(text, px as f32, false, crate::fonts::craft_fonts()).map(PlateContent::Text)
     }
 
     fn text_layout(&self, i: usize, l: &Layout) -> Option<crate::text::TextLayout> {
@@ -761,7 +761,7 @@ impl SlideOverlays {
         if t.opacity <= 0.0 {
             return None;
         }
-        crate::text::TextLayout::new(text, (t.size * Self::short(l)).max(1.0) as f32, false, crate::fonts::CRAFT_FONTS)
+        crate::text::TextLayout::new(text, (t.size * Self::short(l)).max(1.0) as f32, false, crate::fonts::craft_fonts())
     }
 
     fn stars_size(&self, l: &Layout) -> Option<(usize, f64)> {

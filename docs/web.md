@@ -52,15 +52,21 @@ codecs) at opt-level 3 and the rest (egui, eframe, serde, glue) at "s". What goe
 is the brotli column: 3.1 MB, 11 % less than the old build's brotli size and 41 % less than its
 gzip size (5.25 MB). `wasm-opt -Oz`, when installed, shrinks it further.
 
-**Fonts.** The browser has no system fonts to fall back on, so CJK text comes from
-[craft-fonts](https://github.com/storytold/craft-fonts), the optional `CRAFT_FONTS_DIR` build
+**Fonts.** The browser has no system fonts to fall back on, so CJK, Thai and Georgian text comes
+from [craft-fonts](https://github.com/storytold/craft-fonts), the optional `CRAFT_FONTS_DIR` build
 input (`CRAFT_FONTS_DIR=../craft-fonts cargo xtask web`; release builds always set it). On wasm32
-`crates/engine/build.rs` embeds BIZ UDPGothic Regular (UI and watermark fallback) and Noto Sans
-Thai Regular (~214 KiB, for Thai file and folder names in every UI language). The web
-bundle also ships Noto Sans CJK SC Regular as `lightcraft_zh_hans.otf` and loads it before the UI
-starts. Keeping the 16 MB Chinese face separate leaves the module under Cloudflare's 25 MiB
-per-file limit (the older Japanese-only module measured 21.8 MB). Without `CRAFT_FONTS_DIR`, the
-web build still works, but Chinese and Japanese text lack glyphs.
+`crates/engine/build.rs` embeds no font: `cargo xtask web` copies BIZ UDPGothic Regular (Japanese
+UI and watermark fallback, 4.7 MB), Noto Sans CJK SC Regular (Simplified Chinese, 16 MB), Noto
+Sans Thai Regular (Thai file and folder names in every UI language) and, when the craft-fonts
+checkout has it, Noto Sans Georgian Regular into `fonts/` with their licences, in craft-fonts'
+own layout, and lists them in `fonts/manifest.json`. `index.html` fetches them while the module
+compiles and passes them to `start`, which adds them to the engine's faces
+(`lightcraft_engine::fonts::add_fonts`) before the UI starts; the UI and the export watermark then
+use them as on the desktop. Cloudflare Pages serves at most **25 MiB (26,214,400 bytes) per
+file**, a hard limit, and the module alone is close to it (25,809,310 bytes on 2026-10-19, no
+`wasm-opt`): with these faces embedded (about 5 MB more) it could not be deployed. `cargo xtask
+web` fails when a release-build file is over that limit. Without `CRAFT_FONTS_DIR` there is no
+`fonts/` folder; the web build still works, but CJK, Thai and Georgian text lack glyphs.
 
 ## Deploying: headers
 

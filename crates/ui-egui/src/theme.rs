@@ -10,7 +10,6 @@ use std::sync::Arc;
 use egui::{Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Stroke, Visuals};
 
 pub const FONT_SEMIBOLD: &str = "semibold";
-const WEB_CHINESE_FONT: &str = "web Noto Sans CJK SC";
 
 /// Shared colour-label palette for badges, thumbnail surrounds and feedback.
 pub fn label_color(label: lightcraft_catalog::ColorLabel) -> Color32 {
@@ -257,25 +256,14 @@ impl Tokens {
     }
 }
 
+/// Install the craft-fonts faces this instance has: embedded, or loaded beside the WASM on the web.
 pub fn install_fonts(ctx: &egui::Context) {
-    install_fonts_with_chinese(ctx, None);
+    ctx.set_fonts(font_definitions(lightcraft_engine::craft_fonts()));
 }
 
-/// Install the browser's separately downloaded Chinese face alongside the embedded faces.
-pub fn install_fonts_with_chinese(ctx: &egui::Context, chinese: Option<&Arc<FontData>>) {
-    ctx.set_fonts(font_definitions_with_chinese(lightcraft_engine::CRAFT_FONTS, chinese));
-}
-
-/// Inter remains the default UI face. Egui's default faces and craft-fonts cover other scripts;
-/// the browser's separate Chinese face precedes Japanese faces within the CJK fallback list.
-/// Without craft-fonts or that separate face, CJK text shows boxes.
+/// Inter remains the default UI face. Egui's default faces and craft-fonts cover other scripts.
+/// Without craft-fonts, CJK text shows boxes.
 pub fn font_definitions(craft: &'static [lightcraft_engine::CraftFont]) -> FontDefinitions {
-    font_definitions_with_chinese(craft, None)
-}
-
-/// The web build keeps the large Simplified Chinese face outside the size-limited WASM module.
-/// Prefer it for Chinese UI text, including Traditional Chinese until it has its own face.
-pub fn font_definitions_with_chinese(craft: &'static [lightcraft_engine::CraftFont], chinese: Option<&Arc<FontData>>) -> FontDefinitions {
     let mut fonts = FontDefinitions::default();
     fonts.font_data.insert("Inter".into(), Arc::new(FontData::from_static(include_bytes!("../../../assets/fonts/Inter-Regular.ttf"))));
     fonts.font_data.insert("Inter-SemiBold".into(), Arc::new(FontData::from_static(include_bytes!("../../../assets/fonts/Inter-SemiBold.ttf"))));
@@ -286,7 +274,7 @@ pub fn font_definitions_with_chinese(craft: &'static [lightcraft_engine::CraftFo
             .map(craft_font_name)
             .collect::<Vec<String>>()
     };
-    let (mut regular, mut bold) = (fallback("Regular"), fallback("Bold"));
+    let (regular, mut bold) = (fallback("Regular"), fallback("Bold"));
     for name in regular.iter().chain(bold.iter()) {
         if let Some(font) = craft.iter().find(|font| &craft_font_name(font) == name) {
             fonts.font_data.insert(name.clone(), Arc::new(FontData::from_static(font.bytes)));
@@ -300,18 +288,6 @@ pub fn font_definitions_with_chinese(craft: &'static [lightcraft_engine::CraftFo
         *name = format!("{name} strong");
         fonts.font_data.insert(name.clone(), Arc::new(heavier));
     }
-    let script = crate::i18n::language().script();
-    let prefer_chinese = chinese.is_some() && matches!(script, "Hans" | "Hant");
-    if let Some(font) = chinese {
-        fonts.font_data.insert(WEB_CHINESE_FONT.into(), font.clone());
-        if prefer_chinese {
-            regular.insert(0, WEB_CHINESE_FONT.into());
-            bold.insert(0, WEB_CHINESE_FONT.into());
-        } else {
-            regular.push(WEB_CHINESE_FONT.into());
-            bold.push(WEB_CHINESE_FONT.into());
-        }
-    }
     let defaults: Vec<String> = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
     let mut prop = vec!["Inter".to_string()];
     prop.extend(defaults.iter().cloned());
@@ -322,27 +298,17 @@ pub fn font_definitions_with_chinese(craft: &'static [lightcraft_engine::CraftFo
     semi.extend(bold);
     fonts.families.insert(FontFamily::Name(FONT_SEMIBOLD.into()), semi);
     let mono = fonts.families.entry(FontFamily::Monospace).or_default();
-    let mut mono_fallback = fallback("Regular");
-    if prefer_chinese {
-        mono_fallback.insert(0, WEB_CHINESE_FONT.into());
-    }
-    if chinese.is_some() && !prefer_chinese {
-        mono_fallback.push(WEB_CHINESE_FONT.into());
-    }
-    mono.extend(mono_fallback);
+    mono.extend(fallback("Regular"));
     fonts
 }
 
-/// The font families used by this app instance, including the browser's separately loaded face.
-pub fn font_credits(chinese_loaded: bool) -> String {
+/// The font families used by this app instance, including the faces loaded beside the WASM.
+pub fn font_credits() -> String {
     let mut families = vec!["Inter"];
-    for f in lightcraft_engine::CRAFT_FONTS {
+    for f in lightcraft_engine::craft_fonts() {
         if !families.contains(&f.family) {
             families.push(f.family);
         }
-    }
-    if chinese_loaded && !families.contains(&"Noto Sans CJK SC") {
-        families.push("Noto Sans CJK SC");
     }
     families.join(" / ")
 }
@@ -536,28 +502,31 @@ mod tests {
     }
 
     #[test]
-    fn separate_web_chinese_face_is_available_in_every_ui_family() {
-        // Simulate the WASM build, which embeds only the Japanese face. The Chinese face arrives
-        // as a separate file and must precede that face when the UI uses Chinese.
-        static JAPANESE: &[lightcraft_engine::CraftFont] = &[lightcraft_engine::CraftFont {
-            family: "BIZ UDPGothic",
-            style: "Regular",
-            scripts: &["Jpan", "Latn"],
-            bytes: include_bytes!("../../../assets/fonts/Inter-Regular.ttf"),
-        }];
+    fn chinese_face_leads_for_chinese_and_follows_the_japanese_face_for_japanese() {
+        // The web build's faces (loaded beside the WASM, then joined to the embedded ones by
+        // `lightcraft_engine::fonts::add_fonts`) are ordinary craft-fonts faces: the Chinese face
+        // must precede the Japanese one when the UI uses Chinese, in every UI family.
         let embedded = lightcraft_engine::CRAFT_FONTS.iter().find(|font| font.family == "Noto Sans CJK SC" && font.style == "Regular");
-        let fallback: &'static [u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
-        let source = embedded.map_or(fallback, |font| font.bytes);
-        let chinese = Arc::new(FontData::from_static(source));
+        let inter: &'static [u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
+        let faces: &'static [lightcraft_engine::CraftFont] = Box::leak(Box::new([
+            lightcraft_engine::CraftFont { family: "BIZ UDPGothic", style: "Regular", scripts: &["Jpan", "Latn"], bytes: inter },
+            lightcraft_engine::CraftFont {
+                family: "Noto Sans CJK SC",
+                style: "Regular",
+                scripts: &["Hans", "Latn"],
+                bytes: embedded.map_or(inter, |font| font.bytes),
+            },
+        ]));
+        let chinese = "craft-fonts Noto Sans CJK SC Regular";
         set_language(Locale::ZhHans);
-        let definitions = font_definitions_with_chinese(JAPANESE, Some(&chinese));
+        let definitions = font_definitions(faces);
         let default_count = FontDefinitions::default().families.get(&FontFamily::Proportional).map_or(0, Vec::len);
         for (family, primary) in [(FontFamily::Proportional, "Inter"), (FontFamily::Name(FONT_SEMIBOLD.into()), "Inter-SemiBold")] {
             let names = definitions.families.get(&family).expect("UI font family");
             assert_eq!(names.first().map(String::as_str), Some(primary));
-            assert_eq!(names.get(1 + default_count).map(String::as_str), Some(WEB_CHINESE_FONT));
+            assert_eq!(names.get(1 + default_count).map(String::as_str), Some(chinese));
         }
-        assert!(definitions.families.get(&FontFamily::Monospace).is_some_and(|names| names.contains(&WEB_CHINESE_FONT.to_string())));
+        assert!(definitions.families.get(&FontFamily::Monospace).is_some_and(|names| names.contains(&chinese.to_string())));
 
         if embedded.is_some() {
             let ctx = egui::Context::default();
@@ -573,10 +542,10 @@ mod tests {
         }
 
         set_language(Locale::Ja);
-        let japanese = font_definitions_with_chinese(JAPANESE, Some(&chinese));
+        let japanese = font_definitions(faces);
         let names = japanese.families.get(&FontFamily::Proportional).expect("proportional fonts");
         assert_eq!(names.get(1 + default_count).map(String::as_str), Some("craft-fonts BIZ UDPGothic Regular"));
-        assert_eq!(names.get(2 + default_count).map(String::as_str), Some(WEB_CHINESE_FONT));
+        assert_eq!(names.get(2 + default_count).map(String::as_str), Some(chinese));
         set_language(Locale::En);
     }
 

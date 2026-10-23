@@ -474,13 +474,13 @@ impl Marks {
         // centred in the bottom margin, and on the paper when the margin is thinner than the text
         let top = |h: f32| (area_bottom + (page_h - area_bottom - h) / 2.0).clamp(0.0, (page_h - h).max(0.0));
         if self.numbers
-            && let Some(t) = crate::text::TextLayout::new(&number.to_string(), self.text_px, false, crate::fonts::CRAFT_FONTS)
+            && let Some(t) = crate::text::TextLayout::new(&number.to_string(), self.text_px, false, crate::fonts::craft_fonts())
         {
             let x = ((area.x + area.w) as f32 - t.width).max(0.0);
             draw_text(page, &t, x, top(t.height), self.ink);
         }
         if let Some(info) = &self.info
-            && let Some(t) = crate::text::TextLayout::new(info, self.text_px, false, crate::fonts::CRAFT_FONTS)
+            && let Some(t) = crate::text::TextLayout::new(info, self.text_px, false, crate::fonts::craft_fonts())
         {
             draw_text(page, &t, area.x as f32, top(t.height), self.ink);
         }

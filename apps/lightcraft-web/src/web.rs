@@ -407,7 +407,7 @@ struct WebApp {
 }
 
 impl WebApp {
-    fn new(cc: &eframe::CreationContext<'_>, boot: Boot, chinese_font: Vec<u8>) -> Self {
+    fn new(cc: &eframe::CreationContext<'_>, boot: Boot) -> Self {
         let Boot { opts, backend, files, index, lib_dir, load_error } = boot;
         let originals = Originals::default();
         let t = perf_now();
@@ -459,8 +459,7 @@ impl WebApp {
         session.media.preview_capacity = 3;
         // nothing is saved while the stored library couldn't be read
         let frozen = Rc::new(Cell::new(read_failed));
-        let mut app = LightcraftApp::new(session, services(originals.clone(), backend.clone(), files.clone(), frozen.clone(), cc.egui_ctx.clone()))
-            .with_chinese_font(chinese_font);
+        let mut app = LightcraftApp::new(session, services(originals.clone(), backend.clone(), files.clone(), frozen.clone(), cc.egui_ctx.clone()));
         let ui_written = files.get("ui.json").unwrap_or_default();
         if let Ok(ui) = serde_json::from_slice::<UiState>(&ui_written) {
             app.ui = ui;
@@ -721,16 +720,24 @@ fn install_browser_language() {
     }
 }
 
-/// Start the app with the separately fetched Simplified Chinese font (empty in font-free builds).
+/// One entry of `fonts/manifest.json`, which `cargo xtask web` writes beside the font files.
+#[derive(serde::Deserialize)]
+struct WebFont {
+    family: String,
+    style: String,
+    scripts: Vec<String>,
+}
+
+/// Start the app with the craft-fonts faces the page fetched from beside the WASM: `manifest` is
+/// the text of `fonts/manifest.json` and `files` holds each entry's bytes (a `Uint8Array`) in the
+/// same order. Both are empty in font-free builds.
 #[wasm_bindgen]
-pub fn start(chinese_font: Vec<u8>) {
+pub fn start(manifest: String, files: js_sys::Array) {
     eframe::WebLogger::init(log::LevelFilter::Info).ok();
     safety::install_panic_hook();
     install_browser_language();
     log::info!("lightcraft: wasm instantiated at {:.0} ms", perf_now());
-    if chinese_font.is_empty() {
-        log::warn!("lightcraft: no Simplified Chinese font supplied; Chinese-only glyphs will show as boxes");
-    }
+    add_web_fonts(&manifest, &files);
     let opts = Options::from_url();
     wasm_bindgen_futures::spawn_local(async move {
         // one tab per library: two would each keep their own copy and overwrite each other's saves
@@ -751,7 +758,7 @@ pub fn start(chinese_font: Vec<u8>) {
         };
         let boot = boot(opts).await;
         let runner = eframe::WebRunner::new();
-        let r = runner.start(canvas, eframe::WebOptions::default(), Box::new(move |cc| Ok(Box::new(WebApp::new(cc, boot, chinese_font))))).await;
+        let r = runner.start(canvas, eframe::WebOptions::default(), Box::new(move |cc| Ok(Box::new(WebApp::new(cc, boot))))).await;
         match r {
             Ok(()) => {
                 if let Some(el) = window().and_then(|w| w.document()).and_then(|d| d.get_element_by_id("lightcraft_loading")) {
@@ -764,4 +771,26 @@ pub fn start(chinese_font: Vec<u8>) {
             }
         }
     });
+}
+
+/// Hand the fetched faces to the engine, which the UI and the export watermark read them from. The
+/// app lives as long as the page, so the bytes are leaked into the `'static` font table.
+fn add_web_fonts(manifest: &str, files: &js_sys::Array) {
+    let list: Vec<WebFont> = serde_json::from_str(manifest).unwrap_or_default();
+    let fonts = list
+        .into_iter()
+        .zip(files.iter())
+        .map(|(font, bytes)| lightcraft_engine::CraftFont {
+            family: font.family.leak(),
+            style: font.style.leak(),
+            scripts: font.scripts.into_iter().map(|script| &*script.leak()).collect::<Vec<&str>>().leak(),
+            bytes: js_sys::Uint8Array::new(&bytes).to_vec().leak(),
+        })
+        .collect::<Vec<_>>();
+    if fonts.is_empty() {
+        log::warn!("lightcraft: no craft-fonts faces supplied; CJK, Thai and Georgian text will show as boxes");
+    }
+    for font in lightcraft_engine::fonts::add_fonts(fonts) {
+        log::warn!("lightcraft: {} {} did not load; its text will show as boxes", font.family, font.style);
+    }
 }

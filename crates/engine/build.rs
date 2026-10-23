@@ -3,9 +3,10 @@
 //! Recipe from craft-fonts' docs/integration.md; craft-fonts is never a Cargo dependency, and this
 //! script only reads a local directory (no network).
 //!
-//! wasm32 embeds BIZ UDPGothic Regular (~4.5 MB) and Noto Sans Thai (~214 KiB) and Noto Sans Georgian, to keep the
-//! `.wasm` within the web size budget (Cloudflare serves at most 25 MiB per file); the export
-//! watermark falls back to it there. Native builds embed every font.
+//! wasm32 embeds no font: Cloudflare Pages serves at most 25 MiB per file and the module alone is
+//! close to that, so `cargo xtask web` ships the web faces beside the `.wasm` and the page hands
+//! them to the app before it starts (`lightcraft_engine::fonts::add_fonts`). The manifest is still
+//! checked here. Native builds embed every font.
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
@@ -16,6 +17,7 @@ fn main() {
     let required = std::env::var_os("CRAFT_FONTS_REQUIRED").is_some();
     let mut src = String::from("pub static CRAFT_FONTS: &[CraftFont] = &[\n");
     let mut embedded = 0;
+    let wasm = std::env::var("CARGO_CFG_TARGET_ARCH").is_ok_and(|a| a == "wasm32");
     if let Some(dir) = std::env::var_os("CRAFT_FONTS_DIR").map(PathBuf::from).map(resolve) {
         match craft_fonts(&dir, required) {
             Ok(entries) => {
@@ -33,7 +35,7 @@ fn main() {
     src.push_str("];\n");
     // Without them the app still runs and every language still selectable, so Chinese and Japanese
     // just paint boxes — the one failure a user cannot diagnose from what they see.
-    if embedded == 0 {
+    if embedded == 0 && !wasm {
         println!(
             "cargo::warning=no craft-fonts embedded: Chinese and Japanese text will render as empty boxes. \
              Clone https://github.com/storytold/craft-fonts next to this repo and rebuild with \
@@ -78,7 +80,7 @@ fn craft_fonts(dir: &Path, required: bool) -> Result<String, String> {
         has_japanese_ui |= (*family, *style) == ("BIZ UDPGothic", "Regular");
         has_chinese_ui |= (*family, *style) == ("Noto Sans CJK SC", "Regular") && scripts.split(',').any(|script| script.trim() == "Hans");
         has_thai_ui |= (*family, *style) == ("Noto Sans Thai", "Regular") && scripts.split(',').any(|script| script.trim() == "Thai");
-        if wasm && !matches!((*family, *style), ("BIZ UDPGothic" | "Noto Sans Thai" | "Noto Sans Georgian", "Regular")) {
+        if wasm {
             continue;
         }
         let path = dir.join(file).canonicalize().map_err(|e| format!("{file}: {e}"))?;

@@ -15,8 +15,7 @@ static site in `lightcraft-web-<version>/`:
 | `lightcraft_web.js` | wasm-bindgen glue (generated, ES module) |
 | `lightcraft_web_bg.wasm` | The app, about 13 MB (about 3 MB with brotli) |
 | `worker.js` | Starts the render workers (each runs the same module) |
-| `lightcraft_zh_hans.otf` | Simplified Chinese UI font, included when built with `CRAFT_FONTS_DIR` |
-| `OFL-noto-sans-cjk-sc.txt` | The bundled Chinese font's SIL Open Font License |
+| `fonts/` | The UI fonts (Japanese, Simplified Chinese, Thai, Georgian) with their SIL Open Font Licenses, and `manifest.json`, which lists them for `index.html`; included when built with `CRAFT_FONTS_DIR` |
 | `*.gz`, `*.br` | Precompressed copies of the files above (optional to serve) |
 | `_headers`, `.htaccess` | Sample header rules for Netlify/Cloudflare Pages and Apache |
 

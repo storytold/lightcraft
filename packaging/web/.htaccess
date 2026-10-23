@@ -9,7 +9,7 @@ AddType text/javascript .js
 # The file names don't change between versions: revalidate them (no `immutable`), or an upgrade
 # could leave browsers with an old module, or old glue next to a new module.
 <IfModule mod_headers.c>
-  <FilesMatch "\.(wasm|js|html)$">
+  <FilesMatch "\.(wasm|js|html|json|ttf|otf)$">
     Header set Cache-Control "no-cache"
   </FilesMatch>
 </IfModule>

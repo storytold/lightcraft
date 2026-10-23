@@ -1288,7 +1288,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                             ui.label(crate::i18n::tr_format!("Version {} — a clean-room, pure-Rust photo library and raw developer.", env!("CARGO_PKG_VERSION")));
                             ui.label(crate::i18n::tr_format!(
                                 "MIT OR Apache-2.0. Fonts: {} (OFL). Icons: original.",
-                                crate::theme::font_credits(app.chinese_font.is_some())
+                                crate::theme::font_credits()
                             ));
                             ui.add_space(10.0);
                             let r = crate::button::Button::new("Join the ArtCraft Discord")

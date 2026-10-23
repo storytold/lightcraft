@@ -20,58 +20,108 @@ const WEB_PROFILE: &str = "web";
 /// *host* artifacts (build scripts, proc-macros, `deps/`, `build/`, `.fingerprint/`) to
 /// `<target>/<profile>/`, and `packaging/web/package.sh` zips the whole bundle directory (issue #793).
 const SITE_DIR: &str = "web-site";
-const CHINESE_FONT_FILE: &str = "lightcraft_zh_hans.otf";
-const CHINESE_FONT_LICENSE_FILE: &str = "OFL-noto-sans-cjk-sc.txt";
 
 /// Files copied from `apps/lightcraft-web/` into the bundle as they are.
 const STATIC_FILES: [&str; 2] = ["index.html", "worker.js"];
 
-/// Bundle files that get precompressed copies.
+/// Bundle files that get precompressed copies (the web fonts get them too).
 const COMPRESSED: [&str; 4] = ["index.html", "worker.js", "lightcraft_web.js", "lightcraft_web_bg.wasm"];
 
-/// The Noto face is shipped beside the WASM rather than embedded in it: hosts such as Cloudflare
-/// Pages cap individual files at 25 MiB, while the complete site can contain larger assets.
-fn chinese_font_in_manifest(manifest: &str) -> Option<(&str, &str)> {
-    manifest.lines().find_map(|line| {
-        let fields: Vec<_> = line.split('|').map(str::trim).collect();
-        if fields.len() >= 6 && fields[0] == "Noto Sans CJK SC" && fields[1] == "Regular" && !fields[2].is_empty() && !fields[5].is_empty() {
-            Some((fields[2], fields[5]))
-        } else {
-            None
-        }
-    })
+/// Cloudflare Pages' hard limit per file (25 MiB): a release bundle with a larger file can't be deployed there.
+const MAX_FILE_BYTES: usize = 25 * 1024 * 1024;
+
+/// Where the web fonts go in the bundle; `index.html` reads `fonts/manifest.json` from here.
+const FONTS_DIR: &str = "fonts";
+
+/// The craft-fonts faces the web build ships, as (family, style, required). They go beside the
+/// WASM rather than into it: Cloudflare Pages serves at most 25 MiB per file and the module alone
+/// is close to that, while the site as a whole may be larger. `index.html` fetches them and hands
+/// them to the app before it starts. A face that is not required ships when the craft-fonts
+/// checkout has it.
+const WEB_FACES: [(&str, &str, bool); 4] = [
+    ("BIZ UDPGothic", "Regular", true),
+    ("Noto Sans CJK SC", "Regular", true),
+    ("Noto Sans Thai", "Regular", true),
+    ("Noto Sans Georgian", "Regular", false),
+];
+
+/// A [`WEB_FACES`] entry as the craft-fonts manifest lists it.
+#[derive(Debug, PartialEq)]
+struct WebFace<'a> {
+    family: &'a str,
+    style: &'a str,
+    file: &'a str,
+    scripts: Vec<&'a str>,
+    licence: &'a str,
 }
 
-fn copy_chinese_font(out: &Path) -> Result<bool, String> {
-    // A previous font-enabled build must not leave an unlicensed/stale asset in a font-free one.
-    for name in [CHINESE_FONT_FILE, CHINESE_FONT_LICENSE_FILE, "lightcraft_zh_hans.otf.gz", "lightcraft_zh_hans.otf.br"] {
-        let path = out.join(name);
-        match std::fs::remove_file(&path) {
-            Ok(()) => (),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
-            Err(e) => return Err(format!("{}: {e}", path.display())),
+/// The [`WEB_FACES`] in a craft-fonts `fonts/manifest.txt`, in that order; a missing required face
+/// is an error.
+fn web_faces_in_manifest(manifest: &str) -> Result<Vec<WebFace<'_>>, String> {
+    let lines: Vec<Vec<&str>> =
+        manifest.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).map(|l| l.split('|').map(str::trim).collect()).collect();
+    let mut faces = Vec::new();
+    for (family, style, required) in WEB_FACES {
+        let found = lines.iter().find(|f| f.len() >= 6 && f[0] == family && f[1] == style && !f[2].is_empty() && !f[5].is_empty());
+        match found {
+            Some(f) => {
+                for path in [f[2], f[5]] {
+                    if !Path::new(path).starts_with(FONTS_DIR) || path.starts_with('/') || path.split('/').any(|c| c == "..") {
+                        return Err(format!("{family} {style}: {path} leaves the craft-fonts checkout"));
+                    }
+                }
+                faces.push(WebFace { family, style, file: f[2], scripts: f[3].split(',').map(str::trim).collect(), licence: f[5] });
+            }
+            None if required => return Err(format!("{family} {style} is missing")),
+            None => println!("web fonts: {family} {style} is not in this craft-fonts checkout; skipped"),
         }
+    }
+    Ok(faces)
+}
+
+/// Copy the [`WEB_FACES`] and their licences into `out/fonts/` (craft-fonts' own layout) and write
+/// `out/fonts/manifest.json`; returns the font files' bundle paths. Without `CRAFT_FONTS_DIR`
+/// nothing is shipped and the web build runs without them.
+fn copy_web_fonts(out: &Path) -> Result<Vec<String>, String> {
+    // A previous font-enabled build must not leave an unlicensed/stale asset in a font-free one
+    // (`lightcraft_zh_hans.otf` and its licence: the layout before `fonts/`).
+    let fonts_dir = out.join(FONTS_DIR);
+    match std::fs::remove_dir_all(&fonts_dir) {
+        Ok(()) => (),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+        Err(e) => return Err(format!("{}: {e}", fonts_dir.display())),
+    }
+    for name in ["lightcraft_zh_hans.otf", "lightcraft_zh_hans.otf.gz", "lightcraft_zh_hans.otf.br", "OFL-noto-sans-cjk-sc.txt"] {
+        let _ = std::fs::remove_file(out.join(name));
     }
     let Some(dir) = std::env::var_os("CRAFT_FONTS_DIR") else {
         if std::env::var_os("CRAFT_FONTS_REQUIRED").is_some() {
             return Err("CRAFT_FONTS_REQUIRED is set but CRAFT_FONTS_DIR is missing".into());
         }
-        return Ok(false);
+        println!("web fonts: no CRAFT_FONTS_DIR, so CJK, Thai and Georgian text will show as boxes");
+        return Ok(Vec::new());
     };
     let dir = PathBuf::from(dir);
     let dir = if dir.is_absolute() { dir } else { root().join(dir) };
     let manifest_path = dir.join("fonts/manifest.txt");
     let manifest = std::fs::read_to_string(&manifest_path).map_err(|e| format!("{}: {e}", manifest_path.display()))?;
-    let (font, licence) =
-        chinese_font_in_manifest(&manifest).ok_or_else(|| format!("{}: Noto Sans CJK SC Regular is missing", manifest_path.display()))?;
-    let licence = dir.join(licence);
-    let licence_target = out.join(CHINESE_FONT_LICENSE_FILE);
-    std::fs::copy(&licence, &licence_target).map_err(|e| format!("{} → {}: {e}", licence.display(), licence_target.display()))?;
-    let source = dir.join(font);
-    let target = out.join(CHINESE_FONT_FILE);
-    std::fs::copy(&source, &target).map_err(|e| format!("{} → {}: {e}", source.display(), target.display()))?;
-    println!("web Chinese font: {} → {}", source.display(), target.display());
-    Ok(true)
+    let faces = web_faces_in_manifest(&manifest).map_err(|e| format!("{}: {e}", manifest_path.display()))?;
+    let mut list = Vec::new();
+    for face in &faces {
+        for path in [face.file, face.licence] {
+            let (source, target) = (dir.join(path), out.join(path));
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+            }
+            std::fs::copy(&source, &target).map_err(|e| format!("{} → {}: {e}", source.display(), target.display()))?;
+        }
+        println!("web font: {} {} → {}", face.family, face.style, out.join(face.file).display());
+        list.push(serde_json::json!({"family": face.family, "style": face.style, "scripts": face.scripts, "file": face.file}));
+    }
+    std::fs::create_dir_all(&fonts_dir).map_err(|e| format!("{}: {e}", fonts_dir.display()))?;
+    let json = fonts_dir.join("manifest.json");
+    std::fs::write(&json, serde_json::to_string_pretty(&list).unwrap_or_default()).map_err(|e| format!("{}: {e}", json.display()))?;
+    Ok(faces.iter().map(|face| face.file.to_string()).collect())
 }
 
 /// The `wasm-bindgen` version pinned in Cargo.lock (the CLI must match it exactly).
@@ -138,11 +188,11 @@ pub fn run(args: &[&str]) -> Result<(), String> {
     for f in STATIC_FILES {
         std::fs::copy(root().join("apps/lightcraft-web").join(f), out.join(f)).map_err(|e| format!("copy {f}: {e}"))?;
     }
-    let chinese_font = copy_chinese_font(&out)?;
+    let fonts = copy_web_fonts(&out)?;
 
     // precompressed copies (skipped for --dev: they'd only slow the edit loop down)
-    println!("\n{:<26} {:>12} {:>12} {:>12}", "file", "bytes", "gzip -9", "brotli -11");
-    for f in COMPRESSED.into_iter().chain(chinese_font.then_some(CHINESE_FONT_FILE)) {
+    println!("\n{:<50} {:>12} {:>12} {:>12}", "file", "bytes", "gzip -9", "brotli -11");
+    for f in COMPRESSED.into_iter().chain(fonts.iter().map(String::as_str)) {
         let p = out.join(f);
         let raw = std::fs::read(&p).map_err(|e| format!("{}: {e}", p.display()))?;
         let (gz, br) = if dev {
@@ -158,7 +208,13 @@ pub fn run(args: &[&str]) -> Result<(), String> {
             (Some(gz.len()), Some(br.len()))
         };
         let show = |n: Option<usize>| n.map_or("-".to_string(), |n| n.to_string());
-        println!("{f:<26} {:>12} {:>12} {:>12}", raw.len(), show(gz), show(br));
+        println!("{f:<50} {:>12} {:>12} {:>12}", raw.len(), show(gz), show(br));
+        if !dev && raw.len() > MAX_FILE_BYTES {
+            return Err(format!(
+                "{f} is {} bytes, over the {MAX_FILE_BYTES}-byte (25 MiB) per-file limit of Cloudflare Pages (docs/web.md)",
+                raw.len()
+            ));
+        }
     }
     let size = std::fs::metadata(&bg).map(|m| m.len()).unwrap_or(0);
     println!("\nweb build ready: {} ({:.1} MB wasm)", out.display(), size as f64 / 1e6);
@@ -194,6 +250,7 @@ fn mime(path: &Path) -> &'static str {
         "png" => "image/png",
         "jpg" | "jpeg" => "image/jpeg",
         "otf" => "font/otf",
+        "ttf" => "font/ttf",
         "txt" => "text/plain; charset=utf-8",
         "svg" => "image/svg+xml",
         _ => "application/octet-stream",
@@ -314,16 +371,44 @@ mod tests {
         assert_eq!(mime(Path::new("a/lightcraft_web_bg.wasm")), "application/wasm");
         assert_eq!(mime(Path::new("index.html")), "text/html; charset=utf-8");
         assert_eq!(mime(Path::new("worker.js")), "text/javascript; charset=utf-8");
-        assert_eq!(mime(Path::new(CHINESE_FONT_FILE)), "font/otf");
+        assert_eq!(mime(Path::new("fonts/noto-sans-cjk-sc/NotoSansCJKsc-Regular.otf")), "font/otf");
+        assert_eq!(mime(Path::new("fonts/noto-sans-georgian/NotoSansGeorgian.ttf")), "font/ttf");
+        assert_eq!(mime(Path::new("fonts/manifest.json")), "application/json");
     }
 
     #[test]
-    fn web_bundle_selects_the_chinese_face_from_the_font_manifest() {
+    fn web_bundle_selects_its_faces_from_the_font_manifest() {
         let manifest = "# family | style | path | scripts | licence | licence file\n\
-            BIZ UDPGothic | Regular | fonts/biz.ttf | Jpan,Latn | OFL-1.1 | fonts/biz/OFL.txt\n\
+            BIZ UDPGothic | Bold | fonts/biz/Bold.ttf | Jpan,Latn | OFL-1.1 | fonts/biz/OFL.txt\n\
+            Noto Sans Thai | Regular | fonts/thai/NotoSansThai.ttf | Thai | OFL-1.1 | fonts/thai/OFL.txt\n\
+            BIZ UDPGothic | Regular | fonts/biz/Regular.ttf | Jpan,Latn | OFL-1.1 | fonts/biz/OFL.txt\n\
             Noto Sans CJK SC | Regular | fonts/noto/NotoSansCJKsc-Regular.otf | Hans,Latn | OFL-1.1 | fonts/noto/OFL.txt\n";
-        assert_eq!(chinese_font_in_manifest(manifest), Some(("fonts/noto/NotoSansCJKsc-Regular.otf", "fonts/noto/OFL.txt")));
-        assert_eq!(chinese_font_in_manifest("BIZ UDPGothic | Regular | fonts/biz.ttf | Jpan,Latn | OFL-1.1 | fonts/biz/OFL.txt"), None);
+        let faces = web_faces_in_manifest(manifest).unwrap();
+        let files: Vec<_> = faces.iter().map(|f| f.file).collect();
+        // In WEB_FACES order; Georgian is optional (craft-fonts before a71c20e3 has none).
+        assert_eq!(files, ["fonts/biz/Regular.ttf", "fonts/noto/NotoSansCJKsc-Regular.otf", "fonts/thai/NotoSansThai.ttf"]);
+        assert_eq!(faces[0].scripts, ["Jpan", "Latn"]);
+        assert_eq!(faces[0].licence, "fonts/biz/OFL.txt");
+        let georgian = format!("{manifest}Noto Sans Georgian | Regular | fonts/geo/NotoSansGeorgian.ttf | Geor | OFL-1.1 | fonts/geo/OFL.txt\n");
+        assert_eq!(
+            web_faces_in_manifest(&georgian).unwrap().last().map(|f| (f.family, f.scripts.clone())),
+            Some(("Noto Sans Georgian", vec!["Geor"]))
+        );
+        // A required face missing, or a path out of the checkout, fails the build.
+        let no_thai: String = manifest.lines().filter(|l| !l.contains("Thai")).map(|l| format!("{l}\n")).collect();
+        assert!(web_faces_in_manifest(&no_thai).unwrap_err().contains("Noto Sans Thai Regular is missing"));
+        let escape = manifest.replace("fonts/thai/NotoSansThai.ttf", "../NotoSansThai.ttf");
+        assert!(web_faces_in_manifest(&escape).is_err());
+        let root = manifest.replace("fonts/thai/NotoSansThai.ttf", "index.html");
+        assert!(web_faces_in_manifest(&root).is_err());
+    }
+
+    /// The page fetches the same manifest name the bundle writes, and passes it to `start`.
+    #[test]
+    fn index_html_loads_the_web_fonts() {
+        let html = std::fs::read_to_string(root().join("apps/lightcraft-web/index.html")).unwrap();
+        assert!(html.contains(&format!("./{FONTS_DIR}/manifest.json")), "index.html must fetch {FONTS_DIR}/manifest.json");
+        assert!(html.contains("start(fontManifest, fontFiles)"));
     }
 
     #[test]
