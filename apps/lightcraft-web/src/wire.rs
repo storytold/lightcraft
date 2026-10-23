@@ -61,6 +61,9 @@ pub struct WireJob {
     /// Render only this window `[x, y, w, h]` of the output `max_w × max_h` describes (a zoomed view).
     #[serde(default)]
     pub window: Option<[usize; 4]>,
+    /// High Quality Preview: scale the (native-resolution) render to the view this way.
+    #[serde(default)]
+    pub hq: Option<lightcraft_engine::hq_preview::HqDownscale>,
 }
 
 impl WireJob {
@@ -94,6 +97,7 @@ impl WireJob {
             stages: job.stages.is_some().then(|| view.to_string()),
             overlay: job.request.overlay.to_parts(),
             window: job.request.window.map(|w| [w.x, w.y, w.w, w.h]),
+            hq: job.hq,
         }
     }
 
@@ -203,6 +207,10 @@ impl WorkerCore {
         // an HDR edit's histogram shows its HDR range (as on native)
         if let Some(h) = lightcraft_engine::pipeline::hdr_histogram(&src.image, &info, &job.settings, &job.request()) {
             rendered.histogram = h;
+        }
+        // (the histogram stays the native render's, as on native)
+        if let Some(hq) = &job.hq {
+            rendered.image = hq.apply(&rendered.image);
         }
         Ok(rendered)
     }
@@ -485,6 +493,7 @@ mod tests {
             stages: Some("Main".into()),
             overlay: (0, 0.0),
             window: None,
+            hq: None,
         };
         let mut core = WorkerCore::default();
         assert_eq!(core.needs_original(&job).as_deref(), Some(hash.as_str()));

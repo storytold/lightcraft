@@ -118,7 +118,7 @@ impl SourceLevel {
 /// Pixels along the source's long edge that an output `out_long` pixels long needs: a crop shows
 /// only part of the photo, so its pixels come from a source that many times larger (the source
 /// level is chosen from this, or a tight crop shown at its own pixels would be a stretched preview).
-fn source_edge_needed(p: &Photo, settings: &DevelopSettings, apply_crop: bool, out_long: usize) -> usize {
+pub(crate) fn source_edge_needed(p: &Photo, settings: &DevelopSettings, apply_crop: bool, out_long: usize) -> usize {
     let (w, h) = (f64::from(p.width.max(1)), f64::from(p.height.max(1)));
     let r = settings.crop.geometry.rect;
     let shown = if apply_crop { (r.width() * w).max(r.height() * h) } else { w.max(h) };
@@ -789,6 +789,9 @@ pub struct RenderJob {
     /// to a 64 px step) and the window would otherwise shrink the texture with 2-tap bilinear sampling, which blurs fine detail at
     /// small ratios and aliases it at large ones. The caches keep the full render.
     pub display_fit: Option<(usize, usize)>,
+    /// High Quality Preview: the request is the photo's native-resolution frame (or a window of
+    /// it), scaled to the view's pixels after rendering ([`crate::Session::high_quality`]).
+    pub hq: Option<crate::hq_preview::HqDownscale>,
 }
 
 /// `img` shrunk to fit `max_w × max_h` with a Lanczos filter (see [`RenderJob::display_fit`]).
@@ -1018,6 +1021,16 @@ impl RenderJob {
                 // the GPU when there is one.
                 let gpu = self.cache.is_none();
                 let (mut rendered, gpu_fallback) = develop_reporting(src, &info, &self.settings, &self.request, self.stages.as_deref(), gpu);
+                // High Quality Preview: the native render scaled to the view, while it is still on
+                // the sRGB curve (before a display profile's correction); the histogram stays the
+                // native render's, like the full-size export's
+                let mut native_histogram = None;
+                if let Some(hq) = &self.hq {
+                    if let (Some(d), Some(_)) = (&self.display, self.request.display) {
+                        native_histogram = crate::display::srgb_histogram(&rendered.image, d);
+                    }
+                    rendered.image = hq.apply(&rendered.image);
+                }
                 // for a display profile: the image goes to the display's values, the histogram
                 // and the cached view preview stay sRGB
                 let mut srgb = None;
@@ -1026,7 +1039,7 @@ impl RenderJob {
                         let keep = self.view_cache.is_some() && self.request.quality == Quality::Full;
                         let (s, h) = crate::display::finish_render(&mut rendered.image, d, keep);
                         // (an HDR edit's HDR histogram stays)
-                        if let Some(h) = h.filter(|_| rendered.histogram.hdr.is_none()) {
+                        if let Some(h) = native_histogram.or(h).filter(|_| rendered.histogram.hdr.is_none()) {
                             rendered.histogram = h;
                         }
                         srgb = s;
@@ -1330,6 +1343,7 @@ impl crate::Session {
             slide: None,
             preview_cut: None,
             display_fit: None,
+            hq: None,
         })
     }
 
@@ -1384,6 +1398,7 @@ impl crate::Session {
             slide: None,
             preview_cut: None,
             display_fit: None,
+            hq: None,
         })
     }
 
@@ -1439,6 +1454,7 @@ impl crate::Session {
             slide: None,
             preview_cut,
             display_fit: None,
+            hq: None,
         })
     }
 

@@ -402,9 +402,13 @@ fn request_window(app: &mut LightcraftApp, c: &WindowCtx, v: &WindowView) -> Opt
         to_px * (v.visible.bottom() - v.target.top()),
     );
     let win = crate::region::window_for(fw, fh, visible, crate::region::max_span(c.texture_side))?;
-    // a window waits for the original another window job is decoding (see `defer_window`)
-    let original_held = app.session.media.has_source(c.id, lightcraft_engine::SourceLevel::for_size(fw.max(fh)));
-    let window_pending = app.renderer.is_pending(Slot::Region) || app.renderer.is_pending(Slot::RegionBefore);
+    // a window waits for the original another window job is decoding (see `defer_window`); a
+    // High Quality whole frame decodes it too
+    let hq = app.ui.high_quality_preview && !c.interacting;
+    let original_held = app.session.media.has_source(c.id, lightcraft_engine::SourceLevel::for_size(fw.max(fh)))
+        || (hq && app.session.media.has_source(c.id, lightcraft_engine::SourceLevel::Full));
+    let window_pending =
+        app.renderer.is_pending(Slot::Region) || app.renderer.is_pending(Slot::RegionBefore) || (hq && app.renderer.is_pending(Slot::Main));
     if crate::region::defer_window(window_pending, original_held) {
         return if v.before { app.region_before_view } else { app.region_view }.filter(|w| w.photo == c.id);
     }
@@ -418,6 +422,19 @@ fn request_window(app: &mut LightcraftApp, c: &WindowCtx, v: &WindowView) -> Opt
     let Some(job) = job else {
         app.window_refused = Some((c.id, c.look, frame_edge));
         return None;
+    };
+    // High Quality Preview: below 100 % the window is cut from the native frame (not while dragging)
+    let job = if hq {
+        let (job, state) = app.session.high_quality(job);
+        let refused = matches!(state, lightcraft_engine::hq_preview::HqState::Refused { .. });
+        app.hq_report.insert(if v.before { "windowBefore" } else { "window" }, state);
+        if refused {
+            app.window_refused = Some((c.id, c.look, frame_edge));
+            return None;
+        }
+        job
+    } else {
+        job
     };
     // a drag renders drafts of the window, as it does of the whole frame. The Before tile stays
     // plain; the After tile carries the same mask overlay as the whole-frame render.
@@ -440,6 +457,14 @@ fn request_window(app: &mut LightcraftApp, c: &WindowCtx, v: &WindowView) -> Opt
     app.region_tiles.insert((v.before, job.key), view);
     app.renderer.request(v.slot, job, 99);
     Some(view)
+}
+
+/// `job` as a High Quality Preview job ([`lightcraft_engine::Session::high_quality`]), recording
+/// what was done as `kind` for `ui.inspect`.
+fn hq_job(app: &mut LightcraftApp, kind: &'static str, job: lightcraft_engine::RenderJob) -> lightcraft_engine::RenderJob {
+    let (job, state) = app.session.high_quality(job);
+    app.hq_report.insert(kind, state);
+    job
 }
 
 /// Draw `v`'s window texture over the whole-frame render, if it is the one asked for (or, in a
@@ -608,12 +633,19 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     // hover and before renders are stand-ins: the preview size is plenty and keeps them cheap
     let se = app.ui.settings.stand_in_edge(want, texture_side);
     let (sw, sh) = if aspect >= 1.0 { (se, short(se, aspect)) } else { (short(se, 1.0 / aspect), se) };
+    let hq = app.ui.high_quality_preview;
+    if !hq {
+        app.hq_report.clear();
+    }
     if let Some(job) = app.session.loupe_job(id, rw.max(8), rh.max(8), !crop_tool) {
         let job = if interacting { job.draft() } else { job };
         // at rest the render is shrunk to exactly the size it is drawn at with a Lanczos filter on
         // the worker, so the window draws it texel for texel instead of shrinking it with 2-tap
         // sampling (the render is up to a 64 px step larger, or the preview level)
         let job = if interacting { job } else { job.with_display_fit(fit_px[0], fit_px[1]) };
+        // High Quality Preview: the full-resolution render averaged in linear light straight to that
+        // drawn size (no Lanczos pass); a drag's drafts stay fast
+        let job = if hq && !interacting { hq_job(app, "main", job) } else { job };
         let job = job.with_overlay(overlay).with_proof(app.ui.soft_proof.then_some(app.ui.proof));
         let job = job.with_hidden_grading(app.ui.grading_hidden_for(id));
         app.renderer.request(Slot::Main, job, 100);
@@ -673,6 +705,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     {
         // (the same display fit as the After view, so both panes are the same texture size)
         let job = if interacting { job } else { job.with_display_fit(fit_px[0], fit_px[1]) };
+        // (High Quality in a drag too, as the Before side has no drafts; at rest its downscale goes
+        // straight to the display fit)
+        let job = if hq { hq_job(app, "before", job) } else { job };
         app.renderer.request(Slot::Before, job, 90);
     }
     // zoomed past what the whole-frame render holds: also render the part on screen, at no more

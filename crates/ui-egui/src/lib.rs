@@ -101,6 +101,8 @@ mod tests_grid;
 #[cfg(test)]
 mod tests_guided_guides;
 #[cfg(test)]
+mod tests_hq_preview;
+#[cfg(test)]
 mod tests_info_dialogs;
 #[cfg(test)]
 mod tests_keymap;
@@ -424,6 +426,9 @@ pub struct LightcraftApp {
     pub(crate) drag_scale: region::DragScale,
     /// (photo, look, window frame size) a window was refused for: it reads more than one render holds.
     pub(crate) window_refused: Option<(lightcraft_catalog::PhotoId, u64, usize)>,
+    /// High Quality Preview (`view.highQualityPreview`): what the engine did with the loupe's last
+    /// job of each kind (`main`, `before`, `window`, `windowBefore`), for `ui.inspect`.
+    pub(crate) hq_report: std::collections::BTreeMap<&'static str, lightcraft_engine::hq_preview::HqState>,
     pub(crate) region_tiles: std::collections::HashMap<(bool, u64), region::RegionView>,
     /// The window render each pane of Compare / Reference asked for last (left, right), as
     /// [`Self::region_view`] is for the loupe.
@@ -534,6 +539,7 @@ impl LightcraftApp {
             size_hold: Default::default(),
             drag_scale: Default::default(),
             window_refused: None,
+            hq_report: Default::default(),
             region_tiles: Default::default(),
             compare_windows: [None; 2],
             compare_tiles: Default::default(),

@@ -2,6 +2,12 @@
 
 ## 2026-10-21
 
+### High Quality Preview
+- View ▸ High Quality Preview makes the zoomed-out loupe show the full-resolution render scaled down, which is what a
+  full-size export writes. Turn it on when a photo with very fine, high-contrast detail (stars, line art, fractals)
+  under a strong curve or a big exposure looks different zoomed in than at Fit. It is slower on big photos, so it is
+  off by default; slider drags stay fast and the sharp version follows when you let go.
+
 ### Sharper resampling in HDR and panorama merges
 - Merged photos (HDR and panorama) are resampled with a sharper filter (Lanczos-3 instead of bilinear). Moving a
   photo by half a pixel used to lose a third of its finest detail; now it keeps most of it, without halos around

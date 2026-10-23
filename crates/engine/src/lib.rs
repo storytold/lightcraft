@@ -43,6 +43,7 @@ pub mod files;
 mod focus_scan;
 pub mod fonts;
 pub mod guard;
+pub mod hq_preview;
 pub mod import;
 mod import_move;
 pub mod lens_profiles;
@@ -1336,6 +1337,8 @@ mod tests_forget_local;
 mod tests_history_cursor;
 #[cfg(test)]
 mod tests_hold_view;
+#[cfg(test)]
+mod tests_hq_preview;
 #[cfg(test)]
 mod tests_ids_params;
 #[cfg(test)]

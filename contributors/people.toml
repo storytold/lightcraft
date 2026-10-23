@@ -64,3 +64,6 @@ sync_github_name = true
 
 [people.ronibalthazar]
 sync_github_name = true
+
+[people.akulica]
+display_name = "akulica"

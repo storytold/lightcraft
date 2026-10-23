@@ -756,6 +756,9 @@ pub struct UiState {
     #[serde(skip)]
     pub proof_intent: lightcraft_engine::proof::ProofIntent,
     pub proof_paper_ink: bool,
+    /// High Quality Preview (`view.highQualityPreview`): below 100 % the Detail loupe shows the
+    /// full-resolution render scaled down instead of a render made at display size.
+    pub high_quality_preview: bool,
     /// Masking: show the selected mask as a rendered overlay (O), how (`MaskView` name, ⇧O cycles),
     /// in which colour and opacity (0..100, colour views), and whether pins are drawn.
     pub mask_overlay: bool,
@@ -1386,6 +1389,7 @@ impl Default for UiState {
             show_clipping: false,
             histogram: true,
             soft_proof: false,
+            high_quality_preview: false,
             proof: lightcraft_engine::pipeline::Proof { dest_warning: false, ..Default::default() },
             proof_profile: None,
             proof_intent: lightcraft_engine::proof::ProofIntent::Perceptual,

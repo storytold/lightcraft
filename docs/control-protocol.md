@@ -126,6 +126,15 @@ scrolling pans in both axes and respects the operating system's scrolling direct
 These gestures work in Detail (including editing tools and full-screen preview), Compare and Reference
 views, and only apply over their image areas. Panning stops at the image edges.
 
+`view.highQualityPreview {on?}` (View ▸ High Quality Preview; no params toggles; replies `{on}`; saved with the UI
+state) makes the Detail loupe below 100 % show the full-resolution render scaled down (linear-light area average)
+instead of a render made at display size: slower, but what a full-size export writes, which matters for fine,
+near-binary detail under extreme curves. Slider drags still draft at display size. `ui.inspect` →
+`highQualityPreview` reports `{on, jobs}`, where `jobs` holds, for the loupe's last `main`, `before`, `window` and
+`windowBefore` jobs, `{state: "applied", native: [w, h]}`, `{state: "native"}` (100 % or more),
+`{state: "skipped", reason}` (HDR output, or a native frame too big to render at once) or `{state: "refused",
+reason}` (a window whose spots or Auto Mask strokes read too far; the whole frame is shown instead).
+
 The camera's focus point ([focus-points.md](focus-points.md)) is `meta.focus` in `photo.inspect`: `{rect: {x0, y0,
 x1, y1}, mode?, area?, tracking?}`, normalized to the upright photo (absent when the file records none).
 `view.focusPoint {on?}` shows it over the photo (no params toggles; replies `{on}`), and `view.zoomToFocus {on?}`
