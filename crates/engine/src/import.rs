@@ -1113,20 +1113,30 @@ impl ImportJob {
                 plan.slots.push(Slot::Item(PreparedItem::Duplicate { path, existing: *existing, reason: "content", hash: Some(h.clone()) }));
                 continue;
             }
-            // the XMP sidecar (or a raw's embedded XMP), read before copying: its capture time files
+            // the XMP sidecar (or a file's embedded XMP), read before copying: its capture time files
             // and names the copy when the file itself has none
             let raw = info.kind == MediaKind::Raw;
-            let packet = crate::sidecar::find_sidecar_for_import(&stems, self.naming, &path)
-                .and_then(|f| std::fs::read_to_string(f).ok())
-                .or_else(|| info.xmp.clone().filter(|_| raw));
+            let has_embedded_xmp = raw || matches!(info.format.to_ascii_uppercase().as_str(), "JPEG" | "JPG" | "TIFF" | "TIF" | "PNG" | "WEBP");
+            let sidecar_file = crate::sidecar::find_sidecar_for_import(&stems, self.naming, &path).and_then(|f| std::fs::read_to_string(f).ok());
+            let from_file = sidecar_file.is_none();
+            let packet = sidecar_file.or_else(|| info.xmp.clone().filter(|_| has_embedded_xmp));
             let target = crate::crs::Target::for_file(info.kind, &info.format, info.preview_only.is_some(), &info.meta.camera);
-            let sidecar = packet.and_then(|x| match crate::sidecar::parse_sidecar(&x, target) {
+            let mut sidecar = packet.and_then(|x| match crate::sidecar::parse_sidecar(&x, target) {
                 Ok(sc) => Some(sc),
                 Err(e) => {
                     log::warn!("import {path}: XMP: {e}");
                     None
                 }
             });
+            // Embedded XMP on a rendered file (JPEG, TIFF, PNG, WebP) has develop adjustments
+            // already baked into the pixels; only raws/DNGs keep foreign develop settings from embedded XMP.
+            if from_file
+                && !raw
+                && let Some(sc) = &mut sidecar
+            {
+                sc.develop = None;
+                sc.warnings.clear();
+            }
             if info.captured.is_none() {
                 info.captured = sidecar.as_ref().and_then(|sc| sc.captured.clone());
             }
@@ -1144,6 +1154,9 @@ impl ImportJob {
                     let mut q = Photo::new(PhotoId(0), Source::File { path: path.clone() }, &own, &info.format, 0, 0, &self.now);
                     q.captured = info.captured.clone();
                     q.meta = info.meta.clone();
+                    if let Some(sc) = &sidecar {
+                        crate::sidecar::merge_into(&mut q, sc, &self.now);
+                    }
                     let name = opts.rename.as_deref().filter(|t| !t.trim().is_empty()).map(|t| {
                         let n = crate::rename::expand(t, &q, self.seq);
                         self.seq += 1;
