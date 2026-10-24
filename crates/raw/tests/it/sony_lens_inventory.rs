@@ -289,8 +289,8 @@ impl Drop for Scratch {
     }
 }
 
-/// A small Sony CFA file with a distortion setting (a lens record), or, `unsupported`, the packed 12-bit ARW variant
-/// the decoder refuses as unsupported.
+/// A small Sony CFA file with a distortion setting (a lens record), or, `unsupported`, a compressed 12-bit ARW variant
+/// the decoder refuses as unsupported: split over two strips (a single strip of this size is ARW version 1, now decoded).
 fn synthetic_arw(unsupported: bool) -> Vec<u8> {
     use lightcraft_tiff::{IfdBuilder, ImageData, TiffWriter, Value, tags as t};
     let mut raw = IfdBuilder::new();
@@ -305,7 +305,7 @@ fn synthetic_arw(unsupported: bool) -> Vec<u8> {
         raw.set(t::BITS_PER_SAMPLE, Value::Short(vec![12]));
         raw.set(t::COMPRESSION, Value::Short(vec![32767]));
         raw.set(0x7010, Value::Short(vec![8000, 10400, 12900, 14100]));
-        raw.set_image(ImageData::Strips { rows_per_strip: 4, strips: vec![vec![0; 32 * 4 + 8]] });
+        raw.set_image(ImageData::Strips { rows_per_strip: 2, strips: vec![vec![0; 32 * 2 + 4]; 2] });
     } else {
         raw.set(t::BITS_PER_SAMPLE, Value::Short(vec![16]));
         raw.set(t::COMPRESSION, Value::Short(vec![1]));

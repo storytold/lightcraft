@@ -1,6 +1,7 @@
 //! Vendor raw formats (TIFF-based) and helpers shared by them.
 
 pub mod arw;
+mod arw1;
 pub mod arw6;
 mod arw6_curve;
 #[cfg(test)]
