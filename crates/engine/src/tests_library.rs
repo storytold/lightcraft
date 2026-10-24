@@ -654,6 +654,24 @@ fn set_rules_with_a_name_is_one_step() {
     assert_eq!(album(&s).name, "Old");
 }
 
+/// The rules dialog sends `replace` and has no album field: a view of an album saved as a smart
+/// album stays limited to that album after OK, until a call says `album: null`.
+#[test]
+fn editing_a_smart_album_made_from_an_album_view_keeps_the_album() {
+    use lightcraft_catalog::AlbumId;
+    let mut s = crate::Session::with_demo();
+    let trip = s.execute("album.create", &serde_json::json!({"name": "Trip", "addSelected": false})).unwrap()["id"].as_u64().unwrap();
+    let all = s.catalog.photos().map(|p| p.id.0).collect::<Vec<_>>();
+    s.execute("album.addPhotos", &serde_json::json!({"id": trip, "ids": [all[0], all[1]]})).unwrap();
+    s.execute("library.source", &serde_json::json!({"kind": "album", "id": trip})).unwrap();
+    let id = s.execute("album.createSmart", &serde_json::json!({"name": "From Trip"})).unwrap()["id"].as_u64().unwrap();
+    let album_of = |s: &crate::Session| s.catalog.album(AlbumId(id)).unwrap().smart.as_ref().unwrap().album;
+    let r = s.execute("album.setRules", &serde_json::json!({"id": id, "replace": true, "rules": {"ruleSet": {"rules": []}}})).unwrap();
+    assert_eq!((album_of(&s), r["count"].as_u64()), (Some(AlbumId(trip)), Some(2)), "still limited to the album: {r}");
+    let r = s.execute("album.setRules", &serde_json::json!({"id": id, "replace": true, "rules": {"album": null}})).unwrap();
+    assert_eq!(album_of(&s), None, "and dropped on purpose: {r}");
+}
+
 /// albums.list says which smart albums have rules that no longer check, and why.
 #[test]
 fn album_list_reports_problems() {
