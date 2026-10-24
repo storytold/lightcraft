@@ -7,7 +7,9 @@
 //!   (random init, propagation, exponentially shrinking random search). Each EM iteration finds, for
 //!   every patch overlapping the hole, its most similar fully-known patch, then re-estimates hole
 //!   pixels by a similarity-weighted vote of the overlapping matches. Coarse-to-fine over an image
-//!   pyramid (the coarsest level is initialised by membrane interpolation), so large holes stay cheap.
+//!   pyramid (the coarsest level is filled from the hole's edge inwards first, see [`onion_init`]),
+//!   so large holes stay cheap. The last vote copies real source pixels instead of averaging them,
+//!   so the fill keeps the grain of its surroundings.
 //! * [`best_offset`], proximity match: the single displacement whose surrounding ring best matches the
 //!   ring around the hole (sum of squared differences), i.e. an automatic Healing Brush source.
 //! * [`synthesize`], create texture: patch-based texture synthesis in the style of A. Efros,
@@ -62,15 +64,20 @@ pub struct CompleteParams {
     /// PatchMatch passes per EM iteration.
     pub pm_iters: usize,
     /// Levels where the hole is wider than this (in that level's pixels) only *refine* the upsampled
-    /// match field (one local PatchMatch pass and one vote), which keeps big holes tractable: the
-    /// structure is decided at coarse scale, fine levels just add detail.
+    /// match field (`min_em_iters` EM iterations of one PatchMatch pass searching two patches
+    /// around), which keeps big holes tractable: the structure is decided at coarse scale, fine
+    /// levels just add detail.
     pub refine_extent: usize,
     pub seed: u64,
+    /// The last vote on the finest level gives each hole pixel the overlapping match that is
+    /// closest to the vote's mean instead of the mean itself: a real pixel of the source, so the
+    /// fill keeps the grain and texture of its surroundings instead of averaging them away.
+    pub sharp_final: bool,
 }
 
 impl Default for CompleteParams {
     fn default() -> Self {
-        Self { patch_radius: 3, em_iters: 8, min_em_iters: 2, pm_iters: 2, refine_extent: 96, seed: 1 }
+        Self { patch_radius: 3, em_iters: 8, min_em_iters: 2, pm_iters: 2, refine_extent: 256, seed: 1, sharp_final: true }
     }
 }
 
@@ -286,8 +293,9 @@ impl Solver<'_> {
         }
     }
 
-    /// Re-estimate hole pixels by a similarity-weighted vote of all overlapping patch matches.
-    fn vote(&mut self, nnf: &[(i32, i32)], cost: &[f32]) {
+    /// Re-estimate hole pixels by a similarity-weighted vote of all overlapping patch matches. With
+    /// `sharp`, each pixel takes the vote closest to the weighted mean (see [`CompleteParams::sharp_final`]).
+    fn vote(&mut self, nnf: &[(i32, i32)], cost: &[f32], sharp: bool) {
         let (w, h, ch, r) = (self.w, self.h, self.ch, self.r);
         // σ² from the 75th percentile of match costs (Wexler et al. use a robust scale like this).
         let mut cs: Vec<f32> = cost.iter().zip(&self.targets).filter(|(c, t)| **t && c.is_finite()).map(|(c, _)| *c).collect();
@@ -310,6 +318,8 @@ impl Solver<'_> {
                 }
                 let mut acc = vec![0.0f32; ch];
                 let mut wsum = 0.0f32;
+                // with `sharp`, the source pixel index of every vote
+                let mut cands: Vec<usize> = Vec::new();
                 for dy in -r..=r {
                     let ty = y as i32 + dy;
                     if ty < 0 || ty as usize >= h {
@@ -332,10 +342,17 @@ impl Solver<'_> {
                             acc[c] += img[si + c] * wt;
                         }
                         wsum += wt;
+                        if sharp {
+                            cands.push(si);
+                        }
                     }
                 }
                 if wsum > 0.0 {
                     acc.iter_mut().for_each(|v| *v /= wsum);
+                    let near = |si: &usize| -> f32 { (0..ch).map(|c| (img[si + c] - acc[c]).powi(2)).sum() };
+                    if let Some(&si) = cands.iter().min_by(|a, b| near(a).total_cmp(&near(b))) {
+                        acc.copy_from_slice(&img[si..si + ch]);
+                    }
                     out.push((x, acc));
                 }
             }
@@ -356,6 +373,103 @@ impl Solver<'_> {
             }
         }
     }
+}
+
+/// Most patch comparisons [`onion_init`] makes (hole pixels × sources): past it, every n-th source.
+const ONION_BUDGET: usize = 40_000_000;
+
+/// Start for the coarsest level: the hole filled from its edge inwards, a ring at a time. Each
+/// pixel takes the centre of the source patch that best matches the *known* pixels around it (the
+/// surroundings and the rings already filled), so the hole starts out continuing the structure at
+/// its edge. A smooth membrane start instead makes the first matches favour flat patches whose
+/// colour is the average of the surroundings (two different backgrounds blend into a third colour
+/// that then gets copied in).
+#[allow(clippy::too_many_arguments)]
+fn onion_init(
+    w: usize,
+    h: usize,
+    ch: usize,
+    r: i32,
+    img: &mut [f32],
+    hole: &[bool],
+    sources: &[(i32, i32)],
+    cancelled: &(dyn Fn() -> bool + Sync),
+) -> Result<(), Cancelled> {
+    let mut known: Vec<bool> = hole.iter().map(|h| !h).collect();
+    let left = hole.iter().filter(|h| **h).count();
+    let step = (left.saturating_mul(sources.len()) / ONION_BUDGET).max(1);
+    let mut todo = left;
+    while todo > 0 {
+        if cancelled() {
+            return Err(Cancelled);
+        }
+        // the ring: unknown pixels with a known 8-neighbour
+        let mut ring: Vec<(i32, i32)> = Vec::new();
+        for y in 0..h as i32 {
+            for x in 0..w as i32 {
+                if known[y as usize * w + x as usize] {
+                    continue;
+                }
+                let touches = (-1..=1).any(|dy: i32| {
+                    (-1..=1).any(|dx: i32| {
+                        let (nx, ny) = (x + dx, y + dy);
+                        nx >= 0 && ny >= 0 && (nx as usize) < w && (ny as usize) < h && known[ny as usize * w + nx as usize]
+                    })
+                });
+                if touches {
+                    ring.push((x, y));
+                }
+            }
+        }
+        if ring.is_empty() {
+            break;
+        }
+        let fill = |&(x, y): &(i32, i32)| -> (usize, usize) {
+            let mut best = (f32::INFINITY, 0usize);
+            for (k, &(sx, sy)) in sources.iter().enumerate().step_by(step) {
+                let (mut sum, mut n) = (0.0f32, 0usize);
+                for dy in -r..=r {
+                    let ty = y + dy;
+                    if ty < 0 || ty as usize >= h {
+                        continue;
+                    }
+                    for dx in -r..=r {
+                        let tx = x + dx;
+                        if tx < 0 || tx as usize >= w || !known[ty as usize * w + tx as usize] {
+                            continue;
+                        }
+                        let (ti, si) = ((ty as usize * w + tx as usize) * ch, ((sy + dy) as usize * w + (sx + dx) as usize) * ch);
+                        for c in 0..ch {
+                            let d = img[ti + c] - img[si + c];
+                            sum += d * d;
+                        }
+                        n += 1;
+                    }
+                }
+                let cost = if n == 0 { f32::INFINITY } else { sum / n as f32 };
+                if cost < best.0 {
+                    best = (cost, k);
+                }
+            }
+            let (sx, sy) = sources[best.1];
+            (y as usize * w + x as usize, sy as usize * w + sx as usize)
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        let picks: Vec<(usize, usize)> = {
+            use rayon::prelude::*;
+            ring.par_iter().map(fill).collect()
+        };
+        #[cfg(target_arch = "wasm32")]
+        let picks: Vec<(usize, usize)> = ring.iter().map(fill).collect();
+        for (t, s) in picks {
+            for c in 0..ch {
+                img[t * ch + c] = img[s * ch + c];
+            }
+            known[t] = true;
+        }
+        todo -= ring.len().min(todo);
+    }
+    Ok(())
 }
 
 /// Content-aware completion of `hole` (see module docs). Returns `None` when there is no fully-known
@@ -384,13 +498,14 @@ pub fn complete_with(
     let Some((bx0, by0, bx1, by1)) = hole_bbox(w, h, hole) else { return Ok(Some(img.to_vec())) };
     let r = p.patch_radius.max(1);
     let psz = 2 * r + 1;
-    // Pyramid: shrink until the hole is a few patches across.
+    // Pyramid: shrink until the hole is three patches across. Smaller, and a patch at the coarsest
+    // level spans so much of the surroundings that it matches the wrong structure.
     let mut levels = vec![Level { w, h, img: img.to_vec(), hole: hole.to_vec() }];
     let mut ext = (bx1 - bx0).max(by1 - by0);
     let mut exts = vec![ext];
     while let Some(l) = levels.last() {
         check()?;
-        if ext <= 2 * psz || l.w / 2 < 3 * psz || l.h / 2 < 3 * psz {
+        if ext <= 3 * psz || l.w / 2 < 3 * psz || l.h / 2 < 3 * psz {
             break;
         }
         let d = downsample(l, ch);
@@ -439,6 +554,9 @@ pub fn complete_with(
                 targets[i] = cnt > 0;
             }
         }
+        if prev.is_none() && !valid_list.is_empty() {
+            onion_init(lw, lh, ch, ri, &mut limg, &lhole, &valid_list, cancelled)?;
+        }
         if valid_list.is_empty() {
             if li == 0 {
                 return Ok(None);
@@ -479,11 +597,12 @@ pub fn complete_with(
         let em = if li + 1 == nlev {
             p.em_iters
         } else if refine_only {
-            1
+            p.min_em_iters
         } else {
             (p.em_iters >> (nlev - 1 - li)).max(p.min_em_iters)
         };
         let pm_iters = if refine_only { 1 } else { p.pm_iters };
+        let finest = li == 0;
         let full_search = (lw.max(lh)) as i32;
         let mut cost = vec![f32::INFINITY; lw * lh];
         for it in 0..em {
@@ -498,7 +617,7 @@ pub fn complete_with(
             }
             // Wide random search on coarse levels / first iteration, local refinement afterwards.
             let radius = if refine_only {
-                2
+                (2 * psz as i32).min(full_search)
             } else if li + 1 == nlev || it == 0 {
                 full_search
             } else {
@@ -509,7 +628,7 @@ pub fn complete_with(
                 solver.patchmatch(&mut nnf, &mut cost, pass + it * pm_iters, p.seed.wrapping_add((li * 1000 + it) as u64), radius);
             }
             check()?;
-            solver.vote(&nnf, &cost);
+            solver.vote(&nnf, &cost, p.sharp_final && finest && it + 1 == em);
             check()?;
         }
         prev = Some((lw, lh, limg));
@@ -571,6 +690,25 @@ mod tests {
         assert!(out.iter().zip(&dirty).zip(hole.iter().flat_map(|h| [*h; 3])).all(|((a, b), h)| h || a == b));
         // Deterministic.
         assert_eq!(out, complete(w, h, ch, &dirty, &hole, &CompleteParams::default()).unwrap());
+    }
+
+    #[test]
+    fn completion_keeps_the_grain() {
+        // Noise: a fill that averages its matches comes out much smoother than its surroundings.
+        let (w, h, ch) = (96, 96, 1);
+        let mut rng = Rng::new(3);
+        let clean: Vec<f32> = (0..w * h).map(|_| 0.4 + (rng.next() % 1000) as f32 / 1000.0 * 0.2).collect();
+        let hole = disc(w, h, 48.0, 48.0, 14.0);
+        let out = complete(w, h, ch, &clean, &hole, &CompleteParams::default()).unwrap();
+        let sd = |inside: bool| {
+            let v: Vec<f32> = out.iter().zip(&hole).filter(|(_, h)| **h == inside).map(|(v, _)| *v).collect();
+            let m = v.iter().sum::<f32>() / v.len() as f32;
+            (v.iter().map(|x| (x - m).powi(2)).sum::<f32>() / v.len() as f32).sqrt()
+        };
+        let (fill, around) = (sd(true), sd(false));
+        assert!(fill > 0.7 * around, "fill σ {fill}, surroundings σ {around}");
+        let smooth = complete(w, h, ch, &clean, &hole, &CompleteParams { sharp_final: false, ..Default::default() }).unwrap();
+        assert_ne!(out, smooth);
     }
 
     #[test]

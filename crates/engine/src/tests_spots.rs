@@ -28,8 +28,8 @@ fn spots(s: &Session) -> Vec<lightcraft_develop::Spot> {
 #[test]
 fn spots_select_move_edit_refresh_and_delete() {
     let mut s = Session::with_demo();
-    // a remove spot gets a resolved source (a pin to show) and is selected
-    let r = s.execute("spot.add", &json!({"points": [[0.4, 0.5]], "size": 0.02})).unwrap();
+    // a heal spot gets a resolved source (a pin to show) and is selected
+    let r = s.execute("spot.add", &json!({"mode": "heal", "points": [[0.4, 0.5]], "size": 0.02})).unwrap();
     assert_eq!(r["index"], 0);
     assert_eq!(s.active_spot, Some(0));
     let src0 = spots(&s)[0].source_offset.expect("automatic source resolved");
@@ -64,6 +64,12 @@ fn spots_select_move_edit_refresh_and_delete() {
     s.execute("spot.delete", &json!({})).unwrap();
     assert_eq!((spots(&s).len(), s.active_spot), (1, None));
     assert_eq!(spots(&s)[0].mode, lightcraft_develop::SpotMode::Clone);
+    // Remove is content-aware: no source is picked, and there is none to refresh
+    s.execute("spot.add", &json!({"points": [[0.5, 0.5]], "size": 0.02})).unwrap();
+    let sp = &spots(&s)[1];
+    assert_eq!((sp.mode, sp.source_offset), (lightcraft_develop::SpotMode::Remove, None));
+    assert!(s.execute("spot.refreshSource", &json!({})).is_err());
+    s.execute("spot.delete", &json!({})).unwrap();
     assert!(s.execute("spot.delete", &json!({})).is_err(), "nothing selected");
     s.execute("spot.add", &json!({"points": [[0.2, 0.2]], "source": [0.05, 0.0]})).unwrap();
     s.execute("spot.delete", &json!({"index": 0})).unwrap();

@@ -415,7 +415,8 @@ fn remove(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     header(ui, "Remove");
     padded(ui, |ui| {
         ui.horizontal_wrapped(|ui| {
-            for (label, tool) in [("Remove", "remove"), ("Content-Aware", "fill"), ("Heal", "heal"), ("Clone", "clone")] {
+            // Remove is content-aware (as in Lightroom); Fill, the same, is only left on older spots
+            for (label, tool) in [("Remove", "remove"), ("Heal", "heal"), ("Clone", "clone")] {
                 if text_button(ui, &format!("removeMode-{tool}"), label, app.ui.tool == tool).clicked() {
                     app.ui.tool = tool.into();
                 }
@@ -492,7 +493,9 @@ fn remove(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     if sel.is_some() {
         padded(ui, |ui| {
             ui.horizontal(|ui| {
-                if text_button(ui, "spotRefresh", crate::i18n::tr("Refresh Source (/)"), false).clicked() {
+                if sel.as_ref().is_some_and(|(_, sp)| !sp.mode.content_aware())
+                    && text_button(ui, "spotRefresh", crate::i18n::tr("Refresh Source (/)"), false).clicked()
+                {
                     let _ = app.run("spot.refreshSource", json!({}));
                 }
                 if text_button(ui, "spotDelete", crate::i18n::tr("Delete (⌫)"), false).clicked() {
