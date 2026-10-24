@@ -1,6 +1,8 @@
 {
   " ({unsure} with several look-alike files: use Locate)": " ({unsure} із кількома схожими файлами: використайте «Знайти»)",
   " ({} in Recently Deleted)": " ({} у нещодавно видалених)",
+  " · aesthetic {:.1}": " · естетика {:.1}",
+  " · eyes {:.0}%": " · очі {:.0}%",
   " · {:.0}% clipped": " · {:.0}% відсічено",
   " · {failed} couldn't be rendered": " · не вдалося відтворити: {failed}",
   " · {skipped} skipped (file exists)": " · пропущено: {skipped} (файл існує)",

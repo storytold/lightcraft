@@ -238,8 +238,16 @@ fn op_variants_are_versioned() {
             Op::SetHistoryCursor { .. } => 8,
         }
     }
-    /// v9: `Photo.preview_checked` and `Op::SetContent.preview_checked`.
-    const NEWEST_FIELDS: u32 = 9;
+    /// v10: `Analysis.eyes_open` / `aesthetic` / `cull_score`.
+    const NEWEST_FIELDS: u32 = 10;
     let newest = since(&Op::SetHistoryCursor { id: PhotoId(1), cursor: None });
     assert_eq!(newest.max(NEWEST_FIELDS), VERSION, "the newest op's or fields' version must be the current format version");
+}
+
+/// A v9 `Analysis` object without the new score fields still loads (serde default).
+#[test]
+fn v9_analysis_json_gains_optional_score_fields() {
+    let a: Analysis = serde_json::from_str(r#"{"sharpness":50.0,"clipped":0.01,"group":null,"best":false}"#).unwrap();
+    assert!(a.eyes_open.is_none() && a.aesthetic.is_none() && a.cull_score.is_none());
+    assert_eq!(a.sharpness, 50.0);
 }

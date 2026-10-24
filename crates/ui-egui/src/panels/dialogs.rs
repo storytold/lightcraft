@@ -383,7 +383,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     crate::widgets::register(ui.ctx(), "field:cullSimilar", r.rect);
                     clamp_cull_burst(burst_gap, similarity);
                     ui.label(egui::RichText::new(crate::i18n::tr("Lower it when a panning or moving burst splits into several groups.")).color(t.text_dim));
-                    ui.label(egui::RichText::new(crate::i18n::tr("Scores stay on the photos: filter or make smart albums with Focus and Best of Similar Shots.")).color(t.text_dim));
+                    ui.label(egui::RichText::new(crate::i18n::tr("Scores stay on the photos: filter or make smart albums with Focus, Eyes Open, Aesthetic and Cull Score.")).color(t.text_dim));
                 }
                 Dialog::WhatsNew => {
                     egui::ScrollArea::vertical().max_height(list_height(ui, 460.0)).auto_shrink([false, true]).show(ui, |ui| {

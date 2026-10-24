@@ -1,6 +1,8 @@
 {
   " ({unsure} with several look-alike files: use Locate)": " ({unsure} con varios archivos parecidos: usar Localizar)",
   " ({} in Recently Deleted)": " ({} en Eliminadas recientemente)",
+  " · aesthetic {:.1}": " · estética {:.1}",
+  " · eyes {:.0}%": " · ojos {:.0}%",
   " · {:.0}% clipped": " · {:.0}% recortado",
   " · {failed} couldn't be rendered": " · no se pudieron renderizar: {failed}",
   " · {skipped} skipped (file exists)": " · omitidas: {skipped} (el archivo existe)",

@@ -2,6 +2,8 @@
   " ({unsure} with several look-alike files: use Locate)": " ({unsure} có nhiều tệp trông giống nhau: dùng Định vị)",
   " ({} in Recently Deleted)": " ({} trong Đã xóa gần đây)",
   " in {g} group{}": " in {g} group{}",
+  " · aesthetic {:.1}": " · thẩm mỹ {:.1}",
+  " · eyes {:.0}%": " · mắt {:.0}%",
   " · kept, not applied: {}": " · kept, not applied: {}",
   " · {:.0}% clipped": " · {:.0}% bị cắt",
   " · {failed} couldn't be rendered": " · {failed} không thể kết xuất",

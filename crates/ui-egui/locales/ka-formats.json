@@ -1,6 +1,8 @@
 {
   " ({unsure} with several look-alike files: use Locate)": " ({unsure} რამდენიმე მსგავსი ფაილით: გამოიყენეთ „მოძებნა“)",
   " ({} in Recently Deleted)": " ({} ახლახან წაშლილებში)",
+  " · aesthetic {:.1}": " · ესთეტიკა {:.1}",
+  " · eyes {:.0}%": " · თვალები {:.0}%",
   " · {:.0}% clipped": " · {:.0}% მოკვეთილია",
   " · {failed} couldn't be rendered": " · ვერ დარენდერდა: {failed}",
   " · {queued} waiting": " · რიგშია: {queued}",

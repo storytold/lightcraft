@@ -1,4 +1,7 @@
 {
+  " · aesthetic {:.1}": " · 審美 {:.1}",
+  " · eyes {:.0}%": " · 開眼 {:.0}%",
+
   " · {skipped} skipped (file exists)": "・{skipped}件は同名ファイルのためスキップ",
   " · {} duplicate{} skipped": "・重複{}枚をスキップ{:.0}",
   " · {} failed: {}": "・{}件失敗：{}",
