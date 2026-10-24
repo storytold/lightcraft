@@ -1271,6 +1271,26 @@ pub(crate) mod tests {
         assert!(!lightcraft_catalog::relative_wb_camera("DNG", "SONY ILCE-7M3"));
     }
 
+    /// A Fujifilm X-Trans III body reads Kelvin through the neutral pair its RAF stores (issue #730); without the pair
+    /// in the file, or on a body with matrices (X-T3), nothing changes.
+    #[test]
+    fn a_fujifilm_x_trans_iii_raf_reads_kelvin_through_its_neutral_pair() {
+        use lightcraft_raw::{ColorData, RawFormat};
+        let meta = |make: &str, model: &str| lightcraft_meta::Metadata { make: Some(make.into()), model: Some(model.into()), ..Default::default() };
+        let a = [366.0f32 / 302.0, 1.0, 866.0 / 302.0];
+        let d65 = [646.0f32 / 302.0, 1.0, 498.0 / 302.0];
+        let pair = lightcraft_raw::kelvin_presets::KelvinPresets::from_neutral_pair(a, d65);
+        assert!(pair.is_some());
+        let with = ColorData { kelvin_presets: pair, ..Default::default() };
+        let xt20 = WbScaleOf::new(RawFormat::Raf, &with, Some(d65), &meta("FUJIFILM", "X-T20"));
+        assert!(!xt20.relative && xt20.scale_white.is_some());
+        let (t, tint) = xt20.as_shot(lightcraft_color::cct::temp_tint_to_xy(6500.0, 0.0));
+        assert!((6000.0..7000.0).contains(&t) && tint.abs() < 25.0, "{t} {tint}");
+        assert!(!lightcraft_catalog::relative_wb_camera("RAF", "FUJIFILM X-T20"));
+        let bare = WbScaleOf::new(RawFormat::Raf, &ColorData::default(), Some(d65), &meta("FUJIFILM", "X-T20"));
+        assert!(bare.scale_white.is_none());
+    }
+
     /// A merged DNG (Photo Merge) of a raw without colour matrices shows the As Shot temperature and tint its source
     /// shows, on every scale: through the measured matrices (ILCE-7M3), through the presets (ILCA-99M2), the relative
     /// scale's 6500 K / 0 (ILCE-7M2) and a file's own white (an unfitted format). Merges of real ILCE-7M3 brackets

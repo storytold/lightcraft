@@ -22,6 +22,11 @@
 //! - The isotherms are not perpendicular to the curve in these coordinates: an offset also changes mired by
 //!   [`ISOTHERM_TILT`] times the mired the same distance along the curve would.
 //!
+//! Fujifilm X-Trans III bodies (X-T20, X-T2, X-Pro2, X-E3, X-H1, X100F) store no such presets but the camera's own
+//! neutral multipliers for Illuminant A and D65 (`0xf00c`, [`KelvinPresets::from_neutral_pair`], tag number from
+//! a black-box `exiftool -v3`). The pair gives a two-point line in the same coordinates; mired is linear along it,
+//! isotherms are perpendicular to it, and tint is scaled by the CIE locus spacing. No other camera's data is used.
+//!
 //! The two constants come from the 14 Sony bodies that have both measured matrices and the presets (one CC0
 //! raw.pixls.us sample each for the presets, a grid of multipliers through `crate::spectral` for the matrices):
 //! the tilt measured 0.59–0.84 (mean 0.74), the tint spacing 0.90–1.04 of the locus's (mean 0.98, taken as 1).
@@ -55,6 +60,11 @@ const MODELS: &[(&str, &str)] = &[
     ("CANON", "PowerShot G1 X Mark III"),
 ];
 
+/// Fujifilm's X-Trans III bodies, whose raws carry the camera's own neutral multipliers for Illuminant A and D65
+/// (`vendor::raf`, tag `0xf00c`; see [`KelvinPresets::from_neutral_pair`]): checked on the files of each (X-T20,
+/// X-T2, X-Pro2, X-E3, X-H1, X100F), the Exif model as Fujifilm writes it.
+const FUJI_MODELS: &[&str] = &["X-T20", "X-T2", "X-Pro2", "X-E3", "X-H1", "X100F"];
+
 /// Whether a raw of this Exif make and model is edited in Kelvin through its presets (when it has no colour
 /// matrices of its own or measured: see [`crate::spectral::find`], which comes first), from the file's presets or
 /// built-in ones ([`crate::kelvin_builtin`]).
@@ -64,14 +74,16 @@ pub fn covers(make: Option<&str>, model: &str) -> bool {
     }
     let model = model.trim();
     let brand = make.and_then(|m| m.split_whitespace().next());
-    MODELS.iter().any(|(b, m)| {
-        let bare = model
+    let bare_of = |b: &str| {
+        model
             .get(..b.len())
             .zip(model.get(b.len()..))
             .filter(|(p, rest)| p.eq_ignore_ascii_case(b) && rest.starts_with(' '))
-            .map_or(model, |(_, rest)| rest.trim_start());
-        brand.is_none_or(|x| x.eq_ignore_ascii_case(b)) && bare.eq_ignore_ascii_case(m)
-    })
+            .map_or(model, |(_, rest)| rest.trim_start())
+    };
+    let listed = MODELS.iter().any(|(b, m)| brand.is_none_or(|x| x.eq_ignore_ascii_case(b)) && bare_of(b).eq_ignore_ascii_case(m));
+    let fuji = brand.is_none_or(|b| b.eq_ignore_ascii_case("FUJIFILM")) && FUJI_MODELS.iter().any(|m| bare_of("FUJIFILM").eq_ignore_ascii_case(m));
+    listed || fuji
 }
 
 /// [`covers`] for make and model joined by a space, as the catalog keeps them (`"SONY ILCA-99M2"`).
@@ -88,7 +100,16 @@ const MAX_POINTS: usize = 32;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct KelvinPresets {
     points: Vec<(f32, [f32; 3])>,
+    /// The camera's neutral multipliers for Illuminant A and D65 when the presets come from such a pair
+    /// ([`Self::from_neutral_pair`]); the points are then the line between them at five temperatures.
+    #[serde(default)]
+    pair: Option<[[f32; 3]; 2]>,
 }
+
+/// Illuminant A and D65 as chromaticities (CIE).
+const A_XY: Xy = Xy::new(0.44757, 0.40745);
+const D65_XY: Xy = Xy::new(0.31271, 0.32902);
+const POINT_KELVIN: [f32; 5] = [2500.0, 3200.0, 4500.0, 6000.0, 8500.0];
 
 fn usable(m: [f32; 3]) -> bool {
     m.iter().all(|v| *v > 0.0 && v.is_finite())
@@ -113,7 +134,7 @@ impl KelvinPresets {
                 let (a, b) = (log_point(w[0].1), log_point(w[1].1));
                 w[0].0 < w[1].0 && b[0] > a[0] && b[1] < a[1]
             });
-        ok.then(|| KelvinPresets { points: points.into_iter().map(|(k, m)| (k, [m[0] / m[1], 1.0, m[2] / m[1]])).collect() })
+        ok.then(|| KelvinPresets { points: points.into_iter().map(|(k, m)| (k, [m[0] / m[1], 1.0, m[2] / m[1]])).collect(), pair: None })
     }
 
     /// A curve from presets in any order, as a camera lists them by name (Canon's Daylight, Shade, Cloudy, …):
@@ -135,6 +156,51 @@ impl KelvinPresets {
         KelvinPresets::new(kept)
     }
 
+    /// Presets from a camera's own neutral multipliers (red, green, blue, green = 1) for Illuminant A and D65, as
+    /// Fujifilm stores them in `WB_GRBLevelsStandard`. Two whites fix the camera's response only on the line
+    /// between them, and nothing but the colorimetry of the two lights is used to place a white off it: in
+    /// `(ln R/G, ln B/G)` mired is linear along the line (extended past both ends), the isotherms are taken
+    /// perpendicular to it (no tilt), and the tint is the Planckian locus's own CIE 1960 spacing per unit length
+    /// plus the tint the two lights themselves have (A is on the locus, D65 is about +9.5 off it). No other camera's
+    /// data is involved. `None` for unusable multipliers or two that make no curve.
+    pub fn from_neutral_pair(a: [f32; 3], d65: [f32; 3]) -> Option<KelvinPresets> {
+        if !usable(a) || !usable(d65) {
+            return None;
+        }
+        let (a, d65) = ([a[0] / a[1], 1.0, a[2] / a[1]], [d65[0] / d65[1], 1.0, d65[2] / d65[1]]);
+        let (pa, pd) = (log_point(a), log_point(d65));
+        let (ma, md) = (1e6 / cct::xy_to_temp_tint(A_XY).0, 1e6 / cct::xy_to_temp_tint(D65_XY).0);
+        let points = POINT_KELVIN.map(|k| {
+            let f = (1e6 / k as f64 - ma) / (md - ma);
+            let q = [pa[0] + f * (pd[0] - pa[0]), pa[1] + f * (pd[1] - pa[1])];
+            (k, [q[0].exp() as f32, 1.0, q[1].exp() as f32])
+        });
+        let mut out = KelvinPresets::new(points)?;
+        out.pair = Some([a, d65]);
+        Some(out)
+    }
+
+    /// [`Self::temp_tint`] for a neutral pair (see [`Self::from_neutral_pair`]).
+    fn pair_temp_tint(pair: [[f32; 3]; 2], q: [f64; 2]) -> Option<(f64, f64)> {
+        let (pa, pd) = (log_point(pair[0]), log_point(pair[1]));
+        let d = [pd[0] - pa[0], pd[1] - pa[1]];
+        let len = d[0].hypot(d[1]);
+        // only a deserialized pair can repeat a point
+        if !(len > 0.0 && len.is_finite()) {
+            return None;
+        }
+        let t = [d[0] / len, d[1] / len];
+        let n = if t[0] - t[1] < 0.0 { [t[1], -t[0]] } else { [-t[1], t[0]] };
+        let r = [q[0] - pa[0], q[1] - pa[1]];
+        let along = (r[0] * t[0] + r[1] * t[1]) / len;
+        let off = r[0] * n[0] + r[1] * n[1];
+        let ((ta, tint_a), (td, tint_d)) = (cct::xy_to_temp_tint(A_XY), cct::xy_to_temp_tint(D65_XY));
+        let ((u0, v0), (u1, v1)) = (locus_uv(ta), locus_uv(td));
+        let tint_per_len = cct::TINT_SCALE * (u1 - u0).hypot(v1 - v0) / len;
+        let mired = 1e6 / ta + along * (1e6 / td - 1e6 / ta);
+        Some((1e6 / mired.clamp(1e6 / MAX_K, 1e6 / MIN_K), tint_a + along * (tint_d - tint_a) + tint_per_len * off))
+    }
+
     /// Temperature (K) and tint of the white these multipliers balance (see the module docs); `None` for unusable
     /// multipliers.
     pub fn temp_tint(&self, wb_multipliers: [f32; 3]) -> Option<(f64, f64)> {
@@ -142,6 +208,10 @@ impl KelvinPresets {
             return None;
         }
         let q = log_point(wb_multipliers);
+        if let Some(pair) = self.pair {
+            let (t, tint) = Self::pair_temp_tint(pair, q)?;
+            return Some((t, tint.clamp(-MAX_TINT, MAX_TINT)));
+        }
         let last = self.points.len().saturating_sub(2);
         let mut best: Option<(f64, f64, f64)> = None;
         for (i, w) in self.points.windows(2).enumerate() {
@@ -290,9 +360,52 @@ mod tests {
         assert_eq!(KelvinPresets::from_unordered([(5000.0, g(1400.0, 1400.0)), (6000.0, g(1500.0, 1300.0))]), None);
         assert_eq!(KelvinPresets::from_unordered(std::iter::empty()), None);
         // a stored curve with a repeated point (only deserializing can make one) reads without dividing by zero
-        let bad = KelvinPresets { points: vec![(5000.0, g(1400.0, 1400.0)); 3] };
+        let bad = KelvinPresets { points: vec![(5000.0, g(1400.0, 1400.0)); 3], pair: None };
         assert_eq!(bad.temp_tint(g(1400.0, 1400.0)), None);
-        assert_eq!(KelvinPresets { points: vec![] }.temp_tint(g(1400.0, 1400.0)), None);
+        assert_eq!(KelvinPresets { points: vec![], pair: None }.temp_tint(g(1400.0, 1400.0)), None);
+        // and so does a stored neutral pair with equal endpoints
+        let same = KelvinPresets { points: vec![], pair: Some([[1.0, 1.0, 1.0]; 2]) };
+        assert_eq!(same.temp_tint(g(1400.0, 1400.0)), None);
+    }
+
+    /// An X-T20's stored pair (`302 366 866 17 302 646 498 21`).
+    fn xt20() -> (KelvinPresets, [f32; 3], [f32; 3]) {
+        let (a, d) = ([366.0 / 302.0, 1.0, 866.0 / 302.0], [646.0 / 302.0, 1.0, 498.0 / 302.0]);
+        (KelvinPresets::from_neutral_pair(a, d).unwrap(), a, d)
+    }
+
+    #[test]
+    fn a_neutral_pair_reads_back_as_its_own_illuminants() {
+        let (p, a, d) = xt20();
+        let (ta, tint_a) = p.temp_tint(a).unwrap();
+        let (td, tint_d) = p.temp_tint(d).unwrap();
+        let (want_t, want_tint) = cct::xy_to_temp_tint(D65_XY);
+        assert!((ta - cct::xy_to_temp_tint(A_XY).0).abs() < 2.0 && (tint_a - cct::xy_to_temp_tint(A_XY).1).abs() < 0.5, "{ta} {tint_a}");
+        assert!((td - want_t).abs() < 2.0 && (tint_d - want_tint).abs() < 0.5, "{td} {tint_d}");
+        // the points are the same reading at their temperatures, on the locus
+        for (k, m) in p.points.clone() {
+            let (t, tint) = p.temp_tint(m).unwrap();
+            assert!((t - k as f64).abs() < 2.0 && tint.abs() < 12.0, "{k}: {t} {tint}");
+        }
+        // greener light than the daylight pair: positive tint, as for a matrix camera
+        let (_, green) = p.temp_tint([d[0] * 1.06, 1.0, d[2] * 1.06]).unwrap();
+        let (_, magenta) = p.temp_tint([d[0] / 1.06, 1.0, d[2] / 1.06]).unwrap();
+        assert!(green > magenta + 15.0, "{green} {magenta}");
+    }
+
+    #[test]
+    fn unusable_pairs_give_nothing() {
+        assert_eq!(KelvinPresets::from_neutral_pair([0.0, 1.0, 1.0], [2.0, 1.0, 1.5]), None);
+    }
+
+    #[test]
+    fn fujifilm_x_trans_iii_models_are_covered() {
+        for c in ["FUJIFILM X-T20", "Fujifilm X-T2", "FUJIFILM X100F", "FUJIFILM X-H1", "FUJIFILM X-Pro2", "FUJIFILM X-E3"] {
+            assert!(covers_camera(c), "{c}");
+        }
+        for c in ["FUJIFILM X-T3", "FUJIFILM X-T30", "SONY X-T20", "FUJIFILM GFX 100"] {
+            assert!(!covers_camera(c), "{c}");
+        }
     }
 
     #[test]
