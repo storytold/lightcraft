@@ -25,6 +25,9 @@ pub struct PreviewBuild {
     /// Shared with the build's row in the activity stack (its ✕ sets it).
     pub cancel: Arc<AtomicBool>,
     pub finished: AtomicBool,
+    /// A frontend announced how it ended (the app's toast); one that ended and was not announced is kept when the next
+    /// build replaces it ([`Session::take_unreported_builds`]).
+    pub reported: AtomicBool,
     /// Damaged smart previews rebuilt (Build Smart Previews only).
     pub repaired: AtomicUsize,
     /// What is built ("" = previews; "smart previews" — Build Smart Previews runs the same way).
@@ -101,6 +104,18 @@ impl Drop for Running {
                 .get_or_insert_with(|| "the build stopped unexpectedly".to_string());
         }
         self.state.finished.store(true, Ordering::Relaxed);
+    }
+}
+
+/// Make `state` the session's current build. A build that ended and was not announced yet ([`PreviewBuild::reported`])
+/// is kept for the frontend to announce ([`Session::take_unreported_builds`]), so that starting the next one right
+/// after it (as a build waiting in line does) does not lose its result, its failed count or its error.
+fn set_current(s: &mut Session, state: Arc<PreviewBuild>) {
+    if let Some(old) = s.preview_build.replace(state)
+        && old.finished.load(Ordering::Relaxed)
+        && !old.reported.load(Ordering::Relaxed)
+    {
+        s.keep_unreported_build(old);
     }
 }
 
@@ -221,7 +236,7 @@ fn build(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let jobs: Vec<Vec<RenderJob>> = ids.iter().map(|id| jobs_for(s, *id, edge)).filter(|j| !j.is_empty()).collect();
     let state = Arc::new(PreviewBuild { total: jobs.len(), ..Default::default() });
-    s.preview_build = Some(state.clone());
+    set_current(s, state.clone());
     let run = Running { task: task_for(s, &state), state: state.clone() };
     let lanes = lanes(jobs.len(), edge.is_none());
     let wait = p.get("wait").and_then(Value::as_bool).unwrap_or(false) || cfg!(target_arch = "wasm32");
@@ -421,7 +436,7 @@ fn smart(s: &mut Session, p: &Value) -> Result<Value> {
     let custom = s.smart_previews_dir.is_some();
     if background {
         let state = Arc::new(PreviewBuild { total: jobs.len(), what, ..Default::default() });
-        s.preview_build = Some(state.clone());
+        set_current(s, state.clone());
         let run = Running { task: task_for(s, &state), state: state.clone() };
         std::thread::Builder::new()
             .name("lc-smart-previews".into())

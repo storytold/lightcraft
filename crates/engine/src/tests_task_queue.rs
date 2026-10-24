@@ -247,3 +247,40 @@ fn another_library_drops_what_waits() {
     s.close_library().unwrap();
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Given a build that ended and a build waiting behind it, when the next command starts the waiting one before the
+/// app announced the first, then the first is kept (once, with its counts) for the frontend to announce, and the
+/// new build is the current one.
+#[test]
+fn a_build_replaced_by_the_one_waiting_behind_it_is_kept_until_it_is_announced() {
+    let mut s = Session::with_demo();
+    let ids = build_ids(&s, 1);
+    let h = hold(&mut s);
+    let first = h.build.clone();
+    first.done.store(2, Ordering::Relaxed);
+    first.failed.store(1, Ordering::Relaxed);
+    s.execute("library.buildPreviews", &json!({"ids": ids, "edge": 256, "queue": true})).unwrap();
+    release(h);
+    tasks(&mut s); // the command that ends up starting the waiting build
+    assert!(s.preview_build.as_ref().is_some_and(|b| !Arc::ptr_eq(b, &first)), "the waiting build is the current one");
+    let kept = s.take_unreported_builds();
+    assert_eq!(kept.len(), 1);
+    assert!(Arc::ptr_eq(&kept[0], &first));
+    assert_eq!((kept[0].done.load(Ordering::Relaxed), kept[0].failed.load(Ordering::Relaxed)), (2, 1));
+    assert!(s.take_unreported_builds().is_empty(), "once");
+    settle(&mut s);
+}
+
+/// A build the frontend announced already is not kept when the next one replaces it.
+#[test]
+fn a_build_that_was_announced_is_not_kept_when_the_next_one_replaces_it() {
+    let mut s = Session::with_demo();
+    let ids = build_ids(&s, 1);
+    let h = hold(&mut s);
+    h.build.reported.store(true, Ordering::Relaxed);
+    s.execute("library.buildPreviews", &json!({"ids": ids, "edge": 256, "queue": true})).unwrap();
+    release(h);
+    tasks(&mut s);
+    assert!(s.take_unreported_builds().is_empty());
+    settle(&mut s);
+}

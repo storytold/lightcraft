@@ -564,3 +564,29 @@ fn a_task_waiting_in_line_has_no_row_and_starts_when_the_lane_frees() {
     }
     assert!(h.app.session.preview_build.as_ref().is_some_and(|b| !std::sync::Arc::ptr_eq(b, &build)), "the waiting build started");
 }
+
+/// Given a build that ended and a build waiting behind it, when a command starts the waiting one before the frame that
+/// announces the first, then the first one's end is still announced, and once.
+#[test]
+fn a_build_replaced_by_the_one_waiting_behind_it_is_still_announced() {
+    use lightcraft_engine::cmd::previews::PreviewBuild;
+    use std::sync::atomic::Ordering;
+
+    let mut h = demo();
+    let first = std::sync::Arc::new(PreviewBuild::default());
+    first.done.store(2, Ordering::Relaxed);
+    h.app.session.preview_build = Some(first.clone());
+    let row = h.app.session.activity.start("previews", "Building previews", Cancel::Yes);
+    let ids: Vec<u64> = h.app.session.catalog.photos().take(1).map(|p| p.id.0).collect();
+    h.app.session.execute("library.buildPreviews", &json!({"ids": ids, "edge": 256, "queue": true})).unwrap();
+    first.finished.store(true, Ordering::Release);
+    drop(row);
+    // a command in the same frame, before the app looks at the finished build
+    h.app.session.execute("activity.list", &json!({})).unwrap();
+    assert!(h.app.session.preview_build.as_ref().is_some_and(|b| !std::sync::Arc::ptr_eq(b, &first)), "the waiting build replaced it");
+    h.step();
+    assert!(first.reported.load(Ordering::Relaxed), "its end was announced");
+    let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+    assert!(toast.contains("Previews ready for 2 photos"), "{toast}");
+    assert!(h.app.session.take_unreported_builds().is_empty());
+}

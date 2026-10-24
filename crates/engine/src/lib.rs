@@ -391,6 +391,9 @@ pub struct Session {
     pub slideshow_export: Option<std::sync::Arc<slideshow_export::ExportRun>>,
     /// The last (or running) Build Previews.
     pub preview_build: Option<std::sync::Arc<cmd::previews::PreviewBuild>>,
+    /// Builds that ended and were replaced by the next one before a frontend announced them
+    /// ([`Session::take_unreported_builds`]).
+    unreported_builds: Vec<std::sync::Arc<cmd::previews::PreviewBuild>>,
     /// Develop defaults applied on import (persisted in prefs.json).
     pub import_defaults: import::ImportDefaults,
     /// Disk budget of the library's thumbnail cache in MB (0 = default; persisted in prefs.json).
@@ -528,6 +531,7 @@ impl Session {
             folder_changes: None,
             activity: Default::default(),
             preview_build: None,
+            unreported_builds: Vec::new(),
             slideshow_export: None,
             import_defaults: import::ImportDefaults::default(),
             cache_mb: 0,
@@ -580,6 +584,22 @@ impl Session {
             EngineError::BadParams { cmd, msg } if cmd.is_empty() => EngineError::BadParams { cmd: id.to_string(), msg },
             e => e,
         })
+    }
+
+    /// A build that ended is replaced by the next one before a frontend announced it: keep it (at most 16; the oldest
+    /// goes first) for [`Session::take_unreported_builds`].
+    pub(crate) fn keep_unreported_build(&mut self, build: std::sync::Arc<cmd::previews::PreviewBuild>) {
+        const KEEP: usize = 16;
+        if self.unreported_builds.len() >= KEEP {
+            self.unreported_builds.remove(0);
+        }
+        self.unreported_builds.push(build);
+    }
+
+    /// The builds that ended and were replaced before a frontend announced them, oldest first, once. The frontend
+    /// announces each (and sets its `reported`) like the current build's end.
+    pub fn take_unreported_builds(&mut self) -> Vec<std::sync::Arc<cmd::previews::PreviewBuild>> {
+        std::mem::take(&mut self.unreported_builds)
     }
 
     /// Start the tasks waiting in line whose lane is free ([`crate::activity`]), each by running the command it was
