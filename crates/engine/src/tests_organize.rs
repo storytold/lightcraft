@@ -216,6 +216,40 @@ fn stacks_group_collapse_and_replay() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Rating, labelling or flagging a collapsed stack marks every photo in it, not just the top
+/// that stands for it (issue #2232); an expanded stack or explicit `ids` mark only those photos.
+#[test]
+fn marking_a_collapsed_stack_marks_all_its_photos() {
+    use lightcraft_catalog::ColorLabel;
+    let mut s = Session::with_demo();
+    let vis = s.visible_cloned();
+    let (a, b, c) = (vis[2], vis[3], vis[4]);
+    s.execute("library.select", &json!({"ids": [a.0, b.0, c.0], "active": b.0})).unwrap();
+    s.execute("stack.group", &json!({})).unwrap();
+    assert_eq!(s.selected(), vec![b], "the collapsed stack's top stands for it");
+    let members = s.catalog.stack_of(b).unwrap().photos.clone();
+    s.execute("photo.rate", &json!({"rating": 5})).unwrap();
+    s.execute("photo.label", &json!({"label": "red"})).unwrap();
+    s.execute("photo.flag", &json!({"flag": "pick"})).unwrap();
+    for id in &members {
+        let p = s.catalog.photo(*id).unwrap();
+        assert_eq!((p.rating, p.label, p.flag), (5, Some(ColorLabel::Red), Flag::Pick), "member {id:?}");
+    }
+    s.execute("photo.decreaseRating", &json!({})).unwrap();
+    assert!(members.iter().all(|id| s.catalog.photo(*id).unwrap().rating == 4));
+    // explicit ids: only those photos
+    s.execute("photo.rate", &json!({"rating": 1, "ids": [b.0]})).unwrap();
+    assert_eq!(s.catalog.photo(b).unwrap().rating, 1);
+    assert_eq!(s.catalog.photo(a).unwrap().rating, 4);
+    // expanded: only the selected member
+    s.execute("stack.toggle", &json!({})).unwrap();
+    s.execute("library.select", &json!({"ids": [c.0]})).unwrap();
+    s.execute("photo.label", &json!({"label": "blue"})).unwrap();
+    assert_eq!(s.catalog.photo(c).unwrap().label, Some(ColorLabel::Blue));
+    assert_eq!(s.catalog.photo(a).unwrap().label, Some(ColorLabel::Red));
+    assert_eq!(s.catalog.photo(b).unwrap().label, Some(ColorLabel::Red));
+}
+
 #[test]
 fn album_source_reports_in_library_state_and_persists_the_view() {
     // An album source made `library.state` panic (serde can't put an integer in an internally

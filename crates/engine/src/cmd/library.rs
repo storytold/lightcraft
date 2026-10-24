@@ -179,6 +179,33 @@ fn mark_deleted(s: &mut Session, ids: &[PhotoId], label: &str) -> Result<usize> 
 /// Apply one op per target as a single undo step.
 fn for_targets(s: &mut Session, p: &Value, label: &str, f: impl Fn(PhotoId) -> Option<Op>) -> Result<Value> {
     let targets = s.targets(p)?;
+    apply_each(s, &targets, label, f)
+}
+
+/// Targets of rating, flag and label commands: [`Session::targets`], where a selected photo of a
+/// collapsed stack stands for the whole stack (issue #2232). Explicit `ids` / `id` are kept as given.
+fn mark_targets(s: &Session, p: &Value) -> Result<Vec<PhotoId>> {
+    let targets = s.targets(p)?;
+    let explicit = |k: &str| p.get(k).is_some_and(|v| !v.is_null());
+    if explicit("ids") || explicit("id") {
+        return Ok(targets);
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut out: Vec<PhotoId> = Vec::with_capacity(targets.len());
+    for id in targets {
+        let members = s.catalog.stack_of(id).filter(|st| st.collapsed).map_or_else(|| vec![id], |st| st.photos.clone());
+        out.extend(members.into_iter().filter(|m| seen.insert(*m)));
+    }
+    Ok(out)
+}
+
+/// [`for_targets`] on [`mark_targets`].
+fn for_marks(s: &mut Session, p: &Value, label: &str, f: impl Fn(PhotoId) -> Option<Op>) -> Result<Value> {
+    let targets = mark_targets(s, p)?;
+    apply_each(s, &targets, label, f)
+}
+
+fn apply_each(s: &mut Session, targets: &[PhotoId], label: &str, f: impl Fn(PhotoId) -> Option<Op>) -> Result<Value> {
     let ops: Vec<Op> = targets.iter().filter_map(|id| f(*id)).collect();
     let n = ops.len();
     if n > 0 {
@@ -190,7 +217,7 @@ fn for_targets(s: &mut Session, p: &Value, label: &str, f: impl Fn(PhotoId) -> O
 /// Adjust each target's own rating; unchanged bounds do not create an undo step.
 fn change_rating(s: &mut Session, p: &Value, delta: i8, label: &str) -> Result<Value> {
     let mut ops = Vec::new();
-    for id in s.targets(p)? {
+    for id in mark_targets(s, p)? {
         let old = s.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?.rating;
         let rating = (i16::from(old) + i16::from(delta)).clamp(0, 5) as u8;
         if rating != old {
@@ -209,7 +236,7 @@ fn change_rating(s: &mut Session, p: &Value, delta: i8, label: &str) -> Result<V
 /// raising/lowering clamps on reject < unflagged < pick. Unchanged photos make no history step.
 fn change_flag(s: &mut Session, p: &Value, label: &str, step: impl Fn(Flag) -> Flag) -> Result<Value> {
     let mut ops = Vec::new();
-    for id in s.targets(p)? {
+    for id in mark_targets(s, p)? {
         let old = s.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?.flag;
         let flag = step(old);
         if flag != old {
@@ -769,7 +796,7 @@ pub fn specs() -> Vec<CommandSpec> {
             if !(0..=5).contains(&r) {
                 return Err(bad("photo.rate", "rating must be 0..5"));
             }
-            let v = for_targets(s, p, "Set Rating", |id| Some(Op::SetRating { id, rating: r as u8 }))?;
+            let v = for_marks(s, p, "Set Rating", |id| Some(Op::SetRating { id, rating: r as u8 }))?;
             advance_if(s, p);
             Ok(v)
         }),
@@ -781,7 +808,7 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
         cmd!("photo.flag", "Set Flag", ["Photo", "Set Flag"], None, "{flag: pick|reject|none, ids?, advance?: bool}", has_selection, |s, p| {
             let f = str_param(p, "flag").and_then(Flag::parse).ok_or_else(|| bad("photo.flag", "flag must be pick|reject|none"))?;
-            let v = for_targets(s, p, "Set Flag", |id| Some(Op::SetFlag { id, flag: f }))?;
+            let v = for_marks(s, p, "Set Flag", |id| Some(Op::SetFlag { id, flag: f }))?;
             advance_if(s, p);
             Ok(v)
         }),
@@ -820,13 +847,13 @@ pub fn specs() -> Vec<CommandSpec> {
             |s, p| { change_flag(s, p, "Decrease Flag Status", |f| if f == Flag::Pick { Flag::None } else { Flag::Reject }) }
         ),
         cmd!("photo.pick", "Flag as Pick", ["Photo", "Set Flag"], Some("P"), "{ids?}", has_selection, |s, p| {
-            for_targets(s, p, "Flag as Pick", |id| Some(Op::SetFlag { id, flag: Flag::Pick }))
+            for_marks(s, p, "Flag as Pick", |id| Some(Op::SetFlag { id, flag: Flag::Pick }))
         }),
         cmd!("photo.reject", "Flag as Reject", ["Photo", "Set Flag"], Some("X"), "{ids?}", has_selection, |s, p| {
-            for_targets(s, p, "Flag as Reject", |id| Some(Op::SetFlag { id, flag: Flag::Reject }))
+            for_marks(s, p, "Flag as Reject", |id| Some(Op::SetFlag { id, flag: Flag::Reject }))
         }),
         cmd!("photo.unflag", "Unflag", ["Photo", "Set Flag"], Some("U"), "{ids?}", has_selection, |s, p| {
-            for_targets(s, p, "Unflag", |id| Some(Op::SetFlag { id, flag: Flag::None }))
+            for_marks(s, p, "Unflag", |id| Some(Op::SetFlag { id, flag: Flag::None }))
         }),
         cmd!(
             "photo.label",
@@ -844,7 +871,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     None => return Err(bad("photo.label", "missing `label` (red|yellow|green|blue|purple|none)")),
                     Some(_) => return Err(bad("photo.label", "label must be red|yellow|green|blue|purple|none")),
                 };
-                for_targets(s, p, "Set Color Label", |id| Some(Op::SetLabel { id, label: l }))
+                for_marks(s, p, "Set Color Label", |id| Some(Op::SetLabel { id, label: l }))
             }
         ),
         // ---- orientation
