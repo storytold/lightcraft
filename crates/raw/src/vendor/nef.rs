@@ -313,7 +313,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         _ => Cfa::bayer_static("RGGB"),
     };
     let body = measured_body(&model, w, h, bits);
-    let active_w = if cygm { w } else { stored_active_w };
+    let active_w = stored_active_w;
     // the white level is measured from the whole image (or known for a measured body); the probe (no samples in its
     // result) takes the nominal one
     let white = match (body.and_then(|b| b.white), mode) {
@@ -1119,11 +1119,11 @@ mod tests {
         raw.set(t::PHOTOMETRIC, Value::Short(vec![photometric::CFA]));
         raw.set(t::CFA_REPEAT_PATTERN_DIM, Value::Short(vec![2, 2]));
         raw.set(t::CFA_PATTERN_EP, Value::Byte(pattern.to_vec()));
-        raw.set(t::ORIENTATION, Value::Short(vec![1]));
         raw.set_image(ImageData::Strips { rows_per_strip: h as u32, strips: vec![packed] });
         let mut ifd0 = IfdBuilder::new();
         ifd0.set(t::MAKE, Value::Ascii("NIKON".into()));
         ifd0.set(t::MODEL, Value::Ascii(model.into()));
+        ifd0.set(t::ORIENTATION, Value::Short(vec![1]));
         let mut note = IfdBuilder::new();
         note.set(0x0001, Value::Undefined(version.to_vec()));
         let mut maker = b"Nikon\0\x02\0\0\0".to_vec();
@@ -1194,11 +1194,13 @@ mod tests {
         let img = smooth_scene(w, h);
         let bytes = coolpix_file("E8400", [2, 1, 1, 0], w, h, &two_fields(&img, w, h, true));
         let tiff = Tiff::parse(&bytes).unwrap();
-        let orientation = raw_ifd(&tiff).unwrap().get(t::ORIENTATION).unwrap().offset as usize;
+        let orientation = tiff.ifds.first().unwrap().get(t::ORIENTATION).unwrap().offset as usize;
         for code in [3u16, 6, 8] {
             let mut rotated = bytes.clone();
             rotated.get_mut(orientation..orientation + 2).unwrap().copy_from_slice(&code.to_le_bytes());
-            assert_eq!(crate::decode(&rotated).unwrap().data, RawData::U16(img.clone()), "orientation {code}");
+            let r = crate::decode(&rotated).unwrap();
+            assert_eq!(r.orientation, Orientation::from_exif(code), "the rotated file reports orientation {code}");
+            assert_eq!(r.data, RawData::U16(img.clone()), "orientation {code}");
         }
     }
 
