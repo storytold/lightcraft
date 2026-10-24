@@ -98,6 +98,8 @@ mod tests_dialogs;
 #[cfg(test)]
 mod tests_drop_import;
 #[cfg(test)]
+mod tests_drop_undo;
+#[cfg(test)]
 mod tests_edit_layout;
 #[cfg(test)]
 mod tests_empty_library;
@@ -226,6 +228,8 @@ pub use control::{ControlRequest, ControlResponse};
 pub use state::UiState;
 
 const TOAST_SECONDS: f64 = 1.4;
+/// How long a toast that offers Undo stays: time to read it and reach the button.
+const UNDO_TOAST_SECONDS: f64 = 6.0;
 /// The `path` of a display profile read from the screen rather than chosen as a file.
 pub const SCREEN_PROFILE: &str = "screen";
 
@@ -879,6 +883,33 @@ impl LightcraftApp {
     pub fn toast_for(&mut self, ctx: &egui::Context, text: impl Into<String>, secs: f64) {
         let t = ctx.input(|i| i.time);
         self.ui.toast = Some((text.into(), t + secs, None));
+        self.ui.toast_undo = None;
+    }
+
+    /// A toast for an action that has just committed one undo step (a drop or a menu move that moved, added or tagged
+    /// photos): it carries an Undo button for [`UNDO_TOAST_SECONDS`], until the next step is committed or
+    /// the toast is replaced, whichever comes first.
+    pub fn toast_undoable(&mut self, ctx: &egui::Context, text: impl Into<String>) {
+        let text = text.into();
+        self.toast_for(ctx, text.clone(), UNDO_TOAST_SECONDS);
+        self.ui.toast_undo = Some((text, self.session.commits(), self.session.undo.len()));
+    }
+
+    /// Whether the toast on screen offers Undo: it is the one [`Self::toast_undoable`] showed, nothing has been
+    /// committed since (a later step would make Undo reach that instead), the undo stack is as the drop left it
+    /// (Edit > Undo from the menu or a new library would change it, and a click would then undo something else),
+    /// and no dialog is open over the toast.
+    pub fn toast_offers_undo(&self) -> bool {
+        match (&self.ui.toast, &self.ui.toast_undo) {
+            (Some((shown, _, _)), Some((text, commits, steps))) => {
+                shown == text
+                    && *commits == self.session.commits()
+                    && *steps == self.session.undo.len()
+                    && self.session.redo.is_empty()
+                    && self.ui.dialog.is_none()
+            }
+            _ => false,
+        }
     }
 
     /// Reverse geocoding: say how a place-names download ended (a failure stays readable, with what to do).
@@ -967,6 +998,7 @@ impl LightcraftApp {
     pub fn toast_error(&mut self, ctx: &egui::Context, text: impl Into<String>) {
         let t = ctx.input(|i| i.time);
         self.ui.toast = Some((text.into(), t + 6.0, None));
+        self.ui.toast_undo = None;
     }
 
     fn drain_control(&mut self, ctx: &egui::Context) {
