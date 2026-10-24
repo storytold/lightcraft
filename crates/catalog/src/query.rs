@@ -143,6 +143,10 @@ fn shuffle_rank(seed: u64, id: PhotoId) -> u64 {
 pub(crate) struct Prepared {
     root: Option<String>,
     only: Option<std::collections::HashSet<PhotoId>>,
+    /// The search words ([`Filter::tokens`]).
+    tokens: Vec<String>,
+    /// A pass over the library, which makes the text kept for each photo when it isn't ([`Catalog::search_text`]).
+    whole: bool,
 }
 
 /// The tokens of a search text: split at whitespace, except inside double quotes, so
@@ -174,8 +178,8 @@ fn unquote(s: &str) -> &str {
     s.strip_prefix('"').map_or(s, |inner| inner.strip_suffix('"').unwrap_or(inner))
 }
 
-fn token_matches(p: &Photo, tok: &str) -> bool {
-    let t = tok.to_lowercase();
+/// Whether the word `t` (lower-cased) is in `p`, as a field of it or as plain text.
+fn token_matches(p: &Photo, t: &str, hay: &Hay) -> bool {
     // a token that starts with a quote is a phrase, even with a colon in it
     if let Some((field, quoted)) = t.split_once(':').filter(|_| !t.starts_with('"')) {
         let val = unquote(quoted);
@@ -217,20 +221,30 @@ fn token_matches(p: &Photo, tok: &str) -> bool {
             "name" | "file" => p.file_name.to_lowercase().contains(val),
             // Not a known field: the colon is part of a plain word ("10:30", "Re:"), its value unquoted
             // (`re:"a b"` is the text `re:a b`).
-            _ if val.len() != quoted.len() => text_matches(p, &format!("{field}:{val}")),
-            _ => text_matches(p, &t),
+            _ if val.len() != quoted.len() => hay.text().contains(&format!("{field}:{val}")),
+            _ => hay.text().contains(t),
         };
     }
-    text_matches(p, unquote(&t))
+    hay.text().contains(unquote(t))
 }
 
-/// Whether the lower-cased word `t` is in the file name, title, caption, camera, lens, location,
-/// format, a keyword or the name of a person (a named face) of `p`.
-fn text_matches(p: &Photo, t: &str) -> bool {
-    let hay = [&p.file_name, &p.meta.title, &p.meta.caption, &p.meta.camera, &p.meta.lens, &p.meta.location, &p.format];
-    hay.iter().any(|h| h.to_lowercase().contains(t))
-        || p.meta.keywords.iter().any(|k| k.to_lowercase().contains(t))
-        || p.people().iter().any(|n| n.to_lowercase().contains(t))
+/// A photo's lower-cased text for the free-text search: the one the catalog keeps when `p` is its
+/// own photo and a pass over the library made them ([`Prepared::whole`]), else made when first asked.
+struct Hay<'a> {
+    p: &'a Photo,
+    cat: &'a Catalog,
+    whole: bool,
+    kept: std::cell::OnceCell<Option<&'a crate::index::PhotoText>>,
+    own: std::cell::OnceCell<crate::index::PhotoText>,
+}
+
+impl Hay<'_> {
+    fn text(&self) -> &crate::index::PhotoText {
+        match self.kept.get_or_init(|| self.cat.search_text(self.p, self.whole)) {
+            Some(t) => t,
+            None => self.own.get_or_init(|| crate::index::PhotoText::of(self.p)),
+        }
+    }
 }
 
 /// Whether `p` has a named face region called `name` (case-insensitive).
@@ -332,13 +346,23 @@ impl Filter {
 
     /// [`Filter::prepare`] for testing one photo (the `only` ids are looked through, not hashed).
     pub(crate) fn prepare_one(&self) -> Prepared {
-        Prepared { root: self.library_root(), only: None }
+        Prepared { root: self.library_root(), only: None, tokens: self.tokens(), whole: false }
     }
 
     /// What [`Filter::matches_in`] needs worked out once for a pass over many photos rather than
     /// once per photo: the library folder's identity and the `only` ids as a set.
     pub(crate) fn prepare(&self) -> Prepared {
-        Prepared { root: self.library_root(), only: (!self.only.is_empty()).then(|| self.only.iter().copied().collect()) }
+        Prepared {
+            root: self.library_root(),
+            only: (!self.only.is_empty()).then(|| self.only.iter().copied().collect()),
+            tokens: self.tokens(),
+            whole: true,
+        }
+    }
+
+    /// The search words ([`search_tokens`]), lower-cased (as `str::to_lowercase` does, once per query, not once per photo).
+    fn tokens(&self) -> Vec<String> {
+        search_tokens(&self.text).map(str::to_lowercase).collect()
     }
 
     /// [`Filter::library_folder`] as a folder identity ([`folder_key`]); `None` without a choice.
@@ -462,7 +486,11 @@ impl Filter {
         {
             return false;
         }
-        search_tokens(&self.text).all(|tok| token_matches(p, tok))
+        if prepared.tokens.is_empty() {
+            return true;
+        }
+        let hay = Hay { p, cat, whole: prepared.whole, kept: std::cell::OnceCell::new(), own: std::cell::OnceCell::new() };
+        prepared.tokens.iter().all(|t| token_matches(p, t, &hay))
     }
 }
 
