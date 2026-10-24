@@ -11,7 +11,7 @@
 
 use egui::{Color32, CursorIcon, Id, Key, Modifiers, Rect, RichText, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 use lightcraft_catalog::rules::{Kind, album_rule_id, bool_label, bool_value, choice_label, field_kind, field_label, ops_for};
-use lightcraft_catalog::{Match, RuleSet};
+use lightcraft_catalog::{Match, Rule, RuleSet};
 use serde_json::Value;
 
 use crate::album_picker::AlbumEntry;
@@ -90,8 +90,49 @@ struct Drag {
     /// edited meanwhile (typing in a field that kept focus) is given up, its path would point into
     /// other rules; the edit stays.
     base: Option<RuleSet>,
-    /// The first frame of the drag has been seen (`base` is taken in the next).
-    seen: bool,
+    /// No more rounding is to be expected (no other widget had the focus when the drag started, or
+    /// the one frame after the start has passed): the rules must be the ones the drag started with.
+    /// Until then `base` may take a field's rounded number.
+    settled: bool,
+}
+
+/// Whether `a` and `b` are the same rules but for the numbers in their values (what a number field
+/// rewrites when it gives its focus up): the same groups and match modes, the same fields and
+/// operators, every other value equal.
+fn same_but_numbers(a: &RuleSet, b: &RuleSet) -> bool {
+    a.mode == b.mode
+        && a.rules.len() == b.rules.len()
+        && a.rules.iter().zip(&b.rules).all(|pair| match pair {
+            (Rule::Group { group: x }, Rule::Group { group: y }) => same_but_numbers(x, y),
+            (Rule::Field { field: f, op: o, value: v }, Rule::Field { field: g, op: p, value: w }) => {
+                f == g && o == p && (matches!((last_unit(v), last_unit(w)), (Some(x), Some(y)) if x == y) || alike(v, w))
+            }
+            _ => false,
+        })
+}
+
+/// The unit of an "in the last" value as its field reads it (`{"n": 7, "unit": "Weeks"}`, or a plain
+/// number of days): the field writes `{"n", "unit"}` back in lower case whatever shape it was stored in.
+fn last_unit(v: &Value) -> Option<String> {
+    match v {
+        Value::Object(o) if o.get("n").is_some_and(|n| n.is_number() || n.is_string()) => {
+            Some(o.get("unit").and_then(Value::as_str).unwrap_or("days").to_lowercase())
+        }
+        Value::Number(_) => Some("days".to_string()),
+        _ => None,
+    }
+}
+
+/// Whether two values are equal but for numbers: a number (or a text that reads as one) stands for
+/// any number, in a pair (Between) or an object (`{"n": 20, "unit": "days"}`) too.
+fn alike(a: &Value, b: &Value) -> bool {
+    let number = |v: &Value| v.is_number() || v.as_str().is_some_and(|s| s.trim().parse::<f64>().is_ok());
+    match (a, b) {
+        _ if number(a) && number(b) => true,
+        (Value::Array(x), Value::Array(y)) => x.len() == y.len() && x.iter().zip(y).all(|(x, y)| alike(x, y)),
+        (Value::Object(x), Value::Object(y)) => x.len() == y.len() && x.iter().all(|(k, x)| y.get(k).is_some_and(|y| alike(x, y))),
+        _ => a == b,
+    }
 }
 
 /// What the rows record while they are drawn, for the end of the frame to act on (kept in the
@@ -191,7 +232,9 @@ pub fn grip(ui: &mut Ui, row: &Row) {
     let (dragging_this, dragging) = with_state(&ctx, |s| (s.drag.as_ref().is_some_and(|d| d.from == row.path), s.drag.is_some()));
     if resp.drag_started_by(egui::PointerButton::Primary) {
         let label = (row.label)();
-        with_state(&ctx, |s| s.drag = Some(Drag { from: row.path.to_vec(), label, base: None, seen: false }));
+        // only a widget that has the focus before the grip takes it can hand back a rounded number
+        let other_focus = ctx.memory(|m| m.focused()).is_some_and(|f| f != id);
+        with_state(&ctx, |s| s.drag = Some(Drag { from: row.path.to_vec(), label, base: None, settled: !other_focus }));
         // the dragged row's grip takes the focus, so after the drop it follows the row (a focus left
         // on another row's grip or field would stay at its old place, on whichever row lands there)
         resp.request_focus();
@@ -257,14 +300,15 @@ pub fn finish(ui: &mut Ui, rs: &mut RuleSet, salt: &str) {
     }
     let Some(mut drag) = drag else { return };
     match &drag.base {
-        None if !drag.seen => {
-            // the frame the drag starts, the grip takes the focus from a number field, which hands back
-            // its clamped or rounded text one frame later: the rules are taken after that
-            drag.seen = true;
-            with_state(&ctx, |s| s.drag = Some(drag.clone()));
-        }
         None => {
             drag.base = Some(rs.clone());
+            with_state(&ctx, |s| s.drag = Some(drag.clone()));
+        }
+        // the frame after the drag starts, a number field the grip took the focus from hands back its
+        // clamped or rounded text: only that may differ from the rules the drag started with
+        Some(base) if !drag.settled && same_but_numbers(base, rs) => {
+            drag.base = Some(rs.clone());
+            drag.settled = true;
             with_state(&ctx, |s| s.drag = Some(drag.clone()));
         }
         Some(base) if base != rs => {
@@ -412,6 +456,33 @@ mod tests {
         assert_eq!(slot_at(&rows, 98.0), [2], "the bottom strip is beside the group: after it");
         assert_eq!(slot_at(&rows, 500.0), [3], "below everything");
         assert_eq!(slot_at(&rows, -50.0), [0], "above everything");
+    }
+
+    /// What a number field hands back when it gives up its focus (a clamped or rounded number, in
+    /// whatever shape the rule keeps it) is the same rule; anything else is another one.
+    #[test]
+    fn rules_differing_only_in_numbers_are_alike() {
+        let set = |rules: serde_json::Value| -> RuleSet { serde_json::from_value(json!({"rules": rules})).unwrap() };
+        let a = set(json!([{"field": "rating", "op": "is", "value": 9}, {"field": "rating", "op": "between", "value": [2, 9]}]));
+        let b = set(json!([{"field": "rating", "op": "is", "value": 5}, {"field": "rating", "op": "between", "value": [2.0, 5]}]));
+        assert!(same_but_numbers(&a, &b), "numbers, and numbers in a pair");
+        let c = set(json!([{"field": "rating", "op": "is", "value": "9"}]));
+        assert!(same_but_numbers(&c, &set(json!([{"field": "rating", "op": "is", "value": 5}]))), "a text that reads as a number");
+        let last = |n: u64| set(json!([{"field": "captureDate", "op": "inLast", "value": {"n": n, "unit": "days"}}]));
+        assert!(same_but_numbers(&last(20_000), &last(10_000)), "a number in an object");
+        let unit = set(json!([{"field": "captureDate", "op": "inLast", "value": {"n": 3, "unit": "weeks"}}]));
+        assert!(!same_but_numbers(&last(3), &unit), "another unit is another rule");
+        let stored = |v: serde_json::Value| set(json!([{"field": "captureDate", "op": "inLast", "value": v}]));
+        let written = stored(json!({"n": 10_000.0, "unit": "days"}));
+        assert!(same_but_numbers(&stored(json!(20_000)), &written), "a plain number of days is written as {{n, unit}}");
+        assert!(same_but_numbers(&stored(json!({"n": 20_000})), &written), "a missing unit is days");
+        assert!(same_but_numbers(&stored(json!({"n": "7.4", "unit": "Days"})), &written), "the unit in lower case");
+        assert!(!same_but_numbers(&stored(json!(7)), &stored(json!({"n": 7, "unit": "weeks"}))), "days are not weeks");
+        let text = |s: &str| set(json!([{"field": "keyword", "op": "is", "value": s}]));
+        assert!(!same_but_numbers(&text("a"), &text("b")) && same_but_numbers(&text("a"), &text("a")));
+        assert!(!same_but_numbers(&a, &set(json!([{"field": "rating", "op": "is", "value": 9}]))), "another count of rules");
+        let op = set(json!([{"field": "rating", "op": "gte", "value": 5}]));
+        assert!(!same_but_numbers(&op, &set(json!([{"field": "rating", "op": "lte", "value": 5}]))), "another operator");
     }
 
     #[test]

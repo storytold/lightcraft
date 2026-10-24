@@ -536,3 +536,39 @@ fn a_drag_whose_dialog_was_replaced_drops_nothing() {
     release(&mut h, to);
     assert_eq!(shape(&h), "7 8 9");
 }
+
+/// A drag whose dialog is replaced in the very frame after the drag starts (before its rules are
+/// compared with the ones it started with) drops nothing in the other dialog either, whether the
+/// other dialog has other rules or the same kind of rules with other numbers.
+#[test]
+fn a_drag_whose_dialog_was_replaced_in_its_first_frames_drops_nothing() {
+    for (replacement, shown) in [(vec![rule(7), rule(8)], "7 8"), (vec![rule(7), rule(8), rule(9)], "7 8 9")] {
+        let mut h = editor(vec![rule(1), rule(2), rule(3)]);
+        let from = grip(&h, "rules-0").center();
+        let to = below(grip(&h, "rules-2"));
+        pointer(&mut h, from, Some(true));
+        h.step();
+        let mut started = false;
+        for i in 1..=16 {
+            pointer(&mut h, from + (to - from) * (i as f32 / 16.0), None);
+            h.step();
+            // the grip takes the focus in the frame the drag starts (the name follows a frame later)
+            if focused_is(&h, "rules-0") {
+                started = true;
+                break;
+            }
+        }
+        assert!(started, "the drag started");
+        // the other dialog opens before the next frame is drawn
+        let other: RuleSet = serde_json::from_value(json!({"rules": replacement})).unwrap();
+        h.app.ui.dialog = Some(crate::state::Dialog::SmartRules { id: None, name: "Other".into(), rules: other, parent: None });
+        h.step();
+        // over a place that is valid in the new dialog
+        let to = below(grip(&h, "rules-1"));
+        pointer(&mut h, to, None);
+        h.step();
+        h.step();
+        release(&mut h, to);
+        assert_eq!(shape(&h), shown, "nothing moved in the dialog that replaced it");
+    }
+}
