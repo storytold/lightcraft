@@ -143,8 +143,12 @@ fn background_requests_never_wait_and_failures_come_back_as_messages() {
     s.segmenter.background = true;
     let id = s.active().unwrap();
     s.segmenter.dir = Some(tmp("missing"));
-    for (cmd, p) in [("mask.add", json!({"kind": "object"})), ("mask.add", json!({"kind": "prompt", "text": "sky"})), ("segment.prepare", json!({}))]
-    {
+    for (cmd, p) in [
+        ("mask.add", json!({"kind": "object"})),
+        ("mask.add", json!({"kind": "prompt", "text": "sky"})),
+        ("mask.add", json!({"kind": "people", "face": [0.4, 0.2, 0.5, 0.35], "parts": ["Hair"]})),
+        ("segment.prepare", json!({})),
+    ] {
         let t = Instant::now();
         let e = s.execute(cmd, &p).unwrap_err().to_string();
         assert!(t.elapsed() < Duration::from_millis(500), "{cmd}");
@@ -172,12 +176,14 @@ fn background_requests_never_wait_and_failures_come_back_as_messages() {
     assert_eq!((r["include"].as_u64(), r["exclude"].as_u64()), (Some(1), Some(1)));
     let r = s.execute("mask.add", &json!({"kind": "prompt", "text": "the sky"})).unwrap();
     assert_eq!(r["pending"], true);
+    let r = s.execute("mask.add", &json!({"kind": "people", "face": [0.4, 0.2, 0.5, 0.35], "parts": ["Skin"]})).unwrap();
+    assert_eq!(r["pending"], true);
     assert!(t.elapsed() < Duration::from_secs(1), "nothing waited for the model: {:?}", t.elapsed());
     let messages = settle(&mut s, Duration::from_secs(60));
     assert!(!messages.is_empty() && messages.iter().all(|m| !m.is_empty()), "{messages:?}");
     assert!(messages.iter().any(|m| m.contains("model.safetensors") || m.contains("SAM 3")), "{messages:?}");
     assert!(s.segmenter.pending_clicks().is_none());
-    // the Object mask is there, without a selection; no Describe mask was made from nothing
+    // the Object mask is there, without a selection; no Describe or People mask was made from nothing
     let d = s.develop_of(id).unwrap();
     assert_eq!(d.masks.len(), 1);
     assert!(matches!(&d.masks[0].components[0].shape, lightcraft_develop::MaskShape::Object { seg: None, .. }));
@@ -300,9 +306,12 @@ fn a_missing_model_is_model_missing_by_kind() {
         let mut s = Session::with_demo();
         s.segmenter.background = background;
         s.segmenter.dir = Some(tmp(&format!("kind-{background}")));
-        for (cmd, p) in
-            [("mask.add", json!({"kind": "object"})), ("mask.add", json!({"kind": "prompt", "text": "sky"})), ("segment.prepare", json!({}))]
-        {
+        for (cmd, p) in [
+            ("mask.add", json!({"kind": "object"})),
+            ("mask.add", json!({"kind": "prompt", "text": "sky"})),
+            ("mask.add", json!({"kind": "people", "face": [0.4, 0.2, 0.5, 0.35]})),
+            ("segment.prepare", json!({})),
+        ] {
             let e = s.execute(cmd, &p).unwrap_err();
             if Segmenter::AVAILABLE {
                 assert_eq!(e.kind(), ErrorKind::ModelMissing(AiModel::Sam3), "{cmd} (background {background}): {e}");
@@ -311,5 +320,132 @@ fn a_missing_model_is_model_missing_by_kind() {
                 assert_eq!(e.kind(), ErrorKind::Other, "{cmd}: {e}");
             }
         }
+    }
+}
+
+fn face_region(rect: [f64; 4], name: Option<&str>) -> lightcraft_meta::Region {
+    let r = lightcraft_geom::Rect { x0: rect[0], y0: rect[1], x1: rect[2], y1: rect[3] };
+    lightcraft_meta::Region { rect: r, kind: lightcraft_meta::RegionKind::Face, name: name.map(str::to_string), description: None }
+}
+
+fn set_regions(s: &mut Session, id: lightcraft_catalog::PhotoId, regions: Vec<lightcraft_meta::Region>) {
+    let mut meta = s.catalog.photo(id).unwrap().meta.clone();
+    meta.regions = regions;
+    s.commit("setup", lightcraft_catalog::Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
+}
+
+/// `photo.faces` lists the face regions (not pets) in mask coordinates too, and a People mask
+/// takes its person by index or by box; a stored selection needs no model, and the parameters
+/// are checked before the model is.
+#[test]
+fn people_masks_pick_a_face_and_check_their_parameters() {
+    use lightcraft_develop::MaskShape;
+    let mut s = Session::with_demo();
+    let id = s.active().unwrap();
+    let pet = lightcraft_meta::Region { kind: lightcraft_meta::RegionKind::Pet, ..face_region([0.0, 0.0, 0.1, 0.1], None) };
+    set_regions(&mut s, id, vec![pet, face_region([0.1, 0.2, 0.3, 0.4], Some("Ann")), face_region([0.6, 0.2, 0.8, 0.4], None)]);
+    let faces = s.execute("photo.faces", &json!({})).unwrap()["faces"].clone();
+    assert_eq!(faces.as_array().unwrap().len(), 2);
+    assert_eq!((faces[0]["index"].as_u64(), faces[0]["region"].as_u64(), faces[0]["name"].as_str()), (Some(0), Some(1), Some("Ann")));
+    assert_eq!(faces[1]["face"], json!([0.6, 0.2, 0.8, 0.4]), "upright photo: the same box");
+    // after Rotate Right the box is in the turned frame (the left of the photo is its top)
+    s.execute("photo.rotateRight", &json!({})).unwrap();
+    let turned = s.execute("photo.faces", &json!({})).unwrap()["faces"][0].clone();
+    assert_eq!(turned["rect"], json!({"x0": 0.1, "y0": 0.2, "x1": 0.3, "y1": 0.4}), "the region itself is unchanged");
+    let f: Vec<f64> = serde_json::from_value(turned["face"].clone()).unwrap();
+    assert!((f[0] - 0.6).abs() < 1e-9 && (f[1] - 0.1).abs() < 1e-9 && (f[2] - 0.8).abs() < 1e-9 && (f[3] - 0.3).abs() < 1e-9, "{f:?}");
+    s.execute("photo.rotateLeft", &json!({})).unwrap();
+
+    // parameters: a face that isn't there, neither face nor person, an unknown part, a bad box
+    for (p, want) in [
+        (json!({"kind": "people", "person": 5}), "no face 5"),
+        (json!({"kind": "people"}), "needs `person`"),
+        (json!({"kind": "people", "person": 0, "parts": ["Lips"]}), "Lips"),
+        (json!({"kind": "people", "face": [0.5, 0.5, 0.2, 0.9]}), "inside the photo"),
+        (json!({"kind": "people", "face": "left"}), "inside the photo"),
+        (json!({"kind": "people", "person": 0, "parts": "Hair"}), "list of names"),
+    ] {
+        let e = s.execute("mask.add", &p).unwrap_err().to_string();
+        assert!(e.contains(want), "{p}: {e}");
+    }
+    assert!(s.develop_of(id).unwrap().masks.is_empty());
+
+    // a stored selection: no model needed; a box alone takes the index of the face it matches
+    let seg = serde_json::to_value(lightcraft_develop::SegMask::from_logits(4, &[5.0; 16])).unwrap();
+    s.execute("mask.add", &json!({"kind": "people", "face": [0.61, 0.21, 0.79, 0.41], "parts": ["Hair"], "seg": seg})).unwrap();
+    s.execute("mask.addComponent", &json!({"op": "subtract", "kind": "people", "person": 0, "parts": ["Skin"], "seg": seg})).unwrap();
+    let d = s.develop_of(id).unwrap();
+    let c = &d.masks[0].components;
+    let MaskShape::People { person, parts, face, seg: Some(_), .. } = &c[0].shape else { panic!("{:?}", c[0].shape) };
+    assert_eq!((*person, parts.as_slice(), *face), (1, &["Hair".to_string()][..], Some([0.61, 0.21, 0.79, 0.41])));
+    let MaskShape::People { person, face, .. } = &c[1].shape else { panic!("{:?}", c[1].shape) };
+    assert_eq!((*person, *face, c[1].op), (0, Some([0.1, 0.2, 0.3, 0.4]), lightcraft_develop::MaskOp::Subtract));
+}
+
+/// With `LIGHTCRAFT_SAM3_DIR` set: a People request runs through the real model, end to end
+/// (in waiting and in background mode). The demo photos have no people, so on them it checks the
+/// plumbing (the request finishes, with a selection or a "no person" answer); a portrait given
+/// as `LIGHTCRAFT_PEOPLE_PHOTO` (and its face box as `LIGHTCRAFT_PEOPLE_FACE`, `x0,y0,x1,y1` on
+/// normalized; default: its first face region) must give a selection.
+#[cfg(feature = "sam")]
+#[test]
+fn people_masks_with_the_real_model() {
+    let Some(dir) = std::env::var_os("LIGHTCRAFT_SAM3_DIR").map(std::path::PathBuf::from).filter(|d| lightcraft_segment::is_model_dir(d)) else {
+        lightcraft_testkit::skip!(Model, "set LIGHTCRAFT_SAM3_DIR to the SAM 3 model folder");
+        return;
+    };
+    let photo = std::env::var_os("LIGHTCRAFT_PEOPLE_PHOTO").map(std::path::PathBuf::from);
+    let mut s = match &photo {
+        Some(path) => {
+            let mut s = Session::new().with_fs();
+            s.execute("library.import", &json!({"paths": [path.to_string_lossy()]})).unwrap();
+            let id = s.catalog.photos().next().unwrap().id;
+            s.execute("library.select", &json!({"ids": [id.0]})).unwrap();
+            s
+        }
+        None => {
+            lightcraft_testkit::skip!(Input, "set LIGHTCRAFT_PEOPLE_PHOTO to a photo with people (the demo photos have none)");
+            Session::with_demo()
+        }
+    };
+    s.segmenter.dir = Some(dir);
+    let id = s.active().unwrap();
+    let face: Vec<f64> = match std::env::var("LIGHTCRAFT_PEOPLE_FACE") {
+        Ok(v) => v.split(',').map(|x| x.trim().parse().unwrap()).collect(),
+        Err(_) => serde_json::from_value(s.execute("photo.faces", &json!({})).unwrap()["faces"][0]["face"].clone())
+            .unwrap_or_else(|_| vec![0.42, 0.25, 0.58, 0.45]),
+    };
+    let t = Instant::now();
+    let r = s.execute("mask.add", &json!({"kind": "people", "face": face, "parts": ["Hair", "Skin"]}));
+    eprintln!(
+        "People (Hair, Skin) on {}: {:?} in {:?}",
+        photo.as_deref().map_or("a demo photo".into(), |p| p.display().to_string()),
+        r.as_ref().map(|_| "a mask"),
+        t.elapsed()
+    );
+    match &r {
+        Ok(_) => {
+            let d = s.develop_of(id).unwrap();
+            let lightcraft_develop::MaskShape::People { seg: Some(seg), .. } = &d.masks[0].components[0].shape else { panic!("a People selection") };
+            assert!(seg.logits().is_some_and(|l| crate::segment::people::selects_anything(&l)));
+            // the zoomed-in pass runs too (or says there's nothing to refine)
+            s.execute("mask.refineDetail", &json!({})).unwrap();
+        }
+        Err(e) => {
+            assert!(photo.is_none(), "a photo with people gives a selection: {e}");
+            let e = e.to_string();
+            assert!(e.contains("No person") || e.contains("was found on this person"), "{e}");
+        }
+    }
+    // background mode: queued, then applied (or a message) by polling
+    s.segmenter.background = true;
+    let before = s.develop_of(id).unwrap().masks.len();
+    let r = s.execute("mask.add", &json!({"kind": "people", "face": face, "parts": ["Entire Person"]})).unwrap();
+    assert_eq!(r["pending"], true);
+    let messages = settle(&mut s, Duration::from_secs(600));
+    let after = s.develop_of(id).unwrap().masks.len();
+    assert!(after == before + 1 || messages.iter().any(|m| m.contains("No person")), "{messages:?}");
+    if photo.is_some() {
+        assert_eq!(after, before + 1, "{messages:?}");
     }
 }

@@ -1,5 +1,5 @@
-//! AI masks: Object (clicks) and Describe (text) selections computed with SAM 3
-//! (`lightcraft-segment`, cargo feature `sam`; the desktop app enables it).
+//! AI masks: Object (clicks), Describe (text) and People ([`people`]) selections computed with
+//! SAM 3 (`lightcraft-segment`, cargo feature `sam`; the desktop app enables it).
 //!
 //! **Nothing requires the model.** It is not part of LightCraft (SAM License); the user
 //! downloads it when they first use an AI mask and agree to (`segment.model.download`), or
@@ -17,6 +17,7 @@
 
 #[cfg(feature = "sam")]
 mod download;
+pub mod people;
 #[cfg(feature = "sam")]
 mod worker;
 
@@ -62,6 +63,8 @@ pub(crate) enum Tag {
     Clicks { photo: PhotoId, mask: u32, comp: usize, hint: Vec<Point>, exclude: Vec<Point> },
     /// A Describe selection: a new mask (`mask: None`) or a component combined by `op`.
     NewPrompt { photo: PhotoId, mask: Option<u32>, op: String, name: Option<String>, text: String },
+    /// A People selection, as for `NewPrompt`.
+    NewPeople { photo: PhotoId, mask: Option<u32>, op: String, name: Option<String>, person: PeopleRequest },
     /// A zoomed-in pass for a component, computed from `shape` (without its detail).
     Detail { photo: PhotoId, mask: u32, comp: usize, shape: MaskShape },
 }
@@ -80,6 +83,21 @@ pub(crate) struct Input {
 pub(crate) enum Prompt {
     Clicks(Vec<Click>),
     Text(String),
+    /// The parts of the person whose face is `face` (normalized to the photo).
+    People {
+        face: [f64; 4],
+        parts: Vec<people::Part>,
+    },
+}
+
+/// A People selection to compute: the parts (`parts`, as the shape stores their names) of the
+/// person whose face box is `face` (mask coordinates); `person` is the face's index among the
+/// photo's faces, kept with the mask.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PeopleRequest {
+    pub person: u32,
+    pub face: [f64; 4],
+    pub parts: Vec<String>,
 }
 
 /// Object clicks sent to the worker and not applied yet (background mode): further clicks add
@@ -364,11 +382,20 @@ pub fn detail_region(seg: &SegMask, aspect: f64) -> Option<[f64; 4]> {
 #[cfg_attr(not(feature = "sam"), allow(dead_code))]
 fn strip_detail(mut shape: MaskShape) -> MaskShape {
     // (nor its edge setting: moving the slider meanwhile keeps the pass)
-    if let MaskShape::Object { detail, edge, .. } | MaskShape::Prompt { detail, edge, .. } = &mut shape {
+    if let MaskShape::Object { detail, edge, .. } | MaskShape::Prompt { detail, edge, .. } | MaskShape::People { detail, edge, .. } = &mut shape {
         detail.clear();
         *edge = 0.0;
     }
     shape
+}
+
+/// What a People request that found no one says.
+pub const NO_PERSON: &str = "No person was found at this face.";
+
+/// What a People request says when the person was found but none of `parts` on them.
+pub fn no_parts(parts: &[String]) -> String {
+    let names: Vec<&str> = people::parts_of(parts).unwrap_or_default().iter().map(|p| p.name()).collect();
+    format!("No {} was found on this person.", names.join(" or ").to_lowercase())
 }
 
 fn clicks_of(include: &[Point], exclude: &[Point]) -> Vec<Click> {
@@ -552,8 +579,51 @@ impl Session {
         }
     }
 
-    /// Start a zoomed-in pass for component `comp` of mask `mask` on photo `id` (an Object or
-    /// Describe selection): the photo around the selection is rendered at a higher resolution
+    /// Segment the parts of the person whose face is `face` on photo `id`, waiting for the
+    /// model; `Ok(None)` when no person is found at the face. (The selection may still be
+    /// empty: a part this person doesn't show, see [`people::selects_anything`].)
+    pub fn segment_people(&mut self, id: PhotoId, face: [f64; 4], parts: &[String]) -> Result<Option<SegMask>, String> {
+        self.segmenter.model_dir()?;
+        let parts = people::parts_of(parts)?;
+        let face = people::face_box(face).ok_or("the face box is outside the photo")?;
+        #[cfg(feature = "sam")]
+        {
+            self.segment_wait(id, worker::Kind::People { face, parts }, None)
+        }
+        #[cfg(not(feature = "sam"))]
+        {
+            let _ = (id, face, parts);
+            Err("AI masks are not available in this build".into())
+        }
+    }
+
+    /// Background mode: queue a People selection; the mask (or component, combined by `op`
+    /// into mask `mask`) is created by [`Session::segment_poll`] when the person is found.
+    pub(crate) fn segment_people_later(
+        &mut self,
+        id: PhotoId,
+        mask: Option<u32>,
+        op: &str,
+        name: Option<String>,
+        req: PeopleRequest,
+    ) -> Result<(), String> {
+        self.segmenter.model_dir()?;
+        let parts = people::parts_of(&req.parts)?;
+        let face = people::face_box(req.face).ok_or("the face box is outside the photo")?;
+        #[cfg(feature = "sam")]
+        {
+            let tag = Tag::NewPeople { photo: id, mask, op: op.to_string(), name, person: req };
+            self.segment_queue(id, worker::Kind::People { face, parts }, tag, None)
+        }
+        #[cfg(not(feature = "sam"))]
+        {
+            let _ = (id, mask, op, name, req, face, parts);
+            Err("AI masks are not available in this build".into())
+        }
+    }
+
+    /// Start a zoomed-in pass for component `comp` of mask `mask` on photo `id` (an Object,
+    /// Describe or People selection): the photo around the selection is rendered at a higher resolution
     /// and segmented again. In background mode [`Session::segment_poll`] applies the result;
     /// otherwise it is applied before this returns. `Ok(false)` when there is nothing to
     /// refine (no selection yet, or it is most of the photo) or a pass is running already.
@@ -567,12 +637,21 @@ impl Session {
                 (seg.clone(), Prompt::Clicks(clicks_of(hint, exclude)))
             }
             MaskShape::Prompt { text, seg: Some(seg), .. } => (seg.clone(), Prompt::Text(text.clone())),
+            MaskShape::People { face: Some(face), parts, seg: Some(seg), .. } => {
+                (seg.clone(), Prompt::People { face: *face, parts: people::parts_of(parts)? })
+            }
             _ => return Ok(false),
         };
         let p = self.catalog.photo(id).ok_or("no such photo")?;
         let (pw, ph) = (f64::from(p.width.max(1)), f64::from(p.height.max(1)));
         let aspect = if d.orientation.swaps_axes() { ph / pw } else { pw / ph };
         let Some(region) = detail_region(&seg, aspect) else { return Ok(false) };
+        // (the person is found again by their face: a region without it can't be refined)
+        if let Prompt::People { face, .. } = &prompt
+            && people::face_in(*face, region).is_none()
+        {
+            return Ok(false);
+        }
         #[cfg(feature = "sam")]
         {
             let kind = worker::Kind::Detail { prompt, region };
@@ -616,6 +695,33 @@ impl Session {
             }
         }
         polled
+    }
+
+    /// A selection found in the background (`p`: its `mask.add` params) becomes a new mask
+    /// (`mask: None`) or a component of `mask` combined by `op`.
+    #[cfg(feature = "sam")]
+    fn add_found(&mut self, photo: PhotoId, mask: Option<u32>, op: &str, name: Option<String>, mut p: serde_json::Value, polled: &mut Polled) {
+        if let Some(n) = name {
+            p["name"] = serde_json::json!(n);
+        }
+        let r = match mask {
+            None => self.execute("mask.add", &p),
+            Some(m) => {
+                if !self.develop_of(photo).is_some_and(|d| d.masks.iter().any(|x| x.id == m)) {
+                    return polled.messages.push("The mask was removed before the selection was found.".into());
+                }
+                self.active_mask = Some(m);
+                p["op"] = serde_json::json!(op);
+                self.execute("mask.addComponent", &p)
+            }
+        };
+        match r {
+            Ok(_) => {
+                polled.changed = true;
+                polled.refine = self.active_mask;
+            }
+            Err(e) => polled.messages.push(e.to_string()),
+        }
     }
 
     #[cfg(feature = "sam")]
@@ -665,28 +771,23 @@ impl Session {
                     return polled.messages.push(format!("The photo changed before “{text}” was found; try again."));
                 }
                 let Ok(seg) = serde_json::to_value(seg) else { return };
-                let mut p = serde_json::json!({"kind": "prompt", "text": text, "seg": seg});
-                if let Some(n) = name {
-                    p["name"] = serde_json::json!(n);
-                }
-                let r = match mask {
-                    None => self.execute("mask.add", &p),
-                    Some(m) => {
-                        if !self.develop_of(photo).is_some_and(|d| d.masks.iter().any(|x| x.id == m)) {
-                            return polled.messages.push("The mask was removed before the selection was found.".into());
-                        }
-                        self.active_mask = Some(m);
-                        p["op"] = serde_json::json!(op);
-                        self.execute("mask.addComponent", &p)
-                    }
+                self.add_found(photo, mask, &op, name, serde_json::json!({"kind": "prompt", "text": text, "seg": seg}), polled);
+            }
+            Tag::NewPeople { photo, mask, op, name, person } => {
+                let seg = match o.result {
+                    Ok(Some(seg)) => seg,
+                    Ok(None) => return polled.messages.push(NO_PERSON.into()),
+                    Err(e) => return polled.messages.push(e),
                 };
-                match r {
-                    Ok(_) => {
-                        polled.changed = true;
-                        polled.refine = self.active_mask;
-                    }
-                    Err(e) => polled.messages.push(e.to_string()),
+                if !seg.logits().is_some_and(|l| people::selects_anything(&l)) {
+                    return polled.messages.push(no_parts(&person.parts));
                 }
+                if self.active() != Some(photo) {
+                    return polled.messages.push("The photo changed before the person was found; try again.".into());
+                }
+                let Ok(seg) = serde_json::to_value(seg) else { return };
+                let p = serde_json::json!({"kind": "people", "person": person.person, "face": person.face, "parts": person.parts, "seg": seg});
+                self.add_found(photo, mask, &op, name, p, polled);
             }
             Tag::Detail { photo, mask, comp, shape } => {
                 let patch = match o.result {
@@ -701,7 +802,7 @@ impl Session {
                     return; // clicked again meanwhile: a newer pass will follow
                 }
                 match &mut c.shape {
-                    MaskShape::Object { detail, .. } | MaskShape::Prompt { detail, .. } => *detail = vec![patch],
+                    MaskShape::Object { detail, .. } | MaskShape::Prompt { detail, .. } | MaskShape::People { detail, .. } => *detail = vec![patch],
                     _ => return,
                 }
                 match self.set_develop(photo, d, "AI Mask Detail") {

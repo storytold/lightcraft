@@ -4,7 +4,8 @@
 //! Components combine with Add (max), Subtract (a·(1−c)) and Intersect (a·c).
 //!
 //! AI shapes (Sky, Subject, Background, People) use the segmentation [`Mattes`] the source carries
-//! (DNG semantic masks, e.g. iPhone ProRAW's) when it has a matching one, else a heuristic.
+//! (DNG semantic masks, e.g. iPhone ProRAW's) when it has a matching one, else a heuristic. A
+//! People shape with a stored SAM 3 selection (`seg`) renders from that, like Object and Describe.
 
 use lightcraft_develop::{BrushStroke, LocalAdjustments, Mask, MaskOp, MaskShape, SegMask};
 use lightcraft_geom::{Orientation, Point};
@@ -104,7 +105,8 @@ impl Mattes {
         match shape {
             MaskShape::Sky => self.of(&[Sky]),
             MaskShape::Subject => person(),
-            MaskShape::People { parts, .. } => {
+            // (a stored SAM 3 selection wins over the mattes)
+            MaskShape::People { seg: None, detail, parts, .. } if detail.is_empty() => {
                 let wanted: Vec<MatteKind> = parts
                     .iter()
                     .filter_map(|p| {
@@ -276,7 +278,9 @@ pub fn shape_alpha(shape: &MaskShape, frame: &Frame, w: usize, h: usize, img: &R
             }
             smooth_plane(&mut out, 0.01 * frame_px(frame, w));
         }
-        MaskShape::Object { seg, detail, edge, .. } | MaskShape::Prompt { seg, detail, edge, .. } if seg.is_some() || !detail.is_empty() => {
+        MaskShape::Object { seg, detail, edge, .. } | MaskShape::Prompt { seg, detail, edge, .. } | MaskShape::People { seg, detail, edge, .. }
+            if seg.is_some() || !detail.is_empty() =>
+        {
             // Edge: below 0 a steeper transition (up to 8× the logits), above 0 feathered (up to
             // 2 % of the long edge, so previews and exports match)
             let e = (*edge / 100.0).clamp(-1.0, 1.0) as f32;
@@ -765,6 +769,14 @@ mod tests {
         for shape in [
             MaskShape::Object { hint: vec![Point::new(0.25, 0.5)], exclude: vec![], seg: Some(seg.clone()), detail: vec![], edge: 0.0 },
             MaskShape::Prompt { text: "left".into(), seg: Some(seg.clone()), detail: vec![], edge: 0.0 },
+            MaskShape::People {
+                person: 0,
+                parts: vec!["Hair".into()],
+                face: Some([0.2, 0.2, 0.3, 0.4]),
+                seg: Some(seg.clone()),
+                detail: vec![],
+                edge: 0.0,
+            },
         ] {
             for (w, h) in [(40, 20), (400, 200)] {
                 let a = shape_alpha(&shape, &frame(w, h), w, h, &Rgb32f::new(w, h), &Plane::new(w, h), 0.0, None);
@@ -1186,9 +1198,20 @@ mod tests {
         assert!(subject.get(10, 50) > 0.99 && subject.get(190, 50) > 0.99 && subject.get(100, 50) < 0.01);
         let background = eval(&MaskShape::Background);
         assert!(background.get(100, 50) > 0.99 && background.get(10, 50) < 0.01);
-        let hair = eval(&MaskShape::People { person: 0, parts: vec!["Hair".into()] });
+        let people = |part: &str| MaskShape::People { person: 0, parts: vec![part.into()], face: None, seg: None, detail: vec![], edge: 0.0 };
+        let hair = eval(&people("Hair"));
         assert!(hair.get(190, 50) > 0.99 && hair.get(10, 50) < 0.01);
-        let lips = MaskShape::People { person: 0, parts: vec!["Lips".into()] };
+        let lips = people("Lips");
         assert_eq!(eval(&lips), shape_alpha(&lips, &f, w, h, &img, &l, 0.0, None));
+        // a SAM 3 selection (here: the middle third) wins over the mattes
+        let side = 12;
+        let logits: Vec<f32> = (0..side * side).map(|i| if (4..8).contains(&(i % side)) { 12.0 } else { -12.0 }).collect();
+        let mut chosen = people("Hair");
+        if let MaskShape::People { seg, face, .. } = &mut chosen {
+            *seg = Some(SegMask::from_logits(side, &logits));
+            *face = Some([0.45, 0.2, 0.55, 0.4]);
+        }
+        let a = eval(&chosen);
+        assert!(a.get(100, 50) > 0.99 && a.get(190, 50) < 0.01 && a.get(10, 50) < 0.01);
     }
 }

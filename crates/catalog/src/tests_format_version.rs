@@ -28,6 +28,49 @@ fn snapshot_version(m: &MemStore) -> u64 {
     v["version"].as_u64().unwrap()
 }
 
+/// v10 added a People mask's SAM 3 selection (`face`, `seg`, `detail`, `edge`). A v9 library with
+/// a People mask (person and parts only) opens as it was and is rewritten as v10; a v10 library
+/// keeps the selection across an unrelated op and the next snapshot. (Builds that don't know the
+/// fields refuse a v10 library: `newer_snapshot_is_refused_untouched`.)
+#[test]
+fn people_selections_survive_open_op_and_snapshot() {
+    use lightcraft_develop::{DevelopSettings, Mask, MaskComponent, MaskOp, MaskShape, SegMask};
+    let people = |seg: Option<SegMask>| {
+        let mut d = DevelopSettings::default();
+        let face = seg.as_ref().map(|_| [0.4, 0.2, 0.5, 0.35]);
+        let shape = MaskShape::People { person: 0, parts: vec!["Hair".into()], face, seg, detail: vec![], edge: 0.0 };
+        d.masks.push(Mask { id: 1, components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape }], ..Mask::default() });
+        std::sync::Arc::new(d)
+    };
+    let mut c = Catalog::new();
+    let op = photo(&mut c);
+    c.apply(op).unwrap();
+    let id = c.photos().next().unwrap().id;
+    c.apply(Op::SetDevelop { id, settings: people(None), label: "People".into(), edited: None }).unwrap();
+    // v9: a People mask without a selection is upgraded to the current format
+    let m = MemStore::new();
+    m.set(SNAPSHOT, format!("{{\"format\":\"lightcraft-catalog\",\"version\":9,\"seq\":2,\"catalog\":{}}}\n", c.to_snapshot()).into_bytes());
+    let (_, loaded, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!(r.upgraded_from, Some(9));
+    assert_eq!(snapshot_version(&m), u64::from(VERSION));
+    assert_eq!(loaded.to_snapshot(), c.to_snapshot());
+    // the current format: the selection is kept across an unrelated op and a snapshot
+    c.apply(Op::SetDevelop { id, settings: people(Some(SegMask::from_logits(4, &[3.0; 16]))), label: "People".into(), edited: None }).unwrap();
+    let want = c.photo(id).unwrap().develop.masks.clone();
+    let m = MemStore::new();
+    m.set(SNAPSHOT, format!("{{\"format\":\"lightcraft-catalog\",\"version\":{VERSION},\"seq\":3,\"catalog\":{}}}\n", c.to_snapshot()).into_bytes());
+    let (mut j, mut loaded, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!(r.upgraded_from, None);
+    let op = Op::SetRating { id, rating: 5 };
+    j.append(std::slice::from_ref(&op)).unwrap();
+    loaded.apply(op).unwrap();
+    j.snapshot(&loaded).unwrap();
+    drop(j);
+    let (_, reread, _) = Journal::open(Box::new(m)).unwrap();
+    assert_eq!(reread.photo(id).unwrap().rating, 5);
+    assert_eq!(reread.photo(id).unwrap().develop.masks, want);
+}
+
 #[test]
 fn v1_library_loads_and_is_upgraded() {
     let (base, log, full) = legacy_parts();
@@ -238,8 +281,8 @@ fn op_variants_are_versioned() {
             Op::SetHistoryCursor { .. } => 8,
         }
     }
-    /// v9: `Photo.preview_checked` and `Op::SetContent.preview_checked`.
-    const NEWEST_FIELDS: u32 = 9;
+    /// v10: `MaskShape::People.face` / `seg` / `detail` / `edge` (a People mask's SAM 3 selection).
+    const NEWEST_FIELDS: u32 = 10;
     let newest = since(&Op::SetHistoryCursor { id: PhotoId(1), cursor: None });
     assert_eq!(newest.max(NEWEST_FIELDS), VERSION, "the newest op's or fields' version must be the current format version");
 }
