@@ -363,6 +363,15 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         {
             control(app, ui, d, c, true);
         }
+        // single outlier photosites, replaced in the raw mosaic (#1345): raws only
+        if app.session.catalog.photo(id).is_some_and(|p| p.develops_raw()) {
+            egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 4, bottom: 0 }).show(ui, |ui| {
+                let mut on = d.detail.nr_outliers;
+                if super::settings::check(ui, "detail.nrOutliers", &mut on, "Remove Hot Pixels") {
+                    let _ = app.run("develop.merge", json!({"settings": {"detail": {"nr_outliers": on}}, "label": "Remove Hot Pixels"}));
+                }
+            });
+        }
         ui.add_space(8.0);
     });
     section(app, ui, &d, "optics", "Optics", |app, ui, d| {

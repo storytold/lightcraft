@@ -458,6 +458,9 @@ pub struct AppSettings {
     pub photocraft_file: EditFile,
     /// Memory the caches may hold together, in MB (0 = automatic; `app.memoryBudget`).
     pub memory_mb: u32,
+    /// Remove Hot Pixels leaves a raw alone when more than this share of its photosites, in percent, would be
+    /// replaced (`app.hotPixelLimit`).
+    pub hot_pixel_limit: f32,
     /// Filmstrip: file names above the thumbnails.
     pub film_names: bool,
     /// Filmstrip: rating / flag / edited badges on the thumbnails.
@@ -526,6 +529,7 @@ impl Default for AppSettings {
             photocraft_path: String::new(),
             photocraft_file: EditFile { format: EditFormat::Psd, ..EditFile::default() },
             memory_mb: 0,
+            hot_pixel_limit: HOT_PIXEL_LIMIT_DEFAULT,
             film_names: true,
             film_badges: true,
             grid_badges: GridBadges::Auto,
@@ -604,6 +608,10 @@ impl EditFile {
 
 /// Preview size limits offered in Settings → Performance (0 = Automatic).
 pub const PREVIEW_LIMITS: [u32; 5] = [0, 1600, 2560, 3840, 5120];
+
+/// Hot pixel limits offered in Settings → Performance (percent of a raw's photosites), and the default.
+pub const HOT_PIXEL_LIMITS: [f32; 5] = [0.05, 0.1, 0.2, 0.5, 1.0];
+pub const HOT_PIXEL_LIMIT_DEFAULT: f32 = 0.2;
 
 /// The most the loupe ever renders in one go (memory and GPU texture size), whatever the setting.
 pub const LOUPE_EDGE_CEILING: u32 = 8192;

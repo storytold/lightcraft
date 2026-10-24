@@ -1,5 +1,17 @@
 # What's new in LightCraft
 
+## Unreleased
+
+### Remove Hot Pixels
+- Detail ▸ Noise Reduction has a new box, Remove Hot Pixels (raws only), on for newly imported raws (issue #1345).
+  At high ISO single photosites read far brighter than all their neighbours and turn into small red, green or blue
+  dots that noise reduction only makes fainter. They are now replaced before the raw is developed. A point of light
+  spread over neighbouring photosites, such as a star, is kept; untick the box for star fields that need every
+  single-photosite point. Photos edited earlier keep their look: the box is off for them.
+- A raw that would have more than 0.2 % of its photosites replaced is left unchanged: such a photo doesn't look like
+  hot pixels on a sensor. Stars and other points of light that are kept don't count, so a dense star field still
+  loses its hot pixels. Settings ▸ Performance ▸ Hot pixel limit sets the share (0.05 % to 1 %).
+
 ## 2026-10-24
 
 ### Relative-date filters and smart albums follow the clock

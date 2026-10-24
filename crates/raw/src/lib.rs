@@ -32,6 +32,7 @@ mod dng;
 pub mod dngwrite;
 pub mod gaintable;
 pub mod highlight;
+mod hotpixel;
 #[cfg(feature = "jxl")]
 mod jxl;
 pub mod kelvin_builtin;
@@ -53,6 +54,7 @@ mod wb_estimate;
 
 pub use demosaic::{Method, demosaic};
 pub use dngwrite::{DngCompression, DngWriteOptions, write_dng, write_rendered_dng};
+pub use hotpixel::HOT_PIXEL_MAX_SHARE;
 pub use lens_metadata::LensMetadata;
 pub use lightcraft_color::Mat3;
 pub use lightcraft_geom::Orientation;

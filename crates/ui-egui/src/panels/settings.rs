@@ -16,7 +16,7 @@ use egui::RichText;
 use serde_json::{Value, json};
 
 use crate::LightcraftApp;
-use crate::state::{GridBadges, PREVIEW_LIMITS, StartupView};
+use crate::state::{GridBadges, HOT_PIXEL_LIMIT_DEFAULT, HOT_PIXEL_LIMITS, PREVIEW_LIMITS, StartupView};
 use crate::theme::Tokens;
 use crate::widgets::register;
 
@@ -616,6 +616,21 @@ fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         let opts = [(0u32, auto.as_str()), (512, "512 MB"), (1024, "1 GB"), (2048, "2 GB"), (4096, "4 GB")];
         choices(ui, "settingsMemory", &opts, &mut app.ui.settings.memory_mb);
     });
+    row(ui, t, crate::i18n::tr("Hot pixel limit"), |ui| {
+        let opts: Vec<(f32, String)> = HOT_PIXEL_LIMITS
+            .iter()
+            .map(|p| (*p, if *p == HOT_PIXEL_LIMIT_DEFAULT { format!("{p} % ({})", crate::i18n::tr("default")) } else { format!("{p} %") }))
+            .collect();
+        let opts: Vec<(f32, &str)> = opts.iter().map(|(p, l)| (*p, l.as_str())).collect();
+        choices(ui, "settingsHotPixels", &opts, &mut app.ui.settings.hot_pixel_limit);
+    });
+    hint(
+        ui,
+        t,
+        crate::i18n::tr(
+            "Remove Hot Pixels (Detail) leaves a raw unchanged when more than this share of its photosites would be replaced: such a photo doesn't look like hot pixels on a sensor. Stars and other points of light it keeps don't count.",
+        ),
+    );
     heading(ui, t, crate::i18n::tr("Thumbnail cache"));
     let cur = (app.session.cache_bytes() >> 20) as u32;
     row(ui, t, crate::i18n::tr("Size limit"), |ui| {

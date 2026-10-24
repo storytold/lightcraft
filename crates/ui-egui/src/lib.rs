@@ -508,6 +508,8 @@ pub struct LightcraftApp {
     pub gpu_notice: bool,
     /// The memory budget setting last applied (MB, 0 = automatic).
     memory_applied: Option<u32>,
+    /// The hot pixel limit last applied (percent).
+    hot_pixels_applied: Option<f32>,
     /// The display profile setting last applied (`app.displayProfile`).
     pub(crate) display_applied: Option<String>,
     /// Why the display profile setting could not be applied (shown in Settings ▸ Display).
@@ -602,6 +604,7 @@ impl LightcraftApp {
             gpu_applied: None,
             gpu_notice: false,
             memory_applied: None,
+            hot_pixels_applied: None,
             display_applied: None,
             display_error: None,
             screen_profile: None,
@@ -1369,6 +1372,12 @@ impl LightcraftApp {
             let _ = self.session.execute("app.memoryBudget", &serde_json::json!({"mb": mb}));
         }
         self.memory_applied = Some(mb);
+        let limit = self.ui.settings.hot_pixel_limit;
+        if self.hot_pixels_applied != Some(limit) {
+            self.hot_pixels_applied = Some(limit);
+            // (a value the engine refuses, from a hand-edited file, leaves its limit as it was)
+            let _ = self.session.execute("app.hotPixelLimit", &serde_json::json!({"percent": limit}));
+        }
         // the monitor profile (Settings ▸ Display): previews follow it from the next frame
         if self.display_applied.as_ref() != Some(&self.ui.settings.display_profile) {
             let path = self.ui.settings.display_profile.clone();

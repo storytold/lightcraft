@@ -360,33 +360,71 @@ pub fn bin_factor(raw: &lightcraft_raw::RawImage, max_edge: usize) -> Option<usi
     [8usize, 6, 4, 3, 2].into_iter().find(|&k| raw.can_bin(k) && (long / k >= need || (k == 3 && !raw.can_bin(2) && long / k >= need3)))
 }
 
+/// Remove Hot Pixels leaves a raw alone when more than this share of its photosites would be replaced (Settings ▸
+/// Performance ▸ Hot pixel limit, `app.hotPixelLimit`), as `f64` bits. Process-wide, like the GPU switch.
+static HOT_PIXEL_LIMIT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(lightcraft_raw::HOT_PIXEL_MAX_SHARE.to_bits());
+
+/// The share of a raw's photosites Remove Hot Pixels may replace (0..1).
+pub fn hot_pixel_limit() -> f64 {
+    f64::from_bits(HOT_PIXEL_LIMIT.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+/// Set [`hot_pixel_limit`]; false (nothing changed) unless `share` is a new value in 0..=1. Sources decoded before
+/// keep the old limit: the caller forgets them ([`crate::media::MediaCache::clear_sources`]).
+pub fn set_hot_pixel_limit(share: f64) -> bool {
+    if !(0.0..=1.0).contains(&share) {
+        return false;
+    }
+    HOT_PIXEL_LIMIT.swap(share.to_bits(), std::sync::atomic::Ordering::Relaxed) != share.to_bits()
+}
+
+/// What [`hot_pixel_limit`] adds to the render cache keys of `settings`: nothing at the default limit or when they
+/// don't remove hot pixels, so those renders stay valid whatever the limit.
+pub fn hot_pixel_key(settings: &lightcraft_develop::DevelopSettings) -> u64 {
+    let limit = hot_pixel_limit();
+    if !settings.removes_hot_pixels() || limit.to_bits() == lightcraft_raw::HOT_PIXEL_MAX_SHARE.to_bits() {
+        return 0;
+    }
+    limit.to_bits().wrapping_mul(0x9e37_79b9_7f4a_7c15).rotate_left(29)
+}
+
 /// Decode a file into a linear Rec.2020 image no larger than `max_edge`, oriented.
 ///
 /// Runs on a rayon worker: its many short parallel loops then start on the worker's own queue
 /// instead of each one waking the pool from outside and waiting for it (which costs more than the
 /// loops themselves when the machine is busy).
 pub fn load_bytes(bytes: &[u8], max_edge: usize) -> Result<(Rgb32f, SourceInfo), String> {
-    rayon::scope(|_| load_bytes_now(std::borrow::Cow::Borrowed(bytes), max_edge, None, false).map(|(img, _, info, _)| (img, info)))
+    load_bytes_with(bytes, max_edge, false)
+}
+
+/// [`load_bytes`], with a raw's single outlier photosites replaced in the mosaic first when `outliers` is set
+/// ([`lightcraft_develop::Detail::nr_outliers`]).
+pub fn load_bytes_with(bytes: &[u8], max_edge: usize, outliers: bool) -> Result<(Rgb32f, SourceInfo), String> {
+    rayon::scope(|_| load_bytes_now(std::borrow::Cow::Borrowed(bytes), max_edge, None, outliers, false).map(|(img, _, info, _)| (img, info)))
 }
 
 /// [`load_bytes`] taking the file's bytes: a raw file's bytes are freed as soon as it is decoded
 /// (less memory held while it is developed).
-pub fn load_vec(bytes: Vec<u8>, max_edge: usize) -> Result<(Rgb32f, SourceInfo), String> {
-    rayon::scope(move |_| load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, None, false).map(|(img, _, info, _)| (img, info)))
+pub fn load_vec(bytes: Vec<u8>, max_edge: usize, outliers: bool) -> Result<(Rgb32f, SourceInfo), String> {
+    rayon::scope(move |_| load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, None, outliers, false).map(|(img, _, info, _)| (img, info)))
 }
 
 /// [`load_vec`] for a thumbnail: a DNG that keeps reduced-resolution copies of its raw image (Lightroom's HDR and
 /// panorama merges) develops the smallest that covers `max_edge` instead of the whole image. The flag says whether
 /// it did: such a picture is not the full image, and an export never renders from it.
-pub fn load_vec_reduced(bytes: Vec<u8>, max_edge: usize) -> Result<(Rgb32f, SourceInfo, bool), String> {
-    rayon::scope(move |_| load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, None, true).map(|(img, _, info, reduced)| (img, info, reduced)))
+pub fn load_vec_reduced(bytes: Vec<u8>, max_edge: usize, outliers: bool) -> Result<(Rgb32f, SourceInfo, bool), String> {
+    rayon::scope(move |_| {
+        load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, None, outliers, true).map(|(img, _, info, reduced)| (img, info, reduced))
+    })
 }
 
 /// [`load_vec`] that also develops the photo's cached denoised picture (`spec`) from the same decode: the plain
 /// picture, the denoised one (`None` when it cannot be read or does not fit this raw: the plain one is then all
 /// there is) and the source facts. Both pictures are the same size.
-pub fn load_vec_pair(bytes: Vec<u8>, max_edge: usize, spec: &DenoiseSpec) -> Result<(Rgb32f, Option<Rgb32f>, SourceInfo), String> {
-    rayon::scope(move |_| load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, Some(spec), false).map(|(img, twin, info, _)| (img, twin, info)))
+pub fn load_vec_pair(bytes: Vec<u8>, max_edge: usize, spec: &DenoiseSpec, outliers: bool) -> Result<(Rgb32f, Option<Rgb32f>, SourceInfo), String> {
+    rayon::scope(move |_| {
+        load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, Some(spec), outliers, false).map(|(img, twin, info, _)| (img, twin, info))
+    })
 }
 
 /// The denoised camera RGB of `raw` from its cached product, as the plain development would have it: the default
@@ -415,6 +453,7 @@ fn load_bytes_now(
     bytes: std::borrow::Cow<'_, [u8]>,
     max_edge: usize,
     denoise: Option<&DenoiseSpec>,
+    outliers: bool,
     allow_reduced: bool,
 ) -> Result<(Rgb32f, Option<Rgb32f>, SourceInfo, bool), String> {
     if lightcraft_raw::probe(&bytes).is_some() {
@@ -438,6 +477,14 @@ fn load_bytes_now(
             }
             Err(Err(e)) => return Err(e),
         };
+        // single outlier photosites, replaced in the mosaic before anything is developed from it (#1345)
+        if outliers {
+            let t = std::time::Instant::now();
+            let n = raw.suppress_hot_pixels_with(hot_pixel_limit());
+            if lightcraft_pipeline::profiling() {
+                eprintln!("[profile] raw outliers: {n} photosites replaced in {:.1} ms", t.elapsed().as_secs_f64() * 1e3);
+            }
+        }
         // Embedded lens corrections are applied by the pipeline ("Enable Profile Corrections"), not baked in
         // (removed before the camera look's binned sensor proxy too, which needs an empty `OpcodeList3`).
         let info = raw.info();
@@ -1072,13 +1119,13 @@ fn quick_image_srgb(header: &[u8], window: &[u8], adobe_rgb: bool, max_edge: usi
 /// The filesystem-backed [`PairLoader`]: the file is read and decoded once, and developed as usual and from the photo's
 /// denoised picture. It holds two pictures at once, so it counts for more at the memory gate than a plain load.
 pub fn fs_pair_loader() -> PairLoader {
-    Arc::new(|path: &str, max_edge: usize, spec: &DenoiseSpec| {
+    Arc::new(|path: &str, max_edge: usize, spec: &DenoiseSpec, outliers: bool| {
         let len = std::fs::metadata(path).map(|m| m.len() as usize).unwrap_or(0);
         let weight = len * if max_edge <= crate::media::SourceLevel::Thumb.max_edge() { 4 } else { 10 };
         let gate = crate::memory::work_gate();
         let _permit = if crate::memory::is_background() { gate.acquire(weight) } else { gate.acquire_urgent(weight) };
         let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
-        let r = load_vec_pair(bytes, max_edge, spec);
+        let r = load_vec_pair(bytes, max_edge, spec, outliers);
         crate::memory::release();
         r
     })
@@ -1092,7 +1139,8 @@ pub fn fs_pair_loader() -> PairLoader {
 /// interactive loads (the loupe, exports) never wait — they are counted, so background work
 /// yields to them.
 pub fn fs_hooks() -> (FileLoader, FileProbe) {
-    let loader: FileLoader = Arc::new(|path: &str, max_edge: usize| fs_load(path, max_edge, |bytes| load_vec(bytes, max_edge)));
+    let loader: FileLoader =
+        Arc::new(|path: &str, max_edge: usize, outliers: bool| fs_load(path, max_edge, |bytes| load_vec(bytes, max_edge, outliers)));
     let probe: FileProbe = Arc::new(|path: &str| {
         let len = std::fs::metadata(path).map(|m| usize::try_from(m.len()).unwrap_or(usize::MAX)).unwrap_or(0);
         let _permit = crate::memory::work_gate().acquire(len);
@@ -1106,7 +1154,7 @@ pub fn fs_hooks() -> (FileLoader, FileProbe) {
 
 /// The filesystem [`ReducedLoader`]: [`load_vec_reduced`] of the file, gated like [`fs_hooks`]' loader.
 pub fn fs_reduced_loader() -> ReducedLoader {
-    Arc::new(|path: &str, max_edge: usize| fs_load(path, max_edge, |bytes| load_vec_reduced(bytes, max_edge)))
+    Arc::new(|path: &str, max_edge: usize, outliers: bool| fs_load(path, max_edge, |bytes| load_vec_reduced(bytes, max_edge, outliers)))
 }
 
 /// Read `path` and `load` it, waiting on [`crate::memory::work_gate`] as [`fs_hooks`] explains.
@@ -1677,7 +1725,7 @@ pub(crate) mod tests {
         product::write(&path, &camera_rgb, key).unwrap();
         let spec = DenoiseSpec { product: path, key: key.into(), make: None };
         let (ordinary, _) = load_bytes(&bytes, 2048).unwrap();
-        let (plain, cached, _) = load_vec_pair(bytes, 2048, &spec).unwrap();
+        let (plain, cached, _) = load_vec_pair(bytes, 2048, &spec, false).unwrap();
         assert_eq!(plain.data, ordinary.data, "requesting a twin must not change the ordinary path");
         let cached = cached.unwrap();
         assert_eq!((plain.width, plain.height), (24, 32));
@@ -2343,10 +2391,10 @@ pub(crate) mod tests {
         let mean = |img: &lightcraft_raster::Rgba8| img.data.iter().map(|p| p[1] as f64).sum::<f64>() / img.data.len().max(1) as f64;
 
         // the loaders: only the thumbnail's develops the copy, and only when it covers the size
-        let (copy, _, used) = load_vec_reduced(bytes.clone(), 512).unwrap();
+        let (copy, _, used) = load_vec_reduced(bytes.clone(), 512, false).unwrap();
         assert!(used, "a thumbnail develops the copy");
-        assert!(!load_vec_reduced(bytes.clone(), 1024).unwrap().2, "no copy covers 1024 px");
-        let (full, _) = load_vec(bytes.clone(), 512).unwrap();
+        assert!(!load_vec_reduced(bytes.clone(), 1024, false).unwrap().2, "no copy covers 1024 px");
+        let (full, _) = load_vec(bytes.clone(), 512, false).unwrap();
         assert!(g(&copy) > 4.0 * g(&full), "the fixture's copy is much brighter: {} vs {}", g(&copy), g(&full));
 
         let dir = std::env::temp_dir().join(format!("lc-reduced-export-{}", std::process::id()));
