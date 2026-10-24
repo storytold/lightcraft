@@ -263,6 +263,10 @@ bit-identical, and one (the point colour range overlay) has max 2 LSB on 0.0002%
 mean 0.0003 LSB. That is the same picture as on Metal, inside the bounds
 (`cargo test -p lightcraft-gpu --release --test it equivalence:: -- --nocapture`).
 
+**NVIDIA RTX Spark N1X (6144-core Blackwell RTX GPU, DX12 32.0.16.1742 + Vulkan 617.42, Windows 11 ARM64 `aarch64-pc-windows-msvc`), 2026-10-19**:
+all 17 tests pass on both DX12 (FXC) and Vulkan, with **max 1 LSB** and **worst mean ≤ 0.0003 LSB**
+across every case (`0.0000%` of pixels > 1 LSB).
+
 Remaining differences come from f32 vs f64 coordinate math, fast-math transcendental functions on
 Metal and summation order in the box filters — all far below one 8-bit step.
 

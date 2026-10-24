@@ -534,7 +534,7 @@ impl FaceGpu {
             mark_broken(&format!("the GPU did not finish a face model: {e}"));
             return Err(format!("the GPU did not finish: {e}"));
         }
-        match rx.recv_timeout(Duration::from_secs(10)) {
+        match crate::ctx::wait_for_map(&d.device, &rx, Duration::from_secs(10)) {
             Ok(Ok(())) => {}
             Ok(Err(e)) => return Err(format!("reading the result back failed: {e}")),
             Err(e) => return Err(format!("reading the result back failed: {e}")),

@@ -770,6 +770,7 @@ impl NetRunner {
         self.wake.notify_one();
     }
 
+    /// Upload `input` into `w`, dispatch the network's kernels, wait for the GPU and read the output tile back.
     fn execute(&self, w: &Workspace, input: &[f32]) -> Result<Vec<f32>, Error> {
         let d = self.shared.dev;
         let (t, c) = (self.tile, self.in_channels);
@@ -808,13 +809,13 @@ impl NetRunner {
         }
         let bytes = (self.shared.layout.out_floats * 4) as u64;
         enc.copy_buffer_to_buffer(&w.output, 0, &w.staging, 0, bytes);
-        d.queue.submit([enc.finish()]);
+        let index = d.queue.submit([enc.finish()]);
         let slice = w.staging.slice(..bytes);
         let (tx, rx) = std::sync::mpsc::channel();
         slice.map_async(wgpu::MapMode::Read, move |r| {
             let _ = tx.send(r);
         });
-        let waited = d.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: Some(TIMEOUT) });
+        let waited = d.device.poll(wgpu::PollType::Wait { submission_index: Some(index), timeout: Some(TIMEOUT) });
         let [oom, validation, internal] = scopes;
         let errors = [pollster::block_on(internal.pop()), pollster::block_on(validation.pop()), pollster::block_on(oom.pop())];
         let [internal, validation, oom] = errors;
@@ -830,7 +831,7 @@ impl NetRunner {
             mark_broken(&format!("the GPU did not finish a tile: {e}"));
             return Err(Error::Runtime(format!("the GPU did not finish: {e}")));
         }
-        match rx.recv_timeout(Duration::from_secs(10)) {
+        match crate::ctx::wait_for_map(&d.device, &rx, Duration::from_secs(10)) {
             Ok(Ok(())) => {}
             Ok(Err(e)) => return Err(Error::Runtime(format!("reading the result back failed: {e}"))),
             Err(e) => return Err(Error::Runtime(format!("reading the result back failed: {e}"))),

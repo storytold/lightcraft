@@ -294,10 +294,11 @@ mod tests {
     /// wgpu's default panic. Needs an adapter; skipped where there is none (CI without a GPU).
     #[test]
     fn pipeline_errors_are_captured_not_panics() {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: backend::window_backends(),
-            ..wgpu::InstanceDescriptor::new_without_display_handle()
-        });
+        let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+        desc.backends = backend::window_backends();
+        desc.backend_options = backend::backend_options();
+        desc.flags = backend::instance_flags_from_env(desc.flags);
+        let instance = wgpu::Instance::new(desc);
         let Ok(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) else {
             lightcraft_testkit::skip!(Gpu, "no GPU adapter");
             return;

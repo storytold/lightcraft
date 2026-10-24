@@ -421,10 +421,11 @@ impl Gpu {
     }
 
     /// Submit command buffers, then make the buffers this thread dropped before reusable.
-    pub fn submit(&self, cmds: impl IntoIterator<Item = wgpu::CommandBuffer>) {
-        self.queue.submit(cmds);
+    pub fn submit(&self, cmds: impl IntoIterator<Item = wgpu::CommandBuffer>) -> wgpu::SubmissionIndex {
+        let index = self.queue.submit(cmds);
         let retired = take_retired();
         self.pool(retired);
+        index
     }
 
     /// Put reusable buffers into the free pool (trimmed to its limit).
@@ -586,7 +587,7 @@ impl Gpu {
             mapped_at_creation: false,
         });
         enc.copy_buffer_to_buffer(src.raw(), 0, &staging, 0, size);
-        self.submit([enc.finish()]);
+        let index = self.submit([enc.finish()]);
         let slice = staging.slice(..size);
         let (tx, rx) = std::sync::mpsc::channel();
         slice.map_async(wgpu::MapMode::Read, move |r| {
@@ -599,11 +600,10 @@ impl Gpu {
         // A lost device makes the wait fail ([`Gpu::poll`] turns wgpu's panic into the error) and
         // the map callback never run: checking both keeps this from blocking forever (or handing
         // back an unwritten buffer as the image).
-        if let Err(e) = self.poll(wgpu::PollType::Wait { submission_index: None, timeout: Some(READBACK_TIMEOUT) }) {
+        if let Err(e) = self.poll(wgpu::PollType::Wait { submission_index: Some(index), timeout: Some(READBACK_TIMEOUT) }) {
             return failed(e);
         }
-        // another thread's poll may be the one that runs the callback: allow it a moment
-        match rx.recv_timeout(std::time::Duration::from_secs(10)) {
+        match wait_for_map(&self.device, &rx, std::time::Duration::from_secs(10)) {
             Ok(Ok(())) => {}
             Ok(Err(e)) => return failed(format!("{e}")),
             Err(e) => return failed(format!("map callback: {e}")),
@@ -616,6 +616,36 @@ impl Gpu {
         drop(data);
         staging.unmap();
         out
+    }
+}
+
+/// Receive the result of a `map_async` callback after `PollType::Wait` has returned, polling
+/// `device` if the callback has not fired yet (e.g. on DX12 when another thread is also polling
+/// the device or when the fence signals before pending map callbacks are invoked).
+pub(crate) fn wait_for_map(
+    device: &wgpu::Device,
+    rx: &std::sync::mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>,
+    timeout: std::time::Duration,
+) -> Result<Result<(), wgpu::BufferAsyncError>, std::sync::mpsc::RecvTimeoutError> {
+    if let Ok(r) = rx.try_recv() {
+        return Ok(r);
+    }
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        let poll = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| device.poll(wgpu::PollType::Poll)));
+        match rx.try_recv() {
+            Ok(r) => return Ok(r),
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => return Err(std::sync::mpsc::RecvTimeoutError::Disconnected),
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                if !matches!(poll, Ok(Ok(_))) {
+                    return Err(std::sync::mpsc::RecvTimeoutError::Disconnected);
+                }
+                if std::time::Instant::now() >= deadline {
+                    return Err(std::sync::mpsc::RecvTimeoutError::Timeout);
+                }
+                std::thread::yield_now();
+            }
+        }
     }
 }
 
