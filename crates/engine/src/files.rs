@@ -1220,10 +1220,10 @@ pub(crate) mod tests {
             (t.round(), tint.round())
         });
         // a camera without measured matrices: relative, whatever the multipliers
-        let a7m2 = WbScaleOf::new(RawFormat::Arw, &ColorData::default(), mul, &meta("SONY", "ILCE-7M2"));
+        let a7m2 = WbScaleOf::new(RawFormat::Arw, &ColorData::default(), mul, &meta("SONY", "DSC-R1"));
         assert!(a7m2.relative && !a7m2.legacy_relative && a7m2.scale_white.is_none());
         assert_eq!(a7m2.as_shot(d65), (6500.0, 0.0));
-        assert!(lightcraft_catalog::relative_wb_camera("ARW", "SONY ILCE-7M2"));
+        assert!(lightcraft_catalog::relative_wb_camera("ARW", "SONY DSC-R1"));
         // a camera without matrices whose presets give the scale: Kelvin through them, Sony's daylight preset as
         // 5500 K or so; without presets in the file the scale is Kelvin still, the white the tags' (D65)
         let g = |r: f32, b: f32| [r / 1024.0, 1.0, b / 1024.0];
@@ -1258,7 +1258,7 @@ pub(crate) mod tests {
         let bare = WbScaleOf::new(RawFormat::Arw, &ColorData::default(), mul, &meta("SONY", "ILCA-99M2"));
         assert!(bare.legacy_relative && bare.scale_white.is_none());
         // presets in a file of a camera not listed: relative, as the catalog decides from the camera alone
-        let other = WbScaleOf::new(RawFormat::Arw, &with, mul, &meta("SONY", "ILCE-1"));
+        let other = WbScaleOf::new(RawFormat::Arw, &with, mul, &meta("SONY", "DSC-R1"));
         assert!(other.relative && other.scale_white.is_none());
         let unknown = WbScaleOf::new(RawFormat::Nef, &ColorData::default(), mul, &lightcraft_meta::Metadata::default());
         assert!(unknown.relative && unknown.as_shot(d65) == (6500.0, 0.0));
@@ -1271,9 +1271,29 @@ pub(crate) mod tests {
         assert!(!lightcraft_catalog::relative_wb_camera("DNG", "SONY ILCE-7M3"));
     }
 
+    /// A Fujifilm X-Trans III body reads Kelvin through the neutral pair its RAF stores (issue #730); without the pair
+    /// in the file, or on a body with matrices (X-T3), nothing changes.
+    #[test]
+    fn a_fujifilm_x_trans_iii_raf_reads_kelvin_through_its_neutral_pair() {
+        use lightcraft_raw::{ColorData, RawFormat};
+        let meta = |make: &str, model: &str| lightcraft_meta::Metadata { make: Some(make.into()), model: Some(model.into()), ..Default::default() };
+        let a = [366.0f32 / 302.0, 1.0, 866.0 / 302.0];
+        let d65 = [646.0f32 / 302.0, 1.0, 498.0 / 302.0];
+        let pair = lightcraft_raw::kelvin_presets::KelvinPresets::from_neutral_pair(a, d65);
+        assert!(pair.is_some());
+        let with = ColorData { kelvin_presets: pair, ..Default::default() };
+        let xt20 = WbScaleOf::new(RawFormat::Raf, &with, Some(d65), &meta("FUJIFILM", "X-T20"));
+        assert!(!xt20.relative && xt20.scale_white.is_some());
+        let (t, tint) = xt20.as_shot(lightcraft_color::cct::temp_tint_to_xy(6500.0, 0.0));
+        assert!((6000.0..7000.0).contains(&t) && tint.abs() < 25.0, "{t} {tint}");
+        assert!(!lightcraft_catalog::relative_wb_camera("RAF", "FUJIFILM X-T20"));
+        let bare = WbScaleOf::new(RawFormat::Raf, &ColorData::default(), Some(d65), &meta("FUJIFILM", "X-T20"));
+        assert!(bare.scale_white.is_none());
+    }
+
     /// A merged DNG (Photo Merge) of a raw without colour matrices shows the As Shot temperature and tint its source
     /// shows, on every scale: through the measured matrices (ILCE-7M3), through the presets (ILCA-99M2), the relative
-    /// scale's 6500 K / 0 (ILCE-7M2) and a file's own white (an unfitted format). Merges of real ILCE-7M3 brackets
+    /// scale's 6500 K / 0 (DSC-R1) and a file's own white (an unfitted format). Merges of real ILCE-7M3 brackets
     /// opened at 6113–7307 K / +115 where the ARWs show 3932–5268 K / +7.
     #[test]
     fn a_merged_dng_shows_the_white_balance_its_source_shows() {
@@ -1291,7 +1311,7 @@ pub(crate) mod tests {
         let cases = [
             (RawFormat::Arw, ColorData::default(), [2.5039f32, 1.0, 1.5078], meta("SONY", "ILCE-7M3")),
             (RawFormat::Arw, with_presets, g(2500.0, 1668.0), meta("SONY", "ILCA-99M2")),
-            (RawFormat::Arw, ColorData::default(), [2.2, 1.0, 1.6], meta("SONY", "ILCE-7M2")),
+            (RawFormat::Arw, ColorData::default(), [2.2, 1.0, 1.6], meta("SONY", "DSC-R1")),
             (RawFormat::Rw2, ColorData::default(), [2.0, 1.0, 1.4], meta("Panasonic", "DC-G9")),
         ];
         for (format, color, mul, meta) in cases {
