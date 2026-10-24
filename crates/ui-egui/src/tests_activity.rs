@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use lightcraft_engine::activity::{Cancel, TaskInfo, Unit};
+use lightcraft_engine::activity::{Cancel, Ending, TaskInfo, Unit};
 use serde_json::json;
 
 use crate::headless::Headless;
@@ -336,6 +336,8 @@ fn scan_shows_a_row_and_cancel_closes_it() {
         h.step();
     }
     assert!(h.app.ui.dialog.is_none(), "no review opened");
+    let row = h.app.session.activity.finished().into_iter().next().expect("a stopped scan leaves a row");
+    assert_eq!((row.label.as_str(), row.ending), ("Scanning folder", Ending::Stopped));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -378,6 +380,8 @@ fn final_merge_shows_a_row_and_cancels() {
     assert!(h.app.session.activity.list().is_empty());
     let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
     assert_eq!(toast, "HDR merge cancelled");
+    let row = h.app.session.activity.finished().into_iter().next().expect("a stopped merge leaves a row");
+    assert_eq!((row.ending, row.summary.as_str()), (Ending::Stopped, "HDR merge cancelled"));
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -462,6 +466,7 @@ fn batch_merge_runs_each_set_in_turn() {
 #[test]
 fn find_missing_shows_an_indeterminate_row() {
     let mut h = demo();
+    h.app.session.activity.keep_after(0);
     let dir = std::env::temp_dir().join(format!("lc-activity-findmissing-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     // run directly, not through a request (which runs frames): the search of an empty folder is over at once, but its
@@ -474,6 +479,25 @@ fn find_missing_shows_an_indeterminate_row() {
     assert_eq!((rows[0].total, rows[0].cancellable), (0, false), "indeterminate, no ✕");
     assert!(h.step_until(T, |h| h.app.tasks.is_empty()));
     assert!(h.app.session.activity.list().is_empty(), "the row goes with the task");
+    let row = h.app.session.activity.finished().into_iter().next().expect("and a row says what it found");
+    assert_eq!(row.ending, Ending::Done);
+    assert!(row.summary.starts_with("Found 0 missing photos"), "{:?}", row.summary);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A Lightroom catalog that can't be read leaves a row saying the task failed, and why.
+#[test]
+fn a_lightroom_catalog_that_cannot_be_read_leaves_a_failed_row() {
+    let mut h = demo();
+    let dir = std::env::temp_dir().join(format!("lc-activity-lrcat-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("Not a catalog.lrcat");
+    std::fs::write(&path, b"this is not a Lightroom catalog").unwrap();
+    let r = crate::menus::run_ui_command(&mut h.app, "library.inspectLightroom", &json!({"path": path.to_string_lossy(), "wait": true}));
+    assert!(r.is_some(), "the command is the interface's");
+    let row = h.app.session.activity.finished().into_iter().next().expect("a failed task always leaves a row");
+    assert_eq!((row.kind, row.ending), ("lightroom", Ending::Failed));
+    assert!(row.summary.starts_with("Lightroom inspection failed"), "{:?}", row.summary);
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -528,4 +552,131 @@ fn immediate_library_commands_and_auto_sync_show_completion() {
     h.app.ui.toast = None;
     assert!(h.app.run("library.compact", json!({})).is_err());
     assert!(h.app.ui.toast.is_none());
+}
+
+/// The demo app, reading the files as they are on disk (the demo library reads none), keeping every ended task's row.
+fn demo_on_disk() -> Headless {
+    let mut h = demo();
+    h.app.session.media.file_probe = lightcraft_engine::Session::new().with_fs().media.file_probe;
+    h.app.session.activity.keep_after(0);
+    h
+}
+
+/// A folder with a valid PNG and, in a subfolder, a JPEG cut short before its end-of-image marker (the real reason).
+fn folder_with_a_truncated_jpeg(tag: &str) -> std::path::PathBuf {
+    use lightcraft_codecs::{ChromaSubsampling, EncodeImage, EncodeMeta};
+    let dir = std::env::temp_dir().join(format!("lc-activity-unreadable-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("trip")).unwrap();
+    let img = lightcraft_raster::Rgba8 { width: 64, height: 48, data: vec![[90, 120, 160, 255]; 64 * 48] };
+    let png = lightcraft_codecs::encode_png(&EncodeImage::rgba8(&img), &EncodeMeta::default()).unwrap();
+    std::fs::write(dir.join("good.png"), png).unwrap();
+    let mut jpeg = lightcraft_codecs::encode_jpeg(&EncodeImage::rgba8(&img), 90, ChromaSubsampling::S444, &EncodeMeta::default()).unwrap();
+    jpeg.truncate(jpeg.len() - 2);
+    std::fs::write(dir.join("trip").join("bad.jpg"), jpeg).unwrap();
+    dir
+}
+
+/// What an import's row says it could not read.
+fn the_row_names_the_truncated_jpeg(h: &Headless) {
+    let rows = h.app.session.activity.finished();
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    let row = &rows[0];
+    assert_eq!((row.kind, row.ending, row.failed), ("import", Ending::Problems, 1), "{row:?}");
+    let names: Vec<&str> = row.failures.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(names, vec![std::path::Path::new("trip").join("bad.jpg").to_string_lossy()], "{row:?}");
+    assert!(row.failures[0].reason.contains("truncated"), "{}", row.failures[0].reason);
+}
+
+#[test]
+fn an_import_row_names_each_file_it_could_not_read_and_why() {
+    let dir = folder_with_a_truncated_jpeg("paths");
+    let mut h = demo_on_disk();
+    crate::import::start_paths(&mut h.app, vec![dir.to_string_lossy().to_string()]).unwrap();
+    assert!(h.step_until(Duration::from_secs(60), |h| h.app.import.is_none()));
+    the_row_names_the_truncated_jpeg(&h);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The review hands the engine the checked files, not the folder: the names of those it cannot read still start at
+/// the source folder. (A file the scan could not read is not offered, so this one is made to look readable.)
+#[test]
+fn a_reviewed_imports_row_names_unreadable_files_below_its_source() {
+    let dir = folder_with_a_truncated_jpeg("review");
+    let mut h = demo_on_disk();
+    crate::import::open(&mut h.app, vec![dir.to_string_lossy().to_string()]).unwrap();
+    assert!(h.step_until(T, |h| matches!(h.app.ui.dialog, Some(crate::state::Dialog::Import { .. }))));
+    h.app.session.activity.dismiss_all();
+    let Some(crate::state::Dialog::Import { opts }) = &mut h.app.ui.dialog else { panic!("no review") };
+    for c in &mut opts.candidates {
+        c.error = None;
+    }
+    opts.checked.iter_mut().for_each(|on| *on = true);
+    assert_eq!(opts.selected_paths().len(), 2);
+    assert_eq!(h.request("ui.dialog.confirm", json!({}), T)["ok"], true);
+    assert!(h.step_until(Duration::from_secs(60), |h| h.app.import.is_none()));
+    the_row_names_the_truncated_jpeg(&h);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A scan that ran to its end says so, and says when it found nothing to import.
+#[test]
+fn a_scan_that_found_nothing_leaves_a_row_saying_so() {
+    let mut h = demo();
+    h.app.session.activity.keep_after(0);
+    let dir = std::env::temp_dir().join(format!("lc-activity-emptyscan-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    crate::import::open(&mut h.app, vec![dir.to_string_lossy().to_string()]).unwrap();
+    assert!(h.step_until(T, |h| h.app.scan.is_none()));
+    let row = h.app.session.activity.finished().into_iter().next().expect("a row for the scan");
+    assert_eq!((row.label.as_str(), row.ending, row.detail.as_str()), ("Scanning folder", Ending::Done, "No photos found"));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A scan that met files it could not read says so in its row, by name, whether it was for the import review or the
+/// Local view (which leaves those files out, so nothing later would say it). The Local view's row says which folder,
+/// and opening that folder again replaces it instead of adding another.
+#[test]
+fn a_scan_that_met_unreadable_files_leaves_a_row_with_problems() {
+    for browse in [false, true] {
+        let mut h = demo();
+        h.app.session.activity.keep_after(0);
+        // the files are read as on disk (the demo library reads none)
+        h.app.session.media.file_probe = lightcraft_engine::Session::new().with_fs().media.file_probe;
+        let dir = std::env::temp_dir().join(format!("lc-activity-badscan-{browse}-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("broken.jpg"), b"not a jpeg at all").unwrap();
+        std::fs::write(dir.join("sub").join("also.jpg"), b"not a jpeg either").unwrap();
+        let path = dir.to_string_lossy().to_string();
+        let scan = |h: &mut Headless| {
+            if browse {
+                crate::import::browse(&mut h.app, &path, Some(true)).unwrap();
+            } else {
+                crate::import::open(&mut h.app, vec![path.clone()]).unwrap();
+            }
+            assert!(h.step_until(T, |h| h.app.scan.is_none()));
+        };
+        scan(&mut h);
+        let names = |h: &Headless| {
+            let mut v: Vec<String> = h.app.session.activity.finished()[0].failures.iter().map(|f| f.name.clone()).collect();
+            v.sort();
+            v
+        };
+        let row = h.app.session.activity.finished()[0].clone();
+        assert_eq!((row.ending, row.failed, row.detail.as_str()), (Ending::Problems, 2, "2 photos not readable"), "browse {browse}: {row:?}");
+        // the Local view names a file by where it is in the folder (two subfolders can hold the same name)
+        let deeper = if browse { std::path::Path::new("sub").join("also.jpg").to_string_lossy().into_owned() } else { "also.jpg".into() };
+        let mut want = vec!["broken.jpg".to_string(), deeper];
+        want.sort();
+        assert_eq!(names(&h), want, "{row:?}");
+        if browse {
+            let folder = std::path::absolute(&dir).unwrap().to_string_lossy().trim_end_matches(std::path::MAIN_SEPARATOR).to_string();
+            assert_eq!(row.path.as_deref(), Some(folder.as_str()), "{row:?}");
+            scan(&mut h);
+            let rows = h.app.session.activity.finished();
+            assert_eq!(rows.len(), 1, "one row for the folder: {rows:?}");
+            assert!(rows[0].id != row.id && rows[0].failed == 2, "the new row is the one kept: {rows:?}");
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }

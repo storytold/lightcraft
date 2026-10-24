@@ -1765,7 +1765,7 @@ mod tests {
             move || {
                 let _ = rx_unblock.recv();
             },
-            |_app, _ctx, _| {},
+            |_app, _ctx, _| lightcraft_engine::activity::Outcome::default(),
         )
         .unwrap();
         assert!(app.tasks.is_running("Unrelated Long Background Task"));

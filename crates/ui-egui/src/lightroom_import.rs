@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 
-use lightcraft_engine::activity::{Cancel, TaskGuard};
+use lightcraft_engine::activity::{Cancel, Ending, Outcome, TaskGuard};
 use lightcraft_engine::lightroom_job::{LightroomProgress, LightroomStep};
 use serde_json::{Value, json};
 
@@ -42,7 +42,8 @@ pub struct LightroomTask {
     rx: mpsc::Receiver<Message>,
     phase: Phase,
     cancelled: bool,
-    guard: TaskGuard,
+    /// Its row in the activity stack; taken at the end to say how the task went.
+    guard: Option<TaskGuard>,
 }
 
 impl LightroomTask {
@@ -60,7 +61,7 @@ impl LightroomTask {
             Kind::Import => "Importing Lightroom catalog",
         };
         let guard = s.activity.start("lightroom", label, Cancel::Flag(cancel.clone()));
-        let task = Self { kind, path, cancel, progress, rx, phase: Phase::Reading, cancelled: false, guard };
+        let task = Self { kind, path, cancel, progress, rx, phase: Phase::Reading, cancelled: false, guard: Some(guard) };
         task.refresh();
         task
     }
@@ -68,7 +69,9 @@ impl LightroomTask {
     /// Move to `phase`; only reading the catalog can stop, adding the photos runs to the end.
     fn enter(&mut self, phase: Phase) {
         self.phase = phase;
-        self.guard.set_cancellable(phase == Phase::Reading);
+        if let Some(guard) = &self.guard {
+            guard.set_cancellable(phase == Phase::Reading);
+        }
         self.refresh();
     }
 
@@ -76,6 +79,7 @@ impl LightroomTask {
     /// (reading the photos takes nearly all of an import, so it is counted, not waited out);
     /// then what is being done.
     fn refresh(&self) {
+        let Some(guard) = &self.guard else { return };
         let (step, done, total) = self.progress.step();
         let detail = match (self.phase, self.kind, step) {
             (Phase::Reading, Kind::Inspect, _) => "",
@@ -86,11 +90,11 @@ impl LightroomTask {
             (Phase::Finalizing, ..) => crate::i18n::tr("Saving Lightroom import index…"),
         };
         if self.phase == Phase::Reading {
-            self.guard.progress(done as u64, total as u64);
+            guard.progress(done as u64, total as u64);
         } else {
-            self.guard.progress(0, 0);
+            guard.progress(0, 0);
         }
-        self.guard.detail(detail);
+        guard.detail(detail);
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -258,7 +262,7 @@ fn inspect_report(data: lightcraft_engine::lightroom_catalog::CatalogImport) -> 
 }
 
 /// The task is over: keep its result (with the catalog's `path`) for `status` and say how it went.
-fn terminal(app: &mut LightcraftApp, ctx: &egui::Context, task: &LightroomTask, mut value: Value) {
+fn terminal(app: &mut LightcraftApp, ctx: &egui::Context, task: &mut LightroomTask, mut value: Value) {
     let kind = task.kind;
     if let Some(o) = value.as_object_mut() {
         o.entry("path").or_insert_with(|| json!(task.path));
@@ -305,6 +309,18 @@ fn terminal(app: &mut LightcraftApp, ctx: &egui::Context, task: &LightroomTask, 
     if matches!(kind, Kind::Import) && value.get("cancelled") != Some(&Value::Bool(true)) {
         app.lightroom_result = Some(result_dialog(&value, &message));
         show_result(app);
+    }
+    let ending = if value.get("error").is_some() {
+        Ending::Failed
+    } else if value.get("cancelled").and_then(Value::as_bool).unwrap_or(false) {
+        Ending::Stopped
+    } else if value.get("indexWarning").is_some() || value.get("report").unwrap_or(&value)["failed"].as_array().is_some_and(|f| !f.is_empty()) {
+        Ending::Problems
+    } else {
+        Ending::Done
+    };
+    if let Some(guard) = task.guard.take() {
+        guard.finish(Outcome { ending, summary: message.clone(), ..Default::default() });
     }
     app.lightroom_last = Some(value);
     app.lightroom = None;
@@ -441,7 +457,11 @@ pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
             return;
         }
         Err(mpsc::TryRecvError::Disconnected) => {
-            terminal(app, ctx, &task, json!({"error": "Lightroom worker stopped unexpectedly"}));
+            // the worker died (a panic): its row says so, rather than that the catalog failed
+            if let Some(guard) = task.guard.take() {
+                guard.finish(Outcome::ended(Ending::Died));
+            }
+            terminal(app, ctx, &mut task, json!({"error": "Lightroom worker stopped unexpectedly"}));
             return;
         }
     };
@@ -449,35 +469,31 @@ pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
     // error's words: a real failure that mentions "cancelled" is still reported as a failure.
     match message {
         Message::Inspected(result) => match result {
-            Ok(report) if !task.cancel.load(Ordering::Relaxed) => terminal(app, ctx, &task, report),
-            Ok(_) => terminal(app, ctx, &task, json!({"cancelled": true})),
-            Err(_) if task.cancel.load(Ordering::Relaxed) => terminal(app, ctx, &task, json!({"cancelled": true})),
-            Err(e) => terminal(app, ctx, &task, json!({"error": e})),
+            Ok(report) if !task.cancel.load(Ordering::Relaxed) => terminal(app, ctx, &mut task, report),
+            Ok(_) => terminal(app, ctx, &mut task, json!({"cancelled": true})),
+            Err(_) if task.cancel.load(Ordering::Relaxed) => terminal(app, ctx, &mut task, json!({"cancelled": true})),
+            Err(e) => terminal(app, ctx, &mut task, json!({"error": e})),
         },
         Message::Prepared(result) => {
             let prepared = match result {
                 Ok(p) => p,
                 Err(_) if task.cancel.load(Ordering::Relaxed) => {
-                    terminal(app, ctx, &task, json!({"cancelled": true}));
+                    terminal(app, ctx, &mut task, json!({"cancelled": true}));
                     return;
                 }
                 Err(e) => {
-                    terminal(app, ctx, &task, json!({"error": e}));
+                    terminal(app, ctx, &mut task, json!({"error": e}));
                     return;
                 }
             };
             if task.cancel.load(Ordering::Relaxed) || prepared.is_cancelled() || !prepared.token().matches(&app.session) {
                 prepared.rollback();
-                terminal(
-                    app,
-                    ctx,
-                    &task,
-                    if task.cancel.load(Ordering::Relaxed) {
-                        json!({"cancelled": true})
-                    } else {
-                        json!({"error": "Lightroom import belongs to a different open library"})
-                    },
-                );
+                let value = if task.cancel.load(Ordering::Relaxed) {
+                    json!({"cancelled": true})
+                } else {
+                    json!({"error": "Lightroom import belongs to a different open library"})
+                };
+                terminal(app, ctx, &mut task, value);
                 return;
             }
             task.enter(Phase::Committing);
@@ -494,7 +510,7 @@ pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
             let (tx, rx) = mpsc::channel();
             let commit_error = committed.as_ref().err().map(ToString::to_string);
             let Some(finalization) = finalization else {
-                terminal(app, ctx, &task, json!({"error": commit_error.clone().unwrap_or_else(|| "Lightroom import did not commit".into())}));
+                terminal(app, ctx, &mut task, json!({"error": commit_error.clone().unwrap_or_else(|| "Lightroom import did not commit".into())}));
                 return;
             };
             if let Err(e) = spawn_finalize(finalization, tx, ctx.clone()) {
@@ -502,7 +518,7 @@ pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
                 if let Some(error) = commit_error {
                     result["error"] = json!(error);
                 }
-                terminal(app, ctx, &task, result);
+                terminal(app, ctx, &mut task, result);
                 return;
             }
             task.rx = rx;
@@ -518,14 +534,14 @@ pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
             let pending = app.lightroom_last.take().unwrap_or(Value::Null);
             let report = pending.get("report").cloned().unwrap_or(Value::Null);
             match result {
-                Ok(()) if pending.get("error").is_none() => terminal(app, ctx, &task, report),
-                Ok(()) => terminal(app, ctx, &task, json!({"report": report, "error": pending["error"].clone()})),
+                Ok(()) if pending.get("error").is_none() => terminal(app, ctx, &mut task, report),
+                Ok(()) => terminal(app, ctx, &mut task, json!({"report": report, "error": pending["error"].clone()})),
                 Err(e) => {
                     let mut value = json!({"report": report, "indexWarning": e});
                     if let Some(error) = pending.get("error") {
                         value["error"] = error.clone();
                     }
-                    terminal(app, ctx, &task, value);
+                    terminal(app, ctx, &mut task, value);
                 }
             }
         }
@@ -649,9 +665,9 @@ mod tests {
             mode: lightcraft_catalog::rules::Match::All,
             rules: vec![lightcraft_catalog::rules::Rule::Field { field: "rating".into(), op: "is".into(), value: json!(5) }],
         });
-        let (task, _tx, _, _) = fake_import(&h);
+        let (mut task, _tx, _, _) = fake_import(&h);
         let value = json!({"photos": 1, "imported": 1, "collections": 0, "missing": ["D:/Photos/a.NEF"], "mapping": {"1": id}, "library": "C:/Pictures/LightCraft Library"});
-        terminal(&mut h.app, &h.view.ctx, &task, value);
+        terminal(&mut h.app, &h.view.ctx, &mut task, value);
         assert!(h.app.ui.toast.as_ref().unwrap().0.contains("1 photos added"));
         h.step();
         h.step();
@@ -676,8 +692,8 @@ mod tests {
     #[test]
     fn lightroom_failure_stays_readable_without_offering_a_success_action() {
         let mut h = demo();
-        let (task, _tx, _, _) = fake_import(&h);
-        terminal(&mut h.app, &h.view.ctx, &task, json!({"error": "catalog or WAL exceeds 1 GiB import limit"}));
+        let (mut task, _tx, _, _) = fake_import(&h);
+        terminal(&mut h.app, &h.view.ctx, &mut task, json!({"error": "catalog or WAL exceeds 1 GiB import limit"}));
         h.step();
         h.step();
         assert!(h.painted_text().join(" ").contains("exceeds 1 GiB import limit"));
@@ -689,8 +705,8 @@ mod tests {
     fn lightroom_result_waits_for_an_existing_dialog() {
         let mut h = demo();
         h.app.ui.dialog = Some(crate::state::Dialog::About);
-        let (task, _tx, _, _) = fake_import(&h);
-        terminal(&mut h.app, &h.view.ctx, &task, json!({"error": "catalog could not be read"}));
+        let (mut task, _tx, _, _) = fake_import(&h);
+        terminal(&mut h.app, &h.view.ctx, &mut task, json!({"error": "catalog could not be read"}));
         assert!(matches!(h.app.ui.dialog, Some(crate::state::Dialog::About)));
         assert!(h.app.lightroom_result.is_some());
         h.app.ui.dialog = None;
