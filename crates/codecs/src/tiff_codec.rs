@@ -32,7 +32,13 @@ pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Decoded> {
     let has_alpha = n_samples > n_color && !matches!(ct, ColorType::Palette(_));
     let premultiplied = has_alpha && extra.first() == Some(&1);
 
-    let res = d.read_image().map_err(err)?;
+    // `read_image` reads only the first plane of a planar image (#2462); this reads them all, or
+    // only the first when every plane together would pass the decoding buffer limit.
+    let mut res = DecodingResult::U8(Vec::new());
+    let read = d.read_image_to_buffer(&mut res).map_err(err)?;
+    if res.as_buffer(0).as_bytes().len() < read.complete_len {
+        return Err(Error::Unsupported(F, "planar TIFF too large to decode"));
+    }
     let (wu, hu) = (w as usize, h as usize);
     let n = wu * hu;
     let mut buf = match res {
