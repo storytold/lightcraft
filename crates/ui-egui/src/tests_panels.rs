@@ -2569,6 +2569,30 @@ fn histogram_corners_toggle_clipping_warnings() {
     assert!(!h.app.ui.show_clipping);
 }
 
+/// Issue #2679: the histogram stays at the top of the Edit panel while its sliders scroll under it.
+#[test]
+fn the_histogram_stays_in_view_while_the_sliders_scroll() {
+    let mut h = demo(
+        [1400.0, 700.0],
+        json!({"view": "detail", "right": "edit", "histogram": true, "openSections": ["light", "color", "effects", "detail", "optics"]}),
+    );
+    let (hist, exposure) = (widget(&h, "histogram"), widget(&h, "slider:light.exposure"));
+    let panel = widget(&h, "panel:right_panel");
+    let r = h.request("ui.move", json!({"x": panel.center().x, "y": panel.bottom() - 40.0}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    for _ in 0..4 {
+        let r = h.request("ui.scroll", json!({"dy": -300.0}), T);
+        assert_eq!(r["ok"], true, "{r}");
+    }
+    h.step();
+    let moved = h.app.widgets.iter().find(|(w, _)| w == "slider:light.exposure").map(|(_, r)| *r);
+    assert!(moved.is_none_or(|r| r.top() < exposure.top() - 100.0), "the sliders scrolled: {exposure:?} → {moved:?}");
+    assert_eq!(widget(&h, "histogram"), hist, "the histogram stayed where it was");
+    for id in ["histogram:shadows", "histogram:highlights"] {
+        assert!(hist.contains_rect(widget(&h, id)), "{id} is still on the histogram");
+    }
+}
+
 #[test]
 fn the_histogram_clipping_buttons_stay_clear_of_the_hovered_scroll_bar() {
     // every section open: the Edit panel scrolls, so its scroll bar runs past the histogram

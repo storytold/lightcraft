@@ -97,9 +97,6 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     }
     let preview_only = app.session.catalog.photo(id).and_then(|p| p.preview_only.clone());
 
-    if app.ui.histogram {
-        histogram(app, ui, id);
-    }
     if app.ui.soft_proof {
         soft_proofing(app, ui, id);
     }
@@ -607,7 +604,9 @@ fn steady_hdr_histogram(ctx: &egui::Context, id: PhotoId, hdr_edit: bool, hist: 
     }
 }
 
-fn histogram(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
+/// The histogram, its clipping buttons and the EXIF strip, drawn above the Edit panel's scrolling sliders
+/// ([`super::right::show`]).
+pub fn histogram(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let t = Tokens::get(ui.ctx());
     let w = ui.available_width();
     let hdr_edit = app.session.develop_of(id).is_some_and(|d| d.hdr.enabled);
@@ -729,8 +728,8 @@ fn histogram(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         }
     }
     let mut clicked = resp.clicked();
-    // the panel's floating scroll bar widens over the right edge when hovered: both buttons keep
-    // clear of it, the left one too so they stay symmetric (#1640)
+    // both buttons keep clear of the panel's right edge, where its floating scroll bar widens when
+    // hovered beside the sliders, the left one too so they stay symmetric (#1640)
     let [shadow_rect, highlight_rect] = super::histogram::clipping_rects(ui, plot);
     for (name, rect, label, clipped) in [
         ("shadows", shadow_rect, "Shadow clipping", clipping.map(|(lo, _)| lo > 0.003)),

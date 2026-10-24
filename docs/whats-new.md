@@ -21,6 +21,10 @@
 
 ## 2026-10-23
 
+### The histogram stays in view
+- The histogram stays at the top of the Edit panel while its sliders scroll under it (issue #2679). It used to scroll
+  away with them, so it was out of sight while using the sliders further down the panel.
+
 ### Tab leaves the name field in New Album, New Smart Album and the name prompts
 - In New Album, New Smart Album, Save Metadata Preset and the other dialogs with one name field, the field has the
   keyboard focus when the dialog opens, and Tab now moves on to the check box, Cancel and OK (Shift+Tab goes back).
