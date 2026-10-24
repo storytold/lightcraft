@@ -510,7 +510,10 @@ impl Prepared {
         }
         let bytes = pdf.len();
         let catalog = if self.request.settings.full_screen { " /PageMode /FullScreen" } else { "" };
-        pdf.finish(catalog)?.into_inner().map_err(|e| format!("PDF: {}", e.error()))?.sync_all().map_err(|e| format!("PDF: {e}"))?;
+        let pdf_file = pdf.finish(catalog)?.into_inner().map_err(|e| format!("PDF: {}", e.error()))?;
+        lightcraft_catalog::safe_file::sync_file(&pdf_file, false).map_err(|e| format!("PDF: {e}"))?;
+        // closed before the rename: Windows can't rename a file that is still open
+        drop(pdf_file);
         part.commit(&self.guard)?;
         progress(total, total, "");
         let mut out = self.summary(Format::Pdf, pages, skipped, warnings);
@@ -555,7 +558,7 @@ impl Prepared {
             self.guard.check(&target)?;
             let (part, mut f) = PartFile::new(&target)?;
             f.write_all(&jpg).map_err(|e| format!("{}: {e}", part.part.display()))?;
-            f.sync_all().map_err(|e| format!("{}: {e}", part.part.display()))?;
+            lightcraft_catalog::safe_file::sync_file(&f, false).map_err(|e| format!("{}: {e}", part.part.display()))?;
             bytes = bytes.saturating_add(jpg.len());
             parts.push(part);
         }
@@ -676,7 +679,7 @@ impl Prepared {
         let periods = mux.periods();
         let file = mux.finish().map_err(|e| e.to_string())?;
         let file = file.into_inner().map_err(|e| format!("video: {}", e.error()))?;
-        file.sync_all().map_err(|e| format!("video: {e}"))?;
+        lightcraft_catalog::safe_file::sync_file(&file, false).map_err(|e| format!("video: {e}"))?;
         let bytes = file.metadata().map(|m| m.len()).unwrap_or(0);
         drop(file);
         if cancel.load(Ordering::Relaxed) {

@@ -9,6 +9,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use crate::safe_file::sync_file;
+
 /// A flat namespace of named files with the few operations the journal needs.
 pub trait Store: Send {
     /// The whole file, or `None` if it doesn't exist.
@@ -110,10 +112,16 @@ impl Store for FsStore {
             self.appender = None;
         }
         let tmp = self.path(&format!("{name}.tmp"));
-        {
-            let mut f = create_staging(&tmp)?;
+        let mut f = create_staging(&tmp)?;
+        let written = (|| {
             f.write_all(data)?;
-            f.sync_all()?;
+            sync_file(&f, false)
+        })();
+        // closed before the rename: Windows can't rename a file that is still open
+        drop(f);
+        if let Err(e) = written {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(e);
         }
         std::fs::rename(&tmp, self.path(name))?;
         self.sync_dir();
@@ -131,7 +139,7 @@ impl Store for FsStore {
             fill(&mut w)?;
             w.flush()?;
             let f = w.inner.into_inner().map_err(|e| e.into_error())?;
-            f.sync_all()?;
+            sync_file(&f, false)?;
             Ok(w.n)
         })();
         let n = match written {
@@ -158,7 +166,7 @@ impl Store for FsStore {
             self.appender = Some((name.to_string(), f));
         }
         let Some((_, f)) = self.appender.as_mut() else { return Err(io::Error::other("appender not open")) };
-        let written = f.write_all(data).and_then(|()| f.sync_data());
+        let written = f.write_all(data).and_then(|()| sync_file(f, true));
         if written.is_err() {
             // The handle may be dead (a network share that reconnected, a removed volume): the next
             // attempt reopens the file. Part of `data` may be in the file; the caller cuts it back
@@ -180,7 +188,7 @@ impl Store for FsStore {
             Err(e) => return Err(e),
         };
         f.set_len(len)?;
-        f.sync_all()
+        sync_file(&f, false)
     }
 
     fn describe(&self) -> String {
