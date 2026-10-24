@@ -282,6 +282,10 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         (Some([2, 2]), Some(p)) if p == coolpix::CYGM_PATTERN
     ) && info.compression != t::compression::NIKON
         && info.samples_per_pixel == 1;
+    // Checked in every mode, so a CYGM NEF that `probe_info` accepts also decodes
+    if cygm && (w < 4 || h < 4 || !w.is_multiple_of(2) || !h.is_multiple_of(2)) {
+        return Err(RawError::Corrupt("Coolpix: bad CYGM mosaic".into()));
+    }
     if cygm && let (Mode::Full, RawData::U16(d)) = (mode, &data) {
         let rgb = coolpix::cygm_to_rgb(d, w, h, coolpix::CYGM_PATTERN).ok_or_else(|| RawError::Corrupt("Coolpix: bad CYGM mosaic".into()))?;
         data = RawData::U16(rgb);
