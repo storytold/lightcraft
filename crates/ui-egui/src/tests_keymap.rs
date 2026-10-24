@@ -103,6 +103,27 @@ fn a_key_given_to_a_command_overrides_a_fixed_key() {
     assert_eq!(before, after, "the rating key must not fire too");
 }
 
+/// A declared key that yields to another command's saved key can be taken back with ↺.
+#[test]
+fn restore_takes_back_a_declared_key_another_command_holds() {
+    use crate::shortcuts::shortcut_of;
+    let mut h = demo();
+    h.app.ui.settings.keymap.insert("photo.increaseRating".into(), "P".into());
+    assert_eq!(shortcut_of(&h.app.ui.settings.keymap, "photo.pick"), None);
+    h.app.run("app.shortcuts", json!({})).unwrap();
+    h.step();
+    h.step();
+    click(&mut h, "check:shortcuts.showAll");
+    click(&mut h, "field:shortcutsSearch");
+    assert_eq!(h.request("ui.text", json!({"text": "flag as pick"}), T)["ok"], true);
+    h.step();
+    h.step();
+    click(&mut h, "button:shortcutReset-photo.pick");
+    assert_eq!(shortcut_of(&h.app.ui.settings.keymap, "photo.pick"), Some("P"));
+    assert_eq!(shortcut_of(&h.app.ui.settings.keymap, "photo.increaseRating"), None);
+    assert!(h.app.ui.settings.keymap.is_empty(), "{:?}", h.app.ui.settings.keymap);
+}
+
 /// Open the editor, filtered to `search`, and start recording for `id`.
 fn record(h: &mut Headless, search: &str, id: &str) {
     if h.app.ui.dialog.is_none() {
