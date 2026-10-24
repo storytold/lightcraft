@@ -1,9 +1,11 @@
 //! Assisted culling: score photos for focus and clipping, group similar shots taken close
 //! together (bursts) and mark the sharpest of each group; optionally reject blurry ones and pick
-//! each group's best. Scores are kept on the photos (rules / smart albums: `sharpness`,
-//! `bestOfGroup`).
+//! each group's best. Also writes classical aesthetic, eyes-open (when faces are known) and a
+//! combined cull score. Scores are kept on the photos (rules / smart albums: `sharpness`,
+//! `bestOfGroup`, `clipped`, `eyesOpen`, `aesthetic`, `cullScore`).
 
-use lightcraft_catalog::{Analysis, Flag, Op, PhotoId};
+use lightcraft_catalog::{Analysis, Flag, Op, Photo, PhotoId};
+use lightcraft_raster::Rgb32f;
 use serde_json::{Value, json};
 
 use super::{CommandSpec, always, cmd};
@@ -21,6 +23,34 @@ fn secs(iso: &str) -> Option<i64> {
     Some(d.unix_seconds())
 }
 
+/// Eyes-open from YuNet landmarks when the detector is installed; otherwise a weak guess from a
+/// stored face box. `None` when neither is available (the field is skipped, not stored as 0).
+fn eyes_open_for(src: &Rgb32f, detector: Option<&lightcraft_faces::yunet::Detector>, photo: Option<&Photo>) -> Option<f32> {
+    if let Some(det) = detector {
+        let rgb: Vec<u8> = src
+            .data
+            .iter()
+            .flat_map(|c| {
+                [0, 1, 2]
+                    .map(|i| (lightcraft_color::transfer::linear_to_srgb(c.get(i).copied().unwrap_or(0.0).clamp(0.0, 1.0)) * 255.0).round() as u8)
+            })
+            .collect();
+        if let Ok(faces) = det.detect(&rgb, src.width, src.height, &lightcraft_faces::yunet::Options::default())
+            && let Some(first) = faces.first()
+        {
+            return lightcraft_pipeline::cull::eyes_open(src, &first.landmarks);
+        }
+    }
+    let r = photo.and_then(|p| p.meta.regions.iter().find(|r| r.kind == lightcraft_meta::RegionKind::Face))?;
+    let (x0, y0, x1, y1) = (r.rect.x0 as f32, r.rect.y0 as f32, r.rect.x1 as f32, r.rect.y1 as f32);
+    let w = (x1 - x0).abs();
+    let h = (y1 - y0).abs();
+    if !w.is_finite() || !h.is_finite() || w < 0.02 || h < 0.02 {
+        return None;
+    }
+    lightcraft_pipeline::cull::eyes_open(src, &[(x0 + 0.3 * w, y0 + 0.32 * h), (x0 + 0.7 * w, y0 + 0.32 * h)])
+}
+
 fn analyze(s: &mut Session, p: &Value) -> Result<Value> {
     let ids: Vec<PhotoId> = if p.get("ids").is_some() || s.selection.ids.len() > 1 { s.targets(p)? } else { s.visible_cloned() };
     // a photo listed twice is one photo, not a burst of two look-alikes (first occurrence kept)
@@ -30,14 +60,17 @@ fn analyze(s: &mut Session, p: &Value) -> Result<Value> {
     let pick_best = p.get("pickBest").and_then(Value::as_bool).unwrap_or(false);
     let (gap, same) = burst_params(p)?;
     // measure (thumbnail-level sources: fast, and enough for focus at 512 px)
-    let mut rows: Vec<(PhotoId, Option<i64>, f32, f32, [f32; 64])> = Vec::new();
+    let detector = super::face_detect::detector(s).ok();
+    let mut rows: Vec<(PhotoId, Option<i64>, f32, f32, [f32; 64], Option<f32>, f32)> = Vec::new();
     let mut failed = Vec::new();
     for id in ids {
         match s.source_now(id, crate::media::SourceLevel::Thumb) {
             Ok(src) => {
-                let t = s.catalog.photo(id).and_then(|p| p.captured.as_deref().and_then(secs));
+                let photo = s.catalog.photo(id);
+                let t = photo.and_then(|p| p.captured.as_deref().and_then(secs));
                 use lightcraft_pipeline::cull;
-                rows.push((id, t, cull::sharpness(&src), cull::clipped(&src), cull::signature(&src)));
+                let eyes = eyes_open_for(&src, detector.as_deref(), photo.map(|p| p.as_ref()));
+                rows.push((id, t, cull::sharpness(&src), cull::clipped(&src), cull::signature(&src), eyes, cull::aesthetic(&src)));
             }
             Err(e) => failed.push(json!([id.0, e])),
         }
@@ -69,10 +102,22 @@ fn analyze(s: &mut Session, p: &Value) -> Result<Value> {
     let mut ops = Vec::new();
     let (mut rejected, mut picked) = (0, 0);
     let mut out = Vec::new();
-    for (i, (id, _, sharp, clip, _)) in rows.iter().enumerate() {
+    for (i, (id, _, sharp, clip, _, eyes, aesthetic)) in rows.iter().enumerate() {
         let g = group_of[i];
         let is_best = g.is_some_and(|g| best.get(&g).is_some_and(|b| b.0 == i));
-        ops.push(Op::SetAnalysis { id: *id, analysis: Some(Analysis { sharpness: *sharp, clipped: *clip, group: g, best: is_best }) });
+        let score = lightcraft_pipeline::cull::cull_score(*sharp, *clip, is_best, g.is_some(), *eyes, *aesthetic);
+        ops.push(Op::SetAnalysis {
+            id: *id,
+            analysis: Some(Analysis {
+                sharpness: *sharp,
+                clipped: *clip,
+                group: g,
+                best: is_best,
+                eyes_open: *eyes,
+                aesthetic: Some(*aesthetic),
+                cull_score: Some(score),
+            }),
+        });
         let flag = s.catalog.photo(*id).map(|p| p.flag).unwrap_or_default();
         if reject_below.is_some_and(|t| *sharp < t) && flag != Flag::Reject {
             ops.push(Op::SetFlag { id: *id, flag: Flag::Reject });
@@ -81,7 +126,16 @@ fn analyze(s: &mut Session, p: &Value) -> Result<Value> {
             ops.push(Op::SetFlag { id: *id, flag: Flag::Pick });
             picked += 1;
         }
-        out.push(json!({"id": id.0, "sharpness": (sharp * 10.0).round() / 10.0, "clipped": clip, "group": g, "best": is_best}));
+        out.push(json!({
+            "id": id.0,
+            "sharpness": (sharp * 10.0).round() / 10.0,
+            "clipped": clip,
+            "group": g,
+            "best": is_best,
+            "eyesOpen": eyes,
+            "aesthetic": (aesthetic * 10.0).round() / 10.0,
+            "cullScore": (score * 1000.0).round() / 1000.0,
+        }));
     }
     if !ops.is_empty() {
         s.commit("Assisted Culling", Op::Batch { ops })?;
@@ -158,7 +212,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Assisted Culling",
             [],
             None,
-            "{ids?, rejectBelow?: sharpness 0..100, pickBest?: bool, burstGap?: seconds 0..86400 (10), similarity?: 0..1 (0.93)} — score the selected photos (else all in view) for focus (0..100) and clipping, group look-alike shots (signature similarity at least `similarity`) taken at most `burstGap` seconds apart and mark the sharpest of each; optionally reject blurry photos and pick each group's best; one undo step → {photos: [{id, sharpness, clipped, group, best}], groups, rejected, picked}",
+            "{ids?, rejectBelow?: sharpness 0..100, pickBest?: bool, burstGap?: seconds 0..86400 (10), similarity?: 0..1 (0.93)} — score the selected photos (else all in view) for focus (0..100), clipping, classical aesthetic and eyes-open when faces are known; group look-alike shots (signature similarity at least `similarity`) taken at most `burstGap` seconds apart and mark the sharpest of each; optionally reject blurry photos and pick each group's best; one undo step → {photos: [{id, sharpness, clipped, group, best, eyesOpen?, aesthetic, cullScore}], groups, rejected, picked}",
             always,
             analyze
         ),

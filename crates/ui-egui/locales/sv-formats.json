@@ -2,6 +2,8 @@
   " ({unsure} with several look-alike files: use Locate)": " ({unsure} med flera likadana filer: använd Leta upp)",
   " ({} in Recently Deleted)": " ({} i Nyligen raderade)",
   " in {g} group{}": " i {g} grupp{}",
+  " · aesthetic {:.1}": " · estetik {:.1}",
+  " · eyes {:.0}%": " · ögon {:.0}%",
   " · kept, not applied: {}": " · behålls men tillämpas inte: {}",
   " · {:.0}% clipped": " · {:.0} % klippt",
   " · {failed} couldn't be rendered": " · {failed} kunde inte renderas",

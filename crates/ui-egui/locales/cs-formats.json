@@ -1,6 +1,8 @@
 {
   " ({unsure} with several look-alike files: use Locate)": " ({unsure} s několika podobnými soubory: použijte Najít umístění)",
   " ({} in Recently Deleted)": " ({} v nedávno odstraněných)",
+  " · aesthetic {:.1}": " · estetika {:.1}",
+  " · eyes {:.0}%": " · oči {:.0}%",
   " · {:.0}% clipped": " · {:.0}% oříznutých tónů",
   " · {failed} couldn't be rendered": " · {failed} se nepodařilo vykreslit",
   " · {queued} waiting": " · {queued} čeká",

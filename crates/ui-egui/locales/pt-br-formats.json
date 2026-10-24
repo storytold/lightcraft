@@ -1,5 +1,7 @@
 {
   " ({} in Recently Deleted)": " ({} em Excluídos recentemente)",
+  " · aesthetic {:.1}": " · estética {:.1}",
+  " · eyes {:.0}%": " · olhos {:.0}%",
   " · {skipped} skipped (file exists)": " · {skipped} ignorada(s) (arquivo existente)",
   " · {} duplicate{} skipped": " · {} duplicada(s) ignorada(s){:.0}",
   " · {} failed: {}": " · {} falhou: {}",

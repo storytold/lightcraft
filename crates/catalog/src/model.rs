@@ -312,6 +312,7 @@ pub struct Photo {
 
 /// What assisted culling measured on a photo.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Analysis {
     /// Focus: 0 (blurred) .. 100 (crisp), from the detail in the photo's sharpest area.
     pub sharpness: f32,
@@ -321,6 +322,15 @@ pub struct Analysis {
     pub group: Option<u32>,
     /// The best photo of its group.
     pub best: bool,
+    /// Eyes-open 0..1 when faces were measured (YuNet landmark heuristic). Absent when no faces.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub eyes_open: Option<f32>,
+    /// Aesthetic 1..10 (classical heuristic, not a NIMA head).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub aesthetic: Option<f32>,
+    /// Combined 0..1 cull score from classical measures.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cull_score: Option<f32>,
 }
 
 /// Raw formats whose files carry vendor white-balance multipliers but no colour matrices: their starting

@@ -1,4 +1,7 @@
 {
+  " · aesthetic {:.1}": " · estetika {:.1}",
+  " · eyes {:.0}%": " · mata {:.0}%",
+
   " · {skipped} skipped (file exists)": " · {skipped} dilewati (file sudah ada)",
   " · {} duplicate{} skipped": " · {} duplikat dilewati{:.0}",
   " · {} failed: {}": " · {} gagal: {}",

@@ -2,6 +2,8 @@
   " ({unsure} with several look-alike files: use Locate)": " ({unsure} usealla samannäköisellä tiedostolla: käytä Paikanna)",
   " ({} in Recently Deleted)": " ({} Äskettäin poistetuissa)",
   " in {g} group{}": " · ryhmiä: {g}{:.0}",
+  " · aesthetic {:.1}": " · estetiikka {:.1}",
+  " · eyes {:.0}%": " · silmät {:.0}%",
   " · kept, not applied: {}": " · säilytetty, ei käytetty: {}",
   " · {:.0}% clipped": " · {:.0}% leikkautunut",
   " · {failed} couldn't be rendered": " · renderöinti epäonnistui: {failed}",

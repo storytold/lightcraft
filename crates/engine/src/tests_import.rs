@@ -1024,6 +1024,24 @@ fn assisted_culling_ignores_repeated_ids() {
     assert!(an.group.is_none() && !an.best, "{an:?}");
 }
 
+/// Classical aesthetic and cullScore persist without optional models; eyes-open is skipped when
+/// no detector and no face regions (not stored as 0).
+#[test]
+fn assisted_culling_persists_aesthetic_and_cull_score() {
+    let mut s = Session::with_demo();
+    let id = s.visible_cloned()[0];
+    let r = s.execute("photo.analyze", &json!({"ids": [id.0]})).unwrap();
+    let row = &r["photos"][0];
+    assert!(row["aesthetic"].as_f64().is_some(), "{r}");
+    assert!(row["cullScore"].as_f64().is_some(), "{r}");
+    let an = s.catalog.photo(id).unwrap().analysis.unwrap();
+    let aesthetic = an.aesthetic.expect("aesthetic");
+    assert!((1.0..=10.0).contains(&aesthetic), "{an:?}");
+    let score = an.cull_score.expect("cull_score");
+    assert!((0.0..=1.0).contains(&score), "{an:?}");
+    assert!(row["eyesOpen"].is_null() || row["eyesOpen"].is_number(), "{r}");
+}
+
 /// Assisted culling: two look-alike shots one second apart across midnight form a burst at the end of
 /// every month, including those with fewer than 31 days.
 #[test]

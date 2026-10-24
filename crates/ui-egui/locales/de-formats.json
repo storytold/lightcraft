@@ -1,6 +1,8 @@
 {
   " ({unsure} with several look-alike files: use Locate)": " ({unsure} mit mehreren ähnlichen Dateien: „Fehlende Datei suchen“ verwenden)",
   " ({} in Recently Deleted)": " ({} in „Zuletzt gelöscht“)",
+  " · aesthetic {:.1}": " · Ästhetik {:.1}",
+  " · eyes {:.0}%": " · Augen {:.0}%",
   " · {:.0}% clipped": " · {:.0}% beschnitten",
   " · {failed} couldn't be rendered": " · nicht gerenderte Fotos: {failed}",
   " · {skipped} skipped (file exists)": " · {skipped} übersprungen (Datei vorhanden)",
