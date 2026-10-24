@@ -393,7 +393,7 @@ pub(super) fn refuse_photos(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &e
     if app.ui.dragging_photos.is_none() || !pointer_over_row(ui, resp.rect) {
         return;
     }
-    let released = ui.input(|i| i.pointer.any_released());
+    let released = ui.input(|i| i.pointer.primary_released());
     crate::panels::grid::refuse_drop(app, ui.ctx(), hint.to_string(), why, released);
 }
 

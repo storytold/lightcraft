@@ -235,6 +235,32 @@ fn esc_the_frame_after_a_release_in_full_screen_leaves_full_screen() {
     assert!(!h.app.ui.fullscreen, "and Esc then leaves full screen");
 }
 
+/// A right-button release over a row that refuses photos (a smart album, an album folder, a keyword
+/// row) is not the drop the primary button's release is: no refusal is said. (Whether the drag itself
+/// goes on after that release is the grid's `drag_feedback`, not this row's.)
+#[test]
+fn a_right_button_release_over_a_refusing_row_says_nothing() {
+    let mut h = app();
+    let smart = run(&mut h, "album.createSmart", json!({"name": "Fours", "rules": {"rating": 4}}))["id"].as_u64().unwrap();
+    h.settle(SETTLE);
+    let (outside, _) = photos_around(&mut h, GARDEN);
+    for row in [format!("source:album:{smart}"), "source:folder:1".to_string(), "source:keyword:mountains".to_string()] {
+        let target = drag_photos(&mut h, &outside, &row);
+        for pressed in [true, false] {
+            h.events.push(egui::Event::PointerButton {
+                pos: target,
+                button: egui::PointerButton::Secondary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            });
+            h.step();
+        }
+        assert_eq!(toast(&h), "", "{row}: nothing is said: {}", toast(&h));
+        release(&mut h, target);
+        h.app.ui.toast = None;
+    }
+}
+
 #[test]
 fn esc_during_a_drag_leaves_a_dialog_open() {
     let mut h = app();
