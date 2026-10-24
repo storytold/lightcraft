@@ -407,10 +407,12 @@ fn cr3_preview_boxes(bytes: &[u8]) -> Option<&[u8]> {
             let be32 = |at: usize| bytes.get(at..at + 4).map(|s| u32::from_be_bytes([s[0], s[1], s[2], s[3]]) as usize);
             let (Some(size), Some(len)) = (be32(start), be32(start + 20)) else { continue };
             let j = start + 24;
-            if len < 4 || j + len > start + size.max(24) || j + len > bytes.len() {
+            // 32-bit box lengths can wrap `usize` on wasm32: check the sums, then slice with `get`
+            let (Some(end), Some(lim)) = (j.checked_add(len), start.checked_add(size.max(24))) else { continue };
+            if len < 4 || end > lim {
                 continue;
             }
-            let jpeg = &bytes[j..j + len];
+            let Some(jpeg) = bytes.get(j..end) else { continue };
             if is_dct_jpeg(jpeg) {
                 if best.is_none_or(|b| b.len() < jpeg.len()) {
                     best = Some(jpeg);
@@ -582,6 +584,20 @@ mod tests {
         assert_eq!(embedded_preview(&cr3).unwrap(), j);
         for n in 0..cr3.len() {
             let _ = embedded_preview(&cr3[..n]);
+        }
+    }
+
+    /// #2569: `PRVW` box and JPEG lengths near `u32::MAX` (which wrap `usize` on wasm32) find no preview, never panic.
+    #[test]
+    fn cr3_preview_box_huge_lengths_are_rejected() {
+        let j = fake_jpeg(300);
+        for (size, len) in [(u32::MAX, u32::MAX), (u32::MAX, u32::MAX - 23), (24 + j.len() as u32, u32::MAX - 3)] {
+            let mut cr3 = b"   ftypcrx    crx isom".to_vec();
+            cr3.extend_from_slice(&size.to_be_bytes());
+            cr3.extend_from_slice(b"PRVW     T8 ");
+            cr3.extend_from_slice(&len.to_be_bytes());
+            cr3.extend_from_slice(&j);
+            assert_eq!(cr3_preview_boxes(&cr3), None, "size {size:#x}, len {len:#x}");
         }
     }
 
