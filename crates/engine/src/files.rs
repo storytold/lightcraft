@@ -2932,4 +2932,40 @@ pub(crate) mod tests {
         drop(s);
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    /// An ILCE-7CR frame at ISO 50 (the sensor at ISO 100 with a stop more light) develops at half the level of the
+    /// same sensor data at ISO 100: the decoder's baseline exposure reaches the render.
+    #[test]
+    fn a7cr_iso_50_develops_a_stop_darker_than_iso_100() {
+        use lightcraft_tiff::{IfdBuilder, ImageData, TiffWriter, Value, tags as t};
+        let arw = |iso: u16| {
+            let (w, h) = (64u32, 48u32);
+            let mut raw = IfdBuilder::new();
+            raw.set(t::MAKE, Value::Ascii("SONY".into()));
+            raw.set(t::MODEL, Value::Ascii("ILCE-7CR".into()));
+            raw.set(t::IMAGE_WIDTH, Value::Long(vec![w]));
+            raw.set(t::IMAGE_LENGTH, Value::Long(vec![h]));
+            raw.set(t::SAMPLES_PER_PIXEL, Value::Short(vec![1]));
+            raw.set(t::PHOTOMETRIC, Value::Short(vec![t::photometric::CFA]));
+            raw.set(t::BITS_PER_SAMPLE, Value::Short(vec![16]));
+            raw.set(t::COMPRESSION, Value::Short(vec![1]));
+            raw.set(t::WHITE_LEVEL, Value::Long(vec![16383]));
+            // a mid grey, far from clipping at either exposure
+            let samples: Vec<u8> = (0..w * h).flat_map(|_| 3000u16.to_le_bytes()).collect();
+            raw.set_image(ImageData::Strips { rows_per_strip: h, strips: vec![samples] });
+            let mut exif = IfdBuilder::new();
+            exif.set(t::ISO_SPEED, Value::Short(vec![iso]));
+            raw.set_child(t::EXIF_IFD, exif);
+            TiffWriter::default().write(&[raw]).expect("the fixture writes")
+        };
+        let mean = |iso| {
+            let (img, _) = load_bytes(&arw(iso), 64).expect("the fixture develops");
+            let sum: f64 = img.data.iter().map(|p| p.iter().map(|v| f64::from(*v)).sum::<f64>()).sum();
+            sum / (img.data.len() * 3) as f64
+        };
+        let (at_50, at_100) = (mean(50), mean(100));
+        assert!(at_100 > 0.01, "the fixture develops to a visible level: {at_100}");
+        let ratio = at_50 / at_100;
+        assert!((ratio - 0.5).abs() < 0.01, "ISO 50 / ISO 100 = {ratio}");
+    }
 }
