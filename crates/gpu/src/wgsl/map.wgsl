@@ -188,7 +188,7 @@ fn nr_col(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups) 
     let yl = lum2020(p);
     let t = pf(1u);
     let q = vec3<f32>(b[3u * i], b[3u * i + 1u], b[3u * i + 2u]);
-    let k = yl / max(c[i], 1e-6);
+    let k = select(1.0, yl / c[i], c[i] > 0.0);
     put_rgb(i, p + (q * k - p) * t);
 }
 
