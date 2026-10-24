@@ -88,6 +88,10 @@ pub struct ImportDialog {
     /// What to do with those: `restore` (the default: the photo comes back with its edits), `fresh`
     /// (imported as a new photo, the old record deleted) or "" (leave them) — the `onDeleted` param.
     pub on_deleted: String,
+    /// What is read from the photos themselves (keywords, ratings and labels, titles and
+    /// captions, location, develop settings): the library's choice when the review opens.
+    #[serde(default)]
+    pub read: lightcraft_engine::import::ReadFromPhotos,
     /// The candidate clicked last: where a Shift-click range starts ([`ImportDialog::click`]).
     #[serde(skip)]
     pub last_clicked: Option<usize>,
@@ -613,6 +617,8 @@ pub fn poll_scan(app: &mut LightcraftApp, ctx: &egui::Context) {
     }
     app.renderer.forget_imports();
     let mut d = ImportDialog::new(out.candidates);
+    // as the review was last used, else as the library has it
+    d.read = app.session.import_defaults.read_in(lightcraft_engine::import::ReadDialog::Import);
     let trashed = d
         .candidates
         .iter()
@@ -654,7 +660,7 @@ pub fn start(app: &mut LightcraftApp, d: &ImportDialog) -> Result<Value, String>
         (true, false) => "copy",
         (true, true) => "move",
     };
-    let mut params = json!({"mode": mode, "keywords": d.keywords()});
+    let mut params = json!({"mode": mode, "keywords": d.keywords(), "read": d.read});
     if !d.on_deleted.is_empty() {
         params["onDeleted"] = json!(d.on_deleted);
     }
@@ -684,6 +690,8 @@ pub fn start(app: &mut LightcraftApp, d: &ImportDialog) -> Result<Value, String>
     }
     let total = queue.len();
     app.import = Some(ImportTask::new(queue, params, undo0, false));
+    // the Read row opens next time as it was used now
+    remember_read(app, lightcraft_engine::import::ReadDialog::Import, d.read);
     app.renderer.forget_imports();
     Ok(json!({"importing": total}))
 }
@@ -1325,6 +1333,44 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
         let r = ui.add(egui::TextEdit::singleline(&mut d.keywords).hint_text(crate::i18n::tr("comma, separated")).desired_width(f32::INFINITY));
         register(ui.ctx(), "field:importKeywords", r.rect);
     });
+    // what the photos themselves carry: each kind is read, or left in the files
+    field(ui, "Read", |ui| {
+        ui.horizontal_wrapped(|ui| {
+            for (kind, label, read) in read_choices(&mut d.read) {
+                let r = ui.checkbox(read, crate::i18n::tr(label)).on_hover_text(crate::i18n::tr(READ_HINT));
+                register(ui.ctx(), format!("check:importRead.{kind}"), r.rect);
+            }
+        });
+    });
+}
+
+/// Remember how a dialog's Read row was used, with the library (`library.preferences` →
+/// `import.readLast`): the dialog opens that way next time. Ticks that are the library's own
+/// choice are not kept, so a dialog nobody changed goes on following Settings ▸ Import.
+pub(crate) fn remember_read(app: &mut LightcraftApp, dialog: lightcraft_engine::import::ReadDialog, read: lightcraft_engine::import::ReadFromPhotos) {
+    if app.session.import_defaults.read_in(dialog) == read {
+        return;
+    }
+    // (not the person's action, and nothing of theirs is lost when it can't be saved: the
+    // dialog opens as the library has it)
+    if let Err(e) = app.session.execute("library.preferences", &json!({"import": {"readLast": {dialog.name(): read}}})) {
+        log::warn!("the Read choice of {} was not remembered: {e}", dialog.name());
+    }
+}
+
+/// What "Read" is about, in the import review and in Settings ▸ Import.
+pub(crate) const READ_HINT: &str = "What imports take from the photos themselves and the sidecars beside them. What is not read stays in the files, and LightCraft does not write it back into their sidecars either.";
+
+/// The kinds of thing an import reads from the photos, each by its command name, its label and
+/// whether it is read.
+pub(crate) fn read_choices(read: &mut lightcraft_engine::import::ReadFromPhotos) -> [(&'static str, &'static str, &mut bool); 5] {
+    [
+        ("keywords", "Keywords", &mut read.keywords),
+        ("ratings", "Ratings and labels", &mut read.ratings),
+        ("descriptions", "Titles and captions", &mut read.descriptions),
+        ("location", "Location", &mut read.location),
+        ("develop", "Develop settings", &mut read.develop),
+    ]
 }
 
 fn candidate_cell(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog, i: usize, rect: Rect) {
@@ -1524,6 +1570,8 @@ pub fn example_destination(app: &LightcraftApp, d: &ImportDialog) -> Option<Stri
     // the probe's metadata, so {camera}, {title}… preview as they will import
     if let Some(info) = app.session.import_probes.get(&c.path) {
         q.meta = info.meta.clone();
+        // what is not read names no file or folder either, as in the import itself
+        d.read.of_the_file(&mut q.meta);
     }
     let name = if d.rename.trim().is_empty() { c.name.clone() } else { lightcraft_engine::rename::expand(d.rename.trim(), &q, 1) };
     let root = if d.destination.trim().is_empty() {
@@ -1607,6 +1655,25 @@ mod tests {
         assert_eq!(grid_height(700.0, -50.0, 142.0), 700.0);
         assert_eq!(grid_height(700.0, f32::NAN, 142.0), 700.0);
         assert_eq!(grid_height(f32::INFINITY, 300.0, 142.0), DIALOG_SIZE[1] - DEFAULT_BELOW_GRID);
+    }
+
+    /// The example line previews names "as they will import": a kind the import does not read names nothing.
+    #[test]
+    fn the_example_leaves_out_what_the_import_does_not_read() {
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), crate::Services::default());
+        let mut info = lightcraft_engine::media::ProbeInfo::default();
+        info.meta.title = "Harbour".into();
+        app.session.import_probes.insert("img0.jpg".into(), info);
+        let mut d = ImportDialog::new(vec![ImportCandidate { path: "img0.jpg".into(), name: "img0.jpg".into(), ..Default::default() }]);
+        d.destination = "Photos".into();
+        d.rename = "{title}".into();
+        let sep = std::path::MAIN_SEPARATOR;
+        // (between "Photos" and the file name come the dated folders)
+        let name_of = |d: &ImportDialog| example_destination(&app, d).unwrap_or_default().rsplit(sep).next().unwrap_or_default().to_string();
+        assert_eq!(name_of(&d), "Harbour.jpg", "read: the title names the file");
+        d.read.descriptions = false;
+        assert_eq!(name_of(&d), "img0.jpg", "not read: the original name stays");
+        assert!(example_destination(&app, &d).is_some_and(|e| e.starts_with(&format!("Photos{sep}"))));
     }
 
     /// Six candidates, all checked; candidate 3 is a duplicate (unchecked, not importable).

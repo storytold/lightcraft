@@ -352,6 +352,14 @@ fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             }
         });
     }
+    heading(ui, t, crate::i18n::tr("Read from photos"));
+    hint(ui, t, crate::import::READ_HINT);
+    let mut read = app.session.import_defaults.read;
+    for (kind, label, on) in crate::import::read_choices(&mut read) {
+        if check(ui, &format!("settings.read.{kind}"), on, label) {
+            let _ = app.run("library.preferences", json!({"import": {"read": {kind: *on}}}));
+        }
+    }
     heading(ui, t, crate::i18n::tr("XMP sidecars"));
     let mut xmp = app.session.xmp;
     if check(ui, "settings.autoWriteXmp", &mut xmp.auto_write, "Automatically write changes into XMP sidecars") {

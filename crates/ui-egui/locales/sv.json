@@ -2414,5 +2414,11 @@
   "⌘-drag to straighten, ⇧G Guided Upright, a grid while transforming.": "⌘-dra för att räta upp, ⇧G guidad upprätning, ett rutnät under transformering.",
   "★ Favorites": "★ Favoriter",
   "日本語": "日本語",
-  "繁體中文（台灣）": "繁體中文（台灣）"
+  "繁體中文（台灣）": "繁體中文（台灣）",
+  "What imports take from the photos themselves and the sidecars beside them. What is not read stays in the files, and LightCraft does not write it back into their sidecars either.": "Vad importer hämtar från själva fotona och från sidofilerna bredvid dem. Det som inte läses stannar kvar i filerna, och LightCraft skriver det inte heller tillbaka till deras sidofiler.",
+  "Read from photos": "Läs från fotona",
+  "Ratings and labels": "Betyg och etiketter",
+  "Develop settings": "Framkallningsinställningar",
+  "Titles and captions": "Titlar och bildtexter",
+  "Read": "Läs"
 }
