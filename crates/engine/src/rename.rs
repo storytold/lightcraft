@@ -26,7 +26,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use lightcraft_catalog::dates::MONTHS;
-use lightcraft_catalog::{Op, Photo, PhotoId, Source};
+use lightcraft_catalog::{CatalogError, Op, Photo, PhotoId, Source};
 use serde::Serialize;
 
 use crate::sidecar::SidecarNaming;
@@ -874,6 +874,16 @@ pub(crate) fn move_all(fs: &dyn MoveFs, moves: &[(String, String)]) -> std::resu
     Ok(())
 }
 
+/// `op` with every `SetFile` a `Relink`: the same change to the catalog, but undo and redo move no file for it. For what is
+/// left of a rollback when the files it would move are already back where it puts the photos.
+pub(crate) fn without_file_moves(op: Op) -> Op {
+    match op {
+        Op::Batch { ops } => Op::Batch { ops: ops.into_iter().map(without_file_moves).collect() },
+        Op::SetFile { id, file_name, source } => Op::Relink { id, file_name, source, format: None },
+        op => op,
+    }
+}
+
 /// Final `SetFile` per photo (nested batches included), filtered by destination only afterward.
 fn set_file_ops_to(op: &Op, to: &HashSet<&str>, out: &mut Vec<Op>) {
     let mut pending = vec![op];
@@ -1098,6 +1108,12 @@ impl Session {
             let back: Vec<(String, String)> = moves.iter().rev().map(|(a, b)| (b.clone(), a.clone())).collect();
             if let Err(e) = move_all(fs, &back) {
                 return Err(EngineError::Other(format!("{err}; the renamed files could not all be moved back: {}", e.message)));
+            }
+            if matches!(err, EngineError::Catalog(CatalogError::PartlyApplied { .. }))
+                && let Some(step) = self.undo.last_mut()
+            {
+                // (the files are back: what is left of the rollback must point the photos at them, not move them)
+                step.op = without_file_moves(std::mem::replace(&mut step.op, Op::Batch { ops: Vec::new() }));
             }
             return Err(err);
         }

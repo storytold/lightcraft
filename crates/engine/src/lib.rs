@@ -88,7 +88,7 @@ use std::sync::Arc;
 pub use cmd::{CommandInfo, CommandSpec, command_specs, find_command};
 pub use errors::{AiModel, ErrorKind};
 pub use fonts::{CRAFT_FONTS, CraftFont};
-use lightcraft_catalog::{Catalog, Filter, Op, PhotoId, Sort};
+use lightcraft_catalog::{Catalog, CatalogError, Filter, Op, PhotoId, Sort};
 use lightcraft_develop::DevelopSettings;
 pub use media::{RenderJob, SourceLevel};
 use serde_json::Value;
@@ -629,9 +629,20 @@ impl Session {
     // ---------------------------------------------------------------- ops, undo
 
     /// Apply an op as one undoable step.
+    ///
+    /// A batch that fails and cannot be rolled back whole ([`CatalogError::PartlyApplied`]) did change the catalog, so
+    /// it is journaled all the same (replaying it leaves the same changes), and what is left of its rollback is the
+    /// undo step: undoing it finishes the rollback. The error still reaches the caller.
     pub fn commit(&mut self, label: &str, op: Op) -> Result<()> {
         let fwd = op.clone();
-        let inv = self.apply_catalog(op)?;
+        let (inv, failure) = match self.apply_catalog(op) {
+            Ok(inv) => (inv, None),
+            Err(EngineError::Catalog(CatalogError::PartlyApplied { cause, remaining })) => {
+                let remaining = *remaining;
+                (remaining.clone(), Some(EngineError::Catalog(CatalogError::PartlyApplied { cause, remaining: Box::new(remaining) })))
+            }
+            Err(e) => return Err(e),
+        };
         self.pending_log.push(fwd);
         self.undo.push(UndoEntry { label: label.to_string(), op: inv, folder: None, retry_inverse: Vec::new(), retry_sidecars: Vec::new() });
         self.commits = self.commits.wrapping_add(1);
@@ -642,7 +653,7 @@ impl Session {
         for mut dropped in self.redo.drain(..) {
             self.pending_sidecar_repairs.append(&mut dropped.retry_sidecars);
         }
-        Ok(())
+        failure.map_or(Ok(()), Err)
     }
 
     fn apply_catalog(&mut self, op: Op) -> Result<Op> {
@@ -664,7 +675,11 @@ impl Session {
                 _ => {}
             }
         }
-        let inv = self.catalog.apply(op)?;
+        // (a batch that was only partly taken back changed the catalog all the same: what hangs on its photos goes too)
+        let applied = self.catalog.apply(op);
+        if applied.is_err() && !matches!(applied, Err(CatalogError::PartlyApplied { .. })) {
+            return applied.map_err(Into::into);
+        }
         for id in invalidated {
             self.media.forget(id);
         }
@@ -674,17 +689,20 @@ impl Session {
         }
         #[cfg(target_arch = "wasm32")]
         let _ = replaced;
-        Ok(inv)
+        Ok(applied?)
     }
 
     /// [`Session::commit`] for an op that goes with a folder already renamed on disk; the undo
     /// step renames it back (`folder` is the undo direction: current place → old place).
     pub(crate) fn commit_with_folder(&mut self, label: &str, op: Op, folder: FolderMove) -> Result<()> {
-        self.commit(label, op)?;
-        if let Some(e) = self.undo.last_mut() {
+        let result = self.commit(label, op);
+        // (a batch only partly taken back is journaled and has its undo step too: that step moves the folder back)
+        if (result.is_ok() || matches!(result, Err(EngineError::Catalog(CatalogError::PartlyApplied { .. }))))
+            && let Some(e) = self.undo.last_mut()
+        {
             e.folder = Some(folder);
         }
-        Ok(())
+        result
     }
 
     /// The box to cut a face's picture from: the detector's, when the scan has looked at the face (every face is then shown
@@ -703,8 +721,12 @@ impl Session {
     /// an undo step, and it leaves the redo stack alone.
     pub(crate) fn apply_system(&mut self, op: Op) -> Result<()> {
         let fwd = op.clone();
-        self.catalog.apply(op)?;
-        self.pending_log.push(fwd);
+        let applied = self.catalog.apply(op);
+        if applied.is_ok() || matches!(applied, Err(CatalogError::PartlyApplied { .. })) {
+            // (a batch only partly taken back changed the catalog all the same: the journal has to say so)
+            self.pending_log.push(fwd);
+        }
+        applied?;
         Ok(())
     }
 
@@ -775,7 +797,12 @@ impl Session {
         let redo = match self.apply_with_files(&mut e, fs) {
             Ok(r) => r,
             Err(err) => {
-                self.undo.push(e);
+                // (a step that was only partly applied cannot be tried again: what is left of it goes to the other
+                // stack, where taking it back returns the catalog to where it was before the attempt)
+                match self.rest_of_partial_step(&mut e, &err) {
+                    Some(rest) => self.redo.push(rest),
+                    None => self.undo.push(e),
+                }
                 return Err(err);
             }
         };
@@ -791,6 +818,24 @@ impl Session {
         Ok(e.label)
     }
 
+    /// The step that takes back what an undo or redo step (`e`) left in the catalog when it failed part-way
+    /// ([`CatalogError::PartlyApplied`]); `None` when it failed without changing anything. The step itself cannot be
+    /// tried again from where the catalog now is, so its sidecars to repair are handed on.
+    fn rest_of_partial_step(&mut self, e: &mut UndoEntry, err: &EngineError) -> Option<UndoEntry> {
+        let EngineError::Catalog(CatalogError::PartlyApplied { remaining, .. }) = err else { return None };
+        self.pending_sidecar_repairs.append(&mut e.retry_sidecars);
+        // (the inverses of path corrections it kept come after what is left, as when a step succeeds)
+        let op = match (**remaining).clone() {
+            op if e.retry_inverse.is_empty() => op,
+            Op::Batch { mut ops } => {
+                ops.append(&mut e.retry_inverse);
+                Op::Batch { ops }
+            }
+            op => Op::Batch { ops: std::iter::once(op).chain(std::mem::take(&mut e.retry_inverse)).collect() },
+        };
+        Some(UndoEntry { label: e.label.clone(), op, folder: None, retry_inverse: Vec::new(), retry_sidecars: Vec::new() })
+    }
+
     pub fn redo_step(&mut self) -> Result<String> {
         self.redo_step_with(&rename::RealFs)
     }
@@ -800,7 +845,10 @@ impl Session {
         let undo = match self.apply_with_files(&mut e, fs) {
             Ok(r) => r,
             Err(err) => {
-                self.redo.push(e);
+                match self.rest_of_partial_step(&mut e, &err) {
+                    Some(rest) => self.undo.push(rest),
+                    None => self.redo.push(e),
+                }
                 return Err(err);
             }
         };
@@ -888,13 +936,31 @@ impl Session {
                 }
             }
             Err(e) => {
+                if matches!(e, EngineError::Catalog(CatalogError::PartlyApplied { .. })) {
+                    // the step changed the catalog in part: the journal has to say so
+                    self.pending_log.push(entry.op.clone());
+                }
                 let back: Vec<(String, String)> = moves.iter().rev().map(|(a, b)| (b.clone(), a.clone())).collect();
                 if let Err(mut be) = rename::move_all(fs, &back) {
                     entry.retry_sidecars.append(&mut be.pending_sidecars);
-                    return Err(EngineError::Other(format!("{e}; the files could not all be moved back: {}", be.message)));
+                    let moved = format!("the files could not all be moved back: {}", be.message);
+                    return Err(match e {
+                        // (what is left of the rollback must reach the undo and redo stacks all the same)
+                        EngineError::Catalog(CatalogError::PartlyApplied { cause, remaining }) => EngineError::Catalog(CatalogError::PartlyApplied {
+                            cause: Box::new(CatalogError::Invalid(format!("{cause}; {moved}"))),
+                            remaining,
+                        }),
+                        e => EngineError::Other(format!("{e}; {moved}")),
+                    });
                 }
                 undo_folder();
-                Err(e)
+                Err(match e {
+                    // (the files are back: what is left of the rollback must point the photos at them, not move them)
+                    EngineError::Catalog(CatalogError::PartlyApplied { cause, remaining }) => {
+                        EngineError::Catalog(CatalogError::PartlyApplied { cause, remaining: Box::new(rename::without_file_moves(*remaining)) })
+                    }
+                    e => e,
+                })
             }
         }
     }
