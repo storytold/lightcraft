@@ -329,8 +329,8 @@ pub fn install() -> Option<&'static AppLogger> {
     Some(logger)
 }
 
-/// Chain a panic hook after the current one (the engine guard's: standard error plus
-/// `lightcraft-panics.log` in the temp folder) that also puts the panic in the log file.
+/// Chain a panic hook after the current one (the engine guard's when there is a crash log: standard
+/// error plus `lightcraft-panics.log` in the settings folder) that also puts the panic in the log file.
 pub fn record_panics(logger: &'static AppLogger) {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
