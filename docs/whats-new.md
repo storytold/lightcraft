@@ -157,6 +157,11 @@
   the full count took about 14 s instead of about 23 s on a heavily loaded machine; the rest is the text rules of
   the albums themselves. The counts are the same as before, including for albums that loop through each other.
 
+### Local says where its listing stops
+- In the left panel's Local, a folder eight levels below its place used to open onto nothing. It now says **Go Deeper**:
+  click it to add that folder to Local as a place of its own (a message says so), where it opens further. A folder
+  that is already a place of its own says "Opens as its own place" there instead, where the listing stops.
+
 ### Sharper resampling in HDR and panorama merges
 - Merged photos (HDR and panorama) are resampled with a sharper filter (Lanczos-3 instead of bilinear). Moving a
   photo by half a pixel used to lose a third of its finest detail; now it keeps most of it, without halos around

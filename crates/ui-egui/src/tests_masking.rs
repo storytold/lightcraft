@@ -1150,6 +1150,120 @@ fn local_folder_listed_twice_opens_and_closes_each_row() {
     h.settle(SETTLE);
 }
 
+/// Given folders nine deep below a Local place, when the eighth is opened, then a row says
+/// deeper folders are not listed (in place of an open folder that seems empty), and clicking it
+/// adds that folder to Local, where it opens further.
+#[test]
+fn local_says_where_its_listing_stops_and_offers_the_way_on() {
+    /// Removes the folders however the test ends.
+    struct Cleanup(std::path::PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let base = std::env::temp_dir().join(format!("lc-ui-deep-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let _cleanup = Cleanup(base.clone());
+    let mut levels = vec![base.clone()];
+    for name in ["1", "2", "3", "4", "5", "6", "7", "8", "9"] {
+        let next = levels.last().unwrap().join(name);
+        levels.push(next);
+    }
+    std::fs::create_dir_all(levels.last().unwrap()).unwrap();
+    let mut h = detail("panel.edit");
+    let r = h.request("ui.resize", json!({"width": 1400.0, "height": 1400.0}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    exec(&mut h, "view.leftPanel", json!({"show": true}));
+    exec(&mut h, "view.sidebarSection", json!({"section": "albums", "collapsed": true}));
+    h.hide_home_above(&base);
+    exec(&mut h, "local.addRoot", json!({"path": base.to_string_lossy()}));
+    h.settle(SETTLE);
+    let on_screen = |h: &Headless, id: &str| h.app.widgets.iter().any(|(w, _)| w == id);
+    // the place and the eight levels below it open one after the other
+    for level in &levels[..9] {
+        let toggle = format!("folderToggle:{}", level.to_string_lossy());
+        h.step_until(SETTLE, |h| on_screen(h, &toggle));
+        let r = h.request("ui.clickWidget", json!({"id": toggle}), T);
+        assert_eq!(r["ok"], true, "{r}");
+    }
+    let eighth = levels[8].to_string_lossy().to_string();
+    let more = format!("source:localDeeper:{eighth}");
+    h.step_until(SETTLE, |h| on_screen(h, &more));
+    assert!(on_screen(&h, &more), "the eighth level says there is more inside");
+    assert!(!on_screen(&h, &format!("source:local:{}", levels[9].to_string_lossy())), "the ninth is not listed");
+    assert!(!on_screen(&h, &format!("source:localDeeper:{}", levels[7].to_string_lossy())), "a level that lists its folders says nothing");
+    let r = h.request("ui.clickWidget", json!({"id": more}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert!(h.app.ui.local_roots.contains(&eighth), "the folder is a Local place now: {:?}", h.app.ui.local_roots);
+    let said = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+    assert!(said.contains("“8”") && said.contains("Local"), "the click says what it did: {said:?}");
+    assert!(!on_screen(&h, &more), "a place of its own now, the row has nothing left to offer");
+    // the row inside the first place says where its folders are, and is a row of its own: not
+    // the place's (one triangle each, so opening one does not open the other)
+    assert!(on_screen(&h, &format!("localDeeperNote:{eighth}")), "an open folder never seems to hold nothing");
+    // (both triangles go by the folder's widget id; each opens its own row, #1093)
+    let toggle = format!("folderToggle:{eighth}");
+    assert_eq!(h.app.widgets.iter().filter(|(w, _)| *w == toggle).count(), 2, "the row inside and the place have a triangle each");
+    // taken out of Local again (Remove from Local), the place is not listed: the row inside is
+    // no longer a second row of it, and offers the way on once more
+    exec(&mut h, "local.hide", json!({"path": eighth}));
+    h.settle(SETTLE);
+    assert!(!on_screen(&h, &format!("localDeeperNote:{eighth}")), "no note about a place that is not listed");
+    assert!(on_screen(&h, &more), "a place that was taken out of Local can be added again from here");
+}
+
+/// Given a Go Deeper row still shown for a folder that is gone from the disk, when it is
+/// clicked, then the refusal is said in a message and Local is unchanged.
+#[test]
+fn go_deeper_says_why_when_the_folder_cannot_be_added() {
+    /// Removes the folders however the test ends.
+    struct Cleanup(std::path::PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let base = std::env::temp_dir().join(format!("lc-ui-deep-gone-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let _cleanup = Cleanup(base.clone());
+    let mut levels = vec![base.clone()];
+    for name in ["1", "2", "3", "4", "5", "6", "7", "8", "9"] {
+        let next = levels.last().unwrap().join(name);
+        levels.push(next);
+    }
+    std::fs::create_dir_all(levels.last().unwrap()).unwrap();
+    let mut h = detail("panel.edit");
+    let r = h.request("ui.resize", json!({"width": 1400.0, "height": 1400.0}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    exec(&mut h, "view.leftPanel", json!({"show": true}));
+    exec(&mut h, "view.sidebarSection", json!({"section": "albums", "collapsed": true}));
+    h.hide_home_above(&base);
+    exec(&mut h, "local.addRoot", json!({"path": base.to_string_lossy()}));
+    h.settle(SETTLE);
+    let on_screen = |h: &Headless, id: &str| h.app.widgets.iter().any(|(w, _)| w == id);
+    for level in &levels[..9] {
+        let toggle = format!("folderToggle:{}", level.to_string_lossy());
+        h.step_until(SETTLE, |h| on_screen(h, &toggle));
+        let r = h.request("ui.clickWidget", json!({"id": toggle}), T);
+        assert_eq!(r["ok"], true, "{r}");
+    }
+    let eighth = levels[8].to_string_lossy().to_string();
+    let more = format!("source:localDeeper:{eighth}");
+    h.step_until(SETTLE, |h| on_screen(h, &more));
+    assert!(on_screen(&h, &more), "the eighth level says there is more inside");
+    // the folder goes away; the row, from the listing kept for a moment, is still there to click
+    std::fs::remove_dir_all(&levels[8]).unwrap();
+    let places = h.app.ui.local_roots.clone();
+    let r = h.request("ui.clickWidget", json!({"id": more}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    assert_eq!(h.app.ui.local_roots, places, "nothing was added");
+    let said = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+    assert!(said.contains("not a folder"), "the refusal is said: {said:?}");
+}
+
 #[test]
 fn geometry_slider_drag_marks_the_grid() {
     let mut h = detail("panel.crop");
