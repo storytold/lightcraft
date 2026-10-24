@@ -263,7 +263,7 @@
 ### Reduce motion
 - **Settings ▸ Interface ▸ Reduce motion** (`view.reduceMotion` for scripts and agents) turns off the animations
   that move or turn: a click on the photo or Z zooms at once instead of easing in, the interface's own small easing
-  stops, the Synchronize Folder spinner becomes a still dot, and the activity panel's sweeping bar becomes a still
+  stops, every spinner (a busy button's too) becomes a still dot, and every sweeping progress bar becomes a still
   segment, and scrolling to a photo (the grid and the filmstrip following the active photo) jumps instead of
   gliding. Fades that tell you something changed (toasts, the slideshow's crossfade and its control bar) stay. On macOS
   it follows System Settings ▸ Accessibility ▸ Display ▸ Reduce motion until you change it in Settings; **Use the
@@ -636,6 +636,7 @@
   Slideshow Export no longer say "1 photos" or "1 stacks". The Import review's Move button counts photos that are
   in Recently Deleted apart, since they are restored and their files stay where they are: "Move 2 Photos · Restore 1
   Photo".
+
 
 ### Sharper resampling in HDR and panorama merges
 - Merged photos (HDR and panorama) are resampled with a sharper filter (Lanczos-3 instead of bilinear). Moving a
