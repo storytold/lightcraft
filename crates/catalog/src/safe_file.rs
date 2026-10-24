@@ -24,6 +24,9 @@
 //!   links, an exclusive create that claims the name, then a rename over that placeholder).
 //! - [`same_file`] tells whether two paths name the same file on disk (device + inode on Unix,
 //!   resolved paths elsewhere), for "is this target an original?" checks.
+//! - [`open_regular`] / [`open_or_create_regular`] open a library file in place (to read, append
+//!   or cut it), never through a link planted at its name, nor a FIFO or a device (issue #2552).
+//!   The replacing writes above are safe already: a rename replaces a link, it doesn't follow it.
 
 use std::cell::Cell;
 use std::fs::{self, File, OpenOptions};
@@ -287,6 +290,61 @@ pub fn same_file(a: &Path, b: &Path) -> bool {
     }
 }
 
+/// Open the regular file `path` in place with `opts`, never through a link at that name: a library
+/// folder may come from a share, a sync or an archive, and a link planted there would have a write
+/// land in, or a read take, a file elsewhere (issue #2552). A link, a FIFO (whose open would block),
+/// a device or a folder at the name is refused with a message saying what to do; nothing there is
+/// `None`. `opts` must not create or truncate: [`open_or_create_regular`] makes a missing file.
+///
+/// On Unix the opened file is checked to be the one looked at (same device and inode) before
+/// anything is read or written through it, so a link swapped in meanwhile is refused too.
+pub fn open_regular(path: &Path, opts: &OpenOptions) -> io::Result<Option<File>> {
+    let before = match fs::symlink_metadata(path) {
+        Ok(m) => m,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    if !before.file_type().is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "{} is a link or not a regular file; LightCraft won't read or write a library file through one. Remove it or put the real file there.",
+                path.display()
+            ),
+        ));
+    }
+    let f = match opts.open(path) {
+        Ok(f) => f,
+        // removed since it was looked at
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let after = f.metadata()?;
+        if (after.dev(), after.ino()) != (before.dev(), before.ino()) {
+            return Err(io::Error::other(format!("{} changed while it was being opened; try again", path.display())));
+        }
+    }
+    Ok(Some(f))
+}
+
+/// [`open_regular`], or, when nothing is at `path`, a new file made exclusively (`create_new`),
+/// which neither follows a link planted there meanwhile nor creates its target. `true` when this
+/// call made the file.
+pub fn open_or_create_regular(path: &Path, opts: &OpenOptions) -> io::Result<(File, bool)> {
+    if let Some(f) = open_regular(path, opts)? {
+        return Ok((f, false));
+    }
+    match opts.clone().create_new(true).open(path) {
+        Ok(f) => Ok((f, true)),
+        // made by another program since: opened by the same rules
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => open_regular(path, opts)?.map(|f| (f, false)).ok_or(e),
+        Err(e) => Err(e),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -407,6 +465,30 @@ mod tests {
         assert!(same_file(&p, &d.join("sub/../x.jpg")));
         assert!(!same_file(&p, &d.join("y.jpg")));
         assert!(!same_file(&p, &d.join("missing.jpg")));
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    /// Issue #2552: only a regular file is opened in place. A link (even to a regular file), a
+    /// folder, a FIFO or a device at the name is refused without being opened, and a missing file
+    /// is `None` until `open_or_create_regular` makes it.
+    #[cfg(unix)]
+    #[test]
+    fn only_regular_files_are_opened_in_place() {
+        let d = temp("regular");
+        let p = d.join("catalog.log");
+        assert!(open_regular(&p, OpenOptions::new().read(true)).unwrap().is_none());
+        assert!(open_or_create_regular(&p, OpenOptions::new().append(true)).unwrap().1, "a missing file is made");
+        assert!(!open_or_create_regular(&p, OpenOptions::new().append(true)).unwrap().1, "an existing one is opened");
+        assert!(open_regular(&p, OpenOptions::new().read(true)).unwrap().is_some());
+        std::os::unix::fs::symlink(&p, d.join("link.log")).unwrap();
+        fs::create_dir_all(d.join("folder.log")).unwrap();
+        let fifo = d.join("fifo.log");
+        assert!(std::process::Command::new("mkfifo").arg(&fifo).status().unwrap().success());
+        for refused in [d.join("link.log"), d.join("folder.log"), fifo, PathBuf::from("/dev/null")] {
+            let e = open_regular(&refused, OpenOptions::new().read(true)).unwrap_err();
+            assert!(e.to_string().contains("is a link or not a regular file"), "{}: {e}", refused.display());
+            assert!(open_or_create_regular(&refused, OpenOptions::new().append(true)).is_err(), "{}", refused.display());
+        }
         let _ = fs::remove_dir_all(&d);
     }
 }

@@ -199,3 +199,31 @@ fn dropping_the_lock_frees_the_library_while_another_thread_spawns_processes() {
         &refused[..refused.len().min(3)]
     );
 }
+
+/// Issue #2552: a `catalog.lock` planted as a link is never created or locked through. The library
+/// opens unprotected (with a warning), the file the link points to keeps its bytes and its lock,
+/// and a dangling link makes nothing at its target.
+#[cfg(unix)]
+#[test]
+fn a_link_at_the_lock_file_is_never_created_or_locked_through() {
+    use std::os::unix::fs::symlink;
+    let _serial = serial();
+    let dir = temp_dir("lock-link");
+    let victim = dir.join("victim.txt");
+    std::fs::write(&victim, b"keep").unwrap();
+    symlink(&victim, dir.join(LOCK)).unwrap();
+    let l = LibraryLock::acquire(&dir, "LightCraft").unwrap();
+    assert!(!l.held(), "locked through the link");
+    assert!(std::fs::File::open(&victim).unwrap().try_lock().is_ok(), "the link's target is locked");
+    drop(l);
+    assert_eq!(std::fs::read(&victim).unwrap(), b"keep");
+
+    let dangling = temp_dir("lock-dangling");
+    let target = dangling.join("made-through-link");
+    symlink(&target, dangling.join(LOCK)).unwrap();
+    assert!(!LibraryLock::acquire(&dangling, "LightCraft").unwrap().held());
+    assert!(!target.exists(), "a dangling link's target was created");
+    for d in [&dir, &dangling] {
+        let _ = std::fs::remove_dir_all(d);
+    }
+}
