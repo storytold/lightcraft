@@ -74,6 +74,8 @@ mod tests_canvas_pan;
 #[cfg(test)]
 mod tests_capture_time;
 #[cfg(test)]
+mod tests_carried_text_field_menu;
+#[cfg(test)]
 mod tests_compare;
 #[cfg(test)]
 mod tests_copy_paste_dialogs;
@@ -1573,6 +1575,8 @@ impl LightcraftApp {
         }
         panels::dialogs::prepare(self, ui);
         let t0 = now_ms();
+        // what the panels below read to refuse a right-click's menu while photos are carried
+        widgets::set_carrying(&ctx, self.ui.dragging_photos.is_some() && ctx.input(|i| i.pointer.primary_down()));
         if std::mem::take(&mut self.ui.quit) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
