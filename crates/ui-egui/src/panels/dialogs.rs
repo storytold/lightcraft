@@ -1423,6 +1423,8 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     Dialog::LightroomCatalog { .. } => "Import Lightroom Catalog…",
                     d @ Dialog::LightroomDestination { .. } => crate::lightroom_destination::ok_label(d),
                     Dialog::SynchronizeFolder { .. } if informational => "Close",
+                    // the scan need not be waited for
+                    Dialog::SynchronizeFolder { counts: None, .. } => "Continue in Background",
                     Dialog::SynchronizeFolder { .. } => "Synchronize",
                     Dialog::SamModel { then: Some(_), .. } if sam_installed => "Continue",
                     Dialog::SamModel { .. } if sam_installed || sam_running || sam_nowhere => "",
@@ -1445,8 +1447,10 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     && (informational
                         || !matches!(
                             &dlg,
-                            Dialog::DenoiseModel { accepted: false, .. } | Dialog::FaceModel { accepted: false, .. } | Dialog::SynchronizeFolder { counts: None, .. }
+                            Dialog::DenoiseModel { accepted: false, .. } | Dialog::FaceModel { accepted: false, .. }
                         )
+                            // (Synchronize, just after its button stopped being Continue in Background)
+                            && !(matches!(&dlg, Dialog::SynchronizeFolder { counts: Some(_), .. }) && !crate::sync::settled(app, ui.ctx()))
                             // smart-album rules that can't mean anything wait to be fixed
                             && !matches!(&dlg, Dialog::SmartRules { id, rules, .. } if !rules.check_for(&app.session.catalog, id.map(lightcraft_catalog::AlbumId)).is_empty()));
                 let primary = !informational && can_confirm && confirm_style(&dlg) == ConfirmStyle::Primary;

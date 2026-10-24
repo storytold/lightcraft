@@ -56,14 +56,19 @@ fn detail_line(t: &TaskInfo) -> String {
 /// Draw the stack (called every frame, after the panels and dialogs).
 pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
     let all = app.session.activity.list();
+    // a scan that finished in the background and waits to be looked at
+    let ready = app.sync_ready.clone();
     if all.is_empty() {
         app.activity_expanded = false;
-        return;
+        if ready.is_none() {
+            return;
+        }
+    } else {
+        // look again soon: a young task becomes due, bars move
+        ctx.request_repaint_after(std::time::Duration::from_millis(100));
     }
-    // look again soon: a young task becomes due, bars move
-    ctx.request_repaint_after(std::time::Duration::from_millis(100));
     let tasks: Vec<&TaskInfo> = all.iter().filter(|t| t.age_ms >= SHOW_AFTER_MS).collect();
-    if tasks.is_empty() {
+    if tasks.is_empty() && ready.is_none() {
         return;
     }
     let t = Tokens::get(ctx);
@@ -72,6 +77,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
     let max_height = (ctx.content_rect().height() - t.top_bar_h - 60.0).max(80.0);
     let mut cancel = None;
     let mut toggle = false;
+    let mut notice = None;
     let frame = egui::Frame::NONE.fill(t.chrome).stroke(Stroke::new(1.0, t.field_border)).corner_radius(6).inner_margin(Margin::same(MARGIN));
     egui::Area::new(egui::Id::new("activity-stack")).order(egui::Order::Middle).fixed_pos(pos2(8.0, t.top_bar_h + 8.0)).show(ctx, |ui| {
         // An area lays out in the size it had last frame, and the scroll area would take that as all the room there
@@ -83,6 +89,12 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
             ui.set_width(inner);
             ui.spacing_mut().item_spacing.y = 3.0;
             egui::ScrollArea::vertical().max_height(max_height).auto_shrink([false, true]).show(ui, |ui| {
+                if let Some(ready) = &ready {
+                    notice = scan_notice(ui, &t, ready, inner);
+                    if !tasks.is_empty() {
+                        ui.add_space(6.0);
+                    }
+                }
                 for (i, task) in tasks.iter().take(shown).enumerate() {
                     if i > 0 {
                         ui.add_space(6.0);
@@ -104,6 +116,11 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
     if let Some(id) = cancel {
         self::cancel(app, id);
     }
+    match notice {
+        Some(Notice::Review) => crate::sync::review(app),
+        Some(Notice::Dismiss) => crate::sync::dismiss(app),
+        None => {}
+    }
     if toggle {
         app.activity_expanded = !app.activity_expanded;
     }
@@ -113,6 +130,54 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
 /// so the command goes to the engine directly (`LightcraftApp::run` would put its error in the status bar).
 pub(crate) fn cancel(app: &mut LightcraftApp, id: u64) {
     let _ = app.session.execute("activity.cancel", &json!({"id": id}));
+}
+
+/// What was done with a notice.
+enum Notice {
+    Review,
+    Dismiss,
+}
+
+/// The notice of a Synchronize Folder scan that finished in the background (widgets
+/// `activity:scanReady`, its `:review` and `:dismiss`): what it found and in which folder. A
+/// click on it opens the dialog with the result; ✕ lets go of it. It stays until one of
+/// the two: the person looks when ready.
+fn scan_notice(ui: &mut egui::Ui, t: &Tokens, ready: &crate::sync::SyncReady, width: f32) -> Option<Notice> {
+    let mut dismissed = false;
+    let title = if ready.counts.offline { tr("Folder not found").to_string() } else { tr_format!("Changes found: {n}", n = ready.changes()) };
+    let mut reviewed = false;
+    let r = ui
+        .vertical(|ui| {
+            ui.set_width(width);
+            ui.horizontal(|ui| {
+                let label_w = width - CROSS - 6.0;
+                ui.allocate_ui_with_layout(vec2(label_w, 18.0), Layout::left_to_right(Align::Center), |ui| {
+                    ui.set_width(label_w);
+                    ui.add(egui::Label::new(RichText::new(title).font(t.font(12.5)).color(t.text)).truncate());
+                });
+                let (rect, resp) = ui.allocate_exact_size(vec2(CROSS, CROSS), Sense::click());
+                paint(ui.painter(), rect.shrink(2.0), Icon::Close, if resp.hovered() { t.text } else { t.icon });
+                register(ui.ctx(), "activity:scanReady:dismiss", rect);
+                dismissed = resp.on_hover_text(tr("Dismiss")).clicked();
+            });
+            // (the part below the ✕'s line takes the click, so the two never overlap)
+            let body = ui
+                .vertical(|ui| {
+                    ui.set_width(width);
+                    ui.add(egui::Label::new(RichText::new(ready.name.as_str()).font(t.font(11.0)).color(t.text_dim)).truncate());
+                    ui.add(egui::Label::new(RichText::new(tr("Review…")).font(t.font(11.0)).color(t.accent)));
+                })
+                .response;
+            let click = ui.interact(body.rect, egui::Id::new("activity-scan-ready"), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+            register(ui.ctx(), "activity:scanReady:review", body.rect);
+            reviewed = click.on_hover_text(tr("Open Synchronize Folder with what the scan found")).clicked();
+        })
+        .response;
+    register(ui.ctx(), "activity:scanReady", r.rect);
+    if dismissed {
+        return Some(Notice::Dismiss);
+    }
+    reviewed.then_some(Notice::Review)
 }
 
 /// One task: name and ✕, the bar, the detail line. True when ✕ was clicked.

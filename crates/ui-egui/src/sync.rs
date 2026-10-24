@@ -3,6 +3,10 @@
 //! changed and what to do about it. Synchronize runs `folder.synchronize`, which acts on exactly
 //! the scan the dialog showed (see `lightcraft_engine::sync`). Both the scan and the run show a row in the activity
 //! stack (issue #345); its ✕ stops them like the dialog's Cancel.
+//!
+//! The scan need not be waited for: Continue in Background closes the dialog and the scan goes
+//! on under its row. When it is done, a notice in the activity stack says so ([`SyncReady`]);
+//! a click on it opens the dialog with what was found, whenever the person is ready for it.
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -20,6 +24,12 @@ pub struct SyncTask {
     path: String,
     /// What the dialog calls the folder (its row's detail).
     name: String,
+    disk: bool,
+    /// The dialog was closed with Continue in Background: the scan goes on without it.
+    background: bool,
+    /// What was ticked in the dialog when it was closed that way (a dialog that had scanned
+    /// before and was scanning again keeps its ticks): the dialog opens with them again.
+    choice: SyncChoice,
     progress: Arc<SyncProgress>,
     rx: std::sync::mpsc::Receiver<FolderChanges>,
     /// Its row in the activity stack; ✕ cancels the scan and closes the dialog.
@@ -44,10 +54,20 @@ fn listing_text(folders: usize, files: usize) -> String {
     crate::i18n::tr_format!("Listing folders — folders: {folders}, files: {files}", folders = folders, files = files)
 }
 
-/// Open the dialog for folder `path` (called `name` in it) and start scanning.
+/// Open the dialog for folder `path` (called `name` in it) and start scanning. One folder at a
+/// time: while another folder is scanned in the background, or what was found in it waits to
+/// be looked at, this is refused (minutes of scanning are not thrown away unasked); the same
+/// folder is scanned afresh.
 pub fn open(app: &mut LightcraftApp, path: &str, name: &str, disk: bool) -> Result<(), String> {
-    cancel(app);
+    if let Some(other) = app.sync.as_ref().filter(|t| t.background && t.path != path) {
+        return Err(crate::i18n::tr_format!("“{name}” is still being scanned: wait for it, or stop it with ✕ on its row", name = other.name));
+    }
+    if let Some(other) = app.sync_ready.as_ref().filter(|r| r.path != path) {
+        return Err(crate::i18n::tr_format!("Look at the changes found in “{name}” first, or dismiss them", name = other.name));
+    }
+    // (a folder that can't be synchronized leaves what there is alone)
     let input = SyncInput::new(&mut app.session, path, disk).map_err(|e| e.to_string())?;
+    cancel(app);
     let progress = Arc::new(SyncProgress::default());
     let (tx, rx) = std::sync::mpsc::channel();
     let p = progress.clone();
@@ -60,7 +80,16 @@ pub fn open(app: &mut LightcraftApp, path: &str, name: &str, disk: bool) -> Resu
     job();
     let guard = app.session.activity.start("sync", "Looking for changes", Cancel::Flag(progress.files.cancel.clone()));
     guard.detail(name);
-    app.sync = Some(SyncTask { path: path.to_string(), name: name.to_string(), progress, rx, guard });
+    app.sync = Some(SyncTask {
+        path: path.to_string(),
+        name: name.to_string(),
+        disk,
+        background: false,
+        choice: SyncChoice::default(),
+        progress,
+        rx,
+        guard,
+    });
     let d = SyncChoice::default();
     app.ui.dialog = Some(Dialog::SynchronizeFolder {
         path: path.to_string(),
@@ -75,12 +104,72 @@ pub fn open(app: &mut LightcraftApp, path: &str, name: &str, disk: bool) -> Resu
     Ok(())
 }
 
+/// A scan that finished in the background, waiting to be looked at: the notice in the activity
+/// stack. Its changes are `session.folder_changes`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SyncReady {
+    pub path: String,
+    /// What the dialog calls the folder.
+    pub name: String,
+    pub disk: bool,
+    pub counts: SyncCounts,
+    /// What was ticked when the dialog was closed.
+    pub choice: SyncChoice,
+}
+
+impl SyncReady {
+    /// How many changes there are to look at.
+    pub fn changes(&self) -> usize {
+        let c = &self.counts;
+        c.new + c.moved + c.missing + c.metadata
+    }
+}
+
+/// A click on the notice: open the dialog with what the background scan found.
+pub fn review(app: &mut LightcraftApp) {
+    // (a dialog that is open is not taken away; the notice waits)
+    if app.ui.dialog.is_some() {
+        return;
+    }
+    let Some(ready) = app.sync_ready.take() else { return };
+    let d = ready.choice;
+    app.ui.dialog = Some(Dialog::SynchronizeFolder {
+        path: ready.path,
+        name: ready.name,
+        disk: ready.disk,
+        counts: Some(ready.counts),
+        import_new: d.import_new,
+        relink_moved: d.relink_moved,
+        remove_missing: d.remove_missing,
+        read_metadata: d.read_metadata,
+    });
+}
+
+/// ✕ on the notice: what the scan found is let go of.
+pub fn dismiss(app: &mut LightcraftApp) {
+    if app.sync_ready.is_some() {
+        cancel(app);
+    }
+}
+
+/// Another library was opened: a scan of the one before, running or waiting to be looked at,
+/// says nothing about this one.
+pub(crate) fn library_changed(app: &mut LightcraftApp) {
+    if app.sync.is_some() || app.sync_ready.is_some() || app.sync_owns_changes {
+        cancel(app);
+        if matches!(app.ui.dialog, Some(Dialog::SynchronizeFolder { .. })) {
+            app.ui.dialog = None;
+        }
+    }
+}
+
 /// Stop a running scan and let go of a finished one the dialog made (one an agent made with
 /// `folder.scanChanges` is the agent's).
 fn cancel(app: &mut LightcraftApp) {
     if let Some(t) = app.sync.take() {
         t.progress.files.cancel.store(true, Ordering::Relaxed);
     }
+    app.sync_ready = None;
     if std::mem::take(&mut app.sync_owns_changes) {
         app.session.folder_changes = None;
     }
@@ -93,21 +182,25 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
         Some(Dialog::SynchronizeFolder { path, .. }) => Some(path.clone()),
         _ => None,
     };
-    let Some(open_for) = open_for else {
-        if app.sync.is_some() || app.sync_owns_changes {
+    let background = app.sync.as_ref().is_some_and(|t| t.background);
+    if open_for.is_none() && !background {
+        // (what a background scan found is kept for its notice)
+        if app.sync.is_some() || (app.sync_owns_changes && app.sync_ready.is_none()) {
             cancel(app);
         }
         return;
-    };
+    }
     let Some(task) = app.sync.as_ref() else { return };
-    if task.path != open_for {
+    if !background && open_for.as_deref() != Some(task.path.as_str()) {
         cancel(app);
         return;
     }
     if task.guard.is_cancelled() {
         // ✕ on its row: a scan stopped part-way has nothing to show
         cancel(app);
-        app.ui.dialog = None;
+        if !background {
+            app.ui.dialog = None;
+        }
         return;
     }
     let (done, total, detail) = scan_row(&task.progress, &task.name);
@@ -119,12 +212,14 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
         Err(std::sync::mpsc::TryRecvError::Empty) => return,
         Err(_) => {
             app.sync = None;
-            app.ui.dialog = None;
+            if !background {
+                app.ui.dialog = None;
+            }
             app.toast(ctx, crate::i18n::tr("Scan failed"));
             return;
         }
     };
-    app.sync = None;
+    let Some(task) = app.sync.take() else { return };
     let c = SyncCounts {
         offline: changes.offline,
         new: changes.new.len(),
@@ -134,11 +229,36 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
         metadata: changes.metadata.len(),
         moved: changes.moved.len(),
     };
+    if background {
+        let ready = SyncReady { path: task.path.clone(), name: task.name.clone(), disk: task.disk, counts: c, choice: task.choice };
+        if !ready.counts.offline && ready.changes() == 0 {
+            // nothing to look at: said and done
+            app.toast(ctx, format!("{}: {}", ready.name, crate::i18n::tr("The library is up to date with this folder.")));
+            return;
+        }
+        app.session.folder_changes = Some(changes);
+        app.sync_owns_changes = true;
+        app.sync_ready = Some(ready);
+        return;
+    }
     app.session.folder_changes = Some(changes);
     app.sync_owns_changes = true;
     if let Some(Dialog::SynchronizeFolder { counts, .. }) = &mut app.ui.dialog {
         *counts = Some(c);
+        // the button was Continue in Background until now: Synchronize waits a moment
+        app.sync_scanned_at = ctx.input(|i| i.time);
+        ctx.request_repaint_after(std::time::Duration::from_secs_f64(SETTLE_SECONDS));
     }
+}
+
+/// How long Synchronize stays unavailable after the scan ended (s). The dialog's one button
+/// reads Continue in Background while the folder is scanned and Synchronize after: a click meant
+/// for the first, landing as the scan ends, must not start the second.
+pub const SETTLE_SECONDS: f64 = 0.6;
+
+/// Whether the dialog's Synchronize can be pressed yet ([`SETTLE_SECONDS`]).
+pub fn settled(app: &LightcraftApp, ctx: &egui::Context) -> bool {
+    ctx.input(|i| i.time) - app.sync_scanned_at >= SETTLE_SECONDS
 }
 
 /// How far the scan is: the folders and files listed while it lists the folder, else the files
@@ -176,6 +296,9 @@ pub fn body(app: &LightcraftApp, ui: &mut egui::Ui, dlg: &mut Dialog) {
                 _ => ui.label(crate::i18n::tr("Scanning…")),
             }
         });
+        ui.label(
+            egui::RichText::new(crate::i18n::tr("You can go on working: a notice at the top left says when the scan is done.")).color(t.text_dim),
+        );
         return;
     };
     if c.offline {
@@ -222,6 +345,24 @@ pub fn body(app: &LightcraftApp, ui: &mut egui::Ui, dlg: &mut Dialog) {
 /// stale (the folder's photos changed meanwhile) is refused and made again, keeping the choices.
 /// A folder that is up to date has nothing to hand over: confirming it only closes the dialog.
 pub fn confirm(app: &mut LightcraftApp, dlg: &Dialog) -> Result<Value, String> {
+    if matches!(dlg, Dialog::SynchronizeFolder { counts: None, .. }) {
+        // Continue in Background: the scan goes on without the dialog, which the caller closes
+        return match &mut app.sync {
+            Some(task) => {
+                task.background = true;
+                if let Dialog::SynchronizeFolder { import_new, relink_moved, remove_missing, read_metadata, .. } = dlg {
+                    task.choice = SyncChoice {
+                        import_new: *import_new,
+                        relink_moved: *relink_moved,
+                        remove_missing: *remove_missing,
+                        read_metadata: *read_metadata,
+                    };
+                }
+                Ok(json!({"background": true}))
+            }
+            None => Err("the folder is still being scanned".into()),
+        };
+    }
     let Dialog::SynchronizeFolder { path, name, disk, counts: Some(counts), import_new, relink_moved, remove_missing, read_metadata, .. } = dlg
     else {
         return Err("the folder is still being scanned".into());
