@@ -44,6 +44,11 @@ rfd = { workspace = true }
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = { workspace = true }
 
+[target.'cfg(windows)'.dependencies]
+# the colour profile of the monitor showing the window (`win_screen_profile`)
+lightcraft-wincolor = { workspace = true }
+raw-window-handle = "0.6"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 muda = { workspace = true }
 objc2 = { workspace = true }

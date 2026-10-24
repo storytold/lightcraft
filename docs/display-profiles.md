@@ -16,17 +16,30 @@ have one share it; otherwise, and without colord, previews stay sRGB (choose a p
 that colour-manages windows itself with the same profile (KWin with an ICC profile set in Display Configuration)
 would correct twice; KWin keeps that profile in its own settings, not colord, so this only happens when both are set.
 
+**Windows uses the profile it assigns to the monitor showing the window** (Settings ▸ System ▸ Display ▸ Color
+profile, Color Management, or a calibrator) while none is chosen. On an SDR desktop Windows passes what an app draws to
+the monitor unchanged, so without it a wide-gamut monitor shows sRGB previews oversaturated and a calibration is
+ignored. `crates/wincolor` finds the monitor the window is mostly on and asks Windows Color System for its default
+profile, in the user's scope when they chose per-user profiles for that monitor, else the system's. It is asked about
+once a second, so moving the window to another monitor and changing the profile in Windows are both followed without
+a restart. (GDI's `GetICMProfileW` keeps answering the profile a process first saw, so it is only the fallback when the
+monitor's device can't be found.) With no profile assigned, previews are sRGB. **While Windows colour-manages the
+desktop itself** (HDR on, or Auto Color Management on Windows 11: its advanced-colour state, from
+`DisplayConfigGetDeviceInfo`), it treats an ordinary app's output as sRGB and converts it for the monitor, so previews
+stay sRGB rather than be converted twice. The log says which applies (`screen profile: …`) whenever it changes.
+
 ## Using it
 
 Settings ▸ Display ▸ **Choose Profile…** picks an `.icc` / `.icm` file (the dialog opens where the system keeps
-them: `~/.local/share/icc` on Linux, ColorSync's folders on macOS, `…\spool\drivers\color` on Windows). **Use sRGB**
-(on macOS and Linux **Use Screen Profile**) goes back to no profile. The choice is an app setting (`ui.json`, `displayProfile`)
+them: `~/.local/share/icc` on Linux, ColorSync's folders on macOS, `…\spool\drivers\color` on Windows). **Use Screen
+Profile** (in hosts without one, **Use sRGB**) goes back to no profile. The choice is an app setting (`ui.json`, `displayProfile`)
 and applies at once; a file that can't be used is reported there and previews stay sRGB.
 
 Agents and scripts: `app.displayProfile {"path": "/path/to/monitor.icc"}` (`""` or `null`: none; no `path`: report
 only) returns `{path, description, kind: "matrix" | "lut", primaries: {red, green, blue: [x, y]}}`; the screen's
-profile (macOS or Linux, none chosen) reports `path: null, screen: true`. Hosts supply it as `Services::screen_profile`
-(`apps/lightcraft/src/screen_profile.rs`, `apps/lightcraft/src/colord.rs`); headless sessions have none and stay sRGB.
+profile (none chosen) reports `path: null, screen: true`. Hosts supply it as `Services::screen_profile`
+(`apps/lightcraft/src/screen_profile.rs`, `apps/lightcraft/src/colord.rs`, `apps/lightcraft/src/win_screen_profile.rs`);
+headless sessions have none and stay sRGB.
 
 ## How it works
 
@@ -55,5 +68,6 @@ LUT-based profile's correction about 65 ms. Drafts during slider drags skip the 
 
 ## Not yet
 
-- Picking up the profile Windows assigns (WCS: needs FFI, so an isolated `unsafe` helper crate) and X11's
-  `_ICC_PROFILE`; following the window across monitors on Linux and Windows (macOS does both, above).
+- X11's `_ICC_PROFILE`, and following the window across monitors on Linux (macOS and Windows do both, above).
+- Windows' advanced-colour profiles (what a monitor uses while Auto Color Management is on): LightCraft leaves colour
+  to Windows then.
