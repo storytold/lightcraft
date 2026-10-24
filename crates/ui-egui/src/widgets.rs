@@ -694,7 +694,7 @@ pub fn text_button(ui: &mut Ui, id: &str, label: &str, active: bool) -> Response
     let t = Tokens::get(ui.ctx());
     let font = t.semibold(11.5);
     let galley = ui.painter().layout_no_wrap(label.to_string(), font, t.text);
-    let size = vec2((galley.size().x + 18.0).max(37.0), 24.0);
+    let size = vec2(text_button_width(galley.size().x), 24.0);
     let (r, resp) = ui.allocate_exact_size(size, Sense::click());
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, active, label));
     register(ui.ctx(), format!("button:{id}"), r);
@@ -709,6 +709,18 @@ pub fn text_button(ui: &mut Ui, id: &str, label: &str, active: bool) -> Response
     p.rect(r, CornerRadius::same(4), fill, Stroke::new(1.0, t.button_border), StrokeKind::Inside);
     p.galley(r.center() - galley.size() / 2.0, galley, t.text);
     resp
+}
+
+/// The width of a [`text_button`] whose label is `text_width` wide.
+fn text_button_width(text_width: f32) -> f32 {
+    (text_width + 18.0).max(37.0)
+}
+
+/// The width [`text_button`] takes for `label` (translated as it would be), to plan a row before drawing it.
+pub fn text_button_size(ui: &Ui, label: &str) -> f32 {
+    let t = Tokens::get(ui.ctx());
+    let galley = ui.painter().layout_no_wrap(crate::i18n::tr(label).to_string(), t.semibold(11.5), t.text);
+    text_button_width(galley.size().x)
 }
 
 /// A segmented control: `labels` share the available width equally, `per_row` per row. Each segment is
