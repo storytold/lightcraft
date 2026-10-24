@@ -59,14 +59,27 @@ impl ControlRequest {
 
 pub enum Outcome {
     Done(Value),
-    Screenshot { path: Option<String>, headless: bool },
+    /// Answered later, by whoever holds the request's `reply` (a task that is still running).
+    Later,
+    Screenshot {
+        path: Option<String>,
+        headless: bool,
+    },
 }
 
+/// A reply that says it worked: `result`.
+pub(crate) fn success(v: Value) -> Value {
+    json!({"ok": true, "result": v})
+}
+/// A reply that says it failed: `error`.
+pub(crate) fn failure(e: impl std::fmt::Display) -> Value {
+    json!({"ok": false, "error": e.to_string()})
+}
 fn ok(v: Value) -> Outcome {
-    Outcome::Done(json!({"ok": true, "result": v}))
+    Outcome::Done(success(v))
 }
 fn err(e: impl std::fmt::Display) -> Outcome {
-    Outcome::Done(json!({"ok": false, "error": e.to_string()}))
+    Outcome::Done(failure(e))
 }
 fn wrap(r: Result<Value, String>) -> Outcome {
     match r {
@@ -201,6 +214,12 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
         "engine.execute" | "ui.menu.invoke" | "command" => {
             let Some(id) = s("command").or(s("id")) else { return err("missing `command`") };
             let params = p.get("params").cloned().filter(|v| !v.is_null()).unwrap_or(json!({}));
+            if id == "library.missing" {
+                // looks at every photo's file: on a worker thread, answered when it is done
+                let started = crate::missing_sweep::ask(app, req.reply.clone());
+                ctx.request_repaint();
+                return started;
+            }
             let r = app.run(id, params);
             ctx.request_repaint();
             wrap(r)
