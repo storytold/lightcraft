@@ -380,6 +380,9 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
     let popup_open = egui::Popup::is_any_open(ctx);
     // Esc that just took a text field's focus away (it gives back the field's text) does nothing else
     let popup_open = popup_open || app.text_focus;
+    // a drag in progress (a button is down, or is released this frame): Esc gives it up
+    // (`LightcraftApp::end_drags`) and does nothing else
+    let popup_open = popup_open || (app.ui.drag_active() && ctx.input(|i| i.pointer.any_down() || i.pointer.any_released()));
     ctx.input(|i| {
         // Enter opens the active grid photo; widgets, popups and custom bindings keep the key.
         if grid

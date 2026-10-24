@@ -305,5 +305,8 @@
   "Could not read {name}: {e}": "Soubor {name} se nepodařilo přečíst: {e}",
   "Added {n} photo{}": "Přidáno fotografií: {n}{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Kam má jít katalog Lightroomu „{catalog}“?",
-  "Merge into the open library “{library}” ({count} photo{})": "Sloučit s otevřenou knihovnou „{library}“ (fotografie: {count}{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Sloučit s otevřenou knihovnou „{library}“ (fotografie: {count}{:.0})",
+  "Add {n} photo{} to “{}”": "Přidat do „{1}“ fotografie: {n}{0:.0}",
+  "{n} already there": "již tam je: {n}",
+  "Add “{keyword}” to {n} photo{}": "Přidat „{keyword}“ k fotografiím: {n}{:.0}"
 }

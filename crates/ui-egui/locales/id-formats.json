@@ -305,5 +305,8 @@
   "Drop to review {n} item{} for import": "Jatuhkan untuk meninjau {n} item sebelum impor{:.0}",
   "Inside: {names}": "Di dalam: {names}",
   "Where should the Lightroom catalog “{catalog}” go?": "Ke mana katalog Lightroom “{catalog}” diimpor?",
-  "Merge into the open library “{library}” ({count} photo{})": "Gabungkan ke pustaka yang terbuka “{library}” ({count} foto{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Gabungkan ke pustaka yang terbuka “{library}” ({count} foto{:.0})",
+  "Add {n} photo{} to “{}”": "Tambahkan {n} foto{0:.0} ke “{1}”",
+  "Add “{keyword}” to {n} photo{}": "Tambahkan “{keyword}” ke {n} foto{:.0}",
+  "{n} already there": "{n} sudah ada"
 }

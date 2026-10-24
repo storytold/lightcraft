@@ -305,5 +305,8 @@
   "Could not read {name}: {e}": "{name} を読み取れませんでした: {e}",
   "Added {n} photo{}": "{n}枚を追加しました{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Lightroom カタログ「{catalog}」をどこに読み込みますか？",
-  "Merge into the open library “{library}” ({count} photo{})": "開いているライブラリ「{library}」に統合（写真{count}枚）{:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "開いているライブラリ「{library}」に統合（写真{count}枚）{:.0}",
+  "Add {n} photo{} to “{}”": "{n}枚を「{1}」に追加{0:.0}",
+  "{n} already there": "{n}枚は追加済み",
+  "Add “{keyword}” to {n} photo{}": "写真{n}枚に「{keyword}」を追加{:.0}"
 }

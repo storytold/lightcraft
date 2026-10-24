@@ -96,6 +96,8 @@ mod tests_dialog_tab;
 #[cfg(test)]
 mod tests_dialogs;
 #[cfg(test)]
+mod tests_drag_contract;
+#[cfg(test)]
 mod tests_drop_import;
 #[cfg(test)]
 mod tests_edit_layout;
@@ -408,6 +410,9 @@ pub struct LightcraftApp {
     screenshot_token: u64,
     /// Offscreen context for headless screenshots of the windowed app.
     shadow: Option<headless::HeadlessView>,
+    /// The frame being laid out is the offscreen one of a headless screenshot: it has no pointer of
+    /// its own, so it must not end a drag the window's pointer is still holding.
+    drawing_offscreen: bool,
     /// Synthetic input events (from the control channel) injected one step per frame.
     pub synthetic: Vec<egui::Event>,
     /// Files the control channel (`ui.dropFiles`) holds over the window: every frame reports them
@@ -553,6 +558,7 @@ impl LightcraftApp {
             pending_screenshots: vec![],
             screenshot_token: 0,
             shadow: None,
+            drawing_offscreen: false,
             synthetic: vec![],
             drop_hover: vec![],
             drop_pending: vec![],
@@ -1082,7 +1088,9 @@ impl LightcraftApp {
         // same scroll offsets, open sections, style… as the window
         let memory = main.memory(|m| m.clone());
         view.ctx.memory_mut(|m| *m = memory);
+        self.drawing_offscreen = true;
         view.run(headless::HeadlessView::raw_input(size, ppp, time, vec![]), |ui| self.ui(ui));
+        self.drawing_offscreen = false;
         let img = capture.then(|| {
             let mut tex = self.renderer.cpu_textures();
             if let (Some((t, ..)), Some(px)) = (&self.merge.preview, &self.merge.preview_pixels) {
@@ -1563,6 +1571,31 @@ impl LightcraftApp {
         }
     }
 
+    /// Ends drags that must not go on, before any panel or dialog sees the frame: Esc gives up a
+    /// drag and is taken, so a dialog open over it doesn't also close; and a drag outlives its
+    /// button in no layout (full screen and the slideshow don't run the panels that end it).
+    /// The frame a button is released in is left to the drop targets, except in full screen, which has none.
+    fn end_drags(&mut self, ctx: &egui::Context) {
+        if self.drawing_offscreen || !self.ui.drag_active() {
+            return;
+        }
+        let (esc, down, released) = ctx.input(|i| (i.key_pressed(egui::Key::Escape), i.pointer.any_down(), i.pointer.any_released()));
+        // a release is left to the drop targets, except in full screen, where there are none: the
+        // drag ends on that frame, so an Esc on the next one can't find it still going
+        if !esc && (down || (released && !self.ui.fullscreen)) {
+            return;
+        }
+        if esc {
+            widgets::take_escape(ctx);
+        }
+        if self.ui.dragging_album.take().is_some() {
+            panels::left::forget_hover(self, ctx);
+        }
+        self.ui.dragging_photos = None;
+        self.ui.dragging_section = None;
+        self.ui.dragging_keyword = None;
+    }
+
     /// Lay out the whole window.
     pub fn ui(&mut self, ui: &mut egui::Ui) {
         i18n::set_language(self.ui.language);
@@ -1581,6 +1614,7 @@ impl LightcraftApp {
         self.hover_preview = None;
         self.ai_mask_detail(&ctx);
         self.place_names_outcome(&ctx);
+        self.end_drags(&ctx);
         if self.ui.fullscreen {
             // full-screen preview: the photo alone on black
             egui::CentralPanel::default()
@@ -1614,10 +1648,13 @@ impl LightcraftApp {
         panels::activity::show(self, &ctx);
         export_task::poll_photos(self, &ctx);
         pick::poll(self, &ctx);
-        panels::grid::drag_feedback(self, &ctx);
-        panels::left::album_drag_feedback(self, &ctx);
-        panels::left::section_drag_feedback(self, &ctx);
-        panels::keyword_list::drag_feedback(self, &ctx);
+        // (each ends its drag when the button is up, which an offscreen frame's pointer never is)
+        if !self.drawing_offscreen {
+            panels::grid::drag_feedback(self, &ctx);
+            panels::left::album_drag_feedback(self, &ctx);
+            panels::left::section_drag_feedback(self, &ctx);
+            panels::keyword_list::drag_feedback(self, &ctx);
+        }
         panels::toast(self, &ctx);
         drop_overlay::show(self, &ctx);
         self.widgets = widgets::take_registry(&ctx);
