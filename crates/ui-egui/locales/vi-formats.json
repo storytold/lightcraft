@@ -305,5 +305,6 @@
   "Drop to import {n} preset{}": "Thả để nhập {n} thiết lập sẵn{:.0}",
   "Drop to review {n} item{} for import": "Thả để xem lại {n} mục trước khi nhập{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Nhập danh mục Lightroom «{catalog}» vào đâu?",
-  "Merge into the open library “{library}” ({count} photo{})": "Gộp vào thư viện đang mở «{library}» ({count} ảnh{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Gộp vào thư viện đang mở «{library}» ({count} ảnh{:.0})",
+  "It leads back to itself through “{}”: change the rules of one album on the loop (Edit Smart Album…)": "Album này quay lại chính nó qua album «{}»: hãy đổi quy tắc của một album trong vòng lặp (Chỉnh sửa album thông minh…)"
 }

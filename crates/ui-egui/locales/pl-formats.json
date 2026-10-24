@@ -305,5 +305,6 @@
   "Added {n} photo{}": "Dodano zdjęcia: {n}{:.0}",
   "Inside: {names}": "Wewnątrz: {names}",
   "Where should the Lightroom catalog “{catalog}” go?": "Dokąd zaimportować katalog Lightroom „{catalog}”?",
-  "Merge into the open library “{library}” ({count} photo{})": "Scal z otwartą biblioteką „{library}” (zdjęcia: {count}){:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "Scal z otwartą biblioteką „{library}” (zdjęcia: {count}){:.0}",
+  "It leads back to itself through “{}”: change the rules of one album on the loop (Edit Smart Album…)": "Wraca do siebie przez album „{}”: zmień reguły jednego z albumów w pętli (Edytuj album inteligentny…)"
 }

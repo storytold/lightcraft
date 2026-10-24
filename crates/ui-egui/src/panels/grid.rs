@@ -322,7 +322,14 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     }
     app.canvas_rect = Some(ui.max_rect());
     if ids.is_empty() {
-        if !chips.is_empty() {
+        // an album on a loop is empty because of the loop, whatever filters are on
+        let loop_note = match app.session.source {
+            lightcraft_engine::LibrarySource::Album(id) => crate::i18n::album_loop_note(&app.session.catalog, id),
+            _ => None,
+        };
+        if let Some((title, body)) = loop_note {
+            super::empty_message(ui, ui.max_rect(), &title, &body);
+        } else if !chips.is_empty() {
             let body = match total {
                 Some(n) if n > 0 => {
                     crate::i18n::tr_format!("{n} photos in {} are hidden by the filters above", crate::i18n::source_title(&app.session), n = n)

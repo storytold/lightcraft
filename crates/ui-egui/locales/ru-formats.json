@@ -305,5 +305,6 @@
   "Could not read {name}: {e}": "Не удалось прочитать {name}: {e}",
   "Added {n} photo{}": "Добавлено фото: {n}{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Куда импортировать каталог Lightroom «{catalog}»?",
-  "Merge into the open library “{library}” ({count} photo{})": "Объединить с открытой библиотекой «{library}» (фото: {count}){:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "Объединить с открытой библиотекой «{library}» (фото: {count}){:.0}",
+  "It leads back to itself through “{}”: change the rules of one album on the loop (Edit Smart Album…)": "Он возвращается к себе через альбом «{}»: измените условия одного из альбомов в цикле (Изменить смарт-альбом…)"
 }
