@@ -31,7 +31,7 @@ pub mod strip;
 pub mod topbar;
 pub mod unnamed;
 
-use egui::{Align2, Rect, pos2, vec2};
+use egui::{Rect, pos2, vec2};
 
 use crate::LightcraftApp;
 pub use crate::dialogs;
@@ -112,12 +112,23 @@ pub fn toast(app: &mut LightcraftApp, ctx: &egui::Context) {
     ctx.request_repaint_after(std::time::Duration::from_millis(30));
 }
 
-/// Paint a centred, dimmed message (empty states).
+/// Paint a centred, dimmed message (empty states). Each line wraps to the area, so a long one (a
+/// translation, an album named in it) is not cut off at its edges.
 pub fn empty_message(ui: &egui::Ui, rect: Rect, title: &str, body: &str) {
     let t = Tokens::get(ui.ctx());
     let p = ui.painter();
-    p.text(rect.center() - vec2(0.0, 12.0), Align2::CENTER_CENTER, crate::i18n::tr(title), t.semibold(18.0), t.text_label);
-    p.text(rect.center() + vec2(0.0, 14.0), Align2::CENTER_CENTER, crate::i18n::tr(body), t.font(13.0), t.text_dim);
+    let wrap = (rect.width() - 32.0).max(120.0);
+    let lay = |text: &str, font: egui::FontId, color: egui::Color32| {
+        let mut job = egui::text::LayoutJob::simple(text.to_owned(), font, color, wrap);
+        job.halign = egui::Align::Center;
+        p.layout_job(job)
+    };
+    let title = lay(crate::i18n::tr(title), t.semibold(18.0), t.text_label);
+    let body = lay(crate::i18n::tr(body), t.font(13.0), t.text_dim);
+    // as one block, centred: one line each sits where the two lines always sat
+    let top = rect.center().y - (title.size().y + 8.0 + body.size().y) / 2.0;
+    p.galley(pos2(rect.center().x, top), title.clone(), t.text_label);
+    p.galley(pos2(rect.center().x, top + title.size().y + 8.0), body, t.text_dim);
 }
 
 /// A button under an empty state's message: the command it runs, its label, and the id it is

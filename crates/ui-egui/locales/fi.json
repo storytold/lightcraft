@@ -2383,5 +2383,7 @@
   "Top bar": "Yläpalkki",
   "Tool strip": "Työkalupalkki",
   "Bottom bar": "Alapalkki",
-  "Stopped at the scan limit: there may be more photos": "Skannauksen raja saavutettiin: valokuvia voi olla lisää"
+  "Stopped at the scan limit: there may be more photos": "Skannauksen raja saavutettiin: valokuvia voi olla lisää",
+  "This album is in a loop, so it shows nothing": "Tämä albumi on silmukassa, joten se ei näytä mitään",
+  "It tests itself: change its rules (Edit Smart Album…)": "Se testaa itseään: muuta sen sääntöjä (Muokkaa älyalbumia…)"
 }

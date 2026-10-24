@@ -560,8 +560,33 @@ impl Catalog {
 
     /// Whether smart album `id` with `rules` (as [`Filter::prepare`]d) holds `p`.
     fn smart_album_has(&self, id: AlbumId, rules: &Filter, prepared: &query::Prepared, p: &Photo) -> bool {
-        // guarded: a smart album testing smart albums can't loop or recurse without end
-        !p.deleted && rules::smart_album_holds(id, p.id, || rules.matches_in(p, self, prepared))
+        // an album on a loop holds nothing, whoever asks (see `album_on_a_loop`); beyond that, a
+        // smart album testing smart albums can't recurse without end (the guard)
+        !p.deleted && !self.looping().contains(&id) && rules::smart_album_holds(id, p.id, || rules.matches_in(p, self, prepared))
+    }
+
+    /// Whether album `id` is on a loop: a smart album that includes itself, directly or through
+    /// the smart albums it tests. Such an album holds no photos ([`Self::album_photos`],
+    /// [`Self::album_count`], [`Self::album_contains`] and the grid all agree), until its rules or
+    /// those of an album on the loop change. An album that only tests a looping album is not on
+    /// the loop: it is worked out as usual, seeing the looping album as empty.
+    pub fn album_on_a_loop(&self, id: AlbumId) -> bool {
+        self.looping().contains(&id)
+    }
+
+    /// For an album on a loop, an album it tests that leads back to it: the one to name when
+    /// saying why it is empty (itself when it tests itself and nothing else on the loop). `None`
+    /// for an album that is not on a loop.
+    pub fn album_loops_through(&self, id: AlbumId) -> Option<AlbumId> {
+        if !self.album_on_a_loop(id) {
+            return None;
+        }
+        let tested = self.albums.get(&id)?.smart.as_deref()?.albums_tested();
+        tested
+            .iter()
+            .copied()
+            .find(|b| *b != id && self.album_on_a_loop(*b) && self.album_reaches(*b, id))
+            .or_else(|| tested.contains(&id).then_some(id))
     }
 
     /// Whether smart album `from` tests `to`, directly or through the smart albums it tests (the
@@ -936,6 +961,7 @@ impl Catalog {
             }
             Op::AddAlbum { album } => {
                 self.plans = PlansMemo::default();
+                self.index.forget_loops();
                 if self.albums.contains_key(&album.id) {
                     return Err(CatalogError::Invalid(format!("album {:?} exists", album.id)));
                 }
@@ -958,6 +984,7 @@ impl Catalog {
             }
             Op::RemoveAlbum { id } => {
                 self.plans = PlansMemo::default();
+                self.index.forget_loops();
                 if self.albums.values().any(|a| a.parent == Some(id)) {
                     return Err(CatalogError::Invalid("folder is not empty".into()));
                 }
@@ -1019,6 +1046,7 @@ impl Catalog {
             }
             Op::SetAlbumRules { id, rules } => {
                 self.plans = PlansMemo::default();
+                self.index.forget_loops();
                 self.validate_rules(&rules)?;
                 let a = self.album_mut(id)?;
                 let Some(old) = a.smart.as_mut() else {
@@ -1542,6 +1570,8 @@ mod tests_local;
 mod tests_lock;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests_log_thread;
+#[cfg(test)]
+mod tests_looping_albums;
 #[cfg(test)]
 mod tests_repair;
 #[cfg(test)]

@@ -325,5 +325,6 @@
   "View › Detail View ({keys}).": "Visa › Detaljvy ({keys}).",
   "File › Export… · File › Print… ({keys}).": "Fil › Exportera… · Fil › Skriv ut… ({keys}).",
   "{n} folder{} could not be read": "Mappar som inte gick att läsa: {n}{:.0}",
-  "{n} file{} skipped (not a supported photo type)": "Hoppade över filer (fotoformat som inte stöds): {n}{:.0}"
+  "{n} file{} skipped (not a supported photo type)": "Hoppade över filer (fotoformat som inte stöds): {n}{:.0}",
+  "It leads back to itself through “{}”: change the rules of one album on the loop (Edit Smart Album…)": "Det leder tillbaka till sig självt via albumet ”{}”: ändra reglerna för ett av albumen i loopen (Redigera smart album…)"
 }

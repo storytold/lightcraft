@@ -326,5 +326,6 @@
   "{name} is installed and in use: face recognition is on": "Модель {name} установлена и используется: распознавание лиц включено",
   "Bring photos in with File › Import Photos… ({keys}).": "Фотографии добавляются через Файл › Импорт фото… ({keys}).",
   "View › Detail View ({keys}).": "Вид › Режим детализации ({keys}).",
-  "File › Export… · File › Print… ({keys}).": "Файл › Экспорт… · Файл › Печать… ({keys})."
+  "File › Export… · File › Print… ({keys}).": "Файл › Экспорт… · Файл › Печать… ({keys}).",
+  "It leads back to itself through “{}”: change the rules of one album on the loop (Edit Smart Album…)": "Он возвращается к себе через альбом «{}»: измените условия одного из альбомов в цикле (Изменить смарт-альбом…)"
 }

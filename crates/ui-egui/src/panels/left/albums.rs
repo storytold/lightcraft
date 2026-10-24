@@ -72,6 +72,9 @@ fn albums_tree(app: &mut LightcraftApp, ui: &mut egui::Ui, all: &AlbumKids, pare
             let label = if target == Some(a.id) { format!("{} +", a.name) } else { a.name.clone() };
             // a smart album whose rules no longer check (an album they test was deleted) says so
             let problems = app.caches.smart_album_problems(&app.session.catalog).get(&a.id).cloned().unwrap_or_default();
+            // an album on a loop holds nothing: its tooltip says so, and through which album (the ⚠ is
+            // there already: a loop is one of the problems it reports)
+            let loop_note = crate::i18n::album_loop_note(&app.session.catalog, a.id);
             let label = if problems.is_empty() { label } else { format!("⚠ {label}") };
             let mut resp = Row::new(&format!("album:{}", a.id.0), icon, &label)
                 .count(Some(n))
@@ -99,6 +102,9 @@ fn albums_tree(app: &mut LightcraftApp, ui: &mut egui::Ui, all: &AlbumKids, pare
                         tip.push('\n');
                         tip.push_str(&crate::i18n::problem_line(p));
                     }
+                }
+                if let Some((title, body)) = &loop_note {
+                    tip.push_str(&format!("\n\n{title}\n{body}"));
                 }
                 resp = resp.on_hover_text(tip);
             }

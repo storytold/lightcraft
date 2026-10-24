@@ -3609,5 +3609,7 @@
   "Start the app with --control 7980 (or LIGHTCRAFT_CONTROL_PORT), then lightcraft-cli mcp --connect attaches one to it.": "Démarrez l'application avec --control 7980 (ou LIGHTCRAFT_CONTROL_PORT), puis lightcraft-cli mcp --connect y connecte un agent.",
   "Welcome": "Bienvenue",
   "Next": "Suivant",
-  "Get Started": "Commencer"
+  "Get Started": "Commencer",
+  "This album is in a loop, so it shows nothing": "Cet album est pris dans une boucle : il n'affiche rien",
+  "It tests itself: change its rules (Edit Smart Album…)": "Il se teste lui-même : modifiez ses règles (Modifier l'album intelligent…)"
 }

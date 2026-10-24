@@ -2397,5 +2397,7 @@
   "Top bar": "Bilah atas",
   "Tool strip": "Bilah alat",
   "Bottom bar": "Bilah bawah",
-  "Stopped at the scan limit: there may be more photos": "Berhenti pada batas pemindaian: mungkin masih ada foto"
+  "Stopped at the scan limit: there may be more photos": "Berhenti pada batas pemindaian: mungkin masih ada foto",
+  "This album is in a loop, so it shows nothing": "Album ini berada dalam perulangan, jadi tidak menampilkan apa pun",
+  "It tests itself: change its rules (Edit Smart Album…)": "Album ini menjadikan dirinya sendiri syarat: ubah aturannya (Edit album pintar…)"
 }
