@@ -220,6 +220,10 @@ pub enum Op {
         /// when it is `None`.
         #[serde(default, skip_serializing_if = "String::is_empty")]
         preview_checked: String,
+        /// The file is a JPEG cut short (see [`Photo::truncated`]). Absent in records written before
+        /// the field existed, which read as `false`; builds that don't know it ignore it.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        truncated: bool,
     },
     /// The lens data a photo's file carries (what Reload finds when it was read after import).
     SetEmbeddedLens {
@@ -914,7 +918,7 @@ impl Catalog {
                 let old_format = format.map(|f| std::mem::replace(&mut p.format, f));
                 Op::Relink { id, file_name: old_name, source: std::mem::replace(&mut p.source, source), format: old_format }
             }
-            Op::SetContent { id, width, height, file_size, content_hash, preview_only, preview_checked } => {
+            Op::SetContent { id, width, height, file_size, content_hash, preview_only, preview_checked, truncated } => {
                 let p = self.photo_mut(id)?;
                 Op::SetContent {
                     id,
@@ -924,6 +928,7 @@ impl Catalog {
                     content_hash: std::mem::replace(&mut p.content_hash, content_hash),
                     preview_only: std::mem::replace(&mut p.preview_only, preview_only),
                     preview_checked: std::mem::replace(&mut p.preview_checked, preview_checked),
+                    truncated: std::mem::replace(&mut p.truncated, truncated),
                 }
             }
             Op::SetEmbeddedLens { id, lens } => {

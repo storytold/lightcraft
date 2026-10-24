@@ -49,6 +49,7 @@ fn library(name: &str) -> Lib {
         content_hash: p.content_hash.clone(),
         preview_only: p.preview_only.clone(),
         preview_checked: OTHER.into(),
+        truncated: false,
     })
     .unwrap();
     assert!(s.catalog.photo(id).unwrap().preview_only_stale());

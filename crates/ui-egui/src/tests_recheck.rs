@@ -40,6 +40,7 @@ fn app_with_stale_photo(dir: &Path) -> (LightcraftApp, PhotoId) {
             content_hash: p.content_hash.clone(),
             preview_only: Some("Cr3 files are not decoded yet".into()),
             preview_checked: "0.5.0".into(),
+            truncated: false,
         })
         .unwrap();
     (LightcraftApp::new(session, Default::default()), id)
@@ -130,6 +131,7 @@ fn reload_of_a_selection_runs_in_the_background() {
             content_hash: p.content_hash.clone(),
             preview_only: Some("Cr3 files are not decoded yet".into()),
             preview_checked: "0.5.0".into(),
+            truncated: false,
         })
         .unwrap();
     let items = lightcraft_engine::cmd::reload::plan(&mut app.session, &json!({"ids": [id.0]})).unwrap();

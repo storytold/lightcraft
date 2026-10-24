@@ -1127,6 +1127,7 @@ mod thumbnail_tests {
                 content_hash: Some("changed".into()),
                 preview_only: None,
                 preview_checked: String::new(),
+                truncated: false,
             })
             .unwrap();
         assert!(!r.thumb_current(catalog.photo(PhotoId(1)).unwrap(), 384, 10));
