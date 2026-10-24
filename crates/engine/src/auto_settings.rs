@@ -1,8 +1,9 @@
 //! Photo ▸ Auto Settings on several photos in the background (`develop.auto {background: true}`, #1752): each photo's
 //! thumbnail-size source is read on a worker thread, with a row in the activity stack that can be cancelled. The
 //! values are worked out on the session as the sources arrive ([`Session::pump_auto_settings`], every frame in the
-//! app) and set as one undo step once all of them are in. A cancel, or a photo that can't be read, sets none, as the
-//! inline command does.
+//! app) and set as one undo step once all of them are in, through [`Session::execute_fn`] so the step is saved and
+//! auto-written to XMP like any command's, and not while a slider or crop drag is open. A cancel, or a photo that
+//! can't be read, sets none, as the inline command does; a photo removed during the run is skipped.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -36,7 +37,7 @@ pub struct AutoJob {
 /// How a background Auto Settings run ended.
 #[derive(Debug)]
 pub enum AutoOutcome {
-    /// The values were set on this many photos, as one undo step.
+    /// The values were set on this many photos, as one undo step (none when every photo was removed during the run).
     Applied(usize),
     /// Stopped (the row's ✕, `activity.cancel`, or another library opened): nothing was set.
     Cancelled,
@@ -77,8 +78,9 @@ pub(crate) fn start(s: &mut Session, ids: Vec<PhotoId>) -> Result<Value> {
 }
 
 impl Session {
-    /// Take in what a background Auto Settings run has read, and set the values once every photo is in. Cheap to
-    /// call every frame (the app does). `Some` once the run has ended.
+    /// Take in what a background Auto Settings run has read, and set the values once every photo is in and no
+    /// interaction (a slider or crop drag) is open, so the drag's own undo step is committed first. Cheap to call
+    /// every frame (the app does). `Some` once the run has ended.
     pub fn pump_auto_settings(&mut self) -> Option<AutoOutcome> {
         let mut job = self.auto_settings.take()?;
         if job.cancel.load(Ordering::Relaxed) || !Arc::ptr_eq(&job.identity, &self.library_identity) {
@@ -101,9 +103,14 @@ impl Session {
         }
         job.guard.progress(job.autos.len() as u64, job.total as u64);
         if job.autos.len() == job.total {
-            let n = job.autos.len();
-            return Some(match crate::cmd::develop::commit_autos(self, &job.autos) {
-                Ok(()) => AutoOutcome::Applied(n),
+            if self.interaction.is_some() {
+                self.auto_settings = Some(job);
+                return None;
+            }
+            let autos = std::mem::take(&mut job.autos);
+            let r = self.execute_fn(C, |s| crate::cmd::develop::commit_autos(s, &autos).map(|n| json!({"applied": n})));
+            return Some(match r {
+                Ok(v) => AutoOutcome::Applied(v["applied"].as_u64().unwrap_or(0) as usize),
                 Err(e) => AutoOutcome::Failed(e),
             });
         }

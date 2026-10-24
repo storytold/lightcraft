@@ -40,9 +40,10 @@ fn apply_auto(d: &mut DevelopSettings, a: &AutoTone) {
     d.color.saturation = a.saturation;
 }
 
-/// Set each photo's auto values on its current settings, as one undo step.
-pub(crate) fn commit_autos(s: &mut Session, autos: &[(PhotoId, AutoTone)]) -> Result<()> {
-    let ops = autos
+/// Set each photo's auto values on its current settings, as one undo step; a photo that is gone is skipped. How
+/// many were set (no undo step when none).
+pub(crate) fn commit_autos(s: &mut Session, autos: &[(PhotoId, AutoTone)]) -> Result<usize> {
+    let ops: Vec<Op> = autos
         .iter()
         .filter_map(|(id, a)| {
             let mut d = (*s.develop_of(*id).unwrap_or_default()).clone();
@@ -50,7 +51,11 @@ pub(crate) fn commit_autos(s: &mut Session, autos: &[(PhotoId, AutoTone)]) -> Re
             s.develop_op(*id, d, "Auto")
         })
         .collect();
-    s.commit("Auto", Op::Batch { ops })
+    let n = ops.len();
+    if n > 0 {
+        s.commit("Auto", Op::Batch { ops })?;
+    }
+    Ok(n)
 }
 
 fn section_param(p: &Value, c: &str) -> Result<Section> {
@@ -452,7 +457,9 @@ pub fn specs() -> Vec<CommandSpec> {
                                 Ok(())
                             })?;
                         }
-                        _ => commit_autos(s, &autos)?,
+                        _ => {
+                            commit_autos(s, &autos)?;
+                        }
                     }
                     Ok(result)
                 }

@@ -761,17 +761,6 @@ impl LightcraftApp {
     }
 
     /// Announce the end of a Build Previews run.
-    /// Photo ▸ Auto Settings on several photos: take in what its worker has read, and say when the values are set.
-    fn auto_settings_status(&mut self, ctx: &egui::Context) {
-        use lightcraft_engine::auto_settings::AutoOutcome;
-        match self.session.pump_auto_settings() {
-            None if self.session.auto_settings.is_some() => ctx.request_repaint_after(std::time::Duration::from_millis(50)),
-            None | Some(AutoOutcome::Cancelled) => {}
-            Some(AutoOutcome::Applied(_)) => self.toast(ctx, crate::i18n::tr("Auto settings applied")),
-            Some(AutoOutcome::Failed(e)) => self.toast_error(ctx, e.to_string()),
-        }
-    }
-
     fn preview_build_status(&mut self, ctx: &egui::Context) {
         use std::sync::atomic::Ordering;
         let Some(b) = self.session.preview_build.clone() else { return };
@@ -796,6 +785,17 @@ impl LightcraftApp {
         } else {
             // The activity stack shows the run while it works; poll for the end.
             ctx.request_repaint_after(std::time::Duration::from_millis(250));
+        }
+    }
+
+    /// Photo ▸ Auto Settings on several photos: take in what its worker has read, and say when the values are set.
+    fn auto_settings_status(&mut self, ctx: &egui::Context) {
+        use lightcraft_engine::auto_settings::AutoOutcome;
+        match self.session.pump_auto_settings() {
+            None if self.session.auto_settings.is_some() => ctx.request_repaint_after(std::time::Duration::from_millis(50)),
+            None | Some(AutoOutcome::Cancelled) | Some(AutoOutcome::Applied(0)) => {}
+            Some(AutoOutcome::Applied(_)) => self.toast(ctx, crate::i18n::tr("Auto settings applied")),
+            Some(AutoOutcome::Failed(e)) => self.toast_error(ctx, e.to_string()),
         }
     }
 

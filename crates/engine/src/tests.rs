@@ -526,6 +526,105 @@ fn auto_settings_on_named_photos_needs_no_selection() {
     assert!(ids.iter().all(|id| !s.develop_of(lightcraft_catalog::PhotoId(*id)).unwrap_or_default().is_unedited()));
 }
 
+/// A background run's values are committed as a command is (`Session::execute_fn`), so with "Automatically write
+/// changes into XMP" on, every photo's sidecar gets them, as the inline run's does (#1752 review).
+#[test]
+fn background_auto_settings_write_the_sidecars() {
+    use crate::tests_xmp::{temp_dir, write_png};
+    let src = temp_dir("auto-settings-src");
+    let lib = temp_dir("auto-settings-lib");
+    write_png(&src.join("a.png"), 3);
+    write_png(&src.join("b.png"), 7);
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    s.execute("library.xmpPreferences", &json!({"autoWrite": true})).unwrap();
+    let ids: Vec<u64> = s.catalog.photos().map(|p| p.id.0).collect();
+    assert_eq!(ids.len(), 2);
+    s.execute("library.select", &json!({"ids": ids, "active": ids[0]})).unwrap();
+    s.execute("develop.auto", &json!({"background": true})).unwrap();
+    assert!(matches!(finish_auto_settings(&mut s), crate::auto_settings::AutoOutcome::Applied(2)));
+    for (id, name) in ids.iter().zip(["a.xmp", "b.xmp"]) {
+        let d = s.develop_of(lightcraft_catalog::PhotoId(*id)).unwrap();
+        assert!(!d.is_unedited(), "{name}: set");
+        let sidecar = src.join(name);
+        assert!(sidecar.is_file(), "{name}: written by the background run");
+        match crate::sidecar::parse_sidecar(&std::fs::read_to_string(&sidecar).unwrap(), crate::crs::Target::Rendered).unwrap().develop {
+            Some(crate::sidecar::DevelopPatch::Full(x)) => {
+                assert_eq!((x.light.exposure, x.light.contrast), (d.light.exposure, d.light.contrast), "{name}")
+            }
+            other => panic!("{name}: {other:?}"),
+        }
+    }
+    let _ = std::fs::remove_dir_all(&src);
+    let _ = std::fs::remove_dir_all(&lib);
+}
+
+/// A background run that is in while a slider drag is open waits for the drag to end, so the drag's undo step comes
+/// first and Auto's second: two undos go back through the dragged value to the start (#1752 review).
+#[test]
+fn background_auto_settings_wait_for_an_interaction_to_end() {
+    let mut s = demo();
+    let ids: Vec<u64> = s.visible_cloned().iter().take(3).map(|p| p.0).collect();
+    let a = lightcraft_catalog::PhotoId(ids[0]);
+    let dev = |s: &Session| (*s.develop_of(a).unwrap_or_default()).clone();
+    s.execute("library.select", &json!({"ids": ids, "active": ids[0]})).unwrap();
+    let original = dev(&s);
+    let undo = s.undo.len();
+    let r = s.execute("develop.auto", &json!({"background": true})).unwrap();
+    let row = |s: &Session| s.activity.list().into_iter().find(|t| t.id == r["taskId"].as_u64().unwrap()).expect("the row");
+    s.begin_interaction("Shadows").unwrap();
+    // every photo is read, but nothing is set while the drag is open
+    let t0 = std::time::Instant::now();
+    while row(&s).done < 3 {
+        assert!(s.pump_auto_settings().is_none(), "not while dragging");
+        assert!(t0.elapsed() < std::time::Duration::from_secs(60), "the photos were never read");
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    for _ in 0..3 {
+        assert!(s.pump_auto_settings().is_none(), "not while dragging");
+    }
+    assert_eq!(dev(&s), original);
+    assert_eq!(s.undo.len(), undo);
+    let mut d = original.clone();
+    d.light.shadows = 40.0;
+    s.set_develop(a, d, "Shadows").unwrap();
+    s.end_interaction().unwrap();
+    assert!(matches!(finish_auto_settings(&mut s), crate::auto_settings::AutoOutcome::Applied(3)));
+    assert_eq!(s.undo.len(), undo + 2, "the drag, then Auto");
+    assert_ne!(dev(&s).light.contrast, original.light.contrast, "Auto's values are on");
+    s.execute("edit.undo", &json!({})).unwrap();
+    let dragged = dev(&s);
+    assert_eq!((dragged.light.shadows, dragged.light.contrast), (40.0, original.light.contrast), "the drag's value, without Auto");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(dev(&s), original, "back to the start");
+}
+
+/// A photo removed during a background run is skipped: the rest are set and counted, and a run left with no photo
+/// commits no undo step and clears no redo (#1752 review).
+#[test]
+fn background_auto_settings_skip_photos_removed_during_the_run() {
+    let mut s = demo();
+    let ids: Vec<u64> = s.visible_cloned().iter().take(4).map(|p| p.0).collect();
+    let dev = |s: &Session, id: u64| s.develop_of(lightcraft_catalog::PhotoId(id)).unwrap_or_default();
+    s.execute("develop.auto", &json!({"ids": [ids[0], ids[1]], "background": true})).unwrap();
+    s.execute("photo.deletePermanently", &json!({"ids": [ids[0]]})).unwrap();
+    let undo = s.undo.len();
+    assert!(matches!(finish_auto_settings(&mut s), crate::auto_settings::AutoOutcome::Applied(1)), "the photo still there");
+    assert!(!dev(&s, ids[1]).is_unedited());
+    assert_eq!(s.undo.len(), undo + 1);
+    // every photo gone: nothing to set, no undo step, the redo stack kept
+    s.execute("develop.auto", &json!({"ids": [ids[2], ids[3]], "background": true})).unwrap();
+    s.execute("photo.deletePermanently", &json!({"ids": [ids[2], ids[3]]})).unwrap();
+    s.execute("develop.set", &json!({"ids": [ids[1]], "control": "light.exposure", "value": 1.0})).unwrap();
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.redo.len(), 1, "a redo step to keep");
+    let undo = s.undo.len();
+    assert!(matches!(finish_auto_settings(&mut s), crate::auto_settings::AutoOutcome::Applied(0)));
+    assert_eq!((s.undo.len(), s.redo.len()), (undo, 1), "no empty undo step, the redo kept");
+    assert!(s.pump_auto_settings().is_none(), "the run is over");
+}
+
 #[test]
 fn versions_history_and_reset() {
     let mut s = demo();
