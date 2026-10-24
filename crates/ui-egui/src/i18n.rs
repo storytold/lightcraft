@@ -382,12 +382,14 @@ pub fn source_label(source: lightcraft_engine::LibrarySource, catalog: &lightcra
     if matches!(source, lightcraft_engine::LibrarySource::Album(id) if catalog.album(id).is_some()) { label } else { tr(&label).to_string() }
 }
 
-/// What the grid is titled for the session's source: [`source_label`], or a library folder's last
-/// two names (`photos/travel`; the folder's name is the user's and stays verbatim).
+/// What the grid is titled for the session's source: [`source_label`], or a library or browsed
+/// folder's last two names (`photos/travel`; the folder's name is the user's and stays verbatim).
 pub fn source_title(session: &lightcraft_engine::Session) -> String {
-    match (session.source, session.library_folder.as_deref()) {
-        (lightcraft_engine::LibrarySource::LibraryFolder, Some(path)) => lightcraft_catalog::folders::folder_label(path),
-        (source, _) => source_label(source, &session.catalog),
+    use lightcraft_engine::LibrarySource;
+    match (session.source, session.library_folder.as_deref(), session.browse.as_ref()) {
+        (LibrarySource::LibraryFolder, Some(path), _) => lightcraft_catalog::folders::folder_label(path),
+        (LibrarySource::Folder, _, Some(b)) if !b.path.is_empty() => lightcraft_catalog::folders::folder_label(&b.path),
+        (source, _, _) => source_label(source, &session.catalog),
     }
 }
 

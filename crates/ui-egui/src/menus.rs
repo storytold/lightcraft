@@ -582,13 +582,16 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             Ok(json!({"show": app.ui.face_boxes}))
         }
         "view.people" => {
-            // Everyone; the page just left stays one click away (the chip next to the title)
+            // Everyone in the photos the view shows; the page just left stays one click away (the chip next to the title)
             if let Some(name) = app.ui.person_page.take() {
                 app.ui.last_person = Some(name);
             }
             app.ui.person_from = None;
             app.ui.view = ViewMode::People;
-            Ok(json!({"people": app.session.catalog.people().len()}))
+            // and the source they come from (null: the whole library)
+            let people = app.caches.people(&app.session).len();
+            let source = app.session.people_follow_source().then(|| crate::i18n::source_title(&app.session));
+            Ok(json!({"people": people, "source": source}))
         }
         "view.person" => {
             // {name}: one person's page in the People view: their faces, and the faces that look like them

@@ -450,6 +450,34 @@ fn unnamed_faces_come_with_look_alikes_together_and_the_name_the_named_ones_sugg
     let _ = std::fs::remove_dir_all(&d);
 }
 
+/// `scope: "view"` lists the unnamed faces of the photos the view shows (here an album, the person filter aside), as
+/// the People view does (#2516); without it every unnamed face in the library. Recently Deleted shows photos out of
+/// the library, so there it is the library's faces. An unknown scope is an error.
+#[test]
+fn unnamed_faces_can_be_those_of_the_photos_the_view_shows() {
+    let mut s = Session::with_demo();
+    let (a, b) = two_photos(&s);
+    set_regions(&mut s, a, vec![region(0.1, None)]);
+    set_regions(&mut s, b, vec![region(0.1, None), region(0.4, None), region(0.7, Some("Ann"))]);
+    let album = s.execute("album.create", &json!({"name": "Shoot"})).unwrap()["id"].clone();
+    s.execute("album.addPhotos", &json!({"id": album, "ids": [a.0]})).unwrap();
+    s.execute("library.source", &json!({"kind": "album", "id": album})).unwrap();
+    s.execute("library.filter", &json!({"person": "Ann"})).unwrap();
+    let unnamed = |s: &mut Session, p: Value| {
+        let r = s.execute("faces.unnamed", &p).unwrap();
+        let faces: Vec<u64> = r["faces"].as_array().unwrap().iter().map(|f| f["photo"].as_u64().unwrap()).collect();
+        (r["total"].as_u64().unwrap(), faces)
+    };
+    assert_eq!(unnamed(&mut s, json!({"scope": "view"})), (1, vec![a.0]), "the album's unnamed face");
+    assert_eq!(unnamed(&mut s, json!({})).0, 3, "every unnamed face in the library");
+    assert_eq!(unnamed(&mut s, json!({"scope": null})).0, 3);
+    s.execute("library.source", &json!({"kind": "recentlyDeleted"})).unwrap();
+    assert_eq!(unnamed(&mut s, json!({"scope": "view"})).0, 3, "Recently Deleted: the library's faces");
+    for odd in [json!({"scope": "nope"}), json!({"scope": "visible"}), json!({"scope": 5})] {
+        assert!(s.execute("faces.unnamed", &odd).is_err(), "{odd}");
+    }
+}
+
 #[test]
 fn every_scanned_face_is_shown_by_the_same_kind_of_box() {
     let d = temp("view");

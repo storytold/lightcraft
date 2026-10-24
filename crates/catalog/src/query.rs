@@ -570,12 +570,13 @@ impl Catalog {
 
     /// [`Self::people`] among the photos `filter` lets through (its `person` is ignored): what the
     /// People view offers while other filters (a date, a rating, an album…) are active, so picking
-    /// a person never ends in an empty grid.
+    /// a person never ends in an empty grid. Only the library's photos: a file only browsed in a
+    /// folder, or a deleted photo, holds no one (a person's page looks at the library).
     pub fn people_in(&self, filter: &Filter) -> Vec<Person> {
         let filter = Filter { person: None, ..filter.clone() };
         let mut m: std::collections::HashMap<String, (Person, f64)> = Default::default();
         let prepared = filter.prepare();
-        for p in self.photos().filter(|p| filter.matches_in(p, self, &prepared)) {
+        for p in self.photos().filter(|p| p.in_library() && filter.matches_in(p, self, &prepared)) {
             let mut seen: Vec<String> = Vec::new();
             for r in p.meta.regions.iter().filter(|r| r.kind == lightcraft_meta::RegionKind::Face) {
                 let Some(name) = r.name.as_deref().map(str::trim).filter(|n| !n.is_empty()) else { continue };

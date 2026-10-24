@@ -160,6 +160,8 @@ mod tests_open_lightroom;
 #[cfg(test)]
 mod tests_panels;
 #[cfg(test)]
+mod tests_people_scope;
+#[cfg(test)]
 mod tests_preset_favorites;
 #[cfg(test)]
 mod tests_preset_import;
@@ -1805,7 +1807,8 @@ pub struct Caches {
     /// The Keyword List's tick boxes, by library revision and selection.
     keyword_ticks: Option<(u64, u64, std::sync::Arc<panels::keyword_list::Ticks>)>,
     folder_tree: Option<(u64, std::sync::Arc<Vec<lightcraft_catalog::FolderNode>>)>,
-    people: Option<(u64, lightcraft_catalog::Filter, std::sync::Arc<Vec<lightcraft_catalog::Person>>)>,
+    /// The People view's cards, by library revision and what the view shows ([`people_scope`]).
+    people: Option<(u64, String, std::sync::Arc<Vec<lightcraft_catalog::Person>>)>,
     suggestions: Option<(u64, std::sync::Arc<Vec<String>>)>,
     /// What the Add keyword box offers for the text typed in it, by library revision, the
     /// selection's keywords and that text.
@@ -1853,8 +1856,9 @@ pub struct Caches {
     pub face_hints: Option<(u64, u64, u64, std::sync::Arc<panels::faces::Hints>)>,
     /// The open person page: (name, catalog revision, faces indexed, when it was asked for, the page).
     pub person_page: Option<(String, u64, u64, f64, std::sync::Arc<panels::person::PersonPage>)>,
-    /// The unnamed faces: (catalog revision, faces indexed, when it was asked for, the list).
-    pub unnamed: Option<(u64, u64, f64, std::sync::Arc<panels::unnamed::Unnamed>)>,
+    /// The unnamed faces: (catalog revision, what the view shows ([`people_scope`]), faces indexed, when it was asked
+    /// for, the list).
+    pub unnamed: Option<(u64, String, u64, f64, std::sync::Arc<panels::unnamed::Unnamed>)>,
     /// The most photos the face scan has had left at once since it last finished (the progress bar's whole).
     pub faces_peak: u64,
     person_names: Option<(u64, std::sync::Arc<Vec<String>>)>,
@@ -1891,6 +1895,13 @@ pub struct RulesView {
 pub(crate) fn key_of(parts: impl std::hash::Hash) -> u64 {
     use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher};
     BuildHasherDefault::<DefaultHasher>::default().hash_one(parts)
+}
+
+/// What the People view lists people and unnamed faces from, as a cache key: the source, the folder it shows and the
+/// filter bar (its person aside), read from the session without looking through the library.
+pub(crate) fn people_scope(s: &lightcraft_engine::Session) -> String {
+    let filter = lightcraft_catalog::Filter { person: None, ..s.filter.clone() };
+    format!("{:?}|{:?}|{:?}|{filter:?}", s.source, s.browse, s.library_folder)
 }
 
 /// Whether a tally of the library made when the catalog was at `revision` is still right, given that it reads only
@@ -2011,19 +2022,16 @@ impl Caches {
             }
         }
     }
-    /// The people named on faces among the photos the filter lets through (its own `person` aside),
-    /// with photo counts.
-    pub fn people(
-        &mut self,
-        cat: &lightcraft_catalog::Catalog,
-        filter: &lightcraft_catalog::Filter,
-    ) -> std::sync::Arc<Vec<lightcraft_catalog::Person>> {
-        let key = lightcraft_catalog::Filter { person: None, ..filter.clone() };
+    /// The people named on faces among the photos the view shows (its source and filter bar, the
+    /// filter's own `person` aside: [`lightcraft_engine::Session::people_filter`]), with photo counts.
+    pub fn people(&mut self, s: &lightcraft_engine::Session) -> std::sync::Arc<Vec<lightcraft_catalog::Person>> {
+        let key = people_scope(s);
         match &self.people {
-            Some((r, f, t)) if *r == cat.revision && *f == key => t.clone(),
+            Some((r, k, t)) if *r == s.catalog.revision && *k == key => t.clone(),
             _ => {
-                let t = std::sync::Arc::new(cat.people_in(&key));
-                self.people = Some((cat.revision, key, t.clone()));
+                // (asked only when something changed: Recently Added looks through the library for its start)
+                let t = std::sync::Arc::new(s.catalog.people_in(&s.people_filter()));
+                self.people = Some((s.catalog.revision, key, t.clone()));
                 t
             }
         }

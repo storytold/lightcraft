@@ -445,6 +445,23 @@ fn people_from_named_face_regions() {
         "the person filter is ignored"
     );
     assert_eq!(names(Filter { rating: 5, ..Default::default() }), vec![], "nobody in the filtered photos");
+
+    // the library's people only: a file only browsed in a folder, or a deleted photo, holds no one (a person's page
+    // and Rename Person look at the library)
+    let mut file = |path: &str, name: &str| {
+        let id = c.alloc_photo_id();
+        let mut p = Photo::new(id, Source::File { path: path.into() }, path, "JPEG", 6000, 4000, "2026-09-30T10:00:00");
+        p.meta.regions = vec![region(Some(name), RegionKind::Face)];
+        c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        id
+    };
+    file("/shoot/g.jpg", "Ann");
+    let browsed = file("/shoot/h.jpg", "Bea");
+    c.apply(Op::SetLocal { id: browsed, local: true }).unwrap();
+    c.apply(Op::SetDeleted { id: e, deleted: true }).unwrap();
+    let names = |f: Filter| c.people_in(&f).into_iter().map(|p| p.name).collect::<Vec<_>>();
+    assert_eq!(names(Filter { folder: Some("/shoot".into()), ..Default::default() }), vec!["Ann".to_string()], "a browsed file");
+    assert!(names(Filter { deleted: true, ..Default::default() }).is_empty(), "a deleted photo");
 }
 
 /// Most photos have no regions: the field is left out of the catalog JSON then, and a catalog written

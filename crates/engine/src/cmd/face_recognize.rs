@@ -197,12 +197,24 @@ struct Arranged {
     suggestions: std::collections::HashMap<(u64, usize), (String, f32)>,
 }
 
-/// `faces.unnamed {limit?: 600}`: the faces nobody has named, to be named a group at a time. With recognition running,
-/// faces that look alike are next to each other, and a face the named faces recognise carries the name they suggest.
+/// `faces.unnamed {limit?: 600, scope?: "view"}`: the faces nobody has named, to be named a group at a time. With
+/// recognition running, faces that look alike are next to each other, and a face the named faces recognise carries the
+/// name they suggest. `scope: "view"` keeps to the photos the view shows, as the People view does
+/// ([`Session::people_filter`]: under All Photos, Missing Photos and Recently Deleted, the library by the filter bar).
 fn unnamed(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "faces.unnamed";
     let limit = p.get("limit").and_then(Value::as_u64).map_or(600, |n| usize::try_from(n).unwrap_or(600)).clamp(1, MAX_UNNAMED);
+    let shown: Option<std::collections::HashSet<lightcraft_catalog::PhotoId>> = match p.get("scope") {
+        None | Some(Value::Null) => None,
+        Some(v) if v.as_str() == Some("view") => {
+            let f = s.people_filter();
+            // the default filter lets the whole library through, as no scope does
+            (f != lightcraft_catalog::Filter::default()).then(|| s.catalog.query(&f, &lightcraft_catalog::Sort::default()).into_iter().collect())
+        }
+        Some(v) => return Err(bad(C, format!("unknown scope {v}: leave it out for the whole library, or \"view\""))),
+    };
     let mut all: Vec<(u64, usize, lightcraft_geom::Rect)> = Vec::new();
-    for ph in s.catalog.photos().filter(|ph| ph.in_library()) {
+    for ph in s.catalog.photos().filter(|ph| ph.in_library() && shown.as_ref().is_none_or(|v| v.contains(&ph.id))) {
         for (index, r) in ph.meta.regions.iter().enumerate() {
             if r.kind == lightcraft_meta::RegionKind::Face && r.name.is_none() {
                 all.push((ph.id.0, index, r.rect));
@@ -1151,7 +1163,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Unnamed Faces",
             [],
             None,
-            "{limit?: 600} → {total, faces: [{photo, index, rect, view, suggestion: {name, score} | null}], ordered, ready} — the faces nobody has named; with recognition running, look-alikes are next to each other and a face the named ones recognise carries the name they suggest. `view` is the box to show the face by. Name them with `faces.nameFaces`",
+            "{limit?: 600, scope?: \"view\"} → {total, faces: [{photo, index, rect, view, suggestion: {name, score} | null}], ordered, ready} — the faces nobody has named, in the library or, with `scope: \"view\"`, in the photos the view shows (its source and filter bar, the person filter aside: what the People view lists; under All Photos, Missing Photos and Recently Deleted the library, by the filter bar); with recognition running, look-alikes are next to each other and a face the named ones recognise carries the name they suggest. `view` is the box to show the face by. Name them with `faces.nameFaces`",
             super::always,
             unnamed
         ),

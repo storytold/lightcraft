@@ -63,10 +63,22 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let now = ui.input(|i| i.time);
     let thumb = app.ui.thumb_size;
-    let people = app.caches.people(&app.session.catalog, &app.session.filter);
+    let people = app.caches.people(&app.session);
     let (head, _) = ui.allocate_exact_size(vec2(ui.available_width(), HEADER_H), Sense::hover());
     let title =
         ui.painter().text(pos2(head.left() + PAD, head.center().y), Align2::LEFT_CENTER, crate::i18n::tr("Named People"), t.semibold(15.0), t.text);
+    // the source they come from, when the view shows a part of the library (an album, a folder, Picks…)
+    let narrowed = app.session.people_follow_source();
+    let title = if narrowed {
+        let source = fit(ui.painter(), &crate::i18n::source_title(&app.session), t.font(13.0), 260.0);
+        let r = ui.painter().text(pos2(title.right() + 8.0, head.center().y), Align2::LEFT_CENTER, format!("· {source}"), t.font(13.0), t.text_dim);
+        register(ui.ctx(), "people:source", r);
+        ui.interact(r, egui::Id::new("people-source"), Sense::hover())
+            .on_hover_text(crate::i18n::tr("The people in the photos this view shows. Choose All Photos to see everyone."));
+        title.union(r)
+    } else {
+        title
+    };
     // the person page last left (a face opened from it, or its back button): one click returns to it
     if let Some(last) = app.ui.last_person.clone().filter(|n| people.iter().any(|p| &p.name == n)) {
         let label = fit(ui.painter(), &last, t.font(13.0), 224.0);
@@ -89,10 +101,14 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     super::unnamed::naming_bar(app, ui);
     let unnamed = super::unnamed::faces(app, now);
     if people.is_empty() && unnamed.faces.is_empty() {
-        let (title, body) = if chips.is_empty() {
-            ("No people yet", "Face names written to XMP by Lightroom and other apps show up here, and faces found in your photos can be named.")
-        } else {
+        let (title, body) = if !chips.is_empty() && narrowed {
+            ("No named people in these photos", "Remove a filter above, or choose All Photos in the sidebar")
+        } else if !chips.is_empty() {
             ("No named people in these photos", "Remove a filter above, or choose Clear all")
+        } else if narrowed {
+            ("No people in these photos", "Choose All Photos in the sidebar to see everyone")
+        } else {
+            ("No people yet", "Face names written to XMP by Lightroom and other apps show up here, and faces found in your photos can be named.")
         };
         super::empty_message(ui, ui.available_rect_before_wrap(), title, body);
         return;
@@ -116,13 +132,12 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             first..last
         };
         if people.is_empty() {
-            ui.painter().text(
-                pos2(area.left() + PAD, area.top() + 24.0),
-                Align2::LEFT_CENTER,
-                "No named people yet. Name the faces below to start.",
-                t.font(13.0),
-                t.text_dim,
-            );
+            let none = if narrowed {
+                "No one in these photos is named yet. Name the faces below."
+            } else {
+                "No named people yet. Name the faces below to start."
+            };
+            ui.painter().text(pos2(area.left() + PAD, area.top() + 24.0), Align2::LEFT_CENTER, crate::i18n::tr(none), t.font(13.0), t.text_dim);
         }
         let mut shown = 0;
         for row in visible(PAD, rows, row_h) {

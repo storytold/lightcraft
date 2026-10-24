@@ -1213,6 +1213,21 @@ impl Session {
         f
     }
 
+    /// The photos the People view lists people and unnamed faces from: the ones the view shows (its source over the
+    /// filter bar), the person filter aside. Where the People view lists everyone ([`Session::people_follow_source`]),
+    /// the filter bar alone.
+    pub fn people_filter(&self) -> Filter {
+        let f = if self.people_follow_source() { self.view_filter(self.source, &self.filter) } else { self.filter.clone() };
+        Filter { person: None, ..f }
+    }
+
+    /// Whether the People view lists only the people of the source shown (an album, a folder, Picks…). All Photos,
+    /// Missing Photos (no filter of its own) and Recently Deleted (photos out of the library, while a person's faces
+    /// are the library's) list everyone.
+    pub fn people_follow_source(&self) -> bool {
+        !matches!(self.source, LibrarySource::All | LibrarySource::Missing | LibrarySource::RecentlyDeleted)
+    }
+
     /// Let go of what a held view kept: the view shows what matches now ([`Session::hold_view`]).
     pub fn refresh_view(&mut self) {
         self.base = None;
