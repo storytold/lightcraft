@@ -947,7 +947,7 @@ fn commit_interaction(app: &mut LightcraftApp, ui: &egui::Ui, dragging: bool, st
     if !dragging || !(stopped || released) {
         return false;
     }
-    let _ = app.run("develop.endInteraction", json!({}));
+    app.act("develop.endInteraction", json!({}));
     true
 }
 
@@ -988,7 +988,7 @@ fn param_drag(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect, resp: &egui::
         && near_curve(q) <= PARAM_GRAB
     {
         let x = from_screen_x(q);
-        let _ = app.run("develop.beginInteraction", json!({"label": "Parametric Curve"}));
+        app.act("develop.beginInteraction", json!({"label": "Parametric Curve"}));
         let region = model.region_at(x);
         let initial_amount = model.amounts.get(region).copied().unwrap_or(0.0);
         let start_pos = to_screen(x, model.at(x));
@@ -1015,7 +1015,7 @@ fn param_drag(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect, resp: &egui::
         }
     }
     if let Some((id, v)) = set {
-        let _ = app.run("develop.set", json!({"control": id, "value": v}));
+        app.act("develop.set", json!({"control": id, "value": v}));
     }
     let dropped = resp.drag_stopped();
     if commit_interaction(app, ui, dragged.is_some(), dropped) {

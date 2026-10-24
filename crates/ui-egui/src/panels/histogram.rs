@@ -175,7 +175,7 @@ pub fn interact(app: &mut LightcraftApp, ui: &egui::Ui, resp: &Response, plot: R
             app.gesture = Some(Gesture::HistogramDrag { control, value: next });
             let v = quantized(spec, next);
             if value_of(app, id, spec) != v {
-                let _ = app.run("develop.set", json!({"control": control, "value": v}));
+                app.act("develop.set", json!({"control": control, "value": v}));
             }
         }
         if resp.drag_stopped() {
@@ -187,9 +187,9 @@ pub fn interact(app: &mut LightcraftApp, ui: &egui::Ui, resp: &Response, plot: R
         && let Some(zone) = pressed
         && let Some(spec) = zone.spec()
     {
-        let _ = app.run("develop.beginInteraction", json!({"label": spec.label}));
+        app.act("develop.beginInteraction", json!({"label": spec.label}));
         app.ui.dragging_control = Some(spec.id.to_string());
-        let _ = app.run("develop.set", json!({"control": spec.id, "value": spec.default}));
+        app.act("develop.set", json!({"control": spec.id, "value": spec.default}));
         finish(app);
     }
     // the highlight and the readout follow the drag's locked zone, else the pointer's
@@ -210,7 +210,7 @@ pub fn interact(app: &mut LightcraftApp, ui: &egui::Ui, resp: &Response, plot: R
 fn finish(app: &mut LightcraftApp) {
     app.gesture = None;
     app.ui.dragging_control = None;
-    let _ = app.run("develop.endInteraction", json!({}));
+    app.act("develop.endInteraction", json!({}));
 }
 
 /// A control's value on the photo, or its default when the photo has no settings yet.

@@ -122,21 +122,31 @@ fn a_refused_menu_item_says_why() {
 
 /// An interface command that wraps an engine command (Edit In, All Metadata…) hands on the
 /// engine's error as text ("command `photo.editExternal` is not available right now: no photo
-/// selected"): the person reads the reason only, agents the whole of it as before.
+/// selected"): the person reads the reason only, agents the whole of it as before. Edit In
+/// says "Couldn't open the editor: …" itself, on every way in, and the reason replaces the raw text in that.
 #[test]
 fn an_interface_command_that_wraps_an_engine_command_says_the_reason_only() {
     let mut app = app();
     app.session.selection = Default::default();
-    for (id, wrapped) in [("photo.editInExternal", "photo.editExternal"), ("dialog.allMetadata", "photo.allMetadata")] {
+    for (id, wrapped, own_prefix) in
+        [("photo.editInExternal", "photo.editExternal", Some("Couldn't open the editor: ")), ("dialog.allMetadata", "photo.allMetadata", None)]
+    {
         app.ui.toast = None;
         let whole = app.run(id, json!({})).unwrap_err();
         assert!(whole.contains(&format!("`{wrapped}`")), "agents get the engine's error as it was: {whole}");
-        assert_eq!(toast(&app), None);
+        if own_prefix.is_none() {
+            assert_eq!(toast(&app), None);
+        }
+        app.ui.toast = None;
         assert_eq!(app.act(id, json!({})), None);
         let said = toast(&app).expect("a toast").to_string();
         assert!(!said.contains(wrapped) && !said.contains("not available right now") && !said.contains("invalid parameters"), "{said}");
-        assert!(whole.to_lowercase().ends_with(&said.to_lowercase()), "the reason, capitalised: {said} / {whole}");
+        let reason = crate::engine_reason(&whole).expect("the engine's text");
+        assert!(said.to_lowercase().ends_with(&reason.to_lowercase()), "the reason, capitalised: {said} / {whole}");
         assert!(said.chars().next().is_some_and(char::is_uppercase), "{said}");
+        if let Some(prefix) = own_prefix {
+            assert_eq!(said, format!("{prefix}{}", crate::sentence(reason)), "the command's own words with the reason in them, once");
+        }
     }
 }
 
