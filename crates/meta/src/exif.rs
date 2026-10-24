@@ -504,6 +504,19 @@ pub fn write_exif(meta: &Metadata) -> Vec<u8> {
             ex.set(tag, v);
         }
     }
+    if let Some(d) = meta.capture_time {
+        let offset = d.offset_minutes.map(|o| {
+            let sign = if o < 0 { '-' } else { '+' };
+            format!("{sign}{:02}:{:02}", o.abs() / 60, o.abs() % 60)
+        });
+        let subsec = (d.millis != 0).then(|| format!("{:03}", d.millis));
+        for (tag, v) in [(t::OFFSET_TIME, &offset), (t::OFFSET_TIME_ORIGINAL, &offset), (t::SUBSEC_TIME, &subsec), (t::SUBSEC_TIME_ORIGINAL, &subsec)]
+        {
+            if let Some(v) = v {
+                ex.set(tag, Value::Ascii(v.clone()));
+            }
+        }
+    }
     ifd0.set_child(t::EXIF_IFD, ex);
     if let Some(g) = meta.gps {
         let dms = |v: f64| {
@@ -531,6 +544,14 @@ pub fn write_exif(meta: &Metadata) -> Vec<u8> {
 #[cfg(test)]
 mod write_tests {
     use super::*;
+
+    #[test]
+    fn capture_time_offset_and_subsec_round_trip() {
+        for iso in ["2026-09-20T05:40:00.250+02:00", "2026-09-20T05:40:00.005-03:30", "2026-09-20T05:40:00"] {
+            let m = Metadata { capture_time: DateTime::parse_iso(iso), ..Default::default() };
+            assert_eq!(read_exif(&write_exif(&m)).capture_time, m.capture_time, "{iso}");
+        }
+    }
 
     #[test]
     fn exif_round_trips() {
