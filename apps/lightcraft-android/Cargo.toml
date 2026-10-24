@@ -1,0 +1,45 @@
+[package]
+name = "lightcraft-android"
+description = "LightCraft on Android: eframe + wgpu shell on GameActivity, reusing the desktop engine and egui UI"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# The workspace forbids `unsafe`; the Android entry point needs `#[unsafe(no_mangle)]` and the JNI
+# shim needs two raw-pointer wrappers, so this crate follows the `crates/sysmem` pattern: `deny`,
+# with `#[allow(unsafe_code)]` on the entry and on the FFI module (each block carries `// SAFETY:`).
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+too_many_arguments = "allow"
+needless_range_loop = "allow"
+type_complexity = "allow"
+excessive_precision = "allow"
+
+[lib]
+name = "main"
+crate-type = ["cdylib"]
+
+[target.'cfg(target_os = "android")'.dependencies]
+lightcraft-engine = { workspace = true }
+lightcraft-ui-egui = { workspace = true }
+lightcraft-codecs = { workspace = true }
+lightcraft-raster = { workspace = true }
+egui = { workspace = true }
+serde_json = { workspace = true }
+log = { workspace = true }
+jni = "0.22"
+ndk-context = "0.1"
+# accesskit + native-activity is a hard eframe compile error, and NativeActivity has no IME, so the
+# window runs on GameActivity (androidx.games:games-activity, see android/app/build.gradle).
+eframe = { workspace = true, default-features = false, features = [
+    "default_fonts",
+    "wgpu",
+    "android-game-activity",
+] }
+winit = { version = "0.30", default-features = false }
+android_logger = "0.15"
