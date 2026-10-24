@@ -1733,6 +1733,7 @@
   "Denoise Settings": "Impostazioni della riduzione disturbo",
   "Denoise all photos with an Amount": "Riduci il disturbo in tutte le foto con una quantità",
   "Downloaded and checked. Installing…": "Scaricato e verificato. Installazione…",
+  "The download failed": "Download non riuscito",
   "Failed its last test": "Non ha superato l'ultimo test",
   "Graphics card": "Scheda grafica",
   "I have read these terms and accept them for my own use": "Ho letto queste condizioni e le accetto per uso personale",
@@ -2356,5 +2357,12 @@
   "Import dropped files without review": "Importa i file rilasciati senza revisione",
   "An import is running": "Un'importazione è in corso",
   "An import is running. Drop photos when it has finished": "Un'importazione è in corso. Trascina le foto quando è finita",
-  "Finish Lightroom catalog import before adding photos": "Termina l'importazione del catalogo Lightroom prima di aggiungere foto"
+  "Finish Lightroom catalog import before adding photos": "Termina l'importazione del catalogo Lightroom prima di aggiungere foto",
+  "Face recognition is on": "Il riconoscimento dei volti è attivo",
+  "Face recognition is off. Turn it on to get name suggestions and see look-alike faces together.": "Il riconoscimento dei volti è disattivato. Attivalo per ricevere suggerimenti di nomi e vedere insieme i volti simili.",
+  "Turn on": "Attiva",
+  "Set up face recognition": "Configura il riconoscimento dei volti",
+  "Face recognition needs a model to suggest names: a one-time download, in Settings.": "Il riconoscimento dei volti ha bisogno di un modello per suggerire i nomi: un download una tantum, in Impostazioni.",
+  "Turn on name suggestions": "Attiva i suggerimenti di nomi",
+  "Set up name suggestions…": "Configura i suggerimenti di nomi…"
 }

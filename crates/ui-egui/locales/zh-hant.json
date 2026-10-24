@@ -1714,6 +1714,7 @@
   "Denoise Settings": "Denoise Settings",
   "Denoise all photos with an Amount": "Denoise all photos with an Amount",
   "Downloaded and checked. Installing…": "Downloaded and checked. Installing…",
+  "The download failed": "下載失敗。",
   "Failed its last test": "Failed its last test",
   "Graphics card": "Graphics card",
   "I have read these terms and accept them for my own use": "I have read these terms and accept them for my own use",
@@ -2154,5 +2155,12 @@
   "Import dropped files without review": "不經檢查直接匯入拖放的檔案",
   "An import is running": "正在匯入",
   "An import is running. Drop photos when it has finished": "正在匯入。匯入完成後再拖放照片",
-  "Finish Lightroom catalog import before adding photos": "新增照片前，請先完成 Lightroom 目錄的匯入"
+  "Finish Lightroom catalog import before adding photos": "新增照片前，請先完成 Lightroom 目錄的匯入",
+  "Face recognition is on": "臉部辨識已開啟",
+  "Face recognition is off. Turn it on to get name suggestions and see look-alike faces together.": "臉部辨識已關閉。開啟後可取得姓名建議，並將相似的臉孔放在一起檢視。",
+  "Turn on": "開啟",
+  "Set up face recognition": "設定臉部辨識",
+  "Face recognition needs a model to suggest names: a one-time download, in Settings.": "臉部辨識需要一個模型來建議姓名：只需在「設定」中下載一次。",
+  "Turn on name suggestions": "開啟姓名建議",
+  "Set up name suggestions…": "設定姓名建議…"
 }

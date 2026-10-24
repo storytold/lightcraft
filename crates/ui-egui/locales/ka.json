@@ -620,6 +620,7 @@
   "Download Place Names (GeoNames)": "ადგილების სახელების ჩამოტვირთვა (GeoNames)",
   "Download the SAM 3 Model?": "ჩამოიტვირთოს SAM 3 მოდელი?",
   "Downloaded and checked. Installing…": "ჩამოტვირთულია და შემოწმებულია. ინსტალირდება…",
+  "The download failed": "ჩამოტვირთვა ვერ მოხერხდა",
   "Downloading model": "მოდელი იტვირთება",
   "Downloading place names": "ადგილების სახელები იტვირთება",
   "Downloads": "ჩამოტვირთვები",
@@ -2731,5 +2732,12 @@
   "Import dropped files without review": "ჩაგდებული ფაილების იმპორტი გადახედვის გარეშე",
   "An import is running": "იმპორტი მიმდინარეობს",
   "An import is running. Drop photos when it has finished": "იმპორტი მიმდინარეობს. ფოტოები ჩააგდეთ, როცა დასრულდება",
-  "Finish Lightroom catalog import before adding photos": "ფოტოების დამატებამდე დაასრულეთ Lightroom-ის კატალოგის იმპორტი"
+  "Finish Lightroom catalog import before adding photos": "ფოტოების დამატებამდე დაასრულეთ Lightroom-ის კატალოგის იმპორტი",
+  "Face recognition is on": "სახეების ამოცნობა ჩართულია",
+  "Face recognition is off. Turn it on to get name suggestions and see look-alike faces together.": "სახეების ამოცნობა გამორთულია. ჩართეთ, რომ მიიღოთ სახელების შეთავაზებები და ერთად ნახოთ მსგავსი სახეები.",
+  "Turn on": "ჩართვა",
+  "Set up face recognition": "სახეების ამოცნობის დაყენება",
+  "Face recognition needs a model to suggest names: a one-time download, in Settings.": "სახეების ამოცნობას სახელების შესათავაზებლად მოდელი სჭირდება: ერთჯერადი ჩამოტვირთვა, პარამეტრებში.",
+  "Turn on name suggestions": "სახელების შეთავაზებების ჩართვა",
+  "Set up name suggestions…": "სახელების შეთავაზებების დაყენება…"
 }

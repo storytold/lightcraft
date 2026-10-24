@@ -401,7 +401,8 @@ pub fn show(app: &mut crate::LightcraftApp, ui: &mut egui::Ui) {
     let t = crate::theme::Tokens::get(ui.ctx());
     let mut workspace = app.ui.docking.clone().unwrap_or_else(|| from_ui(app));
     if let Err(error) = workspace.validate().and_then(|()| sync(&mut workspace, app)) {
-        app.ui.toast = Some((format!("Panel layout could not be restored: {error}"), ui.input(|input| input.time) + 8.0, None));
+        app.ui.toast =
+            Some((crate::i18n::tr_format!("Panel layout could not be restored: {error}", error = error), ui.input(|input| input.time) + 8.0, None));
         workspace = from_ui(app);
         let _ = sync(&mut workspace, app);
     }
@@ -488,7 +489,8 @@ pub fn show(app: &mut crate::LightcraftApp, ui: &mut egui::Ui) {
             .map_err(|error| error.to_string())
             .and_then(|action| command_impl(app, false, &json!({"action": action}), true))
         {
-            app.ui.toast = Some((format!("Panel move was not applied: {error}"), ui.input(|input| input.time) + 8.0, None));
+            app.ui.toast =
+                Some((crate::i18n::tr_format!("Panel move was not applied: {error}", error = error), ui.input(|input| input.time) + 8.0, None));
         }
     }
 }

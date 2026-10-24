@@ -305,5 +305,9 @@
   "Could not read {name}: {e}": "无法读取 {name}：{e}",
   "Added {n} photo{}": "已添加 {n} 张照片{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Lightroom 目录“{catalog}”要导入到哪里？",
-  "Merge into the open library “{library}” ({count} photo{})": "合并到当前打开的图库“{library}”（{count} 张照片）{:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "合并到当前打开的图库“{library}”（{count} 张照片）{:.0}",
+  "Panel layout could not be restored: {error}": "无法恢复面板布局：{error}",
+  "Panel move was not applied: {error}": "面板移动未应用：{error}",
+  "{name} is installed": "{name} 已安装",
+  "{name} is installed and in use: face recognition is on": "{name} 已安装并在使用：人脸识别已开启"
 }

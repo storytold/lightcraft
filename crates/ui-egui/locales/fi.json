@@ -556,6 +556,7 @@
   "Download Place Names (GeoNames)": "Lataa paikannimet (GeoNames)",
   "Download the SAM 3 Model?": "Ladataanko SAM 3 -malli?",
   "Downloaded and checked. Installing…": "Ladattu ja tarkistettu. Asennetaan…",
+  "The download failed": "Lataus epäonnistui",
   "Downloading model": "Ladataan mallia",
   "Downloading place names": "Ladataan paikannimiä",
   "Downloads": "Lataukset",
@@ -2324,5 +2325,12 @@
   "Drop to open the face model": "Pudota avataksesi kasvomallin",
   "Dropped Files": "Pudotetut tiedostot",
   "Finish Lightroom catalog import before adding photos": "Viimeistele Lightroom-luettelon tuonti ennen kuvien lisäämistä",
-  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta"
+  "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta",
+  "Face recognition is on": "Kasvojentunnistus on päällä",
+  "Face recognition is off. Turn it on to get name suggestions and see look-alike faces together.": "Kasvojentunnistus on pois päältä. Ota se käyttöön, niin saat nimiehdotuksia ja näet samannäköiset kasvot yhdessä.",
+  "Turn on": "Ota käyttöön",
+  "Set up face recognition": "Määritä kasvojentunnistus",
+  "Face recognition needs a model to suggest names: a one-time download, in Settings.": "Kasvojentunnistus tarvitsee mallin nimien ehdottamiseen: kertaluonteinen lataus Asetuksissa.",
+  "Turn on name suggestions": "Ota nimiehdotukset käyttöön",
+  "Set up name suggestions…": "Määritä nimiehdotukset…"
 }

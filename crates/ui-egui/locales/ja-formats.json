@@ -305,5 +305,9 @@
   "Could not read {name}: {e}": "{name} を読み取れませんでした: {e}",
   "Added {n} photo{}": "{n}枚を追加しました{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Lightroom カタログ「{catalog}」をどこに読み込みますか？",
-  "Merge into the open library “{library}” ({count} photo{})": "開いているライブラリ「{library}」に統合（写真{count}枚）{:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "開いているライブラリ「{library}」に統合（写真{count}枚）{:.0}",
+  "Panel layout could not be restored: {error}": "パネル配置を復元できませんでした：{error}",
+  "Panel move was not applied: {error}": "パネルの移動は適用されませんでした：{error}",
+  "{name} is installed": "{name} をインストールしました",
+  "{name} is installed and in use: face recognition is on": "{name} をインストールして使用中です：顔認識はオンです"
 }

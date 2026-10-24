@@ -1666,6 +1666,7 @@
   "Denoise Settings": "Ustawienia odszumiania",
   "Denoise all photos with an Amount": "Odszum wszystkie zdjęcia z ustawioną intensywnością",
   "Downloaded and checked. Installing…": "Pobrano i sprawdzono. Instalowanie…",
+  "The download failed": "Pobieranie nie powiodło się",
   "Failed its last test": "Nie przeszedł ostatniego testu",
   "Graphics card": "Karta graficzna",
   "I have read these terms and accept them for my own use": "Przeczytałem warunki i akceptuję je na własny użytek",
@@ -2280,5 +2281,12 @@
   "Import dropped files without review": "Importuj upuszczone pliki bez przeglądu",
   "An import is running": "Import jest w toku",
   "An import is running. Drop photos when it has finished": "Import jest w toku. Upuść zdjęcia, gdy się zakończy",
-  "Finish Lightroom catalog import before adding photos": "Zakończ import katalogu Lightrooma, zanim dodasz zdjęcia"
+  "Finish Lightroom catalog import before adding photos": "Zakończ import katalogu Lightrooma, zanim dodasz zdjęcia",
+  "Face recognition is on": "Rozpoznawanie twarzy jest włączone",
+  "Face recognition is off. Turn it on to get name suggestions and see look-alike faces together.": "Rozpoznawanie twarzy jest wyłączone. Włącz je, aby dostawać propozycje imion i widzieć podobne twarze razem.",
+  "Turn on": "Włącz",
+  "Set up face recognition": "Skonfiguruj rozpoznawanie twarzy",
+  "Face recognition needs a model to suggest names: a one-time download, in Settings.": "Rozpoznawanie twarzy potrzebuje modelu, aby proponować imiona: jednorazowe pobranie w Ustawieniach.",
+  "Turn on name suggestions": "Włącz propozycje imion",
+  "Set up name suggestions…": "Skonfiguruj propozycje imion…"
 }

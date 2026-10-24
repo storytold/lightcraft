@@ -1357,11 +1357,23 @@ mod tests {
         h.step();
         assert!(offers(&mut h));
         assert_eq!(h.app.session.execute("faces.models.list", &json!({})).unwrap()["enabled"], false);
+        h.app.ui.language = crate::i18n::Locale::De;
+        crate::i18n::set_language(crate::i18n::Locale::De);
+        h.step();
+        h.step();
+        assert!(offers(&mut h), "the offer is still there in German");
         let r = h.request("ui.clickWidget", json!({"id": "faces:setup"}), t);
         assert_eq!(r["ok"], true, "{r}");
         h.step();
         h.step();
         assert_eq!(h.app.session.execute("faces.models.list", &json!({})).unwrap()["enabled"], true);
+        assert_eq!(
+            h.app.ui.toast.as_ref().map(|toast| toast.0.as_str()),
+            Some(crate::i18n::Locale::De.tr("Face recognition is on")),
+            "the toast is looked up in the UI language"
+        );
+        h.app.ui.language = crate::i18n::Locale::En;
+        crate::i18n::set_language(crate::i18n::Locale::En);
         assert_eq!(h.app.ui.dialog, None, "nothing to go to Settings for");
         h.step();
         assert!(!offers(&mut h), "once it is on the offer is gone");

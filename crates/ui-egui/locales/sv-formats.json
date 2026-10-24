@@ -305,5 +305,9 @@
   "Drop to review {n} item{} for import": "Släpp för att granska {n} objekt före import{:.0}",
   "Inside: {names}": "Inuti: {names}",
   "Where should the Lightroom catalog “{catalog}” go?": "Vart ska Lightroom-katalogen ”{catalog}” importeras?",
-  "Merge into the open library “{library}” ({count} photo{})": "Slå samman med det öppna biblioteket ”{library}” ({count} foto{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Slå samman med det öppna biblioteket ”{library}” ({count} foto{:.0})",
+  "Panel layout could not be restored: {error}": "Panellayouten kunde inte återställas: {error}",
+  "Panel move was not applied: {error}": "Panelflytten tillämpades inte: {error}",
+  "{name} is installed": "{name} är installerad",
+  "{name} is installed and in use: face recognition is on": "{name} är installerad och används: ansiktsigenkänning är på"
 }

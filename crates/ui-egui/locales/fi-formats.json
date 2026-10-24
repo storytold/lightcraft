@@ -305,5 +305,9 @@
   "Drop to import {n} preset{}": "Pudota tuodaksesi esiasetuksia: {n}{:.0}",
   "Drop to review {n} item{} for import": "Pudota tarkistaaksesi ennen tuontia (kohteita: {n}){:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Minne Lightroom-luettelo ”{catalog}” tuodaan?",
-  "Merge into the open library “{library}” ({count} photo{})": "Yhdistä avoimeen kirjastoon ”{library}” (kuvia: {count}{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Yhdistä avoimeen kirjastoon ”{library}” (kuvia: {count}{:.0})",
+  "Panel layout could not be restored: {error}": "Paneelien asettelua ei voitu palauttaa: {error}",
+  "Panel move was not applied: {error}": "Paneelin siirtoa ei otettu käyttöön: {error}",
+  "{name} is installed": "{name} on asennettu",
+  "{name} is installed and in use: face recognition is on": "{name} on asennettu ja käytössä: kasvojentunnistus on päällä"
 }

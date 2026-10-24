@@ -599,6 +599,7 @@
   "Download Place Names (GeoNames)": "Stáhnout názvy míst (GeoNames)",
   "Download the SAM 3 Model?": "Stáhnout model SAM 3?",
   "Downloaded and checked. Installing…": "Staženo a ověřeno. Probíhá instalace…",
+  "The download failed": "Stažení se nezdařilo",
   "Downloading model": "Stahování modelu",
   "Downloading place names": "Stahování názvů míst",
   "Downloads": "Stažené soubory",
@@ -2405,5 +2406,12 @@
   "Import dropped files without review": "Importovat přetažené soubory bez kontroly",
   "An import is running": "Import už běží",
   "An import is running. Drop photos when it has finished": "Import už běží. Fotky přetáhněte, až skončí",
-  "Finish Lightroom catalog import before adding photos": "Dokončete import katalogu Lightroom, než přidáte fotky"
+  "Finish Lightroom catalog import before adding photos": "Dokončete import katalogu Lightroom, než přidáte fotky",
+  "Face recognition is on": "Rozpoznávání obličejů je zapnuto",
+  "Face recognition is off. Turn it on to get name suggestions and see look-alike faces together.": "Rozpoznávání obličejů je vypnuto. Zapněte je, abyste dostávali návrhy jmen a viděli podobné obličeje pohromadě.",
+  "Turn on": "Zapnout",
+  "Set up face recognition": "Nastavit rozpoznávání obličejů",
+  "Face recognition needs a model to suggest names: a one-time download, in Settings.": "Rozpoznávání obličejů potřebuje model, aby mohlo navrhovat jména: jednorázové stažení v Nastavení.",
+  "Turn on name suggestions": "Zapnout návrhy jmen",
+  "Set up name suggestions…": "Nastavit návrhy jmen…"
 }

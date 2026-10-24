@@ -82,6 +82,13 @@
   library you open and are imported into it, as files given on the command line are; presets dropped then are
   refused with a note, since they belong to a library.
 
+### Panel layout messages, face recognition prompts and the second window's title in your language
+- The messages shown when a panel layout cannot be restored or a panel move is not applied, the face recognition
+  prompts (the banner and the name box's offer, with their buttons), the "Face recognition is on" and "is installed"
+  messages, and the title of the second window are now in the interface language in all 17 languages. They stayed in
+  English before. So did "The download failed", shown under a denoise or face recognition model's download when the
+  download gives no reason.
+
 ## 2026-10-22
 
 ### Reliability

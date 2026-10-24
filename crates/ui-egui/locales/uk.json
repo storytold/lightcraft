@@ -1705,6 +1705,7 @@
   "Denoise Settings": "Налаштування усунення шуму",
   "Denoise all photos with an Amount": "Обробити всі фото зі значенням усунення шуму",
   "Downloaded and checked. Installing…": "Завантажено й перевірено. Установлення…",
+  "The download failed": "Не вдалося завантажити",
   "Failed its last test": "Останню перевірку не пройдено",
   "Graphics card": "Відеокарта",
   "I have read these terms and accept them for my own use": "Я прочитав ці умови й приймаю їх для власного використання",
@@ -2351,5 +2352,12 @@
   "Import dropped files without review": "Імпортувати перетягнуті файли без перегляду",
   "An import is running": "Імпорт уже виконується",
   "An import is running. Drop photos when it has finished": "Імпорт уже виконується. Перетягніть фото, коли він завершиться",
-  "Finish Lightroom catalog import before adding photos": "Завершіть імпорт каталогу Lightroom, перш ніж додавати фото"
+  "Finish Lightroom catalog import before adding photos": "Завершіть імпорт каталогу Lightroom, перш ніж додавати фото",
+  "Face recognition is on": "Розпізнавання облич увімкнено",
+  "Face recognition is off. Turn it on to get name suggestions and see look-alike faces together.": "Розпізнавання облич вимкнено. Увімкніть його, щоб отримувати підказки імен і бачити схожі обличчя разом.",
+  "Turn on": "Увімкнути",
+  "Set up face recognition": "Налаштувати розпізнавання облич",
+  "Face recognition needs a model to suggest names: a one-time download, in Settings.": "Для підказок імен розпізнаванню облич потрібна модель: одноразове завантаження в Налаштуваннях.",
+  "Turn on name suggestions": "Увімкнути підказки імен",
+  "Set up name suggestions…": "Налаштувати підказки імен…"
 }

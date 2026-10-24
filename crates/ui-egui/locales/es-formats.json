@@ -305,5 +305,9 @@
   "Could not read {name}: {e}": "No se pudo leer {name}: {e}",
   "Added {n} photo{}": "{n} foto{0} añadida{0}",
   "Where should the Lightroom catalog “{catalog}” go?": "¿Dónde debe ir el catálogo de Lightroom “{catalog}”?",
-  "Merge into the open library “{library}” ({count} photo{})": "Combinar con la biblioteca abierta “{library}” ({count} foto{})"
+  "Merge into the open library “{library}” ({count} photo{})": "Combinar con la biblioteca abierta “{library}” ({count} foto{})",
+  "Panel layout could not be restored: {error}": "No se pudo restablecer la disposición de paneles: {error}",
+  "Panel move was not applied: {error}": "No se aplicó el movimiento del panel: {error}",
+  "{name} is installed": "{name} está instalado",
+  "{name} is installed and in use: face recognition is on": "{name} está instalado y en uso: el reconocimiento facial está activado"
 }

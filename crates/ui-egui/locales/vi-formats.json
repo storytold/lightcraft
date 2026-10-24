@@ -305,5 +305,9 @@
   "Drop to import {n} preset{}": "Thả để nhập {n} thiết lập sẵn{:.0}",
   "Drop to review {n} item{} for import": "Thả để xem lại {n} mục trước khi nhập{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Nhập danh mục Lightroom «{catalog}» vào đâu?",
-  "Merge into the open library “{library}” ({count} photo{})": "Gộp vào thư viện đang mở «{library}» ({count} ảnh{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Gộp vào thư viện đang mở «{library}» ({count} ảnh{:.0})",
+  "Panel layout could not be restored: {error}": "Không thể khôi phục bố cục bảng: {error}",
+  "Panel move was not applied: {error}": "Việc di chuyển bảng chưa được áp dụng: {error}",
+  "{name} is installed": "{name} đã được cài đặt",
+  "{name} is installed and in use: face recognition is on": "{name} đã được cài đặt và đang dùng: nhận diện khuôn mặt đã bật"
 }

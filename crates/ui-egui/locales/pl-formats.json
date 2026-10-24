@@ -305,5 +305,9 @@
   "Added {n} photo{}": "Dodano zdjęcia: {n}{:.0}",
   "Inside: {names}": "Wewnątrz: {names}",
   "Where should the Lightroom catalog “{catalog}” go?": "Dokąd zaimportować katalog Lightroom „{catalog}”?",
-  "Merge into the open library “{library}” ({count} photo{})": "Scal z otwartą biblioteką „{library}” (zdjęcia: {count}){:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "Scal z otwartą biblioteką „{library}” (zdjęcia: {count}){:.0}",
+  "Panel layout could not be restored: {error}": "Nie udało się przywrócić układu paneli: {error}",
+  "Panel move was not applied: {error}": "Przeniesienie panelu nie zostało zastosowane: {error}",
+  "{name} is installed": "{name} jest zainstalowany",
+  "{name} is installed and in use: face recognition is on": "{name} jest zainstalowany i używany: rozpoznawanie twarzy jest włączone"
 }

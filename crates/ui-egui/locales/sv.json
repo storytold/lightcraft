@@ -605,6 +605,7 @@
   "Download Place Names (GeoNames)": "Hämta ortnamn (GeoNames)",
   "Download the SAM 3 Model?": "Vill du hämta SAM 3-modellen?",
   "Downloaded and checked. Installing…": "Hämtad och kontrollerad. Installerar…",
+  "The download failed": "Hämtningen misslyckades",
   "Downloading model": "Hämtar modell",
   "Downloading place names": "Hämtar ortnamn",
   "Downloads": "Hämtade filer",
@@ -2426,5 +2427,12 @@
   "Drop to open the face model": "Släpp för att öppna ansiktsmodellen",
   "Dropped Files": "Släppta filer",
   "Finish Lightroom catalog import before adding photos": "Slutför importen av Lightroom-katalogen innan du lägger till foton",
-  "Import dropped files without review": "Importera släppta filer utan granskning"
+  "Import dropped files without review": "Importera släppta filer utan granskning",
+  "Face recognition is on": "Ansiktsigenkänning är på",
+  "Face recognition is off. Turn it on to get name suggestions and see look-alike faces together.": "Ansiktsigenkänning är av. Slå på den för att få namnförslag och se liknande ansikten tillsammans.",
+  "Turn on": "Slå på",
+  "Set up face recognition": "Ställ in ansiktsigenkänning",
+  "Face recognition needs a model to suggest names: a one-time download, in Settings.": "Ansiktsigenkänning behöver en modell för att föreslå namn: en engångsnedladdning, i Inställningar.",
+  "Turn on name suggestions": "Slå på namnförslag",
+  "Set up name suggestions…": "Ställ in namnförslag…"
 }

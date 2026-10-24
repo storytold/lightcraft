@@ -1702,6 +1702,7 @@
   "Denoise Settings": "Réglages de débruitage",
   "Denoise all photos with an Amount": "Débruiter toutes les photos ayant une Quantité",
   "Downloaded and checked. Installing…": "Téléchargé et vérifié. Installation en cours…",
+  "The download failed": "Le téléchargement a échoué",
   "Failed its last test": "Échec lors de son dernier test",
   "Graphics card": "Carte graphique",
   "I have read these terms and accept them for my own use": "J'ai lu ces conditions et je les accepte pour mon propre usage",
@@ -2387,5 +2388,12 @@
   "Checking recent libraries": "Vérification des bibliothèques récentes",
   "The photos are imported once a library is open": "Les photos seront importées dès qu'une bibliothèque sera ouverte",
   "Open a library first, then drop the presets again": "Ouvrez d'abord une bibliothèque, puis déposez à nouveau les préréglages",
-  "This library couldn't be checked:": "Impossible de vérifier cette bibliothèque :"
+  "This library couldn't be checked:": "Impossible de vérifier cette bibliothèque :",
+  "Face recognition is on": "La reconnaissance des visages est activée",
+  "Face recognition is off. Turn it on to get name suggestions and see look-alike faces together.": "La reconnaissance des visages est désactivée. Activez-la pour obtenir des suggestions de noms et voir ensemble les visages qui se ressemblent.",
+  "Turn on": "Activer",
+  "Set up face recognition": "Configurer la reconnaissance des visages",
+  "Face recognition needs a model to suggest names: a one-time download, in Settings.": "La reconnaissance des visages a besoin d'un modèle pour suggérer des noms : un téléchargement unique, dans Réglages.",
+  "Turn on name suggestions": "Activer les suggestions de noms",
+  "Set up name suggestions…": "Configurer les suggestions de noms…"
 }

@@ -1714,6 +1714,7 @@
   "Denoise Settings": "ノイズ除去の設定",
   "Denoise all photos with an Amount": "適用量のあるすべての写真のノイズを除去",
   "Downloaded and checked. Installing…": "ダウンロードして確認しました。インストール中…",
+  "The download failed": "ダウンロードに失敗しました。",
   "Failed its last test": "前回のテストに失敗",
   "Graphics card": "グラフィックカード",
   "I have read these terms and accept them for my own use": "この条件を読み、自分の使用のために同意します",
@@ -2353,5 +2354,12 @@
   "Import dropped files without review": "ドロップしたファイルを確認せずに読み込む",
   "An import is running": "読み込み中です",
   "An import is running. Drop photos when it has finished": "読み込み中です。完了してから写真をドロップしてください",
-  "Finish Lightroom catalog import before adding photos": "写真を追加する前に Lightroom カタログの読み込みを完了してください"
+  "Finish Lightroom catalog import before adding photos": "写真を追加する前に Lightroom カタログの読み込みを完了してください",
+  "Face recognition is on": "顔認識をオンにしました",
+  "Face recognition is off. Turn it on to get name suggestions and see look-alike faces together.": "顔認識はオフです。オンにすると、名前の候補が表示され、似た顔をまとめて見られます。",
+  "Turn on": "オンにする",
+  "Set up face recognition": "顔認識を設定",
+  "Face recognition needs a model to suggest names: a one-time download, in Settings.": "顔認識で名前の候補を表示するにはモデルが必要です。設定から一度だけダウンロードします。",
+  "Turn on name suggestions": "名前の候補をオンにする",
+  "Set up name suggestions…": "名前の候補を設定…"
 }

@@ -559,6 +559,7 @@
   "Download Place Names (GeoNames)": "Unduh nama tempat (GeoNames)",
   "Download the SAM 3 Model?": "Unduh model SAM 3?",
   "Downloaded and checked. Installing…": "Sudah diunduh dan diverifikasi. Menginstal…",
+  "The download failed": "Pengunduhan gagal",
   "Downloading model": "Mengunduh model",
   "Downloading place names": "Mengunduh nama tempat",
   "Downloads": "Unduhan",
@@ -2336,5 +2337,12 @@
   "Drop to open the face model": "Jatuhkan untuk membuka model wajah",
   "Dropped Files": "File yang dijatuhkan",
   "Finish Lightroom catalog import before adding photos": "Selesaikan impor katalog Lightroom sebelum menambahkan foto",
-  "Import dropped files without review": "Impor file yang dijatuhkan tanpa tinjauan"
+  "Import dropped files without review": "Impor file yang dijatuhkan tanpa tinjauan",
+  "Face recognition is on": "Pengenalan wajah aktif",
+  "Face recognition is off. Turn it on to get name suggestions and see look-alike faces together.": "Pengenalan wajah nonaktif. Aktifkan untuk mendapatkan saran nama dan melihat wajah yang mirip bersama-sama.",
+  "Turn on": "Aktifkan",
+  "Set up face recognition": "Siapkan pengenalan wajah",
+  "Face recognition needs a model to suggest names: a one-time download, in Settings.": "Pengenalan wajah memerlukan model untuk menyarankan nama: sekali unduh, di Pengaturan.",
+  "Turn on name suggestions": "Aktifkan saran nama",
+  "Set up name suggestions…": "Siapkan saran nama…"
 }

@@ -305,5 +305,9 @@
   "Could not read {name}: {e}": "Не вдалося прочитати {name}: {e}",
   "Added {n} photo{}": "Додано фото: {n}{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Куди імпортувати каталог Lightroom «{catalog}»?",
-  "Merge into the open library “{library}” ({count} photo{})": "Об’єднати з відкритою бібліотекою «{library}» (фото: {count}){:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "Об’єднати з відкритою бібліотекою «{library}» (фото: {count}){:.0}",
+  "Panel layout could not be restored: {error}": "Не вдалося відновити розташування панелей: {error}",
+  "Panel move was not applied: {error}": "Переміщення панелі не застосовано: {error}",
+  "{name} is installed": "{name} установлено",
+  "{name} is installed and in use: face recognition is on": "{name} установлено й використовується: розпізнавання облич увімкнено"
 }
