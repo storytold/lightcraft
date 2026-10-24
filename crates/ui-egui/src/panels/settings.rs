@@ -309,10 +309,7 @@ fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     check(ui, "settings.closeDialogsOutside", &mut app.ui.settings.close_dialogs_outside, "Close a dialog by clicking outside it");
     heading(ui, t, crate::i18n::tr("External Editing"));
     row(ui, t, crate::i18n::tr("PhotoCraft"), |ui| {
-        crate::text_field::TextField::singleline("field:photocraftPath", &mut app.ui.settings.photocraft_path)
-            .hint(crate::i18n::tr("Found automatically"))
-            .width(220.0)
-            .show(ui);
+        program_field(app, ui, "field:photocraftPath", crate::i18n::tr("Found automatically"), |s| &mut s.photocraft_path);
     });
     edit_file_rows(ui, t, "photocraftFile", &mut app.ui.settings.photocraft_file);
     hint(
@@ -323,10 +320,7 @@ fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         ),
     );
     row(ui, t, crate::i18n::tr("Other editor"), |ui| {
-        crate::text_field::TextField::singleline("field:externalEditor", &mut app.ui.settings.external_editor)
-            .hint(crate::i18n::tr("System default"))
-            .width(220.0)
-            .show(ui);
+        program_field(app, ui, "field:externalEditor", crate::i18n::tr("System default"), |s| &mut s.external_editor);
     });
     edit_file_rows(ui, t, "externalFile", &mut app.ui.settings.external_file);
     hint(ui, t, crate::i18n::tr("Edit in Other Editor (⌥⌘E) opens the copy in this application (an app name on macOS, a program path elsewhere)."));
@@ -337,6 +331,34 @@ fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             "To hand this editor the original file itself instead (the raw, without a copy: DxO PhotoLab, for example), right-click a photo → Edit In → Open Original in Other Editor (RAW, no copy).",
         ),
     );
+}
+
+/// The field naming a program Edit In starts (`widget`, holding the setting `value` picks). Only
+/// the user's own typing sets it, since a client must not choose what runs (#2551): what synthetic
+/// input (the control channel, MCP) changes is taken back, and so is a cut or paste for the rest of
+/// an edit it took part in (the field's menu does those a frame or two after the click, the host
+/// answering a paste with the clipboard's text). The user's typing in that edit stays.
+fn program_field(app: &mut LightcraftApp, ui: &mut egui::Ui, widget: &str, hint: &str, value: fn(&mut crate::state::AppSettings) -> &mut String) {
+    let id = crate::text_field::id(widget);
+    let client = app.synthetic_frame || ui.data(|d| d.get_temp::<bool>(id.with("client"))).unwrap_or(false);
+    let before = value(&mut app.ui.settings).clone();
+    let r = crate::text_field::TextField::singleline(widget, value(&mut app.ui.settings)).hint(hint).width(220.0).show(ui);
+    ui.data_mut(|d| d.insert_temp(id.with("client"), client && r.editing));
+    let clipboard = ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Cut | egui::Event::Paste(_))));
+    if (app.synthetic_frame || client && clipboard) && *value(&mut app.ui.settings) != before {
+        *value(&mut app.ui.settings) = before;
+        // nor can the field's undo bring it back
+        if let Some(mut state) = egui::text_edit::TextEditState::load(ui.ctx(), id) {
+            state.clear_undoer();
+            state.store(ui.ctx(), id);
+        }
+        app.toast(ui.ctx(), crate::i18n::tr("Only you can set the editor: type it here yourself"));
+    }
+}
+
+/// `id` is one of the two fields naming a program Edit In starts ([`program_field`]).
+pub(crate) fn is_program_field(id: egui::Id) -> bool {
+    ["field:photocraftPath", "field:externalEditor"].iter().any(|w| crate::text_field::id(w) == id)
 }
 
 /// The file Edit In hands an editor: format, colour space and bit depth (`button:{id}Format-…`).

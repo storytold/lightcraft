@@ -331,6 +331,13 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
                 Some("copy") => app.synthetic.push(egui::Event::Copy),
                 Some("paste") => match s("text") {
                     Some(text) => app.synthetic.push(egui::Event::Paste(text.to_string())),
+                    // the host's answer would pass for the user's own paste: never into the
+                    // programs Edit In starts (#2551)
+                    None if ctx.memory(|m| m.focused()).is_some_and(crate::panels::settings::is_program_field) => {
+                        return err(
+                            "ui.clipboard: no paste from the system clipboard into the programs Edit In starts: the user chooses those in Settings ▸ External Editing",
+                        );
+                    }
                     None => ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste),
                 },
                 _ => return err("ui.clipboard: `action` is cut, copy or paste"),
@@ -366,6 +373,13 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
             lightcraft_develop::presets::deep_merge(&mut v, p);
             match serde_json::from_value::<crate::UiState>(v) {
                 Ok(mut u) => {
+                    // the programs Edit In starts are the user's to choose, never a client's (#2551)
+                    let (now, asked) = (&app.ui.settings, &u.settings);
+                    if asked.external_editor != now.external_editor || asked.photocraft_path != now.photocraft_path {
+                        return err(
+                            "ui.set: the programs Edit In starts (settings.externalEditor, settings.photocraftPath) are chosen in Settings ▸ External Editing, not by a client",
+                        );
+                    }
                     if let Err(error) = crate::docking::set_widths(&mut u, p) {
                         return err(error);
                     }

@@ -1323,10 +1323,15 @@ fn open_original_in_external_editor_hands_over_the_raw_itself() {
     assert_eq!(std::fs::read(&a_path).unwrap(), b"raw sensor data", "the original is left as it is");
     assert!(std::fs::read_dir(&dir).unwrap().count() == 2, "nothing is written next to the originals");
 
-    // the editor can be named per call; the active photo must have a file for the menu
-    let r = exec(&mut h, "photo.openOriginalInExternal", json!({"ids": [a.0], "app": "/opt/dxo"}));
+    // a call may name the configured editor again, never another one (#2551); the active photo
+    // must have a file for the menu
+    let calls = opened.lock().unwrap().len();
+    let r = h.request("engine.execute", json!({"command": "photo.openOriginalInExternal", "params": {"ids": [a.0], "app": "/opt/dxo"}}), T);
+    assert_eq!(r["ok"], false, "{r}");
+    assert_eq!(opened.lock().unwrap().len(), calls, "another editor was started");
+    let r = exec(&mut h, "photo.openOriginalInExternal", json!({"ids": [a.0], "app": "DxO PhotoLab"}));
     assert_eq!(r["opened"][0]["path"], a_path.as_str());
-    assert_eq!(opened.lock().unwrap().last().unwrap().1, "/opt/dxo");
+    assert_eq!(opened.lock().unwrap().last().unwrap().1, "DxO PhotoLab");
     exec(&mut h, "library.select", json!({"ids": [a.0]}));
     assert!(crate::menus::ui_enabled(&h.app, "photo.openOriginalInExternal"));
     exec(&mut h, "library.select", json!({"ids": [demo.0]}));
@@ -1420,6 +1425,173 @@ fn open_original_refuses_anything_that_is_not_a_photo_file() {
     assert!(std::path::Path::new(&handed[0][0]).is_absolute() && handed[0][0].ends_with("DSC_0001.NEF"), "{handed:?}");
     let _ = std::fs::remove_dir_all(&dir);
     h.settle(SETTLE);
+}
+
+/// Issue #2551: a control or MCP client can't choose the program Edit In starts. `app` may only
+/// name the editor set in Settings ▸ External Editing again, or PhotoCraft: anything else is
+/// refused before a copy is made or anything starts, and `ui.set` changes neither setting.
+#[test]
+fn edit_in_starts_only_the_editor_set_in_settings() {
+    use lightcraft_catalog::{Op, Photo, Source};
+    let dir = std::env::temp_dir().join(format!("lc-ui-app-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let opened: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>> = Default::default();
+    let batches: std::sync::Arc<std::sync::Mutex<Vec<(Vec<String>, String)>>> = Default::default();
+    let (o, bt) = (opened.clone(), batches.clone());
+    let services = Services {
+        png: None,
+        open_with: Some(Box::new(move |path: &str, app: &str| {
+            o.lock().unwrap().push((path.to_string(), app.to_string()));
+            Ok(())
+        })),
+        open_all_with: Some(Box::new(move |paths: &[String], app: &str| {
+            bt.lock().unwrap().push((paths.to_vec(), app.to_string()));
+            Ok(())
+        })),
+        check_editor: Some(Box::new(|_: &str| Ok(()))),
+        ..Default::default()
+    };
+    let mut session = lightcraft_engine::Session::with_demo().with_fs();
+    let demo = session.catalog.photos().map(|p| p.id).next().unwrap();
+    let path = dir.join("DSC_0001.NEF");
+    std::fs::write(&path, b"raw sensor data").unwrap();
+    let a = session.catalog.alloc_photo_id();
+    let p = Photo::new(a, Source::File { path: path.to_string_lossy().into_owned() }, "DSC_0001.NEF", "NEF", 60, 40, "2026-01-01T10:00:00");
+    session.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    let app = LightcraftApp::new(session, services);
+    let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
+    h.app.ui.settings.external_editor = "DxO PhotoLab".into();
+    let refused = |r: &serde_json::Value| r["ok"] == false && r.to_string().contains("Settings ▸ External Editing");
+
+    for other in [json!("/bin/sh"), json!("cmd.exe"), json!(""), json!(42)] {
+        let r = h.request("engine.execute", json!({"command": "photo.openOriginalInExternal", "params": {"ids": [a.0], "app": other}}), T);
+        assert!(refused(&r), "{other}: {r}");
+    }
+    exec(&mut h, "library.select", json!({"ids": [demo.0]}));
+    let n = h.app.session.catalog.len();
+    for command in ["photo.editInExternal", "photo.editInPhotoCraft"] {
+        let r = h.request("engine.execute", json!({"command": command, "params": {"dir": dir.to_string_lossy(), "app": "/bin/sh"}}), T);
+        assert!(refused(&r), "{command}: {r}");
+    }
+    assert_eq!(h.app.session.catalog.len(), n, "a refused Edit In makes no copy");
+    assert!(opened.lock().unwrap().is_empty() && batches.lock().unwrap().is_empty(), "a program the client named was started");
+
+    // the configured editor and PhotoCraft may still be named, however spelled: what starts is
+    // the editor as Settings and the app name it
+    for (name, starts) in [("DxO PhotoLab", "DxO PhotoLab"), (" DxO PhotoLab ", "DxO PhotoLab"), (" photocraft", "PhotoCraft")] {
+        exec(&mut h, "photo.openOriginalInExternal", json!({"ids": [a.0], "app": name}));
+        assert_eq!(batches.lock().unwrap().last().map(|b| b.1.as_str()), Some(starts), "{name:?}");
+    }
+    exec(&mut h, "photo.editInExternal", json!({"dir": dir.to_string_lossy(), "app": "DxO PhotoLab"}));
+    assert_eq!(opened.lock().unwrap().last().map(|c| c.1.as_str()), Some("DxO PhotoLab"));
+
+    // nor can the settings be changed behind the user's back
+    for key in ["externalEditor", "photocraftPath"] {
+        let r = h.request("ui.set", json!({"settings": {key: "/bin/sh"}}), T);
+        assert!(refused(&r), "{key}: {r}");
+    }
+    assert_eq!((h.app.ui.settings.external_editor.as_str(), h.app.ui.settings.photocraft_path.as_str()), ("DxO PhotoLab", ""));
+    for settings in [json!({"filmNames": false}), json!({"externalEditor": "DxO PhotoLab"})] {
+        let r = h.request("ui.set", json!({"settings": settings}), T);
+        assert_eq!(r["ok"], true, "{settings}: {r}");
+    }
+    assert!(!h.app.ui.settings.film_names);
+    let _ = std::fs::remove_dir_all(&dir);
+    h.settle(SETTLE);
+}
+
+/// Settings ▸ General scrolled to its foot, where External Editing is, so that its fields are in view and take clicks.
+fn show_external_editing(h: &mut Headless) {
+    exec(h, "app.settings", json!({"tab": "general"}));
+    h.settle(SETTLE);
+    let Some(window) = h.app.widgets.iter().find(|(w, _)| w == "dialog:window").map(|(_, r)| *r) else { panic!("no Settings window") };
+    h.request("ui.move", json!({"x": window.center().x, "y": window.center().y}), T);
+    for _ in 0..6 {
+        h.request("ui.scroll", json!({"dy": -400.0}), T);
+        h.step();
+    }
+    h.settle(SETTLE);
+}
+
+/// Issue #2551: what the control channel types or pastes into Settings ▸ External Editing's two
+/// fields is taken back, and it can't paste the system clipboard there (a client must not choose
+/// the program Edit In starts); what the user types there stays.
+#[test]
+fn only_the_user_types_the_editor_into_settings() {
+    let services = Services { png: None, ..Default::default() };
+    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+    let mut h = Headless::new(app, [1200.0, 900.0], 1.0);
+    h.app.ui.settings.external_editor = "DxO PhotoLab".into();
+    show_external_editing(&mut h);
+    let field = |h: &Headless, id: &str| h.app.widgets.iter().find(|(w, _)| w == id).map(|(_, r)| *r);
+    let value = |h: &Headless, id: &str| {
+        let s = &h.app.ui.settings;
+        if id == "field:externalEditor" { s.external_editor.clone() } else { s.photocraft_path.clone() }
+    };
+    h.view.clipboard = "/bin/sh".into();
+    for (id, before) in [("field:externalEditor", "DxO PhotoLab"), ("field:photocraftPath", "")] {
+        assert!(field(&h, id).is_some(), "{id} is on screen");
+        click(&mut h, id);
+        // the field's own Paste, chosen by a client: the host hands over the clipboard's text a
+        // frame later, in input that isn't synthetic
+        for (widget, button) in [(id.to_string(), "right"), (format!("{id}:paste"), "left")] {
+            let r = h.request("ui.clickWidget", json!({"id": widget, "button": button}), T);
+            assert_eq!(r["ok"], true, "{widget}: {r}");
+            h.settle(SETTLE);
+        }
+        assert_eq!(value(&h, id), before, "{id}: pasted from its menu by a client");
+        let r = h.request("ui.text", json!({"text": "/bin/sh"}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(SETTLE);
+        assert_eq!(value(&h, id), before, "{id}: typed by a client");
+        let r = h.request("ui.clipboard", json!({"action": "paste", "text": "/bin/sh"}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(SETTLE);
+        assert_eq!(value(&h, id), before, "{id}: pasted by a client");
+        let r = h.request("ui.key", json!({"key": "enter"}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(SETTLE);
+        assert_eq!(value(&h, id), before, "{id}: once the edit ends");
+    }
+
+    // the user's own click and typing come from the host, not the control channel
+    let at = field(&h, "field:externalEditor").unwrap().center();
+    let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+    h.events.extend([egui::Event::PointerMoved(at), button(true)]);
+    h.step();
+    h.events.push(button(false));
+    h.step();
+    h.events.push(egui::Event::Text(" 8".into()));
+    h.settle(SETTLE);
+    let typed = value(&h, "field:externalEditor");
+    assert!(typed != "DxO PhotoLab" && typed.contains('8'), "the user's typing was taken back: {typed:?}");
+    // nor can a client paste the system clipboard into the edit the user began
+    let r = h.request("ui.clipboard", json!({"action": "paste"}), T);
+    assert!(r["ok"] == false && r.to_string().contains("Settings ▸ External Editing"), "{r}");
+    h.settle(SETTLE);
+    assert_eq!(value(&h, "field:externalEditor"), typed, "pasted from the clipboard by a client");
+}
+
+/// Issue #2551: in an edit of the Other editor field a client began (its click), what the user
+/// then types stays; a paste the host hands over in that edit is still taken back, since the
+/// client may have chosen it from the field's menu.
+#[test]
+fn the_user_types_the_editor_into_an_edit_a_client_began() {
+    let services = Services { png: None, ..Default::default() };
+    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+    let mut h = Headless::new(app, [1200.0, 900.0], 1.0);
+    h.app.ui.settings.external_editor = "DxO PhotoLab".into();
+    show_external_editing(&mut h);
+    click(&mut h, "field:externalEditor");
+    h.settle(SETTLE);
+    h.events.push(egui::Event::Text(" 8".into()));
+    h.settle(SETTLE);
+    let typed = h.app.ui.settings.external_editor.clone();
+    assert!(typed != "DxO PhotoLab" && typed.contains('8'), "the user's typing was taken back: {typed:?}");
+    h.events.push(egui::Event::Paste("/bin/sh".into()));
+    h.settle(SETTLE);
+    assert_eq!(h.app.ui.settings.external_editor, typed, "a paste in an edit a client began");
 }
 
 #[test]

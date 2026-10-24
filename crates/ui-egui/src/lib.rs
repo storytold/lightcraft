@@ -410,6 +410,9 @@ pub struct LightcraftApp {
     shadow: Option<headless::HeadlessView>,
     /// Synthetic input events (from the control channel) injected one step per frame.
     pub synthetic: Vec<egui::Event>,
+    /// This frame's input includes synthetic events: what they change is a client's doing, not
+    /// the user's.
+    pub(crate) synthetic_frame: bool,
     /// Files the control channel (`ui.dropFiles`) holds over the window: every frame reports them
     /// as hovered, as the OS does while a drag is over the window.
     drop_hover: Vec<String>,
@@ -554,6 +557,7 @@ impl LightcraftApp {
             screenshot_token: 0,
             shadow: None,
             synthetic: vec![],
+            synthetic_frame: false,
             drop_hover: vec![],
             drop_pending: vec![],
             copied: None,
@@ -1435,6 +1439,7 @@ impl LightcraftApp {
 
     /// Inject synthetic events (pointer events one per frame; key sequences up to the release).
     pub fn raw_input_hook(&mut self, raw: &mut egui::RawInput) {
+        self.synthetic_frame = false;
         // the frame after a synthetic release / key: modifiers back up
         if std::mem::take(&mut self.synthetic_mods_release) && self.synthetic_mods != egui::Modifiers::NONE {
             self.synthetic_mods = egui::Modifiers::NONE;
@@ -1453,6 +1458,7 @@ impl LightcraftApp {
         if self.synthetic.is_empty() {
             return;
         }
+        self.synthetic_frame = true;
         let n = match self.synthetic[0] {
             egui::Event::PointerMoved(_) | egui::Event::PointerButton { .. } | egui::Event::MouseWheel { .. } => 1,
             _ => self.synthetic.iter().position(|e| matches!(e, egui::Event::Key { pressed: false, .. })).map_or(self.synthetic.len(), |i| i + 1),

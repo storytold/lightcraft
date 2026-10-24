@@ -37,7 +37,10 @@ it on that connection runs. This keeps an HTTP request (for example a web page's
 `127.0.0.1:<port>`) from smuggling a command in its body: its request line is rejected first. Junk never reaches the
 UI thread, and at most 16 connections are served at once (further ones get an error line and are closed). Clients
 that hit an error reply should reconnect. The port has no authentication, so only enable it when you need it. The MCP server's connect
-mode ([mcp.md](mcp.md)) is a thin layer over this channel. Implementation:
+mode ([mcp.md](mcp.md)) is a thin layer over this channel. A client can't choose a program for LightCraft to start:
+`photo.editInExternal`, `photo.editInPhotoCraft` and `photo.openOriginalInExternal` take an `app` only when it names the
+editor set in Settings ▸ External Editing again, or PhotoCraft, and neither `ui.set` nor typing or pasting there
+(`ui.text`, `ui.key`, `ui.clipboard`) changes which editors those are. Implementation:
 `crates/ui-egui/src/control.rs` (methods) and `apps/lightcraft/src/control_server.rs` (transport).
 
 ## Isolated automation profiles
@@ -84,10 +87,10 @@ filmstrip is visible.
 | `ui.pointer` | `{events: [{kind: down\|drag\|up, x, y}], alt?, shift?, cmd?}` | Gesture in normalized image coordinates (Detail view) |
 | `ui.key` | `{key, cmd?, shift?, alt?, ctrl?}` | Key press |
 | `ui.text` | `{text}` | Text input |
-| `ui.clipboard` | `{action: cut\|copy\|paste, text?}` | Cut, copy or paste in the focused text field, as the system does for ⌘X / ⌘C / ⌘V; `paste` pastes `text`, or the system clipboard without it. Refused when no text field has the focus (outside one, ⌘C / ⌘V are the commands `develop.copy` / `develop.paste`). In the desktop app cut and copy write the system clipboard. `ui.inspect` → `copied` is the text the UI last put on the clipboard |
+| `ui.clipboard` | `{action: cut\|copy\|paste, text?}` | Cut, copy or paste in the focused text field, as the system does for ⌘X / ⌘C / ⌘V; `paste` pastes `text`, or the system clipboard without it. Refused when no text field has the focus (outside one, ⌘C / ⌘V are the commands `develop.copy` / `develop.paste`), and `paste` without `text` is refused in Settings ▸ External Editing's PhotoCraft and Other editor fields: the programs Edit In starts are the user's to choose. In the desktop app cut and copy write the system clipboard. `ui.inspect` → `copied` is the text the UI last put on the clipboard |
 | `ui.scroll` | `{dx, dy, cmd?, ctrl?, shift?, alt?}` | Wheel / two-finger scroll at the current pointer; pans over the image, modifier-scroll zooms |
 | `ui.zoom` | `{factor}` | Pinch zoom at the current pointer (positive scale multiplier; 1 = unchanged). Position it first with `ui.move` or `ui.hoverWidget` |
-| `ui.set` | partial UI state, e.g. `{"view": "detail"}` | Resulting UI state |
+| `ui.set` | partial UI state, e.g. `{"view": "detail"}` | Resulting UI state. Refused when it would change `settings.externalEditor` or `settings.photocraftPath`, the programs Edit In starts: only the user sets those, in Settings ▸ External Editing |
 | `ui.dialog.confirm` / `ui.dialog.cancel` | — | Close the open dialog (confirm runs its action; Synchronize Folder on a folder that is up to date answers `{"upToDate": true}` and starts nothing) |
 | `ui.resize` | `{width, height}` | Resize the window |
 | `ui.dropFiles` | `{paths: [..], hover?}` | Files dragged from the file manager. `hover: true` makes every following frame report `paths` as hovered over the window (the drop card appears, `ui.widgets` lists `dropOverlay`) until another `ui.dropFiles` replaces them; `{paths: [], hover: true}` ends the hover. Without `hover` the files are dropped: the hover ends and the next frame receives them as dropped files, exactly as an OS drop arrives (photos and folders open the import review, or import at once with Settings ▸ Import ▸ Import dropped files without review). An empty path stands for a file whose path the platform doesn't tell |

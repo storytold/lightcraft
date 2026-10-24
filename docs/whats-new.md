@@ -84,6 +84,12 @@
 
 ## 2026-10-22
 
+### Only you choose the program Edit In starts
+- A control-channel or MCP client can no longer make LightCraft start a program of its choosing (issue #2551). Edit In
+  and Open Original in Other Editor accept an editor named by automation only when it is the one set in
+  Settings ▸ External Editing, or PhotoCraft. Automation can't change those two settings either: `ui.set` refuses
+  them, and nothing it types or pastes into their fields stays. Type your editor there yourself, as before.
+
 ### Reliability
 - Opening a library no longer writes through a link left at the lock's owner note (`catalog.lock.owner`): the link
   is removed and a new note made in its place, so the file it pointed to is never changed (as for the catalog's

@@ -220,7 +220,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("photo.editInPhotoCraft", "Edit in PhotoCraft", Some("Cmd+Shift+E"), "Photo>Edit In"),
     ("photo.editInExternal", "Edit in Other Editor", Some("Cmd+Alt+E"), "Photo>Edit In"),
     // {ids?, app?}: the original files themselves (a raw stays a raw: no render, no copy), opened
-    // in the other editor, e.g. a raw developer
+    // in the other editor, e.g. a raw developer; `app` may name only that editor or PhotoCraft
     ("photo.openOriginalInExternal", "Open Original in Other Editor (RAW, no copy)", None, "Photo>Edit In"),
     ("dialog.mergeHdr", "HDR…", Some("Ctrl+H"), "Photo>Photo Merge"),
     ("dialog.mergePanorama", "Panorama…", Some("Ctrl+M"), "Photo>Photo Merge"),
@@ -2432,11 +2432,24 @@ fn show_in_folders(app: &mut LightcraftApp, id: Option<lightcraft_catalog::Photo
     Ok(json!({"path": path}))
 }
 
+/// The editor an Edit In command starts: the one set in Settings ▸ External Editing
+/// (`configured`). `p`'s `app` may name it again, or PhotoCraft, never another program: a control
+/// or MCP client must not choose what runs (#2551).
+fn requested_editor(p: &Value, configured: String) -> Result<String, String> {
+    match p.get("app") {
+        None | Some(Value::Null) => Ok(configured),
+        Some(Value::String(a)) if a.trim() == configured.trim() => Ok(configured),
+        Some(Value::String(a)) if a.trim().eq_ignore_ascii_case(crate::state::PHOTOCRAFT) => Ok(crate::state::PHOTOCRAFT.to_string()),
+        Some(_) => Err("Edit In opens only the editor set in Settings ▸ External Editing, or PhotoCraft: choose another one there".into()),
+    }
+}
+
 /// Photo ▸ Edit In: render a copy of each selected photo with its edits (stacked on its original)
 /// as Settings ▸ External Editing asks for that editor, then open them there. `p` may override the
-/// file (`format`, `colorSpace`, `bitDepth`) and the editor (`app`). PhotoCraft is checked first,
-/// so a missing editor leaves no copy behind. Once the copies exist, an editor that won't open them
-/// is reported in the result's `failed` (and a toast), not as an error.
+/// file (`format`, `colorSpace`, `bitDepth`); its `app` may only name that editor again or
+/// PhotoCraft. The editor is checked first, so a refused or missing one leaves no copy behind.
+/// Once the copies exist, an editor that won't open them is reported in the result's `failed`
+/// (and a toast), not as an error.
 fn edit_in(app: &mut LightcraftApp, ctx: &egui::Context, p: &Value, photocraft: bool) -> Result<Value, String> {
     // every way in (menu, shortcut, context menu, the control channel) says why nothing opened
     edit_in_inner(app, ctx, p, photocraft).inspect_err(|e| app.toast(ctx, crate::i18n::tr_format!("Couldn't open the editor: {e}", e = e)))
@@ -2450,7 +2463,7 @@ fn edit_in_inner(app: &mut LightcraftApp, ctx: &egui::Context, p: &Value, photoc
     } else {
         (settings.external_file, settings.external_editor.clone())
     };
-    let editor = p.get("app").and_then(Value::as_str).map_or(configured, str::to_string);
+    let editor = requested_editor(p, configured)?;
     if let Some(check) = app.services.check_editor.as_ref() {
         check(&editor)?;
     }
@@ -2507,9 +2520,9 @@ const MAX_ORIGINALS: usize = 50;
 
 /// Photo ▸ Edit In ▸ Open Original in Other Editor: hand each selected photo's original file
 /// itself (a raw stays a raw: nothing is rendered, copied or added to the library) to the editor
-/// set in Settings ▸ External Editing, e.g. a raw developer. `p` may give `ids` and the editor
-/// (`app`). Demo photos and missing files are skipped and listed; when no photo has a file to
-/// open, it fails saying why.
+/// set in Settings ▸ External Editing, e.g. a raw developer. `p` may give `ids`; its `app` may
+/// only name that editor again or PhotoCraft. Demo photos and missing files are skipped and
+/// listed; when no photo has a file to open, it fails saying why.
 fn open_original_in(app: &mut LightcraftApp, ctx: &egui::Context, p: &Value) -> Result<Value, String> {
     let r = open_originals(app, p);
     if let Err(e) = &r {
@@ -2529,6 +2542,7 @@ fn open_original_in(app: &mut LightcraftApp, ctx: &egui::Context, p: &Value) -> 
 }
 
 fn open_originals(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
+    let editor = requested_editor(p, app.ui.settings.external_editor.clone())?;
     let mut ids = app.session.targets(p).map_err(|e| e.to_string())?;
     ids.dedup();
     if ids.is_empty() {
@@ -2559,7 +2573,6 @@ fn open_originals(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
             format!("nothing to open: none of these photos has its original file ({why})")
         });
     }
-    let editor = p.get("app").and_then(Value::as_str).map_or_else(|| app.ui.settings.external_editor.clone(), str::to_string);
     if let Some(check) = app.services.check_editor.as_ref() {
         check(&editor)?;
     }
