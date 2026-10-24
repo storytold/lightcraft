@@ -1384,6 +1384,8 @@ mod tests_segment;
 #[cfg(test)]
 mod tests_settings_files;
 #[cfg(test)]
+mod tests_shelved_folder;
+#[cfg(test)]
 mod tests_slide;
 #[cfg(test)]
 mod tests_slideshow_export;
