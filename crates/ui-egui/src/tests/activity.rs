@@ -110,6 +110,9 @@ fn count_text_by_unit() {
         cancellable: true,
         cancelling: false,
         age_ms: 600,
+        waiting: false,
+        place: 0,
+        lane: None,
     };
     assert_eq!(count_text(&t), "3 of 25");
     (t.done, t.total, t.unit) = (12 * 1_048_576, 340 * 1_048_576, Unit::Bytes);
@@ -590,4 +593,36 @@ fn immediate_library_commands_and_auto_sync_show_completion() {
     h.app.ui.toast = None;
     assert!(h.app.run("library.compact", json!({})).is_err());
     assert!(h.app.ui.toast.is_none());
+}
+
+/// Given a preview build running and another waiting in line behind it, then the stack shows the running build only,
+/// and the waiting one starts by itself, in a frame, when the build ahead of it ends.
+#[test]
+fn a_task_waiting_in_line_has_no_row_and_starts_when_the_lane_frees() {
+    use lightcraft_engine::cmd::previews::PreviewBuild;
+    use std::sync::atomic::Ordering;
+
+    let mut h = demo();
+    let build = std::sync::Arc::new(PreviewBuild::default());
+    h.app.session.preview_build = Some(build.clone());
+    let running = h.app.session.activity.start("previews", "Building previews", Cancel::Yes);
+    let ids: Vec<u64> = h.app.session.catalog.photos().take(1).map(|p| p.id.0).collect();
+    let queued = h.app.session.execute("library.buildPreviews", &json!({"ids": ids, "edge": 256, "queue": true})).unwrap();
+    let waiting = queued["queued"].as_u64().expect("it waits");
+    assert_eq!(h.app.session.activity.list().len(), 2);
+    wait_visible(&mut h);
+    assert!(has(&h, &format!("activity:row:{}", running.id())));
+    assert!(!has(&h, &format!("activity:row:{waiting}")) && rows(&h) == 1, "a waiting task draws no row");
+    // the lane frees with no command asked: the frame loop starts it
+    build.finished.store(true, Ordering::Release);
+    drop(running);
+    let t0 = std::time::Instant::now();
+    while h.app.session.activity.list().iter().any(|t| t.id == waiting && t.label == "Building previews") && t0.elapsed() < T {
+        h.step();
+        let started = h.app.session.preview_build.as_ref().is_some_and(|b| !std::sync::Arc::ptr_eq(b, &build));
+        if started {
+            break;
+        }
+    }
+    assert!(h.app.session.preview_build.as_ref().is_some_and(|b| !std::sync::Arc::ptr_eq(b, &build)), "the waiting build started");
 }
