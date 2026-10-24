@@ -2,6 +2,12 @@
 
 ## 2026-10-23
 
+### Place names always download into the settings folder
+- Download Place Names (for Fill Location from GPS) always saves the GeoNames files in the settings folder (issue
+  #2575). An agent or script driving LightCraft could name another folder and another server, and have that
+  server's files written there; it is now refused. Each file is saved complete or not at all, and replaces whatever
+  is in its place instead of writing through a link to somewhere else.
+
 ### Tab leaves the name field in New Album, New Smart Album and the name prompts
 - In New Album, New Smart Album, Save Metadata Preset and the other dialogs with one name field, the field has the
   keyboard focus when the dialog opens, and Tab now moves on to the check box, Cancel and OK (Shift+Tab goes back).
