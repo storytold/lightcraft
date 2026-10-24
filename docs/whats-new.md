@@ -157,6 +157,11 @@
   the full count took about 14 s instead of about 23 s on a heavily loaded machine; the rest is the text rules of
   the albums themselves. The counts are the same as before, including for albums that loop through each other.
 
+### A count never covers a name in the sidebar
+- In the left panel, the count of a deeply indented row (a folder, keyword or album) no longer prints over its icon
+  and name when the panel is narrow. It follows the name, wholly past the panel's edge, and scrolling sideways
+  reaches it; so does the colour dot of a labelled folder. A row with room for its name keeps its count at the edge, as before.
+
 ### Sharper resampling in HDR and panorama merges
 - Merged photos (HDR and panorama) are resampled with a sharper filter (Lanczos-3 instead of bilinear). Moving a
   photo by half a pixel used to lose a third of its finest detail; now it keeps most of it, without halos around
