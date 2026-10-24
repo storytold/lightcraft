@@ -1098,13 +1098,17 @@ fn theme_preview(ui: &mut egui::Ui, kind: crate::theme::ThemeKind, width: f32) {
 // ------------------------------------------------------------------------------- Open Library…
 
 /// Switching libraries is refused while an import (or the folder scan before one) is running: its
-/// remaining batches would be committed into the new library (issue #1509).
+/// remaining batches would be committed into the new library (issue #1509). The same applies to a
+/// pending CollabCraft Open: the answer would otherwise import into the library opened later.
 pub(crate) fn can_switch_library(app: &LightcraftApp) -> Result<(), String> {
     if crate::lightroom_import::is_running(app) {
         return Err("wait for Lightroom catalog import to finish before switching libraries".into());
     }
     if app.import.is_some() || app.scan.is_some() {
         return Err("wait for the import to finish before switching libraries".into());
+    }
+    if matches!(app.cloud.busy, Some(crate::cloud::Busy::Opening { .. })) {
+        return Err("wait for the cloud photo to finish opening before switching libraries".into());
     }
     Ok(())
 }

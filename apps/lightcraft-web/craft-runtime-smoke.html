@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="craft-runtime-worker" content="/craft-worker-host.js">
+  <title>LightCraft craft-runtime smoke</title>
+  <link rel="icon" href="data:,">
+  <style>
+    html, body { margin: 0; min-height: 100%; background: #1c1c1c; color: #b8b8b8; font: 14px/1.45 system-ui, sans-serif; }
+    #loading {
+      min-height: 100vh; display: flex; flex-direction: column; gap: 12px;
+      align-items: center; justify-content: center; padding: 24px; text-align: center;
+    }
+    .ok { color: #8fd4a8; white-space: pre-wrap; max-width: 70ch; }
+    .err { color: #ff8a7a; white-space: pre-wrap; max-width: 70ch; }
+  </style>
+</head>
+<body>
+  <div id="loading">
+    <div id="status">craft-runtime smoke (DedicatedWorker, no wasm)</div>
+  </div>
+  <script type="module" src="craft-runtime-pilot.js"></script>
+</body>
+</html>

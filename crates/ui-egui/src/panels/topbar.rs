@@ -192,6 +192,59 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 ("bell", Icon::Bell, "Activity", "panel.activity"),
             ] {
                 let r = Rect::from_center_size(pos2(x, full.center().y), vec2(28.0, 28.0));
+                // When a cloud service is configured the static storage-status
+                // icon is replaced by the live account badge from craft-ui. The
+                // badge fits the same 28 × 28 slot; it grows rightward into the
+                // space the title bar leaves, which is never occupied on the
+                // narrow end of a large-photo window.
+                if id == "cloud" && crate::cloud::available(app) {
+                    // Account badge + presence. Both draw inside the allocated rect.
+                    let badge_rect = Rect::from_center_size(pos2(x, full.center().y), vec2(28.0, full.height()));
+                    // Hover-only so the account badge keeps left-click (sign in/out).
+                    // Right-click is read from pointer input: the badge button sits on
+                    // top of any Sense::click overlay and would otherwise eat secondary.
+                    let hover = ui.interact(badge_rect, egui::Id::new("cloud-badge-ctx"), Sense::hover());
+                    if let Some(tip) = unsaved.as_deref() {
+                        hover.on_hover_text(tip);
+                    }
+                    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(badge_rect));
+                    crate::cloud::who(app, &mut child);
+                    register(ui.ctx(), "icon:cloud", badge_rect);
+                    // Keep the persistent local-save warning even when the account badge replaced
+                    // the static cloud icon; a six-second toast alone is not enough.
+                    if unsaved.is_some() {
+                        let c = badge_rect.right_top() + vec2(-5.0, 6.0);
+                        ui.painter().circle_filled(c, 6.0, t.reject);
+                        ui.painter().text(c, Align2::CENTER_CENTER, "!", t.semibold(9.5), t.canvas);
+                        register(ui.ctx(), "indicator:unsaved", badge_rect);
+                    }
+                    let menu_id = egui::Id::new("cloud-badge-files");
+                    let open_menu = ui.rect_contains_pointer(badge_rect)
+                        && ui.input(|i| i.pointer.button_clicked(egui::PointerButton::Secondary));
+                    egui::Popup::new(menu_id, ui.ctx().clone(), badge_rect, ui.layer_id())
+                        .kind(egui::PopupKind::Menu)
+                        .open_memory(open_menu.then_some(egui::SetOpenCommand::Bool(true)))
+                        .at_pointer_fixed()
+                        .layout(egui::Layout::top_down_justified(egui::Align::Min))
+                        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                        .show(|ui| {
+                            let open = ui.button(crate::i18n::tr("Open from CollabCraft…"));
+                            register(ui.ctx(), "menu:cloudOpen", open.rect);
+                            if open.clicked() {
+                                let _ = app.run("file.cloudOpen", json!({}));
+                                ui.close();
+                            }
+                            let has_photo = app.session.active().is_some();
+                            let save = ui.add_enabled(has_photo, egui::Button::new(crate::i18n::tr("Save to CollabCraft…")));
+                            register(ui.ctx(), "menu:cloudSave", save.rect);
+                            if save.clicked() {
+                                let _ = app.run("file.cloudSave", json!({}));
+                                ui.close();
+                            }
+                        });
+                    x -= 40.0;
+                    continue;
+                }
                 let resp = ui.interact(r, egui::Id::new(("top", id)), Sense::click()).on_hover_text(crate::i18n::tr(tip));
                 crate::widgets::announce(&resp, crate::i18n::tr(tip));
                 register(ui.ctx(), format!("icon:{id}"), r);

@@ -24,6 +24,7 @@
 
 mod alloc_release;
 mod appearance;
+mod cloud;
 #[cfg(target_os = "linux")]
 mod colord;
 mod control_server;
@@ -714,6 +715,8 @@ fn services(cc: &eframe::CreationContext<'_>, log_file: Option<&std::path::Path>
         backup_library: None,
         restore_library: None,
         system_theme: appearance::service(),
+        // Desktop Cloud Open writes into Originals/Cloud via std::fs; browser uses store_bytes.
+        store_bytes: None,
     }
 }
 
@@ -969,6 +972,14 @@ fn main() -> eframe::Result {
                 // HDR display: SDR unless the surface, platform and display all allow HDR
                 hdr_display::report(cc.wgpu_render_state.as_ref().map(|r| r.target_format));
                 let mut app = LightcraftApp::new(session, services(cc, app_log_file.as_deref()));
+                // Cloud storage, when a service is configured. Without one the
+                // interface offers nothing cloud-shaped at all.
+                if let Some(backend) = cloud::service(cc.egui_ctx.clone()) {
+                    app.cloud.connect(backend);
+                }
+                // The share dialog reaches the same service through its own client,
+                // so a sign-in through either half serves both.
+                app.share.connect(collabcraft_share::CollabCraft::from_fn(cloud::client).for_app("lightcraft"));
                 if let Some(ui) = prefs {
                     app.ui = ui;
                 }

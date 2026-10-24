@@ -22,6 +22,8 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
 crc32fast = { workspace = true }
+craft-cloud-client = { workspace = true }
+collabcraft-share = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 eframe = { workspace = true, features = ["default_fonts", "glow"] }
@@ -31,6 +33,9 @@ wasm-bindgen-futures = { workspace = true }
 js-sys = { workspace = true }
 web-sys = { workspace = true, features = [
     "Blob",
+    "Request",
+    "RequestInit",
+    "RequestCredentials",
     "BlobPropertyBag",
     "DedicatedWorkerGlobalScope",
     "Document",

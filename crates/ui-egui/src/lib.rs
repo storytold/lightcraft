@@ -11,6 +11,7 @@ pub mod brush_live;
 pub mod button;
 pub mod canvas_keys;
 mod command_error;
+pub mod cloud;
 pub mod control;
 pub mod credits;
 pub mod date_picker;
@@ -64,6 +65,8 @@ mod tests_browse_active;
 mod tests_button;
 #[cfg(test)]
 mod tests_canvas_keys;
+#[cfg(test)]
+mod tests_cloud;
 #[cfg(test)]
 mod tests_compare;
 #[cfg(test)]
@@ -231,6 +234,9 @@ pub type CheckEditorFn = Box<dyn Fn(&str) -> Result<(), String>>;
 /// Something the host does with the session (web: back up or restore the library in browser
 /// storage); the work may finish asynchronously.
 pub type HostAction = Box<dyn FnMut(&mut Session) -> Result<Value, String>>;
+/// Store photo bytes in the host's durable store and queue an import (web: Originals + OPFS).
+/// Used by CollabCraft Cloud Open so the browser never writes through `std::fs`.
+pub type StoreBytesFn = Box<dyn FnMut(String, Vec<u8>)>;
 
 /// The system's dark/light appearance where egui doesn't report one (Linux desktops whose
 /// windowing layer says nothing, e.g. many Wayland compositors). The host answers from what it
@@ -308,6 +314,9 @@ pub struct Services {
     pub restore_library: Option<HostAction>,
     /// The system appearance for Appearance Mode ▸ Auto, ahead of egui's own report.
     pub system_theme: Option<SystemThemeFn>,
+    /// Browser (and any host without a real filesystem): put CollabCraft Open bytes into
+    /// durable storage and queue them for import, the same path a drag-drop uses.
+    pub store_bytes: Option<StoreBytesFn>,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -487,6 +496,19 @@ pub struct LightcraftApp {
     pub library_problem: Option<panels::library_problem::LibraryProblem>,
     /// The activity stack shows every task, not just the first few ("+N more" was clicked).
     pub activity_expanded: bool,
+    /// Cloud file browser / save / share state. Driven every frame by `cloud::pump`.
+    pub cloud: craft_ui::cloud::CloudFiles,
+    /// Share-dialog state. Shown by `share.show(ctx)` every frame.
+    pub share: craft_ui::share::ShareDialog,
+    /// Presence bar (other users viewing the same photo). Populated by `pump`.
+    pub presence: craft_ui::presence::PresenceBar,
+    /// Which cloud page the user opened from the File menu, if any.
+    pub cloud_page: Option<cloud::CloudPage>,
+    /// Library generation when a CollabCraft Open (`Busy::Opening`) began. A late answer after a
+    /// library switch is refused so the photo cannot land in the wrong catalog.
+    pub(crate) cloud_open_library: Option<u64>,
+    /// Activity-stack row while a CollabCraft Save is encoding off the UI thread.
+    pub(crate) cloud_encode: Option<lightcraft_engine::activity::TaskGuard>,
 }
 
 impl LightcraftApp {
@@ -566,6 +588,12 @@ impl LightcraftApp {
             library_problem: None,
             activity_expanded: false,
             model_setup: Default::default(),
+            cloud: Default::default(),
+            share: Default::default(),
+            presence: Default::default(),
+            cloud_page: None,
+            cloud_open_library: None,
+            cloud_encode: None,
         }
     }
 
@@ -1155,6 +1183,11 @@ impl LightcraftApp {
         self.save_status(ctx);
         self.slideshow_tick(ctx);
         panels::faces::pump(self, ctx);
+        // Cloud Open / Save / Share: drain the worker channel and advance the UI state.
+        cloud::pump(self, ctx);
+        // Share dialog: draw the modal overlay when it is open. Called from logic so it appears
+        // even when the topbar (which normally opens it) is not drawn this frame.
+        self.share.show(ctx);
         // back from an external editor: pick up the files it saved
         let focused = ctx.input(|i| i.focused);
         if focused && !self.ui.was_focused && !self.ui.external_edits.is_empty() {
@@ -1482,6 +1515,9 @@ impl LightcraftApp {
             panels::notices::show(self, &ctx);
             panels::dialogs::show(self, &ctx);
             panels::library_problem::show(self, &ctx);
+            if let Some(page) = self.cloud_page {
+                cloud::modal(self, page, &ctx);
+            }
             panels::toast(self, &ctx);
             self.widgets = widgets::take_registry(&ctx);
             self.end_frame(&ctx, t0);
@@ -1500,6 +1536,10 @@ impl LightcraftApp {
         panels::notices::show(self, &ctx);
         panels::dialogs::show(self, &ctx);
         panels::library_problem::show(self, &ctx);
+        // Cloud Open / Save modal: drawn above all panels, below system dialogs.
+        if let Some(page) = self.cloud_page {
+            cloud::modal(self, page, &ctx);
+        }
         export_task::poll(self, &ctx);
         slideshow_export::poll(self, &ctx);
         panels::activity::show(self, &ctx);
