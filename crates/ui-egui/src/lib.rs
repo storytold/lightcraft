@@ -188,6 +188,8 @@ mod tests_sam_setup;
 #[cfg(test)]
 mod tests_scroll;
 #[cfg(test)]
+mod tests_side_keys;
+#[cfg(test)]
 mod tests_slider_reset;
 #[cfg(test)]
 mod tests_slideshow;
@@ -1530,6 +1532,8 @@ impl LightcraftApp {
             return;
         }
         self.shown_library = Some(generation);
+        // (a row's id in the last library may name another row in this one)
+        self.ui.sidebar_cursor = None;
         if let Some(l) = self.session.library.as_ref().filter(|l| l.on_disk) {
             let path = l.dir.to_string_lossy().into_owned();
             panels::settings::remember_library(&mut self.ui.settings.recent_libraries, &path);

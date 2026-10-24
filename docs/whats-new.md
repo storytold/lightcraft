@@ -157,6 +157,18 @@
   the full count took about 14 s instead of about 23 s on a heavily loaded machine; the rest is the text rules of
   the albums themselves. The counts are the same as before, including for albums that loop through each other.
 
+### The sidebar from the keyboard
+- **View ▸ Keyboard in Sidebar** (Cmd+Alt+B) gives the keys to the left sidebar: a ring shows the row they are
+  on, starting at what the grid shows. ↑ ↓ move (Home, End, Page Up, Page Down too), → unfolds a folder or
+  section or steps into it, ← folds it or steps out, Enter or Space chooses the row as a click does, typing goes
+  to the next row that starts so (the same letter again: the one after), and F2 renames an album, a keyword or
+  a folder.
+- Esc, Tab, the shortcut again, Find or a click on the photos gives the keys back. While they are in the sidebar,
+  keys without Cmd / Ctrl / Alt are not shortcuts (P finds a row, it does not flag a photo), and keys with Shift
+  are not the sidebar's either, except Shift+Tab, which gives the keys back like Tab; with it off
+  nothing changes: a click on a row never takes the keys.
+- For agents: `view.sidebarKeys` `{on?}`; the ring is widget `sidebarCursor`.
+
 ### Sharper resampling in HDR and panorama merges
 - Merged photos (HDR and panorama) are resampled with a sharper filter (Lanczos-3 instead of bilinear). Moving a
   photo by half a pixel used to lose a third of its finest detail; now it keeps most of it, without halos around

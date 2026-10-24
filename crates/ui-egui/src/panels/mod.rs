@@ -32,6 +32,7 @@ pub mod rules_editor;
 pub mod rules_move;
 pub mod second;
 pub mod settings;
+pub(crate) mod side_keys;
 pub mod slide_layout;
 pub mod slide_overlays;
 pub mod slide_templates;
