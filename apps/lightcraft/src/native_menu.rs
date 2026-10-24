@@ -478,6 +478,7 @@ impl NativeMenu {
     /// app can crash in winit's teardown, PR #444).
     pub fn update(&mut self, app: &mut LightcraftApp, ctx: &egui::Context) -> bool {
         lightcraft_ui_egui::i18n::set_language(app.ui.language);
+        app.session.begin_frame();
         let mut quit = false;
         while let Ok(key) = self.rx.try_recv() {
             if key == QUIT {

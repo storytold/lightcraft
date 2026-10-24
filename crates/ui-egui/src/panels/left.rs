@@ -1664,7 +1664,7 @@ fn folder_menu(app: &mut LightcraftApp, resp: &egui::Response, a: &Album) {
             ui.separator();
         }
         if !a.folder && !a.is_smart() {
-            let local_only = super::grid::local_only(app, &app.session.selected());
+            let local_only = super::grid::selection_local_only(app);
             let b = ui
                 .add_enabled(!local_only, egui::Button::new(crate::i18n::tr("Add Selected Photos")))
                 .on_disabled_hover_text(super::grid::albums_hint());
