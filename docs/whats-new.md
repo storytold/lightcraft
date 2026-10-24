@@ -82,6 +82,16 @@
   library you open and are imported into it, as files given on the command line are; presets dropped then are
   refused with a note, since they belong to a library.
 
+### Drag a Folders row onto another to move that folder
+- A folder in the sidebar's Folders section can be dragged onto another Folders row to move it there on disk, with
+  its photos, as the row's Move Folder To… menu item does. The row under the pointer lights up (a closed one opens after a
+  moment, so a folder inside it can be reached) and the dragged label says "Move “trip” into “archive”". A row that
+  can't take the folder (the folder itself, one inside it, the folder it is in already, a row that covers several
+  disks, the library's own folder) shows the not-allowed cursor and says why in the label. A drop asks first, naming
+  both folders and how many photos go along; "Don't ask again" (Settings → Confirm before moving photos to another
+  folder on disk) moves it at once. Esc gives the drag up, and Edit ▸ Undo moves the folder back. A click on a row
+  still chooses it.
+
 ## 2026-10-22
 
 ### Reliability

@@ -305,5 +305,9 @@
   "Added {n} photo{}": "Dodano zdjęcia: {n}{:.0}",
   "Inside: {names}": "Wewnątrz: {names}",
   "Where should the Lightroom catalog “{catalog}” go?": "Dokąd zaimportować katalog Lightroom „{catalog}”?",
-  "Merge into the open library “{library}” ({count} photo{})": "Scal z otwartą biblioteką „{library}” (zdjęcia: {count}){:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "Scal z otwartą biblioteką „{library}” (zdjęcia: {count}){:.0}",
+  "Move “{name}” into “{into}”": "Przenieś „{name}” do „{into}”",
+  "Move “{name}” into “{into}”?": "Przenieść „{name}” do „{into}”?",
+  "Photos in it and in the folders inside it: {count}": "Zdjęcia w nim i w folderach w nim zawartych: {count}",
+  "“{name}” is no longer there: nothing was moved": "„{name}” już nie istnieje: nic nie zostało przeniesione"
 }

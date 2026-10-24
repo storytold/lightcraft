@@ -305,5 +305,9 @@
   "Drop to review {n} item{} for import": "Jatuhkan untuk meninjau {n} item sebelum impor{:.0}",
   "Inside: {names}": "Di dalam: {names}",
   "Where should the Lightroom catalog “{catalog}” go?": "Ke mana katalog Lightroom “{catalog}” diimpor?",
-  "Merge into the open library “{library}” ({count} photo{})": "Gabungkan ke pustaka yang terbuka “{library}” ({count} foto{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Gabungkan ke pustaka yang terbuka “{library}” ({count} foto{:.0})",
+  "Move “{name}” into “{into}”": "Pindahkan “{name}” ke “{into}”",
+  "Move “{name}” into “{into}”?": "Pindahkan “{name}” ke “{into}”?",
+  "Photos in it and in the folders inside it: {count}": "Foto di dalamnya dan di folder di dalamnya: {count}",
+  "“{name}” is no longer there: nothing was moved": "“{name}” tidak ditemukan lagi: tidak ada yang dipindahkan"
 }

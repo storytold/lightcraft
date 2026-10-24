@@ -305,5 +305,9 @@
   "Could not read {name}: {e}": "无法读取 {name}：{e}",
   "Added {n} photo{}": "已添加 {n} 张照片{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Lightroom 目录“{catalog}”要导入到哪里？",
-  "Merge into the open library “{library}” ({count} photo{})": "合并到当前打开的图库“{library}”（{count} 张照片）{:.0}"
+  "Merge into the open library “{library}” ({count} photo{})": "合并到当前打开的图库“{library}”（{count} 张照片）{:.0}",
+  "Move “{name}” into “{into}”": "将“{name}”移到“{into}”",
+  "Move “{name}” into “{into}”?": "将“{name}”移到“{into}”？",
+  "Photos in it and in the folders inside it: {count}": "其中及其子文件夹中的照片：{count}",
+  "“{name}” is no longer there: nothing was moved": "“{name}”已不存在：未移动任何内容"
 }
