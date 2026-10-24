@@ -641,7 +641,7 @@ fn preview(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, s
             register(&ctx, format!("print:gridcell:{i}"), rect);
             shown.extend(paint_cell(app, &painter, t, st, rect, *photo, &sheet, r));
         }
-        page_options(&painter, st, &sheet, &shown, pu.page + 1);
+        page_options(&painter, st, &sheet, &shown, pu.page + 1, pages);
     }
 
     // footer: page navigation and the selected cell
@@ -894,34 +894,49 @@ fn paint_cell(
 /// The Page Options as the print draws them ([`compose`]): crop marks at the corners of each
 /// photo, the page number at the bottom right and the print settings at the bottom left.
 /// Packages draw none of them, as the print doesn't ([`compose::has_page_options`]).
-fn page_options(painter: &egui::Painter, st: &PrintSettings, sheet: &Sheet, photos: &[Rect], number: usize) {
+fn page_options(painter: &egui::Painter, st: &PrintSettings, sheet: &Sheet, photos: &[Rect], number: usize, pages: usize) {
     if !compose::has_page_options(st.layout.style) {
         return;
     }
     let p = &st.page;
     let ink = compose::mark_ink(p.background);
     let ink = Color32::from_rgb(ink[0], ink[1], ink[2]);
-    if p.crop_marks {
-        let (len, gap) = (compose::CROP_MARK_IN as f32 * sheet.scale, compose::CROP_MARK_GAP_IN as f32 * sheet.scale);
-        let stroke = Stroke::new(1.0, ink);
-        for r in photos {
-            for (corner, dx, dy) in
-                [(r.left_top(), -1.0, -1.0), (r.right_top(), 1.0, -1.0), (r.left_bottom(), -1.0, 1.0), (r.right_bottom(), 1.0, 1.0)]
-            {
-                painter.line_segment([corner + vec2(dx * gap, 0.0), corner + vec2(dx * (gap + len), 0.0)], stroke);
-                painter.line_segment([corner + vec2(0.0, dy * gap), corner + vec2(0.0, dy * (gap + len))], stroke);
+    // the text first: the crop marks stop short of it
+    let mut text = Vec::new();
+    if let Ok(inches) = st.layout.printable() {
+        let area = sheet.rect(&inches);
+        let font = |pt: f64| egui::FontId::proportional((pt as f32 / 72.0 * sheet.scale).max(4.0));
+        let y = (area.bottom() + sheet.page.bottom()) / 2.0;
+        if p.page_numbers {
+            text.push(painter.text(pos2(area.right(), y), Align2::RIGHT_CENTER, number.to_string(), font(compose::PAGE_TEXT_PT), ink));
+        }
+        // fitted with the print's font; the preview's is wider, so it shrinks to the same room
+        let em = compose::PAGE_TEXT_PT as f32 / 72.0 * sheet.scale;
+        let room = text.first().map_or(area.right(), |n: &Rect| n.left() - em) - area.left();
+        if p.page_info
+            && room > 0.0
+            && let Some((line, pt)) = compose::page_info_fit(&compose::page_info_text(st), inches.w, p.page_numbers.then_some(pages.max(1)))
+        {
+            let mut size = font(pt);
+            let width = painter.layout_no_wrap(line.clone(), size.clone(), ink).size().x;
+            if width > room {
+                size.size *= room / width;
             }
+            text.push(painter.text(pos2(area.left(), y), Align2::LEFT_CENTER, line, size, ink));
         }
     }
-    let Ok(area) = st.layout.printable() else { return };
-    let area = sheet.rect(&area);
-    let font = egui::FontId::proportional((compose::PAGE_TEXT_PT as f32 / 72.0 * sheet.scale).max(4.0));
-    let y = (area.bottom() + sheet.page.bottom()) / 2.0;
-    if p.page_numbers {
-        painter.text(pos2(area.right(), y), Align2::RIGHT_CENTER, number.to_string(), font.clone(), ink);
-    }
-    if p.page_info {
-        painter.text(pos2(area.left(), y), Align2::LEFT_CENTER, compose::page_info_text(st), font, ink);
+    if p.crop_marks {
+        let scale = f64::from(sheet.scale);
+        let bounds = |r: &Rect| [r.left(), r.top(), r.width(), r.height()].map(f64::from);
+        let text: Vec<[f64; 4]> = text.iter().map(bounds).collect();
+        let shown: Vec<[f64; 4]> = photos.iter().map(bounds).collect();
+        for photo in &shown {
+            for mark in compose::crop_mark_rects(*photo, compose::CROP_MARK_IN * scale, compose::CROP_MARK_GAP_IN * scale, 1.0, &text) {
+                for [x, y, w, h] in compose::crop_mark_pieces(mark, &shown) {
+                    painter.rect_filled(Rect::from_min_size(pos2(x as f32, y as f32), vec2(w as f32, h as f32)), 0.0, ink);
+                }
+            }
+        }
     }
 }
 
