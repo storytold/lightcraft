@@ -242,13 +242,13 @@
   "{done} of {total}": "{done} de {total}",
   "{done} of {total} MB": "{done} de {total} MB",
   "{pct} %": "{pct}%",
-  "+{n} more": "+{n} mais",
   "Create the keyword “{name}”": "Criar a palavra-chave “{name}”",
   "new, inside {parent}": "nova, dentro de {parent}",
   "Keywords of {n} selected photos": "Palavras-chave de {n} fotos selecionadas",
   "Removed “{name}” from {n} photos. Edit ▸ Undo puts it back.": "“{name}” removida de {n} fotos. Editar → Desfazer a traz de volta.",
   "1 task is still running: {names}. Quitting stops it.": "1 tarefa ainda está em andamento: {names}. Sair a interrompe.",
   "{n} tasks are still running: {names}. Quitting stops them.": "{n} tarefas ainda estão em andamento: {names}. Sair as interrompe.",
+  "{n} tasks": "{n} tarefas",
   "{what} merge cancelled": "{what} mesclagem cancelada",
   "{n} Local photo{} skipped: albums hold library photos (Add to My Photos first)": "Fotos locais ignoradas: {n}{0:.0} — álbuns contêm fotos da biblioteca (adicione-as às Minhas fotos primeiro)",
   "New Folder in “{name}”": "Nova pasta em “{name}”",
@@ -305,5 +305,6 @@
   "Could not read {name}: {e}": "Não foi possível ler {name}: {e}",
   "Added {n} photo{}": "{n} foto{0} adicionada{0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Para onde vai o catálogo do Lightroom “{catalog}”?",
-  "Merge into the open library “{library}” ({count} photo{})": "Mesclar na biblioteca aberta “{library}” ({count} foto{})"
+  "Merge into the open library “{library}” ({count} photo{})": "Mesclar na biblioteca aberta “{library}” ({count} foto{})",
+  "+{n} more": "+{n} mais"
 }
