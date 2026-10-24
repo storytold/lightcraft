@@ -468,6 +468,19 @@
   server's files written there; it is now refused. Each file is saved complete or not at all, and replaces whatever
   is in its place instead of writing through a link to somewhere else.
 
+### Open or fold a whole branch of the sidebar
+- Hold Option (Alt on Windows and Linux) and click a row's triangle in the left sidebar to open or fold that row
+  and all the rows inside it, however many: a folder of albums with the folders in it, a folder of the library
+  down to its last folder, a keyword with the keywords inside it, a year with its months. A plain click still
+  opens or folds the one row.
+- What you open or fold inside it afterwards holds for that row. A folder that appears inside it later is as
+  the last Option-click on a row above it left the rest.
+- In Local, Option-click folds everything inside the folder; opening opens the one folder (opening them all
+  would read every folder inside from the disk).
+- The sidebar's rows are not remembered between sessions, so a branch opened or folded this way starts again as
+  the sidebar starts.
+- For scripts: `ui.clickWidget` takes `alt: true` for this click.
+
 ### Videos in the grid are no longer sent to the image decoders
 - A video in the library (an MP4 or MOV brought in from a Lightroom catalog) no longer asks the image decoders for a
   grid thumbnail (issue #2682). They can't read one, so each video failed with "unrecognised image format", showed a
