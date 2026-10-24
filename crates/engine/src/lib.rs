@@ -135,10 +135,11 @@ pub type Result<T> = std::result::Result<T, EngineError>;
 pub struct UndoEntry {
     pub label: String,
     pub op: Op,
-    /// A folder to rename on disk (`from` → `to`) before `op` is applied: Rename / Move Folder
-    /// (whose `op` relinks the photos inside). Never overwrites; refused when `to` exists. An
-    /// empty `to` removes the (empty) folder `from`, an empty `from` creates `to` (Create Folder).
-    pub folder: Option<FolderMove>,
+    /// Folders to rename on disk (`from` → `to`, in this order) before `op` is applied: Rename /
+    /// Move Folder (whose `op` relinks the photos inside; Move Folders has several, all or none
+    /// done). Never overwrites; refused when `to` exists. An empty `to` removes the (empty)
+    /// folder `from`, an empty `from` creates `to` (Create Folder).
+    pub folders: Vec<FolderMove>,
     /// Inverses of logged path corrections from a partially failed history step.
     pub(crate) retry_inverse: Vec<Op>,
     /// Sidecars still separated from their photo after a failed move or rollback.
@@ -633,7 +634,7 @@ impl Session {
         let fwd = op.clone();
         let inv = self.apply_catalog(op)?;
         self.pending_log.push(fwd);
-        self.undo.push(UndoEntry { label: label.to_string(), op: inv, folder: None, retry_inverse: Vec::new(), retry_sidecars: Vec::new() });
+        self.undo.push(UndoEntry { label: label.to_string(), op: inv, folders: Vec::new(), retry_inverse: Vec::new(), retry_sidecars: Vec::new() });
         self.commits = self.commits.wrapping_add(1);
         if self.undo.len() > 1000 {
             let mut dropped = self.undo.remove(0);
@@ -682,9 +683,25 @@ impl Session {
     pub(crate) fn commit_with_folder(&mut self, label: &str, op: Op, folder: FolderMove) -> Result<()> {
         self.commit(label, op)?;
         if let Some(e) = self.undo.last_mut() {
-            e.folder = Some(folder);
+            e.folders = vec![folder];
         }
         Ok(())
+    }
+
+    /// Fold the last `n` undo steps, each a folder move, into one: undo moves every folder back
+    /// and redo moves them all again, as one step. Anything else among them leaves the steps as
+    /// they are (returns false).
+    pub(crate) fn merge_folder_moves(&mut self, n: usize, label: &str) -> bool {
+        let Some(from) = self.undo.len().checked_sub(n).filter(|_| n > 0) else { return false };
+        if self.undo.get(from..).is_none_or(|t| t.iter().any(|e| e.folders.len() != 1 || !e.retry_inverse.is_empty() || !e.retry_sidecars.is_empty()))
+        {
+            return false;
+        }
+        let tail = self.undo.split_off(from);
+        let folders = tail.iter().flat_map(|e| e.folders.iter().cloned()).collect();
+        let ops = tail.into_iter().rev().map(|e| e.op).collect();
+        self.undo.push(UndoEntry { label: label.to_string(), op: Op::Batch { ops }, folders, retry_inverse: Vec::new(), retry_sidecars: Vec::new() });
+        true
     }
 
     /// The box to cut a face's picture from: the detector's, when the scan has looked at the face (every face is then shown
@@ -746,7 +763,7 @@ impl Session {
         }
         let Some(entries) = self.undo.get(self.undo.len() - n..) else { return };
         // Folder moves and partially applied file steps stay on their own.
-        if entries.iter().any(|e| e.folder.is_some() || !e.retry_inverse.is_empty() || !e.retry_sidecars.is_empty()) {
+        if entries.iter().any(|e| !e.folders.is_empty() || !e.retry_inverse.is_empty() || !e.retry_sidecars.is_empty()) {
             return;
         }
         let tail = self.undo.split_off(self.undo.len() - n);
@@ -754,7 +771,7 @@ impl Session {
         self.undo.push(UndoEntry {
             label: label.to_string(),
             op: Op::Batch { ops },
-            folder: None,
+            folders: Vec::new(),
             retry_inverse: Vec::new(),
             retry_sidecars: Vec::new(),
         });
@@ -784,7 +801,7 @@ impl Session {
         self.redo.push(UndoEntry {
             label: e.label.clone(),
             op: redo,
-            folder: e.folder.as_ref().map(FolderMove::reversed),
+            folders: e.folders.iter().map(FolderMove::reversed).collect(),
             retry_inverse: Vec::new(),
             retry_sidecars: Vec::new(),
         });
@@ -809,7 +826,7 @@ impl Session {
         self.undo.push(UndoEntry {
             label: e.label.clone(),
             op: undo,
-            folder: e.folder.as_ref().map(FolderMove::reversed),
+            folders: e.folders.iter().map(FolderMove::reversed).collect(),
             retry_inverse: Vec::new(),
             retry_sidecars: Vec::new(),
         });
@@ -844,17 +861,23 @@ impl Session {
         rename::validate_sidecars(fs, &entry.retry_sidecars).map_err(|e| EngineError::Other(format!("can't move the files back: {e}")))?;
         // Repair discarded file steps before another path change can stale their exact paths.
         // Unrelated metadata history must remain usable while a sidecar is still unwritable.
-        if entry.folder.is_some() || !entry.retry_sidecars.is_empty() || !self.file_moves(&entry.op).is_empty() {
+        if !entry.folders.is_empty() || !entry.retry_sidecars.is_empty() || !self.file_moves(&entry.op).is_empty() {
             self.repair_sidecars_with(fs).map_err(|e| EngineError::Other(format!("can't move the files back: {e}")))?;
         }
         rename::retry_sidecars(fs, &mut entry.retry_sidecars).map_err(|e| EngineError::Other(format!("can't move the files back: {e}")))?;
         let op = &entry.op;
-        let folder = entry.folder.as_ref();
-        if let Some(f) = folder {
-            cmd::browse::folder_on_disk(&f.from, &f.to).map_err(|e| EngineError::Other(format!("can't move the folder back: {e}")))?;
+        let folders = entry.folders.as_slice();
+        for (i, f) in folders.iter().enumerate() {
+            if let Err(e) = cmd::browse::folder_on_disk(&f.from, &f.to) {
+                // all or none: the ones already moved go back
+                for done in folders.iter().take(i).rev() {
+                    let _ = cmd::browse::folder_on_disk(&done.to, &done.from);
+                }
+                return Err(EngineError::Other(format!("can't move the folder back: {e}")));
+            }
         }
         let undo_folder = || {
-            if let Some(f) = folder {
+            for f in folders.iter().rev() {
                 let _ = cmd::browse::folder_on_disk(&f.to, &f.from);
             }
         };
@@ -873,7 +896,7 @@ impl Session {
         }
         match self.apply_catalog(op.clone()) {
             Ok(inv) => {
-                if let Some(f) = folder {
+                for f in folders {
                     cmd::browse::follow_folder(self, &f.from, &f.to);
                 }
                 if entry.retry_inverse.is_empty() {
@@ -1389,6 +1412,8 @@ mod tests_face_tiles;
 mod tests_filesystem_history;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests_focus_scan;
+#[cfg(test)]
+mod tests_folder_batch;
 #[cfg(test)]
 mod tests_folders;
 #[cfg(test)]

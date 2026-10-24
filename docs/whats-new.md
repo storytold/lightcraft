@@ -101,6 +101,14 @@
 - Photo Grid and Square Grid now show the grid-cycle shortcut (G by default) in the View menu. The hints follow
   shortcut changes; clicking a menu row still selects that grid (issue #2500).
 
+### Move several folders into one in a single step
+- For agents: `folder.move {paths, into}` moves several folders on disk into one folder, with the photos in them
+  following, as one undo step: Undo moves them all back and Redo moves them all again. If any one can't move (a folder
+  into itself or into one inside it, a name already taken in the destination, one folder inside another of the list,
+  two folders with the same name, a folder that isn't there; or more than 200 folders) the whole move is refused with a plain sentence and
+  nothing moves. `folder.move {path, into}` is unchanged.
+- Move Folder To… in the folder menus now has a tooltip, and a widget id for agents and tests (`folderMove:<path>`
+  in Folders, `localFolderMove:<path>` in Local).
 
 ## 2026-10-21
 
