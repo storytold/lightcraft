@@ -12,7 +12,9 @@
 //! Lossless (non-XYB) tiles are rendered in the codestream's own colour encoding, which is the identity,
 //! keeping the values in the raw IFD's sample space. Lossy (XYB) tiles are decoded by jxl-oxide to linear
 //! sRGB primaries; the codestream's declared encoding is then restored by hand: its primaries with a
-//! plain 3×3 matrix, then its transfer curve. The samples of a lossy tile mean what they would in a
+//! plain 3×3 matrix, then its transfer curve. A grey (single-plane) lossy tile is still coded as three
+//! XYB channels; its declared grey encoding is restored as the luminance (CIE Y, D65 white) of the
+//! linear sRGB output, then its transfer curve. The samples of a lossy tile mean what they would in a
 //! lossless one with the same header, so a declared transfer curve is part of the stored values, not a
 //! display hint. Lightroom Classic's lossy LinearRaw DNGs (Convert to DNG with lossy compression) store
 //! perceptually shaped samples, label them with the sRGB curve and linearise them with a cubic
@@ -126,7 +128,7 @@ enum Output {
 
 /// Decide how to render a chunk from its header: whether it is XYB-coded, the declared colour
 /// encoding and the intensity target. Lossy data is only accepted when the declared encoding is an RGB
-/// one with a D65 white point and an SDR transfer curve (linear, sRGB, BT.709 or a power: what raw DNG
+/// one (three planes) or a grey one (one plane) with a D65 white point and an SDR transfer curve (linear, sRGB, BT.709 or a power: what raw DNG
 /// writers signal) and no HDR tone mapping would apply, otherwise the samples cannot be restored
 /// faithfully.
 fn output_for(xyb: bool, encoding: &ColourEncoding, intensity_target: f32, planes: usize) -> Result<Output> {
@@ -134,13 +136,15 @@ fn output_for(xyb: bool, encoding: &ColourEncoding, intensity_target: f32, plane
         return Ok(Output::AsCoded);
     }
     let unsupported = |what: &str| RawError::Unsupported(format!("lossy JPEG XL tile with {what}"));
-    if planes != 3 {
-        return Err(unsupported("a single colour plane"));
-    }
     let ColourEncoding::Enum(e) = encoding else {
         return Err(unsupported("an ICC profile instead of a colour encoding"));
     };
-    if e.colour_space != ColourSpace::Rgb {
+    // a single plane is declared grey, three are declared RGB (the header's grey flag is the colour space)
+    let grey = planes == 1;
+    if grey && e.colour_space != ColourSpace::Grey {
+        return Err(unsupported("a single colour plane that is not declared grey"));
+    }
+    if !grey && e.colour_space != ColourSpace::Rgb {
         return Err(unsupported("a declared encoding that is not RGB"));
     }
     let curve = match e.tf {
@@ -166,6 +170,13 @@ fn output_for(xyb: bool, encoding: &ColourEncoding, intensity_target: f32, plane
     }
     if intensity_target > 255.0 {
         return Err(unsupported("an intensity target above 255 nits"));
+    }
+    if grey {
+        // a grey encoding has no primaries, only the white point: its single plane is the luminance (CIE Y)
+        // of the decoder's linear sRGB, which is the row of sRGB → XYZ that gives Y. The rows of the
+        // matrix are all that row; only the first is used for one plane.
+        let y = rgb_to_xyz(SRGB)[1].map(|v| v as f32);
+        return Ok(Output::FromXyb { matrix: Some([y; 3]), curve });
     }
     let primaries = match e.primaries {
         Primaries::Srgb => return Ok(Output::FromXyb { matrix: None, curve }),
@@ -338,6 +349,25 @@ mod tests {
     }
 
     #[test]
+    fn lossy_grey_data_is_the_luminance_in_the_declared_curve() {
+        // Lightroom Classic's merged monochrome LinearRaw DNGs: one plane, declared grey with a linear
+        // (16-bit float) or an sRGB (16-bit integer) curve
+        let grey = |tf| {
+            let mut e = EnumColourEncoding::srgb_linear(RenderingIntent::Perceptual);
+            e.colour_space = ColourSpace::Grey;
+            e.tf = tf;
+            output_for(true, &ColourEncoding::Enum(e), 255.0, 1).unwrap()
+        };
+        let Output::FromXyb { matrix: Some(m), curve: Curve::Linear } = grey(TransferFunction::Linear) else { panic!("grey, linear") };
+        // the luminance of linear sRGB (IEC 61966-2-1: 0.2126, 0.7152, 0.0722); white stays white
+        for (v, e) in m[0].iter().zip([0.2126, 0.7152, 0.0722]) {
+            assert!((v - e).abs() < 1e-4, "{m:?}");
+        }
+        assert!((m[0].iter().sum::<f32>() - 1.0).abs() < 1e-5, "{m:?}");
+        assert!(matches!(grey(TransferFunction::Srgb), Output::FromXyb { curve: Curve::Srgb, .. }));
+    }
+
+    #[test]
     fn lossy_data_keeps_the_declared_transfer_curve() {
         // Lightroom Classic's lossy LinearRaw DNGs: Rec.2100 primaries, sRGB transfer curve
         let mut e = EnumColourEncoding::srgb_linear(RenderingIntent::Perceptual);
@@ -466,7 +496,15 @@ mod tests {
     #[test]
     fn lossy_data_that_cannot_be_restored_is_unsupported() {
         let bad = |xyb_planes: usize, e: ColourEncoding, it: f32| matches!(output_for(true, &e, it, xyb_planes), Err(RawError::Unsupported(_)));
-        assert!(bad(1, linear(Primaries::Srgb), 255.0), "grey");
+        assert!(bad(1, linear(Primaries::Srgb), 255.0), "one plane declared RGB");
+        let mut g = EnumColourEncoding::srgb_linear(RenderingIntent::Relative);
+        g.colour_space = ColourSpace::Grey;
+        assert!(bad(1, ColourEncoding::Enum(g.clone()), 10_000.0), "grey with an HDR intensity target");
+        g.tf = TransferFunction::Pq;
+        assert!(bad(1, ColourEncoding::Enum(g.clone()), 255.0), "grey with PQ");
+        g.tf = TransferFunction::Linear;
+        g.white_point = WhitePoint::Dci;
+        assert!(bad(1, ColourEncoding::Enum(g), 255.0), "grey with a white point other than D65");
         assert!(bad(3, linear(Primaries::Srgb), 10_000.0), "HDR intensity target would tone-map");
         let mut e = EnumColourEncoding::srgb_linear(RenderingIntent::Relative);
         for tf in [TransferFunction::Pq, TransferFunction::Hlg, TransferFunction::Unknown, TransferFunction::Gamma { g: 0, inverted: true }] {
