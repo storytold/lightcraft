@@ -348,7 +348,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                         egui::RichText::new(crate::i18n::tr_format!("Creates {} stacks from {} of {scope}", preview["stacks"], preview["photos"], scope = crate::i18n::tr(scope))).color(t.text_dim),
                     );
                 }
-                Dialog::Cull { reject_below, pick_best, burst_gap, similarity } => {
+                Dialog::Cull { reject_below, pick_best, stack_groups, burst_gap, similarity } => {
                     let n = app.session.selection.ids.len();
                     let scope = if n > 1 { crate::i18n::tr_format!("the {n} selected photos", n = n) } else { crate::i18n::tr_format!("the {} photos in view", app.session.visible_cloned().len()) };
                     ui.label(egui::RichText::new(crate::i18n::tr_format!("Scores {scope} for focus and exposure and finds similar shots taken within seconds of each other (bursts).", scope = scope)).color(t.text_label));
@@ -358,6 +358,8 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     ui.label(egui::RichText::new(crate::i18n::tr(if *reject_below > 0.0 { "Blurry photos below the score are flagged as rejects." } else { "0: nothing is rejected." })).color(t.text_dim));
                     let r = ui.checkbox(pick_best, crate::i18n::tr("Pick the sharpest photo of each burst"));
                     crate::widgets::register(ui.ctx(), "check:cullPick", r.rect);
+                    let r = ui.checkbox(stack_groups, crate::i18n::tr("Stack each burst, best photo on top"));
+                    crate::widgets::register(ui.ctx(), "check:cullStack", r.rect);
                     ui.add_space(6.0);
                     // the sliders drag over the usual range; their value fields take whatever
                     // `photo.analyze` accepts (a gap of 0 s to a day, a similarity of 0 to 1)
@@ -2042,9 +2044,12 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
         Dialog::DenoiseModel { info, accepted } => crate::panels::denoise::install(app, info, *accepted),
         Dialog::FaceModel { path, info, accepted } => crate::panels::faces::install(app, path, info, *accepted),
         Dialog::AllMetadata { .. } | Dialog::SystemInfo { .. } | Dialog::WhatsNew => Ok(serde_json::Value::Null),
-        Dialog::Cull { reject_below, pick_best, burst_gap, similarity } => {
+        Dialog::Cull { reject_below, pick_best, stack_groups, burst_gap, similarity } => {
             app.ui.cull_burst = Some((*burst_gap, *similarity));
-            app.run("photo.analyze", cull_params(*reject_below, *pick_best, *burst_gap, *similarity))
+            app.ui.cull_stack = *stack_groups;
+            let mut p = cull_params(*reject_below, *pick_best, *burst_gap, *similarity);
+            p["stackGroups"] = json!(stack_groups);
+            app.run("photo.analyze", p)
         }
         Dialog::SmartRules { id, name, rules, parent } => {
             // refused before anything changes (not even the name)
