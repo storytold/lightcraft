@@ -12,6 +12,7 @@ use serde_json::{Value, json};
 
 use crate::LightcraftApp;
 use crate::icons::{Icon, paint};
+use crate::menu_item::MenuItem;
 use crate::render::Slot;
 use crate::state::RightPanel;
 use crate::theme::Tokens;
@@ -127,7 +128,12 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if text_button(ui, "reset", crate::i18n::tr("Reset"), false)
-                    .on_hover_text(reset_tip(&app.ui.settings.keymap, ui.ctx().os() == egui::os::OperatingSystem::Mac))
+                    .on_hover_text(crate::kbd::tip_with_shortcut(
+                        crate::i18n::tr("Reset all edits"),
+                        "develop.reset",
+                        &app.ui.settings.keymap,
+                        crate::kbd::is_mac(ui.ctx()),
+                    ))
                     .clicked()
                 {
                     reset_clicked = true;
@@ -245,7 +251,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                         if m == WbMode::Custom {
                             continue;
                         }
-                        if ui.selectable_label(d.wb.mode == m, m.label()).clicked() {
+                        if MenuItem::new(m.label()).selected(d.wb.mode == m).show(ui).clicked() {
                             let mode = serde_json::to_value(m).unwrap_or_default();
                             let _ = app.run("develop.wb", json!({"mode": mode}));
                         }
@@ -446,8 +452,8 @@ fn profile_menu_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSett
     // (clicked, hovered)
     let mut pick: (Option<String>, Option<String>) = (None, None);
     let item = |ui: &mut egui::Ui, key: &str, id: &str, name: &str, pick: &mut (Option<String>, Option<String>)| {
-        let r = ui.selectable_label(id == cur, crate::i18n::profile_label(id, name));
-        register(ui.ctx(), format!("profileMenu:{key}:{id}"), r.rect);
+        let label = crate::i18n::profile_label(id, name);
+        let r = MenuItem::new(label).selected(id == cur).widget(format!("profileMenu:{key}:{id}")).show(ui);
         if r.clicked() {
             pick.0 = Some(id.to_string());
         }
@@ -470,15 +476,14 @@ fn profile_menu_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSett
         ui.separator();
     }
     for g in profile_groups() {
-        let r = crate::widgets::menu_button(ui, crate::i18n::tr(g), |ui| {
+        let r = MenuItem::new(crate::i18n::tr(g)).check_slot(true).widget(format!("profileMenu:groupMenu:{g}")).submenu(ui, |ui| {
             crate::menu_level::level(ui, 2, Some(below), |ui| {
                 ui.set_min_width(170.0);
                 for p in PROFILES.iter().filter(|p| p.group == g) {
                     item(ui, "group", p.id, p.name, &mut pick);
                 }
-            });
+            })
         });
-        register(ui.ctx(), format!("profileMenu:groupMenu:{g}"), r.response.rect);
         if r.inner.is_some() {
             crate::menu_level::set_anchor(ui.ctx(), 2, r.response.rect);
         }
@@ -489,15 +494,14 @@ fn profile_menu_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSett
     lut_groups.dedup();
     for g in &lut_groups {
         // a folder's name as it is, and its own widget id even when it matches a built-in group
-        let r = crate::widgets::menu_button(ui, g.as_str(), |ui| {
+        let r = MenuItem::new(g.as_str()).check_slot(true).widget(format!("profileMenu:lutGroupMenu:{g}")).submenu(ui, |ui| {
             crate::menu_level::level(ui, 2, Some(below), |ui| {
                 ui.set_min_width(170.0);
                 for p in app.session.lut_profiles.iter().filter(|p| &p.group == g) {
                     item(ui, "group", &p.id, &p.name, &mut pick);
                 }
-            });
+            })
         });
-        register(ui.ctx(), format!("profileMenu:lutGroupMenu:{g}"), r.response.rect);
         if r.inner.is_some() {
             crate::menu_level::set_anchor(ui.ctx(), 2, r.response.rect);
         }
@@ -510,14 +514,12 @@ fn profile_menu_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSett
         } else {
             crate::i18n::tr_format!("Add “{}” to Favorites", crate::i18n::profile_label(cur, name))
         };
-        let r = ui.button(label);
-        register(ui.ctx(), "profileMenu:toggleFavorite", r.rect);
+        let r = MenuItem::new(&label).check_slot(true).widget("profileMenu:toggleFavorite").show(ui);
         if r.clicked() {
             let _ = app.run("profile.favorite", json!({"id": cur}));
         }
     }
-    let r = ui.button(crate::i18n::tr("Browse…"));
-    register(ui.ctx(), "profileMenu:browse", r.rect);
+    let r = MenuItem::new(crate::i18n::tr("Browse…")).check_slot(true).widget("profileMenu:browse").show(ui);
     if r.clicked() {
         let _ = app.run("panel.profiles", json!({}));
     }
@@ -563,11 +565,9 @@ fn section(
         }
     }
     crate::widgets::context_menu(&resp, |ui| {
-        let mut solo = app.ui.single_panel;
-        let item = ui.checkbox(&mut solo, crate::i18n::tr("Solo Mode"));
-        register(ui.ctx(), "sectionMenu:solo", item.rect);
+        let item = MenuItem::new(crate::i18n::tr("Solo Mode")).checked(app.ui.single_panel).widget("sectionMenu:solo").show(ui);
         if item.clicked() {
-            if let Err(e) = app.run("view.soloSections", json!({"on": solo})) {
+            if let Err(e) = app.run("view.soloSections", json!({"on": !app.ui.single_panel})) {
                 app.toast(ui.ctx(), e);
             }
             ui.close();
@@ -840,14 +840,14 @@ fn soft_proofing(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             let mut pick = false;
             crate::widgets::combo_box("proof-space").width(170.0).selected_text(shown).show_ui(ui, |ui| {
                 for s in OutputSpace::ALL {
-                    if ui.selectable_label(device.is_none() && cur == s, s.label()).clicked() {
+                    if MenuItem::new(s.label()).selected(device.is_none() && cur == s).show(ui).clicked() {
                         let _ = app.run("view.softProof", json!({"space": s}));
                     }
                 }
                 if let Some(n) = &device {
-                    let _ = ui.selectable_label(true, n);
+                    let _ = MenuItem::new(n).selected(true).inert().show(ui);
                 }
-                if app.services.pick_display_profile.is_some() && ui.selectable_label(false, crate::i18n::tr("Other…")).clicked() {
+                if app.services.pick_display_profile.is_some() && MenuItem::new(crate::i18n::tr("Other…")).selected(false).show(ui).clicked() {
                     pick = true;
                 }
             });
@@ -1297,15 +1297,16 @@ fn curve_footer(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings)
                         user_seen = true;
                         ui.separator();
                     }
-                    let r = ui.selectable_label(current.as_deref() == Some(p.name.as_str()), crate::i18n::builtin_label(&p.name, p.builtin));
-                    register(ui.ctx(), format!("curvePreset:{}", p.name), r.rect);
+                    let label = crate::i18n::builtin_label(&p.name, p.builtin);
+                    let r =
+                        MenuItem::new(label).selected(current.as_deref() == Some(p.name.as_str())).widget(format!("curvePreset:{}", p.name)).show(ui);
                     if r.clicked() {
                         let _ = app.run("curve.applyPreset", json!({"name": p.name}));
                         ui.close();
                     }
                     if !p.builtin {
                         crate::widgets::context_menu(&r, |ui| {
-                            if ui.button(crate::i18n::tr("Delete Preset")).clicked() {
+                            if MenuItem::new(crate::i18n::tr("Delete Preset")).show(ui).clicked() {
                                 let _ = app.run("curve.deletePreset", json!({"name": p.name}));
                                 ui.close();
                             }
@@ -1314,18 +1315,22 @@ fn curve_footer(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings)
                 }
                 ui.separator();
                 let shaped = current.as_deref() != Some("Linear");
-                let r = ui.add_enabled(shaped, egui::Button::new(crate::i18n::tr("Save Point Curve…")));
-                register(ui.ctx(), "curvePresetMenu:save", r.rect);
+                let r = MenuItem::new(crate::i18n::tr("Save Point Curve…")).check_slot(true).enabled(shaped).widget("curvePresetMenu:save").show(ui);
                 if r.clicked() {
                     crate::panels::dialogs::prompt(app, "Save Point Curve Preset", "Preset name", "", "curve.savePreset", json!({}), "name");
                     ui.close();
                 }
-                if ui.add_enabled(app.services.pick_curve_preset_files.is_some(), egui::Button::new(crate::i18n::tr("Import Presets…"))).clicked() {
+                if MenuItem::new(crate::i18n::tr("Import Presets…"))
+                    .check_slot(true)
+                    .enabled(app.services.pick_curve_preset_files.is_some())
+                    .show(ui)
+                    .clicked()
+                {
                     let _ = app.run("file.importCurvePresets", json!({}));
                     ui.close();
                 }
                 let can_export = app.services.save_curve_preset_file.is_some() && !app.session.curve_presets.is_empty();
-                if ui.add_enabled(can_export, egui::Button::new(crate::i18n::tr("Export Presets…"))).clicked() {
+                if MenuItem::new(crate::i18n::tr("Export Presets…")).check_slot(true).enabled(can_export).show(ui).clicked() {
                     let _ = app.run("file.exportCurvePresets", json!({}));
                     ui.close();
                 }
@@ -1352,14 +1357,12 @@ fn curve_reset_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, ch: &str) {
     } else {
         crate::i18n::tr_format!("Reset {} Channel", crate::i18n::tr(channel_label(ch)))
     };
-    let r = ui.button(label);
-    register(ui.ctx(), "curveMenu:resetChannel", r.rect);
+    let r = MenuItem::new(&label).widget("curveMenu:resetChannel").show(ui);
     if r.clicked() {
         let _ = app.run("curve.reset", json!({"channel": ch}));
         ui.close();
     }
-    let r = ui.button(crate::i18n::tr("Reset All Curves"));
-    register(ui.ctx(), "curveMenu:resetAll", r.rect);
+    let r = MenuItem::new(crate::i18n::tr("Reset All Curves")).widget("curveMenu:resetAll").show(ui);
     if r.clicked() {
         let _ = app.run("curve.reset", json!({"channel": "all"}));
         ui.close();
@@ -2039,15 +2042,6 @@ pub(crate) fn reload_preview_only(app: &mut LightcraftApp, ctx: &egui::Context, 
     }
 }
 
-/// The Reset button's tooltip with the reset shortcut as this platform writes it (issue #1751).
-fn reset_tip(keymap: &crate::shortcuts::Keymap, mac: bool) -> String {
-    let base = crate::i18n::tr("Reset all edits");
-    match crate::shortcuts::shortcut_of(keymap, "develop.reset") {
-        Some(sc) => format!("{base} ({})", crate::menubar::shortcut_text(sc, mac)),
-        None => base.to_string(),
-    }
-}
-
 #[cfg(test)]
 mod curve_histogram_tests {
     use super::*;
@@ -2096,17 +2090,5 @@ mod tests {
         // HDR turned off: the SDR histogram at once; other photos keep their own
         assert_eq!(steady_hdr_histogram(&ctx, id, false, Some(sdr.clone())), Some(sdr.clone()));
         assert_eq!(steady_hdr_histogram(&ctx, PhotoId(8), true, Some(sdr.clone())), Some(sdr));
-    }
-
-    /// Issue #1751: Windows and Linux read Ctrl where macOS reads Cmd, and a rebound shortcut shows.
-    #[test]
-    fn reset_tooltip_names_the_shortcut_of_this_platform() {
-        let keymap = crate::shortcuts::Keymap::new();
-        assert_eq!(reset_tip(&keymap, false), "Reset all edits (Ctrl+Shift+R)");
-        assert_eq!(reset_tip(&keymap, true), "Reset all edits (⌘⇧R)");
-        let rebound: crate::shortcuts::Keymap = [("develop.reset".to_string(), "Cmd+Alt+R".to_string())].into();
-        assert_eq!(reset_tip(&rebound, false), "Reset all edits (Ctrl+Alt+R)");
-        let unbound: crate::shortcuts::Keymap = [("develop.reset".to_string(), String::new())].into();
-        assert_eq!(reset_tip(&unbound, false), "Reset all edits");
     }
 }

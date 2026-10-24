@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 
 use crate::LightcraftApp;
 use crate::icons::{Icon, paint};
+use crate::menu_item::MenuItem;
 use crate::theme::Tokens;
 use crate::widgets::register;
 
@@ -72,17 +73,12 @@ fn picker(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, current: &str, a
     egui::Popup::menu(&r).show(|ui| {
         egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
             for (label, patch, sel) in &items {
-                if ui
-                    .selectable_label(
-                        *sel,
-                        if matches!(id, "camera" | "lens" | "keyword") && patch.get(id).is_some_and(|value| !value.is_null()) {
-                            label.as_str()
-                        } else {
-                            crate::i18n::tr(label)
-                        },
-                    )
-                    .clicked()
-                {
+                let text = if matches!(id, "camera" | "lens" | "keyword") && patch.get(id).is_some_and(|value| !value.is_null()) {
+                    label.as_str()
+                } else {
+                    crate::i18n::tr(label)
+                };
+                if MenuItem::new(text).selected(*sel).show(ui).clicked() {
                     chosen = Some(patch.clone());
                 }
             }
@@ -269,12 +265,12 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     egui::Popup::menu(&presets).show(|ui| {
         let names: Vec<String> = app.session.filter_presets.iter().map(|f| f.name.clone()).collect();
         for n in &names {
-            let r = ui.button(n);
+            let r = MenuItem::new(n).show(ui);
             if r.clicked() {
                 let _ = app.run("filter.applyPreset", json!({"name": n}));
             }
             crate::widgets::context_menu(&r, |ui| {
-                if ui.button(crate::i18n::tr("Delete Preset")).clicked() {
+                if MenuItem::new(crate::i18n::tr("Delete Preset")).show(ui).clicked() {
                     let _ = app.run("filter.deletePreset", json!({"name": n}));
                 }
             });
@@ -283,7 +279,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             ui.label(egui::RichText::new(crate::i18n::tr("No filter presets yet")).color(t.text_dim));
         }
         ui.separator();
-        if ui.add_enabled(filtering, egui::Button::new(crate::i18n::tr("Save Current Filter as Preset…"))).clicked() {
+        if MenuItem::new(crate::i18n::tr("Save Current Filter as Preset…")).enabled(filtering).show(ui).clicked() {
             crate::panels::dialogs::prompt(app, "Save Filter Preset", "Preset name", "", "filter.savePreset", json!({}), "name");
         }
     });

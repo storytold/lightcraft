@@ -9,6 +9,7 @@ use lightcraft_pipeline::geometry::Frame;
 use serde_json::json;
 
 use crate::LightcraftApp;
+use crate::menu_item::MenuItem;
 use crate::render::Slot;
 use crate::state::{BeforeAfter, RightPanel, ToolOverlay, Zoom};
 use crate::theme::Tokens;
@@ -987,9 +988,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         preview_only_pill(ui, canvas, why);
     }
     crate::widgets::context_menu(&resp, |ui| {
-        crate::widgets::menu_button(ui, crate::i18n::tr("Zoom"), |ui| {
+        MenuItem::new(crate::i18n::tr("Zoom")).submenu(ui, |ui| {
             for (label, cmd) in [("Fit", "view.zoomFit"), ("100%", "view.zoom100"), ("Zoom In", "view.zoomIn"), ("Zoom Out", "view.zoomOut")] {
-                if ui.button(crate::i18n::tr(label)).clicked() {
+                if MenuItem::new(crate::i18n::tr(label)).show(ui).clicked() {
                     let _ = app.run(cmd, json!({}));
                 }
             }

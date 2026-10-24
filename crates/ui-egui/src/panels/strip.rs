@@ -27,21 +27,23 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         )
         .show(ui, |ui| {
             let has_photo = app.session.active().is_some();
+            let mac = crate::kbd::is_mac(ui.ctx());
+            // each tooltip names the key its command has now, remapped ones included
             ui.vertical_centered(|ui| {
                 ui.spacing_mut().item_spacing.y = GAP;
                 let sz = vec2(t.strip_w, BUTTON_H);
-                if icon_button(ui, "presets", Icon::Presets, sz, app.ui.presets, has_photo, "Presets (Shift+P)").clicked() {
+                if icon_button(ui, "presets", Icon::Presets, sz, app.ui.presets, has_photo, &tip(app, mac, "Presets", "panel.presets")).clicked() {
                     let _ = app.run("panel.presets", json!({}));
                 }
-                for (id, icon, panel, tip) in [
-                    ("edit", Icon::Sliders, RightPanel::Edit, "Edit (E)"),
-                    ("crop", Icon::Crop, RightPanel::Crop, "Crop & Rotate (C)"),
-                    ("remove", Icon::Eraser, RightPanel::Remove, "Remove (H)"),
-                    ("masking", Icon::Mask, RightPanel::Masking, "Masking (M)"),
+                for (id, icon, panel, name) in [
+                    ("edit", Icon::Sliders, RightPanel::Edit, "Edit"),
+                    ("crop", Icon::Crop, RightPanel::Crop, "Crop & Rotate"),
+                    ("remove", Icon::Eraser, RightPanel::Remove, "Remove"),
+                    ("masking", Icon::Mask, RightPanel::Masking, "Masking"),
                     ("redeye", Icon::Eye, RightPanel::RedEye, "Red Eye"),
                 ] {
                     let on = app.ui.right == panel || (panel == RightPanel::Edit && app.ui.right == RightPanel::Profiles);
-                    if icon_button(ui, id, icon, sz, on, has_photo, tip).clicked() {
+                    if icon_button(ui, id, icon, sz, on, has_photo, &tip(app, mac, name, &format!("panel.{id}"))).clicked() {
                         let _ = app.run(&format!("panel.{id}"), json!({}));
                     }
                     if id == "edit" {
@@ -49,10 +51,30 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     }
                 }
                 separator(ui, &t);
-                if icon_button(ui, "versions", Icon::Versions, sz, app.ui.right == RightPanel::Versions, has_photo, "Versions (Shift+V)").clicked() {
+                if icon_button(
+                    ui,
+                    "versions",
+                    Icon::Versions,
+                    sz,
+                    app.ui.right == RightPanel::Versions,
+                    has_photo,
+                    &tip(app, mac, "Versions", "panel.versions"),
+                )
+                .clicked()
+                {
                     let _ = app.run("panel.versions", json!({}));
                 }
-                if icon_button(ui, "activity", Icon::Activity, sz, app.ui.right == RightPanel::Activity, true, "History & Activity (Y)").clicked() {
+                if icon_button(
+                    ui,
+                    "activity",
+                    Icon::Activity,
+                    sz,
+                    app.ui.right == RightPanel::Activity,
+                    true,
+                    &tip(app, mac, "History & Activity", "panel.activity"),
+                )
+                .clicked()
+                {
                     let _ = app.run("panel.activity", json!({}));
                 }
                 if icon_button(ui, "more", Icon::More, sz, false, true, "More").clicked() {
@@ -70,14 +92,31 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             child.vertical_centered(|ui| {
                 ui.spacing_mut().item_spacing.y = GAP;
                 let sz = vec2(t.strip_w, BUTTON_H);
-                if icon_button(ui, "keywords", Icon::Tag, sz, app.ui.right == RightPanel::Keywords, has_photo, "Keywords (K)").clicked() {
+                if icon_button(
+                    ui,
+                    "keywords",
+                    Icon::Tag,
+                    sz,
+                    app.ui.right == RightPanel::Keywords,
+                    has_photo,
+                    &tip(app, mac, "Keywords", "panel.keywords"),
+                )
+                .clicked()
+                {
                     let _ = app.run("panel.keywords", json!({}));
                 }
-                if icon_button(ui, "info", Icon::Info, sz, app.ui.right == RightPanel::Info, has_photo, "Info (I)").clicked() {
+                if icon_button(ui, "info", Icon::Info, sz, app.ui.right == RightPanel::Info, has_photo, &tip(app, mac, "Info", "panel.info"))
+                    .clicked()
+                {
                     let _ = app.run("panel.info", json!({}));
                 }
             });
         });
+}
+
+/// The tooltip of the strip button for `cmd`: its name and the key `cmd` has now.
+fn tip(app: &LightcraftApp, mac: bool, base: &str, cmd: &str) -> String {
+    crate::kbd::tip_with_shortcut(crate::i18n::tr(base), cmd, &app.ui.settings.keymap, mac)
 }
 
 fn separator(ui: &mut egui::Ui, t: &Tokens) {

@@ -7,6 +7,7 @@ use serde_json::json;
 
 use crate::LightcraftApp;
 use crate::icons::{Icon, paint};
+use crate::menu_item::MenuItem;
 use crate::state::RightPanel;
 use crate::theme::Tokens;
 use crate::widgets::{divider, register, slider, text_button};
@@ -222,7 +223,7 @@ fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
 
             egui::Popup::menu(&r).show(|ui| {
                 for (label, a) in ASPECT_PRESETS {
-                    if ui.button(crate::i18n::tr(label)).clicked() {
+                    if MenuItem::new(crate::i18n::tr(label)).show(ui).clicked() {
                         let _ = app.run("crop.aspect", json!({"aspect": a}));
                     }
                 }
@@ -546,8 +547,7 @@ pub(crate) fn tool_overlay_options(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             .on_hover_text(crate::i18n::tr("When pins show on the photo (Shift+H cycles)"));
         egui::Popup::menu(&r).show(|ui| {
             for m in ToolOverlay::ALL {
-                let item = ui.selectable_label(m == current, crate::i18n::tr(m.label()));
-                register(ui.ctx(), format!("toolOverlay:{}", m.name()), item.rect);
+                let item = MenuItem::new(crate::i18n::tr(m.label())).selected(m == current).widget(format!("toolOverlay:{}", m.name())).show(ui);
                 if item.clicked() {
                     let _ = app.run("view.toolOverlay", json!({"mode": m.name()}));
                 }
@@ -904,7 +904,7 @@ fn copyright_status(app: &mut LightcraftApp, ui: &mut egui::Ui, current: lightcr
     ui.label(egui::RichText::new(crate::i18n::tr("Copyright Status")).size(11.5).color(t.text_dim));
     let r = crate::widgets::combo_box("info-copyright-status").selected_text(crate::i18n::tr(current.label())).show_ui(ui, |ui| {
         for st in lightcraft_catalog::CopyrightStatus::ALL {
-            if ui.selectable_label(st == current, crate::i18n::tr(st.label())).clicked() && st != current {
+            if MenuItem::new(crate::i18n::tr(st.label())).selected(st == current).show(ui).clicked() && st != current {
                 let _ = app.run("photo.setMeta", json!({"copyrightStatus": st.id()}));
             }
         }
@@ -1177,8 +1177,9 @@ fn keyword_set(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             .show_ui(ui, |ui| {
                 for set in sets["sets"].as_array().into_iter().flatten() {
                     let name = set["name"].as_str().unwrap_or_default();
-                    if ui
-                        .selectable_label(name == current, crate::i18n::builtin_label(name, name == lightcraft_engine::cmd::keywords::RECENT))
+                    if MenuItem::new(crate::i18n::builtin_label(name, name == lightcraft_engine::cmd::keywords::RECENT))
+                        .selected(name == current)
+                        .show(ui)
                         .clicked()
                     {
                         let _ = app.run("keyword.useSet", json!({"name": name}));
@@ -1186,8 +1187,7 @@ fn keyword_set(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 }
                 ui.separator();
                 // Edit Set…: the current nine, slot by slot (named, Recent Keywords becomes a set)
-                let edit = ui.button(crate::i18n::tr("Edit Set…"));
-                register(ui.ctx(), "keywordSetMenu:edit", edit.rect);
+                let edit = MenuItem::new(crate::i18n::tr("Edit Set…")).check_slot(true).widget("keywordSetMenu:edit").show(ui);
                 if edit.clicked() {
                     let mut slots: Vec<String> =
                         sets["keywords"].as_array().into_iter().flatten().filter_map(|k| k.as_str().map(str::to_string)).collect();
@@ -1200,7 +1200,7 @@ fn keyword_set(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                         as_new: false,
                     });
                 }
-                if ui.button(crate::i18n::tr("Save Current Keywords as Set…")).clicked() {
+                if MenuItem::new(crate::i18n::tr("Save Current Keywords as Set…")).check_slot(true).show(ui).clicked() {
                     app.ui.dialog = Some(crate::state::Dialog::TextPrompt {
                         title: "Save Keyword Set".into(),
                         hint: "Set name".into(),
@@ -1211,7 +1211,7 @@ fn keyword_set(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     });
                 }
                 if current != lightcraft_engine::cmd::keywords::RECENT
-                    && ui.button(crate::i18n::tr_format!("Delete “{current}”", current = current)).clicked()
+                    && MenuItem::new(&crate::i18n::tr_format!("Delete “{current}”", current = current)).check_slot(true).show(ui).clicked()
                 {
                     let _ = app.run("keyword.deleteSet", json!({"name": current}));
                 }
@@ -1334,20 +1334,20 @@ fn versions(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 "Click to restore · double-click to rename"
             }));
             crate::widgets::context_menu(&resp, |ui| {
-                if ui.button(crate::i18n::tr("Restore")).clicked() {
+                if MenuItem::new(crate::i18n::tr("Restore")).show(ui).clicked() {
                     let _ = app.run("version.restore", json!({"index": i}));
                 }
-                if ui.button(crate::i18n::tr("Update with Current Settings")).clicked() {
+                if MenuItem::new(crate::i18n::tr("Update with Current Settings")).show(ui).clicked() {
                     let _ = app.run("version.update", json!({"index": i}));
                 }
-                if ui.button(crate::i18n::tr("Rename…")).clicked() {
+                if MenuItem::new(crate::i18n::tr("Rename…")).show(ui).clicked() {
                     crate::panels::dialogs::prompt(app, "Rename Version", "Version name", &v.name, "version.rename", json!({"index": i}), "name");
                 }
-                if ui.button(crate::i18n::tr("Set as Before")).clicked() {
+                if MenuItem::new(crate::i18n::tr("Set as Before")).show(ui).clicked() {
                     let _ = app.run("beforeAfter.setBefore", json!({"source": "version", "name": v.name}));
                 }
                 ui.separator();
-                if ui.button(crate::i18n::tr("Delete")).clicked() {
+                if MenuItem::new(crate::i18n::tr("Delete")).show(ui).clicked() {
                     let _ = app.run("version.delete", json!({"index": i}));
                 }
             });
@@ -1423,15 +1423,15 @@ fn activity(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 let _ = app.run("history.restore", json!({"index": i}));
             }
             crate::widgets::context_menu(&resp, |ui| {
-                if ui.button(crate::i18n::tr("Copy History Step Settings to Before")).clicked() {
+                if MenuItem::new(crate::i18n::tr("Copy History Step Settings to Before")).show(ui).clicked() {
                     let _ = app.run("beforeAfter.setBefore", json!({"source": "history", "index": i}));
                 }
-                if ui.button(crate::i18n::tr("Create Version from Step")).clicked() {
+                if MenuItem::new(crate::i18n::tr("Create Version from Step")).show(ui).clicked() {
                     let _ = app.run("history.restore", json!({"index": i}));
                     let _ = app.run("version.create", json!({"name": h.label}));
                 }
                 ui.separator();
-                if ui.button(crate::i18n::tr("Clear History")).clicked() {
+                if MenuItem::new(crate::i18n::tr("Clear History")).show(ui).clicked() {
                     let _ = app.run("history.clear", json!({}));
                 }
             });
