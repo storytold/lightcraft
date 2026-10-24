@@ -2,6 +2,12 @@
 
 ## 2026-10-24
 
+### A change that could only be partly taken back is saved and can be undone
+- When a change made of several steps (such as deleting photos that sit in stacks) failed part-way and LightCraft
+  could not put everything back, what it had changed stayed in the open library but was neither saved nor undoable,
+  so a restart brought back the old state and Undo could not finish the job. Such a change is now saved as it
+  stands, the error says it was only partly taken back, and Undo finishes taking it back.
+
 ### Relative-date filters and smart albums follow the clock
 - A current view or source count using “in the last” rules now refreshes when the session clock moves into a new
   minute, even when no catalog edit occurred. This fixes stale photos remaining in the grid and stale counts for
