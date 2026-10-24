@@ -2164,7 +2164,6 @@
   "Wednesday": "keskiviikko",
   "What's New": "Mitä uutta",
   "When pins show on the photo (Shift+H cycles)": "Milloin nastat näkyvät kuvassa (Shift+H vaihtaa)",
-  "When rated or hovered": "Luokiteltaessa tai osoitettaessa",
   "White Balance": "Valkotasapaino",
   "White Balance Selector": "Valkotasapainon valitsin",
   "White Balance Selector (W)": "Valkotasapainon valitsin (W)",
@@ -2311,5 +2310,12 @@
   "− harder border · + softer border": "− terävämpi reuna · + pehmeämpi reuna",
   "≤  at most": "≤  enintään",
   "≥  at least": "≥  vähintään",
-  "★ Favorites": "★ Suosikit"
+  "★ Favorites": "★ Suosikit",
+  "Right-click ▸ Locate Missing File… to find it again.": "Napsauta hiiren kakkospainikkeella → Paikanna puuttuva tiedosto… löytääksesi sen uudelleen.",
+  "Right-click ▸ Reload from Disk to try again.": "Napsauta hiiren kakkospainikkeella → Lataa levyltä uudelleen yrittääksesi uudelleen.",
+  "Stack — click to collapse (S)": "Pino — napsauta tiivistääksesi (S)",
+  "Stack — click to expand (S)": "Pino — napsauta laajentaaksesi (S)",
+  "Stars on hover": "Tähdet osoitettaessa",
+  "Stars on hover: flags and colour labels always show; the stars and the edited mark appear while a photo is hovered or selected.": "Tähdet osoitettaessa: liput ja värimerkinnät näkyvät aina; tähdet ja muokattu-merkki näkyvät, kun kuvaa osoitetaan tai se on valittuna.",
+  "Virtual copy": "Virtuaalikopio"
 }

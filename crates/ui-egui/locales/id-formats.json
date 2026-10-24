@@ -202,7 +202,6 @@
   "{n} similar photo{} · View ▸ Clear Filters to see all": "{n} foto serupa{:.0} · Tampilan → Hapus filter untuk melihat semua",
   "Moved; {} photo(s) relinked": "Dipindahkan; {} foto ditautkan ulang",
   "{} label (click more labels to show any of them)": "Label {} (klik label lain untuk ikut menampilkan foto berlabel tersebut)",
-  ", {} star{}": ", {} bintang{:.0}",
   ", {} label": ", label {}",
   "Downloads from {host}. Once it has arrived and checked out, LightCraft installs it, {after}.": "Diunduh dari {host}. Setelah selesai diunduh dan lolos pemeriksaan, LightCraft akan menginstalnya, {after}.",
   "{:.1} MB": "{:.1} MB",
@@ -297,5 +296,6 @@
   "{what} merge added at {mp}: its full size, {full}, needs more memory than this computer has": "Hasil penggabungan {what} ditambahkan dengan resolusi {mp}: resolusi penuhnya ({full}) memerlukan memori melebihi kapasitas komputer ini",
   "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "Hasil penggabungan {what} ditambahkan dengan resolusi {mp}, resolusi maksimum untuk panorama (resolusi penuhnya {full})",
   "{skipped} catalog images were not imported because their records in the catalog are incomplete.": "{skipped} catalog images were not imported because their records in the catalog are incomplete.",
-  "Listing folders — folders: {folders}, files: {files}": "Listing folders — folders: {folders}, files: {files}"
+  "Listing folders — folders: {folders}, files: {files}": "Listing folders — folders: {folders}, files: {files}",
+  ", rating {} of 5": ", rating: {} dari 5"
 }

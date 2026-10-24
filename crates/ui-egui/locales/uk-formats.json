@@ -198,7 +198,6 @@
   "{n} similar photo{} · View ▸ Clear Filters to see all": "Подібних фото: {n}{:.0} · Вигляд → Скинути фільтри, щоб побачити всі",
   "Moved; {} photo(s) relinked": "Переміщено; повторно пов’язано фото: {}",
   "{} label (click more labels to show any of them)": "Мітка «{}» (клацніть інші мітки, щоб показати фото з будь-якою з них)",
-  ", {} star{}": ", зірок: {}{:.0}",
   ", {} label": ", мітка: {}",
   "Downloads from {host}. Once it has arrived and checked out, LightCraft installs it, {after}.": "Завантажується з {host}. Після отримання й перевірки LightCraft установлює модель, {after}.",
   "{:.1} MB": "{:.1} МБ",
@@ -297,5 +296,6 @@
   "Move {n} photo{} to “{}”": "Перемістити до «{1}» фото: {n}{0:.0}",
   "Move {n} photo{} to “{}”?": "Перемістити до «{1}» фото: {n}{0:.0}?",
   "Listing folders — folders: {folders}, files: {files}": "Перегляд тек — тек: {folders}, файлів: {files}",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "До «{1}» переміщено фото: {n}{0:.0}. Редагування → Скасувати поверне їх."
+  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "До «{1}» переміщено фото: {n}{0:.0}. Редагування → Скасувати поверне їх.",
+  ", rating {} of 5": ", оцінка: {} з 5"
 }

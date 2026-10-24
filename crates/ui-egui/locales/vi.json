@@ -1975,7 +1975,6 @@
   "We": "T4",
   "Wednesday": "Thứ Tư",
   "What's New": "Có gì mới",
-  "When rated or hovered": "Khi đã xếp hạng hoặc rê chuột",
   "White Balance": "Cân bằng trắng",
   "White Balance Selector": "Bộ chọn cân bằng trắng",
   "White Balance Selector (W)": "Bộ chọn cân bằng trắng (W)",
@@ -2220,5 +2219,12 @@
   "≥  at least": "≥  tối thiểu",
   "⌘-drag to straighten, ⇧G Guided Upright, a grid while transforming.": "⌘-kéo để chỉnh thẳng, ⇧G Chỉnh thẳng có hướng dẫn, lưới khi biến đổi.",
   "日本語": "日本語",
-  "繁體中文（台灣）": "繁體中文（台灣）"
+  "繁體中文（台灣）": "繁體中文（台灣）",
+  "Right-click ▸ Locate Missing File… to find it again.": "Nhấp chuột phải → Định vị tệp bị thiếu… để tìm lại.",
+  "Right-click ▸ Reload from Disk to try again.": "Nhấp chuột phải → Tải lại từ đĩa để thử lại.",
+  "Stack — click to collapse (S)": "Chồng — nhấp để thu gọn (S)",
+  "Stack — click to expand (S)": "Chồng — nhấp để mở rộng (S)",
+  "Stars on hover": "Sao khi rê chuột",
+  "Stars on hover: flags and colour labels always show; the stars and the edited mark appear while a photo is hovered or selected.": "Sao khi rê chuột: cờ và nhãn màu luôn hiển thị; sao và dấu đã chỉnh sửa xuất hiện khi ảnh được rê chuột qua hoặc được chọn.",
+  "Virtual copy": "Bản sao ảo"
 }

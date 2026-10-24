@@ -14,7 +14,6 @@
   "+{} more": "+{} ещё",
   ", {failed} file{} not readable": ", не читается файлов: {failed}{:.0}",
   ", {} label": ", метка: {}",
-  ", {} star{}": ", звёзд: {}{:.0}",
   "; {kept} already had a location": "; уже имели местоположение: {kept}",
   "; {outside} outside its time range": "; вне временного диапазона трека: {outside}",
   "@{}: {} PRs, {} commits, +{} / −{} lines (Δ {}), +{} / −{} binary assets, {} – {}": "@{}: PR: {}, коммитов: {}, строк: +{} / −{} (Δ {}), бинарных файлов: +{} / −{}, {} – {}",
@@ -297,5 +296,6 @@
   "Move {n} photo{} to “{}”": "Переместить в «{1}» фото: {n}{0:.0}",
   "Move {n} photo{} to “{}”?": "Переместить в «{1}» фото: {n}{0:.0}?",
   "Listing folders — folders: {folders}, files: {files}": "Просмотр папок — папок: {folders}, файлов: {files}",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "В «{1}» перемещено фото: {n}{0:.0}. Правка → Отменить вернёт их."
+  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "В «{1}» перемещено фото: {n}{0:.0}. Правка → Отменить вернёт их.",
+  ", rating {} of 5": ", оценка: {} из 5"
 }

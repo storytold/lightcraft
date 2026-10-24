@@ -1569,7 +1569,8 @@
   "Watermark": "浮水印",
   "Wednesday": "星期三",
   "What's New": "新增功能",
-  "When rated or hovered": "評分或游標停留時",
+  "Stars on hover": "游標停留時顯示星級",
+  "Stars on hover: flags and colour labels always show; the stars and the edited mark appear while a photo is hovered or selected.": "游標停留時顯示星級：旗標和顏色標籤一律顯示；星級和已編輯標記在照片被游標停留或選取時顯示。",
   "White Balance": "白平衡",
   "White Balance Selector": "白平衡選取器",
   "White Balance Selector (W)": "白平衡選取器（W）",
@@ -2143,5 +2144,10 @@
   "Checking the GPU…": "正在檢查 GPU…",
   "CPU": "CPU",
   "A face model uses the GPU only when a check shows it gives the same results faster.": "只有在檢查顯示 GPU 能更快得出相同結果時，臉孔模型才會使用 GPU。",
-  "Checking the GPU for faces": "正在檢查用於臉孔的 GPU"
+  "Checking the GPU for faces": "正在檢查用於臉孔的 GPU",
+  "Stack — click to expand (S)": "堆疊 — 按一下以展開 (S)",
+  "Stack — click to collapse (S)": "堆疊 — 按一下以收合 (S)",
+  "Virtual copy": "虛擬副本",
+  "Right-click ▸ Locate Missing File… to find it again.": "按右鍵 → 尋找遺失的檔案…，即可重新找到它。",
+  "Right-click ▸ Reload from Disk to try again.": "按右鍵 → 從磁碟重新載入，即可重試。"
 }

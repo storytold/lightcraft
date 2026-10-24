@@ -45,7 +45,7 @@ fn filmstrip_stack_badge_expands_and_collapses_the_stack() {
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
     assert!(!h.app.session.visible_cloned().contains(&member), "collapsed: only the top shows");
-    let badge = format!("filmstack:{}", top.0);
+    let badge = format!("film:stack:{}", top.0);
     let r = h.request("ui.clickWidget", json!({"id": badge}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);

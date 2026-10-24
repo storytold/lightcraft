@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use egui::{Align2, Color32, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
-use lightcraft_catalog::{Catalog, ColorLabel, DateRun, Flag, GroupBy, PhotoId, SortKey, StackId};
+use lightcraft_catalog::{Catalog, ColorLabel, DateRun, GroupBy, PhotoId, SortKey, StackId};
 use serde_json::json;
 
 use crate::LightcraftApp;
@@ -265,9 +265,13 @@ impl GridCache {
     }
 }
 
-/// Width / height of a photo's cell: its cropped, oriented shape.
+/// [`photo_aspect`] of photo `id` of the catalog.
 pub(crate) fn shape_of(cat: &Catalog, id: PhotoId) -> f32 {
-    let p = cat.photo(id);
+    photo_aspect(cat.photo(id).map(|p| &**p))
+}
+
+/// Width / height of a photo's cell: its cropped, oriented shape.
+pub(crate) fn photo_aspect(p: Option<&lightcraft_catalog::Photo>) -> f32 {
     let (w, h) = p.map(|p| (p.width.max(1) as f32, p.height.max(1) as f32)).unwrap_or((3.0, 2.0));
     let swap = p.is_some_and(|p| p.develop.orientation.swaps_axes());
     let crop = p.map(|p| p.develop.crop.geometry.rect).unwrap_or(lightcraft_geom::Rect::UNIT);
@@ -417,10 +421,7 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 visible_ids.insert(id);
                 let r = rect.translate(origin.to_vec2());
                 let onscreen = rect.intersects(viewport);
-                cell(app, ui, id, r, square, onscreen, ppp);
-                if let Some((sid, pos)) = stacks.get(&id) {
-                    stack_badge(app, ui, id, *sid, *pos, r, square);
-                }
+                cell(app, ui, id, r, square, onscreen, ppp, stacks.get(&id).copied());
             }
         }
         // date headers (top to bottom); the current group's header sticks to the top while its
@@ -755,7 +756,16 @@ pub(crate) fn skips_the_real_render(embedded_is_final: bool, from_embedded: bool
 /// Rendered thumbnails replacing embedded previews: after everything on screen.
 pub const BACKGROUND_THUMB_PRIORITY: u32 = 3;
 
-fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square: bool, onscreen: bool, ppp: f32) {
+fn cell(
+    app: &mut LightcraftApp,
+    ui: &mut egui::Ui,
+    id: PhotoId,
+    r: Rect,
+    square: bool,
+    onscreen: bool,
+    ppp: f32,
+    stack: Option<(lightcraft_catalog::StackId, usize)>,
+) {
     let t = Tokens::get(ui.ctx());
     let Some(photo) = app.session.catalog.photo(id).cloned() else { return };
     let resp = ui.interact(r, egui::Id::new(("cell", id.0)), Sense::click_and_drag());
@@ -765,7 +775,7 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
     // screen readers: the file, then rating / flag / label
     let mut spoken = photo.file_name.clone();
     if photo.rating > 0 {
-        spoken.push_str(&crate::i18n::tr_format!(", {} star{}", photo.rating, if photo.rating == 1 { "" } else { "s" }));
+        spoken.push_str(&crate::thumb::spoken_rating(photo.rating));
     }
     match photo.flag {
         lightcraft_catalog::Flag::Pick => spoken.push_str(crate::i18n::tr(", picked")),
@@ -788,7 +798,7 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
     // thumbnail
     let size = thumb_px(img_rect.width().max(img_rect.height()), ppp);
     request_thumb(app, id, size, if onscreen { 10 } else { 5 });
-    if let Some(tex) = app.renderer.thumb(id) {
+    let (photo_rect, failure) = if let Some(tex) = app.renderer.thumb(id) {
         let [tw, th] = tex.size;
         // Preserve the decoded preview's ratio when it differs from the catalog dimensions.
         let fit = super::detail::fit_texture_rect(img_rect, [tw, th]);
@@ -798,20 +808,18 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
         } else if selected {
             p.rect_stroke(fit, 0.0, Stroke::new(2.0, Color32::from_gray(170)), StrokeKind::Outside);
         }
+        (fit, None)
     } else {
-        let ph = img_rect.shrink(if square { 20.0 } else { 0.0 });
-        p.rect_filled(ph, 0.0, Color32::from_gray(38));
+        let ph = crate::thumb::placeholder_rect(img_rect, photo_aspect(Some(&*photo)));
+        crate::thumb::paint_placeholder(p, ph);
         // not drawn yet (or unreadable): the selection is still visible
         if active {
             p.rect_stroke(ph, 0.0, Stroke::new(2.0, Color32::WHITE), StrokeKind::Outside);
         } else if selected {
             p.rect_stroke(ph, 0.0, Stroke::new(2.0, Color32::from_gray(170)), StrokeKind::Outside);
         }
-        if app.renderer.failure(Slot::Thumb(id)).is_some() {
-            // unreadable / missing file
-            p.text(ph.center(), Align2::CENTER_CENTER, "!", t.semibold(18.0), t.text_dim);
-        }
-    }
+        (ph, app.renderer.failure(Slot::Thumb(id)).map(str::to_owned))
+    };
     // labels and badges
     if square && app.ui.show_filenames {
         let m = &photo.meta;
@@ -840,74 +848,26 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
         p.rect_filled(br, 2.0, Color32::from_gray(26));
         p.galley(br.min + vec2(4.0, 1.5), g, t.text_label);
     }
-    let show_badges = match app.ui.settings.grid_badges {
-        crate::state::GridBadges::Auto => resp.hovered() || selected || photo.rating > 0 || photo.flag != Flag::None || photo.label.is_some(),
-        crate::state::GridBadges::Always => true,
-        crate::state::GridBadges::Never => false,
+    // Stars on hover: the decision marks (flag, colour label) always show; the stars and the edited
+    // mark only while the photo is hovered or selected, so a mostly rated library stays clean.
+    let engaged = resp.hovered() || selected;
+    let (show_marks, show_extras) = match app.ui.settings.grid_badges {
+        crate::state::GridBadges::Auto => (true, engaged),
+        crate::state::GridBadges::Always => (true, true),
+        crate::state::GridBadges::Never => (false, false),
     };
-    let badge_bar = Rect::from_min_max(pos2(img_rect.left(), img_rect.bottom() - 24.0), img_rect.right_bottom());
-    if !square && photo.label.is_some() {
-        // Justified photos fill the whole cell, so the label shows as a translucent tinted footer
-        // over the photo's bottom edge (opaque, it would hide 24 px of every labelled photo).
-        p.rect_filled(badge_bar, 0.0, crate::theme::label_background(t.cell, photo.label, selected).gamma_multiply(0.7));
-    }
-    if show_badges {
-        let bar = badge_bar;
-        if (resp.hovered() || selected) && (square || photo.label.is_none()) {
-            p.rect_filled(bar, 0.0, Color32::from_black_alpha(120));
-        }
-        let mut x = bar.left() + 6.0;
-        for i in 0..photo.rating {
-            paint(p, Rect::from_min_size(pos2(x + i as f32 * 13.0, bar.center().y - 6.0), vec2(12.0, 12.0)), Icon::StarFilled, t.star);
-        }
-        x += photo.rating as f32 * 13.0 + 4.0;
-        match photo.flag {
-            Flag::Pick => paint(p, Rect::from_min_size(pos2(x, bar.center().y - 7.0), vec2(14.0, 14.0)), Icon::FlagPickFilled, t.pick),
-            Flag::Reject => paint(p, Rect::from_min_size(pos2(x, bar.center().y - 7.0), vec2(14.0, 14.0)), Icon::FlagReject, t.reject),
-            Flag::None => {}
-        }
-        let mut right = bar.right();
-        if photo.is_edited() {
-            paint(p, Rect::from_min_size(pos2(right - 20.0, bar.center().y - 7.0), vec2(14.0, 14.0)), Icon::Sliders, t.text_label);
-            right -= 20.0;
-        }
-        if let Some(l) = photo.label {
-            p.circle(pos2(right - 12.0, bar.center().y), 5.0, label_color(l), Stroke::new(1.0, Color32::from_black_alpha(120)));
-        }
-    }
-    if let Some(name) = &photo.copy_name {
-        // virtual copy: a folded-corner tag at the top right
-        let g = p.layout_no_wrap(name.clone(), t.semibold(10.5), Color32::WHITE);
-        let tr = if square { img_rect.right_top() + vec2(-6.0, 6.0) } else { img_rect.right_top() + vec2(-5.0, 5.0) };
-        let br = Rect::from_min_max(pos2(tr.x - g.size().x - 26.0, tr.y), pos2(tr.x, tr.y + 20.0));
-        p.rect_filled(br, 10.0, Color32::from_black_alpha(165));
-        let c = pos2(br.left() + 13.0, br.center().y);
-        let s = 5.0;
-        p.add(egui::Shape::convex_polygon(
-            vec![c + vec2(-s, -s), c + vec2(s * 0.3, -s), c + vec2(s, -s * 0.3), c + vec2(s, s), c + vec2(-s, s)],
-            Color32::TRANSPARENT,
-            Stroke::new(1.2, Color32::WHITE),
-        ));
-        p.line_segment([c + vec2(s * 0.3, -s), c + vec2(s * 0.3, -s * 0.3)], Stroke::new(1.2, Color32::WHITE));
-        p.line_segment([c + vec2(s * 0.3, -s * 0.3), c + vec2(s, -s * 0.3)], Stroke::new(1.2, Color32::WHITE));
-        p.galley(pos2(br.left() + 22.0, br.center().y - g.size().y / 2.0), g, Color32::WHITE);
-    }
-    if let Some(why) = &photo.preview_only {
-        // a raw shown from its embedded JPEG: a small amber "Preview" pill at the image's bottom
-        // left, above the badge bar (always shown: it changes what editing does)
-        let g = p.layout_no_wrap(crate::i18n::tr("Preview").into(), t.semibold(9.5), Color32::WHITE);
-        let at = pos2(img_rect.left() + 6.0, img_rect.bottom() - 30.0 - 16.0);
-        let br = Rect::from_min_size(at, vec2(g.size().x + 24.0, 16.0));
-        p.rect_filled(br, 8.0, Color32::from_black_alpha(170));
-        paint(p, Rect::from_center_size(pos2(br.left() + 9.0, br.center().y), vec2(12.0, 12.0)), Icon::Info, t.caution);
-        p.galley(pos2(br.left() + 17.0, br.center().y - g.size().y / 2.0), g, Color32::WHITE);
-        register(ui.ctx(), format!("badge:previewOnly:{}", id.0), br);
-        ui.interact(br, egui::Id::new(("preview-only-badge", id.0)), Sense::hover())
-            .on_hover_text(crate::i18n::tr_format!("Preview only — {}", crate::widgets::preview_only_explanation(why)));
-    }
-    if photo.flag == Flag::Reject {
-        p.rect_filled(img_rect, 0.0, Color32::from_black_alpha(110));
-    }
+    let overlay = crate::thumb::Thumb {
+        surface: crate::thumb::Surface::Grid,
+        photo: &photo,
+        rect: photo_rect,
+        stack,
+        marks: show_marks,
+        extras: show_extras,
+        hot: engaged,
+        failure,
+        surround: square,
+    };
+    let badge = crate::thumb::overlay(app, ui, &overlay);
     // interaction
     if let Some(k) = app.ui.keyword_painter.clone() {
         // painting: a click toggles the keyword on this photo
@@ -944,6 +904,10 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
         app.ui.dragging_photos = Some(app.session.selection.ids.iter().map(|p| p.0).collect());
     }
     crate::widgets::context_menu(&resp, |ui| context_menu(app, ui, id));
+    // (the stack badge covers part of the cell: it opens the same menu)
+    if let Some(badge) = badge {
+        crate::widgets::context_menu(&badge, |ui| context_menu(app, ui, id));
+    }
 }
 
 /// The header of a Local folder view: the path as a breadcrumb (each part opens that folder),
@@ -1162,38 +1126,6 @@ pub fn label_items(app: &mut LightcraftApp, ui: &mut egui::Ui, current: Option<C
 /// A label as the `label` parameter of `photo.label` / `folder.label` names it.
 pub fn label_param(l: Option<ColorLabel>) -> String {
     l.map_or_else(|| "none".to_string(), |l| format!("{l:?}").to_lowercase())
-}
-
-/// Stack badge at the cell's top-left: the photo count on a collapsed stack's top, `i/n` on the
-/// members of an expanded stack. Clicking or double-clicking it expands/collapses the stack.
-pub fn stack_badge(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, sid: lightcraft_catalog::StackId, pos: usize, r: Rect, square: bool) {
-    let t = Tokens::get(ui.ctx());
-    let Some(st) = app.session.catalog.stack(sid) else { return };
-    let n = st.photos.len();
-    let collapsed = st.collapsed;
-    let text = if collapsed { n.to_string() } else { format!("{}/{n}", pos + 1) };
-    let p = ui.painter();
-    let g = p.layout_no_wrap(text, t.semibold(11.0), Color32::WHITE);
-    let origin = if square { r.min + vec2(10.0, 26.0) } else { r.min + vec2(5.0, 5.0) };
-    let br = Rect::from_min_size(origin, vec2(g.size().x + 30.0, 20.0));
-    let resp = ui.interact(br, egui::Id::new(("stack-badge", id.0)), Sense::click()).on_hover_text(if collapsed {
-        "Stack — click to expand (S)"
-    } else {
-        "Stack — click to collapse (S)"
-    });
-    crate::widgets::announce(&resp, crate::i18n::tr(if collapsed { "Expand Stack" } else { "Collapse Stack" }));
-    register(ui.ctx(), format!("stack:{}", id.0), br);
-    let fill = if resp.hovered() { Color32::from_black_alpha(220) } else { Color32::from_black_alpha(165) };
-    p.rect_filled(br, 10.0, fill);
-    if pos == 0 && !collapsed {
-        p.rect_stroke(br, 10.0, Stroke::new(1.0, t.accent), StrokeKind::Inside);
-    }
-    paint(p, Rect::from_min_size(br.min + vec2(6.0, 3.0), vec2(14.0, 14.0)), Icon::Stack, Color32::WHITE);
-    p.galley(pos2(br.min.x + 24.0, br.center().y - g.size().y / 2.0), g, Color32::WHITE);
-    // a double-click (Lightroom's way) toggles once: its second click would undo the first
-    if resp.clicked() && !resp.double_clicked() {
-        toggle_stack(app, ui.ctx(), id);
-    }
 }
 
 /// A click on a stack badge (grid or filmstrip): expand / collapse that photo's stack, selected or
