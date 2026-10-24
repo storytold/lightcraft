@@ -106,8 +106,10 @@ pub struct FolderChanges {
     pub path: String,
     /// Files to import.
     pub new: Vec<ImportCandidate>,
-    /// Files whose content the library already has (under another path).
-    pub duplicates: usize,
+    /// Files whose content a photo already has (in the library under another path, or a file found
+    /// earlier in this scan), each with that photo when it is in the library: imported only with
+    /// [`SyncChoice::import_duplicates`].
+    pub duplicates: Vec<ImportCandidate>,
     /// Supported files that couldn't be read.
     pub unreadable: Vec<ImportCandidate>,
     /// Photos whose file is gone.
@@ -147,16 +149,20 @@ pub struct FolderMoved {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SyncChoice {
     pub import_new: bool,
+    /// With `import_new`, the files whose content a photo already has come in too, as photos of
+    /// their own ([`crate::import::ImportDefaults::import_duplicates`]).
+    pub import_duplicates: bool,
     pub relink_moved: bool,
     pub remove_missing: bool,
     pub read_metadata: bool,
 }
 
 impl Default for SyncChoice {
-    /// Lightroom Classic's defaults: import the new files, leave the rest to be looked at; and
-    /// photos whose file moved follow it (nothing is lost, and undo puts them back).
+    /// Lightroom Classic's defaults: import the new files (leaving out those whose content the
+    /// library already has), leave the rest to be looked at; and photos whose file moved follow it
+    /// (nothing is lost, and undo puts them back).
     fn default() -> Self {
-        SyncChoice { import_new: true, relink_moved: true, remove_missing: false, read_metadata: false }
+        SyncChoice { import_new: true, import_duplicates: false, relink_moved: true, remove_missing: false, read_metadata: false }
     }
 }
 
@@ -285,7 +291,7 @@ pub fn scan_with(input: SyncInput, progress: &SyncProgress) -> FolderChanges {
             // a file only looked at in Local is not in the library yet: it is new
             (Some("path"), _) if browsed => changes.new.push(ImportCandidate { duplicate: None, existing: None, ..c }),
             (Some("path"), _) => {}
-            (Some(_), _) => changes.duplicates += 1,
+            (Some(_), _) => changes.duplicates.push(c),
             (None, Some(_)) => changes.unreadable.push(c),
             (None, None) => changes.new.push(c),
         }
@@ -315,8 +321,35 @@ fn same_for_sync(a: &Arc<Photo>, b: &Arc<Photo>) -> bool {
 }
 
 /// The content a hash stands for: a Duplicate's own hash is the original's plus `:dup<id>`.
-fn base_hash(h: &str) -> &str {
+pub(crate) fn base_hash(h: &str) -> &str {
     h.split(':').next().unwrap_or(h)
+}
+
+impl FolderChanges {
+    /// Of the files the scan found whose content a photo already has, the ones "Don't import files
+    /// already in the library" unticked brings in: all but copies of a photo in Recently Deleted (an
+    /// import would restore that photo, wherever its folder is, instead of bringing the copy in
+    /// here; restoring it is for Recently Deleted to do). Asked by each file's own content, so a
+    /// trashed photo that shares its key with a live one is found too. One pass over the library.
+    pub fn importable_duplicates(&self, library: &Catalog) -> Vec<&ImportCandidate> {
+        let hash_of = |c: &ImportCandidate| self.probes.get(&c.path).and_then(|p| p.content_hash.as_deref());
+        let wanted: std::collections::HashSet<&str> = self.duplicates.iter().filter_map(hash_of).collect();
+        let mut trashed = std::collections::HashSet::new();
+        if !wanted.is_empty() {
+            for p in library.photos().filter(|p| p.deleted) {
+                if let Some(h) = p.content_hash.as_deref().map(base_hash)
+                    && wanted.contains(h)
+                {
+                    trashed.insert(h.to_string());
+                }
+            }
+        }
+        self.duplicates
+            .iter()
+            .filter(|c| !c.existing.and_then(|id| library.photo(PhotoId(id))).is_some_and(|p| p.deleted))
+            .filter(|c| !hash_of(c).is_some_and(|h| trashed.contains(h)))
+            .collect()
+    }
 }
 
 /// Missing photos' files found elsewhere in the folder (old path → new path): the file was
@@ -691,12 +724,19 @@ impl SyncJob {
         if changes.offline {
             return Err(not_there(&changes.path));
         }
+        let importing: Vec<String> = if choice.import_duplicates {
+            changes.importable_duplicates(&s.catalog).into_iter().map(|c| c.path.clone()).collect()
+        } else {
+            Vec::new()
+        };
         let FolderChanges { new, missing, metadata, moved, probes, .. } = changes;
-        let opts = ImportOptions { mode: ImportMode::Add, ..Default::default() };
-        let import = if choice.import_new && !new.is_empty() {
+        let opts = ImportOptions { mode: ImportMode::Add, import_duplicates: choice.import_duplicates, ..Default::default() };
+        // (the new files first: of two copies of one new picture, the first found keeps the content's key)
+        let files: Vec<String> = new.into_iter().map(|c| c.path).chain(importing).collect();
+        let import = if choice.import_new && !files.is_empty() {
             s.import_probes = probes;
             let job = crate::import::ImportJob::new(s, opts.clone())?;
-            Some((job, new.into_iter().map(|c| c.path).collect()))
+            Some((job, files))
         } else {
             None
         };
