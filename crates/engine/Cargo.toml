@@ -46,8 +46,8 @@ lightcraft-segment = { workspace = true, optional = true }
 # model downloads run natively only (the web build fetches no models)
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 lightcraft-fetch = { workspace = true }
-# capture-time parsing for face recognition (native only)
-chrono = { workspace = true }
+# capture-time parsing for face recognition; local time for the Trash's DeletionDate (native only)
+chrono = { workspace = true, features = ["clock"] }
 
 [features]
 # AI masks with SAM 3 (Object / Describe). Off for the web and CLI builds.
@@ -64,3 +64,14 @@ jxl-oxide = { workspace = true }
 lightcraft-heif = { workspace = true, features = ["testdata"] }
 libc = { workspace = true }
 lightcraft-tiff = { workspace = true }
+
+# the user's id, for the Trash a disk keeps (safe calls: this crate forbids `unsafe`)
+[target.'cfg(unix)'.dependencies]
+rustix = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# the Finder's Trash (photo.trashFiles): NSFileManager says where the file went, so undo can put it back,
+# and whether a folder's disk has a Trash (NSPathUtilities: the Trash directory search); objc2 for the
+# autorelease pool those calls need on a worker thread
+objc2 = { workspace = true }
+objc2-foundation = { workspace = true, features = ["NSFileManager", "NSURL", "NSString", "NSError", "NSPathUtilities"] }
