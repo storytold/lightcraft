@@ -148,12 +148,48 @@ fn unloaded_thumbnails_show_their_selection() {
             continue;
         }
         let id = w.trim_start_matches("thumb:").parse::<u64>().unwrap();
-        let want = if id == active.0 { egui::Color32::WHITE } else { egui::Color32::from_gray(170) };
+        let t = crate::theme::Tokens::get(&h.view.ctx);
+        let want = if id == active.0 { t.cell_active_border } else { t.cell_selected_border };
         let px = img[((r.min.x - 1.0) as usize, r.center().y as usize)];
         assert_eq!(px, want, "photo {id}");
         checked += 1;
     }
     assert!(checked >= 3, "checked {checked}");
+}
+
+/// The selection border stands out from the selected cell in every theme (issue #2382): white
+/// was invisible on the light themes' pale cells.
+#[test]
+fn the_selection_border_is_visible_in_every_theme() {
+    let mut h = grid(ViewMode::PhotoGrid);
+    h.request("engine.execute", json!({"command": "library.selectAll"}), T);
+    for kind in crate::theme::ThemeKind::ALL {
+        h.app.run("view.theme", json!({"theme": kind.id()})).unwrap();
+        let img = h.snapshot(SETTLE);
+        let t = crate::theme::Tokens::get(&h.view.ctx);
+        assert_eq!(t.cell_selected, crate::theme::Tokens::for_kind(kind).cell_selected, "{kind:?} is shown");
+        let active = h.app.session.selection.active.expect("active");
+        let canvas = h.app.canvas_rect.expect("grid drawn");
+        let (mut active_seen, mut other_seen) = (false, false);
+        for (w, r) in h.app.widgets.iter().filter(|(w, _)| w.starts_with("thumb:")) {
+            if !canvas.shrink(4.0).contains_rect(*r) {
+                continue;
+            }
+            let id = w.trim_start_matches("thumb:").parse::<u64>().unwrap();
+            // the border just above the thumbnail
+            let px = img[(r.center().x as usize, (r.min.y - 1.0) as usize)];
+            let c = crate::button::contrast(px, t.cell_selected);
+            assert!(c >= 3.0, "{kind:?}: photo {id}'s border {px:?} has contrast {c:.2} on {:?}", t.cell_selected);
+            if id == active.0 {
+                active_seen = true;
+                assert_eq!(px, t.cell_active_border, "{kind:?}");
+            } else {
+                other_seen = true;
+                assert_eq!(px, t.cell_selected_border, "{kind:?}");
+            }
+        }
+        assert!(active_seen && other_seen, "{kind:?}");
+    }
 }
 
 /// A folder of unedited raws on a slow share: the grid must not decode every raw to draw a 512 px
