@@ -1,6 +1,7 @@
 //! Slideshow playback: the settings of Lightroom Classic's Playback panel and the timeline that
-//! plays the photos in view (durations, fades, random order, repeat, pause, stepping), between an
-//! optional intro and ending screen (the Titles panel, [`crate::slide_title`]).
+//! plays the photos in view (durations, fades, random order, repeat, pause, stepping, manual
+//! advance), between an optional intro and ending screen (the Titles panel,
+//! [`crate::slide_title`]).
 //!
 //! No UI here: [`Playback`] is a pure state machine driven with injected times (seconds on any
 //! monotonic clock), so the desktop app, a later Slideshow module and tests run the same timeline.
@@ -39,11 +40,22 @@ pub struct PlaybackSettings {
     pub repeat: bool,
     /// Render the next slides before they are due.
     pub prepare_previews: bool,
+    /// Manual slideshow: a slide stays up until ← / → (or the controls) change it; the slide
+    /// duration is not used for playback then.
+    pub manual: bool,
 }
 
 impl Default for PlaybackSettings {
     fn default() -> Self {
-        PlaybackSettings { slide_duration: 4.0, fade_duration: 1.0, fade_color: None, random_order: false, repeat: true, prepare_previews: true }
+        PlaybackSettings {
+            slide_duration: 4.0,
+            fade_duration: 1.0,
+            fade_color: None,
+            random_order: false,
+            repeat: true,
+            prepare_previews: true,
+            manual: false,
+        }
     }
 }
 
@@ -66,6 +78,7 @@ impl PlaybackSettings {
             "randomOrder": self.random_order,
             "repeat": self.repeat,
             "preparePreviews": self.prepare_previews,
+            "manual": self.manual,
         })
     }
 
@@ -82,8 +95,11 @@ impl PlaybackSettings {
                 "randomOrder" => s.random_order = boolean(k, v)?,
                 "repeat" => s.repeat = boolean(k, v)?,
                 "preparePreviews" => s.prepare_previews = boolean(k, v)?,
+                "manual" => s.manual = boolean(k, v)?,
                 other => {
-                    return Err(format!("unknown setting `{other}` (slideDuration, fadeDuration, fadeColor, randomOrder, repeat, preparePreviews)"));
+                    return Err(format!(
+                        "unknown setting `{other}` (slideDuration, fadeDuration, fadeColor, randomOrder, repeat, preparePreviews, manual)"
+                    ));
                 }
             }
         }
@@ -432,8 +448,12 @@ impl Playback {
         self.started + self.duration(self.current())
     }
 
-    /// Seconds until the next slide is due (as of `now`; frozen while paused).
+    /// Seconds until the next slide is due (as of `now`; frozen while paused; infinite in a
+    /// manual slideshow, where no slide is ever due).
     pub fn remaining(&self, now: f64) -> f64 {
+        if self.settings.manual {
+            return f64::INFINITY;
+        }
         (self.due() - self.clock(now)).max(0.0)
     }
 
@@ -490,7 +510,8 @@ impl Playback {
             self.started = now;
             return Tick::Idle;
         }
-        if now < self.due() {
+        // a manual slideshow moves only with `step` (← / →)
+        if self.settings.manual || now < self.due() {
             return Tick::Idle;
         }
         let Some(next) = self.upcoming(1).first().copied() else {
@@ -775,6 +796,30 @@ mod tests {
         p.step(i32::MIN, f64::NAN);
         let _ = p.frame(f64::NAN);
         assert!(Playback::new(vec![], None, d, 0, 0.0).is_none());
+    }
+
+    #[test]
+    fn a_manual_slideshow_moves_only_with_the_arrows() {
+        let s = PlaybackSettings { manual: true, repeat: false, ..settings(1.0, 0.5) };
+        let mut p = titled(3, s, Some(1.0), Some(1.0));
+        assert_eq!(p.tick(1000.0, all_ready), Tick::Idle, "the intro stays up past its duration");
+        assert_eq!(p.current(), Item::INTRO);
+        assert_eq!(p.remaining(1000.0), f64::INFINITY, "nothing is ever due");
+        assert_eq!(p.upcoming(1), vec![ph(1)], "the next slide is still prepared for →");
+        assert_eq!(p.step(1, 1000.0), Tick::Advanced(ph(1)));
+        assert_eq!(p.tick(5000.0, all_ready), Tick::Idle);
+        assert_eq!(p.current(), ph(1), "a photo stays up too");
+        assert_eq!(p.step(-1, 5000.0), Tick::Advanced(Item::INTRO), "← goes back");
+        assert_eq!(p.step(4, 5000.0), Tick::Advanced(Item::ENDING));
+        assert_eq!(p.tick(9000.0, all_ready), Tick::Idle, "the ending stays up until → ends the show");
+        assert_eq!(p.step(1, 9000.0), Tick::Ended);
+        // the setting round-trips and is checked like the others
+        let d = PlaybackSettings::default();
+        assert!(!d.manual, "off by default");
+        let m = d.merged(&json!({"manual": true})).unwrap();
+        assert!(m.manual);
+        assert_eq!(m.to_json()["manual"], true);
+        assert!(d.merged(&json!({"manual": "yes"})).is_err());
     }
 
     #[test]

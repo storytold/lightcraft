@@ -151,6 +151,46 @@ fn arrows_cut_and_repeat_off_ends_after_the_last_slide() {
 }
 
 #[test]
+fn a_manual_slideshow_waits_for_the_arrow_keys() {
+    let mut h = grid();
+    let photos = h.app.session.visible_cloned();
+    // the library setting, as the Settings checkbox sets it
+    run(&mut h, "slideshow.playback", json!({"manual": true}));
+    let r = run(&mut h, "view.slideshow", json!({"interval": 0.5, "fadeDuration": 0}));
+    assert_eq!(r["settings"]["manual"], true, "{r}");
+    // once the first two slides are rendered, and far longer than the slide duration: the first
+    // photo stays up
+    assert!(h.step_until(SETTLE, |h| has_slide(h, photos[0]) && has_slide(h, photos[1])), "the slides are rendered");
+    for _ in 0..120 {
+        h.step();
+    }
+    assert_eq!(photo_up(&h), photos[0], "nothing advances on its own");
+    let r = h.request("ui.key", json!({"key": "right"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(photo_up(&h), photos[1]);
+    assert_eq!(h.app.session.active(), Some(photos[1]), "the selection follows");
+    let s = run(&mut h, "slideshow.togglePause", json!({}));
+    assert_eq!((s["manual"].clone(), s["remaining"].clone()), (json!(true), json!(null)), "{s}");
+    run(&mut h, "slideshow.end", json!({}));
+    assert!(h.app.ui.slideshow.is_none());
+    // off again: it advances by itself
+    run(&mut h, "slideshow.playback", json!({"manual": false}));
+    run(&mut h, "view.slideshow", json!({"interval": 0.5, "fadeDuration": 0}));
+    let up = photo_up(&h);
+    assert!(h.step_until(SETTLE, |h| h.app.ui.slideshow.as_ref().is_some_and(|r| r.play.current_photo() != Some(up))));
+    run(&mut h, "slideshow.end", json!({}));
+    // the Settings checkbox turns it on
+    run(&mut h, "view.slideshowOptions", json!({}));
+    h.step();
+    reveal(&mut h, "check:settings.slideshowManual");
+    let r = h.request("ui.clickWidget", json!({"id": "check:settings.slideshowManual"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    assert!(h.app.session.slideshow.manual, "the checkbox goes through slideshow.playback");
+    h.settle(SETTLE);
+}
+
+#[test]
 fn random_order_starts_at_the_selection_and_is_fixed_by_the_seed() {
     let order = |seed: u64| {
         let mut h = grid();
