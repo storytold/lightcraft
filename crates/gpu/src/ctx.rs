@@ -15,6 +15,11 @@ struct Module {
 
 const MODULES: &[Module] = &[
     Module {
+        src: include_str!("wgsl/reduction.wgsl"),
+        bindings: &[("pixels", false, "u32"), ("partials", true, "u32"), ("summary", true, "u32")],
+        entries: &["summary_partial", "summary_reduce"],
+    },
+    Module {
         src: include_str!("wgsl/finish.wgsl"),
         bindings: &[
             ("img", false, "f32"),
@@ -572,22 +577,50 @@ impl Gpu {
     /// A failed readback (device lost, map error, timeout) fails the render ([`FailKind::Fatal`])
     /// and returns zeros, which the caller discards; after an earlier failure in the same render
     /// nothing more is submitted.
-    pub fn finish_and_read<T: bytemuck::Pod>(&self, mut enc: wgpu::CommandEncoder, src: &Buf, len: usize) -> Vec<T> {
-        assert!(len <= src.len, "readback of {len} values from a buffer of {}", src.len);
-        let zeros = || vec![<T as bytemuck::Zeroable>::zeroed(); len];
+    pub fn finish_and_read<T: bytemuck::Pod>(&self, enc: wgpu::CommandEncoder, src: &Buf, len: usize) -> Vec<T> {
+        self.finish_and_read_with_tail(enc, src, len, None).0
+    }
+
+    /// Read pixels and an optional compact summary with a single submission, map and wait.
+    /// A summary-only consumer can instead read its buffer through `finish_and_read`.
+    pub fn finish_and_read_with_tail<T: bytemuck::Pod>(
+        &self,
+        mut enc: wgpu::CommandEncoder,
+        src: &Buf,
+        len: usize,
+        tail: Option<&Buf>,
+    ) -> (Vec<T>, Vec<u32>) {
+        // `len` counts 32-bit words, not T elements: RGB f32 uses three words per element.
+        // Reject a malformed internal request before slicing or recording a GPU copy.
+        let size = len.checked_mul(4);
+        let tail_size = tail.map_or(Some(0), |b| b.len.checked_mul(4));
+        let total = size.zip(tail_size).and_then(|(a, b)| a.checked_add(b));
+        let Some((size, total)) = size.zip(total).filter(|(size, total)| {
+            len <= src.len
+                && size.checked_rem(std::mem::size_of::<T>()) == Some(0)
+                && *total > 0
+                && (*total as u64) <= self.device.limits().max_buffer_size
+        }) else {
+            fail(FailKind::Fatal, "invalid readback size or element type".into());
+            return (Vec::new(), Vec::new());
+        };
+        let zeros = || (vec![<T as bytemuck::Zeroable>::zeroed(); size / std::mem::size_of::<T>()], vec![0; tail.map_or(0, |b| b.len)]);
         if failed() {
             return zeros();
         }
-        let size = (len * 4) as u64;
+        let size = size as u64;
         let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("readback"),
-            size: size.max(4),
+            size: total as u64,
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         enc.copy_buffer_to_buffer(src.raw(), 0, &staging, 0, size);
+        if let Some(tail) = tail {
+            enc.copy_buffer_to_buffer(tail.raw(), 0, &staging, size, (tail.len * 4) as u64);
+        }
         self.submit([enc.finish()]);
-        let slice = staging.slice(..size);
+        let slice = staging.slice(..total as u64);
         let (tx, rx) = std::sync::mpsc::channel();
         slice.map_async(wgpu::MapMode::Read, move |r| {
             let _ = tx.send(r);
@@ -612,7 +645,13 @@ impl Gpu {
             Ok(d) => d,
             Err(e) => return failed(format!("{e:?}")),
         };
-        let out: Vec<T> = bytemuck::cast_slice(&data).to_vec();
+        let Some((image, tail)) = data.get(..size as usize).zip(data.get(size as usize..)) else {
+            return failed("truncated mapped buffer".into());
+        };
+        let (Ok(image), Ok(tail)) = (bytemuck::try_cast_slice(image), bytemuck::try_cast_slice(tail)) else {
+            return failed("invalid mapped buffer alignment".into());
+        };
+        let out = (image.to_vec(), tail.to_vec());
         drop(data);
         staging.unmap();
         out

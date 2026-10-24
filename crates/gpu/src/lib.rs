@@ -42,6 +42,8 @@ pub mod nn;
 #[cfg(not(target_arch = "wasm32"))]
 mod params;
 #[cfg(not(target_arch = "wasm32"))]
+mod reduction;
+#[cfg(not(target_arch = "wasm32"))]
 mod render;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -142,6 +144,8 @@ pub enum Fault {
     /// The per-pixel stage's work never runs (what a driver that silently drops or resets a
     /// submission looks like: the readback holds no image).
     DropWork,
+    /// The compact histogram/validation readback contains no completed reduction.
+    DropSummary,
     /// A storage-buffer limit of this many bytes for this render.
     Limit(u64),
 }

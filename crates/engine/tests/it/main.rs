@@ -4,4 +4,5 @@
 mod denoise_cpu;
 #[cfg(feature = "denoise")]
 mod denoise_real;
+mod gpu_histogram_raw;
 mod preview_read;

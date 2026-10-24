@@ -73,6 +73,11 @@ fn diff(a: &Rgba8, b: &Rgba8) -> (f64, u8, f64) {
 fn check(name: &str, src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest) -> (f64, u8) {
     let cpu = render(src, info, s, req).image;
     let gpu = lightcraft_gpu::render(src, info, s, req, None).expect("gpu render");
+    if req.overlay == lightcraft_pipeline::Overlay::None {
+        // #2783: exact histogram of the GPU's own pixels, including windows expanded for spots
+        // then cut back. CPU/GPU pixel rounding may move a bin, so compare the same pixels.
+        assert_eq!(gpu.histogram, lightcraft_raster::Histogram::of_srgb8(&gpu.image), "{name}: GPU histogram");
+    }
     let (mean, max, over) = diff(&cpu, &gpu.image);
     eprintln!("{name:<28} {}x{}  mean {mean:.4}  max {max}  >1: {:.4}%", cpu.width, cpu.height, over * 100.0);
     assert!(mean < MEAN_LSB && max <= MAX_LSB, "{name}: mean {mean:.4} LSB, max {max} LSB");

@@ -107,6 +107,14 @@ fn failed_gpu_renders_fall_back_with_a_reason() {
     lightcraft_gpu::reset_failures();
     ok("after dropped work");
 
+    // A missing reduction must not be mistaken for a valid all-black histogram.
+    lightcraft_gpu::inject_fault(Fault::DropSummary);
+    let why = failed("dropped summary");
+    assert!(why.contains("invalid GPU result summary"), "{why}");
+    assert!(!lightcraft_gpu::available());
+    lightcraft_gpu::reset_failures();
+    ok("after dropped summary");
+
     // a black photo is still rendered (on the CPU, to be sure)
     let black = Arc::new(lightcraft_raster::Rgb32f::from_fn(256, 256, |_, _| [0.0; 3]));
     let s0 = DevelopSettings::default();
