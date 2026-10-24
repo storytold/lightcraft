@@ -649,15 +649,71 @@ impl Shared {
     }
 }
 
+/// Workspaces not in use, and how many exist (free or with a tile in flight).
+struct Slots<T> {
+    free: Vec<T>,
+    made: usize,
+}
+
+/// Up to `cap` workspaces shared by the threads that run tiles. The free list and the count share one lock, so a caller
+/// that finds none free and waits cannot miss one being given back or forgotten in between (issue #2577).
+struct Workspaces<T> {
+    slots: Mutex<Slots<T>>,
+    wake: Condvar,
+    cap: usize,
+}
+
+impl<T> Workspaces<T> {
+    fn new(first: T, cap: usize) -> Self {
+        Workspaces { slots: Mutex::new(Slots { free: vec![first], made: 1 }), wake: Condvar::new(), cap }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Slots<T>> {
+        self.slots.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// A free workspace, a new one from `make` when fewer than `cap` exist, else wait for one to come back or be
+    /// forgotten.
+    fn take(&self, make: impl FnOnce() -> Result<T, Error>) -> Result<T, Error> {
+        let mut s = self.lock();
+        loop {
+            if let Some(w) = s.free.pop() {
+                return Ok(w);
+            }
+            if s.made < self.cap {
+                s.made += 1;
+                drop(s);
+                let w = make();
+                if w.is_err() {
+                    self.forget();
+                }
+                return w;
+            }
+            s = self.wake.wait(s).unwrap_or_else(|e| e.into_inner());
+        }
+    }
+
+    fn give(&self, w: T) {
+        self.lock().free.push(w);
+        self.wake.notify_one();
+    }
+
+    /// One workspace fewer exists: a waiting caller may make another.
+    fn forget(&self) {
+        let mut s = self.lock();
+        s.made = s.made.saturating_sub(1);
+        drop(s);
+        self.wake.notify_one();
+    }
+}
+
 /// A network on the GPU for one tile size. Cheap to share between threads: each call takes a free workspace.
 pub struct NetRunner {
     shared: Shared,
     tile: usize,
     in_channels: usize,
-    free: Mutex<Vec<Workspace>>,
-    /// Workspaces made so far (they are made when a call finds none free, up to [`WORKSPACES`]).
-    made: Mutex<usize>,
-    wake: Condvar,
+    /// Workspaces are made when a call finds none free, up to [`WORKSPACES`].
+    workspaces: Workspaces<Workspace>,
     bytes: u64,
 }
 
@@ -708,7 +764,7 @@ pub fn runner(net: &Net, tile: usize) -> Result<NetRunner, String> {
     if let Some(e) = errors.into_iter().flatten().next() {
         return Err(format!("{}: the denoise kernels could not be set up ({e})", d.info.name));
     }
-    Ok(NetRunner { shared, tile, in_channels: net.in_channels, free: Mutex::new(vec![first]), made: Mutex::new(1), wake: Condvar::new(), bytes })
+    Ok(NetRunner { shared, tile, in_channels: net.in_channels, workspaces: Workspaces::new(first, WORKSPACES), bytes })
 }
 
 impl NetRunner {
@@ -729,45 +785,30 @@ impl NetRunner {
 
     /// A free workspace, a new one when fewer than [`WORKSPACES`] exist, else wait for one to come back.
     fn take(&self) -> Result<Workspace, Error> {
-        let mut free = self.free.lock().unwrap_or_else(|e| e.into_inner());
-        loop {
-            if let Some(w) = free.pop() {
-                return Ok(w);
+        self.workspaces.take(|| {
+            // a caller woken by the last tiles failing on a lost device makes nothing on it
+            if let Some(why) = broken_reason() {
+                return Err(Error::Runtime(format!("the GPU is not used any more: {why}")));
             }
-            {
-                let mut made = self.made.lock().unwrap_or_else(|e| e.into_inner());
-                if *made < WORKSPACES {
-                    *made += 1;
-                    drop(made);
-                    drop(free);
-                    let d = self.shared.dev;
-                    let scopes =
-                        [d.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory), d.device.push_error_scope(wgpu::ErrorFilter::Validation)];
-                    let w = self.shared.workspace();
-                    let [oom, validation] = scopes;
-                    let (validation, oom) = (pollster::block_on(validation.pop()), pollster::block_on(oom.pop()));
-                    if let Some(e) = oom.or(validation) {
-                        self.forget();
-                        return Err(Error::Runtime(format!("the GPU could not make room for another tile: {e}")));
-                    }
-                    return Ok(w);
-                }
+            let d = self.shared.dev;
+            let scopes = [d.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory), d.device.push_error_scope(wgpu::ErrorFilter::Validation)];
+            let w = self.shared.workspace();
+            let [oom, validation] = scopes;
+            let (validation, oom) = (pollster::block_on(validation.pop()), pollster::block_on(oom.pop()));
+            if let Some(e) = oom.or(validation) {
+                return Err(Error::Runtime(format!("the GPU could not make room for another tile: {e}")));
             }
-            free = self.wake.wait(free).unwrap_or_else(|e| e.into_inner());
-        }
+            Ok(w)
+        })
     }
 
     fn give(&self, w: Workspace) {
-        self.free.lock().unwrap_or_else(|e| e.into_inner()).push(w);
-        self.wake.notify_one();
+        self.workspaces.give(w);
     }
 
     /// A workspace is gone (dropped after a failure): room for a new one, and a waiting caller may make it.
     fn forget(&self) {
-        let mut made = self.made.lock().unwrap_or_else(|e| e.into_inner());
-        *made = made.saturating_sub(1);
-        drop(made);
-        self.wake.notify_one();
+        self.workspaces.forget();
     }
 
     fn execute(&self, w: &Workspace, input: &[f32]) -> Result<Vec<f32>, Error> {
@@ -1113,5 +1154,61 @@ mod tests {
         assert!(plan(&n, 15, u64::MAX).is_err());
         // a buffer limit smaller than the activations
         assert!(plan(&n, 16, 64).is_err());
+    }
+
+    /// Issue #2577: a tile failing between a caller finding every workspace in use and that caller waiting still wakes
+    /// it. The caller holds the lock from its check to its wait, as `Workspaces::take` does, so `forget` waits for it. A
+    /// wait that runs out fails, whatever the count is by then: the wakeup itself has to arrive.
+    #[test]
+    fn a_caller_that_finds_every_workspace_in_use_hears_one_being_forgotten() {
+        let ws = Workspaces::new(0u32, 1);
+        assert_eq!(ws.lock().free.pop(), Some(0));
+        std::thread::scope(|scope| {
+            // where take() is between finding every workspace in use and waiting
+            let mut s = ws.lock();
+            assert!(s.free.is_empty() && s.made == ws.cap);
+            scope.spawn(|| ws.forget());
+            // the tile in flight fails now
+            std::thread::sleep(Duration::from_millis(50));
+            // wait as take() does, and again only after a spurious wakeup that changed nothing
+            loop {
+                let (next, r) = ws.wake.wait_timeout(s, Duration::from_secs(10)).unwrap_or_else(|e| e.into_inner());
+                assert!(!r.timed_out(), "the caller missed the workspace being forgotten");
+                s = next;
+                if s.made != ws.cap {
+                    break;
+                }
+            }
+            assert_eq!(s.made, 0);
+        });
+    }
+
+    #[test]
+    fn take_waits_for_a_workspace_to_come_back_or_be_forgotten() {
+        let ws = std::sync::Arc::new(Workspaces::new(0u32, 1));
+        let fail = || Err(Error::Runtime("no room".into()));
+        assert_eq!(ws.take(fail).unwrap(), 0);
+        // a caller on a thread nobody joins: if its wakeup never comes, the test fails on its timeout instead of hanging
+        let caller = |made: u32| {
+            let (ws, (tx, rx)) = (ws.clone(), std::sync::mpsc::channel());
+            std::thread::spawn(move || tx.send(ws.take(|| Ok(made))));
+            rx
+        };
+        // the only workspace is in flight: a caller waits until it is forgotten, then makes a new one
+        let rx = caller(1);
+        assert!(rx.recv_timeout(Duration::from_millis(50)).is_err(), "took a workspace while none was free");
+        ws.forget();
+        assert_eq!(rx.recv_timeout(Duration::from_secs(10)).unwrap().unwrap(), 1);
+        // or until it comes back, and takes that one
+        let rx = caller(2);
+        assert!(rx.recv_timeout(Duration::from_millis(50)).is_err(), "took a workspace while none was free");
+        ws.give(1);
+        assert_eq!(rx.recv_timeout(Duration::from_secs(10)).unwrap().unwrap(), 1);
+        // a workspace that could not be made leaves room for the next try
+        ws.forget();
+        assert!(ws.take(fail).is_err());
+        assert_eq!(ws.lock().made, 0);
+        assert_eq!(ws.take(|| Ok(3)).unwrap(), 3);
+        assert_eq!(ws.lock().made, 1);
     }
 }
