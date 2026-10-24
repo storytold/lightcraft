@@ -118,6 +118,12 @@
 
 ## 2026-10-18
 
+### ⌘A in a text field selects its text on macOS
+- With a text field focused (a Metadata field, the search box), ⌘A now selects the field's text instead of selecting
+  every photo in the grid, so leaving the field no longer writes its value to all of them. ⌘C, ⌘X, ⌘V, ⌘Z and ⌘⇧Z
+  go to the field the same way, and Edit menu items chosen with the mouse while a field has focus act on the field,
+  as in other Mac apps.
+
 ### Thumbnails of Lightroom HDR and panorama merges in a second
 - Grid and filmstrip thumbnails of DNGs that Lightroom merged (HDR, Panorama, HDR Panorama) now develop from the
   small copies of the raw image Lightroom keeps inside the file (256 to 2048 px), not from the whole merge. A 23836 ×

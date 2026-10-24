@@ -10,7 +10,10 @@
 //!   twice); the others stay on their menu items for display and egui runs them;
 //! - while a text field has keyboard focus, accelerators without ⌘ (`G`, `1`, `Delete`…) and the
 //!   text-editing ones (⌘A/⌘C/⌘V/⌘X/⌘Z) are removed, so typing and text editing work; they come
-//!   back when the field loses focus.
+//!   back when the field loses focus;
+//! - muda can't take an accelerator off a macOS menu item (`set_accelerator(None)` leaves the old
+//!   key on it), so ⌘A/⌘C/⌘V/⌘X/⌘Z still reach the menu bar while a field has focus: their items
+//!   then act on the field ([`to_text_field`]), as Edit menu items do in other Mac apps.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{Receiver, channel};
@@ -276,6 +279,31 @@ fn yields_to_text(sc: &str) -> bool {
     !sc.contains("Cmd") && !sc.contains("Ctrl") || TEXT_EDIT.contains(&sc)
 }
 
+/// Hands a text-editing menu choice (⌘A/⌘C/⌘V/⌘X/⌘Z/⌘⇧Z) to the text field that has focus,
+/// instead of running its command on the photos. Returns whether it did.
+fn to_text_field(ctx: &egui::Context, sc: &str) -> bool {
+    use egui::{Event, Key, Modifiers};
+    if !TEXT_EDIT.contains(&sc) || !ctx.text_edit_focused() {
+        return false;
+    }
+    let cmd = Modifiers::COMMAND | Modifiers::MAC_CMD;
+    let key = |key: Key, modifiers: Modifiers| Event::Key { key, physical_key: Some(key), pressed: true, repeat: false, modifiers };
+    let event = match sc {
+        "Cmd+A" => key(Key::A, cmd),
+        "Cmd+C" => Event::Copy,
+        "Cmd+X" => Event::Cut,
+        "Cmd+Z" => key(Key::Z, cmd),
+        "Cmd+Shift+Z" => key(Key::Z, cmd | Modifiers::SHIFT),
+        // only the host can read the clipboard: it answers with a paste event
+        _ => {
+            ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+            return true;
+        }
+    };
+    ctx.input_mut(|i| i.events.push(event));
+    true
+}
+
 /// Whether AppKit hands this shortcut to the menu bar: only key presses with ⌘ or ⌃, and function
 /// keys. A plain `C` or `⇧P` never reaches it (the window's view takes the key), so egui has to run
 /// those even though their menu item shows the key.
@@ -528,6 +556,9 @@ impl NativeMenu {
                 continue;
             }
             if let Some(it) = self.items.get(&key) {
+                if it.shortcut.as_deref().is_some_and(|sc| to_text_field(ctx, sc)) {
+                    continue;
+                }
                 let (cmd, params) = (it.cmd.clone(), it.params.clone());
                 let _ = lightcraft_ui_egui::menubar::run_item(app, &cmd, params);
             }
@@ -613,6 +644,32 @@ mod tests {
             assert!(seen.insert(structure_of(&bar)), "{language:?} shares another language's menu structure key");
         }
         set_language(Locale::En);
+    }
+
+    /// ⌘A while a Metadata field has focus reaches the menu bar as Edit ▸ Select All: it selects
+    /// the field's text, not every photo (#281). Without a focused field the item runs as before.
+    #[test]
+    fn text_edit_menu_choices_go_to_the_focused_field() {
+        let ctx = egui::Context::default();
+        let id = egui::Id::new("caption");
+        let mut text = String::from("A lake at dawn");
+        let mut pass = |ctx: &egui::Context, before: &dyn Fn(&egui::Context) -> bool| {
+            let mut handled = false;
+            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                handled = before(ui.ctx());
+                ui.add(egui::TextEdit::singleline(&mut text).id(id));
+            });
+            out.textures_delta.clear();
+            handled
+        };
+        assert!(!pass(&ctx, &|ctx| to_text_field(ctx, "Cmd+A")), "no field has focus: the command runs");
+        ctx.memory_mut(|m| m.request_focus(id));
+        pass(&ctx, &|_| false);
+        assert!(!pass(&ctx, &|ctx| to_text_field(ctx, "Cmd+Shift+E")), "not a text-editing key");
+        assert!(pass(&ctx, &|ctx| to_text_field(ctx, "Cmd+A")));
+        let range = egui::text_edit::TextEditState::load(&ctx, id).and_then(|s| s.cursor.char_range()).unwrap();
+        let range = range.as_sorted_char_range();
+        assert_eq!((range.start.0, range.end.0), (0, 14), "the whole text is selected");
     }
 
     #[test]
