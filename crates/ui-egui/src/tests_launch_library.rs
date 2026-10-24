@@ -129,8 +129,8 @@ fn the_list_checks_each_library_and_selects_the_last_one() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Every file under `dir`: relative path → (contents, modification time).
-fn snapshot(dir: &Path) -> std::collections::BTreeMap<PathBuf, (Vec<u8>, std::time::SystemTime)> {
+/// Every file under `dir`: relative path → (contents, length, modification time).
+fn snapshot(dir: &Path) -> std::collections::BTreeMap<PathBuf, (Option<Vec<u8>>, u64, std::time::SystemTime)> {
     let mut out = std::collections::BTreeMap::new();
     let mut todo = vec![dir.to_path_buf()];
     while let Some(d) = todo.pop() {
@@ -140,11 +140,23 @@ fn snapshot(dir: &Path) -> std::collections::BTreeMap<PathBuf, (Vec<u8>, std::ti
             if m.is_dir() {
                 todo.push(p.clone());
             }
-            let bytes = if m.is_file() { std::fs::read(&p).unwrap() } else { Vec::new() };
-            out.insert(p.strip_prefix(dir).unwrap().to_path_buf(), (bytes, m.modified().unwrap()));
+            let (bytes, len) = if m.is_file() { (contents(&p), m.len()) } else { (Some(Vec::new()), 0) };
+            out.insert(p.strip_prefix(dir).unwrap().to_path_buf(), (bytes, len, m.modified().unwrap()));
         }
     }
     out
+}
+
+/// The bytes of the file `p`, or `None` for a lock file that a [`lightcraft_catalog::LibraryLock`]
+/// holds on Windows: there `LockFileEx` locks the file's bytes, and reading them through another
+/// handle fails with os error 33 (`ERROR_LOCK_VIOLATION`). Such a file is compared by its length
+/// and modification time only.
+fn contents(p: &Path) -> Option<Vec<u8>> {
+    match std::fs::read(p) {
+        Ok(bytes) => Some(bytes),
+        Err(e) if cfg!(windows) && e.raw_os_error() == Some(33) && p.file_name().is_some_and(|n| n == lightcraft_catalog::lock::LOCK) => None,
+        Err(e) => panic!("{}: {e}", p.display()),
+    }
 }
 
 /// Listing the recent libraries (and drawing the window) writes nothing into any of them: no
