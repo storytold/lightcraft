@@ -362,8 +362,8 @@ fn ui_commands_2(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
                 (Ok(follow), Ok(on)) => (follow, on),
                 (Err(e), _) | (_, Err(e)) => return Some(Err(e)),
             };
-            // (where the host has no system setting to read, following would turn off a choice made
-            // for nothing, and report a system that is not there)
+            // (where the host has no system setting to read, or its reader has not answered, following
+            // would turn off a choice made for nothing, and report a system that is not there)
             if follow == Some(true) && !app.system_reduce_motion_available() {
                 return Some(Err("view.reduceMotion: this system has no Reduce Motion setting to follow".into()));
             }

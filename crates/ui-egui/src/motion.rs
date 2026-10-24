@@ -1,7 +1,7 @@
 //! The one place every animation asks whether motion is reduced (Settings ▸ Interface ▸ Reduce motion).
 //!
 //! The rule: with reduce motion on, things that move or turn stop moving (the click-zoom tween,
-//! egui's own widget easing, scrolling to a photo (it jumps instead of gliding), spinners, the activity bar's sweep); opacity fades that tell a state
+//! egui's own widget easing, scrolling to a photo (it jumps instead of gliding), every spinner including a busy button's, every indeterminate progress bar's sweep); opacity fades that tell a state
 //! change stay (toasts, the slideshow crossfade and its control bar).
 //!
 //! [`LightcraftApp::sync_theme`](crate::LightcraftApp::sync_theme) stores the setting in the egui

@@ -284,11 +284,30 @@ fn the_sync_spinner_is_a_still_dot_when_reduced() {
     let ctx = egui::Context::default();
     let shapes = |reduced: bool| {
         crate::motion::sync(&ctx, reduced);
-        let mut out = ctx.run_ui(Default::default(), crate::motion::spinner);
+        let mut out = ctx.run_ui(Default::default(), |ui| {
+            crate::progress::spinner(ui, 14.0);
+        });
         out.textures_delta.clear();
         out.shapes.iter().map(|s| format!("{:?}", s.shape)).collect::<Vec<_>>()
     };
     let (a, b) = (shapes(true), shapes(true));
     assert_eq!(a, b, "still");
     assert!(a.iter().any(|s| s.contains("Circle")), "a dot is painted: {a:?}");
+}
+
+#[test]
+fn a_busy_button_shows_a_still_dot_when_reduced_and_a_turning_arc_when_not() {
+    let ctx = egui::Context::default();
+    let shapes = |reduced: bool| {
+        crate::motion::sync(&ctx, reduced);
+        let mut out = ctx.run_ui(Default::default(), |ui| {
+            crate::button::Button::new("Working").busy(true).show(ui);
+        });
+        out.textures_delta.clear();
+        out.shapes.iter().map(|s| format!("{:?}", s.shape)).collect::<Vec<_>>()
+    };
+    let still = shapes(true);
+    assert!(still.iter().any(|s| s.contains("Circle")), "a dot is painted: {still:?}");
+    let turning = shapes(false);
+    assert!(!turning.iter().any(|s| s.contains("Circle")), "an arc, not a dot: {turning:?}");
 }
