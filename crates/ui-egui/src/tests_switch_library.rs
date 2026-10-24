@@ -259,6 +259,85 @@ fn library_names_must_work_as_folder_names_on_every_system() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Issue #2718: a library chosen in File ▸ Open Recent Library opens after the window has closed
+/// the menu and said which library is opening; it used to open in the frame of the click, leaving
+/// the menu on screen with no word of what was happening while a large library opened.
+#[test]
+fn open_recent_library_says_it_is_opening_before_it_opens() {
+    let dir = temp("open-recent-message");
+    let second = dir.join("second");
+    // (dropped: its lock on the library goes with it)
+    lightcraft_engine::Session::new().with_fs().open_library(&second, false).unwrap();
+    let mut app = app_in(&dir);
+    app.ui.settings.recent_libraries = vec![second.to_string_lossy().into_owned()];
+    let mut h = crate::headless::Headless::new(app, [1280.0, 800.0], 1.0);
+    h.settle(std::time::Duration::from_secs(10));
+    let t = std::time::Duration::from_secs(5);
+    for (method, id) in [("ui.clickWidget", "menu:File"), ("ui.hoverWidget", "menusub:Open Recent Library")] {
+        let r = h.request(method, json!({"id": id}), t);
+        assert_eq!(r["ok"], true, "{method} {id}: {r}");
+        h.settle(std::time::Duration::from_secs(10));
+    }
+    let find = |h: &crate::headless::Headless, id: &str| h.app.widgets.iter().filter(|(w, _)| w == id).map(|(_, r)| *r).collect::<Vec<_>>();
+    let submenu = find(&h, "menu-level:2")[0];
+    // the submenu lists the recent libraries in order (the open one too)
+    let nth = h.app.ui.settings.recent_libraries.iter().position(|r| std::path::Path::new(r) == second).expect("second is recent");
+    let mut items: Vec<_> = find(&h, "menuitem:app.openLibrary").into_iter().filter(|r| submenu.contains_rect(*r)).collect();
+    items.sort_by(|a, b| a.top().total_cmp(&b.top()));
+    let item = items[nth];
+    let at = item.center();
+    let click = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+    for event in [egui::Event::PointerMoved(at), click(true), click(false)] {
+        h.events.push(event);
+        h.step();
+    }
+    // the frame after the click: the menu is closed, the message is up, the library not opened yet
+    h.step();
+    let open = |h: &crate::headless::Headless| h.app.session.library.as_ref().map(|l| l.dir.clone());
+    assert_eq!(open(&h), Some(dir.join("first")), "the old library is still open");
+    let message = h.app.opening_library.as_ref().map(|p| p.message.clone());
+    assert_eq!(message.as_deref(), Some("Opening library “second”…"));
+    assert!(!find(&h, "libraryOpening").is_empty(), "the message is drawn");
+    assert!(find(&h, "menu-level:1").is_empty() && find(&h, "menu-level:2").is_empty(), "the menu is closed");
+    // the next frame opens it
+    h.step();
+    assert_eq!(
+        open(&h).and_then(|d| d.canonicalize().ok()),
+        second.canonicalize().ok(),
+        "the new library is open: {:?}",
+        h.app.ui.toast.as_ref().map(|t| &t.0)
+    );
+    assert!(h.app.opening_library.is_none());
+    assert!(find(&h, "libraryOpening").is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Issue #2718: a library chosen in the Open Library folder dialog waits for its message too.
+#[test]
+fn a_library_chosen_in_open_library_says_it_is_opening_before_it_opens() {
+    let dir = temp("open-picked-message");
+    let second = dir.join("second");
+    let mut app = app_in(&dir);
+    let answer: std::sync::Arc<std::sync::Mutex<Vec<std::sync::mpsc::Sender<Vec<String>>>>> = Default::default();
+    let a = answer.clone();
+    app.services.picker = Some(Box::new(move |_| {
+        let (tx, rx) = std::sync::mpsc::channel();
+        a.lock().unwrap().push(tx);
+        Ok(rx)
+    }));
+    let mut h = crate::headless::Headless::new(app, [1200.0, 800.0], 1.0);
+    h.settle(std::time::Duration::from_secs(10));
+    assert_eq!(h.app.run("app.openLibrary", json!({})).unwrap(), serde_json::Value::Null);
+    answer.lock().unwrap()[0].send(vec![second.to_string_lossy().into_owned()]).unwrap();
+    let t = std::time::Duration::from_secs(5);
+    assert!(h.step_until(t, |h| h.app.opening_library.is_some()), "the answer waits");
+    assert_eq!(h.app.session.library.as_ref().map(|l| l.dir.clone()), Some(dir.join("first")), "not opened yet");
+    assert!(h.step_until(t, |h| h.app.opening_library.is_none()));
+    let open = h.app.session.library.as_ref().and_then(|l| l.dir.canonicalize().ok());
+    assert_eq!(open, second.canonicalize().ok(), "{:?}", h.app.ui.toast.as_ref().map(|t| &t.0));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// The web build's page title names the active photo (a host embedding the page reads it to know
 /// which document a drop opened), with • while changes are not yet in storage (issue #2397).
 #[test]

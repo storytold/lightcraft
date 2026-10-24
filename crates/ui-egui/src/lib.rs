@@ -23,6 +23,7 @@ pub mod headless;
 pub mod i18n;
 pub mod icons;
 pub mod import;
+pub mod library_open;
 pub mod lightroom_destination;
 pub mod lightroom_import;
 pub mod links;
@@ -419,6 +420,8 @@ pub struct LightcraftApp {
     pub copied: Option<String>,
     /// Native file dialogs up for commands (`pick`): each command runs again when its closes.
     pub(crate) pending_picks: Vec<pick::Pending>,
+    /// A library opened from a menu or the Open Library dialog, waiting for its message to show (#2718).
+    pub opening_library: Option<library_open::Pending>,
     /// Modifiers announced for synthetic input (held from a button down to its release).
     synthetic_mods: egui::Modifiers,
     /// Clear `synthetic_mods` on the next frame.
@@ -558,6 +561,7 @@ impl LightcraftApp {
             drop_pending: vec![],
             copied: None,
             pending_picks: vec![],
+            opening_library: None,
             synthetic_mods: egui::Modifiers::NONE,
             synthetic_mods_release: false,
             styled: false,
@@ -1140,6 +1144,7 @@ impl LightcraftApp {
     pub fn logic(&mut self, ctx: &egui::Context) {
         i18n::set_language(self.ui.language);
         let t0 = now_ms();
+        library_open::run_pending(self, ctx);
         panels::library_problem::logic(self, ctx);
         self.logic_inner(ctx);
         self.perf.logic_ms = now_ms() - t0;
@@ -1590,6 +1595,7 @@ impl LightcraftApp {
             panels::notices::show(self, &ctx);
             panels::dialogs::show(self, &ctx);
             panels::library_problem::show(self, &ctx);
+            library_open::show(self, &ctx);
             panels::toast(self, &ctx);
             drop_overlay::show(self, &ctx);
             self.widgets = widgets::take_registry(&ctx);
@@ -1618,6 +1624,7 @@ impl LightcraftApp {
         panels::left::album_drag_feedback(self, &ctx);
         panels::left::section_drag_feedback(self, &ctx);
         panels::keyword_list::drag_feedback(self, &ctx);
+        library_open::show(self, &ctx);
         panels::toast(self, &ctx);
         drop_overlay::show(self, &ctx);
         self.widgets = widgets::take_registry(&ctx);

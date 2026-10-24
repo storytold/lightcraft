@@ -21,6 +21,11 @@
 
 ## 2026-10-23
 
+### Opening a library says so
+- Choosing a library in File ▸ Open Recent Library, or in the Open Library dialog, now closes the menu and says
+  which library is opening until it is open (issue #2718). A large library used to open with the menu still on
+  screen and no sign of what was happening, so the app looked hung. An error opening it shows as a message.
+
 ### Tab leaves the name field in New Album, New Smart Album and the name prompts
 - In New Album, New Smart Album, Save Metadata Preset and the other dialogs with one name field, the field has the
   keyboard focus when the dialog opens, and Tab now moves on to the check box, Cancel and OK (Shift+Tab goes back).
