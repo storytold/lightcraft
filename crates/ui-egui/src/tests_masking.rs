@@ -1883,6 +1883,114 @@ fn a_fast_brush_stroke_shows_without_gaps_before_the_button_is_released() {
     }
 }
 
+/// What the photo shows along the centreline of [`hold_fast_stroke`]'s stroke at height `y`, away
+/// from the cursor ring at its end.
+fn stroke_centreline(h: &Headless, y: f32) -> Vec<[f32; 3]> {
+    let im = h.paint();
+    let img = h.app.image_rect.expect("the photo is on screen");
+    let ppp = h.pixels_per_point;
+    (1..=74)
+        .map(|i| {
+            let x = 0.17 + (0.85 - 0.17) * i as f32 / 80.0;
+            let (sx, sy) = (((img.left() + x * img.width()) * ppp) as usize, ((img.top() + y * img.height()) * ppp) as usize);
+            let c = im.pixels[sy * im.size[0] + sx];
+            [c.r() as f32, c.g() as f32, c.b() as f32]
+        })
+        .collect()
+}
+
+/// The fast stroke of the #517 test at height `y`, with the button still held: its centreline
+/// before painting and while painting.
+fn hold_fast_stroke(h: &mut Headless, y: f32) -> (Vec<[f32; 3]>, Vec<[f32; 3]>) {
+    pointer(h, json!([{"kind": "move", "x": 0.02, "y": 0.02}]));
+    h.settle(SETTLE);
+    let photo = stroke_centreline(h, y);
+    pointer(
+        h,
+        json!([{"kind": "down", "x": 0.15, "y": y}, {"kind": "drag", "x": 0.17, "y": y}, {"kind": "drag", "x": 0.5, "y": y}, {"kind": "drag", "x": 0.85, "y": y}]),
+    );
+    assert!(matches!(h.app.gesture, Some(crate::panels::detail::Gesture::Brush { .. })), "still painting");
+    (photo, stroke_centreline(h, y))
+}
+
+/// The centreline points (photo, held) where the stroke being painted changes the photo.
+fn tinted(photo: &[[f32; 3]], held: &[[f32; 3]]) -> Vec<([f32; 3], [f32; 3])> {
+    photo.iter().zip(held).filter(|(p, l)| (0..3).any(|k| (p[k] - l[k]).abs() > 6.0)).map(|(p, l)| (*p, *l)).collect()
+}
+
+/// Issue #2549: with the mask overlay hidden (a mask slider hid it, or O) or a colour overlay at
+/// opacity 0, the stroke being painted doesn't tint the photo either, so dodging and burning is
+/// judged on the photo; the effect shows once the stroke is committed. The all-masks overlay still
+/// shows it, as it will the committed stroke.
+#[test]
+fn a_brush_stroke_is_not_tinted_while_the_mask_overlay_is_hidden() {
+    let mut h = detail("panel.masking");
+    h.settle(SETTLE);
+    exec(&mut h, "tool.brush", json!({"new": true}));
+    let r = h.request("ui.set", json!({"brushSize": 0.03, "brushFeather": 50.0, "brushFlow": 100.0}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    // dodging: brighten the new, still empty mask first (which hides the overlay), then paint
+    exec(&mut h, "mask.adjust", json!({"values": {"exposure": 1.0}}));
+    assert!(!h.app.ui.mask_overlay, "a mask slider hides the overlay");
+    let (photo, held) = hold_fast_stroke(&mut h, 0.3);
+    let t = tinted(&photo, &held);
+    assert!(t.is_empty(), "the hidden overlay tints the stroke being painted: {} of 74 points, first {:?}", t.len(), t.first());
+    assert!(h.app.brush_live.is_none(), "nothing is drawn over the photo while painting");
+    pointer(&mut h, json!([{"kind": "up", "x": 0.85, "y": 0.3}]));
+    let d = develop(&h);
+    let MaskShape::Brush { strokes } = &d.masks[0].components[0].shape else { panic!("brush") };
+    assert!(strokes[0].points.len() >= 3, "{strokes:?}");
+    assert!(!h.app.ui.mask_overlay, "painting leaves the overlay hidden");
+    // committed: the stroke brightens the photo
+    h.settle(SETTLE);
+    let luma = |c: &[[f32; 3]]| c.iter().map(|p| p[0] + p[1] + p[2]).sum::<f32>() / c.len() as f32;
+    let done = stroke_centreline(&h, 0.3);
+    assert!(luma(&done) > luma(&photo) + 30.0, "committed {} vs before {}", luma(&done), luma(&photo));
+
+    // O shows the overlay again, but a colour overlay at opacity 0 shows nothing of the committed
+    // strokes, nor of the one being painted
+    let r = h.request("ui.key", json!({"key": "o"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(h.app.ui.mask_overlay, "O shows the overlay");
+    exec(&mut h, "view.maskOverlayColor", json!({"opacity": 0}));
+    let (photo, held) = hold_fast_stroke(&mut h, 0.45);
+    let t = tinted(&photo, &held);
+    assert!(t.is_empty(), "an overlay at opacity 0 tints the stroke being painted: {} of 74 points, first {:?}", t.len(), t.first());
+    pointer(&mut h, json!([{"kind": "up", "x": 0.85, "y": 0.45}]));
+
+    // O hides it again, at its usual opacity
+    exec(&mut h, "view.maskOverlayColor", json!({"opacity": 50}));
+    let r = h.request("ui.key", json!({"key": "o"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(!h.app.ui.mask_overlay, "O hides the overlay");
+    let (photo, held) = hold_fast_stroke(&mut h, 0.6);
+    let t = tinted(&photo, &held);
+    assert!(t.is_empty(), "the overlay hidden with O tints the stroke being painted: {} of 74 points, first {:?}", t.len(), t.first());
+    pointer(&mut h, json!([{"kind": "up", "x": 0.85, "y": 0.6}]));
+
+    // the all-masks overlay shows every mask's region, so the stroke being painted is tinted as it
+    // will be once committed
+    exec(&mut h, "view.maskOverlayAll", json!({}));
+    assert!(h.app.ui.mask_overlay_all && !h.app.ui.mask_overlay);
+    let (photo, held) = hold_fast_stroke(&mut h, 0.75);
+    let [r0, g0, b0] = h.app.ui.mask_overlay_color.map(|v| v as f32);
+    let op = h.app.ui.mask_overlay_opacity / 100.0;
+    for (p, got) in photo.iter().zip(&held) {
+        let want = [p[0] + (r0 - p[0]) * op, p[1] + (g0 - p[1]) * op, p[2] + (b0 - p[2]) * op];
+        assert!((0..3).all(|k| (got[k] - want[k]).abs() <= 12.0), "the all-masks overlay tints the stroke: {got:?} vs {want:?}");
+    }
+    pointer(&mut h, json!([{"kind": "up", "x": 0.85, "y": 0.75}]));
+    assert_eq!(develop(&h).masks.len(), 1, "every stroke went into the one mask");
+
+    // a hidden mask isn't in the all-masks overlay: nor is the stroke being painted into it
+    let id = develop(&h).masks[0].id;
+    exec(&mut h, "mask.visible", json!({"id": id, "visible": false}));
+    let (photo, held) = hold_fast_stroke(&mut h, 0.9);
+    let t = tinted(&photo, &held);
+    assert!(t.is_empty(), "the all-masks overlay tints a stroke into a hidden mask: {} of 74 points, first {:?}", t.len(), t.first());
+    pointer(&mut h, json!([{"kind": "up", "x": 0.85, "y": 0.9}]));
+}
+
 #[test]
 fn effect_dropdown_applies_saves_and_shows_the_matching_effect() {
     let mut h = detail("panel.masking");
