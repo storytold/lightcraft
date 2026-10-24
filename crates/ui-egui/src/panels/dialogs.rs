@@ -1550,14 +1550,8 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                 crate::panels::grid::toast_skipped(app, ctx, &r);
                 close = true;
             }
-            // a move says how it went, or why nothing moved
-            Ok(r) if matches!(dlg, Dialog::MovePhotos { .. }) => {
-                if let Dialog::MovePhotos { name, .. } = &dlg {
-                    let text = crate::panels::left::moved_text(r["moved"].as_u64().unwrap_or(0), name);
-                    app.toast(ctx, text);
-                }
-                close = true;
-            }
+            // a move that began says how it went when it ends (`move_task`); one that can't, why now
+            Ok(_) if matches!(dlg, Dialog::MovePhotos { .. }) => close = true,
             Err(e) if matches!(dlg, Dialog::MovePhotos { .. }) => {
                 app.toast(ctx, e);
                 close = true;
@@ -2092,7 +2086,8 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
             if *dont_ask {
                 app.ui.settings.ask_before_move = false;
             }
-            crate::panels::left::move_photos(app, Some(ids), folder).map(|n| json!({"moved": n}))
+            let ctx = app.tasks.repaint.clone().unwrap_or_default();
+            crate::move_task::start(app, &ctx, &json!({"ids": ids, "folder": folder}))
         }
         // the catalog found: no file dialog; none: File ▸ Import Lightroom Catalog… asks for it
         Dialog::LightroomCatalog { catalog, .. } => {

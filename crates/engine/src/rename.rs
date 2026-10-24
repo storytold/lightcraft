@@ -534,7 +534,7 @@ fn is_respelling(fs: &dyn MoveFs, from: &Path, to: &Path) -> bool {
 }
 
 /// Windows accepts both separators; spelling differences must not hide file identity.
-fn folded_path(path: &str) -> String {
+pub(crate) fn folded_path(path: &str) -> String {
     if cfg!(windows) { path.replace('\\', "/").to_lowercase() } else { path.to_lowercase() }
 }
 
@@ -848,8 +848,19 @@ pub(crate) struct BatchMoveError {
 /// Move the files `moves` names, all or nothing: after a failure the earlier moves are undone.
 /// Moves that can't be undone (e.g. the network share went away) are reported, not ignored.
 pub(crate) fn move_all(fs: &dyn MoveFs, moves: &[(String, String)]) -> std::result::Result<(), BatchMoveError> {
+    move_all_with(fs, moves, &mut |_, _| {})
+}
+
+/// [`move_all`], telling `before(k, move)` before each move (`k` moved so far): progress for a
+/// batch that runs on a worker.
+pub(crate) fn move_all_with(
+    fs: &dyn MoveFs,
+    moves: &[(String, String)],
+    before: &mut dyn FnMut(usize, &(String, String)),
+) -> std::result::Result<(), BatchMoveError> {
     let mut done: Vec<&(String, String)> = Vec::new();
     for m in moves {
+        before(done.len(), m);
         let Err(e) = move_file_with(fs, &m.0, &m.1) else {
             done.push(m);
             continue;
@@ -1060,26 +1071,11 @@ impl Session {
     /// (all or nothing), then commit one undoable op, labelled `label(count)`, that points the
     /// photos (and their virtual copies) at the new paths. Undo moves the files back.
     pub(crate) fn apply_file_plans(&mut self, fs: &dyn MoveFs, plans: &[RenamePlan], label: &dyn Fn(usize) -> String) -> Result<usize> {
+        self.refuse_while_moving()?;
         // A partly completed rename can already have the requested photo name. Repair
         // its sidecars before treating that empty move list as a successful retry.
         self.repair_sidecars_with(fs)?;
-        let mut ops = Vec::new();
-        let by_path: HashMap<&str, &RenamePlan> = plans.iter().filter_map(|p| p.from_path.as_deref().map(|f| (f, p))).collect();
-        for p in self.catalog.photos() {
-            let plan = match &p.source {
-                Source::File { path } => by_path.get(path.as_str()).copied(),
-                Source::Demo { .. } => plans.iter().find(|x| x.id == p.id.0 && x.from_path.is_none()),
-            };
-            let Some(plan) = plan else { continue };
-            let source = match &plan.to_path {
-                Some(t) if matches!(&p.source, Source::File { path } if Path::new(path) == Path::new(t)) => p.source.clone(),
-                Some(t) => Source::File { path: t.clone() },
-                None => p.source.clone(),
-            };
-            if plan.to != p.file_name || source != p.source {
-                ops.push(Op::SetFile { id: p.id, file_name: plan.to.clone(), source });
-            }
-        }
+        let ops = self.set_file_ops(plans);
         let n = ops.len();
         let op = Op::Batch { ops };
         let moves: Vec<(String, String)> = plans
@@ -1102,6 +1098,29 @@ impl Session {
             return Err(err);
         }
         Ok(n)
+    }
+
+    /// The catalog changes that point the photos `plans` name (and their virtual copies, which
+    /// share the file) at their new names and paths. No file-system calls.
+    pub(crate) fn set_file_ops(&self, plans: &[RenamePlan]) -> Vec<Op> {
+        let mut ops = Vec::new();
+        let by_path: HashMap<&str, &RenamePlan> = plans.iter().filter_map(|p| p.from_path.as_deref().map(|f| (f, p))).collect();
+        for p in self.catalog.photos() {
+            let plan = match &p.source {
+                Source::File { path } => by_path.get(path.as_str()).copied(),
+                Source::Demo { .. } => plans.iter().find(|x| x.id == p.id.0 && x.from_path.is_none()),
+            };
+            let Some(plan) = plan else { continue };
+            let source = match &plan.to_path {
+                Some(t) if matches!(&p.source, Source::File { path } if Path::new(path) == Path::new(t)) => p.source.clone(),
+                Some(t) => Source::File { path: t.clone() },
+                None => p.source.clone(),
+            };
+            if plan.to != p.file_name || source != p.source {
+                ops.push(Op::SetFile { id: p.id, file_name: plan.to.clone(), source });
+            }
+        }
+        ops
     }
 
     /// After a failed batch of moves for `op`: point the photos whose files stayed moved at

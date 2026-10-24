@@ -57,6 +57,7 @@ pub mod media;
 pub mod memory;
 pub mod merge;
 mod model_download;
+pub mod move_job;
 pub mod open_path;
 pub mod originals;
 mod pdf;
@@ -331,6 +332,12 @@ pub struct Session {
     pub library: Option<library::Library>,
     /// Identity of current library opening; refreshed only after a successful open.
     pub(crate) library_identity: Arc<()>,
+    /// The move to another folder running in the background, if any ([`move_job`]): other file
+    /// moves wait for it, and its photos' sidecars are written once it ends.
+    pub(crate) moving: std::sync::Weak<move_job::MoveTicket>,
+    /// Photos whose automatic sidecar write waits for their file to arrive at the folder it is
+    /// being moved to ([`move_job`]); written when the move ends. Not a failure: no notice.
+    pub(crate) held_sidecars: std::collections::BTreeSet<PhotoId>,
     /// XMP sidecar preferences (persisted with the library).
     pub xmp: sidecar::XmpPrefs,
     /// Parameters of the last export (`app.export` params, minus targets), persisted in prefs.json.
@@ -501,6 +508,8 @@ impl Session {
             active_spot: None,
             library: None,
             library_identity: Arc::new(()),
+            moving: std::sync::Weak::new(),
+            held_sidecars: Default::default(),
             xmp: sidecar::XmpPrefs::default(),
             last_export: None,
             last_merge: Default::default(),
@@ -845,6 +854,7 @@ impl Session {
         // Repair discarded file steps before another path change can stale their exact paths.
         // Unrelated metadata history must remain usable while a sidecar is still unwritable.
         if entry.folder.is_some() || !entry.retry_sidecars.is_empty() || !self.file_moves(&entry.op).is_empty() {
+            self.refuse_while_moving()?;
             self.repair_sidecars_with(fs).map_err(|e| EngineError::Other(format!("can't move the files back: {e}")))?;
         }
         rename::retry_sidecars(fs, &mut entry.retry_sidecars).map_err(|e| EngineError::Other(format!("can't move the files back: {e}")))?;
@@ -1415,6 +1425,8 @@ mod tests_lightroom_folder;
 mod tests_mask_effects;
 #[cfg(test)]
 mod tests_merge;
+#[cfg(test)]
+mod tests_move_job;
 #[cfg(test)]
 mod tests_move_to_share;
 #[cfg(test)]

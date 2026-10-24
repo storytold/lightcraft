@@ -31,6 +31,7 @@ pub mod menubar;
 pub mod menus;
 pub mod merge;
 mod model_setup;
+pub mod move_task;
 pub mod panels;
 pub mod pick;
 pub mod print_view;
@@ -403,6 +404,8 @@ pub struct LightcraftApp {
     pub quit_prompt: Option<QuitPrompt>,
     /// Quit Anyway was chosen: the window may close with unsaved changes.
     pub quit_confirmed: bool,
+    /// Quit Anyway was chosen while photos were moving: the move (which has no ✕) is cut short.
+    pub quit_cuts_move: bool,
     control_rx: Option<Receiver<ControlRequest>>,
     pending_screenshots: Vec<PendingShot>,
     screenshot_token: u64,
@@ -478,6 +481,10 @@ pub struct LightcraftApp {
     pub sync_owns_changes: bool,
     /// A Synchronize Folder at work in the background.
     pub sync_run: Option<sync::SyncRun>,
+    /// Photos being moved to another folder in the background (`move_task`).
+    pub move_run: Option<move_task::MoveRun>,
+    /// How the last background move ended (`ui.inspect` → `move.last`).
+    pub last_move: Option<Value>,
     /// A Lightroom catalog inspect/import in progress.
     pub lightroom: Option<lightroom_import::LightroomTask>,
     /// Last terminal Lightroom result, exposed by the command's status/wait response.
@@ -549,6 +556,7 @@ impl LightcraftApp {
             notices: vec![],
             quit_prompt: None,
             quit_confirmed: false,
+            quit_cuts_move: false,
             control_rx: None,
             pending_screenshots: vec![],
             screenshot_token: 0,
@@ -588,6 +596,8 @@ impl LightcraftApp {
             sync: None,
             sync_owns_changes: false,
             sync_run: None,
+            move_run: None,
+            last_move: None,
             lightroom: None,
             lightroom_last: None,
             lightroom_result: None,
@@ -1119,6 +1129,14 @@ impl LightcraftApp {
         }
     }
 
+    /// Called as the app exits, before the library is saved and closed: a move whose worker has
+    /// already finished (its result waiting for the next frame) is applied now, so the catalog
+    /// matches the files. A worker still running is abandoned, as quitting always did.
+    pub fn finish_ready_move(&mut self) {
+        let ctx = self.tasks.repaint.clone().unwrap_or_default();
+        move_task::poll(self, &ctx);
+    }
+
     /// The process is about to end (settings and library are saved by then): make sure nothing is
     /// inside the GPU driver when it does (issue #620: a render running on a worker thread while
     /// the process exits crashes in the driver). No GPU work starts from here on; the render
@@ -1192,6 +1210,7 @@ impl LightcraftApp {
         import::poll_scan(self, ctx);
         sync::poll(self, ctx);
         sync::poll_run(self, ctx);
+        move_task::poll(self, ctx);
         import::tick(self, ctx);
         lightroom_import::tick(self, ctx);
         recheck::tick(self);

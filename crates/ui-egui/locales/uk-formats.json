@@ -248,7 +248,6 @@
   "{what} merge cancelled": "Об’єднання {what} скасовано",
   "{n} Local photo{} skipped: albums hold library photos (Add to My Photos first)": "Пропущено локальних фото: {n}{0:.0} — в альбомах лише фото з бібліотеки (спершу додайте їх до моїх фото)",
   "New Folder in “{name}”": "Нова тека в «{name}»",
-  "Moved {} photo(s)": "Переміщено фото: {}",
   "not added to Apple Photos: {e}": "не додано до Apple Фото: {e}",
   "{n} added to Apple Photos album “{album}”": "Додано до альбому Apple Фото «{album}»: {n}",
   "{n} added to Apple Photos": "Додано до Apple Фото: {n}",

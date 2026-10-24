@@ -234,7 +234,6 @@
   "Lightroom geometry for {path} was not preserved; saved Upright transform is unsupported.": "Geometria z Lightrooma dla {path} nie została zachowana; zapisane przekształcenie Upright nie jest obsługiwane.",
   "Lightroom geometry for {path} was not preserved; saved transform is ignored because Upright is Off.": "Geometria z Lightrooma dla {path} nie została zachowana; zapisane przekształcenie jest pomijane, ponieważ Upright jest wyłączony.",
   "Lightroom geometry was not preserved for {path}; {mode} will be recalculated.": "Geometria z Lightrooma dla {path} nie została zachowana; tryb {mode} zostanie obliczony ponownie.",
-  "Moved {} photo(s)": "Przeniesione zdjęcia: {}",
   "New Folder in “{name}”": "Nowy folder w „{name}”",
   "Restored {} photo{} from Recently Deleted": "Przywrócone z Ostatnio usuniętych zdjęcia: {}{:.0}",
   "XMP adjustments were not imported for {path}: {fields}.": "Korekty XMP dla {path} nie zostały zaimportowane: {fields}.",

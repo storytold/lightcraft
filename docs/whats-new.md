@@ -104,6 +104,21 @@
 
 ## 2026-10-21
 
+### Moving photos to a NAS no longer freezes the window
+- Moving photos to another folder (dropping them on a Folders row, Move Selected Photos Here, Move to Folder…) now
+  runs in the background. The activity stack shows "Moving photos" with how many have moved and the file in hand,
+  and a toast says how it ended. The photos move as one step Edit ▸ Undo takes back.
+- While a move runs, editing, rating and keywording go on as usual; the moving photos' XMP sidecars are written once
+  they arrive. Another move, a rename, Undo or Redo of a file move and opening another library are refused until it
+  ends, with a message saying so.
+- Quitting while photos are moving asks first. Quitting anyway cuts the move short: the files that had already
+  moved stay in the new folder while the library still points at the old places, so use File ▸ Find Missing Photos…
+  and choose the new folder to relink them. A file that was half copied to another disk leaves a hidden
+  `.lc-partial` file there, which you can delete. A file caught mid-move can end up at both places: the library keeps
+  the old one, and the copy in the new folder makes the next move there refuse that name until you delete it. Edits
+  made during the move stay in the library, but their XMP sidecar writes are lost; write them again with
+  Photo ▸ Save Metadata to File.
+
 ### Settings window
 - Settings is one size on every tab and stays where it is as you go through them; before, each tab made its own
   size and the tabs moved under the pointer. The tabs stay in place while a long page scrolls (in a very short

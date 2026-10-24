@@ -785,6 +785,10 @@ impl Session {
             return Err(EngineError::Other(format!("{} is a virtual copy: its settings live only in the library", p.file_name)));
         }
         let orig = file_path(p).ok_or_else(|| EngineError::Other(format!("{} is not a file on disk", p.file_name)))?;
+        if self.is_moving(orig) {
+            // the file and its sidecar are on their way: a write now would land behind them
+            return Err(EngineError::Other(format!("{} is being moved: its sidecar is written once it arrives", p.file_name)));
+        }
         // A relative path would be taken from the working directory.
         if Path::new(orig).is_relative() || !Path::new(orig).is_file() {
             return Err(EngineError::Other(format!("{}: the original {orig} is missing; no XMP sidecar is written", p.file_name)));
@@ -878,12 +882,17 @@ impl Session {
         self.auto_write_sidecar_ids(ids);
     }
 
-    fn auto_write_sidecar_ids(&mut self, ids: Vec<PhotoId>) {
+    pub(crate) fn auto_write_sidecar_ids(&mut self, ids: Vec<PhotoId>) {
         if ids.is_empty() {
             return;
         }
         let owners = StemOwners::among(&self.catalog, &ids);
         for id in ids {
+            // on its way to another folder: written once it arrives (`move_job`), not a failure
+            if self.catalog.photo(id).and_then(|p| file_path(p)).is_some_and(|f| self.is_moving(f)) {
+                self.held_sidecars.insert(id);
+                continue;
+            }
             if self.catalog.photo(id).is_some_and(|p| file_path(p).is_some() && p.copy_of.is_none()) {
                 match self.save_sidecar_with(id, &owners) {
                     Ok(_) => {
@@ -919,6 +928,7 @@ impl Session {
                 None => {
                     self.unsaved_sidecars.remove(&id);
                 }
+                Some(path) if self.is_moving(&path) => {}
                 Some(path) if self.media.availability.exists(&path) == Some(true) => ready.push(id),
                 Some(_) => {}
             }
