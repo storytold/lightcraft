@@ -212,6 +212,14 @@ fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, 
         if text_button(ui, "printSaveTemplate", "Save", false).clicked() && !pu.template_name.trim().is_empty() {
             run(app, &ctx, "print.template.save", json!({"name": pu.template_name}));
         }
+        if app.services.pick_print_templates.is_some() && text_button(ui, "printTemplateImport", "Import…", false).clicked() {
+            let paths = app.services.pick_print_templates.as_mut().map(|pick| pick()).unwrap_or_default();
+            for path in paths {
+                if let Some(r) = run(app, &ctx, "print.template.import", json!({"path": path})) {
+                    app.toast(&ctx, crate::i18n::tr_format!("Imported {name}", name = r["name"].as_str().unwrap_or_default()));
+                }
+            }
+        }
     });
     let names: Vec<String> = app.session.print_templates.iter().map(|t| t.name.clone()).collect();
     for (i, name) in names.iter().enumerate() {
@@ -220,6 +228,15 @@ fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if text_button(ui, &format!("printTemplateDelete-{i}"), "Delete", false).clicked() {
                     run(app, &ctx, "print.template.delete", json!({"name": name}));
+                }
+                if app.services.save_print_template.is_some() && text_button(ui, &format!("printTemplateExport-{i}"), "Export…", false).clicked() {
+                    let stem = lightcraft_engine::slide_template::file_stem(name).unwrap_or_else(|| "Print Template".into());
+                    let file = format!("{stem}.{}", lightcraft_engine::print::template::FILE_EXT);
+                    if let Some(path) = app.services.save_print_template.as_mut().and_then(|save| save(&file))
+                        && let Some(r) = run(app, &ctx, "print.template.export", json!({"name": name, "path": path}))
+                    {
+                        app.toast(&ctx, crate::i18n::tr_format!("Exported to {path}", path = r["path"].as_str().unwrap_or_default()));
+                    }
                 }
                 if text_button(ui, &format!("printTemplateApply-{i}"), "Apply", false).clicked() {
                     run(app, &ctx, "print.template.apply", json!({"name": name}));

@@ -215,6 +215,50 @@ fn templates_save_apply_and_delete_from_the_dialog() {
 }
 
 #[test]
+fn templates_export_and_import_from_the_dialog() {
+    let dir = std::env::temp_dir().join(format!("lightcraft-ui-print-templates-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("Sheet 5x6.lcprint").to_string_lossy().to_string();
+    let suggested = Arc::new(Mutex::new(Vec::<String>::new()));
+    let names = suggested.clone();
+    let (save_to, pick) = (file.clone(), file.clone());
+    let services = Services {
+        save_print_template: Some(Box::new(move |name: &str| {
+            names.lock().unwrap().push(name.to_string());
+            Some(save_to.clone())
+        })),
+        pick_print_templates: Some(Box::new(move || vec![pick.clone()])),
+        ..Default::default()
+    };
+    let mut h = demo(services);
+    open_print(&mut h);
+    click(&mut h, "button:printStyle-1");
+    cmd(&mut h, "print.set", json!({"layout": {"grid": {"columns": 5, "rows": 6}}}));
+    h.app.ui.print.template_name = "Sheet 5x6".into();
+    click(&mut h, "button:printSaveTemplate");
+    click(&mut h, "button:printTemplateExport-0");
+    assert_eq!(*suggested.lock().unwrap(), vec!["Sheet 5x6.lcprint".to_string()]);
+    assert!(std::path::Path::new(&file).is_file());
+    click(&mut h, "button:printTemplateImport");
+    let names: Vec<&str> = h.app.session.print_templates.iter().map(|t| t.name.as_str()).collect();
+    assert_eq!(names, ["Sheet 5x6", "Sheet 5x6 (2)"]);
+    assert_eq!(h.app.session.print_templates[1].settings, h.app.session.print_templates[0].settings);
+    assert!(has(&h, "button:printTemplateExport-1"), "the imported template is listed");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn template_files_need_the_hosts_file_dialogs() {
+    let mut h = demo(Services::default());
+    open_print(&mut h);
+    h.app.ui.print.template_name = "Plain".into();
+    click(&mut h, "button:printSaveTemplate");
+    assert!(has(&h, "button:printTemplateApply-0"));
+    assert!(!has(&h, "button:printTemplateExport-0"), "no save dialog: no Export…");
+    assert!(!has(&h, "button:printTemplateImport"), "no open dialog: no Import…");
+}
+
+#[test]
 fn print_to_pdf_picks_a_file_and_runs_in_the_background() {
     let asked = Arc::new(Mutex::new(Vec::<crate::pick::PickRequest>::new()));
     let requests = asked.clone();
