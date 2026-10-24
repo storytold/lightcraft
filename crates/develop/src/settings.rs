@@ -1035,6 +1035,72 @@ impl Default for Mask {
     }
 }
 
+impl DevelopSettings {
+    /// Calls `f` for every segmentation grid stored in these settings (the `seg` and `detail`
+    /// of Object and Prompt mask shapes).
+    pub fn visit_seg_masks(&self, f: &mut impl FnMut(&crate::SegMask)) {
+        for mask in &self.masks {
+            for component in &mask.components {
+                visit_shape(&component.shape, f);
+            }
+        }
+    }
+
+    /// [`DevelopSettings::visit_seg_masks`] with mutable access (resolving references into a
+    /// snapshot's grid table).
+    pub fn visit_seg_masks_mut(&mut self, f: &mut impl FnMut(&mut crate::SegMask)) {
+        for mask in &mut self.masks {
+            for component in &mut mask.components {
+                visit_shape_mut(&mut component.shape, f);
+            }
+        }
+    }
+}
+
+fn visit_shape(shape: &MaskShape, f: &mut impl FnMut(&crate::SegMask)) {
+    match shape {
+        MaskShape::Object { seg, detail, .. } => {
+            if let Some(seg) = seg {
+                f(seg);
+            }
+            for d in detail {
+                f(d);
+            }
+        }
+        MaskShape::Prompt { seg, detail, .. } => {
+            if let Some(seg) = seg {
+                f(seg);
+            }
+            for d in detail {
+                f(d);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn visit_shape_mut(shape: &mut MaskShape, f: &mut impl FnMut(&mut crate::SegMask)) {
+    match shape {
+        MaskShape::Object { seg, detail, .. } => {
+            if let Some(seg) = seg.as_mut() {
+                f(seg);
+            }
+            for d in detail {
+                f(d);
+            }
+        }
+        MaskShape::Prompt { seg, detail, .. } => {
+            if let Some(seg) = seg.as_mut() {
+                f(seg);
+            }
+            for d in detail {
+                f(d);
+            }
+        }
+        _ => {}
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // Heal / remove / red eye
 

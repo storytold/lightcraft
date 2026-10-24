@@ -423,6 +423,23 @@ impl Photo {
     pub fn relative_wb(&self) -> bool {
         self.develops_raw() && relative_wb_camera(&self.format, &self.meta.camera)
     }
+    /// Every settings holder of this photo that can carry segmentation grids: the develop
+    /// settings, the versions', the history steps' and the import look. A snapshot's shared grid
+    /// table ([`crate::Catalog`]'s `grids`) covers all of them, so a new holder belongs here.
+    pub(crate) fn settings_holders(&self) -> impl Iterator<Item = &Arc<DevelopSettings>> {
+        std::iter::once(&self.develop)
+            .chain(self.versions.iter().map(|v| &v.settings))
+            .chain(self.history.iter().map(|h| &h.settings))
+            .chain(self.import_look.iter())
+    }
+    /// [`Photo::settings_holders`] with mutable access (resolving a snapshot's grid references).
+    pub(crate) fn settings_holders_mut(&mut self) -> impl Iterator<Item = &mut Arc<DevelopSettings>> {
+        let Photo { develop, versions, history, import_look, .. } = self;
+        std::iter::once(develop)
+            .chain(versions.iter_mut().map(|v| &mut v.settings))
+            .chain(history.iter_mut().map(|h| &mut h.settings))
+            .chain(import_look.as_mut())
+    }
     /// The develop settings import gave this photo: [`Photo::camera_defaults`], or the user's
     /// default preset applied on top of them ([`Photo::import_look`]). Like the camera defaults,
     /// in the photo's own rendering process.
