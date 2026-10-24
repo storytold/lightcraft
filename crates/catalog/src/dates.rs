@@ -45,7 +45,12 @@ pub fn weekday(iso: &str) -> Option<&'static str> {
 /// 0000–9999 (an ISO date here has four year digits, so it couldn't be read back); `secs` may be
 /// anything, it never overflows.
 pub fn shift_iso(iso: &str, secs: i64) -> Option<String> {
-    let t = iso_seconds(iso)?.checked_add(secs)?;
+    let base = iso_seconds(iso)?;
+    // reject impossible dates that the arithmetic silently rolls over (2026-02-30)
+    if civil(base).get(..10) != iso.trim().get(..10) {
+        return None;
+    }
+    let t = base.checked_add(secs)?;
     let (first, last) = (iso_seconds("0000-01-01T00:00:00")?, iso_seconds("9999-12-31T23:59:59")?);
     if !(first..=last).contains(&t) {
         return None;
@@ -249,6 +254,14 @@ mod tests {
         assert_eq!(shift_iso("9999-12-31T23:59:58", 1).as_deref(), Some("9999-12-31T23:59:59"));
         assert_eq!(normalize_iso("2026-04-01 10:05").as_deref(), Some("2026-04-01T10:05:00"));
         assert_eq!(normalize_iso("2026-02-30"), None);
+    }
+
+    #[test]
+    fn shift_refuses_impossible_dates() {
+        assert_eq!(shift_iso("2026-02-30T10:00:00", 60), None);
+        assert_eq!(shift_iso("2026-02-29T10:00:00", 0), None);
+        assert_eq!(shift_iso("2026-04-31T10:00:00", 0), None);
+        assert_eq!(shift_iso("2024-02-29T10:00:00", 0).as_deref(), Some("2024-02-29T10:00:00"));
     }
 
     #[test]
