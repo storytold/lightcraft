@@ -869,6 +869,9 @@ fn folders_rename_and_move_with_their_photos() {
     s.media.forget(id);
     assert!(s.render_now(id, 16, 16).is_ok());
     assert!(s.execute("folder.move", &json!({"path": b.to_string_lossy(), "into": b.join("deeper").to_string_lossy()})).is_err(), "not into itself");
+    // a move goes into a folder that is there; it never makes one
+    assert!(s.execute("folder.move", &json!({"path": b.to_string_lossy(), "into": root.join("Archive").to_string_lossy()})).is_err());
+    std::fs::create_dir_all(root.join("Archive")).unwrap();
     let r = s.execute("folder.move", &json!({"path": b.to_string_lossy(), "into": root.join("Archive").to_string_lossy()})).unwrap();
     assert_eq!(r["relinked"], 1);
     assert_eq!(path(&s), root.join("Archive").join("Italy 2026").join("one.png").to_string_lossy());
@@ -922,6 +925,7 @@ fn folder_rename_and_move_undo_and_redo_on_disk() {
 
     // move into another folder, undo, redo
     let into = root.join("Archive");
+    std::fs::create_dir_all(&into).unwrap();
     s.execute("folder.move", &json!({"path": b.to_string_lossy(), "into": into.to_string_lossy()})).unwrap();
     let moved = into.join("Italy");
     assert_eq!(path(&s), moved.join("one.png").to_string_lossy());

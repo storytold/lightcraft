@@ -164,6 +164,13 @@ pub fn volume_of(p: &crate::Photo) -> Option<String> {
     place(dir).map(|pl| folder_key(&pl.mount))
 }
 
+/// The disk or share a folder path lies on, as `(its mount point, its name)`: `/Volumes/nas/a`
+/// gives `("/Volumes/nas", "nas")`. `None` for the startup disk (a path the pattern table has no
+/// mount point for) and for a path that is not absolute. From the path alone; nothing is read.
+pub fn disk_of(path: &str) -> Option<(String, String)> {
+    place(path).filter(|p| p.mount != "/").map(|p| (p.mount, p.volume))
+}
+
 /// Whether `path` is a whole disk or share (`/`, `C:\`, `\\srv\share`, `/Volumes/nas`), not a
 /// folder in one.
 pub fn is_disk_root(path: &str) -> bool {
