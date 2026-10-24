@@ -164,6 +164,11 @@
 
 ## 2026-10-15
 
+### Export Keywords leaves your originals alone
+- File ▸ Export Keywords… (`keyword.export`) now refuses a path that is a photo's original or its XMP sidecar, as
+  the other exports do, and writes the list atomically (issue #1944). Over the control channel, MCP or the CLI it
+  used to write the keyword list over whatever file it was given.
+
 ### Photo Merge takes each photo once
 - A merge that names the same photo more than once (through `ids` on the control channel, MCP or the CLI) now merges
   it once (issue #1947). Naming one photo three times no longer "merges" it with itself, and a long repeated list no
