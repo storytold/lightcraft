@@ -2232,5 +2232,13 @@
   "Drop to open the face model": "Thả để mở mô hình khuôn mặt",
   "Dropped Files": "Tệp đã thả",
   "Finish Lightroom catalog import before adding photos": "Hoàn tất nhập danh mục Lightroom trước khi thêm ảnh",
-  "Import dropped files without review": "Nhập các tệp đã thả mà không xem lại"
+  "Import dropped files without review": "Nhập các tệp đã thả mà không xem lại",
+  "AI masks": "Mặt nạ AI",
+  "Device": "Thiết bị",
+  "Last photo": "Ảnh gần nhất",
+  "Remote worker": "Worker từ xa",
+  "Run on": "Chạy trên",
+  "Automatic (GPU when available)": "Tự động (GPU nếu có)",
+  "Object and Describe masks analyze each photo once, on the graphics card unless CPU is chosen or “Use the GPU for rendering” is off. On the processor that takes much longer.": "Mặt nạ Đối tượng và Mô tả phân tích mỗi ảnh một lần, trên card đồ họa trừ khi chọn CPU hoặc tắt “Dùng GPU để kết xuất”. Trên bộ xử lý việc này lâu hơn nhiều.",
+  "Automatic runs the model on the Mac's graphics card. Choose CPU if AI masks fail there; on the processor they take much longer.": "Tự động chạy mô hình trên card đồ họa của máy Mac. Hãy chọn CPU nếu mặt nạ AI bị lỗi ở đó; trên bộ xử lý chúng chạy lâu hơn nhiều."
 }

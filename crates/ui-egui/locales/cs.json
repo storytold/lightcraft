@@ -2405,5 +2405,13 @@
   "Import dropped files without review": "Importovat přetažené soubory bez kontroly",
   "An import is running": "Import už běží",
   "An import is running. Drop photos when it has finished": "Import už běží. Fotky přetáhněte, až skončí",
-  "Finish Lightroom catalog import before adding photos": "Dokončete import katalogu Lightroom, než přidáte fotky"
+  "Finish Lightroom catalog import before adding photos": "Dokončete import katalogu Lightroom, než přidáte fotky",
+  "AI masks": "AI masky",
+  "Device": "Zařízení",
+  "Last photo": "Poslední fotka",
+  "Remote worker": "Vzdálený proces",
+  "Run on": "Spouštět na",
+  "Automatic (GPU when available)": "Automaticky (GPU, je-li k dispozici)",
+  "Object and Describe masks analyze each photo once, on the graphics card unless CPU is chosen or “Use the GPU for rendering” is off. On the processor that takes much longer.": "Masky Objekt a Popsat analyzují každou fotku jednou, na grafické kartě, pokud není zvoleno CPU nebo vypnuto „Použít GPU pro vykreslování“. Na procesoru to trvá mnohem déle.",
+  "Automatic runs the model on the Mac's graphics card. Choose CPU if AI masks fail there; on the processor they take much longer.": "Automaticky spouští model na grafické kartě Macu. Pokud tam AI masky selhávají, zvolte CPU; na procesoru trvají mnohem déle."
 }

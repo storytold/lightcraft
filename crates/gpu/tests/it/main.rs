@@ -7,3 +7,7 @@ mod equivalence;
 mod fallback;
 #[cfg(not(target_arch = "wasm32"))]
 mod gpu_probe;
+#[cfg(feature = "sam")]
+mod sam3_backbone;
+#[cfg(feature = "sam")]
+mod sam3_necks;
