@@ -56,7 +56,6 @@
   "Create Keyword Tag Inside “{name}”…": "Skapa nyckelordstagg i ”{name}”…",
   "Create the keyword “{name}”": "Skapa nyckelordet ”{name}”",
   "Create {n} Virtual Copies": "Skapa {n} virtuella kopior",
-  "Creates {} stacks from {} of {scope}": "Skapar {} staplar av {} i {scope}",
   "Decoder: {reason}": "Avkodare: {reason}",
   "Delete \"{label}\"": "Radera ”{label}”",
   "Delete \"{label}\" (and the mask)": "Radera ”{label}” (och masken)",
@@ -233,7 +232,6 @@
   "{n} originals opened in the other editor": "{n} original har öppnats i den andra redigeraren",
   "{n} pages": "{n} sidor",
   "{n} photos": "{n} foton",
-  "{n} photos in view · {slides} slides · {time}": "{n} foton i vyn · {slides} bilder · {time}",
   "{n} photos in {} are hidden by the filters above": "{n} foton i {} döljs av filtren ovan",
   "{n} photos opened for editing; each is stacked with its original": "{n} foton har öppnats för redigering; vart och ett staplas med sitt original",
   "{n} photo{}": "{n} foto{}",
@@ -295,7 +293,6 @@
   "Move {n} photo{} to “{}”": "Move {n} photo{} to “{}”",
   "Move {n} photo{} to “{}”?": "Move {n} photo{} to “{}”?",
   "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Moved {n} photo{} to “{}”. Edit → Undo moves them back.",
-  "{n} selected photos · {pages} pages": "{n} selected photos · {pages} pages",
   "{skipped} catalog images were not imported because their records in the catalog are incomplete.": "{skipped} catalog images were not imported because their records in the catalog are incomplete.",
   "Listing folders — folders: {folders}, files: {files}": "Listing folders — folders: {folders}, files: {files}",
   "Added {n} photo{}": "{n} foto tillagda{:.0}",
@@ -305,5 +302,8 @@
   "Drop to review {n} item{} for import": "Släpp för att granska {n} objekt före import{:.0}",
   "Inside: {names}": "Inuti: {names}",
   "Where should the Lightroom catalog “{catalog}” go?": "Vart ska Lightroom-katalogen ”{catalog}” importeras?",
-  "Merge into the open library “{library}” ({count} photo{})": "Slå samman med det öppna biblioteket ”{library}” ({count} foto{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Slå samman med det öppna biblioteket ”{library}” ({count} foto{:.0})",
+  "Creates {stacks} stack{} from {photos} of {scope}": "Skapar staplar: {stacks} · foton: {photos} av {scope}{:.0}",
+  "{n} selected photo{} · {pages} page{}": "Markerade foton: {n} · sidor: {pages}{:.0}{:.0}",
+  "{n} photo{} in view · {slides} slide{} · {time}": "Foton i vyn: {n} · bilder: {slides} · {time}{:.0}{:.0}"
 }

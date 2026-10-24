@@ -5,7 +5,7 @@ order: 40
 verified: 0.7.1
 ---
 
-Select the photos, then choose **File** > **Export…**. Pick a format, a size and a folder, then click **OK**. Your originals are not changed.
+Select the photos, then choose **File** > **Export…**. Pick a format, a size and a folder, then click the export button, which says how many photos it will export, such as **Export 3 Photos**. Your originals are not changed.
 
 ## Steps
 
@@ -20,7 +20,7 @@ Select the photos, then choose **File** > **Export…**. Pick a format, a size a
 9. Set **File name** to a template such as `{name}-{seq}`. Click **Tags** to see the tags you can insert.
 10. Set **If file exists** to **Add number**, **Overwrite** or **Skip**.
 11. On macOS, tick **Add to Apple Photos** to add the exported files to Photos as well. Type an **Album** name to put them in that album. The first time, macOS asks whether LightCraft may control Photos.
-12. Click **OK**. The export shows its progress in the activity stack at the top left.
+12. Click the export button, which says how many photos it will export, such as **Export 3 Photos**. The export shows its progress in the activity stack at the top left.
 
 If you did not choose a folder, the window stays open and shows an error, so your choices are not lost.
 

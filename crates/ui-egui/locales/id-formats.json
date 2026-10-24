@@ -99,7 +99,6 @@
   "{n} photo{}": "{n} foto{:.0}",
   "{n} photo{} match · updates automatically as photos change": "{n} foto cocok{:.0} · diperbarui otomatis saat foto berubah",
   "{n} photo{} now · updates automatically as photos change": "Saat ini {n} foto{:.0} · diperbarui otomatis saat foto berubah",
-  "{n} selected photos · {pages} pages": "{n} foto dipilih · {pages} halaman",
   "{sel_n} selected · {counted}": "{sel_n} dipilih · {counted}",
   "{stage}… {:.0}%": "{stage}… {:.0}%",
   "{what} merge added": "Hasil penggabungan {what} ditambahkan",
@@ -156,7 +155,6 @@
   "Auto Import: added {} photo{}": "Impor otomatis: {} foto{:.0} ditambahkan",
   "Building previews for {} photos…": "Membuat pratinjau untuk {} foto…",
   "Couldn't open the editor: {e}": "Tidak dapat membuka editor: {e}",
-  "Creates {} stacks from {} of {scope}": "Membuat {} tumpukan dari {} di antara {scope}",
   "Done ({what}): {done} photo{plural}": "Selesai ({what}): {done} foto{plural:.0}",
   "Focus {:.0}": "Fokus {:.0}",
   "Folder “{}” (and its subfolders)": "Folder “{}” (beserta subfoldernya)",
@@ -283,7 +281,6 @@
   "Skipped {problem}": "Dilewati: {problem}",
   "…and {more} more": "…dan {more} lainnya",
   "Template preview: {name}": "Pratinjau templat: {name}",
-  "{n} photos in view · {slides} slides · {time}": "{n} foto dalam tampilan · {slides} slide · {time}",
   "{n} pages": "{n} halaman",
   "{n} JPEG files": "{n} file JPEG",
   "{s} s of AV1 video": "Video AV1 {s} detik",
@@ -305,5 +302,8 @@
   "Drop to review {n} item{} for import": "Jatuhkan untuk meninjau {n} item sebelum impor{:.0}",
   "Inside: {names}": "Di dalam: {names}",
   "Where should the Lightroom catalog “{catalog}” go?": "Ke mana katalog Lightroom “{catalog}” diimpor?",
-  "Merge into the open library “{library}” ({count} photo{})": "Gabungkan ke pustaka yang terbuka “{library}” ({count} foto{:.0})"
+  "Merge into the open library “{library}” ({count} photo{})": "Gabungkan ke pustaka yang terbuka “{library}” ({count} foto{:.0})",
+  "Creates {stacks} stack{} from {photos} of {scope}": "Membuat {stacks} tumpukan dari {photos} foto ({scope}){:.0}",
+  "{n} selected photo{} · {pages} page{}": "{n} foto dipilih · {pages} halaman{:.0}{:.0}",
+  "{n} photo{} in view · {slides} slide{} · {time}": "{n} foto di tampilan · {slides} slide · {time}{:.0}{:.0}"
 }
