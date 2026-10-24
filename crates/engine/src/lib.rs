@@ -1360,6 +1360,8 @@ pub fn json_delta(old: &Value, new: &Value) -> Option<Value> {
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod tests_album_missing;
+#[cfg(test)]
 mod tests_album_order;
 #[cfg(test)]
 mod tests_album_remove;
