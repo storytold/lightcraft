@@ -497,7 +497,9 @@ pub fn apply_nr(img: &mut Rgb32f, lum: Option<NrLum>, col: Option<NrColor>) {
             for (x, p) in row.iter_mut().enumerate() {
                 let i = y * w + x;
                 let c0 = p.map(|v| v.max(0.0));
-                let k = luminance_2020(c0) / b.data[i][3].max(1e-6);
+                let bl = b.data[i][3];
+                // the blurred luminance includes this pixel, so it is zero only where all of it is
+                let k = if bl > 0.0 { luminance_2020(c0) / bl } else { 1.0 };
                 *p = [0, 1, 2].map(|c| c0[c] + (b.data[i][c] * k - c0[c]) * nr.t);
             }
         });
@@ -1020,5 +1022,19 @@ mod nr_tests {
             let (y0, y1) = (luminance_2020(*p), luminance_2020(*q));
             assert!((y1 - y0).abs() <= 1e-5 + 1e-3 * y0, "luminance {y0} -> {y1}");
         }
+    }
+
+    #[test]
+    fn colour_nr_leaves_a_flat_pixel_below_the_old_floor_alone() {
+        let mut img = Rgb32f::from_fn(8, 8, |_, _| [1e-7; 3]);
+        apply_nr(&mut img, None, Some(NrColor { sigma: 2.0, t: 1.0 }));
+        for p in &img.data {
+            for v in p {
+                assert!((v / 1e-7 - 1.0).abs() < 1e-3, "{v}");
+            }
+        }
+        let mut black = Rgb32f::from_fn(8, 8, |_, _| [0.0; 3]);
+        apply_nr(&mut black, None, Some(NrColor { sigma: 2.0, t: 1.0 }));
+        assert!(black.data.iter().all(|p| *p == [0.0; 3]));
     }
 }
