@@ -230,6 +230,9 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         (RawData::U16(d), 12)
     } else if total * 8 >= (n as u64) * 12 && total * 8 < (n as u64) * 13 && chunks.len() == 1 {
         let src = chunk_bytes(bytes, &chunks[0]).ok_or_else(|| RawError::Corrupt("ORF strip outside file".into()))?;
+        if (src.len() as u64) * 8 < (n as u64) * 12 {
+            return Err(RawError::Corrupt("ORF strip shorter than its rows".into()));
+        }
         // the depth is fixed here, so a header-only probe needs the samples only when the file doesn't state its
         // colour-filter layout
         let d = if mode == Mode::Full || stated.is_none() {
@@ -553,6 +556,30 @@ mod tests {
             assert_eq!((r.bits, r.data.len()), (12, w * h));
             assert_eq!(r.cfa.as_ref().unwrap().name(), if tag.is_some() { "BGGR" } else { "RGGB" });
             assert_eq!(crate::probe_info(&bytes).unwrap(), r.info());
+        }
+    }
+
+    /// Points IFD0's single strip offset at `at` (little-endian file, LONG value held in the entry).
+    fn move_strip(bytes: &mut [u8], at: u32) {
+        let ifd = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize;
+        let count = u16::from_le_bytes([bytes[ifd], bytes[ifd + 1]]) as usize;
+        let entry = (0..count).map(|i| ifd + 2 + i * 12).find(|&e| bytes[e..e + 2] == t::STRIP_OFFSETS.to_le_bytes()).unwrap();
+        bytes[entry + 8..entry + 12].copy_from_slice(&at.to_le_bytes());
+    }
+
+    #[test]
+    fn packed_12_bit_strip_running_past_the_file_is_refused() {
+        let (w, h) = (16usize, 4usize);
+        let strip = vec![0x5au8; w * h * 3 / 2];
+        for tag in [Some(BGGR), None] {
+            let mut bytes = orf_with(w as u32, h as u32, 12, strip.clone(), tag);
+            // the declared 96-byte strip now starts 24 bytes before the end of the file
+            let at = bytes.len() as u32 - 24;
+            move_strip(&mut bytes, at);
+            assert!(crate::decode(&bytes).is_err(), "{tag:?}");
+            if tag.is_none() {
+                assert!(crate::probe_info(&bytes).is_err());
+            }
         }
     }
 
