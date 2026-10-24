@@ -294,6 +294,10 @@ pub struct Catalog {
     /// Lookups derived from the above (never saved), see [`index`].
     #[serde(skip)]
     index: index::Indexes,
+    /// Each smart album's rules ready to run (cheapest rule first), worked out when first asked and
+    /// forgotten when an op adds or removes an album or changes rules.
+    #[serde(skip)]
+    plans: PlansMemo,
 }
 
 /// What of a photo an op changed: enough to tell which tallies of the library an edit leaves as they were (a
@@ -331,6 +335,32 @@ impl Aspects {
 
 /// The most photos remembered as touched; older changes are then answered with "anything may have changed".
 const MAX_TOUCHED: usize = 8192;
+
+/// [`Catalog::plans`] as last worked out: derived from the albums, like [`index::Indexes`], so no
+/// part of what a catalog is; a copy starts without it.
+#[derive(Default)]
+struct PlansMemo {
+    plans: std::sync::OnceLock<std::collections::HashMap<AlbumId, query::Prepared>>,
+    guard: std::sync::OnceLock<bool>,
+}
+
+impl Clone for PlansMemo {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+impl PartialEq for PlansMemo {
+    fn eq(&self, _: &PlansMemo) -> bool {
+        true
+    }
+}
+
+impl std::fmt::Debug for PlansMemo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("PlansMemo")
+    }
+}
 
 /// A short memory of what the latest ops changed, so that what is derived from the catalog (the grid's list) can
 /// follow a small edit without being worked out again from every photo.
@@ -442,10 +472,59 @@ impl Catalog {
     /// no smart album).
     pub fn album_contains(&self, id: AlbumId, p: &Photo) -> bool {
         match self.albums.get(&id) {
-            Some(Album { smart: Some(rules), .. }) => self.smart_album_has(id, rules, &rules.prepare_one(), p),
+            Some(Album { smart: Some(rules), .. }) => match self.plans().get(&id) {
+                Some(plan) => self.smart_album_has(id, rules, plan, p),
+                None => self.smart_album_has(id, rules, &rules.prepare_one(self), p),
+            },
             Some(a) => self.album_lists(a.id, p.id),
             None => false,
         }
+    }
+
+    /// Every smart album's [`Filter::prepare_one`], worked out once for the albums as they are
+    /// (so a photo asked about does not prepare the album's rules again).
+    fn plans(&self) -> &std::collections::HashMap<AlbumId, query::Prepared> {
+        self.plans.plans.get_or_init(|| self.albums.values().filter_map(|a| a.smart.as_ref().map(|rules| (a.id, rules.prepare_one(self)))).collect())
+    }
+
+    /// Whether rules must be tested as written, not cheapest first ([`Filter::prepare`]): some smart
+    /// album tests itself (a saved or damaged catalog; the app refuses to make one), or a chain of
+    /// smart albums testing smart albums is as long as [`rules::MAX_ALBUM_DEPTH`], where the
+    /// innermost hold nothing. There an answer can depend on which album was asked first (the
+    /// answers memo keeps what was worked out under the cut), so reordering could change who
+    /// matches. Worked out once for the albums as they are.
+    pub(crate) fn keeps_written_order(&self) -> bool {
+        *self.plans.guard.get_or_init(|| {
+            self.albums.values().any(|a| a.smart.is_some() && self.album_reaches(a.id, a.id)) || self.longest_chain() >= rules::MAX_ALBUM_DEPTH
+        })
+    }
+
+    /// The most smart albums one smart album leads through, itself included, by the smart albums
+    /// its rules and album filter test. Only asked of albums that lead back to none.
+    fn longest_chain(&self) -> usize {
+        let tests = |id: &AlbumId| -> Vec<AlbumId> {
+            let tested = self.albums.get(id).and_then(|a| a.smart.as_deref()).map(Filter::albums_tested).unwrap_or_default();
+            tested.into_iter().filter(|t| self.albums.get(t).is_some_and(|a| a.smart.is_some())).collect()
+        };
+        let mut chain: std::collections::HashMap<AlbumId, usize> = std::collections::HashMap::new();
+        for root in self.albums.values().filter(|a| a.smart.is_some()).map(|a| a.id) {
+            let mut stack = vec![root];
+            while let Some(a) = stack.last().copied() {
+                if chain.contains_key(&a) {
+                    stack.pop();
+                    continue;
+                }
+                let kids = tests(&a);
+                let pending: Vec<AlbumId> = kids.iter().copied().filter(|k| !chain.contains_key(k)).collect();
+                if pending.is_empty() {
+                    chain.insert(a, 1 + kids.iter().filter_map(|k| chain.get(k)).copied().max().unwrap_or(0));
+                    stack.pop();
+                } else {
+                    stack.extend(pending);
+                }
+            }
+        }
+        chain.values().copied().max().unwrap_or(0)
     }
 
     /// Whether smart album `id` with `rules` (as [`Filter::prepare`]d) holds `p`.
@@ -502,7 +581,7 @@ impl Catalog {
     pub fn album_photos(&self, id: AlbumId) -> Vec<PhotoId> {
         match self.albums.get(&id) {
             Some(Album { smart: Some(rules), .. }) => {
-                let prepared = rules.prepare();
+                let prepared = rules.prepare(self);
                 self.photos.values().filter(|p| self.smart_album_has(id, rules, &prepared, p)).map(|p| p.id).collect()
             }
             Some(a) => a.photos.clone(),
@@ -515,7 +594,7 @@ impl Catalog {
         match self.albums.get(&id) {
             // counted in place: no id list is built just for its length
             Some(Album { smart: Some(rules), .. }) => {
-                let prepared = rules.prepare();
+                let prepared = rules.prepare(self);
                 self.photos.values().filter(|p| self.smart_album_has(id, rules, &prepared, p)).count()
             }
             Some(a) => a.photos.iter().filter(|p| self.photos.get(p).is_some_and(|p| !p.deleted)).count(),
@@ -779,6 +858,7 @@ impl Catalog {
                 Op::SetHistoryCursor { id, cursor: std::mem::replace(&mut p.history_cursor, cursor) }
             }
             Op::AddAlbum { album } => {
+                self.plans = PlansMemo::default();
                 if self.albums.contains_key(&album.id) {
                     return Err(CatalogError::Invalid(format!("album {:?} exists", album.id)));
                 }
@@ -800,6 +880,7 @@ impl Catalog {
                 Op::RemoveAlbum { id }
             }
             Op::RemoveAlbum { id } => {
+                self.plans = PlansMemo::default();
                 if self.albums.values().any(|a| a.parent == Some(id)) {
                     return Err(CatalogError::Invalid("folder is not empty".into()));
                 }
@@ -860,6 +941,7 @@ impl Catalog {
                 Op::SetAlbumCover { id, cover: std::mem::replace(&mut a.cover, cover) }
             }
             Op::SetAlbumRules { id, rules } => {
+                self.plans = PlansMemo::default();
                 self.validate_rules(&rules)?;
                 let a = self.album_mut(id)?;
                 let Some(old) = a.smart.as_mut() else {
@@ -1163,6 +1245,8 @@ impl Catalog {
         if !changed.is_empty() {
             // stacks and albums changed outside `apply`: the lookups are built again when asked
             self.index = index::Indexes::default();
+            // (and what was worked out from the albums, the guard of [`Self::keeps_written_order`] too)
+            self.plans = PlansMemo::default();
         }
         changed
     }
@@ -1222,6 +1306,8 @@ mod tests_local;
 mod tests_lock;
 #[cfg(test)]
 mod tests_repair;
+#[cfg(test)]
+mod tests_rule_order;
 #[cfg(test)]
 mod tests_scale;
 #[cfg(test)]

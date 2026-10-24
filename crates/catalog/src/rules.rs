@@ -490,6 +490,12 @@ fn pass_answer(id: crate::AlbumId, photo: crate::PhotoId) -> Option<bool> {
 
 #[cfg(test)]
 thread_local! {
+    /// Tests: test rules in the order they were written, as before [`RuleSet::by_cost`].
+    pub(crate) static WRITTEN_ORDER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+thread_local! {
     /// How many times a smart album's rules were worked out on this thread (tests count them).
     pub(crate) static EVALUATED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
@@ -1048,6 +1054,48 @@ impl Rule {
     }
 }
 
+/// How much work one rule is, in tiers: [`RuleSet::by_cost`] tests the cheaper first.
+const COST_SCALAR: u8 = 0;
+const COST_SMALL: u8 = 1;
+const COST_TEXT: u8 = 2;
+const COST_ALBUM: u8 = 3;
+
+impl Rule {
+    /// A rule's tier: 0 numbers, choices and yes/no questions about one photo's own record (and
+    /// anything that is false at once: an unknown field or a missing album); 1 dates, keyword and
+    /// people lists, short single fields, an index lookup and a plain album's list (a folder holds no photos here: an empty lookup); 2 text built
+    /// from several fields and file paths (they copy and lower-case the text); 3 a smart album,
+    /// which runs a whole rule set for the photo. A group costs as much as its dearest rule.
+    fn cost(&self, cat: &Catalog) -> u8 {
+        match self {
+            Rule::Group { group } => group.rules.iter().map(|r| r.cost(cat)).max().unwrap_or(COST_SCALAR),
+            Rule::Field { field, value, .. } => match field.as_str() {
+                "album" => album_rule_id(value).map_or(COST_SCALAR, |id| match cat.albums.get(&id) {
+                    None => COST_SCALAR,
+                    Some(a) if a.smart.is_some() => COST_ALBUM,
+                    Some(_) => COST_SMALL,
+                }),
+                "text" | "filePath" | "location" => COST_TEXT,
+                "keywords" | "person" | "personCount" | "stacked" | "sameContent" | "copyName" | "fileName" | "extension" | "format" | "title"
+                | "caption" | "altText" | "city" | "state" | "country" | "camera" | "lens" | "creator" | "copyright" | "captureDate"
+                | "importDate" | "editDate" | "shutterSpeed" | "aspect" => COST_SMALL,
+                _ => COST_SCALAR,
+            },
+        }
+    }
+
+    /// This rule with its nested groups ordered by cost, and its tier.
+    fn by_cost(&self, cat: &Catalog) -> (u8, Rule) {
+        match self {
+            Rule::Group { group } => {
+                let group = group.by_cost(cat);
+                (group.rules.iter().map(|r| r.cost(cat)).max().unwrap_or(COST_SCALAR), Rule::Group { group })
+            }
+            field => (field.cost(cat), field.clone()),
+        }
+    }
+}
+
 impl RuleSet {
     pub fn matches(&self, p: &Photo, cat: &Catalog) -> bool {
         if self.rules.is_empty() {
@@ -1058,6 +1106,22 @@ impl RuleSet {
             Match::Any => self.rules.iter().any(|r| r.matches(p, cat)),
             Match::None => !self.rules.iter().any(|r| r.matches(p, cat)),
         }
+    }
+
+    /// This rule set with its rules (and those of nested groups) in the order to test them: the
+    /// cheapest first ([`Rule::cost`]), the user's order among equals. Rules are pure (they read
+    /// the photo and the catalog; a smart album's answer is the same however it is reached as long
+    /// as no smart album tests itself and no chain is cut by the depth limit, which callers check first: [`Catalog::keeps_written_order`]),
+    /// so for all, any and none the photos that match are the same in any order; only the work
+    /// differs. Worked out once for a pass, never per photo. The saved rules are untouched.
+    pub(crate) fn by_cost(&self, cat: &Catalog) -> RuleSet {
+        #[cfg(test)]
+        if WRITTEN_ORDER.get() {
+            return self.clone();
+        }
+        let mut rules: Vec<(u8, Rule)> = self.rules.iter().map(|r| r.by_cost(cat)).collect();
+        rules.sort_by_key(|(cost, _)| *cost);
+        RuleSet { mode: self.mode, rules: rules.into_iter().map(|(_, r)| r).collect() }
     }
 
     /// Whether matches depend on the clock ("in the last…" rules, nested groups included): the
