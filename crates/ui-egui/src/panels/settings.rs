@@ -11,6 +11,7 @@
 //!   `slideshow.playback` commands into the library's `prefs.json`,
 //!   so they travel with the library.
 
+use crate::check::check;
 use egui::RichText;
 use serde_json::{Value, json};
 
@@ -80,13 +81,6 @@ pub(super) fn row<R>(ui: &mut egui::Ui, t: &Tokens, label: &str, add: impl FnOnc
 
 pub(super) fn hint(ui: &mut egui::Ui, t: &Tokens, text: &str) {
     ui.label(RichText::new(crate::i18n::tr(text)).size(11.0).color(t.text_dim));
-}
-
-/// A checkbox addressable as `check:{id}`; true when toggled.
-pub(super) fn check(ui: &mut egui::Ui, id: &str, value: &mut bool, label: &str) -> bool {
-    let r = ui.checkbox(value, crate::i18n::tr(label));
-    register(ui.ctx(), format!("check:{id}"), r.rect);
-    r.changed()
 }
 
 /// Mutually exclusive buttons (`button:{id}-{index}`).
@@ -252,7 +246,7 @@ fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     });
     let mut per = d.per_camera;
     row(ui, t, "", |ui| {
-        if check(ui, "settings.perCamera", &mut per, "Use camera-specific defaults") {
+        if check(ui, "settings.perCamera", &mut per, "Use camera-specific defaults").changed() {
             let _ = app.run("library.preferences", json!({"import": {"perCamera": per}}));
         }
     });
@@ -354,7 +348,7 @@ fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     }
     heading(ui, t, crate::i18n::tr("XMP sidecars"));
     let mut xmp = app.session.xmp;
-    if check(ui, "settings.autoWriteXmp", &mut xmp.auto_write, "Automatically write changes into XMP sidecars") {
+    if check(ui, "settings.autoWriteXmp", &mut xmp.auto_write, "Automatically write changes into XMP sidecars").changed() {
         let _ = app.run("library.xmpPreferences", json!({"autoWrite": xmp.auto_write}));
     }
     row(ui, t, crate::i18n::tr("Sidecar names"), |ui| {
@@ -368,7 +362,7 @@ fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     if !cfg!(target_arch = "wasm32") {
         heading(ui, t, crate::i18n::tr("Cameras and Cards"));
         let mut on_card = d.show_on_card;
-        if check(ui, "settings.importOnCard", &mut on_card, "Show the import review when a camera or card is connected") {
+        if check(ui, "settings.importOnCard", &mut on_card, "Show the import review when a camera or card is connected").changed() {
             let _ = app.run("library.preferences", json!({"import": {"showOnCard": on_card}}));
         }
         heading(ui, t, crate::i18n::tr("Auto Import"));
@@ -391,7 +385,7 @@ fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         if d.auto_folder.is_some() {
             row(ui, t, "", |ui| {
                 let mut copy = d.auto_copy;
-                if ui.checkbox(&mut copy, crate::i18n::tr("Copy into the library (else use the files where they are)")).changed() {
+                if check(ui, "settings.autoImportCopy", &mut copy, "Copy into the library (else use the files where they are)").changed() {
                     let _ = app.run("library.autoImport", json!({"copy": copy}));
                 }
             });
@@ -697,7 +691,7 @@ pub(super) fn view_options(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Token
     use crate::state::{InfoOverlay as I, LoupeInfo, LoupeInfoField as F};
     heading(ui, t, crate::i18n::tr("Loupe View"));
     let mut show = app.ui.info_overlay != I::Off;
-    if check(ui, "viewOptions.showInfo", &mut show, "Show Info Overlay") {
+    if check(ui, "viewOptions.showInfo", &mut show, "Show Info Overlay").changed() {
         app.ui.info_overlay = if show { I::Basic } else { I::Off };
     }
     ui.add_enabled_ui(show, |ui| {
@@ -847,15 +841,15 @@ fn playback_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         }
     });
     let mut v = s.random_order;
-    if check(ui, "settings.slideshowRandom", &mut v, "Random order") {
+    if check(ui, "settings.slideshowRandom", &mut v, "Random order").changed() {
         let _ = app.run("slideshow.playback", json!({"randomOrder": v}));
     }
     let mut v = s.repeat;
-    if check(ui, "settings.slideshowRepeat", &mut v, "Repeat (off: the slideshow ends after the last photo)") {
+    if check(ui, "settings.slideshowRepeat", &mut v, "Repeat (off: the slideshow ends after the last photo)").changed() {
         let _ = app.run("slideshow.playback", json!({"repeat": v}));
     }
     let mut v = s.prepare_previews;
-    if check(ui, "settings.slideshowPrepare", &mut v, "Prepare previews in advance") {
+    if check(ui, "settings.slideshowPrepare", &mut v, "Prepare previews in advance").changed() {
         let _ = app.run("slideshow.playback", json!({"preparePreviews": v}));
     }
     hint(
@@ -933,8 +927,7 @@ fn theme_card<V: PartialEq + Copy>(
                     let row = egui::Rect::from_min_size(ui.cursor().min, egui::vec2(ui.available_width(), 24.0));
                     let hovered = ui.ctx().pointer_hover_pos().is_some_and(|p| row.contains(p));
                     ui.horizontal(|ui| {
-                        let r = ui.radio_value(value, *v, crate::i18n::tr(kind.label()));
-                        register(ui.ctx(), format!("radio:theme-{}", kind.id()), r.rect);
+                        crate::check::radio(ui, &format!("theme-{}", kind.id()), value, *v, kind.label());
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             let favorite = favorites.iter().any(|id| id == kind.id());
                             let r = ui

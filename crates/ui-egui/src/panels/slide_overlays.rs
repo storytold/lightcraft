@@ -6,6 +6,7 @@
 //! overlays on the active photo's slide. Sliders change the settings in memory while dragged and
 //! save them when let go; text fields save when the edit ends (Return or leaving the field).
 
+use crate::check::check;
 use egui::RichText;
 use lightcraft_engine::export::Anchor;
 use lightcraft_engine::slide_overlay::{
@@ -13,7 +14,7 @@ use lightcraft_engine::slide_overlay::{
 };
 use serde_json::{Value, json};
 
-use super::settings::{check, choices, heading, hint, row};
+use super::settings::{choices, heading, hint, row};
 use crate::LightcraftApp;
 use crate::text_field::TextField;
 use crate::theme::Tokens;
@@ -63,7 +64,7 @@ fn colour(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, value: [u8; 3], 
 /// A checkbox (`check:settings.{id}`); true when it is on.
 fn toggle(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, value: bool, label: &str, wrap: &dyn Fn(bool) -> Value) -> bool {
     let mut v = value;
-    if check(ui, &format!("settings.{id}"), &mut v, label) {
+    if check(ui, &format!("settings.{id}"), &mut v, label).changed() {
         set(app, wrap(v));
     }
     v

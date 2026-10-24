@@ -5,6 +5,7 @@
 //! [`crate::shortcuts::assign`] into [`crate::state::AppSettings::keymap`] (saved in `ui.json`),
 //! the same path as the `app.setShortcut` command.
 
+use crate::check::check;
 use egui::RichText;
 
 use crate::LightcraftApp;
@@ -25,8 +26,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     ui.horizontal(|ui| {
         let r = ui.add(egui::TextEdit::singleline(&mut search).hint_text(crate::i18n::tr("Search commands or keys")).desired_width(220.0));
         register(ui.ctx(), "field:shortcutsSearch", r.rect);
-        let r = ui.checkbox(&mut show_all, crate::i18n::tr("Show commands without a shortcut"));
-        register(ui.ctx(), "check:shortcuts.showAll", r.rect);
+        check(ui, "shortcuts.showAll", &mut show_all, "Show commands without a shortcut");
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let r = ui.add_enabled(!app.ui.settings.keymap.is_empty(), egui::Button::new(crate::i18n::tr("Reset All")));
             register(ui.ctx(), "button:shortcutsResetAll", r.rect);
@@ -93,16 +93,16 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, b: &Bindable, sc:
     };
     ui.label(name).on_hover_text(hover);
     let recording = app.recording_shortcut.as_deref() == Some(b.id);
-    let text = if recording {
-        RichText::new(crate::i18n::tr("Press keys…")).color(egui::Color32::WHITE)
+    // an unset shortcut shows a dimmed dash
+    let (text, ink) = if recording {
+        (crate::i18n::tr("Press keys…").to_string(), Some(egui::Color32::WHITE))
     } else {
         match sc {
-            Some(sc) => RichText::new(menu_text(sc, mac)).color(t.text),
-            None => RichText::new("—").color(t.text_dim),
+            Some(sc) => (menu_text(sc, mac), None),
+            None => ("—".to_string(), Some(t.text_dim)),
         }
     };
-    let r = ui.add(egui::Button::new(text).min_size(egui::vec2(110.0, 0.0)).selected(recording));
-    register(ui.ctx(), format!("button:shortcut-{}", b.id), r.rect);
+    let r = crate::widgets::text_button_sized(ui, &format!("shortcut-{}", b.id), &text, recording, 110.0, 24.0, ink);
     if r.clicked() {
         app.recording_shortcut = if recording { None } else { Some(b.id.to_string()) };
     }
