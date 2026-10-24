@@ -96,6 +96,32 @@ fn removing_the_samples_takes_their_albums_and_keeps_the_persons_own() {
 }
 
 #[test]
+fn removing_the_samples_takes_a_chain_of_folders_however_deep() {
+    // Given an album of sample photos at the bottom of 70 folders, each inside the one above
+    let mut s = Session::with_demo().with_fs();
+    let photos: Vec<_> = s.catalog.photos().filter(|p| matches!(p.source, Source::Demo { .. })).map(|p| p.id).take(2).collect();
+    let mut parent = None;
+    for level in 0..70 {
+        let id = s.catalog.alloc_album_id();
+        let mut folder = lightcraft_catalog::Album::new(id, format!("deep-{level:02}"));
+        folder.folder = true;
+        folder.parent = parent;
+        s.catalog.apply(Op::AddAlbum { album: folder }).unwrap();
+        parent = Some(id);
+    }
+    let id = s.catalog.alloc_album_id();
+    let mut bottom = lightcraft_catalog::Album::new(id, "bottom");
+    bottom.parent = parent;
+    bottom.photos = photos;
+    s.catalog.apply(Op::AddAlbum { album: bottom }).unwrap();
+    // When the samples are removed
+    s.execute("library.removeSamples", &json!({})).unwrap();
+    // Then no folder of the chain is left behind, empty
+    let left: Vec<_> = s.catalog.albums().filter(|a| a.name.starts_with("deep-") || a.name == "bottom").map(|a| a.name.clone()).collect();
+    assert!(left.is_empty(), "left behind: {left:?}");
+}
+
+#[test]
 fn removing_the_samples_while_one_of_their_albums_is_shown_goes_back_to_all_photos() {
     let dir = temp_dir("source");
     png(&dir.join("own.png"));

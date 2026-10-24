@@ -35,10 +35,12 @@ pub fn remove_ops(c: &Catalog) -> (Op, usize, Vec<AlbumId>) {
     let filled_by_samples =
         |a: &Album| !a.folder && a.smart.is_none() && !a.quick && !a.photos.is_empty() && a.photos.iter().all(|p| gone.contains(p));
     let mut albums: Vec<AlbumId> = c.albums().filter(|a| filled_by_samples(a)).map(|a| a.id).collect();
-    // a folder goes when everything in it goes (bounded: a folder can't hold itself)
+    // a folder goes when everything in it goes: one level of folders per round, so a chain is
+    // taken in at most one round per album (bounded, in case the albums hold each other)
     let mut changed = true;
     let mut rounds = 0;
-    while changed && rounds < 64 {
+    let most_rounds = c.albums().count() + 1;
+    while changed && rounds < most_rounds {
         rounds += 1;
         let emptied: Vec<AlbumId> = c
             .albums()
