@@ -896,6 +896,10 @@ pub struct UiState {
     /// The develop control whose slider is being dragged (geometry sliders show a grid).
     #[serde(skip)]
     pub dragging_control: Option<String>,
+    /// The crop as it stood when the Straighten slider drag began, so every step of that drag is
+    /// measured against the drawn crop rather than the previous step's shrunken one (issue #1794).
+    #[serde(skip)]
+    pub crop_angle_from: Option<lightcraft_geom::CropGeometry>,
     pub search: String,
     /// Focus the search field on the next frame (Edit → Find…).
     #[serde(skip)]
@@ -1500,6 +1504,7 @@ impl Default for UiState {
             unnamed_focus: false,
             hidden_locations: Vec::new(),
             dragging_control: None,
+            crop_angle_from: None,
             external_edits: Vec::new(),
             was_focused: true,
             auto_import_at: 0.0,
