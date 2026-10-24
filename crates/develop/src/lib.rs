@@ -38,6 +38,14 @@ impl DevelopSettings {
         serde_json::from_value(v.clone())
     }
 
+    /// [`Self::from_json`] for settings from outside the app, such as a sidecar's `lc:settings`
+    /// (issue #2555): kept in range as [`Self::merged`] keeps them.
+    pub fn from_untrusted_json(v: &Value) -> Result<DevelopSettings, serde_json::Error> {
+        let mut s = DevelopSettings::from_json(v)?;
+        s.keep_in_range(&DevelopSettings::default());
+        Ok(s)
+    }
+
     /// Merge a partial JSON object into these settings (fields not mentioned are kept). A white balance that
     /// names no [`WbScale`] keeps the meaning it always had (`Legacy`), whatever scale these settings were on: a
     /// partial from before the scale existed, or one that never said, must not become Kelvin by landing on
@@ -58,8 +66,9 @@ impl DevelopSettings {
 
     /// What crs XMP import does to the values it reads, for settings that arrive as JSON (presets, `develop.merge`,
     /// `render --settings`; issue #1946): every slider clamped through its control spec, point curves in 0..1, and a
-    /// crop with no area left as it was in `before`. Unrotated, the crop is clipped to the photo first; a turned crop
-    /// may reach past 0..1 and is left to the crop tools, which know the photo's size.
+    /// crop with no area left as it was in `before`. The angle is kept within ±45° (not finite: 0). Unrotated, the crop
+    /// is clipped to the photo first; a turned crop may reach past 0..1 and is bounded where the photo's size is known
+    /// (`CropGeometry::bounded`, applied by the pipeline).
     fn keep_in_range(&mut self, before: &DevelopSettings) {
         for c in controls::CONTROLS {
             if let Some(v) = controls::get(self, c.id) {
@@ -71,6 +80,7 @@ impl DevelopSettings {
             *p = lightcraft_geom::Point::new(p.x.clamp(0.0, 1.0), p.y.clamp(0.0, 1.0));
         }
         let g = &mut self.crop.geometry;
+        g.angle = if g.angle.is_finite() { g.angle.clamp(-45.0, 45.0) } else { 0.0 };
         if g.angle == 0.0 {
             g.rect = g.rect.intersect(&lightcraft_geom::Rect::UNIT);
         }

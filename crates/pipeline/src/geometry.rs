@@ -54,7 +54,8 @@ impl Frame {
     pub fn with_lens(src_w: usize, src_h: usize, s: &DevelopSettings, apply_crop: bool, lens: Option<&EmbeddedLens>) -> Frame {
         let orient = s.orientation;
         let (ow, oh) = if orient.swaps_axes() { (src_h as f64, src_w as f64) } else { (src_w as f64, src_h as f64) };
-        let crop = if apply_crop { s.crop.geometry } else { CropGeometry::default() };
+        // bounded: a crop from a sidecar or an agent can reach far past the photo (issue #2555)
+        let crop = if apply_crop { s.crop.geometry.bounded(ow, oh) } else { CropGeometry::default() };
         let lens = lens.map(|l| reorient_lens(l, orient, src_w as f64, src_h as f64));
         let mut warp = Warp::from_settings(ow, oh, s, lens.as_ref());
         let persp = perspective(s, ow, oh);
@@ -354,6 +355,18 @@ pub const FULL: Rect = Rect::UNIT;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Issue #2555: a turned crop rect of 0..1000 (from a sidecar or an agent) made the native size
+    /// of a 6000 × 4000 photo ~2.4·10¹³ pixels, which a full-size export allocated.
+    #[test]
+    fn a_crop_far_past_the_photo_keeps_the_native_size_near_the_source() {
+        let mut s = DevelopSettings::default();
+        s.crop.geometry = lightcraft_geom::CropGeometry { rect: lightcraft_geom::Rect::new(0.0, 0.0, 1000.0, 1000.0), angle: 5.0 };
+        let (w, h) = crate::native_output_size(6000, 4000, &s);
+        assert!(w <= 12_000.0 && h <= 8_000.0, "{w} x {h}");
+        // an untouched photo is its own size
+        assert_eq!(crate::native_output_size(6000, 4000, &DevelopSettings::default()), (6000.0, 4000.0));
+    }
 
     #[test]
     fn default_frame_is_identity() {

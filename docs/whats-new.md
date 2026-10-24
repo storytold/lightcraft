@@ -2,6 +2,13 @@
 
 ## 2026-10-23
 
+### Edits read from a sidecar are kept in range
+- LightCraft edits read back from an XMP sidecar (Read Metadata from File, or at import) are now checked like presets
+  and pasted settings: sliders and curves are kept in their ranges and the straighten angle within ±45° (issue
+  #2555). A turned crop that reaches far past the photo is trimmed to the photo when it is shown or exported. Before,
+  a damaged or hand-edited sidecar could set a crop that made a full-size export ask for trillions of pixels and
+  close the app. Crops made with the crop tool are unchanged.
+
 ### Tab leaves the name field in New Album, New Smart Album and the name prompts
 - In New Album, New Smart Album, Save Metadata Preset and the other dialogs with one name field, the field has the
   keyboard focus when the dialog opens, and Tab now moves on to the check box, Cancel and OK (Shift+Tab goes back).

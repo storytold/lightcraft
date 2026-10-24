@@ -187,6 +187,23 @@ fn process_numbers_survive_a_reopen_and_develop_get_reports_them() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Issue #2555: a sidecar's `lc:settings` became the photo's settings without the range checks
+/// presets and `develop.merge` get, so sliders and the crop angle kept any value.
+#[test]
+fn sidecar_settings_are_kept_in_range() {
+    use crate::sidecar::{DevelopPatch, parse_sidecar};
+    let mut wild = lightcraft_develop::DevelopSettings::default();
+    wild.light.exposure = 1e9;
+    wild.crop.geometry = lightcraft_geom::CropGeometry { rect: lightcraft_geom::Rect::new(0.0, 0.0, 1000.0, 1000.0), angle: 400.0 };
+    let json = wild.to_json().to_string();
+    let packet = lightcraft_meta::write_xmp(&lightcraft_meta::Metadata::default(), Some(&json));
+    let Some(DevelopPatch::Full(d)) = parse_sidecar(&packet, crate::crs::Target::Rendered).unwrap().develop else { panic!("no lc:settings") };
+    assert!(d.light.exposure <= 10.0, "exposure {}", d.light.exposure);
+    assert_eq!(d.crop.geometry.angle, 45.0);
+    let (w, h) = lightcraft_pipeline::native_output_size(6000, 4000, &d);
+    assert!(w <= 12_000.0 && h <= 8_000.0, "{w} x {h}");
+}
+
 #[test]
 fn sidecars_keep_the_process_and_interchange_edits_get_the_latest() {
     use crate::sidecar::{DevelopPatch, merge_into, parse_sidecar, sidecar_packet};
