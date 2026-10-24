@@ -115,7 +115,7 @@ fn xguided_apply(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workg
     dst[i] = max(c[i], clamp(b[2u * i] * a[i] + b[2u * i + 1u], 0.0, 1.0));
 }
 
-// White balance: 3×3 matrix (P[1] = has matrix, P[2..11] row-major), clamped at 0.
+// White balance: 3×3 matrix (P[1] = has matrix, P[2..11] row-major), signed (`local::white_balance`).
 @compute @workgroup_size(256)
 fn wb_k(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups) nw: vec3<u32>) {
     let i = lin_index(g, nw);
@@ -130,7 +130,7 @@ fn wb_k(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups) nw
             pf(8u) * c.x + pf(9u) * c.y + pf(10u) * c.z,
         );
     }
-    put_rgb(i, max(c * 1.0, vec3<f32>(0.0)));
+    put_rgb(i, c);
 }
 
 // Luminance NR: scale by 2^((f − l)·k) (a: image, b: log luminance l, c: filtered f). P[1] = k.
@@ -156,7 +156,7 @@ fn chroma_k(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups
     put_rgb(i, vec3<f32>(c0.x / y, c0.y / y, c0.z / y));
 }
 
-// An RGB image with negative values set to 0.
+// An RGB image with negative values set to 0 (after noise reduction, `local::denoise`).
 @compute @workgroup_size(256)
 fn clamp0_k(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups) nw: vec3<u32>) {
     let i = lin_index(g, nw);
@@ -166,30 +166,34 @@ fn clamp0_k(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups
     put_rgb(i, max(rgb_a(i), vec3<f32>(0.0)));
 }
 
-// Luminance (>= 0) of an RGB image.
+// |luminance| of an RGB image (colour NR's blur(|Y|), `local::apply_nr`).
 @compute @workgroup_size(256)
-fn lum_k(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups) nw: vec3<u32>) {
+fn abs_lum_k(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups) nw: vec3<u32>) {
     let i = lin_index(g, nw);
     if (i >= pu(0u)) {
         return;
     }
-    dst[i] = max(lum2020(rgb_a(i)), 0.0);
+    dst[i] = abs(lum2020(rgb_a(i)));
 }
 
-// Colour NR: blend towards the luminance-weighted blur blur(rgb) / blur(Y) at the pixel's own
-// luminance (a: image, b: blurred rgb, c: blurred luminance). P[1] = t.
+// Colour NR, `local::nr_colour_pixel` (a: image, b: blurred rgb, c: blurred |luminance|). P[1] = t,
+// P[2], P[3] = `local::NR_RATIO_FROM`, `NR_RATIO_FULL`.
 @compute @workgroup_size(256)
 fn nr_col(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups) nw: vec3<u32>) {
     let i = lin_index(g, nw);
     if (i >= pu(0u)) {
         return;
     }
-    let p = max(rgb_a(i), vec3<f32>(0.0));
-    let yl = lum2020(p);
+    let p = rgb_a(i);
     let t = pf(1u);
     let q = vec3<f32>(b[3u * i], b[3u * i + 1u], b[3u * i + 2u]);
-    let k = select(1.0, yl / c[i], c[i] > 0.0);
-    put_rgb(i, p + (q * k - p) * t);
+    let yp = lum2020(p);
+    let bl = lum2020(q);
+    let ba = c[i];
+    let a = select(0.0, clamp((bl / ba - pf(2u)) / (pf(3u) - pf(2u)), 0.0, 1.0), ba > 0.0);
+    let k = select(0.0, yp / bl, bl > 0.0);
+    let tgt = a * q * k + (1.0 - a) * (q - vec3<f32>(bl - yp));
+    put_rgb(i, p + (tgt - p) * t);
 }
 
 // Every P[1]-th value of `a` (airlight sampling). P[0] = output count.

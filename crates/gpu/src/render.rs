@@ -858,17 +858,19 @@ fn denoise(cx: &mut Cx<'_>, img: Buf, plan: &Plan<'_>) -> Buf {
         img = out;
     }
     if let Some(nr) = col {
-        let pos = cx.gpu.buffer(n * 3);
-        map(cx, "clamp0_k", n, &[], [Some(&img), None, None], &pos);
         let y = cx.gpu.buffer(n);
-        map(cx, "lum_k", n, &[], [Some(&pos), None, None], &y);
+        map(cx, "abs_lum_k", n, &[], [Some(&img), None, None], &y);
         let by = gaussian(cx, &y, w, h, 1, nr.sigma);
-        let b = gaussian(cx, &pos, w, h, 3, nr.sigma);
+        let b = gaussian(cx, &img, w, h, 3, nr.sigma);
         let out = cx.gpu.buffer(n * 3);
-        map(cx, "nr_col", n, &[nr.t.to_bits()], [Some(&img), Some(&b), Some(&by)], &out);
+        let p = [nr.t, local::NR_RATIO_FROM, local::NR_RATIO_FULL].map(f32::to_bits);
+        map(cx, "nr_col", n, &p, [Some(&img), Some(&b), Some(&by)], &out);
         img = out;
     }
-    img
+    // signed until here (`local::denoise`)
+    let out = cx.gpu.buffer(n * 3);
+    map(cx, "clamp0_k", n, &[], [Some(&img), None, None], &out);
+    out
 }
 
 /// The planes the per-pixel stage reads.

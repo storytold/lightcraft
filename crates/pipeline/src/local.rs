@@ -12,12 +12,15 @@ use lightcraft_raster::{Plane, Rgb32f, par_join};
 use crate::geometry::Frame;
 use crate::{Prepared, Quality, SourceInfo, for_rows, masks, timed};
 
-/// White balance (relative to the source's as-shot white) and exposure, in place.
+/// White balance (relative to the source's as-shot white) and exposure, in place; channels below 0 are set to 0.
 pub fn scene_linear_pre(img: &mut Rgb32f, info: &SourceInfo, s: &DevelopSettings) {
     wb_gain(img, info, s, 2f32.powf(s.light.exposure as f32));
+    let w = img.width;
+    for_rows(&mut img.data, w, |_, row| row.iter_mut().for_each(|p| *p = p.map(|v| v.max(0.0))));
 }
 
-/// White balance only (exposure is applied by the per-pixel stage, see [`crate::Prepared`]).
+/// White balance only (exposure is applied by the per-pixel stage, see [`crate::Prepared`]). The result is signed:
+/// channels below 0 (noise near black, kept by decoding) stay until [`denoise`] has averaged them, then are set to 0.
 pub fn white_balance(img: &mut Rgb32f, info: &SourceInfo, s: &DevelopSettings) {
     wb_gain(img, info, s, 1.0);
 }
@@ -59,7 +62,9 @@ fn wb_gain(img: &mut Rgb32f, info: &SourceInfo, s: &DevelopSettings, gain: f32) 
                     m[2][0] * c[0] + m[2][1] * c[1] + m[2][2] * c[2],
                 ];
             }
-            *p = [(c[0] * gain).max(0.0), (c[1] * gain).max(0.0), (c[2] * gain).max(0.0)];
+            // signed: a clamp here would keep only the positive half of the noise near black, a tinted pedestal in
+            // high-ISO shadows that colour noise reduction then cannot average away (#840)
+            *p = c.map(|v| v * gain);
         }
     });
 }
@@ -462,6 +467,9 @@ pub fn nr_params(s: &DevelopSettings, scale: f32) -> (Option<NrLum>, Option<NrCo
 pub fn denoise(img: &mut Rgb32f, s: &DevelopSettings, scale: f32) {
     let (lum, col) = nr_params(s, scale);
     apply_nr(img, lum, col);
+    // The image is signed up to here (`wb_gain`): later stages take it non-negative, as before (#840).
+    let w = img.width;
+    for_rows(&mut img.data, w, |_, row| row.iter_mut().for_each(|p| *p = p.map(|v| v.max(0.0))));
 }
 
 /// Noise reduction with explicit parameters (see [`denoise`]).
@@ -488,25 +496,43 @@ pub fn apply_nr(img: &mut Rgb32f, lum: Option<NrLum>, col: Option<NrColor>) {
         // Blur the colour weighted by luminance: blur(rgb) / blur(Y) is the chromaticity of the
         // neighbourhood's mean light, so the mean colour of a noisy or dark patch is kept (blurring
         // the per-pixel ratio rgb / Y is not mean-preserving where Y is small or noisy).
-        let planes = img.map(|c| {
-            let c = c.map(|v| v.max(0.0));
-            [c[0], c[1], c[2], luminance_2020(c)]
-        });
+        // The input is signed (noise near black, see `wb_gain`): blur(Y) = Y(blur(rgb)) can be near zero where
+        // positive and negative noise cancel, and the ratio is then unstable; there it gives way to the additive form
+        // blur(rgb) - blur(Y) + Y (the neighbourhood's colour offset at this pixel's luminance), which also keeps
+        // the pixel's luminance and the local mean, by the share [`nr_ratio_share`] of blur(Y) in blur(|Y|).
+        let planes = img.map(|c| [c[0], c[1], c[2], luminance_2020(c).abs()]);
         let b = gaussian(&planes, nr.sigma);
         for_rows(&mut img.data, w, |y, row| {
             for (x, p) in row.iter_mut().enumerate() {
                 let i = y * w + x;
-                let c0 = p.map(|v| v.max(0.0));
-                let bl = b.data[i][3];
-                // the blurred luminance includes this pixel, so it is zero only where all of it is
-                let k = if bl > 0.0 { luminance_2020(c0) / bl } else { 1.0 };
-                *p = [0, 1, 2].map(|c| c0[c] + (b.data[i][c] * k - c0[c]) * nr.t);
+                let q = [b.data[i][0], b.data[i][1], b.data[i][2]];
+                *p = nr_colour_pixel(*p, q, b.data[i][3], nr.t);
             }
         });
         if let Some(t) = _t {
             eprintln!("    nr colour: {:.1} ms", t.elapsed().as_secs_f64() * 1e3);
         }
     }
+}
+
+/// How much of the multiplicative (ratio) form colour NR uses, from blur(Y) / blur(|Y|) (1 where the neighbourhood's
+/// luminance is all of one sign; 0 where at most half of it survives the cancelling of signed noise).
+pub fn nr_ratio_share(bl: f32, ba: f32) -> f32 {
+    if ba > 0.0 { ((bl / ba - NR_RATIO_FROM) / (NR_RATIO_FULL - NR_RATIO_FROM)).clamp(0.0, 1.0) } else { 0.0 }
+}
+
+/// Below this blur(Y) / blur(|Y|) colour NR is purely additive, see [`nr_ratio_share`].
+pub const NR_RATIO_FROM: f32 = 0.5;
+/// From this blur(Y) / blur(|Y|) up colour NR is purely the ratio form, see [`nr_ratio_share`].
+pub const NR_RATIO_FULL: f32 = 0.8;
+
+/// Colour NR of one pixel `p`: toward the neighbourhood's colour `q` (blur(rgb)) at `p`'s own luminance, by `t`;
+/// `ba` is blur(|Y|).
+pub fn nr_colour_pixel(p: [f32; 3], q: [f32; 3], ba: f32, t: f32) -> [f32; 3] {
+    let (yp, bl) = (luminance_2020(p), luminance_2020(q));
+    let a = nr_ratio_share(bl, ba);
+    let k = if bl > 0.0 { yp / bl } else { 0.0 };
+    [0, 1, 2].map(|c| p[c] + ((a * q[c] * k + (1.0 - a) * (q[c] - bl + yp)) - p[c]) * t)
 }
 
 pub fn log_lum(c: [f32; 3]) -> f32 {
@@ -1001,7 +1027,9 @@ mod nr_tests {
     #[test]
     fn colour_nr_keeps_means_in_noisy_shadows() {
         let noise = |x: usize, y: usize, k: usize| (((x * 7919 + y * 104729 + k * 15485863) % 101) as f32 / 101.0 - 0.5) * 0.03;
-        let mut img = Rgb32f::from_fn(96, 96, |x, y| [0.012 + noise(x, y, 1), 0.012 + noise(x, y, 2), 0.006 + noise(x, y, 3)].map(|v| v.max(0.0)));
+        // signed, as decoding and white balance leave it (some channels below 0)
+        let mut img = Rgb32f::from_fn(96, 96, |x, y| [0.012 + noise(x, y, 1), 0.012 + noise(x, y, 2), 0.006 + noise(x, y, 3)]);
+        assert!(img.data.iter().any(|p| p.iter().any(|v| *v < 0.0)));
         let before = img.clone();
         let mean = |im: &Rgb32f, c: usize| im.data.iter().map(|p| p[c]).sum::<f32>() / im.len() as f32;
         let chroma_sd = |im: &Rgb32f| {
@@ -1012,7 +1040,8 @@ mod nr_tests {
         let mut s = DevelopSettings::default();
         s.detail.nr_luminance = 0.0;
         s.detail.nr_color = 75.0;
-        denoise(&mut img, &s, 1.0);
+        let (_, col) = nr_params(&s, 1.0);
+        apply_nr(&mut img, None, col);
         for c in 0..3 {
             let (a, b) = (mean(&before, c), mean(&img, c));
             assert!((b / a - 1.0).abs() < 0.02, "channel {c} mean {a} -> {b}");
@@ -1021,6 +1050,46 @@ mod nr_tests {
         for (p, q) in before.data.iter().zip(&img.data) {
             let (y0, y1) = (luminance_2020(*p), luminance_2020(*q));
             assert!((y1 - y0).abs() <= 1e-5 + 1e-3 * y0, "luminance {y0} -> {y1}");
+        }
+    }
+
+    /// Where signed noise cancels in the blur (blur(Y) near 0 against blur(|Y|)) colour NR is additive, so a dark pixel
+    /// does not become a bright speck; where the neighbourhood is all positive it is the ratio form.
+    #[test]
+    fn colour_nr_ratio_gives_way_where_luminance_cancels() {
+        assert_eq!(nr_ratio_share(1.0, 1.0), 1.0);
+        assert_eq!(nr_ratio_share(0.8, 1.0), 1.0);
+        assert_eq!(nr_ratio_share(0.5, 1.0), 0.0);
+        assert_eq!(nr_ratio_share(-0.2, 1.0), 0.0);
+        assert_eq!(nr_ratio_share(0.0, 0.0), 0.0);
+        assert!((nr_ratio_share(0.65, 1.0) - 0.5).abs() < 1e-6);
+        // all positive: the ratio form, the neighbourhood's chromaticity at the pixel's luminance
+        let (p, q) = ([0.02, 0.01, 0.01], [0.012, 0.012, 0.009]);
+        let o = nr_colour_pixel(p, q, luminance_2020(q), 1.0);
+        let k = luminance_2020(p) / luminance_2020(q);
+        for c in 0..3 {
+            assert!((o[c] - q[c] * k).abs() < 1e-7, "{o:?}");
+        }
+        // cancelling neighbourhood (blur(Y) 1e-6 of blur(|Y|) 0.01): the ratio would scale q by 0.004 / 1e-6
+        let q = [0.003, -0.001, 0.002];
+        let bl = luminance_2020(q);
+        let q = q.map(|v| v - bl + 1e-6);
+        let p = [0.004; 3];
+        let o = nr_colour_pixel(p, q, 0.01, 1.0);
+        assert!(o.iter().all(|v| v.abs() < 0.01), "{o:?}");
+        assert!((luminance_2020(o) - luminance_2020(p)).abs() < 1e-6);
+    }
+
+    /// Colour NR works on the signed image; what leaves noise reduction is non-negative, as later stages expect.
+    #[test]
+    fn denoise_output_is_non_negative() {
+        let noise = |x: usize, y: usize, k: usize| (((x * 7919 + y * 104729 + k * 15485863) % 101) as f32 / 101.0 - 0.5) * 0.03;
+        for nr_color in [0.0, 50.0] {
+            let mut img = Rgb32f::from_fn(32, 32, |x, y| [0.004 + noise(x, y, 1), 0.004 + noise(x, y, 2), 0.002 + noise(x, y, 3)]);
+            let mut s = DevelopSettings::default();
+            s.detail.nr_color = nr_color;
+            denoise(&mut img, &s, 1.0);
+            assert!(img.data.iter().all(|p| p.iter().all(|v| *v >= 0.0)), "nr_color {nr_color}");
         }
     }
 
