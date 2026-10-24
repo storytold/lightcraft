@@ -32,6 +32,9 @@ use serde::{Deserialize, Serialize};
 use crate::Session;
 use crate::media::ProbeInfo;
 
+mod reads;
+pub use reads::{MAX_SKIPPED, MAX_STUCK_READERS, ReadWatch, STALL_AFTER, StalledRead, StuckReaders};
+
 /// File extensions offered by import discovery and file pickers (lower case).
 /// This includes preview-only raws; the file probe decides whether sensor decoding is available.
 pub const EXTENSIONS: &[&str] = &[
@@ -1602,6 +1605,10 @@ impl Session {
 #[cfg(test)]
 #[path = "import/tests_known.rs"]
 mod tests_known;
+
+#[cfg(test)]
+#[path = "import/tests_pool.rs"]
+mod tests_pool;
 
 #[cfg(test)]
 mod prepared_tests {
