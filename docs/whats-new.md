@@ -118,6 +118,10 @@
 
 ## 2026-10-18
 
+### Every raw shows in the web picker
+- File ▸ Import Photos… in the web version now lists every format the import reads, CR3, NRW, RAF, ORF, RW2, PEF,
+  SRW and the rest included, in upper and lower case, instead of a shorter hand-kept list (issue #2212).
+
 ### Thumbnails of Lightroom HDR and panorama merges in a second
 - Grid and filmstrip thumbnails of DNGs that Lightroom merged (HDR, Panorama, HDR Panorama) now develop from the
   small copies of the raw image Lightroom keeps inside the file (256 to 2048 px), not from the whole merge. A 23836 ×

@@ -185,6 +185,12 @@ pub fn mime_for(name: &str) -> &'static str {
     }
 }
 
+/// The file picker's `accept` list: every extension the import takes, in lower and upper case
+/// (issue #2212: a hand-kept list left out CR3, RAF, ORF and other raws).
+pub fn picker_accept() -> String {
+    lightcraft_engine::import::EXTENSIONS.iter().flat_map(|e| [format!(".{e}"), format!(".{}", e.to_ascii_uppercase())]).collect::<Vec<_>>().join(",")
+}
+
 #[cfg(test)]
 pub(crate) fn png_bytes(w: usize, h: usize) -> Vec<u8> {
     let bytes: Vec<u8> = (0..w * h).flat_map(|i| [(i * 7) as u8, 128, 200, 255]).collect();
@@ -196,6 +202,17 @@ pub(crate) fn png_bytes(w: usize, h: usize) -> Vec<u8> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn picker_accepts_every_imported_extension() {
+        let accept = picker_accept();
+        let accept: Vec<&str> = accept.split(',').collect();
+        for ext in lightcraft_engine::import::EXTENSIONS {
+            assert!(accept.contains(&format!(".{ext}").as_str()), ".{ext} missing from the picker");
+            let upper = format!(".{}", ext.to_ascii_uppercase());
+            assert!(accept.contains(&upper.as_str()), "{upper} missing from the picker");
+        }
+    }
 
     #[test]
     fn paths() {

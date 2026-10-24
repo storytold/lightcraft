@@ -19,11 +19,9 @@ use crate::backup::{ACTIVE_LIBRARY, DEFAULT_LIBRARY_DIR, valid_library_dir};
 use crate::bench::Bench;
 use crate::files::{Files, FlushOp, LIBRARY_FILES};
 use crate::safety::{self, notice};
-use crate::store::{Originals, content_hash, download_name, storage_key};
+use crate::store::{Originals, content_hash, download_name, picker_accept, storage_key};
 use crate::wire::ThumbIndex;
 use crate::workers::{THUMB_INDEX, Workers};
-
-const ACCEPT: &str = ".jpg,.jpeg,.png,.tif,.tiff,.webp,.dng,.cr2,.nef,.arw,.psd,.jxl,.gif,.bmp";
 
 /// After a failed save, wait this long before trying again (ms).
 const SAVE_RETRY_MS: f64 = 2000.0;
@@ -123,7 +121,7 @@ fn open_picker(originals: Originals, backend: Option<Backend>, ctx: egui::Contex
     let Ok(input) = doc.create_element("input").map(|e| e.unchecked_into::<web_sys::HtmlInputElement>()) else { return };
     input.set_type("file");
     input.set_multiple(true);
-    input.set_accept(ACCEPT);
+    input.set_accept(&picker_accept());
     let inp = input.clone();
     let on_change = Closure::<dyn FnMut()>::new(move || {
         if let Some(files) = inp.files() {
