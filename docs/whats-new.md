@@ -27,6 +27,14 @@
   Before, the field took the focus back every frame, so only Return and Esc got you out of it. Return still
   confirms and Esc still cancels.
 
+### A thumbnail that can't be read is tried again only when its photo changes
+- A file the grid can't draw (a damaged JPEG, a file the decoders can't read) was decoded again after every change to
+  the library, even a change to another photo: face recognition and metadata reads at launch made each such file
+  fail 20 to 40 times in a few minutes, one log warning each time (issue #2682). It is now tried again when that photo
+  changes (Locate Missing File, Reload, an edit) or when the library can't say which photos changed. A photo whose
+  file is missing, such as one on a drive that is unplugged, is still tried again at every change, so it comes back
+  once the drive does.
+
 ### Foreign XMP metadata survives namespace-prefix collisions
 - Saving a sidecar keeps another application's properties even when its namespace uses prefixes such as `lc`
   or `xmp`. Those foreign properties no longer become LightCraft settings or ratings when imported.
