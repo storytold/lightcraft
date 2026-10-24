@@ -70,14 +70,14 @@ fn rms_chroma(a: &Rgb32f, b: &Rgb32f) -> f32 {
 fn preview_error(s: &DevelopSettings, scales: &[f32], metric: fn(&Rgb32f, &Rgb32f) -> f32) -> Vec<(f32, f32, f32)> {
     let src = noisy_scene(0.15);
     let mut full = src.clone();
-    denoise(&mut full, s, 1.0);
+    denoise(&mut full, s, 1.0, None, None);
     scales
         .iter()
         .map(|&k| {
             let reference = scaled(&full, k);
             let plain = scaled(&src, k);
             let mut preview = plain.clone();
-            denoise(&mut preview, s, k);
+            denoise(&mut preview, s, k, None, None);
             (k, metric(&preview, &reference), metric(&plain, &reference))
         })
         .collect()
@@ -87,7 +87,8 @@ const SCALES: [f32; 6] = [0.5, 0.33, 0.25, 0.167, 0.1, 0.05];
 
 #[test]
 fn luminance_nr_preview_matches_full_size_scaled_down() {
-    let mut s = DevelopSettings::default();
+    // the guided filter's radii (process V3 and before; V4's wavelet: the next test)
+    let mut s = DevelopSettings { process: lightcraft_develop::Process::V3.version(), ..Default::default() };
     s.detail.nr_luminance = 50.0;
     s.detail.nr_detail = 50.0;
     s.detail.nr_color = 0.0;
@@ -98,6 +99,27 @@ fn luminance_nr_preview_matches_full_size_scaled_down() {
         // off than no noise reduction at all, and 0.53 / 0.70 of it at 0.5 / 0.33.
         assert!(ratio <= 1.0, "preview at {k} is further off than no noise reduction: {err} vs {off}");
         assert!(err <= 0.01, "preview at {k} is {err} stops off");
+        if k >= 0.33 {
+            assert!(ratio <= 0.4, "preview at {k}: {ratio}");
+        }
+    }
+}
+
+#[test]
+fn wavelet_luminance_nr_preview_matches_full_size_scaled_down() {
+    // Process V4's wavelet shifts its levels by the preview's scale and fades out below a fifth
+    // (`nrl::threshold`). It removes about twice as much as the guided filter at full size, so the
+    // absolute bound is the guided filter's doubled; the relative ones are the same. Without the
+    // shift and the fade a preview at 0.1 / 0.05 was 1.2 / 6 times further off than no noise reduction.
+    let mut s = DevelopSettings { process: lightcraft_develop::Process::V4.version(), ..Default::default() };
+    s.detail.nr_luminance = 50.0;
+    s.detail.nr_detail = 50.0;
+    s.detail.nr_color = 0.0;
+    for (k, err, off) in preview_error(&s, &SCALES, rms_log) {
+        let ratio = err / off;
+        eprintln!("wavelet luminance NR, preview at {k}: {err:.4} stops from the full-size render scaled down ({ratio:.2} of NR off)");
+        assert!(ratio <= 1.0, "preview at {k} is further off than no noise reduction: {err} vs {off}");
+        assert!(err <= 0.02, "preview at {k} is {err} stops off");
         if k >= 0.33 {
             assert!(ratio <= 0.4, "preview at {k}: {ratio}");
         }
@@ -171,7 +193,8 @@ fn preview_from_a_smaller_source_level_matches_one_from_the_original() {
     // The app draws a grid cell from the 512-px thumbnail level and the loupe from the 2560-px
     // preview level. Told the original's size, a render from the smaller copy denoises like one from
     // the original at the same output size; before #960 its radii were in the copy's pixels.
-    let mut s = DevelopSettings::default();
+    // (Process V3: the guided filter, whose radii show the copy's pixels clearly.)
+    let mut s = DevelopSettings { process: lightcraft_develop::Process::V3.version(), ..Default::default() };
     s.detail.nr_luminance = 60.0;
     s.detail.nr_color = 40.0;
     let original = noisy_scene(0.15);

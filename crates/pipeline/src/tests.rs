@@ -239,6 +239,16 @@ fn stage_cache_matches_uncached_render_through_a_slider_session() {
         Box::new(|s| s.effects.dehaze = 0.0),
         Box::new(|s| s.effects.dehaze = 25.0),
         Box::new(|s| s.detail.nr_luminance = 60.0),
+        // the luminance sliders reuse the image before the luminance NR (with colour NR on)
+        Box::new(|s| s.detail.nr_color = 40.0),
+        Box::new(|s| s.detail.nr_luminance = 30.0),
+        Box::new(|s| s.detail.nr_detail = 80.0),
+        Box::new(|s| s.detail.nr_contrast = 40.0),
+        Box::new(|s| s.detail.nr_luminance = 0.0),
+        Box::new(|s| s.detail.nr_luminance = 60.0),
+        // Exposure in between keeps the image before the luminance NR and its statistics
+        Box::new(|s| s.light.exposure = -0.5),
+        Box::new(|s| s.detail.nr_luminance = 45.0),
         Box::new(|s| {
             s.wb.mode = lightcraft_develop::WbMode::Custom;
             s.wb.temp = 4000.0;
@@ -256,10 +266,14 @@ fn stage_cache_matches_uncached_render_through_a_slider_session() {
         for req in [&full, &draft] {
             let a = render_cached(&src, &info, &s, req, &cache).image;
             let b = render(&src, &info, &s, req).image;
-            if req.quality == Quality::Draft && i == 6 {
+            // the steps that change the noise reduction, and Exposure among them: a draft keeps the stand-in
+            // planes until the linear image changes otherwise (white balance, step 15)
+            let nr_only = (6..=14).contains(&i);
+            if req.quality == Quality::Draft && nr_only {
                 // a draft while noise reduction changes keeps the wide planes of the image before it
                 let d = max_diff(&a, &b);
-                assert!(d <= 3, "step {i} draft: {d}");
+                // (up to 5 levels measured when Luminance goes from 60 to 0)
+                assert!(d <= 6, "step {i} draft: {d}");
             } else {
                 assert_eq!(a, b, "step {i} {:?}", req.quality);
             }
@@ -298,8 +312,9 @@ fn drafts_keep_wide_planes_across_a_noise_reduction_change_and_full_renders_do_n
         s.detail.nr_color = v / 2.0;
         let a = render_cached(&src, &info, &s, &draft, &cache).image;
         let d = max_diff(&a, &render(&src, &info, &s, &draft).image);
-        // close to the exact draft (a few levels at edges, where clarity is strong)
-        assert!(d <= 8, "nr {v}: {d}");
+        // close to the exact draft (a few levels at edges, where clarity is strong; the wavelet luminance NR
+        // changes the image more than the old filter did, 13 levels measured at Luminance 45)
+        assert!(d <= 16, "nr {v}: {d}");
         // a full-quality render after the drafts is exact (it never takes the stand-in planes)
         assert_eq!(render_cached(&src, &info, &s, &full, &cache).image, render(&src, &info, &s, &full).image, "nr {v}");
     }
@@ -817,6 +832,41 @@ fn stored_process_numbers_render_with_a_known_process() {
     }
 }
 
+/// Moving the luminance NR sliders on a 2.5 MP preview: the colour NR is not redone.
+/// `cargo test --release -p lightcraft-pipeline --lib tests::bench_luminance_slider -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn bench_luminance_slider() {
+    use crate::{StageCache, render_cached};
+    use std::sync::Arc;
+    let (w, h) = (1936usize, 1290usize);
+    let src = Arc::new(Rgb32f::from_fn(w, h, |x, y| {
+        let mut seed = (x as u32).wrapping_mul(0x9e37_79b9) ^ (y as u32).wrapping_mul(0x85eb_ca6b) | 1;
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        let n = (seed as f32 / u32::MAX as f32 - 0.5) * 0.04;
+        let v = 0.05 + 0.1 * ((x / 64 + y / 64) % 3) as f32 + n;
+        [v, v * 0.9 + n, v * 0.8]
+    }));
+    let info = SourceInfo { raw: true, ..Default::default() };
+    let cache = StageCache::default();
+    let req = RenderRequest::fit(w, h);
+    let mut s = DevelopSettings::default();
+    s.detail.nr_color = 25.0;
+    s.detail.nr_luminance = 30.0;
+    let _ = render_cached(&src, &info, &s, &req, &cache);
+    for l in [40.0, 50.0, 60.0] {
+        s.detail.nr_luminance = l;
+        let t = std::time::Instant::now();
+        let _ = render_cached(&src, &info, &s, &req, &cache);
+        let cached = t.elapsed();
+        let t = std::time::Instant::now();
+        let _ = crate::render(&src, &info, &s, &req);
+        eprintln!("luminance {l}: with the stage cache {:.0} ms, without {:.0} ms", cached.as_secs_f64() * 1e3, t.elapsed().as_secs_f64() * 1e3);
+    }
+}
+
 /// A crop a hair wide (or of no size, as a command or a sidecar can set) shown to fit made the
 /// tone, clarity and dehaze stages blur with sigmas of millions of pixels (infinite for no size):
 /// the box width's square overflowed (a panic in debug builds, a radius of billions of pixels and
@@ -839,4 +889,56 @@ fn sliver_crops_render_quickly_with_wide_stages_on() {
         assert!(t.elapsed().as_secs_f64() < 20.0, "{rect:?}: {:?}", t.elapsed());
         assert!(r.image.width >= 1 && r.image.height >= 1, "{rect:?}");
     }
+}
+
+// Given a cached render with one process, a change to a process with other noise filters (Update to
+// Current Process, undo) renders like a fresh render, not the cached denoised image
+#[test]
+fn a_process_change_does_not_reuse_the_other_noise_filters() {
+    use crate::{StageCache, render_cached};
+    use lightcraft_develop::Process;
+    use std::sync::Arc;
+    // chroma noise, and brightness noise for the luminance filter
+    let mut src = colour_noise_scene(128, 96, 128);
+    for (i, p) in src.data.iter_mut().enumerate() {
+        let n = ((i as u32).wrapping_mul(0x9e37_79b9) >> 24) as f32 / 255.0 - 0.5;
+        *p = p.map(|c| c * (1.0 + 0.3 * n));
+    }
+    let src = Arc::new(src);
+    let info = SourceInfo::default();
+    let req = RenderRequest::fit(128, 96);
+    // the colour filter (V2 → V3) and the luminance filter (V3 → V4)
+    for (from, lum) in [(Process::V2, 0.0), (Process::V3, 30.0)] {
+        let cache = StageCache::default();
+        let mut old = DevelopSettings::default();
+        old.detail.nr_color = 25.0;
+        old.detail.nr_color_smoothness = 0.0;
+        old.detail.nr_luminance = lum;
+        old.process = from.version();
+        let current = DevelopSettings { process: Process::LATEST.version(), ..old.clone() };
+        let first = render_cached(&src, &info, &old, &req, &cache).image;
+        let fresh = render(&src, &info, &current, &req).image;
+        assert!(max_diff(&first, &fresh) > 0, "{from:?}: the filters differ on this scene");
+        assert_eq!(render_cached(&src, &info, &current, &req, &cache).image, fresh, "{from:?}: process update");
+        assert_eq!(render_cached(&src, &info, &old, &req, &cache).image, first, "{from:?}: undo");
+    }
+}
+
+/// Flat grey with chroma noise: `quiet` columns on the left with little noise, the rest with much.
+pub(crate) fn colour_noise_scene(w: usize, h: usize, quiet: usize) -> Rgb32f {
+    let mut seed = 0x2545_f491_4f6c_dd1d_u64;
+    let mut noise = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        ((seed >> 11) as f32 / (1u64 << 53) as f32 - 0.5) * 2.0
+    };
+    let mut img = Rgb32f::new(w, h);
+    for (i, p) in img.data.iter_mut().enumerate() {
+        let sigma = if i % w < quiet { 0.001 } else { 0.015 };
+        let y = 0.04f32;
+        let (r, b) = (y + noise() * sigma, y + noise() * sigma);
+        *p = [r, (y - 0.2627 * r - 0.0593 * b) / 0.6780, b];
+    }
+    img
 }

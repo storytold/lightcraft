@@ -250,6 +250,17 @@ fn cases() -> Vec<(&'static str, Edit)> {
             s.detail.nr_color = 60.0;
             s.detail.nr_color_smoothness = 50.0;
         }),
+        // the wavelet luminance NR at its extremes (Detail 0 smooths the fine levels most, Contrast 100 keeps
+        // the coarse ones)
+        ("luminance NR 100, detail 0", |s| {
+            s.detail.nr_luminance = 100.0;
+            s.detail.nr_detail = 0.0;
+        }),
+        ("luminance NR 100, contrast 100", |s| {
+            s.detail.nr_luminance = 100.0;
+            s.detail.nr_detail = 100.0;
+            s.detail.nr_contrast = 100.0;
+        }),
         ("crop + straighten + flip", |s| {
             s.crop.geometry.rect = Rect::new(0.1, 0.05, 0.85, 0.9);
             s.crop.geometry.angle = 7.5;
@@ -889,6 +900,29 @@ fn windows_of_a_big_photo_share_one_uploaded_source() {
     assert_eq!(lightcraft_gpu::shared_source_bytes(), 0, "an idle app gives it back");
     lightcraft_gpu::render(&src, &info, &s, &at(1000), Some(&after)).expect("gpu render");
     assert_eq!(lightcraft_gpu::source_uploads() - start, 2);
+}
+
+/// Both noise reductions in bands of rows (a small band budget): each band's halo covers its filter's
+/// reach, so the result is the one-band (and CPU) result.
+#[test]
+fn noise_reductions_in_bands_match() {
+    if !gpu() {
+        return;
+    }
+    let (w, h) = (1200, 800);
+    let src = scene(0, w, h);
+    let info = SourceInfo { raw: true, ..Default::default() };
+    let mut s = DevelopSettings::default();
+    s.detail.nr_luminance = 60.0;
+    s.detail.nr_color = 40.0;
+    let req = RenderRequest::fit(w, h);
+    let cpu = render(&src, &info, &s, &req).image;
+    // 1200 px rows at 48 bytes a pixel: 500 rows a band besides the whole output (with the halos: a few bands each)
+    lightcraft_gpu::inject_fault(lightcraft_gpu::Fault::BandBudget((12 * w * h + 48 * w * 500) as u64));
+    let gpu = lightcraft_gpu::render(&src, &info, &s, &req, None).expect("gpu render");
+    let (mean, max, over) = diff(&cpu, &gpu.image);
+    eprintln!("NR in bands {w}x{h}  mean {mean:.4}  max {max}  >1: {:.4}%", over * 100.0);
+    assert!(mean < MEAN_LSB && max <= MAX_LSB, "mean {mean:.4} LSB, max {max} LSB");
 }
 
 #[test]

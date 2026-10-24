@@ -187,6 +187,21 @@ fn noise_reduction_does_not_depend_on_the_window() {
     }
 }
 
+// Given luminance noise reduction on a frame larger than its statistics tiles, a zoomed window is
+// filtered like the same pixels of the whole render
+#[test]
+fn luminance_nr_at_depth_matches_the_whole_render() {
+    let mut s = DevelopSettings::default();
+    controls::set(&mut s, "detail.nrLuminance", 80.0);
+    let src = noisy_scene();
+    let (fw, fh) = (2400, 1600);
+    let f = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(fw, fh)).image;
+    let win = PixelWindow { x: 1100, y: 500, w: 512, h: 384 };
+    let w = render(&src, &SourceInfo::default(), &s, &RenderRequest { window: Some(win), ..RenderRequest::fit(fw, fh) }).image;
+    let (max, mean) = compare(&f, &w, win);
+    assert!(max <= 3 && mean <= 0.15, "max {max} (≤ 3), mean {mean:.3} (≤ 0.15)");
+}
+
 // Given a mask with Refine Edges, the refinement width follows the whole frame's size
 #[test]
 fn mask_edge_refinement_does_not_depend_on_the_window() {
@@ -406,6 +421,78 @@ fn auto_mask_strokes_match_the_whole_render() {
         ..Default::default()
     };
     check_noisy("auto mask", &s, PixelWindow { x: 400, y: 300, w: 300, h: 250 }, 2, 0.1);
+}
+
+/// Sampling many windows at once (the luminance NR's statistics tiles) gives each window's own
+/// sampling bit for bit, with the source oriented and prefiltered (downscaled) once.
+#[test]
+fn sampling_windows_at_once_matches_each_window() {
+    let src = lightcraft_scenes::demo_library()[0].render(1200, 800);
+    for o in [Orientation::Normal, Orientation::Rotate90] {
+        let mut s = DevelopSettings { orientation: o, ..Default::default() };
+        s.crop.geometry.rect = Rect::new(0.05, 0.1, 0.9, 0.95);
+        s.crop.geometry.angle = 3.0;
+        let plan = crate::plan(&src, &SourceInfo::default(), &s, &RenderRequest::fit(500, 500));
+        let (frame, fw, fh) = &plan.full;
+        let wins: Vec<PixelWindow> = [(0, 0, 64, 48), (100, 37, 128, 128), (*fw - 50, *fh - 40, 50, 40), (0, 0, *fw, *fh)]
+            .iter()
+            .map(|&(x, y, w, h)| PixelWindow { x, y, w, h })
+            .collect();
+        let together = frame.sample_windows(&src, *fw, *fh, &wins);
+        for (win, t) in wins.iter().zip(&together) {
+            let f = if (win.w, win.h) == (*fw, *fh) { frame.clone() } else { frame.window(*fw, *fh, *win) };
+            assert!(f.sample(&src, win.w, win.h).data == t.data, "{o:?} {win:?}");
+        }
+    }
+}
+
+// Given the joint colour NR, a window is filtered with the whole frame's noise model: a quiet part of
+// the frame does not make a window of its noisy part (or the other way round) smooth differently
+#[test]
+fn joint_colour_nr_measures_the_noise_of_the_whole_frame() {
+    use lightcraft_develop::Process;
+    // a frame that is one noise tile, and one of many tiles (`nrl::tiles`)
+    for (w, h, win) in [(768, 128, PixelWindow { x: 640, y: 32, w: 64, h: 64 }), (1664, 1536, PixelWindow { x: 1400, y: 700, w: 128, h: 128 })] {
+        let src = crate::tests::colour_noise_scene(w, h, w * 2 / 3);
+        let req = RenderRequest::fit(w, h);
+        // with the old luminance NR before it (process V3) and the wavelet one after it
+        for (process, lum) in [(Process::V3, 0.0), (Process::V3, 30.0), (Process::LATEST, 30.0)] {
+            let mut s = DevelopSettings { process: process.version(), ..Default::default() };
+            s.detail.nr_color = 25.0;
+            s.detail.nr_color_smoothness = 0.0;
+            s.detail.nr_luminance = lum;
+            let f = render(&src, &SourceInfo::default(), &s, &req).image;
+            let part = render(&src, &SourceInfo::default(), &s, &RenderRequest { window: Some(win), ..req }).image;
+            let (max, mean) = compare_inset(&f, &part, win, win.w / 4);
+            assert!(max <= 2 && mean <= 0.1, "{w}×{h} {process:?} lum {lum}: max {max}, mean {mean:.3}");
+        }
+    }
+}
+
+// Given a 16-bit or float render of a window with the joint colour and wavelet luminance NR, then
+// its edges are the whole render's too: the window is grown by the filters' reach and cut back
+#[test]
+fn a_deep_window_with_noise_reduction_matches_the_whole_render() {
+    use crate::OutputDepth;
+    use lightcraft_develop::Process;
+    let (w, h, win) = (768, 128, PixelWindow { x: 600, y: 32, w: 96, h: 64 });
+    let src = crate::tests::colour_noise_scene(w, h, w * 2 / 3);
+    for depth in [OutputDepth::U16, OutputDepth::F32Linear] {
+        for (process, lum) in [(Process::V3, 0.0), (Process::LATEST, 30.0)] {
+            let mut s = DevelopSettings { process: process.version(), ..Default::default() };
+            s.detail.nr_color = 25.0;
+            s.detail.nr_color_smoothness = 0.0;
+            s.detail.nr_luminance = lum;
+            let req = RenderRequest { depth, ..RenderRequest::fit(w, h) };
+            let deep = |req: &RenderRequest| render(&src, &SourceInfo::default(), &s, req).deep.map(|d| d.to_rgba8());
+            let (Some(f), Some(part)) = (deep(&req), deep(&RenderRequest { window: Some(win), ..req })) else {
+                panic!("{depth:?}: no deep image");
+            };
+            assert_eq!((part.width, part.height), (win.w, win.h), "{depth:?}: the window's own size");
+            let (max, mean) = compare_inset(&f, &part, win, 0);
+            assert!(max <= 1 && mean <= 0.01, "{depth:?} {process:?} lum {lum}: max {max}, mean {mean:.3}");
+        }
+    }
 }
 
 /// The margin the loupe's windows carry around what they show at this size (`region::margin_for`:
